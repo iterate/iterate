@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { RpcTarget, upgradeWebSocketResponse, WebSocketPair } from "capnweb";
 import WebSocket from "ws";
-import type { connectIterate } from "iterate/node";
+import type { IterateConnection } from "iterate/node";
 
 /** Headers the local dial makes itself: undici throws on the hop-by-hop ones, and `host` must be
  *  localhost's (Vite's `allowedHosts` refuses any other). */
@@ -166,71 +166,127 @@ function causeOf(error: unknown): string {
   return cause?.code || cause?.message || (error instanceof Error ? error.message : String(error));
 }
 
+/** How long the tunnel waits before each attempt to reconnect after its connection closed, about
+ *  five minutes in all: long enough for Wi-Fi to come back or a laptop to wake, short enough that a
+ *  tunnel whose network is gone for good says so and exits. */
+const RECONNECT_DELAYS_MS = [1_000, 2_000, 4_000, 8_000, 15_000, ...Array(9).fill(30_000)];
+
 /** `iterate tunnel <port>`: lend a `LocalPortRpcTarget` to the project as `itx.tunnels.<slug>`, set
  *  the fetch route `tunnel-<slug>` taking the `<slug>` host to it, print the URL on stdout, and on
- *  Ctrl-C delete the route, then end the lend. A disconnect ends the tunnel with an error. */
+ *  Ctrl-C delete the route, then end the lend. A connection that closes (its heartbeat found it dead,
+ *  iterate/node) is replaced: `reconnect` opens a fresh one and the tunnel lends and routes again
+ *  over it, the same name taking its own route over. Only when every attempt fails does the tunnel
+ *  end, with an error. */
 export async function runTunnel(input: {
-  connection: Awaited<ReturnType<typeof connectIterate>>;
+  connection: IterateConnection;
+  reconnect: () => Promise<IterateConnection>;
   project: string;
   port: number;
   routingSlug?: string;
   public?: boolean;
+  /** the reconnect schedule — a test's, `RECONNECT_DELAYS_MS` otherwise */
+  reconnectDelaysMs?: readonly number[];
 }): Promise<void> {
   const routingSlug = input.routingSlug || `t${randomBytes(4).toString("hex")}`;
   const fetchRouteName = `tunnel-${routingSlug}`;
   const target = `itx.tunnels.${routingSlug}`;
-  using project = await input.connection.session.projects.get(input.project);
-  // A route of this name or on this host is someone else's unless it is this tunnel's own (a
-  // restart, another terminal), which is taken over.
-  const conflict = (await project.fetchRoutes.list()).find(
-    (route) =>
-      (route.fetchRouteName === fetchRouteName ||
-        route.requestMatcher.routingSlug === routingSlug) &&
-      !(route.fetchRouteName === fetchRouteName && route.target.join(".") === target),
-  );
-  if (conflict)
-    throw new Error(
-      `The fetch route ${conflict.fetchRouteName} (target ${conflict.target.join(".")}) already has this name or host. Pick another --name.`,
-    );
-  const url = await project.url({ routingSlug });
-  using _lend = await project.provide(
-    target,
-    new LocalPortRpcTarget(input.port, (line) => console.error(line)),
-  );
   // Listening before the route is set: until a listener is installed the OS's default action ends
   // the process at once, which would leave the route standing.
   let stop = () => {};
   const stopped = new Promise<"stopped">((resolve) => (stop = () => resolve("stopped")));
   process.once("SIGINT", stop);
   process.once("SIGTERM", stop);
-  try {
+  /** Serve over one connection until Ctrl-C (the route deleted) or until the connection closes. */
+  const serve = async (
+    connection: IterateConnection,
+    first: boolean,
+  ): Promise<"stopped" | { code: number; reason: string }> => {
+    using project = await connection.session.projects.get(input.project);
+    // A route of this name or on this host is someone else's unless it is this tunnel's own (a
+    // restart, another terminal, this tunnel before it reconnected), which is taken over.
+    const conflict = (await project.fetchRoutes.list()).find(
+      (route) =>
+        (route.fetchRouteName === fetchRouteName ||
+          route.requestMatcher.routingSlug === routingSlug) &&
+        !(route.fetchRouteName === fetchRouteName && route.target.join(".") === target),
+    );
+    if (conflict)
+      throw new Error(
+        `The fetch route ${conflict.fetchRouteName} (target ${conflict.target.join(".")}) already has this name or host. Pick another --name.`,
+      );
+    const url = await project.url({ routingSlug });
+    using _lend = await project.provide(
+      target,
+      new LocalPortRpcTarget(input.port, (line) => console.error(line)),
+    );
     await project.fetchRoutes.set(fetchRouteName, {
       requestMatcher: { routingSlug },
       target,
       authRequirement: input.public ? null : { visitors: "project-members" },
     });
-    console.log(url);
-    console.error(
-      `${url} → http://localhost:${input.port} (${input.public ? "public" : "project members only"}). Press Ctrl-C to stop.`,
-    );
-    const basePath = new URL(url).pathname;
-    if (basePath !== "/")
+    if (first) {
+      console.log(url);
       console.error(
-        `Projects are served under paths here: your local server must serve under ${basePath} (Vite: --base ${basePath}). To serve at / on an origin of its own, give the deployment a domain with a wildcard certificate: https://github.com/iterate/iterate/blob/main/apps/os/SELF-HOSTING.md#custom-domain-own-origins-for-apps-and-tunnels`,
+        `${url} → http://localhost:${input.port} (${input.public ? "public" : "project members only"}). Press Ctrl-C to stop.`,
       );
-    const outcome = await Promise.race([stopped, input.connection.closed]);
-    if (outcome !== "stopped")
-      throw new Error(
-        `The tunnel disconnected (${outcome.code}: ${outcome.reason || "connection closed"}). Run iterate tunnel again to reconnect.`,
-      );
+      const basePath = new URL(url).pathname;
+      if (basePath !== "/")
+        console.error(
+          `Projects are served under paths here: your local server must serve under ${basePath} (Vite: --base ${basePath}). To serve at / on an origin of its own, give the deployment a domain with a wildcard certificate: https://github.com/iterate/iterate/blob/main/apps/os/SELF-HOSTING.md#custom-domain-own-origins-for-apps-and-tunnels`,
+        );
+    } else console.error(`Reconnected: ${url} → http://localhost:${input.port}`);
+    const outcome = await Promise.race([stopped, connection.closed]);
+    // the route first: the host stops answering the moment it is gone
+    if (outcome === "stopped")
+      await project.fetchRoutes.set(fetchRouteName, null).catch((error: unknown) => {
+        console.error(`Could not delete the fetch route ${fetchRouteName}: ${messageOf(error)}`);
+      });
+    return outcome;
+  };
+  const delaysMs = input.reconnectDelaysMs || RECONNECT_DELAYS_MS;
+  let connection: IterateConnection | null = input.connection;
+  let lastFailure = "";
+  try {
+    for (let first = true, failures = 0; ; first = false) {
+      if (connection) {
+        try {
+          const outcome = await serve(connection, first);
+          if (outcome === "stopped") return;
+          lastFailure = `${outcome.code}: ${outcome.reason || "connection closed"}`;
+          console.error(`The tunnel disconnected (${lastFailure}). Reconnecting...`);
+          failures = 0; // it was serving: a fresh round of attempts
+        } catch (error) {
+          if (first) throw error; // the first connection's refusal (a taken name) is the answer
+          lastFailure = messageOf(error);
+          console.error(`Could not serve the tunnel again: ${lastFailure}`);
+        } finally {
+          connection[Symbol.dispose]();
+        }
+      }
+      const delayMs = delaysMs[failures++];
+      if (delayMs === undefined)
+        throw new Error(
+          `The tunnel disconnected and could not reconnect (${lastFailure}). Run iterate tunnel again.`,
+        );
+      let wait: ReturnType<typeof setTimeout> | undefined;
+      const waited = await Promise.race([
+        stopped,
+        new Promise<"waited">((resolve) => (wait = setTimeout(() => resolve("waited"), delayMs))),
+      ]);
+      clearTimeout(wait);
+      if (waited === "stopped") return;
+      connection = await input.reconnect().catch((error: unknown) => {
+        lastFailure = messageOf(error);
+        console.error(`Could not reconnect: ${lastFailure}`);
+        return null;
+      });
+    }
   } finally {
     process.removeListener("SIGINT", stop);
     process.removeListener("SIGTERM", stop);
-    // the route first: the host stops answering the moment it is gone
-    await project.fetchRoutes.set(fetchRouteName, null).catch((error: unknown) => {
-      console.error(
-        `Could not delete the fetch route ${fetchRouteName}: ${error instanceof Error ? error.message : String(error)}`,
-      );
-    });
   }
+}
+
+function messageOf(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }

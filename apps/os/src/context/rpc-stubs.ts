@@ -183,11 +183,18 @@ export class RpcStubDirectory {
       // way until the pins' release, while its pager may already lend a live one — so the NEXT call
       // pages again. Only the stub THIS call rode: a re-lend that landed meanwhile is the live one.
       // The failed call is not retried.
-      if (isRetryableTransportError(error) && this.#borrowedRpcStubs.get(rpcStubKey) === borrowed) {
+      // A transport failure is the lender's worker gone mid-call ("Network connection lost." when
+      // the edge closed a dead client's socket, 2026-09-25): the stub is offline, coded so (a 502),
+      // never an uncoded 500.
+      if (!isRetryableTransportError(error)) throw error;
+      if (this.#borrowedRpcStubs.get(rpcStubKey) === borrowed) {
         this.#borrowedRpcStubs.delete(rpcStubKey);
         disposeRpcStub(borrowed);
       }
-      throw error;
+      throw codedError(
+        "RPC_STUB_OFFLINE",
+        `rpc stub ${JSON.stringify(rpcStubKey)} went offline mid-call (${error instanceof Error ? error.message : String(error)})`,
+      );
     }
   }
 
@@ -434,6 +441,7 @@ export type ClientRpcStub = { dup(): ClientRpcStub; [k: string]: unknown };
  *  WebSocket. Minted fresh per page and returned at the pins' release (context/residency.ts). */
 class LentRpcStub extends WorkersRpcTarget {
   #clientRpcStub: ClientRpcStub;
+  #rpcStubKey: string;
   /** THE ONE "the lend ended" reason, SHARED across every page of one pager (a `{ reason }` holder)
    *  and set ONCE by whatever ends the lend first — the single `onRpcBroken` registration in
    *  `lendRpcStubOverPager` or the pager's close — always BEFORE the session's dup is disposed, so a
@@ -446,11 +454,13 @@ class LentRpcStub extends WorkersRpcTarget {
   #durableObjectStub: () => IterateContextDurableObjectStub;
   constructor(
     clientRpcStub: ClientRpcStub,
+    rpcStubKey: string,
     lendEnded: { reason: string | null },
     durableObjectStub: () => IterateContextDurableObjectStub,
   ) {
     super();
     this.#clientRpcStub = clientRpcStub;
+    this.#rpcStubKey = rpcStubKey;
     this.#lendEnded = lendEnded;
     this.#durableObjectStub = durableObjectStub;
   }
@@ -474,15 +484,17 @@ class LentRpcStub extends WorkersRpcTarget {
     request: Request,
   ): Promise<unknown> {
     try {
-      const receiver = (await walkStepsOnRpcStub(this.#clientRpcStub, itxExpressionSteps)) as {
-        fetch(r: Request): Promise<unknown>;
-      };
-      return await dialRpcStubFetch(
-        (r) => receiver.fetch(r),
-        request,
-        upgradeId,
-        this.#durableObjectStub,
-      );
+      return await whileClientAnswers(this.#clientRpcStub, this.#rpcStubKey, async () => {
+        const receiver = (await walkStepsOnRpcStub(this.#clientRpcStub, itxExpressionSteps)) as {
+          fetch(r: Request): Promise<unknown>;
+        };
+        return await dialRpcStubFetch(
+          (r) => receiver.fetch(r),
+          request,
+          upgradeId,
+          this.#durableObjectStub,
+        );
+      });
     } catch (e) {
       this.#recodeIfLendEnded(e, "mid-fetch");
     }
@@ -490,11 +502,63 @@ class LentRpcStub extends WorkersRpcTarget {
 
   async invoke(itxExpressionSteps: ItxExpression): Promise<unknown> {
     try {
-      return await walkStepsOnRpcStub(this.#clientRpcStub, itxExpressionSteps);
+      return await whileClientAnswers(this.#clientRpcStub, this.#rpcStubKey, () =>
+        walkStepsOnRpcStub(this.#clientRpcStub, itxExpressionSteps),
+      );
     } catch (e) {
       this.#recodeIfLendEnded(e, "mid-invoke");
     }
   }
+}
+
+/** A LENT CALL THE CLIENT HAS NOT ANSWERED for 10 s is followed by a question: a call on a member no
+ *  client has (`itxLivenessProbe`), which a live client answers at once, with an error (capnweb's
+ *  "is not a function", the kit firmware's "unknown device capability"). Any answer proves the
+ *  client is there, and the call waits on (a slow local server is the client's business), asked
+ *  again every 10 s. No answer within 10 s more means the client's network went away without a
+ *  close — a laptop asleep, a NAT mapping expired — and its socket would stay open at the edge until
+ *  the edge's TCP retransmits give up: on prd 2026-09-25 a tunnel's visitors waited 12 to 16 minutes
+ *  for that, and then got a 500. The call fails RPC_STUB_OFFLINE now instead (a 502 on a fetch,
+ *  `expression-fetch.rpc-stub-offline`). The lend stays: a client that was only slow answers the
+ *  next call, and a dead one's session close ends it. */
+async function whileClientAnswers(
+  clientRpcStub: ClientRpcStub,
+  rpcStubKey: string,
+  makeCall: () => unknown,
+): Promise<unknown> {
+  const call = Promise.resolve().then(makeCall);
+  const settled = call.then(
+    () => "settled" as const,
+    () => "settled" as const,
+  );
+  const within = <A>(answer: Promise<A>, ms: number): Promise<A | "silent"> => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    return Promise.race([
+      answer,
+      new Promise<"silent">((resolve) => (timer = setTimeout(() => resolve("silent"), ms))),
+    ]).finally(() => clearTimeout(timer));
+  };
+  const startedAt = Date.now();
+  while ((await within(settled, 10_000)) === "silent") {
+    const probe = Promise.resolve()
+      .then(() => (clientRpcStub.itxLivenessProbe as () => Promise<unknown>)())
+      .then(disposeRpcStub, () => undefined)
+      .then(() => "answered" as const);
+    if ((await within(Promise.race([settled, probe]), 10_000)) !== "silent") continue;
+    console.warn({
+      event: "rpc-stub-client-unanswered",
+      namespace: "rpc-stubs",
+      message:
+        "a lent stub's client answered neither a call nor a liveness probe; the call fails RPC_STUB_OFFLINE",
+      rpcStubKey,
+      waitedMs: Date.now() - startedAt,
+    });
+    throw codedError(
+      "RPC_STUB_OFFLINE",
+      `rpc stub ${JSON.stringify(rpcStubKey)}: its client stopped answering`,
+    );
+  }
+  return await call;
 }
 
 /** Offer the DO a lend of `clientRpcStub` under `rpcStubKey`: dup the client's stub for the session,
@@ -592,7 +656,7 @@ export async function lendRpcStubOverPager(
         durableObjectStub()
           .lendRpcStub({
             rpcStubKey,
-            stub: new LentRpcStub(sessionRpcStub, lendEnded, durableObjectStub),
+            stub: new LentRpcStub(sessionRpcStub, rpcStubKey, lendEnded, durableObjectStub),
           })
           .catch(() => undefined), // offline throws — ignore; the DO's page times out on its own
       );

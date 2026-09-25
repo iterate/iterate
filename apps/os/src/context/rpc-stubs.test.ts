@@ -68,7 +68,7 @@ test.each([
     rejects: "a transport failure (workerd's `retryable: true` stamp)",
     error: Object.assign(new Error("Network connection lost."), { retryable: true }),
     becomes:
-      "DROPPED and disposed — the next call finds nothing borrowed (RPC_STUB_OFFLINE, no pager)",
+      "OFFLINE (a 502, never an uncoded 500), DROPPED and disposed — the next call finds nothing borrowed",
     dropped: true,
   },
   {
@@ -91,7 +91,11 @@ test.each([
     const rpcStubDirectory = directory();
     const stub = fakeBorrowedRpcStub(() => Promise.reject(error));
     rpcStubDirectory.lendRpcStub({ rpcStubKey: "k", stub });
-    await expect(rpcStubDirectory.invokeRpcStub("k", [["", 1]])).rejects.toBe(error);
+    await expect(rpcStubDirectory.invokeRpcStub("k", [["", 1]])).rejects.toMatchObject(
+      dropped
+        ? { code: "RPC_STUB_OFFLINE", message: expect.stringContaining("Network connection lost.") }
+        : error,
+    );
     expect(stub).toMatchObject({ disposed: dropped });
     expect(rpcStubDirectory.hasBorrowedRpcStubs()).toBe(!dropped);
     if (dropped) {
@@ -115,7 +119,7 @@ test("a borrowed stub after a rejected call: a late transport failure of a stub 
   const inFlight = rpcStubDirectory.invokeRpcStub("k", [["", 1]]);
   rpcStubDirectory.lendRpcStub({ rpcStubKey: "k", stub: replacement }); // a re-lend REPLACES (and returns the old)
   failOld(Object.assign(new Error("Network connection lost."), { retryable: true }));
-  await expect(inFlight).rejects.toMatchObject({ retryable: true });
+  await expect(inFlight).rejects.toMatchObject({ code: "RPC_STUB_OFFLINE" });
   expect(await rpcStubDirectory.invokeRpcStub("k", [["", 2]])).toBe("ok");
   expect(replacement).toMatchObject({ disposed: false });
   expect(rpcStubDirectory.hasBorrowedRpcStubs()).toBe(true);
@@ -212,6 +216,95 @@ test("a relay registers onRpcBroken on the session's stub ONCE per session, not 
   expect(onRpcBrokenRegistrations).toBeLessThanOrEqual(1);
 
   relay.dispose();
+});
+
+// ── rpc stub relay ── A LENT CALL IS BOUNDED BY THE CLIENT'S ANSWERS. A client whose network went
+// away without a close (a laptop asleep, a NAT mapping expired) answers nothing and its socket stays
+// open at the edge until the edge's TCP gives up: on prd 2026-09-25 a tunnel's visitors waited 12 to
+// 16 minutes, then got a 500. A call unanswered for 10 s is followed by a liveness probe (a call on a
+// member no client has, which a live one answers at once with an error); a probe unanswered for
+// 10 s more fails the call RPC_STUB_OFFLINE, logged. A client that answers the probe is only slow,
+// and its call waits on.
+
+test.each([
+  {
+    client: "answers nothing (its network is gone)",
+    callAnswersAfterMs: null,
+    probeAnswers: false,
+    outcome: "RPC_STUB_OFFLINE at 20 s, logged",
+  },
+  {
+    client: "answers every probe and the call at 35 s (a slow local server)",
+    callAnswersAfterMs: 35_000,
+    probeAnswers: true,
+    outcome: "the call's answer, three probes asked, nothing logged",
+  },
+])("a lent call whose client $client → $outcome", async ({ callAnswersAfterMs, probeAnswers }) => {
+  vi.useFakeTimers();
+  onTestFinished(() => void vi.useRealTimers());
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  warn.mockClear(); // an earlier test's spy on console.warn is this one: only this test's calls count
+  let probes = 0;
+  const never = () => new Promise(() => {});
+  const client = {
+    dup: () => client,
+    onRpcBroken() {},
+    [Symbol.dispose]() {},
+    hello: () =>
+      callAnswersAfterMs === null
+        ? never()
+        : new Promise((resolve) => setTimeout(() => resolve("hi"), callAnswersAfterMs)),
+    itxLivenessProbe: () => {
+      probes += 1;
+      return probeAnswers
+        ? Promise.reject(new TypeError("'itxLivenessProbe' is not a function."))
+        : never();
+    },
+  };
+  const lentStubs: BorrowedRpcStub[] = [];
+  const pager = new FakePagerWebSocket();
+  const context = {
+    fetch: async () => ({ status: 101, webSocket: pager }),
+    lendRpcStub: async (input: { stub: BorrowedRpcStub }) => void lentStubs.push(input.stub),
+  };
+  const relay = await lendRpcStubOverPager(
+    (() => context) as unknown as Parameters<typeof lendRpcStubOverPager>[0],
+    client as unknown as Parameters<typeof lendRpcStubOverPager>[1],
+    "itx.tunnels.laptop",
+    [],
+    () => {},
+  );
+  onTestFinished(() => relay.dispose());
+  pager.page();
+  const call = lentStubs[0].invoke([["hello"]]).then(
+    (value) => ({ value }),
+    (error: unknown) => ({ error }),
+  );
+  if (callAnswersAfterMs === null) {
+    await vi.advanceTimersByTimeAsync(19_999);
+    expect(warn).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(await call).toMatchObject({
+      error: { code: "RPC_STUB_OFFLINE", message: expect.stringContaining("stopped answering") },
+    });
+    expect(probes).toBe(1);
+    expect(warn.mock).toMatchObject({
+      calls: [
+        [
+          expect.objectContaining({
+            event: "rpc-stub-client-unanswered",
+            rpcStubKey: "itx.tunnels.laptop",
+            waitedMs: 20_000,
+          }),
+        ],
+      ],
+    });
+  } else {
+    await vi.advanceTimersByTimeAsync(callAnswersAfterMs);
+    expect(await call).toEqual({ value: "hi" });
+    expect(probes).toBe(3);
+    expect(warn).not.toHaveBeenCalled();
+  }
 });
 
 // ── rpc stub relay ── THE LEND IS THE SESSION'S, NOT THE SOCKET'S. The pager is a connection between

@@ -155,44 +155,22 @@ test.for([
     routing === "paths"
       ? "https://os.example.com/projects/p/blog/"
       : "https://blog--p.example.com/";
-  const calls: string[] = [];
-  const routes: unknown[] = [];
-  const project = {
-    url: async () => url,
-    fetchRoutes: {
-      list: async () => [],
-      set: async (name: string, route: unknown) => {
-        calls.push(`set ${name} ${route && "route"}`);
-        routes.push(route);
-      },
-    },
-    provide: async (target: string) => {
-      calls.push(`provide ${target}`);
-      return { [Symbol.dispose]: () => {} };
-    },
-    [Symbol.dispose]: () => {},
-  };
-  const connection = {
-    session: { projects: { get: async () => project } },
-    // the tunnel ends as soon as it is live: the connection is already closed
-    closed: Promise.resolve({ code: 1006, reason: "" }),
-  } as unknown as Parameters<typeof runTunnel>[0]["connection"];
+  const fake = fakeProject(url);
   using stderr = vi.spyOn(console, "error").mockImplementation(() => {});
   using stdout = vi.spyOn(console, "log").mockImplementation(() => {});
   const run = runTunnel({
-    connection,
+    // the tunnel ends as soon as it is live: the connection is already closed, and no reconnect
+    connection: fake.connection(Promise.resolve({ code: 1006, reason: "" })),
+    reconnect: () => Promise.reject(new Error("unreachable")),
+    reconnectDelaysMs: [],
     project: "p",
     port: 5173,
     routingSlug: "blog",
     public: visibility === "public",
   });
-  await expect(run).rejects.toThrow("The tunnel disconnected");
-  expect(calls).toEqual([
-    "provide itx.tunnels.blog",
-    "set tunnel-blog route",
-    "set tunnel-blog null",
-  ]);
-  expect(routes[0]).toMatchObject({
+  await expect(run).rejects.toThrow("The tunnel disconnected and could not reconnect");
+  expect(fake).toMatchObject({ calls: ["provide itx.tunnels.blog", "set tunnel-blog route"] });
+  expect(fake.routes[0]).toMatchObject({
     authRequirement: visibility === "public" ? null : { visitors: "project-members" },
   });
   expect(stdout.mock).toMatchObject({ calls: [[url]] });
@@ -201,6 +179,94 @@ test.for([
   );
   expect(basePathLines).toHaveLength(routing === "paths" ? 1 : 0);
 });
+
+// A connection that closes under a live tunnel (its heartbeat found the network gone — a laptop
+// asleep, a NAT mapping expired) is replaced: the tunnel reconnects and lends and routes again, and
+// says so; a failed attempt is tried again on the schedule, and only when every attempt fails does
+// it end, with an error. 2026-09-25: a tunnel sat 55 minutes on a dead connection, unaware.
+test("a tunnel whose connection closes reconnects, lends and routes again; it ends only when every attempt fails", async () => {
+  const fake = fakeProject("https://blog--p.example.com/");
+  using stderr = vi.spyOn(console, "error").mockImplementation(() => {});
+  using _stdout = vi.spyOn(console, "log").mockImplementation(() => {});
+  let dropSecond!: () => void;
+  const reconnects = [
+    () => Promise.reject(new Error("getaddrinfo ENOTFOUND os.example.com")), // Wi-Fi not back yet
+    async () =>
+      fake.connection(
+        new Promise((resolve) => (dropSecond = () => resolve({ code: 1006, reason: "gone" }))),
+      ),
+  ];
+  const run = runTunnel({
+    connection: fake.connection(Promise.resolve({ code: 1006, reason: "no answer to a ping" })),
+    reconnect: () => {
+      const next = reconnects.shift();
+      if (!next) return Promise.reject(new Error("still offline"));
+      const connection = next();
+      void connection.then(
+        () => setTimeout(() => dropSecond(), 5),
+        () => undefined,
+      );
+      return connection;
+    },
+    reconnectDelaysMs: [0, 0],
+    project: "p",
+    port: 5173,
+    routingSlug: "blog",
+  });
+  await expect(run).rejects.toThrow(
+    "The tunnel disconnected and could not reconnect (still offline)",
+  );
+  expect(fake).toMatchObject({
+    calls: [
+      "provide itx.tunnels.blog",
+      "set tunnel-blog route",
+      "provide itx.tunnels.blog",
+      "set tunnel-blog route",
+    ],
+    disposedConnections: 2,
+  });
+  expect(stderr.mock.calls.map(([line]) => String(line))).toEqual([
+    expect.stringContaining("Press Ctrl-C to stop."),
+    "The tunnel disconnected (1006: no answer to a ping). Reconnecting...",
+    "Could not reconnect: getaddrinfo ENOTFOUND os.example.com",
+    "Reconnected: https://blog--p.example.com/ → http://localhost:5173",
+    "The tunnel disconnected (1006: gone). Reconnecting...",
+    "Could not reconnect: still offline",
+    "Could not reconnect: still offline",
+  ]);
+});
+
+/** A project whose routes and lends are recorded, reached over connections that close when `closed`
+ *  resolves (each counts its disposal). */
+function fakeProject(url: string) {
+  const fake = {
+    calls: [] as string[],
+    routes: [] as unknown[],
+    disposedConnections: 0,
+    connection: (closed: Promise<{ code: number; reason: string }>) =>
+      ({
+        session: { projects: { get: async () => project } },
+        closed,
+        [Symbol.dispose]: () => void (fake.disposedConnections += 1),
+      }) as unknown as Parameters<typeof runTunnel>[0]["connection"],
+  };
+  const project = {
+    url: async () => url,
+    fetchRoutes: {
+      list: async () => [],
+      set: async (name: string, route: unknown) => {
+        fake.calls.push(`set ${name} ${route && "route"}`);
+        fake.routes.push(route);
+      },
+    },
+    provide: async (target: string) => {
+      fake.calls.push(`provide ${target}`);
+      return { [Symbol.dispose]: () => {} };
+    },
+    [Symbol.dispose]: () => {},
+  };
+  return fake;
+}
 
 type VisitorSocket = {
   accept(): void;
