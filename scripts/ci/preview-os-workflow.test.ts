@@ -135,9 +135,6 @@ test("Preview OS deploys the PR merged into main, and the test jobs use that ver
     deploySteps.findIndex((step) => step.name === "Reconcile dependencies (baked)"),
   );
   expect(resolve).toBeLessThan(deploy);
-  expect(deploySteps[deploy]?.env?.PREVIEW_TESTED_COMMIT).toBe(
-    "${{ steps.tested.outputs.description }}",
-  );
   expect(preview.jobs.deploy!.outputs).toMatchObject({
     "tested-sha": "${{ steps.tested.outputs.sha }}",
     // the name preview.ts gives the deployment, `pr<n>-<sha7>` of the tested commit

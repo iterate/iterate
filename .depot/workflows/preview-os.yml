@@ -7,12 +7,11 @@
 #                       nothing and passes. Otherwise it deploys the PR merged into main (the run's own
 #                       commit, the merge commit Depot read this file from; the head alone on a
 #                       dispatch whose PR conflicts, scripts/ci/preview-tested-commit.ts) as
-#                       `pr<n>-<sha7>`, and writes the URL, the tested commit and the operations into
-#                       the PR body, under a status line: deploying, deployed or deploy failed. Its
-#                       output `deployment` is the name the jobs after it use
-#   E2E tests           after Deploy preview: the vitest e2e suite against the deployment, its line
-#                       under the status line (passed or failed), then its test telemetry and flake
-#                       records. The rows tagged `slow` run only when the PR carries the `slow-e2e`
+#                       `pr<n>-<sha7>`: it folds the PR body's section into a previous commit's
+#                       first, and writes its own section (the workers and their sign-in links) once
+#                       it has landed. Its output `deployment` is the name the jobs after it use
+#   E2E tests           after Deploy preview: the vitest e2e suite against the deployment, then its
+#                       test telemetry and flake records. The rows tagged `slow` run only when the PR carries the `slow-e2e`
 #                       label or edits one of them (SLOW_ROW_PATHS) (docs/testing.md#slow-rows)
 #   Browser specs       beside E2E tests: the Playwright specs, the same way, and the Playwright
 #                       report. One job definition, E2E tests', differing only in the suite it names
@@ -181,7 +180,6 @@ jobs:
           GITHUB_REPOSITORY: ${{ github.repository }}
           PREVIEW_PR_NUMBER: ${{ env.PR_NUMBER }}
           PREVIEW_APPS: ${{ inputs.apps || 'all' }}
-          PREVIEW_TESTED_COMMIT: ${{ steps.tested.outputs.description }}
           # the PR head, which a template-changing PR's quick-launch links read the template at
           PREVIEW_HEAD_SHA: ${{ steps.tested.outputs.head-sha }}
         run: doppler run -- pnpm preview deploy

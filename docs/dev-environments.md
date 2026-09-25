@@ -474,18 +474,18 @@ worker (next story).
 Every push to a PR runs the **Preview OS** workflow. When the PR touches
 preview-relevant paths (`previewPaths` in `scripts/ci/preview-paths.ts`; see
 [Depot CI](depot-ci.md#which-prs-get-a-preview)), **Deploy preview** deploys
-the tested commit's apps/os and all six clients, then writes the URL and the
-operations into the PR body's managed section. **E2E tests** (the Vitest e2e
+the tested commit's apps/os and all six clients. It folds the PR body's
+managed section into a `<details>` first, so the links there read as the
+previous commit's, and writes the new deployment's section once it lands: a
+row per worker with its one-click `Sign in ↗` and Cloudflare dashboard links,
+and the template quick-launch links. A deploy that fails leaves the previous
+section folded. **E2E tests** (the Vitest e2e
 suite, `pnpm preview e2e`) and **Browser specs** (the Playwright specs,
 `pnpm preview specs`) then run side by side against that deployment, each its
 own job and required check; **Clean up superseded** deletes the PR's older
 deployments beside them. A deploy that did not succeed turns both suites red
-rather than letting them report green. The section opens with a status line
-(`<!-- os-preview-status:begin -->…end`) naming the commit, the CI job and
-when: `deploying`, then `deployed` or `deploy failed` (with the error's tail,
-and the links below marked as the last good deploy's). Under it each suite's
-job writes its own line, `E2E tests` or `Browser specs`, `passed` or `failed`;
-a new deploy clears them. Each job rewrites only its own line.
+rather than letting them report green. The verdicts live in those checks; the
+section holds links only.
 
 Closing or merging the PR runs `pnpm preview delete`, which deletes every
 deployment of the PR: its workers, D1, Artifacts namespace, KV namespaces and

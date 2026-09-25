@@ -6,10 +6,9 @@
 //   config              build apps/os for this commit's deployment and name the config it wrote
 //   deploy              this commit's deployment: apps/os (its D1, R2 bucket and Artifacts namespace
 //                       created, the D1 migrated), every app on top, the readiness gate, the sign-in
-//                       seed, the PR body's section and its status line
+//                       seed, the PR body's section (the previous one folded first)
 //   e2e, specs          the vitest e2e suite (`--slow-rows`, scripts/slow-rows.ts) or the Playwright
-//                       specs against a deployment: PREVIEW_DEPLOYMENT, else the prefix's newest;
-//                       the suite's line under the status line
+//                       specs against a deployment: PREVIEW_DEPLOYMENT, else the prefix's newest
 //   cleanup-superseded  delete the prefix's deployments PREVIEW_DEPLOYMENT supersedes
 //   delete              every deployment of a prefix: a closed PR's (preview-delete.yml)
 //   sweep               the stale deployments (preview-sweep.ts), nightly (preview-sweep.yml)
@@ -65,22 +64,15 @@ import {
   APPS,
   assertFreshInstall,
   configTemplateNames,
-  deployWithStatus,
+  foldPreviousPreviewSection,
   MAIN_ON_DEV,
-  PREVIEW_SUITES,
   previewDeploymentName,
   previewDeploymentUrls,
   previewPullRequestNumber,
   renderPullRequestSection,
   resolvePreviewPrefix,
-  splicePreviewStatus,
-  splicePreviewSuite,
   splicePullRequestBody,
-  suiteLineMayBeOverwritten,
   templateQuickLaunches,
-  type PreviewStatus,
-  type PreviewSuite,
-  type PreviewSuiteStatus,
 } from "./preview-config.ts";
 import {
   groupPreviewDeployments,
@@ -146,16 +138,13 @@ const pullRequest = (number: string | number) => ({ ...getRepo(), pull_number: N
 /** Read, splice, write, read back: the PR body has no conditional update, so a person editing the
  *  description in the same seconds could lose one write or the other. Reading it back and
  *  re-splicing onto whatever is there now converges on both edits within a few rounds. `what` names
- *  the write in the log: the whole preview section, its status line, or a suite's line. A writer
- *  that may run at the same moment (the other suite's job: `mayBeOverwritten`, given the body just
- *  written) waits out that writer's read and PATCH before it reads back, since a PATCH made from a
- *  read that predates this write drops it. So every PATCH goes out once, straight after its read: a
- *  5xx is not asked again with a body read seconds earlier, the next round reads anew. */
+ *  the write in the log: the fold of the previous section, or the section. Every PATCH goes out
+ *  once, straight after its read: a 5xx is not asked again with a body read seconds earlier, the
+ *  next round reads anew. */
 async function writePullRequestBody(
   prNumber: string,
   what: string,
   splice: (body: string) => string,
-  mayBeOverwritten: (body: string) => boolean = () => false,
 ) {
   const github = getOctokit();
   const readBody = async () => (await github.rest.pulls.get(pullRequest(prNumber))).data.body || "";
@@ -172,7 +161,7 @@ async function writePullRequestBody(
     if (patchError) {
       console.warn(`${describe(patchError)}; reading the body again`);
       await new Promise((resolve) => setTimeout(resolve, 5000));
-    } else if (mayBeOverwritten(body)) await new Promise((resolve) => setTimeout(resolve, 3000));
+    }
     const after = await readBody();
     if (splice(after) === after)
       return console.log(`wrote ${what} into the body of PR #${prNumber}`);
@@ -188,38 +177,6 @@ function checkedOutCommit() {
   const result = spawnSync("git", ["rev-parse", "HEAD"], { cwd: ROOT, encoding: "utf8" });
   if (result.status !== 0) throw new Error(`git rev-parse HEAD: ${result.stderr.trim()}`);
   return result.stdout.trim();
-}
-
-/** Where the preview stands, as the PR body's status line (preview-config.ts `PreviewStatus`), or
- *  a suite's line under it (`PreviewSuiteStatus`): this checkout's commit, this CI job
- *  (`DEPOT_JOB_URL`), now. Only with a PR and a token; a write that fails is logged, never the
- *  job's failure — the job's own outcome stands. */
-async function writeStatus(
-  prNumber: string | undefined,
-  status:
-    | Pick<PreviewStatus, "state" | "error">
-    | Pick<PreviewSuiteStatus, "suite" | "state" | "error">,
-) {
-  if (!prNumber || !process.env.GITHUB_TOKEN) return;
-  const what =
-    "suite" in status
-      ? `the ${PREVIEW_SUITES[status.suite]} line (${status.state})`
-      : `the preview status (${status.state})`;
-  const stamp = { commit: checkedOutCommit(), runUrl: process.env.DEPOT_JOB_URL, at: new Date() };
-  const write =
-    "suite" in status
-      ? writePullRequestBody(
-          prNumber,
-          what,
-          (body) => splicePreviewSuite(body, { ...status, ...stamp }),
-          (body) => suiteLineMayBeOverwritten(body, { ...status, ...stamp }),
-        )
-      : writePullRequestBody(prNumber, what, (body) =>
-          splicePreviewStatus(body, { ...status, ...stamp }),
-        );
-  await write.catch((error: unknown) =>
-    console.warn(`could not write ${what}: ${describe(error)}`),
-  );
 }
 
 // ── the account's deployments: listed, grouped by name (preview-sweep.ts), deleted ─────────────
@@ -502,28 +459,25 @@ async function resetParent(options: { dryRun: boolean }) {
 
 // ── the deployment ─────────────────────────────────────────────────────────────────────────────
 
-/** The status line says `deploying` first and `deploy failed`, with the error's tail, when any
- *  step throws; a deploy that lands rewrites the whole section, `deployed`. The `deploying` write
- *  runs beside the steps, and both later writes land after it (preview-config.ts
- *  `deployWithStatus`). */
+/** The deploy, with the PR body's section folded into a previous commit's beside it
+ *  (preview-config.ts `foldPreviousPreviewSection`): a deploy that fails leaves it folded, and one
+ *  that lands writes its own section after the fold has landed. A body write that fails is logged,
+ *  never the deploy's failure. */
 async function deployPreview(
   ctx: EnvContext<OsEnv>,
   name: string,
   prNumber: string | undefined,
   apps: StartApp[],
 ) {
-  await deployWithStatus(
-    (status) =>
-      traceOperation(`Write the ${status.state} status`, () =>
-        writeStatus(
-          prNumber,
-          status.state === "deploying"
-            ? status
-            : { state: status.state, error: describe(status.error) },
-        ),
-      ),
-    (deploying) => deployPreviewSteps(ctx, name, prNumber, apps, deploying),
-  );
+  const folded =
+    prNumber && process.env.GITHUB_TOKEN
+      ? traceOperation("Fold the previous section", () =>
+          writePullRequestBody(prNumber, "the folded previous section", foldPreviousPreviewSection),
+        ).catch((error: unknown) =>
+          console.warn(`could not fold the previous section: ${describe(error)}`),
+        )
+      : Promise.resolve();
+  await deployPreviewSteps(ctx, name, prNumber, apps, folded);
 }
 
 /** The version apps/os's `/version` names (`<versionId> <platformOrigin>`, src/worker.ts): on a
@@ -544,7 +498,7 @@ async function deployPreviewSteps(
   name: string,
   prNumber: string | undefined,
   apps: StartApp[],
-  deploying: Promise<void>,
+  folded: Promise<void>,
 ) {
   assertFreshInstall(REPO_ROOT);
   const urls = previewDeploymentUrls(name);
@@ -611,27 +565,28 @@ async function deployPreviewSteps(
       })
     : undefined;
   const publish = async (seeded: boolean) => {
-    const summary = {
-      deployment: name,
-      status: {
-        state: "deployed",
-        commit: checkedOutCommit(),
-        runUrl: process.env.DEPOT_JOB_URL,
-        at: new Date(),
-      } satisfies PreviewStatus,
-      url,
-      versionId,
-      dashboardUrl: `https://dash.cloudflare.com/${MAIN_ON_DEV.cloudflareAccountId}/workers/services/view/${name}-os/production`,
-      apps: deployedApps,
-      // the workflow's scripts/ci/preview-tested-commit.ts: the PR merged into main, or the head alone
-      testedCommit: process.env.PREVIEW_TESTED_COMMIT,
-      signIn: signIn && { ...signIn, seeded },
-    };
     mkdirSync(OUTPUT_DIR, { recursive: true });
-    writeFileSync(path.join(OUTPUT_DIR, "preview.json"), `${JSON.stringify(summary, null, 2)}\n`);
-    if (!prNumber || !process.env.GITHUB_TOKEN) return;
-    await deploying;
-    const section = renderPullRequestSection(summary);
+    writeFileSync(
+      path.join(OUTPUT_DIR, "preview.json"),
+      `${JSON.stringify({ deployment: name, url, versionId, apps: deployedApps }, null, 2)}\n`,
+    );
+    if (!prNumber || !signIn || !process.env.GITHUB_TOKEN) return;
+    await folded;
+    const dashboardUrl = (worker: string) =>
+      `https://dash.cloudflare.com/${MAIN_ON_DEV.cloudflareAccountId}/workers/services/view/${worker}/production`;
+    const section = renderPullRequestSection({
+      deployment: name,
+      workers: [
+        { name: "os", url, signIn: signIn.heading, dashboardUrl: dashboardUrl(`${name}-os`) },
+        ...deployedApps.map((app) => ({
+          ...app,
+          signIn: signIn.apps[app.name]!,
+          dashboardUrl: dashboardUrl(`${name}-${app.name}`),
+        })),
+      ],
+      templates: signIn.templates,
+      seed: { project: signIn.project, seeded },
+    });
     await traceOperation("Write the PR section", () =>
       writePullRequestBody(prNumber, "the preview section", (body) =>
         splicePullRequestBody(body, section),
@@ -828,13 +783,11 @@ async function writeDeployedTarget(name: string, apps: TestEvidenceTarget["apps"
  *  the specs in specs/setup.ts. Every spec project runs, the notes and voice projects against this
  *  deployment's Notes, Voice, Dash and Admin apps, the Notes session specs signing out in its Dash
  *  (NOTES_BASE_URL, VOICE_BASE_URL, DASH_BASE_URL, ADMIN_BASE_URL; their specs fail in CI without
- *  them). The suite's line under the
- *  PR body's status line then says `passed` or `failed`. The e2e rows tagged `slow` run as asked,
- *  else as the PR's label and paths say (scripts/slow-rows.ts); `only` runs them alone and is no
- *  verdict on the PR, so it writes no line. Vitest gets the choice as E2E_SLOW_ROWS, which holds each
- *  row to its timeout ceiling (e2e/support/setup.ts). */
+ *  them). The job's check is the verdict. The e2e rows tagged `slow` run as asked, else as the PR's
+ *  label and paths say (scripts/slow-rows.ts). Vitest gets the choice as E2E_SLOW_ROWS, which holds
+ *  each row to its timeout ceiling (e2e/support/setup.ts). */
 async function runSuite(
-  suite: PreviewSuite,
+  suite: "e2e" | "specs",
   name: string,
   prNumber: string | undefined,
   requestedSlowRows: SlowRows | undefined,
@@ -850,7 +803,6 @@ async function runSuite(
       ? ["notes", "voice", "dash", "admin"].map((name) => ({ name, url: appUrl(name) }))
       : [],
   );
-  let statusPr = prNumber;
   try {
     if (suite === "e2e") {
       const { slowRows, reason } = await chooseSlowRows({
@@ -865,7 +817,6 @@ async function runSuite(
         },
       });
       console.log(`[slow-rows] ${slowRows}: ${reason}`);
-      if (slowRows === "only") statusPr = undefined;
       // `e2e:run`, not `e2e`: the deployed target needs no local build.
       await runAsync("pnpm", ["e2e:run", ...slowRowsTagsFilter(slowRows)], {
         cwd: ROOT,
@@ -889,10 +840,8 @@ async function runSuite(
       });
     }
   } catch (error) {
-    await writeStatus(statusPr, { suite, state: "failed", error: describe(error) });
-    throw new Error(`${PREVIEW_SUITES[suite]} failed against ${url}: ${describe(error)}`);
+    throw new Error(`the ${suite} suite failed against ${url}: ${describe(error)}`);
   }
-  await writeStatus(statusPr, { suite, state: "passed" });
 }
 
 // ── sweep (cloudflare-os: GitHub has no `environment.auto_stop_in`) ────────────────────────────
@@ -1044,7 +993,7 @@ export default class Preview {
   async config(options: PreviewOptions = {}) {
     await main("config", options);
   }
-  /** this commit's deployment: apps/os, the apps on top, the PR body and its status line */
+  /** this commit's deployment: apps/os, the apps on top, the PR body's section */
   async deploy(options: PreviewOptions = {}) {
     await main("deploy", options);
   }

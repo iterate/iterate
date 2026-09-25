@@ -115,11 +115,10 @@ depot ci dispatch --org 0p91s0lz49 --repo iterate/iterate --workflow preview-os.
 from main ([Run CI without a PR](../../docs/depot-ci.md#run-ci-without-a-pr)), never from main,
 whose head would carry the result, and one suite alone never from the PR's branch
 ([why](../../docs/depot-ci.md#run-the-suites-against-a-deployed-preview)). `delete` removes every
-deployment of the PR or name. CI publishes URLs and operation links in the PR body, under a status
-line (deploying, deployed, deploy failed, with the CI job) and a line per suite (`E2E tests` and
-`Browser specs`: passed or failed, each with its CI job), with one-click `Sign in ↗` links as the
-PR's test person, `pr<N>@preview.iterate.test`, and one-click "New project from template" links
-into the Dash ([dev environments](../../docs/dev-environments.md), `src/test-link.ts`). For an
+deployment of the PR or name. CI writes each deployment's links into the PR body: per worker, a
+one-click `Sign in ↗` as the PR's test person, `pr<N>@preview.iterate.test`, and its Cloudflare
+dashboard; one-click "New project from template" links into the Dash; and the previous commit's
+section folded while the next deploys ([dev environments](../../docs/dev-environments.md), `src/test-link.ts`). For an
 operational change, verify the deployment's resulting state and telemetry as well as its checks.
 The [engineering invariant](../../docs/engineering-invariants.md) defines the required standard.
 
