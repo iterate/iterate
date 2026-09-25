@@ -3,6 +3,7 @@ import { expect, test } from "vitest";
 import { installVoice } from "@iterate-com/voice/install";
 import { freshCtx, rejection } from "../../os/e2e/support/client.ts";
 import { openAgentItx, voiceWorkspaceSource } from "./support.ts";
+import { ScriptedAi, answeredLog, assistantWords, configureModel } from "./fixtures.ts";
 
 test("THE CHAIN: a subagent two levels down resolves a capability provided at the root through parent links, lists it with its description and origin, and births its own children relative to itself", async () => {
   const ctx = freshCtx("chain");
@@ -168,5 +169,46 @@ createFailing(test, /voice agent's parent link should be the context that asked/
       "itx.cd('/jail')",
     ]);
     expect(tool).toMatch(/is masked/);
+  },
+);
+
+// ONE PROJECT, ONE TRUST BOUNDARY: one agent messages another, and the words land stamped with the
+// sender (apps/os src/caller.ts `stampCaller`). The receiver takes a turn on a user's words from
+// anyone in the project, names the sender to the model, and does not listen to a delete request from
+// beside it (packages/agents contract.ts `trust`).
+createFailing(test, /should be stamped with the agent that sent it/, { timeoutMs: 90_000 })(
+  "an agent messages another: the words land stamped with the sender's sandbox and raise a turn that names it; a delete request from beside the receiver changes nothing",
+  async () => {
+    const root = await openAgentItx(freshCtx("agent-to-agent"));
+    const ai = new ScriptedAi(["Hello, a."]);
+    await root.cd("/agents/b").provide("itx.ai", ai);
+    await root.agents.create("/agents/a");
+    await root.agents.create("/agents/b");
+    await configureModel(root.cd("/agents/b"));
+    const { message, deleteRequest } = (await root
+      .cd("/agents/a")
+      .run(
+        "async (itx) => { const b = itx.agents.get('/agents/b'); const message = await b.message('hello from a'); const [deleteRequest] = await b.append({ type: 'events.iterate.com/agent/delete-requested', payload: {} }); return { message, deleteRequest }; }",
+      )) as {
+      message: { source?: unknown };
+      deleteRequest: { offset: number; source?: unknown };
+    };
+    expect(message.source, "a message should be stamped with the agent that sent it").toEqual({
+      origin: "/agents/a/sandbox",
+    });
+    expect(deleteRequest.source).toEqual({ origin: "/agents/a/sandbox" });
+    const log = await answeredLog(root.cd("/agents/b"), "b's answer to a");
+    expect(assistantWords(log)).toEqual(["Hello, a."]);
+    expect(ai.calls[0]!.messages.at(-1)).toEqual({
+      role: "user",
+      content: "[from /agents/a/sandbox] hello from a",
+    });
+    const agent = root.cd("/agents/b").facets.get("agent");
+    await agent.waitUntilProcessed({ offset: deleteRequest.offset });
+    expect((await agent.snapshot()).state.deletion).toBeNull();
+    expect((await root.agents.list()).map((row: { path: string }) => row.path)).toEqual([
+      "/agents/a",
+      "/agents/b",
+    ]);
   },
 );
