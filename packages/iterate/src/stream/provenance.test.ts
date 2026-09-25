@@ -36,24 +36,10 @@ test.for(TRUSTS_ROWS)(
   ({ here, source, trusted }) => expect(trusts(here, source)).toBe(trusted),
 );
 
-const event = (
-  type: string,
-  path: string,
-  source?: EventSource,
-  payload: Record<string, unknown> = {},
-): StreamEvent => ({
-  type,
-  path,
-  source,
-  payload,
-  offset: 1,
-  createdAt: "2026-09-26T00:00:00.000Z",
-});
-
-const userOnly: TrustRule = (source, e) =>
-  (e.payload as { role?: string }).role === "user" || trusts(e.path, source);
 const RULES: Record<string, TrustRule> = {
-  "chat/said": userOnly,
+  // a user's words from anyone, anything else from the trusted
+  "chat/said": (source, e) =>
+    (e.payload as { role?: string }).role === "user" || trusts(e.path, source),
   "open/anything": "anyone",
   "account/fact": "platform",
 };
@@ -137,6 +123,29 @@ test("certifiesItself: the writer is the path the event names", () => {
 
 // THE ENGINE: an event the contract's trust refuses is neither folded nor acted on, and the skip is
 // logged — on a push, a catch-up and a re-reduce alike.
+test("the engine ignores an event from a writer the contract does not trust: not folded, not acted on, logged", async () => {
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  const mem = memoryStream("/agents/b");
+  mem.stream.append(
+    { type: "note/added", source: { origin: "/agents/b" } },
+    { type: "note/added", source: { origin: "/agents/a/sandbox" } },
+    { type: "note/added", source: { origin: "/", principal: member } },
+  );
+  const processor = new CountingProcessor();
+  const engine = new ProcessorEngine(processor, { stream: mem.stream, storage: memoryStorage() });
+  await engine.catchUpFromLog();
+  await settle();
+  expect(await engine.snapshot()).toMatchObject({ state: { heard: ["/agents/b", "/"] } });
+  expect(processor).toMatchObject({ acted: [1, 3] });
+  expect(warn).toHaveBeenCalledWith({
+    event: "processor.untrusted-event-ignored",
+    slug: "counting",
+    type: "note/added",
+    origin: "/agents/a/sandbox",
+    offset: 2,
+  });
+});
+
 const CountingContract = defineProcessorContract({
   slug: "counting",
   version: "1",
@@ -156,25 +165,11 @@ class CountingProcessor extends StreamProcessor<{ heard: string[] }> {
   }
 }
 
-test("the engine ignores an event from a writer the contract does not trust: not folded, not acted on, logged", async () => {
-  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-  const mem = memoryStream("/agents/b");
-  mem.stream.append(
-    { type: "note/added", source: { origin: "/agents/b" } },
-    { type: "note/added", source: { origin: "/agents/a/sandbox" } },
-    { type: "note/added", source: { origin: "/", principal: member } },
-  );
-  const processor = new CountingProcessor();
-  const engine = new ProcessorEngine(processor, { stream: mem.stream, storage: memoryStorage() });
-  await engine.catchUpFromLog();
-  await settle();
-  expect((await engine.snapshot()).state.heard).toEqual(["/agents/b", "/"]);
-  expect(processor.acted).toEqual([1, 3]);
-  expect(warn).toHaveBeenCalledWith({
-    event: "processor.untrusted-event-ignored",
-    slug: "counting",
-    type: "note/added",
-    origin: "/agents/a/sandbox",
-    offset: 2,
-  });
-});
+function event(
+  type: string,
+  path: string,
+  source?: EventSource,
+  payload: Record<string, unknown> = {},
+): StreamEvent {
+  return { type, path, source, payload, offset: 1, createdAt: "2026-09-26T00:00:00.000Z" };
+}

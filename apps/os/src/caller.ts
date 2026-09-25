@@ -62,6 +62,7 @@ export function stampCaller<E extends { source?: unknown }>(
     ...event,
     source: {
       origin: caller.path || here,
+      // oxlint-disable-next-line iterate/simple-truthiness-check -- the stamp is a canonical record: stored as JSON, compared whole (an idempotent echo, a replay), so an absent field must stay absent, never `principal: undefined`
       ...(caller.principal && { principal: caller.principal }),
       ...(caller.principal && caller.grant && { grant: caller.grant }),
       ...(caller.platform && { platform: true as const }),

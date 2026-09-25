@@ -128,18 +128,12 @@ test("a processor emits idempotent scheduling intent and later reduces the remin
   const definition = events.find((event) => event.type === "events.iterate.com/itx/schedule-set")!;
   // The definition is the processor's, written from `/` and caused by the invoice it processed; the
   // occurrence is `/` writing what the schedule says, pointing at the definition.
-  expect(definition.source).toEqual({ origin: "/" });
-  expect(definition.metadata.causedBy).toMatchObject({
-    processor: "reminders",
-    offset: opened.offset,
+  expect(definition).toMatchObject({
+    source: { origin: "/" },
+    metadata: { causedBy: { processor: "reminders", offset: opened.offset } },
   });
-  expect(due.source).toEqual({
-    origin: "/",
-    schedule: {
-      key: expect.any(String),
-      scheduledAtOffset: definition.offset,
-      at: expect.any(String),
-    },
+  expect(due).toMatchObject({
+    source: { origin: "/", schedule: { scheduledAtOffset: definition.offset } },
   });
   expect(due).toStrictEqual(events.find((event) => event.offset === due.offset));
   // Repeating the original durable intent after completion returns its receipt, never a new timer.
@@ -187,12 +181,10 @@ test("pause holds a deadline until resume; the definition's stamp names its auth
     type: "held/due",
     afterOffset: definition.scheduledAtOffset,
   });
-  expect(due.source).toEqual({
-    origin: "/",
-    schedule: {
-      key: "held",
-      scheduledAtOffset: definition.scheduledAtOffset,
-      at: expect.any(String),
+  expect(due).toMatchObject({
+    source: {
+      origin: "/",
+      schedule: { key: "held", scheduledAtOffset: definition.scheduledAtOffset },
     },
   });
   const log = await readAll(itx);

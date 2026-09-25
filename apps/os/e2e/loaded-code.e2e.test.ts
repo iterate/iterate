@@ -269,9 +269,10 @@ test("a script beneath a mask cannot delete the config repo by appending its req
   const [requested] = (await jail.builtins.run(
     "async (itx) => itx.repos.get('/repos/config').append({ type: 'events.iterate.com/repo/delete-requested', payload: {} })",
   )) as { offset: number; source?: unknown }[];
-  expect(requested!.source).toEqual({ origin: "/jail" });
+  const { source, offset } = requested!;
+  expect(source).toEqual({ origin: "/jail" });
   const repo = root.cd("/repos/config").facets.get("repo");
-  await repo.waitUntilProcessed({ offset: requested!.offset });
+  await repo.waitUntilProcessed({ offset });
   expect((await repo.snapshot()).state.deletion).toBeNull();
   expect((await root.repos.list()).map((entry: { path: string }) => entry.path)).toEqual([
     "/repos/config",

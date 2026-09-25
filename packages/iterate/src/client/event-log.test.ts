@@ -110,7 +110,7 @@ test("who acted and the processors table's version follow the events held", asyn
   const context = fakeContext([1, 2, 3, 4], (offset) => ({
     ...(offset === 2 && { type: "events.iterate.com/itx/subscription-configured" }),
     ...(offset !== 3 && {
-      source: { principal: { actor: offset === 4 ? "user_b" : "user_a" } },
+      source: { origin: "/", principal: { actor: offset === 4 ? "user_b" : "user_a" } },
     }),
   }));
   const log = connectEventLog(context.itx, { consumes: ["*"], history: "all" });

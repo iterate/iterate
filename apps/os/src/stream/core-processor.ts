@@ -613,7 +613,7 @@ function normalizeSubscriptionConfigured(input: {
   ifConfiguredAtOffset?: number;
 }): Record<string, unknown> {
   const name = parseSubscriptionName(input.name);
-  if (input.from !== undefined && input.from !== "anyone")
+  if (input.from && input.from !== "anyone")
     throw new Error(
       `a subscription's from is "anyone" or absent (the trusted writers): got ${JSON.stringify(input.from)}`,
     );

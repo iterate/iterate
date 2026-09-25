@@ -106,20 +106,13 @@ export default class Serving extends WorkerEntrypoint {
 test("a worker whose spec says servesCallers serves a caller beneath its host as that caller; a spec that does not, and a caller beside it, as its host; only the platform names a caller", async () => {
   const ctx = freshCtx("for-caller-worker");
   const root = openItx(ctx);
-  for (const [match, servesCallers] of [
-    ["itx.served", true],
-    ["itx.hosted", false],
+  for (const [match, spec] of [
+    ["itx.served", { source: SERVING_WORKER, servesCallers: true }],
+    ["itx.hosted", { source: SERVING_WORKER }],
   ] as const)
     await root.append({
       type: "events.iterate.com/itx/rewrite-rule-configured",
-      payload: {
-        match,
-        target: [
-          "itx",
-          "workers",
-          ["get", { source: SERVING_WORKER, ...(servesCallers && { servesCallers }) }],
-        ],
-      },
+      payload: { match, target: ["itx", "workers", ["get", spec]] },
     });
   const jail = root.cd("/jail");
   await jail.provide("itx", "itx.builtins.cd('/')");

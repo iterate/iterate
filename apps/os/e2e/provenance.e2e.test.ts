@@ -20,8 +20,8 @@ const FORGED = {
 
 test("nothing forges its own source: a session's and a script's `source` is replaced whole by the platform's stamp", async () => {
   const root = openItx(freshCtx("provenance-forged"));
-  const [bySession] = await root.append({ type: "probe/forged", source: FORGED });
-  expect(bySession.source, "a forged source should never survive a session's append").toEqual({
+  const [{ source: bySession }] = await root.append({ type: "probe/forged", source: FORGED });
+  expect(bySession, "a forged source should never survive a session's append").toEqual({
     origin: "/",
     principal: { actor: "admin" },
   });
@@ -39,14 +39,14 @@ test("a lifecycle fact from a writer the entity does not trust lands, stamped wi
   const root = openItx(freshCtx("provenance-untrusted-lifecycle"));
   await root.workspaces.create("/w");
   // Loaded code at /x, beside /w: its delete request is a message the workspace does not hear.
-  const requested = (await root
+  const { offset, source } = (await root
     .cd("/x")
     .builtins.run(
       "async (itx) => (await itx.cd('/w').append({ type: 'events.iterate.com/workspace/delete-requested', payload: {} }))[0]",
     )) as { offset: number; source: unknown };
-  expect(requested.source).toEqual({ origin: "/x" });
+  expect(source).toEqual({ origin: "/x" });
   const workspace = root.cd("/w").facets.get("workspace");
-  await workspace.waitUntilProcessed({ offset: requested.offset });
+  await workspace.waitUntilProcessed({ offset });
   expect(
     (await workspace.snapshot()).state.deletion,
     "a delete request from beside the workspace should change nothing",
@@ -60,11 +60,11 @@ test("a jailed context's writes are visibly the jail's: its one outward channel 
   // A bare null, then the one grant: what the jail says goes to /inbox.
   await jail.provide("itx", null);
   await jail.provide("itx.tell", "itx.builtins.cd('/inbox').append");
-  const told = (await jail.builtins.run(
+  const { path, source } = (await jail.builtins.run(
     "async (itx) => (await itx.tell({ type: 'note/told', payload: { text: 'let me out' } }))[0]",
   )) as { source?: unknown; path: string };
-  expect(told.path).toBe("/inbox");
-  expect(told.source, "the jail's writes should carry the jail as their origin").toEqual({
+  expect(path).toBe("/inbox");
+  expect(source, "the jail's writes should carry the jail as their origin").toEqual({
     origin: "/jail",
   });
 });
@@ -104,7 +104,7 @@ test("a raw reader hears the trusted writers by default; `from: 'anyone'` hears 
   const [fromBeside] = (await x.builtins.run(
     "async (itx) => itx.workspaces.get('/w').append({ type: 'events.iterate.com/workspace/delete-requested', payload: {} })",
   )) as { offset: number; source?: unknown }[];
-  expect(fromBeside!.source).toEqual({ origin: "/x" });
+  expect(fromBeside).toMatchObject({ source: { origin: "/x" } });
   const [fromMember] = await w.append({ type: "note/by-member" });
   for (const reader of [trusted, everyone])
     await until("the member's note reaches the reader", async () =>
@@ -115,18 +115,6 @@ test("a raw reader hears the trusted writers by default; `from: 'anyone'` hears 
   // and the workspace itself did not listen: it stands
   expect(await root.workspaces.list()).toEqual([{ path: "/w", createdAt: expect.any(String) }]);
 });
-
-/** A script at `from` that says `call` on its own itx and reports what it answered or refused. */
-const say = (
-  root: { cd(path: string): { builtins: { run(code: string): Promise<unknown> } } },
-  from: string,
-  call: string,
-) =>
-  root
-    .cd(from)
-    .builtins.run(
-      `async (itx) => { try { return { ok: await ${call} }; } catch (e) { return { error: String(e.message) }; } }`,
-    ) as Promise<{ ok?: any; error?: string }>;
 
 test("loaded code appends anywhere in the project, stamped with its context; its control lands only at its own context and beneath; every other verb stays within its subtree", async () => {
   const root = openItx(freshCtx("provenance-crossing"));
@@ -167,3 +155,15 @@ test("open append is bounded: a writer a context does not trust appends at most 
   // its own subtree trusts it: unbounded there
   expect((await say(root, "/x", `itx.cd('./below').append(...${flood})`)).ok).toHaveLength(121);
 });
+
+/** A script at `from` that says `call` on its own itx and reports what it answered or refused. */
+const say = (
+  root: { cd(path: string): { builtins: { run(code: string): Promise<unknown> } } },
+  from: string,
+  call: string,
+) =>
+  root
+    .cd(from)
+    .builtins.run(
+      `async (itx) => { try { return { ok: await ${call} }; } catch (e) { return { error: String(e.message) }; } }`,
+    ) as Promise<{ ok?: any; error?: string }>;

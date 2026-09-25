@@ -22,7 +22,8 @@ test("an occurrence is the context writing what its schedule says: stamped with 
   await fire(ctx);
   const live = await waiting;
   const replay = (await readLog(ctx)).find((event) => event.type === "reminder/due");
-  expect(live.source).toStrictEqual({
+  const { source } = live;
+  expect(source).toStrictEqual({
     origin: "/",
     schedule: { key: "reminder", scheduledAtOffset: definition!.offset, at: expect.any(String) },
   });

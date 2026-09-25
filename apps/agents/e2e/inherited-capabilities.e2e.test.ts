@@ -193,10 +193,12 @@ createFailing(test, /should be stamped with the agent that sent it/, { timeoutMs
       message: { source?: unknown };
       deleteRequest: { offset: number; source?: unknown };
     };
-    expect(message.source, "a message should be stamped with the agent that sent it").toEqual({
+    const { source: said } = message;
+    const { source: asked } = deleteRequest;
+    expect(said, "a message should be stamped with the agent that sent it").toEqual({
       origin: "/agents/a/sandbox",
     });
-    expect(deleteRequest.source).toEqual({ origin: "/agents/a/sandbox" });
+    expect(asked).toEqual({ origin: "/agents/a/sandbox" });
     const log = await answeredLog(root.cd("/agents/b"), "b's answer to a");
     expect(assistantWords(log)).toEqual(["Hello, a."]);
     expect(ai.calls[0]!.messages.at(-1)).toEqual({

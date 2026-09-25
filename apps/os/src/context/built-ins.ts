@@ -387,6 +387,10 @@ function abortReasonOf(reason: unknown, verb: string): string | undefined {
   return parsed.data;
 }
 
+/** How many events a writer a context does not trust may append there per window (built-ins
+ *  `append`): a sibling's messages, not a flood. */
+const UNTRUSTED_APPENDS = { events: 120, windowMs: 60_000 };
+
 /** What the CONTEXT (the DO) injects: identity, the bindings, and the operations only it can serve. */
 interface BuildBuiltInsDeps {
   projectInfo: () => Promise<{ projectSlug?: string }>;
@@ -483,10 +487,6 @@ interface BuildBuiltInsDeps {
    *  `itx` handle so a library call's `itx.fetch(...)` resolves through THIS context's rules. */
   library: LibraryRoots;
 }
-
-/** How many events a writer a context does not trust may append there per window (built-ins
- *  `append`): a sibling's messages, not a flood. */
-const UNTRUSTED_APPENDS = { events: 120, windowMs: 60_000 };
 
 /** Assemble the built-in scope for one context. Every entry closes over the context's identity —
  *  PRE-SCOPED, not policed: cross-project access is unspellable by construction. */

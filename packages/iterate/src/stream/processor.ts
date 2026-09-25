@@ -1194,7 +1194,7 @@ export function defineProcessorContract<
     description: contract.description,
     consumes: contract.consumes,
     emits: contract.emits,
-    ...(contract.trust && { trust: contract.trust }),
+    trust: contract.trust,
     stateSchema: contract.stateSchema,
     events,
     processorDeps,
