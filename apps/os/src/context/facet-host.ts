@@ -179,6 +179,10 @@ export class FacetHost {
   /** The generation `itx.facets.abort` ended, per facet, and why: a call in flight on it rejects
    *  FACET_ABORTED (`#call`) — an outcome asked for, not a failure to report or a row to halt. */
   readonly #abortedOnRequest = new Map<string, { generation: number; reason?: string }>();
+  /** The generation a restart under a NEW LOADED IDENTITY ended, per facet (`#materialize`): a call
+   *  in flight on it rejects FACET_RESTARTED (`#call`) — the outcome of a code change, owed again
+   *  on the new instance, not a failure to report. */
+  readonly #restartedForLoadedIdentity = new Map<string, number>();
   /** Each facet's latest recovery (`#recover`), settled either way: the next one starts after it,
    *  so no restart aborts another recovery's retry mid-call. */
   readonly #facetRecoveryByName = new Map<string, Promise<void>>();
@@ -288,10 +292,11 @@ export class FacetHost {
         await this.callFacetAsPlatform(name, [["revive"]]);
         this.#facetRevived(name);
       } catch (error) {
-        // A revive `itx.facets.abort` cut off (FACET_ABORTED) failed at nothing: the reset was asked
-        // for, and the fresh instance is owed the same revive — due now, the next pass's, with no
-        // backoff and no issue.
-        if (errorCode(error) === "FACET_ABORTED") {
+        // A revive `itx.facets.abort` cut off (FACET_ABORTED), or a restart under a new loaded
+        // identity (FACET_RESTARTED), failed at nothing: the fresh instance is owed the same revive
+        // — due now, the next pass's, with no backoff and no issue.
+        const code = errorCode(error);
+        if (code === "FACET_ABORTED" || code === "FACET_RESTARTED") {
           this.#claimFacetAlarm(name, Date.now());
           continue;
         }
@@ -921,12 +926,10 @@ export class FacetHost {
         // A platform start (`#start`, `#recover`) is itself the start that follows; a call restarts
         // it first — abort and start with nothing between (`#restart`), the identity recorded there.
         if (platformStart) {
-          this.#abortFacetIfRunning(name, "loaded identity changed");
+          this.#abortForNewLoadedIdentity(name);
           this.#liveFacetNames.delete(name); // cold from here: it starts afresh below
         } else {
-          started = await this.#restart(name, () =>
-            this.#abortFacetIfRunning(name, "loaded identity changed"),
-          );
+          started = await this.#restart(name, () => this.#abortForNewLoadedIdentity(name));
           if (this.#facetStartupMemoByName.get(name) !== memo)
             throw codedError(
               "NO_FACET",
@@ -984,7 +987,8 @@ export class FacetHost {
    *  channel back) — then the answer copied out. A facet that never answers (FACET_CALL_WATCHDOG_MS)
    *  is restarted (`#restart`) — unless the call was a platform start, which leaves it — and one
    *  whose startup threw is aborted and starts on its next call: its pending call rejects, the
-   *  counter drains. A call on an instance `abort` reset rejects FACET_ABORTED; one on an instance
+   *  counter drains. A call on an instance `abort` reset rejects FACET_ABORTED; one on an instance a
+   *  new loaded identity restarted, FACET_RESTARTED; one on an instance
    *  `#deleteFacet` deleted, NO_FACET. */
   async #call(
     { facet, startupFailed, generation }: MaterializedFacet,
@@ -1038,6 +1042,15 @@ export class FacetHost {
         throw codedError(
           "FACET_ABORTED",
           `facet "${name}" was aborted${aborted.reason ? `: ${aborted.reason}` : ""} — its next call starts it fresh`,
+        );
+      // A call the watchdog timed out stays TIMEOUT: only the restart's own rejection is re-coded.
+      if (
+        this.#restartedForLoadedIdentity.get(name) === generation &&
+        errorCode(error) !== "TIMEOUT"
+      )
+        throw codedError(
+          "FACET_RESTARTED",
+          `facet "${name}" was restarted under a new loaded identity — its next call runs on the new instance`,
         );
       // The runtime's own words for a call in flight on a facet `ctx.facets.delete` took
       // (workerd server.c++ `deleteFacet`): the removal this call raced, not a failure of it.
@@ -1145,6 +1158,14 @@ export class FacetHost {
     } catch {
       /* facet not running */
     }
+  }
+  /** The restart's abort when a facet's loaded identity moved, the generation it ended recorded so
+   *  a call in flight on it rejects FACET_RESTARTED (`#call`). */
+  #abortForNewLoadedIdentity(name: string): void {
+    const generation = this.#facetGeneration(name);
+    this.#abortFacetIfRunning(name, "loaded identity changed");
+    if (this.#facetGeneration(name) !== generation)
+      this.#restartedForLoadedIdentity.set(name, generation);
   }
   #facetGeneration(name: string): number {
     return this.#facetGenerationByName.get(name) ?? 0;

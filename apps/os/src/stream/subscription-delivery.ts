@@ -380,8 +380,11 @@ export class SubscriptionDelivery {
         this.#haltRow(name, row.configuredAtOffset, row.configuredAtOffset, 1, error);
         return;
       }
-      // A catch-up an `itx.facets.abort` cut off is owed by the fresh instance: run it there.
-      if (errorCode(error) === "FACET_ABORTED") return this.#catchUpFacetRow(name, row);
+      // A catch-up an `itx.facets.abort` or a new loaded identity's restart cut off is owed by the
+      // fresh instance: run it there.
+      const code = errorCode(error);
+      if (code === "FACET_ABORTED" || code === "FACET_RESTARTED")
+        return this.#catchUpFacetRow(name, row);
       throw error;
     }
   }
@@ -575,9 +578,10 @@ export class SubscriptionDelivery {
         // log — queued behind whatever already waits on this row (a later push heals the same gap
         // on its own; the catch-up is then a no-op). ONE catch-up per timed-out push: a batch that
         // is slow every time costs two aborts per commit and never loops. A push an
-        // `itx.facets.abort` cut off (FACET_ABORTED) is the same loss, asked for: caught up alike.
+        // `itx.facets.abort` cut off (FACET_ABORTED) is the same loss, asked for, and so is one a
+        // restart under a new loaded identity cut off (FACET_RESTARTED): caught up alike.
         const code = errorCode(error);
-        if (code === "TIMEOUT" || code === "FACET_ABORTED")
+        if (code === "TIMEOUT" || code === "FACET_ABORTED" || code === "FACET_RESTARTED")
           this.#catchUpAfterPushTimeout(name, row);
         throw error;
       }
@@ -588,6 +592,17 @@ export class SubscriptionDelivery {
       // FACET_ABORTED is a reset someone asked for, its batch caught up above.
       const code = errorCode(error);
       if (code === "NO_ITX_EXPRESSION_MATCH" || code === "FACET_ABORTED") return;
+      // FACET_RESTARTED is a code change's restart, its batch caught up above: logged, no issue.
+      if (code === "FACET_RESTARTED") {
+        console.log({
+          event: "delivery.facet-restarted-in-flight",
+          namespace: "subscription-delivery",
+          failureSite: "subscription-delivery.deliver",
+          name,
+          code,
+        });
+        return;
+      }
       if (code === "NO_FACET" && this.#isStillTheRow(name, row)) return;
       this.#reportFacetRowFailure("subscription-delivery.deliver", name, row, error);
     }
