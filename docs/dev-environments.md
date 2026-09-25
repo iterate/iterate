@@ -161,9 +161,15 @@ read secrets.
   changes is linked at the PR head instead
   (`template=github:iterate/iterate#<head>&path:configs/<name>`, the
   custom field prefilled), so the project is born from the unmerged template.
-  A click signs a logged-out browser in as the PR's test person,
-  `pr<N>@preview.iterate.test`, and lands inside project `pr<N>`, with no
-  password and no Allow page. CI seeds that person and project on every deploy
+  The PR body is public, so a link alone signs nobody in: a click first sends
+  the browser to prd (`os.iterate.com`) to confirm it's an `*@nustom.com`
+  person, through an OAuth grant that can only read who they are (prd's
+  `/oauth2/userinfo` resource; `apps/os/src/test-link-admins.ts`). Then it
+  signs the browser in as the PR's test person, `pr<N>@preview.iterate.test`,
+  and lands inside project `pr<N>`, with no password and no Allow page on the
+  preview. An agent without an admin's prd session signs in to a preview with
+  its password instead (Doppler `os/preview`, `APP_CONFIG` `login.password`).
+  CI seeds that person and project on every deploy
   (`apps/os/scripts/preview.ts` `previewSignIn`). The link is
   `/.auth/test-link?t=<token>` (`apps/os/src/test-link.ts`), signed with the
   preview's `secrets.key` and bound to that preview's origin, so a pr123 link
@@ -172,7 +178,9 @@ read secrets.
   one) and is deleted with the preview. The route exists only where
   `login.testLink` is set. The preview config and local dev set it in code,
   never in Doppler, and `parseAppConfig` refuses it unless `urls.os` is a
-  workers.dev or localhost origin, so prd answers 404. Locally, mint one with
+  workers.dev or localhost origin, so prd answers 404, and off localhost
+  refuses it without `login.testLink.admins`, the issuer and email patterns
+  that gate it. Local dev redeems a link at once. Locally, mint one with
   the dev key (`specs/os/test-link.spec.ts` shows how). Anyone can still sign
   in with any email and the preview's password (Doppler
   `os/preview`, `APP_CONFIG.login.password`).

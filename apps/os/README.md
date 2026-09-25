@@ -118,7 +118,8 @@ whose head would carry the result, and one suite alone never from the PR's branc
 preview's state before redeploying; `delete` removes it. CI publishes URLs and operation links in
 the PR body, under a status line (deploying, deployed, deploy failed, with the CI job) and a line
 per suite (`E2E tests` and `Browser specs`: passed or failed, each with its CI job),
-with one-click `Sign in ↗` links as the PR's test person, `pr<N>@preview.iterate.test`, and
+with `Sign in ↗` links as the PR's test person, `pr<N>@preview.iterate.test`, for whoever
+confirms at prd that they are `*@nustom.com` (`src/test-link-admins.ts`), and
 one-click "New project from template" links into the Dash
 ([dev environments](../../docs/dev-environments.md), `src/test-link.ts`).
 For an operational change, verify the preview's resulting state and telemetry as well as its checks.
