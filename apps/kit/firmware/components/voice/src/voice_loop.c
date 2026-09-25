@@ -2422,11 +2422,12 @@ static void status_voice_init(void) {
   const bool narrate = iterate_kit_platform_reset_by_person();
   iterate_kit_announcer_init(&runtime.status_voice.announcer, narrate, now_ms(NULL));
   ESP_LOGI(
-      tag, "status voice: %s%s", iterate_kit_status_voice_name(voice),
-      runtime.board->play_clip == NULL ? " (this board plays no clips)"
+      tag, "status voice: %s%s (reset: %s)", iterate_kit_status_voice_name(voice),
+      runtime.board->play_clip == NULL ? ", but this board plays no clips"
       : !runtime.status_voice.enabled   ? ""
       : narrate                         ? ", narrating this boot"
-                                        : ", quiet: nobody caused this boot");
+                                        : ", quiet: nobody caused this boot",
+      iterate_kit_platform_reset_reason_name());
 }
 
 /* Render (or reuse) a phrase and hand it to the board. Only called once the last clip is over. */
