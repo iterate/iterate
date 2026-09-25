@@ -2,7 +2,8 @@
 // config worker through a pipe the context DO owns (iterate-context-durable-object.ts `#expressionFetchBody`), so a
 // route that never reads its body leaves no read pending on the DO's request stream
 // (https://github.com/cloudflare/workerd/issues/918). Local workerd does not surface that error, so
-// these rows pin what the pipe must preserve; the error itself is proven on a deployed worker.
+// these rows pin what the pipe must preserve; the error itself is proven on a deployed worker. A GET
+// or HEAD that arrives with a body reaches the app with none, since `new Request` refuses one.
 
 import { exports } from "cloudflare:workers";
 import { expect, test } from "vitest";
@@ -42,6 +43,23 @@ test("a project host POST reaches a route that ignores its body (200) and one th
   );
   expect(echoed).toMatchObject({ status: 200 });
   expect(await echoed.text()).toBe(payload);
+});
+
+test("a project host GET or HEAD that arrives with a body gets the page (200), not a 500", async () => {
+  const itx = await (
+    await openSession()
+  )
+    .authenticate(adminCredentials())
+    .projects.create({ project: "get-with-body" });
+  await publishConfigWorker(itx, ["itx", "workers", ["get", { source: SRC_BODY_ROUTER }]]);
+
+  for (const method of ["GET", "HEAD"]) {
+    const answer = await exports.default.fetch(
+      "https://echo--get-with-body.projects.test/elrte/src/elrte.src.html",
+      { method, headers: { "content-length": "0", "content-type": "application/json" } },
+    );
+    expect(answer).toMatchObject({ status: 200 });
+  }
 });
 
 /** A streamed body, as a visitor's arrives — not a string the runtime buffers up front. */
