@@ -290,11 +290,23 @@ export function encodeCommit(input: {
 
 // ── pack parsing ──
 
-/** Inflate one zlib stream starting at `offset`, reporting consumed bytes. */
-function inflateAt(pack: Uint8Array, offset: number): { consumed: number; out: Uint8Array } {
+/** Inflate one zlib stream starting at `offset`, reporting consumed bytes. It stops as soon as the
+ *  output passes `declared`, the size the entry's header states: an untrusted pack cannot make this
+ *  isolate allocate more than the header admitted (and `parsePack` bounds). */
+function inflateAt(
+  pack: Uint8Array,
+  offset: number,
+  declared: number,
+): { consumed: number; out: Uint8Array } {
   const inflator = new Inflate();
   const chunks: Uint8Array[] = [];
-  inflator.onData = (chunk: Uint8Array) => chunks.push(chunk);
+  let inflated = 0;
+  inflator.onData = (chunk: Uint8Array) => {
+    inflated += chunk.length;
+    if (inflated > declared)
+      throw new Error(`a pack entry inflates past its declared ${declared} byte(s)`);
+    chunks.push(chunk);
+  };
   inflator.onEnd = () => undefined;
   let pushed = 0;
   while (!inflator.ended && offset + pushed < pack.length) {
@@ -459,7 +471,7 @@ export async function parsePack(
     } else {
       entry.type = kind;
     }
-    const inflated = inflateAt(pack, cursor);
+    const inflated = inflateAt(pack, cursor, declaredSize);
     cursor += inflated.consumed;
     if (inflated.out.length !== declaredSize) {
       throw new Error(
@@ -698,7 +710,12 @@ function pushRefused(body: Uint8Array, expectedRef: string): string | null {
  *  percent-encoded or raw — a secret placeholder (`x-access-token:getSecret("/secrets/github-acme",
  *  { field: "accessToken" })@github.com/…`) has slashes and quotes no URL parser takes in userinfo —
  *  and egress substitutes a placeholder inside the credential (apps/os secrets.ts). */
-export function gitRemoteOf(remote: string): { url: string; authorization: string | null } {
+export function gitRemoteOf(remote: string): {
+  url: string;
+  authorization: string | null;
+  /** The decoded userinfo, or null when the URL has none. */
+  userinfo: { user: string; password: string } | null;
+} {
   const refusal = () =>
     new Error(`not an http(s) git URL: ${JSON.stringify(redactRemote(remote))}`);
   const match = /^(https?:\/\/)(?:(.*)@)?([^@/?#]+)(\/[^?#]*)?$/.exec(remote);
@@ -712,15 +729,40 @@ export function gitRemoteOf(remote: string): { url: string; authorization: strin
   }
   if (!url.hostname) throw refusal();
   const clean = `${url.origin}${url.pathname.replace(/\/+$/, "")}`;
-  if (!userinfo) return { url: clean, authorization: null };
+  if (!userinfo) return { url: clean, authorization: null, userinfo: null };
   const colon = userinfo.indexOf(":");
-  const [user, password] =
-    colon === -1 ? [userinfo, ""] : [userinfo.slice(0, colon), userinfo.slice(colon + 1)];
-  const credential = `${decodeUserinfo(user)}:${decodeUserinfo(password)}`;
+  const user = decodeUserinfo(colon === -1 ? userinfo : userinfo.slice(0, colon));
+  const password = decodeUserinfo(colon === -1 ? "" : userinfo.slice(colon + 1));
   return {
     url: clean,
-    authorization: `Basic ${btoa(String.fromCharCode(...textEncoder.encode(credential)))}`,
+    authorization: basicAuthorization(`${user}:${password}`),
+    userinfo: { user, password },
   };
+}
+
+/** `user:password` as a `Basic` Authorization value, UTF-8 first — how git and curl send userinfo,
+ *  and how Artifacts takes its minted token. */
+export function basicAuthorization(credential: string): string {
+  return `Basic ${btoa(String.fromCharCode(...textEncoder.encode(credential)))}`;
+}
+
+/** A response body as bytes, read no further than `maxBytes`: a remote that answers more is refused
+ *  before this isolate holds it all. */
+export async function readCapped(response: Response, maxBytes: number): Promise<Uint8Array> {
+  const reader = response.body?.getReader();
+  if (!reader) return new Uint8Array(0);
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) return concat(chunks);
+    total += value.byteLength;
+    if (total > maxBytes) {
+      await reader.cancel();
+      throw new Error(`the remote answered more than ${maxBytes} bytes`);
+    }
+    chunks.push(value);
+  }
 }
 
 /** A userinfo part percent-decoded, or as written when it is not valid percent-encoding. */
@@ -732,9 +774,10 @@ function decodeUserinfo(part: string): string {
   }
 }
 
-/** A remote as it may be shown: its userinfo dropped. */
+/** A remote as it may be shown: everything up to its last `@` dropped after the scheme, whatever the
+ *  scheme or its case, so no credential in it is ever echoed. */
 export function redactRemote(remote: string): string {
-  return remote.replace(/^(https?:\/\/).*@(?=[^@]*$)/, "$1");
+  return remote.replace(/^([a-z][a-z0-9+.-]*:\/\/)?[^@]*@(?=[^@]*$)/i, "$1");
 }
 
 /** Whether `target` is `from` or one of its ancestors, walking every parent through the commits in
@@ -759,6 +802,9 @@ export function commitReaches(
 }
 
 // ── transport ──
+
+/** The most one git response may be: a pack for a whole history is buffered here to parse it. */
+const MAX_RESPONSE_BYTES = 64 * 1024 * 1024;
 
 /** The wait before the one repeat of a read Artifacts answered 5xx. */
 const UPLOAD_PACK_RETRY_DELAYS_MS = [1_000];
@@ -810,7 +856,7 @@ export function createGitWireTransport(input: {
           await response.body?.cancel(); // an unread body keeps its connection open
           throw new Error(`${service} responded ${response.status} for ${input.remote}`);
         }
-        return new Uint8Array(await response.arrayBuffer());
+        return readCapped(response, MAX_RESPONSE_BYTES);
       },
       {
         event: "repo.platform-failure-retry",

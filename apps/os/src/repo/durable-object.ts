@@ -35,6 +35,7 @@ import { assertCreated, EntityLifecycleProcessor } from "../project/entity-lifec
 import {
   ZERO_OID,
   buildPack,
+  basicAuthorization,
   commitReaches,
   createGitWireTransport,
   encodeCommit,
@@ -44,6 +45,7 @@ import {
   parseCommit,
   parsePack,
   parseTree,
+  readCapped,
   redactRemote,
   treeObjectsOf,
   type GitObjectType,
@@ -60,7 +62,7 @@ const AUTHOR = { email: "config@iterate.com", name: "iterate" };
 const TOKEN_TTL_SECONDS = 300;
 /** Reuse a token only while this much of its life remains — an operation must not outlive it. */
 const TOKEN_REUSE_MARGIN_MS = 60_000;
-/** The most a pull or push inflates to prove a fast-forward: the pack is checked in this isolate. */
+/** The most a pull or push reads and inflates of an untrusted remote: the pack is checked here. */
 const MAX_PACK_OBJECT_BYTES = 64 * 1024 * 1024;
 const textDecoder = new TextDecoder();
 const textEncoder = new TextEncoder();
@@ -69,6 +71,9 @@ type Transport = ReturnType<typeof createGitWireTransport>;
 /** A git token as this facet keeps it: reused until `until` (epoch ms) minus the margin. */
 type StoredToken = { token: string; until: number };
 type TipSnapshot = { manifest: RepoManifest; objects: Map<string, RawGitObject> };
+/** A commit's fact, owed from the moment its push is sent until both appends have landed; a pull's
+ *  carries a key of its own, since a pull can return main to a commit published before. */
+type OwedFact = CommitCompleted & { key?: string };
 
 /** A repo-relative FILE path, `notes/log.md`: no leading slash, no empty, `.` or `..` segment. */
 function filePath(path: string): string {
@@ -163,7 +168,7 @@ export class RepoDurableObject extends StreamProcessorDurableObject<
     if (known && Date.now() < known.until - TOKEN_REUSE_MARGIN_MS)
       return createGitWireTransport({
         remote: await this.#remote(),
-        authorization: artifactsAuthorization(known.token),
+        authorization: basicAuthorization(`x:${known.token}`),
       });
     const path = this.#path;
     const asked = Date.now();
@@ -176,7 +181,7 @@ export class RepoDurableObject extends StreamProcessorDurableObject<
     await this.ctx.storage.put(key, token, { allowUnconfirmed: true });
     return createGitWireTransport({
       remote,
-      authorization: artifactsAuthorization(minted.plaintext),
+      authorization: basicAuthorization(`x:${minted.plaintext}`),
     });
   }
 
@@ -309,7 +314,15 @@ export class RepoDurableObject extends StreamProcessorDurableObject<
    *  an unborn `main`): a `main` anywhere else refuses the commit before anything is pushed, so a
    *  decision made on an older read never lands on top of a commit it did not see (the project's
    *  seed, project/processor.ts). */
-  async commitFiles(input: {
+  commitFiles(input: {
+    message: string;
+    changes: RepoFileChange[];
+    author?: { name: string; email: string };
+    parent?: string | null;
+  }): Promise<{ commitOid: string | null; changedPaths: string[] }> {
+    return this.#serialized(() => this.#commitFiles(input));
+  }
+  async #commitFiles(input: {
     message: string;
     changes: RepoFileChange[];
     author?: { name: string; email: string };
@@ -328,18 +341,7 @@ export class RepoDurableObject extends StreamProcessorDurableObject<
     this.#snapshotMemo = null; // whatever the outcome, the next read re-fetches — or reads the push's
     const transport = await this.#transport("write");
     const tip = (await transport.tipOf(REF)) || null;
-    // A fact still OWED from a push that landed without its facts (below: the caller saw the throw)
-    // is settled FIRST, word for word (an idempotency key names ONE event) — before this commit can
-    // overwrite the debt or land on top of an unpublished tip. The apex follows the fact
-    // (project/processor.ts), so a commit in git without it would sit unpublished; a root still
-    // refusing the fact refuses this commit too, loud. An owed fact for another commit than the tip
-    // never landed (a debt written before a push that was refused or died) or is stale (main moved
-    // since): dropped.
-    const owed = await this.ctx.storage.get<CommitCompleted>("commit-fact");
-    if (owed) {
-      if (owed.commitOid === tip) await this.#commitFact(owed);
-      else await this.ctx.storage.delete("commit-fact");
-    }
+    await this.#settleOwedFact(tip);
     // oxlint-disable-next-line iterate/simple-truthiness-check -- `parent` absent commits onto whatever main holds; `null` names an unborn main, which a born one refuses
     if (parent !== undefined && parent !== tip)
       throw new Error(
@@ -392,7 +394,7 @@ export class RepoDurableObject extends StreamProcessorDurableObject<
     toPush.push({ payload: commitBytes, type: "commit" });
     // The fact this push will owe, kept in storage until it has landed on both logs — so a retry after
     // a lost append lands the same event (above), never a different one under the same key.
-    const committed: CommitCompleted = { path, commitOid, message: input.message, changedPaths };
+    const committed: OwedFact = { path, commitOid, message: input.message, changedPaths };
     await this.ctx.storage.put("commit-fact", committed);
     const refused = await transport.push({
       newOid: commitOid,
@@ -434,17 +436,42 @@ export class RepoDurableObject extends StreamProcessorDurableObject<
 
   /** THE COMMIT'S FACT: cross-posted to `/` FIRST — the project processor follows the config repo's
    *  commits with the apex (project/processor.ts), so a commit whose own-path fact lost its answer is
-   *  published anyway — then on this path. Keyed by the commit on both, so landing it again (an owed
-   *  fact on a retry, above) lands nothing where it stands. Owed no more once both have landed. */
-  async #commitFact(payload: CommitCompleted): Promise<void> {
+   *  published anyway — then on this path. Keyed by the commit on both (a pull's by its own key), so
+   *  landing it again (an owed fact on a retry) lands nothing where it stands. Owed no more once both
+   *  have landed. */
+  async #commitFact({ key, ...payload }: OwedFact): Promise<void> {
     const committed: EventInput<typeof RepoContract> = {
       type: "events.iterate.com/repo/commit-completed",
       payload,
-      idempotencyKey: `repo/commit-completed:${payload.path}:${payload.commitOid}`,
+      idempotencyKey: key || `repo/commit-completed:${payload.path}:${payload.commitOid}`,
     };
     await this.withItx((itx) => itx.cd("/").append(committed));
     await this.withItx((itx) => itx.append(committed));
     await this.ctx.storage.delete("commit-fact");
+  }
+
+  /** A fact still OWED from a commit or pull whose push landed without its facts (the caller saw the
+   *  throw) is settled FIRST, word for word (an idempotency key names ONE event) — before a write can
+   *  overwrite the debt or land on top of an unpublished tip, and before a pull answers up to date.
+   *  The apex follows the fact (project/processor.ts), so a commit in git without it would sit
+   *  unpublished; a root still refusing the fact refuses this write too, loud. An owed fact for
+   *  another commit than the tip never landed (a debt written before a push that was refused or
+   *  died) or is stale (main moved since): dropped. Writes are serialized (`#serialized`), so the one
+   *  debt is always the write's own. */
+  async #settleOwedFact(tip: string | null): Promise<void> {
+    const owed = await this.ctx.storage.get<OwedFact>("commit-fact");
+    if (!owed) return;
+    if (owed.commitOid === tip) await this.#commitFact(owed);
+    else await this.ctx.storage.delete("commit-fact");
+  }
+
+  /** ONE WRITE AT A TIME in this facet: a commit and a pull each read the tip, owe a fact and push,
+   *  so two at once would overwrite each other's debt. */
+  #writes: Promise<unknown> = Promise.resolve();
+  #serialized<T>(write: () => Promise<T>): Promise<T> {
+    const run = this.#writes.then(write, write);
+    this.#writes = run.catch(() => undefined);
+    return run;
   }
 
   /** The remote this repo remembers, or null. */
@@ -453,12 +480,20 @@ export class RepoDurableObject extends StreamProcessorDurableObject<
     return (await this.snapshot()).state.origin;
   }
 
-  /** Remember `url` as origin, or forget it (`null`): a `repo/origin-set` fact on this path. A URL git
-   *  cannot use (not http(s), a query, the scp form) is refused before anything is written. */
+  /** Remember `url` as origin, or forget it (`null`): a `repo/origin-set` fact on this path. The URL
+   *  must be one git can use, and its credential, if any, a secret placeholder — an origin is stored
+   *  on the log, so it never holds a token. A refusal never echoes the credential. */
   async setOrigin(url: string | null): Promise<{ origin: string | null }> {
-    await this.#created();
+    const path = await this.#created();
     const origin = z.string().min(1).nullable().parse(url);
-    if (origin) gitRemoteOf(origin);
+    if (origin) {
+      const { userinfo } = gitRemoteOf(origin);
+      if (userinfo && !/^getSecret\(.*\)$/s.test(userinfo.password))
+        throw codedError(
+          "INVALID_INPUT",
+          `repo ${path}: an origin's credential is a secret placeholder (user:getSecret("/secrets/…")), never a token — ${redactRemote(origin)}`,
+        );
+    }
     await this.withItx((itx) =>
       itx.append({ type: "events.iterate.com/repo/origin-set", payload: { origin } }),
     );
@@ -466,10 +501,14 @@ export class RepoDurableObject extends StreamProcessorDurableObject<
   }
 
   /** Bring the remote's main here, the same commits: its pack goes to Artifacts' receive-pack
-   *  unchanged, compare-and-swapped on our tip. Refused `NOT_FAST_FORWARD` unless our tip is in the
-   *  remote's history or `force` says to reset main to the remote's. A pull that moves main lands the
-   *  commit's fact like `commitFiles` (so `/repos/config` publishes), owed if the fact is lost. */
-  async pull(options?: { remote?: string; force?: boolean }): Promise<RepoSyncResult> {
+   *  unchanged, compare-and-swapped on our tip. Up to date when our main already contains theirs;
+   *  refused `NOT_FAST_FORWARD` unless theirs contains ours, or `force` says to reset main to the
+   *  remote's (an ancestor of ours included). A pull that moves main lands the commit's fact like
+   *  `commitFiles` (so `/repos/config` publishes), owed until it lands. */
+  pull(options?: { remote?: string; force?: boolean }): Promise<RepoSyncResult> {
+    return this.#serialized(() => this.#pull(options));
+  }
+  async #pull(options: unknown): Promise<RepoSyncResult> {
     const path = await this.#created();
     const { remote, force } = await this.#syncOptions(options);
     const artifacts = await this.#transport("write");
@@ -477,36 +516,28 @@ export class RepoDurableObject extends StreamProcessorDurableObject<
       artifacts.tipOf(REF),
       remote.transport.tipOf(REF),
     ]);
+    await this.#settleOwedFact(ours);
     if (!theirs) throw new Error(`repo ${path}: ${remote.shown} has no main to pull`);
     if (theirs === ours) return { status: "up-to-date", commitOid: ours, previousOid: ours };
     const pack = await remote.transport.fetchPack({ wants: [theirs], haves: ours ? [ours] : [] });
-    const packed = new Map(
-      (await parsePack(pack, { maxTotalObjectBytes: MAX_PACK_OBJECT_BYTES })).map((o) => [
-        o.oid,
-        o,
-      ]),
-    );
-    if (ours && !force && !commitReaches(packed, theirs, ours))
+    if (ours && !force && !commitReaches(await parseBounded(pack), theirs, ours)) {
+      if (await reaches(artifacts, ours, theirs))
+        return { status: "up-to-date", commitOid: ours, previousOid: ours };
       throw notFastForward(path, `${remote.shown}'s main does not contain ours`, ours, theirs);
+    }
     this.#snapshotMemo = null;
-    // The fact this pull will owe: the paths the two trees differ in, read from our tip's snapshot
-    // and the pack (which carries every object of theirs that ours does not reach).
-    const before = ours
-      ? await this.#tipSnapshot(artifacts, ours)
-      : { manifest: new Map(), objects: new Map<string, RawGitObject>() };
-    const commit = packed.get(theirs);
-    if (commit?.type !== "commit")
-      throw new Error(`repo ${path}: ${remote.shown}'s pack omitted its tip commit ${theirs}`);
-    const { tree, message } = parseCommit(commit.payload);
-    const objects = new Map([...before.objects, ...packed]);
-    const treeObject = objects.get(tree);
-    const after =
-      treeObject?.type === "tree" ? manifestOf(parseTree(treeObject.payload), objects) : null;
-    const committed: CommitCompleted = {
+    // The fact this pull owes, read before anything moves: the paths the two tips' trees differ in,
+    // and their commit's message, from the remote's own snapshot of it.
+    const [before, after] = await Promise.all([
+      ours ? this.#tipSnapshot(artifacts, ours) : null,
+      this.#tipSnapshot(remote.transport, theirs),
+    ]);
+    const committed: OwedFact = {
       path,
       commitOid: theirs,
-      message,
-      changedPaths: after ? changedPathsOf(before.manifest, after) : [],
+      message: parseCommit(after.objects.get(theirs)!.payload).message,
+      changedPaths: changedPathsOf(before?.manifest || new Map(), after.manifest),
+      key: `repo/commit-completed:${path}:${theirs}:pull:${crypto.randomUUID()}`,
     };
     await this.ctx.storage.put("commit-fact", committed);
     const refused = await artifacts.push({
@@ -520,19 +551,14 @@ export class RepoDurableObject extends StreamProcessorDurableObject<
       await this.ctx.storage.delete("commit-fact");
       throw new Error(`repo ${path}: the pull was refused: ${refused}`);
     }
-    // A tree the pack and our tip did not both carry (a revert to an older tree): read it back.
-    if (!after)
-      committed.changedPaths = changedPathsOf(
-        before.manifest,
-        (await this.#tipSnapshot(artifacts, theirs)).manifest,
-      );
     await this.#commitFact(committed);
     return { status: "updated", commitOid: theirs, previousOid: ours };
   }
 
   /** Send this repo's main to the remote's main: Artifacts' pack of what the remote lacks, forwarded
-   *  unchanged to its receive-pack. Refused `NOT_FAST_FORWARD` unless the remote's tip is in our
-   *  history or `force` says to overwrite it. */
+   *  unchanged to its receive-pack, compare-and-swapped on the remote's tip. Up to date when the
+   *  remote's main already contains ours; refused `NOT_FAST_FORWARD` unless ours contains theirs, or
+   *  `force` says to overwrite it. */
   async push(options?: { remote?: string; force?: boolean }): Promise<RepoSyncResult> {
     const path = await this.#created();
     const { remote, force } = await this.#syncOptions(options);
@@ -544,15 +570,10 @@ export class RepoDurableObject extends StreamProcessorDurableObject<
     if (!ours) throw new Error(`repo ${path}: main has no commit to push`);
     if (theirs === ours) return { status: "up-to-date", commitOid: ours, previousOid: ours };
     const pack = await artifacts.fetchPack({ wants: [ours], haves: theirs ? [theirs] : [] });
-    if (theirs && !force) {
-      const packed = new Map(
-        (await parsePack(pack, { maxTotalObjectBytes: MAX_PACK_OBJECT_BYTES })).map((o) => [
-          o.oid,
-          o,
-        ]),
-      );
-      if (!commitReaches(packed, ours, theirs))
-        throw notFastForward(path, `our main does not contain ${remote.shown}'s`, ours, theirs);
+    if (theirs && !force && !commitReaches(await parseBounded(pack), ours, theirs)) {
+      if (await reaches(remote.transport, theirs, ours))
+        return { status: "up-to-date", commitOid: theirs, previousOid: theirs };
+      throw notFastForward(path, `our main does not contain ${remote.shown}'s`, ours, theirs);
     }
     const refused = await remote.transport.push({
       oldOid: theirs || ZERO_OID,
@@ -568,8 +589,10 @@ export class RepoDurableObject extends StreamProcessorDurableObject<
 
   /** A pull's or push's options, and the remote they name (or origin) as a transport through this
    *  context's egress: the request reaches the remote with the URL's userinfo as its credential,
-   *  where egress substitutes a secret placeholder. The body is read before the call ends, so
-   *  nothing of the egress outlives it. */
+   *  where egress substitutes a secret placeholder. The body is read — no more than the cap — before
+   *  the call ends, so nothing of the egress outlives it. A caller that may pull or push may already
+   *  commit to the repo, and a commit to /repos/config publishes code that runs with the root's
+   *  egress: this reaches nothing that caller could not. */
   async #syncOptions(options: unknown) {
     const { remote: named, force = false } =
       z
@@ -590,7 +613,7 @@ export class RepoDurableObject extends StreamProcessorDurableObject<
       fetch: (request) =>
         this.withItx(async (itx) => {
           const response = await itx.fetch(request);
-          return new Response(await response.arrayBuffer(), {
+          return new Response(await readCapped(response, MAX_PACK_OBJECT_BYTES), {
             status: response.status,
             statusText: response.statusText,
             headers: response.headers,
@@ -632,9 +655,23 @@ export class RepoDurableObject extends StreamProcessorDurableObject<
   }
 }
 
-/** Artifacts' minted token as the Basic credential its git endpoint takes. */
-function artifactsAuthorization(token: string): string {
-  return `Basic ${btoa(`x:${token}`)}`;
+/** An untrusted pack's objects by oid, each object and all of them bounded (git-wire.ts). */
+async function parseBounded(pack: Uint8Array): Promise<Map<string, RawGitObject>> {
+  const limits = {
+    maxObjectBytes: MAX_PACK_OBJECT_BYTES,
+    maxTotalObjectBytes: MAX_PACK_OBJECT_BYTES,
+  };
+  return new Map((await parsePack(pack, limits)).map((object) => [object.oid, object]));
+}
+
+/** Whether `tip`'s history on `transport`'s remote contains `oid`: its pack for `tip`, having `oid`,
+ *  walked (`commitReaches` — right whether the server honours the have, ignores it, or never saw it). */
+async function reaches(transport: Transport, tip: string, oid: string): Promise<boolean> {
+  return commitReaches(
+    await parseBounded(await transport.fetchPack({ wants: [tip], haves: [oid] })),
+    tip,
+    oid,
+  );
 }
 
 /** The paths two trees differ in: added, removed, or another blob or mode — sorted. */

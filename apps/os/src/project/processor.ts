@@ -454,7 +454,9 @@ export class ProjectProcessor extends StreamProcessor<
           ) {
             await append({
               type: "events.iterate.com/itx/ingress-configured",
-              idempotencyKey: `itx/ingress-configured:${tip.commitOid}`,
+              // Keyed by the commit's fact, not the commit alone: a pull can return main to a
+              // commit published before (B, C, then B again), which publishes it again.
+              idempotencyKey: `itx/ingress-configured:${tip.commitOid}@${tip.offset}`,
               payload: { target: configRepoIngressTarget(tip.commitOid) },
             });
             this.#published = tip.offset;

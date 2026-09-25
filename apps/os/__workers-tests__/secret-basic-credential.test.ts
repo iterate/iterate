@@ -31,16 +31,20 @@ test("a Basic credential's placeholder is substituted for the pinned origin only
     status: 200,
     body: "ok",
   });
-  expect(upstream.requests).toEqual([
-    {
-      url: "https://git.test/acme/config.git/git-upload-pack",
-      authorization: basic(`x-access-token:${token}`),
-    },
-  ]);
+  expect(upstream).toMatchObject({
+    requests: [
+      {
+        url: "https://git.test/acme/config.git/git-upload-pack",
+        authorization: basic(`x-access-token:${token}`),
+      },
+    ],
+  });
 
   const refused = await call("https://elsewhere.test/acme/config.git/git-upload-pack", credential);
-  expect(refused.status).toBe(502);
-  expect(refused.body).toContain("is pinned to https://git.test");
+  expect(refused).toMatchObject({
+    status: 502,
+    body: expect.stringContaining("is pinned to https://git.test"),
+  });
   expect(upstream.requests).toHaveLength(1); // nothing was sent to the unpinned origin
 
   const plain = basic("user:pass");

@@ -379,7 +379,7 @@ for (const { name, events, state } of reduceRows)
 // arguments faked (an `append` that records and can be held open; `runInBackground` runs the work at
 // once). Pinned: a tip that lands WHILE an append is in flight is published by the same attempt once
 // the append settles — no further delivery needed (an idempotent hit lands no fresh event to deliver).
-test("ProjectProcessor — the apex follows the config repo: each tip is published once, keyed by its commit; a tip that lands during an in-flight append is published when it settles", async () => {
+test("ProjectProcessor — the apex follows the config repo: each tip is published once, keyed by its commit's fact; a tip that lands during an in-flight append is published when it settles; a pull back to an earlier commit publishes it again", async () => {
   const processor = new ProjectProcessor(
     () => Promise.reject(new Error("unused")),
     () => Promise.reject(new Error("unused")),
@@ -402,8 +402,8 @@ test("ProjectProcessor — the apex follows the config repo: each tip is publish
   await new Promise((r) => setTimeout(r, 0));
   await new Promise((r) => setTimeout(r, 0));
   expect(appended.map((e) => e.idempotencyKey)).toEqual([
-    "itx/ingress-configured:aaa",
-    "itx/ingress-configured:bbb",
+    "itx/ingress-configured:aaa@5",
+    "itx/ingress-configured:bbb@7",
   ]);
   // The target names the commit twice: the source read at it, the cache keyed by it.
   expect(JSON.stringify(appended[1]!.payload!.target)).toContain('"commitOid":"bbb"');
@@ -412,6 +412,14 @@ test("ProjectProcessor — the apex follows the config repo: each tip is publish
   deliver(processor, { ...empty, configRepoTip: tip("bbb", 7) }, append);
   await new Promise((r) => setTimeout(r, 0));
   expect(appended).toHaveLength(2);
+  // A forced pull back to the first commit is a new fact: published again, under its own key.
+  deliver(processor, { ...empty, configRepoTip: tip("aaa", 9) }, append);
+  await new Promise((r) => setTimeout(r, 0));
+  expect(appended.map((e) => e.idempotencyKey)).toEqual([
+    "itx/ingress-configured:aaa@5",
+    "itx/ingress-configured:bbb@7",
+    "itx/ingress-configured:aaa@9",
+  ]);
 });
 
 // Every wake of the project's root pushes the facet its wake record, and a fresh incarnation of the
@@ -436,7 +444,7 @@ test("ProjectProcessor — a tip the state does not hold published is published;
     runInBackground,
   );
   await settle();
-  expect(appended.map((event) => event.idempotencyKey)).toEqual(["itx/ingress-configured:aaa"]);
+  expect(appended.map((event) => event.idempotencyKey)).toEqual(["itx/ingress-configured:aaa@1"]);
   const state = reduceProcessor(processorWithoutHostnames(), [
     committed("/repos/config", "aaa"),
     normalizeControlEvent(appended[0]!, "/"),

@@ -22,6 +22,7 @@ import type {
 } from "iterate/api";
 import { secretsEqual, signClaims, verifyClaims } from "./caller.ts";
 import { exchange as exchangeWaitroseSession } from "./integrations/waitrose.ts";
+import { basicAuthorization } from "./repo/git-wire.ts";
 import { SecretRefreshKind } from "./secret/contract.ts";
 
 /** What the secret's facet stores: the material, the ORIGINS it may be sent to (never
@@ -252,11 +253,6 @@ function basicCredentialOf(value: string): string | null {
   } catch {
     return null;
   }
-}
-
-/** `user:password` as a `Basic` header value, UTF-8 first. */
-export function basicAuthorization(credential: string): string {
-  return `Basic ${btoa(String.fromCharCode(...new TextEncoder().encode(credential)))}`;
 }
 
 // ── a WebSocket's frames ── the Discord shape: the upgrade carries no credential, the first client

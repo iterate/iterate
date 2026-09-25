@@ -234,6 +234,89 @@ test("origin: setOrigin records it on the repo's log; pull and push default to i
   await expect(none.pull()).rejects.toThrow(/no origin/);
 });
 
+test("a remote behind ours: pull is up to date and moves nothing; a forced pull resets main back to it, and a return to a commit published before lands a new fact", async () => {
+  const { artifacts, remote } = await withRemote();
+  const { repo, appended } = syncingRepo(artifacts);
+  const seed = artifacts.remoteTip(path)!;
+  await repo.push({ remote });
+  const { commitOid: ahead } = await repo.commitFiles({
+    message: "ahead",
+    changes: [{ path: "a.md", content: "a\n" }],
+  });
+  expect(await repo.pull({ remote })).toEqual({
+    status: "up-to-date",
+    commitOid: ahead,
+    previousOid: ahead,
+  });
+  appended.length = 0;
+
+  expect(await repo.pull({ remote, force: true })).toEqual({
+    status: "updated",
+    commitOid: seed,
+    previousOid: ahead,
+  });
+  expect(artifacts.remoteTip(path)).toBe(seed);
+  // back to the seed, which was published before: a new fact
+  expect(appended.filter((event) => event.at === path)).toMatchObject([
+    { payload: { commitOid: seed, message: "seed", changedPaths: ["a.md"] } },
+  ]);
+  expect(await repo.pull({ remote })).toMatchObject({ status: "up-to-date" });
+  expect(appended.filter((event) => event.at === path)).toHaveLength(1);
+});
+
+test("a pull whose fact was lost settles it before it answers up to date; a commit and a pull at once run one after the other", async () => {
+  const { artifacts, remote } = await withRemote();
+  const { repo, appended, failNextAppendAt } = syncingRepo(artifacts);
+  await repo.push({ remote });
+  const { commitOid: theirs } = await artifacts.pushFromOutside(GITHUB, {
+    message: "theirs",
+    changes: [{ path: "t.md", content: "t\n" }],
+  });
+  failNextAppendAt("/");
+  await expect(repo.pull({ remote })).rejects.toThrow(/root refused/);
+  expect(artifacts.remoteTip(path)).toBe(theirs); // the pull landed in git, not its fact
+  expect(await repo.pull({ remote })).toMatchObject({ status: "up-to-date", commitOid: theirs });
+  expect(appended.filter((event) => event.at === path)).toMatchObject([
+    { payload: { commitOid: theirs, changedPaths: ["t.md"] } },
+  ]);
+
+  appended.length = 0;
+  await artifacts.pushFromOutside(GITHUB, {
+    message: "next",
+    changes: [{ path: "n.md", content: "n\n" }],
+  });
+  const [committed, pulled] = await Promise.allSettled([
+    repo.commitFiles({ message: "mine", changes: [{ path: "m.md", content: "m\n" }] }),
+    repo.pull({ remote }),
+  ]);
+  // one after the other: the pull meets the commit on main, a divergence, and says so
+  expect(committed).toMatchObject({ status: "fulfilled" });
+  expect(pulled).toMatchObject({ status: "rejected", reason: { code: "NOT_FAST_FORWARD" } });
+  expect(appended.filter((event) => event.at === path)).toMatchObject([
+    { payload: { message: "mine" } },
+  ]);
+});
+
+test("an origin holds a secret placeholder, never a token: a literal credential is refused without being echoed, in any letter case", async () => {
+  const { artifacts } = await withRemote();
+  const { repo, appended } = syncingRepo(artifacts);
+  const token = "ghs_literalSecretValue123";
+  for (const origin of [
+    `https://x-access-token:${token}@github.com/acme/config.git`,
+    `HTTPS://x-access-token:${token}@github.com/acme/config.git`,
+    `https://${token}@github.com/acme/config.git`,
+    `ftp://x:${token}@example.com/r.git`,
+  ]) {
+    const refused = await repo.setOrigin(origin).then(
+      () => "set",
+      (error: Error) => error.message,
+    );
+    expect(refused).toMatch(/placeholder|not an http\(s\) git URL/);
+    expect(refused).not.toContain(token);
+  }
+  expect(appended).toEqual([]);
+});
+
 test("origin-set is reduced into the repo's state: set, replaced, forgotten; a payload that is no origin is skipped", () => {
   const originSet = (origin: unknown) => ({
     type: "events.iterate.com/repo/origin-set",
@@ -284,9 +367,14 @@ function repoFacet(
 function syncingRepo(artifacts: FakeArtifacts, origin: string | null = null) {
   const appended: { at: string; type: string; payload: unknown }[] = [];
   const requests: { url: string; authorization: string | null }[] = [];
+  let failAt: string | null = null;
   const record =
     (at: string) =>
     async (...events: { type: string; payload?: unknown }[]) => {
+      if (failAt === at) {
+        failAt = null;
+        throw new Error(`the root refused the append at ${at}`);
+      }
       for (const { type, payload } of events) appended.push({ at, type, payload });
       return events;
     };
@@ -303,7 +391,11 @@ function syncingRepo(artifacts: FakeArtifacts, origin: string | null = null) {
     },
     origin,
   );
-  return { repo, appended, requests };
+  /** The next append on `at` throws, as a root refusing it would. */
+  const failNextAppendAt = (at: string) => {
+    failAt = at;
+  };
+  return { repo, appended, requests, failNextAppendAt };
 }
 
 /** A second repo on the fake server, standing for GitHub: the remote a pull or push names. */

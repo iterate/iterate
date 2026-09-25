@@ -440,7 +440,7 @@ test("against real Artifacts: a forced pull makes main a public GitHub repo's ow
     await itx.cfArtifacts.delete("/repos/config");
     await itx.cfArtifacts.delete("/repos/mirror");
   }
-}, 120_000);
+}, 60_000);
 
 // LOCAL ONLY: the row reads the repo back from the fake git remote on this machine's loopback, which a
 // deployed worker cannot reach (the platform answers 403 — see localOnly).

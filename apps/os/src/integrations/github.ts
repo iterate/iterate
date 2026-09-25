@@ -265,7 +265,10 @@ export async function acceptGithubCallback(
             installationId: id,
             client: attempt.client === "iterate" ? { platform: "github" } : { project: "github" },
           },
-          merge: true,
+          // iterate's App: the material is only the minted token, so the record is replaced whole
+          // and an older connection's pin gains GitHub itself (a merge keeps the pin). A project's
+          // own App keeps its material (the App's key), pinned to both from the start.
+          merge: attempt.client !== "iterate",
         },
       ),
     );

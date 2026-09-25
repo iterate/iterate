@@ -7,6 +7,7 @@
 
 import { expect, onTestFinished, test, vi } from "vitest";
 import {
+  buildPack,
   commitReaches,
   concat,
   createGitWireTransport,
@@ -17,10 +18,13 @@ import {
   hashObject,
   manifestOf,
   parseCommit,
+  parsePack,
   parseTree,
+  readCapped,
   pktFrames,
   pktLine,
   pktText,
+  redactRemote,
   type RawGitObject,
   type RepoManifest,
   treeObjectsOf,
@@ -189,6 +193,7 @@ test.for([
     becomes: {
       url: "https://github.com/acme/config.git",
       authorization: basic(`x-access-token:${PLACEHOLDER}`),
+      userinfo: { user: "x-access-token", password: PLACEHOLDER },
     },
   },
   {
@@ -203,7 +208,7 @@ test.for([
     becomes: { url: "http://127.0.0.1:8123/repo.git", authorization: basic("someone:") },
   },
 ] as const)("gitRemoteOf($remote)", ({ remote, becomes }) => {
-  expect(gitRemoteOf(remote)).toEqual(becomes);
+  expect(gitRemoteOf(remote)).toMatchObject(becomes);
 });
 
 test.for([
@@ -257,6 +262,42 @@ test("commitReaches: along every parent within the objects, and onto a parent th
   expect(commitReaches(objects, a, b)).toBe(false);
   expect(commitReaches(objects, b, side)).toBe(false);
   expect(commitReaches(objects, b, "d".repeat(40))).toBe(false);
+});
+
+test("an untrusted pack is bounded: an object over the cap, or an entry that inflates past its declared size, fails before it is kept", async () => {
+  expect(
+    await parsePack(await buildPack([{ type: "blob", payload: new Uint8Array(10) }])),
+  ).toMatchObject([{ type: "blob" }]);
+  const big = await buildPack([{ type: "blob", payload: new Uint8Array(2_000_000) }]);
+  await expect(parsePack(big, { maxObjectBytes: 1_000_000 })).rejects.toThrow(
+    /exceeds 1000000 bytes/,
+  );
+  // One entry whose header declares ONE byte while its zlib stream inflates to a megabyte.
+  const honest = await buildPack([{ type: "blob", payload: new Uint8Array(1_000_000) }]);
+  let cursor = 12; // the entry's header: type and size, 7 bits a byte after the first 4
+  while (honest[cursor]! & 0x80) cursor += 1;
+  const lying = concat([
+    honest.subarray(0, 12),
+    Uint8Array.of((3 << 4) | 1),
+    honest.subarray(cursor + 1, honest.length - 20),
+  ]);
+  const digest = new Uint8Array(await crypto.subtle.digest("SHA-1", lying));
+  await expect(parsePack(concat([lying, digest]))).rejects.toThrow(
+    /inflates past its declared 1 byte/,
+  );
+});
+
+test("a response body over the cap is refused before it is all read", async () => {
+  await expect(readCapped(new Response(new Uint8Array(3_000)), 1_000)).rejects.toThrow(
+    /more than 1000 bytes/,
+  );
+  expect(await readCapped(new Response("ok"), 1_000)).toEqual(new TextEncoder().encode("ok"));
+});
+
+test("redactRemote drops a credential whatever the scheme or its case", () => {
+  expect(redactRemote("HTTPS://x:TOKEN@github.com/a/b.git")).toBe("HTTPS://github.com/a/b.git");
+  expect(redactRemote("ftp://u:TOKEN@example.com/r.git")).toBe("ftp://example.com/r.git");
+  expect(redactRemote("https://github.com/a/b.git")).toBe("https://github.com/a/b.git");
 });
 
 /** `user:password` as a Basic header value, UTF-8 first. */
