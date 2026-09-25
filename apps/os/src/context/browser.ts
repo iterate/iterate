@@ -1,27 +1,9 @@
 // browser.ts — the `itx.browser` built-in root.
 // Two methods: raw `fetch` for CDP, and `quickAction` which returns the action's RESULT instead of
-// the binding's `{ success, result }` Response envelope.
+// the binding's `{ success, result }` Response envelope. Its shape is the published one (iterate/api
+// `CfBrowserApi`).
 
-/** A Browser Run quick-action name (`browser.quickAction`'s first argument):
- * what to extract from the rendered page — page content, screenshot, PDF,
- * markdown, accessibility snapshot, scraped elements, structured JSON, links,
- * or a crawl. */
-export type CfBrowserQuickAction =
-  | "content"
-  | "screenshot"
-  | "pdf"
-  | "markdown"
-  | "snapshot"
-  | "scrape"
-  | "json"
-  | "links"
-  | "crawl";
-
-/** Options for a Browser Run quick action: the target page as a `url` or as
- * inline `html`, plus the action's own pass-through options (e.g.
- * `screenshotOptions`). */
-export type CfBrowserQuickActionOptions = Record<string, unknown> &
-  ({ url: string } | { html: string });
+import type { CfBrowserApi, CfBrowserQuickAction, CfBrowserQuickActionOptions } from "iterate/api";
 
 /**
  * Unwraps a Browser Run quick-action Response to the caller-facing result:
@@ -56,10 +38,10 @@ export async function unwrapBrowserRunQuickAction(
 }
 
 /** Cloudflare Browser Run binding exposed through itx. */
-export function cfBrowser(binding: BrowserRun) {
+export function cfBrowser(binding: BrowserRun): CfBrowserApi {
   return {
     /** Raw Browser Run fetch, primarily for libraries that connect over CDP. */
-    fetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+    fetch(input: Request | string | URL, init?: RequestInit): Promise<Response> {
       return binding.fetch(input, init);
     },
     /**

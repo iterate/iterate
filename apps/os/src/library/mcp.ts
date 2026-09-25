@@ -9,11 +9,9 @@
 
 import { RpcTarget } from "capnweb";
 import { z } from "zod";
+import type { McpConnectionApi, McpConnectOptions } from "iterate/api";
 import type { LibraryItx } from "../library.ts";
 import { refuseUnlessOk, subclassWithMethods } from "./connection.ts";
-
-/** Options for `connectToMcp`: extra headers sent with every request (auth). */
-export type McpConnectOptions = { headers?: Record<string, string> };
 
 // An external MCP server's responses are UNTRUSTED network data — parsed against these schemas at
 // every boundary, never cast, so a server that answers off-spec heals into a clear error instead of
@@ -63,7 +61,7 @@ export async function connectToMcp(
 }
 
 /** A connected MCP server. Held across calls it is an RpcTarget; disposed, it DELETEs its session. */
-export class McpConnectionRpcTarget extends RpcTarget {
+export class McpConnectionRpcTarget extends RpcTarget implements McpConnectionApi {
   readonly #jsonRpcClient: McpJsonRpcClient;
   readonly #serverInfo: MCPServerInfo;
   constructor(client: McpJsonRpcClient, serverInfo: MCPServerInfo) {
@@ -72,22 +70,22 @@ export class McpConnectionRpcTarget extends RpcTarget {
     this.#serverInfo = serverInfo;
   }
   /** The `initialize` answer. */
-  serverInfo(): MCPServerInfo {
+  serverInfo() {
     return this.#serverInfo;
   }
   /** Ask the server again — `tools/list` now. */
-  async listTools(): Promise<MCPTool[]> {
+  async listTools() {
     return MCPToolsList.parse(await this.#jsonRpcClient.request("tools/list", {})).tools;
   }
   /** `tools/call`: the result's `structuredContent`, else its text content JSON-parsed when it
    *  parses, else the text; an `isError` result throws with that text. */
-  async callTool(name: string, args?: Record<string, unknown>): Promise<unknown> {
+  async callTool(...[name, args]: Parameters<McpConnectionApi["callTool"]>) {
     const result = MCPToolResult.parse(
       await this.#jsonRpcClient.request("tools/call", { name, arguments: args || {} }),
     );
     return mcpResultToValue(name, result);
   }
-  async close(): Promise<void> {
+  async close() {
     await this.#jsonRpcClient.close();
   }
   [Symbol.dispose](): void {

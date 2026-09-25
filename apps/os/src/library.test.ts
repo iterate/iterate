@@ -5,7 +5,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import { RpcTarget, newHttpBatchRpcResponse } from "capnweb";
 import { expect, onTestFinished, test, vi } from "vitest";
 import { codedError } from "iterate/lib";
-import type { WaitForEventFilter } from "iterate/api";
+import type { OpenApiDocument, WaitForEventFilter } from "iterate/api";
 import type { StreamEvent, StreamEventInput } from "iterate/stream/processor";
 import {
   buildLibrary,
@@ -19,7 +19,7 @@ import {
 } from "./library.ts";
 import { connectToCapnweb } from "./library/capnweb.ts";
 import { connectToMcp, type McpConnectionRpcTarget } from "./library/mcp.ts";
-import { connectToOpenApi, type OpenApiDocument } from "./library/openapi.ts";
+import { connectToOpenApi } from "./library/openapi.ts";
 
 // ── the library ── the memo `buildLibrary` keeps over the three verbs: a connect with the same
 // (verb, url, options) is ONE live connection for the context's life; `releaseConnections()` (the

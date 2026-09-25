@@ -10,28 +10,16 @@ import { keySortedForPrint, InvokeHandle, print, type ItxExpression } from "iter
 import { codedError, errorCode, resolveContextPath, withTimeout } from "iterate/lib";
 import type { EventInput, StreamEvent } from "iterate/stream/processor";
 import type { RunSettled, RunSettlement } from "iterate/stream/run";
+import type { EntityCollectionApi, FileHandle, FileRecord, IterateContextApi } from "iterate/api";
 import type { Caller } from "./caller.ts";
 import type { BuiltInScope } from "./context/built-ins.ts";
 import { RepoContract } from "./repo/contract.ts";
 import type { RepoDurableObject, repoVerbs } from "./repo/durable-object.ts";
 import { WorkspaceContract } from "./workspace/contract.ts";
 import type { WorkspaceDurableObject, workspaceVerbs } from "./workspace/durable-object.ts";
-import {
-  connectToCapnweb,
-  type CapnwebConnectOptions,
-  type CapnwebConnection,
-} from "./library/capnweb.ts";
-import {
-  connectToMcp,
-  type McpConnectOptions,
-  type McpConnectionRpcTarget,
-} from "./library/mcp.ts";
-import {
-  connectToOpenApi,
-  type OpenApiConnectOptions,
-  type OpenApiConnectionRpcTarget,
-  type OpenApiDocument,
-} from "./library/openapi.ts";
+import { connectToCapnweb } from "./library/capnweb.ts";
+import { connectToMcp } from "./library/mcp.ts";
+import { connectToOpenApi } from "./library/openapi.ts";
 
 /** What a library module is handed: the itx handle (the record's own dotted surface), narrowed to
  *  what the library uses — `fetch`, the connectors' HTTP; `r2`, the files' storage; `builtins`, the
@@ -51,20 +39,17 @@ export interface LibraryRoots {
    *  or that was still running at its ten-minute deadline (RUN_DEADLINE_MS) — is settled as such,
    *  never re-run. JSON in, JSON out. A script bakes in its own values — an agent writes it whole
    *  (an alternative to a tool call), so `run` takes no arguments. */
-  run(script: string): Promise<unknown>;
+  run: IterateContextApi["run"];
   /** An MCP server over Streamable HTTP: `callTool(name, args)`, `listTools()`, and one method per
    *  tool whose name is a legal identifier. */
-  connectToMcp(url: string, options?: McpConnectOptions): Promise<McpConnectionRpcTarget>;
+  connectToMcp: IterateContextApi["connectToMcp"];
   /** An OpenAPI 3 service from its document or the URL of one: one method per `operationId`, taking
    *  one input object (path, query, header and body fields together); `call(operationId, input)` too. */
-  connectToOpenApi(
-    specOrUrl: string | OpenApiDocument,
-    options?: OpenApiConnectOptions,
-  ): Promise<OpenApiConnectionRpcTarget>;
+  connectToOpenApi: IterateContextApi["connectToOpenApi"];
   /** A remote capnweb API's main object as a pipelinable handle — a WebSocket session through egress
    *  (default) or one HTTP batch per chain (`{ transport: "batch" }`); dotted calls chain with no round
    *  trip per step. */
-  connectToCapnweb(url: string, options?: CapnwebConnectOptions): Promise<CapnwebConnection>;
+  connectToCapnweb: IterateContextApi["connectToCapnweb"];
   /** A repo (src/repo/): a stream on any path whose `repo` facet lands the commit facts. `get(path)`
    *  is the handle — the facet's verbs plus the typed `append` of the repo's own events; `list()`
    *  and `create(path)` are the collection's on the `project` facet at `/`. */
@@ -84,43 +69,19 @@ export interface LibraryRoots {
    *  and `.url({ method?, expiresInSeconds? })` — a signed URL on the project host that downloads
    *  (`GET`, the default) or uploads (`PUT`) the file, `itx.r2.presign` underneath. `list(prefix?)`
    *  lists records under a prefix. */
-  files: {
-    get(path: string): InvokeHandle & FileHandle;
-    list(prefix?: string): Promise<FileRecord[]>;
-  };
+  files: IterateContextApi["files"];
 }
 
-/** An entity root (`itx.repos`, `itx.workspaces`): `get(path)` the handle, typed as the facet it
- *  dispatches to; `list()`, `create(path)` and `delete(path)` the collection's. */
-type EntityRoot<Handle> = {
-  get(path: string): InvokeHandle & Handle;
-  list(): Promise<{ path: string; createdAt: string }[]>;
-  create(path: string): Promise<{ path: string }>;
-  /** The entity's deletion saga on that path: the request, the death certificate (cross-posted to `/`, the catalog drops it), then the row disabled. */
-  delete(path: string): Promise<{ path: string }>;
-};
+/** An entity root (`itx.repos`, `itx.workspaces`): the published collection (iterate/api
+ *  `EntityCollectionApi`) with `get(path)` typed as the facet it dispatches to — narrower than the
+ *  published handle, which the edge's `implements IterateContextApi` (iterate-context.ts) checks it
+ *  against. */
+type EntityRoot<Handle> = EntityCollectionApi<InvokeHandle & Handle>;
 
 /** What an entity handle's dotted members reach: the facet's own `Verbs`, and the typed `append` of
  *  the entity's events on that context (`entityHandle`). */
 type EntityHandle<Facet, Verbs extends keyof Facet, Contract> = Pick<Facet, Verbs> & {
   append(...events: EventInput<Contract>[]): Promise<StreamEvent[]>;
-};
-
-/** A stored file as `itx.files` answers it: its path, content type and size. */
-type FileRecord = { path: string; contentType: string; size: number };
-/** What a file handle's dotted members reach. */
-type FileHandle = {
-  put(input: {
-    contentType?: string;
-    data: Uint8Array | ArrayBuffer | string;
-  }): Promise<FileRecord>;
-  bytes(): Promise<Uint8Array>;
-  head(): Promise<FileRecord | null>;
-  delete(): Promise<void>;
-  url(input?: {
-    method?: "GET" | "PUT";
-    expiresInSeconds?: number;
-  }): Promise<{ url: string; expiresAt: string }>;
 };
 
 /** What `buildLibrary` closes over beside `itx`. */

@@ -11,6 +11,7 @@
  */
 import { z } from "zod";
 import { bytesToBase64 } from "@iterate-com/shared/base64";
+import type { IterateContextApiWith } from "iterate/api";
 import { ConfigWorker } from "iterate/sdk";
 import { VOICE_DELEGATE_CONSUMES } from "./events.ts";
 import { ScreenInfo, ScreenImageInput, renderScreenPixels } from "./screen.js";
@@ -158,14 +159,8 @@ export default class VoiceWorker extends ConfigWorker {
     const screenDevice =
       options.screen === true && deviceMatch?.[1] ? deviceMatch[1].replaceAll("-", "_") : undefined;
     return this.withItx(async (scope) => {
-      // `agents` is the rewrite rule the agents app mounts, which the declared scope does not name.
-      const itx = scope as unknown as {
-        agents: { create(path: string): Promise<unknown> };
-        cd(path: string): {
-          append(...events: object[]): Promise<unknown>;
-          processors: { disable(name: string): Promise<unknown> };
-        };
-      };
+      // `itx.agents` is the rewrite rule the agents app mounts, which install.ts requires first.
+      const itx = scope as IterateContextApiWith<"agents">;
       // Normal agent creation establishes the creator link and script sandbox before
       // either loaded voice processor needs project code, egress or tools.
       await itx.agents.create(streamPath);

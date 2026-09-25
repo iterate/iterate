@@ -5,7 +5,7 @@
 
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import type { WorkerSource } from "../../src/context/worker-loader.ts";
+import type { WorkerSource } from "iterate/api";
 
 /** The presence facet as its TypeScript source files, handed over exactly like user code: the host
  *  (durable-object.ts) is the entry, its siblings ride under their own names. */

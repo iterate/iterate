@@ -36,7 +36,7 @@ import {
   normalizedItxExpression,
 } from "iterate/expression";
 import { ITX_PRINCIPAL_HEADER, type Principal } from "iterate/principal";
-import type { RewriteRuleListEntry, StreamPage } from "iterate/api";
+import type { RewriteRuleListEntry, StreamPage, SubscriptionListEntry } from "iterate/api";
 import { ITERATE_ROUTING_SLUG_HEADER } from "iterate/project-ingress";
 import { RunRequested, type RunSettlement } from "iterate/stream/run";
 import {
@@ -90,7 +90,7 @@ import {
 } from "./context/itx-expression-rewriting.ts";
 import { signedFileUrl } from "./context/file-urls.ts";
 import { ControlPlane } from "./control-plane/edge.ts";
-import { buildBuiltIns, type SubscriptionListEntry } from "./context/built-ins.ts";
+import { buildBuiltIns } from "./context/built-ins.ts";
 import { FacetHost } from "./context/facet-host.ts";
 import { firstPartyFacetClassOf } from "./first-party-facets.ts";
 import type { ArtifactsNamespace } from "./context/cf-artifacts.ts";
