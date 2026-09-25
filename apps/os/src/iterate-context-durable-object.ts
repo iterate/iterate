@@ -460,6 +460,11 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     this.#destroyed = true;
     await this.ctx.blockConcurrencyWhile(async () => {
       await this.ctx.storage.deleteAll();
+      // An abort breaks the output gate, and a write not yet confirmed goes with it: without this
+      // sync the deletion itself is rolled back (prd, 2026-09-25: every context of a deleted project
+      // kept its data, and its root woke on its alarm every 40 s). Local workerd confirms at once,
+      // so only a deployed worker shows it. `#abortAfterTheAnswer` syncs for the same reason.
+      await this.ctx.storage.sync();
       // an alarm this reset interrupts must not run again: it would wake the destroyed context
       this.ctx.abort(CONTEXT_DESTROYED, { retryAlarm: false });
     });
