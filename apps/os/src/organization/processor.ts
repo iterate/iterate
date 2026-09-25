@@ -69,6 +69,10 @@ export class OrganizationProcessor extends StreamProcessor<
           projects: { ...state.projects, [projectId]: { slug, createdAt: event.createdAt } },
         };
       }
+      case "events.iterate.com/organization/project-removed": {
+        const { [event.payload.projectId]: gone, ...projects } = state.projects;
+        return gone && { ...state, projects };
+      }
       case "events.iterate.com/secret/set":
       case "events.iterate.com/secret/deleted": {
         const secrets = reduceSecretCatalog(state.secrets, event);

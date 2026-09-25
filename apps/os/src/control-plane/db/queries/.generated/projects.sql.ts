@@ -219,3 +219,32 @@ export namespace firstOrganizationOf {
 		id: string;
 	};
 }
+
+const deleteProjectSql = `
+delete from projects
+where id = ?
+  and (? = 1 or exists (
+    select 1 from memberships a
+    where a.org_id = projects.org_id and a.user_id = ? and a.role = 'owner'
+  ));
+`.trim();
+const deleteProjectQuery = (params: deleteProject.Params) => ({
+	name: "deleteProject",
+	sql: deleteProjectSql,
+	args: [params.id, params.asOperator, params.actorId],
+});
+
+export const deleteProject = Object.assign(
+	async function deleteProject(client: Client, params: deleteProject.Params) {
+		return client.run(deleteProjectQuery(params));
+	},
+	{ sql: deleteProjectSql, query: deleteProjectQuery },
+);
+
+export namespace deleteProject {
+	export type Params = {
+		id: string;
+		asOperator: number;
+		actorId: string;
+	};
+}

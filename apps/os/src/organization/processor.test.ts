@@ -29,6 +29,12 @@ const projectAdded = (projectId: string, slug: string) => ({
   source: platform,
 });
 
+const projectRemoved = (projectId: string, slug: string) => ({
+  type: "events.iterate.com/organization/project-removed",
+  payload: { projectId, slug },
+  source: platform,
+});
+
 const rows: {
   name: string;
   events: { type: string; payload?: unknown; source?: typeof platform }[];
@@ -38,6 +44,23 @@ const rows: {
     name: "the empty record",
     events: [],
     state: { name: null, deletedAt: null, members: {}, invitations: {}, projects: {}, secrets: {} },
+  },
+  {
+    name: "a project removed leaves the record; one never added changes nothing",
+    events: [
+      created("Booper"),
+      projectAdded("prj_1", "monkey"),
+      projectRemoved("prj_1", "monkey"),
+      projectRemoved("prj_9", "never"),
+    ],
+    state: {
+      name: "Booper",
+      deletedAt: null,
+      members: {},
+      invitations: {},
+      projects: {},
+      secrets: {},
+    },
   },
   {
     name: "created sets the name, renamed replaces it; a project added to it is a row by id, stamped with the event's time; the same project again is ignored",

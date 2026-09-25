@@ -17,10 +17,12 @@ const requested = {
 };
 const created = { type: "events.iterate.com/project/created", payload: {} };
 const failed = { type: "events.iterate.com/project/create-failed", payload: { error: "boom" } };
+const deleted = { type: "events.iterate.com/project/deleted", payload: {} };
 
 /** The empty state; a row spreads it and names only what its events changed. */
 const empty: ProjectState = {
   creation: null,
+  deletion: null,
   repos: {},
   workspaces: {},
   contexts: {},
@@ -82,6 +84,7 @@ const reduceRows: {
     events: [requested, created, repoBorn("/repos/config"), workspaceBorn("/workspaces/notes")],
     state: {
       creation: { status: "created", offset: 2 },
+      deletion: null,
       repos: { "/repos/config": { createdAt: expect.any(String) } },
       workspaces: { "/workspaces/notes": { createdAt: expect.any(String) } },
       contexts: {},
@@ -306,6 +309,23 @@ const reduceRows: {
       workspaceBorn("/w"),
     ],
     state: { ...empty, workspaces: { "/w": { createdAt: expect.any(String) } } },
+  },
+  {
+    name: "a delete request the platform stamped opens the deletion, at its offset — once; the saga's own records change nothing",
+    events: [
+      requested,
+      created,
+      deleteRequested({ platform: true }),
+      deleteRequested({ platform: true }),
+      { type: "events.iterate.com/project/context-deleted", payload: { path: "/a" } },
+      deleted,
+    ],
+    state: { ...empty, creation: { status: "created", offset: 2 }, deletion: { offset: 3 } },
+  },
+  {
+    name: "a member's delete request (no platform stamp), or their forged certificate, deletes nothing and stops nothing",
+    events: [requested, created, deleteRequested(), deleted, deleteRequested({ platform: true })],
+    state: { ...empty, creation: { status: "created", offset: 2 }, deletion: { offset: 5 } },
   },
 ];
 for (const { name, events, state } of reduceRows)
@@ -566,6 +586,88 @@ test("ProjectProcessor — a drained re-check knows the add it just answered pro
   expect(calls).toEqual(["claim www.acme.test", "claim www.acme.test"]);
 });
 
+// THE DELETION SAGA — driven by hand like the effects above, over a fake reach (processor.ts
+// `ProjectDeletion`) that records every call.
+test("ProjectProcessor — the deletion: the registry is kept on every delivery; the saga destroys each registered context deepest first, each answered by a keyed context-deleted, then the hostnames, the project's storage, the certificate, and `/` last — and no other saga runs meanwhile", async () => {
+  const calls: string[] = [];
+  const registry = new Set<string>();
+  const processor = new ProjectProcessor(
+    () => {
+      calls.push("withItx (another saga ran)");
+      return Promise.reject(new Error("unused"));
+    },
+    () => Promise.reject(new Error("unused")),
+    () => ({
+      reservedZones: [],
+      claim: async () => {},
+      release: async (name) => void calls.push(`release ${name}`),
+      setPrimaryHostname: async () => {},
+      provider: {
+        provision: async () => observation("active"),
+        remove: async (name) => void calls.push(`remove ${name}`),
+      },
+    }),
+    () => ({
+      recordContext: (path) => void registry.add(path),
+      forgetContext: (path) => void registry.delete(path),
+      contextPaths: async () => [...registry],
+      destroyContext: async (path) => void calls.push(`destroy ${path}`),
+      deleteProjectStorage: async () => void calls.push("delete storage"),
+    }),
+  );
+  // the registry, as announcements and destructions arrive — caught up or not
+  for (const childPath of ["/repos", "/repos/config", "/agents/web/1", "/agents", "/agents/web"])
+    processor.processEvent({
+      event: { type: "events.iterate.com/itx/child-created", payload: { childPath } } as never,
+      state: empty,
+      previousState: empty,
+      delivery: { caughtUp: false },
+      append: (async () => []) as never,
+      blockProcessorWhile: () => {},
+      runInBackground: () => {},
+    });
+  expect([...registry].sort()).toEqual([
+    "/agents",
+    "/agents/web",
+    "/agents/web/1",
+    "/repos",
+    "/repos/config",
+  ]);
+  const appended: { type: string; idempotencyKey?: string }[] = [];
+  const state: ProjectState = {
+    ...empty,
+    creation: { status: "requested", offset: 1 }, // would run the creation saga, were it not deleted
+    deletion: { offset: 9 },
+    hostnames: {
+      "www.acme.test": { requested: null, cloudflare: observation("active"), error: null },
+    },
+  };
+  deliver(processor, state, async (...events) => {
+    appended.push(...(events as typeof appended));
+  });
+  await settle();
+  expect(calls).toEqual([
+    "destroy /agents/web/1",
+    "destroy /agents/web",
+    "destroy /repos/config",
+    "destroy /agents",
+    "destroy /repos",
+    "remove www.acme.test",
+    "release www.acme.test",
+    "delete storage",
+    "destroy /",
+  ]);
+  expect(registry).toMatchObject({ size: 0 }); // each row went as its context did
+  expect(appended.map((event) => event.idempotencyKey)).toEqual([
+    "project/context-deleted:/agents/web/1",
+    "project/context-deleted:/agents/web",
+    "project/context-deleted:/repos/config",
+    "project/context-deleted:/agents",
+    "project/context-deleted:/repos",
+    "project/deleted",
+  ]);
+});
+
 test("template provenance survives replay of the project creation request", () => {
   const configRepoTemplate = "github:example/config#" + "a".repeat(40) + "&path:starter";
   expect(
@@ -675,6 +777,10 @@ function observation(status: string) {
 /** A context announcing itself to `/` (iterate-context-durable-object.ts `announceToAncestors`). */
 function childCreated(childPath: string) {
   return { type: "events.iterate.com/itx/child-created", payload: { childPath } };
+}
+
+function deleteRequested(source?: { platform: true }) {
+  return { type: "events.iterate.com/project/delete-requested", payload: {}, source };
 }
 
 /** Two turns: a background effect's awaits, then its append. */

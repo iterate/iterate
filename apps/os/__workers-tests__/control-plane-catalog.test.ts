@@ -385,6 +385,36 @@ test("projects: a slug is one project across every organization: the same organi
   expect(await c.organizations()).toHaveLength(1);
 });
 
+test("projects: an owner or the operator deletes a project's row, which frees its slug; a member, a stranger, or a project already gone is refused; its hostname claim outlives the row until released", async () => {
+  await emptyTables();
+  const ada = await person("ada@example.com");
+  const bob = await person("bob@example.com");
+  const org = await c.createOrganization(as(ada), { name: "Booper" });
+  await c.addMember(as(ada), org.id, { userId: bob.id, role: "member" });
+  const dawg = await c.createProject(as(ada), { project: "dawg", organizationId: org.id });
+  await c.claimHostname(dawg.id, "dawg.example.com");
+  await expect(c.deleteProject(as(bob), dawg.id)).rejects.toMatchObject({ code: "FORBIDDEN" });
+  expect(await c.deleteProject(as(ada), "dawg")).toEqual(dawg);
+  expect(await c.project(dawg.id)).toBeNull();
+  // its hostname claim outlives the row (it admits nothing: no row to join), holding the name
+  // until the deletion saga releases it — after Cloudflare let go of the custom hostname
+  expect(await c.projectByHostname(["dawg.example.com"])).toBeNull();
+  expect(await rows("select hostname, project_id as projectId from project_hostnames")).toEqual([
+    { hostname: "dawg.example.com", projectId: dawg.id },
+  ]);
+  const other = await c.createProject(as(ada), { project: "other", organizationId: org.id });
+  await expect(c.claimHostname(other.id, "dawg.example.com")).rejects.toMatchObject({
+    code: "INVALID_INPUT",
+  });
+  await c.releaseHostname(dawg.id, "dawg.example.com");
+  await c.claimHostname(other.id, "dawg.example.com");
+  expect((await c.projectByHostname(["dawg.example.com"]))?.project).toEqual(other);
+  await expect(c.deleteProject(as(ada), dawg.id)).rejects.toMatchObject({ code: "FORBIDDEN" });
+  const again = await c.createProject(as(ada), { project: "dawg", organizationId: org.id });
+  expect(again).not.toMatchObject({ id: dawg.id });
+  expect(await c.deleteProject(admin, again.id)).toEqual(again);
+});
+
 test("projects: with no organization named: the person's first by name, made on first use after their email, one when created at once; the operator's own organization, made on first use", async () => {
   await emptyTables();
   const ada = await person("ada.lovelace@example.com");

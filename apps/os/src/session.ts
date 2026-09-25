@@ -1094,6 +1094,61 @@ class ProjectCollectionRpcTarget extends RpcTarget {
     return this.#context(id);
   }
 
+  /** DELETE the project — the owner of its organization, or the operator. Every step is keyed, so
+   *  a delete that failed part way is simply asked again: the control plane says who may (catalog.ts
+   *  `projectToDelete`); the root is asked to delete it, as the platform's own fact; the project
+   *  leaves its organization's record; and the control plane drops its row, from which moment
+   *  nothing reaches it. The deletion saga on the root (project/processor.ts) destroys every
+   *  context, its hostnames, kv, files and repos, and the root last; the answer does not wait for
+   *  it. */
+  async delete(project: string): Promise<void> {
+    const { input: sessionInput, caller } = this.#session;
+    const address = DurableObjectNameCodec.parse(project);
+    const id =
+      address.path === "/" && address.projectId !== GLOBAL_PROJECT_ID
+        ? await sessionInput.controlPlane.reachableProjectId(
+            this.#session.authority.reach,
+            address.projectId,
+          )
+        : null;
+    if (!id)
+      throw codedError("FORBIDDEN", `projects.delete(${JSON.stringify(project)}): no such project`);
+    const doomed = await sessionInput.controlPlane.projectToDelete(caller, id);
+    const root = sessionInput.contextNamespace.getByName(
+      DurableObjectNameCodec.stringify({ projectId: id, path: "/" }),
+    );
+    await root.invoke(["itx", "processors", ["enable", "project"]], [], caller);
+    await root.invoke(
+      [
+        "itx",
+        "builtins",
+        [
+          "append",
+          {
+            type: "events.iterate.com/project/delete-requested",
+            idempotencyKey: "project/delete-requested",
+            payload: {},
+          },
+        ],
+      ],
+      [],
+      { ...caller, platform: true },
+    );
+    if (doomed.orgId !== ADMIN_ORG_ID)
+      await appendPlatformFacts(
+        sessionInput.contextNamespace,
+        { organization: doomed.orgId },
+        {
+          type: "events.iterate.com/organization/project-removed",
+          idempotencyKey: `organization/project-removed:${id}`,
+          payload: { projectId: id, slug: doomed.slug },
+        },
+        caller,
+        { folded: true },
+      );
+    await sessionInput.controlPlane.deleteProject(caller, id);
+  }
+
   #context(projectId: string): IterateContextRpcTarget {
     this.#session.input.onProjectAccess?.(projectId);
     return new IterateContextRpcTarget(

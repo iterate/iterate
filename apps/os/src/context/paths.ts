@@ -70,6 +70,10 @@ export function ancestorPathsOf(path: string): string[] {
   return segments.map((_, index) => `/${segments.slice(0, index).join("/")}`);
 }
 
+/** The reset a context's `destroy()` ends with (iterate-context-durable-object.ts), which is also
+ *  the answer its caller reads as done (project/durable-object.ts). */
+export const CONTEXT_DESTROYED = "destroyed: its project was deleted";
+
 /** A context's path relative to its owner's root (`resourceScope`) — what a secret's placeholder
  *  spells: `/secrets/shop` for a project's `/secrets/shop` and a user's `/users/<id>/secrets/shop`
  *  alike. */
