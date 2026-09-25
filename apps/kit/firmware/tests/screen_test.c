@@ -9,12 +9,13 @@ static struct capnweb_session session;
 static char sent[4096];
 static enum iterate_kit_screen_state state;
 static unsigned submits;
+static bool shows_at_once;
 static bool submit(void *context, enum iterate_kit_screen_format format, const uint8_t *data, size_t length) {
   (void)context;
   assert(format == ITERATE_KIT_SCREEN_MONO1 || format == ITERATE_KIT_SCREEN_GRAY4);
   assert(data == screen.bitmap && length == screen.expected_bytes);
   ++submits;
-  state = ITERATE_KIT_SCREEN_PENDING;
+  state = shows_at_once ? ITERATE_KIT_SCREEN_SHOWN : ITERATE_KIT_SCREEN_PENDING;
   return true;
 }
 static enum iterate_kit_screen_state get_state(void *context) { (void)context; return state; }
@@ -72,23 +73,48 @@ int main(void) {
   assert(strstr(sent,"RangeError") && screen.next_offset == 1);
   call("setImage", "{\"uploadId\":1,\"offset\":1,\"format\":\"mono1\",\"data\":\"%%%A\"}");
   assert(strstr(sent,"RangeError") && screen.next_offset == 1);
+  /* The chunk that completes the frame is answered by the refresh, not at once. */
+  sent[0] = 0;
   call("setImage", "{\"uploadId\":1,\"offset\":1,\"format\":\"mono1\",\"data\":\"gP+A\"}");
   assert(submits == 1 && screen.uploads_completed == 0 && pixels[0] == 255 && pixels[3] == 128);
+  assert(sent[0] == 0 && screen.shown_answer_owed);
+  iterate_kit_peer_step(&peer); assert(sent[0] == 0);
   call("setImage", "null"); assert(strstr(sent,"BusyError") && screen.showing_image);
   call("status", ""); assert(strstr(sent,"pending"));
-  module.session_ended(module.context);
-  call("setImage", "{\"uploadId\":2,\"offset\":0,\"format\":\"mono1\",\"data\":\"AAAAAA==\"}");
-  assert(strstr(sent,"BusyError") && pixels[0] == 255);
   state = ITERATE_KIT_SCREEN_SHOWN;
+  sent[0] = 0;
+  iterate_kit_peer_step(&peer);
+  assert(strcmp(sent, "[\"resolve\",7,4]") == 0 && screen.uploads_completed == 1 && !screen.shown_answer_owed);
+  sent[0] = 0;
+  iterate_kit_peer_step(&peer); assert(sent[0] == 0);
   call("status", ""); assert(strstr(sent,"shown") && screen.uploads_completed == 1);
-  call("status", ""); assert(screen.uploads_completed == 1);
   call("setImage", "null"); assert(!screen.showing_image);
   call("setImage", "{\"uploadId\":2,\"offset\":0,\"format\":\"rgb565\",\"data\":\"AAAA\"}");
   assert(strstr(sent,"RangeError"));
+  /* A failed refresh fails the last chunk. */
   call("setImage", "{\"uploadId\":3,\"offset\":0,\"format\":\"gray4\",\"data\":\"AAAAAAAAAAAAAA==\"}");
-  assert(submits == 2);
+  assert(submits == 2 && screen.shown_answer_owed);
   state = ITERATE_KIT_SCREEN_FAILED;
-  call("status", ""); assert(strstr(sent,"failed") && screen.uploads_completed == 1);
+  sent[0] = 0;
+  iterate_kit_peer_step(&peer);
+  assert(strstr(sent,"\"resolve\"") == NULL && strstr(sent,"screen refresh failed") && screen.uploads_completed == 1);
+  call("status", ""); assert(strstr(sent,"failed"));
+  /* A session that ends owes its last chunk nothing; the refresh still holds new uploads off. */
+  state = ITERATE_KIT_SCREEN_SHOWN;
+  call("setImage", "null"); assert(!screen.showing_image);
+  call("setImage", "{\"uploadId\":4,\"offset\":0,\"format\":\"mono1\",\"data\":\"AAAAAA==\"}");
+  assert(submits == 3 && screen.shown_answer_owed);
+  module.session_ended(module.context);
+  assert(!screen.shown_answer_owed);
+  call("setImage", "{\"uploadId\":5,\"offset\":0,\"format\":\"mono1\",\"data\":\"/////w==\"}");
+  assert(strstr(sent,"BusyError") && pixels[0] == 0);
+  state = ITERATE_KIT_SCREEN_SHOWN;
+  sent[0] = 0;
+  iterate_kit_peer_step(&peer); assert(sent[0] == 0);
+  /* A driver that shows the frame as it takes it is answered on the spot. */
+  shows_at_once = true;
+  call("setImage", "{\"uploadId\":6,\"offset\":0,\"format\":\"mono1\",\"data\":\"/////w==\"}");
+  assert(submits == 4 && !screen.shown_answer_owed && strstr(sent,",4]") && pixels[0] == 255);
   /* The peer serves plain Cap'n Web paths only: a flattened {path, args}
    * envelope is an unknown method, never a nested dispatch. */
   call_path("\"invokeCapability\"", "{\"path\":[[\"screen\",\"status\"]],\"args\":[[]]}");

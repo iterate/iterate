@@ -13,7 +13,7 @@ import { z } from "zod";
 import { bytesToBase64 } from "@iterate-com/shared/base64";
 import { ConfigWorker } from "iterate/sdk";
 import { VOICE_DELEGATE_CONSUMES } from "./events.ts";
-import { ScreenInfo, ScreenImageInput, ScreenStatus, renderScreenPixels } from "./screen.js";
+import { ScreenInfo, ScreenImageInput, renderScreenPixels } from "./screen.js";
 import SCREEN_CONTEXT from "./screen-context.md";
 
 /* Replaced by the installer with the bundle's content hash (the voice-delegate facet's key is inlined at its
@@ -43,7 +43,6 @@ export default class VoiceWorker extends ConfigWorker {
           {
             screen: {
               info(): Promise<unknown>;
-              status(): Promise<unknown>;
               setImage(
                 input: null | { uploadId: number; offset: number; format: string; data: string },
               ): Promise<unknown>;
@@ -98,31 +97,37 @@ export default class VoiceWorker extends ConfigWorker {
       );
       const uploadId = Math.floor(Math.random() * 0x7fffffff);
       const transferStartedAt = Date.now();
+      let slowestChunkMs = 0;
       for (let offset = 0; offset < bitmap.length; offset += info.maxChunkBytes) {
         const expected = Math.min(offset + info.maxChunkBytes, bitmap.length);
-        const acknowledged = await screen.setImage({
+        const sentAt = Date.now();
+        const answer = screen.setImage({
           uploadId,
           format,
           offset,
-          data: bytesToBase64(
-            bitmap.subarray(offset, Math.min(offset + info.maxChunkBytes, bitmap.length)),
-          ),
+          data: bytesToBase64(bitmap.subarray(offset, expected)),
         });
+        // The chunk that completes the frame is answered once the panel shows it, and fails if the
+        // refresh fails (apps/kit/firmware/components/capabilities/src/screen.c). Its bound is the
+        // screen's refreshTimeoutMs on top of the slowest round trip an earlier chunk took.
+        let refreshDeadline: ReturnType<typeof setTimeout> | undefined;
+        const acknowledged = await (expected < bitmap.length
+          ? answer
+          : Promise.race([
+              answer,
+              new Promise<never>((_, reject) => {
+                refreshDeadline = setTimeout(
+                  () => reject(new Error("Screen refresh timed out")),
+                  slowestChunkMs + info.refreshTimeoutMs,
+                );
+              }),
+            ]).finally(() => clearTimeout(refreshDeadline)));
+        slowestChunkMs = Math.max(slowestChunkMs, Date.now() - sentAt);
         if (acknowledged !== expected) {
           throw new Error(
             `screen acknowledged ${String(acknowledged)} bytes; expected ${String(expected)}`,
           );
         }
-      }
-      const deadline = Date.now() + info.refreshTimeoutMs;
-      for (;;) {
-        const status = ScreenStatus.parse(await screen.status());
-        if (status.uploadId !== uploadId)
-          throw new Error("Screen upload was replaced by another caller");
-        if (status.state === "shown") break;
-        if (status.state !== "pending") throw new Error(`Screen refresh ${status.state}`);
-        if (Date.now() >= deadline) throw new Error("Screen refresh timed out");
-        await new Promise((resolve) => setTimeout(resolve, 150));
       }
       const transferMs = Date.now() - transferStartedAt;
       return {

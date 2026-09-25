@@ -148,29 +148,42 @@ test("an unsupported format fails before rendering or transfer", async () => {
   expect(setImage).not.toHaveBeenCalled();
 });
 
-test("an accepted e-paper upload waits for refresh completion", async () => {
-  const { worker, status } = await harness();
-  status.mockImplementationOnce(async () => ({ ...(await status()), state: "pending" }));
-  expect(await worker.setImage({ device: "zectrix_note4", image: { html: "x" } })).toMatchObject({
-    shown: true,
+test("an e-paper upload returns once the chunk that completes the frame is answered", async () => {
+  const { worker, setImage } = await harness();
+  let refreshed = (_acknowledged: number) => {};
+  setImage.mockImplementation(async (chunk: any) => {
+    const acknowledged = chunk.offset + Buffer.from(chunk.data, "base64").length;
+    if (acknowledged < 15000) return acknowledged;
+    return new Promise((resolve) => (refreshed = resolve));
   });
-  expect(status.mock.calls.length).toBeGreaterThan(1);
+  let settled = false;
+  const shown = worker
+    .setImage({ device: "zectrix_note4", image: { html: "x" } })
+    .finally(() => (settled = true));
+  await vi.waitFor(() => expect(setImage).toHaveBeenCalledTimes(4));
+  expect(settled).toBe(false);
+  refreshed(15000);
+  expect(await shown).toMatchObject({ shown: true, bytes: 15000 });
 });
 
-test.each(["failed", "idle"])("a %s refresh never reports shown", async (state) => {
-  const { worker, status } = await harness();
-  status.mockImplementationOnce(async () => ({ ...(await status()), state }));
+test("a failed refresh never reports shown", async () => {
+  const { worker, setImage } = await harness();
+  setImage.mockImplementation(async (chunk: any) => {
+    const acknowledged = chunk.offset + Buffer.from(chunk.data, "base64").length;
+    if (acknowledged < 15000) return acknowledged;
+    throw new Error("screen refresh failed");
+  });
   await expect(worker.setImage({ device: "zectrix_note4", image: { html: "x" } })).rejects.toThrow(
-    `refresh ${state}`,
+    "screen refresh failed",
   );
 });
 
 test("an abandoned refresh times out", async () => {
-  const { worker, status } = await harness(png(3, 0), { refreshTimeoutMs: 1 });
-  status.mockImplementationOnce(async () => {
-    const result = await status();
-    status.mockResolvedValue({ ...result, state: "pending" });
-    return { ...result, state: "pending" };
+  const { worker, setImage } = await harness(png(3, 0), { refreshTimeoutMs: 1 });
+  setImage.mockImplementation(async (chunk: any) => {
+    const acknowledged = chunk.offset + Buffer.from(chunk.data, "base64").length;
+    if (acknowledged < 15000) return acknowledged;
+    return new Promise(() => {});
   });
   await expect(worker.setImage({ device: "zectrix_note4", image: { html: "x" } })).rejects.toThrow(
     "timed out",
@@ -287,15 +300,12 @@ async function harness(image = png(3, 0), infoOverride = {}) {
     partialRefresh: false,
     ...infoOverride,
   };
-  let uploadId = 0;
   const quickAction = vi.fn(async () => new Uint8Array(image));
-  const setImage = vi.fn(async (chunk: any) => {
+  const setImage = vi.fn(async (chunk: any): Promise<unknown> => {
     if (chunk === null) return true;
-    uploadId = chunk.uploadId;
     return chunk.offset + Buffer.from(chunk.data, "base64").length;
   });
-  const status = vi.fn(async () => ({ uploadId, state: "shown" }));
-  const screen = { setImage, status, info: vi.fn(async () => info) };
+  const screen = { setImage, info: vi.fn(async () => info) };
   const append = vi.fn(async (...events: any[]) => {
     for (const event of events) admitLoadedCodeRow(event, "/agents/voice/test");
     return [];
@@ -311,7 +321,6 @@ async function harness(image = png(3, 0), infoOverride = {}) {
     worker: new VoiceWorker({ ITX: { get: () => itx } }),
     quickAction,
     setImage,
-    status,
     append,
     create: itx.agents.create,
     disable,

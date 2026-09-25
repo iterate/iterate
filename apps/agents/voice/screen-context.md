@@ -176,7 +176,7 @@ return await itx.cd("/").voice.setImage({
 ```
 
 Say the image was shown only after the setter returns `shown: true`. It
-waits for `screen.status()` to report that the device finished its refresh.
+returns once the device has finished its refresh.
 This acknowledges the controller operation, not an optical measurement. A failure must
 be reported rather than described as success.
 

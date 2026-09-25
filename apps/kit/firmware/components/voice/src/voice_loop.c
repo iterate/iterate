@@ -506,6 +506,9 @@ static void on_session_ended(void *context) {
    * A press made before any session has no call under it yet, and waits.
    */
   if (runtime.activation_live) end_local_activation("session-lost", "call ended");
+  /* The capability modules drop what the session lent them: a camera frame on
+   * loan, a screen upload, the answer a screen owes a call that died with it. */
+  iterate_kit_peer_session_ended(&runtime.peer);
   for (size_t index = 0U; index < 4U; ++index) {
     iterate_kit_stream_subscription_session_ended(&runtime.subscriptions[index]);
   }
@@ -2552,6 +2555,8 @@ void iterate_kit_voice_loop_step(void) {
   {
     (void)esp_task_wdt_reset();
     (void)iterate_kit_itx_transport_poll(&transport, 16U);
+    /* A call whose answer waits on hardware (a screen refresh) is answered here. */
+    iterate_kit_peer_step(&runtime.peer);
     /*
      * The controls, at a human cadence rather than the loop's.
      *

@@ -6,7 +6,9 @@
 // (rpc.ts): every 30 s the grant must still be live (oauth.ts `grantIsLive`: not ended, not
 // expired, its email still allowed) and still reach the project, and a connection whose last
 // successful check is 60 s old ends. A revoked key's connection therefore closes within a minute,
-// on every door.
+// at `/api` and on every project host. The connection asks because nothing can tell it: a
+// revocation or a removed membership is a write to the control plane's D1, which notifies no one,
+// and the connection lives in whichever edge isolate accepted it, which no writer can address.
 //
 // What is held, and how:
 //   - a WebSocket: relayed through a pair the edge owns, so the edge can close both ends;
@@ -54,7 +56,8 @@ export function leasedProjectHostAnswer(
 
 /** THE LEASE on a connection a grant holds open (`/api`'s socket, rpc.ts; a project host's, above):
  *  `end` once, when a re-check finds the grant ended or `reaches` false, or no re-check has
- *  succeeded for `LEASE_MS`. The grant's own expiry bounds it too. `name` is the door, in the logs.
+ *  succeeded for `LEASE_MS`. The grant's own expiry bounds it too. `name` is the route that holds
+ *  the connection, in the logs.
  *  Returns the lease's release, for a connection that closed on its own. */
 export function holdGrantLease(
   env: Env,
