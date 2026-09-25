@@ -9,35 +9,35 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from "./routes/__root.tsx";
-import { Route as IndexRouteImport } from "./routes/index.tsx";
 import { Route as AuthRouteImport } from "./routes/_auth.tsx";
-import { Route as AuthActivityRouteImport } from "./routes/_auth/activity.tsx";
-import { Route as AuthHomeRouteImport } from "./routes/_auth/home.tsx";
+import { Route as IndexRouteImport } from "./routes/index.tsx";
 import { Route as AuthSessionsRouteImport } from "./routes/_auth/sessions.tsx";
-import { Route as AuthInvitationsTokenRouteImport } from "./routes/_auth/invitations.$token.tsx";
+import { Route as AuthHomeRouteImport } from "./routes/_auth/home.tsx";
+import { Route as AuthActivityRouteImport } from "./routes/_auth/activity.tsx";
+import { Route as AuthProjectsIndexRouteImport } from "./routes/_auth/projects/index.tsx";
 import { Route as AuthOrganizationsIndexRouteImport } from "./routes/_auth/organizations/index.tsx";
 import { Route as AuthOrganizationsOrgIdRouteImport } from "./routes/_auth/organizations/$orgId.tsx";
-import { Route as AuthProjectsIndexRouteImport } from "./routes/_auth/projects/index.tsx";
+import { Route as AuthInvitationsTokenRouteImport } from "./routes/_auth/invitations.$token.tsx";
 import { Route as AuthProjectsSlugRouteRouteImport } from "./routes/_auth/projects/$slug/route.tsx";
-import { Route as AuthOrganizationsOrgIdActivityRouteImport } from "./routes/_auth/organizations/$orgId_.activity.tsx";
 import { Route as AuthProjectsSlugIndexRouteImport } from "./routes/_auth/projects/$slug/index.tsx";
-import { Route as AuthProjectsSlugHostnamesRouteImport } from "./routes/_auth/projects/$slug/hostnames.tsx";
-import { Route as AuthProjectsSlugMcpRouteImport } from "./routes/_auth/projects/$slug/mcp.tsx";
 import { Route as AuthProjectsSlugSecretsRouteImport } from "./routes/_auth/projects/$slug/secrets.tsx";
+import { Route as AuthProjectsSlugMcpRouteImport } from "./routes/_auth/projects/$slug/mcp.tsx";
+import { Route as AuthProjectsSlugHostnamesRouteImport } from "./routes/_auth/projects/$slug/hostnames.tsx";
+import { Route as AuthOrganizationsOrgIdActivityRouteImport } from "./routes/_auth/organizations/$orgId_.activity.tsx";
 import { Route as AuthProjectsSlugContextsSplatRouteImport } from "./routes/_auth/projects/$slug/contexts.$.tsx";
 
+const AuthRoute = AuthRouteImport.update({
+  id: "/_auth",
+  getParentRoute: () => rootRouteImport,
+} as any);
 const IndexRoute = IndexRouteImport.update({
   id: "/",
   path: "/",
   getParentRoute: () => rootRouteImport,
 } as any);
-const AuthRoute = AuthRouteImport.update({
-  id: "/_auth",
-  getParentRoute: () => rootRouteImport,
-} as any);
-const AuthActivityRoute = AuthActivityRouteImport.update({
-  id: "/activity",
-  path: "/activity",
+const AuthSessionsRoute = AuthSessionsRouteImport.update({
+  id: "/sessions",
+  path: "/sessions",
   getParentRoute: () => AuthRoute,
 } as any);
 const AuthHomeRoute = AuthHomeRouteImport.update({
@@ -45,14 +45,14 @@ const AuthHomeRoute = AuthHomeRouteImport.update({
   path: "/home",
   getParentRoute: () => AuthRoute,
 } as any);
-const AuthSessionsRoute = AuthSessionsRouteImport.update({
-  id: "/sessions",
-  path: "/sessions",
+const AuthActivityRoute = AuthActivityRouteImport.update({
+  id: "/activity",
+  path: "/activity",
   getParentRoute: () => AuthRoute,
 } as any);
-const AuthInvitationsTokenRoute = AuthInvitationsTokenRouteImport.update({
-  id: "/invitations/$token",
-  path: "/invitations/$token",
+const AuthProjectsIndexRoute = AuthProjectsIndexRouteImport.update({
+  id: "/projects/",
+  path: "/projects/",
   getParentRoute: () => AuthRoute,
 } as any);
 const AuthOrganizationsIndexRoute = AuthOrganizationsIndexRouteImport.update({
@@ -65,9 +65,9 @@ const AuthOrganizationsOrgIdRoute = AuthOrganizationsOrgIdRouteImport.update({
   path: "/organizations/$orgId",
   getParentRoute: () => AuthRoute,
 } as any);
-const AuthProjectsIndexRoute = AuthProjectsIndexRouteImport.update({
-  id: "/projects/",
-  path: "/projects/",
+const AuthInvitationsTokenRoute = AuthInvitationsTokenRouteImport.update({
+  id: "/invitations/$token",
+  path: "/invitations/$token",
   getParentRoute: () => AuthRoute,
 } as any);
 const AuthProjectsSlugRouteRoute = AuthProjectsSlugRouteRouteImport.update({
@@ -75,15 +75,19 @@ const AuthProjectsSlugRouteRoute = AuthProjectsSlugRouteRouteImport.update({
   path: "/projects/$slug",
   getParentRoute: () => AuthRoute,
 } as any);
-const AuthOrganizationsOrgIdActivityRoute =
-  AuthOrganizationsOrgIdActivityRouteImport.update({
-    id: "/organizations/$orgId_/activity",
-    path: "/organizations/$orgId/activity",
-    getParentRoute: () => AuthRoute,
-  } as any);
 const AuthProjectsSlugIndexRoute = AuthProjectsSlugIndexRouteImport.update({
   id: "/",
   path: "/",
+  getParentRoute: () => AuthProjectsSlugRouteRoute,
+} as any);
+const AuthProjectsSlugSecretsRoute = AuthProjectsSlugSecretsRouteImport.update({
+  id: "/secrets",
+  path: "/secrets",
+  getParentRoute: () => AuthProjectsSlugRouteRoute,
+} as any);
+const AuthProjectsSlugMcpRoute = AuthProjectsSlugMcpRouteImport.update({
+  id: "/mcp",
+  path: "/mcp",
   getParentRoute: () => AuthProjectsSlugRouteRoute,
 } as any);
 const AuthProjectsSlugHostnamesRoute =
@@ -92,16 +96,12 @@ const AuthProjectsSlugHostnamesRoute =
     path: "/hostnames",
     getParentRoute: () => AuthProjectsSlugRouteRoute,
   } as any);
-const AuthProjectsSlugMcpRoute = AuthProjectsSlugMcpRouteImport.update({
-  id: "/mcp",
-  path: "/mcp",
-  getParentRoute: () => AuthProjectsSlugRouteRoute,
-} as any);
-const AuthProjectsSlugSecretsRoute = AuthProjectsSlugSecretsRouteImport.update({
-  id: "/secrets",
-  path: "/secrets",
-  getParentRoute: () => AuthProjectsSlugRouteRoute,
-} as any);
+const AuthOrganizationsOrgIdActivityRoute =
+  AuthOrganizationsOrgIdActivityRouteImport.update({
+    id: "/organizations/$orgId_/activity",
+    path: "/organizations/$orgId/activity",
+    getParentRoute: () => AuthRoute,
+  } as any);
 const AuthProjectsSlugContextsSplatRoute =
   AuthProjectsSlugContextsSplatRouteImport.update({
     id: "/contexts/$",
@@ -222,13 +222,6 @@ export interface RootRouteChildren {
 
 declare module "@tanstack/react-router" {
   interface FileRoutesByPath {
-    "/": {
-      id: "/";
-      path: "/";
-      fullPath: "/";
-      preLoaderRoute: typeof IndexRouteImport;
-      parentRoute: typeof rootRouteImport;
-    };
     "/_auth": {
       id: "/_auth";
       path: "";
@@ -236,11 +229,18 @@ declare module "@tanstack/react-router" {
       preLoaderRoute: typeof AuthRouteImport;
       parentRoute: typeof rootRouteImport;
     };
-    "/_auth/activity": {
-      id: "/_auth/activity";
-      path: "/activity";
-      fullPath: "/activity";
-      preLoaderRoute: typeof AuthActivityRouteImport;
+    "/": {
+      id: "/";
+      path: "/";
+      fullPath: "/";
+      preLoaderRoute: typeof IndexRouteImport;
+      parentRoute: typeof rootRouteImport;
+    };
+    "/_auth/sessions": {
+      id: "/_auth/sessions";
+      path: "/sessions";
+      fullPath: "/sessions";
+      preLoaderRoute: typeof AuthSessionsRouteImport;
       parentRoute: typeof AuthRoute;
     };
     "/_auth/home": {
@@ -250,18 +250,18 @@ declare module "@tanstack/react-router" {
       preLoaderRoute: typeof AuthHomeRouteImport;
       parentRoute: typeof AuthRoute;
     };
-    "/_auth/sessions": {
-      id: "/_auth/sessions";
-      path: "/sessions";
-      fullPath: "/sessions";
-      preLoaderRoute: typeof AuthSessionsRouteImport;
+    "/_auth/activity": {
+      id: "/_auth/activity";
+      path: "/activity";
+      fullPath: "/activity";
+      preLoaderRoute: typeof AuthActivityRouteImport;
       parentRoute: typeof AuthRoute;
     };
-    "/_auth/invitations/$token": {
-      id: "/_auth/invitations/$token";
-      path: "/invitations/$token";
-      fullPath: "/invitations/$token";
-      preLoaderRoute: typeof AuthInvitationsTokenRouteImport;
+    "/_auth/projects/": {
+      id: "/_auth/projects/";
+      path: "/projects";
+      fullPath: "/projects/";
+      preLoaderRoute: typeof AuthProjectsIndexRouteImport;
       parentRoute: typeof AuthRoute;
     };
     "/_auth/organizations/": {
@@ -278,11 +278,11 @@ declare module "@tanstack/react-router" {
       preLoaderRoute: typeof AuthOrganizationsOrgIdRouteImport;
       parentRoute: typeof AuthRoute;
     };
-    "/_auth/projects/": {
-      id: "/_auth/projects/";
-      path: "/projects";
-      fullPath: "/projects/";
-      preLoaderRoute: typeof AuthProjectsIndexRouteImport;
+    "/_auth/invitations/$token": {
+      id: "/_auth/invitations/$token";
+      path: "/invitations/$token";
+      fullPath: "/invitations/$token";
+      preLoaderRoute: typeof AuthInvitationsTokenRouteImport;
       parentRoute: typeof AuthRoute;
     };
     "/_auth/projects/$slug": {
@@ -292,13 +292,6 @@ declare module "@tanstack/react-router" {
       preLoaderRoute: typeof AuthProjectsSlugRouteRouteImport;
       parentRoute: typeof AuthRoute;
     };
-    "/_auth/organizations/$orgId_/activity": {
-      id: "/_auth/organizations/$orgId_/activity";
-      path: "/organizations/$orgId/activity";
-      fullPath: "/organizations/$orgId/activity";
-      preLoaderRoute: typeof AuthOrganizationsOrgIdActivityRouteImport;
-      parentRoute: typeof AuthRoute;
-    };
     "/_auth/projects/$slug/": {
       id: "/_auth/projects/$slug/";
       path: "/";
@@ -306,11 +299,11 @@ declare module "@tanstack/react-router" {
       preLoaderRoute: typeof AuthProjectsSlugIndexRouteImport;
       parentRoute: typeof AuthProjectsSlugRouteRoute;
     };
-    "/_auth/projects/$slug/hostnames": {
-      id: "/_auth/projects/$slug/hostnames";
-      path: "/hostnames";
-      fullPath: "/projects/$slug/hostnames";
-      preLoaderRoute: typeof AuthProjectsSlugHostnamesRouteImport;
+    "/_auth/projects/$slug/secrets": {
+      id: "/_auth/projects/$slug/secrets";
+      path: "/secrets";
+      fullPath: "/projects/$slug/secrets";
+      preLoaderRoute: typeof AuthProjectsSlugSecretsRouteImport;
       parentRoute: typeof AuthProjectsSlugRouteRoute;
     };
     "/_auth/projects/$slug/mcp": {
@@ -320,12 +313,19 @@ declare module "@tanstack/react-router" {
       preLoaderRoute: typeof AuthProjectsSlugMcpRouteImport;
       parentRoute: typeof AuthProjectsSlugRouteRoute;
     };
-    "/_auth/projects/$slug/secrets": {
-      id: "/_auth/projects/$slug/secrets";
-      path: "/secrets";
-      fullPath: "/projects/$slug/secrets";
-      preLoaderRoute: typeof AuthProjectsSlugSecretsRouteImport;
+    "/_auth/projects/$slug/hostnames": {
+      id: "/_auth/projects/$slug/hostnames";
+      path: "/hostnames";
+      fullPath: "/projects/$slug/hostnames";
+      preLoaderRoute: typeof AuthProjectsSlugHostnamesRouteImport;
       parentRoute: typeof AuthProjectsSlugRouteRoute;
+    };
+    "/_auth/organizations/$orgId_/activity": {
+      id: "/_auth/organizations/$orgId_/activity";
+      path: "/organizations/$orgId/activity";
+      fullPath: "/organizations/$orgId/activity";
+      preLoaderRoute: typeof AuthOrganizationsOrgIdActivityRouteImport;
+      parentRoute: typeof AuthRoute;
     };
     "/_auth/projects/$slug/contexts/$": {
       id: "/_auth/projects/$slug/contexts/$";

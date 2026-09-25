@@ -5,9 +5,11 @@ import { elapsedBetween, inspectedPlace, orderEventKeys } from "./event-inspecto
 import type { ContextViewEvent } from "./types.tsx";
 
 // offsets 3, 4, 7, 9: 5, 6 and 8 were ephemeral
-const log = [3, 4, 7, 9].map(
-  (offset): ContextViewEvent => ({ offset, type: "t", createdAt: "2026-09-25T00:00:00.000Z" }),
-);
+const log = [3, 4, 7, 9].map((offset): ContextViewEvent => ({
+  offset,
+  type: "t",
+  createdAt: "2026-09-25T00:00:00.000Z",
+}));
 
 test.each([
   [3, { event: 3, previous: undefined, next: 4, missing: undefined }],

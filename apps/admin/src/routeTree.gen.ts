@@ -9,20 +9,20 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from "./routes/__root.tsx";
-import { Route as AuthRouteImport } from "./routes/_auth.tsx";
 import { Route as IndexRouteImport } from "./routes/index.tsx";
+import { Route as AuthRouteImport } from "./routes/_auth.tsx";
 import { Route as AuthUsersRouteImport } from "./routes/_auth/users.tsx";
-import { Route as AuthProjectsIndexRouteImport } from "./routes/_auth/projects.index.tsx";
 import { Route as AuthGlobalSplatRouteImport } from "./routes/_auth/global.$.tsx";
+import { Route as AuthProjectsIndexRouteImport } from "./routes/_auth/projects.index.tsx";
 import { Route as AuthProjectsSlugSplatRouteImport } from "./routes/_auth/projects.$slug.$.tsx";
 
-const AuthRoute = AuthRouteImport.update({
-  id: "/_auth",
-  getParentRoute: () => rootRouteImport,
-} as any);
 const IndexRoute = IndexRouteImport.update({
   id: "/",
   path: "/",
+  getParentRoute: () => rootRouteImport,
+} as any);
+const AuthRoute = AuthRouteImport.update({
+  id: "/_auth",
   getParentRoute: () => rootRouteImport,
 } as any);
 const AuthUsersRoute = AuthUsersRouteImport.update({
@@ -30,14 +30,14 @@ const AuthUsersRoute = AuthUsersRouteImport.update({
   path: "/users",
   getParentRoute: () => AuthRoute,
 } as any);
-const AuthProjectsIndexRoute = AuthProjectsIndexRouteImport.update({
-  id: "/projects/",
-  path: "/projects/",
-  getParentRoute: () => AuthRoute,
-} as any);
 const AuthGlobalSplatRoute = AuthGlobalSplatRouteImport.update({
   id: "/global/$",
   path: "/global/$",
+  getParentRoute: () => AuthRoute,
+} as any);
+const AuthProjectsIndexRoute = AuthProjectsIndexRouteImport.update({
+  id: "/projects/",
+  path: "/projects/",
   getParentRoute: () => AuthRoute,
 } as any);
 const AuthProjectsSlugSplatRoute = AuthProjectsSlugSplatRouteImport.update({
@@ -91,18 +91,18 @@ export interface RootRouteChildren {
 
 declare module "@tanstack/react-router" {
   interface FileRoutesByPath {
-    "/_auth": {
-      id: "/_auth";
-      path: "";
-      fullPath: "/";
-      preLoaderRoute: typeof AuthRouteImport;
-      parentRoute: typeof rootRouteImport;
-    };
     "/": {
       id: "/";
       path: "/";
       fullPath: "/";
       preLoaderRoute: typeof IndexRouteImport;
+      parentRoute: typeof rootRouteImport;
+    };
+    "/_auth": {
+      id: "/_auth";
+      path: "";
+      fullPath: "/";
+      preLoaderRoute: typeof AuthRouteImport;
       parentRoute: typeof rootRouteImport;
     };
     "/_auth/users": {
@@ -112,18 +112,18 @@ declare module "@tanstack/react-router" {
       preLoaderRoute: typeof AuthUsersRouteImport;
       parentRoute: typeof AuthRoute;
     };
-    "/_auth/projects/": {
-      id: "/_auth/projects/";
-      path: "/projects";
-      fullPath: "/projects/";
-      preLoaderRoute: typeof AuthProjectsIndexRouteImport;
-      parentRoute: typeof AuthRoute;
-    };
     "/_auth/global/$": {
       id: "/_auth/global/$";
       path: "/global/$";
       fullPath: "/global/$";
       preLoaderRoute: typeof AuthGlobalSplatRouteImport;
+      parentRoute: typeof AuthRoute;
+    };
+    "/_auth/projects/": {
+      id: "/_auth/projects/";
+      path: "/projects";
+      fullPath: "/projects/";
+      preLoaderRoute: typeof AuthProjectsIndexRouteImport;
       parentRoute: typeof AuthRoute;
     };
     "/_auth/projects/$slug/$": {
