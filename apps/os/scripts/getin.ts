@@ -1,6 +1,5 @@
 // `pnpm getin` — one command to a browser signed in to this worktree's local platform, inside a
-// project that exists. It restores #1760's `pnpm getin` (removed with the legacy platform in #2837)
-// on today's one-click sign-in link (src/test-link.ts, #2966), which local dev enables:
+// project that exists, through the one-click sign-in link (src/test-link.ts) that local dev enables:
 //
 //   pnpm getin                    # signed in as test@preview.iterate.test, in project `test`
 //   pnpm -s getin --print         # only the URL, on stdout — for Playwright and agents
