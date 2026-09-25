@@ -497,9 +497,13 @@ export function projectHostOf(
   url: URL,
   platformOrigin: string,
 ): ProjectAddress | null {
+  // The platform and MCP origins first: `os.<domain>` under a `*.<domain>` project wildcard is the
+  // platform's, never project `os`. Under paths the platform origin carries `/projects/…` too.
+  if (url.origin === config.urls.mcp) return null;
+  if (url.origin === platformOrigin && config.urls.ingressRouting?.type !== "paths") return null;
   const routed = projectAddressOf(config.urls.ingressRouting, url, platformOrigin);
   if (routed) return routed;
-  if (url.origin === platformOrigin || url.origin === config.urls.mcp) return null;
+  if (url.origin === platformOrigin) return null;
   const wildcard = projectWildcardHostOf(url.hostname, config.urls.projectWildcard);
   return wildcard && { ...wildcard, basePath: "" };
 }

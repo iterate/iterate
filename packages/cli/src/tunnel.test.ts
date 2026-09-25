@@ -1,7 +1,7 @@
 // tunnel.test.ts — the tunnel's local proxy, `LocalPortRpcTarget`, against real local servers: what
 // the project host's request becomes on `localhost:<port>`, a WebSocket that keeps the subprotocol
-// the local server chose, and the 502 when nothing listens; and `runTunnel` refusing a private
-// tunnel where projects are served under paths. The platform half (the route, the host,
+// the local server chose, and the 502 when nothing listens; and the route `runTunnel` sets. The
+// platform half (the route, the host,
 // the lent stub) is apps/os e2e/tunnel.e2e.test.ts.
 import { createServer, type IncomingMessage, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -157,8 +157,8 @@ test("a random routing slug is a letter and seven letters or digits", () => {
   for (let i = 0; i < 50; i++) expect(randomRoutingSlug()).toMatch(/^[a-z][a-z0-9]{7}$/);
 });
 
-// Under paths routing the tunnel lives under a base path: private and public tunnels are both set,
-// and the tunnel says where it lives and what the local server must do.
+// Private and public tunnels are set under both routings, the route's authRequirement saying which;
+// under paths the tunnel says the base path the local server must serve under.
 test.for([
   ["paths", "private"],
   ["paths", "public"],
@@ -170,12 +170,15 @@ test.for([
       ? "https://os.example.com/projects/p/blog/"
       : "https://blog--p.example.com/";
   const calls: string[] = [];
+  const routes: unknown[] = [];
   const project = {
     url: async () => url,
     fetchRoutes: {
       list: async () => [],
-      set: async (name: string, route: unknown) =>
-        void calls.push(`set ${name} ${route && "route"}`),
+      set: async (name: string, route: unknown) => {
+        calls.push(`set ${name} ${route && "route"}`);
+        routes.push(route);
+      },
     },
     provide: async (target: string) => {
       calls.push(`provide ${target}`);
@@ -202,9 +205,15 @@ test.for([
     "set tunnel-blog route",
     "set tunnel-blog null",
   ]);
-  const underPaths =
-    "This deployment serves projects under paths, so this tunnel lives at https://os.example.com/projects/p/blog/. Your local server must serve under /projects/p/blog/ (Vite: --base /projects/p/blog/); a server that only works at / will not work here. To serve at the root of its own origin, give the deployment a domain with a wildcard certificate: https://github.com/iterate/iterate/blob/main/apps/os/SELF-HOSTING.md#custom-domain-own-origins-for-apps-and-tunnels";
-  expect(stderr.mock.calls.some(([line]) => line === underPaths)).toBe(routing === "paths");
+  expect(routes[0]).toMatchObject({
+    authRequirement: visibility === "public" ? null : { visitors: "project-members" },
+  });
+  const warned = stderr.mock.calls.some(
+    ([line]) =>
+      String(line).includes("--base /projects/p/blog/") &&
+      String(line).includes("SELF-HOSTING.md#custom-domain-own-origins-for-apps-and-tunnels"),
+  );
+  expect(warned).toBe(routing === "paths");
 });
 
 type VisitorSocket = {

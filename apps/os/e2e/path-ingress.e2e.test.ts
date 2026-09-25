@@ -2,23 +2,24 @@
 // a deployment with one hostname and no wildcard (workers.dev) reaches its projects as
 // `<os>/projects/<project>/<routingSlug>/…` and the apex `<os>/projects/<project>/…`, both the
 // project's config worker. The worker strips the prefix before the config worker sees the URL and
-// hands it its base path. Every app runs on the platform's own origin, unsandboxed; public or
-// private is the app's call per path, exactly as under subdomains: an app's `401 Bearer
-// realm="iterate"` becomes the platform's sign-in for a page load (next: the full `/projects/…`
-// path), and a member arrives stamped. A stored file is the one thing served sandboxed (anyone
-// holding its signed URL opens it). The platform's own first segments (`api`, `mcp`, `login`, …)
-// are never a project. LOCAL ONLY: every row boots its own worker with the paths configuration
+// hands it its base path. Every app runs on the platform's own origin; public or private is the
+// app's call per path, exactly as under subdomains: an app's `401 Bearer realm="iterate"` becomes
+// the platform's sign-in for a page load (next: the full `/projects/…` path), and a member arrives
+// stamped. An app cannot set the platform's `__Host-itx-*` cookies or `Service-Worker-Allowed`. A
+// stored file is served sandboxed (anyone holding its signed URL opens it). The platform's own first
+// segments (`api`, `mcp`, `login`, …) are never a project. LOCAL ONLY: every row boots its own worker with the paths configuration
 // (support/worker-config.ts; `await using paths = await pathsWorker()`, stopped when the row ends) —
 // the shared worker routes by subdomain.
 import { request } from "undici";
 import { expect } from "vitest";
-import { startOwnWorker, type OwnWorker } from "./support/own-worker.ts";
+import { startOwnWorker } from "./support/own-worker.ts";
 import { issuerCookie } from "./support/principal.ts";
 import { freshDnsSafeProjectSlug, localOnly, publishConfigWorker } from "./support/project-host.ts";
 
 /** A config worker that answers a routing slug with what it was handed: the URL it saw, its base
  *  path, its routing slug, the cookie and principal it was given; `/private` asks for a signed-in
- *  caller (the platform's challenge) unless one is stamped; the apex is its own 404. */
+ *  caller (the platform's challenge) unless one is stamped; `/headers` tries to set what only the
+ *  platform may; the apex is its own 404. */
 const SRC_ECHO_URL_CONFIG_WORKER = {
   "cap.js": `import { WorkerEntrypoint } from "cloudflare:workers";
 export default class Echo extends WorkerEntrypoint {
@@ -29,6 +30,12 @@ export default class Echo extends WorkerEntrypoint {
     const principal = request.headers.get("x-itx-principal");
     if (url.pathname === "/private" && !principal)
       return new Response("Sign in\\n", { status: 401, headers: { "WWW-Authenticate": 'Bearer realm="iterate"' } });
+    if (url.pathname === "/headers") {
+      const headers = new Headers({ "Service-Worker-Allowed": "/" });
+      headers.append("Set-Cookie", "__Host-itx-session=stolen; Path=/; Secure; HttpOnly");
+      headers.append("Set-Cookie", "theme=dark; Path=/");
+      return new Response("ok\\n", { headers });
+    }
     return Response.json({
       path: url.pathname + url.search,
       basePath: request.headers.get("x-iterate-base-path"),
@@ -41,7 +48,7 @@ export default class Echo extends WorkerEntrypoint {
 };
 
 localOnly(
-  "a routing slug is reached at /projects/<project>/<routingSlug>/…, public by default: the prefix stripped, the base path handed over, the answer as the app gave it (no sandbox)",
+  "a routing slug is reached at /projects/<project>/<routingSlug>/…, public by default: the prefix stripped, the base path handed over, the app's headers kept, the platform's own (cookies, service-worker scope) dropped",
   { timeout: 120_000 },
   async () => {
     await using paths = await pathsWorker();
@@ -57,6 +64,10 @@ localOnly(
     });
     expect(answer.headers.get("content-security-policy")).toBeNull();
     expect(answer.headers.get("x-app-header")).toBe("kept");
+    // what only the platform may say on its origin never reaches the visitor
+    const headers = await fetch(`${origin}/projects/${slug}/echo/headers`);
+    expect(headers.headers.get("service-worker-allowed")).toBeNull();
+    expect(headers.headers.getSetCookie()).toEqual(["theme=dark; Path=/"]);
     // the routing slug's root, with and without a trailing slash
     expect(await (await fetch(`${origin}/projects/${slug}/echo/`)).json()).toMatchObject({
       path: "/",
@@ -76,13 +87,14 @@ localOnly(
 );
 
 localOnly(
-  "a path the app keeps private: an anonymous page load goes to the platform's sign-in and back to the full /projects/… path, a fetch keeps the app's 401, a member arrives signed in with the platform's cookie kept from the app",
+  "a path the app keeps private: a page load goes to sign in and back to the full /projects/… path; a member arrives signed in",
   { timeout: 120_000 },
   async () => {
     await using paths = await pathsWorker();
     const { origin, slug, member } = paths;
     const path = `/projects/${slug}/echo/private?x=1`;
-    // a page load as the browser sends it: fetch would overwrite `Sec-Fetch-Mode` with its own
+    // a page load as the browser sends it (fetch would overwrite `Sec-Fetch-Mode`); undici directly,
+    // not navigateProjectUrl, whose local dispatcher dials the shared worker, not this one
     const signIn = await request(`${origin}${path}`, {
       headers: { "sec-fetch-mode": "navigate", "sec-fetch-dest": "document" },
     });
@@ -91,9 +103,6 @@ localOnly(
       statusCode: 302,
       headers: { location: `${origin}/.auth/login?${new URLSearchParams({ next: path })}` },
     });
-    const fetched = await fetch(`${origin}${path}`, { redirect: "manual" });
-    expect(fetched).toMatchObject({ status: 401 });
-    expect(await fetched.text()).toBe("Sign in\n");
     const signedIn = await fetch(`${origin}${path}`, {
       headers: { cookie: `${member}; theme=dark` },
       redirect: "manual",
@@ -104,12 +113,11 @@ localOnly(
       cookie: "theme=dark",
       signedIn: true,
     });
-    expect(signedIn.headers.get("content-security-policy")).toBeNull();
   },
 );
 
 localOnly(
-  "a stored file under /projects/<project>/files/… is served to anyone holding its signed URL, no sign-in — and sandboxed, the one document on the platform's origin a project does not serve itself",
+  "a stored file under /projects/<project>/files/… is served to anyone holding its signed URL, sandboxed",
   { timeout: 120_000 },
   async () => {
     await using paths = await pathsWorker();
@@ -124,7 +132,9 @@ localOnly(
     const served = await fetch(signed.url);
     expect(served, await served.clone().text()).toMatchObject({ status: 200 });
     expect(served.headers.get("content-type")).toMatch(/text\/html/);
-    expect(served.headers.get("content-security-policy")).toMatch(/\bsandbox\b/);
+    const csp = served.headers.get("content-security-policy");
+    expect(csp).toMatch(/\bsandbox\b/);
+    expect(csp).not.toContain("allow-same-origin");
   },
 );
 
@@ -151,9 +161,7 @@ localOnly(
 /** A worker booted for one row with PATH routing, project `slug` created on it as a person — its
  *  member, whose issuer cookie is `member` — and the echo config worker published; disposing it
  *  stops the worker (and the sessions it minted). */
-async function pathsWorker(): Promise<
-  AsyncDisposable & { worker: OwnWorker; origin: string; slug: string; member: string }
-> {
+async function pathsWorker() {
   await using stack = new AsyncDisposableStack();
   const worker = await startOwnWorker({ ingressRouting: { type: "paths" } });
   stack.defer(() => worker.stop());

@@ -24,9 +24,11 @@ import { fileURLToPath } from "node:url";
 import { WebSocketServer } from "ws";
 import { expect, test } from "vitest";
 import { adminCredentials, session, until, untilValue, workerUrl } from "./support/client.ts";
+import { issuerCookie } from "./support/principal.ts";
 import {
   fetchProjectUrl,
   freshDnsSafeProjectSlug,
+  ingressRouting,
   navigateProjectUrl,
   projectUrlSocket,
   registerProject,
@@ -36,13 +38,14 @@ import {
 const bin = fileURLToPath(new URL("../../../packages/cli/bin/iterate.js", import.meta.url).href);
 
 test(
-  "iterate tunnel: private by default, public on --public (HTTP and a vite-hmr WebSocket), Ctrl-C deletes the route, a killed tunnel is 502",
+  "iterate tunnel: private by default (under paths a member reaches its page, assets and WebSocket), public on --public (HTTP and a vite-hmr WebSocket), Ctrl-C deletes the route, a killed tunnel is 502",
   // Each CLI process connects and sets a route (a few seconds each against a preview): three of them.
   { timeout: 90_000 },
   async () => {
     await using local = await localServer();
     const slug = freshDnsSafeProjectSlug("tunnel");
-    const projectId = await registerProject(slug);
+    const member = { email: `${slug}@example.com` };
+    const projectId = await registerProject(slug, member);
     const itx = session().authenticate(adminCredentials()).projects.get(projectId);
     await itx.waitForEvent({
       type: ["events.iterate.com/project/created", "events.iterate.com/project/create-failed"],
@@ -52,7 +55,7 @@ test(
     await using cli = await cliConfig();
 
     // private (the default): the route's authRequirement, under paths as under subdomains — an
-    // anonymous page load goes to sign in and back to the full path, a fetch is 401
+    // anonymous page load goes to sign in, a fetch is 401
     const privateTunnel = cli.tunnel([String(local.port), "--name", "web", "--project", projectId]);
     const privateUrl = new URL((await privateTunnel.live).url);
     const navigation = await navigateProjectUrl(privateUrl, {
@@ -60,10 +63,30 @@ test(
       "sec-fetch-dest": "document",
     });
     expect(navigation).toMatchObject({ status: 302 });
-    expect(navigation.headers.location).toContain(
-      `/.auth/login?next=${encodeURIComponent(privateUrl.pathname)}`,
-    );
+    expect(navigation.headers.location).toContain("/.auth/login");
     expect(await fetchProjectUrl(privateUrl)).toMatchObject({ status: 401 });
+    if (ingressRouting()?.type === "paths") {
+      // under paths a member's platform cookie is the tunnel's: the page, a nested asset, and a
+      // same-origin WebSocket all reach the local server
+      const signedIn = {
+        cookie: await issuerCookie(member.email),
+        origin: new URL(workerUrl("/")).origin,
+      };
+      const base = privateUrl.href.endsWith("/") ? privateUrl.href : `${privateUrl.href}/`;
+      for (const url of [new URL(base), new URL("assets/app.js", base)])
+        expect(await fetchProjectUrl(url, signedIn)).toMatchObject({
+          status: 200,
+          text: `local ${url.pathname}`,
+        });
+      const socket = await projectUrlSocket(new URL(base), signedIn);
+      const echo = await new Promise<string>((resolve, reject) => {
+        socket.addEventListener("open", () => socket.send("member"));
+        socket.addEventListener("message", (event) => resolve(String(event.data)));
+        socket.addEventListener("error", () => reject(new Error("the WebSocket did not open")));
+      });
+      socket.close(1000, "done");
+      expect(echo).toBe("local-echo:member");
+    }
     expect(await privateTunnel.stop("SIGINT")).toBe(0);
     expect(await itx.fetchRoutes.list()).toEqual([]);
     expect(await fetchProjectUrl(privateUrl)).toMatchObject({

@@ -21,16 +21,16 @@ The rest of this page is what the recipe leaves out.
 `https://iterate.<your-subdomain>.workers.dev/projects/<project>/<routingSlug>/`, and `/projects/<project>/`
 for the project's own config worker (`urls.ingressRouting: { type: "paths" }`).
 
-With no domain, every project's code runs on the platform's own origin and can act as any
-signed-in visitor, in every project that person can reach. Paths routing is for a deployment whose
-people all trust each other. Apps are public unless their router marks a path private, exactly as
-with a domain: a private path sends a visitor to the platform's sign-in and back. Signed file URLs
+With no domain, every project's code runs on the platform's own origin. An app's code can do
+anything the person visiting it can do on the deployment, in every project they reach, including
+minting tokens that outlive the visit. Paths routing is for a deployment whose people all trust each
+other. Apps are public unless their router marks a path private, exactly as with a domain: a private
+path sends a visitor to the platform's sign-in and back. Signed file URLs
 (`/projects/<project>/files/…`) work for anyone holding one, and are served sandboxed so a file
-can never act as whoever opens it. An app must serve under its base path (Vite: `--base`); one that
-only works at `/` does not work here.
+can never act as whoever opens it.
 
-For public apps, and apps on an origin of their own, give the deployment a
-[custom domain](#custom-domain-own-origins-for-apps-and-tunnels).
+For apps on an origin of their own, or people who don't all trust each other, give the deployment
+a [custom domain](#custom-domain-own-origins-for-apps-and-tunnels).
 
 ## Other sign-in methods and configuration
 
@@ -56,8 +56,7 @@ What it takes:
 
 1. **The zone** for `<your-domain>` on the same Cloudflare account as the Worker.
 2. **A proxied wildcard DNS record** for `*.<your-domain>`. It also covers `os.<your-domain>`. The
-   record's target does not matter; the Worker route answers. For iterate's own deployments
-   `apps/os/scripts/ensure-resources.ts` creates it; on a self-host, add it in the dashboard.
+   record's target does not matter; the Worker route answers.
 3. **A certificate for `*.<your-domain>`.** Cloudflare's Universal SSL covers the apex and one
    wildcard level, which is why app hosts are one label (`<routingSlug>--<project>`) and not
    `<routingSlug>.<project>.<your-domain>`.
@@ -65,7 +64,6 @@ What it takes:
    `selfHostWranglerConfig` in `apps/os/scripts/generate-wrangler-config.ts`, which sets none.
 5. **The config:** `urls.os` = `https://os.<your-domain>` in `APP_CONFIG`, and
    `APP_CONFIG_URLS__INGRESS_ROUTING` = `{"type":"subdomains","hostname":"<your-domain>"}` in the
-   same function's `vars`. That var overrides `urls.ingressRouting` in `APP_CONFIG`, and it is
-   `{"type":"paths"}` there today.
+   same function's `vars`, which override `urls.ingressRouting` in `APP_CONFIG`.
 
 Deploy again. `/mcp` then lives at `https://os.<your-domain>/mcp`; reconnect your MCP client there.

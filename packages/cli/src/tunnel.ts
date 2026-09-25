@@ -19,9 +19,6 @@ const HOP_BY_HOP_HEADERS = [
  *  short enough that `tunnel-<slug>` is a DNS label too. */
 const ROUTING_SLUG = /^[a-z](?:[a-z0-9]|-(?!-))*$/;
 const ROUTING_SLUG_MAX_LENGTH = 50;
-/** What a deployment needs so each project app, a tunnel included, gets its own origin. */
-const CUSTOM_DOMAIN_DOCS =
-  "https://github.com/iterate/iterate/blob/main/apps/os/SELF-HOSTING.md#custom-domain-own-origins-for-apps-and-tunnels";
 /** Routing slugs the edge answers itself, never the config worker (apps/os
  *  src/context/file-urls.ts `FILES_ROUTING_SLUG`: signed file URLs). */
 const RESERVED_ROUTING_SLUGS = ["files"];
@@ -273,7 +270,7 @@ export async function runTunnel(input: {
     );
     if (basePath !== "/")
       console.error(
-        `This deployment serves projects under paths, so this tunnel lives at ${url}. Your local server must serve under ${basePath} (Vite: --base ${basePath}); a server that only works at / will not work here. To serve at the root of its own origin, give the deployment a domain with a wildcard certificate: ${CUSTOM_DOMAIN_DOCS}`,
+        `Projects are served under paths here: your local server must serve under ${basePath} (Vite: --base ${basePath}). To serve at / on an origin of its own, give the deployment a domain with a wildcard certificate: https://github.com/iterate/iterate/blob/main/apps/os/SELF-HOSTING.md#custom-domain-own-origins-for-apps-and-tunnels`,
       );
     try {
       const outcome = await Promise.race([stopped, input.connection.closed]);
