@@ -8,7 +8,7 @@ import {
   type Project,
   type Snapshot,
   type Type,
-} from "@typescript/native-preview/unstable/sync";
+} from "typescript/unstable/sync";
 import type { Rule } from "eslint";
 import type { CallExpression, Expression, Node } from "estree";
 

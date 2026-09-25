@@ -114,6 +114,27 @@ test("mixed TypeScript changes count only emitted runtime lines as Significant",
   ]);
 });
 
+test("a TSX change to JSX text alone (UI copy) is Significant", () => {
+  using repo = createGitRepo();
+  const page = (copy: string) =>
+    [
+      "export function Page() {",
+      "  return (",
+      "    <p>",
+      `      ${copy}`,
+      "    </p>",
+      "  );",
+      "}",
+      "",
+    ].join("\n");
+  const base = repo.commit({ "src/page.tsx": page("Sign in to continue") });
+  const head = repo.commit({ "src/page.tsx": page("Sign in to Waitrose") });
+
+  expect(getChangedFiles(base, head, repo.path)).toMatchObject([
+    { path: "src/page.tsx", added: 1, removed: 1, significantAdded: 1, significantRemoved: 1 },
+  ]);
+});
+
 test("runtime-emitting TypeScript syntax remains Significant without compiler-line inflation", () => {
   using repo = createGitRepo();
   const base = repo.commit({ "src/direction.ts": "" });
