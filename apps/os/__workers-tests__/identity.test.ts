@@ -69,14 +69,14 @@ test("Google subject keeps the same principal when its verified email changes", 
   expect(await controlPlane().getUser("verified@signin.test")).toBeNull();
 });
 
-test("wrong nonce, signature and unverified email cannot establish issuer identity", async () => {
-  for (const [claims, badSignature, status] of [
-    [{ nonce: "foreign-browser" }, false, 400],
-    [{}, true, 400],
-    [{ email_verified: false }, false, 403],
+test("wrong nonce, signature and unverified email cannot establish issuer identity: each lands on the sign-in page with why", async () => {
+  for (const [claims, badSignature, error] of [
+    [{ nonce: "foreign-browser" }, false, "Sign-in was refused or expired. Please start again."],
+    [{}, true, "Sign-in was refused or expired. Please start again."],
+    [{ email_verified: false }, false, "Google must verify your email before you can sign in."],
   ] as const) {
     const response = await identityLogin("google", claims, badSignature);
-    expect(response).toMatchObject({ status });
+    expect(signInPageOf(response)).toEqual({ next: "/oauth2/auth?client=test", error });
     expect(
       response.headers.getSetCookie().some((cookie) => cookie.startsWith("__Host-itx-session=")),
     ).toBe(false);
@@ -152,20 +152,30 @@ test("Cloudflare's verified ID token creates the same revocable issuer session, 
 });
 
 test.for([
-  { name: "wrong nonce", claims: { nonce: "other-browser" }, status: 400 },
-  { name: "wrong audience", claims: { aud: "another-client" }, status: 400 },
-  { name: "wrong issuer", claims: { iss: "https://google.test" }, status: 400 },
-  { name: "expired token", claims: { exp: 1 }, status: 400 },
-  { name: "unverified email", claims: { email_verified: false }, status: 403 },
-  { name: "missing email verification", claims: { email_verified: undefined }, status: 403 },
-  { name: "missing email", claims: { email: undefined }, status: 403 },
-  { name: "bad signature", claims: {}, signature: true, status: 400 },
-  { name: "wrong state", claims: {}, state: true, status: 400 },
+  { name: "wrong nonce", claims: { nonce: "other-browser" }, error: "REFUSED" as const },
+  { name: "wrong audience", claims: { aud: "another-client" }, error: "REFUSED" as const },
+  { name: "wrong issuer", claims: { iss: "https://google.test" }, error: "REFUSED" as const },
+  { name: "expired token", claims: { exp: 1 }, error: "REFUSED" as const },
+  { name: "unverified email", claims: { email_verified: false }, error: "UNVERIFIED" as const },
+  {
+    name: "missing email verification",
+    claims: { email_verified: undefined },
+    error: "UNVERIFIED" as const,
+  },
+  { name: "missing email", claims: { email: undefined }, error: "UNVERIFIED" as const },
+  { name: "bad signature", claims: {}, signature: true, error: "REFUSED" as const },
+  { name: "wrong state", claims: {}, state: true, error: "REFUSED" as const },
 ])(
-  "Cloudflare refuses $name without creating a session",
-  async ({ claims, signature, state, status }) => {
+  "Cloudflare refuses $name without creating a session, back on the sign-in page with why",
+  async ({ claims, signature, state, error }) => {
     const response = await identityLogin("cloudflare", claims, signature, state);
-    expect(response).toMatchObject({ status });
+    expect(signInPageOf(response)).toEqual({
+      next: "/oauth2/auth?client=test",
+      error: {
+        REFUSED: "Sign-in was refused or expired. Please start again.",
+        UNVERIFIED: "Cloudflare must verify your email before you can sign in.",
+      }[error],
+    });
     expect(
       response.headers.getSetCookie().some((cookie) => cookie.startsWith("__Host-itx-session=")),
     ).toBe(false);
@@ -239,7 +249,13 @@ test.for(["provider mismatch", "declined consent"])(
       headers: { cookie },
       redirect: "manual",
     });
-    expect(response).toMatchObject({ status: 400 });
+    expect(signInPageOf(response)).toEqual({
+      next: "/",
+      error:
+        failure === "provider mismatch"
+          ? "Sign-in expired. Please start again."
+          : "Sign-in was refused or expired. Please start again.",
+    });
     expect(
       response.headers.getSetCookie().some((value) => value.startsWith("__Host-itx-session=")),
     ).toBe(false);
@@ -400,12 +416,159 @@ test("signing in with the Google account a person connected before keeps that on
 test("a fake provider signs in an address under the test-link domain alone", async () => {
   const petshop = petshopFakes();
   const { response } = await signInThroughFake(petshop, "google", { email: "ada@iterate.com" });
-  expect(response).toMatchObject({ status: 403 });
-  expect(await response.text()).toContain("under signin.test alone");
+  expect(signInPageOf(response)).toEqual({
+    next: "/",
+    error: "Google: a fake provider signs in addresses under signin.test alone.",
+  });
   expect(
     response.headers.getSetCookie().some((cookie) => cookie.startsWith("__Host-itx-session=")),
   ).toBe(false);
   expect(await controlPlane().getUser("ada@iterate.com")).toBeNull();
+});
+
+test("GitHub: a person who never approved iterate's Email addresses permission lands on the sign-in page, told how to approve it", async () => {
+  const petshop = petshopFakes();
+  const refusals = vi.spyOn(console, "info");
+  const { response } = await signInThroughFake(petshop, "github", {
+    login: "gh-noemail",
+    email: "gh-noemail@signin.test",
+    emails: "none",
+  });
+  expect(signInPageOf(response)).toEqual({
+    next: "/",
+    error:
+      "GitHub didn't share your email address with iterate. Revoke iterate at https://github.com/settings/apps/authorizations, then sign in with GitHub again to approve its updated permissions — or sign in another way.",
+  });
+  expect(
+    response.headers.getSetCookie().some((cookie) => cookie.startsWith("__Host-itx-session=")),
+  ).toBe(false);
+  // an expected outcome: logged as the person's refusal, never as a fault
+  expect(refusals).toHaveBeenCalledWith(
+    expect.objectContaining({
+      event: "identity.sign-in-refused",
+      provider: "github",
+      reason: "github-email-permission",
+      acceptedPermissions: "emails=read",
+    }),
+  );
+  expect(await controlPlane().identity("github", String(fakeUserIdOf("gh-noemail")))).toBeNull();
+});
+
+test.for<[string, "google" | "cloudflare" | "github"]>([
+  ["Google", "google"],
+  ["Cloudflare", "cloudflare"],
+  ["GitHub", "github"],
+])(
+  "%s: a callback with no sign-in flow cookie lands on the sign-in page, never an exception",
+  async ([, provider]) => {
+    const path = {
+      google: "/.auth/identity",
+      cloudflare: "/.auth/identity/cloudflare",
+      github: "/.auth/identity/github",
+    }[provider];
+    const response = await exports.default.fetch(
+      `${ORIGIN}${path}/callback?${new URLSearchParams({ code: "bogus", state: "bogus" })}`,
+      { redirect: "manual" },
+    );
+    expect(signInPageOf(response)).toEqual({
+      next: "/",
+      error: "Sign-in expired. Please start again.",
+    });
+  },
+);
+
+test.for<[string, (url: URL) => Response | "unreachable" | null, string, string | null]>([
+  [
+    "a code GitHub refuses to exchange",
+    (url) =>
+      url.pathname === "/login/oauth/access_token"
+        ? Response.json({ error: "bad_verification_code" })
+        : null,
+    "Sign-in was refused or expired. Please start again.",
+    null,
+  ],
+  [
+    "a token endpoint that cannot be reached",
+    (url) => (url.pathname === "/login/oauth/access_token" ? "unreachable" : null),
+    "GitHub didn't answer. Please try again.",
+    "identity.platform-failure-token",
+  ],
+  [
+    "a token endpoint answering 502",
+    (url) =>
+      url.pathname === "/login/oauth/access_token"
+        ? new Response("bad gateway", { status: 502 })
+        : null,
+    "GitHub didn't answer. Please try again.",
+    "identity.platform-failure-token",
+  ],
+  [
+    "/user answering 503",
+    (url) => (url.pathname === "/user" ? new Response("unavailable", { status: 503 }) : null),
+    "GitHub didn't answer. Please try again.",
+    "identity.platform-failure-user",
+  ],
+  [
+    "/user/emails answering 500",
+    (url) => (url.pathname === "/user/emails" ? new Response("oops", { status: 500 }) : null),
+    "GitHub didn't answer. Please try again.",
+    "identity.platform-failure-emails",
+  ],
+  [
+    "a primary address GitHub has not verified",
+    (url) =>
+      url.pathname === "/user/emails"
+        ? Response.json([{ email: "gh-step@signin.test", primary: true, verified: false }])
+        : null,
+    "GitHub must verify your primary email before you can sign in.",
+    null,
+  ],
+])(
+  "GitHub: %s lands on the sign-in page with why, never an exception",
+  async ([, failing, error, warned]) => {
+    const petshop = failFetch(petshopFakes(), failing);
+    const warnings = vi.spyOn(console, "warn");
+    const { response } = await signInThroughFake(petshop, "github", {
+      login: "gh-step",
+      email: "gh-step@signin.test",
+    });
+    expect(signInPageOf(response)).toEqual({ next: "/", error });
+    if (warned)
+      expect(warnings).toHaveBeenCalledWith(
+        expect.objectContaining({ event: warned, provider: "github" }),
+      );
+  },
+);
+
+test("a second Google subject for an address already linked to one lands on the sign-in page, never a 409 page", async () => {
+  await controlPlane().linkIdentity("google", "the-first-google-subject", "taken@signin.test");
+  const response = await identityLogin("google", {
+    email: "taken@signin.test",
+    sub: "taken-google",
+  });
+  expect(signInPageOf(response)).toMatchObject({
+    next: "/oauth2/auth?client=test",
+    error: expect.any(String),
+  });
+});
+
+test("a defect of ours after the provider answered is reported, and the person still lands on the sign-in page", async () => {
+  const petshop = petshopFakes();
+  failFetch(petshop, (url) =>
+    url.pathname === "/user" ? Response.json({ unexpected: "shape" }) : null,
+  );
+  const issues = vi.spyOn(console, "error");
+  const { response } = await signInThroughFake(petshop, "github", {
+    login: "gh-defect",
+    email: "gh-defect@signin.test",
+  });
+  expect(signInPageOf(response)).toEqual({
+    next: "/",
+    error: "Sign-in with GitHub failed. Please try again.",
+  });
+  expect(issues).toHaveBeenCalledWith(
+    expect.objectContaining({ event: "issue", failureSite: "identity.sign-in-failed" }),
+  );
 });
 
 /** A browser signing in through a pet-shop fake: the platform's redirect to the provider (its
@@ -559,4 +722,30 @@ async function identityLogin(
 
 function encode(value: unknown) {
   return btoa(JSON.stringify(value)).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/, "");
+}
+
+/** Where a sign-in callback sent the browser, when it is the sign-in page: `next` and the `error`
+ *  the page shows. */
+function signInPageOf(response: Response) {
+  expect(response).toMatchObject({ status: 303 });
+  const location = new URL(response.headers.get("location")!, ORIGIN);
+  expect(location).toMatchObject({ pathname: "/login" });
+  return { next: location.searchParams.get("next"), error: location.searchParams.get("error") };
+}
+
+/** The pet shop's fakes, with one GitHub request answered by `failing` instead: a response, or
+ *  "unreachable" for a fetch that throws; null passes the request to the fake. */
+function failFetch(
+  petshop: ReturnType<typeof petshopFakes>,
+  failing: (url: URL) => Response | "unreachable" | null,
+) {
+  const spy = vi.mocked(globalThis.fetch);
+  const answer = spy.getMockImplementation()!;
+  spy.mockImplementation(async (input, init) => {
+    const url = new URL(input instanceof Request ? input.url : String(input));
+    const failure = url.hostname === "github.test" ? failing(url) : null;
+    if (failure === "unreachable") throw new TypeError("Network connection lost.");
+    return failure || answer(input, init);
+  });
+  return petshop;
 }
