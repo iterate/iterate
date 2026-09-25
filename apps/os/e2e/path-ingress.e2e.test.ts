@@ -2,12 +2,12 @@
 // a deployment with one hostname and no wildcard (workers.dev) reaches its projects as
 // `<os>/projects/<project>/<routingSlug>/…` and the apex `<os>/projects/<project>/…`, both the
 // project's config worker. The worker strips the prefix before the config worker sees the URL and
-// hands it its base path. Every app runs on the platform's own origin, where its script acts as
-// whoever is signed in there, so EVERY PROJECT PATH IS MEMBERS-ONLY (src/project-host-sign-in.ts
-// rules 8–10): a member gets the app's answer as it was, with no sandbox; anyone else is turned away
-// at the edge — a page load to sign in, a fetch 401, a signed-in non-member 403. A signed file URL
-// is its own authorization. The platform's own first segments (`api`, `mcp`, `login`, …) are never
-// a project. LOCAL ONLY: every row boots its own worker with the paths configuration
+// hands it its base path. Every app runs on the platform's own origin, unsandboxed; public or
+// private is the app's call per path, exactly as under subdomains: an app's `401 Bearer
+// realm="iterate"` becomes the platform's sign-in for a page load (next: the full `/projects/…`
+// path), and a member arrives stamped. A stored file is the one thing served sandboxed (anyone
+// holding its signed URL opens it). The platform's own first segments (`api`, `mcp`, `login`, …)
+// are never a project. LOCAL ONLY: every row boots its own worker with the paths configuration
 // (support/worker-config.ts; `await using paths = await pathsWorker()`, stopped when the row ends) —
 // the shared worker routes by subdomain.
 import { request } from "undici";
@@ -17,7 +17,8 @@ import { issuerCookie } from "./support/principal.ts";
 import { freshDnsSafeProjectSlug, localOnly, publishConfigWorker } from "./support/project-host.ts";
 
 /** A config worker that answers a routing slug with what it was handed: the URL it saw, its base
- *  path, its routing slug; the apex is its own 404. */
+ *  path, its routing slug, the cookie and principal it was given; `/private` asks for a signed-in
+ *  caller (the platform's challenge) unless one is stamped; the apex is its own 404. */
 const SRC_ECHO_URL_CONFIG_WORKER = {
   "cap.js": `import { WorkerEntrypoint } from "cloudflare:workers";
 export default class Echo extends WorkerEntrypoint {
@@ -25,48 +26,48 @@ export default class Echo extends WorkerEntrypoint {
     const url = new URL(request.url);
     const routingSlug = request.headers.get("x-iterate-routing-slug");
     if (routingSlug === null) return new Response("Not found\\n", { status: 404 });
+    const principal = request.headers.get("x-itx-principal");
+    if (url.pathname === "/private" && !principal)
+      return new Response("Sign in\\n", { status: 401, headers: { "WWW-Authenticate": 'Bearer realm="iterate"' } });
     return Response.json({
       path: url.pathname + url.search,
       basePath: request.headers.get("x-iterate-base-path"),
       routingSlug,
       cookie: request.headers.get("cookie"),
+      signedIn: principal !== null,
     }, { headers: { "x-app-header": "kept" } });
   }
 }`,
 };
 
 localOnly(
-  "a member reaches a routing slug at /projects/<project>/<routingSlug>/…: the prefix stripped, the base path handed over, the answer as the app gave it (no sandbox), the platform's cookie kept from the app",
+  "a routing slug is reached at /projects/<project>/<routingSlug>/…, public by default: the prefix stripped, the base path handed over, the answer as the app gave it (no sandbox)",
   { timeout: 120_000 },
   async () => {
     await using paths = await pathsWorker();
-    const { origin, slug, member } = paths;
-    const answer = await fetch(`${origin}/projects/${slug}/echo/hello?x=1`, {
-      headers: { cookie: `${member}; theme=dark` },
-      redirect: "manual",
-    });
+    const { origin, slug } = paths;
+    const answer = await fetch(`${origin}/projects/${slug}/echo/hello?x=1`, { redirect: "manual" });
     expect(answer, await answer.clone().text()).toMatchObject({ status: 200 });
     expect(await answer.json()).toEqual({
       path: "/hello?x=1",
       basePath: `/projects/${slug}/echo`,
       routingSlug: "echo",
-      cookie: "theme=dark",
+      cookie: null,
+      signedIn: false,
     });
     expect(answer.headers.get("content-security-policy")).toBeNull();
     expect(answer.headers.get("x-app-header")).toBe("kept");
     // the routing slug's root, with and without a trailing slash
-    const asMember = { headers: { cookie: member } };
-    expect(await (await fetch(`${origin}/projects/${slug}/echo/`, asMember)).json()).toMatchObject({
+    expect(await (await fetch(`${origin}/projects/${slug}/echo/`)).json()).toMatchObject({
       path: "/",
     });
-    expect(await (await fetch(`${origin}/projects/${slug}/echo`, asMember)).json()).toMatchObject({
+    expect(await (await fetch(`${origin}/projects/${slug}/echo`)).json()).toMatchObject({
       path: "/",
     });
     // the apex is the config worker's too (its 404); an unknown project is 4xx
-    const apex = await fetch(`${origin}/projects/${slug}/`, { ...asMember, redirect: "manual" });
+    const apex = await fetch(`${origin}/projects/${slug}/`, { redirect: "manual" });
     expect(apex, await apex.clone().text()).toMatchObject({ status: 404 });
     const unknown = await fetch(`${origin}/projects/${freshDnsSafeProjectSlug("nobody")}/echo/`, {
-      ...asMember,
       redirect: "manual",
     });
     expect(unknown.status).toBeGreaterThanOrEqual(400);
@@ -75,35 +76,40 @@ localOnly(
 );
 
 localOnly(
-  "every project path is members-only: an anonymous page load goes to sign in and back, an anonymous fetch is 401, a signed-in non-member is 403 — the apex too",
+  "a path the app keeps private: an anonymous page load goes to the platform's sign-in and back to the full /projects/… path, a fetch keeps the app's 401, a member arrives signed in with the platform's cookie kept from the app",
   { timeout: 120_000 },
   async () => {
     await using paths = await pathsWorker();
-    const { origin, slug } = paths;
-    const navigate = { "sec-fetch-mode": "navigate", "sec-fetch-dest": "document" };
-    for (const path of [`/projects/${slug}/echo/hello?x=1`, `/projects/${slug}/`]) {
-      // a page load as the browser sends it: fetch would overwrite `Sec-Fetch-Mode` with its own
-      const signIn = await request(`${origin}${path}`, { headers: navigate });
-      await signIn.body.dump();
-      expect(signIn, path).toMatchObject({
-        statusCode: 302,
-        headers: { location: `${origin}/.auth/login?${new URLSearchParams({ next: path })}` },
-      });
-      const fetched = await fetch(`${origin}${path}`, { redirect: "manual" });
-      expect(fetched, path).toMatchObject({ status: 401 });
-      expect(fetched.headers.get("www-authenticate"), path).toBe('Bearer realm="iterate"');
-    }
-    const stranger = await issuerCookie(`${slug}-stranger@example.com`, "/", origin);
-    for (const headers of [{ cookie: stranger }, { cookie: stranger, ...navigate }]) {
-      const refused = await request(`${origin}/projects/${slug}/echo/`, { headers });
-      expect(refused).toMatchObject({ statusCode: 403 });
-      expect(await refused.body.text()).toBe(`You are not a member of the project ${slug}.\n`);
-    }
+    const { origin, slug, member } = paths;
+    const path = `/projects/${slug}/echo/private?x=1`;
+    // a page load as the browser sends it: fetch would overwrite `Sec-Fetch-Mode` with its own
+    const signIn = await request(`${origin}${path}`, {
+      headers: { "sec-fetch-mode": "navigate", "sec-fetch-dest": "document" },
+    });
+    await signIn.body.dump();
+    expect(signIn).toMatchObject({
+      statusCode: 302,
+      headers: { location: `${origin}/.auth/login?${new URLSearchParams({ next: path })}` },
+    });
+    const fetched = await fetch(`${origin}${path}`, { redirect: "manual" });
+    expect(fetched).toMatchObject({ status: 401 });
+    expect(await fetched.text()).toBe("Sign in\n");
+    const signedIn = await fetch(`${origin}${path}`, {
+      headers: { cookie: `${member}; theme=dark` },
+      redirect: "manual",
+    });
+    expect(signedIn, await signedIn.clone().text()).toMatchObject({ status: 200 });
+    expect(await signedIn.json()).toMatchObject({
+      path: "/private?x=1",
+      cookie: "theme=dark",
+      signedIn: true,
+    });
+    expect(signedIn.headers.get("content-security-policy")).toBeNull();
   },
 );
 
 localOnly(
-  "a stored file under /projects/<project>/files/… is served to anyone holding its signed URL, no sign-in — and sandboxed, the one thing on the platform's origin a non-member reaches",
+  "a stored file under /projects/<project>/files/… is served to anyone holding its signed URL, no sign-in — and sandboxed, the one document on the platform's origin a project does not serve itself",
   { timeout: 120_000 },
   async () => {
     await using paths = await pathsWorker();

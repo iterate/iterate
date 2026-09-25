@@ -26,14 +26,6 @@
 //      always a path on the host's own origin (iterate/lib `sameOriginPath`).
 //   7. Anything else (a fetch, a write, an upgrade): anonymous → the 401 passes; non-member → 403 (a
 //      401 would send an OAuth client to authorize again, to be handed the same token).
-//
-// PATHS INGRESS IS MEMBERS-ONLY — pathsIngressRefusalOf: under paths routing every app runs on the
-// platform's own origin, where its script can act as whoever is signed in there, so the edge admits
-// only the project's members to any project path, before the app is asked:
-//   8. A member passes.
-//   9. Anonymous: a top-level document navigation (rule 6's test) → 302 to `<login>?next=<path>`;
-//      anything else → 401 with the platform's challenge, `Bearer realm="iterate"`.
-//  10. A non-member → 403.
 
 import { isSameOriginBrowserRequest, sameOriginPath } from "iterate/lib";
 
@@ -70,56 +62,20 @@ export function projectHostSignInAnswerOf(input: {
   const { answer, request, caller } = input;
   if (answer.status !== 401 || caller === "member") return null;
   if (!isIterateSignInChallenge(answer.headers.get("www-authenticate"))) return null;
-  if (isDocumentNavigation(request))
-    return signInRedirect(
-      request,
-      input.loginUrl,
-      caller === "non-member" ? { project: input.projectSlug } : {},
+  if (isDocumentNavigation(request)) {
+    const url = new URL(request.url);
+    const next = sameOriginPath(url.pathname + url.search, url.origin);
+    const query = new URLSearchParams(
+      caller === "non-member" ? { project: input.projectSlug, next } : { next },
     );
+    return new Response(null, {
+      status: 302,
+      headers: { Location: `${input.loginUrl}?${query}`, "Cache-Control": "no-store" },
+    });
+  }
   if (caller === "non-member")
     return new Response("This session cannot access this project\n", { status: 403 });
   return null;
-}
-
-/** Rules 8–10: the edge's answer to a request on a project path under paths routing, or null when
- *  the caller is a member and the request goes on to the app. `loginUrl` is the platform's absolute
- *  `/.auth/login`. */
-export function pathsIngressRefusalOf(input: {
-  request: RequestShape;
-  caller: ProjectHostCaller;
-  projectSlug: string;
-  loginUrl: string;
-}): Response | null {
-  const { request, caller } = input;
-  if (caller === "member") return null;
-  if (caller === "non-member")
-    return new Response(`You are not a member of the project ${input.projectSlug}.\n`, {
-      status: 403,
-      headers: { "Cache-Control": "no-store" },
-    });
-  if (isDocumentNavigation(request)) return signInRedirect(request, input.loginUrl, {});
-  return new Response("Sign in to iterate\n", {
-    status: 401,
-    headers: { "WWW-Authenticate": 'Bearer realm="iterate"', "Cache-Control": "no-store" },
-  });
-}
-
-/** The 302 to `loginUrl` that comes back to the path and query the browser addressed (a
- *  paths-routed base path included), always a path on the request's own origin. */
-function signInRedirect(
-  request: RequestShape,
-  loginUrl: string,
-  query: Record<string, string>,
-): Response {
-  const url = new URL(request.url);
-  const next = sameOriginPath(url.pathname + url.search, url.origin);
-  return new Response(null, {
-    status: 302,
-    headers: {
-      Location: `${loginUrl}?${new URLSearchParams({ ...query, next })}`,
-      "Cache-Control": "no-store",
-    },
-  });
 }
 
 /** An auth-scheme or auth-param name (RFC 9110 `token`). */

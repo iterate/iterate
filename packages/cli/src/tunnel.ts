@@ -231,12 +231,6 @@ export async function runTunnel(input: {
   using project = await input.connection.session.projects.get(input.project);
   const url = await project.url({ routingSlug });
   const basePath = new URL(url).pathname;
-  // Under paths routing every project path is its members' alone (the platform's edge admits no one
-  // else), so a public tunnel is impossible there. Refused before anything is lent or set.
-  if (basePath !== "/" && input.public)
-    throw new Error(
-      `This deployment serves projects under paths, where every app is private to its project's members; --public needs a domain: ${CUSTOM_DOMAIN_DOCS}`,
-    );
   // A host another route already takes is someone else's: refuse, never take it over. A tunnel of
   // the same name (a restart, another terminal) is taken over.
   const taken = (await project.fetchRoutes.list()).find(

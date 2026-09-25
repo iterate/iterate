@@ -21,13 +21,13 @@ The rest of this page is what the recipe leaves out.
 `https://iterate.<your-subdomain>.workers.dev/projects/<project>/<routingSlug>/`, and `/projects/<project>/`
 for the project's own config worker (`urls.ingressRouting: { type: "paths" }`).
 
-With no domain, every project's app runs on the platform's own origin. Its scripts share that
-origin's sign-in, so any app can act as whoever opens it, in every project that person can reach.
-Paths routing is for a deployment whose people all trust each other. The platform only lets a
-project's members open its paths: anyone else is sent to sign in (a page) or gets a 401 (anything
-else), and a signed-in non-member gets a 403. Signed file URLs (`/projects/<project>/files/…`) still
-work for anyone holding one, served sandboxed so a file can never act as whoever opens it. An app
-must serve under its base path (Vite: `--base`); one that only works at `/` does not work here.
+With no domain, every project's code runs on the platform's own origin and can act as any
+signed-in visitor, in every project that person can reach. Paths routing is for a deployment whose
+people all trust each other. Apps are public unless their router marks a path private, exactly as
+with a domain: a private path sends a visitor to the platform's sign-in and back. Signed file URLs
+(`/projects/<project>/files/…`) work for anyone holding one, and are served sandboxed so a file
+can never act as whoever opens it. An app must serve under its base path (Vite: `--base`); one that
+only works at `/` does not work here.
 
 For public apps, and apps on an origin of their own, give the deployment a
 [custom domain](#custom-domain-own-origins-for-apps-and-tunnels).

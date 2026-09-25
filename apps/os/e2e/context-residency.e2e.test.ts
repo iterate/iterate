@@ -33,6 +33,7 @@
 // edits this file. The claimed-work row waits out one claim's alarm (20 s) and runs on every PR.
 import { expect, test } from "vitest";
 import {
+  adminCredentials,
   disposeSessions,
   EVICTION_IDLES,
   freshCtx,
@@ -41,6 +42,7 @@ import {
   openItx,
   readAll,
   rejection,
+  session,
   sleep,
   until,
 } from "./support/client.ts";
@@ -49,7 +51,6 @@ import {
   fetchProjectUrl,
   freshDnsSafeProjectSlug,
   projectUrl,
-  registerProject,
 } from "./support/project-host.ts";
 import {
   CARELESS_CHATROOM_SOURCE,
@@ -309,9 +310,8 @@ deployedOnly(
 
 test("a website project's facets do not outlive their contexts after a page load", async () => {
   const slug = freshDnsSafeProjectSlug("residency-site");
-  // registerProject: under paths the project needs a member to be reached at all
-  const projectId = await registerProject(slug);
-  const root = openItx(projectId);
+  const root = await session().authenticate(adminCredentials()).projects.create({ project: slug });
+  const { projectId } = await root.whoami();
   await until(
     "project/created",
     async () =>

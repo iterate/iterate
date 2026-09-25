@@ -2,10 +2,9 @@
 // it (the package's bin, operator credentials) and a tiny HTTP + WebSocket server on a local port.
 // The project is a fresh one on the default template, so its config worker is the template's router
 // (configs/default/worker.ts: `itx.fetchRoutes.match`, then `env.ITX.fetch`). Pins:
-//   • private (the default): an anonymous page load is sent to sign in, an anonymous fetch is 401
+//   • private (the default): an anonymous page load is sent to sign in, an anonymous fetch is 401,
+//     under paths (a per-PR preview) as under subdomains
 //   • public: HTTP reaches the local server; a WebSocket asking for `vite-hmr` opens with it, echoes
-//   • under paths (a per-PR preview) every project path is members-only: --public is refused before
-//     anything is set, and the private tunnel is the one that serves its members
 //   • a context reset (what every deploy does) leaves the WebSocket open, nothing lost
 //   • Ctrl-C deletes the route: the host is the template's own 404 again
 //   • a tunnel killed outright closes a visitor's WebSocket at once, 1001 "tunnel disconnected",
@@ -28,7 +27,6 @@ import { adminCredentials, session, until, untilValue, workerUrl } from "./suppo
 import {
   fetchProjectUrl,
   freshDnsSafeProjectSlug,
-  ingressRouting,
   navigateProjectUrl,
   projectUrlSocket,
   registerProject,
@@ -38,10 +36,9 @@ import {
 const bin = fileURLToPath(new URL("../../../packages/cli/bin/iterate.js", import.meta.url).href);
 
 test(
-  "iterate tunnel: private by default, public on --public (under paths every project path is members-only: private works, public is refused); HTTP and a vite-hmr WebSocket reach the local server, Ctrl-C deletes the route, a killed tunnel is 502",
-  // Each CLI process connects and sets a route (a few seconds each against a preview); the refused
-  // one under paths exits at once, so a preview runs two full ones.
-  { timeout: 90_000 },
+  "iterate tunnel: private by default, public on --public (HTTP and a vite-hmr WebSocket), Ctrl-C deletes the route, a killed tunnel is 502",
+  // Each CLI process connects and sets a route (a few seconds each against a preview): three of them.
+  { timeout: 120_000 },
   async () => {
     await using local = await localServer();
     const slug = freshDnsSafeProjectSlug("tunnel");
@@ -53,56 +50,45 @@ test(
       timeoutMs: 60_000,
     });
     await using cli = await cliConfig();
-    const paths = ingressRouting()?.type === "paths";
-    const navigate = { "sec-fetch-mode": "navigate", "sec-fetch-dest": "document" };
-    // the helpers go as the project's member under paths (support/project-host.ts); an empty
-    // cookie is a visitor with none
-    const anonymous = { cookie: "" };
-    // THE TUNNEL THIS DEPLOYMENT SERVES: private under paths, public under subdomains.
-    const tunnelArgs = [String(local.port), "--name", "web", "--project", projectId];
-    const servedArgs = paths ? tunnelArgs : [...tunnelArgs, "--public"];
 
-    if (paths) {
-      // --public is refused before anything is set: no one but a member reaches a project path
-      await expect(cli.tunnel([...tunnelArgs, "--public"]).live).rejects.toThrow(
-        "every app is private to its project's members; --public needs a domain",
-      );
-      expect(await itx.fetchRoutes.list()).toEqual([]);
-    } else {
-      // private (the default): an anonymous page load is sent to sign in, a fetch is 401
-      const privateTunnel = cli.tunnel(tunnelArgs);
-      const privateUrl = new URL((await privateTunnel.live).url);
-      const navigation = await navigateProjectUrl(privateUrl, navigate);
-      expect(navigation).toMatchObject({ status: 302 });
-      expect(navigation.headers.location).toContain("/.auth/login");
-      expect(await fetchProjectUrl(privateUrl)).toMatchObject({ status: 401 });
-      expect(await privateTunnel.stop("SIGINT")).toBe(0);
-      expect(await itx.fetchRoutes.list()).toEqual([]);
-      expect(await fetchProjectUrl(privateUrl)).toMatchObject({
-        status: 404,
-        text: "Not found\n",
-      });
-    }
+    // private (the default): the route's authRequirement, under paths as under subdomains — an
+    // anonymous page load goes to sign in and back to the full path, a fetch is 401
+    const privateTunnel = cli.tunnel([String(local.port), "--name", "web", "--project", projectId]);
+    const privateUrl = new URL((await privateTunnel.live).url);
+    const navigation = await navigateProjectUrl(privateUrl, {
+      "sec-fetch-mode": "navigate",
+      "sec-fetch-dest": "document",
+    });
+    expect(navigation).toMatchObject({ status: 302 });
+    expect(navigation.headers.location).toContain(
+      `/.auth/login?next=${encodeURIComponent(privateUrl.pathname)}`,
+    );
+    expect(await fetchProjectUrl(privateUrl)).toMatchObject({ status: 401 });
+    expect(await privateTunnel.stop("SIGINT")).toBe(0);
+    expect(await itx.fetchRoutes.list()).toEqual([]);
+    expect(await fetchProjectUrl(privateUrl)).toMatchObject({
+      status: 404,
+      text: "Not found\n",
+    });
 
-    const served = cli.tunnel(servedArgs);
+    // public
+    const publicTunnel = cli.tunnel([
+      String(local.port),
+      "--name",
+      "web",
+      "--public",
+      "--project",
+      projectId,
+    ]);
     // relative: under paths routing the tunnel's base is `/projects/<project>/web/`, which the
     // local server sees too (it serves under that base)
-    const { url } = await served.live;
-    const tunnelUrl = new URL("hello", url.endsWith("/") ? url : `${url}/`);
-    expect(await fetchProjectUrl(tunnelUrl)).toMatchObject({
+    const { url } = await publicTunnel.live;
+    const publicUrl = new URL("hello", url.endsWith("/") ? url : `${url}/`);
+    expect(await fetchProjectUrl(publicUrl)).toMatchObject({
       status: 200,
-      text: `local ${tunnelUrl.pathname}`,
+      text: `local ${publicUrl.pathname}`,
     });
-    if (paths) {
-      // a visitor who is no member is turned away at the edge: a page load to sign in, a fetch 401
-      const navigation = await navigateProjectUrl(tunnelUrl, { ...navigate, ...anonymous });
-      expect(navigation).toMatchObject({ status: 302 });
-      expect(navigation.headers.location).toContain(
-        `/.auth/login?next=${encodeURIComponent(tunnelUrl.pathname)}`,
-      );
-      expect(await fetchProjectUrl(tunnelUrl, anonymous)).toMatchObject({ status: 401 });
-    }
-    expect(await wsRoundTripOnProjectUrl(tunnelUrl, "ping", 15_000, ["vite-hmr"])).toMatchObject({
+    expect(await wsRoundTripOnProjectUrl(publicUrl, "ping", 15_000, ["vite-hmr"])).toMatchObject({
       opened: true,
       protocol: "vite-hmr",
       echo: "local-echo:ping",
@@ -112,7 +98,7 @@ test(
     // a context reset — what every deploy does to every Durable Object — cuts the context's sockets;
     // the visitor's socket outlives it (context/fetch-upgrade-splice.ts)
     expect(
-      await echoesAcrossContextReset(tunnelUrl, () => itx.abort("a deploy's reset, on demand")),
+      await echoesAcrossContextReset(publicUrl, () => itx.abort("a deploy's reset, on demand")),
     ).toEqual({
       echoes: ["local-echo:before", "local-echo:across", "local-echo:after"],
       closeCode: null,
@@ -120,9 +106,9 @@ test(
 
     // killed outright: a visitor's socket closes at once — the relay knows its provider is gone —
     // nothing deletes the route, and its target is not connected
-    const visitor = await openSocket(tunnelUrl);
+    const visitor = await openSocket(publicUrl);
     const killedAt = Date.now();
-    await served.stop("SIGKILL");
+    await publicTunnel.stop("SIGKILL");
     const visitorClosed = await visitor.closed;
     expect({ ...visitorClosed, afterMs: visitorClosed.at - killedAt }).toMatchObject({
       code: 1001,
@@ -132,7 +118,7 @@ test(
     expect(
       await untilValue(
         "the killed tunnel answers 502",
-        () => fetchProjectUrl(tunnelUrl),
+        () => fetchProjectUrl(publicUrl),
         (page) => page.status === 502,
         { timeoutMs: 30_000 },
       ),
@@ -143,18 +129,25 @@ test(
     });
 
     // run again, then Ctrl-C: the route is deleted and the host is the template's own 404 again
-    const again = cli.tunnel(servedArgs);
+    const again = cli.tunnel([
+      String(local.port),
+      "--name",
+      "web",
+      "--public",
+      "--project",
+      projectId,
+    ]);
     await again.live;
     expect(await again.stop("SIGINT")).toBe(0);
     expect(await itx.fetchRoutes.list()).toEqual([]);
-    expect(await fetchProjectUrl(tunnelUrl)).toMatchObject({ status: 404, text: "Not found\n" });
+    expect(await fetchProjectUrl(publicUrl)).toMatchObject({ status: 404, text: "Not found\n" });
   },
 );
 
 /** A WebSocket held open on `url`: one echo, then `reset()`, then two more sent across it — the
  *  echoes it saw, and the close code if the socket closed before it was done. */
 async function echoesAcrossContextReset(url: URL, reset: () => Promise<unknown>) {
-  const socket = await projectUrlSocket(url);
+  const socket = projectUrlSocket(url);
   const echoes: string[] = [];
   let closeCode: number | null = null;
   socket.addEventListener("message", (event) => echoes.push(String(event.data)));
@@ -180,7 +173,7 @@ async function echoesAcrossContextReset(url: URL, reset: () => Promise<unknown>)
 
 /** A WebSocket open on `url`, and when and how it closed. */
 async function openSocket(url: URL) {
-  const socket = await projectUrlSocket(url);
+  const socket = projectUrlSocket(url);
   const closed = new Promise<{ code: number; reason: string; at: number }>((resolve) =>
     socket.addEventListener("close", (event) =>
       resolve({ code: event.code, reason: event.reason, at: Date.now() }),

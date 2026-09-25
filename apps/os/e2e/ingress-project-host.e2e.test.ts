@@ -19,7 +19,6 @@ import { createFailing } from "@iterate-com/shared/test-support/failing-test";
 import { openItx } from "./support/client.ts";
 import { oauthSession } from "./support/principal.ts";
 import {
-  anonymousVisitor,
   appSeesUrl,
   deployedOnly,
   fetchProjectHost,
@@ -29,7 +28,6 @@ import {
   navigateProjectUrl,
   projectHostsAreLocal,
   projectUrl,
-  projectUrlSocket,
   publishConfigWorker,
   registerProject,
 } from "./support/project-host.ts";
@@ -162,22 +160,14 @@ test("a project host verifies an OAuth bearer, strips credentials and rejects a 
   const seen = JSON.parse(echo.text);
   expect(seen).toMatchObject({ principal, cookie: "theme=dark" });
   expect(seen.authorization).toBeNull();
-  const forgedPrincipal = { "x-itx-principal": '{"actor":"forged"}' };
-  // under paths every project path is members-only: no credential and no membership are refused
-  // at the edge (the app is never asked); under subdomains both arrive anonymous
-  const paths = ingressRouting()?.type === "paths";
-  const forged = await fetchProjectUrl(echoUrl, { ...forgedPrincipal, ...anonymousVisitor });
-  if (paths) expect(forged).toMatchObject({ status: 401 });
-  else expect(JSON.parse(forged.text).principal).toBeNull();
+  const forged = await fetchProjectUrl(echoUrl, { "x-itx-principal": '{"actor":"forged"}' });
+  expect(JSON.parse(forged.text).principal).toBeNull();
   // a grant for another project is no member here: it arrives anonymous, never refused
   const other = await registerProject(freshDnsSafeProjectSlug("ingress-foreign"), member);
   const foreign = await oauthSession(other, member);
   const stranger = await fetchProjectUrl(echoUrl, { Authorization: `Bearer ${foreign.token}` });
-  if (paths) expect(stranger, stranger.text).toMatchObject({ status: 403 });
-  else {
-    expect(stranger, stranger.text).toMatchObject({ status: 200 });
-    expect(JSON.parse(stranger.text)).toMatchObject({ principal: null, authorization: null });
-  }
+  expect(stranger, stranger.text).toMatchObject({ status: 200 });
+  expect(JSON.parse(stranger.text)).toMatchObject({ principal: null, authorization: null });
 });
 
 test("an app's sign-in challenge (401 Bearer realm=iterate): a page load goes to sign in and back, a non-member's to sign in again with the project; a fetch keeps the 401, a non-member's is 403", async () => {
@@ -195,17 +185,11 @@ test("an app's sign-in challenge (401 Bearer realm=iterate): a page load goes to
       ...query,
       next: privateUrl.pathname + privateUrl.search,
     })}`;
-  // under paths the edge answers a visitor with no credential or membership before the app is
-  // asked (every project path is members-only): the same sign-in, its own 401, a non-member 403
-  const paths = ingressRouting()?.type === "paths";
-  const signIn = await navigateProjectUrl(privateUrl, { ...navigate, ...anonymousVisitor });
+  const signIn = await navigateProjectUrl(privateUrl, navigate);
   expect(signIn, signIn.text).toMatchObject({ status: 302 });
   expect(signIn.headers).toMatchObject({ location: login({}), "cache-control": "no-store" });
-  const fetched = await fetchProjectUrl(privateUrl, anonymousVisitor);
-  expect(fetched).toMatchObject({
-    status: 401,
-    text: paths ? "Sign in to iterate\n" : "Sign in\n",
-  });
+  const fetched = await fetchProjectUrl(privateUrl);
+  expect(fetched).toMatchObject({ status: 401, text: "Sign in\n" });
   expect(fetched.headers).toMatchObject({ "www-authenticate": 'Bearer realm="iterate"' });
   const { token } = await oauthSession(projectId, member);
   expect(
@@ -214,11 +198,8 @@ test("an app's sign-in challenge (401 Bearer realm=iterate): a page load goes to
   const other = await registerProject(freshDnsSafeProjectSlug("ingress-sign-in-other"), member);
   const foreign = { Authorization: `Bearer ${(await oauthSession(other, member)).token}` };
   const signInAgain = await navigateProjectUrl(privateUrl, { ...navigate, ...foreign });
-  if (paths) expect(signInAgain, signInAgain.text).toMatchObject({ status: 403 });
-  else {
-    expect(signInAgain, signInAgain.text).toMatchObject({ status: 302 });
-    expect(signInAgain.headers).toMatchObject({ location: login({ project: slug }) });
-  }
+  expect(signInAgain, signInAgain.text).toMatchObject({ status: 302 });
+  expect(signInAgain.headers).toMatchObject({ location: login({ project: slug }) });
   expect(await fetchProjectUrl(privateUrl, foreign)).toMatchObject({ status: 403 });
 });
 
@@ -260,9 +241,8 @@ deployedOnly(
     const slug = freshDnsSafeProjectSlug("ingress-ws");
     const itx = openItx(await registerProject(slug));
     await publishConfigWorker(itx, siteTarget());
-    // through the helper: under paths it goes as the project's member (support/project-host.ts)
-    const ws = await projectUrlSocket(
-      projectUrl({ project: slug, routingSlug: "site", path: "/ws" }),
+    const ws = new WebSocket(
+      projectUrl({ project: slug, routingSlug: "site", path: "/ws" }).href.replace(/^http/, "ws"),
     );
     const echo = await new Promise<string>((resolve, reject) => {
       const timer = setTimeout(() => reject(new Error("no echo within 10 s")), 10_000);
@@ -309,10 +289,7 @@ export default class extends WorkerEntrypoint {
       add(text: string): Promise<{ text: string }[]>;
       list(): Promise<{ text: string }[]>;
     }>(
-      // as any: undici's WebSocket, the helper's (under paths it goes as the project's member)
-      (await projectUrlSocket(
-        projectUrl({ project: slug, routingSlug: "notes", path: "/rpc" }),
-      )) as any,
+      projectUrl({ project: slug, routingSlug: "notes", path: "/rpc" }).href.replace(/^http/, "ws"),
     );
     expect(await notes.list()).toEqual([]);
     await notes.add("first");

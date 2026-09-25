@@ -157,14 +157,14 @@ test("a random routing slug is a letter and seven letters or digits", () => {
   for (let i = 0; i < 50; i++) expect(randomRoutingSlug()).toMatch(/^[a-z][a-z0-9]{7}$/);
 });
 
-// Under paths routing every project path is its members' alone: a public tunnel is refused before
-// anything is lent or set, and a private one says where it lives and what the local server must do.
+// Under paths routing the tunnel lives under a base path: private and public tunnels are both set,
+// and the tunnel says where it lives and what the local server must do.
 test.for([
-  ["paths", "private", "set"],
-  ["paths", "public", "refused"],
-  ["subdomains", "private", "set"],
-  ["subdomains", "public", "set"],
-] as const)("a %s deployment, a %s tunnel: %s", async ([routing, visibility, outcome]) => {
+  ["paths", "private"],
+  ["paths", "public"],
+  ["subdomains", "private"],
+  ["subdomains", "public"],
+] as const)("a %s deployment, a %s tunnel", async ([routing, visibility]) => {
   const url =
     routing === "paths"
       ? "https://os.example.com/projects/p/blog/"
@@ -196,13 +196,6 @@ test.for([
     routingSlug: "blog",
     public: visibility === "public",
   });
-  if (outcome === "refused") {
-    await expect(run).rejects.toThrow(
-      "This deployment serves projects under paths, where every app is private to its project's members; --public needs a domain: https://github.com/iterate/iterate/blob/main/apps/os/SELF-HOSTING.md#custom-domain-own-origins-for-apps-and-tunnels",
-    );
-    expect(calls).toEqual([]);
-    return;
-  }
   await expect(run).rejects.toThrow("The tunnel disconnected");
   expect(calls).toEqual([
     "provide itx.tunnels.blog",

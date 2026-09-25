@@ -1,7 +1,6 @@
 import { expect, test } from "vitest";
 import {
   isIterateSignInChallenge,
-  pathsIngressRefusalOf,
   projectHostCallerOf,
   projectHostSignInAnswerOf,
   type ProjectHostCaller,
@@ -249,81 +248,6 @@ test.for<{
   if (becomes === "unchanged") return expect(response).toBeNull();
   expect(response).toMatchObject({ status: becomes.status });
   expect(response!.headers.get("location") ?? undefined).toBe(becomes.location);
-});
-
-// ── rules 8–10: paths ingress is members-only ──
-test.for<{
-  name: string;
-  method?: string;
-  headers?: Record<string, string>;
-  caller: ProjectHostCaller;
-  becomes: { status: number; location?: string; wwwAuthenticate?: string } | "passes";
-}>([
-  { name: "a member", headers: NAVIGATE, caller: "member", becomes: "passes" },
-  {
-    name: "a member's WebSocket upgrade",
-    headers: { upgrade: "websocket" },
-    caller: "member",
-    becomes: "passes",
-  },
-  {
-    name: "anonymous navigation, back to the base path",
-    headers: NAVIGATE,
-    caller: "anonymous",
-    becomes: {
-      status: 302,
-      location: "/.auth/login?next=%2Fprojects%2Facme%2Fsite%2Fnotes%3Fview%3Dall",
-    },
-  },
-  {
-    name: "anonymous HEAD navigation",
-    method: "HEAD",
-    headers: NAVIGATE,
-    caller: "anonymous",
-    becomes: {
-      status: 302,
-      location: "/.auth/login?next=%2Fprojects%2Facme%2Fsite%2Fnotes%3Fview%3Dall",
-    },
-  },
-  {
-    name: "anonymous fetch",
-    headers: { "sec-fetch-mode": "cors", "sec-fetch-dest": "empty" },
-    caller: "anonymous",
-    becomes: { status: 401, wwwAuthenticate: 'Bearer realm="iterate"' },
-  },
-  {
-    name: "anonymous POST",
-    method: "POST",
-    caller: "anonymous",
-    becomes: { status: 401, wwwAuthenticate: 'Bearer realm="iterate"' },
-  },
-  {
-    name: "anonymous WebSocket upgrade",
-    headers: { upgrade: "websocket", accept: "text/html" },
-    caller: "anonymous",
-    becomes: { status: 401, wwwAuthenticate: 'Bearer realm="iterate"' },
-  },
-  {
-    name: "non-member navigation",
-    headers: NAVIGATE,
-    caller: "non-member",
-    becomes: { status: 403 },
-  },
-  { name: "non-member fetch", caller: "non-member", becomes: { status: 403 } },
-])("paths: $name → $becomes", ({ method, headers, caller, becomes }) => {
-  const response = pathsIngressRefusalOf({
-    request: new Request("https://os.test/projects/acme/site/notes?view=all", {
-      method: method || "GET",
-      headers,
-    }),
-    caller,
-    projectSlug: "acme",
-    loginUrl: "/.auth/login",
-  });
-  if (becomes === "passes") return expect(response).toBeNull();
-  expect(response).toMatchObject({ status: becomes.status });
-  expect(response!.headers.get("location") ?? undefined).toBe(becomes.location);
-  expect(response!.headers.get("www-authenticate") ?? undefined).toBe(becomes.wwwAuthenticate);
 });
 
 // ── the challenge parser ──

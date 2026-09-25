@@ -34,11 +34,7 @@ import {
 import { DurableObjectNameCodec, resourceScope } from "./context/paths.ts";
 import { authorizationForToken, recordGrantUse } from "./oauth.ts";
 import { leasedProjectHostAnswer } from "./project-host-lease.ts";
-import {
-  pathsIngressRefusalOf,
-  projectHostCallerOf,
-  projectHostSignInAnswerOf,
-} from "./project-host-sign-in.ts";
+import { projectHostCallerOf, projectHostSignInAnswerOf } from "./project-host-sign-in.ts";
 
 /** A project host's re-entry count — THE COUNT THE APP FORWARDS: an app that fetches its own host
  *  and forwards the headers it was handed re-enters with the count on them, each pass adds one, and
@@ -52,6 +48,14 @@ const PROJECT_HOST_HOPS_HEADER = "x-itx-expression-hops";
  *  deleted by the edge on every project request, so a visitor's spelling never reaches the project.
  *  Empty under subdomains (each routing slug owns its origin). */
 const ITERATE_BASE_PATH_HEADER = "x-iterate-base-path";
+
+/** THE SANDBOX a stored file served through paths ingress runs in: an opaque origin — no cookies,
+ *  no storage, no scripting of other frames, `Origin: null` on every request it makes — so an HTML or
+ *  SVG file on the platform's own origin, which anyone holding its signed URL opens, cannot act as
+ *  whoever opens it. An app's own answers are not sandboxed: under paths every project's code runs
+ *  on the platform's origin by design (SELF-HOSTING.md). A WebSocket answer is left alone. */
+const PATHS_INGRESS_SANDBOX =
+  "sandbox allow-scripts allow-forms allow-popups allow-modals allow-downloads";
 
 /** The Request without its base path (paths ingress): the same method, body and upgrade, the URL
  *  starting at the app's root. */
@@ -80,6 +84,14 @@ function controlPlaneUnavailable(error: unknown, hostname: string): Response {
     `503: the platform could not look up ${hostname} just now; try again in a minute\n`,
     { status: 503, headers: { "cache-control": "no-store", "retry-after": "60" } },
   );
+}
+
+/** A stored file's answer through paths ingress, sandboxed (PATHS_INGRESS_SANDBOX). */
+function sandboxed(response: Response): Response {
+  if (response.webSocket) return response;
+  const answer = new Response(response.body, response);
+  answer.headers.set("content-security-policy", PATHS_INGRESS_SANDBOX);
+  return answer;
 }
 
 /** WHO a project host's request is, as the context DO's `fetch` reads it: `principal` is the
@@ -243,20 +255,13 @@ export default {
           request: withoutBasePath(request, projectHost.basePath),
         });
         logServedStale();
-        // Under paths a stored file is the one thing on the platform's origin a NON-member reaches
-        // (anyone holding the URL): an HTML or SVG file there runs sandboxed — an opaque origin, no
-        // cookie to spend — so it can never act as whoever opens it.
-        if (routing?.type !== "paths" || file.webSocket) return file;
-        const sandboxed = new Response(file.body, file);
-        sandboxed.headers.set(
-          "content-security-policy",
-          "sandbox allow-scripts allow-forms allow-popups allow-modals allow-downloads",
-        );
-        return sandboxed;
+        // Under paths a stored HTML or SVG file is a document on the platform's own origin that anyone
+        // holding the URL opens: it runs sandboxed (an opaque origin, no cookie to spend).
+        return routing?.type === "paths" ? sandboxed(file) : file;
       }
       // The browser adapter's endpoints (`/api`, `/.auth/*`) are an app's OWN under subdomains — its
       // origin. Under paths the app shares the platform's origin, whose `/api` and `/.auth/*` are
-      // the issuer's: the platform's own sign-in is the app's, and its cookie reaches the app's script.
+      // the issuer's: the platform's sign-in is the app's, and its cookie reaches the app's script.
       if (routing?.type !== "paths") {
         const browserResponse = await browserClient(request, env, ctx);
         if (browserResponse) {
@@ -291,18 +296,6 @@ export default {
         authorization: authorization && { via: bearer ? "bearer" : "cookie", reachesProject },
         request,
       });
-      // UNDER PATHS every project path is members-only (project-host-sign-in.ts rules 8–10): the app
-      // runs on the platform's origin, where its script acts as whoever is signed in there, so only
-      // the project's members reach it — before the context is dialled.
-      if (routing?.type === "paths") {
-        const refusal = pathsIngressRefusalOf({
-          request,
-          caller,
-          projectSlug: project.slug,
-          loginUrl: `${platformOrigin}/.auth/login`,
-        });
-        if (refusal) return refusal;
-      }
       const stamped = caller === "member" ? authorization : null;
       if (stamped?.grant) ctx.waitUntil(recordGrantUse(env, stamped.grant));
       // the visitor's own cookies reach the app; the platform's cookie and bearer never do

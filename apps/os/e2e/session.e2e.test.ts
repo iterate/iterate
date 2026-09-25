@@ -22,7 +22,6 @@ import { oauthSession } from "./support/principal.ts";
 import {
   fetchProjectUrl,
   freshDnsSafeProjectSlug,
-  ingressRouting,
   projectUrl,
   projectUrlSocket,
   publishConfigWorker,
@@ -208,11 +207,10 @@ test("projects.create({ project }) writes the catalog row on global:/ and opens 
   expect(await itx.repos.get("/repos/config").listFiles()).toMatchObject({
     paths: ["AGENTS.md", "worker.ts"],
   });
-  // published: the apex answers the seeded homepage worker. Under paths every project path is
-  // members-only, and the deployment's own organization has none: the edge refuses everyone.
-  const apex = await fetchProjectUrl(projectUrl({ project: slug, path: "/" }));
-  if (ingressRouting()?.type === "paths") expect(apex).toMatchObject({ status: 401 });
-  else expect(apex.text.trim()).toBe(`Homepage of project ${slug}`);
+  // published: the apex answers the seeded homepage worker (subdomain routing under the test's base)
+  expect((await fetchProjectUrl(projectUrl({ project: slug, path: "/" }))).text.trim()).toBe(
+    `Homepage of project ${slug}`,
+  );
   // the facet reduces its own certificate: the state the dash renders
   expect(await itx.facets.get("project").liveSnapshot()).toMatchObject({
     state: { creation: { status: "created", offset: created.offset } },
@@ -350,18 +348,13 @@ test(
     expect(
       await fetchProjectUrl(echoOf(slug), { Authorization: "Bearer itk_forged" }),
     ).toMatchObject({ status: 401 });
-    // a project the key does not cover: the request arrives anonymous, the key stamped on nothing —
-    // under paths, where every project path is members-only, it is refused (403)
+    // a project the key does not cover: the request arrives anonymous, the key stamped on nothing
     const uncovered = await fetchProjectUrl(echoOf(otherSlug), bearer);
-    if (ingressRouting()?.type === "paths")
-      expect(uncovered, uncovered.text).toMatchObject({ status: 403 });
-    else {
-      expect(uncovered, uncovered.text).toMatchObject({ status: 200 });
-      expect(JSON.parse(uncovered.text)).toEqual({ principal: null, authorization: null });
-    }
+    expect(uncovered, uncovered.text).toMatchObject({ status: 200 });
+    expect(JSON.parse(uncovered.text)).toEqual({ principal: null, authorization: null });
     // a WebSocket the key holds open on the project's host: the edge relays it on the key's lease
     // (src/project-host-lease.ts)
-    const hostSocket = await projectUrlSocket(echoOf(slug), bearer);
+    const hostSocket = projectUrlSocket(echoOf(slug), bearer);
     const hostClosed = new Promise<{ code: number; reason: string }>((resolve) =>
       hostSocket.addEventListener("close", ({ code, reason }) => resolve({ code, reason }), {
         once: true,

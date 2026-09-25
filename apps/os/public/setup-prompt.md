@@ -188,4 +188,4 @@ dash's projects page. That starts a new attempt.
     the laptop mic. The page installs the voice agent itself, asking for an OpenAI key the first
     time.
 
-Google, Cloudflare or email-code sign-in, and custom domains (without one, every project app is members-only and shares the platform's origin): `apps/os/SELF-HOSTING.md`.
+Google, Cloudflare or email-code sign-in, and custom domains (without one, every project's code shares the platform's origin): `apps/os/SELF-HOSTING.md`.
