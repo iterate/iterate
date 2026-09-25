@@ -1,6 +1,7 @@
 import handler, { createServerEntry } from "@tanstack/react-start/server-entry";
 import { env } from "cloudflare:workers";
 import { proxyPosthogRequest } from "@iterate-com/shared/posthog";
+import { startAppConfigOf } from "@iterate-com/shared/start-app-config";
 import { appAuth, issuerAnswersAt } from "iterate/app-server";
 import type { BrowserSession } from "iterate/app-session";
 import { deviceClientMetadata } from "./firmware/device-client.ts";
@@ -14,13 +15,9 @@ declare global {
     interface Env {
       ASSETS: Fetcher;
       BROWSER_SESSION: DurableObjectNamespace<BrowserSession>;
-      ITERATE_ORIGIN: string;
-      /** zones a connectable issuer may not live under (the SDK's `issuerOriginOf`) — this deployment's own, comma-separated */
-      ITERATE_DENY_ZONES: string;
-      /** the first-party apps' origins by name, JSON — the dash's for the device-token link (routes/__root.tsx) */
-      ITERATE_APP_ORIGINS: string;
-      /** PostHog's project key (envs.ts, prd only); unset ⇒ no PostHog */
-      POSTHOG_PROJECT_KEY?: string;
+      /** THE APP'S CONFIGURATION, JSON (@iterate-com/shared/start-app-config): its platform, the
+       *  other apps' origins, our own zones and its PostHog key — from envs.ts (startAppWorkerConfig) */
+      APP_CONFIG: string;
     }
   }
 }
@@ -30,6 +27,8 @@ declare global {
  *  Everything else is TanStack Start's: the built assets, then its pages. */
 export default createServerEntry({
   async fetch(request) {
+    // parsed on the first request, /healthz's included: a malformed config fails the deploy's smoke
+    const config = startAppConfigOf(env);
     const url = new URL(request.url);
     if (url.pathname === "/healthz") return new Response("ok");
     // posthog-js's `api_host` (packages/ui posthog.tsx): PostHog EU through our own origin
@@ -40,14 +39,18 @@ export default createServerEntry({
     // A device's own OAuth client and sign-in come next.
     const deviceClient = deviceClientMetadata(url);
     if (deviceClient) return deviceClient;
-    const deviceLogin = await deviceAuth(request, env, { issuerAnswersAt });
+    const deviceLogin = await deviceAuth(
+      request,
+      { sessions: env.BROWSER_SESSION, defaultIssuer: config.urls.os, denyZones: config.denyZones },
+      { issuerAnswersAt },
+    );
     if (deviceLogin) return deviceLogin;
     const auth = await appAuth(request, {
       client: { name: "iterate Kit", logoUri: "/favicon.svg" },
       sessions: env.BROWSER_SESSION,
-      issuer: env.ITERATE_ORIGIN,
-      resource: `${env.ITERATE_ORIGIN}/api`,
-      denyZones: env.ITERATE_DENY_ZONES.split(",").filter(Boolean),
+      issuer: config.urls.os,
+      resource: `${config.urls.os}/api`,
+      denyZones: config.denyZones,
       api: (request) => fetch(request),
     });
     if (auth) return auth;

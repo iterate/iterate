@@ -16,7 +16,7 @@ test("choosing a device starts its branded client before consent, with a new ide
         method: "POST",
         headers: { origin, cookie },
       }),
-      f.env,
+      f.kit,
       f.deps,
     );
     expect(response?.status).toBe(303);
@@ -52,7 +52,7 @@ test("GETs and cross-origin requests cannot replace a device session", async () 
       (
         await deviceAuth(
           new Request(`${origin}/devices/satellite1/login`, { method, headers }),
-          f.env,
+          f.kit,
           f.deps,
         )
       )?.status,
@@ -68,7 +68,7 @@ test("setup reads the stored consent identity; query parameters cannot change it
     new Request(`${origin}/device-session.json?device=waveshare&clientId=attacker`, {
       headers: { cookie },
     }),
-    f.env,
+    f.kit,
     f.deps,
   );
   expect(await response?.json()).toEqual({
@@ -80,7 +80,7 @@ test("setup reads the stored consent identity; query parameters cannot change it
     (
       await deviceAuth(
         new Request(`${origin}/device-session.json`, { headers: { cookie } }),
-        f.env,
+        f.kit,
         f.deps,
       )
     )?.status,
@@ -91,11 +91,11 @@ test("generic login and old firmware bookmarks return to device selection withou
   const f = fixture();
   const response = await deviceAuth(
     new Request(`${origin}/.auth/login?next=/devices/satellite1/firmware/latest`),
-    f.env,
+    f.kit,
     f.deps,
   );
   expect(response?.headers.get("location")).toBe("/?device=satellite1");
-  expect(await deviceAuth(new Request(`${origin}/`), f.env, f.deps)).toBeNull();
+  expect(await deviceAuth(new Request(`${origin}/`), f.kit, f.deps)).toBeNull();
   expect(f.begin).not.toHaveBeenCalled();
 });
 
@@ -109,7 +109,7 @@ test("a failed end is observable and does not create another authorization", asy
         method: "POST",
         headers: { origin, cookie },
       }),
-      f.env,
+      f.kit,
       f.deps,
     );
     expect(response?.status).toBe(503);
@@ -133,7 +133,7 @@ test("a connect link to another iterate platform carries it to device selection,
     new Request(
       `${origin}/.auth/connect?issuer=${encodeURIComponent(`${selfHost}/some/path`)}&next=/devices/satellite1/firmware/latest`,
     ),
-    f.env,
+    f.kit,
     f.deps,
   );
   expect(connect?.status).toBe(303);
@@ -143,7 +143,7 @@ test("a connect link to another iterate platform carries it to device selection,
 
   const denied = await deviceAuth(
     new Request(`${origin}/.auth/connect?issuer=https://look-alike.iterate.app`),
-    f.env,
+    f.kit,
     f.deps,
   );
   expect(denied?.status).toBe(400);
@@ -158,7 +158,7 @@ test("choosing a device for another iterate platform starts its consent on that 
       `${origin}/devices/home-assistant-voice-preview-edition/login?issuer=${encodeURIComponent(selfHost)}`,
       { method: "POST", headers: { origin, cookie } },
     ),
-    f.env,
+    f.kit,
     f.deps,
   );
   expect(response?.status).toBe(303);
@@ -181,7 +181,7 @@ test("a platform that doesn't answer as iterate is refused before any session ch
       method: "POST",
       headers: { origin, cookie },
     }),
-    f.env,
+    f.kit,
     f.deps,
   );
   expect(response?.status).toBe(400);
@@ -197,7 +197,7 @@ test("forgetting an old sign-in clears this browser's session and goes back to d
       method: "POST",
       headers: { origin, cookie },
     }),
-    f.env,
+    f.kit,
     f.deps,
   );
   expect(forget?.status).toBe(303);
@@ -212,7 +212,7 @@ test("forgetting an old sign-in clears this browser's session and goes back to d
     ["POST", { origin: "https://other.example", cookie }, 403],
   ] as const)
     expect(
-      (await deviceAuth(new Request(`${origin}/.auth/forget`, { method, headers }), f.env, f.deps))
+      (await deviceAuth(new Request(`${origin}/.auth/forget`, { method, headers }), f.kit, f.deps))
         ?.status,
     ).toBe(status);
 });
@@ -237,10 +237,10 @@ function fixture() {
   } as unknown as DurableObjectNamespace<BrowserSession>;
   const issuerAnswersAt = vi.fn(async (_origin: string): Promise<string | null> => null);
   return {
-    env: {
-      BROWSER_SESSION: sessions,
-      ITERATE_ORIGIN: "https://issuer.example",
-      ITERATE_DENY_ZONES: "iterate.app,iterate.com",
+    kit: {
+      sessions,
+      defaultIssuer: "https://issuer.example",
+      denyZones: ["iterate.app", "iterate.com"],
     },
     deps: { issuerAnswersAt },
     begin,

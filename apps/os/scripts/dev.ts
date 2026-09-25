@@ -18,7 +18,7 @@
 // worktree keeps its port. Without `--port`, the port is this
 // worktree's last recorded one, else 8788, else any free one — so two worktrees each keep their
 // own, and the one that gets 8788 matches the Dash's documented `.dev.vars`
-// (`ITERATE_ORIGIN=http://localhost:8788`).
+// (`APP_CONFIG_URLS__OS=http://localhost:8788`).
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import {
   closeSync,

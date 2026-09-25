@@ -36,5 +36,5 @@ See [voice/README.md](voice/README.md) for voice setup. Run voice tools from thi
 `pnpm voice:call`, `pnpm voice:board`. Kit’s Prepare device flow installs voice.
 
 Dev: `pnpm dev` (defaults to https://os.iterate.com; a gitignored `.dev.vars` with
-`ITERATE_ORIGIN=http://localhost:8788` selects a local platform). Deploy through the existing
+`APP_CONFIG_URLS__OS=http://localhost:8788` selects a local platform). Deploy through the existing
 `doppler run --project agents --config prd -- pnpm run deploy --env prd` command.

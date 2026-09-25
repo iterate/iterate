@@ -15,6 +15,7 @@ import { fileURLToPath } from "node:url";
 import { Generator, getConfig } from "@tanstack/router-generator";
 import { createCli, t } from "trpc-cli";
 import { z } from "zod";
+import type { StartAppConfig } from "@iterate-com/shared/start-app-config";
 import {
   adminEnvs,
   agentsEnvs,
@@ -33,8 +34,8 @@ import { COMPATIBILITY_DATE, OBSERVABILITY, registrableDomainOf } from "./wrangl
 export interface StartAppEnv extends DeployableEnv {
   workerName: string;
   baseUrl: string;
-  /** PostHog's project key (envs.ts `ITERATE_POSTHOG_PROJECT_KEY`): the worker's
-   *  `POSTHOG_PROJECT_KEY`, and the app's pages start posthog-js with it. Unset ⇒ no PostHog. */
+  /** PostHog's project key (envs.ts `ITERATE_POSTHOG_PROJECT_KEY`): the worker's `APP_CONFIG
+   *  posthogProjectKey`, which the app's pages start posthog-js with. Unset ⇒ no PostHog. */
   posthogProjectKey?: string;
 }
 
@@ -49,8 +50,11 @@ export interface StartApp {
 }
 
 /** THE FIRST-PARTY APPS by name — `StartApp.name`, the key the apps look each other up by in
- *  `ITERATE_APP_ORIGINS` (startAppWorkerConfig) — each its envs.ts map. */
-const FIRST_PARTY_APPS: Record<string, Record<string, StartAppEnv>> = {
+ *  their `APP_CONFIG` `urls` (startAppWorkerConfig; the schema names each) — each its envs.ts map. */
+const FIRST_PARTY_APPS: Record<
+  Exclude<keyof StartAppConfig["urls"], "os">,
+  Record<string, StartAppEnv>
+> = {
   dash: dashEnvs,
   agents: agentsEnvs,
   notes: notesEnvs,
@@ -103,8 +107,9 @@ export function startAppWorkerConfig(app: StartApp, envName: string | undefined)
     );
   // THE ENVIRONMENT ITS LINKS POINT INTO: a deployed app's own — prd's apps sign in against prd's
   // platform, and a `preview` build (the app's preview parent, main on the dev/preview account)
-  // against the platform's preview parent — and prd's for local dev, which takes a local issuer
-  // from a gitignored .dev.vars. A per-PR preview's config swaps in the same PR's (startAppPreviewConfig).
+  // against the platform's preview parent — and prd's for local dev, which names a local issuer
+  // in a gitignored .dev.vars (`APP_CONFIG_URLS__OS=http://localhost:8788`, merged on top). A
+  // per-PR preview's config swaps in the same PR's (startAppPreviewConfig).
   const linked = envName || "prd";
   const platform = osEnvs[linked];
   if (!platform)
@@ -115,6 +120,18 @@ export function startAppWorkerConfig(app: StartApp, envName: string | undefined)
       throw new Error(`apps/${app.name}: envs.ts has no ${linked} environment of apps/${name}`);
     return [name, other.baseUrl];
   });
+  // THE APP'S CONFIGURATION, all of it from envs.ts; its schema documents each key
+  // (@iterate-com/shared/start-app-config)
+  const appConfig = {
+    urls: {
+      os: platform.baseUrl,
+      // the linked environment's apps, as the issuer is; a per-PR preview's config names the same
+      // PR's app previews instead, only the ones that run deploys (startAppPreviewConfig)
+      ...Object.fromEntries(appOrigins),
+    },
+    denyZones: ownZones(),
+    ...(env?.posthogProjectKey && { posthogProjectKey: env.posthogProjectKey }),
+  } satisfies z.input<typeof StartAppConfig>;
   return {
     name: env?.workerName ?? app.name,
     main: "src/server.ts",
@@ -122,21 +139,7 @@ export function startAppWorkerConfig(app: StartApp, envName: string | undefined)
     compatibility_flags: ["nodejs_compat", "global_fetch_strictly_public"],
     durable_objects: { bindings: [{ name: "BROWSER_SESSION", class_name: "BrowserSession" }] },
     exports: { BrowserSession: { type: "durable-object" as const, storage: "sqlite" as const } },
-    vars: {
-      // the default issuer: the linked environment's platform origin
-      ITERATE_ORIGIN: platform.baseUrl,
-      // our own zones: project hosts and custom apexes are userspace and could serve a look-alike
-      // issuer, so the browser-auth gate refuses to CONNECT to an issuer under them (the default
-      // issuer is exempt) — derived from envs.ts, never spelled twice
-      ITERATE_DENY_ZONES: ownZones().join(","),
-      // the first-party apps' origins by name (JSON), what a link from one app to another follows —
-      // the dash's directory of apps, Kit's link to the sessions in the dash: the linked
-      // environment's, as the issuer is; a per-PR preview's config names the same PR's app previews
-      // instead, only the ones that run deploys (startAppPreviewConfig)
-      ITERATE_APP_ORIGINS: JSON.stringify(Object.fromEntries(appOrigins)),
-      // unset ⇒ no var, no PostHog
-      ...(env?.posthogProjectKey && { POSTHOG_PROJECT_KEY: env.posthogProjectKey }),
-    },
+    vars: { APP_CONFIG: JSON.stringify(appConfig) },
     observability: OBSERVABILITY,
     assets: {
       binding: "ASSETS",
@@ -291,8 +294,8 @@ export function buildStartApp(app: StartApp, env: string) {
  *  of the built config (dist/server/wrangler.json, the `preview` env's) — the shape of
  *  cloudflare-os's `buildPreviewConfigs`. An app on top of the platform is an OAuth client and
  *  nothing else: no secrets, no data of its own, one Durable Object class for the browser session,
- *  and its vars with the issuer swapped for the same PR's apps/os preview and the other apps for
- *  the same PR's app previews (`appOrigins`, apps/os/scripts/preview-config.ts
+ *  and its `APP_CONFIG` with `urls` swapped: the issuer for the same PR's apps/os preview and the
+ *  other apps for the same PR's app previews (`appOrigins`, apps/os/scripts/preview-config.ts
  *  `appPreviewOrigins`), so a link from one to another stays in the preview. The top level is
  *  the parent worker (what `wrangler preview` branches from; main deploys it, apps/os
  *  scripts/preview.ts `deployParents`) with the class as a legacy `migrations` entry, because the pkg.pr.new
@@ -310,12 +313,15 @@ export function startAppPreviewConfig(
     previews: {
       observability: config.observability,
       durable_objects: config.durable_objects,
-      // Every var the built worker carries (ITERATE_DENY_ZONES among them), the issuer swapped for this
-      // PR's apps/os preview and the apps' origins for this PR's app previews.
+      // The built worker's configuration (its deny zones among it), `urls` replaced whole: the
+      // issuer is this PR's apps/os preview and the apps are this PR's app previews, none of the
+      // parents' (an app the run does not deploy is named nowhere).
       vars: {
         ...config.vars,
-        ITERATE_ORIGIN: input.issuer,
-        ITERATE_APP_ORIGINS: JSON.stringify(input.appOrigins),
+        APP_CONFIG: JSON.stringify({
+          ...JSON.parse(config.vars.APP_CONFIG),
+          urls: { os: input.issuer, ...input.appOrigins },
+        }),
       },
     },
   };

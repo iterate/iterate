@@ -39,7 +39,8 @@ Then run `pnpm install` and `pnpm --dir apps/<app> routes:generate`.
 | File                                                                                          | Change                                                                                                                                                         |
 | --------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `envs.ts`                                                                                     | `<app>Envs` with `preview` (the per-PR parent: dev/preview account, `<app>-preview` on `iterate-dev-preview.workers.dev`) and `prd` (with `posthogProjectKey`) |
-| `scripts/lib/start-app.ts`                                                                    | `FIRST_PARTY_APPS`, which drives the deny zones and `ITERATE_APP_ORIGINS`                                                                                      |
+| `scripts/lib/start-app.ts`                                                                    | `FIRST_PARTY_APPS`, which drives the deny zones and the apps' `APP_CONFIG` `urls`                                                                              |
+| `packages/shared/src/start-app-config.ts`                                                     | the app's name under `urls`, which `FIRST_PARTY_APPS` is typed against                                                                                         |
 | `apps/os/scripts/preview-config.ts`                                                           | `APPS`, so each PR previews it next to the platform and it gets its own `Sign in ↗` link                                                                       |
 | `pnpm-workspace.yaml`, `knip.ts`, `doppler.yaml`                                              | the workspace entry, the `apps/{dash,kit,notes,voice}` knip block, `project: <app>` with `path: apps/<app>/`                                                   |
 | `scripts/ci/preview-paths.ts`, `preview-delete.yml`, `main-os-e2e.yml`, `preview-parents.yml` | `apps/<app>/**` and `deploy-<app>.yml` in `previewPaths` and the three workflows' `paths`, and the app list in `preview-os.yml`'s `apps` description           |
@@ -66,7 +67,7 @@ plus `pnpm --dir apps/<app> ensure-resources --env prd` once for the proxied DNS
 ## 4. Prove it
 
 - `pnpm typecheck`, `pnpm lint`, `pnpm knip`, `pnpm format`.
-- Locally: `pnpm dev` for the platform, plus `ITERATE_ORIGIN=http://localhost:8788` in the
+- Locally: `pnpm dev` for the platform, plus `APP_CONFIG_URLS__OS=http://localhost:8788` in the
   app's gitignored `.dev.vars`, then `pnpm --dir apps/<app> dev`.
 - On the PR: the Preview OS workflow deploys the app next to the platform. Open its `Sign in ↗`
   link in an isolated browser session and check that it lands signed in inside project `pr<n>`.

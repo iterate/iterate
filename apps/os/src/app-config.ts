@@ -12,6 +12,7 @@
 //     login: { allowedEmails, password, emailCode: { from }, google: { clientId, clientSecret }, cloudflare: { clientId, clientSecret }, testLink: { emailDomain } },
 //     admins,
 //     customHostnames: { zone, zoneId, dcvDelegationUuid, reservedZones }, cloudflareApiToken,
+//     posthogProjectKey,
 //     secrets: { key, previousKey, adminBearer },
 //   }
 //
@@ -20,9 +21,16 @@
 // (that is how a deployment's `urls` come from envs.ts while its secrets come from the one blob, and
 // how `secrets.key` stands alone as its own Worker secret so it can rotate with `previousKey` beside
 // it). A blank var is unset. A key the schema does not name is warned about loudly at boot and
-// dropped, never silently kept.
+// dropped, never silently kept. The mechanism is shared with the apps on top
+// (@iterate-com/shared/app-config); this module is the platform's schema and cross-field rules.
 
 import { z } from "zod";
+import {
+  dnsName,
+  fieldNameOf,
+  optionalOrigin,
+  parseAppConfigVars,
+} from "@iterate-com/shared/app-config";
 import {
   projectAddressOf,
   projectWildcardHostOf,
@@ -59,26 +67,6 @@ function redacted<Schema extends z.ZodTypeAny>(schema: Schema) {
 
 /** A field's failure message names the SHAPE; `parseAppConfig` prefixes where it came from. */
 const REQUIRED = "required, but unset or blank";
-
-/** An HTTP(S) origin with no path or query — `new URL(v).origin === v`. */
-const httpOrigin = z
-  .string()
-  .trim()
-  .refine((value) => {
-    if (!URL.canParse(value)) return false;
-    const url = new URL(value);
-    return url.origin === value && (url.protocol === "https:" || url.protocol === "http:");
-  }, "expected an HTTP(S) origin without a path");
-
-/** An origin a deployment may leave out (blank ⇒ the documented default). */
-const optionalOrigin = z.union([z.literal(""), httpOrigin]).default("");
-
-/** A DNS name: lowercase labels, no scheme, no trailing dot, no wildcard — the wildcard is implied. */
-const dnsName = z
-  .string()
-  .trim()
-  .toLowerCase()
-  .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*(?:\.[a-z0-9]+(?:-[a-z0-9]+)*)*$/, "expected a DNS name");
 
 /** THE `APP_CONFIG` SCHEMA — PER-FIELD validation only; the cross-field rules (a distinct MCP origin,
  *  the ingress routing's hostname, at least one sign-in mechanism) live in `parseAppConfig`, because
@@ -133,6 +121,10 @@ export const AppConfig = z.object({
    *  today a project's custom hostnames (edit on `customHostnames.zone`). Blank ⇒ none; a custom
    *  hostname is then refused with that reason rather than half-provisioned. */
   cloudflareApiToken: redacted(z.string().trim().default("")),
+  /** PostHog's project key (envs.ts `posthogProjectKey`, prd only): the issuer's pages start
+   *  posthog-js with it (issuer.functions.ts) and every `reportIssue` becomes a `$exception` in
+   *  PostHog Error Tracking (posthog.ts). A public key, not a secret. Blank ⇒ no PostHog. */
+  posthogProjectKey: z.string().trim().default(""),
   /** How a person signs in. Each mechanism is on iff its block is present; `parseAppConfig` refuses a
    *  deployment with none (nobody could ever sign in). */
   login: z
@@ -249,150 +241,11 @@ export type AppConfigEnv = { CF_VERSION_METADATA?: { id: string }; APP_CONFIG?: 
   [Name in `APP_CONFIG_${string}`]?: string;
 };
 
-/** The override var a schema path answers to — `["urls", "os"]` → `APP_CONFIG_URLS__OS` — the inverse
- *  of `overridesOf`, so a boot error names both spellings a human might have used. */
-function envVarNameOf(path: readonly (string | number | symbol)[]): string {
-  return `APP_CONFIG_${path
-    .map((segment) =>
-      String(segment)
-        .replace(/([A-Z])/g, "_$1")
-        .toUpperCase(),
-    )
-    .join("__")}`;
-}
-
-/** Where a field came from, for a message: its path in the object and its var spelling. */
-function fieldNameOf(path: readonly (string | number | symbol)[]): string {
-  return `APP_CONFIG ${path.map(String).join(".")} (${envVarNameOf(path)})`;
-}
-
-/** Warn, loudly, about a key the schema does not name — in the object or an `APP_CONFIG_*` override,
- *  checked once on the merged config. Walks the plain objects only; a record accepts any key. */
-function warnUnknownKeys(raw: unknown, schema: z.ZodTypeAny, path: string[]): void {
-  const object = z.record(z.string(), z.unknown()).safeParse(raw);
-  if (!object.success) return;
-  // unwrap() and shape hand back loosely typed schemas; the walk checks each with instanceof
-  let current: z.ZodTypeAny = schema;
-  while (
-    current instanceof z.ZodDefault ||
-    current instanceof z.ZodPrefault ||
-    current instanceof z.ZodOptional
-  )
-    current = current.unwrap() as z.ZodTypeAny;
-  if (!(current instanceof z.ZodObject)) return;
-  for (const [key, value] of Object.entries(object.data)) {
-    const child = current.shape[key] as z.ZodTypeAny | undefined;
-    if (!child) {
-      console.warn(
-        `APP_CONFIG: unknown key "${[...path, key].join(".")}" — not in the schema, ignored. Remove it, or add it to app-config.ts.`,
-      );
-      continue;
-    }
-    warnUnknownKeys(value, child, [...path, key]);
-  }
-}
-
-type PlainObject = Record<string, unknown>;
-
-function isPlainObject(value: unknown): value is PlainObject {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
-
-/** The `APP_CONFIG` object itself; blank ⇒ `{}`. */
-function objectOf(appConfig: string | undefined): PlainObject {
-  if (!appConfig?.trim()) return {};
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(appConfig);
-  } catch (error) {
-    throw new Error("APP_CONFIG must be valid JSON", { cause: error });
-  }
-  if (!isPlainObject(parsed)) throw new Error("APP_CONFIG must be a JSON object");
-  return parsed;
-}
-
-/** The `APP_CONFIG_*` overrides as one nested object: `__` separates path segments and each
- *  segment's SNAKE_CASE becomes camelCase (`APP_CONFIG_LOGIN__EMAIL_CODE__FROM` → `login.emailCode.from`).
- *  A value that reads as JSON (`true`, `false`, `null`, an object, an array, a quoted string) is
- *  parsed; anything else is the string itself. */
-function overridesOf(configEnv: Record<string, string>): PlainObject {
-  const overrides: PlainObject = {};
-  for (const [key, value] of Object.entries(configEnv)) {
-    if (!key.startsWith("APP_CONFIG_")) continue;
-    const path = key
-      .slice("APP_CONFIG_".length)
-      .split("__")
-      .map((segment) =>
-        segment
-          .toLowerCase()
-          .split("_")
-          .filter(Boolean)
-          .map((word, index) => (index === 0 ? word : word[0]!.toUpperCase() + word.slice(1)))
-          .join(""),
-      )
-      .filter(Boolean);
-    const last = path.pop();
-    if (!last) continue;
-    let target = overrides;
-    for (const segment of path) {
-      const existing = target[segment];
-      const next: PlainObject = isPlainObject(existing) ? existing : {};
-      target[segment] = next;
-      target = next;
-    }
-    target[last] = overrideValueOf(value);
-  }
-  return overrides;
-}
-
-function overrideValueOf(value: string): unknown {
-  const trimmed = value.trim();
-  const looksLikeJson =
-    ["true", "false", "null"].includes(trimmed) ||
-    trimmed.startsWith("{") ||
-    trimmed.startsWith("[") ||
-    (trimmed.startsWith('"') && trimmed.endsWith('"'));
-  if (!looksLikeJson) return value;
-  try {
-    return JSON.parse(trimmed);
-  } catch {
-    return value;
-  }
-}
-
-/** `overrides` over `base`, plain objects merged key by key; anything else replaced whole. */
-function deepMerge(base: PlainObject, overrides: PlainObject): PlainObject {
-  const merged = { ...base };
-  for (const [key, value] of Object.entries(overrides)) {
-    const existing = merged[key];
-    merged[key] =
-      isPlainObject(existing) && isPlainObject(value) ? deepMerge(existing, value) : value;
-  }
-  return merged;
-}
-
 /** Parse the configuration out of `env` (a worker env, or any record — only `APP_CONFIG` and the
  *  `APP_CONFIG_*` keys are read; a blank one is unset). Pure; every test parses through it. A
  *  malformed field throws naming itself. */
 export function parseAppConfig(env: object, deployId = "unversioned"): AppConfig {
-  const configEnv: Record<string, string> = {};
-  for (const [key, value] of Object.entries(env)) {
-    if (!(key === "APP_CONFIG" || key.startsWith("APP_CONFIG_"))) continue;
-    if (typeof value !== "string" || !value.trim()) continue;
-    configEnv[key] = value;
-  }
-  let parsed: z.output<typeof AppConfig>;
-  try {
-    const raw = deepMerge(objectOf(configEnv.APP_CONFIG), overridesOf(configEnv));
-    warnUnknownKeys(raw, AppConfig, []);
-    parsed = AppConfig.parse(raw);
-  } catch (error) {
-    if (error instanceof z.ZodError) {
-      const issue = error.issues[0]!;
-      throw new Error(`${fieldNameOf(issue.path)}: ${issue.message}`);
-    }
-    throw error;
-  }
+  const parsed = parseAppConfigVars(env, AppConfig);
   const { urls, login } = parsed;
   if (urls.mcp && !urls.os)
     throw new Error(

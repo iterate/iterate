@@ -1,6 +1,7 @@
 import handler, { createServerEntry } from "@tanstack/react-start/server-entry";
 import { env } from "cloudflare:workers";
 import { proxyPosthogRequest } from "@iterate-com/shared/posthog";
+import { startAppConfigOf } from "@iterate-com/shared/start-app-config";
 import { appAuth } from "iterate/app-server";
 import type { BrowserSession } from "iterate/app-session";
 export { BrowserSession } from "iterate/app-session";
@@ -11,11 +12,9 @@ declare global {
     interface Env {
       ASSETS: Fetcher;
       BROWSER_SESSION: DurableObjectNamespace<BrowserSession>;
-      ITERATE_ORIGIN: string;
-      /** zones a connectable issuer may not live under (the SDK's `issuerOriginOf`) — this deployment's own, comma-separated */
-      ITERATE_DENY_ZONES: string;
-      /** PostHog's project key (envs.ts, prd only); unset ⇒ no PostHog */
-      POSTHOG_PROJECT_KEY?: string;
+      /** THE APP'S CONFIGURATION, JSON (@iterate-com/shared/start-app-config): its platform, the
+       *  other apps' origins, our own zones and its PostHog key — from envs.ts (startAppWorkerConfig) */
+      APP_CONFIG: string;
     }
   }
 }
@@ -25,6 +24,8 @@ declare global {
  *  Everything else is TanStack Start's: the built assets, then its pages. */
 export default createServerEntry({
   async fetch(request) {
+    // parsed on the first request, /healthz's included: a malformed config fails the deploy's smoke
+    const config = startAppConfigOf(env);
     const url = new URL(request.url);
     if (url.pathname === "/healthz") return new Response("ok");
     // posthog-js's `api_host` (packages/ui posthog.tsx): PostHog EU through our own origin
@@ -32,9 +33,9 @@ export default createServerEntry({
     const auth = await appAuth(request, {
       client: { name: "iterate Agents", logoUri: "/client-logo.svg" },
       sessions: env.BROWSER_SESSION,
-      issuer: env.ITERATE_ORIGIN,
-      resource: `${env.ITERATE_ORIGIN}/api`,
-      denyZones: env.ITERATE_DENY_ZONES.split(",").filter(Boolean),
+      issuer: config.urls.os,
+      resource: `${config.urls.os}/api`,
+      denyZones: config.denyZones,
       api: (request) => fetch(request),
     });
     if (auth) return auth;

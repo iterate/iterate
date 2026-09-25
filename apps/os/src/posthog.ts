@@ -12,15 +12,13 @@ import { PostHog } from "posthog-node";
 import { appConfigOf } from "./app-config.ts";
 import type { Env } from "./env.ts";
 
-/** Sent where the worker has a PostHog project key — envs.ts gives one to prd only, so previews
- *  and local dev report nothing. */
+/** Sent where the worker has a PostHog project key (`APP_CONFIG posthogProjectKey`) — envs.ts
+ *  gives one to prd only, so previews and local dev report nothing. */
 export function captureIssueInPosthog(issue: Issue): void {
   // `cloudflare:workers` types its env without this worker's bindings
-  const workerEnv = env as Env;
-  const apiKey = workerEnv.POSTHOG_PROJECT_KEY;
-  if (!apiKey) return;
-  const config = appConfigOf(workerEnv);
-  const client = new PostHog(apiKey, {
+  const config = appConfigOf(env as Env);
+  if (!config.posthogProjectKey) return;
+  const client = new PostHog(config.posthogProjectKey, {
     host: "https://eu.i.posthog.com",
     flushAt: 1,
     flushInterval: 0,

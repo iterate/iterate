@@ -39,6 +39,7 @@ const MINIMAL_CONFIG = {
   urls: { os: "", mcp: "", dash: "", ingressRouting: null },
   login: { password: "password" },
   cloudflareApiToken: "",
+  posthogProjectKey: "",
   admins: [],
   secrets: { key: "secrets-key", previousKey: "", adminBearer: "" },
   deployId: "unversioned",
@@ -93,6 +94,7 @@ const appConfigRows: {
       APP_CONFIG_CUSTOM_HOSTNAMES:
         '{"zone":"iterate.app","zoneId":"zone-1","dcvDelegationUuid":"dcv-1","reservedZones":["iterate.app","iterate.com"]}',
       APP_CONFIG_CLOUDFLARE_API_TOKEN: "cloudflare-token",
+      APP_CONFIG_POSTHOG_PROJECT_KEY: "phc_test",
       APP_CONFIG_LOGIN__EMAIL_CODE__FROM: "iterate <login@iterate.com>",
       APP_CONFIG_LOGIN__GOOGLE__CLIENT_ID: "google-id",
       APP_CONFIG_LOGIN__GOOGLE__CLIENT_SECRET: "google-secret",
@@ -116,6 +118,7 @@ const appConfigRows: {
         reservedZones: ["iterate.app", "iterate.com"],
       },
       cloudflareApiToken: "cloudflare-token",
+      posthogProjectKey: "phc_test",
       login: {
         password: "password",
         emailCode: { from: "iterate <login@iterate.com>" },
@@ -597,6 +600,7 @@ const expose = (config: AppConfig) => ({
   urls: config.urls,
   customHostnames: config.customHostnames,
   cloudflareApiToken: config.cloudflareApiToken.exposeSecret(),
+  posthogProjectKey: config.posthogProjectKey,
   admins: config.admins,
   login: {
     ...config.login,
