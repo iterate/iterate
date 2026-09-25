@@ -113,7 +113,7 @@ function iterateContextAddressOf(ctx: DurableObjectState) {
     );
   return DurableObjectNameCodec.address({
     projectId: born.payload.projectId,
-    path: born.payload.path ?? "/",
+    path: born.payload.path || "/",
   });
 }
 

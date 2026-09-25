@@ -1,12 +1,6 @@
 import { expect, test } from "vitest";
 import { classifyContexts, type SweptContext } from "./context-sweep.ts";
 
-const context = (id: string, projectId: string, path = "/"): SweptContext => ({
-  id,
-  projectId,
-  path,
-});
-
 test.each([
   ["a live project's context is left alone", [context("a", "prj_live")], { live: ["a"] }],
   ["a global context is never swept", [context("g", "global", "/users/u1")], { global: ["g"] }],
@@ -29,3 +23,7 @@ test.each([
     ...expected,
   });
 });
+
+function context(id: string, projectId: string, path = "/"): SweptContext {
+  return { id, projectId, path };
+}
