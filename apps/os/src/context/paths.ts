@@ -14,7 +14,7 @@ const PROJECT_ID = /^[A-Za-z0-9_-]+$/;
  *  (`session.user` is exactly `session.projects.get(...)` one namespace over) — except that it is NOT
  *  NAVIGABLE: `cd` is refused for every caller, on a global edge handle (IterateContextRpcTarget.cd)
  *  and inside a global DO (built-ins.ts `cd`). A catalog project's id is minted (`prj_<hex>`), but
- *  the admin secret addresses a project the catalog never heard of by any id, so `projects.get` and
+ *  the admin secret addresses a project the catalog never heard of by any `prj_…` id, so `projects.get` and
  *  the MCP `project` refuse the word, and `DurableObjectNameCodec.address` refuses every
  *  `global--…` id (`GLOBAL_OWNER_ID_PREFIX`). */
 export const GLOBAL_PROJECT_ID = "global";
