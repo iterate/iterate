@@ -299,7 +299,8 @@ export class ConsentRpcTarget extends RpcTarget {
       const request = await this.#request(data.query);
       const client = await oauthHelpers(env, this.#addresses).lookupClient(request.clientId);
       if (request.resource === this.#addresses.userinfo) {
-        if (data.impersonate) return { error: "Signing in as someone else is not for this client." };
+        if (data.impersonate)
+          return { error: "Signing in as someone else is not for this client." };
         return await this.#complete(request, client, [], ["iterate"], IDENTIFY_GRANT_MS);
       }
       if (data.impersonate) return await this.#impersonate(request, client, data.impersonate);
