@@ -9,7 +9,7 @@ import { ConsentPanel, StepHeading, type ConsentFrame } from "./consent-step.tsx
  *  whom, typed with the platform's people as suggestions, and who the client really is — its
  *  verified host, where the code goes, the resource and the permissions it would hold as them, and
  *  a warning for anything that is not one of this deployment's own apps. Submit is a plain POST to
- *  this very authorization URL carrying `impersonate=<email>` in the body, which the platform
+ *  this very authorization URL carrying `impersonate=<user id>` in the body, which the platform
  *  checks again (consent.ts `approve`). */
 export function SomeoneElseStep({
   headingRef,
@@ -29,7 +29,9 @@ export function SomeoneElseStep({
   const formId = useId();
   const [email, setEmail] = useState("");
   const [submitting, setSubmitting] = useState(false);
-  const who = email.trim() || "them";
+  // the form posts the person's id, never the address typed: only someone on the list can be picked
+  const chosen = impersonation.people.find((person) => person.email === email.trim().toLowerCase());
+  const who = chosen?.email || "them";
   return (
     <ConsentPanel
       {...frame}
@@ -73,7 +75,7 @@ export function SomeoneElseStep({
           form={formId}
           size="lg"
           className="h-auto min-h-11 whitespace-normal"
-          disabled={!email.trim() || submitting}
+          disabled={!chosen || submitting}
         >
           Sign {clientName} in as {who} for an hour
         </Button>
@@ -95,7 +97,6 @@ export function SomeoneElseStep({
         <Input
           id={`${formId}-email`}
           type="email"
-          name="impersonate"
           list={`${formId}-people`}
           autoComplete="off"
           required
@@ -104,9 +105,10 @@ export function SomeoneElseStep({
         />
         <datalist id={`${formId}-people`}>
           {impersonation.people.map((person) => (
-            <option key={person} value={person} />
+            <option key={person.id} value={person.email} />
           ))}
         </datalist>
+        {chosen ? <input type="hidden" name="impersonate" value={chosen.id} /> : null}
       </form>
     </ConsentPanel>
   );

@@ -2,7 +2,7 @@
 // wrangler.test.jsonc lists oauth-admin@example.com): the `admin` scope and signing a client in as
 // someone else, through the real sign-in, consent, code exchange and admission.
 import { env } from "cloudflare:workers";
-import { expect, test } from "vitest";
+import { expect, test, vi } from "vitest";
 import type { StreamEvent } from "iterate/stream/processor";
 import { platformAddressesOf } from "../src/app-config.ts";
 import { authorizationForToken } from "../src/oauth.ts";
@@ -90,7 +90,7 @@ test("signing a client in as someone: offered to an admin alone, the person's gr
 
   const signedIn = await authorize(admin.approver, {
     scope: "iterate account admin",
-    impersonate: target.user.email,
+    impersonate: target.user.id,
   });
   // the ordinary consent page, with the picker's facts for the admin: whom, and who the client is
   expect(signedIn.view).toMatchObject({
@@ -103,8 +103,8 @@ test("signing a client in as someone: offered to an admin alone, the person's gr
       scopes: [{ name: "iterate" }, { name: "account" }],
     },
   });
-  expect(signedIn.view.kind === "consent" && signedIn.view.impersonation?.people).toContain(
-    target.user.email,
+  expect(signedIn.view.kind === "consent" && signedIn.view.impersonation?.people).toContainEqual(
+    target.user,
   );
   expect(signedIn.scope?.split(" ").sort()).toEqual(["account", "iterate"]);
   const authorization = await authorizationForToken(env, signedIn.token!, addresses, "api");
@@ -146,17 +146,30 @@ test("signing a client in as someone: offered to an admin alone, the person's gr
   const started = (await accountEvents(target.user.id)).find(
     (event) => event.type === "events.iterate.com/account/impersonation-started",
   );
-  expect(started).toMatchObject({
-    payload: { grantId, scopes: ["iterate", "account"], clientName: "Admin integration" },
+  const record = {
+    payload: {
+      grantId,
+      target: { userId: target.user.id, email: target.user.email },
+      impersonatedBy: { actor: admin.user.id, email: ADMIN },
+      clientName: "Admin integration",
+      resource: "api",
+      scopes: ["iterate", "account"],
+      projects: null,
+    },
     source: { principal: { actor: admin.user.id, email: ADMIN }, platform: true },
-  });
+  };
+  expect(started).toMatchObject(record);
   const performed = (await accountEvents(admin.user.id)).find(
     (event) => event.type === "events.iterate.com/account/impersonation-performed",
   );
-  expect(performed).toMatchObject({
-    payload: { grantId, target: { userId: target.user.id, email: target.user.email } },
-    source: { principal: { actor: admin.user.id, email: ADMIN }, platform: true },
-  });
+  expect(performed).toMatchObject(record);
+  // the grant's own use is stamped with both people too
+  const used = (await accountEvents(target.user.id)).find(
+    (event) =>
+      event.type === "events.iterate.com/account/grant-used" &&
+      (event.payload as { grantId: string }).grantId === grantId,
+  );
+  expect(used?.source?.principal).toMatchObject({ impersonatedBy: { actor: admin.user.id } });
 
   // the admin leaving the list ends it at its next request
   expect(
@@ -172,21 +185,77 @@ test("signing a client in as someone: offered to an admin alone, the person's gr
   const mcp = await authorize(admin.approver, {
     scope: "iterate admin",
     resource: addresses.mcp,
-    impersonate: target.user.email,
+    impersonate: target.user.id,
   });
   expect(mcp.view).toMatchObject({ impersonation: { resource: "MCP" } });
   expect(mcp).toMatchObject({ scope: "iterate" });
 
+  // the person ending it in their Sessions ends it, refresh included
+  await theirs.grants.end(grantId);
+  expect(await authorizationForToken(env, signedIn.token!, addresses, "api")).toBeNull();
+  expect(await refresh(signedIn)).toMatchObject({ status: 400 });
+
   // anyone but an admin is offered nothing and refused when they post it anyway
-  const refused = await authorize(target.approver, { scope: "iterate", impersonate: ADMIN });
+  const refused = await authorize(target.approver, {
+    scope: "iterate",
+    impersonate: admin.user.id,
+  });
   expect(refused.view.kind === "consent" && refused.view.impersonation).toBeUndefined();
   expect(refused.error).toMatch(/Only a platform admin/);
+  // …and the consent form itself takes no post without the page's own Origin
+  const noOrigin = await call(`/oauth2/auth?client_id=x`, {
+    method: "POST",
+    body: new URLSearchParams({ impersonate: target.user.id }),
+  });
+  expect(noOrigin).toMatchObject({ status: 403 });
   // and nobody is named through the authorization URL: `act_as` there is an unknown parameter
   const named = await authorize(target.approver, { scope: "iterate", actAs: ADMIN });
   expect(named.view).toMatchObject({ kind: "consent", email: target.user.email });
   expect(await authorizationForToken(env, named.token!, addresses, "api")).toMatchObject({
     principal: { actor: target.user.id },
   });
+});
+
+test("an impersonation's access token never outlives its hour: a code exchanged late gets a token that ends with it", async () => {
+  fetchReachesThisWorker();
+  const target = await approverFor("impersonated-late@example.com");
+  const admin = await approverFor(ADMIN);
+  // nine minutes on (the code lives ten): 51 minutes of the hour are left, not the token's usual 60
+  const late = await authorize(admin.approver, {
+    scope: "iterate",
+    impersonate: target.user.id,
+    exchangeAfterMs: 9 * 60_000,
+  });
+  expect(late.expiresIn).toBeLessThanOrEqual(51 * 60 + 1);
+  const authorization = await authorizationForToken(env, late.token!, addresses, "api");
+  expect(authorization!.grant!.expiresAt).toBeLessThanOrEqual(authorization!.grant!.deadline);
+});
+
+test("a client on a project's host signed in as someone is bound to that project, as the person's own sign-in would be", async () => {
+  fetchReachesThisWorker();
+  const target = await approverFor("impersonated-host@example.com");
+  using hostProject = await (
+    await actingAs(target.user.email)
+  ).projects.create({ project: "impersonated-host" });
+  const projectId = (await hostProject.whoami()).projectId;
+  await controlPlane().claimHostname(projectId, "impersonated-host.test");
+  const admin = await approverFor(ADMIN);
+  const { query } = await authorizationRequest("https://impersonated-host.test/.auth/client.json", [
+    addresses.api,
+  ]);
+  query.set("redirect_uri", "https://impersonated-host.test/.auth/callback");
+  const view = await admin.approver.consent.describe(`?${query}`);
+  expect(view).toMatchObject({ projectBound: true, impersonation: { ownApp: false } });
+  const approval = await admin.approver.consent.approve({
+    query: `?${query}`,
+    projects: [],
+    impersonate: target.user.id,
+  });
+  expect(approval).toHaveProperty("redirectTo");
+  const started = (await accountEvents(target.user.id)).find(
+    (event) => event.type === "events.iterate.com/account/impersonation-started",
+  );
+  expect(started).toMatchObject({ payload: { projects: [projectId] } });
 });
 
 /** Everything on `userId`'s account log. */
@@ -213,7 +282,14 @@ async function approverFor(email: string) {
  *  exchanged: the access token, or the refusal. */
 async function authorize(
   approver: Awaited<ReturnType<typeof approverFor>>["approver"],
-  input: { scope: string; resource?: string; actAs?: string; impersonate?: string },
+  input: {
+    scope: string;
+    resource?: string;
+    actAs?: string;
+    impersonate?: string;
+    /** how long after approval the code is exchanged */
+    exchangeAfterMs?: number;
+  },
 ) {
   const client = await helpers().createClient({
     clientName: "Admin integration",
@@ -235,6 +311,10 @@ async function authorize(
   });
   if ("error" in approval) return { view, error: approval.error };
   const code = new URL(approval.redirectTo).searchParams.get("code")!;
+  const now = Date.now();
+  const clock = input.exchangeAfterMs
+    ? vi.spyOn(Date, "now").mockImplementation(() => now + input.exchangeAfterMs!)
+    : null;
   const response = await call("/oauth2/token", {
     method: "POST",
     body: new URLSearchParams({
@@ -245,9 +325,34 @@ async function authorize(
       code_verifier: verifier,
     }),
   });
-  const token = await response.json<{ access_token: string; scope: string }>();
+  clock?.mockRestore();
+  const token = await response.json<{
+    access_token: string;
+    refresh_token: string;
+    scope: string;
+    expires_in: number;
+  }>();
   expect(response, JSON.stringify(token)).toMatchObject({ status: 200 });
-  return { view, token: token.access_token, scope: token.scope };
+  return {
+    view,
+    clientId: client.clientId,
+    token: token.access_token,
+    refreshToken: token.refresh_token,
+    scope: token.scope,
+    expiresIn: token.expires_in,
+  };
+}
+
+/** A refresh of `granted`'s tokens at the token endpoint. */
+function refresh(granted: { clientId?: string; refreshToken?: string }) {
+  return call("/oauth2/token", {
+    method: "POST",
+    body: new URLSearchParams({
+      grant_type: "refresh_token",
+      refresh_token: granted.refreshToken!,
+      client_id: granted.clientId!,
+    }),
+  });
 }
 
 /** The deployment's `admins` as `list` names them, for one admission. */

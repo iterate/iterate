@@ -80,26 +80,27 @@ export const ConsentApproved = z.object({
   scopes: z.array(z.string()),
 });
 export type ConsentApproved = z.infer<typeof ConsentApproved>;
-/** `events.iterate.com/account/impersonation-started`: a platform admin (the event's
- *  `source.principal`) signed a client in as this person (consent.ts `#impersonate`), with the
- *  scopes the client asked for, until `expiresAt` (epoch ms). AWAITED before the client gets its
- *  code: no impersonation is used unrecorded. An audit record: the account folds nothing from it. */
-export const ImpersonationStarted = z.object({
+/** A platform admin signed a client in as someone (consent.ts `#impersonate`): ONE record, landed on
+ *  both accounts — `events.iterate.com/account/impersonation-started` on the person's,
+ *  `events.iterate.com/account/impersonation-performed` on the admin's, each stamped with the admin
+ *  as `source.principal` — AWAITED before the client gets its code, so no impersonation is used
+ *  unrecorded. Audit only: the account folds nothing from it. */
+export const Impersonation = z.object({
+  /** the grant's id, the same in both records: what ends it (the person's Sessions list it) */
+  grantId: z.string().min(1),
+  target: z.object({ userId: z.string(), email: z.string() }),
+  impersonatedBy: z.object({ actor: z.string(), email: z.string() }),
   clientId: z.string().min(1),
   clientName: z.string(),
-  /** the grant's id: what ends it (the person's Sessions list shows it, marked with the admin) */
-  grantId: z.string().min(1),
+  /** the resource the grant is for */
+  resource: z.enum(["api", "mcp"]),
   scopes: z.array(z.string()),
+  /** the projects it is bound to; null = every project of the person's */
+  projects: z.array(z.string()).nullable(),
+  /** epoch ms */
   expiresAt: z.number(),
 });
-export type ImpersonationStarted = z.infer<typeof ImpersonationStarted>;
-/** `events.iterate.com/account/impersonation-performed`: the other side of `impersonation-started`,
- *  on the ADMIN's own account (also the event's `source.principal`) — they signed a client in as
- *  `target` with these scopes until `expiresAt` (epoch ms). Awaited beside it; audit only, like it. */
-export const ImpersonationPerformed = ImpersonationStarted.extend({
-  target: z.object({ userId: z.string(), email: z.string() }),
-});
-export type ImpersonationPerformed = z.infer<typeof ImpersonationPerformed>;
+export type Impersonation = z.infer<typeof Impersonation>;
 
 export const AccountContract = defineProcessorContract({
   slug: "account",
@@ -171,12 +172,12 @@ export const AccountContract = defineProcessorContract({
     "events.iterate.com/account/impersonation-started": {
       description:
         "A platform admin signed a client in as the person, for an hour (platform fact, audit only).",
-      payloadSchema: ImpersonationStarted,
+      payloadSchema: Impersonation,
     },
     "events.iterate.com/account/impersonation-performed": {
       description:
         "The person, a platform admin, signed a client in as someone else, for an hour (platform fact, audit only).",
-      payloadSchema: ImpersonationPerformed,
+      payloadSchema: Impersonation,
     },
   },
   // THE RELATIONSHIPS: the account consumes the user's own secrets' certificates without owning

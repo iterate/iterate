@@ -15,13 +15,9 @@ import {
 } from "iterate/oauth-scopes";
 import type { IngressRouting } from "iterate/project-ingress";
 import { suggestOrganizationName } from "./name-suggestions.ts";
-import {
-  type ConsentApproved,
-  type ImpersonationPerformed,
-  type ImpersonationStarted,
-} from "./account/contract.ts";
+import { type ConsentApproved, type Impersonation } from "./account/contract.ts";
 import type { Env } from "./env.ts";
-import type { OrganizationRecord, ProjectRecord } from "./control-plane/catalog.ts";
+import type { OrganizationRecord, ProjectRecord, UserRecord } from "./control-plane/catalog.ts";
 import { ControlPlane } from "./control-plane/edge.ts";
 import { appConfigOf, type PlatformAddresses } from "./app-config.ts";
 import {
@@ -64,8 +60,8 @@ export type ConsentView =
       /** For a platform admin only: what "Sign in as someone else…" offers and must show before
        *  it signs the client in as someone (`approve`'s `impersonate`, `#impersonate`). */
       impersonation?: {
-        /** everyone else on the platform, by email */
-        people: string[];
+        /** everyone else on the platform */
+        people: UserRecord[];
         /** what the grant would hold: the request's scopes but `admin` */
         scopes: ConsentScope[];
         resource: "API" | "MCP";
@@ -257,9 +253,9 @@ export class ConsentRpcTarget extends RpcTarget {
         ...bound,
         ...(isAdmin(env, this.#grant.email) && {
           impersonation: {
-            people: (await controlPlane.listUsers())
-              .filter((user) => user.id !== this.#grant.userId)
-              .map((user) => user.email),
+            people: (await controlPlane.listUsers()).filter(
+              (user) => user.id !== this.#grant.userId,
+            ),
             scopes: request.scope
               .filter((scope) => scope !== "admin")
               .map((scope) => {
@@ -280,9 +276,10 @@ export class ConsentRpcTarget extends RpcTarget {
   /** Approve: the projects ticked (`["*"]` = every current and future project) and, task-based
    *  consent, the scopes left ticked — `iterate` always, never one the request did not ask for; the
    *  grant and its tokens carry exactly that set (`session.info().scopes` tells the app). Without
-   *  `scopes`, the request's whole set. With `impersonate` (a person's email, the page's "Sign in
+   *  `scopes`, the request's whole set. With `impersonate` (a person's user id, the page's "Sign in
    *  as someone else…"), a platform admin signs the client in as that person instead
-   *  (`#impersonate`); anyone else is refused, whatever the page showed them. */
+   *  (`#impersonate`); anyone else is refused, whatever the page showed them. The admin is never
+   *  read from the input: only from this target's live issuer grant. */
   async approve(input: {
     query: string;
     projects: string[];
@@ -295,7 +292,7 @@ export class ConsentRpcTarget extends RpcTarget {
         query: z.string(),
         projects: z.array(z.string()),
         scopes: z.array(z.string()).optional(),
-        impersonate: z.string().min(1).optional(),
+        impersonate: z.string().startsWith("user_").optional(),
       })
       .parse(input);
     try {
@@ -345,7 +342,7 @@ export class ConsentRpcTarget extends RpcTarget {
   }
 
   /** SIGN IN AS SOMEONE ELSE: a platform admin's approval of any authorization — a first-party
-   *  app's or a third party's, for `/api` or `/mcp` — as the person `email` names; refused to anyone
+   *  app's or a third party's, for `/api` or `/mcp` — as the person `userId` names; refused to anyone
    *  the platform's `admins` does not list (the page offers it to no one else, but a form can be
    *  posted by hand) and for an address nobody signed in as. The client gets a grant of the
    *  PERSON — stored under them, so it is in their Sessions, marked with the admin — that reaches
@@ -356,12 +353,12 @@ export class ConsentRpcTarget extends RpcTarget {
    *  only once both accounts record the grant, AWAITED: the person's that it started, the admin's
    *  that they did it. A record that fails leaves the code unsent, and the grant unexchanged dies
    *  with the code's ten minutes. */
-  async #impersonate(request: AuthRequest, client: ClientInfo | null, email: string) {
+  async #impersonate(request: AuthRequest, client: ClientInfo | null, userId: string) {
     const env = this.#env;
     if (!isAdmin(env, this.#grant.email))
       return { error: "Only a platform admin can sign in as someone else." };
-    const target = await new ControlPlane(env).getUser(email);
-    if (!target) return { error: `Nobody has signed in as ${email}.` };
+    const target = await new ControlPlane(env).getUser(userId);
+    if (!target) return { error: "Nobody on this platform has that id." };
     const impersonatedBy = { actor: this.#grant.userId, email: this.#grant.email };
     const scope = request.scope.filter((scope) => scope !== "admin");
     // bound as the person's own grant for this client would be: a project host's client reaches
@@ -396,34 +393,29 @@ export class ConsentRpcTarget extends RpcTarget {
     // the code, so either person can find and end it
     const grantId = new URL(approved.redirectTo).searchParams.get("code")?.split(":")[1];
     if (!grantId) throw new Error("The authorization code names no grant.");
-    const record = {
+    const payload = {
+      grantId,
+      target: { userId: target.id, email: target.email },
+      impersonatedBy,
       clientId: request.clientId,
       clientName: display.clientName,
-      grantId,
+      resource: request.resource === this.#addresses.mcp ? "mcp" : "api",
       scopes: scope,
+      projects: projectBound ? projects.map((project) => project.id) : null,
       expiresAt: deadline,
-    };
+    } satisfies Impersonation;
     const caller = { principal: impersonatedBy, grant: this.#grant.grantId };
     await Promise.all([
       appendPlatformFacts(
         env.ITERATE_CONTEXT,
         { account: target.id },
-        {
-          type: "events.iterate.com/account/impersonation-started",
-          payload: record satisfies ImpersonationStarted,
-        },
+        { type: "events.iterate.com/account/impersonation-started", payload },
         caller,
       ),
       appendPlatformFacts(
         env.ITERATE_CONTEXT,
         { account: impersonatedBy.actor },
-        {
-          type: "events.iterate.com/account/impersonation-performed",
-          payload: {
-            ...record,
-            target: { userId: target.id, email: target.email },
-          } satisfies ImpersonationPerformed,
-        },
+        { type: "events.iterate.com/account/impersonation-performed", payload },
         caller,
       ),
     ]);
@@ -490,7 +482,8 @@ export class ConsentRpcTarget extends RpcTarget {
    *  Anything else (another app, no project yet, every other session) gets the page. */
   async #testLinkApproval(request: AuthRequest, client: ClientInfo | null) {
     const testLink = this.#grant.testLink;
-    if (!testLink) return null;
+    // an admin always gets the page: it is where "Sign in as someone else…" is
+    if (!testLink || isAdmin(this.#env, this.#grant.email)) return null;
     const returnsTo = new URL(request.redirectUri);
     if (returnsTo.pathname !== "/.auth/callback" || !testLink.clients.includes(returnsTo.origin))
       return null;

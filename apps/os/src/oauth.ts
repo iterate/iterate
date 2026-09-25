@@ -85,6 +85,8 @@ export type Authorization = {
  *  (`refreshTokenIdleTTL`, the library's README "PKCE and token lifecycle"), never past its
  *  `deadline` (`grantLifetime`). */
 const SESSION_IDLE_SECONDS = 7 * 24 * 3600;
+/** An access token's lifetime; `grantLifetime` shortens it to the grant's deadline. */
+const ACCESS_TOKEN_SECONDS = 3600;
 
 /** The provider validates the client, redirect, PKCE and the resource: one of the two the
  * authorization server declares (a request naming none, both, or another is `invalid_target`). We
@@ -339,7 +341,16 @@ export async function recordGrantUse(env: Env, grant: AccessGrant): Promise<void
         type: "events.iterate.com/account/grant-used",
         payload: { grantId: grant.grantId, at: now } satisfies GrantUsed,
       },
-      { principal: { actor: grant.userId, email: grant.email }, grant: grant.grantId },
+      {
+        // an impersonation's use names the admin beside the person, as every event it causes does
+        principal: {
+          actor: grant.userId,
+          email: grant.email,
+          // oxlint-disable-next-line iterate/simple-truthiness-check -- as `authorizationOf`'s principal: only an impersonation carries the key
+          ...(grant.impersonatedBy && { impersonatedBy: grant.impersonatedBy }),
+        },
+        grant: grant.grantId,
+      },
     );
   } catch (error) {
     grantUseRecordedAt.delete(key); // the next use tries again
@@ -407,6 +418,7 @@ function authorizationServer(env: Env, { platformOrigin, api, mcp, userinfo }: P
     clientRegistrationEndpoint: CLIENT_REGISTRATION_ENDPOINT,
     clientIdMetadataDocumentEnabled: true,
     scopesSupported: OAuthScope.options,
+    accessTokenTTL: ACCESS_TOKEN_SECONDS,
     refreshTokenTTL: SESSION_IDLE_SECONDS,
     refreshTokenIdleTTL: SESSION_IDLE_SECONDS,
     tokenExchangeCallback: (input) => grantLifetime(env, input),
@@ -436,14 +448,21 @@ async function authorizationOf(
 ): Promise<Authorization | null> {
   const props = TokenProps.safeParse(token.props);
   if (!props.success || props.data.userId !== token.userId) return null;
-  const grant = { ...props.data, scope: token.scope, expiresAt: token.expiresAt * 1000 };
+  // the deadline bounds the token too (`grantLifetime`), so every check of `expiresAt` — a batch's
+  // calls (rpc.ts), a socket's lease (project-host-lease.ts) — honours it
+  const grant = {
+    ...props.data,
+    scope: token.scope,
+    expiresAt: Math.min(token.expiresAt * 1000, props.data.deadline),
+  };
   const account = await liveGrantAccount(env, grant);
   if (!account) return null;
   return {
     principal: {
       actor: grant.userId,
       email: grant.email,
-      impersonatedBy: grant.impersonatedBy,
+      // oxlint-disable-next-line iterate/simple-truthiness-check -- the principal crosses Cap'n Web and JSON to callers (`whoami`, a project host's header): an `impersonatedBy: undefined` key arrives there as a key, so only an impersonation carries one
+      ...(grant.impersonatedBy && { impersonatedBy: grant.impersonatedBy }),
     },
     reach: grant.scope.includes("admin")
       ? "every"
@@ -537,13 +556,18 @@ async function grantLifetime(
   const remaining = Math.floor((grant.deadline - Date.now()) / 1000);
   // KV's shortest expiry, below which the library refuses a lifetime (`invalid_request`).
   if (remaining < 60) throw refused("deadline_passed", "The session has expired.");
-  const accessTokenProps = { ...grant, grantId: input.grantId };
-  if (remaining >= SESSION_IDLE_SECONDS) return { accessTokenProps };
+  // No access token outlives the deadline either: an hour's impersonation whose code is exchanged
+  // late gets a token that ends with the hour, not the library's hour from the exchange.
+  const token = {
+    accessTokenProps: { ...grant, grantId: input.grantId },
+    accessTokenTTL: Math.min(ACCESS_TOKEN_SECONDS, remaining),
+  };
+  if (remaining >= SESSION_IDLE_SECONDS) return token;
   // The library honors `refreshTokenTTL` only at the code exchange and `refreshTokenIdleTTL` only at
   // a refresh, and refuses either key anywhere else.
   return input.grantType === GrantType.AUTHORIZATION_CODE
-    ? { accessTokenProps, refreshTokenTTL: remaining }
-    : { accessTokenProps, refreshTokenIdleTTL: remaining };
+    ? { ...token, refreshTokenTTL: remaining }
+    : { ...token, refreshTokenIdleTTL: remaining };
 }
 
 /** The env the provider runs over: the worker's, with `OAUTH_KV` the provider's store

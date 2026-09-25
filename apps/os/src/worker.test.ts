@@ -253,6 +253,17 @@ const appConfigRows: {
     },
     throws: /^APP_CONFIG admins \(APP_CONFIG_ADMINS\): not with login\.password/,
   },
+  // …nor beside paths ingress, where a project's own code runs on the issuer's origin
+  {
+    vars: {
+      APP_CONFIG_SECRETS__KEY: "secrets-key",
+      APP_CONFIG_LOGIN__EMAIL_CODE__FROM: "login@example.com",
+      APP_CONFIG_URLS__OS: "https://os.example.com",
+      APP_CONFIG_URLS__INGRESS_ROUTING: '{"type":"paths"}',
+      APP_CONFIG_ADMINS: '["jonas@iterate.com"]',
+    },
+    throws: /^APP_CONFIG admins \(APP_CONFIG_ADMINS\): not with paths ingress routing/,
+  },
   {
     vars: { ...MINIMAL, APP_CONFIG_ADMINS: '["*@iterate.com"]' },
     throws: /admins\.0 .*expected exact email addresses/,

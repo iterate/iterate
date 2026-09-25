@@ -236,8 +236,9 @@ Sessions list it as started by the admin, their account records
 `account/impersonation-started` and the admin's `account/impersonation-performed`
 (both with the grant's id), and the shell shows **Signed in as … / You are …**
 with Stop impersonating. Removing an address from `admins` ends both at its next
-request. `admins` beside `login.password` is refused except on a preview or local
-dev: anyone with the password could sign in as an admin.
+request. `admins` beside `login.password` or paths ingress routing is refused
+except on a preview or local dev: anyone with the password could sign in as an
+admin, and under paths a project's own code runs on the issuer's origin.
 
 The `iterate` CLI (`packages/cli`) takes the bearer from
 `APP_CONFIG_ADMIN_API_SECRET`, ahead of `ITERATE_BEARER_TOKEN` and any stored

@@ -423,12 +423,18 @@ export function parseAppConfig(env: object, deployId = "unversioned"): AppConfig
     throw new Error(
       `${fieldNameOf(["login", "testLink"])}: only for a preview, local dev or a test — urls.os must be a workers.dev, localhost or .test origin, not ${JSON.stringify(urls.os)}`,
     );
-  // Anyone who knows the global password signs in as any email they type — a listed admin's too,
-  // and an admin reaches every project and signs in as anyone. So the two go together only where
-  // nobody's real data lives.
-  if (parsed.admins.length && login.password.exposeSecret() && !isTestLinkOrigin(urls.os))
+  // An admin reaches every project and signs any client in as anyone, so admins go only where
+  // nobody's real data lives beside what could act as one: the global password (anyone who knows it
+  // signs in as any email, a listed admin's too) or paths ingress (a project's own code runs on the
+  // issuer's origin, where the issuer's cookie and its consent page are).
+  const beside = login.password.exposeSecret()
+    ? "login.password"
+    : ingressRouting?.type === "paths"
+      ? "paths ingress routing"
+      : null;
+  if (parsed.admins.length && beside && !isTestLinkOrigin(urls.os))
     throw new Error(
-      `${fieldNameOf(["admins"])}: not with login.password — anyone with the password could sign in as an admin — except for a preview, local dev or a test (urls.os a workers.dev, localhost or .test origin), not ${JSON.stringify(urls.os)}`,
+      `${fieldNameOf(["admins"])}: not with ${beside} except for a preview, local dev or a test (urls.os a workers.dev, localhost or .test origin), not ${JSON.stringify(urls.os)}`,
     );
   // Off a laptop (or a `.test` origin, never public), a link alone signs nobody in: its redeemer proves at another issuer that they
   // are one of `admins.emails` (test-link.ts). A preview's origin is public, and so is its PR body.

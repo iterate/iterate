@@ -531,8 +531,6 @@ export type ConsentAnswer =
       ingressRouting: IngressRouting;
       /** the onboarding step's first draft of an organization name, from the person's name or email */
       suggestedOrganizationName: string;
-      /** for a platform admin only: everyone else's email, what "Sign in as someone else…" offers */
-      people?: string[];
     }
   | {
       /** a client asking only who the person is (the platform's `/oauth2/userinfo` resource) */
@@ -616,7 +614,7 @@ export interface IterateSessionApi {
     approve(input: {
       query: string;
       projects: string[];
-      /** a platform admin's "Sign in as someone else…": the person's email */
+      /** a platform admin's "Sign in as someone else…": the person's user id */
       impersonate?: string;
     }): Promise<{ redirectTo: string } | { error: string }>;
   };
