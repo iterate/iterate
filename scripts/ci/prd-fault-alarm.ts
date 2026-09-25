@@ -559,6 +559,38 @@ async function readWindow(
       ),
     )
   ).flat();
+  // A visitor whose connection to a tunnel's WebSocket vanished without a close frame (a laptop
+  // asleep, a network gone): the edge logs `fetch-upgrade.local-gone` at info, and the runtime
+  // fails that invocation — its pump of the visitor's socket read a dead connection — with
+  // "Network connection lost." and an exception summary in the same ray
+  // (apps/os context/fetch-upgrade-splice.ts). Those two go; any other error in the ray still pages.
+  // Like the answers above, a capped or failed read excludes nothing.
+  const vanishedVisitors = await rows(
+    [{ key: "event", operation: "eq", value: "fetch-upgrade.local-gone", type: "string" }],
+    "$metadata.rayId",
+  ).then(
+    (found) => {
+      const rays = found.map(([rayId]) => rayId).filter(Boolean);
+      const capped = rays.length >= 2000;
+      console.log(
+        JSON.stringify({
+          event: "prd-fault-alarm.vanished-visitor-evidence",
+          rays: rays.length,
+          capped,
+        }),
+      );
+      return capped ? [] : withoutVanishedVisitorFailures(rays);
+    },
+    (error: unknown) => {
+      console.warn(
+        JSON.stringify({
+          event: "prd-fault-alarm.vanished-visitor-classification-failed",
+          error: error instanceof Error ? error.message : String(error),
+        }),
+      );
+      return [];
+    },
+  );
   // Every 5xx pages, so they are counted twice: by URL, and in all. The ones the URL rows miss
   // (no URL logged, or past 2,000 groups) page as `unknown`.
   const readServerErrors = async () => {
@@ -589,6 +621,7 @@ async function readWindow(
       { key: "$metadata.level", operation: "eq", value: "error", type: "string" },
       { key, operation: "neq", value: "", type: "string" },
       ...expectedAnswers,
+      ...vanishedVisitors,
       ...filters,
     ];
     const [errors, apiUnreadBodyErrors] = await Promise.all([
@@ -736,6 +769,50 @@ const EXPECTED_EXPRESSION_FETCH_ANSWERS = [
   { event: "expression-fetch.rpc-stub-offline", status: 502 },
   { event: "expression-fetch.deploy-reset", status: 503 },
 ] as const;
+
+/** Filters keeping every row except, in `rays` (rays whose edge logged `fetch-upgrade.local-gone`),
+ *  the runtime's "Network connection lost." and the invocation's exception summary. One `not_in`
+ *  takes 500 IDs. Pure. */
+function withoutVanishedVisitorFailures(rays: string[]): object[] {
+  const chunks: string[][] = [];
+  for (let start = 0; start < rays.length; start += 500)
+    chunks.push(rays.slice(start, start + 500));
+  return chunks.map((chunk) => ({
+    kind: "group",
+    filterCombination: "or",
+    filters: [
+      { key: "$metadata.rayId", operation: "is_null", type: "string" },
+      { key: "$metadata.rayId", operation: "not_in", value: chunk.join(","), type: "string" },
+      {
+        kind: "group",
+        filterCombination: "and",
+        filters: [
+          {
+            kind: "group",
+            filterCombination: "or",
+            filters: [
+              { key: "$metadata.type", operation: "neq", value: "cf-worker", type: "string" },
+              {
+                key: "$metadata.message",
+                operation: "neq",
+                value: "Network connection lost.",
+                type: "string",
+              },
+            ],
+          },
+          {
+            kind: "group",
+            filterCombination: "or",
+            filters: [
+              { key: "$metadata.type", operation: "neq", value: "cf-worker-event", type: "string" },
+              { key: "$workers.outcome", operation: "neq", value: "exception", type: "string" },
+            ],
+          },
+        ],
+      },
+    ],
+  }));
+}
 
 const WorkerErrorEvent = z.object({
   timestamp: z.number(),
