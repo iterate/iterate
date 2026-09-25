@@ -25,13 +25,13 @@ export default async function deploy(options: {
     withoutRoutes: options.withoutRoutes,
     appRoot: fileURLToPath(new URL("..", import.meta.url)),
     appLabel: "apps/os",
-    envs: { [options.env]: env },
+    name: options.env,
+    env,
     dopplerProject: OS_DOPPLER_PROJECT,
-    env: options.env,
-    workerName: (env) => env.workerName,
-    servingUrl: (env) => env.baseUrl,
+    workerName: env.workerName,
+    servingUrl: env.baseUrl,
     // a per-commit deployment's are created below, by name
-    resources: (env) => env.resources || {},
+    resources: env.resources || {},
     // The private login settings and at-rest key come from Doppler. Public URLs come from envs.ts.
     requiredSecrets: ["APP_CONFIG", "APP_CONFIG_SECRETS__KEY"],
     // The control plane's D1 is migrated before the code that reads it uploads, so a migration that
@@ -51,7 +51,7 @@ export default async function deploy(options: {
         },
       });
     },
-    smokes: (env) => [
+    smokes: [
       { url: `${env.baseUrl}/version`, ok: (status) => status === 200, label: "version" },
       {
         url: `${env.baseUrl}/.well-known/oauth-authorization-server`,

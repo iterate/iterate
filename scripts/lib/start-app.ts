@@ -199,17 +199,16 @@ function workerFirstRoutes(app: StartApp) {
 }
 
 async function deploy(app: StartApp, options: { env: string }) {
+  const env = envNamed(app.envs, options.env);
   await deployApp({
     appRoot: fileURLToPath(app.root),
     appLabel: `apps/${app.name}`,
-    envs: app.envs,
+    name: options.env,
+    env,
     dopplerProject: app.name,
-    env: options.env,
-    workerName: (env) => env.workerName,
-    servingUrl: (env) => env.baseUrl,
-    smokes: (env) => [
-      { url: `${env.baseUrl}/healthz`, ok: (status) => status === 200, label: "health" },
-    ],
+    workerName: env.workerName,
+    servingUrl: env.baseUrl,
+    smokes: [{ url: `${env.baseUrl}/healthz`, ok: (status) => status === 200, label: "health" }],
   });
 }
 

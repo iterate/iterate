@@ -8,7 +8,6 @@ import {
 } from "./deploy-helpers.ts";
 import {
   assertProvisioned,
-  envNamed,
   resolveEnvContext,
   type DeployableEnv,
   type EnvContext,
@@ -17,7 +16,7 @@ import {
 /**
  * THE deploy pipeline — the same top-to-bottom program every app runs:
  *
- *   resolve --env → assert resources provisioned → collect secrets →
+ *   load the env's Doppler secrets → assert resources provisioned → collect secrets →
  *   app-specific prepare (config preflight, synced assets) → vite build → deploy
  *   code+secrets in one version → smoke-probe → afterDeploy → ✅
  *
@@ -36,16 +35,16 @@ export async function deployApp<E extends DeployableEnv>(input: {
   appRoot: string;
   /** e.g. "apps/os" — used in log lines. */
   appLabel: string;
-  /** The app's env map from the root envs.ts. */
-  envs: Record<string, E>;
+  /** The env's name (the deploy script's --env flag): the build's CLOUDFLARE_ENV. */
+  name: string;
+  /** Its envs.ts entry, which the deploy script looked up by that name. */
+  env: E;
   dopplerProject: string;
-  /** Target environment name from envs.ts (the deploy script's --env flag). */
-  env: string;
-  workerName: (env: E) => string;
+  workerName: string;
   /** Public origin for the final success line. */
-  servingUrl: (env: E) => string;
+  servingUrl: string;
   /** Resource-ID map to assert provisioned (omit when the app owns none). */
-  resources?: (env: E) => Record<string, string>;
+  resources?: Record<string, string>;
   /** Secret names the deploy fails without; each ships with the code. */
   requiredSecrets?: readonly string[];
   /**
@@ -61,7 +60,7 @@ export async function deployApp<E extends DeployableEnv>(input: {
   ) => Promise<void> | void;
   /** Runs after a healthy deploy. */
   afterDeploy?: (ctx: EnvContext<E>, secretValues: Record<string, string>) => Promise<void> | void;
-  smokes: (env: E) => {
+  smokes: {
     url: string;
     /** Which HTTP statuses count as healthy for this probe. */
     ok: (status: number) => boolean;
@@ -81,14 +80,13 @@ export async function deployApp<E extends DeployableEnv>(input: {
   withoutRoutes?: boolean;
 }) {
   const ctx = await resolveEnvContext({
-    name: input.env,
-    env: envNamed(input.envs, input.env),
+    name: input.name,
+    env: input.env,
     dopplerProject: input.dopplerProject,
   });
-  if (input.resources) assertProvisioned(ctx.name, input.resources(ctx.env));
-  const workerName = input.workerName(ctx.env);
+  if (input.resources) assertProvisioned(ctx.name, input.resources);
   console.log(
-    `Deploying ${input.appLabel} to ${ctx.name} (worker ${workerName}, account ${ctx.env.cloudflareAccountId})`,
+    `Deploying ${input.appLabel} to ${ctx.name} (worker ${input.workerName}, account ${ctx.env.cloudflareAccountId})`,
   );
 
   const credentials = {
@@ -102,18 +100,18 @@ export async function deployApp<E extends DeployableEnv>(input: {
   if (input.withoutRoutes) {
     const config = JSON.parse(readFileSync(builtConfig, "utf8"));
     writeFileSync(builtConfig, JSON.stringify({ ...config, routes: [] }));
-    console.log(`Deploying ${workerName} without its ${config.routes?.length ?? 0} routes`);
+    console.log(`Deploying ${input.workerName} without its ${config.routes?.length ?? 0} routes`);
   }
 
   await deployWithSecrets({ cwd: input.appRoot, builtConfig, secretValues, credentials });
 
   if (input.withoutRoutes)
-    console.log(`smokes skipped: ${input.servingUrl(ctx.env)} still routes to another Worker`);
+    console.log(`smokes skipped: ${input.servingUrl} still routes to another Worker`);
   else
-    for (const probe of input.smokes(ctx.env)) {
+    for (const probe of input.smokes) {
       await smoke(probe.url, probe.ok, probe.label);
     }
   await input.afterDeploy?.(ctx, secretValues);
 
-  console.log(`✅ ${ctx.name} deployed and serving at ${input.servingUrl(ctx.env)}`);
+  console.log(`✅ ${ctx.name} deployed and serving at ${input.servingUrl}`);
 }
