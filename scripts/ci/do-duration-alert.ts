@@ -395,8 +395,7 @@ async function findOrCreateHeadline(input: {
  * first run, rewritten in place on every run after. Recognised among the
  * bot's replies by every cell of the table's header row — never the joined
  * row: the table pads cells into columns, so the joined header never appears
- * verbatim, and until 2026-09-23 every run posted a fresh table (24 replies a
- * day, burying the alerts).
+ * verbatim.
  */
 export async function upsertDetailsReply(input: {
   slack: WebClient;

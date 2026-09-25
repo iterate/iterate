@@ -31,8 +31,9 @@ export default {
       entry: ["configs/*/worker.ts", "configs/*/*/index.ts"],
       project: ["*.ts", "specs/**/*.ts", "configs/**/*.{ts,js}"],
       ignoreDependencies: [
-        // The .depot/workflows steps run this bin from the root.
+        // The .depot/workflows steps run these bins from the root (`pnpm tsx scripts/ci/…`).
         "trpc-cli",
+        "tsx",
         // The `iterate` bin: `pnpm exec iterate` from the root (docs/dev-environments.md).
         "@iterate-com/cli",
         // `cloudflare:workers` parses as the "cloudflare" package.

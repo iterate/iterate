@@ -87,7 +87,7 @@ test("setup reads the stored consent identity; query parameters cannot change it
   ).toBe(401);
 });
 
-test("generic login and old firmware bookmarks return to device selection without starting generic consent", async () => {
+test("the generic login returns to device selection without starting generic consent", async () => {
   const f = fixture();
   const response = await deviceAuth(
     new Request(`${origin}/.auth/login?next=/devices/satellite1/firmware/latest`),

@@ -1,6 +1,5 @@
 // `pnpm getin` — one command to a browser signed in to this worktree's local platform, inside a
-// project that exists. It restores #1760's `pnpm getin` (removed with the legacy platform in #2837)
-// on today's one-click sign-in link (apps/os/src/test-link.ts, #2966), which local dev enables:
+// project that exists, through the one-click sign-in link (src/test-link.ts) that local dev enables:
 //
 //   pnpm getin                    # signed in as test@preview.iterate.test, in project `test`
 //   pnpm -s getin --print         # only the URL, on stdout — for Playwright and agents
@@ -8,8 +7,8 @@
 //                                 # stdout: their bearer at /api, /mcp and the project's hosts
 //   pnpm getin -e ada@preview.iterate.test -p demo
 //
-// 1. the worktree's dev server: `pnpm dev start --detach` (apps/os/scripts/dev.ts), which returns at
-//    once when it is already up, then its record, apps/os/.wrangler/dev-server.json;
+// 1. the worktree's dev server: `pnpm dev start --detach` (scripts/dev.ts), which returns at
+//    once when it is already up, then its record, .wrangler/dev-server.json;
 // 2. the person and their project: `projects.create` as them through the local operator bearer —
 //    the same idempotent call as preview.ts `previewSignIn` and e2e's `registerProject`, so a second
 //    run reuses both;
@@ -17,16 +16,17 @@
 //    Dash's project page when a Dash wired to this server is up (and pre-approving it: no Allow
 //    page), else on the issuer's `/login` ("Signed in as");
 // 4. open it, or print it; or, for `--token`, sign the person in with local dev's password and
-//    mint them a personal access token for the project (apps/os/src/grants.ts `mint`), 30 days.
+//    mint them a personal access token for the project (src/grants.ts `mint`), 30 days.
 //
-// Local dev only: the credentials are local dev's (apps/os/scripts/generate-wrangler-config.ts
+// Local dev only: the credentials are local dev's (scripts/generate-wrangler-config.ts
 // `viteWranglerConfig`); a deployment answers the link's `aud` with a 403, prd with a 404.
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import process from "node:process";
 import { newHttpBatchRpcSession, newWebSocketRpcSession } from "capnweb";
 import { createCli } from "trpc-cli";
-import { mintTestLink, TEST_LINK_EMAIL_DOMAIN, TEST_LINK_PATH } from "../apps/os/src/test-link.ts";
+import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
+import { mintTestLink, TEST_LINK_EMAIL_DOMAIN, TEST_LINK_PATH } from "../src/test-link.ts";
 
 /** Open a browser signed in to local OS, in a project — starting the dev server and creating the project when missing */
 export default async function getin(
@@ -52,7 +52,7 @@ export default async function getin(
   if (!local || domain !== TEST_LINK_EMAIL_DOMAIN)
     throw new Error(`--email must be an address under ${TEST_LINK_EMAIL_DOMAIN}, not ${email}`);
   const project = options.project || local;
-  const os = new URL("../apps/os/", import.meta.url);
+  const os = new URL("..", import.meta.url);
 
   // Everything but the URL goes to stderr, so `pnpm -s getin --print` prints the URL alone.
   const started = spawnSync("pnpm", ["dev", "start", "--detach"], {
@@ -171,4 +171,4 @@ async function localDash(origin: string, issuer: string) {
     : null;
 }
 
-void createCli({ ...import.meta, name: "getin" }).run();
+if (isMainModule(import.meta.url)) void createCli({ ...import.meta, name: "getin" }).run();

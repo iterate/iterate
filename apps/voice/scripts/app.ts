@@ -1,3 +1,4 @@
+import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
 import { voiceEnvs } from "../../../envs.ts";
 import { startAppCli } from "../../../scripts/lib/start-app.ts";
 
@@ -7,4 +8,4 @@ export const voice = {
   root: new URL("..", import.meta.url),
   envs: voiceEnvs,
 };
-if (process.argv[1]?.endsWith("app.ts")) void startAppCli(voice).run();
+if (isMainModule(import.meta.url)) void startAppCli(voice).run();

@@ -12,8 +12,7 @@
 // normal variance never crosses it: a crossing is a regression, not weather. CALIBRATION,
 // 2026-09-24, the worker of main bd7f3f91b: `pnpm perf` against a fresh throwaway preview per run,
 // 5 runs from a laptop in London and 3 from Depot (the guard's own workflow, dispatched);
-// `calibration` is the judged median's range in ms (events/s for the rate) across each set. The
-// push and rule budgets are the e2e rows' own until #2977.
+// `calibration` is the judged median's range in ms (events/s for the rate) across each set.
 
 export const LATENCY_METRICS = {
   // ── concurrent project creation (perf/project-creation.perf.test.ts) ──
@@ -117,7 +116,7 @@ export const LATENCY_METRICS = {
     budget: 3_000,
     calibration: "laptop 389–935, Depot 403–569",
   },
-  // ── rule invocation (perf/rewrite-rules.perf.test.ts, rewrite-rules.e2e's budget until #2977) ──
+  // ── rule invocation (perf/rewrite-rules.perf.test.ts) ──
   "rules.300.newest": {
     file: "perf/rewrite-rules.perf.test.ts",
     sample: "invoking the newest of 300 rewrite rules",
@@ -132,7 +131,7 @@ export const LATENCY_METRICS = {
     budget: 150,
     calibration: "laptop 20.9–39.1, Depot 21.6–70.2",
   },
-  // ── stream fan-out (perf/push-delivery.perf.test.ts, push-delivery.e2e's budgets until #2977) ──
+  // ── stream fan-out (perf/push-delivery.perf.test.ts) ──
   "push.flood.p50": {
     file: "perf/push-delivery.perf.test.ts",
     sample: "a flood round's median append→callback latency (2000 ephemerals, one subscriber)",

@@ -5,6 +5,7 @@
   "description": "OS: the Iterate platform Worker and its TanStack Start issuer pages",
   "scripts": {
     "dev": "tsx scripts/dev.ts",
+    "getin": "tsx scripts/getin.ts",
     "build": "tsx scripts/build.ts && vite build",
     "deploy": "tsx scripts/deploy.ts",
     "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.tests.json && tsc --noEmit -p tsconfig.scripts.json",
