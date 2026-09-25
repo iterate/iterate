@@ -40,35 +40,16 @@ import type { StreamEvent } from "iterate/stream/processor";
 import type { AlarmTrace } from "../src/iterate-context-durable-object.ts";
 import {
   adminCredentials,
+  COUNTER_SOURCE,
   Echo,
   openSession,
   owedAlarmOf,
+  readLog,
   releasePins,
+  snapshot,
   stub,
   until,
 } from "./support.ts";
-
-/** A tiny userspace processor: counts every durable event. The tally fixture's shape
- *  (e2e/support/sources.ts), reduced to one number — the pure `CounterProcessor` plus its host
- *  `CounterDurableObject`, which is what the load chain names. */
-const COUNTER_SRC = /* js */ `
-import { StreamProcessor, StreamProcessorDurableObject, defineProcessorContract, z } from "iterate/sdk";
-const contract = defineProcessorContract({
-  slug: "counter",
-  version: "1.0.0",
-  description: "counts durable events",
-  stateSchema: z.object({ n: z.number().default(0) }),
-  consumes: ["*"],
-  emits: [],
-});
-class CounterProcessor extends StreamProcessor {
-  contract = contract;
-  reduce({ state }) { return { n: state.n + 1 }; }
-}
-export class CounterDurableObject extends StreamProcessorDurableObject {
-  processor = new CounterProcessor();
-}
-`;
 
 // ─────────── THE RELEASE (`releasePins`, run directly by these tests), and what survives the eviction it enables ───────────
 
@@ -179,9 +160,10 @@ test("a facet TWO rows host survives the removal of ONE of them — memo and sto
     type: "events.iterate.com/itx/subscription-configured",
     payload: { name: "a", target: null },
   });
-  const core = (await context.invoke("itx.facets.get('core').snapshot()")) as {
-    state: { subscriptions: Record<string, unknown> };
-  };
+  const core = await snapshot<{ subscriptions: Record<string, unknown> }>(
+    "prj_shared_facet",
+    "core",
+  );
   expect(Object.keys(core.state.subscriptions)).toEqual(["b"]);
   // The startup memo row "b" depends on, and the facet's own storage, are both still there.
   const memo = await runInDurableObject(context, (_instance, state) =>
@@ -215,7 +197,7 @@ test("RE-ENABLE WITH NEW SOURCE: a materialized processor re-enabled under the s
           "get",
           "counter",
           {
-            source: { "worker.js": COUNTER_SRC.replace("state.n + 1", "state.n + 10") },
+            source: { "worker.js": COUNTER_SOURCE.replace("state.n + 1", "state.n + 10") },
             className: "CounterDurableObject",
           },
         ],
@@ -269,11 +251,7 @@ test("AN OBSERVED PASS: an exact waitForEvent observer receives one ephemeral tr
   const trace = await observed;
   expect(trace).toMatchObject({ type: "events.iterate.com/itx/alarm-trace", ephemeral: true });
   expect(trace.payload).toMatchObject({ reason: "alarm-fired", dueSchedules: 1 });
-  const ring = (
-    (await s.invoke(["itx", ["readEvents", 0, 500, { includeEphemeral: true }]])) as {
-      events: StreamEvent[];
-    }
-  ).events
+  const ring = (await readLog(ctx, { includeEphemeral: true }))
     .filter((event) => event.type === "events.iterate.com/itx/alarm-trace")
     .map((event) => event.payload as unknown as AlarmTrace);
   expect(ring.map((t) => t.reason)).toEqual(["alarm-fired", "alarm-pass"]);
@@ -335,9 +313,7 @@ test("A '*' FACET WAKE OWES NOTHING: a facet-hosting context owes no alarm after
   await until("no alarm owed", async () => (await owedAlarmAt(ctx)) === null);
   expect(await owedAlarmAt(ctx)).toBeNull(); // the live facet is owed nothing: it is not a pin
   const wokens = async () =>
-    ((await s.invoke(["itx", ["readEvents", 0, 500]])) as { events: StreamEvent[] }).events.filter(
-      (event) => event.type === "events.iterate.com/itx/woken",
-    );
+    (await readLog(ctx)).filter((event) => event.type === "events.iterate.com/itx/woken");
   const before = (await wokens()).length;
   // A due schedule fires into an evicted actor: the fresh incarnation's wake record materializes
   // the counter for the push, and the pass arms nothing for it. (An alarm with nothing durable due
@@ -371,9 +347,7 @@ test("A WAKE MAKES NO LOOP: an incarnation the alarm woke ends with no alarm —
   await s.invoke("itx.schedules.list()"); // born: created, woken
   await until("no alarm", async () => (await owedAlarmAt(ctx)) === null);
   const wokens = async () =>
-    ((await s.invoke(["itx", ["readEvents", 0, 500]])) as { events: StreamEvent[] }).events.filter(
-      (event) => event.type === "events.iterate.com/itx/woken",
-    );
+    (await readLog(ctx)).filter((event) => event.type === "events.iterate.com/itx/woken");
   const before = (await wokens()).length;
   // A due schedule (set on the quiet incarnation, which is then evicted) fires for real and wakes a
   // FRESH incarnation, whose wake record says so. (An alarm with nothing durable due — a stray one a
@@ -414,11 +388,9 @@ test("A BORROW ARMS NOTHING: the first call through a stub — a live '*' subscr
   await new Promise((r) => setTimeout(r, 800)); // an alarm armed for the borrow would show by now
   await until("no alarm owed", async () => (await owedAlarmAt(ctx)) === null);
   expect(await owedAlarmAt(ctx)).toBeNull();
-  const ring = (
-    (await stub(ctx).invoke(["itx", ["readEvents", 0, 500, { includeEphemeral: true }]])) as {
-      events: StreamEvent[];
-    }
-  ).events.filter((event) => event.type === "events.iterate.com/itx/alarm-trace");
+  const ring = (await readLog(ctx, { includeEphemeral: true })).filter(
+    (event) => event.type === "events.iterate.com/itx/alarm-trace",
+  );
   expect(ring).toEqual([]); // no pass ran: nothing was due
 });
 test("A BORROW RACES THE RELEASE: a stub invoke fired concurrently with the pins' release still answers", async () => {
@@ -575,18 +547,14 @@ test("ALARM PUMPS CURSOR DELIVERY: a failed at-least-once delivery is retried fr
  *  into an empty schedule. */
 const owedAlarmAt = async (ctx: string): Promise<number | null> => owedAlarmOf(stub(ctx));
 
-type FacetSnap = { offset: number; state: { n: number } };
-function snapCounter(ctx: string, name = "counter") {
-  return stub(ctx).invoke(["itx", "facets", ["get", name], ["snapshot"]]) as Promise<FacetSnap>;
-}
+const snapCounter = (ctx: string) => snapshot<{ n: number }>(ctx, "counter");
 
 // The number of DURABLE events a "*" consumer sees (read is durable-only; every incarnation's wake
 // record is one of them). CounterProcessor consumes "*", so its `n` equals this — the exact-once
 // invariant. (Not `n === offset`: every processor's live-state delta is an ephemeral that consumes
 // an offset, so a durable event's offset exceeds the count of durable events before it.)
 async function durableCount(ctx: string): Promise<number> {
-  return ((await stub(ctx).invoke(["itx", ["readEvents", 0, 500]])) as { events: unknown[] }).events
-    .length;
+  return (await readLog(ctx)).length;
 }
 
 /** The `itx.processors.enable(name, { source, className })` root, spelled raw at the DO's `invoke`: ONE
@@ -602,7 +570,11 @@ async function enableCounter(ctx: string, name = "counter"): Promise<void> {
       target: [
         "itx",
         "facets",
-        ["get", name, { source: { "worker.js": COUNTER_SRC }, className: "CounterDurableObject" }],
+        [
+          "get",
+          name,
+          { source: { "worker.js": COUNTER_SOURCE }, className: "CounterDurableObject" },
+        ],
         "processEventBatch",
       ],
     },

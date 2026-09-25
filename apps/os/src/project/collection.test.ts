@@ -131,9 +131,5 @@ function fakeContext(
 }
 
 function spy(level: "warn") {
-  const logged = vi.spyOn(console, level).mockImplementation(() => {});
-  onTestFinished(() => {
-    logged.mockRestore();
-  });
-  return logged;
+  return vi.spyOn(console, level).mockImplementation(() => {});
 }

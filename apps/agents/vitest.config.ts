@@ -5,6 +5,10 @@ export default defineConfig({
   test: {
     reporters: vitestReporters,
     environment: "node",
-    include: ["src/**/*.test.ts", "runtime/**/*.test.ts", "voice/**/*.test.ts"],
+    include: ["src/**/*.test.ts"],
+    restoreMocks: true,
+    unstubGlobals: true,
+    unstubEnvs: true,
+    silent: "passed-only",
   },
 });

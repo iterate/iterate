@@ -14,7 +14,7 @@
 // a hosted processor SDK facet. Long by nature: ~70 s.
 
 import { expect, test } from "vitest";
-import { stub, until } from "./support.ts";
+import { readLog, stub, until } from "./support.ts";
 
 /** FACET_CALL_WATCHDOG_MS (not exported — a copy, so a change to the constant shows up here). */
 const WATCHDOG_MS = 60_000;
@@ -143,9 +143,7 @@ test(
     const [checkpoint] = healed.checkpoints;
     expect(checkpoint?.slug).toBe(name);
     // Every durable event, each incarnation's wake record included: what a "*" row sees.
-    const durableEvents = (
-      (await stub(ctx).invoke(["itx", ["readEvents", 0, 500]])) as { events: unknown[] }
-    ).events.length;
+    const durableEvents = (await readLog(ctx)).length;
     expect(JSON.parse(checkpoint!.state)).toEqual({ n: durableEvents });
 
     // And the row is live: the next append lands as an ordinary push, once.

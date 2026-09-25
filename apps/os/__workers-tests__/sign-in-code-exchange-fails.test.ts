@@ -6,7 +6,7 @@
 // Durable Object reset, so a sign-in during a deploy does not fail at all.
 import { createExecutionContext } from "cloudflare:test";
 import { env, exports } from "cloudflare:workers";
-import { expect, onTestFinished, test, vi } from "vitest";
+import { expect, test, vi } from "vitest";
 import { platformAddressesOf } from "../src/app-config.ts";
 import { authorizationServerFetch } from "../src/oauth.ts";
 import { clearLoginCookie } from "../src/password-and-code-sign-in.ts";
@@ -14,7 +14,7 @@ import { authorizationRequest, helpers } from "./oauth-support.ts";
 import { controlPlane, loginPassword, ORIGIN } from "./support.ts";
 
 test("a code exchange that times out sends the person back to the sign-in page with the error, logged as a platform failure", async () => {
-  const fetches = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+  vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
     const request = new Request(input, init);
     const url = new URL(request.url);
     if (url.origin !== ORIGIN) throw new Error(`Unexpected external fetch: ${url}`);
@@ -24,10 +24,6 @@ test("a code exchange that times out sends the person back to the sign-in page w
     return exports.default.fetch(request);
   });
   const warn = vi.spyOn(console, "warn");
-  onTestFinished(() => {
-    fetches.mockRestore();
-    warn.mockRestore();
-  });
 
   const response = await exports.default.fetch(
     new Request(`${ORIGIN}/login`, {
@@ -64,9 +60,6 @@ test("a code exchange that times out sends the person back to the sign-in page w
 
 test("a token endpoint that answers a 500 sends the person back to the sign-in page with the error, logged as a platform failure", async () => {
   const warn = vi.spyOn(console, "warn");
-  onTestFinished(() => {
-    warn.mockRestore();
-  });
   const response = await signInWhile("failing-exchange@example.com", async () =>
     Response.json({ error: "server_error" }, { status: 500 }),
   );
@@ -83,9 +76,6 @@ test("a token endpoint that answers a 500 sends the person back to the sign-in p
 
 test("a token endpoint whose answer is no OAuth response at all (an uncaught exception) is the same platform failure", async () => {
   const warn = vi.spyOn(console, "warn");
-  onTestFinished(() => {
-    warn.mockRestore();
-  });
   // what the token endpoint answers when its grant check throws: no OAuth error body, which
   // oauth4webapi reads as "not a conform Token Endpoint response"
   const response = await signInWhile(
@@ -163,9 +153,6 @@ test("the token endpoint rides out a deploy's reset of the person's Durable Obje
     );
   };
   const warn = vi.spyOn(console, "warn");
-  onTestFinished(() => {
-    warn.mockRestore();
-  });
   const healed = await exchange(1);
   expect(healed, await healed.clone().text()).toMatchObject({ status: 200 });
   // a deploy's reset is expected, never a platform failure the prd fault alarm counts
@@ -181,15 +168,12 @@ test("the token endpoint rides out a deploy's reset of the person's Durable Obje
 
 /** A password sign-in's POST /login, its token endpoint answered by `tokenEndpoint`. */
 async function signInWhile(email: string, tokenEndpoint: () => Promise<Response>) {
-  const fetches = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+  vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
     const request = new Request(input, init);
     const url = new URL(request.url);
     if (url.origin !== ORIGIN) throw new Error(`Unexpected external fetch: ${url}`);
     if (url.pathname === "/oauth2/token") return tokenEndpoint();
     return exports.default.fetch(request);
-  });
-  onTestFinished(() => {
-    fetches.mockRestore();
   });
   return exports.default.fetch(
     new Request(`${ORIGIN}/login`, {

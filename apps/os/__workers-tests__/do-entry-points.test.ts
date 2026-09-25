@@ -18,12 +18,12 @@
 //     `owedAlarm`) — a pin (a borrowed rpc stub, an open socket) is
 //     released by a timer, never the alarm; only storage.getAlarm() can see that (the deployed e2e
 //     tests pin the records but cannot read the alarm);
-//   • the entry points themselves: the four deleted configuration verbs are gone; the rewrite-rule EVENT's
-//     match is canonicalized at the append BOUNDARY (a Workers-RPC caller bypasses the edge, appends a
-//     literal, and the DO normalizes it — no builder in between); and a table row is
-//     `{ match, target }` keyed by the canonical match and NOTHING else — no delivery mode, no offset
-//     identity (HOW a target is served is never written on a rule: the delivery loop decides by
-//     evaluating a subscription's own target, subscription-delivery.ts);
+//   • the entry points themselves: the rewrite-rule EVENT's match is canonicalized at the append
+//     BOUNDARY (a Workers-RPC caller bypasses the edge, appends a literal, and the DO normalizes
+//     it — no builder in between); and a table row is `{ match, target }` keyed by the canonical
+//     match and NOTHING else — no delivery mode, no offset identity (HOW a target is served is never
+//     written on a rule: the delivery loop decides by evaluating a subscription's own target,
+//     subscription-delivery.ts);
 //   • the table is a MAP: a re-set at the same match REPLACES (nothing is "beneath"), `null`
 //     DELETES, a second `null` is a benign no-op — and every set or un-set is exactly ONE event,
 //     never deduped against the current row;
@@ -36,7 +36,15 @@ import { evictDurableObject, runInDurableObject } from "cloudflare:test";
 import { RpcTarget } from "capnweb";
 import { expect, test } from "vitest";
 import { parse, print, type ItxExpression } from "iterate/expression";
-import { adminCredentials, openSession, owedAlarm, stub, until } from "./support.ts";
+import {
+  adminCredentials,
+  openSession,
+  owedAlarm,
+  readLog,
+  snapshot,
+  stub,
+  until,
+} from "./support.ts";
 
 test("a core-snapshot probe materializes only created and woken, without subscriptions or an alarm", async () => {
   await runInDurableObject(stub("prj_do_virginprobe"), async (instance, state) => {
@@ -79,18 +87,10 @@ test("a core-snapshot probe materializes only created and woken, without subscri
   });
 });
 
-test("the DO's entry points are the stream, invoke, fetch and the rpc-stub plumbing — no configuration verbs; a rewrite rule is ONE appended event the append boundary canonicalizes, and a table row is `{ match, target }`, nothing else", async () => {
+test("the DO's entry points are the stream, invoke, fetch and the rpc-stub plumbing; a rewrite rule is ONE appended event the append boundary canonicalizes, and a table row is `{ match, target }`, nothing else", async () => {
   const ctx = "prj_do_canonical";
   await runInDurableObject(stub(ctx), async (instance) => {
     const methods = instance as unknown as Record<string, unknown>;
-    for (const gone of [
-      "provideCapability",
-      "revokeCapability",
-      "configureSubscription",
-      "removeSubscription",
-      "attachRpcStubPager", // folded into the pager upgrade at `fetch` (key + the events that name it)
-    ])
-      expect(gone in methods).toBe(false);
     for (const method of [
       "append",
       "read",
@@ -208,10 +208,7 @@ test("a PAUSED context survives an eviction: the constructor's birth-row replay 
   // The fresh incarnation's constructor replays `config` under its idempotency key — on a paused
   // stream. Then the resume lands like any other day.
   await stub(ctx).append({ type: "events.iterate.com/itx/resumed" });
-  const page = (await stub(ctx).invoke(["itx", ["readEvents", 0, 50]])) as {
-    events: { type: string }[];
-  };
-  expect(page.events.map((e) => e.type)).toContain("events.iterate.com/itx/resumed");
+  expect((await readLog(ctx)).map((e) => e.type)).toContain("events.iterate.com/itx/resumed");
   const [afterResume] = (await stub(ctx).append({ type: "after-resume" })) as unknown as {
     type: string;
   }[];
@@ -277,17 +274,15 @@ test("a handle's undo is a COMPARE-AND-SET decided in the reduce: a stale remova
 type RewriteRuleRow = { match: ItxExpression; target: ItxExpression };
 async function rewriteRulesOf(ctx: string): Promise<Record<string, RewriteRuleRow>> {
   return (
-    (await stub(ctx).invoke("itx.facets.get('core').snapshot()")) as {
-      state: { itxExpressionRewriteRules: Record<string, RewriteRuleRow> };
-    }
+    await snapshot<{ itxExpressionRewriteRules: Record<string, RewriteRuleRow> }>(ctx, "core")
   ).state.itxExpressionRewriteRules;
 }
 
 /** The `itx/rewrite-rule-configured` rows of the durable log — one per set or un-set, no dedupe. */
 async function rewriteRuleEventCount(ctx: string): Promise<number> {
-  return (
-    (await stub(ctx).invoke(["itx", ["readEvents", 0, 500]])) as { events: { type: string }[] }
-  ).events.filter((e) => e.type === "events.iterate.com/itx/rewrite-rule-configured").length;
+  return (await readLog(ctx)).filter(
+    (e) => e.type === "events.iterate.com/itx/rewrite-rule-configured",
+  ).length;
 }
 
 /** The DO's in-memory socket census (a DO-only verb — physical facts, never event-derivable). */

@@ -27,7 +27,7 @@ shared closure state and lifecycle hooks grow. Put the group in the title
 (`"session teardown: a handle disposes only what it registered"`) or a
 `// ── section ──` comment.
 
-- **Rows that must run in order.** `pnpm e2e` runs every file's tests
+- **Rows that must run in order.** `pnpm os e2e` runs every file's tests
   concurrently (`--sequence.concurrent`). Rows that share state they also
   measure or reset (one seeded context) are `test.sequential(...)`, and a table
   of them is `test.sequential.for(rows)(...)`. Sequential rows run one at a time,
@@ -49,11 +49,14 @@ shared closure state and lifecycle hooks grow. Put the group in the title
   where the helper returns an object with `[Symbol.dispose]` or
   `[Symbol.asyncDispose]`. Several resources go on one `AsyncDisposableStack`.
   The lint tests here (`createOxlintFixture`) are the model.
-- **Vitest globals** (fake timers, `vi.stubGlobal`, `vi.stubEnv`, `vi.spyOn`)
-  are restored per test with `onTestFinished(...)` inside the test that changed
-  them (`vi.useRealTimers()`, `vi.unstubAllGlobals()`, `vi.unstubAllEnvs()`,
-  `spy.mockRestore()`). Only apps/kit's config restores them itself
-  (`unstubGlobals`, `restoreMocks`).
+- **Vitest globals.** Every vitest config (and the os unit and workers
+  projects) sets `restoreMocks`, `unstubGlobals` and `unstubEnvs`, so each test
+  starts with the last one's `vi.spyOn` spies, `vi.stubGlobal` globals and
+  `vi.stubEnv` variables restored; a test does not restore them itself. Fake
+  timers are not restored by config: a test that calls `vi.useFakeTimers()`
+  restores them with `onTestFinished(() => void vi.useRealTimers())`. The os e2e
+  project sets none of them, since its rows run concurrently and a restore
+  before one row would undo a sibling's.
 - **Setup every file of a suite needs** (the os e2e suite's
   `setupFiles: ["./e2e/support/setup.ts"]`, which injects the shared worker's
   URL and disposes each test's sessions) belongs in that suite's `setupFiles`.
@@ -68,9 +71,10 @@ code against a module that does not exist. Pass the dependency in instead: a
 argument (`apps/os/src/context/rpc-stubs.test.ts` injects its `waitUntil`).
 `vi.fn()`, `vi.spyOn(...)` and `vi.stubGlobal(...)` are not module mocks.
 
-For `cloudflare:workers`: the os unit project aliases it to
-[`src/test/cloudflare-workers-shim.ts`](../apps/os/src/test/cloudflare-workers-shim.ts),
-and Start's generated server entry to a stand-in page
+For `cloudflare:workers`: the os unit project, dummy-petshop and packages/iterate
+alias it to
+[`cloudflare-workers-shim.ts`](../packages/shared/src/test-support/cloudflare-workers-shim.ts),
+and the os unit project aliases Start's generated server entry to a stand-in page
 ([`src/test/start-server-entry-shim.ts`](../apps/os/src/test/start-server-entry-shim.ts)).
 A module whose only platform dependency is a base class (`RpcTarget`,
 `WorkerEntrypoint`, `DurableObject`) loads in node with no `vi.mock` in the

@@ -1,4 +1,4 @@
-// src/client/presence/contract.ts — THE PRESENCE PROCESSOR'S CONTRACT (processor.ts is the pure reduce,
+// e2e/support/presence/contract.ts — THE PRESENCE PROCESSOR'S CONTRACT (processor.ts is the pure reduce,
 // durable-object.ts the loadable host), and the only place its events are spelled. Every type is
 // derived here: `PresenceState = ProcessorState<typeof PresenceContract>` is the reduced state below.
 //

@@ -5,9 +5,8 @@
 import { evictDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import { expect, test } from "vitest";
-import type { StreamEvent } from "iterate/stream/processor";
 import { DurableObjectNameCodec } from "../src/context/paths.ts";
-import { adminCredentials, openSession, refused, stub } from "./support.ts";
+import { adminCredentials, openSession, readLog, refused, stub } from "./support.ts";
 
 test("the sweep identifies a context by id without waking its ancestors, refuses an id nothing was born at, and destroys only an orphan", async () => {
   const admin = (await openSession()).authenticate(adminCredentials());
@@ -24,7 +23,7 @@ test("the sweep identifies a context by id without waking its ancestors, refuses
 
   // by id: who each is, and nothing recorded on the orphan (no wake, so no announcement)
   await evictDurableObject(stub(`${orphanProject}.iterate/x`));
-  const before = (await eventsOf(orphanProject, "/x")).length;
+  const before = (await readLog(`${orphanProject}.iterate/x`)).length;
   await evictDurableObject(stub(`${orphanProject}.iterate/x`));
   const identified = await admin.contexts.identify([
     orphan,
@@ -44,7 +43,7 @@ test("the sweep identifies a context by id without waking its ancestors, refuses
   // evicted again, so this read is a fresh incarnation recording one wake; had `identify` recorded
   // one in its own incarnation, the log would hold two more
   await evictDurableObject(stub(`${orphanProject}.iterate/x`));
-  expect(await eventsOf(orphanProject, "/x")).toHaveLength(before + 1);
+  expect(await readLog(`${orphanProject}.iterate/x`)).toHaveLength(before + 1);
 
   // only the orphan is destroyed
   await refused(() => admin.contexts.destroy(idOf(liveProject, "/y")), "FORBIDDEN", /still exists/);
@@ -62,15 +61,9 @@ test("the sweep identifies a context by id without waking its ancestors, refuses
   });
   expect((await live.whoami()) as { projectId: string }).toMatchObject({ projectId: liveProject });
   expect(
-    (await eventsOf(orphanProject, "/x")).filter((event) => event.type === "test/marker"),
+    (await readLog(`${orphanProject}.iterate/x`)).filter((event) => event.type === "test/marker"),
   ).toEqual([]);
 });
 
 const idOf = (projectId: string, path: string) =>
   env.ITERATE_CONTEXT.idFromName(DurableObjectNameCodec.stringify({ projectId, path })).toString();
-
-/** A context's durable log, read by name (a destroyed one is born again, empty). */
-async function eventsOf(projectId: string, path: string): Promise<StreamEvent[]> {
-  const page = await stub(`${projectId}.iterate${path}`).read(0, 500);
-  return (page as unknown as { events: StreamEvent[] }).events;
-}

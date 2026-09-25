@@ -3,19 +3,17 @@
 // someone else, through the real sign-in, consent, code exchange and admission.
 import { env } from "cloudflare:workers";
 import { expect, test, vi } from "vitest";
-import type { StreamEvent } from "iterate/stream/processor";
 import { platformAddressesOf } from "../src/app-config.ts";
 import { authorizationForToken } from "../src/oauth.ts";
 import {
   actingAs,
   authorizationRequest,
   call,
-  fetchReachesThisWorker,
   helpers,
   issuerApprover,
   rpc,
 } from "./oauth-support.ts";
-import { controlPlane, loginPassword, ORIGIN, stub } from "./support.ts";
+import { controlPlane, fetchReachesThisWorker, loginPassword, ORIGIN, readLog } from "./support.ts";
 
 const ADMIN = "oauth-admin@example.com";
 const addresses = platformAddressesOf(env, new Request(`${ORIGIN}/api`));
@@ -146,7 +144,7 @@ test("signing a client in as someone: offered to an admin alone, the person's gr
   });
 
   // both accounts record it, with the grant's id, the admin the principal of each record
-  const started = (await accountEvents(target.user.id)).find(
+  const started = (await readLog(`global.iterate/users/${target.user.id}`)).find(
     (event) => event.type === "events.iterate.com/account/impersonation-started",
   );
   const record = {
@@ -162,12 +160,12 @@ test("signing a client in as someone: offered to an admin alone, the person's gr
     source: { principal: { actor: admin.user.id, email: ADMIN }, platform: true },
   };
   expect(started).toMatchObject(record);
-  const performed = (await accountEvents(admin.user.id)).find(
+  const performed = (await readLog(`global.iterate/users/${admin.user.id}`)).find(
     (event) => event.type === "events.iterate.com/account/impersonation-performed",
   );
   expect(performed).toMatchObject(record);
   // the grant's own use is stamped with both people too
-  const used = (await accountEvents(target.user.id)).find(
+  const used = (await readLog(`global.iterate/users/${target.user.id}`)).find(
     (event) =>
       event.type === "events.iterate.com/account/grant-used" &&
       (event.payload as { grantId: string }).grantId === grantId,
@@ -255,20 +253,11 @@ test("a client on a project's host signed in as someone is bound to that project
     impersonate: target.user.id,
   });
   expect(approval).toHaveProperty("redirectTo");
-  const started = (await accountEvents(target.user.id)).find(
+  const started = (await readLog(`global.iterate/users/${target.user.id}`)).find(
     (event) => event.type === "events.iterate.com/account/impersonation-started",
   );
   expect(started).toMatchObject({ payload: { projects: [projectId] } });
 });
-
-/** Everything on `userId`'s account log. */
-async function accountEvents(userId: string) {
-  return (
-    (await stub(`global.iterate/users/${userId}`).invoke(["itx", ["readEvents", 0, 500]])) as {
-      events: StreamEvent[];
-    }
-  ).events;
-}
 
 /** The consent capability of `email`'s issuer session, signed in with the password. */
 async function approverFor(email: string) {

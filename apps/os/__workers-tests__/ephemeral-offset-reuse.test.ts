@@ -8,25 +8,10 @@
 // read-verb cases below are also the pin for that fix: they evict at once after ONE release.)
 import { evictDurableObject, runInDurableObject } from "cloudflare:test";
 import { expect, test } from "vitest";
+import type { StreamPage } from "iterate/api";
 import type { ItxExpression } from "iterate/expression";
-import { releasePins, stub, until } from "./support.ts";
+import { COUNTER_SOURCE, releasePins, snapshot, stub, until } from "./support.ts";
 
-const COUNTER_MODULES = {
-  "worker.js": /* js */ `
-import { StreamProcessor, StreamProcessorDurableObject, defineProcessorContract, z } from "iterate/sdk";
-const contract = defineProcessorContract({
-  slug: "counter", version: "1.0.0", description: "counts durable events",
-  stateSchema: z.object({ n: z.number().default(0) }), events: {}, consumes: ["*"], emits: [],
-});
-class CounterProcessor extends StreamProcessor {
-  contract = contract;
-  reduce({ state }) { return { n: state.n + 1 }; }
-}
-export class CounterDurableObject extends StreamProcessorDurableObject {
-  processor = new CounterProcessor();
-}
-`,
-};
 const DIGEST_MODULES = {
   "worker.js": /* js */ `
 import { WorkerEntrypoint } from "cloudflare:workers";
@@ -102,15 +87,16 @@ test("enable with a consumes filter: itx.facets.get(name) answers before the fir
     type: "events.iterate.com/itx/subscription-configured",
     payload: {
       name: "c2",
-      target: [...hostedFacet(COUNTER_MODULES, "CounterDurableObject", "c2"), "processEventBatch"],
+      target: [
+        ...hostedFacet({ "worker.js": COUNTER_SOURCE }, "CounterDurableObject", "c2"),
+        "processEventBatch",
+      ],
       consumes: ["tick"],
     },
   });
   // No wait: the name alone answers — a hosting row recovers its facet's spec from the log that
   // configured it, whether or not onCommit's resolve of the target has run yet.
-  const snap = (await s.invoke(["itx", "facets", ["get", "c2"], ["snapshot"]])) as {
-    state: { n: number };
-  };
+  const snap = await snapshot<{ n: number }>(ctx, "c2");
   expect(snap.state.n).toBeGreaterThanOrEqual(0);
 });
 
@@ -123,7 +109,7 @@ test("processor: a read-driven catch-up (snapshot after the release) with epheme
       payload: {
         name: "counter",
         target: [
-          ...hostedFacet(COUNTER_MODULES, "CounterDurableObject", "counter"),
+          ...hostedFacet({ "worker.js": COUNTER_SOURCE }, "CounterDurableObject", "counter"),
           "processEventBatch",
         ],
         consumes: ["tick", "events.iterate.com/itx/subscription-configured"],
@@ -140,10 +126,7 @@ test("processor: a read-driven catch-up (snapshot after the release) with epheme
   expect(p0.events.at(-1)).toMatchObject({ type: "note" });
   await releasePins(ctx); // abort the idle facet (checkpoint = tick offset, durable)
   // the repo's own snapCounter shape: re-materialize by name → #pushedThroughOffset undefined → catchUpFromLog() → read(cursor) → [note], scannedThroughOffset = head
-  const mid = (await s.invoke(["itx", "facets", ["get", "counter"], ["snapshot"]])) as {
-    offset: number;
-    state: { n: number };
-  };
+  const mid = await snapshot<{ n: number }>(ctx, "counter");
   // n = created + woken + configured + tick + note: gap repair reads the unsent
   // birth records, the push reduces tick, and this wake reads note.
   // read() proves the durable log only, so the checkpoint the wake persisted is the mark, not the head.
@@ -158,18 +141,14 @@ test("processor: a read-driven catch-up (snapshot after the release) with epheme
     highestDurableOffset + 1,
     highestDurableOffset + 2,
   ]);
-  const after = (await s.invoke(["itx", "facets", ["get", "counter"], ["snapshot"]])) as {
-    offset: number;
-    state: { n: number };
-  };
+  const after = await snapshot<{ n: number }>(ctx, "counter");
   // the pushed tick@mark+2 is reduced exactly once, and the new incarnation's woken@mark+1 — a
   // durable event like any other, pushed to the "*" row — once → n grows by exactly 2.
   expect(after).toMatchObject({ state: { n: mid.state.n + 2 } });
 });
 
-type Page = { events: { type: string; offset: number }[]; scannedThroughOffset: number };
-async function page(ctx: string): Promise<Page> {
-  return (await stub(ctx).invoke(["itx", ["readEvents", 0, 500]])) as Page;
+async function page(ctx: string) {
+  return (await stub(ctx).invoke(["itx", ["readEvents", 0, 500]])) as StreamPage;
 }
 
 /** The stream-kept cursor of subscription `name` once it stands at or past `offset` — the ack of

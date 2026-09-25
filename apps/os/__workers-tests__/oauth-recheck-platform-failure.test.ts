@@ -10,8 +10,8 @@ import { ControlPlane, ControlPlaneUnavailableError } from "../src/control-plane
 import { authorizationForToken } from "../src/oauth.ts";
 import { rpcResponse } from "../src/rpc.ts";
 import type { IterateRpcTarget } from "../src/session.ts";
-import { fetchReachesThisWorker, grant } from "./oauth-support.ts";
-import { ORIGIN, until } from "./support.ts";
+import { grant } from "./oauth-support.ts";
+import { fetchReachesThisWorker, ORIGIN, until } from "./support.ts";
 
 test("a live session rides out control-plane reads that failed on the platform's side during its re-check: each is retried, and logged as the platform's failure", async () => {
   fetchReachesThisWorker();
@@ -66,10 +66,6 @@ test("a live session rides out control-plane reads that failed on the platform's
       ),
     );
   const warns = vi.spyOn(console, "warn");
-  onTestFinished(() => {
-    membershipReads.mockRestore();
-    warns.mockRestore();
-  });
   // Real elapsed time: the 30 s tick meets the reset, its retry 2 s later the outage, and the next
   // retry reads through.
   await until(

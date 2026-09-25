@@ -9,7 +9,7 @@
     "build": "tsx scripts/build.ts && vite build",
     "deploy": "tsx scripts/deploy.ts",
     "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.tests.json && tsc --noEmit -p tsconfig.scripts.json",
-    "test": "pnpm build && vitest run --configLoader runner --project unit --project workers",
+    "test": "pnpm build && vitest run --configLoader runner --project unit --project workers --silent=passed-only",
     "test:watch": "vitest --configLoader runner --project unit",
     "e2e": "pnpm build && pnpm e2e:run",
     "e2e:run": "vitest run --configLoader runner --project e2e --sequence.concurrent",

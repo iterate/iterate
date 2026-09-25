@@ -62,7 +62,7 @@ that outlives the call runs under a processor's `runInBackground` claim. Lint re
 ```ts
 import { reduceProcessor } from "iterate/stream/test-support";
 
-// apps/os/src/client/presence/processor.test.ts: durable ticks are reduced, ephemeral pokes are not
+// apps/os/e2e/support/presence/processor.test.ts: durable ticks are reduced, ephemeral pokes are not
 const state = reduceProcessor(new PresenceProcessor(), [{ type: "tick" }, { type: "poke" }]);
 // state.ticks === 1
 ```

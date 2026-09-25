@@ -2,7 +2,7 @@ import { evictDurableObject, runDurableObjectAlarm, runInDurableObject } from "c
 import { expect, test, vi } from "vitest";
 import type { StreamEvent } from "iterate/stream/processor";
 import { scheduledAppendFacetSource } from "../e2e/support/scheduled-append-facet.ts";
-import { stub, releasePins, until } from "./support.ts";
+import { readLog, releasePins, stub, until } from "./support.ts";
 
 const at = "2035-01-01T00:00:00Z";
 
@@ -24,7 +24,7 @@ test.for([{ principal: { actor: "admin" } }, { processor: { slug: "reminders", v
     await s.invoke("itx.schedules.list()");
     await fire(ctx);
     const live = await waiting;
-    const replay = (await read(ctx)).events.find((event) => event.type === "reminder/due");
+    const replay = (await readLog(ctx)).find((event) => event.type === "reminder/due");
     expect(live.source?.schedule?.definedBy).toStrictEqual(source);
     expect(live).toStrictEqual(replay);
   },
@@ -55,7 +55,7 @@ test("a facet's deadline survives the release and eviction; duplicate alarms app
   await runInDurableObject(s, async (instance) => {
     await instance.alarm();
   });
-  const events = (await read(ctx)).events;
+  const events = await readLog(ctx);
   expect(events.filter((event) => event.type === "job/timed-out")).toHaveLength(1);
   expect(events.filter((event) => event.type === "job/timeout-audit")).toHaveLength(1);
   expect(await s.invoke("itx.schedules.list()")).toEqual([]);
@@ -72,11 +72,11 @@ test("paused deadlines remain pending across eviction and resume without an alar
   await s.append({ type: "events.iterate.com/itx/paused", payload: { reason: "maintenance" } });
   await evictDurableObject(s);
   await fire(ctx);
-  expect((await read(ctx)).events.filter((event) => event.type === "due")).toEqual([]);
+  expect((await readLog(ctx)).filter((event) => event.type === "due")).toEqual([]);
   expect(await s.invoke("itx.schedules.get('paused')")).not.toBeNull();
   await s.append({ type: "events.iterate.com/itx/resumed" });
   expect(await fire(ctx)).toBe(true);
-  expect((await read(ctx)).events.filter((event) => event.type === "due")).toHaveLength(1);
+  expect((await readLog(ctx)).filter((event) => event.type === "due")).toHaveLength(1);
 });
 
 test("one invalid occurrence is durably failed without partially appending or blocking another", async () => {
@@ -99,7 +99,7 @@ test("one invalid occurrence is durably failed without partially appending or bl
     ["set", { key: "good", when: { at }, events: [{ type: "good" }] }],
   ]);
   await fire(ctx);
-  const events = (await read(ctx)).events;
+  const events = await readLog(ctx);
   expect(events.filter((event) => event.type === "prefix")).toEqual([]);
   expect(events.filter((event) => event.type === "good")).toHaveLength(1);
   expect(await s.invoke("itx.schedules.get('bad')")).toMatchObject({
@@ -119,9 +119,9 @@ test("more than one alarm budget of due work drains in bounded batches", async (
     })),
   );
   expect(await fire(ctx)).toBe(true);
-  expect((await read(ctx)).events.filter((event) => event.type === "batch/due")).toHaveLength(32);
+  expect((await readLog(ctx)).filter((event) => event.type === "batch/due")).toHaveLength(32);
   expect(await fire(ctx)).toBe(true);
-  const delivered = (await read(ctx)).events.filter((event) => event.type === "batch/due");
+  const delivered = (await readLog(ctx)).filter((event) => event.type === "batch/due");
   expect(delivered.map((event) => event.payload?.i)).toEqual(
     Array.from({ length: 33 }, (_, i) => i),
   );
@@ -156,7 +156,7 @@ test("an interval coalesces an idle gap across eviction and stops on explicit ca
   const firstAt = Date.parse(schedule.nextAt);
   await evictDurableObject(s);
   await fire(ctx, firstAt + 65_000);
-  const { events: afterFirstTick } = await read(ctx);
+  const afterFirstTick = await readLog(ctx);
   expect(afterFirstTick.filter((event) => event.type === "tick")).toHaveLength(1);
   // The incarnation the alarm constructed says so: the stored alarm was the tick's, and due.
   expect(
@@ -166,12 +166,12 @@ test("an interval coalesces an idle gap across eviction and stops on explicit ca
     nextAt: new Date(firstAt + 70_000).toISOString(),
   });
   await fire(ctx, firstAt + 65_000); // duplicate delivery at the same wall time
-  expect((await read(ctx)).events.filter((event) => event.type === "tick")).toHaveLength(1);
+  expect((await readLog(ctx)).filter((event) => event.type === "tick")).toHaveLength(1);
   await fire(ctx, firstAt + 70_000);
-  expect((await read(ctx)).events.filter((event) => event.type === "tick")).toHaveLength(2);
+  expect((await readLog(ctx)).filter((event) => event.type === "tick")).toHaveLength(2);
   await s.invoke(["itx", "schedules", ["cancel", receipt]]);
   await fire(ctx, firstAt + 80_000);
-  expect((await read(ctx)).events.filter((event) => event.type === "tick")).toHaveLength(2);
+  expect((await readLog(ctx)).filter((event) => event.type === "tick")).toHaveLength(2);
   expect(await s.invoke("itx.schedules.list()")).toEqual([]);
 });
 
@@ -205,9 +205,7 @@ test("a failed interval stays parked across later alarms", async () => {
     },
   });
   expect(
-    (await read(ctx)).events.filter(
-      (event) => event.type === "events.iterate.com/itx/schedule-failed",
-    ),
+    (await readLog(ctx)).filter((event) => event.type === "events.iterate.com/itx/schedule-failed"),
   ).toHaveLength(1);
 });
 
@@ -268,7 +266,7 @@ test.for(["once", "interval"])(
     }
     await evictDurableObject(s);
     await fire(ctx, dueAt); // recovery sees the committed completion, never the original obligation
-    const events = (await read(ctx)).events;
+    const events = await readLog(ctx);
     expect(events.filter((event) => event.type === "postcommit/due")).toHaveLength(1);
     expect(
       events.filter((event) => event.type === "events.iterate.com/itx/schedule-fired"),
@@ -313,10 +311,4 @@ async function fire(ctx: string, now = Date.parse(at)) {
   } finally {
     vi.useRealTimers();
   }
-}
-
-async function read(ctx: string) {
-  return (await stub(ctx).invoke(["itx", ["readEvents", 0, 500]])) as {
-    events: { type: string; offset: number; payload?: Record<string, unknown> }[];
-  };
 }

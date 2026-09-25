@@ -12,7 +12,7 @@ import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { expect, test } from "vitest";
 import type { StreamEvent } from "iterate/stream/processor";
 import type { AlarmTrace } from "../src/iterate-context-durable-object.ts";
-import { adminCredentials, openSession, stub, until } from "./support.ts";
+import { adminCredentials, openSession, readLog, stub, until } from "./support.ts";
 
 const TURNS = 30;
 
@@ -30,7 +30,7 @@ test(`a processor's ${TURNS} turns of run-requested → run-settled: every run s
   const settled = await until(
     `${TURNS} turns`,
     async () => {
-      const runs = (await readWithTraces(ctx)).filter(
+      const runs = (await readLog(ctx, { includeEphemeral: true })).filter(
         (event) => event.type === "events.iterate.com/itx/run-settled",
       );
       return runs.length >= TURNS ? runs : undefined;
@@ -40,12 +40,12 @@ test(`a processor's ${TURNS} turns of run-requested → run-settled: every run s
   expect(settled.map((event) => event.payload?.settlement)).toEqual(
     Array.from({ length: TURNS }, (_, turn) => ({ status: "succeeded", result: turn })),
   );
-  expect(runsStartedByAlarmPasses(await readWithTraces(ctx))).toBe(TURNS);
+  expect(runsStartedByAlarmPasses(await readLog(ctx, { includeEphemeral: true }))).toBe(TURNS);
 
   // A caller's run is the caller's depth: it starts at its commit, and no pass starts it.
   const itx = await (await openSession()).authenticate(adminCredentials()).projects.get(ctx);
   expect(await itx.run("async () => 'at once'")).toBe("at once");
-  expect(runsStartedByAlarmPasses(await readWithTraces(ctx))).toBe(TURNS);
+  expect(runsStartedByAlarmPasses(await readLog(ctx, { includeEphemeral: true }))).toBe(TURNS);
 });
 
 test("a run the context died owing its alarm is settled `interrupted` by the incarnation that alarm wakes, never started", async () => {
@@ -68,7 +68,7 @@ test("a run the context died owing its alarm is settled `interrupted` by the inc
   await runDurableObjectAlarm(stub(ctx));
   // Settled by the ALARM's wake record, in the same batch — not by the read below, whose own wake
   // record would settle it too.
-  const log = await readWithTraces(ctx);
+  const log = await readLog(ctx, { includeEphemeral: true });
   const settled = log.find((event) => event.type === "events.iterate.com/itx/run-settled");
   expect(settled?.payload?.settlement).toMatchObject({
     status: "failed",
@@ -79,14 +79,6 @@ test("a run the context died owing its alarm is settled `interrupted` by the inc
     payload: { reason: "alarm" },
   });
 });
-
-/** The log with the ring's ephemerals, where the alarm passes' traces are. */
-const readWithTraces = async (ctx: string) =>
-  (
-    (await stub(ctx).invoke(["itx", ["readEvents", 0, 500, { includeEphemeral: true }]])) as {
-      events: StreamEvent[];
-    }
-  ).events;
 
 const runsStartedByAlarmPasses = (events: StreamEvent[]) =>
   events

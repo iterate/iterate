@@ -7,7 +7,7 @@
 // the abort and the new isolate, so the second attempt goes through.
 import { runInDurableObject } from "cloudflare:test";
 import { expect, test } from "vitest";
-import { stub, until } from "./support.ts";
+import { readLog, snapshot, stub, until } from "./support.ts";
 
 const platformFailures = {
   clone_version: "Unable to deserialize cloned data due to invalid or unsupported version.",
@@ -44,19 +44,16 @@ for (const [label, message] of Object.entries(platformFailures)) {
     // The configure batch is the facet's FIRST push (rejected by the facet, retried by the DO on a
     // restarted facet); the appended event is the next.
     await s.append({ type: "a/1" });
-    const durable = ((await s.invoke(["itx", ["readEvents", 0, 500]])) as { events: unknown[] })
-      .events.length;
+    const durable = (await readLog(ctx)).length;
     await until("every durable event reduced", async () => {
-      const snap = (await s.invoke("itx.facets.get('flaky').snapshot()")) as {
-        state: { n: number };
-      };
+      const snap = await snapshot<{ n: number }>(ctx, "flaky");
       return snap.state.n === durable ? snap : undefined;
     });
     const tries = (await s.invoke("itx.facets.get('flaky').tries()")) as { seq: number }[];
     // The rejected push and its retry at least; the appended event rides the retry when its commit
     // landed while the first push was in flight (a pending push folds), or comes as a third push.
     expect(tries.length).toBeGreaterThanOrEqual(2);
-    const snap = (await s.invoke("itx.facets.get('flaky').snapshot()")) as { state: { n: number } };
+    const snap = await snapshot<{ n: number }>(ctx, "flaky");
     expect(snap).toMatchObject({ state: { n: durable } }); // every durable event counted once — no double, no loss
     const loaderIdAfter = await runInDurableObject(
       s,

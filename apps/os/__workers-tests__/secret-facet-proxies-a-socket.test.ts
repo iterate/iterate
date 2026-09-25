@@ -18,8 +18,8 @@
 
 import { runInDurableObject } from "cloudflare:test";
 import { newWebSocketRpcSession, newWorkersRpcResponse, RpcTarget } from "capnweb";
-import { expect, onTestFinished, test, vi } from "vitest";
-import { stub, until } from "./support.ts";
+import { expect, test, vi } from "vitest";
+import { readLog, stub, until } from "./support.ts";
 
 const SHOP = "https://petshop.test";
 
@@ -55,12 +55,11 @@ test("a WebSocket 101 through a secret: the caller's context forwards to /secret
   expect(await shop.getPet("pet-1")).toMatchObject({ id: "pet-1", name: "Biscuit" });
 
   // The use is a fact on the secret's path — the request as received, never the bearer.
-  const used = await until("the secret/used fact", async () => {
-    const { events } = (await secret.invoke(["itx", ["readEvents"]])) as {
-      events: { type: string; payload?: Record<string, unknown> }[];
-    };
-    return events.find((event) => event.type === "events.iterate.com/secret/used");
-  });
+  const used = await until("the secret/used fact", async () =>
+    (await readLog(`${project}.iterate/secrets/shop`)).find(
+      (event) => event.type === "events.iterate.com/secret/used",
+    ),
+  );
   expect(used).toMatchObject({ payload: { method: "GET", url: `${SHOP}/capnweb`, status: 101 } });
   expect(JSON.stringify(used)).not.toContain(accessToken);
 
@@ -172,13 +171,10 @@ test("an app's fetch expression inherits WebSocket egress through its parent con
 function serveShop(): string {
   const accessToken = `shop-token-${crypto.randomUUID()}`;
   const network = globalThis.fetch;
-  const spy = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+  vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
     const request = new Request(input, init);
     if (new URL(request.url).origin !== SHOP) return network(request);
     return shopFetch(request, accessToken);
-  });
-  onTestFinished(() => {
-    spy.mockRestore();
   });
   return accessToken;
 }

@@ -1,4 +1,4 @@
-// src/client/presence/processor.ts — the presence processor's PURE class, unit-tested in
+// e2e/support/presence/processor.ts — the presence processor's PURE class, unit-tested in
 // processor.test.ts. Imports only the pure kernel (no cloudflare:workers), so a node unit test can
 // construct it with `new`; durable-object.ts is the loadable host.
 import {

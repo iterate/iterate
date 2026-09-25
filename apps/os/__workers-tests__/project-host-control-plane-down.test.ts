@@ -17,7 +17,6 @@ test.for([
     const { host } = await catalogOnlyProject(`down-${how.replace(" ", "-")}`);
     failReads(how);
     const warn = vi.spyOn(console, "warn");
-    onTestFinished(() => warn.mockRestore());
 
     const started = Date.now();
     const refused = await call(host);
@@ -39,7 +38,6 @@ test("a slow read is waited for: the control plane's late answer serves the host
   const { host } = await catalogOnlyProject("slow", { ownHostname: true });
   const outage = failReads("hangs");
   const warn = vi.spyOn(console, "warn");
-  onTestFinished(() => warn.mockRestore());
 
   let settled = false;
   const answer = call(host).finally(() => (settled = true));
@@ -76,7 +74,6 @@ test("a signed-in visitor whose access read fails while admission read through: 
   vi.setSystemTime(Date.now() + 6_000);
   failReads("throws", ["accessibleTo"]);
   const warn = vi.spyOn(console, "warn");
-  onTestFinished(() => warn.mockRestore());
 
   const refused = await call(host, { authorization: `Bearer ${visitor.token}` });
   vi.useRealTimers();
@@ -100,7 +97,6 @@ test("/api while the control plane's reads hang: projects.get answers a retryabl
   vi.setSystemTime(Date.now() + 6_000);
   const outage = failReads("hangs", ["accessibleTo"]);
   const warn = vi.spyOn(console, "warn");
-  onTestFinished(() => warn.mockRestore());
 
   const started = performance.now();
   const refusal = await session.projects.get(slug).then(

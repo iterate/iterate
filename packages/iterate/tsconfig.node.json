@@ -6,7 +6,6 @@
   "include": [
     "src/node.ts",
     "src/stream/test-support.ts",
-    "src/test-support",
     "src/**/*.test.*",
     "tsdown.config.ts",
     "vitest.config.ts"

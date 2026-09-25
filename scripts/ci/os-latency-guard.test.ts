@@ -1,7 +1,7 @@
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { expect, onTestFinished, test, vi } from "vitest";
+import { expect, test, vi } from "vitest";
+import { temporaryDirectory } from "@iterate-com/shared/test-support/temporary-directory";
 import { LATENCY_METRICS, type LatencyMetricName } from "../../apps/os/perf/latency.ts";
 import {
   baselineWindow,
@@ -327,8 +327,8 @@ test.for([
     red: true,
   },
 ])("the judge: $name", async ({ brokenBefore, red }) => {
-  const dir = mkdtempSync(join(tmpdir(), "os-latency-guard-"));
-  const path = (name: string) => join(dir, name);
+  using dir = temporaryDirectory();
+  const path = (name: string) => join(dir.path, name);
   const mcpRow = "an MCP tool call on a project, with a personal access token";
   writeFileSync(
     path("report.json"),
@@ -365,9 +365,7 @@ test.for([
   );
   writeFileSync(path("summary.md"), "");
   vi.stubEnv("GITHUB_STEP_SUMMARY", path("summary.md"));
-  onTestFinished(() => void vi.unstubAllEnvs());
   const log = vi.spyOn(console, "log").mockImplementation(() => {});
-  onTestFinished(() => log.mockRestore());
 
   const judged = judge({
     report: path("report.json"),

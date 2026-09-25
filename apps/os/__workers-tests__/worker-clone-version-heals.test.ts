@@ -6,7 +6,7 @@
 // `workers.get`; the facet twin is facet-clone-version-heals.test.ts). The condition is prd's, so
 // the worker here plays it: the first isolate to serve a request marks itself in kv and throws the
 // text on every request it serves, for good.
-import { expect, onTestFinished, test, vi } from "vitest";
+import { expect, test, vi } from "vitest";
 import { stub } from "./support.ts";
 
 const CLONE_VERSION = "Unable to deserialize cloned data due to invalid or unsupported version.";
@@ -27,7 +27,6 @@ test.for([
 ])("$name", async ({ first, firstAnswer, event }) => {
   const s = stub(`prj_worker_clone_${first.method.toLowerCase()}`);
   const warns = vi.spyOn(console, "warn");
-  onTestFinished(() => void warns.mockRestore());
   const page = async (init: RequestInit) => {
     const response = await s.fetch(
       new Request("https://site.test/", {

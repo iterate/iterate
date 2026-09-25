@@ -1,5 +1,5 @@
 import { env, exports } from "cloudflare:workers";
-import { expect, onTestFinished, test, vi } from "vitest";
+import { expect, test, vi } from "vitest";
 import { appSession } from "iterate/app-server";
 import { DEFAULT_GOOGLE_SIGN_IN_SCOPES, platformAddressesOf } from "../src/app-config.ts";
 import { authorizationForToken } from "../src/oauth.ts";
@@ -208,7 +208,7 @@ test("provider subjects are independent, while verified email links Google and C
 test.for(["provider mismatch", "declined consent"])(
   "identity callback refuses %s before exchanging a code",
   async (failure) => {
-    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
       const url = new URL(input instanceof Request ? input.url : String(input));
       if (url.pathname.endsWith("/.well-known/openid-configuration")) {
         const issuer = url.href.slice(0, -"/.well-known/openid-configuration".length);
@@ -224,9 +224,6 @@ test.for(["provider mismatch", "declined consent"])(
       }
       if (url.origin === ORIGIN) return exports.default.fetch(new Request(input, init));
       throw new Error(`Unexpected token exchange for ${failure}`);
-    });
-    onTestFinished(() => {
-      fetchSpy.mockRestore();
     });
     const begin = await exports.default.fetch(`${ORIGIN}/.auth/identity/cloudflare`, {
       redirect: "manual",
@@ -652,16 +649,13 @@ async function identityLogin(
     id_token_signing_alg_values_supported: ["RS256"],
   };
   let tokenResponse: object | undefined;
-  const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+  vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
     const url = new URL(input instanceof Request ? input.url : String(input));
     if (url.href === `${issuer}/.well-known/openid-configuration`) return Response.json(metadata);
     if (url.href === jwksEndpoint) return Response.json({ keys: [jwk] });
     if (url.href === tokenEndpoint && tokenResponse) return Response.json(tokenResponse);
     if (url.origin === ORIGIN) return exports.default.fetch(new Request(input, init));
     throw new Error(`Unexpected identity fixture fetch: ${url}`);
-  });
-  onTestFinished(() => {
-    fetchSpy.mockRestore();
   });
   const begin = await exports.default.fetch(
     `${ORIGIN}${path}?next=%2Foauth2%2Fauth%3Fclient%3Dtest`,

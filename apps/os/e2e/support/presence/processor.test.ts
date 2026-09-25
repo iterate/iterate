@@ -1,4 +1,4 @@
-// src/client/presence/processor.test.ts — the PresenceProcessor's reduce, declarative `{ events →
+// e2e/support/presence/processor.test.ts — the PresenceProcessor's reduce, declarative `{ events →
 // state }` rows on the shared harness (iterate/stream/test-support `reduceProcessor`). The reduce folds
 // durable `tick`s into `ticks`; the ephemeral `poke` is deliberately NOT reduced (it drives a runtime
 // field, `#lastPokeMs`, that resets on eviction and never re-reduces).

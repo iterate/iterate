@@ -10,8 +10,8 @@
 // Pinned in the `workers` vitest project because it needs the real facet runtime (`ctx.facets`, its
 // abort) and a hosted processor SDK facet.
 
-import { expect, onTestFinished, test, vi } from "vitest";
-import { stub, until } from "./support.ts";
+import { expect, test, vi } from "vitest";
+import { readLog, stub, until } from "./support.ts";
 
 const name = "restartedcounter";
 
@@ -25,10 +25,6 @@ test("a push in flight on a facet restarted under a new loaded identity rejects 
 
   const errors = vi.spyOn(console, "error");
   const logs = vi.spyOn(console, "log");
-  onTestFinished(() => {
-    errors.mockRestore();
-    logs.mockRestore();
-  });
   // The same name and class, NEW source: the row's next call restarts the facet in place.
   await configure(ctx, hangingCounterSource(false));
 
@@ -46,8 +42,7 @@ test("a push in flight on a facet restarted under a new loaded identity rejects 
     const p = await probe(ctx);
     return p.checkpoints.some((c) => c.reduced_through_offset > owed!.offset) ? p : undefined;
   });
-  const events = ((await s.invoke(["itx", ["readEvents", 0, 500]])) as { events: unknown[] })
-    .events;
+  const events = await readLog(ctx);
   expect(JSON.parse(healed.checkpoints[0]!.state)).toEqual({ n: events.length }); // each once
   expect(
     ((await s.invoke(["itx", "subscriptions", ["get", name]])) as { halted?: unknown }).halted,

@@ -9,7 +9,7 @@ import type { UserRecord } from "../src/control-plane/catalog.ts";
 import type { IterateRpcTarget } from "../src/session.ts";
 import { startIssuerSession } from "../src/issuer-session.ts";
 import { oauthHelpers } from "../src/oauth.ts";
-import { adminSession, catalog, controlPlane, ORIGIN } from "./support.ts";
+import { adminSession, catalog, controlPlane, fetchReachesThisWorker, ORIGIN } from "./support.ts";
 test("first consent creates organization and project through the ordinary session, then grants only the chosen project", async () => {
   fetchReachesThisWorker();
   const user = await catalog().linkIdentity({
@@ -551,17 +551,6 @@ function operator(email?: string) {
     for (const session of sessions) session[Symbol.dispose]();
   });
   return adminSession(sessions, email);
-}
-
-/** `fetch` reaches this worker until the test finishes — DNS transport only. Provider metadata,
- *  PKCE, exchange, storage and API are real. */
-function fetchReachesThisWorker() {
-  const spy = vi
-    .spyOn(globalThis, "fetch")
-    .mockImplementation((input, init) => exports.default.fetch(new Request(input, init)));
-  onTestFinished(() => {
-    spy.mockRestore();
-  });
 }
 
 /** A session on `/api` with `headers` on the upgrade, authenticated from them; disposed when the

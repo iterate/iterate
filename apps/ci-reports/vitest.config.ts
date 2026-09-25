@@ -3,5 +3,12 @@ import { vitestReporters } from "../../packages/shared/src/test-support/e2e-poli
 
 // Its own config so Vitest does not load vite.config.ts, whose Cloudflare plugin would start a Worker.
 export default defineConfig({
-  test: { reporters: vitestReporters, include: ["src/**/*.test.ts"] },
+  test: {
+    reporters: vitestReporters,
+    include: ["src/**/*.test.ts"],
+    restoreMocks: true,
+    unstubGlobals: true,
+    unstubEnvs: true,
+    silent: "passed-only",
+  },
 });

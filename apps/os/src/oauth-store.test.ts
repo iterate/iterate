@@ -11,9 +11,6 @@ test.for([
   "D1_ERROR: Internal error in D1 DB storage caused object to be reset.",
 ])("a grant read D1 says to send again (%s) is asked once more, and logged", async (message) => {
   const warns = vi.spyOn(console, "warn").mockImplementation(() => {});
-  onTestFinished(() => {
-    warns.mockRestore();
-  });
   const store = storeOver([
     () => Promise.reject(new Error(message)),
     () => Promise.resolve({ results: [{ value: '{"id":"g1"}' }] }),
@@ -30,9 +27,6 @@ test.for([
 
 test("a second failure throws: the grant store never retries twice", async () => {
   const warns = vi.spyOn(console, "warn").mockImplementation(() => {});
-  onTestFinished(() => {
-    warns.mockRestore();
-  });
   const store = storeOver([
     () => Promise.reject(new Error("D1_ERROR: Network connection lost.")),
     () => Promise.reject(new Error("D1_ERROR: Network connection lost.")),
@@ -60,10 +54,7 @@ test.for([
 test("a grant read or a KV write still waiting after five seconds names its step while it waits", async () => {
   vi.useFakeTimers();
   const warns = vi.spyOn(console, "warn").mockImplementation(() => {});
-  onTestFinished(() => {
-    vi.useRealTimers();
-    warns.mockRestore();
-  });
+  onTestFinished(() => void vi.useRealTimers());
   let answerGrant!: (value: string) => void;
   let confirmPut!: () => void;
   const store = providerStore({

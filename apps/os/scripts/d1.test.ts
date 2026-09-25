@@ -3,20 +3,17 @@ import { ensureD1 } from "./d1.ts";
 import type { Cf } from "./preview-artifacts.ts";
 
 test("a preview's D1 is created with no location hint, so D1 places it near the job creating it", async () => {
-  vi.spyOn(console, "log").mockImplementation(() => {});
+  const log = vi.spyOn(console, "log");
   const { cf, requests } = fakeCloudflare([]);
   await ensureD1(cf, "os-latency-db", "automatic");
   expect(requests.find((request) => request.route === "/d1/database")).toEqual({
     route: "/d1/database",
     body: { name: "os-latency-db" },
   });
-  expect(console.log).toHaveBeenCalledWith(
-    "created D1 os-latency-db (new-uuid), its primary in ENAM",
-  );
+  expect(log).toHaveBeenCalledWith("created D1 os-latency-db (new-uuid), its primary in ENAM");
 });
 
 test("prd's and the parent's D1 is created in western Europe", async () => {
-  vi.spyOn(console, "log").mockImplementation(() => {});
   const { cf, requests } = fakeCloudflare([]);
   await ensureD1(cf, "os-prd-db", "weur");
   expect(requests.find((request) => request.route === "/d1/database")).toEqual({
@@ -26,7 +23,6 @@ test("prd's and the parent's D1 is created in western Europe", async () => {
 });
 
 test("a D1 that exists is found and left where it is", async () => {
-  vi.spyOn(console, "log").mockImplementation(() => {});
   const { cf, requests } = fakeCloudflare([{ uuid: "old-uuid", name: "os-latency-db" }]);
   expect(await ensureD1(cf, "os-latency-db", "automatic")).toMatchObject({ uuid: "old-uuid" });
   expect(requests.map((request) => request.route)).toEqual(["/d1/database?per_page=100&page=1"]);

@@ -1,13 +1,15 @@
 // __workers-tests__/support.ts — what every file in the Workers suite (the vitest project that runs
-// INSIDE workerd, next to the worker) shares: the context DO stub by ctx name, the control plane's
-// database, a capnweb session over the worker's /api (disposed at teardown — importing this module
-// registers the afterAll), a live value to lend (`Echo`, tagged per instance), the production pins'
-// release on demand, the alarm a context owes, the one poll-until, a signed-in member with their
-// browser cookie, and the pet shop's integration fakes.
+// INSIDE workerd, next to the worker) shares: the context DO stub by ctx name, its log and a facet's
+// snapshot read through it, the control plane's database, a capnweb session over the worker's /api
+// (disposed at teardown — importing this module registers the afterAll), a live value to lend
+// (`Echo`, tagged per instance), the production pins' release on demand, the alarm a context owes,
+// the one poll-until, a signed-in member with their browser cookie, the counter processor's source,
+// and the pet shop's integration fakes.
 import { runInDurableObject } from "cloudflare:test";
 import { env, exports } from "cloudflare:workers";
 import { newWebSocketRpcSession, RpcTarget } from "capnweb";
-import { afterAll, expect, onTestFinished, vi } from "vitest";
+import { afterAll, expect, vi } from "vitest";
+import type { StreamPage } from "iterate/api";
 import { DurableObjectNameCodec } from "../src/context/paths.ts";
 import { ControlPlaneDatabase } from "../src/control-plane/catalog.ts";
 import { projectsByHostnames } from "../src/control-plane/db/queries/.generated/hostnames.sql.ts";
@@ -26,6 +28,26 @@ export const ORIGIN = "https://control.test";
  *  edge reducing the returns away, plus runInDurableObject over the same instance. */
 export const stub = (ctx: string) =>
   env.ITERATE_CONTEXT.getByName(DurableObjectNameCodec.parse(ctx).name);
+
+/** A context's durable log, its first 500 events: `itx.readEvents` invoked on the context's DO with
+ *  no caller. `includeEphemeral` merges in the ephemerals the running incarnation still holds, where
+ *  the alarm passes' traces are. */
+export async function readLog(ctx: string, options?: { includeEphemeral: true }) {
+  const page = (await stub(ctx).invoke([
+    "itx",
+    ["readEvents", 0, 500, ...(options ? [options] : [])],
+  ])) as StreamPage;
+  return page.events;
+}
+
+/** Facet `facet`'s folded state and the offset it reduced through, from the context's DO:
+ *  `itx.facets.get(facet).snapshot()` invoked with no caller. */
+export async function snapshot<State>(ctx: string, facet: string) {
+  return (await stub(ctx).invoke(["itx", "facets", ["get", facet], ["snapshot"]])) as {
+    offset: number;
+    state: State;
+  };
+}
 
 /** One client's rpc stub, lent under its key: the per-instance tag (`echo-<i>:<s>`) proves no
  *  crosstalk. Provided as `itx.provide(rpcStubKey, new Echo(i))`, so
@@ -74,7 +96,7 @@ export function interceptCatalogReads(fail?: {
   const failing = new WeakSet<D1PreparedStatement>();
   const prepare = env.DB.prepare.bind(env.DB);
   const batch = env.DB.batch.bind(env.DB);
-  const prepares = vi.spyOn(env.DB, "prepare").mockImplementation((sql: string) => {
+  vi.spyOn(env.DB, "prepare").mockImplementation((sql: string) => {
     const statement = prepare(sql);
     const read = readOf(sql);
     if (!read) return statement;
@@ -91,17 +113,11 @@ export function interceptCatalogReads(fail?: {
     };
     return statement;
   });
-  const batches = vi
-    .spyOn(env.DB, "batch")
-    .mockImplementation((statements) =>
-      statements.some((statement) => failing.has(statement))
-        ? fail!.with(() => batch(statements))
-        : batch(statements),
-    );
-  onTestFinished(() => {
-    prepares.mockRestore();
-    batches.mockRestore();
-  });
+  vi.spyOn(env.DB, "batch").mockImplementation((statements) =>
+    statements.some((statement) => failing.has(statement))
+      ? fail!.with(() => batch(statements))
+      : batch(statements),
+  );
   return reads;
 }
 
@@ -248,6 +264,15 @@ export async function signedInMember(email: string): Promise<{ session: any; coo
   return { session: await transport.authenticate({ type: "from-server-cookie" }), cookie };
 }
 
+/** `fetch` reaches this worker for the rest of the test: the issuer fetches its own client metadata
+ *  while it signs someone in, and the network is out of reach here. Provider metadata, PKCE,
+ *  exchange, storage and API are real. */
+export function fetchReachesThisWorker() {
+  vi.spyOn(globalThis, "fetch").mockImplementation((input, init) =>
+    exports.default.fetch(new Request(input, init)),
+  );
+}
+
 /** A project `slug` made by a member of its own (`<slug>@example.test`): their itx on it, its id,
  *  their `/api` session and their browser cookie. */
 export async function projectWithMember(slug: string) {
@@ -256,6 +281,28 @@ export async function projectWithMember(slug: string) {
   const { projectId } = (await itx.whoami()) as { projectId: string };
   return { itx, projectId, session, cookie };
 }
+
+/** A tiny userspace processor: counts every durable event. The tally fixture's shape
+ *  (e2e/support/sources.ts), reduced to one number — the pure `CounterProcessor` plus its host
+ *  `CounterDurableObject`, which is what the load chain names. */
+export const COUNTER_SOURCE = /* js */ `
+import { StreamProcessor, StreamProcessorDurableObject, defineProcessorContract, z } from "iterate/sdk";
+const contract = defineProcessorContract({
+  slug: "counter",
+  version: "1.0.0",
+  description: "counts durable events",
+  stateSchema: z.object({ n: z.number().default(0) }),
+  consumes: ["*"],
+  emits: [],
+});
+class CounterProcessor extends StreamProcessor {
+  contract = contract;
+  reduce({ state }) { return { n: state.n + 1 }; }
+}
+export class CounterDurableObject extends StreamProcessorDurableObject {
+  processor = new CounterProcessor();
+}
+`;
 
 /** The hosts the pet shop's Slack, Google, Cloudflare and GitHub fakes answer on in this suite
  *  (APP_CONFIG `integrations`, wrangler.test.jsonc and vitest.config.ts). */
@@ -271,7 +318,7 @@ export function petshopFakes() {
   const requests: { method: string; url: string; headers: Record<string, string>; body: string }[] =
     [];
   const through = globalThis.fetch;
-  const spy = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+  vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
     const request = new Request(input, init);
     // the issuer fetching its own client metadata while it signs someone in (`signedInMember`)
     if (new URL(request.url).origin === ORIGIN) return exports.default.fetch(request);
@@ -286,7 +333,6 @@ export function petshopFakes() {
     });
     return (await petshop.handle(request)) ?? new Response("Not Found", { status: 404 });
   });
-  onTestFinished(() => spy.mockRestore());
   return { ...petshop, requests };
 }
 
@@ -372,7 +418,7 @@ export function fakeCloudflareCustomHostnames({ active = [] }: { active?: string
   const hostnames: string[] = [...active];
   const writes: string[] = [];
   const through = globalThis.fetch;
-  const spy = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+  vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
     const request = new Request(input, init);
     const url = new URL(request.url);
     if (url.hostname !== "api.cloudflare.com") return through(request);
@@ -401,6 +447,5 @@ export function fakeCloudflareCustomHostnames({ active = [] }: { active?: string
     const asked = url.searchParams.get("hostname");
     return ok(hostnames.filter((hostname) => hostname === asked).map(entry));
   });
-  onTestFinished(() => spy.mockRestore());
   return { hostnames, writes };
 }

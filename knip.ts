@@ -55,10 +55,11 @@ export default {
       // setups); the rest are entries here. The browser specs are the root suite (specs/AGENTS.md).
       entry: [
         "src/worker.ts!",
-        "src/client/**/*.{ts,tsx}",
         // the e2e suite's test files are entries; e2e/support/** is project code, so an unused support
         // export is reported
         "e2e/**/*.e2e.test.ts",
+        // read as text and handed over as the presence facet's source (e2e/support/sources.ts)
+        "e2e/support/presence/durable-object.ts",
         "perf/**/*.perf.test.ts",
         "__workers-tests__/**/*.ts",
         "bench/**/*.ts",

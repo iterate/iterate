@@ -1,9 +1,9 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, test } from "vitest";
 import { TestTelemetryArtifact } from "@iterate-com/shared/test-support/ci-telemetry";
 import { unknownFlakeRecordFromTelemetry } from "@iterate-com/shared/test-support/flake-record";
+import { temporaryDirectory } from "@iterate-com/shared/test-support/temporary-directory";
 import { writeFlakeSuiteSummary } from "./flake-suite-summary.ts";
 
 test("a complete clean browser run publishes a summary even without flake records", async () => {
@@ -206,16 +206,6 @@ test.for([
     );
   },
 );
-
-function temporaryDirectory() {
-  const path = mkdtempSync(join(tmpdir(), "flake-summary-"));
-  return {
-    path,
-    [Symbol.dispose]() {
-      rmSync(path, { recursive: true, force: true });
-    },
-  };
-}
 
 function browserResult() {
   return TestTelemetryArtifact.parse({

@@ -1,9 +1,9 @@
 // A socket that holds no project. Its own file: the row waits the guard's real 30 s re-check,
 // beside the other three (oauth-support.ts).
-import { expect, onTestFinished, test, vi } from "vitest";
+import { expect, test, vi } from "vitest";
 import { ControlPlane } from "../src/control-plane/edge.ts";
-import { fetchReachesThisWorker, grant, rpc } from "./oauth-support.ts";
-import { ORIGIN } from "./support.ts";
+import { grant, rpc } from "./oauth-support.ts";
+import { fetchReachesThisWorker, ORIGIN } from "./support.ts";
 
 test("a socket holding no project re-checks its grant every thirty seconds and reads no membership", async () => {
   fetchReachesThisWorker();
@@ -13,9 +13,6 @@ test("a socket holding no project re-checks its grant every thirty seconds and r
   // The worker under test runs in this isolate: the guard's membership read (rpc.ts —
   // `controlPlane.reachableProjects`, the one read behind every reach check) passes this spy.
   const membershipReads = vi.spyOn(ControlPlane.prototype, "reachableProjects");
-  onTestFinished(() => {
-    membershipReads.mockRestore();
-  });
   // Real elapsed time: one tick of the deployed 30 s interval, nothing test-only.
   await new Promise((resolve) => setTimeout(resolve, 31_000));
   membershipReads.mockRestore();

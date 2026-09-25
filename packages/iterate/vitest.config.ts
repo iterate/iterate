@@ -5,10 +5,18 @@ import { vitestReporters } from "../shared/src/test-support/e2e-policy/vitest-re
 export default defineConfig({
   resolve: {
     alias: {
+      // app-session.ts's only platform import is the DurableObject base class.
       "cloudflare:workers": fileURLToPath(
-        new URL("./src/test-support/cloudflare-workers.ts", import.meta.url),
+        new URL("../shared/src/test-support/cloudflare-workers-shim.ts", import.meta.url),
       ),
     },
   },
-  test: { reporters: vitestReporters, include: ["src/**/*.test.{ts,tsx}"] },
+  test: {
+    reporters: vitestReporters,
+    include: ["src/**/*.test.{ts,tsx}"],
+    restoreMocks: true,
+    unstubGlobals: true,
+    unstubEnvs: true,
+    silent: "passed-only",
+  },
 });

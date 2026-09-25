@@ -1,10 +1,10 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { parquetReadObjects } from "hyparquet";
 import type { TestTelemetryArtifact } from "@iterate-com/shared/test-support/ci-telemetry";
+import { temporaryDirectory } from "@iterate-com/shared/test-support/temporary-directory";
 import {
   TestEvidenceManifest,
   testEvidencePaths,
@@ -412,7 +412,6 @@ test("a Cloudflare 5xx, 429 or dropped connection is retried, each retry a platf
     expect.objectContaining({ attempt: 2, status: 429, waitMs: 5000 }),
     expect.objectContaining({ attempt: 3, answer: "fetch failed: ECONNRESET" }),
   ]);
-  warn.mockRestore();
 });
 
 test("the retries are bounded: a Cloudflare 5xx that persists fails the upload, and the manifest never lands", async () => {
@@ -431,7 +430,6 @@ test("the retries are bounded: a Cloudflare 5xx that persists fails the upload, 
   expect(
     api.requests.some((request) => request.url.endsWith("/testrun_1nxc464grh/manifest.json")),
   ).toBe(false);
-  warn.mockRestore();
 });
 
 test("no retry starts after the upload's deadline, and the manifest never lands", async () => {
@@ -532,7 +530,7 @@ test("a file that changed after the manifest listed it is never sent, and the ma
 });
 
 test("a failed step says why in a warning annotation and a line of the job's summary, and leaves the marker the fallback report looks for", () => {
-  using runner = temporaryDirectory("test-evidence-runner-");
+  using runner = temporaryDirectory();
   const summary = join(runner.path, "summary.md");
   const log = vi.spyOn(console, "log").mockImplementation(() => {});
 
@@ -555,17 +553,15 @@ test("a failed step says why in a warning annotation and a line of the job's sum
   );
   expect(existsSync(join(runner.path, "test-evidence-upload.reported"))).toBe(true);
   expect(existsSync(join(runner.path, "test-evidence-write.reported"))).toBe(false);
-  log.mockRestore();
 });
 
 test("nothing the upload logs or reports carries the API token or the S3 secret derived from it", async () => {
   using folder = evidenceFolder({ artifacts: [], check: completeCheck });
-  using runner = temporaryDirectory("test-evidence-runner-");
+  using runner = temporaryDirectory();
   await write(folder.path);
   const output: unknown[] = [];
-  const spies = (["log", "warn", "error"] as const).map((level) =>
-    vi.spyOn(console, level).mockImplementation((...args) => output.push(...args)),
-  );
+  for (const level of ["log", "warn", "error"] as const)
+    vi.spyOn(console, level).mockImplementation((...args) => output.push(...args));
   const runnerEnvironment = {
     GITHUB_STEP_SUMMARY: join(runner.path, "summary.md"),
     RUNNER_TEMP: runner.path,
@@ -615,7 +611,6 @@ test("nothing the upload logs or reports carries the API token or the S3 secret 
   expect(printed).toContain("Test evidence not in R2");
   expect(printed).not.toContain(apiToken);
   expect(printed).not.toContain(secret);
-  for (const spy of spies) spy.mockRestore();
 });
 
 test("the summary line of an uploaded folder names its prefix, which the CI telemetry sync reads back from the job's summary", () => {
@@ -640,7 +635,7 @@ test("the summary line of an uploaded folder names its prefix, which the CI tele
 });
 
 test("the source's tree is the files on disk, changes and new files included, and the index is left alone", async () => {
-  using folder = temporaryDirectory("test-evidence-git-");
+  using folder = temporaryDirectory();
   const repo = folder.path;
   const git = (...args: string[]) =>
     execFileSync(
@@ -744,7 +739,7 @@ function evidenceFolder(input: {
   target?: object;
   flakeRecords?: string;
 }) {
-  const folder = temporaryDirectory("test-evidence-");
+  const folder = temporaryDirectory();
   const put = (path: string, contents: string) => {
     mkdirSync(join(folder.path, path, ".."), { recursive: true });
     writeFileSync(join(folder.path, path), contents);
@@ -767,11 +762,6 @@ async function testsTable(repoRoot: string) {
     // a copy: a small file's Buffer is a slice of Node's shared pool, so its `.buffer` holds other bytes
     file: new Uint8Array(readFileSync(join(repoRoot, testEvidencePaths.testsTable))).buffer,
   });
-}
-
-function temporaryDirectory(prefix: string) {
-  const path = mkdtempSync(join(tmpdir(), prefix));
-  return { path, [Symbol.dispose]: () => rmSync(path, { recursive: true }) };
 }
 
 function artifact(

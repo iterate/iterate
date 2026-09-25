@@ -10,10 +10,7 @@ import type { WorkerSource } from "iterate/api";
 /** The presence facet as its TypeScript source files, handed over exactly like user code: the host
  *  (durable-object.ts) is the entry, its siblings ride under their own names. */
 const presenceFile = (name: string) =>
-  readFileSync(
-    fileURLToPath(new URL(`../../src/client/presence/${name}`, import.meta.url).href),
-    "utf8",
-  );
+  readFileSync(fileURLToPath(new URL(`./presence/${name}`, import.meta.url).href), "utf8");
 const PRESENCE_SOURCE: WorkerSource = {
   "worker.ts": presenceFile("durable-object.ts"),
   "processor.ts": presenceFile("processor.ts"),
@@ -74,7 +71,7 @@ export default class Digest extends WorkerEntrypoint {
     const poison = events.find((e) => e.payload && e.payload.poison);
     if (poison)
       throw Object.assign(new Error("digest: refusing poison at offset " + poison.offset), {
-        retryable: false, // the stamped-flag doctrine: never-retryable halts NOW, not in 30 min
+        retryable: false, // our stamp, not workerd's (it only sets true): halts NOW, not in 30 min
       });
     return withItx(this.env.ITX, async (itx) => {
       const n = Number((await itx.kv.get("digested")) ?? 0) + events.length;
@@ -106,7 +103,7 @@ export class ChunkyDurableObject extends StreamProcessorDurableObject {
   processor = new ChunkyProcessor();
 }`,
   },
-  // The presence processor (reduced ⊕ runtime) — the hosted demo's source, shared (src/client).
+  // The presence processor (reduced ⊕ runtime), its TypeScript files in support/presence.
   presence: PRESENCE_SOURCE,
   "user-tally": {
     "worker.js": `import { StreamProcessor, StreamProcessorDurableObject, defineProcessorContract, z } from "iterate/sdk";
