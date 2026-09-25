@@ -5,7 +5,7 @@
 // platform's `os-legacy-2026-04` (APP_CONFIG_INTEGRATIONS__EXA, APP_CONFIG_INTEGRATIONS__PARALLEL),
 // OpenAI from `os` (OPENAI_API_KEY). No value is ever printed.
 //
-//   pnpm --dir apps/os seed-instance-secrets --env preview [--pr 3063] [--lend-to-every-project]
+//   pnpm --dir apps/os seed-instance-secrets --env preview [--deployment pr3063-a1b2c3d] [--lend-to-every-project]
 //
 // `--env` names the target in envs.ts and is required: there is no default, and prd also needs
 // `--confirm-prd`.
@@ -19,7 +19,7 @@ import type { IterateApi } from "iterate/api";
 import { OS_DOPPLER_PROJECT, osEnvs } from "../../../envs.ts";
 import { resolveEnvContext } from "../../../scripts/lib/env-context.ts";
 import { parseAppConfig } from "../src/app-config.ts";
-import { previewUrl } from "./preview-config.ts";
+import { previewDeploymentUrls } from "./preview-config.ts";
 
 /** Each key: its path on the instance, the Doppler project and variable it comes from, and the
  *  origins it is pinned to. */
@@ -54,8 +54,9 @@ const keyOf = (text: string) =>
 export default async function seedInstanceSecrets(options: {
   /** the target deployment in envs.ts (preview, prd, …) — required, never defaulted */
   env: string;
-  /** a per-PR preview of `--env preview`, by its PR number */
-  pr?: number;
+  /** a per-commit deployment, by its name (`pr3063-a1b2c3d`), in place of `--env preview`'s own
+   *  worker; its keys go with it, so a PR's next push needs seeding again */
+  deployment?: string;
   /** the Doppler config of os-legacy-2026-04 that Exa's and Parallel's keys are read from (prd when unset) */
   legacyConfig?: string;
   /** the Doppler config OPENAI_API_KEY is read from (os); the target's own config when unset */
@@ -72,7 +73,9 @@ export default async function seedInstanceSecrets(options: {
     dopplerProject: OS_DOPPLER_PROJECT,
     env: options.env,
   });
-  const baseUrl = options.pr ? previewUrl(`pr${options.pr}`) : context.env.baseUrl;
+  const baseUrl = options.deployment
+    ? previewDeploymentUrls(options.deployment).os
+    : context.env.baseUrl;
   const adminSecret = parseAppConfig({
     APP_CONFIG: context.secrets.APP_CONFIG,
     APP_CONFIG_SECRETS__KEY: context.secrets.APP_CONFIG_SECRETS__KEY,

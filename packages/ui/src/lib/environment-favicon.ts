@@ -6,7 +6,7 @@
  *
  * Read from the page's own hostname, the one fact the Worker, the server render and the browser
  * all agree on, so no env var or config carries it (envs.ts names the hosts):
- * - `pr<N>-<worker>.<subdomain>.workers.dev`: a per-PR Worker Preview (apps/os/scripts/preview.ts)
+ * - `pr<N>-<sha7>-<app>.<subdomain>.workers.dev`: a PR's per-commit deployment (apps/os/scripts/preview.ts)
  * - `localhost`, `*.localhost`, `127.0.0.1`: `pnpm dev`
  * - anything else: production (os.iterate.com, dash.iterate.com, agents.iterate.com, …)
  *

@@ -7,9 +7,9 @@ How local development, preview environments, and identities work.
 Every deployed environment is an entry in the root **`envs.ts`** (hostnames,
 worker names, accounts, resource IDs) plus a Doppler config of the same name
 carrying its secrets. `pnpm --dir apps/os run deploy --env prd` deploys
-production; `preview` is the parent Worker every per-PR preview branches from
-(`pnpm preview deploy`, below); `dev` runs a fully-local server and never
-deploys. Scripts never branch on environment names; envs.ts + the config
+production; `preview` is main on the dev/preview account, whose Doppler config
+every per-commit deployment ships (`pnpm preview deploy`, below); `dev` runs a
+fully-local server and never deploys. Scripts never branch on environment names; envs.ts + the config
 supply everything.
 
 Local dev is **fully local**: Durable Objects, D1, KV and R2 run in miniflare
@@ -151,12 +151,11 @@ read secrets.
   and the other RFC 2606/6761 names). No deployment ever mails them, because a
   bounce costs the sender's reputation; sign in as them with the deployment's
   password.
-- One-click sign-in: every hosted client (Dash, Agents, Notes, Voice, Kit) is
-  deployed next to the platform preview and wired to it, and the PR body's
-  preview section carries `Sign in ↗` links: one in the heading (into the
-  Dash's project, or the issuer's own page when the Dash wasn't previewed),
-  one per app, and with the Dash one per `configs` template ("New project
-  from template"), which lands in the Dash's New project sheet with that
+- One-click sign-in: every hosted client (Dash, Agents, Notes, Admin, Voice,
+  Kit) is deployed next to the platform in each per-commit deployment and wired
+  to it, and the PR body's section carries `Sign in ↗` links: one per worker
+  (apps/os's into the Dash's project), and with the Dash one per `configs`
+  template ("New project from template"), which lands in the Dash's New project sheet with that
   template chosen (`/projects?new=1&template=<name>`). A template the PR
   changes is linked at the PR head instead
   (`template=github:iterate/iterate#<head>&path:configs/<name>`, the
@@ -170,13 +169,14 @@ read secrets.
   preview. An agent without an admin's prd session signs in to a preview with
   its password instead (Doppler `os/preview`, `APP_CONFIG` `login.password`).
   CI seeds that person and project on every deploy
-  (`apps/os/scripts/preview.ts` `previewSignIn`). The link is
+  (`apps/os/scripts/preview.ts` `seedSignIn`). The link is
   `/.auth/test-link?t=<token>` (`apps/os/src/test-link.ts`), signed with the
-  preview's `secrets.key` and bound to that preview's origin, so a pr123 link
-  is refused on pr124 even though every preview inherits the same key. It is
-  also bound to that one address, expires in 14 days (every push mints a fresh
-  one) and is deleted with the preview. The route exists only where
-  `login.testLink` is set. The preview config and local dev set it in code,
+  deployment's `secrets.key` and bound to its origin, so a link for one
+  deployment is refused on another even though every deployment ships the same
+  key. It is also bound to that one address, expires in 14 days (every push
+  mints a fresh one) and goes with its deployment. The route exists only where
+  `login.testLink` is set. A per-commit deployment's config (envs.ts
+  `previewDeployment`'s `testLinks`, with its admins) and local dev set it in code,
   never in Doppler, and `parseAppConfig` refuses it unless `urls.os` is a
   workers.dev or localhost origin, so prd answers 404, and off localhost
   refuses it without `login.testLink.admins`, the issuer and email patterns
@@ -330,8 +330,8 @@ pnpm spec specs/os/auth.spec.ts --headed
 Against a deployment, the specs validate one env contract. The config reads
 the deployment's credentials out of `APP_CONFIG` (the password for sign-in, the
 operator bearer for fixture setup), its project routing and MCP origin out of
-the `envs.ts` entry the URL falls under, so a per-PR preview inherits its
-parent's (`apps/os/e2e/support/deployed-target.ts`). `DEMO_BASE_URL` is the
+`envs.ts`: the entry the URL is, or the per-commit deployment it names
+(`apps/os/e2e/support/deployed-target.ts`). `DEMO_BASE_URL` is the
 only target override; when it is unset, Playwright boots the local dev server.
 It never infers credentials from redirects.
 
@@ -370,9 +370,9 @@ principal that made it, but the bearer's principal is the operator, not a
 person. Guard those Doppler values like any production secret, and prefer a
 scoped identity (your own login or personal access token) when you can.
 
-Each environment (local dev, the preview parent, prd) has its own
-`secrets.key`, bearer and password, so a leak is scoped to one environment;
-every per-PR preview shares its parent's. A blank `secrets.adminBearer` turns operator
+Each environment (local dev, main on dev, prd) has its own `secrets.key`,
+bearer and password, so a leak is scoped to one environment; every per-commit
+deployment ships main on dev's. A blank `secrets.adminBearer` turns operator
 access off entirely (a self-host needs none: a personal access token covers
 scripting).
 
@@ -385,57 +385,51 @@ developer's actual Chrome.
 
 ## Preview environments
 
-There is no fleet to expand: every PR gets its own preview, and nothing is
-pooled or leased.
+Every tested commit of a PR gets a deployment of its own. Nothing is pooled,
+leased or redeployed in place.
 
-Each preview is a complete, isolated stack on the dev/preview Cloudflare
-account: a Cloudflare Worker Preview of the parent `os`, named `pr<n>`, at
-`https://pr<n>-os.iterate-dev-preview.workers.dev`,
-with Durable Objects, a D1, KV, R2 and an Artifacts namespace of its own. The
-five hosted clients (Dash, Agents, Notes, Voice, Kit) deploy as previews of their
-own parents, wired to it and to each other: each signs in against it, and every link
-between them — the platform's landing page to the Dash, the Dash's directory of apps,
-Kit's link to the sessions in the Dash — names the same PR's app previews
-(`appPreviewOrigins` in `apps/os/scripts/preview-config.ts`), only the ones the run
-deployed. Previews use workers.dev and have no project hosts:
-projects are paths on the one origin. The recipe is cloudflare-os's
-(`apps/os/scripts/preview.ts`; commands in `apps/os/README.md`).
+A deployment is a complete, isolated set of plain Workers on the dev/preview
+Cloudflare account, named `<prefix>-<sha7>`: `pr<n>` and the first 7 digits of
+the commit CI tests (the PR merged into main). apps/os is
+`https://pr<n>-<sha7>-os.iterate-dev-preview.workers.dev`, with Durable
+Objects, a D1, KV, R2 and an Artifacts namespace of its own. The six hosted
+clients (Dash, Agents, Notes, Admin, Voice, Kit) are `pr<n>-<sha7>-<app>`: each
+signs in against that apps/os, and every link between them names the same
+deployment's apps. The name decides everything (`previewDeployment` in
+`envs.ts`), and the build and deploy are prd's (`apps/os/scripts/deploy.ts`,
+`deployApp`). Deployments use workers.dev and have no project hosts: projects
+are paths on the one origin. Commands: `apps/os/README.md`.
 
-### The preview model: one preview per PR, for the PR's whole life
+### The model: a fresh deployment per tested commit
 
-A preview belongs to one PR, named after its number and branch. The
-invariants:
-
-- **A PR keeps its preview from first deploy until the PR closes.** Every push
-  redeploys it in place (`deploy`); closing the PR deletes it and everything it
-  owned (`preview-delete.yml`). The nightly sweep (`preview-sweep.yml`) is the safety valve: it
-  deletes a preview whose PR closed without a delete, a preview whose last
-  deploy is more than 7 days old, a hand-named preview idle for 24 hours with no
-  open PR branch of that name, and any per-preview resource that outlived its
-  preview. The rules are a pure table in `apps/os/scripts/preview-sweep.ts`.
-  Kept short on purpose, because a live preview costs Cloudflare resources and
-  its Durable Objects can keep waking.
+- **Every push deploys a new set; the old one goes once the new one is ready.**
+  Beside the suites, **Clean up superseded** deletes the PR's older
+  deployments. Closing the PR deletes all of them (`preview-delete.yml`). The
+  nightly sweep (`preview-sweep.yml`) is the safety valve: it deletes a
+  deployment whose PR closed without a delete, one an hour older than its
+  PR's newest, one more than 7 days old, and a hand-named one idle for
+  24 hours with no open PR branch of that name. The rules are a pure table in
+  `apps/os/scripts/preview-sweep.ts`. Kept short on purpose: every deployment
+  is 7 workers, and the account allows 500.
+- **Data does not survive a push.** Manual QA state lives as long as its
+  deployment. The PR body's `Sign in ↗` link re-seeds the test person and
+  project `pr<n>` on every deploy.
 - **In-test cleanup is never the guarantee.** Every e2e run provisions its own
   projects under a run id (`E2E_RUN_ID`; CI pins the workflow run and attempt),
   so runs never collide, but a cancelled or killed run cleans up nothing.
-  Deleting the preview is the guarantee. `reset` deletes the preview and its
-  resources, then deploys fresh; `delete` removes it. Consequence: manual QA
-  state on a preview survives pushes (they redeploy in place) and is gone after
-  a `reset` or when the PR closes.
-- **The preview's name is its identity.** It derives from the PR number and
-  branch (`apps/os/scripts/preview-config.ts`). The PR body's managed section
-  only _displays_ the URL, deployment and clients; it is never consulted for
-  ownership, and a person's text around it is kept verbatim. Teardown looks
-  each preview up again right before deleting it, and a GitHub lookup that
-  failed never makes a preview stale.
+  Deleting the deployment is the guarantee.
+- **The name is its identity.** Every worker and resource of a deployment is
+  `<prefix>-<sha7>-<member>`, and every delete finds them by that name. The PR
+  body's managed section only _displays_ the URL, version and clients; it is
+  never consulted, and a person's text around it is kept verbatim. A GitHub
+  lookup that failed never makes a deployment stale.
 - **Nothing to contend for.** There is no pool, so there is no queue, no
   resting slot and no reclaim. Concurrency is per PR: a push cancels the PR's
-  run in progress, and the next run redeploys the whole preview, which repairs
-  a deploy cut short.
-- **Everything is attributable and visible.** The PR body names the preview,
-  its deployment and a Cloudflare dashboard link; the workflow logs narrate
-  each operation; `pnpm preview sweep --dry-run` prints what the sweep would
-  delete and why.
+  run in progress, and the next run deploys a set of its own.
+- **Everything is attributable and visible.** The PR body names the
+  deployment, its version and a Cloudflare dashboard link; the workflow logs
+  narrate each operation; `pnpm preview sweep --dry-run` prints what the sweep
+  would delete and why.
 
   ```bash
   # What would the nightly sweep delete, and why?
@@ -447,6 +441,20 @@ CI and local machines run the **same preview commands**. Doppler/Cloudflare
 deploy access is an operator capability, so deploy from a checkout of the PR's
 head.
 
+### Second pushes
+
+What the push before leaves behind, and what deletes it. A deployment is
+whatever of its members exist, so a half-made one is deleted like a whole one
+(`apps/os/scripts/preview-sweep.test.ts` pins each row).
+
+| The push before                                  | What it left                                                | What deletes it                                                                                                                                       |
+| ------------------------------------------------ | ----------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| deployed; its tests passed or failed             | a whole deployment                                          | this push's Clean up superseded, once this push's deployment is ready                                                                                 |
+| was cancelled halfway through deploying          | some of its D1, R2 bucket, Artifacts namespace, KV, workers | the same                                                                                                                                              |
+| failed to deploy                                 | the same; the PR body says `deploy failed`                  | the same. Until then the push before it, the last to deploy, stays: the sweep never counts a deployment without its apps/os worker as the PR's newest |
+| is still deploying when this push's cleanup runs | members created after this push's                           | nothing yet: the cleanup deletes only deployments made entirely before its own                                                                        |
+| had its own cleanup cancelled or failing         | the deployment before it                                    | this push's cleanup, else the nightly sweep an hour later                                                                                             |
+
 ### Main runs
 
 A push to `main` deploys production directly and waits for nothing else: Deploy
@@ -455,13 +463,20 @@ the MCP and `/api` bearer challenges) mutate nothing, then, once `/version`
 names the new version, GETs each production project host and pages
 #error-pulse on a 421, a 5xx or no answer that four tries 10 s apart do not
 clear (`scripts/ci/prd-post-deploy-check.ts`). In parallel, **Main OS e2e**
-(`main-os-e2e.yml`) redeploys the pushed commit in place to its own preview,
-`main`, runs the e2e suite and the browser specs against it, and pages
-#error-pulse only when main goes red or green again. Its runs never cancel each other: the
-pushes that land during a run queue behind it, collapsed to the newest, so
-every run that starts reaches a verdict unless someone cancels it by hand. A
-job that hangs until its timeout counts as red. The full mutating proof is each
-PR's preview.
+(`main-os-e2e.yml`) deploys the pushed commit as `main-<sha7>`, runs the e2e
+suite and the browser specs against it, deletes the `main-…` deployments
+before it, and pages #error-pulse only when main goes red or green again. Its
+runs never cancel each other: the pushes that land during a run queue behind
+it, collapsed to the newest, so every run that starts reaches a verdict unless
+someone cancels it by hand. A job that hangs until its timeout counts as red.
+The full mutating proof is each PR's deployment.
+
+**Main on dev** (`os`, `dash`, … at `*.iterate-dev-preview.workers.dev`,
+`osEnvs.preview` in `envs.ts`) is main on the dev/preview account, redeployed
+in place by `preview-parents.yml` from every such push and erased nightly. People
+use it by hand; nothing a PR deploys depends on it. (The workflow and the
+`deploy-parents` command keep the name from when every PR's Worker Preview
+branched off these workers.)
 
 What still exercises deployed code on a schedule: the nightly **OS crash hunt**
 drives isolate-ceiling rows against prd (`os-crash-hunt.yml`), the hourly
@@ -474,46 +489,49 @@ worker (next story).
 
 Every push to a PR runs the **Preview OS** workflow. When the PR touches
 preview-relevant paths (`previewPaths` in `scripts/ci/preview-paths.ts`; see
-[Depot CI](depot-ci.md#which-prs-get-a-preview)), **Deploy preview** builds and
-deploys the platform preview and all six clients, then writes the URL and the
-operations into the PR body's managed section. **E2E tests** (the Vitest e2e
+[Depot CI](depot-ci.md#which-prs-get-a-preview)), **Deploy preview** deploys
+the tested commit's apps/os and all six clients. It folds the PR body's
+managed section into a `<details>` first, so the links there read as the
+previous commit's, and writes the new deployment's section once it lands: a
+row per worker with its one-click `Sign in ↗` and Cloudflare dashboard links,
+and the template quick-launch links. A deploy that fails leaves the previous
+section folded. **E2E tests** (the Vitest e2e
 suite, `pnpm preview e2e`) and **Browser specs** (the Playwright specs,
 `pnpm preview specs`) then run side by side against that deployment, each its
-own job and required check. A deploy that did not succeed turns both red rather
-than letting them report green. The section opens with a status line
-(`<!-- os-preview-status:begin -->…end`) naming the commit, the CI job and
-when: `deploying`, then `deployed` or `deploy failed` (with the error's tail,
-and the links below marked as the last good deploy's). Under it each suite's
-job writes its own line, `E2E tests` or `Browser specs`, `passed` or `failed`;
-a new deploy clears them. Each job rewrites only its own line.
+own job and required check; **Clean up superseded** deletes the PR's older
+deployments beside them. A deploy that did not succeed turns both suites red
+rather than letting them report green. The verdicts live in those checks; the
+section holds links only.
 
-Closing or merging the PR runs `pnpm preview delete`, which deletes the
-preview, its D1, Artifacts namespace, KV namespaces and R2 bucket, and the
-client previews.
+Closing or merging the PR runs `pnpm preview delete`, which deletes every
+deployment of the PR: its workers, D1, Artifacts namespace, KV namespaces and
+R2 bucket.
 
-Preview cleanliness is an **invariant of birth**, not a promise about exits:
-every preview is created with resources of its own, so no PR ever inherits
-another PR's data. When an exit path skips the delete (a force-closed PR, a
-failed cleanup), the sweep collects both the preview and any orphaned resource.
-One exit is Cloudflare's: an Artifacts namespace it will not delete (an empty
-repos list, yet `DELETE` keeps answering 409/10202 "Namespace is not empty").
-The delete and the sweep log `preview.platform-failure-stuck-namespace` and
-carry on; the sweep pages #error-pulse to escalate it to Cloudflare and tries
-again the next night. The run goes red only when the sweep could not act.
+Cleanliness is an **invariant of birth**, not a promise about exits: every
+deployment is created with resources of its own, so no PR or push ever inherits
+another's data. When an exit path skips the delete (a force-closed PR, a failed
+cleanup), the sweep collects what is left. One exit is Cloudflare's: an
+Artifacts namespace it will not delete (an empty repos list, yet `DELETE` keeps
+answering 409/10202 "Namespace is not empty"). The delete and the sweep log
+`preview.platform-failure-stuck-namespace` and carry on; the sweep pages
+#error-pulse to escalate it to Cloudflare and tries again the next night. The
+run goes red only when the sweep could not act.
 
 ### Story 2: run what CI runs, locally
 
-The `pnpm preview` commands CI runs (`deploy`, `e2e`, `reset`, `delete`,
-`sweep`) run from `apps/os` under the parent Doppler config; they are in
-[apps/os/README.md](../apps/os/README.md). Given the PR's number and branch,
-they address the same preview CI deployed for the PR (the name is the same),
-so a local run redeploys it in place rather than fighting CI.
+The `pnpm preview` commands CI runs (`deploy`, `e2e`, `specs`, `delete`,
+`sweep`) run from `apps/os` under Doppler `os/preview`; they are in
+[apps/os/README.md](../apps/os/README.md). Given the PR's number, `deploy`
+deploys your checkout's commit as `pr<n>-<sha7>`: the same deployment CI makes
+when your checkout is the commit CI tests, a deployment of its own otherwise.
+`e2e` and `specs` test the PR's newest deployment unless PREVIEW_DEPLOYMENT
+names one.
 
 For a focused flake hunt, reuse the exact deployment and run one test file or
 one test repeatedly without redeploying (from `apps/os`):
 
 ```bash
-PREVIEW=https://pr1234-os.iterate-dev-preview.workers.dev
+PREVIEW=https://pr1234-a1b2c3d-os.iterate-dev-preview.workers.dev
 
 # one Vitest file, one test (paths are relative to apps/os)
 WORKER_BASE_URL=$PREVIEW doppler run --project os --config preview -- \
@@ -538,84 +556,80 @@ bug. All requested runs complete, so the summary preserves the failure rate.
 Run it from CI (`os-e2e-soak.yml`) when the result matters: from a laptop
 the OAuth-cookie rows answer 401, an unexplained laptop-side difference.
 
-### Story 3: pin a PR to a preview
+### Story 3: run a PR's operations by hand
 
-Nothing to pin: the PR's preview name is a function of its number and branch,
-so every deploy for that PR, from CI or a laptop, lands on the same preview.
-To run a PR's operations by hand, dispatch the workflow with its number:
+Nothing to pin: a PR's deployments are named for its number. To run its
+operations by hand, dispatch the workflow with that number:
 
 ```bash
 depot ci dispatch --org 0p91s0lz49 --repo iterate/iterate \
   --workflow preview-os.yml --ref <branch> \
-  --input pull-request-number=1234 --input action=reset
+  --input pull-request-number=1234 --input action=deploy
 ```
 
-`action` is `deploy | reset | test | e2e | specs` (`test`, `e2e` and `specs`
-run the suites against the preview as it is deployed:
+`action` is `deploy | test | e2e | specs` (`test`, `e2e` and `specs` run the
+suites against the PR's newest deployment:
 [Depot CI](depot-ci.md#run-the-suites-against-a-deployed-preview)); `apps`
-(`all | auto | none`) chooses the clients deployed on top. Delete and the nightly sweep are
-workflows of their own: dispatch `preview-delete.yml` with
-`--input pull-request-number=1234` to delete the preview, `preview-sweep.yml`
-to sweep now.
+(`all | none`) chooses whether the clients are deployed on top. Delete and the
+nightly sweep are workflows of their own: dispatch `preview-delete.yml` with
+`--input pull-request-number=1234` to delete the PR's deployments,
+`preview-sweep.yml` to sweep now.
 
-### Story 4: a preview for experiments
+### Story 4: a deployment for experiments
 
-Name a preview yourself instead of by PR number. That is what keeps PR
-previews from deploying over you and PR cleanups from deleting your work:
+Name a prefix yourself instead of a PR number. That keeps PR runs from
+deleting your work:
 
 ```bash
 cd apps/os
 doppler run --project os --config preview -- pnpm preview deploy --name exp-<you>
-# → https://exp-<you>-os.iterate-dev-preview.workers.dev
+# → https://exp-<you>-<sha7>-os.iterate-dev-preview.workers.dev, for your checkout's commit
 
 # sign in there with any email and the preview password, drive it as operator,
 # or run the specs against it:
-DEMO_BASE_URL=https://exp-<you>-os.iterate-dev-preview.workers.dev \
+DEMO_BASE_URL=https://exp-<you>-<sha7>-os.iterate-dev-preview.workers.dev \
   doppler run --project os --config preview -- pnpm spec
 
-# delete it when done; otherwise the sweep takes it 24 h after its last deploy
+# delete it when done; otherwise the sweep takes it 24 h after it was made
 # (unless an open PR's head branch slugifies to the same name)
 doppler run --project os --config preview -- pnpm preview delete --name exp-<you>
 ```
 
-The OS e2e soak uses exactly this with `--name soak`.
+Deploying from another commit makes another deployment beside it; the sweep
+takes the older one an hour later. The OS e2e soak uses exactly this with
+`--name soak`.
 
 ### Story 5: something is stuck
 
-A preview that will not deploy, or whose state is wrong, has three remedies,
-from least to most destructive:
+A deployment that will not deploy, or whose state is wrong, has two remedies:
 
-- **redeploy** (`deploy`, or push again): same preview, same data, new code;
-- **reset** (`reset`): delete the preview and every resource it owns, then
-  deploy fresh. Previous projects, agents and schedules are gone, which is the
-  point;
-- **delete** (`delete`): remove it; the next push or dispatch creates it anew.
+- **deploy again** (push again, or `deploy` from a checkout of a new commit): a
+  fresh deployment, with nothing of the old one's data. Deploying the same
+  commit again redeploys the same deployment in place;
+- **delete** (`delete`): remove every deployment of the prefix; the next push
+  or dispatch creates one anew.
 
 ```bash
 cd apps/os
 doppler run --project os --config preview -- pnpm preview sweep --dry-run  # what is stale, and why
-doppler run --project os --config preview -- pnpm preview reset --pr 1234 --name <branch>
-doppler run --project os --config preview -- pnpm preview sweep            # delete stale previews and orphans
+doppler run --project os --config preview -- pnpm preview delete --pr 1234
+doppler run --project os --config preview -- pnpm preview sweep            # delete stale deployments
 ```
 
-Automation never deletes a preview whose PR is open and recently deployed. A
-lookup that fails leaves the preview alone rather than guessing. Every
-deletion is logged in the job that made it.
+Automation never deletes a PR's newest deployment while the PR is open and it
+is less than 7 days old. A lookup that fails leaves a deployment alone rather
+than guessing. Every deletion is logged in the job that made it.
 
-### Preview plumbing (secrets and clients)
+### Deployment plumbing (secrets and clients)
 
-A preview's configuration is **inherited, not provisioned**: every preview gets
-the parent's two secrets (`APP_CONFIG`, `APP_CONFIG_SECRETS__KEY`, the
-`os-preview` Worker's Previews settings, from Doppler
-`os/preview`), and its own `urls` (its origin, projects as paths,
-its Dash when deployed) come from the per-preview Wrangler config
-`preview.ts` writes. Clients need no registration: each identifies itself by
-its client-metadata URL, so the platform preview and its clients need no
-deploy-time coordination. The deploy creates the preview's Artifacts
-namespace; KV and R2 are provisioned per preview by Wrangler.
-
-More detail on the environments themselves: `envs.ts` (`osEnvs.preview`, the
-parent) and `apps/os/README.md`.
+A deployment's configuration comes from `envs.ts` like any other environment's:
+`previewDeployment(name)` derives apps/os's env (its origin, its Dash, projects
+as paths, the one-click sign-in links on, one test admin) and each app's, and
+the deploy ships Doppler `os/preview`'s two secrets (`APP_CONFIG`,
+`APP_CONFIG_SECRETS__KEY`) with apps/os. Clients need no registration: each
+identifies itself by its client-metadata URL. The deploy creates apps/os's D1
+(then migrates it), R2 bucket and Artifacts namespace by name; wrangler
+provisions its KV namespaces on the first deploy.
 
 ## Public webhooks
 

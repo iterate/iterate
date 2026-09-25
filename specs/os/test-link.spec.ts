@@ -6,8 +6,9 @@
 // admin's, asking only who they are (apps/os/src/test-link-admins.ts) — what the spec checks there,
 // since no spec holds an admin's prd session. Runs against the local worker (local dev turns the
 // links on; its key is apps/os/scripts/generate-wrangler-config.ts's) or, with DEMO_BASE_URL, a
-// preview under `doppler run` (its key is the Previews' `APP_CONFIG_SECRETS__KEY`). A deployment
-// on its own domain has the links off: nothing to prove there, so the specs skip.
+// per-commit deployment under `doppler run --config preview` (its key is that config's
+// `APP_CONFIG_SECRETS__KEY`). A deployment on its own domain has the links off: nothing to prove
+// there, so the specs skip.
 import { expect } from "@playwright/test";
 import { uniqueFixtureSlug } from "@iterate-com/shared/test-support/fixture-slug";
 import { mintTestLink, TEST_LINK_PATH } from "../../apps/os/src/test-link.ts";
@@ -108,7 +109,7 @@ function testLinkKeyOf(origin: string) {
   return key!;
 }
 
-/** Where every preview's admins prove who they are (apps/os/scripts/preview-config.ts). */
+/** Where every preview's admins prove who they are (envs.ts `previewDeployment`'s `testLinks`). */
 const PRD_ISSUER = "https://os.iterate.com";
 
 /** A preview, whose links need an admin (app-config.ts requires `login.testLink.admins` off

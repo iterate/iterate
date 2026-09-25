@@ -69,6 +69,8 @@ async function eraseDataWith(
     env: options.env,
   });
   const { env, cf } = context;
+  if (!env.resources)
+    throw new Error(`${context.name} records no resource ids in envs.ts: nothing to erase them by`);
   console.log(
     `${options.dryRun ? "Inventory" : "Erase"}: ${context.name}, worker ${env.workerName}`,
   );
@@ -146,7 +148,7 @@ async function eraseDataWith(
     z
       .array(z.object({ results: z.array(z.looseObject({})) }))
       .parse(
-        await cf(`/d1/database/${env.resources.dbId}/query`, {
+        await cf(`/d1/database/${env.resources!.dbId}/query`, {
           method: "POST",
           body: JSON.stringify({ sql }),
         }),

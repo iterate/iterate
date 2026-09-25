@@ -6,9 +6,10 @@
  * one triple costs ~20). Prints the wall time and the latency distribution per verb, every refusal,
  * then reads back what the control plane knows: the people's reach (their organization, their
  * project), the operator's listings (every user, organization and project counted). A logic error shows as a mismatch; a bottleneck as a verb whose p95 grows with the
- * load. Nothing here is cleaned up: the preview's `pnpm preview reset` is.
+ * load. Nothing here is cleaned up: deleting the deployment is (`pnpm preview delete`, or the next
+ * push's Clean up superseded).
  *
- *   doppler run --project os --config preview -- sh -c 'ADMIN_API_SECRET="$(node -p "JSON.parse(process.env.APP_CONFIG).secrets.adminBearer")" pnpm control-plane-load --worker-base-url https://pr2828-os.iterate-dev-preview.workers.dev --triples 1000 --sockets 50'
+ *   doppler run --project os --config preview -- sh -c 'ADMIN_API_SECRET="$(node -p "JSON.parse(process.env.APP_CONFIG).secrets.adminBearer")" pnpm control-plane-load --worker-base-url https://pr2828-a1b2c3d-os.iterate-dev-preview.workers.dev --triples 1000 --sockets 50'
  */
 import { newWebSocketRpcSession } from "capnweb";
 import { createCli } from "trpc-cli";

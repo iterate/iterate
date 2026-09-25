@@ -1,19 +1,22 @@
-// scripts/preview.ts — one Worker Preview per pull request of the one worker, the cloudflare-os recipe
-// (their scripts/preview/preview.ts: eighteen workers in three tiers collapsed to one). The effects
-// half; the pure half — naming, the PR body's section, the preview's wrangler config — is
-// scripts/preview-config.ts (preview.test.ts). Commands: config (build and write preview config),
-// deploy (build, the D1 migrated and the Artifacts namespace, the secrets, `wrangler preview`, the
-// PR body and its status line), e2e and specs (the vitest e2e suite, `--slow-rows` picking the rows
-// tagged `slow`, scripts/slow-rows.ts, or the Playwright specs, against the live preview; the
-// suite's line under the status line), reset (delete, then deploy), delete (the preview, its D1,
-// Artifacts namespace, KV namespaces and R2 bucket, the apps on top), sweep (the stale previews and
-// the resources that outlived theirs — the rules are scripts/preview-sweep.ts), deploy-parents (the
-// workers every preview branches from, from this checkout: preview-parents.yml on every push to
-// main), reset-parent (the `os` parent's own data erased, then the parent deployed again:
-// preview-sweep.yml, nightly). `--dry-run` prints the plan.
-import { spawn, spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+// scripts/preview.ts — A FRESH SET OF PLAIN WORKERS PER TESTED COMMIT on the dev/preview account:
+// apps/os and each app on top, `<prefix>-<sha7>-<app>` (envs.ts `previewDeployment`), deployed by
+// the same build and `wrangler deploy` as prd (scripts/deploy.ts, deployApp). The effects half; the
+// pure halves are scripts/preview-config.ts (naming, the PR body's section) and
+// scripts/preview-sweep.ts (which deployments go). Commands:
+//   config              build apps/os for this commit's deployment and name the config it wrote
+//   deploy              this commit's deployment: apps/os (its D1, R2 bucket and Artifacts namespace
+//                       created, the D1 migrated), every app on top, the readiness gate, the sign-in
+//                       seed, the PR body's section (the previous one folded first)
+//   e2e, specs          the vitest e2e suite (`--slow-rows`, scripts/slow-rows.ts) or the Playwright
+//                       specs against a deployment: PREVIEW_DEPLOYMENT, else the prefix's newest
+//   cleanup-superseded  delete the prefix's deployments PREVIEW_DEPLOYMENT supersedes
+//   delete              every deployment of a prefix: a closed PR's (preview-delete.yml)
+//   sweep               the stale deployments (preview-sweep.ts), nightly (preview-sweep.yml)
+//   deploy-parents      main on the dev/preview account, redeployed in place (preview-parents.yml)
+//   reset-parent        main on dev's data erased, then deployed again (preview-sweep.yml)
+// `--dry-run` prints the plan.
+import { spawnSync } from "node:child_process";
+import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { newWebSocketRpcSession } from "capnweb";
@@ -31,31 +34,26 @@ import {
   findBuiltWranglerConfig,
   runAsync,
   smoke,
-  smokeResponse,
 } from "../../../scripts/lib/deploy-helpers.ts";
 import {
   CloudflareApiError,
   resolveEnvContext,
   type EnvContext,
 } from "../../../scripts/lib/env-context.ts";
-import {
-  buildStartApp,
-  writeStartAppPreviewConfig,
-  type StartApp,
-} from "../../../scripts/lib/start-app.ts";
+import { buildStartApp, type StartApp } from "../../../scripts/lib/start-app.ts";
 import { createOctokit, getOctokit, getRepo } from "../../../scripts/ci/github.ts";
 import { getSlackClient, slackChannelIds } from "../../../scripts/ci/slack.ts";
 import { traceOperation } from "../../../scripts/ci/tracing/tracing.ts";
 import { parseAppConfig, type AppConfig } from "../src/app-config.ts";
 import { mintTestLink, TEST_LINK_PATH, testLinkIdentityOf } from "../src/test-link.ts";
 import { buildOs } from "./build.ts";
-import { applyD1Migrations, ensureD1, findD1, type D1Row } from "./d1.ts";
+import type { D1Row } from "./d1.ts";
 import deployOs from "./deploy.ts";
 import eraseData from "./erase-data.ts";
+import { readWranglerBase } from "./generate-wrangler-config.ts";
 import { awaitPreviewReady } from "./preview-readiness.ts";
 import {
   deleteArtifactsNamespace,
-  ensureArtifactsNamespace,
   isCloudflareError,
   renderStuckArtifactsNamespacesPage,
   type ArtifactsNamespaceRow,
@@ -63,153 +61,70 @@ import {
   type StuckArtifactsNamespace,
 } from "./preview-artifacts.ts";
 import {
-  accountResourceNames,
   APPS,
-  appPreviewOrigins,
-  appPreviewUrl,
   assertFreshInstall,
-  changedApps,
   configTemplateNames,
-  deployWithStatus,
-  lastLines,
-  PREVIEW_CONFIG_NAME,
-  PREVIEW_PARENT,
-  isDurableObjectClassNotExportedError,
+  foldPreviousPreviewSection,
+  MAIN_ON_DEV,
+  previewDeploymentName,
+  previewDeploymentUrls,
   previewPullRequestNumber,
-  previewResourceName,
-  previewResourceSuffixes,
-  previewUrl,
   renderPullRequestSection,
-  resolvePreviewName,
-  PREVIEW_SUITES,
-  splicePreviewStatus,
-  splicePreviewSuite,
+  resolvePreviewPrefix,
   splicePullRequestBody,
-  suiteLineMayBeOverwritten,
   templateQuickLaunches,
-  writePreviewWranglerConfig,
-  type PreviewStatus,
-  type PreviewSuite,
-  type PreviewSuiteStatus,
 } from "./preview-config.ts";
 import {
+  groupPreviewDeployments,
+  newestPreviewDeployment,
   planPreviewSweep,
-  previewNameOfSweptResource,
+  planSupersededCleanup,
+  previewMemberSuffixes,
+  type PreviewDeploymentListing,
+  type PreviewMember,
   type PullRequestState,
-  type SweptResource,
 } from "./preview-sweep.ts";
 import { chooseSlowRows, SlowRows, slowRowsTagsFilter } from "./slow-rows.ts";
 
 const ROOT = path.resolve(import.meta.dirname, "..");
 const REPO_ROOT = path.resolve(ROOT, "../..");
 const OUTPUT_DIR = path.join(ROOT, "output");
-/** cloudflare-os runs on this draft build too: released wrangler accepts a binding-only KV entry in
- *  `previews` but sends `namespace_id: undefined`; the branch of workers-sdk PR #14416 provisions a
- *  fresh KV namespace and R2 bucket per preview. Its `preview delete` deletes them only when the
- *  config it reads declares them (binding-only `previews` entries), and the delete here hands it one
- *  naming the parent alone — so deletePreview deletes them itself (2026-09-23: 162 KV namespaces and
- *  81 R2 buckets had leaked). Drop this, and the tmpdir install below, once a released changelog
- *  mentions preview auto-provisioning. */
-const WRANGLER_PACKAGE = "https://pkg.pr.new/wrangler@14416";
 
 const Command = z.enum([
   "config",
   "deploy",
   "e2e",
   "specs",
-  "reset",
+  "cleanup-superseded",
   "delete",
   "sweep",
   "deploy-parents",
   "reset-parent",
 ]);
 type Command = z.infer<typeof Command>;
-/** The apps on top: every one by default, none, or (auto) the ones whose paths this PR changes. */
-const AppsMode = z.enum(["all", "auto", "none"]);
+/** The apps on top: every one (a PR's, a CI workflow's), or none (a soak of apps/os alone). */
+const AppsMode = z.enum(["all", "none"]);
 type AppsMode = z.infer<typeof AppsMode>;
 
-/** The parent's Doppler config (envs.ts `OS_DOPPLER_PROJECT`, config `preview`), downloaded — the
- *  Cloudflare credentials for its account and the two secrets every preview inherits — the way
- *  ensure-resources and erase-data resolve theirs. Refuses a Doppler account that is not the
- *  parent's. */
-const parentContext = () =>
+/** Main on dev's Doppler config (envs.ts `OS_DOPPLER_PROJECT`, config `preview`), downloaded — the
+ *  Cloudflare credentials for the dev/preview account and the two secrets every apps/os deploy
+ *  there ships — the way ensure-resources and erase-data resolve theirs. Refuses a Doppler account
+ *  that is not the dev/preview one. */
+const accountContext = () =>
   resolveEnvContext({ envs: osEnvs, dopplerProject: OS_DOPPLER_PROJECT, env: "preview" });
-
-// ── process helpers (cloudflare-os) ────────────────────────────────────────────────────────────
 
 function describe(error: unknown) {
   return error instanceof Error ? error.message : String(error);
 }
 
-/** Run a command and capture its output — wrangler's `--json` payload, its prose for a not-found
- *  check. What may stream through runs by deploy-helpers' `runAsync`. */
-function run(
-  command: string,
-  args: string[],
-  options: { cwd?: string; env?: NodeJS.ProcessEnv } = {},
-) {
-  console.log(
-    `running${options.cwd ? ` in ${path.relative(ROOT, options.cwd) || "."}` : ""}: ${command} ${args.join(" ")}`,
-  );
-  return new Promise<{ status: number | null; stdout: string; stderr: string }>(
-    (resolve, reject) => {
-      const child = spawn(command, args, {
-        cwd: options.cwd || ROOT,
-        env: options.env || process.env,
-        stdio: ["ignore", "pipe", "pipe"],
-      });
-      let stdout = "";
-      let stderr = "";
-      child.stdout.setEncoding("utf8");
-      child.stderr.setEncoding("utf8");
-      child.stdout.on("data", (data: string) => (stdout += data));
-      child.stderr.on("data", (data: string) => (stderr += data));
-      child.once("error", (error) =>
-        reject(new Error(`failed to run ${command}: ${error.message}`)),
-      );
-      child.once("close", (status) => resolve({ status, stdout, stderr }));
-    },
-  );
-}
-
-/** The wrangler a run uses: the pinned draft build (WRANGLER_PACKAGE) installed into a tmpdir the
- *  way cloudflare-os does it (pnpm, exotic subdeps allowed for the pkg.pr.new workspace packages). */
-function preparePreviewWrangler() {
-  const installDir = mkdtempSync(path.join(tmpdir(), "os-preview-wrangler-"));
-  writeFileSync(
-    path.join(installDir, "package.json"),
-    JSON.stringify({ private: true, dependencies: { wrangler: WRANGLER_PACKAGE } }),
-  );
-  writeFileSync(
-    path.join(installDir, "pnpm-workspace.yaml"),
-    "allowBuilds:\n  esbuild: true\n  sharp: true\n  workerd: true\n",
-  );
-  return {
-    command: path.join(installDir, "node_modules", ".bin", "wrangler"),
-    ready: runAsync("pnpm", ["--config.blockExoticSubdeps=false", "--dir", installDir, "install"], {
-      cwd: installDir,
-    }),
-    cleanup: () => rmSync(installDir, { recursive: true, force: true }),
-  };
-}
-
-/** `wrangler --json` still logs prose ahead of the JSON object; the payload comes last. */
-function parseWranglerJson(raw: string): {
-  preview?: { id?: string; name?: string; slug?: string; urls?: string[] };
-  deployment?: { id?: string; urls?: string[] };
-} {
-  const start = raw.lastIndexOf("\n{");
-  const jsonStart = start >= 0 ? start + 1 : raw.indexOf("{");
-  if (jsonStart < 0) throw new Error("wrangler emitted no JSON payload");
-  return JSON.parse(raw.slice(jsonStart));
-}
-
-/** Every row of a paged account listing — D1, Artifacts namespaces and a worker's previews all page
- *  the same way (`per_page`, `page`; the previews list hands out ten a page unless asked, measured). */
+/** Every row of a paged account listing — KV, D1 and Artifacts namespaces all page the same way
+ *  (`per_page`, `page`). */
 async function listAll<T>(cf: Cf, route: string) {
   const rows: T[] = [];
   for (let page = 1; ; page++) {
-    const batch = await cf<T[]>(`${route}?per_page=100&page=${page}`);
+    const batch = await cf<T[]>(
+      `${route}${route.includes("?") ? "&" : "?"}per_page=100&page=${page}`,
+    );
     rows.push(...batch);
     if (batch.length < 100) return rows;
   }
@@ -223,16 +138,13 @@ const pullRequest = (number: string | number) => ({ ...getRepo(), pull_number: N
 /** Read, splice, write, read back: the PR body has no conditional update, so a person editing the
  *  description in the same seconds could lose one write or the other. Reading it back and
  *  re-splicing onto whatever is there now converges on both edits within a few rounds. `what` names
- *  the write in the log: the whole preview section, its status line, or a suite's line. A writer
- *  that may run at the same moment (the other suite's job: `mayBeOverwritten`, given the body just
- *  written) waits out that writer's read and PATCH before it reads back, since a PATCH made from a
- *  read that predates this write drops it. So every PATCH goes out once, straight after its read: a
- *  5xx is not asked again with a body read seconds earlier, the next round reads anew. */
+ *  the write in the log: the fold of the previous section, or the section. Every PATCH goes out
+ *  once, straight after its read: a 5xx is not asked again with a body read seconds earlier, the
+ *  next round reads anew. */
 async function writePullRequestBody(
   prNumber: string,
   what: string,
   splice: (body: string) => string,
-  mayBeOverwritten: (body: string) => boolean = () => false,
 ) {
   const github = getOctokit();
   const readBody = async () => (await github.rest.pulls.get(pullRequest(prNumber))).data.body || "";
@@ -249,7 +161,7 @@ async function writePullRequestBody(
     if (patchError) {
       console.warn(`${describe(patchError)}; reading the body again`);
       await new Promise((resolve) => setTimeout(resolve, 5000));
-    } else if (mayBeOverwritten(body)) await new Promise((resolve) => setTimeout(resolve, 3000));
+    }
     const after = await readBody();
     if (splice(after) === after)
       return console.log(`wrote ${what} into the body of PR #${prNumber}`);
@@ -267,66 +179,7 @@ function checkedOutCommit() {
   return result.stdout.trim();
 }
 
-/** Where the preview stands, as the PR body's status line (preview-config.ts `PreviewStatus`), or
- *  a suite's line under it (`PreviewSuiteStatus`): this checkout's commit, this CI job
- *  (`DEPOT_JOB_URL`), now. Only with a PR and a token; a write that fails is logged, never the
- *  job's failure — the job's own outcome stands. */
-async function writeStatus(
-  prNumber: string | undefined,
-  status:
-    | Pick<PreviewStatus, "state" | "error">
-    | Pick<PreviewSuiteStatus, "suite" | "state" | "error">,
-) {
-  if (!prNumber || !process.env.GITHUB_TOKEN) return;
-  const what =
-    "suite" in status
-      ? `the ${PREVIEW_SUITES[status.suite]} line (${status.state})`
-      : `the preview status (${status.state})`;
-  const stamp = { commit: checkedOutCommit(), runUrl: process.env.DEPOT_JOB_URL, at: new Date() };
-  const write =
-    "suite" in status
-      ? writePullRequestBody(
-          prNumber,
-          what,
-          (body) => splicePreviewSuite(body, { ...status, ...stamp }),
-          (body) => suiteLineMayBeOverwritten(body, { ...status, ...stamp }),
-        )
-      : writePullRequestBody(prNumber, what, (body) =>
-          splicePreviewStatus(body, { ...status, ...stamp }),
-        );
-  await write.catch((error: unknown) =>
-    console.warn(`could not write ${what}: ${describe(error)}`),
-  );
-}
-
-// ── the control plane's D1 (scripts/d1.ts): created and migrated by the deploy, deleted here ────
-
-/** The preview's D1, created when missing and migrated, before any code that reads it deploys. It
- *  is created near this job (`automatic`, scripts/d1.ts `D1Location`). */
-async function ensurePreviewDatabase(ctx: EnvContext<OsEnv>, previewName: string) {
-  const databaseName = previewResourceName(previewName, "db");
-  const { uuid } = await ensureD1(ctx.cf, databaseName, "automatic");
-  await applyD1Migrations(ctx.cf, {
-    databaseName,
-    databaseId: uuid,
-    credentials: {
-      CLOUDFLARE_API_TOKEN: ctx.secrets.CLOUDFLARE_API_TOKEN!,
-      CLOUDFLARE_ACCOUNT_ID: PREVIEW_PARENT.cloudflareAccountId,
-    },
-  });
-  return uuid;
-}
-
-async function deleteDatabase(cf: Cf, name: string) {
-  const row = await findD1(cf, name);
-  if (!row) return console.warn(`D1 ${name} did not exist; continuing.`);
-  await cf(`/d1/database/${row.uuid}`, { method: "DELETE" });
-  console.log(`deleted D1 ${name}`);
-}
-
-// ── the Artifacts namespace: scripts/preview-artifacts.ts ───────────────────────────────────────
-
-// ── the KV namespaces and the R2 bucket (provisioned by `wrangler preview`, deleted here) ──────
+// ── the account's deployments: listed, grouped by name (preview-sweep.ts), deleted ─────────────
 
 type KvNamespaceRow = { id: string; title: string };
 
@@ -377,66 +230,381 @@ async function deleteR2Bucket(cf: Cf, bucketName: string) {
   console.log(`deleted R2 bucket ${bucketName} (${deletedObjects} objects)`);
 }
 
-// ── the apps on top (cloudflare-os's second tier) ──────────────────────────────────────────────
-
-const isMissingWorkerError = (output: string) =>
-  /This Worker does not exist on your account|code"?:\s*10007/i.test(output);
-
-/** A config that names a parent worker and nothing else: enough for `wrangler preview delete`
- *  and the sweep, on a checkout that never built anything. */
-function writeParentConfig(parent: { workerName: string; cloudflareAccountId: string }) {
-  const dir = mkdtempSync(path.join(tmpdir(), "os-preview-parent-"));
-  const file = path.join(dir, "wrangler.json");
-  writeFileSync(
-    file,
-    JSON.stringify({ name: parent.workerName, account_id: parent.cloudflareAccountId }),
-  );
-  return file;
+/** One already gone — a PR's close racing the sweep, a re-run — is deleted: Cloudflare's 404/7404,
+ *  the not-found wrangler reads a D1 lookup by. */
+async function deleteD1(cf: Cf, row: { uuid: string; name: string }) {
+  await cf(`/d1/database/${row.uuid}`, { method: "DELETE" }).catch((error) => {
+    if (!isCloudflareError(error, 404, 7404)) throw error;
+  });
+  console.log(`deleted D1 ${row.name}`);
 }
 
-/** Write the app's preview config — this PR's apps/os preview as the issuer, this run's app
- *  previews as the other apps (`appPreviewOrigins`) — onto its `preview` build, and branch a
- *  preview off the app's parent, which main deploys (deployParents). */
-async function deployAppPreview(
-  app: StartApp,
-  previewName: string,
-  input: { issuer: string; appOrigins: Record<string, string> },
-  wrangler: string,
-) {
-  const root = path.resolve(import.meta.dirname, "../..", app.name);
-  const config = writeStartAppPreviewConfig(app, input);
-  const result = await run(wrangler, ["preview", "--name", previewName, "-c", config, "--json"], {
-    cwd: root,
+/** Every worker, KV namespace, R2 bucket, D1 and Artifacts namespace on the account that belongs to
+ *  a per-commit deployment, grouped by deployment (preview-sweep.ts `groupPreviewDeployments`). */
+async function listPreviewDeployments(cf: Cf) {
+  const suffixes = previewMemberSuffixes(
+    readWranglerBase().kv_namespaces.map(({ binding }: { binding: string }) => binding),
+  );
+  // R2 pages by cursor, which the API client does not hand back: one page of the API's ceiling,
+  // narrowed to a deployment's bucket suffix, and a full one refused.
+  const [scripts, kv, { buckets }, d1, artifacts] = await Promise.all([
+    cf<{ id: string; created_on?: string }[]>("/workers/scripts"),
+    listAll<KvNamespaceRow>(cf, "/storage/kv/namespaces"),
+    cf<{ buckets: { name: string; creation_date?: string }[] }>(
+      `/r2/buckets?name_contains=-${suffixes.r2[0]}&per_page=1000`,
+    ),
+    listAll<D1Row>(cf, "/d1/database"),
+    listAll<ArtifactsNamespaceRow>(cf, "/artifacts/namespaces"),
+  ]);
+  if (buckets.length >= 1000)
+    throw new Error("1000 or more R2 buckets: the listing may be cut off");
+  const members: PreviewMember[] = [
+    ...scripts.map((row): PreviewMember => ({
+      kind: "worker",
+      name: row.id,
+      id: row.id,
+      createdAt: row.created_on,
+    })),
+    ...kv.map((row): PreviewMember => ({ kind: "kv", name: row.title, id: row.id })),
+    ...buckets.map((row): PreviewMember => ({
+      kind: "r2",
+      name: row.name,
+      id: row.name,
+      createdAt: row.creation_date,
+    })),
+    ...d1.map((row): PreviewMember => ({
+      kind: "d1",
+      name: row.name,
+      id: row.uuid,
+      createdAt: row.created_at,
+    })),
+    ...artifacts.map((row): PreviewMember => ({
+      kind: "artifacts",
+      name: row.namespace,
+      id: row.namespace,
+      createdAt: row.created_at,
+    })),
+  ];
+  return groupPreviewDeployments(members, suffixes);
+}
+
+/** A deployment's workers first, so nothing writes to what goes next, then its KV, R2 bucket, D1
+ *  and Artifacts namespace; each member one at a time settles before any failure is named. One
+ *  already gone is the expected case. Resolves to its Artifacts namespace when Cloudflare will not
+ *  delete it (StuckArtifactsNamespace): the rest still goes, and the nightly sweep retries and
+ *  pages it. */
+async function deletePreviewDeployment(cf: Cf, deployment: PreviewDeploymentListing) {
+  const failures: string[] = [];
+  let stuck: StuckArtifactsNamespace | undefined;
+  const settle = async (
+    members: PreviewMember[],
+    remove: (member: PreviewMember) => Promise<void>,
+  ) => {
+    const results = await Promise.allSettled(members.map(remove));
+    results.forEach((result, index) => {
+      if (result.status === "rejected")
+        failures.push(`${members[index]!.name}: ${describe(result.reason)}`);
+    });
+  };
+  const workers = deployment.members.filter((member) => member.kind === "worker");
+  await settle(workers, async ({ name }) => {
+    // `force`: a worker with Durable Object namespaces is refused without it
+    await cf(`/workers/scripts/${name}?force=true`, { method: "DELETE" }).catch((error) => {
+      if (!isCloudflareError(error, 404, 10007)) throw error;
+    });
+    console.log(`deleted worker ${name}`);
   });
-  if (result.stderr) process.stderr.write(result.stderr);
-  if (result.status !== 0) {
-    const output = `${result.stdout}\n${result.stderr}`;
-    const hint = isMissingWorkerError(output)
-      ? ` — the parent worker ${app.envs.preview!.workerName} is missing: ${DEPLOY_PARENTS_HINT}`
-      : "";
+  await settle(
+    deployment.members.filter((member) => member.kind !== "worker"),
+    async (member) => {
+      if (member.kind === "kv") return deleteKvNamespace(cf, { id: member.id, title: member.name });
+      if (member.kind === "r2") return deleteR2Bucket(cf, member.name);
+      if (member.kind === "d1") return deleteD1(cf, { uuid: member.id, name: member.name });
+      stuck = await deleteArtifactsNamespace(cf, member.name);
+    },
+  );
+  if (failures.length > 0)
     throw new Error(
-      `wrangler preview failed with exit code ${result.status}${hint}\n${lastLines(output, 40)}`,
+      `${deployment.name}: ${failures.length} member(s) not deleted\n  ${failures.join("\n  ")}`,
+    );
+  console.log(`deleted deployment ${deployment.name} (${deployment.members.length} members)`);
+  return stuck;
+}
+
+/** Delete each of `deployments`, then fail naming the ones that did not go. A namespace Cloudflare
+ *  will not delete does not fail it: the caller reports on a commit that did not cause it, and the
+ *  nightly sweep retries and pages it. */
+async function deletePreviewDeployments(cf: Cf, deployments: PreviewDeploymentListing[]) {
+  const failures: string[] = [];
+  const stuckNamespaces: StuckArtifactsNamespace[] = [];
+  for (const deployment of deployments) {
+    await deletePreviewDeployment(cf, deployment).then(
+      (stuck) => {
+        if (stuck) stuckNamespaces.push(stuck);
+      },
+      (error) => failures.push(describe(error)),
     );
   }
-  const url = parseWranglerJson(result.stdout).preview?.urls?.[0];
-  if (url !== appPreviewUrl(app, previewName))
-    throw new Error(`expected ${appPreviewUrl(app, previewName)}, wrangler returned ${url}`);
+  return { failures, stuckNamespaces };
+}
+
+/** THE PREFIX'S DEPLOYMENTS THIS ONE SUPERSEDES (preview-sweep.ts `planSupersededCleanup`): each
+ *  run's `Clean up superseded` job, once its own deployment is ready. Never the run's verdict: the
+ *  job does not gate the checks, and what it leaves the next run's cleanup or the sweep takes. */
+async function cleanupSuperseded(cf: Cf, name: string, options: { dryRun: boolean }) {
+  const superseded = planSupersededCleanup(await listPreviewDeployments(cf), name);
+  for (const deployment of superseded)
+    console.log(
+      `  ${options.dryRun ? "would delete" : "delete"} ${deployment.name}: superseded by ${name}`,
+    );
+  console.log(`${superseded.length} deployment(s) superseded by ${name}`);
+  if (options.dryRun) return;
+  const { failures, stuckNamespaces } = await deletePreviewDeployments(cf, superseded);
+  for (const stuck of stuckNamespaces)
+    console.warn(
+      `Artifacts namespace ${stuck.namespace} stays: Cloudflare will not delete it; the nightly sweep retries and pages #error-pulse.`,
+    );
+  if (failures.length > 0) throw new Error(`cleanup failures:\n  ${failures.join("\n  ")}`);
+}
+
+/** EVERY DEPLOYMENT OF A PREFIX: a closed PR's (preview-delete.yml), or a name's by hand. */
+async function deletePrefix(cf: Cf, prefix: string, options: { dryRun: boolean }) {
+  const deployments = (await listPreviewDeployments(cf)).filter(
+    (deployment) => deployment.prefix === prefix,
+  );
+  for (const deployment of deployments)
+    console.log(
+      `  ${options.dryRun ? "would delete" : "delete"} ${deployment.name} (${deployment.members.length} members)`,
+    );
+  console.log(`${deployments.length} deployment(s) of ${prefix}`);
+  if (options.dryRun) return;
+  const { failures, stuckNamespaces } = await deletePreviewDeployments(cf, deployments);
+  for (const stuck of stuckNamespaces)
+    console.warn(
+      `Artifacts namespace ${stuck.namespace} stays: Cloudflare will not delete it; the nightly sweep retries and pages #error-pulse.`,
+    );
+  if (failures.length > 0) throw new Error(`delete failures:\n  ${failures.join("\n  ")}`);
+}
+
+/** The deployment a suite tests: the one the run just deployed (PREVIEW_DEPLOYMENT, the deploy
+ *  job's output), else — a test-only dispatch, a laptop — the prefix's newest. */
+async function deploymentToTest(prefix: string) {
+  if (process.env.PREVIEW_DEPLOYMENT) return process.env.PREVIEW_DEPLOYMENT;
+  const newest = newestPreviewDeployment(
+    await listPreviewDeployments((await accountContext()).cf),
+    prefix,
+  );
+  if (!newest) throw new Error(`${prefix} has no deployment to test: deploy one first`);
+  console.log(`testing ${prefix}'s newest deployment, ${newest.name}`);
+  return newest.name;
+}
+
+// ── the apps on top, and main on dev ───────────────────────────────────────────────────────────
+
+/** One app on top, from its own build for `envName` (start-app.ts `startAppWorkerConfig`: a
+ *  per-commit deployment's signs in against that deployment's apps/os and links to its apps), and
+ *  the smoke that it answers at `url`. An app is an OAuth client and nothing else: no secrets, no
+ *  data of its own, one Durable Object class for the browser session. */
+async function deployStartApp(
+  app: StartApp,
+  envName: string,
+  url: string,
+  credentials: Record<string, string>,
+) {
+  const root = path.resolve(import.meta.dirname, "../..", app.name);
+  await buildStartApp(app, envName);
+  await deployWithSecrets({
+    cwd: root,
+    builtConfig: findBuiltWranglerConfig(root),
+    secretValues: {},
+    credentials,
+  });
   await smoke(`${url}/healthz`, (status) => status === 200, `apps/${app.name} health`);
   return { name: app.name, url };
 }
 
-/** The apps this run previews: --apps all, none, or (auto) the ones whose paths this PR changes. */
-async function appsToPreview(mode: AppsMode, prNumber: string | undefined) {
-  if (mode === "all") return APPS;
-  if (mode === "none") return [];
-  try {
-    const apps = changedApps(await changedPaths(prNumber));
-    console.log(`apps on top changed: ${apps.map((app) => app.name).join(", ") || "none"}`);
-    return apps;
-  } catch (error) {
-    console.warn(`${describe(error)}; previewing every app on top.`);
-    return APPS;
-  }
+/** MAIN ON THE DEV/PREVIEW ACCOUNT, from this checkout, in place: apps/os's `os` (envs.ts
+ *  osEnvs.preview) as any OS deployment deploys (scripts/deploy.ts: its own resources, its Doppler
+ *  secrets, its smokes), and each app's from its `preview` build, which signs in against `os` and
+ *  links to the others (start-app.ts startAppWorkerConfig). preview-parents.yml runs this on every
+ *  push to main. Nothing a PR deploys depends on it. Side by side; every one settles before the
+ *  failed ones are named. */
+async function deployParents(ctx: EnvContext<OsEnv>) {
+  const credentials = {
+    CLOUDFLARE_API_TOKEN: ctx.secrets.CLOUDFLARE_API_TOKEN!,
+    CLOUDFLARE_ACCOUNT_ID: MAIN_ON_DEV.cloudflareAccountId,
+  };
+  const steps = [
+    { name: "apps/os", deploy: () => deployOs({ env: "preview" }) },
+    ...APPS.map((app) => ({
+      name: `apps/${app.name}`,
+      deploy: () => deployStartApp(app, "preview", app.envs.preview!.baseUrl, credentials),
+    })),
+  ];
+  const results = await Promise.allSettled(steps.map((step) => step.deploy()));
+  const failures = results.flatMap((result, index) =>
+    result.status === "rejected" ? [`${steps[index]!.name}: ${describe(result.reason)}`] : [],
+  );
+  if (failures.length) throw new Error(`main on dev failed\n\n${failures.join("\n\n")}`);
+  console.log(
+    `✅ main on dev deployed: ${[MAIN_ON_DEV, ...APPS.map((app) => app.envs.preview!)].map((env) => env.baseUrl).join(", ")}`,
+  );
+}
+
+/** THE NIGHTLY RESET of main on dev's own data (preview-sweep.yml): what people and agents left on
+ *  os.iterate-dev-preview.workers.dev and the apps signed in against it — its Durable Objects, its
+ *  D1's rows (users, organizations, projects), KV, R2 and Artifacts repos — erased
+ *  (scripts/erase-data.ts), then it is deployed again from this checkout. The per-commit
+ *  deployments are workers of their own and keep serving throughout. The apps hold nothing worth
+ *  a reset: a browser session each, which the next sign-in replaces. */
+async function resetParent(options: { dryRun: boolean }) {
+  await eraseData({ env: "preview", dryRun: options.dryRun });
+  if (options.dryRun) return;
+  await deployOs({ env: "preview" });
+}
+
+// ── the deployment ─────────────────────────────────────────────────────────────────────────────
+
+/** The deploy, with the PR body's section folded into a previous commit's beside it
+ *  (preview-config.ts `foldPreviousPreviewSection`): a deploy that fails leaves it folded, and one
+ *  that lands writes its own section after the fold has landed. A body write that fails is logged,
+ *  never the deploy's failure. */
+async function deployPreview(
+  ctx: EnvContext<OsEnv>,
+  name: string,
+  prNumber: string | undefined,
+  apps: StartApp[],
+) {
+  const folded =
+    prNumber && process.env.GITHUB_TOKEN
+      ? traceOperation("Fold the previous section", () =>
+          writePullRequestBody(prNumber, "the folded previous section", foldPreviousPreviewSection),
+        ).catch((error: unknown) =>
+          console.warn(`could not fold the previous section: ${describe(error)}`),
+        )
+      : Promise.resolve();
+  await deployPreviewSteps(ctx, name, prNumber, apps, folded);
+}
+
+/** The version apps/os's `/version` names (`<versionId> <platformOrigin>`, src/worker.ts): on a
+ *  brand-new worker, the one this deploy uploaded. */
+async function deployedVersion(url: string) {
+  const response = await fetch(`${url}/version`, { signal: AbortSignal.timeout(10_000) });
+  if (!response.ok) throw new Error(`${url}/version answered ${response.status}`);
+  return (await response.text()).split(" ")[0]!.trim();
+}
+
+/** apps/os (scripts/deploy.ts: its resources created, its D1 migrated, its secrets, its smokes) and
+ *  each app on top, side by side, each a span in the CI trace (docs/ci-traces.md); every URL is
+ *  known before anything deploys (envs.ts `previewDeployment`). Every step settles before a failed
+ *  one fails the deploy, named. Then the readiness gate on apps/os, and once it passes the sign-in
+ *  seed and the PR body's section side by side. */
+async function deployPreviewSteps(
+  ctx: EnvContext<OsEnv>,
+  name: string,
+  prNumber: string | undefined,
+  apps: StartApp[],
+  folded: Promise<void>,
+) {
+  assertFreshInstall(REPO_ROOT);
+  const urls = previewDeploymentUrls(name);
+  // the paths this PR changes, for the Dash's template links (signInLinks), read beside the builds
+  const changed =
+    prNumber && apps.some((app) => app.name === "dash")
+      ? changedPaths(prNumber).catch((error: unknown) => {
+          console.warn(
+            `sign-in: ${describe(error)}; every template link names the deployment's own copy`,
+          );
+          return [];
+        })
+      : Promise.resolve([]);
+  const credentials = {
+    CLOUDFLARE_API_TOKEN: ctx.secrets.CLOUDFLARE_API_TOKEN!,
+    CLOUDFLARE_ACCOUNT_ID: MAIN_ON_DEV.cloudflareAccountId,
+  };
+  const steps = [
+    { step: "apps/os", done: traceOperation("Deploy OS", () => deployOs({ env: name })) },
+    ...apps.map((app) => ({
+      step: `apps/${app.name}`,
+      done: traceOperation(`Deploy ${app.name}`, () =>
+        deployStartApp(app, name, urls.apps[app.name]!, credentials),
+      ),
+    })),
+  ];
+  const failures = (await Promise.allSettled(steps.map(({ done }) => done))).flatMap(
+    (result, index) =>
+      result.status === "rejected"
+        ? [{ step: steps[index]!.step, error: describe(result.reason) }]
+        : [],
+  );
+  // the failed steps on the first line (the PR body's summary), each one's error and output tail after it
+  if (failures.length === 1) throw new Error(`${failures[0]!.step}: ${failures[0]!.error}`);
+  if (failures.length > 1)
+    throw new Error(
+      `${failures.map(({ step }) => step).join(", ")} failed\n\n${failures.map(({ step, error }) => `${step}: ${error}`).join("\n\n")}`,
+    );
+  const deployedApps = apps.map((app) => ({ name: app.name, url: urls.apps[app.name]! }));
+  const url = urls.os;
+  const versionId = await deployedVersion(url);
+  const config = parseAppConfig(collectSecrets(ctx, ["APP_CONFIG", "APP_CONFIG_SECRETS__KEY"]));
+  // `/version` answering is not the deployment answering: a brand-new worker's Durable Objects
+  // answer `internal error; reference = …` for seconds after it (19 of 20 brand-new Worker Previews
+  // on 2026-09-24, for 6–27 s; preview-readiness.ts). Nothing is handed on — the PR body's links,
+  // the sign-in seed, the e2e job — until five rounds of eight in a row answer in full on this
+  // version. One that does not within 150 s fails the deploy, naming what it answered.
+  await traceOperation("Readiness gate", () =>
+    awaitPreviewReady(url, {
+      adminSecret: config.secrets.adminBearer.exposeSecret(),
+      version: versionId,
+      width: 8,
+      consecutive: 5,
+      deadlineMs: 150_000,
+    }),
+  );
+  console.log(`\ndeployment ${name}: ${url}`);
+  const signIn = prNumber
+    ? await signInLinks(config, {
+        url,
+        prNumber,
+        apps: deployedApps,
+        changedPaths: await changed,
+      })
+    : undefined;
+  const publish = async (seeded: boolean) => {
+    mkdirSync(OUTPUT_DIR, { recursive: true });
+    writeFileSync(
+      path.join(OUTPUT_DIR, "preview.json"),
+      `${JSON.stringify({ deployment: name, url, versionId, apps: deployedApps }, null, 2)}\n`,
+    );
+    if (!prNumber || !signIn || !process.env.GITHUB_TOKEN) return;
+    await folded;
+    const dashboardUrl = (worker: string) =>
+      `https://dash.cloudflare.com/${MAIN_ON_DEV.cloudflareAccountId}/workers/services/view/${worker}/production`;
+    const section = renderPullRequestSection({
+      deployment: name,
+      workers: [
+        { name: "os", url, signIn: signIn.heading, dashboardUrl: dashboardUrl(`${name}-os`) },
+        ...deployedApps.map((app) => ({
+          ...app,
+          signIn: signIn.apps[app.name]!,
+          dashboardUrl: dashboardUrl(`${name}-${app.name}`),
+        })),
+      ],
+      templates: signIn.templates,
+      seed: { project: signIn.project, seeded },
+    });
+    await traceOperation("Write the PR section", () =>
+      writePullRequestBody(prNumber, "the preview section", (body) =>
+        splicePullRequestBody(body, section),
+      ),
+    );
+  };
+  // The seed and the section side by side: a seed that failed rewrites the section to say so.
+  const [seeded] = await Promise.all([
+    signIn ? traceOperation("Seed sign-in", () => seedSignIn(config, { url, ...signIn })) : true,
+    publish(true),
+  ]);
+  if (!seeded) await publish(false);
 }
 
 /** The paths this pull request changes. From GitHub when there is a PR — the same cumulative diff
@@ -460,372 +628,6 @@ async function changedPaths(prNumber: string | undefined) {
   return git("diff", "--name-only", git("merge-base", "origin/main", "HEAD"), "HEAD")
     .split("\n")
     .filter(Boolean);
-}
-
-/** `wrangler preview delete` of one preview of `parent` — apps/os's or an app's. One that never
- *  existed — a PR closed before its first deploy, a re-run of the cleanup job, the sweep racing the
- *  close job, a parent never deployed — is the expected case, not a failure. */
-async function deleteWorkerPreview(
-  parent: { workerName: string; cloudflareAccountId: string },
-  previewName: string,
-  wrangler: string,
-) {
-  const config = writeParentConfig(parent);
-  try {
-    const result = await run(wrangler, [
-      "preview",
-      "delete",
-      "--name",
-      previewName,
-      "-c",
-      config,
-      "-y",
-    ]);
-    if (result.status === 0)
-      return console.log(`${parent.workerName}: deleted preview ${previewName}`);
-    if (/not found|does not exist|10007|10025|10222/i.test(`${result.stdout}\n${result.stderr}`))
-      return console.warn(
-        `${parent.workerName}: preview ${previewName} did not exist; continuing.`,
-      );
-    throw new Error(
-      `${parent.workerName}: wrangler preview delete failed with exit code ${result.status}\n${result.stderr}`,
-    );
-  } finally {
-    rmSync(path.dirname(config), { recursive: true, force: true });
-  }
-}
-
-// ── the parents (preview-parents.yml) ───────────────────────────────────────────────────
-
-/** How a missing or out-of-date parent is put right: every parent is main's. */
-const DEPLOY_PARENTS_HINT =
-  "deploy the parents from main (the Preview parents workflow, or `pnpm preview deploy-parents` in apps/os under Doppler os/preview)";
-
-/** THE PARENTS, from this checkout: apps/os's `os` (envs.ts osEnvs.preview) as any OS deployment
- *  deploys (scripts/deploy.ts: its own resources, its Doppler secrets, its smokes), and each app's
- *  from its `preview` build, which signs in against `os` and links to the other parents
- *  (start-app.ts startAppWorkerConfig). Every preview branches from these; preview-parents.yml
- *  runs this on every push to main, so the parents are main on the dev/preview account. Side by
- *  side; every one settles before the failed ones are named. */
-async function deployParents(ctx: EnvContext<OsEnv>) {
-  const credentials = {
-    CLOUDFLARE_API_TOKEN: ctx.secrets.CLOUDFLARE_API_TOKEN!,
-    CLOUDFLARE_ACCOUNT_ID: PREVIEW_PARENT.cloudflareAccountId,
-  };
-  const deployApp = async (app: StartApp) => {
-    const root = path.resolve(import.meta.dirname, "../..", app.name);
-    await buildStartApp(app, "preview");
-    const builtConfig = findBuiltWranglerConfig(root);
-    await deployWithSecrets({ cwd: root, builtConfig, secretValues: {}, credentials });
-    await smoke(`${app.envs.preview!.baseUrl}/healthz`, (status) => status === 200, "health");
-  };
-  const steps = [
-    { name: "apps/os", deploy: () => deployOs({ env: "preview" }) },
-    ...APPS.map((app) => ({ name: `apps/${app.name}`, deploy: () => deployApp(app) })),
-  ];
-  const results = await Promise.allSettled(steps.map((step) => step.deploy()));
-  const failures = results.flatMap((result, index) =>
-    result.status === "rejected" ? [`${steps[index]!.name}: ${describe(result.reason)}`] : [],
-  );
-  if (failures.length) throw new Error(`parents failed\n\n${failures.join("\n\n")}`);
-  console.log(
-    `✅ parents deployed: ${[PREVIEW_PARENT, ...APPS.map((app) => app.envs.preview!)].map((env) => env.baseUrl).join(", ")}`,
-  );
-}
-
-/** THE NIGHTLY RESET of the `os` parent's own data (preview-sweep.yml): what people and agents left
- *  on os.iterate-dev-preview.workers.dev and the app parents signed in against it — its Durable
- *  Objects, its D1's rows (users, organizations, projects), KV, R2 and Artifacts repos — erased
- *  (scripts/erase-data.ts), then the parent deployed again from this checkout. Its Worker Previews
- *  keep their own data and keep serving throughout: the retirement tombstones the parent's own
- *  namespaces only, and the parked parent keeps preview URLs on (scripts/lib/do-reset.ts; both
- *  measured 2026-09-24 on a throwaway worker). The app parents hold nothing worth a reset: a
- *  browser session each, which the next sign-in replaces. */
-async function resetParent(options: { dryRun: boolean }) {
-  await eraseData({ env: "preview", dryRun: options.dryRun });
-  if (options.dryRun) return;
-  await deployOs({ env: "preview" });
-}
-
-// ── the preview itself ─────────────────────────────────────────────────────────────────────────
-
-/** `preview secret bulk` writes the WORKER's Previews settings, which every preview of it inherits:
- *  one upload covers every preview, and each run refreshes them. The two secrets are the deployment's
- *  (src/app-config.ts, scripts/deploy.ts ships the same two): the one `APP_CONFIG` object —
- *  `login.password`, `secrets.adminBearer` — and `APP_CONFIG_SECRETS__KEY` beside it. Values go
- *  through a 0600 tmp file, never argv or the config. The command reads only the worker's name and
- *  account, so the config naming the parent alone serves, and the upload needs no build: it runs
- *  beside the builds, in its own directory, away from the dist/ they write. */
-async function uploadPreviewSecrets(wrangler: string, ctx: EnvContext<OsEnv>) {
-  const secrets = collectSecrets(ctx, ["APP_CONFIG", "APP_CONFIG_SECRETS__KEY"]);
-  const config = writeParentConfig(PREVIEW_PARENT);
-  const dir = path.dirname(config);
-  const file = path.join(dir, "secrets.json");
-  try {
-    writeFileSync(file, JSON.stringify(secrets), { mode: 0o600 });
-    await runAsync(wrangler, ["preview", "secret", "bulk", file, "-c", config], { cwd: dir });
-    console.log(
-      `uploaded ${Object.keys(secrets).length} secrets to the Previews settings of ${PREVIEW_PARENT.workerName}`,
-    );
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
-}
-
-/** The OS's own preview, from an OS build already made, its D1 (`databaseId`, migrated), its
- *  Artifacts namespace and the Previews secrets already in place: its config (naming the PR's Dash
- *  preview when this run deploys one), `wrangler preview`, and the smoke that the new deployment
- *  serves. */
-async function deployOsPreview(
-  ctx: EnvContext<OsEnv>,
-  previewName: string,
-  databaseId: string,
-  dashOrigin: string | undefined,
-  wrangler: string,
-  recreated = false,
-): Promise<{ url: string; deploymentId: string; slug: string }> {
-  writePreviewWranglerConfig({ previewName, databaseId, dashOrigin });
-  const result = await run(wrangler, [
-    "preview",
-    "--name",
-    previewName,
-    "-c",
-    PREVIEW_CONFIG_NAME,
-    "--json",
-  ]);
-  if (result.stderr) process.stderr.write(result.stderr);
-  if (result.status !== 0) {
-    const output = `${result.stdout}\n${result.stderr}`;
-    // An existing preview cannot gain a Durable Object class (preview-config.ts): delete it with
-    // its resources and create it again, once. The apps on top deploying beside it are previews of
-    // their own parents, and stay.
-    if (!recreated && isDurableObjectClassNotExportedError(output)) {
-      console.warn(
-        `preview ${previewName} lacks a Durable Object class this build binds (Cloudflare 10061), and an existing Worker Preview cannot gain one: deleting the preview and its resources, then creating it again`,
-      );
-      await deletePreview(ctx.cf, previewName, wrangler);
-      const [recreatedDatabaseId] = await Promise.all([
-        ensurePreviewDatabase(ctx, previewName),
-        ensureArtifactsNamespace(ctx.cf, previewResourceName(previewName, "repos")),
-      ]);
-      return deployOsPreview(ctx, previewName, recreatedDatabaseId, dashOrigin, wrangler, true);
-    }
-    // Not the parent's classes: a brand-new preview binds a class its parent never had (measured
-    // 2026-09-24 on a throwaway worker).
-    const hint = isMissingWorkerError(output)
-      ? ` — the parent worker ${PREVIEW_PARENT.workerName} is missing: ${DEPLOY_PARENTS_HINT}`
-      : "";
-    throw new Error(
-      `wrangler preview failed with exit code ${result.status}${hint}\n${lastLines(output, 40)}`,
-    );
-  }
-  const data = parseWranglerJson(result.stdout);
-  const url = data.preview?.urls?.[0];
-  const deploymentId = data.deployment?.id;
-  if (!url || !deploymentId)
-    throw new Error(`wrangler emitted no preview URL or deployment id:\n${result.stdout}`);
-  if (url !== previewUrl(previewName)) {
-    throw new Error(
-      `expected preview URL ${previewUrl(previewName)}, but wrangler returned ${url}`,
-    );
-  }
-  // apps/os's smoke is `/version` naming the new deployment (src/worker.ts), asked every 5 s. Not
-  // sooner: it hands straight on to the readiness gate, and an in-place redeploy's old version
-  // still answers for seconds after. Asked every 0.5 s it saved at most ~3.5 s, and the gate then
-  // missed in its first two rounds on 3 of 7 in-place redeploys (#3035).
-  await traceOperation("Smoke /version", () =>
-    smokeResponse(
-      `${url}/version`,
-      async (response) =>
-        response.status === 200 && (await response.text()).startsWith(deploymentId),
-      "version names the deployment",
-    ),
-  );
-  // `/version` answering is not the preview answering: a brand-new preview's Durable Objects
-  // answer `internal error; reference = …` for seconds after it (19 of 20 brand-new previews on
-  // 2026-09-24, for 6–27 s), and a preview redeployed in place still runs the previous version in
-  // places (preview-readiness.ts). Nothing is handed on — the PR body's links, the sign-in seed,
-  // the e2e job — until five rounds of eight in a row answer in full on this deployment. A preview
-  // that does not within 150 s fails the deploy, naming what it answered: the slowest of 17
-  // in-place soak redeploys took 58 s (2026-09-25).
-  await traceOperation("Readiness gate", () =>
-    awaitPreviewReady(url, {
-      adminSecret: parseAppConfig(
-        collectSecrets(ctx, ["APP_CONFIG", "APP_CONFIG_SECRETS__KEY"]),
-      ).secrets.adminBearer.exposeSecret(),
-      version: deploymentId,
-      width: 8,
-      consecutive: 5,
-      deadlineMs: 150_000,
-    }),
-  );
-  return { url, deploymentId, slug: data.preview?.slug || previewName };
-}
-
-/** The status line says `deploying` first and `deploy failed`, with the error's tail, when any
- *  step throws; a deploy that lands rewrites the whole section, `deployed`. The `deploying` write
- *  runs beside the steps, and both later writes land after it (preview-config.ts
- *  `deployWithStatus`). */
-async function deployPreview(
-  ctx: EnvContext<OsEnv>,
-  previewName: string,
-  prNumber: string | undefined,
-  apps: StartApp[],
-) {
-  await deployWithStatus(
-    (status) =>
-      traceOperation(`Write the ${status.state} status`, () =>
-        writeStatus(
-          prNumber,
-          status.state === "deploying"
-            ? status
-            : { state: status.state, error: describe(status.error) },
-        ),
-      ),
-    (deploying) => deployPreviewSteps(ctx, previewName, prNumber, apps, deploying),
-  );
-}
-
-/** Wait for every promise, then throw the first failure: a step that fails early leaves none still
- *  running when the deploy reports it, nor the wrangler install they run removed under them. */
-async function settleAll(promises: Promise<unknown>[]) {
-  const failed = (await Promise.allSettled(promises)).find(
-    (result) => result.status === "rejected",
-  );
-  if (failed) throw failed.reason;
-}
-
-/** Each step starts once what it needs is there, and each is a span in the CI trace
- *  (docs/ci-traces.md): the wrangler install, the Previews secrets, the D1 and its migrations and
- *  the Artifacts namespace need no build and run beside the builds; apps/os deploys once its build and those are done, and
- *  each app on top once its own build and the wrangler are, beside apps/os — every URL is known
- *  before anything deploys (preview-config.ts `previewUrl`, `appPreviewUrl`). Every step settles
- *  before a failed one fails the deploy, named. Once apps/os's readiness gate has passed, the
- *  sign-in seed and the PR body's section go out side by side. */
-async function deployPreviewSteps(
-  ctx: EnvContext<OsEnv>,
-  previewName: string,
-  prNumber: string | undefined,
-  apps: StartApp[],
-  deploying: Promise<void>,
-) {
-  assertFreshInstall(REPO_ROOT);
-  const appOrigins = appPreviewOrigins(apps, previewName);
-  // the paths this PR changes, for the Dash's template links (signInLinks), read beside the builds
-  const changed =
-    prNumber && apps.some((app) => app.name === "dash")
-      ? changedPaths(prNumber).catch((error: unknown) => {
-          console.warn(
-            `sign-in: ${describe(error)}; every template link names the preview's own copy`,
-          );
-          return [];
-        })
-      : Promise.resolve([]);
-  const wrangler = preparePreviewWrangler();
-  try {
-    const installed = traceOperation("Install wrangler", () => wrangler.ready);
-    const database = traceOperation("Ensure the D1 and apply its migrations", () =>
-      ensurePreviewDatabase(ctx, previewName),
-    );
-    const prepared = settleAll([
-      installed.then(() =>
-        traceOperation("Upload the Previews secrets", () =>
-          uploadPreviewSecrets(wrangler.command, ctx),
-        ),
-      ),
-      database,
-      traceOperation("Ensure the Artifacts namespace", () =>
-        ensureArtifactsNamespace(ctx.cf, previewResourceName(previewName, "repos")),
-      ),
-    ]);
-    const osPreview = (async () => {
-      await settleAll([traceOperation("Build OS", () => buildOs("preview")), prepared]);
-      const databaseId = await database;
-      return traceOperation("Deploy OS preview", () =>
-        deployOsPreview(ctx, previewName, databaseId, appOrigins.dash, wrangler.command),
-      );
-    })();
-    const appPreviews = apps.map(async (app) => {
-      await settleAll([
-        traceOperation(`Build ${app.name}`, () => buildStartApp(app, "preview")),
-        installed,
-      ]);
-      return traceOperation(`Deploy ${app.name}`, () =>
-        deployAppPreview(
-          app,
-          previewName,
-          { issuer: previewUrl(previewName), appOrigins },
-          wrangler.command,
-        ),
-      );
-    });
-    const failures = (await Promise.allSettled([osPreview, ...appPreviews])).flatMap(
-      (result, index) =>
-        result.status === "rejected"
-          ? [
-              {
-                step: index === 0 ? "apps/os" : `apps/${apps[index - 1]!.name}`,
-                error: describe(result.reason),
-              },
-            ]
-          : [],
-    );
-    // the failed steps on the first line (the PR body's summary), each one's error and output tail after it
-    if (failures.length === 1) throw new Error(`${failures[0]!.step}: ${failures[0]!.error}`);
-    if (failures.length > 1)
-      throw new Error(
-        `${failures.map(({ step }) => step).join(", ")} failed\n\n${failures.map(({ step, error }) => `${step}: ${error}`).join("\n\n")}`,
-      );
-    const { url, deploymentId, slug } = await osPreview;
-    const deployedApps = await Promise.all(appPreviews);
-    console.log(`\npreview ${previewName}: ${url}`);
-    const config = parseAppConfig(collectSecrets(ctx, ["APP_CONFIG", "APP_CONFIG_SECRETS__KEY"]));
-    const signIn = prNumber
-      ? await signInLinks(config, {
-          url,
-          prNumber,
-          apps: deployedApps,
-          changedPaths: await changed,
-        })
-      : undefined;
-    const publish = async (seeded: boolean) => {
-      const summary = {
-        previewName,
-        status: {
-          state: "deployed",
-          commit: checkedOutCommit(),
-          runUrl: process.env.DEPOT_JOB_URL,
-          at: new Date(),
-        } satisfies PreviewStatus,
-        url,
-        deploymentId,
-        slug,
-        dashboardUrl: `https://dash.cloudflare.com/${PREVIEW_PARENT.cloudflareAccountId}/workers/services/view/${PREVIEW_PARENT.workerName}/production/previews/${slug}`,
-        apps: deployedApps,
-        // the workflow's scripts/ci/preview-tested-commit.ts: the PR merged into main, or the head alone
-        testedCommit: process.env.PREVIEW_TESTED_COMMIT,
-        signIn: signIn && { ...signIn, seeded },
-      };
-      mkdirSync(OUTPUT_DIR, { recursive: true });
-      writeFileSync(path.join(OUTPUT_DIR, "preview.json"), `${JSON.stringify(summary, null, 2)}\n`);
-      if (!prNumber || !process.env.GITHUB_TOKEN) return;
-      await deploying;
-      const section = renderPullRequestSection(summary);
-      await traceOperation("Write the PR section", () =>
-        writePullRequestBody(prNumber, "the preview section", (body) =>
-          splicePullRequestBody(body, section),
-        ),
-      );
-    };
-    // The seed and the section side by side: a seed that failed rewrites the section to say so.
-    const [seeded] = await Promise.all([
-      signIn ? traceOperation("Seed sign-in", () => seedSignIn(config, { url, ...signIn })) : true,
-      publish(true),
-    ]);
-    if (!seeded) await publish(false);
-  } finally {
-    wrangler.cleanup();
-  }
 }
 
 /** THE ONE-CLICK SIGN-IN a PR's body links (src/test-link.ts): the heading's link, one per app,
@@ -880,8 +682,9 @@ async function signInLinks(
 
 /** Seed the PR's test person and project — created as them through the operator's bearer (`as`),
  *  the same idempotent call as e2e/support/project-host.ts `registerProject`, so the Dash link
- *  lands inside it — then smoke the heading's link. Neither ever fails the deploy: they log, and
- *  the section says when the seed failed. */
+ *  lands inside it — then smoke apps/os's link: a good one signs nobody in yet, and sends the
+ *  browser to prd's `/oauth2/auth` to prove it is an admin's (src/test-link-admins.ts). Neither
+ *  ever fails the deploy: they log, and the section says when the seed failed. */
 async function seedSignIn(
   config: AppConfig,
   preview: { url: string; email: string; project: string; heading: string },
@@ -919,53 +722,17 @@ async function seedSignIn(
   const smoke = await fetch(preview.heading, { redirect: "manual" }).catch(
     (error: unknown) => error,
   );
-  if (smoke instanceof Response && smoke.status === 302 && smoke.headers.has("set-cookie"))
-    console.log(`sign-in: the heading link signs in (302 to ${smoke.headers.get("location")})`);
+  const location =
+    smoke instanceof Response && smoke.status === 302
+      ? new URL(smoke.headers.get("location") || "/", preview.url)
+      : undefined;
+  if (location?.pathname === "/oauth2/auth")
+    console.log(`sign-in: apps/os's link asks ${location.origin} who the browser is, as it should`);
   else
     console.warn(
-      `sign-in: the heading link did not sign in: ${smoke instanceof Response ? `${smoke.status} ${await smoke.text()}` : describe(smoke)}`,
+      `sign-in: apps/os's link did not ask prd who the browser is: ${smoke instanceof Response ? `${smoke.status} ${location || (await smoke.text())}` : describe(smoke)}`,
     );
   return seeded;
-}
-
-/** The preview, then everything it owned, each found by its name: its D1 and its Artifacts
- *  namespace (this script created them), its KV namespaces and its R2 bucket (wrangler provisioned them; see WRANGLER_PACKAGE
- *  for why its delete leaves them). One already gone is the expected case. Resolves to its
- *  Artifacts namespace when Cloudflare will not delete it (StuckArtifactsNamespace): the rest still
- *  goes, and the namespace, now an orphan, is the nightly sweep's to retry and page. */
-async function deletePreview(cf: Cf, previewName: string, wrangler: string) {
-  await deleteWorkerPreview(PREVIEW_PARENT, previewName, wrangler);
-  await deleteDatabase(cf, previewResourceName(previewName, "db"));
-  const stuck = await deleteArtifactsNamespace(cf, previewResourceName(previewName, "repos"));
-  const suffixes = previewResourceSuffixes();
-  const kvNamespaces = await listAll<KvNamespaceRow>(cf, "/storage/kv/namespaces");
-  for (const title of suffixes.kv.map((suffix) => previewResourceName(previewName, suffix))) {
-    const row = kvNamespaces.find((namespace) => namespace.title === title);
-    if (row) await deleteKvNamespace(cf, row);
-    else console.warn(`KV namespace ${title} did not exist; continuing.`);
-  }
-  for (const suffix of suffixes.r2)
-    await deleteR2Bucket(cf, previewResourceName(previewName, suffix));
-  return stuck;
-}
-
-/** apps/os's preview and everything it owned, then every app on top's preview (whether or not it
- *  exists). A namespace Cloudflare will not delete does not fail it: the PR-close delete and main's
- *  e2e cleanup report on a commit that did not cause it, and the nightly sweep pages it. */
-async function deleteAll(cf: Cf, previewName: string) {
-  const wrangler = preparePreviewWrangler();
-  try {
-    await wrangler.ready;
-    const stuck = await deletePreview(cf, previewName, wrangler.command);
-    for (const app of APPS)
-      await deleteWorkerPreview(app.envs.preview!, previewName, wrangler.command);
-    if (stuck)
-      console.warn(
-        `Artifacts namespace ${stuck.namespace} stays: Cloudflare will not delete it; the nightly sweep retries and pages #error-pulse.`,
-      );
-  } finally {
-    wrangler.cleanup();
-  }
 }
 
 /** Each suite's test telemetry identity, pinned rather than read from pnpm's ambient package name:
@@ -991,21 +758,21 @@ const PREVIEW_SUITE_TELEMETRY: Record<"specs" | "preview-e2e", Record<string, st
   : { specs: {}, "preview-e2e": {} };
 
 /** THE DEPLOYED TARGET, in the test evidence folder before the suite starts, when the workflow
- *  records evidence (TEST_TELEMETRY_ARTIFACT_DIR): the preview and the deployment its `/version`
- *  answers with. A run against a preview deployed earlier (a dispatch of `test`, `e2e` or `specs`)
- *  tests what that deploy left, not the commit this job checked out
+ *  records evidence (TEST_TELEMETRY_ARTIFACT_DIR): the deployment (as `previewName`) and the
+ *  version its `/version` answers with. A run against a deployment made earlier (a dispatch of
+ *  `test`, `e2e` or `specs`) tests what that deploy left, not the commit this job checked out
  *  (docs/test-evidence.md#when-deploy-e2e-and-specs-are-separate-jobs). It never fails the run: a
- *  preview that does not answer fails the suites, and the file then has no deploymentId. */
-async function writeDeployedTarget(previewName: string, apps: TestEvidenceTarget["apps"]) {
+ *  deployment that does not answer fails the suites, and the file then has no deploymentId. */
+async function writeDeployedTarget(name: string, apps: TestEvidenceTarget["apps"]) {
   if (!process.env.TEST_TELEMETRY_ARTIFACT_DIR) return;
-  const url = previewUrl(previewName);
+  const url = previewDeploymentUrls(name).os;
   // `<deployId> <platformOrigin>` (src/worker.ts)
   const deploymentId = await fetch(`${url}/version`, { signal: AbortSignal.timeout(10_000) })
     .then(async (response) => (response.ok ? (await response.text()).split(" ")[0] : undefined))
     .catch(() => undefined);
   try {
     const target = TestEvidenceTarget.parse({
-      previewName,
+      previewName: name,
       url,
       deploymentId: deploymentId?.trim() || undefined,
       apps,
@@ -1020,39 +787,33 @@ async function writeDeployedTarget(previewName: string, apps: TestEvidenceTarget
 }
 
 /** THE PROOF, one suite per CI job (preview-os.yml's E2E tests and Browser specs), against the
- *  live preview in deployed-target mode: `e2e`, the vitest e2e suite, and `specs`, the root
+ *  live deployment in deployed-target mode: `e2e`, the vitest e2e suite, and `specs`, the root
  *  Playwright specs (specs/AGENTS.md) — the suites `pnpm e2e` and `pnpm spec` run. Each runner
  *  derives the deployed target itself (e2e/support/deployed-target.ts, from the `APP_CONFIG` in this
- *  process's environment and the parent's envs.ts entry): the vitest suite in its global-setup, the
- *  specs in specs/setup.ts. Every spec project runs, the notes and voice projects against this
- *  preview's Notes, Voice, Dash and Admin apps, the Notes session specs signing out in its Dash
+ *  process's environment and envs.ts `previewDeployment`): the vitest suite in its global-setup,
+ *  the specs in specs/setup.ts. Every spec project runs, the notes and voice projects against this
+ *  deployment's Notes, Voice, Dash and Admin apps, the Notes session specs signing out in its Dash
  *  (NOTES_BASE_URL, VOICE_BASE_URL, DASH_BASE_URL, ADMIN_BASE_URL; their specs fail in CI without
- *  them). The suite's line under the
- *  PR body's status line then says `passed` or `failed`. The e2e rows tagged `slow` run as asked,
- *  else as the PR's label and paths say (scripts/slow-rows.ts); `only` runs them alone and is no
- *  verdict on the PR, so it writes no line. Vitest gets the choice as E2E_SLOW_ROWS, which holds each
- *  row to its timeout ceiling (e2e/support/setup.ts). */
+ *  them). The job's check is the verdict. The e2e rows tagged `slow` run as asked, else as the PR's
+ *  label and paths say (scripts/slow-rows.ts). Vitest gets the choice as E2E_SLOW_ROWS, which holds
+ *  each row to its timeout ceiling (e2e/support/setup.ts). */
 async function runSuite(
-  suite: PreviewSuite,
-  previewName: string,
+  suite: "e2e" | "specs",
+  name: string,
   prNumber: string | undefined,
   requestedSlowRows: SlowRows | undefined,
 ) {
-  const url = previewUrl(previewName);
+  const urls = previewDeploymentUrls(name);
+  const url = urls.os;
   const env = { WORKER_BASE_URL: url, DEMO_BASE_URL: url };
-  const appUrl = (name: string) =>
-    appPreviewUrl(
-      APPS.find((app) => app.name === name)!,
-      previewName,
-    );
+  const appUrl = (app: string) => urls.apps[app]!;
   await writeDeployedTarget(
-    previewName,
+    name,
     // the client apps the specs run against; the vitest rows use none
     suite === "specs"
       ? ["notes", "voice", "dash", "admin"].map((name) => ({ name, url: appUrl(name) }))
       : [],
   );
-  let statusPr = prNumber;
   try {
     if (suite === "e2e") {
       const { slowRows, reason } = await chooseSlowRows({
@@ -1067,7 +828,6 @@ async function runSuite(
         },
       });
       console.log(`[slow-rows] ${slowRows}: ${reason}`);
-      if (slowRows === "only") statusPr = undefined;
       // `e2e:run`, not `e2e`: the deployed target needs no local build.
       await runAsync("pnpm", ["e2e:run", ...slowRowsTagsFilter(slowRows)], {
         cwd: ROOT,
@@ -1091,10 +851,8 @@ async function runSuite(
       });
     }
   } catch (error) {
-    await writeStatus(statusPr, { suite, state: "failed", error: describe(error) });
-    throw new Error(`${PREVIEW_SUITES[suite]} failed against ${url}: ${describe(error)}`);
+    throw new Error(`the ${suite} suite failed against ${url}: ${describe(error)}`);
   }
-  await writeStatus(statusPr, { suite, state: "passed" });
 }
 
 // ── sweep (cloudflare-os: GitHub has no `environment.auto_stop_in`) ────────────────────────────
@@ -1130,204 +888,97 @@ async function openPullRequestBranches() {
   }
 }
 
-/** Every KV namespace, D1 and Artifacts namespace on the account, and every R2 bucket whose name
- *  begins with the parent's — each a candidate for preview-sweep.ts rule 4. */
-async function listSweptResources(cf: Cf): Promise<SweptResource[]> {
-  // R2 pages by cursor, which the API client does not hand back: one page of the API's ceiling,
-  // narrowed to the parent's prefix, and a full one refused.
-  const { buckets } = await cf<{ buckets: { name: string; creation_date?: string }[] }>(
-    `/r2/buckets?name_contains=${PREVIEW_PARENT.workerName}-&per_page=1000`,
-  );
-  if (buckets.length >= 1000)
-    throw new Error("1000 or more R2 buckets: the listing may be cut off");
-  return [
-    ...(await listAll<KvNamespaceRow>(cf, "/storage/kv/namespaces")).map((row) => ({
-      kind: "kv" as const,
-      name: row.title,
-      id: row.id,
-    })),
-    ...buckets.map((bucket) => ({
-      kind: "r2" as const,
-      name: bucket.name,
-      id: bucket.name,
-      createdAt: bucket.creation_date,
-    })),
-    ...(await listAll<D1Row>(cf, "/d1/database")).map((row) => ({
-      kind: "d1" as const,
-      name: row.name,
-      id: row.uuid,
-      createdAt: row.created_at,
-    })),
-    ...(await listAll<ArtifactsNamespaceRow>(cf, "/artifacts/namespaces")).map((row) => ({
-      kind: "artifacts" as const,
-      name: row.namespace,
-      id: row.namespace,
-      createdAt: row.created_at,
-    })),
-  ];
+/** LEGACY, from before per-commit deployments (2026-09-25): the Worker Previews of main on dev's
+ *  workers that each PR used to get, and apps/os's previews' resources (`os-<preview>-<binding>`).
+ *  Every run finds fewer; delete this, and the sweep's call, once one logs "no Worker Previews
+ *  left". */
+async function deleteLegacyWorkerPreviews(cf: Cf, options: { dryRun: boolean }) {
+  const failures: string[] = [];
+  const osPreviews: string[] = [];
+  for (const worker of [
+    MAIN_ON_DEV.workerName,
+    ...APPS.map((app) => app.envs.preview!.workerName),
+  ]) {
+    const previews = await listAll<{ name: string }>(cf, `/workers/workers/${worker}/previews`);
+    for (const { name } of previews) {
+      if (worker === MAIN_ON_DEV.workerName) osPreviews.push(name);
+      console.log(
+        `  ${options.dryRun ? "would delete" : "delete"} legacy Worker Preview ${name} of ${worker}`,
+      );
+      if (options.dryRun) continue;
+      await cf(`/workers/workers/${worker}/previews/${name}?force=true`, {
+        method: "DELETE",
+      }).catch((error) => failures.push(`${worker} preview ${name}: ${describe(error)}`));
+    }
+  }
+  if (osPreviews.length === 0 && failures.length === 0) console.log("no Worker Previews left");
+  const legacyName = (preview: string, binding: string) =>
+    `${MAIN_ON_DEV.workerName}-${preview}-${binding}`;
+  const [kv, d1] = await Promise.all([
+    listAll<KvNamespaceRow>(cf, "/storage/kv/namespaces"),
+    listAll<D1Row>(cf, "/d1/database"),
+  ]);
+  for (const preview of osPreviews) {
+    if (options.dryRun) continue;
+    const removals = [
+      ...kv
+        .filter((row) =>
+          [legacyName(preview, "itx-kv"), legacyName(preview, "oauth-kv")].includes(row.title),
+        )
+        .map((row) => () => deleteKvNamespace(cf, row)),
+      ...d1
+        .filter((row) => row.name === legacyName(preview, "db"))
+        .map((row) => () => deleteD1(cf, row)),
+      () => deleteR2Bucket(cf, legacyName(preview, "files")),
+      () => deleteArtifactsNamespace(cf, legacyName(preview, "repos")).then(() => undefined),
+    ];
+    for (const remove of removals)
+      await remove().catch((error) => failures.push(`${preview}: ${describe(error)}`));
+  }
+  return failures;
 }
 
-type ListedPreview = { name: string; created_on?: string; deployed_on?: string };
-
-const RESOURCE_KIND_LABELS: Record<SweptResource["kind"], string> = {
-  kv: "KV namespace",
-  r2: "R2 bucket",
-  d1: "D1",
-  artifacts: "Artifacts namespace",
-};
-
-/** The stale previews (deletePreview, and the apps on top of the same name) and the resources that
- *  outlived their preview, by the rules in scripts/preview-sweep.ts. */
+/** The stale deployments (scripts/preview-sweep.ts), then the legacy Worker Previews. */
 async function sweep(cf: Cf, options: { dryRun: boolean; jobUrl: string | undefined }) {
   const { dryRun } = options;
-  // The resources BEFORE the previews (rule 5): wrangler creates a preview before its KV and R2.
-  const resources = await listSweptResources(cf);
-  const previews = await listAll<ListedPreview>(
-    cf,
-    `/workers/workers/${PREVIEW_PARENT.workerName}/previews`,
-  );
-  console.log(
-    `${previews.length} preview(s) on ${PREVIEW_PARENT.workerName}; ${resources.length} KV namespaces, R2 buckets, D1s and Artifacts namespaces to judge`,
-  );
-  // An app's preview without an apps/os preview of the same name is a leftover of a failed delete.
-  const appPreviews: { app: StartApp; name: string }[] = [];
-  for (const app of APPS) {
-    const parent = app.envs.preview!.workerName;
-    const listed = await listAll<ListedPreview>(cf, `/workers/workers/${parent}/previews`).catch(
-      (error) => {
-        if (!isMissingWorkerError(describe(error))) throw error;
-        return [] as ListedPreview[]; // a parent never deployed holds no previews
-      },
-    );
-    for (const preview of listed) appPreviews.push({ app, name: preview.name });
-  }
-  const scripts = await cf<{ id: string; created_on?: string }[]>("/workers/scripts");
-  const workerNames = scripts.map((script) => script.id);
-  const resourceSuffixes = previewResourceSuffixes();
-  const accountResources = accountResourceNames();
-  // The pull requests the rules read: a preview's (rule 2), a leftover D1's or Artifacts namespace's
-  // (rule 6).
-  const pullRequestNumbers = new Set(
-    [
-      ...previews.map((preview) => preview.name),
-      ...resources
-        .filter((resource) => resource.kind === "d1" || resource.kind === "artifacts")
-        .map(
-          (resource) =>
-            previewNameOfSweptResource(resource, {
-              workerNames,
-              accountResourceNames: accountResources,
-              resourceSuffixes,
-            }) || "",
-        ),
-    ]
-      .map((name) => previewPullRequestNumber(name))
-      .filter((number) => number !== undefined),
-  );
+  const deployments = await listPreviewDeployments(cf);
+  console.log(`${deployments.length} deployment(s) on the account`);
   const pullRequestStates = new Map<number, PullRequestState>();
-  for (const number of pullRequestNumbers)
+  for (const number of new Set(
+    deployments
+      .map((deployment) => previewPullRequestNumber(deployment.prefix))
+      .filter((number) => number !== undefined),
+  ))
     pullRequestStates.set(number, await pullRequestState(number));
   const plan = planPreviewSweep({
     now: Date.now(),
-    workerNames,
-    accountResourceNames: accountResources,
-    parentCreatedAt: scripts.find((script) => script.id === PREVIEW_PARENT.workerName)?.created_on,
-    resourceSuffixes,
-    previews: previews.map((preview) => ({
-      name: preview.name,
-      lastDeployedAt: preview.deployed_on || preview.created_on,
-    })),
-    resources,
+    deployments,
     pullRequestStates,
     openPullRequestBranches: await openPullRequestBranches(),
   });
-  const stale = plan.previews.filter((preview) => preview.verdict === "stale");
-  const staleNames = new Set(stale.map(({ name }) => name));
-  const listedNames = new Set(previews.map((preview) => preview.name));
-  const staleAppPreviews = appPreviews.filter(
-    ({ name }) => staleNames.has(name) || !listedNames.has(name),
-  );
-  for (const { name, verdict, reason } of plan.previews)
-    console.log(`  ${verdict === "stale" ? "delete" : "keep  "} preview ${name}: ${reason}`);
-  for (const orphan of plan.orphans)
-    console.log(
-      `  delete orphan ${RESOURCE_KIND_LABELS[orphan.kind]} ${orphan.name}: ${orphan.reason}`,
-    );
-  for (const { app, name } of staleAppPreviews)
-    console.log(`  delete apps/${app.name} preview ${name}`);
-  const orphanCounts = Object.entries(RESOURCE_KIND_LABELS).map(
-    ([kind, label]) => `${plan.orphans.filter((orphan) => orphan.kind === kind).length} ${label}`,
-  );
-  console.log(
-    `plan: ${stale.length} stale preview(s); orphans: ${orphanCounts.join(", ")}; ${staleAppPreviews.length} app preview(s)`,
-  );
-  if (dryRun || (stale.length === 0 && plan.orphans.length === 0 && staleAppPreviews.length === 0))
-    return;
-  const wrangler = preparePreviewWrangler();
-  try {
-    await wrangler.ready;
-    const failures: string[] = [];
-    // Cloudflare's, not the sweep's: paged, and tried again the next night (StuckArtifactsNamespace).
-    const stuckNamespaces: StuckArtifactsNamespace[] = [];
-    const noteStuck = (stuck: StuckArtifactsNamespace | undefined) => {
-      if (stuck) stuckNamespaces.push(stuck);
-    };
-    for (const { name } of stale) {
-      await deletePreview(cf, name, wrangler.command).then(noteStuck, (error) =>
-        failures.push(`${name}: ${describe(error)}`),
-      );
-    }
-    // Each orphan's preview looked up once more, right before its resources go: a preview deployed
-    // under that name since the listing (a reset, a redeploy that reuses leftovers by name) keeps them.
-    for (const previewName of new Set(plan.orphans.map((orphan) => orphan.previewName))) {
-      const previewGone = await cf(
-        `/workers/workers/${PREVIEW_PARENT.workerName}/previews/${previewName}`,
-      ).then(
-        () => {
-          console.warn(`preview ${previewName} exists again; its resources stay.`);
-          return false;
-        },
-        (error) => {
-          if (isCloudflareError(error, 404, 10025)) return true;
-          failures.push(`preview ${previewName}: ${describe(error)}`);
-          return false;
-        },
-      );
-      if (!previewGone) continue;
-      for (const orphan of plan.orphans.filter((row) => row.previewName === previewName)) {
-        const deleteOrphan = {
-          kv: () => deleteKvNamespace(cf, { id: orphan.id, title: orphan.name }),
-          r2: () => deleteR2Bucket(cf, orphan.name),
-          d1: async () => {
-            await cf(`/d1/database/${orphan.id}`, { method: "DELETE" });
-            console.log(`deleted D1 ${orphan.name}`);
-          },
-          artifacts: async () => noteStuck(await deleteArtifactsNamespace(cf, orphan.name)),
-        }[orphan.kind];
-        await deleteOrphan().catch((error) => failures.push(`${orphan.name}: ${describe(error)}`));
-      }
-    }
-    for (const { app, name } of staleAppPreviews) {
-      await deleteWorkerPreview(app.envs.preview!, name, wrangler.command).catch((error) =>
-        failures.push(`apps/${app.name} ${name}: ${describe(error)}`),
-      );
-    }
-    // The run is red only when the sweep could not act. A scheduled run reports on main's head
-    // commit, where red reads as "this commit broke", so Cloudflare's refusal is a page instead
-    // (the rule scripts/ci/prd-fault-alarm.ts follows); a page that could not be posted is a failure.
-    if (stuckNamespaces.length > 0) {
-      const text = renderStuckArtifactsNamespacesPage(stuckNamespaces, options.jobUrl);
-      console.log(text);
-      await (async () =>
-        getSlackClient().chat.postMessage({
-          channel: slackChannelIds["#error-pulse"],
-          text,
-        }))().catch((error) => failures.push(`paging #error-pulse: ${describe(error)}`));
-    }
-    if (failures.length > 0) throw new Error(`sweep failures:\n  ${failures.join("\n  ")}`);
-  } finally {
-    wrangler.cleanup();
+  for (const { deployment, verdict, reason } of plan)
+    console.log(`  ${verdict === "stale" ? "delete" : "keep  "} ${deployment.name}: ${reason}`);
+  const stale = plan
+    .filter(({ verdict }) => verdict === "stale")
+    .map(({ deployment }) => deployment);
+  console.log(`plan: ${stale.length} stale deployment(s) of ${plan.length}`);
+  const legacyFailures = await deleteLegacyWorkerPreviews(cf, { dryRun });
+  if (dryRun) return;
+  const { failures, stuckNamespaces } = await deletePreviewDeployments(cf, stale);
+  failures.push(...legacyFailures);
+  // The run is red only when the sweep could not act. A scheduled run reports on main's head
+  // commit, where red reads as "this commit broke", so Cloudflare's refusal is a page instead
+  // (the rule scripts/ci/prd-fault-alarm.ts follows); a page that could not be posted is a failure.
+  if (stuckNamespaces.length > 0) {
+    const text = renderStuckArtifactsNamespacesPage(stuckNamespaces, options.jobUrl);
+    console.log(text);
+    await (async () =>
+      getSlackClient().chat.postMessage({
+        channel: slackChannelIds["#error-pulse"],
+        text,
+      }))().catch((error) => failures.push(`paging #error-pulse: ${describe(error)}`));
   }
+  if (failures.length > 0) throw new Error(`sweep failures:\n  ${failures.join("\n  ")}`);
 }
 
 // ── main ───────────────────────────────────────────────────────────────────────────────────────
@@ -1335,90 +986,98 @@ async function sweep(cf: Cf, options: { dryRun: boolean; jobUrl: string | undefi
 type PreviewOptions = {
   /** the pull request's number (else PREVIEW_PR_NUMBER) */
   pr?: string;
-  /** the preview's name, for a run without a PR number (else PREVIEW_NAME) */
+  /** the prefix's name, for a run without a PR number (else PREVIEW_NAME) */
   name?: string;
-  /** the apps on top: all (default, else PREVIEW_APPS), none, or auto (the ones this PR changes) */
-  apps?: "all" | "auto" | "none";
+  /** the apps on top: all (default, else PREVIEW_APPS) or none */
+  apps?: "all" | "none";
   /** e2e: which rows tagged `slow` run — run, skip or only (else E2E_SLOW_ROWS) */
   slowRows?: "run" | "skip" | "only";
-  /** print the plan (sweep, reset-parent) or build and write the config only (the rest) */
+  /** print the plan instead of acting */
   dryRun?: boolean;
 };
 
-/** One Worker Preview per pull request of the one worker: `pnpm preview <command> [flags]`. */
+/** A fresh set of plain workers per tested commit: `pnpm preview <command> [flags]`. */
 export default class Preview {
-  /** build and write the preview's wrangler config */
+  /** build apps/os for this commit's deployment and name the config it wrote */
   async config(options: PreviewOptions = {}) {
     await main("config", options);
   }
-  /** build, the Artifacts namespace, the secrets, `wrangler preview`, the PR body and its status line */
+  /** this commit's deployment: apps/os, the apps on top, the PR body's section */
   async deploy(options: PreviewOptions = {}) {
     await main("deploy", options);
   }
-  /** the vitest e2e suite against the live preview */
+  /** the vitest e2e suite against a deployment (PREVIEW_DEPLOYMENT, else the prefix's newest) */
   async e2e(options: PreviewOptions = {}) {
     await main("e2e", options);
   }
-  /** the Playwright specs against the live preview */
+  /** the Playwright specs against a deployment (PREVIEW_DEPLOYMENT, else the prefix's newest) */
   async specs(options: PreviewOptions = {}) {
     await main("specs", options);
   }
-  /** delete the preview, then deploy it */
-  async reset(options: PreviewOptions = {}) {
-    await main("reset", options);
+  /** delete the prefix's deployments PREVIEW_DEPLOYMENT supersedes */
+  async cleanupSuperseded(options: PreviewOptions = {}) {
+    await main("cleanup-superseded", options);
   }
-  /** the preview, its Artifacts namespace, KV namespaces and R2 bucket, leftover D1, the apps on top */
+  /** every deployment of the prefix: its workers, KV, R2 bucket, D1 and Artifacts namespace */
   async delete(options: PreviewOptions = {}) {
     await main("delete", options);
   }
-  /** the stale previews and the resources that outlived theirs (scripts/preview-sweep.ts) */
+  /** the stale deployments (scripts/preview-sweep.ts) and the legacy Worker Previews */
   async sweep(options: PreviewOptions = {}) {
     await main("sweep", options);
   }
-  /** the workers every preview branches from, from this checkout */
+  /** main on the dev/preview account, from this checkout, in place */
   async deployParents(options: PreviewOptions = {}) {
     await main("deploy-parents", options);
   }
-  /** the `os` parent's own data erased, then the parent deployed again */
+  /** main on dev's own data erased, then main on dev deployed again */
   async resetParent(options: PreviewOptions = {}) {
     await main("reset-parent", options);
   }
 }
 
 async function main(command: Command, options: PreviewOptions) {
-  const parsed = { ...options, command, dryRun: options.dryRun ?? false };
-  const pr = parsed.pr || process.env.PREVIEW_PR_NUMBER;
-  const appsMode = parsed.apps || AppsMode.parse(process.env.PREVIEW_APPS || "all");
-  if (parsed.command === "sweep")
-    return sweep((await parentContext()).cf, {
-      dryRun: parsed.dryRun,
-      jobUrl: process.env.DEPOT_JOB_URL,
-    });
-  if (parsed.command === "deploy-parents") return deployParents(await parentContext());
-  if (parsed.command === "reset-parent") return resetParent({ dryRun: parsed.dryRun });
-  const previewName = resolvePreviewName({
-    name: parsed.name || process.env.PREVIEW_NAME,
+  const dryRun = options.dryRun || false;
+  const pr = options.pr || process.env.PREVIEW_PR_NUMBER;
+  if (command === "sweep")
+    return sweep((await accountContext()).cf, { dryRun, jobUrl: process.env.DEPOT_JOB_URL });
+  if (command === "deploy-parents") return deployParents(await accountContext());
+  if (command === "reset-parent") return resetParent({ dryRun });
+  if (command === "cleanup-superseded") {
+    const current = process.env.PREVIEW_DEPLOYMENT;
+    if (!current)
+      throw new Error("cleanup-superseded needs PREVIEW_DEPLOYMENT, the deployment the run made");
+    return cleanupSuperseded((await accountContext()).cf, current, { dryRun });
+  }
+  const prefix = resolvePreviewPrefix({
+    name: options.name || process.env.PREVIEW_NAME,
     prNumber: pr,
   });
-  console.log(`preview ${previewName} → ${previewUrl(previewName)}`);
-  if (parsed.command === "config" || parsed.dryRun) {
-    await buildOs("preview");
-    console.log(
-      `wrote ${writePreviewWranglerConfig({ previewName, databaseId: "<created at deploy>" })}`,
+  if (command === "delete") return deletePrefix((await accountContext()).cf, prefix, { dryRun });
+  if (command === "e2e" || command === "specs")
+    return runSuite(
+      command,
+      await deploymentToTest(prefix),
+      pr,
+      options.slowRows || SlowRows.optional().parse(process.env.E2E_SLOW_ROWS || undefined),
     );
+  const name = previewDeploymentName(prefix, checkedOutCommit());
+  const urls = previewDeploymentUrls(name);
+  console.log(`deployment ${name} → ${urls.os}`);
+  if (command === "config") {
+    await buildOs(name);
+    console.log(`wrote ${findBuiltWranglerConfig(ROOT)}`);
     return;
   }
-  if (parsed.command === "e2e" || parsed.command === "specs")
-    return runSuite(
-      parsed.command,
-      previewName,
-      pr,
-      parsed.slowRows || SlowRows.optional().parse(process.env.E2E_SLOW_ROWS || undefined),
-    );
-  const ctx = await parentContext();
-  if (parsed.command === "delete") return deleteAll(ctx.cf, previewName);
-  if (parsed.command === "reset") await deleteAll(ctx.cf, previewName);
-  return deployPreview(ctx, previewName, pr, await appsToPreview(appsMode, pr));
+  const apps =
+    AppsMode.parse(options.apps || process.env.PREVIEW_APPS || "all") === "all" ? APPS : [];
+  if (dryRun) {
+    for (const app of apps) console.log(`  apps/${app.name} → ${urls.apps[app.name]}`);
+    return;
+  }
+  // the name the suites and the cleanup job test and keep (preview-os.yml, main-os-e2e.yml)
+  if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, `deployment=${name}\n`);
+  return deployPreview(await accountContext(), name, pr, apps);
 }
 
 if (process.argv[1]?.endsWith("preview.ts"))

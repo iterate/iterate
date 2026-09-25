@@ -1,5 +1,5 @@
 // scripts/preview-github-app.ts — the GitHub App every per-PR preview names as iterate's own
-// (preview-config.ts sets it as APP_CONFIG `integrations.github`), in a module of its own so the e2e
+// (scripts/deploy.ts ships it as the APP_CONFIG `integrations.github` secret), in a module of its own so the e2e
 // that installs it imports no deploy tooling.
 import { dummyPetshopEnvs } from "../../../envs.ts";
 

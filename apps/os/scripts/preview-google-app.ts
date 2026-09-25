@@ -1,5 +1,5 @@
 // scripts/preview-google-app.ts — the Google client every per-PR preview names as iterate's own
-// (preview-config.ts sets it as APP_CONFIG `integrations.google`), in a module of its own so the e2e
+// (generate-wrangler-config.ts sets it as APP_CONFIG `integrations.google`), in a module of its own so the e2e
 // that connects through it imports no deploy tooling.
 import { dummyPetshopEnvs } from "../../../envs.ts";
 

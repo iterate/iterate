@@ -51,9 +51,8 @@ export interface KitEnv {
 }
 
 export const kitEnvs = {
-  // THE PARENT of kit's per-PR Worker Previews (apps/os/scripts/preview.ts): each preview is a
-  // branch of this worker, bound to the same PR's apps/os preview as its issuer; the parent itself
-  // is main, signed in against osEnvs.preview (preview-parents.yml). A preview lists and
+  // KIT AT MAIN on the dev/preview account, signed in against osEnvs.preview and
+  // redeployed in place with it (preview-parents.yml). A PR's kit is its own worker (`previewDeployment`). Every kit lists and
   // flashes the same GitHub releases as production (apps/kit/src/firmware/releases.ts).
   preview: {
     cloudflareAccountId: PREVIEW_AND_DEV_ACCOUNT_ID,
@@ -112,14 +111,28 @@ export interface OsEnv {
    *  is the zone's Delegated DCV id (`GET /zones/:id/dcv_delegation/uuid`), which the owner's
    *  `_acme-challenge` CNAME names. */
   cloudflareForSaas?: { zone: string; zoneId: string; dcvDelegationUuid: string };
-  resources: { oauthKvId: string; itxKvId: string; dbId: string };
+  /** The one-click sign-in links (apps/os src/test-link.ts, `APP_CONFIG_LOGIN__TEST_LINK__…`), and
+   *  the test domain's `admin@` as the one admin the admin app's specs sign in as. A per-commit
+   *  deployment's only: app-config.ts refuses the links off a workers.dev origin besides. The PR
+   *  body that carries them is public, so a link signs nobody in until its redeemer proves at
+   *  `admins.issuer` that they are an address `admins.emails` names (src/test-link-admins.ts). */
+  testLinks?: { admins: { issuer: string; emails: string[] } };
+  /** iterate's own Slack app, Google and Cloudflare OAuth clients and GitHub App are the dummy pet
+   *  shop's fakes (apps/os/scripts/preview-*-app.ts), and people sign in with Google, Cloudflare and
+   *  GitHub through them. A per-commit deployment's only: prd's and main on dev's integrations are
+   *  their Doppler `APP_CONFIG`'s. */
+  petshopIntegrations?: boolean;
+  /** The ids of the resources `resourceNamePrefix` names, which ensure-resources creates and this
+   *  file records. Unset for a per-commit deployment (`previewDeployment`), whose own deploy creates
+   *  them by name (scripts/deploy.ts). */
+  resources?: { oauthKvId: string; itxKvId: string; dbId: string };
 }
+
 export const osEnvs: Record<string, OsEnv> = {
-  // THE PARENT OF EVERY PER-PR PREVIEW (apps/os/scripts/preview.ts, the cloudflare-os recipe): a
-  // Worker Preview is a branch of an existing worker, and this is that worker on the dev/preview
-  // account — `pr<n>-os.<subdomain>.workers.dev`. Each preview has resources of its own. The parent
-  // itself is main on the dev/preview account: preview-parents.yml deploys it from every
-  // push to main, beside the apps' parents, which sign in against it. workers.dev only.
+  // MAIN ON THE DEV/PREVIEW ACCOUNT: preview-parents.yml redeploys it in place from every push to
+  // main, beside the apps' main-on-dev workers, which sign in against it; its data is erased
+  // nightly (preview-sweep.yml). People use it by hand. No PR deployment depends on it: each is a
+  // set of workers of its own (`previewDeployment`). workers.dev only.
   preview: {
     cloudflareAccountId: PREVIEW_AND_DEV_ACCOUNT_ID,
     dopplerConfig: "preview",
@@ -127,11 +140,10 @@ export const osEnvs: Record<string, OsEnv> = {
     baseUrl: "https://os.iterate-dev-preview.workers.dev",
     mcpBaseUrl: "https://os.iterate-dev-preview.workers.dev/mcp",
     dashBaseUrl: "https://dash.iterate-dev-preview.workers.dev",
-    // Projects as paths on the one origin (`/projects/<slug>/<routingSlug>/…`): workers.dev has no wildcard
-    // subdomains, and every preview inherits this.
+    // Projects as paths on the one origin (`/projects/<slug>/<routingSlug>/…`): workers.dev has no
+    // wildcard subdomains.
     ingressRouting: { type: "paths" },
-    // Not the worker's name: local dev's R2 bucket is `os-files` (wrangler.base.jsonc), and a
-    // preview's own resources are `os-<preview>-…` (preview-config.ts `previewResourceName`).
+    // Not the worker's name: local dev's R2 bucket is `os-files` (wrangler.base.jsonc).
     artifactsNamespace: "os-parent-repos",
     resourceNamePrefix: "os-parent",
     resources: {
@@ -192,9 +204,8 @@ export const osEnvs: Record<string, OsEnv> = {
  *  fat first-party TanStack Start app (README there), an ordinary OAuth client of the headless
  *  platform at os.iterate.com, on a custom domain (dash.iterate.com). */
 export const dashEnvs = {
-  // THE PARENT of dash's per-PR Worker Previews (apps/os/scripts/preview.ts): each preview is a
-  // branch of this worker, bound to the same PR's apps/os preview as its issuer; the parent itself
-  // is main, signed in against osEnvs.preview (preview-parents.yml).
+  // DASH AT MAIN on the dev/preview account, signed in against osEnvs.preview and
+  // redeployed in place with it (preview-parents.yml). A PR's dash is its own worker (`previewDeployment`).
   preview: {
     cloudflareAccountId: PREVIEW_AND_DEV_ACCOUNT_ID,
     dopplerConfig: "preview",
@@ -212,9 +223,8 @@ export const dashEnvs = {
 
 /** apps/agents — the agents page (README there); the notes app's shape, on a custom domain. */
 export const agentsEnvs = {
-  // THE PARENT of agents's per-PR Worker Previews (apps/os/scripts/preview.ts): each preview is a
-  // branch of this worker, bound to the same PR's apps/os preview as its issuer; the parent itself
-  // is main, signed in against osEnvs.preview (preview-parents.yml).
+  // AGENTS AT MAIN on the dev/preview account, signed in against osEnvs.preview and
+  // redeployed in place with it (preview-parents.yml). A PR's agents is its own worker (`previewDeployment`).
   preview: {
     cloudflareAccountId: PREVIEW_AND_DEV_ACCOUNT_ID,
     dopplerConfig: "preview",
@@ -232,9 +242,8 @@ export const agentsEnvs = {
 };
 
 export const notesEnvs = {
-  // THE PARENT of notes's per-PR Worker Previews (apps/os/scripts/preview.ts): each preview is a
-  // branch of this worker, bound to the same PR's apps/os preview as its issuer; the parent itself
-  // is main, signed in against osEnvs.preview (preview-parents.yml).
+  // NOTES AT MAIN on the dev/preview account, signed in against osEnvs.preview and
+  // redeployed in place with it (preview-parents.yml). A PR's notes is its own worker (`previewDeployment`).
   preview: {
     cloudflareAccountId: PREVIEW_AND_DEV_ACCOUNT_ID,
     dopplerConfig: "preview",
@@ -253,9 +262,8 @@ export const notesEnvs = {
 
 /** apps/admin — the platform's admin app (README there); the notes app's shape, on a custom domain. */
 export const adminEnvs = {
-  // THE PARENT of admin's per-PR Worker Previews (apps/os/scripts/preview.ts): each preview is a
-  // branch of this worker, bound to the same PR's apps/os preview as its issuer; the parent itself
-  // is main, signed in against osEnvs.preview (preview-parents.yml).
+  // ADMIN AT MAIN on the dev/preview account, signed in against osEnvs.preview and
+  // redeployed in place with it (preview-parents.yml). A PR's admin is its own worker (`previewDeployment`).
   preview: {
     cloudflareAccountId: PREVIEW_AND_DEV_ACCOUNT_ID,
     dopplerConfig: "preview",
@@ -273,9 +281,8 @@ export const adminEnvs = {
 };
 
 export const voiceEnvs = {
-  // THE PARENT of voice's per-PR Worker Previews (apps/os/scripts/preview.ts): each preview is a
-  // branch of this worker, bound to the same PR's apps/os preview as its issuer; the parent itself
-  // is main, signed in against osEnvs.preview (preview-parents.yml).
+  // VOICE AT MAIN on the dev/preview account, signed in against osEnvs.preview and
+  // redeployed in place with it (preview-parents.yml). A PR's voice is its own worker (`previewDeployment`).
   preview: {
     cloudflareAccountId: PREVIEW_AND_DEV_ACCOUNT_ID,
     dopplerConfig: "preview",
@@ -291,6 +298,76 @@ export const voiceEnvs = {
     baseUrl: "https://voice.iterate.com",
   },
 };
+
+/** The account's workers.dev subdomain: every dev/preview worker is `<worker>.<this>`. */
+const PREVIEW_WORKERS_DEV = "iterate-dev-preview.workers.dev";
+
+/** The apps on top of apps/os that a per-commit deployment deploys beside it, by the name each
+ *  looks the others up by (scripts/lib/start-app.ts `ITERATE_APP_ORIGINS`). */
+export const PREVIEW_DEPLOYMENT_APPS = [
+  "dash",
+  "agents",
+  "notes",
+  "admin",
+  "voice",
+  "kit",
+] as const;
+
+/** `<prefix>-<sha7>`: a prefix of lowercase words (`pr3144`, `main`, `real-model`), at most 28
+ *  characters, then the tested commit's first 7 hex digits. Every worker and resource name of the
+ *  set stays under 63 characters (`<name>-agents`, `<name>-os-oauth-kv`). */
+const PREVIEW_DEPLOYMENT_NAME = /^(?<prefix>[a-z0-9]+(?:-[a-z0-9]+)*)-(?<sha>[0-9a-f]{7})$/;
+
+/** THE PER-COMMIT DEPLOYMENTS (apps/os/scripts/preview.ts): every PR run and every CI workflow that
+ *  tests a deployment gets a fresh set of plain Workers on the dev/preview account for the commit
+ *  it tests, apps/os and each app on top, named `<name>-<app>` for a `name` of `<prefix>-<sha7>`:
+ *  `pr3144-a1b2c3d-os` at `https://pr3144-a1b2c3d-os.iterate-dev-preview.workers.dev`,
+ *  `pr3144-a1b2c3d-dash`, …. The name decides everything, so the build, the deploy, the suites and
+ *  the delete each derive the same set from it. apps/os's resources are named after its worker and
+ *  provisioned by its first deploy: KV by wrangler (`<worker>-oauth-kv`, `<worker>-itx-kv`), the
+ *  D1, R2 bucket and Artifacts namespace by scripts/deploy.ts. Nothing is redeployed in place: the
+ *  next commit gets a set of its own, and the older one is deleted (preview.ts `cleanup-superseded`,
+ *  preview-sweep.ts). Undefined for a name of any other shape. */
+export function previewDeployment(name: string) {
+  const match = PREVIEW_DEPLOYMENT_NAME.exec(name);
+  if (!match?.groups || match.groups.prefix!.length > 28) return undefined;
+  const origin = (app: string) => `https://${name}-${app}.${PREVIEW_WORKERS_DEV}`;
+  const osWorker = `${name}-os`;
+  const os: OsEnv = {
+    cloudflareAccountId: PREVIEW_AND_DEV_ACCOUNT_ID,
+    dopplerConfig: "preview",
+    workerName: osWorker,
+    baseUrl: origin("os"),
+    mcpBaseUrl: `${origin("os")}/mcp`,
+    // named whether or not the run deploys the dash (a soak deploys apps/os alone)
+    dashBaseUrl: origin("dash"),
+    ingressRouting: { type: "paths" },
+    testLinks: { admins: { issuer: osEnvs.prd!.baseUrl, emails: ["*@nustom.com"] } },
+    petshopIntegrations: true,
+    artifactsNamespace: `${osWorker}-repos`,
+    resourceNamePrefix: osWorker,
+  };
+  const apps = Object.fromEntries(
+    PREVIEW_DEPLOYMENT_APPS.map((app) => [
+      app,
+      {
+        cloudflareAccountId: PREVIEW_AND_DEV_ACCOUNT_ID,
+        dopplerConfig: "preview",
+        workerName: `${name}-${app}`,
+        baseUrl: origin(app),
+      },
+    ]),
+  );
+  return { name, prefix: match.groups.prefix!, sha: match.groups.sha!, os, apps };
+}
+
+/** THE apps/os DEPLOYMENT A NAME NAMES: an `osEnvs` entry (`prd`, `preview`), or a per-commit
+ *  deployment derived from its name (`pr3144-a1b2c3d`, `previewDeployment`); undefined for any
+ *  other name. What building and deploying apps/os by name look up (vite.config.ts through
+ *  generate-wrangler-config.ts, scripts/deploy.ts), so neither needs to tell the two apart. */
+export function osEnv(name: string): OsEnv | undefined {
+  return osEnvs[name] || previewDeployment(name)?.os;
+}
 
 /** Static OAuth example and downloadable unpacked Chrome extension. Credentials share the platform's Doppler project. */
 export const spaEnvs = {

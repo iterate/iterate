@@ -24,6 +24,7 @@ import {
   kitEnvs,
   notesEnvs,
   osEnvs,
+  previewDeployment,
   voiceEnvs,
 } from "../../envs.ts";
 import { deployApp } from "./deploy-app.ts";
@@ -106,38 +107,19 @@ export function ownZones(): string[] {
   return [...zones].sort();
 }
 
-/** The app's Worker config for one envs.ts environment — or, with none, local dev — which its
+/** The app's Worker config for one environment — an envs.ts one, a per-commit deployment by its
+ *  name (`pr3144-a1b2c3d`, envs.ts `previewDeployment`), or, with none, local dev — which its
  *  vite.config.ts hands the Cloudflare Vite plugin (`cloudflare({ config })`); there is no wrangler
- *  file. `vite build` snapshots it into dist/server/wrangler.json, what deploy and a per-PR preview
- *  ship. The environment is CLOUDFLARE_ENV, as deployApp and buildStartApp set it. */
+ *  file. `vite build` snapshots it into dist/server/wrangler.json, what a deploy ships. The
+ *  environment is CLOUDFLARE_ENV, as deployApp and buildStartApp set it. */
 export function startAppWorkerConfig(app: StartApp, envName: string | undefined) {
-  const env = envName ? app.envs[envName] : undefined;
-  if (envName && !env)
-    throw new Error(
-      `apps/${app.name}: unknown env ${JSON.stringify(envName)}; known envs: ${Object.keys(app.envs).join(", ")}`,
-    );
-  // THE ENVIRONMENT ITS LINKS POINT INTO: a deployed app's own — prd's apps sign in against prd's
-  // platform, and a `preview` build (the app's preview parent, main on the dev/preview account)
-  // against the platform's preview parent — and prd's for local dev, which names a local issuer
-  // in a gitignored .dev.vars (`APP_CONFIG_URLS__OS=http://localhost:8788`, merged on top). A
-  // per-PR preview's config swaps in the same PR's (startAppPreviewConfig).
-  const linked = envName || "prd";
-  const platform = osEnvs[linked];
-  if (!platform)
-    throw new Error(`apps/${app.name}: envs.ts has no osEnvs.${linked} to sign in against`);
-  const appOrigins = Object.entries(FIRST_PARTY_APPS).map(([name, envs]) => {
-    const other = envs[linked];
-    if (!other)
-      throw new Error(`apps/${app.name}: envs.ts has no ${linked} environment of apps/${name}`);
-    return [name, other.baseUrl];
-  });
+  const { env, platform, appOrigins } = linkedEnvironment(app, envName);
   // THE APP'S CONFIGURATION, all of it from envs.ts; its schema documents each key
   // (@iterate-com/shared/start-app-config)
   const appConfig = {
     urls: {
       os: platform.baseUrl,
-      // the linked environment's apps, as the issuer is; a per-PR preview's config names the same
-      // PR's app previews instead, only the ones that run deploys (startAppPreviewConfig)
+      // the linked environment's apps, as the issuer is
       ...Object.fromEntries(appOrigins),
     },
     denyZones: ownZones(),
@@ -173,6 +155,40 @@ export function startAppWorkerConfig(app: StartApp, envName: string | undefined)
         ],
       }),
   };
+}
+
+/** The app's own env and THE ENVIRONMENT ITS LINKS POINT INTO: a deployed app's own — prd's apps
+ *  sign in against prd's platform, main on the dev/preview account's (`preview`) against its
+ *  platform, and a per-commit deployment's against that deployment's apps/os, linking to its apps
+ *  — and prd's for local dev, which names a local issuer in a gitignored .dev.vars
+ *  (`APP_CONFIG_URLS__OS=http://localhost:8788`, merged on top). */
+function linkedEnvironment(
+  app: StartApp,
+  envName: string | undefined,
+): { env: StartAppEnv | undefined; platform: { baseUrl: string }; appOrigins: string[][] } {
+  const preview = envName ? previewDeployment(envName) : undefined;
+  if (preview)
+    return {
+      env: preview.apps[app.name],
+      platform: preview.os,
+      appOrigins: Object.entries(preview.apps).map(([name, env]) => [name, env.baseUrl]),
+    };
+  const env = envName ? app.envs[envName] : undefined;
+  if (envName && !env)
+    throw new Error(
+      `apps/${app.name}: unknown env ${JSON.stringify(envName)}; known envs: ${Object.keys(app.envs).join(", ")}`,
+    );
+  const linked = envName || "prd";
+  const platform = osEnvs[linked];
+  if (!platform)
+    throw new Error(`apps/${app.name}: envs.ts has no osEnvs.${linked} to sign in against`);
+  const appOrigins = Object.entries(FIRST_PARTY_APPS).map(([name, envs]) => {
+    const other = envs[linked];
+    if (!other)
+      throw new Error(`apps/${app.name}: envs.ts has no ${linked} environment of apps/${name}`);
+    return [name, other.baseUrl];
+  });
+  return { env, platform, appOrigins };
 }
 
 /** THE REQUESTS THAT START THE APP'S WORKER (`assets.run_worker_first`): every one — /healthz, the
@@ -295,59 +311,9 @@ async function generateRouteTree(app: StartApp, options: { check?: boolean }) {
 }
 
 /** `vite build` for one env: the cloudflare plugin snapshots that env's Worker config
- *  (startAppWorkerConfig) into dist/server/wrangler.json, which is what a preview deploy of the app
- *  starts from. */
+ *  (startAppWorkerConfig) into dist/server/wrangler.json, which the deploy then ships. */
 export function buildStartApp(app: StartApp, env: string) {
   return viteBuild(fileURLToPath(app.root), env);
-}
-
-/** The config `wrangler preview` reads for one per-PR preview of a start app, as a pure function
- *  of the built config (dist/server/wrangler.json, the `preview` env's) — the shape of
- *  cloudflare-os's `buildPreviewConfigs`. An app on top of the platform is an OAuth client and
- *  nothing else: no secrets, no data of its own, one Durable Object class for the browser session,
- *  and its `APP_CONFIG` with `urls` swapped: the issuer for the same PR's apps/os preview and the
- *  other apps for the same PR's app previews (`appOrigins`, apps/os/scripts/preview-config.ts
- *  `appPreviewOrigins`), so a link from one to another stays in the preview. The top level is
- *  the parent worker (what `wrangler preview` branches from; main deploys it, apps/os
- *  scripts/preview.ts `deployParents`) with the class as a legacy `migrations` entry, because the pkg.pr.new
- *  wrangler build that provisions previews predates `exports`; the `previews` block is the one
- *  preview's own — assets are not a `previews` key and are inherited from the top level. */
-export function startAppPreviewConfig(
-  built: Record<string, any>,
-  input: { issuer: string; appOrigins: Record<string, string> },
-): Record<string, unknown> {
-  const { exports, topLevelName, ...config } = built;
-  return {
-    ...config,
-    preview_urls: true,
-    migrations: [{ tag: "v1", new_sqlite_classes: Object.keys(exports) }],
-    previews: {
-      observability: config.observability,
-      durable_objects: config.durable_objects,
-      // The built worker's configuration (its deny zones among it), `urls` replaced whole: the
-      // issuer is this PR's apps/os preview and the apps are this PR's app previews, none of the
-      // parents' (an app the run does not deploy is named nowhere).
-      vars: {
-        ...config.vars,
-        APP_CONFIG: JSON.stringify({
-          ...JSON.parse(config.vars.APP_CONFIG),
-          urls: { os: input.issuer, ...input.appOrigins },
-        }),
-      },
-    },
-  };
-}
-
-/** Write dist/server/wrangler.preview.json from the build and return its path. */
-export function writeStartAppPreviewConfig(
-  app: StartApp,
-  input: { issuer: string; appOrigins: Record<string, string> },
-): string {
-  const dir = path.join(fileURLToPath(app.root), "dist/server");
-  const built = JSON.parse(readFileSync(path.join(dir, "wrangler.json"), "utf8"));
-  const file = path.join(dir, "wrangler.preview.json");
-  writeFileSync(file, `${JSON.stringify(startAppPreviewConfig(built, input), null, 2)}\n`);
-  return file;
 }
 
 /**

@@ -94,7 +94,7 @@ gh api -X PATCH repos/iterate/iterate/pulls/<n> --input payload.json
 
 ## Previews
 
-Every open PR (draft or ready) whose change touches the platform or its clients gets a preview deployment: the Preview OS workflow deploys one Cloudflare Worker Preview of `apps/os` per PR, plus the Dash, Agents, Notes, Voice and Kit clients on top (**Deploy preview**), runs the integration suite (**E2E tests**) and the browser specs (**Browser specs**) against it, and writes the links and operations into the PR body. E2E tests and Browser specs are required checks. A PR that touches none of the preview paths deploys nothing, and both skip, which counts as passing. Commands for resetting, re-running the suites or deleting the preview: [apps/os/README.md](../apps/os/README.md).
+Every open PR (draft or ready) whose change touches the platform or its clients gets a preview deployment: the Preview OS workflow deploys the tested commit as a fresh set of plain Workers, `apps/os` plus the Dash, Agents, Notes, Admin, Voice and Kit clients on top (**Deploy preview**), runs the integration suite (**E2E tests**) and the browser specs (**Browser specs**) against it, deletes the PR's older deployments (**Clean up superseded**), and writes the links and operations into the PR body. E2E tests and Browser specs are required checks. A PR that touches none of the preview paths deploys nothing, and both skip, which counts as passing. Commands for re-running the suites or deleting the deployments: [apps/os/README.md](../apps/os/README.md).
 
 For operational changes, inspect the preview's resulting state and telemetry in addition to test results. Production rollout remains gated on the [engineering invariant](engineering-invariants.md).
 

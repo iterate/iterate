@@ -38,7 +38,7 @@ fingerprinted `/assets/*`.
    JS graph, auth, socket and first read, live fan-out, or an optional heavy runtime. For
    route, loader, split or hydration work, also read [TanStack Start](references/tanstack-start.md).
 2. Measure on the PR's own preview, never only on local dev. The PR body lists every app's
-   preview URL (`appPreviewUrl` in `apps/os/scripts/preview-config.ts`) with a one-click
+   URL in the PR's deployment (`previewDeployment` in `envs.ts`) with a one-click
    `Sign in ↗` link. The link signs a fresh browser in as `pr<n>@preview.iterate.test` and
    lands in project `pr<n>`, once prd confirms the browser is an `*@nustom.com` person's; an
    isolated session has no such prd sign-in, so sign in with the preview's password (Doppler

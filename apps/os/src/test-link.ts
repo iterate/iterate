@@ -8,13 +8,13 @@
 // The token is caller.ts `signClaims`' `base64url(JSON claims).base64url(HMAC-SHA256)`. Why it is
 // not a standing credential:
 //   • OFF unless `login.testLink` is configured, which app-config.ts refuses unless `urls.os` is a
-//     workers.dev or localhost origin — prd can never turn it on; only previewWranglerConfig (the
-//     config `wrangler preview` reads, never deploy.ts's) and local dev set it.
-//   • `aud` must be the redeeming deployment's platform origin: every preview inherits one
-//     `secrets.key`, yet a link minted for pr123's preview is refused on pr124's.
+//     workers.dev or localhost origin — prd can never turn it on; only a per-commit deployment's
+//     config (envs.ts `previewDeployment`, `testLinks`) and local dev's set it.
+//   • `aud` must be the redeeming deployment's platform origin: every per-commit deployment ships
+//     one `secrets.key` (Doppler os/preview's), yet a link minted for one is refused on another.
 //   • it names one email, which must be under `login.testLink.emailDomain` (`.test` is reserved:
 //     nothing ever mails it), and it expires (CI mints 14 days and re-mints on every push); the
-//     preview, and the link with it, is deleted when the PR closes.
+//     deployment, and the link with it, is deleted once the next push's is ready.
 //   • every claim is under the MAC: nobody edits the link into another person, another `next` or
 //     another client list.
 //   • off localhost the link alone signs nobody in — it sits in a public PR body: its redeemer first

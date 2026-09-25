@@ -250,19 +250,19 @@ export const AppConfig = z.object({
       /** A PREVIEW'S ONE-CLICK SIGN-IN (test-link.ts): `GET /.auth/test-link?t=` signs a browser in
        *  as the address a link signed with this deployment's key names, under `emailDomain`. Not a
        *  sign-in mechanism a person chooses, and refused (`parseAppConfig`) unless `urls.os` is a
-       *  workers.dev or localhost origin. Set in code, never in Doppler: the per-PR preview's config
-       *  (scripts/preview-config.ts `previewWranglerConfig`) and local dev's
-       *  (scripts/generate-wrangler-config.ts), as `APP_CONFIG_LOGIN__TEST_LINK__EMAIL_DOMAIN`. */
+       *  workers.dev or localhost origin. Set in code, never in Doppler: a per-commit deployment's
+       *  config (envs.ts `previewDeployment`'s `testLinks`) and local dev's, both
+       *  scripts/generate-wrangler-config.ts's, as `APP_CONFIG_LOGIN__TEST_LINK__EMAIL_DOMAIN`. */
       testLink: z
         .object({
           emailDomain: dnsName.default(TEST_LINK_EMAIL_DOMAIN),
           /** WHO MAY REDEEM A LINK (test-link.ts): before a link signs anyone in, the browser signs
-           *  in at `issuer` — another iterate deployment, prd for a preview — through an OAuth grant
-           *  that can only read who they are (the issuer's `/oauth2/userinfo` resource), and only an
-           *  address `emails` names redeems it. Required wherever the origin is not localhost
-           *  (`parseAppConfig`): a link in a public PR body is then no credential. The preview's
-           *  config sets both (scripts/preview-config.ts), as
-           *  `APP_CONFIG_LOGIN__TEST_LINK__ADMINS__ISSUER` and `…__ADMINS__EMAILS`. */
+           *  in at `issuer` — another iterate deployment, prd for a per-commit deployment — through
+           *  an OAuth grant that can only read who they are (the issuer's `/oauth2/userinfo`
+           *  resource), and only an address `emails` names redeems it. Required wherever the origin
+           *  is not localhost (`parseAppConfig`): a link in a public PR body is then no credential. A
+           *  per-commit deployment's config sets both (envs.ts `previewDeployment`'s
+           *  `testLinks.admins`), as `APP_CONFIG_LOGIN__TEST_LINK__ADMINS__ISSUER` and `…__EMAILS`. */
           admins: z
             .object({
               issuer: httpOrigin,

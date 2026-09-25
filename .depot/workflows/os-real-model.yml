@@ -1,9 +1,9 @@
 # THE REAL-MODEL SUITE for apps/os and the agents runtime: once a day, on every main push that changes
-# how an agent calls its model, and on dispatch, redeploy main IN PLACE to the Worker Preview
-# `real-model`, run the rows titled `REAL:` against real models (OpenAI's astra on Cloudflare's
-# billing, the default model, and Workers AI), and judge the run. No run deletes the preview: a
-# brand-new one answers Cloudflare's `internal error` for seconds after it is created
-# (main-os-e2e.yml).
+# how an agent calls its model, and on dispatch, deploy the commit as `real-model-<sha7>` (the same
+# deployment again, in place, when it has not changed since the last run), run the rows titled
+# `REAL:` against real models (OpenAI's astra on Cloudflare's billing, the default model, and
+# Workers AI), and judge the run. The deploy's readiness gate waits out a brand-new worker's first
+# seconds (main-os-e2e.yml); the run then deletes the workflow's deployments before it.
 #
 # Every other run (PR previews, Main OS e2e, the soak) runs those turns against a fake provider and
 # spends nothing: one AI Gateway spend cap covers the preview account, and on 2026-09-24 a day of soaks
@@ -13,9 +13,9 @@
 # The judge (scripts/ci/main-e2e-alert.ts `judge`, reading the run's test telemetry) pages Slack
 # #error-pulse on a change of state only: red once, green again once, with the channel's last page as
 # its state, the way Main OS e2e pages. A page leaves the run green; a BROKEN PROBE (the deploy, no
-# telemetry, a REAL: row not run) fails the run. A run off main never pages: it prints what it would post. A dispatch redeploys the workflow's preview
-# with the branch; the next run of main puts main back. One run at a time, each run's deploy waiting
-# for the run before it to finish with the preview.
+# telemetry, a REAL: row not run) fails the run. A run off main never pages: it prints what it would post. A dispatch deploys the branch's commit
+# under the workflow's prefix; the next run of main deploys main's again. One run at a time, each
+# run's deploy waiting for the run before it to finish with its deployment.
 #
 #   depot ci dispatch --org 0p91s0lz49 --repo iterate/iterate --workflow os-real-model.yml --ref <branch>
 #
@@ -46,8 +46,8 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  # THE WORKFLOW'S ONE PREVIEW, redeployed in place by every run (apps/os/scripts/preview.ts reads it;
-  # preview-sweep.ts CI_WORKFLOW_PREVIEWS knows it).
+  # THE PREFIX of the workflow's deployments, `real-model-<sha7>` (apps/os/scripts/preview.ts reads
+  # it; preview-sweep.ts CI_WORKFLOW_PREVIEWS knows it).
   PREVIEW_NAME: real-model
   # The image's baked store: dependencies.mjs fingerprints it (docs/depot-ci.md#custom-image)
   PNPM_CONFIG_STORE_DIR: /home/runner/.pnpm-store
@@ -76,14 +76,26 @@ jobs:
         run: doppler setup --config preview --project os
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-      - name: Redeploy the preview in place
+      # `<prefix>-<sha7>` of main's commit: a fresh deployment when main moved since the last run,
+      # the same one deployed again in place when it has not (apps/os/scripts/preview.ts)
+      - name: Deploy main's commit
+        id: deploy
         working-directory: apps/os
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           PREVIEW_APPS: none
         run: doppler run -- pnpm preview deploy
+      # The workflow's deployments before this one, deleted now this one is ready
+      # (apps/os/scripts/preview.ts `cleanup-superseded`); never this run's verdict.
+      - name: Delete the superseded deployments
+        continue-on-error: true
+        working-directory: apps/os
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          PREVIEW_DEPLOYMENT: ${{ steps.deploy.outputs.deployment }}
+        run: doppler run -- pnpm preview cleanup-superseded
       # The files that hold the REAL: rows, opted in. A failed row is the judge's verdict, so it does
-      # not stop the job here. Credentials: the preview's parent's APP_CONFIG (e2e/support/global-setup.ts).
+      # not stop the job here. Credentials: Doppler os/preview's APP_CONFIG (e2e/support/global-setup.ts).
       - name: Run the real-model rows
         working-directory: apps/os
         env:
