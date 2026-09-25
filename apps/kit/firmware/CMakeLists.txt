@@ -33,6 +33,7 @@ add_subdirectory(components/core)
 add_subdirectory(components/audio)
 add_subdirectory(components/capabilities)
 add_subdirectory(components/avatar)
+add_subdirectory(components/tinyvoice)
 # The host ESP-IDF, then the shared voice loop built against it. Every ESP
 # board under targets/ runs that loop; on a laptop the tests drive it with a
 # pinned clock and targets/mac runs it as a device.
