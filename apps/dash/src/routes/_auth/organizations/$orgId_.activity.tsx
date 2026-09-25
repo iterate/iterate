@@ -1,5 +1,5 @@
 // /organizations/<organization>/activity — the organization's record: created, renamed, the
-// projects created in it — the context view over `session.organizations.get(orgId)`'s log, with
+// projects added to it — the context view over `session.organizations.get(orgId)`'s log, with
 // the organization fold enabled on first visit. Reached from the organization's page; the name is
 // the tree's (components/organization-tree.tsx), and an organization the tree does not hold is not
 // found. A sibling of the settings route, not its child (the `_` in the file name): the settings
@@ -35,7 +35,7 @@ function OrganizationActivity() {
           <span className="text-muted-foreground">· Activity</span>
         </h1>
         <p className="text-sm text-muted-foreground">
-          The organization's record: created, renamed, and every project created in it.
+          The organization's record: created, renamed, and every project added to it.
         </p>
       </div>
       <ContextActivity

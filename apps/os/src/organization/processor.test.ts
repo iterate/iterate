@@ -40,7 +40,7 @@ const rows: {
     state: { name: null, deletedAt: null, members: {}, invitations: {}, projects: {}, secrets: {} },
   },
   {
-    name: "created sets the name, renamed replaces it; a project created in it is a row by id, stamped with the event's time; the same project again is ignored",
+    name: "created sets the name, renamed replaces it; a project added to it is a row by id, stamped with the event's time; the same project again is ignored",
     events: [
       created("Booper"),
       projectAdded("prj_1", "monkey"),
