@@ -187,5 +187,8 @@ dash's projects page. That starts a new attempt.
   - voice: `https://voice.iterate.com/.auth/connect?issuer=<origin>`, to talk to the project from
     the laptop mic. The page installs the voice agent itself, asking for an OpenAI key the first
     time.
+  - kit: `https://k.iterate.com/.auth/connect?issuer=<origin>`, to flash a voice board (e.g. a Home
+    Assistant Voice Preview Edition) over USB from Chrome or Edge, so it talks to the project too.
+    It installs the voice agent the same way.
 
 Google, Cloudflare or email-code sign-in, and custom domains: `apps/os/SELF-HOSTING.md`.
