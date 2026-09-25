@@ -541,10 +541,17 @@ const launcherProcedures = {
     })
     .handler(async ({ input }) => {
       const { resolved, connection } = await connectConfigured();
-      using owned = connection;
-      const project = await selectProject(owned, input.project || resolved.config.defaultProject);
+      let project: string;
+      try {
+        project = await selectProject(connection, input.project || resolved.config.defaultProject);
+      } catch (error) {
+        connection[Symbol.dispose]();
+        throw error;
+      }
+      // runTunnel owns the connection from here, and every one `reconnect` opens
       await runTunnel({
-        connection: owned,
+        connection,
+        reconnect: async () => (await connectConfigured()).connection,
         project,
         port: input.port,
         routingSlug: input.name,

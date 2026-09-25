@@ -10,10 +10,21 @@ export type IterateConnection = Disposable & {
   closed: Promise<{ code: number; reason: string }>;
 };
 
+/** THE CONNECTION'S HEARTBEAT: a WebSocket ping every `intervalMs`, which the edge answers without
+ *  the Worker. A connection that answers none for `deadAfterMs` is dead and is terminated, so
+ *  `closed` resolves and its owner can reconnect. A network that vanishes without a close — a
+ *  laptop asleep, a NAT mapping expired — otherwise leaves a socket that never sends, never
+ *  receives and never closes: on 2026-09-25 an idle `iterate tunnel` sat 55 minutes behind a
+ *  carrier NAT that had dropped its mapping, its visitors hanging, the CLI unaware. The pings are
+ *  also the traffic that keeps such a mapping from expiring. */
+const HEARTBEAT = { intervalMs: 15_000, deadAfterMs: 45_000 };
+
 // Explicit return type keeps declaration emit from expanding capnweb's recursive mapped types.
 export async function connectIterate(input: {
   baseUrl: string;
   auth: SessionCredentials;
+  /** the heartbeat's timing — a test's, `HEARTBEAT` otherwise */
+  heartbeat?: { intervalMs: number; deadAfterMs: number };
 }): Promise<IterateConnection> {
   const url = new URL("/api", input.baseUrl);
   if (url.protocol !== "https:" && url.protocol !== "http:") {
@@ -23,8 +34,22 @@ export async function connectIterate(input: {
   const socket = new WebSocket(url.href, { handshakeTimeout: 15_000 });
   // ws implements the DOM event/send/close interface consumed by capnweb.
   const root = newWebSocketRpcSession<IterateApi>(socket as unknown as globalThis.WebSocket);
+  const heartbeat = input.heartbeat || HEARTBEAT;
+  let lastPongAt = Date.now();
+  let dead = "";
+  socket.on("pong", () => (lastPongAt = Date.now()));
+  const pinger = setInterval(() => {
+    if (socket.readyState !== WebSocket.OPEN) return;
+    if (Date.now() - lastPongAt < heartbeat.deadAfterMs) return socket.ping();
+    dead = `no answer to a WebSocket ping for ${heartbeat.deadAfterMs / 1000} s`;
+    socket.terminate();
+  }, heartbeat.intervalMs);
+  pinger.unref(); // the heartbeat never keeps a finished script's process alive
   const closed = new Promise<{ code: number; reason: string }>((resolve) => {
-    socket.once("close", (code, reason) => resolve({ code, reason: reason.toString() }));
+    socket.once("close", (code, reason) => {
+      clearInterval(pinger);
+      resolve({ code, reason: dead || reason.toString() });
+    });
   });
   // The transport surfaces failures through RPC and `closed`; ws also emits an EventEmitter error.
   socket.on("error", () => {});
