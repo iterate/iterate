@@ -10,23 +10,22 @@ import { ensureArtifactsNamespace, isCloudflareError } from "./preview-artifacts
 /** Deploy apps/os to `--env`, any name envs.ts `osEnv` knows: `prd` (Deploy OS), `preview` (main on
  *  dev, scripts/preview.ts `deploy-parents`) or a per-commit deployment's (`pr3144-a1b2c3d`,
  *  scripts/preview.ts `deploy`). */
-export default async function deploy(
-  options: {
-    env?: string;
-    /** Deploy with no routes, beside the Worker its hostnames still reach (deployApp
-     *  `withoutRoutes`): the first step of moving a deployment to a new Worker. */
-    withoutRoutes?: boolean;
-  } = {},
-) {
-  // deployApp looks `--env` up in a map, and a per-commit deployment is in none: envs.ts derives it
-  // from its name. So the map is the one env `--env` names, else osEnvs (whose names the "unknown
-  // env" error then lists).
-  const env = options.env ? osEnv(options.env) : undefined;
+export default async function deploy(options: {
+  env: string;
+  /** Deploy with no routes, beside the Worker its hostnames still reach (deployApp
+   *  `withoutRoutes`): the first step of moving a deployment to a new Worker. */
+  withoutRoutes?: boolean;
+}) {
+  const env = osEnv(options.env);
+  if (!env)
+    throw new Error(
+      `apps/os: unknown env ${JSON.stringify(options.env)}; known: ${Object.keys(osEnvs).join(", ")}, or a per-commit deployment's <prefix>-<sha7>`,
+    );
   await deployApp({
     withoutRoutes: options.withoutRoutes,
     appRoot: fileURLToPath(new URL("..", import.meta.url)),
     appLabel: "apps/os",
-    envs: options.env && env ? { [options.env]: env } : osEnvs,
+    envs: { [options.env]: env },
     dopplerProject: OS_DOPPLER_PROJECT,
     env: options.env,
     workerName: (env) => env.workerName,
