@@ -1,15 +1,17 @@
 // tunnel.e2e.test.ts — `iterate tunnel <port>` against the deployment, the CLI run as a person runs
 // it (the package's bin, operator credentials) and a tiny HTTP + WebSocket server on a local port.
 // The project is a fresh one on the default template, so its config worker is the template's router
-// (configs/default/worker.ts: `itx.fetchRoutes.match`, then `env.ITX.fetch`). Pins:
+// (configs/default/worker.ts: `itx.fetchRoutes.match`, then `env.ITX.fetch` to the route's target).
+// Pins:
 //   • private (the default): an anonymous page load is sent to sign in, an anonymous fetch is 401,
 //     under paths (a per-PR preview) as under subdomains
 //   • public: HTTP reaches the local server; a WebSocket asking for `vite-hmr` opens with it, echoes
 //   • a context reset (what every deploy does) leaves the WebSocket open, nothing lost
 //   • Ctrl-C deletes the route: the host is the template's own 404 again
 //   • a tunnel killed outright closes a visitor's WebSocket at once, 1001 "tunnel disconnected",
-//     and leaves its route standing and answering 502, "not connected", with
-//     `x-iterate-fetch-route-offline` naming the route
+//     and leaves its route standing; the rule its target named goes with the lend, so the host
+//     answers 404
+//   • a restart takes over its own route, and Ctrl-C deletes it
 // The proxy's own behaviour (headers, bodies, frames) is packages/cli src/tunnel.test.ts; the route
 // and the subprotocol through the platform, e2e/fetch-routes.e2e.test.ts.
 
@@ -38,7 +40,7 @@ import {
 const bin = fileURLToPath(new URL("../../../packages/cli/bin/iterate.js", import.meta.url).href);
 
 test(
-  "iterate tunnel: private by default (under paths a member reaches its page, assets and WebSocket), public on --public (HTTP and a vite-hmr WebSocket), Ctrl-C deletes the route, a killed tunnel is 502",
+  "iterate tunnel: private by default (under paths a member reaches its page, assets and WebSocket), public on --public (HTTP and a vite-hmr WebSocket), Ctrl-C deletes the route, a killed tunnel's host is 404",
   // Each CLI process connects and sets a route (a few seconds each against a preview): three of them.
   { timeout: 90_000 },
   async () => {
@@ -57,7 +59,7 @@ test(
     // private (the default): the route's authRequirement, under paths as under subdomains — an
     // anonymous page load goes to sign in, a fetch is 401
     const privateTunnel = cli.tunnel([String(local.port), "--name", "web", "--project", projectId]);
-    const privateUrl = new URL((await privateTunnel.live).url);
+    const privateUrl = new URL(await privateTunnel.url);
     const navigation = await navigateProjectUrl(privateUrl, {
       "sec-fetch-mode": "navigate",
       "sec-fetch-dest": "document",
@@ -105,7 +107,7 @@ test(
     ]);
     // relative: under paths routing the tunnel's base is `/projects/<project>/web/`, which the
     // local server sees too (it serves under that base)
-    const { url } = await publicTunnel.live;
+    const url = await publicTunnel.url;
     const publicUrl = new URL("hello", url.endsWith("/") ? url : `${url}/`);
     expect(await fetchProjectUrl(publicUrl)).toMatchObject({
       status: 200,
@@ -128,7 +130,7 @@ test(
     });
 
     // killed outright: a visitor's socket closes at once — the relay knows its provider is gone —
-    // nothing deletes the route, and its target is not connected
+    // nothing deletes the route, and the rule its target named goes with the lend
     const visitor = await openSocket(publicUrl);
     const killedAt = Date.now();
     await publicTunnel.stop("SIGKILL");
@@ -140,18 +142,16 @@ test(
     });
     expect(
       await untilValue(
-        "the killed tunnel answers 502",
+        "the killed tunnel's host answers 404",
         () => fetchProjectUrl(publicUrl),
-        (page) => page.status === 502,
+        (page) => page.status === 404,
         { timeoutMs: 30_000 },
       ),
-    ).toMatchObject({
-      status: 502,
-      headers: { "x-iterate-fetch-route-offline": "tunnel-web" },
-      text: "tunnel-web is not connected\n",
-    });
+    ).toMatchObject({ status: 404, text: expect.stringContaining("itx.tunnels.web") });
+    expect(await itx.fetchRoutes.list()).toMatchObject([{ fetchRouteName: "tunnel-web" }]);
 
-    // run again, then Ctrl-C: the route is deleted and the host is the template's own 404 again
+    // a restart takes over its own route (a tunnel of the same name, which the killed one left
+    // standing); then Ctrl-C deletes it and the host is the template's own 404 again
     const again = cli.tunnel([
       String(local.port),
       "--name",
@@ -160,7 +160,8 @@ test(
       "--project",
       projectId,
     ]);
-    await again.live;
+    await again.url;
+    expect(await fetchProjectUrl(publicUrl)).toMatchObject({ status: 200 });
     expect(await again.stop("SIGINT")).toBe(0);
     expect(await itx.fetchRoutes.list()).toEqual([]);
     expect(await fetchProjectUrl(publicUrl)).toMatchObject({ status: 404, text: "Not found\n" });
@@ -233,7 +234,7 @@ async function localServer() {
 }
 
 /** A CLI config pointing at the worker under test, the operator's credentials in the environment,
- *  and `tunnel(args)`: the bin running `iterate tunnel … --json`, its `live` line awaited. */
+ *  and `tunnel(args)`: the bin running `iterate tunnel …`, the URL it prints on stdout awaited. */
 async function cliConfig() {
   const directory = await mkdtemp(join(tmpdir(), "iterate-tunnel-e2e-"));
   await mkdir(join(directory, "iterate"));
@@ -244,7 +245,7 @@ async function cliConfig() {
   const children: ChildProcess[] = [];
   return {
     tunnel(args: string[]) {
-      const child = execFile(process.execPath, [bin, "tunnel", ...args, "--json"], {
+      const child = execFile(process.execPath, [bin, "tunnel", ...args], {
         env: {
           ...process.env,
           XDG_CONFIG_HOME: directory,
@@ -256,17 +257,14 @@ async function cliConfig() {
       let stderr = "";
       child.stderr!.on("data", (chunk) => (stderr += chunk));
       const exited = new Promise<number | null>((resolve) => child.once("exit", resolve));
-      const live = new Promise<{ url: string }>((resolve, reject) => {
-        createInterface({ input: child.stdout! }).on("line", (line) => {
-          const event = JSON.parse(line) as { type: string; url: string };
-          if (event.type === "live") resolve(event);
-        });
+      const url = new Promise<string>((resolve, reject) => {
+        createInterface({ input: child.stdout! }).once("line", resolve);
         void exited.then((code) =>
-          reject(new Error(`iterate tunnel exited ${code} before it was live: ${stderr}`)),
+          reject(new Error(`iterate tunnel exited ${code} before it printed its URL: ${stderr}`)),
         );
       });
       return {
-        live,
+        url,
         stop: (signal: "SIGINT" | "SIGKILL") => {
           child.kill(signal);
           return exited;

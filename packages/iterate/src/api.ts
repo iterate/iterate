@@ -245,15 +245,14 @@ export interface IterateContextApi {
      * from an agent context, a successful submission messages that same agent with the path only. */
     collectFromUser(input: CollectSecretInput): Promise<CollectSecretLink>;
   };
-  /** The project's fetch routes, on its root `/`: which requests on its hosts go to which itx
-   *  expression. `set` appends one `itx/fetch-route-configured` fact (`null` deletes the route);
-   *  `match` answers the route a request takes, which the config worker forwards with
-   *  `env.ITX.fetch` naming `itx.fetchRoutes.fetch('<name>')` (a WebSocket upgrade included). */
+  /** The project's fetch routes, on its root `/`: which itx expression, the route's `target`, a
+   *  request on its hosts goes to. `set` appends one `itx/fetch-route-configured` fact (`null`
+   *  deletes the route); `match` answers the route a request takes, which the config worker forwards
+   *  to `route.target` with `x-itx-expression` through `env.ITX.fetch` (a WebSocket upgrade included). */
   fetchRoutes: {
     set(fetchRouteName: string, route: FetchRouteInput | null): Promise<{ fetchRouteName: string }>;
     list(): Promise<FetchRouteEntry[]>;
     match(request: {
-      method: string;
       url: string;
       headers: Headers | Record<string, string> | [string, string][];
     }): Promise<FetchRouteEntry | null>;

@@ -3,7 +3,8 @@ import { RpcTarget, upgradeWebSocketResponse, WebSocketPair } from "capnweb";
 import WebSocket from "ws";
 import type { connectIterate } from "iterate/node";
 
-/** Headers that describe one hop, never the request: the local dial makes its own. */
+/** Headers the local dial makes itself: undici throws on the hop-by-hop ones, and `host` must be
+ *  localhost's (Vite's `allowedHosts` refuses any other). */
 const HOP_BY_HOP_HEADERS = [
   "connection",
   "keep-alive",
@@ -15,21 +16,10 @@ const HOP_BY_HOP_HEADERS = [
   "host",
 ];
 
-/** A routing slug (`blog` for `blog--<project>`): a DNS label's start, never the `--` separator,
- *  short enough that `tunnel-<slug>` is a DNS label too. */
-const ROUTING_SLUG = /^[a-z](?:[a-z0-9]|-(?!-))*$/;
-const ROUTING_SLUG_MAX_LENGTH = 50;
-/** Routing slugs the edge answers itself, never the config worker (apps/os
- *  src/context/file-urls.ts `FILES_ROUTING_SLUG`: signed file URLs). */
-const RESERVED_ROUTING_SLUGS = ["files"];
-
 /** THE TUNNEL'S LENT STUB: every request the project's host routes here, proxied to
- *  `http://localhost:<port>` — path and query, method, headers (plus `x-forwarded-host` and
- *  `x-forwarded-proto`: the host the visitor used; under paths routing the base path the edge
- *  stripped put back), the body streamed, redirects handed back as they
- *  are. A WebSocket upgrade dials `ws://localhost:<port>` with the subprotocols the visitor asked
- *  for and pumps frames both ways; the 101 names the one the local server chose. Nothing listening
- *  is a 502 naming the port. */
+ *  `http://localhost:<port>` — method, headers, streamed body, redirects handed back as they are.
+ *  A WebSocket upgrade dials the local server with the visitor's subprotocols and pumps frames both
+ *  ways. Nothing listening is a 502 naming the port. */
 export class LocalPortRpcTarget extends RpcTarget {
   readonly #port: number;
   readonly #log: (line: string) => void;
@@ -42,19 +32,16 @@ export class LocalPortRpcTarget extends RpcTarget {
 
   async fetch(request: Request): Promise<Response> {
     const visitorUrl = new URL(request.url);
-    // Under paths routing the edge strips `/projects/<project>/<slug>` and says it here; the local
-    // server serves under that base (Vite: `--base`), so the path it sees is the one the visitor
-    // asked for.
+    // Under paths routing the edge strips `/projects/<project>/<slug>` and names it here: this
+    // sends the visitor's own path, which a server under that base (Vite: `--base`) expects.
     const basePath = request.headers.get("x-iterate-base-path") || "";
     // Set piecewise, never joined as a string: a path of `//other-host/` must stay a path on
     // localhost, never become a destination.
-    const localUrl = new URL(this.#localOrigin());
+    const localUrl = new URL(`http://localhost:${this.#port}`);
     localUrl.pathname = `${basePath}${visitorUrl.pathname}`;
     localUrl.search = visitorUrl.search;
     const headers = new Headers(request.headers);
     for (const name of HOP_BY_HOP_HEADERS) headers.delete(name);
-    headers.set("x-forwarded-host", visitorUrl.host);
-    headers.set("x-forwarded-proto", visitorUrl.protocol.slice(0, -1));
     if ((request.headers.get("upgrade") ?? "").toLowerCase() === "websocket")
       return this.#upgradeWebSocket(request, localUrl, headers);
     let response: Response;
@@ -77,7 +64,7 @@ export class LocalPortRpcTarget extends RpcTarget {
       });
     }
     this.#log(`${request.method} ${localUrl.pathname}${localUrl.search} → ${response.status}`);
-    // fetch decoded a compressed body: its encoding and length describe bytes no longer there
+    // Node's fetch always decodes a compressed body, so its encoding and length no longer hold
     const responseHeaders = new Headers(response.headers);
     if (responseHeaders.has("content-encoding")) {
       responseHeaders.delete("content-encoding");
@@ -110,8 +97,10 @@ export class LocalPortRpcTarget extends RpcTarget {
     });
     const local = new WebSocket(localUrl, protocols, { headers: localHeaders });
     local.on("message", (data, isBinary) => {
+      // ws's default binaryType, nodebuffer, delivers every message as one Buffer
+      const buffer = data as Buffer;
       try {
-        visitorSide.send(isBinary ? new Uint8Array(toBuffer(data)) : toBuffer(data).toString());
+        visitorSide.send(isBinary ? new Uint8Array(buffer) : buffer.toString());
       } catch {
         /* the visitor's side is closing; its close tears the bridge down */
       }
@@ -160,10 +149,6 @@ export class LocalPortRpcTarget extends RpcTarget {
       headers: local.protocol ? { "Sec-WebSocket-Protocol": local.protocol } : {},
     });
   }
-
-  #localOrigin(): string {
-    return `http://localhost:${this.#port}`;
-  }
 }
 
 /** A close code a WebSocket may send: the ones only a runtime reports (1005 none, 1006 abnormal,
@@ -175,120 +160,77 @@ function sendableCloseCode(code: number | undefined): number {
   return code >= 3000 && code <= 4999 ? code : 1000;
 }
 
-function toBuffer(data: WebSocket.RawData): Buffer {
-  if (Buffer.isBuffer(data)) return data;
-  if (Array.isArray(data)) return Buffer.concat(data);
-  return Buffer.from(data);
-}
-
 /** undici hides the reason a dial failed (ECONNREFUSED) in `cause`. */
 function causeOf(error: unknown): string {
   const cause = (error as { cause?: { code?: string; message?: string } })?.cause;
   return cause?.code || cause?.message || (error instanceof Error ? error.message : String(error));
 }
 
-/** A short random routing slug: a letter, then seven letters or digits. */
-export function randomRoutingSlug(): string {
-  const alphabet = "abcdefghijklmnopqrstuvwxyz0123456789";
-  const bytes = randomBytes(8);
-  return [...bytes]
-    .map((byte, index) => alphabet[byte % (index === 0 ? 26 : alphabet.length)])
-    .join("");
-}
-
 /** `iterate tunnel <port>`: lend a `LocalPortRpcTarget` to the project as `itx.tunnels.<slug>`, set
- *  the fetch route `tunnel-<slug>` taking the `<slug>` host to it, print the URL, and on Ctrl-C
- *  delete the route, then end the lend. A disconnect ends the tunnel with an error. */
+ *  the fetch route `tunnel-<slug>` taking the `<slug>` host to it, print the URL on stdout, and on
+ *  Ctrl-C delete the route, then end the lend. A disconnect ends the tunnel with an error. */
 export async function runTunnel(input: {
   connection: Awaited<ReturnType<typeof connectIterate>>;
   project: string;
   port: number;
   routingSlug?: string;
   public?: boolean;
-  json?: boolean;
 }): Promise<void> {
-  const routingSlug = input.routingSlug || randomRoutingSlug();
-  if (RESERVED_ROUTING_SLUGS.includes(routingSlug))
-    throw new Error(
-      `--name ${routingSlug} is reserved: the platform serves the ${routingSlug}--<project> host itself`,
-    );
-  if (!ROUTING_SLUG.test(routingSlug) || routingSlug.length > ROUTING_SLUG_MAX_LENGTH)
-    throw new Error(
-      `--name ${JSON.stringify(routingSlug)} is not a routing slug: lowercase letters, digits and single hyphens, starting with a letter, at most ${ROUTING_SLUG_MAX_LENGTH} characters`,
-    );
-  type TunnelEvent =
-    | { type: "live"; url: string; routingSlug: string; fetchRouteName: string; public: boolean }
-    | { type: "request"; line: string }
-    | { type: "stopped" };
-  const emit = (event: TunnelEvent) => {
-    if (input.json) process.stdout.write(`${JSON.stringify(event)}\n`);
-  };
+  const routingSlug = input.routingSlug || `t${randomBytes(4).toString("hex")}`;
   const fetchRouteName = `tunnel-${routingSlug}`;
   const target = `itx.tunnels.${routingSlug}`;
   using project = await input.connection.session.projects.get(input.project);
-  const url = await project.url({ routingSlug });
-  const basePath = new URL(url).pathname;
-  // A host another route already takes is someone else's: refuse, never take it over. A tunnel of
-  // the same name (a restart, another terminal) is taken over.
-  const taken = (await project.fetchRoutes.list()).find(
+  // A route of this name or on this host is someone else's unless it is this tunnel's own (a
+  // restart, another terminal), which is taken over.
+  const conflict = (await project.fetchRoutes.list()).find(
     (route) =>
-      route.fetchRouteName !== fetchRouteName && route.requestMatcher.routingSlug === routingSlug,
+      (route.fetchRouteName === fetchRouteName ||
+        route.requestMatcher.routingSlug === routingSlug) &&
+      !(route.fetchRouteName === fetchRouteName && route.target.join(".") === target),
   );
-  if (taken)
+  if (conflict)
     throw new Error(
-      `The ${routingSlug} host already has the fetch route ${JSON.stringify(taken.fetchRouteName)}, which this tunnel would shadow or be shadowed by. Pick another --name.`,
+      `The fetch route ${conflict.fetchRouteName} (target ${conflict.target.join(".")}) already has this name or host. Pick another --name.`,
     );
-  const standing = (await project.fetchRoutes.list()).find(
-    (route) => route.fetchRouteName === fetchRouteName,
-  );
-  if (standing && standing.target.join(".") !== target)
-    throw new Error(
-      `The fetch route ${fetchRouteName} exists and was not made by a tunnel (its target is ${standing.target.join(".")}). Pick another --name.`,
-    );
-  const log = (line: string) => {
-    if (input.json) emit({ type: "request", line });
-    else console.error(line);
-  };
-  using _provision = await project.provide(target, new LocalPortRpcTarget(input.port, log));
-  await project.fetchRoutes.set(fetchRouteName, {
-    requestMatcher: { routingSlug },
+  const url = await project.url({ routingSlug });
+  using _lend = await project.provide(
     target,
-    authRequirement: input.public ? null : { visitors: "project-members" },
-  });
+    new LocalPortRpcTarget(input.port, (line) => console.error(line)),
+  );
+  // Listening before the route is set: until a listener is installed the OS's default action ends
+  // the process at once, which would leave the route standing.
+  let stop = () => {};
+  const stopped = new Promise<"stopped">((resolve) => (stop = () => resolve("stopped")));
+  process.once("SIGINT", stop);
+  process.once("SIGTERM", stop);
   try {
-    // Listening before the URL is out: until a listener is installed the OS's default action ends
-    // the process at once, so a Ctrl-C right after `live` would leave the route standing.
-    let stop: () => void = () => {};
-    const stopped = new Promise<"stopped">((resolve) => {
-      stop = () => resolve("stopped");
+    await project.fetchRoutes.set(fetchRouteName, {
+      requestMatcher: { routingSlug },
+      target,
+      authRequirement: input.public ? null : { visitors: "project-members" },
     });
-    process.once("SIGINT", stop);
-    process.once("SIGTERM", stop);
-    emit({ type: "live", url, routingSlug, fetchRouteName, public: Boolean(input.public) });
+    console.log(url);
     console.error(
       `${url} → http://localhost:${input.port} (${input.public ? "public" : "project members only"}). Press Ctrl-C to stop.`,
     );
+    const basePath = new URL(url).pathname;
     if (basePath !== "/")
       console.error(
         `Projects are served under paths here: your local server must serve under ${basePath} (Vite: --base ${basePath}). To serve at / on an origin of its own, give the deployment a domain with a wildcard certificate: https://github.com/iterate/iterate/blob/main/apps/os/SELF-HOSTING.md#custom-domain-own-origins-for-apps-and-tunnels`,
       );
-    try {
-      const outcome = await Promise.race([stopped, input.connection.closed]);
-      if (outcome !== "stopped")
-        throw new Error(
-          `The tunnel disconnected (${outcome.code}: ${outcome.reason || "connection closed"}). Run iterate tunnel again to reconnect.`,
-        );
-    } finally {
-      process.removeListener("SIGINT", stop);
-      process.removeListener("SIGTERM", stop);
-    }
+    const outcome = await Promise.race([stopped, input.connection.closed]);
+    if (outcome !== "stopped")
+      throw new Error(
+        `The tunnel disconnected (${outcome.code}: ${outcome.reason || "connection closed"}). Run iterate tunnel again to reconnect.`,
+      );
   } finally {
-    // the route first: the host stops answering 502 the moment it is gone
+    process.removeListener("SIGINT", stop);
+    process.removeListener("SIGTERM", stop);
+    // the route first: the host stops answering the moment it is gone
     await project.fetchRoutes.set(fetchRouteName, null).catch((error: unknown) => {
       console.error(
         `Could not delete the fetch route ${fetchRouteName}: ${error instanceof Error ? error.message : String(error)}`,
       );
     });
-    emit({ type: "stopped" });
   }
 }

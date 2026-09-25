@@ -1,16 +1,17 @@
-// src/fetch-routes.ts — A PROJECT'S FETCH ROUTES: named rules on the project's root `/` that say
-// which requests arriving on the project's hosts go to which itx expression — a tunnel's lent stub
-// (`iterate tunnel`), a facet, a loaded worker. Each is one fact on `/`,
-// `itx/fetch-route-configured`, and THIS FILE is the only place it is spelled, folded into the route
-// table (`reduceFetchRouteConfigured`) and matched against a request (`matchFetchRoute`), all
-// pure. The table is part of the root's CORE STATE (stream/core-processor.ts `fetchRoutes`), reduced
-// inline with every commit, so reading it is a memory read. The verbs are the built-in
-// `itx.fetchRoutes` (context/built-ins.ts): `set` validates here and appends the fact, `list`,
-// `match` and `fetch` read the table. The project's config worker asks `match` for every request and
-// forwards a match through its own `env.ITX.fetch` (configs/default/worker.ts).
+// src/fetch-routes.ts — A PROJECT'S FETCH ROUTES: named rules on the project's root `/` that map a
+// request to an itx expression, the route's TARGET — a tunnel's lent stub (`iterate tunnel`), a
+// facet, a loaded worker — as a rewrite rule maps an expression to an expression. Each is one fact
+// on `/`, `itx/fetch-route-configured`, and THIS FILE is the only place it is spelled, folded into
+// the route table (`reduceFetchRouteConfigured`) and matched against a request (`matchFetchRoute`),
+// all pure. The table is part of the root's CORE STATE (stream/core-processor.ts `fetchRoutes`),
+// reduced inline with every commit, so reading it is a memory read. The verbs are the built-in
+// `itx.fetchRoutes` (context/built-ins.ts): `set` validates here and appends the fact, `list` and
+// `match` read the table. The project's config worker asks `match` for every request and forwards
+// a match to its target through its own `env.ITX.fetch` (configs/default/worker.ts).
 import { z } from "zod";
 import { normalizedItxExpression, type ItxExpression } from "iterate/expression";
-import { ITERATE_ROUTING_SLUG_HEADER } from "iterate/project-ingress";
+import { ITERATE_ROUTING_SLUG_HEADER, ROUTING_SLUG } from "iterate/project-ingress";
+import { FILES_ROUTING_SLUG } from "./context/file-urls.ts";
 
 /** A route's name: a DNS label (`tunnel-blog`, `api`), so it reads in a URL, a log line and a header. */
 const FetchRouteName = z
@@ -50,7 +51,17 @@ const UrlPatternInit = z
  *  `x-iterate-routing-slug` the edge stamps; absent on the apex), the URL the app sees against a
  *  standard `URLPattern`, and exact header values (names case-insensitive). `{}` takes every request. */
 const FetchRouteRequestMatcher = z.strictObject({
-  routingSlug: z.string().min(1).optional(),
+  routingSlug: z
+    .string()
+    .max(63)
+    .regex(
+      ROUTING_SLUG,
+      "a routing slug is a DNS label starting with a letter: lowercase letters, digits and single hyphens, at most 63",
+    )
+    .refine((routingSlug) => routingSlug !== FILES_ROUTING_SLUG, {
+      message: `the ${FILES_ROUTING_SLUG} routing slug is reserved: the platform serves signed file URLs there`,
+    })
+    .optional(),
   url: UrlPatternInit.optional(),
   headers: z.record(z.string().min(1), z.string()).optional(),
 });
@@ -62,19 +73,38 @@ const FetchRouteAuthRequirement = z.strictObject({
   visitors: z.literal("project-members"),
 });
 
-/** The itx expression a route forwards to, as the array half (`itx.tunnels.blog` parsed). */
-const FetchRouteTarget = z.custom<ItxExpression>(
-  (value) => {
-    try {
-      // the normalizer is the check: it throws on anything that is not an itx expression
-      normalizedItxExpression(value as ItxExpression);
-      return Array.isArray(value);
-    } catch {
-      return false;
-    }
-  },
-  { message: "target is an itx expression (the array half)" },
-);
+/** The itx expression a route forwards to, as the array half (`itx.tunnels.blog` parsed). The
+ *  config worker sends it as JSON in the `x-itx-expression` header of its own `env.ITX.fetch`, so it
+ *  runs as the config worker's call, behind the app wall: no `builtins` step (the wall refuses one
+ *  at request time), ASCII only (a header value), and a terminal `fetch` takes no args (the Request
+ *  is its one). */
+const FetchRouteTarget = z
+  .custom<ItxExpression>(
+    (value) => {
+      try {
+        // the normalizer is the check: it throws on anything that is not an itx expression
+        normalizedItxExpression(value as ItxExpression);
+        return Array.isArray(value);
+      } catch {
+        return false;
+      }
+    },
+    { message: "target is an itx expression (the array half)" },
+  )
+  .refine(
+    (target) => target.every((step) => (Array.isArray(step) ? step[0] : step) !== "builtins"),
+    { message: "target has no builtins step: it runs as the config worker's call" },
+  )
+  .refine((target) => /^[\x20-\x7e]*$/.test(JSON.stringify(target)), {
+    message: "target is ASCII: it travels in the x-itx-expression header",
+  })
+  .refine(
+    (target) => {
+      const lastStep = target.at(-1);
+      return !Array.isArray(lastStep) || lastStep[0] !== "fetch" || lastStep.length === 1;
+    },
+    { message: "target's fetch takes no args: the request is its one" },
+  );
 
 /** The one fact's payload — what `itx.fetchRoutes.set` validates before it appends, and what the
  *  append boundary checks on any other append (stream/core-processor.ts `normalizeControlEvent`).

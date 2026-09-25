@@ -33,7 +33,7 @@ export type ProjectAddress = { project: string; routingSlug: string | null; base
 /** A DNS label: lowercase letters and digits, single hyphens inside. */
 const DNS_LABEL = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 /** A routing slug: a DNS label starting with a letter. */
-const ROUTING_SLUG = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/;
+export const ROUTING_SLUG = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/;
 
 /** The labels `host` has under `hostname` — `site--p.iterate.app` ⇒ `["site--p"]` — lowercased, a
  *  trailing dot (a fully-qualified Host, `site--p.base.`) dropped; null when `host` is not under

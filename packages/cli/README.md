@@ -81,18 +81,50 @@ iterate tunnel 5173 --project my-project --name blog
 iterate tunnel 3000 --project my-project --public   # anyone may use it; the name is random
 ```
 
-The tunnel lends the local port to the project as `itx.tunnels.<name>` and sets the fetch
-route `tunnel-<name>` (`itx.fetchRoutes`), which the project's config worker consults first
-(the default templates do; an older project adds the lines from `configs/default/worker.ts` to
-its own `worker.ts`). By default only signed-in project members get through; others are sent to
-sign in. Ctrl-C deletes the route; a tunnel that dies without it leaves the host answering 502
-until it runs again. The local server sees `x-forwarded-host` and `x-forwarded-proto`.
-`--json` prints the URL and each request as NDJSON.
+The URL alone goes to stdout; everything else goes to stderr. The tunnel lends the local port to
+the project as `itx.tunnels.<name>` and sets the fetch route `tunnel-<name>` (`itx.fetchRoutes`)
+whose target is it; the project's config worker forwards a matched request to the route's target
+(`configs/default/worker.ts`). By default only signed-in project members get through; others are
+sent to sign in. Ctrl-C deletes the route; a tunnel that dies without it leaves the host answering
+502 until the platform notices, then 404, until it runs again.
 
 On a deployment that serves projects under paths (`/projects/<project>/<name>/` on the
 platform's own origin, such as a per-PR preview), the local server must serve under the printed
 base path (Vite: `--base`). A deployment with a domain gives each tunnel its own origin:
 [custom domain](../../apps/os/SELF-HOSTING.md#custom-domain-own-origins-for-apps-and-tunnels).
+
+### Without the CLI
+
+A tunnel is one capnweb session: lend the project a fetch-shaped `RpcTarget`, set a fetch route
+whose target is it, and delete the route on exit.
+[apps/os/examples/serve-localhost.mjs](../../apps/os/examples/serve-localhost.mjs) is the whole
+thing, runnable (`npm install capnweb@npm:@iterate-com/capnweb`):
+
+```js
+class LocalSite extends RpcTarget {
+  async fetch(request) {
+    const url = new URL(request.url);
+    // a WebSocket upgrade: dial ws://localhost:<port>, bridge it through a WebSocketPair and answer
+    // upgradeWebSocketResponse(visitor, { headers: { "Sec-WebSocket-Protocol": local.protocol } })
+    // Node's fetch decodes a compressed body but keeps its content-encoding: ask for none
+    const headers = new Headers(request.headers);
+    headers.set("accept-encoding", "identity");
+    return fetch(`http://localhost:${port}${url.pathname}${url.search}`, {
+      method: request.method,
+      headers,
+      body: request.body,
+      duplex: "half",
+    });
+  }
+}
+await project.provide(`itx.tunnels.${routingSlug}`, new LocalSite());
+await project.fetchRoutes.set(`tunnel-${routingSlug}`, {
+  requestMatcher: { routingSlug },
+  target: `itx.tunnels.${routingSlug}`,
+  authRequirement: null,
+});
+console.log(await project.url({ routingSlug }));
+```
 
 ## Configs
 

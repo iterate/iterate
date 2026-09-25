@@ -727,7 +727,7 @@ export async function lendRpcStubOverPager(
 //
 //   1. Some capabilities are FETCH-SHAPED: `(request: Request) => Promise<Response>`. They are
 //      ALWAYS called through a terminal `fetch` — `itx.site.fetch(request)`, never a method of
-//      any other name. `itxExpressionFetchCall` (below) is the one normalizer that enforces the
+//      any other name. `itxExpressionEndingInFetch` (below) is the one normalizer that enforces the
 //      spelling for an `x-itx-expression` fetch; `terminalFetchOf` is the one reader of the shape a LIVE call
 //      carries.
 //
@@ -820,14 +820,17 @@ function splitTerminalFetch(
   return null;
 }
 
-/** Normalize any spelling to the canonical terminal-fetch call (doctrine point 1) carrying the
- *  live `request` as its LAST argument: `itx.site` and `itx.site.fetch` are `itx.site.fetch(request)`,
- *  and a `fetch` call's own expression args come first — `itx.fetchRoutes.fetch('blog')` is
- *  `itx.fetchRoutes.fetch('blog', request)`. The Request is never expression data: it rides in
- *  here, as the one live value. */
-export function itxExpressionFetchCall(expr: ItxExpression, request: Request): ItxExpression {
+/** Normalize any spelling to the canonical terminal-fetch call (doctrine point 1): strip a
+ *  trailing `fetch` step (property or call) and append the one `fetch` PROPERTY step — the live
+ *  Request always rides as the runtime arg, never as expression data. A `fetch(...)` call
+ *  carrying expression args is a LOUD error: the author meant something a fetch cannot do. */
+export function itxExpressionEndingInFetch(expr: ItxExpression): ItxExpression {
   const terminal = splitTerminalFetch(expr);
-  return [...(terminal?.steps ?? expr), ["fetch", ...(terminal?.fetchArgs ?? []), request]];
+  if (terminal && terminal.fetchArgs.length > 0)
+    throw new Error(
+      `fetch takes no expression args — the live Request rides in as the runtime arg (got ${JSON.stringify(terminal.fetchArgs)})`,
+    );
+  return [...(terminal?.steps ?? expr), "fetch"];
 }
 
 /** A LIVE call that is the terminal fetch carrying the one Request — `[..., ["fetch", request]]`, or

@@ -1,12 +1,12 @@
 // __workers-tests__/fetch-routes.test.ts — THE FETCH ROUTES, end to end inside workerd: a config
 // worker that asks `itx.fetchRoutes.match` for every request and forwards a match through its own
-// `env.ITX.fetch` naming `itx.fetchRoutes.fetch('<name>')` — the shape `iterate tunnel` routes
-// with (configs/default/worker.ts) — reaching a lent stub over a real capnweb session:
+// `env.ITX.fetch` naming the route's target in `x-itx-expression` — the shape `iterate tunnel`
+// routes with (configs/default/worker.ts) — reaching a lent stub over a real capnweb session:
 //
 //   eyeball `blog--<project>.projects.test` → the edge → the context DO → the config worker (loaded)
-//   → `fetchRoutes.match` (the root's core state) → `env.ITX.fetch` → the DO's
-//   expression fetch `itx.fetchRoutes.fetch('tunnel-blog', request)` → the route's target
-//   `itx.tunnels.blog` → the lent stub (context/rpc-stubs.ts, the fetch-upgrade leg for a socket).
+//   → `fetchRoutes.match` (the root's core state) → `env.ITX.fetch` → the DO's expression fetch of
+//   the route's target `itx.tunnels.blog` → the lent stub (context/rpc-stubs.ts, the fetch-upgrade
+//   leg for a socket).
 //
 // The WebSocket half carries a SUBPROTOCOL: a browser that asked for one (Vite's HMR client asks
 // for `vite-hmr`) drops a 101 that names none, so the provider's choice must survive the upgrade
@@ -17,10 +17,10 @@
 
 import { exports } from "cloudflare:workers";
 import { RpcTarget } from "capnweb";
-import { expect, test } from "vitest";
+import { expect, test, vi } from "vitest";
 import { adminCredentials, openSession, publishConfigWorker } from "./support.ts";
 
-test("a config worker routes by `itx.fetchRoutes.match` to a lent stub: HTTP, a WebSocket that keeps its subprotocol, the private route's 401 challenge, and a 502 once the stub is gone", async () => {
+test("a config worker routes by `itx.fetchRoutes.match` to a lent stub: HTTP, a WebSocket that keeps its subprotocol, the private route's 401 challenge, a 404 once the lend is recalled", async () => {
   const project = "fetch-routes-tunnel";
   const itx = await createProject(project);
   const site = new LiveSite();
@@ -77,22 +77,18 @@ test("a config worker routes by `itx.fetchRoutes.match` to a lent stub: HTTP, a 
   expect(navigation).toMatchObject({ status: 302 });
   expect(navigation.headers.get("location")).toContain("/.auth/login");
 
-  // the lend recalled: the route stands, its target is not connected — a 502 naming the route
+  // the lend recalled: the route stands, and the rule its target named went with the lend —
+  // default-deny, a 404
   await itx.fetchRoutes.set("tunnel-blog", {
     requestMatcher: { routingSlug: "blog" },
     target: "itx.tunnels.blog",
   });
   provision[Symbol.dispose]();
   await expect
-    .poll(async () => {
-      const gone = await exports.default.fetch(`https://blog--${project}.projects.test/`);
-      return {
-        status: gone.status,
-        offline: gone.headers.get("x-iterate-fetch-route-offline"),
-        text: await gone.text(),
-      };
-    })
-    .toEqual({ status: 502, offline: "tunnel-blog", text: "tunnel-blog is not connected\n" });
+    .poll(
+      async () => (await exports.default.fetch(`https://blog--${project}.projects.test/`)).status,
+    )
+    .toBe(404);
 
   // deleted: the host is the config worker's own again
   await itx.fetchRoutes.set("tunnel-blog", null);
@@ -152,14 +148,12 @@ test("itx.fetchRoutes.set validates the route before it appends and is idempoten
   ]);
   expect(
     await itx.fetchRoutes.match({
-      method: "GET",
       url: "https://fetch-routes-table.projects.test/api/pets",
       headers: [["accept", "*/*"]],
     }),
   ).toMatchObject({ fetchRouteName: "api" });
   expect(
     await itx.fetchRoutes.match({
-      method: "GET",
       url: "https://fetch-routes-table.projects.test/",
       headers: {},
     }),
@@ -171,6 +165,30 @@ test("itx.fetchRoutes.set validates the route before it appends and is idempoten
   );
 });
 
+test("a route whose target is a lent stub that is offline answers 502, logged at info and never reported, the header naming the expression", async () => {
+  const project = "fetch-routes-offline";
+  const itx = await createProject(project);
+  // the rule half without the lend: the rule matches, no stub is lent under its key
+  await itx.provide("itx.tunnels.ghost", "itx.rpcStubs.get('ghost')");
+  await itx.fetchRoutes.set("tunnel-ghost", {
+    requestMatcher: { routingSlug: "ghost" },
+    target: "itx.tunnels.ghost",
+  });
+  await publishConfigWorker(itx, ["itx", "workers", ["get", { source: SRC_FETCH_ROUTER }]]);
+  using info = vi.spyOn(console, "info");
+  using error = vi.spyOn(console, "error");
+  const offline = await exports.default.fetch(`https://ghost--${project}.projects.test/`);
+  expect({
+    status: offline.status,
+    rpcStubOffline: offline.headers.get("x-iterate-rpc-stub-offline"),
+  }).toEqual({ status: 502, rpcStubOffline: '["itx","tunnels","ghost"]' });
+  expect(info).toHaveBeenCalledWith({
+    event: "expression-fetch.rpc-stub-offline",
+    itxExpression: '["itx","tunnels","ghost"]',
+  });
+  expect(error).not.toHaveBeenCalled();
+});
+
 /** THE TEMPLATE ROUTER (configs/default/worker.ts), plus a fallback: a matched request goes to
  *  its route through `env.ITX.fetch`, a private route's anonymous visitor gets the sign-in
  *  challenge, anything else is this worker's 404. */
@@ -178,12 +196,12 @@ const SRC_FETCH_ROUTER = {
   "cap.js": `import { ConfigWorker } from "./processor.js";
 export default class Router extends ConfigWorker {
   async fetch(request) {
-    const route = await this.withItx((itx) => itx.fetchRoutes.match({ method: request.method, url: request.url, headers: request.headers }));
+    const route = await this.withItx((itx) => itx.fetchRoutes.match({ url: request.url, headers: request.headers }));
+    if (route?.authRequirement && !request.headers.has("x-itx-principal"))
+      return new Response("Sign in\\n", { status: 401, headers: { "WWW-Authenticate": 'Bearer realm="iterate"' } });
     if (route) {
-      if (route.authRequirement && !request.headers.get("x-itx-principal"))
-        return new Response("Sign in\\n", { status: 401, headers: { "WWW-Authenticate": 'Bearer realm="iterate"' } });
       const headers = new Headers(request.headers);
-      headers.set("x-itx-expression", \`itx.fetchRoutes.fetch(\${JSON.stringify(route.fetchRouteName)})\`);
+      headers.set("x-itx-expression", JSON.stringify(route.target));
       return this.env.ITX.fetch(new Request(request, { headers }));
     }
     return new Response("no route\\n", { status: 404 });

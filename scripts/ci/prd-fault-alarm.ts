@@ -434,9 +434,9 @@ async function readWindow(
       );
     return result.calculations[0]!.aggregates.map((row) => [row.groupKey, row.count]);
   };
-  // A fetch route whose target is not connected (`iterate tunnel` killed without Ctrl-C) answers
-  // 502 on purpose — the upstream's absence, not a fault — and logs `console.info({ event:
-  // "fetch-route.target-offline", … })` (apps/os context/built-ins.ts); a Vite tab left open
+  // A fetch route whose target is an offline lent stub (`iterate tunnel` killed without Ctrl-C)
+  // answers 502 on purpose — the upstream's absence, not a fault — and logs `console.info({ event:
+  // "expression-fetch.rpc-stub-offline", … })` (apps/os iterate-context-durable-object.ts); a Vite tab left open
   // re-requests it every second. Each hop of that request logs its own 502 summary at error level
   // under its own requestId: the project host's Worker, the context DO's fetch, the ItxEntrypoint of
   // the config worker's `env.ITX.fetch`, and the DO's fetch again. The loaded config worker starts a
@@ -445,8 +445,8 @@ async function readWindow(
   // line: another status, another event or another ray still pages. One `not_in` takes 500 IDs here
   // (2,000 answers "Internal error"). A capped or failed read excludes nothing: it can only remove
   // noise, never lose an observed fault.
-  const notTargetOffline = await rows(
-    [{ key: "event", operation: "eq", value: "fetch-route.target-offline", type: "string" }],
+  const notRpcStubOffline = await rows(
+    [{ key: "event", operation: "eq", value: "expression-fetch.rpc-stub-offline", type: "string" }],
     "$metadata.rayId",
   ).then(
     (found) => {
@@ -454,7 +454,7 @@ async function readWindow(
       const capped = rays.length >= 2000;
       console.log(
         JSON.stringify({
-          event: "prd-fault-alarm.target-offline-evidence",
+          event: "prd-fault-alarm.rpc-stub-offline-evidence",
           rays: rays.length,
           capped,
         }),
@@ -479,7 +479,7 @@ async function readWindow(
     (error: unknown) => {
       console.warn(
         JSON.stringify({
-          event: "prd-fault-alarm.target-offline-classification-failed",
+          event: "prd-fault-alarm.rpc-stub-offline-classification-failed",
           error: error instanceof Error ? error.message : String(error),
         }),
       );
@@ -491,7 +491,7 @@ async function readWindow(
   const readServerErrors = async () => {
     const status = [
       { key: "$workers.event.response.status", operation: "gte", value: 500, type: "number" },
-      ...notTargetOffline,
+      ...notRpcStubOffline,
     ];
     const [byUrl, all] = await Promise.all([
       rows(status, "$workers.event.request.url"),
@@ -515,7 +515,7 @@ async function readWindow(
     const common = [
       { key: "$metadata.level", operation: "eq", value: "error", type: "string" },
       { key, operation: "neq", value: "", type: "string" },
-      ...notTargetOffline,
+      ...notRpcStubOffline,
       ...filters,
     ];
     const [errors, apiUnreadBodyErrors] = await Promise.all([

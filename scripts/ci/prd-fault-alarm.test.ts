@@ -585,10 +585,11 @@ test.for(["message", "error"])(
   },
 );
 
-// A killed `iterate tunnel` leaves its fetch route answering 502 "<route> is not connected"; every
-// hop logs a 502 summary, all in the ray of the route's `fetch-route.target-offline` info line.
-test("a tunnel's not-connected 502s, every hop of them, page nothing", async () => {
-  await using _logs = queryableWorkersLogs(targetOfflineRequest("vite-ping"));
+// A killed `iterate tunnel` leaves its fetch route's target, a lent stub, offline until its rule is
+// un-set: 502s, every hop logging a 502 summary, all in the ray of the context DO's
+// `expression-fetch.rpc-stub-offline` info line.
+test("a tunnel's offline-stub 502s, every hop of them, page nothing", async () => {
+  await using _logs = queryableWorkersLogs(rpcStubOfflineRequest("vite-ping"));
   await expect(summary()).resolves.toBe("prd is quiet");
 });
 
@@ -603,8 +604,8 @@ test.for([
   ],
 ] as const)("%s still pages", async ([, change, line]) => {
   await using _logs = queryableWorkersLogs([
-    ...targetOfflineRequest("vite-ping"),
-    ...targetOfflineRequest("vite-ping", change).slice(1),
+    ...rpcStubOfflineRequest("vite-ping"),
+    ...rpcStubOfflineRequest("vite-ping", change).slice(1),
   ]);
   expect(await summary()).toContain(line);
 });
@@ -613,9 +614,9 @@ test.for(["capped", "failed"])(
   "a %s read of the offline rays keeps every 502 paging",
   async (reason) => {
     const events = [
-      ...targetOfflineRequest("vite-ping"),
+      ...rpcStubOfflineRequest("vite-ping"),
       ...(reason === "capped"
-        ? Array.from({ length: 2000 }, (_, i) => targetOfflineRequest(`t${i}`)[0]!)
+        ? Array.from({ length: 2000 }, (_, i) => rpcStubOfflineRequest(`t${i}`)[0]!)
         : []),
     ];
     await using _logs = queryableWorkersLogs(events, (query) => {
@@ -959,11 +960,11 @@ function failedDocsRequest() {
   }));
 }
 
-/** One request to a killed tunnel's host, as a preview logged it (2026-09-24): the route's info line
- *  in the context DO, then a 502 summary from each hop — the project host's Worker, the DO's fetch,
+/** One request to a killed tunnel's host, as a preview logged it (2026-09-24): the offline stub's info
+ *  line in the context DO, then a 502 summary from each hop — the project host's Worker, the DO's fetch,
  *  the config worker's ItxEntrypoint and the DO's fetch again — each with its own requestId and all
  *  in `rayId`. `change` alters the four summaries. */
-function targetOfflineRequest(
+function rpcStubOfflineRequest(
   rayId: string,
   change: { status?: number; rayId?: string; type?: string; message?: string } = {},
 ) {
@@ -972,7 +973,7 @@ function targetOfflineRequest(
   return [
     {
       timestamp: 42,
-      event: "fetch-route.target-offline",
+      event: "expression-fetch.rpc-stub-offline",
       $metadata: { type: "cf-worker", level: "info", requestId: `${rayId}-inner-do`, rayId },
       $workers: { executionModel: "durableObject", event: { request: { url } } },
     },
