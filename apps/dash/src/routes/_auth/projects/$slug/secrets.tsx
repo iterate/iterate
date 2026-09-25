@@ -31,7 +31,6 @@ import {
 } from "@iterate-com/ui/components/alert-dialog";
 import { Button } from "@iterate-com/ui/components/button";
 import { Field, FieldDescription, FieldGroup, FieldLabel } from "@iterate-com/ui/components/field";
-import { Identifier } from "@iterate-com/ui/components/identifier";
 import { Input } from "@iterate-com/ui/components/input";
 import { SecretTextarea } from "@iterate-com/ui/components/not-recorded";
 import {
@@ -52,6 +51,7 @@ import {
   TableHeader,
   TableRow,
 } from "@iterate-com/ui/components/table";
+import { Identifier } from "../../../../components/identifier.tsx";
 
 export const Route = createFileRoute("/_auth/projects/$slug/secrets")({
   // the sheet's state is the URL: `?new=1` sets a new secret, `?update=<name>` updates that one

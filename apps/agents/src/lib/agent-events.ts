@@ -8,7 +8,7 @@
 // `capability-host/script-run-*` with an `executionId`. `adaptContextRuns` renames the one into the
 // other and fills in the fields a failed settlement lacks under the shared reducer's strict schema.
 import { z } from "zod";
-import { sliceText, type StreamText } from "@iterate-com/shared/chunked-text";
+import { sliceText, type StreamText } from "./chunked-text.ts";
 import {
   initialAgentUiState,
   reduceAgentUi,
@@ -16,8 +16,8 @@ import {
   type AgentUiItem,
   type AgentUiState,
   type AgentUiStep,
-} from "@iterate-com/ui/components/events/agent-ui-reducer";
-import type { Event } from "@iterate-com/ui/components/events/types";
+} from "./events/agent-ui-reducer.ts";
+import type { Event } from "./events/types.ts";
 
 // Loose: the Events view is the raw log, so every envelope field the wire carries survives.
 const Committed = z.looseObject({

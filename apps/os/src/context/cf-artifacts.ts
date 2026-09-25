@@ -3,7 +3,7 @@
 // git-over-HTTPS needs from it, a token (`get(path).createToken`) and the remote URL (`get(path).remote()`,
 // the binding's own — it knows the account and namespace; nothing here spells them).
 // GIT ITSELF — files, commits, the wire — lives in the repo facet (src/repo/durable-object.ts over
-// shared/git-wire.ts), the domain object `itx.repos.get(path)`: THAT is how a project interacts with
+// repo/git-wire.ts), the domain object `itx.repos.get(path)`: THAT is how a project interacts with
 // its repos, and the only thing that speaks git. This root is what the facet calls for its credential
 // and remote, and where a test lends a fake (`provide("itx.cfArtifacts", …)`, e2e/support/fake-artifacts.ts).
 //

@@ -9,7 +9,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@iterate-com/ui/components/card";
-import { Identifier } from "@iterate-com/ui/components/identifier";
+import { Identifier } from "../../../../components/identifier.tsx";
 import { httpOriginOf } from "../../../../lib/origins.ts";
 
 const shell = getRouteApi("/_auth");

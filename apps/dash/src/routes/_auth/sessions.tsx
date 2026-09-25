@@ -19,7 +19,6 @@ import {
   CardTitle,
 } from "@iterate-com/ui/components/card";
 import { Checkbox } from "@iterate-com/ui/components/checkbox";
-import { Identifier } from "@iterate-com/ui/components/identifier";
 import { Input } from "@iterate-com/ui/components/input";
 import { Label } from "@iterate-com/ui/components/label";
 import { NativeSelect, NativeSelectOption } from "@iterate-com/ui/components/native-select";
@@ -32,6 +31,7 @@ import {
   TableHeader,
   TableRow,
 } from "@iterate-com/ui/components/table";
+import { Identifier } from "../../components/identifier.tsx";
 import { AllowAccount } from "../../components/allow-account.tsx";
 
 const GRANT_KIND_LABELS: Record<GrantKind, string> = {

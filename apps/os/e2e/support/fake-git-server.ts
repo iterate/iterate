@@ -1,5 +1,5 @@
 // fake-git-server.ts — an in-memory git REMOTE for the local e2e run: a Node `http` server on
-// 127.0.0.1 speaking exactly the protocol-v2 subset the repo facet speaks (shared/git-wire.ts,
+// 127.0.0.1 speaking exactly the protocol-v2 subset the repo facet speaks (src/repo/git-wire.ts,
 // whose codecs this reuses — so a pack this serves is a pack the facet parses, and a pack the facet
 // pushes is one this parses): `ls-refs` for the tip of `refs/heads/main`, a shallow `fetch` (wants +
 // `deepen N` → one pack in sideband-1 frames) and `receive-pack` (one ref update, compare-and-swapped
@@ -31,7 +31,7 @@ import {
   treeObjectsOf,
   type RawGitObject,
   type RepoManifest,
-} from "@iterate-com/shared/git-wire";
+} from "../../src/repo/git-wire.ts";
 import type { RepoFileChange } from "../../src/repo/durable-object.ts";
 
 /** The repo facet's one branch, and the author of a commit landed from outside it. */

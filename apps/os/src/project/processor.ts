@@ -71,7 +71,7 @@ function configRepoCommitOf(target: unknown): string | null {
 }
 
 /** The files of a config-repo template, which seed a project created from one: the host passes
- *  `downloadPublicGithubTemplate` (@iterate-com/shared/config-repo-template/github). */
+ *  `downloadPublicGithubTemplate` (repo/github-template.ts). */
 type TemplateDownload = (
   reference: ConfigRepoTemplateReference,
 ) => Promise<Array<{ content: string; path: string }>>;

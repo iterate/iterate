@@ -19,6 +19,13 @@
 import { z } from "zod";
 import { StreamProcessorDurableObject, type ItxEntrypointService } from "iterate/sdk";
 import type { EventInput } from "iterate/stream/processor";
+import { DurableObjectNameCodec } from "../context/paths.ts";
+import type { ItxEntrypointScope } from "../iterate-context.ts";
+import {
+  assertCreated,
+  EntityLifecycleProcessor,
+  type EntityCreationAndDeletionState,
+} from "../project/entity-lifecycle.ts";
 import {
   ZERO_OID,
   buildPack,
@@ -32,14 +39,7 @@ import {
   type GitObjectType,
   type RawGitObject,
   type RepoManifest,
-} from "@iterate-com/shared/git-wire";
-import { DurableObjectNameCodec } from "../context/paths.ts";
-import type { ItxEntrypointScope } from "../iterate-context.ts";
-import {
-  assertCreated,
-  EntityLifecycleProcessor,
-  type EntityCreationAndDeletionState,
-} from "../project/entity-lifecycle.ts";
+} from "./git-wire.ts";
 import { RepoContract, type CommitCompleted } from "./contract.ts";
 
 /** The one branch every repo operation addresses. */

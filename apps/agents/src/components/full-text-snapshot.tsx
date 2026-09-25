@@ -1,7 +1,6 @@
 // The "View full text" sheet a long live stream offers once the feed only paints its tail.
 import { memo, useState } from "react";
 import { CopyIcon } from "lucide-react";
-import { sliceText, type StreamText } from "@iterate-com/shared/chunked-text";
 import { Button } from "@iterate-com/ui/components/button";
 import { toast } from "sonner";
 import {
@@ -12,6 +11,7 @@ import {
   SheetTitle,
   SheetTrigger,
 } from "@iterate-com/ui/components/sheet";
+import { sliceText, type StreamText } from "../lib/chunked-text.ts";
 
 export function FullTextSnapshot({ text }: { text: StreamText }) {
   const [snapshot, setSnapshot] = useState<string>();

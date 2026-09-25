@@ -1,6 +1,9 @@
 @import "@iterate-com/ui/globals.css";
 
 @source "../src/**/*.{ts,tsx}";
+/* Streamdown's built-in markdown components (headings, lists, tables…) carry Tailwind classes of
+   their own; scan its dist so they exist in the output (https://streamdown.ai). */
+@source "../node_modules/streamdown/dist/*.js";
 
 /* Streamed-token reveal (StreamingText): `both` keeps a token invisible until its
    animation-delay elapses, so a window's tokens fan in across the ~150ms between coalesced

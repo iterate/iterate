@@ -1,6 +1,6 @@
 import { z } from "zod";
-import { hashObject, treeObjectsOf } from "@iterate-com/shared/git-wire";
 import type { ItxExpression } from "iterate/expression";
+import { hashObject, treeObjectsOf } from "../src/repo/git-wire.ts";
 import { HOSTNAME } from "../src/project/custom-hostnames.ts";
 import { decryptSecretMaterial, type MaterialKeys } from "../src/secret-at-rest.ts";
 import { normalizeSecretRecord } from "../src/secrets.ts";

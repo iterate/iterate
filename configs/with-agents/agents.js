@@ -53,6 +53,7 @@ var FileAttachment = z.object({
   size: z.number().int().nonnegative()
 });
 var TriggerSource = z.enum(["external", "agent-loop"]);
+var AgentLlmRequestCancelReason = z.enum(["interrupted-by-user-input", "expired"]);
 var LlmUsage = z.object({
   inputTokens: z.number().int().nonnegative(),
   outputTokens: z.number().int().nonnegative(),
@@ -232,7 +233,7 @@ var AgentContract = defineProcessorContract({
           }),
           z.object({
             status: z.literal("cancelled"),
-            reason: z.enum(["expired", "interrupted-by-user-input"]),
+            reason: AgentLlmRequestCancelReason,
             partialText: z.string().optional()
           })
         ])

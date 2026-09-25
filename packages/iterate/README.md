@@ -20,14 +20,10 @@ subpath in `package.json`'s `exports` is one public module; nothing else is impo
   imports, re-exports, dynamic `import()` and an app added later are covered, and
   `lint/oxlintrc-platform-line.test.ts` pins it. Tests may import apps/os's two harnesses,
   `apps/os/e2e/support/` and `apps/os/__workers-tests__/support.ts`, which drive a real platform.
-- The one known exception: the git codec (`@iterate-com/shared/git-wire`) and the GitHub template
-  reader live in packages/shared, though only the platform's Worker runs them. packages/shared is
-  private, so they do not cross the line.
 - No private core package behind a thin `iterate`: apps/os would then import modules user code
   cannot, and the SDK's types would have to be bundled or published anyway.
 
-Follow-ups: move the git codec and the template reader into `apps/os/src/repo/`, and type the test
-harnesses against `iterate/api`. The decision's reasons, and how workerd, the Agents SDK, Convex,
+Follow-up: type the test harnesses against `iterate/api`. The decision's reasons, and how workerd, the Agents SDK, Convex,
 Supabase, tRPC, Hono and Wrangler draw the same line:
 [the decision record](https://github.com/iterate/iterate/blob/d52a4e8e0f791c96b683fe178b56570532123c05/docs/2026-09-24-sdk-platform-line.md)
 (#3018).

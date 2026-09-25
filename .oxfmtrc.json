@@ -26,7 +26,6 @@
     "**/.claude/worktrees/",
     "pnpm-lock.yaml",
     "pnpm-workspace.yaml",
-    "**/components/ai-elements/",
     "packages/ui/src/components/alert-dialog.tsx",
     "packages/ui/src/components/avatar.tsx",
     "packages/ui/src/components/badge.tsx",

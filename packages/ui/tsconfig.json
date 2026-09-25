@@ -6,7 +6,6 @@
     "types": ["node"],
     "jsx": "react-jsx",
     "paths": {
-      "@iterate-com/shared/*": ["../../packages/shared/src/*"],
       "@iterate-com/ui/*": ["./src/*"]
     }
   },

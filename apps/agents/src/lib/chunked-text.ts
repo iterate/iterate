@@ -3,7 +3,7 @@ import { z } from "zod";
 /** Small immutable blocks keep both structural diffs and React updates local.
  * The two levels copy at most one 32-block group plus the group index on append.
  * Blocks may contain one extra UTF-16 unit to keep a surrogate pair together. */
-export const textBlockSize = 1024;
+const textBlockSize = 1024;
 export const textGroupSize = 32;
 
 const textIndex = z.string().regex(/^(0|[1-9]\d*)$/);

@@ -5,11 +5,6 @@ import { CircleIcon } from "lucide-react";
 import { z } from "zod";
 import type { AuthenticatedApp } from "iterate/app";
 import { useIterateContext, useLiveState } from "iterate/react";
-import {
-  Conversation,
-  ConversationContent,
-  ConversationScrollButton,
-} from "@iterate-com/ui/components/ai-elements/conversation";
 import { AppShell } from "@iterate-com/ui/components/app-shell";
 import {
   Breadcrumb,
@@ -22,13 +17,18 @@ import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@iterate-com/u
 import { Spinner } from "@iterate-com/ui/components/spinner";
 import { Tabs, TabsList, TabsTrigger } from "@iterate-com/ui/components/tabs";
 import { cn } from "cn";
-import type { AgentUiLlmStep } from "@iterate-com/ui/components/events/agent-ui-reducer";
 import { ContextView } from "@iterate-com/ui/components/context-view/context-view";
 import { LiveStateValue } from "@iterate-com/ui/components/context-view/live-state-value";
 import {
   ContextViewState,
   RIGHT_EDGE_CLOSED,
 } from "@iterate-com/ui/components/context-view/context-view-search";
+import type { AgentUiLlmStep } from "../../lib/events/agent-ui-reducer.ts";
+import {
+  Conversation,
+  ConversationContent,
+  ConversationScrollButton,
+} from "../../components/conversation.tsx";
 import { installAgents } from "../../../runtime/install.ts";
 import agentRuntime from "../../../../../configs/with-agents/agents.js?raw";
 import { AgentFeedItemRow, AgentLiveActivity, type Inspect } from "../../components/agent-feed.tsx";

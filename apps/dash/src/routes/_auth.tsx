@@ -23,8 +23,8 @@ import {
   DropdownMenuItem,
   DropdownMenuLabel,
 } from "@iterate-com/ui/components/dropdown-menu";
-import { Identifier } from "@iterate-com/ui/components/identifier";
 import { usePosthogIdentity, type PosthogGroup } from "@iterate-com/ui/components/posthog";
+import { Identifier } from "../components/identifier.tsx";
 import { DashBreadcrumbs } from "../components/dash-breadcrumbs.tsx";
 import { DashNav } from "../components/dash-nav.tsx";
 import { OrganizationTree, useOrganizationTree } from "../components/organization-tree.tsx";

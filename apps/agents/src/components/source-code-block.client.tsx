@@ -228,9 +228,7 @@ export type SourceCodeLanguage =
   | "text";
 
 /** The CodeMirror language extension for a {@link SourceCodeLanguage}. */
-export function sourceCodeLanguageExtension(
-  language: SourceCodeLanguage,
-): SourceCodeBlockExtension {
+function sourceCodeLanguageExtension(language: SourceCodeLanguage): SourceCodeBlockExtension {
   switch (language) {
     case "typescript":
       return javascript({ jsx: true, typescript: true });
