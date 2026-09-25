@@ -588,7 +588,7 @@ test("ProjectProcessor — a drained re-check knows the add it just answered pro
 
 // THE DELETION SAGA — driven by hand like the effects above, over a fake reach (processor.ts
 // `ProjectDeletion`) that records every call.
-test("ProjectProcessor — the deletion: the saga destroys each context the registry names deepest first, each answered by a keyed context-deleted that takes it out of the registry, then the hostnames, the project's storage, the certificate, and `/` last — and no other saga runs meanwhile", async () => {
+test("ProjectProcessor — the deletion: the saga destroys each context the registry names deepest first, each answered by a keyed context-deleted that nothing reads back, then the hostnames, the project's storage, the certificate, and `/` last — and no other saga runs meanwhile", async () => {
   const calls: string[] = [];
   const processor = new ProjectProcessor(
     () => {
@@ -653,13 +653,14 @@ test("ProjectProcessor — the deletion: the saga destroys each context the regi
     "project/context-deleted:/repos",
     "project/deleted",
   ]);
-  // each context-deleted takes its context out of the registry: a resumed saga skips it
+  // nothing the saga writes is read back: the registry still names every context, so a pass
+  // after an eviction destroys them all again, and a member's forged record skips none
   const deleted = appended.filter(
     (event) => event.type === "events.iterate.com/project/context-deleted",
   );
-  expect(
-    Object.keys(reduceProcessor(processorWithoutHostnames(), [...announced, ...deleted]).contexts),
-  ).toEqual(["/x/../y"]);
+  expect(reduceProcessor(processorWithoutHostnames(), [...announced, ...deleted]).contexts).toEqual(
+    registered.contexts,
+  );
 });
 
 test("template provenance survives replay of the project creation request", () => {

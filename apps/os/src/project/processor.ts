@@ -178,12 +178,6 @@ export class ProjectProcessor extends StreamProcessor<
         return state.creation?.status === "created"
           ? undefined
           : { ...state, creation: { status: "failed", offset: event.offset } };
-      case "events.iterate.com/project/context-deleted": {
-        // The saga's own record of a context it destroyed: it leaves the registry.
-        if (!state.contexts[event.payload.path]) return undefined;
-        const { [event.payload.path]: _deleted, ...contexts } = state.contexts;
-        return { ...state, contexts };
-      }
       case "events.iterate.com/project/delete-requested":
         // The platform's fact alone (the session appends it once the control plane dropped the
         // row): a member can append this type to `/`, and theirs deletes nothing.
@@ -336,12 +330,12 @@ export class ProjectProcessor extends StreamProcessor<
     // THE DELETION SAGA — state-derived, at head, in the background, and alone: a project being
     // deleted starts none of the sagas below, and this one first waits out any this incarnation
     // already started. Deepest context first, so a retried destruction of one (which wakes it, and
-    // it announces itself) only reaches ancestors that still exist; each destroyed context's
-    // `context-deleted` takes it out of the registry, so a pass after an eviction resumes where the
-    // last stopped. Then each custom hostname at Cloudflare and then its claim (the claim outlives the
+    // it announces itself) only reaches ancestors that still exist. A pass after an eviction
+    // destroys every registered context again: destroying one already gone is harmless, and nothing
+    // the saga writes is read back, so nothing a member appends can make it skip one. Then each custom hostname at Cloudflare and then its claim (the claim outlives the
     // project's row, so no other project takes the name while Cloudflare still has it), kv, files and
     // Artifacts repos, the certificate, and `/` itself — the context this runs in, so nothing follows
-    // it. Only the platform's request opens it.
+    // it. Only the platform's request opens it; none of the facts it writes are read back.
     if (state.deletion) {
       if (this.#deleting) return;
       const deletion = this.deletion();
