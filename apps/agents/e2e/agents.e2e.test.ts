@@ -40,16 +40,11 @@ test("a fully masked visitor sandbox can receive a prose reply without gaining t
   const support = itx.cd(path);
   await support.provide("itx.ai", new ScriptedAi(["Here is a domain from the catalogue."]));
   await itx.agents.create(path);
-  await itx.cd(`${path}/sandbox`).append(
-    {
-      type: "events.iterate.com/itx/rewrite-rule-configured",
-      payload: { match: "itx", target: null },
-    },
-    {
-      type: "events.iterate.com/itx/rewrite-rule-configured",
-      payload: { match: "itx.agents", target: null },
-    },
-  );
+  // one row: the sandbox reaches `itx.agents` only through its link, so the bare null denies it too
+  await itx.cd(`${path}/sandbox`).append({
+    type: "events.iterate.com/itx/rewrite-rule-configured",
+    payload: { match: "itx", target: null },
+  });
   await configureModel(support);
   await itx.agents.get(path).message("Suggest a name in prose.");
   const log = await until("prose reply with no sandbox capabilities", async () => {

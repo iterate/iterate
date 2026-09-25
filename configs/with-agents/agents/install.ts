@@ -34,9 +34,11 @@ export async function installAgents(
     type: "events.iterate.com/itx/rewrite-rule-configured",
     payload: {
       match: "itx.agents",
-      target: ["itx", "facets", ["get", "agents", spec]],
+      // `@caller`: the context the call started at, filled by the platform, so every context linked
+      // to the root reaches the agents beneath itself (collection.ts).
+      target: ["itx", "facets", ["get", "agents", spec], ["at", { "@caller": true }]],
       description:
-        "The project's installed agents app: list(), create(path), get(path).message(text), delete(path)",
+        "The agents beneath this context: list(), create(path), get(path).message(text), delete(path)",
     },
   });
   await itx.invoke(["itx", "agents", ["upgrade"]]);

@@ -16,11 +16,13 @@ Choose **With agents** when creating a project, or open this app on a minimal pr
 and writes the `itx.agents` rewrite. `itx.agents.create(path)` installs an agent at that context;
 `get(path).message(text)` sends a message. The app owns the code and the project owns its data.
 
-The collection delegates capabilities to each agent and its script context. Restrict scripts by
-narrowing the sandbox's rewrite rules. A fully masked sandbox can still receive prose replies;
+Each agent is linked to the context that created it, and its scripts run in its sandbox, linked to
+the agent. `itx.agents` reaches the collection through those links, at the context the call started
+at: a context creates, lists, messages and deletes only the agents beneath itself, and an agent
+announces only its own birth and death. Restrict scripts by narrowing the sandbox's rewrite rules. A
+fully masked sandbox (`itx ⇒ null`) can still receive prose replies, and has no `itx.agents`;
 denied capability introspection advertises no tools to the model. To allow scripts, retain an
 explicit `run` grant and grant `rewriteRules.list` so the model can inspect its allowed capabilities.
-Mask the sandbox's specific `itx.agents` grant too when denying access to the collection.
 
 The loader runs the runtime as written (TypeScript, no bundle). Installation also rebinds existing normal agents to the current runtime; their grants and
 history are retained. Reinstalling is safe. Existing projects are not silently migrated by a platform deployment.

@@ -1,4 +1,11 @@
-// The installed catalog delegates project capabilities to each agent and its script context.
+// `itx.agents`: THE AGENTS BENEATH THE CONTEXT THAT HOLDS IT. The root's row is
+// `itx.agents ⇒ itx.facets.get('agents', spec).at(@caller)` (install.ts), and the platform fills
+// `@caller` with the context the call started at (iterate/expression `@caller`), so a context linked
+// to the root reaches the collection at its OWN path. Every verb stays strictly beneath that base:
+// `create` links the new agent to it, `get` and `delete` reach no agent it could not have created,
+// `at` only narrows, `list` shows its subtree, `announce` takes only the base's own certificate and
+// `upgrade` is the root's. The facet appends with the root's reach whatever the base, so what it
+// appends for a caller is typed too: `get(path).append` takes only the agent contract's own events.
 //
 // A DELETED AGENT'S FACET IS NEVER HOSTED AGAIN. `delete` ends with the `agent` row gone and
 // `ctx.facets.delete` taking the facet's storage with it (apps/os context/facet-host.ts
@@ -12,13 +19,14 @@
 // Object storage caused object to be reset". Aborting a running loaded facet is how Cloudflare comes
 // to reset a whole object (apps/os e2e/facet-abort-storage-reset.e2e.test.ts measures it).
 import { RpcTarget } from "cloudflare:workers";
+import { z } from "zod";
 import type { WithItx } from "iterate/sdk";
 import type { StreamEvent } from "iterate/stream/processor";
 import type { ItxScope as ItxEntrypointScope } from "iterate/sdk";
 import { codedError, errorCode, resolveContextPath } from "iterate/lib";
 import type { FacetSpec } from "iterate/api";
 import type { AgentCatalogState } from "./catalog.ts";
-import type { AgentState } from "./contract.ts";
+import { AgentContract, type AgentState } from "./contract.ts";
 
 export class AgentCollectionRpcTarget extends RpcTarget {
   private readonly withItx: WithItx<ItxEntrypointScope>;
@@ -30,7 +38,7 @@ export class AgentCollectionRpcTarget extends RpcTarget {
     withItx: WithItx<ItxEntrypointScope>,
     catalog: () => Promise<AgentCatalogState>,
     spec: () => Promise<FacetSpec>,
-    base = "/",
+    base: string,
   ) {
     super();
     this.withItx = withItx;
@@ -39,15 +47,39 @@ export class AgentCollectionRpcTarget extends RpcTarget {
     this.base = base;
   }
 
-  announce(input: unknown) {
-    return this.withItx((itx) =>
-      itx.invoke(["itx", "facets", ["get", "agents"], ["announce", input]]),
+  /** The agents beneath `path`: this base or a context beneath it, so a holder can hand on less
+   *  than it holds and never more (the voice service creates for its caller this way). */
+  at(path: string): AgentCollectionRpcTarget {
+    const base =
+      resolveContextPath(this.base, path) === this.base ? this.base : this.#beneath(path);
+    return new AgentCollectionRpcTarget(this.withItx, this.catalog, this.spec, base);
+  }
+
+  /** An agent's certificate for the catalog on `/`, from the agent itself: its processor announces
+   *  through its own `itx.agents`, which reaches this collection at the agent's own path
+   *  (processor.ts), so a certificate naming any other path is refused — a forged `agent/deleted`
+   *  would end that agent for good. */
+  async announce(input: unknown): Promise<void> {
+    const event = Certificate.parse(input);
+    if (event.payload.path !== this.base)
+      throw codedError(
+        "FORBIDDEN",
+        `itx.agents at ${JSON.stringify(this.base)} announces only its own certificate, not ${JSON.stringify(event.payload.path)}'s`,
+      );
+    await this.withItx((itx) =>
+      itx.append({ ...event, idempotencyKey: `${event.type}:${event.payload.path}` }),
     );
   }
 
   /** Rebind existing normal agents when this app is installed or updated. Voice processors
-   * keep their own code; grants, sandbox rules and conversation history are untouched. */
+   * keep their own code; grants, sandbox rules and conversation history are untouched. Every agent
+   * in the project, so the root's alone (install.ts calls it there). */
   async upgrade(): Promise<void> {
+    if (this.base !== "/")
+      throw codedError(
+        "FORBIDDEN",
+        `itx.agents.upgrade() rebinds every agent in the project: the root's, not ${JSON.stringify(this.base)}'s`,
+      );
     const spec = await this.spec();
     for (const { path } of await this.list()) {
       await this.withItx(async (itx) => {
@@ -60,14 +92,14 @@ export class AgentCollectionRpcTarget extends RpcTarget {
   }
 
   get(path: string): AgentReference {
-    path = resolveContextPath(this.base, path);
-    if (path === "/") throw new Error("An agent needs its own context path");
-    return new AgentReference(this.withItx, path, this.spec, this.catalog);
+    return new AgentReference(this.withItx, this.#beneath(path), this.spec, this.catalog);
   }
 
-  /** Every agent born under the project, by path — the certificates cross-posted to `/`, folded. */
+  /** Every agent born beneath this base, by path — the certificates cross-posted to `/`, folded. */
   async list(): Promise<{ path: string; createdAt: string }[]> {
-    return Object.entries((await this.catalog()).agents).map(([path, row]) => ({ path, ...row }));
+    return Object.entries((await this.catalog()).agents)
+      .filter(([path]) => path.startsWith(this.base === "/" ? "/" : `${this.base}/`))
+      .map(([path, row]) => ({ path, ...row }));
   }
 
   /** Bring the agent at `path` into being: the `agent` processor row on that path, then
@@ -79,18 +111,10 @@ export class AgentCollectionRpcTarget extends RpcTarget {
    *  handle: `itx.agents.get(path)` addresses it. */
   create(path: string): Promise<{ path: string }> {
     return this.withItx(async (itx) => {
-      path = resolveContextPath(this.base, path);
-      if (path === "/") throw new Error("An agent needs its own context path");
-      // The parent link goes to this collection's base — the context whose own `itx.agents` row
-      // reached it — and never to a context `create` names: a script could otherwise link its child
-      // above its own masks. The base itself is still the caller's to choose through the public
-      // `at(base)`, and the root's is `/` for every context linked to it: both pinned in
-      // e2e/inherited-capabilities.e2e.test.ts.
-      const creator = resolveContextPath("/", this.base);
-      // Writing a parent link on an ancestor would point back down to its child.
-      // Refuse before loading a facet or changing any context rows.
-      if (creator.startsWith(`${path}/`))
-        throw codedError("FORBIDDEN", "An agent cannot create its own ancestor");
+      path = this.#beneath(path);
+      // The parent link goes to this collection's base, the context the call started at, and never to
+      // a context `create` names: a script could otherwise link its child above its own masks.
+      const creator = this.base;
       // Dead is terminal, and a dead agent's facet is never hosted again (the header says why).
       const dead = new Error(`agent ${path}: deleted — not re-creatable`);
       if ((await this.catalog()).deleted[path]) throw dead;
@@ -120,8 +144,10 @@ export class AgentCollectionRpcTarget extends RpcTarget {
       let requestedAtOffset: number;
       if (state.creation?.status === "requested") requestedAtOffset = state.creation.offset;
       else {
-        // The collection owns the project scope and delegates it to this child. The
-        // processor and its scripts get distinct contexts so their grants can be narrowed separately.
+        // The agent is linked to its creator and its scripts run in their own context, linked to the
+        // agent, so the sandbox's grants can be narrowed apart from the agent's. Neither gets a row
+        // of its own for `itx.agents`: each reaches the root's through its link, at its own path, and
+        // a bare `null` on the sandbox denies it with everything else.
         const sandbox = `${path}/sandbox`;
         const rule = (match: string, target: string, key: string) => ({
           type: "events.iterate.com/itx/rewrite-rule-configured",
@@ -131,22 +157,10 @@ export class AgentCollectionRpcTarget extends RpcTarget {
         await context.append(
           rule("itx", `itx.cd(${JSON.stringify(creator)})`, `agent-parent:${path}`),
           rule("itx.run", `itx.cd(${JSON.stringify(sandbox)}).run`, `agent-sandbox:${path}`),
-          rule(
-            "itx.agents",
-            `itx.cd('/').agents.at(${JSON.stringify(path)})`,
-            `agent-collection:${path}`,
-          ),
         );
         await itx
           .cd(sandbox)
-          .append(
-            rule("itx", `itx.cd(${JSON.stringify(path)})`, `agent-parent:${sandbox}`),
-            rule(
-              "itx.agents",
-              `itx.cd('/').agents.at(${JSON.stringify(sandbox)})`,
-              `agent-collection:${sandbox}`,
-            ),
-          );
+          .append(rule("itx", `itx.cd(${JSON.stringify(path)})`, `agent-parent:${sandbox}`));
         // Over the loopback stub an append's answer types as an RPC result, not the array the context
         // declares (`append(...events): Promise<StreamEvent[]>`); the wire copied it.
         const [requested] = (await context.append({
@@ -174,8 +188,7 @@ export class AgentCollectionRpcTarget extends RpcTarget {
    *  Terminal: a deleted agent is not re-creatable. */
   delete(path: string): Promise<{ path: string }> {
     return this.withItx(async (itx) => {
-      path = resolveContextPath(this.base, path);
-      if (path === "/") throw new Error("An agent needs its own context path");
+      path = this.#beneath(path);
       const context = itx.cd(path);
       // THE CATALOG, THEN THE FACET BY NAME, so no call here hosts a facet for an agent that has
       // none (the header says why). Never born: nothing to delete. Dead with no `agent` row left:
@@ -230,6 +243,19 @@ export class AgentCollectionRpcTarget extends RpcTarget {
         await context.processors.disable("agent");
       return { path };
     });
+  }
+
+  /** `path` against this base, which it must lie strictly beneath: an agent this base's context
+   *  could create, never the base itself, an ancestor or a sibling's. Refused before anything is
+   *  read or written. */
+  #beneath(path: string): string {
+    const absolute = resolveContextPath(this.base, path);
+    if (absolute === this.base || !absolute.startsWith(this.base === "/" ? "/" : `${this.base}/`))
+      throw codedError(
+        "FORBIDDEN",
+        `itx.agents at ${JSON.stringify(this.base)} reaches only the agents beneath it, not ${JSON.stringify(absolute)}`,
+      );
+    return absolute;
   }
 }
 
@@ -293,7 +319,46 @@ class AgentReference extends RpcTarget {
       itx.cd(path).invoke(["itx", "facets", ["get", "agent", spec], ["message", input]]),
     );
   }
-  append(...events: import("iterate/stream/processor").StreamEventInput[]) {
-    return this.withItx((itx) => itx.cd(this.path).append(...events));
+
+  /** The typed write (contract.ts `EventInput<typeof AgentContract>`): events the agent contract
+   *  OWNS, each payload parsed by its schema, appended on the agent's context. Only those: this
+   *  collection appends with the root's reach, so a rewrite row, a subscription or a dependency's
+   *  `itx/run-requested` through it would run past every mask on the caller's chain. */
+  append(...events: unknown[]) {
+    const parsed = events.map((event) => {
+      const input = AgentEventInput.parse(event);
+      const schema = Object.hasOwn(AgentContract.events, input.type)
+        ? AgentContract.payloadSchemaFor?.(input.type)
+        : undefined;
+      if (!schema)
+        throw codedError(
+          "FORBIDDEN",
+          `itx.agents.get(path).append: ${JSON.stringify(input.type)} is not an event the agent contract owns`,
+        );
+      // Every payload schema in contract.ts is a `z.object`, so what it parses is a record.
+      return { ...input, payload: schema.parse(input.payload ?? {}) as Record<string, unknown> };
+    });
+    return this.withItx((itx) => itx.cd(this.path).append(...parsed));
   }
 }
+
+/** A certificate an agent announces for the catalog on `/` (catalog.ts folds them). */
+const Certificate = z.discriminatedUnion("type", [
+  z.object({
+    type: z.literal("events.iterate.com/agent/created"),
+    payload: z.object({ path: z.string().startsWith("/").min(2) }),
+  }),
+  z.object({
+    type: z.literal("events.iterate.com/agent/deleted"),
+    payload: z.object({ path: z.string().startsWith("/").min(2) }),
+  }),
+]);
+
+/** One event as a caller hands it to `append`, before its payload meets the contract's schema. */
+const AgentEventInput = z.object({
+  type: z.string(),
+  payload: z.unknown(),
+  idempotencyKey: z.string().optional(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
+  ephemeral: z.literal(true).optional(),
+});

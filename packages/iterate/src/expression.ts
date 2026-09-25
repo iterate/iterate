@@ -49,13 +49,36 @@ const RESERVED = new Set(["__proto__", "constructor", "prototype"]);
 // string like any other); `...@` as an object-literal entry is the merge form. In the array half the
 // marker is ONE reserved literal, `{ "@": true }`, and the merge entry the key `"...@"` with the value
 // `true` — so the stored form is plain JSON, and those two spellings are unspellable as literals in a
-// target (the codec's one reservation). What `@` MEANS is `fillItxExpressionHoles` in
+// target (the codec's reservation, with `@caller` below). What `@` MEANS is `fillItxExpressionHoles` in
 // apps/os/src/context/itx-expression-rewriting.ts; here it is only lexed (parse, targets only) and
 // printed back (print, targets only).
 /** The marker's array-half spelling, the one reserved literal. */
 const ITX_EXPRESSION_HOLE = { "@": true } as const;
 /** The merge entry's key — `...@` — read by apps/os `fillItxExpressionHoles`. */
 export const ITX_EXPRESSION_MERGE_KEY = "...@";
+
+// ── `@caller`, THE CONTEXT A CALL STARTED AT — a rewrite rule's target may hold it anywhere ──
+// The platform fills it as the rule rewrites a call (apps/os `resolveItxExpression`), from the origin
+// the call's first hop stamped, so no caller can choose it. It is Cloudflare's `ctx.props` for a row
+// every child inherits: "`ctx.props` can only be set by someone who has permission to edit and
+// deploy the worker to which it is being delivered"
+// (https://developers.cloudflare.com/workers/runtime-apis/context/). The root's
+// `itx.agents ⇒ itx.facets.get('agents', spec).at(@caller)` hands the collection the context that
+// asked, never a path the asker names. The array half spells it `{ "@caller": true }`, the codec's
+// second reserved literal; parse and print treat it as they treat `@`.
+const ITX_EXPRESSION_CALLER = { "@caller": true } as const;
+/** Is `value` the `@caller` literal? */
+export const isItxExpressionCaller = (value: unknown): boolean =>
+  jsonEqual(value, ITX_EXPRESSION_CALLER);
+/** Does `value` hold `@caller` anywhere? */
+export function containsItxExpressionCaller(value: unknown): boolean {
+  if (isItxExpressionCaller(value)) return true;
+  if (Array.isArray(value)) return value.some(containsItxExpressionCaller);
+  // oxlint-disable-next-line iterate/simple-truthiness-check -- `value` is `unknown`; the typeof separates real objects from primitives (a bare truthiness check would recurse into strings/numbers)
+  if (value !== null && typeof value === "object")
+    return Object.values(value).some(containsItxExpressionCaller);
+  return false;
+}
 
 /** A single- or double-quoted string literal (escapes honored) or a JSON5 comment (block or line):
  *  THE one pattern every walk that must skip what is inside them is built from — the marker lex, the
@@ -64,14 +87,18 @@ export const ITX_EXPRESSION_MERGE_KEY = "...@";
 const STRING_OR_COMMENT = String.raw`"(?:[^"\\]|\\[\s\S])*"|'(?:[^'\\]|\\[\s\S])*'|/\*[\s\S]*?\*/|//[^\n]*`;
 const isStringOrComment = (match: string): boolean =>
   match[0] === '"' || match[0] === "'" || match[0] === "/";
-/** In call args: a literal (kept verbatim) or a marker — `...@` before `@`, so the merge form wins. */
-const MARKERS_IN_ARGS = new RegExp(`${STRING_OR_COMMENT}|\\.\\.\\.@|@`, "g");
+/** In call args: a literal (kept verbatim) or a marker — `...@` and `@caller` before `@`, so the
+ *  longer forms win. */
+const MARKERS_IN_ARGS = new RegExp(`${STRING_OR_COMMENT}|\\.\\.\\.@|@caller\\b|@`, "g");
 /** In JSON5's printed output: the marker literal `{'@':true}` and the merge entry `'...@':true` are
  *  spelled with a single-quoted key and matched on those exact boundaries — listed BEFORE the literal
  *  alternative so the entry's `'...@'` is read as the entry, not as a string. A user's string that
  *  merely contains those characters is emitted by JSON5 as a longer (double-quoted) literal and is
  *  consumed whole. */
-const MARKERS_IN_PRINT = new RegExp(`\\{'@':true\\}|'\\.\\.\\.@':true|${STRING_OR_COMMENT}`, "g");
+const MARKERS_IN_PRINT = new RegExp(
+  `\\{'@':true\\}|\\{'@caller':true\\}|'\\.\\.\\.@':true|${STRING_OR_COMMENT}`,
+  "g",
+);
 /** A bracket outside a literal. */
 const BRACKETS = new RegExp(`${STRING_OR_COMMENT}|[()[\\]{}]`, "g");
 
@@ -105,8 +132,8 @@ function matchingParen(source: string, open: number): number {
 }
 
 /** Parse the STRING half: dotted names + `.method(args)` calls (args JSON5-parsed); rejects reserved
- *  names + bare scope calls. `holes: true` — a rewrite rule's TARGET only — lexes `@` / `...@` into
- *  the marker literals; anywhere else a bare `@` is refused. */
+ *  names + bare scope calls. `holes: true` — a rewrite rule's TARGET only — lexes `@` / `...@` /
+ *  `@caller` into the marker literals; anywhere else a bare `@` is refused. */
 export function parse(source: string, options?: { holes?: boolean }): ItxExpression {
   if (source.length > ITX_EXPRESSION_STRING_MAX_CHARS)
     throw codedError(
@@ -138,7 +165,10 @@ export function parse(source: string, options?: { holes?: boolean }): ItxExpress
       const inner = raw.replace(MARKERS_IN_ARGS, (match) => {
         if (isStringOrComment(match)) return match;
         if (!options?.holes)
-          fail("`@` (the caller's input) is legal only in a rewrite rule's target");
+          fail(
+            `\`${match}\` (the caller's input or origin) is legal only in a rewrite rule's target`,
+          );
+        if (match === "@caller") return JSON.stringify(ITX_EXPRESSION_CALLER);
         return match === "@"
           ? JSON.stringify(ITX_EXPRESSION_HOLE)
           : `${JSON.stringify(ITX_EXPRESSION_MERGE_KEY)}:true`;
@@ -227,9 +257,10 @@ export const keySortedForPrint = (_key: string, value: unknown): unknown =>
 
 /** Canonical stored form: dotted path + `.method(args)` calls (args `JSON5.stringify`d, object keys
  *  sorted). `holes: true` — a rewrite rule's TARGET only — spells the marker literals back as `@` /
- *  `...@`, and `parse(print(e, { holes: true }), { holes: true })` round-trips; without it the
- *  reserved literals print as the plain JSON5 they are, so a CALL that happens to carry `{ "@": true }`
- *  as data round-trips through `parse` (no holes) unchanged — the resolve/invoke law holds for it. */
+ *  `...@` / `@caller`, and `parse(print(e, { holes: true }), { holes: true })` round-trips; without
+ *  it the reserved literals print as the plain JSON5 they are, so a CALL that happens to carry
+ *  `{ "@": true }` as data round-trips through `parse` (no holes) unchanged — the resolve/invoke law
+ *  holds for it. */
 export function print(expr: ItxExpression, options?: { holes?: boolean }): string {
   return expr
     .map((step, i) => {
@@ -238,7 +269,13 @@ export function print(expr: ItxExpression, options?: { holes?: boolean }): strin
       const json = JSON5.stringify(step.slice(1), keySortedForPrint).slice(1, -1);
       const args = options?.holes
         ? json.replace(MARKERS_IN_PRINT, (match) =>
-            match === "{'@':true}" ? "@" : match === "'...@':true" ? "...@" : match,
+            match === "{'@':true}"
+              ? "@"
+              : match === "{'@caller':true}"
+                ? "@caller"
+                : match === "'...@':true"
+                  ? "...@"
+                  : match,
           )
         : json;
       return step[0] === "" ? `(${args})` : `${dot}${step[0]}(${args})`;
