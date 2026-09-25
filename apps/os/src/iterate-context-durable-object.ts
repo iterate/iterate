@@ -1242,9 +1242,11 @@ export class IterateContextDurableObject extends DurableObject<Env> {
    *  Cloudflare's own advice is to drain the body: https://github.com/cloudflare/workers-sdk/issues/5095).
    *  An app may ignore its body (a scanner POSTing to a static site, prd 2026-09-23), so the pending
    *  read is this pipe's, and its end is recorded here instead of thrown uncaught. Streamed, never
-   *  buffered: an app that proxies uploads or echoes the body still streams. */
+   *  buffered: an app that proxies uploads or echoes the body still streams. A GET or HEAD gets
+   *  none, even one that arrived with a body (`content-length: 0` is enough): `new Request` refuses
+   *  a body on either method. */
   #expressionFetchBody(request: Request): ReadableStream | null {
-    if (!request.body) return null;
+    if (!request.body || request.method === "GET" || request.method === "HEAD") return null;
     const { readable, writable } = new IdentityTransformStream();
     request.body.pipeTo(writable).catch((error: unknown) => {
       console.info({
