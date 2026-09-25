@@ -5,3 +5,6 @@
 
 # Run output: scripts/preview.ts's preview.json, scripts/e2e-soak.ts's soak reports.
 /output/
+
+# sqlfu's scratch database and query catalog (sqlfu.config.ts): `pnpm db:check` rebuilds them.
+/.sqlfu/

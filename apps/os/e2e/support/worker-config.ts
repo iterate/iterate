@@ -22,8 +22,10 @@ export const E2E_INGRESS_ROUTING: NonNullable<IngressRouting> = {
   hostname: "localhost",
 };
 
-/** Vite's local built config patched with absolute paths and test credentials. The control-plane
- *  Durable Object and OAuth KV remain local. `ingressRouting` chooses subdomains or paths for project requests. */
+/** Vite's local built config patched with absolute paths and test credentials. The control plane's
+ *  D1 and OAuth KV remain local, the D1 migrated once the worker is up (`applyD1Migrations`, in
+ *  global-setup.ts and own-worker.ts). `ingressRouting` chooses subdomains or paths for project
+ *  requests. */
 export function e2eWorkerConfig(
   platformOrigin = "http://127.0.0.1",
   ingressRouting: NonNullable<IngressRouting> = E2E_INGRESS_ROUTING,
@@ -49,6 +51,11 @@ export function e2eWorkerConfig(
       ...rawConfig.assets,
       directory: join(PACKAGE_DIR, "dist/server", String(rawConfig.assets?.directory)),
     },
+    // the control plane's migrations, as absolute as `main`: the built value is dist/server's
+    d1_databases: rawConfig.d1_databases?.map((database: { migrations_dir?: string }) => ({
+      ...database,
+      migrations_dir: join(PACKAGE_DIR, "dist/server", String(database.migrations_dir)),
+    })),
     vars: {
       ...vars,
       APP_CONFIG_URLS__OS: platformOrigin,

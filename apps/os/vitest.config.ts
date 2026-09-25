@@ -24,7 +24,7 @@
 // modules for unit tests and fixtures. Browser E2E is the root Playwright suite (specs/AGENTS.md).
 
 import { fileURLToPath } from "node:url";
-import { cloudflareTest } from "@cloudflare/vitest-plugin";
+import { cloudflareTest, readD1Migrations } from "@cloudflare/vitest-plugin";
 import {
   E2E_CI_RETRIES,
   E2E_SLOW_ROW_TIMEOUT_MS,
@@ -61,7 +61,7 @@ const onUnhandledError = (error: unknown): boolean | void => {
  *  stops being long drops off this list. */
 const LONG_POLES = [
   "__workers-tests__/facet-push-timeout-heals.test.ts",
-  "__workers-tests__/oauth-recheck-deploy-reset.test.ts",
+  "__workers-tests__/oauth-recheck-platform-failure.test.ts",
   "__workers-tests__/personal-access-tokens.test.ts",
   "__workers-tests__/oauth-recheck-no-project.test.ts",
   "__workers-tests__/oauth-recheck-revoked.test.ts",
@@ -125,14 +125,25 @@ export default defineConfig({
       },
       {
         plugins: [
-          cloudflareTest({
+          // The control plane's D1 starts empty in every test file (each file its own storage):
+          // the migrations, read here in node, are applied by the setup file below, as wrangler
+          // applies them to a deployment's (https://developers.cloudflare.com/workers/testing/vitest-integration/test-apis/#d1).
+          cloudflareTest(async () => ({
             main: "./dist/server/index.js",
             wrangler: { configPath: "./wrangler.test.jsonc" },
-          }),
+            miniflare: {
+              bindings: {
+                TEST_MIGRATIONS: await readD1Migrations(
+                  fileURLToPath(new URL("./src/control-plane/db/migrations", import.meta.url)),
+                ),
+              },
+            },
+          })),
         ],
         test: {
           name: "workers",
           include: ["__workers-tests__/**/*.test.ts", "../agents/__workers-tests__/**/*.test.ts"],
+          setupFiles: ["./__workers-tests__/apply-migrations.ts"],
           // First test pays workerd boot + the 200-client attach storm (the cloudflare-os
           // cold-start lesson, scaled up).
           testTimeout: 120_000,

@@ -12,8 +12,9 @@ production; `preview` is the parent Worker every per-PR preview branches from
 deploys. Scripts never branch on environment names; envs.ts + the config
 supply everything.
 
-Local dev is **fully local**: Durable Objects, KV and R2 run in miniflare
-inside your worktree's `apps/os/.wrangler/state`, the server listens on
+Local dev is **fully local**: Durable Objects, D1, KV and R2 run in miniflare
+inside your worktree's `apps/os/.wrangler/state` (`pnpm dev` migrates the local D1 first,
+`pnpm --dir apps/os db:migrate`), the server listens on
 `http://localhost:8788` (or the `--port` you pass), and there is no external
 dependency at all: the OS worker is its own OAuth issuer, and `pnpm dev` hands
 it plain dev values instead of secrets. OS is a single worker (the edge,
@@ -24,7 +25,7 @@ Nothing is contested between worktrees: twenty agents on one machine each run
 their own isolated environment, each on its own port.
 
 Identity lives in the **platform's control plane** (users, organizations and
-projects in the `CONTROL_PLANE` Durable Object's own SQLite; see
+projects in the deployment's D1, `apps/os/src/control-plane/db/`; see
 `apps/os/SELF-HOSTING.md`). A deployment signs people in with whichever
 mechanisms its `APP_CONFIG.login` enables: a global password, a mailed code,
 Google, or Cloudflare. Two deployment secrets let you act as anyone, instantly:
@@ -374,7 +375,7 @@ pooled or leased.
 Each preview is a complete, isolated stack on the dev/preview Cloudflare
 account: a Cloudflare Worker Preview of the parent `os`, named `pr<n>`, at
 `https://pr<n>-os.iterate-dev-preview.workers.dev`,
-with Durable Objects, KV, R2 and an Artifacts namespace of its own. The
+with Durable Objects, a D1, KV, R2 and an Artifacts namespace of its own. The
 five hosted clients (Dash, Agents, Notes, Voice, Kit) deploy as previews of their
 own parents, wired to it and to each other: each signs in against it, and every link
 between them — the platform's landing page to the Dash, the Dash's directory of apps,
@@ -471,8 +472,8 @@ job writes its own line, `E2E tests` or `Browser specs`, `passed` or `failed`;
 a new deploy clears them. Each job rewrites only its own line.
 
 Closing or merging the PR runs `pnpm preview delete`, which deletes the
-preview, its Artifacts namespace, KV namespaces and R2 bucket (and any D1 an
-older preview left behind), and the client previews.
+preview, its D1, Artifacts namespace, KV namespaces and R2 bucket, and the
+client previews.
 
 Preview cleanliness is an **invariant of birth**, not a promise about exits:
 every preview is created with resources of its own, so no PR ever inherits

@@ -1,4 +1,4 @@
-import { createExecutionContext, runInDurableObject } from "cloudflare:test";
+import { createExecutionContext } from "cloudflare:test";
 import { env, exports } from "cloudflare:workers";
 import { newWebSocketRpcSession } from "capnweb";
 import { expect, onTestFinished, test, vi } from "vitest";
@@ -8,7 +8,6 @@ import { appSession } from "iterate/app-server";
 import { platformAddressesOf } from "../src/app-config.ts";
 import { browserAuthorization } from "../src/browser-client.ts";
 import { projectsForClient } from "../src/consent.ts";
-import type { ControlPlaneDurableObject } from "../src/control-plane/durable-object.ts";
 import { accountStateOf, authorizationForToken, recordGrantUse } from "../src/oauth.ts";
 import type { Env } from "../src/env.ts";
 import type { IterateRpcTarget } from "../src/session.ts";
@@ -25,7 +24,7 @@ import {
   restoreMembership,
   rpc,
 } from "./oauth-support.ts";
-import { controlPlane, controlPlaneStub, loginPassword, ORIGIN, until } from "./support.ts";
+import { controlPlane, interceptCatalogReads, loginPassword, ORIGIN, until } from "./support.ts";
 const adminSecret = env.APP_CONFIG_SECRETS__ADMIN_BEARER!;
 
 test("discovery advertises CIMD AND DCR: the registration endpoint is published and registers a client", async () => {
@@ -353,20 +352,7 @@ test("an MCP tool call finds a project named by slug in the person's access reco
   fetchReachesThisWorker();
   const flow = await grant([`${ORIGIN}/mcp`]);
   const token = flow.token!.access_token;
-  const reads = await runInDurableObject(
-    controlPlaneStub(),
-    (instance: ControlPlaneDurableObject) => {
-      const prototype = Object.getPrototypeOf(instance) as ControlPlaneDurableObject;
-      return {
-        project: vi.spyOn(prototype, "project"),
-        accessibleTo: vi.spyOn(prototype, "accessibleTo"),
-      };
-    },
-  );
-  onTestFinished(() => {
-    reads.project.mockRestore();
-    reads.accessibleTo.mockRestore();
-  });
+  const reads = interceptCatalogReads();
   expect(
     await tool(token, "run", {
       project: "oauth-a",

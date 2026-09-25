@@ -93,7 +93,7 @@ async function buildServer(
   platformOrigin: string,
   instructed: boolean,
 ): Promise<McpServer> {
-  const controlPlane = new ControlPlane(env.CONTROL_PLANE);
+  const controlPlane = new ControlPlane(env);
   const { reach, principal, grant } = authorization;
   const caller = { principal, grant: grant?.grantId, platformOrigin };
   const mcpServer = new McpServer(

@@ -136,7 +136,7 @@ export async function identityResponse(request: Request, env: Env) {
     }
     // The provider and its stable subject together name the person (the control plane's rule: link
     // once by verified email, then by the subject); an email change cannot change the actor.
-    const user = await new ControlPlane(env.CONTROL_PLANE).linkIdentity(
+    const user = await new ControlPlane(env).linkIdentity(
       provider,
       identity.data.sub,
       identity.data.email,

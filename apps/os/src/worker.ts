@@ -17,7 +17,6 @@ import { identityResponse } from "./identity.ts";
 import { SECRET_OAUTH_CALLBACK_PATH } from "./secret-oauth.ts";
 import { secretOAuthCallback } from "./secret-oauth-callback.ts";
 import { ControlPlane, ControlPlaneUnavailableError } from "./control-plane/edge.ts";
-import { admitProjectHost } from "./control-plane/last-known-project.ts";
 import { oauthResponse } from "./api.ts";
 import { issuerHandler } from "./issuer-pages.ts";
 import { testLinkResponse } from "./issuer-session.ts";
@@ -60,19 +59,10 @@ function withoutBasePath(request: Request, basePath: string): Request {
 }
 
 /** A project host's answer when a control-plane read it needed failed on the platform's side
- *  (ControlPlaneUnavailableError, edge.ts): its admission's, with no last-known copy to stand in,
- *  or a signed-in visitor's access, which has none. A 503, logged as
- *  `control-plane.platform-failure-unavailable` (scripts/ci/prd-fault-alarm.ts pages on a burst,
- *  and on the 5xx), not an exception. Any other error is rethrown. */
+ *  (ControlPlaneUnavailableError, which edge.ts logged): a 503 (scripts/ci/prd-fault-alarm.ts
+ *  pages on the 5xx), not an exception. Any other error is rethrown. */
 function controlPlaneUnavailable(error: unknown, hostname: string): Response {
   if (!(error instanceof ControlPlaneUnavailableError)) throw error;
-  console.warn({
-    event: "control-plane.platform-failure-unavailable",
-    name: hostname,
-    method: error.method,
-    waitedMs: error.waitedMs,
-    message: error.message,
-  });
   return new Response(
     `503: the platform could not look up ${hostname} just now; try again in a minute\n`,
     { status: 503, headers: { "cache-control": "no-store", "retry-after": "60" } },
@@ -156,7 +146,6 @@ export { BrowserSession } from "iterate/app-session";
 // `ctx.exports` (first-party-facets.ts FIRST_PARTY_FACET_CLASSES) — ordinary bundled
 // worker code with the worker's real env, never a loaded source.
 export { AccountDurableObject } from "./account/durable-object.ts";
-export { ControlPlaneDurableObject } from "./control-plane/durable-object.ts";
 export { OrganizationDurableObject } from "./organization/durable-object.ts";
 export { ProjectDurableObject } from "./project/durable-object.ts";
 export { RepoDurableObject } from "./repo/durable-object.ts";
@@ -200,7 +189,7 @@ export default {
     // this request's own — stamped on every caller from here on, and the two resource identifiers.
     const addresses = platformAddressesOf(env, request);
     const { platformOrigin } = addresses;
-    const controlPlane = new ControlPlane(env.CONTROL_PLANE);
+    const controlPlane = new ControlPlane(env);
     const routing = appConfig.urls.ingressRouting;
     // PROJECT-HOST INGRESS: a request on any host of a project reaches the project's config worker —
     // the Request riding into the context DO's `fetch` with its URL, the visitor's own cookies and a
@@ -213,38 +202,23 @@ export default {
     // host's address (a static rule, else a hostname a project added: one catalog read), then one
     // catalog read (memoized per isolate: a slug's project never changes; an unknown label five
     // seconds, edge.ts `getProjectKeepingMisses`) — the row resolves the host's label (a slug, an id
-    // would do too) to the project's id; an unknown label is 421. When a read fails or has not
-    // answered in 3 s, the control plane's last-known copy of its answer stands in
-    // (last-known-project.ts); a host with none waits, and answers 503 if it fails.
-    const admitted = await admitProjectHost(controlPlane, {
-      config: appConfig,
-      url,
-      platformOrigin,
-      kv: env.OAUTH_KV,
-    }).catch((error: unknown) => controlPlaneUnavailable(error, url.hostname));
-    if (admitted instanceof Response) return admitted;
-    if (admitted) {
-      const { address: projectHost, project, stale } = admitted;
+    // would do too) to the project's id; an unknown label is 421. A slow read is waited for; one
+    // that fails on the platform's side is a 503.
+    const projectHost = await controlPlane
+      .projectHostOf(appConfig, url, platformOrigin)
+      .catch((error: unknown) => controlPlaneUnavailable(error, url.hostname));
+    if (projectHost instanceof Response) return projectHost;
+    if (projectHost) {
+      const project = await controlPlane
+        .getProjectKeepingMisses(projectHost.project)
+        .catch((error: unknown) => controlPlaneUnavailable(error, url.hostname));
+      if (project instanceof Response) return project;
       if (!project)
         return new Response(
           `421: no project ${JSON.stringify(projectHost.project)} is served here\n`,
           { status: 421 },
         );
       const projectId = project.id;
-      /** A request admitted on last-known copies logs it ONCE, as what it became: served (here) or,
-       *  for a signed-in visitor, a 503 (below). scripts/ci/prd-fault-alarm.ts pages on a burst. */
-      const logServedStale = () => {
-        if (stale)
-          console.warn({
-            event: "control-plane.platform-failure-stale-project",
-            name: url.hostname,
-            project: projectHost.project,
-            method: stale.method,
-            waitedMs: stale.waitedMs,
-            message: stale.message,
-            copies: stale.copies,
-          });
-      };
       // THE FILES HOST (context/file-urls.ts): `files--<project>` serves a signed file URL straight
       // from the bucket, before any session or DO — the token in the URL is the authorization.
       if (projectHost.routingSlug === FILES_ROUTING_SLUG) {
@@ -255,7 +229,6 @@ export default {
           keyPrefix: `${resourceScope(projectId, "/").id}/`,
           request: withoutBasePath(request, projectHost.basePath),
         });
-        logServedStale();
         // Under paths a stored HTML or SVG file is a document on the platform's own origin that anyone
         // holding the URL opens: it runs sandboxed (an opaque origin, no cookie to spend).
         if (routing?.type === "paths")
@@ -270,16 +243,13 @@ export default {
       // platform's; same-origin app scripts can make authenticated platform requests.
       if (routing?.type !== "paths") {
         const browserResponse = await browserClient(request, env, ctx);
-        if (browserResponse) {
-          logServedStale();
-          return browserResponse;
-        }
+        if (browserResponse) return browserResponse;
       }
       // THE PRIMARY HOSTNAME (primary-hostname-redirect.ts): a navigation on the ingress base goes
       // to the project's own hostname, after the browser adapter so a sign-in under way finishes
-      // where it started. Admitted on last-known copies, the control plane is failing: served.
+      // where it started.
       const redirect = primaryHostnameRedirectOf(request, { routing, platformOrigin });
-      if (redirect && !stale) {
+      if (redirect) {
         const primaryHostname = await controlPlane
           .primaryHostnameOf(projectId)
           .catch((error: unknown) => controlPlaneUnavailable(error, url.hostname));
@@ -306,18 +276,12 @@ export default {
           status: 401,
           headers: { "WWW-Authenticate": 'Bearer error="invalid_token"' },
         });
-      // A person's access has no stand-in: a membership read the control plane fails is a 503, and
-      // once one of this request's admission reads failed, it is one at once — a second wait would
-      // only end the same way. An admission read that was only slow is waited out here.
-      if (authorization && stale?.failure)
-        return controlPlaneUnavailable(stale.failure, url.hostname);
       const reachesProject = authorization
         ? await controlPlane
             .reachesProject(authorization.reach, projectId)
             .catch((error: unknown) => controlPlaneUnavailable(error, url.hostname))
         : false;
       if (reachesProject instanceof Response) return reachesProject;
-      logServedStale();
       // WHO ARRIVES (project-host-sign-in.ts): a member is stamped; a non-member, or a session
       // cookie on a cross-site write or upgrade, goes on anonymous — the app decides what that sees
       const caller = projectHostCallerOf({

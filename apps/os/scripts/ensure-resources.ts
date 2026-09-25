@@ -3,6 +3,7 @@ import { OS_DOPPLER_PROJECT, osEnvs } from "../../../envs.ts";
 import { resolveEnvContext } from "../../../scripts/lib/env-context.ts";
 import { ensureProxiedDnsRecord } from "../../../scripts/lib/deploy-helpers.ts";
 import { routedHostnames } from "./generate-wrangler-config.ts";
+import { ensureD1 } from "./d1.ts";
 import { ensureArtifactsNamespace } from "./preview-artifacts.ts";
 
 export default async function ensureResources(options: { env?: string } = {}) {
@@ -15,7 +16,7 @@ export default async function ensureResources(options: { env?: string } = {}) {
   const namespaces = await ctx.cf<{ id: string; title: string }[]>(
     "/storage/kv/namespaces?per_page=1000",
   );
-  const resources = { oauthKvId: "", itxKvId: "" };
+  const resources = { oauthKvId: "", itxKvId: "", dbId: "" };
   for (const [key, suffix] of [
     ["oauthKvId", "oauth"],
     ["itxKvId", "itx"],
@@ -29,6 +30,9 @@ export default async function ensureResources(options: { env?: string } = {}) {
       }));
     resources[key] = namespace.id;
   }
+  // The control plane's D1 (the wrangler generator binds `<resourceNamePrefix>-db` as DB); the deploy
+  // migrates it (scripts/d1.ts).
+  resources.dbId = (await ensureD1(ctx.cf, `${ctx.env.resourceNamePrefix}-db`)).uuid;
   // The one R2 bucket behind `itx.r2` (the wrangler generator names it `<resourceNamePrefix>-files`).
   const bucketName = `${ctx.env.resourceNamePrefix}-files`;
   const buckets = await ctx.cf<{ buckets: { name: string }[] }>("/r2/buckets?per_page=1000");
@@ -52,7 +56,8 @@ export default async function ensureResources(options: { env?: string } = {}) {
   // the entry to paste and fail.
   if (
     resources.oauthKvId !== ctx.env.resources.oauthKvId ||
-    resources.itxKvId !== ctx.env.resources.itxKvId
+    resources.itxKvId !== ctx.env.resources.itxKvId ||
+    resources.dbId !== ctx.env.resources.dbId
   ) {
     console.log(`\nenvs.ts is out of date for ${ctx.name} — update its resources entry to:\n`);
     console.log(`  resources: ${JSON.stringify(resources, null, 2).replaceAll("\n", "\n  ")},\n`);

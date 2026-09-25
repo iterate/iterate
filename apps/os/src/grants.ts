@@ -170,7 +170,7 @@ export class GrantsRpcTarget extends RpcTarget {
     return {
       items: [...keys, ...sessions],
       cursor: page.cursor,
-      projects: await new ControlPlane(env.CONTROL_PLANE).reachableProjects(session.reach),
+      projects: await new ControlPlane(env).reachableProjects(session.reach),
       canMintToken: mintsPersonalAccessTokens(this.#addresses.platformOrigin),
     };
   }
@@ -220,9 +220,7 @@ export class GrantsRpcTarget extends RpcTarget {
       throw codedError("FORBIDDEN", "Personal access tokens require an HTTPS deployment.");
     if (data.expiresAt && data.expiresAt < Date.now() + 60_000)
       throw codedError("INVALID_INPUT", "expiresAt must be at least a minute away.");
-    const projects = (
-      await new ControlPlane(env.CONTROL_PLANE).reachableProjects(session.reach, data.projects)
-    )
+    const projects = (await new ControlPlane(env).reachableProjects(session.reach, data.projects))
       .filter((project) => data.projects.includes(project.id))
       .map((project) => project.id);
     if (!projects.length) throw codedError("FORBIDDEN", "Choose a project you can access.");

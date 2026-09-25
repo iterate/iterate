@@ -3,6 +3,7 @@ import { createCli } from "trpc-cli";
 import { OS_DOPPLER_PROJECT, osEnvs } from "../../../envs.ts";
 import { deployApp } from "../../../scripts/lib/deploy-app.ts";
 import { build } from "./build.ts";
+import { applyD1Migrations } from "./d1.ts";
 
 export default async function deploy(
   options: {
@@ -24,8 +25,19 @@ export default async function deploy(
     resources: (env) => env.resources,
     // The private login settings and at-rest key come from Doppler. Public URLs come from envs.ts.
     requiredSecrets: ["APP_CONFIG", "APP_CONFIG_SECRETS__KEY"],
-    async prepare() {
+    // The control plane's D1 is migrated before the code that reads it uploads, so a migration that
+    // fails leaves the running version serving; a migration must keep that version working for the
+    // minute until the upload (scripts/d1.ts).
+    async prepare(ctx, _secretValues, credentials) {
       await build();
+      await applyD1Migrations(ctx.cf, {
+        databaseName: `${ctx.env.resourceNamePrefix}-db`,
+        databaseId: ctx.env.resources.dbId,
+        credentials: {
+          CLOUDFLARE_API_TOKEN: credentials.CLOUDFLARE_API_TOKEN!,
+          CLOUDFLARE_ACCOUNT_ID: credentials.CLOUDFLARE_ACCOUNT_ID!,
+        },
+      });
     },
     smokes: (env) => [
       { url: `${env.baseUrl}/version`, ok: (status) => status === 200, label: "version" },

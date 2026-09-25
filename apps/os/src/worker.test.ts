@@ -358,12 +358,12 @@ const origins = {
   APP_CONFIG_URLS__OS: "https://os.iterate.com",
   APP_CONFIG_URLS__MCP: "https://mcp.iterate.com",
 };
-/** The bindings the edge touches before it answers a public route: the registry namespace the
- *  control plane's edge is built over (`ControlPlane`, src/control-plane/edge.ts — the singleton's
- *  stub is taken, never dialled: these rows never reach the catalog), the context namespace, and
- *  the assets binding the issuer's pages come from (one placeholder page). */
+/** The bindings the edge touches before it answers a public route: the control plane's D1 the edge
+ *  is built over (`ControlPlane`, src/control-plane/edge.ts — never queried: these rows never reach
+ *  the catalog), the context namespace, and the assets binding the issuer's pages come from (one
+ *  placeholder page). */
 const bindings = {
-  CONTROL_PLANE: { getByName: () => ({}) },
+  DB: {},
   ITERATE_CONTEXT: { getByName: () => ({}) },
   ASSETS: { fetch: async () => new Response("<!doctype html>the page") },
 };

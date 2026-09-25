@@ -9,10 +9,10 @@ import type { UserRecord } from "../src/control-plane/catalog.ts";
 import type { IterateRpcTarget } from "../src/session.ts";
 import { startIssuerSession } from "../src/issuer-session.ts";
 import { oauthHelpers } from "../src/oauth.ts";
-import { adminSession, controlPlaneStub, ORIGIN } from "./support.ts";
+import { adminSession, catalog, controlPlane, ORIGIN } from "./support.ts";
 test("first consent creates organization and project through the ordinary session, then grants only the chosen project", async () => {
   fetchReachesThisWorker();
-  const user = await controlPlaneStub().linkIdentity({
+  const user = await catalog().linkIdentity({
     provider: "google",
     subject: "1357924680",
     email: "bootstrap@example.com",
@@ -229,7 +229,7 @@ test("a client on a project's custom apex is bound to that project at consent, l
   const apexProjectId = (await apexProject.whoami()).projectId;
   // the project's own hostname, claimed as its processor claims one (project-host-routing.test.ts
   // proves the whole add)
-  await env.CONTROL_PLANE.getByName("global").claimHostname(apexProjectId, "custom-apex.test");
+  await controlPlane().claimHostname(apexProjectId, "custom-apex.test");
   const login = await issuerSignIn(user, "/");
   const issuer = await connect({ Cookie: login.setCookie.split(";")[0]!, Origin: ORIGIN });
   const flow = await authorizationCodeRequest({
@@ -460,8 +460,8 @@ test("CIMD consent shows the metadata host even when the client declares a diffe
 
 test("the consent page renders on the server, and Authorize posts the choice to the exact authorization URL", async () => {
   fetchReachesThisWorker();
-  const user = await controlPlaneStub().createUser({ email: "consent-page@example.com" });
-  const project = await controlPlaneStub().createProject(
+  const user = await catalog().createUser({ email: "consent-page@example.com" });
+  const project = await catalog().createProject(
     { principal: { actor: user.id, email: user.email } },
     { project: `consent-page-${crypto.randomUUID().slice(0, 8)}` },
   );

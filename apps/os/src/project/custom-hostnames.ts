@@ -28,6 +28,9 @@ export function customHostnameProblem(
 ): string | null {
   if (!HOSTNAME.test(hostname))
     return `'${hostname}' is not a hostname (letters, digits and hyphens, at least two labels, like www.example.com).`;
+  // the claim binds one parameter per label (catalog.ts `claimHostname`), and D1 binds at most 100
+  // to a query (https://developers.cloudflare.com/d1/platform/limits/)
+  if (hostname.split(".").length > 32) return `'${hostname}' has more than 32 labels.`;
   const reserved = reservedZones.find((zone) => hostname === zone || hostname.endsWith(`.${zone}`));
   return reserved
     ? `'${hostname}' is under ${reserved}, which this deployment serves itself.`

@@ -6,7 +6,8 @@
 // dashboards would, signed in as themselves (the operator's `as`, a sign-in's own find-or-create).
 // Every project is timed from the call:
 //   answered — `projects.create` returned: the person, the catalog row on the control plane (one
-//              singleton Durable Object, so N at once queue there), the project's saga opened;
+//              D1, which runs one statement or batch at a time, so N at once queue there), the
+//              project's saga opened;
 //   ready    — its `project/created` certificate is on `/`: the config repo seeded and published,
 //              the apex serving it (session.e2e proves that sequence; this times it).
 // and each round until its LAST project is ready. A project that is not ready by READY_DEADLINE_MS,

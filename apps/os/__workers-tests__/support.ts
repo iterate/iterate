@@ -1,6 +1,6 @@
 // __workers-tests__/support.ts — what every file in the Workers suite (the vitest project that runs
-// INSIDE workerd, next to the worker) shares: the context DO stub by ctx name, the CONTROL_PLANE
-// registry stub, a capnweb session over the worker's /api (disposed at teardown — importing this module
+// INSIDE workerd, next to the worker) shares: the context DO stub by ctx name, the control plane's
+// database, a capnweb session over the worker's /api (disposed at teardown — importing this module
 // registers the afterAll), a live value to lend (`Echo`, tagged per instance), the production pins'
 // release on demand, the alarm a context owes, and the one poll-until.
 import { runInDurableObject } from "cloudflare:test";
@@ -8,6 +8,10 @@ import { env, exports } from "cloudflare:workers";
 import { newWebSocketRpcSession, RpcTarget } from "capnweb";
 import { afterAll, expect, onTestFinished, vi } from "vitest";
 import { DurableObjectNameCodec } from "../src/context/paths.ts";
+import { ControlPlaneDatabase } from "../src/control-plane/catalog.ts";
+import { projectsByHostnames } from "../src/control-plane/db/queries/.generated/hostnames.sql.ts";
+import { accessibleOrganizations } from "../src/control-plane/db/queries/.generated/organizations.sql.ts";
+import { projectsByRef } from "../src/control-plane/db/queries/.generated/projects.sql.ts";
 import { ControlPlane } from "../src/control-plane/edge.ts";
 import type { IterateContextDurableObject } from "../src/iterate-context-durable-object.ts";
 import type { IterateRpcTarget } from "../src/session.ts";
@@ -35,13 +39,69 @@ export class Echo extends RpcTarget {
   }
 }
 
-/** THE REGISTRY, the `CONTROL_PLANE` singleton DO (src/control-plane/durable-object.ts): the raw
- *  Workers-RPC stub, so a test calls its methods directly (`controlPlaneStub().project(ref)`) with no
- *  edge or session between. Fresh per test. */
-export const controlPlaneStub = () => env.CONTROL_PLANE.getByName("global");
+/** THE CATALOG, the control plane's database over this file's D1 (src/control-plane/catalog.ts): a
+ *  test calls its verbs directly (`catalog().project(ref)`) with no edge, memo or session between. */
+export const catalog = () => new ControlPlaneDatabase(env.DB);
 
-/** The control plane as the edge holds it (src/control-plane/edge.ts): the catalog's rows. */
-export const controlPlane = () => new ControlPlane(env.CONTROL_PLANE);
+/** The control plane as the edge holds it (src/control-plane/edge.ts): the catalog's rows and the
+ *  isolate's memos. */
+export const controlPlane = () => new ControlPlane(env);
+
+/** THE CATALOG READS a project host's admission and a person's access make, each told by the SQL
+ *  it sends D1 (src/control-plane/db/queries), up to its first parameter. */
+const CATALOG_READS = {
+  project: projectsByRef.sql,
+  projectByHostname: projectsByHostnames.sql,
+  accessibleTo: accessibleOrganizations.sql,
+};
+export type CatalogRead = keyof typeof CATALOG_READS;
+
+/** Every catalog read sent to this file's D1 until the test finishes — the worker's, whose binding
+ *  is this isolate's `env.DB` too — each spy called with the value its first parameter binds (a
+ *  ref, the first hostname asked, a user id). With `fail`, those `reads` answer what `fail.with`
+ *  makes of the real call, a single statement's and a batch's alike. */
+export function interceptCatalogReads(fail?: {
+  reads: readonly CatalogRead[];
+  with: <T>(answer: () => Promise<T>) => Promise<T>;
+}) {
+  const reads = { project: vi.fn(), projectByHostname: vi.fn(), accessibleTo: vi.fn() };
+  const readOf = (sql: string) =>
+    (Object.keys(CATALOG_READS) as CatalogRead[]).find((read) =>
+      sql.startsWith(CATALOG_READS[read].slice(0, CATALOG_READS[read].indexOf("?"))),
+    );
+  const failing = new WeakSet<D1PreparedStatement>();
+  const prepare = env.DB.prepare.bind(env.DB);
+  const batch = env.DB.batch.bind(env.DB);
+  const prepares = vi.spyOn(env.DB, "prepare").mockImplementation((sql: string) => {
+    const statement = prepare(sql);
+    const read = readOf(sql);
+    if (!read) return statement;
+    const bind = statement.bind.bind(statement);
+    statement.bind = (...args: unknown[]) => {
+      reads[read](args[0]);
+      const bound = bind(...args);
+      if (fail?.reads.includes(read)) {
+        failing.add(bound);
+        const all = bound.all.bind(bound);
+        bound.all = (() => fail.with(all)) as typeof bound.all;
+      }
+      return bound;
+    };
+    return statement;
+  });
+  const batches = vi
+    .spyOn(env.DB, "batch")
+    .mockImplementation((statements) =>
+      statements.some((statement) => failing.has(statement))
+        ? fail!.with(() => batch(statements))
+        : batch(statements),
+    );
+  onTestFinished(() => {
+    prepares.mockRestore();
+    batches.mockRestore();
+  });
+  return reads;
+}
 
 /** This suite's admin bearer (wrangler.test.jsonc `APP_CONFIG_SECRETS__ADMIN_BEARER`). */
 const adminApiSecret = (): string => env.APP_CONFIG_SECRETS__ADMIN_BEARER!;

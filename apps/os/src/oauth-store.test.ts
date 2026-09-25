@@ -1,64 +1,60 @@
-// src/oauth-store.test.ts — the provider's store over a fake control plane: a grant call cut at the
-// transport is asked once more, on a fresh stub. A deploy's reset of the control plane's Durable
-// Object is expected; any other cut is logged as a platform failure the prd fault alarm counts. A
-// call that stalls is named while it waits.
+// src/oauth-store.test.ts — the provider's store over a fake control-plane D1: a grant call D1 failed
+// on the platform's side, and says to send again, is asked once more, its retry logged as a platform
+// failure the prd fault alarm counts (beside the failure edge.ts logs); anything else throws at once.
+// A call that stalls is named while it waits.
 import { expect, onTestFinished, test, vi } from "vitest";
 import { providerStore } from "./oauth-store.ts";
 
 test.each([
-  [
-    "Durable Object reset because its code was updated.",
-    "oauth.deploy-reset-grant-store-retry",
-    "Error: Durable Object reset because its code was updated.",
-  ],
-  // any other cut is the platform's failure, which the edge's read names (control-plane/edge.ts)
-  [
-    "Network connection lost.",
-    "oauth.platform-failure-grant-store-retry",
-    "ControlPlaneUnavailableError: The control plane failed oauthGrant: Network connection lost.",
-  ],
-])(
-  "a grant read cut at the transport (%s) is asked once more on a fresh stub, and logged as %s",
-  async (message, event, logged) => {
-    const warns = vi.spyOn(console, "warn").mockImplementation(() => {});
-    onTestFinished(() => {
-      warns.mockRestore();
-    });
-    const store = storeOver([
-      () => Promise.reject(transportCut(message)),
-      () => Promise.resolve('{"id":"g1"}'),
-    ]);
-    expect(await store.get("grant:user_a:g1", { type: "json" })).toEqual({ id: "g1" });
-    expect(warns).toHaveBeenCalledExactlyOnceWith({
-      event,
-      name: "grant-store-get",
-      message: logged,
-    });
-  },
-);
-
-test("a second cut throws: the grant store never retries twice", async () => {
+  "D1_ERROR: Network connection lost.",
+  "D1_ERROR: D1 DB reset because its code was updated.",
+  "D1_ERROR: Internal error in D1 DB storage caused object to be reset.",
+])("a grant read D1 says to send again (%s) is asked once more, and logged", async (message) => {
   const warns = vi.spyOn(console, "warn").mockImplementation(() => {});
   onTestFinished(() => {
     warns.mockRestore();
   });
   const store = storeOver([
-    () => Promise.reject(transportCut()),
-    () => Promise.reject(transportCut()),
-    () => Promise.resolve('{"id":"never read"}'),
+    () => Promise.reject(new Error(message)),
+    () => Promise.resolve({ results: [{ value: '{"id":"g1"}' }] }),
   ]);
-  await expect(store.get("grant:user_a:g1", { type: "json" })).rejects.toThrow(
-    /Durable Object reset/,
-  );
-  expect(warns).toHaveBeenCalledTimes(1);
+  expect(await store.get("grant:user_a:g1", { type: "json" })).toEqual({ id: "g1" });
+  expect(retries(warns)).toEqual([
+    {
+      event: "oauth.platform-failure-grant-store-retry",
+      name: "grant-store-get",
+      message: `ControlPlaneUnavailableError: The control plane failed oauthGrant: ${message}`,
+    },
+  ]);
 });
 
-test("a refusal that is no transport failure is not asked again", async () => {
+test("a second failure throws: the grant store never retries twice", async () => {
+  const warns = vi.spyOn(console, "warn").mockImplementation(() => {});
+  onTestFinished(() => {
+    warns.mockRestore();
+  });
   const store = storeOver([
-    () => Promise.reject(new Error("no such table: oauth_grants")),
-    () => Promise.resolve('{"id":"never read"}'),
+    () => Promise.reject(new Error("D1_ERROR: Network connection lost.")),
+    () => Promise.reject(new Error("D1_ERROR: Network connection lost.")),
+    () => Promise.resolve({ results: [{ value: '{"id":"never read"}' }] }),
   ]);
-  await expect(store.get("grant:user_a:g1", "text")).rejects.toThrow(/no such table/);
+  await expect(store.get("grant:user_a:g1", { type: "json" })).rejects.toThrow(
+    /The control plane failed oauthGrant: D1_ERROR: Network connection lost/,
+  );
+  expect(retries(warns)).toHaveLength(1);
+});
+
+test.each([
+  // the platform's, but not to be sent again: the query may still be queued
+  ["D1_ERROR: D1 DB is overloaded. Requests queued for too long.", /failed oauthGrant/],
+  // ours
+  ["D1_ERROR: no such table: oauth_grants: SQLITE_ERROR", /failed oauthGrant: D1_ERROR: no such/],
+])("a grant read failing with %s is not asked again", async (message, thrown) => {
+  const store = storeOver([
+    () => Promise.reject(new Error(message)),
+    () => Promise.resolve({ results: [{ value: '{"id":"never read"}' }] }),
+  ]);
+  await expect(store.get("grant:user_a:g1", "text")).rejects.toThrow(thrown);
 });
 
 test("a grant read or a KV write still waiting after five seconds names its step while it waits", async () => {
@@ -71,9 +67,7 @@ test("a grant read or a KV write still waiting after five seconds names its step
   let answerGrant!: (value: string) => void;
   let confirmPut!: () => void;
   const store = providerStore({
-    CONTROL_PLANE: {
-      getByName: () => ({ oauthGrant: () => new Promise((r) => (answerGrant = r)) }),
-    } as never,
+    DB: fakeD1(() => new Promise((r) => (answerGrant = (value) => r({ results: [{ value }] })))),
     OAUTH_KV: { put: () => new Promise<void>((r) => (confirmPut = r)) } as unknown as KVNamespace,
   });
   const read = store.get("grant:user_a:g1", { type: "json" });
@@ -97,20 +91,19 @@ test("a grant read or a KV write still waiting after five seconds names its step
   await write;
 });
 
-/** The store over a control plane whose every stub answers `oauthGrant` with the next of
- *  `answers` (edge.ts takes a fresh stub after a transport failure). KV is never reached. */
-function storeOver(answers: (() => Promise<string>)[]) {
-  const namespace = {
-    getByName: () => ({ oauthGrant: () => answers.shift()!() }),
-  };
-  return providerStore({
-    CONTROL_PLANE: namespace as never,
-    OAUTH_KV: {} as KVNamespace,
-  });
+/** The grant store's own retries among the warns. */
+const retries = (warns: { mock: { calls: unknown[][] } }) =>
+  warns.mock.calls
+    .map(([entry]) => entry as { event?: string })
+    .filter((entry) => entry.event?.startsWith("oauth."));
+
+/** The store over a control-plane D1 whose every query answers with the next of `answers`. KV is
+ *  never reached. */
+function storeOver(answers: (() => Promise<{ results: unknown[] }>)[]) {
+  return providerStore({ DB: fakeD1(() => answers.shift()!()), OAUTH_KV: {} as KVNamespace });
 }
 
-/** What workerd throws for a call cut at the transport (retryable-error.ts): by default, a deploy's
- *  reset of the Durable Object. */
-function transportCut(message = "Durable Object reset because its code was updated.") {
-  return Object.assign(new Error(message), { retryable: true });
+/** A D1 binding whose every statement's rows are `rows()`'s. */
+function fakeD1(rows: () => Promise<{ results: unknown[] }>) {
+  return { prepare: () => ({ bind: () => ({ all: rows }) }) } as unknown as D1Database;
 }

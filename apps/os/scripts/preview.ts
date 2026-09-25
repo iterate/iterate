@@ -2,15 +2,15 @@
 // (their scripts/preview/preview.ts: eighteen workers in three tiers collapsed to one). The effects
 // half; the pure half — naming, the PR body's section, the preview's wrangler config — is
 // scripts/preview-config.ts (preview.test.ts). Commands: config (build and write preview config),
-// deploy (build, the Artifacts namespace, the secrets, `wrangler preview`, the PR body and its
-// status line), e2e and specs (the vitest e2e suite, `--slow-rows` picking the rows tagged `slow`,
-// scripts/slow-rows.ts, or the Playwright specs, against the live preview; the suite's line under the
-// status line), reset (delete, then deploy), delete (the
-// preview, its Artifacts namespace, KV namespaces and R2 bucket, plus any leftover D1, the apps on
-// top), sweep (the stale previews and the resources that outlived theirs — the rules are
-// scripts/preview-sweep.ts), deploy-parents (the workers every preview branches from, from this
-// checkout: preview-parents.yml on every push to main), reset-parent (the `os` parent's own data
-// erased, then the parent deployed again: preview-sweep.yml, nightly). `--dry-run` prints the plan.
+// deploy (build, the D1 migrated and the Artifacts namespace, the secrets, `wrangler preview`, the
+// PR body and its status line), e2e and specs (the vitest e2e suite, `--slow-rows` picking the rows
+// tagged `slow`, scripts/slow-rows.ts, or the Playwright specs, against the live preview; the
+// suite's line under the status line), reset (delete, then deploy), delete (the preview, its D1,
+// Artifacts namespace, KV namespaces and R2 bucket, the apps on top), sweep (the stale previews and
+// the resources that outlived theirs — the rules are scripts/preview-sweep.ts), deploy-parents (the
+// workers every preview branches from, from this checkout: preview-parents.yml on every push to
+// main), reset-parent (the `os` parent's own data erased, then the parent deployed again:
+// preview-sweep.yml, nightly). `--dry-run` prints the plan.
 import { spawn, spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -49,6 +49,7 @@ import { traceOperation } from "../../../scripts/ci/tracing/tracing.ts";
 import { parseAppConfig, type AppConfig } from "../src/app-config.ts";
 import { mintTestLink, TEST_LINK_PATH, testLinkIdentityOf } from "../src/test-link.ts";
 import { buildOs } from "./build.ts";
+import { applyD1Migrations, ensureD1, findD1, type D1Row } from "./d1.ts";
 import deployOs from "./deploy.ts";
 import eraseData from "./erase-data.ts";
 import { awaitPreviewReady } from "./preview-readiness.ts";
@@ -299,17 +300,25 @@ async function writeStatus(
   );
 }
 
-// ── leftover D1s (no preview creates one any more; deletePreview and the sweep delete them) ─────
+// ── the control plane's D1 (scripts/d1.ts): created and migrated by the deploy, deleted here ────
 
-type D1Row = { uuid: string; name: string; created_at?: string };
-
-/** The list API's `name` filter matches by prefix (measured), so the exact match is made here. */
-async function findDatabase(cf: Cf, name: string) {
-  return (await listAll<D1Row>(cf, "/d1/database")).find((row) => row.name === name);
+/** The preview's D1, created when missing and migrated, before any code that reads it deploys. */
+async function ensurePreviewDatabase(ctx: EnvContext<OsEnv>, previewName: string) {
+  const databaseName = previewResourceName(previewName, "db");
+  const { uuid } = await ensureD1(ctx.cf, databaseName);
+  await applyD1Migrations(ctx.cf, {
+    databaseName,
+    databaseId: uuid,
+    credentials: {
+      CLOUDFLARE_API_TOKEN: ctx.secrets.CLOUDFLARE_API_TOKEN!,
+      CLOUDFLARE_ACCOUNT_ID: PREVIEW_PARENT.cloudflareAccountId,
+    },
+  });
+  return uuid;
 }
 
 async function deleteDatabase(cf: Cf, name: string) {
-  const row = await findDatabase(cf, name);
+  const row = await findD1(cf, name);
   if (!row) return console.warn(`D1 ${name} did not exist; continuing.`);
   await cf(`/d1/database/${row.uuid}`, { method: "DELETE" });
   console.log(`deleted D1 ${name}`);
@@ -526,7 +535,7 @@ async function deployParents(ctx: EnvContext<OsEnv>) {
 
 /** THE NIGHTLY RESET of the `os` parent's own data (preview-sweep.yml): what people and agents left
  *  on os.iterate-dev-preview.workers.dev and the app parents signed in against it — its Durable
- *  Objects (users, organizations, projects), KV, R2 and Artifacts repos — erased
+ *  Objects, its D1's rows (users, organizations, projects), KV, R2 and Artifacts repos — erased
  *  (scripts/erase-data.ts), then the parent deployed again from this checkout. Its Worker Previews
  *  keep their own data and keep serving throughout: the retirement tombstones the parent's own
  *  namespaces only, and the parked parent keeps preview URLs on (scripts/lib/do-reset.ts; both
@@ -563,18 +572,20 @@ async function uploadPreviewSecrets(wrangler: string, ctx: EnvContext<OsEnv>) {
   }
 }
 
-/** The OS's own preview, from an OS build already made, its Artifacts namespace and the Previews
- *  secrets already in place: its config (naming the PR's Dash preview when this run deploys one),
- *  `wrangler preview`, and the smoke that the new deployment serves. */
+/** The OS's own preview, from an OS build already made, its D1 (`databaseId`, migrated), its
+ *  Artifacts namespace and the Previews secrets already in place: its config (naming the PR's Dash
+ *  preview when this run deploys one), `wrangler preview`, and the smoke that the new deployment
+ *  serves. */
 async function deployOsPreview(
   ctx: EnvContext<OsEnv>,
   previewName: string,
+  databaseId: string,
   dashOrigin: string | undefined,
   wrangler: string,
   settleMs: number,
   recreated = false,
 ): Promise<{ url: string; deploymentId: string; slug: string }> {
-  writePreviewWranglerConfig({ previewName, dashOrigin });
+  writePreviewWranglerConfig({ previewName, databaseId, dashOrigin });
   const result = await run(wrangler, [
     "preview",
     "--name",
@@ -594,8 +605,19 @@ async function deployOsPreview(
         `preview ${previewName} lacks a Durable Object class this build binds (Cloudflare 10061), and an existing Worker Preview cannot gain one: deleting the preview and its resources, then creating it again`,
       );
       await deletePreview(ctx.cf, previewName, wrangler);
-      await ensureArtifactsNamespace(ctx.cf, previewResourceName(previewName, "repos"));
-      return deployOsPreview(ctx, previewName, dashOrigin, wrangler, settleMs, true);
+      const [recreatedDatabaseId] = await Promise.all([
+        ensurePreviewDatabase(ctx, previewName),
+        ensureArtifactsNamespace(ctx.cf, previewResourceName(previewName, "repos")),
+      ]);
+      return deployOsPreview(
+        ctx,
+        previewName,
+        recreatedDatabaseId,
+        dashOrigin,
+        wrangler,
+        settleMs,
+        true,
+      );
     }
     // Not the parent's classes: a brand-new preview binds a class its parent never had (measured
     // 2026-09-24 on a throwaway worker).
@@ -684,8 +706,8 @@ async function settleAll(promises: Promise<unknown>[]) {
 }
 
 /** Each step starts once what it needs is there, and each is a span in the CI trace
- *  (docs/ci-traces.md): the wrangler install, the Previews secrets and the Artifacts namespace
- *  need no build and run beside the builds; apps/os deploys once its build and those are done, and
+ *  (docs/ci-traces.md): the wrangler install, the Previews secrets, the D1 and its migrations and
+ *  the Artifacts namespace need no build and run beside the builds; apps/os deploys once its build and those are done, and
  *  each app on top once its own build and the wrangler are, beside apps/os — every URL is known
  *  before anything deploys (preview-config.ts `previewUrl`, `appPreviewUrl`). Every step settles
  *  before a failed one fails the deploy, named. Once apps/os's readiness gate has passed, the
@@ -713,20 +735,25 @@ async function deployPreviewSteps(
   const wrangler = preparePreviewWrangler();
   try {
     const installed = traceOperation("Install wrangler", () => wrangler.ready);
+    const database = traceOperation("Ensure the D1 and apply its migrations", () =>
+      ensurePreviewDatabase(ctx, previewName),
+    );
     const prepared = settleAll([
       installed.then(() =>
         traceOperation("Upload the Previews secrets", () =>
           uploadPreviewSecrets(wrangler.command, ctx),
         ),
       ),
+      database,
       traceOperation("Ensure the Artifacts namespace", () =>
         ensureArtifactsNamespace(ctx.cf, previewResourceName(previewName, "repos")),
       ),
     ]);
     const osPreview = (async () => {
       await settleAll([traceOperation("Build OS", () => buildOs("preview")), prepared]);
+      const databaseId = await database;
       return traceOperation("Deploy OS preview", () =>
-        deployOsPreview(ctx, previewName, appOrigins.dash, wrangler.command, settleMs),
+        deployOsPreview(ctx, previewName, databaseId, appOrigins.dash, wrangler.command, settleMs),
       );
     })();
     const appPreviews = apps.map(async (app) => {
@@ -912,9 +939,8 @@ async function seedSignIn(
   return seeded;
 }
 
-/** The preview, then everything it owned, each found by its name: its Artifacts namespace (this
- *  script created it), any `db` D1 a preview from before the control plane moved to a Durable Object
- *  left behind, its KV namespaces and its R2 bucket (wrangler provisioned them; see WRANGLER_PACKAGE
+/** The preview, then everything it owned, each found by its name: its D1 and its Artifacts
+ *  namespace (this script created them), its KV namespaces and its R2 bucket (wrangler provisioned them; see WRANGLER_PACKAGE
  *  for why its delete leaves them). One already gone is the expected case. Resolves to its
  *  Artifacts namespace when Cloudflare will not delete it (StuckArtifactsNamespace): the rest still
  *  goes, and the namespace, now an orphan, is the nightly sweep's to retry and page. */
@@ -1392,7 +1418,9 @@ async function main(command: Command, options: PreviewOptions) {
   console.log(`preview ${previewName} → ${previewUrl(previewName)}`);
   if (parsed.command === "config" || parsed.dryRun) {
     await buildOs("preview");
-    console.log(`wrote ${writePreviewWranglerConfig({ previewName })}`);
+    console.log(
+      `wrote ${writePreviewWranglerConfig({ previewName, databaseId: "<created at deploy>" })}`,
+    );
     return;
   }
   if (parsed.command === "e2e" || parsed.command === "specs")

@@ -85,7 +85,7 @@ export async function projectsForClient(
   userId: string,
   expected: readonly string[] = [],
 ) {
-  const controlPlane = new ControlPlane(env.CONTROL_PLANE);
+  const controlPlane = new ControlPlane(env);
   const projects = await controlPlane.reachableProjects({ userId }, expected);
   const url = URL.canParse(clientId) ? new URL(clientId) : null;
   const host =
@@ -185,10 +185,7 @@ export class ConsentRpcTarget extends RpcTarget {
       // The page lists what the person holds NOW, read past this isolate's access memo: a project
       // just made (the page's New project form, served by whichever isolate) is listed at once.
       // The project list below reads the answer this read just memoized.
-      const { organizations } = await new ControlPlane(env.CONTROL_PLANE).accessibleTo(
-        this.#grant.userId,
-        true,
-      );
+      const { organizations } = await new ControlPlane(env).accessibleTo(this.#grant.userId, true);
       const bound = await projectsForClient(
         env,
         this.#addresses.platformOrigin,
@@ -294,7 +291,7 @@ export class ConsentRpcTarget extends RpcTarget {
     if (!actAs) return null;
     if (!isAdmin(this.#env, this.#grant.email))
       return { error: "only a platform admin can view an app as someone else" };
-    const target = await new ControlPlane(this.#env.CONTROL_PLANE).getUser(actAs);
+    const target = await new ControlPlane(this.#env).getUser(actAs);
     if (!target) return { error: `nobody has signed in as ${actAs}` };
     return { target };
   }
@@ -419,7 +416,7 @@ export class ConsentRpcTarget extends RpcTarget {
     const returnsTo = new URL(request.redirectUri);
     if (returnsTo.pathname !== "/.auth/callback" || !testLink.clients.includes(returnsTo.origin))
       return null;
-    const project = await new ControlPlane(this.#env.CONTROL_PLANE).getProject(testLink.project);
+    const project = await new ControlPlane(this.#env).getProject(testLink.project);
     if (!project) return null;
     // `expected`: CI may have seeded the project on another isolate moments ago (the specs do)
     const { projects, projectBound } = await projectsForClient(

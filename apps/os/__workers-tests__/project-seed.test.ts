@@ -10,7 +10,7 @@ import {
 } from "../scripts/project-seed-format.ts";
 import {
   adminCredentials,
-  controlPlaneStub,
+  catalog,
   fakeCloudflareCustomHostnames,
   openSession,
   stub,
@@ -146,7 +146,7 @@ test("a project's hostnames round-trip through a seed: capture records the ones 
     { hostname: "www.seeded.test", asked: true, status: "pending, certificate unknown" },
   ]);
   expect(cloudflare).toMatchObject({ hostnames: ["www.seeded.test"] });
-  expect(await controlPlaneStub().projectByHostname(["www.seeded.test"])).toMatchObject({
+  expect(await catalog().projectByHostname(["www.seeded.test"])).toMatchObject({
     project: { id: projectId },
   });
   expect(await captureHostnames(project)).toEqual(archived);
@@ -182,7 +182,7 @@ test("apply never takes a hostname another project holds: the restore fails nami
   await expect(
     restoreHostnames(restored, ["www.held.test"], { timeoutMs: 10_000 }),
   ).rejects.toThrow(/refused: www\.held\.test \(.*belongs to another project/);
-  expect(await controlPlaneStub().projectByHostname(["www.held.test"])).toMatchObject({
+  expect(await catalog().projectByHostname(["www.held.test"])).toMatchObject({
     project: { id: holderId },
   });
   expect(cloudflare).toMatchObject({ writes, hostnames: ["www.held.test"] });
@@ -201,7 +201,7 @@ test("after a real erase the zone still holds the custom hostname: apply's reque
     { hostname: "kept.erased.test", asked: true, status: "active, certificate active" },
   ]);
   expect(cloudflare).toMatchObject({ writes: [] });
-  expect(await controlPlaneStub().projectByHostname(["kept.erased.test"])).toMatchObject({
+  expect(await catalog().projectByHostname(["kept.erased.test"])).toMatchObject({
     project: { id: projectId },
   });
   expect(await captureHostnames(project)).toEqual(["kept.erased.test"]);

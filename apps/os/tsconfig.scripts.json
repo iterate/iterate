@@ -3,6 +3,12 @@
   // need its types (tsconfig.tests.json owns those).
   "extends": "../../tsconfig.base.json",
   "compilerOptions": { "types": ["node"] },
-  "include": ["vite.config.ts", "vitest.config.ts", "vitest.global-setup.ts", "scripts/*.ts"],
+  "include": [
+    "vite.config.ts",
+    "vitest.config.ts",
+    "vitest.global-setup.ts",
+    "sqlfu.config.ts",
+    "scripts/*.ts"
+  ],
   "exclude": ["scripts/inspect-context.ts", "scripts/project-seed*.ts"]
 }

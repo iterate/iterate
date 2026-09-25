@@ -73,10 +73,6 @@
     "bindings": [
       { "name": "ITERATE_CONTEXT", "class_name": "IterateContextDurableObject" },
       { "name": "BROWSER_SESSION", "class_name": "BrowserSession" },
-      // THE CONTROL PLANE: one singleton `ControlPlaneDurableObject` (getByName("global")), reached
-      // by binding, not hosted as a facet of any context (so no other context can host it).
-      // control-plane/edge.ts is the worker's typed client over it.
-      { "name": "CONTROL_PLANE", "class_name": "ControlPlaneDurableObject" },
     ],
   },
   // The DOs' lifecycle, declaratively: SQLite-backed classes, no migration history to replay.
@@ -90,7 +86,8 @@
     // The removed built-in was hosted as a facet of IterateContextDurableObject. Retire its
     // unused standalone namespace; agent streams and facet storage belong to the context.
     "AgentDurableObject": { "type": "durable-object", "state": "deleted" },
-    "ControlPlaneDurableObject": { "type": "durable-object", "storage": "sqlite" },
+    // The control plane moved to D1 (`DB` below). Retire the old singleton's namespace.
+    "ControlPlaneDurableObject": { "type": "durable-object", "state": "deleted" },
     // The route table moved into each project root's core state (src/fetch-routes.ts); the class
     // was only ever hosted as a facet, so its standalone namespace holds no object. Retire it.
     "IngressRoutesDurableObject": { "type": "durable-object", "state": "deleted" },
@@ -101,9 +98,23 @@
     "WorkspaceDurableObject": { "type": "durable-object", "storage": "sqlite" },
   },
 
-  // OAUTH_KV = the in-process OAuth AS's tokens and DCR clients (its grants are in the control plane,
-  // src/oauth-store.ts), the sign-in challenges, the personal access tokens' index and the control
-  // plane's last-known copies (src/control-plane/last-known-project.ts).
+  // THE CONTROL PLANE: the deployment's users, identities, organizations, memberships, projects,
+  // invitations, custom hostnames and OAuth grants (src/control-plane/db/definitions.sql). This top
+  // level is local dev's (`pnpm db:migrate` migrates it, scripts/dev.ts first thing); a deployment's
+  // is `<resourceNamePrefix>-db` (envs.ts `resources.dbId`, ensure-resources) and a preview's
+  // `os-<preview>-db` (scripts/preview.ts), each migrated by wrangler from `migrations_dir` before
+  // its code uploads (scripts/d1.ts).
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "os-dev-db",
+      "database_id": "os-dev-db",
+      "migrations_dir": "src/control-plane/db/migrations",
+    },
+  ],
+
+  // OAUTH_KV = the in-process OAuth AS's tokens and DCR clients (its grants are in the control
+  // plane's D1, src/oauth-store.ts), the sign-in challenges and the personal access tokens' index.
   "kv_namespaces": [
     // itx.kv backing — project-prefixed (the D8 portability proof point).
     { "binding": "ITX_KV", "id": "08df862920b04446b3503c22f9888b04" },

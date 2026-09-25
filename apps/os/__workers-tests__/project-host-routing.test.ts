@@ -4,6 +4,7 @@ import { newWebSocketRpcSession } from "capnweb";
 import { expect, test } from "vitest";
 import type { IterateRpcTarget } from "../src/session.ts";
 import {
+  catalog,
   fakeCloudflareCustomHostnames,
   ORIGIN,
   publishConfigWorker,
@@ -228,9 +229,7 @@ test("a project's own hostname: added, the processor claims it and creates its w
     timeoutMs: 10_000,
   });
   expect(cloudflare).toMatchObject({ hostnames: [] });
-  expect(
-    await env.CONTROL_PLANE.getByName("global").projectByHostname(["iterate.somedomain.test"]),
-  ).toBeNull();
+  expect(await catalog().projectByHostname(["iterate.somedomain.test"])).toBeNull();
 });
 
 test("a project's primary hostname: once a live hostname is made primary, itx.url composes on it; a navigation on the ingress base is a 308 to the same routing slug, path and query there; a POST, a fetch and a WebSocket upgrade on the ingress base are served", async () => {

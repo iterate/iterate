@@ -72,7 +72,7 @@ deploys them from every push to main that a PR's preview would run for, and
 `https://dash.iterate-dev-preview.workers.dev` signs in against
 `https://os.iterate-dev-preview.workers.dev`. What people leave there is erased nightly
 (`pnpm preview reset-parent`, in the Preview sweep workflow); PR previews keep their data and keep
-serving through it. A platform preview has its own Durable Objects, KV, R2, and Artifacts namespace. Closing the PR deletes the preview and its resources. The nightly sweep also removes stale previews and orphaned resources;
+serving through it. A platform preview has its own Durable Objects, D1, KV, R2, and Artifacts namespace. Closing the PR deletes the preview and its resources. The nightly sweep also removes stale previews and orphaned resources;
 see `scripts/preview-sweep.ts` for the rules. Previews use workers.dev and have no project hosts.
 Main OS e2e, the latency guard and the real-model suite each keep one preview, `main`, `latency` and
 `real-model`, which every run redeploys in place, its readiness gate held 150 s (`--settle 150`)
@@ -123,6 +123,29 @@ one-click "New project from template" links into the Dash
 ([dev environments](../../docs/dev-environments.md), `src/test-link.ts`).
 For an operational change, verify the preview's resulting state and telemetry as well as its checks.
 The [engineering invariant](../../docs/engineering-invariants.md) defines the required standard.
+
+## The control plane's database
+
+The control plane — users, identities, organizations, memberships, projects, invitations, custom
+hostnames and the OAuth provider's grants — is one D1 per deployment, bound as `DB`: `os-prd-db`,
+`os-parent-db`, `os-<preview>-db` for each preview, and `os-dev-db` locally
+(`src/control-plane/db/`). [sqlfu](https://github.com/mmkal/sqlfu) authors it: the schema is
+`definitions.sql`, the migrations `migrations/*.sql`, and every query a named statement in
+`queries/*.sql`, typed into `queries/.generated/` (committed); `db/index.ts` says why each write is
+one statement or one batch.
+
+To change the schema, edit `definitions.sql`, write the next migration (`pnpm --dir apps/os db:draft`
+drafts it), then:
+
+```sh
+pnpm --dir apps/os db:check     # the migrations replay to definitions.sql
+pnpm --dir apps/os db:generate  # the typed queries; commit what changes
+pnpm --dir apps/os db:migrate   # this worktree's local D1 (`pnpm dev` runs it too)
+```
+
+Wrangler migrates a deployment's D1 when it deploys, and a preview's when the preview deploys,
+before the code that reads it uploads (`scripts/d1.ts`): a migration must keep the running version
+working until then. D1 Time Travel restores a database to any minute of the last 30 days.
 
 ## Projects and MCP
 

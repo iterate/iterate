@@ -15,6 +15,8 @@ on:
     paths:
       - .depot/workflows/deploy-os.yml
       - apps/os/**
+      # `**` does not descend into a dot directory, and sqlfu's typed queries ship in the Worker
+      - apps/os/src/**/.generated/**
       # Never in the Worker or its deploy: the app's docs (not public/setup-prompt.md, which prd
       # serves), its tests, benches and perf suite, and the preview and soak scripts. Preview OS and
       # Main OS e2e still run for them.

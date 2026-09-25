@@ -1,8 +1,9 @@
 /** Erase all apps/os data while retaining the worker, routes and resource identities.
  * Run `pnpm erase-data --env prd --yes-i-mean-prd --dry-run` before the real erase.
  * The worker is parked and its Durable Objects retired first, stopping writers and alarms.
- * Both KV namespaces, R2 files and Artifacts repositories are then emptied and verified; the catalog
- * (users, organizations, projects) lives in Durable Objects, retired with the rest.
+ * The control plane's D1 rows (users, organizations, projects, grants), both KV namespaces, R2
+ * files and Artifacts repositories are then emptied and verified. The D1 keeps its schema and
+ * migration history, so the next deploy's migrate is a no-op.
  * A failed or incomplete erase throws; rerunning is safe. Deploy again to restore service.
  */
 import { fileURLToPath } from "node:url";
@@ -24,6 +25,7 @@ const WorkerSettings = z.object({
   bindings: z.array(z.looseObject({ name: z.string(), type: z.string() })),
 });
 const dataBindings = new Set([
+  "d1",
   "kv_namespace",
   "r2_bucket",
   "artifacts",
@@ -139,6 +141,36 @@ async function eraseDataWith(
     } while (cursor);
     return names;
   };
+  /** One `/query` of the D1, a statement's results per `;`-separated statement. */
+  const d1 = async (sql: string) =>
+    z
+      .array(z.object({ results: z.array(z.looseObject({})) }))
+      .parse(
+        await cf(`/d1/database/${env.resources.dbId}/query`, {
+          method: "POST",
+          body: JSON.stringify({ sql }),
+        }),
+      )
+      .map((result) => result.results);
+  /** The D1's tables, but SQLite's own (`sqlite_…`, `sqlite_sequence` among them), D1's (`_cf_…`)
+   *  and wrangler's migration history (`d1_migrations`), which stays with the schema. Filtered here,
+   *  not with LIKE, whose `_` matches any character. */
+  const [schema = []] = await d1("select name from sqlite_master where type = 'table'");
+  const tables = z
+    .array(z.object({ name: z.string() }))
+    .parse(schema)
+    .map((table) => table.name)
+    .filter(
+      (name) => !name.startsWith("sqlite_") && !name.startsWith("_cf_") && name !== "d1_migrations",
+    );
+  const countRows = async () =>
+    tables.length
+      ? (await d1(tables.map((table) => `select count(*) as rows from "${table}"`).join("; "))).map(
+          (rows) => z.object({ rows: z.number() }).parse(rows[0]).rows,
+        )
+      : [];
+  for (const [index, rows] of (await countRows()).entries())
+    console.log(`D1 before: ${tables[index]} — ${rows} rows`);
   for (const store of stores)
     console.log(`${store.label} before: ${(await listNames(store)).length}`);
   const resourceIds = new Set([
@@ -208,6 +240,18 @@ async function eraseDataWith(
       "Worker still has data bindings; refusing to erase data while requests may still write.",
     );
 
+  // D1 enforces foreign keys; deferred to the end of this one request's transaction, the tables
+  // empty in any order (https://developers.cloudflare.com/d1/sql-api/foreign-keys/).
+  if (tables.length)
+    await d1(
+      ["pragma defer_foreign_keys = on", ...tables.map((table) => `delete from "${table}"`)].join(
+        "; ",
+      ),
+    );
+  if ((await countRows()).some((rows) => rows !== 0))
+    throw new Error("D1 still holds rows after the erase; rerun to finish.");
+  console.log("D1 after: every table is empty");
+
   for (const store of stores) {
     const deadline = Date.now() + 30 * 60_000;
     let deleted = 0;
@@ -255,7 +299,7 @@ async function eraseDataWith(
     console.log(`${store.label} after: empty`);
   }
   console.log(
-    `✅ ${context.name}: all Durable Objects retired; both KV namespaces, R2 and Artifacts verified empty. Deploy to restore service.`,
+    `✅ ${context.name}: all Durable Objects retired; D1, both KV namespaces, R2 and Artifacts verified empty. Deploy to restore service.`,
   );
 }
 export { eraseDataWith };
