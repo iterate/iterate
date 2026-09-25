@@ -232,8 +232,26 @@ const appConfigRows: {
   },
   // the platform admins: exact addresses, lowercased; a pattern is refused, never read as one
   {
-    vars: { ...MINIMAL, APP_CONFIG_ADMINS: '["Jonas@Iterate.com"]' },
-    becomes: { ...MINIMAL_CONFIG, admins: ["jonas@iterate.com"] },
+    vars: {
+      ...MINIMAL,
+      APP_CONFIG_URLS__OS: "http://localhost:8788",
+      APP_CONFIG_ADMINS: '["Jonas@Iterate.com"]',
+    },
+    becomes: {
+      ...MINIMAL_CONFIG,
+      urls: { ...MINIMAL_CONFIG.urls, os: "http://localhost:8788" },
+      admins: ["jonas@iterate.com"],
+    },
+  },
+  // …but beside the global password only where nobody's real data lives: anyone with the password
+  // could sign in as the admin
+  {
+    vars: {
+      ...MINIMAL,
+      APP_CONFIG_URLS__OS: "https://os.example.com",
+      APP_CONFIG_ADMINS: '["jonas@iterate.com"]',
+    },
+    throws: /^APP_CONFIG admins \(APP_CONFIG_ADMINS\): not with login\.password/,
   },
   {
     vars: { ...MINIMAL, APP_CONFIG_ADMINS: '["*@iterate.com"]' },

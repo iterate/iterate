@@ -275,9 +275,10 @@ export const AppConfig = z.object({
     .prefault({}),
   /** THE PLATFORM ADMINS: exact email addresses, never a pattern — `["jonas@iterate.com"]`, or the
    *  var `APP_CONFIG_ADMINS='["jonas@iterate.com"]'`. A person listed here may be granted the
-   *  `admin` scope at consent (every project and person, 12 hours) and may view an app as someone
-   *  else (consent.ts); every admission of such a grant reads the list again, so removing an
-   *  address ends its admin grants and impersonations at their next request (oauth.ts). Unset ⇒
+   *  `admin` scope at consent (every project and person, 12 hours) and may sign any client in as
+   *  someone else (consent.ts); every admission of such a grant reads the list again, so removing an
+   *  address ends its admin grants and impersonations at their next request (oauth.ts). Refused
+   *  beside `login.password` but on a preview or local dev (`parseAppConfig`). Unset ⇒
    *  nobody. The operator bearer is not a person and needs no entry. */
   admins: z
     .array(
@@ -422,6 +423,13 @@ export function parseAppConfig(env: object, deployId = "unversioned"): AppConfig
     throw new Error(
       `${fieldNameOf(["login", "testLink"])}: only for a preview, local dev or a test — urls.os must be a workers.dev, localhost or .test origin, not ${JSON.stringify(urls.os)}`,
     );
+  // Anyone who knows the global password signs in as any email they type — a listed admin's too,
+  // and an admin reaches every project and signs in as anyone. So the two go together only where
+  // nobody's real data lives.
+  if (parsed.admins.length && login.password.exposeSecret() && !isTestLinkOrigin(urls.os))
+    throw new Error(
+      `${fieldNameOf(["admins"])}: not with login.password — anyone with the password could sign in as an admin — except for a preview, local dev or a test (urls.os a workers.dev, localhost or .test origin), not ${JSON.stringify(urls.os)}`,
+    );
   // Off a laptop (or a `.test` origin, never public), a link alone signs nobody in: its redeemer proves at another issuer that they
   // are one of `admins.emails` (test-link.ts). A preview's origin is public, and so is its PR body.
   if (login.testLink && !login.testLink.admins && !isLocalOrTestOrigin(urls.os))
@@ -459,7 +467,8 @@ export function parseAppConfig(env: object, deployId = "unversioned"): AppConfig
   };
 }
 
-/** An origin test links may be honoured on (`login.testLink`): an https workers.dev one (a per-PR
+/** An origin test links (`login.testLink`), and `admins` beside the global password, may be
+ *  honoured on: an https workers.dev one (a per-PR
  *  preview's), localhost's, or one under `.test` (RFC 2606: never a public name — the workers
  *  suite's). A blank `urls.os` is none of them: it must be named. */
 function isTestLinkOrigin(origin: string) {

@@ -1,5 +1,5 @@
 // __workers-tests__/admin-and-impersonation.test.ts — the platform admin (app-config.ts `admins`,
-// wrangler.test.jsonc lists oauth-admin@example.com): the `admin` scope and viewing an app as
+// wrangler.test.jsonc lists oauth-admin@example.com): the `admin` scope and signing a client in as
 // someone else, through the real sign-in, consent, code exchange and admission.
 import { env } from "cloudflare:workers";
 import { expect, test } from "vitest";
@@ -76,7 +76,7 @@ test("the admin scope: offered and granted to a listed address alone, every proj
   await expect(Promise.resolve(theirRoot.global)).rejects.toThrow(/Only a platform admin/);
 });
 
-test("viewing an app as someone: the person's grant for an hour with the admin beside them on every event, audited on their account, their own sign-ins untouched; refused to anyone else", async () => {
+test("signing a client in as someone: offered to an admin alone, the person's grant for an hour with the admin beside them on every event, audited on both accounts, marked in their Sessions, their own sign-ins untouched", async () => {
   fetchReachesThisWorker();
   const target = await approverFor("impersonated@example.com");
   using _project = await (
@@ -88,17 +88,26 @@ test("viewing an app as someone: the person's grant for an hour with the admin b
   const own = await authorize(target.approver, { scope: "iterate account" });
   const admin = await approverFor(ADMIN);
 
-  const viewed = await authorize(admin.approver, {
+  const signedIn = await authorize(admin.approver, {
     scope: "iterate account admin",
-    actAs: target.user.email,
+    impersonate: target.user.email,
   });
-  expect(viewed.view).toMatchObject({
-    kind: "impersonate",
-    target: target.user.email,
+  // the ordinary consent page, with the picker's facts for the admin: whom, and who the client is
+  expect(signedIn.view).toMatchObject({
+    kind: "consent",
     email: ADMIN,
+    impersonation: {
+      resource: "API",
+      redirectHost: "client.test",
+      ownApp: false,
+      scopes: [{ name: "iterate" }, { name: "account" }],
+    },
   });
-  expect(viewed.scope?.split(" ").sort()).toEqual(["account", "iterate"]);
-  const authorization = await authorizationForToken(env, viewed.token!, addresses, "api");
+  expect(signedIn.view.kind === "consent" && signedIn.view.impersonation?.people).toContain(
+    target.user.email,
+  );
+  expect(signedIn.scope?.split(" ").sort()).toEqual(["account", "iterate"]);
+  const authorization = await authorizationForToken(env, signedIn.token!, addresses, "api");
   expect(authorization).toMatchObject({
     principal: {
       actor: target.user.id,
@@ -116,8 +125,8 @@ test("viewing an app as someone: the person's grant for an hour with the admin b
     principal: { actor: target.user.id },
   });
 
-  // what the viewing session does is stamped with both people
-  const { root } = await rpc(viewed.token!);
+  // what the session does is stamped with both people
+  const { root } = await rpc(signedIn.token!);
   using context = await root.projects.get(project.id);
   const [appended] = await context.append({ type: "impersonation-probe" });
   expect(appended!.source?.principal).toEqual({
@@ -126,31 +135,68 @@ test("viewing an app as someone: the person's grant for an hour with the admin b
     impersonatedBy: { actor: admin.user.id, email: ADMIN },
   });
 
-  // the person's account records who started it, before the grant existed
-  const account = (
-    (await stub(`global.iterate/users/${target.user.id}`).invoke([
-      "itx",
-      ["readEvents", 0, 500],
-    ])) as { events: StreamEvent[] }
-  ).events.find((event) => event.type === "events.iterate.com/account/impersonation-started");
-  expect(account).toMatchObject({
-    payload: { impersonatedBy: { userId: admin.user.id, email: ADMIN } },
+  // the person's Sessions list the grant, marked with the admin
+  const { root: theirs } = await rpc(own.token!);
+  const grantId = authorization!.grant!.grantId;
+  expect((await theirs.grants.list()).items.find((item) => item.id === grantId)).toMatchObject({
+    impersonatedBy: ADMIN,
+  });
+
+  // both accounts record it, with the grant's id, the admin the principal of each record
+  const started = (await accountEvents(target.user.id)).find(
+    (event) => event.type === "events.iterate.com/account/impersonation-started",
+  );
+  expect(started).toMatchObject({
+    payload: { grantId, scopes: ["iterate", "account"], clientName: "Admin integration" },
+    source: { principal: { actor: admin.user.id, email: ADMIN }, platform: true },
+  });
+  const performed = (await accountEvents(admin.user.id)).find(
+    (event) => event.type === "events.iterate.com/account/impersonation-performed",
+  );
+  expect(performed).toMatchObject({
+    payload: { grantId, target: { userId: target.user.id, email: target.user.email } },
     source: { principal: { actor: admin.user.id, email: ADMIN }, platform: true },
   });
 
-  // the admin leaving the list ends the impersonation at its next request
+  // the admin leaving the list ends it at its next request
   expect(
-    await authorizationForToken(listing(["someone@example.com"]), viewed.token!, addresses, "api"),
+    await authorizationForToken(
+      listing(["someone@example.com"]),
+      signedIn.token!,
+      addresses,
+      "api",
+    ),
   ).toBeNull();
 
-  // anyone but an admin is refused, with the reason on the page
-  const refused = await authorize(target.approver, { scope: "iterate", actAs: ADMIN });
-  expect(refused.view).toMatchObject({
-    kind: "invalid",
-    description: expect.stringMatching(/only a platform admin/),
+  // for /mcp too, the person's reach: the `admin` rule is the only one /mcp adds
+  const mcp = await authorize(admin.approver, {
+    scope: "iterate admin",
+    resource: addresses.mcp,
+    impersonate: target.user.email,
   });
-  expect(refused.error).toMatch(/only a platform admin/);
+  expect(mcp.view).toMatchObject({ impersonation: { resource: "MCP" } });
+  expect(mcp).toMatchObject({ scope: "iterate" });
+
+  // anyone but an admin is offered nothing and refused when they post it anyway
+  const refused = await authorize(target.approver, { scope: "iterate", impersonate: ADMIN });
+  expect(refused.view.kind === "consent" && refused.view.impersonation).toBeUndefined();
+  expect(refused.error).toMatch(/Only a platform admin/);
+  // and nobody is named through the authorization URL: `act_as` there is an unknown parameter
+  const named = await authorize(target.approver, { scope: "iterate", actAs: ADMIN });
+  expect(named.view).toMatchObject({ kind: "consent", email: target.user.email });
+  expect(await authorizationForToken(env, named.token!, addresses, "api")).toMatchObject({
+    principal: { actor: target.user.id },
+  });
 });
+
+/** Everything on `userId`'s account log. */
+async function accountEvents(userId: string) {
+  return (
+    (await stub(`global.iterate/users/${userId}`).invoke(["itx", ["readEvents", 0, 500]])) as {
+      events: StreamEvent[];
+    }
+  ).events;
+}
 
 /** The consent capability of `email`'s issuer session, signed in with the password. */
 async function approverFor(email: string) {
@@ -162,11 +208,12 @@ async function approverFor(email: string) {
   return { approver, user: await controlPlane().ensureUser(email) };
 }
 
-/** A client's authorization for `scope` on `resource`, `act_as` added when given, approved by
- *  `approver` with every project, and its code exchanged: the access token, or the refusal. */
+/** A client's authorization for `scope` on `resource` (`act_as` in its query when given), approved
+ *  by `approver` with every project — or as the person `impersonate` names — and its code
+ *  exchanged: the access token, or the refusal. */
 async function authorize(
   approver: Awaited<ReturnType<typeof approverFor>>["approver"],
-  input: { scope: string; resource?: string; actAs?: string },
+  input: { scope: string; resource?: string; actAs?: string; impersonate?: string },
 ) {
   const client = await helpers().createClient({
     clientName: "Admin integration",
@@ -181,7 +228,11 @@ async function authorize(
   query.set("scope", input.scope);
   if (input.actAs) query.set("act_as", input.actAs);
   const view = await approver.consent.describe(`?${query}`);
-  const approval = await approver.consent.approve({ query: `?${query}`, projects: ["*"] });
+  const approval = await approver.consent.approve({
+    query: `?${query}`,
+    projects: ["*"],
+    impersonate: input.impersonate,
+  });
   if ("error" in approval) return { view, error: approval.error };
   const code = new URL(approval.redirectTo).searchParams.get("code")!;
   const response = await call("/oauth2/token", {

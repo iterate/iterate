@@ -1,7 +1,8 @@
 // The Admin app (apps/admin): a platform admin — a person `APP_CONFIG.admins` lists, signed in with
-// the `admin` scope — sees every project and person, opens any context of a project or of the
-// global namespace, and views the Dash as someone else for an hour: the session is theirs, every
-// event names the admin beside them, and Stop impersonating signs the Dash back in as the admin.
+// the `admin` scope — sees every project and person, and opens any context of a project or of the
+// global namespace. And any app signs such an admin in as someone else for an hour, from the
+// issuer's consent ("Sign in as someone else…"): the session is theirs, every event names the admin
+// beside them, and Stop impersonating signs the app back in as the admin.
 import { expect, type Page } from "@playwright/test";
 import { signInWithPassword } from "../test-support/issuer.ts";
 import { test } from "../test-support/test.ts";
@@ -10,7 +11,7 @@ import { test } from "../test-support/test.ts";
 // `PREVIEW_ADMIN_EMAIL`, generate-wrangler-config.ts)
 const ADMIN_EMAIL = "admin@preview.iterate.test";
 
-test("an admin opens any project's contexts and the global namespace, and views the Dash as another person", async ({
+test("an admin opens any project's contexts and the global namespace, and signs the Dash in as another person", async ({
   page,
   helpers,
 }) => {
@@ -53,21 +54,35 @@ test("an admin opens any project's contexts and the global namespace, and views 
       .waitFor();
   });
 
-  // view the Dash as the person, append as them, stop
-  await page.getByRole("link", { name: "Users", exact: true }).click();
-  await page
-    .getByRole("row")
-    .filter({ hasText: person })
-    .getByRole("link", { name: "View dash as", exact: true })
-    .click();
-  // noWaitAfter: View as posts to the issuer, which hands the browser back to the Dash through its
-  // sign-in callback; the next locator waits for that (the spinner-waiter counts a navigation in
-  // flight as loading), not the click's tight action timeout
-  await page
-    .getByRole("button", { name: `View as ${person}`, exact: true })
-    .click({ noWaitAfter: true });
+  await test.step("sign in to the Dash as the admin", async () => {
+    await page.goto(`${dash}/projects`);
+    await authorize(page);
+  });
+
+  await test.step("Switch account… and sign the Dash in as the person", async () => {
+    await page.getByRole("button", { name: "Account", exact: true }).click();
+    // noWaitAfter: Switch account… posts to the Dash's logout and signs in again, navigating
+    await page
+      .getByRole("menuitem", { name: "Switch account…", exact: true })
+      .click({ noWaitAfter: true });
+    // the Dash's logout → its login → the issuer's consent, where the admin alone gets the link
+    await page.getByRole("button", { name: "Sign in as someone else…", exact: true }).click({
+      // timeout: no loading UI can show mid-redirect, so the spinner-waiter has nothing to extend by
+      timeout: 10_000,
+    });
+    await page.getByRole("combobox", { name: "Their email", exact: true }).fill(person);
+    // the confirm names the client as the platform verified it, and what it would hold
+    await page.getByRole("region", { name: "The client" }).getByText("Resource").waitFor();
+    // noWaitAfter: the confirm posts and the issuer hands the browser back to the Dash
+    await page
+      .getByRole("button", { name: `Sign iterate Dash in as ${person} for an hour`, exact: true })
+      .click({ noWaitAfter: true });
+    await page.getByText(`You are ${ADMIN_EMAIL}`).waitFor({
+      // timeout: no loading UI can show mid-redirect, so the spinner-waiter has nothing to extend by
+      timeout: 10_000,
+    });
+  });
   const marker = page.getByRole("button", { name: "Stop impersonating", exact: true });
-  await page.getByText(`You are ${ADMIN_EMAIL}`).waitFor();
 
   await page.goto(`${dash}/projects/${fixture.project.slug}/contexts/demo/one`);
   await page.getByRole("button", { name: "Append event", exact: true }).click();
