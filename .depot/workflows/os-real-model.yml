@@ -76,15 +76,12 @@ jobs:
         run: doppler setup --config preview --project os
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-      # --settle: the readiness gate holds 150 s, past the window an in-place redeploy's old version
-      # still answers in (up to ~100 s measured), so its reset lands on a probe, never on a REAL: row
-      # (apps/os/scripts/preview-readiness.ts).
       - name: Redeploy the preview in place
         working-directory: apps/os
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           PREVIEW_APPS: none
-        run: doppler run -- pnpm preview deploy --settle 150
+        run: doppler run -- pnpm preview deploy
       # The files that hold the REAL: rows, opted in. A failed row is the judge's verdict, so it does
       # not stop the job here. Credentials: the preview's parent's APP_CONFIG (e2e/support/global-setup.ts).
       - name: Run the real-model rows

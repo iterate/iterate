@@ -851,17 +851,21 @@ deletes. The latency guard does the same with `latency`, and the real-model suit
 
 A brand-new preview's Durable Objects answer Cloudflare's `internal error; reference = …` for
 10–40 s after it is created, and the deploy's readiness gate (`apps/os/scripts/preview-readiness.ts`)
-waits that out, or fails the deploy after 60 s. A preview redeployed in place has no such window,
-but it has another: on some hosts its Durable Objects keep running the previous version for up to
-~100 s, then reset with "Durable Object reset because its code was updated.", failing every call in
-flight. The gate cannot see that window, since the old version answers, so these workflows deploy
-with `--settle 150`: the gate keeps probing for 150 s and the reset lands on a probe.
+waits that out. A preview redeployed in place has no such window, but it has another: Cloudflare
+releases the new version eventually consistently, so for a while an edge can still serve the
+previous version and a brand-new Durable Object can still start on it, and an object on it later
+resets with "Durable Object reset because its code was updated.", failing every call in flight. So
+each of the gate's probes also asks which version its edge and four brand-new contexts run (the
+operator's `session.versions`), and the gate passes once five rounds in a row run the deployment
+everywhere. It fails the deploy after 150 s. A PR's preview, redeployed in place on every push, goes
+through the same gate.
 
-Soaks of the e2e suite at `--retry=0` (`os-e2e-soak.yml`, 2026-09-24) counted the runs with a row
-that failed on a platform signature. Brand-new previews behind the gate: 3 of 52. Redeployed in
-place, e2e as soon as the gate passed: 7 of 48, 30 of their 39 rows "code was updated". Redeployed
-in place with `--settle 150`: 1 of 20. About one run in twenty keeps one such row either way (a
-storage reset, "no longer active"), and CI's one retry absorbs it.
+Soaks of the e2e suite at `--retry=0` (`os-e2e-soak.yml`, 2026-09-24), every run redeployed in place:
+with e2e as soon as a gate without the version check passed, 7 of 48 runs had a row fail on a
+platform signature, 30 of their 39 rows "code was updated". Held 150 s instead (`--settle 150`), the
+deploy's start to the first test took 173 s at the median. With the version check, it took 36 s
+(p90 67 s), and no row failed "code was updated" in 29 runs. About one run in twenty keeps a
+platform row either way (a storage reset, "no longer active"), and CI's one retry absorbs it.
 
 - Each workflow's runs are serialized (`cancel-in-progress: false`), so no deploy lands under another
   run's tests.

@@ -1,5 +1,5 @@
-// scripts/preview-readiness.ts — IS A BRAND-NEW WORKER PREVIEW READY FOR TRAFFIC? `/version` naming
-// the deployment (the deploy's smoke) proves the stateless Worker serves the new code. It does not
+// scripts/preview-readiness.ts — IS A WORKER PREVIEW READY FOR TRAFFIC? `/version` naming the
+// deployment (the deploy's smoke) proves the stateless Worker serves the new code. It does not
 // prove what every e2e row needs next: a WebSocket upgrade on `/api`, and a Durable Object — a fresh
 // context and a facet it hosts — answering over it. On a brand-new preview they do not, for seconds
 // after `/version` does: the preview's freshly provisioned Durable Object namespace answers calls
@@ -16,23 +16,28 @@
 // (docs/engineering-invariants.md), naming what answered: the upgrade's HTTP status and body, or
 // the RPC error. A preview still missing at the deadline fails the deploy with those misses.
 //
-// AN IN-PLACE REDEPLOY has its own window: its Durable Objects keep running the previous version on
-// some hosts for up to ~100 s after `wrangler preview` starts (Workers Logs, 48 soak redeploys), then
-// reset with "Durable Object reset because its code was updated.", failing every call in flight. The
-// rounds pass meanwhile, since the old version answers them. `holdMs` keeps the rounds going that
-// long (every probe's `whoami` calls its context's Durable Object), so the reset lands on a probe
-// instead of on e2e.
+// A PREVIEW REDEPLOYED IN PLACE answers at once, partly on the previous version: Cloudflare releases
+// a new version eventually consistently ("typically seconds to minutes",
+// https://developers.cloudflare.com/durable-objects/platform/known-issues/#code-updates). For a while
+// an edge can still serve it and a brand-new Durable Object can still start on it, and an object on
+// it later resets with "Durable Object reset because its code was updated.", failing every call in
+// flight. So each probe also asks the operator's `session.versions` (src/session.ts) which version
+// its edge, its own context and more brand-new ones run, and misses (`stage: "version"`) when any is
+// not the deploy's: the gate passes once `consecutive` rounds in a row run the deploy's version
+// everywhere they look.
 import { randomBytes, randomUUID } from "node:crypto";
 import { request } from "node:https";
 import { newWebSocketRpcSession } from "capnweb";
 import { WebSocket } from "undici";
 
-/** Wait until the preview at `url` answers `consecutive` full rounds in a row, each `width` probes
- *  at once; throws, naming the misses, when `deadlineMs` passes first. */
+/** Wait until the preview at `url` answers `consecutive` full rounds in a row on `version` (the
+ *  deployment's id), each `width` probes at once; throws, naming the misses, when `deadlineMs` passes
+ *  first. */
 export function awaitPreviewReady(
   url: string,
   options: {
     adminSecret: string;
+    version: string;
     width: number;
     consecutive: number;
     deadlineMs: number;
@@ -112,18 +117,27 @@ type ProbeMiss = { ok: false; stage: string; detail: string };
 type ProbeOutcome = { ok: true; ms: number } | ProbeMiss;
 
 /** `width` probes at once, each on its own connection and its own fresh context. */
-function probeRound(url: string, options: { adminSecret: string; width: number }) {
-  return Promise.all(Array.from({ length: options.width }, () => probe(url, options.adminSecret)));
+function probeRound(url: string, options: { adminSecret: string; version: string; width: number }) {
+  return Promise.all(
+    Array.from({ length: options.width }, () => probe(url, options.adminSecret, options.version)),
+  );
 }
+
+/** How many brand-new contexts each probe asks the version of: its own and three that exist only to
+ *  be asked. A brand-new Durable Object starts on whichever version its host runs, so the gate
+ *  samples placements: with one per probe, 6 of 48 soak redeploys still had an e2e context start on
+ *  the previous version after the gate passed; with four, 2 of 48 (2026-09-24). */
+const CONTEXTS_PER_PROBE = 4;
 
 /** ONE PROBE, at most 20 s: a bare upgrade of `/api` (its status and body are the evidence when it
  *  fails — a WebSocket client never sees them), then a capnweb session on a second socket: `whoami`
  *  on a fresh project context (the context Durable Object), a secret set there (a facet it hosts,
  *  SecretDurableObject) and a one-line `run` (a loaded isolate through the Worker Loader) — the
- *  three things the e2e rows that failed on brand-new previews were doing. The project is
- *  `prj_readiness_<uuid>`, one per probe, so every probe materializes a Durable Object that never
- *  existed. A miss names the step it stopped at. */
-async function probe(url: string, adminSecret: string): Promise<ProbeOutcome> {
+ *  three things the e2e rows that failed on brand-new previews were doing — then `versions`, which
+ *  version its edge, that context and more brand-new ones run. Every project is
+ *  `prj_readiness_<uuid>`, so every probe materializes Durable Objects that never existed. A miss
+ *  names the step it stopped at. */
+async function probe(url: string, adminSecret: string, version: string): Promise<ProbeOutcome> {
   const started = Date.now();
   const at = { stage: "upgrade" };
   // What the capnweb transport folds into "WebSocket connection failed.": undici's reason for
@@ -158,17 +172,30 @@ async function probe(url: string, adminSecret: string): Promise<ProbeOutcome> {
             };
           };
         };
+        versions(projectIds: string[]): Promise<{ edge: string; contexts: string[] }>;
       };
     }>(socket as unknown as globalThis.WebSocket);
-    const itx = rpc
-      .authenticate({ type: "admin-secret", secret: adminSecret })
-      .projects.get(`prj_readiness_${randomUUID().replaceAll("-", "")}`);
+    const session = rpc.authenticate({ type: "admin-secret", secret: adminSecret });
+    const [project, ...more] = Array.from(
+      { length: CONTEXTS_PER_PROBE },
+      () => `prj_readiness_${randomUUID().replaceAll("-", "")}`,
+    );
+    const itx = session.projects.get(project);
     at.stage = "whoami";
     await itx.whoami();
     at.stage = "secrets.set";
     await itx.secrets.set("/secrets/readiness", "probe", { urls: ["https://readiness.invalid"] });
     at.stage = "run";
     await itx.run("async () => 'ready'");
+    at.stage = "version";
+    const { edge, contexts } = await session.versions([project, ...more]);
+    const behind = [
+      ...(edge === version ? [] : [`the edge runs ${edge}`]),
+      ...contexts
+        .filter((context) => context !== version)
+        .map((context) => `a brand-new context runs ${context}`),
+    ];
+    if (behind.length > 0) throw new Error(`${behind.join("; ")}, not ${version}`);
   };
   try {
     await withTimeout(steps(), 20_000);

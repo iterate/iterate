@@ -651,21 +651,22 @@ async function deployOsPreview(
     ),
   );
   // `/version` answering is not the preview answering: a brand-new preview's Durable Objects
-  // answer `internal error; reference = …` for seconds after it (preview-readiness.ts; 19 of 20
-  // brand-new previews on 2026-09-24, for 6–27 s). Nothing is handed on — the PR body's links,
-  // the sign-in seed, main's e2e job — until five rounds of eight in a row answer in full; a
-  // preview that does not within a minute fails the deploy, naming what it answered. `--settle`
-  // holds the rounds past an in-place redeploy's window, when the old version still answers
-  // (preview-readiness.ts): the CI workflows' own previews, redeployed in place by every run.
+  // answer `internal error; reference = …` for seconds after it (19 of 20 brand-new previews on
+  // 2026-09-24, for 6–27 s), and a preview redeployed in place still runs the previous version in
+  // places (preview-readiness.ts). Nothing is handed on — the PR body's links, the sign-in seed,
+  // the e2e job — until five rounds of eight in a row answer in full on this deployment. A preview
+  // that does not within 150 s fails the deploy, naming what it answered: the slowest of 29
+  // in-place soak redeploys took 68 s (2026-09-24). `--settle` holds the rounds that long besides.
   await traceOperation("Readiness gate", () =>
     awaitPreviewReady(url, {
       adminSecret: parseAppConfig(
         collectSecrets(ctx, ["APP_CONFIG", "APP_CONFIG_SECRETS__KEY"]),
       ).secrets.adminBearer.exposeSecret(),
+      version: deploymentId,
       width: 8,
       consecutive: 5,
       holdMs: settleMs,
-      deadlineMs: settleMs + 60_000,
+      deadlineMs: settleMs + 150_000,
     }),
   );
   return { url, deploymentId, slug: data.preview?.slug || previewName };
