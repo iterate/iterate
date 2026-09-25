@@ -108,9 +108,3 @@ rather than trusting the page: `iterate itx run` against the preview
 `iterate --config preview login` and `iterate --config preview itx run …`).
 Live views update over a WebSocket; if one does not update, check the server
 state before calling it a UI bug.
-
-## Performance evidence in the browser
-
-Loading-speed work records the captures the
-[performance playbook](../.agents/skills/os-web-performance/references/playbook.md#measure-what-people-get)
-lists.
