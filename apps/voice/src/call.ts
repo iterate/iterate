@@ -4,7 +4,7 @@
 // microphone frames go up as ephemeral appends, twenty a second; hanging up appends the terminal.
 
 // registers `itx.voice` on InstalledAppRoots
-import type {} from "../../agents/voice/api.ts";
+import type {} from "@iterate-com/voice";
 import type { IterateContextApiWith } from "iterate/api";
 import type { AuthenticatedApp } from "iterate/app";
 import { base64ToInt16, int16ToBase64, type AudioSession } from "./audio.ts";

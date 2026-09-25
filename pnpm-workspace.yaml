@@ -9,9 +9,11 @@ packages:
   - apps/spa
   - apps/dummy-petshop
   - apps/ci-reports
+  - packages/agents
   - packages/cli
   - packages/iterate
   - packages/petshop-sdk
+  - packages/voice
   - packages/shared
   - packages/ui
   - lint

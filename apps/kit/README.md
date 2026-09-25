@@ -29,10 +29,12 @@ platform's address. **Set up another device** keeps the platform.
 Preparing installs voice when missing. The form asks for an OpenAI API key as soon as the
 picked project turns out to have none. It verifies voice health before minting a ten-year token scoped to the
 chosen project, under the same OAuth client that was authorized. Existing voice
-services, secrets and project websites are preserved. Immutable voice files live
-under `voice/` in project KV; the `itx.voice` mount is published only after all
-uploads succeed. The installer is `apps/agents/voice/install.ts`, shared with voice.iterate.com,
-which installs voice without a device.
+services, secrets and project websites are preserved. Voice is the npm package
+`@iterate-com/voice`, on the agents app `@iterate-com/agents`: the project's config repo
+gets an `agents/` and a `voice/` folder that pin the builds of the commit Kit was built
+from and re-export them, and both are installed from those folders. The installer is
+`@iterate-com/voice/install`, shared with voice.iterate.com, which installs voice
+without a device.
 
 Client metadata lives at `k.iterate.com/devices/<model>/clients/<uuid>.json`. The
 flashed token appears as `Kit <board> <date>` with kind **Device** in your sessions

@@ -9,6 +9,7 @@
  *   generate-route-tree        regenerate src/routeTree.gen.ts outside `vite dev`/`vite build`; `--check`
  *                              fails (and restores the file) when the checked-in tree is stale
  */
+import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -29,6 +30,16 @@ import { deployApp } from "./deploy-app.ts";
 import { ensureProxiedDnsRecord, viteBuild } from "./deploy-helpers.ts";
 import { resolveEnvContext, type DeployableEnv } from "./env-context.ts";
 import { COMPATIBILITY_DATE, OBSERVABILITY, registrableDomainOf } from "./wrangler-config.ts";
+
+/** The commit an app is built from, as vite.config.ts defines it for the client
+ *  (`import.meta.env.VITE_SOURCE_COMMIT`): a preview's PR head (the deploy step's PREVIEW_HEAD_SHA,
+ *  since a preview builds the PR merged into main), else the checkout's. An app that installs this
+ *  repository's packages into a project pins that commit's pkg.pr.new build when there is one. */
+export function sourceCommit(): string {
+  if (process.env.PREVIEW_HEAD_SHA) return process.env.PREVIEW_HEAD_SHA;
+  const result = spawnSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" });
+  return result.status === 0 ? result.stdout.trim() : "";
+}
 
 /** One deployed environment of a start app: what every deploy needs, plus the worker and its origin. */
 export interface StartAppEnv extends DeployableEnv {

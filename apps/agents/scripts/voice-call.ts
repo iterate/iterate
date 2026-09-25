@@ -14,7 +14,7 @@
 //
 // ITERATE_BEARER_TOKEN is a personal access token for the project
 // (`pnpm exec iterate --config prd tokens create`). PROJECT=prj-voice.
-import type {} from "../voice/api.ts";
+import type {} from "@iterate-com/voice";
 import { readFileSync, writeFileSync } from "node:fs";
 import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
 import type { RpcStub } from "capnweb";

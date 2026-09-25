@@ -129,7 +129,7 @@ test("every request starts the app's Worker but its static files: vite's /assets
   expect(dash.assets).toMatchObject({
     run_worker_first: ["/*", "!/assets/*", "!/client-logo.svg"],
   });
-  // a directory of public files is one rule; kit's public/ also holds the gitignored voice-install.json once built
+  // a directory of public files is one rule
   const kit = startAppWorkerConfig(
     { name: "kit", root: new URL("../../apps/kit/", import.meta.url), envs: kitEnvs },
     "prd",

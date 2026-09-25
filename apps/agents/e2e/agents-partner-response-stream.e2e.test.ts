@@ -2,12 +2,12 @@
 // transport. Whole-JSON fixtures cannot cover incremental delivery or Response metadata.
 import { RpcTarget } from "capnweb";
 import { expect } from "vitest";
+import { AI_TRANSPORT_SOURCE } from "@iterate-com/agents/ai-transport-source";
+import { installAgents } from "@iterate-com/agents/install";
 import { collector, freshCtx, readAll, rejection, until } from "../../os/e2e/support/client.ts";
 import { startOwnWorker } from "../../os/e2e/support/own-worker.ts";
 import { localOnly } from "../../os/e2e/support/project-host.ts";
-import { agentRuntimeSource } from "../src/lib/agent-runtime-source.ts";
-import { AI_TRANSPORT_SOURCE } from "../../../configs/with-agents/agents/ai-transport-source.ts";
-import { installAgents } from "../../../configs/with-agents/agents/install.ts";
+import { agentsWorkspaceSource } from "./agents-source.ts";
 import { assistantWords, configureModel, settledLog } from "./fixtures.ts";
 
 class DeferredResponsesAi extends RpcTarget {
@@ -127,7 +127,7 @@ localOnly(
     const worker = await startOwnWorker();
     try {
       const itx = worker.itx(freshCtx("agent-partner-stream"));
-      await installAgents(itx, agentRuntimeSource);
+      await installAgents(itx, agentsWorkspaceSource);
       const support = itx.cd("/agents/support");
       const partnerAi = new DeferredResponsesAi();
       await support.provide("itx.ai", partnerAi);

@@ -1,3 +1,4 @@
+/// <reference path="./markdown.d.ts" />
 /**
  * The voice service, explicitly mounted at `itx.voice`, is what
  * a device calls on the button press:
@@ -7,24 +8,33 @@
  * Normal agent creation establishes the parent link, sandbox and catalog entry. Then the voice
  * processors replace the default agent processor: one append installs their subscriptions and
  * starts the call, so the relay dials the provider before the first microphone frame arrives.
- * The device carries no source or class name; the bundles live in the project's KV.
+ * The device carries no source or class name: both facets load the project's installed voice
+ * source, the one this worker runs (install.ts keeps it in project KV).
  */
+import type {} from "@iterate-com/agents";
+// registers `itx.agents` on InstalledAppRoots
 import { bytesToBase64 } from "@iterate-com/shared/base64";
 import type { IterateContextApiWith } from "iterate/api";
-import { ConfigWorker } from "iterate/sdk";
+import { ConfigWorker, z } from "iterate/sdk";
 import type { VoiceApi } from "./api.ts";
 import { VOICE_DELEGATE_CONSUMES } from "./events.ts";
-import { ScreenInfo, ScreenImageInput, renderScreenPixels } from "./screen.js";
+import { ScreenInfo, ScreenImageInput, renderScreenPixels } from "./screen.ts";
 import SCREEN_CONTEXT from "./screen-context.md";
 
-/* Replaced by the installer with the bundle's content hash (the voice-delegate facet's key is inlined at its
- * row below): the loader caches an isolate under the key, so a new build must be a new key. */
-const VOICE_AGENT_CACHE_KEY = "voice-agent:dev";
+/** What install.ts writes at `voice/runtime`: the installed source and its content hash, which the
+ *  loader caches an isolate under, so a new source is a new key. */
+const VoiceRuntime = z.object({
+  cacheKey: z.string().min(1),
+  source: z.record(z.string(), z.string()),
+});
 
 export default class VoiceWorker extends ConfigWorker implements VoiceApi {
   async health() {
-    const { projectId } = await this.withItx((itx) => itx.whoami());
-    return { ok: true as const, projectId, cacheKey: VOICE_AGENT_CACHE_KEY };
+    const { projectId, cacheKey } = await this.withItx(async (itx) => ({
+      ...(await itx.whoami()),
+      ...(await installedRuntime(itx)),
+    }));
+    return { ok: true as const, projectId, cacheKey };
   }
 
   /** Render to the resolution and pixel format advertised by the target. */
@@ -157,6 +167,7 @@ export default class VoiceWorker extends ConfigWorker implements VoiceApi {
     return this.withItx(async (scope) => {
       // `itx.agents` is the rewrite rule the agents app mounts, which install.ts requires first.
       const itx = scope as IterateContextApiWith<"agents">;
+      const { cacheKey, source } = await installedRuntime(itx);
       // Normal agent creation establishes the creator link and script sandbox before
       // either loaded voice processor needs project code, egress or tools.
       await itx.agents.create(streamPath);
@@ -170,15 +181,7 @@ export default class VoiceWorker extends ConfigWorker implements VoiceApi {
             target: [
               "itx",
               "facets",
-              [
-                "get",
-                "voice-agent",
-                {
-                  source: "itx.kv.get('voice-agent.js')",
-                  cacheKey: VOICE_AGENT_CACHE_KEY,
-                  className: "VoiceAgentDurableObject",
-                },
-              ],
+              ["get", "voice-agent", { source, cacheKey, className: "VoiceAgentDurableObject" }],
               "processEventBatch",
             ],
             /* Every durable event, plus the two ephemeral types a processor only sees by name. */
@@ -200,12 +203,7 @@ export default class VoiceWorker extends ConfigWorker implements VoiceApi {
               [
                 "get",
                 "voice-delegate",
-                {
-                  source: "itx.kv.get('voice-delegate.js')",
-                  /* Substituted by the installer with voice-delegate.js's content hash, like the voice key. */
-                  cacheKey: "voice-delegate:dev",
-                  className: "VoiceDelegateDurableObject",
-                },
+                { source, cacheKey, className: "VoiceDelegateDurableObject" },
               ],
               "processEventBatch",
             ],
@@ -238,4 +236,11 @@ export default class VoiceWorker extends ConfigWorker implements VoiceApi {
       return { streamPath };
     });
   }
+}
+
+/** The voice source the project installed (install.ts). */
+async function installedRuntime(itx: { kv: { get(key: string): Promise<string | null> } }) {
+  const stored = await itx.kv.get("voice/runtime");
+  if (!stored) throw new Error("Voice is not installed: project KV has no voice/runtime");
+  return VoiceRuntime.parse(JSON.parse(stored));
 }

@@ -3,13 +3,12 @@ import { tanstackStart } from "@tanstack/react-start/plugin/vite";
 import tailwindcss from "@tailwindcss/vite";
 import viteReact from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
-import { startAppWorkerConfig } from "../../scripts/lib/start-app.ts";
-import { writeVoiceInstall } from "../agents/scripts/build-voice-install.ts";
+import { sourceCommit, startAppWorkerConfig } from "../../scripts/lib/start-app.ts";
 import { kit } from "./scripts/app.ts";
 
-await writeVoiceInstall(new URL("./public/voice-install.json", import.meta.url));
-
 export default defineConfig({
+  // the installers pin the packages this commit published (@iterate-com/agents, @iterate-com/voice)
+  define: { "import.meta.env.VITE_SOURCE_COMMIT": JSON.stringify(sourceCommit()) },
   plugins: [
     cloudflare({
       viteEnvironment: { name: "ssr" },

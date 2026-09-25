@@ -8,8 +8,8 @@ Its SIL Open Font License is in `press-start-2p-OFL.txt`.
 - [Google Fonts family](https://fonts.google.com/specimen/Press+Start+2P)
 - [Upstream font and license](https://github.com/google/fonts/tree/main/ofl/pressstart2p)
 
-`apps/agents/scripts/build-voice-install.ts` embeds this font in `pixel-font.css` and stores that CSS in
-a content-addressed `voice/…/screen-font.css` project KV entry. A rendering script inserts
+`src/screen-font.ts` is `pixel-font.css` with this font embedded, and the installer stores it at
+`voice/screen-font.css` in project KV. A rendering script inserts
 the CSS into its HTML; Chromium needs no external font request. The model never
 needs to generate or read the font's base64 bytes. The CSS family name is
 `Iterate Pixel`; use normal weight at 16px or 24px with integer positions.

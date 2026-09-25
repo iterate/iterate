@@ -19,8 +19,10 @@
     "firmware:build": "node ./scripts/firmware-release.ts build"
   },
   "dependencies": {
+    "@iterate-com/agents": "workspace:*",
     "@iterate-com/shared": "workspace:*",
     "@iterate-com/ui": "workspace:*",
+    "@iterate-com/voice": "workspace:*",
     "@tanstack/react-query": "^5.103.2",
     "@tanstack/react-router": "catalog:",
     "@tanstack/react-start": "catalog:",

@@ -8,7 +8,7 @@ import { build } from "esbuild";
 import { expect, test, vi } from "vitest";
 
 // oxlint-disable-next-line import-js/no-restricted-paths -- the fake `itx`'s append refuses what the platform's app wall refuses: a fake borrowing the real policy, never runtime code crossing the line
-import { admitLoadedCodeRow } from "../../os/src/context/itx-expression-rewriting.ts";
+import { admitLoadedCodeRow } from "../../../apps/os/src/context/itx-expression-rewriting.ts";
 
 // Whichever row runs first pays for bundling the worker with esbuild (`loadVoiceWorker()`), which
 // used to run under the hook budget; every row gets that budget.
@@ -73,6 +73,18 @@ test.each(["waveshare-rlcd-4-2", "zectrix-note4", "havpe"])(
     const events = append.mock.calls[0]!;
     const subscription = events.find((event) => event.payload?.name === "voice-delegate");
     expect(subscription).toBeDefined();
+    for (const [name, className] of [
+      ["voice-agent", "VoiceAgentDurableObject"],
+      ["voice-delegate", "VoiceDelegateDurableObject"],
+    ])
+      expect(events.find((event) => event.payload?.name === name).payload).toMatchObject({
+        target: [
+          "itx",
+          "facets",
+          ["get", name, { ...JSON.parse(RUNTIME), className }],
+          "processEventBatch",
+        ],
+      });
     expect(events.some((event) => event.type === "events.iterate.com/agent/context-added")).toBe(
       device !== "havpe",
     );
@@ -189,6 +201,9 @@ test("an abandoned refresh times out", async () => {
     "timed out",
   );
 });
+
+/** The installed voice source as install.ts stores it; both facets of a press load it. */
+const RUNTIME = JSON.stringify({ cacheKey: "c".repeat(64), source: { "worker.ts": "voice" } });
 
 let voiceWorker: Promise<any> | undefined;
 
@@ -312,6 +327,7 @@ async function harness(image = png(3, 0), infoOverride = {}) {
   });
   const disable = vi.fn(async () => undefined);
   const itx = {
+    kv: { get: vi.fn(async (key: string) => (key === "voice/runtime" ? RUNTIME : null)) },
     agents: { create: vi.fn(async () => ({})) },
     browser: { quickAction },
     clients: { waveshare_rlcd_4_2: { screen }, zectrix_note4: { screen }, tiny: { screen } },

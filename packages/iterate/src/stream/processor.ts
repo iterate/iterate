@@ -1105,7 +1105,7 @@ export type EmittedEventInput<Contract> = Contract extends {
   : StreamEventInput;
 
 /** What a caller APPENDS for one of a contract's OWNED events — the typed write on an entity
- *  (`itx.agents.get(path).append(…)`, library.ts): the type string, the payload as its schema takes
+ *  (`itx.repos.get(path).append(…)`, library.ts): the type string, the payload as its schema takes
  *  it (`z.input`), a key and metadata; `ephemeral` only where the definition says so. Derived from
  *  the catalog, so a payload field renamed in the contract is a type error at every call site. */
 export type EventInput<Contract> = Contract extends { events: infer Events extends EventCatalog }

@@ -5,8 +5,11 @@ import type { SessionCredentials } from "iterate/api";
 const connections: { socket: WebSocket; rpc: Disposable }[] = [];
 
 /** The person's personal access token for the project (apps/os/docs/credentials.md), presented
- *  in-band on the bare socket `session()` opens. */
+ *  in-band on the bare socket `session()` opens; or, for a project no token at hand covers,
+ *  APP_CONFIG_ADMIN_API_SECRET, the deployment's operator secret. */
 export function credentials(): SessionCredentials {
+  const operator = process.env.APP_CONFIG_ADMIN_API_SECRET?.trim();
+  if (operator) return { type: "admin-secret", secret: operator };
   const token = process.env.ITERATE_BEARER_TOKEN;
   if (!token)
     throw new Error(

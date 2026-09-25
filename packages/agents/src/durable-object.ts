@@ -2,7 +2,7 @@
 import { StreamProcessorDurableObject, type ItxEntrypointService } from "iterate/sdk";
 import type { StreamEvent } from "iterate/stream/processor";
 import type { ItxScope as ItxEntrypointScope } from "iterate/sdk";
-import type { AgentHandleApi } from "iterate/api";
+import type { AgentHandleApi } from "./api.ts";
 import type { AgentState, FileAttachment } from "./contract.ts";
 import { AgentProcessor, STREAM_IDLE_BUDGET_MS } from "./processor.ts";
 import { AgentAiSink } from "./ai-transport.ts";

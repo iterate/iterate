@@ -42,7 +42,7 @@ digits and short labels; draw symbols as SVG if needed. A 16px character is
 approximately 16px wide, so plan for about 21 characters in a 336px content
 area. Do not rely on emoji or an uninstalled system font for an icon.
 
-Fetch `screen-font.css` from root KV and embed the returned CSS in
+Fetch `voice/screen-font.css` from root KV and embed the returned CSS in
 `<style>`. Its font is a 2.5KB WOFF2 data URL: no external font request, and no
 need to print the base64 data in your reply. Browser Run supports embedded
 custom fonts; otherwise an unavailable family can silently fall back.
@@ -130,7 +130,7 @@ untrusted values before inserting them into HTML. The helper accepts at most
 
 ```ts
 const root = itx.cd("/");
-const fontCSS = await root.kv.get("screen-font.css");
+const fontCSS = await root.kv.get("voice/screen-font.css");
 if (!fontCSS) throw new Error("Screen font is not installed");
 
 const html = `<!doctype html><html><head><meta charset="utf-8"><style>

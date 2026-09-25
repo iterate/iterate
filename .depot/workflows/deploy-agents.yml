@@ -17,6 +17,9 @@ on:
       - envs.ts
       - scripts/lib/**
       - configs/**
+      # the UI reads the agents' contract and parser and installs the package; its scripts drive voice
+      - packages/agents/**
+      - packages/voice/**
       - packages/iterate/**
       - packages/ui/**
       - packages/shared/**
