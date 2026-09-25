@@ -496,13 +496,7 @@ function GithubRepositories({
         const url = `https://api.github.com/installation/repositories?per_page=100&page=${page}`;
         const response = await api.projects.get(projectId).fetch(
           new Request(url, {
-            headers: {
-              accept: "application/vnd.github+json",
-              authorization: `Bearer ${token}`,
-              // GitHub refuses a request without one; where the browser drops it (Chromium), the
-              // egress sets its own
-              "user-agent": "iterate-dash",
-            },
+            headers: { accept: "application/vnd.github+json", authorization: `Bearer ${token}` },
           }),
         );
         // the status alone: a failed egress's body can quote the placeholder
