@@ -5,7 +5,7 @@ import { deployApp } from "../../../scripts/lib/deploy-app.ts";
 
 /** vite build → wrangler deploy → the shop's index answers (scripts/lib/deploy-app.ts). No secrets
  *  ship: PETSHOP_SEAL_KEY is already a worker secret, and a deploy keeps it. */
-export default async function deploy(options: { env?: string } = {}) {
+export default async function deploy(options: { env: string }) {
   await deployApp({
     appRoot: fileURLToPath(new URL("..", import.meta.url)),
     appLabel: "apps/dummy-petshop",

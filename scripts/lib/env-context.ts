@@ -35,8 +35,7 @@ export class CloudflareApiError extends Error {
 /**
  * A resolved `--env <name>` invocation: the app's envs.ts entry plus that
  * env's Doppler secrets. Every deployed-environment script starts here, so
- * the environment is selected by name (a deploy's or ensure-resources'
- * DOPPLER_CONFIG fallback aside; see resolveEnvContext).
+ * the environment is always selected by name.
  */
 export interface EnvContext<E extends DeployableEnv> {
   name: string;
@@ -50,42 +49,34 @@ export interface EnvContext<E extends DeployableEnv> {
 }
 
 /**
- * Resolve an environment name into a full context. `env` is the explicit
- * name from the caller's CLI flag — this function never reads argv itself.
- *
- * `allowDopplerConfigFallback` (default false) permits the CI bridge: when
- * `env` is absent, fall back to DOPPLER_CONFIG — so CI's existing
- * `doppler run -- pnpm run-script deploy` (no flags)
- * selects the matching env without extra plumbing (env names and Doppler
- * config names coincide; the account-id assertion below still catches any
- * mismatch). Deploys pass `allowDopplerConfigFallback: true`; erase-data
- * does NOT (destructive = explicit flag only — trpc-cli enforces the
- * required `--env` option); ensure-resources passes true (harmless,
- * create-only).
+ * The entry `name` names in an app's envs.ts map, or an error listing the names it knows. How a
+ * script turns its required `--env` flag into the env it hands resolveEnvContext or deployApp.
  */
-export async function resolveEnvContext<E extends DeployableEnv>(options: {
-  envs: Record<string, E>;
-  /** Doppler project the env's config lives in (e.g. "os", "dash"). */
-  dopplerProject: string;
-  /** Explicit environment name (the caller's --env flag). */
-  env?: string;
-  /** When `env` is absent, allow the CI-bridge DOPPLER_CONFIG fallback. Default false. */
-  allowDopplerConfigFallback?: boolean;
-}): Promise<EnvContext<E>> {
-  const name =
-    options.env || (options.allowDopplerConfigFallback ? process.env.DOPPLER_CONFIG : undefined);
-  if (!name) {
-    throw new Error(
-      `Pass --env <name>. Known: ${Object.keys(options.envs).join(", ")} (see envs.ts).`,
-    );
-  }
-  const env = options.envs[name];
+export function envNamed<E>(envs: Record<string, E>, name: string): E {
+  const env = envs[name];
   if (!env) {
     throw new Error(
-      `Unknown environment ${JSON.stringify(name)}. Known: ${Object.keys(options.envs).join(", ")}`,
+      `Unknown environment ${JSON.stringify(name)}. Known: ${Object.keys(envs).join(", ")}`,
     );
   }
+  return env;
+}
 
+/**
+ * Resolve an env the caller has already looked up by name (envNamed, or envs.ts `osEnv` for
+ * apps/os) into a full context: its Doppler secrets, checked against the Cloudflare account
+ * envs.ts puts it in. Nothing here reads argv or the process environment, so every script
+ * selects its env with an explicit `--env`.
+ */
+export async function resolveEnvContext<E extends DeployableEnv>(options: {
+  /** The env's name in envs.ts (the caller's --env flag). */
+  name: string;
+  /** Its envs.ts entry. */
+  env: E;
+  /** Doppler project the env's config lives in (e.g. "os", "dash"). */
+  dopplerProject: string;
+}): Promise<EnvContext<E>> {
+  const { name, env } = options;
   const secrets = loadDopplerSecrets(options.dopplerProject, env.dopplerConfig);
 
   const accountId = secrets.CLOUDFLARE_ACCOUNT_ID;

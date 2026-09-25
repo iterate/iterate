@@ -11,7 +11,7 @@ import { z } from "zod";
 import type { IterateSessionApi, SessionCredentials } from "iterate/api";
 import type { ItxExpression } from "iterate/expression";
 import { OS_DOPPLER_PROJECT, osEnvs } from "../../../envs.ts";
-import { resolveEnvContext } from "../../../scripts/lib/env-context.ts";
+import { envNamed, resolveEnvContext } from "../../../scripts/lib/env-context.ts";
 import { atRestKeysOf, parseAppConfig } from "../src/app-config.ts";
 import {
   DeploymentStructure,
@@ -36,11 +36,11 @@ type SeedApi = {
     }
   >;
 };
-async function target(env: string) {
+async function target(name: string) {
   const context = await resolveEnvContext({
-    envs: osEnvs,
+    name,
+    env: envNamed(osEnvs, name),
     dopplerProject: OS_DOPPLER_PROJECT,
-    env,
   });
   // Match deploy.ts: only these two secrets are shipped, not legacy Doppler overrides.
   const config = parseAppConfig({

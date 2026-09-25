@@ -27,7 +27,7 @@ import {
   TestEvidenceTarget,
   testEvidencePaths,
 } from "@iterate-com/shared/test-support/test-evidence";
-import { OS_DOPPLER_PROJECT, osEnvs, type OsEnv } from "../../../envs.ts";
+import { OS_DOPPLER_PROJECT, type OsEnv } from "../../../envs.ts";
 import {
   collectSecrets,
   deployWithSecrets,
@@ -111,7 +111,7 @@ type AppsMode = z.infer<typeof AppsMode>;
  *  there ships — the way ensure-resources and erase-data resolve theirs. Refuses a Doppler account
  *  that is not the dev/preview one. */
 const accountContext = () =>
-  resolveEnvContext({ envs: osEnvs, dopplerProject: OS_DOPPLER_PROJECT, env: "preview" });
+  resolveEnvContext({ name: "preview", env: MAIN_ON_DEV, dopplerProject: OS_DOPPLER_PROJECT });
 
 function describe(error: unknown) {
   return error instanceof Error ? error.message : String(error);
