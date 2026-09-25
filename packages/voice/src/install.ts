@@ -6,7 +6,7 @@
 // without loading it.
 import type {} from "./api.ts";
 // registers `itx.voice` on InstalledAppRoots
-import { ensureAgents } from "@iterate-com/agents/install";
+import { ensureAgents, rootManifestListing } from "@iterate-com/agents/install";
 import type { IterateContextApi, IterateContextApiWith, RepoHandle } from "iterate/api";
 import { z } from "zod";
 import { SCREEN_FONT_CSS } from "./screen-font.ts";
@@ -88,14 +88,22 @@ export async function ensureVoiceAgent(
   if (!(await project.rewriteRules.get("itx.voice"))) {
     await ensureAgents(project, versions.agents);
     const repo = project.repos.get("/repos/config");
+    const root = rootManifestListing(
+      await repo.readFile("package.json"),
+      "@iterate-com/voice",
+      versions.voice,
+    );
     const commit = (await repo.readFile("voice/package.json"))
       ? undefined
       : await repo.commitFiles({
           message: "Install voice",
-          changes: Object.entries(voiceFolder(versions.voice)).map(([name, content]) => ({
-            path: `voice/${name}`,
-            content,
-          })),
+          changes: [
+            ...Object.entries(voiceFolder(versions.voice)).map(([name, content]) => ({
+              path: `voice/${name}`,
+              content,
+            })),
+            ...(root ? [{ path: "package.json", content: root }] : []),
+          ],
         });
     // No commitOid (nothing committed, or a commit that changed nothing) reads the tip.
     const commitOid = commit?.commitOid ?? undefined;

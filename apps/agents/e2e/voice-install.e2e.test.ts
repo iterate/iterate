@@ -43,6 +43,13 @@ deployedOnly(
     expect(JSON.parse((await config.readFile("voice/package.json"))!)).toEqual({
       dependencies: { "@iterate-com/voice": versions.voice },
     });
+    // the root lists both packages too, so `tsc` over the repo resolves the folders' imports
+    expect(JSON.parse((await config.readFile("package.json"))!)).toMatchObject({
+      devDependencies: {
+        "@iterate-com/agents": versions.agents,
+        "@iterate-com/voice": versions.voice,
+      },
+    });
     expect(await project.kv.get("worker.js")).toBe("my existing data");
     for (const before of rulesBefore)
       expect(await project.rewriteRules.get(before.match)).toEqual(before);
