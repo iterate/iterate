@@ -196,29 +196,6 @@ test("a release the KV delete fails keeps the claim, so the copy never outlives 
   expect(await copyAt(lastKnownKey("hostname", hostname))).toMatchObject({ id: projectId });
 });
 
-test("the rows the catalog held before copies were written are backfilled once, by the control plane's alarm", async () => {
-  const { slug, projectId, host } = await catalogOnlyProject("backfilled", { ownHostname: true });
-  const keys = [
-    lastKnownKey("project", slug),
-    lastKnownKey("project", projectId),
-    lastKnownKey("hostname", new URL(host).hostname),
-  ];
-  // the rows as they stood before this change: no copies, and no backfill yet
-  await Promise.all(keys.map((key) => env.OAUTH_KV.delete(key)));
-  // what the constructor does on the first start after this change: the alarm, due at once
-  await runInDurableObject(controlPlaneStub(), async (_, state) => {
-    state.storage.kv.delete("last-known-backfill");
-    await state.storage.setAlarm(Date.now());
-  });
-
-  for (const key of keys) expect(await copyAt(key)).toMatchObject({ id: projectId });
-  expect(
-    await runInDurableObject(controlPlaneStub(), (_, state) =>
-      state.storage.kv.get("last-known-backfill"),
-    ),
-  ).toBe("done");
-});
-
 test("while the control plane answers, a request never reads the copies, and a project's own hostname is ONE read", async () => {
   const { host } = await catalogOnlyProject("copy-unread", { ownHostname: true });
   const gets = vi.spyOn(env.OAUTH_KV, "get");

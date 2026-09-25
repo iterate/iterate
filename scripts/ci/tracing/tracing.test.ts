@@ -518,7 +518,7 @@ test("quiet steps retain their duration, retries have distinct parents, and unfi
           exitCode: 0,
         }),
         {
-          ...line("e2e", { kind: "shell-start", id: "tests", step: "e2e", time: ms(61) }),
+          ...line("e2e", { kind: "shell-start", id: "tests", step: "suite", time: ms(61) }),
           stepId: "",
           command: "pnpm spec",
         },
@@ -765,14 +765,14 @@ test("a second-precision Depot finish does not invent a negative finish phase", 
       [
         "attempt",
         [
-          line("e2e", { kind: "shell-start", id: "suite", step: "e2e", time: ms(2) }),
-          line("e2e", { kind: "shell-end", id: "suite", time: ms(33.5), exitCode: 1 }),
+          line("suite", { kind: "shell-start", id: "suite", step: "suite", time: ms(2) }),
+          line("suite", { kind: "shell-end", id: "suite", time: ms(33.5), exitCode: 1 }),
         ],
       ],
     ]),
   );
   const spans = report.resourceSpans[0].scopeSpans[0].spans;
-  const suite = spans.find((span) => span.name === "e2e")!;
+  const suite = spans.find((span) => span.name === "suite")!;
   const finish = spans.find((span) => span.name === "Finish")!;
   expect(suite).toMatchObject({
     status: { code: 2 },

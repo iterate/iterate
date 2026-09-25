@@ -262,8 +262,8 @@ sharing a title count as one run, and all must pass to advance it. Missing
 reporters, unexecuted tests, wrong commits, interrupted runs and damaged/missing
 records cannot certify a clean result. Focused local runs do not publish complete
 suite summaries. The preview e2e suite's summary also says whether it ran the
-rows tagged `slow` (`slowRows: "ran" | "skipped"`; absent before the tag existed, when every row
-ran), which the PR time to green guard splits pushes on ([Depot CI](depot-ci.md#pr-time-to-green)).
+rows tagged `slow` (`slowRows: "ran" | "skipped"`; absent when no row is tagged `slow`, so every
+row ran), which the PR time to green guard splits pushes on ([Depot CI](depot-ci.md#pr-time-to-green)).
 
 Each suite shows its latest complete main commit, run, test count and failure
 count. An incomplete attempt keeps that provenance visible with a warning,

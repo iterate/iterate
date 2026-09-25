@@ -235,7 +235,7 @@ async function tracedWorkflow(workflow: {
   const e2e = workflow.jobs.find(([key]) => key === "e2e")!;
   const marker = (event: object) => ({
     stepKey: "opaque-e2e",
-    stepId: "e2e",
+    stepId: "suite",
     stepName: "Run the e2e suite against the preview",
     body: `@@ci-trace ${JSON.stringify(event)}`,
   });
@@ -258,7 +258,7 @@ async function tracedWorkflow(workflow: {
         marker({
           kind: "shell-start",
           id: "suite",
-          step: "e2e",
+          step: "suite",
           time: Date.parse(at(e2e[2] + 11)),
         }),
         marker({ kind: "shell-end", id: "suite", time: Date.parse(at(e2e[3] - 10)), exitCode: 0 }),
@@ -270,7 +270,7 @@ async function tracedWorkflow(workflow: {
       return new Response(
         stringify({
           jobs: {
-            e2e: { steps: [{ id: "e2e", run: "doppler run -- pnpm preview e2e" }] },
+            e2e: { steps: [{ id: "suite", run: "doppler run -- pnpm preview e2e" }] },
             trace: { needs: workflow.needs, steps: [] },
           },
         }),

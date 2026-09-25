@@ -303,11 +303,11 @@ class CreateWaits {
  *  from (session-fed: the control-plane database is imperative). ONE path for every creation —
  *  a person's, the operator's acting as one, and the operator's own into a named organization (a
  *  project seed's `apply`) — and for a creation asked again: it lands what the record LACKS, read
- *  at head, so the same creation again (a rerun `apply`, a retry) appends nothing, and one whose
- *  landing an earlier deployment skipped lands now. An organization the record has never heard of
- *  is one this creation minted (a person's first project, catalog.ts): its creation and its members
- *  come first, in one ordered append, so the fold sees the organization before its project. Each
- *  of those memberships also lands on the member's account, in the BACKGROUND
+ *  at head, so the same creation again (a rerun `apply`, a retry) appends nothing. An organization
+ *  the record has never heard of is one this creation minted (a person's first project,
+ *  catalog.ts): its creation and its members come first, in one ordered append, so the fold sees
+ *  the organization before its project. Each of those memberships also lands on the member's
+ *  account, in the BACKGROUND
  *  (`publishPlatformFacts`): the answer never waits on a person's account. A brand-new account's
  *  first write can take Cloudflare seconds to confirm (21.9 s on 2026-09-24), and its output gate
  *  holds every answer until then. Nothing before the answer needs the account: the dash reads it

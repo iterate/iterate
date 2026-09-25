@@ -78,7 +78,7 @@ and then its normalized run command; hover the label or bar to see all three.
 Commands have the Doppler wrapper stripped and come from the workflow YAML at
 the run's triggering SHA (the merge revision on PR runs), never from expanded
 runner logs. Each test job's suite step, `suite` in E2E tests and Browser specs
-(one definition; `e2e` and `specs` in older runs), opens its **Test** phase. The shell hook preserves
+(one definition), opens its **Test** phase. The shell hook preserves
 exit codes and ignores nested shells. It requires only the Node already
 installed in the runner image, so it measures `pnpm install` too.
 

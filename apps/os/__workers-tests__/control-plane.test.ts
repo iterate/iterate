@@ -281,8 +281,8 @@ test("the operator's project in a named organization lands on the organization's
   expect(await projectFacts()).toEqual([
     { payload: { projectId: "prj_seeded", slug: "seeded" }, platform: true },
   ]);
-  // a project the catalog holds and the record lacks (the operator's creations landed nothing
-  // before): the next create lands it — once, however often it is asked
+  // a project the catalog holds and the record lacks (a creation whose landing failed after the
+  // catalog's write): the next create lands it — once, however often it is asked
   await controlPlaneStub().createProject(
     { principal: { actor: "admin" } },
     { project: "seeded-earlier", organizationId: org.id, restoreProjectId: "prj_seeded_earlier" },

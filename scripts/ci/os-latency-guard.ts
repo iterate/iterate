@@ -71,12 +71,6 @@ const REGRESSION_FACTOR = 3;
 const REGRESSION_FLOOR_MS = 250;
 
 const MetricName = z.enum(Object.keys(LATENCY_METRICS) as [LatencyMetricName]);
-/** Metric names read back from a state an older table wrote: a metric since renamed or removed is
- *  dropped, never a parse failure. */
-const KnownMetrics = z
-  .array(z.string())
-  .transform((names) => names.filter((name) => MetricName.safeParse(name).success))
-  .pipe(z.array(MetricName));
 
 /** What one run hands the next: the main runs it knows, oldest first, and the metrics paged red. */
 export const GuardState = z.object({
@@ -87,23 +81,16 @@ export const GuardState = z.object({
       run: z.string(),
       at: z.iso.datetime(),
       /** Each measured metric's median. */
-      judged: z
-        .record(z.string(), z.number())
-        .transform((judged) =>
-          Object.fromEntries(
-            Object.entries(judged).filter(([name]) => MetricName.safeParse(name).success),
-          ),
-        )
-        .pipe(z.partialRecord(MetricName, z.number())),
+      judged: z.partialRecord(MetricName, z.number()),
       /** The measured metrics that crossed a line. */
-      over: KnownMetrics,
+      over: z.array(MetricName),
       /** The probes that broke, recorded or not: a probe broken again in the next run is red. */
-      broken: z.array(z.string()).default([]),
+      broken: z.array(z.string()),
     }),
   ),
-  red: KnownMetrics,
+  red: z.array(MetricName),
 });
-export type GuardState = z.output<typeof GuardState>;
+export type GuardState = z.infer<typeof GuardState>;
 
 /** What a perf row leaves on its meta (apps/os/perf/record.ts `TaskMeta`): its samples, and, when
  *  it failed, the causes and lost sockets behind the failure (perf/setup.ts) and the push row's

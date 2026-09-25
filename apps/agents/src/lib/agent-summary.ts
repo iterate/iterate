@@ -12,20 +12,20 @@ export type AgentStatus = "running" | "waiting" | "idle";
 
 export type AgentSummary = {
   status: AgentStatus;
-  /** ISO time the facet's state last moved; null on a runtime older than contract version 6. */
+  /** ISO time the facet's state last moved; null until it first moves. */
   lastActivityAt: string | null;
   /** The first line of the first thing a person said to it; null until someone has. */
   title: string | null;
 };
 
-/** The slice of the facet's live state a summary reads. Parsed, not asserted: the live state is
- *  the installed runtime's, which a project may not have upgraded. */
+/** The slice of the facet's live state a summary reads. Parsed, not asserted: a value that is not
+ *  an agent's state has no summary. */
 const AgentLiveState = z.object({
   creation: z.object({ status: z.string() }).nullable(),
   paused: z.object({}).nullable(),
   openRequest: z.object({}).nullable(),
   pendingLlmRequestTrigger: z.object({}).nullable(),
-  lastActivityAt: z.string().nullable().optional(),
+  lastActivityAt: z.string().nullable(),
   contextItems: z.array(
     z.object({
       role: z.string(),
@@ -66,7 +66,7 @@ export function summarizeAgentState(value: unknown): AgentSummary | undefined {
       .split("\n")
       .map((line) => line.trim())
       .find(Boolean) ?? null;
-  return { status, lastActivityAt: state.lastActivityAt || null, title };
+  return { status, lastActivityAt: state.lastActivityAt, title };
 }
 
 export type AgentRow = {

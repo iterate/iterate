@@ -331,12 +331,11 @@ test("the Cost section prices each suite's rows: percentiles, marginal wall, ret
   expect(body).not.toContain("a quick row");
 });
 
-test("the Cost window is each suite's last 100 complete runs with per-row durations among its newest", () => {
+test("the Cost window is each suite's last 100 complete runs among its newest", () => {
   const priced = (n: number, name: string) =>
     run(n, [], { tests: [{ name, outcome: "pass", startMs: 0, durationMs: 20_000 }] });
   const runs = [priced(1, "an old row"), priced(2, "an old row")];
   for (let n = 3; n <= 102; n++) runs.push(priced(n, "a new row"));
-  runs.push(run(103, [], { tests: [{ name: "a new row", outcome: "pass" }] }));
   runs.push(
     run(104, [], {
       newest: false,
@@ -361,7 +360,10 @@ function line(body: string, start: string) {
   return found;
 }
 
-/** A suite run uploaded `n` days after the epoch: main and complete unless told otherwise. */
+type SummaryTest = NonNullable<SuiteRun["summary"]>["tests"][number];
+
+/** A suite run uploaded `n` days after the epoch: main and complete unless told otherwise. Its
+ *  tests ran 0 ms and did not fail unless told otherwise. */
 function run(
   n: number,
   records: FlakeRecord[],
@@ -370,7 +372,7 @@ function run(
     main?: boolean;
     complete?: boolean;
     newest?: boolean;
-    tests?: NonNullable<SuiteRun["summary"]>["tests"];
+    tests?: (Pick<SummaryTest, "name" | "outcome"> & Partial<SummaryTest>)[];
   } = {},
 ): SuiteRun {
   const complete = options.complete !== false;
@@ -387,7 +389,7 @@ function run(
       startedAt: day(n),
       finishedAt: day(n + 0.001),
       testCount: options.tests?.length || Math.max(1, records.length),
-      tests: options.tests || [],
+      tests: (options.tests || []).map((test) => ({ durationMs: 0, failed: false, ...test })),
       unknownFlakeCount: records.filter((record) => record.kind === "unknown").length,
       failedCount: 0,
       diagnostics: complete ? [] : ["test runner interrupted"],

@@ -172,13 +172,13 @@ function vitestRun(enabled: string) {
     ],
   };
   const lines = [
-    { kind: "shell-start", id: "shell", step: "e2e", time: Date.parse(startedAt) },
+    { kind: "shell-start", id: "shell", step: "suite", time: Date.parse(startedAt) },
     ...events,
     { kind: "shell-end", id: "shell", time: Date.now(), exitCode: 1 },
   ].map((event) => ({
     body: `@@ci-trace ${JSON.stringify(event)}`,
     stepKey: "e2e",
-    stepId: "e2e",
+    stepId: "suite",
   }));
   return {
     result,

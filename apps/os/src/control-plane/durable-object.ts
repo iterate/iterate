@@ -19,35 +19,12 @@ import { OAuthGrantTable } from "./oauth-grants.ts";
 /** KV's clock: epoch seconds. */
 const nowSeconds = () => Math.floor(Date.now() / 1000);
 
-/** Where the one-time backfill of the copies (`alarm`) stands, in this object's own storage: the
- *  last project id it wrote, or `done`. */
-const BACKFILL_KEY = "last-known-backfill";
-
 export class ControlPlaneDurableObject extends DurableObject<Pick<Env, "OAUTH_KV">> {
   readonly #db = new ControlPlaneDatabase(this.ctx.storage.sql);
   /** The OAuth provider's grants (oauth-grants.ts), read and written through oauth-store.ts. */
   readonly #grants = new OAuthGrantTable(this.ctx.storage.sql);
   /** The hostname copies' writes, one after another (`#hostnameTurn`). */
   #hostnameWrites: Promise<unknown> = Promise.resolve();
-
-  constructor(ctx: DurableObjectState, env: Pick<Env, "OAUTH_KV">) {
-    super(ctx, env);
-    if (ctx.storage.kv.get(BACKFILL_KEY) !== "done") void ctx.storage.setAlarm(Date.now());
-  }
-
-  /** THE ONE-TIME BACKFILL of the copies, for the rows written before copies were: every hostname's,
-   *  then every project's by id, 200 projects (400 keys) an alarm — KV allows a Worker invocation
-   *  1,000 operations (https://developers.cloudflare.com/kv/platform/limits/) — from where the
-   *  last alarm stopped. A write that fails fails the alarm, which the runtime retries. */
-  override async alarm() {
-    const after = this.ctx.storage.kv.get<string>(BACKFILL_KEY);
-    if (after === "done") return;
-    if (!after) for (const hostname of this.#db.hostnames()) await this.#copyHostname(hostname);
-    const page = this.#db.projectsAfter(after || "", 200);
-    await Promise.all(page.map((project) => this.#copyProject(project)));
-    this.ctx.storage.kv.put(BACKFILL_KEY, page.length < 200 ? "done" : page.at(-1)!.id);
-    if (page.length === 200) await this.ctx.storage.setAlarm(Date.now());
-  }
 
   /** A write — the database's synchronous check-and-insert — in one transaction: it stands whole or
    *  a refusal leaves nothing. */
@@ -176,7 +153,7 @@ export class ControlPlaneDurableObject extends DurableObject<Pick<Env, "OAUTH_KV
     });
   }
   /** `write` after every hostname copy write before it, so a hostname's last write is what the
-   *  catalog held last — a backfill's in flight never lands after a release's delete. */
+   *  catalog held last. */
   #hostnameTurn(write: () => Promise<void>) {
     const turn = this.#hostnameWrites.then(write);
     this.#hostnameWrites = turn.catch(() => {});
@@ -197,8 +174,8 @@ export class ControlPlaneDurableObject extends DurableObject<Pick<Env, "OAUTH_KV
   }
 }
 
-/** A copy the control plane failed to write: none stands in for it during an outage (a 503, as
- *  before copies). Never a platform-failure page of its own. */
+/** A copy the control plane failed to write: none stands in for it during an outage (a 503).
+ *  Never a platform-failure page of its own. */
 function copyUnwritten(name: string, error: unknown) {
   console.warn({ event: "control-plane.last-known-copy-unwritten", name, message: String(error) });
 }
