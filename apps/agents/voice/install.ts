@@ -20,14 +20,6 @@ export async function fetchVoiceInstall(): Promise<z.infer<typeof VoiceInstall>>
   return VoiceInstall.parse(await response.json());
 }
 
-/** Whether the project has the OpenAI key voice calls use (`ensureVoiceAgent` needs one to install
- *  voice): Kit checks as soon as a project is picked, to ask for the key alongside the Wi-Fi. */
-export async function hasOpenaiKey(project: {
-  secrets: Pick<IterateContextApi["secrets"], "list">;
-}) {
-  return (await project.secrets.list()).some((secret) => secret.path === "/secrets/openai");
-}
-
 /** Kit mints its device grant only after this succeeds. Partial uploads are safe to retry:
  * content-addressed files are written first, then one durable rule publishes the service. */
 export async function ensureVoiceAgent(
@@ -38,7 +30,8 @@ export async function ensureVoiceAgent(
   loadInstall: () => Promise<z.infer<typeof VoiceInstall>>,
   openaiKey?: string,
 ): Promise<"ready" | "needs-openai-key"> {
-  if (!(await hasOpenaiKey(project))) {
+  const secrets = await project.secrets.list();
+  if (!secrets.some((secret) => secret.path === "/secrets/openai")) {
     if (!openaiKey?.trim()) return "needs-openai-key";
     await project.secrets.set("/secrets/openai", openaiKey.trim(), {
       urls: ["https://api.openai.com"],

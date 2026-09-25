@@ -26,11 +26,7 @@ import {
   SelectValue,
 } from "@iterate-com/ui/components/select";
 import { EyeIcon, EyeOffIcon, LogOutIcon, UsbIcon } from "lucide-react";
-import {
-  ensureVoiceAgent,
-  fetchVoiceInstall,
-  hasOpenaiKey,
-} from "../../../../agents/voice/install.ts";
+import { ensureVoiceAgent, fetchVoiceInstall } from "../../../../agents/voice/install.ts";
 import { SetupWizard, type SetupInput } from "../../components/setup-wizard.tsx";
 import {
   DEFAULT_DEVICE_ID,
@@ -114,7 +110,8 @@ function KitPage() {
     queryFn: project
       ? async () => {
           using itx = await api.projects.get(project.id);
-          return hasOpenaiKey(itx);
+          const secrets = await itx.secrets.list();
+          return secrets.some((secret) => secret.path === "/secrets/openai");
         }
       : skipToken,
   });
@@ -258,6 +255,8 @@ function KitPage() {
                   void navigate({
                     to: "/devices/$deviceId/firmware/$firmwareVersion",
                     params: { deviceId: device.id, firmwareVersion: value },
+                    // keep the picked project: without it the picker falls back to the first one
+                    search: (previous) => previous,
                   });
                 }}
               >

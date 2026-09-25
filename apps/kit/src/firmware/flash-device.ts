@@ -1,3 +1,4 @@
+import type { EwtConsole } from "esp-web-tools/dist/components/ewt-console.js";
 import type { Manifest } from "esp-web-tools/dist/const.js";
 import type { FirmwareDevice } from "./catalog.ts";
 import type { DeviceConfiguration } from "./config-image.ts";
@@ -78,8 +79,9 @@ export async function flashDevice(input: {
 
 /**
  * Opens a board's serial port to read its logs, what esp-web-tools' "Logs & Console" did: the port
- * it was just flashed through (`flash` closed it), or one the person picks. Loads esp-web-tools'
- * console element (components/device-logs.tsx shows it).
+ * it was just flashed through (`flash` closed it), or one the person picks. Returns esp-web-tools'
+ * console element for it, which starts reading once it's on the page (components/device-logs.tsx);
+ * `closeDeviceLogs` stops it.
  */
 export async function openDeviceLogs(port: SerialPort | undefined) {
   const chosen = port || (await choosePort());
@@ -87,7 +89,18 @@ export async function openDeviceLogs(port: SerialPort | undefined) {
   await chosen.open({ baudRate: 115200, bufferSize: 8192 }).catch((error: unknown) => {
     throw portProblem(error);
   });
-  return chosen;
+  const logs = document.createElement("ewt-console");
+  logs.port = chosen;
+  logs.logger = console;
+  logs.allowInput = false;
+  logs.style.height = "100%";
+  return logs;
+}
+
+/** Stops reading and lets go of the port, so flashing (or another tab) can open it next. */
+export async function closeDeviceLogs(logs: EwtConsole) {
+  await logs.disconnect();
+  await logs.port.close();
 }
 
 function readableFailure(state: Extract<FlashState, { state: "error" }>, device: FirmwareDevice) {

@@ -21,7 +21,12 @@ import { Spinner } from "@iterate-com/ui/components/spinner";
 import { UsbIcon } from "lucide-react";
 import type { FirmwareDevice } from "../firmware/catalog.ts";
 import type { DeviceConfiguration } from "../firmware/config-image.ts";
-import { flashDevice, openDeviceLogs, type FlashProgress } from "../firmware/flash-device.ts";
+import {
+  closeDeviceLogs,
+  flashDevice,
+  openDeviceLogs,
+  type FlashProgress,
+} from "../firmware/flash-device.ts";
 import type { FirmwareManifest } from "../firmware/prepare-manifest.ts";
 import { DeviceLogs } from "./device-logs.tsx";
 
@@ -61,6 +66,11 @@ export function SetupWizard({
       }),
   });
   const logging = useMutation({ mutationFn: openDeviceLogs });
+  // Back from the logs waits for the port to close, so the next Choose port or Show logs can open it
+  const closingLogs = useMutation({
+    mutationFn: closeDeviceLogs,
+    onSettled: () => logging.reset(),
+  });
   // `flashDevice` reports progress into the query cache, one entry per attempt; this reads it back
   const progress = useQuery<FlashProgress>({
     queryKey: flashProgressKey(flashing.variables?.attempt),
@@ -73,9 +83,13 @@ export function SetupWizard({
       onOpenChange={(open) => {
         // a board unplugged mid-write has to be flashed again, so the wizard stays until it's done
         if (open || flashing.isPending) return;
-        preparing.reset();
-        flashing.reset();
-        logging.reset();
+        const resetAll = () => {
+          preparing.reset();
+          flashing.reset();
+          logging.reset();
+        };
+        if (logging.isSuccess) closingLogs.mutate(logging.data, { onSettled: resetAll });
+        else resetAll();
       }}
       disablePointerDismissal
     >
@@ -266,7 +280,9 @@ export function SetupWizard({
                 </DialogFooter>
               </>
             )}
-            {logging.isSuccess && <DeviceLogs port={logging.data} onBack={() => logging.reset()} />}
+            {logging.isSuccess && (
+              <DeviceLogs logs={logging.data} onBack={() => closingLogs.mutate(logging.data)} />
+            )}
           </>
         )}
       </DialogContent>
