@@ -135,8 +135,8 @@ const VitestReport = z.object({
 });
 
 /** THE PLATFORM'S FAILURES: what a row can break on only because Cloudflare, or the network between
- *  the runner and it, failed the row — never on anything our code decides. Each was a red run of
- *  main on 2026-09-24, one row each, every budget fine, and the row green on the next run. */
+ *  the runner and it, failed the row — never on anything our code decides. Each broke one row of a
+ *  red main run, every budget fine, and the row was green on the next run. */
 const PLATFORM_FAILURES = {
   /** undici's fetch rejects with exactly this only when no HTTP response came at all. Main
    *  927f7a835: `read ECONNRESET` on the MCP row's first call, and Workers Logs had no `/mcp`
@@ -153,6 +153,14 @@ const PLATFORM_FAILURES = {
    *  trip between the edge and the Durable Object stalled ~3 s, and lends the pushes paged for came
    *  back past their 10 s timeout, the pushes lost (apps/os/src/context/rpc-stubs.ts). */
   "edge-stall": "pushes never came while the edge's round trips to the Durable Object stalled",
+  /** workerd's DISCONNECTED failure, handed back through a session that stayed open: a Workers RPC
+   *  connection under the call, from our Worker to a Durable Object or between two objects, was cut
+   *  inside Cloudflare. Our code never throws it, and a reset of our own objects fails with a
+   *  message of its own (apps/os/src/retryable-error.ts). The edge sends an idempotent call it cut
+   *  once more (apps/os/src/iterate-context.ts `READ_CALLS`), so what reaches a row is a write, or
+   *  a second cut. On 2026-09-25, 34 of 50 concurrent calls never reached a context whose
+   *  incarnation, 50 facets and session all ran on. */
+  "transport-cut": "a Workers RPC connection under the call was lost inside Cloudflare",
 } as const;
 export type PlatformFailure = keyof typeof PLATFORM_FAILURES;
 /** A subscribe batch this slow, at the median, is the platform stalling: ~0.1 s normally, 3.0–3.2 s
@@ -165,6 +173,7 @@ function platformFailure(message: string, meta: RowMeta | undefined): PlatformFa
   const firstLine = message.split("\n", 1)[0]!.trim();
   if (firstLine === "TypeError: fetch failed") return "connection-reset";
   if (firstLine === "Error: WebSocket connection failed.") return "socket-lost";
+  if (firstLine === "Error: Network connection lost.") return "transport-cut";
   const subscribeBatchMs = meta?.subscribeBatchMs ?? [];
   if (
     firstLine.startsWith("Error: until(") &&

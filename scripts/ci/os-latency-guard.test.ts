@@ -82,18 +82,18 @@ test("a report's metrics come off each row's meta; a row that missed only budget
   });
 });
 
-// THE THREE RED RUNS OF MAIN ON 2026-09-24, each one row broken by the platform with every budget
-// fine: their failure messages as the perf reports hold them, and the meta the rows now leave
-// beside them (perf/setup.ts, perf/push-delivery.perf.test.ts) with the values the job logs and
-// Workers Logs measured.
-const redRunsOf20260924: {
+// THE RED RUNS OF MAIN, each one row broken by the platform with every budget fine: their failure
+// messages as the perf reports hold them, and the meta the rows now leave beside them
+// (perf/setup.ts, perf/push-delivery.perf.test.ts) with the values the job logs and Workers Logs
+// measured.
+const redRunsOfMain: {
   main: string;
   row: string;
   file: string;
   failureMessages: string[];
   meta: Parameters<typeof readReport>[0]["testResults"][number]["assertionResults"][number]["meta"];
   platform: PlatformFailure;
-  evidence: string;
+  evidence?: string;
   unrecorded: LatencyMetricName[];
 }[] = [
   {
@@ -142,9 +142,20 @@ const redRunsOf20260924: {
     evidence: "subscribe round trips 3,012, 3,150, 3,204, 3,088, 3,121, 3,066, 3,175, 3,190 ms",
     unrecorded: ["push.fan200.all", "push.fan200.whoami"],
   },
+  {
+    main: "f12b3d1ea",
+    row: "50 userspace processors: one append reaches all 50 in under 5 s, and a whoami during it takes under 1.5 s",
+    file: "push-delivery",
+    failureMessages: [
+      "Error: Network connection lost.\n    at Evaluator.evaluateImpl (file:///home/runner/work/iterate/iterate/node_modules/.pnpm/@iterate-com+capnweb@0.12.2/node_modules/@iterate-com/capnweb/dist/index.js:2087:69)\n    at Evaluator.evaluateWithDepth (file:///home/runner/work/iterate/iterate/node_modules/.pnpm/@iterate-com+capnweb@0.12.2/node_modules/@iterate-com/capnweb/dist/index.js:2010:25)\n    at Evaluator.evaluate (file:///home/runner/work/iterate/iterate/node_modules/.pnpm/@iterate-com+capnweb@0.12.2/node_modules/@iterate-com/capnweb/dist/index.js:2005:15)\n    at RpcSessionImpl.readLoop (file:///home/runner/work/iterate/iterate/node_modules/.pnpm/@iterate-com+capnweb@0.12.2/node_modules/@iterate-com/capnweb/dist/index.js:2897:62)",
+    ],
+    meta: { failure: { causes: [], socketsLost: [] } },
+    platform: "transport-cut",
+    unrecorded: ["push.fan50.all", "push.fan50.whoami"],
+  },
 ];
 
-test.for(redRunsOf20260924)(
+test.for(redRunsOfMain)(
   "main $main: $platform broke one row, the metrics it left unrecorded are its breakage, and the run is RECORDED, not red",
   ({ row, file, failureMessages, meta, platform, evidence, unrecorded }) => {
     const report = readReport({
