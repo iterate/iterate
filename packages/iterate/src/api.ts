@@ -510,6 +510,8 @@ export interface GrantRecord {
   /** A personal access token's: the grant of the session that minted it (listed here while it
    *  lives). */
   mintedBy?: string;
+  /** A platform admin's sign-in as this person: the admin's email. */
+  impersonatedBy?: string;
 }
 
 /** What the consent screen shows for an authorization request. */
@@ -529,15 +531,6 @@ export type ConsentAnswer =
       ingressRouting: IngressRouting;
       /** the onboarding step's first draft of an organization name, from the person's name or email */
       suggestedOrganizationName: string;
-    }
-  | {
-      /** a platform admin's request to view the client as `target` (the app's `?act_as=`) */
-      kind: "impersonate";
-      clientName: string;
-      clientId: string;
-      email: string;
-      target: string;
-      denyLocation: string;
     }
   | {
       /** a client asking only who the person is (the platform's `/oauth2/userinfo` resource) */
@@ -621,6 +614,8 @@ export interface IterateSessionApi {
     approve(input: {
       query: string;
       projects: string[];
+      /** a platform admin's "Sign in as someone else…": the person's user id */
+      impersonate?: string;
     }): Promise<{ redirectTo: string } | { error: string }>;
   };
   projects: {

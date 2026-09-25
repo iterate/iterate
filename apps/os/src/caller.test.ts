@@ -101,7 +101,7 @@ test("a person through a grant: source.principal and source.grant, a client-supp
     },
   });
 });
-test("an admin viewing as someone: both stamped; a client's claim of one is dropped with its principal", () => {
+test("an admin signed in as someone: both stamped; a client's claim of one is dropped with its principal", () => {
   const viewed = {
     actor: "user_bob",
     email: "bob@example.com",

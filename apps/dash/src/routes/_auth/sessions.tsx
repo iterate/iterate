@@ -196,6 +196,11 @@ function SessionsPage() {
                           {item.projects.map((id) => slugOf.get(id) ?? id).join(", ")}
                         </span>
                       )}
+                      {item.impersonatedBy && (
+                        <span className="max-w-64 truncate text-xs font-normal text-muted-foreground">
+                          Started by {item.impersonatedBy}, signed in as you
+                        </span>
+                      )}
                       {item.mintedBy && (
                         <span className="max-w-64 truncate text-xs font-normal text-muted-foreground">
                           Minted by{" "}

@@ -225,12 +225,20 @@ user's session (the projects of their organizations). The e2e suite's
 Signed in to the admin app (`apps/admin`), which asks for the `admin` scope, an
 admin reaches every project and person, and the global namespace as
 `session.global` (its `cd` walks `/users/<id>…` and `/organizations/<id>…`), for
-12 hours. Its Users page's "View dash as" opens the dash as that person for an
-hour (`/.auth/login?act_as=<email>` on any app): the grant is theirs, every event
-names the admin in `source.principal.impersonatedBy`, their account records
-`account/impersonation-started`, and the shell shows who is viewing whom with
-Stop impersonating. Removing an address from `admins` ends both at its next
-request.
+12 hours. To use any app as someone else, sign in to it again (the account
+menu's **Switch account…**): the issuer's consent page offers an admin, and
+nobody else, **Sign in as someone else…** — their email, then a confirm that
+names who the client is (its verified host, where the code goes, the resource,
+the permissions) and warns about anything that is not one of our apps. It works
+for any client, third parties and `/mcp` included. The grant is the person's, for
+an hour: every event names the admin in `source.principal.impersonatedBy`, their
+Sessions list it as started by the admin, their account records
+`account/impersonation-started` and the admin's `account/impersonation-performed`
+(both with the grant's id), and the shell shows **Signed in as … / You are …**
+with Stop impersonating. Removing an address from `admins` ends both at its next
+request. `admins` beside `login.password` or paths ingress routing is refused
+except on a preview or local dev: anyone with the password could sign in as an
+admin, and under paths a project's own code runs on the issuer's origin.
 
 The `iterate` CLI (`packages/cli`) takes the bearer from
 `APP_CONFIG_ADMIN_API_SECRET`, ahead of `ITERATE_BEARER_TOKEN` and any stored

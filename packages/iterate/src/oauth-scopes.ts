@@ -4,9 +4,10 @@ import { z } from "zod";
  *   - `iterate`             — reach the projects the person grants (every app; implied, always granted)
  *   - `account`             — manage the person's sessions and personal access tokens
  *   - `organizations:write` — the person's organizations: list every one they belong to, create new ones
- *   - `admin`               — operate the platform: every project and person, and viewing an app as
- *                             someone else. Granted only to an email the deployment's `admins` lists
- *                             (apps/os consent.ts), and only while it lists it (oauth.ts)
+ *   - `admin`               — operate the platform: every project and person. Granted only to an
+ *                             email the deployment's `admins` lists (apps/os consent.ts), and only
+ *                             while it lists it (oauth.ts). Signing a client in as someone else is
+ *                             no scope: the issuer offers it to a listed admin at consent
  *  Consent is task-based (the shape Cloudflare's own OAuth consent took in August 2026: a client
  *  requests a set, the person may deselect the optional ones, the token carries what was granted):
  *  `iterate` is required, every other requested scope is optional on the consent page, and an app
