@@ -62,7 +62,10 @@ test("a run the context died owing its alarm is settled `interrupted` by the inc
     await state.storage.sync();
     state.abort("killed before its alarm pass");
   }).catch(() => {}); // abort() throws by design: nothing after it runs
-  expect(await runDurableObjectAlarm(stub(ctx))).toBe(true); // a fresh stub: the old one died with its incarnation
+  // A fresh stub: the old one died with its incarnation. The alarm is due at once, so the runtime
+  // may deliver it before the harness does, most often under load; either way an alarm, not a
+  // request, wakes the fresh incarnation, and the wake record below says which.
+  await runDurableObjectAlarm(stub(ctx));
   // Settled by the ALARM's wake record, in the same batch — not by the read below, whose own wake
   // record would settle it too.
   const log = await readWithTraces(ctx);

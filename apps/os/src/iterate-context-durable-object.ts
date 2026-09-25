@@ -1056,16 +1056,15 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     // incarnation (its armer was evicted, the normal end) nothing at all but re-deriving the alarm;
     // its birth already reset the unclaimed loaded facets.
     const wokeAt = Date.now();
-    // A run open on the log that this incarnation neither runs nor owes was left by a dead one — one
-    // it owed this very alarm included: the pass's wake record settles it `interrupted`.
-    const runsLeftOpen = Object.keys(this.#stream.coreReducedState.scriptRuns).some(
-      (offset) =>
-        !this.#scriptRunsInFlight.has(Number(offset)) &&
-        !this.#runsOwedToTheAlarm.has(Number(offset)),
-    );
+    // A run a dead incarnation left open, one it owed this very alarm included, is settled
+    // `interrupted` by this incarnation's wake record, so a wake that finds one takes the full pass,
+    // whose wake record that is. Once the wake is recorded, every open run is this incarnation's.
+    const wakeRecordSettlesARun =
+      !this.#stream.wakeRecorded() &&
+      Object.keys(this.#stream.coreReducedState.scriptRuns).length > 0;
     if (
       this.#runsOwedToTheAlarm.size === 0 &&
-      !runsLeftOpen &&
+      !wakeRecordSettlesARun &&
       !this.#durableAlarmDeadlines().some((at) => at !== null && at <= wokeAt)
     ) {
       await this.#alarmCoordinator.pass(async () => this.#residency.alarmPassStarted(wokeAt));
