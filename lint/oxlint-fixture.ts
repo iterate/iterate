@@ -92,3 +92,15 @@ export function createOxlintFixture(input: {
     },
   };
 }
+
+/**
+ * One row of a single-rule table test: `source` written as `file` in a fresh fixture (with the
+ * strict tsconfig, so type-aware rules run too) and linted with `--fix` and only `iterate/<rule>`
+ * armed. Returns the messages oxlint still reports, in its order, and the file after any fix.
+ */
+export function lintOne(rule: string, file: string, source: string) {
+  using fixture = createOxlintFixture({ rules: { [`iterate/${rule}`]: "error" }, tsconfig: true });
+  fixture.write(file, source);
+  const messages = fixture.diagnostics([file, "--fix"]).map((diagnostic) => diagnostic.message);
+  return { messages, output: fixture.read(file) };
+}
