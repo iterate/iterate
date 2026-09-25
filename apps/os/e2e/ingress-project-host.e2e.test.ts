@@ -19,6 +19,7 @@ import { createFailing } from "@iterate-com/shared/test-support/failing-test";
 import { openItx } from "./support/client.ts";
 import { oauthSession } from "./support/principal.ts";
 import {
+  anonymousVisitor,
   appSeesUrl,
   deployedOnly,
   fetchProjectHost,
@@ -160,14 +161,22 @@ test("a project host verifies an OAuth bearer, strips credentials and rejects a 
   const seen = JSON.parse(echo.text);
   expect(seen).toMatchObject({ principal, cookie: "theme=dark" });
   expect(seen.authorization).toBeNull();
-  const forged = await fetchProjectUrl(echoUrl, { "x-itx-principal": '{"actor":"forged"}' });
-  expect(JSON.parse(forged.text).principal).toBeNull();
+  const forgedPrincipal = { "x-itx-principal": '{"actor":"forged"}' };
+  // under paths every project path is members-only: no credential and no membership are refused
+  // at the edge (the app is never asked); under subdomains both arrive anonymous
+  const paths = ingressRouting()?.type === "paths";
+  const forged = await fetchProjectUrl(echoUrl, { ...forgedPrincipal, ...anonymousVisitor });
+  if (paths) expect(forged).toMatchObject({ status: 401 });
+  else expect(JSON.parse(forged.text).principal).toBeNull();
   // a grant for another project is no member here: it arrives anonymous, never refused
   const other = await registerProject(freshDnsSafeProjectSlug("ingress-foreign"), member);
   const foreign = await oauthSession(other, member);
   const stranger = await fetchProjectUrl(echoUrl, { Authorization: `Bearer ${foreign.token}` });
-  expect(stranger, stranger.text).toMatchObject({ status: 200 });
-  expect(JSON.parse(stranger.text)).toMatchObject({ principal: null, authorization: null });
+  if (paths) expect(stranger, stranger.text).toMatchObject({ status: 403 });
+  else {
+    expect(stranger, stranger.text).toMatchObject({ status: 200 });
+    expect(JSON.parse(stranger.text)).toMatchObject({ principal: null, authorization: null });
+  }
 });
 
 test("an app's sign-in challenge (401 Bearer realm=iterate): a page load goes to sign in and back, a non-member's to sign in again with the project; a fetch keeps the 401, a non-member's is 403", async () => {
@@ -185,11 +194,17 @@ test("an app's sign-in challenge (401 Bearer realm=iterate): a page load goes to
       ...query,
       next: privateUrl.pathname + privateUrl.search,
     })}`;
-  const signIn = await navigateProjectUrl(privateUrl, navigate);
+  // under paths the edge answers a visitor with no credential or membership before the app is
+  // asked (every project path is members-only): the same sign-in, its own 401, a non-member 403
+  const paths = ingressRouting()?.type === "paths";
+  const signIn = await navigateProjectUrl(privateUrl, { ...navigate, ...anonymousVisitor });
   expect(signIn, signIn.text).toMatchObject({ status: 302 });
   expect(signIn.headers).toMatchObject({ location: login({}), "cache-control": "no-store" });
-  const fetched = await fetchProjectUrl(privateUrl);
-  expect(fetched).toMatchObject({ status: 401, text: "Sign in\n" });
+  const fetched = await fetchProjectUrl(privateUrl, anonymousVisitor);
+  expect(fetched).toMatchObject({
+    status: 401,
+    text: paths ? "Sign in to iterate\n" : "Sign in\n",
+  });
   expect(fetched.headers).toMatchObject({ "www-authenticate": 'Bearer realm="iterate"' });
   const { token } = await oauthSession(projectId, member);
   expect(
@@ -198,8 +213,11 @@ test("an app's sign-in challenge (401 Bearer realm=iterate): a page load goes to
   const other = await registerProject(freshDnsSafeProjectSlug("ingress-sign-in-other"), member);
   const foreign = { Authorization: `Bearer ${(await oauthSession(other, member)).token}` };
   const signInAgain = await navigateProjectUrl(privateUrl, { ...navigate, ...foreign });
-  expect(signInAgain, signInAgain.text).toMatchObject({ status: 302 });
-  expect(signInAgain.headers).toMatchObject({ location: login({ project: slug }) });
+  if (paths) expect(signInAgain, signInAgain.text).toMatchObject({ status: 403 });
+  else {
+    expect(signInAgain, signInAgain.text).toMatchObject({ status: 302 });
+    expect(signInAgain.headers).toMatchObject({ location: login({ project: slug }) });
+  }
   expect(await fetchProjectUrl(privateUrl, foreign)).toMatchObject({ status: 403 });
 });
 

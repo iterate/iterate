@@ -150,6 +150,9 @@ export async function registerProject(slug: string, as?: { email: string }): Pro
  *  go as the project's member — its issuer cookie — unless a row sends its own `authorization` or
  *  `cookie`. Under subdomains nothing changes. */
 const pathsMember = () => ({ email: `e2e-member-${runId()}-${workerSlot()}@example.com` });
+/** The headers of a visitor with no credential: an empty cookie keeps the helpers from sending the
+ *  member's (under paths; under subdomains they send none anyway). */
+export const anonymousVisitor = { cookie: "" };
 /** A project's slug and id → the email of the member `registerProject` made it for. */
 const projectMembers = new Map<string, string>();
 /** An email → its issuer cookie, minted once. */

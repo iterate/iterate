@@ -15,6 +15,7 @@ import { RpcTarget, upgradeWebSocketResponse, WebSocketPair } from "capnweb";
 import { expect, test } from "vitest";
 import { adminCredentials, rejection, session, untilValue } from "./support/client.ts";
 import {
+  anonymousVisitor,
   fetchProjectUrl,
   freshDnsSafeProjectSlug,
   navigateProjectUrl,
@@ -50,13 +51,19 @@ test("a route to a lent stub: HTTP, a WebSocket keeping its subprotocol, the pri
     ...route,
     authRequirement: { visitors: "project-members" },
   });
+  // a visitor with no credential: sent to sign in, a fetch 401 (under paths the edge answers both
+  // before the route is asked: every project path is members-only)
   const navigation = await navigateProjectUrl(blog, {
+    ...anonymousVisitor,
     "sec-fetch-mode": "navigate",
     "sec-fetch-dest": "document",
   });
   expect(navigation).toMatchObject({ status: 302 });
   expect(navigation.headers.location).toContain("/.auth/login");
-  expect(await fetchProjectUrl(blog)).toMatchObject({ status: 401, text: "Sign in\n" });
+  expect(await fetchProjectUrl(blog, anonymousVisitor)).toMatchObject({
+    status: 401,
+    headers: { "www-authenticate": 'Bearer realm="iterate"' },
+  });
 
   await itx.fetchRoutes.set("tunnel-blog", route);
   provision[Symbol.dispose]();
