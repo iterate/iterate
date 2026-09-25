@@ -58,9 +58,6 @@ playwriter-screenshot-*
 pr-videos/
 *.log
 
-# Local dev secrets and miniflare state an older checkout may still hold; never commit.
-.alchemy/
-
 # The host CLI's default playback file: an artifact of running it, not source.
 iterate-kit-playback.wav
 

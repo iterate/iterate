@@ -60,7 +60,6 @@
   "jsPlugins": [
     "./lint/oxlint-plugin-iterate.ts",
     "@tanstack/eslint-plugin-router",
-    "eslint-plugin-codegen",
     "eslint-plugin-eslint-comments",
     {
       "name": "import-js",
@@ -202,7 +201,6 @@
         "no-sequences": "error",
         "prefer-numeric-literals": "error",
         "no-new-func": "error",
-        "codegen/codegen": "error",
         "react/only-export-components": [
           "warn",
           {

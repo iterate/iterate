@@ -12,7 +12,6 @@
     "@octokit/rest": "^22.0.0",
     "@slack/web-api": "^8.1.1",
     "aws4fetch": "1.0.20",
-    "capnweb": "catalog:",
     "hyparquet-writer": "0.16.10",
     "yaml": "catalog:",
     "zod": "catalog:"

@@ -84,7 +84,7 @@ read secrets.
   `apps/os/.wrangler/dev-server.json` (`{pid, port, baseUrl, startedAt, detached}`), which
   is how `status`, `kill` and `pnpm getin` find it. Without `--port` the port is
   the worktree's last recorded one, else `8788`, else a free one. `pnpm getin`
-  (`scripts/getin.ts`) starts the server if need be, creates the project as the
+  (`apps/os/scripts/getin.ts`) starts the server if need be, creates the project as the
   person through the operator bearer (idempotent), and opens a one-click sign-in
   link (below) signed with the local key. With a local Dash up at
   `http://localhost:5173` whose `APP_CONFIG_URLS__OS` is this server, it lands on the

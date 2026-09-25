@@ -5,8 +5,8 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync, writeFileSync, readFileSync, readdirSync } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
-import process from "node:process";
 import { build as esbuild } from "esbuild";
+import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
 import { viteBuild } from "../../../scripts/lib/deploy-helpers.ts";
 
 const root = path.resolve(import.meta.dirname, "..");
@@ -127,4 +127,4 @@ export async function buildOs(env: string) {
   await viteBuild(root, env);
 }
 
-if (process.argv[1]?.endsWith("build.ts")) await build();
+if (isMainModule(import.meta.url)) await build();

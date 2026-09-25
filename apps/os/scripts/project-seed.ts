@@ -8,6 +8,7 @@ import { newWebSocketRpcSession, type RpcStub } from "capnweb";
 import { WebSocket } from "undici";
 import { createCli } from "trpc-cli";
 import { z } from "zod";
+import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
 import type { IterateSessionApi, SessionCredentials } from "iterate/api";
 import type { ItxExpression } from "iterate/expression";
 import { OS_DOPPLER_PROJECT, osEnvs } from "../../../envs.ts";
@@ -479,5 +480,4 @@ export async function apply(options: {
   });
 }
 
-if (process.argv[1]?.endsWith("project-seed.ts"))
-  void createCli({ ...import.meta, name: "project-seed" }).run();
+if (isMainModule(import.meta.url)) void createCli({ ...import.meta, name: "project-seed" }).run();
