@@ -1,4 +1,3 @@
-import type { EwtConsole } from "esp-web-tools/dist/components/ewt-console.js";
 import type { Manifest } from "esp-web-tools/dist/const.js";
 import type { FirmwareDevice } from "./catalog.ts";
 import type { DeviceConfiguration } from "./config-image.ts";
@@ -80,8 +79,8 @@ export async function flashDevice(input: {
 /**
  * Opens a board's serial port to read its logs, what esp-web-tools' "Logs & Console" did: the port
  * it was just flashed through (`flash` closed it), or one the person picks. Returns esp-web-tools'
- * console element for it, which starts reading once it's on the page, and `mount`, the ref that
- * puts it there (components/device-logs.tsx). `closeDeviceLogs` stops it.
+ * console element for it, which starts reading once it's on the page, `mount`, the ref that puts
+ * it there (components/device-logs.tsx), and `close`.
  */
 export async function openDeviceLogs(port: SerialPort | undefined) {
   const chosen = port || (await choosePort());
@@ -94,27 +93,23 @@ export async function openDeviceLogs(port: SerialPort | undefined) {
   logs.logger = console;
   logs.allowInput = false;
   logs.style.height = "100%";
+  // Once per session: Back waits for it, and the view's unmount asks again, however it goes away.
+  // The one promise is the answer to both, so the port is closed exactly once.
+  let closing: Promise<void> | undefined;
+  const close = () => (closing ||= logs.disconnect().then(() => chosen.close()));
   return {
     logs,
-    // One function per session, so React attaches it once. Its cleanup lets go of the port however
-    // the view goes away: after Back (already closed), or unmounted by leaving the page.
+    /** Stops reading and lets go of the port, so flashing (or another tab) can open it next. */
+    close,
+    /** The view's ref: one function per session, so React attaches it once. */
     mount: (host: HTMLElement | null) => {
       if (!host) return;
       host.appendChild(logs);
       return () => {
-        closeDeviceLogs(logs).catch((error: unknown) =>
-          console.warn("kit.logs_close_failed", error),
-        );
+        close().catch((error: unknown) => console.warn("kit.logs_close_failed", error));
       };
     },
   };
-}
-
-/** Stops reading and lets go of the port, so flashing (or another tab) can open it next. Safe to
- *  call twice: a closed port has no `readable`. */
-export async function closeDeviceLogs(logs: EwtConsole) {
-  await logs.disconnect();
-  if (logs.port.readable) await logs.port.close();
 }
 
 function readableFailure(state: Extract<FlashState, { state: "error" }>, device: FirmwareDevice) {

@@ -21,12 +21,7 @@ import { Spinner } from "@iterate-com/ui/components/spinner";
 import { UsbIcon } from "lucide-react";
 import type { FirmwareDevice } from "../firmware/catalog.ts";
 import type { DeviceConfiguration } from "../firmware/config-image.ts";
-import {
-  closeDeviceLogs,
-  flashDevice,
-  openDeviceLogs,
-  type FlashProgress,
-} from "../firmware/flash-device.ts";
+import { flashDevice, openDeviceLogs, type FlashProgress } from "../firmware/flash-device.ts";
 import type { FirmwareManifest } from "../firmware/prepare-manifest.ts";
 import { DeviceLogs } from "./device-logs.tsx";
 
@@ -68,7 +63,7 @@ export function SetupWizard({
   const logging = useMutation({ mutationFn: openDeviceLogs });
   // Back from the logs waits for the port to close, so the next Choose port or Show logs can open it
   const closingLogs = useMutation({
-    mutationFn: closeDeviceLogs,
+    mutationFn: (session: Awaited<ReturnType<typeof openDeviceLogs>>) => session.close(),
     onSettled: () => logging.reset(),
   });
   // `flashDevice` reports progress into the query cache, one entry per attempt; this reads it back
@@ -88,7 +83,7 @@ export function SetupWizard({
           flashing.reset();
           logging.reset();
         };
-        if (logging.isSuccess) closingLogs.mutate(logging.data.logs, { onSettled: resetAll });
+        if (logging.isSuccess) closingLogs.mutate(logging.data, { onSettled: resetAll });
         else resetAll();
       }}
       disablePointerDismissal
@@ -281,10 +276,7 @@ export function SetupWizard({
               </>
             )}
             {logging.isSuccess && (
-              <DeviceLogs
-                session={logging.data}
-                onBack={() => closingLogs.mutate(logging.data.logs)}
-              />
+              <DeviceLogs session={logging.data} onBack={() => closingLogs.mutate(logging.data)} />
             )}
           </>
         )}
