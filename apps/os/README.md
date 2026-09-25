@@ -174,3 +174,5 @@ presents a personal access token; [credentials](docs/credentials.md) says which 
 where, and why the operator bearer is `/api`'s alone.
 
 For a deployment in another Cloudflare account, follow [self-hosting](SELF-HOSTING.md).
+
+<!-- preview probe for #3158: do not merge -->
