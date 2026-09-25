@@ -1134,13 +1134,34 @@ export async function handlePetshopRequest(request: Request, deps: PetshopDeps):
 // in the Durable Object.
 const petCatalogue = seedPets();
 
+/** A call to the state Durable Object that the platform failed: workerd stamps it `retryable` (the
+ *  transport was cut), `overloaded`, or `durableObjectReset` (a deploy or a storage failure reset
+ *  the object under the call). */
+const isDurableObjectFailure = (error: unknown): error is Error =>
+  error instanceof Error &&
+  ["retryable", "overloaded", "durableObjectReset"].some(
+    (flag) => Reflect.get(error, flag) === true,
+  );
+
 export default {
-  fetch(request: Request, env: Env): Promise<Response> {
-    return handlePetshopRequest(request, {
-      state: env.PETSHOP_STATE.get(env.PETSHOP_STATE.idFromName("global")),
-      sealKey: env.PETSHOP_SEAL_KEY,
-      backdoorSecret: env.PETSHOP_BACKDOOR_SECRET,
-      pets: petCatalogue,
-    });
+  async fetch(request: Request, env: Env): Promise<Response> {
+    try {
+      return await handlePetshopRequest(request, {
+        state: env.PETSHOP_STATE.get(env.PETSHOP_STATE.idFromName("global")),
+        sealKey: env.PETSHOP_SEAL_KEY,
+        backdoorSecret: env.PETSHOP_BACKDOOR_SECRET,
+        pets: petCatalogue,
+      });
+    } catch (error) {
+      if (!isDurableObjectFailure(error)) throw error;
+      // The caller gets the platform's message instead of Cloudflare's error page, and the shop's
+      // log names the call it failed.
+      console.error({
+        event: "petshop.state-failed",
+        request: `${request.method} ${new URL(request.url).pathname}`,
+        message: error.message,
+      });
+      return json({ error: "temporarily_unavailable", error_description: error.message }, 503);
+    }
   },
 };

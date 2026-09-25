@@ -6,7 +6,8 @@
  */
 import { createHmac } from "node:crypto";
 import { expect, onTestFinished, test, vi } from "vitest";
-import { pkceS256 } from "./seal.ts";
+import { pkceS256, randomSealKey } from "./seal.ts";
+import worker, { type Env } from "./worker.ts";
 import {
   DEFAULT_ACCESS_TTL_SECONDS,
   DEFAULT_CLIENT_ID,
@@ -700,6 +701,35 @@ test("mcp oauth: a dynamically-registered client is pinned to its redirect URIs"
   expect(await rejected.json()).toMatchObject({ error: "invalid_request" });
 });
 
+test("state failure: a call the state Durable Object's reset failed answers 503 with the platform's message and logs the request; any other throw stays an exception", async () => {
+  const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+  onTestFinished(() => logged.mockRestore());
+  const reset = Object.assign(
+    new Error("Durable Object storage operation exceeded timeout which caused object to be reset."),
+    { overloaded: true, durableObjectReset: true },
+  );
+  const login = () =>
+    new Request(
+      `${ORIGIN}/api/legacy-login`,
+      postJson({ email: "a@b.c", password: "correct-horse" }),
+    );
+
+  const response = await worker.fetch(login(), envWhoseStateThrows(reset));
+  expect(response).toMatchObject({ status: 503 });
+  expect(await response.json()).toEqual({
+    error: "temporarily_unavailable",
+    error_description: reset.message,
+  });
+  expect(logged).toHaveBeenCalledWith({
+    event: "petshop.state-failed",
+    request: "POST /api/legacy-login",
+    message: reset.message,
+  });
+
+  const bug = new TypeError("state.clients is undefined");
+  await expect(worker.fetch(login(), envWhoseStateThrows(bug))).rejects.toBe(bug);
+});
+
 const basicAuth = (clientId: string, clientSecret: string) =>
   `Basic ${btoa(`${clientId}:${clientSecret}`)}`;
 
@@ -766,6 +796,16 @@ async function backdoorState(shop: Shop): Promise<PetshopState> {
 }
 
 const postJson = (body: unknown): RequestInit => ({ method: "POST", body: JSON.stringify(body) });
+
+/** The deployed worker's bindings, its state Durable Object failing every call with `error`. */
+const envWhoseStateThrows = (error: Error) =>
+  ({
+    PETSHOP_STATE: {
+      idFromName: () => ({}),
+      get: () => ({ getState: () => Promise.reject(error) }),
+    },
+    PETSHOP_SEAL_KEY: randomSealKey(),
+  }) as unknown as Env;
 
 const hexHmac = (secret: string, body: string) =>
   `sha256=${createHmac("sha256", secret).update(body).digest("hex")}`;
