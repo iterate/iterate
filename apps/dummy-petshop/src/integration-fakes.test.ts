@@ -217,6 +217,22 @@ test.for<[string, (shop: Fakes) => Promise<Response>, object]>([
     },
     { status: 401 },
   ],
+  [
+    "the emails of a user who never approved the Email addresses permission",
+    async (shop) => {
+      const code = await shop.codeFrom("/login/oauth/authorize", {
+        client_id: DEFAULT_CLIENT_ID,
+        redirect_uri: CALLBACK,
+        emails: "none",
+      });
+      const emails = await shop.call("/user/emails", {
+        headers: { authorization: `Bearer ${await userToken(shop, code)}` },
+      });
+      expect(emails.headers.get("x-accepted-github-permissions")).toBe("emails=read");
+      return emails;
+    },
+    { status: 403, body: { message: "Resource not accessible by integration" } },
+  ],
 ])("github refuses %s", async ([, run, expected]) => {
   const shop = fakes();
   await installAcme(shop);

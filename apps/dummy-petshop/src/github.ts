@@ -11,9 +11,11 @@
  *                                         &setup_action=install&state (the code is `login`'s,
  *                                         default the installation's first user); `request=1`
  *                                         (a member asking an owner) → ?setup_action=request&state
- *   GET  /login/oauth/authorize           ?client_id&redirect_uri&state[&login][&email] → a code at
- *                                         once (Sign in with GitHub, and the connect's authorize);
- *                                         `prompt=select_account` with no login: the account picker
+ *   GET  /login/oauth/authorize           ?client_id&redirect_uri&state[&login][&email][&emails=none]
+ *                                         → a code at once (Sign in with GitHub, and the connect's
+ *                                         authorize); `prompt=select_account` with no login: the
+ *                                         account picker; `emails=none`: the user authorized before
+ *                                         the App asked for "Email addresses" and never approved it
  *   POST /login/oauth/access_token        client_id, client_secret, code, redirect_uri (required when the
  *                                         authorize request named one) (query or
  *                                         form) → an expiring user token and its refresh token (as
@@ -22,7 +24,9 @@
  *                                         200 `{ error }`
  *   GET  /user                            the user token's user
  *   GET  /user/emails                     its one address, primary and verified (`email`, default
- *                                         `<login>@users.petshop.test`)
+ *                                         `<login>@users.petshop.test`); for an `emails=none` token
+ *                                         GitHub's 403 "Resource not accessible by integration" with
+ *                                         `X-Accepted-GitHub-Permissions: emails=read`
  *   GET  /user/installations              the installations that user reaches through that client
  *   GET  /user/memberships/orgs/<org>     the user's role in an organization an installation is on
  *   POST /app/installations/<id>/access_tokens   an RS256 App JWT → an installation token
@@ -69,6 +73,8 @@ interface GithubUserCodePayload {
   redirectUriNamed?: true;
   login: string;
   email?: string;
+  /** The user never approved the App's "Email addresses" account permission. */
+  emailsDenied?: true;
   exp: number;
 }
 
@@ -76,6 +82,7 @@ interface GithubUserTokenPayload {
   t: "github-user";
   login: string;
   email?: string;
+  emailsDenied?: true;
   clientId: string;
   /** The client's revocation epoch, so `/__backdoor/expire-tokens` forces a refresh. */
   epoch?: number;
@@ -86,6 +93,7 @@ interface GithubRefreshTokenPayload {
   t: "github-refresh";
   login: string;
   email?: string;
+  emailsDenied?: true;
   clientId: string;
 }
 
@@ -109,6 +117,7 @@ export async function handleGithubRequest(
     login: string,
     email?: string,
     redirectUriNamed?: true,
+    emailsDenied?: true,
   ) =>
     seal(
       {
@@ -119,6 +128,7 @@ export async function handleGithubRequest(
         redirectUriNamed,
         login,
         email,
+        emailsDenied,
         exp: nowSeconds() + 600,
       } satisfies GithubUserCodePayload,
       deps.sealKey,
@@ -159,6 +169,7 @@ export async function handleGithubRequest(
         query.login || "petshop-user",
         query.email,
         true,
+        query.emails === "none" || undefined,
       ),
     );
     target.searchParams.set("state", query.state || "");
@@ -170,7 +181,7 @@ export async function handleGithubRequest(
     // GitHub answers a refused exchange with HTTP 200 and an `error`
     if (!client || client.public || client.clientSecret !== params.client_secret)
       return Response.json({ error: "incorrect_client_credentials" });
-    let user: { login: string; email?: string };
+    let user: { login: string; email?: string; emailsDenied?: true };
     if (params.grant_type === "refresh_token") {
       const refresh = await unseal<GithubRefreshTokenPayload>(
         params.refresh_token || "",
@@ -200,6 +211,7 @@ export async function handleGithubRequest(
       t: "github-user",
       login: user.login,
       email: user.email,
+      emailsDenied: user.emailsDenied,
       clientId,
       epoch: accessTokenEpochFor(await deps.state.getState(), clientId),
       exp: nowSeconds() + USER_TOKEN_TTL_SECONDS,
@@ -208,6 +220,7 @@ export async function handleGithubRequest(
       t: "github-refresh",
       login: user.login,
       email: user.email,
+      emailsDenied: user.emailsDenied,
       clientId,
     };
     return Response.json({
@@ -347,6 +360,16 @@ export async function handleGithubRequest(
     return badCredentials();
   if (key === "GET /user")
     return Response.json({ login: token.login, id: fakeUserIdOf(token.login), type: "User" });
+  if (key === "GET /user/emails" && token.emailsDenied)
+    return Response.json(
+      {
+        message: "Resource not accessible by integration",
+        documentation_url:
+          "https://docs.github.com/rest/users/emails#list-email-addresses-for-the-authenticated-user",
+        status: "403",
+      },
+      { status: 403, headers: { "x-accepted-github-permissions": "emails=read" } },
+    );
   if (key === "GET /user/emails")
     return Response.json([
       {

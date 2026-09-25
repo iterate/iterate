@@ -76,6 +76,31 @@ deployedOnly(
   },
 );
 
+deployedOnly(
+  "Sign in with GitHub as a person who never approved iterate's Email addresses permission lands on the sign-in page, told how to approve it",
+  async ({ skip }) => {
+    const login = freshDnsSafeProjectSlug("gh-noemail");
+    const response = await callbackThroughFake("/.auth/identity/github", {
+      login,
+      email: `${login}@${TEST_LINK_EMAIL_DOMAIN}`,
+      emails: "none",
+    });
+    if (!response) return skip("this deployment's GitHub client is not the pet shop's fake");
+    expect(response).toMatchObject({ status: 303 });
+    const location = new URL(response.headers.get("location")!, workerUrl("/"));
+    expect({
+      path: location.pathname,
+      error: location.searchParams.get("error"),
+    }).toMatchObject({
+      path: "/login",
+      error: expect.stringContaining("https://github.com/settings/apps/authorizations"),
+    });
+    expect(
+      response.headers.getSetCookie().some((value) => value.startsWith("__Host-itx-session=")),
+    ).toBe(false);
+  },
+);
+
 /** A browser signing in at `path` through a pet-shop fake — `choices` are the person's picks at its
  *  page — following the platform's redirects back for consent: the session cookie, or null when the
  *  provider is not the pet shop. */
@@ -83,6 +108,21 @@ async function signInThroughFake(
   path: string,
   choices: Record<string, string>,
 ): Promise<string | null> {
+  const response = await callbackThroughFake(path, choices);
+  if (!response) return null;
+  expect(response, await response.clone().text()).toMatchObject({ status: 303 });
+  return response.headers
+    .getSetCookie()
+    .map((value) => value.split(";")[0]!)
+    .find((value) => value.startsWith("__Host-itx-session="))!;
+}
+
+/** The platform's last answer to a browser signing in at `path` through a pet-shop fake, or null
+ *  when the provider is not the pet shop. */
+async function callbackThroughFake(
+  path: string,
+  choices: Record<string, string>,
+): Promise<Response | null> {
   let response = await fetch(`${workerUrl(path)}?next=%2F`, { redirect: "manual" });
   for (let hop = 0; hop < 3 && response.status === 302; hop++) {
     const cookie = response.headers.getSetCookie()[0]!.split(";")[0]!;
@@ -96,11 +136,7 @@ async function signInThroughFake(
       redirect: "manual",
     });
   }
-  expect(response, await response.clone().text()).toMatchObject({ status: 303 });
-  return response.headers
-    .getSetCookie()
-    .map((value) => value.split(";")[0]!)
-    .find((value) => value.startsWith("__Host-itx-session="))!;
+  return response;
 }
 
 async function gmailProfile(itx: any) {

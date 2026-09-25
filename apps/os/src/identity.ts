@@ -13,6 +13,16 @@
 // one keeps the refresh token already stored. GitHub is the App's user authorization: its user
 // token acts with the App's permissions, and its primary verified address is the email.
 //
+// A CALLBACK NEVER THROWS: whatever goes wrong after the provider sends the browser back lands the
+// person on the sign-in page with why (`/login?next&error`, 303), split three ways in the logs:
+//  - a REFUSAL (`SignInRefused`: an expired or foreign flow, a declined consent, a code the provider
+//    will not exchange, an unverified email, a GitHub user who never approved the App's "Email
+//    addresses" permission, an identity conflict) is an expected outcome, logged at info as
+//    `identity.sign-in-refused` with its `reason`;
+//  - the PROVIDER unreachable or answering a server error (`ProviderUnavailable`) is a platform
+//    failure, a warn `identity.platform-failure-<step>` the prd fault alarm counts;
+//  - anything else is a defect of ours, reported at error level (`identity.sign-in-failed`).
+//
 // A provider pointed at a FAKE (a preview's pet shop, which mints any address) signs in addresses
 // under `login.testLink.emailDomain` alone (integrations/rules.ts `fakeProviderEmailRefusal`).
 import * as oauth from "oauth4webapi";
@@ -131,13 +141,48 @@ function signInClientOf(config: AppConfig, provider: IdentityProvider) {
 }
 type SignInClient = NonNullable<ReturnType<typeof signInClientOf>>;
 
-/** A refusal the person reads: the sign-in page's words, never a stack. */
+const REFUSED = "Sign-in was refused or expired. Please start again.";
+/** GitHub answers `/user/emails` 403 to a user token whose user never approved the App's "Email
+ *  addresses" account permission — one who authorized the App before it asked for it. GitHub asks
+ *  them only on a fresh authorization ("Approving updated permissions for a GitHub App": the App
+ *  "will prompt you to reauthorize the app in order to enable the new account permissions"). */
+const GITHUB_EMAIL_PERMISSION_MESSAGE =
+  "GitHub didn't share your email address with iterate. Revoke iterate at https://github.com/settings/apps/authorizations, then sign in with GitHub again to approve its updated permissions — or sign in another way.";
+
+/** A refusal the person reads on the sign-in page — an expected outcome, never a fault: `reason`
+ *  names it in the log, with `details` beside it. */
 class SignInRefused extends Error {
-  readonly status: number;
-  constructor(message: string, status: number) {
+  readonly reason: string;
+  readonly details: Record<string, string | number | undefined>;
+  constructor(
+    message: string,
+    reason: string,
+    details: Record<string, string | number | undefined> = {},
+  ) {
     super(message);
-    this.status = status;
+    this.reason = reason;
+    this.details = details;
   }
+}
+
+/** The provider unreachable at `step`, or answering it with a server error: a platform failure. */
+class ProviderUnavailable extends Error {
+  readonly step: string;
+  constructor(step: string, cause: unknown) {
+    super(cause instanceof Error ? cause.message : String(cause));
+    this.step = step;
+  }
+}
+
+/** A provider's answer at `step`: a failure to reach it, or a server error or rate limit from it,
+ *  is `ProviderUnavailable`. */
+async function providerFetch(step: string, input: string, init?: RequestInit) {
+  const response = await fetch(input, init).catch((error: unknown) => {
+    throw new ProviderUnavailable(step, error);
+  });
+  if (response.status >= 500 || response.status === 429)
+    throw new ProviderUnavailable(step, `${new URL(input).pathname} answered ${response.status}`);
+  return response;
 }
 
 export async function identityResponse(request: Request, env: Env) {
@@ -151,17 +196,26 @@ export async function identityResponse(request: Request, env: Env) {
   const client = signInClientOf(config, provider);
   if (!client) return new Response(`${NAMES[provider]} sign-in is not configured`, { status: 503 });
   const cookie = `__Host-itx-${provider}-identity-flow`;
-  const as = client.issuer
-    ? await oauth
-        .discoveryRequest(client.issuer)
-        .then((response) => oauth.processDiscoveryResponse(client.issuer!, response))
-    : null;
+  /** Google's and Cloudflare's OpenID configuration (GitHub has none). */
+  const discover = () =>
+    client.issuer
+      ? oauth
+          .discoveryRequest(client.issuer)
+          .then((response) => oauth.processDiscoveryResponse(client.issuer!, response))
+          .catch((error: unknown) => {
+            throw new ProviderUnavailable("discovery", error);
+          })
+      : null;
   const { platformOrigin } = platformAddressesOf(env, request);
   const redirectUri = `${platformOrigin}${PATHS[provider]}/callback`;
   const signingSecret = await sessionSigningSecretOf(config);
   const headers = new Headers({ "Cache-Control": "no-store", "Referrer-Policy": "no-referrer" });
   /** Off to the provider's authorize page, the flow in a signed cookie. */
-  const authorize = async (flow: Flow, consentFor?: string) => {
+  const authorize = async (
+    as: oauth.AuthorizationServer | null,
+    flow: Flow,
+    consentFor?: string,
+  ) => {
     const authorization = new URL(
       as ? as.authorization_endpoint! : `${client.githubOrigin}/login/oauth/authorize`,
     );
@@ -197,9 +251,24 @@ export async function identityResponse(request: Request, env: Env) {
   });
   if (url.pathname === PATHS[provider])
     return authorize(
+      await discover(),
       newFlow(sameOriginPath(url.searchParams.get("next") || "/", platformOrigin), false),
     );
   headers.append("Set-Cookie", `${cookie}=; ${cookieAttributes}; Max-Age=0`);
+  /** Back to the sign-in page, `error` on it. */
+  const toSignInPage = (next: string, error: string) => {
+    headers.set("Location", `/login?${new URLSearchParams({ next, error })}`);
+    return new Response(null, { status: 303, headers });
+  };
+  const refused = (next: string, refusal: SignInRefused) => {
+    console.info({
+      ...refusal.details,
+      event: "identity.sign-in-refused",
+      provider,
+      reason: refusal.reason,
+    });
+    return toSignInPage(next, refusal.message);
+  };
   const signed = cookieValueOf(request.headers.get("cookie"), cookie);
   const parsedFlow = Flow.safeParse(signed && (await verifyClaims(signed, signingSecret)));
   if (
@@ -209,9 +278,10 @@ export async function identityResponse(request: Request, env: Env) {
     parsedFlow.data.clientId !== client.clientId ||
     parsedFlow.data.redirectUri !== redirectUri
   )
-    return new Response("Sign-in expired. Please start again.", { status: 400, headers });
+    return refused("/", new SignInRefused("Sign-in expired. Please start again.", "flow-expired"));
   const flow = parsedFlow.data;
   try {
+    const as = await discover();
     const signedIn = as
       ? await oidcSignIn(as, client, url, flow, redirectUri)
       : await githubSignIn(client, url, flow, redirectUri);
@@ -221,13 +291,11 @@ export async function identityResponse(request: Request, env: Env) {
         identity.email,
         config.login.testLink?.emailDomain ?? null,
       );
-      if (refusal) throw new SignInRefused(`${NAMES[provider]}: ${refusal}.`, 403);
+      if (refusal)
+        throw new SignInRefused(`${NAMES[provider]}: ${refusal}.`, "fake-provider-email");
     }
-    if (!emailAllowed(config.login.allowedEmails, identity.email)) {
-      const query = new URLSearchParams({ next: flow.next, error: EMAIL_NOT_ALLOWED_MESSAGE });
-      headers.set("Location", `/login?${query}`);
-      return new Response(null, { status: 303, headers });
-    }
+    if (!emailAllowed(config.login.allowedEmails, identity.email))
+      throw new SignInRefused(EMAIL_NOT_ALLOWED_MESSAGE, "email-not-allowed");
     // The provider and its stable subject together name the person (the control plane's rule: link
     // once by verified email, then by the subject); an email change cannot change the actor.
     const user = await new ControlPlane(env).linkIdentity(provider, identity.sub, identity.email);
@@ -240,7 +308,7 @@ export async function identityResponse(request: Request, env: Env) {
         bounced: flow.bounced,
       })
     )
-      return authorize(newFlow(flow.next, true), identity.email);
+      return authorize(as, newFlow(flow.next, true), identity.email);
     // The person is signed in whatever becomes of the token: a failure to keep it is reported, and
     // the next sign-in (or a connect) keeps one.
     await keepSignInToken(env, client, provider, user, signedIn, connection).catch(
@@ -250,32 +318,37 @@ export async function identityResponse(request: Request, env: Env) {
       picture: identity.picture,
       name: identity.name,
     });
-    if ("error" in session) {
-      const query = new URLSearchParams({ next: flow.next, error: session.error });
-      headers.set("Location", `/login?${query}`);
-      return new Response(null, { status: 303, headers });
-    }
+    // its failures are logged where they happen (issuer-session.ts)
+    if ("error" in session) return toSignInPage(flow.next, session.error);
     headers.append("Set-Cookie", session.setCookie);
     headers.set("Location", session.location);
     return new Response(null, { status: 303, headers });
   } catch (error) {
-    if (error instanceof SignInRefused)
-      return new Response(error.message, { status: error.status, headers });
+    if (error instanceof SignInRefused) return refused(flow.next, error);
     if (errorCode(error) === "IDENTITY_CONFLICT")
-      return new Response(error instanceof Error ? error.message : "Account identity conflict", {
-        status: 409,
-        headers,
-      });
+      return refused(
+        flow.next,
+        new SignInRefused(
+          error instanceof Error ? error.message : "Account identity conflict",
+          "identity-conflict",
+        ),
+      );
     if (
       error instanceof oauth.AuthorizationResponseError ||
       error instanceof oauth.OperationProcessingError ||
       (error instanceof oauth.ResponseBodyError && error.error === "invalid_grant")
     )
-      return new Response("Sign-in was refused or expired. Please start again.", {
-        status: 400,
-        headers,
+      return refused(flow.next, new SignInRefused(REFUSED, "provider-refused"));
+    if (error instanceof ProviderUnavailable) {
+      console.warn({
+        event: `identity.platform-failure-${error.step}`,
+        provider,
+        message: error.message,
       });
-    throw error;
+      return toSignInPage(flow.next, `${NAMES[provider]} didn't answer. Please try again.`);
+    }
+    reportIssue("identity.sign-in-failed", error, { provider });
+    return toSignInPage(flow.next, `Sign-in with ${NAMES[provider]} failed. Please try again.`);
   }
 }
 
@@ -290,14 +363,20 @@ async function oidcSignIn(
 ): Promise<SignedIn> {
   const oauthClient = { client_id: client.clientId };
   const parameters = oauth.validateAuthResponse(as, oauthClient, url, flow.state);
-  const response = await oauth.authorizationCodeGrantRequest(
-    as,
-    oauthClient,
-    oauth.ClientSecretPost(client.clientSecret),
-    parameters,
-    redirectUri,
-    flow.verifier,
-  );
+  const response = await oauth
+    .authorizationCodeGrantRequest(
+      as,
+      oauthClient,
+      oauth.ClientSecretPost(client.clientSecret),
+      parameters,
+      redirectUri,
+      flow.verifier,
+    )
+    .catch((error: unknown) => {
+      throw new ProviderUnavailable("token", error);
+    });
+  if (response.status >= 500 || response.status === 429)
+    throw new ProviderUnavailable("token", `the token endpoint answered ${response.status}`);
   const tokens = await oauth.processAuthorizationCodeResponse(as, oauthClient, response, {
     expectedNonce: flow.nonce,
     requireIdToken: true,
@@ -307,7 +386,7 @@ async function oidcSignIn(
   if (!identity.success)
     throw new SignInRefused(
       `${NAMES[flow.provider]} must verify your email before you can sign in.`,
-      403,
+      "email-unverified",
     );
   return {
     identity: identity.data,
@@ -331,8 +410,8 @@ async function githubSignIn(
   redirectUri: string,
 ): Promise<SignedIn> {
   if (url.searchParams.get("state") !== flow.state || url.searchParams.get("error"))
-    throw new SignInRefused("Sign-in was refused or expired. Please start again.", 400);
-  const exchange = await fetch(client.tokenEndpoint, {
+    throw new SignInRefused(REFUSED, "provider-refused");
+  const exchange = await providerFetch("token", client.tokenEndpoint, {
     method: "POST",
     headers: { accept: "application/json", "content-type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({
@@ -344,17 +423,29 @@ async function githubSignIn(
     }),
   });
   const tokens: unknown = await exchange.json().catch(() => null);
+  // GitHub refuses an exchange (a spent or foreign code) with HTTP 200 and an `error`
   if (!isRecord(tokens) || typeof tokens.access_token !== "string")
-    throw new SignInRefused("Sign-in was refused or expired. Please start again.", 400);
-  const accessToken = tokens.access_token;
-  const github = async (path: string) => {
-    const response = await fetch(`${client.apiOrigin}${path}`, {
-      headers: {
-        accept: "application/vnd.github+json",
-        authorization: `Bearer ${accessToken}`,
-        "user-agent": "iterate",
-      },
+    throw new SignInRefused(REFUSED, "provider-refused", {
+      error: isRecord(tokens) && typeof tokens.error === "string" ? tokens.error : undefined,
     });
+  const accessToken = tokens.access_token;
+  const github = async (path: "/user" | "/user/emails") => {
+    const response = await providerFetch(
+      path === "/user" ? "user" : "emails",
+      `${client.apiOrigin}${path}`,
+      {
+        headers: {
+          accept: "application/vnd.github+json",
+          authorization: `Bearer ${accessToken}`,
+          "user-agent": "iterate",
+        },
+      },
+    );
+    // the user never approved the App's "Email addresses" permission; GitHub names what it wanted
+    if (path === "/user/emails" && response.status === 403)
+      throw new SignInRefused(GITHUB_EMAIL_PERMISSION_MESSAGE, "github-email-permission", {
+        acceptedPermissions: response.headers.get("x-accepted-github-permissions") ?? undefined,
+      });
     if (!response.ok) throw new Error(`GitHub's ${path} answered ${response.status}`);
     return (await response.json()) as unknown;
   };
@@ -371,7 +462,10 @@ async function githubSignIn(
     .parse(await github("/user/emails"));
   const primary = emails.find((email) => email.primary && email.verified);
   if (!primary)
-    throw new SignInRefused("GitHub must verify your primary email before you can sign in.", 403);
+    throw new SignInRefused(
+      "GitHub must verify your primary email before you can sign in.",
+      "email-unverified",
+    );
   return {
     identity: {
       sub: String(user.id),
