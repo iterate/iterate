@@ -50,7 +50,7 @@ export async function accessToken(shop: Shop): Promise<string> {
 /** Request options that present `token` as a bearer credential. */
 export const bearer = (token: string) => ({ headers: { authorization: `Bearer ${token}` } });
 
-/** Request options that POST `body` as JSON (the backdoor and legacy-login endpoints read it). */
+/** Request options that POST `body` as JSON. */
 export const postJson = (body: unknown): RequestInit => ({
   method: "POST",
   body: JSON.stringify(body),
