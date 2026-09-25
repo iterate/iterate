@@ -15,6 +15,8 @@
 //     delete: `list` answers in PATHS and returns ONE namespace-wide page + a cursor (the binding does
 //     not filter by project), so membership is asserted over ALL pages, never page one alone
 //   • isolation: one project never sees another's repos
+//   • a create right after a delete of the same path ends with a live repo: Artifacts deletes
+//     asynchronously, and the name answers "already exists" until the deletion lands
 //   • THE GIT ROUND TRIP through the facet (`itx.repos.get(path)`) against the real remote: born
 //     through the collection (`itx.repos.create(path)`, whose processor saga provisions the Artifacts
 //     repo), an unborn `main` reads as no file, the first commit lands parentless, a second lands a
@@ -65,6 +67,23 @@ test("cfArtifacts isolation: one project never sees another's repos", async () =
   try {
     // b lists its OWN repos (all pages) — a's repo lives under a's project and is filtered out.
     expect(await allRepoPaths(b)).not.toContain(path);
+  } finally {
+    await a.cfArtifacts.delete(path);
+  }
+});
+
+test("cfArtifacts: a create right after a delete of the same path ends with a live repo", async () => {
+  const a = openItx(freshCtx("cfaRecreate"));
+  const path = freshRepoPath("recreate");
+
+  expect(await a.cfArtifacts.create(path)).toEqual({ created: true });
+  try {
+    expect(await a.cfArtifacts.delete(path)).toBe(true);
+    // at once: the name may still be taken by the deletion in flight, which create waits out
+    expect(await a.cfArtifacts.create(path)).toEqual({ created: true });
+    const tok = await a.cfArtifacts.get(path).createToken("read", 60);
+    expect(tok.plaintext.length).toBeGreaterThan(0);
+    expect(await allRepoPaths(a)).toContain(path);
   } finally {
     await a.cfArtifacts.delete(path);
   }
