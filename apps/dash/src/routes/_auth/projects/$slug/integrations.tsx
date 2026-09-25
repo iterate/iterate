@@ -724,7 +724,8 @@ function ownAppOf(
           secret("clientSecret", "Client Secret"),
           secret("signingSecret", "Signing Secret"),
         ],
-        pin: ["https://slack.com"],
+        // the connection's whole pin up front (slack.com first: the connect reads it as the origin)
+        pin: ["https://slack.com", "https://files.slack.com"],
       };
     case "google":
       return {
@@ -733,7 +734,13 @@ function ownAppOf(
           "Create an OAuth client (Web application) in Google Cloud Console and add the redirect URL as an authorized redirect URI.",
         urls: [callback],
         fields: [secret("clientId", "Client ID"), secret("clientSecret", "Client secret")],
-        pin: ["https://oauth2.googleapis.com"],
+        // the connection's whole pin up front (the token origin first: the connect reads it as the origin)
+        pin: [
+          "https://oauth2.googleapis.com",
+          "https://www.googleapis.com",
+          "https://gmail.googleapis.com",
+          "https://docs.googleapis.com",
+        ],
       };
     case "github":
       return {
