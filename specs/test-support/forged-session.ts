@@ -30,8 +30,8 @@ export async function createProjectFixture(
     project,
     itx: input.operator.authenticate().projects.get(project.id),
     [Symbol.asyncDispose]() {
-      // Disposable Playwright projects are left behind: OS has no project removal, and a
-      // preview's state goes with the preview.
+      // A fixture's project is left behind (a spec that deletes one does so itself): a preview's
+      // state goes with the preview, and a failed spec's project stays to be read.
       return Promise.resolve();
     },
   };
