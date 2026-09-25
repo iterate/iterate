@@ -1,6 +1,6 @@
 import { join } from "node:path";
 
-import { SignatureKind } from "@typescript/native-preview/unstable/sync";
+import { SignatureKind } from "typescript/unstable/sync";
 import { expect, test } from "vitest";
 
 import { createOxlintFixture } from "./oxlint-fixture.ts";

@@ -17,10 +17,9 @@ packages:
   - lint
   - scripts
 # Every dependency two or more packages use is pinned here once and written `catalog:` in each
-# package.json; a dependency only one package uses keeps its version in that package.json.
-# catalogMode strict makes `pnpm add` write `catalog:` for a catalogued dependency and refuses any
-# other version of it.
-catalogMode: strict
+# package.json; a dependency only one package uses keeps its version in that package.json. The
+# catalog is kept by hand: pnpm's other catalog modes have `pnpm add` write every new dependency
+# into it, rewriting this file.
 cleanupUnusedCatalogs: true
 catalog:
   # One Cloudflare toolchain for every Worker in the repo: the Vite plugin, the wrangler it builds
@@ -99,9 +98,5 @@ overrides:
 # The catalog's typescript is 7, the native compiler, which has no JS API. typescript-eslint (under
 # this oxlint jsPlugin) needs TypeScript's JS API and peers on typescript <6.1; a peer resolves from
 # the parent's dependencies, which overrides cannot reach, so the plugin carries its own 6.
-packageExtensions:
-  "@tanstack/eslint-plugin-router":
-    dependencies:
-      typescript: npm:typescript@^6.0.3
 patchedDependencies:
   zod@4.6.5: patches/zod@4.6.5.patch

@@ -23,9 +23,10 @@
     "@tanstack/router-generator": "1.167.38",
     "@types/node": "catalog:",
     "hyparquet": "1.31.1",
+    "oxc-parser": "^0.151.0",
+    "oxc-transform": "^0.151.0",
     "trpc-cli": "catalog:",
     "typescript": "catalog:",
-    "typescript6": "npm:typescript@^6.0.3",
     "vitest": "catalog:"
   }
 }
