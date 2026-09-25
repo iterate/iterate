@@ -107,6 +107,7 @@ These rules apply whenever an agent is asked to open, babysit, address review, o
 - **Do wait** for **Cursor Bugbot** (and any other review bot that posts threads) to finish before treating the PR as “done,” unless the human says not to.
 - Bugbot is done when its check-run reaches `status: completed` (`success`, `skipped` and `neutral` all count); its findings are the unresolved review threads, which must reach zero. Rules 1–3 below say how to poll both.
 - Prefer waiting for **Cursor Bugbot** over merging on lint/test green alone.
+- The **Iterate GitHub AI linter** check reviews each head of an open, non-draft PR against `rules/` at the PR's base, as `iterate[bot]` (it runs on the prd `iterate` project from iterate/config `ai-linter/`). It is done at `status: completed`: `success` means no findings, and `neutral` means its inline comments are review threads like Bugbot's. It never blocks a merge.
 
 #### Agent wait loops: gate on the head commit's check-runs
 
