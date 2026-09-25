@@ -1,3 +1,4 @@
+import { useId } from "react";
 import { Button } from "@iterate-com/ui/components/button";
 import { Checkbox } from "@iterate-com/ui/components/checkbox";
 import { Label } from "@iterate-com/ui/components/label";
@@ -59,6 +60,9 @@ export function PermissionChoices({
   disabled: boolean;
   onDeclinedChange: (declined: ReadonlySet<string>) => void;
 }) {
+  // Named by the title and described by the note: the label around the checkbox would name it
+  // with both (Base UI).
+  const id = useId();
   function tick(name: string, checked: boolean) {
     const next = new Set(declined);
     if (checked) next.delete(name);
@@ -74,14 +78,19 @@ export function PermissionChoices({
         >
           <Checkbox
             className="mt-0.5 border-foreground/30 data-disabled:opacity-50"
-            aria-label={scope.title}
+            aria-labelledby={`${id}-${scope.name}-title`}
+            aria-describedby={`${id}-${scope.name}-note`}
             checked={scope.required || !declined.has(scope.name)}
             disabled={disabled || scope.required}
             onCheckedChange={(checked) => tick(scope.name, checked)}
           />
           <span className="flex flex-col gap-0.5">
-            <strong className="font-medium">{scope.title}</strong>
-            <span className="text-xs text-muted-foreground">{scope.note}</span>
+            <strong id={`${id}-${scope.name}-title`} className="font-medium">
+              {scope.title}
+            </strong>
+            <span id={`${id}-${scope.name}-note`} className="text-xs text-muted-foreground">
+              {scope.note}
+            </span>
           </span>
         </Label>
       ))}

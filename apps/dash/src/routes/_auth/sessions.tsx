@@ -341,7 +341,6 @@ function SessionsPage() {
                   ? projects.map((project) => (
                       <Label key={project.id} className="gap-2 font-mono font-normal">
                         <Checkbox
-                          aria-label={project.slug}
                           checked={!excludedProjectIds.has(project.id)}
                           disabled={minting}
                           onCheckedChange={(checked) => {
