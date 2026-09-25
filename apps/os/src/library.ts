@@ -180,17 +180,17 @@ export function buildLibrary(
 
 // ── run ── `itx.run(script)`: a request on the log, its settlement awaited. `runScript` appends
 // `itx/run-requested` and waits for the `run-settled` naming that request's offset; the EXECUTION is the
-// context DO's runner (iterate-context-durable-object.ts `#executeRun`), which calls `executeScript`
-// below at the request's commit — so a literal `run-requested` appended by anyone (a client over
-// /api, the agent's loop, a schedule) runs exactly as `itx.run` does, and both leave the same pair
-// of events. The script is the text of a function of one parameter — `async (itx) => …` — spliced
-// VERBATIM into the template below (a caller's own code in its own confined isolate: the
-// trusted-client doctrine), so a text that is not one function expression fails at load, in the
-// loader's words. It takes no arguments: a script is an agent's whole output (an alternative to a
-// tool call), its values baked in. The template is the smallest WorkerEntrypoint that hosts it:
-// `run()` hands it the scope of ONE `withItx` round trip, as the SDK's ConfigWorker does, so the
-// scope and every call the script made through it are released when it settles — its unawaited ones
-// and its deadline's included.
+// context DO's runner (iterate-context-durable-object.ts `#startRequestedRuns`), which calls
+// `executeScript` below at the request's commit, or a processor's request in the next alarm pass —
+// so a literal `run-requested` appended by anyone (a client over /api, the agent's loop, a schedule)
+// runs exactly as `itx.run` does, and both leave the same pair of events. The script is the text of
+// a function of one parameter — `async (itx) => …` — spliced VERBATIM into the template below (a
+// caller's own code in its own confined isolate: the trusted-client doctrine), so a text that is not
+// one function expression fails at load, in the loader's words. It takes no arguments: a script is
+// an agent's whole output (an alternative to a tool call), its values baked in. The template is the
+// smallest WorkerEntrypoint that hosts it: `run()` hands it the scope of ONE `withItx` round trip,
+// as the SDK's ConfigWorker does, so the scope and every call the script made through it are
+// released when it settles — its unawaited ones and its deadline's included.
 // The call rides `itx.workers.get(...).run()` on the handle the library holds, so a rule on
 // `itx.workers` applies to it like any other call.
 
