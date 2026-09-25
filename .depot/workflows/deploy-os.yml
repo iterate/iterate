@@ -92,6 +92,14 @@ jobs:
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         run: pnpm tsx scripts/ci/prd-post-deploy-check.ts check --previous-version "${{ steps.previous.outputs.version }}"
+      # `iterate@latest` on npm is the SDK prd now serves (scripts/ci/publish-iterate.ts): the next
+      # patch after npm's, so a project's local `npm install iterate` types what its loaded workers
+      # link. After the host check, and only for a deploy that went out.
+      - name: Publish the iterate SDK to npm
+        if: ${{ !cancelled() && steps.deploy.outcome == 'success' }}
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: doppler run -- pnpm tsx scripts/ci/publish-iterate.ts
       # The deploy's own result to #ci; a deploy that failed, was cancelled or hit the job's timeout
       # posts failure. `always()`, because `!cancelled()` is false once the job is cancelled, and a
       # timeout ends the job by cancelling it.
