@@ -72,6 +72,7 @@ import {
   resourceScope,
 } from "./context/paths.ts";
 import { secretPathsReferenced } from "./secrets.ts";
+import { isDeployReset } from "./retryable-error.ts";
 import { appConfigOf, sessionSigningSecretOf, type AppConfigEnv } from "./app-config.ts";
 import {
   ItxExpressionResolver,
@@ -1299,24 +1300,34 @@ export class IterateContextDurableObject extends DurableObject<Env> {
               ? 400
               : code === "RPC_STUB_OFFLINE"
                 ? 502
-                : 500;
+                : isDeployReset(error)
+                  ? 503
+                  : 500;
         if (status === 500)
           reportIssue("iterate-context.expression-fetch", error, {
             itxExpression: itxExpressionHeader,
           });
         // A lent stub offline (a tunnel killed or asleep, before its rule is un-set) is the
         // upstream's absence: a 502, logged at info and never reported, its header naming the
-        // expression to a client. The prd fault alarm (scripts/ci/prd-fault-alarm.ts) drops the 502
-        // summaries in this line's ray.
-        if (status === 502)
+        // expression to a client. A deploy that reset a context the fetch dialed, where the hop could
+        // not send it again (a request with a body, an upgrade; built-ins.ts `cd`), is a 503 the
+        // visitor retries in a second, logged at info and never reported. The prd fault alarm
+        // (scripts/ci/prd-fault-alarm.ts) drops the 502 and 503 summaries in these lines' rays.
+        if (status === 502 || status === 503)
           console.info({
-            event: "expression-fetch.rpc-stub-offline",
+            event:
+              status === 502
+                ? "expression-fetch.rpc-stub-offline"
+                : "expression-fetch.deploy-reset",
             itxExpression: itxExpressionHeader,
           });
         const message = error instanceof Error ? error.message : String(error);
         return new Response(`expression fetch error: ${message}\n`, {
           status,
-          headers: status === 502 ? { "x-iterate-rpc-stub-offline": itxExpressionHeader } : {},
+          headers: {
+            ...(status === 502 && { "x-iterate-rpc-stub-offline": itxExpressionHeader }),
+            ...(status === 503 && { "retry-after": "1", "cache-control": "no-store" }),
+          },
         });
       }
     }

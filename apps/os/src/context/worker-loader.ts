@@ -28,6 +28,7 @@ import {
   type ItxExpressionInput,
 } from "iterate/expression";
 import PLATFORM_MODULES from "../generated/platform-modules.js";
+import { isDeployReset } from "../retryable-error.ts";
 import { readPackage, resolveModules } from "./module-resolution.ts";
 
 /** A worker's FILES as authored, path → code (module-resolution.ts `readPackage` finds the entry and
@@ -206,8 +207,25 @@ export async function prepareConfinedWorker(
         `${where}: a source EXPRESSION needs a cacheKey (a build id, a commit) — the producer runs only when no isolate is warm under it, so the key must change whenever the code does`,
       );
     sourceVersion = cacheKey;
+    // The producer is a read the cacheKey names, so running it twice is running it once: a DEPLOY
+    // that resets the context it reads (the project ingress's `itx.repos.get("/repos/config")`,
+    // read on the first request after every deploy, prd 2026-09-25) is read once more, from that
+    // context's fresh incarnation.
     getModules = async () => {
-      const produced = await opts.invoke(normalizedItxExpression(source));
+      let produced: unknown;
+      try {
+        produced = await opts.invoke(normalizedItxExpression(source));
+      } catch (error) {
+        if (!isDeployReset(error)) throw error;
+        console.warn({
+          event: "workers.deploy-reset-source-retry",
+          namespace: "iterate-context",
+          name: opts.owner,
+          where,
+          message: String(error),
+        });
+        produced = await opts.invoke(normalizedItxExpression(source));
+      }
       return requireFiles(typeof produced === "string" ? { "worker.js": produced } : produced);
     };
   }

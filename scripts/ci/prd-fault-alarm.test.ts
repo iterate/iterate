@@ -82,7 +82,7 @@ test("a run that cannot read prd fails: a failed Workers Logs query", async () =
   await expect(summary(() => slack.client)).rejects.toThrow(
     'Workers Logs query failed: [{"code":10000,"message":"Authentication error"}]',
   );
-  expect(cloudflare.fetch).toHaveBeenCalledTimes(10);
+  expect(cloudflare.fetch).toHaveBeenCalledTimes(11);
   expect(slack).toMatchObject({ posts: [] });
 });
 
@@ -383,7 +383,7 @@ test("a reset-only window goes quiet after the re-count and posts nothing", asyn
   const slack = fakeSlack();
   await expect(summary(() => slack.client)).resolves.toBe("prd is quiet");
   expect(slack).toMatchObject({ posts: [] });
-  expect(logs.fetch).toHaveBeenCalledTimes(13);
+  expect(logs.fetch).toHaveBeenCalledTimes(14);
 });
 
 test("a fresh error sharing the pager URL and every HTTP 5xx survive reset classification", async () => {
@@ -608,6 +608,30 @@ test.for([
     ...rpcStubOfflineRequest("vite-ping", change).slice(1),
   ]);
   expect(await summary()).toContain(line);
+});
+
+// A deploy that resets a context an expression fetch dialed, where the hop could not send it again
+// (a request with a body), answers 503: every hop's 503 summary is in the ray of the context DO's
+// `expression-fetch.deploy-reset` info line (prd os-prd 2026-09-25 14:45:21Z paged on these as 500s).
+const deployReset = { event: "expression-fetch.deploy-reset", status: 503 };
+test("a deploy reset's 503s, every hop of them, page nothing", async () => {
+  await using _logs = queryableWorkersLogs(rpcStubOfflineRequest("post", {}, deployReset));
+  await expect(summary()).resolves.toBe("prd is quiet");
+});
+
+test.for([
+  [
+    "a 502 in a deploy reset's ray",
+    rpcStubOfflineRequest("post", { status: 502 }, deployReset).slice(1),
+  ],
+  ["a 503 in an offline stub's ray", rpcStubOfflineRequest("vite-ping", { status: 503 }).slice(1)],
+] as const)("%s still pages", async ([, summaries]) => {
+  await using _logs = queryableWorkersLogs([
+    ...rpcStubOfflineRequest("post", {}, deployReset),
+    ...rpcStubOfflineRequest("vite-ping"),
+    ...summaries,
+  ]);
+  expect(await summary()).toContain("4 5xx responses: blog--p.iterate.app 4");
 });
 
 test.for(["capped", "failed"])(
@@ -963,17 +987,22 @@ function failedDocsRequest() {
 /** One request to a killed tunnel's host, as a preview logged it (2026-09-24): the offline stub's info
  *  line in the context DO, then a 502 summary from each hop — the project host's Worker, the DO's fetch,
  *  the config worker's ItxEntrypoint and the DO's fetch again — each with its own requestId and all
- *  in `rayId`. `change` alters the four summaries. */
+ *  in `rayId`. `change` alters the four summaries; `answer` is another expected answer's line and
+ *  status (a deploy reset's 503). */
 function rpcStubOfflineRequest(
   rayId: string,
   change: { status?: number; rayId?: string; type?: string; message?: string } = {},
+  answer: { event: string; status: number } = {
+    event: "expression-fetch.rpc-stub-offline",
+    status: 502,
+  },
 ) {
   const url = "https://blog--p.iterate.app/__vite_ping";
   const summaryRayId = "rayId" in change ? change.rayId : rayId;
   return [
     {
       timestamp: 42,
-      event: "expression-fetch.rpc-stub-offline",
+      event: answer.event,
       $metadata: { type: "cf-worker", level: "info", requestId: `${rayId}-inner-do`, rayId },
       $workers: { executionModel: "durableObject", event: { request: { url } } },
     },
@@ -990,7 +1019,7 @@ function rpcStubOfflineRequest(
         outcome: "ok",
         event: {
           request: { url },
-          response: "status" in change ? { status: change.status } : { status: 502 },
+          response: "status" in change ? { status: change.status } : { status: answer.status },
         },
       },
     })),

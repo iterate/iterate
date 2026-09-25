@@ -9,12 +9,15 @@
 export const isRetryableTransportError = (error: unknown): boolean =>
   (error as { retryable?: unknown } | null)?.retryable === true;
 
-/** A transport failure a DEPLOY caused: every deploy resets the platform's Durable Objects for their
- *  new code, and workerd fails each call in flight with this message. Expected on every deploy
- *  under traffic, so a retry it causes is no platform failure (scripts/ci/prd-fault-alarm.ts, which
- *  excludes the same message from its errors). */
+/** A failure a DEPLOY caused: every deploy resets the platform's Durable Objects for their new
+ *  code, and workerd fails each call in flight with this message, stamped `retryable` (a cut
+ *  transport) or `durableObjectReset` (a call the reset broke inside the object, which is what a
+ *  caller one hop further sees). Expected on every deploy under traffic, so a retry it causes is no
+ *  platform failure (scripts/ci/prd-fault-alarm.ts, which excludes the same message from its
+ *  errors). The message tells the deploy from any other reset carrying the same flags. */
 export const isDeployReset = (error: unknown): boolean =>
-  isRetryableTransportError(error) &&
+  (isRetryableTransportError(error) ||
+    (error as { durableObjectReset?: unknown } | null)?.durableObjectReset === true) &&
   error instanceof Error &&
   error.message.includes("Durable Object reset because its code was updated");
 
