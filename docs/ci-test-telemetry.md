@@ -9,7 +9,8 @@ Two things, kept apart on purpose:
 - **Test telemetry as CI artifacts**: every test runner writes a raw JSON
   artifact, a finalizer checks that every runner left one, and the job keeps
   them as a Depot artifact beside the flake records the
-  [flake dashboard](https://github.com/iterate/iterate/issues/2580) folds.
+  [flake dashboard](https://github.com/iterate/iterate/issues/2580) reads from
+  the test evidence in R2.
   Nothing from here goes to PostHog.
 
 Both feed a third: the [test evidence folder](test-evidence.md), each job
@@ -238,17 +239,16 @@ Re-run the check on a downloaded artifact with
 
 Any test that fails then passes on retry on **main** enters Unknown flakes,
 including when the rest of its suite is interrupted. It stays until **20
-consecutive clean main passes** in that suite, with no time window. Another
-retry or final failure resets the streak. If it is absent from a complete main
-run's **full test list**, remove the row immediately instead. PR results,
+consecutive clean main passes** in that suite. Another retry or final failure
+resets the streak. If it is absent from the full test list of the newest
+complete main run after its last failure, the row goes at once. PR results,
 skips and incomplete runs cannot advance its streak or prove its deletion.
-Adding a wrapper on main moves it to Flakes or Failures. History remains in
-the stream after a row disappears.
+Adding a wrapper on main moves it to Flakes or Failures.
 
-Keep the latest full main test list per suite, even when a newer summary only
-has counts. A late retry from before proven deletion cannot restore the row;
-a new retry after that inventory can. A newer observation of the test also
-prevents an older inventory from falsely declaring it absent.
+The dashboard recomputes all of this every hour from the runs it reads, in the
+order their evidence reached R2 (`scripts/ci/flake-dashboard/`), so a result
+that arrives late is simply placed where it belongs. The passes come from the
+per-test results of each suite's newest 30 main runs.
 
 Known `createFlake` tests suggest removing their wrapper after the same 20 main
 passes, without a minimum elapsed time. They remain wrapped until someone
@@ -260,8 +260,7 @@ including zero-flake runs. Summaries include each test's bare title and result;
 the reporters use that same title for retries and wrappers. Multiple instances
 sharing a title count as one run, and all must pass to advance it. Missing
 reporters, unexecuted tests, wrong commits, interrupted runs and damaged/missing
-records cannot certify a clean result. Old summaries containing only counts
-cannot advance per-test streaks or prove deletion. Focused local runs do not publish complete
+records cannot certify a clean result. Focused local runs do not publish complete
 suite summaries. The preview e2e suite's summary also says whether it ran the
 rows tagged `slow` (`slowRows: "ran" | "skipped"`; absent before the tag existed, when every row
 ran), which the PR time to green guard splits pushes on ([Depot CI](depot-ci.md#pr-time-to-green)).
@@ -271,6 +270,6 @@ count. An incomplete attempt keeps that provenance visible with a warning,
 while any observed retry/failure still adds or resets its unknown-flake row.
 
 Main's preview suites run in Main OS e2e (`main-os-e2e.yml`), on its own
-preview redeployed with each main push, and upload the same `flake-records-specs-attempt-<id>` and
-`flake-records-preview-e2e-attempt-<id>` artifacts as a PR's Preview OS run; the writer's
-`SUITE_WORKFLOWS` lists Test, Preview OS and Main OS e2e.
+preview redeployed with each main push. Their evidence, like the Test job's on a
+main push, is filed under `trust=main`, which is what makes a run a main run for
+the dashboard ([object keys](test-evidence.md#object-keys)).

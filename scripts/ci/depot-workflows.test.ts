@@ -6,7 +6,6 @@ import { expect, test } from "vitest";
 import { parse as parseYaml } from "yaml";
 import { testEvidencePaths } from "@iterate-com/shared/test-support/test-evidence";
 import { CI_WORKFLOW_PREVIEWS } from "../../apps/os/scripts/preview-sweep.ts";
-import { SUITE_WORKFLOWS, stateArtifact as flakeDashboardState } from "./flake-dashboard/update.ts";
 import { stateArtifact as osLatencyState } from "./os-latency-guard.ts";
 import { stepFailureTitles, testEvidenceJobs } from "./test-evidence.ts";
 import { CHECKS, stateArtifact as prTtgState } from "./pr-ttg-guard.ts";
@@ -409,17 +408,21 @@ test("release.yml never takes a kit-firmware tag for the last release", () => {
   expect(releaseInfo?.run).toContain("git describe --tags --abbrev=0 --match 'v[0-9]*'");
 });
 
-test("the flake dashboard lists every workflow that uploads flake records", () => {
-  const uploaders = depotWorkflowFiles.flatMap((file) => {
-    const workflow = loadWorkflow(file);
-    return Object.values(workflow.jobs).some((job) =>
-      (job.steps || []).some((step) => String(step.with?.name || "").startsWith("flake-records-")),
-    )
-      ? [workflow.name]
-      : [];
-  });
+test("every job that records flakes uploads its test evidence to R2, where the flake dashboard reads them", () => {
+  const jobs = depotWorkflowFiles.flatMap((file) =>
+    Object.entries(loadWorkflow(file).jobs).flatMap(([jobId, job]) =>
+      (job.steps || []).some((step) => String(step.with?.name || "").startsWith("flake-records-"))
+        ? [{ job: `${file}:${jobId}`, steps: job.steps || [] }]
+        : [],
+    ),
+  );
 
-  expect(uploaders.sort()).toEqual([...SUITE_WORKFLOWS].sort());
+  expect(jobs.length).toBeGreaterThan(0);
+  for (const { job, steps } of jobs)
+    expect(
+      steps.some((step) => step.run?.includes("scripts/ci/test-evidence.ts upload")),
+      job,
+    ).toBe(true);
 });
 
 test("the iterate GitHub App's key is read only by the flake dashboard, which never runs on a pull request or push", () => {
@@ -438,7 +441,6 @@ test("the iterate GitHub App's key is read only by the flake dashboard, which ne
 // The scripts decide which runs write one: the latency, time-to-green and fault guards only a real
 // run on main (their `--ref`).
 const guards = [
-  { script: "scripts/ci/flake-dashboard/update.ts", state: flakeDashboardState },
   { script: "scripts/ci/os-latency-guard.ts", state: osLatencyState },
   { script: "scripts/ci/pr-ttg-guard.ts", state: prTtgState },
   { script: "scripts/ci/prd-fault-alarm.ts", state: prdFaultAlarmState },

@@ -311,7 +311,7 @@ jobs:
             env:
               DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
             run: doppler run --project _shared --config preview -- pnpm tsx scripts/ci/test-evidence.ts upload
-          # One artifact per suite and job attempt, pulled by the flake dashboard's writer.
+          # One artifact per suite and job attempt; PR time to green reads its suite summary.
           - name: Upload flake records
             if: always() && steps.suite.outcome != 'skipped'
             uses: actions/upload-artifact@v4

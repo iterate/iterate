@@ -144,8 +144,8 @@ jobs:
       E2E_SLOW_ROWS: run
       JUDGED_SUITE: slow e2e rows
       JUDGED_TAG: slow
-      # TEST TELEMETRY, as a PR preview's test jobs write it; main's suite summaries feed the flake
-      # dashboard (scripts/ci/flake-dashboard/update.ts SUITE_WORKFLOWS).
+      # TEST TELEMETRY, as a PR preview's test jobs write it; main's flake records and suite
+      # summaries feed the flake dashboard through the test evidence in R2.
       TEST_TELEMETRY_ARTIFACT_DIR: test-results/ci-telemetry/raw
       TEST_TELEMETRY_BRANCH: main
       TEST_TELEMETRY_HEAD_SHA: ${{ github.sha }}

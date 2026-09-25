@@ -1,12 +1,12 @@
-# THE FLAKE DASHBOARD'S WRITER (scripts/ci/flake-dashboard/update.ts): folds the flake-records-*
-# artifacts that the Test and Preview OS jobs finished since its last run and rewrites issue #2580.
-# The fold's state is this job's own artifact, read back by the next run, kept even when the issue
-# write fails. A dispatch with dry-run=true renders without writing the issue or the state.
+# THE FLAKE DASHBOARD (scripts/ci/flake-dashboard/update.ts): recomputes issue #2580 every hour from
+# the flake records and suite summaries that CI's test runs keep in R2 (docs/test-evidence.md), and
+# rewrites the issue when its body changed. Nothing is kept between runs. A dispatch with
+# dry-run=true prints the body in the log and writes nothing.
 #
-# #2580 is written as the iterate GitHub App (iterate[bot]), as before #2837: the writer mints an
-# installation token narrowed to writing issues in this repository. The Depot app's job token has no
-# Issues permission (403 on PATCH issues/2580). The app's key is read here only, in a workflow that
-# never runs on pull_request or push.
+# #2580 is written as the iterate GitHub App (iterate[bot]): the writer mints an installation token
+# narrowed to writing issues in this repository. The Depot app's job token has no Issues permission
+# (403 on PATCH issues/2580). The app's key is read here only, in a workflow that never runs on
+# pull_request or push.
 name: Flake dashboard
 permissions:
   contents: read
@@ -17,7 +17,7 @@ on:
   workflow_dispatch:
     inputs:
       dry-run:
-        description: true = render only; neither the issue nor the state is written
+        description: true = print the body in the log instead of writing the issue
         required: false
         type: string
         default: "false"
@@ -40,27 +40,14 @@ jobs:
           clean: false
       - name: Install dependencies
         run: pnpm install --frozen-lockfile --prefer-offline
-      # The Depot organization token CI telemetry already uses (Doppler _shared/preview) lists and
-      # downloads the artifacts. The iterate GitHub App's id and key (Doppler os-legacy-backup/prd,
-      # where the legacy platform kept them) mint the token that writes the issue.
-      - name: Fold new flake records into the dashboard issue
+      # The Cloudflare API token CI uploads the test evidence with (Doppler _shared/preview) reads
+      # it back. The iterate GitHub App's id and key (Doppler os-legacy-backup/prd) mint the token
+      # that writes the issue.
+      - name: Recompute the dashboard issue
         run: |-
           set -euo pipefail
-          export DEPOT_TOKEN GITHUB_APP_ID GITHUB_APP_PRIVATE_KEY
-          DEPOT_TOKEN="$(doppler secrets get DEPOT_CI_TELEMETRY_TOKEN --plain --project _shared --config preview)"
+          export CLOUDFLARE_API_TOKEN GITHUB_APP_ID GITHUB_APP_PRIVATE_KEY
+          CLOUDFLARE_API_TOKEN="$(doppler secrets get CLOUDFLARE_API_TOKEN --plain --project _shared --config preview)"
           GITHUB_APP_ID="$(doppler secrets get GITHUB_APP_ID --plain --project os-legacy-backup --config prd)"
           GITHUB_APP_PRIVATE_KEY="$(doppler secrets get GITHUB_APP_PRIVATE_KEY --plain --project os-legacy-backup --config prd)"
-          pnpm tsx scripts/ci/flake-dashboard/update.ts \
-            --state-out test-results/flake-dashboard/state.json \
-            --body-out test-results/flake-dashboard/body.md \
-            ${{ inputs.dry-run == 'true' && '--dry-run' || '' }}
-      # Also after a failed issue write: the script keeps the fold before it writes the issue. A run
-      # that failed before folding has no state to keep.
-      - name: Keep the fold state for the next run
-        if: always() && inputs.dry-run != 'true'
-        uses: actions/upload-artifact@v4
-        with:
-          name: flake-dashboard-state
-          path: test-results/flake-dashboard/state.json
-          if-no-files-found: ignore
-          overwrite: true
+          pnpm tsx scripts/ci/flake-dashboard/update.ts ${{ inputs.dry-run == 'true' && '--dry-run' || '' }}

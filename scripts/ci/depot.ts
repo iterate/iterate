@@ -13,7 +13,7 @@ import {
 export const DEPOT_ORG = "0p91s0lz49";
 
 /** `operation` over `inputs`, at most `concurrency` at a time, outputs in input order: how the
- *  telemetry sync and the flake dashboard fan out their per-run Depot calls. */
+ *  telemetry sync fans out its per-run Depot calls, and the flake dashboard its R2 reads. */
 export async function mapConcurrent<Input, Output>(
   inputs: Input[],
   concurrency: number,
@@ -101,8 +101,8 @@ export async function depotCliJson<T>(args: string[]): Promise<T> {
 
 /**
  * `file` inside the newest `artifact` a finished or failed run of `workflow` (its `name:`) uploaded,
- * as text — how a scheduled job hands its state to its next run (the flake dashboard's fold, the
- * latency guard's baseline) — or undefined when none of its last 20 runs kept one. A failed run
+ * as text — how a scheduled job hands its state to its next run (the latency guard's baseline) —
+ * or undefined when none of its last 20 runs kept one. A failed run
  * counts: a job that keeps its state before it fails still handed it on.
  */
 export async function newestArtifactFile(input: {

@@ -12,9 +12,12 @@ straight to R2, into one bucket, `iterate-ci`**. The Test job and the E2E tests
 and Browser specs jobs of Preview OS and Main OS e2e write it. The folder holds
 the run's result, the deployed target of the e2e jobs, Kit's CTest results as
 JUnit XML and the per-test Parquet rows. CI writes the bucket with the
-Cloudflare API token it already holds. Nothing reads R2 yet: the readers, the
-analytics, local runs and skipping CI on a trusted run are designed, not built,
-and [#3110](https://github.com/iterate/iterate/issues/3110) holds that design and its open decisions.
+Cloudflare API token it already holds. One reader is built: the
+[flake dashboard](https://github.com/iterate/iterate/issues/2580) reads the
+recent folders' flake records and suite summaries back every hour
+([reading it back](#reading-it-back)). The other readers, the analytics, local
+runs and skipping CI on a trusted run are designed, not built, and
+[#3110](https://github.com/iterate/iterate/issues/3110) holds that design and its open decisions.
 
 ## The evidence folder
 
@@ -461,6 +464,11 @@ GROUP BY ALL ORDER BY p95_ms DESC LIMIT 25;
 ```
 
 A downloaded folder works too: `read_parquet('test-results/tables/tests.parquet')`.
+
+The flake dashboard (`scripts/ci/flake-dashboard/evidence.ts`) lists
+`evidence/ci/trust=<main|pr>/date=<day>/` for the last eight UTC days through
+the S3 API, with the credentials the upload derives, and reads the
+`flake-records/` files of the folders whose manifest is listed.
 
 ### Sizes and costs
 

@@ -119,11 +119,9 @@ jobs:
             env:
               DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
             run: doppler run --project _shared --config preview -- pnpm tsx scripts/ci/test-evidence.ts upload
-          # The whole flake-reporting contract from CI's side: publish the
-          # recorder lines and the finalizer's suite-summary.json as a workflow
-          # artifact for the flake dashboard to pull, one per job attempt
-          # (docs/testing.md#flakes-and-pinned-failures). CI holds no dashboard
-          # credential.
+          # The recorder lines and the finalizer's suite-summary.json as a workflow
+          # artifact, one per job attempt. The flake dashboard reads the same files
+          # from the test evidence in R2 (docs/testing.md#flakes-and-pinned-failures).
           - name: Upload flake records
             if: always()
             uses: actions/upload-artifact@v4

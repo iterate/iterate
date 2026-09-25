@@ -601,9 +601,8 @@ A row over the budget has two ways out:
   and its file joins `SLOW_ROW_PATHS`, which the guard checks.
 
 The [flake dashboard](https://github.com/iterate/iterate/issues/2580) prices
-the rows too. Its **Cost** section folds each full `preview-e2e` and `unit`
-run's per-row durations: each row's p50 and p95 over the suite's last 100
-complete runs, its marginal wall (how much sooner the run would have ended
+the rows too. Its **Cost** section reads the per-row durations of each suite's
+last 100 complete `preview-e2e` and `unit` runs: each row's p50 and p95, its marginal wall (how much sooner the run would have ended
 without it), its retries and PR failures, and a proposal for a row past its
 budget or with 10s of marginal wall: make it faster, or tag it `slow`. A
 failed attempt 8 or more rows of one run share, retried or not, counts once,
@@ -751,7 +750,7 @@ Two wrappers in `packages/shared/src/test-support` register through the runner's
 - `createFlake(test, /pattern/)` ([flake-test.ts](../packages/shared/src/test-support/flake-test.ts)) marks a known flake. The body asserts real behavior. A pass or a failure matching the pattern is green, any other failure or a hang is red, and the test is never retried: one sample per run.
 - `createFailing(test, /pattern/)` ([failing-test.ts](../packages/shared/src/test-support/failing-test.ts)) pins a known bug. The body asserts the desired behavior and must fail with the pattern. A pass (the bug looks fixed) or a different failure is red.
 
-Every outcome of either wrapper, and every plain test that failed, whether its CI retry then passed or not (an unknown flake, with the first attempt's error), is one JSON line in `FLAKE_RECORD_DIR`. The CI finalizer (`scripts/ci/upload-test-telemetry.ts --flake-suites <unit|specs|preview-e2e>`, one suite per job) adds the suite's `suite-summary.json`, and the job uploads `flake-records-<suite>-attempt-<id>` artifacts, one per job attempt. The [flake dashboard](https://github.com/iterate/iterate/issues/2580) folds them hourly (`.depot/workflows/flake-dashboard.yml`), writing the issue as the iterate GitHub App. Local runs without the variable record nothing.
+Every outcome of either wrapper, and every plain test that failed, whether its CI retry then passed or not (an unknown flake, with the first attempt's error), is one JSON line in `FLAKE_RECORD_DIR`. The CI finalizer (`scripts/ci/upload-test-telemetry.ts --flake-suites <unit|specs|preview-e2e>`, one suite per job) adds the suite's `suite-summary.json`, and the job keeps both in its [test evidence](test-evidence.md) folder in R2, as well as in `flake-records-<suite>-attempt-<id>` artifacts, one per job attempt. Every hour the [flake dashboard](https://github.com/iterate/iterate/issues/2580) (`.depot/workflows/flake-dashboard.yml`, `scripts/ci/flake-dashboard/`) reads the recent runs' records and summaries back from R2 and recomputes the whole issue, writing it as the iterate GitHub App. It keeps nothing between runs: main's runs of the last seven days give the wrapped tests' stats and lifecycle streaks, and each suite's newest 150 runs on any branch give the squares, the last three complete runs a row must appear in to stay listed, and the Cost section. Local runs without the variable record nothing.
 
 Each suite carries a monthly `flake sentinel` (`flakeSentinel` in flake-test.ts): a `createFlake` test that throws its allowed error about 10% of the time until its month ends. The three have distinct names, so each gets its own dashboard row: `flake sentinel` (`packages/shared/src/test-support/flake-sentinel.test.ts`), `flake sentinel (specs)` (`specs/flake-sentinel.spec.ts`) and `flake sentinel (e2e)` (`apps/os/e2e/flake-sentinel.e2e.test.ts`). A sentinel that reads 0% or goes red means the recording or ingestion pipeline is broken; distrust the dashboard, not the sentinel. Rolling all three forward is one constant, `SENTINEL_MONTH_END` in flake-test.ts.
 
@@ -819,10 +818,10 @@ flakes" section of the dashboard shows the error samples to turn into a
 `createFlake` pattern, and once wrapped, the same test name migrates into the
 Flakes section. `createFailing` pins record too (`pinned-fail` /
 `unexpected-pass`), so the Failures section shows how long each pin has stood
-and proposes deleting wrappers whose bugs look fixed. CI uploads the records
-as `flake-records-unit`, `flake-records-specs` and `flake-records-preview-e2e`,
-each suffixed `-attempt-<id>` so a retried job keeps both attempts' records;
-`.depot/workflows/flake-dashboard.yml` folds them into
+within the last seven days, and proposes deleting wrappers whose bugs look
+fixed. A proposal shows while the streak behind it holds. Each test run keeps
+its records in its evidence folder in R2, where
+`.depot/workflows/flake-dashboard.yml` reads them for
 [#2580](https://github.com/iterate/iterate/issues/2580).
 
 For playwright specs, `createFlake` REPLACES retries — but only for tests
