@@ -155,7 +155,13 @@ export type PreviewSweepInput = {
   openPullRequestBranches: string[] | undefined;
 };
 
-export function planPreviewSweep(input: PreviewSweepInput) {
+type PreviewSweepVerdict = {
+  deployment: PreviewDeploymentListing;
+  verdict: "stale" | "keep";
+  reason: string;
+};
+
+export function planPreviewSweep(input: PreviewSweepInput): PreviewSweepVerdict[] {
   const newestOfPrefix = new Map<string, string>();
   for (const prefix of new Set(input.deployments.map((deployment) => deployment.prefix))) {
     const newest = newestPreviewDeployment(input.deployments, prefix);
@@ -170,8 +176,12 @@ export function planPreviewSweep(input: PreviewSweepInput) {
     const created = Number.isNaN(hours)
       ? "no member with a creation stamp"
       : `newest member created ${hours.toFixed(1)} h ago`;
-    const stale = (reason: string) => ({ deployment, verdict: "stale" as const, reason });
-    const keep = (reason: string) => ({ deployment, verdict: "keep" as const, reason });
+    const stale = (reason: string): PreviewSweepVerdict => ({
+      deployment,
+      verdict: "stale",
+      reason,
+    });
+    const keep = (reason: string): PreviewSweepVerdict => ({ deployment, verdict: "keep", reason });
     if (hours > 7 * 24) return stale(`${created}, more than 7 days`); // rule 1
     const number = previewPullRequestNumber(prefix);
     const state =

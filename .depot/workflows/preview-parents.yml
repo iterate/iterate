@@ -4,8 +4,7 @@
 # would run for (scripts/ci/preview-paths.ts `previewPaths`; depot-workflows.test.ts keeps them
 # equal): https://os.iterate-dev-preview.workers.dev is os.iterate.com at main, and
 # https://dash.iterate-dev-preview.workers.dev is dash.iterate.com at main, signed in against it.
-# People use it by hand. The workflow and command keep the name from when every PR's Worker Preview
-# branched off these workers ("the parents").
+# People use it by hand.
 #
 # Nothing waits for this, and nothing depends on it: each PR, and Main OS e2e, deploys a set of
 # workers of its own (envs.ts `previewDeployment`).

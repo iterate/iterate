@@ -5,9 +5,8 @@
 #   depot ci dispatch --org 0p91s0lz49 --repo iterate/iterate --workflow os-e2e-soak.yml \
 #     --ref <branch> --input runs=100 --input preview=soak-<your slug>
 # A SOAK OF ITS OWN NEEDS A NAME OF ITS OWN: two soaks of one name and one commit deploy the same
-# deployment again before their suites, so each measures the other's deploys (2026-09-24: a
-# full-suite soak of main redeployed `soak` ten minutes into two agents.e2e soaks of a fix branch,
-# which then soaked main's worker). Delete a name's deployments when done:
+# deployment again before their suites, so each measures the other's deploys. Delete a name's
+# deployments when done:
 # `pnpm --dir apps/os preview delete --name <preview>`; the nightly sweep takes them after a day.
 # THE FIRST MINUTES OF A DEPLOYMENT: --input fresh-previews=true deploys a brand-new deployment for
 # every run instead, runs e2e against it at once and deletes it (e2e-soak.ts --fresh-previews) — the

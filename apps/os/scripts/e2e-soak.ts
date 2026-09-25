@@ -13,9 +13,8 @@
 // THE FIRST MINUTES OF A DEPLOYMENT (`--fresh-previews <prefix>`): each run deploys a brand-new
 // deployment `<prefix>-<n>-<sha7>` (scripts/preview.ts deploy --apps none, its readiness gate
 // included), runs the e2e project against it at once, and deletes it — the shape every PR and
-// main's e2e run has: a fresh set of workers per tested commit (2026-09-24: bursts of `internal
-// error; reference = …` on brand-new Worker Previews, scripts/preview-readiness.ts). A deploy that
-// fails is counted and named, never a skipped run. No perf run in this mode: the budgets measure a
+// main's e2e run has: a fresh set of workers per tested commit, behind the readiness gate
+// (scripts/preview-readiness.ts). A deploy that fails is counted and named, never a skipped run. No perf run in this mode: the budgets measure a
 // warm worker.
 //
 // AN IN-PLACE REDEPLOY (`--redeploy <name>`): each run deploys this checkout's deployment of the name

@@ -230,6 +230,15 @@ async function deleteR2Bucket(cf: Cf, bucketName: string) {
   console.log(`deleted R2 bucket ${bucketName} (${deletedObjects} objects)`);
 }
 
+/** One already gone — a PR's close racing the sweep, a re-run — is deleted: Cloudflare's 404/7404,
+ *  the not-found wrangler reads a D1 lookup by. */
+async function deleteD1(cf: Cf, row: { uuid: string; name: string }) {
+  await cf(`/d1/database/${row.uuid}`, { method: "DELETE" }).catch((error) => {
+    if (!isCloudflareError(error, 404, 7404)) throw error;
+  });
+  console.log(`deleted D1 ${row.name}`);
+}
+
 /** Every worker, KV namespace, R2 bucket, D1 and Artifacts namespace on the account that belongs to
  *  a per-commit deployment, grouped by deployment (preview-sweep.ts `groupPreviewDeployments`). */
 async function listPreviewDeployments(cf: Cf) {
@@ -250,27 +259,27 @@ async function listPreviewDeployments(cf: Cf) {
   if (buckets.length >= 1000)
     throw new Error("1000 or more R2 buckets: the listing may be cut off");
   const members: PreviewMember[] = [
-    ...scripts.map((row) => ({
-      kind: "worker" as const,
+    ...scripts.map((row): PreviewMember => ({
+      kind: "worker",
       name: row.id,
       id: row.id,
       createdAt: row.created_on,
     })),
-    ...kv.map((row) => ({ kind: "kv" as const, name: row.title, id: row.id })),
-    ...buckets.map((row) => ({
-      kind: "r2" as const,
+    ...kv.map((row): PreviewMember => ({ kind: "kv", name: row.title, id: row.id })),
+    ...buckets.map((row): PreviewMember => ({
+      kind: "r2",
       name: row.name,
       id: row.name,
       createdAt: row.creation_date,
     })),
-    ...d1.map((row) => ({
-      kind: "d1" as const,
+    ...d1.map((row): PreviewMember => ({
+      kind: "d1",
       name: row.name,
       id: row.uuid,
       createdAt: row.created_at,
     })),
-    ...artifacts.map((row) => ({
-      kind: "artifacts" as const,
+    ...artifacts.map((row): PreviewMember => ({
+      kind: "artifacts",
       name: row.namespace,
       id: row.namespace,
       createdAt: row.created_at,
@@ -310,10 +319,7 @@ async function deletePreviewDeployment(cf: Cf, deployment: PreviewDeploymentList
     async (member) => {
       if (member.kind === "kv") return deleteKvNamespace(cf, { id: member.id, title: member.name });
       if (member.kind === "r2") return deleteR2Bucket(cf, member.name);
-      if (member.kind === "d1") {
-        await cf(`/d1/database/${member.id}`, { method: "DELETE" });
-        return console.log(`deleted D1 ${member.name}`);
-      }
+      if (member.kind === "d1") return deleteD1(cf, { uuid: member.id, name: member.name });
       stuck = await deleteArtifactsNamespace(cf, member.name);
     },
   );
@@ -922,9 +928,7 @@ async function deleteLegacyWorkerPreviews(cf: Cf, options: { dryRun: boolean }) 
         .map((row) => () => deleteKvNamespace(cf, row)),
       ...d1
         .filter((row) => row.name === legacyName(preview, "db"))
-        .map(
-          (row) => () => cf(`/d1/database/${row.uuid}`, { method: "DELETE" }).then(() => undefined),
-        ),
+        .map((row) => () => deleteD1(cf, row)),
       () => deleteR2Bucket(cf, legacyName(preview, "files")),
       () => deleteArtifactsNamespace(cf, legacyName(preview, "repos")).then(() => undefined),
     ];

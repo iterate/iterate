@@ -31,7 +31,6 @@ export default async function deploy(options: {
     env: options.env,
     workerName: (env) => env.workerName,
     servingUrl: (env) => env.baseUrl,
-    // a per-commit deployment's are created below, by name
     resources: (env) => env.resources || {},
     // The private login settings and at-rest key come from Doppler. Public URLs come from envs.ts.
     requiredSecrets: ["APP_CONFIG", "APP_CONFIG_SECRETS__KEY"],
