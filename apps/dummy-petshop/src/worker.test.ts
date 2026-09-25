@@ -4,7 +4,6 @@
  * storage map (test/shop.ts), and the vitest alias that swaps
  * `cloudflare:workers` for packages/shared/src/test-support/cloudflare-workers-shim.ts.
  */
-import { createHmac } from "node:crypto";
 import { expect, onTestFinished, test, vi } from "vitest";
 import { pkceS256, randomSealKey } from "./seal.ts";
 import worker, { type Env } from "./worker.ts";
@@ -15,7 +14,7 @@ import {
   type PetshopState,
 } from "./state.ts";
 import { startReceiver } from "./test/receiver.ts";
-import { makeShop, ORIGIN, type Shop } from "./test/shop.ts";
+import { bearer, hexHmac, makeShop, ORIGIN, postJson, type Shop } from "./test/shop.ts";
 
 /** What POST /__backdoor/clients returns. */
 type MintedClient = { clientId: string; clientSecret: string };
@@ -786,15 +785,11 @@ async function connect(
   return response.json();
 }
 
-const bearer = (token: string) => ({ headers: { authorization: `Bearer ${token}` } });
-
 async function backdoorState(shop: Shop): Promise<PetshopState> {
   const response = await shop.call("/__backdoor/state");
   expect(response).toMatchObject({ status: 200 });
   return response.json();
 }
-
-const postJson = (body: unknown): RequestInit => ({ method: "POST", body: JSON.stringify(body) });
 
 /** The deployed worker's bindings, its state Durable Object failing every call with `error`. */
 const envWhoseStateThrows = (error: Error) =>
@@ -805,6 +800,3 @@ const envWhoseStateThrows = (error: Error) =>
     },
     PETSHOP_SEAL_KEY: randomSealKey(),
   }) as unknown as Env;
-
-const hexHmac = (secret: string, body: string) =>
-  `sha256=${createHmac("sha256", secret).update(body).digest("hex")}`;

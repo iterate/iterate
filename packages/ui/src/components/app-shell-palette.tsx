@@ -37,8 +37,9 @@ type PaletteRow =
   | (PaletteEntry & { kind: "project"; href: string })
   | (PaletteEntry & { kind: "nav"; element: HTMLElement });
 
-/** Nothing to subscribe to: the platform does not change under a page. */
-const subscribeToNothing = () => () => {};
+/** `useSyncExternalStore`'s subscribe for a value with no change event, such as the platform,
+ *  which does not change under a page. */
+export const subscribeToNothing = () => () => {};
 
 /** The shortcut as this platform spells it. */
 function useShortcutLabel() {

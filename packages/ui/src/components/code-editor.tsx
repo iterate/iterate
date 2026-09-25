@@ -3,7 +3,7 @@ import type { CodeEditorProps } from "./code-editor.client.tsx";
 
 export type { CodeEditorProps } from "./code-editor.client.tsx";
 
-// Same rationale as serialized-object-code-block: keep CodeMirror out of the
+// Same rationale as code-block.tsx: keep CodeMirror out of the
 // server bundle (10 MiB worker upload limit) — it only mounts in the browser.
 const LazyEditor: ComponentType<CodeEditorProps> = import.meta.env.SSR
   ? () => null

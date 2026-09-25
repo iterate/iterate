@@ -36,7 +36,7 @@ export interface CodeEditorProps {
 }
 
 /**
- * The editable sibling of `SerializedObjectCodeBlock`: a controlled CodeMirror
+ * The editable sibling of `CodeBlock`: a controlled CodeMirror
  * surface used as a composer input. The editor instance is created once and
  * kept alive — the callbacks reach it as Effect Events, so a parent re-render
  * never tears it down, and external `value` changes (e.g. loading an example)

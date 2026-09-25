@@ -18,6 +18,7 @@
  * Pure functions of (jwt, publicKeyPem, …): no state, no DO, just WebCrypto,
  * so the whole thing unit-tests in plain Node (see github-app.test.ts).
  */
+import { bytesFromBase64Url } from "./seal.ts";
 
 /** The only JWT algorithm petshop's App registry verifies (`sign()` is RS256
  * today, ES256 later). */
@@ -32,15 +33,6 @@ const APP_JWT_ALG = "RS256";
 export type AppJwtVerification =
   | { ok: true; iss: string; exp: number }
   | { ok: false; reason: string };
-
-/** base64url (no padding) → bytes, mirroring seal.ts `fromB64url`. */
-function bytesFromBase64Url(value: string): Uint8Array {
-  const padded = value
-    .replace(/-/g, "+")
-    .replace(/_/g, "/")
-    .padEnd(Math.ceil(value.length / 4) * 4, "=");
-  return Uint8Array.from(atob(padded), (char) => char.charCodeAt(0));
-}
 
 /** Decode one base64url JWT segment to the JSON value it encodes, or null if it
  * is not valid base64url-encoded JSON (a malformed token, not a crash). */

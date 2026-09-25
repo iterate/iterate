@@ -27,6 +27,7 @@ import {
   AppShellPalette,
   PaletteHeaderButton,
   PaletteSidebarButton,
+  subscribeToNothing,
   usePaletteShortcut,
 } from "./app-shell-palette.tsx";
 import {
@@ -64,10 +65,6 @@ import { resetPosthog } from "./posthog.tsx";
 /** A project as the switcher lists it; `org` is its organization, when the app knows it — grouped
  *  by the id (two organizations may share a name), labelled by the name. */
 export type AppShellProject = { id: string; slug: string; org?: { id: string; name: string } };
-
-/** Nothing to subscribe to: the cookie has no change event, and `SidebarProvider` reads
- *  `defaultOpen` once, when it mounts. */
-const subscribeToNothing = () => () => {};
 
 /** Frames a signed-in page. It reads the `sidebar_state` cookie shadcn's provider writes, so the
  *  sidebar reopens the way it was left — through `useSyncExternalStore`, which keeps the read out
@@ -116,6 +113,8 @@ export function AppShell({
   locationKey: string;
   children: ReactNode;
 }) {
+  // nothing to subscribe to: the cookie has no change event, and `SidebarProvider` reads
+  // `defaultOpen` once, when it mounts
   const defaultOpen = useSyncExternalStore(
     subscribeToNothing,
     () => !document.cookie.split("; ").includes("sidebar_state=false"),

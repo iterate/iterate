@@ -9,7 +9,7 @@
 /* oxlint-disable iterate/no-capnweb-http-batch -- these tests drive the pet shop SERVER's HTTP-batch /capnweb endpoint on purpose (the WebSocket half is covered separately); the rule targets stateless-worker client code, not a batch handler under test */
 import { newHttpBatchRpcSession } from "capnweb";
 import { expect, test, vi } from "vitest";
-import { accessToken, makeShop, ORIGIN, type Shop } from "./test/shop.ts";
+import { accessToken, bearer, makeShop, ORIGIN, type Shop } from "./test/shop.ts";
 
 test("HTTP batch: listPets / getPet / createPet for a valid bearer token, and the writes persist", async () => {
   const shop = makeShop();
@@ -25,7 +25,7 @@ test("HTTP batch: listPets / getPet / createPet for a valid bearer token, and th
   const created = await session().createPet({ name: "Rex", species: "terrier" });
   expect(created).toMatchObject({ id: "pet-3", name: "Rex", species: "terrier" });
   // the same catalogue the other surfaces read
-  const viaRest = await shop.call("/api/pets", { headers: bearer(token) });
+  const viaRest = await shop.call("/api/pets", bearer(token));
   expect((await viaRest.json<{ pets: unknown[] }>()).pets).toHaveLength(3);
 });
 
@@ -68,7 +68,7 @@ test("401 without a bearer token — the endpoint itself, and as the client sees
 test("GET /capnweb without an Upgrade is capnweb's 400, never a socket", async () => {
   const shop = makeShop();
   const token = await accessToken(shop);
-  const response = await shop.call("/capnweb", { headers: bearer(token) });
+  const response = await shop.call("/capnweb", bearer(token));
   expect(response).toMatchObject({ status: 400 });
   expect(await response.text()).toMatch(/POST or WebSocket/);
 });
@@ -99,9 +99,7 @@ function capnwebClient(shop: Shop, token?: string) {
     posts,
     session: () =>
       newHttpBatchRpcSession(
-        new Request(`${ORIGIN}/capnweb`, token ? { headers: bearer(token) } : undefined),
+        new Request(`${ORIGIN}/capnweb`, token ? bearer(token) : undefined),
       ) as unknown as PetshopApi,
   };
 }
-
-const bearer = (token: string) => ({ authorization: `Bearer ${token}` });

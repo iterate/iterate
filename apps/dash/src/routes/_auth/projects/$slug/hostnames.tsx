@@ -68,7 +68,10 @@ function ProjectHostnames() {
     );
   const request = (verb: "add" | "remove", hostname: string) =>
     append({
-      type: `events.iterate.com/project/hostname-${verb}-requested`,
+      type:
+        verb === "add"
+          ? "events.iterate.com/project/hostname-add-requested"
+          : "events.iterate.com/project/hostname-remove-requested",
       payload: { hostname },
     });
   const configurePrimary = (hostname: string | null) =>
