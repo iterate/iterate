@@ -1,5 +1,5 @@
 /** Semantic project recovery: config Git tree, organization membership, encrypted current secret
- * cells and the project's own hostnames. No streams, offsets, OAuth sessions, files or processor
+ * cells and the project's own hostnames, with its primary one. No streams, offsets, OAuth sessions, files or processor
  * state are archived. */
 import { execFileSync } from "node:child_process";
 import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -18,11 +18,13 @@ import {
   EncryptedSecretSeed,
   ProjectSeed,
   captureHostnames,
+  capturePrimaryHostname,
   compareStructure,
   configTree,
   openProjectSeed,
   restorableHostnames,
   restoreHostnames,
+  restorePrimaryHostname,
 } from "./project-seed-format.ts";
 
 type SeedApi = {
@@ -200,6 +202,7 @@ export async function capture(options: {
     if (expectedTip && expectedTip !== (await root.invoke([...repoRef, ["tip"]])))
       throw new Error("Config head changed during capture; retry into a new archive.");
     const hostnames = await captureHostnames(root);
+    const primaryHostname = await capturePrimaryHostname(root);
     return ProjectSeed.parse({
       version: 1,
       capturedAt: new Date().toISOString(),
@@ -212,6 +215,7 @@ export async function capture(options: {
       config: { commit, tree, files },
       secrets,
       hostnames,
+      primaryHostname,
     });
   });
   await openProjectSeed(seed, context.keys);
@@ -224,7 +228,7 @@ export async function capture(options: {
     { mode: 0o600 },
   );
   console.log(
-    `Captured ${seed.project}: ${seed.config.files.length} config files, ${seed.secrets.length} encrypted secrets, hostnames [${seed.hostnames.join(", ")}] → ${file}`,
+    `Captured ${seed.project}: ${seed.config.files.length} config files, ${seed.secrets.length} encrypted secrets, hostnames [${seed.hostnames.join(", ")}], primary ${seed.primaryHostname || "none"} → ${file}`,
   );
 }
 
@@ -236,7 +240,7 @@ export async function check(options: { env: string; file: string }) {
     context.keys,
   );
   console.log(
-    `Verified ${seed.project}: Git tree ${seed.config.tree}; ${seed.config.files.length} files; ${seed.secrets.length} decryptable secrets; ${seed.organization.members.length} members; hostnames [${seed.hostnames.join(", ")}].`,
+    `Verified ${seed.project}: Git tree ${seed.config.tree}; ${seed.config.files.length} files; ${seed.secrets.length} decryptable secrets; ${seed.organization.members.length} members; hostnames [${seed.hostnames.join(", ")}], primary ${seed.primaryHostname || "none"}.`,
   );
 }
 
@@ -449,6 +453,15 @@ export async function apply(options: {
       console.log(
         `Hostname ${hostname}: ${asked ? "requested again" : "already served"}, ${status}.`,
       );
+    // after the hostnames: the reduce makes only a live hostname the project holds primary
+    if (seed.primaryHostname && hostnames.some((h) => h.hostname === seed.primaryHostname)) {
+      const primary = await restorePrimaryHostname(root, seed.primaryHostname);
+      console.log(
+        primary.primary
+          ? `Primary hostname ${primary.hostname}: ${primary.asked ? "configured again" : "already primary"}.`
+          : `Primary hostname ${primary.hostname} NOT set: its certificate is not active yet, and only a live hostname becomes primary. Make it primary on the dash's Hostnames page once it serves.`,
+      );
+    }
     for (const member of members) {
       const orgs = await rpc
         .authenticate({

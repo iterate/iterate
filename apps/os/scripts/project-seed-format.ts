@@ -47,6 +47,10 @@ export const ProjectSeed = z.object({
   /** The project's own hostnames (`project/hostname-*`, src/project/custom-hostnames.ts): each one
    *  it served at capture. */
   hostnames: z.array(z.string().regex(HOSTNAME)),
+  /** The project's primary hostname at capture (`project/primary-hostname-configured`,
+   *  src/project/contract.ts `primaryHostname`), one of `hostnames`, or null. Archives captured
+   *  before it was recorded carry none. */
+  primaryHostname: z.string().regex(HOSTNAME).nullable().default(null),
 });
 export type ProjectSeed = z.infer<typeof ProjectSeed>;
 
@@ -90,6 +94,8 @@ export async function openProjectSeed(raw: unknown, keys: MaterialKeys) {
     (hostname, index) => seed.hostnames.indexOf(hostname) !== index,
   );
   if (duplicateHostname) throw new Error(`Duplicate hostname: ${duplicateHostname}`);
+  if (seed.primaryHostname && !seed.hostnames.includes(seed.primaryHostname))
+    throw new Error(`Primary hostname ${seed.primaryHostname} is not one of the hostnames.`);
   const paths = new Set<string>();
   const secrets = [];
   for (const secret of seed.secrets) {
@@ -187,9 +193,11 @@ export function compareStructure(captured: DeploymentStructure, live: Deployment
 /** A project's root context as the seed commands reach it: capnweb's stub over `/api`. */
 type SeedRoot = { invoke(expression: ItxExpression): Promise<unknown> };
 
-/** The project facet's hostnames (src/project/contract.ts `hostnames`), the fields read here. */
+/** The project facet's hostnames and primary hostname (src/project/contract.ts `hostnames`,
+ *  `primaryHostname`), the fields read here. */
 const ProjectHostnames = z.object({
   state: z.object({
+    primaryHostname: z.string().nullable(),
     hostnames: z.record(
       z.string(),
       z.object({
@@ -201,10 +209,13 @@ const ProjectHostnames = z.object({
   }),
 });
 type ProjectHostnames = z.infer<typeof ProjectHostnames>["state"]["hostnames"];
-async function projectHostnames(root: SeedRoot): Promise<ProjectHostnames> {
+async function projectHostnameState(root: SeedRoot) {
   return ProjectHostnames.parse(
     await root.invoke(["itx", "facets", ["get", "project"], ["snapshot"]]),
-  ).state.hostnames;
+  ).state;
+}
+async function projectHostnames(root: SeedRoot): Promise<ProjectHostnames> {
+  return (await projectHostnameState(root)).hostnames;
 }
 /** Served: Cloudflare has provisioned it for the project, and no removal is pending. */
 const serves = (entry: ProjectHostnames[string] | undefined) =>
@@ -269,4 +280,45 @@ export async function restoreHostnames(
       status: `${status}, certificate ${sslStatus}`,
     };
   });
+}
+
+/** What `capture` records as the primary hostname: the project's, or null. */
+export async function capturePrimaryHostname(root: SeedRoot): Promise<string | null> {
+  return (await projectHostnameState(root)).primaryHostname;
+}
+
+/** What `apply` does with the archived primary hostname, after `restoreHostnames`: append the
+ *  dash's `primary-hostname-configured` unless the project already has it, and wait for the project
+ *  processor to reduce it. The reduce takes only a hostname the project holds whose certificate is
+ *  active; after an erase the zone still holds the custom hostname, so it usually is. One still
+ *  pending is not made primary: `primary` answers false, and the owner makes it primary on the
+ *  dash's Hostnames page once it serves. */
+export async function restorePrimaryHostname(
+  root: SeedRoot,
+  hostname: string,
+): Promise<{ hostname: string; asked: boolean; primary: boolean }> {
+  if ((await projectHostnameState(root)).primaryHostname === hostname)
+    return { hostname, asked: false, primary: true };
+  const [configured] = z
+    .array(z.object({ offset: z.number() }))
+    .parse(
+      await root.invoke([
+        "itx",
+        [
+          "append",
+          { type: "events.iterate.com/project/primary-hostname-configured", payload: { hostname } },
+        ],
+      ]),
+    );
+  await root.invoke([
+    "itx",
+    "facets",
+    ["get", "project"],
+    ["waitUntilProcessed", { offset: configured!.offset }],
+  ]);
+  return {
+    hostname,
+    asked: true,
+    primary: (await projectHostnameState(root)).primaryHostname === hostname,
+  };
 }

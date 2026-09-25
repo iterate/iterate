@@ -9,6 +9,7 @@ import {
   type ProjectAddress,
   customHostnameCandidatesOf,
   primaryHostnameUrlOf,
+  projectPublicUrlOf,
   projectWildcardHostOf,
 } from "./project-ingress.ts";
 
@@ -346,3 +347,70 @@ test("a primary hostname URL parses back to its routing slug as a custom hostnam
     routingSlug: "blog",
   });
 });
+
+// ── projectPublicUrlOf ── `itx.url` and `whoami().projectUrl`: the primary hostname when there is one, else the ingress
+test.each([
+  {
+    primaryHostname: null,
+    routing: subdomains,
+    target: {},
+    url: "https://templestein.iterate.app/",
+  },
+  {
+    primaryHostname: null,
+    routing: subdomains,
+    target: { routingSlug: "blog", path: "/a" },
+    url: "https://blog--templestein.iterate.app/a",
+  },
+  {
+    primaryHostname: null,
+    routing: paths,
+    target: { routingSlug: "blog" },
+    url: "https://os.iterate.com/projects/templestein/blog/",
+  },
+  { primaryHostname: null, routing: null, target: {}, url: null },
+  {
+    primaryHostname: "templestein.com",
+    routing: subdomains,
+    target: {},
+    url: "https://templestein.com/",
+  },
+  {
+    primaryHostname: "templestein.com",
+    routing: subdomains,
+    target: { routingSlug: "blog", path: "/a" },
+    url: "https://blog.templestein.com/a",
+  },
+  // the primary is the project's own hostname, whatever the deployment's ingress
+  {
+    primaryHostname: "templestein.com",
+    routing: paths,
+    target: {},
+    url: "https://templestein.com/",
+  },
+  {
+    primaryHostname: "templestein.com",
+    routing: null,
+    target: {},
+    url: "https://templestein.com/",
+  },
+  {
+    primaryHostname: "templestein.com",
+    routing: subdomains,
+    target: { routingSlug: "a--b" },
+    url: null,
+  },
+] satisfies {
+  primaryHostname: string | null;
+  routing: IngressRouting;
+  target: { routingSlug?: string; path?: string };
+  url: string | null;
+}[])(
+  "public URL of $target with primary $primaryHostname under $routing",
+  ({ primaryHostname, routing, target, url }) => {
+    expect(
+      projectPublicUrlOf(routing, PRD, { project: "templestein", primaryHostname, ...target })
+        ?.href ?? null,
+    ).toBe(url);
+  },
+);
