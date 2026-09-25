@@ -14,7 +14,8 @@ test("the sweep identifies a context by id without waking its ancestors, refuses
   const orphanProject = `prj_orphan${crypto.randomUUID().replaceAll("-", "").slice(0, 12)}`;
   await stub(`${orphanProject}.iterate/x`).append({ type: "test/marker", payload: {} });
   const orphan = idOf(orphanProject, "/x");
-  const live = await admin.projects.create({ project: `swept-${crypto.randomUUID().slice(0, 8)}` });
+  const liveSlug = `swept-${crypto.randomUUID().slice(0, 8)}`;
+  const live = await admin.projects.create({ project: liveSlug });
   const { projectId: liveProject } = (await live.whoami()) as { projectId: string };
   await live.cd("/y").readEvents(0, 1);
   const user = `u${crypto.randomUUID().replaceAll("-", "").slice(0, 8)}`;
@@ -53,6 +54,13 @@ test("the sweep identifies a context by id without waking its ancestors, refuses
     /global context/,
   );
   expect(await admin.contexts.destroy(orphan)).toEqual({ projectId: orphanProject, path: "/x" });
+  // a stray born under a live project's SLUG, as if it were an id, is an orphan too
+  await stub(`${liveSlug}.iterate/`).read(0, 1);
+  expect(await admin.contexts.destroy(idOf(liveSlug, "/"))).toEqual({
+    projectId: liveSlug,
+    path: "/",
+  });
+  expect((await live.whoami()) as { projectId: string }).toMatchObject({ projectId: liveProject });
   expect(
     (await eventsOf(orphanProject, "/x")).filter((event) => event.type === "test/marker"),
   ).toEqual([]);

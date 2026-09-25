@@ -1235,7 +1235,9 @@ class ContextSweepRpcTarget extends RpcTarget {
     const { projectId, path } = await stub.identity();
     if (projectId === GLOBAL_PROJECT_ID)
       throw codedError("FORBIDDEN", `${path} is a global context: the sweep leaves it alone.`);
-    if (await this.#session.input.controlPlane.getProject(projectId))
+    // by id alone: the lookup also answers a slug, and a stray born under a live project's SLUG
+    // (an operator addressing `templestein` as an id) is no part of that project
+    if ((await this.#session.input.controlPlane.getProject(projectId))?.id === projectId)
       throw codedError("FORBIDDEN", `${projectId} still exists: ${path} is no orphan.`);
     await stub.destroy().catch((error: unknown) => {
       if (!String(error).includes(CONTEXT_DESTROYED)) throw error;
