@@ -191,11 +191,14 @@ test("esm.sh's own /node/ polyfills (capnweb's Buffer) load as ordinary modules"
   expectLinked(modules);
 });
 
-test("a pkg.pr.new version resolves through esm.sh's /pr/ route, a PR ref pinned to the commit pkg.pr.new serves; a URL naming another package is refused", async () => {
+test("a pkg.pr.new version resolves through esm.sh's /pr/ route, a PR ref pinned to the commit pkg.pr.new serves, its own subpath imports at that commit; a URL naming another package is refused", async () => {
   const esm = fakeEsm({
     "/acme/shop/@acme/sdk@1234": { commit: "acme:shop:9f8e7d6c5b4a" },
     "/pr/acme/shop/@acme/sdk@9f8e7d6c5b4a": `export * from "/pr/acme/shop/@acme/sdk@9f8e7d6c5b4a/es2022/sdk.mjs";`,
-    "/pr/acme/shop/@acme/sdk@9f8e7d6c5b4a/es2022/sdk.mjs": `export const connect = () => "shop";`,
+    // esm.sh's /pr/ route spells the package's import of its own exported subpath bare
+    "/pr/acme/shop/@acme/sdk@9f8e7d6c5b4a/es2022/sdk.mjs": `import { name } from "acme/shop/@acme/sdk/contract"; export const connect = () => name;`,
+    "/pr/acme/shop/@acme/sdk@9f8e7d6c5b4a/contract": `export * from "/pr/acme/shop/@acme/sdk@9f8e7d6c5b4a/es2022/contract.mjs";`,
+    "/pr/acme/shop/@acme/sdk@9f8e7d6c5b4a/es2022/contract.mjs": `export const name = "shop";`,
   });
   const source = (url: string) => ({
     "worker.ts": `import { connect } from "@acme/sdk"; export default { fetch: () => new Response(connect()) };`,
