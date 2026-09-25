@@ -354,7 +354,7 @@ test(
     expect(JSON.parse(uncovered.text)).toEqual({ principal: null, authorization: null });
     // a WebSocket the key holds open on the project's host: the edge relays it on the key's lease
     // (src/project-host-lease.ts)
-    const hostSocket = projectUrlSocket(echoOf(slug), bearer);
+    const hostSocket = await projectUrlSocket(echoOf(slug), bearer);
     const hostClosed = new Promise<{ code: number; reason: string }>((resolve) =>
       hostSocket.addEventListener("close", ({ code, reason }) => resolve({ code, reason }), {
         once: true,

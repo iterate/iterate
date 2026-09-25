@@ -157,12 +157,13 @@ test("a random routing slug is a letter and seven letters or digits", () => {
   for (let i = 0; i < 50; i++) expect(randomRoutingSlug()).toMatch(/^[a-z][a-z0-9]{7}$/);
 });
 
-// Under paths routing a tunnel's pages are sandboxed on the platform's origin: no cookie reaches
-// their subresources, so a private tunnel could never load one.
+// Under paths routing every project path is its members' alone: a public tunnel is refused before
+// anything is lent or set, and a private one says where it lives and what the local server must do.
 test.for([
-  ["paths", "private", "refused"],
-  ["paths", "public", "set"],
+  ["paths", "private", "set"],
+  ["paths", "public", "refused"],
   ["subdomains", "private", "set"],
+  ["subdomains", "public", "set"],
 ] as const)("a %s deployment, a %s tunnel: %s", async ([routing, visibility, outcome]) => {
   const url =
     routing === "paths"
@@ -187,7 +188,7 @@ test.for([
     // the tunnel ends as soon as it is live: the connection is already closed
     closed: Promise.resolve({ code: 1006, reason: "" }),
   } as unknown as Parameters<typeof runTunnel>[0]["connection"];
-  using _stderr = vi.spyOn(console, "error").mockImplementation(() => {});
+  using stderr = vi.spyOn(console, "error").mockImplementation(() => {});
   const run = runTunnel({
     connection,
     project: "p",
@@ -197,17 +198,20 @@ test.for([
   });
   if (outcome === "refused") {
     await expect(run).rejects.toThrow(
-      "Private tunnels need their own origin; this deployment serves projects under paths (https://os.example.com/projects/p/blog/). Use --public, or give the deployment a domain (subdomain routing).",
+      "This deployment serves projects under paths, where every app is private to its project's members; --public needs a domain: https://github.com/iterate/iterate/blob/main/apps/os/SELF-HOSTING.md#custom-domain-own-origins-for-apps-and-tunnels",
     );
     expect(calls).toEqual([]);
-  } else {
-    await expect(run).rejects.toThrow("The tunnel disconnected");
-    expect(calls).toEqual([
-      "provide itx.tunnels.blog",
-      "set tunnel-blog route",
-      "set tunnel-blog null",
-    ]);
+    return;
   }
+  await expect(run).rejects.toThrow("The tunnel disconnected");
+  expect(calls).toEqual([
+    "provide itx.tunnels.blog",
+    "set tunnel-blog route",
+    "set tunnel-blog null",
+  ]);
+  const underPaths =
+    "This deployment serves projects under paths, so this tunnel lives at https://os.example.com/projects/p/blog/. Your local server must serve under /projects/p/blog/ (Vite: --base /projects/p/blog/); a server that only works at / will not work here. To serve at the root of its own origin, give the deployment a domain with a wildcard certificate: https://github.com/iterate/iterate/blob/main/apps/os/SELF-HOSTING.md#custom-domain-own-origins-for-apps-and-tunnels";
+  expect(stderr.mock.calls.some(([line]) => line === underPaths)).toBe(routing === "paths");
 });
 
 type VisitorSocket = {

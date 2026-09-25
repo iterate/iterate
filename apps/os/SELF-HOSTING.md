@@ -19,9 +19,18 @@ The rest of this page is what the recipe leaves out.
 ## Project apps
 
 `https://iterate.<your-subdomain>.workers.dev/projects/<project>/<routingSlug>/`, and `/projects/<project>/`
-for the project's own config worker (`urls.ingressRouting: { type: "paths" }`). Every document
-served there runs sandboxed in the browser (an opaque origin: no cookies, no storage), so an app
-that needs the person's identity authenticates in-band rather than by cookie.
+for the project's own config worker (`urls.ingressRouting: { type: "paths" }`).
+
+With no domain, every project's app runs on the platform's own origin. Its scripts share that
+origin's sign-in, so any app can act as whoever opens it, in every project that person can reach.
+Paths routing is for a deployment whose people all trust each other. The platform only lets a
+project's members open its paths: anyone else is sent to sign in (a page) or gets a 401 (anything
+else), and a signed-in non-member gets a 403. Signed file URLs (`/projects/<project>/files/…`) still
+work for anyone holding one. An app must serve under its base path (Vite: `--base`); one that only
+works at `/` does not work here.
+
+For public apps, and apps on an origin of their own, give the deployment a
+[custom domain](#custom-domain-own-origins-for-apps-and-tunnels).
 
 ## Other sign-in methods and configuration
 
@@ -36,11 +45,27 @@ Cloudflare takes `{ clientId, clientSecret }` from your own OAuth client; regist
 `<your-origin>/.auth/identity/cloudflare/callback` and configure the client for
 `response_types: ["code", "id_token"]` and the `user-details.read` scope.
 
-## Custom domain (optional)
+## Custom domain: own origins for apps and tunnels
 
-Add your zone to the same Cloudflare account, then set `urls.os` to `https://os.<your-domain>` and
-`urls.ingressRouting` to `{"type":"subdomains","hostname":"<your-domain>"}` in `APP_CONFIG`, and add
-a route for `os.<your-domain>/*` and a wildcard route `*.<your-domain>/*` in
-`selfHostWranglerConfig` in `apps/os/scripts/generate-wrangler-config.ts` (with a proxied wildcard
-DNS record) to the config. Projects then answer at `<routingSlug>--<project>.<your-domain>` and
-`<project>.<your-domain>`.
+With a domain, each project app gets an origin of its own, `<routingSlug>--<project>.<your-domain>`,
+and the project's config worker answers at `<project>.<your-domain>`. The platform's sign-in stays
+on `os.<your-domain>`, out of the apps' reach. Apps can be public, a dev server can serve at `/`,
+and `iterate tunnel` works private or `--public`, at the root of its own origin.
+
+What it takes:
+
+1. **The zone** for `<your-domain>` on the same Cloudflare account as the Worker.
+2. **A proxied wildcard DNS record** for `*.<your-domain>`. It also covers `os.<your-domain>`. The
+   record's target does not matter; the Worker route answers. For iterate's own deployments
+   `apps/os/scripts/ensure-resources.ts` creates it; on a self-host, add it in the dashboard.
+3. **A certificate for `*.<your-domain>`.** Cloudflare's Universal SSL covers the apex and one
+   wildcard level, which is why app hosts are one label (`<routingSlug>--<project>`) and not
+   `<routingSlug>.<project>.<your-domain>`.
+4. **Worker routes** `os.<your-domain>/*` and `*.<your-domain>/*` (zone `<your-domain>`), added to
+   `selfHostWranglerConfig` in `apps/os/scripts/generate-wrangler-config.ts`, which sets none.
+5. **The config:** `urls.os` = `https://os.<your-domain>` in `APP_CONFIG`, and
+   `APP_CONFIG_URLS__INGRESS_ROUTING` = `{"type":"subdomains","hostname":"<your-domain>"}` in the
+   same function's `vars`. That var overrides `urls.ingressRouting` in `APP_CONFIG`, and it is
+   `{"type":"paths"}` there today.
+
+Deploy again. `/mcp` then lives at `https://os.<your-domain>/mcp`; reconnect your MCP client there.

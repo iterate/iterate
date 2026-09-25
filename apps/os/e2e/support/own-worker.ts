@@ -14,8 +14,9 @@ export type OwnWorker = {
   url: URL;
   /** A fresh session's authenticated itx for `ctx` — its root context. */
   itx(ctx: string): any;
-  /** A fresh session creates project `slug` and hands back its root itx. */
-  createProject(slug: string): Promise<any>;
+  /** A fresh session creates project `slug` — in the operator's own organization, or `as` a person
+   *  (their organization, them a member) — and hands back its root itx. */
+  createProject(slug: string, as?: { email: string }): Promise<any>;
   /** Everything the worker logged so far, as one string to grep. */
   logs(): string;
   /** Dispose every session this worker minted, then stop workerd. */
@@ -35,15 +36,15 @@ export async function startOwnWorker(
     workers: [{ config: e2eWorkerConfig(url.origin, opts.ingressRouting) }],
   });
   const sessions: unknown[] = [];
-  const admin = () => {
+  const admin = (as?: { email: string }) => {
     const s = newWebSocketRpcSession(`ws://${url.host}/api`);
     sessions.push(s);
-    return (s as any).authenticate({ type: "admin-secret", secret: E2E_ADMIN_API_SECRET });
+    return (s as any).authenticate({ type: "admin-secret", secret: E2E_ADMIN_API_SECRET, as });
   };
   return {
     url,
     itx: (ctx) => admin().projects.get(ctx),
-    createProject: (slug) => admin().projects.create({ project: slug }),
+    createProject: (slug, as) => admin(as).projects.create({ project: slug }),
     logs: () => JSON.stringify(server.getLogs()),
     stop: async () => {
       for (const s of sessions) {

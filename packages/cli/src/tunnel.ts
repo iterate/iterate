@@ -19,6 +19,9 @@ const HOP_BY_HOP_HEADERS = [
  *  short enough that `tunnel-<slug>` is a DNS label too. */
 const ROUTING_SLUG = /^[a-z](?:[a-z0-9]|-(?!-))*$/;
 const ROUTING_SLUG_MAX_LENGTH = 50;
+/** What a deployment needs so each project app, a tunnel included, gets its own origin. */
+const CUSTOM_DOMAIN_DOCS =
+  "https://github.com/iterate/iterate/blob/main/apps/os/SELF-HOSTING.md#custom-domain-own-origins-for-apps-and-tunnels";
 /** Routing slugs the edge answers itself, never the config worker (apps/os
  *  src/context/file-urls.ts `FILES_ROUTING_SLUG`: signed file URLs). */
 const RESERVED_ROUTING_SLUGS = ["files"];
@@ -228,12 +231,11 @@ export async function runTunnel(input: {
   using project = await input.connection.session.projects.get(input.project);
   const url = await project.url({ routingSlug });
   const basePath = new URL(url).pathname;
-  // Under paths routing the tunnel shares the platform's origin, so its pages are served sandboxed
-  // with an opaque origin: their subresource requests carry no cookie and a private route turns
-  // every one of them away. Refused before anything is lent or set.
-  if (basePath !== "/" && !input.public)
+  // Under paths routing every project path is its members' alone (the platform's edge admits no one
+  // else), so a public tunnel is impossible there. Refused before anything is lent or set.
+  if (basePath !== "/" && input.public)
     throw new Error(
-      `Private tunnels need their own origin; this deployment serves projects under paths (${url}). Use --public, or give the deployment a domain (subdomain routing).`,
+      `This deployment serves projects under paths, where every app is private to its project's members; --public needs a domain: ${CUSTOM_DOMAIN_DOCS}`,
     );
   // A host another route already takes is someone else's: refuse, never take it over. A tunnel of
   // the same name (a restart, another terminal) is taken over.
@@ -277,7 +279,7 @@ export async function runTunnel(input: {
     );
     if (basePath !== "/")
       console.error(
-        `This deployment serves projects under paths: the local server must serve under ${basePath} (Vite: --base ${basePath}).`,
+        `This deployment serves projects under paths, so this tunnel lives at ${url}. Your local server must serve under ${basePath} (Vite: --base ${basePath}); a server that only works at / will not work here. To serve at the root of its own origin, give the deployment a domain with a wildcard certificate: ${CUSTOM_DOMAIN_DOCS}`,
       );
     try {
       const outcome = await Promise.race([stopped, input.connection.closed]);

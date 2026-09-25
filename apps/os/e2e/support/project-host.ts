@@ -14,6 +14,7 @@ import {
 import { test } from "vitest";
 import { projectUrlOf, type IngressRouting } from "iterate/project-ingress";
 import { adminCredentials, runId, session, workerSlot, workerUrl } from "./client.ts";
+import { issuerCookie } from "./principal.ts";
 
 const LOCAL_HOSTNAMES = new Set(["localhost", "127.0.0.1"]);
 const worker = (): URL => new URL(workerUrl("/"));
@@ -134,8 +135,39 @@ const projectHostUrl = (scheme: "http" | "ws", host: string, path: string): stri
  *  id (`openItx(id)`), the host by the slug (`site--<slug>.<base>`). Idempotent; identical against
  *  the local and the deployed worker. */
 export async function registerProject(slug: string, as?: { email: string }): Promise<string> {
-  using itx = await session().authenticate(adminCredentials(as)).projects.create({ project: slug });
-  return (await itx.whoami()).projectId;
+  const member = as || (ingressRouting()?.type === "paths" ? pathsMember() : undefined);
+  using itx = await session()
+    .authenticate(adminCredentials(member))
+    .projects.create({ project: slug });
+  const { projectId } = await itx.whoami();
+  if (member) for (const name of [slug, projectId]) projectMembers.set(name, member.email);
+  return projectId;
+}
+
+/** UNDER PATHS EVERY PROJECT PATH IS MEMBERS-ONLY (src/project-host-sign-in.ts rules 8–10), and the
+ *  operator's own organization has no members: `registerProject` puts a project with no `as` in this
+ *  person's organization instead (one per worker process), and the project-address helpers below
+ *  go as the project's member — its issuer cookie — unless a row sends its own `authorization` or
+ *  `cookie`. Under subdomains nothing changes. */
+const pathsMember = () => ({ email: `e2e-member-${runId()}-${workerSlot()}@example.com` });
+/** A project's slug and id → the email of the member `registerProject` made it for. */
+const projectMembers = new Map<string, string>();
+/** An email → its issuer cookie, minted once. */
+const memberCookies = new Map<string, Promise<string>>();
+
+/** `headers`, plus the project's member's issuer cookie when the worker routes by paths, `url` is a
+ *  project path of a project `registerProject` made, and the row sent no credential of its own. */
+async function asProjectMember(
+  url: string | URL,
+  headers: Record<string, string>,
+): Promise<Record<string, string>> {
+  if (ingressRouting()?.type !== "paths") return headers;
+  if (Object.keys(headers).some((name) => /^(authorization|cookie)$/i.test(name))) return headers;
+  const project = /^\/projects\/([^/]+)/.exec(new URL(url).pathname)?.[1];
+  const email = project && projectMembers.get(project);
+  if (!email) return headers;
+  if (!memberCookies.has(email)) memberCookies.set(email, issuerCookie(email));
+  return { ...headers, cookie: await memberCookies.get(email)! };
 }
 
 /** Publish `target` as the project's config worker — what EVERY host of the project reaches, the
@@ -171,7 +203,7 @@ export async function fetchProjectUrl(
   const { method = "GET", body } = init;
   const res = await undiciFetch(String(url), {
     method,
-    headers,
+    headers: await asProjectMember(url, headers),
     body,
     redirect: "manual",
     dispatcher: projectHostDispatcher(),
@@ -186,7 +218,10 @@ export async function navigateProjectUrl(
   url: string | URL,
   headers: Record<string, string>,
 ): Promise<{ status: number; headers: Record<string, string>; text: string }> {
-  const res = await undiciRequest(String(url), { headers, dispatcher: projectHostDispatcher() });
+  const res = await undiciRequest(String(url), {
+    headers: await asProjectMember(url, headers),
+    dispatcher: projectHostDispatcher(),
+  });
   return {
     status: res.statusCode,
     headers: Object.fromEntries(
@@ -219,9 +254,12 @@ export async function fetchProjectHost(
 /** A WebSocket on a project address (`projectUrl`, its scheme turned to ws/wss) with `headers` (a
  *  bearer: a browser cannot send one, a script or device can), through `projectHostDispatcher`,
  *  held open for the caller: it opens, echoes and closes as the row drives it. */
-export function projectUrlSocket(url: URL, headers: Record<string, string> = {}): UndiciWebSocket {
+export async function projectUrlSocket(
+  url: URL,
+  headers: Record<string, string> = {},
+): Promise<UndiciWebSocket> {
   return new UndiciWebSocket(url.href.replace(/^http/, "ws"), {
-    headers,
+    headers: await asProjectMember(url, headers),
     dispatcher: projectHostDispatcher(),
   });
 }
@@ -247,9 +285,13 @@ export function wsRoundTripOnProjectUrl(
   protocols: string[] = [],
 ): Promise<WebSocketRoundTrip> {
   return new Promise((resolve) => {
+    roundTrip(resolve).catch((error: unknown) => resolve({ opened: false, error: String(error) }));
+  });
+  async function roundTrip(resolve: (outcome: WebSocketRoundTrip) => void) {
     const out: WebSocketRoundTrip = { opened: false };
     const ws = new UndiciWebSocket(url.href.replace(/^http/, "ws"), {
       protocols,
+      headers: await asProjectMember(url, {}),
       dispatcher: projectHostDispatcher(),
     });
     const timer = setTimeout(() => {
@@ -278,5 +320,5 @@ export function wsRoundTripOnProjectUrl(
       out.closeCode = event.code;
       resolve(out);
     });
-  });
+  }
 }
