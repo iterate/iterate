@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { expect } from "vitest";
@@ -26,7 +26,8 @@ export function createOxlintFixture(input: {
   overrides?: unknown[];
   tsconfig?: boolean;
 }) {
-  const root = mkdtempSync(join(tmpdir(), "iterate-oxlint-"));
+  // Plugins resolve imports against the real cwd; macOS's temporary directory is a symlink.
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "iterate-oxlint-")));
   const configPath = join(root, ".oxlintrc.json");
   const off = ["correctness", "nursery", "pedantic", "perf", "restriction", "style", "suspicious"];
   writeFileSync(

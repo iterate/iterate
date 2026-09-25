@@ -51,9 +51,9 @@ overrides:
   "@material/web": 2.4.1
   axios: 1.13.6
   baseline-browser-mapping: ^2.9.14
-  iterate>capnweb: npm:@iterate-com/capnweb@0.12.2
-  '@iterate-com/agents>capnweb': npm:@iterate-com/capnweb@0.12.2
-  os>capnweb: npm:@iterate-com/capnweb@0.12.2
+  iterate>capnweb: npm:@iterate-com/capnweb@0.12.3
+  '@iterate-com/agents>capnweb': npm:@iterate-com/capnweb@0.12.3
+  os>capnweb: npm:@iterate-com/capnweb@0.12.3
   srvx: 0.11.12
   wrangler: "catalog:cloudflare"
   ws: 8.19.0

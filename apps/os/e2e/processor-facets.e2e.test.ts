@@ -398,19 +398,19 @@ test("a burst past the breaker's capacity pauses the stream (the facet appends `
   expect(core.state).toMatchObject({
     paused: { reason: "breaker: durable events exceeded the bucket" },
   });
+  // Inspect the debt while paused: after resuming, later events refill the bucket by event time.
+  const snap = await itx.invoke("itx.facets.get('breaker').snapshot()");
+  expect(snap.state.tokens).toBeLessThan(0);
+  expect(snap.state.lastAtMs).toBeGreaterThan(0);
 
   // the operator's recovery is a plain control append — resume always lands on a paused stream
   await itx.append({ type: "events.iterate.com/itx/resumed" });
   const [after] = await itx.append({ type: "after" });
   expect(after.offset).toBeGreaterThan(paused.offset); // flow restored
-  // the bucket is in debt (no second crossing) — the ONE trip is the only `paused` in the log
+  // Resuming does not cause another trip: the ONE crossing is the only `paused` in the log.
   expect(
     (await readAll(itx)).filter((e) => e.type === "events.iterate.com/itx/paused"),
   ).toHaveLength(1);
-  // and the breaker's reduced state is the pure reduce of the log: tokens below zero, replayable
-  const snap = await itx.invoke("itx.facets.get('breaker').snapshot()");
-  expect(snap.state.tokens).toBeLessThan(0);
-  expect(snap.state.lastAtMs).toBeGreaterThan(0);
 });
 
 // ── the processors ROOT is the third layer on subscriptions: list() is the rows that host a facet ──

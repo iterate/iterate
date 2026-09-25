@@ -12,7 +12,7 @@
     "@octokit/rest": "^22.0.0",
     "@slack/web-api": "^7.14.1",
     "aws4fetch": "1.0.20",
-    "capnweb": "npm:@iterate-com/capnweb@^0.12.2",
+    "capnweb": "npm:@iterate-com/capnweb@^0.12.3",
     "hyparquet-writer": "0.16.10",
     "yaml": "^2.8.3",
     "zod": "4.5.4"
