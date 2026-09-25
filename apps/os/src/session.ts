@@ -1099,8 +1099,9 @@ class ProjectCollectionRpcTarget extends RpcTarget {
    *  reach (`reachableProjectId`), and the id alone goes on: the DO name's host, a grant's list,
    *  `whoami()`. A project only — a context name belongs to `cd`. Outside this session's reach is
    *  FORBIDDEN; so is the global namespace's id (it is no project: a platform admin reaches it as
-   *  `session.global`). The admin secret alone addresses a project the catalog never heard of, by
-   *  id (a fresh context of its own). */
+   *  `session.global`). The admin secret alone addresses a project the catalog never heard of — by
+   *  a `prj_…` id only (a fresh context of its own: the e2e suite's contexts); a slug the catalog
+   *  does not hold is refused for every caller (control-plane/edge.ts `projectIdOf`). */
   async get(project: string): Promise<IterateContextRpcTarget> {
     const address = DurableObjectNameCodec.parse(project);
     if (address.path !== "/")

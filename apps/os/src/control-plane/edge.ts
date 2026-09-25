@@ -299,11 +299,13 @@ export class ControlPlane {
   }
 
   /** The id a ref names: an id is self-evident (`prj_…` — a slug never holds an underscore), a
-   *  slug resolves through the catalog, and a slug nobody holds passes through for the reach check
-   *  to refuse. */
-  async projectIdOf(ref: string): Promise<string> {
+   *  slug resolves through the catalog, and a slug nobody holds names nothing (null) — for every
+   *  reach, the operator's included: passed through as an id, it once minted contexts named by
+   *  the slug (prd, 2026-09-25: `templestein.iterate/` while the D1 catalog was being filled, and
+   *  `lupa-s-organization.iterate/repos/config` after that project's deletion). */
+  async projectIdOf(ref: string): Promise<string | null> {
     if (ref.startsWith("prj_")) return ref;
-    return (await this.getProject(ref))?.id ?? ref;
+    return (await this.getProject(ref))?.id ?? null;
   }
 
   /** What a person can access — memoized; `fresh` bypasses the memo (the re-read before a refusal). */
@@ -322,11 +324,12 @@ export class ControlPlane {
 
   /** Whether `reach` reaches `ref` — the admission behind `projects.get` (session.ts), a `/mcp`
    *  tool's `project` and a project host's visitor (worker.ts). The admin reaches a project the
-   *  catalog never heard of; a named reach is its list; a user's is their memberships — re-read
+   *  catalog never heard of by its `prj_…` id, never by a slug nobody holds; a named reach is its list; a user's is their memberships — re-read
    *  once before a refusal. */
   async reachesProject(reach: Reach, ref: string): Promise<boolean> {
-    if (reach === "every") return true;
     const id = await this.projectIdOf(ref);
+    if (!id) return false;
+    if (reach === "every") return true;
     if (reach.projectIds && !reach.projectIds.includes(id)) return false;
     if (!("userId" in reach)) return true;
     const reaches = (record: AccessibleRecord) =>
@@ -346,7 +349,7 @@ export class ControlPlane {
   async reachableProjectId(reach: Reach, ref: string): Promise<string | null> {
     if (reach === "every" || !("userId" in reach)) {
       const id = await this.projectIdOf(ref);
-      return (await this.reachesProject(reach, id)) ? id : null;
+      return id && (await this.reachesProject(reach, id)) ? id : null;
     }
     const named = (record: AccessibleRecord) =>
       record.projects.find((project) => project.id === ref || project.slug === ref);
