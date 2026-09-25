@@ -1,8 +1,9 @@
 // /projects/<slug>/hostnames — the project's own hostnames: `iterate.example.com` serves the project's
 // site and `<app>.iterate.example.com` its apps. The `project` facet's LIVE STATE on `/` is the list
 // (apps/os/src/project/contract.ts `hostnames`): what the processor still owes, Cloudflare's status
-// and the CNAMEs the owner adds. Adding (`?add=1`, a sheet), checking again and removing each append
-// ONE event to the root; the processor's answer lands in the live state.
+// and the CNAMEs the owner adds, and which live hostname is primary. Adding (`?add=1`, a sheet),
+// checking again, removing and making primary each append ONE event to the root; the processor's
+// answer lands in the live state.
 import { useState, type FormEvent } from "react";
 import { createFileRoute, getRouteApi, useNavigate } from "@tanstack/react-router";
 import { Plus } from "lucide-react";
@@ -22,8 +23,9 @@ import { useContextStub, useFacetLiveState } from "../../../../lib/context-stub.
 
 const shell = getRouteApi("/_auth");
 
-/** The project facet's live state, the one field this page reads. */
+/** The project facet's live state, the fields this page reads. */
 const HostnamesLive = z.looseObject({
+  primaryHostname: z.string().nullable().default(null),
   hostnames: z
     .record(
       z.string(),
@@ -55,18 +57,25 @@ function ProjectHostnames() {
   const navigate = useNavigate({ from: Route.fullPath });
   const context = useContextStub(() => api.projects.get(project.id), [api, project.id]).stub;
   const live = useFacetLiveState(context, "project");
-  const hostnames = Object.entries(HostnamesLive.safeParse(live.value).data?.hostnames ?? {});
+  const parsed = HostnamesLive.safeParse(live.value).data;
+  const hostnames = Object.entries(parsed?.hostnames ?? {});
+  const primaryHostname = parsed?.primaryHostname ?? null;
   const [error, setError] = useState<string | null>(null);
+  const append = (event: { type: string; payload: { hostname: string | null } }) =>
+    context!.append(event).then(
+      () => setError(null),
+      (caught: unknown) => setError(caught instanceof Error ? caught.message : String(caught)),
+    );
   const request = (verb: "add" | "remove", hostname: string) =>
-    context!
-      .append({
-        type: `events.iterate.com/project/hostname-${verb}-requested`,
-        payload: { hostname },
-      })
-      .then(
-        () => setError(null),
-        (caught: unknown) => setError(caught instanceof Error ? caught.message : String(caught)),
-      );
+    append({
+      type: `events.iterate.com/project/hostname-${verb}-requested`,
+      payload: { hostname },
+    });
+  const configurePrimary = (hostname: string | null) =>
+    append({
+      type: "events.iterate.com/project/primary-hostname-configured",
+      payload: { hostname },
+    });
   const add = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const hostname = String(new FormData(event.currentTarget).get("hostname"));
@@ -86,7 +95,8 @@ function ProjectHostnames() {
         <p className="text-sm text-muted-foreground">
           Serve this project on a domain of your own: <code>iterate.example.com</code> is its site,
           <code> &lt;app&gt;.iterate.example.com</code> its apps. Add the DNS records shown once; it
-          goes live, with a certificate, when they are seen.
+          goes live, with a certificate, when they are seen. A live hostname made primary is where
+          the project&apos;s links point, and page visits to its default address are sent there.
         </p>
       </div>
       {error && (
@@ -118,8 +128,26 @@ function ProjectHostnames() {
                     <Badge variant={status === "Failed" ? "destructive" : "secondary"}>
                       {status}
                     </Badge>
+                    {hostname === primaryHostname && <Badge>Primary</Badge>}
                   </div>
                   <div className="flex gap-2">
+                    {hostname === primaryHostname ? (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => void configurePrimary(null)}
+                      >
+                        Clear primary
+                      </Button>
+                    ) : live ? (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => void configurePrimary(hostname)}
+                      >
+                        Make primary
+                      </Button>
+                    ) : null}
                     <Button
                       variant="outline"
                       size="sm"

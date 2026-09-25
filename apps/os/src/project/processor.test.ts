@@ -27,6 +27,7 @@ const empty: ProjectState = {
   configRepoTip: null,
   publishedCommitOid: null,
   hostnames: {},
+  primaryHostname: null,
 };
 
 const reduceRows: {
@@ -86,6 +87,7 @@ const reduceRows: {
       configRepoTip: null,
       publishedCommitOid: null,
       hostnames: {},
+      primaryHostname: null,
     },
   },
   {
@@ -205,6 +207,85 @@ const reduceRows: {
     },
   },
   {
+    name: "a live hostname the project holds becomes primary",
+    events: [hostname("add-requested"), addSettled(1, "active"), primary("www.acme.test")],
+    state: {
+      ...empty,
+      hostnames: { "www.acme.test": liveHostname() },
+      primaryHostname: "www.acme.test",
+    },
+  },
+  {
+    name: "null clears the primary hostname",
+    events: [
+      hostname("add-requested"),
+      addSettled(1, "active"),
+      primary("www.acme.test"),
+      primary(null),
+    ],
+    state: { ...empty, hostnames: { "www.acme.test": liveHostname() } },
+  },
+  {
+    name: "a hostname the project does not hold, or one not live, is refused as primary: the primary stays as it was",
+    events: [
+      hostname("add-requested"),
+      addSettled(1, "active"),
+      primary("www.acme.test"),
+      primary("other.acme.test"),
+      { ...hostname("add-requested"), payload: { hostname: "pending.acme.test" } },
+      primary("pending.acme.test"),
+    ],
+    state: {
+      ...empty,
+      hostnames: {
+        "www.acme.test": liveHostname(),
+        "pending.acme.test": {
+          requested: { verb: "add", offset: 5 },
+          cloudflare: null,
+          error: null,
+        },
+      },
+      primaryHostname: "www.acme.test",
+    },
+  },
+  {
+    name: "a hostname asked for before it is live is refused as primary",
+    events: [hostname("add-requested"), addSettled(1, "pending"), primary("www.acme.test")],
+    state: {
+      ...empty,
+      hostnames: {
+        "www.acme.test": { requested: null, cloudflare: observation("pending"), error: null },
+      },
+    },
+  },
+  {
+    name: "asking to remove the primary hostname clears it",
+    events: [
+      hostname("add-requested"),
+      addSettled(1, "active"),
+      primary("www.acme.test"),
+      hostname("remove-requested"),
+      removed(4),
+    ],
+    state: empty,
+  },
+  {
+    name: "a re-check that finds the primary no longer live clears it",
+    events: [
+      hostname("add-requested"),
+      addSettled(1, "active"),
+      primary("www.acme.test"),
+      hostname("add-requested"),
+      addSettled(4, "pending"),
+    ],
+    state: {
+      ...empty,
+      hostnames: {
+        "www.acme.test": { requested: null, cloudflare: observation("pending"), error: null },
+      },
+    },
+  },
+  {
     name: "a malformed payload for a KNOWN type is skipped by the contract, never reduced",
     events: [
       { type: "events.iterate.com/repo/created", payload: { path: 1 } },
@@ -290,6 +371,38 @@ test("ProjectProcessor — a tip the state does not hold published is published;
   expect({ appends: appended.length, background }).toEqual({ appends: 1, background: 1 });
 });
 
+test("ProjectProcessor — an event that changes the primary hostname holds the cursor until the control plane has it; one that changes nothing writes nothing", async () => {
+  const written: (string | null)[] = [];
+  const processor = new ProjectProcessor(
+    () => Promise.reject(new Error("unused")),
+    () => Promise.reject(new Error("unused")),
+    () => ({
+      reservedZones: [],
+      claim: async () => {},
+      release: async () => {},
+      setPrimaryHostname: async (hostname) => void written.push(hostname),
+      provider: null,
+    }),
+  );
+  const blockers: (() => Promise<unknown>)[] = [];
+  for (const [previous, next] of [
+    [null, "www.acme.test"],
+    ["www.acme.test", "www.acme.test"],
+    ["www.acme.test", null],
+  ] as const)
+    processor.processEvent({
+      event: null,
+      state: { ...empty, primaryHostname: next },
+      previousState: { ...empty, primaryHostname: previous },
+      delivery: { caughtUp: false },
+      append: (() => Promise.resolve([])) as never,
+      blockProcessorWhile: (work) => void blockers.push(work),
+      runInBackground: () => {},
+    });
+  for (const work of blockers) await work();
+  expect(written).toEqual(["www.acme.test", null]);
+});
+
 // THE CUSTOM HOSTNAMES — the effect, driven by hand with a fake control plane and Cloudflare.
 test("ProjectProcessor — a hostname add claims, provisions and answers keyed by its request; a refusal releases a claim never provisioned; a remove deletes then releases; a deployment that cannot provision refuses", async () => {
   const calls: string[] = [];
@@ -300,6 +413,7 @@ test("ProjectProcessor — a hostname add claims, provisions and answers keyed b
       reservedZones: ["iterate.app"],
       claim: async (name) => void calls.push(`claim ${name}`),
       release: async (name) => void calls.push(`release ${name}`),
+      setPrimaryHostname: async () => {},
       provider: {
         provision: async (name) => {
           calls.push(`provision ${name}`);
@@ -365,6 +479,7 @@ test("ProjectProcessor — one request per hostname at a time: a remove asked wh
       reservedZones: [],
       claim: async (name) => void calls.push(`claim ${name}`),
       release: async (name) => void calls.push(`release ${name}`),
+      setPrimaryHostname: async () => {},
       provider: {
         provision: async () => {
           await held;
@@ -407,6 +522,7 @@ test("ProjectProcessor — a drained re-check knows the add it just answered pro
       reservedZones: [],
       claim: async (name) => void calls.push(`claim ${name}`),
       release: async (name) => void calls.push(`release ${name}`),
+      setPrimaryHostname: async () => {},
       provider: {
         provision: async () => {
           provisions += 1;
@@ -518,6 +634,14 @@ function addSettled(requestOffset: number, status: string | null, error: string 
       error,
     },
   };
+}
+
+function primary(hostname: string | null) {
+  return { type: "events.iterate.com/project/primary-hostname-configured", payload: { hostname } };
+}
+
+function liveHostname() {
+  return { requested: null, cloudflare: observation("active"), error: null };
 }
 
 function removed(requestOffset: number) {

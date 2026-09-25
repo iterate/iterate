@@ -134,9 +134,14 @@ export type CollectSecretInput = {
  * Iterate instance; it is not itself permission to write a secret. */
 export type CollectSecretLink = { path: string; url: string };
 
-/** WHICH requests a fetch route takes — every field given must hold: the host's routing slug
- *  (`blog` for `blog--<project>`), a `URLPattern` over the URL the app sees (its init's fields, each a
- *  pattern string), exact header values. `{}` takes every request. */
+/** WHICH requests a fetch route takes — every field given must hold. A fetch route matches an HTTP
+ *  request: `url` is a standard `URLPattern` over the real URL (hostname and path; its init's
+ *  fields, each a pattern string), `headers` exact values. `routingSlug` is a convenience, the one
+ *  address component both ingress modes can express: paths routing shares one host, so it is the
+ *  `/projects/<project>/<routingSlug>` segment; subdomains make it `<routingSlug>--<project>` or
+ *  `<routingSlug>.<custom hostname>`. Without paths routing it could go, and a route would match
+ *  its hostname directly (`url: { hostname: "here.tunnels.templestein.com" }`). `{}` takes every
+ *  request. */
 export type FetchRouteRequestMatcher = {
   routingSlug?: string;
   url?: {
@@ -196,7 +201,8 @@ export interface IterateContextApi {
     | { projectId: string; path: string; projectSlug?: string; projectUrl?: string }
     | Promise<{ projectId: string; path: string; projectSlug?: string; projectUrl?: string }>;
   append(...events: StreamEventInput[]): Promise<StreamEvent[]>;
-  /** This project's public URL over HTTP: the apex, or a routing slug's host (`blog--<project>`),
+  /** This project's public URL over HTTP: the apex, or a routing slug's host (`blog--<project>`, or
+   *  `blog.<primary hostname>` once the project has a primary hostname),
    *  at `path`. Only from a session, which carries the origin to compose it with. */
   url(target?: { routingSlug?: string; path?: string }): Promise<string>;
   /** RESET this context (Cloudflare's `ctx.abort`): its Durable Object drops everything it holds in

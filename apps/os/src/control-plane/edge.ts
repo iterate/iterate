@@ -83,6 +83,8 @@ const memoize = (project: ProjectRecord) => {
  *  deleted first). */
 const hostnameMemo = new Map<string, { at: number; value: Promise<ProjectAddress | null> }>();
 const accessMemo = new Map<string, { at: number; value: Promise<AccessibleRecord> }>();
+/** A project's primary hostname by project id, hit or miss, kept thirty seconds (`primaryHostnameOf`). */
+const primaryHostnameMemo = new Map<string, { at: number; hostname: string | null }>();
 
 /** Who asked, as the control plane records it: the caller's principal and its connection. */
 const callerOf = (caller: Caller) => ({ principal: caller.principal, grant: caller.grant });
@@ -281,6 +283,17 @@ export class ControlPlane {
     value.catch(() => hostnameMemo.delete(hostname));
     hostnameMemo.set(hostname, { at: Date.now(), value });
     return this.#withinDeadline("projectByHostname", value);
+  }
+
+  /** A project's primary hostname (project/contract.ts `primaryHostname`), or null — memoized
+   *  thirty seconds per isolate, hit or miss, so a change reaches the edge's redirect and
+   *  `itx.url` within that. The answer is kept, never the read in flight (`getProjectKeepingMisses`). */
+  async primaryHostnameOf(projectId: string): Promise<string | null> {
+    const memoized = primaryHostnameMemo.get(projectId);
+    if (memoized && Date.now() - memoized.at < 30_000) return memoized.hostname;
+    const hostname = await this.#read<string | null>("primaryHostnameOf", projectId);
+    primaryHostnameMemo.set(projectId, { at: Date.now(), hostname });
+    return hostname;
   }
 
   /** The id a ref names: an id is self-evident (`prj_…` — a slug never holds an underscore), a

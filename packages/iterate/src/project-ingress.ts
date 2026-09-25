@@ -32,7 +32,12 @@ export type ProjectAddress = { project: string; routingSlug: string | null; base
 
 /** A DNS label: lowercase letters and digits, single hyphens inside. */
 const DNS_LABEL = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
-/** A routing slug: a DNS label starting with a letter. */
+/** A ROUTING SLUG: a DNS label starting with a letter. It is a convenience: the one address
+ *  component both ingress modes can express. Paths routing shares one host, so there it is the
+ *  `/projects/<project>/<routingSlug>` segment; subdomains make it `<routingSlug>--<project>` or
+ *  `<routingSlug>.<custom hostname>`. If paths routing is removed, the routing slug,
+ *  `x-iterate-routing-slug` and the `--` host form can be deleted, and a project's code matches
+ *  hostnames directly. */
 export const ROUTING_SLUG = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/;
 
 /** The labels `host` has under `hostname` — `site--p.iterate.app` ⇒ `["site--p"]` — lowercased, a
@@ -148,4 +153,24 @@ export function projectUrlOf(
   return parsed && parsed.project === target.project && parsed.routingSlug === routingSlug
     ? url
     : null;
+}
+
+/** The URL of `routingSlug` (null ⇒ the apex) at `path` (default "/", must start with "/") on a
+ *  project's PRIMARY HOSTNAME, one of its own live hostnames (apps/os project/contract.ts
+ *  `primaryHostname`): `https://<routingSlug>.<primaryHostname><path>`, or
+ *  `https://<primaryHostname><path>` for the apex. Null for a bad routing slug. Pure. */
+export function primaryHostnameUrlOf(
+  primaryHostname: string,
+  target: { routingSlug?: string | null; path?: string },
+): URL | null {
+  const path = target.path || "/";
+  if (!path.startsWith("/"))
+    throw new Error(`primaryHostnameUrlOf: path must start with "/": ${path}`);
+  const routingSlug = target.routingSlug || null;
+  if (routingSlug && !ROUTING_SLUG.test(routingSlug)) return null;
+  // one absolute string, never `path` resolved against a base: `//other.host/…` resolved that way
+  // leaves the primary, and so the host is checked too
+  const hostname = `${routingSlug ? `${routingSlug}.` : ""}${primaryHostname}`;
+  const url = new URL(`https://${hostname}${path}`);
+  return url.hostname === hostname ? url : null;
 }

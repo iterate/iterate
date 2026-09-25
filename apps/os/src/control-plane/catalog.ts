@@ -105,6 +105,9 @@ export class ControlPlaneDatabase {
       // (project/processor.ts claims and releases them): a hostname is ONE project's apex.
       "CREATE TABLE IF NOT EXISTS project_hostnames (hostname TEXT PRIMARY KEY, project_id TEXT NOT NULL)",
       "CREATE INDEX IF NOT EXISTS project_hostnames_project ON project_hostnames (project_id)",
+      // A project's primary hostname (project/processor.ts publishes it): one of its hostnames,
+      // which its URLs use and the edge redirects its ingress-base navigations to.
+      "CREATE TABLE IF NOT EXISTS project_primary_hostnames (project_id TEXT PRIMARY KEY, hostname TEXT NOT NULL)",
     ])
       sql.exec(statement);
   }
@@ -565,6 +568,27 @@ export class ControlPlaneDatabase {
       "DELETE FROM project_hostnames WHERE hostname = ? AND project_id = ?",
       hostname,
       projectId,
+    );
+  }
+
+  /** Set a project's primary hostname, or clear it with null. */
+  setPrimaryHostname(projectId: string, hostname: string | null): void {
+    if (hostname)
+      this.sql.exec(
+        "INSERT INTO project_primary_hostnames (project_id, hostname) VALUES (?, ?) ON CONFLICT (project_id) DO UPDATE SET hostname = excluded.hostname",
+        projectId,
+        hostname,
+      );
+    else this.sql.exec("DELETE FROM project_primary_hostnames WHERE project_id = ?", projectId);
+  }
+
+  /** A project's primary hostname, while the project still holds its claim; null for none. */
+  primaryHostnameOf(projectId: string): string | null {
+    return (
+      this.#rows<{ hostname: string }>(
+        "SELECT h.hostname FROM project_primary_hostnames p JOIN project_hostnames h ON h.hostname = p.hostname AND h.project_id = p.project_id WHERE p.project_id = ?",
+        projectId,
+      )[0]?.hostname ?? null
     );
   }
 

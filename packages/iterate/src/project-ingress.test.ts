@@ -8,6 +8,7 @@ import {
   type IngressRouting,
   type ProjectAddress,
   customHostnameCandidatesOf,
+  primaryHostnameUrlOf,
   projectWildcardHostOf,
 } from "./project-ingress.ts";
 
@@ -313,4 +314,35 @@ test.each([
   { host: "localhost", candidates: [{ hostname: "localhost", routingSlug: null }] },
 ])("custom hostname candidates of $host", ({ host, candidates }) => {
   expect(customHostnameCandidatesOf(host)).toEqual(candidates);
+});
+
+// ── primaryHostnameUrlOf ── a routing slug is one label under the primary hostname; the apex is the hostname
+test.each([
+  { target: {}, url: "https://templestein.com/" },
+  { target: { routingSlug: null, path: "/a?b=1" }, url: "https://templestein.com/a?b=1" },
+  { target: { routingSlug: "here-public" }, url: "https://here-public.templestein.com/" },
+  {
+    target: { routingSlug: "blog", path: "/posts/1" },
+    url: "https://blog.templestein.com/posts/1",
+  },
+  { target: { routingSlug: "9lives" }, url: null },
+  { target: { routingSlug: "a--b" }, url: null },
+  // a path never changes the host: the edge passes a visitor's own path here
+  { target: { path: "//evil.test/x" }, url: "https://templestein.com//evil.test/x" },
+  { target: { path: "/\\evil.test/x" }, url: "https://templestein.com//evil.test/x" },
+  { target: { path: "/@evil.test/x" }, url: "https://templestein.com/@evil.test/x" },
+])("primary hostname URL of $target", ({ target, url }) => {
+  expect(primaryHostnameUrlOf("templestein.com", target)?.href ?? null).toBe(url);
+});
+
+test("a primary hostname URL's path without a leading slash is a programmer error", () => {
+  expect(() => primaryHostnameUrlOf("templestein.com", { path: "x" })).toThrow(/must start with/);
+});
+
+test("a primary hostname URL parses back to its routing slug as a custom hostname candidate", () => {
+  const url = primaryHostnameUrlOf("templestein.com", { routingSlug: "blog" })!;
+  expect(customHostnameCandidatesOf(url.hostname)).toContainEqual({
+    hostname: "templestein.com",
+    routingSlug: "blog",
+  });
 });

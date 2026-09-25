@@ -233,6 +233,74 @@ test("a project's own hostname: added, the processor claims it and creates its w
   ).toBeNull();
 });
 
+test("a project's primary hostname: once a live hostname is made primary, itx.url composes on it; a navigation on the ingress base is a 308 to the same routing slug, path and query there; a POST, a fetch and a WebSocket upgrade on the ingress base are served", async () => {
+  fakeCloudflareCustomHostnames({ active: ["primary.somedomain.test"] });
+  using session = await api();
+  const admin = session.authenticate(ADMIN);
+  const itx = await admin.projects.create({ project: "primary-hostname" });
+  await publishConfigWorker(itx, [
+    "itx",
+    "workers",
+    ["get", { source: SRC_HOSTNAME_SITE, cacheKey: "primary-hostname" }],
+  ]);
+  const [asked] = await itx.append({
+    type: "events.iterate.com/project/hostname-add-requested",
+    payload: { hostname: "primary.somedomain.test" },
+  });
+  expect(
+    await itx.waitForEvent({
+      type: "events.iterate.com/project/hostname-add-settled",
+      afterOffset: asked!.offset,
+      timeoutMs: 10_000,
+    }),
+  ).toMatchObject({ payload: { cloudflare: { status: "active", sslStatus: "active" } } });
+  const [configured] = await itx.append({
+    type: "events.iterate.com/project/primary-hostname-configured",
+    payload: { hostname: "primary.somedomain.test" },
+  });
+  // the processor's cursor passes the event once the control plane holds the primary
+  await itx.invoke([
+    "itx",
+    "facets",
+    ["get", "project"],
+    ["waitUntilProcessed", { offset: configured!.offset }],
+  ]);
+
+  expect(await itx.url({ routingSlug: "echo", path: "/a?b=1" })).toBe(
+    "https://echo.primary.somedomain.test/a?b=1",
+  );
+  expect(await itx.url()).toBe("https://primary.somedomain.test/");
+
+  const navigate = { "sec-fetch-mode": "navigate", "sec-fetch-dest": "document" };
+  for (const [from, to] of [
+    [
+      "https://echo--primary-hostname.projects.test/a?b=1",
+      "https://echo.primary.somedomain.test/a?b=1",
+    ],
+    ["https://primary-hostname.projects.test/", "https://primary.somedomain.test/"],
+  ]) {
+    const redirected = await call(from!, { headers: navigate });
+    expect(redirected, from).toMatchObject({ status: 308 });
+    expect(redirected.headers.get("location"), from).toBe(to);
+  }
+  const served = "https://echo--primary-hostname.projects.test/a?b=1";
+  for (const [why, init] of [
+    ["a POST", { method: "POST", headers: navigate, body: "x" }],
+    ["a fetch", { headers: { "sec-fetch-mode": "cors", "sec-fetch-dest": "empty" } }],
+    ["a WebSocket upgrade", { headers: { ...navigate, upgrade: "websocket" } }],
+  ] as const) {
+    const answer = await call(served, init);
+    expect(answer, why).toMatchObject({ status: 200 });
+    expect(await answer.json(), why).toEqual({
+      host: "echo--primary-hostname.projects.test",
+      routingSlug: "echo",
+    });
+  }
+  // on the primary hostname itself, a navigation is served
+  const onPrimary = await call("https://echo.primary.somedomain.test/", { headers: navigate });
+  expect(onPrimary).toMatchObject({ status: 200 });
+});
+
 /** A config worker that says which host it answered, and the routing slug it saw. */
 const SRC_HOSTNAME_SITE = {
   "cap.js": `import { ConfigWorker } from "./processor.js";

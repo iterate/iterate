@@ -36,7 +36,7 @@ export class ProjectDurableObject extends StreamProcessorDurableObject<
   );
 
   /** The custom-hostname effect's reach, for THIS project — built when a request runs, never at
-   *  construction: its claims in the control plane's hostname table, and Cloudflare under the
+   *  construction: its claims and its primary in the control plane's hostname tables, and Cloudflare under the
    *  deployment's `customHostnames` config. */
   #hostnames(): ProjectHostnames {
     const { projectId } = DurableObjectNameCodec.parse(this.ctx.props.iterateContextName);
@@ -46,6 +46,7 @@ export class ProjectDurableObject extends StreamProcessorDurableObject<
       reservedZones: config.customHostnames?.reservedZones ?? [],
       claim: (hostname) => controlPlane().claimHostname(projectId, hostname),
       release: (hostname) => controlPlane().releaseHostname(projectId, hostname),
+      setPrimaryHostname: (hostname) => controlPlane().setPrimaryHostname(projectId, hostname),
       provider: cloudflareCustomHostnameProvider(config),
     };
   }
