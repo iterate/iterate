@@ -1,7 +1,7 @@
 /**
  * The wire format of test-health telemetry: one JSON line per observed
- * outcome, appended to `$FLAKE_RECORD_DIR`, shipped by CI as
- * `flake-records-<suite>` artifacts, and folded by the flake dashboard
+ * outcome, appended to `$FLAKE_RECORD_DIR`, kept by CI in each test run's
+ * evidence folder in R2, and read from there by the flake dashboard
  * (docs/testing.md#flakes-and-pinned-failures).
  *
  * Three producers write records:

@@ -17,7 +17,6 @@ const NAMESPACES = new Set([
   "secret",
   "agent",
   "voice-agent",
-  "flake-dashboard",
   "chrome",
   "email",
   "capability-host",

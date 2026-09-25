@@ -5,7 +5,7 @@ import {
   ciTelemetrySourceFromEnvironment,
   type TestTelemetryArtifact,
 } from "@iterate-com/shared/test-support/ci-telemetry";
-import type { FlakeRecord } from "./flake-dashboard/contract.ts";
+import type { FlakeRecord } from "./flake-dashboard/evidence.ts";
 
 /**
  * One row per test, for the test evidence folder's `tables/tests.parquet`

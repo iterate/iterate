@@ -27,7 +27,7 @@
  * A flake test therefore never blocks unrelated work, but it keeps running and
  * keeps producing data. When `FLAKE_RECORD_DIR` is set, every execution
  * appends one JSON line (see FlakeRecord in ./flake-record.ts) to a per-process file in
- * that directory; CI ships those lines to the flake dashboard. Local runs
+ * that directory; CI keeps those lines for the flake dashboard. Local runs
  * without the variable record nothing.
  *
  * Lifecycle (see docs/testing.md): a test that seems flaky moves from a plain
@@ -173,8 +173,9 @@ const SENTINEL_MONTH_END = new Date("2026-11-01");
  * (recorder, artifact, ingestion, dashboard) end to end. Until SENTINEL_MONTH_END it throws the
  * allowed error about 10% of runs, so the dashboard should read a flake rate near 10%: 0%, or a red
  * run, means the pipeline itself is broken. After the month ends it passes every run until the date
- * is rolled forward. The dashboard's lifecycle proposals skip sentinels (scripts/ci/flake-dashboard
- * fold.ts), so no unwrap is ever proposed. `title` is the dashboard row, so each suite keeps its own.
+ * is rolled forward. The dashboard's lifecycle proposals skip sentinels
+ * (scripts/ci/flake-dashboard/dashboard.ts), so no unwrap is ever proposed. `title` is the
+ * dashboard row, so each suite keeps its own.
  */
 export function flakeSentinel<TestFn extends (...args: any[]) => any>(test: TestFn, title: string) {
   // The date is UTC midnight; the month it closes is named in UTC too, whatever the runner's zone.

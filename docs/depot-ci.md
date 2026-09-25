@@ -92,7 +92,7 @@ Anything else that needs GitHub-only triggers, such as `pull_request_target`, `i
 | `os-e2e-soak.yml`            | Dispatch                                            | The e2e suite N times against one deployed worker, each run then the perf budgets                       |
 | `os-latency.yml`             | Every 3 hours, dispatch                             | **OS latency**: the perf suite against main's preview `latency`; to PostHog; pages on a change of state |
 | `os-real-model.yml`          | Daily, main push to the agents runtime, dispatch    | **OS real model**: the `REAL:` rows against main's preview `real-model`; pages on a change of state     |
-| `flake-dashboard.yml`        | Hourly, dispatch                                    | Folds the flake records and row costs into [#2580](https://github.com/iterate/iterate/issues/2580)      |
+| `flake-dashboard.yml`        | Hourly, dispatch                                    | Recomputes [#2580](https://github.com/iterate/iterate/issues/2580) from the flake records in R2         |
 | `ci-telemetry.yml`           | Hourly, dispatch                                    | One PostHog event per Depot workflow run and job attempt                                                |
 | `pr-ttg.yml`                 | Hourly, dispatch                                    | **PR time to green**: how long each PR push waited for its checks; PostHog; pages on a change of state  |
 | `release.yml`                | Daily, dispatch                                     | A dated `v…` release with a changelog when main moved                                                   |
@@ -332,10 +332,10 @@ A dispatch of `test.yml` fails with `Workflow 'test.yml' not found or does not
 have workflow_dispatch trigger`. Preview OS under `ci run` skips every job,
 since its jobs need a pull request or a dispatch's inputs: dispatch it. LOC
 report under `ci run` prints its table (`No pull request context`) and writes
-no body. Downstream a scratch run is an ordinary one: the flake dashboard folds
-a Test run's flake records (it lists workflows by name), the hourly telemetry
-sync sends the run to PostHog with trigger `api` or `workflow_dispatch`, and
-test evidence goes to R2 under `trust=pr`. PR time to green reads pull requests
+no body. Downstream a scratch run is an ordinary one: its test evidence goes to
+R2 under `trust=pr`, where the flake dashboard reads a Test run's flake records
+like a pull request's, and the hourly telemetry sync sends the run to PostHog
+with trigger `api` or `workflow_dispatch`. PR time to green reads pull requests
 only.
 
 ### Soak: N runs, then read them

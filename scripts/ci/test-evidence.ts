@@ -14,7 +14,7 @@ import {
   testEvidencePaths,
 } from "@iterate-com/shared/test-support/test-evidence";
 import { ciBucketEnvs } from "../../envs.ts";
-import { FlakeRecord } from "./flake-dashboard/contract.ts";
+import { FlakeRecord } from "./flake-dashboard/evidence.ts";
 import { ciJobAttempt, testResultsParquet, testResultsTable } from "./test-results-parquet.ts";
 import { loadTestTelemetryArtifacts } from "./upload-test-telemetry.ts";
 

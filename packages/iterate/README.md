@@ -112,8 +112,8 @@ that prefix belongs to whoever appends it and is opaque to the platform: tests u
   prefix.
 - **A domain namespace** is the singular name of the kind of context whose log the event belongs
   to, which is the defining contract's slug when there is one: `account`, `organization`,
-  `project`, `repo`, `workspace`, `secret`, `agent`, `voice-agent`, `flake-dashboard`. A fact
-  cross-posted to another log keeps its own namespace: `repo/created` on `/` is still a repo fact.
+  `project`, `repo`, `workspace`, `secret`, `agent`, `voice-agent`. A fact cross-posted to another
+  log keeps its own namespace: `repo/created` on `/` is still a repo fact.
 - **An integration** uses its own name as its namespace, for example `chrome`.
 - **`test`** holds types that only tests append. Production code never matches a `test/*` type. A
   test contract may keep a slug of its own (`counter`), but its events go under `test/`. A test must
@@ -164,7 +164,7 @@ that prefix belongs to whoever appends it and is opaque to the platform: tests u
   follows its name (`itx/child-created:<path>`). Broader concepts, modules and Workers log
   event names keep theirs: the Stream, scheduled appends, `core`, `scheduled-append.completed`.
 - **Renaming.** A rename has to serve one of these rules, not taste. If a type is stored outside the
-  platform's Durable Objects (device firmware, a published SDK, a project's config repo, CI state),
+  platform's Durable Objects (device firmware, a published SDK, a project's config repo),
   rename it only in a change that migrates that store too.
 
 | Namespace                                                           | Defined in                                                                                                                                                                                                                                                                                                 |
@@ -173,7 +173,6 @@ that prefix belongs to whoever appends it and is opaque to the platform: tests u
 | `account`, `organization`, `project`, `repo`, `workspace`, `secret` | `apps/os/src/<name>/contract.ts` (repo and workspace also use `project/entity-lifecycle.ts`)                                                                                                                                                                                                               |
 | `agent`                                                             | `apps/agents/runtime/contract.ts`                                                                                                                                                                                                                                                                          |
 | `voice-agent`                                                       | `apps/agents/voice/voice-agent.ts`, `apps/agents/voice/events.ts`                                                                                                                                                                                                                                          |
-| `flake-dashboard`                                                   | `scripts/ci/flake-dashboard/contract.ts`                                                                                                                                                                                                                                                                   |
 | `chrome`                                                            | `apps/browser-extension/panel.js`                                                                                                                                                                                                                                                                          |
 | `test`                                                              | tests only                                                                                                                                                                                                                                                                                                 |
 

@@ -9,27 +9,23 @@ export const FlakeSuiteSummary = z
     startedAt: z.iso.datetime(),
     finishedAt: z.iso.datetime(),
     testCount: z.number().int().nonnegative(),
-    // Optional because the fold strips it from the snapshots it stores in mainRuns; per-test
-    // evidence is folded separately.
-    tests: z
-      .array(
-        z.object({
-          name: z.string().min(1),
-          outcome: z.enum(["pass", "fail", "skip"]),
-          // What the dashboard's Cost section reads (scripts/ci/flake-dashboard/fold.ts): how long
-          // the row ran, when it started after the suite did, its tags, its retries, whether it
-          // failed after them, and its first failure's message.
-          durationMs: z.number().int().nonnegative().optional(),
-          startMs: z.number().int().nonnegative().optional(),
-          tags: z.array(z.string()).optional(),
-          retries: z.number().int().nonnegative().optional(),
-          failed: z.boolean().optional(),
-          error: z.string().max(300).optional(),
-        }),
-      )
-      .optional(),
+    tests: z.array(
+      z.object({
+        name: z.string().min(1),
+        outcome: z.enum(["pass", "fail", "skip"]),
+        // What the flake dashboard's Cost section reads (scripts/ci/flake-dashboard/dashboard.ts):
+        // how long the row ran, when it started after the suite did, its tags, its retries,
+        // whether it failed after them, and its first failure's message.
+        durationMs: z.number().int().nonnegative().optional(),
+        startMs: z.number().int().nonnegative().optional(),
+        tags: z.array(z.string()).optional(),
+        retries: z.number().int().nonnegative().optional(),
+        failed: z.boolean().optional(),
+        error: z.string().max(300).optional(),
+      }),
+    ),
     // The kind "unknown" records the suite wrote (retried passes and hard failures of plain tests):
-    // the dashboard downgrades an artifact whose record lines do not add up to it.
+    // the dashboard marks a run incomplete when its record lines do not add up to it.
     unknownFlakeCount: z.number().int().nonnegative(),
     failedCount: z.number().int().nonnegative(),
     // The preview e2e suite only: whether it ran its rows tagged `slow`, which a PR that touches
