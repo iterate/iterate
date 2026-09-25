@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
-import { expect, onTestFinished, test, vi } from "vitest";
+import { expect, test, vi } from "vitest";
 import { FIRMWARE_VERSION_PATTERN, findFirmwareDevice } from "../src/firmware/catalog.ts";
 import {
   checkFlashLayout,
@@ -169,7 +169,6 @@ test("firmwareInputs: excludes every other board, the Mac included, and what onl
 
 test("releasesFromRefs: reads kit-firmware tags, peels annotated ones and skips malformed ones", () => {
   const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-  onTestFinished(() => warn.mockRestore());
   const refs = [
     "1111111111111111111111111111111111111111\trefs/tags/kit-firmware/satellite1/002574-2026-09-23-b2a4558",
     "2222222222222222222222222222222222222222\trefs/tags/kit-firmware/stackchan/002575-2026-09-24-c3b5669",

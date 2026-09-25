@@ -6,8 +6,9 @@ export default defineConfig({
     reporters: vitestReporters,
     environment: "node",
     include: ["src/**/*.test.ts", "scripts/**/*.test.ts"],
-    // the tests stub `window` and spy on `console` without lifecycle hooks (lint/test-style-rules.md)
-    unstubGlobals: true,
     restoreMocks: true,
+    unstubGlobals: true,
+    unstubEnvs: true,
+    silent: "passed-only",
   },
 });

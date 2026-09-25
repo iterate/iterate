@@ -37,7 +37,6 @@ test.for([
     failNext = false;
     return Promise.reject(new Error("Artifacts answered 503"));
   });
-  onTestFinished(() => void vi.unstubAllGlobals());
   const repo = repoFacet(artifacts);
 
   const wave = await Promise.allSettled(

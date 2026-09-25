@@ -4,7 +4,7 @@
 // origin; a write or upgrade another site drove arrives anonymous. Bearer rows, and the sign-in
 // challenge under both routings, are in e2e/ingress-project-host.e2e.test.ts.
 import { exports } from "cloudflare:workers";
-import { expect, onTestFinished, test, vi } from "vitest";
+import { expect, test, vi } from "vitest";
 import { publishConfigWorker, signedInSession, SRC_ECHO_APP } from "./support.ts";
 
 test("a member's session cookie on a project host: a read from anywhere and a write or WebSocket upgrade from the host itself carry the principal; a cross-site write or upgrade arrives anonymous", async () => {
@@ -54,10 +54,9 @@ async function hostCookieSession(slug: string) {
   const { projectId } = await itx.whoami();
   const principal = await root.whoami();
   // the issuer fetches the host's client document and the host its token: both are this worker
-  const spy = vi
-    .spyOn(globalThis, "fetch")
-    .mockImplementation((input, init) => exports.default.fetch(new Request(input, init)));
-  onTestFinished(() => spy.mockRestore());
+  vi.spyOn(globalThis, "fetch").mockImplementation((input, init) =>
+    exports.default.fetch(new Request(input, init)),
+  );
   const origin = `https://echo--${slug}.projects.test`;
   const start = await exports.default.fetch(`${origin}/.auth/login?next=/`, { redirect: "manual" });
   const cookie = start.headers.get("set-cookie")!.split(";")[0]!;

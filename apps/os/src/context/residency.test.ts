@@ -270,10 +270,7 @@ test("birth reset: nothing reset adds nothing to the wake record", async () => {
 function residencyFixture() {
   vi.useFakeTimers({ now: T });
   const log = vi.spyOn(console, "log").mockImplementation(() => {});
-  onTestFinished(() => {
-    vi.useRealTimers();
-    log.mockRestore();
-  });
+  onTestFinished(() => void vi.useRealTimers());
   const state = {
     borrowed: false,
     scriptRunsInFlight: 0,

@@ -21,7 +21,7 @@ import { expect, test } from "vitest";
 import { AccountProcessor } from "../src/account/processor.ts";
 import type { IterateRpcTarget } from "../src/session.ts";
 import { endGrantOnAccount } from "./oauth-support.ts";
-import { adminCredentials, openSession, refused, stub, until } from "./support.ts";
+import { adminCredentials, openSession, readLog, refused, stub, until } from "./support.ts";
 
 // ── shape — a global context is an ordinary context (passing) ──
 
@@ -344,10 +344,7 @@ test("a project named 'global' cannot collide with the deployment-global namespa
     type: string;
   }[];
   expect(mark).toMatchObject({ type: "collide-mark" });
-  const rootPage = (await stub("global").invoke(["itx", ["readEvents"]])) as {
-    events: { type: string }[];
-  };
-  expect(rootPage.events.some((event) => event.type === "collide-mark")).toBe(false);
+  expect((await readLog("global")).some((event) => event.type === "collide-mark")).toBe(false);
 });
 
 test("a user cannot reach an organization they do not belong to", async () => {

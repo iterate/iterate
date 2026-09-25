@@ -8,7 +8,7 @@
  */
 /* oxlint-disable iterate/no-capnweb-http-batch -- these tests drive the pet shop SERVER's HTTP-batch /capnweb endpoint on purpose (the WebSocket half is covered separately); the rule targets stateless-worker client code, not a batch handler under test */
 import { newHttpBatchRpcSession } from "capnweb";
-import { expect, onTestFinished, test, vi } from "vitest";
+import { expect, test, vi } from "vitest";
 import { accessToken, makeShop, ORIGIN, type Shop } from "./test/shop.ts";
 
 test("HTTP batch: listPets / getPet / createPet for a valid bearer token, and the writes persist", async () => {
@@ -94,9 +94,6 @@ function capnwebClient(shop: Shop, token?: string) {
     const request = new Request(input, init);
     posts.push(request);
     return shop.fetch(request);
-  });
-  onTestFinished(() => {
-    vi.unstubAllGlobals();
   });
   return {
     posts,

@@ -1,6 +1,6 @@
 import { env, exports } from "cloudflare:workers";
 import { newWebSocketRpcSession } from "capnweb";
-import { expect, onTestFinished, test, vi } from "vitest";
+import { expect, onTestFinished, test } from "vitest";
 import type { StreamEvent } from "iterate/stream/processor";
 import type { AccountState } from "../src/account/contract.ts";
 import { ControlPlaneDatabase } from "../src/control-plane/catalog.ts";
@@ -11,6 +11,7 @@ import type { OrganizationState } from "../src/organization/contract.ts";
 import type { IterateRpcTarget } from "../src/session.ts";
 import {
   adminSession,
+  fetchReachesThisWorker,
   ORIGIN,
   publishConfigWorker,
   refused,
@@ -633,17 +634,6 @@ function operator(email?: string) {
     for (const session of sessions) session[Symbol.dispose]();
   });
   return adminSession(sessions, email);
-}
-
-/** `fetch` reaches this worker until the test finishes: the issuer fetches its own client metadata
- *  while it signs someone in, and the network is out of reach here. */
-function fetchReachesThisWorker() {
-  const spy = vi
-    .spyOn(globalThis, "fetch")
-    .mockImplementation((input, init) => exports.default.fetch(new Request(input, init)));
-  onTestFinished(() => {
-    spy.mockRestore();
-  });
 }
 
 /** The sign-in page's own post — same-ORIGIN, a form — with or without a browser's cookie. */

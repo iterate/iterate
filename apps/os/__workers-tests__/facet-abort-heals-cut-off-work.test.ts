@@ -21,8 +21,8 @@
 // its abort), a hosted processor SDK facet and the alarm on demand.
 
 import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
-import { expect, onTestFinished, test, vi } from "vitest";
-import { stub, until } from "./support.ts";
+import { expect, test, vi } from "vitest";
+import { readLog, stub, until } from "./support.ts";
 
 /** A userspace processor that HANGS on any batch carrying a `pin/hang` event, on its FIRST revive
  *  and on a catch-up it was armed for — forever, before the engine runs. Each is recorded
@@ -103,12 +103,12 @@ const name = "hangingcounter";
 
 test("a push hung on a facet that itx.facets.abort resets is caught up by the fresh instance — reduced once, the row live, the context not reset", async () => {
   const ctx = "prj_facet_abort_heals_its_push";
-  const { probe, read } = await hostedOn(ctx);
+  const { probe } = await hostedOn(ctx);
   const [owed] = (await stub(ctx).append({ type: "pin/hang" })) as { offset: number }[];
   await until("the hanging push is on the facet", async () => (await probe()).seen.length === 2);
-  const wakesBefore = (await read()).filter((e) => e.type === "events.iterate.com/itx/woken");
+  const wakesBefore = (await readLog(ctx)).filter((e) => e.type === "events.iterate.com/itx/woken");
 
-  const errors = consoleErrors();
+  const errors = vi.spyOn(console, "error");
   const aborted = await stub(ctx).invoke(["itx", "facets", ["abort", name, "unstick"]]);
   expect(aborted).toMatchObject({
     type: "events.iterate.com/itx/facet-aborted",
@@ -120,7 +120,7 @@ test("a push hung on a facet that itx.facets.abort resets is caught up by the fr
     return p.checkpoints.some((c) => c.reduced_through_offset > owed!.offset) ? p : undefined;
   });
   expect(healed.seen.filter((row) => Number(row.hung) === 1)).toHaveLength(1); // never re-pushed
-  const events = await read();
+  const events = await readLog(ctx);
   expect(JSON.parse(healed.checkpoints[0]!.state)).toEqual({ n: events.length }); // each once
   expect(
     ((await stub(ctx).invoke(["itx", "subscriptions", ["get", name]])) as { halted?: unknown })
@@ -135,7 +135,7 @@ test("a revive hung on a facet that itx.facets.abort resets is owed again at onc
   const { probe } = await hostedOn(ctx);
   // A due claim, what a processor holds while a `runInBackground` attempt is in flight.
   await stub(ctx).invoke(["itx", "processors", ["claim", name, Date.now()]]);
-  const errors = consoleErrors();
+  const errors = vi.spyOn(console, "error");
   // The pass — the harness's own alarm or this one, whichever runs it first: its revive hangs.
   const pass = runDurableObjectAlarm(stub(ctx));
   await until("the revive hangs on the facet", async () => (await probe()).revives.length === 1);
@@ -161,7 +161,7 @@ test("a catch-up hung on a facet that itx.facets.abort resets runs again on the 
   const { probe } = await hostedOn(ctx);
   const before = (await probe()).catchups.length;
   await stub(ctx).invoke(["itx", "facets", ["get", name], ["armCatchUpHang"]]);
-  const errors = consoleErrors();
+  const errors = vi.spyOn(console, "error");
   // An operator's resume: a facet row resumes by catching up from the log (subscription-delivery.ts).
   await stub(ctx).append({
     type: "events.iterate.com/itx/subscription-delivery-resumed",
@@ -185,11 +185,8 @@ test("a push hung on a facet whose row is removed is that removal — logged, ne
   const { probe } = await hostedOn(ctx);
   await stub(ctx).append({ type: "pin/hang" });
   await until("the hanging push is on the facet", async () => (await probe()).seen.length === 2);
-  const errors = consoleErrors();
+  const errors = vi.spyOn(console, "error");
   const logs = vi.spyOn(console, "log");
-  onTestFinished(() => {
-    logs.mockRestore();
-  });
   await stub(ctx).append({
     type: "events.iterate.com/itx/subscription-configured",
     payload: { name, target: null },
@@ -254,20 +251,8 @@ async function hostedOn(ctx: string) {
       catchups: Array<{ hung: number }>;
       checkpoints: Array<{ reduced_through_offset: number; state: string }>;
     }>;
-  const read = async () =>
-    ((await stub(ctx).invoke(["itx", ["readEvents", 0, 500]])) as { events: { type: string }[] })
-      .events;
   await until("the configure batch was pushed", async () => (await probe()).seen.length === 1);
-  return { probe, read };
-}
-
-/** `console.error`, spied until the test finishes. */
-function consoleErrors() {
-  const errors = vi.spyOn(console, "error");
-  onTestFinished(() => {
-    errors.mockRestore();
-  });
-  return errors;
+  return { probe };
 }
 
 /** The `reportIssue` lines the context logged — it runs in this isolate, so they are this console's. */

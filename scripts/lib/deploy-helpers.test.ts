@@ -1,7 +1,7 @@
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { expect, onTestFinished, test, vi } from "vitest";
+import { expect, test, vi } from "vitest";
 import { runCloudflareCommandWith429Retry, runAsync, smokeResponse } from "./deploy-helpers.ts";
 
 // ── runAsync ──
@@ -87,9 +87,6 @@ test.for([
 test("can require an exact response body rather than trusting the status alone", async () => {
   const fetchMock = vi.fn(async () => Response.json({ error: "not found" }, { status: 404 }));
   vi.stubGlobal("fetch", fetchMock);
-  onTestFinished(() => {
-    vi.unstubAllGlobals();
-  });
 
   await expect(
     smokeResponse(

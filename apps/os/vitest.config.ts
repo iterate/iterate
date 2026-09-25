@@ -1,7 +1,7 @@
 // THE vitest config; pick a project with `--project` (`pnpm test` runs unit + workers, `pnpm e2e`,
 // `pnpm perf` and `pnpm bench` the other three). Five PROJECTS (vitest's own word), each a genuinely
 // different execution context:
-//   • unit    — in-process node, the fast suite (src/**/*.test.ts)
+//   • unit    — in-process node, the fast suite (src/**/*.test.ts, and the e2e fixtures' own tests)
 //   • workers — INSIDE workerd next to the worker via @cloudflare/vitest-plugin, for the hibernation
 //               cases that genuinely need cloudflare:test controls (__workers-tests__/**). The worker
 //               under test is Vite's built dist/server/index.js — `exports.default.fetch`
@@ -109,6 +109,9 @@ export default defineConfig({
     // `maxWorkers`; e2e sets its own.
     maxWorkers: process.env.CI ? 7 : undefined,
     // A ROOT option: every project's runs, e2e's included, write the retry telemetry CI uploads.
+    // `silent` is read at the root too (by the default reporter), so `pnpm test` passes
+    // `--silent=passed-only` for unit and workers alone: a passing e2e or perf row still prints
+    // what it reports and does not assert (perf's `[latency]` lines).
     reporters: vitestReporters,
     globalSetup: ["./vitest.global-setup.ts"],
     // Read at the ROOT: a project's own `onUnhandledError` is not consulted (vitest 4).
@@ -117,7 +120,13 @@ export default defineConfig({
       {
         test: {
           name: "unit",
-          include: ["src/**/*.test.ts", "scripts/*.test.ts"],
+          include: ["src/**/*.test.ts", "scripts/*.test.ts", "e2e/support/**/*.test.ts"],
+          // Each test starts with the last one's spies, stubbed globals and env restored
+          // (lint/test-style-rules.md), as in every workspace's config. Not in e2e, whose rows run
+          // concurrently: a restore before one row would undo a sibling's.
+          restoreMocks: true,
+          unstubGlobals: true,
+          unstubEnvs: true,
           // The edge and DO modules reach the control plane, whose OAuth provider imports
           // cloudflare:workers; inlined so the alias below covers it.
           server: { deps: { inline: ["@cloudflare/workers-oauth-provider"] } },
@@ -128,7 +137,10 @@ export default defineConfig({
         resolve: {
           alias: {
             "cloudflare:workers": fileURLToPath(
-              new URL("./src/test/cloudflare-workers-shim.ts", import.meta.url),
+              new URL(
+                "../../packages/shared/src/test-support/cloudflare-workers-shim.ts",
+                import.meta.url,
+              ),
             ),
             "@tanstack/react-start/server-entry": fileURLToPath(
               new URL("./src/test/start-server-entry-shim.ts", import.meta.url),
@@ -167,6 +179,9 @@ export default defineConfig({
           name: "workers",
           include: ["__workers-tests__/**/*.test.ts", "../agents/__workers-tests__/**/*.test.ts"],
           setupFiles: ["./__workers-tests__/apply-migrations.ts"],
+          restoreMocks: true,
+          unstubGlobals: true,
+          unstubEnvs: true,
           // First test pays workerd boot + the 200-client attach storm (the cloudflare-os
           // cold-start lesson, scaled up).
           testTimeout: 120_000,

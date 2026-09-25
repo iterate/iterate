@@ -9,7 +9,7 @@
 // `expression-fetch.deploy-reset` at info and never reported (iterate-context-durable-object.ts).
 // The reset is the test's: `state.abort` with the deploy's words, mid-call, on the context dialed.
 import { runInDurableObject } from "cloudflare:test";
-import { expect, onTestFinished, test, vi } from "vitest";
+import { expect, test, vi } from "vitest";
 import type { ItxExpression } from "iterate/expression";
 import { stub } from "./support.ts";
 
@@ -96,7 +96,6 @@ function logEvents() {
   const spies = (["info", "warn", "error"] as const).map(
     (level) => [level, vi.spyOn(console, level)] as const,
   );
-  onTestFinished(() => spies.forEach(([, spy]) => spy.mockRestore()));
   return () => {
     const lines = spies.flatMap(([level, spy]) =>
       spy.mock.calls.map(([line]) => [level, String((line as { event?: unknown })?.event)]),

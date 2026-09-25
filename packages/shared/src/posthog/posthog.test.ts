@@ -1,4 +1,4 @@
-import { expect, onTestFinished, test, vi } from "vitest";
+import { expect, test, vi } from "vitest";
 import { proxyPosthogRequest } from "./posthog.ts";
 
 test.for(["static/array.js", "array/phc_test/config.js"])(
@@ -6,9 +6,6 @@ test.for(["static/array.js", "array/phc_test/config.js"])(
   async (path) => {
     const upstream = vi.fn(async () => new Response("asset"));
     vi.stubGlobal("fetch", upstream);
-    onTestFinished(() => {
-      vi.unstubAllGlobals();
-    });
 
     await proxyPosthogRequest({
       request: new Request(`https://os.iterate.com/e/${path}`),
@@ -25,9 +22,6 @@ test.for(["static/array.js", "array/phc_test/config.js"])(
 test("forwards every other SDK request to ingest without application cookies or credentials", async () => {
   const upstream = vi.fn<typeof fetch>(async () => new Response(null, { status: 204 }));
   vi.stubGlobal("fetch", upstream);
-  onTestFinished(() => {
-    vi.unstubAllGlobals();
-  });
   const request = new Request("https://os.iterate.com/e/s/?compression=gzip-js", {
     method: "POST",
     headers: {

@@ -6,7 +6,7 @@
 // at PREVIEW whose fetches to either origin reach the right one.
 import { createExecutionContext } from "cloudflare:test";
 import { env, exports } from "cloudflare:workers";
-import { expect, onTestFinished, test, vi } from "vitest";
+import { expect, test, vi } from "vitest";
 import { appSession } from "iterate/app-server";
 import worker from "../src/worker.ts";
 import { platformAddressesOf } from "../src/app-config.ts";
@@ -45,7 +45,6 @@ test("an admin's link: the issuer asks only who they are, and the preview signs 
   expect(back.startsWith(`${PREVIEW}${TEST_LINK_PATH}/callback?`)).toBe(true);
 
   const info = vi.spyOn(console, "info");
-  onTestFinished(() => info.mockRestore());
   const landed = await previewFetch(back, flowCookie);
   expect(landed, await landed.clone().text()).toMatchObject({ status: 302 });
   expect(landed.headers.get("location")).toBe(`${PREVIEW}/login`);
@@ -78,7 +77,6 @@ test("anyone the admins' issuer vouches for but the preview's admins is refused,
   const approver = await approverFor("stranger@example.com");
   const approval = await approver.consent.approve({ query: authorize.search, projects: [] });
   const warn = vi.spyOn(console, "warn");
-  onTestFinished(() => warn.mockRestore());
   const refused = await previewFetch(
     (approval as { redirectTo: string }).redirectTo,
     cookieOf(clicked, "__Host-iterate-test-link"),
@@ -176,13 +174,12 @@ function previewFetch(url: string, cookie: string) {
 /** `fetch` reaches this worker as the issuer at ORIGIN and as the preview at PREVIEW, until the test
  *  finishes: the issuer reads the preview's client metadata, the preview exchanges its code. */
 function bothOriginsReachable() {
-  const spy = vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
+  vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
     const request = new Request(input, init);
     return new URL(request.url).origin === PREVIEW
       ? worker.fetch(request, previewEnv, createExecutionContext())
       : exports.default.fetch(request);
   });
-  onTestFinished(() => spy.mockRestore());
 }
 
 /** The consent capability of `email`'s issuer session at ORIGIN, signed in with the password. */

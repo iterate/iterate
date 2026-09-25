@@ -4,7 +4,7 @@
 // and a failure that is not the platform's are the caller's at once. Node: the namespace is a fake
 // whose stubs fail as workerd stamps each failure (retryable-error.ts).
 
-import { expect, onTestFinished, test, vi } from "vitest";
+import { expect, test, vi } from "vitest";
 import type { ItxExpression } from "iterate/expression";
 import { DurableObjectNameCodec } from "./context/paths.ts";
 import { IterateContextRpcTarget, type IterateContextNamespace } from "./iterate-context.ts";
@@ -150,7 +150,6 @@ test.for([
   "platform failures at the edge: $name",
   async ({ call, args = [], failures, outcome, retries }) => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    onTestFinished(() => warn.mockRestore());
     const left = [...failures];
     const invoke = vi.fn(async () => {
       const failure = left.shift();

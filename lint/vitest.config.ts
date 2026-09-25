@@ -11,5 +11,9 @@ export default defineConfig({
     // so they don't flake on Depot's `Test` workflow.
     testTimeout: 30_000,
     hookTimeout: 30_000,
+    restoreMocks: true,
+    unstubGlobals: true,
+    unstubEnvs: true,
+    silent: "passed-only",
   },
 });

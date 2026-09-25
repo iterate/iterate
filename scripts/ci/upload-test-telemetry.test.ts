@@ -1,11 +1,11 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   writeTestTelemetryArtifact,
   type TestTelemetryArtifact,
 } from "@iterate-com/shared/test-support/ci-telemetry";
 import { UNIT_ROW_WARN_EXEMPTIONS } from "@iterate-com/shared/test-support/e2e-policy";
+import { temporaryDirectory } from "@iterate-com/shared/test-support/temporary-directory";
 import { expect, test } from "vitest";
 import { unitTestWorkspaces } from "./test-telemetry-completeness.ts";
 import { finalizeTestTelemetry, unitRowBudget } from "./upload-test-telemetry.ts";
@@ -332,14 +332,4 @@ test("warns about unit and Workers rows over the Test job's row budget, and exem
 
 function readManifest(artifactRoot: string) {
   return JSON.parse(readFileSync(join(artifactRoot, "manifest.json"), "utf8")) as unknown;
-}
-
-function temporaryDirectory() {
-  const path = mkdtempSync(join(tmpdir(), "test-telemetry-finalizer-"));
-  return {
-    path,
-    [Symbol.dispose]() {
-      rmSync(path, { recursive: true, force: true });
-    },
-  };
 }

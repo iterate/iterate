@@ -30,7 +30,6 @@ const TIP = "322f6b7736f1636a850cfc3d3d639730b0882514";
 
 test("a pkt-line body cut mid-header rejects instead of yielding an empty ref list", async () => {
   vi.stubGlobal("fetch", async () => new Response("00", { status: 200 }));
-  onTestFinished(() => void vi.unstubAllGlobals());
   const transport = createGitWireTransport({
     remote: "https://account.artifacts.example/git/ns/prj.config.git",
     token: "t",
@@ -82,11 +81,7 @@ test.for([
       : new Response("unavailable", { status });
   });
   vi.stubGlobal("fetch", fetch);
-  onTestFinished(() => {
-    vi.useRealTimers();
-    vi.unstubAllGlobals();
-    warn.mockRestore();
-  });
+  onTestFinished(() => void vi.useRealTimers());
   const transport = createGitWireTransport({
     remote: "https://artifacts.example/prj.git",
     token: "t",

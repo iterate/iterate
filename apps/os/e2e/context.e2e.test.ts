@@ -63,34 +63,38 @@ test("cd('') resolves to THIS context (self) and answers rather than wedging", a
   expect(page.events.map((e: any) => e.type)).toContain("self-ping");
 });
 
-test("a default-deny miss carries code NO_ITX_EXPRESSION_MATCH across the /api hop", async () => {
-  const itx = openItx(freshCtx("codemiss"));
-  const err = await rejection(itx.invoke(["itx", "nope", ["thing"]]));
-  expect(errorCode(err)).toBe("NO_ITX_EXPRESSION_MATCH");
-  expect(err.message).toMatch(/no rewrite rule matches/);
-});
-
-test("a paused-stream refusal carries code STREAM_PAUSED across the /api hop", async () => {
-  // enforcement refusals ride the same coded channel end to end
-  const itx = openItx(freshCtx("codepause"));
-  await itx.append({ type: "events.iterate.com/itx/paused", payload: { reason: "operator" } });
-  const err = await rejection(itx.append({ type: "mark", payload: { n: 1 } }));
-  expect(errorCode(err)).toBe("STREAM_PAUSED");
-  expect(err.message).toContain("stream paused");
+// An enforcement refusal rides the same coded channel end to end as a default-deny miss.
+test.for([
+  {
+    name: "a default-deny miss",
+    code: "NO_ITX_EXPRESSION_MATCH",
+    message: /no rewrite rule matches/,
+    refused: (itx: any) => itx.invoke(["itx", "nope", ["thing"]]),
+  },
+  {
+    name: "a paused-stream refusal",
+    code: "STREAM_PAUSED",
+    message: /stream paused/,
+    refused: async (itx: any) => {
+      await itx.append({ type: "events.iterate.com/itx/paused", payload: { reason: "operator" } });
+      return itx.append({ type: "mark", payload: { n: 1 } });
+    },
+  },
+])("$name carries code $code across the /api hop", async ({ code, message, refused }) => {
+  const err = await rejection(refused(openItx(freshCtx("coded"))));
+  expect(errorCode(err)).toBe(code);
+  expect(err.message).toMatch(message);
 });
 
 // ── the natural dotted client surface ──
 
-test("explicit form: invoke(['itx', ['whoami']]) answers (the half the dotted surface sugars)", async () => {
-  const ctx = freshCtx("explicit");
-  const who = await openItx(ctx).invoke(["itx", ["whoami"]]);
-  expect(who).toMatchObject({ projectId: ctx, path: "/" });
-});
-
-test("root dotted call: await itx.whoami() falls back to the ONE invoke method", async () => {
-  const ctx = freshCtx("who");
-  const who = await openItx(ctx).whoami();
-  expect(who).toMatchObject({ projectId: ctx, path: "/" });
+// The dotted call falls back to the ONE invoke method; the explicit form is the half it sugars.
+test.for([
+  { spelling: "explicit", whoami: (itx: any) => itx.invoke(["itx", ["whoami"]]) },
+  { spelling: "dotted", whoami: (itx: any) => itx.whoami() },
+])("the $spelling whoami answers", async ({ spelling, whoami }) => {
+  const ctx = freshCtx(spelling);
+  expect(await whoami(openItx(ctx))).toMatchObject({ projectId: ctx, path: "/" });
 });
 
 test("depth-2 dotted: itx.kv.put('k','v') then itx.kv.get('k') round trips", async () => {

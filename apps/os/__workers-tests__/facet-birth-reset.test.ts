@@ -17,9 +17,8 @@
 
 import { evictDurableObject, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { expect, onTestFinished, test, vi } from "vitest";
-import type { StreamEvent } from "iterate/stream/processor";
 import { UNCLAIMED_FACET_SWEEP_AFTER_QUIET_MS } from "../src/context/facet-host.ts";
-import { releasePins, stub } from "./support.ts";
+import { readLog, releasePins, stub } from "./support.ts";
 
 /** A plain loaded class; `id` names the instance. */
 const spec = {
@@ -58,7 +57,7 @@ test("a context's birth resets its loaded facets that hold no claim, names them 
   await releasePins(ctx); // workerd keeps a DO with a live facet resident; the edge does not
   await evictDurableObject(s);
 
-  const { events } = (await s.invoke(["itx", ["readEvents", 0, 500]])) as { events: StreamEvent[] };
+  const events = await readLog(ctx);
   const woken = events.filter((event) => event.type === "events.iterate.com/itx/woken");
   expect(woken.length).toBe(2);
   expect(woken[0]!.payload).not.toHaveProperty("facetsReset");
@@ -80,7 +79,7 @@ test("a birth resets only the facets the last incarnation called: one no call re
     await evictDurableObject(s);
     await s.invoke(["itx", ["whoami"]]);
   }
-  const { events } = (await s.invoke(["itx", ["readEvents", 0, 500]])) as { events: StreamEvent[] };
+  const events = await readLog(ctx);
   const woken = events.filter((event) => event.type === "events.iterate.com/itx/woken");
   expect(woken.map((event) => (event.payload as { facetsReset?: string[] }).facetsReset)).toEqual([
     undefined,
@@ -146,7 +145,7 @@ test("a context still resident a quiet period after it materialized a loaded fac
   // The same incarnation answers: the unclaimed facet from a fresh instance, the claimed one as it was.
   expect(await s.invoke(["itx", "facets", ["get", "idle"], ["hello"]])).not.toBe(before.idle);
   expect(await s.invoke(["itx", "facets", ["get", "busy"], ["hello"]])).toBe(before.busy);
-  const { events } = (await s.invoke(["itx", ["readEvents", 0, 500]])) as { events: StreamEvent[] };
+  const events = await readLog(ctx);
   expect(events.filter((event) => event.type === "events.iterate.com/itx/woken").length).toBe(1);
   await s.invoke(["itx", "processors", ["claim", "busy", null]]);
 });
@@ -171,7 +170,7 @@ test("the sweep's alarm an evicted incarnation left wakes a fresh one that appen
     ],
   ]);
   expect(await alarmOf(s)).toBe(t0 + UNCLAIMED_FACET_SWEEP_AFTER_QUIET_MS);
-  const before = await durableEvents(s);
+  const before = await readLog(ctx);
   const incarnation = await incarnationOf(s);
   await releasePins(ctx);
   await evictDurableObject(s);
@@ -180,7 +179,7 @@ test("the sweep's alarm an evicted incarnation left wakes a fresh one that appen
   expect(await alarmOf(s)).toBe(later);
   // The wake appended nothing: the one new event is the wake record of the read below — this
   // incarnation's first inbound call, so its reason is "request" — naming the facet its birth reset.
-  const appended = (await durableEvents(s)).slice(before.length);
+  const appended = (await readLog(ctx)).slice(before.length);
   expect(appended.map((event) => [event.type, event.payload])).toEqual([
     [
       "events.iterate.com/itx/woken",
@@ -301,10 +300,6 @@ test("a first-party facet's release arms no sweep: the sweep never resets one, s
 
 function alarmOf(s: ReturnType<typeof stub>): Promise<number | null> {
   return runInDurableObject(s, (_instance, state) => state.storage.getAlarm());
-}
-
-async function durableEvents(s: ReturnType<typeof stub>): Promise<StreamEvent[]> {
-  return ((await s.invoke(["itx", ["readEvents", 0, 500]])) as { events: StreamEvent[] }).events;
 }
 
 function incarnationOf(s: ReturnType<typeof stub>): Promise<number> {

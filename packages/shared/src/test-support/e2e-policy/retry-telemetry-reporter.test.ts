@@ -6,9 +6,6 @@ import type { TestTelemetryArtifact } from "../ci-telemetry.ts";
 import { RetryTelemetryReporter } from "./retry-telemetry-reporter.ts";
 
 test("records module timing when Vitest omits the queued callback", () => {
-  onTestFinished(() => {
-    vi.unstubAllEnvs();
-  });
   vi.stubEnv("TEST_TELEMETRY_ARTIFACT_FILE", undefined);
   vi.stubEnv("TEST_TELEMETRY_ARTIFACT_DIR", undefined);
   const reporter = new RetryTelemetryReporter({ testKind: "e2e", suite: "vitest" });
@@ -24,9 +21,6 @@ test("records module timing when Vitest omits the queued callback", () => {
 });
 
 test("writes its pessimistic sentinel only when the Vitest run starts", () => {
-  onTestFinished(() => {
-    vi.unstubAllEnvs();
-  });
   vi.stubEnv("TEST_TELEMETRY_ARTIFACT_FILE", undefined);
   const directory = mkdtempSync(join(tmpdir(), "vitest-telemetry-start-"));
   vi.stubEnv("TEST_TELEMETRY_ARTIFACT_DIR", directory);
@@ -40,9 +34,6 @@ test("writes its pessimistic sentinel only when the Vitest run starts", () => {
 });
 
 test("preserves an interrupted Vitest run instead of reporting a test failure", async () => {
-  onTestFinished(() => {
-    vi.unstubAllEnvs();
-  });
   vi.stubEnv("TEST_TELEMETRY_ARTIFACT_FILE", undefined);
   const directory = mkdtempSync(join(tmpdir(), "vitest-telemetry-interrupted-"));
   vi.stubEnv("TEST_TELEMETRY_ARTIFACT_DIR", directory);
@@ -60,9 +51,6 @@ test("preserves an interrupted Vitest run instead of reporting a test failure", 
 });
 
 test("records the first failed attempt when a retry passes", async () => {
-  onTestFinished(() => {
-    vi.unstubAllEnvs();
-  });
   const file = join(tmpdir(), `retry-telemetry-${process.pid}-${Date.now()}.json`);
   // Scoped: the flaky fixture below writes an unknown-flake record, which
   // must land here and never in the CI run's real FLAKE_RECORD_DIR.
@@ -73,7 +61,6 @@ test("records the first failed attempt when a retry passes", async () => {
   vi.stubEnv("TEST_TELEMETRY_SUITE", undefined);
   vi.stubEnv("TEST_TELEMETRY_ARTIFACT_FILE", file);
   const log = vi.spyOn(console, "log").mockImplementation(() => {});
-  onTestFinished(() => log.mockRestore());
 
   const testCase = {
     id: "network-test-id",
@@ -167,16 +154,12 @@ test("records the first failed attempt when a retry passes", async () => {
 });
 
 test("a plain test that failed every attempt leaves an unexpected-error flake record", async () => {
-  onTestFinished(() => {
-    vi.unstubAllEnvs();
-  });
   const directory = mkdtempSync(join(tmpdir(), "vitest-hard-failure-"));
   const flakeRecordDir = join(directory, "flake-records");
   vi.stubEnv("FLAKE_RECORD_DIR", flakeRecordDir);
   vi.stubEnv("TEST_TELEMETRY_ARTIFACT_FILE", join(directory, "telemetry.json"));
   vi.stubEnv("TEST_TELEMETRY_ARTIFACT_DIR", undefined);
-  const log = vi.spyOn(console, "log").mockImplementation(() => {});
-  onTestFinished(() => log.mockRestore());
+  vi.spyOn(console, "log").mockImplementation(() => {});
   const testCase = (name: string, state: string, options?: { fails: boolean }) => ({
     fullName: `socket > ${name}`,
     name,
@@ -221,16 +204,12 @@ test("a plain test that failed every attempt leaves an unexpected-error flake re
 });
 
 test("writes unit tests without performing network I/O", async () => {
-  onTestFinished(() => {
-    vi.unstubAllEnvs();
-  });
   vi.stubEnv("TEST_TELEMETRY_ARTIFACT_FILE", undefined);
   const directory = mkdtempSync(join(tmpdir(), "vitest-telemetry-artifacts-"));
   vi.stubEnv("TEST_TELEMETRY_ARTIFACT_DIR", directory);
   vi.stubEnv("npm_package_name", "@iterate/example");
   vi.stubEnv("GITHUB_WORKSPACE", "/repo");
   const fetchMock = vi.spyOn(globalThis, "fetch");
-  onTestFinished(() => fetchMock.mockRestore());
 
   const testCase = {
     fullName: "math > adds",
@@ -267,16 +246,12 @@ test("writes unit tests without performing network I/O", async () => {
 });
 
 test("prints the e2e rows that ran past the row budget's warning", async () => {
-  onTestFinished(() => {
-    vi.unstubAllEnvs();
-  });
   const directory = mkdtempSync(join(tmpdir(), "vitest-row-budget-"));
   onTestFinished(() => rmSync(directory, { recursive: true }));
   vi.stubEnv("TEST_TELEMETRY_ARTIFACT_FILE", join(directory, "telemetry.json"));
   vi.stubEnv("TEST_TELEMETRY_ARTIFACT_DIR", undefined);
   vi.stubEnv("FLAKE_RECORD_DIR", undefined);
   const log = vi.spyOn(console, "log").mockImplementation(() => {});
-  onTestFinished(() => log.mockRestore());
   const row = (name: string, project: string, duration: number, tags: string[] = []) => ({
     fullName: name,
     name,

@@ -2,7 +2,7 @@
  * Unit tests for the whole pet-shop HTTP surface, run in plain Node: the
  * real route handlers and the real state store (state.ts) over an in-memory
  * storage map (test/shop.ts), and the vitest alias that swaps
- * `cloudflare:workers` for src/test/cloudflare-workers-shim.ts.
+ * `cloudflare:workers` for packages/shared/src/test-support/cloudflare-workers-shim.ts.
  */
 import { createHmac } from "node:crypto";
 import { expect, onTestFinished, test, vi } from "vitest";
@@ -703,7 +703,6 @@ test("mcp oauth: a dynamically-registered client is pinned to its redirect URIs"
 
 test("state failure: a call the state Durable Object's reset failed answers 503 with the platform's message and logs the request; any other throw stays an exception", async () => {
   const logged = vi.spyOn(console, "error").mockImplementation(() => {});
-  onTestFinished(() => logged.mockRestore());
   const reset = Object.assign(
     new Error("Durable Object storage operation exceeded timeout which caused object to be reset."),
     { overloaded: true, durableObjectReset: true },
