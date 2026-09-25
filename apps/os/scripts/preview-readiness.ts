@@ -41,14 +41,12 @@ export function awaitPreviewReady(
     width: number;
     consecutive: number;
     deadlineMs: number;
-    holdMs?: number;
   },
 ) {
   return awaitFullRounds(() => probeRound(url, options), {
     label: url,
     consecutive: options.consecutive,
     deadlineMs: options.deadlineMs,
-    holdMs: options.holdMs,
     pauseMs: 1_000,
   });
 }
@@ -56,25 +54,17 @@ export function awaitPreviewReady(
 /** The gate's loop over any round of probes (preview-readiness.test.ts drives it with fakes): a
  *  round with a miss resets the streak, logs one `preview.platform-failure-readiness` warn per miss
  *  and pauses `pauseMs`; the deadline is checked before each round, so a round (every probe at most
- *  20 s) is the most it can overrun by. With `holdMs`, the rounds go on until that long has passed
- *  too, the streak still whole at the end, ten pauses apart once it is. */
+ *  20 s) is the most it can overrun by. */
 export async function awaitFullRounds(
   round: () => Promise<ProbeOutcome[]>,
-  options: {
-    label: string;
-    consecutive: number;
-    deadlineMs: number;
-    pauseMs: number;
-    holdMs?: number;
-  },
+  options: { label: string; consecutive: number; deadlineMs: number; pauseMs: number },
 ) {
-  const holdMs = options.holdMs || 0;
   const started = Date.now();
   const misses: (ProbeMiss & { atMs: number })[] = [];
   let probes = 0;
   let streak = 0;
   let rounds = 0;
-  while (streak < options.consecutive || Date.now() - started < holdMs) {
+  while (streak < options.consecutive) {
     if (Date.now() - started > options.deadlineMs)
       throw new Error(
         `preview ${options.label} was not ready within ${options.deadlineMs / 1000} s: ${misses.length} of ${probes} probes missed, the last ${streak} round(s) answered in full\n${misses
@@ -103,12 +93,10 @@ export async function awaitFullRounds(
     }
     streak = missed.length === 0 ? streak + 1 : 0;
     if (missed.length > 0) await new Promise((resolve) => setTimeout(resolve, options.pauseMs));
-    else if (streak >= options.consecutive && Date.now() - started < holdMs)
-      await new Promise((resolve) => setTimeout(resolve, options.pauseMs * 10));
   }
   const ms = Date.now() - started;
   console.log(
-    `readiness ok: ${options.label} answered ${options.consecutive} full round(s) in a row after ${(ms / 1000).toFixed(1)} s${holdMs ? `, held ${holdMs / 1000} s` : ""} (${rounds} rounds, ${misses.length} of ${probes} probes missed)`,
+    `readiness ok: ${options.label} answered ${options.consecutive} full round(s) in a row after ${(ms / 1000).toFixed(1)} s (${rounds} rounds, ${misses.length} of ${probes} probes missed)`,
   );
   return { rounds, misses, ms };
 }

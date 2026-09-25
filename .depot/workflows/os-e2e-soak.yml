@@ -66,11 +66,6 @@ on:
         required: false
         type: string
         default: "0"
-      settle:
-        description: With redeploy or fresh-previews, the deploy's --settle (seconds the readiness gate holds)
-        required: false
-        type: string
-        default: "0"
 env:
   # The image's baked store: dependencies.mjs fingerprints it (docs/depot-ci.md#custom-image)
   PNPM_CONFIG_STORE_DIR: /home/runner/.pnpm-store
@@ -121,10 +116,9 @@ jobs:
           RUN_RESIDENCY_TIMING: ${{ inputs.residency-timing }}
           REDEPLOY: ${{ inputs.redeploy }}
           GAP: ${{ inputs.gap }}
-          SETTLE: ${{ inputs.settle }}
         run: |
-          if [ -n "$FRESH_PREVIEWS" ]; then target=(--fresh-previews "$FRESH_PREVIEWS" --settle "${SETTLE:-0}")
-          elif [ "$REDEPLOY" = true ]; then target=(--redeploy "$PREVIEW" --gap "${GAP:-0}" --settle "${SETTLE:-0}")
+          if [ -n "$FRESH_PREVIEWS" ]; then target=(--fresh-previews "$FRESH_PREVIEWS")
+          elif [ "$REDEPLOY" = true ]; then target=(--redeploy "$PREVIEW" --gap "${GAP:-0}")
           else target=(--preview "$PREVIEW"); fi
           doppler run -- pnpm e2e:soak --runs "$RUNS" "${target[@]}" ${FILTER:+--filter "$FILTER"}
       - name: Upload the per-run reports and the summary

@@ -127,7 +127,6 @@ type Command = z.infer<typeof Command>;
 /** The apps on top: every one by default, none, or (auto) the ones whose paths this PR changes. */
 const AppsMode = z.enum(["all", "auto", "none"]);
 type AppsMode = z.infer<typeof AppsMode>;
-const USAGE = `Usage: preview.ts <${Command.options.join("|")}> [--pr <n>] [--name <ref>] [--apps ${AppsMode.options.join("|")}] [--settle <seconds>] [--slow-rows ${SlowRows.options.join("|")}] [--dry-run]`;
 
 /** The parent's Doppler config (envs.ts `OS_DOPPLER_PROJECT`, config `preview`), downloaded — the
  *  Cloudflare credentials for its account and the two secrets every preview inherits — the way
@@ -582,7 +581,6 @@ async function deployOsPreview(
   databaseId: string,
   dashOrigin: string | undefined,
   wrangler: string,
-  settleMs: number,
   recreated = false,
 ): Promise<{ url: string; deploymentId: string; slug: string }> {
   writePreviewWranglerConfig({ previewName, databaseId, dashOrigin });
@@ -609,15 +607,7 @@ async function deployOsPreview(
         ensurePreviewDatabase(ctx, previewName),
         ensureArtifactsNamespace(ctx.cf, previewResourceName(previewName, "repos")),
       ]);
-      return deployOsPreview(
-        ctx,
-        previewName,
-        recreatedDatabaseId,
-        dashOrigin,
-        wrangler,
-        settleMs,
-        true,
-      );
+      return deployOsPreview(ctx, previewName, recreatedDatabaseId, dashOrigin, wrangler, true);
     }
     // Not the parent's classes: a brand-new preview binds a class its parent never had (measured
     // 2026-09-24 on a throwaway worker).
@@ -656,7 +646,7 @@ async function deployOsPreview(
   // places (preview-readiness.ts). Nothing is handed on — the PR body's links, the sign-in seed,
   // the e2e job — until five rounds of eight in a row answer in full on this deployment. A preview
   // that does not within 150 s fails the deploy, naming what it answered: the slowest of 17
-  // in-place soak redeploys took 58 s (2026-09-25). `--settle` holds the rounds that long besides.
+  // in-place soak redeploys took 58 s (2026-09-25).
   await traceOperation("Readiness gate", () =>
     awaitPreviewReady(url, {
       adminSecret: parseAppConfig(
@@ -665,8 +655,7 @@ async function deployOsPreview(
       version: deploymentId,
       width: 8,
       consecutive: 5,
-      holdMs: settleMs,
-      deadlineMs: settleMs + 150_000,
+      deadlineMs: 150_000,
     }),
   );
   return { url, deploymentId, slug: data.preview?.slug || previewName };
@@ -681,7 +670,6 @@ async function deployPreview(
   previewName: string,
   prNumber: string | undefined,
   apps: StartApp[],
-  settleMs: number,
 ) {
   await deployWithStatus(
     (status) =>
@@ -693,7 +681,7 @@ async function deployPreview(
             : { state: status.state, error: describe(status.error) },
         ),
       ),
-    (deploying) => deployPreviewSteps(ctx, previewName, prNumber, apps, settleMs, deploying),
+    (deploying) => deployPreviewSteps(ctx, previewName, prNumber, apps, deploying),
   );
 }
 
@@ -718,7 +706,6 @@ async function deployPreviewSteps(
   previewName: string,
   prNumber: string | undefined,
   apps: StartApp[],
-  settleMs: number,
   deploying: Promise<void>,
 ) {
   assertFreshInstall(REPO_ROOT);
@@ -754,7 +741,7 @@ async function deployPreviewSteps(
       await settleAll([traceOperation("Build OS", () => buildOs("preview")), prepared]);
       const databaseId = await database;
       return traceOperation("Deploy OS preview", () =>
-        deployOsPreview(ctx, previewName, databaseId, appOrigins.dash, wrangler.command, settleMs),
+        deployOsPreview(ctx, previewName, databaseId, appOrigins.dash, wrangler.command),
       );
     })();
     const appPreviews = apps.map(async (app) => {
@@ -1351,8 +1338,6 @@ type PreviewOptions = {
   name?: string;
   /** the apps on top: all (default, else PREVIEW_APPS), none, or auto (the ones this PR changes) */
   apps?: "all" | "auto" | "none";
-  /** deploy: how long, in seconds, the readiness gate holds (default 0) */
-  settle?: number;
   /** e2e: which rows tagged `slow` run — run, skip or only (else E2E_SLOW_ROWS) */
   slowRows?: "run" | "skip" | "only";
   /** print the plan (sweep, reset-parent) or build and write the config only (the rest) */
@@ -1400,9 +1385,7 @@ export default class Preview {
 }
 
 async function main(command: Command, options: PreviewOptions) {
-  const settleSeconds = options.settle ?? 0;
-  if (!(Number.isInteger(settleSeconds) && settleSeconds >= 0)) throw new Error(USAGE);
-  const parsed = { ...options, command, settleSeconds, dryRun: options.dryRun ?? false };
+  const parsed = { ...options, command, dryRun: options.dryRun ?? false };
   const pr = parsed.pr || process.env.PREVIEW_PR_NUMBER;
   const appsMode = parsed.apps || AppsMode.parse(process.env.PREVIEW_APPS || "all");
   if (parsed.command === "sweep")
@@ -1434,13 +1417,7 @@ async function main(command: Command, options: PreviewOptions) {
   const ctx = await parentContext();
   if (parsed.command === "delete") return deleteAll(ctx.cf, previewName);
   if (parsed.command === "reset") await deleteAll(ctx.cf, previewName);
-  return deployPreview(
-    ctx,
-    previewName,
-    pr,
-    await appsToPreview(appsMode, pr),
-    parsed.settleSeconds * 1000,
-  );
+  return deployPreview(ctx, previewName, pr, await appsToPreview(appsMode, pr));
 }
 
 if (process.argv[1]?.endsWith("preview.ts"))

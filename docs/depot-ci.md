@@ -862,7 +862,7 @@ through the same gate.
 
 Soaks of the e2e suite at `--retry=0` (`os-e2e-soak.yml`), every run redeployed in place. With e2e
 as soon as a gate without the version check passed, 7 of 48 runs had a row fail on a platform
-signature, 30 of their 39 rows "code was updated" (2026-09-24). Held 150 s instead (`--settle 150`),
+signature, 30 of their 39 rows "code was updated" (2026-09-24). With the gate held 150 s instead,
 the deploy's start to the first test took 173 s at the median (p90 182 s). With the version check
 (2026-09-25, 17 runs, before and after the control plane moved to D1) it took 42 s (p90 72 s): stale
 rounds held 12 of the 17 gates, for up to 42 s, and every "code was updated" reset landed on a probe
