@@ -42,7 +42,7 @@ Separate from `tasks/ci-change-detection.md` (what to deploy and test); this is 
 
 ## Checklist
 
-- [x] `envs.ts`: derive a per-commit env set from a name; the name rule (`<prefix>-<sha7>`, 63-char DNS-label guard, the account-resource and former-parent clashes `resolvePreviewName` refuses today) _`previewDeployment(name)` + `OsPreviewEnv`; the clash checks went: every name ends `-<sha7>-<member>`, which no account resource has_
+- [x] `envs.ts`: derive a per-commit env set from a name; the name rule (`<prefix>-<sha7>`, 63-char DNS-label guard, the account-resource and former-parent clashes `resolvePreviewName` refuses today) _`previewDeployment(name)`, `osEnv(name)` and an optional `OsEnv.resources`; the clash checks went: every name ends `-<sha7>-<member>`, which no account resource has_
 - [x] `generate-wrangler-config.ts` / `start-app.ts`: build for a derived env; resources binding-only; the test-link and preview-admin vars `previewWranglerConfig` sets today _`deploymentWranglerConfig` / `linkedEnvironment`; KV binding-only, D1 by name, R2/Artifacts named after the worker; `testLinks` on `OsEnv`_
 - [x] `preview.ts deploy`: build and `deployApp` os and each app with released wrangler; secrets per worker; readiness gate kept for a brand-new worker's first seconds; the in-place version wait only for main on dev _`deployOs({ env: name })` (deploy.ts creates D1/R2/Artifacts, then migrates) + `deployStartApp`; gate fed the version `/version` names_
 - [x] Delete `preparePreviewWrangler`, `uploadPreviewSecrets`, the 10061 recreate path, `reset`, `previewWranglerConfig`, `writeStartAppPreviewConfig` _gone, with `--apps auto` (a fresh name never has the untouched apps)_

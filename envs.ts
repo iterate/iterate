@@ -117,12 +117,12 @@ export interface OsEnv {
    *  body that carries them is public, so a link signs nobody in until its redeemer proves at
    *  `admins.issuer` that they are an address `admins.emails` names (src/test-link-admins.ts). */
   testLinks?: { admins: { issuer: string; emails: string[] } };
-  resources: { oauthKvId: string; itxKvId: string; dbId: string };
+  /** The ids of the resources `resourceNamePrefix` names, which ensure-resources creates and this
+   *  file records. Unset for a per-commit deployment (`previewDeployment`), whose own deploy creates
+   *  them by name (scripts/deploy.ts). */
+  resources?: { oauthKvId: string; itxKvId: string; dbId: string };
 }
 
-/** A per-commit deployment's apps/os (`previewDeployment`): no resource ids, because its own deploy
- *  provisions its resources, named after its worker (scripts/deploy.ts). */
-export type OsPreviewEnv = Omit<OsEnv, "resources">;
 export const osEnvs: Record<string, OsEnv> = {
   // MAIN ON THE DEV/PREVIEW ACCOUNT: preview-parents.yml redeploys it in place from every push to
   // main, beside the apps' main-on-dev workers, which sign in against it; its data is erased
@@ -328,7 +328,7 @@ export function previewDeployment(name: string) {
   if (!match?.groups || match.groups.prefix!.length > 28) return undefined;
   const origin = (app: string) => `https://${name}-${app}.${PREVIEW_WORKERS_DEV}`;
   const osWorker = `${name}-os`;
-  const os: OsPreviewEnv = {
+  const os: OsEnv = {
     cloudflareAccountId: PREVIEW_AND_DEV_ACCOUNT_ID,
     dopplerConfig: "preview",
     workerName: osWorker,
@@ -353,6 +353,14 @@ export function previewDeployment(name: string) {
     ]),
   );
   return { name, prefix: match.groups.prefix!, sha: match.groups.sha!, os, apps };
+}
+
+/** THE apps/os DEPLOYMENT A NAME NAMES: an `osEnvs` entry (`prd`, `preview`), or a per-commit
+ *  deployment derived from its name (`pr3144-a1b2c3d`, `previewDeployment`); undefined for any
+ *  other name. What building and deploying apps/os by name look up (vite.config.ts through
+ *  generate-wrangler-config.ts, scripts/deploy.ts), so neither needs to tell the two apart. */
+export function osEnv(name: string): OsEnv | undefined {
+  return osEnvs[name] || previewDeployment(name)?.os;
 }
 
 /** Static OAuth example and downloadable unpacked Chrome extension. Credentials share the platform's Doppler project. */

@@ -1,12 +1,6 @@
 import { readFileSync } from "node:fs";
 import JSON5 from "json5";
-import {
-  osEnvs,
-  PREVIEW_AND_DEV_ACCOUNT_ID,
-  previewDeployment,
-  type OsEnv,
-  type OsPreviewEnv,
-} from "../../../envs.ts";
+import { osEnvs, PREVIEW_AND_DEV_ACCOUNT_ID, osEnv, type OsEnv } from "../../../envs.ts";
 import { OBSERVABILITY, registrableDomainOf } from "../../../scripts/lib/wrangler-config.ts";
 import { TEST_LINK_EMAIL_DOMAIN } from "../src/test-link.ts";
 
@@ -15,7 +9,7 @@ import { TEST_LINK_EMAIL_DOMAIN } from "../src/test-link.ts";
  *  per-commit deployment's test links — as the override vars the parser merges on top of the
  *  Doppler blob: `APP_CONFIG_URLS__<KEY>`. An object travels as a JSON STRING — the parser reads
  *  string vars only. A blank var is unset. */
-function configVars(env: OsPreviewEnv) {
+function configVars(env: OsEnv) {
   const vars: Record<string, string> = { APP_CONFIG_URLS__OS: env.baseUrl };
   if (new URL(env.mcpBaseUrl).origin !== new URL(env.baseUrl).origin)
     vars.APP_CONFIG_URLS__MCP = new URL(env.mcpBaseUrl).origin;
@@ -48,7 +42,7 @@ function configVars(env: OsPreviewEnv) {
 /** The zones a deployment owns: those of its own hostnames, its project wildcard, and its SaaS
  *  project-host zones. No project may add a custom hostname equal to or under one of these
  *  (`customHostnames.reservedZones`). */
-function ownZonesOf(env: OsPreviewEnv) {
+function ownZonesOf(env: OsEnv) {
   return new Set([
     registrableDomainOf(new URL(env.baseUrl).hostname),
     registrableDomainOf(new URL(env.mcpBaseUrl).hostname),
@@ -63,7 +57,7 @@ function ownZonesOf(env: OsPreviewEnv) {
  *  project wildcard's apex and wildcard. A project's own custom hostname is a Cloudflare for SaaS
  *  custom hostname, reached through the SaaS zone's one `*\/*` route (wranglerConfig). A workers.dev
  *  host is served by `workers_dev` itself. */
-export function routedHostnames(env: OsPreviewEnv) {
+export function routedHostnames(env: OsEnv) {
   const ownHost = (hostname: string) => ({ hostname, zone: registrableDomainOf(hostname) });
   const wildcard = (hostname: string) => ({ hostname: `*.${hostname}`, zone: hostname });
   return [
@@ -105,11 +99,10 @@ function localWranglerConfig() {
  *  (`previewDeployment`) has no ids: its KV is binding-only, which wrangler provisions as
  *  `<worker>-oauth-kv` and `<worker>-itx-kv` on the first deploy, and its D1 is named without an id,
  *  which wrangler finds by name once scripts/deploy.ts has created and migrated it. */
-function deploymentWranglerConfig(env: OsEnv | OsPreviewEnv) {
+function deploymentWranglerConfig(env: OsEnv) {
   const {
     d1_databases: [localDatabase],
   } = readWranglerBase();
-  const resources = "resources" in env ? env.resources : undefined;
   return {
     name: env.workerName,
     account_id: env.cloudflareAccountId,
@@ -129,15 +122,13 @@ function deploymentWranglerConfig(env: OsEnv | OsPreviewEnv) {
         binding: localDatabase.binding,
         migrations_dir: localDatabase.migrations_dir,
         database_name: `${env.resourceNamePrefix}-db`,
-        ...(resources && { database_id: resources.dbId }),
+        ...(env.resources && { database_id: env.resources.dbId }),
       },
     ],
-    kv_namespaces: resources
-      ? [
-          { binding: "OAUTH_KV", id: resources.oauthKvId },
-          { binding: "ITX_KV", id: resources.itxKvId },
-        ]
-      : [{ binding: "OAUTH_KV" }, { binding: "ITX_KV" }],
+    kv_namespaces: [
+      { binding: "OAUTH_KV", ...(env.resources && { id: env.resources.oauthKvId }) },
+      { binding: "ITX_KV", ...(env.resources && { id: env.resources.itxKvId }) },
+    ],
     vars: configVars(env),
   };
 }
@@ -176,7 +167,7 @@ export function viteWranglerConfig(
         }),
       },
     };
-  const deployment = osEnvs[name] || previewDeployment(name)?.os;
+  const deployment = osEnv(name);
   if (!deployment) throw new Error(`apps/os: unknown env ${JSON.stringify(name)}`);
   return { ...local, ...deploymentWranglerConfig(deployment) };
 }

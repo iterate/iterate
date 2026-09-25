@@ -313,12 +313,13 @@ test("a deployment's apps/os config parses as its worker parses it, with the two
 
 test("an envs.ts deployment's config still names its resources by id, and turns no test links on", () => {
   const config = viteWranglerConfig("prd", { localDev: false, port: "0" });
+  const ids = osEnvs.prd!.resources!;
   expect(config).toMatchObject({
     kv_namespaces: [
-      { binding: "OAUTH_KV", id: osEnvs.prd!.resources.oauthKvId },
-      { binding: "ITX_KV", id: osEnvs.prd!.resources.itxKvId },
+      { binding: "OAUTH_KV", id: ids.oauthKvId },
+      { binding: "ITX_KV", id: ids.itxKvId },
     ],
-    d1_databases: [{ database_name: "os-prd-db", database_id: osEnvs.prd!.resources.dbId }],
+    d1_databases: [{ database_name: "os-prd-db", database_id: ids.dbId }],
   });
   expect(config.vars).not.toHaveProperty("APP_CONFIG_LOGIN__TEST_LINK__EMAIL_DOMAIN");
   expect(() => viteWranglerConfig("pr3144", { localDev: false, port: "0" })).toThrow(

@@ -1,20 +1,15 @@
 import { fileURLToPath } from "node:url";
 import { createCli } from "trpc-cli";
-import {
-  OS_DOPPLER_PROJECT,
-  osEnvs,
-  previewDeployment,
-  type OsEnv,
-  type OsPreviewEnv,
-} from "../../../envs.ts";
+import { OS_DOPPLER_PROJECT, osEnv, osEnvs, type OsEnv } from "../../../envs.ts";
 import { deployApp } from "../../../scripts/lib/deploy-app.ts";
 import type { EnvContext } from "../../../scripts/lib/env-context.ts";
 import { build } from "./build.ts";
 import { applyD1Migrations, ensureD1 } from "./d1.ts";
 import { ensureArtifactsNamespace, isCloudflareError } from "./preview-artifacts.ts";
 
-/** Deploy apps/os to `--env`: an envs.ts deployment, or a per-commit deployment by its name
- *  (`pr3144-a1b2c3d`, envs.ts `previewDeployment`), which scripts/preview.ts deploys. */
+/** Deploy apps/os to `--env`, any name envs.ts `osEnv` knows: `prd` (Deploy OS), `preview` (main on
+ *  dev, scripts/preview.ts `deploy-parents`) or a per-commit deployment's (`pr3144-a1b2c3d`,
+ *  scripts/preview.ts `deploy`). */
 export default async function deploy(
   options: {
     env?: string;
@@ -23,18 +18,21 @@ export default async function deploy(
     withoutRoutes?: boolean;
   } = {},
 ) {
-  const preview = options.env ? previewDeployment(options.env) : undefined;
-  await deployApp<OsEnv | OsPreviewEnv>({
+  // deployApp looks `--env` up in a map, and a per-commit deployment is in none: envs.ts derives it
+  // from its name. So the map is the one env `--env` names, else osEnvs (whose names the "unknown
+  // env" error then lists).
+  const env = options.env ? osEnv(options.env) : undefined;
+  await deployApp({
     withoutRoutes: options.withoutRoutes,
     appRoot: fileURLToPath(new URL("..", import.meta.url)),
     appLabel: "apps/os",
-    envs: preview ? { [preview.name]: preview.os } : osEnvs,
+    envs: options.env && env ? { [options.env]: env } : osEnvs,
     dopplerProject: OS_DOPPLER_PROJECT,
     env: options.env,
     workerName: (env) => env.workerName,
     servingUrl: (env) => env.baseUrl,
     // a per-commit deployment's are created below, by name
-    resources: (env) => ("resources" in env ? env.resources : {}),
+    resources: (env) => env.resources || {},
     // The private login settings and at-rest key come from Doppler. Public URLs come from envs.ts.
     requiredSecrets: ["APP_CONFIG", "APP_CONFIG_SECRETS__KEY"],
     // The control plane's D1 is migrated before the code that reads it uploads, so a migration that
@@ -43,7 +41,7 @@ export default async function deploy(
     async prepare(ctx, _secretValues, credentials) {
       const [, databaseId] = await Promise.all([
         build(),
-        "resources" in ctx.env ? ctx.env.resources.dbId : createResources(ctx),
+        ctx.env.resources?.dbId || createResources(ctx),
       ]);
       await applyD1Migrations(ctx.cf, {
         databaseName: `${ctx.env.resourceNamePrefix}-db`,
@@ -75,7 +73,7 @@ export default async function deploy(
  *  wrangler's to create during the deploy. The D1 is created near this job (`automatic`, d1.ts
  *  `D1Location`), which in CI is where the deployment's suites call it from. Resolves to the D1's id. The delete that takes them is
  *  scripts/preview.ts `deletePreviewDeployment`. */
-async function createResources(ctx: EnvContext<OsEnv | OsPreviewEnv>) {
+async function createResources(ctx: EnvContext<OsEnv>) {
   const bucketName = `${ctx.env.resourceNamePrefix}-files`;
   const [database] = await Promise.all([
     ensureD1(ctx.cf, `${ctx.env.resourceNamePrefix}-db`, "automatic"),
