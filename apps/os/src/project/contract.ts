@@ -122,6 +122,11 @@ export const ProjectContract = defineProcessorContract({
         "One of the project's contexts was destroyed by the deletion saga: its storage, its facets' and its alarm are gone. A record: nothing reads it back.",
       payloadSchema: z.object({ path: z.string().min(1) }),
     },
+    "events.iterate.com/project/delete-failed": {
+      description:
+        "A deletion pass failed three times over (the saga retries after 5 s and 30 s): the error. The saga stops in this incarnation, and a later one starts it again. A record: nothing reads it back.",
+      payloadSchema: z.object({ error: z.string() }),
+    },
     "events.iterate.com/project/deleted": {
       description:
         "Every context but `/`, the custom hostnames, kv, files and Artifacts repos are gone; `/` itself is destroyed next. A record: nothing reads it back.",
@@ -189,6 +194,7 @@ export const ProjectContract = defineProcessorContract({
     "events.iterate.com/project/created",
     "events.iterate.com/project/create-failed",
     "events.iterate.com/project/context-deleted",
+    "events.iterate.com/project/delete-failed",
     "events.iterate.com/project/deleted",
     "events.iterate.com/project/hostname-add-settled",
     "events.iterate.com/project/hostname-removed",

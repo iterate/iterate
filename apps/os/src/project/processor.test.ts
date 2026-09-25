@@ -4,7 +4,7 @@
 // landing the request, the processor landing the certificate on `/` — is pinned end to end in
 // e2e/session.e2e.test.ts.
 
-import { expect, test } from "vitest";
+import { expect, onTestFinished, test, vi } from "vitest";
 import type { StreamEventInput } from "iterate/stream/processor";
 import { reduceProcessor } from "iterate/stream/test-support";
 import { normalizeControlEvent } from "../stream/core-processor.ts";
@@ -661,6 +661,99 @@ test("ProjectProcessor — the deletion: the saga destroys each context the regi
   expect(reduceProcessor(processorWithoutHostnames(), [...announced, ...deleted])).toMatchObject({
     contexts: registered.contexts,
   });
+});
+
+test("ProjectProcessor — the deletion: a context announced while a pass runs (the creation saga's `/repos/config`) is destroyed by the same pass, before `/`", async () => {
+  const calls: string[] = [];
+  const registered = reduceProcessor(processorWithoutHostnames(), ["/a", "/b"].map(childCreated));
+  const state: ProjectState = { ...registered, deletion: { offset: 9 } };
+  const processor: ProjectProcessor = new ProjectProcessor(
+    () => Promise.reject(new Error("unused")),
+    () => Promise.reject(new Error("unused")),
+    () => null,
+    () => ({
+      destroyContext: async (path) => {
+        calls.push(`destroy ${path}`);
+        if (path !== "/a") return;
+        // its announcement is delivered while the pass is destroying `/a`
+        const announced = reduceProcessor(processorWithoutHostnames(), [
+          ...["/a", "/b"].map(childCreated),
+          childCreated("/repos/config"),
+        ]);
+        processor.processEvent({
+          event: childCreated("/repos/config") as never,
+          state: { ...announced, deletion: { offset: 9 } },
+          previousState: state,
+          delivery: { caughtUp: false },
+          append: (async () => []) as never,
+          blockProcessorWhile: () => {},
+          runInBackground: () => {},
+        });
+      },
+      deleteProjectStorage: async () => void calls.push("delete storage"),
+    }),
+  );
+  deliver(processor, state, async () => {});
+  await settle();
+  expect(calls).toEqual([
+    "destroy /a",
+    "destroy /b",
+    "destroy /repos/config",
+    "delete storage",
+    "destroy /",
+  ]);
+});
+
+test("ProjectProcessor — the deletion: a pass that keeps failing runs again after 5 s and 30 s, then records delete-failed, is reported, and stops in this incarnation; a later incarnation starts it again", async () => {
+  vi.useFakeTimers();
+  onTestFinished(() => void vi.useRealTimers());
+  let passes = 0;
+  const appended: unknown[] = [];
+  const reported: unknown[] = [];
+  const incarnation = () =>
+    new ProjectProcessor(
+      () => Promise.reject(new Error("unused")),
+      () => Promise.reject(new Error("unused")),
+      () => null,
+      () => ({
+        destroyContext: async () => {
+          passes += 1;
+          throw new Error("Cloudflare said no");
+        },
+        deleteProjectStorage: async () => {},
+      }),
+    );
+  const state: ProjectState = {
+    ...reduceProcessor(processorWithoutHostnames(), [childCreated("/a")]),
+    deletion: { offset: 9 },
+  };
+  const run = (processor: ProjectProcessor) =>
+    deliver(
+      processor,
+      state,
+      async (...events) => void appended.push(...events),
+      (work) => void work().catch((error: unknown) => void reported.push(error)),
+    );
+  const first = incarnation();
+  run(first);
+  await vi.advanceTimersByTimeAsync(0);
+  expect(passes).toBe(1);
+  await vi.advanceTimersByTimeAsync(5_000);
+  expect(passes).toBe(2);
+  await vi.advanceTimersByTimeAsync(30_000);
+  expect(passes).toBe(3);
+  expect(appended).toMatchObject([
+    { type: "events.iterate.com/project/delete-failed", payload: { error: "Cloudflare said no" } },
+  ]);
+  expect(reported).toMatchObject([{ message: "Cloudflare said no" }]);
+  // its own delete-failed, delivered to it, does not start it again: no retry storm
+  run(first);
+  await vi.advanceTimersByTimeAsync(60_000);
+  expect(passes).toBe(3);
+  // a later incarnation does
+  run(incarnation());
+  await vi.advanceTimersByTimeAsync(0);
+  expect(passes).toBe(4);
 });
 
 test("template provenance survives replay of the project creation request", () => {
