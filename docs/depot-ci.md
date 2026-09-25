@@ -860,12 +860,14 @@ operator's `session.versions`), and the gate passes once five rounds in a row ru
 everywhere. It fails the deploy after 150 s. A PR's preview, redeployed in place on every push, goes
 through the same gate.
 
-Soaks of the e2e suite at `--retry=0` (`os-e2e-soak.yml`, 2026-09-24), every run redeployed in place:
-with e2e as soon as a gate without the version check passed, 7 of 48 runs had a row fail on a
-platform signature, 30 of their 39 rows "code was updated". Held 150 s instead (`--settle 150`), the
-deploy's start to the first test took 173 s at the median. With the version check, it took 36 s
-(p90 67 s), and no row failed "code was updated" in 29 runs. About one run in twenty keeps a
-platform row either way (a storage reset, "no longer active"), and CI's one retry absorbs it.
+Soaks of the e2e suite at `--retry=0` (`os-e2e-soak.yml`), every run redeployed in place. With e2e
+as soon as a gate without the version check passed, 7 of 48 runs had a row fail on a platform
+signature, 30 of their 39 rows "code was updated" (2026-09-24). Held 150 s instead (`--settle 150`),
+the deploy's start to the first test took 173 s at the median (p90 182 s). With the version check
+(2026-09-25, 11 runs) it took 42 s (p90 62 s): stale rounds held 6 of the 11 gates, for up to 42 s,
+every "code was updated" reset landed on a probe inside a gate, and no row failed on a platform
+signature. A storage reset or a dropped socket can still fail a row in any shape, and CI's one retry
+absorbs it.
 
 - Each workflow's runs are serialized (`cancel-in-progress: false`), so no deploy lands under another
   run's tests.

@@ -655,8 +655,8 @@ async function deployOsPreview(
   // 2026-09-24, for 6–27 s), and a preview redeployed in place still runs the previous version in
   // places (preview-readiness.ts). Nothing is handed on — the PR body's links, the sign-in seed,
   // the e2e job — until five rounds of eight in a row answer in full on this deployment. A preview
-  // that does not within 150 s fails the deploy, naming what it answered: the slowest of 29
-  // in-place soak redeploys took 68 s (2026-09-24). `--settle` holds the rounds that long besides.
+  // that does not within 150 s fails the deploy, naming what it answered: the slowest of 11
+  // in-place soak redeploys took 55 s (2026-09-25). `--settle` holds the rounds that long besides.
   await traceOperation("Readiness gate", () =>
     awaitPreviewReady(url, {
       adminSecret: parseAppConfig(
