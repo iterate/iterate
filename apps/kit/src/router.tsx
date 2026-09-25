@@ -1,3 +1,4 @@
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createRouter } from "@tanstack/react-router";
 import {
   DefaultErrorComponent,
@@ -10,8 +11,13 @@ import { routeTree } from "./routeTree.gen.ts";
 // so this function's inferred return type IS the app's router type. Components passed as options
 // are wrapped in lambdas so checking them doesn't traverse the registered router types (TS7023).
 export function getRouter() {
+  // one per router, like the router itself: the server builds one per request
+  const queryClient = new QueryClient();
   return createRouter({
     routeTree,
+    Wrap: ({ children }) => (
+      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    ),
     defaultPreload: "intent",
     scrollRestoration: true,
     defaultErrorComponent: (props) => <DefaultErrorComponent {...props} />,

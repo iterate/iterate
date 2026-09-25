@@ -31,6 +31,9 @@ export interface FirmwareDevice {
   target: string;
   name: string;
   description: string;
+  /** How a person starts a call once the board is set up (from its `firmware/devices/<target>`
+   *  board table and README): Kit's done screen says it. */
+  startCall: string;
 }
 
 /**
@@ -44,42 +47,49 @@ export const firmwareCatalog: readonly FirmwareDevice[] = [
     target: "zectrix_note4",
     name: "ZECTRIX NOTE4",
     description: "E-paper voice companion with monochrome and 16-level grayscale images",
+    startCall: "Press OK.",
   },
   {
     id: "waveshare-rlcd-4-2",
     target: "waveshare_s3_rlcd",
     name: "Waveshare ESP32-S3 RLCD 4.2",
     description: "Reflective display and KEY-button voice companion (experimental audio)",
+    startCall: "Press KEY.",
   },
   {
     id: DEFAULT_DEVICE_ID,
     target: "havpe",
     name: "Home Assistant Voice Preview Edition",
     description: "ESP32-S3 voice satellite",
+    startCall: 'Press the button on top, or say "Jarvis".',
   },
   {
     id: "satellite1",
     target: "satellite1",
     name: "FutureProofHomes Satellite1",
     description: "ESP32-S3 XMOS voice satellite",
+    startCall: 'Press its button, or say "Jarvis".',
   },
   {
     id: "m5stick-s3",
     target: "m5sticks3",
     name: "M5StickS3",
     description: "ESP32-S3 pocket voice companion",
+    startCall: "Press either button on the front or side.",
   },
   {
     id: "stackchan",
     target: "stackchan",
     name: "StackChan",
     description: "M5Stack CoreS3 desktop companion",
+    startCall: "Tap its face or its side button.",
   },
   {
     id: "waveshare",
     target: "waveshare_s3_amoled",
     name: "Waveshare ESP32-S3 Touch AMOLED",
     description: "ESP32-S3 screen voice companion",
+    startCall: "Press the upper (BOOT) button.",
   },
 ];
 

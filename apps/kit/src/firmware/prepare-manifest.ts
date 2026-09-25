@@ -7,8 +7,8 @@ import { firmwareManifestPath, type FirmwareDevice } from "./catalog.ts";
  * Loads a firmware release's `manifest.json` through Kit's own origin (firmware-proxy.ts) and checks
  * it before anything can flash it: the version is the one asked for, every part is a file beside the
  * manifest on this origin, and no part starts inside the configuration partition, which
- * `prepareInstallManifest` fills. Part paths come back absolute, because the install manifest is
- * a blob URL that esp-web-tools cannot resolve relative paths against.
+ * `prepareInstall` fills. Part paths come back absolute, so `flash` needs no base URL to resolve
+ * them against.
  *
  * The manifest is a standard esp-web-tools manifest (https://esphome.github.io/esp-web-tools/) plus
  * `configurationPartition`, as apps/kit/scripts/firmware-release.ts `firmwareManifest` writes it.
@@ -55,40 +55,35 @@ export async function loadFirmwareManifest(
 export type FirmwareManifest = Awaited<ReturnType<typeof loadFirmwareManifest>>;
 
 /**
- * The manifest esp-web-tools installs from, as a blob URL: the release's parts plus this install's
- * `ITERKIT1` configuration image at `configurationPartition`, under the device's current name, with
- * the erase prompt and without Improv (the firmware joins Wi-Fi from its configuration image).
+ * What esp-web-tools' `flash` writes (flash-device.ts): the release's parts plus this install's
+ * `ITERKIT1` configuration image at `configurationPartition`, under the device's current name. The
+ * image is a blob URL, which `flash` downloads like any other part; disposing revokes it, once
+ * flashing has finished with it.
  */
-export function prepareInstallManifest(
+export function prepareInstall(
   manifest: FirmwareManifest,
   device: FirmwareDevice,
   configuration: DeviceConfiguration,
 ) {
-  const configurationImage = pageLifetimeObjectUrl(
+  const configurationImage = URL.createObjectURL(
     new Blob([encodeDeviceConfiguration(configuration, manifest.configurationPartition.size)], {
       type: "application/octet-stream",
     }),
   );
-  return pageLifetimeObjectUrl(
-    new Blob(
-      [
-        JSON.stringify({
-          name: device.name,
-          version: manifest.version,
-          new_install_prompt_erase: true,
-          new_install_improv_wait_time: 0,
-          builds: manifest.builds.map((build) => ({
-            ...build,
-            parts: [
-              ...build.parts,
-              { path: configurationImage, offset: manifest.configurationPartition.offset },
-            ],
-          })),
-        }),
-      ],
-      { type: "application/json" },
-    ),
-  );
+  return {
+    manifest: {
+      name: device.name,
+      version: manifest.version,
+      builds: manifest.builds.map((build) => ({
+        ...build,
+        parts: [
+          ...build.parts,
+          { path: configurationImage, offset: manifest.configurationPartition.offset },
+        ],
+      })),
+    },
+    [Symbol.dispose]: () => URL.revokeObjectURL(configurationImage),
+  };
 }
 
 const ReleaseManifest = z.object({
@@ -108,27 +103,3 @@ const ReleaseManifest = z.object({
     size: z.number().int().positive(),
   }),
 });
-
-// ESP Web Tools does not expose a flash-finished event to its host button.
-// Keep activated manifests alive for the document lifetime so changing routes
-// or fields cannot revoke bytes while its dialog is reading them.
-const pageLifetimeObjectUrls = new Set<string>();
-let pageHideCleanupRegistered = false;
-
-function pageLifetimeObjectUrl(blob: Blob) {
-  const value = URL.createObjectURL(blob);
-  pageLifetimeObjectUrls.add(value);
-  if (!pageHideCleanupRegistered) {
-    pageHideCleanupRegistered = true;
-    window.addEventListener(
-      "pagehide",
-      () => {
-        for (const objectUrl of pageLifetimeObjectUrls) URL.revokeObjectURL(objectUrl);
-        pageLifetimeObjectUrls.clear();
-        pageHideCleanupRegistered = false;
-      },
-      { once: true },
-    );
-  }
-  return value;
-}
