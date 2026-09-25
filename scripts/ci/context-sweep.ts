@@ -62,13 +62,30 @@ async function main() {
     return body as never;
   };
 
-  const namespace = (
-    await cloudflare<{ id: string; class?: string; script?: string }[]>(`${api}?per_page=1000`)
-  ).result.find(
-    (row) => row.class === "IterateContextDurableObject" && row.script === target.workerName,
-  );
-  if (!namespace)
-    throw new Error(`no IterateContextDurableObject namespace on ${target.workerName}`);
+  // Every page; a Worker Preview's namespaces are listed under its parent's script, marked
+  // `preview` (scripts/lib/do-reset.ts `getWorkerDoNamespaces`), and are not this deployment's.
+  const matches: { id: string }[] = [];
+  for (let page = 1; ; page++) {
+    const batch = (
+      await cloudflare<{ id: string; class?: string; script?: string; preview?: unknown }[]>(
+        `${api}?per_page=100&page=${page}`,
+      )
+    ).result;
+    matches.push(
+      ...batch.filter(
+        (row) =>
+          row.class === "IterateContextDurableObject" &&
+          row.script === target.workerName &&
+          !row.preview,
+      ),
+    );
+    if (batch.length < 100) break;
+  }
+  if (matches.length !== 1)
+    throw new Error(
+      `expected one IterateContextDurableObject namespace on ${target.workerName}, found ${matches.length}`,
+    );
+  const namespace = matches[0]!;
   const stored: string[] = [];
   for (let cursor: string | undefined; ;) {
     const page = await cloudflare<{ id: string; hasStoredData?: boolean }[]>(

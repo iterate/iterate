@@ -40,7 +40,9 @@ test("the sweep identifies a context by id without waking its ancestors, refuses
     id: never,
     error: expect.stringMatching(/addressed by name/),
   });
-  // this read's own incarnation records one wake; `identify` recorded none (else two)
+  // evicted again, so this read is a fresh incarnation recording one wake; had `identify` recorded
+  // one in its own incarnation, the log would hold two more
+  await evictDurableObject(stub(`${orphanProject}.iterate/x`));
   expect(await eventsOf(orphanProject, "/x")).toHaveLength(before + 1);
 
   // only the orphan is destroyed
