@@ -253,7 +253,6 @@ test.for([
     vi.useFakeTimers();
     onTestFinished(() => void vi.useRealTimers());
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    warn.mockClear(); // an earlier test's spy on console.warn is this one: only this test's calls count
     const session = { dup: () => session, onRpcBroken() {}, [Symbol.dispose]() {} };
     const pager = new FakePagerWebSocket();
     let lendTries = 0;
@@ -297,7 +296,6 @@ test("a lend recalled while its repeat waits is not lent again, and its failure 
   vi.useFakeTimers();
   onTestFinished(() => void vi.useRealTimers());
   const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-  warn.mockClear(); // an earlier test's spy on console.warn is this one: only this test's calls count
   const session = { dup: () => session, onRpcBroken() {}, [Symbol.dispose]() {} };
   const pager = new FakePagerWebSocket();
   let lendTries = 0;
@@ -353,7 +351,6 @@ test.for([
   vi.useFakeTimers();
   onTestFinished(() => void vi.useRealTimers());
   const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-  warn.mockClear(); // an earlier test's spy on console.warn is this one: only this test's calls count
   let probes = 0;
   const never = () => new Promise(() => {});
   const client = {
@@ -459,7 +456,6 @@ test("a pager whose keepalives go unanswered (a reset whose close the relay neve
   vi.useFakeTimers();
   onTestFinished(() => void vi.useRealTimers());
   const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-  warn.mockClear();
   let closedBeforeRedial: number | undefined;
   const fake = await relayOverFakeDurableObject((dial) => {
     if (dial === 2) closedBeforeRedial = closed.mock.calls.length;
@@ -588,8 +584,6 @@ test.for([
     onTestFinished(() => void vi.useRealTimers());
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const error = vi.spyOn(console, "error").mockImplementation(() => {});
-    warn.mockClear();
-    error.mockClear();
     const redialed = new FakePagerWebSocket();
     const closed = vi.spyOn(redialed, "close");
     const fake = await relayOverFakeDurableObject(async (dial) => {
@@ -616,7 +610,6 @@ test("a lend recalled while a re-dial hangs ends quietly at the deadline: no err
   vi.useFakeTimers();
   onTestFinished(() => void vi.useRealTimers());
   const error = vi.spyOn(console, "error").mockImplementation(() => {});
-  error.mockClear(); // an earlier test's spy on console.error carries its calls
   let answerLate: (pager: FakePagerWebSocket) => void = () => {};
   const late = new FakePagerWebSocket();
   const closed = vi.spyOn(late, "close");
