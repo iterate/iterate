@@ -107,10 +107,12 @@ export async function runCloudflareCommandWith429Retry(
     }
 
     const delayMs = backoffMs[attempt - 1];
-    console.warn(
-      `Cloudflare API rate limited (429) during ${command} ${args.join(" ")} ` +
-        `(attempt ${attempt}/${backoffMs.length + 1}); retrying command in ${Math.round(delayMs / 1000)}s...`,
-    );
+    console.warn({
+      event: "cloudflare-api.rate-limited-retry",
+      label: `${command} ${args.join(" ")}`,
+      attempt,
+      retryInMs: delayMs,
+    });
     await sleep(delayMs);
   }
 }

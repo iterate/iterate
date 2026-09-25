@@ -35,6 +35,8 @@
 // past the cap the end gives up the same way. The edge's invocation dying is beyond any of this:
 // the visitor's connection terminates in it, so the visitor's socket dies with it.
 
+import { sendableCloseCode, truncateCloseReason } from "./websocket-close.ts";
+
 /** How long an end keeps trying after its DO socket dropped: re-dials, then the other end's
  *  resume. A deploy's reset answers again within seconds (the rpc-stub pager's re-dial: 0.2–4 s
  *  on prd 2026-09-24). */
@@ -512,22 +514,6 @@ function closeQuietly(socket: SpliceSocket | null, code: number, reason: string)
   } catch {
     /* already closing */
   }
-}
-
-/** A close code a socket may send: the ones only a runtime reports (1005 none, 1006 abnormal, 1015
- *  TLS) and anything out of range become 1000. */
-function sendableCloseCode(code: number | undefined): number {
-  if (code === undefined) return 1000;
-  if (code === 1000 || (code >= 1001 && code <= 1003) || (code >= 1007 && code <= 1014))
-    return code;
-  return code >= 3000 && code <= 4999 ? code : 1000;
-}
-
-/** A close reason within the RFC's 123 UTF-8 bytes (workerd throws past it), whole characters. */
-function truncateCloseReason(reason: string): string {
-  let out = reason;
-  while (new TextEncoder().encode(out).length > 123) out = out.slice(0, -1);
-  return out;
 }
 
 /** THE LOG LINE for what an end reports. A resume after a deploy's reset is expected on every deploy

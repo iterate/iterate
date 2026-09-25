@@ -6,11 +6,10 @@
 //
 // Each fault is an incident: a 5xx host, a healed facet's name, or an error message. A new one pages
 // at the top level, mentioning Jonas; its repeats go quietly into that page's thread, back in the
-// channel (and mentioning Jonas) once it grows tenfold; a day unseen closes it. Until 2026-09-24 the
-// alarm held every page for an hour after any page while reading only the last half hour, so a
-// different 500 in that hour was never posted. The memory is the run's `prd-fault-alarm-state`
-// artifact: where the next read starts and the open incidents' threads. Without it a run reads the
-// last half hour and pages everything as new — a repeat, never a miss.
+// channel (and mentioning Jonas) once it grows tenfold; a day unseen closes it. The memory is the
+// run's `prd-fault-alarm-state` artifact: where the next read starts and the open incidents'
+// threads. Without it a run reads the last half hour and pages everything as new — a repeat, never
+// a miss.
 //
 // A workaround that heals a platform fault logs `console.warn({ event:
 // "<area>.platform-failure-<action>", name, … })` (apps/os context/facet-host.ts); naming it so
@@ -27,6 +26,8 @@ import { createCli } from "trpc-cli";
 import { z } from "zod";
 import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
 import {
+  HttpAnswerError,
+  httpPlatformFailure,
   PLATFORM_FAILURE_DELAYS_MS,
   retryPlatformFailures,
 } from "@iterate-com/shared/platform-retry";
@@ -91,6 +92,16 @@ export const PINNED_WORKAROUNDS = [
     event: "iterate-context.platform-failure-alarm-",
     /** The post, once the heal has been absent `PIN_QUIET_DAYS`. */
     post: "Cloudflare seems to have fixed held Durable Object alarms: delete the overdue watch in apps/os/src/alarm-coordinator.ts",
+  },
+  // The Worker Loader defect at facet start (https://github.com/iterate/alarm-loader-facet-repro),
+  // healed at both of its call sites; worker-loader.ts `retire` serves both, and goes with the last.
+  {
+    event: "facet.platform-failure-",
+    post: "Cloudflare seems to have fixed the Worker Loader defect at facet start: delete the restart in apps/os/src/context/facet-host.ts (`isFacetStartPlatformFailure`)",
+  },
+  {
+    event: "workers.platform-failure-",
+    post: "Cloudflare seems to have fixed the Worker Loader clone-version defect in workers.get: delete its retire and replay in apps/os/src/context/built-ins.ts",
   },
 ];
 export const PIN_QUIET_DAYS = 28;
@@ -371,18 +382,6 @@ function hhmm(date: Date) {
   return date.toISOString().slice(11, 16);
 }
 
-/** Cloudflare's own failure of a Workers Logs query: a 5xx, or an answer that is not JSON (its HTML
- *  error page). The message names the status, the content type and the answer's first 200 bytes. */
-class CloudflarePlatformFailure extends Error {
-  readonly status: number;
-  constructor(response: Response, text: string) {
-    super(
-      `Workers Logs query answered HTTP ${response.status} (${response.headers.get("content-type") ?? "no content-type"}): ${text.slice(0, 200)}`,
-    );
-    this.status = response.status;
-  }
-}
-
 /** A Workers Logs filter: a leaf, or a group combining its filters. */
 export type LogFilter =
   | { key: string; operation: string; value?: string | number; type: "string" | "number" }
@@ -602,11 +601,11 @@ async function readWindow(
   // (exclusionQueries). Its rows sum to a lower bound (events without the grouped field, or past
   // 2,000 groups in a query, drop out) — a burst still pages.
   //
-  // A query only reads, so one that Cloudflare itself failed (CloudflarePlatformFailure, or a
-  // dropped connection) is asked again after each of `delaysMs`, with a
-  // `prd-fault-alarm.platform-failure-retry` warn per repeat; the last failure fails the run. A JSON
-  // answer below 500 is Cloudflare's answer about the query: a broken token (success: false) or a
-  // renamed field fails the run at once, never reads as a quiet prd.
+  // A query only reads, so one that Cloudflare itself failed (a 5xx, a 429, an answer that is not
+  // JSON — its HTML error page, whatever the status — or a dropped connection) is asked again after
+  // each of `delaysMs`, with a `prd-fault-alarm.platform-failure-retry` warn per repeat; the last
+  // failure fails the run. Any other JSON answer is Cloudflare's answer about the query: a broken
+  // token (success: false) or a renamed field fails the run at once, never reads as a quiet prd.
   const query = (view: "calculations" | "events", filters: LogFilter[], parameters: object) =>
     retryPlatformFailures(
       async () => {
@@ -630,12 +629,17 @@ async function readWindow(
           },
         );
         const text = await response.text();
-        if (response.status >= 500) throw new CloudflarePlatformFailure(response, text);
+        // The message names the status, the content type and the answer's first 200 bytes.
+        const failed = new HttpAnswerError(
+          `Workers Logs query answered HTTP ${response.status} (${response.headers.get("content-type") ?? "no content-type"}): ${text.slice(0, 200)}`,
+          response.status,
+        );
+        if (response.status >= 500 || response.status === 429) throw failed;
         let answer: unknown;
         try {
           answer = JSON.parse(text);
         } catch {
-          throw new CloudflarePlatformFailure(response, text);
+          throw failed;
         }
         const body = z
           .object({
@@ -651,13 +655,11 @@ async function readWindow(
       {
         event: "prd-fault-alarm.platform-failure-retry",
         delaysMs,
-        // fetch rejects with a TypeError when the connection fails; a timeout is thrown as it is.
+        // Every HttpAnswerError thrown above is Cloudflare's own failure, the HTML page included.
         platformFailure: (error) =>
-          error instanceof TypeError
-            ? { view, status: "network", message: error.message }
-            : error instanceof CloudflarePlatformFailure
-              ? { view, status: error.status, message: error.message }
-              : undefined,
+          error instanceof HttpAnswerError
+            ? { view, status: error.status, message: error.message }
+            : httpPlatformFailure(error, { view }),
       },
     );
   // Without `groupBy`, one row: ["", the total].

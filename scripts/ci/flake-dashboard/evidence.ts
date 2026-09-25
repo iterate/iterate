@@ -10,6 +10,8 @@ import { createHash } from "node:crypto";
 import { AwsClient } from "aws4fetch";
 import { z } from "zod";
 import {
+  HttpAnswerError,
+  httpPlatformFailure,
   PLATFORM_FAILURE_DELAYS_MS,
   retryPlatformFailures,
 } from "@iterate-com/shared/platform-retry";
@@ -233,7 +235,7 @@ async function ciBucket(input: { accountId: string; bucketName: string; apiToken
           signal: AbortSignal.timeout(30_000),
         });
         if (response.ok) return response.text();
-        throw new R2Failure(
+        throw new HttpAnswerError(
           `R2 ${what}: HTTP ${response.status} ${await response.text()}`,
           response.status,
         );
@@ -241,13 +243,7 @@ async function ciBucket(input: { accountId: string; bucketName: string; apiToken
       {
         event: "flake-dashboard.platform-failure-retry",
         delaysMs: PLATFORM_FAILURE_DELAYS_MS,
-        // fetch rejects with a TypeError when the connection fails; a timeout is thrown as it is.
-        platformFailure: (error) =>
-          error instanceof TypeError
-            ? { what, status: "network", message: error.message }
-            : error instanceof R2Failure && (error.status >= 500 || error.status === 429)
-              ? { what, status: error.status, message: error.message }
-              : undefined,
+        platformFailure: (error) => httpPlatformFailure(error, { what }),
       },
     );
   return {
@@ -274,14 +270,6 @@ async function ciBucket(input: { accountId: string; bucketName: string; apiToken
     get: (key: string) =>
       request(`${origin}/${key.split("/").map(encodeURIComponent).join("/")}`, `get ${key}`),
   };
-}
-
-class R2Failure extends Error {
-  status: number;
-  constructor(message: string, status: number) {
-    super(message);
-    this.status = status;
-  }
 }
 
 /**

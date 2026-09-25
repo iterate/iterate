@@ -5,6 +5,8 @@ import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 
 import {
+  HttpAnswerError,
+  httpPlatformFailure,
   PLATFORM_FAILURE_DELAYS_MS,
   retryPlatformFailures,
 } from "@iterate-com/shared/platform-retry";
@@ -38,12 +40,12 @@ export async function mapConcurrent<Input, Output>(
  * their fields are in https://github.com/depot/cli/blob/main/proto/depot/ci/v1/ci.proto (JSON uses
  * the camelCase field names). `token` is an organization API token (`DEPOT_CI_TELEMETRY_TOKEN`).
  *
- * A read (`Get…`, `List…`, the only methods CI calls) that Depot answers with a 5xx, or whose
- * connection fails, is asked again after each of `delaysMs`, with a `depot.platform-failure-retry`
- * warn per repeat (`retryPlatformFailures`). A 4xx is an answer about the request and fails at
- * once, as does any other method (Connect sends every call as a POST, so only the name says it
- * changes nothing). A single 500 on GetJobAttemptLogs is enough to fail a trace job without the
- * repeat.
+ * A read (`Get…`, `List…`, the only methods CI calls) that Depot answers with a 5xx or a 429, or
+ * whose connection fails, is asked again after each of `delaysMs`, with a
+ * `depot.platform-failure-retry` warn per repeat (`retryPlatformFailures`). Any other 4xx is an
+ * answer about the request and fails at once, as does any other method (Connect sends every call
+ * as a POST, so only the name says it changes nothing). A single 500 on GetJobAttemptLogs is
+ * enough to fail a trace job without the repeat.
  */
 export async function depotCiApi(
   method: string,
@@ -66,21 +68,15 @@ export async function depotCiApi(
       });
       if (response.ok) return await response.json();
       await response.body?.cancel();
-      throw Object.assign(new Error(`Depot ${method} returned HTTP ${response.status}`), {
-        status: response.status,
-      });
+      throw new HttpAnswerError(
+        `Depot ${method} returned HTTP ${response.status}`,
+        response.status,
+      );
     },
     {
       event: "depot.platform-failure-retry",
       delaysMs: /^(Get|List)[A-Z]/.test(method) ? delaysMs : [],
-      platformFailure: (error) => {
-        // fetch rejects with a TypeError when the connection fails; a timeout or an abort is not
-        // Depot's answer and is thrown as it is.
-        if (error instanceof TypeError)
-          return { method, status: "network", message: error.message };
-        const { status = 0, message } = error as { status?: number; message?: string };
-        return status >= 500 ? { method, status, message } : undefined;
-      },
+      platformFailure: (error) => httpPlatformFailure(error, { method }),
     },
   );
 }

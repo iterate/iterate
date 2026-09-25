@@ -23,6 +23,12 @@ test.for([
     app: { code: 4001, reason: "bye" },
     client: { code: 4001, reason: "bye" },
   },
+  {
+    // 200 UTF-8 bytes: workerd refuses a close reason past 123 bytes, whole characters kept.
+    name: "a close whose reason is past 123 bytes",
+    app: { code: 4001, reason: "é".repeat(100) },
+    client: { code: 4001, reason: "é".repeat(61) },
+  },
 ])("$name on the app's end closes the client $client.code", async ({ app, client }) => {
   const upstream = new AppSocket();
   // A 101's shape as the edge reads it: a Response cannot carry a WebSocket the runtime did not make.

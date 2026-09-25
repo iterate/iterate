@@ -50,49 +50,37 @@ test("retries an explicit Wrangler 429 and then succeeds", async () => {
   }
 });
 
-test("does not retry a non-429 command failure", async () => {
-  const sleep = vi.fn(async () => {});
+test.for([
+  {
+    name: "a non-429 failure is not retried",
+    stderr: "500 Internal Server Error",
+    exit: 7,
+    sleeps: [],
+  },
+  {
+    name: "a recovered 429 is not retried when a later unrelated error ends the command",
+    stderr: "429 Too Many Requests\nERROR\n500 Internal Server Error",
+    exit: 7,
+    sleeps: [],
+  },
+  {
+    name: "the last 429 fails once the bounded attempts are spent",
+    stderr: "429 Too Many Requests",
+    exit: 1,
+    sleeps: [1, 1],
+  },
+])("$name", async ({ stderr, exit, sleeps }) => {
+  const sleep = vi.fn(async (_ms: number) => {});
 
   await expect(
     runCloudflareCommandWith429Retry(
       process.execPath,
-      ["--eval", 'console.error("500 Internal Server Error"); process.exit(7)'],
+      ["--eval", `console.error(${JSON.stringify(stderr)}); process.exit(${exit})`],
       { cwd: process.cwd() },
       { backoffMs: [1, 1], sleep },
     ),
-  ).rejects.toThrow("exited with 7");
-  expect(sleep).not.toHaveBeenCalled();
-});
-
-test("does not retry a recovered 429 when a later unrelated error terminates the command", async () => {
-  const sleep = vi.fn(async () => {});
-
-  await expect(
-    runCloudflareCommandWith429Retry(
-      process.execPath,
-      [
-        "--eval",
-        'console.error("429 Too Many Requests\\nERROR\\n500 Internal Server Error"); process.exit(7)',
-      ],
-      { cwd: process.cwd() },
-      { backoffMs: [1, 1], sleep },
-    ),
-  ).rejects.toThrow("exited with 7");
-  expect(sleep).not.toHaveBeenCalled();
-});
-
-test("fails after the bounded 429 attempt budget is exhausted", async () => {
-  const sleep = vi.fn(async () => {});
-
-  await expect(
-    runCloudflareCommandWith429Retry(
-      process.execPath,
-      ["--eval", 'console.error("429 Too Many Requests"); process.exit(1)'],
-      { cwd: process.cwd() },
-      { backoffMs: [1, 1], sleep },
-    ),
-  ).rejects.toThrow("exited with 1");
-  expect(sleep).toHaveBeenCalledTimes(2);
+  ).rejects.toThrow(`exited with ${exit}`);
+  expect(sleep.mock.calls.map(([ms]) => ms)).toEqual(sleeps);
 });
 
 // ── smokeResponse ──

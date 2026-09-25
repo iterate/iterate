@@ -82,10 +82,11 @@ const CURSOR_READ_BUDGET_CHARS = 8 * 1024 * 1024;
  *  payloads the same way the in-flight budget does (above). */
 const PENDING_PUSHES_TOTAL_BUDGET_CHARS = 8 * 1024 * 1024;
 
-/** A failure that can only repeat — halt the row now, not after the ladder: the flag workerd itself
- *  stamps (`retryable: false`, processor.ts's ReduceCheckpointTable stamps it too) or one of OUR codes that a
- *  retry cannot change (a target that is not callable, a checkpoint or an event over its ceiling).
- *  Never NO_ITX_EXPRESSION_MATCH: a target nothing resolves DANGLES (`danglingUnder`), it is not halted. */
+/** A failure that can only repeat — halt the row now, not after the ladder: `retryable: false`, our
+ *  own stamp (processor.ts's ReduceCheckpointTable; workerd only ever sets `retryable: true`), or one
+ *  of OUR codes that a retry cannot change (a target that is not callable, a checkpoint or an event
+ *  over its ceiling). Never NO_ITX_EXPRESSION_MATCH: a target nothing resolves DANGLES
+ *  (`danglingUnder`), it is not halted. */
 const deterministicFailure = (error: unknown): boolean =>
   (error as { retryable?: unknown } | null)?.retryable === false ||
   [

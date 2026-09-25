@@ -3,6 +3,7 @@
 // the binding's `{ success, result }` Response envelope. Its shape is the published one (iterate/api
 // `CfBrowserApi`).
 
+import { retryPlatformFailures } from "@iterate-com/shared/platform-retry";
 import type { CfBrowserApi, CfBrowserQuickAction, CfBrowserQuickActionOptions } from "iterate/api";
 
 /**
@@ -69,23 +70,19 @@ export function cfBrowser(binding: BrowserRun): CfBrowserApi {
             }
           ).quickAction(action, options),
         );
-      try {
-        return await attempt();
-      } catch (error) {
-        const message = String((error as { message?: unknown })?.message ?? error);
-        // Browser Run's own timeout (`{"code":6002,"message":"A timeout was reached. …"}`) on INLINE
-        // HTML: nothing remote to wait for, so the timeout is the service's, never the page's. A `url`
-        // page's timeout may be that site's and is not retried.
-        if (!("html" in options && /"code":6002\b/.test(message))) throw error;
-        console.warn({
-          event: "browser.platform-failure-retry",
-          namespace: "iterate-context",
-          action,
-          message,
-        });
-        await new Promise((resolve) => setTimeout(resolve, 1000));
-        return await attempt();
-      }
+      return retryPlatformFailures(attempt, {
+        event: "browser.platform-failure-retry",
+        delaysMs: [1000],
+        platformFailure: (error) => {
+          const message = error instanceof Error ? error.message : String(error);
+          // Browser Run's own timeout (`{"code":6002,"message":"A timeout was reached. …"}`) on INLINE
+          // HTML: nothing remote to wait for, so the timeout is the service's, never the page's. A
+          // `url` page's timeout may be that site's and is not retried.
+          return "html" in options && /"code":6002\b/.test(message)
+            ? { namespace: "iterate-context", action, message }
+            : undefined;
+        },
+      });
     },
   };
 }

@@ -57,14 +57,16 @@ test("the 2026-09-23 fault window pages with hosts, healed facets and collapsed 
         ["internal error; reference = c1k0cg2egm9c43toh6sfipct", 1],
       ],
     }),
-  ).toMatchInlineSnapshot(`
-    "🚨 prd fault page: 07:00–07:30 UTC <@U067G4QRFK2>
-    • 13 5xx responses: garple.com 7, lispwoso.com 6
-    • 1815 platform-failure heals: project 1279, repo 536
-    • 1201 errors: ProjectDurableObject.jsrpc 1199, internal error; reference = … 2
-    <https://dash.cloudflare.com/04b3b57291ef2626c6a8daa9d47065a7/workers-and-pages/observability|Workers Logs>
-    No state from the last run: an incident already paged pages again."
-  `);
+  ).toBe(
+    [
+      "🚨 prd fault page: 07:00–07:30 UTC <@U067G4QRFK2>",
+      "• 13 5xx responses: garple.com 7, lispwoso.com 6",
+      "• 1815 platform-failure heals: project 1279, repo 536",
+      "• 1201 errors: ProjectDurableObject.jsrpc 1199, internal error; reference = … 2",
+      "<https://dash.cloudflare.com/04b3b57291ef2626c6a8daa9d47065a7/workers-and-pages/observability|Workers Logs>",
+      "No state from the last run: an incident already paged pages again.",
+    ].join("\n"),
+  );
 });
 
 test.for([
@@ -227,8 +229,6 @@ test("a new 5xx pages; its repeats reply in the page's thread without mentioning
   });
 });
 
-// Until 2026-09-24 a page held every page for an hour, while each run read only the half hour
-// before it: a different 500 in that hour was never posted.
 test("a different 5xx during an open incident pages at once", async () => {
   const slack = fakeSlack();
   const run1 = await runAt("07:30", null, slack, serverErrorsOnly(1));
@@ -961,6 +961,8 @@ test("a pinned workaround posts once when its heal has been absent PIN_QUIET_DAY
       [],
       [
         "✅ Cloudflare seems to have fixed held Durable Object alarms: delete the overdue watch in apps/os/src/alarm-coordinator.ts. prd has logged no `iterate-context.platform-failure-alarm-*` since 2026-09-23 (28 days) <@U067G4QRFK2>",
+        "✅ Cloudflare seems to have fixed the Worker Loader defect at facet start: delete the restart in apps/os/src/context/facet-host.ts (`isFacetStartPlatformFailure`). prd has logged no `facet.platform-failure-*` since 2026-09-23 (28 days) <@U067G4QRFK2>",
+        "✅ Cloudflare seems to have fixed the Worker Loader clone-version defect in workers.get: delete its retire and replay in apps/os/src/context/built-ins.ts. prd has logged no `workers.platform-failure-*` since 2026-09-23 (28 days) <@U067G4QRFK2>",
       ],
       [],
       [],
@@ -978,7 +980,11 @@ test("a pinned workaround posts once when its heal has been absent PIN_QUIET_DAY
 test("a run without a pin's state starts its count: a late post, never a false one", () => {
   expect(pinnedWorkarounds([], window, null)).toEqual({
     posts: [],
-    pins: { [heldAlarm!.event]: { lastSeen: now.toISOString(), told: false } },
+    pins: {
+      "iterate-context.platform-failure-alarm-": { lastSeen: now.toISOString(), told: false },
+      "facet.platform-failure-": { lastSeen: now.toISOString(), told: false },
+      "workers.platform-failure-": { lastSeen: now.toISOString(), told: false },
+    },
   });
   expect(
     pinnedWorkarounds([], window, { readUntil: now.toISOString(), incidents: {}, pins: {} }),
@@ -1008,10 +1014,10 @@ test("the held-alarm pin reads prd's heals by event and posts its one message to
       post.thread_ts,
       String(post.text).slice(0, 32),
     ]),
-    pin: run2.next.pins,
+    pin: run2.next.pins[heldAlarm!.event],
   }).toEqual({
     posts: [[channel, undefined, "✅ Cloudflare seems to have fixed"]],
-    pin: { [heldAlarm!.event]: { lastSeen: lastSeen.toISOString(), told: true } },
+    pin: { lastSeen: lastSeen.toISOString(), told: true },
   });
 });
 

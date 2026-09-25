@@ -2,7 +2,7 @@
 // pure over an injected namespace) and the path → Artifacts-name mapping. Git itself is the repo
 // facet's (repo/git-wire.test.ts pins its codecs).
 
-import { expect, test, vi } from "vitest";
+import { expect, test } from "vitest";
 import {
   projectScopedArtifacts,
   repoArtifactName,
@@ -11,6 +11,7 @@ import {
   type ArtifactRepoHandle,
   type ArtifactsNamespace,
 } from "./cf-artifacts.ts";
+import { settle } from "./test-support.ts";
 
 // ── the mapping ── every itx surface speaks a repo's PATH; the Artifacts NAME is derived here alone.
 test("repoArtifactName — the Artifacts repo a path is backed by: segments joined with `--`; the convention and any other path alike", () => {
@@ -452,30 +453,6 @@ function deletingNamespace(
     },
   };
   return { ...recording, namespace };
-}
-
-/** Run a verb with every wait it takes elapsed at once: its answer or error, the platform-failure
- *  retries it warned, and what it logged at info. */
-async function settle<T>(run: () => Promise<T>) {
-  vi.useFakeTimers();
-  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-  const info = vi.spyOn(console, "info").mockImplementation(() => {});
-  try {
-    const outcome = run().then(
-      (value) => ({ value }),
-      (error: Error) => ({ error }),
-    );
-    await vi.runAllTimersAsync();
-    return {
-      ...(await outcome),
-      retries: warn.mock.calls.map(([entry]) => entry),
-      logs: info.mock.calls.map(([entry]) => entry),
-    };
-  } finally {
-    warn.mockRestore();
-    info.mockRestore();
-    vi.useRealTimers();
-  }
 }
 
 function recordingNamespace(existing: string[] = []) {

@@ -10,9 +10,7 @@ export const PLATFORM_FAILURE_DELAYS_MS: readonly number[] = [2_000, 5_000, 10_0
  * wait.
  *
  * The caller decides whether a repeat is safe: a call that could create a second copy passes no
- * delays. CI scripts' GitHub and Depot calls (scripts/ci/github.ts, depot.ts), an itx call into a
- * context (apps/os/src/iterate-context.ts) and the repo facet's git reads (git-wire.ts) ask again
- * through this.
+ * delays.
  */
 export async function retryPlatformFailures<T>(
   attempt: () => Promise<T>,
@@ -38,4 +36,26 @@ export async function retryPlatformFailures<T>(
       await new Promise((resolve) => setTimeout(resolve, delayMs));
     }
   }
+}
+
+/** An HTTP answer that is not a success: its status is what `httpPlatformFailure` reads. */
+export class HttpAnswerError extends Error {
+  readonly status: number;
+  constructor(message: string, status: number) {
+    super(message);
+    this.status = status;
+  }
+}
+
+/**
+ * `platformFailure` for a `fetch`: what to log, `label` first, when the connection failed (`fetch`
+ * rejects with a TypeError) or the answer was an `HttpAnswerError` with a 5xx or a 429 (the platform
+ * asking for a slower pace). Anything else is undefined and thrown at once: a 4xx is an answer about
+ * the request, and a timeout or an abort is the caller's own.
+ */
+export function httpPlatformFailure(error: unknown, label: Record<string, string>) {
+  if (error instanceof TypeError) return { ...label, status: "network", message: error.message };
+  if (error instanceof HttpAnswerError && (error.status >= 500 || error.status === 429))
+    return { ...label, status: error.status, message: error.message };
+  return undefined;
 }

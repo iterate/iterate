@@ -56,10 +56,13 @@ export async function fetchCloudflareWith429Retry(
     }
     const retryAfter = parseRetryAfterMs(response);
     const delayMs = Math.min(retryAfter ?? fallbackMs, maxRetryAfterMs);
-    console.warn(
-      `Cloudflare API rate limited (429) on ${label} (attempt ${index + 1}/${backoffMs.length + 1}); ` +
-        `retrying in ${Math.round(delayMs / 1000)}s${retryAfter != null ? " (Retry-After)" : ""}...`,
-    );
+    console.warn({
+      event: "cloudflare-api.rate-limited-retry",
+      label,
+      attempt: index + 1,
+      retryInMs: delayMs,
+      retryAfterMs: retryAfter,
+    });
     // Drain the 429 body before waiting: an unread Response pins its
     // keep-alive connection in undici for as long as it is referenced, and
     // holding one across a 5-120s backoff (times every concurrent caller in
