@@ -74,6 +74,9 @@ test("the admin scope: offered and granted to a listed address alone, every proj
   expect(theirs).toMatchObject({ reach: { userId: person.user.id } });
   const { root: theirRoot } = await rpc(unlisted.token!);
   await expect(Promise.resolve(theirRoot.global)).rejects.toThrow(/Only a platform admin/);
+  // nor the operator acting as a person: every scope, but that person's reach
+  const operatorAs = await actingAs(person.user.email);
+  await expect(Promise.resolve(operatorAs.global)).rejects.toThrow(/Only a platform admin/);
 });
 
 test("signing a client in as someone: offered to an admin alone, the person's grant for an hour with the admin beside them on every event, audited on both accounts, marked in their Sessions, their own sign-ins untouched", async () => {

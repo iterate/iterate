@@ -284,6 +284,10 @@ type AppAuth = {
   issuer: string;
   /** Its `/api`. */
   resource: string;
+  /** What the app asks for when a login names no `scope` (the shell's Switch account and Stop
+   *  impersonating): the same list its `createIterateClient({ scopes })` asks for. `iterate` is
+   *  always added. */
+  scopes?: readonly string[];
   /** Platform dispatches in process to avoid /api recursion; other apps pass fetch. */
   api: (request: Request) => Promise<Response> | Response;
   /** The issuer proves identity before establishing its own ordinary app session. */
@@ -380,11 +384,10 @@ export async function appAuth(request: Request, config: AppAuth): Promise<Respon
     });
     if ("error" in named) return refusalPage(issuer, named.error);
     const next = nextPathOf(String(form.get("next") ?? "/"), url.origin);
-    const parsed = OAuthScopes.safeParse(
-      String(form.get("scope") ?? "")
-        .split(" ")
-        .filter(Boolean),
-    );
+    const posted = String(form.get("scope") ?? "")
+      .split(" ")
+      .filter(Boolean);
+    const parsed = OAuthScopes.safeParse(posted.length ? posted : config.scopes || []);
     if (!parsed.success) return refusalPage(issuer, "Unsupported permission.");
     if (named.origin !== issuer) {
       const refused = await issuerAnswersAt(named.origin);
@@ -434,7 +437,10 @@ export async function appAuth(request: Request, config: AppAuth): Promise<Respon
     if (request.method !== "GET") return new Response("Method not allowed", { status: 405 });
     const next = nextPathOf(url.searchParams.get("next"), url.origin);
     const scope = url.searchParams.get("scope");
-    const parsed = OAuthScopes.safeParse(scope ? scope.split(" ").filter(Boolean) : []);
+    // no `scope` asks for the app's own (`AppAuth.scopes`); a page's step-up names more
+    const parsed = OAuthScopes.safeParse(
+      scope ? scope.split(" ").filter(Boolean) : config.scopes || [],
+    );
     if (!parsed.success) return new Response("Unsupported permission", { status: 400 });
     const scopes = parsed.data;
     // A link may NAME an issuer; only the connect page's POST may bind one. So a login link that
@@ -539,7 +545,6 @@ export async function appAuth(request: Request, config: AppAuth): Promise<Respon
     // connect page for that issuer (one click, the host named), so "Sign in again" at a self-host
     // stays at the self-host instead of silently binding the browser back to the default.
     const ended = await held();
-    const endedScopes = (await session?.scopes()) ?? [];
     try {
       await session?.end();
     } catch {
@@ -551,14 +556,10 @@ export async function appAuth(request: Request, config: AppAuth): Promise<Respon
     }
     // The scopes the next sign-in must hold ride along: the Sign-in-again form's `next` IS the login
     // URL that asked for them (`/.auth/login?…&scope=…`), and the connect page starts the grant from
-    // its own `scope` — without this the reconnected grant would hold `iterate` alone and the login
-    // would send the person straight back to Sign in again. A login `next` that names none asks for
-    // what the ended session held: the shell's Switch account and Stop impersonating sign in again,
-    // through the issuer's consent, with the app's own permissions.
-    const nextUrl = new URL(nextPathOf(url.searchParams.get("next"), url.origin), url.origin);
-    if (nextUrl.pathname === "/.auth/login" && !nextUrl.searchParams.get("scope"))
-      nextUrl.searchParams.set("scope", endedScopes.join(" "));
-    const next = nextUrl.pathname + nextUrl.search;
+    // its own `scope` (a login that names none, the shell's Switch account and Stop impersonating,
+    // asks for the app's own: `AppAuth.scopes`).
+    const next = nextPathOf(url.searchParams.get("next"), url.origin);
+    const nextUrl = new URL(next, url.origin);
     const scope =
       nextUrl.pathname === "/.auth/login" ? nextUrl.searchParams.get("scope") || "" : "";
     const headers = new Headers({

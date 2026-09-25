@@ -117,6 +117,37 @@ test("a sign-out from a connected issuer bound for an ordinary page carries no s
   );
 });
 
+test("a login that names no scope asks for the app's own, so Switch account and Stop impersonating sign an app back in with what it needs", async () => {
+  const begun: string[][] = [];
+  const sessions = {
+    getByName: () => ({
+      begin: async (host: { issuer: string; scopes: string[] }) => {
+        begun.push(host.scopes);
+        return `${host.issuer}/oauth2/auth?state=x`;
+      },
+    }),
+  } as unknown as DurableObjectNamespace<BrowserSession>;
+  const config = {
+    sessions,
+    issuer: ISSUER,
+    resource: `${ISSUER}/api`,
+    scopes: ["admin"],
+    api: () => new Response(""),
+  };
+  // the shell's POST: the logout hands the login on as it is, no scope copied from the ended grant
+  const logout = await appAuth(
+    new Request("https://admin.example/.auth/logout?next=%2F.auth%2Flogin%3Fnext%3D%2F", {
+      method: "POST",
+      headers: { origin: "https://admin.example" },
+    }),
+    config,
+  );
+  expect(logout?.headers.get("location")).toBe("/.auth/login?next=/");
+  const login = await appAuth(new Request("https://admin.example/.auth/login?next=/"), config);
+  expect(login?.status).toBe(302);
+  expect(begun).toEqual([["iterate", "admin"]]);
+});
+
 test("client metadata publishes app branding relative to its own origin, independently of the issuer", async () => {
   const response = await appAuth(new Request("https://notes.example/.auth/client.json"), {
     sessions: {} as DurableObjectNamespace<BrowserSession>,
