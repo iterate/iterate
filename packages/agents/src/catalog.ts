@@ -6,8 +6,8 @@ import {
   type ReduceArgs,
   type ProcessorState,
 } from "iterate/stream/processor";
-import type { AgentsApi } from "iterate/api";
 import { StreamProcessorDurableObject } from "iterate/sdk";
+import type { AgentHandleApi, AgentsApi } from "./api.ts";
 import { AgentContract } from "./contract.ts";
 import { AgentCollectionRpcTarget } from "./collection.ts";
 
@@ -66,7 +66,7 @@ const Certificate = z.discriminatedUnion("type", [
 ]);
 
 /** The agents app's collection facet — what the `itx.agents` rule names (install.ts): the
- *  published `AgentsApi` (iterate/api) at the project's root, plus `at(base)` and `announce`, the
+ *  published `AgentsApi` (api.ts) at the project's root, plus `at(base)` and `announce`, the
  *  app's own plumbing between an agent's context and the root. */
 export class AgentCollectionDurableObject
   extends StreamProcessorDurableObject<AgentCatalogState>
@@ -118,7 +118,8 @@ export class AgentCollectionDurableObject
   list() {
     return this.#collection.list();
   }
-  get(path: string) {
+  // oxlint-disable-next-line iterate/mechanical-class-impl -- the published declarations name the handle by its interface: the inferred class is collection.ts's own
+  get(path: string): AgentHandleApi {
     return this.#collection.get(path);
   }
   create(path: string) {

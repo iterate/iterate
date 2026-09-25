@@ -1,6 +1,6 @@
 import { RunSettled } from "iterate/stream/run";
+import { AgentLlmRequestCancelReason } from "@iterate-com/agents/contract";
 import { appendText, sliceText, type StreamText } from "../chunked-text.ts";
-import { AgentLlmRequestCancelReason } from "../../../../../configs/with-agents/agents/contract.ts";
 import type { StreamEvent } from "./stream-event.ts";
 
 // The agent UI is a clean chat: user message → activity ("Ran code 2× · 3
@@ -389,7 +389,7 @@ function reduceAgentUiEvent(
     case "events.iterate.com/agent/context-added": {
       const role = readString(event, "role");
       const text = readString(event, "content");
-      // oxlint-disable-next-line iterate/simple-truthiness-check -- empty content is a real message: a person can send attachments alone (configs/with-agents/agents/durable-object.ts message()), and an assistant's committed text replaces the streamed preview even when empty
+      // oxlint-disable-next-line iterate/simple-truthiness-check -- empty content is a real message: a person can send attachments alone (@iterate-com/agents durable-object.ts message()), and an assistant's committed text replaces the streamed preview even when empty
       if (text == null) return state;
       const actor = readRecord(event, "actor");
       const actorType = typeof actor?.type === "string" ? actor.type : undefined;
@@ -942,7 +942,7 @@ function updateLlmStep(
 
 /**
  * The response/thinking text deltas inside one streamed LLM chunk, in the
- * shapes configs/with-agents/agents/processor.ts puts into `llm-response-frame`:
+ * shapes @iterate-com/agents processor.ts puts into `llm-response-frame`:
  * OpenAI Responses API events for a partner model, and a `@cf/` Workers AI
  * model's raw SSE events (`{ response }`, or `choices[].delta` from a model
  * that speaks the OpenAI chat format).

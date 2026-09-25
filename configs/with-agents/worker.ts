@@ -1,11 +1,26 @@
-import { ConfigWorker, type ConfigEventArgs } from "iterate/sdk";
-import { installAgents } from "./agents/install.ts";
+import { installAgents } from "@iterate-com/agents/install";
+import { ConfigWorker, z, type ConfigEventArgs } from "iterate/sdk";
+
+const CommitCompleted = z.object({
+  path: z.string(),
+  commitOid: z.string(),
+  changedPaths: z.array(z.string()),
+});
 
 export default class extends ConfigWorker {
+  // The agents app runs from agents/ in this repo: its package.json pins @iterate-com/agents and its
+  // index.ts re-exports the app's classes. It is installed when the project is created, and again
+  // from every commit that changes agents/ (a new version is an upgrade).
   async processEvent({ event, itx }: ConfigEventArgs) {
-    if (event.type !== "events.iterate.com/project/created") return;
-    // The agents app runs from its own source in this repo: the files of agents/, index.ts its entry.
-    await installAgents(itx, await itx.repos.get("/repos/config").modules({ dir: "agents" }));
+    let commitOid: string | undefined;
+    if (event.type === "events.iterate.com/repo/commit-completed") {
+      const commit = CommitCompleted.parse(event.payload);
+      if (commit.path !== "/repos/config") return;
+      if (!commit.changedPaths.some((path) => path.startsWith("agents/"))) return;
+      commitOid = commit.commitOid;
+    } else if (event.type !== "events.iterate.com/project/created") return;
+    const repo = itx.repos.get("/repos/config");
+    await installAgents(itx, await repo.modules({ dir: "agents", commitOid }));
   }
   // Every host of the project reaches this fetch. The platform names the host's routing slug in
   // `x-iterate-routing-slug` (`blog` for `blog--<project>.<base>`; absent on the apex): route on it.

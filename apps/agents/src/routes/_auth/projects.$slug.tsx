@@ -22,14 +22,13 @@ import {
   ContextViewState,
   RIGHT_EDGE_CLOSED,
 } from "@iterate-com/ui/components/context-view/context-view-search";
+import { ensureAgents, publishedVersion } from "@iterate-com/agents/install";
 import type { AgentUiLlmStep } from "../../lib/events/agent-ui-reducer.ts";
 import {
   Conversation,
   ConversationContent,
   ConversationScrollButton,
 } from "../../components/conversation.tsx";
-import { installAgents } from "../../../../../configs/with-agents/agents/install.ts";
-import { agentRuntimeSource } from "../../lib/agent-runtime-source.ts";
 import { AgentFeedItemRow, AgentLiveActivity, type Inspect } from "../../components/agent-feed.tsx";
 import { InspectorSheet, type Inspected } from "../../components/agent-inspectors.tsx";
 import { agentEventInspectors, agentEventRenderers } from "../../lib/agent-event-renderers.tsx";
@@ -118,7 +117,11 @@ function AgentsPage() {
             if (!data.installed) {
               // The SDK models the public API as promises; capnweb's stub has the
               // same runtime methods with additional pipelining types.
-              await installAgents(itx as unknown as IterateContextApi, agentRuntimeSource);
+              const version = await publishedVersion(
+                "@iterate-com/agents",
+                import.meta.env.VITE_SOURCE_COMMIT,
+              );
+              await ensureAgents(itx as unknown as IterateContextApi, version);
               await router.invalidate({ sync: true });
               return;
             }
@@ -275,7 +278,7 @@ function useAgentInterrupt(args: {
 }
 
 /** The agent facet's live state, the fields the header reads
- *  (configs/with-agents/agents/contract.ts `stateSchema`): a pause, the one open request, the one
+ *  (@iterate-com/agents contract.ts `stateSchema`): a pause, the one open request, the one
  *  pending trigger. A script the agent asked for is the
  *  CONTEXT's obligation, not in this state — the feed's running code step says so. */
 const AgentLive = z.object({

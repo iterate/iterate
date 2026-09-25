@@ -8,8 +8,8 @@
 // for every root app code reaches: apps/os derives its built-in record's type from these members
 // (context/built-ins.ts `BuiltInScope`, library.ts `LibraryRoots`), so a root or a verb the platform
 // implements and this file does not declare — or declares differently — fails to typecheck there.
-// The installed apps' roots (`itx.agents`) are here too, beside the context's own
-// (`IterateContextApiWith`); a userspace app augments `InstalledAppRoots` with its own from its code.
+// The roots installed apps add are NOT here: each app registers its own on `InstalledAppRoots` from
+// its package, and `IterateContextApiWith` spells a context that has them.
 
 import type { Ai, R2HTTPMetadata, R2Range } from "@cloudflare/workers-types";
 import type { InvokeHandle, ItxExpression, ItxExpressionInput } from "./expression.ts";
@@ -538,49 +538,17 @@ export type EntityCollectionApi<Handle> = {
   delete(path: string): Promise<{ path: string }>;
 };
 
-/** What `agents.get(path).message(input)` takes: the words, or the words with attachments (each
- *  stored under the agent's path in `itx.files` and named on the event). */
-export type AgentMessageInput =
-  | string
-  | {
-      message: string;
-      files?: { contentType: string; filename: string; data: Uint8Array | ArrayBuffer | string }[];
-    };
-
-/** `itx.agents.get(path)`: one agent (configs/with-agents/agents). */
-export interface AgentHandleApi {
-  /** A person's words: ONE `events.iterate.com/agent/context-added`, the trigger of the agent's
-   *  next turn, answered so a caller can wait for what follows it. A deleted agent, or one never
-   *  created, refuses. */
-  message(input: AgentMessageInput): Promise<StreamEvent>;
-  /** Append to the agent's context. */
-  append(...events: StreamEventInput[]): Promise<StreamEvent[]>;
-}
-
-/** `itx.agents` — the agents app (configs/with-agents/agents), installed by rewrite rule on the
- *  project's root and on each agent's context. `create` and `delete` are sagas on the agent's path
- *  (a deleted agent is not re-creatable); `upgrade` rebinds every agent to the installed runtime. */
-export interface AgentsApi {
-  list(): Promise<{ path: string; createdAt: string }[]>;
-  get(path: string): AgentHandleApi;
-  create(path: string): Promise<{ path: string }>;
-  delete(path: string): Promise<{ path: string }>;
-  upgrade(): Promise<void>;
-}
-
 /** The roots an installable app adds by rewrite rule — present only on a context whose table has
  *  the rule (a project that installed the app), so never part of `IterateContextApi` itself. An
  *  installed app publishes its root by augmenting this interface from its own package
  *  (`declare module "iterate/api" { interface InstalledAppRoots { myApp: MyAppApi } }`), so a root
  *  the platform does not ship is never named here; a caller imports that module to spell
  *  `IterateContextApiWith<"myApp">`. */
-export interface InstalledAppRoots {
-  agents: AgentsApi;
-}
+export interface InstalledAppRoots {}
 
-/** A context whose project installed the named apps: `IterateContextApiWith<"agents">` spells
- *  `itx.agents`. Code that holds a plain scope asserts it (`itx as IterateContextApiWith<"agents">`)
- *  where it knows the app is installed. */
+/** A context whose project installed the named apps: with the app's package imported,
+ *  `IterateContextApiWith<"myApp">` spells `itx.myApp`. Code that holds a plain scope asserts it
+ *  (`itx as IterateContextApiWith<"myApp">`) where it knows the app is installed. */
 export type IterateContextApiWith<App extends keyof InstalledAppRoots> = IterateContextApi &
   Pick<InstalledAppRoots, App>;
 
@@ -824,7 +792,7 @@ export interface IterateContextApi {
    *  out); resolves with the result or rejects with the settlement's error. Never re-run. A script
    *  still running ten minutes after it started is settled failed (`failureKind: "deadline"`). */
   run(script: string): Promise<unknown>;
-  /** The project's repos, workspaces and agents as domain objects — one shape each: `get(path)` is
+  /** The project's repos and workspaces as domain objects — one shape each: `get(path)` is
    *  the entity's facet on the context at `path` (its verbs, plus the typed `append` on that
    *  context), `list()` the project catalog, `create(path)` the creation saga on that path (the
    *  parent link the caller's context writes first, then the processor row, the request, the

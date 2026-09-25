@@ -1,9 +1,8 @@
 import { createFailing } from "@iterate-com/shared/test-support/failing-test";
 import { expect, test } from "vitest";
+import { installVoice } from "@iterate-com/voice/install";
 import { freshCtx, rejection } from "../../os/e2e/support/client.ts";
-import { buildVoiceInstall } from "../scripts/build-voice-install.ts";
-import { ensureVoiceAgent } from "../voice/install.ts";
-import { openAgentItx } from "./support.ts";
+import { openAgentItx, voiceWorkspaceSource } from "./support.ts";
 
 test("THE CHAIN: a subagent two levels down resolves a capability provided at the root through parent links, lists it with its description and origin, and births its own children relative to itself", async () => {
   const ctx = freshCtx("chain");
@@ -156,8 +155,10 @@ createFailing(test, /voice agent's parent link should be the context that asked/
   "a context linked to the root cannot reach past its own mask through a voice agent it sets up with the root's `itx.voice`",
   async () => {
     const { root, jail } = await linkedToTheRootBeneathAMask("voice-root-linked");
-    const install = await buildVoiceInstall();
-    await ensureVoiceAgent(root, async () => install, "placeholder-openai-key");
+    await root.secrets.set("/secrets/openai", "placeholder-openai-key", {
+      urls: ["https://api.openai.com"],
+    });
+    await installVoice(root, await voiceWorkspaceSource());
     // The voice worker is loaded code at `/` whose `env.ITX` is its own, so it creates every agent
     // through the root's `itx.agents`, at whatever absolute `streamPath` the caller names.
     const { links, tool } = (await jail.builtins.run(

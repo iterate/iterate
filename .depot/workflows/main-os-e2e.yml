@@ -61,6 +61,8 @@ on:
       - playwright.config.ts
       - packages/cli/**
       - packages/iterate/**
+      - packages/agents/**
+      - packages/voice/**
       - packages/shared/**
       - packages/ui/**
       - package.json

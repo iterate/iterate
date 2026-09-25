@@ -15,11 +15,12 @@ import { Button } from "@iterate-com/ui/components/button";
 import { Field, FieldDescription, FieldLabel } from "@iterate-com/ui/components/field";
 import { SecretInput } from "@iterate-com/ui/components/not-recorded";
 import { cn } from "cn";
-import { ensureVoiceAgent, fetchVoiceInstall } from "../../../../agents/voice/install.ts";
+import { publishedVersion } from "@iterate-com/agents/install";
+import { ensureVoiceAgent } from "@iterate-com/voice/install";
 import { openAudio, type AudioSession } from "../../audio.ts";
 import { startCall, type Call, type CallFact } from "../../call.ts";
 
-/** The relay's live view (apps/agents/voice VoiceLiveView), validated on every read. */
+/** The relay's live view (@iterate-com/voice VoiceLiveView), validated on every read. */
 const VoiceLiveView = z.object({
   phase: z.enum(["idle", "dialing", "live", "ended"]),
   activation: z.string().nullable(),
@@ -86,7 +87,7 @@ function CallPage() {
   );
 }
 
-/** A project with no voice agent: the installer Kit's Prepare runs (apps/agents/voice/install.ts),
+/** A project with no voice agent: the installer Kit's Prepare runs (@iterate-com/voice/install),
  *  here in the browser, as the signed-in person, against whichever platform this app is connected
  *  to. The key goes from this form to the project's `/secrets/openai`, pinned to OpenAI. */
 function InstallVoice({ project, needsOpenaiKey }: { project: string; needsOpenaiKey: boolean }) {
@@ -97,7 +98,12 @@ function InstallVoice({ project, needsOpenaiKey }: { project: string; needsOpena
       try {
         using itx = await api.projects.get(project);
         const openaiKey = String(form.get("openai-key") || "");
-        await ensureVoiceAgent(itx, fetchVoiceInstall, openaiKey);
+        const commit = import.meta.env.VITE_SOURCE_COMMIT;
+        const versions = {
+          agents: await publishedVersion("@iterate-com/agents", commit),
+          voice: await publishedVersion("@iterate-com/voice", commit),
+        };
+        await ensureVoiceAgent(itx, versions, openaiKey);
         // "needs-openai-key" too: the key was deleted since the page loaded, and the reload asks.
         // `sync`: the reload is awaited, so "Installing…" stays up until the page shows what the
         // install made. Without it the router reloads a route it already has data for in the

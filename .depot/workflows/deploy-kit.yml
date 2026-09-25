@@ -17,8 +17,9 @@ on:
       - "!apps/kit/firmware/**"
       - packages/ui/**
       - packages/shared/**
-      - apps/agents/**
-      - configs/with-agents/agents/**
+      # Prepare's installer (@iterate-com/voice/install and @iterate-com/agents/install)
+      - packages/agents/**
+      - packages/voice/**
       - packages/iterate/**
       - package.json
       - pnpm-lock.yaml

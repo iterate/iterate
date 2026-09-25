@@ -103,7 +103,7 @@ answers the chunk that completes the frame only once the hardware has shown it
 16-level grayscale (`gray4`) and big-endian RGB565 use row-major pixels with
 each row padded to whole bytes. Panel-native packing belongs to the driver.
 
-`apps/agents/voice/screen.ts` validates metadata and converts
+`packages/voice/src/screen.ts` validates metadata and converts
 browser PNGs at the advertised resolution; `voice.setImage` waits for a bounded
 refresh acknowledgment. E-paper submits to a separate task so image updates
 cannot stall voice capture, playback or button handling. The voice loop checks

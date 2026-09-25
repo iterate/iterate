@@ -16,11 +16,12 @@ import type { WithItx } from "iterate/sdk";
 import type { StreamEvent } from "iterate/stream/processor";
 import type { ItxScope as ItxEntrypointScope } from "iterate/sdk";
 import { codedError, errorCode, resolveContextPath } from "iterate/lib";
-import type { AgentHandleApi, AgentsApi, FacetSpec } from "iterate/api";
+import type { FacetSpec } from "iterate/api";
+import type { AgentHandleApi, AgentsApi } from "./api.ts";
 import type { AgentCatalogState } from "./catalog.ts";
 import type { AgentState } from "./contract.ts";
 
-/** `itx.agents` (iterate/api `AgentsApi`) over one base: the root's at `/`, an agent's own at its
+/** `itx.agents` (api.ts `AgentsApi`) over one base: the root's at `/`, an agent's own at its
  *  path (`at(base)`, catalog.ts). */
 export class AgentCollectionRpcTarget extends RpcTarget implements AgentsApi {
   private readonly withItx: WithItx<ItxEntrypointScope>;
@@ -87,7 +88,7 @@ export class AgentCollectionRpcTarget extends RpcTarget implements AgentsApi {
       // reached it — and never to a context `create` names: a script could otherwise link its child
       // above its own masks. The base itself is still the caller's to choose through the public
       // `at(base)`, and the root's is `/` for every context linked to it: both pinned in
-      // e2e/inherited-capabilities.e2e.test.ts.
+      // apps/agents/e2e/inherited-capabilities.e2e.test.ts.
       const creator = resolveContextPath("/", this.base);
       // Writing a parent link on an ancestor would point back down to its child.
       // Refuse before loading a facet or changing any context rows.
@@ -235,7 +236,7 @@ export class AgentCollectionRpcTarget extends RpcTarget implements AgentsApi {
   }
 }
 
-/** `itx.agents.get(path)` (iterate/api `AgentHandleApi`): the agent at one path. */
+/** `itx.agents.get(path)` (api.ts `AgentHandleApi`): the agent at one path. */
 class AgentReference extends RpcTarget implements AgentHandleApi {
   private readonly withItx: WithItx<ItxEntrypointScope>;
   private readonly path: string;

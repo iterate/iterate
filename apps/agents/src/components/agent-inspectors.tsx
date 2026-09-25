@@ -17,6 +17,7 @@ import { toast } from "sonner";
 import { Spinner } from "@iterate-com/ui/components/spinner";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@iterate-com/ui/components/tabs";
 import { cn } from "cn";
+import { parseCodemodeResponse } from "@iterate-com/agents/codemode-format";
 import type { StreamEvent } from "../lib/events/stream-event.ts";
 import {
   formatAgentUiDuration,
@@ -24,7 +25,6 @@ import {
   type AgentUiLlmStep,
 } from "../lib/events/agent-ui-reducer.ts";
 import { sliceText, type StreamText } from "../lib/chunked-text.ts";
-import { parseCodemodeResponse } from "../../../../configs/with-agents/agents/codemode-format.ts";
 import {
   formatDateTime,
   isRecord,

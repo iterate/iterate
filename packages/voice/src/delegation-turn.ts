@@ -4,8 +4,8 @@
  * ending in the sentence the voice should say. Pure: the model call and the
  * script runner come in as functions, so this is table-tested in node.
  */
-import { parseCodemodeResponse } from "../../../configs/with-agents/agents/codemode-format.ts";
-import { DEFAULT_AGENT_SYSTEM_PROMPT } from "../../../configs/with-agents/agents/system-prompt.ts";
+import { parseCodemodeResponse } from "@iterate-com/agents/codemode-format";
+import { DEFAULT_AGENT_SYSTEM_PROMPT } from "@iterate-com/agents/system-prompt";
 
 // A website edit needs discovery, a candidate probe, publication and a live check;
 // the production recovery case alone took seven scripts. Allow bounded recovery

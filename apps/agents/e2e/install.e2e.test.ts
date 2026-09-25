@@ -1,12 +1,12 @@
 import { expect, test } from "vitest";
+import { installAgents } from "@iterate-com/agents/install";
 import { freshCtx, openItx, readAll, until } from "../../os/e2e/support/client.ts";
-import { agentRuntimeSource } from "../src/lib/agent-runtime-source.ts";
-import { installAgents } from "../../../configs/with-agents/agents/install.ts";
+import { agentsWorkspaceSource } from "./agents-source.ts";
 import { ScriptedAi, assistantWords, configureModel } from "./fixtures.ts";
 
 test("install and reinstall preserve existing agents, sandbox grants and conversation history", async () => {
   const itx = openItx(freshCtx("agents-install"));
-  const source = agentRuntimeSource;
+  const source = agentsWorkspaceSource;
   const oldSource = {
     ...source,
     "index.ts": `${source["index.ts"]}\n// previous release\n`,
@@ -50,7 +50,7 @@ test("install and reinstall preserve existing agents, sandbox grants and convers
 
 test("a removed agents rewrite can be installed again with the same runtime", async () => {
   const itx = openItx(freshCtx("agents-reinstall"));
-  const source = agentRuntimeSource;
+  const source = agentsWorkspaceSource;
   await installAgents(itx, source);
   const installed = await itx.rewriteRules.get("itx.agents");
   await itx.append({

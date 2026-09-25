@@ -1,6 +1,6 @@
 import { expect, test } from "vitest";
 import { reduceProcessor } from "iterate/stream/test-support";
-import { AgentProcessor } from "../../../../configs/with-agents/agents/processor.ts";
+import { AgentProcessor } from "@iterate-com/agents/processor";
 import {
   countActiveOrWaiting,
   orderAgents,
