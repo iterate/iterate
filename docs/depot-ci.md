@@ -864,10 +864,11 @@ Soaks of the e2e suite at `--retry=0` (`os-e2e-soak.yml`), every run redeployed 
 as soon as a gate without the version check passed, 7 of 48 runs had a row fail on a platform
 signature, 30 of their 39 rows "code was updated" (2026-09-24). Held 150 s instead (`--settle 150`),
 the deploy's start to the first test took 173 s at the median (p90 182 s). With the version check
-(2026-09-25, 11 runs) it took 42 s (p90 62 s): stale rounds held 6 of the 11 gates, for up to 42 s,
-every "code was updated" reset landed on a probe inside a gate, and no row failed on a platform
-signature. A storage reset or a dropped socket can still fail a row in any shape, and CI's one retry
-absorbs it.
+(2026-09-25, 17 runs, before and after the control plane moved to D1) it took 42 s (p90 72 s): stale
+rounds held 12 of the 17 gates, for up to 42 s, and every "code was updated" reset landed on a probe
+inside a gate. One row failed on a platform signature, a socket dropped 2 s after the gate with no
+trace on the Worker's side. A storage reset or a dropped socket can still fail a row in any shape,
+and CI's one retry absorbs it.
 
 - Each workflow's runs are serialized (`cancel-in-progress: false`), so no deploy lands under another
   run's tests.
