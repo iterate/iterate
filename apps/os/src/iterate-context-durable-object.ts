@@ -90,12 +90,31 @@ import type { ArtifactsNamespace } from "./context/cf-artifacts.ts";
 import { Residency } from "./context/residency.ts";
 import { SubscriptionDelivery, type DeliveryDeadline } from "./stream/subscription-delivery.ts";
 
-function parseIterateContextDurableObjectName(name: string | undefined) {
-  if (!name)
+/** WHO THIS CONTEXT IS: its name, when it was reached by name (every caller but one); reached by
+ *  id alone — the context sweep (scripts/ci/context-sweep.ts), which knows only the ids Cloudflare
+ *  lists — its own birth record, `itx/created { projectId, path }` at offset 1. A context with no
+ *  birth record and no name is nobody: refused, so no id alone ever mints one. */
+function iterateContextAddressOf(ctx: DurableObjectState) {
+  if (ctx.id.name) return DurableObjectNameCodec.parse(ctx.id.name);
+  let body: string | undefined;
+  try {
+    body = ctx.storage.sql
+      .exec<{ body: string }>("SELECT body FROM events WHERE offset = 1")
+      .toArray()[0]?.body;
+  } catch {
+    // no events table: an empty store
+  }
+  const born = body
+    ? (JSON.parse(body) as { type?: string; payload?: { projectId?: string; path?: string } })
+    : undefined;
+  if (born?.type !== "events.iterate.com/itx/created" || !born.payload?.projectId)
     throw new Error(
-      "IterateContextDurableObject must be addressed by name (reach it via getByName).",
+      "IterateContextDurableObject must be addressed by name (reach it via getByName); by id, only a context that was born answers.",
     );
-  return DurableObjectNameCodec.parse(name);
+  return DurableObjectNameCodec.address({
+    projectId: born.payload.projectId,
+    path: born.payload.path ?? "/",
+  });
 }
 
 /** ONE ALARM PASS, as the DO saw it — the payload of the ephemeral `itx/alarm-trace` event,
@@ -176,7 +195,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
 
   /** WHO THIS DO IS: the DO name parsed ONCE into `{ name, projectId, path }`. A context is only
    *  ever reached `getByName`; an id-addressed instance fails right here, before it can touch anything. */
-  readonly #durableObjectAddress = parseIterateContextDurableObjectName(this.ctx.id.name);
+  readonly #durableObjectAddress = iterateContextAddressOf(this.ctx);
   /** The roots with an implicit row HERE (itx-expression-rewriting.ts `implicitRootsAt`): every built-in at the
    *  resource owner's root, the context roots anywhere else. Fixed for the DO's life — a path is. */
   readonly #implicitRoots = implicitRootsAt(
@@ -417,6 +436,14 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   }
 
   #destroyed = false;
+
+  /** WHO THIS CONTEXT IS, for the context sweep, which reaches it by id: its project and path.
+   *  Records no wake, so it announces nothing: an orphan asked must not re-create the ancestors its
+   *  deleted project lost. */
+  identity(): { projectId: string; path: string } {
+    const { projectId, path } = this.#durableObjectAddress;
+    return { projectId, path };
+  }
 
   /** DESTROY THIS CONTEXT (the project deletion saga, project/processor.ts): every byte it holds
    *  goes — its log, its kv, its alarm, and every facet's storage with it (`deleteAll` deletes the
