@@ -3,9 +3,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Check, Copy } from "lucide-react";
 import { basicSetup, EditorView } from "codemirror";
-import { javascript } from "@codemirror/lang-javascript";
 import { json } from "@codemirror/lang-json";
-import { markdown } from "@codemirror/lang-markdown";
 import { yaml } from "@codemirror/lang-yaml";
 import { foldService } from "@codemirror/language";
 import { search, searchKeymap } from "@codemirror/search";
@@ -19,7 +17,9 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "./tooltip.tsx";
 
 export interface CodeBlockProps {
   code: string;
-  language: "typescript" | "markdown" | "yaml" | "json";
+  /** The language's CodeMirror support, and any folds of its own; the same instance on every
+   *  render, since a new one rebuilds the view. */
+  language: Extension;
   className?: string;
   /** False hides the gutter, fold arrows included. */
   showLineNumbers?: boolean;
@@ -28,7 +28,7 @@ export interface CodeBlockProps {
 }
 
 /** Read-only code with search, folding and a copy button: the agents app's scripts and model
- *  responses, and {@link SerializedObjectCodeBlock}'s data. */
+ *  responses (code-block.tsx gives it their grammars), and {@link SerializedObjectCodeBlock}'s data. */
 export function CodeBlock({
   code,
   language,
@@ -40,10 +40,9 @@ export function CodeBlock({
     () => [
       basicSetup,
       vsCodeLight,
-      languageSupport[language](),
       search({ top: true }),
       foldPromptBlocks(),
-      language === "yaml" || language === "json" ? foldBracketsAndDocComments() : [],
+      language,
       keymap.of(searchKeymap),
       EditorView.editable.of(false),
       EditorView.contentAttributes.of({ tabindex: "0" }),
@@ -83,7 +82,7 @@ export function SerializedObjectCodeBlock({
   return (
     <CodeBlock
       code={code}
-      language={format}
+      language={dataLanguages[format]}
       className={className}
       toolbar={
         <>
@@ -172,11 +171,9 @@ function CopyButton({ label, text }: { label: string; text: () => string }) {
   );
 }
 
-const languageSupport = {
-  typescript: () => javascript({ jsx: true, typescript: true }),
-  markdown: () => markdown(),
-  yaml: () => yaml(),
-  json: () => json(),
+const dataLanguages = {
+  yaml: [yaml(), foldBracketsAndDocComments()],
+  json: [json(), foldBracketsAndDocComments()],
 };
 
 function serializeData(data: unknown, format: "yaml" | "json") {

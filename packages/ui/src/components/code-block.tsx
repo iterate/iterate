@@ -6,11 +6,38 @@ import type { CodeBlockProps, SerializedObjectCodeBlockProps } from "./code-bloc
 // Keep CodeMirror (languages, theme, search) out of the server bundle: the
 // worker script has a 10 MiB upload limit and the editor only mounts in the
 // browser anyway. The type-only imports leave no runtime edge.
-const LazyCodeBlock = lazyClient((module) => module.CodeBlock);
-const LazySerializedObjectCodeBlock = lazyClient((module) => module.SerializedObjectCodeBlock);
+const LazyCodeBlock: ComponentType<SourceCodeBlockProps> = import.meta.env.SSR
+  ? () => null
+  : lazy(async () => {
+      // The grammars load with CodeBlock alone: markdown brings html, css and javascript, which
+      // serialized data's chunk (yaml, json) would otherwise carry to the dash's event inspector.
+      const [{ CodeBlock }, { javascript }, { markdown }] = await Promise.all([
+        import("./code-block.client.tsx"),
+        import("@codemirror/lang-javascript"),
+        import("@codemirror/lang-markdown"),
+      ]);
+      const languages = {
+        typescript: javascript({ jsx: true, typescript: true }),
+        markdown: markdown(),
+      };
+      return {
+        default: ({ language, ...props }: SourceCodeBlockProps) => (
+          <CodeBlock {...props} language={languages[language]} />
+        ),
+      };
+    });
+const LazySerializedBlock: ComponentType<SerializedObjectCodeBlockProps> = import.meta.env.SSR
+  ? () => null
+  : lazy(async () => ({
+      default: (await import("./code-block.client.tsx")).SerializedObjectCodeBlock,
+    }));
+
+type SourceCodeBlockProps = Omit<CodeBlockProps, "language" | "toolbar"> & {
+  language: "typescript" | "markdown";
+};
 
 /** Read-only code with search, folding and a copy button (code-block.client.tsx). */
-export function CodeBlock(props: CodeBlockProps) {
+export function CodeBlock(props: SourceCodeBlockProps) {
   return (
     <Suspense fallback={<CodeBlockFallback className={props.className} />}>
       <LazyCodeBlock {...props} />
@@ -22,7 +49,7 @@ export function CodeBlock(props: CodeBlockProps) {
 export function SerializedObjectCodeBlock(props: SerializedObjectCodeBlockProps) {
   return (
     <Suspense fallback={<CodeBlockFallback className={props.className} />}>
-      <LazySerializedObjectCodeBlock {...props} />
+      <LazySerializedBlock {...props} />
     </Suspense>
   );
 }
@@ -36,12 +63,4 @@ function CodeBlockFallback({ className }: { className?: string }) {
       </div>
     </div>
   );
-}
-
-function lazyClient<Props>(
-  pick: (module: typeof import("./code-block.client.tsx")) => ComponentType<Props>,
-): ComponentType<Props> {
-  return import.meta.env.SSR
-    ? () => null
-    : lazy(async () => ({ default: pick(await import("./code-block.client.tsx")) }));
 }
