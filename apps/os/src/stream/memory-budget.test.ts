@@ -131,11 +131,11 @@ const rows: {
     facts: { deltasRefused: 0 },
     bounds: [["deltasCommitted", ">=", 5]],
   },
-  // CONTROL, once a pin: a 12 MiB projection's every delta is a whole-array replace, and while the
-  // append ceiling measured ephemerals too every delta was refused (EVENT_TOO_LARGE, swallowed by
-  // LiveState.set as a "lost notification" — the watcher got nothing, not even a chain gap). The
-  // ceiling now measures only what is STORED; an ephemeral rides the pending-push budget instead. The
-  // diff cost per set (stringify + parse of both sides, ~6× the projection transient) stays.
+  // A 12 MiB projection's every delta is a whole-array replace past the append ceiling. The ceiling
+  // measures only what is STORED and an ephemeral delta rides the pending-push budget instead, so none
+  // is refused: a refused delta is swallowed by LiveState.set as a "lost notification", and the
+  // watcher gets nothing, not even a chain gap. Each set still costs its diff (stringify + parse of
+  // both sides, ~6× the projection transient).
   {
     name: "live state: a 12 MiB projection still emits its deltas — an ephemeral is never stored, so the append ceiling does not apply to it",
     scenario: "live-state-large-projection",
@@ -150,9 +150,9 @@ const rows: {
     args: { ...STUCK_ROWS_20, disjointTypes: 0 },
     bounds: [["callsStarted", ">=", 20]], // every row called (a 16 MiB log is two pages a row)
   },
-  // BORN RED (oom): the pending budget was PER ROW — 20 stuck rows on 20 disjoint event types kept
-  // 8 MiB of undelivered pushes EACH, 160 MiB in one isolate. Flipped by the per-context ledger
-  // (PENDING_PUSHES_TOTAL_BUDGET_CHARS across rows + DELIVERY_IN_FLIGHT_BUDGET_CHARS across calls).
+  // The pending budget is the context's, not each row's: 20 stuck rows on 20 disjoint event types at
+  // 8 MiB of undelivered pushes each would be 160 MiB in one isolate. PENDING_PUSHES_TOTAL_BUDGET_CHARS
+  // bounds them across rows, and DELIVERY_IN_FLIGHT_BUDGET_CHARS across calls.
   {
     name: "delivery backlog × rows: 20 stuck facet rows on DISJOINT event types share ONE pending budget and ONE in-flight budget — never 20 × 8 MiB",
     scenario: "stuck-facet-rows",
@@ -164,11 +164,11 @@ const rows: {
     args: { ...CURSOR_ROWS_BEHIND_16_MIB, rowCount: 4 },
     bounds: [["callsStarted", ">=", 4]], // every row called (a page may split under the read budget)
   },
-  // BORN RED (oom): one commit drained every behind cursor row at once, each holding a budgeted page
-  // across its awaited call — 20 rows was 160 MiB. Flipped by the in-flight ledger: a cursor delivery
-  // waits for room, so the rows drain a few at a time (`maxCallsInFlight` says how many; the callees
-  // here answer after 250 ms). The rows are behind the natural way — a fresh incarnation whose cursors
-  // were never acked — and the commit is one small append.
+  // One commit wakes every behind cursor row, and each holds a budgeted page across its awaited call:
+  // 20 at once would be 160 MiB. A cursor delivery waits for room in the in-flight ledger, so the rows
+  // drain a few at a time (`maxCallsInFlight` says how many; the callees here answer after 250 ms).
+  // The rows are behind the natural way — a fresh incarnation whose cursors were never acked — and
+  // the commit is one small append.
   {
     name: "cursor rows: 20 behind cursor rows and ONE commit — the commit path drains them under the in-flight budget, never a page per row at once",
     scenario: "cursor-rows-behind-one-commit",
@@ -184,11 +184,10 @@ const rows: {
     args: { ...CURSOR_ROWS_EPHEMERALS_FROM_RING, rowCount: 2, batchCount: 4 },
     bounds: [["callsStarted", ">=", 1]],
   },
-  // BORN RED (oom): the loop remembered ONE pushed batch per cursor row outside every budget — the
-  // pending fold bounded, the in-flight ledgers bounded, this second copy bounded by nothing but the
-  // row count (160 rows × 900 KiB is 140 MiB). Flipped by reading a cursor row's ephemerals from the
-  // stream's recent-ephemerals ring (1 MiB) under the cursor-read budget: a row waiting for room holds
-  // nothing, so what is retained is the in-flight batches (8 MiB) and the ring, whatever the row count.
+  // A cursor row reads its ephemerals from the stream's recent-ephemerals ring (1 MiB) under the
+  // cursor-read budget, and a row waiting for room holds nothing, so what is retained is the in-flight
+  // batches (8 MiB) and the ring, whatever the row count. A pushed batch kept per row would be bounded
+  // by nothing but the row count: 160 rows × 900 KiB is 140 MiB.
   {
     name: "cursor rows: 160 cursor rows fed 900 KiB ephemerals retain the ring and the in-flight batches, never a batch per row",
     scenario: "cursor-rows-ephemerals-from-ring",
