@@ -600,7 +600,7 @@ export class ControlPlaneDatabase {
       orgId: project.orgId,
       userId: guard.actorId,
     });
-    const refusal = ownerRefusal(organization ?? undefined, guard, "delete a project of");
+    const refusal = ownerRefusal(organization || undefined, guard, "delete a project of");
     if (refusal) throw refusal;
     return project;
   }

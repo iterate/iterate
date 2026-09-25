@@ -6,14 +6,7 @@ import { expect, test } from "vitest";
 import { env } from "cloudflare:workers";
 import type { StreamEvent } from "iterate/stream/processor";
 import { CONTEXT_DESTROYED } from "../src/context/paths.ts";
-import {
-  adminCredentials,
-  controlPlane,
-  openSession,
-  refused,
-  stub,
-  until,
-} from "./support.ts";
+import { adminCredentials, controlPlane, openSession, refused, stub, until } from "./support.ts";
 
 test("deleting a project drops its row at once, then destroys every context it announced, its kv, and its root last", async () => {
   const admin = (await openSession()).authenticate(adminCredentials());
