@@ -18,7 +18,7 @@ test("fetch expression headers preserve Unicode worker source through the HTTP B
   const expression: ItxExpression = [
     "itx",
     "workers",
-    ["get", { source: { "cap.js": 'return "東京 🌍 café";' } }],
+    ["get", { source: { "worker.js": 'return "東京 🌍 café";' } }],
   ];
   const headers = new Headers({ "x-itx-expression": encodeFetchExpression(expression) });
   expect(JSON.parse(headers.get("x-itx-expression")!)).toEqual(expression);

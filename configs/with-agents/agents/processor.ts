@@ -1,4 +1,4 @@
-// runtime/processor.ts — THE AGENT PROCESSOR: the pure reduce of the creation and deletion facts,
+// agents/processor.ts — THE AGENT PROCESSOR: the pure reduce of the creation and deletion facts,
 // the conversation and the loop's obligations, and the effects over that fold — THE SAGAS (the birth
 // `itx.agents.create(path)` opens: the certificate on `/` and here with the default prompt beside it;
 // the death `itx.agents.delete(path)` opens: the certificate on `/` and here, after which the loop
@@ -34,7 +34,6 @@ import type { WithItx } from "iterate/sdk";
 import type { RewriteRuleListEntry } from "iterate/api";
 import type { ItxScope as ItxEntrypointScope } from "iterate/sdk";
 import type { RunSettlement } from "iterate/stream/run";
-import { bytesToBase64 } from "@iterate-com/shared/base64";
 import {
   AgentContract,
   type AgentState,
@@ -49,6 +48,14 @@ import { parseCodemodeResponse } from "./codemode-format.ts";
  *  property of the code, not of a deployment. */
 const AI_GATEWAY_ID = "default";
 import { DEFAULT_AGENT_SYSTEM_PROMPT } from "./system-prompt.ts";
+
+/** Bytes to base64, chunked so a long buffer cannot overflow the call stack's argument list. */
+function bytesToBase64(bytes: Uint8Array): string {
+  let binary = "";
+  for (let index = 0; index < bytes.length; index += 0x8000)
+    binary += String.fromCharCode(...bytes.subarray(index, index + 0x8000));
+  return btoa(binary);
+}
 
 /** The failure backoff, folded into the debounce window: doubling from the policy's base per
  *  consecutive failure, capped at its ceiling; nothing after a success. */

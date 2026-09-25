@@ -10,7 +10,7 @@ import { getPropertyName } from "./ast.ts";
 type AstNode = { type: string; parent?: AstNode; [key: string]: any };
 
 const MESSAGE =
-  "Reach the context through withItx: `withItx(this.env.ITX, (itx) => …)` from ./processor.js, or `this.withItx(fn)` on an SDK host (ConfigWorker, StreamProcessorDurableObject); an object that needs reach takes a `WithItx` accessor. A raw ITX.get() hands out a scope nothing releases, and whatever is kept from it keeps its context, and any facet holding it, resident after the context is evicted (apps/os/docs/residency.md).";
+  "Reach the context through withItx: `withItx(this.env.ITX, (itx) => …)` from iterate/sdk, or `this.withItx(fn)` on an SDK host (ConfigWorker, StreamProcessorDurableObject); an object that needs reach takes a `WithItx` accessor. A raw ITX.get() hands out a scope nothing releases, and whatever is kept from it keeps its context, and any facet holding it, resident after the context is evicted (apps/os/docs/residency.md).";
 
 const LIVE_ANSWER =
   "This withItx callback answers a live value (the scope, a property of it, or an `itx.cd(path)` handle), and withItx releases it before the caller gets it. Answer data (`(await itx.cd(path).whoami()).path`); an object that needs reach takes a `WithItx` accessor and makes its own round trips.";
@@ -44,10 +44,10 @@ export const noRawItxGetRule: StrictRule = {
       ReturnStatement(node) {
         report(liveAnswerOfReturn(node as unknown as AstNode), LIVE_ANSWER);
       },
-      // A module handed over as source text: a `"cap.js": …` entry of a module map (a string, a
-      // template, `String.raw`, or a const holding one), or a template marked `/* js */`.
+      // A module handed over as source text: a `"worker.js": …` (or `.ts`) entry of a source's files
+      // (a string, a template, `String.raw`, or a const holding one), or a template marked `/* js */`.
       Property(node) {
-        if (!getPropertyName(node.key)?.endsWith(".js")) return;
+        if (!/\.(js|ts)$/.test(getPropertyName(node.key) ?? "")) return;
         let value = unwrap(node.value as unknown as AstNode);
         if (value.type === "Identifier") value = constInit(context, value) ?? value;
         if (isModuleText(value)) embeddedModules.add(value);

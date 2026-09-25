@@ -1,7 +1,7 @@
-// sdk/index.ts — THE userspace SDK surface, bundled (zod included — the owner's call) into every
-// loaded isolate as `processor.js` (apps/os/scripts/build.ts bundles it):
+// sdk/index.ts — THE userspace SDK surface (zod re-exported — the owner's call). A loaded worker
+// imports it by name and the loader links this deployment's own build of it (apps/os/scripts/build.ts):
 //
-//   import { StreamProcessor, StreamProcessorDurableObject, defineProcessorContract, z } from "./processor.js";
+//   import { StreamProcessor, StreamProcessorDurableObject, defineProcessorContract, z } from "iterate/sdk";
 //
 // The workerd HOSTS live here too (this file imports cloudflare:workers; the Node unit tests never import it):
 //   FacetDurableObject           — the `DurableObject` shell a context hosts as a facet: its class lists
@@ -127,9 +127,10 @@ export abstract class FacetDurableObject<Env = unknown> extends DurableObject<En
 /** The itx scope `withItx` hands its callback: a context's declared API (api.ts) — a capnweb stub
  *  of apps/os's `IterateContextRpcTarget`, which satisfies it. */
 export type ItxScope = IterateContextApi;
-/** What hands the scope over: the loopback entrypoint a loaded worker has as `env.ITX`, or the one a
- *  class of the platform's own worker mints from `ctx.exports`. */
-export type ItxEntrypointService = { get(): ItxScope };
+/** What hands the scope over — a loaded worker's `env.ITX`, or the loopback a class of the platform's
+ *  own worker mints from `ctx.exports`: `get()` its scope, or `fetch` a request through the
+ *  context's dispatch (a fetch route's target, the `x-itx-expression` header). */
+export type ItxEntrypointService = { get(): ItxScope; fetch(request: Request): Promise<Response> };
 /** The least a host needs of its scope: the fixed-point log calls the engine makes. The platform's own
  *  facets pass the Workers-RPC STUB of a context (every dotted step pipelined; a property there is a
  *  promise), which no plain-promise interface can name — so the constraint is this, not `ItxScope`. */

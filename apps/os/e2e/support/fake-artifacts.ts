@@ -10,8 +10,8 @@
 // what the repo facet's memo avoids. The remote's own side — `remoteTip`, `remoteFiles`,
 // `pushFromOutside` — is for a test's eyes, and is never on the real proxy.
 import { RpcTarget } from "capnweb";
+import type { RepoFileChange } from "iterate/api";
 import { repoArtifactName, repoPathOf } from "../../src/context/cf-artifacts.ts";
-import type { RepoFileChange } from "../../src/repo/durable-object.ts";
 import { FakeGitServer } from "./fake-git-server.ts";
 
 /** What the fake's `get(path)` hands back — an `RpcTarget` like the real `ScopedArtifactRepoRpcTarget`, so it

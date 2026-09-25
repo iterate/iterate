@@ -17,9 +17,9 @@ test("a first-party name hosts its exported class with no source; other names ne
   expect(facetSpecFromHostingTarget(target(["get", "presence"]))).toBeUndefined();
   expect(
     facetSpecFromHostingTarget(
-      target(["get", "presence", { source: { "cap.js": "export {}" }, className: "P" }]),
+      target(["get", "presence", { source: { "worker.js": "export {}" }, className: "P" }]),
     ),
-  ).toEqual({ name: "presence", source: { "cap.js": "export {}" }, className: "P" });
+  ).toEqual({ name: "presence", source: { "worker.js": "export {}" }, className: "P" });
 });
 
 const target = (getStep: unknown[]): ItxExpression =>

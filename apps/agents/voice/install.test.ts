@@ -3,7 +3,7 @@ import { ensureVoiceAgent } from "./install.ts";
 
 const workerKey = `kit/voice/${"a".repeat(64)}/worker.js`;
 const bundle = {
-  agentsRuntime: "agents",
+  agentsRuntime: { "index.ts": "agents" },
   files: { [workerKey]: "worker" },
   workerKey,
   cacheKey: `voice-worker:${"a".repeat(64)}`,

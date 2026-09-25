@@ -67,8 +67,8 @@ test("a processor no row pushes reads its log on every read — the host's word 
  *  every round trip it makes is a catch-up's read of the log. */
 const COUNTING_TALLY_SPEC = {
   source: {
-    "cap.js": /* js */ `
-import { StreamProcessor, StreamProcessorDurableObject, defineProcessorContract, z } from "./processor.js";
+    "worker.js": /* js */ `
+import { StreamProcessor, StreamProcessorDurableObject, defineProcessorContract, z } from "iterate/sdk";
 const contract = defineProcessorContract({
   slug: "tally",
   version: "1.0.0",

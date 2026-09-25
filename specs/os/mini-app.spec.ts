@@ -56,7 +56,11 @@ export default class extends WorkerEntrypoint {
   await fixture.itx.append({
     type: "events.iterate.com/itx/ingress-configured",
     payload: {
-      target: ["itx", "workers", ["get", { source: { "cap.js": router, "mini-app.js": miniApp } }]],
+      target: [
+        "itx",
+        "workers",
+        ["get", { source: { "worker.js": router, "mini-app.js": miniApp } }],
+      ],
     },
   });
 

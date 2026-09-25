@@ -28,7 +28,7 @@ import { releasePins, stub, until } from "./support.ts";
 /** A facet with in-memory state only: a call counter and a per-instance id. A restart shows as
  *  `calls` back to 1 and a new `instance`. */
 const HELLO_SRC = /* js */ `
-import { FacetDurableObject } from "./processor.js";
+import { FacetDurableObject } from "iterate/sdk";
 export class Hello extends FacetDurableObject {
   static publicMethods = [...super.publicMethods, "hello"];
   calls = 0;
@@ -36,13 +36,13 @@ export class Hello extends FacetDurableObject {
   hello() { this.calls++; return { calls: this.calls, instance: this.instance }; }
 }
 `;
-const HELLO_SPEC = { source: { "cap.js": HELLO_SRC }, className: "Hello" };
+const HELLO_SPEC = { source: { "worker.js": HELLO_SRC }, className: "Hello" };
 
 /** A hosted PUSH target that counts what the delivery loop hands it — the two verbs the loop calls
  *  on a facet row (subscription-delivery.ts): `catchUpFromLog` once at enable, `processEventBatch`
  *  per batch. In-memory tallies, read back through `stats()`. */
 const TALLY_SRC = /* js */ `
-import { FacetDurableObject } from "./processor.js";
+import { FacetDurableObject } from "iterate/sdk";
 export class Tally extends FacetDurableObject {
   static publicMethods = [...super.publicMethods, "stats"];
   batches = 0;
@@ -97,7 +97,7 @@ test("20 durable events pushed to a hosted facet's processEventBatch add no LOAD
       target: [
         "itx",
         "facets",
-        ["get", "tally", { source: { "cap.js": TALLY_SRC }, className: "Tally" }],
+        ["get", "tally", { source: { "worker.js": TALLY_SRC }, className: "Tally" }],
         "processEventBatch",
       ],
     },

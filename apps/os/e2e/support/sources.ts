@@ -1,16 +1,30 @@
 // e2e/support/sources.ts — the demo module sources the E2E tests hand over INLINE. A source IS the
-// worker's modules (module name → code, `"cap.js"` is the main module); nothing is seeded anywhere,
+// worker's files (path → code, the entry `worker.ts` or `worker.js`); nothing is seeded anywhere,
 // there is no producer to fetch it. Each test names the fixture it uses:
 //   ...source: SOURCES.site...
 
-import PRESENCE_PROCESSOR_SOURCE from "../../src/generated/presence-processor-source.js";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import type { WorkerSource } from "../../src/context/worker-loader.ts";
+
+/** The presence facet as its TypeScript source files, handed over exactly like user code: the host
+ *  (durable-object.ts) is the entry, its siblings ride under their own names. */
+const presenceFile = (name: string) =>
+  readFileSync(
+    fileURLToPath(new URL(`../../src/client/presence/${name}`, import.meta.url).href),
+    "utf8",
+  );
+const PRESENCE_SOURCE: WorkerSource = {
+  "worker.ts": presenceFile("durable-object.ts"),
+  "processor.ts": presenceFile("processor.ts"),
+  "contract.ts": presenceFile("contract.ts"),
+};
 
 /** THE fixture sources, keyed by fixture NAME — each value is the worker's modules, handed over
  *  literally at every load site (`itx.workers.get({ source: SOURCES.probe })`, `facets.get(name, { source: … })`). */
 export const SOURCES: Record<string, WorkerSource> = {
   chatroom: {
-    "cap.js": `import { FacetDurableObject, LiveState, withItx } from "./processor.js";
+    "worker.js": `import { FacetDurableObject, LiveState, withItx } from "iterate/sdk";
 export class ChatroomDurableObject extends FacetDurableObject {
   static publicMethods = [...super.publicMethods, "post", "state"];
   #chat = new LiveState({ append: (e) => withItx(this.env.ITX, (itx) => itx.append(e)) }, "chat", { messages: [] });
@@ -22,7 +36,7 @@ export class ChatroomDurableObject extends FacetDurableObject {
 }`,
   },
   probe: {
-    "cap.js": `import { WorkerEntrypoint } from "cloudflare:workers";
+    "worker.js": `import { WorkerEntrypoint } from "cloudflare:workers";
 export default class Probe extends WorkerEntrypoint {
   async run(v, cb) {
     return {
@@ -33,7 +47,7 @@ export default class Probe extends WorkerEntrypoint {
 }`,
   },
   keeper: {
-    "cap.js": `import { FacetDurableObject } from "./processor.js";
+    "worker.js": `import { FacetDurableObject } from "iterate/sdk";
 export class KeeperDurableObject extends FacetDurableObject {
   static publicMethods = [...super.publicMethods, "stash", "useStashed", "started"];
   startedAt = Date.now();
@@ -53,8 +67,8 @@ export class KeeperDurableObject extends FacetDurableObject {
   // stream calls at-least-once from a cursor it keeps (resolving IS the ack; throwing ⇒ retry;
   // `retryable: false` ⇒ halt now).
   digest: {
-    "cap.js": `import { WorkerEntrypoint } from "cloudflare:workers";
-import { withItx } from "./processor.js";
+    "worker.js": `import { WorkerEntrypoint } from "cloudflare:workers";
+import { withItx } from "iterate/sdk";
 export default class Digest extends WorkerEntrypoint {
   async processEventBatch(events, range) {
     const poison = events.find((e) => e.payload && e.payload.poison);
@@ -71,7 +85,7 @@ export default class Digest extends WorkerEntrypoint {
 }`,
   },
   chunky: {
-    "cap.js": `import { StreamProcessor, StreamProcessorDurableObject, defineProcessorContract, z } from "./processor.js";
+    "worker.js": `import { StreamProcessor, StreamProcessorDurableObject, defineProcessorContract, z } from "iterate/sdk";
 const contract = defineProcessorContract({
   slug: "chunky",
   version: "1.0.0",
@@ -93,9 +107,9 @@ export class ChunkyDurableObject extends StreamProcessorDurableObject {
 }`,
   },
   // The presence processor (reduced ⊕ runtime) — the hosted demo's source, shared (src/client).
-  presence: PRESENCE_PROCESSOR_SOURCE,
+  presence: PRESENCE_SOURCE,
   "user-tally": {
-    "cap.js": `import { StreamProcessor, StreamProcessorDurableObject, defineProcessorContract, z } from "./processor.js";
+    "worker.js": `import { StreamProcessor, StreamProcessorDurableObject, defineProcessorContract, z } from "iterate/sdk";
 const contract = defineProcessorContract({
   slug: "user-tally",
   version: "1.0.0",
@@ -117,7 +131,7 @@ export class UserTallyDurableObject extends StreamProcessorDurableObject {
   // The facet-spine demo processor: counts every durable event
   // by type. A userspace class like any other — there are no built-in processors.
   tally: {
-    "cap.js": `import { StreamProcessor, StreamProcessorDurableObject, defineProcessorContract, z } from "./processor.js";
+    "worker.js": `import { StreamProcessor, StreamProcessorDurableObject, defineProcessorContract, z } from "iterate/sdk";
 const contract = defineProcessorContract({
   slug: "tally",
   version: "1.0.0",
@@ -142,7 +156,7 @@ export class TallyDurableObject extends StreamProcessorDurableObject {
   // trips the stream by appending itx/paused with the breaker's reason, keyed so a replay can never
   // double-pause. Core knows nothing about it — the pause check reads the reduced `paused` slice.
   breaker: {
-    "cap.js": `import { StreamProcessor, StreamProcessorDurableObject, defineProcessorContract, z } from "./processor.js";
+    "worker.js": `import { StreamProcessor, StreamProcessorDurableObject, defineProcessorContract, z } from "iterate/sdk";
 const CAPACITY = 5; // tokens the bucket holds
 const REFILL_PER_SECOND = 1; // tokens restored per second of EVENT time
 const CONTROL = new Set([
@@ -188,8 +202,8 @@ export class BreakerDurableObject extends StreamProcessorDurableObject {
   // `newWorkersRpcResponse` export (library-connectors.e2e) and, through `path()`,
   // that the host's `/<path>` reaches the service verbatim.
   capnwebServer: {
-    "cap.js": `import { WorkerEntrypoint, RpcTarget } from "cloudflare:workers";
-import { newWorkersRpcResponse } from "./processor.js";
+    "worker.js": `import { WorkerEntrypoint, RpcTarget } from "cloudflare:workers";
+import { newWorkersRpcResponse } from "iterate/sdk";
 class Api extends RpcTarget {
   #path;
   constructor(path) { super(); this.#path = path; }
@@ -203,7 +217,7 @@ export default class CapnwebServer extends WorkerEntrypoint {
 }`,
   },
   site: {
-    "cap.js": `import { WorkerEntrypoint } from "cloudflare:workers";
+    "worker.js": `import { WorkerEntrypoint } from "cloudflare:workers";
 export default class Site extends WorkerEntrypoint {
   async fetch(request) {
     if ((request.headers.get("Upgrade") || "").toLowerCase() === "websocket") {

@@ -66,7 +66,7 @@ const claimOf = (ctx: string, facet: string) =>
 
 /** A userspace processor that records each `revive()` in its own SQLite before the engine runs it. */
 const REVIVE_COUNTER_SRC = /* js */ `
-import { StreamProcessor, StreamProcessorDurableObject, defineProcessorContract, z } from "./processor.js";
+import { StreamProcessor, StreamProcessorDurableObject, defineProcessorContract, z } from "iterate/sdk";
 const contract = defineProcessorContract({
   slug: "revivecounter",
   version: "1.0.0",
@@ -111,7 +111,7 @@ async function hostedOn(ctx: string) {
         [
           "get",
           name,
-          { source: { "cap.js": REVIVE_COUNTER_SRC }, className: "ReviveCounterDurableObject" },
+          { source: { "worker.js": REVIVE_COUNTER_SRC }, className: "ReviveCounterDurableObject" },
         ],
         "processEventBatch",
       ],

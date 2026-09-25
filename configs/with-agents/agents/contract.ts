@@ -1,4 +1,4 @@
-// runtime/contract.ts — AN AGENT: a domain object on the context at any path (`/agents/<name>` by
+// agents/contract.ts — AN AGENT: a domain object on the context at any path (`/agents/<name>` by
 // convention) — a conversation driven by a model that acts by writing scripts against that
 // context's `itx`. Its facts live on that path's log, and THIS FILE is the only place they are
 // spelled. The rest of the folder derives from it: processor.ts reduces these events, runs the

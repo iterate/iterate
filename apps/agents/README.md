@@ -5,9 +5,10 @@ and storage; this app owns the agent catalog, lifecycle, model loop, sandbox set
 `itx.agents` is a durable rewrite to the installed collection facet, not a platform built-in.
 
 - `src/` — the web app: chat, attachments, live state, events and traces.
-- `runtime/` — the collection and agent processors, loaded through the public `iterate/sdk`.
+- `configs/with-agents/agents/` (outside this folder) — the collection and agent processors, the
+  runtime's only source; `runtime/processor.test.ts` is the processor's spec.
 - `voice/` — the voice relay, delegate, screen renderer and their tests.
-- `scripts/` — runtime bundling and voice call/device tools.
+- `scripts/` — the voice installer build and voice call/device tools.
 - `e2e/` and `__workers-tests__/` — integration tests using apps/os's generic worker harness.
 
 Choose **With agents** when creating a project, or open this app on a minimal project and click
@@ -21,8 +22,7 @@ denied capability introspection advertises no tools to the model. To allow scrip
 explicit `run` grant and grant `rewriteRules.list` so the model can inspect its allowed capabilities.
 Mask the sandbox's specific `itx.agents` grant too when denying access to the collection.
 
-`pnpm runtime:build` rebuilds the committed runtime in `configs/with-agents/agents.js`.
-After changing runtime code, rebuild before testing the template or web installer. Installation also rebinds existing normal agents to the current runtime; their grants and
+The loader runs the runtime as written (TypeScript, no bundle). Installation also rebinds existing normal agents to the current runtime; their grants and
 history are retained. Reinstalling is safe. Existing projects are not silently migrated by a platform deployment.
 
 `pnpm test` runs app unit tests. From the repository root, integration tests run with:

@@ -3,7 +3,7 @@
  * `delegation-requested` and speaks `thinking-added`/`commentary-added`; the delegate (voice-delegate.ts)
  * answers the one with the others. Declared once so the two contracts cannot drift apart.
  */
-import { z } from "./processor.js";
+import { z } from "iterate/sdk";
 
 /** The device's call identity: the press mints it, the frames carry it. */
 export const Activation = z.string().min(1).max(64);

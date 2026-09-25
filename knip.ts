@@ -21,10 +21,6 @@ export default {
     "duplicates",
   ],
   ignoreIssues: {
-    // apps/agents' runtime:build output and the config templates' workers: the platform injects
-    // ./processor.js when it loads them.
-    "configs/with-agents/agents.js": ["unresolved"],
-    "configs/*/worker.ts": ["unresolved"],
     // The types it names resolve from each extending app's own dependencies.
     "tsconfig.app.json": ["unlisted", "unresolved"],
   },
@@ -91,11 +87,9 @@ export default {
       ignoreDependencies: ["cloudflare", "tailwindcss"],
     },
     "apps/agents": {
-      // scripts/build-runtime.ts bundles runtime/index.ts into the with-agents template;
       // scripts/build-voice-install.ts bundles the voice entries into the installer.
       entry: [
         "scripts/**/*.ts",
-        "runtime/index.ts",
         "voice/{voice-agent,voice-delegate,worker}.ts",
         "e2e/**/*.e2e.test.ts",
         "__workers-tests__/**/*.test.ts",

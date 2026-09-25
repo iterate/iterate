@@ -426,8 +426,8 @@ test("beginOAuth, public client (RFC 7591 registration, PKCE alone, client_id in
  *  project's secret through its own `env.ITX` (the key never enters the app) and records what it
  *  accepted. */
 const WEBHOOK_RECEIVER = {
-  "cap.js": `import { WorkerEntrypoint } from "cloudflare:workers";
-import { withItx } from "./processor.js";
+  "worker.js": `import { WorkerEntrypoint } from "cloudflare:workers";
+import { withItx } from "iterate/sdk";
 export default class WebhookReceiver extends WorkerEntrypoint {
   async fetch(request) {
     const payload = await request.text();

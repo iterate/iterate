@@ -1,11 +1,12 @@
 import { Buffer } from "node:buffer";
 import { URL } from "node:url";
 import { createHash } from "node:crypto";
-import { readFile, writeFile } from "node:fs/promises";
+import { readdir, readFile, writeFile } from "node:fs/promises";
 import { build } from "esbuild";
-import { buildAgentRuntime, injectedSdk } from "./build-runtime.ts";
 
-/** The three voice bundles as the installer ships them; the deployed voice e2e test loads the same. */
+/** The three voice bundles as the installer ships them; the deployed voice e2e test loads the same.
+ *  `iterate/*` and `zod` stay bare imports: the loader links them to the platform's SDK build, as it
+ *  does for any user worker. */
 export async function bundleVoiceSources(): Promise<{
   voiceAgent: string;
   voiceDelegate: string;
@@ -21,8 +22,7 @@ export async function bundleVoiceSources(): Promise<{
         platform: "neutral",
         target: "es2022",
         loader: { ".md": "text" },
-        external: ["./processor.js", "cloudflare:workers"],
-        plugins: [injectedSdk],
+        external: ["cloudflare:workers", "zod", "iterate", "iterate/*"],
         logLevel: "silent",
       });
       const code = result.outputFiles[0]?.text;
@@ -31,6 +31,18 @@ export async function bundleVoiceSources(): Promise<{
     }),
   );
   return { voiceAgent: voiceAgent!, voiceDelegate: voiceDelegate!, worker: worker! };
+}
+
+/** The agents runtime as `installAgents` takes it: configs/with-agents/agents' `.ts` files by name
+ *  (src/lib/agent-runtime-source.ts globs the same for code Vite transforms; a vite.config is not). */
+async function readAgentRuntimeSource(): Promise<Record<string, string>> {
+  const folder = new URL("../../../configs/with-agents/agents/", import.meta.url);
+  const names = (await readdir(folder)).filter((name) => name.endsWith(".ts"));
+  return Object.fromEntries(
+    await Promise.all(
+      names.map(async (name) => [name, await readFile(new URL(name, folder), "utf8")]),
+    ),
+  );
 }
 
 /** Build the same hosted processors the devices call, with immutable project KV keys. */
@@ -47,7 +59,7 @@ export async function buildVoiceInstall() {
   return createVoiceInstall({
     ...(await bundleVoiceSources()),
     fontCss,
-    agentsRuntime: await buildAgentRuntime(),
+    agentsRuntime: await readAgentRuntimeSource(),
   });
 }
 
@@ -57,7 +69,7 @@ export function createVoiceInstall(sources: {
   voiceDelegate: string;
   worker: string;
   fontCss: string;
-  agentsRuntime: string;
+  agentsRuntime: Record<string, string>;
 }) {
   const files: Record<string, string> = {};
   const add = (name: string, source: string) => {

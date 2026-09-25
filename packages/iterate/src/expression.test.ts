@@ -71,13 +71,13 @@ test.each(COMMENTED)("comments inside call args: $spelled parses", ({ spelled, p
 });
 
 test("a string expression over the char limit is refused, coded, before any parsing; the parsed form carries the same thing", () => {
-  const big = `itx.workers.get({ source: { "cap.js": ${JSON.stringify("x".repeat(3000))} } })`;
+  const big = `itx.workers.get({ source: { "worker.js": ${JSON.stringify("x".repeat(3000))} } })`;
   expect(() => parse(big)).toThrowError(/EXPRESSION_TOO_LONG|over the 2048-char limit/);
   expect(
     normalizedItxExpression([
       "itx",
       "workers",
-      ["get", { source: { "cap.js": "x".repeat(3000) } }],
+      ["get", { source: { "worker.js": "x".repeat(3000) } }],
     ]),
   ).toHaveLength(3);
 });

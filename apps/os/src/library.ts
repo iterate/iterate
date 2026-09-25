@@ -11,7 +11,6 @@ import { codedError, errorCode, resolveContextPath, withTimeout } from "iterate/
 import type { EventInput, StreamEvent } from "iterate/stream/processor";
 import type { RunSettled, RunSettlement } from "iterate/stream/run";
 import type { Caller } from "./caller.ts";
-import WITH_ITX_MODULE from "./generated/with-itx-module.js";
 import type { BuiltInScope } from "./context/built-ins.ts";
 import { RepoContract } from "./repo/contract.ts";
 import type { RepoDurableObject, repoVerbs } from "./repo/durable-object.ts";
@@ -244,15 +243,15 @@ export function buildLibrary(
 export const RUN_DEADLINE_MS = 10 * 60_000;
 
 /** The module `run` loads: `script` spliced in as `const script = (…)`, run inside ONE `withItx`
- *  round trip (the SDK's, bundled alone as `with-itx.js`: a script's isolate never loads the whole
- *  SDK) and raced against the deadline. Its value becomes JSON inside the round trip: the log carries
+ *  round trip (`iterate/with-itx`, the platform's ~1.5 KB module: a script's isolate never loads the
+ *  whole SDK) and raced against the deadline. Its value becomes JSON inside the round trip: the log carries
  *  JSON, and a live value (a handle, a function) is released with the round trip. Exported for the
  *  unit pin. */
-export function runScriptModule(script: string): { "cap.js": string; "with-itx.js": string } {
+export function runScriptModule(script: string): { "worker.js": string } {
   return {
-    "cap.js": [
+    "worker.js": [
       'import { WorkerEntrypoint } from "cloudflare:workers";',
-      'import { withItx } from "./with-itx.js";',
+      'import { withItx } from "iterate/with-itx";',
       `const script = (${script});`,
       "export default class extends WorkerEntrypoint {",
       "  async run() {",
@@ -275,7 +274,6 @@ export function runScriptModule(script: string): { "cap.js": string; "with-itx.j
       "}",
       "",
     ].join("\n"),
-    "with-itx.js": WITH_ITX_MODULE,
   };
 }
 

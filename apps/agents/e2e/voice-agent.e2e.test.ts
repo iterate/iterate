@@ -3,10 +3,10 @@
 // This pins loaded-code admission, agent birth, inherited KV/egress, secret substitution,
 // delegated scripts and audio in both directions. It does not test the model, microphones or speakers.
 import { expect } from "vitest";
-import { buildAgentRuntime } from "../scripts/build-runtime.ts";
+import { agentRuntimeSource } from "../src/lib/agent-runtime-source.ts";
 import { bundleVoiceSources, createVoiceInstall } from "../scripts/build-voice-install.ts";
 import { ensureVoiceAgent } from "../voice/install.ts";
-import { DEFAULT_AGENT_SYSTEM_PROMPT } from "../runtime/system-prompt.ts";
+import { DEFAULT_AGENT_SYSTEM_PROMPT } from "../../../configs/with-agents/agents/system-prompt.ts";
 import { openItx, readAll, runId, until, untilValue } from "../../os/e2e/support/client.ts";
 import { oauthSession } from "../../os/e2e/support/principal.ts";
 import {
@@ -61,7 +61,7 @@ deployedOnly(
         "get",
         {
           source: {
-            "cap.js": `import { WorkerEntrypoint } from "cloudflare:workers";
+            "worker.js": `import { WorkerEntrypoint } from "cloudflare:workers";
 export default class extends WorkerEntrypoint {
   async fetch(request) {
     if (!request.headers.get("x-itx-principal") || !request.headers.get("x-itx-grant")) return new Response("missing provider credential", {status: 401});
@@ -113,7 +113,7 @@ export default class extends WorkerEntrypoint {
     expect(delegate.split(responsesUrl)).toHaveLength(2);
     const fixtureDelegate = delegate.replace(responsesUrl, providerUrl);
     const install = createVoiceInstall({
-      agentsRuntime: await buildAgentRuntime(),
+      agentsRuntime: agentRuntimeSource,
       voiceAgent: fixtureVoice,
       voiceDelegate: fixtureDelegate,
       worker,

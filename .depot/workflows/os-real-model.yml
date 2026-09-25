@@ -37,7 +37,7 @@ on:
     paths:
       - .depot/workflows/os-real-model.yml
       - scripts/ci/main-e2e-alert.ts
-      - apps/agents/runtime/**
+      - configs/with-agents/agents/**
       - apps/agents/e2e/agents-default-model.e2e.test.ts
   workflow_dispatch:
 

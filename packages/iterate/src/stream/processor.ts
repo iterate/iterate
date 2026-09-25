@@ -2,12 +2,12 @@
 // contract and three hooks, no constructor arguments, no storage, no stream — a unit test constructs
 // it with `new`), and `ProcessorEngine`, which drives ONE such instance against a stream and a
 // storage; the SDK's `StreamProcessorDurableObject` builds one per hosted facet. The author surface
-// is Node-testable and bundled into every loaded isolate as
-// `processor.js` (sdk/index.ts), so nothing here imports cloudflare:workers. Four concepts ride with it:
+// is Node-testable and re-exported by `iterate/sdk`, which loaded isolates link to the platform's own
+// build, so nothing here imports cloudflare:workers. Four concepts ride with it:
 //   events             — `StreamEventInput` / `StreamEvent`, the envelope, and the idempotency rules
 //   reduce checkpoint  — `ReduceCheckpointTable`, THE ONE spelling of a persisted reduce checkpoint
 //   live state         — `LiveState`, one value, its revision chain and the diff→emit delta
-//   processor contract — `defineProcessorContract`, the zod contract helper (zod rides the SDK bundle)
+//   processor contract — `defineProcessorContract`, the zod contract helper (zod rides the SDK build)
 //
 // THE CONCURRENCY CONTRACT:
 //   1. ONE SERIAL CHAIN per processor — batches never interleave.

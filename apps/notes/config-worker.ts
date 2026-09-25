@@ -1,8 +1,8 @@
 // A project config worker that serves the Notes app on notes--<project>.<base>. Every host of the
 // project reaches this worker's fetch (published with `itx/ingress-configured`); the platform
 // says which host in the `x-iterate-routing-slug` header (absent on the apex) — the platform's
-// header, never a visitor's. The platform supplies processor.js.
-import { ConfigWorker } from "./processor.js";
+// header, never a visitor's. The loader links `iterate/sdk` to the platform's own SDK build.
+import { ConfigWorker } from "iterate/sdk";
 
 export default class extends ConfigWorker {
   async fetch(request: Request) {

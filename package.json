@@ -6,8 +6,9 @@
     "dev": "pnpm --dir apps/os dev",
     "getin": "tsx scripts/getin.ts",
     "os": "pnpm --dir apps/os",
-    "typecheck": "pnpm -r --parallel typecheck && pnpm typecheck:specs",
+    "typecheck": "pnpm -r --parallel typecheck && pnpm typecheck:specs && pnpm typecheck:configs",
     "typecheck:specs": "tsc --noEmit -p specs/tsconfig.json",
+    "typecheck:configs": "tsc -p configs/default && tsc -p configs/with-agents",
     "format": "oxfmt",
     "format:check": "oxfmt --check",
     "lint": "oxlint . --threads 1 --deny-warnings --report-unused-disable-directives-severity error",
@@ -18,6 +19,7 @@
     "test": "pnpm -r --parallel test"
   },
   "devDependencies": {
+    "@cloudflare/workers-types": "catalog:",
     "@iterate-com/cli": "workspace:*",
     "@iterate-com/shared": "workspace:*",
     "@playwright/test": "catalog:",

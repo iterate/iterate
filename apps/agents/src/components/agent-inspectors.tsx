@@ -24,7 +24,7 @@ import {
   type AgentUiLlmStep,
 } from "../lib/events/agent-ui-reducer.ts";
 import { sliceText, type StreamText } from "../lib/chunked-text.ts";
-import { parseCodemodeResponse } from "../../runtime/codemode-format.ts";
+import { parseCodemodeResponse } from "../../../../configs/with-agents/agents/codemode-format.ts";
 import {
   formatDateTime,
   isRecord,

@@ -180,7 +180,7 @@ test("an abandoned refresh times out", async () => {
 let voiceWorker: Promise<any> | undefined;
 
 /**
- * Deployed facets receive processor.js from the runtime. Supply just the
+ * Deployed, `iterate/sdk` links to the platform's SDK build. Supply just the
  * ConfigWorker environment and the SDK's `z` here and exercise the actual
  * bundled worker, built once per file on first use.
  */
@@ -199,9 +199,9 @@ function loadVoiceWorker(): Promise<any> {
       loader: { ".md": "text" },
       plugins: [
         {
-          name: "processor-runtime",
+          name: "sdk-runtime",
           setup(builder) {
-            builder.onResolve({ filter: /^\.\/processor\.js$/ }, () => ({
+            builder.onResolve({ filter: /^iterate\/sdk$/ }, () => ({
               path: "processor",
               namespace: "test-runtime",
             }));

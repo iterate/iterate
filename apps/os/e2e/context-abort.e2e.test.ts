@@ -22,8 +22,8 @@ import { freshDnsSafeProjectSlug, registerProject } from "./support/project-host
 
 /** A loaded worker that says whatever the test hands it through its own `env.ITX` — loaded code. */
 const SAY = {
-  "cap.js": `import { WorkerEntrypoint } from "cloudflare:workers";
-import { withItx } from "./processor.js";
+  "worker.js": `import { WorkerEntrypoint } from "cloudflare:workers";
+import { withItx } from "iterate/sdk";
 export default class extends WorkerEntrypoint {
   async say(call) {
     try { return { ok: await withItx(this.env.ITX, (itx) => itx.invoke(call)) }; }
@@ -36,7 +36,7 @@ export default class extends WorkerEntrypoint {
  *  answers — and says how many such calls this instance holds. */
 const COUNTER = {
   source: {
-    "cap.js": `import { FacetDurableObject } from "./processor.js";
+    "worker.js": `import { FacetDurableObject } from "iterate/sdk";
 export class CounterDurableObject extends FacetDurableObject {
   static publicMethods = [...super.publicMethods, "bump", "hang", "hanging"];
   inMemory = 0;

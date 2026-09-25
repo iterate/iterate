@@ -270,7 +270,7 @@ deployedSubdomainsOnly(
         "get",
         {
           source: {
-            "cap.js": `import { WorkerEntrypoint } from "cloudflare:workers";
+            "worker.js": `import { WorkerEntrypoint } from "cloudflare:workers";
 export default class Echo extends WorkerEntrypoint {
   fetch(request) { return new Response((request.headers.get("x-secret") ?? "(none)") + " " + (request.headers.get("x-field") ?? "(none)")); }
 }`,

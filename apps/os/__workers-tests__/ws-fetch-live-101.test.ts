@@ -219,8 +219,8 @@ test("a lent-stub WebSocket provider that GREETS on connect: the eyeball receive
 
 /** A capnweb server as a LOADED WORKER: the SDK's `newWorkersRpcResponse` over its `fetch`. */
 const SRC_CAPNWEB_SERVER = {
-  "cap.js": `import { WorkerEntrypoint, RpcTarget } from "cloudflare:workers";
-import { newWorkersRpcResponse } from "./processor.js";
+  "worker.js": `import { WorkerEntrypoint, RpcTarget } from "cloudflare:workers";
+import { newWorkersRpcResponse } from "iterate/sdk";
 class Api extends RpcTarget {
   #path;
   constructor(path) { super(); this.#path = path; }
@@ -253,7 +253,7 @@ test("a LOADED worker's 101 through the project host: the SDK's newWorkersRpcRes
  *  to the lent stub at `itx.wsdev` through its own `env.ITX.fetch` (a native fetch hop, which
  *  carries a WebSocket); anything else is its 404. */
 const SRC_WSDEV_ROUTER = {
-  "cap.js": `import { WorkerEntrypoint } from "cloudflare:workers";
+  "worker.js": `import { WorkerEntrypoint } from "cloudflare:workers";
 export default class Router extends WorkerEntrypoint {
   fetch(request) {
     if (request.headers.get("x-iterate-routing-slug") !== "wsdev")

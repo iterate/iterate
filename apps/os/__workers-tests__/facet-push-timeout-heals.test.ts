@@ -28,7 +28,7 @@ const SLOW_MS = WATCHDOG_MS + 5_000;
  *  delay, so a redelivery is a second row; the slow decision is module-level, so no later attempt
  *  is slow. `probe()` reads both tables WITHOUT touching the engine (a read verb would catch up). */
 const SLOW_COUNTER_SRC = /* js */ `
-import { StreamProcessor, StreamProcessorDurableObject, defineProcessorContract, z } from "./processor.js";
+import { StreamProcessor, StreamProcessorDurableObject, defineProcessorContract, z } from "iterate/sdk";
 const contract = defineProcessorContract({
   slug: "slowcounter",
   version: "1.0.0",
@@ -93,7 +93,7 @@ test(
           [
             "get",
             name,
-            { source: { "cap.js": SLOW_COUNTER_SRC }, className: "SlowCounterDurableObject" },
+            { source: { "worker.js": SLOW_COUNTER_SRC }, className: "SlowCounterDurableObject" },
           ],
           "processEventBatch",
         ],

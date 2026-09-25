@@ -97,7 +97,7 @@ test("a repo-backed worker changes when its explicit subscription spec is update
   );
 });
 
-const source = (version: string) => `import { ConfigWorker } from "./processor.js";
+const source = (version: string) => `import { ConfigWorker } from "iterate/sdk";
 export default class extends ConfigWorker {
   async processEvent({ event, itx }) {
     if (event.type === "events.iterate.com/test/ping-sent") await itx.append({

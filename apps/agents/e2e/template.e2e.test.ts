@@ -1,4 +1,4 @@
-import { readFile } from "node:fs/promises";
+import { readdir, readFile } from "node:fs/promises";
 import { expect, test } from "vitest";
 import { freshCtx, openItx, readAll, until } from "../../os/e2e/support/client.ts";
 
@@ -11,7 +11,14 @@ test("the copied agents template installs its collection on project/created thro
   });
   await root.repos.create("/repos/config");
   const changes = await Promise.all(
-    ["worker.ts", "agents.js", "iterate.json", "AGENTS.md"].map(async (path) => ({
+    [
+      "worker.ts",
+      "iterate.json",
+      "AGENTS.md",
+      ...(
+        await readdir(new URL("../../../configs/with-agents/agents/", import.meta.url).pathname)
+      ).map((name) => `agents/${name}`),
+    ].map(async (path) => ({
       path,
       content: await readFile(
         new URL(`../../../configs/with-agents/${path}`, import.meta.url).pathname,

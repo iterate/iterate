@@ -27,12 +27,14 @@ import {
   type ItxExpression,
   type ItxExpressionInput,
 } from "iterate/expression";
-import PROCESSOR_SDK_MODULE from "../generated/processor-sdk.js";
+import PLATFORM_MODULES from "../generated/platform-modules.js";
+import { readPackage, resolveModules } from "./module-resolution.ts";
 
-/** A worker's MODULES, module name → code. `"cap.js"` is the main module. */
+/** A worker's FILES as authored, path → code (module-resolution.ts `readPackage` finds the entry and
+ *  resolves the rest into what the loader takes). */
 export type WorkerModules = Record<string, string>;
 /** A worker/facet SOURCE: the modules, literally — or an itx expression that PRODUCES them (a
- *  modules record, or one module string = `cap.js`), evaluated only when no isolate is warm under the
+ *  files record, or one string — a bundle, as the voice install's KV entries are — loaded as `worker.js`), evaluated only when no isolate is warm under the
  *  caller's `cacheKey` (header). Stored where it is named: a facet's startup memo, a subscription's
  *  target, a rewrite rule's target. */
 export type WorkerSource = WorkerModules | ItxExpressionInput;
@@ -91,12 +93,14 @@ const isWorkerModules = (source: unknown): source is WorkerModules =>
  *  `repo.modules` calls on one repo facet instead of one, and its host answered 503 for ~70 s. The
  *  recovery is kept beside the `itxEntrypoint` stub it was started for, which a context mints once
  *  per incarnation: a new incarnation never waits on a promise its dead predecessor left behind. */
+/** A source resolved into what the loader takes (module-resolution.ts). */
+type ResolvedWorker = Awaited<ReturnType<typeof resolveModules>>;
 const loaderIdGenerations = new Map<
   string,
   {
     generation: number;
     dead: boolean;
-    recovery?: { itxEntrypoint: Fetcher; modules: Promise<WorkerModules> };
+    recovery?: { itxEntrypoint: Fetcher; modules: Promise<ResolvedWorker> };
   }
 >();
 
@@ -126,7 +130,7 @@ function contentHashOfWorkerModules(modules: WorkerModules): string {
 
 /** What `prepareConfinedWorker` needs. */
 type PrepareConfinedWorkerOptions = {
-  env: { LOADER: WorkerLoader };
+  env: { LOADER: WorkerLoader; ITX_KV: KVNamespace };
   /** The deploy identity every loader id folds in (worker.ts `AppConfig.deployId`: CF_VERSION_METADATA.id,
    *  "unversioned" locally) — a facet built from an isolate a PRIOR deployment minted cannot be called
    *  by the new parent, so a redeploy must mint fresh isolates. */
@@ -184,16 +188,16 @@ export async function prepareConfinedWorker(
   opts: PrepareConfinedWorkerOptions,
 ): Promise<{ loaderId: string; load: () => WorkerStub; retire: () => void }> {
   const { where, source, cacheKey } = opts;
-  const requireMainModule = (modules: unknown): WorkerModules => {
-    if (!isWorkerModules(modules) || typeof modules["cap.js"] !== "string")
-      throw new Error(`${where}: a source is its modules, and needs a "cap.js" main module`);
-    return modules;
+  const requireFiles = (files: unknown): WorkerModules => {
+    if (!isWorkerModules(files)) throw new Error(`${where}: a source is its files, path → code`);
+    return files;
   };
   // 1. the key's last component — and how the modules will be obtained.
   let sourceVersion: string;
   let getModules: () => Promise<WorkerModules> | WorkerModules;
   if (isWorkerModules(source)) {
-    const modules = requireMainModule(source);
+    const modules = requireFiles(source);
+    readPackage(modules, where); // refused where it is handed in, not late in a cold load
     sourceVersion = cacheKey || contentHashOfWorkerModules(modules);
     getModules = () => modules;
   } else {
@@ -204,7 +208,7 @@ export async function prepareConfinedWorker(
     sourceVersion = cacheKey;
     getModules = async () => {
       const produced = await opts.invoke(normalizedItxExpression(source));
-      return requireMainModule(typeof produced === "string" ? { "cap.js": produced } : produced);
+      return requireFiles(typeof produced === "string" ? { "worker.js": produced } : produced);
     };
   }
   // 2. the confined worker under the billed cacheKey. A JSON array, never `a:b:c`: a context name,
@@ -222,14 +226,26 @@ export async function prepareConfinedWorker(
   ]);
   const state = loaderIdGenerations.get(loaderIdBase) ?? { generation: 0, dead: false };
   let { generation } = state;
-  let modulesForWorkerCode = getModules;
+  // Produce AND resolve: a source whose imports cannot resolve (a missing file, a parse error, esm.sh
+  // down) fails here — in the recovery below that is before `load()` opens a new generation, so a
+  // failure that persists mints no billed identity per retry.
+  const produce = async (): Promise<ResolvedWorker> =>
+    resolveModules(await getModules(), {
+      platform: PLATFORM_MODULES,
+      store: opts.env.ITX_KV,
+      // A wrapper, never the bare global: workerd refuses `fetch` called as another object's
+      // method ("Illegal invocation"), which `opts.fetch(...)` in the resolver would be.
+      fetch: (input, init) => fetch(input, init),
+      where,
+    });
+  let workerForCode = produce;
   if (state.dead) {
     // Outside the loader, so a throw here poisons nothing; one run for every caller while it lasts.
     let recovery =
       state.recovery?.itxEntrypoint === opts.itxEntrypoint ? state.recovery.modules : undefined;
     if (!recovery) {
       const deadGeneration = generation;
-      const started = Promise.resolve().then(() => getModules());
+      const started = Promise.resolve().then(produce);
       recovery = started;
       loaderIdGenerations.set(loaderIdBase, {
         generation,
@@ -246,25 +262,22 @@ export async function prepareConfinedWorker(
         () => settle({ generation: deadGeneration, dead: true }), // the next caller tries again
       );
     }
-    const modules = await recovery;
+    const resolved = await recovery;
     generation += 1;
-    modulesForWorkerCode = () => modules;
+    workerForCode = async () => resolved;
   }
   const loaderId = generation ? `${loaderIdBase}#${generation}` : loaderIdBase;
   const load = () =>
     opts.env.LOADER.get(loaderId, async () => {
-      let modules: WorkerModules;
+      let resolved: ResolvedWorker;
       try {
-        modules = await modulesForWorkerCode();
+        // Only on a cold isolate; resolution is locked per dependency set in ITX_KV, so a cold start
+        // after the first one reads KV and never the network.
+        resolved = await workerForCode();
       } catch (error) {
         loaderIdGenerations.set(loaderIdBase, { generation, dead: true });
         throw error;
       }
-      // The processor SDK ("processor.js", ~370 KB — ~40× a typical fixture) is injected only when a
-      // module IMPORTS it. The failure mode is loud: a forgotten import fails at module link, by name.
-      const importsProcessorSdk = Object.values(modules).some((code) =>
-        /["']\.\/processor\.js["']/.test(code),
-      );
       return {
         // PURE-PLAY: no node:*, so userspace code stays portable across workerd builds.
         // `allow_irrevocable_stub_storage` (experimental) lets loaded code store its `env.ITX` stub
@@ -277,10 +290,8 @@ export async function prepareConfinedWorker(
           "no_nodejs_compat_v2",
           "allow_irrevocable_stub_storage",
         ],
-        mainModule: "cap.js",
-        modules: importsProcessorSdk
-          ? { ...modules, "processor.js": PROCESSOR_SDK_MODULE }
-          : modules,
+        mainModule: resolved.mainModule,
+        modules: resolved.modules,
         env: { ITX: opts.itxEntrypoint },
         globalOutbound: opts.itxEntrypoint,
       };

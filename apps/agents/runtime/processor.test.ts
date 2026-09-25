@@ -6,14 +6,14 @@
 
 import { expect, test } from "vitest";
 import { reduceProcessor } from "iterate/stream/test-support";
-import { type AgentState } from "./contract.ts";
+import { type AgentState } from "../../../configs/with-agents/agents/contract.ts";
 import {
   AgentProcessor,
   buildChatMessages,
   renderCapabilityTree,
   renderScriptSettlement,
-} from "./processor.ts";
-import { parseCodemodeResponse } from "./codemode-format.ts";
+} from "../../../configs/with-agents/agents/processor.ts";
+import { parseCodemodeResponse } from "../../../configs/with-agents/agents/codemode-format.ts";
 
 const requested = { type: "events.iterate.com/agent/create-requested", payload: {} };
 const created = { type: "events.iterate.com/agent/created", payload: { path: "/agents/support" } };

@@ -92,11 +92,14 @@ export class AgentCollectionDurableObject extends StreamProcessorDurableObject<A
         return (await this.snapshot()).state;
       },
       async () => {
-        const cacheKey = await this.withItx((itx) => itx.kv.get("agents/runtime-key"));
-        if (!cacheKey) throw new Error("The agents runtime has not been installed");
-        const source = await this.withItx((itx) => itx.kv.get(`agents/runtime/${cacheKey}.js`));
-        if (!source) throw new Error(`The installed agents runtime is missing: ${cacheKey}`);
-        return { cacheKey, source: { "cap.js": source }, className: "AgentDurableObject" };
+        const runtime = await this.withItx((itx) => itx.kv.get("agents/runtime"));
+        if (!runtime) throw new Error("The agents runtime has not been installed");
+        // Written by install.ts: the runtime's files and its content hash.
+        const { cacheKey, source } = JSON.parse(runtime) as {
+          cacheKey: string;
+          source: Record<string, string>;
+        };
+        return { cacheKey, source, className: "AgentDurableObject" };
       },
       base,
     );

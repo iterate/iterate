@@ -59,9 +59,9 @@ test.for([
 /** The worker: the first isolate that serves a request is the bad cache entry — it marks itself in
  *  kv and throws the clone-version text on every request it serves; any other isolate answers. */
 const source = {
-  "cap.js": `
+  "worker.js": `
 import { WorkerEntrypoint } from "cloudflare:workers";
-import { withItx } from "./processor.js";
+import { withItx } from "iterate/sdk";
 let isolate;
 export default class Site extends WorkerEntrypoint {
   fetch(request) {

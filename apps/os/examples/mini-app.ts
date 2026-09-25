@@ -15,10 +15,11 @@
 // dials over a WebSocket. Persistence is the PROJECT's own itx.kv (this loaded code speaks for the
 // project), so the notes are shared and durable. `RpcTarget`/`WorkerEntrypoint` are the runtime's own
 // (inside a loaded isolate capnweb's RpcTarget IS the native one); `newWorkersRpcResponse` — which
-// serves BOTH the WebSocket upgrade and a one-shot HTTP batch — and `withItx` come from the injected
-// SDK. The API holds no scope for its socket's lifetime: each method is its own `withItx` round trip.
+// serves BOTH the WebSocket upgrade and a one-shot HTTP batch — and `withItx` come from `iterate/sdk`,
+// which the loader links to this deployment's own SDK build. The API holds no scope for its socket's
+// lifetime: each method is its own `withItx` round trip.
 import { RpcTarget, WorkerEntrypoint } from "cloudflare:workers";
-import { newWorkersRpcResponse, withItx, type WithItx } from "./processor.js";
+import { newWorkersRpcResponse, withItx, type WithItx } from "iterate/sdk";
 
 const KEY = "mini-app/notes";
 

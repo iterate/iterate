@@ -1,9 +1,9 @@
-import { ConfigWorker } from "./processor.js";
+import { ConfigWorker } from "iterate/sdk";
 
 export default class extends ConfigWorker {
   // Every host of the project reaches this fetch. The platform names the host's routing slug in
   // `x-iterate-routing-slug` (`blog` for `blog--<project>.<base>`; absent on the apex): route on it.
-  async fetch(request) {
+  async fetch(request: Request) {
     // Fetch routes first (`iterate tunnel` sets one): a matched request goes to its route's target.
     const route = await this.withItx((itx) =>
       itx.fetchRoutes.match({ url: request.url, headers: request.headers }),
@@ -19,7 +19,7 @@ export default class extends ConfigWorker {
       return this.env.ITX.fetch(new Request(request, { headers }));
     }
     const routingSlug = request.headers.get("x-iterate-routing-slug");
-    if (routingSlug === null) {
+    if (!routingSlug) {
       const { projectSlug } = await this.withItx((itx) => itx.whoami());
       return new Response("Homepage of project " + projectSlug + "\n", {
         headers: { "content-type": "text/plain; charset=utf-8" },

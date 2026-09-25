@@ -50,7 +50,7 @@ import { SOURCES } from "./support/sources.ts";
  *  `x-itx-expression` naming the stub — a native fetch hop, which carries a WebSocket (Workers RPC
  *  does not). */
 const SRC_DEVICE_ROUTER = {
-  "cap.js": `import { WorkerEntrypoint } from "cloudflare:workers";
+  "worker.js": `import { WorkerEntrypoint } from "cloudflare:workers";
 export default class Router extends WorkerEntrypoint {
   fetch(request) {
     if (request.headers.get("x-iterate-routing-slug") !== "device")
@@ -173,7 +173,7 @@ test("a missing project secret in the URL query is a loud 502 naming the URL —
 
 const SRC_PROVIDER = {
   // oxlint-disable-next-line iterate/no-raw-itx-get -- the provider's scope and lend are held on globalThis on purpose: the rows below pin a lent stub's lifetime
-  "cap.js": `import { WorkerEntrypoint, RpcTarget } from "cloudflare:workers";
+  "worker.js": `import { WorkerEntrypoint, RpcTarget } from "cloudflare:workers";
 class WsDevice extends RpcTarget {
   fetch(request) {
     if ((request.headers.get("Upgrade") || "").toLowerCase() === "websocket") {
@@ -226,7 +226,7 @@ export default class Provider extends WorkerEntrypoint {
 };
 
 const SRC_CONSUMER = {
-  "cap.js": `import { WorkerEntrypoint } from "cloudflare:workers";
+  "worker.js": `import { WorkerEntrypoint } from "cloudflare:workers";
 export default class Consumer extends WorkerEntrypoint {
   async run(kind) {
     if (kind === "plain") {

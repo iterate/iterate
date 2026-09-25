@@ -31,11 +31,11 @@ Supabase, tRPC, Hono and Wrangler draw the same line:
 ## Reaching the context from loaded code
 
 Code the platform loads for a project (a config worker, a facet, a worker behind a rewrite rule)
-imports the SDK as `./processor.js` and reaches its context through `withItx`: one round trip,
+imports the SDK as `iterate/sdk` and reaches its context through `withItx`: one round trip,
 after which the scope, every call made through it and every handle it awaited are released.
 
 ```js
-import { ConfigWorker, withItx } from "./processor.js";
+import { ConfigWorker, withItx } from "iterate/sdk";
 
 export default class extends ConfigWorker {
   async fetch() {
@@ -167,7 +167,7 @@ that prefix belongs to whoever appends it and is opaque to the platform: tests u
 | ------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `itx`                                                               | `apps/os/src/stream/core-processor.ts` (and its leaf event catalog), `stream.ts`, `scheduled-appends.ts`, `subscription-delivery.ts`, `apps/os/src/context/built-ins.ts`, `apps/os/src/fetch-routes.ts`, `apps/os/src/iterate-context-durable-object.ts`, `packages/iterate/src/stream/{run,processor}.ts` |
 | `account`, `organization`, `project`, `repo`, `workspace`, `secret` | `apps/os/src/<name>/contract.ts` (repo and workspace also use `project/entity-lifecycle.ts`)                                                                                                                                                                                                               |
-| `agent`                                                             | `apps/agents/runtime/contract.ts`                                                                                                                                                                                                                                                                          |
+| `agent`                                                             | `configs/with-agents/agents/contract.ts`                                                                                                                                                                                                                                                                   |
 | `voice-agent`                                                       | `apps/agents/voice/voice-agent.ts`, `apps/agents/voice/events.ts`                                                                                                                                                                                                                                          |
 | `chrome`                                                            | `apps/browser-extension/panel.js`                                                                                                                                                                                                                                                                          |
 | `test`                                                              | tests only                                                                                                                                                                                                                                                                                                 |

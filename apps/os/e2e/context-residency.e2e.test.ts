@@ -161,12 +161,12 @@ test("listing repos does not keep the project root resident", async () => {
 
 /** A loaded worker whose answer is DATA — `{ a: 1 }`, handed through the context to the facet. */
 const DATA_WORKER_SOURCE = {
-  "cap.js": `import { WorkerEntrypoint } from "cloudflare:workers";
+  "worker.js": `import { WorkerEntrypoint } from "cloudflare:workers";
 export default class Data extends WorkerEntrypoint { data() { return { a: 1 }; } }`,
 };
 /** A loaded worker whose answer is LIVE — an RpcTarget, a new one per `make()`. */
 const LIVE_WORKER_SOURCE = {
-  "cap.js": `import { WorkerEntrypoint, RpcTarget } from "cloudflare:workers";
+  "worker.js": `import { WorkerEntrypoint, RpcTarget } from "cloudflare:workers";
 let made = 0;
 class Made extends RpcTarget {
   constructor(n) { super(); this.n = n; }
@@ -178,7 +178,7 @@ export default class LiveMaker extends WorkerEntrypoint { make() { made += 1; re
  *  scope and every answer, and releases none of them. */
 const CARELESS_HOLDER_SOURCE = {
   // oxlint-disable-next-line iterate/no-raw-itx-get -- the careless holder IS the subject: it keeps its env.ITX scope and every answer
-  "cap.js": `import { FacetDurableObject } from "./processor.js";
+  "worker.js": `import { FacetDurableObject } from "iterate/sdk";
 export class CarelessHolderDurableObject extends FacetDurableObject {
   static publicMethods = [...super.publicMethods, "keepData", "keepSiblingSnapshot", "keepLiveAndPing", "started"];
   kept = [];
@@ -343,7 +343,7 @@ test("a website project's facets do not outlive their contexts after a page load
  *  (the repo facet's `cfArtifacts.get(path).remote()`), and answers awaited inside the round trip
  *  (the collection's `const context = itx.cd(path)`). */
 const REACHER_SOURCE = {
-  "cap.js": `import { StreamProcessor, StreamProcessorDurableObject, defineProcessorContract, z } from "./processor.js";
+  "worker.js": `import { StreamProcessor, StreamProcessorDurableObject, defineProcessorContract, z } from "iterate/sdk";
 const contract = defineProcessorContract({
   slug: "reacher",
   version: "1.0.0",

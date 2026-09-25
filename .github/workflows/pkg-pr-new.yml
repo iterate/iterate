@@ -1,16 +1,19 @@
 name: pkg.pr.new
 on:
   # Every main commit publishes, so any main sha is installable
-  # (pkg.pr.new/iterate/iterate/iterate@<sha>, pkg.pr.new/iterate/iterate/@iterate-com/cli@<sha>).
+  # (pkg.pr.new/iterate/iterate/iterate@<sha>, pkg.pr.new/iterate/iterate/@iterate-com/cli@<sha>,
+  # pkg.pr.new/iterate/iterate/@iterate-com/petshop-sdk@<sha>).
   push:
     branches:
       - main
-  # A PR publishes only when the SDK's or the CLI's inputs change: packages/iterate imports nothing
-  # outside itself, packages/cli only the SDK, and the root manifests and lockfile decide the install.
+  # A PR publishes only when the SDK's, the CLI's or the pet shop SDK's inputs change: packages/iterate
+  # imports nothing outside itself, packages/cli only the SDK, packages/petshop-sdk only capnweb, and
+  # the root manifests and lockfile decide the install.
   pull_request:
     paths:
       - packages/cli/**
       - packages/iterate/**
+      - packages/petshop-sdk/**
       - package.json
       - pnpm-lock.yaml
       - pnpm-workspace.yaml
@@ -28,10 +31,11 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: 24
-      - run: pnpm install --frozen-lockfile --filter iterate-root --filter @iterate-com/cli...
+      - run: pnpm install --frozen-lockfile --filter iterate-root --filter @iterate-com/cli... --filter @iterate-com/petshop-sdk
       - run: pnpm --dir packages/iterate build
       - run: pnpm --dir packages/cli build
+      - run: pnpm --dir packages/petshop-sdk build
       # --pnpm: pack with `pnpm pack` so publishConfig.exports (dist remap)
       # is applied — `npm pack` would ship the dev exports pointing at src/.
       # pkg.pr.new requires every monorepo package in one invocation.
-      - run: pnpm exec pkg-pr-new publish --pnpm ./packages/iterate ./packages/cli
+      - run: pnpm exec pkg-pr-new publish --pnpm ./packages/iterate ./packages/cli ./packages/petshop-sdk

@@ -124,7 +124,7 @@ type FacetHostDeps = {
   /** What `prepareConfinedWorker` reads of the env: the Worker Loader. Read at call time, off the
    *  DO's own `env` field — a workerd test swaps that field for a counting loader
    *  (__workers-tests__/facet-class-loads-at-startup.test.ts). */
-  env: () => { LOADER: WorkerLoader };
+  env: () => { LOADER: WorkerLoader; ITX_KV: KVNamespace };
   deployId: string;
   /** The DO's name: a facet's props and the owner half of its loader identity. */
   iterateContextName: string;

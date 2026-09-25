@@ -11,6 +11,7 @@ packages:
   - apps/ci-reports
   - packages/cli
   - packages/iterate
+  - packages/petshop-sdk
   - packages/shared
   - packages/ui
   - lint

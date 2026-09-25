@@ -46,8 +46,8 @@ import { deployedOnly, projectHostsAreLocal } from "./support/project-host.ts";
  *  write through, and abort, a facet of ITS OWN (`ctx.facets` inside the facet). */
 const WRITER_SOURCE = (tag: string) => ({
   // oxlint-disable-next-line iterate/no-raw-itx-get -- the careless keep IS the subject: writeOn and chatter keep their env.ITX answers so the facet runs on
-  "cap.js": `import { DurableObject } from "cloudflare:workers";
-import { FacetDurableObject } from "./processor.js";
+  "worker.js": `import { DurableObject } from "cloudflare:workers";
+import { FacetDurableObject } from "iterate/sdk";
 const put = (storage, key, i) => storage.kv.put(key, "x".repeat(2048) + i);
 const pause = () => new Promise((resolve) => setTimeout(resolve, 1));
 export class ChildDurableObject extends DurableObject {

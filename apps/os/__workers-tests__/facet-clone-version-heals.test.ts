@@ -29,7 +29,7 @@ for (const [label, message] of Object.entries(platformFailures)) {
           [
             "get",
             "flaky",
-            { source: { "cap.js": flakyFacetSource(message) }, className: "FlakyDurableObject" },
+            { source: { "worker.js": flakyFacetSource(message) }, className: "FlakyDurableObject" },
           ],
           "processEventBatch",
         ],
@@ -78,8 +78,8 @@ for (const [label, message] of Object.entries(platformFailures)) {
 // rejects here, once — after `itx.facets.abort`.
 test("a platform start that rejects with the platform's clone-version text restarts once under a fresh loaded identity, and the facet answers", async () => {
   const source = {
-    "cap.js": `
-import { FacetDurableObject } from "./processor.js";
+    "worker.js": `
+import { FacetDurableObject } from "iterate/sdk";
 export class StartsFlaky extends FacetDurableObject {
   static publicMethods = [...super.publicMethods, "arm", "hello"];
   arm() { this.ctx.storage.kv.put("reject-next-start", true); }
@@ -113,8 +113,8 @@ export class StartsFlaky extends FacetDurableObject {
 
 test("concurrent stale start failures do not retire the replacement generation twice", async () => {
   const source = {
-    "cap.js": `
-import { FacetDurableObject } from "./processor.js";
+    "worker.js": `
+import { FacetDurableObject } from "iterate/sdk";
 export class Racing extends FacetDurableObject {
   static publicMethods = [...super.publicMethods, "run"];
   #releaseBothStarts = function () {};
@@ -156,8 +156,8 @@ export class Racing extends FacetDurableObject {
 // text.
 test("on a runtime whose facet starts answer one call each, concurrent calls on a running facet each answer", async () => {
   const source = {
-    "cap.js": `
-import { FacetDurableObject } from "./processor.js";
+    "worker.js": `
+import { FacetDurableObject } from "iterate/sdk";
 export class OneCallPerStart extends FacetDurableObject {
   static publicMethods = [...super.publicMethods, "run"];
   #answered = false;
@@ -202,8 +202,8 @@ export class OneCallPerStart extends FacetDurableObject {
 // retry spent — and then on a restart of its own.
 test("on a runtime whose facet starts answer one call each, a call killed by a peer's restart answers on a start of its own", async () => {
   const source = {
-    "cap.js": `
-import { FacetDurableObject } from "./processor.js";
+    "worker.js": `
+import { FacetDurableObject } from "iterate/sdk";
 export class OneCallPerStart extends FacetDurableObject {
   static publicMethods = [...super.publicMethods, "run", "inFlight"];
   #answered = false;
@@ -243,8 +243,8 @@ export class OneCallPerStart extends FacetDurableObject {
 // retry on the replacement without restarting it again.
 test("one platform failure while other calls are in flight restarts the facet once; every call answers", async () => {
   const source = {
-    "cap.js": `
-import { FacetDurableObject } from "./processor.js";
+    "worker.js": `
+import { FacetDurableObject } from "iterate/sdk";
 export class Steady extends FacetDurableObject {
   static publicMethods = [...super.publicMethods, "slow", "failOnce"];
   async slow() {
@@ -277,7 +277,7 @@ export class Steady extends FacetDurableObject {
  *  SQLite, which survives the abort and the new isolate. */
 function flakyFacetSource(message: string) {
   return /* js */ `
-import { StreamProcessor, StreamProcessorDurableObject, defineProcessorContract, z } from "./processor.js";
+import { StreamProcessor, StreamProcessorDurableObject, defineProcessorContract, z } from "iterate/sdk";
 const contract = defineProcessorContract({
   slug: "flaky",
   version: "1.0.0",

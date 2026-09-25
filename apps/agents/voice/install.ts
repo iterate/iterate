@@ -1,11 +1,11 @@
 import type { IterateContextApi } from "iterate/api";
 import { z } from "zod";
-import { installAgents } from "../runtime/install.ts";
+import { installAgents } from "../../../configs/with-agents/agents/install.ts";
 
 // `kit/voice/…`: the prefix Kit first installed under, kept so installed projects keep their keys.
 const VoiceFileKey = z.string().regex(/^kit\/voice\/[a-f0-9]{64}\/[a-z-]+\.(js|css)$/);
 const VoiceInstall = z.object({
-  agentsRuntime: z.string().min(1),
+  agentsRuntime: z.record(z.string(), z.string()),
   files: z.record(VoiceFileKey, z.string().min(1)),
   workerKey: VoiceFileKey,
   cacheKey: z.string().regex(/^voice-worker:[a-f0-9]{64}$/),

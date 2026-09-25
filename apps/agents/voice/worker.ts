@@ -11,8 +11,8 @@
  */
 import { z } from "zod";
 import { bytesToBase64 } from "@iterate-com/shared/base64";
+import { ConfigWorker } from "iterate/sdk";
 import { VOICE_DELEGATE_CONSUMES } from "./events.ts";
-import { ConfigWorker } from "./processor.js";
 import { ScreenInfo, ScreenImageInput, ScreenStatus, renderScreenPixels } from "./screen.js";
 import SCREEN_CONTEXT from "./screen-context.md";
 

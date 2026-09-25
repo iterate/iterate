@@ -3,7 +3,7 @@
 // and what it is about — the first thing a person said to it. Pure, so the ordering and the status
 // are unit rows (agent-summary.test.ts); use-agent-summaries.ts keeps them live.
 import { z } from "zod";
-import { parseCodemodeResponse } from "../../runtime/codemode-format.ts";
+import { parseCodemodeResponse } from "../../../../configs/with-agents/agents/codemode-format.ts";
 
 /** `waiting`: paused — a breaker tripped or an operator paused it, and only a person's next words
  *  resume it. `running`: otherwise, a model request is open or about to be, a script it asked for

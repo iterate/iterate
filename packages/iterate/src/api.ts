@@ -185,6 +185,37 @@ export type FetchRouteEntry = {
   configuredOffset: number;
 };
 
+/** One change a repo commit applies: a file's new content, or its deletion. */
+export type RepoFileChange = { path: string; content: string } | { path: string; delete: true };
+/** One commit as `log` lists it, newest first (`timestamp` is epoch milliseconds). */
+export type RepoLogEntry = {
+  oid: string;
+  message: string;
+  author: { name: string; email: string };
+  timestamp: number;
+  parents: string[];
+};
+/** What a commit reports: the new tip (null on an unborn repo that stayed empty) and the paths it
+ *  changed (none when the tree was already as asked). */
+export type RepoCommitResult = { commitOid: string | null; changedPaths: string[] };
+/** `itx.repos.get(path)`: the repo's verbs, branch `main` only (the repo facet in apps/os). A
+ *  `commitOid` pins a read to that commit; without one, a read is of the tip. */
+export type RepoHandle = InvokeHandle & {
+  tip(): Promise<string | null>;
+  readFile(path: string, options?: { commitOid: string }): Promise<string | null>;
+  /** The repo as a loaded worker's source: every file, or with `dir` those under that folder. */
+  modules(options?: { commitOid?: string; dir?: string }): Promise<Record<string, string>>;
+  listFiles(): Promise<{ commitOid: string | null; paths: string[] }>;
+  commitFiles(input: {
+    message: string;
+    changes: RepoFileChange[];
+    author?: { name: string; email: string };
+    parent?: string | null;
+  }): Promise<RepoCommitResult>;
+  writeFile(path: string, content: string): Promise<RepoCommitResult>;
+  log(options?: { limit?: number }): Promise<RepoLogEntry[]>;
+};
+
 /** A context (a project, a user, an organization): every `itx` root, reached through `invoke`. */
 export interface IterateContextApi {
   invoke(call: ItxExpressionInput, ...args: unknown[]): Promise<unknown>;
@@ -350,7 +381,7 @@ export interface IterateContextApi {
    *  terminal fact — created, or create-failed thrown), `delete(path)` the deletion saga (the
    *  request, `deleted` cross-posted to `/`, the row disabled). A relative `path` means the caller's. */
   repos: {
-    get(path: string): InvokeHandle;
+    get(path: string): RepoHandle;
     list(): Promise<{ path: string; createdAt: string }[]>;
     create(path: string): Promise<{ path: string }>;
     delete(path: string): Promise<{ path: string }>;

@@ -1,7 +1,7 @@
 // workers-and-facets.e2e.test.ts — LOADING CODE: one entry point per host kind. `itx.workers.get({ source })`
 // (a stateless WorkerEntrypoint — its spec is its address) and `itx.facets.get(name, { source,
 // className })` (a DurableObject hosted as the durable facet `name`; `itx.facets.get(name)` addresses
-// a RUNNING facet). The SOURCE is the worker's MODULES (module name → code, `"cap.js"` the main
+// a RUNNING facet). The SOURCE is the worker's MODULES (module name → code, `"worker.js"` the main
 // module), handed over at the load site — no bare-lambda sugar, every source exports its host; or an
 // EXPRESSION producing the modules, only under a required `cacheKey`. Pins:
 //   • a stateless run, a durable named facet whose state persists across calls, address by bare name,
@@ -11,7 +11,7 @@
 //     name); a producer that THREW never poisons the key: the next attempt loads under the id's next
 //     generation (worker-loader.ts `loaderIdGenerations`), at both entry points and through the memo
 //   • dialing a REMOTE capnweb API is USERSPACE: a loaded WorkerEntrypoint imports capnweb's client
-//     from the SDK (`./processor.js`), reads the remote's url from Cloudflare's own `ctx.props`, and
+//     from the SDK (`iterate/sdk`), reads the remote's url from Cloudflare's own `ctx.props`, and
 //     dials ONE one-shot HTTP batch per chain through egress (no built-in, no persistent socket, so the
 //     remote never pins the context DO) — behind a rewrite rule by name; the remote is THIS worker's own
 //     /api (another project; the admin bearer on the POST), so the proof runs identically locally and deployed
@@ -37,10 +37,10 @@ test("itx.workers.get({ source: src }) (stateless) + itx.facets.get(name, spec) 
   // The two sources, handed over INLINE — each EXPORTS its host object (the contract): a
   // WorkerEntrypoint or a DurableObject class. No host-injected wrapper.
   const SRC_GREET = JSON.stringify({
-    "cap.js": entrypoint("async run(name) { return `hi ${name}`; }"),
+    "worker.js": entrypoint("async run(name) { return `hi ${name}`; }"),
   });
   const SRC_COUNTER = JSON.stringify({
-    "cap.js": `import { FacetDurableObject } from "./processor.js";
+    "worker.js": `import { FacetDurableObject } from "iterate/sdk";
 export class CounterDurableObject extends FacetDurableObject {
   static publicMethods = [...super.publicMethods, "bump", "value"];
   async bump() { const n = ((await this.ctx.storage.get('n')) ?? 0) + 1; await this.ctx.storage.put('n', n); return n; }
@@ -84,7 +84,7 @@ test("itx.workers.get takes the modules INLINE", async () => {
   const inline = await itx.invoke([
     "itx",
     "workers",
-    ["get", { source: { "cap.js": entrypoint("async run(x) { return x * 2; }") } }],
+    ["get", { source: { "worker.js": entrypoint("async run(x) { return x * 2; }") } }],
     ["run", 21],
   ]);
   expect(inline).toBe(42);
@@ -97,8 +97,8 @@ test("itx.workers.get takes the modules INLINE", async () => {
       "get",
       {
         source: {
-          "cap.js": `import { WorkerEntrypoint } from "cloudflare:workers";
-import { withItx } from "./processor.js";
+          "worker.js": `import { WorkerEntrypoint } from "cloudflare:workers";
+import { withItx } from "iterate/sdk";
 export default class extends WorkerEntrypoint {
   async run() { return (await withItx(this.env.ITX, (itx) => itx.whoami())).projectId; }
 }`,
@@ -121,7 +121,7 @@ test("a source EXPRESSION with a cacheKey is produced ONCE per cold isolate — 
     produced: string[] = [];
     get(name: string): Record<string, string> {
       this.produced.push(name);
-      return { "cap.js": entrypoint(`async run(x) { return "${name}:" + x; }`) };
+      return { "worker.js": entrypoint(`async run(x) { return "${name}:" + x; }`) };
     }
   }
   const codeStore = new CodeStore();
@@ -157,7 +157,7 @@ test("a source EXPRESSION with a cacheKey is produced ONCE per cold isolate — 
     get(): Record<string, string> {
       this.produced++;
       return {
-        "cap.js": `import { FacetDurableObject } from "./processor.js";
+        "worker.js": `import { FacetDurableObject } from "iterate/sdk";
 export class CounterDurableObject extends FacetDurableObject {
   static publicMethods = [...super.publicMethods, "bump"];
   async bump() { const n = ((await this.ctx.storage.get('n')) ?? 0) + 1; await this.ctx.storage.put('n', n); return n; }
@@ -191,12 +191,16 @@ test("workers.get: a cacheKey whose producer threw once loads on the next attemp
   const itx = openItx(freshCtx("poisonkey"));
   // The producer reads the built modules out of the context's own kv — "a build capability wrote
   // the artifact, now load it".
-  const spec = { source: "itx.kv.get('build:cap.js')", cacheKey: "producer-poison:v1" };
+  const spec = { source: "itx.kv.get('build:worker.js')", cacheKey: "producer-poison:v1" };
   const load = (): Promise<unknown> => itx.invoke(["itx", "workers", ["get", spec], ["hello"]]);
   // 1. the artifact has not landed yet: the producer throws inside getCode
   await expect(load()).rejects.toThrow();
   // 2. the build lands — same producer expression, same key
-  await itx.invoke(["itx", "kv", ["put", "build:cap.js", entrypoint("hello() { return 'hi'; }")]]);
+  await itx.invoke([
+    "itx",
+    "kv",
+    ["put", "build:worker.js", entrypoint("hello() { return 'hi'; }")],
+  ]);
   // 3. produced again, loaded under the next generation — never the first failure replayed
   expect(await load()).toBe("hi");
 });
@@ -217,7 +221,7 @@ test("facets.get: a facet whose producer threw once materializes on the next att
     [
       "put",
       "build:greeter.js",
-      `import { FacetDurableObject } from "./processor.js";\nexport class Greeter extends FacetDurableObject { static publicMethods = [...super.publicMethods, "hello"]; hello() { return "hi"; } }`,
+      `import { FacetDurableObject } from "iterate/sdk";\nexport class Greeter extends FacetDurableObject { static publicMethods = [...super.publicMethods, "hello"]; hello() { return "hi"; } }`,
     ],
   ]);
   expect(await hello()).toBe("hi");
@@ -232,9 +236,9 @@ test("facets.get: a facet whose producer threw once materializes on the next att
 // `itx.os.projects.get(id).rename(…)` shape) rides one POST. The credentials ride in ctx.props like
 // the url does.
 const SRC_REMOTE = {
-  "cap.js": /* js */ `
+  "worker.js": /* js */ `
 import { WorkerEntrypoint } from "cloudflare:workers";
-import { newHttpBatchRpcSession } from "./processor.js";
+import { newHttpBatchRpcSession } from "iterate/sdk";
 export class Remote extends WorkerEntrypoint {
   #api() { return newHttpBatchRpcSession(new Request(this.ctx.props.url, { headers: { authorization: "Bearer " + this.ctx.props.credentials.secret } })); }
   whoami() { return this.#api().authenticate(this.ctx.props.credentials).projects.get(this.ctx.props.projectId).whoami(); }
@@ -275,9 +279,9 @@ test("a userspace worker dials a remote capnweb API with the url in ctx.props, b
 
 // ── worker A: a stateful DO with a getter chain that bottoms out at callLater(ms, cb) ──
 const SRC_WORKER_A = {
-  "cap.js": `
+  "worker.js": `
 import { RpcTarget } from "cloudflare:workers";
-import { FacetDurableObject } from "./processor.js";
+import { FacetDurableObject } from "iterate/sdk";
 class Timer extends RpcTarget {
   async callLater(ms, cb) {
     const run = cb.dup();                       // retain past this call (a param stub is disposed on return)
@@ -298,9 +302,9 @@ export default CounterDurableObject;`,
 
 // ── worker B: reaches A via withItx(env.ITX, …) and writes the natural mid-chain dotted call ──
 const SRC_WORKER_B = {
-  "cap.js": `
+  "worker.js": `
 import { WorkerEntrypoint } from "cloudflare:workers";
-import { withItx } from "./processor.js";
+import { withItx } from "iterate/sdk";
 export default class ConsumerB extends WorkerEntrypoint {
   run(aRef) {
     // withItx hands the real scope. facets.get(name, { source, className }) is a mid-chain

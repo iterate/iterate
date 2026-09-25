@@ -36,7 +36,7 @@ import {
  *  at `/` with a RELATIVE script, the script at `/app.js`, an echo of what it was handed at `/echo`,
  *  and a WebSocket echo on an upgrade — and any other routing slug is its own 404, naming the slug. */
 const SRC_SITE = {
-  "cap.js": String.raw`import { WorkerEntrypoint } from "cloudflare:workers";
+  "worker.js": String.raw`import { WorkerEntrypoint } from "cloudflare:workers";
 export default class Site extends WorkerEntrypoint {
   fetch(request) {
     const url = new URL(request.url);
@@ -205,7 +205,7 @@ test("an app's sign-in challenge (401 Bearer realm=iterate): a page load goes to
 
 /** A config worker that fetches its own host with a FRESH Request — nothing forwarded, so no hop count. */
 const SRC_SELF_LOOP = {
-  "cap.js": `import { WorkerEntrypoint } from "cloudflare:workers";
+  "worker.js": `import { WorkerEntrypoint } from "cloudflare:workers";
 export default class Loop extends WorkerEntrypoint {
   fetch(request) { return fetch(new Request(request.url)); }
 }`,
@@ -283,7 +283,7 @@ export default class extends WorkerEntrypoint {
     await publishConfigWorker(itx, [
       "itx",
       "workers",
-      ["get", { source: { "cap.js": router, "mini-app.js": miniApp } }],
+      ["get", { source: { "worker.js": router, "mini-app.js": miniApp } }],
     ]);
     using notes = newWebSocketRpcSession<{
       add(text: string): Promise<{ text: string }[]>;

@@ -12,8 +12,8 @@ import type { ItxExpression } from "iterate/expression";
 import { releasePins, stub, until } from "./support.ts";
 
 const COUNTER_MODULES = {
-  "cap.js": /* js */ `
-import { StreamProcessor, StreamProcessorDurableObject, defineProcessorContract, z } from "./processor.js";
+  "worker.js": /* js */ `
+import { StreamProcessor, StreamProcessorDurableObject, defineProcessorContract, z } from "iterate/sdk";
 const contract = defineProcessorContract({
   slug: "counter", version: "1.0.0", description: "counts durable events",
   stateSchema: z.object({ n: z.number().default(0) }), events: {}, consumes: ["*"], emits: [],
@@ -28,9 +28,9 @@ export class CounterDurableObject extends StreamProcessorDurableObject {
 `,
 };
 const DIGEST_MODULES = {
-  "cap.js": /* js */ `
+  "worker.js": /* js */ `
 import { WorkerEntrypoint } from "cloudflare:workers";
-import { withItx } from "./processor.js";
+import { withItx } from "iterate/sdk";
 export default class Digest extends WorkerEntrypoint {
   processEventBatch(events, range) {
     return withItx(this.env.ITX, async (itx) => {
