@@ -1,6 +1,7 @@
 import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { basename, join, relative, resolve } from "node:path";
 import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
+import { createCli } from "trpc-cli";
 import { TestTelemetryArtifact } from "@iterate-com/shared/test-support/ci-telemetry";
 import {
   UNIT_ROW_WARN_EXEMPTIONS,
@@ -174,34 +175,35 @@ function duplicateValues(values: readonly string[]) {
   return [...duplicates];
 }
 
-if (isMainModule(import.meta.url)) {
-  const flakeSuitesIndex = process.argv.indexOf("--flake-suites");
-  let flakeSuites: FlakeSuite | undefined;
-  if (flakeSuitesIndex !== -1) {
-    const suite = process.argv[flakeSuitesIndex + 1];
-    if (suite !== "unit" && suite !== "specs" && suite !== "preview-e2e")
-      throw new Error("--flake-suites requires unit, specs or preview-e2e");
-    flakeSuites = suite;
-  }
-  const rootFlagIndex = process.argv.indexOf("--artifact-root");
-  const artifactRoot =
-    rootFlagIndex === -1 ? "test-results/ci-telemetry" : process.argv[rootFlagIndex + 1];
-  if (!artifactRoot || artifactRoot.startsWith("--")) {
-    throw new Error("--artifact-root requires a path");
-  }
-  // `--expect-unit-workspaces`: the checked-out tree's test workspaces (the Test workflow);
-  // otherwise the list the workflow names (a preview test job's `iterate-root` or `os`).
-  const expectedWorkspaces = process.argv.includes("--expect-unit-workspaces")
+/** Finalizes the job's CI test telemetry (finalizeTestTelemetry): completeness, unit row budget and
+ *  the flake suite summary. */
+export default async function uploadTestTelemetry(
+  options: {
+    /** The flake suite this job ran, for its suite-summary.json. */
+    flakeSuites?: "unit" | "specs" | "preview-e2e";
+    /** Where the raw telemetry artifacts are. */
+    artifactRoot?: string;
+    /** Expect the checked-out tree's test workspaces (the Test workflow); otherwise the list
+     *  TEST_TELEMETRY_EXPECTED_WORKSPACES names (a preview test job's `iterate-root` or `os`). */
+    expectUnitWorkspaces?: boolean;
+    /** The job was cancelled (the workflow's `cancelled()`). */
+    cancelled?: boolean;
+  } = {},
+) {
+  const expectedWorkspaces = options.expectUnitWorkspaces
     ? unitTestWorkspaces(process.cwd())
     : (process.env.TEST_TELEMETRY_EXPECTED_WORKSPACES || "")
         .split(",")
         .map((workspace) => workspace.trim())
         .filter(Boolean);
   await finalizeTestTelemetry({
-    artifactRoot,
-    cancelled: process.argv.includes("--cancelled"),
+    artifactRoot: options.artifactRoot || "test-results/ci-telemetry",
+    cancelled: options.cancelled ?? false,
     expectedWorkspaces,
-    flakeSuites,
+    flakeSuites: options.flakeSuites,
     headSha: process.env.TEST_TELEMETRY_HEAD_SHA,
   });
 }
+
+if (isMainModule(import.meta.url))
+  void createCli({ ...import.meta, name: "upload-test-telemetry" }).run();

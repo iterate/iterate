@@ -1,19 +1,8 @@
 {
-  "include": ["**/*.ts"],
-  "compilerOptions": {
-    "target": "ES2024",
-    "module": "ESNext",
-    "lib": ["ES2024"],
-    "types": ["node"],
-    "moduleResolution": "bundler",
-    "allowImportingTsExtensions": true,
-    "noEmit": true,
-    "skipLibCheck": true,
-    "strict": true,
-    // Node runs some of these files with its own type stripping (preview-tested-commit.ts before
-    // install, env-context.ts under preview's trpc-cli): reject syntax it cannot strip.
-    "erasableSyntaxOnly": true,
-    "verbatimModuleSyntax": true,
-    "isolatedModules": true
-  }
+  // Node runs some of these files with its own type stripping (preview-tested-commit.ts before
+  // install, env-context.ts under preview's trpc-cli): the base's erasableSyntaxOnly rejects syntax
+  // it cannot strip.
+  "extends": "../tsconfig.base.json",
+  "compilerOptions": { "types": ["node"] },
+  "include": ["**/*.ts"]
 }

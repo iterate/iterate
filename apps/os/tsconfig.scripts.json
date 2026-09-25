@@ -2,10 +2,7 @@
   // The node programs and their tests: every scripts/*.ts but the few that import worker code and
   // need its types (tsconfig.tests.json owns those).
   "extends": "../../tsconfig.base.json",
-  "compilerOptions": {
-    "lib": ["ES2024", "ESNext.Disposable"],
-    "types": ["node"]
-  },
+  "compilerOptions": { "types": ["node"] },
   "include": ["vite.config.ts", "vitest.config.ts", "vitest.global-setup.ts", "scripts/*.ts"],
   "exclude": ["scripts/inspect-context.ts", "scripts/project-seed*.ts"]
 }

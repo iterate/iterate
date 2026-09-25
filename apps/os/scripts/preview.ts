@@ -18,6 +18,7 @@ import path from "node:path";
 import process from "node:process";
 import { newWebSocketRpcSession } from "capnweb";
 import { WebSocket } from "undici";
+import { createCli } from "trpc-cli";
 import { z } from "zod";
 import {
   TestEvidenceTarget,
@@ -1024,7 +1025,10 @@ async function runSuite(
   const url = previewUrl(previewName);
   const env = { WORKER_BASE_URL: url, DEMO_BASE_URL: url };
   const appUrl = (name: string) =>
-    appPreviewUrl(APPS.find((app) => app.name === name)!, previewName);
+    appPreviewUrl(
+      APPS.find((app) => app.name === name)!,
+      previewName,
+    );
   await writeDeployedTarget(
     previewName,
     // the client apps the specs run against; the vitest rows use none
@@ -1311,49 +1315,65 @@ async function sweep(cf: Cf, options: { dryRun: boolean; jobUrl: string | undefi
 
 // ── main ───────────────────────────────────────────────────────────────────────────────────────
 
-function parseArgs(argv: string[]): {
-  command: Command;
+type PreviewOptions = {
+  /** the pull request's number (else PREVIEW_PR_NUMBER) */
   pr?: string;
+  /** the preview's name, for a run without a PR number (else PREVIEW_NAME) */
   name?: string;
-  apps?: AppsMode;
-  settleSeconds: number;
-  slowRows?: SlowRows;
-  dryRun: boolean;
-} {
-  const command = Command.safeParse(argv[0]);
-  if (!command.success) throw new Error(USAGE);
-  let pr: string | undefined;
-  let name: string | undefined;
-  let apps: AppsMode | undefined;
-  let settleSeconds = 0;
-  let slowRows: SlowRows | undefined;
-  let dryRun = false;
-  for (let i = 1; i < argv.length; i++) {
-    const arg = argv[i];
-    if (arg === "--dry-run") dryRun = true;
-    else if (arg === "--pr") pr = argv[++i];
-    else if (arg === "--name") name = argv[++i];
-    else if (arg === "--apps") {
-      const mode = AppsMode.safeParse(argv[++i]);
-      if (!mode.success) throw new Error(USAGE);
-      apps = mode.data;
-    } else if (arg === "--settle") {
-      settleSeconds = Number(argv[++i]);
-      if (!(Number.isInteger(settleSeconds) && settleSeconds >= 0)) throw new Error(USAGE);
-    } else if (arg === "--slow-rows") {
-      const choice = SlowRows.safeParse(argv[++i]);
-      if (!choice.success) throw new Error(USAGE);
-      slowRows = choice.data;
-    } else throw new Error(`unknown argument: ${arg}\n${USAGE}`);
+  /** the apps on top: all (default, else PREVIEW_APPS), none, or auto (the ones this PR changes) */
+  apps?: "all" | "auto" | "none";
+  /** deploy: how long, in seconds, the readiness gate holds (default 0) */
+  settle?: number;
+  /** e2e: which rows tagged `slow` run — run, skip or only (else E2E_SLOW_ROWS) */
+  slowRows?: "run" | "skip" | "only";
+  /** print the plan (sweep, reset-parent) or build and write the config only (the rest) */
+  dryRun?: boolean;
+};
+
+/** One Worker Preview per pull request of the one worker: `pnpm preview <command> [flags]`. */
+export default class Preview {
+  /** build and write the preview's wrangler config */
+  async config(options: PreviewOptions = {}) {
+    await main("config", options);
   }
-  return { command: command.data, pr, name, apps, settleSeconds, slowRows, dryRun };
+  /** build, the Artifacts namespace, the secrets, `wrangler preview`, the PR body and its status line */
+  async deploy(options: PreviewOptions = {}) {
+    await main("deploy", options);
+  }
+  /** the vitest e2e suite against the live preview */
+  async e2e(options: PreviewOptions = {}) {
+    await main("e2e", options);
+  }
+  /** the Playwright specs against the live preview */
+  async specs(options: PreviewOptions = {}) {
+    await main("specs", options);
+  }
+  /** delete the preview, then deploy it */
+  async reset(options: PreviewOptions = {}) {
+    await main("reset", options);
+  }
+  /** the preview, its Artifacts namespace, KV namespaces and R2 bucket, leftover D1, the apps on top */
+  async delete(options: PreviewOptions = {}) {
+    await main("delete", options);
+  }
+  /** the stale previews and the resources that outlived theirs (scripts/preview-sweep.ts) */
+  async sweep(options: PreviewOptions = {}) {
+    await main("sweep", options);
+  }
+  /** the workers every preview branches from, from this checkout */
+  async deployParents(options: PreviewOptions = {}) {
+    await main("deploy-parents", options);
+  }
+  /** the `os` parent's own data erased, then the parent deployed again */
+  async resetParent(options: PreviewOptions = {}) {
+    await main("reset-parent", options);
+  }
 }
 
-/** The flags, then the workflow's spellings — PREVIEW_PR_NUMBER, PREVIEW_APPS (all | auto | none),
- *  PREVIEW_NAME (a run without a PR number: a CI workflow's own preview), E2E_SLOW_ROWS (run | skip
- *  | only; empty decides) — then the defaults. */
-async function main(argv: string[]) {
-  const parsed = parseArgs(argv);
+async function main(command: Command, options: PreviewOptions) {
+  const settleSeconds = options.settle ?? 0;
+  if (!(Number.isInteger(settleSeconds) && settleSeconds >= 0)) throw new Error(USAGE);
+  const parsed = { ...options, command, settleSeconds, dryRun: options.dryRun ?? false };
   const pr = parsed.pr || process.env.PREVIEW_PR_NUMBER;
   const appsMode = parsed.apps || AppsMode.parse(process.env.PREVIEW_APPS || "all");
   if (parsed.command === "sweep")
@@ -1392,9 +1412,5 @@ async function main(argv: string[]) {
   );
 }
 
-if (process.argv[1]?.endsWith("preview.ts")) {
-  main(process.argv.slice(2)).catch((error) => {
-    console.error(describe(error));
-    process.exit(1);
-  });
-}
+if (process.argv[1]?.endsWith("preview.ts"))
+  void createCli({ ...import.meta, name: "preview" }).run({ formatError: describe });

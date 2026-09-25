@@ -41,8 +41,8 @@
 //     [--state-out <next.json>] [--test-page] [--dry-run]
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
-import { parseArgs } from "node:util";
 import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
+import { createCli } from "trpc-cli";
 import { FlakeSuiteSummary } from "@iterate-com/shared/test-support/flake-suite-summary";
 import { z } from "zod";
 import { osEnvs } from "../../envs.ts";
@@ -285,15 +285,25 @@ export function pushEvents(pushes: Push[]) {
   );
 }
 
-async function measure(options: {
-  token: string;
+/** Measure the last 24 hours of PR pushes' time to green (DEPOT_TOKEN reads Depot CI), page
+ *  #error-pulse on a change of judgement, keep the state and send PostHog each push. */
+export async function measure(options: {
+  /** The run's git ref: only refs/heads/main keeps state and sends PostHog events. */
   ref: string;
+  /** The previous run's state (`previous-state --out`). */
   state?: string;
+  /** Where to write the state for the next run. */
   stateOut?: string;
-  testPage: boolean;
-  dryRun: boolean;
+  /** Post this run's numbers marked 🧪, mentioning nobody. */
+  testPage?: boolean;
+  /** Print the page instead of posting it. */
+  dryRun?: boolean;
 }) {
-  const depot = (method: string, body: object) => depotCiApi(method, body, options.token);
+  const token = z
+    .string({ error: "DEPOT_TOKEN is required (Doppler _shared/preview)" })
+    .min(1)
+    .parse(process.env.DEPOT_TOKEN);
+  const depot = (method: string, body: object) => depotCiApi(method, body, token);
   const testRun = options.testPage || options.ref !== "refs/heads/main";
   const now = Date.now();
   const state: TtgState =
@@ -372,7 +382,7 @@ async function listPullRequestRuns(
   since: number,
 ) {
   const runs: z.infer<typeof RunPage>["runs"] = [];
-  for (let pageToken = ""; ; ) {
+  for (let pageToken = ""; ;) {
     const page = RunPage.parse(
       await depot("ListRuns", {
         repo: "iterate/iterate",
@@ -531,40 +541,12 @@ const ArtifactPage = z.object({
     .default([]),
 });
 
-if (isMainModule(import.meta.url)) {
-  const { positionals, values } = parseArgs({
-    allowPositionals: true,
-    options: {
-      out: { type: "string" },
-      ref: { type: "string" },
-      state: { type: "string" },
-      "state-out": { type: "string" },
-      "test-page": { type: "boolean", default: false },
-      "dry-run": { type: "boolean", default: false },
-    },
-  });
-  const done =
-    positionals[0] === "previous-state" && values.out
-      ? saveNewestArtifactFile({ ...stateArtifact, out: values.out }).then(console.log)
-      : positionals[0] === "measure" && values.ref
-        ? measure({
-            token: z
-              .string({ error: "DEPOT_TOKEN is required (Doppler _shared/preview)" })
-              .min(1)
-              .parse(process.env.DEPOT_TOKEN),
-            ref: values.ref,
-            state: values.state,
-            stateOut: values["state-out"],
-            testPage: values["test-page"],
-            dryRun: values["dry-run"],
-          })
-        : Promise.reject(
-            new Error(
-              "usage: pr-ttg-guard.ts previous-state --out <file> | measure --ref <ref> [--state <file>] [--state-out <file>] [--test-page] [--dry-run]",
-            ),
-          );
-  done.catch((error: unknown) => {
-    console.error(error instanceof Error ? error.message : String(error));
-    process.exit(1);
-  });
+/** Save the previous main run's state artifact to --out, for `measure --state`. */
+export async function previousState(options: {
+  /** Where to save the state file. */
+  out: string;
+}) {
+  console.log(await saveNewestArtifactFile({ ...stateArtifact, out: options.out }));
 }
+
+if (isMainModule(import.meta.url)) void createCli({ ...import.meta, name: "pr-ttg-guard" }).run();

@@ -210,7 +210,7 @@ export function useIterateContext(
         return;
       }
       subscription = handle;
-      for (let after = 0; ; ) {
+      for (let after = 0; ;) {
         const page = await itx.readEvents(after, 500);
         if (disposed) return;
         merge(page.events);

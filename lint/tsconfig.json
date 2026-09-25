@@ -1,15 +1,5 @@
 {
-  "compilerOptions": {
-    "allowImportingTsExtensions": true,
-    "lib": ["ES2023"],
-    "module": "NodeNext",
-    "moduleResolution": "NodeNext",
-    "noImplicitAny": true,
-    "noEmit": true,
-    "skipLibCheck": true,
-    "strict": true,
-    "target": "ES2022",
-    "types": ["node"]
-  },
+  "extends": "../tsconfig.base.json",
+  "compilerOptions": { "types": ["node"], "noImplicitAny": true },
   "include": ["*.ts"]
 }

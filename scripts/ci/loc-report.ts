@@ -5,6 +5,7 @@ import { extname, join, matchesGlob } from "node:path";
 
 import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
 import { decode } from "@jridgewell/sourcemap-codec";
+import { createCli } from "trpc-cli";
 import ts from "typescript";
 
 import { getOctokit, getRepo, readEventPayload } from "./github.ts";
@@ -372,15 +373,22 @@ function ensureCommitAvailable(sha: string) {
   }
 }
 
-async function postLocReport() {
+/** Writes the LOC report section into the pull request's body (GITHUB_EVENT_PATH); outside a pull
+ *  request, prints the report for baseRef...headRef. */
+export default async function locReport(
+  /** Outside a pull request: the base ref (default origin/main). */
+  baseRef?: string,
+  /** Outside a pull request: the head ref (default HEAD). */
+  headRef?: string,
+) {
   const payload = process.env.GITHUB_EVENT_PATH ? readEventPayload() : undefined;
   const pullRequest = payload?.pull_request;
 
   if (!pullRequest?.base?.sha || !pullRequest.head?.sha) {
-    const baseRef = process.argv[2] || "origin/main";
-    const headRef = process.argv[3] || "HEAD";
-    console.log(`No pull request context - printing report for ${baseRef}...${headRef}\n`);
-    const report = computeReport(getChangedFiles(baseRef, headRef, process.cwd()));
+    const base = baseRef || "origin/main";
+    const head = headRef || "HEAD";
+    console.log(`No pull request context - printing report for ${base}...${head}\n`);
+    const report = computeReport(getChangedFiles(base, head, process.cwd()));
     console.log(renderTable(report));
     return;
   }
@@ -403,6 +411,4 @@ async function postLocReport() {
   console.log(`Updated LOC report section in PR #${pullRequest.number} body`);
 }
 
-if (isMainModule(import.meta.url)) {
-  await postLocReport();
-}
+if (isMainModule(import.meta.url)) void createCli({ ...import.meta, name: "loc-report" }).run();

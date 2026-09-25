@@ -32,25 +32,25 @@
   "scripts": {
     "build": "tsdown",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run --reporter=default --reporter=../shared/src/test-support/e2e-policy/retry-telemetry-reporter.ts",
+    "test": "vitest run",
     "prepack": "pnpm build"
   },
   "dependencies": {
     "@clack/prompts": "^1.0.0",
-    "@orpc/server": "1.13.14",
-    "capnweb": "npm:@iterate-com/capnweb@0.12.3",
+    "@orpc/server": "catalog:",
+    "capnweb": "catalog:",
     "iterate": "workspace:*",
-    "oauth4webapi": "^3.8.5",
-    "trpc-cli": "0.15.1",
-    "ws": "8.19.0",
-    "zod": "4.5.4"
+    "oauth4webapi": "catalog:",
+    "trpc-cli": "catalog:",
+    "ws": "catalog:",
+    "zod": "catalog:"
   },
   "devDependencies": {
-    "@types/node": "^22.0.0",
-    "@types/ws": "^8.18.1",
-    "tsdown": "0.22.2",
-    "typescript": "^5.9.3",
-    "vitest": "4.0.15"
+    "@types/node": "catalog:",
+    "@types/ws": "catalog:",
+    "tsdown": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
   },
   "bin": {
     "iterate": "./bin/iterate.js"

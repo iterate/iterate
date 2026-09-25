@@ -1,7 +1,9 @@
 import { defineConfig } from "vitest/config";
+import { vitestReporters } from "../packages/shared/src/test-support/e2e-policy/vitest-reporters.ts";
 
 export default defineConfig({
   test: {
+    reporters: vitestReporters,
     environment: "node",
     // These tests spawn the real oxlint binary and run the TypeScript native
     // type-checker; a cold run (the first test in a file pays the warmup) can

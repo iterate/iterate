@@ -34,8 +34,8 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { execFileSync } from "node:child_process";
-import { parseArgs } from "node:util";
 import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
+import { createCli } from "trpc-cli";
 import { z } from "zod";
 import {
   BUDGET_MISSED,
@@ -518,16 +518,28 @@ export function latencyEvents(readings: Reading[], context: EventContext) {
 /** Judge one run of the perf suite: log every metric, page on a change of state, keep the state,
  *  send PostHog its events, and throw when the probe is broken in a way that turns the run red. */
 export async function judge(options: {
+  /** The perf suite's vitest JSON report. */
   report: string;
+  /** The previous run's state (`previous-state --out`). */
   state?: string;
+  /** Where to write the state for the next run (only a real run on main writes one). */
   stateOut?: string;
+  /** The run's id. */
   run: string;
+  /** The run's git ref. */
   ref: string;
+  /** The event that started the run. */
   trigger: string;
-  budgetScale: number;
-  dryRun: boolean;
+  /** Scales every budget (the dispatch's forced alert); anything but 1 is a test run. Default 1. */
+  budgetScale?: number;
+  /** Print the page and the events instead of sending them. */
+  dryRun?: boolean;
 }) {
-  const testRun = options.budgetScale !== 1 || options.ref !== "refs/heads/main";
+  const budgetScale = z
+    .number()
+    .positive()
+    .parse(options.budgetScale ?? 1);
+  const testRun = budgetScale !== 1 || options.ref !== "refs/heads/main";
   const state: GuardState =
     options.state && existsSync(options.state)
       ? GuardState.parse(JSON.parse(readFileSync(options.state, "utf8")))
@@ -541,7 +553,7 @@ export async function judge(options: {
   const readings = judgeRun({
     samples: report.samples,
     history: state.runs,
-    scale: options.budgetScale,
+    scale: budgetScale,
   });
   const broken = judgeBroken(brokenProbes(report.broken, readings), state.runs.at(-1));
   const sha = execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim();
@@ -571,7 +583,7 @@ export async function judge(options: {
       stillRed: outcome.next?.red.filter((metric) => !outcome.turnedRed.includes(metric)) ?? [],
       commit: { sha, subject },
       runUrl: process.env.DEPOT_JOB_URL,
-      testRun: testRun ? { scale: options.budgetScale } : undefined,
+      testRun: testRun ? { scale: budgetScale } : undefined,
     });
   console.log(
     JSON.stringify({
@@ -642,45 +654,13 @@ function escapeData(text: string) {
   return text.replaceAll("%", "%25").replaceAll("\r", "%0D").replaceAll("\n", "%0A");
 }
 
-if (isMainModule(import.meta.url)) {
-  const { positionals, values } = parseArgs({
-    allowPositionals: true,
-    options: {
-      out: { type: "string" },
-      report: { type: "string" },
-      state: { type: "string" },
-      "state-out": { type: "string" },
-      run: { type: "string" },
-      ref: { type: "string" },
-      trigger: { type: "string" },
-      "budget-scale": { type: "string" },
-      "dry-run": { type: "boolean", default: false },
-    },
-  });
-  const done =
-    positionals[0] === "previous-state" && values.out
-      ? saveNewestArtifactFile({ ...stateArtifact, out: values.out }).then(console.log)
-      : positionals[0] === "judge" && values.report && values.run && values.ref && values.trigger
-        ? judge({
-            report: values.report,
-            state: values.state,
-            stateOut: values["state-out"],
-            run: values.run,
-            ref: values.ref,
-            trigger: values.trigger,
-            budgetScale: z.coerce
-              .number()
-              .positive()
-              .parse(values["budget-scale"] || "1"),
-            dryRun: values["dry-run"],
-          })
-        : Promise.reject(
-            new Error(
-              "usage: os-latency-guard.ts previous-state --out <file> | judge --report <file> --run <id> --ref <ref> --trigger <event> [--state <file>] [--state-out <file>] [--budget-scale <n>] [--dry-run]",
-            ),
-          );
-  done.catch((error: unknown) => {
-    console.error(error instanceof Error ? error.message : String(error));
-    process.exit(1);
-  });
+/** Save the previous main run's state artifact to --out, for `judge --state`. */
+export async function previousState(options: {
+  /** Where to save the state file. */
+  out: string;
+}) {
+  console.log(await saveNewestArtifactFile({ ...stateArtifact, out: options.out }));
 }
+
+if (isMainModule(import.meta.url))
+  void createCli({ ...import.meta, name: "os-latency-guard" }).run();

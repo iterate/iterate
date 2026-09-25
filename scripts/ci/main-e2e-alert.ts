@@ -22,13 +22,13 @@
 import { appendFileSync } from "node:fs";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
-import { parseArgs } from "node:util";
 import { z } from "zod";
 import type {
   TestTelemetryArtifact,
   TestTelemetryRecord,
 } from "@iterate-com/shared/test-support/ci-telemetry";
 import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
+import { createCli } from "trpc-cli";
 import { getSlackClient, onCallMention, slackChannelIds } from "./slack.ts";
 import { testTelemetryFailed } from "./test-telemetry-completeness.ts";
 import { loadTestTelemetryArtifacts } from "./upload-test-telemetry.ts";
@@ -209,7 +209,15 @@ async function pageSuite(judged: z.infer<typeof JudgedSuite>, dryRun: boolean): 
   await pageOnChangeOfState({ ...judged, failedJobs: [], dryRun });
 }
 
-async function alert(dryRun: boolean): Promise<void> {
+/** Page #error-pulse when main changed state, from the run's jobs (NEEDS, `toJSON(needs)`), and
+ *  each judged suite a job named in its `suite-verdict` output. */
+export async function alert(options: {
+  /** The run's git ref: only refs/heads/main pages. */
+  ref: string;
+  /** Print the page instead of posting it. */
+  dryRun?: boolean;
+}): Promise<void> {
+  const dryRun = runIsDry(options);
   const needs = Needs.parse(JSON.parse(process.env.NEEDS || "{}"));
   const results = Object.fromEntries(
     Object.entries(needs).map(([job, need]) => [job, need.result]),
@@ -231,9 +239,17 @@ async function alert(dryRun: boolean): Promise<void> {
       await pageSuite(JudgedSuite.parse(JSON.parse(need.outputs["suite-verdict"])), dryRun);
 }
 
-type Suite = { suite: string; rows: SuiteRows };
-
-async function failingRows(directory: string, suite: Suite | undefined) {
+/** The failing rows of a job's telemetry, and the verdict of the suite it judges (`--suite` with
+ *  `--tag`, both or neither), as the job's GITHUB_OUTPUT. */
+export async function failingRows(options: {
+  /** The job's test telemetry directory. */
+  dir: string;
+  suite?: string;
+  tag?: string;
+}) {
+  const directory = options.dir;
+  const suite = suiteOf(options);
+  if (Boolean(options.suite) !== Boolean(suite)) throw new Error(usage);
   const artifacts = (await loadTestTelemetryArtifacts(directory)).map(({ artifact }) => artifact);
   const failing = mainE2eFailingRows(artifacts);
   console.log(`${failing.length} failing rows in ${artifacts.length} telemetry artifacts`);
@@ -246,46 +262,40 @@ async function failingRows(directory: string, suite: Suite | undefined) {
     );
 }
 
-async function judge(directory: string, suite: Suite, dryRun: boolean) {
-  const artifacts = (await loadTestTelemetryArtifacts(directory)).map(({ artifact }) => artifact);
+/** Judge a suite's rows (`--tag` or `--title-prefix`) in a run's telemetry and page
+ *  #error-pulse on its change of state. */
+export async function judge(options: {
+  /** The run's test telemetry directory. */
+  dir: string;
+  suite: string;
+  tag?: string;
+  titlePrefix?: string;
+  /** The run's git ref: only refs/heads/main pages. */
+  ref: string;
+  /** Print the page instead of posting it. */
+  dryRun?: boolean;
+}) {
+  const suite = suiteOf(options);
+  if (!suite) throw new Error(usage);
+  const dryRun = runIsDry(options);
+  const artifacts = (await loadTestTelemetryArtifacts(options.dir)).map(({ artifact }) => artifact);
   await pageSuite({ suite: suite.suite, ...suiteVerdict(artifacts, suite.rows) }, dryRun);
 }
 
-if (isMainModule(import.meta.url)) {
-  const { positionals, values } = parseArgs({
-    allowPositionals: true,
-    options: {
-      dir: { type: "string" },
-      suite: { type: "string" },
-      tag: { type: "string" },
-      "title-prefix": { type: "string" },
-      ref: { type: "string" },
-      "dry-run": { type: "boolean", default: false },
-    },
-  });
-  const dryRun = values["dry-run"] || values.ref !== "refs/heads/main";
-  const rows: SuiteRows | undefined = values.tag
-    ? { tag: values.tag }
-    : values["title-prefix"]
-      ? { titlePrefix: values["title-prefix"] }
+/** A suite is named exactly when its rows are. */
+function suiteOf(options: { suite?: string; tag?: string; titlePrefix?: string }) {
+  const rows: SuiteRows | undefined = options.tag
+    ? { tag: options.tag }
+    : options.titlePrefix
+      ? { titlePrefix: options.titlePrefix }
       : undefined;
-  const suite = values.suite && rows ? { suite: values.suite, rows } : undefined;
-  // a suite is named exactly when its rows are
-  const suiteWhole = Boolean(values.suite) === Boolean(rows);
-  const done =
-    positionals[0] === "failing-rows" && values.dir && suiteWhole
-      ? failingRows(values.dir, suite)
-      : positionals[0] === "alert" && values.ref
-        ? alert(dryRun)
-        : positionals[0] === "judge" && values.dir && suite && values.ref
-          ? judge(values.dir, suite, dryRun)
-          : Promise.reject(
-              new Error(
-                "usage: main-e2e-alert.ts failing-rows --dir <dir> [--suite <name> --tag <tag>] | alert --ref <ref> [--dry-run] | judge --dir <dir> --suite <name> (--tag <tag> | --title-prefix <prefix>) --ref <ref> [--dry-run]",
-              ),
-            );
-  done.catch((error: unknown) => {
-    console.error(error instanceof Error ? error.message : String(error));
-    process.exit(1);
-  });
+  return options.suite && rows ? { suite: options.suite, rows } : undefined;
 }
+
+const runIsDry = (options: { ref: string; dryRun?: boolean }) =>
+  Boolean(options.dryRun) || options.ref !== "refs/heads/main";
+
+const usage =
+  "usage: main-e2e-alert.ts failing-rows --dir <dir> [--suite <name> --tag <tag>] | alert --ref <ref> [--dry-run] | judge --dir <dir> --suite <name> (--tag <tag> | --title-prefix <prefix>) --ref <ref> [--dry-run]";
+
+if (isMainModule(import.meta.url)) void createCli({ ...import.meta, name: "main-e2e-alert" }).run();

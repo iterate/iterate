@@ -42,7 +42,7 @@ Save this in your scratchpad as `dump-agent.js`, with the agent's path filled in
 ```js
 const agent = itx.cd("/agents/web/<moment>");
 const events = [];
-for (let after = 0; ; ) {
+for (let after = 0; ;) {
   const page = await agent.readEvents(after, 500);
   events.push(...page.events);
   if (page.atHead || page.scannedThroughOffset <= after) break;

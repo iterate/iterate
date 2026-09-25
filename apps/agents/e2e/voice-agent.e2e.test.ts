@@ -267,7 +267,7 @@ export default class extends WorkerEntrypoint {
               event.type === "events.iterate.com/agent/context-added",
           ).length;
       let websiteAnswer: (typeof received)[number] | undefined;
-      for (let seen = 0; !websiteAnswer; ) {
+      for (let seen = 0; !websiteAnswer;) {
         const left = wholeMs - (Date.now() - websiteAskedAt);
         const events = await untilValue(
           left <= stepMs

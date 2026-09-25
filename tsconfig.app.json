@@ -1,0 +1,13 @@
+{
+  // The apps on Workers (apps/os, dash, agents, notes, voice, kit, dummy-petshop and ci-reports):
+  // Worker and browser code in one program, built by Vite.
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "lib": ["ES2024", "ESNext.Disposable", "DOM", "DOM.Iterable"],
+    "types": ["@cloudflare/workers-types", "node", "vite/client"],
+    "jsx": "react-jsx",
+    // Off for the Start apps: Start's docs warn it can leak server code into the client bundle
+    // (#2904).
+    "verbatimModuleSyntax": false
+  }
+}

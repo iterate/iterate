@@ -26,7 +26,9 @@ export default {
     "configs/with-agents/agents.js": ["unresolved"],
     "configs/*/worker.ts": ["unresolved"],
     // The types it names resolve from each extending app's own dependencies.
-    "tsconfig.base.json": ["unlisted", "unresolved"],
+    "tsconfig.app.json": ["unlisted", "unresolved"],
+    // packageExtensions adds @types/react as a peer of lucide-react and streamdown.
+    "pnpm-workspace.yaml": ["unlisted"],
   },
   workspaces: {
     ".": {
@@ -34,11 +36,6 @@ export default {
       entry: ["configs/*/worker.ts"],
       project: ["*.ts", "specs/**/*.ts", "configs/**/*.{ts,js}"],
       ignoreDependencies: [
-        // .oxlintrc.json loads these as jsPlugins, which knip's oxlint plugin does not read.
-        "@tanstack/eslint-plugin-router",
-        "eslint-plugin-codegen",
-        "eslint-plugin-eslint-comments",
-        "eslint-plugin-import",
         // The .depot/workflows steps run this bin from the root.
         "trpc-cli",
         // The `iterate` bin: `pnpm exec iterate` from the root (docs/dev-environments.md).
@@ -47,15 +44,11 @@ export default {
         "cloudflare",
       ],
     },
-    lint: {
-      // .oxlintrc.json's jsPlugins entry.
-      entry: ["oxlint-plugin-iterate.ts"],
-    },
     scripts: {
       // The programs .depot/workflows run (knip reads no Depot workflows); the modules beside them
       // get unused-export checks.
       entry: [
-        "ci/{create-release,do-duration-alert,do-duration-probe,loc-report,main-e2e-alert,notify,pr-dashboard,prd-fault-alarm,prd-post-deploy-check,preview-tested-commit,shadcn-drift,sync-ci-telemetry,upload-test-telemetry}.ts",
+        "ci/{create-release,do-duration-alert,do-duration-probe,loc-report,main-e2e-alert,merges-with-main,notify,os-latency-guard,pr-dashboard,pr-ttg-guard,prd-fault-alarm,prd-post-deploy-check,preview-paths,preview-tested-commit,shadcn-drift,sync-ci-telemetry,test-evidence,upload-test-telemetry}.ts",
         "ci/flake-dashboard/update.ts",
         "ci/tracing/{cli,tracing}.ts",
         "depot-ci/dependencies.mjs",
@@ -77,12 +70,12 @@ export default {
         // the node programs (build/dev/deploy/preview and the operator CLIs) and their tests, so the
         // library modules beside them (preview-config, preview-sweep, generate-wrangler-config) get
         // unused-export checks
-        "scripts/{build,dev,deploy,preview,ensure-resources,erase-data,replay-directory,control-plane-load,project-seed,e2e-soak,inspect-context}.ts",
+        "scripts/{build,dev,deploy,preview,ensure-resources,erase-data,control-plane-load,project-seed,e2e-soak,inspect-context}.ts",
         "scripts/*.test.ts",
         "examples/**/*.ts",
       ],
       project: [
-        "src/**/*.{ts,tsx}!",
+        "src/**/*.{ts,tsx,css}!",
         "scripts/**/*.ts",
         "examples/**/*.ts",
         "e2e/**/*.ts",
@@ -90,16 +83,14 @@ export default {
         "__workers-tests__/**/*.ts",
         "bench/**/*.ts",
       ],
-      // `cloudflare:workers` parses as the "cloudflare" package. Tailwind is imported by
-      // src/styles.css, which knip does not read.
+      // `cloudflare:workers` parses as the "cloudflare" package; knip does not count
+      // src/styles.css's `@import "tailwindcss"`.
       ignoreDependencies: ["cloudflare", "tailwindcss"],
     },
     "apps/agents": {
       // scripts/build-runtime.ts bundles runtime/index.ts into the with-agents template;
       // scripts/build-voice-install.ts bundles the voice entries into the installer.
       entry: [
-        "vite.config.ts",
-        "src/server.ts!",
         "scripts/**/*.ts",
         "runtime/index.ts",
         "voice/{voice-agent,voice-delegate,worker}.ts",
@@ -108,7 +99,7 @@ export default {
       ],
       project: [
         "scripts/**/*.ts",
-        "src/**/*.{ts,tsx}!",
+        "src/**/*.{ts,tsx,css}!",
         "runtime/**/*.ts",
         "voice/**/*.ts",
         "e2e/**/*.ts",
@@ -116,43 +107,40 @@ export default {
       ],
       vite: false,
       wrangler: false,
-      ignoreDependencies: ["tailwindcss", "cloudflare", "@cloudflare/workers-types"],
+      ignoreDependencies: ["tailwindcss", "cloudflare"],
     },
-    "apps/{dash,kit,notes,voice}": {
-      // The Worker entry is declared here: there is no wrangler file to read it from (the Worker
-      // config is scripts/lib/start-app.ts's, handed to the Cloudflare Vite plugin).
-      entry: ["vite.config.ts", "src/server.ts!", "scripts/**/*.ts"],
-      project: ["scripts/**/*.ts", "src/**/*.{ts,tsx}!", "!dist/**!"],
-      vite: false,
-      wrangler: false,
-      // Tailwind backs a Vite plugin rather than a direct runtime import. `cloudflare:workers` parses
-      // as the "cloudflare" package; the Workers types are named by the shared tsconfig.base.json.
-      ignoreDependencies: ["tailwindcss", "cloudflare", "@cloudflare/workers-types"],
-    },
+    // The Start apps: knip's vite and TanStack Start plugins find the Worker entry.
+    ...Object.fromEntries(
+      ["dash", "kit", "notes", "voice"].map((app) => [
+        `apps/${app}`,
+        {
+          entry: ["scripts/**/*.ts"],
+          project: ["scripts/**/*.ts", "src/**/*.{ts,tsx,css}!"],
+          // knip does not count src/styles.css's `@import "tailwindcss"`.
+          ignoreDependencies: ["tailwindcss"],
+        },
+      ]),
+    ),
     "apps/dummy-petshop": {
       // vite.config.ts names the Worker's main inline.
       entry: ["src/worker.ts!"],
-      // As in the Start apps: `cloudflare:workers` parses as the "cloudflare" package; the Workers
-      // types are named by tsconfig.base.json.
-      ignoreDependencies: ["cloudflare", "@cloudflare/workers-types"],
+      // `cloudflare:workers` parses as the "cloudflare" package.
+      ignoreDependencies: ["cloudflare"],
     },
     "apps/ci-reports": {
       // vite.config.ts names the Worker's main inline.
       entry: ["src/worker.ts!"],
-      // The Workers types are named by tsconfig.base.json.
-      ignoreDependencies: ["@cloudflare/workers-types"],
     },
     "apps/spa": {
       // public/index.html loads app.js, and its import map resolves @iterate-com/capnweb from a CDN.
       entry: ["public/app.js"],
-      // scripts/deploy.ts runs `pnpm exec wrangler`.
-      ignoreDependencies: ["@iterate-com/capnweb", "wrangler"],
+      ignoreDependencies: ["@iterate-com/capnweb"],
     },
     "packages/ui": {
       // The package.json export map is the public entry surface (many subpath
       // exports, no src/index.ts) — same posture as packages/shared.
       entry: ["src/**/*.test.{ts,tsx}"],
-      project: ["src/**/*.{ts,tsx}"],
+      project: ["src/**/*.{ts,tsx,css}"],
     },
     "packages/cli": {
       // The `iterate` bin (package.json `bin`).

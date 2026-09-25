@@ -1,3 +1,4 @@
+import { useId } from "react";
 import { Button } from "@iterate-com/ui/components/button";
 import { Checkbox } from "@iterate-com/ui/components/checkbox";
 import { Label } from "@iterate-com/ui/components/label";
@@ -36,6 +37,8 @@ export function ProjectChoices({
   onSelectionChange: (selection: ProjectSelection) => void;
   onCreatingChange: (creating: boolean) => void;
 }) {
+  // The label around a checkbox names it too (Base UI); these name each project "<slug> in <org>".
+  const id = useId();
   function tick(projectId: string, checked: boolean) {
     const excluded = new Set(selection.excluded);
     if (checked) excluded.delete(projectId);
@@ -48,7 +51,6 @@ export function ProjectChoices({
         <Label className="gap-3 rounded-lg px-2 py-2 leading-normal hover:bg-muted">
           <Checkbox
             className="border-foreground/30 data-disabled:opacity-50"
-            aria-label="All my projects, now and future"
             checked={selection.all}
             disabled={disabled}
             onCheckedChange={(all) => onSelectionChange({ ...selection, all })}
@@ -63,14 +65,21 @@ export function ProjectChoices({
         >
           <Checkbox
             className="border-foreground/30 data-disabled:opacity-50"
-            aria-label={`${project.slug} in ${project.orgName}`}
+            aria-labelledby={`${id}-${project.id}-slug ${id}-${project.id}-in ${id}-${project.id}-org`}
             checked={selection.all || !selection.excluded.has(project.id)}
             disabled={disabled || selection.all}
             onCheckedChange={(checked) => tick(project.id, checked)}
           />
           <span className="flex min-w-0 flex-col">
-            <span className="truncate font-mono">{project.slug}</span>
-            <span className="truncate text-xs text-muted-foreground">{project.orgName}</span>
+            <span id={`${id}-${project.id}-slug`} className="truncate font-mono">
+              {project.slug}
+            </span>
+            <span id={`${id}-${project.id}-in`} className="sr-only">
+              in
+            </span>
+            <span id={`${id}-${project.id}-org`} className="truncate text-xs text-muted-foreground">
+              {project.orgName}
+            </span>
           </span>
         </Label>
       ))}

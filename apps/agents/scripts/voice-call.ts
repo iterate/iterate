@@ -15,22 +15,10 @@
 // ITERATE_BEARER_TOKEN is a personal access token for the project
 // (`pnpm exec iterate --config prd tokens create`). PROJECT=prj-voice.
 import { readFileSync, writeFileSync } from "node:fs";
+import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
+import { createCli } from "trpc-cli";
 import { credentials, disposeSessions, session } from "./client.ts";
 
-const args = new Map<string, string>();
-for (let i = 2; i < process.argv.length; i += 2) {
-  const key = process.argv[i];
-  const value = process.argv[i + 1];
-  if (!key?.startsWith("--") || !value) throw new Error(`usage: --flag value…, got ${key}`);
-  args.set(key.slice(2), value);
-}
-const PROJECT = process.env.PROJECT || "prj-voice";
-const CONTEXT_PATH = args.get("path") || `/calls/${Date.now().toString(36)}`;
-const UTTERANCE = args.get("utterance");
-const SAY = args.get("say");
-const OUT = args.get("out") || `/tmp/voice-call-${Date.now().toString(36)}.wav`;
-/** How long to keep the microphone open with silence after the utterance (the model answers then). */
-const LISTEN_MS = Number(args.get("listen-ms") || 12_000);
 const FRAME_MS = 50;
 const BYTES_PER_MS = 32; // 16 kHz mono PCM16
 const now = () => Date.now();
@@ -85,7 +73,28 @@ function wavFromPcm(pcm: Uint8Array): Uint8Array {
   return Buffer.concat([header, pcm]);
 }
 
-async function main(): Promise<void> {
+/** ONE voice conversation on a fresh context, making exactly the device's calls; prints the
+ *  timeline from the press. PROJECT (env) names the project, default prj-voice. */
+export default async function voiceCall(
+  options: {
+    /** The fresh context's path; default /calls/<now>. */
+    path?: string;
+    /** A 16 kHz mono PCM16 WAV to send as microphone frames. */
+    utterance?: string;
+    /** Text sent as a `commentary-added` fact after one silent frame. */
+    say?: string;
+    /** Where to write what came back as a WAV; default /tmp/voice-call-<now>.wav. */
+    out?: string;
+    /** How long to keep the microphone open with silence after the utterance (the model answers then). */
+    listenMs?: number;
+  } = {},
+): Promise<void> {
+  const PROJECT = process.env.PROJECT || "prj-voice";
+  const CONTEXT_PATH = options.path || `/calls/${Date.now().toString(36)}`;
+  const UTTERANCE = options.utterance;
+  const SAY = options.say;
+  const OUT = options.out || `/tmp/voice-call-${Date.now().toString(36)}.wav`;
+  const LISTEN_MS = Number(options.listenMs || 12_000);
   if (!UTTERANCE && !SAY) throw new Error("pass --utterance <wav> or --say <text>");
   const micPcm = UTTERANCE ? pcmFromWav(UTTERANCE) : Buffer.alloc(FRAME_MS * BYTES_PER_MS);
 
@@ -266,5 +275,4 @@ async function main(): Promise<void> {
   disposeSessions();
 }
 
-await main();
-process.exit(0);
+if (isMainModule(import.meta.url)) void createCli({ ...import.meta, name: "voice-call" }).run();

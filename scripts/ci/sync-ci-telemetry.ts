@@ -25,8 +25,8 @@
  *     pnpm tsx scripts/ci/sync-ci-telemetry.ts --dry-run --since 2026-09-24T00:00:00Z
  */
 import { readFile, readdir } from "node:fs/promises";
-import { parseArgs } from "node:util";
 import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
+import { createCli } from "trpc-cli";
 import { parse as parseYaml } from "yaml";
 import { z } from "zod";
 import { osEnvs } from "../../envs.ts";
@@ -44,14 +44,17 @@ const longestWorkflowMs = 2 * 3_600_000;
 /** A sync that has failed for longer drops the oldest part of its window and says so. */
 const longestWindowMs = 6 * 3_600_000;
 
-async function main() {
-  const { values } = parseArgs({
-    options: {
-      "dry-run": { type: "boolean", default: false },
-      since: { type: "string" },
-      until: { type: "string" },
-    },
-  });
+/** Sync Depot CI's finished runs since the last sync to PostHog as CI telemetry events. */
+export default async function syncCiTelemetry(
+  values: {
+    /** Print the events instead of sending them. */
+    dryRun?: boolean;
+    /** Start of the window (ISO time) instead of the last sync. */
+    since?: string;
+    /** End of the window (ISO time); default now minus the settle time. */
+    until?: string;
+  } = {},
+) {
   const depotToken = z
     .string({ error: "DEPOT_CI_TELEMETRY_TOKEN is required (Doppler _shared/preview)" })
     .min(1)
@@ -143,7 +146,7 @@ async function main() {
     ]),
   );
   console.log(`[ci-telemetry] ${events.length} event(s): ${JSON.stringify(counts)}`);
-  if (values["dry-run"]) {
+  if (values.dryRun) {
     const hours = (window.end - window.start) / 3_600_000;
     console.log(
       `[ci-telemetry] dry run: ${Math.round((events.length / hours) * 24)} event(s)/day at this window's rate`,
@@ -599,4 +602,5 @@ type WorkflowDetail = z.infer<typeof WorkflowDetail>;
 /** GetJobSummary's answer for one attempt: its steps' summaries joined, empty when none wrote one. */
 const JobSummary = z.object({ markdown: z.string().default("") });
 
-if (isMainModule(import.meta.url)) await main();
+if (isMainModule(import.meta.url))
+  void createCli({ ...import.meta, name: "sync-ci-telemetry" }).run();

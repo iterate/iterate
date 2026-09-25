@@ -186,7 +186,7 @@ export function buildLibrary(
         list: async (prefix = "") => {
           // Every page: the semantic layer answers the whole set under a prefix.
           const records: FileRecord[] = [];
-          for (let cursor: string | undefined; ; ) {
+          for (let cursor: string | undefined; ;) {
             const page = await itx.r2.list({ prefix: fileKey(prefix), cursor });
             for (const object of page.objects) records.push(fileRecord(object));
             if (!page.truncated) return records;

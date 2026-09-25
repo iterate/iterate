@@ -802,9 +802,9 @@ test("the Lint check runs the root lint script that local runs use", () => {
 });
 
 test("the preview's e2e suite writes the canonical telemetry artifact", () => {
-  // `e2e` is a build plus `e2e:run`; the preview runs `e2e:run` alone (it must not rebuild the
-  // deployed dist/), so the reporter lives on `e2e:run`.
-  expect(readPackageJson("apps/os").scripts?.["e2e:run"]).toMatch(/retry-telemetry-reporter\.ts/);
+  // The preview runs `e2e:run` alone (it must not rebuild the deployed dist/); the reporters are a
+  // root option of apps/os's vitest config, so every project's run writes it.
+  expect(readVitestConfig("apps/os")).toMatch(/^ {4}reporters: vitestReporters,$/m);
 });
 
 test("every unit-test workspace writes the canonical telemetry artifact", () => {
@@ -815,9 +815,9 @@ test("every unit-test workspace writes the canonical telemetry artifact", () => 
       .join(" ");
     if (!testCommand) return [];
     expect(
-      testCommand,
-      `${directory}/package.json must install the canonical test telemetry reporter`,
-    ).toMatch(/retry-telemetry-reporter\.ts/);
+      readVitestConfig(directory),
+      `${directory}/vitest.config.ts must install the canonical test telemetry reporter`,
+    ).toMatch(/reporters: vitestReporters/);
     return [packageJson.name];
   });
 
@@ -1200,6 +1200,10 @@ function triggers(paths: string[], file: string) {
     if (matchesGlob(file, negated ? pattern.slice(1) : pattern)) included = !negated;
   }
   return included;
+}
+
+function readVitestConfig(directory: string) {
+  return readFileSync(resolve(repoRoot, directory, "vitest.config.ts"), "utf8");
 }
 
 function readPackageJson(directory: string) {

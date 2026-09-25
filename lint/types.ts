@@ -18,16 +18,24 @@ export type StrictRule = Omit<Rule.RuleModule, "create"> & {
   create: (context: Rule.RuleContext) => Rule.NodeListener &
     RuleListenerMethods & {
       // Infer direct node selectors and qualified variants like `Identifier:exit` or `VariableDeclarator[init.callee.object.name='z']`.
-      [Name in ListenableNodeName as `${Name}${SelectorQualifier}`]?: Rule.NodeListener[LeafNode<Name>];
+      [
+        Name in ListenableNodeName as `${Name}${SelectorQualifier}`
+      ]?: Rule.NodeListener[LeafNode<Name>];
     } & {
       // Infer comma selectors from the first selector segment; overlapping mapped entries can produce unions for concrete keys.
-      [Name in ListenableNodeName as `${string}${Name}${SelectorQualifier},${string}`]?: Rule.NodeListener[LeafNode<Name>];
+      [
+        Name in ListenableNodeName as `${string}${Name}${SelectorQualifier},${string}`
+      ]?: Rule.NodeListener[LeafNode<Name>];
     } & {
       // Infer comma selectors from the last selector segment; overlapping mapped entries can produce unions for concrete keys.
-      [Name in ListenableNodeName as `${string},${string}${Name}${SelectorQualifier}`]?: Rule.NodeListener[LeafNode<Name>];
+      [
+        Name in ListenableNodeName as `${string},${string}${Name}${SelectorQualifier}`
+      ]?: Rule.NodeListener[LeafNode<Name>];
     } & {
       // Infer descendant selectors from the rightmost node selector, which is the node passed to the listener.
-      [Name in ListenableNodeName as `${string} ${Name}${SelectorQualifier}`]?: Rule.NodeListener[LeafNode<Name>];
+      [
+        Name in ListenableNodeName as `${string} ${Name}${SelectorQualifier}`
+      ]?: Rule.NodeListener[LeafNode<Name>];
     };
 };
 

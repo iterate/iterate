@@ -1,7 +1,6 @@
 import { createRootRoute, Outlet, Scripts, useHydrated } from "@tanstack/react-router";
-import { useEffect } from "react";
 import { EnvironmentHeadContent } from "@iterate-com/ui/components/environment-head-content";
-import { posthogPrivacy } from "@iterate-com/ui/components/not-recorded";
+import { initPosthog } from "@iterate-com/ui/components/posthog";
 import { getPosthogProjectKey } from "../issuer.functions.ts";
 import css from "../styles.css?url";
 
@@ -18,28 +17,16 @@ export const Route = createRootRoute({
   component: RootDocument,
 });
 
-/** The sign-in and consent pages: pageviews and session replay, anonymous — the person is
- *  identified in the apps they sign in to (dash), and PostHog's shared `*.iterate.com` cookie joins
- *  this visit to them. posthog-js directly, not packages/ui's setup: this worker's type program has
- *  no DOM. Same settings: through `/e` (worker.ts), EU, and the apps' privacy (`posthogPrivacy`),
- *  so the password and the mailed code (`SecretInput`s) are never recorded. */
+/** The sign-in and consent pages: the apps' PostHog (packages/ui posthog.tsx), anonymous — the
+ *  person is identified in the apps they sign in to (dash), and PostHog's shared `*.iterate.com`
+ *  cookie joins this visit to them. The apps' privacy covers the password and the mailed code
+ *  (`SecretInput`s). */
 function RootDocument() {
   // `data-hydrated` is false in the server's HTML and true once React owns the page: the specs'
   // hydration-waiter (specs/AGENTS.md) waits on it before touching controls that do nothing yet.
   const hydrated = useHydrated();
   const apiKey = Route.useLoaderData();
-  useEffect(() => {
-    if (!apiKey) return;
-    void import("posthog-js").then(({ default: posthog }) =>
-      posthog.init(apiKey, {
-        api_host: "/e",
-        ui_host: "https://eu.posthog.com",
-        defaults: "2026-06-25",
-        person_profiles: "identified_only",
-        ...posthogPrivacy(),
-      }),
-    );
-  }, [apiKey]);
+  initPosthog(apiKey);
   return (
     <html lang="en">
       <head>

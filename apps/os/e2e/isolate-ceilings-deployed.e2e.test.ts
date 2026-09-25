@@ -73,7 +73,7 @@ test.sequential(
     const itx = openItx(seeded.ctx);
     const seen = new Map<number, string>();
     let pages = 0;
-    for (let after = 0; ; ) {
+    for (let after = 0; ;) {
       const page = await itx.invoke(["itx", ["readEvents", after, 500]]);
       pages++;
       for (const event of page.events as { offset: number; type: string; payload: any }[])

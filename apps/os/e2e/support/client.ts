@@ -259,7 +259,7 @@ export const ruleMatchAtRest = (event: { payload?: { match?: unknown } }) => {
  *  head (a page is bounded by rows AND by bytes, so one page is not the log). */
 export const readAll = async (itx: any): Promise<any[]> => {
   const all: any[] = [];
-  for (let after = 0; ; ) {
+  for (let after = 0; ;) {
     const page = await itx.invoke(["itx", ["readEvents", after, 500]]);
     all.push(...page.events);
     if (page.atHead === true || page.scannedThroughOffset <= after) return all;

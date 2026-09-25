@@ -1,5 +1,7 @@
-/** Forward a browser SDK request under `proxyPrefix` to PostHog's EU region: the SDK's assets to the
- *  asset host, everything else to ingest without this app's cookies. */
+/** Forward a browser SDK request under `proxyPrefix` to PostHog's EU region, as PostHog's Cloudflare
+ *  Worker proxy does (https://posthog.com/docs/advanced/proxy/cloudflare): the SDK's assets to the
+ *  asset host, everything else to ingest with the visitor's IP and without this app's cookies or
+ *  credentials. The body is read whole first, the guide's fix for POSTs that never reach PostHog. */
 export async function proxyPosthogRequest(options: {
   request: Request;
   proxyPrefix: string;
@@ -13,21 +15,21 @@ export async function proxyPosthogRequest(options: {
   const posthogUrl = `https://${targetHost}${posthogPath}${url.search}`;
   const headers = isAsset ? undefined : new Headers(options.request.headers);
   headers?.delete("cookie");
+  headers?.delete("authorization");
   headers?.delete("connection");
-  headers?.set("Host", targetHost);
+  // fetch sets PostHog's own from the URL.
+  headers?.delete("host");
   const clientIp = options.request.headers.get("cf-connecting-ip");
   if (headers && clientIp) headers.set("X-Forwarded-For", clientIp);
 
   const body =
     options.request.method === "GET" || options.request.method === "HEAD"
       ? undefined
-      : options.request.body || undefined;
+      : await options.request.arrayBuffer();
   return fetch(posthogUrl, {
     method: options.request.method,
     headers,
     body,
     redirect: options.request.redirect,
-    // Node's fetch requires this for stream bodies; Workers harmlessly ignore it.
-    ...(body && { duplex: "half" as const }),
   });
 }

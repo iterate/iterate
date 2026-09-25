@@ -598,14 +598,12 @@ export async function describeRewriteRules(args: {
   inherit: (path: string, depth: number) => Promise<RewriteRuleListEntry[]>;
 }): Promise<RewriteRuleListEntry[]> {
   const { rules, implicitRoots, path: ownPath, depth } = args;
-  const own = rules.map(
-    (rule): RewriteRuleListEntry => ({
-      match: print(rule.match),
-      target: rule.target && print(rule.target, { holes: true }),
-      description: rule.description,
-      context: ownPath,
-    }),
-  );
+  const own = rules.map((rule): RewriteRuleListEntry => ({
+    match: print(rule.match),
+    target: rule.target && print(rule.target, { holes: true }),
+    description: rule.description,
+    context: ownPath,
+  }));
   const claimed = new Set(own.map((row) => row.match));
   // `roots` is `implicitRoots` (`implicitRootsAt`: a subset of `BUILT_IN_ROOTS`) or the target of a
   // bare `itx ⇒ itx.builtins` (every root), so each one indexes the description map; the sets are

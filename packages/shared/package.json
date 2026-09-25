@@ -31,15 +31,15 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "vitest run --environment node src --reporter=default --reporter=./src/test-support/e2e-policy/retry-telemetry-reporter.ts"
+    "test": "vitest run"
   },
   "dependencies": {
-    "zod": "4.5.4",
-    "pako": "^3.0.1"
+    "zod": "catalog:",
+    "pako": "catalog:"
   },
   "devDependencies": {
-    "@types/node": "^25.0.10",
-    "typescript": "^5.9.3",
-    "vitest": "^4.1.5"
+    "@types/node": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
   }
 }

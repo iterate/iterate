@@ -1,23 +1,20 @@
 {
-  // The compiler options every app on Workers shares (apps/os, dash, agents, notes, voice, kit,
-  // dummy-petshop and ci-reports): each app's tsconfig.json extends this and adds only what is its
-  // own — its `include`, and apps/os its Worker-only `lib`.
+  // The language rules every TypeScript program in the repo shares. Each tsconfig extends this (or
+  // tsconfig.app.json) and adds only its environment: `lib`, `types`, `jsx` and its files.
   "compilerOptions": {
     "target": "ES2024",
     "module": "ESNext",
     "moduleResolution": "Bundler",
-    "lib": ["ES2024", "ESNext.Disposable", "DOM", "DOM.Iterable"],
-    "types": ["@cloudflare/workers-types", "node", "vite/client"],
+    "lib": ["ES2024", "ESNext.Disposable"],
+    "types": [],
     "strict": true,
     "noEmit": true,
     "skipLibCheck": true,
     "isolatedModules": true,
-    // verbatimModuleSyntax stays off for the Start apps: Start's docs warn it can leak server code
-    // into the client bundle (#2904). packages/shared, ui and iterate keep it on.
+    "verbatimModuleSyntax": true,
     "erasableSyntaxOnly": true,
     "noUncheckedSideEffectImports": true,
     "allowImportingTsExtensions": true,
-    "resolveJsonModule": true,
-    "jsx": "react-jsx"
+    "resolveJsonModule": true
   }
 }
