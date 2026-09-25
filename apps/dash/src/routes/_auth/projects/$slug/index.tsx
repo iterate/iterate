@@ -1,18 +1,41 @@
 // /projects/<project>/ — the overview: the project, its role, its site — and, while the project's own
 // creation runs, where it stands: the `project` facet's LIVE STATE on `/` (apps/os/src/project/),
 // rendered as a creation checklist until `project/created` lands, or as the failure the
-// processor reported. The frame the project's own pages fill in over time.
+// processor reported. The frame the project's own pages fill in over time. Its organization's owner
+// deletes the project here (`session.projects.delete`).
 import { useEffect, useState } from "react";
-import { createFileRoute, getRouteApi } from "@tanstack/react-router";
+import { createFileRoute, getRouteApi, useNavigate } from "@tanstack/react-router";
 import { ArrowUpRight, CheckIcon, CircleXIcon, LoaderCircleIcon } from "lucide-react";
 import { z } from "zod";
 import type { AuthenticatedApp } from "iterate/app";
 import { useContextStub, useFacetLiveState } from "iterate/react";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@iterate-com/ui/components/alert-dialog";
 import { Badge } from "@iterate-com/ui/components/badge";
-import { buttonVariants } from "@iterate-com/ui/components/button";
+import { Button, buttonVariants } from "@iterate-com/ui/components/button";
+import {
+  Card,
+  CardDescription,
+  CardFooter,
+  CardHeader,
+  CardTitle,
+} from "@iterate-com/ui/components/card";
+import { Spinner } from "@iterate-com/ui/components/spinner";
 import { cn } from "cn";
 import { Identifier } from "../../../../components/identifier.tsx";
-import { useOrganizationTree } from "../../../../components/organization-tree.tsx";
+import {
+  reloadOrganizationTree,
+  useOrganizationTree,
+} from "../../../../components/organization-tree.tsx";
 import { projectHostOf } from "../../../../lib/origins.ts";
 
 const shell = getRouteApi("/_auth");
@@ -83,7 +106,66 @@ function ProjectOverview() {
           <Identifier value={project.orgId} />
         </dd>
       </dl>
+      {org?.role === "owner" ? <DeleteProject project={project} /> : null}
     </div>
+  );
+}
+
+/** Its organization's owner deletes the project: the verb answers once its row is gone, and the
+ *  organization's live record drops it from the list; its contexts and storage go after, on the
+ *  project's own deletion saga. */
+function DeleteProject({ project }: { project: { id: string; slug: string } }) {
+  const { api } = shell.useRouteContext();
+  const navigate = useNavigate();
+  const [deleting, setDeleting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  async function remove() {
+    setError(null);
+    setDeleting(true);
+    try {
+      await api.projects.delete(project.id);
+      reloadOrganizationTree(); // the listed tree's; the live one follows by itself
+      await navigate({ to: "/projects", replace: true });
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+      setDeleting(false);
+    }
+  }
+  return (
+    <Card className="border-destructive/40">
+      <CardHeader>
+        <CardTitle>Delete project</CardTitle>
+        <CardDescription>
+          Deletes the project, its site, custom hostnames, repositories, files and every agent and
+          context in it. There is no undo.
+        </CardDescription>
+      </CardHeader>
+      <CardFooter className="flex-col items-start gap-3">
+        <AlertDialog>
+          <AlertDialogTrigger render={<Button variant="destructive" />} disabled={deleting}>
+            {deleting ? <Spinner data-icon="inline-start" /> : null}
+            Delete project
+          </AlertDialogTrigger>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Delete {project.slug}?</AlertDialogTitle>
+              <AlertDialogDescription>
+                The project and everything in it go. There is no undo.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>Cancel</AlertDialogCancel>
+              <AlertDialogAction onClick={() => void remove()}>Delete</AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+        {error ? (
+          <p role="alert" data-type="error" className="text-sm text-destructive">
+            {error}
+          </p>
+        ) : null}
+      </CardFooter>
+    </Card>
   );
 }
 

@@ -639,6 +639,11 @@ export interface IterateSessionApi {
       /** Operator-only recovery: retain the source project identity from a project seed. */
       restoreProjectId?: string;
     }): Promise<IterateContextApi>;
+    /** Delete a project, by its slug or its id — its organization's owner, or the operator; anyone
+     *  else is refused (FORBIDDEN). Answers once nothing reaches the project any more (its row is
+     *  gone, and its slug free); its contexts, hostnames and storage are destroyed after, by the
+     *  deletion saga on its root. There is no undo. */
+    delete(project: string): Promise<void>;
   };
   /** The organizations this session reaches — the person's memberships (a grant narrowed to
    *  projects sees only their organizations, unless it holds `organizations:write`): the rows, the
