@@ -351,8 +351,10 @@ test(
     // a WebSocket the key holds open on the project's host: the edge relays it on the key's lease
     // (src/project-host-lease.ts)
     const hostSocket = projectUrlSocket(echoOf(slug), bearer);
-    const hostClosed = new Promise<number>((resolve) =>
-      hostSocket.addEventListener("close", (event) => resolve(event.code), { once: true }),
+    const hostClosed = new Promise<{ code: number; reason: string }>((resolve) =>
+      hostSocket.addEventListener("close", ({ code, reason }) => resolve({ code, reason }), {
+        once: true,
+      }),
     );
     await new Promise((resolve, reject) => {
       hostSocket.addEventListener("open", resolve, { once: true });
@@ -430,10 +432,14 @@ test(
     await expect(mcpCall("tools/list", {}, token)).rejects.toThrow("answered 401");
     expect(await fetchProjectUrl(echoOf(slug), bearer)).toMatchObject({ status: 401 });
     // … and the sockets it opened close at their next re-check: the /api socket, taking its
-    // capability with it, and the project host's WebSocket, closed by the edge with 1008
+    // capability with it, and the project host's WebSocket, closed by the edge with 1008. The
+    // platform can drop the host socket's connection to the app before that re-check (about 1 in
+    // 90 sockets over their 30 s on previews, measured 2026-09-25); the edge then closes it 1011
+    // (project-host-lease.ts) and the lease has nothing left to close. The lease's own 1008 on a
+    // relayed socket is pinned without a platform in __workers-tests__/personal-access-tokens.test.ts.
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
-      const [, hostCloseCode] = await Promise.race([
+      const [, hostClose] = await Promise.race([
         Promise.all([closed, hostClosed]),
         new Promise<never>((_, reject) => {
           timer = setTimeout(
@@ -442,7 +448,9 @@ test(
           );
         }),
       ]);
-      expect(hostCloseCode).toBe(1008);
+      expect([1008, 1011], `the host socket's close: ${JSON.stringify(hostClose)}`).toContain(
+        hostClose.code,
+      );
     } finally {
       clearTimeout(timer);
       hostSocket.close();
