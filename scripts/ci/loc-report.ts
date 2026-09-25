@@ -6,7 +6,8 @@ import { extname, join, matchesGlob } from "node:path";
 import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
 import { decode } from "@jridgewell/sourcemap-codec";
 import { createCli } from "trpc-cli";
-import ts from "typescript";
+// TypeScript 7 (the repo's `typescript`) is the native compiler with no JS API; transpileModule is TypeScript 6's.
+import ts from "typescript6";
 
 import { getOctokit, getRepo, readEventPayload } from "./github.ts";
 import { markdownAnnotator } from "./markdown-annotator.ts";
