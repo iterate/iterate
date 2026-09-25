@@ -171,12 +171,14 @@ function causeOf(error: unknown): string {
  *  tunnel whose network is gone for good says so and exits. */
 const RECONNECT_DELAYS_MS = [1_000, 2_000, 4_000, 8_000, 15_000, ...Array(9).fill(30_000)];
 
-/** `iterate tunnel <port>`: lend a `LocalPortRpcTarget` to the project as `itx.tunnels.<slug>`, set
+/** `iterate tunnel <port>`: lend a `LocalPortRpcTarget` to the project as `itx.tunnels.<slug>` with
  *  the fetch route `tunnel-<slug>` taking the `<slug>` host to it, print the URL on stdout, and on
- *  Ctrl-C delete the route, then end the lend. A connection that closes (its heartbeat found it dead,
- *  iterate/node) is replaced: `reconnect` opens a fresh one and the tunnel lends and routes again
- *  over it, the same name taking its own route over. Only when every attempt fails does the tunnel
- *  end, with an error. */
+ *  Ctrl-C delete the route, then end the lend. The route rides the lend (`provide`'s `fetchRoute`):
+ *  the platform sets it again whenever it re-attaches the lend and removes it when the lend ends —
+ *  a tunnel killed outright, or asleep, leaves no route behind. A connection that closes (its
+ *  heartbeat found it dead, iterate/node) is replaced: `reconnect` opens a fresh one and the tunnel
+ *  lends and routes again over it, the same name taking its own route over. Only when every attempt
+ *  fails does the tunnel end, with an error. */
 export async function runTunnel(input: {
   connection: IterateConnection;
   reconnect: () => Promise<IterateConnection>;
@@ -196,11 +198,12 @@ export async function runTunnel(input: {
   const stopped = new Promise<"stopped">((resolve) => (stop = () => resolve("stopped")));
   process.once("SIGINT", stop);
   process.once("SIGTERM", stop);
-  /** Serve over one connection until Ctrl-C (the route deleted) or until the connection closes. */
+  /** Serve over one connection until Ctrl-C (the route deleted), or until the connection closes or
+   *  the lend ends — why, as a line. */
   const serve = async (
     connection: IterateConnection,
     first: boolean,
-  ): Promise<"stopped" | { code: number; reason: string }> => {
+  ): Promise<"stopped" | string> => {
     using project = await connection.session.projects.get(input.project);
     // A route of this name or on this host is someone else's unless it is this tunnel's own (a
     // restart, another terminal, this tunnel before it reconnected), which is taken over.
@@ -215,15 +218,17 @@ export async function runTunnel(input: {
         `The fetch route ${conflict.fetchRouteName} (target ${conflict.target.join(".")}) already has this name or host. Pick another --name.`,
       );
     const url = await project.url({ routingSlug });
-    using _lend = await project.provide(
+    using lend = await project.provide(
       target,
       new LocalPortRpcTarget(input.port, (line) => console.error(line)),
+      {
+        fetchRoute: {
+          fetchRouteName,
+          requestMatcher: { routingSlug },
+          authRequirement: input.public ? null : { visitors: "project-members" },
+        },
+      },
     );
-    await project.fetchRoutes.set(fetchRouteName, {
-      requestMatcher: { routingSlug },
-      target,
-      authRequirement: input.public ? null : { visitors: "project-members" },
-    });
     if (first) {
       console.log(url);
       console.error(
@@ -235,7 +240,16 @@ export async function runTunnel(input: {
           `Projects are served under paths here: your local server must serve under ${basePath} (Vite: --base ${basePath}). To serve at / on an origin of its own, give the deployment a domain with a wildcard certificate: https://github.com/iterate/iterate/blob/main/apps/os/SELF-HOSTING.md#custom-domain-own-origins-for-apps-and-tunnels`,
         );
     } else console.error(`Reconnected: ${url} → http://localhost:${input.port}`);
-    const outcome = await Promise.race([stopped, connection.closed]);
+    // The lend can end while the connection lives (the platform lost its pager, and the route
+    // with it): serving again over a fresh connection lends and routes again.
+    const lendEnded = lend.lendEnded().then(
+      (reason) => `its lend ended: the stub ${reason}`,
+      (error: unknown) => `its lend ended: ${messageOf(error)}`,
+    );
+    const connectionClosed = connection.closed.then(
+      ({ code, reason }) => `${code}: ${reason || "connection closed"}`,
+    );
+    const outcome = await Promise.race([stopped, connectionClosed, lendEnded]);
     // the route first: the host stops answering the moment it is gone
     if (outcome === "stopped")
       await project.fetchRoutes.set(fetchRouteName, null).catch((error: unknown) => {
@@ -252,7 +266,7 @@ export async function runTunnel(input: {
         try {
           const outcome = await serve(connection, first);
           if (outcome === "stopped") return;
-          lastFailure = `${outcome.code}: ${outcome.reason || "connection closed"}`;
+          lastFailure = outcome;
           console.error(`The tunnel disconnected (${lastFailure}). Reconnecting...`);
           failures = 0; // it was serving: a fresh round of attempts
         } catch (error) {

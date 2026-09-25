@@ -77,22 +77,14 @@ test("a config worker routes by `itx.fetchRoutes.match` to a lent stub: HTTP, a 
   expect(navigation).toMatchObject({ status: 302 });
   expect(navigation.headers.get("location")).toContain("/.auth/login");
 
-  // the lend recalled: the route stands, and the rule its target named went with the lend —
-  // default-deny, a 404
+  // the lend recalled: the rule its target named and the route go with it — the host is the
+  // config worker's own again
   await itx.fetchRoutes.set("tunnel-blog", {
     requestMatcher: { routingSlug: "blog" },
     target: "itx.tunnels.blog",
   });
   provision[Symbol.dispose]();
-  await expect
-    .poll(
-      async () => (await exports.default.fetch(`https://blog--${project}.projects.test/`)).status,
-    )
-    .toBe(404);
-
-  // deleted: the host is the config worker's own again
-  await itx.fetchRoutes.set("tunnel-blog", null);
-  expect(await itx.fetchRoutes.list()).toEqual([]);
+  await expect.poll(async () => await itx.fetchRoutes.list()).toEqual([]);
   expect(await exports.default.fetch(`https://blog--${project}.projects.test/`)).toMatchObject({
     status: 404,
   });

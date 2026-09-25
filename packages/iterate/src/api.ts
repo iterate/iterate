@@ -323,14 +323,21 @@ export interface IterateContextApi {
   }): Promise<{ [Symbol.dispose](): void }>;
   /** A rewrite rule of this context, session-scoped (the handle's dispose removes it): make `match`
    *  mean `target`, an expression, a live stub, or null to deny. `description` is the one line a
-   *  model reads for the name. The durable spelling is the rule's event (`RewriteRuleConfigured`)
-   *  through `itx.append`. */
+   *  model reads for the name. `fetchRoute` (a live stub, on the project's root) is a fetch route to
+   *  `match` that lives exactly as long as the lend: set with it, set again when the platform
+   *  re-attaches it, removed when it ends however it ends. A live stub's handle answers
+   *  `lendEnded()` with why the lend ended — it can end while the session lives (the platform lost
+   *  its pager). The durable spelling is the rule's event (`RewriteRuleConfigured`) through
+   *  `itx.append`. */
   provide(
     match: ItxExpressionInput,
     // Expressions, null, or live RPC references (RpcTarget / callable), serialized by capnweb.
     target: unknown,
-    options?: { description?: string },
-  ): Promise<{ [Symbol.dispose](): void }>;
+    options?: {
+      description?: string;
+      fetchRoute?: Omit<FetchRouteInput, "target"> & { fetchRouteName: string };
+    },
+  ): Promise<{ [Symbol.dispose](): void; lendEnded(): Promise<string> }>;
   /** A script — the text of `async (itx) => { … }` — run once against this context, on its log:
    *  `itx/run-requested` under the caller, the context's runner, `run-settled` (JSON in, JSON
    *  out); resolves with the result or rejects with the settlement's error. Never re-run. A script

@@ -82,11 +82,12 @@ iterate tunnel 3000 --project my-project --public   # anyone may use it; the nam
 ```
 
 The URL alone goes to stdout; everything else goes to stderr. The tunnel lends the local port to
-the project as `itx.tunnels.<name>` and sets the fetch route `tunnel-<name>` (`itx.fetchRoutes`)
+the project as `itx.tunnels.<name>` with the fetch route `tunnel-<name>` (`itx.fetchRoutes`)
 whose target is it; the project's config worker forwards a matched request to the route's target
 (`configs/default/worker.ts`). By default only signed-in project members get through; others are
-sent to sign in. Ctrl-C deletes the route; a tunnel that dies without it leaves the host answering
-502 until the platform notices, then 404, until it runs again.
+sent to sign in. The route lives as long as the lend: Ctrl-C deletes it, and a tunnel that dies
+without it (killed, asleep, offline) leaves the host answering 502 until the platform notices,
+then the route is gone too, until the tunnel runs again.
 
 On a deployment that serves projects under paths (`/projects/<project>/<name>/` on the
 platform's own origin, such as a per-PR preview), the local server must serve under the printed
@@ -95,8 +96,8 @@ base path (Vite: `--base`). A deployment with a domain gives each tunnel its own
 
 ### Without the CLI
 
-A tunnel is one capnweb session: lend the project a fetch-shaped `RpcTarget`, set a fetch route
-whose target is it, and delete the route on exit.
+A tunnel is one capnweb session: lend the project a fetch-shaped `RpcTarget` with a fetch route
+to it (`provide`'s `fetchRoute`, which ends with the lend), and delete the route on exit.
 [apps/os/examples/serve-localhost.mjs](../../apps/os/examples/serve-localhost.mjs) is the whole
 thing, runnable (`npm install capnweb@npm:@iterate-com/capnweb`):
 
@@ -117,11 +118,13 @@ class LocalSite extends RpcTarget {
     });
   }
 }
-await project.provide(`itx.tunnels.${routingSlug}`, new LocalSite());
-await project.fetchRoutes.set(`tunnel-${routingSlug}`, {
-  requestMatcher: { routingSlug },
-  target: `itx.tunnels.${routingSlug}`,
-  authRequirement: null,
+// the route rides the lend: set again when the platform re-attaches it, gone when it ends
+await project.provide(`itx.tunnels.${routingSlug}`, new LocalSite(), {
+  fetchRoute: {
+    fetchRouteName: `tunnel-${routingSlug}`,
+    requestMatcher: { routingSlug },
+    authRequirement: null,
+  },
 });
 console.log(await project.url({ routingSlug }));
 ```
