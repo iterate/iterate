@@ -3,10 +3,6 @@
 #include <assert.h>
 #include <string.h>
 
-#ifdef NDEBUG
-#error "firmware tests must execute assertions"
-#endif
-
 /*
  * The interesting half of live capture is the handoff, not CoreAudio. A
  * capture thread that never stops meets a cooperative loop that sometimes

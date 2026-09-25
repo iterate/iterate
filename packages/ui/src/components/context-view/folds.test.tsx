@@ -240,15 +240,25 @@ for (const growth of growths)
       }
     });
 
-test("growthOf: an append, a prepend, nothing, and anything else", () => {
-  const [a, b, c, d] = grown;
-  expect(growthOf([a, b], [a, b, c])).toEqual({ end: [c] });
-  expect(growthOf([b, c], [a, b, c])).toEqual({ start: [a] });
-  const same = [a, b];
+// growthOf compares items by identity; distinct strings stand in for distinct events.
+test.for([
+  { name: "an append", previous: ["a", "b"], next: ["a", "b", "c"], growth: { end: ["c"] } },
+  { name: "a prepend", previous: ["b", "c"], next: ["a", "b", "c"], growth: { start: ["a"] } },
+  { name: "grew in the middle", previous: ["a", "c"], next: ["a", "b", "c"], growth: null },
+  { name: "shrank", previous: ["a", "b", "c"], next: ["a", "b"], growth: null },
+  {
+    name: "grew at both ends at once",
+    previous: ["b", "d"],
+    next: ["a", "b", "c", "d"],
+    growth: null,
+  },
+])("growthOf: $name", ({ previous, next, growth }) => {
+  expect(growthOf(previous, next)).toEqual(growth);
+});
+
+test("growthOf: the same array grew by nothing", () => {
+  const same = ["a", "b"];
   expect(growthOf(same, same)).toEqual({ end: [] });
-  expect(growthOf([a, c], [a, b, c])).toBeNull(); // grew in the middle
-  expect(growthOf([a, b, c], [a, b])).toBeNull(); // shrank
-  expect(growthOf([b, d], [a, b, c, d])).toBeNull(); // grew at both ends at once
 });
 
 /** An item as a line: its kind, key and the offsets it covers. */

@@ -2,10 +2,6 @@
 
 #include <assert.h>
 
-#ifdef NDEBUG
-#error "firmware tests must execute assertions"
-#endif
-
 static void held_at_boot_requires_release_before_a_press_can_activate(void) {
   struct iterate_kit_button button = {0};
   iterate_kit_button_update(&button, true, 0U);

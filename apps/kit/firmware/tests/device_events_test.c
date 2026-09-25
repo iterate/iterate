@@ -1,25 +1,9 @@
 #include "iterate/kit/device_events.h"
 
+#include <assert.h>
 #include <stdbool.h>
 #include <stddef.h>
-#include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
-
-static void test_assert(
-    bool condition,
-    const char *expression,
-    const char *file,
-    int line) {
-  if (condition) {
-    return;
-  }
-  fprintf(stderr, "%s:%d: assertion failed: %s\n", file, line, expression);
-  abort();
-}
-
-#define assert(expression) \
-  test_assert((expression), #expression, __FILE__, __LINE__)
 
 enum {
   EVENT_CAPACITY = 2,

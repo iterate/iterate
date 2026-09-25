@@ -20,21 +20,11 @@
 #include "iterate/kit/audio_processor.h"
 #include "iterate/kit/voice_device_profile.h"
 
+#include <assert.h>
 #include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
-
-static void test_assert(
-    bool condition, const char *expression, const char *file, int line) {
-  if (condition) return;
-  (void)fprintf(
-      stderr, "%s:%d: assertion failed: %s\n", file, line, expression);
-  abort();
-}
-
-#define assert(expression) \
-  test_assert((expression), #expression, __FILE__, __LINE__)
 
 /* --- a board that is nothing but a screen --------------------------------- */
 

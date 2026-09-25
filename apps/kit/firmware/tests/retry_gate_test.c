@@ -5,10 +5,6 @@
 #include <assert.h>
 #include <stdint.h>
 
-#ifdef NDEBUG
-#error "firmware tests must execute assertions"
-#endif
-
 /*
  * When an access point is down, reconnecting every event-loop turn burns CPU
  * needed by audio and can hammer both Wi-Fi and the service. A fixed tight

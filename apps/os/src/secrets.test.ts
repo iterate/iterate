@@ -308,57 +308,123 @@ test("hmacSha256Hex agrees with node's HMAC over a string and over bytes", async
   expect(await hmacSha256Hex("k", bytes)).toBe(oracle("k", bytes));
 });
 
-test("secretMaterialStringOf: the whole string, or one string field of an object; an object with no field, a field on a string (JSON or not), a non-string field and an empty string are no key", () => {
-  expect(secretMaterialStringOf("whsec_k")).toBe("whsec_k");
-  expect(secretMaterialStringOf({ signing: "s" })).toBeNull();
-  expect(secretMaterialStringOf({ signing: "s", n: 1 }, "signing")).toBe("s");
-  expect(secretMaterialStringOf({ a: { b: "deep" } }, "a.b")).toBe("deep");
-  expect(secretMaterialStringOf(JSON.stringify({ signing: "s" }), "signing")).toBeNull();
-  expect(secretMaterialStringOf({ n: 1 }, "n")).toBeNull();
-  expect(secretMaterialStringOf({ signing: "" }, "signing")).toBeNull();
-  expect(secretMaterialStringOf("not json", "signing")).toBeNull();
-  expect(secretMaterialStringOf({ signing: "s" }, "missing")).toBeNull();
+test.for([
+  { name: "the whole string", material: "whsec_k", field: undefined, key: "whsec_k" },
+  {
+    name: "an object with no field is no key",
+    material: { signing: "s" },
+    field: undefined,
+    key: null,
+  },
+  {
+    name: "one string field of an object",
+    material: { signing: "s", n: 1 },
+    field: "signing",
+    key: "s",
+  },
+  {
+    name: "a dotted field reaches into an object",
+    material: { a: { b: "deep" } },
+    field: "a.b",
+    key: "deep",
+  },
+  {
+    name: "a field on a JSON string is no key",
+    material: JSON.stringify({ signing: "s" }),
+    field: "signing",
+    key: null,
+  },
+  {
+    name: "a field on a non-JSON string is no key",
+    material: "not json",
+    field: "signing",
+    key: null,
+  },
+  { name: "a non-string field is no key", material: { n: 1 }, field: "n", key: null },
+  { name: "an empty string is no key", material: { signing: "" }, field: "signing", key: null },
+  { name: "a missing field is no key", material: { signing: "s" }, field: "missing", key: null },
+])("secretMaterialStringOf: $name", ({ material, field, key }) => {
+  expect(secretMaterialStringOf(material, field)).toBe(key);
 });
 
-test("verifySecretHmac: true for the right key, payload and hex (either case); false for a tampered payload, a wrong or malformed signature, a wrong field, or a material with no key", async () => {
-  const payload =
-    "1700000000." + JSON.stringify({ id: "evt_1", type: "checkout.session.completed" });
-  const signature = createHmac("sha256", "whsec_k").update(payload).digest("hex");
-  expect(await verifySecretHmac("whsec_k", { payload, signature })).toBe(true);
+const hmacPayload =
+  "1700000000." + JSON.stringify({ id: "evt_1", type: "checkout.session.completed" });
+const hmacSignature = createHmac("sha256", "whsec_k").update(hmacPayload).digest("hex");
+
+test.for([
+  { name: "the right key, payload and hex", material: "whsec_k", input: {}, verified: true },
+  {
+    name: "the hex in upper case, padded",
+    material: "whsec_k",
+    input: { signature: ` ${hmacSignature.toUpperCase()} ` },
+    verified: true,
+  },
+  {
+    name: "the payload as bytes",
+    material: "whsec_k",
+    input: { payload: new TextEncoder().encode(hmacPayload) },
+    verified: true,
+  },
+  {
+    name: "an object's key field, named",
+    material: { signing: "whsec_k", other: 1 },
+    input: { field: "signing" },
+    verified: true,
+  },
+  {
+    name: "a tampered payload",
+    material: "whsec_k",
+    input: { payload: hmacPayload + " " },
+    verified: false,
+  },
+  { name: "a wrong key", material: "whsec_other", input: {}, verified: false },
+  {
+    name: "a wrong signature",
+    material: "whsec_k",
+    input: { signature: "00".repeat(32) },
+    verified: false,
+  },
+  {
+    name: "a signature with its scheme prefix", // the caller's to strip
+    material: "whsec_k",
+    input: { signature: "sha256=" + hmacSignature },
+    verified: false,
+  },
+  {
+    name: "a signature cut short",
+    material: "whsec_k",
+    input: { signature: hmacSignature.slice(0, 63) },
+    verified: false,
+  },
+  { name: "an object with no field", material: { signing: "whsec_k" }, input: {}, verified: false },
+  {
+    name: "an object's non-string field",
+    material: { signing: "whsec_k", other: 1 },
+    input: { field: "other" },
+    verified: false,
+  },
+])("verifySecretHmac: $name → $verified", async ({ material, input, verified }) => {
   expect(
-    await verifySecretHmac("whsec_k", { payload, signature: ` ${signature.toUpperCase()} ` }),
-  ).toBe(true);
-  expect(
-    await verifySecretHmac("whsec_k", { payload: new TextEncoder().encode(payload), signature }),
-  ).toBe(true);
-  expect(
-    await verifySecretHmac(
-      { signing: "whsec_k", other: 1 },
-      { payload, signature, field: "signing" },
-    ),
-  ).toBe(true);
-  expect(await verifySecretHmac("whsec_k", { payload: payload + " ", signature })).toBe(false);
-  expect(await verifySecretHmac("whsec_other", { payload, signature })).toBe(false);
-  expect(await verifySecretHmac("whsec_k", { payload, signature: "00".repeat(32) })).toBe(false);
-  expect(await verifySecretHmac("whsec_k", { payload, signature: "sha256=" + signature })).toBe(
-    false,
-  ); // the scheme prefix is the caller's to strip
-  expect(await verifySecretHmac("whsec_k", { payload, signature: signature.slice(0, 63) })).toBe(
-    false,
-  );
-  expect(await verifySecretHmac({ signing: "whsec_k" }, { payload, signature })).toBe(false); // an object needs a field
-  expect(
-    await verifySecretHmac(
-      { signing: "whsec_k", other: 1 },
-      { payload, signature, field: "other" },
-    ),
-  ).toBe(false);
+    await verifySecretHmac(material, { payload: hmacPayload, signature: hmacSignature, ...input }),
+  ).toBe(verified);
 });
 
-test("originPinned: only a pinned origin passes; an empty pin passes nothing", () => {
-  expect(originPinned("https://api.example.com/v1/x", ["https://api.example.com"])).toBe(true);
-  expect(originPinned("https://evil.example/", ["https://api.example.com"])).toBe(false);
-  expect(originPinned("https://api.example.com/", [])).toBe(false);
+test.for([
+  {
+    name: "a pinned origin passes",
+    url: "https://api.example.com/v1/x",
+    pins: ["https://api.example.com"],
+    pinned: true,
+  },
+  {
+    name: "another origin does not",
+    url: "https://evil.example/",
+    pins: ["https://api.example.com"],
+    pinned: false,
+  },
+  { name: "an empty pin passes nothing", url: "https://api.example.com/", pins: [], pinned: false },
+])("originPinned: $name", ({ url, pins, pinned }) => {
+  expect(originPinned(url, pins)).toBe(pinned);
 });
 
 // ── the record ── `normalizeSecretRecord`: what `itx.secrets.set(path, material, options)` stores.
@@ -979,16 +1045,30 @@ test.for([
   else expect(normalize().refresh).toMatchObject(keeps!);
 });
 
-test("isSecretOAuthState: the signed claims must carry the kind, the secret's context and every field with its type — another claim set signed by the same key is not a state", () => {
-  const state = { kind: "secret-oauth", context: "prj_x.iterate/secrets/shop", nonce: "x", exp: 1 };
-  expect(isSecretOAuthState(state)).toBe(true);
-  expect(isSecretOAuthState({ ...state, kind: "google-login" })).toBe(false);
-  expect(isSecretOAuthState({ ...state, exp: "1" })).toBe(false);
-  expect(isSecretOAuthState({ ...state, context: 7 })).toBe(false);
-  expect(isSecretOAuthState([state])).toBe(false);
-  expect(isSecretOAuthState({ ...state, next: "https://os.example/" })).toBe(true);
-  expect(isSecretOAuthState({ ...state, next: 1 })).toBe(false);
-  expect(isSecretOAuthState(null)).toBe(false);
+// The signed claims must carry the kind, the secret's context and every field with its type: another
+// claim set signed by the same key is not a state.
+const oauthState = {
+  kind: "secret-oauth",
+  context: "prj_x.iterate/secrets/shop",
+  nonce: "x",
+  exp: 1,
+};
+
+test.for([
+  { name: "the claims of a state", claims: oauthState, state: true },
+  { name: "another kind", claims: { ...oauthState, kind: "google-login" }, state: false },
+  { name: "exp as a string", claims: { ...oauthState, exp: "1" }, state: false },
+  { name: "context as a number", claims: { ...oauthState, context: 7 }, state: false },
+  { name: "an array", claims: [oauthState], state: false },
+  {
+    name: "with a string next",
+    claims: { ...oauthState, next: "https://os.example/" },
+    state: true,
+  },
+  { name: "with a numeric next", claims: { ...oauthState, next: 1 }, state: false },
+  { name: "null", claims: null, state: false },
+])("isSecretOAuthState: $name → $state", ({ claims, state }) => {
+  expect(isSecretOAuthState(claims)).toBe(state);
 });
 
 // ── at rest (secret-at-rest.ts) ── the material never sits in storage in the clear, and a ciphertext

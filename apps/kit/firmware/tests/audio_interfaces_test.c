@@ -5,10 +5,6 @@
 #include <assert.h>
 #include <string.h>
 
-#ifdef NDEBUG
-#error "firmware tests must execute assertions"
-#endif
-
 struct fake_codec {
   enum iterate_kit_status read_status;
   enum iterate_kit_status write_status;

@@ -563,28 +563,42 @@ test("public protocol origins: a preview's one-click sign-in link (test-link.ts)
   expect(await refused.text()).toBe(`This sign-in link is for ${pr123}, not this deployment.\n`);
 });
 
-test("public protocol origins: the issuer's pages admit only their own methods, HTML requests and same-origin posts", async () => {
-  const page = (path: string, init?: RequestInit) =>
-    worker.fetch(
-      new Request(`https://os.iterate.com${path}`, init),
-      { ...bindings, ...origins } as unknown as Env,
-      { waitUntil() {}, passThroughOnException() {} } as unknown as ExecutionContext,
-    );
-  expect(await page("/login")).toMatchObject({ status: 200 });
-  expect(await page("/login", { headers: { accept: "application/json" } })).toMatchObject({
+// The issuer's pages admit only their own methods, HTML requests and same-origin posts; beside them
+// are the public files, and nothing else.
+test.for<{ name: string; path: string; init: RequestInit; status: number }>([
+  { name: "a page", path: "/login", init: {}, status: 200 },
+  {
+    name: "a page asked for JSON",
+    path: "/login",
+    init: { headers: { accept: "application/json" } },
     status: 406,
-  });
-  expect(await page("/", { method: "POST" })).toMatchObject({ status: 405 });
-  expect(await page("/login", { method: "DELETE" })).toMatchObject({ status: 405 });
-  const crossSite = { method: "POST", headers: { origin: "https://evil.example" } };
-  expect(await page("/login", crossSite)).toMatchObject({ status: 403 });
-  expect(await page("/oauth2/auth?client_id=x", crossSite)).toMatchObject({ status: 403 });
-  // the public files beside the pages, and nothing else
-  expect(await page("/issuer.css")).toMatchObject({ status: 200 });
-  expect(await page("/client-logos/browser-extension.svg")).toMatchObject({ status: 200 });
-  expect(await page("/authorize.js")).toMatchObject({ status: 404 });
-  expect(await page("/capnweb.js")).toMatchObject({ status: 404 });
-});
+  },
+  { name: "a POST to the root", path: "/", init: { method: "POST" }, status: 405 },
+  { name: "a DELETE of a page", path: "/login", init: { method: "DELETE" }, status: 405 },
+  {
+    name: "a cross-site POST to a page",
+    path: "/login",
+    init: { method: "POST", headers: { origin: "https://evil.example" } },
+    status: 403,
+  },
+  {
+    name: "a cross-site POST to authorize",
+    path: "/oauth2/auth?client_id=x",
+    init: { method: "POST", headers: { origin: "https://evil.example" } },
+    status: 403,
+  },
+  { name: "the issuer's stylesheet", path: "/issuer.css", init: {}, status: 200 },
+  { name: "a client logo", path: "/client-logos/browser-extension.svg", init: {}, status: 200 },
+  { name: "a script that is not a public file", path: "/authorize.js", init: {}, status: 404 },
+  { name: "capnweb's script", path: "/capnweb.js", init: {}, status: 404 },
+])(
+  "public protocol origins, the issuer's pages: $name → $status",
+  async ({ path, init, status }) => {
+    expect(await request(new Request(`https://os.iterate.com${path}`, init))).toMatchObject({
+      status,
+    });
+  },
+);
 
 test("public protocol origins: /favicon.svg is production's logo, and a preview's purple PR badge", async () => {
   const assetPaths: string[] = [];
@@ -629,7 +643,7 @@ test("appConfigOf — once per env object: a malformed field throws at first use
 });
 
 /** A public route's answer from the edge over `bindings` and `env` (the origins by default). */
-const request = (url: string, env: Record<string, unknown> = origins) =>
+const request = (url: string | Request, env: Record<string, unknown> = origins) =>
   worker.fetch(
     new Request(url),
     { ...bindings, ...env } as unknown as Env,
