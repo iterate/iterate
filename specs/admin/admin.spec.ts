@@ -25,7 +25,11 @@ test("an admin opens any project's contexts and the global namespace, and views 
   await test.step("sign in to the Admin app as the admin", async () => {
     // the app asks for its scopes (`iterate admin`) as it signs in (apps/admin/src/scopes.ts)
     await page.goto("/projects");
-    await page.getByRole("button", { name: "Switch account", exact: true }).click();
+    // noWaitAfter: Switch account posts to the issuer's logout, navigating to sign-in, which the
+    // Email field waits for
+    await page
+      .getByRole("button", { name: "Switch account", exact: true })
+      .click({ noWaitAfter: true });
     await signInWithPassword(page, ADMIN_EMAIL);
     await authorize(page);
     await page.getByRole("heading", { name: "Projects", exact: true }).waitFor();
@@ -82,7 +86,8 @@ test("an admin opens any project's contexts and the global namespace, and views 
   const principal = appended?.source?.principal;
   expect([principal?.email, principal?.impersonatedBy?.email]).toEqual([person, ADMIN_EMAIL]);
 
-  // noWaitAfter: Stop impersonating posts to the Dash's logout and signs in again, navigating
+  // noWaitAfter: Stop impersonating posts to the Dash's logout and signs in again, navigating; the
+  // page it leaves shows the person's "Account", so every wait from here names the admin
   await marker.click({ noWaitAfter: true });
   await authorize(page);
   // the Dash is the admin's again
@@ -96,10 +101,15 @@ test("an admin opens any project's contexts and the global namespace, and views 
   await page.getByRole("heading", { name: "Projects", exact: true }).waitFor();
 });
 
-/** The issuer's consent for an app, when it asks: Review permissions, then Authorize. */
+/** The issuer's consent for an app, when it asks: Review permissions, then Authorize. It waits for
+ *  consent or the app signed in as the admin, never any "Account": a page being left that shows
+ *  someone else's would satisfy the wait before the navigation ends
+ *  (specs/test-support/navigating-post.spec.ts). */
 async function authorize(page: Page) {
   const review = page.getByRole("button", { name: "Review permissions", exact: true });
-  const signedIn = page.getByRole("button", { name: "Account", exact: true });
+  const signedIn = page
+    .getByRole("button", { name: "Account", exact: true })
+    .filter({ hasText: ADMIN_EMAIL });
   await review.or(signedIn).waitFor();
   if (!(await review.isVisible())) return;
   await review.click();

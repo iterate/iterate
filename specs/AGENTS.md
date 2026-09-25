@@ -26,6 +26,10 @@ The default `actionTimeout` in your playwright config should be _very aggressive
 
 If you've really come up against a case where you truly think it's better to add `{ timeout: 10_000 }` or some such, you MUST leave a // comment explaining why so we can more easily fix the underlying issue later.
 
+## After a click that navigates
+
+A click that posts and navigates takes `noWaitAfter`: without it, the click itself waits for the navigation within the 1 s action timeout. The next wait names something only the next page shows, such as the signed-in account's email rather than any "Account" button. Until the next page commits, a target the page being left also shows is ready at once, so the wait goes to Playwright with the bare action timeout and a slow post outlasts it. A target only the next page shows rides out the post ([navigating-post.spec.ts](test-support/navigating-post.spec.ts)).
+
 ## Error UI
 
 For common developer pitfalls, instead of littering your test code with defensive try/catch statements and custom selectors for app error UI, just add the `data-type="error"` attribute to relevant UI elements. Then, the `ui-error-reporter` plugin will pick up any errors on screen automatically (including toasts rendered using the `sonner` library). The plugin will find elements annotated in this way and include their text content in error reports, so agents and humans will quickly be able to get an indication of what went wrong.
