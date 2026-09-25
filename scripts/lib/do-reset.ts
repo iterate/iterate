@@ -95,8 +95,8 @@ export async function resetWorkerDurableObjects(input: {
         workers_dev: false,
         // A parent's Worker Previews keep serving while it is parked: an unset
         // `preview_urls` follows `workers_dev` and takes every preview offline
-        // (404, 1042) until the next deploy (measured 2026-09-24 on a throwaway
-        // worker). Our workers run with preview URLs on anyway.
+        // (404, 1042) until the next deploy. Our workers run with preview URLs
+        // on anyway.
         preview_urls: true,
         exports: Object.fromEntries(
           deletedClasses.map((className) => [
