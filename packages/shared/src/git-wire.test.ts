@@ -7,15 +7,22 @@
 
 import { expect, onTestFinished, test, vi } from "vitest";
 import {
+  concat,
   createGitWireTransport,
   encodeCommit,
+  FLUSH,
   hashObject,
   manifestOf,
   parseCommit,
   parseTree,
+  pktLine,
   type RepoManifest,
   treeObjectsOf,
+  ZERO_OID,
 } from "./git-wire.ts";
+
+/** A tip the fake remote's ls-refs names. */
+const TIP = "322f6b7736f1636a850cfc3d3d639730b0882514";
 
 // ── git wire ── the wire's one refusal that matters to the repo facet: a TRUNCATED pkt-line body is
 // an outage, never an empty ref list (an empty list reads as "unborn repo" → "no file", which would
@@ -29,6 +36,84 @@ test("a pkt-line body cut mid-header rejects instead of yielding an empty ref li
     token: "t",
   });
   await expect(transport.tipOf("refs/heads/main")).rejects.toThrow(/truncated pkt-line/);
+});
+
+// ── Artifacts 5xx ── a git-upload-pack only reads, so the one Artifacts answered 5xx is sent ONCE
+// more a second later, logged as `repo.platform-failure-retry`; a second 5xx, a 4xx and a push's 5xx
+// fail at once.
+
+test.for([
+  {
+    name: "a read answered 503 once is sent again a second later, logged, and answers",
+    send: "tipOf",
+    statuses: [503, 200],
+    outcome: { answer: TIP },
+    retries: [{ name: "git-upload-pack", status: 503, attempt: 1, retryInMs: 1_000 }],
+  },
+  {
+    name: "a read answered 5xx twice fails with the second answer",
+    send: "tipOf",
+    statuses: [502, 503],
+    outcome: { error: "git-upload-pack responded 503 for https://artifacts.example/prj.git" },
+    retries: [{ name: "git-upload-pack", status: 502, attempt: 1, retryInMs: 1_000 }],
+  },
+  {
+    name: "a read answered 4xx fails at once: an answer about the request",
+    send: "tipOf",
+    statuses: [401],
+    outcome: { error: "git-upload-pack responded 401 for https://artifacts.example/prj.git" },
+    retries: [],
+  },
+  {
+    name: "a push answered 503 is never sent twice",
+    send: "push",
+    statuses: [503],
+    outcome: { error: "git-receive-pack responded 503 for https://artifacts.example/prj.git" },
+    retries: [],
+  },
+] as const)("Artifacts 5xx: $name", async ({ send, statuses, outcome, retries }) => {
+  vi.useFakeTimers();
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  const answers = [...statuses];
+  const fetch = vi.fn(async () => {
+    const status = answers.shift()!;
+    return status === 200
+      ? new Response(concat([pktLine(`${TIP} refs/heads/main`), FLUSH]), { status })
+      : new Response("unavailable", { status });
+  });
+  vi.stubGlobal("fetch", fetch);
+  onTestFinished(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+    warn.mockRestore();
+  });
+  const transport = createGitWireTransport({
+    remote: "https://artifacts.example/prj.git",
+    token: "t",
+  });
+  const settled = (
+    send === "tipOf"
+      ? transport.tipOf("refs/heads/main")
+      : transport.push({
+          newOid: TIP,
+          oldOid: ZERO_OID,
+          pack: new Uint8Array(),
+          ref: "refs/heads/main",
+        })
+  ).then(
+    (answer) => ({ answer }),
+    (error: Error) => ({ error: error.message }),
+  );
+  await vi.runAllTimersAsync();
+  expect(await settled).toEqual(outcome);
+  expect(fetch).toHaveBeenCalledTimes(statuses.length);
+  expect(warn.mock.calls.map(([line]) => line)).toEqual(
+    retries.map((retry) => ({
+      event: "repo.platform-failure-retry",
+      remote: "https://artifacts.example/prj.git",
+      ...retry,
+    })),
+  );
 });
 
 // ── the tree codec ── nested trees encode to git's OWN object ids. The expected ids were computed with

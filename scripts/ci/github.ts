@@ -2,7 +2,10 @@ import { readFileSync } from "node:fs";
 
 import { Octokit } from "@octokit/rest";
 
-import { PLATFORM_FAILURE_DELAYS_MS, retryPlatformFailures } from "./platform-retry.ts";
+import {
+  PLATFORM_FAILURE_DELAYS_MS,
+  retryPlatformFailures,
+} from "@iterate-com/shared/platform-retry";
 
 export function getOctokit() {
   const auth = process.env.GITHUB_TOKEN;
@@ -21,7 +24,7 @@ export function createOctokit(auth: string | undefined) {
  * GitHub answers a small share of API calls with a 5xx, or the connection drops before it
  * answers at all. One such 500 on `GET /pulls/2899` failed a LOC report whose same-sha rerun
  * passed a quarter of an hour later. A call that GitHub failed is asked again after each of
- * `delaysMs` (platform-retry.ts), with a `github.platform-failure-retry` warn per repeat.
+ * `delaysMs` (`retryPlatformFailures`), with a `github.platform-failure-retry` warn per repeat.
  *
  * Only GET, HEAD, PUT, PATCH and DELETE are asked again: each names its whole end state, so a
  * repeat after a write that did land is harmless. A POST creates (a release, a comment), and a

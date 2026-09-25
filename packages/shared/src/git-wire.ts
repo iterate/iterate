@@ -10,6 +10,7 @@
 // no blob.
 
 import { deflate, Inflate } from "pako";
+import { retryPlatformFailures } from "./platform-retry.ts";
 
 /** The "no such object" oid a first push names as the old value of an unborn ref. */
 export const ZERO_OID = "0".repeat(40);
@@ -686,6 +687,9 @@ function pushRefused(body: Uint8Array, expectedRef: string): string | null {
 
 // ── transport ──
 
+/** The wait before the one repeat of a read Artifacts answered 5xx. */
+const UPLOAD_PACK_RETRY_DELAYS_MS = [1_000];
+
 /**
  * HTTP transport against one Artifacts remote — the three verbs the repo facet
  * (repo/durable-object.ts) calls: `tipOf(ref)` (the branch tip's oid, or undefined for an unborn
@@ -693,24 +697,47 @@ function pushRefused(body: Uint8Array, expectedRef: string): string | null {
  * pack) and `push` (one receive-pack; null when the server moved the ref,
  * else the refusal in its words). `token` is the repo access token Artifacts
  * minted (`createToken` / `create`), sent as a basic-auth password.
+ *
+ * Artifacts answers a git request 5xx now and then, and the same request a moment later is fine.
+ * A `git-upload-pack` (`tipOf`, `fetchObjects`) only reads, so one it answered 5xx is sent ONCE
+ * more, `UPLOAD_PACK_RETRY_DELAYS_MS` later, logged as `repo.platform-failure-retry`; a second 5xx,
+ * and any other failure, throws. A `git-receive-pack` is a push, never sent twice: the caller reads
+ * the tip again and decides.
  */
 export function createGitWireTransport(input: { remote: string; token: string }) {
   const authorization = `Basic ${btoa(`x:${input.token}`)}`;
   const post = async (service: string, body: Uint8Array): Promise<Uint8Array> => {
-    const response = await fetch(`${input.remote}/${service}`, {
-      body: body as Uint8Array<ArrayBuffer>,
-      headers: {
-        authorization,
-        "content-type": `application/x-${service}-request`,
-        "git-protocol": "version=2",
-        "user-agent": "git/2.45.0 (iterate-repos)",
+    /** The status the attempt's answer failed with, 0 when it failed before an answer. */
+    let failedStatus = 0;
+    return retryPlatformFailures(
+      async () => {
+        failedStatus = 0;
+        const response = await fetch(`${input.remote}/${service}`, {
+          body: body as Uint8Array<ArrayBuffer>,
+          headers: {
+            authorization,
+            "content-type": `application/x-${service}-request`,
+            "git-protocol": "version=2",
+            "user-agent": "git/2.45.0 (iterate-repos)",
+          },
+          method: "POST",
+        });
+        if (!response.ok) {
+          failedStatus = response.status;
+          await response.body?.cancel(); // an unread body keeps its connection open
+          throw new Error(`${service} responded ${response.status} for ${input.remote}`);
+        }
+        return new Uint8Array(await response.arrayBuffer());
       },
-      method: "POST",
-    });
-    if (!response.ok) {
-      throw new Error(`${service} responded ${response.status} for ${input.remote}`);
-    }
-    return new Uint8Array(await response.arrayBuffer());
+      {
+        event: "repo.platform-failure-retry",
+        delaysMs: service === "git-upload-pack" ? UPLOAD_PACK_RETRY_DELAYS_MS : [],
+        platformFailure: () =>
+          failedStatus >= 500
+            ? { name: service, status: failedStatus, remote: input.remote }
+            : undefined,
+      },
+    );
   };
   return {
     fetchObjects: async (request: { deepen: number; wants: string[] }): Promise<RawGitObject[]> =>
