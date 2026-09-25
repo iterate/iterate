@@ -129,7 +129,8 @@ export type ItxCaller = { path: string; itx: ItxEntrypointService };
  *
  *  SERVING CONTEXTS BENEATH: a class that lists `forCaller` serves a call that originated beneath
  *  its context only as that caller. The context calls `forCaller(caller)` (an `ItxCaller`) first and
- *  walks the caller's steps on what it answers, and refuses a call from beside it (apps/os
+ *  walks the caller's steps on what it answers; a call from beside it is served as the facet's own
+ *  context, handing over nothing (apps/os
  *  context/caller-capability.ts). Act for the caller only through `caller.itx`; `this.env.ITX` is
  *  the context hosting the facet, for the facet's own state. A call from the facet's context or
  *  above it reaches the facet's own methods, as for any facet:

@@ -6,7 +6,7 @@
 //   • from O strictly beneath H, is called `forCaller(caller)` first and the caller's steps walk what
 //     it answers — `caller` is `{ path: O, itx }`, O's own app handle, walled at O (its `cd` goes
 //     down only) and resolved through O's table;
-//   • from O beside H, refuses the call FORBIDDEN;
+//   • from O beside H, answers as its host, handing over nothing: O's code never chose it;
 //   • never runs a `forCaller` a caller spelled: only the platform names a caller.
 // A facet that lists no `forCaller` is called as its host from anywhere. Beside it: a loaded facet
 // is told its own spec (`ctx.props.spec`, its startup memo), and a stateless worker walks a chained
@@ -78,14 +78,57 @@ test("a walk that spells forCaller is FORBIDDEN: only the platform names a calle
     ).toEqual({ error: expect.stringMatching(/"forCaller" is the platform's/) });
 });
 
-test("a facet that lists forCaller answers a caller above its host as its host, and refuses a caller beside it", async () => {
+test("a facet that lists forCaller answers a caller above its host, and a caller beside it, as its host", async () => {
   const root = openItx(freshCtx("for-caller-beside"));
   const atMid = (steps: unknown[]) => ["itx", ["cd", "/mid"], "facets", ...steps];
   expect(await root.invoke(atMid([["get", "serving", SERVING], ["path"]]))).toBe("the host");
   expect(
     await outcomeOf(root.cd("/other").invoke(atMid([["get", "serving"], ["path"]]))),
-    "a caller beside the host should be refused",
-  ).toEqual({ error: expect.stringMatching(/beside/) });
+    "a caller beside the host should be served as the host, handed nothing",
+  ).toEqual({ answer: "the host" });
+});
+
+/** A worker that serves callers: `forCaller` answers an object acting through the caller's handle. */
+const SERVING_WORKER = {
+  "worker.js": `import { RpcTarget, WorkerEntrypoint } from "cloudflare:workers";
+import { withItx } from "iterate/sdk";
+class Served extends RpcTarget {
+  #caller;
+  constructor(caller) { super(); this.#caller = caller; }
+  whoami() { return withItx(this.#caller.itx, (itx) => itx.whoami()); }
+}
+export default class Serving extends WorkerEntrypoint {
+  forCaller(caller) { return new Served(caller); }
+  whoami() { return withItx(this.env.ITX, (itx) => itx.whoami()); }
+}`,
+};
+
+test("a worker whose spec says servesCallers serves a caller beneath its host as that caller; a spec that does not, and a caller beside it, as its host; only the platform names a caller", async () => {
+  const ctx = freshCtx("for-caller-worker");
+  const root = openItx(ctx);
+  for (const [match, servesCallers] of [
+    ["itx.served", true],
+    ["itx.hosted", false],
+  ] as const)
+    await root.append({
+      type: "events.iterate.com/itx/rewrite-rule-configured",
+      payload: {
+        match,
+        target: [
+          "itx",
+          "workers",
+          ["get", { source: SERVING_WORKER, ...(servesCallers && { servesCallers }) }],
+        ],
+      },
+    });
+  const jail = root.cd("/jail");
+  await jail.provide("itx", "itx.builtins.cd('/')");
+  expect(await jail.served.whoami()).toEqual({ projectId: ctx, path: "/jail" });
+  expect(await jail.hosted.whoami()).toEqual({ projectId: ctx, path: "/" });
+  expect(await root.served.whoami()).toEqual({ projectId: ctx, path: "/" });
+  expect(
+    await outcomeOf(jail.invoke("itx.served.forCaller({ path: '/elsewhere' }).whoami()")),
+  ).toEqual({ error: expect.stringMatching(/"forCaller" is the platform's/) });
 });
 
 test("a facet that lists no forCaller is called as its host from anywhere", async () => {

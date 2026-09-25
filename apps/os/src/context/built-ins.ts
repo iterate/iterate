@@ -20,6 +20,7 @@ import {
   resolveContextPath,
 } from "iterate/lib";
 import { z } from "zod";
+import type { ItxCaller } from "iterate/sdk";
 import type { StreamEventInput } from "iterate/stream/processor";
 import {
   itxExpressionStepName,
@@ -65,6 +66,7 @@ import {
   materializeItxHandleReference,
   walkSteps,
 } from "./dispatch.ts";
+import { stepsForCaller } from "./caller-capability.ts";
 import { assertFacetPlacement, assertLoadedCodePlacement } from "./first-party-facet-placement.ts";
 import {
   ITX_EXPRESSION_FETCH_HEADER,
@@ -470,6 +472,9 @@ interface BuildBuiltInsDeps {
   abortAfterTheAnswer: (message: string) => Promise<void>;
   /** The DO's claim table for hosted processors (`processors.claim`). */
   claimFacetAlarm: (name: string, at: number | null) => void;
+  /** What a service that serves callers is handed for a caller at `path` beneath this context:
+   *  `{ path, itx }`, `itx` the loopback code loaded at `path` holds (context/caller-capability.ts). */
+  itxCallerAt: (path: string) => ItxCaller;
   /** The `ItxEntrypoint` stub a loaded worker gets as `env.ITX` and `globalOutbound` — the loopback
    *  minted for this context at its current origin (the DO's `#itxEntrypoint`; iterate-context.ts's `ItxEntrypoint` for why it is never a
    *  raw getByName stub). */
@@ -1608,16 +1613,33 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
     // terminal `fetch(request)` is this same call: `entrypoint.fetch(request)` IS the entrypoint's
     // fetch channel, socket-bearing Responses included (context/rpc-stubs.ts doctrine, point 4).
     // A chained walk (`make(7).ping()`) walks each step on what the one before answered, as a
-    // facet's does. Re-resolves per call; the loader caches by key, so a warm isolate is reused and
-    // a producer expression never re-runs.
+    // facet's does. A spec that says `servesCallers` serves a caller beneath this context as that
+    // caller (context/caller-capability.ts): `forCaller(caller)` first, the caller's steps on what it
+    // answers; the platform alone names a caller. Re-resolves per call; the loader caches by key, so
+    // a warm isolate is reused and a producer expression never re-runs.
     workers: {
       get: (spec: {
         source: WorkerSource;
         cacheKey?: string;
         className?: string;
         props?: unknown;
-      }) =>
-        new InvokeHandle(async (steps) => {
+        servesCallers?: true;
+      }) => {
+        // The context the call ORIGINATED at, captured when the handle is made (as `cd`'s is).
+        const origin = deps.caller().path || path;
+        return new InvokeHandle(async (walk) => {
+          if (itxExpressionStepName(walk[0]) === "forCaller")
+            throw codedError(
+              "FORBIDDEN",
+              `workers.get(spec): "forCaller" is the platform's — it names the caller, and only the platform does`,
+            );
+          const steps = stepsForCaller({
+            host: path,
+            origin,
+            servesCallers: spec.servesCallers === true,
+            steps: walk,
+            callerAt: deps.itxCallerAt,
+          });
           // Loaded code runs only inside a project (first-party-facet-placement.ts rule 6) —
           // refused before a source expression runs or anything loads.
           assertLoadedCodePlacement("workers.get", { projectId, path });
@@ -1693,7 +1715,8 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
             if (!replayable) throw error;
             return await attempt();
           }
-        }),
+        });
+      },
     },
     ...deps.library, // THE LIBRARY (library.ts), built and owned by the DO
   } satisfies Omit<BuiltInScope, "builtins">;

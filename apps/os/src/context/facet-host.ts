@@ -704,7 +704,6 @@ export class FacetHost {
           FIRST_PARTY_FACET_PUBLIC_METHODS[name as keyof typeof FIRST_PARTY_FACET_PUBLIC_METHODS];
       assertFacetMethodIsPublic(name, publicMethods, itxExpressionSteps);
       itxExpressionSteps = stepsForCaller({
-        facet: name,
         host: this.#deps.path,
         origin: callerOrigin,
         servesCallers: publicMethods.includes("forCaller"),

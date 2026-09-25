@@ -164,9 +164,11 @@ a processor's row). A caller reaches a facet by itx expression only through the 
 lists in `static publicMethods`: extend `FacetDurableObject` or `StreamProcessorDurableObject` from
 `iterate/sdk` and add your own (`[...super.publicMethods, "send"]`); the platform's own calls
 go around the list (`src/context/facet-public-methods.ts`). A class that also lists `forCaller`
-serves a call that originated beneath its context only as that caller: the platform calls
-`forCaller(caller)` first, handing it the caller's own walled itx handle, walks the caller's steps
-on what it answers, and refuses a call from beside the context (`src/context/caller-capability.ts`).
+(or a `workers.get` spec that says `servesCallers: true`) serves a call that originated beneath its
+context only as that caller: the platform calls `forCaller(caller)` first, handing it the caller's own
+walled itx handle, and walks the caller's steps on what it answers. A caller at the context, above it
+or beside it is served as the context itself, and nothing it holds is handed over
+(`src/context/caller-capability.ts`).
 
 Anything a caller or a facet keeps can hold a context resident and billed after its last call.
 [Context residency](docs/residency.md) explains the seven mechanisms that prevent, end or record
