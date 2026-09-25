@@ -6,10 +6,14 @@ import type { IterateRpcTarget } from "../../src/session.ts";
 import { loginPassword, publicSession, workerUrl } from "./client.ts";
 
 /** THE ISSUER SESSION for `email`: the sign-in page's password post, as the page itself makes it
- *  (same-origin, a form) — the `Cookie` header value a browser would then carry. */
-export async function issuerCookie(email: string, next = "/"): Promise<string> {
-  const issuer = new URL(workerUrl("/")).origin;
-  const login = await fetch(workerUrl("/login"), {
+ *  (same-origin, a form) — the `Cookie` header value a browser would then carry. `issuer` is the
+ *  shared worker's origin unless a row booted its own (support/own-worker.ts). */
+export async function issuerCookie(
+  email: string,
+  next = "/",
+  issuer = new URL(workerUrl("/")).origin,
+): Promise<string> {
+  const login = await fetch(`${issuer}/login`, {
     method: "POST",
     headers: { Origin: issuer },
     body: new URLSearchParams({ email, password: loginPassword(), next }),

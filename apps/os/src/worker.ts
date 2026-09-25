@@ -49,14 +49,6 @@ const PROJECT_HOST_HOPS_HEADER = "x-itx-expression-hops";
  *  Empty under subdomains (each routing slug owns its origin). */
 const ITERATE_BASE_PATH_HEADER = "x-iterate-base-path";
 
-/** THE SANDBOX every document served through paths ingress runs in: an opaque origin — no cookies,
- *  no storage, no scripting of other frames, `Origin: null` on every request it makes — so a
- *  project's app on the platform's own origin can neither spend the issuer's cookie nor read another
- *  project's. Set by the edge AFTER the app answers; an app cannot remove it. A WebSocket answer
- *  carries no document and is left alone. */
-const PATHS_INGRESS_SANDBOX =
-  "sandbox allow-scripts allow-forms allow-popups allow-modals allow-downloads";
-
 /** The Request without its base path (paths ingress): the same method, body and upgrade, the URL
  *  starting at the app's root. */
 function withoutBasePath(request: Request, basePath: string): Request {
@@ -86,12 +78,20 @@ function controlPlaneUnavailable(error: unknown, hostname: string): Response {
   );
 }
 
-/** An app's answer through paths ingress, sandboxed (PATHS_INGRESS_SANDBOX). */
-function sandboxed(response: Response): Response {
-  if (response.webSocket) return response;
-  const answer = new Response(response.body, response);
-  answer.headers.set("content-security-policy", PATHS_INGRESS_SANDBOX);
-  return answer;
+/** An app's answer without what only the platform may say on its origin: `Service-Worker-Allowed`
+ *  (a service worker scoped to `/` would control the sign-in pages and `/api`) and a `Set-Cookie`
+ *  for the platform's own `__Host-itx-*` cookies. A WebSocket's 101 carries neither. */
+function withoutPlatformHeaders(answer: Response): Response {
+  if (answer.webSocket) return answer;
+  const setCookies = answer.headers.getSetCookie();
+  const kept = setCookies.filter((cookie) => !cookie.trimStart().startsWith("__Host-itx-"));
+  if (!answer.headers.has("service-worker-allowed") && kept.length === setCookies.length)
+    return answer;
+  const response = new Response(answer.body, answer);
+  response.headers.delete("service-worker-allowed");
+  response.headers.delete("set-cookie");
+  for (const cookie of kept) response.headers.append("set-cookie", cookie);
+  return response;
 }
 
 /** WHO a project host's request is, as the context DO's `fetch` reads it: `principal` is the
@@ -255,13 +255,18 @@ export default {
           request: withoutBasePath(request, projectHost.basePath),
         });
         logServedStale();
-        // Under paths a stored HTML or SVG file is a document on the platform's own origin: it runs
-        // sandboxed exactly as an app's answer does (an opaque origin, no cookie to spend).
-        return routing?.type === "paths" ? sandboxed(file) : file;
+        // Under paths a stored HTML or SVG file is a document on the platform's own origin that anyone
+        // holding the URL opens: it runs sandboxed (an opaque origin, no cookie to spend).
+        if (routing?.type === "paths")
+          file.headers.set(
+            "content-security-policy",
+            "sandbox allow-scripts allow-forms allow-popups allow-modals allow-downloads",
+          );
+        return file;
       }
       // The browser adapter's endpoints (`/api`, `/.auth/*`) are an app's OWN under subdomains — its
-      // origin. Under paths the app shares the platform's origin, whose `/api` and `/.auth/*` are
-      // the issuer's: an app there has no cookie sign-in of its own (it authenticates in-band).
+      // origin. Under paths the app shares the platform's origin, whose `/api` and `/.auth/*` are the
+      // platform's; same-origin app scripts can make authenticated platform requests.
       if (routing?.type !== "paths") {
         const browserResponse = await browserClient(request, env, ctx);
         if (browserResponse) {
@@ -317,7 +322,7 @@ export default {
           platformOrigin,
         }),
       );
-      const answer = spliceEyeballAnswer(served, contextOf);
+      const answer = withoutPlatformHeaders(spliceEyeballAnswer(served, contextOf));
       // The app's `401 Bearer realm="iterate"` becomes the sign-in (project-host-sign-in.ts), at the
       // browser adapter serving this host: the host's own under subdomains, the platform's under paths.
       const signIn = projectHostSignInAnswerOf({
@@ -331,13 +336,12 @@ export default {
       // A MEMBER'S BEARER GRANT holds what stays open (a WebSocket, a streamed body) to its lease:
       // ended, expired or out of the project, the connection closes within a minute
       // (project-host-lease.ts).
-      const response =
+      return (
         signIn ||
         (bearer && stamped?.grant
           ? leasedProjectHostAnswer(env, stamped.grant, stamped.reach, projectId, answer)
-          : answer);
-      // Under paths the app answered on the platform's own origin: its document runs sandboxed.
-      return routing?.type === "paths" ? sandboxed(response) : response;
+          : answer)
+      );
     }
     // Under a subdomains wildcard there are project hosts and nothing else: a hostname there that
     // fails the grammar (`site--prj_1`, `a.b.c`, `--x`) names no project host and must not fall

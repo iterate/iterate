@@ -15,6 +15,7 @@ import {
   appConfigOf,
   atRestKeysOf,
   parseAppConfig,
+  projectHostOf,
   sessionSigningSecretOf,
   type AppConfig,
 } from "./app-config.ts";
@@ -413,6 +414,43 @@ test("public protocol origins: the issuer stays on the control plane when its zo
   });
   expect(response).toMatchObject({ status: 200 });
   expect(await response.text()).toBe("unversioned https://os.iterate.com\n");
+});
+
+// ── projectHostOf ── the platform and MCP origins are never a project host, even under the wildcard
+const subdomains = {
+  ...MINIMAL,
+  APP_CONFIG_URLS__OS: "https://os.example.com",
+  APP_CONFIG_URLS__MCP: "https://mcp.example.com",
+  APP_CONFIG_URLS__INGRESS_ROUTING: '{"type":"subdomains","hostname":"example.com"}',
+};
+const pathsRouting = {
+  ...MINIMAL,
+  APP_CONFIG_URLS__OS: "https://os.test",
+  APP_CONFIG_URLS__INGRESS_ROUTING__TYPE: "paths",
+};
+test.for<{ vars: Record<string, string>; url: string; host: object | null }>([
+  { vars: subdomains, url: "https://os.example.com/login", host: null },
+  { vars: subdomains, url: "https://os.example.com/api", host: null },
+  { vars: subdomains, url: "https://mcp.example.com/", host: null },
+  {
+    vars: subdomains,
+    url: "https://site--acme.example.com/x",
+    host: { project: "acme", routingSlug: "site", basePath: "" },
+  },
+  {
+    vars: subdomains,
+    url: "https://acme.example.com/",
+    host: { project: "acme", routingSlug: null, basePath: "" },
+  },
+  { vars: pathsRouting, url: "https://os.test/login", host: null },
+  {
+    vars: pathsRouting,
+    url: "https://os.test/projects/acme/site/x",
+    host: { project: "acme", routingSlug: "site", basePath: "/projects/acme/site" },
+  },
+])("projectHostOf $url → $host", ({ vars, url, host }) => {
+  const config = parseAppConfig(vars);
+  expect(projectHostOf(config, new URL(url), config.urls.os)).toEqual(host);
 });
 
 test("public protocol origins: under path routing the platform's own paths are never a project (projects live under /projects/): its endpoints answer as themselves", async () => {

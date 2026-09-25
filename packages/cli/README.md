@@ -90,9 +90,9 @@ until it runs again. The local server sees `x-forwarded-host` and `x-forwarded-p
 `--json` prints the URL and each request as NDJSON.
 
 On a deployment that serves projects under paths (`/projects/<project>/<name>/` on the
-platform's own origin, such as a per-PR preview), only `--public` tunnels work: the tunnel's pages
-run sandboxed with an opaque origin, so their requests carry no sign-in cookie, and `tunnel`
-refuses a private one. The local server must serve under the printed base path (Vite: `--base`).
+platform's own origin, such as a per-PR preview), the local server must serve under the printed
+base path (Vite: `--base`). A deployment with a domain gives each tunnel its own origin:
+[custom domain](../../apps/os/SELF-HOSTING.md#custom-domain-own-origins-for-apps-and-tunnels).
 
 ## Configs
 

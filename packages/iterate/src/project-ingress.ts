@@ -12,8 +12,8 @@
 //               `<project>.<hostname>` — every routing slug its own origin, under one wildcard on `hostname`.
 //   paths       `<platformOrigin>/projects/<project>/<routingSlug>/…`, the apex `<platformOrigin>/projects/<project>/`
 //               — one origin (workers.dev has no wildcard), every project under `/projects/` so the
-//               platform's own paths (`/api`, `/mcp`, `/login`, …) need no reserved list; the edge
-//               sandboxes what a project serves.
+//               platform's own paths (`/api`, `/mcp`, `/login`, …) need no reserved list; every
+//               project's pages share that origin with the platform.
 
 /** THE ROUTING SLUG a project host named (`notes` for `notes--<project>.<hostname>`), as the project's
  *  config worker `fetch` reads it; absent on the apex. Written only by the platform: the edge sets or

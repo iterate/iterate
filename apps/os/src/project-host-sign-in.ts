@@ -9,7 +9,9 @@
 //   3. The session COOKIE counts on a write (any method but GET, HEAD, OPTIONS) or a WebSocket
 //      upgrade only from the host's own origin (iterate/lib `isSameOriginBrowserRequest`: an absent
 //      Origin passes). Otherwise the request goes on anonymous. A bearer is never sent by a browser
-//      on its own, so it always counts. A principal an app is handed is therefore safe to act on.
+//      on its own, so it always counts. A principal an app is handed is therefore safe to act on
+//      against another site; under paths every project's page is same-origin with every other
+//      project's and the platform's, so this is no defence between them.
 //   4. Everything else: a member.
 //
 // THE SIGN-IN CHALLENGE — projectHostSignInAnswerOf: an app asks for a signed-in caller by answering

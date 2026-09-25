@@ -228,13 +228,6 @@ export async function runTunnel(input: {
   using project = await input.connection.session.projects.get(input.project);
   const url = await project.url({ routingSlug });
   const basePath = new URL(url).pathname;
-  // Under paths routing the tunnel shares the platform's origin, so its pages are served sandboxed
-  // with an opaque origin: their subresource requests carry no cookie and a private route turns
-  // every one of them away. Refused before anything is lent or set.
-  if (basePath !== "/" && !input.public)
-    throw new Error(
-      `Private tunnels need their own origin; this deployment serves projects under paths (${url}). Use --public, or give the deployment a domain (subdomain routing).`,
-    );
   // A host another route already takes is someone else's: refuse, never take it over. A tunnel of
   // the same name (a restart, another terminal) is taken over.
   const taken = (await project.fetchRoutes.list()).find(
@@ -277,7 +270,7 @@ export async function runTunnel(input: {
     );
     if (basePath !== "/")
       console.error(
-        `This deployment serves projects under paths: the local server must serve under ${basePath} (Vite: --base ${basePath}).`,
+        `Projects are served under paths here: your local server must serve under ${basePath} (Vite: --base ${basePath}). To serve at / on an origin of its own, give the deployment a domain with a wildcard certificate: https://github.com/iterate/iterate/blob/main/apps/os/SELF-HOSTING.md#custom-domain-own-origins-for-apps-and-tunnels`,
       );
     try {
       const outcome = await Promise.race([stopped, input.connection.closed]);
