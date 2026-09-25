@@ -32,7 +32,7 @@ test("the normal prompt's repository example runs and its result reaches the nex
   expect(result).toEqual({ content: "The website says hello.", hangUp: false, scripts: 1 });
 });
 
-test.each([
+test.for([
   "<codemode>\nreturn 1",
   "<codemode>\nreturn 1\n</codemode>\n<codemode>\nreturn 2\n</codemode>",
 ])("invalid codemode executes nothing and the model can correct it: %s", async (invalid) => {

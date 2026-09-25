@@ -52,7 +52,7 @@ test("no filter shows everything; types narrow to the set; the query searches ty
 });
 
 // ── the offset range ──
-test.each([
+test.for([
   { name: "from alone", range: { from: 3 }, shown: [3, 4] },
   { name: "to alone", range: { to: 2 }, shown: [1, 2] },
   { name: "both, inclusive", range: { from: 2, to: 3 }, shown: [2, 3] },
@@ -73,7 +73,7 @@ test("refilter follows a growing log under an offset range, and a new bound filt
   ]);
 });
 
-test.each([
+test.for([
   { text: "", bound: undefined },
   { text: "  ", bound: undefined },
   { text: "12", bound: 12 },
@@ -87,7 +87,7 @@ test.each([
 });
 
 // ── typeChips ──
-test.each([
+test.for([
   {
     name: "nothing ticked: the counts as they are",
     ticked: [],

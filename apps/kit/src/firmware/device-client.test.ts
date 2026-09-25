@@ -2,7 +2,7 @@ import { expect, test } from "vitest";
 import { firmwareCatalog } from "./catalog.ts";
 import { deviceClientMetadata, deviceVendors } from "./device-client.ts";
 
-test.each(firmwareCatalog)(
+test.for(firmwareCatalog)(
   "$name has a distinct client per unit and its vendor artwork",
   async (device) => {
     const ids = ["11111111-1111-4111-8111-111111111111", "22222222-2222-4222-8222-222222222222"];

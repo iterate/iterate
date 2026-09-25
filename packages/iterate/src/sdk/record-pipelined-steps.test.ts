@@ -5,7 +5,7 @@
 import { expect, test, vi } from "vitest";
 import { recordPipelinedSteps, withItx } from "./record-pipelined-steps.ts";
 
-test.each([
+test.for([
   {
     name: "a pipelined chain records the intermediate and the final call",
     run: (itx: any) => itx.cd("/a").append({ type: "x" }),

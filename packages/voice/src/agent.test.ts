@@ -11,7 +11,7 @@ vi.setConfig({ testTimeout: 10_000 });
 // September 21 calls: the supplied Markdown was dropped and the agent edited the
 // project website. Fixture keeps context + first concrete maths request verbatim;
 // audio, transcripts (already in the request), and unrelated lifecycle events omitted.
-test.each([
+test.for([
   ...fixtures,
   {
     device: "future_colour_device",

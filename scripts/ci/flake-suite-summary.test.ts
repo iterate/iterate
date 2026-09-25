@@ -109,7 +109,7 @@ test("each row carries what the dashboard's Cost section reads", async () => {
   });
 });
 
-test.each(["interrupted", "missing workspace", "wrong commit", "unexecuted test"])(
+test.for(["interrupted", "missing workspace", "wrong commit", "unexecuted test"])(
   "%s cannot publish a clean complete result",
   async (failure) => {
     using output = temporaryDirectory();
@@ -137,7 +137,7 @@ test.each(["interrupted", "missing workspace", "wrong commit", "unexecuted test"
 
 // Each of the two preview test jobs summarizes its own suite: the other suite's result, which a
 // job never has, cannot stand in for its own.
-test.each(["specs", "preview-e2e"] as const)(
+test.for(["specs", "preview-e2e"] as const)(
   "the %s summary counts only its own runner's result",
   async (suite) => {
     using output = temporaryDirectory();
@@ -167,7 +167,7 @@ test.each(["specs", "preview-e2e"] as const)(
   },
 );
 
-test.each([
+test.for([
   { states: ["passed", "failed"], slowRows: "ran" },
   { states: ["skipped", "skipped"], slowRows: "skipped" },
   { states: [], slowRows: undefined },

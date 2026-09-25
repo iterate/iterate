@@ -13,7 +13,7 @@ test("production's project hosts come from envs.ts", () => {
   ]);
 });
 
-test.each<{ case: string; hostStatus: number; pages: boolean }>([
+test.for<{ case: string; hostStatus: number; pages: boolean }>([
   { case: "a host that answers", hostStatus: 200, pages: false },
   { case: "a host that redirects still answers", hostStatus: 302, pages: false },
   { case: "a host's own 404 is the site's answer", hostStatus: 404, pages: false },
@@ -33,7 +33,7 @@ test.each<{ case: string; hostStatus: number; pages: boolean }>([
   expect(Boolean(page)).toBe(pages);
 });
 
-test.each<{ case: string; previousVersion?: string; liveVersion?: string; pages: boolean }>([
+test.for<{ case: string; previousVersion?: string; liveVersion?: string; pages: boolean }>([
   {
     case: "/version names a new version",
     previousVersion: "old",

@@ -47,7 +47,7 @@ test("a green push's time to green runs from the run's creation to its last chec
 
 // Depot's GetRunMetrics for run l9b40r65b2 (PR #3094) and v7gm132nt1 (PR #3009, whose e2e failed
 // and passed on a re-run), cut to the fields the guard reads.
-test.each<{
+test.for<{
   metrics: RunMetrics;
   firstExecutions: Parameters<typeof measurePush>[0]["firstExecutions"];
   expected: object;
@@ -104,7 +104,7 @@ test.each<{
   },
 );
 
-test.each([
+test.for([
   { summary: { slowRows: "skipped" as const }, e2e: "slow-rows-skipped" },
   { summary: { slowRows: "ran" as const }, e2e: "every-row" },
   // a suite with no row tagged slow: every row ran
@@ -177,7 +177,7 @@ test("a re-run check counts at its first execution: red at that execution's end"
   ).toMatchObject({ outcome: "red", seconds: 240 });
 });
 
-test.each([
+test.for([
   // Test cancelled 4.7 s after the PR's next run was created: superseded (runs xpqdpl3n30, jl03bzphth)
   { nextRunAt: "2026-09-24T11:50:05Z", outcome: "superseded" },
   // the next push came after Test had already been cancelled: that cancel was a timeout
@@ -202,7 +202,7 @@ test.each([
 
 // Preview OS cancels its run in progress when the PR's next push starts (preview-os.yml
 // `concurrency:`), even in the CI trace, after its suites passed.
-test.each([
+test.for([
   { nextRunAt: "2026-09-24T11:55:00Z", ended: "2026-09-24T12:30:00.000Z", outcome: "superseded" },
   { nextRunAt: "2026-09-24T11:54:20Z", ended: "2026-09-24T11:54:25.587Z", outcome: "superseded" },
   // cancelled before the next push: a timeout or a person
@@ -287,7 +287,7 @@ test("summarizes the window's pushes by what their e2e ran, with interpolated pe
   expect(summary).toMatchObject({ slowRowsShare: 1 / 7, superseded: 1 });
 });
 
-test.each([
+test.for([
   { seconds: [150], judgement: "too-few" },
   { seconds: Array(20).fill(150), judgement: "under" },
   { seconds: Array(20).fill(165), judgement: "under" },
@@ -313,7 +313,7 @@ test.each([
   expect(LINES).toEqual({ p50: 165, p90: 200, minPushes: 20 });
 });
 
-test.each([
+test.for([
   { paged: "under", judgement: "over", page: "over" },
   { paged: "over", judgement: "over", page: null },
   { paged: "over", judgement: "under", page: "under" },

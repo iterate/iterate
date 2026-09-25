@@ -22,10 +22,10 @@ test("a leg whose image receipt matches the script uses the image's ESP-IDF and 
   );
 });
 
-test.each([
+test.for([
   ["an image without ESP-IDF", undefined],
   ["an image baked from another esp-idf.sh", "0000000000000000000000000000000000000000"],
-])("%s makes the leg warn, then install from the network", (_, receipt) => {
+] as const)("%s makes the leg warn, then install from the network", ([, receipt]) => {
   using leg = fixture();
   if (receipt) leg.writeReceipt(receipt);
 

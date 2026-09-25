@@ -19,7 +19,7 @@ test("covers what the page asked for → straight to next", async () => {
   expect(response?.headers.get("location")).toBe("/projects/acme");
 });
 
-test.each([
+test.for([
   {
     lacks: "a project the page named",
     path: "/.auth/login?next=%2Fprojects%2Facme&scope=iterate&project=acme",

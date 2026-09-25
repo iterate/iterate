@@ -2,7 +2,7 @@ import { SLOW_ROW_PATHS } from "@iterate-com/shared/test-support/e2e-policy";
 import { expect, test } from "vitest";
 import { chooseSlowRows, SLOW_ROWS_LABEL, slowRowsTagsFilter } from "./slow-rows.ts";
 
-test.each([
+test.for([
   {
     case: "a PR that changes the code the slow rows prove, but neither turns them on nor edits one, skips them",
     pullRequest: pullRequest(
@@ -57,7 +57,7 @@ test("without a pull request (main, the scheduled run, a laptop) every row runs,
   ).toEqual({ slowRows: "run", reason: "no pull request" });
 });
 
-test.each(["run", "skip", "only"] as const)(
+test.for(["run", "skip", "only"] as const)(
   "what was asked for (E2E_SLOW_ROWS, --slow-rows) wins, and nothing is read: %s",
   async (requested) => {
     expect(await chooseSlowRows({ requested, prNumber: "7", readPullRequest: unread })).toEqual({

@@ -14,7 +14,7 @@ test("source-only changes preserve the dependency fingerprint", () => {
   expect(workspace.run("fingerprint")).toBe(before);
 });
 
-test.each([
+test.for([
   ["pnpm-lock.yaml", "lockfileVersion: '9.0'\n# changed lock input\n"],
   ["pnpm-workspace.yaml", "packages:\n  - app\n  - another-app\n"],
   [".npmrc", "color=false\n"],
@@ -23,7 +23,7 @@ test.each([
   ["external/index.js", "module.exports = 8;\n"],
   // the bake's recipe: its runner, its Node, the tags it snapshots
   [".depot/workflows/build-preview-ci-image.yml", "runs-on: depot-ubuntu-26.04-16\n"],
-])("changed %s changes the dependency fingerprint", (file, contents) => {
+])("changed %s changes the dependency fingerprint", ([file, contents]) => {
   using workspace = fixture();
   const before = workspace.run("fingerprint");
   workspace.write(file, contents);
@@ -54,7 +54,7 @@ test("manifest changes affect the fingerprint even with an unchanged lockfile", 
   expect(workspace.run("fingerprint")).not.toBe(before);
 });
 
-test.each([
+test.for([
   ["package.json", "pnpm:devPreinstall"],
   ["package.json", "preinstall"],
   ["package.json", "install"],
@@ -68,7 +68,7 @@ test.each([
   ["app/package.json", "preprepare"],
   ["app/package.json", "prepare"],
   ["app/package.json", "postprepare"],
-])("%s %s prevents sealing dependencies", (file, hook) => {
+])("%s %s prevents sealing dependencies", ([file, hook]) => {
   using workspace = fixture();
   const manifest = JSON.parse(readFileSync(join(workspace.cwd, file), "utf8"));
   workspace.write(

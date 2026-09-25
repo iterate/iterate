@@ -217,12 +217,12 @@ test("a scheduled run has no pull request", async () => {
   expect(github.pullRequestsForCommit).not.toHaveBeenCalled();
 });
 
-test.each([
+test.for<[Parameters<typeof busyDepot>[0], string]>([
   [{ name: "Lint and Typecheck" }, "Lint and Typecheck"],
   [{ status: ["failed"] }, "failed"],
 ])(
   "a full listing (%o) that does not reach back starts the window two hours after its oldest workflow, and warns",
-  async (listing, label) => {
+  async ([listing, label]) => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const requested = {
       start: Date.parse("2026-09-24T16:24:00Z"),

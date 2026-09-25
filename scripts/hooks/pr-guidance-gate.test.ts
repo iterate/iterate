@@ -59,7 +59,7 @@ test("a stale hash — the doc changed since it was read — is blocked again", 
 
 // The tests above use this machine's PATH, so they cover only the hash tool it has. These cover
 // each case on every machine.
-test.each(["sha1sum", "shasum"])("with only %s on the PATH, the gate blocks and acks", (tool) => {
+test.for(["sha1sum", "shasum"])("with only %s on the PATH, the gate blocks and acks", (tool) => {
   using path = pathWith([tool]);
   const denied = runHook(`gh pr create --title "hello"`, path.dir);
   expect(denied).toMatchObject({ status: 2 });

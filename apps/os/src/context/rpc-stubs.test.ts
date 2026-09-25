@@ -65,7 +65,7 @@ test("stampCallerHeaders strips every header the DO's fetch trusts as the platfo
 // return, while its pager could lend a live one. A client's own throw, or a coded refusal, is not a
 // broken transport and keeps the stub warm. Node: the pager layer is never entered (no sockets).
 
-test.each([
+test.for([
   {
     rejects: "a transport failure (workerd's `retryable: true` stamp)",
     error: Object.assign(new Error("Network connection lost."), { retryable: true }),
@@ -227,7 +227,7 @@ test("a relay registers onRpcBroken on the session's stub ONCE per session, not 
 // a `rpc-stubs.platform-failure-relend` warn. A lend that still fails, or fails with the DO's own
 // error, is one `rpc-stub-lend-failed` warn: the DO's page times out and a push waiting on it is lost.
 
-test.each([
+test.for([
   {
     lendFails: "once with the transport cut",
     failures: 1,
@@ -346,7 +346,7 @@ test("a lend recalled while its repeat waits is not lent again, and its failure 
 // 10 s more fails the call RPC_STUB_OFFLINE, logged. A client that answers the probe is only slow,
 // and its call waits on.
 
-test.each([
+test.for([
   {
     client: "answers nothing (its network is gone)",
     callAnswersAfterMs: null,
@@ -434,7 +434,7 @@ test.each([
 // and ends the lend; anything else is a drop, and the relay dials the DO again (bounded: five
 // tries over ~30 s, all within 60 s of the drop) while the session's dup stays lent.
 
-test.each([
+test.for([
   {
     closes: "with 1006 (the leg dropped: the DO reset, the hop failed)",
     code: 1006,
@@ -537,7 +537,7 @@ test("a pager that closes under a live session: a re-dial the DO never answers i
 
 // 2026-09-24 14:06: a deploy's reset answered the voice boards' re-dials with 503, and the relay
 // read that as a refusal and gave up on the first answer. A 5xx is the DO not ready yet.
-test.each([
+test.for([
   { answers: "503 (the DO not ready yet)", status: 503, dials: 3, disposed: 0 },
   { answers: "409 (the DO's refusal)", status: 409, dials: 2, disposed: 1 },
 ])(
@@ -591,7 +591,7 @@ test("a re-dial the DO never answers is given up 60 s after the drop, never dial
 // A voice board that goes away takes its /api session with it, and its pager often drops a moment
 // before the session's own end reaches the lend. The drop is logged with its outcome, so a session
 // that ends while the re-dial is in flight logs nothing; a live one logs the drop once it is back.
-test.each([
+test.for([
   {
     session: "ends while the re-dial is in flight",
     endSession: true,

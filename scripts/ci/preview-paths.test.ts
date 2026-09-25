@@ -6,7 +6,7 @@ import { expect, test } from "vitest";
 import { touchesPreview } from "./preview-paths.ts";
 
 // GitHub's `paths` semantics: any file whose last matching pattern is a positive one triggers.
-test.each([
+test.for([
   { files: ["apps/os/src/worker.ts"], preview: true },
   { files: ["configs/default/AGENTS.md"], preview: true },
   { files: ["package.json"], preview: true },
@@ -27,7 +27,7 @@ test.each([
 // merged into main. A rename counts on both sides: moving a file out of apps/os changes apps/os.
 // A HEAD that is no merge (the head alone, when the pull request conflicts) cannot tell, so it
 // deploys.
-test.each([
+test.for([
   { change: "adds", path: "docs/notes.md", preview: "false" },
   { change: "adds", path: "apps/os/src/worker.ts", preview: "true" },
   { change: "moves apps/os/src/moved.ts to", path: "docs/moved.ts", preview: "true" },

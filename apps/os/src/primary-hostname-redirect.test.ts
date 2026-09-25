@@ -8,7 +8,7 @@ const subdomains: IngressRouting = { type: "subdomains", hostname: "iterate.app"
 const PLATFORM = "https://os.iterate.com";
 const navigate = { "sec-fetch-mode": "navigate", "sec-fetch-dest": "document" };
 
-test.each<{
+test.for<{
   why: string;
   url: string;
   method?: string;

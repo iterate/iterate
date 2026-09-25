@@ -35,10 +35,10 @@ const TABLE: [string, ItxExpression][] = [
   ["itx.math.add(1,-2.5,true,null)", ["itx", "math", ["add", 1, -2.5, true, null]]], // primitives
 ];
 
-test.each(TABLE)("expression codec, parse: %s", (str, expr) => {
+test.for(TABLE)("expression codec, parse: %s", ([str, expr]) => {
   expect(parse(str)).toEqual(expr);
 });
-test.each(TABLE)("expression codec, print: %s", (str, expr) => {
+test.for(TABLE)("expression codec, print: %s", ([str, expr]) => {
   expect(print(expr)).toBe(str);
 });
 
@@ -50,7 +50,7 @@ const CANONICAL: { spelled: string; becomes: string }[] = [
   { spelled: "itx.ai.run({fast:true,model:'x'})", becomes: "itx.ai.run({fast:true,model:'x'})" },
   { spelled: 'itx.ai.run( "x" , {b:1, a:2} )', becomes: "itx.ai.run('x',{a:2,b:1})" },
 ];
-test.each(CANONICAL)("canonical spelling: $spelled prints as $becomes", ({ spelled, becomes }) => {
+test.for(CANONICAL)("canonical spelling: $spelled prints as $becomes", ({ spelled, becomes }) => {
   expect(print(parse(spelled))).toBe(becomes);
   expect(print(parseItxExpressionPrefix(spelled))).toBe(becomes); // a rule's match, the same way
 });
@@ -66,7 +66,7 @@ const COMMENTED: { spelled: string; parsesTo: ItxExpression }[] = [
     parsesTo: ["itx", ["x", "// not a comment", "/* nor this */"]],
   },
 ];
-test.each(COMMENTED)("comments inside call args: $spelled parses", ({ spelled, parsesTo }) => {
+test.for(COMMENTED)("comments inside call args: $spelled parses", ({ spelled, parsesTo }) => {
   expect(parse(spelled)).toEqual(parsesTo);
 });
 
