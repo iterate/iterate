@@ -466,6 +466,59 @@ test("`@` round-trips the codec (targets only): parse → print → parse; the o
   expect(parse("itx.kv.get('a@b', \"x@y\")")).toEqual(["itx", "kv", ["get", "a@b", "x@y"]]);
 });
 
+test("`@caller` round-trips the codec (targets only): it lexes to `{ '@caller': true }` anywhere in a target and prints back; in a call it is refused, inside quotes it is a string", () => {
+  const target = "itx.workers.get({ props: { caller: @caller }, source: 's' }).at(@caller, @)";
+  const parsed = parse(target, { holes: true });
+  expect(parsed).toEqual([
+    "itx",
+    "workers",
+    ["get", { props: { caller: { "@caller": true } }, source: "s" }],
+    ["at", { "@caller": true }, { "@": true }],
+  ]);
+  expect(print(parsed, { holes: true })).toBe(
+    "itx.workers.get({props:{caller:@caller},source:'s'}).at(@caller,@)",
+  );
+  expect(parse(print(parsed, { holes: true }), { holes: true })).toEqual(parsed);
+  expect(() => parse("itx.agents.at(@caller)")).toThrow(
+    /`@caller` .* legal only in a rewrite rule's target/,
+  );
+  expect(parse("itx.kv.get('@caller')")).toEqual(["itx", "kv", ["get", "@caller"]]);
+});
+
+test("`@caller` is the context the call started at: the resolver fills it in the winning row's target, anywhere in it, from `Caller.path` (the first hop's stamp) else its own path; a caller's own `{ '@caller': true }` stays data; a reader that dispatches nothing leaves it as spelled", () => {
+  const rules = table([
+    "itx.agents ⇒ itx.facets.get('agents').at(@caller)",
+    "itx.voice ⇒ itx.workers.get({ source: 'v', props: { caller: @caller } })",
+  ]);
+  const resolverFor = (callerPath?: string) =>
+    new ItxExpressionResolver({
+      builtIns: fakeBuiltIns(),
+      rewriteRules: () => rules,
+      implicitRoots: ROOT,
+      path: "/",
+      caller: () => ({ principal: null, path: callerPath }),
+    });
+  const ran = (callerPath: string | undefined, call: ItxExpressionInput) =>
+    print(resolverFor(callerPath).resolve(call).at(-1)!);
+  expect(ran("/jail", "itx.agents.create('./a')")).toBe(
+    "itx.builtins.facets.get('agents').at('/jail').create('./a')",
+  );
+  expect(ran(undefined, "itx.agents.list()")).toBe(
+    "itx.builtins.facets.get('agents').at('/').list()",
+  );
+  expect(ran("/jail", "itx.voice.setupVoiceAgent({})")).toBe(
+    "itx.builtins.workers.get({props:{caller:'/jail'},source:'v'}).setupVoiceAgent({})",
+  );
+  expect(ran("/jail", ["itx", "agents", ["create", { "@caller": true }]])).toBe(
+    "itx.builtins.facets.get('agents').at('/jail').create({'@caller':true})",
+  );
+  expect(
+    print(resolveItxExpression(() => rules, parse("itx.agents.list()"), ROOT).at(-1)!, {
+      holes: true,
+    }),
+  ).toBe("itx.builtins.facets.get('agents').at(@caller).list()");
+});
+
 // ───────────────────────────── the append boundary ─────────────────────────────
 
 test("rewrite-rule-configured — ONE event, both halves canonical, loud at the append boundary: AT REST: BOTH halves are the PARSED form (either codec half in, the parsed form out) — the reduce keys the table by printing the match, so a canonical match over the codec cap never re-parses", () => {
@@ -1173,7 +1226,7 @@ test("the app wall (`Caller.app`): on the INPUT expression only, `itx.builtins` 
     expect(() => resolver.resolve(`itx.cd('${to}').whoami()`)).toThrow(/goes down only/);
   expect(() => resolver.resolve("itx.cd('./b').cd('../..').whoami()")).toThrow(/goes down only/);
 });
-test("the app wall (`Caller.app`): on the INPUT expression only, `itx.builtins` is refused and `cd` goes down only — from the root too: a ROW loaded code appends is walled on its target: the fixed point and a cd above are refused, its own lend (`itx.builtins.rpcStubs.get`) and a plain expression pass, a mask says nothing", () => {
+test("the app wall (`Caller.app`): on the INPUT expression only, `itx.builtins` is refused and `cd` goes down only — from the root too: a ROW loaded code appends is walled on its target: the fixed point and a cd above are refused, its own lend (`itx.builtins.rpcStubs.get`) and a plain expression pass, a mask says nothing, and `@caller` is the root's code's alone", () => {
   const row = (type: string, target: unknown) => () =>
     admitLoadedCodeRow({ type, payload: { match: "itx.x", target } }, "/agents/a");
   expect(row("events.iterate.com/itx/rewrite-rule-configured", "itx.builtins.cd('/')")).toThrow(
@@ -1205,6 +1258,29 @@ test("the app wall (`Caller.app`): on the INPUT expression only, `itx.builtins` 
   ).not.toThrow();
   expect(row("events.iterate.com/itx/rewrite-rule-configured", null)).not.toThrow();
   expect(row("events.iterate.com/note/added", "itx.builtins.cd('/')")).not.toThrow(); // not a row
+  // `@caller` below the root can name a context above the writer (an ancestor calling in): refused;
+  // at the root every origin is beneath, so the root's code may write it (an app's install)
+  expect(row("events.iterate.com/itx/rewrite-rule-configured", "itx.cd(@caller).run")).toThrow(
+    /"@caller" is the root's word, not a loaded worker's at "\/agents\/a"/,
+  );
+  expect(() =>
+    admitLoadedCodeRow(
+      {
+        type: "events.iterate.com/itx/rewrite-rule-configured",
+        payload: { match: "itx.agents", target: "itx.facets.get('agents').at(@caller)" },
+      },
+      "/",
+    ),
+  ).not.toThrow();
+  expect(
+    row("events.iterate.com/itx/rewrite-rule-configured", [
+      "itx",
+      "builtins",
+      "rpcStubs",
+      ["get", "itx.x"],
+      ["at", { "@caller": true }],
+    ]),
+  ).toThrow(/"@caller" is the root's word/);
 });
 
 test("cd forwards a factory and terminal fetch together, without exporting an intermediate handle over RPC", async () => {

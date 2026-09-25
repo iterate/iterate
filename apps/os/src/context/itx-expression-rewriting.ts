@@ -14,8 +14,9 @@
 // row of THIS context's table wins, the fixed point `itx.builtins` ends the chain, a bare `itx` row
 // with a target yields to the implicit rows and a bare `null` denies all), the implicit rows
 // (`implicitRootsAt`), the check every row passes at the append boundary
-// (`normalizeRewriteRuleConfigured`), `@` as the caller's input (expression.ts), the app wall on a
-// loaded worker's calls and rows (`admitLoadedCodeExpression`, `admitLoadedCodeRow`), and un-setting
+// (`normalizeRewriteRuleConfigured`), `@` as the caller's input and `@caller` as the context the call
+// started at (expression.ts, filled by `resolveItxExpression`), the app wall on a loaded worker's
+// calls and rows (`admitLoadedCodeExpression`, `admitLoadedCodeRow`), and un-setting
 // — a `null` kept as a mask only where something beneath would answer, `ifTarget` as a compare-and-set
 // delete (stream/core-processor.ts `CoreState.itxExpressionRewriteRules`).
 //
@@ -44,7 +45,9 @@ import type { RewriteRuleConfigured, RewriteRuleListEntry } from "iterate/api";
 import {
   InvokeHandle,
   normalizedItxExpression,
+  containsItxExpressionCaller,
   containsItxExpressionHole,
+  isItxExpressionCaller,
   isItxExpressionHole,
   ITX_EXPRESSION_MERGE_KEY,
   itxExpressionStepName,
@@ -269,6 +272,19 @@ function fillItxExpressionHoles(
   );
 }
 
+/** `template` with every `@caller` replaced by `origin`, the context the call started at. */
+function fillItxExpressionCaller(template: unknown, origin: string): unknown {
+  if (isItxExpressionCaller(template)) return origin;
+  if (Array.isArray(template))
+    return template.map((value) => fillItxExpressionCaller(value, origin));
+  // oxlint-disable-next-line iterate/simple-truthiness-check -- a target is parsed JSON; the typeof separates its objects from its primitives (bare truthiness would misroute strings/numbers)
+  if (template !== null && typeof template === "object")
+    return Object.fromEntries(
+      Object.entries(template).map(([key, value]) => [key, fillItxExpressionCaller(value, origin)]),
+    );
+  return template;
+}
+
 /** The call with the matched prefix replaced by the target (its `@` holes filled by
  *  `fillItxExpressionHoles`). */
 function applyItxExpressionRewriteRule(
@@ -291,14 +307,17 @@ function applyItxExpressionRewriteRule(
 
 /** Rules 3–5 together, PURE: the CHAIN of rewrites from `call` to the call that runs — `call` itself
  *  first, the builtins-rooted call last (one element when `call` is already there). `implicitRoots`
- *  is what has an implicit row HERE (`implicitRootsAt`). Throws NO_ITX_EXPRESSION_MATCH when nothing
- *  claims the call, or when the winning row is a mask (default-deny), and a depth error after 32
- *  rewrites. `rules` is a THUNK read at most once, and NOT AT ALL when the call is already
+ *  is what has an implicit row HERE (`implicitRootsAt`). `origin` is the context the call started
+ *  at, the value of `@caller` in each winning row's target (never in the call's own steps, which are
+ *  data); the readers that dispatch nothing (the census, `describeRewriteRules`, the reduce) omit it
+ *  and the marker stays as spelled. Throws NO_ITX_EXPRESSION_MATCH when nothing claims the call, or
+ *  when the winning row is a mask (default-deny), and a depth error after 32 rewrites. `rules` is a THUNK read at most once, and NOT AT ALL when the call is already
  *  builtins-rooted: a fixed-point dispatch never materializes the table. */
 export function resolveItxExpression(
   rules: () => readonly ItxExpressionRewriteRule[],
   call: ItxExpression,
   implicitRoots: ReadonlySet<string>,
+  origin?: string,
 ): ItxExpression[] {
   const chain: ItxExpression[] = [call];
   let current = call;
@@ -320,7 +339,12 @@ export function resolveItxExpression(
           "NO_ITX_EXPRESSION_MATCH",
           `${JSON.stringify(print(current))} is masked: the rule at ${JSON.stringify(print(winner.rule.match))} is null (default-deny; provide a target)`,
         );
-      current = applyItxExpressionRewriteRule(winner.rule.target, winner.match);
+      const target =
+        origin && containsItxExpressionCaller(winner.rule.target)
+          ? // a filled copy of a parsed target is the same shape, a string where the marker stood
+            (fillItxExpressionCaller(winner.rule.target, origin) as ItxExpression)
+          : winner.rule.target;
+      current = applyItxExpressionRewriteRule(target, winner.match);
       chain.push(current);
       continue;
     }
@@ -523,8 +547,13 @@ function admitLoadedCodeExpression(expression: ItxExpression, base: string): voi
  *  walled on its TARGET like a call is on its input — else `itx ⇒ itx.builtins.cd('/')` on its own log
  *  would re-parent it past its creator's masks, and a subscription target runs as the kernel. The one
  *  fixed-point target it may write is its OWN lend, `itx.builtins.rpcStubs.get(<key>)`: the registry is
- *  this context's, so the row grants nothing the code does not already hold. A `null` (a mask, an
- *  un-set) says nothing and passes. Any other event passes untouched. */
+ *  this context's, so the row grants nothing the code does not already hold. `@caller` is the root's
+ *  code's alone (the config worker installing an app): a row below the root is also resolved for an
+ *  ANCESTOR that calls into it, so `@caller` there can name a context above the writer — a sandbox's
+ *  `itx.run ⇒ itx.cd(@caller).run` would send its agent's next script back up to the agent, and
+ *  `itx.run ⇒ itx.agents.at(@caller).delete('…')` would spend the agent's reach on the sandbox's
+ *  errand. At the root every origin is at or beneath the writer. A `null` (a mask, an un-set) says
+ *  nothing and passes. Any other event passes untouched. */
 export function admitLoadedCodeRow(event: { type: string; payload?: unknown }, base: string): void {
   if (
     event.type !== "events.iterate.com/itx/rewrite-rule-configured" &&
@@ -535,6 +564,11 @@ export function admitLoadedCodeRow(event: { type: string; payload?: unknown }, b
   if (!target) return; // a mask, an un-set (an empty string is the reduce's refusal, not this wall's)
   if (typeof target !== "string" && !Array.isArray(target)) return; // a live object: the lend's own business
   const expression = normalizedItxExpression(target as ItxExpressionInput, { holes: true });
+  if (base !== "/" && containsItxExpressionCaller(expression))
+    throw codedError(
+      "FORBIDDEN",
+      `"@caller" is the root's word, not a loaded worker's at ${JSON.stringify(base)}: a row here also answers the contexts above it (${JSON.stringify(print(expression, { holes: true }))})`,
+    );
   const [, root, registry, lend] = expression;
   if (root === "builtins" && registry === "rpcStubs" && Array.isArray(lend) && lend[0] === "get")
     return;
@@ -736,13 +770,24 @@ export class ItxExpressionResolver {
     if (caller.app && !caller.path) admitLoadedCodeExpression(expression, this.#path);
   }
 
+  /** The context the current call started at — `@caller` (the same value as library.ts `originOf`):
+   *  the origin the first hop stamped, else this context. */
+  #origin(): string {
+    return this.#caller().path || this.#path;
+  }
+
   /** PURE: the chain of rewrites from `call` to the builtins-rooted call that would run
    *  (`resolveItxExpression`, after the app wall).
    *  Nothing is dispatched. The one law: `invoke(call)` ≡ `invoke(resolve(call).at(-1))`. */
   resolve(call: ItxExpressionInput): ItxExpression[] {
     const expression = normalizedItxExpression(call);
     this.#admit(expression);
-    return resolveItxExpression(this.#rewriteRules, expression, this.#implicitRoots);
+    return resolveItxExpression(
+      this.#rewriteRules,
+      expression,
+      this.#implicitRoots,
+      this.#origin(),
+    );
   }
 
   /** Resolve + run one call: the chain's last element, walked against the physical scope from the
@@ -760,9 +805,12 @@ export class ItxExpressionResolver {
       extraArgs = [];
     }
     this.#admit(expression);
-    const rewritten = resolveItxExpression(this.#rewriteRules, expression, this.#implicitRoots).at(
-      -1,
-    )!;
+    const rewritten = resolveItxExpression(
+      this.#rewriteRules,
+      expression,
+      this.#implicitRoots,
+      this.#origin(),
+    ).at(-1)!;
     const rootName = itxExpressionStepName(rewritten[2]);
     const roots = () => Object.keys(this.#builtIns).join(", ");
     if (!rootName)

@@ -21,11 +21,17 @@ test("install and reinstall preserve existing agents, sandbox grants and convers
     type: "events.iterate.com/itx/rewrite-rule-configured",
     payload: { match: "itx.secrets", target: null },
   });
+  // the sandbox's own grants and its agent's: the root's rows it inherits include the app's own
+  // `itx.agents`, which an install replaces
+  const sandboxGrants = async () =>
+    ((await sandbox.rewriteRules.list()) as { context: string }[]).filter(
+      (row) => row.context !== "/",
+    );
   await context.provide("itx.ai", new ScriptedAi(["Before upgrade.", "After upgrade."]));
   await configureModel(context);
   await itx.agents.get("/agents/support").message("Remember this conversation.");
   await until("first reply", async () => assistantWords(await readAll(context)).length === 1);
-  const grants = await sandbox.rewriteRules.list();
+  const grants = await sandboxGrants();
   const history = await readAll(context);
   const previous = await context.processors.list();
 
@@ -33,7 +39,7 @@ test("install and reinstall preserve existing agents, sandbox grants and convers
   expect(await itx.agents.list()).toEqual([
     { path: "/agents/support", createdAt: expect.any(String) },
   ]);
-  expect(await sandbox.rewriteRules.list()).toEqual(grants);
+  expect(await sandboxGrants()).toEqual(grants);
   expect((await readAll(context)).slice(0, history.length)).toEqual(history);
   expect(await context.processors.list()).not.toEqual(previous);
   await itx.agents.get("/agents/support").message("Continue after the upgrade.");
@@ -43,7 +49,7 @@ test("install and reinstall preserve existing agents, sandbox grants and convers
   const installedRows = await context.processors.list();
   await installAgents(itx, source);
   expect(await context.processors.list()).toEqual(installedRows);
-  expect(await sandbox.rewriteRules.list()).toEqual(grants);
+  expect(await sandboxGrants()).toEqual(grants);
   await installAgents(itx, oldSource);
   expect(await itx.rewriteRules.get("itx.agents")).toEqual(oldRule);
 });

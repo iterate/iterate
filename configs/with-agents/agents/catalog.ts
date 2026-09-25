@@ -7,6 +7,7 @@ import {
   type ProcessorState,
 } from "iterate/stream/processor";
 import { StreamProcessorDurableObject } from "iterate/sdk";
+import { resolveContextPath } from "iterate/lib";
 import { AgentContract } from "./contract.ts";
 import { AgentCollectionRpcTarget } from "./collection.ts";
 
@@ -53,31 +54,11 @@ class AgentCatalogProcessor extends StreamProcessor<
   }
 }
 
-const Certificate = z.discriminatedUnion("type", [
-  z.object({
-    type: z.literal("events.iterate.com/agent/created"),
-    payload: z.object({ path: z.string().startsWith("/").min(2) }),
-  }),
-  z.object({
-    type: z.literal("events.iterate.com/agent/deleted"),
-    payload: z.object({ path: z.string().startsWith("/").min(2) }),
-  }),
-]);
-
 export class AgentCollectionDurableObject extends StreamProcessorDurableObject<AgentCatalogState> {
-  /** The processor's reads, and `itx.agents`: the collection's verbs, `at(base)` (the collection an
-   *  agent's own `itx.agents` rule reaches, collection.ts) and `announce` (a certificate from an
-   *  agent context). */
-  static override publicMethods = [
-    ...super.publicMethods,
-    "list",
-    "get",
-    "create",
-    "delete",
-    "upgrade",
-    "at",
-    "announce",
-  ];
+  /** The processor's reads, and `at(base)`: the collection of the agents beneath `base`, which the
+   *  root's `itx.agents` row fills with the context the call started at (install.ts). The facet is
+   *  reached by name only on `/`, so only the root picks any other base. */
+  static override publicMethods = [...super.publicMethods, "at"];
 
   processor = new AgentCatalogProcessor();
   at(base: string) {
@@ -101,29 +82,7 @@ export class AgentCollectionDurableObject extends StreamProcessorDurableObject<A
         };
         return { cacheKey, source, className: "AgentDurableObject" };
       },
-      base,
-    );
-  }
-  #collection = this.at("/");
-  upgrade() {
-    return this.#collection.upgrade();
-  }
-  list() {
-    return this.#collection.list();
-  }
-  get(path: string) {
-    return this.#collection.get(path);
-  }
-  create(path: string) {
-    return this.#collection.create(path);
-  }
-  delete(path: string) {
-    return this.#collection.delete(path);
-  }
-  async announce(input: unknown) {
-    const event = Certificate.parse(input);
-    await this.withItx((itx) =>
-      itx.append({ ...event, idempotencyKey: `${event.type}:${event.payload.path}` }),
+      resolveContextPath("/", base),
     );
   }
 }

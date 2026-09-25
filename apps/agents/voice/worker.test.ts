@@ -60,13 +60,14 @@ test("an incorrect device acknowledgment stops the upload", async () => {
 test.each(["waveshare-rlcd-4-2", "zectrix-note4", "havpe"])(
   "%s receives only its own screen context",
   async (device) => {
-    const { worker, append, create, disable } = await harness();
+    const { worker, append, at, create, disable } = await harness();
     await worker.setupVoiceAgent({
       streamPath: `/agents/voice/v23/${device}/test`,
       activation: "test",
       screen: device !== "havpe",
     });
     expect(create).toHaveBeenCalledExactlyOnceWith(`/agents/voice/v23/${device}/test`);
+    expect(at).toHaveBeenCalledExactlyOnceWith("/");
     expect(disable).toHaveBeenCalledExactlyOnceWith("agent");
     expect(create.mock.invocationCallOrder[0]).toBeLessThan(disable.mock.invocationCallOrder[0]!);
     expect(disable.mock.invocationCallOrder[0]).toBeLessThan(append.mock.invocationCallOrder[0]!);
@@ -89,6 +90,14 @@ test.each(["waveshare-rlcd-4-2", "zectrix-note4", "havpe"])(
     expect(subscription.payload.consumes).toContain("events.iterate.com/agent/context-added");
   },
 );
+
+test("a caller beneath the root sets up its voice agent through the agents beneath itself, by default at its own agents/voice", async () => {
+  const { worker, at, create } = await harness(png(3, 0), {}, "/jail");
+  const { streamPath } = await worker.setupVoiceAgent({ activation: "test" });
+  expect(streamPath).toMatch(/^\/jail\/agents\/voice\/[0-9a-f-]{36}$/);
+  expect(at).toHaveBeenCalledExactlyOnceWith("/jail");
+  expect(create).toHaveBeenCalledExactlyOnceWith(streamPath);
+});
 
 // Regression: a photo URL in the September 21 voice stream returned HTTP 404.
 // Chromium still produced a valid PNG containing the broken-image icon.
@@ -223,7 +232,7 @@ function loadVoiceWorker(): Promise<any> {
             builder.onLoad({ filter: /.*/, namespace: "test-runtime" }, () => ({
               contents: [
                 `import { withItx } from ${JSON.stringify(recordPipelinedSteps)};`,
-                "export class ConfigWorker { constructor(env) { this.env = env; } withItx(call) { return withItx(this.env.ITX, call); } }",
+                "export class ConfigWorker { constructor(ctx, env) { this.ctx = ctx; this.env = env; } withItx(call) { return withItx(this.env.ITX, call); } }",
                 'export { z } from "zod";',
               ].join("\n"),
               resolveDir: new URL(".", import.meta.url).pathname,
@@ -288,7 +297,7 @@ function png(channels: 3 | 4, filter: number) {
   ]);
 }
 
-async function harness(image = png(3, 0), infoOverride = {}) {
+async function harness(image = png(3, 0), infoOverride = {}, caller = "/") {
   const VoiceWorker = await loadVoiceWorker();
   const info = {
     width: 400,
@@ -311,18 +320,20 @@ async function harness(image = png(3, 0), infoOverride = {}) {
     return [];
   });
   const disable = vi.fn(async () => undefined);
+  const create = vi.fn(async () => ({}));
   const itx = {
-    agents: { create: vi.fn(async () => ({})) },
+    agents: { at: vi.fn(() => ({ create })) },
     browser: { quickAction },
     clients: { waveshare_rlcd_4_2: { screen }, zectrix_note4: { screen }, tiny: { screen } },
     cd: vi.fn(() => ({ append, processors: { disable } })),
   };
   return {
-    worker: new VoiceWorker({ ITX: { get: () => itx } }),
+    worker: new VoiceWorker({ props: { caller } }, { ITX: { get: () => itx } }),
     quickAction,
     setImage,
     append,
-    create: itx.agents.create,
+    at: itx.agents.at,
+    create,
     disable,
   };
 }

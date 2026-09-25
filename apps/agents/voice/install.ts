@@ -60,6 +60,9 @@ export async function ensureVoiceAgent(
             {
               source: `itx.kv.get(${JSON.stringify(install.workerKey)})`,
               cacheKey: install.cacheKey,
+              // The context the call started at, filled by the platform: the worker creates and
+              // sets up agents beneath it only (worker.ts).
+              props: { caller: { "@caller": true } },
             },
           ],
         ],

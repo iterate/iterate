@@ -8,6 +8,11 @@
  * processors replace the default agent processor: one append installs their subscriptions and
  * starts the call, so the relay dials the provider before the first microphone frame arrives.
  * The device carries no source or class name; the bundles live in the project's KV.
+ *
+ * The worker runs at `/` with the root's reach whoever calls it, so it acts for its caller through
+ * `ctx.props.caller`: the context the call started at, which the platform fills into the row
+ * (install.ts `@caller`). A voice agent is created beneath that context through `itx.agents` narrowed
+ * to it, never at a path the caller names above itself.
  */
 import { z } from "zod";
 import { bytesToBase64 } from "@iterate-com/shared/base64";
@@ -150,7 +155,9 @@ export default class VoiceWorker extends ConfigWorker {
     activation: string;
     screen?: boolean;
   }): Promise<{ streamPath: string }> {
-    const streamPath = options.streamPath || `/agents/voice/${crypto.randomUUID()}`;
+    const { caller } = VoiceProps.parse(this.ctx.props);
+    const streamPath =
+      options.streamPath || `${caller === "/" ? "" : caller}/agents/voice/${crypto.randomUUID()}`;
     if (!streamPath.startsWith("/")) {
       throw new Error(`voice streamPath must be absolute; received ${JSON.stringify(streamPath)}`);
     }
@@ -160,15 +167,17 @@ export default class VoiceWorker extends ConfigWorker {
     return this.withItx(async (scope) => {
       // `agents` is the rewrite rule the agents app mounts, which the declared scope does not name.
       const itx = scope as unknown as {
-        agents: { create(path: string): Promise<unknown> };
+        agents: { at(base: string): { create(path: string): Promise<unknown> } };
         cd(path: string): {
           append(...events: object[]): Promise<unknown>;
           processors: { disable(name: string): Promise<unknown> };
         };
       };
       // Normal agent creation establishes the creator link and script sandbox before
-      // either loaded voice processor needs project code, egress or tools.
-      await itx.agents.create(streamPath);
+      // either loaded voice processor needs project code, egress or tools. The collection is the
+      // caller's, so a `streamPath` outside the caller is refused here, before anything below
+      // touches it with the root's reach.
+      await itx.agents.at(caller).create(streamPath);
       const conversation = itx.cd(streamPath);
       await conversation.processors.disable("agent");
       await conversation.append(
@@ -248,3 +257,6 @@ export default class VoiceWorker extends ConfigWorker {
     });
   }
 }
+
+/** What the `itx.voice` row hands the worker (install.ts): the context the call started at. */
+const VoiceProps = z.object({ caller: z.string().startsWith("/") });
