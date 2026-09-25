@@ -9,13 +9,35 @@ const CONFIG_HEADER_BYTES = 16;
 /**
  * Field tags, matching `configuration.c` in the firmware exactly.
  *
- * These numbers are the wire format. All five are required by the firmware.
+ * These numbers are the wire format. The firmware requires the first five. The status voice (6) is
+ * optional to it, so an older image still boots (and sings Greensleeves), and older firmware skips it.
  */
 const fieldWifiSsid = 1;
 const fieldWifiPassword = 2;
 const fieldOsBaseUrl = 3;
 const fieldProjectId = 4;
 const fieldProjectApiKey = 5;
+const fieldStatusVoice = 6;
+
+/**
+ * How a board says its connection status out loud before it reaches iterate: sung to a tune, spoken,
+ * or not at all. The values are the names `configuration.c` decodes; a name the firmware does not know
+ * sings Greensleeves.
+ */
+export const statusVoices = [
+  { value: "greensleeves", label: "Greensleeves" },
+  { value: "daisy-bell", label: "Daisy Bell" },
+  { value: "auld-lang-syne", label: "Auld Lang Syne" },
+  { value: "lass-of-aughrim", label: "The Lass of Aughrim" },
+  { value: "spoken", label: "Spoken, no tune" },
+  { value: "off", label: "Off" },
+] as const;
+
+export type StatusVoice = (typeof statusVoices)[number]["value"];
+
+export function isStatusVoice(value: string): value is StatusVoice {
+  return statusVoices.some((voice) => voice.value === value);
+}
 
 /* These include the C string terminator: configuration.h is the ABI source. */
 const wifiSsidMaxBytes = 32;
@@ -34,6 +56,7 @@ export interface DeviceConfiguration {
     projectId: string;
     projectApiKey: string;
   };
+  statusVoice: StatusVoice;
 }
 
 export function normalizeOsBaseUrl(value: string) {
@@ -120,6 +143,12 @@ export function encodeDeviceConfiguration(
         name: "project API key",
         value: configuration.iterate.projectApiKey,
         maxBytes: projectApiKeyMaxBytes,
+      },
+      {
+        tag: fieldStatusVoice,
+        name: "status voice",
+        value: configuration.statusVoice,
+        validate: isStatusVoice,
       },
     ],
     textEncoder,
