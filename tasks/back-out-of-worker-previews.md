@@ -1,11 +1,11 @@
 ---
-status: ready
+status: in-progress
 size: large
 ---
 
 # Back out of Cloudflare Worker Previews
 
-**Status:** planned (grilled 2026-09-25), nothing built yet. Branched after #3145 (D1 control plane) and #3069 (in-place readiness), which landed mid-grill. Next: `envs.ts`-derived per-commit env, then the deploy path, then cleanup and workflows.
+**Status:** code, tests and docs done; not yet proven on Cloudflare. Built: per-commit deployments derived from their name (`envs.ts` `previewDeployment`), prd's deploy path for them, set-based cleanup/delete/sweep, all workflows moved, docs. Missing: the evidence list below (the first real Preview OS run of this branch, the second-push checks, dispatches), then the one-off cleanup of legacy Worker Previews after merge (the sweep's transitional step also does it nightly).
 
 ## Why
 
@@ -42,21 +42,21 @@ Separate from `tasks/ci-change-detection.md` (what to deploy and test); this is 
 
 ## Checklist
 
-- [ ] `envs.ts`: derive a per-commit env set from a name; the name rule (`<prefix>-<sha7>`, 63-char DNS-label guard, the account-resource and former-parent clashes `resolvePreviewName` refuses today)
-- [ ] `generate-wrangler-config.ts` / `start-app.ts`: build for a derived env; resources binding-only; the test-link and preview-admin vars `previewWranglerConfig` sets today
-- [ ] `preview.ts deploy`: build and `deployApp` os and each app with released wrangler; secrets per worker; readiness gate kept for a brand-new worker's first seconds; the in-place version wait only for main on dev
-- [ ] Delete `preparePreviewWrangler`, `uploadPreviewSecrets`, the 10061 recreate path, `reset`, `previewWranglerConfig`, `writeStartAppPreviewConfig`
-- [ ] Delete a set: `wrangler delete` each worker, then KV, R2 (emptied first), Artifacts namespace and D1 by name
-- [ ] `cleanup-superseded` command and its job in every workflow of decision 7
-- [ ] `preview-delete.yml`: every `pr<n>-*` set
-- [ ] `preview-sweep.ts`: rules over worker names; table tests
-- [ ] `preview-os.yml`: the deploy job outputs the set's name for the suites; a test-only dispatch resolves the PR's newest set; `reset` action gone
-- [ ] `main-os-e2e.yml`, `os-latency.yml`, `os-real-model.yml`, `os-e2e-soak.yml`: prefix names
-- [ ] Callers that assume Worker Previews: `e2e/support/deployed-target.ts`, `specs/setup.ts`, `packages/ui` environment favicon, `scripts/lib/do-reset.ts`, `scripts/ci/do-duration-probe.ts`
-- [ ] PR body section: per-commit URL, the worker's dashboard link, no "every push redeploys it in place"
-- [ ] `docs/dev-environments.md`: the four second-push scenarios (decision 12)
-- [ ] Docs: `docs/dev-environments.md`, `docs/pull-requests.md` (Previews), `apps/os/README.md`, `docs/depot-ci.md`, the workflow headers, `envs.ts` comments (parents → main on dev)
-- [ ] Tests: `preview.test.ts`, `preview-sweep.test.ts`, `scripts/ci/depot-workflows.test.ts`, `scripts/ci/preview-os-workflow.test.ts`
+- [x] `envs.ts`: derive a per-commit env set from a name; the name rule (`<prefix>-<sha7>`, 63-char DNS-label guard, the account-resource and former-parent clashes `resolvePreviewName` refuses today) _`previewDeployment(name)` + `OsPreviewEnv`; the clash checks went: every name ends `-<sha7>-<member>`, which no account resource has_
+- [x] `generate-wrangler-config.ts` / `start-app.ts`: build for a derived env; resources binding-only; the test-link and preview-admin vars `previewWranglerConfig` sets today _`deploymentWranglerConfig` / `linkedEnvironment`; KV binding-only, D1 by name, R2/Artifacts named after the worker; `testLinks` on `OsEnv`_
+- [x] `preview.ts deploy`: build and `deployApp` os and each app with released wrangler; secrets per worker; readiness gate kept for a brand-new worker's first seconds; the in-place version wait only for main on dev _`deployOs({ env: name })` (deploy.ts creates D1/R2/Artifacts, then migrates) + `deployStartApp`; gate fed the version `/version` names_
+- [x] Delete `preparePreviewWrangler`, `uploadPreviewSecrets`, the 10061 recreate path, `reset`, `previewWranglerConfig`, `writeStartAppPreviewConfig` _gone, with `--apps auto` (a fresh name never has the untouched apps)_
+- [x] Delete a set: `wrangler delete` each worker, then KV, R2 (emptied first), Artifacts namespace and D1 by name _`deletePreviewDeployment`: workers via `DELETE /workers/scripts/:name?force=true`, then KV/R2/D1/Artifacts, all settled_
+- [x] `cleanup-superseded` command and its job in every workflow of decision 7 _jobs in preview-os and main-os-e2e; a `continue-on-error` step in latency and real-model; the soak relies on the sweep_
+- [x] `preview-delete.yml`: every `pr<n>-*` set _`pnpm preview delete` now deletes every deployment of the prefix_
+- [x] `preview-sweep.ts`: rules over worker names; table tests _`groupPreviewDeployments` + rules 1–4 + `planSupersededCleanup`; `newestPreviewDeployment` needs the os worker, so a failed push never gets the last good one swept_
+- [x] `preview-os.yml`: the deploy job outputs the set's name for the suites; a test-only dispatch resolves the PR's newest set; `reset` action gone _`outputs.deployment` via `$GITHUB_OUTPUT`; suites get `PREVIEW_DEPLOYMENT`_
+- [x] `main-os-e2e.yml`, `os-latency.yml`, `os-real-model.yml`, `os-e2e-soak.yml`: prefix names _prefixes `main`, `latency`, `real-model`; soak `<name>-<sha7>`_
+- [x] Callers that assume Worker Previews: `e2e/support/deployed-target.ts`, `specs/setup.ts`, `packages/ui` environment favicon, `scripts/lib/do-reset.ts`, `scripts/ci/do-duration-probe.ts` _deployed-target resolves the name; favicon regex already matched; do-duration-probe comment; do-reset untouched (still right for main on dev)_
+- [x] PR body section: per-commit URL, the worker's dashboard link, no "every push redeploys it in place" _`deployment` + `versionId`; dashboard link to `<name>-os`_
+- [x] `docs/dev-environments.md`: the four second-push scenarios (decision 12) _"Second pushes" table (five rows: the cleanup-cancelled case too)_
+- [x] Docs: `docs/dev-environments.md`, `docs/pull-requests.md` (Previews), `apps/os/README.md`, `docs/depot-ci.md`, the workflow headers, `envs.ts` comments (parents → main on dev) _plus testing.md, the creating-an-app skill, debug-os-worker skill_
+- [x] Tests: `preview.test.ts`, `preview-sweep.test.ts`, `scripts/ci/depot-workflows.test.ts`, `scripts/ci/preview-os-workflow.test.ts` _plus start-app.test.ts and the favicon test_
 - [ ] Post-merge, once: delete every Worker Preview still on `os` and the app parents, with their KV/R2/Artifacts (the new sweep lists workers, not previews)
 
 ## Evidence (decision 11)
@@ -78,3 +78,9 @@ Separate from `tasks/ci-change-detection.md` (what to deploy and test); this is 
 - Grilled in Plannotator (8 revisions). Every recommendation was taken; the sad-path evidence and decision 12 came from your note on rev 7.
 
 ## Implementation log
+
+- 2026-09-25: main moved twice mid-grill: #3145 (the control plane is D1) and #3069 (in-place readiness, `--settle` gone). Decision 4 became "each set's os worker gets its own D1".
+- Resources: the repo's wrangler (4.140) auto-provisions binding-only KV as `<worker>-<binding>` and finds a D1 by `database_name`, but an R2 `bucket_name` is "fully specified" (never provisioned), and a D1 has to be migrated before the code uploads. So deploy.ts creates D1, R2 and Artifacts by name and wrangler creates the KV. Checked in `wrangler-dist/cli.js` (`provisionBindings`, `autoProvisionedResourceName`, `D1Handler.isConnectedToExistingResource`).
+- Legacy Worker Previews: the Cloudflare API deletes them directly (`DELETE /workers/workers/{worker}/previews/{name}?force=true`), so the transitional sweep step needs no draft wrangler.
+- Merged main after #3166 (the apps read `APP_CONFIG`): `startAppWorkerConfig` builds that blob from `linkedEnvironment`, and the preview swap it added (`startAppPreviewConfig`) is gone with the rest.
+- Latency guard: it measured an in-place-redeployed preview on purpose ("what production is"). It now measures a fresh deployment whenever main moved between runs, so its baseline may shift once.
