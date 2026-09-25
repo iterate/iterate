@@ -226,7 +226,6 @@ async function eraseDataWith(
       CLOUDFLARE_ACCOUNT_ID: env.cloudflareAccountId,
     },
     compatibilityDate,
-    containerClassNames: [],
   });
   if ((await services.getWorkerDoNamespaces(context, env.workerName)).length)
     throw new Error(
