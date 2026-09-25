@@ -167,7 +167,7 @@ function retryingOnePlatformFailure<T>(
     event: "cfartifacts.platform-failure-retry",
     delaysMs: [1000],
     platformFailure: (error) => {
-      const message = String((error as { message?: unknown })?.message ?? error);
+      const message = error instanceof Error ? error.message : String(error);
       return /An internal error occurred|\b10400\b/.test(message)
         ? { namespace: "iterate-context", name, verb, message }
         : undefined;

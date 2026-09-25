@@ -74,7 +74,7 @@ export function cfBrowser(binding: BrowserRun): CfBrowserApi {
         event: "browser.platform-failure-retry",
         delaysMs: [1000],
         platformFailure: (error) => {
-          const message = String((error as { message?: unknown })?.message ?? error);
+          const message = error instanceof Error ? error.message : String(error);
           // Browser Run's own timeout (`{"code":6002,"message":"A timeout was reached. …"}`) on INLINE
           // HTML: nothing remote to wait for, so the timeout is the service's, never the page's. A
           // `url` page's timeout may be that site's and is not retried.
