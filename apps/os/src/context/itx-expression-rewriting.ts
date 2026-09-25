@@ -554,7 +554,8 @@ export function builtInsGetStep(
 }
 
 /** Every rpc-stub key some row (a rule, a subscription) currently names, resolved through the
- *  whole table — the census an `itx/resumed` commit compares against the registry's presence. */
+ *  whole table — the census an `itx/woken` or `itx/resumed` commit compares against the registry's
+ *  presence. */
 export function rpcStubKeysNamed(args: {
   rules: readonly ItxExpressionRewriteRule[];
   subscriptionTargets: Record<string, ItxExpression>;
