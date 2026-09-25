@@ -630,8 +630,8 @@ test("a closed PR's preview is deleted by its own workflow, in that PR's preview
 
 // Each CI workflow of main that deploys a preview keeps one of its own, never brand-new
 // (apps/os/scripts/preview-sweep.ts CI_WORKFLOW_PREVIEWS; docs/depot-ci.md#main-os-e2e-keeps-one-preview):
-// it redeploys it in place one run at a time, the gate held past the old version's window, and
-// never deletes it.
+// it redeploys it in place one run at a time, with no hold (the gate waits until the preview runs the
+// deployment), and never deletes it.
 test("each CI workflow that deploys a preview redeploys its own in place, one run at a time, and never deletes it", () => {
   const ownPreviews = depotWorkflowFiles.flatMap((file) => {
     const workflow = loadWorkflow(file);
@@ -650,8 +650,7 @@ test("each CI workflow that deploys a preview redeploys its own in place, one ru
     expect(workflow.concurrency, file).toMatchObject({ "cancel-in-progress": false });
     const steps = Object.values(workflow.jobs).flatMap((job) => job.steps || []);
     const runs = steps.map((step) => step.run || "");
-    // the gate holds past the window an in-place redeploy's old version still answers in
-    expect(runs, file).toContainEqual(expect.stringMatching(/pnpm preview deploy --settle \d{3}$/));
+    expect(runs, file).toContainEqual("doppler run -- pnpm preview deploy");
     expect(runs, file).not.toContainEqual(expect.stringMatching(/pnpm preview (delete|reset)$/));
     expect(
       steps.filter((step) => step.env?.PREVIEW_NAME || step.run?.includes("PREVIEW_NAME=")),

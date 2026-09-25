@@ -525,6 +525,25 @@ export class SessionRpcTarget extends RpcTarget {
       .exportSecretForProjectSeed(this.#input.appConfig.secrets.adminBearer.exposeSecret());
   }
 
+  /** The deploy's readiness gate's (scripts/preview-readiness.ts), the operator's alone: the version
+   *  this edge runs and the one each named project's root context runs, at most eight. A project
+   *  nobody has touched gets a brand-new context by the asking, which is the point: while Cloudflare
+   *  releases a redeploy, a brand-new Durable Object can still start on the previous version. */
+  async versions(projectIds: string[]) {
+    if (this.#authority.principal.actor !== "admin" || this.#authority.reach !== "every")
+      throw codedError("FORBIDDEN", "Deployment versions are the operator's.");
+    const contexts = z
+      .array(z.string())
+      .max(8)
+      .parse(projectIds)
+      .map((projectId) =>
+        this.#input.contextNamespace
+          .getByName(DurableObjectNameCodec.address({ projectId, path: "/" }).name)
+          .version(),
+      );
+    return { edge: this.#input.appConfig.deployId, contexts: await Promise.all(contexts) };
+  }
+
   /** Safe bootstrap data for every app, regardless of which host serves it. */
   info() {
     return {

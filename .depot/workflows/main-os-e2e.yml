@@ -5,12 +5,11 @@
 # preview, then E2E tests (every row, the ones tagged `slow` that most PRs skip too) and Browser
 # specs side by side, then CI trace. No run deletes it: a BRAND-NEW preview's Durable Objects answer
 # Cloudflare's `internal error; reference = …` for seconds after it is created, which the deploy's
-# readiness gate (apps/os/scripts/preview-readiness.ts) has to wait out. A preview redeployed in place has a window
-# of its own instead, its previous version answering for up to ~100 s before a reset, which the
-# gate holds through (`--settle 150`; docs/depot-ci.md#main-os-e2e-keeps-one-preview). Nothing resets
-# it either: a reset deletes it and creates it brand-new. Every row mints its own people and
-# projects, so nothing reads what earlier runs left. The nightly sweep keeps it through quiet days
-# (apps/os/scripts/preview-sweep.ts rule 3).
+# readiness gate (apps/os/scripts/preview-readiness.ts) has to wait out. A preview redeployed in place
+# still runs the previous version in places for a while, which the gate waits out too
+# (docs/depot-ci.md#main-os-e2e-keeps-one-preview). Nothing resets it either: a reset deletes it and
+# creates it brand-new. Every row mints its own people and projects, so nothing reads what earlier
+# runs left. The nightly sweep keeps it through quiet days (apps/os/scripts/preview-sweep.ts rule 3).
 #
 # Runs never cancel each other: one at a time, since each redeploys the preview the run before it
 # tests, and a push that lands meanwhile queues, where Depot keeps only the newest (a burst of merges
@@ -112,16 +111,13 @@ jobs:
         run: doppler setup --config preview --project os
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-      # --settle: the readiness gate holds 150 s, past the window an in-place redeploy's old version
-      # still answers in (up to ~100 s measured), so its reset lands on a probe, never on e2e
-      # (apps/os/scripts/preview-readiness.ts).
       - name: Redeploy the preview in place
         id: deploy
         working-directory: apps/os
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           PREVIEW_APPS: all
-        run: doppler run -- pnpm preview deploy --settle 150
+        run: doppler run -- pnpm preview deploy
 
   # THE TWO SUITES, as a PR's Preview OS runs them (preview-os.yml): E2E tests and Browser specs,
   # side by side after the deploy, and ONE DEFINITION. Browser specs runs E2E tests' runner, outputs

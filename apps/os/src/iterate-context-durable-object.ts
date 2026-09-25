@@ -167,6 +167,12 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     return this.#facetHost.callFacetAsPlatform("secret", [["exportForProjectSeed", adminSecret]]);
   }
 
+  /** The version this context runs (`CF_VERSION_METADATA.id`), for `session.versions`. Native RPC
+   *  only. */
+  version() {
+    return this.#appConfig.deployId;
+  }
+
   /** WHO THIS DO IS: the DO name parsed ONCE into `{ name, projectId, path }`. A context is only
    *  ever reached `getByName`; an id-addressed instance fails right here, before it can touch anything. */
   readonly #durableObjectAddress = parseIterateContextDurableObjectName(this.ctx.id.name);

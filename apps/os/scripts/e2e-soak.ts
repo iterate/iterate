@@ -5,7 +5,7 @@
 //   WORKER_BASE_URL=… pnpm e2e:soak --runs 100 [--filter <vitest filter>]
 //   pnpm e2e:soak --runs 100 --preview soak-mine     (the preview's URL; WORKER_BASE_URL wins)
 //   pnpm e2e:soak --runs 10 --fresh-previews soak-fresh-<tag>
-//   pnpm e2e:soak --runs 10 --redeploy soak-<tag> [--gap <seconds>] [--settle <seconds>]
+//   pnpm e2e:soak --runs 10 --redeploy soak-<tag> [--gap <seconds>]
 //
 // The credentials are the deployment's: under `doppler run` its APP_CONFIG is in the environment and
 // e2e/support/global-setup.ts reads them out of it.
@@ -59,22 +59,12 @@ type SoakOptions = {
   redeploy?: string;
   /** seconds to wait after each --redeploy run before the next redeploy */
   gap?: number;
-  /** passed to scripts/preview.ts deploy --settle (deploying modes only) */
-  settle?: string;
 };
 
 /** Run the e2e suite (then the perf budgets) N times against one deployed worker and tally every
  *  row that did not pass every time: output/soak/summary.json plus a table. */
 export default async function e2eSoak(options: SoakOptions = {}) {
-  const {
-    runs = 100,
-    filter,
-    preview,
-    freshPreviews,
-    redeploy,
-    gap: gapSeconds = 0,
-    settle,
-  } = options;
+  const { runs = 100, filter, preview, freshPreviews, redeploy, gap: gapSeconds = 0 } = options;
   if (!Number.isInteger(runs) || runs < 1) throw new Error("--runs must be a positive integer");
   if ((freshPreviews || redeploy) && (preview || process.env.WORKER_BASE_URL))
     throw new Error(
@@ -83,8 +73,6 @@ export default async function e2eSoak(options: SoakOptions = {}) {
   if (freshPreviews && redeploy) throw new Error("--fresh-previews or --redeploy, not both");
   if (!(Number.isFinite(gapSeconds) && gapSeconds >= 0) || (gapSeconds && !redeploy))
     throw new Error("--gap takes a number of seconds, and only with --redeploy");
-  if (settle && !freshPreviews && !redeploy)
-    throw new Error("--settle is the deploy's (scripts/preview.ts): only with a deploying mode");
   if (!freshPreviews && !redeploy) {
     // An explicit WORKER_BASE_URL wins; otherwise the named preview (os-e2e-soak.yml deploys it first).
     process.env.WORKER_BASE_URL ||= preview
@@ -258,12 +246,7 @@ export default async function e2eSoak(options: SoakOptions = {}) {
         stdio: ["ignore", "inherit", "inherit"],
       }).status;
     try {
-      const deployed = pnpmPreview(
-        "deploy",
-        "--apps",
-        "none",
-        ...(settle ? ["--settle", settle] : []),
-      );
+      const deployed = pnpmPreview("deploy", "--apps", "none");
       if (deployed !== 0) {
         deployFailures.push({ run: n, preview, status: deployed });
         console.log(`run ${n}/${runs}: ${preview} did not deploy (exit ${deployed})`);
