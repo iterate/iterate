@@ -379,6 +379,69 @@ test("against real Artifacts: created, a nested commit, the memo, the catalog", 
   }
 }, 90_000);
 
+// ONE HISTORY ON TWO REMOTES, against real Artifacts and real GitHub: a pull forwards GitHub's pack
+// unchanged, so the repo's main IS GitHub's commit (same oid); an unrelated main refuses until
+// `force`; a push sends the same commits to a second Artifacts repo, whose credential rides in the
+// remote URL's userinfo and leaves the URL as a Basic header (git-wire.ts `gitRemoteOf`).
+test("against real Artifacts: a forced pull makes main a public GitHub repo's own commit, origin is remembered, and a push sends it on to another repo", async () => {
+  const itx = openItx(freshCtx("realsync"));
+  const github = "https://github.com/octocat/Spoon-Knife.git"; // public, tiny, on main
+  try {
+    await itx.repos.create("/repos/config");
+    await itx.repos.create("/repos/mirror");
+    const repo = itx.repos.get("/repos/config");
+    const ours = await repo.commitFiles({
+      message: "ours",
+      parent: null,
+      changes: [{ path: "worker.ts", content: "export default 1;\n" }],
+    });
+    const unrelated = await rejection(repo.pull({ remote: github }));
+    expect(unrelated).toMatchObject({ code: "NOT_FAST_FORWARD", data: { ours: ours.commitOid } });
+    expect(await repo.tip()).toBe(ours.commitOid);
+
+    expect(await repo.setOrigin(github)).toEqual({ origin: github });
+    expect(await repo.origin()).toBe(github);
+    const pulled = await repo.pull({ force: true });
+    expect(pulled).toMatchObject({ status: "updated", previousOid: ours.commitOid });
+    expect(await repo.tip()).toBe(pulled.commitOid);
+    expect(await repo.readFile("README.md")).toMatch(/Spoon-Knife/i);
+    expect(await repo.readFile("worker.ts")).toBeNull();
+    expect(
+      (await readAll(itx.cd("/repos/config")))
+        .filter((e) => e.type === "events.iterate.com/repo/commit-completed")
+        .map((e) => (e.payload as { commitOid: string }).commitOid),
+    ).toEqual([ours.commitOid, pulled.commitOid]);
+    expect(await repo.pull()).toEqual({
+      status: "up-to-date",
+      commitOid: pulled.commitOid,
+      previousOid: pulled.commitOid,
+    });
+
+    const mirror = itx.cfArtifacts.get("/repos/mirror");
+    const { plaintext } = await mirror.createToken("write", 300);
+    const remote = (await mirror.remote()).replace("https://", `https://x:${plaintext}@`);
+    expect(await repo.push({ remote })).toEqual({
+      status: "updated",
+      commitOid: pulled.commitOid,
+      previousOid: null,
+    });
+    expect(await itx.repos.get("/repos/mirror").tip()).toBe(pulled.commitOid);
+    const next = await repo.commitFiles({
+      message: "next",
+      changes: [{ path: "notes.md", content: "n\n" }],
+    });
+    expect(await repo.push({ remote })).toEqual({
+      status: "updated",
+      commitOid: next.commitOid,
+      previousOid: pulled.commitOid,
+    });
+    expect(await itx.repos.get("/repos/mirror").readFile("notes.md")).toBe("n\n");
+  } finally {
+    await itx.cfArtifacts.delete("/repos/config");
+    await itx.cfArtifacts.delete("/repos/mirror");
+  }
+}, 120_000);
+
 // LOCAL ONLY: the row reads the repo back from the fake git remote on this machine's loopback, which a
 // deployed worker cannot reach (the platform answers 403 — see localOnly).
 localOnly(

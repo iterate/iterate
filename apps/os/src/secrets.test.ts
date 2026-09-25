@@ -157,6 +157,26 @@ const rows: {
     becomes: { url: "https://api.example.com/bot/123:abc/send" },
   },
   {
+    name: "a placeholder inside a Basic credential (a git remote's userinfo) is substituted and the credential encoded again",
+    headers: {
+      authorization: `Basic ${basic('x-access-token:getSecret("/secrets/obj", { field: "accessToken" })')}`,
+    },
+    becomes: { headers: { authorization: `Basic ${basic("x-access-token:AT")}` } },
+  },
+  {
+    name: "a Basic credential with no placeholder in it is left as it is",
+    headers: { authorization: `Basic ${basic("user:pass")}` },
+    becomes: "unchanged",
+  },
+  {
+    name: "a Basic credential naming a secret that is not stored refuses naming the header",
+    headers: { authorization: `Basic ${basic('x:getSecret("/secrets/absent")')}` },
+    becomes: {
+      refused:
+        'itx.fetch: no stored project secret for getSecret("/secrets/absent") in header "authorization"',
+    },
+  },
+  {
     name: "a URL placeholder with no stored secret refuses naming the request URL",
     url: 'https://api.example.com/?t=getSecret("/secrets/absent")',
     becomes: {
@@ -213,6 +233,13 @@ test("secretPathsReferenced: the distinct secret PATHS a request's URL and heade
     ),
   ).toEqual(["/secrets/q", "/secrets/tok"]);
   expect(secretPathsReferenced(new Request("https://api.example.com/"))).toEqual([]);
+  expect(
+    secretPathsReferenced(
+      new Request("https://github.com/acme/config.git/git-upload-pack", {
+        headers: { authorization: `Basic ${basic('x:getSecret("/secrets/github-acme")')}` },
+      }),
+    ),
+  ).toEqual(["/secrets/github-acme"]);
 });
 
 test("secretPathsReferenced: a placeholder never names `/secrets/..` or `/secrets/.` — they resolve onto the owner's root, never a secret's own context; `...` is an ordinary name", () => {
@@ -1061,3 +1088,8 @@ const scripted = (answer: (exchange: Exchange) => Response) => {
   };
   return { exchanges, fetchFn };
 };
+
+/** `user:password` as a Basic credential's base64, UTF-8 first. */
+function basic(credential: string): string {
+  return btoa(String.fromCharCode(...new TextEncoder().encode(credential)));
+}

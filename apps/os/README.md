@@ -154,7 +154,9 @@ working until then. D1 Time Travel restores a database to any minute of the last
 ## Projects and MCP
 
 `session.projects.create()` starts a durable project-creation saga. Each project has a config
-repository; commits to `/repos/config` publish the pinned `worker.ts` revision. The optional
+repository; commits to `/repos/config` publish the pinned `worker.ts` revision. A repo can remember
+a git remote as its origin and `pull()` or `push()` it, fast-forward only unless `force`, keeping one
+history with the same commits on both ([a config repo on GitHub](docs/project-creation.md#a-config-repo-on-github)). The optional
 `configs/with-agents` template adds userspace agents. See [project creation](docs/project-creation.md).
 
 A context hosts Durable Object classes as facets (`itx.facets.get(name, { source, className })`, or

@@ -176,8 +176,10 @@ export function normalizeSecretRecord(
 // parentheses; `/secrets/NAME` is the PATH `itx.secrets.set("/secrets/NAME", …)` stored. Matched as written in a
 // header, and as the URL parser percent-encodes it in a URL (`"` → %22, a space → %20, `{` → %7B, `}`
 // → %7D) — the path and the query alike; the value is spliced back into the URL as ONE component,
-// `:` kept (Telegram's `bot123:abc` path). There is no peeling of a `Basic
-// base64(user:getSecret(…))` credential, no JSON-body template — the body is never scanned.
+// `:` kept (Telegram's `bot123:abc` path). A `Basic base64(user:getSecret(…))` credential is peeled:
+// the placeholder is substituted inside the decoded `user:password` and the credential encoded
+// again — the Authorization a git remote's userinfo becomes (`https://x:getSecret(…)@host/repo.git`,
+// as git and curl send it). No JSON-body template — the body is never scanned.
 const QUOTE = '(?:"|%22)';
 const SPACE = "(?:\\s|%20)*";
 const SECRET_PLACEHOLDER = new RegExp(
@@ -234,8 +236,27 @@ export function secretPathsReferenced(request: Request): string[] {
     for (const [, path = ""] of value.matchAll(SECRET_PLACEHOLDER)) paths.add(path);
   };
   scan(request.url);
-  for (const [, value] of request.headers) scan(value);
+  for (const [, value] of request.headers) scan(basicCredentialOf(value) ?? value);
   return [...paths];
+}
+
+/** The decoded `user:password` of a `Basic` header value, or null when the value is no Basic
+ *  credential (or not base64 of UTF-8). */
+function basicCredentialOf(value: string): string | null {
+  const encoded = /^Basic\s+([A-Za-z0-9+/=]+)\s*$/i.exec(value)?.[1];
+  if (!encoded) return null;
+  try {
+    return new TextDecoder("utf-8", { fatal: true, ignoreBOM: false }).decode(
+      Uint8Array.from(atob(encoded), (character) => character.charCodeAt(0)),
+    );
+  } catch {
+    return null;
+  }
+}
+
+/** `user:password` as a `Basic` header value, UTF-8 first. */
+export function basicAuthorization(credential: string): string {
+  return `Basic ${btoa(String.fromCharCode(...new TextEncoder().encode(credential)))}`;
 }
 
 // ── a WebSocket's frames ── the Discord shape: the upgrade carries no credential, the first client
@@ -383,7 +404,13 @@ export async function substituteProjectSecrets(
   const headers = new Headers(base.headers);
   let changed = false;
   for (const [name, value] of base.headers) {
-    const substituted = await substitute(value, `header "${name}"`, false);
+    const credential = basicCredentialOf(value);
+    const inCredential = credential
+      ? await substitute(credential, `header "${name}"`, false)
+      : null;
+    const substituted = inCredential
+      ? basicAuthorization(inCredential)
+      : await substitute(value, `header "${name}"`, false);
     // oxlint-disable-next-line iterate/simple-truthiness-check -- substitute() returns null for "no placeholder here"; a substituted-to-empty header ("") is a real change and must be written, not skipped
     if (substituted !== null) {
       headers.set(name, substituted);

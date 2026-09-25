@@ -1449,6 +1449,9 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     headers.delete(FETCH_UPGRADE_RESUMABLE_HEADER); // the edge's ask of a lent stub, never an origin's
     // A lend's headers are platform-to-platform (secrets.ts `LEND_USE_HEADER`): never a caller's.
     for (const name of [...headers.keys()]) if (name.startsWith("x-itx-lend")) headers.delete(name);
+    // A browser cannot set User-Agent on a Request it builds (Chromium drops it), and GitHub's API
+    // refuses a request without one: a caller that names none is sent as `iterate`.
+    if (!headers.has("user-agent")) headers.set("user-agent", "iterate");
     const outbound = new Request(request, { headers });
     const paths = secretPathsReferenced(outbound);
     if (paths.length === 0) return fetch(outbound);

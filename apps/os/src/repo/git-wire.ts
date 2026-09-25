@@ -2,7 +2,9 @@
 // exactly as git computes them, a tree flattened to a manifest, a manifest re-encoded to tree
 // objects), the pack codec (parse a fetch's pack — zlib entries, ref/ofs deltas resolved — and build a
 // push's), the protocol-v2 framing (pkt-line, ls-refs, fetch, receive-pack report-status) and the one
-// HTTP transport against an Artifacts remote (`createGitWireTransport`). Its callers: the platform's
+// HTTP transport against a git remote (`createGitWireTransport`: Artifacts, or a repo's origin through
+// the context's egress), the remote URL a repo remembers (`gitRemoteOf`) and the ancestry a pull or
+// push checks inside the pack it forwards (`commitReaches`). Its callers: the platform's
 // repo facet (apps/os/src/repo/durable-object.ts), the anonymous GitHub config-template reader
 // (github-template.ts, which brings its own fetch) and, in Node, the local e2e run's fake
 // remote (apps/os/e2e/support/fake-git-server.ts) — so a pack the fake serves is a pack the client
@@ -578,9 +580,13 @@ export function encodeFetchRequest(input: {
   deepen?: number;
   filter?: "blob:none";
   wants: string[];
+  /** Commits the client already has: the pack leaves out what they reach (a server that does not
+   *  know one sends it anyway). */
+  haves?: string[];
 }): Uint8Array {
   const parts = [pktLine("command=fetch"), DELIM];
   for (const want of input.wants) parts.push(pktLine(`want ${want}`));
+  for (const have of input.haves || []) parts.push(pktLine(`have ${have}`));
   if (input.deepen !== undefined) parts.push(pktLine(`deepen ${input.deepen}`));
   if (input.filter) parts.push(pktLine(`filter ${input.filter}`));
   parts.push(pktLine("no-progress"));
@@ -685,18 +691,87 @@ function pushRefused(body: Uint8Array, expectedRef: string): string | null {
   return notes.join("; ");
 }
 
+// ── remotes and ancestry ──
+
+/** A git remote as git reads one: an http(s) URL with no query or fragment, whose userinfo, if any,
+ *  leaves the URL and becomes a Basic credential, as git and curl send it. The userinfo may be
+ *  percent-encoded or raw — a secret placeholder (`x-access-token:getSecret("/secrets/github-acme",
+ *  { field: "accessToken" })@github.com/…`) has slashes and quotes no URL parser takes in userinfo —
+ *  and egress substitutes a placeholder inside the credential (apps/os secrets.ts). */
+export function gitRemoteOf(remote: string): { url: string; authorization: string | null } {
+  const refusal = () =>
+    new Error(`not an http(s) git URL: ${JSON.stringify(redactRemote(remote))}`);
+  const match = /^(https?:\/\/)(?:(.*)@)?([^@/?#]+)(\/[^?#]*)?$/.exec(remote);
+  if (!match) throw refusal();
+  const [, scheme, userinfo, host, path = ""] = match;
+  let url: URL;
+  try {
+    url = new URL(`${scheme}${host}${path}`);
+  } catch {
+    throw refusal();
+  }
+  if (!url.hostname) throw refusal();
+  const clean = `${url.origin}${url.pathname.replace(/\/+$/, "")}`;
+  if (!userinfo) return { url: clean, authorization: null };
+  const colon = userinfo.indexOf(":");
+  const [user, password] =
+    colon === -1 ? [userinfo, ""] : [userinfo.slice(0, colon), userinfo.slice(colon + 1)];
+  const credential = `${decodeUserinfo(user)}:${decodeUserinfo(password)}`;
+  return {
+    url: clean,
+    authorization: `Basic ${btoa(String.fromCharCode(...textEncoder.encode(credential)))}`,
+  };
+}
+
+/** A userinfo part percent-decoded, or as written when it is not valid percent-encoding. */
+function decodeUserinfo(part: string): string {
+  try {
+    return decodeURIComponent(part);
+  } catch {
+    return part;
+  }
+}
+
+/** A remote as it may be shown: its userinfo dropped. */
+export function redactRemote(remote: string): string {
+  return remote.replace(/^(https?:\/\/).*@(?=[^@]*$)/, "$1");
+}
+
+/** Whether `target` is `from` or one of its ancestors, walking every parent through the commits in
+ *  `objects` — a pack, which stops at commits the client already has: a parent outside it counts
+ *  when it IS the target. So a fetch that wanted `from` and had `target` proves a fast-forward. */
+export function commitReaches(
+  objects: Map<string, RawGitObject>,
+  from: string,
+  target: string,
+): boolean {
+  const seen = new Set<string>();
+  const queue = [from];
+  while (queue.length > 0) {
+    const oid = queue.pop()!;
+    if (oid === target) return true;
+    if (seen.has(oid)) continue;
+    seen.add(oid);
+    const commit = objects.get(oid);
+    if (commit?.type === "commit") queue.push(...parseCommit(commit.payload).parents);
+  }
+  return false;
+}
+
 // ── transport ──
 
 /** The wait before the one repeat of a read Artifacts answered 5xx. */
 const UPLOAD_PACK_RETRY_DELAYS_MS = [1_000];
 
 /**
- * HTTP transport against one Artifacts remote — the three verbs the repo facet
- * (repo/durable-object.ts) calls: `tipOf(ref)` (the branch tip's oid, or undefined for an unborn
- * branch), `fetchObjects` (a v2 fetch; the verified objects of the response
- * pack) and `push` (one receive-pack; null when the server moved the ref,
- * else the refusal in its words). `token` is the repo access token Artifacts
- * minted (`createToken` / `create`), sent as a basic-auth password.
+ * HTTP transport against one git remote — the verbs the repo facet (repo/durable-object.ts) calls:
+ * `tipOf(ref)` (the branch tip's oid, or undefined for an unborn branch), `fetchObjects` (a v2 fetch;
+ * the verified objects of the response pack), `fetchPack` (the same fetch's pack bytes, unchanged,
+ * to forward to another remote) and `push` (one receive-pack; null when the server moved the ref,
+ * else the refusal in its words). `authorization` is the Authorization header: Artifacts' minted
+ * token as a Basic password, or a remote's userinfo (`gitRemoteOf`). `fetch` sends the requests: the
+ * isolate's own for Artifacts, the context's egress for a repo's origin, where a secret placeholder
+ * in the credential is substituted.
  *
  * Artifacts answers a git request 5xx now and then, and the same request a moment later is fine.
  * A `git-upload-pack` (`tipOf`, `fetchObjects`) only reads, so one it answered 5xx is sent ONCE
@@ -704,24 +779,32 @@ const UPLOAD_PACK_RETRY_DELAYS_MS = [1_000];
  * and any other failure, throws. A `git-receive-pack` is a push, never sent twice: the caller reads
  * the tip again and decides.
  */
-export function createGitWireTransport(input: { remote: string; token: string }) {
-  const authorization = `Basic ${btoa(`x:${input.token}`)}`;
+export function createGitWireTransport(input: {
+  remote: string;
+  authorization: string | null;
+  fetch?: (request: Request) => Promise<Response>;
+}) {
+  const send = input.fetch || ((request: Request) => fetch(request));
   const post = async (service: string, body: Uint8Array): Promise<Uint8Array> => {
     /** The status the attempt's answer failed with, 0 when it failed before an answer. */
     let failedStatus = 0;
     return retryPlatformFailures(
       async () => {
         failedStatus = 0;
-        const response = await fetch(`${input.remote}/${service}`, {
-          body: body as Uint8Array<ArrayBuffer>,
-          headers: {
-            authorization,
-            "content-type": `application/x-${service}-request`,
-            "git-protocol": "version=2",
-            "user-agent": "git/2.45.0 (iterate-repos)",
-          },
-          method: "POST",
+        const headers = new Headers({
+          "content-type": `application/x-${service}-request`,
+          "git-protocol": "version=2",
+          "user-agent": "git/2.45.0 (iterate-repos)",
         });
+        // A public remote takes no credential: no Authorization at all, never an empty one.
+        if (input.authorization) headers.set("authorization", input.authorization);
+        const response = await send(
+          new Request(`${input.remote}/${service}`, {
+            body: body as Uint8Array<ArrayBuffer>,
+            headers,
+            method: "POST",
+          }),
+        );
         if (!response.ok) {
           failedStatus = response.status;
           await response.body?.cancel(); // an unread body keeps its connection open
@@ -742,6 +825,8 @@ export function createGitWireTransport(input: { remote: string; token: string })
   return {
     fetchObjects: async (request: { deepen: number; wants: string[] }): Promise<RawGitObject[]> =>
       parsePack(demuxFetchResponse(await post("git-upload-pack", encodeFetchRequest(request)))),
+    fetchPack: async (request: { wants: string[]; haves: string[] }): Promise<Uint8Array> =>
+      demuxFetchResponse(await post("git-upload-pack", encodeFetchRequest(request))),
     tipOf: async (ref: string): Promise<string | undefined> =>
       parseLsRefs(await post("git-upload-pack", encodeLsRefsRequest([ref]))).find(
         (entry) => entry.name === ref,
