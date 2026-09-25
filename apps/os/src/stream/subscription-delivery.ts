@@ -36,7 +36,13 @@
 import type { ItxExpression } from "iterate/expression";
 import { errorCode, reportIssue, withTimeout } from "iterate/lib";
 import type { StreamPage } from "iterate/api";
-import { type StreamEvent, consumesEvent, type ScannedRange } from "iterate/stream/processor";
+import {
+  admits,
+  consumesEvent,
+  type ScannedRange,
+  type StreamEvent,
+} from "iterate/stream/processor";
+import { platformSource } from "../caller.ts";
 import { callOn, walkSteps, FacetHandle, RpcStubHandle } from "../context/dispatch.ts";
 import { type Subscription, targetOwnsProgress } from "./core-processor.ts";
 import { RECENT_EPHEMERALS_BUDGET_CHARS, type Stream, type SubscriptionCursor } from "./stream.ts";
@@ -675,6 +681,7 @@ export class SubscriptionDelivery {
     // A halted row owes nothing; the fact's own commit reconciles the alarm.
     this.#stream.append({
       type: "events.iterate.com/itx/subscription-delivery-halted",
+      source: platformSource(this.#stream.path),
       payload: {
         name,
         afterOffset,
@@ -722,7 +729,7 @@ export class SubscriptionDelivery {
       cached.rewriteRulesRef === rewriteRulesRef
     )
       return { head: cached.head, call: cached.call };
-    const evaluated = await this.#evaluateItxExpressionTargetHead(row.target);
+    const evaluated = await this.#evaluateItxExpressionTargetHead(row.target, row.from);
     this.#deliveryRecordFor(name).evaluatedTargetHead = {
       configuredAtOffset: row.configuredAtOffset,
       rewriteRulesRef,
@@ -736,7 +743,10 @@ export class SubscriptionDelivery {
    *  one call to make on it. A target ending in a call step names the callee itself (a bare lent
    *  callback: `itx.rpcStubs.get('k')`); a trailing property step names the method to call on it
    *  (`…get('presence').processEventBatch`) — on a facet, the facet host's push. */
-  async #evaluateItxExpressionTargetHead(target: ItxExpression): Promise<{
+  async #evaluateItxExpressionTargetHead(
+    target: ItxExpression,
+    from?: "anyone",
+  ): Promise<{
     head: unknown;
     call: (events: StreamEvent[], range: ScannedRange) => Promise<void>;
   }> {
@@ -754,6 +764,11 @@ export class SubscriptionDelivery {
         await this.#pushEventBatchToFacet(head, events, range);
         return;
       }
+      // A RAW READER — a live client, a worker — hears what `admits` passes unless its row says
+      // `from: "anyone"`; a facet's engine filters for itself (above). The range still proves the
+      // skipped offsets, as a `consumes` filter's do. Kit plays the frames matched by the call's
+      // activation, which is in the call's path: this is what keeps a sibling from making it speak.
+      if (from !== "anyone") events = events.filter((event) => admits(event));
       const walked = method
         ? (await walkSteps({ value: head, receiver: undefined }, [[method, events, range]])).value
         : await callOn(head, undefined, [events, range]);

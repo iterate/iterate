@@ -34,6 +34,12 @@ export {
   LiveState,
   StreamProcessor,
   defineProcessorContract,
+  // PROVENANCE (stream/provenance.ts): who wrote an event, and whom a reader listens to.
+  admits,
+  certifiesItself,
+  trusts,
+  type EventSource,
+  type TrustRule,
   type ConsumedEvent,
   type EventCatalog,
   type EventDefinition,

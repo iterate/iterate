@@ -2,7 +2,7 @@ import { z } from "zod";
 
 /** `events.iterate.com/itx/run-requested`: the whole script — the text of `async (itx) => …`.
  *  The event's own OFFSET is the run's identity: the settlement names it back. A caller's request
- *  starts at its commit; a processor's (the engine stamps `source.processor`) in the context's next
+ *  starts at its commit; a processor's (the engine says so in `metadata.causedBy`) in the context's next
  *  alarm pass, a fresh invocation, so a processor's turns never pile up call depth. */
 export const RunRequested = z.object({ code: z.string().min(1) });
 export type RunRequested = z.infer<typeof RunRequested>;

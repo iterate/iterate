@@ -26,12 +26,13 @@ import type { StreamPage, WaitForEventFilter } from "iterate/api";
 import {
   idempotencyConflictMessage,
   sameIdempotentEvent,
+  type EventSource,
   type StreamEvent,
   type StreamEventInput,
   ReduceCheckpointTable,
   type SqlStorageHandle,
 } from "iterate/stream/processor";
-import type { Caller } from "../caller.ts";
+import { platformSource, type Caller } from "../caller.ts";
 import { reduceScheduledAppends } from "./scheduled-appends.ts";
 import {
   CoreContract,
@@ -39,6 +40,12 @@ import {
   reduceCoreEventBatch,
   type CoreState,
 } from "./core-processor.ts";
+
+/** THE IDEMPOTENCY INDEX'S KEY: the writer's own key under its writer — the platform, or the
+ *  context whose code or session wrote it (iterate/stream/processor `EventSource`). An unstamped
+ *  event (the stream's own records) keys as written. */
+const writerScopedKey = (source: EventSource | undefined, idempotencyKey: string): string =>
+  source ? `${source.platform ? "platform" : source.origin} ${idempotencyKey}` : idempotencyKey;
 
 /** THE APPEND CEILING on one serialized body, in JS chars (`JSON.stringify(body).length` — the one
  *  O(1) size JS has; V8 serializes a string at 1–2 bytes per char). Workers RPC caps ONE message at
@@ -72,8 +79,6 @@ const PAUSE_EXEMPT_EVENT_TYPES = new Set([
   "events.iterate.com/itx/aborted",
   "events.iterate.com/itx/facet-aborted",
   "events.iterate.com/itx/schedule-cancelled",
-  // the runner's own record of a run's end — a paused stream must still close a script it started
-  "events.iterate.com/itx/run-settled",
   // a child's announcement — a paused ancestor must still learn which contexts exist below it
   "events.iterate.com/itx/child-created",
 ]);
@@ -119,7 +124,8 @@ interface StreamDeps {
 export class Stream {
   /** THE TABLES (`StreamStorage` below) — the delivery loop keeps its cursors through here too. */
   readonly storage: StreamStorage;
-  readonly #path: string;
+  /** The context this log is: what the stream's own records are stamped as written by. */
+  readonly path: string;
   readonly #projectId: string;
   readonly #onCommit: StreamDeps["onCommit"];
   readonly #wakeRecordDetail: StreamDeps["wakeRecordDetail"];
@@ -146,7 +152,7 @@ export class Stream {
   constructor(deps: StreamDeps) {
     this.storage = new StreamStorage(deps.storage);
     if (!deps.incarnationCountedByHost) this.storage.countIncarnation();
-    this.#path = deps.path;
+    this.path = deps.path;
     this.#projectId = deps.projectId;
     this.#onCommit = deps.onCommit;
     this.#wakeRecordDetail = deps.wakeRecordDetail;
@@ -166,7 +172,7 @@ export class Stream {
       reportIssue(
         "stream.core-checkpoint-missing",
         new Error(
-          `stream ${this.#path}: the log holds rows through offset ${highestDurableOffset} but no core checkpoint — re-deriving the mark and the state from the log`,
+          `stream ${this.path}: the log holds rows through offset ${highestDurableOffset} but no core checkpoint — re-deriving the mark and the state from the log`,
         ),
         { highestDurableOffset },
       );
@@ -218,14 +224,17 @@ export class Stream {
    *  Both events are exempt from pause: a paused stream still records its wake. */
   appendBirthRecord(): void {
     if (this.#highestDurableOffset !== 0) return;
+    const source = platformSource(this.path);
     this.append(
       {
         type: "events.iterate.com/itx/created",
-        payload: { projectId: this.#projectId, path: this.#path },
+        payload: { projectId: this.#projectId, path: this.path },
+        source,
       },
       {
         type: "events.iterate.com/itx/woken",
         payload: { incarnation: this.storage.incarnation, reason: "request" },
+        source,
       },
     );
     this.#wakeRecorded = true;
@@ -240,9 +249,11 @@ export class Stream {
    *  started it), and whoever asked reads the settlement, not a second attempt. */
   appendWakeRecord(reason: "alarm" | "request"): void {
     if (this.#wakeRecorded) return;
+    const source = platformSource(this.path);
     const interrupted = Object.keys(this.#coreReducedState.scriptRuns).map(
       (requestOffset): StreamEventInput => ({
         type: "events.iterate.com/itx/run-settled",
+        source,
         idempotencyKey: `itx/run-settled:${requestOffset}`,
         payload: {
           requestOffset: Number(requestOffset),
@@ -258,6 +269,7 @@ export class Stream {
       {
         type: "events.iterate.com/itx/woken",
         payload: { incarnation: this.storage.incarnation, reason, ...this.#wakeRecordDetail?.() },
+        source,
       },
       ...interrupted,
     );
@@ -346,25 +358,28 @@ export class Stream {
     const committedEvents: StreamEvent[] = []; // one per appended event, in order (a dedupe hit echoes the existing event)
     const freshEvents: StreamEvent[] = []; // the events NEW to the log, in offset order — what commits, reduces, fans out
     const eventsByIdempotencyKey = new Map<string, StreamEvent>(); // keys landing earlier in THIS batch
-    const freshDurables: { event: StreamEvent; serializedBody: string }[] = []; // the rows to insert, in offset order
+    const freshDurables: { event: StreamEvent; serializedBody: string; idempotencyKey?: string }[] =
+      []; // the rows to insert, in offset order, each with its writer-scoped key
     const freshEphemerals: { event: StreamEvent; chars: number }[] = []; // for the ring, once the batch lands
     let throughOffset = afterOffset;
     for (const event of events) {
       const { offset: expectedOffset, ...eventInput } = event;
-      // IDEMPOTENCY: a key already in the log (or earlier in this batch) answers with THAT event and
-      // consumes no offset; a different body under the same key refuses the whole batch.
-      let existingEvent = eventInput.idempotencyKey
-        ? eventsByIdempotencyKey.get(eventInput.idempotencyKey)
-        : undefined;
-      if (eventInput.idempotencyKey && !existingEvent) {
-        const row = this.storage.readEventByIdempotencyKey(eventInput.idempotencyKey);
+      // IDEMPOTENCY, PER WRITER: a key already in the log (or earlier in this batch) answers with
+      // THAT event and consumes no offset; a different body under the same key refuses the whole
+      // batch. A key names an event among its writer's own (`writerScopedKey`), so no writer can
+      // squat another's key.
+      const idempotencyKey =
+        eventInput.idempotencyKey && writerScopedKey(eventInput.source, eventInput.idempotencyKey);
+      let existingEvent = idempotencyKey ? eventsByIdempotencyKey.get(idempotencyKey) : undefined;
+      if (idempotencyKey && !existingEvent) {
+        const row = this.storage.readEventByIdempotencyKey(idempotencyKey);
         // row.body is the stored input plus createdAt, written only by the insert below; the row
         // supplies the offset and the stream the path, which completes a StreamEvent.
         if (row)
           existingEvent = {
             ...(JSON.parse(row.body) as object),
             offset: row.offset,
-            path: this.#path,
+            path: this.path,
           } as StreamEvent;
       }
       if (existingEvent) {
@@ -406,14 +421,13 @@ export class Stream {
             maxChars: EVENT_BODY_MAX_CHARS,
           },
         );
-      const committedEvent = { ...eventInput, offset, createdAt, path: this.#path } as StreamEvent;
-      if (eventInput.idempotencyKey)
-        eventsByIdempotencyKey.set(eventInput.idempotencyKey, committedEvent);
+      const committedEvent = { ...eventInput, offset, createdAt, path: this.path } as StreamEvent;
+      if (idempotencyKey) eventsByIdempotencyKey.set(idempotencyKey, committedEvent);
       committedEvents.push(committedEvent);
       freshEvents.push(committedEvent);
       if (committedEvent.ephemeral)
         freshEphemerals.push({ event: committedEvent, chars: serializedBody.length });
-      else freshDurables.push({ event: committedEvent, serializedBody });
+      else freshDurables.push({ event: committedEvent, serializedBody, idempotencyKey });
     }
     if (freshEvents.length === 0) return committedEvents; // every event deduped to an existing one
     // Only definitions can grow the projection. Completion/cancellation shrink it or advance a
@@ -450,8 +464,8 @@ export class Stream {
     } else {
       let reducedState = this.#coreReducedState;
       this.storage.transactionSync(() => {
-        for (const { event, serializedBody } of freshDurables)
-          this.storage.insertEvent(event.offset, serializedBody, event.idempotencyKey || null);
+        for (const { event, serializedBody, idempotencyKey } of freshDurables)
+          this.storage.insertEvent(event.offset, serializedBody, idempotencyKey || null);
         // The core reduce checkpoints with this batch: the cursor every batch IS the durable head
         // (one write, not two), the state on change. Reduced into a LOCAL: the fields move only
         // after the transaction commits, so a failed write never leaves phantom core state in memory.
@@ -515,7 +529,7 @@ export class Stream {
           { offset: row.offset },
         );
       }
-      return { ...body, offset: row.offset, path: this.#path };
+      return { ...body, offset: row.offset, path: this.path };
     });
     // The proof: a CUT page is contiguously known through its last row; a complete page proves the
     // scan reached the durable mark — never the in-memory head (the header's zero-write contract).

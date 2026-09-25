@@ -29,7 +29,7 @@
 // which zod-parses each control event's payload and stores the normalized form, so the fold CASTS what
 // it reads and never re-parses. The stream's own records (`PLATFORM_ONLY_EVENT_TYPES`: birth, wake,
 // the halted fact, the alarm trace) are well-formed by construction: the platform appends them past
-// validation, and `append` refuses them. The route fold parses what it reads all the same
+// validation, and `append` refuses any the platform did not stamp. The route fold parses what it reads all the same
 // (src/fetch-routes.ts): one route that does not compile must never break every request's `match`.
 
 import {
@@ -245,6 +245,9 @@ export type Subscription = {
   target: ItxExpression;
   /** Event types delivered; absent = every durable event; naming a type opts its ephemerals in. */
   consumes?: string[];
+  /** Whom a RAW reader (a live client, a worker) hears: `"anyone"` in the project, or — absent —
+   *  the events `admits` passes (iterate/stream/processor). A facet filters for itself. */
+  from?: "anyone";
   /** The row's identity — the offset of its subscription-configured event. */
   configuredAtOffset: number;
   /** Where CURSOR delivery starts for this row — its first delivery follows this offset (0 = the
@@ -540,6 +543,7 @@ export function reduceCoreEvent(
       }
       const consumes = payload.consumes as string[] | undefined;
       const afterOffset = payload.afterOffset as number | undefined;
+      const from = payload.from as "anyone" | undefined;
       // M1: a hosting target keeps its spelling but sheds its SOURCE here (`hostedFacet` says why).
       const configuredTarget = normalizedItxExpression(payload.target as ItxExpressionInput); // stored as the parsed form
       const { target, hostedFacet } = elideHostedFacetSource(
@@ -550,6 +554,8 @@ export function reduceCoreEvent(
         target,
         // oxlint-disable-next-line iterate/simple-truthiness-check -- canonical subscription row (serialized to the JSON checkpoint, compared with jsonEqual which counts keys): an absent optional field must stay absent, not `field: undefined`
         ...(consumes && { consumes }),
+        // oxlint-disable-next-line iterate/simple-truthiness-check -- canonical subscription row (serialized to the JSON checkpoint, compared with jsonEqual which counts keys): an absent optional field must stay absent, not `field: undefined`
+        ...(from && { from }),
         configuredAtOffset: event.offset,
         // oxlint-disable-next-line iterate/simple-truthiness-check -- canonical subscription row (serialized to the JSON checkpoint, compared with jsonEqual which counts keys): an absent optional field must stay absent, not `field: undefined`
         ...(afterOffset !== undefined && { afterOffset }),
@@ -603,9 +609,14 @@ function normalizeSubscriptionConfigured(input: {
   target: ItxExpressionInput | null;
   consumes?: string[];
   afterOffset?: number;
+  from?: "anyone";
   ifConfiguredAtOffset?: number;
 }): Record<string, unknown> {
   const name = parseSubscriptionName(input.name);
+  if (input.from !== undefined && input.from !== "anyone")
+    throw new Error(
+      `a subscription's from is "anyone" or absent (the trusted writers): got ${JSON.stringify(input.from)}`,
+    );
   const { afterOffset } = input;
   if (afterOffset !== undefined && !(Number.isInteger(afterOffset) && afterOffset >= 0))
     throw new Error(
@@ -625,6 +636,7 @@ function normalizeSubscriptionConfigured(input: {
     target,
     ...(target && input.consumes && { consumes: input.consumes }),
     ...(target && afterOffset !== undefined && { afterOffset }),
+    ...(target && input.from && { from: input.from }),
     ...(!target &&
       input.ifConfiguredAtOffset !== undefined && {
         ifConfiguredAtOffset: input.ifConfiguredAtOffset,
@@ -649,29 +661,29 @@ function normalizeIngressConfigured(input: unknown): { target: ItxExpression | n
   return { target: expression };
 }
 
-/** THE PLATFORM'S OWN RECORDS: appended by the Stream (the birth and wake records), the delivery
- *  loop (the halted fact) and the DO's alarm (the trace) straight through `Stream.append`.
- *  `normalizeControlEvent` refuses them, so no caller rewrites who a context is (`created` feeds
- *  `implicitRootsAt`), which incarnation runs, or halts a subscription row it does not own. */
+/** THE PLATFORM'S OWN RECORDS: the Stream's birth and wake records, the delivery loop's halted
+ *  fact, the DO's alarm trace and a run's settlement. `normalizeControlEvent` refuses any not stamped
+ *  `source.platform`, so no writer rewrites who a context is (`created` feeds `implicitRootsAt`),
+ *  which incarnation runs, halts a subscription row it does not own, or settles a run it did not
+ *  execute (a settlement is a processor's next input: an agent's model reads it). */
 export const PLATFORM_ONLY_EVENT_TYPES = new Set<string>([
   "events.iterate.com/itx/created",
   "events.iterate.com/itx/woken",
   "events.iterate.com/itx/subscription-delivery-halted",
   "events.iterate.com/itx/alarm-trace",
+  "events.iterate.com/itx/run-settled",
 ]);
 
 /** THE APPEND BOUNDARY for core CONTROL events: validate + normalize a LITERAL control event so call
  *  sites write `itx.append({ type, payload })` with NO event-builder helper. A subscription/rewrite
  *  target is validated and normalized STRING→array before storage (the reduce must never string-parse
  *  a facet source — the codec's 2 KiB cap), and a malformed control event throws HERE instead of
- *  committing a durable no-op. A platform-only record (`PLATFORM_ONLY_EVENT_TYPES`) is refused. Every
+ *  committing a durable no-op. A platform-only record (`PLATFORM_ONLY_EVENT_TYPES`) the platform did
+ *  not stamp is refused. Every
  *  other event passes through untouched. The DO runs this on every append
  *  (iterate-context-durable-object.ts). */
 export function normalizeControlEvent(event: StreamEventInput, ownPath: string): StreamEventInput {
-  // A fixed type list is a stopgap: it isolates the platform's own records, but it cannot say who
-  // may append what to a given stream. That needs provenance on the event itself — e.g. events
-  // signed by their appender, and processors that ignore an event whose signature does not check.
-  if (PLATFORM_ONLY_EVENT_TYPES.has(event.type))
+  if (PLATFORM_ONLY_EVENT_TYPES.has(event.type) && event.source?.platform !== true)
     throw new Error(`${event.type} is the platform's own record: it cannot be appended`);
   // The operator's control events: checked, never rewritten — strict, so an unknown key throws
   // instead of being dropped, and the event is stored as sent (an idempotent retry compares the

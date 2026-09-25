@@ -112,6 +112,8 @@ export type LiveStateItx = {
   subscribe(input: {
     name?: string;
     consumes?: string[];
+    /** Whom the target hears (api.ts `subscribe`): absent, the trusted writers. */
+    from?: "anyone";
     target: (events: unknown[], range: unknown) => void;
   }): Promise<{ [Symbol.dispose](): void }>;
 };

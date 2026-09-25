@@ -186,9 +186,9 @@ export class ProjectProcessor extends StreamProcessor<
           ? undefined
           : { ...state, creation: { status: "failed", offset: event.offset } };
       case "events.iterate.com/project/delete-requested":
-        // The platform's fact alone (the session appends it once the control plane dropped the
-        // row): a member can append this type to `/`, and theirs deletes nothing.
-        if (event.source?.platform !== true || state.deletion) return undefined;
+        // The platform's fact alone (the contract's `trust`): the session appends it once the
+        // control plane dropped the row.
+        if (state.deletion) return undefined;
         return { ...state, deletion: { offset: event.offset } };
       case "events.iterate.com/project/hostname-add-requested": {
         const known = state.hostnames[event.payload.hostname];

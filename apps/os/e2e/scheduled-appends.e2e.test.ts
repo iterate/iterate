@@ -126,12 +126,22 @@ test("a processor emits idempotent scheduling intent and later reduces the remin
   });
   const events = await readAll(itx);
   const definition = events.find((event) => event.type === "events.iterate.com/itx/schedule-set")!;
-  expect(definition.source.processor.whileProcessing).toMatchObject({ offset: opened.offset });
-  expect(due.source.schedule).toMatchObject({ scheduledAtOffset: definition.offset });
-  expect(due.source.schedule.definedBy.processor).toMatchObject({ slug: "reminders" });
-  expect(Object.keys(due.source.schedule.definedBy)).toEqual(["processor"]);
+  // The definition is the processor's, written from `/` and caused by the invoice it processed; the
+  // occurrence is `/` writing what the schedule says, pointing at the definition.
+  expect(definition.source).toEqual({ origin: "/" });
+  expect(definition.metadata.causedBy).toMatchObject({
+    processor: "reminders",
+    offset: opened.offset,
+  });
+  expect(due.source).toEqual({
+    origin: "/",
+    schedule: {
+      key: expect.any(String),
+      scheduledAtOffset: definition.offset,
+      at: expect.any(String),
+    },
+  });
   expect(due).toStrictEqual(events.find((event) => event.offset === due.offset));
-  expect(due.source.processor).toBeUndefined();
   // Repeating the original durable intent after completion returns its receipt, never a new timer.
   const [receipt] = await itx.append({
     type: definition.type,
@@ -142,7 +152,7 @@ test("a processor emits idempotent scheduling intent and later reduces the remin
   expect(await itx.schedules.list()).toEqual([]);
 });
 
-test("pause holds a deadline until resume; session attribution names the definition's author", async () => {
+test("pause holds a deadline until resume; the definition's stamp names its author, the occurrence points at it", async () => {
   const itx = openItx(freshCtx("schedule_pause"));
   // Relative to its own commit, as in the replacement row below: an absolute `now + 1.5 s` from
   // before this first call's birth of the project had already passed when it committed, so it
@@ -177,10 +187,19 @@ test("pause holds a deadline until resume; session attribution names the definit
     type: "held/due",
     afterOffset: definition.scheduledAtOffset,
   });
-  expect(due.source.schedule.definedBy.principal).toMatchObject({ actor: "admin" });
-  expect(Object.keys(due.source.schedule.definedBy)).toEqual(["principal"]);
-  expect(due).toStrictEqual((await readAll(itx)).find((event) => event.offset === due.offset));
-  expect(due.source.principal).toBeUndefined();
+  expect(due.source).toEqual({
+    origin: "/",
+    schedule: {
+      key: "held",
+      scheduledAtOffset: definition.scheduledAtOffset,
+      at: expect.any(String),
+    },
+  });
+  const log = await readAll(itx);
+  expect(log.find((event) => event.offset === definition.scheduledAtOffset)?.source).toMatchObject({
+    principal: { actor: "admin" },
+  });
+  expect(due).toStrictEqual(log.find((event) => event.offset === due.offset));
   expect(await itx.schedules.list()).toEqual([]);
 });
 

@@ -55,6 +55,7 @@ import {
   type ItxExpressionInput,
   type ItxExpressionPrefix,
 } from "iterate/expression";
+import { isAtOrBeneath } from "iterate/stream/processor";
 import type { Caller } from "../caller.ts";
 import { ScheduledAppendInput } from "../stream/scheduled-appends.ts";
 import { callOn, walkSteps, awaitAnswerReleasedIfRejected } from "./dispatch.ts";
@@ -519,7 +520,7 @@ function admitLoadedCodeExpression(expression: ItxExpression, base: string): voi
       }
     if (Array.isArray(step) && step[0] === "cd" && typeof step[1] === "string") {
       const to = resolveContextPath(at, step[1]);
-      if (to !== at && !to.startsWith(at === "/" ? "/" : `${at}/`))
+      if (!isAtOrBeneath(to, at))
         throw codedError(
           "FORBIDDEN",
           `cd goes down only for loaded code: ${JSON.stringify(step[1])} from ${JSON.stringify(at)} would leave it`,
@@ -529,37 +530,39 @@ function admitLoadedCodeExpression(expression: ItxExpression, base: string): voi
   }
 }
 
-/** THE APP WALL ON A ROW: a rewrite rule or a subscription loaded code appends on its own context is
- *  walled on its TARGET like a call is on its input — else `itx ⇒ itx.builtins.cd('/')` on its own log
- *  would re-parent it past its creator's masks, and a subscription target runs as the kernel. The one
- *  fixed-point target it may write is its OWN lend, `itx.builtins.rpcStubs.get(<key>)`: the registry is
- *  this context's, so the row grants nothing the code does not already hold. A `null` (a mask, an
- *  un-set) says nothing and passes. Nothing gets round the wall:
- *    • a REMOVAL (`ifTarget`, the reduce's compare-and-set delete) is refused: it hands the name
- *      back to what lies beneath, the parent link, so deleting a mask would widen the context to its
- *      creator's reach. A plain `null` stays a mask wherever something beneath would answer. Loaded
- *      code never needs one: `provide` lends it live stubs only, whose rows the DO removes when the
- *      last pager closes;
- *    • a SCHEDULED batch (`schedule-set`) is walled event by event as it is scheduled: the alarm
- *      appends it later as the kernel;
- *    • a FETCH ROUTE is set only from the project's root: the config worker serves routes at `/`,
- *      so a route set from below would publish the root's reach on the project's hosts. `match`
- *      and `list` only read, and answer from below.
- *  A NAME MASK IS NOT A JAIL: the parent link still forwards every other name (kv, secrets, repos,
- *  fetch routes), so only a bare `itx ⇒ null` plus the rows granted after it confines a context.
- *  Any other event passes untouched. */
-export function admitLoadedCodeRow(event: { type: string; payload?: unknown }, base: string): void {
+/** WHAT LOADED CODE MAY WRITE, as one check over each event it appends (built-ins.ts `append`).
+ *  Anyone in a project may append any event anywhere, and the stamp says who did (src/caller.ts);
+ *  a reader decides whether to listen (iterate/stream/processor `admits`). CONTROL is the exception,
+ *  because the core is the reader that acts at commit:
+ *    • loaded code's `itx/*` event lands only at its ORIGIN (the context its call started at) or
+ *      beneath it — a row, a run, a schedule, a processor, a fetch route, a pause. The platform's
+ *      own hops strip `app` (built-ins.ts `hopCaller`) and are not subject;
+ *    • a rewrite rule or a subscription it writes is walled on its TARGET like a call is on its input
+ *      — else `itx ⇒ itx.builtins.cd('/')` on its own log would re-parent it past its creator's masks,
+ *      and a subscription target runs as the kernel. The one fixed-point target it may write is its
+ *      OWN lend, `itx.builtins.rpcStubs.get(<key>)`: the registry is this context's, so the row
+ *      grants nothing the code does not already hold. A `null` (a mask, an un-set) says nothing and
+ *      passes. A REMOVAL (`ifTarget`, the reduce's compare-and-set delete) is refused: it hands the
+ *      name back to what lies beneath, the parent link, so deleting a mask would widen the context to
+ *      its creator's reach. A plain `null` stays a mask wherever something beneath would answer;
+ *    • a SCHEDULED batch (`schedule-set`) is checked event by event as it is scheduled: the alarm
+ *      appends it later as the context.
+ *  A context trusts its own code, so no reader can undo what these refuse. A NAME MASK IS NOT A
+ *  JAIL: the parent link still forwards every other name (kv, secrets, repos), so only a bare
+ *  `itx ⇒ null` plus the rows granted after it confines a context. */
+export function admitLoadedCodeRow(
+  event: { type: string; payload?: unknown },
+  origin: string,
+  here: string,
+): void {
+  if (String(event.type).startsWith("events.iterate.com/itx/") && !isAtOrBeneath(here, origin))
+    throw codedError(
+      "FORBIDDEN",
+      `${event.type} at ${JSON.stringify(here)}: loaded code configures only the context its call started at (${JSON.stringify(origin)}) and those beneath it`,
+    );
   if (event.type === "events.iterate.com/itx/schedule-set") {
     for (const scheduled of ScheduledAppendInput.parse(event.payload).events)
-      admitLoadedCodeRow(scheduled, base);
-    return;
-  }
-  if (event.type === "events.iterate.com/itx/fetch-route-configured") {
-    if (base !== "/")
-      throw codedError(
-        "FORBIDDEN",
-        `a project's fetch routes are set only from the project's root: the config worker serves them at "/", and ${JSON.stringify(base)} is below it`,
-      );
+      admitLoadedCodeRow(scheduled, origin, here);
     return;
   }
   if (
@@ -584,7 +587,7 @@ export function admitLoadedCodeRow(event: { type: string; payload?: unknown }, b
   const [, root, registry, lend] = expression;
   if (root === "builtins" && registry === "rpcStubs" && Array.isArray(lend) && lend[0] === "get")
     return;
-  admitLoadedCodeExpression(expression, base);
+  admitLoadedCodeExpression(expression, origin);
 }
 
 /** A bare `itx` row whose target is `cd` of THIS context is a loop no depth budget can see — every

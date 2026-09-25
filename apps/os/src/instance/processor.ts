@@ -15,9 +15,6 @@ export class InstanceProcessor extends StreamProcessor<
     event,
     state,
   }: ReduceArgs<InstanceState, ConsumedEvent<typeof InstanceContract>>): InstanceState | undefined {
-    // Every certificate folded here is the platform's cross-post (`source.platform`, caller.ts
-    // `Caller.platform`): an append by the operator's own hand stays on the log and changes nothing.
-    if (event.source?.platform !== true) return undefined;
     const secrets = reduceSecretCatalog(state.secrets, event);
     return secrets && { ...state, secrets };
   }

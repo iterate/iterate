@@ -208,6 +208,8 @@ export const AccountContract = defineProcessorContract({
     "events.iterate.com/waitrose/disconnected",
   ],
   emits: [],
+  // Every fact folded here is the platform's to write (caller.ts `Caller.platform`): the person can append any type to their own context, and theirs changes nothing.
+  trust: { "*": "platform" },
 });
 
 /** The account's reduced state: its record (the contract's `stateSchema`). */

@@ -563,7 +563,7 @@ test("version bump re-reduces via reduce only — effects never re-run", async (
 
 // ── emit rules + idempotency ──
 
-test("milestone emitted with provenance stamp + idempotency key; re-wake dedupes", async () => {
+test("milestone emitted with its cause (`metadata.causedBy`, the processor's own word) + idempotency key; re-wake dedupes", async () => {
   const { engine, tick, events } = setup();
   tick();
   tick();
@@ -577,7 +577,13 @@ test("milestone emitted with provenance stamp + idempotency key; re-wake dedupes
   expect(milestones).toHaveLength(1);
   expect(milestones[0]).toMatchObject({
     payload: { at: 3 },
-    source: { processor: { slug: "counter", whileProcessing: { offset: 3 } } },
+    metadata: {
+      causedBy: {
+        processor: "counter",
+        offset: 3,
+        type: "events.iterate.com/test/counter-ticked",
+      },
+    },
   });
   // the milestone append itself lands on the stream and re-delivers — wake again, still one
   await engine.catchUpFromLog();

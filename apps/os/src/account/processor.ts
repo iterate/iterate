@@ -21,10 +21,6 @@ export class AccountProcessor extends StreamProcessor<
     event,
     state,
   }: ReduceArgs<AccountState, ConsumedEvent<typeof AccountContract>>): AccountState | undefined {
-    // Every fact folded here is the platform's to write (`source.platform`, caller.ts
-    // `Caller.platform`): the person can append any type to their own context, and that one stays on
-    // the log, attributed to them, and changes nothing.
-    if (event.source?.platform !== true) return undefined;
     switch (event.type) {
       case "events.iterate.com/account/authenticated":
         return { ...state, authentications: [...state.authentications, event.payload] };

@@ -1175,7 +1175,7 @@ test("the app wall (`Caller.app`): on the INPUT expression only, `itx.builtins` 
 });
 test("the app wall (`Caller.app`): on the INPUT expression only, `itx.builtins` is refused and `cd` goes down only — from the root too: a ROW loaded code appends is walled on its target: the fixed point and a cd above are refused, its own lend (`itx.builtins.rpcStubs.get`) and a plain expression pass, a mask says nothing", () => {
   const row = (type: string, target: unknown) => () =>
-    admitLoadedCodeRow({ type, payload: { match: "itx.x", target } }, "/agents/a");
+    admitLoadedCodeRow({ type, payload: { match: "itx.x", target } }, "/agents/a", "/agents/a");
   expect(row("events.iterate.com/itx/rewrite-rule-configured", "itx.builtins.cd('/')")).toThrow(
     /not a loaded worker's word/,
   );
@@ -1263,11 +1263,11 @@ test("the app wall on a row walls the source producer in its target too", () => 
   expect(row("itx.builtins.cd('/').kv.get('src')")).toThrow(/not a loaded worker's word/);
   expect(row("itx.kv.get('src')")).not.toThrow();
 });
-test("the app wall (`Caller.app`): on the INPUT expression only, `itx.builtins` is refused and `cd` goes down only — from the root too: a row has no way round the wall: loaded code removes no row (`ifTarget`, null or not), a scheduled batch is walled event by event as it is scheduled, and a fetch route is set only from the project's root", () => {
+test("the app wall (`Caller.app`): on the INPUT expression only, `itx.builtins` is refused and `cd` goes down only — from the root too: a row has no way round the wall: loaded code removes no row (`ifTarget`, null or not), a scheduled batch is walled event by event as it is scheduled, and it configures only its own context and those beneath it", () => {
   const append =
-    (event: { type: string; payload?: unknown }, base = "/agents/a") =>
+    (event: { type: string; payload?: unknown }, origin = "/agents/a", here = origin) =>
     () =>
-      admitLoadedCodeRow(event, base);
+      admitLoadedCodeRow(event, origin, here);
   for (const ifTarget of [null, "itx.cd('./b').tool"])
     expect(
       append({
@@ -1300,10 +1300,66 @@ test("the app wall (`Caller.app`): on the INPUT expression only, `itx.builtins` 
       target: "itx.tool",
     },
   };
-  expect(append(route)).toThrow(/set only from the project's root/);
-  expect(append(schedule([route]))).toThrow(/set only from the project's root/);
-  expect(append(route, "/")).not.toThrow();
+  // A route row at the code's own context is inert (only `/` serves routes); at `/` from below it
+  // is control above the code, refused like any other.
+  expect(append(route)).not.toThrow();
+  expect(append(route, "/agents/a", "/")).toThrow(
+    /configures only the context its call started at/,
+  );
+  expect(append(schedule([route]), "/agents/a", "/")).toThrow(/configures only/);
+  expect(append(route, "/", "/")).not.toThrow();
 });
+
+// Anyone in a project appends anything anywhere; loaded code's CONTROL lands only at its origin
+// and beneath. Each row: the event, where the call started, where it lands.
+const CONTROL_ROWS: { event: string; origin: string; here: string; lands: boolean }[] = [
+  {
+    event: "events.iterate.com/agent/context-added",
+    origin: "/agents/a/sandbox",
+    here: "/agents/b",
+    lands: true,
+  },
+  {
+    event: "events.iterate.com/repo/delete-requested",
+    origin: "/x",
+    here: "/repos/config",
+    lands: true,
+  },
+  {
+    event: "events.iterate.com/itx/run-requested",
+    origin: "/agents/a/sandbox",
+    here: "/agents/b",
+    lands: false,
+  },
+  { event: "events.iterate.com/itx/paused", origin: "/agents/a", here: "/", lands: false },
+  {
+    event: "events.iterate.com/itx/subscription-configured",
+    origin: "/mid",
+    here: "/middle",
+    lands: false,
+  },
+  {
+    event: "events.iterate.com/itx/run-requested",
+    origin: "/agents/a",
+    here: "/agents/a",
+    lands: true,
+  },
+  {
+    event: "events.iterate.com/itx/run-requested",
+    origin: "/agents/a",
+    here: "/agents/a/sandbox",
+    lands: true,
+  },
+  { event: "events.iterate.com/itx/paused", origin: "/", here: "/anywhere", lands: true },
+];
+test.for(CONTROL_ROWS)(
+  "loaded code whose call started at $origin appends $event at $here → lands: $lands",
+  ({ event, origin, here, lands }) => {
+    const append = () => admitLoadedCodeRow({ type: event, payload: {} }, origin, here);
+    if (lands) expect(append).not.toThrow();
+    else expect(append).toThrow(/loaded code configures only the context its call started at/);
+  },
+);
 
 test("cd forwards a factory and terminal fetch together, without exporting an intermediate handle over RPC", async () => {
   const request = new Request("https://provider.example/", { headers: { upgrade: "websocket" } });

@@ -44,6 +44,7 @@ import {
   ITX_APP_HEADER,
   ITX_CALLER_PATH_HEADER,
   ITX_GRANT_HEADER,
+  platformSource,
   stampCaller,
   type Caller,
 } from "./caller.ts";
@@ -243,11 +244,13 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     ctx: this.ctx,
     // The SET half of "the DO owns both ends of a lent stub's rule": the events a pager attach
     // carries are committed like any append, in the turn the pager is accepted (the
-    // un-set half is `#unsetWhatNamesRpcStub`). They are a client's events: `source.principal` is
-    // dropped — the DO owns that field, and a lent stub's rule is unattributed.
+    // un-set half is `#unsetWhatNamesRpcStub`). They are a client's events, stamped as this
+    // context's own: a lent stub's rule is no one's in particular.
     appendEvents: (events) =>
       void this.#appendAndRunCommittedEffects(
-        events.map((event) => stampCaller(event, { principal: null })),
+        events.map((event) =>
+          stampCaller(event, { principal: null }, this.#durableObjectAddress.path),
+        ),
       ),
     // PRESENCE is physical (`itx.rpcStubs.list()`); its changes are EPHEMERAL facts, never durable
     // rows — the log must never claim a socket is open. A refusal (a paused stream) is nothing to
@@ -424,13 +427,25 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     const { path } = this.#durableObjectAddress;
     const ancestorPaths = ancestorPathsOf(path);
     if (ancestorPaths.length === 0 || this.ctx.storage.kv.get("ancestors-announced")) return;
+    // Written by the platform, as this context: the ancestor's append stamps it so.
     const announced = Promise.all(
       ancestorPaths.map((ancestorPath) =>
-        this.#sibling(ancestorPath).append({
-          type: "events.iterate.com/itx/child-created",
-          idempotencyKey: `itx/child-created:${path}`,
-          payload: { childPath: path },
-        }),
+        this.#sibling(ancestorPath).invoke(
+          [
+            "itx",
+            "builtins",
+            [
+              "append",
+              {
+                type: "events.iterate.com/itx/child-created",
+                idempotencyKey: `itx/child-created:${path}`,
+                payload: { childPath: path },
+              },
+            ],
+          ],
+          [],
+          { principal: null, platform: true, path },
+        ),
       ),
     ).then(
       () => {
@@ -480,10 +495,12 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   }
 
   /** Inbound append: an inbound call and a `request` wake, then the commit and the committed-event
-   *  effects. */
+   *  effects. Only platform code holds this object's stub (loaded code holds `env.ITX`), so what
+   *  arrives here is the platform writing as this context: stamped so, whatever `source` it carried. */
   async append(...events: StreamEventInput[]): Promise<StreamEvent[]> {
     this.#inboundRequestInOneTurn();
-    return this.#appendAndRunCommittedEffects(events);
+    const source = platformSource(this.#durableObjectAddress.path);
+    return this.#appendAndRunCommittedEffects(events.map((event) => ({ ...event, source })));
   }
 
   /** The bookkeeping of an entry point that runs in ONE synchronous turn (`append`, `read`, a lend,
@@ -498,6 +515,13 @@ export class IterateContextDurableObject extends DurableObject<Env> {
    *  callers: `append`, and the pager attach (rpc-stubs.ts), which needs the refusal in the same
    *  turn it accepted the socket. */
   #appendAndRunCommittedEffects(events: StreamEventInput[]): StreamEvent[] {
+    // STAMPING IS TOTAL: every path to the log stamps who wrote the event (src/caller.ts); one that
+    // forgot fails here, loudly, rather than reading as history (iterate/stream/processor `admits`).
+    for (const event of events)
+      if (!event.source?.origin)
+        throw new Error(
+          `${String(event.type)}: the platform did not stamp who wrote it, so it cannot be appended`,
+        );
     const subscriptionsBeforeCommit = this.#stream.coreReducedState.subscriptions;
     const headBeforeCommit = this.#stream.highestAssignedOffset();
     // THE APPEND BOUNDARY: every event is validated + normalized here (core-processor's
@@ -578,7 +602,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
    *  incarnation left open is not here, and the wake record settles it `interrupted` (stream.ts) —
    *  a run is never re-run. */
   readonly #scriptRunsInFlight = new Set<number>();
-  /** Runs a PROCESSOR requested (`source.processor`, the engine's stamp), owed to the next alarm
+  /** Runs a PROCESSOR requested (`metadata.causedBy`, the engine's word), owed to the next alarm
    *  pass, by the request's offset: the code, and when it was requested — the coordinator's
    *  deadline, so re-deriving it writes nothing. In memory: a run a dead incarnation still owed is
    *  open in `scriptRuns`, and the next wake record settles it `interrupted`, as it does a run cut
@@ -601,7 +625,9 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     for (const event of committedEvents) {
       if (event.type !== "events.iterate.com/itx/run-requested") continue;
       const { code } = event.payload as RunRequested; // parsed at the append boundary (normalizeControlEvent)
-      if (event.source?.processor)
+      // A scheduling hint, not authority: a writer that claims a processor's cause only waits for
+      // the alarm.
+      if (event.metadata?.causedBy)
         this.#runsOwedToTheAlarm.set(event.offset, { code, requestedAt: Date.now() });
       else this.#startRun(event.offset, code);
     }
@@ -635,6 +661,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       this.#appendAndRunCommittedEffects([
         {
           type: "events.iterate.com/itx/run-settled",
+          source: platformSource(this.#durableObjectAddress.path),
           idempotencyKey: `itx/run-settled:${requestOffset}`,
           payload: { requestOffset, settlement },
         },
@@ -1002,6 +1029,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       this.#stream.append({
         type: "events.iterate.com/itx/alarm-trace",
         ephemeral: true,
+        source: platformSource(this.#durableObjectAddress.path),
         payload: trace,
       });
     } catch (error) {
@@ -1117,23 +1145,20 @@ export class IterateContextDurableObject extends DurableObject<Env> {
             scheduledAtOffset: row.scheduledAtOffset,
             at: row.nextAt,
           };
+          // An occurrence is this context writing what the schedule says; who defined it is the
+          // `schedule-set` at `scheduledAtOffset`, and its stamp.
+          const { path } = this.#durableObjectAddress;
           try {
             this.#appendAndRunCommittedEffects([
               ...row.events.map((event) => ({
                 ...event,
-                source: {
-                  schedule: {
-                    ...payload,
-                    ...((row.source?.processor || row.source?.principal) && {
-                      definedBy: {
-                        ...(row.source?.processor && { processor: row.source.processor }),
-                        ...(row.source?.principal && { principal: row.source.principal }),
-                      },
-                    }),
-                  },
-                },
+                source: { origin: path, schedule: payload },
               })),
-              { type: "events.iterate.com/itx/schedule-fired", payload },
+              {
+                type: "events.iterate.com/itx/schedule-fired",
+                source: platformSource(path),
+                payload,
+              },
             ]);
             console.log({
               event: "scheduled-append.completed",
@@ -1156,6 +1181,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
             this.#appendAndRunCommittedEffects([
               {
                 type: "events.iterate.com/itx/schedule-failed",
+                source: platformSource(path),
                 payload: { ...payload, error: String(error).slice(0, 2000) },
               },
             ]);

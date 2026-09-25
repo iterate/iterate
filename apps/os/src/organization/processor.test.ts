@@ -9,7 +9,7 @@ import { type OrganizationState } from "./contract.ts";
 
 /** Every fact the organization folds is the platform's: stamped `source.platform` as its writer
  *  stamps it (session.ts `foldPlatformFacts`). */
-const platform = { platform: true } as const;
+const platform = { origin: "/", platform: true } as const;
 const created = (name: string) => ({
   type: "events.iterate.com/organization/created",
   payload: { name },

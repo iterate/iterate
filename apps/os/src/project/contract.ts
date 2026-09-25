@@ -16,7 +16,11 @@ import { RepoContract } from "../repo/contract.ts";
 import { WorkspaceContract } from "../workspace/contract.ts";
 import { SecretCatalog, SecretContract } from "../secret/contract.ts";
 import { CoreEventCatalog } from "../stream/core-events.ts";
-import { IntegrationConnectionRow, IntegrationEventCatalog } from "../integrations/contract.ts";
+import {
+  INTEGRATION_TRUST,
+  IntegrationConnectionRow,
+  IntegrationEventCatalog,
+} from "../integrations/contract.ts";
 
 /** Where a custom hostname stands at Cloudflare (custom-hostnames.ts reads it off the API). */
 export const CustomHostnameObservation = z.object({
@@ -229,6 +233,19 @@ export const ProjectContract = defineProcessorContract({
     // processor re-points it at every later commit of the config repo (a commit IS its publication)
     "events.iterate.com/itx/ingress-configured",
   ],
+  // WHOM IT LISTENS TO: the platform alone for the project's deletion (the session appends it once
+  // the control plane dropped the row), the secrets' catalog (cross-posted by the secrets verbs) and
+  // the connections; the entities' certificates certify themselves (iterate/stream/processor);
+  // everything else from the trusted — the dash is a member.
+  trust: {
+    "events.iterate.com/project/delete-requested": "platform",
+    "events.iterate.com/secret/set": "platform",
+    "events.iterate.com/secret/deleted": "platform",
+    "events.iterate.com/secret/lent": "platform",
+    "events.iterate.com/secret/borrowed": "platform",
+    "events.iterate.com/secret/lend-revoked": "platform",
+    ...INTEGRATION_TRUST,
+  },
 });
 
 /** The project's reduced state: where its creation stands, and the catalog (the contract's

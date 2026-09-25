@@ -18,6 +18,7 @@
 import { DatabaseSync } from "node:sqlite";
 import type { SqlStorageValue } from "@cloudflare/workers-types";
 import {
+  admits,
   idempotencyConflictMessage,
   sameIdempotentEvent,
   type StreamEvent,
@@ -30,8 +31,8 @@ import {
 } from "./processor.ts";
 
 /** THE PROCESSOR HARNESS: fold `inputs` through a processor's pure `reduce`, exactly as the engine
- *  does — start from the contract's initial state, validate each payload against the contract (a
- *  malformed KNOWN payload is SKIPPED, never reduced), reduce, thread the state — for a declarative
+ *  does — start from the contract's initial state, skip an event its `trust` refuses (`admits`) or a
+ *  malformed KNOWN payload (never reduced), reduce, thread the state — for a declarative
  *  `{ events → state }` processor spec with no engine, storage, or effects. Construct the
  *  processor with `new` and hand it the events; the offsets are the input order. Ephemeral inputs are
  *  reduced like any other — the reduce decides what it folds (presence's `poke` returns undefined). */
@@ -58,6 +59,7 @@ export function reduceProcessor<State>(
       createdAt: new Date((index + 1) * 1000).toISOString(),
       path: "/",
     } as StreamEvent;
+    if (!admits(event, processor.contract.trust)) return; // the engine ignores an untrusted writer
     state = processor.reduce({ event, state }) ?? state;
   });
   return state;

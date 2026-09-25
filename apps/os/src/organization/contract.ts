@@ -170,6 +170,8 @@ export const OrganizationContract = defineProcessorContract({
     "events.iterate.com/secret/deleted",
   ],
   emits: [],
+  // Every fact folded here is the platform's to write (caller.ts `Caller.platform`): a member can append any type to the organization's context, and theirs changes nothing.
+  trust: { "*": "platform" },
 });
 
 /** The organization's reduced state: its record (the contract's `stateSchema`). */

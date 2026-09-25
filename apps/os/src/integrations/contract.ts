@@ -4,6 +4,7 @@
 // the facts are one type. Only the platform appends these (`source.platform`): a connect's callback,
 // a disconnect, and a sign-in that keeps its token (identity.ts).
 import { z } from "zod";
+import type { TrustRule } from "iterate/stream/processor";
 
 export const IntegrationProvider = z.enum(["slack", "google", "cloudflare", "github", "waitrose"]);
 export type IntegrationProvider = z.infer<typeof IntegrationProvider>;
@@ -65,13 +66,18 @@ export const IntegrationEventCatalog = {
   },
 };
 
-/** The fold both owners run: a platform `<provider>/connected` is the row at its log path, a
- *  `disconnected` drops it; anything else, or a fact not the platform's, changes nothing. */
+/** Whom both owners listen to for a connection's facts: the platform alone (a connect's callback,
+ *  a disconnect verb). A contract's `trust` spreads it (iterate/stream/processor `TrustRule`). */
+export const INTEGRATION_TRUST: Readonly<Record<string, TrustRule>> = Object.fromEntries(
+  Object.keys(IntegrationEventCatalog.events).map((type) => [type, "platform"]),
+);
+
+/** The fold both owners run: a `<provider>/connected` is the row at its log path, a `disconnected`
+ *  drops it; anything else changes nothing. Only the platform's reach it (`INTEGRATION_TRUST`). */
 export function reduceIntegrations(
   integrations: Record<string, IntegrationConnectionRow>,
-  event: { type: string; payload: unknown; source?: { platform?: boolean } },
+  event: { type: string; payload: unknown },
 ): Record<string, IntegrationConnectionRow> | undefined {
-  if (event.source?.platform !== true) return undefined;
   const [provider, fact] = event.type.slice("events.iterate.com/".length).split("/");
   const parsedProvider = IntegrationProvider.safeParse(provider);
   if (!parsedProvider.success || (fact !== "connected" && fact !== "disconnected"))

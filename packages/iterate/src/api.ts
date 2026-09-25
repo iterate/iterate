@@ -601,7 +601,7 @@ export interface IterateContextApi {
   url(target?: { routingSlug?: string; path?: string }): Promise<string>;
   /** RESET this context (Cloudflare's `ctx.abort`): its Durable Object drops everything it holds in
    *  memory and the next call starts a fresh incarnation from durable storage. Resolves with the
-   *  `events.iterate.com/itx/aborted { reason?, callerPath?, app? }` event it recorded — durable
+   *  `events.iterate.com/itx/aborted { reason? }` event it recorded — durable
    *  and attributed to the caller before anything resets — and the reset follows the answer.
    *  SURVIVES: the log and everything derived from it (rewrite rules, subscriptions, schedules),
    *  every facet's storage, kv. GOES: in-memory state, every facet instance and its in-flight work,
@@ -755,7 +755,7 @@ export interface IterateContextApi {
      *  it extends the SDK's host, including one that would never answer a call. Its instance and
      *  in-memory state go, and every call in flight on it rejects `FACET_ABORTED`; its storage
      *  stays, and its next call starts it fresh. The context itself is not reset. Resolves with the
-     *  `events.iterate.com/itx/facet-aborted { name, reason?, callerPath?, app? }` event;
+     *  `events.iterate.com/itx/facet-aborted { name, reason? }` event, stamped with who asked;
      *  `NO_FACET` for a name never hosted here. */
     abort(name: string, reason?: string): Promise<StreamEvent>;
   };
@@ -792,6 +792,9 @@ export interface IterateContextApi {
     target: ItxExpressionInput | ((events: unknown[], range: unknown) => void) | null;
     consumes?: string[];
     afterOffset?: number;
+    /** Whom the target hears: absent, the trusted writers (iterate/stream/processor `admits`) —
+     *  what a reader that acts on events wants; `"anyone"` in the project, for a view of the log. */
+    from?: "anyone";
   }): Promise<{ [Symbol.dispose](): void }>;
   /** A rewrite rule of this context, session-scoped (the handle's dispose removes it): make `match`
    *  mean `target`, an expression, a live stub, or null to deny. `description` is the one line a

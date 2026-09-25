@@ -237,7 +237,7 @@ export interface BuiltInScope extends LibraryRoots {
   append: IterateContextApi["append"];
   /** RESET THIS CONTEXT — Cloudflare's `ctx.abort`, asked for: the Durable Object's in-memory state
    *  is discarded and the next call builds a fresh incarnation from durable storage (a new
-   *  `itx/woken`). The FACT comes first — `itx/aborted { reason?, callerPath?, app? }`,
+   *  `itx/woken`). The FACT comes first — `itx/aborted { reason? }`, stamped with who asked,
    *  attributed like any append (`source.principal`) and durable before anything resets — then the
    *  answer (that event), then the reset, one zero-delay turn after the answer left
    *  (iterate-context-durable-object.ts `#abortAfterTheAnswer`). SURVIVES: the log and everything
@@ -491,24 +491,17 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
   const kvPrefix = `${owner.id}:`;
   const r2Prefix = `${owner.id}/`;
   const ownContext = () => deps.context(path);
-  /** THE append: every event appended through this scope carries WHO appended it — the DO's own
-   *  stamp, never a client's (src/caller.ts `stampCaller`): the session's verified principal, or none. */
+  /** THE append: every event appended through this scope is stamped with WHO wrote it — the
+   *  platform's stamp built from the caller, never a writer's own (src/caller.ts `stampCaller`).
+   *  Loaded code configures only its own context and those beneath it, and its rows are walled
+   *  (itx-expression-rewriting.ts `admitLoadedCodeRow`); any other event lands wherever it is sent,
+   *  and its readers decide whether to listen (iterate/stream/processor `admits`). */
   const append = (...events: StreamEventInput[]) => {
     const caller = deps.caller();
-    // Loaded code can delegate its scope to descendants through durable rows; child code
-    // keeps its own ceiling. The append boundary validates the rest of each control event.
-    if (caller.app) for (const event of events) admitLoadedCodeRow(event, caller.path || path);
-    // `account/…` and `organization/…` keys are the platform's facts on a global context (grants.ts,
-    // session.ts): a key a person took first would answer the platform's fact with theirs, which the
-    // owner's fold ignores (a grant that never ends).
-    if (projectId === GLOBAL_PROJECT_ID && !caller.platform)
-      for (const { idempotencyKey } of events)
-        if (/^(?:account|organization)\//.test(String(idempotencyKey)))
-          throw codedError(
-            "FORBIDDEN",
-            `idempotency key ${JSON.stringify(idempotencyKey)} is the platform's`,
-          );
-    return ownContext().append(...events.map((event) => stampCaller(event, caller)));
+    const stamped = events.map((event) => stampCaller(event, caller, path));
+    if (caller.app)
+      for (const event of stamped) admitLoadedCodeRow(event, event.source.origin, path);
+    return ownContext().append(...stamped);
   };
   /** THE PLATFORM'S OWN HOP: the caller rides — principal and grant (the facts stay attributed),
    *  path and origin — but never its `app`: the app wall (itx-expression-rewriting.ts `#admit`) is
@@ -612,8 +605,10 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
       platform: true,
     });
   };
+  /** Stamped `platform` on the secret's own path too: the secret's processor there folds it, and
+   *  the caller who asked is not trusted beneath the root it asked through. */
   const secretFact = async (secret: ReachableContext, event: StreamEventInput): Promise<void> => {
-    await secret.append(stampCaller(event, deps.caller()));
+    await secret.append(stampCaller(event, { ...deps.caller(), platform: true }, path));
     await crossPostSecretFact(event);
   };
   /** A deleted secret's lends end with it, on both sides: the lends of a lender's secret
@@ -1429,14 +1424,11 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
     append,
     abort: async (reasonInput) => {
       const reason = abortReasonOf(reasonInput, "itx.abort");
-      // WHO ASKED, beyond what the append stamps (`source.principal`): the context the call started
-      // at when it hopped here, and whether loaded code asked — loaded code carries no principal.
-      const { path: callerPath, app } = deps.caller();
-      // THE FACT FIRST, through `append` (attributed, pause-exempt — stream.ts), then durable, then
-      // the answer; the reset is the DO's, after it.
+      // THE FACT FIRST, through `append` (stamped with who asked, pause-exempt — stream.ts), then
+      // durable, then the answer; the reset is the DO's, after it.
       const [aborted] = await append({
         type: "events.iterate.com/itx/aborted",
-        payload: { reason, callerPath, app },
+        payload: { reason },
       });
       // The runtime logs this message as an error line (uncatchable); the prd fault alarm
       // (scripts/ci/prd-fault-alarm.ts) excludes its prefix as the expected outcome it is.
@@ -1542,11 +1534,10 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
       // instance, never the one going away.
       abort: async (name, reasonInput) => {
         const reason = abortReasonOf(reasonInput, "itx.facets.abort");
-        const { path: callerPath, app } = deps.caller(); // who asked, as for `abort` above
         await deps.facets.abort(name, reason);
         const [aborted] = await append({
           type: "events.iterate.com/itx/facet-aborted",
-          payload: { name, reason, callerPath, app },
+          payload: { name, reason },
         });
         return aborted;
       },
