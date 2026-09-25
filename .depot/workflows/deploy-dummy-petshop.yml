@@ -32,4 +32,4 @@ jobs:
       - name: Deploy apps/dummy-petshop
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-        run: doppler run --project dummy-petshop --config prd -- pnpm --dir apps/dummy-petshop run-script deploy
+        run: doppler run --project dummy-petshop --config prd -- pnpm --dir apps/dummy-petshop run-script deploy --env prd
