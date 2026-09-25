@@ -10,8 +10,8 @@
 // commit — publishing a config-repo website needs a commit, not a manual ingress event.
 // Subscribed to `/` (the row `session.projects.create` enables), it runs again after every eviction:
 // an attempt lost with an incarnation is simply run again by the next — the repo tolerates existing,
-// a born `main` refuses the seed, every ingress append is keyed by the commit it points at, the
-// certificate is keyed. The host's `withItx` and the template download are its constructor
+// a born `main` refuses the seed, every ingress append is keyed by the commit it points at (a
+// return to a commit published before, by that commit's fact), the certificate is keyed. The host's `withItx` and the template download are its constructor
 // arguments; a unit test constructs it with `new` and reduces rows (processor.test.ts, in node) or
 // hands it a fake download (templates.test.ts); the effects are proven on
 // the worker (e2e/session.e2e.test.ts: the catalog, the apex answering the seed;
@@ -149,7 +149,8 @@ export class ProjectProcessor extends StreamProcessor<
   #creating = false;
   /** The apex following the config repo: the newest tip any delivery has shown this incarnation,
    *  and the offset it has published. The durable ground is the keyed ingress event itself, reduced
-   *  into `state.publishedCommitOid`: a delivery whose state holds the tip's publication marks it
+   *  into `state.publishedCommitOid` and `publishedAt`: a delivery whose state holds the tip's
+   *  publication, after the tip's fact, marks it
    *  published, so a fresh incarnation owes nothing for a commit an earlier one published. The
    *  state learns of this incarnation's own append a delivery later, so the mark is kept here too.
    *  One attempt runs at a time and DRAINS: a tip that arrives while an append is in flight is
@@ -317,11 +318,11 @@ export class ProjectProcessor extends StreamProcessor<
           configRepoTip: { commitOid: event.payload.commitOid, offset: event.offset },
         };
       case "events.iterate.com/itx/ingress-configured": {
-        // A target set by hand publishes no commit and moves nothing: the appends below are keyed
-        // by their commit, so a commit once published is never owed again, whatever the apex names.
+        // A target set by hand publishes no commit and moves nothing. Every publication is recorded
+        // with its offset: a pull can return main to a commit published before, which is owed again.
         const commitOid = configRepoCommitOf(event.payload.target);
-        if (!commitOid || commitOid === state.publishedCommitOid) return undefined;
-        return { ...state, publishedCommitOid: commitOid };
+        if (!commitOid) return undefined;
+        return { ...state, publishedCommitOid: commitOid, publishedAt: event.offset };
       }
       default:
         return undefined;
@@ -433,13 +434,17 @@ export class ProjectProcessor extends StreamProcessor<
     // THE APEX FOLLOWS THE CONFIG REPO — state-derived, at head, in the background: the latest commit
     // of `/repos/config` (its fact cross-posted here by the repo facet) is published by pointing the
     // ingress at it, keyed by the commit, so this and the seed's own append in the saga below land
-    // ONE event, and an attempt lost with an incarnation is run again by the next. A tip the state
-    // already holds published is owed nothing: no append, and no background work to claim the
+    // ONE event, and an attempt lost with an incarnation is run again by the next; a return to a
+    // commit published before is published again under its fact's own key. A tip the state holds
+    // published AFTER its fact is owed nothing: no append, and no background work to claim the
     // context's alarm for. The target is `configRepoIngressTarget`, the same one the saga writes
     // for the seed.
     if (state.configRepoTip) {
       this.#newestTip = state.configRepoTip;
-      if (state.configRepoTip.commitOid === state.publishedCommitOid)
+      if (
+        state.configRepoTip.commitOid === state.publishedCommitOid &&
+        (state.publishedAt || 0) > state.configRepoTip.offset
+      )
         this.#published = state.configRepoTip.offset;
     }
     if (this.#newestTip && this.#published !== this.#newestTip.offset && !this.#publishing) {

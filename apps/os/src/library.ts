@@ -490,7 +490,7 @@ function entityHandle(
         if (contract.consumes.includes(input.type))
           throw codedError(
             "FORBIDDEN",
-            `${name}.append: ${JSON.stringify(input.type)} is the ${name}'s lifecycle — only itx.${name}s.create and itx.${name}s.delete write it`,
+            `${name}.append: ${JSON.stringify(input.type)} is written by the ${name} itself — its lifecycle by itx.${name}s.create and itx.${name}s.delete, a repo's origin by setOrigin`,
           );
         return { ...input, payload: schema.parse(input.payload ?? {}) };
       });

@@ -722,8 +722,8 @@ export function gitRemoteOf(remote: string): {
   /** The decoded userinfo, or null when the URL has none. */
   userinfo: { user: string; password: string } | null;
 } {
-  const refusal = () =>
-    new Error(`not an http(s) git URL: ${JSON.stringify(redactRemote(remote))}`);
+  // Never the input itself: a URL that did not parse may hide a credential anywhere in it.
+  const refusal = () => new Error("not an http(s) git URL (https://host/owner/repo.git)");
   const match = /^(https?:\/\/)(?:(.*)@)?([^@/?#]+)(\/[^?#]*)?$/.exec(remote);
   if (!match) throw refusal();
   const [, scheme, userinfo, host, path = ""] = match;
@@ -781,9 +781,11 @@ function decodeUserinfo(part: string): string {
 }
 
 /** A remote as it may be shown: everything up to its last `@` dropped after the scheme, whatever the
- *  scheme or its case, so no credential in it is ever echoed. */
+ *  scheme or its case, and any query or fragment, so no credential in it is ever echoed. */
 export function redactRemote(remote: string): string {
-  return remote.replace(/^([a-z][a-z0-9+.-]*:\/\/)?[\s\S]*@(?=[^@]*$)/i, "$1");
+  return remote
+    .replace(/^([a-z][a-z0-9+.-]*:\/\/)?[\s\S]*@(?=[^@]*$)/i, "$1")
+    .replace(/[?#][\s\S]*$/, "");
 }
 
 /** Whether `target` is `from` or one of its ancestors, walking every parent through the commits in
@@ -809,8 +811,12 @@ export function commitReaches(
 
 // ── transport ──
 
-/** The most one git response may be: a pack for a whole history is buffered here to parse it. */
-const MAX_RESPONSE_BYTES = 64 * 1024 * 1024;
+/** The most one git response may be, and all of one pack's objects inflated: a pack is buffered
+ *  and parsed in this isolate (128 MiB), where a pull holds a response a few times over and the
+ *  objects beside it. A config repo's whole history is far less (iterate/config's: 0.6 MiB packed,
+ *  9.6 MB inflated). */
+const MAX_RESPONSE_BYTES = 16 * 1024 * 1024;
+export const MAX_INFLATED_BYTES = 24 * 1024 * 1024;
 
 /** The wait before the one repeat of a read Artifacts answered 5xx. */
 const UPLOAD_PACK_RETRY_DELAYS_MS = [1_000];
@@ -882,8 +888,8 @@ export function createGitWireTransport(input: {
   return {
     fetchObjects: async (request: { deepen: number; wants: string[] }): Promise<RawGitObject[]> =>
       parsePack(demuxFetchResponse(await post("git-upload-pack", encodeFetchRequest(request))), {
-        maxObjectBytes: MAX_RESPONSE_BYTES,
-        maxTotalObjectBytes: MAX_RESPONSE_BYTES,
+        maxObjectBytes: MAX_INFLATED_BYTES,
+        maxTotalObjectBytes: MAX_INFLATED_BYTES,
       }),
     fetchPack: async (request: { wants: string[]; haves: string[] }): Promise<Uint8Array> =>
       demuxFetchResponse(await post("git-upload-pack", encodeFetchRequest(request))),

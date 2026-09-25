@@ -310,6 +310,8 @@ test("an origin holds a secret placeholder, never a token: a literal credential 
     `https://x:getSecret(${token})@github.com/acme/config.git`,
     `https://x:getSecret("/secrets/git")${token}@github.com/acme/config.git`,
     `https://x:p@${token}@github.com/acme/config.git`,
+    `https://github.com/acme/config.git?access_token=${token}`,
+    `https://x:${token}%40github.com/acme/config.git`,
   ]) {
     const refused = await repo.setOrigin(origin).then(
       () => "set",
@@ -346,6 +348,13 @@ test("origin-set is reduced into the repo's state: set, replaced, forgotten; a p
   expect(state([originSet("https://a.example/r.git"), originSet(7)])).toBe(
     "https://a.example/r.git",
   );
+  // appended around setOrigin with a token in it: held to setOrigin's rules, so no origin at all
+  expect(
+    state([
+      originSet("https://a.example/r.git"),
+      originSet("https://x:ghp_token@github.com/a/b.git"),
+    ]),
+  ).toBe("https://a.example/r.git");
 });
 
 /** The repo facet on `path`, created, reaching `cfArtifacts` as its context's `itx.cfArtifacts`, over

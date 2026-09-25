@@ -29,6 +29,7 @@ const empty: ProjectState = {
   secrets: {},
   configRepoTip: null,
   publishedCommitOid: null,
+  publishedAt: null,
   hostnames: {},
   integrations: {},
   primaryHostname: null,
@@ -78,7 +79,7 @@ const reduceRows: {
       ingressAt(["itx", "workers", ["get", { source: { "worker.js": "" }, cacheKey: "ccc" }]]),
       ingressAt(null),
     ],
-    state: { ...empty, publishedCommitOid: "bbb" },
+    state: { ...empty, publishedCommitOid: "bbb", publishedAt: 2 },
   },
   {
     name: "a repo's and a workspace's certificates each add one entry, by path, stamped with the event's time — the project's own creation untouched",
@@ -92,6 +93,7 @@ const reduceRows: {
       secrets: {},
       configRepoTip: null,
       publishedCommitOid: null,
+      publishedAt: null,
       hostnames: {},
       integrations: {},
       primaryHostname: null,
@@ -454,10 +456,50 @@ test("ProjectProcessor — a tip the state does not hold published is published;
     committed("/repos/config", "aaa"),
     normalizeControlEvent(appended[0]!, "/"),
   ]);
-  expect(state).toEqual({ ...empty, configRepoTip: tip("aaa", 1), publishedCommitOid: "aaa" });
+  expect(state).toEqual({
+    ...empty,
+    configRepoTip: tip("aaa", 1),
+    publishedCommitOid: "aaa",
+    publishedAt: 2,
+  });
   deliver(processorWithoutHostnames(), state, append, runInBackground);
   await settle();
   expect({ appends: appended.length, background }).toEqual({ appends: 1, background: 1 });
+});
+
+test("ProjectProcessor — a tip is published only by a publication after its fact: a pull back to a commit published before is published again, even when another commit's publication landed after that fact", async () => {
+  const appended: StreamEventInput[] = [];
+  const append = async (...events: unknown[]) => {
+    appended.push(...(events as StreamEventInput[]));
+    return [{ offset: 3 }]; // the commit's key answers its first publication, at 3
+  };
+  const runInBackground = (work: () => Promise<unknown>) => void work();
+  // aaa published at 3; bbb's fact at 7; back to aaa at 9; bbb's publication landed at 10
+  const state = {
+    ...empty,
+    configRepoTip: tip("aaa", 9),
+    publishedCommitOid: "bbb",
+    publishedAt: 10,
+  };
+  deliver(processorWithoutHostnames(), state, append, runInBackground);
+  await settle();
+  expect(appended.map((event) => event.idempotencyKey)).toEqual([
+    "itx/ingress-configured:aaa",
+    "itx/ingress-configured:aaa@9",
+  ]);
+  // the same commit, published before its fact: owed as well
+  appended.length = 0;
+  deliver(
+    processorWithoutHostnames(),
+    { ...empty, configRepoTip: tip("aaa", 9), publishedCommitOid: "aaa", publishedAt: 3 },
+    append,
+    runInBackground,
+  );
+  await settle();
+  expect(appended.map((event) => event.idempotencyKey)).toEqual([
+    "itx/ingress-configured:aaa",
+    "itx/ingress-configured:aaa@9",
+  ]);
 });
 
 test("ProjectProcessor — an event that changes the primary hostname holds the cursor until the control plane has it; one that changes nothing writes nothing", async () => {

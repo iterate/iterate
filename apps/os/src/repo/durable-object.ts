@@ -43,10 +43,10 @@ import {
   hashObject,
   manifestOf,
   gitRemoteOf,
+  MAX_INFLATED_BYTES,
   parseCommit,
   parsePack,
   parseTree,
-  readCapped,
   redactRemote,
   treeObjectsOf,
   type GitObjectType,
@@ -63,8 +63,6 @@ const AUTHOR = { email: "config@iterate.com", name: "iterate" };
 const TOKEN_TTL_SECONDS = 300;
 /** Reuse a token only while this much of its life remains — an operation must not outlive it. */
 const TOKEN_REUSE_MARGIN_MS = 60_000;
-/** The most a pull or push reads and inflates of an untrusted remote: the pack is checked here. */
-const MAX_PACK_OBJECT_BYTES = 64 * 1024 * 1024;
 const textDecoder = new TextDecoder();
 const textEncoder = new TextEncoder();
 
@@ -108,8 +106,29 @@ export const repoVerbs = [
 class RepoProcessor extends EntityLifecycleProcessor<RepoState> {
   override reduce(args: ReduceArgs<RepoState>): RepoState | undefined {
     if (args.event.type !== "events.iterate.com/repo/origin-set") return super.reduce(args);
-    return { ...args.state, origin: OriginSet.parse(args.event.payload).origin };
+    const { origin } = OriginSet.parse(args.event.payload);
+    // A fact appended around `setOrigin` is held to its rules: an origin it would refuse is none.
+    if (origin && originRefusal(origin)) return undefined;
+    return { ...args.state, origin };
   }
+}
+
+/** Why `origin` cannot be a repo's origin, or null: a URL git can use, whose credential, if any, is a
+ *  plain user name and one secret placeholder — an origin lives on the log, so never a token. The
+ *  reason never quotes the origin. */
+function originRefusal(origin: string): string | null {
+  let userinfo: { user: string; password: string } | null;
+  try {
+    ({ userinfo } = gitRemoteOf(origin));
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error);
+  }
+  if (
+    userinfo &&
+    !(/^[a-z][a-z0-9-]{0,31}$/.test(userinfo.user) && isSecretPlaceholder(userinfo.password))
+  )
+    return `an origin's credential is a plain user name and a secret placeholder (x-access-token:getSecret("/secrets/…")), never a token`;
+  return null;
 }
 
 export class RepoDurableObject extends StreamProcessorDurableObject<
@@ -496,17 +515,8 @@ export class RepoDurableObject extends StreamProcessorDurableObject<
   async setOrigin(url: string | null): Promise<{ origin: string | null }> {
     const path = await this.#created();
     const origin = z.string().min(1).nullable().parse(url);
-    if (origin) {
-      const { userinfo } = gitRemoteOf(origin);
-      if (
-        userinfo &&
-        !(/^[a-z][a-z0-9-]{0,31}$/.test(userinfo.user) && isSecretPlaceholder(userinfo.password))
-      )
-        throw codedError(
-          "INVALID_INPUT",
-          `repo ${path}: an origin's credential is a plain user name and a secret placeholder (x-access-token:getSecret("/secrets/…")), never a token — ${redactRemote(origin)}`,
-        );
-    }
+    const refused = origin && originRefusal(origin);
+    if (refused) throw codedError("INVALID_INPUT", `repo ${path}: ${refused}`);
     await this.withItx((itx) =>
       itx.append({ type: "events.iterate.com/repo/origin-set", payload: { origin } }),
     );
@@ -607,7 +617,9 @@ export class RepoDurableObject extends StreamProcessorDurableObject<
    *  CALLER's egress — `egress` is the caller's own `itx.fetch`, which `itx.repos.get(path)` hands
    *  in (library.ts), never this repo's: a caller that may not fetch reaches no remote through a
    *  repo. The request carries the URL's userinfo as its credential, where egress substitutes a
-   *  secret placeholder; its body is read, no more than the cap, before the call ends. */
+   *  secret placeholder; the transport reads its body, no more than its cap (git-wire.ts). The
+   *  caller is the one the handle was made for: a handle lent to another context lends that
+   *  authority, as any capability does. */
   async #syncOptions(options: unknown, egress: Egress | undefined) {
     if (!egress)
       throw codedError(
@@ -630,14 +642,7 @@ export class RepoDurableObject extends StreamProcessorDurableObject<
     const transport = createGitWireTransport({
       remote: remoteUrl,
       authorization,
-      fetch: async (request) => {
-        const response = await egress(request);
-        return new Response(await readCapped(response, MAX_PACK_OBJECT_BYTES), {
-          status: response.status,
-          statusText: response.statusText,
-          headers: response.headers,
-        });
-      },
+      fetch: egress,
     });
     return { force, remote: { transport, shown: redactRemote(url) } };
   }
@@ -682,10 +687,7 @@ function occurrenceKey(path: string, commitOid: string): string {
 
 /** An untrusted pack's objects by oid, each object and all of them bounded (git-wire.ts). */
 async function parseBounded(pack: Uint8Array): Promise<Map<string, RawGitObject>> {
-  const limits = {
-    maxObjectBytes: MAX_PACK_OBJECT_BYTES,
-    maxTotalObjectBytes: MAX_PACK_OBJECT_BYTES,
-  };
+  const limits = { maxObjectBytes: MAX_INFLATED_BYTES, maxTotalObjectBytes: MAX_INFLATED_BYTES };
   return new Map((await parsePack(pack, limits)).map((object) => [object.oid, object]));
 }
 
