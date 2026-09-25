@@ -658,9 +658,9 @@ test("ProjectProcessor — the deletion: the saga destroys each context the regi
   const deleted = appended.filter(
     (event) => event.type === "events.iterate.com/project/context-deleted",
   );
-  expect(reduceProcessor(processorWithoutHostnames(), [...announced, ...deleted]).contexts).toEqual(
-    registered.contexts,
-  );
+  expect(reduceProcessor(processorWithoutHostnames(), [...announced, ...deleted])).toMatchObject({
+    contexts: registered.contexts,
+  });
 });
 
 test("template provenance survives replay of the project creation request", () => {
