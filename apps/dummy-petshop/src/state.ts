@@ -88,15 +88,20 @@ export interface GithubInstallationUser {
 export interface PetshopState {
   /** Per-client revocation epochs. A token seals the epoch for its `clientId`,
    * so concurrent integration tests can expire their own credentials without
-   * invalidating an unrelated client's freshly refreshed token. */
+   * invalidating an unrelated client's freshly refreshed token. An id with a colon is one
+   * account's (`graphqlSessionAccountClientId`, `tescoLoginClientId`), and the
+   * `MINTED_RECORDS_KEPT` most recently revoked accounts are kept; a minted client's epoch goes
+   * with the client. */
   accessTokenEpochs: Record<string, number>;
+  /** The seeded client and the newest `MINTED_RECORDS_KEPT` minted ones, oldest first. */
   clients: Record<string, OauthClient>;
   /** `jti` values of revoked long-lived tokens: the OAuth provider's refresh tokens
    * (`/__backdoor/revoke-refresh-token`), the Google fake's refresh tokens and the Slack fake's
    * bot tokens. The newest `RECORDS_KEPT` are kept. */
   revokedRefreshTokenIds: string[];
   /** `jti` values of authorization codes already exchanged — codes are
-   * single-use (RFC 6749 §4.1.2), so a replayed code is rejected. */
+   * single-use (RFC 6749 §4.1.2), so a replayed code is rejected. The newest
+   * `MINTED_RECORDS_KEPT` are kept, far more than are exchanged while a code lives. */
   usedAuthorizationCodeIds: string[];
   /** Current webhook HMAC secret; rotatable via the backdoor. */
   webhookSigningSecret: string;
@@ -161,6 +166,36 @@ export interface SlackMessage {
  *  workspace) are kept: every e2e run mints its own, so the oldest go first (never the seeded
  *  installation). */
 const RECORDS_KEPT = 200;
+
+/**
+ * How many minted OAuth clients, account revocation epochs and spent authorization codes are
+ * kept, the oldest going first. The state is one stored value that every change rewrites and every
+ * read copies whole, so its size is the cost of each call to the Durable Object; kept unbounded,
+ * those calls queue behind the storage writes until workerd resets the object. A test uses its
+ * client, account or code for minutes, while the e2e suites mint fewer than 700 clients an hour.
+ */
+const MINTED_RECORDS_KEPT = 500;
+
+const MINTED_CLIENT_ID_PREFIX = "petshop-client-";
+
+/** Drops what `MINTED_RECORDS_KEPT` does not keep. A minted client's revocation epoch and its
+ *  scheduled token-endpoint failures go with it; the seeded client and the endpoint-wide epochs
+ *  (`graphql-session-login`, a GitHub App's) stay. */
+function dropOldestMintedRecords(state: PetshopState): void {
+  const mintedClientIds = Object.keys(state.clients).filter((id) =>
+    id.startsWith(MINTED_CLIENT_ID_PREFIX),
+  );
+  for (const clientId of mintedClientIds.slice(0, -MINTED_RECORDS_KEPT))
+    delete state.clients[clientId];
+  for (const byClient of [state.accessTokenEpochs, state.tokenEndpointFailuresRemainingByClient])
+    for (const clientId of Object.keys(byClient))
+      if (clientId.startsWith(MINTED_CLIENT_ID_PREFIX) && !state.clients[clientId])
+        delete byClient[clientId];
+  const accountEpochIds = Object.keys(state.accessTokenEpochs).filter((id) => id.includes(":"));
+  for (const accountId of accountEpochIds.slice(0, -MINTED_RECORDS_KEPT))
+    delete state.accessTokenEpochs[accountId];
+  state.usedAuthorizationCodeIds = state.usedAuthorizationCodeIds.slice(-MINTED_RECORDS_KEPT);
+}
 
 /** A fake account's numeric id, stable for its login or email: FNV-1a of it — a GitHub user's or organization's id, a Google or Cloudflare subject. */
 export function fakeUserIdOf(login: string): number {
@@ -232,6 +267,7 @@ export class PetshopStore {
   }
 
   async #save(state: PetshopState): Promise<void> {
+    dropOldestMintedRecords(state);
     await this.#storage.put("state", state);
   }
 
@@ -245,7 +281,7 @@ export class PetshopStore {
     public?: boolean;
   }): Promise<{ clientId: string; clientSecret: string }> {
     const state = await this.#load();
-    const clientId = `petshop-client-${crypto.randomUUID().slice(0, 8)}`;
+    const clientId = `${MINTED_CLIENT_ID_PREFIX}${crypto.randomUUID().slice(0, 8)}`;
     // A public client has no usable secret; a confidential one authenticates with it.
     const clientSecret = input.public ? "" : crypto.randomUUID();
     state.clients[clientId] = {
@@ -261,6 +297,8 @@ export class PetshopStore {
   async expireAccessTokens(clientId: string): Promise<number> {
     const state = await this.#load();
     const next = accessTokenEpochFor(state, clientId) + 1;
+    // re-inserted, so the order of the epochs is the order they were last revoked in
+    delete state.accessTokenEpochs[clientId];
     state.accessTokenEpochs[clientId] = next;
     await this.#save(state);
     return next;
