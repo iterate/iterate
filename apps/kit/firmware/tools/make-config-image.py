@@ -52,7 +52,8 @@ FIELDS = {
 STATUS_VOICES = ["greensleeves", "daisy-bell", "auld-lang-syne", "lass-of-aughrim", "spoken", "off"]
 # The longest value each field holds, spelled as in config-image.ts and one less
 # than the C array size in configuration.h. Four were one short here, which
-# refused a 128-byte operator secret outright.
+# refused a 128-byte operator secret outright. The status voice is decoded to a
+# byte, not stored; 32 just bounds the name.
 CAPACITY = {
     "wifi-ssid": 32,
     "wifi-password": 64,

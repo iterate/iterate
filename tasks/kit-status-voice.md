@@ -44,7 +44,7 @@ of a tune. Misha's pick is Greensleeves.
    | Connected, then the connection drops                                                    | Nothing (no singing at 3 am)                                                    |
    | "Jarvis" while connected                                                                | "Hello!" instead of the wake chime                                              |
    | "Jarvis" while not connected                                                            | The current connection state, instead of the chime                              |
-   | Button press while not connected                                                        | Chime, then the current connection state                                        |
+   | Button press while not connected                                                        | The current connection state, instead of the chime                              |
    | Button press while connected                                                            | Chime, unchanged                                                                |
 
    Connection states and phrases:

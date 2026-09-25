@@ -77,27 +77,44 @@ void iterate_kit_announcer_step(
   if (announcer->narrating && input->now_ms >= announcer->narration_ends_at_ms) {
     announcer->narrating = false;
   }
+  /* A waiting status phrase is about the state it was queued for. */
+  if (announcer->pending != ITERATE_KIT_ANNOUNCEMENT_NONE &&
+      announcer->pending != ITERATE_KIT_ANNOUNCEMENT_HELLO && announcer->pending != state) {
+    announcer->pending = announcer->pending_answers ? state : ITERATE_KIT_ANNOUNCEMENT_NONE;
+  }
+  if (input->in_session && !announcer->pending_answers) {
+    announcer->pending = ITERATE_KIT_ANNOUNCEMENT_NONE;
+  }
+
   /* "Ready." ends the story, so it does not wait to settle. */
   const bool settled = input->now_ms - announcer->state_since_ms >= ITERATE_KIT_ANNOUNCER_SETTLE_MS ||
                        state == ITERATE_KIT_ANNOUNCEMENT_READY;
-  if (announcer->narrating && settled && (announcer->narrated & bit(state)) == 0U) {
-    announcer->narrated |= bit(state);
+  if (announcer->narrating && !input->in_session && settled &&
+      announcer->pending == ITERATE_KIT_ANNOUNCEMENT_NONE && (announcer->narrated & bit(state)) == 0U) {
     announcer->pending = state;
-    if (state == ITERATE_KIT_ANNOUNCEMENT_READY) announcer->narrating = false;
+    announcer->pending_answers = false;
   }
 
-  /* Someone asked for the board: answer now, whatever the narration did. */
-  if (input->woken) {
-    announcer->pending = input->connected ? ITERATE_KIT_ANNOUNCEMENT_HELLO : state;
-  } else if (input->pressed && !input->connected) {
-    announcer->pending = state;
+  /* Someone asked for the board: answer now, whatever the narration queued. */
+  if (input->woken || input->pressed) {
+    announcer->pending = input->woken && input->connected ? ITERATE_KIT_ANNOUNCEMENT_HELLO : state;
+    announcer->pending_answers = true;
   }
+}
+
+bool iterate_kit_announcer_answers(bool wake_word, bool connected, bool speaker_free) {
+  return speaker_free && (wake_word || !connected);
 }
 
 enum iterate_kit_announcement iterate_kit_announcer_take(
     struct iterate_kit_announcer *announcer) {
   const enum iterate_kit_announcement pending = announcer->pending;
+  if (pending != ITERATE_KIT_ANNOUNCEMENT_NONE && pending != ITERATE_KIT_ANNOUNCEMENT_HELLO) {
+    announcer->narrated |= bit(pending);
+    if (pending == ITERATE_KIT_ANNOUNCEMENT_READY) announcer->narrating = false;
+  }
   announcer->pending = ITERATE_KIT_ANNOUNCEMENT_NONE;
+  announcer->pending_answers = false;
   return pending;
 }
 

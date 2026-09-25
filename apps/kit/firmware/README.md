@@ -129,7 +129,9 @@ board's `play_clip` op, which on ESP boards is the chime player. A board without
 | the wake word, or a press, while not connected          | the current state instead of the chime ("Can't find the Wi-Fi network.")            |
 
 A phrase never cuts off another, and a state that went stale while one played is
-skipped. Nothing is said during a call. The voice is the configuration's
+skipped. A start gets the voice instead of the chime only while the speaker is
+free to answer at once; otherwise it chimes. Narration waits while the
+microphone is open, and nothing new starts during a call. The voice is the configuration's
 `status-voice` field (Kit's **Status voice**): Greensleeves (the default, and what
 an image without the field gets), Daisy Bell, Auld Lang Syne, the Lass of Aughrim,
 spoken, or off. Phrases are scaled to the peak of the board's own `call_ended.wav`,

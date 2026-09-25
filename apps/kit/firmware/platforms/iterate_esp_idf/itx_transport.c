@@ -1653,7 +1653,9 @@ enum iterate_kit_status iterate_kit_itx_transport_stop(
 /*
  * What the last disconnect says about joining, for a person listening to the
  * board. The reason survives a later connect, so it counts only while down.
- * A 4-way handshake that times out is almost always a wrong WPA2 password.
+ * A 4-way handshake that times out is almost always a wrong WPA2 password; a
+ * network found with the wrong kind of security (a password typed for an open
+ * network, say) is a password problem too, not a missing network.
  */
 static enum iterate_kit_wifi_status wifi_status(bool connected, int32_t reason) {
   if (connected) return ITERATE_KIT_WIFI_JOINED;
@@ -1661,10 +1663,10 @@ static enum iterate_kit_wifi_status wifi_status(bool connected, int32_t reason) 
     case WIFI_REASON_AUTH_FAIL:
     case WIFI_REASON_4WAY_HANDSHAKE_TIMEOUT:
     case WIFI_REASON_HANDSHAKE_TIMEOUT:
-      return ITERATE_KIT_WIFI_WRONG_PASSWORD;
-    case WIFI_REASON_NO_AP_FOUND:
     case WIFI_REASON_NO_AP_FOUND_W_COMPATIBLE_SECURITY:
     case WIFI_REASON_NO_AP_FOUND_IN_AUTHMODE_THRESHOLD:
+      return ITERATE_KIT_WIFI_WRONG_PASSWORD;
+    case WIFI_REASON_NO_AP_FOUND:
     case WIFI_REASON_NO_AP_FOUND_IN_RSSI_THRESHOLD:
       return ITERATE_KIT_WIFI_NOT_FOUND;
     default:

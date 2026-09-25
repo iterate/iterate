@@ -173,7 +173,7 @@ bool iterate_kit_i2s_codec_speaker_is_playing(void) {
 /* --- local sounds ---------------------------------------------------------- */
 
 /*
- * THE BOARD'S OWN VOICE: chimes and mode announcements, straight from flash.
+ * THE BOARD'S OWN VOICE: chimes from flash, and the loop's spoken status.
  *
  * Everything else this speaker plays arrives over the stream, paced by the
  * server, seconds after the gesture that asked for it — which is exactly the
@@ -186,9 +186,10 @@ bool iterate_kit_i2s_codec_speaker_is_playing(void) {
  * one and the portable playback task absorbs the rest as backpressure it
  * already knows how to wait out.
  *
- * Allocation-free: the PCM lives in .rodata (flash), the cursor walks it in
- * 20 ms slices, and the lock is held only to move three words — the flash
- * read itself happens outside the critical section.
+ * Allocation-free: the PCM is the caller's (chimes in .rodata, the spoken
+ * status in PSRAM the loop keeps until well after it has played), the cursor
+ * walks it in 20 ms slices, and the lock is held only to move three words —
+ * the read itself happens outside the critical section.
  */
 static const uint8_t *sound_pcm; /* NULL when idle; guarded by codec_lock */
 static uint32_t sound_bytes;

@@ -461,9 +461,11 @@ EXT_RAM_BSS_ATTR static struct {
     /* Rendered once and kept: the wake word asks for it every time. */
     int16_t *hello;
     size_t hello_samples;
-    /* The last status phrase, freed when the next one replaces it. */
+    /* The status phrase playing, freed once it has played. */
     int16_t *status;
     uint64_t busy_until_ms;
+    /* A clip may have raised a gated amplifier that nothing else will lower. */
+    bool speaker_raised;
   } status_voice;
 } runtime;
 
@@ -2452,12 +2454,11 @@ static void status_voice_say(enum iterate_kit_announcement phrase, uint64_t now)
       runtime.status_voice.hello = pcm;
       runtime.status_voice.hello_samples = samples;
     } else {
-      /* Not playing any more: nothing is spoken until the last clip's tail has passed. */
-      heap_caps_free(runtime.status_voice.status);
       runtime.status_voice.status = pcm;
     }
   }
   runtime.board->play_clip(runtime.board_context, pcm, samples);
+  runtime.status_voice.speaker_raised = true;
   runtime.status_voice.busy_until_ms =
       now + samples * 1000U / ITERATE_KIT_TINYVOICE_SAMPLE_RATE_HZ + STATUS_VOICE_TAIL_MS;
   ESP_LOGI(
@@ -2468,33 +2469,51 @@ static void status_voice_say(enum iterate_kit_announcement phrase, uint64_t now)
 
 /*
  * One pass: tell the announcer what happened, and say what it asks for when
- * the speaker is free. `pressed` and `woken` are this pass's session starts.
+ * the speaker is free. `started` is this pass's session start, if any, as the
+ * board's controls made it (`wake_word`: the wake word made it).
  */
-static void status_voice_step(bool pressed, bool woken) {
-  runtime.view.voice_answers_wake_word = runtime.status_voice.enabled;
-  runtime.view.voice_answers_press = runtime.status_voice.enabled && !runtime.view.api_ready;
+static void status_voice_step(bool started, bool wake_word) {
+  const uint64_t now = now_ms(NULL);
+  const bool speaker_free = now >= runtime.status_voice.busy_until_ms;
+  /* The board chose chime or no chime for this start by the promise it last saw. */
+  const bool answered = started && (wake_word ? runtime.view.voice_answers_wake_word
+                                              : runtime.view.voice_answers_press);
+  runtime.view.voice_answers_wake_word =
+      runtime.status_voice.enabled && iterate_kit_announcer_answers(true, runtime.view.api_ready, speaker_free);
+  runtime.view.voice_answers_press =
+      runtime.status_voice.enabled && iterate_kit_announcer_answers(false, runtime.view.api_ready, speaker_free);
   if (!runtime.status_voice.enabled) return;
+  if (speaker_free && runtime.status_voice.status != NULL) {
+    heap_caps_free(runtime.status_voice.status);
+    runtime.status_voice.status = NULL;
+  }
+  if (speaker_free && runtime.status_voice.speaker_raised && !runtime.view.wants_call &&
+      !runtime.view.call_active) {
+    /* What an idle answer path would say: a gated amplifier can go back down. */
+    board_phase(ITERATE_KIT_VOICE_PHASE_QUIET);
+    runtime.status_voice.speaker_raised = false;
+  }
   struct iterate_kit_itx_transport_metrics metrics;
   iterate_kit_itx_transport_metrics(&transport, &metrics);
-  const uint64_t now = now_ms(NULL);
   const struct iterate_kit_announcer_input input = {
       .now_ms = now,
       .wifi = metrics.wifi_status,
       .key_refused = metrics.credential_refused,
       .connected = runtime.view.api_ready,
-      .woken = woken,
-      .pressed = pressed,
+      .in_session = runtime.view.wants_call || runtime.view.call_active,
+      .woken = answered && wake_word,
+      .pressed = answered && !wake_word,
   };
   iterate_kit_announcer_step(&runtime.status_voice.announcer, &input);
   /*
-   * Only between conversations: a clip holds the speaker, and an answer's
+   * Nothing starts during a call: a clip holds the speaker, and an answer's
    * frames would fail behind it. Whatever was due is dropped, not saved.
    */
   if (runtime.view.call_active) {
     (void)iterate_kit_announcer_take(&runtime.status_voice.announcer);
     return;
   }
-  if (now < runtime.status_voice.busy_until_ms) return;
+  if (!speaker_free) return;
   const enum iterate_kit_announcement phrase = iterate_kit_announcer_take(&runtime.status_voice.announcer);
   if (phrase != ITERATE_KIT_ANNOUNCEMENT_NONE) status_voice_say(phrase, now);
 }
@@ -2772,8 +2791,9 @@ void iterate_kit_voice_loop_step(void) {
       runtime.view.wants_call = true;
       ESP_LOGI(tag, "control: starting call");
     }
+    /* The board's start, accepted or not: it chimed or stayed quiet for it already. */
     status_voice_step(
-        session_started && !runtime.intent.wake_word, session_started && runtime.intent.wake_word);
+        runtime.intent.start_call && !runtime.intent.microphone_muted, runtime.intent.wake_word);
     runtime.intent.start_call = false;
     runtime.intent.end_call = false;
     runtime.intent.wake_word = false;

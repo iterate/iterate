@@ -56,14 +56,18 @@ static void mount(void);
 int main(void) {
   boot();
   iterate_kit_fake_platform_set_wifi_status(ITERATE_KIT_WIFI_JOINING);
-  for (int i = 0; i < 22; i++) step();
+  for (int i = 0; i < 10; i++) step();
+  /* Not connected, speaker free: a press or the wake word would get words, not the chime. */
+  assert(board.last_view.voice_answers_press);
+  assert(board.last_view.voice_answers_wake_word);
+  for (int i = 0; i < 12; i++) step();
   assert(board.clip_count == 1U);
   assert(board.clips[0].samples == samples_of(ITERATE_KIT_ANNOUNCEMENT_CONNECTING_TO_WIFI));
   /* As loud as the board's own "call ended". */
   assert(peak_of(&board.clips[0]) == CLIP_PEAK);
-  /* Not connected: a press or the wake word would get words, not the chime. */
-  assert(board.last_view.voice_answers_press);
-  assert(board.last_view.voice_answers_wake_word);
+  /* Singing: an answer could not start at once, so a start would get the chime. */
+  assert(!board.last_view.voice_answers_press);
+  assert(!board.last_view.voice_answers_wake_word);
 
   /* Wi-Fi joins and iterate answers while Greensleeves is still being sung. */
   iterate_kit_fake_platform_set_wifi_status(ITERATE_KIT_WIFI_JOINED);
@@ -74,6 +78,9 @@ int main(void) {
   for (int i = 0; i < 60; i++) step();
   assert(board.clip_count == 2U);
   assert(board.clips[1].samples == samples_of(ITERATE_KIT_ANNOUNCEMENT_READY));
+  for (int i = 0; i < 30; i++) step();
+  /* Connected and quiet: the wake word gets Hello, a press keeps its chime. */
+  assert(board.last_view.voice_answers_wake_word);
   assert(!board.last_view.voice_answers_press);
 
   /* "Jarvis": Hello, and the session starts. */

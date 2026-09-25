@@ -45,12 +45,38 @@ static void a_plugged_in_board_narrates_its_way_to_ready(void) {
 static void a_state_that_went_stale_while_the_speaker_was_busy_is_never_said(void) {
   struct iterate_kit_announcer a;
   iterate_kit_announcer_init(&a, true, 0);
+  STEP(&a, .now_ms = 0, .wifi = ITERATE_KIT_WIFI_JOINING);
   STEP(&a, .now_ms = 1000, .wifi = ITERATE_KIT_WIFI_JOINING);
-  /* The speaker is busy: nothing is taken, and meanwhile Wi-Fi joins. */
-  STEP(&a, .now_ms = 1500, .wifi = ITERATE_KIT_WIFI_JOINED);
-  STEP(&a, .now_ms = 2500, .wifi = ITERATE_KIT_WIFI_JOINED);
-  assert(iterate_kit_announcer_take(&a) == ITERATE_KIT_ANNOUNCEMENT_CONNECTING_TO_ITERATE);
+  assert(iterate_kit_announcer_take(&a) == ITERATE_KIT_ANNOUNCEMENT_CONNECTING_TO_WIFI);
+  /* While that is sung, the network goes missing long enough to be queued... */
+  STEP(&a, .now_ms = 1500, .wifi = ITERATE_KIT_WIFI_NOT_FOUND);
+  STEP(&a, .now_ms = 2500, .wifi = ITERATE_KIT_WIFI_NOT_FOUND);
+  /* ...and comes back before the speaker is free: that phrase is no longer true. */
+  STEP(&a, .now_ms = 4900, .wifi = ITERATE_KIT_WIFI_JOINED);
+  STEP(&a, .now_ms = 5300, .wifi = ITERATE_KIT_WIFI_JOINED);
   assert(iterate_kit_announcer_take(&a) == ITERATE_KIT_ANNOUNCEMENT_NONE);
+  STEP(&a, .now_ms = 5900, .wifi = ITERATE_KIT_WIFI_JOINED);
+  assert(iterate_kit_announcer_take(&a) == ITERATE_KIT_ANNOUNCEMENT_CONNECTING_TO_ITERATE);
+}
+
+static void an_answer_waiting_for_the_speaker_says_the_state_it_finds(void) {
+  struct iterate_kit_announcer a;
+  iterate_kit_announcer_init(&a, false, 0);
+  STEP(&a, .now_ms = 0, .wifi = ITERATE_KIT_WIFI_JOINED);
+  STEP(&a, .now_ms = 5000, .wifi = ITERATE_KIT_WIFI_JOINED, .pressed = true);
+  /* iterate answers first: the press hears "Ready.", not "Connecting to iterate." */
+  STEP(&a, .now_ms = 5050, .wifi = ITERATE_KIT_WIFI_JOINED, .connected = true);
+  assert(iterate_kit_announcer_take(&a) == ITERATE_KIT_ANNOUNCEMENT_READY);
+}
+
+static void narration_waits_while_the_microphone_is_open(void) {
+  struct iterate_kit_announcer a;
+  iterate_kit_announcer_init(&a, true, 0);
+  STEP(&a, .now_ms = 0, .wifi = ITERATE_KIT_WIFI_JOINED, .connected = true, .in_session = true);
+  STEP(&a, .now_ms = 1000, .wifi = ITERATE_KIT_WIFI_JOINED, .connected = true, .in_session = true);
+  assert(iterate_kit_announcer_take(&a) == ITERATE_KIT_ANNOUNCEMENT_NONE);
+  STEP(&a, .now_ms = 9000, .wifi = ITERATE_KIT_WIFI_JOINED, .connected = true);
+  assert(iterate_kit_announcer_take(&a) == ITERATE_KIT_ANNOUNCEMENT_READY);
 }
 
 static void a_wrong_password_is_said_once_however_often_the_board_retries(void) {
@@ -113,14 +139,17 @@ static void a_boot_nobody_caused_is_silent_until_someone_asks(void) {
   assert(iterate_kit_announcer_take(&a) == ITERATE_KIT_ANNOUNCEMENT_WIFI_NOT_FOUND);
 }
 
-static void a_connected_board_says_hello_to_the_wake_word_and_nothing_to_a_press(void) {
+static void a_connected_board_says_hello_to_the_wake_word_and_leaves_a_press_to_the_chime(void) {
   struct iterate_kit_announcer a;
   iterate_kit_announcer_init(&a, false, 0);
   STEP(&a, .now_ms = 0, .wifi = ITERATE_KIT_WIFI_JOINED, .connected = true);
+  assert(iterate_kit_announcer_answers(true, true, true));
   STEP(&a, .now_ms = 60000, .wifi = ITERATE_KIT_WIFI_JOINED, .connected = true, .woken = true);
   assert(iterate_kit_announcer_take(&a) == ITERATE_KIT_ANNOUNCEMENT_HELLO);
-  STEP(&a, .now_ms = 90000, .wifi = ITERATE_KIT_WIFI_JOINED, .connected = true, .pressed = true);
-  assert(iterate_kit_announcer_take(&a) == ITERATE_KIT_ANNOUNCEMENT_NONE);
+  assert(!iterate_kit_announcer_answers(false, true, true));
+  assert(iterate_kit_announcer_answers(false, false, true));
+  /* A busy speaker cannot answer at once, so the chime does. */
+  assert(!iterate_kit_announcer_answers(true, true, false));
 }
 
 static void every_phrase_can_be_said_and_sung(void) {
@@ -139,12 +168,14 @@ static void every_phrase_can_be_said_and_sung(void) {
 int main(void) {
   a_plugged_in_board_narrates_its_way_to_ready();
   a_state_that_went_stale_while_the_speaker_was_busy_is_never_said();
+  an_answer_waiting_for_the_speaker_says_the_state_it_finds();
+  narration_waits_while_the_microphone_is_open();
   a_wrong_password_is_said_once_however_often_the_board_retries();
   wifi_that_never_reaches_iterate_says_so_after_twenty_seconds();
   a_refused_key_outranks_everything_else();
   narration_gives_up_after_three_minutes();
   a_boot_nobody_caused_is_silent_until_someone_asks();
-  a_connected_board_says_hello_to_the_wake_word_and_nothing_to_a_press();
+  a_connected_board_says_hello_to_the_wake_word_and_leaves_a_press_to_the_chime();
   every_phrase_can_be_said_and_sung();
   return 0;
 }

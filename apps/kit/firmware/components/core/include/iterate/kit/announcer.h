@@ -25,10 +25,13 @@ extern "C" {
  *   is not: no singing at 3 am.
  * - Once connected, drops are silent.
  * - A wake word gets "Hello!" when connected, and the reason it cannot talk
- *   when not. So does a button press while not connected.
- * - One phrase at a time, latest wins: the loop takes the next phrase only when
- *   its speaker is free, so a phrase never cuts off another and a state that
- *   went stale while waiting is never said.
+ *   when not. So does a button press while not connected. Only while the
+ *   speaker is free, so the answer starts at once; otherwise the board chimes.
+ * - Narration waits while a session is open or opening: the microphone is live.
+ * - One phrase at a time: the loop takes the next phrase only when its speaker
+ *   is free, so a phrase never cuts off another. A phrase waiting for the
+ *   speaker is about the state it was queued for: narration of a state that
+ *   has passed is dropped, and an answer follows the state.
  */
 
 enum iterate_kit_announcement {
@@ -53,7 +56,7 @@ enum {
   ITERATE_KIT_ANNOUNCER_NARRATION_MS = 180000,
 };
 
-/** One step's facts. The two presses are edges: true on the step they happen. */
+/** One step's facts. `woken` and `pressed` are edges: true on the step they happen. */
 struct iterate_kit_announcer_input {
   uint64_t now_ms;
   enum iterate_kit_wifi_status wifi;
@@ -61,9 +64,11 @@ struct iterate_kit_announcer_input {
   bool key_refused;
   /** The project is mounted: the board can take a call. */
   bool connected;
-  /** The wake word started a session. */
+  /** A session is open or opening, so the microphone is live: narration waits. */
+  bool in_session;
+  /** The wake word started a session that `iterate_kit_announcer_answers` promised to answer. */
   bool woken;
-  /** A button press started a session. */
+  /** A button press did, likewise. */
   bool pressed;
 };
 
@@ -77,6 +82,8 @@ struct iterate_kit_announcer {
   bool wifi_was_joined;
   uint64_t wifi_joined_at_ms;
   enum iterate_kit_announcement pending;
+  /** `pending` answers a press or the wake word, rather than narrating. */
+  bool pending_answers;
 };
 
 /** `narrate`: a person probably caused this boot (iterate/kit/platforms/reset_reason.h). */
@@ -88,7 +95,18 @@ void iterate_kit_announcer_step(
     const struct iterate_kit_announcer_input *input);
 
 /**
- * The phrase to say now, or NONE; taking it clears it. Call only when the
+ * Whether a session start of this kind gets an answer out loud now, in place
+ * of the board's chime: the wake word always, a press while not connected, and
+ * either only while the speaker is free, so the answer can start at once. The
+ * loop publishes this to the board before the start happens, and passes a
+ * start to the announcer only when it was promised, so a start always gets
+ * exactly one of the two.
+ */
+bool iterate_kit_announcer_answers(bool wake_word, bool connected, bool speaker_free);
+
+/**
+ * The phrase to say now, or NONE. Taking it clears it and counts it as said
+ * (a caller dropping it during a call means the same). Call only when the
  * speaker is free to start one.
  */
 enum iterate_kit_announcement iterate_kit_announcer_take(
