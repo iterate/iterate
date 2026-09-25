@@ -5,7 +5,7 @@
 // that ends this app's session and returns to the very same login URL. The page's "signed in as /
 // reaches" read of the platform is best effort: here `resource` is an offline loopback, so those two
 // lines are absent and the network-free permissions line (from the held scopes) is what we assert.
-import { expect, test } from "vitest";
+import { expect, test, vi } from "vitest";
 import { appAuth } from "./app-server.ts";
 import type { BrowserSession } from "./app-session.ts";
 
@@ -125,6 +125,36 @@ test("a sign-out from a connected issuer bound for an ordinary page carries no s
   expect((await response)?.headers.get("location")).toBe(
     `/.auth/connect?${new URLSearchParams({ issuer: CONNECTED, next: "/projects/acme", scope: "" })}`,
   );
+});
+
+test("viewing as someone after a sign-out from a connected issuer: the connect page's Continue asks that issuer for it and lands where the login was headed, not on the login again", async () => {
+  // the discovery check the POST runs against the issuer it names
+  vi.stubGlobal("fetch", async () => Response.json({ issuer: CONNECTED }));
+  const begun: string[] = [];
+  const sessions = {
+    getByName: () => ({
+      begin: async (host: { issuer: string }, next: string) => {
+        begun.push(next);
+        return `${host.issuer}/oauth2/auth?state=x`;
+      },
+    }),
+  } as unknown as DurableObjectNamespace<BrowserSession>;
+  const login = "/.auth/login?act_as=bob%40example.com&next=%2Fprojects%2Facme&scope=iterate";
+  // signed out (the logout cleared the cookie): no session held
+  const answer = await appAuth(
+    new Request("https://notes.example/.auth/connect", {
+      method: "POST",
+      headers: { origin: "https://notes.example" },
+      body: new URLSearchParams({ issuer: CONNECTED, next: login, scope: "iterate" }),
+    }),
+    { sessions, issuer: ISSUER, resource: `${ISSUER}/api`, api: () => new Response("") },
+  );
+  vi.unstubAllGlobals();
+  expect(answer?.status).toBe(302);
+  expect(new URL(answer!.headers.get("location")!).searchParams.get("act_as")).toBe(
+    "bob@example.com",
+  );
+  expect(begun).toEqual(["/projects/acme"]);
 });
 
 test("client metadata publishes app branding relative to its own origin, independently of the issuer", async () => {

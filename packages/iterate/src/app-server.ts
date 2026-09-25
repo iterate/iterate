@@ -423,6 +423,12 @@ export async function appAuth(request: Request, config: AppAuth): Promise<Respon
         await session!.discard();
       }
     }
+    // A sign-out from a connected issuer on the way to viewing this app as someone else (the
+    // `act_as` page's Continue, through `/.auth/logout`) returns here with that login as `next`:
+    // the authorization asks the issuer for it, and lands where that login was headed — not on the
+    // login again, which would ask once more.
+    const onward = new URL(next, url.origin);
+    const actAs = onward.pathname === "/.auth/login" ? onward.searchParams.get("act_as") : null;
     const { location, setCookie } = await startAppSession(
       sessions,
       {
@@ -432,12 +438,14 @@ export async function appAuth(request: Request, config: AppAuth): Promise<Respon
         resource: `${named.origin}/api`,
         scopes: parsed.data,
       },
-      next,
+      actAs ? nextPathOf(onward.searchParams.get("next"), url.origin) : next,
     );
+    const authorize = new URL(location);
+    if (actAs) authorize.searchParams.set("act_as", actAs);
     return new Response(null, {
       status: 302,
       headers: {
-        Location: location,
+        Location: authorize.href,
         "Set-Cookie": setCookie,
         "Cache-Control": "no-store",
         "Referrer-Policy": "no-referrer",
