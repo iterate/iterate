@@ -198,6 +198,20 @@ export function publicSession(token: string) {
   return transport.authenticate({ type: "from-server-cookie" });
 }
 
+/** A browser's session: its issuer cookie (a sign-in's `__Host-itx-session`) on the upgrade, from
+ *  the platform's own origin, as the Dash's page opens `/api`. */
+export function cookieSession(cookie: string) {
+  const url = new URL(workerUrl("/api"));
+  const origin = url.origin;
+  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+  const ws = new UndiciWebSocket(url, { headers: { Cookie: cookie, Origin: origin } });
+  const transport = newWebSocketRpcSession<IterateRpcTarget>(ws as unknown as WebSocket);
+  const open = openTransports();
+  open.sessions.push(transport);
+  open.sockets.push(ws as unknown as WebSocket);
+  return transport.authenticate({ type: "from-server-cookie" });
+}
+
 /** A capnweb session whose underlying WebSocket WE hold — so a test can sever the transport
  *  (network death, no capnweb goodbye) or instrument its frames: `prepare(ws)` runs BEFORE capnweb
  *  attaches, so a wrapped `send` / an early "message" listener sees every frame in wire order. */

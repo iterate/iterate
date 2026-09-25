@@ -16,6 +16,7 @@ import { RepoContract } from "../repo/contract.ts";
 import { WorkspaceContract } from "../workspace/contract.ts";
 import { SecretCatalog, SecretContract } from "../secret/contract.ts";
 import { CoreEventCatalog } from "../stream/core-events.ts";
+import { IntegrationConnectionRow, IntegrationEventCatalog } from "../integrations/contract.ts";
 
 /** Where a custom hostname stands at Cloudflare (custom-hostnames.ts reads it off the API). */
 export const CustomHostnameObservation = z.object({
@@ -32,9 +33,9 @@ export const ProjectContract = defineProcessorContract({
   slug: "project",
   // A checkpoint reduced under an older version is reused as-is by the engine, so bumping the version
   // is what re-reduces every existing root log.
-  version: "12",
+  version: "13",
   description:
-    "The project: where its own creation and deletion stand, its custom hostnames, every context under it (from the announcements each lands on /), and the catalog of every repo, workspace and secret born under it (from the certificates cross-posted to /).",
+    "The project: where its own creation and deletion stand, its custom hostnames, its integration connections, every context under it (from the announcements each lands on /), and the catalog of every repo, workspace and secret born under it (from the certificates cross-posted to /).",
   /** THE REDUCED STATE — what the reduce keeps between events: where the project's OWN creation
    *  stands, as the OFFSET of the event that says so (the request, the certificate, or the failure —
    *  read that event for the error), and the CATALOG of what exists under it — read by each
@@ -87,6 +88,9 @@ export const ProjectContract = defineProcessorContract({
         }),
       )
       .default({}),
+    /** THE INTEGRATION CONNECTIONS, by the connection's log path: the platform's `<provider>/connected`
+     *  facts, a `disconnected` dropping its row. */
+    integrations: z.record(z.string(), IntegrationConnectionRow).default({}),
     /** THE PRIMARY HOSTNAME: one of `hostnames`, live (Cloudflare's hostname and certificate both
      *  `active`), that `itx.url` composes the project's URLs on and the edge redirects a navigation
      *  on the ingress base to (worker.ts). Null when none; cleared when the hostname's removal is
@@ -166,9 +170,16 @@ export const ProjectContract = defineProcessorContract({
       payloadSchema: z.object({ hostname: z.string().min(1).nullable() }),
     },
   },
-  // THE RELATIONSHIP: the project consumes the entities' certificates without owning them, and the
+  // THE RELATIONSHIP: the project consumes the entities' certificates without owning them, its
+  // connections' facts (src/integrations/contract.ts, shared with the account), and the
   // core's apex target (`itx/ingress-configured`), which it both appends and reduces.
-  processorDeps: [RepoContract, WorkspaceContract, SecretContract, CoreEventCatalog],
+  processorDeps: [
+    RepoContract,
+    WorkspaceContract,
+    SecretContract,
+    CoreEventCatalog,
+    IntegrationEventCatalog,
+  ],
   consumes: [
     "events.iterate.com/project/create-requested",
     "events.iterate.com/project/created",
@@ -186,9 +197,22 @@ export const ProjectContract = defineProcessorContract({
     "events.iterate.com/workspace/deleted",
     "events.iterate.com/secret/set",
     "events.iterate.com/secret/deleted",
+    "events.iterate.com/secret/lent",
+    "events.iterate.com/secret/borrowed",
+    "events.iterate.com/secret/lend-revoked",
     "events.iterate.com/repo/commit-completed",
     "events.iterate.com/itx/ingress-configured",
     "events.iterate.com/itx/child-created",
+    "events.iterate.com/slack/connected",
+    "events.iterate.com/slack/disconnected",
+    "events.iterate.com/google/connected",
+    "events.iterate.com/google/disconnected",
+    "events.iterate.com/cloudflare/connected",
+    "events.iterate.com/cloudflare/disconnected",
+    "events.iterate.com/github/connected",
+    "events.iterate.com/github/disconnected",
+    "events.iterate.com/waitrose/connected",
+    "events.iterate.com/waitrose/disconnected",
   ],
   emits: [
     "events.iterate.com/project/created",

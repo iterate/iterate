@@ -30,12 +30,13 @@ const empty: ProjectState = {
   configRepoTip: null,
   publishedCommitOid: null,
   hostnames: {},
+  integrations: {},
   primaryHostname: null,
 };
 
 const reduceRows: {
   name: string;
-  events: { type: string; payload?: unknown }[];
+  events: { type: string; payload?: unknown; source?: { platform: true } }[];
   state: ProjectState;
 }[] = [
   { name: "the empty state", events: [], state: empty },
@@ -92,6 +93,7 @@ const reduceRows: {
       configRepoTip: null,
       publishedCommitOid: null,
       hostnames: {},
+      integrations: {},
       primaryHostname: null,
     },
   },
@@ -208,6 +210,47 @@ const reduceRows: {
       ...empty,
       hostnames: {
         "www.acme.test": { requested: { verb: "add", offset: 4 }, cloudflare: null, error: null },
+      },
+    },
+  },
+  {
+    name: "integrations: a platform `<provider>/connected` is the connection's row, by its log path; `disconnected` drops it; a member's append of either changes nothing",
+    events: [
+      integrationFact("slack", "connected", "acme"),
+      integrationFact("github", "connected", "acme"),
+      integrationFact("slack", "connected", "beta"),
+      integrationFact("slack", "disconnected", "beta"),
+      { ...integrationFact("slack", "disconnected", "acme"), source: undefined },
+      { ...integrationFact("google", "connected", "evil"), source: undefined },
+    ],
+    state: {
+      ...empty,
+      integrations: {
+        "/integrations/slack/acme": integrationRow("slack", "acme"),
+        "/integrations/github/acme": integrationRow("github", "acme"),
+      },
+    },
+  },
+  {
+    name: "a lend arriving is a borrowed catalog row, with no material of its own; its revocation drops it, another lend's does not",
+    events: [
+      borrowed("/secrets/google-ada", "lend_a"),
+      borrowed("/secrets/cf", "lend_b"),
+      lendRevoked("/secrets/cf", "lend_x"),
+      lendRevoked("/secrets/cf", "lend_b"),
+    ],
+    state: {
+      ...empty,
+      secrets: {
+        "/secrets/google-ada": {
+          urls: ["https://google.test"],
+          createdAt: expect.any(String),
+          borrowed: {
+            lendId: "lend_a",
+            lender: { userId: "user_ada", email: "ada@example.com" },
+            integration: { provider: "google", account: "ada@example.com", externalId: "42" },
+          },
+        },
       },
     },
   },
@@ -854,6 +897,30 @@ function removed(requestOffset: number) {
   };
 }
 
+function integrationRow(provider: "slack" | "google" | "github", connection: string) {
+  return {
+    provider,
+    connection,
+    client: "iterate" as const,
+    account: `Acme ${provider}`,
+    externalId: "X1",
+  };
+}
+
+/** A connection's fact on `/`, stamped `source.platform` as src/integrations/ stamps it. */
+function integrationFact(
+  provider: "slack" | "google" | "github",
+  fact: "connected" | "disconnected",
+  connection: string,
+) {
+  const { provider: _provider, ...connected } = integrationRow(provider, connection);
+  return {
+    type: `events.iterate.com/${provider}/${fact}`,
+    payload: fact === "connected" ? connected : { connection },
+    source: { platform: true as const },
+  };
+}
+
 function observation(status: string) {
   return {
     status,
@@ -891,3 +958,23 @@ const deliver = (
     blockProcessorWhile: () => {},
     runInBackground,
   });
+
+function borrowed(path: string, lendId: string) {
+  return {
+    type: "events.iterate.com/secret/borrowed",
+    payload: {
+      path,
+      lendId,
+      lender: { userId: "user_ada", email: "ada@example.com" },
+      urls: ["https://google.test"],
+      integration: { provider: "google", account: "ada@example.com", externalId: "42" },
+    },
+  };
+}
+
+function lendRevoked(path: string, lendId: string) {
+  return {
+    type: "events.iterate.com/secret/lend-revoked",
+    payload: { path, lendId, reason: "lender" },
+  };
+}

@@ -58,7 +58,7 @@ function LoginPage() {
  *  the OAuth providers. */
 function SignInOptions({ state }: { state: Awaited<ReturnType<typeof getLoginState>> }) {
   const formEnabled = state.password || state.emailSignIn;
-  const providersEnabled = Boolean(state.google || state.cloudflare);
+  const providersEnabled = Boolean(state.google || state.cloudflare || state.github);
   if (!formEnabled && !providersEnabled)
     return <p className="text-sm">Sign-in is not configured for this deployment.</p>;
   return (
@@ -81,7 +81,11 @@ function SignInOptions({ state }: { state: Awaited<ReturnType<typeof getLoginSta
         </FieldSeparator>
       ) : null}
       {providersEnabled ? (
-        <SignInProviders google={state.google} cloudflare={state.cloudflare} />
+        <SignInProviders
+          google={state.google}
+          cloudflare={state.cloudflare}
+          github={state.github}
+        />
       ) : null}
     </>
   );

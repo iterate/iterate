@@ -44,6 +44,8 @@ export const Route = createFileRoute("/_auth/projects/$slug")({
     ]);
     const voice = {
       installed: Boolean(rule),
+      // the project's own key, or one lent to it (the catalog lists a borrowed path too): a key
+      // the deployment lends every project counts, and the form never asks for one
       hasOpenaiKey: secrets.some((secret) => secret.path === "/secrets/openai"),
     };
     return { projects, project, voice };

@@ -19,6 +19,7 @@ import type { OrganizationRole } from "../organization/contract.ts";
 import {
   type AccessibleRecord,
   ControlPlaneDatabase,
+  type IntegrationRouteRecord,
   type OrganizationRecord,
   type ProjectRecord,
   type UserRecord,
@@ -285,6 +286,12 @@ export class ControlPlane {
     return custom;
   }
 
+  /** The connection a provider account's webhooks go to (catalog.ts `routeIntegration`). Never
+   *  memoized: a route released and taken by another project routes there on the next delivery. */
+  integrationRouteOf(provider: string, externalId: string): Promise<IntegrationRouteRecord | null> {
+    return this.#read("integrationRoute", () => this.#db.integrationRoute(provider, externalId));
+  }
+
   /** A project's primary hostname (project/contract.ts `primaryHostname`), or null — memoized
    *  thirty seconds per isolate, hit or miss, so a change reaches the edge's redirect and
    *  `itx.url` within that. */
@@ -548,6 +555,24 @@ export class ControlPlane {
   /** Another project's claim, or none, is left alone. */
   releaseHostname(projectId: string, hostname: string): Promise<void> {
     return this.#call("releaseHostname", () => this.#db.releaseHostname(projectId, hostname));
+  }
+  /** Route a provider account's webhooks to one connection (catalog.ts `routeIntegration`): first
+   *  owner wins, a connection holds one account. */
+  routeIntegration(
+    provider: string,
+    externalId: string,
+    projectId: string,
+    path: string,
+  ): Promise<void> {
+    return this.#call("routeIntegration", () =>
+      this.#db.routeIntegration(provider, externalId, projectId, path),
+    );
+  }
+  /** Release every route of the connection at `path`; another connection's are left alone. */
+  releaseIntegrationRoutes(projectId: string, path: string): Promise<void> {
+    return this.#call("releaseIntegrationRoutes", () =>
+      this.#db.releaseIntegrationRoutes(projectId, path),
+    );
   }
   /** Set a project's primary hostname (project/processor.ts publishes it), or clear it with null:
    *  the edge's redirect and `itx.url` read it within `primaryHostnameOf`'s thirty seconds. */

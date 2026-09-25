@@ -108,15 +108,40 @@ export type ClientAuth = "client_secret_basic" | "client_secret_post" | "none";
 export type SecretRefresh =
   /** RFC 6749 §6, the refresh_token grant: `refreshToken` + `clientId` (+ `clientSecret` for a
    *  confidential client) from the material → `accessToken` (+ the newest `refreshToken`). Google,
-   *  GitHub, an MCP server's authorization server, the petshop fixture. */
-  | { kind: "oauth-refresh-token"; tokenEndpoint: string; clientAuth?: ClientAuth }
-  /** The username/password → session-token archetype's one instance so far, Waitrose's login: POST
-   *  the Android app's `NewSession` GraphQL mutation with `username`/`password` from the material →
-   *  `accessToken`. Waitrose has no refresh grant — re-login IS the refresh — so one strategy covers
-   *  the first-use mint and the 401 re-mint. Vendor-specific on purpose: a caller-supplied login
-   *  template would put an arbitrary request body in trusted code; a second vendor of this shape
-   *  earns the generalization, not before. */
-  | { kind: "waitrose-session"; graphqlUrl: string };
+   *  GitHub, an MCP server's authorization server, the petshop fixture. With `client`, the client is
+   *  the deployment's own app at the provider (an integration connected through it): the material
+   *  holds the tokens alone, and the refresh attaches the client's credentials inside the facet. */
+  | {
+      kind: "oauth-refresh-token";
+      tokenEndpoint: string;
+      clientAuth?: ClientAuth;
+      client?: { platform: "slack" | "google" | "cloudflare" | "github" };
+    }
+  /** A GitHub App installation's token (`POST <apiOrigin>/app/installations/<id>/access_tokens`
+   *  with an App JWT) → `accessToken`, minted on first use and on a 401. The App is the deployment's
+   *  (`{ platform: "github" }`, minted only for an installation the control plane routes to this
+   *  project) or the project's own, whose `appId` and `privateKey` the material holds
+   *  (`{ project: "github" }`). */
+  | {
+      kind: "github-app-installation";
+      apiOrigin: string;
+      installationId: string;
+      client: { platform: "github" } | { project: "github" };
+    }
+  /** Waitrose's login, the username/password → session-token archetype bundled with the platform
+   *  (apps/os/src/integrations/waitrose.ts `exchange`): POST the Android app's `NewSession` GraphQL
+   *  mutation with `username`/`password` from the material → `accessToken`. Waitrose has no refresh
+   *  grant — re-login IS the refresh — so one strategy covers the first-use mint and the 401
+   *  re-mint. */
+  | { kind: "waitrose-session"; graphqlUrl: string }
+  /** EXCHANGE CODE: `source` is one ES module exporting `async function exchange(material, fetch)`,
+   *  which logs in (any vendor's shape: a CSRF form and its cookie, a GraphQL mutation) and returns
+   *  the NEXT material — keep what the next login needs (`{ ...material, accessToken }`). It runs
+   *  only on first use and on a 401, in a jail the secret's facet loads: no bindings, `fetch` (the
+   *  argument and the global alike) reaches the secret's pinned origins and nothing else — a
+   *  request anywhere else fails the refresh — and `console` is silenced. Only the returned object
+   *  is kept. The source is part of the record, so changing it is a `set` like the material's. */
+  | { kind: "worker"; source: string };
 
 /** A secret's catalog entry — `secrets.list()` — its path, the pin, the strategy's KIND and when
  *  it was first set; never a value (the owner root's fold of the `secret/set` certificates). */
@@ -124,7 +149,19 @@ export type SecretCatalogEntry = {
   path: string;
   urls: string[];
   refresh?: SecretRefresh["kind"];
+  /** For exchange code (`refresh.kind` "worker"): the SHA-256 of its source, hex — which code it is. */
+  refreshSourceSha256?: string;
   createdAt: string;
+  /** A borrowed secret (`itx.secrets.lend`): whose — a person's, or the deployment's own (lent by
+   *  its operator) — under which lend, and the connection it is. */
+  borrowed?: {
+    lendId: string;
+    lender: { userId: string; email?: string } | { instance: true };
+    integration?: { provider: string; account: string; externalId: string };
+  };
+  /** A lender's secret's live lends, by lend id: the project (or `every-project`) and the path it
+   *  is lent as. */
+  lends?: Record<string, { to: string; as: string; since: string }>;
 };
 
 /** The input an agent gives `itx.secrets.collectFromUser`: the write-only secret path, the
@@ -287,6 +324,39 @@ export interface IterateContextApi {
      * chat. The link fixes the project, platform instance, secret path and egress pin. If called
      * from an agent context, a successful submission messages that same agent with the path only. */
     collectFromUser(input: CollectSecretInput): Promise<CollectSecretLink>;
+    /** On a person's own context (`session.user`): lend one of their secrets to a project they are a
+     *  member of, as the project's path `as`; the project's uses are forwarded to this secret, and
+     *  the material never leaves it. `revokeLend` ends it; so does the project deleting its path,
+     *  or the person leaving the project. On the global root (`session.global`), the operator
+     *  lends the deployment's own secret to a project, or `to: "every-project"`: every project,
+     *  one created later included, borrows it unless its path holds a secret of its own. */
+    lend(
+      path: string,
+      input: { to: string; as: string },
+    ): Promise<{
+      lendId: string;
+      everyProject?: {
+        borrowed: number;
+        kept: string[];
+        failed: { projectId: string; error: string }[];
+      };
+    }>;
+    revokeLend(path: string, lendId: string): Promise<{ lendId: string }>;
+  };
+  /** Connect this context's owner — a project (its root), or a person (`session.user`) — to a
+   *  provider through the deployment's app: `connect` answers where to send the human (and the
+   *  connection's name; again for one that exists asks for more `scopes` on the same account);
+   *  `requestFromUser` answers a Dash link asking the signed-in person to connect it, and with
+   *  lend it to this project, as the path `lendTo` (`/secrets/<name>`) when given. */
+  integrations: {
+    connect(
+      provider: "slack" | "google" | "cloudflare" | "github",
+      options?: { scopes?: string[]; connection?: string; next?: string },
+    ): Promise<{ authorizationUrl: string; connection: string }>;
+    requestFromUser(
+      provider: "google" | "cloudflare",
+      options?: { scopes?: string[]; lendTo?: string },
+    ): Promise<{ url: string }>;
   };
   /** The project's fetch routes, on its root `/`: which itx expression, the route's `target`, a
    *  request on its hosts goes to. `set` appends one `itx/fetch-route-configured` fact (`null`
@@ -519,6 +589,9 @@ export interface IterateSessionApi {
     ingressRouting: IngressRouting;
     /** the MCP server's origin (the dash's connect page) — "" when this deployment serves none */
     mcpOrigin: string;
+    /** the providers whose iterate app this deployment holds (APP_CONFIG `integrations`): a
+     *  project connects through iterate's app only there, and brings its own app anywhere */
+    iterateAppProviders: ("slack" | "google" | "cloudflare" | "github")[];
   };
   /** The grants this session may manage (a signed-in person's with the `account` scope): list and
    *  end its sessions and personal access tokens, and mint a personal access token — its bearer
@@ -611,9 +684,10 @@ export interface IterateSessionApi {
     acceptInvitation(token: string): Promise<OrgRecord>;
   };
   user: IterateContextApi;
-  /** The global namespace's root `/` — a platform admin's session (the `admin` scope) alone. Its
-   *  `cd` reaches `/users/<id>…` and `/organizations/<id>…`, as a project root's reaches the
-   *  project. */
+  /** The global namespace's root `/` — a platform admin's session (the `admin` scope) or the
+   *  operator bearer's alone. Its `cd` reaches `/users/<id>…`, `/organizations/<id>…` and
+   *  `/secrets/<name>…`, as a project root's reaches the project; its `secrets` are the deployment's
+   *  own, which the operator lends to projects. */
   global: IterateContextApi;
   /** Every person on the platform — a platform admin's session (the `admin` scope) or the
    *  operator's alone. */

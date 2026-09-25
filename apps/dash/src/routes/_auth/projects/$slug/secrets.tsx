@@ -195,7 +195,11 @@ function ProjectSecrets() {
                       ))}
                     </ul>
                   </TableCell>
-                  <TableCell className="text-muted-foreground">{secret.refresh || "—"}</TableCell>
+                  <TableCell className="text-muted-foreground">
+                    {secret.refresh === "worker" && secret.refreshSourceSha256
+                      ? `refreshed by code (${secret.refreshSourceSha256.slice(0, 12)})`
+                      : secret.refresh || "—"}
+                  </TableCell>
                   <TableCell className="text-muted-foreground">
                     {new Date(secret.createdAt).toISOString()}
                   </TableCell>

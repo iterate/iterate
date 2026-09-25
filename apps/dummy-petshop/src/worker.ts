@@ -9,7 +9,7 @@
  * webhooks and a test backdoor. GET / documents the whole surface.
  *
  * The worker is stateless: durable state is one JSON blob in the
- * PetshopStateDurableObject (state.ts) and every code/token is a sealed
+ * PetshopStateDurableObject (durable-object.ts) and every code/token is a sealed
  * AES-GCM blob (seal.ts). handlePetshopRequest is a plain function of
  * (request, deps), so unit tests drive the full HTTP surface in Node against
  * the real state class over an in-memory storage fake.
@@ -25,9 +25,17 @@ import {
   newGatewayConnection,
   subprotocolAuth,
 } from "./gateway.ts";
-import { verifyAppJwt } from "./github-app.ts";
 import { handleCapnwebRequest } from "./capnweb.ts";
 import { handleMcpRequest } from "./mcp.ts";
+import { handleSlackTestControls, handleSlackRequest } from "./slack.ts";
+import { handleGoogleRequest } from "./google.ts";
+import { handleCloudflareRequest } from "./cloudflare.ts";
+import {
+  type GithubInstallationTokenPayload,
+  handleGithubRequest,
+  handleGithubTestControls,
+  INSTALLATION_TOKEN_TTL_SECONDS,
+} from "./github.ts";
 import { type Pet, seedPets } from "./pets.ts";
 import { handlePetsRpcRequest, petshopOpenApiDocument } from "./rpc.ts";
 import { hmacSha256Hex, nowSeconds, pkceS256, seal, unseal } from "./seal.ts";
@@ -40,6 +48,7 @@ import {
   graphqlSessionFromBearer,
   handleGraphqlLogin,
 } from "./graphql-login.ts";
+import { handleTescoLogin, TESCO_ACCESS_TTL_SECONDS, TESCO_LOGIN_PASSWORD } from "./tesco-login.ts";
 import {
   DEFAULT_ACCESS_TTL_SECONDS,
   DEFAULT_APP_ID,
@@ -49,17 +58,14 @@ import {
   accessTokenEpochFor,
   type OauthClient,
   type PetshopState,
-  PetshopStateDurableObject,
+  type PetshopStore,
 } from "./state.ts";
+import { PetshopStateDurableObject } from "./durable-object.ts";
 
 export { PetshopStateDurableObject };
 
 /** Authorization codes only need to survive the redirect back to the callback. */
 const CODE_TTL_SECONDS = 120;
-
-/** GitHub-App installation tokens are deliberately short (60s) so an
- * integration that caches one exercises real re-minting. */
-const INSTALLATION_TOKEN_TTL_SECONDS = 60;
 
 /** Bindings the worker runs with (vite.config.ts). */
 export interface Env {
@@ -72,22 +78,26 @@ export interface Env {
 
 /**
  * What route handlers need from the environment. `state` is the Durable
- * Object's RPC stub in production and a plain PetshopStateDurableObject over
- * an in-memory storage fake in unit tests — Pick<> keeps the two
- * structurally interchangeable.
+ * Object's RPC stub in production and a plain PetshopStore over an in-memory
+ * storage fake in unit tests — Pick<> keeps the two structurally
+ * interchangeable.
  */
 export interface PetshopDeps {
   state: Pick<
-    PetshopStateDurableObject,
+    PetshopStore,
     | "getState"
     | "createClient"
     | "expireAccessTokens"
-    | "revokeRefreshToken"
+    | "revokeToken"
     | "rotateSigningSecret"
     | "setTokenEndpointFailures"
     | "consumeTokenEndpointFailure"
     | "consumeAuthorizationCode"
     | "registerApp"
+    | "recordSlackMessage"
+    | "oidcSigningKey"
+    | "recordGithubPull"
+    | "recordGithubCheckRun"
   >;
   sealKey: string;
   backdoorSecret?: string;
@@ -133,29 +143,11 @@ interface RefreshPayload {
   jti: string;
 }
 
-/**
- * Sealed GitHub-App installation token: what petshop mints when a valid
- * App JWT is exchanged at `POST /app/installations/{id}/access_tokens`. It
- * carries `sub`/`clientId`/`epoch`/`exp` so it flows through the SAME bearer API
- * and revocation model as an OAuth access token (see {@link Grant}), plus the
- * `installationId`/`appId` it was minted for so `/api/me` can name which
- * installation the caller is acting as.
- */
-interface InstallationPayload {
-  t: "installation";
-  sub: string;
-  clientId: string;
-  installationId: string;
-  appId: string;
-  epoch: number;
-  exp: number;
-}
-
 /** A live bearer grant on the pet-shop API: an OAuth/legacy access token or a
  * GitHub-App installation token. Both are epoch-bound and expiring, so
  * {@link accessGrant} validates them identically; only `/api/me` distinguishes
  * them (an installation token names its installation). */
-type Grant = AccessPayload | InstallationPayload;
+type Grant = AccessPayload | GithubInstallationTokenPayload;
 
 function json(data: unknown, status = 200, headers: Record<string, string> = {}): Response {
   return new Response(JSON.stringify(data, null, 2), {
@@ -187,6 +179,9 @@ const INDEX = dedent`
   POST /graphql             GraphQL session-login endpoint: NewSession (any username, password "${GRAPHQL_LOGIN_PASSWORD}")
                             → sealed ${GRAPHQL_SESSION_TTL_SECONDS}s session token, valid as an ordinary bearer on /api/*
                             (one more way into the ONE pets API); expired/revoked → 401; no refresh grant — re-login is the refresh
+  GET  /api/tesco/login     the Tesco-shaped two-step login, step one → {csrf} + Set-Cookie tesco_login (binds the token)
+  POST /api/tesco/login     form email, password, _csrf with that cookie → {access_token, expires_in: ${TESCO_ACCESS_TTL_SECONDS}}; any email,
+                            password "${TESCO_LOGIN_PASSWORD}"; a bearer on /api/*; expire-tokens {clientId: "tesco-login:<email>"} revokes it
   GET  /api/me              bearer whoami: {sub, clientId, tokenExpiresInSeconds}; +{installationId, appId} for an installation token
   GET  /api/pets            the account's (entirely fictional) pets
 
@@ -203,6 +198,19 @@ const INDEX = dedent`
   GET  /gateway-header        (websocket) — token in the Authorization: Bearer UPGRADE header (OpenAI-Realtime shape)
   GET  /gateway-subprotocol   (websocket) — token in Sec-WebSocket-Protocol as "petshop.access-token.<token>" (browser-WS shape)
 
+  GET  /oauth/v2/authorize · POST /api/oauth.v2.access | auth.test | chat.postMessage | auth.revoke
+                            a Slack-shaped fake at Slack's own paths (slack.ts): consent at once, &team=<id> picks the workspace
+  GET  /.well-known/openid-configuration · /oauth2/v3/certs · /o/oauth2/v2/auth · POST /token | /revoke · GET /oauth2/v2/userinfo | /gmail/v1/users/me/profile
+                            a Google-shaped fake at Google's own paths (google.ts), an OpenID provider too: consent at once, &email=<e> (or login_hint) picks the account; a refresh token only for prompt=consent; access tokens honour expire-tokens
+  GET  /cloudflare/.well-known/openid-configuration · /cloudflare/oauth2/auth · POST /cloudflare/oauth2/token · GET /client/v4/user
+                            a Cloudflare-shaped fake (cloudflare.ts): its OpenID issuer under /cloudflare, &email=<e> picks the account; a refresh token only for offline_access
+  GET  /apps/<slug>/installations/new · /login/oauth/authorize · POST /login/oauth/access_token
+  GET  /user | /user/emails | /user/installations | /user/memberships/orgs/<org> | /installation/repositories
+  GET  /repos/<o>/<r>/pulls/<n>/files · POST /repos/<o>/<r>/check-runs · GET /repos/<o>/<r>/commits/<sha>/check-runs
+  POST /__backdoor/github/pulls · GET /__backdoor/github/check-runs?installation=   seed a pull request, read the check runs
+                            a GitHub-shaped fake at GitHub's own paths (github.ts): installing (&installation_id=<id>) redirects to the installation's callbackUrl
+                            with a user code (&login=<l>, default its first user), installation_id, setup_action=install and state; &request=1 → setup_action=request
+
   GET  /__backdoor/state                   the whole mutable state, for spec assertions
   POST /__backdoor/clients                 {accessTokenTtlSeconds?} → mint {clientId, clientSecret}
   POST /__backdoor/expire-tokens           {clientId} → invalidate that client's outstanding access tokens ("graphql-session-login:<username>": one account's GraphQL sessions)
@@ -210,8 +218,10 @@ const INDEX = dedent`
   POST /__backdoor/rotate-signing-secret   new webhook HMAC secret
   POST /__backdoor/fail-token-endpoint     {clientId,times} → that client's next N token calls return 500
   POST /__backdoor/webhooks/fire           {url, event?, badSignature?} → POST a signed webhook there now
-  POST /__backdoor/apps                    {publicKeyPem, appId?, installationId?, webhookSecret?} → register/replace a GitHub-App installation (public key only)
-  POST /__backdoor/apps/fire-webhook       {installationId?, url?, event?, badSignature?} → deliver (or, with no url, echo) a webhook signed x-hub-signature-256 with the app's webhookSecret
+  POST /__backdoor/apps                    {publicKeyPem, appId?, installationId?, webhookSecret?, appSlug?, callbackUrl?, account?: {login, id?, type?}, users?: [{login, role: admin|member}], oauthClientId?} → register/replace a GitHub-App installation (public key only)
+  GET  /__backdoor/slack/messages?team=<id>      what chat.postMessage recorded for that workspace
+  POST /__backdoor/slack/fire-webhook      {url, signingSecret, event, badSignature?} → POST it signed like Slack (x-slack-signature v0)
+  POST /__backdoor/apps/fire-webhook       {installationId?, url?, event?, badSignature?, deliveryId?, eventName?} → deliver (or, with no url, echo) a webhook signed x-hub-signature-256 with the app's webhookSecret, with x-github-delivery + x-github-event
 
   Seeded client: ${DEFAULT_CLIENT_ID} / ${DEFAULT_CLIENT_SECRET} · access tokens live ${DEFAULT_ACCESS_TTL_SECONDS}s ·
   webhooks are signed x-petshop-signature-256: sha256=<hex hmac of the raw body> · the backdoor is open
@@ -585,69 +595,6 @@ async function legacyLogin(request: Request, deps: PetshopDeps): Promise<Respons
   });
 }
 
-/**
- * The GitHub-App installation-token endpoint:
- * `POST /app/installations/{installationId}/access_tokens` with an App JWT in
- * `Authorization: Bearer`. petshop holds ONLY the app's PUBLIC key, so all it
- * can do is VERIFY: the JWT's RS256 signature (the OS side signed
- * `header.payload` with the App private key via the secrets `sign()` compute
- * method — the key never left its secret), `iss` = the app id, `exp` in the
- * future. On success it mints a short-TTL sealed installation token accepted by
- * the same bearer API as OAuth access tokens. Every failure — unknown/keyless
- * installation, missing/malformed/mis-signed/expired JWT, wrong issuer — is a
- * flat 401, mirroring GitHub.
- */
-async function appInstallationAccessToken(
-  installationId: string,
-  request: Request,
-  deps: PetshopDeps,
-): Promise<Response> {
-  const state = await deps.state.getState();
-  const app = state.apps[installationId];
-  if (!app || !app.publicKeyPem) {
-    return json(
-      {
-        error: "invalid_installation",
-        error_description: `unknown or keyless installation ${JSON.stringify(installationId)} — register its public key via POST /__backdoor/apps`,
-      },
-      401,
-    );
-  }
-  const header = request.headers.get("authorization") ?? "";
-  if (!/^bearer /i.test(header)) {
-    return json(
-      { error: "invalid_jwt", error_description: "Authorization: Bearer <App JWT> required" },
-      401,
-    );
-  }
-  const verification = await verifyAppJwt({
-    jwt: header.slice(7).trim(),
-    publicKeyPem: app.publicKeyPem,
-    expectedAppId: app.appId,
-    now: nowSeconds(),
-  });
-  if (!verification.ok) {
-    return json({ error: "invalid_jwt", error_description: verification.reason }, 401);
-  }
-  const exp = nowSeconds() + INSTALLATION_TOKEN_TTL_SECONDS;
-  const payload: InstallationPayload = {
-    t: "installation",
-    sub: `installation:${installationId}`,
-    clientId: app.appId,
-    installationId,
-    appId: app.appId,
-    // Re-read this App client's epoch at seal time (verifyAppJwt released the
-    // input gate), matching the OAuth token path's revocation freshness.
-    epoch: accessTokenEpochFor(await deps.state.getState(), app.appId),
-    exp,
-  };
-  // GitHub answers 201 Created with { token, expires_at } (ISO 8601 UTC).
-  return json(
-    { token: await seal(payload, deps.sealKey), expires_at: new Date(exp * 1000).toISOString() },
-    201,
-  );
-}
-
 /** The GraphQL login endpoint's view of the shop: the sealing key, and the two
  * revocation epochs a session of `username` is bound to — the endpoint's
  * (`graphql-session-login`) and the account's. */
@@ -698,14 +645,27 @@ async function deliverWebhook(input: {
   secret: string;
   payload: unknown;
   signatureHeader?: string;
-}): Promise<{ url: string; status: number; signature: string; payload: string; error?: string }> {
+  /** More headers to send (a GitHub delivery's `x-github-delivery`, `x-github-event`). */
+  headers?: Record<string, string>;
+}): Promise<{
+  url: string;
+  status: number;
+  signature: string;
+  payload: string;
+  body?: unknown;
+  error?: string;
+}> {
   const body = JSON.stringify(input.payload);
   const signature = `sha256=${await hmacSha256Hex(input.secret, body)}`;
   const signatureHeader = input.signatureHeader || "x-petshop-signature-256";
   let error: string | undefined;
   const response = await fetch(input.url, {
     method: "POST",
-    headers: { "content-type": "application/json", [signatureHeader]: signature },
+    headers: {
+      "content-type": "application/json",
+      [signatureHeader]: signature,
+      ...input.headers,
+    },
     body,
     signal: AbortSignal.timeout(10_000),
   }).catch((cause: unknown) => {
@@ -714,11 +674,18 @@ async function deliverWebhook(input: {
     error = cause instanceof Error ? (cause.cause ?? cause).toString() : String(cause);
     return null;
   });
+  // the receiver's answer: its JSON, or its text when it is not JSON
+  const text = response ? await response.text().catch(() => "") : "";
+  let answer: unknown = text;
+  try {
+    answer = JSON.parse(text);
+  } catch {}
   return {
     url: input.url,
     status: response?.status ?? 0,
     signature,
     payload: body,
+    ...(response && { body: answer }),
     error,
   };
 }
@@ -767,7 +734,7 @@ async function backdoor(key: string, request: Request, deps: PetshopDeps): Promi
         400,
       );
     }
-    await deps.state.revokeRefreshToken(refresh.jti);
+    await deps.state.revokeToken(refresh.jti);
     return json({ revokedRefreshTokenId: refresh.jti });
   }
   if (key === "POST /__backdoor/rotate-signing-secret") {
@@ -829,13 +796,9 @@ async function backdoor(key: string, request: Request, deps: PetshopDeps): Promi
         400,
       );
     }
+    // A test control whose only callers are our own tests: the body is registerApp's input as is.
     return json(
-      await deps.state.registerApp({
-        appId: typeof body.appId === "string" ? body.appId : undefined,
-        installationId: typeof body.installationId === "string" ? body.installationId : undefined,
-        publicKeyPem: body.publicKeyPem,
-        webhookSecret: typeof body.webhookSecret === "string" ? body.webhookSecret : undefined,
-      }),
+      await deps.state.registerApp(body as Parameters<PetshopStore["registerApp"]>[0]),
       201,
     );
   }
@@ -864,6 +827,7 @@ async function backdoor(key: string, request: Request, deps: PetshopDeps): Promi
       firedAt: new Date().toISOString(),
     };
     const url = typeof body.url === "string" ? body.url : "";
+    const deliveryId = typeof body.deliveryId === "string" ? body.deliveryId : crypto.randomUUID();
     if (!url) {
       const bodyText = JSON.stringify(payload);
       return json({
@@ -882,15 +846,24 @@ async function backdoor(key: string, request: Request, deps: PetshopDeps): Promi
     }
     return json({
       installationId,
+      deliveryId,
       ...(await deliverWebhook({
         url,
         secret,
         payload,
         signatureHeader: "x-hub-signature-256",
+        headers: {
+          "x-github-delivery": deliveryId,
+          "x-github-event": typeof body.eventName === "string" ? body.eventName : "ping",
+        },
       })),
     });
   }
-  return json({ error: "not_found" }, 404);
+  return (
+    (await handleSlackTestControls(request, deps)) ??
+    (await handleGithubTestControls(request, deps)) ??
+    json({ error: "not_found" }, 404)
+  );
 }
 
 /** The gateway's validation deps, projected from the request deps: the sealing
@@ -1069,15 +1042,21 @@ export async function handlePetshopRequest(request: Request, deps: PetshopDeps):
     return rejection || (await mintCodeRedirect(params, deps));
   }
   if (key === "POST /oauth/token") return tokenEndpoint(request, deps);
-  // GitHub-App installation-token minting: the installationId is a path segment,
-  // so this is matched by shape rather than the exact-key table.
-  if (request.method === "POST") {
-    const match = url.pathname.match(/^\/app\/installations\/([^/]+)\/access_tokens$/);
-    if (match) {
-      return appInstallationAccessToken(decodeURIComponent(match[1]), request, deps);
-    }
-  }
+  // The Slack, Google, Cloudflare and GitHub fakes: those services' own paths on this origin.
+  const integrationFake =
+    (await handleSlackRequest(request, deps)) ??
+    (await handleGoogleRequest(request, deps)) ??
+    (await handleCloudflareRequest(request, deps)) ??
+    (await handleGithubRequest(request, deps));
+  if (integrationFake) return integrationFake;
   if (key === "POST /api/legacy-login") return legacyLogin(request, deps);
+  // The Tesco-shaped two-step login (tesco-login.ts): its tokens are ordinary access tokens.
+  const tescoLogin = await handleTescoLogin(request, {
+    sealKey: deps.sealKey,
+    accessTokenEpoch: async (clientId) =>
+      accessTokenEpochFor(await deps.state.getState(), clientId),
+  });
+  if (tescoLogin) return tescoLogin;
   // The GraphQL session-login endpoint (graphql-login.ts): one more way to
   // authenticate against the same pets API.
   if (key === "POST /graphql") {

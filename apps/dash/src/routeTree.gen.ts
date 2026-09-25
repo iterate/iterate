@@ -22,6 +22,7 @@ import { Route as AuthProjectsSlugRouteRouteImport } from "./routes/_auth/projec
 import { Route as AuthOrganizationsOrgIdActivityRouteImport } from "./routes/_auth/organizations/$orgId_.activity.tsx";
 import { Route as AuthProjectsSlugIndexRouteImport } from "./routes/_auth/projects/$slug/index.tsx";
 import { Route as AuthProjectsSlugHostnamesRouteImport } from "./routes/_auth/projects/$slug/hostnames.tsx";
+import { Route as AuthProjectsSlugIntegrationsRouteImport } from "./routes/_auth/projects/$slug/integrations.tsx";
 import { Route as AuthProjectsSlugMcpRouteImport } from "./routes/_auth/projects/$slug/mcp.tsx";
 import { Route as AuthProjectsSlugSecretsRouteImport } from "./routes/_auth/projects/$slug/secrets.tsx";
 import { Route as AuthProjectsSlugContextsSplatRouteImport } from "./routes/_auth/projects/$slug/contexts.$.tsx";
@@ -92,6 +93,12 @@ const AuthProjectsSlugHostnamesRoute =
     path: "/hostnames",
     getParentRoute: () => AuthProjectsSlugRouteRoute,
   } as any);
+const AuthProjectsSlugIntegrationsRoute =
+  AuthProjectsSlugIntegrationsRouteImport.update({
+    id: "/integrations",
+    path: "/integrations",
+    getParentRoute: () => AuthProjectsSlugRouteRoute,
+  } as any);
 const AuthProjectsSlugMcpRoute = AuthProjectsSlugMcpRouteImport.update({
   id: "/mcp",
   path: "/mcp",
@@ -121,6 +128,7 @@ export interface FileRoutesByFullPath {
   "/projects/": typeof AuthProjectsIndexRoute;
   "/organizations/$orgId/activity": typeof AuthOrganizationsOrgIdActivityRoute;
   "/projects/$slug/hostnames": typeof AuthProjectsSlugHostnamesRoute;
+  "/projects/$slug/integrations": typeof AuthProjectsSlugIntegrationsRoute;
   "/projects/$slug/mcp": typeof AuthProjectsSlugMcpRoute;
   "/projects/$slug/secrets": typeof AuthProjectsSlugSecretsRoute;
   "/projects/$slug/": typeof AuthProjectsSlugIndexRoute;
@@ -137,6 +145,7 @@ export interface FileRoutesByTo {
   "/projects": typeof AuthProjectsIndexRoute;
   "/organizations/$orgId/activity": typeof AuthOrganizationsOrgIdActivityRoute;
   "/projects/$slug/hostnames": typeof AuthProjectsSlugHostnamesRoute;
+  "/projects/$slug/integrations": typeof AuthProjectsSlugIntegrationsRoute;
   "/projects/$slug/mcp": typeof AuthProjectsSlugMcpRoute;
   "/projects/$slug/secrets": typeof AuthProjectsSlugSecretsRoute;
   "/projects/$slug": typeof AuthProjectsSlugIndexRoute;
@@ -156,6 +165,7 @@ export interface FileRoutesById {
   "/_auth/projects/": typeof AuthProjectsIndexRoute;
   "/_auth/organizations/$orgId_/activity": typeof AuthOrganizationsOrgIdActivityRoute;
   "/_auth/projects/$slug/hostnames": typeof AuthProjectsSlugHostnamesRoute;
+  "/_auth/projects/$slug/integrations": typeof AuthProjectsSlugIntegrationsRoute;
   "/_auth/projects/$slug/mcp": typeof AuthProjectsSlugMcpRoute;
   "/_auth/projects/$slug/secrets": typeof AuthProjectsSlugSecretsRoute;
   "/_auth/projects/$slug/": typeof AuthProjectsSlugIndexRoute;
@@ -175,6 +185,7 @@ export interface FileRouteTypes {
     | "/projects/"
     | "/organizations/$orgId/activity"
     | "/projects/$slug/hostnames"
+    | "/projects/$slug/integrations"
     | "/projects/$slug/mcp"
     | "/projects/$slug/secrets"
     | "/projects/$slug/"
@@ -191,6 +202,7 @@ export interface FileRouteTypes {
     | "/projects"
     | "/organizations/$orgId/activity"
     | "/projects/$slug/hostnames"
+    | "/projects/$slug/integrations"
     | "/projects/$slug/mcp"
     | "/projects/$slug/secrets"
     | "/projects/$slug"
@@ -209,6 +221,7 @@ export interface FileRouteTypes {
     | "/_auth/projects/"
     | "/_auth/organizations/$orgId_/activity"
     | "/_auth/projects/$slug/hostnames"
+    | "/_auth/projects/$slug/integrations"
     | "/_auth/projects/$slug/mcp"
     | "/_auth/projects/$slug/secrets"
     | "/_auth/projects/$slug/"
@@ -313,6 +326,13 @@ declare module "@tanstack/react-router" {
       preLoaderRoute: typeof AuthProjectsSlugHostnamesRouteImport;
       parentRoute: typeof AuthProjectsSlugRouteRoute;
     };
+    "/_auth/projects/$slug/integrations": {
+      id: "/_auth/projects/$slug/integrations";
+      path: "/integrations";
+      fullPath: "/projects/$slug/integrations";
+      preLoaderRoute: typeof AuthProjectsSlugIntegrationsRouteImport;
+      parentRoute: typeof AuthProjectsSlugRouteRoute;
+    };
     "/_auth/projects/$slug/mcp": {
       id: "/_auth/projects/$slug/mcp";
       path: "/mcp";
@@ -339,6 +359,7 @@ declare module "@tanstack/react-router" {
 
 interface AuthProjectsSlugRouteRouteChildren {
   AuthProjectsSlugHostnamesRoute: typeof AuthProjectsSlugHostnamesRoute;
+  AuthProjectsSlugIntegrationsRoute: typeof AuthProjectsSlugIntegrationsRoute;
   AuthProjectsSlugMcpRoute: typeof AuthProjectsSlugMcpRoute;
   AuthProjectsSlugSecretsRoute: typeof AuthProjectsSlugSecretsRoute;
   AuthProjectsSlugIndexRoute: typeof AuthProjectsSlugIndexRoute;
@@ -347,6 +368,7 @@ interface AuthProjectsSlugRouteRouteChildren {
 
 const AuthProjectsSlugRouteRouteChildren: AuthProjectsSlugRouteRouteChildren = {
   AuthProjectsSlugHostnamesRoute: AuthProjectsSlugHostnamesRoute,
+  AuthProjectsSlugIntegrationsRoute: AuthProjectsSlugIntegrationsRoute,
   AuthProjectsSlugMcpRoute: AuthProjectsSlugMcpRoute,
   AuthProjectsSlugSecretsRoute: AuthProjectsSlugSecretsRoute,
   AuthProjectsSlugIndexRoute: AuthProjectsSlugIndexRoute,

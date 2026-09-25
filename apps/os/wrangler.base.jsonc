@@ -83,6 +83,7 @@
     // `ctx.exports` (iterate-context-durable-object.ts FIRST_PARTY_FACET_CLASSES) — declared like any
     // DO class (wrangler requires the storage line); their state lives in the facet's own SQLite.
     "AccountDurableObject": { "type": "durable-object", "storage": "sqlite" },
+    "InstanceDurableObject": { "type": "durable-object", "storage": "sqlite" },
     // The removed built-in was hosted as a facet of IterateContextDurableObject. Retire its
     // unused standalone namespace; agent streams and facet storage belong to the context.
     "AgentDurableObject": { "type": "durable-object", "state": "deleted" },

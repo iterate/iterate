@@ -20,6 +20,7 @@ import { z } from "zod";
 import { defineProcessorContract, type ProcessorState } from "iterate/stream/processor";
 import { OrganizationContract, OrganizationRole } from "../organization/contract.ts";
 import { SecretCatalog, SecretContract } from "../secret/contract.ts";
+import { IntegrationConnectionRow, IntegrationEventCatalog } from "../integrations/contract.ts";
 
 // Each fact's payload is spelled once and used twice — by its event and by the state that keeps it.
 
@@ -97,9 +98,9 @@ export const AccountContract = defineProcessorContract({
   slug: "account",
   // A checkpoint reduced under an older version is reused as-is by the engine, so bumping the version
   // is what re-reduces every existing root log.
-  version: "6",
+  version: "7",
   description:
-    "The user's account: authentications, personal access tokens, ended and used grants, consents, the organizations the person belongs to, and the catalog of the user's own secrets.",
+    "The user's account: authentications, personal access tokens, ended and used grants, consents, the organizations the person belongs to, the catalog of the user's own secrets and the lends of them, and the person's own connections.",
   /** THE REDUCED STATE — the record of the account, folded from the facts above: what a client
    *  reads through live state. The lists ARE the events they are folded from — no re-spelling. */
   stateSchema: z.object({
@@ -132,6 +133,9 @@ export const AccountContract = defineProcessorContract({
     endedMemberships: z.record(z.string(), z.object({ at: z.string() })).default({}),
     /** Every secret set under this owner (src/secret/contract.ts): what `itx.secrets.list()` reads here. */
     secrets: SecretCatalog.default({}),
+    /** The person's own connections (src/integrations/contract.ts), by log path: a sign-in that kept
+     *  its token, or a connect run on this context. The same row a project keeps. */
+    integrations: z.record(z.string(), IntegrationConnectionRow).default({}),
   }),
   events: {
     "events.iterate.com/account/authenticated": {
@@ -166,8 +170,9 @@ export const AccountContract = defineProcessorContract({
   // THE RELATIONSHIPS: the account consumes the user's own secrets' certificates without owning
   // them (src/secret/contract.ts: cross-posted from `/users/<id>/secrets/<name>`), and the
   // organization's membership facts (src/organization/contract.ts: landed here by the session
-  // beside the organization's own log, after the control-plane database writes the membership).
-  processorDeps: [SecretContract, OrganizationContract],
+  // beside the organization's own log, after the control-plane database writes the membership),
+  // and the person's own connections' facts (src/integrations/contract.ts, shared with projects).
+  processorDeps: [SecretContract, OrganizationContract, IntegrationEventCatalog],
   consumes: [
     "events.iterate.com/account/authenticated",
     "events.iterate.com/account/personal-access-token-minted",
@@ -178,6 +183,16 @@ export const AccountContract = defineProcessorContract({
     "events.iterate.com/organization/member-removed",
     "events.iterate.com/secret/set",
     "events.iterate.com/secret/deleted",
+    "events.iterate.com/secret/lent",
+    "events.iterate.com/secret/lend-revoked",
+    "events.iterate.com/google/connected",
+    "events.iterate.com/google/disconnected",
+    "events.iterate.com/cloudflare/connected",
+    "events.iterate.com/cloudflare/disconnected",
+    "events.iterate.com/github/connected",
+    "events.iterate.com/github/disconnected",
+    "events.iterate.com/waitrose/connected",
+    "events.iterate.com/waitrose/disconnected",
   ],
   emits: [],
 });

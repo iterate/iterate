@@ -1,8 +1,7 @@
 /**
  * Unit tests for the GraphQL session-login endpoint (graphql-login.ts), run in
  * plain Node through the whole HTTP surface like worker.test.ts: the real
- * route handler and the real PetshopStateDurableObject over an in-memory
- * storage fake.
+ * route handler and the real state store over in-memory storage.
  */
 import { expect, onTestFinished, test, vi } from "vitest";
 import {

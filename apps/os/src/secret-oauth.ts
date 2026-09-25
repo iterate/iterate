@@ -8,9 +8,20 @@
 // Two pure functions of (options, fetch): `beginSecretOAuth` builds the pending attempt and the
 // authorize URL; `completeSecretOAuth` turns the pending attempt and a code into a `SecretRecord`.
 // The host (secret/durable-object.ts) signs the `state`, keeps the pending attempt and runs these.
+//
+// AN INTEGRATION'S CONNECT (src/integrations/) names whose app instead of passing a client in the
+// clear: `client: { platform: "slack" }` is the deployment's own (APP_CONFIG `integrations.<provider>`,
+// read inside the secret's facet and never copied into the record — the record holds the tokens, and
+// a refresh names the same client), `client: { project: "slack" }` the project's own, whose
+// credentials this secret already holds (`clientId`, `clientSecret`, and whatever else the app needs,
+// such as Slack's `signingSecret`), kept beside the tokens. Either way the redirect URI is the
+// provider's `/api/integrations/<provider>/callback`, whose handler finishes the connection. `next`
+// is where the callback sends the human once the tokens are stored: the platform's origin or the
+// Dash's, nowhere else (`nextUrlOf`).
 
 import * as oauth from "oauth4webapi";
 import type { ClientAuth } from "iterate/api";
+import { consentAccountRefusal } from "./integrations/rules.ts";
 import {
   clientAuthOf,
   isRecord,
@@ -23,34 +34,56 @@ import {
 /** How long an OAuth attempt stays open: the signed `state`'s expiry and the pending attempt's. */
 export const SECRET_OAUTH_TTL_MS = 10 * 60_000;
 
-/** What `itx.secrets.beginOAuth(path, options)` takes: the provider's two endpoints, the project's
- *  own OAuth client (bring-your-own-app), the scope, the pin, and any extra authorize parameters the
- *  provider needs (Google: `access_type=offline`, `prompt=consent` for a refresh token). */
+/** The providers an integration connects through OAuth, whose callback is
+ *  `/api/integrations/<provider>/callback`. */
+export const OAUTH_INTEGRATION_PROVIDERS = ["slack", "google", "cloudflare"] as const;
+export type OAuthIntegrationProvider = (typeof OAUTH_INTEGRATION_PROVIDERS)[number];
+/** Whose app an integration's connect goes through (the header above). */
+export type SecretOAuthClient =
+  | { platform: OAuthIntegrationProvider }
+  | { project: OAuthIntegrationProvider };
+
+/** What `itx.secrets.beginOAuth(path, options)` takes: the provider's two endpoints, the OAuth client
+ *  (the project's own in the clear, or an integration's `client`), the scope, the pin, any extra
+ *  authorize parameters the provider needs (Google: `access_type=offline`, `prompt=consent` for a
+ *  refresh token), and where the human lands afterwards. */
 export type SecretOAuthOptions = {
   authorizationEndpoint: string;
   tokenEndpoint: string;
-  clientId: string;
-  /** Absent for a public client (PKCE alone). */
+  /** Exactly one of `clientId` and `client`. */
+  clientId?: string;
+  /** Absent for a public client (PKCE alone), and with `client`. */
   clientSecret?: string;
+  client?: SecretOAuthClient;
+  /** An absolute URL on the platform's origin or the Dash's. */
+  next?: string;
   /** How the token endpoint wants the client credential — `ClientAuth` (secrets.ts). */
   clientAuth?: ClientAuth;
   scope?: string;
   /** The origins the tokens may be sent to; defaults to the token endpoint's, which it must include. */
   urls?: string[];
   extra?: Record<string, string>;
+  /** The account the tokens must be for — an existing connection's, asked for more: the provider's
+   *  id for it (a Slack team, an OpenID `sub`), read off the token response. Another account's
+   *  tokens are refused before anything is stored (integrations/rules.ts `consentAccountRefusal`). */
+  expectAccount?: string;
 };
 
 /** The options validated and normalized — the shape the pending attempt and the exchange read. */
 export type NormalizedSecretOAuthOptions = {
   authorizationEndpoint: string;
   tokenEndpoint: string;
+  /** "" with `client`: the host resolves it. */
   clientId: string;
-  /** "" for a public client. */
+  /** "" for a public client, and with `client`. */
   clientSecret: string;
+  client: SecretOAuthClient | null;
   clientAuth: ClientAuth;
   scope?: string;
   urls: string[];
   extra: Record<string, string>;
+  next: string | null;
+  expectAccount: string | null;
 };
 
 /** The pending attempt, kept by the secret's facet between the redirect out and the code
@@ -76,14 +109,40 @@ export type SecretOAuthState = {
   context: string;
   nonce: string;
   exp: number;
+  /** Where the callback redirects once the tokens are stored. */
+  next?: string | null;
 };
 
 /** The platform's one redirect URI for every project secret's OAuth — registered once per provider. */
 export const SECRET_OAUTH_CALLBACK_PATH = "/.secrets/oauth/callback";
 
+/** The redirect URI path of an attempt: an integration's is its provider's callback — the legacy
+ *  platform's URL, which iterate's Slack app and Google client are registered with — and every other
+ *  attempt's `SECRET_OAUTH_CALLBACK_PATH`. worker.ts serves all of them with the same callback. */
+export function secretOAuthCallbackPathOf(client: SecretOAuthClient | null): string {
+  if (!client) return SECRET_OAUTH_CALLBACK_PATH;
+  return `/api/integrations/${"platform" in client ? client.platform : client.project}/callback`;
+}
+
+/** `next` checked: an absolute URL on one of `origins` (the platform's and the Dash's), never an
+ *  open redirect; null when absent. */
+export function nextUrlOf(next: unknown, origins: readonly string[]): string | null {
+  if (!next) return null;
+  const url = URL.canParse(String(next)) ? new URL(String(next)) : null;
+  if (!url || !origins.includes(url.origin))
+    throw new Error(
+      `next is an absolute URL on ${origins.join(" or ")}, got ${JSON.stringify(next)}`,
+    );
+  return url.href;
+}
+
 /** The options validated and normalized: http(s) endpoints, the pin as origins (defaulting to the
- *  token endpoint's origin, which it must contain), the client-auth method from the registry. */
-export function normalizeSecretOAuth(options: unknown): NormalizedSecretOAuthOptions {
+ *  token endpoint's origin, which it must contain), the client-auth method from the registry, one
+ *  client, and `next` on one of `nextOrigins`. */
+export function normalizeSecretOAuth(
+  options: unknown,
+  nextOrigins: readonly string[] = [],
+): NormalizedSecretOAuthOptions {
   if (!isRecord(options)) throw new Error("secrets.beginOAuth: options is an object");
   const endpoint = (key: "authorizationEndpoint" | "tokenEndpoint") => {
     const url = new URL(String(options[key]));
@@ -93,8 +152,11 @@ export function normalizeSecretOAuth(options: unknown): NormalizedSecretOAuthOpt
   };
   const authorizationEndpoint = endpoint("authorizationEndpoint");
   const tokenEndpoint = endpoint("tokenEndpoint");
-  if (typeof options.clientId !== "string" || !options.clientId)
-    throw new Error("secrets.beginOAuth: clientId is required");
+  const client = secretOAuthClientOf(options.client);
+  if (client && (options.clientId !== undefined || options.clientSecret !== undefined))
+    throw new Error("secrets.beginOAuth: pass client, or clientId (and clientSecret), not both");
+  if (!client && (typeof options.clientId !== "string" || !options.clientId))
+    throw new Error("secrets.beginOAuth: clientId (or client) is required");
   const urls = options.urls === undefined ? [tokenEndpoint.origin] : originsOf(options.urls);
   if (!urls.includes(tokenEndpoint.origin))
     throw new Error(
@@ -106,13 +168,33 @@ export function normalizeSecretOAuth(options: unknown): NormalizedSecretOAuthOpt
   return {
     authorizationEndpoint: authorizationEndpoint.href,
     tokenEndpoint: tokenEndpoint.href,
-    clientId: options.clientId,
+    clientId: client ? "" : String(options.clientId),
     clientSecret: typeof options.clientSecret === "string" ? options.clientSecret : "",
+    client,
     clientAuth: clientAuthOf(options.clientAuth),
     ...(typeof options.scope === "string" && options.scope && { scope: options.scope }),
     urls,
     extra,
+    next: nextUrlOf(options.next, nextOrigins),
+    expectAccount:
+      typeof options.expectAccount === "string" && options.expectAccount
+        ? options.expectAccount
+        : null,
   };
+}
+
+/** `client` checked: absent, or `{ platform }` / `{ project }` naming an OAuth integration's provider. */
+function secretOAuthClientOf(value: unknown): SecretOAuthClient | null {
+  if (value === undefined) return null;
+  const provider = (key: string) =>
+    isRecord(value) && OAUTH_INTEGRATION_PROVIDERS.find((name) => name === value[key]);
+  const platform = provider("platform");
+  if (platform) return { platform };
+  const project = provider("project");
+  if (project) return { project };
+  throw new Error(
+    `secrets.beginOAuth: client is { platform } or { project } naming one of ${OAUTH_INTEGRATION_PROVIDERS.join(", ")}, got ${JSON.stringify(value)}`,
+  );
 }
 
 /** The authorization-code request with PKCE S256 (RFC 7636): the pending attempt the host keeps,
@@ -147,19 +229,28 @@ export async function beginSecretOAuth(
   };
 }
 
-/** The code exchange: the pending attempt + the provider's code → the secret's first record, with
- *  the `oauth-refresh-token` strategy pointing at the same token endpoint. */
+/** The code exchange: the pending attempt + the provider's code → the secret's record, with the
+ *  `oauth-refresh-token` strategy pointing at the same token endpoint. `credentials` are the client's
+ *  as the host resolved them (by default the ones passed in the clear), and `kept` the material the secret already holds that stays beside the
+ *  tokens (a project's own app's). The deployment's client (`{ platform }`) is never written into
+ *  the record: its tokens alone, and a refresh — when the provider issued a refresh token — that
+ *  names the same client. */
 export async function completeSecretOAuth(
   pending: PendingSecretOAuth,
   code: string,
   fetchFn: (request: Request) => Promise<Response>,
+  credentials: { clientId: string; clientSecret: string; kept: Record<string, unknown> } = {
+    clientId: pending.options.clientId,
+    clientSecret: pending.options.clientSecret,
+    kept: {},
+  },
 ): Promise<SecretRecord> {
   const { options } = pending;
   const response = await fetchFn(
     oauthTokenRequest({
       tokenEndpoint: options.tokenEndpoint,
-      clientId: options.clientId,
-      clientSecret: options.clientSecret,
+      clientId: credentials.clientId,
+      clientSecret: credentials.clientSecret,
       clientAuth: options.clientAuth,
       params: {
         grant_type: "authorization_code",
@@ -169,19 +260,37 @@ export async function completeSecretOAuth(
       },
     }),
   );
+  if (options.expectAccount) {
+    const refusal = consentAccountRefusal(
+      options.expectAccount,
+      await response
+        .clone()
+        .json()
+        .catch(() => null),
+    );
+    if (refusal) throw new Error(refusal);
+  }
   const tokens = await oauthTokensOf(response, "oauth");
+  const refresh = {
+    kind: "oauth-refresh-token" as const,
+    tokenEndpoint: options.tokenEndpoint,
+    clientAuth: options.clientAuth,
+  };
+  if (options.client && "platform" in options.client)
+    return {
+      material: tokens,
+      urls: options.urls,
+      refresh: tokens.refreshToken ? { ...refresh, client: options.client } : null,
+    };
   return {
     material: {
-      clientId: options.clientId,
-      clientSecret: options.clientSecret, // "" for a public client — the refresh grant then sends client_id alone
+      ...credentials.kept,
+      clientId: credentials.clientId,
+      clientSecret: credentials.clientSecret, // "" for a public client — the refresh grant then sends client_id alone
       ...tokens,
     },
     urls: options.urls,
-    refresh: {
-      kind: "oauth-refresh-token",
-      tokenEndpoint: options.tokenEndpoint,
-      clientAuth: options.clientAuth,
-    },
+    refresh,
   };
 }
 
@@ -193,6 +302,7 @@ export function isSecretOAuthState(claims: unknown): claims is SecretOAuthState 
     claims.kind === "secret-oauth" &&
     typeof claims.context === "string" &&
     typeof claims.nonce === "string" &&
-    typeof claims.exp === "number"
+    typeof claims.exp === "number" &&
+    typeof (claims.next ?? "") === "string"
   );
 }

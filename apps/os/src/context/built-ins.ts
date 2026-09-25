@@ -11,7 +11,7 @@
 // Dynamic code has two entry points, one per host kind: `workers.get(spec)` (stateless) and
 // `facets.get(name, spec)` (durable) — the `BuiltInScope` members below say what each takes.
 
-import { codedError, jsonEqual, resolveContextPath } from "iterate/lib";
+import { codedError, errorCode, jsonEqual, reportIssue, resolveContextPath } from "iterate/lib";
 import { z } from "zod";
 import type { StreamEvent, StreamEventInput } from "iterate/stream/processor";
 import {
@@ -48,9 +48,15 @@ import {
   assertSecretPath,
   normalizeSecretRecord,
   originsOf,
+  sha256Hex,
   type SecretHmacVerification,
 } from "../secrets.ts";
-import type { SecretCatalog, SecretState } from "../secret/contract.ts";
+import type { LendRevokedReason, SecretCatalog, SecretState } from "../secret/contract.ts";
+import { IntegrationProvider } from "../integrations/contract.ts";
+import { tokenSecretPathOf } from "../integrations/connections.ts";
+import type { AccountState } from "../account/contract.ts";
+import type { InstanceState } from "../instance/contract.ts";
+import { ControlPlane } from "../control-plane/edge.ts";
 import {
   FetchRouteConfiguredPayload,
   matchFetchRoute,
@@ -68,7 +74,7 @@ import {
   terminalFetchOf,
 } from "./rpc-stubs.ts";
 import { admitLoadedCodeRow } from "./itx-expression-rewriting.ts";
-import { GLOBAL_PROJECT_ID, resourceScope } from "./paths.ts";
+import { DurableObjectNameCodec, GLOBAL_PROJECT_ID, resourceScope } from "./paths.ts";
 import {
   assertFacetSourceWithinCeiling,
   facetSpecOf,
@@ -104,6 +110,27 @@ export type SubscriptionListEntry = {
 
 /** An `R2Object` as `itx.r2` answers it: every field the class carries, as data — the key with the
  *  owner prefix stripped, dates as ISO strings, checksums as hex. */
+/** What a lend's borrower path is told of its lender (`itx.secrets.acceptLend`): the lend, the
+ *  person (or the deployment itself, the operator's own secret), their secret's context and path,
+ *  its pin, and the connection it is when it is one. */
+export type BorrowedSecret = {
+  lendId: string;
+  lender: { userId: string; email?: string } | { instance: true };
+  lenderContext: string;
+  lenderPath: string;
+  urls: string[];
+  integration?: { provider: string; account: string; externalId: string };
+};
+
+/** How a lend to every project went, project by project: how many borrow it, the projects that
+ *  keep a secret of their own at its path, and the ones whose borrow failed (each reported as
+ *  `itx.secrets.every-project-borrow`). */
+export type EveryProjectBorrows = {
+  borrowed: number;
+  kept: string[];
+  failed: { projectId: string; error: string }[];
+};
+
 type R2ObjectRecord = {
   key: string;
   version: string;
@@ -202,7 +229,7 @@ export interface BuiltInScope extends LibraryRoots {
    *  The material is a string or a JSON object; `urls` (required) pins it to those ORIGINS only — a
    *  mis-typed URL cannot mail a credential to a stranger, nor can an app that forwards a visitor's
    *  headers; `refresh` names the strategy the facet re-mints an expired credential with, in trusted
-   *  code, on a 401 or on first use (`oauth-refresh-token`, `waitrose-session`). WRITE-ONLY — `set`,
+   *  code, on a 401 or on first use (`oauth-refresh-token`, `waitrose-session`, `github-app-installation`, or the secret's own exchange code in a jail, `worker`). WRITE-ONLY — `set`,
    *  `beginOAuth`, `delete`, and a `list` of paths, pins and strategy kinds, never a value. Every
    *  verb runs ON THE SECRET'S PATH (so the log's order is the value's) and lands its fact there —
    *  `secret/set { path, urls, refresh? }`, `secret/deleted { path }` — attributed like any append
@@ -214,14 +241,18 @@ export interface BuiltInScope extends LibraryRoots {
     set(
       path: string,
       material: SecretMaterial,
-      options: { urls: string[]; refresh?: SecretRefresh },
+      /** `merge`: the material's fields go over the ones already stored, whose pin must be `urls`
+       *  (a strategy added to a secret someone else filled — a project's own GitHub App's). */
+      options: { urls: string[]; refresh?: SecretRefresh; merge?: boolean },
     ): Promise<{ path: string }>;
     /** OAUTH, THE FIRST TOKENS (secret-oauth.ts): hand back the provider's authorize URL for the
-     *  project's own OAuth client — send a human there. The provider redirects the human to the
-     *  platform's callback (`/.secrets/oauth/callback`; the human must be signed in to Iterate as
-     *  someone who reaches the secret's owner — a project's member, the user themself for a user's
-     *  own secret), and the secret's facet exchanges the code, becomes an `oauth-refresh-token`
-     *  secret, and `secret/set` lands. Until then nothing is stored at `path` but the attempt. */
+     *  project's own OAuth client, or for an integration's `client` — send a human there. The
+     *  provider redirects the human to the platform's callback (`/.secrets/oauth/callback`, or an
+     *  integration's `/api/integrations/<provider>/callback`; the human must be signed in to Iterate
+     *  as someone who reaches the secret's owner — a project's member, the user themself for a
+     *  user's own secret), the secret's facet exchanges the code, `secret/set` lands, and the
+     *  callback redirects to `next` (on the platform's or the Dash's origin) when given. Until then
+     *  nothing is stored at `path` but the attempt. */
     beginOAuth(path: string, options: SecretOAuthOptions): Promise<{ authorizationUrl: string }>;
     /** The platform's callback completes the attempt through here — the exchange in the secret's
      *  facet, then the facts, on the secret's path like `set` and `delete`. You never call this:
@@ -243,6 +274,56 @@ export interface BuiltInScope extends LibraryRoots {
      *  provider's scheme names (Stripe `${t}.${body}` with its own tolerance check on `t`, GitHub the
      *  body, Slack `v0:${t}:${body}`) and strips the scheme's prefix (`sha256=`, `v0=`). */
     verifyHmac(path: string, input: SecretHmacVerification): Promise<boolean>;
+    /** LEND a person's own secret to a project they are a member of, as one of the project's paths
+     *  (`as`, `/secrets/<name>`): the project's code spells `getSecret("<as>")` and every use is
+     *  forwarded to this secret, which dispatches it — the material never leaves. On the lender's
+     *  own context (`session.user`). `secret/lent` lands here and `secret/borrowed` there; the lend
+     *  ends with `revokeLend`, the borrower's `delete` of its path, or the lender leaving the
+     *  project (`secret/lend-revoked { reason }` on both sides). The OPERATOR lends the
+     *  deployment's own secret (`global:/secrets/<name>`, on `session.global`) to one project, or
+     *  `to: "every-project"`: every project borrows it now (`everyProject` counts them) and each
+     *  one created later does too; a project whose path holds a secret of its own keeps it. */
+    lend(
+      path: string,
+      input: { to: string; as: string },
+    ): Promise<{ lendId: string; everyProject?: EveryProjectBorrows }>;
+    revokeLend(
+      path: string,
+      lendId: string,
+      /** The platform's alone: why, and the borrower it must be lent to. */
+      options?: { reason?: LendRevokedReason; borrower?: string },
+    ): Promise<{ lendId: string }>;
+    /** The platform's half of a lend on the borrower's path (`lend` calls it): you never call it. */
+    acceptLend(path: string, input: BorrowedSecret): Promise<{ path: string }>;
+    /** The platform's, on the global root: a new project borrows every lend to every project
+     *  (session.ts `projects.create`). You never call it. */
+    borrowEveryProjectLends(projectId: string): Promise<EveryProjectBorrows>;
+    /** The platform's, on the deployment's secret: its lend to every project borrowed into one more
+     *  project (`borrowEveryProjectLends`). You never call it. */
+    lendToProject(
+      path: string,
+      lendId: string,
+      projectId: string,
+    ): Promise<"borrowed" | "kept" | "revoked">;
+    /** The platform's half of a revocation on the borrower's path: you never call it. */
+    dropLend(path: string, input: { lendId: string; reason: LendRevokedReason }): Promise<void>;
+  };
+  /** THE INTEGRATIONS (src/integrations/): connect this context's owner — a project's root, or a
+   *  person's own context (`session.user`) — to a provider, through this deployment's app.
+   *  `connect(provider, { scopes?, connection?, next? })` answers where to send the human and the
+   *  connection's name; again for a connection that exists asks for more on the same account.
+   *  `requestFromUser(provider, { scopes, lendTo? })` answers a Dash link that asks the signed-in
+   *  person to connect it and lend it to this project — as the path `lendTo` (`/secrets/<name>`,
+   *  what the agent's code will spell) when given — for an agent or the CLI. */
+  integrations: {
+    connect(
+      provider: IntegrationProvider,
+      options?: { scopes?: string[]; connection?: string; next?: string },
+    ): Promise<{ authorizationUrl: string; connection: string }>;
+    requestFromUser(
+      provider: "google" | "cloudflare",
+      options?: { scopes?: string[]; lendTo?: string },
+    ): Promise<{ url: string }>;
   };
   /** THE FETCH ROUTES (src/fetch-routes.ts): named rules on the project's root `/` mapping a
    *  request on the project's hosts to an itx expression, the route's `target` — `iterate tunnel`'s
@@ -477,6 +558,7 @@ interface BuildBuiltInsDeps {
     AI: Ai;
     BROWSER: BrowserRun;
     ARTIFACTS: ArtifactsNamespace;
+    DB: D1Database;
   };
   /** The deploy identity every loader cacheKey folds in (worker.ts `AppConfig`). */
   deployId: string;
@@ -484,6 +566,9 @@ interface BuildBuiltInsDeps {
   ingressRouting: IngressRouting;
   /** The Dash that this platform instance names for human administration. */
   dashOrigin: string;
+  /** The deployment's platform admins (app-config.ts `admins`): with the admin bearer, the
+   *  operator of the deployment's own secrets. */
+  platformAdmins: () => readonly string[];
   /** THE PLATFORM ORIGIN the current call's caller reached the platform on (the DO's caller record)
    *  — null when the call carries none: a processor's own turn, a loaded worker's `env.ITX`, the
    *  delivery loop, an alarm. */
@@ -502,6 +587,9 @@ interface BuildBuiltInsDeps {
   /** A context stream by CANONICAL path — the own-path parent adapter same-isolate, by-name DO
    *  stubs otherwise. Both satisfy ReachableContext (uniform-async, real-typed — see stream/stream.ts). */
   context: (path: string) => ReachableContext;
+  /** Another OWNER's context by its Durable Object name — a lend's other side, which crosses from a
+   *  person's namespace to a project's. The platform's verbs alone spell one. */
+  otherOwnerContext: (name: string) => Pick<ReachableContext, "invoke">;
   /** The context's egress terminal (secret substitution → `fetch`). */
   egress: (request: Request) => Promise<Response>;
   /** WHO is calling right now — the `Caller` the DO runs this call under (an `x-itx-expression` fetch's headers,
@@ -596,6 +684,7 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
     call: ItxExpressionStep,
     here: (secret: ReachableContext) => Promise<T>,
   ): Promise<T> => {
+    assertOperatorOfGlobalSecrets();
     const contextPath = resolveContextPath(owner.rootPath, `.${assertSecretPath(secretPath)}`);
     return path === contextPath
       ? here(ownContext())
@@ -608,17 +697,50 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
           .context(contextPath)
           .invoke(["itx", "builtins", "secrets", call], [], hopCaller()) as Promise<T>);
   };
+  /** THE DEPLOYMENT'S OWN SECRETS (`global:/secrets/<name>`, the global root's) are the
+   *  operator's: the admin bearer (actor `admin`, no email) or a platform admin (app-config.ts
+   *  `admins`, not viewing an app as someone else), whose `admin` scope is what opened the global
+   *  root to them (session.ts `global`) — and the platform's own hops (a lend's other side). */
+  const assertOperatorOfGlobalSecrets = () => {
+    if (owner.kind !== "global") return;
+    const { principal, platform } = deps.caller();
+    if (platform) return;
+    const email = principal?.email?.trim().toLowerCase();
+    const operator = principal?.actor === "admin" && !email;
+    const admin = email && !principal?.impersonatedBy && deps.platformAdmins().includes(email);
+    if (!operator && !admin)
+      throw codedError(
+        "FORBIDDEN",
+        "itx.secrets: the deployment's own secrets (global:/secrets/<name>) are the operator's — the admin bearer or a platform admin",
+      );
+  };
   /** The owner root's facet — where the catalog is folded from the certificates cross-posted there
-   *  (src/project/contract.ts; src/account/contract.ts and src/organization/contract.ts for the
-   *  global owners). The global root itself owns no secrets. */
-  const ownerRootFacet = (): "project" | "account" | "organization" => {
+   *  (src/project/contract.ts; src/account/contract.ts, src/organization/contract.ts and
+   *  src/instance/contract.ts for the global owners). */
+  const ownerRootFacet = (): "project" | "account" | "organization" | "instance" => {
+    if (owner.kind === "project") return "project";
+    if (owner.kind === "users") return "account";
+    if (owner.kind === "organizations") return "organization";
+    assertOperatorOfGlobalSecrets();
+    return "instance";
+  };
+  /** The facet that holds this context's owner's connections (src/integrations/verbs.ts): a
+   *  project's `project`, a person's `account`. */
+  const integrationsFacet = (verb: string): "project" | "account" => {
     if (projectId !== GLOBAL_PROJECT_ID) return "project";
-    if (owner.rootPath.startsWith("/users/")) return "account";
-    if (owner.rootPath.startsWith("/organizations/")) return "organization";
+    if (owner.kind === "users") return "account";
     throw codedError(
       "INVALID_CONTEXT",
-      "itx.secrets: the global root owns no secrets — a project's, a user's or an organization's context does",
+      `itx.integrations.${verb}: a project's context or a person's own (session.user) holds connections`,
     );
+  };
+  /** Another project's root, for the other side of a lend. */
+  const projectRoot = (id: string) =>
+    deps.otherOwnerContext(DurableObjectNameCodec.stringify({ projectId: id, path: "/" }));
+  /** The platform's verbs (a lend's other side): no caller of theirs ever reaches them. */
+  const assertPlatformCaller = (verb: string) => {
+    if (!deps.caller().platform)
+      throw codedError("FORBIDDEN", `itx.secrets.${verb} is the platform's own`);
   };
   /** The `secret` processor row on the secret's context — the facet hosted with a row, so the
    *  engine pushes it every fact (idempotent: a second enable of the same row is a no-op). */
@@ -634,13 +756,208 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
   /** The fact of a write or a deletion: on the secret's own path (`secret`), attributed to the
    *  caller, then cross-posted to the owner's root for the catalog — stamped `source.platform`, which
    *  a person's or an organization's catalog fold requires (caller.ts `Caller.platform`). */
-  const crossPostSecretFact = (event: StreamEventInput) =>
-    deps
-      .context(owner.rootPath)
-      .invoke(["itx", "builtins", ["append", event]], [], { ...hopCaller(), platform: true });
+  const crossPostSecretFact = async (event: StreamEventInput) => {
+    const root = deps.context(owner.rootPath);
+    // the global root's catalog has no other writer to enable its row (a second enable is a no-op)
+    if (owner.kind === "global")
+      await root.invoke(["itx", "builtins", "processors", ["enable", "instance"]], [], hopCaller());
+    await root.invoke(["itx", "builtins", ["append", event]], [], {
+      ...hopCaller(),
+      platform: true,
+    });
+  };
   const secretFact = async (secret: ReachableContext, event: StreamEventInput): Promise<void> => {
     await secret.append(stampCaller(event, deps.caller()));
     await crossPostSecretFact(event);
+  };
+  /** A deleted secret's lends end with it, on both sides: the lends of a lender's secret
+   *  (`lender`), and the lend a borrower's path stood on (`borrower-deleted`). */
+  const endLendsOf = async (
+    secret: ReachableContext,
+    secretPath: string,
+    cleared: {
+      lends: Record<string, { to: string; as: string; borrowers: string[] }>;
+      borrowed: { lender: string; lenderPath: string; lendId: string } | null;
+    },
+  ) => {
+    const revoked = (lendId: string, reason: LendRevokedReason) =>
+      secretFact(secret, {
+        type: "events.iterate.com/secret/lend-revoked",
+        payload: { path: secretPath, lendId, reason },
+      });
+    for (const [lendId, lend] of Object.entries(cleared.lends)) {
+      await revoked(lendId, "lender");
+      await dropFromBorrowers(lendId, lend, "lender");
+    }
+    if (!cleared.borrowed) return;
+    await deps
+      .otherOwnerContext(cleared.borrowed.lender)
+      .invoke(
+        [
+          "itx",
+          "builtins",
+          "secrets",
+          [
+            "revokeLend",
+            cleared.borrowed.lenderPath,
+            cleared.borrowed.lendId,
+            { reason: "borrower-deleted", borrower: projectId },
+          ],
+        ],
+        [],
+        { ...hopCaller(), platform: true },
+      );
+    await revoked(cleared.borrowed.lendId, "borrower-deleted");
+  };
+  /** A lend's end told to the projects it reached (`dropLend` on each borrowed path), ten at a
+   *  time. A person's lend reaches one project, whose failure fails the call; a lend to every
+   *  project reaches them all, and a project that cannot be told is reported and passed over — its
+   *  path's next use is refused at the lender all the same ("this lend was revoked"). */
+  const dropFromBorrowers = async (
+    lendId: string,
+    lend: { to: string; as: string; borrowers: string[] },
+    reason: LendRevokedReason,
+  ) => {
+    for (let at = 0; at < lend.borrowers.length; at += 10)
+      await Promise.all(
+        lend.borrowers.slice(at, at + 10).map(async (borrower) => {
+          try {
+            await projectRoot(borrower).invoke(
+              ["itx", "builtins", "secrets", ["dropLend", lend.as, { lendId, reason }]],
+              [],
+              { ...hopCaller(), platform: true },
+            );
+          } catch (error) {
+            if (lend.to !== "every-project") throw error;
+            reportIssue("itx.secrets.every-project-drop", error, { lendId, projectId: borrower });
+          }
+        }),
+      );
+  };
+  /** One more project borrows this secret's lend to every project, on the secret's own context:
+   *  kept as a borrower here first, so its first use is admitted, then its path told
+   *  (`acceptLend`). A path that holds a secret of its own keeps it (`kept`: the borrow refused it,
+   *  coded INVALID_INPUT); a lend gone meanwhile borrows nothing (`revoked`). */
+  const lendToProjectHere = async (
+    secretPath: string,
+    lendId: string,
+    borrower: string,
+  ): Promise<"borrowed" | "kept" | "revoked"> => {
+    // the facet's own answer (secret/durable-object.ts `everyProjectBorrower`)
+    const lend = (await secretFacet(["everyProjectBorrower", lendId, borrower, true])) as {
+      as: string;
+      urls: string[];
+    } | null;
+    if (!lend) return "revoked";
+    const borrowed: BorrowedSecret = {
+      lendId,
+      lender: { instance: true },
+      lenderContext: iterateContextName,
+      lenderPath: secretPath,
+      urls: lend.urls,
+    };
+    try {
+      await projectRoot(borrower).invoke(
+        ["itx", "builtins", "secrets", ["acceptLend", lend.as, borrowed]],
+        [],
+        { ...hopCaller(), platform: true },
+      );
+      return "borrowed";
+    } catch (error) {
+      await secretFacet(["everyProjectBorrower", lendId, borrower, false]);
+      if (errorCode(error) === "INVALID_INPUT") return "kept";
+      throw error;
+    }
+  };
+  /** One project's borrow of a lend to every project, counted into `outcome`: a failure is
+   *  reported and counted, never thrown, so one project cannot stop the rest. */
+  const tallyBorrow = async (
+    outcome: EveryProjectBorrows,
+    at: { secretPath: string; lendId: string; borrower: string },
+    borrow: () => Promise<"borrowed" | "kept" | "revoked">,
+  ) => {
+    try {
+      const answer = await borrow();
+      if (answer === "borrowed") outcome.borrowed++;
+      if (answer === "kept") outcome.kept.push(at.borrower);
+    } catch (error) {
+      reportIssue("itx.secrets.every-project-borrow", error, {
+        lendId: at.lendId,
+        path: at.secretPath,
+        projectId: at.borrower,
+      });
+      outcome.failed.push({
+        projectId: at.borrower,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  };
+  /** THE OPERATOR'S LEND of the deployment's own secret, on the secret's context: to one project
+   *  (kept, told, then the fact, as a person's), or to every project — the lend kept and its fact
+   *  landed first, so a project created from now on borrows it too (session.ts
+   *  `projects.create`), then every existing project borrows it, ten at a time (one hop to each
+   *  project's root and on to its path's context). A project created during the walk may be told
+   *  twice; a second borrow of the same lend is a no-op. */
+  const lendFromInstance = async (
+    secret: ReachableContext,
+    secretPath: string,
+    to: string,
+    as: string,
+  ): Promise<{ lendId: string; everyProject?: EveryProjectBorrows }> => {
+    // The facet's own snapshot and answers (secret/durable-object.ts).
+    const { state } = (await secretFacet(["snapshot"])) as { state: SecretState };
+    if (!state.material || state.borrowed)
+      throw codedError(
+        "INVALID_INPUT",
+        `itx.secrets.lend: ${secretPath} holds no secret of the deployment's to lend`,
+      );
+    const lendId = `lend_${crypto.randomUUID().replaceAll("-", "")}`;
+    const lent = (borrower: string) =>
+      secretFact(secret, {
+        type: "events.iterate.com/secret/lent",
+        payload: { path: secretPath, lendId, to: borrower, as },
+      });
+    if (to === "every-project") {
+      await secretFacet(["lend", { lendId, to, as }]);
+      await lent(to);
+      const projects = await new ControlPlane(env).reachableProjects("every");
+      const everyProject: EveryProjectBorrows = { borrowed: 0, kept: [], failed: [] };
+      for (let at = 0; at < projects.length; at += 10)
+        await Promise.all(
+          projects
+            .slice(at, at + 10)
+            .map(({ id: borrower }) =>
+              tallyBorrow(everyProject, { secretPath, lendId, borrower }, () =>
+                lendToProjectHere(secretPath, lendId, borrower),
+              ),
+            ),
+        );
+      return { lendId, everyProject };
+    }
+    const project = await new ControlPlane(env).getProject(to);
+    if (!project) throw codedError("INVALID_INPUT", `itx.secrets.lend: no project ${to}`);
+    const { urls } = (await secretFacet(["lend", { lendId, to: project.id, as }])) as {
+      urls: string[];
+    };
+    const borrowed: BorrowedSecret = {
+      lendId,
+      lender: { instance: true },
+      lenderContext: iterateContextName,
+      lenderPath: secretPath,
+      urls,
+    };
+    try {
+      await projectRoot(project.id).invoke(
+        ["itx", "builtins", "secrets", ["acceptLend", as, borrowed]],
+        [],
+        { ...hopCaller(), platform: true },
+      );
+    } catch (error) {
+      await secretFacet(["endLend", lendId]);
+      throw error;
+    }
+    await lent(project.id);
+    return { lendId };
   };
   /** The `secret` processor rows on the secret's context — one while the secret lives. */
   const secretRows = (secret: ReachableContext) =>
@@ -773,20 +1090,37 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
         onSecretContext(secretPath, ["set", secretPath, material, options], async (secret) => {
           const record = normalizeSecretRecord(material, options);
           await enableSecretRow(secret);
+          // Material of its own over a borrowed path ends the borrow at the lender first, as a
+          // delete does: the lend would otherwise stay live there with no borrower.
+          const { state } = (await secretFacet(["snapshot"])) as { state: SecretState };
+          if (state.borrowed)
+            await endLendsOf(
+              secret,
+              secretPath,
+              (await secretFacet(["clear"])) as Parameters<typeof endLendsOf>[2],
+            );
           await secretFact(secret, {
             type: "events.iterate.com/secret/set",
             payload: {
               path: secretPath,
               urls: record.urls,
               ...(record.refresh && { refresh: record.refresh.kind }),
+              ...(record.refresh?.kind === "worker" && {
+                refreshSourceSha256: await sha256Hex(record.refresh.source),
+              }),
             },
           });
-          await secretFacet(["write", record]);
+          await secretFacet(["write", record, options?.merge === true]);
           return { path: secretPath };
         }),
       // No fact here: the log learns of the secret when the exchange succeeds, so an abandoned
       // attempt leaves no row that advertises a pin and a strategy the facet does not hold.
       beginOAuth: (secretPath, options) => {
+        if (owner.kind === "global")
+          throw codedError(
+            "INVALID_INPUT",
+            "itx.secrets.beginOAuth: the deployment's own secrets are set (itx.secrets.set), never connected",
+          );
         // the provider's callback hangs under the platform origin — the caller's, not a DO's
         const platformOrigin = deps.platformOrigin();
         if (!platformOrigin)
@@ -798,7 +1132,7 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
           await enableSecretRow(secret);
           return (await secretFacet([
             "beginOAuth",
-            normalizeSecretOAuth(options),
+            normalizeSecretOAuth(options, [platformOrigin, deps.dashOrigin].filter(Boolean)),
             platformOrigin,
           ])) as { authorizationUrl: string };
         });
@@ -812,13 +1146,14 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
       // catches the log up. Until then `list()` does not show the secret while egress already honours it.
       completeOAuth: (secretPath, input) =>
         onSecretContext(secretPath, ["completeOAuth", secretPath, input], async (secret) => {
-          const { urls } = (await secretFacet(["completeOAuth", input])) as {
+          const { urls, refresh } = (await secretFacet(["completeOAuth", input])) as {
             urls: string[];
+            refresh?: SecretRefresh["kind"];
             exchanged: boolean;
           };
           await secretFact(secret, {
             type: "events.iterate.com/secret/set",
-            payload: { path: secretPath, urls, refresh: "oauth-refresh-token" },
+            payload: { path: secretPath, urls, refresh },
           });
           return { path: secretPath };
         }),
@@ -836,16 +1171,25 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
           // The facet is the platform's own SecretDurableObject and `snapshot()` the engine's
           // `{ offset, state }`, its state the contract's parsed shape — ours, so asserted.
           const { state } = (await secretFacet(["snapshot"])) as { state: SecretState };
-          if (!state.material && !state.deletion)
+          if (!state.material && !state.deletion) {
+            // an OAuth attempt still in flight dies with it: its callback must not store a token
+            await secretFacet(["clear"]);
             throw new Error(`secret ${secretPath}: never set — nothing to delete`);
+          }
           const deleted: StreamEventInput = {
             type: "events.iterate.com/secret/deleted",
             payload: { path: secretPath },
           };
           const rowStands = (await secretRows(secret)).some((row) => row.name === "secret");
           if (state.material) {
-            await secretFacet(["clear"]);
+            // What the clear ended (secret/durable-object.ts `clear`): this secret's lends, or the
+            // lend this path borrowed.
+            const cleared = (await secretFacet(["clear"])) as {
+              lends: Record<string, { to: string; as: string; borrowers: string[] }>;
+              borrowed: { lender: string; lenderPath: string; lendId: string } | null;
+            };
             await secretFact(secret, deleted);
+            await endLendsOf(secret, secretPath, cleared);
           } else if (rowStands) await crossPostSecretFact(deleted);
           if (rowStands)
             await secret.invoke(
@@ -928,6 +1272,248 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
           ["verifyHmac", secretPath, input],
           () => secretFacet(["verifyHmac", input]) as Promise<boolean>,
         ),
+      // THE LENDER'S side: the lend kept in the facet, the borrower's path told, then the fact — so a
+      // refused borrower (a path with a secret of its own) leaves no lend behind. The deployment's
+      // own secret, lent by the operator, goes on in `lendFromInstance`.
+      lend: (secretPath, input) =>
+        onSecretContext(secretPath, ["lend", secretPath, input], async (secret) => {
+          if (owner.kind !== "users" && owner.kind !== "global")
+            throw codedError(
+              "INVALID_INPUT",
+              "itx.secrets.lend: a person lends their own secrets, on their own context (session.user); the operator the deployment's, on the global root",
+            );
+          const { to, as } = z.object({ to: z.string().min(1), as: z.string() }).parse(input);
+          assertSecretPath(as);
+          if (owner.kind === "global") return lendFromInstance(secret, secretPath, to, as);
+          const projectId = await new ControlPlane(env).reachableProjectId(
+            { userId: owner.ownerId },
+            to,
+          );
+          if (!projectId)
+            throw codedError(
+              "FORBIDDEN",
+              `itx.secrets.lend: you are not a member of project ${to}`,
+            );
+          // The facet's and the account's own snapshots: their contracts' states.
+          const { state } = (await secretFacet(["snapshot"])) as { state: SecretState };
+          if (!state.material || state.borrowed)
+            throw codedError(
+              "INVALID_INPUT",
+              `itx.secrets.lend: ${secretPath} holds no secret of yours to lend`,
+            );
+          const account = (
+            (await deps
+              .context(owner.rootPath)
+              .invoke(["itx", "facets", ["get", "account"], ["snapshot"]], [], hopCaller())) as {
+              state: AccountState;
+            }
+          ).state;
+          const connection = Object.values(account.integrations).find(
+            (row) => tokenSecretPathOf(row.provider, row.connection) === secretPath,
+          );
+          const lendId = `lend_${crypto.randomUUID().replaceAll("-", "")}`;
+          await secretFacet(["lend", { lendId, to: projectId, as }]);
+          const borrowed: BorrowedSecret = {
+            lendId,
+            lender: { userId: owner.ownerId, email: deps.caller().principal?.email },
+            lenderContext: iterateContextName,
+            lenderPath: secretPath,
+            urls: account.secrets[secretPath]?.urls ?? [],
+            ...(connection && {
+              integration: {
+                provider: connection.provider,
+                account: connection.account,
+                externalId: connection.externalId,
+              },
+            }),
+          };
+          try {
+            await projectRoot(projectId).invoke(
+              ["itx", "builtins", "secrets", ["acceptLend", as, borrowed]],
+              [],
+              { ...hopCaller(), platform: true },
+            );
+          } catch (error) {
+            await secretFacet(["endLend", lendId]);
+            throw error;
+          }
+          await secretFact(secret, {
+            type: "events.iterate.com/secret/lent",
+            payload: { path: secretPath, lendId, to: projectId, as },
+          });
+          return { lendId };
+        }),
+      // A revocation from the lender, or the platform's (a borrower's delete, the lender gone from
+      // the project), which alone names another reason and the borrower the lend must be to.
+      // A lend to every project named with one borrower (that project's delete) ends for it alone.
+      revokeLend: (secretPath, lendId, options) =>
+        onSecretContext(secretPath, ["revokeLend", secretPath, lendId, options], async (secret) => {
+          const platform = deps.caller().platform === true;
+          const reason = (platform && options?.reason) || "lender";
+          const borrower = platform ? options?.borrower : undefined;
+          // The facet's own answer (secret/durable-object.ts `endLend`).
+          const lend = (await secretFacet(["endLend", String(lendId), borrower])) as {
+            to: string;
+            as: string;
+            borrowers: string[];
+          } | null;
+          if (!lend) return { lendId };
+          await secretFact(secret, {
+            type: "events.iterate.com/secret/lend-revoked",
+            payload: {
+              path: secretPath,
+              lendId,
+              reason,
+              ...(lend.to === "every-project" && borrower && { borrower }),
+            },
+          });
+          if (reason !== "borrower-deleted") await dropFromBorrowers(lendId, lend, reason);
+          return { lendId };
+        }),
+      borrowEveryProjectLends: async (borrower) => {
+        assertPlatformCaller("borrowEveryProjectLends");
+        if (owner.kind !== "global")
+          throw codedError(
+            "INVALID_CONTEXT",
+            "itx.secrets.borrowEveryProjectLends: the deployment's lends are the global root's",
+          );
+        // `invoke` is untyped across the DO hop; the instance facet's snapshot is its contract's state.
+        const { state } = (await deps
+          .context(owner.rootPath)
+          .invoke(["itx", "facets", ["get", "instance"], ["snapshot"]], [], hopCaller())) as {
+          state: InstanceState;
+        };
+        const outcome: EveryProjectBorrows = { borrowed: 0, kept: [], failed: [] };
+        for (const [secretPath, row] of Object.entries(state.secrets))
+          for (const [lendId, lend] of Object.entries(row.lends || {}))
+            if (lend.to === "every-project")
+              await tallyBorrow(outcome, { secretPath, lendId, borrower }, () =>
+                onSecretContext(secretPath, ["lendToProject", secretPath, lendId, borrower], () =>
+                  lendToProjectHere(secretPath, lendId, borrower),
+                ),
+              );
+        return outcome;
+      },
+      lendToProject: (secretPath, lendId, borrower) => {
+        assertPlatformCaller("lendToProject");
+        return onSecretContext(secretPath, ["lendToProject", secretPath, lendId, borrower], () =>
+          lendToProjectHere(secretPath, lendId, borrower),
+        );
+      },
+      // THE BORROWER'S side, the platform's alone: the path keeps the lend, never material.
+      acceptLend: (secretPath, input) => {
+        assertPlatformCaller("acceptLend");
+        return onSecretContext(secretPath, ["acceptLend", secretPath, input], async (secret) => {
+          await secretFacet([
+            "borrow",
+            { lender: input.lenderContext, lenderPath: input.lenderPath, lendId: input.lendId },
+          ]);
+          const { lenderContext: _context, lenderPath: _path, ...payload } = input;
+          try {
+            await enableSecretRow(secret);
+            await secretFact(secret, {
+              type: "events.iterate.com/secret/borrowed",
+              payload: { path: secretPath, ...payload },
+            });
+          } catch (error) {
+            // a borrow whose fact never landed is no borrow: the lender rolls its lend back too
+            await secretFacet(["dropBorrowed", input.lendId]);
+            throw error;
+          }
+          return { path: secretPath };
+        });
+      },
+      dropLend: (secretPath, input) => {
+        assertPlatformCaller("dropLend");
+        return onSecretContext(secretPath, ["dropLend", secretPath, input], async (secret) => {
+          if (!(await secretFacet(["dropBorrowed", input.lendId]))) return;
+          await secretFact(secret, {
+            type: "events.iterate.com/secret/lend-revoked",
+            payload: { path: secretPath, lendId: input.lendId, reason: input.reason },
+          });
+          await secret.invoke(
+            ["itx", "builtins", "processors", ["disable", "secret"]],
+            [],
+            hopCaller(),
+          );
+        });
+      },
+    },
+    integrations: {
+      connect: async (provider, options = {}) => {
+        const facet = integrationsFacet("connect");
+        const input = z
+          .object({
+            scopes: z.array(z.string().min(1)).optional(),
+            connection: z.string().optional(),
+            next: z.string().optional(),
+          })
+          .parse(options);
+        const root = deps.context(owner.rootPath);
+        // The owner facet's own snapshot and verb: its contract's state, and the connect's answer.
+        const { state } = (await root.invoke(
+          ["itx", "facets", ["get", facet], ["snapshot"]],
+          [],
+          hopCaller(),
+        )) as { state: { integrations: AccountState["integrations"] } };
+        const held = Object.values(state.integrations).filter((row) => row.provider === provider);
+        // a person's one connection to a provider is the one asked for more; a project names its own
+        const connection =
+          input.connection ||
+          (facet === "account" && held.length === 1
+            ? held[0]!.connection
+            : crypto.randomUUID().slice(0, 8));
+        const { authorizationUrl } = (await root.invoke(
+          [
+            "itx",
+            "facets",
+            ["get", facet],
+            [
+              "connectIntegration",
+              {
+                provider: IntegrationProvider.parse(provider),
+                connection,
+                client: "iterate",
+                scopes: input.scopes,
+                next: input.next,
+              },
+            ],
+          ],
+          [],
+          hopCaller(),
+        )) as { authorizationUrl: string };
+        return { authorizationUrl, connection };
+      },
+      requestFromUser: async (provider, options = {}) => {
+        const { scopes, lendTo } = z
+          .object({ scopes: z.array(z.string().min(1)).default([]), lendTo: z.string().optional() })
+          .parse(options);
+        // what a person connects of their own (integrations/verbs.ts); Slack and GitHub are the
+        // project's to connect, `connect` on its root
+        if (provider !== "google" && provider !== "cloudflare")
+          throw codedError(
+            "INVALID_INPUT",
+            `itx.integrations.requestFromUser: a person connects Google or Cloudflare of their own; connect ${provider} on the project (itx.integrations.connect)`,
+          );
+        if (lendTo) assertSecretPath(lendTo);
+        if (!deps.dashOrigin)
+          throw new Error(
+            "itx.integrations.requestFromUser: this platform has no Dash (set APP_CONFIG_URLS__DASH)",
+          );
+        const project = await deps.projectInfo();
+        if (!project.projectSlug)
+          throw new Error(
+            "itx.integrations.requestFromUser: only a project's context asks a person to connect",
+          );
+        const url = new URL(
+          `/projects/${encodeURIComponent(project.projectSlug)}/integrations`,
+          deps.dashOrigin,
+        );
+        url.searchParams.set("request", IntegrationProvider.parse(provider));
+        if (scopes.length > 0) url.searchParams.set("scopes", scopes.join(" "));
+        if (lendTo) url.searchParams.set("lendTo", lendTo);
+        return { url: url.href };
+      },
     },
     fetchRoutes: {
       set: async (fetchRouteName, route) => {
