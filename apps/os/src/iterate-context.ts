@@ -34,6 +34,7 @@ import {
 } from "iterate/expression";
 import { retryPlatformFailures } from "@iterate-com/shared/platform-retry";
 import type { IterateContextApi } from "iterate/api";
+import type { StreamProcessorDurableObject } from "iterate/sdk";
 import type { StreamEvent, StreamEventInput } from "iterate/stream/processor";
 import {
   materializeItxHandleReference,
@@ -69,7 +70,8 @@ export type WaitUntil = (p: Promise<unknown>) => void;
 /** The reads a platform failure may send twice, by the names of their steps after `itx` (and any
  *  `builtins` or `cd(path)` before them): each changes nothing, so a second run answers as the first
  *  would have. A call is judged as the caller spelled it: a context's own row that redirects one of
- *  these names to a write is its owner's to keep safe to repeat. */
+ *  these names to a write, or a facet class that overrides one of the SDK's processor reads with a
+ *  write, is its owner's to keep safe to repeat. */
 const READ_CALLS: ReadonlySet<string> = new Set([
   "whoami",
   "readEvents",
@@ -79,6 +81,13 @@ const READ_CALLS: ReadonlySet<string> = new Set([
   "rewriteRules.list",
   "subscriptions.list",
   "processors.list",
+  ...(
+    [
+      "snapshot",
+      "liveSnapshot",
+      "waitUntilProcessed",
+    ] satisfies (keyof StreamProcessorDurableObject)[]
+  ).map((read) => `facets.get.${read}`),
   "repos.list",
   ...(
     [

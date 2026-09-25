@@ -41,6 +41,34 @@ test.for([
     retries: [{ name: "itx.append", message: "Error: Network connection lost." }],
   },
   {
+    name: "a processor's barrier the lost connection cut is sent again and answers",
+    call: [
+      "itx",
+      "facets",
+      ["get", "fan0"],
+      ["waitUntilProcessed", { offset: 1485, timeoutMs: 30_000 }],
+    ],
+    failures: ["connection lost"],
+    outcome: { answer: "answered" },
+    retries: [
+      { name: "itx.facets.get.waitUntilProcessed", message: "Error: Network connection lost." },
+    ],
+  },
+  {
+    name: "a processor's snapshot the storage timeout reset is sent again",
+    call: ["itx", "builtins", "facets", ["get", "agent"], ["snapshot"]],
+    failures: ["storage timeout"],
+    outcome: { answer: "answered" },
+    retries: [{ name: "itx.builtins.facets.get.snapshot", message: `Error: ${STORAGE_TIMEOUT}` }],
+  },
+  {
+    name: "a facet's own method is never sent twice",
+    call: ["itx", "facets", ["get", "agent"], ["message", "hello"]],
+    failures: ["connection lost"],
+    outcome: { error: "Network connection lost." },
+    retries: [],
+  },
+  {
     name: "a read through cd is sent again",
     call: ["itx", ["cd", "/notes"], ["waitForEvent", { type: "x" }]],
     failures: ["storage timeout"],
