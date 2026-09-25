@@ -10,7 +10,7 @@ served at https://os.iterate.com/setup-prompt.md. Tell Claude Code, Codex or ope
 > follow https://os.iterate.com/setup-prompt.md to set up self-hosted iterate
 
 From an empty folder it builds and deploys into the Cloudflare account you pick, creates your first
-project, checks it, connects itself over MCP, and hands you the dash and voice links. Its
+project, checks it, connects itself over MCP, and hands you the dash, voice and kit links. Its
 requirements are at the top: Workers Paid, R2, and access to Cloudflare Artifacts (a closed beta).
 You can follow it by hand too.
 
