@@ -1650,6 +1650,28 @@ enum iterate_kit_status iterate_kit_itx_transport_stop(
   return ITERATE_KIT_OK;
 }
 
+/*
+ * What the last disconnect says about joining, for a person listening to the
+ * board. The reason survives a later connect, so it counts only while down.
+ * A 4-way handshake that times out is almost always a wrong WPA2 password.
+ */
+static enum iterate_kit_wifi_status wifi_status(bool connected, int32_t reason) {
+  if (connected) return ITERATE_KIT_WIFI_JOINED;
+  switch (reason) {
+    case WIFI_REASON_AUTH_FAIL:
+    case WIFI_REASON_4WAY_HANDSHAKE_TIMEOUT:
+    case WIFI_REASON_HANDSHAKE_TIMEOUT:
+      return ITERATE_KIT_WIFI_WRONG_PASSWORD;
+    case WIFI_REASON_NO_AP_FOUND:
+    case WIFI_REASON_NO_AP_FOUND_W_COMPATIBLE_SECURITY:
+    case WIFI_REASON_NO_AP_FOUND_IN_AUTHMODE_THRESHOLD:
+    case WIFI_REASON_NO_AP_FOUND_IN_RSSI_THRESHOLD:
+      return ITERATE_KIT_WIFI_NOT_FOUND;
+    default:
+      return ITERATE_KIT_WIFI_JOINING;
+  }
+}
+
 void iterate_kit_itx_transport_metrics(
     const struct iterate_kit_itx_transport *transport,
     struct iterate_kit_itx_transport_metrics *metrics) {
@@ -1760,6 +1782,8 @@ void iterate_kit_itx_transport_metrics(
   metrics->last_wifi_disconnect_reason = __atomic_load_n(
       &transport->last_wifi_disconnect_reason,
       __ATOMIC_ACQUIRE);
+  metrics->wifi_status = wifi_status(
+      metrics->wifi_connected, metrics->last_wifi_disconnect_reason);
   metrics->last_websocket_error_generation =
       atomic_load_u32(
           &transport->last_websocket_error_generation);

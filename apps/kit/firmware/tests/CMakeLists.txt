@@ -144,6 +144,11 @@ iterate_kit_add_test(
   iterate-kit-voice-loop-credential-test voice_loop_credential_test.c
   STD 11 LINK iterate-kit-voice iterate-kit-esp-idf-fakes)
 
+# A plugged-in board narrating its connection, heard through its clip player.
+iterate_kit_add_test(
+  iterate-kit-voice-loop-status-voice-test voice_loop_status_voice_test.c
+  STD 11 LINK iterate-kit-voice iterate-kit-esp-idf-fakes)
+
 iterate_kit_add_test(iterate-kit-tinyvoice-test tinyvoice_test.c
   LINK iterate-kit-tinyvoice)
 iterate_kit_add_test(iterate-kit-announcer-test announcer_test.c

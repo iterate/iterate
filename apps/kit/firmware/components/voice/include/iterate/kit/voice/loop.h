@@ -67,6 +67,13 @@ struct iterate_kit_voice_view {
   uint32_t speaker_peak;
   /** Unrecoverable start-up fault. Nothing clears it; the only exit is a reboot. */
   bool fault;
+  /**
+   * A session the wake word starts gets a spoken answer from the loop ("Hello!",
+   * or why it cannot talk), so the board plays no wake chime for it.
+   */
+  bool voice_answers_wake_word;
+  /** The same for a button press: true while the board is not connected. */
+  bool voice_answers_press;
 };
 
 /**
@@ -94,6 +101,8 @@ struct iterate_kit_voice_intent {
   bool end_call;
   /** A level: hardware mute is engaged; capture continues for AEC only. */
   bool microphone_muted;
+  /** With `start_call`: the wake word, not a hand, started it. */
+  bool wake_word;
 };
 
 /** Which fact about the current answer this note carries. */
@@ -197,6 +206,12 @@ struct iterate_kit_board_ops {
    * counter that explains a bug.
    */
   size_t (*health)(void *context, char *out, size_t capacity);
+  /**
+   * Play 16 kHz mono PCM16 now, replacing any clip already playing. The loop
+   * keeps the samples allocated and unchanged until well after they have
+   * played. NULL: the board has no clip player, and never speaks its status.
+   */
+  void (*play_clip)(void *context, const int16_t *pcm, size_t samples);
 };
 
 /**
@@ -248,6 +263,12 @@ struct iterate_kit_board_facts {
    * on the first frame.
    */
   uint16_t capture_stack_bytes;
+  /**
+   * The loudest sample of this board's own "call ended" clip, which carries its
+   * speaker's gain. The board's spoken status is scaled to match; 0 uses the
+   * clip's unscaled peak.
+   */
+  uint16_t clip_peak;
 };
 
 /**

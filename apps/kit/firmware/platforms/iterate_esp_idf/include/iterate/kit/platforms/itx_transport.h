@@ -19,6 +19,7 @@
 #include "iterate/kit/voice_device_profile.h"
 #include "iterate/kit/websocket_frame_writer.h"
 #include "iterate/kit/websocket_text.h"
+#include "iterate/kit/wifi_status.h"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -205,6 +206,8 @@ struct iterate_kit_itx_transport_metrics {
   uint32_t last_application_capnweb_generation;
   int32_t last_application_capnweb_status;
   int32_t last_wifi_disconnect_reason;
+  /** `last_wifi_disconnect_reason` as the loop reads it, while Wi-Fi is down. */
+  enum iterate_kit_wifi_status wifi_status;
   /*
    * `last_websocket_transport_errno` and `last_platform_error` carry the lower
    * adapter's actual causal code.
