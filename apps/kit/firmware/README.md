@@ -126,6 +126,7 @@ board's `play_clip` op, which on ESP boards is the chime player. A board without
 | boot after an update, a crash, a watchdog or a brownout | nothing                                                                             |
 | a drop after it connected                               | nothing                                                                             |
 | the wake word, connected                                | "Hello!" instead of the wake chime                                                  |
+| a call ends                                             | "Call ended." (nothing when the voice is off)                                       |
 | the wake word, or a press, while not connected          | the current state instead of the chime ("Can't find the Wi-Fi network.")            |
 
 A phrase never cuts off another, and a state that went stale while one played is
@@ -134,8 +135,9 @@ free to answer at once; otherwise it chimes. Narration waits while the
 microphone is open, and nothing new starts during a call. The voice is the configuration's
 `status-voice` field (Kit's **Status voice**): Greensleeves (the default, and what
 an image without the field gets), Daisy Bell, Auld Lang Syne, the Lass of Aughrim,
-spoken, or off. Phrases are scaled to the peak of the board's own `call_ended.wav`,
-which carries its speaker gain. Each one is logged as `status voice: "…"`.
+spoken, or off. Phrases are scaled to the board's speech level
+(`ITERATE_KIT_SPEECH_PEAK`, from the same `GAIN` its chime is baked with). Each
+one is logged as `status voice: "…"`.
 
 ## Build and provision
 
@@ -272,10 +274,11 @@ The build runs CI's checks (flash layout, inputs, an unchanged tree) and reports
 its version as `dev`. Do not edit release offsets by hand or substitute
 downloaded binaries.
 
-The two reviewed UI WAVs are committed once, in `assets/sounds/`, where every
-board reads them. CMake deterministically converts
-them into each component build directory with the board's recorded trim and
-gain; generated C arrays are never committed and release builds need no audio
+The one recorded sound, the press chime, is committed once in `assets/sounds/`,
+where every board reads it; everything a board says is rendered on the board
+([Status voice](#status-voice)). CMake deterministically converts the chime into
+each component build directory with the board's recorded trim and gain;
+generated C arrays are never committed and release builds need no audio
 service, secret or network access.
 
 Prove code before publishing a release:

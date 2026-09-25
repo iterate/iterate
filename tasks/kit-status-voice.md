@@ -101,3 +101,10 @@ _(log; newest last)_
 - Not done, for a follow-up: a ▶ preview of each voice in Kit Flasher (needs the synth in the browser; the
   planning page's WebAssembly build is one route), and health fields for the status voice (the health line's
   budget is tight and truncation drops the whole line).
+- After trying it on a Voice PE, Misha asked for "Call ended" in the same voice rather than the recorded
+  one: a session's end now gets a sung "Call ended." and the board skips `call_ended.wav`
+  (`view.voice_says_call_ended`). Hello and Call ended are rendered once and kept.
+- Misha: "we don't need call_ended.wav once we merge this". Deleted: the end of a call is always the loop's
+  "Call ended." (silent with the voice off). Its other job, setting how loud speech is on each board,
+  is now explicit: make-sounds.py emits `ITERATE_KIT_SPEECH_PEAK` from the board's `GAIN`, into
+  `board.sounds.speech_peak`.

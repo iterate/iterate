@@ -4,7 +4,8 @@
  * One boot, heard through the board's clip player: "Connecting to Wi-Fi." while
  * it joins, "Ready." once iterate answers (the connect in between was too
  * quick to mention), "Hello!" instead of the chime when the wake word starts a
- * session, and nothing when the connection drops later. A separate executable
+ * session, "Call ended." when it ends, and nothing
+ * when the connection drops later. A separate executable
  * because the loop is a program that boots once (voice_loop_credential_test.c).
  */
 
@@ -40,7 +41,7 @@ struct clip {
 
 static struct {
   struct iterate_kit_voice_view last_view;
-  struct clip clips[8];
+  struct clip clips[12];
   size_t clip_count;
   bool press_next_poll;
   bool wake_word_next_poll;
@@ -63,7 +64,7 @@ int main(void) {
   for (int i = 0; i < 12; i++) step();
   assert(board.clip_count == 1U);
   assert(board.clips[0].samples == samples_of(ITERATE_KIT_ANNOUNCEMENT_CONNECTING_TO_WIFI));
-  /* As loud as the board's own "call ended". */
+  /* At the board's speech level. */
   assert(peak_of(&board.clips[0]) == CLIP_PEAK);
   /* Singing: an answer could not start at once, so a start would get the chime. */
   assert(!board.last_view.voice_answers_press);
@@ -91,29 +92,43 @@ int main(void) {
   assert(board.clip_count == 3U);
   assert(board.clips[2].samples == samples_of(ITERATE_KIT_ANNOUNCEMENT_HELLO));
 
-  /* Hang up; the next "Jarvis" reuses the Hello already rendered. */
+  /* Hang up: "Call ended.", in the same voice. */
   board.end_next_poll = true;
   for (int i = 0; i < 40; i++) step();
   assert(!board.last_view.wants_call);
+  assert(board.clip_count == 4U);
+  assert(board.clips[3].samples == samples_of(ITERATE_KIT_ANNOUNCEMENT_CALL_ENDED));
+  for (int i = 0; i < 40; i++) step();
+
+  /* The next call reuses both, rendered once. */
   board.press_next_poll = true;
   board.wake_word_next_poll = true;
   for (int i = 0; i < 2; i++) step();
-  assert(board.clip_count == 4U);
-  assert(board.clips[3].pcm == board.clips[2].pcm);
-
-  /* A button press while connected is the chime's, not the loop's. */
+  assert(board.clip_count == 5U);
+  assert(board.clips[4].pcm == board.clips[2].pcm);
   board.end_next_poll = true;
   for (int i = 0; i < 40; i++) step();
+  assert(board.clip_count == 6U);
+  assert(board.clips[5].pcm == board.clips[3].pcm);
+
+  /* A button press while connected is the chime's: all the loop says is the call's end. */
+  for (int i = 0; i < 40; i++) step();
+  assert(!board.last_view.voice_answers_press);
+  const size_t before_press = board.clip_count;
   board.press_next_poll = true;
   for (int i = 0; i < 40; i++) step();
-  assert(board.clip_count == 4U);
+  board.end_next_poll = true;
+  for (int i = 0; i < 40; i++) step();
+  for (size_t i = before_press; i < board.clip_count; i++) {
+    assert(board.clips[i].samples == samples_of(ITERATE_KIT_ANNOUNCEMENT_CALL_ENDED));
+  }
 
   /* Connected once, a drop is silent: no singing at 3 am. */
-  board.end_next_poll = true;
+  const size_t before_drop = board.clip_count;
   iterate_kit_fake_platform_set_state(ITERATE_KIT_ITX_WIFI_CONNECTING);
   iterate_kit_fake_platform_set_wifi_status(ITERATE_KIT_WIFI_JOINING);
   for (int i = 0; i < 100; i++) step();
-  assert(board.clip_count == 4U);
+  assert(board.clip_count == before_drop);
   return 0;
 }
 

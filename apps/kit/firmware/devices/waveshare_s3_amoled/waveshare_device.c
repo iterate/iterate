@@ -553,7 +553,7 @@ static const struct iterate_kit_board board = {
   .button = {.gpio = -1},
   .read_gestures = read_gestures,
   .sounds = {.wake = sound_chime_press, .wake_bytes = sizeof(sound_chime_press),
-    .ended = sound_chime_ended, .ended_bytes = sizeof(sound_chime_ended)},
+    .speech_peak = ITERATE_KIT_SPEECH_PEAK},
   .open_codec = open_codec,
   .set_volume = set_volume,
   .extra = &ops,

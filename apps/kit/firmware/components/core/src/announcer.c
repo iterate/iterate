@@ -23,7 +23,14 @@ static const struct {
         "ih1 t ax r ey2 t r ih f y uw1 z d m ay k iy1 . p l iy1 z s eh1 t m iy ah1 p ax g eh1 n ."},
     [ITERATE_KIT_ANNOUNCEMENT_READY] = {"Ready.", "r eh1 d iy ."},
     [ITERATE_KIT_ANNOUNCEMENT_HELLO] = {"Hello!", "hh ax l ow1 ."},
+    [ITERATE_KIT_ANNOUNCEMENT_CALL_ENDED] = {"Call ended.", "k ao1 l eh1 n d ih d ."},
 };
+
+/* A phrase about the connection, as opposed to an answer to a person (Hello, Call ended). */
+static bool connection_phrase(enum iterate_kit_announcement announcement) {
+  return announcement >= ITERATE_KIT_ANNOUNCEMENT_CONNECTING_TO_WIFI &&
+         announcement <= ITERATE_KIT_ANNOUNCEMENT_READY;
+}
 
 static uint32_t bit(enum iterate_kit_announcement announcement) {
   return UINT32_C(1) << (unsigned)announcement;
@@ -78,8 +85,7 @@ void iterate_kit_announcer_step(
     announcer->narrating = false;
   }
   /* A waiting status phrase is about the state it was queued for. */
-  if (announcer->pending != ITERATE_KIT_ANNOUNCEMENT_NONE &&
-      announcer->pending != ITERATE_KIT_ANNOUNCEMENT_HELLO && announcer->pending != state) {
+  if (connection_phrase(announcer->pending) && announcer->pending != state) {
     announcer->pending = announcer->pending_answers ? state : ITERATE_KIT_ANNOUNCEMENT_NONE;
   }
   if (input->in_session && !announcer->pending_answers) {
@@ -95,9 +101,12 @@ void iterate_kit_announcer_step(
     announcer->pending_answers = false;
   }
 
-  /* Someone asked for the board: answer now, whatever the narration queued. */
+  /* Someone asked for the board, or hung up: answer, whatever the narration queued. */
   if (input->woken || input->pressed) {
     announcer->pending = input->woken && input->connected ? ITERATE_KIT_ANNOUNCEMENT_HELLO : state;
+    announcer->pending_answers = true;
+  } else if (input->call_ended) {
+    announcer->pending = ITERATE_KIT_ANNOUNCEMENT_CALL_ENDED;
     announcer->pending_answers = true;
   }
 }
@@ -109,7 +118,7 @@ bool iterate_kit_announcer_answers(bool wake_word, bool connected, bool speaker_
 enum iterate_kit_announcement iterate_kit_announcer_take(
     struct iterate_kit_announcer *announcer) {
   const enum iterate_kit_announcement pending = announcer->pending;
-  if (pending != ITERATE_KIT_ANNOUNCEMENT_NONE && pending != ITERATE_KIT_ANNOUNCEMENT_HELLO) {
+  if (connection_phrase(pending)) {
     announcer->narrated |= bit(pending);
     if (pending == ITERATE_KIT_ANNOUNCEMENT_READY) announcer->narrating = false;
   }

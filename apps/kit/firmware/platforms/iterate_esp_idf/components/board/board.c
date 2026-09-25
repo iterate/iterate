@@ -348,17 +348,6 @@ static void play_clip(void *context, const int16_t *pcm, size_t samples) {
   play_sound((const uint8_t *)pcm, (uint32_t)(samples * sizeof(int16_t)));
 }
 
-/* The loudest sample of a baked clip, which carries the board's gain. */
-static uint16_t clip_peak(const uint8_t *pcm, uint32_t bytes) {
-  uint16_t peak = 0U;
-  for (uint32_t i = 0; i + 1U < bytes; i += 2U) {
-    const int16_t sample = (int16_t)(uint16_t)(pcm[i] | (pcm[i + 1U] << 8));
-    const uint16_t magnitude = sample < 0 ? (uint16_t)(-(int32_t)sample) : (uint16_t)sample;
-    if (magnitude > peak) peak = magnitude;
-  }
-  return peak;
-}
-
 static void poll(void *context, struct iterate_kit_voice_intent *out) {
   (void)context;
   const uint64_t now_ms = (uint64_t)(esp_timer_get_time() / 1000);
@@ -393,8 +382,7 @@ static void poll(void *context, struct iterate_kit_voice_intent *out) {
   };
   /* A start the loop answers out loud ("Hello!", or why it cannot talk) gets no chime as well. */
   const bool answered = heard_wake_word ? view.voice_answers_wake_word : view.voice_answers_press;
-  /* End before wake: replacement playback leaves the newer intent audible. */
-  if (!microphone_muted && actions.end_chime) play_sound(board->sounds.ended, board->sounds.ended_bytes);
+  /* A session's end is the loop's to say ("Call ended.", iterate/kit/announcer.h). */
   if (!microphone_muted && actions.wake_chime && !answered) play_sound(board->sounds.wake, board->sounds.wake_bytes);
 }
 
@@ -454,7 +442,7 @@ void iterate_kit_board_run(const struct iterate_kit_board *value) {
   facts.speaker.set_volume = set_volume;
   facts.speaker.volume = volume;
   facts.speaker.context = NULL;
-  facts.clip_peak = clip_peak(board->sounds.ended, board->sounds.ended_bytes);
+  facts.clip_peak = board->sounds.speech_peak;
   struct iterate_kit_board_ops ops = board->extra != NULL ? *board->extra : (struct iterate_kit_board_ops){0};
   ops.start = start;
   ops.present = present;

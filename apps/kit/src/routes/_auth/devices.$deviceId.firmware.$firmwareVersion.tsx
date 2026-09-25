@@ -433,8 +433,8 @@ function KitPage() {
                 </SelectContent>
               </Select>
               <FieldDescription>
-                How the board says “Connecting to Wi-Fi”, “Ready” and the like while it connects. A
-                board with a wake word also answers it with “Hello”.
+                How the board says “Connecting to Wi-Fi”, “Ready” and “Call ended”. A board with a
+                wake word also answers it with “Hello”.
               </FieldDescription>
             </FieldContent>
           </Field>

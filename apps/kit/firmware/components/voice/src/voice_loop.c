@@ -458,11 +458,13 @@ EXT_RAM_BSS_ATTR static struct {
     enum iterate_kit_tinyvoice_tune tune;
     struct iterate_kit_announcer announcer;
     struct iterate_kit_tinyvoice synth;
-    /* Rendered once and kept: the wake word asks for it every time. */
-    int16_t *hello;
-    size_t hello_samples;
+    /* Hello and Call ended, rendered once and kept: every call uses them. */
+    int16_t *kept[ITERATE_KIT_ANNOUNCEMENT_COUNT];
+    size_t kept_samples[ITERATE_KIT_ANNOUNCEMENT_COUNT];
     /* The status phrase playing, freed once it has played. */
     int16_t *status;
+    /* Last pass had a session open or opening, to see one end. */
+    bool was_in_session;
     uint64_t busy_until_ms;
     /* A clip may have raised a gated amplifier that nothing else will lower. */
     bool speaker_raised;
@@ -2390,7 +2392,7 @@ enum {
    * the codec copying its last slice after it stops reporting the clip.
    */
   STATUS_VOICE_TAIL_MS = 300,
-  /* The peak of call_ended.wav as committed; a board's facts may scale it. */
+  /* tools/make-sounds.py's SPEECH_PEAK: spoken status on a board with no extra gain. */
   STATUS_VOICE_DEFAULT_PEAK = 19339,
 };
 
@@ -2429,9 +2431,9 @@ static void status_voice_init(void) {
 
 /* Render (or reuse) a phrase and hand it to the board. Only called once the last clip is over. */
 static void status_voice_say(enum iterate_kit_announcement phrase, uint64_t now) {
-  const bool hello = phrase == ITERATE_KIT_ANNOUNCEMENT_HELLO;
-  int16_t *pcm = hello ? runtime.status_voice.hello : NULL;
-  size_t samples = hello ? runtime.status_voice.hello_samples : 0U;
+  const bool keep = phrase == ITERATE_KIT_ANNOUNCEMENT_HELLO || phrase == ITERATE_KIT_ANNOUNCEMENT_CALL_ENDED;
+  int16_t *pcm = runtime.status_voice.kept[phrase];
+  size_t samples = runtime.status_voice.kept_samples[phrase];
   const int64_t started_us = esp_timer_get_time();
   if (pcm == NULL) {
     samples = iterate_kit_tinyvoice_prepare(
@@ -2445,14 +2447,14 @@ static void status_voice_say(enum iterate_kit_announcement phrase, uint64_t now)
       return;
     }
     iterate_kit_tinyvoice_render(&runtime.status_voice.synth, pcm);
-    /* As loud as this board's own "call ended". */
+    /* As loud as this board's speech level. */
     int32_t peak = 1;
     for (size_t i = 0; i < samples; i++) peak = pcm[i] > peak ? pcm[i] : -pcm[i] > peak ? -pcm[i] : peak;
     const int32_t target = runtime.facts->clip_peak != 0U ? runtime.facts->clip_peak : STATUS_VOICE_DEFAULT_PEAK;
     for (size_t i = 0; i < samples; i++) pcm[i] = (int16_t)((int32_t)pcm[i] * target / peak);
-    if (hello) {
-      runtime.status_voice.hello = pcm;
-      runtime.status_voice.hello_samples = samples;
+    if (keep) {
+      runtime.status_voice.kept[phrase] = pcm;
+      runtime.status_voice.kept_samples[phrase] = samples;
     } else {
       runtime.status_voice.status = pcm;
     }
@@ -2482,6 +2484,11 @@ static void status_voice_step(bool started, bool wake_word) {
       runtime.status_voice.enabled && iterate_kit_announcer_answers(true, runtime.view.api_ready, speaker_free);
   runtime.view.voice_answers_press =
       runtime.status_voice.enabled && iterate_kit_announcer_answers(false, runtime.view.api_ready, speaker_free);
+  /* "Call ended." waits for the speaker if a phrase is still playing; a muted board keeps quiet. */
+  const bool in_session = runtime.view.wants_call || runtime.view.call_active;
+  const bool call_ended =
+      runtime.status_voice.was_in_session && !in_session && !runtime.intent.microphone_muted;
+  runtime.status_voice.was_in_session = in_session;
   if (!runtime.status_voice.enabled) return;
   if (speaker_free && runtime.status_voice.status != NULL) {
     heap_caps_free(runtime.status_voice.status);
@@ -2500,9 +2507,10 @@ static void status_voice_step(bool started, bool wake_word) {
       .wifi = metrics.wifi_status,
       .key_refused = metrics.credential_refused,
       .connected = runtime.view.api_ready,
-      .in_session = runtime.view.wants_call || runtime.view.call_active,
+      .in_session = in_session,
       .woken = answered && wake_word,
       .pressed = answered && !wake_word,
+      .call_ended = call_ended,
   };
   iterate_kit_announcer_step(&runtime.status_voice.announcer, &input);
   /*

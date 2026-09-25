@@ -264,9 +264,9 @@ struct iterate_kit_board_facts {
    */
   uint16_t capture_stack_bytes;
   /**
-   * The loudest sample of this board's own "call ended" clip, which carries its
-   * speaker's gain. The board's spoken status is scaled to match; 0 uses the
-   * clip's unscaled peak.
+   * The loudest sample the board's spoken status should reach on this speaker
+   * (the bake's ITERATE_KIT_SPEECH_PEAK, which carries the board's gain). 0
+   * uses the level of a board with no extra gain.
    */
   uint16_t clip_peak;
 };

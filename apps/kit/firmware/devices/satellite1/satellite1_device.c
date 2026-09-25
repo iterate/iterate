@@ -245,7 +245,7 @@ static const struct iterate_kit_board board = {
   .wake_word = "jarvis",
   .sounds = {
     .wake = sound_chime_press, .wake_bytes = sizeof(sound_chime_press),
-    .ended = sound_chime_ended, .ended_bytes = sizeof(sound_chime_ended),
+    .speech_peak = ITERATE_KIT_SPEECH_PEAK,
   },
   .open_codec = iterate_kit_satellite1_open_codec,
   .set_volume = iterate_kit_satellite1_set_volume,

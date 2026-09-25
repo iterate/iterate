@@ -27,6 +27,7 @@ extern "C" {
  * - A wake word gets "Hello!" when connected, and the reason it cannot talk
  *   when not. So does a button press while not connected. Only while the
  *   speaker is free, so the answer starts at once; otherwise the board chimes.
+ * - A session's end gets "Call ended." in the same voice.
  * - Narration waits while a session is open or opening: the microphone is live.
  * - One phrase at a time: the loop takes the next phrase only when its speaker
  *   is free, so a phrase never cuts off another. A phrase waiting for the
@@ -44,6 +45,7 @@ enum iterate_kit_announcement {
   ITERATE_KIT_ANNOUNCEMENT_KEY_REFUSED,
   ITERATE_KIT_ANNOUNCEMENT_READY,
   ITERATE_KIT_ANNOUNCEMENT_HELLO,
+  ITERATE_KIT_ANNOUNCEMENT_CALL_ENDED,
   ITERATE_KIT_ANNOUNCEMENT_COUNT,
 };
 
@@ -70,6 +72,8 @@ struct iterate_kit_announcer_input {
   bool woken;
   /** A button press did, likewise. */
   bool pressed;
+  /** A session ended. */
+  bool call_ended;
 };
 
 struct iterate_kit_announcer {
