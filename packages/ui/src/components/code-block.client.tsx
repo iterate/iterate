@@ -262,7 +262,7 @@ function foldBracketsAndDocComments() {
       }
     }
 
-    for (const pair of ["{}", "[]"] as const) {
+    for (const pair of ["{}", "[]"]) {
       if (line.text.trimEnd().endsWith(pair[0])) {
         const indent = line.text.match(/^\s*/)?.[0] || "";
         for (let i = line.number + 1; i <= state.doc.lines; i++) {
