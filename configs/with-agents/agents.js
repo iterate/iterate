@@ -204,7 +204,7 @@ var AgentContract = defineProcessorContract({
         triggerOffset: z.number().int().positive()
       })
     },
-    "events.iterate.com/agent/llm-response-chunks": {
+    "events.iterate.com/agent/llm-response-frame": {
       description: "EPHEMERAL, never stored: one coalescing window of the provider's streamed events for the request it names \u2014 what a feed renders as the answer being written. The settled event carries the durable text.",
       ephemeral: true,
       payloadSchema: z.object({
@@ -259,7 +259,7 @@ var AgentContract = defineProcessorContract({
       payloadSchema: z.object({ reason: z.string().optional() })
     }
   },
-  // The script events are the CONTEXT's (`context/run-requested` / `run-settled`): the agent asks,
+  // The script events are the CONTEXT's (`itx/run-requested` / `run-settled`): the agent asks,
   // the context runs, the agent reads the settlement as the next developer item.
   processorDeps: [RunContract],
   consumes: [
@@ -274,7 +274,7 @@ var AgentContract = defineProcessorContract({
     "events.iterate.com/agent/llm-request-settled",
     "events.iterate.com/agent/paused",
     "events.iterate.com/agent/resumed",
-    "events.iterate.com/context/run-settled"
+    "events.iterate.com/itx/run-settled"
   ],
   emits: [
     "events.iterate.com/agent/created",
@@ -284,12 +284,12 @@ var AgentContract = defineProcessorContract({
     "events.iterate.com/agent/web-message-sent",
     "events.iterate.com/agent/summary-updated",
     "events.iterate.com/agent/llm-request-requested",
-    "events.iterate.com/agent/llm-response-chunks",
+    "events.iterate.com/agent/llm-response-frame",
     "events.iterate.com/agent/llm-request-settled",
     "events.iterate.com/agent/token-usage-reported",
     "events.iterate.com/agent/paused",
     "events.iterate.com/agent/resumed",
-    "events.iterate.com/context/run-requested"
+    "events.iterate.com/itx/run-requested"
   ]
 });
 
@@ -376,7 +376,7 @@ var DEFAULT_AGENT_SYSTEM_PROMPT = [
   "WORKING ON THE PROJECT'S WEBSITE (the surface itself is the CAPABILITY TREE message):",
   "Start website work with `await itx.whoami()` and use its `projectUrl`; never guess a hostname from the opaque projectId. Ingress means this project's website, not the Ingress game.",
   'WEBSITE INGRESS: every host of the project \u2014 the apex `<project-slug>.<ingress-base>` and `<routing-slug>--<project-slug>.<ingress-base>` \u2014 reaches the config worker\'s `fetch`, which routes on the `x-iterate-routing-slug` request header (absent on the apex) in plain code: `const routingSlug = request.headers.get("x-iterate-routing-slug"); if (routingSlug === null) return homepage; if (routingSlug === "blog") return blog(request); return new Response("Not found", { status: 404 });`. A project with no config worker yet returns 404.',
-  "A COMMIT TO /repos/config IS THE PUBLICATION: the platform points the website at the new commit within a moment (the project follows the config repo's main). For config-repo website updates, let the project processor configure ingress from the commit; no manual `project/ingress-configured` event is needed. `commitFiles` and `writeFile` write to main.",
+  "A COMMIT TO /repos/config IS THE PUBLICATION: the platform points the website at the new commit within a moment (the project follows the config repo's main). For config-repo website updates, let the project processor configure ingress from the commit; no manual `itx/ingress-configured` event is needed. `commitFiles` and `writeFile` write to main.",
   'The worker loader executes JavaScript modules directly, even when the repo file is named worker.ts. Keep the saved source valid JavaScript: no TypeScript type annotations, unresolved package imports, or unbundled dependencies. For a simple site use `import { WorkerEntrypoint } from "cloudflare:workers"; export default class extends WorkerEntrypoint { fetch(request) { return new Response("Hello"); } }`. The whole repo is the worker: worker.ts may import any .js file in the repo by its relative path (`import { page } from "./site/page.js"`), each run as a JavaScript module \u2014 name sibling modules .js (the loader takes a module under no other name; worker.ts is the name the seed uses and runs as the main module); other file types (.md, .css, .json) are not modules \u2014 a worker that serves one exports its text from a .js file. A broken commit takes the site down until the next one, so PROBE THE CANDIDATE BEFORE COMMITTING: `await itx.workers.get({ source: { "cap.js": candidateSource } }).fetch(new Request(projectUrl))` runs the source as a worker without committing anything; commit only when its status and body are what you want.',
   "List files and read existing source before editing; repo paths are repo-relative.",
   "After committing, fetch the actual projectUrl with itx.fetch(new Request(projectUrl)) and inspect its HTTP status and response body \u2014 the publication lands a moment after the commit, so fetch again a few times over a few seconds if the page is still the old one. Report success only after the returned page contains the requested change. A commit receipt is not publication proof. A new verification request requires a new fetch, regardless of conversation history."
@@ -737,7 +737,7 @@ ${partialText}`
             payload: { activity: outcome.status }
           });
         consequences.push({
-          type: "events.iterate.com/context/run-requested",
+          type: "events.iterate.com/itx/run-requested",
           idempotencyKey: this.idempotencyKey("run-requested", event),
           payload: { code: outcome.code }
         });
@@ -750,7 +750,7 @@ ${partialText}`
         });
       if (consequences.length > 0) blockProcessorWhile(() => append(...consequences));
     }
-    if (event?.type === "events.iterate.com/context/run-settled") {
+    if (event?.type === "events.iterate.com/itx/run-settled") {
       const rendered = renderScriptSettlement(event.payload.settlement);
       if (rendered)
         blockProcessorWhile(
@@ -891,7 +891,7 @@ CURRENT PROJECT: ${JSON.stringify(whoami)}`
     }
   }
   /** The model over the conversation up to the request, STREAMED: each coalescing window of provider
-   *  events is one ephemeral `llm-response-chunks` (a feed renders the answer as it is written); ONE
+   *  events is one ephemeral `llm-response-frame` (a feed renders the answer as it is written); ONE
    *  batch then settles the request, lands the assistant's words and reports the cost, so an eviction
    *  between them is impossible. An interruption settles the request itself (processEvent) — an
    *  aborted stream ends here silently, and a success that raced it loses on the settle key. */
@@ -943,7 +943,7 @@ CURRENT PROJECT: ${JSON.stringify(whoami)}`
         const payload = { llmRequestOffset, chunks, sequence: sequence++ };
         windows = windows.then(
           () => append({
-            type: "events.iterate.com/agent/llm-response-chunks",
+            type: "events.iterate.com/agent/llm-response-frame",
             ephemeral: true,
             payload
           })
