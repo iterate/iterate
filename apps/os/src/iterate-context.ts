@@ -187,6 +187,9 @@ export class IterateContextRpcTarget extends RpcTarget {
    *  `source.principal` and `source.grant`, and the DO can compose a public URL (`itx.url`, a signed
    *  file URL) without knowing the deployment's origin itself. */
   readonly #caller: Caller;
+  /** A platform admin's handle on the global namespace (session.ts `global`): its `cd` walks it,
+   *  as a project's walks the project. */
+  readonly #globalPaths: boolean;
 
   constructor(
     contextNamespace: IterateContextNamespace,
@@ -194,8 +197,10 @@ export class IterateContextRpcTarget extends RpcTarget {
     sessionTeardown: SessionTeardown,
     waitUntil: WaitUntil,
     caller: Caller,
+    globalPaths = false,
   ) {
     super();
+    this.#globalPaths = globalPaths;
     this.#contextNamespace = contextNamespace;
     this.#durableObjectAddress = durableObjectAddress;
     this.#sessionTeardown = sessionTeardown;
@@ -250,15 +255,24 @@ export class IterateContextRpcTarget extends RpcTarget {
    *  with the built-in `itx.cd(...)` root. Returns an EDGE context, so `provide` on it lends in this
    *  same session. Pure addressing — and, the projectId being kept, a project's `cd` can never spell
    *  the global namespace. THE GLOBAL NAMESPACE IS NOT NAVIGABLE: a global context is reached by
-   *  IDENTITY only (`session.user`, `session.organizations.get`), so its `cd` is refused for everyone
-   *  — the admin included — and the DO's built-in `cd` refuses it too. This is the whole path mask:
-   *  with no way to name another user's path, there is no policy to get wrong. */
+   *  IDENTITY only (`session.user`, `session.organizations.get`), so its `cd` is refused — and the
+   *  DO's built-in `cd` refuses it too. This is the whole path mask: with no way to name another
+   *  user's path, there is no policy to get wrong. The one exception is a platform admin's handle
+   *  (`#globalPaths`), which walks `/`, `/users/<id>…` and `/organizations/<id>…`. */
   cd(path: string): IterateContextRpcTarget {
-    if (this.#durableObjectAddress.projectId === GLOBAL_PROJECT_ID)
-      throw codedError(
-        "FORBIDDEN",
-        "a global context is reached by identity (session.user, session.organizations), never by path",
-      );
+    if (this.#durableObjectAddress.projectId === GLOBAL_PROJECT_ID) {
+      if (!this.#globalPaths)
+        throw codedError(
+          "FORBIDDEN",
+          "a global context is reached by identity (session.user, session.organizations), never by path",
+        );
+      const resolved = resolveContextPath(this.#durableObjectAddress.path, path);
+      if (!/^\/(?:(?:users|organizations)(?:\/.*)?)?$/.test(resolved))
+        throw codedError(
+          "INVALID_INPUT",
+          `cd(${JSON.stringify(path)}): a global context is /, /users… or /organizations…`,
+        );
+    }
     // LOADED CODE's `cd` is an expression through THIS context's table (`itx.cd ⇒ null` is a wall,
     // and the resolver's app wall keeps it to self and descendants) — the dotted surface of the handle
     // it gets back accumulates onto one `invoke`, exactly as the built-in `cd` root answers.
@@ -286,6 +300,7 @@ export class IterateContextRpcTarget extends RpcTarget {
       this.#sessionTeardown,
       this.#waitUntil,
       this.#caller,
+      this.#globalPaths,
     );
   }
 

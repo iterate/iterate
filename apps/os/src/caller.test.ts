@@ -101,6 +101,27 @@ test("a person through a grant: source.principal and source.grant, a client-supp
     },
   });
 });
+test("an admin viewing as someone: both stamped; a client's claim of one is dropped with its principal", () => {
+  const viewed = {
+    actor: "user_bob",
+    email: "bob@example.com",
+    impersonatedBy: { actor: "user_admin", email: "admin@example.com" },
+  };
+  const forged = {
+    ...event,
+    source: { principal: { actor: "user_bob", impersonatedBy: { actor: "user_x", email: "x@y" } } },
+  };
+  expect(stampCaller(forged, { principal: viewed, grant: "g" })).toEqual({
+    ...event,
+    source: { principal: viewed, grant: "g" },
+  });
+  expect(
+    stampCaller(forged, { principal: { actor: "user_bob", email: "bob@example.com" }, grant: "g" }),
+  ).toEqual({
+    ...event,
+    source: { principal: { actor: "user_bob", email: "bob@example.com" }, grant: "g" },
+  });
+});
 test("the admin secret: a principal, no grant key at all", () => {
   expect(stampCaller(event, { principal: { actor: "admin" } })).toEqual({
     ...event,

@@ -1,7 +1,30 @@
 // Who is here: the people who acted on the context, newest first (from the log's stamps), and how
-// many live rpc stubs are lent to it right now. One line, text — no badges.
+// many live rpc stubs are lent to it right now. One line, text — no badges. And how busy it is:
+// `EventRate`, the strip's live metric (the old header's was a latency sparkline).
+import { useEffect, useState } from "react";
 import { cn } from "cn";
-import type { ContextViewPresence } from "./types.tsx";
+import type { ContextViewEvent, ContextViewPresence } from "./types.tsx";
+
+/** ` · 12/min`: the events of the last minute, from the tail back (the log is sorted), re-counted
+ *  every few seconds while there are any so the rate falls when the log goes quiet; nothing when
+ *  the minute was quiet. */
+export function EventRate({ events }: { events: readonly ContextViewEvent[] }) {
+  const [now, setNow] = useState(() => Date.now());
+  let count = 0;
+  for (let at = events.length - 1; at >= 0; at--) {
+    if (now - Date.parse(events[at]!.createdAt) > 60_000) break;
+    count += 1;
+  }
+  useEffect(() => {
+    if (count === 0) return;
+    const timer = setInterval(() => setNow(Date.now()), 5_000);
+    return () => clearInterval(timer);
+  }, [count]);
+  // a new event restarts the minute from now
+  useEffect(() => setNow(Date.now()), [events]);
+  if (count === 0) return null;
+  return <span title="Events in the last minute">{` · ${String(count)}/min`}</span>;
+}
 
 export function PresenceStrip({
   actors,

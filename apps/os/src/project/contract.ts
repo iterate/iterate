@@ -34,7 +34,7 @@ export const ProjectContract = defineProcessorContract({
   // is what re-reduces every existing root log.
   version: "11",
   description:
-    "The project: where its own creation stands, its custom hostnames, and the catalog of every repo, workspace and secret born under it (from the certificates cross-posted to /).",
+    "The project: where its own creation stands, its custom hostnames, every context under it (from the announcements each lands on /), and the catalog of every repo, workspace and secret born under it (from the certificates cross-posted to /).",
   /** THE REDUCED STATE — what the reduce keeps between events: where the project's OWN creation
    *  stands, as the OFFSET of the event that says so (the request, the certificate, or the failure —
    *  read that event for the error), and the CATALOG of what exists under it — read by each
@@ -52,6 +52,9 @@ export const ProjectContract = defineProcessorContract({
     repos: z.record(z.string(), z.object({ createdAt: z.string() })).default({}),
     /** Every workspace born under the project, by path. */
     workspaces: z.record(z.string(), z.object({ createdAt: z.string() })).default({}),
+    /** THE CONTEXT REGISTRY: every context under the project, by path, from the
+     *  `itx/child-created` each one lands on `/` when it first wakes. `/` itself is not in it. */
+    contexts: z.record(z.string(), z.object({ createdAt: z.string() })).default({}),
     /** The project secret catalog. */
     secrets: SecretCatalog.default({}),
     /** The config repo's tip as its commits reach `/`: the latest `repo/commit-completed` from
@@ -160,6 +163,7 @@ export const ProjectContract = defineProcessorContract({
     "events.iterate.com/secret/deleted",
     "events.iterate.com/repo/commit-completed",
     "events.iterate.com/itx/ingress-configured",
+    "events.iterate.com/itx/child-created",
   ],
   emits: [
     "events.iterate.com/project/created",

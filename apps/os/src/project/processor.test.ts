@@ -23,6 +23,7 @@ const empty: ProjectState = {
   creation: null,
   repos: {},
   workspaces: {},
+  contexts: {},
   secrets: {},
   configRepoTip: null,
   publishedCommitOid: null,
@@ -83,6 +84,7 @@ const reduceRows: {
       creation: { status: "created", offset: 2 },
       repos: { "/repos/config": { createdAt: expect.any(String) } },
       workspaces: { "/workspaces/notes": { createdAt: expect.any(String) } },
+      contexts: {},
       secrets: {},
       configRepoTip: null,
       publishedCommitOid: null,
@@ -282,6 +284,17 @@ const reduceRows: {
       ...empty,
       hostnames: {
         "www.acme.test": { requested: null, cloudflare: observation("pending"), error: null },
+      },
+    },
+  },
+  {
+    name: "the context registry: each announced context once, by path; a repeat keeps the first",
+    events: [childCreated("/agents/a"), childCreated("/repos/config"), childCreated("/agents/a")],
+    state: {
+      ...empty,
+      contexts: {
+        "/agents/a": { createdAt: expect.any(String) },
+        "/repos/config": { createdAt: expect.any(String) },
       },
     },
   },
@@ -657,6 +670,11 @@ function observation(status: string) {
     sslStatus: status,
     records: [{ name: "www.acme.test", value: "cname.iterate.app" }],
   };
+}
+
+/** A context announcing itself to `/` (iterate-context-durable-object.ts `announceToAncestors`). */
+function childCreated(childPath: string) {
+  return { type: "events.iterate.com/itx/child-created", payload: { childPath } };
 }
 
 /** Two turns: a background effect's awaits, then its append. */

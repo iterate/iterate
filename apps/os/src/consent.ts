@@ -15,20 +15,21 @@ import {
 } from "iterate/oauth-scopes";
 import type { IngressRouting } from "iterate/project-ingress";
 import { suggestOrganizationName } from "./name-suggestions.ts";
-import { type ConsentApproved } from "./account/contract.ts";
+import { type ConsentApproved, type ImpersonationStarted } from "./account/contract.ts";
 import type { Env } from "./env.ts";
-import type { OrganizationRecord, ProjectRecord } from "./control-plane/catalog.ts";
+import type { OrganizationRecord, ProjectRecord, UserRecord } from "./control-plane/catalog.ts";
 import { ControlPlane } from "./control-plane/edge.ts";
 import { appConfigOf, type PlatformAddresses } from "./app-config.ts";
 import {
   grantIsLive,
+  isAdmin,
   oauthHelpers,
   parseAuthorization,
   type AccessGrant,
   type GrantProps,
 } from "./oauth.ts";
 import { clientDisplay } from "./client-display.ts";
-import { publishPlatformFacts } from "./session.ts";
+import { appendPlatformFacts, publishPlatformFacts } from "./session.ts";
 
 export type ConsentView =
   | {
@@ -56,6 +57,19 @@ export type ConsentView =
       /** the onboarding step's first draft of an organization name: from the person's display name,
        *  else their email's company domain or local part */
       suggestedOrganizationName: string;
+    }
+  | {
+      /** a platform admin's request to view the client as `target` (`act_as`, `#impersonate`) */
+      kind: "impersonate";
+      clientName: string;
+      clientId: string;
+      clientLogoUri?: string;
+      clientDomain?: string;
+      /** the admin, signed in */
+      email: string;
+      /** the person the client will act as */
+      target: string;
+      denyLocation: string;
     }
   | { kind: "redirect"; location: string }
   | { kind: "invalid"; description: string };
@@ -147,7 +161,9 @@ export class ConsentRpcTarget extends RpcTarget {
     try {
       const request = await this.#request(query);
       const client = await oauthHelpers(env, this.#addresses).lookupClient(request.clientId);
-      const testLinkApproval = await this.#testLinkApproval(request, client);
+      const actAs = await this.#actAs(query);
+      if (actAs && "error" in actAs) return { kind: "invalid", description: actAs.error };
+      const testLinkApproval = actAs ? null : await this.#testLinkApproval(request, client);
       if (testLinkApproval) return { kind: "redirect", location: testLinkApproval.redirectTo };
       const display = clientDisplay(client, request.clientId);
       const denied = new URL(request.redirectUri);
@@ -155,12 +171,29 @@ export class ConsentRpcTarget extends RpcTarget {
       denied.searchParams.set("error_description", "The user declined access.");
       if (request.state) denied.searchParams.set("state", request.state);
       if (request.issuer) denied.searchParams.set("iss", request.issuer);
+      if (actAs)
+        return {
+          kind: "impersonate",
+          clientName: display.clientName,
+          clientId: request.clientId,
+          clientLogoUri: display.logoUri,
+          clientDomain: display.clientDomain,
+          email: this.#grant.email,
+          target: actAs.target.email,
+          denyLocation: denied.href,
+        };
       // The page lists what the person holds NOW, read past this isolate's access memo: a project
       // just made (the page's New project form, served by whichever isolate) is listed at once.
       // The project list below reads the answer this read just memoized.
       const { organizations } = await new ControlPlane(env.CONTROL_PLANE).accessibleTo(
         this.#grant.userId,
         true,
+      );
+      const bound = await projectsForClient(
+        env,
+        this.#addresses.platformOrigin,
+        request.clientId,
+        this.#grant.userId,
       );
       return {
         kind: "consent",
@@ -173,7 +206,7 @@ export class ConsentRpcTarget extends RpcTarget {
         email: this.#grant.email,
         picture: this.#grant.picture,
         // parseAuthorization admitted only known scopes
-        scopes: request.scope.map((scope) => {
+        scopes: this.#grantable(request, bound.projectBound).map((scope) => {
           const name = OAuthScope.parse(scope);
           return { name, ...OAuthScopeDescriptions[name] };
         }),
@@ -183,12 +216,7 @@ export class ConsentRpcTarget extends RpcTarget {
           name: this.#grant.name,
           email: this.#grant.email,
         }),
-        ...(await projectsForClient(
-          env,
-          this.#addresses.platformOrigin,
-          request.clientId,
-          this.#grant.userId,
-        )),
+        ...bound,
       };
     } catch (error) {
       return authorizationFailure(error);
@@ -214,6 +242,11 @@ export class ConsentRpcTarget extends RpcTarget {
     try {
       const request = await this.#request(data.query);
       const client = await oauthHelpers(env, this.#addresses).lookupClient(request.clientId);
+      const actAs = await this.#actAs(data.query);
+      if (actAs)
+        return "error" in actAs
+          ? { error: actAs.error }
+          : await this.#impersonate(request, client, actAs.target);
       const { projects, projectBound } = await projectsForClient(
         env,
         this.#addresses.platformOrigin,
@@ -226,10 +259,10 @@ export class ConsentRpcTarget extends RpcTarget {
       const allProjects = !projectBound && checked.has("*");
       if (!allProjects && !granted.length)
         return { error: "Choose at least one project you can access." };
+      const grantable = this.#grantable(request, projectBound);
       const scope = OAuthScopes.parse(
-        (data.scopes || request.scope).filter(
-          (candidate) =>
-            request.scope.includes(candidate) && OAuthScope.safeParse(candidate).success,
+        (data.scopes || grantable).filter(
+          (candidate) => grantable.includes(candidate) && OAuthScope.safeParse(candidate).success,
         ),
       );
       return await this.#complete(request, client, allProjects ? null : granted, scope);
@@ -239,6 +272,88 @@ export class ConsentRpcTarget extends RpcTarget {
         ? { redirectTo: failure.location }
         : { error: failure.description };
     }
+  }
+
+  /** The scopes of `request` this person may grant: all it asked for, but `admin` only to a
+   *  platform admin (app-config.ts `admins`), only for `/api` and never for a client bound to one
+   *  project — on a project host an admin's grant would count as a member of every project. */
+  #grantable(request: AuthRequest, projectBound: boolean): string[] {
+    const admin =
+      isAdmin(this.#env, this.#grant.email) &&
+      !projectBound &&
+      request.resource === this.#addresses.api;
+    return request.scope.filter((scope) => admin || scope !== "admin");
+  }
+
+  /** The person an authorization's `act_as` names — a platform admin's "view this app as them", put
+   *  there by the app's `/.auth/login?act_as=<email>` (iterate/app-server.ts) — or why it is
+   *  refused: to anyone but an admin, and for an address nobody signed in as. Null when it names
+   *  nobody. */
+  async #actAs(query: string): Promise<{ target: UserRecord } | { error: string } | null> {
+    const actAs = new URLSearchParams(query.replace(/^\?/, "")).get("act_as");
+    if (!actAs) return null;
+    if (!isAdmin(this.#env, this.#grant.email))
+      return { error: "only a platform admin can view an app as someone else" };
+    const target = await new ControlPlane(this.#env.CONTROL_PLANE).getUser(actAs);
+    if (!target) return { error: `nobody has signed in as ${actAs}` };
+    return { target };
+  }
+
+  /** VIEW AN APP AS SOMEONE ELSE: a platform admin's approval of an authorization naming `act_as`.
+   *  The client gets a grant of the PERSON VIEWED — stored under them, so it is in their Sessions —
+   *  that reaches exactly what theirs would (every project of theirs, the scopes the client asked
+   *  for but `admin`), with the admin beside them on every call it makes (`impersonatedBy`,
+   *  oauth.ts). An hour, never refreshed past it; ended at once if the admin leaves `admins`. The
+   *  person's own grants stay: `revokeExistingGrants`' default would sign them out. The start lands
+   *  on their account, AWAITED, before the grant exists. */
+  async #impersonate(request: AuthRequest, client: ClientInfo | null, target: UserRecord) {
+    const env = this.#env;
+    const impersonatedBy = { userId: this.#grant.userId, email: this.#grant.email };
+    const scope = request.scope.filter((scope) => scope !== "admin");
+    // bound as the person's own grant for this client would be: a project host's client reaches
+    // that one project (`projectsForClient`), never the rest of their work
+    const { projects, projectBound } = await projectsForClient(
+      env,
+      this.#addresses.platformOrigin,
+      request.clientId,
+      target.id,
+    );
+    if (projectBound && !projects.length)
+      return { error: `${target.email} cannot reach this project.` };
+    const deadline = Date.now() + 3600_000;
+    await appendPlatformFacts(
+      env.ITERATE_CONTEXT,
+      { account: target.id },
+      {
+        type: "events.iterate.com/account/impersonation-started",
+        payload: {
+          clientId: request.clientId,
+          clientName: client?.clientName ?? request.clientId,
+          scopes: scope,
+          impersonatedBy,
+          expiresAt: deadline,
+        } satisfies ImpersonationStarted,
+      },
+      {
+        principal: { actor: impersonatedBy.userId, email: impersonatedBy.email },
+        grant: this.#grant.grantId,
+      },
+    );
+    return oauthHelpers(env, this.#addresses).completeAuthorization({
+      request,
+      userId: target.id,
+      metadata: clientDisplay(client, request.clientId),
+      scope,
+      revokeExistingGrants: false,
+      props: {
+        kind: "app",
+        userId: target.id,
+        email: target.email,
+        projects: projectBound ? projects.map((project) => project.id) : null,
+        deadline,
+        impersonatedBy,
+      } satisfies GrantProps,
+    });
   }
 
   /** Grant `client` the `projects` (null = every current and future one) and `scope`, and record
@@ -262,7 +377,8 @@ export class ConsentRpcTarget extends RpcTarget {
         userId: this.#grant.userId,
         email: this.#grant.email,
         projects,
-        deadline: Date.now() + 30 * 24 * 3600_000,
+        // a platform admin's `admin` grant lives 12 hours: no refresh outlives its deadline
+        deadline: Date.now() + (scope.includes("admin") ? 12 : 30 * 24) * 3600_000,
       } satisfies GrantProps,
     });
     publishPlatformFacts(
@@ -315,6 +431,6 @@ export class ConsentRpcTarget extends RpcTarget {
     );
     // a project host's own client is bound to its one project: never "All my projects"
     if (projectBound || !projects.some((reachable) => reachable.id === project.id)) return null;
-    return this.#complete(request, client, null, request.scope);
+    return this.#complete(request, client, null, this.#grantable(request, projectBound));
   }
 }

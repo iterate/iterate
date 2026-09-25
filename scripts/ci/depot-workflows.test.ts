@@ -204,7 +204,7 @@ test("deploy-os.yml runs for what reaches the Worker, not the app's docs, tests 
 
 test.each(
   deploymentWorkflows.filter(({ app }) =>
-    ["os", "dash", "agents", "notes", "voice", "kit"].includes(app),
+    ["os", "dash", "agents", "notes", "admin", "voice", "kit"].includes(app),
   ),
 )("$file posts the deploy's own result to #ci as the deploy job's last step", ({ file }) => {
   const workflow = loadWorkflow(file);

@@ -146,7 +146,7 @@ function Shell() {
             )}
           </>
         }
-        account={{ email: info.principal.email || info.principal.actor }}
+        account={info.principal}
         accountActions={
           <>
             {/* the person's id, copyable (Base UI: a menu label lives inside a group) */}

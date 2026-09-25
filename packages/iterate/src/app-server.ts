@@ -132,6 +132,7 @@ const scopeLabels: Record<string, string> = {
   iterate: "your projects",
   account: "your account",
   "organizations:write": "your organizations",
+  admin: "the whole platform",
 };
 
 const text = (value: string) => value.replace(/[&<>"]/g, (c) => `&#${c.charCodeAt(0)};`);
@@ -234,6 +235,21 @@ async function signInAgainPage(input: {
     head: dress.head,
     csp: dress.csp,
     body: `${dress.mark}<h1>Sign in again</h1><p>Your sign-in to <strong>${text(url.host)}</strong> ${lacks}.</p><p class="muted">${signedIn}</p><p class="muted">Signing in again brings you back here. At consent, tick the project — or switch account.</p><form method="post" action="/.auth/logout?next=${encodeURIComponent(back)}"><button class="primary" type="submit">Sign in again</button></form>`,
+  });
+}
+
+/** Before viewing this app as someone else (`/.auth/login?act_as=`) over a sign-in this browser
+ *  holds: who, and that it ends the sign-in here. Continue is a same-origin POST to the logout,
+ *  which comes back to the same login with nothing held — a link alone signs nobody out. */
+function viewAsPage(input: { url: URL; actAs: string; issuer: string; defaultIssuer: string }) {
+  const { url, actAs, issuer, defaultIssuer } = input;
+  const dress = dressOf(issuer, defaultIssuer);
+  const back = nextPathOf(url.pathname + url.search, url.origin);
+  return gatePage({
+    title: "View as someone else",
+    head: dress.head,
+    csp: dress.csp,
+    body: `${dress.mark}<h1>View ${text(url.host)} as <code>${text(actAs)}</code>?</h1><p class="muted">This ends your own sign-in to <strong>${text(url.host)}</strong>. Stop impersonating signs you back in.</p><form method="post" action="/.auth/logout?next=${encodeURIComponent(back)}"><button class="primary" type="submit">Continue</button><a class="quiet" href="/">Cancel</a></form>`,
   });
 }
 
@@ -407,6 +423,12 @@ export async function appAuth(request: Request, config: AppAuth): Promise<Respon
         await session!.discard();
       }
     }
+    // A sign-out from a connected issuer on the way to viewing this app as someone else (the
+    // `act_as` page's Continue, through `/.auth/logout`) returns here with that login as `next`:
+    // the authorization asks the issuer for it, and lands where that login was headed — not on the
+    // login again, which would ask once more.
+    const onward = new URL(next, url.origin);
+    const actAs = onward.pathname === "/.auth/login" ? onward.searchParams.get("act_as") : null;
     const { location, setCookie } = await startAppSession(
       sessions,
       {
@@ -416,12 +438,14 @@ export async function appAuth(request: Request, config: AppAuth): Promise<Respon
         resource: `${named.origin}/api`,
         scopes: parsed.data,
       },
-      next,
+      actAs ? nextPathOf(onward.searchParams.get("next"), url.origin) : next,
     );
+    const authorize = new URL(location);
+    if (actAs) authorize.searchParams.set("act_as", actAs);
     return new Response(null, {
       status: 302,
       headers: {
-        Location: location,
+        Location: authorize.href,
         "Set-Cookie": setCookie,
         "Cache-Control": "no-store",
         "Referrer-Policy": "no-referrer",
@@ -455,7 +479,17 @@ export async function appAuth(request: Request, config: AppAuth): Promise<Respon
     }
     const host = await held();
     const target = host || { issuer, resource };
-    const bearer = await session?.bearer();
+    // VIEW THIS APP AS SOMEONE ELSE (`?act_as=<email>`, the admin app's link): always a fresh
+    // authorization, and the issuer's consent decides, as the admin it knows: anyone else is refused
+    // there (apps/os consent.ts). The grant it issues is the other person's, for an hour; signing
+    // out of it signs back in as the admin, whom the issuer still knows. A GET never signs out: a
+    // browser signed in here first gets a page whose button POSTs the sign-out, then comes back to
+    // this very login with nothing held.
+    const actAs = config.loginPage ? null : url.searchParams.get("act_as");
+    if (actAs && (await session?.bearer()))
+      return viewAsPage({ url, actAs, issuer: target.issuer, defaultIssuer: issuer });
+    if (actAs) await session?.discard();
+    const bearer = actAs ? null : await session?.bearer();
     if (bearer) {
       const probe = await config.api(
         new Request(target.resource, {
@@ -503,10 +537,12 @@ export async function appAuth(request: Request, config: AppAuth): Promise<Respon
       { origin: url.origin, issuer: target.issuer, resource: target.resource, scopes, client },
       next,
     );
+    const authorize = new URL(location);
+    if (actAs) authorize.searchParams.set("act_as", actAs);
     return new Response(null, {
       status: 302,
       headers: {
-        Location: location,
+        Location: authorize.href,
         "Set-Cookie": setCookie,
         "Cache-Control": "no-store",
         "Referrer-Policy": "no-referrer",
@@ -538,6 +574,7 @@ export async function appAuth(request: Request, config: AppAuth): Promise<Respon
     // connect page for that issuer (one click, the host named), so "Sign in again" at a self-host
     // stays at the self-host instead of silently binding the browser back to the default.
     const ended = await held();
+    const endedScopes = (await session?.scopes()) ?? [];
     try {
       await session?.end();
     } catch {
@@ -547,12 +584,16 @@ export async function appAuth(request: Request, config: AppAuth): Promise<Respon
         { status: 503 },
       );
     }
-    const next = nextPathOf(url.searchParams.get("next"), url.origin);
     // The scopes the next sign-in must hold ride along: the Sign-in-again form's `next` IS the login
     // URL that asked for them (`/.auth/login?…&scope=…`), and the connect page starts the grant from
     // its own `scope` — without this the reconnected grant would hold `iterate` alone and the login
-    // would send the person straight back to Sign in again.
-    const nextUrl = new URL(next, url.origin);
+    // would send the person straight back to Sign in again. A login `next` that names none asks for
+    // what the ended session held: the shell's Stop impersonating signs the admin back in with the
+    // app's own permissions.
+    const nextUrl = new URL(nextPathOf(url.searchParams.get("next"), url.origin), url.origin);
+    if (nextUrl.pathname === "/.auth/login" && !nextUrl.searchParams.get("scope"))
+      nextUrl.searchParams.set("scope", endedScopes.join(" "));
+    const next = nextUrl.pathname + nextUrl.search;
     const scope =
       nextUrl.pathname === "/.auth/login" ? nextUrl.searchParams.get("scope") || "" : "";
     const headers = new Headers({

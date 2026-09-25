@@ -19,7 +19,7 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@iterate-com/ui/components/sheet";
-import { useContextStub, useFacetLiveState } from "../../../../lib/context-stub.ts";
+import { useContextStub, useFacetLiveState } from "iterate/react";
 
 const shell = getRouteApi("/_auth");
 

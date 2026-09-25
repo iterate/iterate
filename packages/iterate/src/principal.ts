@@ -3,8 +3,15 @@
 // Request it forwards to a project's worker (sdk/auth.ts reads it). How the platform admits and
 // carries a caller, and signs its own tokens, stays in the platform.
 
-/** Who is acting: a stable actor id (the control plane's user id) and, when known, an email. */
-export type Principal = { actor: string; email?: string };
+/** Who is acting: a stable actor id (the control plane's user id) and, when known, an email. A
+ *  platform admin viewing an app as someone else is two people (RFC 8693's subject and actor): the
+ *  principal is the person viewed, whose access every check reads, and `impersonatedBy` the admin
+ *  doing it, stamped beside them on every event. */
+export type Principal = {
+  actor: string;
+  email?: string;
+  impersonatedBy?: { actor: string; email: string };
+};
 
 /** The header the edge sets on a Request it forwards on a principal's behalf — the ingress after
  *  the cookie check, a session's terminal `fetch` — and strips from every inbound Request. */

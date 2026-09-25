@@ -1,7 +1,25 @@
 // Folding the log for reading: days, housekeeping runs, repeated facts — and that the raw modes fold nothing.
 // The fixture's two days sit 48 h apart at noon UTC, so they are two local days in every timezone.
 import { expect, test } from "vitest";
-import { foldEvents, lastEventOf, sentenceText, whoBefore } from "./folds.tsx";
+import {
+  factByPayload,
+  foldEvents,
+  growthOf,
+  lastEventOf,
+  refold,
+  sentenceText,
+  whoBefore,
+  type FeedItem,
+  type Fold,
+} from "./folds.tsx";
+import {
+  filterEvents,
+  recount,
+  refilter,
+  typeCounts,
+  type Filtered,
+  type TypeCounts,
+} from "./filters.tsx";
 import { housekeepingSummary } from "./core-renderers.tsx";
 import type { ContextViewEvent } from "./types.tsx";
 
@@ -156,6 +174,110 @@ test("whoBefore: carries the last named actor over housekeeping, starts afresh a
   ]);
   // so: #1 named (first), woke unnamed, #3 not named again (still user_a), #4 named (changed), #5 named (new day)
 });
+
+// ── the incremental passes equal the whole ones ──
+// A log of runs (repeats, housekeeping, lone events, actors changing hands) across three days, grown
+// the way the SDK's log grows: the newest page first, then older pages prepended and live events
+// appended, a few at a time, with ends that split runs and days. After every step the incremental
+// fold, filter and type counts must equal the whole passes over the log as it stands.
+const grown = growingLog(240);
+const growths: {
+  name: string;
+  /** The first window of the log, [low, high). */
+  from: [number, number];
+  steps: ("append" | "prepend")[];
+  sizes: number[];
+}[] = [
+  { name: "appends one at a time", from: [0, 1], steps: ["append"], sizes: [1] },
+  { name: "prepends one at a time", from: [239, 240], steps: ["prepend"], sizes: [1] },
+  {
+    name: "pages both ways",
+    from: [150, 160],
+    steps: ["prepend", "append", "append"],
+    sizes: [7, 1, 3, 40],
+  },
+  {
+    name: "big prepends, small appends",
+    from: [150, 160],
+    steps: ["prepend", "append"],
+    sizes: [97, 2],
+  },
+];
+for (const growth of growths)
+  for (const mode of ["pretty", "pretty-raw", "raw"] as const)
+    test(`refold, refilter, recount: ${growth.name}, ${mode}`, () => {
+      const actorOf = (event: ContextViewEvent) => event.source?.principal?.actor || "";
+      const filter = {
+        query: "",
+        types: new Set(["t.example.com/a", "events.iterate.com/itx/woken"]),
+      };
+      let [low, high] = growth.from;
+      let fold: Fold | undefined;
+      let filtered: Filtered | undefined;
+      let counts: TypeCounts | undefined;
+      let filteredFold: Fold | undefined;
+      for (let step = 0; low > 0 || high < grown.length; step += 1) {
+        const size = growth.sizes[step % growth.sizes.length]!;
+        const direction = growth.steps[step % growth.steps.length]!;
+        if (direction === "prepend") low = Math.max(0, low - size);
+        else high = Math.min(grown.length, high + size);
+        // a fresh array each step, as the SDK publishes, holding the same event objects
+        const log = grown.slice(low, high);
+        fold = refold(fold, log, mode, factByPayload, actorOf);
+        const whole = foldEvents(log, mode);
+        expect(fold.items.map(shape)).toEqual(whole.map(shape));
+        expect(fold).toMatchObject({ namedBefore: whoBefore(whole, actorOf) });
+        filtered = refilter(filtered, log, filter);
+        expect(filtered.shown.map((e) => e.offset)).toEqual(
+          filterEvents(log, filter).map((e) => e.offset),
+        );
+        filteredFold = refold(filteredFold, filtered.shown, mode, factByPayload, actorOf);
+        expect(filteredFold.items.map(shape)).toEqual(
+          foldEvents(filterEvents(log, filter), mode).map(shape),
+        );
+        counts = recount(counts, log);
+        expect([...counts.counts.entries()].sort()).toEqual(typeCounts(log).sort());
+      }
+    });
+
+test("growthOf: an append, a prepend, nothing, and anything else", () => {
+  const [a, b, c, d] = grown;
+  expect(growthOf([a, b], [a, b, c])).toEqual({ end: [c] });
+  expect(growthOf([b, c], [a, b, c])).toEqual({ start: [a] });
+  const same = [a, b];
+  expect(growthOf(same, same)).toEqual({ end: [] });
+  expect(growthOf([a, c], [a, b, c])).toBeNull(); // grew in the middle
+  expect(growthOf([a, b, c], [a, b])).toBeNull(); // shrank
+  expect(growthOf([b, d], [a, b, c, d])).toBeNull(); // grew at both ends at once
+});
+
+/** An item as a line: its kind, key and the offsets it covers. */
+function shape(item: FeedItem): string {
+  if (item.kind === "day") return item.key;
+  const offsets = item.kind === "event" ? [item.event.offset] : item.events.map((e) => e.offset);
+  return `${item.key} ${offsets.join(",")}`;
+}
+
+/** `count` events over three days: runs of one fact (repeats), runs of housekeeping, lone events,
+ *  and actors changing hands every so often. */
+function growingLog(count: number): ContextViewEvent[] {
+  return Array.from({ length: count }, (_, i) => {
+    const day = i < 80 ? "2026-09-21" : i < 170 ? "2026-09-23" : "2026-09-25";
+    const iso = `${day}T12:00:${String(i % 60).padStart(2, "0")}.000Z`;
+    const k = i % 23;
+    const type =
+      k < 5
+        ? "t.example.com/a" // a run of five of the same fact
+        : k < 9
+          ? "events.iterate.com/itx/woken" // housekeeping
+          : `t.example.com/unique-${String(i)}`;
+    const payload = k < 5 ? { same: true } : { i };
+    return {
+      ...at(i + 1, type, payload, iso),
+      ...(i % 11 < 6 && { source: { principal: { actor: i % 3 ? "user_a" : "user_b" } } }),
+    };
+  });
+}
 
 function at(offset: number, type: string, payload?: unknown, iso = "2026-09-21T19:00:00.000Z") {
   return {

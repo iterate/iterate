@@ -1,19 +1,18 @@
 // A context's activity — the dash's use of the general-purpose context view (packages/ui) over the
-// SDK's ONE hook: the log (live), the processors table, who is here, the fact renderers, and every
-// hosted processor's live state. `ensureProcessor` names the first-party fold to enable on first
+// SDK's ONE hook, with the dash's fact renderers. `ensureProcessor` names the first-party fold to enable on first
 // visit (the account's, the organization's) when the context has none yet: the facts are on the
-// log either way; the fold is what the panel shows folded.
+// log either way; the fold is what the panel shows folded. The view's composer appends as the
+// signed-in person (the platform stamps the principal).
 import { useEffect, useRef, type ReactNode } from "react";
+import type { IterateContextApi } from "iterate/api";
 import { useIterateContext, type IterateContextHandle } from "iterate/react";
 import { ContextView } from "@iterate-com/ui/components/context-view/context-view";
 import type { ContextViewState } from "@iterate-com/ui/components/context-view/context-view-search";
-import { LiveStateValue } from "@iterate-com/ui/components/context-view/live-state-value";
 import { factRenderers } from "../lib/fact-renderers.tsx";
 
 export type ActivityItx = IterateContextHandle & {
-  processors: IterateContextHandle["processors"] & {
-    enable(name: string): Promise<unknown>;
-  };
+  append: IterateContextApi["append"];
+  processors: { enable(name: string): Promise<unknown> };
 };
 
 export function ContextActivity({
@@ -50,16 +49,13 @@ export function ContextActivity({
   return (
     <ContextView
       title={title}
-      events={iterateContext.events}
-      caughtUp={iterateContext.caughtUp}
-      error={iterateContext.error || processors.error}
+      context={iterateContext}
       renderers={factRenderers}
-      processors={processors.rows}
-      presence={iterateContext.presence}
-      renderCoreState={() => <LiveStateValue state={iterateContext.liveState.core} />}
-      renderLiveState={(name) => <LiveStateValue state={iterateContext.liveState[name]} />}
       state={state}
       onStateChange={onStateChange}
+      onAppend={itx ? (events) => itx.append(...events) : undefined}
+      // the feed scrolls itself: it fills what the page leaves it, never less than 24rem
+      className="min-h-96 flex-1"
     />
   );
 }

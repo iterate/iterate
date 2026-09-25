@@ -14,7 +14,8 @@ import {
   type ReactNode,
   type RefObject,
 } from "react";
-import { CheckIcon, ChevronsLeftIcon, ChevronsUpDownIcon, LogOutIcon } from "lucide-react";
+import { CheckIcon, ChevronsLeftIcon, ChevronsUpDownIcon, EyeIcon, LogOutIcon } from "lucide-react";
+import type { Principal } from "iterate/principal";
 import {
   AppShellPalette,
   PaletteHeaderButton,
@@ -97,8 +98,11 @@ export function AppShell({
   nav?: ReactNode;
   /** what sits beside the phone's sidebar trigger in the header row */
   header?: ReactNode;
-  /** the signed-in person; "Sign out" posts to the SDK's `/.auth/logout` */
-  account: { email: string };
+  /** who the app is signed in as (`info.principal`); "Sign out" posts to the SDK's `/.auth/logout`.
+   *  A platform admin viewing the app as someone (`impersonatedBy`) sees who they are viewing as and
+   *  who they are, above the account menu, with Stop, which ends this sign-in and returns to the
+   *  app's root as themselves (the issuer still knows them). */
+  account: Principal;
   /** the app's own items in the account menu, before Sign out — `DropdownMenuItem`s */
   accountActions?: ReactNode;
   /** the router's current href — a change closes the phone's sidebar sheet */
@@ -137,7 +141,13 @@ export function AppShell({
         <SidebarNav navRef={navRef}>{nav}</SidebarNav>
         <SidebarFooter>
           <CollapseButton />
-          <AccountMenu email={account.email} actions={accountActions} />
+          {account.impersonatedBy ? (
+            <ImpersonationMarker
+              email={account.email || account.actor}
+              admin={account.impersonatedBy.email}
+            />
+          ) : null}
+          <AccountMenu email={account.email || account.actor} actions={accountActions} />
         </SidebarFooter>
         <SidebarRail />
       </Sidebar>
@@ -334,6 +344,37 @@ function CollapseButton() {
         </SidebarMenuButton>
       </SidebarMenuItem>
     </SidebarMenu>
+  );
+}
+
+/** VIEWING AS SOMEONE ELSE, unmissable: whom, who you are, and Stop — the app's own logout (ends
+ *  this impersonation's grant), then its login with the same permissions, which finds the admin at
+ *  the issuer and lands on the app's root (not the page shown: it is often the other person's
+ *  project). A collapsed sidebar keeps the eye. */
+function ImpersonationMarker({ email, admin }: { email: string; admin: string }) {
+  return (
+    <form
+      method="post"
+      action={`/.auth/logout?${new URLSearchParams({ next: "/.auth/login?next=/" })}`}
+      role="status"
+      className="flex flex-col gap-1.5 rounded-lg border border-amber-300 bg-amber-50 p-2 text-xs text-amber-950 group-data-[collapsible=icon]:border-0 group-data-[collapsible=icon]:p-1.5"
+    >
+      <div className="flex items-center gap-2">
+        <EyeIcon className="size-4 shrink-0" aria-label="Viewing as someone else" />
+        <span className="min-w-0 truncate group-data-[collapsible=icon]:hidden">
+          Viewing as <strong className="font-semibold">{email}</strong>
+        </span>
+      </div>
+      <span className="truncate text-amber-800 group-data-[collapsible=icon]:hidden">
+        You are {admin}
+      </span>
+      <button
+        type="submit"
+        className="rounded-md bg-amber-900 px-2 py-1 font-medium text-amber-50 hover:bg-amber-800 group-data-[collapsible=icon]:hidden"
+      >
+        Stop impersonating
+      </button>
+    </form>
   );
 }
 

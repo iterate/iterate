@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { CircleIcon } from "lucide-react";
 import { z } from "zod";
 import type { AuthenticatedApp } from "iterate/app";
-import { useIterateContext, useLiveState } from "iterate/react";
+import { useFacetLiveState, useIterateContext } from "iterate/react";
 import { AppShell } from "@iterate-com/ui/components/app-shell";
 import {
   Breadcrumb,
@@ -18,7 +18,6 @@ import { Spinner } from "@iterate-com/ui/components/spinner";
 import { Tabs, TabsList, TabsTrigger } from "@iterate-com/ui/components/tabs";
 import { cn } from "cn";
 import { ContextView } from "@iterate-com/ui/components/context-view/context-view";
-import { LiveStateValue } from "@iterate-com/ui/components/context-view/live-state-value";
 import {
   ContextViewState,
   RIGHT_EDGE_CLOSED,
@@ -146,7 +145,7 @@ function AgentsPage() {
           </Breadcrumb>
         ) : null
       }
-      account={{ email: info.principal.email || info.principal.actor }}
+      account={info.principal}
       locationKey={href}
     >
       {data.agent ? (
@@ -217,7 +216,11 @@ function useAgentContext(
  *  envelope tagged with the path, the context's script runs in the reducer's vocabulary
  *  (agent-events.ts). The raw log itself feeds the Events view untouched. */
 function useAgentLog(context: Context | undefined, path: string) {
-  const iterateContext = useIterateContext(context, { consumes: FEED_SUBSCRIPTION });
+  // "all": the chat folds the whole log, so it reads every page, not only the newest
+  const iterateContext = useIterateContext(context, {
+    consumes: FEED_SUBSCRIPTION,
+    history: "all",
+  });
   const events = useMemo(
     () =>
       adaptContextRuns(
@@ -288,13 +291,7 @@ function AgentConversation({ project, path }: { project: string; path: string })
   const { context, error: connectError } = useAgentContext(api, project, path);
   const { iterateContext, events, caughtUp, error: logError } = useAgentLog(context, path);
   const error = connectError || logError;
-  const live = useLiveState<unknown>(context, {
-    key: "agent",
-    readSeed: async () =>
-      z
-        .object({ rev: z.number(), state: z.unknown() })
-        .parse(await context!.invoke("itx.facets.get('agent').liveSnapshot()")),
-  });
+  const live = useFacetLiveState(context, "agent");
   const facet = AgentLive.safeParse(live.value);
   // The turn is over when the facet holds no obligation — a pause included (a paused loop owes no
   // follow-up round). Without live state at all (the read failed), the log alone decides: the
@@ -444,19 +441,16 @@ function AgentConversation({ project, path }: { project: string; path: string })
         </p>
       ) : null}
       {view === "events" ? (
-        <div className="min-h-0 flex-1 overflow-y-auto">
+        <div className="flex min-h-0 flex-1 flex-col">
           <ContextView
-            className="mx-auto w-full max-w-3xl px-4 py-2 md:px-6"
+            // the view scrolls its own feed: it fills the tab
+            className="mx-auto min-h-0 w-full max-w-3xl flex-1 px-4 py-2 md:px-6"
             title={<span className="font-mono text-xs">{path}</span>}
-            events={iterateContext.events}
-            caughtUp={caughtUp}
-            error={error || undefined}
+            context={iterateContext}
+            error={connectError}
             renderers={agentEventRenderers}
             inspectors={agentEventInspectors}
-            processors={iterateContext.processors.rows}
-            presence={iterateContext.presence}
-            renderCoreState={() => <LiveStateValue state={iterateContext.liveState.core} />}
-            renderLiveState={(name) => <LiveStateValue state={iterateContext.liveState[name]} />}
+            onAppend={context ? (events) => context.append(...events) : undefined}
             state={search}
             onStateChange={(patch) =>
               void navigate({

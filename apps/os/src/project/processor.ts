@@ -256,6 +256,15 @@ export class ProjectProcessor extends StreamProcessor<
         const secrets = reduceSecretCatalog(state.secrets, event);
         return secrets && { ...state, secrets };
       }
+      case "events.iterate.com/itx/child-created":
+        if (state.contexts[event.payload.childPath]) return undefined;
+        return {
+          ...state,
+          contexts: {
+            ...state.contexts,
+            [event.payload.childPath]: { createdAt: event.createdAt },
+          },
+        };
       case "events.iterate.com/repo/commit-completed":
         // Only the config repo moves the apex; another repo's commit is a fact for its own log.
         if (event.payload.path !== "/repos/config") return undefined;

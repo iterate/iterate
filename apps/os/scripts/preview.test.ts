@@ -507,12 +507,13 @@ test("the preview's wrangler config (a pure transform of Vite's built config): K
   });
 });
 
-test("the preview's wrangler config (a pure transform of Vite's built config): vars are the preview's own origin, projects as paths and the one-click sign-in links on; the secrets are the parent's Previews settings", () => {
+test("the preview's wrangler config (a pure transform of Vite's built config): vars are the preview's own origin, projects as paths, the one-click sign-in links on and one test admin; the secrets are the parent's Previews settings", () => {
   expect(config.previews).toMatchObject({
     vars: {
       APP_CONFIG_URLS__OS: "https://pr123-os.iterate-dev-preview.workers.dev",
       APP_CONFIG_URLS__INGRESS_ROUTING: JSON.stringify({ type: "paths" }),
       APP_CONFIG_LOGIN__TEST_LINK__EMAIL_DOMAIN: "preview.iterate.test",
+      APP_CONFIG_ADMINS: JSON.stringify(["admin@preview.iterate.test"]),
     },
   });
   expect(previewResourceName("pr123", "db")).toBe("os-pr123-db");
@@ -536,6 +537,7 @@ test("a preview's apps link to each other at this PR's preview of each one's par
     notes: "https://pr123-notes.iterate-dev-preview.workers.dev",
     voice: "https://pr123-voice.iterate-dev-preview.workers.dev",
     kit: "https://pr123-kit.iterate-dev-preview.workers.dev",
+    admin: "https://pr123-admin.iterate-dev-preview.workers.dev",
   });
 });
 
@@ -547,8 +549,8 @@ test("an app the preview run does not deploy is named nowhere, never at its prod
   expect(appPreviewOrigins([], "pr123")).toEqual({});
 });
 
-test("which apps on top a preview run deploys: the apps on top are the five clients", () => {
-  expect(APPS.map((app) => app.name)).toEqual(["dash", "agents", "notes", "voice", "kit"]);
+test("which apps on top a preview run deploys: the apps on top are the six clients", () => {
+  expect(APPS.map((app) => app.name)).toEqual(["dash", "agents", "notes", "voice", "kit", "admin"]);
 });
 
 test.each<[string, string[], string[]]>([

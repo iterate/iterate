@@ -13,5 +13,10 @@ export const CoreEventCatalog = {
       // Stored as the parsed expression: the append boundary normalizes a string target.
       payloadSchema: z.object({ target: z.array(z.unknown()).nullable() }),
     },
+    "events.iterate.com/itx/child-created": {
+      description:
+        "A context under this one exists: every context appends it to each ancestor up to its root when it wakes (iterate-context-durable-object.ts `announceToAncestors`), keyed by the child's path, so it lands once per child. The Project processor reduces the ones on `/` into its context registry.",
+      payloadSchema: z.object({ childPath: z.string().min(1) }),
+    },
   },
 };

@@ -69,6 +69,12 @@ export type SubscriptionListEntry = {
    *  the facet at its start and the context restarted it under a fresh loaded identity (a platform
    *  defect the context works around; the count is the cheap way to ask "how often, here"). */
   hostedFacet?: { name: string; className: string; cacheKey?: string; restarts: number };
+  /** Set for a row the context delivers at-least-once (an itx expression target; a facet and a lent
+   *  stub own their progress): the offset the last acked call confirmed, the retry ladder's attempt
+   *  and when the next attempt is due. */
+  cursor?: { confirmedOffset: number; attempt: number; nextAttemptAtMs?: number };
+  /** Set once delivery exhausted its retries: the offset it stopped after, and why. */
+  halted?: { afterOffset: number; attempts: number; error?: string };
 };
 
 /** A loaded worker's source: its modules, literally, or an itx expression that produces them (then
@@ -416,6 +422,15 @@ export type ConsentAnswer =
       /** the onboarding step's first draft of an organization name, from the person's name or email */
       suggestedOrganizationName: string;
     }
+  | {
+      /** a platform admin's request to view the client as `target` (the app's `?act_as=`) */
+      kind: "impersonate";
+      clientName: string;
+      clientId: string;
+      email: string;
+      target: string;
+      denyLocation: string;
+    }
   | { kind: "redirect"; location: string }
   | { kind: "invalid"; description: string };
 
@@ -550,6 +565,19 @@ export interface IterateSessionApi {
     acceptInvitation(token: string): Promise<OrgRecord>;
   };
   user: IterateContextApi;
+  /** The global namespace's root `/` — a platform admin's session (the `admin` scope) alone. Its
+   *  `cd` reaches `/users/<id>…` and `/organizations/<id>…`, as a project root's reaches the
+   *  project. */
+  global: IterateContextApi;
+  /** Every person on the platform — a platform admin's session (the `admin` scope) or the
+   *  operator's alone. */
+  users: {
+    list(): Promise<{ id: string; email: string }[]>;
+    /** by id or email */
+    get(ref: string): Promise<{ id: string; email: string } | null>;
+    /** find-or-create */
+    create(input: { email: string }): Promise<{ id: string; email: string }>;
+  };
   logout(): unknown;
 }
 

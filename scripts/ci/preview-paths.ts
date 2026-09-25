@@ -32,6 +32,7 @@ export const previewPaths = [
   ".depot/workflows/deploy-dash.yml",
   ".depot/workflows/deploy-agents.yml",
   ".depot/workflows/deploy-notes.yml",
+  ".depot/workflows/deploy-admin.yml",
   ".depot/workflows/deploy-voice.yml",
   ".depot/workflows/deploy-kit.yml",
   ".depot/workflows/preview-os.yml",
@@ -40,6 +41,7 @@ export const previewPaths = [
   "apps/dash/**",
   "apps/agents/**",
   "apps/notes/**",
+  "apps/admin/**",
   "apps/voice/**",
   "apps/kit/**",
   // Kit's firmware ships as GitHub releases (kit-firmware.yml), never in its Worker.

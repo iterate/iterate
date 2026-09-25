@@ -62,14 +62,19 @@ A real inline **player** only renders from a
 pointing at any other host — link at best, never a player. (GIFs render from
 any URL.)
 
-Mint the URL through a github.com editor: drag or paste the file into the PR
-description editor, or upload via the attach flow of any PR page's comment
-editor (a browser-automation `file_upload` tool pointed at the editor's file
-input works), wait for the inserted `user-attachments` URL, then clear the
-comment WITHOUT submitting — the asset is already permanent. There is no API
-or `gh` route for this upload. GitHub accepts `.webm`, `.mp4` and `.mov`;
-`ffmpeg -i video-rendered.webm demo.mp4` gives the widest playback support.
-Put the bare URL in the body on its own line with blank lines above and below.
+`gh` (2.99+) uploads it: `--attach <file>` on `gh pr create`, `gh pr edit` and
+`gh pr comment` mints the `user-attachments` URL and appends a player to the body.
+A body that already references the file (`![demo](./demo.mp4)`) gets that
+reference rewritten to the uploaded asset instead, so the video can sit where the
+text introduces it. Videos take no `#alt text` suffix (gh refuses it); images do.
+
+```bash
+PR_GUIDANCE_HASH=<hash> gh pr create --draft --body-file body.md --attach ./demo.mp4
+PR_GUIDANCE_HASH=<hash> gh pr edit <n> --attach ./after.mp4   # appends to the current body
+```
+
+GitHub accepts `.webm`, `.mp4` and `.mov`; `ffmpeg -i video-rendered.webm demo.mp4`
+gives the widest playback support.
 
 Spec recordings: ship `video-rendered.webm` from `VIDEO_MODE=1 pnpm spec -g <name>`;
 [Video mode](testing.md#video-mode-recorded-spec-demos-for-prs) covers the

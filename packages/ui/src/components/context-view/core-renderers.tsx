@@ -19,6 +19,25 @@ export function isHousekeeping(type: string): boolean {
   );
 }
 
+/** How a marker reads: `wake` — the context's Durable Object started again (an eviction, a deploy),
+ *  purple, as the old feed drew it; `lifecycle` — born, paused, resumed, a child, neutral. */
+export type MarkerTone = "wake" | "lifecycle";
+
+/** The context's lifecycle, which Pretty draws as a marker across the row rather than a sentence:
+ *  where the log's life changed, visible while scrolling past (event-row.tsx). A wake inside a run of
+ *  housekeeping stays in its fold. */
+export function markerToneOf(type: string): MarkerTone | undefined {
+  if (type === "events.iterate.com/itx/woken") return "wake";
+  if (
+    type === "events.iterate.com/itx/created" ||
+    type === "events.iterate.com/itx/paused" ||
+    type === "events.iterate.com/itx/resumed" ||
+    type === "events.iterate.com/itx/child-created"
+  )
+    return "lifecycle";
+  return undefined;
+}
+
 /** One line for a folded run of housekeeping: `woke ×3 · subscriptions ×8 · live state ×1`. */
 export function housekeepingSummary(types: readonly string[]): string {
   const counts = new Map<string, number>();
@@ -65,6 +84,8 @@ export const coreEventRenderers: EventRenderers = {
   },
   "events.iterate.com/itx/paused": (e) => quiet(`Paused ${str(record(e.payload).reason)}`),
   "events.iterate.com/itx/resumed": () => quiet("Resumed"),
+  "events.iterate.com/itx/child-created": (e) =>
+    quiet(`Child context ${str(record(e.payload).childPath)} created`),
   "events.iterate.com/itx/subscription-configured": (e) => {
     const p = record(e.payload);
     const consumes = Array.isArray(p.consumes) ? p.consumes.map(String) : [];

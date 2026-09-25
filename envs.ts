@@ -84,6 +84,9 @@ export interface OsEnv {
   /** The dash's origin for this deployment (apps/dash) — where the platform's landing page `/` sends
    *  a person, the platform being headless. Unset ⇒ the page names no dash (a preview has none). */
   dashBaseUrl?: string;
+  /** The platform admins (apps/os src/app-config.ts `admins`): exact email addresses, not secrets,
+   *  so here rather than in Doppler; the generator hands them to the worker as `APP_CONFIG_ADMINS`. */
+  admins?: string[];
   /** How projects are reached over HTTP (`APP_CONFIG urls.ingressRouting`): `subdomains` hangs
    *  `<routingSlug>--<project>.<hostname>` and the apex `<project>.<hostname>` under a wildcard route the
    *  generator adds on `hostname`'s zone (ensure-resources creates the wildcard DNS record); `paths`
@@ -146,6 +149,7 @@ export const osEnvs: Record<string, OsEnv> = {
     baseUrl: "https://os.iterate.com",
     mcpBaseUrl: "https://mcp.iterate.com",
     dashBaseUrl: "https://dash.iterate.com",
+    admins: ["jonas@nustom.com", "misha@nustom.com"],
     posthogProjectKey: ITERATE_POSTHOG_PROJECT_KEY,
     ingressRouting: { type: "subdomains", hostname: "iterate.app" },
     // iterate.com and its first-level names are the iterate project's site; other domains are the
@@ -161,6 +165,7 @@ export const osEnvs: Record<string, OsEnv> = {
         "dash.iterate.com",
         "agents.iterate.com",
         "notes.iterate.com",
+        "admin.iterate.com",
         "k.iterate.com",
         "voice.iterate.com",
         "install.iterate.com",
@@ -241,6 +246,27 @@ export const notesEnvs = {
     posthogProjectKey: ITERATE_POSTHOG_PROJECT_KEY,
     // This exact Worker route takes precedence over the iterate project's *.iterate.com route.
     baseUrl: "https://notes.iterate.com",
+  },
+};
+
+/** apps/admin — the platform's admin app (README there); the notes app's shape, on a custom domain. */
+export const adminEnvs = {
+  // THE PARENT of admin's per-PR Worker Previews (apps/os/scripts/preview.ts): each preview is a
+  // branch of this worker, bound to the same PR's apps/os preview as its issuer; the parent itself
+  // is main, signed in against osEnvs.preview (preview-parents.yml).
+  preview: {
+    cloudflareAccountId: PREVIEW_AND_DEV_ACCOUNT_ID,
+    dopplerConfig: "preview",
+    workerName: "admin",
+    baseUrl: "https://admin.iterate-dev-preview.workers.dev",
+  },
+  prd: {
+    cloudflareAccountId: PRD_ACCOUNT_ID,
+    dopplerConfig: "prd",
+    workerName: "admin",
+    posthogProjectKey: ITERATE_POSTHOG_PROJECT_KEY,
+    // This exact Worker route takes precedence over the iterate project's *.iterate.com route.
+    baseUrl: "https://admin.iterate.com",
   },
 };
 

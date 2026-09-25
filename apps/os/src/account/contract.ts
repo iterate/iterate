@@ -1,6 +1,7 @@
 // src/account/contract.ts — THE ACCOUNT: a person's context, `/users/<id>` in the deployment-global
 // namespace, where the FACTS about them land — an authentication (session.ts), a personal access
-// token minted, a grant ended or used (grants.ts, oauth.ts), a consent approved (consent.ts) — each
+// token minted, a grant ended or used (grants.ts, oauth.ts), a consent approved or a platform admin
+// starting to view an app as the person (consent.ts) — each
 // appended by the verb that did it, stamped with the caller; and the memberships the session lands
 // here after the control-plane database writes them (session.ts `foldPlatformFacts`; a minted
 // organization's first in the background, `landProjectOnOrganization`).
@@ -78,6 +79,19 @@ export const ConsentApproved = z.object({
   scopes: z.array(z.string()),
 });
 export type ConsentApproved = z.infer<typeof ConsentApproved>;
+/** `events.iterate.com/account/impersonation-started`: a platform admin (`impersonatedBy`, also the
+ *  event's `source.principal`) began viewing a client as this person (consent.ts `#impersonate`),
+ *  with the scopes the client asked for, until `expiresAt` (epoch ms). AWAITED before the grant is
+ *  issued: no impersonation goes unrecorded. The grant itself is in the person's Sessions. An
+ *  audit record: the account folds nothing from it. */
+export const ImpersonationStarted = z.object({
+  clientId: z.string().min(1),
+  clientName: z.string(),
+  scopes: z.array(z.string()),
+  impersonatedBy: z.object({ userId: z.string(), email: z.string() }),
+  expiresAt: z.number(),
+});
+export type ImpersonationStarted = z.infer<typeof ImpersonationStarted>;
 
 export const AccountContract = defineProcessorContract({
   slug: "account",
@@ -142,6 +156,11 @@ export const AccountContract = defineProcessorContract({
     "events.iterate.com/account/consent-approved": {
       description: "The person approved a client at consent (platform fact).",
       payloadSchema: ConsentApproved,
+    },
+    "events.iterate.com/account/impersonation-started": {
+      description:
+        "A platform admin began viewing a client as the person, for an hour (platform fact, audit only).",
+      payloadSchema: ImpersonationStarted,
     },
   },
   // THE RELATIONSHIPS: the account consumes the user's own secrets' certificates without owning

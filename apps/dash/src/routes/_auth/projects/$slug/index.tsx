@@ -7,12 +7,12 @@ import { createFileRoute, getRouteApi } from "@tanstack/react-router";
 import { ArrowUpRight, CheckIcon, CircleXIcon, LoaderCircleIcon } from "lucide-react";
 import { z } from "zod";
 import type { AuthenticatedApp } from "iterate/app";
+import { useContextStub, useFacetLiveState } from "iterate/react";
 import { Badge } from "@iterate-com/ui/components/badge";
 import { buttonVariants } from "@iterate-com/ui/components/button";
 import { cn } from "cn";
 import { Identifier } from "../../../../components/identifier.tsx";
 import { useOrganizationTree } from "../../../../components/organization-tree.tsx";
-import { useContextStub, useFacetLiveState } from "../../../../lib/context-stub.ts";
 import { projectHostOf } from "../../../../lib/origins.ts";
 
 const shell = getRouteApi("/_auth");

@@ -593,11 +593,25 @@ export class SessionRpcTarget extends RpcTarget {
     return this.#organizations;
   }
 
-  /** THE PEOPLE — the operator's catalog alone: every other session names one person, itself. */
+  /** THE PEOPLE — the operator's catalog and a platform admin's (reach `every`, oauth.ts): every
+   *  other session names one person, itself. */
   get users(): UserCollectionRpcTarget {
     if (this.#authority.reach !== "every")
       throw codedError("FORBIDDEN", "Only the operator reads the user catalog.");
     return this.#users;
+  }
+
+  /** THE GLOBAL NAMESPACE'S ROOT `/`, for a platform admin: a context is (namespace, path), the
+   *  namespace a project or the global one, and this handle's `cd` walks the global namespace as a
+   *  project's walks its project — `global.cd("/users/<id>")`, `/organizations/<id>…`
+   *  (iterate-context.ts). For a person holding the `admin` scope (reach `every` only while
+   *  `admins` lists them, oauth.ts) alone: not the operator bearer, which names no person, and not
+   *  anyone else, whose global contexts stay reached by identity (`user`, `organizations.get`). */
+  get global(): IterateContextRpcTarget {
+    const { principal, reach, scopes } = this.#authority;
+    if (reach !== "every" || !principal.email || !scopes?.includes("admin"))
+      throw codedError("FORBIDDEN", "Only a platform admin opens the global namespace.");
+    return this.#globalContext("/", true);
   }
 
   /** The signed-in human's own context in the deployment-global namespace — an ORDINARY
@@ -626,13 +640,14 @@ export class SessionRpcTarget extends RpcTarget {
    *  ONLY WAY TO A GLOBAL CONTEXT: `user` and `organizations.get` vend one by IDENTITY (the session's
    *  own user, an org it belongs to) and the handle's `cd` is refused (iterate-context.ts), so no
    *  caller can name another global path — the path mask with no policy table. */
-  #globalContext(path: string): IterateContextRpcTarget {
+  #globalContext(path: string, globalPaths = false): IterateContextRpcTarget {
     return new IterateContextRpcTarget(
       this.#input.contextNamespace,
       DurableObjectNameCodec.address({ projectId: GLOBAL_PROJECT_ID, path }),
       this.#sessionTeardown,
       this.#input.waitUntil,
       this.#caller,
+      globalPaths,
     );
   }
 }
@@ -1054,8 +1069,9 @@ class ProjectCollectionRpcTarget extends RpcTarget {
    *  `/projects/<slug>`, a hostname's label) — the control plane resolves either as it checks the
    *  reach (`reachableProjectId`), and the id alone goes on: the DO name's host, a grant's list,
    *  `whoami()`. A project only — a context name belongs to `cd`. Outside this session's reach is
-   *  FORBIDDEN; so is the global namespace's id (it is no project). The admin secret alone
-   *  addresses a project the catalog never heard of, by id (a fresh context of its own). */
+   *  FORBIDDEN; so is the global namespace's id (it is no project: a platform admin reaches it as
+   *  `session.global`). The admin secret alone addresses a project the catalog never heard of, by
+   *  id (a fresh context of its own). */
   async get(project: string): Promise<IterateContextRpcTarget> {
     const address = DurableObjectNameCodec.parse(project);
     if (address.path !== "/")

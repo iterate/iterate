@@ -14,6 +14,7 @@ import { agents } from "../../agents/scripts/app.ts";
 import { dash } from "../../dash/scripts/app.ts";
 import { kit } from "../../kit/scripts/app.ts";
 import { notes } from "../../notes/scripts/app.ts";
+import { admin } from "../../admin/scripts/app.ts";
 import { voice } from "../../voice/scripts/app.ts";
 import type { StartApp } from "../../../scripts/lib/start-app.ts";
 import { OBSERVABILITY } from "../../../scripts/lib/wrangler-config.ts";
@@ -33,7 +34,7 @@ export const PREVIEW_PARENT = osEnvs.preview!;
 export const MAX_PREVIEW_NAME_LENGTH = 28;
 
 /** The apps on top, each previewed from its own parent worker (envs.ts `<app>Envs.preview`). */
-export const APPS: StartApp[] = [dash, agents, notes, voice, kit];
+export const APPS: StartApp[] = [dash, agents, notes, voice, kit, admin];
 /** A path that changes every app: the SDK they are built on, the shared UI, the shared deploy
  *  scripts, the env map. An app's own paths are `apps/<name>/`. */
 const SHARED_APP_PATHS = [
@@ -580,10 +581,17 @@ export function previewWranglerConfig(input: {
         // only ever what `wrangler preview` reads (deploy.ts never does), and app-config.ts refuses
         // the block off a workers.dev origin besides. The PR body's `Sign in ↗` links redeem here.
         APP_CONFIG_LOGIN__TEST_LINK__EMAIL_DOMAIN: TEST_LINK_EMAIL_DOMAIN,
+        // THE PREVIEW'S ADMIN (app-config.ts `admins`): one test person the admin app's specs sign
+        // in as (specs/admin). A preview already signs anyone in by password or test link, so an
+        // admin here opens nothing that was closed.
+        APP_CONFIG_ADMINS: JSON.stringify([PREVIEW_ADMIN_EMAIL]),
       },
     },
   };
 }
+
+/** The per-PR preview's one admin (`APP_CONFIG_ADMINS` above; specs/admin signs in as them). */
+const PREVIEW_ADMIN_EMAIL = `admin@${TEST_LINK_EMAIL_DOMAIN}`;
 
 /** Write a preview config beside Vite's built config and return its path. */
 export function writePreviewWranglerConfig(input: { previewName: string; dashOrigin?: string }) {

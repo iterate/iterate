@@ -80,6 +80,8 @@
     "APP_CONFIG_LOGIN__GOOGLE__CLIENT_SECRET": "google-test-secret",
     "APP_CONFIG_LOGIN__CLOUDFLARE__CLIENT_ID": "cloudflare-test-client",
     "APP_CONFIG_LOGIN__CLOUDFLARE__CLIENT_SECRET": "cloudflare-test-secret",
+    // the platform admin (admin-and-impersonation.test.ts)
+    "APP_CONFIG_ADMINS": "[\"oauth-admin@example.com\"]",
     "APP_CONFIG_SECRETS__KEY": "test-secrets-key",
     "APP_CONFIG_SECRETS__ADMIN_BEARER": "test-admin-api-secret",
   },

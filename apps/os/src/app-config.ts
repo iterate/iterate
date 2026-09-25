@@ -10,6 +10,7 @@
 //   {
 //     urls: { os, mcp, dash, ingressRouting: { type, hostname }, projectWildcard: { hostname, project, excludedHostnames } },
 //     login: { allowedEmails, password, emailCode: { from }, google: { clientId, clientSecret }, cloudflare: { clientId, clientSecret }, testLink: { emailDomain } },
+//     admins,
 //     customHostnames: { zone, zoneId, dcvDelegationUuid, reservedZones }, cloudflareApiToken,
 //     secrets: { key, previousKey, adminBearer },
 //   }
@@ -192,6 +193,21 @@ export const AppConfig = z.object({
       testLink: z.object({ emailDomain: dnsName.default(TEST_LINK_EMAIL_DOMAIN) }).optional(),
     })
     .prefault({}),
+  /** THE PLATFORM ADMINS: exact email addresses, never a pattern — `["jonas@iterate.com"]`, or the
+   *  var `APP_CONFIG_ADMINS='["jonas@iterate.com"]'`. A person listed here may be granted the
+   *  `admin` scope at consent (every project and person, 12 hours) and may view an app as someone
+   *  else (consent.ts); every admission of such a grant reads the list again, so removing an
+   *  address ends its admin grants and impersonations at their next request (oauth.ts). Unset ⇒
+   *  nobody. The operator bearer is not a person and needs no entry. */
+  admins: z
+    .array(
+      z
+        .string()
+        .trim()
+        .toLowerCase()
+        .regex(/^[^@\s*]+@[^@\s*]+$/, "expected exact email addresses, no `*`"),
+    )
+    .default([]),
   /** The deployment's own keys. */
   secrets: z
     .object({

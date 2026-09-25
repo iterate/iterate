@@ -14,14 +14,14 @@ the server answers or pushes.
 The client lives in the published **`iterate` package** under `iterate/*`
 and is layered so every app shares one implementation:
 
-| Entry                | What it is                                                                                                                                                                                                                         |
-| -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `iterate/react`      | The two React hooks below (`useLiveState`, `useIterateContext`) — the ONE file that imports React. The rendering half (`ContextView`, `AppShell`) lives in `@iterate-com/ui`, so the UI kit stays free of the SDK.                 |
-| `iterate/app`        | `createIterateClient` — the browser's one-socket session: login probe, the socket to the page's own `/api`, and reconnect on the next call. No React anywhere.                                                                     |
-| `iterate/client`     | The framework-free live-state client: `createLiveStateStore` (seed, apply deltas, heal a gap) and `connectLiveState` (wire a context's `subscribe` and a seed read to the store). Node test clients use the same code.             |
-| `iterate/app-server` | The app Worker's half: `appAuth` (the OAuth client, the `/.auth/*` pages and the authenticated `/api` proxy), `appSession`, `issuerOriginOf`. With `BrowserSession` from `iterate/app-session`, the Durable Object each app binds. |
-| `iterate/api`        | The declared shapes of the platform's `/api`: `IterateApi`, `IterateSessionApi`, `IterateContextApi` — what an app types against.                                                                                                  |
-| `iterate/node`       | `connectIterate({ baseUrl, auth })` — the node one-shot dial (`ws`) for scripts and the CLI; `Disposable`, never retried.                                                                                                          |
+| Entry                | What it is                                                                                                                                                                                                                                            |
+| -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `iterate/react`      | The React hooks below (`useLiveState`, `useFacetLiveState`, `useIterateContext`, `useContextStub`) — the ONE file that imports React. The rendering half (`ContextView`, `AppShell`) lives in `@iterate-com/ui`, so the UI kit stays free of the SDK. |
+| `iterate/app`        | `createIterateClient` — the browser's one-socket session: login probe, the socket to the page's own `/api`, and reconnect on the next call. No React anywhere.                                                                                        |
+| `iterate/client`     | The framework-free live-state client: `createLiveStateStore` (seed, apply deltas, heal a gap) and `connectLiveState` (wire a context's `subscribe` and a seed read to the store). Node test clients use the same code.                                |
+| `iterate/app-server` | The app Worker's half: `appAuth` (the OAuth client, the `/.auth/*` pages and the authenticated `/api` proxy), `appSession`, `issuerOriginOf`. With `BrowserSession` from `iterate/app-session`, the Durable Object each app binds.                    |
+| `iterate/api`        | The declared shapes of the platform's `/api`: `IterateApi`, `IterateSessionApi`, `IterateContextApi` — what an app types against.                                                                                                                     |
+| `iterate/node`       | `connectIterate({ baseUrl, auth })` — the node one-shot dial (`ws`) for scripts and the CLI; `Disposable`, never retried.                                                                                                                             |
 
 In a browser the client needs zero configuration beyond its scopes (it dials
 the page's own `/api`, and the app Worker's `appAuth` gate forwards it to the
@@ -161,26 +161,36 @@ is `"connecting" | "live" | "error"`, and the last value stays visible while a
 gap heals from a fresh seed.
 
 ```tsx
-const live = useLiveState<unknown>(context, {
-  key: "project",
-  readSeed: async () =>
-    z
-      .object({ rev: z.number(), state: z.unknown() })
-      .parse(await context!.invoke("itx.facets.get('project').liveSnapshot()")),
-});
+const live = useFacetLiveState(context, "project"); // useLiveState seeded by the facet's liveSnapshot()
 const parsed = ProjectLive.safeParse(live.value).data; // parse the value, never cast it
 ```
 
+`useContextStub(open, deps)` holds the handle these hooks take: it runs `open` —
+`() => api.projects.get(project.id)`, `() => root.cd(path)` — when `deps` change and
+disposes the stub on unmount and every re-open (each open stub is a subscription
+row and a pinned Durable Object on the platform).
+
 `useIterateContext` is the whole-context sibling — ONE hook, one stream
 subscription: every committed event of the context (subscribed BEFORE the
-catch-up read, deduped by offset, `caughtUp` once at the head), the processors
-table (re-read when the log grows a subscription change), who is here
-(`itx.rpcStubs.list()` plus every principal on the log), and named facets' live
-state (`core` plus every hosted facet by default, or exactly `liveState: [...]`):
+catch-up read, deduped by offset, published at most once a frame, `caughtUp` once
+at the head), the processors table (re-read when the log grows a subscription
+change), who is here (`itx.rpcStubs.list()` plus every principal on the log), and
+named facets' live state (`core` plus every hosted facet by default, or exactly
+`liveState: [...]`; `core` has no live state of its own and is its `snapshot()`
+re-read as the head moves, at most once a second). It reads the newest page of the
+log only (`history: "tail"`, the default — a context of 100,000 events opens as
+fast as one of ten) and the page below what it holds on `older.loadOlder()`;
+`history: "all"` reads every page, for a consumer that folds the whole log (the
+agents chat). `ContextView` takes the hook's result whole, as `context`, renders the
+log, the processors with their live state and who is here, and asks for older pages
+as the reader scrolls up (`packages/iterate/src/client/event-log.ts`). An app adds
+its own sentences per event type (`renderers`, matched by exact type or `prefix*`)
+and inspector bodies (`inspectors`):
 
 ```tsx
 const iterateContext = useIterateContext(context, { consumes: FEED_SUBSCRIPTION });
-// iterateContext.events, .caughtUp, .processors.rows, .presence.actors, .liveState.core
+// iterateContext.events, .caughtUp, .older.loadOlder(), .head, .processors.rows, .presence.actors, .liveState.core
+<ContextView title={path} context={iterateContext} renderers={myRenderers} state={search} onStateChange={…} />
 ```
 
 The `readSeed` thunk may be a fresh arrow every render; the hook pins the one it saw
@@ -236,7 +246,9 @@ The entire browser-facing API. A "handle" is a capnweb stub of a context
 | `info`                                              | data      | `{ principal, scopes, platformOrigin, ingressRouting, mcpOrigin }` — the granted `scopes` decide what a page offers (consent is task-based: optional scopes may be unticked).                    |
 | `signInFor(project)`                                | fn        | The page names a project this sign-in does not include: leave for `/.auth/login`, which offers to sign in again and returns to this URL.                                                         |
 | `useLiveState(itx, { key, name?, readSeed })`       | hook      | Subscribe to one producer's live state; seed through `readSeed`, apply pushed deltas, heal a gap. Never suspends. The LiveView primitive.                                                        |
-| `useIterateContext(itx, { consumes?, liveState? })` | hook      | The context, live: `events`, `caughtUp`, `error`, `processors`, `presence`, `liveState` — the data half of `ContextView`.                                                                        |
+| `useFacetLiveState(itx, facet)`                     | hook      | `useLiveState` for a facet hosted on the context, seeded by its `liveSnapshot()`; the value is unparsed.                                                                                         |
+| `useContextStub(open, deps)`                        | hook      | Hold a context stub (`{ stub, error, pending }`), disposed on unmount and every re-open.                                                                                                         |
+| `useIterateContext(itx, { consumes?, liveState? })` | hook      | The context, live: `events`, `caughtUp`, `error`, `older`, `head`, `processors`, `presence`, `liveState` — the data half of `ContextView`; `history: "all"` reads every page.                    |
 | `connectLiveState(itx, opts)`                       | fn        | The framework-free client under both hooks (`iterate/client`): a store plus `dispose()`.                                                                                                         |
 | `createLiveStateStore()`                            | fn        | The pure reduce: `seed`, `apply` (gap ⇒ resync), `get`, `rev`, `subscribe`.                                                                                                                      |
 | `ContextView`, `AppShell`                           | component | The rendering half, from `@iterate-com/ui` — pure components, no SDK import.                                                                                                                     |
@@ -256,8 +268,8 @@ low-level client, the UI kit's pure components, and types.
 ## One consumption model, the stream feed included
 
 The agents app's feed is `useIterateContext` over the agent's context
-(`apps/agents` `routes/_auth/projects.$slug.tsx`, `useAgentLog`): the log in
-memory, deduped by offset, reduced for the chat by `lib/agent-events.ts`.
+(`apps/agents` `routes/_auth/projects.$slug.tsx`, `useAgentLog`): the whole log in
+memory (`history: "all"`), deduped by offset, reduced for the chat by `lib/agent-events.ts`.
 Don't build new UI on a second client-side store; use
 `useLiveState`/`useIterateContext` and a server-owned projection.
 
@@ -297,7 +309,7 @@ components, and `posthog-privacy.test.ts` fails on any other replay or `before_s
 
 ## Where this is going
 
-The model is small on purpose: the SDK's React surface is two hooks over one
+The model is small on purpose: the SDK's React surface is a few hooks over one
 framework-free client, and the UI kit renders what they return without importing
 the SDK. Mutable lists that no projection pushes yet (secrets, organizations,
 grants) reload through `router.invalidate()`; each one that gains a live

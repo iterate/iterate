@@ -50,7 +50,7 @@ export const test = base.extend<{
     /** The origin of a client app deployed against the platform under test, from its
      *  `<APP>_BASE_URL`. Locally a missing app skips the spec; in CI it fails, because the
      *  preview's e2e job always sets the variable. */
-    appOrigin: (app: "notes" | "voice" | "dash") => string;
+    appOrigin: (app: "notes" | "voice" | "dash" | "admin") => string;
   };
   page: Awaited<ReturnType<typeof addPagePlugins>>;
 }>({
