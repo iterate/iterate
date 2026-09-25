@@ -3,8 +3,9 @@ import { resolve } from "node:path";
 import { expect, test } from "vitest";
 
 // Every `events.iterate.com/…` literal in a tracked file names `<namespace>/<event>`: an allowed
-// namespace, a lowercase kebab-case event, never a third segment (packages/iterate/README.md#event-types).
-// A template (`events.iterate.com/${x}`) or a placeholder (`<namespace>`, `…`, `*`) is skipped.
+// namespace, a lowercase kebab-case event, never a third segment. The rules:
+// packages/iterate/README.md#event-types. A template (`events.iterate.com/${x}`) or a placeholder
+// (`<namespace>`, `…`, `*`) is skipped.
 
 const NAMESPACES = new Set([
   "itx",
