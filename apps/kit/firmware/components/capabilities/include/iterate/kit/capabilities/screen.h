@@ -38,6 +38,9 @@ struct iterate_kit_screen {
   uint32_t uploads_started, uploads_completed, upload_failures, bytes_received;
   uint32_t upload_id;
   bool uploading, showing_image, refresh_pending;
+  /* The last chunk's answer, owed until the refresh leaves PENDING (screen.c). */
+  struct capnweb_responder shown_answer;
+  bool shown_answer_owed;
 };
 
 size_t iterate_kit_screen_frame_bytes(uint16_t width, uint16_t height,

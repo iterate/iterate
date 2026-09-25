@@ -2552,6 +2552,8 @@ void iterate_kit_voice_loop_step(void) {
   {
     (void)esp_task_wdt_reset();
     (void)iterate_kit_itx_transport_poll(&transport, 16U);
+    /* A call whose answer waits on hardware (a screen refresh) is answered here. */
+    iterate_kit_peer_step(&runtime.peer);
     /*
      * The controls, at a human cadence rather than the loop's.
      *

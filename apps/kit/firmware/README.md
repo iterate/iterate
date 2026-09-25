@@ -98,7 +98,8 @@ proof, `apps/agents/scripts/voice-board.ts`, takes the device name on
 provides dimensions, supported/preferred wire formats, refresh timing, a
 staging buffer, and submit/status callbacks. `screen.info()` exposes these
 facts; `screen.setImage()` accepts contiguous bounded base64 chunks and
-`screen.status()` acknowledges hardware completion. Monochrome (`mono1`),
+answers the chunk that completes the frame only once the hardware has shown it
+(an error if the refresh failed). Monochrome (`mono1`),
 16-level grayscale (`gray4`) and big-endian RGB565 use row-major pixels with
 each row padded to whole bytes. Panel-native packing belongs to the driver.
 

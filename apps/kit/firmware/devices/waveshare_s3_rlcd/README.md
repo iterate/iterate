@@ -48,8 +48,9 @@ await itx.cd("/").voice.setImage({
 
 The shared screen protocol advertises 400 × 300 `mono1`, stages bounded chunks
 and writes only complete frames. ST7305 command **0x20** gives the required
-1=black polarity; the vendor's 0x21 setting inverts our pixels. The setter waits
-for `screen.status()` refresh completion. Health exposes uploads and failures.
+1=black polarity; the vendor's 0x21 setting inverts our pixels. The panel shows
+a frame as it takes it, so the last chunk is answered at once. Health exposes
+uploads and failures.
 HTML, fonts and conversion stay on the server. The
 [drawing guide](../../../../agents/voice/screen-context.md)
 is supplied through the screen capability, with a licensed ASCII pixel font
