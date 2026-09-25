@@ -58,11 +58,14 @@ test("members group into deployments by name; nothing of another shape on the ac
   ]);
 });
 
-test("a test-only run tests its prefix's newest deployment", () => {
+test("a test-only run tests its prefix's newest deployment that has its apps/os worker", () => {
   const deployments = group([
     worker("pr7-1111111-os", 5),
     worker("pr7-2222222-os", 1),
     worker("pr8-3333333-os", 0.5),
+    // a newer push whose deploy failed before apps/os uploaded
+    d1("pr7-4444444-os-db", 0.2),
+    worker("pr7-4444444-dash", 0.2),
   ]);
   expect(newestPreviewDeployment(deployments, "pr7")).toMatchObject({ name: "pr7-2222222" });
   expect(newestPreviewDeployment(deployments, "pr9")).toBeUndefined();
@@ -138,6 +141,23 @@ test.each<{
     expect(plan).toMatchObject([{ deployment: { name: deployment }, verdict }]);
   },
 );
+
+test("the sweep keeps the last deployment that deployed while a newer push's deploy failed, and takes the failed one after an hour", () => {
+  const plan = planPreviewSweep({
+    now: NOW,
+    deployments: group([
+      worker("pr7-1111111-os", 5),
+      d1("pr7-2222222-os-db", 2),
+      worker("pr7-2222222-dash", 2),
+    ]),
+    pullRequestStates: new Map([[7, "open"]]),
+    openPullRequestBranches: [],
+  });
+  expect(plan).toMatchObject([
+    { deployment: { name: "pr7-1111111" }, verdict: "keep" },
+    { deployment: { name: "pr7-2222222" }, verdict: "stale" },
+  ]);
+});
 
 test.each<{ rule: string; olderHoursAgo?: number; verdict: "stale" | "keep" }>(
   // prettier-ignore

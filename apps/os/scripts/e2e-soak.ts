@@ -64,11 +64,11 @@ type SoakOptions = {
   runs?: number;
   /** a Vitest filter, passed to every run */
   filter?: string;
-  /** the preview to soak (its URL); WORKER_BASE_URL wins */
+  /** the name whose deployment of this checkout to soak; WORKER_BASE_URL wins */
   preview?: string;
-  /** each run deploys a brand-new preview `<prefix>-<n>`, runs e2e against it and deletes it */
+  /** each run deploys a brand-new deployment `<prefix>-<n>-<sha7>`, runs e2e against it and deletes it */
   freshPreviews?: string;
-  /** each run redeploys this preview in place, then runs e2e against it */
+  /** each run deploys this checkout's deployment of this name again, in place, then runs e2e against it */
   redeploy?: string;
   /** seconds to wait after each --redeploy run before the next redeploy */
   gap?: number;

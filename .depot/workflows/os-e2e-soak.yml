@@ -59,7 +59,7 @@ on:
         type: string
         default: "0"
       redeploy:
-        description: "true: every run redeploys `preview` in place and runs e2e against it at once (no perf)"
+        description: "true: every run deploys this ref's deployment of `preview` again, in place, and runs e2e against it at once (no perf)"
         required: false
         type: string
         default: "false"

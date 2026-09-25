@@ -17,8 +17,8 @@
 // STALE (`planPreviewSweep`, nightly) when
 //   1. its newest member is more than 7 days old, whatever its prefix;
 //   2. its prefix is `pr<n>` and pull request #n is closed or does not exist;
-//   3. it is not its prefix's newest deployment, and its newest member is more than an hour old
-//      or it has no stamped member left;
+//   3. it is not its prefix's newest deployment with an apps/os worker (`newestPreviewDeployment`),
+//      and its newest member is more than an hour old or it has no stamped member left;
 //   4. its prefix names no pull request (a hand-picked name like `exp-…` or `soak`), no open pull
 //      request's head branch slugifies to it, it is no CI workflow's own (CI_WORKFLOW_PREVIEWS),
 //      and its newest member is more than 24 h old.
@@ -111,11 +111,20 @@ export function groupPreviewDeployments(
   });
 }
 
-/** The newest deployment of `prefix`, by its newest member, or undefined when it has none with a
- *  stamp. How a test-only run finds the deployment it tests. */
+/** The newest deployment of `prefix` that has its apps/os worker, by its newest member: the one a
+ *  test-only run tests, and the one the sweep keeps (rule 3). A push whose deploy failed or was
+ *  cancelled before apps/os uploaded leaves a newer deployment without it, which never displaces
+ *  the last one that deployed — the one the PR body still links. */
 export function newestPreviewDeployment(deployments: PreviewDeploymentListing[], prefix: string) {
   return deployments
-    .filter((deployment) => deployment.prefix === prefix && deployment.newestCreatedAt)
+    .filter(
+      (deployment) =>
+        deployment.prefix === prefix &&
+        deployment.newestCreatedAt &&
+        deployment.members.some(
+          (member) => member.kind === "worker" && member.name === `${deployment.name}-os`,
+        ),
+    )
     .toSorted((a, b) => Date.parse(b.newestCreatedAt!) - Date.parse(a.newestCreatedAt!))[0];
 }
 
