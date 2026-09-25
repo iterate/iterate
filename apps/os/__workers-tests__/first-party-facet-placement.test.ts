@@ -104,7 +104,7 @@ test("a secret path that resolves onto its owner's root (`/secrets/..`, `/secret
 /** A loaded class that is both a facet (`hello`) and a processor (the two verbs the delivery loop
  *  calls on a hosting row: `catchUpFromLog` at enable, `processEventBatch` per batch). */
 const TALLY_SOURCE = {
-  "cap.js": `import { FacetDurableObject } from "./processor.js";
+  "worker.js": `import { FacetDurableObject } from "iterate/sdk";
 export class Tally extends FacetDurableObject {
   static publicMethods = [...super.publicMethods, "hello"];
   catchUpFromLog() {}
@@ -113,7 +113,7 @@ export class Tally extends FacetDurableObject {
 }`,
 };
 const WORKER_SOURCE = {
-  "cap.js": `import { WorkerEntrypoint } from "cloudflare:workers";
+  "worker.js": `import { WorkerEntrypoint } from "cloudflare:workers";
 export default class extends WorkerEntrypoint { hello() { return "hello from loaded code"; } }`,
 };
 

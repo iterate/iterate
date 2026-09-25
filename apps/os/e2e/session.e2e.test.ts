@@ -202,10 +202,10 @@ test("projects.create({ project }) writes the catalog row on global:/ and opens 
   // oxlint-disable-next-line iterate/prefer-object-property-match -- exact: the created fact carries nothing but its existence
   expect(created.payload).toEqual({}); // existence only
   expect(await processorNames(itx)).toContain("project");
-  // the seed: the config repo in the catalog (its certificate crossed to /), its two files on main
+  // the seed: the config repo in the catalog (its certificate crossed to /), its files on main
   expect((await itx.repos.list()).map((r: { path: string }) => r.path)).toEqual(["/repos/config"]);
   expect(await itx.repos.get("/repos/config").listFiles()).toMatchObject({
-    paths: ["AGENTS.md", "worker.ts"],
+    paths: ["AGENTS.md", "package.json", "tsconfig.json", "worker.ts"],
   });
   // published: the apex answers the seeded homepage worker (subdomain routing under the test's base)
   expect((await fetchProjectUrl(projectUrl({ project: slug, path: "/" }))).text.trim()).toBe(
@@ -252,7 +252,7 @@ test("the built-in cd carries the OAuth principal to a sibling context", async (
  *  bearer it was presented with reached it (it must not: the platform's credential is stripped);
  *  on a WebSocket upgrade, it echoes each message. */
 const SRC_ECHO_APP = {
-  "cap.js": `import { WorkerEntrypoint } from "cloudflare:workers";
+  "worker.js": `import { WorkerEntrypoint } from "cloudflare:workers";
 export default class Echo extends WorkerEntrypoint {
   fetch(request) {
     if ((request.headers.get("upgrade") || "").toLowerCase() === "websocket") {
@@ -509,8 +509,8 @@ test("one-shot HTTP batch whoami at /api, an inline-source worker, and a dotted 
 
   // 2. THE SOURCE IS THE MODULES, handed over INLINE: hand the code over, run it
   const SRC_MINE = {
-    "cap.js": `import { WorkerEntrypoint } from "cloudflare:workers";
-import { withItx } from "./processor.js";
+    "worker.js": `import { WorkerEntrypoint } from "cloudflare:workers";
+import { withItx } from "iterate/sdk";
 export default class Mine extends WorkerEntrypoint {
   async run() {
     const { projectId } = await withItx(this.env.ITX, (itx) => itx.whoami());

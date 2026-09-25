@@ -24,7 +24,7 @@ import { releasePins, stub } from "./support.ts";
 /** A plain loaded class; `id` names the instance. */
 const spec = {
   source: {
-    "cap.js": /* js */ `import { FacetDurableObject } from "./processor.js";
+    "worker.js": /* js */ `import { FacetDurableObject } from "iterate/sdk";
 export class PlainDurableObject extends FacetDurableObject {
   static publicMethods = [...super.publicMethods, "hello"];
   id = crypto.randomUUID();
@@ -37,7 +37,7 @@ export class PlainDurableObject extends FacetDurableObject {
 /** A loaded class serving plain HTTP; its page names the instance. */
 const site = {
   source: {
-    "cap.js": /* js */ `import { FacetDurableObject } from "./processor.js";
+    "worker.js": /* js */ `import { FacetDurableObject } from "iterate/sdk";
 export class SiteDurableObject extends FacetDurableObject {
   id = crypto.randomUUID();
   fetch() { return new Response(this.id); }
@@ -92,7 +92,7 @@ test("a birth resets only the facets the last incarnation called: one no call re
 /** A loaded class whose constructor throws until the time `failStartsFor(ms)` set in its own storage. */
 const fragile = {
   source: {
-    "cap.js": /* js */ `import { FacetDurableObject } from "./processor.js";
+    "worker.js": /* js */ `import { FacetDurableObject } from "iterate/sdk";
 export class FragileDurableObject extends FacetDurableObject {
   static publicMethods = [...super.publicMethods, "failStartsFor", "hello"];
   constructor(ctx, env) {

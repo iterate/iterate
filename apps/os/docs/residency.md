@@ -41,9 +41,9 @@ its context is evicted, billed per instance, and the next incarnation reuses tha
 (measured 2026-09-23: 19 minutes and counting, or until the next deploy). 5 and 6 are the net for a
 project's own code; first-party code never relies on them. Every first-party facet, worker, config
 template, example and `itx.run` script reaches its context through `withItx` (`this.withItx(fn)`
-on an SDK host, `withItx(this.env.ITX, fn)` from `./processor.js` anywhere else, a `WithItx`
+on an SDK host, `withItx(this.env.ITX, fn)` from `iterate/sdk` anywhere else, a `WithItx`
 accessor for an object that needs reach), and lint refuses a raw `env.ITX.get()`
-(`iterate/no-raw-itx-get`, embedded `"cap.js"` modules included) except in the rows that test this
+(`iterate/no-raw-itx-get`, embedded `"worker.js"` modules included) except in the rows that test this
 net. First-party facets are never reset: they release every round trip through `withItx`, and the
 `secret` facet pumps a proxied socket with no claim. A loaded facet that must outlive the call that started it (an LLM
 attempt, its backoff, a live voice dial) holds a claim through `runInBackground`, and a claimed

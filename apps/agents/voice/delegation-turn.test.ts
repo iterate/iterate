@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { DEFAULT_AGENT_SYSTEM_PROMPT } from "../runtime/system-prompt.ts";
+import { DEFAULT_AGENT_SYSTEM_PROMPT } from "../../../configs/with-agents/agents/system-prompt.ts";
 import { runDelegationTurn } from "./delegation-turn.ts";
 import websiteSteps from "./website-steps-repro.json";
 

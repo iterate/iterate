@@ -358,7 +358,7 @@ test("resolveItxExpression — the call that runs: a builtins-rooted call NEVER 
 });
 
 test("resolveItxExpression — the call that runs: a singular worker name has no implicit platform resolution", () => {
-  const target: ItxExpression = ["itx", "workers", ["get", { source: { "cap.js": "source" } }]];
+  const target: ItxExpression = ["itx", "workers", ["get", { source: { "worker.js": "source" } }]];
   expect(() => resolveItxExpression(() => [], ["itx", "worker", "fetch"], ROOT)).toThrow(
     "no rewrite rule matches",
   );
@@ -1210,7 +1210,7 @@ test("cd forwards a factory and terminal fetch together, without exporting an in
     },
     rewriteRules: () =>
       table([
-        "itx.provider ⇒ itx.builtins.cd('/provider').workers.get({source:{'cap.js':'source'}})",
+        "itx.provider ⇒ itx.builtins.cd('/provider').workers.get({source:{'worker.js':'source'}})",
       ]),
     implicitRoots: ROOT,
     path: "/",
@@ -1219,7 +1219,7 @@ test("cd forwards a factory and terminal fetch together, without exporting an in
   const response = (await resolver.invoke("itx.provider.fetch", request)) as Response;
   expect(await response.text()).toBe("native fetch");
   expect(received).toEqual([
-    ["workers", ["get", { source: { "cap.js": "source" } }], ["fetch", request]],
+    ["workers", ["get", { source: { "worker.js": "source" } }], ["fetch", request]],
   ]);
 });
 

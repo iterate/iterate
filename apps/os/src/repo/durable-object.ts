@@ -18,6 +18,7 @@
 
 import { z } from "zod";
 import { StreamProcessorDurableObject, type ItxEntrypointService } from "iterate/sdk";
+import type { RepoFileChange, RepoLogEntry } from "iterate/api";
 import type { EventInput } from "iterate/stream/processor";
 import { DurableObjectNameCodec } from "../context/paths.ts";
 import type { ItxEntrypointScope } from "../iterate-context.ts";
@@ -53,15 +54,6 @@ const TOKEN_REUSE_MARGIN_MS = 60_000;
 const textDecoder = new TextDecoder();
 const textEncoder = new TextEncoder();
 
-export type RepoFileChange = { path: string; content: string } | { path: string; delete: true };
-/** One commit as `log` lists it, newest first (`timestamp` is epoch milliseconds). */
-export type RepoLogEntry = {
-  oid: string;
-  message: string;
-  author: { name: string; email: string };
-  timestamp: number;
-  parents: string[];
-};
 type Transport = ReturnType<typeof createGitWireTransport>;
 /** A git token as this facet keeps it: reused until `until` (epoch ms) minus the margin. */
 type StoredToken = { token: string; until: number };
@@ -81,7 +73,6 @@ function filePath(path: string): string {
 export const repoVerbs = [
   "tip",
   "readFile",
-  "readModules",
   "modules",
   "listFiles",
   "commitFiles",
@@ -249,63 +240,31 @@ export class RepoDurableObject extends StreamProcessorDurableObject<
     return Object.hasOwn(files, path) ? files[path]! : null;
   }
 
-  /** Several files at once, each under the name a loaded worker's module map wants for it —
-   *  `readModules({ 'cap.js': 'apps/site/worker.js', 'site.js': 'apps/site/site.js' })` is a
-   *  no-build app's whole `source`, one call (a source expression yields ONE value, and the loader
-   *  takes the module map). A path that does not exist is a refusal, never a silent hole. */
-  async readModules(
-    modules: Record<string, string>,
-    options?: { commitOid: string },
-  ): Promise<Record<string, string>> {
+  /** THE REPO AS A WORKER'S SOURCE: every file at the commit under its path — or, with `dir`, the
+   *  files under that folder, paths relative to it (a folder that is its own worker, like the agents
+   *  app's). The loader resolves it (context/module-resolution.ts `entryOf`). */
+  async modules(options?: { commitOid?: string; dir?: string }): Promise<Record<string, string>> {
     await this.#created();
-    const revision = z
-      .object({ commitOid: z.string().regex(/^[a-f0-9]{40}$/) })
-      .optional()
-      .parse(options);
-    const { files } = await this.#fresh(revision?.commitOid);
-    const out: Record<string, string> = {};
-    for (const [moduleName, path] of Object.entries(
-      z.record(z.string(), z.string()).parse(modules),
-    )) {
-      if (!Object.hasOwn(files, path))
-        throw new Error(`readModules: no file at ${JSON.stringify(path)}`);
-      out[moduleName] = files[path]!;
-    }
-    return out;
-  }
-
-  /** THE REPO AS A WORKER'S MODULES: every `.js` file at the commit under its own path, and `main`
-   *  (default `worker.ts`) as `cap.js`, the loader's main module — so a config repo's relative imports
-   *  resolve exactly as they do in the tree, with no module map to keep. THE apex target's source
-   *  (project/processor.ts: the seed's and every commit's). The loader takes a module's TEXT only
-   *  under a name ending in `.js` (Cloudflare's rule: "Module name must end with '.js'"), so `.js` is
-   *  the one extension a sibling module may have; `worker.ts` is a name — the platform's seed — and
-   *  it rides as `cap.js`. A `.md`, a `.css`, a `.json` is not a module: a worker that serves one
-   *  exports its text from a `.js` file. A commit with no `main` is a refusal, never an empty worker;
-   *  a repo file at `cap.js` is shadowed by `main` (the loader's name for it). */
-  async modules(options?: { main?: string; commitOid?: string }): Promise<Record<string, string>> {
-    await this.#created();
-    const { main = "worker.ts", commitOid } =
+    const { commitOid, dir } =
       z
         .object({
-          main: z.string().min(1).optional(),
           commitOid: z
             .string()
             .regex(/^[a-f0-9]{40}$/)
             .optional(),
+          dir: z.string().min(1).optional(),
         })
+        .strict()
         .optional()
         .parse(options) ?? {};
     const { files } = await this.#fresh(commitOid);
-    if (!Object.hasOwn(files, main))
-      throw new Error(`modules: no file at ${JSON.stringify(main)} to be the main module`);
-    const out: Record<string, string> = {};
-    for (const [path, content] of Object.entries(files))
-      if (path.endsWith(".js")) out[path] = content;
-    // `cap.js` is the loader's name for the main module, set LAST: a repo file that happens to sit at
-    // `cap.js` is shadowed by `main`, never the other way round.
-    out["cap.js"] = files[main]!;
-    return out;
+    if (!dir) return { ...files };
+    const prefix = `${dir.replace(/\/$/, "")}/`;
+    return Object.fromEntries(
+      Object.entries(files)
+        .filter(([path]) => path.startsWith(prefix))
+        .map(([path, content]) => [path.slice(prefix.length), content]),
+    );
   }
   async listFiles(): Promise<{ commitOid: string | null; paths: string[] }> {
     await this.#created();

@@ -20,7 +20,7 @@ import {
   type ConsumedEvent,
   type ProcessEventArgs,
   type ReduceArgs,
-} from "./processor.js";
+} from "iterate/sdk";
 import {
   completeWithOpenAi,
   runDelegationTurn,

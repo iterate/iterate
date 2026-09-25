@@ -22,8 +22,8 @@
 //     newest-first with parents
 
 import { expect, test } from "vitest";
+import type { RepoLogEntry } from "iterate/api";
 import { repoArtifactName } from "../src/context/cf-artifacts.ts";
-import type { RepoLogEntry } from "../src/repo/durable-object.ts";
 import { freshCtx, freshRepoPath, openItx } from "./support/client.ts";
 
 test("cfArtifacts create/get/list/delete against the real binding, by path, project-scoped", async () => {

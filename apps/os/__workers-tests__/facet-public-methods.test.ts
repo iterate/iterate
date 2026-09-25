@@ -13,8 +13,8 @@ import { signedInSession } from "./support.ts";
 
 /** A person's own processor with a method of its own (`hello`), loaded from source. */
 const LOADED_PROCESSOR_SOURCE = {
-  "cap.js": /* js */ `
-import { StreamProcessor, StreamProcessorDurableObject, defineProcessorContract, z } from "./processor.js";
+  "worker.js": /* js */ `
+import { StreamProcessor, StreamProcessorDurableObject, defineProcessorContract, z } from "iterate/sdk";
 const contract = defineProcessorContract({
   slug: "tally",
   version: "1.0.0",
@@ -38,7 +38,7 @@ export class TallyDurableObject extends StreamProcessorDurableObject {
 /** A loaded class that extends neither SDK facet shell: it lists nothing. */
 const PLAIN_DURABLE_OBJECT_SPEC = {
   source: {
-    "cap.js": /* js */ `
+    "worker.js": /* js */ `
 import { DurableObject } from "cloudflare:workers";
 export class Plain extends DurableObject {
   hello() { return "hello from a plain Durable Object"; }

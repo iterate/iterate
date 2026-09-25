@@ -12,7 +12,7 @@ import { stub } from "./support.ts";
 
 test("a burst of 20 concurrent callers after a failed cold load runs the producer once, and every caller gets the site", async () => {
   const s = stub("prj_loader_recovers_once");
-  const producer = { source: { "cap.js": producerSource }, className: "ProducerDurableObject" };
+  const producer = { source: { "worker.js": producerSource }, className: "ProducerDurableObject" };
   expect(await s.invoke(["itx", "facets", ["get", "producer", producer], ["runs"]])).toBe(0);
   const site: ItxExpression = [
     "itx",
@@ -23,7 +23,7 @@ test("a burst of 20 concurrent callers after a failed cold load runs the produce
   // the cold load's producer answers no modules, so the load fails inside the loader: its id is dead
   // from here. Called in the object: a rejection over the raw stub is also reported unhandled.
   await expect(runInDurableObject(s, (instance) => instance.invoke(site))).rejects.toThrow(
-    /"cap\.js" main module/,
+    /a source is its files/,
   );
   const answers = await Promise.all(Array.from({ length: 20 }, () => s.invoke(site)));
   expect(answers).toEqual(Array.from({ length: 20 }, () => "hi"));
@@ -32,7 +32,7 @@ test("a burst of 20 concurrent callers after a failed cold load runs the produce
 });
 
 const producerSource = /* js */ `
-import { StreamProcessor, StreamProcessorDurableObject, defineProcessorContract, z } from "./processor.js";
+import { StreamProcessor, StreamProcessorDurableObject, defineProcessorContract, z } from "iterate/sdk";
 const contract = defineProcessorContract({
   slug: "producer",
   version: "1.0.0",
@@ -57,7 +57,7 @@ export class ProducerDurableObject extends StreamProcessorDurableObject {
     if (runs === 1) return null; // no modules: the load fails inside the loader
     await new Promise((resolve) => setTimeout(resolve, 300));
     return {
-      "cap.js": "import { WorkerEntrypoint } from 'cloudflare:workers'; export default class Site extends WorkerEntrypoint { hello() { return 'hi'; } }",
+      "worker.js": "import { WorkerEntrypoint } from 'cloudflare:workers'; export default class Site extends WorkerEntrypoint { hello() { return 'hi'; } }",
     };
   }
 }

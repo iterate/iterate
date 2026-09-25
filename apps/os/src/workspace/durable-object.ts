@@ -19,9 +19,9 @@
 // (first-party-facets.ts): ordinary bundled worker code, reached as `itx.facets.get("workspace")`
 // (library.ts).
 import { StreamProcessorDurableObject, type ItxEntrypointService } from "iterate/sdk";
+import type { RepoFileChange, RepoLogEntry } from "iterate/api";
 import { DurableObjectNameCodec } from "../context/paths.ts";
 import type { ItxEntrypointScope } from "../iterate-context.ts";
-import type { RepoFileChange, RepoLogEntry } from "../repo/durable-object.ts";
 import {
   assertCreated,
   EntityLifecycleProcessor,

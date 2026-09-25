@@ -28,8 +28,8 @@ import {
   ConversationContent,
   ConversationScrollButton,
 } from "../../components/conversation.tsx";
-import { installAgents } from "../../../runtime/install.ts";
-import agentRuntime from "../../../../../configs/with-agents/agents.js?raw";
+import { installAgents } from "../../../../../configs/with-agents/agents/install.ts";
+import { agentRuntimeSource } from "../../lib/agent-runtime-source.ts";
 import { AgentFeedItemRow, AgentLiveActivity, type Inspect } from "../../components/agent-feed.tsx";
 import { InspectorSheet, type Inspected } from "../../components/agent-inspectors.tsx";
 import { agentEventInspectors, agentEventRenderers } from "../../lib/agent-event-renderers.tsx";
@@ -118,7 +118,7 @@ function AgentsPage() {
             if (!data.installed) {
               // The SDK models the public API as promises; capnweb's stub has the
               // same runtime methods with additional pipelining types.
-              await installAgents(itx as unknown as IterateContextApi, agentRuntime);
+              await installAgents(itx as unknown as IterateContextApi, agentRuntimeSource);
               await router.invalidate({ sync: true });
               return;
             }

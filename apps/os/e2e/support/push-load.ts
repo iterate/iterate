@@ -164,11 +164,11 @@ export async function fanProbes(itx: any, count: number) {
 }
 
 /** The fan-out probe: the pure `FanProbeProcessor extends StreamProcessor` plus its one-line host
- *  `FanProbeDurableObject extends StreamProcessorDurableObject` (both from the SDK, `./processor.js`),
+ *  `FanProbeDurableObject extends StreamProcessorDurableObject` (both from the SDK, `iterate/sdk`),
  *  counting every durable event. */
 const FAN_PROBE = {
-  "cap.js": /* js */ `
-import { StreamProcessor, StreamProcessorDurableObject } from "./processor.js";
+  "worker.js": /* js */ `
+import { StreamProcessor, StreamProcessorDurableObject } from "iterate/sdk";
 class FanProbeProcessor extends StreamProcessor {
   contract = {
     slug: "fan-probe",

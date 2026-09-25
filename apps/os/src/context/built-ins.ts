@@ -400,8 +400,8 @@ export interface BuiltInScope extends LibraryRoots {
   };
   /** The stateless host: `get({ source, cacheKey?, className?, props? })` → a `WorkerEntrypoint` in
    *  its own confined isolate (no DO, no storage) — ANY method it exports, reached by name (`run`,
-   *  `fetch`, `processEventBatch`, …). `source` is the worker's MODULES, literally (`{ "cap.js": code,
-   *  … }`), OR an itx EXPRESSION that produces them — then `cacheKey` is REQUIRED and the producer runs
+   *  `fetch`, `processEventBatch`, …). `source` is the worker's FILES, literally (`{ "worker.js": code,
+   *  … }`, its entry as module-resolution.ts `readPackage` finds it), OR an itx EXPRESSION that produces them — then `cacheKey` is REQUIRED and the producer runs
    *  only when no isolate is warm under it (worker-loader.ts: Cloudflare's `get(id, getCode)`
    *  contract; the caller owns "same key ⇒ same code"). `className` names the exported class (default:
    *  the default export); `props` is Cloudflare's own WorkerStubEntrypointOptions.props, read back as

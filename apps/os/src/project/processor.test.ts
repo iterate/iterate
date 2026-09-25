@@ -71,8 +71,8 @@ const reduceRows: {
     events: [
       ingressAt(configRepoTarget("aaa")),
       ingressAt(configRepoTarget("bbb")),
-      ingressAt(["itx", "workers", ["get", { source: { "cap.js": "export default {}" } }]]),
-      ingressAt(["itx", "workers", ["get", { source: { "cap.js": "" }, cacheKey: "ccc" }]]),
+      ingressAt(["itx", "workers", ["get", { source: { "worker.js": "export default {}" } }]]),
+      ingressAt(["itx", "workers", ["get", { source: { "worker.js": "" }, cacheKey: "ccc" }]]),
       ingressAt(null),
     ],
     state: { ...empty, publishedCommitOid: "bbb" },

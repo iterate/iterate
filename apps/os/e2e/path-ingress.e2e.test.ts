@@ -21,7 +21,7 @@ import { freshDnsSafeProjectSlug, localOnly, publishConfigWorker } from "./suppo
  *  caller (the platform's challenge) unless one is stamped; `/headers` tries to set what only the
  *  platform may; the apex is its own 404. */
 const SRC_ECHO_URL_CONFIG_WORKER = {
-  "cap.js": `import { WorkerEntrypoint } from "cloudflare:workers";
+  "worker.js": `import { WorkerEntrypoint } from "cloudflare:workers";
 export default class Echo extends WorkerEntrypoint {
   fetch(request) {
     const url = new URL(request.url);

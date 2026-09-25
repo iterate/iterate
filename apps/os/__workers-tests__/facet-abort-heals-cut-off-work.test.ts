@@ -29,7 +29,7 @@ import { stub, until } from "./support.ts";
  *  in the facet's own SQLite first (so the fresh instance after an abort sees the history);
  *  `probe()` reads those and the checkpoint without touching the engine. */
 const HANGING_COUNTER_SRC = /* js */ `
-import { StreamProcessor, StreamProcessorDurableObject, defineProcessorContract, z } from "./processor.js";
+import { StreamProcessor, StreamProcessorDurableObject, defineProcessorContract, z } from "iterate/sdk";
 const contract = defineProcessorContract({
   slug: "hangingcounter",
   version: "1.0.0",
@@ -238,7 +238,10 @@ async function hostedOn(ctx: string) {
         [
           "get",
           name,
-          { source: { "cap.js": HANGING_COUNTER_SRC }, className: "HangingCounterDurableObject" },
+          {
+            source: { "worker.js": HANGING_COUNTER_SRC },
+            className: "HangingCounterDurableObject",
+          },
         ],
         "processEventBatch",
       ],

@@ -1,26 +1,31 @@
 import type { IterateContextApi } from "iterate/api";
 
-/** Install the app into a project root. Its code and catalog remain project-owned userspace. */
+/** Install the app into a project root from its runtime: the files of the agents folder by name
+ *  (`index.ts` its entry). Its code and catalog remain project-owned userspace. */
 export async function installAgents(
   itx: Pick<IterateContextApi, "whoami" | "append" | "invoke"> & {
     kv: Pick<IterateContextApi["kv"], "put">;
     processors: Pick<IterateContextApi["processors"], "enable">;
   },
-  source: string,
+  source: Record<string, string>,
 ) {
   const { path } = await itx.whoami();
   if (path !== "/") throw new Error("Install agents at the project root");
-  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(source));
+  // The runtime's name is its content hash: every facet it hosts names it (a processor row shows
+  // which runtime an agent runs), and an upgrade is a new name.
+  const serialized = JSON.stringify(
+    Object.fromEntries(
+      Object.keys(source)
+        .sort()
+        .map((name) => [name, source[name]]),
+    ),
+  );
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(serialized));
   const cacheKey = Array.from(new Uint8Array(digest), (byte) =>
     byte.toString(16).padStart(2, "0"),
   ).join("");
-  await itx.kv.put(`agents/runtime/${cacheKey}.js`, source);
-  await itx.kv.put("agents/runtime-key", cacheKey);
-  const spec = {
-    cacheKey,
-    source: { "cap.js": source },
-    className: "AgentCollectionDurableObject",
-  };
+  await itx.kv.put("agents/runtime", JSON.stringify({ cacheKey, source }));
+  const spec = { cacheKey, source, className: "AgentCollectionDurableObject" };
   await itx.processors.enable("agents", {
     ...spec,
     consumes: ["events.iterate.com/agent/created", "events.iterate.com/agent/deleted"],

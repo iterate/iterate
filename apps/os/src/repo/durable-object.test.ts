@@ -48,7 +48,7 @@ test.for([
   expect(wave.map((outcome) => outcome.status)).toEqual(
     Array(callers).fill(failFirst ? "rejected" : "fulfilled"),
   );
-  expect(next).toEqual({ "cap.js": "export default 1;\n" });
+  expect(next).toEqual({ "worker.ts": "export default 1;\n" });
   // the fake remote counts only the packs it SERVED: a rejected fetch never reached it
   const packsServed = artifacts.snapshots;
   expect(packsServed).toBe(1);
@@ -56,7 +56,7 @@ test.for([
 
 test("a repo's first read asks the binding for its remote once and mints one token", async () => {
   const { artifacts, calls, cfArtifacts } = await countingArtifacts();
-  expect(await repoFacet(cfArtifacts).modules()).toEqual({ "cap.js": "export default 1;\n" });
+  expect(await repoFacet(cfArtifacts).modules()).toEqual({ "worker.ts": "export default 1;\n" });
   expect(calls).toEqual({ get: 2, info: 1, createToken: 1 });
   expect(artifacts).toMatchObject({ snapshots: 1 });
 });
@@ -69,7 +69,7 @@ test("a fresh incarnation reuses the stored remote and token: a cold load asks t
 
   // A new object over the same storage: nothing in memory, the pack fetched again.
   expect(await repoFacet(cfArtifacts, storage).modules()).toEqual({
-    "cap.js": "export default 1;\n",
+    "worker.ts": "export default 1;\n",
   });
   expect(calls).toEqual(warm);
   expect(artifacts).toMatchObject({ snapshots: 2 });

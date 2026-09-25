@@ -90,14 +90,7 @@ const READ_CALLS: ReadonlySet<string> = new Set([
   ).map((read) => `facets.get.${read}`),
   "repos.list",
   ...(
-    [
-      "tip",
-      "readFile",
-      "readModules",
-      "modules",
-      "listFiles",
-      "log",
-    ] satisfies (typeof repoVerbs)[number][]
+    ["tip", "readFile", "modules", "listFiles", "log"] satisfies (typeof repoVerbs)[number][]
   ).map((verb) => `repos.get.${verb}`),
   "workspaces.list",
   ...(

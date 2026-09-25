@@ -92,7 +92,7 @@ test.sequential(
 
 /** A facet processor that COUNTS blob events — the fan-out target (its push is a loopback RPC copy). */
 const SINK_SOURCE = {
-  "cap.js": `import { StreamProcessor, StreamProcessorDurableObject, defineProcessorContract, z } from "./processor.js";
+  "worker.js": `import { StreamProcessor, StreamProcessorDurableObject, defineProcessorContract, z } from "iterate/sdk";
 const contract = defineProcessorContract({ slug: "sink", version: "1.0.0", description: "counts blob events — a fan-out target", stateSchema: z.object({ n: z.number().default(0) }), events: {}, consumes: ["blob"], emits: [] });
 class SinkProcessor extends StreamProcessor { contract = contract; reduce({ state }) { return { n: state.n + 1 }; } }
 export class SinkDurableObject extends StreamProcessorDurableObject { processor = new SinkProcessor(); }`,
@@ -101,7 +101,7 @@ export class SinkDurableObject extends StreamProcessorDurableObject { processor 
 /** A facet processor whose reduce HOARDS every payload into its checkpoint state — it outgrows the
  *  ~2 MB SQLite checkpoint cell (SQLITE_TOOBIG) and wedges. The poison-facet case. */
 const HOARDER_SOURCE = {
-  "cap.js": `import { StreamProcessor, StreamProcessorDurableObject, defineProcessorContract, z } from "./processor.js";
+  "worker.js": `import { StreamProcessor, StreamProcessorDurableObject, defineProcessorContract, z } from "iterate/sdk";
 const contract = defineProcessorContract({ slug: "hoarder", version: "1.0.0", description: "accumulates every payload — outgrows the checkpoint cell", stateSchema: z.object({ blobs: z.array(z.string()).default([]) }), events: {}, consumes: ["blob"], emits: [] });
 class HoarderProcessor extends StreamProcessor { contract = contract; reduce({ event, state }) { return { blobs: [...state.blobs, event.payload.blob] }; } }
 export class HoarderDurableObject extends StreamProcessorDurableObject { processor = new HoarderProcessor(); }`,
@@ -109,7 +109,7 @@ export class HoarderDurableObject extends StreamProcessorDurableObject { process
 
 /** A stateless WorkerEntrypoint that allocates unboundedly — its OWN loaded isolate's memory limit. */
 const OOMER_SOURCE = {
-  "cap.js": `import { WorkerEntrypoint } from "cloudflare:workers";
+  "worker.js": `import { WorkerEntrypoint } from "cloudflare:workers";
 export default class Oomer extends WorkerEntrypoint {
   async ping() { return "pong"; }
   async oom() { const a = []; for (;;) a.push(new Array(1e6).fill(1)); }

@@ -1,18 +1,16 @@
-import { WITH_ITX_MODULE } from "./with-itx-module.ts";
-
 /** The stateless byte-pushing transport loaded by each agent durable object. A Durable Object that
  *  receives a provider Response or stream from a second Durable Object makes the Workers runtime
  *  report a hung request (./ai-transport.md), so this Worker consumes provider I/O itself and pushes
  *  each byte chunk into the caller's AgentAiSink under an idle bound; no Response, stream or reader
- *  crosses back to the Durable Object. It carries its own `withItx` (`with-itx.js`, built from the
- *  SDK's by runtime:build) and never imports `./processor.js`, so no model call loads the whole SDK. */
+ *  crosses back to the Durable Object. It imports `withItx` alone (`iterate/with-itx`, ~1.5 KB) and never
+ *  `iterate/sdk`, so no model call loads the whole SDK. */
 export const AI_TRANSPORT_SOURCE = {
-  "cap.js": `import { WorkerEntrypoint } from "cloudflare:workers";
-import { withItx } from "./with-itx.js";
+  "worker.js": `import { WorkerEntrypoint } from "cloudflare:workers";
+import { withItx } from "iterate/with-itx";
 export default class AgentAiTransport extends WorkerEntrypoint {
   // One withItx round trip for the whole model call: the scope, its cd(path) and the ai.run call are
   // released after the drain, the whole body inside. The agent facet's runInBackground claim is what
-  // keeps this call alive that long (apps/agents/runtime/processor.ts #runLlmRequest).
+  // keeps this call alive that long (processor.ts #runLlmRequest).
   run(path, model, input, options, sink, idleBudgetMs) {
     return withItx(this.env.ITX, (itx) => this.#run(itx.cd(path), model, input, options, sink, idleBudgetMs));
   }
@@ -67,5 +65,4 @@ export default class AgentAiTransport extends WorkerEntrypoint {
     }
   }
 }`,
-  "with-itx.js": WITH_ITX_MODULE,
 };

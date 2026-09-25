@@ -251,18 +251,19 @@ test("buildLibrary memoizes live connections per context: the memo is keyed by t
 // values in), the same text ⇒ the same module (the loader's content hash reuses the isolate), a
 // blank script refused.
 
-test("run: the module: the script spliced in verbatim, a default WorkerEntrypoint whose run() hands it one withItx round trip, with withItx alone beside it", () => {
+test("run: the module: the script spliced in verbatim, a default WorkerEntrypoint whose run() hands it one withItx round trip from iterate/with-itx alone", () => {
   const module = runScriptModule("async (itx) => (await itx.whoami()).path");
-  expect(module["cap.js"]).toContain('import { WorkerEntrypoint } from "cloudflare:workers"');
-  expect(module["cap.js"]).toContain('import { withItx } from "./with-itx.js";');
-  expect(module["cap.js"]).toContain("const script = (async (itx) => (await itx.whoami()).path);");
-  expect(module["cap.js"]).toContain("export default class extends WorkerEntrypoint");
-  expect(module["cap.js"]).toContain("async run() {");
-  expect(module["cap.js"]).toContain("return await withItx(this.env.ITX, async (itx) => {");
-  expect(module["cap.js"]).toContain("script(itx),");
-  expect(module["cap.js"]).not.toContain("ITX.get()");
-  expect(Object.keys(module)).toEqual(["cap.js", "with-itx.js"]);
-  expect(module["with-itx.js"]).toMatch(/as withItx\b/);
+  expect(module["worker.js"]).toContain('import { WorkerEntrypoint } from "cloudflare:workers"');
+  expect(module["worker.js"]).toContain('import { withItx } from "iterate/with-itx";');
+  expect(module["worker.js"]).toContain(
+    "const script = (async (itx) => (await itx.whoami()).path);",
+  );
+  expect(module["worker.js"]).toContain("export default class extends WorkerEntrypoint");
+  expect(module["worker.js"]).toContain("async run() {");
+  expect(module["worker.js"]).toContain("return await withItx(this.env.ITX, async (itx) => {");
+  expect(module["worker.js"]).toContain("script(itx),");
+  expect(module["worker.js"]).not.toContain("ITX.get()");
+  expect(Object.keys(module)).toEqual(["worker.js"]);
 });
 
 test("run: the module's run() races the script against RUN_DEADLINE_MS in its own isolate: a script that never settles is given up on at the deadline — the call ends, the itx is disposed, no timer is left", async () => {
@@ -1121,9 +1122,6 @@ const ALLOWED_RUNTIME_IMPORTS = new Set([
   // worker would import from the SDK just the same.
   "./repo/contract.ts",
   "./workspace/contract.ts",
-  // The SDK's `withItx` as module TEXT (scripts/build.ts): data a script's isolate imports beside the
-  // script (`runScriptModule`), never code the library runs itself.
-  "./generated/with-itx-module.js",
 ]);
 
 test("the library boundary: library.ts and library/*.ts import only npm packages, the codec, each other, and types", () => {
@@ -1261,7 +1259,7 @@ const settledAt = (offset: number, requestOffset: number, settlement: unknown): 
 });
 
 /** THE MODULE, RUN: the text the loader gets, imported here as a module with its imports stood in
- *  for (`WorkerEntrypoint`, which only hands `env` over; `./with-itx.js`, the real bundled module), so
+ *  for (`WorkerEntrypoint`, which only hands `env` over; `iterate/with-itx`, the real module), so
  *  its `run()` executes exactly as written — under fake timers. `disposals()` counts the script's
  *  scope being released; `itx` stands in for the scope. */
 async function loadedRun(
@@ -1270,13 +1268,17 @@ async function loadedRun(
 ): Promise<{ run: () => Promise<unknown>; disposals: () => number }> {
   let disposals = 0;
   const module = runScriptModule(script);
-  const withItxUrl = `data:text/javascript,${encodeURIComponent(module["with-itx.js"])}`;
-  const standIn = module["cap.js"]
+  (globalThis as { withItxForLoadedRun?: unknown }).withItxForLoadedRun =
+    await import("iterate/with-itx");
+  const standIn = module["worker.js"]
     .replace(
       'import { WorkerEntrypoint } from "cloudflare:workers";',
       "class WorkerEntrypoint { constructor(ctx, env) { this.env = env; } }",
     )
-    .replace('"./with-itx.js"', JSON.stringify(withItxUrl));
+    .replace(
+      'import { withItx } from "iterate/with-itx";',
+      "const { withItx } = globalThis.withItxForLoadedRun;",
+    );
   const { default: Entrypoint } = await import(
     /* @vite-ignore */ `data:text/javascript,${encodeURIComponent(standIn)}`
   );

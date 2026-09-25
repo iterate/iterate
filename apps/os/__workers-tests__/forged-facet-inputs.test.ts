@@ -114,8 +114,8 @@ test("a project member pushes a forged batch into the `project` facet at `/`: no
 
 /** A person's own processor, loaded from source: it counts the ticks on its context's log. */
 const TALLY_SOURCE = {
-  "cap.js": /* js */ `
-import { StreamProcessor, StreamProcessorDurableObject, defineProcessorContract, z } from "./processor.js";
+  "worker.js": /* js */ `
+import { StreamProcessor, StreamProcessorDurableObject, defineProcessorContract, z } from "iterate/sdk";
 const contract = defineProcessorContract({
   slug: "tally",
   version: "1.0.0",

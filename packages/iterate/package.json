@@ -38,6 +38,7 @@
     "./project-ingress": "./src/project-ingress.ts",
     "./oauth": "./src/client/oauth.ts",
     "./stream/run": "./src/stream/run.ts",
+    "./with-itx": "./src/sdk/record-pipelined-steps.ts",
     "./node": "./src/node.ts"
   },
   "publishConfig": {
@@ -107,6 +108,11 @@
         "types": "./dist/stream/run.d.mts",
         "import": "./dist/stream/run.mjs",
         "default": "./dist/stream/run.mjs"
+      },
+      "./with-itx": {
+        "types": "./dist/sdk/record-pipelined-steps.d.ts",
+        "import": "./dist/with-itx.mjs",
+        "default": "./dist/with-itx.mjs"
       },
       "./node": {
         "types": "./dist/node.d.mts",

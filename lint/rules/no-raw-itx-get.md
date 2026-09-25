@@ -21,7 +21,7 @@ and every handle it awaited, with the calls made on that handle
 const { projectSlug } = await this.withItx((itx) => itx.whoami());
 
 // Anything else: a plain WorkerEntrypoint, a FacetDurableObject, a test fixture
-import { withItx } from "./processor.js";
+import { withItx } from "iterate/sdk";
 const { projectSlug } = await withItx(this.env.ITX, (itx) => itx.whoami());
 
 // An object that needs reach takes an accessor, never a scope

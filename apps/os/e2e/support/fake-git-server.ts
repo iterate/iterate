@@ -13,6 +13,7 @@
 
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { listenOnFetchSafePort } from "@iterate-com/shared/test-support/fetch-safe-port";
+import type { RepoFileChange } from "iterate/api";
 import {
   DELIM,
   FLUSH,
@@ -32,7 +33,6 @@ import {
   type RawGitObject,
   type RepoManifest,
 } from "../../src/repo/git-wire.ts";
-import type { RepoFileChange } from "../../src/repo/durable-object.ts";
 
 /** The repo facet's one branch, and the author of a commit landed from outside it. */
 const REF = "refs/heads/main";

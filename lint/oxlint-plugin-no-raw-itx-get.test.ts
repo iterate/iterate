@@ -1,5 +1,5 @@
 // iterate/no-raw-itx-get: code reaches its context through `withItx`, never a raw `ITX.get()`, in a
-// linted file or in a module it hands over as text (`"cap.js": `…``, `String.raw`, a const, a
+// linted file or in a module it hands over as text (`"worker.js": `…``, `String.raw`, a const, a
 // `/* js */` template), and a withItx callback in a linted file never answers the live value it
 // releases. Each row is one file in a temp project linted once by the real oxlint binary; `reported`
 // is how many times the rule flags it.
@@ -53,7 +53,7 @@ const rows = [
     source: "function f(env) { const { ITX } = env; return ITX.get(); }",
   },
   {
-    name: "an embedded cap.js module",
+    name: "an embedded worker.js module",
     reported: 1,
     source: embeddedModule("  async run() { return (await this.env.ITX.get().whoami()).path; }"),
   },
@@ -61,7 +61,7 @@ const rows = [
     name: "an embedded module with an interpolation",
     reported: 1,
     source:
-      'export const hooked = (hook: string) => ({\n  "cap.js": `export default class { async run() { const itx = this.env.ITX.get(); return itx.${hook}.deliver(); } }`,\n});\n',
+      'export const hooked = (hook: string) => ({\n  "worker.js": `export default class { async run() { const itx = this.env.ITX.get(); return itx.${hook}.deliver(); } }`,\n});\n',
   },
   {
     name: "a /* js */ template",
@@ -73,13 +73,13 @@ const rows = [
     name: "a String.raw module",
     reported: 1,
     source:
-      'export const S = { "cap.js": String.raw`export default class { run() { return this.env.ITX.get().whoami(); } }` };\n',
+      'export const S = { "worker.js": String.raw`export default class { run() { return this.env.ITX.get().whoami(); } }` };\n',
   },
   {
     name: "a module held in a const without a marker",
     reported: 1,
     source:
-      'const SRC = `export default class { run() { return this.env.ITX.get().whoami(); } }`;\nexport const S = { "cap.js": SRC };\n',
+      'const SRC = `export default class { run() { return this.env.ITX.get().whoami(); } }`;\nexport const S = { "worker.js": SRC };\n',
   },
   {
     name: "a withItx callback answering its scope",
@@ -167,7 +167,7 @@ const rows = [
   {
     name: "a disable above the module's key",
     reported: 0,
-    source: `export const SOURCE = {\n  // oxlint-disable-next-line iterate/no-raw-itx-get -- the careless keep is the subject\n  "cap.js": \`export default class { run() { return this.env.ITX.get().whoami(); } }\`,\n};\n`,
+    source: `export const SOURCE = {\n  // oxlint-disable-next-line iterate/no-raw-itx-get -- the careless keep is the subject\n  "worker.js": \`export default class { run() { return this.env.ITX.get().whoami(); } }\`,\n};\n`,
   },
 ];
 
@@ -202,7 +202,7 @@ test("an embedded module's report names the lines of the module that call ITX.ge
   });
 });
 
-/** A file whose module map hands over one `cap.js` module: a WorkerEntrypoint around `body`. */
+/** A file whose module map hands over one `worker.js` module: a WorkerEntrypoint around `body`. */
 function embeddedModule(body: string) {
-  return `export const SOURCE = {\n  "cap.js": \`import { WorkerEntrypoint } from "cloudflare:workers";\nexport default class extends WorkerEntrypoint {\n${body}\n}\`,\n};\n`;
+  return `export const SOURCE = {\n  "worker.js": \`import { WorkerEntrypoint } from "cloudflare:workers";\nexport default class extends WorkerEntrypoint {\n${body}\n}\`,\n};\n`;
 }

@@ -52,7 +52,7 @@ import {
  *  (e2e/support/sources.ts), reduced to one number — the pure `CounterProcessor` plus its host
  *  `CounterDurableObject`, which is what the load chain names. */
 const COUNTER_SRC = /* js */ `
-import { StreamProcessor, StreamProcessorDurableObject, defineProcessorContract, z } from "./processor.js";
+import { StreamProcessor, StreamProcessorDurableObject, defineProcessorContract, z } from "iterate/sdk";
 const contract = defineProcessorContract({
   slug: "counter",
   version: "1.0.0",
@@ -148,7 +148,7 @@ test("DISABLE deletes the facet's storage; RE-ENABLE rebuilds from the log (no s
 
 /** A facet that counts bumps in its OWN kv — state a processor's checkpoint stands in for. */
 const BUMP_COUNTER_SRC = /* js */ `
-import { FacetDurableObject } from "./processor.js";
+import { FacetDurableObject } from "iterate/sdk";
 export class BumpCounterDurableObject extends FacetDurableObject {
   static publicMethods = [...super.publicMethods, "bump", "count"];
   bump() { const n = (this.ctx.storage.kv.get("n") ?? 0) + 1; this.ctx.storage.kv.put("n", n); return n; }
@@ -159,7 +159,7 @@ export class BumpCounterDurableObject extends FacetDurableObject {
 `;
 test("a facet TWO rows host survives the removal of ONE of them — memo and storage intact (the delete is the LAST hosting row's, or the survivor would rebuild from 0 and re-run every effect)", async () => {
   const context = stub("prj_shared_facet");
-  const spec = { source: { "cap.js": BUMP_COUNTER_SRC }, className: "BumpCounterDurableObject" };
+  const spec = { source: { "worker.js": BUMP_COUNTER_SRC }, className: "BumpCounterDurableObject" };
   const target: ItxExpression = ["itx", "facets", ["get", "shared", spec], "processEventBatch"];
   // Two rows, both HOSTING the same facet — the `processors.enable` shape, twice.
   await context.append({
@@ -215,7 +215,7 @@ test("RE-ENABLE WITH NEW SOURCE: a materialized processor re-enabled under the s
           "get",
           "counter",
           {
-            source: { "cap.js": COUNTER_SRC.replace("state.n + 1", "state.n + 10") },
+            source: { "worker.js": COUNTER_SRC.replace("state.n + 1", "state.n + 10") },
             className: "CounterDurableObject",
           },
         ],
@@ -501,7 +501,7 @@ test("SCALE DROP + QUIESCE + EVICT + WAKE: a DISPOSED live provide stays gone; t
  *  Throws while kv `flaky-mode` is "fail"; otherwise tallies the batch into kv `flaky-digested`. */
 const FLAKY_SRC = /* js */ `
 import { WorkerEntrypoint } from "cloudflare:workers";
-import { withItx } from "./processor.js";
+import { withItx } from "iterate/sdk";
 export default class Flaky extends WorkerEntrypoint {
   processEventBatch(events, range) {
     return withItx(this.env.ITX, async (itx) => {
@@ -526,7 +526,12 @@ test("ALARM PUMPS CURSOR DELIVERY: a failed at-least-once delivery is retried fr
     type: "events.iterate.com/itx/subscription-configured",
     payload: {
       name: "flaky",
-      target: ["itx", "workers", ["get", { source: { "cap.js": FLAKY_SRC } }], "processEventBatch"],
+      target: [
+        "itx",
+        "workers",
+        ["get", { source: { "worker.js": FLAKY_SRC } }],
+        "processEventBatch",
+      ],
       consumes: ["mark"],
     },
   });
@@ -597,7 +602,7 @@ async function enableCounter(ctx: string, name = "counter"): Promise<void> {
       target: [
         "itx",
         "facets",
-        ["get", name, { source: { "cap.js": COUNTER_SRC }, className: "CounterDurableObject" }],
+        ["get", name, { source: { "worker.js": COUNTER_SRC }, className: "CounterDurableObject" }],
         "processEventBatch",
       ],
     },

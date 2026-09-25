@@ -219,7 +219,7 @@ export async function liveSessionLosesHeldCapabilities(reason: "revoked" | "memb
   const { root, closed, boundAt } = await rpc(flow.token!.access_token);
   using context = await root.projects.get(flow.oauthA.id);
   const native = (await context.invoke(
-    `itx.workers.get({source: {"cap.js": "import { WorkerEntrypoint } from 'cloudflare:workers'; export default class extends WorkerEntrypoint { ping() { return 'pong'; } }"}})`,
+    `itx.workers.get({source: {"worker.js": "import { WorkerEntrypoint } from 'cloudflare:workers'; export default class extends WorkerEntrypoint { ping() { return 'pong'; } }"}})`,
   )) as unknown as { ping(): Promise<string> };
   expect(await native.ping()).toBe("pong");
   class Echo extends RpcTarget {

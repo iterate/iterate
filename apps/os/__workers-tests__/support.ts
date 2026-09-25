@@ -115,7 +115,7 @@ export const loginPassword = (): string => env.APP_CONFIG_LOGIN__PASSWORD!;
  *  cookies and the trusted routing slug — published as a project's config worker
  *  (`publishConfigWorker`) and fetched on a project host. */
 export const SRC_ECHO_APP = {
-  "cap.js": `import { WorkerEntrypoint } from "cloudflare:workers";
+  "worker.js": `import { WorkerEntrypoint } from "cloudflare:workers";
 export default class Echo extends WorkerEntrypoint {
   fetch(request) {
     return Response.json({

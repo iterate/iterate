@@ -153,9 +153,9 @@ function loadVoiceDelegateProcessor(): Promise<any> {
       loader: { ".md": "text" },
       plugins: [
         {
-          name: "processor-runtime",
+          name: "sdk-runtime",
           setup(builder) {
-            builder.onResolve({ filter: /^\.\/processor\.js$/ }, () => ({
+            builder.onResolve({ filter: /^iterate\/sdk$/ }, () => ({
               path: "processor",
               namespace: "test-runtime",
             }));

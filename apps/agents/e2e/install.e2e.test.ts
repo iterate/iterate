@@ -1,13 +1,16 @@
 import { expect, test } from "vitest";
 import { freshCtx, openItx, readAll, until } from "../../os/e2e/support/client.ts";
-import { buildAgentRuntime } from "../scripts/build-runtime.ts";
-import { installAgents } from "../runtime/install.ts";
+import { agentRuntimeSource } from "../src/lib/agent-runtime-source.ts";
+import { installAgents } from "../../../configs/with-agents/agents/install.ts";
 import { ScriptedAi, assistantWords, configureModel } from "./fixtures.ts";
 
 test("install and reinstall preserve existing agents, sandbox grants and conversation history", async () => {
   const itx = openItx(freshCtx("agents-install"));
-  const source = await buildAgentRuntime();
-  const oldSource = source + "\n// previous release\n";
+  const source = agentRuntimeSource;
+  const oldSource = {
+    ...source,
+    "index.ts": `${source["index.ts"]}\n// previous release\n`,
+  };
   expect((await itx.rewriteRules.get("itx.agents"))?.target).toBeFalsy();
   await installAgents(itx, oldSource);
   const oldRule = await itx.rewriteRules.get("itx.agents");
@@ -47,7 +50,7 @@ test("install and reinstall preserve existing agents, sandbox grants and convers
 
 test("a removed agents rewrite can be installed again with the same runtime", async () => {
   const itx = openItx(freshCtx("agents-reinstall"));
-  const source = await buildAgentRuntime();
+  const source = agentRuntimeSource;
   await installAgents(itx, source);
   const installed = await itx.rewriteRules.get("itx.agents");
   await itx.append({

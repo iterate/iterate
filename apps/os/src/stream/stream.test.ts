@@ -664,7 +664,7 @@ test("a paused stream admits an idempotent replay of an explicitly configured su
     type: "events.iterate.com/itx/subscription-configured",
     payload: {
       name: "config",
-      target: "itx.workers.get({ source: { 'cap.js': 'test-source' } }).processEventBatch",
+      target: "itx.workers.get({ source: { 'worker.js': 'test-source' } }).processEventBatch",
       consumes: ["*"],
     },
     idempotencyKey: "config-subscription",

@@ -30,7 +30,7 @@ test("two literal sources whose djb2 hashes collide never share one Worker Loade
       itxEntrypoint: {} as Fetcher,
       kind: "worker",
       owner: "prj_u.iterate/",
-      source: { "cap.js": main },
+      source: { "worker.js": main },
       invoke: () => Promise.reject(new Error("literal modules — nothing to invoke")),
       where: "workers.get",
     });
@@ -50,7 +50,7 @@ test("an owner and a caller's cacheKey that concatenate alike never share one Wo
       itxEntrypoint: {} as Fetcher,
       kind: "worker",
       owner,
-      source: { "cap.js": "export default class W {}" },
+      source: { "worker.js": "export default class W {}" },
       cacheKey,
       invoke: () => Promise.reject(new Error("literal modules — nothing to invoke")),
       where: "workers.get",
@@ -66,7 +66,7 @@ test("two DIFFERENT facet identities never share one Worker Loader cacheKey", as
   // first's isolate, a silent cross-context authority transfer. Same shared source (identical
   // contentHash), as in prod.
   const { env, keys } = fakeLoaderEnv();
-  const modules = { "cap.js": "export default class Tally {}" };
+  const modules = { "worker.js": "export default class Tally {}" };
   const load = (iterateContextName: string, className: string) =>
     loadConfined({
       env,
@@ -92,7 +92,7 @@ test("a producer source runs INSIDE getCode — once per cold isolate, never on 
   let produced = 0;
   const invoke = async () => {
     produced++;
-    return { "cap.js": "export default class Built {}" };
+    return { "worker.js": "export default class Built {}" };
   };
   const load = (cacheKey?: string) =>
     loadConfined({
@@ -116,15 +116,15 @@ test("a producer source runs INSIDE getCode — once per cold isolate, never on 
     loaderId: JSON.stringify(["worker", "deploy-1", null, "prj_u.iterate/", "todo@3f2a1c"]),
   });
   expect(keys.at(-1)).toBe(first.loaderId);
-  await Promise.resolve(); // let getCode's async body run
+  await settled(); // let getCode's async body run
   expect(produced).toBe(1);
   // … and NOT when it is warm — "same key ⇒ same code" is the caller's contract
   await load("todo@3f2a1c");
-  await Promise.resolve();
+  await settled();
   expect(produced).toBe(1);
   // a new key is a new isolate: the producer runs again
   await load("todo@4b7d");
-  await Promise.resolve();
+  await settled();
   expect(produced).toBe(2);
 });
 
@@ -140,21 +140,21 @@ test("literal modules: the key is their content hash unless the caller names a c
     invoke: () => Promise.reject(new Error("literal modules — nothing to invoke")),
     where: "workers.get",
   };
-  const a = await loadConfined({ ...base, source: { "cap.js": "export default 1" } });
-  const b = await loadConfined({ ...base, source: { "cap.js": "export default 2" } });
+  const a = await loadConfined({ ...base, source: { "worker.js": "export default 1" } });
+  const b = await loadConfined({ ...base, source: { "worker.js": "export default 2" } });
   expect(a).not.toMatchObject({ loaderId: b.loaderId }); // content decides
   const named = await loadConfined({
     ...base,
-    source: { "cap.js": "export default 1" },
+    source: { "worker.js": "export default 1" },
     cacheKey: "v7",
   });
   expect(named).toMatchObject({
     loaderId: JSON.stringify(["worker", "deploy-1", null, "prj_u.iterate/", "v7"]),
   });
   expect(keys.at(-1)).toBe(named.loaderId);
-  await expect(
-    loadConfined({ ...base, source: { "index.js": "export default 1" } }),
-  ).rejects.toThrow(/"cap.js" main module/);
+  await expect(loadConfined({ ...base, source: { "lib.js": "export default 1" } })).rejects.toThrow(
+    /no entry/,
+  );
 });
 
 test("WORKAROUND: a producer that threw marks its id dead; the next attempt produces OUTSIDE the loader and loads literally under the id's next generation; a producer that keeps failing mints nothing", async () => {
@@ -164,7 +164,7 @@ test("WORKAROUND: a producer that threw marks its id dead; the next attempt prod
   const invoke = async () => {
     produced++;
     if (!artifactLanded) throw new Error("build artifact not landed yet");
-    return { "cap.js": "export default class Built {}" };
+    return { "worker.js": "export default class Built {}" };
   };
   const load = () =>
     loadConfined({
@@ -199,13 +199,34 @@ test("WORKAROUND: a producer that threw marks its id dead; the next attempt prod
     loaderId: `${JSON.stringify(["worker", "deploy-1", null, "prj_u.iterate/", "todo@dead"])}#1`,
   });
   await expect(warm.get(recovered.loaderId)).resolves.toMatchObject({
-    modules: { "cap.js": "export default class Built {}" },
+    modules: { "worker.js": "export default class Built {}" },
   });
   expect(produced).toBe(4);
   // 4. …and from here the generation is warm: no producer run, no new id
   await load();
   expect(produced).toBe(4);
   expect(new Set(keys)).toMatchObject({ size: 2 }); // the dead id and its one recovered generation
+});
+
+test("a source that keeps failing to resolve mints one loader id, not one per retry: the recovery resolves outside the loader", async () => {
+  const { env, keys } = fakeLoaderEnv();
+  const retry = () =>
+    loadConfined({
+      env,
+      deployId: "deploy-1",
+      platformOrigin: null,
+      itxEntrypoint: {} as Fetcher,
+      kind: "worker",
+      owner: "prj_u.iterate/",
+      source: { "worker.js": `import "./missing.js";` },
+      invoke: () => Promise.reject(new Error("literal files — nothing to invoke")),
+      where: "workers.get",
+    });
+  await retry(); // the cold load resolves inside getCode, fails, and marks the id dead
+  await settled();
+  for (let attempt = 0; attempt < 3; attempt++)
+    await expect(retry()).rejects.toThrow(/no such file/);
+  expect(new Set(keys)).toMatchObject({ size: 1 });
 });
 
 test("WORKAROUND, under load: every caller that finds the id dead while its recovery runs waits on that one recovery — 50 concurrent callers run the producer once, not 50 times", async () => {
@@ -224,7 +245,7 @@ test("WORKAROUND, under load: every caller that finds the id dead while its reco
       throw new Error("Network connection lost.");
     }
     await slow; // a cold repo fetch: 1–2 s on prd, 40–60 s under the herd
-    return { "cap.js": "export default class Site {}" };
+    return { "worker.js": "export default class Site {}" };
   };
   const load = (itxEntrypoint = host) =>
     loadConfined({
@@ -241,10 +262,10 @@ test("WORKAROUND, under load: every caller that finds the id dead while its reco
     });
   const dead = JSON.stringify(["worker", "deploy-1", null, "prj_u.iterate/", "c0ffee"]);
   await load(); // the first load's producer throws inside getCode: the id is dead
-  await Promise.resolve();
+  await settled();
   expect(produced).toBe(1);
   const herd = Array.from({ length: 50 }, () => load());
-  await Promise.resolve();
+  await settled();
   expect(produced).toBe(2); // one recovery, however many callers
   release();
   const recovered = await Promise.all(herd);
@@ -261,7 +282,7 @@ test("WORKAROUND, under load: a recovery that fails fails every caller waiting o
     produced++;
     if (outcome === "fail") throw new Error("Durable Object is overloaded.");
     if (outcome === "hang") return new Promise<never>(() => {}); // its incarnation died mid-call
-    return { "cap.js": "export default class Site {}" };
+    return { "worker.js": "export default class Site {}" };
   };
   const load = (itxEntrypoint: Fetcher) =>
     loadConfined({
@@ -278,7 +299,7 @@ test("WORKAROUND, under load: a recovery that fails fails every caller waiting o
     });
   const incarnation1 = {} as Fetcher;
   await load(incarnation1); // dies inside getCode
-  await Promise.resolve();
+  await settled();
   // a failing recovery: every caller waiting on it fails with it, the producer ran once for them
   const failing = await Promise.allSettled([load(incarnation1), load(incarnation1)]);
   expect(failing.map((r) => r.status)).toEqual(["rejected", "rejected"]);
@@ -286,7 +307,7 @@ test("WORKAROUND, under load: a recovery that fails fails every caller waiting o
   // an incarnation that dies with its recovery in flight leaves a promise that never settles …
   outcome = "hang";
   void load(incarnation1);
-  await Promise.resolve();
+  await settled();
   expect(produced).toBe(3);
   // … and the next incarnation (a new stub) starts its own instead of waiting on it forever
   outcome = "ok";
@@ -306,7 +327,7 @@ test("retire(): a burst of calls that failed on one identity retires it once, an
     itxEntrypoint: {} as Fetcher,
     kind: "worker" as const,
     owner: "prj_retire.iterate/",
-    source: { "cap.js": "export default {}" },
+    source: { "worker.js": "export default {}" },
     invoke: () => Promise.reject(new Error("literal modules — nothing to invoke")),
     where: "workers.get",
   };
@@ -331,7 +352,7 @@ test("prepare resolves the identity without asking the loader; load() is the one
     itxEntrypoint: {} as Fetcher,
     kind: "facet",
     owner: ["prj_u.iterate/", "Counter"],
-    source: { "cap.js": "export default class Counter {}" },
+    source: { "worker.js": "export default class Counter {}" },
     invoke: () => Promise.reject(new Error("literal modules — nothing to invoke")),
     where: 'facet "counter"',
   });
@@ -352,12 +373,12 @@ test("prepare resolves the identity without asking the loader; load() is the one
 });
 
 test("a facet's literal source over the ceiling is refused, coded; a producer expression is never measured", () => {
-  const big = { "cap.js": "x".repeat(FACET_SOURCE_MAX_CHARS + 1) };
+  const big = { "worker.js": "x".repeat(FACET_SOURCE_MAX_CHARS + 1) };
   expect(() =>
     assertFacetSourceWithinCeiling({ source: big, className: "W" }, 'facet "w"'),
   ).toThrowError(/FACET_SOURCE_TOO_LARGE|over the/);
   expect(() =>
-    assertFacetSourceWithinCeiling({ source: { "cap.js": "ok" }, className: "W" }, 'facet "w"'),
+    assertFacetSourceWithinCeiling({ source: { "worker.js": "ok" }, className: "W" }, 'facet "w"'),
   ).not.toThrow();
   expect(() =>
     assertFacetSourceWithinCeiling(
@@ -375,7 +396,7 @@ test("the platform origin the ITX stub was minted with is part of the loader id:
     itxEntrypoint: {} as Fetcher,
     kind: "worker" as const,
     owner: "prj_u.iterate/",
-    source: { "cap.js": "export default class A {}" },
+    source: { "worker.js": "export default class A {}" },
     invoke: () => Promise.reject(new Error("literal modules — nothing to invoke")),
     where: "workers.get",
   };
@@ -415,3 +436,7 @@ const loadConfined = async (opts: Parameters<typeof prepareConfinedWorker>[0]) =
   prepared.load();
   return prepared;
 };
+
+/** Let every promise chain started so far settle (a producer's failure reaches the dead marker
+ *  through the resolve step's awaits), whatever its depth in microtasks. */
+const settled = () => new Promise<void>((resolve) => setTimeout(resolve, 0));

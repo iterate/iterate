@@ -35,6 +35,7 @@
     "@tanstack/react-start": "catalog:",
     "capnweb": "catalog:",
     "cn": "catalog:",
+    "es-module-lexer": "^2.1.0",
     "iterate": "workspace:*",
     "json5": "catalog:",
     "oauth4webapi": "catalog:",
@@ -43,6 +44,7 @@
     "react": "catalog:",
     "react-dom": "catalog:",
     "sqlfu": "0.1.1",
+    "sucrase": "^3.35.1",
     "tailwindcss": "catalog:",
     "zod": "catalog:"
   },

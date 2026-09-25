@@ -1,6 +1,6 @@
 // sdk/record-pipelined-steps.ts — `withItx`, THE one way code reaches its context: ONE round trip on
 // `env.ITX`, then RELEASE a Workers-RPC round trip completely — the scope and every call it made, not
-// only the last. Loaded code imports it from "./processor.js" (`withItx(this.env.ITX, (itx) => …)`); the
+// only the last. Loaded code imports it from "iterate/sdk" (or `iterate/with-itx`, this module alone) (`withItx(this.env.ITX, (itx) => …)`); the
 // SDK's hosts (`StreamProcessorDurableObject.withItx`, `ConfigWorker.withItx`) delegate to it. No
 // workerd import, so the unit tests run it in node (record-pipelined-steps.test.ts) and the platform
 // bundles it alone for a script's isolate (apps/os `runScriptModule`); on native RpcPromises it is

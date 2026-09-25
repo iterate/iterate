@@ -74,13 +74,13 @@ test("a first-party facet name refuses a spec — no source ever names a class o
         facet: await refusal([
           "itx",
           "facets",
-          ["get", "repo", { source: { "cap.js": "export class X {}" }, className: "X" }],
+          ["get", "repo", { source: { "worker.js": "export class X {}" }, className: "X" }],
           ["tip"],
         ]),
         processor: await refusal([
           "itx",
           "processors",
-          ["enable", "repo", { source: { "cap.js": "export class X {}" }, className: "X" }],
+          ["enable", "repo", { source: { "worker.js": "export class X {}" }, className: "X" }],
         ]),
       };
     },

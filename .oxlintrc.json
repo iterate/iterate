@@ -55,8 +55,7 @@
     "**/build/",
     "pnpm-lock.yaml",
     "test-results/**",
-    "apps/browser-extension/capnweb.js",
-    "configs/with-agents/agents.js"
+    "apps/browser-extension/capnweb.js"
   ],
   "jsPlugins": [
     "./lint/oxlint-plugin-iterate.ts",

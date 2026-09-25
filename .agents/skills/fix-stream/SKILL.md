@@ -81,7 +81,7 @@ stored: the settled `agent/llm-request-settled` carries the text.
 ## 3. Name the complaint
 
 Print the conversation with offsets and times before reading product code. Every type is
-`events.iterate.com/…` (the contract is `apps/agents/runtime/contract.ts`):
+`events.iterate.com/…` (the contract is `configs/with-agents/agents/contract.ts`):
 
 - `agent/context-added`: the conversation. The `role` is `system`, `developer`, `user` or
   `assistant`. A user item's `actor.type` is `user`, `script` (a script's result) or `agent`.

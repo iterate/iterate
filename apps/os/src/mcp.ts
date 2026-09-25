@@ -64,7 +64,7 @@ const runInstructions = [
 \`\`\`json
 {"script":"async (itx) => itx.repos.get('/repos/config').commitFiles({ message: 'Add a note', changes: [{ path: 'notes.txt', content: 'Hello from MCP' }] })"}
 \`\`\``,
-  'Website source must be valid JavaScript, including `worker.ts`; sibling modules use `.js`. Preview candidate modules with `itx.workers.get({ source: { "cap.js": candidateSource } }).fetch(new Request(projectUrl))`. After committing, fetch the `projectUrl` returned by `itx.whoami()` and verify the expected response before reporting publication success.',
+  'Website source may be TypeScript (types are stripped, not checked) or JavaScript; files import each other by relative path. Import packages by name: `iterate/*` and `zod` come from the platform, any other package is listed in `package.json` `dependencies` and fetched from npm through esm.sh (packages that need Node.js builtins are refused). Preview a candidate with `itx.workers.get({ source: { "worker.ts": candidateSource } }).fetch(new Request(projectUrl))`; sibling files and `package.json` go in `source` beside `worker.ts` under their repo paths. After committing, fetch the `projectUrl` returned by `itx.whoami()` and verify the expected response before reporting publication success.',
   "Working examples: https://raw.githubusercontent.com/iterate/iterate/main/apps/os/e2e/mcp-project-root.e2e.test.ts — use the `async (itx) => ...` scripts and repo commit examples. The surrounding OAuth setup, project creation and assertions are the integration-test harness; your MCP connection supplies authentication and the project handle. Discover the live capabilities with `itx.rewriteRules.list()`.",
 ].join("\n\n");
 

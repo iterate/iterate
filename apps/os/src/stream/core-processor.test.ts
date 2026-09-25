@@ -256,7 +256,7 @@ test('paused without a reason defaults to "paused" in the reduce (the state guar
 const ingressTarget: ItxExpression = [
   "itx",
   "workers",
-  ["get", { source: { "cap.js": "source" } }],
+  ["get", { source: { "worker.js": "source" } }],
 ];
 
 test("ingress target: stores and replaces the full expression without creating any rewrite alias; null clears it; an unchanged or ephemeral event keeps the state", () => {
@@ -876,7 +876,7 @@ test("reduceCoreEventBatch: a throwing event is handed to onError and SKIPPED �
 
 // ── the builtins root, as the reduce sees it: masks, the platform-equivalent target, hosting on the RESOLVED target ──
 
-const SPEC = { source: { "cap.js": "export class T {}" }, className: "TallyDurableObject" };
+const SPEC = { source: { "worker.js": "export class T {}" }, className: "TallyDurableObject" };
 test("builtins root: `null` at a built-in's name is KEPT as a mask row; `null` at a plain name deletes; a repeat of either is a no-op (undefined)", () => {
   const masked = reduceAll([
     at(1, "events.iterate.com/itx/rewrite-rule-configured", { match: "itx.kv", target: null }),
@@ -989,7 +989,7 @@ test("builtins root: HOSTING is decided on the RESOLVED target: the platform's s
   expect(print(s.subscriptions.viaRule.target)).toBe("itx.hosts.get('c').processEventBatch"); // the caller's spelling, minus the source
   expect(s.subscriptions.address).not.toHaveProperty("hostedFacet");
   for (const row of Object.values(s.subscriptions))
-    expect(JSON.stringify(row)).not.toContain("cap.js");
+    expect(JSON.stringify(row)).not.toContain("worker.js");
 });
 
 test("builtins root: a hosting target that cannot resolve yet (its rule comes later, or a mask sits on `itx.facets`) is stored as given and hosts nothing", () => {
@@ -1010,8 +1010,8 @@ test("builtins root: a hosting target that cannot resolve yet (its rule comes la
 // builtins-rooted, through the new table — the delivery loop re-resolves a target at every push, so
 // the marker must name the facet the row would host NOW, or `processors.disable` would delete the
 // wrong facet (or orphan one). A row the change leaves unresolvable keeps its marker, conservatively.
-const facetF = "itx.builtins.facets.get('f',{source:{'cap.js':'x'},className:'F'})";
-const facetG = "itx.builtins.facets.get('g',{source:{'cap.js':'y'},className:'G'})";
+const facetF = "itx.builtins.facets.get('f',{source:{'worker.js':'x'},className:'F'})";
+const facetG = "itx.builtins.facets.get('g',{source:{'worker.js':'y'},className:'G'})";
 const markerRows: {
   rule: string;
   log: StreamEvent[];

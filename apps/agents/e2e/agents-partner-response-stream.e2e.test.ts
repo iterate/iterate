@@ -5,9 +5,9 @@ import { expect } from "vitest";
 import { collector, freshCtx, readAll, rejection, until } from "../../os/e2e/support/client.ts";
 import { startOwnWorker } from "../../os/e2e/support/own-worker.ts";
 import { localOnly } from "../../os/e2e/support/project-host.ts";
-import { buildAgentRuntime } from "../scripts/build-runtime.ts";
-import { AI_TRANSPORT_SOURCE } from "../runtime/ai-transport-source.ts";
-import { installAgents } from "../runtime/install.ts";
+import { agentRuntimeSource } from "../src/lib/agent-runtime-source.ts";
+import { AI_TRANSPORT_SOURCE } from "../../../configs/with-agents/agents/ai-transport-source.ts";
+import { installAgents } from "../../../configs/with-agents/agents/install.ts";
 import { assistantWords, configureModel, settledLog } from "./fixtures.ts";
 
 class DeferredResponsesAi extends RpcTarget {
@@ -127,7 +127,7 @@ localOnly(
     const worker = await startOwnWorker();
     try {
       const itx = worker.itx(freshCtx("agent-partner-stream"));
-      await installAgents(itx, await buildAgentRuntime());
+      await installAgents(itx, agentRuntimeSource);
       const support = itx.cd("/agents/support");
       const partnerAi = new DeferredResponsesAi();
       await support.provide("itx.ai", partnerAi);

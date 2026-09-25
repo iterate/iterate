@@ -11,8 +11,8 @@ import { freshCtx, openItx } from "./support/client.ts";
 
 /** A loaded worker that hands its `env.ITX` whatever the test asks it to say, and reports the refusal. */
 const PROBE = {
-  "cap.js": `import { WorkerEntrypoint } from "cloudflare:workers";
-import { withItx } from "./processor.js";
+  "worker.js": `import { WorkerEntrypoint } from "cloudflare:workers";
+import { withItx } from "iterate/sdk";
 const outcome = async (fn) => { try { return { ok: await fn() }; } catch (e) { return { error: String(e && e.message || e) }; } };
 export default class extends WorkerEntrypoint {
   say(call, ...args) { return outcome(() => withItx(this.env.ITX, (itx) => itx.invoke(call, ...args))); }

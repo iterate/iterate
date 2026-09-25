@@ -1,0 +1,40 @@
+{
+  "name": "@iterate-com/petshop-sdk",
+  "version": "0.1.0",
+  "description": "A vendor SDK for the dummy pet shop (apps/dummy-petshop): its capnweb pets API, typed",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/iterate/iterate",
+    "directory": "packages/petshop-sdk"
+  },
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "files": [
+    "dist"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.ts",
+        "import": "./dist/index.mjs"
+      }
+    }
+  },
+  "scripts": {
+    "build": "tsdown && tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "prepack": "pnpm build"
+  },
+  "dependencies": {
+    "@iterate-com/capnweb": "^0.12.2"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "catalog:",
+    "tsdown": "catalog:",
+    "typescript": "catalog:"
+  }
+}

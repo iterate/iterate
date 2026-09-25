@@ -66,7 +66,7 @@ type SubscriptionRow = {
 
 /** A bare, well-behaved hosted class — a processor host with no engine, enough for the load chain. */
 const FINE_SRC = /* js */ `
-import { FacetDurableObject } from "./processor.js";
+import { FacetDurableObject } from "iterate/sdk";
 export class FineDurableObject extends FacetDurableObject {
   static publicMethods = [...super.publicMethods, "snapshot"];
   processEventBatch() {}
@@ -175,7 +175,7 @@ createFailing(test, /snapshot\(\) dies of "string or blob too big: SQLITE_TOOBIG
 
 /** A processor whose reduce HOARDS every payload: the checkpoint cell grows with the log. */
 const HOARDER_SRC = /* js */ `
-import { StreamProcessor, StreamProcessorDurableObject } from "./processor.js";
+import { StreamProcessor, StreamProcessorDurableObject } from "iterate/sdk";
 class HoarderProcessor extends StreamProcessor {
   contract = { slug: "hoarder", version: "1.0.0", consumes: ["blob"], emits: [], initialState: () => ({ blobs: [] }) };
   reduce({ event, state }) { return { blobs: [...state.blobs, event.payload.blob] }; }
@@ -244,7 +244,7 @@ throw new Error("boom at module evaluation");
 `;
 
 // WHAT IT DIES OF: `Error: Failed to start Worker:\nUncaught Error: boom at module evaluation\n  at
-// cap.js:4:7` — the platform's envelope around the author's throw, no code. workerd keeps the failed
+// worker.js:4:7` — the platform's envelope around the author's throw, no code. workerd keeps the failed
 // isolate under its loader id for the process's life (the worker-loader.ts WORKAROUND covers a
 // PRODUCER that threw, not code that fails to start), so every push re-hits it — one
 // `subscription-delivery.deliver` line per commit — and every read rejects the same way.
@@ -325,7 +325,7 @@ test("B4 — CONTROL: a facet that cannot start is still disable-able — the nu
 /** A processor whose EFFECT hook throws on one marked event. The reduce is guarded (processor.ts
  *  `#reduceAndProcessEvent` reports and skips a throwing reduce); `processEvent` is not. */
 const POISON_SRC = /* js */ `
-import { StreamProcessor, StreamProcessorDurableObject } from "./processor.js";
+import { StreamProcessor, StreamProcessorDurableObject } from "iterate/sdk";
 class PoisonProcessor extends StreamProcessor {
   contract = { slug: "poison", version: "1.0.0", consumes: ["work"], emits: [], initialState: () => ({ n: 0 }) };
   reduce({ state }) { return { n: state.n + 1 }; }
@@ -613,7 +613,7 @@ function hostingTarget(name: string, source: string, className: string): ItxExpr
   return [
     "itx",
     "facets",
-    ["get", name, { source: { "cap.js": source }, className }],
+    ["get", name, { source: { "worker.js": source }, className }],
     "processEventBatch",
   ];
 }
@@ -671,7 +671,7 @@ function bigWorkerRuleTarget(tag: string, chars: number): ItxExpression {
   return [
     "itx",
     "workers",
-    ["get", { source: { "cap.js": `// ${tag}\n` + "x".repeat(chars) } }],
+    ["get", { source: { "worker.js": `// ${tag}\n` + "x".repeat(chars) } }],
     "hello",
   ];
 }
@@ -713,7 +713,7 @@ async function retryingCursorRow(ctx: string): Promise<SubscriptionRow> {
       target: [
         "itx",
         "workers",
-        ["get", { source: { "cap.js": RETRYING_WORKER_SRC } }],
+        ["get", { source: { "worker.js": RETRYING_WORKER_SRC } }],
         "processEventBatch",
       ],
       consumes: ["mark"],

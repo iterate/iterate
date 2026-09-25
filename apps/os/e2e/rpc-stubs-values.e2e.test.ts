@@ -56,9 +56,9 @@ test("callLater(cb) fires back in the caller — capnweb client AND dynamic work
 
   // ── caller 2: a DYNAMIC WORKER via withItx(env.ITX, …) — the callback appends to the stream (observable) ──
   const SRC_CONSUMER = {
-    "cap.js": `
+    "worker.js": `
 import { WorkerEntrypoint } from "cloudflare:workers";
-import { withItx } from "./processor.js";
+import { withItx } from "iterate/sdk";
 export default class Consumer extends WorkerEntrypoint {
   run() {
     // withItx hands the real scope. Plain dotted access; the callback runs back HERE, inside the

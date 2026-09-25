@@ -18,6 +18,7 @@ on:
       - packages/ui/**
       - packages/shared/**
       - apps/agents/**
+      - configs/with-agents/agents/**
       - packages/iterate/**
       - package.json
       - pnpm-lock.yaml

@@ -21,9 +21,11 @@ A failure emits `project/create-failed`, and a later create call can start anoth
 ## Publishing
 
 A commit to `/repos/config` emits `repo/commit-completed`, and the project processor publishes the
-resulting pinned revision. `worker.ts` must be executable JavaScript; a `.ts` extension does not
-cause transpilation. Probe a candidate with `itx.workers.get({ source }).fetch(...)` before
-committing it.
+resulting pinned revision. `worker.ts` is the main module. Files may be TypeScript (types are
+stripped, not checked) and import each other by relative path. `iterate/*` and `zod` come from the
+platform; any other package is listed in `package.json` and fetched from npm through esm.sh, locked
+per dependency set (`src/context/module-resolution.ts`). Probe a candidate with
+`itx.workers.get({ source }).fetch(...)` before committing it.
 
 An explicit `itx/ingress-configured` remains in effect until the next config commit. Loading a
 worker alone does not create a route.

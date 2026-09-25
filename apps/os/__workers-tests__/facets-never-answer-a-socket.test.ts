@@ -20,7 +20,7 @@ import { adminCredentials, openSession, publishConfigWorker, stub } from "./supp
 /** A stateful app hosted as a facet: `fetch()` serves plain HTTP AND would upgrade a WebSocket if
  *  asked — so the refusal below is the platform's, not the class's. `hits()` is its RPC method. */
 const SRC_APP_FACET = /* js */ `
-import { FacetDurableObject } from "./processor.js";
+import { FacetDurableObject } from "iterate/sdk";
 export class AppFacetDurableObject extends FacetDurableObject {
   static publicMethods = [...super.publicMethods, "hits"];
   #hits = 0;
@@ -36,7 +36,10 @@ export class AppFacetDurableObject extends FacetDurableObject {
   hits() { return this.#hits; }
 }
 `;
-const APP_FACET_SPEC = { source: { "cap.js": SRC_APP_FACET }, className: "AppFacetDurableObject" };
+const APP_FACET_SPEC = {
+  source: { "worker.js": SRC_APP_FACET },
+  className: "AppFacetDurableObject",
+};
 
 test("a project host reaches a facet-hosted app over plain HTTP and RPC; a WebSocket upgrade on it is refused (400, FACET_NO_UPGRADE) and materializes nothing", async () => {
   const { ctx, host } = await projectWithAppFacet("facet-app");

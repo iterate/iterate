@@ -473,8 +473,8 @@ test("waitForEvent through a LOADED worker's env.ITX — the scope's dotted meth
   // loaded: its `run` opens the wait through the scope, a second session appends, and the loaded
   // worker returns the committed event — the Workers-RPC path no other suite drives.
   const SRC_WAITER = {
-    "cap.js": `import { WorkerEntrypoint } from "cloudflare:workers";
-import { withItx } from "./processor.js";
+    "worker.js": `import { WorkerEntrypoint } from "cloudflare:workers";
+import { withItx } from "iterate/sdk";
 export default class Waiter extends WorkerEntrypoint {
   run(afterOffset) {
     return withItx(this.env.ITX, (itx) => itx.waitForEvent({ type: "ping", afterOffset, timeoutMs: 20000 }));
@@ -506,7 +506,7 @@ const probe = test.skipIf(projectHostsAreLocal() || !OPT_IN);
 /** A cursor target that ALWAYS throws a plain (retryable) error — the stuck delivery whose retry
  *  ladder self-wakes fastest (the stream keeps its cursor; an entrypoint cannot own progress). */
 const THROWING_WORKER = {
-  "cap.js": `import { WorkerEntrypoint } from "cloudflare:workers";
+  "worker.js": `import { WorkerEntrypoint } from "cloudflare:workers";
 export default class Thrower extends WorkerEntrypoint {
   async processEventBatch(events, range) { throw new Error("wake-loop: this delivery always fails (retryable)"); }
 }`,

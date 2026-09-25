@@ -22,7 +22,7 @@
 // binds Artifacts too (wrangler's local runtime serves it).
 
 import { expect, test } from "vitest";
-import type { RepoLogEntry } from "../src/repo/durable-object.ts";
+import type { RepoLogEntry } from "iterate/api";
 import {
   freshCtx,
   openItx,
@@ -191,21 +191,9 @@ localOnly(
     expect(await repo.readFile("worker.ts")).toBe("export default 1;\n");
     expect(await repo.listFiles()).toEqual({ commitOid: first.commitOid, paths: ["worker.ts"] });
     expect(await repo.tip()).toBe(first.commitOid);
-    // several files under the module names a loaded worker wants (a no-build app's `source`, one
-    // call); a path that is not there is a refusal, never a silent hole
-    expect(await repo.readModules({ "w.js": "worker.ts" })).toEqual({
-      "w.js": "export default 1;\n",
-    });
-    expect((await rejection(repo.readModules({ "x.js": "missing.ts" }))).message).toMatch(
-      /no file at "missing.ts"/,
-    );
-    // the whole tree as a worker's modules: `worker.ts` is the main module (`cap.js`); only `.js`
-    // files ride under their own paths (the loader's naming rule), so it is not there twice; a main
-    // that is not there is a refusal
-    expect(await repo.modules()).toEqual({ "cap.js": "export default 1;\n" });
-    expect((await rejection(repo.modules({ main: "missing.js" }))).message).toMatch(
-      /no file at "missing.js" to be the main module/,
-    );
+    // the tree as a worker's source: every file under its path, or a folder's, relative to it
+    expect(await repo.modules()).toEqual({ "worker.ts": "export default 1;\n" });
+    expect(await repo.modules({ dir: "apps" })).toEqual({});
     expect(artifacts).toMatchObject({ snapshots: 0 });
 
     // A push from OUTSIDE the facet moves the tip: the next read sees it, with ONE more fetch.

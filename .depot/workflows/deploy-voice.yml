@@ -14,8 +14,9 @@ on:
     paths:
       - .depot/workflows/deploy-voice.yml
       - apps/voice/**
-      # vite.config.ts builds public/voice-install.json from apps/agents (voice/, runtime/)
+      # vite.config.ts builds public/voice-install.json from apps/agents/voice and the agents runtime
       - apps/agents/**
+      - configs/with-agents/agents/**
       - envs.ts
       - scripts/lib/**
       - packages/iterate/**

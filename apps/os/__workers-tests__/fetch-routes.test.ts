@@ -193,7 +193,7 @@ test("a route whose target is a lent stub that is offline answers 502, logged at
  *  its route through `env.ITX.fetch`, a private route's anonymous visitor gets the sign-in
  *  challenge, anything else is this worker's 404. */
 const SRC_FETCH_ROUTER = {
-  "cap.js": `import { ConfigWorker } from "./processor.js";
+  "worker.js": `import { ConfigWorker } from "iterate/sdk";
 export default class Router extends ConfigWorker {
   async fetch(request) {
     const route = await this.withItx((itx) => itx.fetchRoutes.match({ url: request.url, headers: request.headers }));
