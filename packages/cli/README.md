@@ -106,9 +106,12 @@ class LocalSite extends RpcTarget {
     const url = new URL(request.url);
     // a WebSocket upgrade: dial ws://localhost:<port>, bridge it through a WebSocketPair and answer
     // upgradeWebSocketResponse(visitor, { headers: { "Sec-WebSocket-Protocol": local.protocol } })
+    // Node's fetch decodes a compressed body but keeps its content-encoding: ask for none
+    const headers = new Headers(request.headers);
+    headers.set("accept-encoding", "identity");
     return fetch(`http://localhost:${port}${url.pathname}${url.search}`, {
       method: request.method,
-      headers: request.headers,
+      headers,
       body: request.body,
       duplex: "half",
     });

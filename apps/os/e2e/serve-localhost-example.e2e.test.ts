@@ -4,7 +4,8 @@
 // WebSocket server on a local port. The project is a fresh one on the default template, so its
 // config worker is the template's router (configs/default/worker.ts). Pins:
 //   • the URL it prints reaches the local server over HTTP, the visitor's path as-is (under paths
-//     routing the platform strips the base, so the local server sees the same path either way)
+//     routing the platform strips the base, so the local server sees the same path either way),
+//     the body uncompressed (a local server that gzips whatever the request accepts is not asked to)
 //   • a WebSocket asking for `vite-hmr` opens with it and echoes
 //   • SIGINT deletes the route: the host is the template's own 404 again
 
@@ -13,6 +14,7 @@ import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
+import { gzipSync } from "node:zlib";
 import { WebSocketServer } from "ws";
 import { expect, test } from "vitest";
 import { adminCredentials, session, workerUrl } from "./support/client.ts";
@@ -78,9 +80,14 @@ test(
   },
 );
 
-/** The local server: `local <path>` over HTTP, and a WebSocket choosing `vite-hmr` that echoes. */
+/** The local server: `local <path>` over HTTP (gzipped when the request accepts it), and a
+ *  WebSocket choosing `vite-hmr` that echoes. */
 async function localServer() {
-  const server = createServer((request, response) => response.end(`local ${request.url}`));
+  const server = createServer((request, response) => {
+    const body = `local ${request.url}`;
+    if (!/gzip/.test(request.headers["accept-encoding"] ?? "")) return response.end(body);
+    response.writeHead(200, { "content-encoding": "gzip" }).end(gzipSync(body));
+  });
   const wss = new WebSocketServer({
     server,
     handleProtocols: (protocols) => (protocols.has("vite-hmr") ? "vite-hmr" : false),
