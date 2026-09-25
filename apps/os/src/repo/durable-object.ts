@@ -77,7 +77,7 @@ type Egress = (request: Request) => Promise<Response>;
 /** A commit's fact, owed from the moment its push is sent until both appends have landed, under the
  *  key of that one update of main: a pull can return main to a commit published before, and a commit
  *  can be made again with the same oid, and each is published again. */
-type OwedFact = CommitCompleted & { key: string };
+type OwedFact = CommitCompleted & { key?: string };
 
 /** A repo-relative FILE path, `notes/log.md`: no leading slash, no empty, `.` or `..` segment. */
 function filePath(path: string): string {
@@ -452,7 +452,8 @@ export class RepoDurableObject extends StreamProcessorDurableObject<
     const committed: EventInput<typeof RepoContract> = {
       type: "events.iterate.com/repo/commit-completed",
       payload,
-      idempotencyKey: key,
+      // A debt stored before facts had keys of their own is keyed as it was then.
+      idempotencyKey: key || `repo/commit-completed:${payload.path}:${payload.commitOid}`,
     };
     await this.withItx((itx) => itx.cd("/").append(committed));
     await this.withItx((itx) => itx.append(committed));

@@ -601,7 +601,7 @@ export function encodeFetchRequest(input: {
   /** Commits the client already has: the pack leaves out what they reach (a server that does not
    *  know one sends it anyway). */
   haves?: string[];
-}): Uint8Array {
+}): Uint8Array<ArrayBuffer> {
   const parts = [pktLine("command=fetch"), DELIM];
   for (const want of input.wants) parts.push(pktLine(`want ${want}`));
   for (const have of input.haves || []) parts.push(pktLine(`have ${have}`));
@@ -613,7 +613,7 @@ export function encodeFetchRequest(input: {
   return concat(parts);
 }
 
-export function encodeLsRefsRequest(prefixes: string[]): Uint8Array {
+export function encodeLsRefsRequest(prefixes: string[]): Uint8Array<ArrayBuffer> {
   const parts = [pktLine("command=ls-refs"), DELIM, pktLine("peel")];
   for (const prefix of prefixes) parts.push(pktLine(`ref-prefix ${prefix}`));
   parts.push(FLUSH);
@@ -660,7 +660,7 @@ function encodeReceivePackRequest(input: {
   oldOid: string;
   pack: Uint8Array;
   ref: string;
-}): Uint8Array {
+}): Uint8Array<ArrayBuffer> {
   const update = `${input.oldOid} ${input.newOid} ${input.ref}\0report-status side-band-64k agent=iterate-repos/1`;
   return concat([pktLine(update), FLUSH, input.pack]);
 }
@@ -837,7 +837,7 @@ export function createGitWireTransport(input: {
   fetch?: (request: Request) => Promise<Response>;
 }) {
   const send = input.fetch || ((request: Request) => fetch(request));
-  const post = async (service: string, body: Uint8Array): Promise<Uint8Array> => {
+  const post = async (service: string, body: Uint8Array<ArrayBuffer>): Promise<Uint8Array> => {
     /** The status the attempt's answer failed with, 0 when it failed before an answer. */
     let failedStatus = 0;
     return retryPlatformFailures(
@@ -852,9 +852,7 @@ export function createGitWireTransport(input: {
         if (input.authorization) headers.set("authorization", input.authorization);
         const response = await send(
           new Request(`${input.remote}/${service}`, {
-            // Every request body is `concat`'s fresh ArrayBuffer-backed bytes; `BodyInit` names that
-            // backing, which the looser `Uint8Array` parameter type does not.
-            body: body as Uint8Array<ArrayBuffer>,
+            body,
             headers,
             method: "POST",
           }),

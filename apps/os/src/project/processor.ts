@@ -452,20 +452,19 @@ export class ProjectProcessor extends StreamProcessor<
             tip && this.#published !== tip.offset;
             tip = this.#newestTip
           ) {
-            const ingress = {
-              type: "events.iterate.com/itx/ingress-configured" as const,
-              payload: { target: configRepoIngressTarget(tip.commitOid) },
-            };
+            const payload = { target: configRepoIngressTarget(tip.commitOid) };
             const [landed] = await append({
-              ...ingress,
+              type: "events.iterate.com/itx/ingress-configured",
               idempotencyKey: `itx/ingress-configured:${tip.commitOid}`,
+              payload,
             });
             // A pull can return main to a commit published before (B, C, then B again): the key
             // answers that older publication, so this fact publishes it again under its own.
             if (landed && landed.offset < tip.offset)
               await append({
-                ...ingress,
+                type: "events.iterate.com/itx/ingress-configured",
                 idempotencyKey: `itx/ingress-configured:${tip.commitOid}@${tip.offset}`,
+                payload,
               });
             this.#published = tip.offset;
           }

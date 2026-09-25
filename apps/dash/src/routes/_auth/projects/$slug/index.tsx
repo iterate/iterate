@@ -235,7 +235,12 @@ function ConfigRepo({
     work: () => Promise<unknown>,
     variant: "outline" | "destructive" = "outline",
   ) => (
-    <Button variant={variant} disabled={Boolean(busy)} onClick={() => void run(action, work)}>
+    <Button
+      type="button"
+      variant={variant}
+      disabled={Boolean(busy)}
+      onClick={() => void run(action, work)}
+    >
       {busy === action ? <Spinner data-icon="inline-start" /> : null}
       {label}
     </Button>
@@ -319,7 +324,9 @@ function ConfigRepo({
             className="flex h-full flex-col"
             onSubmit={(event) => {
               event.preventDefault();
-              void link(String(new FormData(event.currentTarget).get("url")).trim());
+              // Only the link step has the URL field; a choice step submits nothing.
+              const url = new FormData(event.currentTarget).get("url");
+              if (typeof url === "string") void link(url.trim());
             }}
           >
             <SheetHeader className="border-b">
@@ -375,6 +382,7 @@ function ConfigRepo({
                 <div className="flex flex-col items-start gap-3">
                   {choice.kind === "diverged" ? (
                     <Button
+                      type="button"
                       variant="destructive"
                       disabled={Boolean(busy)}
                       onClick={() => setChoice({ ...choice, kind: "replace" })}
@@ -523,6 +531,7 @@ function GithubRepositories({
           <li key={name} className="flex items-center justify-between gap-2 py-2">
             <span className="font-mono text-sm">{name}</span>
             <Button
+              type="button"
               variant="outline"
               size="sm"
               disabled={disabled}
