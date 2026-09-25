@@ -846,6 +846,8 @@ export function createGitWireTransport(input: {
         if (input.authorization) headers.set("authorization", input.authorization);
         const response = await send(
           new Request(`${input.remote}/${service}`, {
+            // Every request body is `concat`'s fresh ArrayBuffer-backed bytes; `BodyInit` names that
+            // backing, which the looser `Uint8Array` parameter type does not.
             body: body as Uint8Array<ArrayBuffer>,
             headers,
             method: "POST",
