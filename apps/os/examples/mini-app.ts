@@ -69,7 +69,7 @@ const PAGE = `<!doctype html>
           "preact": "https://esm.sh/preact@10.29.8",
           "preact/hooks": "https://esm.sh/preact@10.29.8/hooks",
           "htm/preact": "https://esm.sh/htm@3.1.1/preact?external=preact",
-          "capnweb": "https://esm.sh/@iterate-com/capnweb@0.12.2"
+          "capnweb": "https://esm.sh/@iterate-com/capnweb@0.12.3"
         }
       }
     </script>

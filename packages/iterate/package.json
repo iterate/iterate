@@ -125,7 +125,7 @@
     "prepack": "pnpm build"
   },
   "dependencies": {
-    "capnweb": "npm:@iterate-com/capnweb@0.12.2",
+    "capnweb": "npm:@iterate-com/capnweb@0.12.3",
     "json5": "^2.2.3",
     "oauth4webapi": "^3.8.5",
     "zod": "4.5.4",

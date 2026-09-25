@@ -87,10 +87,14 @@ test("the Notes app works through a project config worker, and its session there
     afterOffset: 0,
     timeoutMs: 60_000,
   });
-  await fixture.itx.append({
-    type: "events.iterate.com/itx/ingress-configured",
-    payload: { target: ["itx", "workers", ["get", { source: { "cap.js": source } }]] },
-  });
+  // Notes writes to this same repo. Store the worker there so each note's commit keeps publishing
+  // it, rather than replacing a one-off ingress override with the seeded worker.
+  await fixture.itx.invoke([
+    "itx",
+    "repos",
+    ["get", "/repos/config"],
+    ["writeFile", "worker.ts", source],
+  ]);
   // On its own origin: one note.
   await page.goto(notes.origin);
   await page

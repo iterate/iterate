@@ -26,7 +26,7 @@
     "@playwright/test": "1.60.0",
     "@tanstack/eslint-plugin-router": "^1.139.0",
     "@types/node": "^24.10.1",
-    "capnweb": "npm:@iterate-com/capnweb@^0.12.2",
+    "capnweb": "npm:@iterate-com/capnweb@^0.12.3",
     "esbuild": "^0.27.4",
     "eslint-plugin-codegen": "0.34.1",
     "eslint-plugin-eslint-comments": "^3.2.0",

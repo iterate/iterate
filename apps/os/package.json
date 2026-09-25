@@ -29,7 +29,7 @@
     "@modelcontextprotocol/server": "2.0.0",
     "@tanstack/react-router": "1.168.3",
     "@tanstack/react-start": "1.167.5",
-    "capnweb": "npm:@iterate-com/capnweb@^0.12.2",
+    "capnweb": "npm:@iterate-com/capnweb@^0.12.3",
     "cn": "^0.4.0",
     "iterate": "workspace:*",
     "json5": "^2.2.3",

@@ -14,7 +14,7 @@
     "@orpc/openapi": "1.13.14",
     "@orpc/server": "1.13.14",
     "@orpc/zod": "1.13.14",
-    "capnweb": "npm:@iterate-com/capnweb@^0.12.2",
+    "capnweb": "npm:@iterate-com/capnweb@^0.12.3",
     "dedent": "^1.7.0",
     "zod": "4.5.4"
   },

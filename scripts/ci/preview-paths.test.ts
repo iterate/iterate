@@ -51,7 +51,7 @@ test.each([
       writeFileSync(join(repo, "apps/os/src/moved.ts"), "export const moved = 1;\n");
       git("add", ".");
       git("commit", "--quiet", "-m", "base");
-      git("checkout", "--quiet", "-b", "head");
+      git("checkout", "--quiet", "-b", "pr-head");
       mkdirSync(dirname(join(repo, path)), { recursive: true });
       if (change.startsWith("moves")) git("mv", "apps/os/src/moved.ts", path);
       else writeFileSync(join(repo, path), "change\n");
@@ -62,7 +62,7 @@ test.each([
         writeFileSync(join(repo, "MAIN.md"), "main moved on\n");
         git("add", ".");
         git("commit", "--quiet", "-m", "main");
-        git("merge", "--quiet", "--no-ff", "-m", "merge", "head");
+        git("merge", "--quiet", "--no-ff", "-m", "merge", "pr-head");
       }
 
       const run = spawnSync(

@@ -152,7 +152,7 @@ test("provisioning fails: create-failed lands on the repo's path with the proxy'
 });
 
 localOnly(
-  "commits through the facet: commit-completed on the repo's path; the memo fetches the tip once after a commit and once when a push from outside moved it",
+  "commits through the facet: commit-completed on the repo's path; the memo retains the pushed commit and fetches once when a push from outside moved it",
   async ({ onTestFinished }) => {
     const itx = openItx(freshCtx("repo"));
     const artifacts = await FakeArtifacts.start();
@@ -186,8 +186,8 @@ localOnly(
         .filter((e) => e.type === "events.iterate.com/repo/commit-completed")
         .map((e) => e.payload),
     ).toEqual([fact]);
-    // The first read after a commit fetches the tip; reads at the same tip fetch nothing more (an
-    // ls-refs each, which is not a fetch).
+    // The pushed commit populated the memo; reads at the same tip fetch nothing (an ls-refs each,
+    // which is not a fetch).
     expect(await repo.readFile("worker.ts")).toBe("export default 1;\n");
     expect(await repo.listFiles()).toEqual({ commitOid: first.commitOid, paths: ["worker.ts"] });
     expect(await repo.tip()).toBe(first.commitOid);
@@ -206,7 +206,7 @@ localOnly(
     expect((await rejection(repo.modules({ main: "missing.js" }))).message).toMatch(
       /no file at "missing.js" to be the main module/,
     );
-    expect(artifacts).toMatchObject({ snapshots: 1 });
+    expect(artifacts).toMatchObject({ snapshots: 0 });
 
     // A push from OUTSIDE the facet moves the tip: the next read sees it, with ONE more fetch.
     const outside = await artifacts.pushFromOutside("/repos/config", {
@@ -218,11 +218,11 @@ localOnly(
       paths: ["b.txt", "worker.ts"],
     });
     expect(await repo.readFile("b.txt")).toBe("b");
-    expect(artifacts).toMatchObject({ snapshots: 2 });
+    expect(artifacts).toMatchObject({ snapshots: 1 });
 
     // A batch through the facet: deletes before writes. The commit fetches the tip it builds on (the
-    // tree its changes apply to) and drops the memo, so the next read fetches the NEW tip; the read
-    // after that fetches nothing.
+    // tree its changes apply to), then populates the memo with the pushed commit: subsequent reads
+    // fetch nothing.
     const second = await repo.commitFiles({
       message: "swap",
       changes: [
@@ -232,14 +232,14 @@ localOnly(
     });
     expect(second).toMatchObject({ changedPaths: ["worker.ts", "c.txt"] });
     expect(second).toMatchObject({ commitOid: artifacts.remoteTip("/repos/config") });
-    expect(artifacts).toMatchObject({ snapshots: 3 });
+    expect(artifacts).toMatchObject({ snapshots: 2 });
     expect(await repo.listFiles()).toEqual({
       commitOid: second.commitOid,
       paths: ["b.txt", "c.txt"],
     });
     expect(await repo.readFile("worker.ts")).toBeNull();
     expect(await repo.readFile("c.txt")).toBe("c");
-    expect(artifacts).toMatchObject({ snapshots: 4 });
+    expect(artifacts).toMatchObject({ snapshots: 2 });
     expect(artifacts.remoteFiles("/repos/config")).toEqual({ "b.txt": "b", "c.txt": "c" });
     // log is its own shallow fetch, that deep — newest first, the outside commit in its place.
     expect((await repo.log()).map((c: RepoLogEntry) => c.message)).toEqual([

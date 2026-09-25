@@ -33,7 +33,7 @@
     "yaml": "^2.8.3",
     "zod": "^4.1.5",
     "pako": "^3.0.1",
-    "capnweb": "npm:@iterate-com/capnweb@^0.12.2"
+    "capnweb": "npm:@iterate-com/capnweb@^0.12.3"
   },
   "devDependencies": {
     "@cloudflare/vite-plugin": "catalog:cloudflare",

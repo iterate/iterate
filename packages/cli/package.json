@@ -38,7 +38,7 @@
   "dependencies": {
     "@clack/prompts": "^1.0.0",
     "@orpc/server": "1.13.14",
-    "capnweb": "npm:@iterate-com/capnweb@0.12.2",
+    "capnweb": "npm:@iterate-com/capnweb@0.12.3",
     "iterate": "workspace:*",
     "oauth4webapi": "^3.8.5",
     "trpc-cli": "0.15.1",
