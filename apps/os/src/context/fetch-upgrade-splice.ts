@@ -450,6 +450,24 @@ export class FetchUpgradeSpliceEnd {
   }
 }
 
+/** THE VISITOR'S END of the edge's splice: the socket its 101 carries. `splice` gets the other end,
+ *  accepted, to splice to the DO socket — a turn later, once the runtime is sending the 101: a pair
+ *  end accepted before the runtime starts pumping the returned end to the network keeps that pump
+ *  reading past the visitor's close frame, and the accepted end's release then fails it ("other end
+ *  of WebSocketPipe was destroyed"), the edge's invocation ending in an uncaught "Network connection
+ *  lost." at every visitor's clean close (prd 2026-09-25: every tunnel /clock visit; workerd's,
+ *  pinned by fetch-upgrade-visitor-close.test.ts). Accept the DO socket in `splice` too:
+ *  its frames wait unread until then, where a frame for an unaccepted end would be lost. */
+export function visitorEndOfSplice(splice: (local: WebSocket) => void): WebSocket {
+  const pair = new WebSocketPair();
+  const [visitor, local] = [pair[0], pair[1]];
+  setTimeout(() => {
+    local.accept();
+    splice(local);
+  }, 0);
+  return visitor;
+}
+
 /** Binary messages as ArrayBuffers where the socket lets us choose (the runtime's `binaryType`). */
 function preferArrayBuffers(socket: SpliceSocket): void {
   if ("binaryType" in socket) (socket as { binaryType: string }).binaryType = "arraybuffer";

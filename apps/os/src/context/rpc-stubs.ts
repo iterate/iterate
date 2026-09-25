@@ -23,6 +23,7 @@ import {
   FetchUpgradeSpliceEnd,
   reportFetchUpgradeSpliceEvent,
   type SpliceSocket,
+  visitorEndOfSplice,
 } from "./fetch-upgrade-splice.ts";
 
 // ── rpc stub directory ── THE RPC STUBS, DO side: the `itx.rpcStubs` built-in's backing
@@ -1240,34 +1241,33 @@ export function spliceEyeballAnswer(
   const headers = new Headers(answer.headers);
   headers.delete(FETCH_UPGRADE_RESUME_HEADER);
   headers.delete(FETCH_UPGRADE_CONTEXT_ABORTED_OFFSET_HEADER);
-  const pair = new WebSocketPair();
-  const [visitor, local] = [pair[0], pair[1]];
-  local.accept();
-  eyeball.accept();
-  new FetchUpgradeSpliceEnd({
-    side: "eyeball",
-    upgradeId: resume.upgradeId,
-    local,
-    localGoneClose: { code: 1001, reason: "visitor disconnected" },
-    socket: eyeball,
-    deployId: resume.deployId,
-    contextAbortedOffset: contextAbortedOffsetOf(answer),
-    redial: async () => {
-      const redialed = await contextOf(resume.path).fetch("https://fetch-upgrade.internal/", {
-        headers: { Upgrade: "websocket", [FETCH_UPGRADE_EYEBALL_HEADER]: resume.upgradeId },
-      });
-      if (!redialed.webSocket) {
-        await redialed.body?.cancel();
-        return null;
-      }
-      redialed.webSocket.accept();
-      return {
-        socket: redialed.webSocket,
-        deployId: redialed.headers.get(FETCH_UPGRADE_DEPLOY_ID_HEADER),
-        contextAbortedOffset: contextAbortedOffsetOf(redialed),
-      };
-    },
-    report: reportFetchUpgradeSpliceEvent,
+  const visitor = visitorEndOfSplice((local) => {
+    eyeball.accept();
+    new FetchUpgradeSpliceEnd({
+      side: "eyeball",
+      upgradeId: resume.upgradeId,
+      local,
+      localGoneClose: { code: 1001, reason: "visitor disconnected" },
+      socket: eyeball,
+      deployId: resume.deployId,
+      contextAbortedOffset: contextAbortedOffsetOf(answer),
+      redial: async () => {
+        const redialed = await contextOf(resume.path).fetch("https://fetch-upgrade.internal/", {
+          headers: { Upgrade: "websocket", [FETCH_UPGRADE_EYEBALL_HEADER]: resume.upgradeId },
+        });
+        if (!redialed.webSocket) {
+          await redialed.body?.cancel();
+          return null;
+        }
+        redialed.webSocket.accept();
+        return {
+          socket: redialed.webSocket,
+          deployId: redialed.headers.get(FETCH_UPGRADE_DEPLOY_ID_HEADER),
+          contextAbortedOffset: contextAbortedOffsetOf(redialed),
+        };
+      },
+      report: reportFetchUpgradeSpliceEvent,
+    });
   });
   return new Response(null, { status: 101, webSocket: visitor, headers });
 }
