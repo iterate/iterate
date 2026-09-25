@@ -269,6 +269,7 @@ test("a project's primary hostname: once a live hostname is made primary, itx.ur
     "https://echo.primary.somedomain.test/a?b=1",
   );
   expect(await itx.url()).toBe("https://primary.somedomain.test/");
+  expect(await itx.whoami()).toMatchObject({ projectUrl: "https://primary.somedomain.test/" });
 
   const navigate = { "sec-fetch-mode": "navigate", "sec-fetch-dest": "document" };
   for (const [from, to] of [

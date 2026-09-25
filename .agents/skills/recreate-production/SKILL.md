@@ -23,7 +23,8 @@ pnpm --dir apps/os project-seed check \
 
 Capture creates a mode-0600 archive, Git mirror, working clone, and receipt. It refuses to
 overwrite an earlier archive. The archive also records the project's custom hostnames
-(`hostnames`). Report only the non-secret counts, hostnames and paths.
+(`hostnames`) and its primary hostname (`primaryHostname`). Report only the non-secret
+counts, hostnames and paths.
 
 Capture the users, organizations and memberships as well; a project seed carries only its own
 organization:
@@ -63,7 +64,8 @@ pnpm --dir apps/os project-seed apply \
 `apply` creates or converges the selected project through normal project, repository, and secret
 operations. It restores the config tree, organization membership, and secrets into fresh project
 identity bindings. It lands the project on its organization's record, the list the dash shows,
-and restores the custom hostnames on the deployment the seed was captured from. It verifies the
+and restores the custom hostnames, then the primary hostname, on the deployment the seed was
+captured from (a primary whose certificate is not yet active is reported, not set). It verifies the
 Git tree, published commit, membership roles, the organization's record, secret readback and
 each hostname's Cloudflare answer before returning. Project IDs are kept; user and organization
 IDs are minted afresh.

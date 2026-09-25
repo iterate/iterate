@@ -6,7 +6,9 @@ import {
   EncryptedSecretSeed,
   ProjectSeed,
   captureHostnames,
+  capturePrimaryHostname,
   restoreHostnames,
+  restorePrimaryHostname,
 } from "../scripts/project-seed-format.ts";
 import {
   adminCredentials,
@@ -205,4 +207,84 @@ test("after a real erase the zone still holds the custom hostname: apply's reque
     project: { id: projectId },
   });
   expect(await captureHostnames(project)).toEqual(["kept.erased.test"]);
+});
+
+test("a project's primary hostname round-trips through a seed: capture records it, apply configures it again after the hostnames, a rerun asks nothing, and a hostname not yet live is not made primary", async () => {
+  fakeCloudflareCustomHostnames({ active: ["www.primary.test"] });
+  const session = await openSession();
+  const admin = session.authenticate(adminCredentials());
+  const project = await admin.projects.create({ project: "seed-primary-hostname" });
+  const primaryFacts = async () =>
+    (
+      (await project.invoke(["itx", ["readEvents", 0, 1000]])) as { events: { type: string }[] }
+    ).events.filter(
+      (event) => event.type === "events.iterate.com/project/primary-hostname-configured",
+    );
+  // the owner adds a live hostname and a pending one, and makes the live one primary
+  for (const hostname of ["www.primary.test", "pending.primary.test"]) {
+    const [asked] = await project.append({
+      type: "events.iterate.com/project/hostname-add-requested",
+      payload: { hostname },
+    });
+    await project.waitForEvent({
+      type: "events.iterate.com/project/hostname-add-settled",
+      afterOffset: asked.offset,
+      timeoutMs: 10_000,
+    });
+  }
+  const [configured] = await project.append({
+    type: "events.iterate.com/project/primary-hostname-configured",
+    payload: { hostname: "www.primary.test" },
+  });
+  await project.invoke([
+    "itx",
+    "facets",
+    ["get", "project"],
+    ["waitUntilProcessed", { offset: configured.offset }],
+  ]);
+  // capture, and the archive's JSON
+  const hostnames = await captureHostnames(project);
+  const primaryHostname = ProjectSeed.shape.primaryHostname.parse(
+    JSON.parse(JSON.stringify(await capturePrimaryHostname(project))),
+  );
+  expect({ hostnames, primaryHostname }).toEqual({
+    hostnames: ["pending.primary.test", "www.primary.test"],
+    primaryHostname: "www.primary.test",
+  });
+  // the erase, as far as the hostnames go
+  for (const hostname of hostnames) {
+    const [removal] = await project.append({
+      type: "events.iterate.com/project/hostname-remove-requested",
+      payload: { hostname },
+    });
+    await project.waitForEvent({
+      type: "events.iterate.com/project/hostname-removed",
+      afterOffset: removal.offset,
+      timeoutMs: 10_000,
+    });
+  }
+  expect(await capturePrimaryHostname(project)).toBeNull();
+  // apply: the hostnames first, then the primary
+  await restoreHostnames(project, hostnames, { timeoutMs: 10_000 });
+  expect(await restorePrimaryHostname(project, primaryHostname!)).toEqual({
+    hostname: "www.primary.test",
+    asked: true,
+    primary: true,
+  });
+  expect(await capturePrimaryHostname(project)).toBe("www.primary.test");
+  // a rerun asks nothing
+  const facts = (await primaryFacts()).length;
+  expect(await restorePrimaryHostname(project, primaryHostname!)).toEqual({
+    hostname: "www.primary.test",
+    asked: false,
+    primary: true,
+  });
+  expect(await primaryFacts()).toHaveLength(facts);
+  // a hostname whose certificate is not active is asked for and not made primary; the primary stays
+  expect(await restorePrimaryHostname(project, "pending.primary.test")).toEqual({
+    hostname: "pending.primary.test",
+    asked: true,
+    primary: false,
+  });
+  expect(await capturePrimaryHostname(project)).toBe("www.primary.test");
 });

@@ -64,6 +64,16 @@ test("hostnames: a well-formed one is kept; a malformed or repeated one is refus
     openProjectSeed({ ...seed, hostnames: ["garple.com", "garple.com"] }, keys),
   ).rejects.toThrow("Duplicate hostname: garple.com");
 });
+test("the primary hostname: one of the hostnames, or null — an archive from before it was recorded has none", async () => {
+  const seed = { ...(await archive()), hostnames: ["garple.com"] };
+  expect((await openProjectSeed(seed, keys)).seed).toMatchObject({ primaryHostname: null });
+  expect(
+    (await openProjectSeed({ ...seed, primaryHostname: "garple.com" }, keys)).seed,
+  ).toMatchObject({ primaryHostname: "garple.com" });
+  await expect(openProjectSeed({ ...seed, primaryHostname: "other.com" }, keys)).rejects.toThrow(
+    "Primary hostname other.com is not one of the hostnames.",
+  );
+});
 test("hostnames are restored only onto the deployment the seed was captured on", async () => {
   const { seed } = await openProjectSeed({ ...(await archive()), hostnames: ["garple.com"] }, keys);
   expect(restorableHostnames(seed, seed.source.platform)).toEqual(["garple.com"]);

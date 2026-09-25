@@ -37,7 +37,7 @@ import {
 } from "iterate/expression";
 import { ITX_PRINCIPAL_HEADER, type Principal } from "iterate/principal";
 import type { RewriteRuleListEntry, StreamPage } from "iterate/api";
-import { ITERATE_ROUTING_SLUG_HEADER, projectUrlOf } from "iterate/project-ingress";
+import { ITERATE_ROUTING_SLUG_HEADER } from "iterate/project-ingress";
 import { RunRequested, type RunSettlement } from "iterate/stream/run";
 import {
   ITX_APP_HEADER,
@@ -618,13 +618,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   readonly #builtIns: Record<string, unknown> = buildBuiltIns({
     projectInfo: async () => {
       const slug = await this.#projectSlug();
-      if (!slug) return {};
-      // the apex URL, when the caller carries the platform origin to compose it with
-      const platformOrigin = this.#platformOrigin;
-      const url = platformOrigin
-        ? projectUrlOf(this.#appConfig.urls.ingressRouting, platformOrigin, { project: slug })
-        : null;
-      return { projectSlug: slug, ...(url && { projectUrl: url.href }) };
+      return slug ? { projectSlug: slug } : {};
     },
     primaryHostname: () =>
       this.#controlPlane.primaryHostnameOf(this.#durableObjectAddress.projectId),

@@ -33,7 +33,7 @@ import type {
   StreamPage,
   WaitForEventFilter,
 } from "iterate/api";
-import { primaryHostnameUrlOf, projectUrlOf, type IngressRouting } from "iterate/project-ingress";
+import { projectPublicUrlOf, type IngressRouting } from "iterate/project-ingress";
 import { stampCaller, type Caller } from "../caller.ts";
 import { FIRST_PARTY_FACET_CLASSES, firstPartyFacetClassOf } from "../first-party-facets.ts";
 import {
@@ -127,7 +127,8 @@ export interface BuiltInScope extends LibraryRoots {
    *  (the resolver strips it); here so a strongly typed holder (the scope a loaded worker's
    *  `withItx(env.ITX, …)` hands it) can spell `itx.builtins.append(…)`. */
   builtins: Omit<BuiltInScope, "builtins">;
-  /** Identify this context. */
+  /** Identify this context. A project's `projectUrl` is its apex, `url()`'s answer (on the primary
+   *  hostname when it has one), present when the call carries the platform origin. */
   whoami(): Promise<{ projectId: string; path: string; projectSlug?: string; projectUrl?: string }>;
   /** THE PUBLIC URL of this project over HTTP — the apex or a `routingSlug`'s host (both reach the
    *  config worker's `fetch`, which reads the slug from `x-iterate-routing-slug`), at `path`
@@ -458,7 +459,7 @@ function abortReasonOf(reason: unknown, verb: string): string | undefined {
 
 /** What the CONTEXT (the DO) injects: identity, the bindings, and the operations only it can serve. */
 interface BuildBuiltInsDeps {
-  projectInfo: () => Promise<{ projectSlug?: string; projectUrl?: string }>;
+  projectInfo: () => Promise<{ projectSlug?: string }>;
   /** This project's primary hostname (project/contract.ts `primaryHostname`), or null. */
   primaryHostname: () => Promise<string | null>;
   projectId: string;
@@ -659,7 +660,19 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
   // Each root implements one member of `BuiltInScope` above (the canonical doc of the surface); the
   // comments here add only the WHY of a code branch.
   return {
-    whoami: () => deps.projectInfo().then((project) => ({ projectId, path, ...project })),
+    whoami: async () => {
+      const project = await deps.projectInfo();
+      const platformOrigin = deps.platformOrigin();
+      // the apex, by `itx.url`'s rule, when the caller carries the platform origin to compose it with
+      const url =
+        project.projectSlug && platformOrigin
+          ? projectPublicUrlOf(deps.ingressRouting, platformOrigin, {
+              project: project.projectSlug,
+              primaryHostname: await deps.primaryHostname(),
+            })
+          : null;
+      return { projectId, path, ...project, ...(url && { projectUrl: url.href }) };
+    },
     url: async (target: { routingSlug?: string; path?: string } = {}) => {
       const platformOrigin = deps.platformOrigin();
       if (!platformOrigin)
@@ -671,14 +684,12 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
       if (!slug)
         throw codedError("INVALID_INPUT", "itx.url: only a project's context has a public URL");
       // on the project's primary hostname when it has one, else under the deployment's ingress
-      const primaryHostname = await deps.primaryHostname();
-      const url = primaryHostname
-        ? primaryHostnameUrlOf(primaryHostname, target)
-        : projectUrlOf(deps.ingressRouting, platformOrigin, {
-            project: slug,
-            routingSlug: target.routingSlug || null,
-            path: target.path,
-          });
+      const url = projectPublicUrlOf(deps.ingressRouting, platformOrigin, {
+        project: slug,
+        primaryHostname: await deps.primaryHostname(),
+        routingSlug: target.routingSlug || null,
+        path: target.path,
+      });
       if (!url)
         throw codedError(
           "INVALID_INPUT",

@@ -174,3 +174,22 @@ export function primaryHostnameUrlOf(
   const url = new URL(`https://${hostname}${path}`);
   return url.hostname === hostname ? url : null;
 }
+
+/** THE PUBLIC URL of `routingSlug` (null ⇒ the apex) at `path` in `project` — the one rule behind
+ *  `itx.url` and `itx.whoami().projectUrl`: on the project's `primaryHostname` when it has one
+ *  (`primaryHostnameUrlOf`), else under the deployment's ingress (`projectUrlOf`). Null as those
+ *  answer null. Pure. */
+export function projectPublicUrlOf(
+  routing: IngressRouting,
+  platformOrigin: string,
+  target: {
+    project: string;
+    primaryHostname: string | null;
+    routingSlug?: string | null;
+    path?: string;
+  },
+): URL | null {
+  return target.primaryHostname
+    ? primaryHostnameUrlOf(target.primaryHostname, target)
+    : projectUrlOf(routing, platformOrigin, target);
+}

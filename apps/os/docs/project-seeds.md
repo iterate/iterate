@@ -92,6 +92,14 @@ hostnames. `erase-data` does not delete the Cloudflare custom
 hostname and the owner's CNAMEs are on their own DNS, so the add finds the existing
 custom hostname and the answer is usually `active` straight away.
 
+`primaryHostname` records the project's primary hostname (one of `hostnames`), or
+null. After the hostnames, `apply` appends `project/primary-hostname-configured` for
+it, the event the dash's Make primary appends, unless the project already has it, and
+waits for the project processor to reduce it. The reduce takes only a hostname whose
+certificate is active. After an erase Cloudflare still holds it, so it usually is;
+one still pending is not made primary, and `apply` says so rather than failing: make
+it primary on the dash's Hostnames page once it serves.
+
 Hostnames are restored only when `apply` targets the deployment the archive was
 captured on (`source.platform`), because a custom hostname lives on that
 deployment's SaaS zone. Onto any other deployment, `apply` skips them and says so.
