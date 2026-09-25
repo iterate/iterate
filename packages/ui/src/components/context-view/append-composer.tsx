@@ -1,45 +1,75 @@
 // The context view's raw composer, the old platform's (apps/os `stream-view-composer.tsx` raw mode
-// and `example-events-panel.tsx`, removed in #2837): YAML for one event or a list of them, sent
-// through the caller's `onAppend` with ⌘/Ctrl+Enter or the button. Closed it is one "Append event"
-// button under the feed, so it never eats the log; open, the editor is capped (12rem) and the feed
-// keeps the rest. Nothing is inserted here: the appended events arrive by the view's live
-// subscription like anyone's, and the view pins the feed to its tail so they land in view. The draft
-// stays after a success — the next append is usually a tweak of the last.
-import { useState } from "react";
-import { PlusIcon } from "lucide-react";
+// and `example-events-panel.tsx`, removed in #2837): YAML (or JSON) for one event or a list of
+// them, sent through the caller's `onAppend` with ⌘/Ctrl+Enter or the button. Closed it is one
+// "Append event" button under the feed, so it never eats the log; open, the editor is capped (12rem)
+// and the feed keeps the rest. Typing completes the event's fields and, after `type:`, the types
+// this context knows (append-completions.ts); "Examples" loads a draft of a type some processor here
+// consumes, grouped by processor. Nothing is inserted here: the appended events arrive by the view's
+// live subscription like anyone's, and the view pins the feed to its tail so they land in view. The
+// draft stays after a success — the next append is usually a tweak of the last.
+import { useMemo, useRef, useState } from "react";
+import { PlusIcon, SparklesIcon } from "lucide-react";
 import { Button } from "../button.tsx";
 import { CodeEditor } from "../code-editor.tsx";
-import { NativeSelect, NativeSelectOption } from "../native-select.tsx";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuGroup,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuTrigger,
+} from "../dropdown-menu.tsx";
 import { Spinner } from "../spinner.tsx";
+import { appendCompletionsAt, knownEventTypes } from "./append-completions.ts";
 import {
   DEFAULT_APPEND_YAML,
+  exampleGroups,
   exampleYaml,
   parseAppendYaml,
   type ContextViewAppendEvent,
 } from "./append-events.ts";
+import { recount, shortEventType, sortedCounts, type TypeCounts } from "./filters.tsx";
+import type { ContextViewEvent, ContextViewProcessor } from "./types.tsx";
 
 export function AppendComposer({
   onAppend,
   onAppended,
-  exampleTypes,
+  events,
+  processors,
 }: {
   onAppend: (events: ContextViewAppendEvent[]) => Promise<unknown>;
   /** After a success: the view follows its tail to show what lands. */
   onAppended: () => void;
-  /** Types some processor here consumes, to load as a draft; empty = no picker. */
-  exampleTypes: readonly string[];
+  /** The loaded log: its types are offered as you type one. */
+  events: readonly ContextViewEvent[];
+  /** The context's processors: what they consume is offered first, and loads as an example. */
+  processors: readonly ContextViewProcessor[];
 }) {
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState(DEFAULT_APPEND_YAML);
   const [pending, setPending] = useState(false);
   /** The last submit's outcome, until the draft changes. */
   const [outcome, setOutcome] = useState<{ error: string } | { appended: number }>();
+  const examples = useMemo(() => exampleGroups(processors), [processors]);
+  // counted only while open, and then only what the log adds (filters.tsx `recount`)
+  const countsRef = useRef<TypeCounts>(undefined);
+  const known = useMemo(
+    () =>
+      open
+        ? knownEventTypes(
+            sortedCounts((countsRef.current = recount(countsRef.current, events)).counts),
+            processors,
+          )
+        : [],
+    [open, events, processors],
+  );
   const edit = (value: string) => {
     setDraft(value);
     setOutcome(undefined);
   };
+  const blank = draft.trim() === "";
   const submit = async () => {
-    if (pending) return;
+    if (pending || blank) return;
     const parsed = parseAppendYaml(draft);
     if ("error" in parsed) return setOutcome(parsed);
     setPending(true);
@@ -69,27 +99,34 @@ export function AppendComposer({
         onSubmit={() => void submit()}
         language="yaml"
         label="Events to append"
-        placeholder="type: …  (a list appends several)"
+        placeholder="type: manual/note-added  (a YAML list appends several)"
         focusOnMount
+        complete={(text, pos, explicit) => appendCompletionsAt(text, pos, explicit, known)}
       />
       <div className="flex flex-wrap items-center gap-2">
-        {exampleTypes.length > 0 ? (
-          <NativeSelect
-            size="sm"
-            aria-label="Load an example"
-            value=""
-            onChange={(event) => {
-              if (event.target.value) edit(exampleYaml(event.target.value));
-            }}
-            className="max-w-64 min-w-0 font-mono text-xs"
-          >
-            <NativeSelectOption value="">Examples…</NativeSelectOption>
-            {exampleTypes.map((type) => (
-              <NativeSelectOption key={type} value={type}>
-                {type.replace("events.iterate.com/", "")}
-              </NativeSelectOption>
-            ))}
-          </NativeSelect>
+        {examples.length > 0 ? (
+          <DropdownMenu>
+            <DropdownMenuTrigger render={<Button variant="ghost" size="sm" />}>
+              <SparklesIcon /> Examples
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start" side="top" className="w-auto max-w-80">
+              {examples.map((group) => (
+                <DropdownMenuGroup key={group.label}>
+                  <DropdownMenuLabel className="truncate">{group.label}</DropdownMenuLabel>
+                  {group.types.map((type) => (
+                    <DropdownMenuItem
+                      key={type}
+                      title={type}
+                      onClick={() => edit(exampleYaml(type))}
+                      className="font-mono text-xs"
+                    >
+                      <span className="truncate">{shortEventType(type)}</span>
+                    </DropdownMenuItem>
+                  ))}
+                </DropdownMenuGroup>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
         ) : null}
         <span className="min-w-0 flex-1 truncate text-xs" role="status">
           {outcome && "error" in outcome ? (
@@ -102,14 +139,19 @@ export function AppendComposer({
             </span>
           ) : (
             <span className="hidden text-muted-foreground sm:inline">
-              One event, or a YAML list of them · ⌘↵ appends
+              YAML or JSON · Tab completes · ⌘↵ appends
             </span>
           )}
         </span>
         <Button variant="ghost" size="sm" onClick={() => setOpen(false)}>
           Close
         </Button>
-        <Button size="sm" onClick={() => void submit()} disabled={pending}>
+        <Button
+          size="sm"
+          onClick={() => void submit()}
+          disabled={pending || blank}
+          title="Append events (⌘↵)"
+        >
           {pending ? <Spinner /> : null} Append
         </Button>
       </div>

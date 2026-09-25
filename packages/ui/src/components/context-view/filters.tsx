@@ -1,5 +1,6 @@
 // Filtering the log, as pure functions: by type (the set left ticked), by a text query over the
-// type and the payload's JSON, by the actor who appended. Plus the two short forms every row uses.
+// type and the payload's JSON, by the actor who appended, by an offset range (the old platform's
+// `from`/`to`). Plus the two short forms every row uses.
 // `refilter` and `recount` follow a log that grows at either end without passing over all of it
 // again (folds.tsx `growthOf`): a JSON.stringify per event per append is too slow at 100,000.
 import { growthOf } from "./folds.tsx";
@@ -12,6 +13,10 @@ export type ContextViewFilter = {
   types: ReadonlySet<string>;
   /** An actor id to narrow to (their events only). */
   actor?: string;
+  /** The lowest offset shown, inclusive. */
+  from?: number;
+  /** The highest offset shown, inclusive. */
+  to?: number;
 };
 
 export function filterEvents(
@@ -22,6 +27,8 @@ export function filterEvents(
   return events.filter((event) => {
     if (filter.types.size > 0 && !filter.types.has(event.type)) return false;
     if (filter.actor && event.source?.principal?.actor !== filter.actor) return false;
+    if (filter.from !== undefined && event.offset < filter.from) return false;
+    if (filter.to !== undefined && event.offset > filter.to) return false;
     if (!query) return true;
     return (
       event.type.toLowerCase().includes(query) ||
@@ -34,7 +41,11 @@ export function filterEvents(
 
 /** Whether a filter narrows anything. */
 export const narrows = (filter: ContextViewFilter): boolean =>
-  Boolean(filter.query.trim()) || filter.types.size > 0 || Boolean(filter.actor);
+  Boolean(filter.query.trim()) ||
+  filter.types.size > 0 ||
+  Boolean(filter.actor) ||
+  filter.from !== undefined ||
+  filter.to !== undefined;
 
 /** Whether two filters narrow the same way (the view's filter is rebuilt from the URL on every
  *  change of it, the inspected event's too). */
@@ -42,6 +53,8 @@ function sameFilter(a: ContextViewFilter, b: ContextViewFilter): boolean {
   return (
     a.query.trim() === b.query.trim() &&
     a.actor === b.actor &&
+    a.from === b.from &&
+    a.to === b.to &&
     a.types.size === b.types.size &&
     [...a.types].every((type) => b.types.has(type))
   );
@@ -111,6 +124,27 @@ function countTypes(counts: Map<string, number>, events: readonly ContextViewEve
 /** Counts by type as the filter row lists them: most frequent first, ties by name. */
 export function sortedCounts(counts: Map<string, number>): [type: string, count: number][] {
   return [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+}
+
+/** The type chips of the filter row: the log's counts, then every ticked type the loaded log does
+ *  not hold (a link's `types`, a type only in older pages) with a count of 0 — so a selection that
+ *  hides everything can still be seen and unticked (the old platform's stale selections). */
+export function typeChips(
+  counts: readonly [type: string, count: number][],
+  ticked: ReadonlySet<string>,
+): [type: string, count: number][] {
+  const listed = new Set(counts.map(([type]) => type));
+  const absent = [...ticked].filter((type) => !listed.has(type)).sort();
+  return [...counts, ...absent.map((type): [string, number] => [type, 0])];
+}
+
+/** An offset box's text as a bound: blank = no bound, a number = that offset (a negative clamped to
+ *  0, a fraction cut), anything else = no change (`null`), so a stray key never empties the feed. */
+export function offsetBound(text: string): number | undefined | null {
+  const trimmed = text.trim();
+  if (trimmed === "") return undefined;
+  const parsed = Number(trimmed.replace(/^#/, ""));
+  return Number.isFinite(parsed) ? Math.max(0, Math.trunc(parsed)) : null;
 }
 
 /** The event type without its `events.iterate.com/` prefix. */

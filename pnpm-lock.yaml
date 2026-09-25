@@ -1048,6 +1048,9 @@ importers:
       '@base-ui/react':
         specifier: ^1.8.0
         version: 1.8.0(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
+      '@codemirror/autocomplete':
+        specifier: ^6.20.3
+        version: 6.20.3
       '@codemirror/lang-json':
         specifier: 'catalog:'
         version: 6.0.2
@@ -1060,6 +1063,9 @@ importers:
       '@codemirror/search':
         specifier: 'catalog:'
         version: 6.7.2
+      '@codemirror/state':
+        specifier: ^6.7.6
+        version: 6.7.6
       '@codemirror/view':
         specifier: ^6.43.13
         version: 6.43.13

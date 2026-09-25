@@ -58,13 +58,20 @@ export function rendererFor<T>(
   return best?.entry;
 }
 
-/** One row of the context's processors table (`itx.processors.list()`). */
+/** One row of the context's subscriptions table (`itx.subscriptions.list()`): a subscriber; one
+ *  that hosts a facet is a processor. */
 export type ContextViewProcessor = {
   name: string;
   target: string;
   consumes?: string[];
   configuredAtOffset: number;
+  /** Where cursor delivery starts (absent = from `configuredAtOffset`). */
+  afterOffset?: number;
   hostedFacet?: { name: string; className: string; cacheKey?: string; restarts: number };
+  /** A row delivered at-least-once: the offset the last acked call confirmed, the retry attempt. */
+  cursor?: { confirmedOffset: number; attempt: number; nextAttemptAtMs?: number };
+  /** Delivery gave up after its retries. */
+  halted?: { afterOffset: number; attempts: number; error?: string };
 };
 
 /** Who acted on the context, newest first, from the log's stamps. */
@@ -76,4 +83,10 @@ export type ContextViewPresence = {
 };
 
 /** One live state as the processors panel renders it (the SDK's `LiveStateResult`, structurally). */
-export type LiveStateView = { status: string; value: unknown; error?: string };
+export type LiveStateView = {
+  status: string;
+  value: unknown;
+  /** The revision the value is at: `core`'s is the offset its snapshot reduced through. */
+  rev?: number | null;
+  error?: string;
+};

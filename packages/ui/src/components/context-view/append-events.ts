@@ -56,13 +56,34 @@ export function exampleYaml(type: string): string {
   return stringify({ type, payload: {} });
 }
 
-/** The types the context's processors consume, each once, sorted — the examples a person can load:
- *  what some processor here reacts to. Wildcards (`*`, `…/*`) name no one type and are left out. */
-export function exampleTypes(processors: readonly { consumes?: readonly string[] }[]): string[] {
-  const types = new Set<string>();
-  for (const processor of processors)
-    for (const type of processor.consumes || []) if (!type.includes("*")) types.add(type);
-  return [...types].sort();
+/** The examples a person can load, grouped by the processors that consume them (the old platform's
+ *  examples panel, one group per processor): what some processor here reacts to. Processors that
+ *  consume the same types share one group (a tab's live-state subscribers are many and alike), named
+ *  by the first and how many more; a type shows once, in its first group. Wildcards (`*`, `…/*`)
+ *  name no one type and are left out; a group with no type left is dropped. */
+export function exampleGroups(
+  processors: readonly { name: string; consumes?: readonly string[] }[],
+): { label: string; types: string[] }[] {
+  const byTypes = new Map<string, { names: string[]; types: string[] }>();
+  for (const processor of [...processors].sort((a, b) => a.name.localeCompare(b.name))) {
+    const types = [...new Set(processor.consumes || [])]
+      .filter((type) => !type.includes("*"))
+      .sort();
+    const key = types.join("\n");
+    const group = byTypes.get(key) || { names: [], types };
+    group.names.push(processor.name);
+    byTypes.set(key, group);
+  }
+  const shown = new Set<string>();
+  const groups: { label: string; types: string[] }[] = [];
+  for (const { names, types } of byTypes.values()) {
+    const fresh = types.filter((type) => !shown.has(type));
+    for (const type of fresh) shown.add(type);
+    if (fresh.length === 0) continue;
+    const label = names.length > 1 ? `${names[0]!} +${String(names.length - 1)}` : names[0]!;
+    groups.push({ label, types: fresh });
+  }
+  return groups;
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {

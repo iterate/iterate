@@ -199,7 +199,7 @@ export type IterateContextHandle = LiveStateItx & {
     afterOffset?: number,
     limit?: number,
   ): Promise<{ events: unknown[]; atHead: boolean; scannedThroughOffset: number }>;
-  processors: { list(): Promise<SubscriptionListEntry[]> | SubscriptionListEntry[] };
+  subscriptions: { list(): Promise<SubscriptionListEntry[]> | SubscriptionListEntry[] };
   rpcStubs: { list(): Promise<string[]> | string[] };
   invoke(call: string): Promise<unknown>;
 };
@@ -218,9 +218,11 @@ const LIVE_STATE_CONNECTING: LiveStateResult = {
  *  `history: "tail"` (the default) reads the newest page only — a context of 100,000 events opens
  *  as fast as one of 10 — and `older.loadOlder()` reads the page below what is held; `"all"` reads
  *  every page from the first, for a consumer that folds the whole log (the agents chat). `head` is
- *  the newest offset known, so a view can say how much of the log it holds. Off that same log, THE PROCESSORS TABLE, re-read whenever the
- *  log grows a row-changing event (a subscription configured, halted or resumed — the table is core
- *  state, one call away, no push of its own), and WHO IS HERE: the rpc stubs lent right now
+ *  the newest offset known, so a view can say how much of the log it holds. Off that same log, THE SUBSCRIPTIONS TABLE (`itx.subscriptions.list()`:
+ *  every subscriber — a row that hosts a facet is a processor — with its delivery cursor), re-read
+ *  whenever the log grows a row-changing event (a subscription configured, halted or resumed — the
+ *  table is core state, one call away, no push of its own) and as the head moves (at most once a
+ *  second, so a cursor's confirmed offset follows its deliveries), and WHO IS HERE: the rpc stubs lent right now
  *  (`itx.rpcStubs.list()` — physical, re-read at every new head, since presence changes are
  *  ephemeral facts) and, from the log, every principal that acted, newest first. And named facets'
  *  LIVE STATE, each seeded through `itx.facets.get('<name>').liveSnapshot()` — one entry per name,
@@ -278,7 +280,7 @@ export function useIterateContext(
   // per frame
   const headForReads = useThrottled(head, 1000);
 
-  // ── the processors table ──
+  // ── the subscriptions table (returned as `processors`: its hosted rows are the processors) ──
   // The table and the last failure remember WHICH itx they came from: a page that swaps contexts
   // (one route, another organization) shows an empty, not-yet-loaded table for the new one rather
   // than the old one's rows or error until the new read lands.
@@ -290,7 +292,7 @@ export function useIterateContext(
   useEffect(() => {
     if (!itx) return;
     let disposed = false;
-    Promise.resolve(itx.processors.list()).then(
+    Promise.resolve(itx.subscriptions.list()).then(
       (list) => {
         if (disposed) return;
         setTable({ itx, rows: list });
@@ -302,7 +304,7 @@ export function useIterateContext(
     return () => {
       disposed = true;
     };
-  }, [itx, tableVersion]);
+  }, [itx, tableVersion, headForReads]);
   const currentTable = itx && table?.itx === itx ? table : undefined;
 
   // ── who is here ──

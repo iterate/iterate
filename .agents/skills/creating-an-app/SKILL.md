@@ -46,8 +46,11 @@ Then run `pnpm install` and `pnpm --dir apps/<app> routes:generate`.
 | `apps/dash/src/apps.ts`                                                                       | only if the app opens a project: the dash's directory, keyed by the same name                                                                                  |
 | `envs.ts` `osEnvs.prd.projectWildcard.excludedHostnames`                                      | only for a custom domain under `iterate.com`                                                                                                                   |
 
-The parent `<app>-preview` Worker does not need to exist in advance. The first preview deploy
-creates it from the same config.
+The parent `<app>` Worker on the dev/preview account must exist before the app's first PR
+preview: a Worker Preview branches from it, and without it the preview deploy fails with "the
+parent worker <app> is missing". The Preview parents workflow deploys it from `main`, which a new
+app is not on yet, so deploy it once by hand from the PR's branch:
+`pnpm --dir apps/<app> run deploy --env preview` (it reads Doppler `<app>/preview`, below).
 
 ## 3. Doppler and the prd deploy
 

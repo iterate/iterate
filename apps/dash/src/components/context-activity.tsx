@@ -12,9 +12,7 @@ import { factRenderers } from "../lib/fact-renderers.tsx";
 
 export type ActivityItx = IterateContextHandle & {
   append: IterateContextApi["append"];
-  processors: IterateContextHandle["processors"] & {
-    enable(name: string): Promise<unknown>;
-  };
+  processors: { enable(name: string): Promise<unknown> };
 };
 
 export function ContextActivity({

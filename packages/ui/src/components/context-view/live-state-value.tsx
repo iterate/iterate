@@ -1,11 +1,21 @@
 // One live state in the processors panel — the core reduce's under the name `core`, a hosted
-// facet's under its own — rendered as YAML (ContextView renders every entry of its source's
-// `liveState` with it).
+// facet's under its own — Pretty (fields, pretty-state.tsx; the core reduce read as its tables) or
+// Raw (YAML), as the panel's toggle says.
 import { SerializedObjectCodeBlock } from "../serialized-object-code-block.tsx";
 import { Spinner } from "../spinner.tsx";
+import { CorePrettyState, PrettyFields } from "./pretty-state.tsx";
 import type { LiveStateView } from "./types.tsx";
 
-export function LiveStateValue({ state }: { state: LiveStateView }) {
+export function LiveStateValue({
+  state,
+  view,
+  core,
+}: {
+  state: LiveStateView;
+  view: "pretty" | "raw";
+  /** The core reduce: Pretty reads it as its tables. */
+  core: boolean;
+}) {
   if (state.status === "error")
     return (
       <p data-type="error" className="text-xs text-destructive">
@@ -18,5 +28,14 @@ export function LiveStateValue({ state }: { state: LiveStateView }) {
         <Spinner /> Connecting…
       </p>
     );
-  return <SerializedObjectCodeBlock data={state.value} initialFormat="yaml" showToggle={false} />;
+  if (view === "raw")
+    return (
+      <SerializedObjectCodeBlock
+        data={state.value}
+        initialFormat="yaml"
+        showToggle={false}
+        className="max-h-[28rem]"
+      />
+    );
+  return core ? <CorePrettyState state={state.value} /> : <PrettyFields value={state.value} />;
 }

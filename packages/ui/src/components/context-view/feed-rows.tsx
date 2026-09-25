@@ -6,7 +6,14 @@ import { memo } from "react";
 import { ChevronDownIcon, ChevronRightIcon } from "lucide-react";
 import { cn } from "cn";
 import { housekeepingSummary } from "./core-renderers.tsx";
-import { EventSentence, formatClockTime, RowGutter } from "./event-row.tsx";
+import {
+  EventSentence,
+  formatClockTime,
+  RowOffset,
+  RowTimes,
+  RowWho,
+  rowClass,
+} from "./event-row.tsx";
 import { actorLabel } from "./filters.tsx";
 import type { ContextViewEvent, EventRenderers } from "./types.tsx";
 
@@ -25,7 +32,7 @@ export const DaySeparator = memo(function DaySeparator({ date }: { date: Date })
             year: date.getFullYear() === today.getFullYear() ? undefined : "numeric",
           });
   return (
-    <div className="flex items-center gap-3 px-2 pt-4 pb-1">
+    <div className="flex items-center gap-3 border-b border-border/40 px-2 pt-4 pb-1">
       <span className="text-xs font-medium text-muted-foreground">{label}</span>
       <span className="h-px flex-1 bg-border" />
     </div>
@@ -34,9 +41,9 @@ export const DaySeparator = memo(function DaySeparator({ date }: { date: Date })
 
 function Chevron({ open }: { open: boolean }) {
   return open ? (
-    <ChevronDownIcon className="size-3.5 shrink-0 text-muted-foreground" />
+    <ChevronDownIcon className="size-3.5 shrink-0 self-center text-muted-foreground" />
   ) : (
-    <ChevronRightIcon className="size-3.5 shrink-0 text-muted-foreground" />
+    <ChevronRightIcon className="size-3.5 shrink-0 self-center text-muted-foreground" />
   );
 }
 
@@ -67,10 +74,10 @@ export const RepeatRow = memo(function RepeatRow({
       type="button"
       onClick={() => onToggle(itemKey)}
       aria-expanded={open}
-      className="flex w-full min-w-0 items-start gap-3 overflow-hidden rounded-md px-2 py-1 text-left hover:bg-muted/60"
+      className={rowClass()}
     >
-      <RowGutter event={first} previous={previous} />
-      <span className="flex min-w-0 flex-1 items-start gap-2">
+      <RowOffset offset={first.offset} />
+      <span className="flex min-w-0 flex-1 items-baseline gap-2">
         <EventSentence event={first} renderers={renderers} className="min-w-0 flex-1" />
         <span
           className="shrink-0 rounded-full bg-muted px-1.5 text-[11px] text-muted-foreground tabular-nums"
@@ -80,11 +87,8 @@ export const RepeatRow = memo(function RepeatRow({
         </span>
         <Chevron open={open} />
       </span>
-      {showWho && who ? (
-        <span className="hidden max-w-40 shrink-0 truncate pt-px text-xs text-muted-foreground md:inline">
-          {who}
-        </span>
-      ) : null}
+      {showWho && who ? <RowWho who={who} /> : null}
+      <RowTimes event={first} previous={previous} />
     </button>
   );
 });
@@ -110,11 +114,9 @@ export const HousekeepingRow = memo(function HousekeepingRow({
       type="button"
       onClick={() => onToggle(itemKey)}
       aria-expanded={open}
-      className={cn(
-        "flex w-full min-w-0 items-start gap-3 overflow-hidden rounded-md px-2 py-1 text-left text-muted-foreground hover:bg-muted/60",
-      )}
+      className={cn(rowClass(), "text-muted-foreground")}
     >
-      <RowGutter event={first} previous={previous} />
+      <RowOffset offset={first.offset} />
       <span className="flex min-w-0 flex-1 items-baseline gap-2 text-xs">
         <span className="truncate">
           {events.length} housekeeping events{" "}
@@ -124,6 +126,7 @@ export const HousekeepingRow = memo(function HousekeepingRow({
         </span>
         <Chevron open={open} />
       </span>
+      <RowTimes event={first} previous={previous} />
     </button>
   );
 });

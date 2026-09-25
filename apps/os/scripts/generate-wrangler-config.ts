@@ -4,8 +4,8 @@ import { osEnvs, PREVIEW_AND_DEV_ACCOUNT_ID, type OsEnv } from "../../../envs.ts
 import { OBSERVABILITY, registrableDomainOf } from "../../../scripts/lib/wrangler-config.ts";
 import { TEST_LINK_EMAIL_DOMAIN } from "../src/test-link.ts";
 
-/** The `urls` half of `APP_CONFIG` (src/app-config.ts) a deployment gets from envs.ts — and the zones
- *  of its projects' custom hostnames (`customHostnames`) — as the
+/** The `urls` half of `APP_CONFIG` (src/app-config.ts) a deployment gets from envs.ts — the zones
+ *  of its projects' custom hostnames (`customHostnames`) and its `admins` too — as the
  *  override vars the parser merges on top of the Doppler blob: `APP_CONFIG_URLS__<KEY>`. An object
  *  travels as a JSON STRING — the parser reads string vars only. A blank var is unset. */
 function urlVars(env: OsEnv) {
@@ -13,6 +13,7 @@ function urlVars(env: OsEnv) {
   if (new URL(env.mcpBaseUrl).origin !== new URL(env.baseUrl).origin)
     vars.APP_CONFIG_URLS__MCP = new URL(env.mcpBaseUrl).origin;
   if (env.dashBaseUrl) vars.APP_CONFIG_URLS__DASH = env.dashBaseUrl;
+  if (env.admins) vars.APP_CONFIG_ADMINS = JSON.stringify(env.admins);
   if (env.ingressRouting)
     vars.APP_CONFIG_URLS__INGRESS_ROUTING = JSON.stringify(env.ingressRouting);
   if (env.projectWildcard)

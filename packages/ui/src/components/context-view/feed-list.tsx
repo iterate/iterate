@@ -9,8 +9,11 @@
 // arrive above it (an older page) or below it (a reader in history is never yanked); rows are keyed
 // by offset, never by index, which is what lets that anchor find its row again after a prepend.
 // Nearing the top of what is loaded (the reader scrolled there, or the log is shorter than the
-// view) asks for the page below it.
-import { useCallback, useEffect, useMemo, useRef, type ReactNode } from "react";
+// view) asks for the page below it. Off the tail, a "Jump to latest" pill (with how many rows came
+// in since) pins it again. The inspected row is scrolled into view once per inspection (the
+// inspector paging the log, a link to an event).
+import { useCallback, useEffect, useMemo, useRef, type CSSProperties, type ReactNode } from "react";
+import { ArrowDownIcon } from "lucide-react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { Spinner } from "../spinner.tsx";
 import { EventRow } from "./event-row.tsx";
@@ -89,7 +92,7 @@ export function FeedList({
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
-  const { stuckRef, stick } = useStickToBottom({
+  const { stuckRef, stuck, stick, release } = useStickToBottom({
     scrollElementRef: scrollRef,
     contentElementRef: contentRef,
   });
@@ -105,9 +108,11 @@ export function FeedList({
     (index: number) => {
       const row = index === 0 ? undefined : rows[index - 1];
       if (!row) return 32;
-      if (row.kind === "day") return 36;
-      if (row.kind === "member") return row.quiet ? 28 : 46;
-      return mode === "pretty-raw" && row.kind === "event" ? 46 : 28;
+      // measured: a sentence 30, a raw line or a fold 27, both lines 48, a day 37
+      if (row.kind === "day") return 37;
+      if (row.kind === "member") return row.quiet ? 30 : 48;
+      if (row.kind !== "event") return 27;
+      return mode === "pretty-raw" ? 48 : mode === "raw" ? 27 : 30;
     },
     [rows, mode],
   );
@@ -129,6 +134,30 @@ export function FeedList({
   });
   const virtualItems = virtualizer.getVirtualItems();
 
+  // The inspected row, scrolled into view once per inspection (the inspector's paging, a link's
+  // `event`) — never again as rows arrive, so a reader who scrolled away from it stays there.
+  const revealRef = useRef<number | undefined>(undefined);
+  useEffect(() => {
+    revealRef.current = inspected;
+  }, [inspected]);
+  useEffect(() => {
+    const offset = revealRef.current;
+    if (offset === undefined || rows.length === 0) return;
+    revealRef.current = undefined;
+    const index = rows.findIndex((row) => rowOffset(row) === offset);
+    if (index < 0) return; // folded away, or not loaded: the inspector shows it all the same
+    release();
+    virtualizer.scrollToIndex(index + 1, { align: "auto" });
+  });
+  // rows that came in since the reader left the tail, for the pill
+  const lastOffset = rows.length > 0 ? lastOffsetOf(rows[rows.length - 1]!) : 0;
+  const leftAtRef = useRef(lastOffset);
+  if (stuck) leftAtRef.current = lastOffset;
+  let arrived = 0;
+  if (!stuck)
+    for (let at = rows.length - 1; at >= 0 && lastOffsetOf(rows[at]!) > leftAtRef.current; at--)
+      if (rows[at]!.kind !== "day") arrived += 1;
+
   const firstInView = virtualItems[0]?.index ?? 0;
   const { loadOlder, loading, exhausted } = older;
   useEffect(() => {
@@ -140,37 +169,57 @@ export function FeedList({
     if (firstInView < LOAD_OLDER_WITHIN_ROWS && (fits || !stuckRef.current)) loadOlder();
   }, [firstInView, loading, exhausted, loadOlder, rows.length, stuckRef]);
 
+  // the offset gutter fits the largest offset, `#` included, so every row's body starts in line
+  const gutter = {
+    "--offset-width": `${String(String(lastOffset).length + 1)}ch`,
+  } as CSSProperties;
   return (
-    <div
-      ref={scrollRef}
-      role="log"
-      aria-label="Events"
-      className="min-h-0 flex-1 overflow-y-auto overscroll-contain"
-    >
-      {rows.length === 0 ? (
-        empty
-      ) : (
-        <div
-          ref={contentRef}
-          className="relative w-full"
-          style={{ height: virtualizer.getTotalSize() }}
+    <div className="relative flex min-h-0 flex-1 flex-col">
+      <div
+        ref={scrollRef}
+        role="log"
+        aria-label="Events"
+        className="min-h-0 flex-1 overflow-y-auto overscroll-contain"
+        style={gutter}
+      >
+        {rows.length === 0 ? (
+          empty
+        ) : (
+          <div
+            ref={contentRef}
+            className="relative w-full"
+            style={{ height: virtualizer.getTotalSize() }}
+          >
+            {virtualItems.map((virtualItem) => (
+              <div
+                key={virtualItem.key}
+                data-index={virtualItem.index}
+                ref={virtualizer.measureElement}
+                className="absolute top-0 left-0 w-full"
+                style={{ transform: `translateY(${String(virtualItem.start)}px)` }}
+              >
+                {virtualItem.index === 0 ? (
+                  <OlderRow loading={loading} exhausted={exhausted} onLoad={loadOlder} />
+                ) : (
+                  renderRow(virtualItem.index - 1)
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+      {stuck || rows.length === 0 ? null : (
+        <button
+          type="button"
+          onClick={stick}
+          className="absolute bottom-3 left-1/2 flex -translate-x-1/2 items-center gap-1.5 rounded-full border bg-background px-3 py-1 text-xs text-muted-foreground shadow-sm hover:text-foreground"
         >
-          {virtualItems.map((virtualItem) => (
-            <div
-              key={virtualItem.key}
-              data-index={virtualItem.index}
-              ref={virtualizer.measureElement}
-              className="absolute top-0 left-0 w-full"
-              style={{ transform: `translateY(${String(virtualItem.start)}px)` }}
-            >
-              {virtualItem.index === 0 ? (
-                <OlderRow loading={loading} exhausted={exhausted} onLoad={loadOlder} />
-              ) : (
-                renderRow(virtualItem.index - 1)
-              )}
-            </div>
-          ))}
-        </div>
+          <ArrowDownIcon className="size-3.5" />
+          Jump to latest
+          {arrived > 0 ? (
+            <span className="tabular-nums text-foreground">· {arrived} new</span>
+          ) : null}
+        </button>
       )}
     </div>
   );
@@ -231,6 +280,17 @@ export function FeedList({
       />
     );
   }
+}
+
+/** The event a row opens in the inspector: an event's, an opened fold member's; none for a day
+ *  mark or a fold (they open in place). */
+function rowOffset(row: FeedItem | MemberRow): number | undefined {
+  return row.kind === "event" || row.kind === "member" ? row.event.offset : undefined;
+}
+
+/** The last offset a row covers (a day mark: 0 — it never ends the list). */
+function lastOffsetOf(row: FeedItem | MemberRow): number {
+  return row.kind === "member" ? row.event.offset : (lastEventOf(row)?.offset ?? 0);
 }
 
 /** The top of what is loaded: a way to read the page below it, that page being read, or the

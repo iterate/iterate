@@ -84,6 +84,9 @@ export interface OsEnv {
   /** The dash's origin for this deployment (apps/dash) — where the platform's landing page `/` sends
    *  a person, the platform being headless. Unset ⇒ the page names no dash (a preview has none). */
   dashBaseUrl?: string;
+  /** The platform admins (apps/os src/app-config.ts `admins`): exact email addresses, not secrets,
+   *  so here rather than in Doppler; the generator hands them to the worker as `APP_CONFIG_ADMINS`. */
+  admins?: string[];
   /** How projects are reached over HTTP (`APP_CONFIG urls.ingressRouting`): `subdomains` hangs
    *  `<routingSlug>--<project>.<hostname>` and the apex `<project>.<hostname>` under a wildcard route the
    *  generator adds on `hostname`'s zone (ensure-resources creates the wildcard DNS record); `paths`
@@ -146,6 +149,7 @@ export const osEnvs: Record<string, OsEnv> = {
     baseUrl: "https://os.iterate.com",
     mcpBaseUrl: "https://mcp.iterate.com",
     dashBaseUrl: "https://dash.iterate.com",
+    admins: ["jonas@nustom.com", "misha@nustom.com"],
     posthogProjectKey: ITERATE_POSTHOG_PROJECT_KEY,
     ingressRouting: { type: "subdomains", hostname: "iterate.app" },
     // iterate.com and its first-level names are the iterate project's site; other domains are the

@@ -68,3 +68,28 @@ test("a long log opens at its newest events and reads older ones as the reader s
   await feed.getByText("n 1", { exact: true }).waitFor();
   expect(await page.locator("[data-index]").count()).toBeLessThan(300);
 });
+
+test("an event opens in the inspector as YAML, and the arrow keys page the log", async ({
+  page,
+  baseURL,
+  helpers,
+}) => {
+  helpers.appOrigin("dash");
+  await using fixture = await helpers.createFixture("inspector", { app: baseURL });
+  await fixture.itx
+    .cd("/pages")
+    .append(
+      { type: "manual/first-added", payload: { n: 1 } },
+      { type: "manual/second-added", payload: { n: 2 } },
+    );
+  await page.goto(`/projects/${fixture.project.slug}/contexts/pages`);
+  await page.getByRole("log", { name: "Events" }).getByText("manual/second-added").click();
+  const inspector = page.getByRole("dialog");
+  await inspector.getByRole("heading", { name: "manual/second-added" }).waitFor();
+  await inspector.getByText("type: manual/second-added").waitFor();
+  // ← the event before, → back again; each step is the page's URL
+  await page.keyboard.press("ArrowLeft");
+  await inspector.getByRole("heading", { name: "manual/first-added" }).waitFor();
+  await page.keyboard.press("ArrowRight");
+  await inspector.getByRole("heading", { name: "manual/second-added" }).waitFor();
+});

@@ -3,7 +3,7 @@
 import { expect, test } from "vitest";
 import {
   DEFAULT_APPEND_YAML,
-  exampleTypes,
+  exampleGroups,
   exampleYaml,
   parseAppendYaml,
 } from "./append-events.ts";
@@ -80,12 +80,41 @@ test("an example loads as a draft that parses back to its type", () => {
   });
 });
 
-test("the examples are the consumed types, once each, sorted, wildcards left out", () => {
-  expect(
-    exampleTypes([
-      { consumes: ["demo/b", "*", "demo/a"] },
-      {},
-      { consumes: ["events.iterate.com/itx/*", "demo/a"] },
-    ]),
-  ).toEqual(["demo/a", "demo/b"]);
+test.each([
+  {
+    name: "one group per processor, by name; types once each, sorted; wildcards left out",
+    processors: [
+      { name: "zeta", consumes: ["demo/b", "*", "demo/a", "demo/b"] },
+      { name: "empty" },
+      { name: "only-wildcards", consumes: ["events.iterate.com/itx/*"] },
+      { name: "alpha", consumes: ["events.iterate.com/itx/*", "demo/c"] },
+    ],
+    groups: [
+      { label: "alpha", types: ["demo/c"] },
+      { label: "zeta", types: ["demo/a", "demo/b"] },
+    ],
+  },
+  {
+    name: "processors that consume the same types share a group, named by the first and the rest",
+    processors: [
+      { name: "sub-b", consumes: ["itx/live-state-changed"] },
+      { name: "sub-a", consumes: ["itx/live-state-changed"] },
+      { name: "sub-c", consumes: ["itx/live-state-changed"] },
+    ],
+    groups: [{ label: "sub-a +2", types: ["itx/live-state-changed"] }],
+  },
+  {
+    name: "a type already shown is not shown again under a later group",
+    processors: [
+      { name: "a", consumes: ["x/one"] },
+      { name: "b", consumes: ["x/one", "x/two"] },
+      { name: "c", consumes: ["x/one"] },
+    ],
+    groups: [
+      { label: "a +1", types: ["x/one"] },
+      { label: "b", types: ["x/two"] },
+    ],
+  },
+])("examples: $name", ({ processors, groups }) => {
+  expect(exampleGroups(processors)).toEqual(groups);
 });

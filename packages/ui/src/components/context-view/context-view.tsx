@@ -24,7 +24,6 @@ import { useCallback, useMemo, useRef, useState, type ReactNode } from "react";
 import { FilterIcon, LayersIcon } from "lucide-react";
 import { cn } from "cn";
 import { Button } from "../button.tsx";
-import { Input } from "../input.tsx";
 import { Spinner } from "../spinner.tsx";
 import {
   contextViewFilterOf,
@@ -39,16 +38,15 @@ import {
   narrows,
   recount,
   refilter,
-  shortEventType,
   sortedCounts,
   type Filtered,
   type TypeCounts,
 } from "./filters.tsx";
 import { refold, sentenceText, type Fold } from "./folds.tsx";
 import { AppendComposer } from "./append-composer.tsx";
-import { exampleTypes, type ContextViewAppendEvent } from "./append-events.ts";
-import { LiveStateValue } from "./live-state-value.tsx";
-import { PresenceStrip } from "./presence-strip.tsx";
+import { type ContextViewAppendEvent } from "./append-events.ts";
+import { FilterRow } from "./filter-row.tsx";
+import { EventRate, PresenceStrip } from "./presence-strip.tsx";
 import { ProcessorsPanel } from "./processors-panel.tsx";
 import {
   type ContextViewEvent,
@@ -109,7 +107,6 @@ export function ContextView({
   const [opened, setOpened] = useState<ReadonlySet<string>>(() => new Set());
   /** Bumped by each append from here: the feed goes back to its tail to show it land. */
   const [followTail, setFollowTail] = useState(0);
-  const examples = useMemo(() => exampleTypes(processors), [processors]);
   // the platform's own events read as sentences everywhere; an app's renderers lie over them
   const allRenderers = useMemo(() => ({ ...coreEventRenderers, ...renderers }), [renderers]);
   const allInspectors = useMemo(() => ({ ...coreEventInspectors, ...inspectors }), [inspectors]);
@@ -151,12 +148,6 @@ export function ContextView({
     [events, filtering],
   );
   const filtered = narrows(filter);
-  const toggleType = (type: string) => {
-    const next = filter.types.has(type)
-      ? [...filter.types].filter((held) => held !== type)
-      : [...filter.types, type];
-    onStateChange({ types: next.length > 0 ? next : undefined });
-  };
   // stable, so the memoised rows skip the re-render every scroll frame and every append brings
   const toggleOpened = useCallback(
     (key: string) =>
@@ -186,6 +177,7 @@ export function ContextView({
         <span className="text-xs text-muted-foreground tabular-nums">
           {count}
           {caughtUp ? "" : " · loading"}
+          <EventRate events={events} />
         </span>
         <PresenceStrip
           actors={presence.actors}
@@ -238,44 +230,14 @@ export function ContextView({
         </Button>
       </div>
       {filtering ? (
-        <div className="flex flex-col gap-2">
-          <Input
-            value={filter.query}
-            onChange={(e) => onStateChange({ q: e.target.value || undefined })}
-            placeholder="Search type or payload"
-            className="h-8 text-sm"
-          />
-          <div className="flex flex-wrap gap-1">
-            {types.map(([type, count]) => (
-              <button
-                key={type}
-                type="button"
-                onClick={() => toggleType(type)}
-                aria-pressed={filter.types.has(type)}
-                className={cn(
-                  "rounded px-1.5 py-0.5 font-mono text-xs hover:bg-muted",
-                  filter.types.has(type) ? "bg-muted text-foreground" : "text-muted-foreground",
-                )}
-              >
-                {shortEventType(type)} <span className="tabular-nums">{count}</span>
-              </button>
-            ))}
-            {filtered ? (
-              <button
-                type="button"
-                onClick={() => onStateChange({ q: undefined, types: undefined, actor: undefined })}
-                className="px-1.5 py-0.5 text-xs text-muted-foreground underline-offset-2 hover:underline"
-              >
-                clear
-              </button>
-            ) : null}
-          </div>
-          {older.exhausted ? null : (
-            <p className="text-xs text-muted-foreground">
-              The filter searches the {loaded} events loaded; scroll up to load older ones.
-            </p>
-          )}
-        </div>
+        <FilterRow
+          filter={filter}
+          counts={types}
+          narrowed={filtered}
+          partial={!older.exhausted}
+          loaded={loaded}
+          onStateChange={onStateChange}
+        />
       ) : null}
       {error ? (
         <p data-type="error" className="text-sm text-destructive">
@@ -309,23 +271,28 @@ export function ContextView({
         <AppendComposer
           onAppend={onAppend}
           onAppended={() => setFollowTail((count) => count + 1)}
-          exampleTypes={examples}
+          events={events}
+          processors={processors}
         />
       ) : null}
       <EventInspector
-        event={inspected === undefined ? undefined : eventAt(events, inspected)}
+        events={events}
+        offset={inspected}
+        older={older}
         renderers={allRenderers}
         inspectors={allInspectors}
+        onNavigate={inspect}
         onClose={() => onStateChange({ event: undefined })}
       />
       <ProcessorsPanel
         open={Boolean(state.processors)}
         onClose={() => onStateChange({ processors: undefined })}
         processors={processors}
-        renderCoreState={() => <LiveStateValue state={liveState.core || LIVE_STATE_CONNECTING} />}
-        renderLiveState={(name) => (
-          <LiveStateValue state={liveState[name] || LIVE_STATE_CONNECTING} />
-        )}
+        presence={presence}
+        liveState={liveState}
+        events={events}
+        head={head}
+        onPickActor={(actor) => onStateChange({ actor, processors: undefined })}
       />
     </div>
   );
@@ -342,32 +309,12 @@ export type ContextViewSource = {
   older?: { loadOlder(): void; loading: boolean; exhausted: boolean };
   /** The newest offset of the log, so the strip can say how much of it is loaded. */
   head?: number;
+  /** The subscriptions table (`itx.subscriptions.list()`): a row hosting a facet is a processor. */
   processors: { rows: readonly ContextViewProcessor[]; error?: string };
   presence: { actors: readonly ContextViewPresence[]; rpcStubs: readonly string[] };
   /** Each live state by name — `core`, and every hosted facet's — for the processors panel. */
   liveState: Record<string, LiveStateView>;
 };
 
-/** A live state the source has not opened yet. */
-const LIVE_STATE_CONNECTING: LiveStateView = { status: "connecting", value: undefined };
-
 /** The whole log is loaded: nothing older to read. */
 const OLDER_EXHAUSTED = { loadOlder: () => {}, loading: false, exhausted: true };
-
-/** The event at `offset` in a log sorted by offset (a binary search: the log can be 100,000 long),
- *  or undefined when it is not loaded. */
-function eventAt(
-  events: readonly ContextViewEvent[],
-  offset: number,
-): ContextViewEvent | undefined {
-  let low = 0;
-  let high = events.length - 1;
-  while (low <= high) {
-    const middle = (low + high) >> 1;
-    const at = events[middle]!.offset;
-    if (at === offset) return events[middle];
-    if (at < offset) low = middle + 1;
-    else high = middle - 1;
-  }
-  return undefined;
-}

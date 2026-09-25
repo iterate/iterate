@@ -15,8 +15,10 @@
 // reader in history, or one who clicked a row open, is never yanked. A user scroll that lands back
 // at the bottom re-engages it. Releasing on touchstart also means it never writes scrollTop during a
 // touch fling (WebKit drops writes during momentum). `stick()` re-engages it from outside — the
-// view's own append, which the person wants to see land wherever they were reading.
-import { useCallback, useEffect, useRef, type RefObject } from "react";
+// view's own append, which the person wants to see land wherever they were reading; `release()`
+// lets go from outside — the feed scrolling to an event the reader stepped to. `stuck` is the same
+// fact as React state, set only when it flips, for the "Jump to latest" button.
+import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
 
 /** How close (px) to the bottom a user scroll must land to re-engage the stick. */
 const RESTICK_EPSILON_PX = 2;
@@ -29,8 +31,9 @@ export function useStickToBottom({
   /** The virtualizer's sizer: its resize (appends, late measurements) re-pins the bottom. It may
    *  mount after the scroller (behind an empty state), so it is observed after every render. */
   contentElementRef: RefObject<HTMLElement | null>;
-}): { stuckRef: RefObject<boolean>; stick: () => void } {
+}): { stuckRef: RefObject<boolean>; stuck: boolean; stick: () => void; release: () => void } {
   const stuck = useRef(true);
+  const [stuckState, setStuckState] = useState(true);
   const resizeObserverRef = useRef<ResizeObserver | null>(null);
 
   useEffect(() => {
@@ -51,6 +54,7 @@ export function useStickToBottom({
       // a breadcrumb: a released stick is the first suspect when a feed strands mid-history
       console.debug(`[stick-to-bottom] released: user-input:${event.type}`);
       stuck.current = false;
+      setStuckState(false);
     };
     // only an UPWARD wheel leaves the tail: wheeling down at the bottom would release into a dead
     // state where the next append writes nothing and no scroll event fires to re-stick
@@ -60,7 +64,9 @@ export function useStickToBottom({
     const onScroll = () => {
       if (stuck.current) return;
       const distance = scroller.scrollHeight - scroller.clientHeight - scroller.scrollTop;
-      if (distance <= RESTICK_EPSILON_PX) stuck.current = true;
+      if (distance > RESTICK_EPSILON_PX) return;
+      stuck.current = true;
+      setStuckState(true);
     };
     const releaseEvents = ["touchstart", "keydown", "pointerdown"] as const;
     for (const name of releaseEvents) scroller.addEventListener(name, release, { passive: true });
@@ -82,9 +88,15 @@ export function useStickToBottom({
 
   const stick = useCallback(() => {
     stuck.current = true;
+    setStuckState(true);
     const scroller = scrollElementRef.current;
     if (scroller) scroller.scrollTop = scroller.scrollHeight;
   }, [scrollElementRef]);
 
-  return { stuckRef: stuck, stick };
+  const release = useCallback(() => {
+    stuck.current = false;
+    setStuckState(false);
+  }, []);
+
+  return { stuckRef: stuck, stuck: stuckState, stick, release };
 }
