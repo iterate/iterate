@@ -4,7 +4,7 @@
  * the shop's one key (state.ts `oidcSigningKey`), so a relying party verifies
  * them exactly as it verifies Google's or Cloudflare's.
  */
-import { nowSeconds } from "./seal.ts";
+import { base64Url, nowSeconds } from "./seal.ts";
 import type { IntegrationFakeDeps } from "./state.ts";
 
 /** The discovery document for an issuer whose endpoints hang under it (`<issuer>/<path>`). */
@@ -75,22 +75,17 @@ export function tokenRequestClient(
   return { clientId: form.client_id || "", clientSecret: form.client_secret };
 }
 
-function base64Url(bytes: Uint8Array): string {
-  let binary = "";
-  for (const byte of bytes) binary += String.fromCharCode(byte);
-  return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/, "");
-}
-
 /** THE FAKES' ACCOUNT PICKER — what a real provider's sign-in page is for: a form asking which
  *  account (`fields`: `email`, and GitHub's `login`), submitted back to the same authorize URL
  *  with the rest of its query kept. A fake shows it when the request names no account and asks for
  *  a pick (`prompt=select_account`, or Cloudflare's login page); a test that names one skips it. */
 export function accountPicker(url: URL, fields: readonly ("email" | "login")[]): Response {
-  const escape = (value: string) =>
-    value.replaceAll("&", "&amp;").replaceAll('"', "&quot;").replaceAll("<", "&lt;");
   const hidden = [...url.searchParams]
     .filter(([key]) => !fields.includes(key as "email" | "login"))
-    .map(([key, value]) => `<input type="hidden" name="${escape(key)}" value="${escape(value)}">`)
+    .map(
+      ([key, value]) =>
+        `<input type="hidden" name="${escapeHtml(key)}" value="${escapeHtml(value)}">`,
+    )
     .join("");
   const inputs = fields
     .map(
@@ -99,7 +94,12 @@ export function accountPicker(url: URL, fields: readonly ("email" | "login")[]):
     )
     .join("<br>");
   return new Response(
-    `<!doctype html><title>Choose an account</title><h1>Choose an account</h1><form method="get" action="${escape(url.pathname)}">${hidden}${inputs}<br><button type="submit">Continue</button></form>`,
+    `<!doctype html><title>Choose an account</title><h1>Choose an account</h1><form method="get" action="${escapeHtml(url.pathname)}">${hidden}${inputs}<br><button type="submit">Continue</button></form>`,
     { headers: { "content-type": "text/html; charset=utf-8" } },
   );
+}
+
+/** Escape text for an HTML attribute value or text node: the fakes' account picker and consent page. */
+export function escapeHtml(value: string): string {
+  return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/"/g, "&quot;");
 }

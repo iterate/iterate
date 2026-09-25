@@ -32,13 +32,15 @@ export function randomSealKey(): string {
   return btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(32))));
 }
 
-function b64url(bytes: Uint8Array): string {
+/** base64url without padding: sealed blobs, PKCE challenges and JWT segments. */
+export function base64Url(bytes: Uint8Array): string {
   let bin = "";
   for (const b of bytes) bin += String.fromCharCode(b);
   return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 
-function fromB64url(s: string): Uint8Array {
+/** The inverse of {@link base64Url}. */
+export function bytesFromBase64Url(s: string): Uint8Array {
   const padded = s
     .replace(/-/g, "+")
     .replace(/_/g, "/")
@@ -57,13 +59,13 @@ export async function seal(payload: unknown, secret: string): Promise<string> {
   out[0] = VERSION;
   out.set(iv, 1);
   out.set(ciphertext, 13);
-  return b64url(out);
+  return base64Url(out);
 }
 
 /** Returns null on any failure: wrong key, tampered blob, malformed input. */
 export async function unseal<T>(token: string, secret: string): Promise<T | null> {
   try {
-    const bytes = fromB64url(token);
+    const bytes = bytesFromBase64Url(token);
     if (bytes[0] !== VERSION || bytes.length < 14) return null;
     const key = await getKey(secret);
     const plaintext = await crypto.subtle.decrypt(
@@ -108,5 +110,5 @@ export function nowSeconds(): number {
  */
 export async function pkceS256(verifier: string): Promise<string> {
   const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", encoder.encode(verifier)));
-  return b64url(digest);
+  return base64Url(digest);
 }

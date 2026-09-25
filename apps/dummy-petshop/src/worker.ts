@@ -38,6 +38,7 @@ import {
 } from "./github.ts";
 import { type Pet, seedPets } from "./pets.ts";
 import { handlePetsRpcRequest, petshopOpenApiDocument } from "./rpc.ts";
+import { escapeHtml } from "./oidc.ts";
 import { hmacSha256Hex, nowSeconds, pkceS256, seal, unseal } from "./seal.ts";
 import {
   GRAPHQL_LOGIN_PASSWORD,
@@ -158,10 +159,6 @@ function json(data: unknown, status = 200, headers: Record<string, string> = {})
 
 async function readJson(request: Request): Promise<Record<string, unknown>> {
   return ((await request.json().catch(() => null)) ?? {}) as Record<string, unknown>;
-}
-
-function escapeHtml(value: string): string {
-  return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/"/g, "&quot;");
 }
 
 // The index doubles as endpoint documentation, so anyone poking a deployed

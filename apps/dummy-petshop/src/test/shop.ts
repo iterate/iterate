@@ -1,3 +1,4 @@
+import { createHmac } from "node:crypto";
 import { memoryPetshop } from "../memory-state.ts";
 import { seedPets } from "../pets.ts";
 import { DEFAULT_CLIENT_ID, DEFAULT_CLIENT_SECRET } from "../state.ts";
@@ -45,3 +46,17 @@ export async function accessToken(shop: Shop): Promise<string> {
   });
   return (await token.json<{ access_token: string }>()).access_token;
 }
+
+/** Request options that present `token` as a bearer credential. */
+export const bearer = (token: string) => ({ headers: { authorization: `Bearer ${token}` } });
+
+/** Request options that POST `body` as JSON. */
+export const postJson = (body: unknown): RequestInit => ({
+  method: "POST",
+  body: JSON.stringify(body),
+});
+
+/** A webhook signature as GitHub spells it, `sha256=<hex hmac-sha256(secret, body)>`, which the OS
+ *  side verifies: computed with node:crypto, independent of seal.ts `hmacSha256Hex`. */
+export const hexHmac = (secret: string, body: string) =>
+  `sha256=${createHmac("sha256", secret).update(body).digest("hex")}`;

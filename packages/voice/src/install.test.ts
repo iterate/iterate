@@ -8,7 +8,7 @@ const versions = {
 
 test("a project without voice gets the agents and voice folders committed, installed from those commits", async () => {
   const root = project();
-  expect(await ensureVoiceAgent(root as never, versions)).toBe("ready");
+  expect(await ensureVoiceAgent(root, versions)).toBe("ready");
   expect(root.commits.map((commit) => commit.changes.map((change) => change.path))).toEqual([
     ["agents/package.json", "agents/index.ts", "package.json"],
     ["voice/package.json", "voice/worker.ts", "package.json"],
@@ -54,7 +54,7 @@ test("a voice/ folder the project already has is installed as it is, never overw
   };
   root.files["voice/package.json"] = own["package.json"];
   root.files["voice/worker.ts"] = own["worker.ts"];
-  expect(await ensureVoiceAgent(root as never, versions)).toBe("ready");
+  expect(await ensureVoiceAgent(root, versions)).toBe("ready");
   expect(root.commits.map((commit) => commit.changes[0]!.path)).toEqual(["agents/package.json"]);
   expect(JSON.parse(root.kv.values["voice/runtime"]!)).toMatchObject({ source: own });
 });
@@ -62,7 +62,7 @@ test("a voice/ folder the project already has is installed as it is, never overw
 test("a project without an OpenAI key and none given is asked for one, and nothing is installed", async () => {
   const root = project();
   root.secrets.list.mockResolvedValue([]);
-  expect(await ensureVoiceAgent(root as never, versions)).toBe("needs-openai-key");
+  expect(await ensureVoiceAgent(root, versions)).toBe("needs-openai-key");
   expect(root).toMatchObject({ commits: [] });
   expect(root.append).not.toHaveBeenCalled();
 });
@@ -71,9 +71,7 @@ test("a broken existing voice service is reported without replacing it", async (
   const root = project();
   root.rewriteRules.get.mockResolvedValue({ match: "itx.voice", target: "custom", context: "/" });
   root.voice.health.mockRejectedValue(new Error("existing service unavailable"));
-  await expect(ensureVoiceAgent(root as never, versions)).rejects.toThrow(
-    "existing service unavailable",
-  );
+  await expect(ensureVoiceAgent(root, versions)).rejects.toThrow("existing service unavailable");
   expect(root).toMatchObject({ commits: [] });
   expect(root.append).not.toHaveBeenCalled();
   expect(root.kv.put).not.toHaveBeenCalled();
@@ -81,7 +79,7 @@ test("a broken existing voice service is reported without replacing it", async (
 
 test("voice refuses a project without the agents app", async () => {
   const root = project();
-  await expect(installVoice(root as never, voiceFolder(versions.voice))).rejects.toThrow(
+  await expect(installVoice(root, voiceFolder(versions.voice))).rejects.toThrow(
     "Voice needs the agents app",
   );
   expect(root.append).not.toHaveBeenCalled();
@@ -100,7 +98,7 @@ function project() {
       rules[event.payload.match] = event.payload;
     return [];
   });
-  return {
+  const root = {
     files,
     commits,
     whoami: vi.fn().mockResolvedValue({ path: "/" }),
@@ -138,4 +136,7 @@ function project() {
     invoke: vi.fn(),
     voice: { health: vi.fn().mockResolvedValue({ ok: true }) },
   };
+  // The fake implements only the calls installing makes; typed once as what ensureVoiceAgent takes,
+  // it keeps its mocks and in-memory records for the assertions.
+  return root as typeof root & Parameters<typeof ensureVoiceAgent>[0];
 }

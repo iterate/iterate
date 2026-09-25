@@ -10,12 +10,12 @@ import { RPCLink } from "@orpc/client/fetch";
 import type { RouterClient } from "@orpc/server";
 import { expect, test } from "vitest";
 import type { petsRouter } from "./rpc.ts";
-import { accessToken, makeShop, ORIGIN, type Shop } from "./test/shop.ts";
+import { accessToken, bearer, makeShop, ORIGIN, type Shop } from "./test/shop.ts";
 
 test("openapi.json: is served for a valid token and lists the pet operations", async () => {
   const shop = makeShop();
   const token = await accessToken(shop);
-  const response = await shop.call("/openapi.json", { headers: bearer(token) });
+  const response = await shop.call("/openapi.json", bearer(token));
   expect(response).toMatchObject({ status: 200 });
   const doc = await response.json<{
     openapi: string;
@@ -57,7 +57,7 @@ test("oRPC handler: 401 without a bearer token", async () => {
 test("OpenAPI (REST-shaped) handler: GET /api/v2/pets returns pets for a valid token", async () => {
   const shop = makeShop();
   const token = await accessToken(shop);
-  const response = await shop.call("/api/v2/pets", { headers: bearer(token) });
+  const response = await shop.call("/api/v2/pets", bearer(token));
   expect(response).toMatchObject({ status: 200 });
   const body = await response.json<{ owner: string; pets: { name: string }[] }>();
   expect(body).toMatchObject({ owner: "Jonas" });
@@ -69,13 +69,11 @@ test("OpenAPI (REST-shaped) handler: 401 without a bearer token", async () => {
   expect(await shop.call("/api/v2/pets")).toMatchObject({ status: 401 });
 });
 
-const bearer = (token: string) => ({ authorization: `Bearer ${token}` });
-
 /** A typed @orpc/client wired to talk to the shop through /rpc, with a bearer header. */
 function client(shop: Shop, token: string): RouterClient<typeof petsRouter> {
   const link = new RPCLink({
     url: `${ORIGIN}/rpc`,
-    headers: () => bearer(token),
+    headers: () => bearer(token).headers,
     fetch: (request) => shop.fetch(request),
   });
   return createORPCClient(link);

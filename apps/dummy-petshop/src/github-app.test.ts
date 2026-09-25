@@ -8,11 +8,10 @@
  * with it. This proves petshop verifies REAL signatures and never needs — never
  * even sees — the private key.
  */
-import { createHmac } from "node:crypto";
 import { expect, test, vi } from "vitest";
 import { DEFAULT_APP_ID, DEFAULT_INSTALLATION_ID } from "./state.ts";
 import { startReceiver } from "./test/receiver.ts";
-import { makeShop, type Shop } from "./test/shop.ts";
+import { bearer, hexHmac, makeShop, postJson, type Shop } from "./test/shop.ts";
 
 type AppKeys = Awaited<ReturnType<typeof generateAppKeys>>;
 
@@ -75,53 +74,41 @@ test("installation-token minting: registering a distinct app id + installation i
   });
 });
 
-test("installation-token minting: a JWT signed by a different key than the registered one is rejected 401", async () => {
-  const shop = makeShop();
-  const { publicKeyPem } = (await sharedKeys()).app;
-  await shop.call("/__backdoor/apps", postJson({ publicKeyPem }));
+test.for([
+  {
+    name: "a JWT signed by an unregistered key",
+    signer: "attacker",
+    claims: {},
+    description: "bad_signature",
+  },
+  {
+    name: "an expired App JWT",
+    signer: "app",
+    claims: { exp: Math.floor(Date.now() / 1000) - 10 },
+    description: "expired",
+  },
+  {
+    name: "a JWT whose iss is not the app id",
+    signer: "app",
+    claims: { iss: "some-other-app" },
+    description: "issuer_mismatch",
+  },
+] as const)(
+  "installation-token minting: $name is rejected 401",
+  async ({ signer, claims, description }) => {
+    const shop = makeShop();
+    const keys = await sharedKeys();
+    await shop.call("/__backdoor/apps", postJson({ publicKeyPem: keys.app.publicKeyPem }));
 
-  const jwt = await signAppJwt(
-    (await sharedKeys()).attacker.privateKey,
-    appJwtClaims(DEFAULT_APP_ID),
-  );
-  const response = await mintInstallationToken(shop, DEFAULT_INSTALLATION_ID, jwt);
-  expect(response).toMatchObject({ status: 401 });
-  expect(await response.json()).toMatchObject({
-    error: "invalid_jwt",
-    error_description: "bad_signature",
-  });
-});
-
-test("installation-token minting: an expired App JWT is rejected 401", async () => {
-  const shop = makeShop();
-  const { privateKey, publicKeyPem } = (await sharedKeys()).app;
-  await shop.call("/__backdoor/apps", postJson({ publicKeyPem }));
-
-  const jwt = await signAppJwt(
-    privateKey,
-    appJwtClaims(DEFAULT_APP_ID, { exp: Math.floor(Date.now() / 1000) - 10 }),
-  );
-  const response = await mintInstallationToken(shop, DEFAULT_INSTALLATION_ID, jwt);
-  expect(response).toMatchObject({ status: 401 });
-  expect(await response.json()).toMatchObject({
-    error: "invalid_jwt",
-    error_description: "expired",
-  });
-});
-
-test("installation-token minting: a JWT whose iss is not the app id is rejected 401", async () => {
-  const shop = makeShop();
-  const { privateKey, publicKeyPem } = (await sharedKeys()).app;
-  await shop.call("/__backdoor/apps", postJson({ publicKeyPem }));
-
-  const jwt = await signAppJwt(privateKey, appJwtClaims(DEFAULT_APP_ID, { iss: "some-other-app" }));
-  const response = await mintInstallationToken(shop, DEFAULT_INSTALLATION_ID, jwt);
-  expect(response).toMatchObject({ status: 401 });
-  expect(await response.json()).toMatchObject({
-    error: "invalid_jwt",
-    error_description: "issuer_mismatch",
-  });
-});
+    const jwt = await signAppJwt(keys[signer].privateKey, appJwtClaims(DEFAULT_APP_ID, claims));
+    const response = await mintInstallationToken(shop, DEFAULT_INSTALLATION_ID, jwt);
+    expect(response).toMatchObject({ status: 401 });
+    expect(await response.json()).toMatchObject({
+      error: "invalid_jwt",
+      error_description: description,
+    });
+  },
+);
 
 test("installation-token minting: the seeded installation is keyless until a key is registered; unknown ids 401", async () => {
   const shop = makeShop();
@@ -231,15 +218,11 @@ test("installation webhooks: firing at an unknown installation id is a 400", asy
   expect(response).toMatchObject({ status: 400 });
 });
 
-const postJson = (body: unknown): RequestInit => ({ method: "POST", body: JSON.stringify(body) });
-
-const bearer = (token: string) => ({ headers: { authorization: `Bearer ${token}` } });
-
 /** POST the installation-token endpoint with an App JWT in the Bearer header. */
 const mintInstallationToken = (shop: Shop, installationId: string, jwt: string) =>
   shop.call(`/app/installations/${installationId}/access_tokens`, {
     method: "POST",
-    headers: { authorization: `Bearer ${jwt}` },
+    ...bearer(jwt),
   });
 
 /** base64url (no padding) of raw bytes — the JWT segment / `sign()` encoding. */
@@ -308,6 +291,3 @@ function appJwtClaims(
   const now = Math.floor(Date.now() / 1000);
   return { iss: overrides.iss || appId, iat: now - 30, exp: overrides.exp ?? now + 540 };
 }
-
-const hexHmac = (secret: string, body: string) =>
-  `sha256=${createHmac("sha256", secret).update(body).digest("hex")}`;

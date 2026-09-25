@@ -1,8 +1,7 @@
 import { createFileRoute, useRouterState } from "@tanstack/react-router";
-import { useEffect, useState, type FormEvent } from "react";
+import { useState, type FormEvent } from "react";
 import { z } from "zod";
-import type { AuthenticatedApp } from "iterate/app";
-import { useFacetLiveState } from "iterate/react";
+import { useContextStub, useFacetLiveState } from "iterate/react";
 import { AppShell } from "@iterate-com/ui/components/app-shell";
 import {
   Breadcrumb,
@@ -84,36 +83,6 @@ const ProjectLive = z.looseObject({
   creation: z.object({ status: z.enum(["requested", "created", "failed"]) }).nullable(),
 });
 
-/** The project's root context as the page holds it: `api.projects.get(id)`, a capnweb stub. */
-type ProjectContext = Awaited<ReturnType<AuthenticatedApp["api"]["projects"]["get"]>>;
-
-/** The project's root context, held for the page's life and disposed on unmount (the dash's
- *  overview holds its own the same way). */
-function useProjectContext(api: AuthenticatedApp["api"], projectId: string) {
-  const [context, setContext] = useState<ProjectContext>();
-  useEffect(() => {
-    let disposed = false;
-    let held: ProjectContext | undefined;
-    (async () => {
-      const stub = await api.projects.get(projectId);
-      // an unmount mid-await comes before the handle the await returns
-      if (disposed) {
-        stub[Symbol.dispose]();
-        return;
-      }
-      held = stub;
-      // A capnweb stub is a callable proxy: handed to a state setter directly, React would take it
-      // for an updater and CALL it (an empty method call the server refuses).
-      setContext(() => stub);
-    })().catch(() => undefined); // the loader resolved the project already; a refusal leaves Save waiting
-    return () => {
-      disposed = true;
-      held?.[Symbol.dispose]();
-    };
-  }, [api, projectId]);
-  return context;
-}
-
 function Editor({
   project,
   initial,
@@ -131,7 +100,7 @@ function Editor({
   // A project is usable once its creation saga lands `project/created`: until then the saga is still
   // seeding the config repo, and a commit here races it ("the commit was refused: stale ref").
   // The project facet's live state says where creation stands, as the dash's overview reads it.
-  const context = useProjectContext(api, project);
+  const context = useContextStub(() => api.projects.get(project), [api, project]).stub;
   const live = useFacetLiveState(context, "project");
   const creation = ProjectLive.safeParse(live.value).data?.creation;
   const ready = creation?.status === "created";

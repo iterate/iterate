@@ -67,104 +67,60 @@ test("identify: after ready, further frames are echoed back verbatim", async () 
   expect(parse(echoed.send)[0]).toEqual({ op: "echo", received: '{"op":"ping","n":1}' });
 });
 
-test("identify: a missing token → invalid + close 4001", async () => {
-  const key = randomSealKey();
-  const deps: GatewayDeps = { sealKey: key, getAccessTokenEpoch: async () => 0 };
-  const state = newGatewayConnection();
-  const reaction = await handleGatewayMessage(state, JSON.stringify({ op: "identify" }), deps);
-  expect(parse(reaction.send)[0]).toMatchObject({ op: "invalid" });
-  expect(reaction).toMatchObject({
-    close: {
-      code: AUTH_FAILED_CLOSE_CODE,
-      reason: "authentication failed",
-    },
-  });
-  expect(state).toMatchObject({ identified: false });
-});
+test.for([
+  { name: "a missing token", frame: async () => JSON.stringify({ op: "identify" }) },
+  { name: "a garbage token", frame: async () => identify("not-a-real-token") },
+  {
+    name: "a token sealed under a different key",
+    frame: async () => identify(await sealedAccessToken(randomSealKey())),
+  },
+  {
+    name: "an expired token",
+    frame: async (key: string) =>
+      identify(await sealedAccessToken(key, { exp: Math.floor(Date.now() / 1000) - 1 })),
+  },
+  // minted under epoch 0, but the shop has since bumped the client to epoch 1
+  {
+    name: "an epoch-revoked token",
+    currentEpoch: 1,
+    frame: async (key: string) => identify(await sealedAccessToken(key, { epoch: 0 })),
+  },
+  {
+    name: "a non-identify first frame",
+    frame: async () => JSON.stringify({ op: "heartbeat" }),
+    reason: "first frame must be an identify frame",
+  },
+  {
+    name: "a non-JSON first frame",
+    frame: async () => "not json at all",
+    reason: "first frame must be JSON identify",
+  },
+])(
+  "identify: $name → invalid + close 4001",
+  async ({ frame, currentEpoch = 0, reason = "missing, invalid, or expired token" }) => {
+    const key = randomSealKey();
+    const state = newGatewayConnection();
+    const reaction = await handleGatewayMessage(state, await frame(key), {
+      sealKey: key,
+      getAccessTokenEpoch: async () => currentEpoch,
+    });
+    expect(reaction).toEqual({
+      send: [JSON.stringify({ op: "invalid", reason })],
+      close: { code: AUTH_FAILED_CLOSE_CODE, reason: "authentication failed" },
+    });
+    expect(state).toMatchObject({ identified: false });
+  },
+);
 
-test("identify: a garbage token → invalid + close 4001", async () => {
-  const key = randomSealKey();
-  const deps: GatewayDeps = { sealKey: key, getAccessTokenEpoch: async () => 0 };
-  const reaction = await handleGatewayMessage(
-    newGatewayConnection(),
-    JSON.stringify({ op: "identify", token: "not-a-real-token" }),
-    deps,
-  );
-  expect(parse(reaction.send)[0]).toMatchObject({ op: "invalid" });
-  expect(reaction.close?.code).toBe(AUTH_FAILED_CLOSE_CODE);
-});
-
-test("identify: a token sealed under a different key → invalid + close 4001", async () => {
-  const deps: GatewayDeps = { sealKey: randomSealKey(), getAccessTokenEpoch: async () => 0 };
-  const foreign = await sealedAccessToken(randomSealKey());
-  const reaction = await handleGatewayMessage(
-    newGatewayConnection(),
-    JSON.stringify({ op: "identify", token: foreign }),
-    deps,
-  );
-  expect(reaction.close?.code).toBe(AUTH_FAILED_CLOSE_CODE);
-});
-
-test("identify: an expired token → invalid + close 4001", async () => {
-  const key = randomSealKey();
-  const deps: GatewayDeps = { sealKey: key, getAccessTokenEpoch: async () => 0 };
-  const token = await sealedAccessToken(key);
-  vi.useFakeTimers({ toFake: ["Date"] });
-  onTestFinished(() => {
-    vi.useRealTimers();
-  });
-  vi.setSystemTime(Date.now() + 121_000);
-  const reaction = await handleGatewayMessage(
-    newGatewayConnection(),
-    JSON.stringify({ op: "identify", token }),
-    deps,
-  );
-  expect(reaction.close?.code).toBe(AUTH_FAILED_CLOSE_CODE);
-});
-
-test("identify: an epoch-revoked token → invalid + close 4001", async () => {
-  const key = randomSealKey();
-  // Token minted under epoch 0, but the shop has since bumped to epoch 1.
-  const deps: GatewayDeps = { sealKey: key, getAccessTokenEpoch: async () => 1 };
-  const token = await sealedAccessToken(key, { epoch: 0 });
-  const reaction = await handleGatewayMessage(
-    newGatewayConnection(),
-    JSON.stringify({ op: "identify", token }),
-    deps,
-  );
-  expect(reaction.close?.code).toBe(AUTH_FAILED_CLOSE_CODE);
-});
-
-test("identify: a non-identify first frame → invalid + close 4001", async () => {
-  const key = randomSealKey();
-  const deps: GatewayDeps = { sealKey: key, getAccessTokenEpoch: async () => 0 };
-  const reaction = await handleGatewayMessage(
-    newGatewayConnection(),
-    JSON.stringify({ op: "heartbeat" }),
-    deps,
-  );
-  expect(parse(reaction.send)[0]).toMatchObject({ op: "invalid" });
-  expect(reaction.close?.code).toBe(AUTH_FAILED_CLOSE_CODE);
-});
-
-test("identify: a non-JSON first frame → invalid + close 4001", async () => {
-  const key = randomSealKey();
-  const deps: GatewayDeps = { sealKey: key, getAccessTokenEpoch: async () => 0 };
-  const reaction = await handleGatewayMessage(newGatewayConnection(), "not json at all", deps);
-  expect(parse(reaction.send)[0]).toMatchObject({ op: "invalid" });
-  expect(reaction.close?.code).toBe(AUTH_FAILED_CLOSE_CODE);
-});
-
-test("bearerTokenFromHeader (/gateway-header): extracts the bearer token, case-insensitively", () => {
-  expect(bearerTokenFromHeader("Bearer abc.def")).toBe("abc.def");
-  expect(bearerTokenFromHeader("bearer   xyz  ")).toBe("xyz");
-});
-
-test("bearerTokenFromHeader (/gateway-header): null for absent or non-bearer headers", () => {
-  expect(bearerTokenFromHeader(null)).toBeNull();
-  expect(bearerTokenFromHeader("")).toBeNull();
-  expect(bearerTokenFromHeader("Basic Zm9v")).toBeNull();
-  expect(bearerTokenFromHeader("Bearer ")).toBeNull();
+test.for([
+  { name: "a bearer token", header: "Bearer abc.def", token: "abc.def" },
+  { name: "a lowercase scheme and a padded token", header: "bearer   xyz  ", token: "xyz" },
+  { name: "no header", header: null, token: null },
+  { name: "an empty header", header: "", token: null },
+  { name: "a Basic header", header: "Basic Zm9v", token: null },
+  { name: "the scheme with no token", header: "Bearer ", token: null },
+])("bearerTokenFromHeader (/gateway-header): $name → $token", ({ header, token }) => {
+  expect(bearerTokenFromHeader(header)).toBe(token);
 });
 
 test("subprotocolAuth (/gateway-subprotocol): pulls the token from the carrier and selects a non-token protocol to echo", () => {
@@ -250,6 +206,9 @@ async function sealedAccessToken(
     key,
   );
 }
+
+/** An IDENTIFY frame presenting `token`. */
+const identify = (token: string) => JSON.stringify({ op: "identify", token });
 
 /** Parse the frames a reaction sends (they are always JSON text). */
 const parse = (frames: string[]) => frames.map((frame) => JSON.parse(frame) as Record<string, any>);
