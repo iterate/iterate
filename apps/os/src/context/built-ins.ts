@@ -21,7 +21,7 @@ import {
 } from "iterate/lib";
 import { z } from "zod";
 import type { ItxCaller } from "iterate/sdk";
-import type { StreamEventInput } from "iterate/stream/processor";
+import { trusts, type StreamEventInput } from "iterate/stream/processor";
 import {
   itxExpressionStepName,
   normalizedItxExpression,
@@ -484,6 +484,10 @@ interface BuildBuiltInsDeps {
   library: LibraryRoots;
 }
 
+/** How many events a writer a context does not trust may append there per window (built-ins
+ *  `append`): a sibling's messages, not a flood. */
+const UNTRUSTED_APPENDS = { events: 120, windowMs: 60_000 };
+
 /** Assemble the built-in scope for one context. Every entry closes over the context's identity —
  *  PRE-SCOPED, not policed: cross-project access is unspellable by construction. */
 export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> {
@@ -506,7 +510,34 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
     const stamped = events.map((event) => stampCaller(event, caller, path));
     if (caller.app)
       for (const event of stamped) admitLoadedCodeRow(event, event.source.origin, path);
+    const [first] = stamped;
+    if (first && !trusts(path, first.source))
+      boundUntrustedAppends(first.source.origin, stamped.length);
     return ownContext().append(...stamped);
+  };
+  /** OPEN APPEND IS BOUNDED: a writer this context does not trust (iterate/stream/processor
+   *  `trusts` — code beside it or beneath it) appends at most `UNTRUSTED_APPENDS.events` events per
+   *  origin per window, per incarnation; past it the append is refused RATE_LIMITED and logged. */
+  const untrustedAppends = new Map<string, { since: number; events: number }>();
+  const boundUntrustedAppends = (origin: string, events: number) => {
+    const now = Date.now();
+    const seen = untrustedAppends.get(origin);
+    const window =
+      seen && now - seen.since < UNTRUSTED_APPENDS.windowMs ? seen : { since: now, events: 0 };
+    window.events += events;
+    untrustedAppends.set(origin, window);
+    if (window.events <= UNTRUSTED_APPENDS.events) return;
+    console.warn({
+      event: "append.untrusted-rate-limited",
+      namespace: "iterate-context",
+      path,
+      origin,
+      events: window.events,
+    });
+    throw codedError(
+      "RATE_LIMITED",
+      `${JSON.stringify(origin)} appended more than ${UNTRUSTED_APPENDS.events} events to ${JSON.stringify(path)} in ${UNTRUSTED_APPENDS.windowMs / 1000} s: this context does not trust it, so its appends are bounded`,
+    );
   };
   /** THE PLATFORM'S OWN HOP: the caller rides — principal and grant (the facts stay attributed),
    *  path and origin — but never its `app`: the app wall (itx-expression-rewriting.ts `#admit`) is

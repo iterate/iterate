@@ -31,7 +31,8 @@ in. The agent retains supplied context messages and passes them to the model
 unchanged; it has no screen-specific matching logic. Script calls and results
 are retained through the same context events, so a later question can refer to
 the exercises or other content already displayed. Its display action is
-`itx.cd("/").voice.setImage({ device, image: { html } })`. The renderer uses
+`itx.voice.setImage({ device, image: { html } })`, which the agent's sandbox inherits from the
+root through its parent links. The renderer uses
 `screen.info()` for dimensions and supported monochrome, grayscale or colour
 formats. Set `image: null` to restore the normal call-status view.
 Capture waits for `<img>` decoding and font readiness, with a five-second

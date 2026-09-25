@@ -498,14 +498,24 @@ export function rowsNamingRpcStub(args: {
 
 /** THE APP WALL, as one check over an expression loaded code hands in (the resolver's INPUT, or the
  *  TARGET of a row it appends): never the fixed point, never a `cd` above `base` (self and descendants
- *  only, resolved step by step). A spec's SOURCE EXPRESSION in a call's arguments (`workers.get`,
- *  `facets.get`, `processors.enable`) is walled too, at the context the walk has reached, so the
+ *  only, resolved step by step) — with ONE exception on the input: `cd(path).append(…)` and nothing
+ *  after it goes anywhere in the project. An append is a message: the target stores it stamped with
+ *  its writer and its readers decide whether to listen (iterate/stream/processor `admits`), and
+ *  loaded code's control lands only at its origin and beneath (`admitLoadedCodeRow`). Every other
+ *  verb acts with the target's authority — `workers.get` and `facets.get(spec)` load code holding the
+ *  target's `env.ITX`, `run` executes there, `abort` resets it — so it stays within the subtree.
+ *  A spec's SOURCE EXPRESSION in a call's arguments (`workers.get`, `facets.get`,
+ *  `processors.enable`) is walled too, with no crossing, at the context the walk has reached, so the
  *  call fails where it is made; the producer also runs there as loaded code when the code loads
  *  (the DO's `invoke`). Codec-style — nothing here is policy: the rows a call rewrites through are
  *  the owner's and are never checked. */
-function admitLoadedCodeExpression(expression: ItxExpression, base: string): void {
+function admitLoadedCodeExpression(
+  expression: ItxExpression,
+  base: string,
+  { crossingAppend }: { crossingAppend: boolean },
+): void {
   let at = base;
-  for (const step of expression) {
+  for (const [index, step] of expression.entries()) {
     const name = typeof step === "string" ? step : step[0];
     if (name === "builtins")
       throw codedError(
@@ -516,14 +526,19 @@ function admitLoadedCodeExpression(expression: ItxExpression, base: string): voi
       for (const arg of step.slice(1)) {
         const source = typeof arg === "object" && arg && "source" in arg ? arg.source : undefined;
         if (typeof source === "string" || Array.isArray(source))
-          admitLoadedCodeExpression(normalizedItxExpression(source), at);
+          admitLoadedCodeExpression(normalizedItxExpression(source), at, { crossingAppend: false });
       }
     if (Array.isArray(step) && step[0] === "cd" && typeof step[1] === "string") {
       const to = resolveContextPath(at, step[1]);
-      if (!isAtOrBeneath(to, at))
+      const appendsOnly =
+        crossingAppend &&
+        index === expression.length - 2 &&
+        itxExpressionStepName(expression[index + 1]) === "append" &&
+        Array.isArray(expression[index + 1]);
+      if (!isAtOrBeneath(to, at) && !appendsOnly)
         throw codedError(
           "FORBIDDEN",
-          `cd goes down only for loaded code: ${JSON.stringify(step[1])} from ${JSON.stringify(at)} would leave it`,
+          `cd goes down only for loaded code, but for one append: ${JSON.stringify(step[1])} from ${JSON.stringify(at)} would leave it`,
         );
       at = to;
     }
@@ -587,7 +602,7 @@ export function admitLoadedCodeRow(
   const [, root, registry, lend] = expression;
   if (root === "builtins" && registry === "rpcStubs" && Array.isArray(lend) && lend[0] === "get")
     return;
-  admitLoadedCodeExpression(expression, origin);
+  admitLoadedCodeExpression(expression, origin, { crossingAppend: false });
 }
 
 /** A bare `itx` row whose target is `cd` of THIS context is a loop no depth budget can see — every
@@ -782,7 +797,8 @@ export class ItxExpressionResolver {
     // The remaining expression now includes the owner's rewrites (e.g. the agent's sandbox
     // redirect to builtins.run), not just loaded code's words. Keep app for row admission and
     // attribution, but don't reject the owner's grant again at its destination.
-    if (caller.app && !caller.path) admitLoadedCodeExpression(expression, this.#path);
+    if (caller.app && !caller.path)
+      admitLoadedCodeExpression(expression, this.#path, { crossingAppend: true });
   }
 
   /** PURE: the chain of rewrites from `call` to the builtins-rooted call that would run

@@ -367,8 +367,8 @@ async function connect(session, project) {
           <button id="lend" class="secondary">Lend the current tab</button></p>
         <p id="proof-result" class="muted"></p>
         <p class="muted">Or post this to one of the project's agents:</p>
-        <p class="prompt">Call itx.cd('/').chrome.openPage({ url: "${escape(proofUrl)}" }), then
-          itx.cd('/').chrome.cdp(tabId, "Runtime.evaluate", { expression: "document.title", returnByValue: true })
+        <p class="prompt">Call itx.chrome.openPage({ url: "${escape(proofUrl)}" }), then
+          itx.chrome.cdp(tabId, "Runtime.evaluate", { expression: "document.title", returnByValue: true })
           on the tabId it returned, and report the title.</p>
       </div>`;
     const result = element("proof-result", HTMLElement);

@@ -1173,6 +1173,43 @@ test("the app wall (`Caller.app`): on the INPUT expression only, `itx.builtins` 
     expect(() => resolver.resolve(`itx.cd('${to}').whoami()`)).toThrow(/goes down only/);
   expect(() => resolver.resolve("itx.cd('./b').cd('../..').whoami()")).toThrow(/goes down only/);
 });
+
+// THE ONE EXCEPTION: an append is a message, not an act — `cd(path).append(…)` and nothing after it
+// goes anywhere in the project (its readers decide whether to listen); any other verb stays within
+// the subtree, and a row's target gets no exception.
+const CROSSING_ROWS: { call: string; admitted: boolean }[] = [
+  { call: "itx.cd('/agents/b').append({ type: 'note' })", admitted: true },
+  { call: "itx.cd('/').append({ type: 'note' }, { type: 'note' })", admitted: true },
+  { call: "itx.cd('..').append({ type: 'note' })", admitted: true },
+  { call: "itx.cd('/agents/b').whoami()", admitted: false },
+  { call: "itx.cd('/agents/b').run('async () => 1')", admitted: false },
+  { call: "itx.cd('/agents/b').append({ type: 'note' }).length", admitted: false },
+  { call: "itx.cd('/').cd('/agents/b').append({ type: 'note' })", admitted: false },
+  {
+    call: "itx.cd('/agents/b').workers.get({ source: {} }).append({ type: 'note' })",
+    admitted: false,
+  },
+];
+test.for(CROSSING_ROWS)(
+  "the app wall at a child: `$call` → admitted: $admitted",
+  ({ call, admitted }) => {
+    const resolve = () => appResolverAt("/agents/a", CHILD).resolve(call);
+    if (admitted) expect(resolve).not.toThrow();
+    else expect(resolve).toThrow(/goes down only for loaded code, but for one append/);
+  },
+);
+test("the app wall on a row gets no crossing exception: a target that appends above the code is refused", () => {
+  expect(() =>
+    admitLoadedCodeRow(
+      {
+        type: "events.iterate.com/itx/rewrite-rule-configured",
+        payload: { match: "itx.tell", target: "itx.cd('/').append" },
+      },
+      "/agents/a",
+      "/agents/a",
+    ),
+  ).toThrow(/goes down only/);
+});
 test("the app wall (`Caller.app`): on the INPUT expression only, `itx.builtins` is refused and `cd` goes down only — from the root too: a ROW loaded code appends is walled on its target: the fixed point and a cd above are refused, its own lend (`itx.builtins.rpcStubs.get`) and a plain expression pass, a mask says nothing", () => {
   const row = (type: string, target: unknown) => () =>
     admitLoadedCodeRow({ type, payload: { match: "itx.x", target } }, "/agents/a", "/agents/a");

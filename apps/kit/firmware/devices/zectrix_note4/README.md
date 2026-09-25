@@ -44,7 +44,7 @@ refresh and a 45-second deadline. The adapter inverts mono1 (1=black) for the
 vendor API (1=white). Gray4 packs the left pixel in the high nibble, 0=black.
 
 ```ts
-await itx.cd("/").voice.setImage({
+await itx.voice.setImage({
   device: "zectrix_note4",
   image: { html: "<body style='margin:0'>Hello NOTE4</body>", format: "gray4" },
 });

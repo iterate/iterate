@@ -30,9 +30,9 @@ root stream as ephemeral events: `events.iterate.com/chrome/attached { tabId, ur
 `includeEphemeral` reads the recent ones. Nothing about a tab is written durably.
 
 The lend is a rewrite rule of the project's root context, `/`: anything calling
-`itx.chrome.openPage(...)` there runs it in the panel for as long as the panel is open; from another
-context of the project (an agent's script runs in its own) the spelling is
-`itx.cd('/').chrome.openPage(...)`, which is the prompt the panel shows to paste.
+`itx.chrome.openPage(...)` there runs it in the panel for as long as the panel is open, and so does a
+context linked to the root (an agent's script runs in its own sandbox, linked up to `/`), which
+inherits the name. Only a mask or a jail's bare null takes it away.
 
 ## Install
 

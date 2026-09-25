@@ -1,9 +1,10 @@
 // loaded-code.e2e.test.ts — WHAT LOADED CODE MAY SAY (the app wall, context/itx-expression-rewriting.ts
 // `admitLoadedCodeExpression`; iterate-context.ts `ItxEntrypoint`): a worker's, a facet's, a script's `env.ITX` runs every
 // call as `Caller.app`. On what it hands in, the fixed point `itx.builtins` is not a word and `cd`
-// goes down only — self and descendants; the rows a call rewrites through are the owner's and are never
-// checked, so a parent link carries a script up exactly as far as its owner said. Its control
-// (`itx/*`) lands only at its own context and beneath. `provide` and
+// goes down only — self and descendants, but for one `append` anywhere in the project, a message its
+// readers decide whether to hear (provenance.e2e.test.ts); the rows a call rewrites through are the
+// owner's and are never checked, so a parent link carries a script up exactly as far as its owner
+// said. Its control (`itx/*`) lands only at its own context and beneath. `provide` and
 // `subscribe` are a session's verbs (loaded code writes rows with `itx.append`). A raw `fetch()` is
 // `itx.fetch(request)` at the worker's context, through the table — no row below the owner root, no
 // egress. The chain a child inherits: own rows → the parent link → … → the root's rows → the built-ins.

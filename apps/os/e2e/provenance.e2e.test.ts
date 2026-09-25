@@ -5,7 +5,6 @@
 // platform vouches for it (`platform`). A processor acts on the events its contract's `trust`
 // admits (iterate/stream/processor `admits`): by default the platform's, a member's, and those
 // written by code at its context or above it.
-import { createFailing } from "@iterate-com/shared/test-support/failing-test";
 import { expect, test } from "vitest";
 import { collector, freshCtx, openItx, rejection, until } from "./support/client.ts";
 
@@ -36,27 +35,24 @@ test("nothing forges its own source: a session's and a script's `source` is repl
   });
 });
 
-createFailing(test, /goes down only/)(
-  "a lifecycle fact from a writer the entity does not trust lands, stamped with its writer, and changes nothing",
-  async () => {
-    const root = openItx(freshCtx("provenance-untrusted-lifecycle"));
-    await root.workspaces.create("/w");
-    // Loaded code at /x, beside /w: its delete request is a message the workspace does not hear.
-    const requested = (await root
-      .cd("/x")
-      .builtins.run(
-        "async (itx) => (await itx.cd('/w').append({ type: 'events.iterate.com/workspace/delete-requested', payload: {} }))[0]",
-      )) as { offset: number; source: unknown };
-    expect(requested.source).toEqual({ origin: "/x" });
-    const workspace = root.cd("/w").facets.get("workspace");
-    await workspace.waitUntilProcessed({ offset: requested.offset });
-    expect(
-      (await workspace.snapshot()).state.deletion,
-      "a delete request from beside the workspace should change nothing",
-    ).toBeNull();
-    expect(await root.workspaces.list()).toEqual([{ path: "/w", createdAt: expect.any(String) }]);
-  },
-);
+test("a lifecycle fact from a writer the entity does not trust lands, stamped with its writer, and changes nothing", async () => {
+  const root = openItx(freshCtx("provenance-untrusted-lifecycle"));
+  await root.workspaces.create("/w");
+  // Loaded code at /x, beside /w: its delete request is a message the workspace does not hear.
+  const requested = (await root
+    .cd("/x")
+    .builtins.run(
+      "async (itx) => (await itx.cd('/w').append({ type: 'events.iterate.com/workspace/delete-requested', payload: {} }))[0]",
+    )) as { offset: number; source: unknown };
+  expect(requested.source).toEqual({ origin: "/x" });
+  const workspace = root.cd("/w").facets.get("workspace");
+  await workspace.waitUntilProcessed({ offset: requested.offset });
+  expect(
+    (await workspace.snapshot()).state.deletion,
+    "a delete request from beside the workspace should change nothing",
+  ).toBeNull();
+  expect(await root.workspaces.list()).toEqual([{ path: "/w", createdAt: expect.any(String) }]);
+});
 
 test("a jailed context's writes are visibly the jail's: its one outward channel lands stamped with the jail", async () => {
   const root = openItx(freshCtx("provenance-jail"));
@@ -118,4 +114,56 @@ test("a raw reader hears the trusted writers by default; `from: 'anyone'` hears 
   expect(trusted.offsets()).not.toContain(fromBeside!.offset);
   // and the workspace itself did not listen: it stands
   expect(await root.workspaces.list()).toEqual([{ path: "/w", createdAt: expect.any(String) }]);
+});
+
+/** A script at `from` that says `call` on its own itx and reports what it answered or refused. */
+const say = (
+  root: { cd(path: string): { builtins: { run(code: string): Promise<unknown> } } },
+  from: string,
+  call: string,
+) =>
+  root
+    .cd(from)
+    .builtins.run(
+      `async (itx) => { try { return { ok: await ${call} }; } catch (e) { return { error: String(e.message) }; } }`,
+    ) as Promise<{ ok?: any; error?: string }>;
+
+test("loaded code appends anywhere in the project, stamped with its context; its control lands only at its own context and beneath; every other verb stays within its subtree", async () => {
+  const root = openItx(freshCtx("provenance-crossing"));
+  const appended = await say(root, "/x", "itx.cd('/y').append({ type: 'note/hi' })");
+  expect(appended.ok?.[0]).toMatchObject({ path: "/y", source: { origin: "/x" } });
+  expect(
+    await say(
+      root,
+      "/x",
+      "itx.cd('/y').append({ type: 'events.iterate.com/itx/paused', payload: {} })",
+    ),
+  ).toEqual({ error: expect.stringMatching(/configures only the context its call started at/) });
+  expect(await say(root, "/x", "itx.cd('/y').whoami()")).toEqual({
+    error: expect.stringMatching(/goes down only for loaded code, but for one append/),
+  });
+  expect(await say(root, "/x", "itx.cd('/y').run('async () => 1')")).toEqual({
+    error: expect.stringMatching(/goes down only/),
+  });
+});
+
+test("a jail's bare null closes it both ways: nothing it says leaves it, and no loaded code's append lands in it", async () => {
+  const root = openItx(freshCtx("provenance-jail-closed"));
+  await root.cd("/jail").provide("itx", null);
+  expect(await say(root, "/jail", "itx.cd('/x').append({ type: 'note/out' })")).toEqual({
+    error: expect.stringMatching(/is masked/),
+  });
+  expect(await say(root, "/x", "itx.cd('/jail').append({ type: 'note/in' })")).toEqual({
+    error: expect.stringMatching(/is masked/),
+  });
+});
+
+test("open append is bounded: a writer a context does not trust appends at most 120 events a minute there", async () => {
+  const root = openItx(freshCtx("provenance-bounded"));
+  const flood = "Array.from({ length: 121 }, (_, i) => ({ type: 'note/flood', payload: { i } }))";
+  expect(await say(root, "/x", `itx.cd('/y').append(...${flood})`)).toEqual({
+    error: expect.stringMatching(/does not trust it, so its appends are bounded/),
+  });
+  // its own subtree trusts it: unbounded there
+  expect((await say(root, "/x", `itx.cd('./below').append(...${flood})`)).ok).toHaveLength(121);
 });
