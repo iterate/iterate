@@ -45,6 +45,14 @@ const FACET_PUBLIC_METHOD_ROWS: {
   { facet: "secret", walk: "write({})", byExpression: "FORBIDDEN" },
   { facet: "secret", walk: "fetch()", byExpression: "FORBIDDEN" },
   { facet: "secret", walk: "verifyHmac({})", byExpression: "FORBIDDEN" },
+  // 5. `forCaller` on the list: the platform calls it; a walk that spells it is refused.
+  { facet: "a loaded service", walk: "list()", byExpression: "reaches the facet" },
+  {
+    facet: "a loaded service",
+    walk: "forCaller({ path: '/elsewhere' }).list()",
+    byExpression: "FORBIDDEN",
+  },
+  { facet: "a loaded service", walk: "forCaller", byExpression: "FORBIDDEN" },
 ];
 
 test.each(FACET_PUBLIC_METHOD_ROWS)(
@@ -85,6 +93,11 @@ abstract class ChatroomDurableObject extends FacetDurableObject {
   static override publicMethods = [...super.publicMethods, "post", "state"];
 }
 
+/** A person's own facet that serves the contexts beneath its own (context/caller-capability.ts). */
+abstract class ServingDurableObject extends FacetDurableObject {
+  static override publicMethods = [...super.publicMethods, "forCaller", "list"];
+}
+
 /** The class each row's facet names; below the classes it lists, read only when a test runs. */
 const FACET_CLASSES = {
   account: AccountDurableObject,
@@ -92,4 +105,5 @@ const FACET_CLASSES = {
   secret: SecretDurableObject,
   "a loaded processor": SendingProcessorDurableObject,
   "a loaded mini-app": ChatroomDurableObject,
+  "a loaded service": ServingDurableObject,
 };

@@ -2,7 +2,7 @@
 // (context/caller-capability.ts). H hosts the facet; O is the context the call originated at, the
 // origin the platform stamped at the call's first hop, or H itself. A facet whose class lists
 // `forCaller`:
-//   • from O at H or above it, answers as today: the caller already holds H;
+//   • from O at H or above it, answers as its host: the caller already holds H;
 //   • from O strictly beneath H, is called `forCaller(caller)` first and the caller's steps walk what
 //     it answers — `caller` is `{ path: O, itx }`, O's own app handle, walled at O (its `cd` goes
 //     down only) and resolved through O's table;
@@ -12,8 +12,6 @@
 // is told its own spec (`ctx.props.spec`, its startup memo), and a stateless worker walks a chained
 // call the way a facet does.
 import { expect, test } from "vitest";
-import { E2E_CI_RETRIES } from "@iterate-com/shared/test-support/e2e-policy";
-import { createFailing } from "@iterate-com/shared/test-support/failing-test";
 import { freshCtx, openItx } from "./support/client.ts";
 
 /** A facet that serves callers beneath its host: what `forCaller` answers acts only through the
@@ -31,7 +29,7 @@ class Served extends RpcTarget {
   up() { return outcome(() => withItx(this.#caller.itx, (itx) => itx.cd("/").whoami())); }
 }
 export class ServingDurableObject extends FacetDurableObject {
-  static publicMethods = [...super.publicMethods, "forCaller", "path", "whoami", "spec"];
+  static publicMethods = [...super.publicMethods, "forCaller", "path", "whoami", "up", "spec"];
   forCaller(caller) { return new Served(caller); }
   path() { return "the host"; }
   whoami() { return withItx(this.env.ITX, (itx) => itx.whoami()); }
@@ -44,6 +42,100 @@ export class HostOnlyDurableObject extends FacetDurableObject {
   },
   className: "ServingDurableObject",
 };
+
+test("a facet that lists forCaller serves a caller beneath its host as that caller: forCaller(caller) first, the caller's own handle walled at the caller", async () => {
+  const { ctx, root, jail } = await servedAtTheRoot("for-caller-beneath");
+  expect(await root.serving.path()).toBe("the host");
+  expect(await root.serving.whoami()).toEqual({ projectId: ctx, path: "/" });
+  expect(
+    await jail.serving.path(),
+    "a caller beneath the host should be served through forCaller",
+  ).toBe("/jail");
+  // Loaded code at /jail, through its link: the same caller, and the handle it is served through
+  // is its own — walled at /jail, so a `cd` above it is refused.
+  expect(
+    await jail.builtins.run(`async (itx) => ({
+        path: await itx.serving.path(),
+        whoami: await itx.serving.whoami(),
+        up: await itx.serving.up(),
+      })`),
+  ).toEqual({
+    path: "/jail",
+    whoami: { projectId: ctx, path: "/jail" },
+    up: { error: expect.stringMatching(/goes down only/) },
+  });
+});
+
+test("a walk that spells forCaller is FORBIDDEN: only the platform names a caller", async () => {
+  const { root, jail } = await servedAtTheRoot("for-caller-forged");
+  for (const [from, context] of [
+    ["/", root],
+    ["/jail", jail],
+  ] as const)
+    expect(
+      await outcomeOf(context.invoke("itx.serving.forCaller({ path: '/elsewhere' }).path()")),
+      `only the platform should name a caller (from ${from})`,
+    ).toEqual({ error: expect.stringMatching(/"forCaller" is the platform's/) });
+});
+
+test("a facet that lists forCaller answers a caller above its host as its host, and refuses a caller beside it", async () => {
+  const root = openItx(freshCtx("for-caller-beside"));
+  const atMid = (steps: unknown[]) => ["itx", ["cd", "/mid"], "facets", ...steps];
+  expect(await root.invoke(atMid([["get", "serving", SERVING], ["path"]]))).toBe("the host");
+  expect(
+    await outcomeOf(root.cd("/other").invoke(atMid([["get", "serving"], ["path"]]))),
+    "a caller beside the host should be refused",
+  ).toEqual({ error: expect.stringMatching(/beside/) });
+});
+
+test("a facet that lists no forCaller is called as its host from anywhere", async () => {
+  const { ctx, root, jail } = await servedAtTheRoot("for-caller-none");
+  await root.append({
+    type: "events.iterate.com/itx/rewrite-rule-configured",
+    payload: {
+      match: "itx.hostOnly",
+      target: [
+        "itx",
+        "facets",
+        ["get", "host-only", { ...SERVING, className: "HostOnlyDurableObject" }],
+      ],
+    },
+  });
+  expect(await jail.hostOnly.whoami()).toEqual({ projectId: ctx, path: "/" });
+});
+
+test("a loaded facet is told its own spec: ctx.props.spec is its startup memo", async () => {
+  const root = openItx(freshCtx("facet-spec"));
+  expect(
+    await root.facets.get("serving", SERVING).spec(),
+    "a loaded facet should be told its own spec",
+  ).toEqual(SERVING);
+  const keyed = { ...SERVING, cacheKey: "serving@v1" };
+  expect(await root.facets.get("keyed", keyed).spec()).toEqual(keyed);
+});
+
+/** A worker whose method answers a live object: a chained walk calls on through it. */
+const MAKER = {
+  "worker.js": `import { RpcTarget, WorkerEntrypoint } from "cloudflare:workers";
+class Made extends RpcTarget {
+  constructor(n) { super(); this.n = n; }
+  ping() { return "pong-" + this.n; }
+}
+export default class Maker extends WorkerEntrypoint { make(n) { return new Made(n); } }`,
+};
+
+test("a stateless worker walks a chained call as a facet does: each step on what the one before answered", async () => {
+  const root = openItx(freshCtx("worker-chain"));
+  // The handle's own `invoke` hands it the whole walk at once.
+  expect(
+    await root.invoke([
+      "itx",
+      "workers",
+      ["get", { source: MAKER }],
+      ["invoke", [["make", 7], ["ping"]]],
+    ]),
+  ).toBe("pong-7");
+});
 
 /** `/` hosts SERVING behind `itx.serving`, and `/jail` is linked to `/`: its unclaimed names answer
  *  there, as a workspace's or an agent's do. */
@@ -64,119 +156,3 @@ const outcomeOf = (call: Promise<unknown>) =>
     (answer) => ({ answer }),
     (error: Error) => ({ error: error.message }),
   );
-
-const pin = (failure: RegExp) =>
-  createFailing(test, failure, {
-    timeoutMs: 60_000,
-    retries: process.env.CI ? E2E_CI_RETRIES : 0,
-  });
-
-pin(/should be served through forCaller/)(
-  "a facet that lists forCaller serves a caller beneath its host as that caller: forCaller(caller) first, the caller's own handle walled at the caller",
-  async () => {
-    const { ctx, root, jail } = await servedAtTheRoot("for-caller-beneath");
-    expect(await root.serving.path()).toBe("the host");
-    expect(await root.serving.whoami()).toEqual({ projectId: ctx, path: "/" });
-    expect(
-      await jail.serving.path(),
-      "a caller beneath the host should be served through forCaller",
-    ).toBe("/jail");
-    // Loaded code at /jail, through its link: the same caller, and the handle it is served through
-    // is its own — walled at /jail, so a `cd` above it is refused.
-    expect(
-      await jail.builtins.run(`async (itx) => ({
-        path: await itx.serving.path(),
-        whoami: await itx.serving.whoami(),
-        up: await itx.serving.up(),
-      })`),
-    ).toEqual({
-      path: "/jail",
-      whoami: { projectId: ctx, path: "/jail" },
-      up: { error: expect.stringMatching(/goes down only/) },
-    });
-  },
-);
-
-pin(/only the platform should name a caller/)(
-  "a walk that spells forCaller is FORBIDDEN: only the platform names a caller",
-  async () => {
-    const { root, jail } = await servedAtTheRoot("for-caller-forged");
-    for (const [from, context] of [
-      ["/", root],
-      ["/jail", jail],
-    ] as const)
-      expect(
-        await outcomeOf(context.invoke("itx.serving.forCaller({ path: '/elsewhere' }).path()")),
-        `only the platform should name a caller (from ${from})`,
-      ).toEqual({ error: expect.stringMatching(/"forCaller" is the platform's/) });
-  },
-);
-
-pin(/a caller beside the host should be refused/)(
-  "a facet that lists forCaller answers a caller above its host as its host, and refuses a caller beside it",
-  async () => {
-    const root = openItx(freshCtx("for-caller-beside"));
-    const atMid = (steps: unknown[]) => ["itx", ["cd", "/mid"], "facets", ...steps];
-    expect(await root.invoke(atMid([["get", "serving", SERVING], ["path"]]))).toBe("the host");
-    expect(
-      await outcomeOf(root.cd("/other").invoke(atMid([["get", "serving"], ["path"]]))),
-      "a caller beside the host should be refused",
-    ).toEqual({ error: expect.stringMatching(/beside/) });
-  },
-);
-
-test("a facet that lists no forCaller is called as its host from anywhere", async () => {
-  const { ctx, root, jail } = await servedAtTheRoot("for-caller-none");
-  await root.append({
-    type: "events.iterate.com/itx/rewrite-rule-configured",
-    payload: {
-      match: "itx.hostOnly",
-      target: [
-        "itx",
-        "facets",
-        ["get", "host-only", { ...SERVING, className: "HostOnlyDurableObject" }],
-      ],
-    },
-  });
-  expect(await jail.hostOnly.whoami()).toEqual({ projectId: ctx, path: "/" });
-});
-
-pin(/a loaded facet should be told its own spec/)(
-  "a loaded facet is told its own spec: ctx.props.spec is its startup memo",
-  async () => {
-    const root = openItx(freshCtx("facet-spec"));
-    expect(
-      await root.facets.get("serving", SERVING).spec(),
-      "a loaded facet should be told its own spec",
-    ).toEqual(SERVING);
-    const keyed = { ...SERVING, cacheKey: "serving@v1" };
-    expect(await root.facets.get("keyed", keyed).spec()).toEqual(keyed);
-  },
-);
-
-/** A worker whose method answers a live object: a chained walk calls on through it. */
-const MAKER = {
-  "worker.js": `import { RpcTarget, WorkerEntrypoint } from "cloudflare:workers";
-class Made extends RpcTarget {
-  constructor(n) { super(); this.n = n; }
-  ping() { return "pong-" + this.n; }
-}
-export default class Maker extends WorkerEntrypoint { make(n) { return new Made(n); } }`,
-};
-
-pin(/a WorkerEntrypoint exposes flat methods/)(
-  "a stateless worker walks a chained call as a facet does: each step on what the one before answered",
-  async () => {
-    const root = openItx(freshCtx("worker-chain"));
-    // The handle's own `invoke` hands the whole walk over at once, as a walk the platform extends
-    // does.
-    expect(
-      await root.invoke([
-        "itx",
-        "workers",
-        ["get", { source: MAKER }],
-        ["invoke", [["make", 7], ["ping"]]],
-      ]),
-    ).toBe("pong-7");
-  },
-);

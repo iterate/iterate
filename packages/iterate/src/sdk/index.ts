@@ -10,7 +10,7 @@
 //   ConfigWorker                 — the stateless `WorkerEntrypoint` a project's one event handler extends
 
 import { DurableObject, WorkerEntrypoint } from "cloudflare:workers";
-import type { IterateContextApi, StreamPage } from "../api.ts";
+import type { FacetSpec, IterateContextApi, StreamPage } from "../api.ts";
 import {
   ProcessorEngine,
   type ScannedRange,
@@ -91,10 +91,15 @@ export { applyPatch, diff, jsonEqual, type PatchOp } from "../lib.ts";
 // provider socket — runs through `runInBackground` (ProcessEventArgs), never as a bare floating
 // promise, a `ctx.waitUntil` or a timer the facet keeps on its own.
 
-/** What the parent mints a facet's class with — the whole identity, and one fact about its feed. */
+/** What the parent mints a facet's class with — the whole identity, its own code, and one fact about
+ *  its feed. */
 export type FacetProps = {
   iterateContextName: string;
   name: string;
+  /** A LOADED facet's own spec: the startup memo its context hosts it from, so it can host its own
+   *  code on another context without reading that code from anywhere a caller could write. Absent
+   *  for the platform's own classes. */
+  spec?: FacetSpec;
   /** Set when, as this facet started, a subscription row of its context pushed it every commit it
    *  consumes (`processEventBatch`, the delivery loop's push): a processor's engine then trusts the
    *  head a catch-up read until the next push (stream/processor.ts, the read verbs). Absent, only a
@@ -102,13 +107,30 @@ export type FacetProps = {
   fedByPushes?: true;
 };
 
+/** A CALLER BENEATH A FACET'S CONTEXT, as `forCaller(caller)` receives it (`FacetDurableObject`):
+ *  the context the call originated at, and that context's own itx handle — the `env.ITX` code loaded
+ *  there holds, walled there (no `builtins`, `cd` down only) and resolved through its rows, masks
+ *  included. Only the platform mints one: a walk that spells `forCaller` is refused. */
+export type ItxCaller = { path: string; itx: ItxEntrypointService };
+
 /** THE FACET SHELL: a `DurableObject` a context hosts as a facet — `itx.facets.get(name, { source,
  *  className })`, a rule naming it, or a processor's row. A caller reaches a facet by itx expression
  *  (`itx.facets.get(name).<method>(…)`) only through what its class lists in `publicMethods`: the
  *  context refuses any other first step FORBIDDEN before the call reaches the facet
  *  (apps/os context/facet-public-methods.ts). The platform's own calls — the delivery loop's push
  *  and catch-up, the alarm's revive — never go through the list. A loaded class that does not
- *  extend this shell lists nothing, so no caller reaches it by expression. */
+ *  extend this shell lists nothing, so no caller reaches it by expression.
+ *
+ *  SERVING CONTEXTS BENEATH: a class that lists `forCaller` serves a call that originated beneath
+ *  its context only as that caller. The context calls `forCaller(caller)` (an `ItxCaller`) first and
+ *  walks the caller's steps on what it answers, and refuses a call from beside it (apps/os
+ *  context/caller-capability.ts). Act for the caller only through `caller.itx`; `this.env.ITX` is
+ *  the context hosting the facet, for the facet's own state. A call from the facet's context or
+ *  above it reaches the facet's own methods, as for any facet:
+ *
+ *    static override publicMethods = [...super.publicMethods, "forCaller", "list"];
+ *    forCaller(caller: ItxCaller) { return new Listing(caller); } // an RpcTarget with `list()`
+ */
 export abstract class FacetDurableObject<Env = unknown> extends DurableObject<Env, FacetProps> {
   /** What a caller may reach by itx expression: the FIRST step of `itx.facets.get(name).<step>…`, a
    *  method or a property of this class. A subclass lists its own on top of its parent's:
