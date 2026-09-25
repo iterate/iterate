@@ -61,6 +61,8 @@ const onUnhandledError = (error: unknown): boolean | void => {
  *  stops being long drops off this list. */
 const LONG_POLES = [
   "__workers-tests__/facet-push-timeout-heals.test.ts",
+  // The same 60 s watchdog, its restart cutting off a sibling push: ~62 s (measured 2026-09-25).
+  "__workers-tests__/facet-timeout-restart-heals-sibling-push.test.ts",
   "__workers-tests__/oauth-recheck-platform-failure.test.ts",
   "__workers-tests__/personal-access-tokens.test.ts",
   "__workers-tests__/oauth-recheck-no-project.test.ts",
