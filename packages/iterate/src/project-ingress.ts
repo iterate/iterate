@@ -168,5 +168,9 @@ export function primaryHostnameUrlOf(
     throw new Error(`primaryHostnameUrlOf: path must start with "/": ${path}`);
   const routingSlug = target.routingSlug || null;
   if (routingSlug && !ROUTING_SLUG.test(routingSlug)) return null;
-  return new URL(path, `https://${routingSlug ? `${routingSlug}.` : ""}${primaryHostname}`);
+  // one absolute string, never `path` resolved against a base: `//other.host/…` resolved that way
+  // leaves the primary, and so the host is checked too
+  const hostname = `${routingSlug ? `${routingSlug}.` : ""}${primaryHostname}`;
+  const url = new URL(`https://${hostname}${path}`);
+  return url.hostname === hostname ? url : null;
 }

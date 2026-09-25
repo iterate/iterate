@@ -327,6 +327,10 @@ test.each([
   },
   { target: { routingSlug: "9lives" }, url: null },
   { target: { routingSlug: "a--b" }, url: null },
+  // a path never changes the host: the edge passes a visitor's own path here
+  { target: { path: "//evil.test/x" }, url: "https://templestein.com//evil.test/x" },
+  { target: { path: "/\\evil.test/x" }, url: "https://templestein.com//evil.test/x" },
+  { target: { path: "/@evil.test/x" }, url: "https://templestein.com/@evil.test/x" },
 ])("primary hostname URL of $target", ({ target, url }) => {
   expect(primaryHostnameUrlOf("templestein.com", target)?.href ?? null).toBe(url);
 });
