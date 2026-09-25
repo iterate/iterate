@@ -14,8 +14,11 @@
 //
 // ITERATE_BEARER_TOKEN is a personal access token for the project
 // (`pnpm exec iterate --config prd tokens create`). PROJECT=prj-voice.
+import type {} from "../voice/api.ts";
 import { readFileSync, writeFileSync } from "node:fs";
 import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
+import type { RpcStub } from "capnweb";
+import type { IterateContextApiWith } from "iterate/api";
 import { createCli } from "trpc-cli";
 import { credentials, disposeSessions, session } from "./client.ts";
 
@@ -100,7 +103,9 @@ export default async function voiceCall(
 
   // ONE warm authenticated session and the project root — what a connected device holds.
   const api = session();
-  const root = api.authenticate(credentials()).projects.get(PROJECT);
+  const root: RpcStub<IterateContextApiWith<"voice">> = api
+    .authenticate(credentials())
+    .projects.get(PROJECT);
   const warm0 = now();
   await root.invoke(["itx", ["whoami"]]);
   console.log(`session + project root ready in ${now() - warm0}ms`);
@@ -122,12 +127,9 @@ export default async function voiceCall(
   // the other's answer, so both go out now.
   const setupPromise = Promise.resolve(
     root.voice.setupVoiceAgent({ streamPath: CONTEXT_PATH, activation }),
-  ).then((result: unknown) => {
+  ).then(({ streamPath }) => {
     marks.setup = at();
-    const parsed = JSON.parse(JSON.stringify(result)) as {
-      streamPath: string;
-    };
-    return parsed;
+    return { streamPath };
   });
 
   await itx.subscribe({

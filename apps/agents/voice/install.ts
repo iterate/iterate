@@ -1,6 +1,8 @@
-import type { IterateContextApi } from "iterate/api";
+import type {} from "./api.ts";
+import type { IterateContextApi, IterateContextApiWith } from "iterate/api";
 import { z } from "zod";
 import { installAgents } from "../../../configs/with-agents/agents/install.ts";
+// registers `itx.voice` on InstalledAppRoots
 
 const VoiceFileKey = z.string().regex(/^voice\/[a-f0-9]{64}\/[a-z-]+\.(js|css)$/);
 const VoiceInstall = z.object({
@@ -66,6 +68,9 @@ export async function ensureVoiceAgent(
       },
     });
   }
-  VoiceHealth.parse(await project.invoke(["itx", "voice", ["health"]]));
+  // The project's `itx.voice` rule exists now (published above, or its own), so its handle answers
+  // `voice`; a project-owned service is still parsed, since only ours is typed by VoiceApi.
+  const installed = project as typeof project & Pick<IterateContextApiWith<"voice">, "voice">;
+  VoiceHealth.parse(await installed.voice.health());
   return "ready";
 }

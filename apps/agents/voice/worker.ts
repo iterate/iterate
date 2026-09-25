@@ -9,10 +9,10 @@
  * starts the call, so the relay dials the provider before the first microphone frame arrives.
  * The device carries no source or class name; the bundles live in the project's KV.
  */
-import { z } from "zod";
 import { bytesToBase64 } from "@iterate-com/shared/base64";
 import type { IterateContextApiWith } from "iterate/api";
 import { ConfigWorker } from "iterate/sdk";
+import type { VoiceApi } from "./api.ts";
 import { VOICE_DELEGATE_CONSUMES } from "./events.ts";
 import { ScreenInfo, ScreenImageInput, renderScreenPixels } from "./screen.js";
 import SCREEN_CONTEXT from "./screen-context.md";
@@ -21,14 +21,14 @@ import SCREEN_CONTEXT from "./screen-context.md";
  * row below): the loader caches an isolate under the key, so a new build must be a new key. */
 const VOICE_AGENT_CACHE_KEY = "voice-agent:dev";
 
-export default class VoiceWorker extends ConfigWorker {
-  async health(): Promise<{ ok: true; projectId: unknown; cacheKey: string }> {
+export default class VoiceWorker extends ConfigWorker implements VoiceApi {
+  async health() {
     const { projectId } = await this.withItx((itx) => itx.whoami());
-    return { ok: true, projectId, cacheKey: VOICE_AGENT_CACHE_KEY };
+    return { ok: true as const, projectId, cacheKey: VOICE_AGENT_CACHE_KEY };
   }
 
   /** Render to the resolution and pixel format advertised by the target. */
-  async setImage(rawInput: z.input<typeof ScreenImageInput>) {
+  async setImage(rawInput: Parameters<VoiceApi["setImage"]>[0]) {
     const input = ScreenImageInput.parse(rawInput);
     const startedAt = Date.now();
     // One round trip for the whole upload, bounded by the screen's refreshTimeoutMs.
@@ -58,7 +58,7 @@ export default class VoiceWorker extends ConfigWorker {
         await screen.setImage(null);
         const transferMs = Date.now() - transferStartedAt;
         return {
-          shown: false,
+          shown: false as const,
           bytes: 0,
           renderMs: 0,
           transferMs,
@@ -132,7 +132,7 @@ export default class VoiceWorker extends ConfigWorker {
       }
       const transferMs = Date.now() - transferStartedAt;
       return {
-        shown: true,
+        shown: true as const,
         width: info.width,
         height: info.height,
         format,
@@ -146,11 +146,7 @@ export default class VoiceWorker extends ConfigWorker {
 
   /** The press. `activation` is the device's call identity: the call starts under it at boot and
    * the microphone frames carry it. */
-  async setupVoiceAgent(options: {
-    streamPath?: string;
-    activation: string;
-    screen?: boolean;
-  }): Promise<{ streamPath: string }> {
+  async setupVoiceAgent(options: Parameters<VoiceApi["setupVoiceAgent"]>[0]) {
     const streamPath = options.streamPath || `/agents/voice/${crypto.randomUUID()}`;
     if (!streamPath.startsWith("/")) {
       throw new Error(`voice streamPath must be absolute; received ${JSON.stringify(streamPath)}`);
