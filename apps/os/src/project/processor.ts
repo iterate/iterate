@@ -77,14 +77,21 @@ type TemplateDownload = (
 ) => Promise<Array<{ content: string; path: string }>>;
 
 /** What the custom-hostname effect reaches, for THIS project (durable-object.ts builds it): the
- *  deployment's reserved zones, the control plane's hostname table, and Cloudflare — null when the
- *  deployment cannot provision one (no `customHostnames` block, or no token). */
+ *  deployment's reserved zones, the control plane's hostname table and the project's primary
+ *  hostname there, and Cloudflare — null when the deployment cannot provision one (no
+ *  `customHostnames` block, or no token). */
 export type ProjectHostnames = {
   reservedZones: readonly string[];
   claim(hostname: string): Promise<void>;
   release(hostname: string): Promise<void>;
+  setPrimaryHostname(hostname: string | null): Promise<void>;
   provider: CustomHostnameProvider | null;
 };
+
+/** Whether a hostname serves: Cloudflare says its hostname and its certificate are both active —
+ *  what a primary hostname must be. */
+const hostnameIsLive = (entry: ProjectState["hostnames"][string] | undefined) =>
+  entry?.cloudflare?.status === "active" && entry.cloudflare.sslStatus === "active";
 
 export class ProjectProcessor extends StreamProcessor<
   ProjectState,
@@ -175,12 +182,15 @@ export class ProjectProcessor extends StreamProcessor<
         const known = state.hostnames[hostname];
         if (!known || known.requested?.verb === "remove") return undefined;
         const requested = known.requested?.offset === requestOffset ? null : known.requested;
+        const settled = { requested, cloudflare: cloudflare || known.cloudflare, error };
         return {
           ...state,
-          hostnames: {
-            ...state.hostnames,
-            [hostname]: { requested, cloudflare: cloudflare || known.cloudflare, error },
-          },
+          hostnames: { ...state.hostnames, [hostname]: settled },
+          // a primary that stops serving is no longer primary
+          primaryHostname:
+            state.primaryHostname === hostname && !hostnameIsLive(settled)
+              ? null
+              : state.primaryHostname,
         };
       }
       case "events.iterate.com/project/hostname-remove-requested": {
@@ -188,6 +198,8 @@ export class ProjectProcessor extends StreamProcessor<
         if (!known) return undefined;
         return {
           ...state,
+          primaryHostname:
+            state.primaryHostname === event.payload.hostname ? null : state.primaryHostname,
           hostnames: {
             ...state.hostnames,
             [event.payload.hostname]: {
@@ -209,6 +221,13 @@ export class ProjectProcessor extends StreamProcessor<
           };
         const { [hostname]: _gone, ...hostnames } = state.hostnames;
         return { ...state, hostnames };
+      }
+      case "events.iterate.com/project/primary-hostname-configured": {
+        // only a live hostname the project holds becomes primary; null clears it
+        const { hostname } = event.payload;
+        if (hostname === state.primaryHostname) return undefined;
+        if (hostname && !hostnameIsLive(state.hostnames[hostname])) return undefined;
+        return { ...state, primaryHostname: hostname };
       }
       case "events.iterate.com/repo/created":
         if (state.repos[event.payload.path]) return undefined;
@@ -258,14 +277,23 @@ export class ProjectProcessor extends StreamProcessor<
 
   override processEvent({
     state,
+    previousState,
     delivery,
     append,
+    blockProcessorWhile,
     runInBackground,
   }: ProcessEventArgs<
     ProjectState,
     ConsumedEvent<typeof ProjectContract>,
     EmittedEventInput<typeof ProjectContract>
   >): undefined {
+    // THE PRIMARY HOSTNAME, published to the control plane (the edge's redirect and `itx.url` read
+    // it there) by the event that changed it: the cursor waits for the write, so an eviction or a
+    // failed write runs it again, and every write is the value as of its event, in log order.
+    if (state.primaryHostname !== previousState.primaryHostname)
+      blockProcessorWhile(
+        async () => await this.hostnames()?.setPrimaryHostname(state.primaryHostname),
+      );
     if (!delivery.caughtUp) return;
     // THE CUSTOM HOSTNAMES — state-derived, at head, in the background: the request each hostname
     // still owes, one hostname at a time, and any later delivery runs it again after an eviction.

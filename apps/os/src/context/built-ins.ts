@@ -33,7 +33,7 @@ import type {
   StreamPage,
   WaitForEventFilter,
 } from "iterate/api";
-import { projectUrlOf, type IngressRouting } from "iterate/project-ingress";
+import { primaryHostnameUrlOf, projectUrlOf, type IngressRouting } from "iterate/project-ingress";
 import { stampCaller, type Caller } from "../caller.ts";
 import { FIRST_PARTY_FACET_CLASSES, firstPartyFacetClassOf } from "../first-party-facets.ts";
 import {
@@ -131,9 +131,10 @@ export interface BuiltInScope extends LibraryRoots {
   whoami(): Promise<{ projectId: string; path: string; projectSlug?: string; projectUrl?: string }>;
   /** THE PUBLIC URL of this project over HTTP — the apex or a `routingSlug`'s host (both reach the
    *  config worker's `fetch`, which reads the slug from `x-iterate-routing-slug`), at `path`
-   *  (default "/") — composed from the deployment's ingress routing (iterate/project-ingress:
-   *  `<routingSlug>--<slug>.<hostname>/…` under subdomains, `<origin>/projects/<slug>/<routingSlug>/…`
-   *  under paths). Refused on a deployment with no project ingress, and on a call carrying no
+   *  (default "/") — on the project's primary hostname when it has one (`<routingSlug>.<primary>/…`,
+   *  the control plane's copy, up to thirty seconds old), else composed from the deployment's
+   *  ingress routing (iterate/project-ingress: `<routingSlug>--<slug>.<hostname>/…` under
+   *  subdomains, `<origin>/projects/<slug>/<routingSlug>/…` under paths). Refused on a deployment with no project ingress, and on a call carrying no
    *  platform origin (a processor's own turn, a loaded worker: hold the URL a session handed you
    *  instead). Only a project's context has one. */
   url(target?: { routingSlug?: string; path?: string }): Promise<string>;
@@ -458,6 +459,8 @@ function abortReasonOf(reason: unknown, verb: string): string | undefined {
 /** What the CONTEXT (the DO) injects: identity, the bindings, and the operations only it can serve. */
 interface BuildBuiltInsDeps {
   projectInfo: () => Promise<{ projectSlug?: string; projectUrl?: string }>;
+  /** This project's primary hostname (project/contract.ts `primaryHostname`), or null. */
+  primaryHostname: () => Promise<string | null>;
   projectId: string;
   path: string;
   /** The codec name of the context these roots belong to (loader cache keys). */
@@ -667,11 +670,15 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
       const slug = (await deps.projectInfo()).projectSlug;
       if (!slug)
         throw codedError("INVALID_INPUT", "itx.url: only a project's context has a public URL");
-      const url = projectUrlOf(deps.ingressRouting, platformOrigin, {
-        project: slug,
-        routingSlug: target.routingSlug || null,
-        path: target.path,
-      });
+      // on the project's primary hostname when it has one, else under the deployment's ingress
+      const primaryHostname = await deps.primaryHostname();
+      const url = primaryHostname
+        ? primaryHostnameUrlOf(primaryHostname, target)
+        : projectUrlOf(deps.ingressRouting, platformOrigin, {
+            project: slug,
+            routingSlug: target.routingSlug || null,
+            path: target.path,
+          });
       if (!url)
         throw codedError(
           "INVALID_INPUT",

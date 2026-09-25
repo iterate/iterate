@@ -8,7 +8,8 @@
 import { proxyPosthogRequest } from "@iterate-com/shared/posthog";
 import { ITX_PRINCIPAL_HEADER, type Principal } from "iterate/principal";
 import { forwardIssues } from "iterate/lib";
-import { ITERATE_ROUTING_SLUG_HEADER } from "iterate/project-ingress";
+import { ITERATE_ROUTING_SLUG_HEADER, primaryHostnameUrlOf } from "iterate/project-ingress";
+import { primaryHostnameRedirectOf } from "./primary-hostname-redirect.ts";
 import { ITX_GRANT_HEADER } from "./caller.ts";
 import { IterateContextDurableObject } from "./iterate-context-durable-object.ts";
 import type { Env as WorkerEnv } from "./env.ts";
@@ -273,6 +274,28 @@ export default {
           logServedStale();
           return browserResponse;
         }
+      }
+      // THE PRIMARY HOSTNAME (primary-hostname-redirect.ts): a navigation on the ingress base goes
+      // to the project's own hostname, after the browser adapter so a sign-in under way finishes
+      // where it started. Admitted on last-known copies, the control plane is failing: served.
+      const redirect = primaryHostnameRedirectOf(request, { routing, platformOrigin });
+      if (redirect && !stale) {
+        const primaryHostname = await controlPlane
+          .primaryHostnameOf(projectId)
+          .catch((error: unknown) => controlPlaneUnavailable(error, url.hostname));
+        if (primaryHostname instanceof Response) return primaryHostname;
+        const location =
+          primaryHostname &&
+          primaryHostnameUrlOf(primaryHostname, {
+            routingSlug: redirect.routingSlug,
+            path: `${url.pathname}${url.search}`,
+          });
+        // no-store: a browser keeps a 308 it may cache, and the primary can change
+        if (location)
+          return new Response(null, {
+            status: 308,
+            headers: { location: location.href, "cache-control": "no-store" },
+          });
       }
       const bearer = /^Bearer\s+(\S+)$/i.exec(request.headers.get("authorization") ?? "")?.[1];
       const authorization = bearer

@@ -611,6 +611,8 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         : null;
       return { projectSlug: slug, ...(url && { projectUrl: url.href }) };
     },
+    primaryHostname: () =>
+      this.#controlPlane.primaryHostnameOf(this.#durableObjectAddress.projectId),
     projectId: this.#durableObjectAddress.projectId,
     path: this.#durableObjectAddress.path,
     iterateContextName: this.#durableObjectAddress.name,

@@ -62,6 +62,9 @@ export class ControlPlaneDurableObject extends DurableObject<Pick<Env, "OAUTH_KV
   projectByHostname(hostnames: readonly string[]) {
     return this.#db.projectByHostname(hostnames);
   }
+  primaryHostnameOf(projectId: string) {
+    return this.#db.primaryHostnameOf(projectId);
+  }
   invitation(tokenHash: string, userId: string | null) {
     return this.#db.invitation(tokenHash, userId, Date.now());
   }
@@ -131,6 +134,10 @@ export class ControlPlaneDurableObject extends DurableObject<Pick<Env, "OAUTH_KV
       await this.env.OAUTH_KV.delete(lastKnownKey("hostname", hostname));
       this.#write(() => this.#db.releaseHostname(projectId, hostname));
     });
+  }
+
+  setPrimaryHostname(projectId: string, hostname: string | null) {
+    this.#write(() => this.#db.setPrimaryHostname(projectId, hostname));
   }
 
   /** `project`'s copies, under its slug and its id (a project's own hostname names it by id). */

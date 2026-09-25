@@ -32,7 +32,7 @@ export const ProjectContract = defineProcessorContract({
   slug: "project",
   // A checkpoint reduced under an older version is reused as-is by the engine, so bumping the version
   // is what re-reduces every existing root log.
-  version: "10",
+  version: "11",
   description:
     "The project: where its own creation stands, its custom hostnames, and the catalog of every repo, workspace and secret born under it (from the certificates cross-posted to /).",
   /** THE REDUCED STATE — what the reduce keeps between events: where the project's OWN creation
@@ -81,6 +81,11 @@ export const ProjectContract = defineProcessorContract({
         }),
       )
       .default({}),
+    /** THE PRIMARY HOSTNAME: one of `hostnames`, live (Cloudflare's hostname and certificate both
+     *  `active`), that `itx.url` composes the project's URLs on and the edge redirects a navigation
+     *  on the ingress base to (worker.ts). Null when none; cleared when the hostname's removal is
+     *  asked or it stops being live. Published to the control plane (processor.ts). */
+    primaryHostname: z.string().nullable().default(null),
   }),
   events: {
     "events.iterate.com/project/create-requested": {
@@ -129,6 +134,11 @@ export const ProjectContract = defineProcessorContract({
         requestOffset: z.number().int().positive(),
       }),
     },
+    "events.iterate.com/project/primary-hostname-configured": {
+      description:
+        "Make `hostname` the project's primary hostname, or clear it with null. Only a live hostname the project holds becomes primary; any other leaves the primary as it was.",
+      payloadSchema: z.object({ hostname: z.string().min(1).nullable() }),
+    },
   },
   // THE RELATIONSHIP: the project consumes the entities' certificates without owning them, and the
   // core's apex target (`itx/ingress-configured`), which it both appends and reduces.
@@ -141,6 +151,7 @@ export const ProjectContract = defineProcessorContract({
     "events.iterate.com/project/hostname-add-settled",
     "events.iterate.com/project/hostname-remove-requested",
     "events.iterate.com/project/hostname-removed",
+    "events.iterate.com/project/primary-hostname-configured",
     "events.iterate.com/repo/created",
     "events.iterate.com/workspace/created",
     "events.iterate.com/repo/deleted",

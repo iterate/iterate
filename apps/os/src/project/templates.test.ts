@@ -235,6 +235,7 @@ async function create(fixture: ReturnType<typeof project>, template?: string) {
         configRepoTemplate: template,
       },
     },
+    previousState: ProjectContract.initialState(),
     delivery: { caughtUp: true },
     append: fixture.append,
     runInBackground: (run: () => Promise<unknown>) => {

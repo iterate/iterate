@@ -47,9 +47,13 @@ const UrlPatternInit = z
     { message: "url is not a URLPattern" },
   );
 
-/** WHICH requests a route takes — every field given must hold: the host's routing slug (the
- *  `x-iterate-routing-slug` the edge stamps; absent on the apex), the URL the app sees against a
- *  standard `URLPattern`, and exact header values (names case-insensitive). `{}` takes every request. */
+/** WHICH requests a route takes — every field given must hold. A fetch route matches an HTTP
+ *  request: `url` is a standard `URLPattern` over the real URL the app sees (hostname and path),
+ *  and `headers` are exact values (names case-insensitive). `routingSlug` is a convenience (the
+ *  `x-iterate-routing-slug` the edge stamps; absent on the apex): the one address component both
+ *  ingress modes can express (iterate/project-ingress `ROUTING_SLUG`). Without paths routing it
+ *  could go, and a route would match its hostname directly
+ *  (`url: { hostname: "here.tunnels.templestein.com" }`). `{}` takes every request. */
 const FetchRouteRequestMatcher = z.strictObject({
   routingSlug: z
     .string()
