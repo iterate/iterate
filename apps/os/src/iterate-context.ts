@@ -60,6 +60,8 @@ import {
 } from "./context/paths.ts";
 import { SessionTeardown } from "./session.ts";
 import { isPlatformFailure } from "./retryable-error.ts";
+import type { repoVerbs } from "./repo/durable-object.ts";
+import type { workspaceVerbs } from "./workspace/durable-object.ts";
 
 export type IterateContextNamespace = DurableObjectNamespace<IterateContextDurableObject>;
 export type WaitUntil = (p: Promise<unknown>) => void;
@@ -78,28 +80,49 @@ const READ_CALLS: ReadonlySet<string> = new Set([
   "subscriptions.list",
   "processors.list",
   "repos.list",
-  ...["tip", "readFile", "readModules", "modules", "listFiles", "log"].map(
-    (verb) => `repos.get.${verb}`,
-  ),
+  ...(
+    [
+      "tip",
+      "readFile",
+      "readModules",
+      "modules",
+      "listFiles",
+      "log",
+    ] satisfies (typeof repoVerbs)[number][]
+  ).map((verb) => `repos.get.${verb}`),
   "workspaces.list",
-  ...["mounts", "readFile", "readBase", "listAllFiles", "gitStatus", "gitLog"].map(
-    (verb) => `workspaces.get.${verb}`,
-  ),
+  ...(
+    [
+      "mounts",
+      "readFile",
+      "readBase",
+      "listAllFiles",
+      "gitStatus",
+      "gitLog",
+    ] satisfies (typeof workspaceVerbs)[number][]
+  ).map((verb) => `workspaces.get.${verb}`),
 ]);
 
-/** An event the log answers with itself when it lands twice (stream/stream.ts). */
-const KeyedEvent = z.object({ idempotencyKey: z.string().min(1) });
+/** An event the log answers with itself when it lands twice: a durable one under an idempotency key,
+ *  which stream/stream.ts finds in its rows. An ephemeral is never stored, so its key matches
+ *  nothing on a second call. */
+const KeyedDurableEvent = z.object({
+  idempotencyKey: z.string().min(1),
+  ephemeral: z.literal(false).optional(),
+});
 
 /** Whether running `itxExpression` twice is running it once: a read (`READ_CALLS`), or an append
- *  whose every event carries an idempotency key. A call with live args (a Request, a callback) is
- *  neither. */
+ *  whose every event is durable and carries an idempotency key. A call with live args (a Request, a
+ *  callback) is neither. */
 function isIdempotentItxCall(itxExpression: ItxExpression, args: unknown[]): boolean {
   if (args.length > 0) return false;
   let steps = itxExpression.slice(itxExpression[1] === "builtins" ? 2 : 1);
   while (Array.isArray(steps[0]) && steps[0][0] === "cd") steps = steps.slice(1);
   const [call] = steps;
   if (steps.length === 1 && Array.isArray(call) && call[0] === "append")
-    return call.length > 1 && call.slice(1).every((event) => KeyedEvent.safeParse(event).success);
+    return (
+      call.length > 1 && call.slice(1).every((event) => KeyedDurableEvent.safeParse(event).success)
+    );
   return READ_CALLS.has(steps.map(itxExpressionStepName).join("."));
 }
 

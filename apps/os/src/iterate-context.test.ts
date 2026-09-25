@@ -41,7 +41,7 @@ test.for([
     retries: [{ name: "itx.append", message: "Error: Network connection lost." }],
   },
   {
-    name: "a read through cd from loaded code is sent again",
+    name: "a read through cd is sent again",
     call: ["itx", ["cd", "/notes"], ["waitForEvent", { type: "x" }]],
     failures: ["storage timeout"],
     outcome: { answer: "answered" },
@@ -64,6 +64,21 @@ test.for([
   {
     name: "an append with one event of the batch unkeyed is never sent twice",
     call: ["itx", ["append", { type: "a", idempotencyKey: "k1" }, { type: "b" }]],
+    failures: ["connection lost"],
+    outcome: { error: "Network connection lost." },
+    retries: [],
+  },
+  {
+    name: "a keyed ephemeral append is never sent twice: no row holds its key",
+    call: ["itx", ["append", { type: "a", idempotencyKey: "k1", ephemeral: true }]],
+    failures: ["connection lost"],
+    outcome: { error: "Network connection lost." },
+    retries: [],
+  },
+  {
+    name: "a read with a live argument is never sent twice",
+    call: ["itx", ["readEvents", 0, 10]],
+    args: [() => {}],
     failures: ["connection lost"],
     outcome: { error: "Network connection lost." },
     retries: [],
@@ -99,45 +114,49 @@ test.for([
 ] satisfies {
   name: string;
   call: ItxExpression;
+  args?: unknown[];
   failures: Failure[];
   outcome: { answer: string } | { error: string };
   retries: { name: string; message: string }[];
-}[])("platform failures at the edge: $name", async ({ call, failures, outcome, retries }) => {
-  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-  onTestFinished(() => warn.mockRestore());
-  const left = [...failures];
-  const invoke = vi.fn(async () => {
-    const failure = left.shift();
-    if (failure) throw platformError(failure);
-    return "answered";
-  });
-  const getByName = vi.fn(() => ({ invoke }));
-  const context = new IterateContextRpcTarget(
-    // The fake namespace answers the one method the edge calls on it.
-    { getByName } as unknown as IterateContextNamespace,
-    DurableObjectNameCodec.address({ projectId: "prj_edge", path: "/" }),
-    new SessionTeardown(),
-    () => {},
-    { principal: null },
-  );
-  const settled = await context.invoke(call).then(
-    (answer) => ({ answer }),
-    (error: Error) => ({ error: error.message }),
-  );
-  expect(settled).toEqual(outcome);
-  expect(invoke).toHaveBeenCalledTimes(1 + retries.length);
-  expect(getByName).toHaveBeenCalledTimes(1 + retries.length); // each attempt on a fresh stub
-  expect(warn.mock.calls.map(([line]) => line)).toEqual(
-    retries.map((retry) => ({
-      event: "itx.platform-failure-retry",
-      projectId: "prj_edge",
-      path: "/",
-      attempt: 1,
-      retryInMs: 0,
-      ...retry,
-    })),
-  );
-});
+}[])(
+  "platform failures at the edge: $name",
+  async ({ call, args = [], failures, outcome, retries }) => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    onTestFinished(() => warn.mockRestore());
+    const left = [...failures];
+    const invoke = vi.fn(async () => {
+      const failure = left.shift();
+      if (failure) throw platformError(failure);
+      return "answered";
+    });
+    const getByName = vi.fn(() => ({ invoke }));
+    const context = new IterateContextRpcTarget(
+      // The fake namespace answers the one method the edge calls on it.
+      { getByName } as unknown as IterateContextNamespace,
+      DurableObjectNameCodec.address({ projectId: "prj_edge", path: "/" }),
+      new SessionTeardown(),
+      () => {},
+      { principal: null },
+    );
+    const settled = await context.invoke(call, ...args).then(
+      (answer) => ({ answer }),
+      (error: Error) => ({ error: error.message }),
+    );
+    expect(settled).toEqual(outcome);
+    expect(invoke).toHaveBeenCalledTimes(1 + retries.length);
+    expect(getByName).toHaveBeenCalledTimes(1 + retries.length); // each attempt on a fresh stub
+    expect(warn.mock.calls.map(([line]) => line)).toEqual(
+      retries.map((retry) => ({
+        event: "itx.platform-failure-retry",
+        projectId: "prj_edge",
+        path: "/",
+        attempt: 1,
+        retryInMs: 0,
+        ...retry,
+      })),
+    );
+  },
+);
 
 type Failure =
   | "storage timeout"
