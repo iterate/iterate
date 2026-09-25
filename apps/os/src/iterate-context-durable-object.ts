@@ -37,6 +37,7 @@ import {
 } from "iterate/expression";
 import { ITX_PRINCIPAL_HEADER, type Principal } from "iterate/principal";
 import type { RewriteRuleListEntry, StreamPage, SubscriptionListEntry } from "iterate/api";
+import type { ItxEntrypointService } from "iterate/sdk";
 import { ITERATE_ROUTING_SLUG_HEADER } from "iterate/project-ingress";
 import { RunRequested, type RunSettlement } from "iterate/stream/run";
 import {
@@ -936,6 +937,18 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     path: this.#durableObjectAddress.path,
     platformOrigin: () => this.#platformOrigin,
     itxEntrypoint: () => this.#itxEntrypoint,
+    caller: () => this.#caller,
+    itxCallerAt: (path) => ({
+      path,
+      // The loopback minted for `path` as for this context's own (`#itxEntrypoint`): `get()` answers
+      // app code walled there. `itxEntrypointFor` types it as the Fetcher it is; the SDK names what
+      // it serves, `ItxEntrypoint`'s `get` and `fetch`.
+      itx: itxEntrypointFor(
+        this.ctx,
+        DurableObjectNameCodec.stringify({ projectId: this.#durableObjectAddress.projectId, path }),
+        this.#platformOrigin,
+      ) as unknown as ItxEntrypointService,
+    }),
     // A producer is loaded code's word: walled on its input and on every row it appends.
     invoke: (call) => this.#invokeInProcess(call, [], { principal: null, app: true }),
     resolveItxExpression: (expression) => this.#itxExpressionResolver.resolve(expression),

@@ -11,12 +11,19 @@
 // Dynamic code has two entry points, one per host kind: `workers.get(spec)` (stateless) and
 // `facets.get(name, spec)` (durable) — the `BuiltInScope` members below say what each takes.
 
-import { codedError, errorCode, jsonEqual, reportIssue, resolveContextPath } from "iterate/lib";
+import {
+  codedError,
+  errorCode,
+  jsonEqual,
+  releaseRpcSessions,
+  reportIssue,
+  resolveContextPath,
+} from "iterate/lib";
 import { z } from "zod";
 import type { StreamEventInput } from "iterate/stream/processor";
 import {
+  itxExpressionStepName,
   normalizedItxExpression,
-  print,
   type ItxExpression,
   type ItxExpressionStep,
   InvokeHandle,
@@ -51,7 +58,13 @@ import {
 } from "../fetch-routes.ts";
 import { normalizeSecretOAuth } from "../secret-oauth.ts";
 import { isDeployReset } from "../retryable-error.ts";
-import { FacetHandle, RpcStubHandle, materializeItxHandleReference } from "./dispatch.ts";
+import {
+  FacetHandle,
+  RpcStubHandle,
+  awaitAnswerReleasedIfRejected,
+  materializeItxHandleReference,
+  walkSteps,
+} from "./dispatch.ts";
 import { assertFacetPlacement, assertLoadedCodePlacement } from "./first-party-facet-placement.ts";
 import {
   ITX_EXPRESSION_FETCH_HEADER,
@@ -1603,8 +1616,9 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
     // A genuine InvokeHandle so `workers.get(spec).run()` pipelines over every transport (workerd#6873). A
     // terminal `fetch(request)` is this same call: `entrypoint.fetch(request)` IS the entrypoint's
     // fetch channel, socket-bearing Responses included (context/rpc-stubs.ts doctrine, point 4).
-    // Re-resolves per call; the loader caches by key, so a warm isolate is reused and a producer
-    // expression never re-runs.
+    // A chained walk (`make(7).ping()`) walks each step on what the one before answered, as a
+    // facet's does. Re-resolves per call; the loader caches by key, so a warm isolate is reused and
+    // a producer expression never re-runs.
     workers: {
       get: (spec: {
         source: WorkerSource;
@@ -1612,13 +1626,7 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
         className?: string;
         props?: unknown;
       }) =>
-        new InvokeHandle(async (methodSteps) => {
-          const [call] = methodSteps;
-          if (methodSteps.length !== 1 || !Array.isArray(call) || call[0] === "")
-            throw new Error(
-              `workers.get(spec).${print(methodSteps)}: a WorkerEntrypoint exposes flat methods`,
-            );
-          const [method, ...args] = call;
+        new InvokeHandle(async (steps) => {
           // Loaded code runs only inside a project (first-party-facet-placement.ts rule 6) —
           // refused before a source expression runs or anything loads.
           assertLoadedCodePlacement("workers.get", { projectId, path });
@@ -1645,26 +1653,40 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
               invoke: deps.invoke,
               where: "workers.get",
             });
+            // What the walk steps past holds a session onto the worker until disposed: released once
+            // the answer is in (facet-host.ts `#call`).
+            const rpcSessionsSteppedPast: unknown[] = [];
             try {
               const entrypoint = load().getEntrypoint(
                 spec.className,
                 spec.props === undefined ? undefined : { props: spec.props },
-                // A loaded entrypoint's methods are the author's; `fn` is checked to be one below.
-              ) as Fetcher & Record<string, (...a: unknown[]) => Promise<unknown>>;
-              const fn = entrypoint[method];
-              if (typeof fn !== "function")
-                throw new Error(`workers.get(spec): the entrypoint has no method "${method}"`);
-              return await Reflect.apply(fn, entrypoint, args);
+              );
+              const { value } = await walkSteps(
+                { value: entrypoint, receiver: undefined },
+                steps,
+                rpcSessionsSteppedPast,
+              );
+              return await awaitAnswerReleasedIfRejected(value);
             } catch (error) {
               if (isCloneVersionFailure(error)) retire();
               throw error;
+            } finally {
+              releaseRpcSessions(rpcSessionsSteppedPast);
             }
           };
           try {
             return await attempt();
           } catch (error) {
             if (!isCloneVersionFailure(error)) throw error;
-            const request = method === "fetch" && args[0] instanceof Request ? args[0] : undefined;
+            // Only a walk that is one `fetch(request)` may be replayed.
+            const [first] = steps;
+            const request =
+              steps.length === 1 &&
+              Array.isArray(first) &&
+              first[0] === "fetch" &&
+              first[1] instanceof Request
+                ? first[1]
+                : undefined;
             const replayable =
               request?.body === null && (request.method === "GET" || request.method === "HEAD");
             console.warn({
@@ -1673,7 +1695,7 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
                 : "workers.platform-failure-retire",
               namespace: "iterate-context",
               name: iterateContextName,
-              method,
+              method: itxExpressionStepName(first),
               requestMethod: request?.method,
               message: error.message,
             });
