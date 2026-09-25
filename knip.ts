@@ -27,8 +27,6 @@ export default {
     "configs/*/worker.ts": ["unresolved"],
     // The types it names resolve from each extending app's own dependencies.
     "tsconfig.app.json": ["unlisted", "unresolved"],
-    // packageExtensions adds @types/react as a peer of lucide-react and streamdown.
-    "pnpm-workspace.yaml": ["unlisted"],
   },
   workspaces: {
     ".": {
