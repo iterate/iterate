@@ -1,10 +1,12 @@
 // THE CONTEXT VIEW — one context's stream with its processors and its presence, the general-purpose
-// view every app reuses (the dash's activity pages, the agents feed's base): a strip (what this is,
-// how many events, who is here, the mode, the two buttons), a filter row (a text query, the types
+// view every app reuses (the dash's activity pages, the agents feed's base): a strip, one line (what
+// this is — a path once, each segment a link up, `context-path.tsx` —, how many events, who is here,
+// then Pretty | Raw, Filter and Processors as labelled text buttons), a filter row (a text query, the types
 // left ticked), the log folded for reading (folds.tsx) as rows one line wide on a desktop and two
 // on a phone, and two right-edge sheets — the inspector for one event, the processors with their
-// live state. Three modes: Pretty (sentences, housekeeping folded, repeats counted),
-// Pretty + raw (every event, sentence and raw line), Raw (the log as data). Nothing here ever
+// live state. Two modes on the strip: Pretty (sentences, housekeeping folded, repeats counted) and
+// Raw (the log as data); Pretty + raw (every event, sentence and raw line) is still a URL's
+// `mode=pretty-raw`, and what an opened fold lists. Nothing here ever
 // scrolls sideways; the inspector shows what a line cuts.
 // BUILT FOR 100,000 EVENTS: the log arrives newest page first and grows at both ends (live
 // appends, older pages as the reader scrolls up — `older`); the filter, the type counts and the fold
@@ -20,11 +22,10 @@
 // APPENDING: given `onAppend` (the caller's `itx.append`), a raw YAML composer sits under the feed
 // (append-composer.tsx), closed to one button; what it appends arrives by the live subscription, and
 // the feed follows its tail so it lands in view. No `onAppend`, no composer.
-import { useCallback, useMemo, useRef, useState, type ReactNode } from "react";
-import { FilterIcon, LayersIcon } from "lucide-react";
+import { useCallback, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { cn } from "cn";
-import { Button } from "../button.tsx";
 import { Spinner } from "../spinner.tsx";
+import { ContextPathLinksContext, type ContextPathLinks } from "./context-path.tsx";
 import {
   contextViewFilterOf,
   RIGHT_EDGE_CLOSED,
@@ -59,11 +60,17 @@ import {
   rendererFor,
 } from "./types.tsx";
 
-const MODES: { id: ContextViewMode; label: string; short: string }[] = [
-  { id: "pretty", label: "Pretty", short: "Pretty" },
-  { id: "pretty-raw", label: "Pretty + raw", short: "+raw" },
-  { id: "raw", label: "Raw", short: "Raw" },
+const MODES: { id: ContextViewMode; label: string }[] = [
+  { id: "pretty", label: "Pretty" },
+  { id: "raw", label: "Raw" },
 ];
+
+/** The strip's text buttons: a word, muted, the one that is on on a quiet fill — no border. */
+const stripButton = (on: boolean) =>
+  cn(
+    "rounded-md px-2 py-0.5 whitespace-nowrap",
+    on ? "bg-muted text-foreground" : "text-muted-foreground hover:text-foreground",
+  );
 
 export function ContextView({
   title,
@@ -74,10 +81,11 @@ export function ContextView({
   state,
   onStateChange,
   onAppend,
+  pathLinks,
   emptyText = "Nothing has happened on this context yet.",
   className,
 }: {
-  /** What this context is, for the strip: a path, a name. */
+  /** What this context is, for the strip: a path (`ContextPath`), a name. */
   title: ReactNode;
   /** The context, live: what `useIterateContext(itx)` returns. */
   context: ContextViewSource;
@@ -93,6 +101,8 @@ export function ContextView({
   /** Append to the context (`(events) => itx.append(...events)`); omitted = a view with no composer.
    *  The platform stamps who appended: nothing to add here. */
   onAppend?: (events: ContextViewAppendEvent[]) => Promise<unknown>;
+  /** Where a context path a row names links (a child context's); omitted = plain text. */
+  pathLinks?: ContextPathLinks;
   emptyText?: string;
   className?: string;
 }) {
@@ -170,103 +180,105 @@ export function ContextView({
     : older.exhausted
       ? `${loaded} events`
       : `${loaded} loaded of ~${(head ?? 0).toLocaleString()} events`;
+  // every row's columns start in line: the offset gutter fits the largest offset, `#` included
+  // (the feed's rows, the day marks and the composer read it); cast: React's CSSProperties has no
+  // index for a custom property
+  const gutter = {
+    "--offset-width": `${String(String(events.at(-1)?.offset ?? 0).length + 1)}ch`,
+  } as CSSProperties;
   return (
-    <div className={cn("flex min-h-0 min-w-0 flex-col gap-2", className)}>
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
-        <div className="min-w-0 flex-1 truncate text-sm">{title}</div>
-        <span className="text-xs text-muted-foreground tabular-nums">
-          {count}
-          {caughtUp ? "" : " · loading"}
-          <EventRate events={events} />
-        </span>
+    <div className={cn("flex min-h-0 min-w-0 flex-col", className)} style={gutter}>
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 px-3 sm:px-4 py-1.5">
+        <div className="flex min-w-0 items-baseline gap-4">
+          <div className="min-w-0 truncate text-sm">{title}</div>
+          <span className="shrink-0 text-xs text-muted-foreground tabular-nums">
+            {count}
+            {caughtUp ? "" : " · loading"}
+            <EventRate events={events} />
+          </span>
+        </div>
         <PresenceStrip
+          className="hidden min-w-0 xl:flex"
           actors={presence.actors}
           rpcStubs={presence.rpcStubs}
           onPick={(actor) => onStateChange({ actor: filter.actor === actor ? undefined : actor })}
         />
-        <div
-          role="tablist"
-          aria-label="How the log reads"
-          className="flex rounded-md border p-0.5 text-xs"
-        >
-          {MODES.map((candidate) => (
-            <button
-              key={candidate.id}
-              type="button"
-              role="tab"
-              aria-selected={mode === candidate.id}
-              onClick={() =>
-                onStateChange({ mode: candidate.id === "pretty" ? undefined : candidate.id })
-              }
-              className={cn(
-                "rounded px-2 py-0.5 whitespace-nowrap",
-                mode === candidate.id
-                  ? "bg-muted text-foreground"
-                  : "text-muted-foreground hover:text-foreground",
-              )}
-            >
-              <span className="sm:hidden">{candidate.short}</span>
-              <span className="hidden sm:inline">{candidate.label}</span>
-            </button>
-          ))}
+        <div className="ml-auto flex items-center gap-3 text-xs">
+          <div role="tablist" aria-label="How the log reads" className="flex gap-0.5">
+            {MODES.map((candidate) => (
+              <button
+                key={candidate.id}
+                type="button"
+                role="tab"
+                aria-selected={mode === candidate.id}
+                onClick={() =>
+                  onStateChange({ mode: candidate.id === "pretty" ? undefined : candidate.id })
+                }
+                className={stripButton(mode === candidate.id)}
+              >
+                {candidate.label}
+              </button>
+            ))}
+          </div>
+          <button
+            type="button"
+            onClick={() => onStateChange({ filter: filtering ? undefined : true })}
+            aria-expanded={filtering}
+            className={stripButton(filtering || filtered)}
+          >
+            Filter
+          </button>
+          <button
+            type="button"
+            onClick={() => onStateChange({ ...RIGHT_EDGE_CLOSED, processors: true })}
+            className={stripButton(false)}
+          >
+            Processors <span className="text-foreground tabular-nums">{processors.length}</span>
+          </button>
         </div>
-        <Button
-          variant={filtering || filtered ? "secondary" : "ghost"}
-          size="sm"
-          onClick={() => onStateChange({ filter: filtering ? undefined : true })}
-          aria-label="Filter"
-          aria-expanded={filtering}
-        >
-          <FilterIcon className="size-4" />
-        </Button>
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={() => onStateChange({ ...RIGHT_EDGE_CLOSED, processors: true })}
-          aria-label="Processors"
-        >
-          <LayersIcon className="size-4" />
-          <span className="ml-1 text-xs">{processors.length}</span>
-        </Button>
       </div>
       {filtering ? (
-        <FilterRow
-          filter={filter}
-          counts={types}
-          narrowed={filtered}
-          partial={!older.exhausted}
-          loaded={loaded}
-          onStateChange={onStateChange}
-        />
+        <div className="px-3 sm:px-4 pb-2">
+          <FilterRow
+            filter={filter}
+            counts={types}
+            narrowed={filtered}
+            partial={!older.exhausted}
+            loaded={loaded}
+            onStateChange={onStateChange}
+          />
+        </div>
       ) : null}
       {error ? (
-        <p data-type="error" className="text-sm text-destructive">
+        <p data-type="error" className="px-3 sm:px-4 text-sm text-destructive">
           {error}
         </p>
       ) : null}
-      <FeedList
-        items={items}
-        namedBefore={namedBefore}
-        mode={mode}
-        renderers={allRenderers}
-        inspected={inspected}
-        onInspect={inspect}
-        opened={opened}
-        onToggle={toggleOpened}
-        older={older}
-        followTail={followTail}
-        empty={
-          error ? null : caughtUp ? (
-            <p className="px-2 py-6 text-sm text-muted-foreground">
-              {filtered ? "No event matches the filter." : emptyText}
-            </p>
-          ) : (
-            <div className="flex items-center gap-2 px-2 py-6 text-sm text-muted-foreground">
-              <Spinner /> Loading the log…
-            </div>
-          )
-        }
-      />
+      <ContextPathLinksContext value={pathLinks}>
+        <FeedList
+          items={items}
+          namedBefore={namedBefore}
+          mode={mode}
+          renderers={allRenderers}
+          inspected={inspected}
+          onInspect={inspect}
+          opened={opened}
+          onToggle={toggleOpened}
+          older={older}
+          followTail={followTail}
+          empty={
+            error ? null : caughtUp ? (
+              <p className="px-3 sm:px-4 py-6 text-sm text-muted-foreground">
+                {filtered ? "No event matches the filter." : emptyText}
+              </p>
+            ) : (
+              <div className="flex items-center gap-2 px-3 sm:px-4 py-6 text-sm text-muted-foreground">
+                <Spinner /> Loading the log…
+              </div>
+            )
+          }
+        />
+      </ContextPathLinksContext>
       {onAppend ? (
         <AppendComposer
           onAppend={onAppend}

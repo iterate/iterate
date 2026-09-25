@@ -87,7 +87,7 @@ test("lastEventOf anchors the next gap at the end of a fold", () => {
 test("housekeepingSummary counts by kind", () => {
   expect(
     housekeepingSummary([log[1]!, log[2]!, log[7]!, log[8]!, log[9]!].map((e) => e.type)),
-  ).toBe("woke ×2 · subscriptions ×2 · live state ×1");
+  ).toBe("woke ×2, subscription ×2, live state");
 });
 
 // ── the same fact is the same sentence ──
