@@ -34,7 +34,7 @@ export const ProjectContract = defineProcessorContract({
   // is what re-reduces every existing root log.
   version: "12",
   description:
-    "The project: where its own creation stands, its custom hostnames, every context under it (from the announcements each lands on /), and the catalog of every repo, workspace and secret born under it (from the certificates cross-posted to /).",
+    "The project: where its own creation and deletion stand, its custom hostnames, every context under it (from the announcements each lands on /), and the catalog of every repo, workspace and secret born under it (from the certificates cross-posted to /).",
   /** THE REDUCED STATE — what the reduce keeps between events: where the project's OWN creation
    *  stands, as the OFFSET of the event that says so (the request, the certificate, or the failure —
    *  read that event for the error), and the CATALOG of what exists under it — read by each
@@ -48,6 +48,9 @@ export const ProjectContract = defineProcessorContract({
       })
       .nullable()
       .default(null),
+    /** The project's DELETION, asked for by the platform at this offset: the saga is destroying it,
+     *  its root last. Null while the project lives. */
+    deletion: z.object({ offset: z.number().int().positive() }).nullable().default(null),
     /** Every repo born under the project, by its context path. */
     repos: z.record(z.string(), z.object({ createdAt: z.string() })).default({}),
     /** Every workspace born under the project, by path. */
@@ -109,6 +112,26 @@ export const ProjectContract = defineProcessorContract({
       description: "What provisioning reported. Terminal until a new request.",
       payloadSchema: z.object({ error: z.string() }),
     },
+    "events.iterate.com/project/delete-requested": {
+      description:
+        "The project's owner deleted it (`session.projects.delete`): the control plane has already dropped its row, so nothing reaches it any more. The processor destroys every context in the project's registry (deepest first), its custom hostnames, its kv, files and Artifacts repos, lands `project/deleted`, and destroys `/` last. Honoured only as the platform's own fact (`source.platform`): a member can append it, and it does nothing.",
+      payloadSchema: z.object({}),
+    },
+    "events.iterate.com/project/context-deleted": {
+      description:
+        "One of the project's contexts was destroyed by the deletion saga: its storage, its facets' and its alarm are gone. A record: nothing reads it back.",
+      payloadSchema: z.object({ path: z.string().min(1) }),
+    },
+    "events.iterate.com/project/delete-failed": {
+      description:
+        "A deletion pass failed three times over (the saga retries after 5 s and 30 s): the error. The saga stops in this incarnation, and a later one starts it again. A record: nothing reads it back.",
+      payloadSchema: z.object({ error: z.string() }),
+    },
+    "events.iterate.com/project/deleted": {
+      description:
+        "Every context but `/`, the custom hostnames, kv, files and Artifacts repos are gone; `/` itself is destroyed next. A record: nothing reads it back.",
+      payloadSchema: z.object({}),
+    },
     "events.iterate.com/project/hostname-add-requested": {
       description:
         "Serve this project on `hostname` — its apex there, and `<routingSlug>.<hostname>` with that routing slug. The processor claims it in the control plane's hostname table and creates the wildcard Cloudflare for SaaS custom hostname, then lands hostname-add-settled. Again for a hostname already added re-reads Cloudflare's status.",
@@ -150,6 +173,8 @@ export const ProjectContract = defineProcessorContract({
     "events.iterate.com/project/create-requested",
     "events.iterate.com/project/created",
     "events.iterate.com/project/create-failed",
+    "events.iterate.com/project/delete-requested",
+    "events.iterate.com/itx/child-created",
     "events.iterate.com/project/hostname-add-requested",
     "events.iterate.com/project/hostname-add-settled",
     "events.iterate.com/project/hostname-remove-requested",
@@ -168,6 +193,9 @@ export const ProjectContract = defineProcessorContract({
   emits: [
     "events.iterate.com/project/created",
     "events.iterate.com/project/create-failed",
+    "events.iterate.com/project/context-deleted",
+    "events.iterate.com/project/delete-failed",
+    "events.iterate.com/project/deleted",
     "events.iterate.com/project/hostname-add-settled",
     "events.iterate.com/project/hostname-removed",
     // the core's: the saga points the project's apex at the seeded config repo's commit, and the

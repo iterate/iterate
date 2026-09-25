@@ -44,6 +44,7 @@ import {
   upsertMembership,
 } from "./db/queries/.generated/organizations.sql.ts";
 import {
+  deleteProject,
   firstOrganizationOf,
   insertAdminOrganization,
   insertFirstOrganizationProject,
@@ -584,6 +585,42 @@ export class ControlPlaneDatabase {
       project,
       rowsOf<firstOrganizationOf.Result>(minted, 3)[0]?.id,
       restoring,
+    );
+  }
+
+  /** The project `caller` may delete — the owner of its organization, or the operator — or a
+   *  refusal. Asked before the deletion is requested, so nothing is asked for that the row's delete
+   *  would then refuse; `deleteProject`'s statement checks again as it deletes. */
+  async projectToDelete(caller: Caller, ref: string): Promise<ProjectRecord> {
+    const guard = this.#ownerGuard(caller, "delete a project of");
+    const project = await this.project(ref);
+    if (!project) throw codedError("FORBIDDEN", "You cannot delete that project.");
+    if (guard.asOperator) return project;
+    const organization = await organizationRole(this.#client, {
+      orgId: project.orgId,
+      userId: guard.actorId,
+    });
+    const refusal = ownerRefusal(organization || undefined, guard, "delete a project of");
+    if (refusal) throw refusal;
+    return project;
+  }
+
+  /** Delete a project's row: the statement's own `where` lets only the organization's owner, or the
+   *  operator, delete it. Nothing reaches the project once its row is gone; its data is the deletion
+   *  saga's (project/processor.ts), and so are its hostname claims, which are no foreign key: the
+   *  saga removes each custom hostname at Cloudflare, then releases the claim, so no other project
+   *  takes the name while Cloudflare still serves it. Answers the row deleted. */
+  async deleteProject(caller: Caller, ref: string): Promise<ProjectRecord> {
+    const project = await this.projectToDelete(caller, ref);
+    const guard = this.#ownerGuard(caller, "delete a project of");
+    const results = await batch(this.#d1, [
+      deleteProject.query({ id: project.id, ...guard }),
+      organizationRole.query({ orgId: project.orgId, userId: guard.actorId }),
+    ]);
+    if (changed(results[0])) return project;
+    throw (
+      ownerRefusal(rowsOf<organizationRole.Result>(results, 1)[0], guard, "delete a project of") ??
+      codedError("FORBIDDEN", "You cannot delete that project.")
     );
   }
 

@@ -4,7 +4,7 @@
 // landing the request, the processor landing the certificate on `/` — is pinned end to end in
 // e2e/session.e2e.test.ts.
 
-import { expect, test } from "vitest";
+import { expect, onTestFinished, test, vi } from "vitest";
 import type { StreamEventInput } from "iterate/stream/processor";
 import { reduceProcessor } from "iterate/stream/test-support";
 import { normalizeControlEvent } from "../stream/core-processor.ts";
@@ -17,10 +17,12 @@ const requested = {
 };
 const created = { type: "events.iterate.com/project/created", payload: {} };
 const failed = { type: "events.iterate.com/project/create-failed", payload: { error: "boom" } };
+const deleted = { type: "events.iterate.com/project/deleted", payload: {} };
 
 /** The empty state; a row spreads it and names only what its events changed. */
 const empty: ProjectState = {
   creation: null,
+  deletion: null,
   repos: {},
   workspaces: {},
   contexts: {},
@@ -82,6 +84,7 @@ const reduceRows: {
     events: [requested, created, repoBorn("/repos/config"), workspaceBorn("/workspaces/notes")],
     state: {
       creation: { status: "created", offset: 2 },
+      deletion: null,
       repos: { "/repos/config": { createdAt: expect.any(String) } },
       workspaces: { "/workspaces/notes": { createdAt: expect.any(String) } },
       contexts: {},
@@ -306,6 +309,23 @@ const reduceRows: {
       workspaceBorn("/w"),
     ],
     state: { ...empty, workspaces: { "/w": { createdAt: expect.any(String) } } },
+  },
+  {
+    name: "a delete request the platform stamped opens the deletion, at its offset — once; the saga's own records change nothing",
+    events: [
+      requested,
+      created,
+      deleteRequested({ platform: true }),
+      deleteRequested({ platform: true }),
+      { type: "events.iterate.com/project/context-deleted", payload: { path: "/a" } },
+      deleted,
+    ],
+    state: { ...empty, creation: { status: "created", offset: 2 }, deletion: { offset: 3 } },
+  },
+  {
+    name: "a member's delete request (no platform stamp), or their forged certificate, deletes nothing and stops nothing",
+    events: [requested, created, deleteRequested(), deleted, deleteRequested({ platform: true })],
+    state: { ...empty, creation: { status: "created", offset: 2 }, deletion: { offset: 5 } },
   },
 ];
 for (const { name, events, state } of reduceRows)
@@ -566,6 +586,176 @@ test("ProjectProcessor — a drained re-check knows the add it just answered pro
   expect(calls).toEqual(["claim www.acme.test", "claim www.acme.test"]);
 });
 
+// THE DELETION SAGA — driven by hand like the effects above, over a fake reach (processor.ts
+// `ProjectDeletion`) that records every call.
+test("ProjectProcessor — the deletion: the saga destroys each context the registry names deepest first, each answered by a keyed context-deleted that nothing reads back, then the hostnames, the project's storage, the certificate, and `/` last — and no other saga runs meanwhile", async () => {
+  const calls: string[] = [];
+  const processor = new ProjectProcessor(
+    () => {
+      calls.push("withItx (another saga ran)");
+      return Promise.reject(new Error("unused"));
+    },
+    () => Promise.reject(new Error("unused")),
+    () => ({
+      reservedZones: [],
+      claim: async () => {},
+      release: async (name) => void calls.push(`release ${name}`),
+      setPrimaryHostname: async () => {},
+      provider: {
+        provision: async () => observation("active"),
+        remove: async (name) => void calls.push(`remove ${name}`),
+      },
+    }),
+    () => ({
+      destroyContext: async (path) => void calls.push(`destroy ${path}`),
+      deleteProjectStorage: async () => void calls.push("delete storage"),
+    }),
+  );
+  // the registry, as the announcements reduce into it (a non-canonical path is no context)
+  const announced = [
+    "/repos",
+    "/repos/config",
+    "/agents/web/1",
+    "/agents",
+    "/agents/web",
+    "/x/../y",
+  ].map(childCreated);
+  const registered = reduceProcessor(processorWithoutHostnames(), announced);
+  const appended: { type: string; idempotencyKey?: string; payload: unknown }[] = [];
+  const state: ProjectState = {
+    ...registered,
+    creation: { status: "requested", offset: 1 }, // would run the creation saga, were it not deleted
+    deletion: { offset: 9 },
+    hostnames: {
+      "www.acme.test": { requested: null, cloudflare: observation("active"), error: null },
+    },
+  };
+  deliver(processor, state, async (...events) => {
+    appended.push(...(events as typeof appended));
+  });
+  await settle();
+  expect(calls).toEqual([
+    "destroy /agents/web/1",
+    "destroy /agents/web",
+    "destroy /repos/config",
+    "destroy /agents",
+    "destroy /repos",
+    "remove www.acme.test",
+    "release www.acme.test",
+    "delete storage",
+    "destroy /",
+  ]);
+  expect(appended.map((event) => event.idempotencyKey)).toEqual([
+    "project/context-deleted:/agents/web/1",
+    "project/context-deleted:/agents/web",
+    "project/context-deleted:/repos/config",
+    "project/context-deleted:/agents",
+    "project/context-deleted:/repos",
+    "project/deleted",
+  ]);
+  // nothing the saga writes is read back: the registry still names every context, so a pass
+  // after an eviction destroys them all again, and a member's forged record skips none
+  const deleted = appended.filter(
+    (event) => event.type === "events.iterate.com/project/context-deleted",
+  );
+  expect(reduceProcessor(processorWithoutHostnames(), [...announced, ...deleted])).toMatchObject({
+    contexts: registered.contexts,
+  });
+});
+
+test("ProjectProcessor — the deletion: a context announced while a pass runs (the creation saga's `/repos/config`) is destroyed by the same pass, before `/`", async () => {
+  const calls: string[] = [];
+  const registered = reduceProcessor(processorWithoutHostnames(), ["/a", "/b"].map(childCreated));
+  const state: ProjectState = { ...registered, deletion: { offset: 9 } };
+  const processor: ProjectProcessor = new ProjectProcessor(
+    () => Promise.reject(new Error("unused")),
+    () => Promise.reject(new Error("unused")),
+    () => null,
+    () => ({
+      destroyContext: async (path) => {
+        calls.push(`destroy ${path}`);
+        if (path !== "/a") return;
+        // its announcement is delivered while the pass is destroying `/a`
+        const announced = reduceProcessor(processorWithoutHostnames(), [
+          ...["/a", "/b"].map(childCreated),
+          childCreated("/repos/config"),
+        ]);
+        processor.processEvent({
+          event: childCreated("/repos/config") as never,
+          state: { ...announced, deletion: { offset: 9 } },
+          previousState: state,
+          delivery: { caughtUp: false },
+          append: (async () => []) as never,
+          blockProcessorWhile: () => {},
+          runInBackground: () => {},
+        });
+      },
+      deleteProjectStorage: async () => void calls.push("delete storage"),
+    }),
+  );
+  deliver(processor, state, async () => {});
+  await settle();
+  expect(calls).toEqual([
+    "destroy /a",
+    "destroy /b",
+    "destroy /repos/config",
+    "delete storage",
+    "destroy /",
+  ]);
+});
+
+test("ProjectProcessor — the deletion: a pass that keeps failing runs again after 5 s and 30 s, then records delete-failed, is reported, and stops in this incarnation; a later incarnation starts it again", async () => {
+  vi.useFakeTimers();
+  onTestFinished(() => void vi.useRealTimers());
+  let passes = 0;
+  const appended: unknown[] = [];
+  const reported: unknown[] = [];
+  const incarnation = () =>
+    new ProjectProcessor(
+      () => Promise.reject(new Error("unused")),
+      () => Promise.reject(new Error("unused")),
+      () => null,
+      () => ({
+        destroyContext: async () => {
+          passes += 1;
+          throw new Error("Cloudflare said no");
+        },
+        deleteProjectStorage: async () => {},
+      }),
+    );
+  const state: ProjectState = {
+    ...reduceProcessor(processorWithoutHostnames(), [childCreated("/a")]),
+    deletion: { offset: 9 },
+  };
+  const run = (processor: ProjectProcessor) =>
+    deliver(
+      processor,
+      state,
+      async (...events) => void appended.push(...events),
+      (work) => void work().catch((error: unknown) => void reported.push(error)),
+    );
+  const first = incarnation();
+  run(first);
+  await vi.advanceTimersByTimeAsync(0);
+  expect(passes).toBe(1);
+  await vi.advanceTimersByTimeAsync(5_000);
+  expect(passes).toBe(2);
+  await vi.advanceTimersByTimeAsync(30_000);
+  expect(passes).toBe(3);
+  expect(appended).toMatchObject([
+    { type: "events.iterate.com/project/delete-failed", payload: { error: "Cloudflare said no" } },
+  ]);
+  expect(reported).toMatchObject([{ message: "Cloudflare said no" }]);
+  // its own delete-failed, delivered to it, does not start it again: no retry storm
+  run(first);
+  await vi.advanceTimersByTimeAsync(60_000);
+  expect(passes).toBe(3);
+  // a later incarnation does
+  run(incarnation());
+  await vi.advanceTimersByTimeAsync(0);
+  expect(passes).toBe(4);
+});
+
 test("template provenance survives replay of the project creation request", () => {
   const configRepoTemplate = "github:example/config#" + "a".repeat(40) + "&path:starter";
   expect(
@@ -675,6 +865,10 @@ function observation(status: string) {
 /** A context announcing itself to `/` (iterate-context-durable-object.ts `announceToAncestors`). */
 function childCreated(childPath: string) {
   return { type: "events.iterate.com/itx/child-created", payload: { childPath } };
+}
+
+function deleteRequested(source?: { platform: true }) {
+  return { type: "events.iterate.com/project/delete-requested", payload: {}, source };
 }
 
 /** Two turns: a background effect's awaits, then its append. */

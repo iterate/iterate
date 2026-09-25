@@ -63,7 +63,7 @@ export const OrganizationContract = defineProcessorContract({
   slug: "organization",
   // A checkpoint reduced under an older version is reused as-is by the engine, so bumping the version
   // is what re-reduces every existing root log.
-  version: "4",
+  version: "5",
   description:
     "The organization's record: created, renamed, deleted, its members, its pending invitation links, every project added to it, and the catalog of its own secrets.",
   /** THE REDUCED STATE — the organization's record, folded from the facts below: what a member
@@ -146,6 +146,11 @@ export const OrganizationContract = defineProcessorContract({
         "A project joined the organization's catalog (platform fact). It lands before, and whatever becomes of, the project's own `project/created`.",
       payloadSchema: z.object({ projectId: z.string().min(1), slug: z.string().min(1) }),
     },
+    "events.iterate.com/organization/project-removed": {
+      description:
+        "A project left the organization's catalog: its owner deleted it, and its own deletion saga is destroying its data (platform fact).",
+      payloadSchema: z.object({ projectId: z.string().min(1), slug: z.string().min(1) }),
+    },
   },
   // THE RELATIONSHIP: the organization consumes its secrets' certificates without owning them
   // (src/secret/contract.ts: cross-posted from `/organizations/<orgId>/secrets/<name>`).
@@ -160,6 +165,7 @@ export const OrganizationContract = defineProcessorContract({
     "events.iterate.com/organization/invitation-accepted",
     "events.iterate.com/organization/invitation-revoked",
     "events.iterate.com/organization/project-added",
+    "events.iterate.com/organization/project-removed",
     "events.iterate.com/secret/set",
     "events.iterate.com/secret/deleted",
   ],

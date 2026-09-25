@@ -45,3 +45,11 @@ join organizations o on o.id = m.org_id
 where m.user_id = :userId
 order by o.name, o.id
 limit 1;
+
+/** @name deleteProject */
+delete from projects
+where id = :id
+  and (:asOperator = 1 or exists (
+    select 1 from memberships a
+    where a.org_id = projects.org_id and a.user_id = :actorId and a.role = 'owner'
+  ));

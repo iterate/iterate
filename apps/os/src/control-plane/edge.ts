@@ -524,6 +524,22 @@ export class ControlPlane {
     return project;
   }
 
+  /** The project `caller` may delete (catalog.ts `projectToDelete`), or a refusal. */
+  projectToDelete(caller: Caller, ref: string): Promise<ProjectRecord> {
+    return this.#call("projectToDelete", () => this.#db.projectToDelete(callerOf(caller), ref));
+  }
+  /** A project's row goes (catalog.ts `deleteProject`): forgotten here at once, and on every other
+   *  isolate when it next reads the catalog — a row it memoized stays until that isolate goes. */
+  async deleteProject(caller: Caller, ref: string): Promise<ProjectRecord> {
+    const project = await this.#call("deleteProject", () =>
+      this.#db.deleteProject(callerOf(caller), ref),
+    );
+    projectMemo.delete(project.id);
+    projectMemo.delete(project.slug);
+    accessMemo.clear(); // every member's reach just changed
+    return project;
+  }
+
   // ── a project's own hostnames, which project/processor.ts claims and releases ──
 
   claimHostname(projectId: string, hostname: string): Promise<void> {
