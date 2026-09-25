@@ -12,12 +12,12 @@ import {
   parseConfigRepoTemplateReference,
   formatConfigRepoTemplateReference,
 } from "@iterate-com/shared/config-repo-template/reference";
-import { pinPublicGithubTemplate } from "@iterate-com/shared/config-repo-template/github";
 import type { IterateApi } from "iterate/api";
 import { codedError, reportIssue } from "iterate/lib";
 import { OAuthScope } from "iterate/oauth-scopes";
 import type { Principal } from "iterate/principal";
 import type { StreamEvent, StreamEventInput } from "iterate/stream/processor";
+import { pinPublicGithubTemplate } from "./repo/github-template.ts";
 import { base64url, sha256Hex, verifyAdminSecret, type Caller } from "./caller.ts";
 import { templates } from "./generated/config-templates.js";
 import type { ConsentRpcTarget } from "./consent.ts";

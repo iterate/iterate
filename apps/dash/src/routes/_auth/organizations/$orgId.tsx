@@ -31,7 +31,6 @@ import {
   CardTitle,
 } from "@iterate-com/ui/components/card";
 import { Field, FieldLabel } from "@iterate-com/ui/components/field";
-import { Identifier } from "@iterate-com/ui/components/identifier";
 import { Input } from "@iterate-com/ui/components/input";
 import { NativeSelect, NativeSelectOption } from "@iterate-com/ui/components/native-select";
 import { NotRecorded } from "@iterate-com/ui/components/not-recorded";
@@ -45,6 +44,7 @@ import {
   TableHeader,
   TableRow,
 } from "@iterate-com/ui/components/table";
+import { Identifier } from "../../../components/identifier.tsx";
 import { AllowOrganizations } from "../../../components/allow-organizations.tsx";
 import {
   readOrganizationTree,

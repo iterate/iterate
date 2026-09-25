@@ -108,7 +108,7 @@ deployment and no real model.
 | The complaint is about…                                               | Test next to                                                                                                           |
 | --------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
 | what the chat shows (missing, duplicated or wrong rows)               | `apps/agents/src/lib/agent-events.test.ts`: `toAgentEvent` → `adaptContextRuns` → `reduceAgentFeed`, with real offsets |
-| the shared reducer behind every agent UI                              | `packages/ui/src/components/events/agent-ui-reducer.test.ts`                                                           |
+| the reducer behind the agent UI                                       | `apps/agents/src/lib/events/agent-ui-reducer.test.ts`                                                                  |
 | what the loop decides (a missing request, a stuck trigger, a breaker) | `apps/agents/runtime/processor.test.ts`: `reduceProcessor` rows                                                        |
 | a voice call                                                          | `apps/agents/voice/*.test.ts` (see `agent.test.ts` and `screen-context-repro.json`)                                    |
 | an effect: a model call, a script run, the birth or death sagas       | `apps/agents/e2e/agents.e2e.test.ts`, with a fake `itx.ai` lent by rule (commands in `apps/agents/README.md`)          |

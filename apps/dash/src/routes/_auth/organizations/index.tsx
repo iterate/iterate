@@ -8,7 +8,6 @@ import { Plus } from "lucide-react";
 import { z } from "zod";
 import { Button } from "@iterate-com/ui/components/button";
 import { Field, FieldGroup, FieldLabel } from "@iterate-com/ui/components/field";
-import { Identifier } from "@iterate-com/ui/components/identifier";
 import { Input } from "@iterate-com/ui/components/input";
 import {
   Sheet,
@@ -28,6 +27,7 @@ import {
   TableHeader,
   TableRow,
 } from "@iterate-com/ui/components/table";
+import { Identifier } from "../../../components/identifier.tsx";
 import { AllowOrganizations } from "../../../components/allow-organizations.tsx";
 import { ListPage } from "../../../components/list-page.tsx";
 import {

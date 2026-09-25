@@ -4,10 +4,10 @@
 // message stays pinned, with a "+N more" toggle.
 import { useState } from "react";
 import { BanIcon } from "lucide-react";
-import type { AgentUiMessageItem } from "@iterate-com/ui/components/events/agent-ui-reducer";
 import { Button } from "@iterate-com/ui/components/button";
 import { Spinner } from "@iterate-com/ui/components/spinner";
 import { cn } from "cn";
+import type { AgentUiMessageItem } from "../lib/events/agent-ui-reducer.ts";
 import { UserMessageBody, type SignedUrl } from "./agent-feed.tsx";
 
 export function QueuedMessagesPanel({

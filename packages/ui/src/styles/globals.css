@@ -9,8 +9,8 @@
 @source "../**/*.{ts,tsx}";
 
 /* Light mode only (docs/frontend-development.md). Tailwind's default `dark:` follows the OS setting;
-   the vendored shadcn components keep upstream's `dark:` classes, and Streamdown's dist, scanned
-   above, carries its own, so the variant never matches: `@media not all` is false everywhere. Dev
+   the vendored shadcn components keep upstream's `dark:` classes (and the Agents app scans
+   Streamdown's dist, which carries its own), so the variant never matches: `@media not all` is false everywhere. Dev
    CSS keeps those rules inside `@media not all`; the production build's minifier drops the block,
    so none of them ship, and the vendored files stay byte-identical to upstream.
    https://tailwindcss.com/docs/dark-mode#toggling-dark-mode-manually */

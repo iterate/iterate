@@ -15,16 +15,15 @@ import {
 } from "@iterate-com/ui/components/sheet";
 import { toast } from "sonner";
 import { Spinner } from "@iterate-com/ui/components/spinner";
-import { SourceCodeBlock } from "@iterate-com/ui/components/source-code-block";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@iterate-com/ui/components/tabs";
 import { cn } from "cn";
-import type { Event } from "@iterate-com/ui/components/events/types";
+import type { Event } from "../lib/events/types.ts";
 import {
   formatAgentUiDuration,
   type AgentUiActivity,
   type AgentUiLlmStep,
-} from "@iterate-com/ui/components/events/agent-ui-reducer";
-import { sliceText, type StreamText } from "@iterate-com/shared/chunked-text";
+} from "../lib/events/agent-ui-reducer.ts";
+import { sliceText, type StreamText } from "../lib/chunked-text.ts";
 import { parseCodemodeResponse } from "../../runtime/codemode-format.ts";
 import {
   formatDateTime,
@@ -33,6 +32,7 @@ import {
   scriptTrace,
   type LlmTrace,
 } from "../lib/agent-events.ts";
+import { SourceCodeBlock } from "./source-code-block.tsx";
 import { MessageResponse } from "./message.tsx";
 import { StreamingCursor, StreamingText } from "./streaming-text.tsx";
 

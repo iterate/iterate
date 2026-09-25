@@ -1,6 +1,6 @@
 // context/cf-artifacts.test.ts — `itx.cfArtifacts`'s unit pins: the binding proxy (project-scoped, BY PATH,
 // pure over an injected namespace) and the path → Artifacts-name mapping. Git itself is the repo
-// facet's (shared/git-wire.test.ts pins its codecs).
+// facet's (repo/git-wire.test.ts pins its codecs).
 
 import { expect, test, vi } from "vitest";
 import {

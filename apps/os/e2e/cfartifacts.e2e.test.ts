@@ -1,6 +1,6 @@
 // cfartifacts.e2e.test.ts — `itx.cfArtifacts`, THE BINDING PROXY, against the REAL Cloudflare
 // Artifacts binding on the DEPLOYED worker (env.ARTIFACTS → the deployment's envs.ts `artifactsNamespace`),
-// and the repo facet's git wire (@iterate-com/shared/git-wire) against the real remote that proxy
+// and the repo facet's git wire (src/repo/git-wire.ts) against the real remote that proxy
 // names: what the unit tests over fakes (src/context/cf-artifacts.test.ts, git-wire.test.ts) and the local
 // e2e run's fake remote (support/fake-git-server.ts) cannot prove — the binding is wired, the remote URL
 // and the token the proxy hands out open the real git-over-HTTPS endpoint, and the project scoping

@@ -2,8 +2,8 @@
 // append tail changes; code stays plain (no highlighting) while it is still being written; a
 // blinking caret marks the tail.
 import { memo, useLayoutEffect, useRef } from "react";
-import { textGroupSize, type StreamText } from "@iterate-com/shared/chunked-text";
 import { cn } from "cn";
+import { textGroupSize, type StreamText } from "../lib/chunked-text.ts";
 import { FullTextSnapshot } from "./full-text-snapshot.tsx";
 
 /** Sealed groups keep their React subtree; only the small append tail changes. */

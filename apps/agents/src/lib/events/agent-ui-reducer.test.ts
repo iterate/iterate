@@ -3,8 +3,8 @@
 // code execution, completion, assistant reply — must reduce into the chat
 // items and live active-work tail the agent feed renders.
 import { expect, test } from "vitest";
-import { appendText } from "@iterate-com/shared/chunked-text";
-import type { Event } from "@iterate-com/ui/components/events/types";
+import { appendText } from "../chunked-text.ts";
+import type { Event } from "./types.ts";
 import {
   AGENT_UI_PROVISIONAL_ACTIVITY_LIMIT,
   deriveAgentUiLiveStatus,
@@ -13,7 +13,7 @@ import {
   settleAgentUiAtIdleBoundary,
   summarizeAgentUiActivity,
   type AgentUiItem,
-} from "@iterate-com/ui/components/events/agent-ui-reducer";
+} from "./agent-ui-reducer.ts";
 
 const SCRIPT_EXPIRES_AT = Date.parse("2026-06-11T00:15:00.000Z");
 

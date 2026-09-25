@@ -12,6 +12,21 @@ catalogs:
     '@cloudflare/workers-types':
       specifier: ^5.20260925.1
       version: 5.20260925.1
+    '@codemirror/lang-json':
+      specifier: ^6.0.2
+      version: 6.0.2
+    '@codemirror/lang-yaml':
+      specifier: ^6.1.3
+      version: 6.1.3
+    '@codemirror/language':
+      specifier: ^6.12.4
+      version: 6.12.4
+    '@codemirror/search':
+      specifier: ^6.7.2
+      version: 6.7.2
+    '@fsegurai/codemirror-theme-bundle':
+      specifier: ^6.4.4
+      version: 6.4.4
     '@modelcontextprotocol/server':
       specifier: 2.1.0
       version: 2.1.0
@@ -51,6 +66,9 @@ catalogs:
     cn:
       specifier: ^0.4.0
       version: 0.4.0
+    codemirror:
+      specifier: ^6.0.2
+      version: 6.0.2
     esbuild:
       specifier: ^0.28.2
       version: 0.28.2
@@ -111,7 +129,6 @@ overrides:
   '@codemirror/state': ^6.7.6
   '@codemirror/view': ^6.43.13
   '@material/web': 2.4.1
-  axios: 1.13.6
   baseline-browser-mapping: ^2.9.14
   srvx: 0.11.12
   wrangler: 4.140.0
@@ -206,12 +223,39 @@ importers:
 
   apps/agents:
     dependencies:
+      '@codemirror/lang-html':
+        specifier: ^6.4.12
+        version: 6.4.12
+      '@codemirror/lang-javascript':
+        specifier: ^6.2.5
+        version: 6.2.5
+      '@codemirror/lang-json':
+        specifier: 'catalog:'
+        version: 6.0.2
+      '@codemirror/lang-markdown':
+        specifier: ^6.5.2
+        version: 6.5.2
+      '@codemirror/lang-sql':
+        specifier: ^6.10.0
+        version: 6.10.0
+      '@codemirror/lang-yaml':
+        specifier: 'catalog:'
+        version: 6.1.3
+      '@codemirror/language':
+        specifier: 'catalog:'
+        version: 6.12.4
+      '@codemirror/search':
+        specifier: 'catalog:'
+        version: 6.7.2
       '@codemirror/state':
         specifier: ^6.7.6
         version: 6.7.6
       '@codemirror/view':
         specifier: ^6.43.13
         version: 6.43.13
+      '@fsegurai/codemirror-theme-bundle':
+        specifier: 'catalog:'
+        version: 6.4.4(@codemirror/language@6.12.4)(@codemirror/state@6.7.6)(@codemirror/view@6.43.13)(@lezer/highlight@1.2.4)
       '@iterate-com/shared':
         specifier: workspace:*
         version: link:../../packages/shared
@@ -230,6 +274,12 @@ importers:
       cn:
         specifier: 'catalog:'
         version: 0.4.0
+      codemirror:
+        specifier: 'catalog:'
+        version: 6.0.2
+      codemirror-json5:
+        specifier: ^1.0.3
+        version: 1.0.3
       iterate:
         specifier: workspace:*
         version: link:../../packages/iterate
@@ -647,6 +697,9 @@ importers:
       oauth4webapi:
         specifier: 'catalog:'
         version: 3.8.8
+      pako:
+        specifier: 'catalog:'
+        version: 3.0.2
       posthog-node:
         specifier: ^5.53.0
         version: 5.53.0
@@ -912,9 +965,6 @@ importers:
 
   packages/shared:
     dependencies:
-      pako:
-        specifier: 'catalog:'
-        version: 3.0.2
       zod:
         specifier: 'catalog:'
         version: 4.6.5(patch_hash=5a57d5a4f788c6fe9e15d60e59511c1f901b7fc1d638126eb2b02cafc9e79a86)
@@ -934,39 +984,24 @@ importers:
       '@base-ui/react':
         specifier: ^1.8.0
         version: 1.8.0(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
-      '@codemirror/lang-html':
-        specifier: ^6.4.12
-        version: 6.4.12
-      '@codemirror/lang-javascript':
-        specifier: ^6.2.5
-        version: 6.2.5
       '@codemirror/lang-json':
-        specifier: ^6.0.2
+        specifier: 'catalog:'
         version: 6.0.2
-      '@codemirror/lang-markdown':
-        specifier: ^6.5.2
-        version: 6.5.2
-      '@codemirror/lang-sql':
-        specifier: ^6.10.0
-        version: 6.10.0
       '@codemirror/lang-yaml':
-        specifier: ^6.1.3
+        specifier: 'catalog:'
         version: 6.1.3
       '@codemirror/language':
-        specifier: ^6.12.4
+        specifier: 'catalog:'
         version: 6.12.4
       '@codemirror/search':
-        specifier: ^6.7.2
+        specifier: 'catalog:'
         version: 6.7.2
       '@codemirror/view':
         specifier: ^6.43.13
         version: 6.43.13
       '@fsegurai/codemirror-theme-bundle':
-        specifier: ^6.4.4
+        specifier: 'catalog:'
         version: 6.4.4(@codemirror/language@6.12.4)(@codemirror/state@6.7.6)(@codemirror/view@6.43.13)(@lezer/highlight@1.2.4)
-      '@iterate-com/shared':
-        specifier: workspace:*
-        version: link:../shared
       '@tanstack/react-router':
         specifier: 'catalog:'
         version: 1.170.39(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
@@ -980,14 +1015,8 @@ importers:
         specifier: 'catalog:'
         version: 0.4.0
       codemirror:
-        specifier: ^6.0.2
+        specifier: 'catalog:'
         version: 6.0.2
-      codemirror-json5:
-        specifier: ^1.0.3
-        version: 1.0.3
-      iterate:
-        specifier: workspace:*
-        version: link:../iterate
       lucide-react:
         specifier: 'catalog:'
         version: 1.48.0(@types/react@19.3.0)(react@19.3.0)
@@ -1446,9 +1475,6 @@ packages:
 
   '@cloudflare/workers-types@5.20260925.1':
     resolution: {integrity: sha512-E/Z3J8CzyNk0sinBu8g/1HjMCViSxG1kd/ARL8nzieSEdqtYZmgdnhlXbi95xyc3oetTwBR/r604/EuwuP6cnQ==}
-
-  '@codemirror/autocomplete@6.20.1':
-    resolution: {integrity: sha512-1cvg3Vz1dSSToCNlJfRA2WSI4ht3K+WplO0UMOgmUYPivCyy2oueZY6Lx7M9wThm7SDUBViRmuT+OG/i8+ON9A==}
 
   '@codemirror/autocomplete@6.20.3':
     resolution: {integrity: sha512-tlosUqb+3BbxCxZdu4tKeRghPFC+QM7q4X5YhKV2eCmPG+1r2F3f4AaSz5sCrFqUtX4Jh20VFTKecl16MgiV9g==}
@@ -2429,17 +2455,11 @@ packages:
   '@jridgewell/trace-mapping@0.3.9':
     resolution: {integrity: sha512-3Belt6tdc8bPgAtbcmdtNJlirVoTmEb5e2gC94PnkwEW9jI6CAHUeoG85tjWP5WquqfavoMtMwiG4P926ZKKuQ==}
 
-  '@lezer/common@1.5.1':
-    resolution: {integrity: sha512-6YRVG9vBkaY7p1IVxL4s44n5nUnaNnGM2/AckNgYOnxTG2kWh1vR8BMxPseWPjRNpb5VtXnMpeYAEAADoRV1Iw==}
-
   '@lezer/common@1.5.2':
     resolution: {integrity: sha512-sxQE460fPZyU3sdc8lafxiPwJHBzZRy/udNFynGQky1SePYBdhkBl1kOagA9uT3pxR8K09bOrmTUqA9wb/PjSQ==}
 
   '@lezer/css@1.3.8':
     resolution: {integrity: sha512-EJn1zcL9qoDptief6ipWKZKLiOpXkxSe0+t8CH9oiMVcZlq7NBWrjCqnc/41EIjeo/ITj1gFFiATdTkaJDL+Og==}
-
-  '@lezer/highlight@1.2.3':
-    resolution: {integrity: sha512-qXdH7UqTvGfdVBINrgKhDsVTJTxactNNxLk7+UMwZhU13lMHaOBlJe9Vqp907ya56Y3+ed2tlqzys7jDkTmW0g==}
 
   '@lezer/highlight@1.2.4':
     resolution: {integrity: sha512-4UeRVFO0lsBaM7GA32zOqbmqNPme9jedo8Ey+5c5656MU3MLitMLIA8aCZTYjUMEpEsuSeXEm78Uea6Iq3bvSg==}
@@ -2455,9 +2475,6 @@ packages:
 
   '@lezer/lr@1.4.10':
     resolution: {integrity: sha512-rnCpTIBafOx4mRp43xOxDJbFipJm/c0cia/V5TiGlhmMa+wsSdoGmUN3w5Bqrks/09Q/D4tNAmWaT8p6NRi77A==}
-
-  '@lezer/lr@1.4.8':
-    resolution: {integrity: sha512-bPWa0Pgx69ylNlMlPvBPryqeLYQjyJjqPx+Aupm5zydLIF3NE+6MMLT8Yi23Bd9cif9VS00aUebn+6fDIGBcDA==}
 
   '@lezer/markdown@1.7.2':
     resolution: {integrity: sha512-iTkYvoVcKt3WkeL7qUDyXHONZEwLio4wj8KTNi2dnjQEXBZKMV63BpQrPqfsM+OkvuRbiSTAcycYAsQzLhRNoQ==}
@@ -8446,13 +8463,6 @@ snapshots:
 
   '@cloudflare/workers-types@5.20260925.1': {}
 
-  '@codemirror/autocomplete@6.20.1':
-    dependencies:
-      '@codemirror/language': 6.12.4
-      '@codemirror/state': 6.7.6
-      '@codemirror/view': 6.43.13
-      '@lezer/common': 1.5.2
-
   '@codemirror/autocomplete@6.20.3':
     dependencies:
       '@codemirror/language': 6.12.4
@@ -8489,12 +8499,12 @@ snapshots:
 
   '@codemirror/lang-javascript@6.2.5':
     dependencies:
-      '@codemirror/autocomplete': 6.20.1
+      '@codemirror/autocomplete': 6.20.3
       '@codemirror/language': 6.12.4
       '@codemirror/lint': 6.9.5
       '@codemirror/state': 6.7.6
       '@codemirror/view': 6.43.13
-      '@lezer/common': 1.5.1
+      '@lezer/common': 1.5.2
       '@lezer/javascript': 1.5.4
 
   '@codemirror/lang-json@6.0.2':
@@ -8514,12 +8524,12 @@ snapshots:
 
   '@codemirror/lang-sql@6.10.0':
     dependencies:
-      '@codemirror/autocomplete': 6.20.1
+      '@codemirror/autocomplete': 6.20.3
       '@codemirror/language': 6.12.4
       '@codemirror/state': 6.7.6
-      '@lezer/common': 1.5.1
-      '@lezer/highlight': 1.2.3
-      '@lezer/lr': 1.4.8
+      '@lezer/common': 1.5.2
+      '@lezer/highlight': 1.2.4
+      '@lezer/lr': 1.4.10
 
   '@codemirror/lang-yaml@6.1.3':
     dependencies:
@@ -9339,8 +9349,6 @@ snapshots:
       '@jridgewell/resolve-uri': 3.1.2
       '@jridgewell/sourcemap-codec': 1.6.0
 
-  '@lezer/common@1.5.1': {}
-
   '@lezer/common@1.5.2': {}
 
   '@lezer/css@1.3.8':
@@ -9348,10 +9356,6 @@ snapshots:
       '@lezer/common': 1.5.2
       '@lezer/highlight': 1.2.4
       '@lezer/lr': 1.4.10
-
-  '@lezer/highlight@1.2.3':
-    dependencies:
-      '@lezer/common': 1.5.2
 
   '@lezer/highlight@1.2.4':
     dependencies:
@@ -9376,10 +9380,6 @@ snapshots:
       '@lezer/lr': 1.4.10
 
   '@lezer/lr@1.4.10':
-    dependencies:
-      '@lezer/common': 1.5.2
-
-  '@lezer/lr@1.4.8':
     dependencies:
       '@lezer/common': 1.5.2
 
@@ -11420,14 +11420,14 @@ snapshots:
       '@codemirror/language': 6.12.4
       '@codemirror/state': 6.7.6
       '@codemirror/view': 6.43.13
-      '@lezer/common': 1.5.1
-      '@lezer/highlight': 1.2.3
+      '@lezer/common': 1.5.2
+      '@lezer/highlight': 1.2.4
       json5: 2.2.3
       lezer-json5: 2.0.2
 
   codemirror@6.0.2:
     dependencies:
-      '@codemirror/autocomplete': 6.20.1
+      '@codemirror/autocomplete': 6.20.3
       '@codemirror/commands': 6.10.2
       '@codemirror/language': 6.12.4
       '@codemirror/lint': 6.9.5

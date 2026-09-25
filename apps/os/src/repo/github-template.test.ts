@@ -1,17 +1,10 @@
 import { expect, test, vi } from "vitest";
-import {
-  buildPack,
-  concat,
-  encodeCommit,
-  hashObject,
-  pktLine,
-  treeObjectsOf,
-} from "../git-wire.ts";
+import { buildPack, concat, encodeCommit, hashObject, pktLine, treeObjectsOf } from "./git-wire.ts";
 import {
   downloadPublicGithubTemplate,
   pinPublicGithubTemplate,
   RetryableRepoCreationError,
-} from "./github.ts";
+} from "./github-template.ts";
 
 const textEncoder = new TextEncoder();
 

@@ -4,13 +4,13 @@
 // push's), the protocol-v2 framing (pkt-line, ls-refs, fetch, receive-pack report-status) and the one
 // HTTP transport against an Artifacts remote (`createGitWireTransport`). Its callers: the platform's
 // repo facet (apps/os/src/repo/durable-object.ts), the anonymous GitHub config-template reader
-// (config-repo-template/github.ts, which brings its own fetch) and, in Node, the local e2e run's fake
+// (github-template.ts, which brings its own fetch) and, in Node, the local e2e run's fake
 // remote (apps/os/e2e/support/fake-git-server.ts) — so a pack the fake serves is a pack the client
 // parses. Text content only; a submodule pointer (mode 160000) is carried through a manifest but has
 // no blob.
 
 import { deflate, Inflate } from "pako";
-import { retryPlatformFailures } from "./platform-retry.ts";
+import { retryPlatformFailures } from "@iterate-com/shared/platform-retry";
 
 /** The "no such object" oid a first push names as the old value of an unborn ref. */
 export const ZERO_OID = "0".repeat(40);

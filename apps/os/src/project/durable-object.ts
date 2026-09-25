@@ -7,8 +7,8 @@
 // dispatch on this facet: `repos().list()`). Hosted from `ctx.exports` (first-party-facets.ts):
 // ordinary bundled worker code, enabled as a row on `/` by `session.projects.create` (session.ts) —
 // and by the first `list()`, which hosts the facet without a row.
-import { downloadPublicGithubTemplate } from "@iterate-com/shared/config-repo-template/github";
 import { StreamProcessorDurableObject, type ItxEntrypointService } from "iterate/sdk";
+import { downloadPublicGithubTemplate } from "../repo/github-template.ts";
 import { appConfigOf, type AppConfigEnv } from "../app-config.ts";
 import { DurableObjectNameCodec } from "../context/paths.ts";
 import type { ControlPlaneDurableObject } from "../control-plane/durable-object.ts";

@@ -13,7 +13,6 @@ import {
   SquareIcon,
 } from "lucide-react";
 import { Button } from "@iterate-com/ui/components/button";
-import { CodeEditor } from "@iterate-com/ui/components/code-editor";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -25,6 +24,7 @@ import {
 } from "@iterate-com/ui/components/dropdown-menu";
 import { Spinner } from "@iterate-com/ui/components/spinner";
 import { cn } from "cn";
+import { CodeEditor } from "./code-editor.tsx";
 import { AttachmentChips, AttachmentFileInput } from "./composer-attachments.tsx";
 import { ComposerTextarea } from "./composer-textarea.tsx";
 import { useComposerAttachments } from "./use-composer-attachments.ts";

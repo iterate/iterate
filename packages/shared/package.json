@@ -4,8 +4,6 @@
   "private": true,
   "type": "module",
   "exports": {
-    "./chunked-text": "./src/chunked-text.ts",
-    "./agent-events": "./src/agent-events.ts",
     "./base64": "./src/base64.ts",
     "./dev/is-main-module": "./src/dev/is-main-module.ts",
     "./test-support/e2e-policy": "./src/test-support/e2e-policy/budgets.ts",
@@ -23,10 +21,7 @@
       "import": "./src/posthog/posthog.ts",
       "default": "./src/posthog/posthog.ts"
     },
-    "./name-suggestions": "./src/name-suggestions.ts",
     "./config-repo-template/reference": "./src/config-repo-template/reference.ts",
-    "./config-repo-template/github": "./src/config-repo-template/github.ts",
-    "./git-wire": "./src/git-wire.ts",
     "./platform-retry": "./src/platform-retry.ts"
   },
   "scripts": {
@@ -34,8 +29,7 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "zod": "catalog:",
-    "pako": "catalog:"
+    "zod": "catalog:"
   },
   "devDependencies": {
     "@types/node": "catalog:",

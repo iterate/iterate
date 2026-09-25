@@ -6,7 +6,6 @@ import {
 } from "@cloudflare/workers-oauth-provider";
 import { RpcTarget } from "capnweb";
 import { z } from "zod";
-import { suggestOrganizationName } from "@iterate-com/shared/name-suggestions";
 import { codedError } from "iterate/lib";
 import {
   OAuthScope,
@@ -15,6 +14,7 @@ import {
   type ConsentScope,
 } from "iterate/oauth-scopes";
 import type { IngressRouting } from "iterate/project-ingress";
+import { suggestOrganizationName } from "./name-suggestions.ts";
 import { type ConsentApproved } from "./account/contract.ts";
 import type { Env } from "./env.ts";
 import type { OrganizationRecord, ProjectRecord } from "./control-plane/catalog.ts";

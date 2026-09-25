@@ -17,13 +17,13 @@ import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@iterate-com/u
 import { Spinner } from "@iterate-com/ui/components/spinner";
 import { Tabs, TabsList, TabsTrigger } from "@iterate-com/ui/components/tabs";
 import { cn } from "cn";
-import type { AgentUiLlmStep } from "@iterate-com/ui/components/events/agent-ui-reducer";
 import { ContextView } from "@iterate-com/ui/components/context-view/context-view";
 import { LiveStateValue } from "@iterate-com/ui/components/context-view/live-state-value";
 import {
   ContextViewState,
   RIGHT_EDGE_CLOSED,
 } from "@iterate-com/ui/components/context-view/context-view-search";
+import type { AgentUiLlmStep } from "../../lib/events/agent-ui-reducer.ts";
 import {
   Conversation,
   ConversationContent,

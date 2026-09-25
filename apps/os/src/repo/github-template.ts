@@ -1,4 +1,8 @@
 import {
+  isSafeConfigRepoTemplatePath,
+  type ConfigRepoTemplateReference,
+} from "@iterate-com/shared/config-repo-template/reference";
+import {
   demuxFetchResponse,
   encodeFetchRequest,
   encodeLsRefsRequest,
@@ -8,8 +12,7 @@ import {
   parsePack,
   parseTree,
   type RawGitObject,
-} from "../git-wire.ts";
-import { isSafeConfigRepoTemplatePath, type ConfigRepoTemplateReference } from "./reference.ts";
+} from "./git-wire.ts";
 
 export class RetryableRepoCreationError extends Error {
   override readonly name = "RetryableRepoCreationError";
