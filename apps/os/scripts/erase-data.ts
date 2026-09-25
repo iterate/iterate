@@ -12,7 +12,11 @@ import { createCli } from "trpc-cli";
 import { OS_DOPPLER_PROJECT, osEnvs } from "../../../envs.ts";
 import { fetchCloudflareWith429Retry } from "../../../scripts/lib/cloudflare-429-retry.ts";
 import { getWorkerDoNamespaces, resetWorkerDurableObjects } from "../../../scripts/lib/do-reset.ts";
-import { CloudflareApiError, resolveEnvContext } from "../../../scripts/lib/env-context.ts";
+import {
+  CloudflareApiError,
+  envNamed,
+  resolveEnvContext,
+} from "../../../scripts/lib/env-context.ts";
 import { readWranglerBase } from "./generate-wrangler-config.ts";
 
 const Listing = z.object({
@@ -64,9 +68,9 @@ async function eraseDataWith(
   if (options.env === "prd" && !options.yesIMeanPrd)
     throw new Error("Refusing to erase PRODUCTION data without --yes-i-mean-prd.");
   const context = await services.resolveEnvContext({
-    envs: osEnvs,
+    name: options.env,
+    env: envNamed(osEnvs, options.env),
     dopplerProject: OS_DOPPLER_PROJECT,
-    env: options.env,
   });
   const { env, cf } = context;
   if (!env.resources)

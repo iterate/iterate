@@ -55,7 +55,7 @@ jobs:
         working-directory: apps/voice
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-        run: doppler run -- pnpm run-script deploy
+        run: doppler run -- pnpm run-script deploy --env prd
       # The deploy's own result to #ci, a failed, cancelled or timed-out deploy included
       # (deploy-os.yml says why `always()`).
       - name: Notify Slack

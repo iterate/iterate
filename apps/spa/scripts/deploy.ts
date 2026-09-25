@@ -2,18 +2,18 @@ import { execFileSync } from "node:child_process";
 import { readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { createBuiltInPrompts, createCli, isAgent, yamlTableConsoleLogger } from "trpc-cli";
 import { OS_DOPPLER_PROJECT, spaEnvs } from "../../../envs.ts";
-import { resolveEnvContext } from "../../../scripts/lib/env-context.ts";
+import { envNamed, resolveEnvContext } from "../../../scripts/lib/env-context.ts";
 import { smokeResponse } from "../../../scripts/lib/deploy-helpers.ts";
 import { COMPATIBILITY_DATE } from "../../../scripts/lib/wrangler-config.ts";
 
 /** scripts/build.ts (static files + the packaged extension) → wrangler deploy → the deployed
  *  oauth.js, client logo and extension bundle match this checkout. */
-export default async function deploy(options: { env?: string } = {}) {
+export default async function deploy(options: { env: string }) {
   await import("./build.ts");
   const ctx = await resolveEnvContext({
-    envs: spaEnvs,
+    name: options.env,
+    env: envNamed(spaEnvs, options.env),
     dopplerProject: OS_DOPPLER_PROJECT,
-    env: options.env,
   });
   const config = new URL("../dist/wrangler.json", import.meta.url);
   writeFileSync(
