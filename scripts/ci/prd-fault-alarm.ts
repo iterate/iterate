@@ -383,20 +383,231 @@ class CloudflarePlatformFailure extends Error {
   }
 }
 
+/** A Workers Logs filter: a leaf, or a group combining its filters. */
+export type LogFilter =
+  | { key: string; operation: string; value?: string | number; type: "string" | "number" }
+  | { kind: "group"; filterCombination: "and" | "or"; filters: LogFilter[] };
+
+/** The filter every query leads with: the first-party prd Workers. */
+const prdWorkers: LogFilter = {
+  key: "$metadata.service",
+  operation: "in",
+  value: PRD_WORKERS.join(","),
+  type: "string",
+};
+
+/** Cloudflare refuses a query whose filters pass 16 nodes, each leaf and each group one node and
+ *  the top-level list none: "Filter expression is too complex; maximum is 16 filter nodes". Its API
+ *  reference names only a nesting depth of 4. */
+export const MAX_FILTER_NODES = 16;
+
+export function filterNodes(filters: LogFilter[]): number {
+  return filters.reduce(
+    (nodes, filter) => nodes + 1 + ("filters" in filter ? filterNodes(filter.filters) : 0),
+    0,
+  );
+}
+
+/** An expected outcome a count drops: the rows whose `key` is one of `values` and that `keep`
+ *  (filters every other row passes) rejects. `name` names it in the logs. */
+export type Exclusion = { name: string; key: string; values: string[]; keep: LogFilter[] };
+
+/**
+ * The queries counting `base`'s rows except `exclusions`' rows: disjoint filter lists whose counts
+ * add up, each within MAX_FILTER_NODES however many exclusions and values there are. Per key, one
+ * part holds the rows whose key is null or none of the values, and one part per chunk of values
+ * excluded by the same exclusions holds those rows under just those exclusions' `keep`; with two
+ * keys, each part of one pairs with each part of the other. Row for row, that is the one query
+ * ANDing each exclusion's
+ * `or(key is_null, key not_in values, keep)`. A part still past MAX_FILTER_NODES is sent without
+ * its last keeps, named in `dropped`: its expected rows may page, and a fault never hides. Pure.
+ */
+export function exclusionQueries(base: LogFilter[], exclusions: Exclusion[]) {
+  let parts: { filters: LogFilter[]; keeps: Exclusion[] }[] = [{ filters: [], keeps: [] }];
+  for (const key of new Set(exclusions.map((exclusion) => exclusion.key))) {
+    const excludedBy = new Map<string, Exclusion[]>();
+    for (const exclusion of exclusions.filter((exclusion) => exclusion.key === key))
+      for (const value of exclusion.values)
+        excludedBy.set(value, [...(excludedBy.get(value) ?? []), exclusion]);
+    if (!excludedBy.size) continue;
+    const alike = new Map<string, { keeps: Exclusion[]; values: string[] }>();
+    for (const [value, keeps] of excludedBy) {
+      const signature = JSON.stringify(keeps.map((exclusion) => exclusion.name));
+      const values = alike.get(signature)?.values ?? [];
+      alike.set(signature, { keeps, values: [...values, value] });
+    }
+    const notIn = chunks([...excludedBy.keys()]).map((chunk): LogFilter => ({
+      key,
+      operation: "not_in",
+      value: chunk.join(","),
+      type: "string",
+    }));
+    const keyParts: typeof parts = [
+      {
+        filters: [
+          {
+            kind: "group",
+            filterCombination: "or",
+            filters: [
+              { key, operation: "is_null", type: "string" },
+              notIn.length === 1
+                ? notIn[0]!
+                : { kind: "group", filterCombination: "and", filters: notIn },
+            ],
+          },
+        ],
+        keeps: [],
+      },
+      ...[...alike.values()].flatMap(({ keeps, values }) =>
+        chunks(values).map((chunk) => ({
+          filters: [{ key, operation: "in", value: chunk.join(","), type: "string" } as const],
+          keeps,
+        })),
+      ),
+    ];
+    parts = parts.flatMap((part) =>
+      keyParts.map((keyPart) => ({
+        filters: [...part.filters, ...keyPart.filters],
+        keeps: [...part.keeps, ...keyPart.keeps],
+      })),
+    );
+  }
+  return parts.map(({ filters, keeps }) => {
+    const kept = [...keeps];
+    const dropped: string[] = [];
+    const query = () => [...base, ...filters, ...kept.flatMap((exclusion) => exclusion.keep)];
+    // readWindow's `query` leads every query with prdWorkers
+    while (kept.length && filterNodes([prdWorkers, ...query()]) > MAX_FILTER_NODES)
+      dropped.unshift(kept.pop()!.name);
+    return { filters: query(), dropped };
+  });
+}
+
+/** `values` in the lists one `in` or `not_in` takes: 500, well under the thousands at which
+ *  Cloudflare answers "Internal error". */
+function chunks(values: string[]) {
+  const chunked: string[][] = [];
+  for (let start = 0; start < values.length; start += 500)
+    chunked.push(values.slice(start, start + 500));
+  return chunked;
+}
+
+/**
+ * Expected outcomes dropped by their ray: in the ray of an `event` info line, the rows `keep`
+ * rejects. `serverErrors`: the 5xx count drops them too, not only the errors.
+ *
+ * Two expression-fetch answers are 5xx on purpose, each logged at info by the context DO that
+ * answered (apps/os iterate-context-durable-object.ts): a fetch route whose target is an offline
+ * lent stub (`iterate tunnel` killed without Ctrl-C) answers 502, the upstream's absence, logged
+ * `expression-fetch.rpc-stub-offline`, and a Vite tab left open re-requests it every second; a
+ * deploy that reset a context the fetch dialed, when the hop could not send it again (a request
+ * with a body), answers 503, logged `expression-fetch.deploy-reset`. Each hop of such a request
+ * logs its own summary at error level under its own requestId: the project host's Worker, the
+ * context DO's fetch, the ItxEntrypoint of the config worker's `env.ITX.fetch`, and the DO's fetch
+ * again. The loaded config worker starts a new traceId, so only the edge's rayId joins all four to
+ * the info line. `keep` rejects only a summary of the answer's status: another status, another
+ * event or another ray still pages.
+ *
+ * A visitor whose connection to a tunnel's WebSocket vanished without a close frame (a laptop
+ * asleep, a network gone): the edge logs `fetch-upgrade.local-gone` at info, and the runtime fails
+ * that invocation — its pump of the visitor's socket read a dead connection — with "Network
+ * connection lost." and an exception summary in the same ray (apps/os
+ * context/fetch-upgrade-splice.ts). Those two go; any other error in the ray still pages.
+ */
+type RayExclusion = { event: string; serverErrors: boolean; keep: LogFilter[] };
+export const RAY_EXCLUSIONS: RayExclusion[] = [
+  ...[
+    { event: "expression-fetch.rpc-stub-offline", status: 502 },
+    { event: "expression-fetch.deploy-reset", status: 503 },
+  ].map(({ event, status }): RayExclusion => ({
+    event,
+    serverErrors: true,
+    keep: [
+      {
+        kind: "group",
+        filterCombination: "or",
+        filters: [
+          { key: "$metadata.type", operation: "is_null", type: "string" },
+          { key: "$metadata.type", operation: "neq", value: "cf-worker-event", type: "string" },
+          { key: "$workers.event.response.status", operation: "is_null", type: "number" },
+          {
+            key: "$workers.event.response.status",
+            operation: "neq",
+            value: status,
+            type: "number",
+          },
+        ],
+      },
+    ],
+  })),
+  {
+    event: "fetch-upgrade.local-gone",
+    serverErrors: false,
+    keep: [
+      {
+        kind: "group",
+        filterCombination: "or",
+        filters: [
+          { key: "$metadata.type", operation: "neq", value: "cf-worker", type: "string" },
+          {
+            key: "$metadata.message",
+            operation: "neq",
+            value: "Network connection lost.",
+            type: "string",
+          },
+        ],
+      },
+      {
+        kind: "group",
+        filterCombination: "or",
+        filters: [
+          { key: "$metadata.type", operation: "neq", value: "cf-worker-event", type: "string" },
+          { key: "$workers.outcome", operation: "neq", value: "exception", type: "string" },
+        ],
+      },
+    ],
+  },
+];
+
+/** A deploy reset's error summaries, by the request IDs deployResetSummaries proves: the Durable
+ *  Object's cf-worker-event rows under them. */
+export const DEPLOY_RESET_SUMMARIES = {
+  name: "deploy-reset-summaries",
+  key: "$metadata.requestId",
+  keep: [
+    {
+      kind: "group",
+      filterCombination: "or",
+      filters: [
+        { key: "$workers.executionModel", operation: "is_null", type: "string" },
+        {
+          key: "$workers.executionModel",
+          operation: "neq",
+          value: "durableObject",
+          type: "string",
+        },
+        { key: "$metadata.type", operation: "is_null", type: "string" },
+        { key: "$metadata.type", operation: "neq", value: "cf-worker-event", type: "string" },
+      ],
+    },
+  ],
+} satisfies Omit<Exclusion, "values">;
+
 async function readWindow(
   window: LogWindow,
   { accountId, apiToken }: CloudflareCredentials,
   delaysMs: readonly number[],
 ): Promise<FaultReading> {
-  // One grouped count per signal. Its rows sum to a lower bound (events without the grouped field,
-  // or past 2,000 groups, drop out) — a burst still pages.
+  // One grouped count per signal: one query, or with exclusions several over disjoint rows
+  // (exclusionQueries). Its rows sum to a lower bound (events without the grouped field, or past
+  // 2,000 groups in a query, drop out) — a burst still pages.
   //
   // A query only reads, so one that Cloudflare itself failed (CloudflarePlatformFailure, or a
   // dropped connection) is asked again after each of `delaysMs`, with a
   // `prd-fault-alarm.platform-failure-retry` warn per repeat; the last failure fails the run. A JSON
   // answer below 500 is Cloudflare's answer about the query: a broken token (success: false) or a
   // renamed field fails the run at once, never reads as a quiet prd.
-  const query = (view: "calculations" | "events", filters: object[], parameters: object) =>
+  const query = (view: "calculations" | "events", filters: LogFilter[], parameters: object) =>
     retryPlatformFailures(
       async () => {
         const response = await fetch(
@@ -413,15 +624,7 @@ async function readWindow(
               parameters: {
                 datasets: ["cloudflare-workers"],
                 ...parameters,
-                filters: [
-                  {
-                    key: "$metadata.service",
-                    operation: "in",
-                    value: PRD_WORKERS.join(","),
-                    type: "string",
-                  },
-                  ...filters,
-                ],
+                filters: [prdWorkers, ...filters],
               },
             }),
           },
@@ -458,7 +661,7 @@ async function readWindow(
       },
     );
   // Without `groupBy`, one row: ["", the total].
-  const rows = async (filters: object[], groupBy?: string): Promise<[string, number][]> => {
+  const rows = async (filters: LogFilter[], groupBy?: string): Promise<[string, number][]> => {
     const result = z
       .object({
         calculations: z
@@ -481,126 +684,75 @@ async function readWindow(
       );
     return result.calculations[0]!.aggregates.map((row) => [row.groupKey, row.count]);
   };
-  // Two expression-fetch answers are 5xx on purpose, each logged at info by the context DO that
-  // answered (apps/os iterate-context-durable-object.ts): a fetch route whose target is an offline
-  // lent stub (`iterate tunnel` killed without Ctrl-C) answers 502, the upstream's absence, logged
-  // `expression-fetch.rpc-stub-offline`, and a Vite tab left open re-requests it every second; a
-  // deploy that reset a context the fetch dialed, when the hop could not send it again (a request
-  // with a body), answers 503, logged `expression-fetch.deploy-reset`. Each hop of such a request
-  // logs its own summary at error level under its own requestId: the project host's Worker, the
-  // context DO's fetch, the ItxEntrypoint of the config worker's `env.ITX.fetch`, and the DO's fetch
-  // again. The loaded config worker starts a new traceId, so only the edge's rayId joins all four to
-  // the info line (a preview's Workers Logs, 2026-09-24). These filters keep every event EXCEPT a
-  // summary of the answer's status in a ray that logged its info line: another status, another
-  // event or another ray still pages. One `not_in` takes 500 IDs here (2,000 answers "Internal
-  // error"). A capped or failed read excludes nothing: it can only remove noise, never lose an
-  // observed fault.
-  const expectedAnswers = (
-    await Promise.all(
-      EXPECTED_EXPRESSION_FETCH_ANSWERS.map(({ event, status }) =>
-        rows(
-          [{ key: "event", operation: "eq", value: event, type: "string" }],
-          "$metadata.rayId",
-        ).then(
-          (found) => {
-            const rays = found.map(([rayId]) => rayId).filter(Boolean);
-            const capped = rays.length >= 2000;
-            console.log(
-              JSON.stringify({
-                event: "prd-fault-alarm.expected-answer-evidence",
-                answer: event,
-                rays: rays.length,
-                capped,
-              }),
-            );
-            if (capped) return [];
-            const chunks: string[][] = [];
-            for (let start = 0; start < rays.length; start += 500)
-              chunks.push(rays.slice(start, start + 500));
-            return chunks.map((chunk) => ({
-              kind: "group",
-              filterCombination: "or",
-              filters: [
-                { key: "$metadata.type", operation: "is_null", type: "string" },
-                {
-                  key: "$metadata.type",
-                  operation: "neq",
-                  value: "cf-worker-event",
-                  type: "string",
-                },
-                { key: "$workers.event.response.status", operation: "is_null", type: "number" },
-                {
-                  key: "$workers.event.response.status",
-                  operation: "neq",
-                  value: status,
-                  type: "number",
-                },
-                { key: "$metadata.rayId", operation: "is_null", type: "string" },
-                {
-                  key: "$metadata.rayId",
-                  operation: "not_in",
-                  value: chunk.join(","),
-                  type: "string",
-                },
-              ],
-            }));
-          },
-          (error: unknown) => {
-            console.warn(
-              JSON.stringify({
-                event: "prd-fault-alarm.expected-answer-classification-failed",
-                answer: event,
-                error: error instanceof Error ? error.message : String(error),
-              }),
-            );
-            return [];
-          },
-        ),
+  const count = async (base: LogFilter[], exclusions: Exclusion[], groupBy?: string) => {
+    const parts = exclusionQueries(base, exclusions);
+    const counted = new Map<string, number>();
+    const found = await Promise.all(parts.map(({ filters }) => rows(filters, groupBy)));
+    for (const [index, { dropped }] of parts.entries()) {
+      const partRows = found[index]!;
+      for (const [key, n] of partRows) counted.set(key, (counted.get(key) ?? 0) + n);
+      // A part without rows lost nothing to its dropped keeps.
+      const total = partRows.reduce((sum, [, n]) => sum + n, 0);
+      if (dropped.length && total)
+        console.warn(
+          JSON.stringify({ event: "prd-fault-alarm.exclusion-dropped", dropped, rows: total }),
+        );
+    }
+    return [...counted].sort(([, a], [, b]) => b - a);
+  };
+  // A read of an exclusion's rays that is capped (2,000 groups) or failed excludes nothing: it can
+  // only remove noise, never lose an observed fault. So does one whose rays, added to those before
+  // it, reach 2,000: the most a count's four `not_in` of rays can hold beside its own filters.
+  const rayEvidence = await Promise.all(
+    RAY_EXCLUSIONS.map(({ event }) =>
+      rows(
+        [{ key: "event", operation: "eq", value: event, type: "string" }],
+        "$metadata.rayId",
+      ).then(
+        (found) => found.map(([rayId]) => rayId).filter(Boolean),
+        (error: unknown) => {
+          console.warn(
+            JSON.stringify({
+              event: "prd-fault-alarm.exclusion-evidence-failed",
+              exclusion: event,
+              error: error instanceof Error ? error.message : String(error),
+            }),
+          );
+          return [];
+        },
       ),
-    )
-  ).flat();
-  // A visitor whose connection to a tunnel's WebSocket vanished without a close frame (a laptop
-  // asleep, a network gone): the edge logs `fetch-upgrade.local-gone` at info, and the runtime
-  // fails that invocation — its pump of the visitor's socket read a dead connection — with
-  // "Network connection lost." and an exception summary in the same ray
-  // (apps/os context/fetch-upgrade-splice.ts). Those two go; any other error in the ray still pages.
-  // Like the answers above, a capped or failed read excludes nothing.
-  const vanishedVisitors = await rows(
-    [{ key: "event", operation: "eq", value: "fetch-upgrade.local-gone", type: "string" }],
-    "$metadata.rayId",
-  ).then(
-    (found) => {
-      const rays = found.map(([rayId]) => rayId).filter(Boolean);
-      const capped = rays.length >= 2000;
-      console.log(
-        JSON.stringify({
-          event: "prd-fault-alarm.vanished-visitor-evidence",
-          rays: rays.length,
-          capped,
-        }),
-      );
-      return capped ? [] : withoutVanishedVisitorFailures(rays);
-    },
-    (error: unknown) => {
-      console.warn(
-        JSON.stringify({
-          event: "prd-fault-alarm.vanished-visitor-classification-failed",
-          error: error instanceof Error ? error.message : String(error),
-        }),
-      );
-      return [];
-    },
+    ),
   );
+  let excludedRays = 0;
+  const rayExclusions = RAY_EXCLUSIONS.map((exclusion, index) => {
+    const rays = rayEvidence[index]!;
+    const capped = excludedRays + rays.length >= 2000;
+    console.log(
+      JSON.stringify({
+        event: "prd-fault-alarm.exclusion-evidence",
+        exclusion: exclusion.event,
+        rays: rays.length,
+        capped,
+      }),
+    );
+    if (!capped) excludedRays += rays.length;
+    return {
+      ...exclusion,
+      name: exclusion.event,
+      key: "$metadata.rayId",
+      values: capped ? [] : rays,
+    };
+  });
   // Every 5xx pages, so they are counted twice: by URL, and in all. The ones the URL rows miss
   // (no URL logged, or past 2,000 groups) page as `unknown`.
   const readServerErrors = async () => {
-    const status = [
+    const status: LogFilter[] = [
       { key: "$workers.event.response.status", operation: "gte", value: 500, type: "number" },
-      ...expectedAnswers,
     ];
+    const answers = rayExclusions.filter((exclusion) => exclusion.serverErrors);
     const [byUrl, all] = await Promise.all([
-      rows(status, "$workers.event.request.url"),
-      rows(status),
+      count(status, answers, "$workers.event.request.url"),
+      count(status, answers),
     ]);
     const missed = (all[0]?.[1] ?? 0) - byUrl.reduce((sum, [, n]) => sum + n, 0);
     return missed > 0 ? [...byUrl, ["unknown", missed] satisfies [string, number]] : byUrl;
@@ -615,28 +767,28 @@ async function readWindow(
   // Read the two fields with the same policy, using error only when message is absent or empty.
   const readErrors = async (
     key: "$metadata.message" | "$metadata.error",
-    filters: object[] = [],
+    filters: LogFilter[],
+    exclusions: Exclusion[],
   ) => {
-    const common = [
+    const common: LogFilter[] = [
       { key: "$metadata.level", operation: "eq", value: "error", type: "string" },
       { key, operation: "neq", value: "", type: "string" },
-      ...expectedAnswers,
-      ...vanishedVisitors,
       ...filters,
     ];
     const [errors, apiUnreadBodyErrors] = await Promise.all([
-      rows(
+      count(
         [
           ...common,
           ...[
             "itx.abort() reset the context", // explicitly requested, recorded in the durable log
             unreadBody,
             "Durable Object reset because its code was updated", // expected deploy cancellation
-          ].map((value) => ({ key, operation: "not_includes", value, type: "string" })),
+          ].map((value): LogFilter => ({ key, operation: "not_includes", value, type: "string" })),
         ],
+        exclusions,
         key,
       ),
-      rows(
+      count(
         [
           ...common,
           { key, operation: "includes", value: unreadBody, type: "string" },
@@ -647,12 +799,13 @@ async function readWindow(
             type: "string",
           },
         ],
+        exclusions,
         key,
       ),
     ]);
     return [...errors, ...apiUnreadBodyErrors];
   };
-  const healed = [
+  const healed: LogFilter[] = [
     { key: "event", operation: "includes", value: "platform-failure", type: "string" },
   ];
   const [serverErrors, heals, healEvents, initialErrors, structuredErrors, pagers] =
@@ -660,17 +813,21 @@ async function readWindow(
       readServerErrors(),
       rows(healed, "name"),
       rows(healed, "event"),
-      readErrors("$metadata.message"),
-      readErrors("$metadata.error", [
-        {
-          kind: "group",
-          filterCombination: "or",
-          filters: [
-            { key: "$metadata.message", operation: "is_null", type: "string" },
-            { key: "$metadata.message", operation: "eq", value: "", type: "string" },
-          ],
-        },
-      ]),
+      readErrors("$metadata.message", [], rayExclusions),
+      readErrors(
+        "$metadata.error",
+        [
+          {
+            kind: "group",
+            filterCombination: "or",
+            filters: [
+              { key: "$metadata.message", operation: "is_null", type: "string" },
+              { key: "$metadata.message", operation: "eq", value: "", type: "string" },
+            ],
+          },
+        ],
+        rayExclusions,
+      ),
       rows(
         [{ key: "event", operation: "includes", value: "rpc-stub-pager-", type: "string" }],
         "event",
@@ -707,35 +864,13 @@ async function readWindow(
       if (result.events.events.length < 100) {
         const expected = deployResetSummaries(result.events.events);
         if (expected.size) {
-          errors = await readErrors("$metadata.message", [
-            {
-              kind: "group",
-              filterCombination: "or",
-              filters: [
-                { key: "$workers.executionModel", operation: "is_null", type: "string" },
-                {
-                  key: "$workers.executionModel",
-                  operation: "neq",
-                  value: "durableObject",
-                  type: "string",
-                },
-                { key: "$metadata.type", operation: "is_null", type: "string" },
-                { key: "$metadata.requestId", operation: "is_null", type: "string" },
-                {
-                  key: "$metadata.type",
-                  operation: "neq",
-                  value: "cf-worker-event",
-                  type: "string",
-                },
-                {
-                  key: "$metadata.requestId",
-                  operation: "not_in",
-                  value: [...expected].join(","),
-                  type: "string",
-                },
-              ],
-            },
-          ]);
+          // Listed before the rays' exclusions, so a part too big for both keeps this one: it
+          // drops a reset's summary in an expected answer's ray whatever status the summary has.
+          errors = await readErrors(
+            "$metadata.message",
+            [],
+            [{ ...DEPLOY_RESET_SUMMARIES, values: [...expected] }, ...rayExclusions],
+          );
           console.log(
             JSON.stringify({
               event: "prd-fault-alarm.deploy-reset-summaries",
@@ -761,57 +896,6 @@ async function readWindow(
     errors: [...errors, ...structuredErrors],
     pagers,
   };
-}
-
-/** The expression fetch's expected 5xx: the info line the answering context DO logs, and the status
- *  every hop's summary in that request's ray carries (`readWindow` drops exactly those). */
-const EXPECTED_EXPRESSION_FETCH_ANSWERS = [
-  { event: "expression-fetch.rpc-stub-offline", status: 502 },
-  { event: "expression-fetch.deploy-reset", status: 503 },
-] as const;
-
-/** Filters keeping every row except, in `rays` (rays whose edge logged `fetch-upgrade.local-gone`),
- *  the runtime's "Network connection lost." and the invocation's exception summary. One `not_in`
- *  takes 500 IDs. Pure. */
-function withoutVanishedVisitorFailures(rays: string[]): object[] {
-  const chunks: string[][] = [];
-  for (let start = 0; start < rays.length; start += 500)
-    chunks.push(rays.slice(start, start + 500));
-  return chunks.map((chunk) => ({
-    kind: "group",
-    filterCombination: "or",
-    filters: [
-      { key: "$metadata.rayId", operation: "is_null", type: "string" },
-      { key: "$metadata.rayId", operation: "not_in", value: chunk.join(","), type: "string" },
-      {
-        kind: "group",
-        filterCombination: "and",
-        filters: [
-          {
-            kind: "group",
-            filterCombination: "or",
-            filters: [
-              { key: "$metadata.type", operation: "neq", value: "cf-worker", type: "string" },
-              {
-                key: "$metadata.message",
-                operation: "neq",
-                value: "Network connection lost.",
-                type: "string",
-              },
-            ],
-          },
-          {
-            kind: "group",
-            filterCombination: "or",
-            filters: [
-              { key: "$metadata.type", operation: "neq", value: "cf-worker-event", type: "string" },
-              { key: "$workers.outcome", operation: "neq", value: "exception", type: "string" },
-            ],
-          },
-        ],
-      },
-    ],
-  }));
 }
 
 const WorkerErrorEvent = z.object({

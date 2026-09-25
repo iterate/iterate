@@ -3,15 +3,23 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { WebClient } from "@slack/web-api";
 import { expect, test, vi } from "vitest";
+import { z } from "zod";
 import {
   type AlarmState,
   alarm,
+  type LogFilter,
+  DEPLOY_RESET_SUMMARIES,
   deployResetSummaries,
+  type Exclusion,
+  exclusionQueries,
   type FaultReading,
+  filterNodes,
   logWindow,
+  MAX_FILTER_NODES,
   PIN_QUIET_DAYS,
   PINNED_WORKAROUNDS,
   pinnedWorkarounds,
+  RAY_EXCLUSIONS,
   run,
   triageIncidents,
 } from "./prd-fault-alarm.ts";
@@ -422,7 +430,8 @@ test("a reset-only window goes quiet after the re-count and posts nothing", asyn
   const slack = fakeSlack();
   await expect(summary(() => slack.client)).resolves.toBe("prd is quiet");
   expect(slack).toMatchObject({ posts: [] });
-  expect(logs.fetch).toHaveBeenCalledTimes(15);
+  // the re-count reads each of its two counts in two parts: the resets' request IDs, and the rest
+  expect(logs.fetch).toHaveBeenCalledTimes(17);
 });
 
 test("a fresh error sharing the pager URL and every HTTP 5xx survive reset classification", async () => {
@@ -720,6 +729,213 @@ test.for([
   expect(await summary()).toContain(line);
 });
 
+// Probed against prd's Workers Logs: 16 leaves, a group of 15, or 13 leaves beside a group of a
+// group pass; one more leaf in any of them answers "maximum is 16 filter nodes".
+test("filter nodes count as Cloudflare counts them: every leaf and every group, not the top-level list", () => {
+  const leaf = {
+    key: "$metadata.message",
+    operation: "neq",
+    value: "probe",
+    type: "string",
+  } as const;
+  const or = (...filters: LogFilter[]): LogFilter => ({
+    kind: "group",
+    filterCombination: "or",
+    filters,
+  });
+  const leaves = (n: number) => Array.from({ length: n }, () => leaf);
+  expect(filterNodes(leaves(16))).toBe(MAX_FILTER_NODES);
+  expect(filterNodes([or(...leaves(15))])).toBe(MAX_FILTER_NODES);
+  expect(filterNodes([...leaves(13), or(or(leaf))])).toBe(MAX_FILTER_NODES);
+  expect(filterNodes([...leaves(14), or(or(leaf))])).toBe(MAX_FILTER_NODES + 1);
+});
+
+test("every query a run sends stays within 16 filter nodes, with every outcome's rays, a ray all three logged, and deploy resets", async () => {
+  const [offline, deployed, gone] = RAY_EXCLUSIONS.map(({ event }) => event);
+  // 1,997 rays and one logged by all three: as many as a run excludes, four `not_in` of them
+  const events = [
+    ...rayInfoLines(offline!, [...rays("offline-", 899), "shared"]),
+    ...rayInfoLines(deployed!, [...rays("deployed-", 599), "shared"]),
+    ...rayInfoLines(gone!, [...rays("gone-", 497), "shared"]),
+    ...rpcStubOfflineRequest("offline-7").slice(1),
+    ...vanishedVisitorRequest("gone-3").slice(1),
+    { timestamp: 42, $metadata: { type: "cf-worker", rayId: "shared", message: "boom" } },
+    { timestamp: 42, $metadata: { type: "cf-worker", error: "structured" } },
+    ...failedDocsRequest(),
+    ...resetPair(),
+  ];
+  await using logs = queryableWorkersLogs(events);
+  using warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  const result = await summary();
+  const nodes = logs.fetch.mock.calls.map(([, init]) =>
+    filterNodes((JSON.parse(init.body) as LogQuery).parameters.filters),
+  );
+  expect(Math.max(...nodes)).toBeLessThanOrEqual(MAX_FILTER_NODES);
+  expect(result).toContain("2 5xx responses: docs.iterate.com 2\n");
+  // The expected 502s and the vanished visitor's two rows go. Past one `not_in` of rays, a query
+  // cannot also hold the resets' keep: their summaries page, and the warn says so.
+  expect(result).toContain(
+    "6 errors: POST https://docs.iterate.com/… 2, GET https://rpc-stub-pager.internal/… 2, boom 1, structured 1\n",
+  );
+  expect(warn).toHaveBeenCalledWith(
+    JSON.stringify({
+      event: "prd-fault-alarm.exclusion-dropped",
+      dropped: [DEPLOY_RESET_SUMMARIES.name],
+      rows: 2,
+    }),
+  );
+});
+
+// The check that fails in CI, not on prd, when an outcome's keep cannot fit beside a count's own
+// filters: each outcome applies in full while the rays a run excludes fit one `not_in`.
+test("each expected outcome applies in full beside the others and deploy resets", async () => {
+  const events = RAY_EXCLUSIONS.flatMap(({ event }, index) => [
+    ...rayInfoLines(event, [...rays(`${index}-`, 100)]),
+    {
+      timestamp: 42,
+      $metadata: { type: "cf-worker", rayId: `${index}-7`, message: `boom ${index}` },
+    },
+    {
+      timestamp: 42,
+      $metadata: {
+        type: "cf-worker",
+        rayId: `${index}-8`,
+        message: "",
+        error: `structured ${index}`,
+      },
+    },
+  ]);
+  await using logs = queryableWorkersLogs([
+    ...events,
+    ...rpcStubOfflineRequest("0-3").slice(1),
+    ...vanishedVisitorRequest("2-3").slice(1),
+    ...resetPair(),
+  ]);
+  using warn = vi.spyOn(console, "warn");
+  using log = vi.spyOn(console, "log").mockImplementation(() => {});
+  await summary();
+  const { reading } = z
+    .object({
+      reading: z.object({ serverErrors: z.array(z.unknown()), errors: z.array(z.unknown()) }),
+    })
+    .parse(
+      JSON.parse(String(log.mock.calls.find(([line]) => String(line).includes('"reading"'))![0])),
+    );
+  expect(reading).toEqual({
+    serverErrors: [],
+    errors: [...RAY_EXCLUSIONS.keys()]
+      .flatMap((index) => [`boom ${index}`, `structured ${index}`])
+      .sort((a, b) => Number(a.startsWith("structured")) - Number(b.startsWith("structured")))
+      .map((label) => [label, 1]),
+  });
+  expect(warn).not.toHaveBeenCalled();
+  for (const [, init] of logs.fetch.mock.calls)
+    expect(filterNodes((JSON.parse(init.body) as LogQuery).parameters.filters)).toBeLessThanOrEqual(
+      MAX_FILTER_NODES,
+    );
+});
+
+test.for([
+  ["errors by message", "$metadata.message", true],
+  ["5xx by URL", "$workers.event.request.url", false],
+] as const)(
+  "the split queries count exactly what the one query counted: %s",
+  ([, groupBy, errors]) => {
+    const [offline, deployed, gone] = RAY_EXCLUSIONS.map((exclusion) => ({
+      ...exclusion,
+      name: exclusion.event,
+      key: "$metadata.rayId",
+    }));
+    const answers: Exclusion[] = [
+      { ...offline!, values: [...rays("o-", 1200), "s"] },
+      { ...deployed!, values: ["d-0", "d-1", "s"] },
+    ];
+    const exclusions: Exclusion[] = errors
+      ? [
+          { ...DEPLOY_RESET_SUMMARIES, values: ["first", "second"] },
+          ...answers,
+          { ...gone!, values: ["g-0", "g-1"] },
+        ]
+      : answers;
+    const row = (
+      rayId: string | undefined,
+      type: string | undefined,
+      message: string,
+      workers: Record<string, unknown> = {},
+      requestId?: string,
+    ) => ({
+      $metadata: { service: "os-prd", level: "error", type, rayId, requestId, message },
+      $workers: { event: { request: { url: `https://${message}.test/` } }, ...workers },
+    });
+    const status = (code: number | undefined, outcome = "ok") => ({
+      outcome,
+      event: { request: { url: "https://host.test/" }, response: { status: code } },
+    });
+    const events = [
+      // an offline stub's rays: first and third `not_in` chunk
+      ...["o-0", "o-1100"].flatMap((ray) => [
+        row(ray, "cf-worker-event", "GET 502", status(502)),
+        row(ray, "cf-worker-event", "GET 500", status(500)),
+        row(ray, "cf-worker-event", "GET no status", status(undefined)),
+        row(ray, "cf-worker", "boom"),
+      ]),
+      // a deploy reset's answer
+      row("d-0", "cf-worker-event", "POST 503", status(503)),
+      row("d-0", "cf-worker-event", "POST 502", status(502)),
+      // a vanished visitor, and a row whose type Workers Logs left out
+      row("g-0", "cf-worker", "Network connection lost."),
+      row("g-0", "cf-worker-event", "GET exception", status(101, "exception")),
+      row("g-0", "cf-worker-event", "GET ok", status(101)),
+      row("g-0", "cf-worker", "other"),
+      row("g-1", undefined, "untyped"),
+      // one ray both answers logged
+      row("s", "cf-worker-event", "GET 502", status(502)),
+      row("s", "cf-worker-event", "POST 503", status(503)),
+      row("s", "cf-worker-event", "GET 500", status(500)),
+      row("s", "cf-worker", "boom"),
+      // no ray, and a ray no outcome logged
+      row(undefined, "cf-worker-event", "GET 502", status(502)),
+      row(undefined, "cf-worker", "Network connection lost."),
+      row("x", "cf-worker-event", "GET 502", status(502)),
+      // a reset's summaries: a Durable Object's, a stateless one's, and another type
+      row(undefined, "cf-worker-event", "GET reset", { executionModel: "durableObject" }, "first"),
+      row(undefined, "cf-worker-event", "GET reset", { executionModel: "stateless" }, "first"),
+      row(undefined, "cf-worker", "GET reset", { executionModel: "durableObject" }, "second"),
+      row(
+        "o-5",
+        "cf-worker-event",
+        "GET reset",
+        { ...status(500), executionModel: "durableObject" },
+        "second",
+      ),
+    ];
+    const base: LogFilter[] = errors
+      ? [{ key: "$metadata.level", operation: "eq", value: "error", type: "string" }]
+      : [{ key: "$workers.event.response.status", operation: "gte", value: 500, type: "number" }];
+    const counted = (filterLists: LogFilter[][]) => {
+      const counts = new Map<string, number>();
+      for (const filters of filterLists)
+        for (const event of events)
+          if (filters.every((filter) => matchesLogFilter(event, filter))) {
+            const key = String(logField(event, groupBy));
+            counts.set(key, (counts.get(key) ?? 0) + 1);
+          }
+      return Object.fromEntries([...counts].sort());
+    };
+    const parts = exclusionQueries(base, exclusions);
+    // a part too big for its keeps (a reset's request IDs in the shared ray) holds no rows here
+    expect(
+      counted(parts.filter(({ dropped }) => dropped.length).map(({ filters }) => filters)),
+    ).toEqual({});
+    expect(counted(parts.map(({ filters }) => filters))).toEqual(
+      counted([oneQuery(base, exclusions)]),
+    );
+    expect(Object.values(counted([base])).reduce((sum, n) => sum + n)).toBeGreaterThan(
+      Object.values(counted([oneQuery(base, exclusions)])).reduce((sum, n) => sum + n),
+    );
+  },
+);
+
 // A workaround whose defect is too rare for a failing test is pinned by its heal's absence.
 const [heldAlarm] = PINNED_WORKAROUNDS;
 const day = 86_400_000;
@@ -946,11 +1162,9 @@ function resetPair(message = "GET https://rpc-stub-pager.internal/") {
   ];
 }
 
-// The Workers Logs wire contract used here: filters select events before grouping. Unlike a fixed
-// count response, this fixture catches a discarded re-count or an exclusion that drops other rows.
-type LogFilter =
-  | { key: string; operation: string; value?: unknown }
-  | { kind: "group"; filterCombination: "or" | "and"; filters: LogFilter[] };
+// The Workers Logs wire contract used here: filters select events before grouping, and a query past
+// 16 filter nodes is refused as Cloudflare refuses it. Unlike a fixed count response, this fixture
+// catches a discarded re-count or an exclusion that drops other rows.
 type LogQuery = {
   view: string;
   limit?: number;
@@ -964,6 +1178,19 @@ function queryableWorkersLogs(
     const query = JSON.parse(init.body) as LogQuery;
     const response = intercept?.(query);
     if (response) return response;
+    if (filterNodes(query.parameters.filters) > MAX_FILTER_NODES)
+      return Response.json(
+        {
+          success: false,
+          errors: [
+            {
+              message: "Bad Request",
+              detail: "Filter expression is too complex; maximum is 16 filter nodes",
+            },
+          ],
+        },
+        { status: 400 },
+      );
     const selected = events
       .map((event) => ({
         ...event,
@@ -1064,6 +1291,44 @@ function failedDocsRequest() {
       },
     },
   }));
+}
+
+/** `n` ray IDs starting with `prefix`. */
+function rays(prefix: string, n: number) {
+  return Array.from({ length: n }, (_, i) => `${prefix}${i}`);
+}
+
+/** The info line `event` in each of `rayIds`. */
+function rayInfoLines(event: string, rayIds: string[]) {
+  return rayIds.map((rayId) => ({
+    timestamp: 42,
+    event,
+    $metadata: { type: "cf-worker", level: "info", rayId },
+  }));
+}
+
+// Each expected outcome as one query sent it: a group per 500 values of its key, kept when the key
+// is null, is none of them, or the row passes the keep. The split queries must count the same rows.
+function oneQuery(base: LogFilter[], exclusions: Exclusion[]): LogFilter[] {
+  return [
+    ...base,
+    ...exclusions.flatMap(({ key, values, keep }) =>
+      Array.from({ length: Math.ceil(values.length / 500) }, (_, i): LogFilter => ({
+        kind: "group",
+        filterCombination: "or",
+        filters: [
+          { key, operation: "is_null", type: "string" },
+          {
+            key,
+            operation: "not_in",
+            value: values.slice(i * 500, i * 500 + 500).join(","),
+            type: "string",
+          },
+          { kind: "group", filterCombination: "and", filters: keep },
+        ],
+      })),
+    ),
+  ];
 }
 
 /** One visitor's WebSocket to a tunnel on the edge whose connection vanished, as prd logged it
