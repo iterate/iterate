@@ -301,6 +301,41 @@ test.each([
   },
 );
 
+test("a lend recalled while its repeat waits is not lent again, and its failure is not logged", async () => {
+  vi.useFakeTimers();
+  onTestFinished(() => void vi.useRealTimers());
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  warn.mockClear(); // an earlier test's spy on console.warn is this one: only this test's calls count
+  const session = { dup: () => session, onRpcBroken() {}, [Symbol.dispose]() {} };
+  const pager = new FakePagerWebSocket();
+  let lendTries = 0;
+  const context = {
+    fetch: async () => ({ status: 101, webSocket: pager }),
+    lendRpcStub: async () => {
+      lendTries += 1;
+      throw Object.assign(new Error("Network connection lost."), { retryable: true });
+    },
+  };
+  const waitedUntil: Promise<unknown>[] = [];
+  const relay = await lendRpcStubOverPager(
+    (() => context) as unknown as Parameters<typeof lendRpcStubOverPager>[0],
+    session as unknown as Parameters<typeof lendRpcStubOverPager>[1],
+    "subscription:fan-104",
+    [],
+    (p) => void waitedUntil.push(p),
+  );
+  pager.page();
+  await vi.advanceTimersByTimeAsync(500); // the first try and its repeat at 0 ms failed; the next waits 1 s
+  relay.dispose();
+  await vi.advanceTimersByTimeAsync(4_000);
+  await Promise.all(waitedUntil);
+  expect(lendTries).toBe(2);
+  expect(warn.mock.calls.map(([line]) => (line as { event: string }).event)).toEqual([
+    "rpc-stubs.platform-failure-relend",
+    "rpc-stubs.platform-failure-relend",
+  ]);
+});
+
 // ── rpc stub relay ── A LENT CALL IS BOUNDED BY THE CLIENT'S ANSWERS. A client whose network went
 // away without a close (a laptop asleep, a NAT mapping expired) answers nothing and its socket stays
 // open at the edge until the edge's TCP gives up: on prd 2026-09-25 a tunnel's visitors waited 12 to

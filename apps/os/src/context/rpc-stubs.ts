@@ -639,11 +639,13 @@ export async function lendRpcStubOverPager(
   const answerPage = async (): Promise<void> => {
     try {
       await retryPlatformFailures(
-        () =>
-          durableObjectStub().lendRpcStub({
+        async () => {
+          if (lendEnded.reason) return; // recalled while a repeat waited: there is nothing to lend
+          await durableObjectStub().lendRpcStub({
             rpcStubKey,
             stub: new LentRpcStub(sessionRpcStub, rpcStubKey, lendEnded, durableObjectStub),
-          }),
+          });
+        },
         {
           event: "rpc-stubs.platform-failure-relend",
           delaysMs: RPC_STUB_RELEND_DELAYS_MS,
