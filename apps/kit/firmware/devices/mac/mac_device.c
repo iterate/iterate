@@ -47,10 +47,11 @@ static volatile sig_atomic_t quit_requested;
 /*
  * The clip the loop last asked for (its spoken status), fed into the speaker
  * ring after the loop's own playback step, on this thread, so the ring keeps
- * its one writer. It queues behind answer audio rather than cutting it off.
+ * its one writer. A copy: this ring can fall behind the loop's idea of when
+ * the clip ended, and the loop frees its PCM by that idea.
  */
 static struct {
-  const int16_t *pcm;
+  int16_t *pcm;
   size_t samples;
   size_t next;
   /* Silence after the clip, so the output's pull has enough queued to play its end. */
@@ -138,13 +139,21 @@ static void poll(void *context, struct iterate_kit_voice_intent *out) {
 
 static void play_clip(void *context, const int16_t *pcm, size_t samples) {
   (void)context;
-  clip.pcm = pcm;
+  free(clip.pcm);
+  clip.pcm = malloc(samples * sizeof(*pcm));
+  if (clip.pcm == NULL) return;
+  memcpy(clip.pcm, pcm, samples * sizeof(*pcm));
   clip.samples = samples;
   clip.next = 0U;
   clip.silence_frames = 4U;
 }
 
 static void feed_clip(void) {
+  /* A call's answer gets the speaker: interleaved in one ring, clip and answer would garble each other. */
+  if (view.call_active && clip.pcm != NULL) {
+    free(clip.pcm);
+    clip.pcm = NULL;
+  }
   while (clip.pcm != NULL &&
          iterate_kit_darwin_audio_output_queued_bytes(&codec.output) <
              iterate_kit_darwin_audio_output_lead_bytes(&codec.output)) {
@@ -158,6 +167,7 @@ static void feed_clip(void) {
     } else if (clip.silence_frames > 0U) {
       clip.silence_frames--;
     } else {
+      free(clip.pcm);
       clip.pcm = NULL;
       /* Trailing silence is the end of a clip, not a starved answer. */
       iterate_kit_darwin_audio_output_set_expected(&codec.output, false);
