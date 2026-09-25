@@ -138,12 +138,22 @@ function isIdempotentItxCall(itxExpression: ItxExpression, args: unknown[]): boo
 
 /** What `provide` hands back: dispose it — or let the session end — and the act is un-done (a lent
  *  stub recalled, a rule or deny removed while the row is still its own). The caller already holds
- *  the match it passed, so the handle carries nothing else. */
+ *  the match it passed. A lent stub's handle also answers `lendEnded()`: the lend can end while the
+ *  session lives (its pager could not be re-dialed, or the DO closed it), and a lender that must
+ *  stay reachable — `iterate tunnel` — lends again when it does. */
 class RewriteRuleHandleRpcTarget extends RpcTarget {
   readonly #undo: () => void;
-  constructor(undo: () => void) {
+  readonly #lendEnded: Promise<string> | null;
+  constructor(undo: () => void, lendEnded: Promise<string> | null = null) {
     super();
     this.#undo = undo;
+    this.#lendEnded = lendEnded;
+  }
+  /** Resolves with why the lend ended, whatever ended it (this handle's dispose included). */
+  lendEnded(): Promise<string> {
+    if (!this.#lendEnded)
+      throw codedError("INVALID_INPUT", "provide lent no stub here: a rule has no lend to end");
+    return this.#lendEnded;
   }
   [Symbol.dispose](): void {
     this.#undo();
@@ -421,7 +431,7 @@ export class IterateContextRpcTarget extends RpcTarget {
     // disposed (`SessionTeardown`: a re-provide replaces the entry). The rule is NOT un-set by this
     // session — the DO un-sets what names the key when its LAST pager closes.
     const lease = this.#sessionTeardown.add(sessionTeardownKey, pager);
-    return new RewriteRuleHandleRpcTarget(() => lease.dispose()); // the lease IS the handle: a stale one is inert
+    return new RewriteRuleHandleRpcTarget(() => lease.dispose(), pager.lendEnded); // the lease IS the handle: a stale one is inert
   }
 
   // ── subscriptions: ONE event, over (a) when the target is live ──

@@ -323,6 +323,29 @@ test("a DO reset under a LIVE lender: the woken incarnation removes the route, a
   expect(await lenderItx.invoke("itx.tunnels.live.echo('back')")).toBe("echo-2:back");
 });
 
+test("a lend that ends while its session lives says so: `lendEnded()` answers why, so a lender that must stay reachable (iterate tunnel) lends again", async () => {
+  const ctx = "prj_pager_lend_ended";
+  const lenderItx = await (await openSession()).authenticate(adminCredentials()).projects.get(ctx);
+  const lend = await lenderItx.provide("itx.tunnels.ended", new Echo(4), {
+    fetchRoute: { fetchRouteName: "tunnel-ended", requestMatcher: { routingSlug: "ended" } },
+  });
+  const lendEnded = lend.lendEnded() as Promise<string>;
+  // the DO closes the pager cleanly (what a newer pager at the key, or a context erase, does): the
+  // relay takes it as the lend's end — the session is untouched
+  await runInDurableObject(stub(ctx), (_instance, state) => {
+    for (const ws of state.getWebSockets()) ws.close(1000, "closed by the DO");
+    return Promise.resolve();
+  });
+  await expect(lendEnded).resolves.toBe("was returned (its pager closed)");
+  expect(await lenderItx.whoami()).toMatchObject({ path: "/" });
+  // lent again over the same session: the rule and the route are back
+  await lenderItx.provide("itx.tunnels.ended", new Echo(5), {
+    fetchRoute: { fetchRouteName: "tunnel-ended", requestMatcher: { routingSlug: "ended" } },
+  });
+  expect(await fetchRouteNames(ctx)).toEqual(["tunnel-ended"]);
+  expect(await lenderItx.invoke("itx.tunnels.ended.echo('again')")).toBe("echo-5:again");
+});
+
 test("provide's fetchRoute is refused before anything is lent: an invalid route, and an expression target", async () => {
   const ctx = "prj_pager_route_refused";
   const itx = await (await openSession()).authenticate(adminCredentials()).projects.get(ctx);

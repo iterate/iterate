@@ -234,6 +234,44 @@ test("a tunnel whose connection closes reconnects, lends and routes again; it en
   ]);
 });
 
+// A lend that ends while its connection lives (the platform lost its pager, and the route with it)
+// is lent again, with its route, over a fresh connection.
+test("a tunnel whose lend ends under a live connection reconnects, lends and routes again", async () => {
+  const fake = fakeProject("https://blog--p.example.com/");
+  using stderr = vi.spyOn(console, "error").mockImplementation(() => {});
+  using _stdout = vi.spyOn(console, "log").mockImplementation(() => {});
+  fake.lendsEnded.push(
+    Promise.resolve("went offline (its pager dropped and could not be re-dialed)"),
+  );
+  let stopSecond!: () => void;
+  const run = runTunnel({
+    connection: fake.connection(new Promise(() => {})),
+    reconnect: async () => {
+      if (fake.disposedConnections > 1) throw new Error("still offline");
+      return fake.connection(
+        new Promise((resolve) => (stopSecond = () => resolve({ code: 1006, reason: "gone" }))),
+      );
+    },
+    reconnectDelaysMs: [0],
+    project: "p",
+    port: 5173,
+    routingSlug: "blog",
+  });
+  await vi.waitFor(() => expect(fake.calls).toHaveLength(2));
+  stopSecond();
+  await expect(run).rejects.toThrow("could not reconnect");
+  expect(fake).toMatchObject({
+    calls: [
+      "provide itx.tunnels.blog with route tunnel-blog",
+      "provide itx.tunnels.blog with route tunnel-blog",
+    ],
+    disposedConnections: 2,
+  });
+  expect(stderr.mock.calls.map(([line]) => String(line))).toContain(
+    "The tunnel disconnected (its lend ended: the stub went offline (its pager dropped and could not be re-dialed)). Reconnecting...",
+  );
+});
+
 /** A project whose routes and lends are recorded, reached over connections that close when `closed`
  *  resolves (each counts its disposal). */
 function fakeProject(url: string) {
@@ -241,6 +279,8 @@ function fakeProject(url: string) {
     calls: [] as string[],
     routes: [] as unknown[],
     disposedConnections: 0,
+    /** Each lend in turn ends when its entry resolves; a lend with none never ends on its own. */
+    lendsEnded: [] as Promise<string>[],
     connection: (closed: Promise<{ code: number; reason: string }>) =>
       ({
         session: { projects: { get: async () => project } },
@@ -264,7 +304,10 @@ function fakeProject(url: string) {
     ) => {
       fake.calls.push(`provide ${target} with route ${options.fetchRoute.fetchRouteName}`);
       fake.routes.push(options.fetchRoute);
-      return { [Symbol.dispose]: () => {} };
+      return {
+        lendEnded: () => fake.lendsEnded.shift() || new Promise<string>(() => {}),
+        [Symbol.dispose]: () => {},
+      };
     },
     [Symbol.dispose]: () => {},
   };

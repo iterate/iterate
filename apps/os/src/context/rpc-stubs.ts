@@ -584,7 +584,7 @@ export async function lendRpcStubOverPager(
   rpcStubKey: string,
   appendEvents: StreamEventInput[],
   waitUntil: (p: Promise<unknown>) => void,
-): Promise<{ dispose(): void }> {
+): Promise<{ dispose(): void; lendEnded: Promise<string> }> {
   const sessionRpcStub = clientRpcStub.dup(); // dup FIRST: a value that is not a stub fails here, before any socket
   // the one shared "the lend ended" reason (LentRpcStub#lendEnded says why it is shared)
   const lendEnded: { reason: string | null } = { reason: null };
@@ -625,10 +625,14 @@ export async function lendRpcStubOverPager(
     );
   }
   // THE ONE PLACE the session's dup is disposed, the reason set FIRST (the first reason wins) so a
-  // call already walking the dup re-codes (LentRpcStub#recodeIfLendEnded).
+  // call already walking the dup re-codes (LentRpcStub#recodeIfLendEnded) — and the lender's
+  // `lendEnded()` answers with it.
+  let resolveLendEnded = (_reason: string) => {};
+  const lendEndedPromise = new Promise<string>((resolve) => (resolveLendEnded = resolve));
   const disposeSessionRpcStub = (reason: string) => {
     lendEnded.reason ||= reason;
     disposeRpcStub(sessionRpcStub);
+    resolveLendEnded(lendEnded.reason);
   };
   /** THE PAGE ANSWER: a fresh Workers-RPC leg around the session's capnweb stub, lent to the DO. A
    *  lend the platform failed (retryable-error.ts `isPlatformFailure`: a relay's connection to the DO
@@ -855,6 +859,7 @@ export async function lendRpcStubOverPager(
         /* already closing */
       }
     },
+    lendEnded: lendEndedPromise,
   };
 }
 
