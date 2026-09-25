@@ -56,7 +56,12 @@ test("an admin opens any project's contexts and the global namespace, and views 
     .filter({ hasText: person })
     .getByRole("link", { name: "View dash as", exact: true })
     .click();
-  await page.getByRole("button", { name: `View as ${person}`, exact: true }).click();
+  // noWaitAfter: View as posts to the issuer, which hands the browser back to the Dash through its
+  // sign-in callback; the next locator waits for that (the spinner-waiter counts a navigation in
+  // flight as loading), not the click's tight action timeout
+  await page
+    .getByRole("button", { name: `View as ${person}`, exact: true })
+    .click({ noWaitAfter: true });
   const marker = page.getByRole("button", { name: "Stop impersonating", exact: true });
   await page.getByText(`You are ${ADMIN_EMAIL}`).waitFor();
 
@@ -77,7 +82,8 @@ test("an admin opens any project's contexts and the global namespace, and views 
   const principal = appended?.source?.principal;
   expect([principal?.email, principal?.impersonatedBy?.email]).toEqual([person, ADMIN_EMAIL]);
 
-  await marker.click();
+  // noWaitAfter: Stop impersonating posts to the Dash's logout and signs in again, navigating
+  await marker.click({ noWaitAfter: true });
   await authorize(page);
   // the Dash is the admin's again
   await page
