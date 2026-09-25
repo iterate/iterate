@@ -29,10 +29,11 @@ test("a project links its config repo to a public GitHub repository, replaces it
 
   await test.step("replace iterate's main with GitHub's", async () => {
     await sheet.getByRole("button", { name: "Replace with GitHub's main", exact: true }).click();
-    await page
-      .getByRole("alertdialog")
-      .getByRole("button", { name: "Replace", exact: true })
-      .click();
+    // the sheet's own confirm: what goes, then Replace
+    await sheet
+      .getByRole("heading", { name: "Replace iterate's main with GitHub's?", exact: true })
+      .waitFor();
+    await sheet.getByRole("button", { name: "Replace", exact: true }).click();
     await configRepo.getByText(/^Pulled [0-9a-f]{7}$/).waitFor();
     await configRepo.getByRole("link", { name: "octocat/Spoon-Knife", exact: true }).waitFor();
   });
