@@ -18,6 +18,7 @@
 // A cookie session's connection (a browser on an app's own host) is not held: a browser cannot put
 // a bearer on a WebSocket, and a personal access token is never a cookie session.
 import { reportIssue } from "iterate/lib";
+import { truncateCloseReason } from "./context/websocket-close.ts";
 import { ControlPlane, ControlPlaneUnavailableError, type Reach } from "./control-plane/edge.ts";
 import type { Env } from "./env.ts";
 import { grantIsLive, type AccessGrant } from "./oauth.ts";
@@ -121,7 +122,7 @@ export function holdGrantLease(
 }
 
 /** A WebSocket relayed through a pair the edge owns: every message passes through, a close on
- *  either end closes the other (a drop as 1011, `sendableCloseCode`), and the lease's end closes
+ *  either end closes the other (a drop as 1011, `relayCloseCode`), and the lease's end closes
  *  both with 1008. The app's handshake headers (a chosen subprotocol) are the client's. */
 function relayed(
   answer: Response,
@@ -140,7 +141,7 @@ function relayed(
     release();
     for (const socket of [server, upstream]) {
       try {
-        socket.close(sendableCloseCode(code), reason.slice(0, 120));
+        socket.close(relayCloseCode(code), truncateCloseReason(reason));
       } catch {
         // already closed
       }
@@ -186,7 +187,7 @@ function piped(
  *  was an orderly close: 1000. A connection that dropped without one (1006; 1015 for TLS) did not
  *  close normally, and a client told 1000 may take the end as meant and not reconnect: 1011, as for
  *  the reserved 1004 and anything out of range. */
-function sendableCloseCode(code: number): number {
+function relayCloseCode(code: number): number {
   if (code === 1005) return 1000;
   const sendable = code >= 1000 && code < 5000 && ![1004, 1006, 1015].includes(code);
   return sendable ? code : 1011;

@@ -14,10 +14,6 @@ import {
   type RawGitObject,
 } from "./git-wire.ts";
 
-export class RetryableRepoCreationError extends Error {
-  override readonly name = "RetryableRepoCreationError";
-}
-
 const MAX_FILE_BYTES = 2 * 1024 * 1024;
 const MAX_FILE_COUNT = 500;
 const MAX_GITHUB_RESPONSE_BYTES = 12 * 1024 * 1024;
@@ -175,24 +171,10 @@ async function fetchGithub(
       signal: AbortSignal.timeout(15_000),
     });
   } catch (error) {
-    throw new RetryableRepoCreationError("GitHub could not be reached.", { cause: error });
+    throw new Error("GitHub could not be reached.", { cause: error });
   }
-  if (!response.ok) {
-    const rateLimited =
-      response.status === 403 &&
-      (response.headers.get("x-ratelimit-remaining") === "0" ||
-        response.headers.has("retry-after"));
-    const message = `GitHub returned HTTP ${response.status} while reading the config template.`;
-    if (
-      rateLimited ||
-      response.status === 408 ||
-      response.status === 429 ||
-      response.status >= 500
-    ) {
-      throw new RetryableRepoCreationError(message);
-    }
-    throw new Error(message);
-  }
+  if (!response.ok)
+    throw new Error(`GitHub returned HTTP ${response.status} while reading the config template.`);
   if (!response.body) return new Uint8Array();
 
   const chunks: Uint8Array[] = [];
@@ -203,9 +185,7 @@ async function fetchGithub(
     try {
       result = await reader.read();
     } catch (error) {
-      throw new RetryableRepoCreationError("GitHub interrupted the config template response.", {
-        cause: error,
-      });
+      throw new Error("GitHub interrupted the config template response.", { cause: error });
     }
     if (result.done) break;
     totalBytes += result.value.byteLength;

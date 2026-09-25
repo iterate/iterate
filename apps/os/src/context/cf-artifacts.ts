@@ -11,6 +11,7 @@
 // name (`repoArtifactName` — the ONE place a name is spelled; every itx surface speaks paths).
 
 import { RpcTarget } from "capnweb";
+import { retryPlatformFailures } from "@iterate-com/shared/platform-retry";
 import type { ArtifactToken, CfArtifactRepoApi, CfArtifactsApi } from "iterate/api";
 
 /** Cloudflare Artifacts ("git for agents", beta) — the per-namespace binding, CONTROL PLANE ONLY, and
@@ -156,26 +157,22 @@ const TAKEN_NAME_WAIT_MS = 20_000;
  *  A second failure, and every other failure, surfaces as what it is. Only for a verb that is safe to run
  *  twice: a read, a token, a delete (a second one answers "not found"), a create (a name its failed
  *  attempt took reads as created: `attempt`'s `isRetry`). */
-async function retryingOnePlatformFailure<T>(
+function retryingOnePlatformFailure<T>(
   verb: string,
   name: string,
   attempt: (isRetry: boolean) => Promise<T>,
 ): Promise<T> {
-  try {
-    return await attempt(false);
-  } catch (error) {
-    const message = String((error as { message?: unknown })?.message ?? error);
-    if (!/An internal error occurred|\b10400\b/.test(message)) throw error;
-    console.warn({
-      event: "cfartifacts.platform-failure-retry",
-      namespace: "iterate-context",
-      name,
-      verb,
-      message,
-    });
-    await new Promise((resolve) => setTimeout(resolve, 1000));
-    return await attempt(true);
-  }
+  let attempts = 0;
+  return retryPlatformFailures(() => attempt(attempts++ > 0), {
+    event: "cfartifacts.platform-failure-retry",
+    delaysMs: [1000],
+    platformFailure: (error) => {
+      const message = String((error as { message?: unknown })?.message ?? error);
+      return /An internal error occurred|\b10400\b/.test(message)
+        ? { namespace: "iterate-context", name, verb, message }
+        : undefined;
+    },
+  });
 }
 
 /** `itx.cfArtifacts` — Cloudflare Artifacts, project-scoped, BY PATH: the binding proxy beneath

@@ -12,6 +12,7 @@
 
 import * as oauth from "oauth4webapi";
 import { z } from "zod";
+import { cookieValueOf } from "iterate/lib";
 import { authorizationCodeRequest, authorizationServer } from "iterate/oauth";
 import { sha256Hex, signClaims, verifyClaims } from "./caller.ts";
 import { USERINFO_PATH } from "./app-config.ts";
@@ -87,11 +88,7 @@ export async function finishAdminCheck(input: {
   key: string;
   request: Request;
 }): Promise<{ email: string; token: string } | { error: string }> {
-  const cookie = input.request.headers
-    .get("cookie")
-    ?.split(/;\s*/)
-    .find((part) => part.startsWith(`${FLOW_COOKIE}=`))
-    ?.slice(FLOW_COOKIE.length + 1);
+  const cookie = cookieValueOf(input.request.headers.get("cookie"), FLOW_COOKIE);
   const flow = Flow.safeParse(await verifyClaims(cookie || "", await flowSecretOf(input.key)));
   if (!flow.success || flow.data.exp <= Date.now())
     return { error: "This sign-in expired or began in another browser. Open the link again." };

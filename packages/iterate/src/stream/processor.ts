@@ -855,8 +855,9 @@ export class ReduceCheckpointTable {
     stateChanged: boolean,
   ): void {
     const serializedState = stateChanged ? (JSON.stringify(state) ?? null) : null;
-    // Stamped `retryable: false` (the flag workerd itself uses): the same state serializes to the
-    // same size on every retry — a delivery loop halts on it instead of climbing its ladder.
+    // Stamped `retryable: false` (our own stamp; workerd only ever sets `retryable: true`): the same
+    // state serializes to the same size on every retry — a delivery loop halts on it instead of
+    // climbing its ladder.
     if (serializedState && serializedState.length > REDUCE_CHECKPOINT_STATE_MAX_CHARS)
       throw Object.assign(
         codedError(

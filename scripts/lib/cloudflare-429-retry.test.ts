@@ -1,91 +1,76 @@
 import { expect, test, vi } from "vitest";
 import { fetchCloudflareWith429Retry } from "./cloudflare-429-retry.ts";
 
-test("returns a non-429 response immediately without sleeping", async () => {
-  const sleep = vi.fn(async () => {});
-  const doFetch = vi.fn(async () => response(200));
-
-  const result = await fetchCloudflareWith429Retry("GET /d1/database", doFetch, { sleep });
-
-  expect(result).toMatchObject({ status: 200 });
-  expect(doFetch).toHaveBeenCalledTimes(1);
-  expect(sleep).not.toHaveBeenCalled();
-});
-
-test("does NOT retry non-429 errors — a 500 surfaces to the caller at once", async () => {
-  const sleep = vi.fn(async () => {});
-  const doFetch = vi.fn(async () => response(500));
-
-  const result = await fetchCloudflareWith429Retry("GET /zones", doFetch, { sleep });
-
-  expect(result).toMatchObject({ status: 500 });
-  expect(doFetch).toHaveBeenCalledTimes(1);
-  expect(sleep).not.toHaveBeenCalled();
-});
-
-test("retries 429s on the fallback schedule until a success", async () => {
-  const sleeps: number[] = [];
-  const doFetch = vi
-    .fn(async () => response(200))
-    .mockResolvedValueOnce(response(429))
-    .mockResolvedValueOnce(response(429));
-
-  const result = await fetchCloudflareWith429Retry("POST /d1/query", doFetch, {
-    sleep: async (ms) => {
-      sleeps.push(ms);
-    },
-  });
-
-  expect(result).toMatchObject({ status: 200 });
-  expect(doFetch).toHaveBeenCalledTimes(3);
-  expect(sleeps).toEqual([5_000, 15_000]);
-});
-
-test("honors Retry-After (delta-seconds) over the fallback delay, capped", async () => {
-  const sleeps: number[] = [];
-  const doFetch = vi
-    .fn(async () => response(200))
-    .mockResolvedValueOnce(response(429, { "retry-after": "9" }))
-    .mockResolvedValueOnce(response(429, { "retry-after": "9999" }));
-
-  const result = await fetchCloudflareWith429Retry("GET /workers", doFetch, {
+// Each row: what Cloudflare answers each call in turn (a status, a 429 with its Retry-After, or a
+// fetch that throws), and what the caller gets (a status or the thrown message) after `sleeps`.
+test.for([
+  { name: "a 200 returns at once", answers: [200], outcome: 200, sleeps: [] },
+  { name: "a 500 surfaces at once, never retried", answers: [500], outcome: 500, sleeps: [] },
+  {
+    name: "429s retry on the fallback schedule until a success",
+    answers: [429, 429, 200],
+    outcome: 200,
+    sleeps: [5_000, 15_000],
+  },
+  {
+    name: "Retry-After (delta-seconds) wins over the fallback delay, capped",
+    answers: [{ retryAfter: "9" }, { retryAfter: "9999" }, 200],
     maxRetryAfterMs: 120_000,
-    sleep: async (ms) => {
-      sleeps.push(ms);
-    },
+    outcome: 200,
+    sleeps: [9_000, 120_000],
+  },
+  {
+    name: "the last 429 goes back to the caller's error path once the attempts are spent",
+    answers: [429, 429, 429, 429, 429],
+    backoffMs: [1, 1, 1, 1],
+    outcome: 429,
+    sleeps: [1, 1, 1, 1],
+  },
+  {
+    name: "a thrown fetch error propagates, never retried",
+    answers: [new Error("ECONNRESET")],
+    outcome: "ECONNRESET",
+    sleeps: [],
+  },
+])("$name", async ({ answers, backoffMs, maxRetryAfterMs, outcome, sleeps }) => {
+  using warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  const sleep = vi.fn(async (_ms: number) => {});
+  let call = 0;
+  const doFetch = vi.fn(async () => {
+    const answer = answers[call++]!;
+    if (answer instanceof Error) throw answer;
+    if (typeof answer === "number") return new Response(null, { status: answer });
+    return new Response(null, { status: 429, headers: { "retry-after": answer.retryAfter } });
   });
-
-  expect(result).toMatchObject({ status: 200 });
-  expect(sleeps).toEqual([9_000, 120_000]);
-});
-
-test("gives up after the configured attempts, returning the final 429 for the caller's normal error path", async () => {
-  const sleep = vi.fn(async () => {});
-  const doFetch = vi.fn(async () => response(429));
 
   const result = await fetchCloudflareWith429Retry("GET /d1/database", doFetch, {
-    backoffMs: [1, 1, 1, 1],
+    backoffMs,
+    maxRetryAfterMs,
     sleep,
-  });
-
-  expect(result).toMatchObject({ status: 429 });
-  expect(doFetch).toHaveBeenCalledTimes(5);
-  expect(sleep).toHaveBeenCalledTimes(4);
-});
-
-test("propagates thrown fetch errors without retrying", async () => {
-  const sleep = vi.fn(async () => {});
-  const doFetch = vi.fn(async () => {
-    throw new Error("ECONNRESET");
-  });
-
-  await expect(fetchCloudflareWith429Retry("GET /d1/database", doFetch, { sleep })).rejects.toThrow(
-    "ECONNRESET",
+  }).then(
+    (response) => response.status,
+    (error: Error) => error.message,
   );
-  expect(doFetch).toHaveBeenCalledTimes(1);
-  expect(sleep).not.toHaveBeenCalled();
+
+  expect(result).toBe(outcome);
+  expect(doFetch).toHaveBeenCalledTimes(answers.length);
+  expect(sleep.mock.calls.map(([ms]) => ms)).toEqual(sleeps);
+  expect(warn).toHaveBeenCalledTimes(sleeps.length);
 });
 
-function response(status: number, headers: Record<string, string> = {}) {
-  return new Response(null, { status, headers });
-}
+test("each retry logs a cloudflare-api.rate-limited-retry warn", async () => {
+  using warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  const doFetch = vi
+    .fn(async () => new Response(null, { status: 200 }))
+    .mockResolvedValueOnce(new Response(null, { status: 429, headers: { "retry-after": "9" } }));
+
+  await fetchCloudflareWith429Retry("GET /workers", doFetch, { sleep: async () => {} });
+
+  expect(warn).toHaveBeenCalledExactlyOnceWith({
+    event: "cloudflare-api.rate-limited-retry",
+    label: "GET /workers",
+    attempt: 1,
+    retryInMs: 9_000,
+    retryAfterMs: 9_000,
+  });
+});

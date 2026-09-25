@@ -79,13 +79,15 @@ test("the page names a /version that did not move and each host that is down, an
       ],
       runUrl: "https://depot.dev/run",
     }),
-  ).toMatchInlineSnapshot(`
-    "🚨 prd post-deploy check failed after the os-prd deploy <@U067G4QRFK2>
-    • https://os.iterate.com/version still names \`0f3a9c21\`, the version live before the deploy
-    • the project host https://iterate.com/ answered 421
-    • the project host https://lispwoso.com/ did not answer
-    <https://depot.dev/run|the deploy run>"
-  `);
+  ).toBe(
+    [
+      "🚨 prd post-deploy check failed after the os-prd deploy <@U067G4QRFK2>",
+      "• https://os.iterate.com/version still names `0f3a9c21`, the version live before the deploy",
+      "• the project host https://iterate.com/ answered 421",
+      "• the project host https://lispwoso.com/ did not answer",
+      "<https://depot.dev/run|the deploy run>",
+    ].join("\n"),
+  );
 });
 
 test("every prd deploy checks the project hosts at once, in the deploy job, before notifying", () => {

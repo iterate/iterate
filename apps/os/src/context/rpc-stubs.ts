@@ -25,6 +25,7 @@ import {
   type SpliceSocket,
   visitorEndOfSplice,
 } from "./fetch-upgrade-splice.ts";
+import { sendableCloseCode, truncateCloseReason } from "./websocket-close.ts";
 
 // ── rpc stub directory ── THE RPC STUBS, DO side: the `itx.rpcStubs` built-in's backing
 // table — physical, never event-sourced. Two layers:
@@ -1094,26 +1095,6 @@ type RpcStubFetchTransport = {
   fetch(upgradeId: string, itxExpressionSteps: ItxExpression, request: Request): Promise<unknown>;
 };
 
-/** workerd enforces the RFC's 123-BYTE (UTF-8) close-reason cap and THROWS over it — a UTF-16
- *  .slice(0, 123) is not enough for multibyte reasons. Truncate by encoded bytes, whole chars. */
-function truncateCloseReason(reason: string): string {
-  if (new TextEncoder().encode(reason).length <= 123) return reason;
-  let out = reason;
-  while (out.length > 0 && new TextEncoder().encode(out).length > 123) out = out.slice(0, -1);
-  return out;
-}
-
-/** Close codes a handler may pass to close(): 1000 or app codes; everything reserved/invalid
- *  (1004-1006, 1015, out-of-range — e.g. an abnormal-closure 1006 being FORWARDED) clamps to 1000. */
-function clampCloseCode(code: number | undefined): number {
-  // a close code is a number where 0 is a distinct (if non-standard) value; only an ABSENT code — the socket closed without sending one — defaults to 1000
-  if (code === undefined) return 1000;
-  if (code === 1000 || (code >= 3000 && code <= 4999)) return code;
-  if (code >= 1001 && code <= 1003) return code;
-  if (code >= 1007 && code <= 1014) return code;
-  return 1000;
-}
-
 /** The WebSocket a client's fetch answered with (capnweb's TunneledWebSocket satisfies it). */
 type ClientWebSocket = {
   accept?(): void;
@@ -1206,7 +1187,7 @@ async function dialRpcStubFetch(
       });
       from.addEventListener("close", (ev) => {
         try {
-          to.close(clampCloseCode(ev.code), truncateCloseReason(ev.reason || ""));
+          to.close(sendableCloseCode(ev.code), truncateCloseReason(ev.reason || ""));
         } catch {
           /* already closing */
         }
@@ -1396,7 +1377,7 @@ export class RpcStubFetchServer {
     // oxlint-disable-next-line iterate/simple-truthiness-check -- #peerOf three-way: undefined = not ours (bail); null = ours-but-peer-gone (fall through to still close ws below)
     if (peer === undefined) return false;
     try {
-      peer?.close(clampCloseCode(code), truncateCloseReason(reason));
+      peer?.close(sendableCloseCode(code), truncateCloseReason(reason));
     } catch {
       /* already closing */
     }
@@ -1404,7 +1385,7 @@ export class RpcStubFetchServer {
     // auto-echo a peer-initiated close, so without this the initiator (an eyeball, or the relay's
     // leg) never sees its own close confirmed and hangs until its timeout.
     try {
-      ws.close(clampCloseCode(code), truncateCloseReason(reason));
+      ws.close(sendableCloseCode(code), truncateCloseReason(reason));
     } catch {
       /* already closing */
     }
