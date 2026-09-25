@@ -187,9 +187,9 @@ export const AppConfig = z.object({
       /** A PREVIEW'S ONE-CLICK SIGN-IN (test-link.ts): `GET /.auth/test-link?t=` signs a browser in
        *  as the address a link signed with this deployment's key names, under `emailDomain`. Not a
        *  sign-in mechanism a person chooses, and refused (`parseAppConfig`) unless `urls.os` is a
-       *  workers.dev or localhost origin. Set in code, never in Doppler: the per-PR preview's config
-       *  (scripts/preview-config.ts `previewWranglerConfig`) and local dev's
-       *  (scripts/generate-wrangler-config.ts), as `APP_CONFIG_LOGIN__TEST_LINK__EMAIL_DOMAIN`. */
+       *  workers.dev or localhost origin. Set in code, never in Doppler: a per-commit deployment's
+       *  config (envs.ts `previewDeployment`'s `testLinks`) and local dev's, both
+       *  scripts/generate-wrangler-config.ts's, as `APP_CONFIG_LOGIN__TEST_LINK__EMAIL_DOMAIN`. */
       testLink: z.object({ emailDomain: dnsName.default(TEST_LINK_EMAIL_DOMAIN) }).optional(),
     })
     .prefault({}),

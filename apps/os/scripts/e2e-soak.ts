@@ -3,27 +3,26 @@
 // that fails every time is a bug; both are named by title, with the counts.
 //
 //   WORKER_BASE_URL=… pnpm e2e:soak --runs 100 [--filter <vitest filter>]
-//   pnpm e2e:soak --runs 100 --preview soak-mine     (the preview's URL; WORKER_BASE_URL wins)
+//   pnpm e2e:soak --runs 100 --preview soak-mine     (this checkout's deployment of that name; WORKER_BASE_URL wins)
 //   pnpm e2e:soak --runs 10 --fresh-previews soak-fresh-<tag>
 //   pnpm e2e:soak --runs 10 --redeploy soak-<tag> [--gap <seconds>]
 //
 // The credentials are the deployment's: under `doppler run` its APP_CONFIG is in the environment and
 // e2e/support/global-setup.ts reads them out of it.
 //
-// THE FIRST MINUTES OF A PREVIEW (`--fresh-previews <prefix>`): each run deploys a brand-new Worker
-// Preview `<prefix>-<n>` (scripts/preview.ts deploy --apps none, its readiness gate included), runs
-// the e2e project against it at once, and deletes it — the shape main's e2e run had until it kept
-// one preview, a `main-<sha>` per push, which a preview redeployed in place never has (2026-09-24:
-// bursts of `internal error; reference = …` on brand-new previews only,
-// scripts/preview-readiness.ts). A deploy that fails is counted and named, never a skipped run. No
-// perf run in this mode: the budgets measure a warm worker.
+// THE FIRST MINUTES OF A DEPLOYMENT (`--fresh-previews <prefix>`): each run deploys a brand-new
+// deployment `<prefix>-<n>-<sha7>` (scripts/preview.ts deploy --apps none, its readiness gate
+// included), runs the e2e project against it at once, and deletes it — the shape every PR and
+// main's e2e run has: a fresh set of workers per tested commit (2026-09-24: bursts of `internal
+// error; reference = …` on brand-new Worker Previews, scripts/preview-readiness.ts). A deploy that
+// fails is counted and named, never a skipped run. No perf run in this mode: the budgets measure a
+// warm worker.
 //
-// MAIN'S SHAPE SINCE IT KEEPS ONE PREVIEW (`--redeploy <preview>`): each run redeploys the named
-// preview IN PLACE (the same deploy, gate included), runs the e2e project against it at once, and
-// never deletes it — Main OS e2e's run on `main` (preview-sweep.ts CI_WORKFLOW_PREVIEWS). Deploy the
-// preview once beforehand and let it age: a preview created minutes ago is still brand-new. `--gap`
-// waits that long after each run before the next redeploy: on main, a run's e2e job ends about
-// 90 s before the next queued run redeploys (the parent's deploy and the build come first).
+// AN IN-PLACE REDEPLOY (`--redeploy <name>`): each run deploys this checkout's deployment of the name
+// again, IN PLACE (the same commit, so the same `<name>-<sha7>`; the same deploy, gate included),
+// runs the e2e project against it at once, and never deletes it — the shape of main on dev
+// (preview-parents.yml). Deploy it once beforehand and let it age: one created minutes ago is still
+// brand-new. `--gap` waits that long after each run before the next redeploy.
 //
 // Each run invokes Vitest directly with its JSON reporter written to output/soak/run-<n>.json, then
 // the perf project (the latency and throughput budgets, perf/**) to output/soak/perf-<n>.json — after
@@ -41,10 +40,24 @@ import path from "node:path";
 import process from "node:process";
 import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
 import { createCli } from "trpc-cli";
-import { previewUrl, resolvePreviewName } from "./preview-config.ts";
+import {
+  previewDeploymentName,
+  previewDeploymentUrls,
+  resolvePreviewPrefix,
+} from "./preview-config.ts";
 
 const ROOT = path.resolve(import.meta.dirname, "..");
 const OUT = path.join(ROOT, "output/soak");
+
+/** apps/os's URL in the deployment scripts/preview.ts makes of this checkout for `--name <name>`
+ *  (preview-config.ts `previewDeploymentName`: `<prefix>-<sha7>`). */
+function deploymentUrl(name: string) {
+  const head = spawnSync("git", ["rev-parse", "HEAD"], { cwd: ROOT, encoding: "utf8" });
+  if (head.status !== 0) throw new Error(`git rev-parse HEAD: ${head.stderr.trim()}`);
+  return previewDeploymentUrls(
+    previewDeploymentName(resolvePreviewPrefix({ name }), head.stdout.trim()),
+  ).os;
+}
 
 type SoakOptions = {
   /** how many runs (default 100) */
@@ -75,9 +88,7 @@ export default async function e2eSoak(options: SoakOptions = {}) {
     throw new Error("--gap takes a number of seconds, and only with --redeploy");
   if (!freshPreviews && !redeploy) {
     // An explicit WORKER_BASE_URL wins; otherwise the named preview (os-e2e-soak.yml deploys it first).
-    process.env.WORKER_BASE_URL ||= preview
-      ? previewUrl(resolvePreviewName({ name: preview }))
-      : "";
+    process.env.WORKER_BASE_URL ||= preview ? deploymentUrl(preview) : "";
     if (!process.env.WORKER_BASE_URL)
       throw new Error(
         "WORKER_BASE_URL, --preview or --fresh-previews is required: the soak runs against a deployment",
@@ -180,14 +191,14 @@ export default async function e2eSoak(options: SoakOptions = {}) {
   const perfWall: number[] = [];
   const deployFailures: { run: number; preview: string; status: number | null }[] = [];
   for (let n = 1; n <= runs; n++) {
-    // the name scripts/preview.ts will give it, so the URL below is the one it deploys
+    // the name scripts/preview.ts deploys, with this checkout's sha appended (deploymentUrl)
     if (freshPreviews) {
-      deployedRun(n, resolvePreviewName({ name: `${freshPreviews}-${n}` }), { remove: true });
+      deployedRun(n, `${freshPreviews}-${n}`, { remove: true });
       continue;
     }
     if (redeploy) {
       if (n > 1 && gapSeconds) spawnSync("sleep", [String(gapSeconds)]);
-      deployedRun(n, resolvePreviewName({ name: redeploy }), { remove: false });
+      deployedRun(n, redeploy, { remove: false });
       continue;
     }
     let started = Date.now();
@@ -253,7 +264,7 @@ export default async function e2eSoak(options: SoakOptions = {}) {
         return;
       }
       const started = Date.now();
-      const failedNow = soakRun("e2e", path.join(OUT, `run-${n}.json`), previewUrl(preview));
+      const failedNow = soakRun("e2e", path.join(OUT, `run-${n}.json`), deploymentUrl(preview));
       wall.push(Date.now() - started);
       console.log(
         `run ${n}/${runs}: ${preview} e2e ${(wall.at(-1)! / 1000).toFixed(0)} s, ${failedNow ?? "?"} failed`,

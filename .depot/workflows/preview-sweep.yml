@@ -1,19 +1,21 @@
-# THE NIGHTLY PREVIEW SWEEP (`pnpm preview sweep`, apps/os/scripts/preview.ts): deletes the previews
-# of `os` and of the apps on top whose PR closed without a delete, that went stale, or
-# that were hand-named and left idle, plus any per-preview resource that outlived its preview. A CI
-# workflow's own preview (`main`, `latency`, `real-model`) goes only once that workflow has not
-# deployed it for a week. The rules are apps/os/scripts/preview-sweep.ts. What stops a force-closed PR, or a
-# failed cleanup, from leaking a preview.
+# THE NIGHTLY SWEEP (`pnpm preview sweep`, apps/os/scripts/preview.ts): deletes the per-commit
+# deployments (every worker and resource named `<prefix>-<sha7>-…`) whose PR closed without a
+# delete, that a newer deployment of their prefix superseded an hour ago or more, that went stale, or
+# that were hand-named and left idle, however little of them is left. A CI workflow's newest
+# deployment (`main-…`, `latency-…`, `real-model-…`) goes only once that workflow has not deployed
+# for a week. The rules are apps/os/scripts/preview-sweep.ts. What stops a force-closed PR, a
+# cancelled or failed cleanup, or a half-made deployment from leaking workers. Until it finds none,
+# it also deletes the Worker Previews each PR used to get, and their resources.
 #
 # A scheduled run reports on main's head commit, where red reads as "this commit broke", so the run
 # goes red only when the sweep could not act. An Artifacts namespace Cloudflare will not delete is a
 # page to #error-pulse instead (preview.ts: StuckArtifactsNamespace), tried again the next night.
 #
-# Beside it, the reset of the `os` parent's own data (`pnpm preview reset-parent`): what people and
-# agents left on https://os.iterate-dev-preview.workers.dev and the app parents signed in against
-# it, erased, then the parent deployed from main again. Every PR preview keeps its data and keeps
-# serving meanwhile. It takes the parents' deploy group (preview-parents.yml), so a push to main
-# never deploys the parent in the middle of an erase.
+# Beside it, the reset of main on dev's own data (`pnpm preview reset-parent`): what people and
+# agents left on https://os.iterate-dev-preview.workers.dev and the apps signed in against it,
+# erased, then main on dev deployed from main again. Every per-commit deployment is workers of its
+# own and keeps serving meanwhile. It takes main on dev's deploy group (preview-parents.yml), so a
+# push to main never deploys it in the middle of an erase.
 #
 # Its own workflow, not a job of preview-os.yml, so no PR's checks carry it as a skipped job.
 # Sweep now with a dispatch:
@@ -60,7 +62,7 @@ jobs:
         run: doppler setup --config preview --project os
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-      - name: Sweep previews whose PR is closed, or older than 7 days
+      - name: Sweep deployments whose PR is closed, superseded, or older than 7 days
         working-directory: apps/os
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
@@ -88,7 +90,7 @@ jobs:
         run: doppler setup --config preview --project os
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-      - name: Erase the os parent's data, then deploy it again
+      - name: Erase main on dev's data, then deploy it again
         working-directory: apps/os
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}

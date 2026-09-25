@@ -49,17 +49,20 @@ const suites = [
 ] as const;
 const suiteRun = 'doppler run -- pnpm preview "$SUITE"';
 
-test("Preview OS names each job for the check it is: deploy, then the two suites side by side, then the trace", () => {
+test("Preview OS names each job for the check it is: deploy, then the two suites and the cleanup side by side, then the trace", () => {
   expect(
     Object.fromEntries(Object.entries(preview.jobs).map(([id, job]) => [id, job.name])),
   ).toEqual({
     deploy: "Deploy preview",
     e2e: "E2E tests",
     specs: "Browser specs",
+    cleanup: "Clean up superseded",
     trace: "CI trace",
   });
   const runs = (job: string) => (preview.jobs[job]?.steps || []).map((step) => step.run);
-  expect(runs("deploy")).toContain('doppler run -- pnpm preview "$ACTION"');
+  expect(runs("deploy")).toContain("doppler run -- pnpm preview deploy");
+  expect([preview.jobs.cleanup!.needs].flat()).toEqual(["deploy"]);
+  expect(runs("cleanup")).toContain("doppler run -- pnpm preview cleanup-superseded");
   for (const suite of suites) {
     expect([preview.jobs[suite.job]!.needs].flat()).toEqual(["deploy"]);
     // one suite per job: specs share no runner's CPU with vitest
@@ -121,7 +124,7 @@ test("Preview OS runs on every pull request, and Deploy preview decides whether 
 test("Preview OS deploys the PR merged into main, and the test jobs use that very commit", () => {
   const deploySteps = preview.jobs.deploy!.steps || [];
   const resolve = deploySteps.findIndex((step) => step.id === "tested");
-  const deploy = deploySteps.findIndex((step) => step.run?.includes('pnpm preview "$ACTION"'));
+  const deploy = deploySteps.findIndex((step) => step.run === "doppler run -- pnpm preview deploy");
   expect(deploySteps[resolve]?.run).toBe("node scripts/ci/preview-tested-commit.ts");
   // on a push, the run's own commit: the merge commit this workflow file was read from
   expect(deploySteps[resolve]?.env?.PREVIEW_RUN_SHA).toBe(
@@ -135,7 +138,12 @@ test("Preview OS deploys the PR merged into main, and the test jobs use that ver
   expect(deploySteps[deploy]?.env?.PREVIEW_TESTED_COMMIT).toBe(
     "${{ steps.tested.outputs.description }}",
   );
-  expect(preview.jobs.deploy!.outputs?.["tested-sha"]).toBe("${{ steps.tested.outputs.sha }}");
+  expect(preview.jobs.deploy!.outputs).toMatchObject({
+    "tested-sha": "${{ steps.tested.outputs.sha }}",
+    // the name preview.ts gives the deployment, `pr<n>-<sha7>` of the tested commit
+    deployment: "${{ steps.deploy.outputs.deployment }}",
+  });
+  expect(deploySteps[deploy]?.id).toBe("deploy");
   // the test jobs and the trace run the scripts of the tree deploy tested, not of the PR head alone
   for (const job of [preview.jobs.e2e!, preview.jobs.specs!, preview.jobs.trace!]) {
     const checkout = job.steps?.find((step) => step.uses === "actions/checkout@v4");
@@ -211,8 +219,8 @@ test.each<[string, Run, { e2e: string; specs: string; trace: boolean }]>([
     { e2e: "tests", specs: "tests", trace: true },
   ],
   [
-    "a reset dispatch whose deploy failed",
-    { event: "workflow_dispatch", action: "reset", pr: "123", deploy: "failure" },
+    "a deploy dispatch whose deploy failed",
+    { event: "workflow_dispatch", action: "deploy", pr: "123", deploy: "failure" },
     { e2e: "fails", specs: "fails", trace: true },
   ],
   [
@@ -275,17 +283,43 @@ test.each<[string, Run, { e2e: string; specs: string; trace: boolean }]>([
   expect({ e2e, specs, trace }).toEqual(expected);
 });
 
-// A PR's preview is `pr<n>` whatever its branch (apps/os/scripts/preview-config.ts resolvePreviewName).
-test("a test job names its preview by the PR's number, or by preview-name without one", () => {
+// A PR's deployments are `pr<n>-<sha7>` whatever its branch (apps/os/scripts/preview-config.ts
+// resolvePreviewPrefix): a suite tests the one its run deployed, and a test-only dispatch the newest
+// of the PR's, or of preview-name's without one.
+test("a test job tests the deployment its run made, else the newest of the PR's or preview-name's", () => {
   for (const suite of suites) {
     const step = preview.jobs[suite.job]!.steps?.find((step) => step.id === "suite");
     expect(step?.env).toMatchObject({
+      PREVIEW_DEPLOYMENT: "${{ needs.deploy.outputs.deployment }}",
       PREVIEW_NAME: "${{ inputs.preview-name }}",
       PREVIEW_PR_NUMBER: "${{ env.PR_NUMBER }}",
     });
   }
   expect(preview.on.workflow_dispatch?.inputs).toHaveProperty("preview-name");
 });
+
+// The cleanup deletes only once this run's deployment is ready, and only this run's prefix's older
+// ones (apps/os/scripts/preview-sweep.ts planSupersededCleanup).
+test.each([
+  { deploy: "success", deployment: "pr123-a1b2c3d", runs: true },
+  // a PR that changes no preview path deploys nothing
+  { deploy: "success", deployment: "", runs: false },
+  { deploy: "failure", deployment: "pr123-a1b2c3d", runs: false },
+  { deploy: "cancelled", deployment: "", runs: false },
+])(
+  "Clean up superseded after a deploy that ended $deploy, deployment '$deployment' ⇒ runs: $runs",
+  ({ deploy, deployment, runs }) => {
+    expect(
+      evaluate(preview.jobs.cleanup!.if, {
+        "needs.deploy.result": deploy,
+        "needs.deploy.outputs.deployment": deployment,
+      }),
+    ).toBe(runs);
+    expect(preview.jobs.cleanup!.steps?.at(-1)?.env).toMatchObject({
+      PREVIEW_DEPLOYMENT: "${{ needs.deploy.outputs.deployment }}",
+    });
+  },
+);
 
 // Without a preview there is nothing to keep: the evidence steps follow the suite, not the guard.
 // The R2 upload and its fallback report follow the manifest's write, and the Playwright report

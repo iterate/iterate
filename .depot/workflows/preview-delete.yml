@@ -1,6 +1,7 @@
-# A CLOSED PULL REQUEST'S PREVIEW, DELETED (`pnpm preview delete`, apps/os/scripts/preview.ts): the
-# apps/os preview that Preview OS (preview-os.yml) deployed for the PR, everything it owned (D1,
-# Artifacts namespace, KV namespaces, R2 bucket) and the client previews.
+# A CLOSED PULL REQUEST'S DEPLOYMENTS, DELETED (`pnpm preview delete`, apps/os/scripts/preview.ts):
+# every `pr<n>-<sha7>` deployment Preview OS (preview-os.yml) made for the PR — its workers, KV
+# namespaces, R2 bucket, D1 and Artifacts namespace — usually just the newest, since each run's
+# cleanup deletes the ones before it.
 #
 # Its own workflow, triggered only when a PR closes, so no push to an open PR carries it as a skipped
 # job. It runs for the PRs that got a preview: its `paths` are the ones Preview OS's Deploy preview
@@ -9,7 +10,7 @@
 # deploy and tests to settle instead of racing them.
 # A delete that never ran or failed is the nightly sweep's (preview-sweep.yml).
 #
-# Delete a PR's preview by hand:
+# Delete a PR's deployments by hand:
 #   depot ci dispatch --org 0p91s0lz49 --repo iterate/iterate \
 #     --workflow preview-delete.yml --ref main --input pull-request-number=<pr>
 # Depot registers the `closed` trigger once this file is on the default branch. The only Depot
@@ -83,11 +84,9 @@ jobs:
       image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
     timeout-minutes: 15
     steps:
-      # The teardown reads the config that created the preview (cloudflare-os does the same), and
-      # Preview OS deployed the PR's head merged into main. On a close, the run's own commit is the
-      # nearest tree to that: a merged PR's squash commit on main, or an unmerged PR's head (Depot
-      # runs the close from the head then). A dispatch from main takes the PR's head
-      # (docs/depot-ci.md#which-tree-a-pull-requests-ci-tests).
+      # The delete finds the PR's deployments by name on the account, so any tree runs it: on a
+      # close, the run's own commit (a merged PR's squash commit on main, or an unmerged PR's head);
+      # on a dispatch from main, the PR's head (docs/depot-ci.md#which-tree-a-pull-requests-ci-tests).
       - name: Checkout the PR's tree
         uses: actions/checkout@v4
         with:
@@ -99,10 +98,10 @@ jobs:
         run: doppler setup --config preview --project os
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-      - name: Delete the preview
+      - name: Delete the PR's deployments
         working-directory: apps/os
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-          # names the preview: `pr<n>`
+          # names the prefix: `pr<n>`
           PREVIEW_PR_NUMBER: ${{ env.PR_NUMBER }}
         run: doppler run -- pnpm preview delete

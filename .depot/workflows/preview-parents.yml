@@ -1,20 +1,20 @@
-# THE PREVIEW PARENTS FROM MAIN (`pnpm preview deploy-parents`, apps/os/scripts/preview.ts): the
-# workers every per-PR Worker Preview branches from, on the dev/preview account — apps/os's `os` and
-# each app's (`dash`, `agents`, `notes`, `admin`, `voice`, `kit`; envs.ts `<app>Envs.preview`). Deployed from
-# every push to main that a pull request's preview would run for (scripts/ci/preview-paths.ts
-# `previewPaths`; depot-workflows.test.ts keeps them equal), the parents are main on the dev/preview
-# account: https://os.iterate-dev-preview.workers.dev is os.iterate.com at main, and
+# MAIN ON THE DEV/PREVIEW ACCOUNT (`pnpm preview deploy-parents`, apps/os/scripts/preview.ts):
+# apps/os's `os` and each app's (`dash`, `agents`, `notes`, `admin`, `voice`, `kit`; envs.ts
+# `<app>Envs.preview`), redeployed in place from every push to main that a pull request's preview
+# would run for (scripts/ci/preview-paths.ts `previewPaths`; depot-workflows.test.ts keeps them
+# equal): https://os.iterate-dev-preview.workers.dev is os.iterate.com at main, and
 # https://dash.iterate-dev-preview.workers.dev is dash.iterate.com at main, signed in against it.
+# People use it by hand. The workflow and command keep the name from when every PR's Worker Preview
+# branched off these workers ("the parents").
 #
-# Nothing waits for this. A preview does not depend on its parent's code: a brand-new preview binds a
-# Durable Object class its parent never had, and redeploying the parent changes no existing preview
-# (measured 2026-09-24 on a throwaway worker).
+# Nothing waits for this, and nothing depends on it: each PR, and Main OS e2e, deploys a set of
+# workers of its own (envs.ts `previewDeployment`).
 #
-# Deploy the parents from any ref by hand:
+# Deploy main on dev from any ref by hand:
 #   depot ci dispatch --org 0p91s0lz49 --repo iterate/iterate \
 #     --workflow preview-parents.yml --ref main --input ref=<ref>
 # The only Depot secret is DOPPLER_TOKEN; Doppler os/preview supplies the Cloudflare credentials and
-# the `os` parent's two secrets (APP_CONFIG, APP_CONFIG_SECRETS__KEY).
+# `os`'s two secrets (APP_CONFIG, APP_CONFIG_SECRETS__KEY).
 
 name: Preview parents
 

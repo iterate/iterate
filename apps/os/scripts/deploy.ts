@@ -1,10 +1,20 @@
 import { fileURLToPath } from "node:url";
 import { createCli } from "trpc-cli";
-import { OS_DOPPLER_PROJECT, osEnvs } from "../../../envs.ts";
+import {
+  OS_DOPPLER_PROJECT,
+  osEnvs,
+  previewDeployment,
+  type OsEnv,
+  type OsPreviewEnv,
+} from "../../../envs.ts";
 import { deployApp } from "../../../scripts/lib/deploy-app.ts";
+import type { EnvContext } from "../../../scripts/lib/env-context.ts";
 import { build } from "./build.ts";
-import { applyD1Migrations } from "./d1.ts";
+import { applyD1Migrations, ensureD1 } from "./d1.ts";
+import { ensureArtifactsNamespace, isCloudflareError } from "./preview-artifacts.ts";
 
+/** Deploy apps/os to `--env`: an envs.ts deployment, or a per-commit deployment by its name
+ *  (`pr3144-a1b2c3d`, envs.ts `previewDeployment`), which scripts/preview.ts deploys. */
 export default async function deploy(
   options: {
     env?: string;
@@ -13,26 +23,31 @@ export default async function deploy(
     withoutRoutes?: boolean;
   } = {},
 ) {
-  await deployApp({
+  const preview = options.env ? previewDeployment(options.env) : undefined;
+  await deployApp<OsEnv | OsPreviewEnv>({
     withoutRoutes: options.withoutRoutes,
     appRoot: fileURLToPath(new URL("..", import.meta.url)),
     appLabel: "apps/os",
-    envs: osEnvs,
+    envs: preview ? { [preview.name]: preview.os } : osEnvs,
     dopplerProject: OS_DOPPLER_PROJECT,
     env: options.env,
     workerName: (env) => env.workerName,
     servingUrl: (env) => env.baseUrl,
-    resources: (env) => env.resources,
+    // a per-commit deployment's are created below, by name
+    resources: (env) => ("resources" in env ? env.resources : {}),
     // The private login settings and at-rest key come from Doppler. Public URLs come from envs.ts.
     requiredSecrets: ["APP_CONFIG", "APP_CONFIG_SECRETS__KEY"],
     // The control plane's D1 is migrated before the code that reads it uploads, so a migration that
     // fails leaves the running version serving; a migration must keep that version working for the
     // minute until the upload (scripts/d1.ts).
     async prepare(ctx, _secretValues, credentials) {
-      await build();
+      const [, databaseId] = await Promise.all([
+        build(),
+        "resources" in ctx.env ? ctx.env.resources.dbId : createResources(ctx),
+      ]);
       await applyD1Migrations(ctx.cf, {
         databaseName: `${ctx.env.resourceNamePrefix}-db`,
-        databaseId: ctx.env.resources.dbId,
+        databaseId,
         credentials: {
           CLOUDFLARE_API_TOKEN: credentials.CLOUDFLARE_API_TOKEN!,
           CLOUDFLARE_ACCOUNT_ID: credentials.CLOUDFLARE_ACCOUNT_ID!,
@@ -55,5 +70,23 @@ export default async function deploy(
     ],
   });
 }
+/** A per-commit deployment's D1, R2 bucket and Artifacts namespace, by the names its config binds
+ *  (generate-wrangler-config.ts `deploymentWranglerConfig`), each found or created; the KV is
+ *  wrangler's to create during the deploy. Resolves to the D1's id. The delete that takes them is
+ *  scripts/preview.ts `deletePreviewDeployment`. */
+async function createResources(ctx: EnvContext<OsEnv | OsPreviewEnv>) {
+  const bucketName = `${ctx.env.resourceNamePrefix}-files`;
+  const [database] = await Promise.all([
+    ensureD1(ctx.cf, `${ctx.env.resourceNamePrefix}-db`),
+    ensureArtifactsNamespace(ctx.cf, ctx.env.artifactsNamespace),
+    ctx.cf(`/r2/buckets/${bucketName}`).catch(async (error) => {
+      if (!isCloudflareError(error, 404, 10006)) throw error;
+      await ctx.cf("/r2/buckets", { method: "POST", body: JSON.stringify({ name: bucketName }) });
+      console.log(`created R2 bucket ${bucketName}`);
+    }),
+  ]);
+  return database.uuid;
+}
+
 if (process.argv[1]?.endsWith("deploy.ts"))
   void createCli({ ...import.meta, name: "deploy" }).run();

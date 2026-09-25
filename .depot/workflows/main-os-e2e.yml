@@ -1,18 +1,18 @@
 # MAIN'S E2E RUN on the dev/preview account, in parallel with Deploy OS, which waits for none of
-# it: a push to main (the paths a PR preview runs for) redeploys apps/os's Worker Preview `main` IN
-# PLACE, with the clients on top of the same name, and runs the e2e suite and the browser specs
-# against it, each in its own job, the jobs a PR's Preview OS has, by the same names: Deploy
-# preview, then E2E tests (every row, the ones tagged `slow` that most PRs skip too) and Browser
-# specs side by side, then CI trace. No run deletes it: a BRAND-NEW preview's Durable Objects answer
-# Cloudflare's `internal error; reference = …` for seconds after it is created, which the deploy's
-# readiness gate (apps/os/scripts/preview-readiness.ts) has to wait out. A preview redeployed in place
-# still runs the previous version in places for a while, which the gate waits out too
-# (docs/depot-ci.md#main-os-e2e-keeps-one-preview). Nothing resets it either: a reset deletes it and
-# creates it brand-new. Every row mints its own people and projects, so nothing reads what earlier
-# runs left. The nightly sweep keeps it through quiet days (apps/os/scripts/preview-sweep.ts rule 3).
+# it: a push to main (the paths a PR preview runs for) deploys a fresh set of plain Workers for the
+# pushed commit, `main-<sha7>-<app>` (envs.ts `previewDeployment`), apps/os and the clients on top,
+# and runs the e2e suite and the browser specs against it, each in its own job, the jobs a PR's
+# Preview OS has, by the same names: Deploy preview, then E2E tests (every row, the ones tagged
+# `slow` that most PRs skip too) and Browser specs side by side, then CI trace; beside the suites,
+# Clean up superseded deletes the `main-…` deployments before it. A BRAND-NEW worker's Durable
+# Objects can answer Cloudflare's `internal error; reference = …` for seconds after it is created,
+# which the deploy's readiness gate (apps/os/scripts/preview-readiness.ts) waits out. Every row mints
+# its own people and projects, so nothing reads what earlier runs left. The newest `main-…`
+# deployment stays for debugging a red main; the nightly sweep keeps it through quiet days
+# (apps/os/scripts/preview-sweep.ts rule 4).
 #
-# Runs never cancel each other: one at a time, since each redeploys the preview the run before it
-# tests, and a push that lands meanwhile queues, where Depot keeps only the newest (a burst of merges
+# Runs never cancel each other: one at a time, so each run's cleanup only ever deletes the runs
+# before it, and a push that lands meanwhile queues, where Depot keeps only the newest (a burst of merges
 # tests its last commit). So every started run that is not cancelled by hand reaches a verdict, a
 # job that hits its timeout counting as red. The `alert` job pages #error-pulse only when main
 # changes state — once when it goes red, naming the failed jobs and the failing rows, once when it is
@@ -23,7 +23,8 @@
 # alert, posts the "CI trace" and "Playwright report" statuses on the pushed commit, as a PR
 # preview's does (docs/ci-traces.md).
 #
-# The script is apps/os/scripts/preview.ts (the same commands as a PR's preview, keyed by name).
+# The script is apps/os/scripts/preview.ts (the same commands as a PR's preview, keyed by the
+# prefix `main`).
 # The only Depot secret is DOPPLER_TOKEN; Doppler os/preview supplies the Cloudflare
 # credentials, _shared/prd the Slack token and the telemetry finalizer's config.
 
@@ -76,7 +77,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  # THE ONE PREVIEW, redeployed in place by every run (apps/os/scripts/preview.ts reads it;
+  # THE PREFIX of every run's deployment, `main-<sha7>` (apps/os/scripts/preview.ts reads it;
   # preview-sweep.ts CI_WORKFLOW_PREVIEWS knows it).
   PREVIEW_NAME: main
   # The image's baked store: dependencies.mjs fingerprints it (docs/depot-ci.md#custom-image)
@@ -91,14 +92,15 @@ defaults:
     shell: bash
 
 jobs:
-  # The parent this preview branches from is main's too, deployed beside this by
-  # preview-parents.yml; a preview does not depend on its parent's code.
   deploy:
     name: Deploy preview
     runs-on:
       size: 4x16
       image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
     timeout-minutes: 40
+    # `main-<sha7>`, which the suites test and the cleanup keeps
+    outputs:
+      deployment: ${{ steps.deploy.outputs.deployment }}
     steps:
       - name: Checkout main
         uses: actions/checkout@v4
@@ -111,7 +113,7 @@ jobs:
         run: doppler setup --config preview --project os
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-      - name: Redeploy the preview in place
+      - name: Deploy the pushed commit's deployment
         id: deploy
         working-directory: apps/os
         env:
@@ -178,6 +180,7 @@ jobs:
         working-directory: apps/os
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          PREVIEW_DEPLOYMENT: ${{ needs.deploy.outputs.deployment }}
           E2E_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
         run: doppler run -- pnpm preview "$SUITE"
       # The rows the alert names when main goes red, and the verdict of the suite the job judges
@@ -274,6 +277,34 @@ jobs:
       TEST_TELEMETRY_HEAD_SHA: ${{ github.sha }}
     outputs: *suite-outputs
     steps: *suite-steps
+
+  # THE `main-…` DEPLOYMENTS BEFORE THIS ONE, deleted once it is ready (apps/os/scripts/preview.ts
+  # `cleanup-superseded`), beside the suites and never gating them or the alert.
+  cleanup:
+    name: Clean up superseded
+    needs: deploy
+    runs-on:
+      size: 2x8
+      image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
+    timeout-minutes: 15
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          clean: false
+          ref: ${{ github.sha }}
+      - name: Reconcile dependencies (baked)
+        run: node scripts/depot-ci/dependencies.mjs install
+      - name: Setup Doppler (baked CLI)
+        run: doppler setup --config preview --project os
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+      - name: Delete the superseded main deployments
+        working-directory: apps/os
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          PREVIEW_DEPLOYMENT: ${{ needs.deploy.outputs.deployment }}
+        run: doppler run -- pnpm preview cleanup-superseded
 
   # THE CI TRACE, as a PR preview's trace job makes it (preview-os.yml): the deploy and two
   # test jobs' timings and markers, uploaded, then the "CI trace" and "Playwright report" statuses on

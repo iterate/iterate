@@ -3,7 +3,8 @@
 // signed in, no email typed and no password — inside the Dash's project, with no Allow page between
 // (consent.ts approves the sibling app the link names). Runs against the local worker (local dev
 // turns the links on; its key is apps/os/scripts/generate-wrangler-config.ts's) or, with
-// DEMO_BASE_URL, a preview under `doppler run` (its key is the Previews' `APP_CONFIG_SECRETS__KEY`).
+// DEMO_BASE_URL, a per-commit deployment under `doppler run --config preview` (its key is that
+// config's `APP_CONFIG_SECRETS__KEY`).
 // A deployment on its own domain has the links off: nothing to prove there, so the specs skip.
 import { expect } from "@playwright/test";
 import { uniqueFixtureSlug } from "@iterate-com/shared/test-support/fixture-slug";

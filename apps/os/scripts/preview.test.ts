@@ -2,23 +2,21 @@ import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { expect, onTestFinished, test } from "vitest";
+import { osEnvs, PREVIEW_DEPLOYMENT_APPS, previewDeployment } from "../../../envs.ts";
+import { viteWranglerConfig } from "./generate-wrangler-config.ts";
 import {
   APPS,
-  appPreviewOrigins,
   assertFreshInstall,
-  changedApps,
   configTemplateNames,
   deployWithStatus,
-  isDurableObjectClassNotExportedError,
   lastLines,
-  MAX_PREVIEW_NAME_LENGTH,
-  previewNameOfResource,
+  MAX_PREVIEW_PREFIX_LENGTH,
+  previewDeploymentName,
+  previewDeploymentUrls,
   previewPullRequestNumber,
-  previewResourceName,
-  previewWranglerConfig,
   renderPreviewStatus,
   renderPullRequestSection,
-  resolvePreviewName,
+  resolvePreviewPrefix,
   slugifyPreviewName,
   splicePreviewStatus,
   splicePreviewSuite,
@@ -35,35 +33,70 @@ test.each([
   ["feature/foo", "", "feature-foo"],
   ["Feature_Foo", undefined, "feature-foo"],
   ["main", undefined, "main"],
-  ["previewer", undefined, "previewer"],
-])("the preview name: %s with PR %s → %s", (name, prNumber, expected) => {
-  expect(resolvePreviewName({ name, prNumber })).toBe(expected);
+  ["real-model", undefined, "real-model"],
+])("a deployment's prefix: %s with PR %s → %s", (name, prNumber, expected) => {
+  expect(resolvePreviewPrefix({ name, prNumber })).toBe(expected);
 });
 
-test("the preview name: a long one is truncated with a stable hash, inside the limit", () => {
-  const name = resolvePreviewName({
+test("a deployment's prefix: a long one is truncated with a stable hash, inside the limit", () => {
+  const prefix = resolvePreviewPrefix({
     name: "jonas/os-worker-previews-with-a-very-long-descriptive-branch-name",
   });
-  expect(name.length).toBeLessThanOrEqual(MAX_PREVIEW_NAME_LENGTH);
-  expect(name).toMatch(/^jonas-os-worker-[a-z0-9-]+-[0-9a-f]{6}$/);
+  expect(prefix.length).toBeLessThanOrEqual(MAX_PREVIEW_PREFIX_LENGTH);
+  expect(prefix).toMatch(/^jonas-os-worker-[a-z0-9-]+-[0-9a-f]{6}$/);
   expect(slugifyPreviewName("a".repeat(40))).not.toBe(slugifyPreviewName("a".repeat(41)));
+  expect(() => resolvePreviewPrefix({})).toThrow("a deployment needs a PR number (--pr) or a name");
 });
 
-test("the preview name: one whose resources the account has for something else is refused", () => {
-  expect(() => resolvePreviewName({ name: "dev" })).toThrow(
-    "preview name dev would take os-dev-db, which is not a preview's",
+test("a deployment's name is its prefix and the tested commit's first 7 digits: a new commit, a new set of workers", () => {
+  const commit = "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678";
+  expect(previewDeploymentName("pr3144", commit)).toBe("pr3144-a1b2c3d");
+  expect(previewDeploymentName("real-model", commit)).toBe("real-model-a1b2c3d");
+  // the longest prefix still names every worker and resource under Cloudflare's 63 characters
+  const longest = previewDeploymentName("a".repeat(MAX_PREVIEW_PREFIX_LENGTH), commit);
+  expect(`${longest}-os-oauth-kv`.length).toBeLessThanOrEqual(63);
+  expect(() => previewDeploymentName("pr3144", "not-a-commit")).toThrow(
+    "pr3144-not-a-c is not a deployment name",
   );
-  expect(() => resolvePreviewName({ name: "parent" })).toThrow(/would take os-parent-/);
-  expect(() => resolvePreviewName({ name: "prd" })).toThrow(/would take os-prd-/);
-  // the former parent's own stores, the legacy slots' namespaces, and the empty slug's fallback
-  for (const name of ["preview", "preview-3", "--"])
-    expect(() => resolvePreviewName({ name })).toThrow(
-      /would take os-preview-.*, under the former parent os-preview's prefix/,
-    );
-  expect(() => resolvePreviewName({})).toThrow("a preview needs a PR number (--pr) or a name");
 });
 
-test("the preview name: a PR's number reads back out of it; any other name has none", () => {
+test("a deployment is derived from its name alone: seven plain workers on the dev/preview account, apps/os's resources named after its worker", () => {
+  expect(previewDeployment("pr3144-a1b2c3d")).toMatchObject({
+    prefix: "pr3144",
+    sha: "a1b2c3d",
+    os: {
+      workerName: "pr3144-a1b2c3d-os",
+      baseUrl: "https://pr3144-a1b2c3d-os.iterate-dev-preview.workers.dev",
+      mcpBaseUrl: "https://pr3144-a1b2c3d-os.iterate-dev-preview.workers.dev/mcp",
+      dashBaseUrl: "https://pr3144-a1b2c3d-dash.iterate-dev-preview.workers.dev",
+      dopplerConfig: "preview",
+      ingressRouting: { type: "paths" },
+      testLinks: true,
+      artifactsNamespace: "pr3144-a1b2c3d-os-repos",
+      resourceNamePrefix: "pr3144-a1b2c3d-os",
+    },
+  });
+  expect(previewDeploymentUrls("pr3144-a1b2c3d")).toEqual({
+    os: "https://pr3144-a1b2c3d-os.iterate-dev-preview.workers.dev",
+    apps: {
+      dash: "https://pr3144-a1b2c3d-dash.iterate-dev-preview.workers.dev",
+      agents: "https://pr3144-a1b2c3d-agents.iterate-dev-preview.workers.dev",
+      notes: "https://pr3144-a1b2c3d-notes.iterate-dev-preview.workers.dev",
+      admin: "https://pr3144-a1b2c3d-admin.iterate-dev-preview.workers.dev",
+      voice: "https://pr3144-a1b2c3d-voice.iterate-dev-preview.workers.dev",
+      kit: "https://pr3144-a1b2c3d-kit.iterate-dev-preview.workers.dev",
+    },
+  });
+  // the envs.ts deployments, main on dev's workers and a bare prefix are none
+  for (const name of ["preview", "prd", "os", "pr3144", "self-host"])
+    expect(previewDeployment(name)).toBeUndefined();
+});
+
+test("the apps on top are the deployment's six clients", () => {
+  expect(APPS.map((app) => app.name).toSorted()).toEqual([...PREVIEW_DEPLOYMENT_APPS].toSorted());
+});
+
+test("a deployment's prefix: a PR's number reads back out of it; any other prefix has none", () => {
   expect(previewPullRequestNumber("pr123")).toBe(123);
   expect(previewPullRequestNumber("pr123-feature-foo")).toBeUndefined();
   expect(previewPullRequestNumber("feature-foo")).toBeUndefined();
@@ -71,7 +104,7 @@ test("the preview name: a PR's number reads back out of it; any other name has n
 });
 
 const JOB = "https://depot.dev/orgs/0p91s0lz49/workflows/w?job=j&attempt=a";
-const DASH = "https://pr123-dash.iterate-dev-preview.workers.dev";
+const DASH = "https://pr123-ccccccc-dash.iterate-dev-preview.workers.dev";
 const deployed: PreviewStatus = {
   state: "deployed",
   commit: "ccccccccc0123456789",
@@ -80,23 +113,25 @@ const deployed: PreviewStatus = {
 };
 
 const section = renderPullRequestSection({
-  previewName: "pr123",
+  deployment: "pr123-ccccccc",
   status: deployed,
-  url: "https://pr123-os.iterate-dev-preview.workers.dev",
-  deploymentId: "bd68a9bb-b323-47fd-bc6b-c4cae7b29c8c",
+  url: "https://pr123-ccccccc-os.iterate-dev-preview.workers.dev",
+  versionId: "bd68a9bb-b323-47fd-bc6b-c4cae7b29c8c",
   dashboardUrl: "https://dash.cloudflare.com/x",
   apps: [
     {
       name: "dash",
-      url: "https://pr123-dash.iterate-dev-preview.workers.dev",
+      url: "https://pr123-ccccccc-dash.iterate-dev-preview.workers.dev",
     },
   ],
 });
 
-test("the PR body's managed section: names the URL, the deployment, the apps on top, and where the operations are", () => {
-  expect(section).toContain("https://pr123-os.iterate-dev-preview.workers.dev");
-  expect(section).toContain("deployment `bd68a9bb`");
-  expect(section).toContain("| dash | https://pr123-dash.iterate-dev-preview.workers.dev |");
+test("the PR body's managed section: names the URL, the version, the apps on top, and where the operations are", () => {
+  expect(section).toContain("https://pr123-ccccccc-os.iterate-dev-preview.workers.dev");
+  expect(section).toContain("version `bd68a9bb`");
+  expect(section).toContain(
+    "| dash | https://pr123-ccccccc-dash.iterate-dev-preview.workers.dev |",
+  );
   expect(section).toContain("https://github.com/iterate/iterate/blob/main/apps/os/README.md");
   expect(section).not.toContain("depot ci dispatch");
   expect(section).not.toContain("Deployed from");
@@ -104,10 +139,10 @@ test("the PR body's managed section: names the URL, the deployment, the apps on 
 
 test("the PR body's managed section: names the commit the run deployed when the workflow resolved one; e2e is the status line's", () => {
   const withCommit = renderPullRequestSection({
-    previewName: "pr123",
+    deployment: "pr123-ccccccc",
     status: deployed,
-    url: "https://pr123-os.iterate-dev-preview.workers.dev",
-    deploymentId: "bd68a9bb-b323-47fd-bc6b-c4cae7b29c8c",
+    url: "https://pr123-ccccccc-os.iterate-dev-preview.workers.dev",
+    versionId: "bd68a9bb-b323-47fd-bc6b-c4cae7b29c8c",
     dashboardUrl: "https://dash.cloudflare.com/x",
     apps: [],
     testedCommit:
@@ -120,9 +155,9 @@ test("the PR body's managed section: names the commit the run deployed when the 
 });
 
 test("the PR body's managed section: on a PR the heading, every app and every config template carry a one-click `Sign in ↗`, and the section says as whom", () => {
-  const dash = "https://pr123-dash.iterate-dev-preview.workers.dev";
-  const notes = "https://pr123-notes.iterate-dev-preview.workers.dev";
-  const os = "https://pr123-os.iterate-dev-preview.workers.dev";
+  const dash = "https://pr123-ccccccc-dash.iterate-dev-preview.workers.dev";
+  const notes = "https://pr123-ccccccc-notes.iterate-dev-preview.workers.dev";
+  const os = "https://pr123-ccccccc-os.iterate-dev-preview.workers.dev";
   const signIn = {
     heading: `${os}/.auth/test-link?t=heading`,
     apps: { dash: `${os}/.auth/test-link?t=dash`, notes: `${os}/.auth/test-link?t=notes` },
@@ -136,10 +171,10 @@ test("the PR body's managed section: on a PR the heading, every app and every co
   };
   const render = (seeded: boolean) =>
     renderPullRequestSection({
-      previewName: "pr123",
+      deployment: "pr123-ccccccc",
       status: deployed,
       url: os,
-      deploymentId: "bd68a9bb-b323-47fd-bc6b-c4cae7b29c8c",
+      versionId: "bd68a9bb-b323-47fd-bc6b-c4cae7b29c8c",
       dashboardUrl: "https://dash.cloudflare.com/x",
       apps: [
         { name: "dash", url: dash },
@@ -148,24 +183,24 @@ test("the PR body's managed section: on a PR the heading, every app and every co
       signIn: { ...signIn, seeded },
     });
   expect(render(true)).toMatchInlineSnapshot(`
-    "### OS preview: \`pr123\`
+    "### OS preview: \`pr123-ccccccc\`
 
     <!-- os-preview-status:begin -->
     Status: **deployed** on \`ccccccccc\` · [CI job ↗](https://depot.dev/orgs/0p91s0lz49/workflows/w?job=j&attempt=a) · updated 2026-09-24 10:32 UTC
     <!-- os-preview-status:end -->
 
-    **https://pr123-os.iterate-dev-preview.workers.dev** · [Sign in ↗](https://pr123-os.iterate-dev-preview.workers.dev/.auth/test-link?t=heading) · deployment \`bd68a9bb\` · [Cloudflare dashboard](https://dash.cloudflare.com/x) · deleted when this PR closes
+    **https://pr123-ccccccc-os.iterate-dev-preview.workers.dev** · [Sign in ↗](https://pr123-ccccccc-os.iterate-dev-preview.workers.dev/.auth/test-link?t=heading) · version \`bd68a9bb\` · [Cloudflare dashboard](https://dash.cloudflare.com/x) · deleted once the next push's deployment is ready, or when this PR closes
 
-    | App on top, signed in against this preview | | |
+    | App on top, signed in against this deployment | | |
     | --- | --- | --- |
-    | dash | https://pr123-dash.iterate-dev-preview.workers.dev | [Sign in ↗](https://pr123-os.iterate-dev-preview.workers.dev/.auth/test-link?t=dash) |
-    | notes | https://pr123-notes.iterate-dev-preview.workers.dev | [Sign in ↗](https://pr123-os.iterate-dev-preview.workers.dev/.auth/test-link?t=notes) |
+    | dash | https://pr123-ccccccc-dash.iterate-dev-preview.workers.dev | [Sign in ↗](https://pr123-ccccccc-os.iterate-dev-preview.workers.dev/.auth/test-link?t=dash) |
+    | notes | https://pr123-ccccccc-notes.iterate-dev-preview.workers.dev | [Sign in ↗](https://pr123-ccccccc-os.iterate-dev-preview.workers.dev/.auth/test-link?t=notes) |
 
-    New project from template: [default at this PR's \`bbbbbbbbb\` ↗](https://pr123-os.iterate-dev-preview.workers.dev/.auth/test-link?t=default) · [with-agents ↗](https://pr123-os.iterate-dev-preview.workers.dev/.auth/test-link?t=with-agents)
+    New project from template: [default at this PR's \`bbbbbbbbb\` ↗](https://pr123-ccccccc-os.iterate-dev-preview.workers.dev/.auth/test-link?t=default) · [with-agents ↗](https://pr123-ccccccc-os.iterate-dev-preview.workers.dev/.auth/test-link?t=with-agents)
 
-    \`Sign in ↗\` signs you in as \`pr123@preview.iterate.test\` with project \`pr123\`, no password and no Allow page: the link is signed for this preview only and expires in 14 days; every push mints a fresh one.
+    \`Sign in ↗\` signs you in as \`pr123@preview.iterate.test\` with project \`pr123\`, no password and no Allow page: the link is signed for this deployment only and expires in 14 days; every push mints a fresh one.
 
-    Every push redeploys it in place. Reset, e2e, delete and the laptop commands: [apps/os/README.md](https://github.com/iterate/iterate/blob/main/apps/os/README.md)."
+    Every push deploys a fresh set of workers, with data of its own. E2e, delete and the laptop commands: [apps/os/README.md](https://github.com/iterate/iterate/blob/main/apps/os/README.md)."
   `);
   expect(render(false)).toContain(
     "Seeding `pr123` failed this run (the deploy log says why), so the apps ask for consent.",
@@ -453,183 +488,56 @@ test("template quick-launch: the Dash reads the PR head's reference back out of 
   });
 });
 
-const template = {
-  main: "index.js",
-  no_bundle: true,
-  compatibility_date: "2026-09-01",
-  compatibility_flags: ["nodejs_compat"],
-  assets: { directory: "../client", binding: "ASSETS", run_worker_first: true },
-  limits: { cpu_ms: 1 },
-  worker_loaders: [{ binding: "LOADER" }],
-  ai: { binding: "AI" },
-  browser: { binding: "BROWSER" },
-  send_email: [{ name: "EMAIL" }],
-  version_metadata: { binding: "CF_VERSION_METADATA" },
-  durable_objects: {
-    bindings: [{ name: "ITERATE_CONTEXT", class_name: "IterateContextDurableObject" }],
-  },
-  exports: {
-    IterateContextDurableObject: { type: "durable-object", storage: "sqlite" },
-    BrowserSession: { type: "durable-object", storage: "sqlite" },
-    AgentDurableObject: { type: "durable-object", state: "deleted" },
-  },
-  r2_buckets: [{ binding: "FILES", bucket_name: "os-files" }],
-  d1_databases: [
+// ── a deployment's wrangler config: the one prd's goes through (generate-wrangler-config.ts) ──
+
+test("a deployment's apps/os config: its own worker, KV binding-only for wrangler to provision, the D1 by name for the deploy to create and migrate, R2 and Artifacts named after its worker, no routes", () => {
+  const config = viteWranglerConfig("pr3144-a1b2c3d", { localDev: false, port: "0" });
+  expect(config).toMatchObject({
+    name: "pr3144-a1b2c3d-os",
+    account_id: osEnvs.preview!.cloudflareAccountId,
+    workers_dev: true,
+    routes: [],
+    r2_buckets: [{ binding: "FILES", bucket_name: "pr3144-a1b2c3d-os-files" }],
+    artifacts: [{ binding: "ARTIFACTS", namespace: "pr3144-a1b2c3d-os-repos" }],
+  });
+  // oxlint-disable-next-line iterate/prefer-object-property-match -- binding-only is the point: a copied id must fail
+  expect(config.kv_namespaces).toEqual([{ binding: "OAUTH_KV" }, { binding: "ITX_KV" }]);
+  // oxlint-disable-next-line iterate/prefer-object-property-match -- no id: wrangler finds the D1 by name
+  expect(config.d1_databases).toEqual([
     {
       binding: "DB",
-      database_name: "os-dev-db",
-      database_id: "os-dev-db",
-      migrations_dir: "../../src/control-plane/db/migrations",
+      database_name: "pr3144-a1b2c3d-os-db",
+      migrations_dir: "src/control-plane/db/migrations",
     },
-  ],
-  artifacts: [{ binding: "ARTIFACTS", namespace: "os-dev-repos" }],
-  kv_namespaces: [
-    { binding: "ITX_KV", id: "1" },
-    { binding: "OAUTH_KV", id: "2" },
-  ],
-};
-const config = previewWranglerConfig({ template, previewName: "pr123", databaseId: "d1-pr123" });
-
-test("the preview's wrangler config (a pure transform of Vite's built config): the top level provisions live classes, excluding deleted exports, as a legacy migrations entry", () => {
-  expect(config).toMatchObject({
-    name: "os",
-    main: "index.js",
-    no_bundle: true,
-    assets: template.assets,
-    migrations: [
-      { tag: "v1", new_sqlite_classes: ["IterateContextDurableObject", "BrowserSession"] },
-    ],
-  });
-  expect(config).not.toHaveProperty("exports");
-  expect(config).not.toHaveProperty("vars");
-  expect(config).not.toHaveProperty("kv_namespaces");
-});
-
-test("the preview's wrangler config (a pure transform of Vite's built config): KV and R2 are binding-only (auto-provisioned per preview); the D1 and the Artifacts namespace are the preview's own", () => {
-  // oxlint-disable-next-line iterate/prefer-object-property-match -- binding-only is the point: a copied id must fail
-  expect(config.previews.kv_namespaces).toEqual([{ binding: "ITX_KV" }, { binding: "OAUTH_KV" }]);
-  // oxlint-disable-next-line iterate/prefer-object-property-match -- binding-only is the point: a copied id must fail
-  expect(config.previews.r2_buckets).toEqual([{ binding: "FILES" }]);
-  // oxlint-disable-next-line iterate/prefer-object-property-match -- the local id and migrations_dir must not ride along
-  expect(config.previews.d1_databases).toEqual([
-    { binding: "DB", database_name: "os-pr123-db", database_id: "d1-pr123" },
   ]);
-  expect(config.previews).toMatchObject({
-    artifacts: [{ binding: "ARTIFACTS", namespace: "os-pr123-repos" }],
-  });
 });
 
-test("the preview's wrangler config (a pure transform of Vite's built config): vars are the preview's own origin, projects as paths, the one-click sign-in links on and one test admin; the secrets are the parent's Previews settings", () => {
-  expect(config.previews).toMatchObject({
+test("a deployment's apps/os config: vars are its own origin, its dash, projects as paths, the one-click sign-in links on and one test admin", () => {
+  expect(viteWranglerConfig("pr3144-a1b2c3d", { localDev: false, port: "0" })).toMatchObject({
     vars: {
-      APP_CONFIG_URLS__OS: "https://pr123-os.iterate-dev-preview.workers.dev",
+      APP_CONFIG_URLS__OS: "https://pr3144-a1b2c3d-os.iterate-dev-preview.workers.dev",
+      APP_CONFIG_URLS__DASH: "https://pr3144-a1b2c3d-dash.iterate-dev-preview.workers.dev",
       APP_CONFIG_URLS__INGRESS_ROUTING: JSON.stringify({ type: "paths" }),
       APP_CONFIG_LOGIN__TEST_LINK__EMAIL_DOMAIN: "preview.iterate.test",
       APP_CONFIG_ADMINS: JSON.stringify(["admin@preview.iterate.test"]),
     },
   });
-  expect(previewResourceName("pr123", "db")).toBe("os-pr123-db");
 });
 
-test("the preview's wrangler config (a pure transform of Vite's built config): a deployed Dash is available to secret collection link generation", () => {
-  const dashOrigin = "https://pr123-dash.iterate-dev-preview.workers.dev";
-  const withDash = previewWranglerConfig({
-    template,
-    previewName: "pr123",
-    databaseId: "d1-pr123",
-    dashOrigin,
+test("an envs.ts deployment's config still names its resources by id, and turns no test links on", () => {
+  const config = viteWranglerConfig("prd", { localDev: false, port: "0" });
+  expect(config).toMatchObject({
+    kv_namespaces: [
+      { binding: "OAUTH_KV", id: osEnvs.prd!.resources.oauthKvId },
+      { binding: "ITX_KV", id: osEnvs.prd!.resources.itxKvId },
+    ],
+    d1_databases: [{ database_name: "os-prd-db", database_id: osEnvs.prd!.resources.dbId }],
   });
-  expect(withDash.previews.vars).toMatchObject({ APP_CONFIG_URLS__DASH: dashOrigin });
-  expect(config.previews.vars.APP_CONFIG_URLS__DASH).toBeUndefined();
+  expect(config.vars).not.toHaveProperty("APP_CONFIG_LOGIN__TEST_LINK__EMAIL_DOMAIN");
+  expect(() => viteWranglerConfig("pr3144", { localDev: false, port: "0" })).toThrow(
+    'apps/os: unknown env "pr3144"',
+  );
 });
-
-test("a preview's apps link to each other at this PR's preview of each one's parent, the URLs the PR body lists", () => {
-  expect(appPreviewOrigins(APPS, "pr123")).toEqual({
-    dash: "https://pr123-dash.iterate-dev-preview.workers.dev",
-    agents: "https://pr123-agents.iterate-dev-preview.workers.dev",
-    notes: "https://pr123-notes.iterate-dev-preview.workers.dev",
-    voice: "https://pr123-voice.iterate-dev-preview.workers.dev",
-    kit: "https://pr123-kit.iterate-dev-preview.workers.dev",
-    admin: "https://pr123-admin.iterate-dev-preview.workers.dev",
-  });
-});
-
-test("an app the preview run does not deploy is named nowhere, never at its production origin", () => {
-  const dashOnly = appPreviewOrigins(changedApps(["apps/dash/src/apps.ts"]), "pr123");
-  expect(dashOnly).toEqual({
-    dash: "https://pr123-dash.iterate-dev-preview.workers.dev",
-  });
-  expect(appPreviewOrigins([], "pr123")).toEqual({});
-});
-
-test("which apps on top a preview run deploys: the apps on top are the six clients", () => {
-  expect(APPS.map((app) => app.name)).toEqual(["dash", "agents", "notes", "voice", "kit", "admin"]);
-});
-
-test.each<[string, string[], string[]]>([
-  ["nothing", ["apps/os/src/worker.ts", "docs/x.md"], []],
-  ["one app", ["apps/dash/src/routes/index.tsx"], ["dash"]],
-  ["two apps", ["apps/notes/src/server.ts", "apps/voice/README.md"], ["notes", "voice"]],
-  ["the SDK: every app", ["packages/iterate/src/app.ts"], APPS.map((app) => app.name)],
-  ["the shared UI: every app", ["packages/ui/src/button.tsx"], APPS.map((app) => app.name)],
-  ["envs.ts: every app", ["envs.ts"], APPS.map((app) => app.name)],
-  ["shared utilities: every app", ["packages/shared/src/slugify.ts"], APPS.map((app) => app.name)],
-  ...["package.json", "pnpm-lock.yaml", "pnpm-workspace.yaml"].map(
-    (file): [string, string[], string[]] => [file, [file], APPS.map((app) => app.name)],
-  ),
-  ["a look-alike path is not an app", ["apps/dashboard/x.ts", "packages/iterate-docs/x.md"], []],
-])("which apps on top a preview run deploys: %s", (_, paths, expected) => {
-  expect(changedApps(paths).map((app) => app.name)).toEqual(expected);
-});
-
-test.each<[string, string, string | undefined]>([
-  ["os-pr123-repos", "repos", "pr123"],
-  ["os-pr123-db", "db", "pr123"],
-  ["os-soak-repos", "repos", "soak"],
-  // nothing between the parent and the suffix: local dev's R2 bucket
-  ["os-files", "files", undefined],
-  // another binding's resource
-  ["os-pr123-db", "repos", undefined],
-  // not the parent's prefix
-  ["iterate-spa-preview-repos", "repos", undefined],
-  // other resources read as preview names too; the sweep leaves them (preview-sweep.ts rule 4:
-  // those envs.ts and wrangler.base.jsonc name, and those of another worker whose name begins `os-`)
-  ["os-dev-repos", "repos", "dev"],
-  ["os-parent-repos", "repos", "parent"],
-  ["os-preview-repos", "repos", "preview"],
-  ["os-prd-project-repos", "repos", "prd-project"],
-  ["os-parent-db", "db", "parent"],
-  ["os-prd-db", "db", "prd"],
-])(
-  "the preview a resource name encodes (previewResourceName's inverse; the sweep's orphan passes): %s as %s → %s",
-  (resourceName, binding, expected) => {
-    expect(previewNameOfResource(resourceName, binding)).toBe(expected);
-  },
-);
-
-test("the preview a resource name encodes (previewResourceName's inverse; the sweep's orphan passes): round-trips previewResourceName", () => {
-  expect(previewNameOfResource(previewResourceName("pr7", "repos"), "repos")).toBe("pr7");
-  expect(previewNameOfResource(previewResourceName("exp-x", "db"), "db")).toBe("exp-x");
-});
-
-test.each([
-  {
-    output:
-      "A request to the Cloudflare API (/accounts/x/workers/workers/os-preview/previews/y/deployments) failed.\n  Cannot create binding for class 'ControlPlaneDurableObject' that is not exported by the script. [code: 10061]",
-    recreate: true,
-  },
-  {
-    output: "Cannot create binding for class 'X' that is not exported by the script.",
-    recreate: true,
-  },
-  { output: "This Worker does not exist on your account. [code: 10007]", recreate: false },
-  { output: "Authentication error [code: 10000]", recreate: false },
-])(
-  "Cloudflare 10061 (a Durable Object class the preview lacks) is recognised: $recreate",
-  ({ output, recreate }) => {
-    expect(isDurableObjectClassNotExportedError(output)).toBe(recreate);
-  },
-);
 
 // Preview OS deploys of #2934, #2939 and #2943 (2026-09-24): the PR head's older lockfile, then
 // the merge commit's, rewrote pnpm-lock.yaml over node_modules baked from that same content.
@@ -686,10 +594,10 @@ function numberedLines(from: number, to: number) {
 /** A deployed section with no apps and no sign-in: what a status splice lands in. */
 function deployedSection() {
   return renderPullRequestSection({
-    previewName: "pr123",
+    deployment: "pr123-ccccccc",
     status: deployed,
-    url: "https://pr123-os.iterate-dev-preview.workers.dev",
-    deploymentId: "bd68a9bb-b323-47fd-bc6b-c4cae7b29c8c",
+    url: "https://pr123-ccccccc-os.iterate-dev-preview.workers.dev",
+    versionId: "bd68a9bb-b323-47fd-bc6b-c4cae7b29c8c",
     dashboardUrl: "https://dash.cloudflare.com/x",
     apps: [],
   });

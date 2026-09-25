@@ -1,15 +1,12 @@
 // scripts/preview-config.ts — the pure half of scripts/preview.ts, what preview.test.ts pins: the
-// preview's name (`pr<n>`, or a slug without a PR), the parent it branches from (envs.ts
-// `osEnvs.preview`) and the URL and resource names that follow from the two, which apps on top a
-// change touches, the PR body's managed section and its status line, the template quick-launch
-// links, the config `wrangler preview` reads — a
-// transform of Vite's built Worker config, the shape of cloudflare-os's `buildPreviewConfigs` —
-// and whether node_modules was installed from the checkout's lockfile.
+// name of a run's per-commit deployment (`pr<n>-<sha7>`, or a slug's; envs.ts `previewDeployment`
+// derives every worker, URL and resource from it), the PR body's managed section and its status
+// line, the template quick-launch links, and whether node_modules was installed from the
+// checkout's lockfile.
 import { createHash } from "node:crypto";
-import { readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { readdirSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
-import { osEnvs } from "../../../envs.ts";
+import { osEnvs, previewDeployment } from "../../../envs.ts";
 import { agents } from "../../agents/scripts/app.ts";
 import { dash } from "../../dash/scripts/app.ts";
 import { kit } from "../../kit/scripts/app.ts";
@@ -17,42 +14,24 @@ import { notes } from "../../notes/scripts/app.ts";
 import { admin } from "../../admin/scripts/app.ts";
 import { voice } from "../../voice/scripts/app.ts";
 import type { StartApp } from "../../../scripts/lib/start-app.ts";
-import { OBSERVABILITY } from "../../../scripts/lib/wrangler-config.ts";
-import { TEST_LINK_EMAIL_DOMAIN } from "../src/test-link.ts";
-import { readWranglerBase } from "./generate-wrangler-config.ts";
 
-/** Beside Vite's built Worker config, so `main` and `assets.directory` resolve identically. */
-export const PREVIEW_CONFIG_NAME = "dist/server/wrangler.preview.json";
+/** MAIN ON THE DEV/PREVIEW ACCOUNT (envs.ts `osEnvs.preview`): the account every per-commit
+ *  deployment lives on, whose Doppler config (`os/preview`) holds its Cloudflare credentials and
+ *  the two secrets each apps/os deploy ships. preview-parents.yml redeploys it from main. */
+export const MAIN_ON_DEV = osEnvs.preview!;
 
-/** THE PARENT of every per-PR preview: a Worker Preview is a branch of an existing worker
- *  (cloudflare-os `staging-config.ts`: "one must exist before a preview can be created"). This is
- *  that worker — `os` on the dev/preview account (envs.ts), itself deployed from main
- *  (preview-parents.yml). */
-export const PREVIEW_PARENT = osEnvs.preview!;
+/** The longest prefix a deployment name takes (envs.ts `previewDeployment`): every worker and
+ *  resource name of the set stays under Cloudflare's 63 characters. */
+export const MAX_PREVIEW_PREFIX_LENGTH = 28;
 
-/** cloudflare-os's limit: the slug is the URL's first label, and KV/R2 names carry it too. */
-export const MAX_PREVIEW_NAME_LENGTH = 28;
-
-/** The apps on top, each previewed from its own parent worker (envs.ts `<app>Envs.preview`). */
+/** The apps on top, each deployed beside apps/os as `<deployment>-<app>`. */
 export const APPS: StartApp[] = [dash, agents, notes, voice, kit, admin];
-/** A path that changes every app: the SDK they are built on, the shared UI, the shared deploy
- *  scripts, the env map. An app's own paths are `apps/<name>/`. */
-const SHARED_APP_PATHS = [
-  "packages/iterate/",
-  "packages/shared/",
-  "packages/ui/",
-  "scripts/lib/",
-  "envs.ts",
-  "package.json",
-  "pnpm-lock.yaml",
-  "pnpm-workspace.yaml",
-];
 
 // ── naming ─────────────────────────────────────────────────────────────────────────────────────
 
-/** Slugify a ref into a legal preview name, truncating with a stable hash (cloudflare-os). */
+/** Slugify a ref into a legal prefix, truncating with a stable hash (cloudflare-os). */
 export function slugifyPreviewName(raw: string) {
-  const budget = MAX_PREVIEW_NAME_LENGTH;
+  const budget = MAX_PREVIEW_PREFIX_LENGTH;
   const slug = raw
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
@@ -63,143 +42,43 @@ export function slugifyPreviewName(raw: string) {
   return `${slug.slice(0, budget - hash.length - 1).replace(/-+$/, "")}-${hash}`;
 }
 
-/** THE FORMER PARENT, until 2026-09-24. Its own stores (`os-preview-files`, `os-preview-repos`) and
- *  the legacy platform's slot namespaces (`os-preview-<n>-repos`, tens of thousands of repos each)
- *  are all `os-preview-…`: what a preview named `preview` or `preview-…` would call its own under
- *  the parent `os`, and a delete of that preview would take them. They outlive any worker, so the
- *  name is refused whether or not the worker still exists. */
-const FORMER_PARENT = "os-preview";
-
-/** `pr<n>` for a pull request: its URLs are `pr<n>-os.…`, `pr<n>-dash.…`, one per PR whatever its
- *  branch is called. Without a number — a CI workflow's own preview, a laptop's experiment — the
- *  slugified name, which the sweep judges on age alone. A name whose resources would be one the
- *  account already has for something else (`dev` → local dev's `os-dev-db`), or under the former
- *  parent's prefix, is refused. */
-export function resolvePreviewName({ name, prNumber }: { name?: string; prNumber?: string }) {
+/** The prefix every deployment of a run's owner shares: `pr<n>` for a pull request, one per PR
+ *  whatever its branch is called; without a number the slugified name — a CI workflow's own
+ *  (`main`, `latency`, `real-model`), a soak's, a laptop's experiment — which the sweep judges on
+ *  age alone. */
+export function resolvePreviewPrefix({ name, prNumber }: { name?: string; prNumber?: string }) {
   const pr = (prNumber || "").trim();
   if (/^\d+$/.test(pr)) return `pr${pr}`;
-  if (!name) throw new Error("a preview needs a PR number (--pr) or a name (--name)");
-  const previewName = slugifyPreviewName(name);
-  const taken = accountResourceNames();
-  const clash = Object.values(previewResourceSuffixes())
-    .flat()
-    .map((suffix) => previewResourceName(previewName, suffix))
-    .find((resourceName) => taken.has(resourceName));
-  if (clash)
-    throw new Error(`preview name ${previewName} would take ${clash}, which is not a preview's`);
-  const repos = previewResourceName(previewName, "repos");
-  if (repos.startsWith(`${FORMER_PARENT}-`))
-    throw new Error(
-      `preview name ${previewName} would take ${repos}, under the former parent ${FORMER_PARENT}'s prefix`,
-    );
-  return previewName;
+  if (!name) throw new Error("a deployment needs a PR number (--pr) or a name (--name)");
+  return slugifyPreviewName(name);
 }
 
-export function previewPullRequestNumber(previewName: string) {
-  const match = /^pr(\d+)$/.exec(previewName);
+/** THE DEPLOYMENT a run deploys or tests: `<prefix>-<sha7>` of the commit it tests (the PR merged
+ *  into main in CI, scripts/ci/preview-tested-commit.ts), so a push that tests a new commit gets a
+ *  new set of workers, and a retry of the same commit redeploys the same set. */
+export function previewDeploymentName(prefix: string, commit: string) {
+  const name = `${prefix}-${commit.slice(0, 7)}`;
+  const deployment = previewDeployment(name);
+  if (!deployment) throw new Error(`${name} is not a deployment name: <prefix>-<7 hex digits>`);
+  return deployment.name;
+}
+
+export function previewPullRequestNumber(prefix: string) {
+  const match = /^pr(\d+)$/.exec(prefix);
   return match ? Number(match[1]) : undefined;
 }
 
-/** Cloudflare's 10061 from `wrangler preview`: "Cannot create binding for class '<class>' that is
- *  not exported by the script. [code: 10061]" — the build binds a Durable Object class the preview
- *  does not have. An existing Worker Preview cannot gain a class it lacked when it was created (every
- *  existing PR preview failed, a new one passed), so scripts/preview.ts deletes the preview and
- *  creates it again. */
-export function isDurableObjectClassNotExportedError(wranglerOutput: string) {
-  return /Cannot create binding for class .* not exported by the script|\[code: 10061\]/.test(
-    wranglerOutput,
-  );
-}
-
-/** `https://<name>-<worker>.<subdomain>.workers.dev` — Cloudflare derives it from the preview's slug
- *  and the worker name, so every URL the config needs is known before anything deploys. */
-export function previewUrl(previewName: string) {
-  const host = new URL(PREVIEW_PARENT.baseUrl).hostname;
-  const prefix = `${PREVIEW_PARENT.workerName}.`;
-  if (!host.startsWith(prefix))
-    throw new Error(`${host} is not the parent worker's workers.dev host`);
-  return `https://${previewName}-${host}`;
-}
-
-/** An app on top's preview URL, `https://<name>-<its parent's workers.dev host>` — known before
- *  anything deploys, by the same rule as apps/os's `previewUrl`. */
-export const appPreviewUrl = (app: StartApp, previewName: string) =>
-  `https://${previewName}-${new URL(app.envs.preview!.baseUrl).hostname}`;
-
-/** The apps a run previews, by name, at their preview URLs: every link between this preview's
- *  apps — the dash the OS preview's landing page names (`APP_CONFIG_URLS__DASH`), and each app
- *  preview's `ITERATE_APP_ORIGINS` (scripts/lib/start-app.ts: the dash's directory of apps, Kit's
- *  link to the sessions in the dash). An app the run does not deploy (`--apps auto|none`) is named
- *  nowhere: a link leads into this PR's preview or does not exist, never to production, where a
- *  preview's projects do not. */
-export function appPreviewOrigins(apps: StartApp[], previewName: string) {
-  return Object.fromEntries(apps.map((app) => [app.name, appPreviewUrl(app, previewName)]));
-}
-
-/** Every preview-owned resource is `<worker>-<preview>-<binding>`, the name wrangler's preview
- *  auto-provisioning gives the KV namespaces and the R2 bucket; the Artifacts namespace follows it
- *  by hand. */
-export const previewResourceName = (previewName: string, binding: string) =>
-  `${PREVIEW_PARENT.workerName}-${previewName}-${binding}`;
-
-/** The account resources a preview owns: the four kinds `previewResourceSuffixes` names. */
-export type PreviewResourceKind = "kv" | "r2" | "d1" | "artifacts";
-
-/** The suffix of every resource a preview owns (`previewResourceName(preview, suffix)`), by kind:
- *  the KV namespaces and the R2 bucket wrangler provisions for the template's bindings — the binding
- *  lowercased, `_` → `-` (workers-sdk `getPreviewResourceName`: `ITX_KV` → `…-itx-kv`) — and the
- *  control plane's D1 (`db`) and the Artifacts namespace scripts/preview.ts creates. What
- *  deletePreview deletes and the sweep recognizes. */
-export function previewResourceSuffixes(
-  template = readWranglerBase(),
-): Record<PreviewResourceKind, string[]> {
-  const suffix = ({ binding }: { binding: string }) => binding.toLowerCase().replaceAll("_", "-");
+/** A deployment's apps/os origin, and its apps' by name: envs.ts `previewDeployment`, for a name
+ *  this module made. */
+export function previewDeploymentUrls(name: string) {
+  const deployment = previewDeployment(name);
+  if (!deployment) throw new Error(`${name} is not a deployment name`);
   return {
-    kv: template.kv_namespaces.map(suffix),
-    r2: template.r2_buckets.map(suffix),
-    d1: ["db"],
-    artifacts: ["repos"],
+    os: deployment.os.baseUrl,
+    apps: Object.fromEntries(
+      Object.entries(deployment.apps).map(([app, env]) => [app, env.baseUrl]),
+    ) as Record<string, string>,
   };
-}
-
-/** THE ACCOUNT'S OTHER RESOURCES that still read as `<parent>-<preview>-<suffix>`: every OS
- *  deployment's own (envs.ts — the parent's `os-parent-files` reads as preview `parent`'s R2, its
- *  `os-parent-db` as that preview's D1) and local dev's (wrangler.base.jsonc — `os-dev-repos` reads
- *  as preview `dev`'s Artifacts namespace). No preview may take a name that would claim one
- *  (resolvePreviewName), and the sweep never deletes one (preview-sweep.ts rule 4). KV is bound by
- *  id, so only its titles count. */
-export function accountResourceNames(template = readWranglerBase()) {
-  return new Set([
-    ...Object.values(osEnvs).flatMap((env) => [
-      `${env.resourceNamePrefix}-oauth`,
-      `${env.resourceNamePrefix}-itx`,
-      `${env.resourceNamePrefix}-files`,
-      `${env.resourceNamePrefix}-db`,
-      env.artifactsNamespace,
-    ]),
-    ...template.r2_buckets.map((bucket: { bucket_name: string }) => bucket.bucket_name),
-    ...template.d1_databases.map((database: { database_name: string }) => database.database_name),
-    ...template.artifacts.map((artifacts: { namespace: string }) => artifacts.namespace),
-  ]);
-}
-
-/** The preview a per-preview resource name encodes — `previewResourceName`'s inverse — or undefined
- *  for a name of another shape: another binding's, or one with nothing between the parent and the
- *  suffix (local dev's `os-files`). How the sweep reads a leftover resource
- *  (scripts/preview-sweep.ts). */
-export function previewNameOfResource(resourceName: string, binding: string) {
-  const prefix = `${PREVIEW_PARENT.workerName}-`;
-  const suffix = `-${binding}`;
-  if (!resourceName.startsWith(prefix) || !resourceName.endsWith(suffix)) return undefined;
-  return resourceName.slice(prefix.length, -suffix.length) || undefined;
-}
-
-/** Which apps on top a set of changed paths touches: an app's own directory, or a shared path
- *  (then every app). */
-export function changedApps(changedPaths: string[], apps = APPS) {
-  if (changedPaths.some((file) => SHARED_APP_PATHS.some((shared) => file.startsWith(shared))))
-    return apps;
-  return apps.filter((app) => changedPaths.some((file) => file.startsWith(`apps/${app.name}/`)));
 }
 
 // ── the PR body's managed section ──────────────────────────────────────────────────────────────
@@ -438,16 +317,18 @@ export function templateQuickLaunches(input: {
   });
 }
 
-/** The status line, the URL, the deployment, the apps on top previewed this run and, on a PR, the
+/** The status line, the URL, the deployment, the apps on top deployed this run and, on a PR, the
  *  one-click `Sign in ↗` links (src/test-link.ts) — the heading's into the Dash (or the issuer's own
  *  page), each app's into that app, and with the Dash one per config template into its New project
- *  sheet; the operations (reset, e2e, delete, the laptop commands) are the README's, linked, not
- *  spelled here a second time. */
+ *  sheet; the operations (e2e, delete, the laptop commands) are the README's, linked, not spelled
+ *  here a second time. */
 export function renderPullRequestSection(input: {
-  previewName: string;
+  /** the deployment's name, `pr<n>-<sha7>` */
+  deployment: string;
   status: PreviewStatus;
   url: string;
-  deploymentId: string;
+  /** the Worker version apps/os's `/version` names */
+  versionId: string;
   dashboardUrl: string;
   apps: { name: string; url: string }[];
   /** Which commit the run deployed (scripts/ci/preview-tested-commit.ts). */
@@ -457,7 +338,7 @@ export function renderPullRequestSection(input: {
     heading: string;
     /** app name → its link */
     apps: Record<string, string>;
-    /** one per config template, into the Dash's New project sheet: only when the Dash was previewed */
+    /** one per config template, into the Dash's New project sheet: only when the Dash was deployed */
     templates: {
       name: string;
       link: string;
@@ -471,17 +352,17 @@ export function renderPullRequestSection(input: {
 }) {
   const { signIn } = input;
   return [
-    `### OS preview: \`${input.previewName}\``,
+    `### OS preview: \`${input.deployment}\``,
     "",
     statusBlock(input.status),
     "",
-    `**${input.url}**${signIn ? ` · [Sign in ↗](${signIn.heading})` : ""} · deployment \`${input.deploymentId.slice(0, 8)}\` · [Cloudflare dashboard](${input.dashboardUrl}) · deleted when this PR closes`,
+    `**${input.url}**${signIn ? ` · [Sign in ↗](${signIn.heading})` : ""} · version \`${input.versionId.slice(0, 8)}\` · [Cloudflare dashboard](${input.dashboardUrl}) · deleted once the next push's deployment is ready, or when this PR closes`,
     "",
     ...(input.testedCommit ? [`Deployed from ${input.testedCommit}.`, ""] : []),
     ...(input.apps.length > 0
       ? signIn
         ? [
-            "| App on top, signed in against this preview | | |",
+            "| App on top, signed in against this deployment | | |",
             "| --- | --- | --- |",
             ...input.apps.map(
               (app) =>
@@ -489,11 +370,11 @@ export function renderPullRequestSection(input: {
             ),
           ]
         : [
-            "| App on top, signed in against this preview | |",
+            "| App on top, signed in against this deployment | |",
             "| --- | --- |",
             ...input.apps.map((app) => `| ${app.name} | ${app.url} |`),
           ]
-      : ["No app preview was deployed in this run."]),
+      : ["No app on top was deployed in this run."]),
     "",
     ...(signIn?.templates.length
       ? [
@@ -508,117 +389,12 @@ export function renderPullRequestSection(input: {
       : []),
     ...(signIn
       ? [
-          `\`Sign in ↗\` signs you in as \`${signIn.email}\` with project \`${signIn.project}\`, no password and no Allow page: the link is signed for this preview only and expires in 14 days; every push mints a fresh one.${signIn.seeded ? "" : ` Seeding \`${signIn.project}\` failed this run (the deploy log says why), so the apps ask for consent.`}`,
+          `\`Sign in ↗\` signs you in as \`${signIn.email}\` with project \`${signIn.project}\`, no password and no Allow page: the link is signed for this deployment only and expires in 14 days; every push mints a fresh one.${signIn.seeded ? "" : ` Seeding \`${signIn.project}\` failed this run (the deploy log says why), so the apps ask for consent.`}`,
           "",
         ]
       : []),
-    "Every push redeploys it in place. Reset, e2e, delete and the laptop commands: [apps/os/README.md](https://github.com/iterate/iterate/blob/main/apps/os/README.md).",
+    "Every push deploys a fresh set of workers, with data of its own. E2e, delete and the laptop commands: [apps/os/README.md](https://github.com/iterate/iterate/blob/main/apps/os/README.md).",
   ].join("\n");
-}
-
-// ── the config `wrangler preview` reads ────────────────────────────────────────────────────────
-
-/** A resource list with only its `binding` names kept — how wrangler is told to auto-provision a
- *  fresh one per preview (cloudflare-os `previewResourceBindings`). */
-const bindingOnly = (resources: { binding: string }[] | undefined) =>
-  (resources || []).map(({ binding }) => ({ binding }));
-
-/** The config `wrangler preview` reads, as a pure function of Vite's built Worker config, the
- *  preview's name and its D1 — the shape of cloudflare-os's `buildPreviewConfigs`, unit-tested
- *  in preview.test.ts. The top level names the parent (which worker, which account, the entry, the
- *  assets) and declares the Durable Object classes as a legacy `migrations` entry: the pkg.pr.new
- *  wrangler build that provisions per-preview KV and R2 predates `exports`, and a preview
- *  deployment provisions its own namespaces from that entry. The `previews` block is the ONE
- *  preview's bindings — a preview inherits nothing from the top level, so every binding the worker
- *  reads is here: KV and R2 binding-only (auto-provisioned; the pinned wrangler provisions no D1),
- *  the D1 by id (a Worker Preview shares rows with any preview naming the same database_id,
- *  https://developers.cloudflare.com/workers/previews/resources/) and the Artifacts namespace by
- *  name. Its vars name the preview's own origin, projects as paths and its
- *  Dash when deployed, and turn the one-click sign-in links on; the secrets (`APP_CONFIG`,
- *  `APP_CONFIG_SECRETS__KEY`) are the parent's Previews settings, inherited. */
-export function previewWranglerConfig(input: {
-  template: Record<string, any>;
-  previewName: string;
-  /** The preview's own D1 (`os-<preview>-db`), which scripts/preview.ts created and migrated. */
-  databaseId: string;
-  dashOrigin?: string;
-}) {
-  const { template: base, previewName } = input;
-  return {
-    name: PREVIEW_PARENT.workerName,
-    account_id: PREVIEW_PARENT.cloudflareAccountId,
-    main: base.main,
-    compatibility_date: base.compatibility_date,
-    compatibility_flags: base.compatibility_flags,
-    workers_dev: true,
-    preview_urls: true,
-    no_bundle: base.no_bundle,
-    rules: base.rules,
-    assets: base.assets,
-    // Tombstones retire existing namespaces; a preview provisions only the live SQLite classes.
-    migrations: [
-      {
-        tag: "v1",
-        new_sqlite_classes: Object.keys(base.exports).filter(
-          (name) => base.exports[name].storage === "sqlite",
-        ),
-      },
-    ],
-    previews: {
-      observability: OBSERVABILITY,
-      limits: base.limits,
-      durable_objects: base.durable_objects,
-      worker_loaders: base.worker_loaders,
-      ai: base.ai,
-      browser: base.browser,
-      send_email: base.send_email,
-      version_metadata: base.version_metadata,
-      kv_namespaces: bindingOnly(base.kv_namespaces),
-      r2_buckets: bindingOnly(base.r2_buckets),
-      d1_databases: base.d1_databases.map(({ binding }: { binding: string }) => ({
-        binding,
-        database_name: previewResourceName(previewName, "db"),
-        database_id: input.databaseId,
-      })),
-      artifacts: base.artifacts.map(({ binding }: { binding: string }) => ({
-        binding,
-        namespace: previewResourceName(previewName, "repos"),
-      })),
-      vars: {
-        APP_CONFIG_URLS__OS: previewUrl(previewName),
-        APP_CONFIG_URLS__DASH: input.dashOrigin,
-        APP_CONFIG_URLS__INGRESS_ROUTING: JSON.stringify(PREVIEW_PARENT.ingressRouting),
-        // THE ONE-CLICK SIGN-IN (src/test-link.ts), on for a per-PR preview only: this config is
-        // only ever what `wrangler preview` reads (deploy.ts never does), and app-config.ts refuses
-        // the block off a workers.dev origin besides. The PR body's `Sign in ↗` links redeem here.
-        APP_CONFIG_LOGIN__TEST_LINK__EMAIL_DOMAIN: TEST_LINK_EMAIL_DOMAIN,
-        // THE PREVIEW'S ADMIN (app-config.ts `admins`): one test person the admin app's specs sign
-        // in as (specs/admin). A preview already signs anyone in by password or test link, so an
-        // admin here opens nothing that was closed.
-        APP_CONFIG_ADMINS: JSON.stringify([PREVIEW_ADMIN_EMAIL]),
-      },
-    },
-  };
-}
-
-/** The per-PR preview's one admin (`APP_CONFIG_ADMINS` above; specs/admin signs in as them). */
-const PREVIEW_ADMIN_EMAIL = `admin@${TEST_LINK_EMAIL_DOMAIN}`;
-
-/** Write a preview config beside Vite's built config and return its path. */
-export function writePreviewWranglerConfig(input: {
-  previewName: string;
-  databaseId: string;
-  dashOrigin?: string;
-}) {
-  const configUrl = new URL(`../${PREVIEW_CONFIG_NAME}`, import.meta.url);
-  const built = JSON.parse(
-    readFileSync(new URL("../dist/server/wrangler.json", import.meta.url), "utf8"),
-  );
-  writeFileSync(
-    configUrl,
-    `${JSON.stringify(previewWranglerConfig({ template: built, ...input }), null, 2)}\n`,
-  );
-  return fileURLToPath(configUrl);
 }
 
 /** A deploy bundles whatever node_modules holds, so an install older than pnpm-lock.yaml would ship

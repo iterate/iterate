@@ -1,19 +1,31 @@
 import { readFileSync } from "node:fs";
 import JSON5 from "json5";
-import { osEnvs, PREVIEW_AND_DEV_ACCOUNT_ID, type OsEnv } from "../../../envs.ts";
+import {
+  osEnvs,
+  PREVIEW_AND_DEV_ACCOUNT_ID,
+  previewDeployment,
+  type OsEnv,
+  type OsPreviewEnv,
+} from "../../../envs.ts";
 import { OBSERVABILITY, registrableDomainOf } from "../../../scripts/lib/wrangler-config.ts";
 import { TEST_LINK_EMAIL_DOMAIN } from "../src/test-link.ts";
 
 /** The `urls` half of `APP_CONFIG` (src/app-config.ts) a deployment gets from envs.ts — the zones
- *  of its projects' custom hostnames (`customHostnames`) and its `admins` too — as the
- *  override vars the parser merges on top of the Doppler blob: `APP_CONFIG_URLS__<KEY>`. An object
- *  travels as a JSON STRING — the parser reads string vars only. A blank var is unset. */
-function urlVars(env: OsEnv) {
+ *  of its projects' custom hostnames (`customHostnames`), its `admins` and a per-commit
+ *  deployment's test links too — as the override vars the parser merges on top of the Doppler blob:
+ *  `APP_CONFIG_URLS__<KEY>`. An object travels as a JSON STRING — the parser reads string vars
+ *  only. A blank var is unset. */
+function urlVars(env: OsPreviewEnv) {
   const vars: Record<string, string> = { APP_CONFIG_URLS__OS: env.baseUrl };
   if (new URL(env.mcpBaseUrl).origin !== new URL(env.baseUrl).origin)
     vars.APP_CONFIG_URLS__MCP = new URL(env.mcpBaseUrl).origin;
   if (env.dashBaseUrl) vars.APP_CONFIG_URLS__DASH = env.dashBaseUrl;
-  if (env.admins) vars.APP_CONFIG_ADMINS = JSON.stringify(env.admins);
+  // THE ONE-CLICK SIGN-IN (src/test-link.ts) the PR body links, and the one admin the admin app's
+  // specs sign in as (specs/admin). A deployment that signs anyone in by password or test link
+  // opens nothing more by making them an admin.
+  const admins = [...(env.admins || []), ...(env.testLinks ? [PREVIEW_ADMIN_EMAIL] : [])];
+  if (env.testLinks) vars.APP_CONFIG_LOGIN__TEST_LINK__EMAIL_DOMAIN = TEST_LINK_EMAIL_DOMAIN;
+  if (admins.length) vars.APP_CONFIG_ADMINS = JSON.stringify(admins);
   if (env.ingressRouting)
     vars.APP_CONFIG_URLS__INGRESS_ROUTING = JSON.stringify(env.ingressRouting);
   if (env.projectWildcard)
@@ -31,7 +43,7 @@ function urlVars(env: OsEnv) {
 /** The zones a deployment owns: those of its own hostnames, its project wildcard, and its SaaS
  *  project-host zones. No project may add a custom hostname equal to or under one of these
  *  (`customHostnames.reservedZones`). */
-function ownZonesOf(env: OsEnv) {
+function ownZonesOf(env: OsPreviewEnv) {
   return new Set([
     registrableDomainOf(new URL(env.baseUrl).hostname),
     registrableDomainOf(new URL(env.mcpBaseUrl).hostname),
@@ -46,7 +58,7 @@ function ownZonesOf(env: OsEnv) {
  *  project wildcard's apex and wildcard. A project's own custom hostname is a Cloudflare for SaaS
  *  custom hostname, reached through the SaaS zone's one `*\/*` route (wranglerConfig). A workers.dev
  *  host is served by `workers_dev` itself. */
-export function routedHostnames(env: OsEnv) {
+export function routedHostnames(env: OsPreviewEnv) {
   const ownHost = (hostname: string) => ({ hostname, zone: registrableDomainOf(hostname) });
   const wildcard = (hostname: string) => ({ hostname: `*.${hostname}`, zone: hostname });
   return [
@@ -59,36 +71,20 @@ export function routedHostnames(env: OsEnv) {
   ].filter(({ hostname }) => !hostname.endsWith(".workers.dev"));
 }
 
-/** wrangler.base.jsonc, the template every deployment's and preview's config derives from. */
+/** A per-commit deployment's one admin (`APP_CONFIG_ADMINS`; specs/admin signs in as them). */
+const PREVIEW_ADMIN_EMAIL = `admin@${TEST_LINK_EMAIL_DOMAIN}`;
+
+/** wrangler.base.jsonc, the template every deployment's config derives from. */
 export function readWranglerBase() {
   return JSON5.parse(readFileSync(new URL("../wrangler.base.jsonc", import.meta.url), "utf8"));
 }
 
-/** Runtime bindings stay with the app; deployed names and IDs come from envs.ts. The top-level
- *  block is local dev (projects under `<project>.localhost`, the secrets as plain dev vars —
- *  scripts/dev.ts) on the dev/preview account, one `env` block per deployment. */
-function wranglerConfig() {
-  const base = readWranglerBase();
-  // THE BINDINGS every env block repeats (wrangler does not inherit them): the base minus its
-  // inheritable keys and minus what an env block sets for itself (the resource ids, routes, vars).
-  const {
-    $schema: _schema,
-    name: _name,
-    main: _main,
-    compatibility_date: _compatibilityDate,
-    compatibility_flags: _compatibilityFlags,
-    observability: _observability,
-    workers_dev: _workersDev,
-    routes: _routes,
-    limits: _limits,
-    r2_buckets: _r2,
-    artifacts: _artifacts,
-    kv_namespaces: _kv,
-    d1_databases: [localDatabase],
-    ...bindings
-  } = base;
+/** Runtime bindings stay with the app; deployed names and IDs come from envs.ts. This is local dev
+ *  (projects under `<project>.localhost`, the secrets as plain dev vars — scripts/dev.ts) on the
+ *  dev/preview account; `deploymentWranglerConfig` is what a deployment puts on top. */
+function localWranglerConfig() {
   return {
-    ...base,
+    ...readWranglerBase(),
     // The account a LOCAL worker (`pnpm dev`, the local e2e run) reaches Cloudflare on: wrangler's
     // local runtime has no simulator for Artifacts, AI or Browser and proxies those three bindings
     // to the real products on this account under the developer's `wrangler login` — so a local
@@ -96,54 +92,62 @@ function wranglerConfig() {
     // never in a deployment's namespace.
     account_id: PREVIEW_AND_DEV_ACCOUNT_ID,
     routes: [],
-    env: Object.fromEntries(
-      Object.entries(osEnvs).map(([name, env]) => [
-        name,
-        {
-          name: env.workerName,
-          account_id: env.cloudflareAccountId,
-          workers_dev: true,
-          observability: OBSERVABILITY,
-          routes: [
-            ...routedHostnames(env).map(({ hostname, zone }) => ({
-              pattern: `${hostname}/*`,
-              zone_name: zone,
-            })),
-            ...(env.cloudflareForSaas
-              ? [{ pattern: "*/*", zone_name: env.cloudflareForSaas.zone }]
-              : []),
-          ],
-          ...bindings,
-          artifacts: [{ binding: "ARTIFACTS", namespace: env.artifactsNamespace }],
-          r2_buckets: [{ binding: "FILES", bucket_name: `${env.resourceNamePrefix}-files` }],
-          d1_databases: [
-            {
-              ...localDatabase,
-              database_name: `${env.resourceNamePrefix}-db`,
-              database_id: env.resources.dbId,
-            },
-          ],
-          kv_namespaces: [
-            { binding: "OAUTH_KV", id: env.resources.oauthKvId },
-            { binding: "ITX_KV", id: env.resources.itxKvId },
-          ],
-          // unset ⇒ undefined, which the JSON config drops: no var, no PostHog on the pages
-          vars: { ...urlVars(env), POSTHOG_PROJECT_KEY: env.posthogProjectKey },
-        },
-      ]),
-    ),
   };
 }
 
-/** The Vite plugin builds one flattened environment at a time: `name` is an envs.ts deployment or
- *  "self-host"; none is a local build — `localDev` for `vite dev` (plain dev secrets as vars), else
- *  the local build the e2e suite runs, on `port`. */
+/** One deployment's worker: its name, account, routes, vars and resources over the base's
+ *  bindings. An envs.ts deployment names its resources by id. A per-commit deployment
+ *  (`previewDeployment`) has no ids: its KV is binding-only, which wrangler provisions as
+ *  `<worker>-oauth-kv` and `<worker>-itx-kv` on the first deploy, and its D1 is named without an id,
+ *  which wrangler finds by name once scripts/deploy.ts has created and migrated it. */
+function deploymentWranglerConfig(env: OsEnv | OsPreviewEnv) {
+  const {
+    d1_databases: [localDatabase],
+  } = readWranglerBase();
+  const resources = "resources" in env ? env.resources : undefined;
+  return {
+    name: env.workerName,
+    account_id: env.cloudflareAccountId,
+    workers_dev: true,
+    observability: OBSERVABILITY,
+    routes: [
+      ...routedHostnames(env).map(({ hostname, zone }) => ({
+        pattern: `${hostname}/*`,
+        zone_name: zone,
+      })),
+      ...(env.cloudflareForSaas ? [{ pattern: "*/*", zone_name: env.cloudflareForSaas.zone }] : []),
+    ],
+    artifacts: [{ binding: "ARTIFACTS", namespace: env.artifactsNamespace }],
+    r2_buckets: [{ binding: "FILES", bucket_name: `${env.resourceNamePrefix}-files` }],
+    d1_databases: [
+      {
+        binding: localDatabase.binding,
+        migrations_dir: localDatabase.migrations_dir,
+        database_name: `${env.resourceNamePrefix}-db`,
+        ...(resources && { database_id: resources.dbId }),
+      },
+    ],
+    kv_namespaces: resources
+      ? [
+          { binding: "OAUTH_KV", id: resources.oauthKvId },
+          { binding: "ITX_KV", id: resources.itxKvId },
+        ]
+      : [{ binding: "OAUTH_KV" }, { binding: "ITX_KV" }],
+    // unset ⇒ undefined, which the JSON config drops: no var, no PostHog on the pages
+    vars: { ...urlVars(env), POSTHOG_PROJECT_KEY: env.posthogProjectKey },
+  };
+}
+
+/** The Vite plugin builds one flattened environment at a time: `name` is an envs.ts deployment, a
+ *  per-commit deployment (`previewDeployment`, `pr3144-a1b2c3d`) or "self-host"; none is a local
+ *  build — `localDev` for `vite dev` (plain dev secrets as vars), else the local build the e2e
+ *  suite runs, on `port`. */
 export function viteWranglerConfig(
   name: string | undefined,
   options: { localDev: boolean; port: string },
 ) {
   if (name === "self-host") return selfHostWranglerConfig();
-  const { env, ...local } = wranglerConfig();
+  const local = localWranglerConfig();
   if (!name)
     return {
       ...local,
@@ -160,17 +164,17 @@ export function viteWranglerConfig(
           APP_CONFIG: JSON.stringify({
             login: { password: "dev", emailCode: { from: "iterate <login@localhost>" } },
             // `pnpm getin`'s person, so the admin app and "view as" work locally, and the admin
-            // the specs sign in as (specs/admin, as on a per-PR preview: preview-config.ts)
-            admins: [`test@${TEST_LINK_EMAIL_DOMAIN}`, `admin@${TEST_LINK_EMAIL_DOMAIN}`],
+            // the specs sign in as (specs/admin, as on a per-commit deployment: PREVIEW_ADMIN_EMAIL)
+            admins: [`test@${TEST_LINK_EMAIL_DOMAIN}`, PREVIEW_ADMIN_EMAIL],
             secrets: { adminBearer: "dev-admin-api-secret" },
           }),
           APP_CONFIG_SECRETS__KEY: "dev-secrets-key",
         }),
       },
     };
-  const deployment = env[name];
+  const deployment = osEnvs[name] || previewDeployment(name)?.os;
   if (!deployment) throw new Error(`apps/os: unknown env ${JSON.stringify(name)}`);
-  return { ...local, ...deployment };
+  return { ...local, ...deploymentWranglerConfig(deployment) };
 }
 
 /** THE SELF-HOST CONFIG (SELF-HOSTING.md): the same worker, the same bindings, for a deployment into

@@ -1,19 +1,21 @@
-# THE FLAKE HUNT for apps/os: run the e2e suite N times against one deployed worker (a preview
-# deployed from the dispatched ref, `pnpm preview deploy --name <preview>`), each run followed by the
+# THE FLAKE HUNT for apps/os: run the e2e suite N times against one deployed worker (the dispatched
+# ref's deployment `<preview>-<sha7>`, `pnpm preview deploy --name <preview>`), each run followed by the
 # perf budgets (apps/os/perf, alone on the wire), and tally every row that did not pass every time
 # (apps/os/scripts/e2e-soak.ts). Dispatch only — this is a measurement, not a gate:
 #   depot ci dispatch --org 0p91s0lz49 --repo iterate/iterate --workflow os-e2e-soak.yml \
 #     --ref <branch> --input runs=100 --input preview=soak-<your slug>
-# A SOAK OF ITS OWN NEEDS A PREVIEW OF ITS OWN: every dispatch redeploys its preview before the
-# suite, so two soaks of one preview measure each other's deploys (2026-09-24: a full-suite soak of
-# main redeployed `soak` ten minutes into two agents.e2e soaks of a fix branch, which then soaked
-# main's worker). Delete a named preview when done: `pnpm --dir apps/os preview delete --name <preview>`.
-# THE FIRST MINUTES OF A PREVIEW: --input fresh-previews=true deploys a brand-new preview for every
-# run instead, runs e2e against it at once and deletes it (e2e-soak.ts --fresh-previews) — main's
-# e2e shape before it kept one preview. Dispatch several at once for more previews per hour.
-# MAIN'S SHAPE NOW: --input redeploy=true redeploys `preview` in place before every run and runs e2e
-# against it at once, never deleting it (e2e-soak.ts --redeploy) — Main OS e2e on `main`. Deploy the
-# preview once and let it age first: one created minutes ago is still brand-new.
+# A SOAK OF ITS OWN NEEDS A NAME OF ITS OWN: two soaks of one name and one commit deploy the same
+# deployment again before their suites, so each measures the other's deploys (2026-09-24: a
+# full-suite soak of main redeployed `soak` ten minutes into two agents.e2e soaks of a fix branch,
+# which then soaked main's worker). Delete a name's deployments when done:
+# `pnpm --dir apps/os preview delete --name <preview>`; the nightly sweep takes them after a day.
+# THE FIRST MINUTES OF A DEPLOYMENT: --input fresh-previews=true deploys a brand-new deployment for
+# every run instead, runs e2e against it at once and deletes it (e2e-soak.ts --fresh-previews) — the
+# shape of every PR's and main's run. Dispatch several at once for more deployments per hour.
+# AN IN-PLACE REDEPLOY: --input redeploy=true deploys the ref's deployment of `preview` again, in
+# place, before every run and runs e2e against it at once, never deleting it (e2e-soak.ts
+# --redeploy) — main on dev's shape. Deploy it once and let it age first: one created minutes ago is
+# still brand-new.
 # DISPATCH ON A REF NOTHING WILL PUSH TO: a push to the dispatched branch cancels the running soak
 # (2026-09-24: two 25-run soaks of a PR branch died at run 2 when the PR was rebased) — push the
 # commit to a branch of its own (`git push origin <sha>:refs/heads/soak/<name>`) and dispatch that.
@@ -32,7 +34,7 @@ on:
         type: string
         default: "100"
       preview:
-        description: The Worker Preview this ref deploys and soaks — one name per concurrent soak
+        description: The name this ref deploys as (`<preview>-<sha7>`) and soaks — one name per concurrent soak
         required: false
         type: string
         default: soak
@@ -87,7 +89,7 @@ jobs:
         run: doppler setup --config preview --project os
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-      # THE WORKER IS THIS REF'S: the named preview is redeployed from the checkout before the suite
+      # THE WORKER IS THIS REF'S: the name's deployment of this checkout is deployed before the suite
       # runs, so the tests and the worker never skew (2026-09-22: a soak of main's tests against a
       # `soak` worker three merges older failed one row in every run of a hundred). An explicit
       # worker-base-url is soaked as given.
@@ -98,10 +100,10 @@ jobs:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           PREVIEW: ${{ inputs.preview }}
         run: doppler run -- pnpm preview deploy --name "$PREVIEW" --apps none
-      # The preview inherits the parent's secrets (APP_CONFIG in Doppler os/preview), so the
-      # admin bearer and the sign-in password come from the same object the preview deploy uploads —
-      # apps/os/e2e/support/global-setup.ts reads them out of it, and the routing out of the
-      # parent's envs.ts entry.
+      # The deployment's secrets are Doppler os/preview's (APP_CONFIG), so the admin bearer and the
+      # sign-in password come from the same object the deploy uploads —
+      # apps/os/e2e/support/global-setup.ts reads them out of it, and the routing out of envs.ts
+      # `previewDeployment`.
       - name: Soak
         working-directory: apps/os
         env:
@@ -111,7 +113,7 @@ jobs:
           PREVIEW: ${{ inputs.preview }}
           RUNS: ${{ inputs.runs }}
           FILTER: ${{ inputs.filter }}
-          # one prefix per dispatch, so dispatches running side by side never share a preview
+          # one prefix per dispatch, so dispatches running side by side never share a deployment
           FRESH_PREVIEWS: ${{ inputs.fresh-previews == 'true' && format('sf-{0}', github.run_id) || '' }}
           RUN_RESIDENCY_TIMING: ${{ inputs.residency-timing }}
           REDEPLOY: ${{ inputs.redeploy }}
