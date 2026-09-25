@@ -144,6 +144,10 @@ iterate_kit_add_test(
   iterate-kit-voice-loop-credential-test voice_loop_credential_test.c
   STD 11 LINK iterate-kit-voice iterate-kit-esp-idf-fakes)
 
+iterate_kit_add_test(iterate-kit-tinyvoice-test tinyvoice_test.c
+  LINK iterate-kit-tinyvoice)
+iterate_kit_add_test(iterate-kit-announcer-test announcer_test.c
+  LINK iterate-kit-core iterate-kit-tinyvoice)
 iterate_kit_add_test(iterate-kit-audio-interfaces-test audio_interfaces_test.c
   LINK iterate-kit-audio)
 
