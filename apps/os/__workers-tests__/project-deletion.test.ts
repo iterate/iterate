@@ -5,6 +5,7 @@
 import { expect, test } from "vitest";
 import { env } from "cloudflare:workers";
 import type { StreamEvent } from "iterate/stream/processor";
+import { CONTEXT_DESTROYED } from "../src/context/paths.ts";
 import {
   adminCredentials,
   controlPlane,
@@ -36,12 +37,16 @@ test("deleting a project drops its row at once, then destroys every context it a
   await refused(() => admin.projects.delete(slug), "FORBIDDEN");
 
   // the root goes last: once it is born again empty, every context below it is gone too
+  // a read that lands while the root is being destroyed is rejected by its reset: not yet
   await until(
     "the root is destroyed",
     async () =>
-      !(await eventsOf(projectId, "/")).some(
-        (event) => event.type === "events.iterate.com/project/create-requested",
-      ),
+      !(
+        await eventsOf(projectId, "/").catch((error: unknown) => {
+          if (!String(error).includes(CONTEXT_DESTROYED)) throw error;
+          return [{ type: "events.iterate.com/project/create-requested" } as StreamEvent];
+        })
+      ).some((event) => event.type === "events.iterate.com/project/create-requested"),
     30_000,
   );
   for (const path of ["/", ...paths])
