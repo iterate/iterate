@@ -144,11 +144,11 @@ test.each(deploymentWorkflows.filter(({ app }) => app !== "os"))(
 );
 
 test.each(["kit", "voice"])(
-  "deploy-%s.yml redeploys when apps/agents changes: vite.config.ts builds voice-install.json from it",
+  "deploy-%s.yml redeploys when the agents or voice package changes: its installer ships in the app",
   (app) => {
     const paths = loadWorkflow(`.depot/workflows/deploy-${app}.yml`).on?.push?.paths ?? [];
-    expect(triggers(paths, "configs/with-agents/agents/index.ts")).toBe(true);
-    expect(triggers(paths, "apps/agents/voice/screen-context.md")).toBe(true);
+    expect(triggers(paths, "packages/agents/src/install.ts")).toBe(true);
+    expect(triggers(paths, "packages/voice/src/install.ts")).toBe(true);
   },
 );
 

@@ -2,6 +2,10 @@
 // browser). Press = a fresh context: one `setupVoiceAgent` append puts the relay and the agent on
 // it and starts the call; a subscription brings the answer's frames and the call's facts back;
 // microphone frames go up as ephemeral appends, twenty a second; hanging up appends the terminal.
+
+// registers `itx.voice` on InstalledAppRoots
+import type {} from "@iterate-com/voice";
+import type { IterateContextApiWith } from "iterate/api";
 import type { AuthenticatedApp } from "iterate/app";
 import { base64ToInt16, int16ToBase64, type AudioSession } from "./audio.ts";
 
@@ -37,9 +41,10 @@ export async function startCall(input: {
   ).join("");
   const streamPath = `/agents/voice/web/${new Date().toISOString().slice(0, 19).replace(/[-:T]/g, "")}-${activation}`;
   const project = await api.projects.get(projectId);
-  // The page offers Call only once `itx.voice` is configured (it installs voice otherwise): a
-  // service that is there but failing says so before anything is appended.
-  await project.invoke(["itx", "voice", ["health"]]).catch((error: unknown) => {
+  // The page offers Call only once `itx.voice` is configured (it installs voice otherwise), so the
+  // project answers `voice`; a service that is there but failing says so before anything is appended.
+  const installed = project as typeof project & Pick<IterateContextApiWith<"voice">, "voice">;
+  await installed.voice.health().catch((error: unknown) => {
     throw new Error(
       `This project's voice agent isn't answering (${error instanceof Error ? error.message : String(error)}).`,
     );
@@ -53,7 +58,7 @@ export async function startCall(input: {
     spkMsReceived: 0,
     handshakeMs: null,
   };
-  const setup = project.invoke(["itx", "voice", ["setupVoiceAgent", { streamPath, activation }]]);
+  const setup = installed.voice.setupVoiceAgent({ streamPath, activation });
   const subscription = await call.subscribe({
     name: `web-${activation}`,
     consumes: [

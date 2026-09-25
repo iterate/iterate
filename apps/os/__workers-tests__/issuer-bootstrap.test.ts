@@ -41,7 +41,10 @@ test("first consent creates organization and project through the ordinary sessio
   expect(login.setCookie).toMatch(/^__Host-itx-session=[\da-f-]+; HttpOnly; Secure;/);
   const headers = { Cookie: login.setCookie.split(";")[0]!, Origin: ORIGIN };
   const api = await connect(headers);
-  expect(await api.info()).toMatchObject({ principal: { actor: user.id, email: user.email } });
+  expect(await api.info()).toMatchObject({
+    principal: { actor: user.id, email: user.email },
+    iterateAppProviders: ["slack", "google", "cloudflare", "github"],
+  });
   expect(await api.organizations.list()).toEqual([]);
   expect(await api.projects.list()).toEqual([]);
   expect(await api.consent.describe(flow.url.search)).toMatchObject({

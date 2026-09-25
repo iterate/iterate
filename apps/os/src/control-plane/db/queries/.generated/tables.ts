@@ -7,6 +7,13 @@ export type IdentitiesRow = {
 	user_id: string;
 };
 
+export type IntegrationRoutesRow = {
+	provider: string;
+	external_id: string;
+	project_id: string;
+	path: string;
+};
+
 export type InvitationsRow = {
 	id: string;
 	token_hash: string;

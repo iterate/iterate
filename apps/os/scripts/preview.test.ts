@@ -281,7 +281,7 @@ test("a deployment's apps/os config: its own worker, KV binding-only for wrangle
   ]);
 });
 
-test("a deployment's apps/os config: vars are its own origin, its dash, projects as paths, the one-click sign-in links on behind prd's *@nustom.com check, and one test admin", () => {
+test("a deployment's apps/os config: vars are its own origin, its dash, projects as paths, the one-click sign-in links on behind prd's *@nustom.com check, one test admin, and the pet shop's fakes as iterate's integrations, which people sign in with too", () => {
   expect(viteWranglerConfig("pr3144-a1b2c3d", { localDev: false, port: "0" })).toMatchObject({
     vars: {
       APP_CONFIG_URLS__OS: "https://pr3144-a1b2c3d-os.iterate-dev-preview.workers.dev",
@@ -290,9 +290,31 @@ test("a deployment's apps/os config: vars are its own origin, its dash, projects
       APP_CONFIG_LOGIN__TEST_LINK__EMAIL_DOMAIN: "preview.iterate.test",
       APP_CONFIG_LOGIN__TEST_LINK__ADMINS__ISSUER: "https://os.iterate.com",
       APP_CONFIG_LOGIN__TEST_LINK__ADMINS__EMAILS: "*@nustom.com",
+      APP_CONFIG_INTEGRATIONS__SLACK: JSON.stringify({
+        oauthClientId: "petshop-default",
+        oauthClientSecret: "petshop-default-secret",
+        webhookSigningSecret: "preview-slack-signing-secret",
+        slackOrigin: "https://dummy-petshop.iterate.workers.dev",
+      }),
+      APP_CONFIG_INTEGRATIONS__GOOGLE: JSON.stringify({
+        oauthClientId: "petshop-default",
+        oauthClientSecret: "petshop-default-secret",
+        googleOrigin: "https://dummy-petshop.iterate.workers.dev",
+      }),
+      APP_CONFIG_INTEGRATIONS__CLOUDFLARE: JSON.stringify({
+        oauthClientId: "petshop-default",
+        oauthClientSecret: "petshop-default-secret",
+        cloudflareOrigin: "https://dummy-petshop.iterate.workers.dev",
+      }),
+      APP_CONFIG_LOGIN__GOOGLE: "{}",
+      APP_CONFIG_LOGIN__GITHUB: "{}",
       APP_CONFIG_ADMINS: JSON.stringify(["admin@preview.iterate.test"]),
     },
   });
+  // the GitHub App carries a key: scripts/deploy.ts ships it as a secret, never a var
+  expect(
+    viteWranglerConfig("pr3144-a1b2c3d", { localDev: false, port: "0" }).vars,
+  ).not.toHaveProperty("APP_CONFIG_INTEGRATIONS__GITHUB");
 });
 
 test("a deployment's apps/os config parses as its worker parses it, with the two secrets every deploy ships", () => {
@@ -311,7 +333,7 @@ test("a deployment's apps/os config parses as its worker parses it, with the two
   });
 });
 
-test("an envs.ts deployment's config still names its resources by id, and turns no test links on", () => {
+test("an envs.ts deployment's config still names its resources by id, and turns no test links or pet shop fakes on", () => {
   const config = viteWranglerConfig("prd", { localDev: false, port: "0" });
   const ids = osEnvs.prd!.resources!;
   expect(config).toMatchObject({
@@ -322,6 +344,7 @@ test("an envs.ts deployment's config still names its resources by id, and turns 
     d1_databases: [{ database_name: "os-prd-db", database_id: ids.dbId }],
   });
   expect(config.vars).not.toHaveProperty("APP_CONFIG_LOGIN__TEST_LINK__EMAIL_DOMAIN");
+  expect(config.vars).not.toHaveProperty("APP_CONFIG_INTEGRATIONS__SLACK");
   expect(() => viteWranglerConfig("pr3144", { localDev: false, port: "0" })).toThrow(
     'apps/os: unknown env "pr3144"',
   );

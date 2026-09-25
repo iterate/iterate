@@ -117,6 +117,11 @@ export interface OsEnv {
    *  body that carries them is public, so a link signs nobody in until its redeemer proves at
    *  `admins.issuer` that they are an address `admins.emails` names (src/test-link-admins.ts). */
   testLinks?: { admins: { issuer: string; emails: string[] } };
+  /** iterate's own Slack app, Google and Cloudflare OAuth clients and GitHub App are the dummy pet
+   *  shop's fakes (apps/os/scripts/preview-*-app.ts), and people sign in with Google, Cloudflare and
+   *  GitHub through them. A per-commit deployment's only: prd's and main on dev's integrations are
+   *  their Doppler `APP_CONFIG`'s. */
+  petshopIntegrations?: boolean;
   /** The ids of the resources `resourceNamePrefix` names, which ensure-resources creates and this
    *  file records. Unset for a per-commit deployment (`previewDeployment`), whose own deploy creates
    *  them by name (scripts/deploy.ts). */
@@ -338,6 +343,7 @@ export function previewDeployment(name: string) {
     dashBaseUrl: origin("dash"),
     ingressRouting: { type: "paths" },
     testLinks: { admins: { issuer: osEnvs.prd!.baseUrl, emails: ["*@nustom.com"] } },
+    petshopIntegrations: true,
     artifactsNamespace: `${osWorker}-repos`,
     resourceNamePrefix: osWorker,
   };

@@ -129,7 +129,7 @@ test("a repo read through its facet does not keep its own context resident", asy
 // The root answers `repos.create` / `repos.list` by walking `facets.get('project').repos().create(…)`:
 // the collection stub the facet answers `repos()` with is walked on, never answered — the resolver
 // releases it once the answer is in (itx-expression-rewriting.ts `invoke`). Kept, it held the project
-// facet and so the root resident (~2 min after a create; until the next deploy before #2846).
+// facet and so the root resident (~2 min after a create).
 test("creating a repo does not keep the project root resident", async () => {
   const { ctx, path } = await repoBornAndRead("residency_root");
   const itx = openItx(ctx);

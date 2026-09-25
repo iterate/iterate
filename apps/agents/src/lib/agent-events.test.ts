@@ -6,8 +6,6 @@
 import { expect, test } from "vitest";
 import { adaptContextRuns, reduceAgentFeed, scriptTrace, toAgentEvent } from "./agent-events.ts";
 
-const PATH = "/agents/support";
-
 test("a request the agent appended while processing the assistant's item becomes script-run-requested with the id the reducer links to that item; its settlement takes the same id; a run nobody's processor asked for is its own offset", () => {
   const adapted = adaptContextRuns(turn());
   const byOffset = (offset: number) => adapted.find((e) => e.offset === offset)!;
@@ -94,16 +92,13 @@ const at = (
   payload: unknown,
   extra: { idempotencyKey?: string; source?: unknown } = {},
 ) =>
-  toAgentEvent(
-    {
-      offset,
-      type,
-      createdAt: new Date(1_700_000_000_000 + offset * 1000).toISOString(),
-      payload,
-      ...extra,
-    },
-    PATH,
-  )!;
+  toAgentEvent({
+    offset,
+    type,
+    createdAt: new Date(1_700_000_000_000 + offset * 1000).toISOString(),
+    payload,
+    ...extra,
+  })!;
 
 /** The engine's stamp on an event the agent processor appended while processing offset 6. */
 const byAgentWhile = (offset: number) => ({
@@ -114,7 +109,7 @@ const byAgentWhile = (offset: number) => ({
  *  script, the CONTEXT runs the script, the message goes out, the result comes back as the
  *  developer item. */
 const turn = () => [
-  at(1, "events.iterate.com/agent/created", { path: PATH }),
+  at(1, "events.iterate.com/agent/created", { path: "/agents/support" }),
   at(2, "events.iterate.com/agent/context-added", { role: "system", content: "Be terse." }),
   at(3, "events.iterate.com/agent/context-added", {
     role: "user",

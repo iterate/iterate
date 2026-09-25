@@ -44,7 +44,7 @@ type ErrorCode =
   | "NOT_A_METHOD" // the dotted path's terminal segment is not callable on the target
   | "NO_FACET" // no facet of that name has been loaded into this context
   | "FACET_ABORTED" // the facet instance this call ran on was reset by `itx.facets.abort` (apps/os context/facet-host.ts) — its next call starts it fresh
-  | "FACET_RESTARTED" // the facet instance this call ran on was restarted under a new loaded identity — its source or its loader identity changed (apps/os context/facet-host.ts) — its next call runs on the new instance
+  | "FACET_RESTARTED" // the facet instance this call ran on was restarted by the platform under it — its source or loader identity changed, or another call on it timed out (apps/os context/facet-host.ts) — its next call runs on the new instance
   | "FACET_NO_UPGRADE" // a WebSocket upgrade aimed at a facet: a facet answers RPC and plain HTTP, never a socket — sockets terminate at the edge (apps/os context/facet-host.ts)
   | "WAIT_TIMEOUT" // waitForEvent expired with no matching event committed
   | "TIMEOUT"; // lib.ts withTimeout: the call did not answer within its deadline

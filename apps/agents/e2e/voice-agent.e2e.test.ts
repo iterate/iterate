@@ -1,12 +1,12 @@
-// The shipped voice bundles, loaded exactly as the installer loads them. Only the provider URL
-// is replaced: a real deployed WebSocket fixture speaks the small GPT-Live audio protocol below.
+// The voice package as this checkout has it, mounted exactly as the installer mounts it. Only the
+// provider URL is replaced: a real deployed WebSocket fixture speaks the small GPT-Live audio
+// protocol below.
 // This pins loaded-code admission, agent birth, inherited KV/egress, secret substitution,
 // delegated scripts and audio in both directions. It does not test the model, microphones or speakers.
 import { expect } from "vitest";
-import { agentRuntimeSource } from "../src/lib/agent-runtime-source.ts";
-import { bundleVoiceSources, createVoiceInstall } from "../scripts/build-voice-install.ts";
-import { ensureVoiceAgent } from "../voice/install.ts";
-import { DEFAULT_AGENT_SYSTEM_PROMPT } from "../../../configs/with-agents/agents/system-prompt.ts";
+import { installAgents } from "@iterate-com/agents/install";
+import { DEFAULT_AGENT_SYSTEM_PROMPT } from "@iterate-com/agents/system-prompt";
+import { installVoice } from "@iterate-com/voice/install";
 import { openItx, readAll, runId, until, untilValue } from "../../os/e2e/support/client.ts";
 import { oauthSession } from "../../os/e2e/support/principal.ts";
 import {
@@ -16,6 +16,8 @@ import {
   publishConfigWorker,
   registerProject,
 } from "../../os/e2e/support/project-host.ts";
+import { agentsWorkspaceSource } from "./agents-source.ts";
+import { voiceWorkspaceSource } from "./support.ts";
 
 deployedOnly(
   "voice activation loads its hosted processors and streams audio through inherited, secret-bearing WebSocket egress",
@@ -41,7 +43,7 @@ deployedOnly(
     expect(candidateProbe).toBeTruthy();
     const websiteScripts = [
       "return await itx.whoami();",
-      'await itx.repos.create("/repos/config"); return await itx.repos.get("/repos/config").listFiles();',
+      'return await itx.repos.get("/repos/config").listFiles();',
       'return await itx.repos.get("/repos/config").readFile("worker.ts");',
       `const candidateSource = ${JSON.stringify(candidateSource)}; const projectUrl = ${JSON.stringify(websiteUrl)}; const response = ${candidateProbe}; const body = await response.text(); if (response.status !== 200 || !body.includes("bad stable manners")) throw new Error("candidate failed"); return body;`,
       `return await itx.repos.get("/repos/config").writeFile("worker.ts", ${JSON.stringify(candidateSource)});`,
@@ -105,21 +107,16 @@ export default class extends WorkerEntrypoint {
       ],
     ]);
 
-    const { voiceAgent: voice, voiceDelegate: delegate, worker } = await bundleVoiceSources();
+    const { "index.js": voice } = await voiceWorkspaceSource();
     const liveUrl = "https://api.openai.com/v1/live/sessions";
     expect(voice.split(liveUrl)).toHaveLength(2);
-    const fixtureVoice = voice.replace(liveUrl, providerUrl);
     const responsesUrl = "https://api.openai.com/v1/responses";
-    expect(delegate.split(responsesUrl)).toHaveLength(2);
-    const fixtureDelegate = delegate.replace(responsesUrl, providerUrl);
-    const install = createVoiceInstall({
-      agentsRuntime: agentRuntimeSource,
-      voiceAgent: fixtureVoice,
-      voiceDelegate: fixtureDelegate,
-      worker,
-      fontCss: "/* fixture font */",
+    expect(voice.split(responsesUrl)).toHaveLength(2);
+    await installAgents(root, agentsWorkspaceSource);
+    await installVoice(root, {
+      "index.js": voice.replace(liveUrl, providerUrl).replace(responsesUrl, providerUrl),
     });
-    expect(await ensureVoiceAgent(root, async () => install)).toBe("ready");
+    expect(await root.voice.health()).toMatchObject({ ok: true, projectId });
 
     const streamPath = "/agents/voice/e2e";
     const activation = "voice-e2e";
@@ -210,6 +207,13 @@ export default class extends WorkerEntrypoint {
         { method: "POST", url: providerUrl, status: 200 },
         { method: "POST", url: providerUrl, status: 200 },
       ]);
+      // The project's creation made and seeded the config repo the scripts below edit; a sandbox
+      // creates only beneath itself, so it cannot make that repo.
+      await root.waitForEvent({
+        type: ["events.iterate.com/project/created", "events.iterate.com/project/create-failed"],
+        afterOffset: 0,
+        timeoutMs: 60_000,
+      });
       // Seven real sandbox scripts: candidate probe, commit, then live verification.
       // The former six-step cap discarded that last check after changing the site.
       const websiteAsked = received.length;

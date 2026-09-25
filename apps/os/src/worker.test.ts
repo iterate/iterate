@@ -14,6 +14,8 @@ import worker from "./worker.ts";
 import {
   appConfigOf,
   atRestKeysOf,
+  DEFAULT_CLOUDFLARE_SCOPES,
+  DEFAULT_GOOGLE_SIGN_IN_SCOPES,
   parseAppConfig,
   projectHostOf,
   sessionSigningSecretOf,
@@ -49,8 +51,8 @@ const appConfigRows: {
   vars: Record<string, unknown>;
   becomes?: unknown;
   throws?: RegExp;
-  /** how many unknown keys the boot warns about, once each (a key inside the object or a stray
-   *  var) */
+  /** how many warnings the boot prints, once each: an unknown key (inside the object or a stray
+   *  var), a provider's sign-in without its client */
   warns?: number;
 }[] = [
   // the object alone, the overrides alone, and both — an override wins over the object
@@ -96,8 +98,9 @@ const appConfigRows: {
       APP_CONFIG_CLOUDFLARE_API_TOKEN: "cloudflare-token",
       APP_CONFIG_POSTHOG_PROJECT_KEY: "phc_test",
       APP_CONFIG_LOGIN__EMAIL_CODE__FROM: "iterate <login@iterate.com>",
-      APP_CONFIG_LOGIN__GOOGLE__CLIENT_ID: "google-id",
-      APP_CONFIG_LOGIN__GOOGLE__CLIENT_SECRET: "google-secret",
+      APP_CONFIG_LOGIN__GOOGLE: "{}",
+      APP_CONFIG_INTEGRATIONS__GOOGLE__OAUTH_CLIENT_ID: "google-id",
+      APP_CONFIG_INTEGRATIONS__GOOGLE__OAUTH_CLIENT_SECRET: "google-secret",
       APP_CONFIG_SECRETS__PREVIOUS_KEY: "the-old-key",
       APP_CONFIG_SECRETS__ADMIN_BEARER: "admin-bearer",
       LOADER: {},
@@ -122,7 +125,7 @@ const appConfigRows: {
       login: {
         password: "password",
         emailCode: { from: "iterate <login@iterate.com>" },
-        google: { clientId: "google-id", clientSecret: "google-secret" },
+        google: { scopes: DEFAULT_GOOGLE_SIGN_IN_SCOPES },
       },
       admins: [],
       secrets: { key: "secrets-key", previousKey: "the-old-key", adminBearer: "admin-bearer" },
@@ -180,20 +183,28 @@ const appConfigRows: {
       login: { password: "", emailCode: { from: "iterate <login@iterate.com>" } },
     },
   },
+  // a provider's sign-in is its integration's client: on with it, off (and so no mechanism) without
   {
     vars: {
       APP_CONFIG_SECRETS__KEY: "secrets-key",
-      APP_CONFIG_LOGIN__CLOUDFLARE__CLIENT_ID: "cf-id",
-      APP_CONFIG_LOGIN__CLOUDFLARE__CLIENT_SECRET: "cf-secret",
+      APP_CONFIG_LOGIN__CLOUDFLARE: "{}",
+      APP_CONFIG_INTEGRATIONS__CLOUDFLARE__OAUTH_CLIENT_ID: "cf-id",
+      APP_CONFIG_INTEGRATIONS__CLOUDFLARE__OAUTH_CLIENT_SECRET: "cf-secret",
     },
     becomes: {
       ...MINIMAL_CONFIG,
-      login: { password: "", cloudflare: { clientId: "cf-id", clientSecret: "cf-secret" } },
+      login: { password: "", cloudflare: { scopes: DEFAULT_CLOUDFLARE_SCOPES } },
     },
   },
   {
-    vars: { ...MINIMAL, APP_CONFIG_LOGIN__CLOUDFLARE__CLIENT_ID: "cf-id" },
-    throws: /login\.cloudflare\.clientSecret .*required, but unset or blank/,
+    vars: { APP_CONFIG_SECRETS__KEY: "secrets-key", APP_CONFIG_LOGIN__CLOUDFLARE: "{}" },
+    throws: /no sign-in mechanism/,
+    warns: 1,
+  },
+  {
+    vars: { ...MINIMAL, APP_CONFIG_LOGIN__GITHUB: "{}" },
+    becomes: MINIMAL_CONFIG,
+    warns: 1,
   },
   // who may sign in: a JSON array, or a comma-separated list as the var; lowercased; an entry
   // without an @ or an empty list is refused rather than silently admitting nobody or everybody
@@ -221,18 +232,47 @@ const appConfigRows: {
   },
   // the platform admins: exact addresses, lowercased; a pattern is refused, never read as one
   {
-    vars: { ...MINIMAL, APP_CONFIG_ADMINS: '["Jonas@Iterate.com"]' },
-    becomes: { ...MINIMAL_CONFIG, admins: ["jonas@iterate.com"] },
+    vars: {
+      ...MINIMAL,
+      APP_CONFIG_URLS__OS: "http://localhost:8788",
+      APP_CONFIG_ADMINS: '["Jonas@Iterate.com"]',
+    },
+    becomes: {
+      ...MINIMAL_CONFIG,
+      urls: { ...MINIMAL_CONFIG.urls, os: "http://localhost:8788" },
+      admins: ["jonas@iterate.com"],
+    },
+  },
+  // …but beside the global password only where nobody's real data lives: anyone with the password
+  // could sign in as the admin
+  {
+    vars: {
+      ...MINIMAL,
+      APP_CONFIG_URLS__OS: "https://os.example.com",
+      APP_CONFIG_ADMINS: '["jonas@iterate.com"]',
+    },
+    throws: /^APP_CONFIG admins \(APP_CONFIG_ADMINS\): not with login\.password/,
+  },
+  // …nor beside paths ingress, where a project's own code runs on the issuer's origin
+  {
+    vars: {
+      APP_CONFIG_SECRETS__KEY: "secrets-key",
+      APP_CONFIG_LOGIN__EMAIL_CODE__FROM: "login@example.com",
+      APP_CONFIG_URLS__OS: "https://os.example.com",
+      APP_CONFIG_URLS__INGRESS_ROUTING: '{"type":"paths"}',
+      APP_CONFIG_ADMINS: '["jonas@iterate.com"]',
+    },
+    throws: /^APP_CONFIG admins \(APP_CONFIG_ADMINS\): not with paths ingress routing/,
   },
   {
     vars: { ...MINIMAL, APP_CONFIG_ADMINS: '["*@iterate.com"]' },
     throws: /admins\.0 .*expected exact email addresses/,
   },
-  // Google is both halves or neither
+  // a client is both halves or neither
   {
-    vars: { ...MINIMAL, APP_CONFIG_LOGIN__GOOGLE__CLIENT_ID: "google-id" },
+    vars: { ...MINIMAL, APP_CONFIG_INTEGRATIONS__CLOUDFLARE__OAUTH_CLIENT_ID: "cf-id" },
     throws:
-      /^APP_CONFIG login\.google\.clientSecret \(APP_CONFIG_LOGIN__GOOGLE__CLIENT_SECRET\): required, but unset or blank$/,
+      /^APP_CONFIG integrations\.cloudflare\.oauthClientSecret \(APP_CONFIG_INTEGRATIONS__CLOUDFLARE__OAUTH_CLIENT_SECRET\): required, but unset or blank$/,
   },
   // the key encrypts every project secret and signs every session: a blank one is refused at
   // first use, not a silent lock-out
@@ -607,18 +647,6 @@ const expose = (config: AppConfig) => ({
   login: {
     ...config.login,
     password: config.login.password.exposeSecret(),
-    ...(config.login.google && {
-      google: {
-        clientId: config.login.google.clientId,
-        clientSecret: config.login.google.clientSecret.exposeSecret(),
-      },
-    }),
-    ...(config.login.cloudflare && {
-      cloudflare: {
-        clientId: config.login.cloudflare.clientId,
-        clientSecret: config.login.cloudflare.clientSecret.exposeSecret(),
-      },
-    }),
   },
   secrets: {
     key: config.secrets.key.exposeSecret(),

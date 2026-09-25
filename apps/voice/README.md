@@ -22,16 +22,17 @@ end and the relay's live state on screen.
   says so). Modeled on the recorder and stream player of OpenAI's realtime console.
 
 A project without a voice agent gets **Install voice** in place of Call: an OpenAI key field if the
-project has no `/secrets/openai`, then `ensureVoiceAgent` (`apps/agents/voice/install.ts`, the
-installer Kit's Prepare runs too) against the install this app serves at `/voice-install.json`,
-written at build time by `apps/agents/scripts/build-voice-install.ts`. It works against any platform
-the app connects to, a self-hosted one included.
+project has no `/secrets/openai`, then `ensureVoiceAgent` (`@iterate-com/voice/install`, the
+installer Kit's Prepare runs too): the config repo gets `agents/` and `voice/` folders pinning the
+`@iterate-com/agents` and `@iterate-com/voice` builds of the commit this app was built from (main's
+when pkg.pr.new has none), and both are installed from them. It works against any platform the app
+connects to, a self-hosted one included.
 
 ## Run
 
 ```bash
-pnpm --filter @iterate-com/voice dev          # against APP_CONFIG_URLS__OS in .dev.vars
-pnpm --filter @iterate-com/voice test         # the PCM helpers
+pnpm --filter @iterate-com/voice-app dev      # against APP_CONFIG_URLS__OS in .dev.vars
+pnpm --filter @iterate-com/voice-app test     # the PCM helpers
 pnpm --dir apps/voice run deploy --env prd
 ```
 

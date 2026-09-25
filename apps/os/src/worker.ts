@@ -1,7 +1,7 @@
 // worker.ts — the one worker's fetch entry: the request is sorted top to bottom — a project host
 // (the files host, else the project's config worker), the MCP origin, then the platform origin's
-// own paths (`/version`, a preview's one-click `/.auth/test-link`, the secret-OAuth callback, Google
-// identity, `/mcp`, the browser adapter's `/api` and `/.auth/*`) and, last, the OAuth provider with
+// own paths (`/version`, a preview's one-click `/.auth/test-link`, the secret-OAuth callback, the
+// integrations' callbacks and webhooks, Google identity, `/mcp`, the browser adapter's `/api` and `/.auth/*`) and, last, the OAuth provider with
 // the issuer's pages as its catch-all.
 // Cap’n Web terminates at `/api`; a project host's request rides into the context DO.
 
@@ -14,8 +14,14 @@ import { ITX_GRANT_HEADER } from "./caller.ts";
 import { IterateContextDurableObject } from "./iterate-context-durable-object.ts";
 import type { Env as WorkerEnv } from "./env.ts";
 import { identityResponse } from "./identity.ts";
-import { SECRET_OAUTH_CALLBACK_PATH } from "./secret-oauth.ts";
+import {
+  OAUTH_INTEGRATION_PROVIDERS,
+  SECRET_OAUTH_CALLBACK_PATH,
+  secretOAuthCallbackPathOf,
+} from "./secret-oauth.ts";
 import { secretOAuthCallback } from "./secret-oauth-callback.ts";
+import { slackWebhookRoute } from "./integrations/slack.ts";
+import { githubCallbackRoute, githubWebhookRoute } from "./integrations/github.ts";
 import { ControlPlane, ControlPlaneUnavailableError } from "./control-plane/edge.ts";
 import { oauthResponse } from "./api.ts";
 import { issuerHandler } from "./issuer-pages.ts";
@@ -151,12 +157,15 @@ export { BrowserSession } from "iterate/app-session";
 // `ctx.exports` (first-party-facets.ts FIRST_PARTY_FACET_CLASSES) — ordinary bundled
 // worker code with the worker's real env, never a loaded source.
 export { AccountDurableObject } from "./account/durable-object.ts";
+export { InstanceDurableObject } from "./instance/durable-object.ts";
 export { OrganizationDurableObject } from "./organization/durable-object.ts";
 export { ProjectDurableObject } from "./project/durable-object.ts";
 export { RepoDurableObject } from "./repo/durable-object.ts";
 export { SecretDurableObject } from "./secret/durable-object.ts";
 export { WorkspaceDurableObject } from "./workspace/durable-object.ts";
 export { ItxEntrypoint } from "./iterate-context.ts";
+// A secret's exchange code's only egress, minted per jail with the pin as props.
+export { PinnedOutbound } from "./secret/exchange-jail.ts";
 
 export default {
   async fetch(request: Request, env: WorkerEnv, ctx: ExecutionContext): Promise<Response> {
@@ -373,9 +382,21 @@ export default {
     if (url.pathname.startsWith("/e/")) return proxyPosthogRequest({ request, proxyPrefix: "/e" });
 
     // A project secret's OAuth callback (secret-oauth.ts): the provider sends the human back here
-    // with the code. Its own reserved path, `/.secrets/`, beside `/version`.
-    if (url.pathname === SECRET_OAUTH_CALLBACK_PATH)
+    // with the code. Its own reserved path, `/.secrets/`, beside `/version` — and an integration's,
+    // the legacy URL iterate's Slack app and Google client are registered with.
+    if (
+      url.pathname === SECRET_OAUTH_CALLBACK_PATH ||
+      OAUTH_INTEGRATION_PROVIDERS.some(
+        (platform) => url.pathname === secretOAuthCallbackPathOf({ platform }),
+      )
+    )
       return secretOAuthCallback(request, env, addresses);
+    // Slack's and GitHub's webhooks and GitHub's connect callback (src/integrations/).
+    const integrationResponse =
+      (await slackWebhookRoute(request, env)) ||
+      (await githubWebhookRoute(request, env)) ||
+      (await githubCallbackRoute(request, env, addresses));
+    if (integrationResponse) return integrationResponse;
     const identity = await identityResponse(request, env);
     if (identity) return identity;
     if (url.pathname === "/mcp") {

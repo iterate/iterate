@@ -10,7 +10,6 @@
 // deployed suite runs ONE real turn through Workers AI.
 import { RpcTarget } from "capnweb";
 import { expect, test } from "vitest";
-import { createFlake } from "@iterate-com/shared/test-support/flake-test";
 import { errorCode } from "iterate/lib";
 import {
   disposeSessions,
@@ -543,177 +542,213 @@ test("the model is shown the SANDBOX's rewriteRules.list() every turn: a capabil
   expect(tree).toContain("itx.kv — "); // the root's implicit rows, described
 });
 
-/** THE PLATFORM'S SUBREQUEST DEPTH, THE JAIL's one known flake. An agent's turns can nest in
- *  Cloudflare's call chain: a Durable Object's outgoing calls count from the depth of its NEWEST
- *  in-flight incoming call (workerd `IoContext::getCurrentIncomingRequest`), and each turn's
- *  run-requested arrives at the agent's context from its facet (facet → env.ITX → context), a hop
- *  or three deeper than the delivery that started the turn. When no shallower call reaches the
- *  context in between, the next turn starts from there, and a script's platform hops (here the
- *  physical `itx.repos` grant: sandbox → loaded isolate → env.ITX → sandbox → `/` → the `project`
- *  facet) eventually pass the limit: "Subrequest depth limit exceeded". Measured on a preview
- *  (2026-09-24): from a session a sandbox script has 9 levels of nested `itx.run` left; turn by
- *  turn in the agent loop it had 9,9,9,9,9,8,8,8,8,7,7,7 or 9,8,7,7,9,… — the chain grows until a
- *  shallower call resets it. Soaked alone THE JAIL failed 1 of 40 runs this way, beside the rest of
- *  this file 3 of 46, and 5 of 15 in the full suite (never a different error). The agent loop's
- *  depth is the product's to fix (the turn must start from a fresh invocation); until then the
- *  row is green on exactly this failure and recorded, and any other failure is red. */
-const jailFlake = createFlake(test, /Subrequest depth limit exceeded/, { timeoutMs: 60_000 });
-
-jailFlake(
-  "THE JAIL: a bare null on the agent's sandbox plus one grant — an injected script reaches nothing but the grant, and the tables are untouched afterwards",
-  async () => {
-    const ctx = freshCtx("agent-jail");
-    const itx = await openAgentItx(ctx);
-    const agentPath = "/agents/web/v1";
-    const support = itx.cd(agentPath);
-    const catalogue = new (class extends RpcTarget {
-      search(input: { q: string }) {
-        return [{ name: `${input.q}.com`, price: 42 }];
-      }
-    })();
-    await itx.provide("itx.catalogue", catalogue, { description: "search the catalogue" });
-    const scripts = [
-      "return await itx.kv.list()",
-      "return await itx.cd('/').whoami()",
-      "return await itx.builtins.whoami()",
-      "const r = await fetch('https://example.com/'); return r.status",
-      "await itx.append({ type: 'events.iterate.com/itx/rewrite-rule-configured', payload: { match: 'itx', target: \"itx.builtins.cd('/')\" } }); return 'granted myself'",
-      "await itx.schedules.set({ key: 'later', when: { afterMs: 10 }, events: [{ type: 't' }] }); return 'scheduled'",
-      "await itx.provide('itx.catalogue', () => 'mine now'); return 'lent over the grant'",
-      "await itx.subscribe({ target: () => {} }); return 'subscribed'",
-      "return await itx.catalogue.search({ q: 'ship' })",
-      "return await itx.repos.list()",
-    ];
-    const ai = new ScriptedAi([
-      ...scripts.map((code) => `<codemode status="probing">\n${code}\n</codemode>`),
-      "Done probing.",
-    ]);
-    await support.provide("itx.ai", ai);
-    const agent = itx.agents.get(agentPath);
-    await itx.agents.create(agentPath);
-    await configureModel(support);
-    // THE OWNER's jail, in ONE batch: the mask replaces the sandbox's link, the grant sits beside it
-    // (the append itself resolves before the mask lands; afterwards the owner writes through
-    // `builtins`, which a session may spell and loaded code may not)
-    await itx.cd(`${agentPath}/sandbox`).append(
-      {
-        type: "events.iterate.com/itx/rewrite-rule-configured",
-        payload: {
-          match: "itx",
-          target: null,
-          description: "this agent's scripts get only the rows below",
-        },
-      },
-      {
-        type: "events.iterate.com/itx/rewrite-rule-configured",
-        payload: {
-          match: "itx.catalogue",
-          target: "itx.builtins.cd('/').catalogue",
-          description: "search the catalogue: itx.catalogue.search({ q })",
-        },
-      },
-      {
-        // a PHYSICAL grant to a library root: the verb runs HERE, its hops at the fixed point
-        type: "events.iterate.com/itx/rewrite-rule-configured",
-        payload: {
-          match: "itx.repos",
-          target: "itx.builtins.repos",
-          description: "the project's repos: itx.repos.list()",
-        },
-      },
-    );
-    await itx.cd(`${agentPath}/sandbox`).builtins.append(
-      {
-        type: "events.iterate.com/itx/rewrite-rule-configured",
-        payload: { match: "itx.run", target: "itx.builtins.run" },
-      },
-      {
-        type: "events.iterate.com/itx/rewrite-rule-configured",
-        payload: { match: "itx.rewriteRules", target: "itx.builtins.rewriteRules" },
-      },
-      {
-        type: "events.iterate.com/itx/rewrite-rule-configured",
-        payload: { match: "itx.agents", target: null },
-      },
-    );
-    const rootRulesBefore = await itx.rewriteRules.list();
-    const sandboxRulesBefore = await itx.cd(`${agentPath}/sandbox`).builtins.rewriteRules.list();
-    // The agent never outlives the test: a turn a failure cut short would otherwise run on after the
-    // session's lend of the fake is gone — into the real model.
-    try {
-      await agent.message("Probe everything.");
-      // THE TURN ENDS WITH THE FAKE'S LAST WORDS, and only then may the test end: its session lends the
-      // model, so a test that ended at the tenth settlement dropped the lend under the agent's eleventh
-      // request, which then went to the REAL default route (Workers AI) and kept probing — up to ten
-      // billed turns after the test had passed (13 JAIL runs on a soak preview, 2026-09-24: 9 did).
-      // The flake ends the wait at once (and the `finally` below deletes the agent, so a turn cut
-      // short never reaches a real model either).
-      const depthRefusalIn = (log: { offset: number; type: string; payload?: any }[]) =>
-        log.find(
-          (e) =>
-            /\/(itx\/run-settled|agent\/llm-request-settled)$/.test(e.type) &&
-            JSON.stringify(e.payload).includes("Subrequest depth limit exceeded"),
-        );
-      const log = await until(
-        "the probing turn's last words",
-        async () => {
-          const all = await readAll(support);
-          return assistantWords(all).includes("Done probing.") ||
-            all.some((e) => e.type === "events.iterate.com/agent/paused") ||
-            depthRefusalIn(all)
-            ? all
-            : undefined;
-        },
-        60_000,
-      ).catch(async (error: unknown) => {
-        const all = await readAll(support);
-        throw new Error(`${String(error)} — the turn so far: ${turnSummary(all)}`);
-      });
-      const depthRefusal = depthRefusalIn(log);
-      if (depthRefusal)
-        throw new Error(
-          `the platform refused a hop at offset ${depthRefusal.offset}: Subrequest depth limit exceeded — the turn: ${turnSummary(log)}`,
-        );
-      const settled = log
-        .filter((e) => e.type === "events.iterate.com/itx/run-settled")
-        .map((e) => e.payload.settlement as { status: string; result?: unknown; error?: string });
-      expect(assistantWords(log).at(-1)).toBe("Done probing."); // the turn ended on the fake's words
-      // a mismatch names every settlement — which script answered what
-      expect(
-        settled.map((s) => s.status),
-        JSON.stringify(settled),
-      ).toEqual([
-        "failed",
-        "failed",
-        "failed",
-        "succeeded",
-        "failed",
-        "failed",
-        "failed",
-        "failed",
-        "succeeded",
-        "succeeded",
-      ]);
-      expect(settled[0]!.error).toMatch(/is masked/); // kv: the bare null
-      expect(settled[1]!.error).toMatch(/masked|goes down only/); // cd('/'): the wall, or the app rule
-      expect(settled[2]!.error).toMatch(/not a loaded worker's word/); // itx.builtins
-      expect(settled[3]).toMatchObject({ result: 404 }); // raw fetch: the expression fetch found no `itx.fetch` row
-      expect(settled[4]!.error).toMatch(/is masked/); // the self-grant: append is masked
-      expect(settled[5]!.error).toMatch(/is masked/); // schedules: masked
-      expect(settled[6]!.error).toMatch(/is masked/); // a live lend over the grant: its row is an append, masked
-      expect(settled[7]!.error).toMatch(/is masked/); // a live subscription: its row likewise
-      expect(settled[8]).toMatchObject({ result: [{ name: "ship.com", price: 42 }] }); // the one grant, still the owner's
-      expect(settled[9]).toMatchObject({ result: [] }); // the library root granted physically: its hops are the platform's
-      // nothing moved: the root's table and the sandbox's are what the owner wrote
-      expect(await itx.rewriteRules.list()).toEqual(rootRulesBefore);
-      expect(await itx.cd(`${agentPath}/sandbox`).builtins.rewriteRules.list()).toEqual(
-        sandboxRulesBefore,
-      );
-    } finally {
-      await Promise.race([itx.agents.delete(agentPath).catch(() => undefined), sleep(5_000)]);
+test("THE JAIL: a bare null on the agent's sandbox plus one grant — an injected script reaches nothing but the grant, and the tables are untouched afterwards", async () => {
+  const ctx = freshCtx("agent-jail");
+  const itx = await openAgentItx(ctx);
+  const agentPath = "/agents/web/v1";
+  const support = itx.cd(agentPath);
+  const catalogue = new (class extends RpcTarget {
+    search(input: { q: string }) {
+      return [{ name: `${input.q}.com`, price: 42 }];
     }
-  },
-);
+  })();
+  await itx.provide("itx.catalogue", catalogue, { description: "search the catalogue" });
+  const scripts = [
+    "return await itx.kv.list()",
+    "return await itx.cd('/').whoami()",
+    "return await itx.builtins.whoami()",
+    "const r = await fetch('https://example.com/'); return r.status",
+    "await itx.append({ type: 'events.iterate.com/itx/rewrite-rule-configured', payload: { match: 'itx', target: \"itx.builtins.cd('/')\" } }); return 'granted myself'",
+    "await itx.schedules.set({ key: 'later', when: { afterMs: 10 }, events: [{ type: 't' }] }); return 'scheduled'",
+    "await itx.provide('itx.catalogue', () => 'mine now'); return 'lent over the grant'",
+    "await itx.subscribe({ target: () => {} }); return 'subscribed'",
+    "return await itx.catalogue.search({ q: 'ship' })",
+    "return await itx.repos.list()",
+  ];
+  const ai = new ScriptedAi([
+    ...scripts.map((code) => `<codemode status="probing">\n${code}\n</codemode>`),
+    "Done probing.",
+  ]);
+  await support.provide("itx.ai", ai);
+  const agent = itx.agents.get(agentPath);
+  await itx.agents.create(agentPath);
+  await configureModel(support);
+  // THE OWNER's jail, in ONE batch: the mask replaces the sandbox's link, the grant sits beside it
+  // (the append itself resolves before the mask lands; afterwards the owner writes through
+  // `builtins`, which a session may spell and loaded code may not)
+  await itx.cd(`${agentPath}/sandbox`).append(
+    {
+      type: "events.iterate.com/itx/rewrite-rule-configured",
+      payload: {
+        match: "itx",
+        target: null,
+        description: "this agent's scripts get only the rows below",
+      },
+    },
+    {
+      type: "events.iterate.com/itx/rewrite-rule-configured",
+      payload: {
+        match: "itx.catalogue",
+        target: "itx.builtins.cd('/').catalogue",
+        description: "search the catalogue: itx.catalogue.search({ q })",
+      },
+    },
+    {
+      // a PHYSICAL grant to a library root: the verb runs HERE, its hops at the fixed point
+      type: "events.iterate.com/itx/rewrite-rule-configured",
+      payload: {
+        match: "itx.repos",
+        target: "itx.builtins.repos",
+        description: "the project's repos: itx.repos.list()",
+      },
+    },
+  );
+  await itx.cd(`${agentPath}/sandbox`).builtins.append(
+    {
+      type: "events.iterate.com/itx/rewrite-rule-configured",
+      payload: { match: "itx.run", target: "itx.builtins.run" },
+    },
+    {
+      type: "events.iterate.com/itx/rewrite-rule-configured",
+      payload: { match: "itx.rewriteRules", target: "itx.builtins.rewriteRules" },
+    },
+    {
+      type: "events.iterate.com/itx/rewrite-rule-configured",
+      payload: { match: "itx.agents", target: null },
+    },
+  );
+  const rootRulesBefore = await itx.rewriteRules.list();
+  const sandboxRulesBefore = await itx.cd(`${agentPath}/sandbox`).builtins.rewriteRules.list();
+  // The agent never outlives the test: a turn a failure cut short would otherwise run on after the
+  // session's lend of the fake is gone — into the real model.
+  try {
+    await agent.message("Probe everything.");
+    // THE TURN ENDS WITH THE FAKE'S LAST WORDS, and only then may the test end: its session lends the
+    // model, so a test that ended at the tenth settlement dropped the lend under the agent's eleventh
+    // request, which then went to the REAL default route (Workers AI) and kept probing — up to ten
+    // billed turns after the test had passed (13 JAIL runs on a soak preview, 2026-09-24: 9 did).
+    // A pause ends the wait at once (and the `finally` below deletes the agent, so a turn cut short
+    // never reaches a real model either).
+    const log = await until(
+      "the probing turn's last words",
+      async () => {
+        const all = await readAll(support);
+        return assistantWords(all).includes("Done probing.") ||
+          all.some((e) => e.type === "events.iterate.com/agent/paused")
+          ? all
+          : undefined;
+      },
+      60_000,
+    ).catch(async (error: unknown) => {
+      const all = await readAll(support);
+      throw new Error(`${String(error)} — the turn so far: ${turnSummary(all)}`);
+    });
+    const settled = log
+      .filter((e) => e.type === "events.iterate.com/itx/run-settled")
+      .map((e) => e.payload.settlement as { status: string; result?: unknown; error?: string });
+    expect(assistantWords(log).at(-1)).toBe("Done probing."); // the turn ended on the fake's words
+    // a mismatch names every settlement — which script answered what
+    expect(
+      settled.map((s) => s.status),
+      JSON.stringify(settled),
+    ).toEqual([
+      "failed",
+      "failed",
+      "failed",
+      "succeeded",
+      "failed",
+      "failed",
+      "failed",
+      "failed",
+      "succeeded",
+      "succeeded",
+    ]);
+    expect(settled[0]!.error).toMatch(/is masked/); // kv: the bare null
+    expect(settled[1]!.error).toMatch(/masked|goes down only/); // cd('/'): the wall, or the app rule
+    expect(settled[2]!.error).toMatch(/not a loaded worker's word/); // itx.builtins
+    expect(settled[3]).toMatchObject({ result: 404 }); // raw fetch: the expression fetch found no `itx.fetch` row
+    expect(settled[4]!.error).toMatch(/is masked/); // the self-grant: append is masked
+    expect(settled[5]!.error).toMatch(/is masked/); // schedules: masked
+    expect(settled[6]!.error).toMatch(/is masked/); // a live lend over the grant: its row is an append, masked
+    expect(settled[7]!.error).toMatch(/is masked/); // a live subscription: its row likewise
+    expect(settled[8]).toMatchObject({ result: [{ name: "ship.com", price: 42 }] }); // the one grant, still the owner's
+    expect(settled[9]).toMatchObject({ result: [] }); // the library root granted physically: its hops are the platform's
+    // nothing moved: the root's table and the sandbox's are what the owner wrote
+    expect(await itx.rewriteRules.list()).toEqual(rootRulesBefore);
+    expect(await itx.cd(`${agentPath}/sandbox`).builtins.rewriteRules.list()).toEqual(
+      sandboxRulesBefore,
+    );
+  } finally {
+    await Promise.race([itx.agents.delete(agentPath).catch(() => undefined), sleep(5_000)]);
+  }
+});
+
+/** AN AGENT'S SCRIPTS KEEP THEIR HOPS: the context starts every run a processor requested in its
+ *  alarm pass, a fresh invocation, so an agent's script has as many hops left before Cloudflare's
+ *  "Subrequest depth limit exceeded" at its fifth turn as at its first, and as a person's `itx.run`
+ *  (why: iterate-context-durable-object.ts `#startRequestedRuns`). Each turn's script counts the
+ *  contexts of a forwarding chain it can still reach. The log is read every three seconds rather
+ *  than continuously: a person's read is itself a fresh request and would mask a loop that piles up
+ *  depth. workerd counts no depth, so a local run reaches the whole chain every time. */
+test("an agent's script has as many hops left at its fifth turn as at its first, and as a person's itx.run", async () => {
+  const itx = await openAgentItx(freshCtx("agent-depth"));
+  const path = "/agents/depth";
+  const support = itx.cd(path);
+  const chain = 16;
+  const turns = 5;
+  await Promise.all(
+    Array.from({ length: chain }, (_, i) =>
+      itx.cd(`${path}/sandbox/chain/${i}`).append({
+        type: "events.iterate.com/itx/rewrite-rule-configured",
+        payload: {
+          match: "itx.hop",
+          target:
+            i === chain - 1
+              ? "itx.builtins.whoami"
+              : `itx.builtins.cd(${JSON.stringify(`${path}/sandbox/chain/${i + 1}`)}).hop`,
+        },
+      }),
+    ),
+  );
+  // Entered at index chain-n, the chain costs n hops: the longest that went through is what is left.
+  const probe = `for (let n = 1; n <= ${chain}; n++) { try { await itx.cd("./chain/" + (${chain} - n)).hop(); } catch { return n - 1; } } return ${chain};`;
+  await support.provide(
+    "itx.ai",
+    new ScriptedAi([
+      ...Array.from({ length: turns }, () => `<codemode status="counting">\n${probe}\n</codemode>`),
+      "Counted.",
+    ]),
+  );
+  await itx.agents.create(path);
+  await configureModel(support);
+  const personHops = await itx.cd(`${path}/sandbox`).run(`async (itx) => { ${probe} }`);
+  try {
+    await itx.agents.get(path).message("Count the hops.");
+    const log = await until(
+      "the counting turns' last words",
+      async () => {
+        await sleep(3_000);
+        const all = await readAll(support);
+        return assistantWords(all).includes("Counted.") ||
+          all.some((e) => e.type === "events.iterate.com/agent/paused")
+          ? all
+          : undefined;
+      },
+      50_000,
+    );
+    const agentHops = log
+      .filter((e) => e.type === "events.iterate.com/itx/run-settled")
+      .map((e) => e.payload.settlement.result as number);
+    expect(agentHops).toHaveLength(turns);
+    // Allow one hop of noise: a cold context's first control-plane read is one more subrequest.
+    expect(
+      Math.min(...agentHops),
+      JSON.stringify({ personHops, agentHops }),
+    ).toBeGreaterThanOrEqual(personHops - 1);
+  } finally {
+    await Promise.race([itx.agents.delete(path).catch(() => undefined), sleep(5_000)]);
+  }
+});
 
 test("itx.agents.delete(path) lands the request and the death certificate on the agent's path AND on /, drops the processor row; message() refuses and the loop runs no more turns; a second delete answers at once; never created, nothing to delete; deleted, not re-creatable", async () => {
   const itx = await openAgentItx(freshCtx("agent-delete"));

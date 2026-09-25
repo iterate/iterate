@@ -5,5 +5,5 @@ import { z } from "zod";
 
 /** The sign-in providers that prove who someone is (identity.ts): each names a person by a stable
  *  subject; a person links at most ONE subject per provider. */
-export const IdentityProvider = z.enum(["google", "cloudflare"]);
+export const IdentityProvider = z.enum(["google", "cloudflare", "github"]);
 export type IdentityProvider = z.infer<typeof IdentityProvider>;

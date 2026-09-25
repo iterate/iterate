@@ -1,63 +1,101 @@
-import { readdir, readFile } from "node:fs/promises";
+// THE AGENTS APP INSTALLED AS A PACKAGE: a project whose config repo is the with-agents template —
+// package.json files that pin @iterate-com/agents (this checkout's pkg.pr.new build) and one
+// index.ts that re-exports it, no runtime source — gets working agents from its own config worker:
+// `project/created` installs them from `agents/`, the loader resolves the package through esm.sh,
+// and a commit that changes `agents/` installs them again from that commit.
+import { readFile } from "node:fs/promises";
 import { expect, test } from "vitest";
 import { freshCtx, openItx, readAll, until } from "../../os/e2e/support/client.ts";
+import { ScriptedAi, assistantWords, configureModel } from "./fixtures.ts";
+import { publishedPackage } from "./support.ts";
 
-// Exercise the real config worker's lifecycle subscription using the local template tree.
-// Downloading published GitHub trees is covered by the shared downloader tests.
-test("the copied agents template installs its collection on project/created through public capabilities", async () => {
-  const root = openItx(freshCtx("agents-template"));
-  await expect(root.invoke("itx.agents.list()")).rejects.toMatchObject({
-    code: "NO_ITX_EXPRESSION_MATCH",
-  });
-  await root.repos.create("/repos/config");
-  const changes = await Promise.all(
-    [
-      "worker.ts",
-      "iterate.json",
-      "AGENTS.md",
-      ...(
-        await readdir(new URL("../../../configs/with-agents/agents/", import.meta.url).pathname)
-      ).map((name) => `agents/${name}`),
-    ].map(async (path) => ({
-      path,
-      content: await readFile(
-        new URL(`../../../configs/with-agents/${path}`, import.meta.url).pathname,
-        "utf8",
-      ),
-    })),
-  );
-  await root.repos.get("/repos/config").commitFiles({ message: "Copy agents template", changes });
-  await root.processors.enable("project");
-  await root.append({
-    type: "events.iterate.com/project/create-requested",
-    payload: { slug: "agents-template", orgId: "test" },
-  });
-  await until("template installed agents", async () => {
-    await root.invoke("itx.agents.list()");
-    return true;
-  }).catch(async (error) => {
-    console.log(
-      JSON.stringify({
-        events: await readAll(root),
-        subscriptions: await root.subscriptions.list(),
+const TEMPLATE_FILES = [
+  "worker.ts",
+  "iterate.json",
+  "package.json",
+  "AGENTS.md",
+  "agents/package.json",
+  "agents/index.ts",
+];
+
+test(
+  "the with-agents template installs the published agents package on project/created, answers a message, and reinstalls from a commit that changes agents/",
+  { timeout: 90_000 },
+  async () => {
+    const root = openItx(freshCtx("agents-template"));
+    await expect(root.invoke("itx.agents.list()")).rejects.toMatchObject({
+      code: "NO_ITX_EXPRESSION_MATCH",
+    });
+    const version = await publishedPackage("@iterate-com/agents");
+    const template = "https://pkg.pr.new/iterate/iterate/@iterate-com/agents@main";
+    const changes = await Promise.all(
+      TEMPLATE_FILES.map(async (path) => {
+        const content = await readFile(
+          new URL(`../../../configs/with-agents/${path}`, import.meta.url).pathname,
+          "utf8",
+        );
+        if (path.endsWith("package.json")) expect(content).toContain(template);
+        return { path, content: content.replaceAll(template, version) };
       }),
     );
-    throw error;
-  });
-  await root.agents.create("/agents/first");
-  expect(await root.agents.list()).toEqual([
-    { path: "/agents/first", createdAt: expect.any(String) },
-  ]);
-  const events = await readAll(root);
-  const subscription = events.find(
-    (event) =>
-      event.type === "events.iterate.com/itx/subscription-configured" &&
-      event.payload.name === "config-worker",
-  );
-  const created = events.find((event) => event.type === "events.iterate.com/project/created");
-  expect(subscription.offset).toBeLessThan(created.offset);
-  expect(events.filter((event) => /failed$/.test(event.type))).toEqual([]);
-  expect(
-    (await root.subscriptions.list()).filter((row: { halted?: unknown }) => row.halted),
-  ).toEqual([]);
-});
+    await root.repos.create("/repos/config");
+    const config = root.repos.get("/repos/config");
+    await config.commitFiles({ message: "Copy agents template", changes });
+    await root.processors.enable("project");
+    await root.append({
+      type: "events.iterate.com/project/create-requested",
+      payload: { slug: "agents-template", orgId: "test" },
+    });
+    // The first load of a new build resolves it through esm.sh; every later one reads the lock.
+    const installed = await until(
+      "template installed agents",
+      async () => {
+        const rule = await root.rewriteRules.get("itx.agents");
+        return rule?.target ? rule : undefined;
+      },
+      60_000,
+    ).catch(async (error) => {
+      console.log(
+        JSON.stringify({
+          events: await readAll(root),
+          subscriptions: await root.subscriptions.list(),
+        }),
+      );
+      throw error;
+    });
+    // The installed source is the folder's two files, nothing else.
+    const runtime = JSON.parse(await root.kv.get("agents/runtime"));
+    expect(Object.keys(runtime.source).sort()).toEqual(["index.ts", "package.json"]);
+    expect(runtime.source["package.json"]).toContain(version);
+
+    const path = "/agents/first";
+    const agent = root.cd(path);
+    await agent.provide("itx.ai", new ScriptedAi(["Hello from the published package."]));
+    await root.agents.create(path);
+    expect(await root.agents.list()).toEqual([{ path, createdAt: expect.any(String) }]);
+    await configureModel(agent);
+    await root.agents.get(path).message("Say hello.");
+    await until("the agent's reply", async () =>
+      assistantWords(await readAll(agent)).includes("Hello from the published package."),
+    );
+
+    // A commit that changes agents/ is an upgrade: the config worker installs that commit's folder.
+    const index = changes.find((change) => change.path === "agents/index.ts")!.content;
+    await config.commitFiles({
+      message: "Touch the agents folder",
+      changes: [{ path: "agents/index.ts", content: `${index}// upgraded\n` }],
+    });
+    await until("reinstalled from the commit", async () => {
+      const rule = await root.rewriteRules.get("itx.agents");
+      return JSON.stringify(rule.target) !== JSON.stringify(installed.target);
+    });
+    expect(JSON.parse(await root.kv.get("agents/runtime")).source["index.ts"]).toContain(
+      "// upgraded",
+    );
+    const events = await readAll(root);
+    expect(events.filter((event) => /failed$/.test(event.type))).toEqual([]);
+    expect(
+      (await root.subscriptions.list()).filter((row: { halted?: unknown }) => row.halted),
+    ).toEqual([]);
+  },
+);

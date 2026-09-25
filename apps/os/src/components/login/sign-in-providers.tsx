@@ -6,12 +6,15 @@ import { cn } from "cn";
 export function SignInProviders({
   google,
   cloudflare,
+  github,
 }: {
   google: string | null;
   cloudflare: string | null;
+  github: string | null;
 }) {
   const providers = [
     { name: "Google", href: google, logo: "/google-logo.svg" },
+    { name: "GitHub", href: github, logo: "/github-logo.svg" },
     { name: "Cloudflare", href: cloudflare, logo: "/cloudflare-logo.svg" },
   ];
   return (

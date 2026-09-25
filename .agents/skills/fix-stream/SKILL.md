@@ -81,7 +81,7 @@ stored: the settled `agent/llm-request-settled` carries the text.
 ## 3. Name the complaint
 
 Print the conversation with offsets and times before reading product code. Every type is
-`events.iterate.com/…` (the contract is `configs/with-agents/agents/contract.ts`):
+`events.iterate.com/…` (the contract is `packages/agents/src/contract.ts`):
 
 - `agent/context-added`: the conversation. The `role` is `system`, `developer`, `user` or
   `assistant`. A user item's `actor.type` is `user`, `script` (a script's result) or `agent`.
@@ -92,7 +92,7 @@ Print the conversation with offsets and times before reading product code. Every
   The UI renames them (`adaptContextRuns` in `apps/agents/src/lib/agent-events.ts`).
 - `agent/web-message-sent`: what the person saw. `agent/paused` and `agent/resumed`: a breaker
   or an operator.
-- `voice-agent/*`: a call's transcripts, delegations and commentary (`apps/agents/voice/`).
+- `voice-agent/*`: a call's transcripts, delegations and commentary (`packages/voice/src/`).
 - Other `itx/*`: the context's own facts, such as wakes (`itx/woken`) and processor rows
   (`itx/subscription-configured`).
 
@@ -109,8 +109,8 @@ deployment and no real model.
 | --------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
 | what the chat shows (missing, duplicated or wrong rows)               | `apps/agents/src/lib/agent-events.test.ts`: `toAgentEvent` → `adaptContextRuns` → `reduceAgentFeed`, with real offsets |
 | the reducer behind the agent UI                                       | `apps/agents/src/lib/events/agent-ui-reducer.test.ts`                                                                  |
-| what the loop decides (a missing request, a stuck trigger, a breaker) | `apps/agents/runtime/processor.test.ts`: `reduceProcessor` rows                                                        |
-| a voice call                                                          | `apps/agents/voice/*.test.ts` (see `agent.test.ts` and `screen-context-repro.json`)                                    |
+| what the loop decides (a missing request, a stuck trigger, a breaker) | `packages/agents/src/processor.test.ts`: `reduceProcessor` rows                                                        |
+| a voice call                                                          | `packages/voice/src/*.test.ts` (see `agent.test.ts` and `screen-context-repro.json`)                                   |
 | an effect: a model call, a script run, the birth or death sagas       | `apps/agents/e2e/agents.e2e.test.ts`, with a fake `itx.ai` lent by rule (commands in `apps/agents/README.md`)          |
 
 - Save the dump as a JSON fixture beside the test, named for the complaint
@@ -127,7 +127,7 @@ deployment and no real model.
 
 ## 5. Prove it is red for the right reason
 
-`pnpm --dir apps/agents exec vitest run <file>` (or `packages/ui`'s). A failure only proves
+`pnpm --dir <package> exec vitest run <file>` (`apps/agents`, `packages/agents`, `packages/voice` or `packages/ui`). A failure only proves
 something when its diff shows the prod symptom. To see everything, assert against a string,
 for example `expect(items.map((i) => i.kind)).toEqual("SHOW ME")`, read the diff, then delete
 that assertion. Commit the test and fixture, push, and open or update the PR as a draft so CI
@@ -137,7 +137,7 @@ shows the red. Put a before/after excerpt of the prod log in the PR body.
 
 1. Make the smallest product fix consistent with the design. Grep for an existing path first,
    because the gap is often routing, not missing machinery. Run the test green, then the
-   package suite (`pnpm --dir apps/agents test`, or `packages/ui`'s). Push.
+   package suite (`pnpm --dir <package> test`). Push.
 2. Shrink the fixture: revert the product file (`git checkout <red commit> -- <file>`), cut
    events, and confirm the test is still red. If it turns green, the cut removed the repro, so
    restore it. Keep the system item, the last complete turn before the bad part, and the bad

@@ -154,7 +154,7 @@ export class Stream {
     // reduce inside the transaction below), so there is no separate mark to write. Read WHATEVER
     // version wrote it: a core-version bump still recovers the head and re-reduces the log up to it.
     const checkpoint = this.storage.reduceCheckpoints.read<CoreState>(CoreContract.slug);
-    // A log with rows but NO checkpoint (a lost row; a store from before the SQL layout) is
+    // A log with rows but NO checkpoint (a lost row) is
     // recoverable: the log is the truth and the checkpoint its cache — the mark is the highest row,
     // and the state is re-reduced below exactly as after a version bump. Reported, never fatal: the
     // alternative was re-appending the birth certificate over offset 1 and dying of a UNIQUE
@@ -236,7 +236,8 @@ export class Stream {
    *  hibernated socket). The first arrival appends it, before its own work; the ones after find it done.
    *  In the SAME batch: the `interrupted` settlement of every run the last incarnation left open
    *  (core state `scriptRuns`). A run is never re-run — the executor that started it died with that
-   *  incarnation, and whoever asked reads the settlement, not a second attempt. */
+   *  incarnation (for a processor's request still owed to the alarm, the pass that would have
+   *  started it), and whoever asked reads the settlement, not a second attempt. */
   appendWakeRecord(reason: "alarm" | "request"): void {
     if (this.#wakeRecorded) return;
     const interrupted = Object.keys(this.#coreReducedState.scriptRuns).map(
@@ -261,6 +262,12 @@ export class Stream {
       ...interrupted,
     );
     this.#wakeRecorded = true;
+  }
+
+  /** Whether this incarnation's wake record is on the log yet. Until it is, every open run is one
+   *  a dead incarnation left: every handler records the wake before it commits anything. */
+  wakeRecorded(): boolean {
+    return this.#wakeRecorded;
   }
 
   #rememberEphemeral(event: StreamEvent, chars: number) {

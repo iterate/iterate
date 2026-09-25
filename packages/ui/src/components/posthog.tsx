@@ -1,4 +1,5 @@
 import { useEffect } from "react";
+import type { Principal } from "iterate/principal";
 import { posthogPrivacy } from "./not-recorded.tsx";
 
 // posthog-js only ever runs in the browser; the SSR branch keeps it out of the
@@ -71,21 +72,20 @@ const NO_GROUPS: PosthogGroup[] = [];
 /** PostHog: the person is the platform user id — the same person in every app — and `groups` are
  *  the caller's (memoized: a new array re-runs the effect). Following PostHog's guide, a different
  *  signed-in user resets first, so the two are never merged; identify and group skip what they
- *  already sent. */
-export function usePosthogIdentity(
-  principal: { actor: string; email?: string },
-  groups: PosthogGroup[] = NO_GROUPS,
-) {
+ *  already sent. A platform admin signed in as someone (`impersonatedBy`) is the admin: the clicks
+ *  are theirs, never the person's. */
+export function usePosthogIdentity(principal: Principal, groups: PosthogGroup[] = NO_GROUPS) {
+  const { actor, email } = principal.impersonatedBy || principal;
   useEffect(() => {
     withPosthogClient((client) => {
       const identified = client.get_property("$user_id");
-      if (typeof identified === "string" && identified !== principal.actor) client.reset();
-      client.identify(principal.actor, principal.email ? { email: principal.email } : undefined);
+      if (typeof identified === "string" && identified !== actor) client.reset();
+      client.identify(actor, email ? { email } : undefined);
       const types = new Set(groups.map((group) => group.type));
       if (Object.keys(client.getGroups()).some((type) => !types.has(type))) client.resetGroups();
       for (const group of groups) client.group(group.type, group.key, group.properties);
     });
-  }, [principal.actor, principal.email, groups]);
+  }, [actor, email, groups]);
 }
 
 /** Sign-out: the next person on this browser starts anonymous (PostHog's guide: reset on logout). */

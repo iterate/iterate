@@ -26,7 +26,8 @@ import {
   SelectValue,
 } from "@iterate-com/ui/components/select";
 import { EyeIcon, EyeOffIcon, LogOutIcon, UsbIcon } from "lucide-react";
-import { ensureVoiceAgent, fetchVoiceInstall } from "../../../../agents/voice/install.ts";
+import { publishedVersion } from "@iterate-com/agents/install";
+import { ensureVoiceAgent } from "@iterate-com/voice/install";
 import { SetupWizard, type SetupInput } from "../../components/setup-wizard.tsx";
 import {
   DEFAULT_DEVICE_ID,
@@ -122,7 +123,12 @@ function KitPage() {
     mutationFn: async (input: SetupInput) => {
       try {
         using itx = await api.projects.get(input.project.id);
-        const voice = await ensureVoiceAgent(itx, fetchVoiceInstall, input.openaiKey);
+        const commit = import.meta.env.VITE_SOURCE_COMMIT;
+        const versions = {
+          agents: await publishedVersion("@iterate-com/agents", commit),
+          voice: await publishedVersion("@iterate-com/voice", commit),
+        };
+        const voice = await ensureVoiceAgent(itx, versions, input.openaiKey);
         if (voice === "needs-openai-key")
           throw new Error(`${input.project.slug} needs an OpenAI API key. Close this and add one.`);
         const { token } = await api.grants.mint({

@@ -8,13 +8,13 @@
  * the bytes staged so far, except the chunk that completes the frame: that
  * answer waits until the driver leaves PENDING, then carries the frame's length
  * if the panel shows it, or an error if the refresh failed. The caller awaits
- * one call and asks nothing again (apps/agents/voice/worker.ts). An e-paper
+ * one call and asks nothing again (packages/voice/src/worker.ts). An e-paper
  * refresh takes seconds, so the reply is deferred (`capnweb_reply_defer`) and
  * `step`, which the device loop runs every pass, answers it; a driver that
  * shows at once (a reflective LCD) is answered on the spot.
  *
  * `status` stays for the voice workers projects already run: a project keeps
- * the worker it installed (apps/agents/voice/install.ts), and those ask
+ * the worker it installed (packages/voice/src/install.ts), and those ask
  * `status` after the last chunk.
  */
 

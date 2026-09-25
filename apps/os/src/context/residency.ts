@@ -64,7 +64,8 @@ type ResidencyDeps = {
   rpcStubs: Pick<RpcStubDirectory, "hasBorrowedRpcStubs" | "returnBorrowedRpcStubs">;
   /** The library's open sockets: a pin, and what the release closes. */
   library: Pick<ReturnType<typeof buildLibrary>, "holdsOpenSocket" | "releaseConnections">;
-  /** The script runs this incarnation is executing (the DO's runner): work in flight. */
+  /** The script runs this incarnation is executing or owes its next alarm pass (the DO's runner):
+   *  work in flight. */
   scriptRunsInFlight: () => number;
   /** A deadline here changed: the DO reconciles its alarm, which reads `deadlines()`. */
   reconcileAlarm: () => void;

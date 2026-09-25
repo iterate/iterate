@@ -6,6 +6,7 @@ import type { EnvContext } from "../../../scripts/lib/env-context.ts";
 import { build } from "./build.ts";
 import { applyD1Migrations, ensureD1 } from "./d1.ts";
 import { ensureArtifactsNamespace, isCloudflareError } from "./preview-artifacts.ts";
+import { PREVIEW_GITHUB_APP, previewGithubAppPrivateKey } from "./preview-github-app.ts";
 
 /** Deploy apps/os to `--env`, any name envs.ts `osEnv` knows: `prd` (Deploy OS), `preview` (main on
  *  dev, scripts/preview.ts `deploy-parents`) or a per-commit deployment's (`pr3144-a1b2c3d`,
@@ -37,7 +38,14 @@ export default async function deploy(options: {
     // The control plane's D1 is migrated before the code that reads it uploads, so a migration that
     // fails leaves the running version serving; a migration must keep that version working for the
     // minute until the upload (scripts/d1.ts).
-    async prepare(ctx, _secretValues, credentials) {
+    async prepare(ctx, secretValues, credentials) {
+      // The pet shop's GitHub fake as iterate's GitHub App (generate-wrangler-config.ts has the other
+      // fakes): its throwaway key is Doppler `os/preview`'s, so the App ships as a secret, not a var.
+      if (ctx.env.petshopIntegrations)
+        secretValues.APP_CONFIG_INTEGRATIONS__GITHUB = JSON.stringify({
+          ...PREVIEW_GITHUB_APP,
+          privateKey: previewGithubAppPrivateKey(),
+        });
       const [, databaseId] = await Promise.all([
         build(),
         ctx.env.resources?.dbId || createResources(ctx),

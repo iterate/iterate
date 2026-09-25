@@ -2,7 +2,8 @@
 // INSIDE workerd, next to the worker) shares: the context DO stub by ctx name, the control plane's
 // database, a capnweb session over the worker's /api (disposed at teardown — importing this module
 // registers the afterAll), a live value to lend (`Echo`, tagged per instance), the production pins'
-// release on demand, the alarm a context owes, and the one poll-until.
+// release on demand, the alarm a context owes, the one poll-until, a signed-in member with their
+// browser cookie, and the pet shop's integration fakes.
 import { runInDurableObject } from "cloudflare:test";
 import { env, exports } from "cloudflare:workers";
 import { newWebSocketRpcSession, RpcTarget } from "capnweb";
@@ -15,6 +16,7 @@ import { projectsByRef } from "../src/control-plane/db/queries/.generated/projec
 import { ControlPlane } from "../src/control-plane/edge.ts";
 import type { IterateContextDurableObject } from "../src/iterate-context-durable-object.ts";
 import type { IterateRpcTarget } from "../src/session.ts";
+import { memoryPetshop } from "../../dummy-petshop/src/memory-state.ts";
 
 /** This suite's platform origin (wrangler.test.jsonc `APP_CONFIG_URLS__OS`). */
 export const ORIGIN = "https://control.test";
@@ -211,10 +213,16 @@ export async function refused(
 }
 
 /** A person signed in through the login form (email + the deployment's password), then on `/api`
- *  with the browser's session cookie: an ordinary user session — no admin credential anywhere. The
- *  issuer fetches its own client metadata while it signs someone in; `fetch` reaches this worker for
- *  that one request (as control-plane.test.ts does), the network being out of reach here. */
+ *  with the browser's session cookie: an ordinary user session — no admin credential anywhere. */
 export async function signedInSession(email: string): Promise<any> {
+  return (await signedInMember(email)).session;
+}
+
+/** `signedInSession`'s person with the browser's session cookie too, for the platform's own pages
+ *  and callbacks. The issuer fetches its own client metadata while it signs someone in; `fetch`
+ *  reaches this worker for that one request (as control-plane.test.ts does), the network being out
+ *  of reach here. */
+export async function signedInMember(email: string): Promise<{ session: any; cookie: string }> {
   const issuerFetch = vi
     .spyOn(globalThis, "fetch")
     .mockImplementation((input, init) => exports.default.fetch(new Request(input, init)));
@@ -225,19 +233,86 @@ export async function signedInSession(email: string): Promise<any> {
     body: new URLSearchParams({ email, password: loginPassword(), next: "/" }),
   });
   issuerFetch.mockRestore();
-  const sessionCookie = login.headers
+  const cookie = login.headers
     .getSetCookie()
-    .find((cookie) => cookie.startsWith("__Host-itx-session="))!
+    .find((value) => value.startsWith("__Host-itx-session="))!
     .split(";")[0]!;
   const response = await exports.default.fetch(`${ORIGIN}/api`, {
-    headers: { Upgrade: "websocket", Origin: ORIGIN, Cookie: sessionCookie },
+    headers: { Upgrade: "websocket", Origin: ORIGIN, Cookie: cookie },
   });
   response.webSocket!.accept();
   const transport = newWebSocketRpcSession<IterateRpcTarget>(
     response.webSocket! as unknown as WebSocket,
   );
   sessions.push(transport);
-  return transport.authenticate({ type: "from-server-cookie" });
+  return { session: await transport.authenticate({ type: "from-server-cookie" }), cookie };
+}
+
+/** A project `slug` made by a member of its own (`<slug>@example.test`): their itx on it, its id,
+ *  their `/api` session and their browser cookie. */
+export async function projectWithMember(slug: string) {
+  const { session, cookie } = await signedInMember(`${slug}@example.test`);
+  const itx = await session.projects.create({ project: slug });
+  const { projectId } = (await itx.whoami()) as { projectId: string };
+  return { itx, projectId, session, cookie };
+}
+
+/** The hosts the pet shop's Slack, Google, Cloudflare and GitHub fakes answer on in this suite
+ *  (APP_CONFIG `integrations`, wrangler.test.jsonc and vitest.config.ts). */
+const PETSHOP_HOSTS = ["slack.test", "google.test", "cloudflare.test", "github.test"];
+
+/** The pet shop's Slack, Google, Cloudflare and GitHub fakes over in-memory state, answering this isolate's
+ *  `fetch` to their hosts until the test finishes, and the issuer's own requests to this worker;
+ *  every other request goes through. `requests`
+ *  holds each request they were sent, oldest first. Sign everyone in first: `signedInMember` restores
+ *  `fetch`. */
+export function petshopFakes() {
+  const petshop = memoryPetshop();
+  const requests: { method: string; url: string; headers: Record<string, string>; body: string }[] =
+    [];
+  const through = globalThis.fetch;
+  const spy = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+    const request = new Request(input, init);
+    // the issuer fetching its own client metadata while it signs someone in (`signedInMember`)
+    if (new URL(request.url).origin === ORIGIN) return exports.default.fetch(request);
+    if (!PETSHOP_HOSTS.includes(new URL(request.url).hostname)) return through(request);
+    // read here: a body belongs to the Durable Object that sent it
+    const { method, url, headers } = request;
+    requests.push({
+      method,
+      url,
+      headers: Object.fromEntries(headers),
+      body: await request.clone().text(),
+    });
+    return (await petshop.handle(request)) ?? new Response("Not Found", { status: 404 });
+  });
+  onTestFinished(() => spy.mockRestore());
+  return { ...petshop, requests };
+}
+
+/** A human's browser from a provider's consent page back through the platform: each hop at a fake
+ *  answered by the pet shop, each at the platform's `/api/integrations/` sent with `cookie`. Answers
+ *  the first response that goes anywhere else — the platform's redirect to `next`, or its refusal. */
+export async function followConsent(
+  petshop: ReturnType<typeof petshopFakes>,
+  url: string,
+  cookie: string,
+): Promise<Response> {
+  for (let hop = 0; hop < 8; hop++) {
+    const request = new Request(url, { headers: { cookie }, redirect: "manual" });
+    const response = PETSHOP_HOSTS.includes(new URL(url).hostname)
+      ? ((await petshop.handle(request)) ?? new Response("Not Found", { status: 404 }))
+      : await exports.default.fetch(request);
+    const location = response.headers.get("location");
+    const next = location ? new URL(location, url) : null;
+    const onward =
+      next &&
+      (PETSHOP_HOSTS.includes(next.hostname) ||
+        (next.origin === ORIGIN && next.pathname.startsWith("/api/integrations/")));
+    if (!onward) return response;
+    url = next.href;
+  }
+  throw new Error(`followConsent: still redirecting at ${url}`);
 }
 
 /** The pins' RELEASE, run directly, plus every live facet aborted: every borrowed stub returned,

@@ -281,7 +281,7 @@ image part, the AI Gateway options), and nothing is spent.
   AI model seeing the image) and the `REAL:` row of
   `apps/os/e2e/ai-root-shadow-and-fable.e2e.test.ts` are `realModelOnly`: they
   run only with `E2E_REAL_MODELS=1`, which only `os-real-model.yml` sets, once a
-  day and on main pushes to `configs/with-agents/agents/**`. The soak strips the
+  day and on main pushes to `packages/agents/**`. The soak strips the
   variable.
 - **What it costs.** An astra turn is about $0.026 (about 2,100 input tokens,
   most of them the system prompt), so a real-model run is about $0.06: about

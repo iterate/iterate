@@ -5,7 +5,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import { RpcTarget, newHttpBatchRpcResponse } from "capnweb";
 import { expect, onTestFinished, test, vi } from "vitest";
 import { codedError } from "iterate/lib";
-import type { WaitForEventFilter } from "iterate/api";
+import type { OpenApiDocument, WaitForEventFilter } from "iterate/api";
 import type { StreamEvent, StreamEventInput } from "iterate/stream/processor";
 import {
   buildLibrary,
@@ -19,7 +19,7 @@ import {
 } from "./library.ts";
 import { connectToCapnweb } from "./library/capnweb.ts";
 import { connectToMcp, type McpConnectionRpcTarget } from "./library/mcp.ts";
-import { connectToOpenApi, type OpenApiDocument } from "./library/openapi.ts";
+import { connectToOpenApi } from "./library/openapi.ts";
 
 // ── the library ── the memo `buildLibrary` keeps over the three verbs: a connect with the same
 // (verb, url, options) is ONE live connection for the context's life; `releaseConnections()` (the
@@ -1104,6 +1104,67 @@ test("connectToOpenApi: not an OpenAPI document → refused at connect", async (
   );
 });
 
+// ── the entities ── `create` and `delete` reach only strictly beneath the caller's origin (the
+// context the platform stamped, `Caller.path`), and the typed `append` refuses the lifecycle facts,
+// which only the collection writes (`entities`, below: every hop recorded).
+test("entities: create and delete reach only strictly beneath the caller's origin — the origin itself, an ancestor, a sibling and anywhere else are FORBIDDEN before anything is dispatched; the root reaches every path but itself", async () => {
+  const jail = entities("/jail");
+  await jail.workspaces.create("./x");
+  await jail.repos.delete("/jail/x/y");
+  for (const path of [".", "/jail", "..", "/", "/jailbreak", "/other/x", "/repos/config"]) {
+    await expect(jail.workspaces.create(path)).rejects.toThrow(
+      /creates and deletes only beneath itself/,
+    );
+    await expect(jail.repos.delete(path)).rejects.toThrow(
+      /creates and deletes only beneath itself/,
+    );
+  }
+  expect(jail).toMatchObject({
+    dispatched: [
+      {
+        at: "/",
+        steps: [
+          "facets",
+          ["get", "project"],
+          ["workspaces"],
+          ["create", "/jail/x", { creator: "/jail" }],
+        ],
+      },
+      { at: "/", steps: ["facets", ["get", "project"], ["repos"], ["delete", "/jail/x/y"]] },
+    ],
+  });
+  const root = entities();
+  await root.repos.create("/repos/config");
+  await expect(root.repos.create("/")).rejects.toThrow(/creates and deletes only beneath itself/);
+  expect(root.dispatched.map(({ steps }) => steps.at(-1))).toEqual([
+    ["create", "/repos/config", { creator: "/" }],
+  ]);
+});
+
+test("entities: the typed append refuses the entity's lifecycle facts, which only the collection writes, and appends the entity's other events on its context", async () => {
+  const { repos, workspaces, dispatched } = entities("/jail");
+  const config = repos.get("/repos/config");
+  for (const append of [
+    () => config.append({ type: "events.iterate.com/repo/create-requested", payload: {} }),
+    () => config.append({ type: "events.iterate.com/repo/created", payload: { path: "/x" } }),
+    () => config.append({ type: "events.iterate.com/repo/create-failed", payload: { error: "" } }),
+    () => config.append({ type: "events.iterate.com/repo/delete-requested", payload: {} }),
+    () => config.append({ type: "events.iterate.com/repo/deleted", payload: { path: "/x" } }),
+  ])
+    await expect(append()).rejects.toThrow(/is the repo's lifecycle/);
+  await expect(
+    workspaces
+      .get("/workspaces/w")
+      .append({ type: "events.iterate.com/workspace/delete-requested", payload: {} }),
+  ).rejects.toThrow(/is the workspace's lifecycle/);
+  const commit = {
+    type: "events.iterate.com/repo/commit-completed" as const,
+    payload: { path: "/repos/config", commitOid: "abc", message: "m", changedPaths: ["worker.ts"] },
+  };
+  await config.append(commit);
+  expect(dispatched).toEqual([{ at: "/repos/config", steps: [["append", commit]] }]);
+});
+
 // ── the library boundary ── THE LIBRARY RULE, pinned: a library module takes `itx` and nothing else,
 // so at runtime it may import only npm packages a userspace worker could bundle too (capnweb,
 // cloudflare:workers) and the one platform primitive that is pure data or a handle
@@ -1445,4 +1506,27 @@ function openApiItx(answer: (request: Request) => Response = () => json({ ok: tr
     },
   } as unknown as LibraryItx;
   return { itx, requests };
+}
+
+/** A library whose caller came from `origin` (none: a caller at the root), over a fake `itx` that
+ *  records every dispatch. */
+function entities(origin?: string) {
+  const dispatched: { at: string; steps: unknown[] }[] = [];
+  const itx = {
+    builtins: {
+      cd: async (at: string) => ({
+        invoke: async (steps: unknown[]) => {
+          dispatched.push({ at, steps });
+          return { path: at };
+        },
+      }),
+    },
+  } as unknown as LibraryItx;
+  return {
+    dispatched,
+    ...buildLibrary(itx, {
+      caller: () => (origin ? { principal: null, path: origin } : { principal: null }),
+      path: "/",
+    }).roots,
+  };
 }

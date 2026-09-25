@@ -1,5 +1,6 @@
-// The rows that are not one event: the day mark, a repeated fact with its count, a run of the
-// platform's housekeeping folded quiet. The two folds open in place on a click: the feed lists
+// The rows that are not one event: the day mark (a plain word over the clock column, no rule), a
+// repeated fact with a small count, a run of the platform's housekeeping folded into one quiet line
+// ("2 housekeeping · woke, subscription"). The two folds open in place on a click: the feed lists
 // their members under them as rows of their own (feed-list.tsx), each opening the inspector like
 // any row. Memoised, like every row: the feed re-renders on every scroll frame.
 import { memo } from "react";
@@ -9,9 +10,11 @@ import { housekeepingSummary } from "./core-renderers.tsx";
 import {
   EventSentence,
   formatClockTime,
+  RowGutter,
   RowOffset,
   RowTimes,
   RowWho,
+  rowBody,
   rowClass,
 } from "./event-row.tsx";
 import { actorLabel } from "./filters.tsx";
@@ -32,18 +35,18 @@ export const DaySeparator = memo(function DaySeparator({ date }: { date: Date })
             year: date.getFullYear() === today.getFullYear() ? undefined : "numeric",
           });
   return (
-    <div className="flex items-center gap-3 border-b border-border/40 px-2 pt-4 pb-1">
-      <span className="text-xs font-medium text-muted-foreground">{label}</span>
-      <span className="h-px flex-1 bg-border" />
+    <div className="flex items-baseline gap-x-3.5 px-3 sm:px-4 pt-3 pb-1">
+      <RowGutter />
+      <span className="text-xs font-semibold text-foreground/75">{label}</span>
     </div>
   );
 });
 
 function Chevron({ open }: { open: boolean }) {
   return open ? (
-    <ChevronDownIcon className="size-3.5 shrink-0 self-center text-muted-foreground" />
+    <ChevronDownIcon className="size-3 shrink-0 self-center text-muted-foreground/70" />
   ) : (
-    <ChevronRightIcon className="size-3.5 shrink-0 self-center text-muted-foreground" />
+    <ChevronRightIcon className="size-3 shrink-0 self-center text-muted-foreground/70" />
   );
 }
 
@@ -77,10 +80,11 @@ export const RepeatRow = memo(function RepeatRow({
       className={rowClass()}
     >
       <RowOffset offset={first.offset} />
-      <span className="flex min-w-0 flex-1 items-baseline gap-2">
-        <EventSentence event={first} renderers={renderers} className="min-w-0 flex-1" />
+      <RowTimes event={first} previous={previous} />
+      <span className={cn(rowBody, "flex items-baseline gap-1.5")}>
+        <EventSentence event={first} renderers={renderers} className="min-w-0" />
         <span
-          className="shrink-0 rounded-full bg-muted px-1.5 text-[11px] text-muted-foreground tabular-nums"
+          className="shrink-0 text-[11px] text-muted-foreground tabular-nums"
           title={`${String(events.length)} times, ${formatClockTime(Date.parse(first.createdAt))} – ${formatClockTime(Date.parse(last.createdAt))}`}
         >
           ×{events.length}
@@ -88,7 +92,6 @@ export const RepeatRow = memo(function RepeatRow({
         <Chevron open={open} />
       </span>
       {showWho && who ? <RowWho who={who} /> : null}
-      <RowTimes event={first} previous={previous} />
     </button>
   );
 });
@@ -117,16 +120,13 @@ export const HousekeepingRow = memo(function HousekeepingRow({
       className={cn(rowClass(), "text-muted-foreground")}
     >
       <RowOffset offset={first.offset} />
-      <span className="flex min-w-0 flex-1 items-baseline gap-2 text-xs">
-        <span className="truncate">
-          {events.length} housekeeping events{" "}
-          <span className="text-muted-foreground/70">
-            · {housekeepingSummary(events.map((e) => e.type))}
-          </span>
-        </span>
-        <Chevron open={open} />
-      </span>
       <RowTimes event={first} previous={previous} />
+      <span className={cn(rowBody, "flex items-baseline gap-1 text-[13px]")}>
+        <Chevron open={open} />
+        <span className="truncate">
+          {events.length} housekeeping · {housekeepingSummary(events.map((e) => e.type))}
+        </span>
+      </span>
     </button>
   );
 });

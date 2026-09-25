@@ -145,7 +145,12 @@ export function connectEventLog(
       caughtUp,
       error,
       head,
-      older: { loading: loadingOlder, exhausted: floor === 0 },
+      // before the first read, `floor` is not known yet: what lies below a push that landed first
+      // is loading, never the start of the log
+      older: {
+        loading: loadingOlder || (!caughtUp && !error),
+        exhausted: caughtUp && floor === 0,
+      },
       actors,
       tableVersion,
     };

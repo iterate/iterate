@@ -1,27 +1,21 @@
+import { memoryPetshop } from "../memory-state.ts";
 import { seedPets } from "../pets.ts";
-import { randomSealKey } from "../seal.ts";
-import { DEFAULT_CLIENT_ID, DEFAULT_CLIENT_SECRET, PetshopStateDurableObject } from "../state.ts";
+import { DEFAULT_CLIENT_ID, DEFAULT_CLIENT_SECRET } from "../state.ts";
 import { handlePetshopRequest, type PetshopDeps } from "../worker.ts";
 
 export const ORIGIN = "https://petshop.example";
 
 /**
- * One shop "environment": the real route handlers and the real state class over
- * an in-memory storage fake. `call` drives it by path+init; `fetch` drives it by
+ * One shop "environment": the real route handlers and the real state store over
+ * in-memory storage (memory-state.ts). `call` drives it by path+init; `fetch` drives it by
  * a whole Request (what an oRPC or capnweb client hands over). Both hit the same
  * deps, so a client's writes are visible to later `call`s.
  */
 export function makeShop(options: { backdoorSecret?: string } = {}) {
-  const blobs = new Map<string, unknown>();
-  // Clone on both sides like real DO storage does, so nothing survives by
-  // reference identity.
-  const storage = {
-    get: async (key: string) => structuredClone(blobs.get(key)),
-    put: async (key: string, value: unknown) => void blobs.set(key, structuredClone(value)),
-  };
+  const { state, sealKey } = memoryPetshop();
   const deps: PetshopDeps = {
-    state: new PetshopStateDurableObject({ storage } as unknown as DurableObjectState, {}),
-    sealKey: randomSealKey(),
+    state,
+    sealKey,
     backdoorSecret: options.backdoorSecret,
     pets: seedPets(),
   };

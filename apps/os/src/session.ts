@@ -41,7 +41,8 @@ import { type ControlPlane, describeReach, type Reach } from "./control-plane/ed
 import { OrganizationRole, type OrganizationState } from "./organization/contract.ts";
 import type { AppConfig } from "./app-config.ts";
 import { isRetryableTransportError } from "./retryable-error.ts";
-import type { AuthenticationFact } from "./account/contract.ts";
+import type { AccountState, AuthenticationFact } from "./account/contract.ts";
+import { IntegrationProvider } from "./integrations/contract.ts";
 import { assertSecretPath } from "./secrets.ts";
 
 /** What `IterateRpcTarget.authenticate` accepts. `from-server-cookie` is the browser and `bearer` is
@@ -90,7 +91,7 @@ export interface SessionInput {
  *  `authenticate({ type: "bearer", token })`, or `authenticate({ type: "admin-secret", secret })`,
  *  the deployment admin secret verified here.
  *  Its teardown owns every context the session it vends hands out. */
-export class IterateRpcTarget extends RpcTarget {
+export class IterateRpcTarget extends RpcTarget implements IterateApi {
   readonly #input: SessionInput;
   readonly #sessionTeardown: SessionTeardown;
   /** The authority the transport already resolved (a credential on the upgrade), or null (a bare
@@ -112,7 +113,7 @@ export class IterateRpcTarget extends RpcTarget {
     this.#sessionTeardown.disposeAll();
   }
 
-  async authenticate(input: unknown): Promise<SessionRpcTarget> {
+  async authenticate(input: unknown) {
     const credentials = SessionCredentials.safeParse(input);
     if (!credentials.success)
       throw codedError(
@@ -265,6 +266,39 @@ async function foldPlatformFacts(
   );
 }
 
+/** A person who left an organization lends nothing to a project they no longer reach: each such
+ *  lend of theirs ends (`secret/lend-revoked { reason: "membership-ended" }` on both sides). Their
+ *  reach is read fresh, past the edge's memo, since it just changed. A use the sweep has not reached
+ *  yet is refused at the lender all the same (secret/durable-object.ts `admitLend`). */
+async function endLendsOutOfReach(
+  input: Pick<SessionInput, "contextNamespace" | "controlPlane">,
+  userId: string,
+): Promise<void> {
+  const account = ownerContext(input.contextNamespace, { account: userId });
+  // The platform's own read of the account facet: its contract's state.
+  const { state } = (await account.invoke(
+    ["itx", "builtins", "facets", ["get", "account"], ["snapshot"]],
+    [],
+    { principal: null },
+  )) as { state: AccountState };
+  const reached = new Set(
+    (await input.controlPlane.accessibleTo(userId, true)).projects.map((project) => project.id),
+  );
+  for (const [path, row] of Object.entries(state.secrets))
+    for (const [lendId, lend] of Object.entries(row.lends || {}))
+      if (!reached.has(lend.to))
+        await account.invoke(
+          [
+            "itx",
+            "builtins",
+            "secrets",
+            ["revokeLend", path, lendId, { reason: "membership-ended" }],
+          ],
+          [],
+          { principal: null, platform: true },
+        );
+}
+
 /** A project creation that answers this late logs where it waited (`session.project-create-slow`).
  *  p50 1.9 s, p99 5.5 s with 1, 10 and 25 people creating at once (os-latency, 2026-09-24). */
 const SLOW_CREATE_MS = 5_000;
@@ -377,6 +411,28 @@ async function landProjectOnOrganization(
     await waits.time("organizationFold", () =>
       foldPlatformFacts(input, [[{ organization: project.orgId }, onOrganization]], caller),
     );
+}
+
+/** THE DEPLOYMENT'S LENDS TO EVERY PROJECT, borrowed by a project just created (context/built-ins.ts
+ *  `borrowEveryProjectLends`, on the global root), before the answer: the project's first
+ *  `getSecret` of a lent path finds it. Never fails the creation: a borrow that fails is reported
+ *  there, and the project lacks that path until the same creation runs again. */
+async function borrowEveryProjectLends(
+  input: Pick<SessionInput, "contextNamespace">,
+  projectId: string,
+  caller: Caller,
+): Promise<void> {
+  const root = input.contextNamespace.getByName(
+    DurableObjectNameCodec.stringify({ projectId: GLOBAL_PROJECT_ID, path: "/" }),
+  );
+  try {
+    await root.invoke(["itx", "builtins", "secrets", ["borrowEveryProjectLends", projectId]], [], {
+      ...caller,
+      platform: true,
+    });
+  } catch (error) {
+    reportIssue("session.every-project-lends", error, { projectId });
+  }
 }
 
 /** `appendPlatformFacts` best-effort and ASYNC (waitUntil), off the verb's own path: the account's
@@ -554,6 +610,11 @@ export class SessionRpcTarget extends RpcTarget {
       platformOrigin: this.#input.platformOrigin,
       ingressRouting: this.#input.appConfig.urls.ingressRouting,
       mcpOrigin: this.#input.appConfig.urls.mcp,
+      iterateAppProviders: IntegrationProvider.options.filter(
+        // Waitrose connects with a username and password: there is no app of iterate's
+        (provider): provider is Exclude<IntegrationProvider, "waitrose"> =>
+          provider !== "waitrose" && !!this.#input.appConfig.integrations[provider],
+      ),
     };
   }
 
@@ -622,15 +683,19 @@ export class SessionRpcTarget extends RpcTarget {
     return this.#users;
   }
 
-  /** THE GLOBAL NAMESPACE'S ROOT `/`, for a platform admin: a context is (namespace, path), the
+  /** THE GLOBAL NAMESPACE'S ROOT `/`, for the operator: a context is (namespace, path), the
    *  namespace a project or the global one, and this handle's `cd` walks the global namespace as a
    *  project's walks its project — `global.cd("/users/<id>")`, `/organizations/<id>…`
-   *  (iterate-context.ts). For a person holding the `admin` scope (reach `every` only while
-   *  `admins` lists them, oauth.ts) alone: not the operator bearer, which names no person, and not
-   *  anyone else, whose global contexts stay reached by identity (`user`, `organizations.get`). */
+   *  (iterate-context.ts) — and its `secrets` are the deployment's own, lent to projects
+   *  (context/built-ins.ts `lend`). For a person holding the `admin` scope (reach `every` only
+   *  while `admins` lists them, oauth.ts), and for the operator bearer itself (actor `admin`, no
+   *  person: a script such as scripts/seed-instance-secrets.ts); not for anyone else, whose global
+   *  contexts stay reached by identity (`user`, `organizations.get`). */
   get global(): IterateContextRpcTarget {
     const { principal, reach, scopes } = this.#authority;
-    if (reach !== "every" || !principal.email || !scopes?.includes("admin"))
+    const operatorBearer = principal.actor === "admin" && !principal.email;
+    const platformAdmin = Boolean(principal.email) && scopes?.includes("admin");
+    if (reach !== "every" || !(operatorBearer || platformAdmin))
       throw codedError("FORBIDDEN", "Only a platform admin opens the global namespace.");
     return this.#globalContext("/", true);
   }
@@ -878,6 +943,7 @@ class OrganizationCollectionRpcTarget extends RpcTarget {
       ],
       caller,
     );
+    await endLendsOutOfReach(sessionInput, userId);
   }
 
   /** A new INVITATION LINK to an organization the caller owns: whoever signs in and accepts it
@@ -1088,6 +1154,9 @@ class ProjectCollectionRpcTarget extends RpcTarget {
       // The organization's record, before the answer: the dash lists the project as soon as it has
       // it. The member's account is not waited on.
       await landProjectOnOrganization(sessionInput, created, caller, waits);
+      await waits.time("everyProjectLends", () =>
+        borrowEveryProjectLends(sessionInput, created.id, caller),
+      );
       return context;
     } finally {
       waits.report({ projectId: project?.id, orgId: project?.orgId });
@@ -1099,8 +1168,9 @@ class ProjectCollectionRpcTarget extends RpcTarget {
    *  reach (`reachableProjectId`), and the id alone goes on: the DO name's host, a grant's list,
    *  `whoami()`. A project only — a context name belongs to `cd`. Outside this session's reach is
    *  FORBIDDEN; so is the global namespace's id (it is no project: a platform admin reaches it as
-   *  `session.global`). The admin secret alone addresses a project the catalog never heard of, by
-   *  id (a fresh context of its own). */
+   *  `session.global`). The admin secret alone addresses a project the catalog never heard of — by
+   *  a `prj_…` id only (a fresh context of its own: the e2e suite's contexts); a slug the catalog
+   *  does not hold is refused for every caller (control-plane/edge.ts `projectIdOf`). */
   async get(project: string): Promise<IterateContextRpcTarget> {
     const address = DurableObjectNameCodec.parse(project);
     if (address.path !== "/")
@@ -1303,10 +1373,6 @@ export class SessionTeardown {
     this.#undoByKey.clear();
   }
 }
-
-// THE PUBLISHED API IS DECLARED, NOT GENERATED (iterate/api): this root satisfies it, checked here.
-const _iterateApi: IterateApi = null as unknown as IterateRpcTarget;
-void _iterateApi;
 
 /** An invitation link's secret: 32 random bytes, base64url — the one path segment of
  *  `/invitations/<token>`, unguessable. The control plane keeps only its `sha256Hex` (`token_hash`),

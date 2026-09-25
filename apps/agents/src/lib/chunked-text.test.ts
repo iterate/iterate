@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { appendText, ChunkedText, sliceText, takeText } from "./chunked-text.ts";
+import { appendText, ChunkedText, sliceText } from "./chunked-text.ts";
 
 test("appends preserve sealed groups and round-trip through JSON", () => {
   const first = appendText("", "a".repeat(32 * 1024));
@@ -32,18 +32,6 @@ test.for([
   const blocks = Object.values(text.groups).flatMap((group) => Object.values(group));
   expect(blocks.some((block) => /[\uD800-\uDBFF]$/.test(block))).toBe(false);
 });
-
-test.for([0, 1, 1023, 1024, 1025, 32768, 32769, 65536])(
-  "takes a prefix without cutting a surrogate pair: %i",
-  (limit) => {
-    const source = "a".repeat(1023) + "😀" + "b".repeat(65536);
-    const text = appendText("", source);
-    const bounded = takeText(text, limit);
-    expect(sliceText(bounded)).toBe(source.slice(0, limit).replace(/[\uD800-\uDBFF]$/, ""));
-    expect(ChunkedText.safeParse(bounded)).toMatchObject({ success: true });
-    expect(text.length).toBe(source.length);
-  },
-);
 
 test("rejects impossible metadata without traversing the claimed block count", () => {
   expect(

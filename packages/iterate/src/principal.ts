@@ -4,9 +4,9 @@
 // carries a caller, and signs its own tokens, stays in the platform.
 
 /** Who is acting: a stable actor id (the control plane's user id) and, when known, an email. A
- *  platform admin viewing an app as someone else is two people (RFC 8693's subject and actor): the
- *  principal is the person viewed, whose access every check reads, and `impersonatedBy` the admin
- *  doing it, stamped beside them on every event. */
+ *  platform admin signed in as someone else is two people (RFC 8693's subject and actor): the
+ *  principal is the person, whose access every check reads, and `impersonatedBy` the admin doing
+ *  it, stamped beside them on every event. */
 export type Principal = {
   actor: string;
   email?: string;

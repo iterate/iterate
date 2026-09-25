@@ -19,6 +19,7 @@ import type { OrganizationRole } from "../organization/contract.ts";
 import {
   type AccessibleRecord,
   ControlPlaneDatabase,
+  type IntegrationRouteRecord,
   type OrganizationRecord,
   type ProjectRecord,
   type UserRecord,
@@ -285,6 +286,12 @@ export class ControlPlane {
     return custom;
   }
 
+  /** The connection a provider account's webhooks go to (catalog.ts `routeIntegration`). Never
+   *  memoized: a route released and taken by another project routes there on the next delivery. */
+  integrationRouteOf(provider: string, externalId: string): Promise<IntegrationRouteRecord | null> {
+    return this.#read("integrationRoute", () => this.#db.integrationRoute(provider, externalId));
+  }
+
   /** A project's primary hostname (project/contract.ts `primaryHostname`), or null — memoized
    *  thirty seconds per isolate, hit or miss, so a change reaches the edge's redirect and
    *  `itx.url` within that. */
@@ -299,11 +306,13 @@ export class ControlPlane {
   }
 
   /** The id a ref names: an id is self-evident (`prj_…` — a slug never holds an underscore), a
-   *  slug resolves through the catalog, and a slug nobody holds passes through for the reach check
-   *  to refuse. */
-  async projectIdOf(ref: string): Promise<string> {
+   *  slug resolves through the catalog, and a slug nobody holds names nothing (null) — for every
+   *  reach, the operator's included: passed through as an id, it once minted contexts named by
+   *  the slug (prd, 2026-09-25: `templestein.iterate/` while the D1 catalog was being filled, and
+   *  `lupa-s-organization.iterate/repos/config` after that project's deletion). */
+  async projectIdOf(ref: string): Promise<string | null> {
     if (ref.startsWith("prj_")) return ref;
-    return (await this.getProject(ref))?.id ?? ref;
+    return (await this.getProject(ref))?.id ?? null;
   }
 
   /** What a person can access — memoized; `fresh` bypasses the memo (the re-read before a refusal). */
@@ -322,11 +331,12 @@ export class ControlPlane {
 
   /** Whether `reach` reaches `ref` — the admission behind `projects.get` (session.ts), a `/mcp`
    *  tool's `project` and a project host's visitor (worker.ts). The admin reaches a project the
-   *  catalog never heard of; a named reach is its list; a user's is their memberships — re-read
+   *  catalog never heard of by its `prj_…` id, never by a slug nobody holds; a named reach is its list; a user's is their memberships — re-read
    *  once before a refusal. */
   async reachesProject(reach: Reach, ref: string): Promise<boolean> {
-    if (reach === "every") return true;
     const id = await this.projectIdOf(ref);
+    if (!id) return false;
+    if (reach === "every") return true;
     if (reach.projectIds && !reach.projectIds.includes(id)) return false;
     if (!("userId" in reach)) return true;
     const reaches = (record: AccessibleRecord) =>
@@ -346,7 +356,7 @@ export class ControlPlane {
   async reachableProjectId(reach: Reach, ref: string): Promise<string | null> {
     if (reach === "every" || !("userId" in reach)) {
       const id = await this.projectIdOf(ref);
-      return (await this.reachesProject(reach, id)) ? id : null;
+      return id && (await this.reachesProject(reach, id)) ? id : null;
     }
     const named = (record: AccessibleRecord) =>
       record.projects.find((project) => project.id === ref || project.slug === ref);
@@ -548,6 +558,24 @@ export class ControlPlane {
   /** Another project's claim, or none, is left alone. */
   releaseHostname(projectId: string, hostname: string): Promise<void> {
     return this.#call("releaseHostname", () => this.#db.releaseHostname(projectId, hostname));
+  }
+  /** Route a provider account's webhooks to one connection (catalog.ts `routeIntegration`): first
+   *  owner wins, a connection holds one account. */
+  routeIntegration(
+    provider: string,
+    externalId: string,
+    projectId: string,
+    path: string,
+  ): Promise<void> {
+    return this.#call("routeIntegration", () =>
+      this.#db.routeIntegration(provider, externalId, projectId, path),
+    );
+  }
+  /** Release every route of the connection at `path`; another connection's are left alone. */
+  releaseIntegrationRoutes(projectId: string, path: string): Promise<void> {
+    return this.#call("releaseIntegrationRoutes", () =>
+      this.#db.releaseIntegrationRoutes(projectId, path),
+    );
   }
   /** Set a project's primary hostname (project/processor.ts publishes it), or clear it with null:
    *  the edge's redirect and `itx.url` read it within `primaryHostnameOf`'s thirty seconds. */

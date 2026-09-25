@@ -176,8 +176,12 @@ class SubscriptionHandleRpcTarget extends RpcTarget {
  *  `facets`, `workers`, …) is a member of this class's TYPE by declaration merging — zero runtime; the
  *  prototype fallback at the bottom of this file is the runtime. So a reader of this file sees the
  *  whole surface, and `withItx(env.ITX, (itx) => itx.append(…))` typechecks in loaded code. `cd` is
- *  the edge's own (below) — it returns an EDGE context, not the built-in's handle. */
-export interface IterateContextRpcTarget extends Omit<BuiltInScope, "cd"> {}
+ *  the edge's own (below) — it returns an EDGE context, not the built-in's handle — and `facets` is
+ *  the published one, whose `get<Facet>` lets a caller type the facet it names (the record's own
+ *  `get` answers the physical host's brand, which a caller never sees). */
+export interface IterateContextRpcTarget extends Omit<BuiltInScope, "cd" | "facets"> {
+  facets: IterateContextApi["facets"];
+}
 
 /** The iterate context (`itx`) at one `{ projectId, path }`, as a client holds it. */
 export class IterateContextRpcTarget extends RpcTarget {
@@ -261,8 +265,9 @@ export class IterateContextRpcTarget extends RpcTarget {
    *  the global namespace. THE GLOBAL NAMESPACE IS NOT NAVIGABLE: a global context is reached by
    *  IDENTITY only (`session.user`, `session.organizations.get`), so its `cd` is refused — and the
    *  DO's built-in `cd` refuses it too. This is the whole path mask: with no way to name another
-   *  user's path, there is no policy to get wrong. The one exception is a platform admin's handle
-   *  (`#globalPaths`), which walks `/`, `/users/<id>…` and `/organizations/<id>…`. */
+   *  user's path, there is no policy to get wrong. The one exception is the operator's handle
+   *  (`#globalPaths`), which walks `/`, `/users/<id>…`, `/organizations/<id>…` and the deployment's
+   *  own secrets, `/secrets/<name>`. */
   cd(path: string): IterateContextRpcTarget {
     if (this.#durableObjectAddress.projectId === GLOBAL_PROJECT_ID) {
       if (!this.#globalPaths)
@@ -271,10 +276,10 @@ export class IterateContextRpcTarget extends RpcTarget {
           "a global context is reached by identity (session.user, session.organizations), never by path",
         );
       const resolved = resolveContextPath(this.#durableObjectAddress.path, path);
-      if (!/^\/(?:(?:users|organizations)(?:\/.*)?)?$/.test(resolved))
+      if (!/^\/(?:(?:users|organizations|secrets)(?:\/.*)?)?$/.test(resolved))
         throw codedError(
           "INVALID_INPUT",
-          `cd(${JSON.stringify(path)}): a global context is /, /users… or /organizations…`,
+          `cd(${JSON.stringify(path)}): a global context is /, /users…, /organizations… or /secrets…`,
         );
     }
     // LOADED CODE's `cd` is an expression through THIS context's table (`itx.cd ⇒ null` is a wall,
@@ -673,9 +678,15 @@ export function itxEntrypointFor(
   return exports.ItxEntrypoint({ props: { iterateContextName, platformOrigin } });
 }
 
-// THE PUBLISHED API IS DECLARED, NOT GENERATED (iterate/api): a context satisfies it, checked here.
-const _iterateContextApi: IterateContextApi = null as unknown as IterateContextRpcTarget;
-void _iterateContextApi;
+/** THE PUBLISHED API IS DECLARED, NOT GENERATED (iterate/api): an edge context IS one — its own
+ *  verbs and every root merged in above — or this fails to typecheck, naming the root or verb that
+ *  is missing or mistyped. Not `implements`: the class's own verbs take richer arguments than the
+ *  published ones (`provide`'s and `subscribe`'s lent stubs, which the published API types
+ *  `unknown`), and an `implements` class spells the contract's (lint: iterate/mechanical-class-impl). */
+function publishedContextApiOf(context: IterateContextRpcTarget): IterateContextApi {
+  return context;
+}
+void publishedContextApiOf;
 
 /** The `itx/fetch-route-configured` a `provide(match, stub, { fetchRoute })` rides its pager with,
  *  its target the stub's match — refused here, before anything is lent, as `itx.fetchRoutes.set`

@@ -56,6 +56,7 @@ import {
   type ItxExpressionPrefix,
 } from "iterate/expression";
 import type { Caller } from "../caller.ts";
+import { ScheduledAppendInput } from "../stream/scheduled-appends.ts";
 import { callOn, walkSteps, awaitAnswerReleasedIfRejected } from "./dispatch.ts";
 import { GLOBAL_PROJECT_ID } from "./paths.ts";
 
@@ -71,7 +72,9 @@ export const BUILT_IN_ROOT_DESCRIPTIONS = {
   url: "this project's public URL over HTTP — the apex or a routing slug's host, at a path: `url({ routingSlug?, path? })`; only from a session that reached the platform on an origin",
   kv: "key-value strings, the project's own: `kv.get(k)` · `kv.put(k, v)` · `kv.list(prefix)` · `kv.delete(k)`",
   secrets:
-    'names only, never values: `secrets.list()`; `secrets.collectFromUser({ path, egress, description? })` returns an authenticated collection link; a `getSecret("/secrets/x")` placeholder in an outbound request is substituted at egress; `secrets.verifyHmac(path, { payload, signature })` checks a webhook\'s HMAC-SHA256 hex signature without revealing the secret',
+    "names only, never values: `secrets.list()`; `secrets.collectFromUser({ path, egress, description? })` returns an authenticated collection link; a `getSecret(\"/secrets/x\")` placeholder in an outbound request is substituted at egress; `secrets.verifyHmac(path, { payload, signature })` checks a webhook's HMAC-SHA256 hex signature without revealing the secret; on a person's own context `secrets.lend(path, { to, as })` lends one to a project (`revokeLend(path, lendId)` ends it)",
+  integrations:
+    "connect a provider through this deployment's app: `integrations.connect(provider, { scopes? })` → { authorizationUrl, connection } (send the human there); `integrations.requestFromUser(provider, { scopes, lendTo? })` → a Dash link asking the signed-in person to connect",
   fetchRoutes:
     "which itx expression a request on this project's hosts goes to: `fetchRoutes.set(name, { requestMatcher: { routingSlug?, url?, headers? }, target, authRequirement?, priority? } | null)` · `list()` · `match({ url, headers })`; the config worker forwards a match to `route.target`",
   ai: "Workers AI, verbatim: `ai.run(model, inputs)`",
@@ -522,14 +525,50 @@ function admitLoadedCodeExpression(expression: ItxExpression, base: string): voi
  *  would re-parent it past its creator's masks, and a subscription target runs as the kernel. The one
  *  fixed-point target it may write is its OWN lend, `itx.builtins.rpcStubs.get(<key>)`: the registry is
  *  this context's, so the row grants nothing the code does not already hold. A `null` (a mask, an
- *  un-set) says nothing and passes. Any other event passes untouched. */
+ *  un-set) says nothing and passes. Nothing gets round the wall:
+ *    • a REMOVAL (`ifTarget`, the reduce's compare-and-set delete) is refused: it hands the name
+ *      back to what lies beneath, the parent link, so deleting a mask would widen the context to its
+ *      creator's reach. A plain `null` stays a mask wherever something beneath would answer. Loaded
+ *      code never needs one: `provide` lends it live stubs only, whose rows the DO removes when the
+ *      last pager closes;
+ *    • a SCHEDULED batch (`schedule-set`) is walled event by event as it is scheduled: the alarm
+ *      appends it later as the kernel;
+ *    • a FETCH ROUTE is set only from the project's root: the config worker serves routes at `/`,
+ *      so a route set from below would publish the root's reach on the project's hosts. `match`
+ *      and `list` only read, and answer from below.
+ *  A NAME MASK IS NOT A JAIL: the parent link still forwards every other name (kv, secrets, repos,
+ *  fetch routes), so only a bare `itx ⇒ null` plus the rows granted after it confines a context.
+ *  Any other event passes untouched. */
 export function admitLoadedCodeRow(event: { type: string; payload?: unknown }, base: string): void {
+  if (event.type === "events.iterate.com/itx/schedule-set") {
+    for (const scheduled of ScheduledAppendInput.parse(event.payload).events)
+      admitLoadedCodeRow(scheduled, base);
+    return;
+  }
+  if (event.type === "events.iterate.com/itx/fetch-route-configured") {
+    if (base !== "/")
+      throw codedError(
+        "FORBIDDEN",
+        `a project's fetch routes are set only from the project's root: the config worker serves them at "/", and ${JSON.stringify(base)} is below it`,
+      );
+    return;
+  }
   if (
     event.type !== "events.iterate.com/itx/rewrite-rule-configured" &&
     event.type !== "events.iterate.com/itx/subscription-configured"
   )
     return;
-  const target = (event.payload as { target?: unknown } | undefined)?.target;
+  const payload = event.payload as { target?: unknown } | undefined;
+  if (
+    event.type === "events.iterate.com/itx/rewrite-rule-configured" &&
+    payload &&
+    Object.hasOwn(payload, "ifTarget")
+  )
+    throw codedError(
+      "FORBIDDEN",
+      "loaded code removes no row (`ifTarget`): the name would answer from beneath it again — write `target: null` to mask it",
+    );
+  const target = payload?.target;
   if (!target) return; // a mask, an un-set (an empty string is the reduce's refusal, not this wall's)
   if (typeof target !== "string" && !Array.isArray(target)) return; // a live object: the lend's own business
   const expression = normalizedItxExpression(target as ItxExpressionInput, { holes: true });
@@ -543,8 +582,8 @@ export function admitLoadedCodeRow(event: { type: string; payload?: unknown }, b
  *  hop is a fresh resolve — so the append boundary refuses it against the path the row lands on
  *  (core-processor.ts `normalizeControlEvent`), whichever caller appends: `provide`, a script's
  *  `itx.append`, a sibling's `cd(path).append`, a schedule's batch, a pager attach. Two contexts
- *  pointing at each other is refused only where it would be created (library.ts `entityRoot`: a
- *  context does not create its own ancestor); rows written by hand can still spell it, a
+ *  pointing at each other is never created (library.ts `entityRoot`: a context creates only
+ *  beneath itself, so the link it writes points up); rows written by hand can still spell it, a
  *  trusted-client misconfiguration. Runs on the normalized row: the match and target parsed once. */
 export function refuseSelfLoopRow(
   row: { match: ItxExpression; target: ItxExpression | null },

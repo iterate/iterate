@@ -9,10 +9,16 @@
 //
 //   {
 //     urls: { os, mcp, dash, ingressRouting: { type, hostname }, projectWildcard: { hostname, project, excludedHostnames } },
-//     login: { allowedEmails, password, emailCode: { from }, google: { clientId, clientSecret }, cloudflare: { clientId, clientSecret }, testLink: { emailDomain, admins: { issuer, emails } } },
+//     login: { allowedEmails, password, emailCode: { from }, google: { scopes }, cloudflare: { scopes }, github: {}, testLink: { emailDomain, admins: { issuer, emails } } },
 //     admins,
 //     customHostnames: { zone, zoneId, dcvDelegationUuid, reservedZones }, cloudflareApiToken,
 //     posthogProjectKey,
+//     integrations: {
+//       slack: { oauthClientId, oauthClientSecret, webhookSigningSecret, scopes, slackOrigin },
+//       google: { oauthClientId, oauthClientSecret, scopes, googleOrigin },
+//       cloudflare: { oauthClientId, oauthClientSecret, scopes, cloudflareOrigin },
+//       github: { appId, appSlug, oauthClientId, oauthClientSecret, privateKey, webhookSecret, githubOrigin },
+//     },
 //     secrets: { key, previousKey, adminBearer },
 //   }
 //
@@ -92,6 +98,64 @@ const emailPatterns = (empty: string) =>
       .min(1, empty),
   );
 
+/** The bot scopes a Slack connection asks for unless told otherwise — the legacy platform's list, so
+ *  iterate's Slack app keeps asking for what its console was set up with. */
+export const DEFAULT_SLACK_BOT_SCOPES = [
+  "channels:history",
+  "channels:join",
+  "channels:manage",
+  "channels:read",
+  "chat:write",
+  "chat:write.public",
+  "files:read",
+  "files:write",
+  "groups:history",
+  "groups:read",
+  "im:history",
+  "im:read",
+  "im:write",
+  "mpim:history",
+  "mpim:read",
+  "reactions:read",
+  "reactions:write",
+  "users.profile:read",
+  "users:read",
+  "users:read.email",
+  "assistant:write",
+  "conversations.connect:write",
+] as const;
+
+/** The scopes a Google connection asks for unless told otherwise — the legacy platform's list, so
+ *  iterate's Google client keeps asking for what its consent screen was verified for. */
+export const DEFAULT_GOOGLE_SCOPES = [
+  "openid",
+  "https://www.googleapis.com/auth/userinfo.email",
+  "https://www.googleapis.com/auth/userinfo.profile",
+  "https://www.googleapis.com/auth/gmail.modify",
+  "https://www.googleapis.com/auth/gmail.send",
+  "https://www.googleapis.com/auth/gmail.labels",
+  "https://www.googleapis.com/auth/calendar",
+  "https://www.googleapis.com/auth/documents",
+  "https://www.googleapis.com/auth/drive",
+] as const;
+
+/** What signing in with Google asks for unless told otherwise: the identity, and the Gmail,
+ *  Calendar, Docs and Drive scopes a connection asks for, so a sign-in keeps a token agents can use. */
+export const DEFAULT_GOOGLE_SIGN_IN_SCOPES = [
+  "openid",
+  "email",
+  "profile",
+  ...DEFAULT_GOOGLE_SCOPES.filter(
+    (scope) => scope !== "openid" && !scope.startsWith("https://www.googleapis.com/auth/userinfo."),
+  ),
+];
+
+/** What signing in with Cloudflare, or connecting it, asks for unless told otherwise: the identity
+ *  alone (Cloudflare returns email and email_verified with these, and rejects email/profile). A
+ *  deployment whose client is registered for more (`offline_access` for a refresh token, the
+ *  Workers deploy scopes) names them. */
+export const DEFAULT_CLOUDFLARE_SCOPES = ["openid", "user-details.read"];
+
 /** THE `APP_CONFIG` SCHEMA — PER-FIELD validation only; the cross-field rules (a distinct MCP origin,
  *  the ingress routing's hostname, at least one sign-in mechanism) live in `parseAppConfig`, because
  *  `warnUnknownKeys` needs plain object schemas to check keys against. Every object `prefault`s to
@@ -169,20 +233,20 @@ export const AppConfig = z.object({
       emailCode: z
         .object({ from: z.string({ error: REQUIRED }).trim().min(1, REQUIRED) })
         .optional(),
-      /** Google sign-in (identity.ts): the OAuth client, both halves. */
+      /** SIGN IN WITH A PROVIDER (identity.ts), each on iff its block is present AND the provider's
+       *  `integrations.<provider>` names the client: one OAuth client per provider serves signing in
+       *  and connecting, because a refresh token only works with the client that issued it. A
+       *  sign-in keeps its token as the person's own connection. `scopes` is what the sign-in asks
+       *  for (GitHub's are the App's permissions, so it has none). */
       google: z
         .object({
-          clientId: z.string({ error: REQUIRED }).trim().min(1, REQUIRED),
-          clientSecret: redacted(z.string({ error: REQUIRED }).trim().min(1, REQUIRED)),
+          scopes: z.array(z.string().trim().min(1)).default(DEFAULT_GOOGLE_SIGN_IN_SCOPES),
         })
         .optional(),
-      /** Cloudflare sign-in uses our own OAuth client, independently of deployment grants. */
       cloudflare: z
-        .object({
-          clientId: z.string({ error: REQUIRED }).trim().min(1, REQUIRED),
-          clientSecret: redacted(z.string({ error: REQUIRED }).trim().min(1, REQUIRED)),
-        })
+        .object({ scopes: z.array(z.string().trim().min(1)).default(DEFAULT_CLOUDFLARE_SCOPES) })
         .optional(),
+      github: z.object({}).optional(),
       /** A PREVIEW'S ONE-CLICK SIGN-IN (test-link.ts): `GET /.auth/test-link?t=` signs a browser in
        *  as the address a link signed with this deployment's key names, under `emailDomain`. Not a
        *  sign-in mechanism a person chooses, and refused (`parseAppConfig`) unless `urls.os` is a
@@ -211,9 +275,10 @@ export const AppConfig = z.object({
     .prefault({}),
   /** THE PLATFORM ADMINS: exact email addresses, never a pattern — `["jonas@iterate.com"]`, or the
    *  var `APP_CONFIG_ADMINS='["jonas@iterate.com"]'`. A person listed here may be granted the
-   *  `admin` scope at consent (every project and person, 12 hours) and may view an app as someone
-   *  else (consent.ts); every admission of such a grant reads the list again, so removing an
-   *  address ends its admin grants and impersonations at their next request (oauth.ts). Unset ⇒
+   *  `admin` scope at consent (every project and person, 12 hours) and may sign any client in as
+   *  someone else (consent.ts); every admission of such a grant reads the list again, so removing an
+   *  address ends its admin grants and impersonations at their next request (oauth.ts). Refused
+   *  beside `login.password` but on a preview or local dev (`parseAppConfig`). Unset ⇒
    *  nobody. The operator bearer is not a person and needs no entry. */
   admins: z
     .array(
@@ -224,6 +289,65 @@ export const AppConfig = z.object({
         .regex(/^[^@\s*]+@[^@\s*]+$/, "expected exact email addresses, no `*`"),
     )
     .default([]),
+  /** THE PLATFORM'S OWN APPS at third parties, which a project connects through instead of bringing
+   *  its own (`client: { platform: "<name>" }`, secret-oauth.ts). Each block optional: unset, no
+   *  project can connect through the platform's app there. */
+  integrations: z
+    .object({
+      /** iterate's Slack app (integrations/slack/): the OAuth client, the key Slack signs webhooks
+       *  with, the bot scopes asked for, and where Slack answers — `slackOrigin`, another origin only
+       *  for a fake (a preview's, scripts/preview-config.ts). The keys are the legacy platform's, so
+       *  its Doppler JSON is reused as it stands. */
+      slack: z
+        .object({
+          oauthClientId: z.string({ error: REQUIRED }).trim().min(1, REQUIRED),
+          oauthClientSecret: redacted(z.string({ error: REQUIRED }).trim().min(1, REQUIRED)),
+          webhookSigningSecret: redacted(z.string({ error: REQUIRED }).trim().min(1, REQUIRED)),
+          scopes: z.array(z.string().trim().min(1)).default([...DEFAULT_SLACK_BOT_SCOPES]),
+          slackOrigin: httpOrigin.default("https://slack.com"),
+        })
+        .optional(),
+      /** iterate's Google OAuth client (integrations/google/): the client and the scopes asked for.
+       *  `googleOrigin` is unset for Google itself; set, ONE origin serves every Google path — a
+       *  fake's (a preview's, scripts/preview-google-app.ts). The legacy platform's keys. */
+      google: z
+        .object({
+          oauthClientId: z.string({ error: REQUIRED }).trim().min(1, REQUIRED),
+          oauthClientSecret: redacted(z.string({ error: REQUIRED }).trim().min(1, REQUIRED)),
+          scopes: z.array(z.string().trim().min(1)).default([...DEFAULT_GOOGLE_SCOPES]),
+          googleOrigin: httpOrigin.optional(),
+        })
+        .optional(),
+      /** iterate's Cloudflare OAuth client (identity.ts signs in with it; integrations/cloudflare.ts
+       *  connects with it). `cloudflareOrigin` is unset for Cloudflare itself (dash.cloudflare.com
+       *  issues, api.cloudflare.com answers); set, a fake's origin serves both, its issuer at
+       *  `<origin>/cloudflare` (a preview's, scripts/preview-cloudflare-app.ts). */
+      cloudflare: z
+        .object({
+          oauthClientId: z.string({ error: REQUIRED }).trim().min(1, REQUIRED),
+          oauthClientSecret: redacted(z.string({ error: REQUIRED }).trim().min(1, REQUIRED)),
+          scopes: z.array(z.string().trim().min(1)).default(DEFAULT_CLOUDFLARE_SCOPES),
+          cloudflareOrigin: httpOrigin.optional(),
+        })
+        .optional(),
+      /** iterate's GitHub App (integrations/github/): its id and URL slug (public), the OAuth client
+       *  that proves a human can see an installation, the private key (PEM, PKCS#8 or GitHub's
+       *  PKCS#1) that signs App JWTs and the key GitHub signs webhooks with. `githubOrigin` is
+       *  `https://github.com` (its API `https://api.github.com`); another origin serves both — a
+       *  fake's. The legacy platform's keys. */
+      github: z
+        .object({
+          appId: z.string({ error: REQUIRED }).trim().min(1, REQUIRED),
+          appSlug: z.string({ error: REQUIRED }).trim().min(1, REQUIRED),
+          oauthClientId: z.string({ error: REQUIRED }).trim().min(1, REQUIRED),
+          oauthClientSecret: redacted(z.string({ error: REQUIRED }).trim().min(1, REQUIRED)),
+          privateKey: redacted(z.string({ error: REQUIRED }).trim().min(1, REQUIRED)),
+          webhookSecret: redacted(z.string({ error: REQUIRED }).trim().min(1, REQUIRED)),
+          githubOrigin: httpOrigin.default("https://github.com"),
+        })
+        .optional(),
+    })
+    .prefault({}),
   /** The deployment's own keys. */
   secrets: z
     .object({
@@ -297,11 +421,24 @@ export function parseAppConfig(env: object, deployId = "unversioned"): AppConfig
   // a laptop's.
   if (login.testLink && !isTestLinkOrigin(urls.os))
     throw new Error(
-      `${fieldNameOf(["login", "testLink"])}: only for a preview or local dev — urls.os must be a workers.dev or localhost origin, not ${JSON.stringify(urls.os)}`,
+      `${fieldNameOf(["login", "testLink"])}: only for a preview, local dev or a test — urls.os must be a workers.dev, localhost or .test origin, not ${JSON.stringify(urls.os)}`,
     );
-  // Off a laptop, a link alone signs nobody in: its redeemer proves at another issuer that they
+  // An admin reaches every project and signs any client in as anyone, so admins go only where
+  // nobody's real data lives beside what could act as one: the global password (anyone who knows it
+  // signs in as any email, a listed admin's too) or paths ingress (a project's own code runs on the
+  // issuer's origin, where the issuer's cookie and its consent page are).
+  const beside = login.password.exposeSecret()
+    ? "login.password"
+    : ingressRouting?.type === "paths"
+      ? "paths ingress routing"
+      : null;
+  if (parsed.admins.length && beside && !isTestLinkOrigin(urls.os))
+    throw new Error(
+      `${fieldNameOf(["admins"])}: not with ${beside} except for a preview, local dev or a test (urls.os a workers.dev, localhost or .test origin), not ${JSON.stringify(urls.os)}`,
+    );
+  // Off a laptop (or a `.test` origin, never public), a link alone signs nobody in: its redeemer proves at another issuer that they
   // are one of `admins.emails` (test-link.ts). A preview's origin is public, and so is its PR body.
-  if (login.testLink && !login.testLink.admins && !isLocalhostOrigin(urls.os))
+  if (login.testLink && !login.testLink.admins && !isLocalOrTestOrigin(urls.os))
     throw new Error(
       `${fieldNameOf(["login", "testLink", "admins"])}: required off localhost — a preview's links are public, so who redeems one must prove who they are at another issuer`,
     );
@@ -309,28 +446,50 @@ export function parseAppConfig(env: object, deployId = "unversioned"): AppConfig
     throw new Error(
       `${fieldNameOf(["login", "testLink", "admins"])}: only on an https urls.os — the issuer reads this deployment's client metadata document there`,
     );
-  if (!login.password.exposeSecret() && !login.emailCode && !login.google && !login.cloudflare)
+  // A provider's sign-in without its client is off, loudly: the rest of the deployment still runs.
+  const signIn = { ...login };
+  for (const provider of ["google", "cloudflare", "github"] as const)
+    if (signIn[provider] && !parsed.integrations[provider]) {
+      console.warn(
+        `${fieldNameOf(["login", provider])}: off — it signs in with integrations.${provider}'s client, which is unset`,
+      );
+      signIn[provider] = undefined;
+    }
+  if (
+    !signIn.password.exposeSecret() &&
+    !signIn.emailCode &&
+    !signIn.google &&
+    !signIn.cloudflare &&
+    !signIn.github
+  )
     throw new Error(
-      `${fieldNameOf(["login"])}: no sign-in mechanism — set login.password, login.emailCode, login.google or login.cloudflare`,
+      `${fieldNameOf(["login"])}: no sign-in mechanism — set login.password, login.emailCode, or login.google, login.cloudflare or login.github with its integrations client`,
     );
   return {
     ...parsed,
+    login: signIn,
     urls: { ...urls, ingressRouting },
     deployId,
   };
 }
 
-/** An origin test links may be honoured on (`login.testLink`): an https workers.dev one (a per-PR
- *  preview's) or localhost's. A blank `urls.os` is neither: it must be named. */
+/** An origin test links (`login.testLink`), and `admins` beside the global password, may be
+ *  honoured on: an https workers.dev one (a per-PR
+ *  preview's), localhost's, or one under `.test` (RFC 2606: never a public name — the workers
+ *  suite's). A blank `urls.os` is none of them: it must be named. */
 function isTestLinkOrigin(origin: string) {
   if (!origin) return false;
   const { protocol, hostname } = new URL(origin);
-  return (protocol === "https:" && hostname.endsWith(".workers.dev")) || isLocalhostOrigin(origin);
+  return (
+    (protocol === "https:" && hostname.endsWith(".workers.dev")) || isLocalOrTestOrigin(origin)
+  );
 }
 
-/** A laptop's origin: localhost's or 127.0.0.1's. */
-function isLocalhostOrigin(origin: string) {
-  return ["localhost", "127.0.0.1"].includes(new URL(origin).hostname);
+/** A laptop's origin (localhost's or 127.0.0.1's) or one under `.test` (RFC 2606: never a public
+ *  name — the workers suite's). */
+function isLocalOrTestOrigin(origin: string) {
+  const { hostname } = new URL(origin);
+  return ["localhost", "127.0.0.1"].includes(hostname) || hostname.endsWith(".test");
 }
 
 const appConfigByEnv = new WeakMap<object, AppConfig>();

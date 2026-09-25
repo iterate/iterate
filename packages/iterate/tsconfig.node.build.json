@@ -1,0 +1,7 @@
+{
+  // The Node entries' declarations (tsdown.config.ts): tsconfig.node.json without the tests and the
+  // configs. tsdown emits them with TypeScript 7, which writes a declaration for a file outside the
+  // package next to that file's source, and vitest.config.ts imports @iterate-com/shared's source.
+  "extends": "./tsconfig.node.json",
+  "include": ["src/node.ts", "src/stream/test-support.ts"]
+}

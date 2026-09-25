@@ -36,7 +36,7 @@ import {
   normalizedItxExpression,
 } from "iterate/expression";
 import { ITX_PRINCIPAL_HEADER, type Principal } from "iterate/principal";
-import type { RewriteRuleListEntry, StreamPage } from "iterate/api";
+import type { RewriteRuleListEntry, StreamPage, SubscriptionListEntry } from "iterate/api";
 import { ITERATE_ROUTING_SLUG_HEADER } from "iterate/project-ingress";
 import { RunRequested, type RunSettlement } from "iterate/stream/run";
 import {
@@ -69,9 +69,15 @@ import {
   CONTEXT_DESTROYED,
   DurableObjectNameCodec,
   GLOBAL_PROJECT_ID,
+  pathUnderOwner,
   resourceScope,
 } from "./context/paths.ts";
-import { secretPathsReferenced } from "./secrets.ts";
+import {
+  LEND_USE_HEADER,
+  LENT_AS_HEADER,
+  secretPathsReferenced,
+  verifyLendUse,
+} from "./secrets.ts";
 import { isDeployReset } from "./retryable-error.ts";
 import { appConfigOf, sessionSigningSecretOf, type AppConfigEnv } from "./app-config.ts";
 import {
@@ -84,7 +90,7 @@ import {
 } from "./context/itx-expression-rewriting.ts";
 import { signedFileUrl } from "./context/file-urls.ts";
 import { ControlPlane } from "./control-plane/edge.ts";
-import { buildBuiltIns, type SubscriptionListEntry } from "./context/built-ins.ts";
+import { buildBuiltIns } from "./context/built-ins.ts";
 import { FacetHost } from "./context/facet-host.ts";
 import { firstPartyFacetClassOf } from "./first-party-facets.ts";
 import type { ArtifactsNamespace } from "./context/cf-artifacts.ts";
@@ -150,6 +156,8 @@ export type AlarmTrace = {
   durableHead: number;
   /** On `alarm-fired`: how many schedules this pass will append. */
   dueSchedules?: number;
+  /** On `alarm-fired`: how many runs a processor requested this pass started. */
+  runs?: number;
   facetWorkInFlight: number;
   /** Names, at most 32. */
   liveFacets: string[];
@@ -569,26 +577,56 @@ export class IterateContextDurableObject extends DurableObject<Env> {
    *  incarnation left open is not here, and the wake record settles it `interrupted` (stream.ts) —
    *  a run is never re-run. */
   readonly #scriptRunsInFlight = new Set<number>();
+  /** Runs a PROCESSOR requested (`source.processor`, the engine's stamp), owed to the next alarm
+   *  pass, by the request's offset: the code, and when it was requested — the coordinator's
+   *  deadline, so re-deriving it writes nothing. In memory: a run a dead incarnation still owed is
+   *  open in `scriptRuns`, and the next wake record settles it `interrupted`, as it does a run cut
+   *  off mid-flight. */
+  readonly #runsOwedToTheAlarm = new Map<number, { code: string; requestedAt: number }>();
 
-  /** THE RUNNER, started at the commit of every `run-requested` — whoever appended it:
-   *  `itx.run` (library.ts: this request, then a wait for its settlement), a client's literal
-   *  append, the agent's loop, a schedule's occurrence. The request's OFFSET is the run's identity:
-   *  the settlement names it. Runs as the kernel: the loaded script's own `env.ITX` calls are
-   *  principal-less anyway (loaded code speaks for the project), and the request event carries who
-   *  asked. Not awaited — the settlement is the run's end, on the log, whether or not the requester
-   *  is still listening. */
+  /** THE RUNNER, for every `run-requested` committed — whoever appended it: `itx.run` (library.ts:
+   *  this request, then a wait for its settlement), a client's literal append, a schedule's
+   *  occurrence, the agent's loop. The request's OFFSET is the run's identity: the settlement names
+   *  it. A caller's request starts at its commit, as deep as the caller. A PROCESSOR's starts in
+   *  the next alarm pass (`#startRunsOwedToTheAlarm`), because an alarm is a fresh invocation.
+   *  Cloudflare refuses a call too many hops below the request it descends from ("Subrequest depth
+   *  limit exceeded"; not configurable — wrangler's `limits` are `cpu_ms` and `subrequests`, a
+   *  count), and a Durable Object's outgoing calls descend from one of its incoming requests
+   *  (workerd `IoContext::getCurrentIncomingRequest`). A loop of processor turns reaches this
+   *  context through ever deeper requests, so a run started at its commit ran out of hops: on a
+   *  preview (2026-09-25) an agent's script had 8 hops left at its first turn and 0 by its twelfth;
+   *  started from the alarm, 13 at every turn. */
   #startRequestedRuns(committedEvents: StreamEvent[]): void {
     for (const event of committedEvents) {
       if (event.type !== "events.iterate.com/itx/run-requested") continue;
       const { code } = event.payload as RunRequested; // parsed at the append boundary (normalizeControlEvent)
-      if (
-        this.#scriptRunsInFlight.has(event.offset) ||
-        !this.#stream.coreReducedState.scriptRuns[event.offset]
-      )
-        continue;
-      this.#scriptRunsInFlight.add(event.offset);
-      void this.#executeRun(event.offset, code);
+      if (event.source?.processor)
+        this.#runsOwedToTheAlarm.set(event.offset, { code, requestedAt: Date.now() });
+      else this.#startRun(event.offset, code);
     }
+  }
+
+  /** THE ALARM PASS'S FIRST JOB: every run a processor requested, started inside the alarm's own
+   *  invocation. Not awaited — the settlement is the run's end, as for any run. Answers how many. */
+  #startRunsOwedToTheAlarm(): number {
+    const owed = [...this.#runsOwedToTheAlarm];
+    this.#runsOwedToTheAlarm.clear();
+    return owed.filter(([offset, { code }]) => this.#startRun(offset, code)).length;
+  }
+
+  /** Runs as the kernel: the loaded script's own `env.ITX` calls are principal-less anyway (loaded
+   *  code speaks for the project), and the request event carries who asked. Not awaited — the
+   *  settlement is the run's end, on the log, whether or not the requester is still listening.
+   *  Answers whether it started: never a run already in flight or one already settled. */
+  #startRun(requestOffset: number, code: string): boolean {
+    if (
+      this.#scriptRunsInFlight.has(requestOffset) ||
+      !this.#stream.coreReducedState.scriptRuns[requestOffset]
+    )
+      return false;
+    this.#scriptRunsInFlight.add(requestOffset);
+    void this.#executeRun(requestOffset, code);
+    return true;
   }
 
   async #executeRun(requestOffset: number, code: string): Promise<void> {
@@ -603,20 +641,6 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     try {
       // Settled within RUN_DEADLINE_MS, its value released (library.ts `runSettlementOf`).
       const settlement = await runSettlementOf(this.#scriptExecution(code));
-      // An agent's turns nest in the call chain until the runtime refuses a hop (#3019). The failed
-      // settlement is on the log only, so this warn is how its rate shows in Workers Logs. A run
-      // redirected to another context settles, and warns, on both.
-      if (
-        settlement.status === "failed" &&
-        settlement.error.includes("Subrequest depth limit exceeded")
-      )
-        console.warn({
-          event: "iterate-context.run-subrequest-depth-exceeded",
-          namespace: "iterate-context",
-          message: "a script run failed: the runtime refused a hop past its subrequest depth limit",
-          name: this.#durableObjectAddress.name,
-          requestOffset,
-        });
       try {
         settle(settlement);
       } catch (error) {
@@ -677,8 +701,8 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   readonly #controlPlane = new ControlPlane(this.env);
 
   /** This context's project's slug; null for a global context (a user's, an organization's). A
-   *  project's slug never changes — catalog.ts inserts a project's row and nothing updates or
-   *  deletes one, and an erase empties the catalog with this storage — so the control plane's
+   *  project's slug never changes — catalog.ts inserts a project's row and nothing updates one,
+   *  and deleting the project or an erase destroys this storage with the row — so the control plane's
    *  answer is kept in this context's own storage: read once in its life, not once per isolate (a
    *  config worker asks `whoami` on every request). */
   async #projectSlug() {
@@ -702,11 +726,13 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       this.#controlPlane.primaryHostnameOf(this.#durableObjectAddress.projectId),
     projectId: this.#durableObjectAddress.projectId,
     path: this.#durableObjectAddress.path,
+    otherOwnerContext: (name) => this.env.ITERATE_CONTEXT.getByName(name),
     iterateContextName: this.#durableObjectAddress.name,
     env: this.env,
     deployId: this.#appConfig.deployId,
     ingressRouting: this.#appConfig.urls.ingressRouting,
     dashOrigin: this.#appConfig.urls.dash,
+    platformAdmins: () => this.#appConfig.admins,
     platformOrigin: () => this.#platformOrigin,
     signFileUrl: async (input) => {
       const platformOrigin = this.#platformOrigin;
@@ -855,8 +881,11 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     deadlines: () => [
       ...this.#durableAlarmDeadlines(),
       ...Object.values(this.#residency.deadlines()),
+      // The runs a processor requested: due since the earliest was requested.
+      ...[...this.#runsOwedToTheAlarm.values()].map(({ requestedAt }) => requestedAt),
     ],
-    held: () => this.#residency.holdsResident(),
+    // A run owed to the alarm holds the watch too: a held alarm would otherwise hold the run.
+    held: () => this.#residency.holdsResident() || this.#runsOwedToTheAlarm.size > 0,
     // The platform fault the watch works around (alarm-coordinator.ts): a re-arm is a warn the prd
     // fault alarm counts, and its telemetry pin (PINNED_WORKAROUNDS) waits out; a give-up is an
     // error — nothing here acts again for it.
@@ -886,7 +915,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   });
 
   /** The three sources a fresh incarnation derives again — schedules, cursor-row claims, facet
-   *  claims; the unclaimed-facet sweep is this incarnation's alone. */
+   *  claims; the unclaimed-facet sweep and the runs owed to the alarm are this incarnation's alone. */
   #durableAlarmDeadlines(): (number | null)[] {
     return [
       this.#stream.nextScheduledAppendAt(),
@@ -922,7 +951,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     facetHost: this.#facetHost,
     rpcStubs: this.#rpcStubs,
     library: this.#library,
-    scriptRunsInFlight: () => this.#scriptRunsInFlight.size,
+    scriptRunsInFlight: () => this.#scriptRunsInFlight.size + this.#runsOwedToTheAlarm.size,
     reconcileAlarm: () => this.#alarmCoordinator.reconcile(),
     inboundCallsHeldChanged: () => this.#alarmCoordinator.watch(),
   });
@@ -930,7 +959,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   #traceAlarm(
     reason: AlarmTrace["reason"],
     before: number | null,
-    extra: Pick<AlarmTrace, "error" | "dueSchedules"> = {},
+    extra: Pick<AlarmTrace, "error" | "dueSchedules" | "runs"> = {},
   ) {
     const delivery = this.#subscriptionDelivery.deadlines();
     const facets = this.#facetHost.snapshot();
@@ -1014,19 +1043,30 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     });
   }
 
-  /** THE ALARM PASS, three jobs in order, under the coordinator's hold (nothing re-arms until it
-   *  completes; a pass that dies is retried by the runtime): the due schedules, the stream-kept
-   *  cursors' owed deliveries, the due claims of hosted processors (each spent, then the facet's
-   *  `revive()` — a facet still busy claims again from there). Then the next deadline is derived
-   *  from what is left. The unclaimed-facet sweep is decided first in every pass; a wake with
-   *  nothing durable due is the sweep's alone and does nothing else. */
+  /** THE ALARM PASS, four jobs in order, under the coordinator's hold (nothing re-arms until it
+   *  completes; a pass that dies is retried by the runtime): the runs processors requested
+   *  (`#startRunsOwedToTheAlarm`), the due schedules, the stream-kept cursors' owed deliveries, the
+   *  due claims of hosted processors (each spent, then the facet's `revive()` — a facet still busy
+   *  claims again from there). Then the next deadline is derived from what is left. The
+   *  unclaimed-facet sweep is decided first in every pass; a wake with nothing owed is the sweep's
+   *  alone and does nothing else. */
   async alarm(): Promise<void> {
     const { armedAt: fired } = this.#alarmCoordinator.snapshot();
     // THE SWEEP'S OWN WAKE: no wake record, no trace, no delivery — in a fresh
     // incarnation (its armer was evicted, the normal end) nothing at all but re-deriving the alarm;
     // its birth already reset the unclaimed loaded facets.
     const wokeAt = Date.now();
-    if (!this.#durableAlarmDeadlines().some((at) => at !== null && at <= wokeAt)) {
+    // A run a dead incarnation left open, one it owed this very alarm included, is settled
+    // `interrupted` by this incarnation's wake record, so a wake that finds one takes the full pass,
+    // whose wake record that is. Once the wake is recorded, every open run is this incarnation's.
+    const wakeRecordSettlesARun =
+      !this.#stream.wakeRecorded() &&
+      Object.keys(this.#stream.coreReducedState.scriptRuns).length > 0;
+    if (
+      this.#runsOwedToTheAlarm.size === 0 &&
+      !wakeRecordSettlesARun &&
+      !this.#durableAlarmDeadlines().some((at) => at !== null && at <= wokeAt)
+    ) {
       await this.#alarmCoordinator.pass(async () => this.#residency.alarmPassStarted(wokeAt));
       return;
     }
@@ -1037,6 +1077,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         // that knows the reason. Its delivery (every "*" row's) runs and acks within this pass, so an
         // alarm wake that finds nothing else owed ends with no alarm and no alarm write at all.
         this.#stream.appendWakeRecord("alarm");
+        const runs = this.#startRunsOwedToTheAlarm();
         // Append each occurrence locally before awaiting subscriber RPC. A completion in the SAME
         // transaction removes the obligation, so eviction or duplicate alarm delivery cannot repeat it.
         const now = Date.now();
@@ -1048,7 +1089,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
               a.scheduledAtOffset - b.scheduledAtOffset,
           )
           .slice(0, 32);
-        this.#traceAlarm("alarm-fired", fired, { dueSchedules: due.length });
+        this.#traceAlarm("alarm-fired", fired, { dueSchedules: due.length, runs });
         for (const row of due) {
           if (this.#stream.coreReducedState.paused) break;
           if (
@@ -1215,6 +1256,21 @@ export class IterateContextDurableObject extends DurableObject<Env> {
 
   async #serveFetch(request: Request): Promise<Response> {
     this.#stream.appendWakeRecord("request");
+    // A BORROWED SECRET'S USE (secret/durable-object.ts `fetch`): the lend, signed by the
+    // borrower's facet; anything else carrying the header is refused, never served as egress.
+    const lendUse = request.headers.get(LEND_USE_HEADER);
+    if (lendUse) {
+      const lend = await verifyLendUse(
+        lendUse,
+        await sessionSigningSecretOf(this.#appConfig),
+        this.#durableObjectAddress.name,
+      );
+      if (!lend)
+        return new Response("itx.fetch: a lend use this lender cannot verify\n", { status: 502 });
+      const headers = new Headers(request.headers);
+      headers.delete(LEND_USE_HEADER);
+      return this.#lentFetch(new Request(request, { headers }), lend);
+    }
     // The handlers, in order — each answers or declines: the rpc-stub pager and the rpc-stub fetch
     // upgrade leg; AN ITX-EXPRESSION FETCH (`x-itx-expression` names an itx expression — JSON from a session's
     // terminal `fetch(request)`, "" from a project host (the project's ingress target) or dotted text
@@ -1391,6 +1447,8 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     stampCallerHeaders(headers, null);
     headers.delete(ITX_EXPRESSION_FETCH_HEADER);
     headers.delete(FETCH_UPGRADE_RESUMABLE_HEADER); // the edge's ask of a lent stub, never an origin's
+    // A lend's headers are platform-to-platform (secrets.ts `LEND_USE_HEADER`): never a caller's.
+    for (const name of [...headers.keys()]) if (name.startsWith("x-itx-lend")) headers.delete(name);
     const outbound = new Request(request, { headers });
     const paths = secretPathsReferenced(outbound);
     if (paths.length === 0) return fetch(outbound);
@@ -1412,6 +1470,51 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       ]) as Promise<Response>;
     // Another context's: its own `fetch` lands in ITS `#egress`, the branch above.
     return this.#sibling(secretPath).fetch(outbound);
+  }
+
+  /** A BORROWED SECRET'S USE, from the borrower's `secret` facet (secret/durable-object.ts `fetch`)
+   *  over this DO's `fetch` — a fetch channel, so an upgrade's 101 crosses it — with the lend signed
+   *  in `LEND_USE_HEADER` (secrets.ts), which only platform code holding the deployment's key can
+   *  mint and every egress strips: this context is the lender's secret, whose facet admits the lend
+   *  — live, lent to `borrower`, the lender still in that project — and dispatches the request
+   *  itself. A lend refused because its lender left the project ends here
+   *  (`secret/lend-revoked { reason: "membership-ended" }` on both sides); every refusal is a 502. */
+  async #lentFetch(
+    request: Request,
+    lend: { lendId: string; borrower: string },
+  ): Promise<Response> {
+    // The facet's own answers (secret/durable-object.ts `admitLend`).
+    const verdict = (await this.#facetHost.callFacetAsPlatform("secret", [["admitLend", lend]])) as
+      | { as: string }
+      | { refused: string; revoke?: "membership-ended" };
+    if ("refused" in verdict) {
+      if (verdict.revoke) {
+        const { projectId, path } = this.#durableObjectAddress;
+        await this.invoke(
+          [
+            "itx",
+            "builtins",
+            "secrets",
+            [
+              "revokeLend",
+              pathUnderOwner(resourceScope(projectId, path), path),
+              lend.lendId,
+              { reason: verdict.revoke },
+            ],
+          ],
+          [],
+          { principal: null, platform: true },
+        );
+      }
+      return new Response(`itx.fetch: ${verdict.refused}\n`, { status: 502 });
+    }
+    // The facet's fetch channel, the path it is lent as beside the request: only this DO sets it
+    // (every egress strips `x-itx-lend*` before a request reaches the facet).
+    const headers = new Headers(request.headers);
+    headers.set(LENT_AS_HEADER, JSON.stringify({ as: verdict.as, borrower: lend.borrower }));
+    return this.#facetHost.callFacetAsPlatform("secret", [
+      ["fetch", new Request(request, { headers })],
+    ]) as Promise<Response>;
   }
 
   webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): void {

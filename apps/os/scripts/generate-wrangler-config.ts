@@ -3,6 +3,9 @@ import JSON5 from "json5";
 import { osEnvs, PREVIEW_AND_DEV_ACCOUNT_ID, osEnv, type OsEnv } from "../../../envs.ts";
 import { OBSERVABILITY, registrableDomainOf } from "../../../scripts/lib/wrangler-config.ts";
 import { TEST_LINK_EMAIL_DOMAIN } from "../src/test-link.ts";
+import { PREVIEW_CLOUDFLARE_APP } from "./preview-cloudflare-app.ts";
+import { PREVIEW_GOOGLE_APP } from "./preview-google-app.ts";
+import { PREVIEW_SLACK_APP } from "./preview-slack-app.ts";
 
 /** The half of `APP_CONFIG` (src/app-config.ts) a deployment gets from envs.ts — its `urls`, the
  *  zones of its projects' custom hostnames (`customHostnames`), its `admins`, its PostHog key and a
@@ -25,6 +28,20 @@ function configVars(env: OsEnv) {
   }
   if (admins.length) vars.APP_CONFIG_ADMINS = JSON.stringify(admins);
   if (env.posthogProjectKey) vars.APP_CONFIG_POSTHOG_PROJECT_KEY = env.posthogProjectKey;
+  // THE PET SHOP'S FAKES as iterate's Slack app and Google and Cloudflare clients, and sign-in with
+  // Google, Cloudflare and GitHub through them, each keeping its token as the person's connection
+  // (a fake admits addresses under the test-link domain alone). The GitHub App carries a key, so
+  // scripts/deploy.ts ships it as a secret.
+  if (env.petshopIntegrations) {
+    vars.APP_CONFIG_INTEGRATIONS__SLACK = JSON.stringify(PREVIEW_SLACK_APP);
+    vars.APP_CONFIG_INTEGRATIONS__GOOGLE = JSON.stringify(PREVIEW_GOOGLE_APP);
+    vars.APP_CONFIG_INTEGRATIONS__CLOUDFLARE = JSON.stringify(PREVIEW_CLOUDFLARE_APP);
+    vars.APP_CONFIG_LOGIN__GOOGLE = "{}";
+    vars.APP_CONFIG_LOGIN__CLOUDFLARE = JSON.stringify({
+      scopes: ["openid", "user-details.read", "offline_access"],
+    });
+    vars.APP_CONFIG_LOGIN__GITHUB = "{}";
+  }
   if (env.ingressRouting)
     vars.APP_CONFIG_URLS__INGRESS_ROUTING = JSON.stringify(env.ingressRouting);
   if (env.projectWildcard)

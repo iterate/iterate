@@ -14,7 +14,14 @@ import {
   type ReactNode,
   type RefObject,
 } from "react";
-import { CheckIcon, ChevronsLeftIcon, ChevronsUpDownIcon, EyeIcon, LogOutIcon } from "lucide-react";
+import {
+  CheckIcon,
+  ChevronsLeftIcon,
+  ChevronsUpDownIcon,
+  EyeIcon,
+  LogOutIcon,
+  UsersIcon,
+} from "lucide-react";
 import type { Principal } from "iterate/principal";
 import {
   AppShellPalette,
@@ -98,10 +105,10 @@ export function AppShell({
   nav?: ReactNode;
   /** what sits beside the phone's sidebar trigger in the header row */
   header?: ReactNode;
-  /** who the app is signed in as (`info.principal`); "Sign out" posts to the SDK's `/.auth/logout`.
-   *  A platform admin viewing the app as someone (`impersonatedBy`) sees who they are viewing as and
-   *  who they are, above the account menu, with Stop, which ends this sign-in and returns to the
-   *  app's root as themselves (the issuer still knows them). */
+  /** who the app is signed in as (`info.principal`); "Sign out" posts to the SDK's `/.auth/logout`,
+   *  "Switch account…" signs in again through the issuer's consent. A platform admin signed in as
+   *  someone (`impersonatedBy`) sees whom and who they are, above the account menu, with Stop
+   *  impersonating, which signs in again the same way (the issuer still knows them). */
   account: Principal;
   /** the app's own items in the account menu, before Sign out — `DropdownMenuItem`s */
   accountActions?: ReactNode;
@@ -347,22 +354,26 @@ function CollapseButton() {
   );
 }
 
-/** VIEWING AS SOMEONE ELSE, unmissable: whom, who you are, and Stop — the app's own logout (ends
- *  this impersonation's grant), then its login with the same permissions, which finds the admin at
- *  the issuer and lands on the app's root (not the page shown: it is often the other person's
- *  project). A collapsed sidebar keeps the eye. */
+/** SIGN IN AGAIN, through the issuer: the app's own logout (ends this sign-in's grant), then its
+ *  login with the same permissions (app-server.ts), which finds the person still signed in at the
+ *  issuer and shows its consent — where a platform admin may "Sign in as someone else…" — and lands
+ *  on the app's root (not the page shown: it is often another person's project). */
+const SIGN_IN_AGAIN = `/.auth/logout?${new URLSearchParams({ next: "/.auth/login?next=/" })}`;
+
+/** SIGNED IN AS SOMEONE ELSE, unmissable: whom, who you are, and Stop — signing in again as
+ *  yourself (`SIGN_IN_AGAIN`). A collapsed sidebar keeps the eye. */
 function ImpersonationMarker({ email, admin }: { email: string; admin: string }) {
   return (
     <form
       method="post"
-      action={`/.auth/logout?${new URLSearchParams({ next: "/.auth/login?next=/" })}`}
+      action={SIGN_IN_AGAIN}
       role="status"
       className="flex flex-col gap-1.5 rounded-lg border border-amber-300 bg-amber-50 p-2 text-xs text-amber-950 group-data-[collapsible=icon]:border-0 group-data-[collapsible=icon]:p-1.5"
     >
       <div className="flex items-center gap-2">
-        <EyeIcon className="size-4 shrink-0" aria-label="Viewing as someone else" />
+        <EyeIcon className="size-4 shrink-0" aria-label="Signed in as someone else" />
         <span className="min-w-0 truncate group-data-[collapsible=icon]:hidden">
-          Viewing as <strong className="font-semibold">{email}</strong>
+          Signed in as <strong className="font-semibold">{email}</strong>
         </span>
       </div>
       <span className="truncate text-amber-800 group-data-[collapsible=icon]:hidden">
@@ -378,11 +389,12 @@ function ImpersonationMarker({ email, admin }: { email: string; admin: string })
   );
 }
 
-/** The signed-in person, and sign out: a POST to the app's own logout, which ends this browser's
- *  grant at the issuer. */
+/** The signed-in person; Switch account… (`SIGN_IN_AGAIN`); and sign out: a POST to the app's own
+ *  logout, which ends this browser's grant at the issuer. */
 function AccountMenu({ email, actions }: { email: string; actions?: ReactNode }) {
   const { isMobile } = useSidebar();
   const logout = useRef<HTMLFormElement>(null);
+  const switchAccount = useRef<HTMLFormElement>(null);
   const initials = email.slice(0, 2).toUpperCase();
   return (
     <SidebarMenu>
@@ -416,6 +428,10 @@ function AccountMenu({ email, actions }: { email: string; actions?: ReactNode })
             </DropdownMenuGroup>
             <DropdownMenuSeparator />
             <DropdownMenuGroup>
+              <DropdownMenuItem onClick={() => switchAccount.current?.requestSubmit()}>
+                <UsersIcon />
+                <span>Switch account…</span>
+              </DropdownMenuItem>
               <DropdownMenuItem
                 onClick={() => {
                   resetPosthog();
@@ -429,7 +445,8 @@ function AccountMenu({ email, actions }: { email: string; actions?: ReactNode })
           </DropdownMenuContent>
         </DropdownMenu>
       </SidebarMenuItem>
-      {/* the sign-out POST, outside the menu item so nothing but the item's click submits it */}
+      {/* the POSTs, outside the menu items so nothing but an item's click submits one */}
+      <form ref={switchAccount} method="post" action={SIGN_IN_AGAIN} hidden />
       <form ref={logout} method="post" action="/.auth/logout" hidden />
     </SidebarMenu>
   );

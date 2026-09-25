@@ -86,40 +86,6 @@
         position: relative;
         min-width: 770px;
       }
-      .dependency-overlay {
-        position: absolute;
-        inset: 0;
-        pointer-events: none;
-        width: 100%;
-        height: 100%;
-        overflow: hidden;
-      }
-      .dependency-overlay path {
-        fill: none;
-        stroke: #f2c875;
-        stroke-width: 2;
-      }
-      .dependency-overlay text {
-        fill: #ffe0a2;
-        stroke: #10151e;
-        stroke-width: 5px;
-        paint-order: stroke;
-        font-size: 11px;
-        font-weight: 600;
-      }
-      #dependencies {
-        display: grid;
-        gap: 8px;
-        padding-left: 20px;
-        font-size: 13px;
-      }
-      #dependencies button {
-        padding: 3px 7px;
-        margin: 3px;
-        max-width: 100%;
-        overflow-wrap: anywhere;
-        text-align: left;
-      }
       .row {
         display: grid;
         grid-template-columns: 350px minmax(420px, 1fr);
@@ -207,13 +173,6 @@
           #5e4c2e 8px
         );
       }
-      .milestone {
-        width: 6px !important;
-        transform: translateX(-3px) rotate(45deg);
-        height: 6px;
-        top: 14px;
-        background: #ffe0a2;
-      }
       .phase-test,
       .passed {
         background: #56bc98;
@@ -297,8 +256,7 @@
       <p id="subtitle"></p>
       <p>
         Expand a job’s phases, then a step, to see individual tests and retries. Click any bar for
-        its timing and evidence. Expand a Wait phase and select its wait step to see labelled
-        dependency arrows; tap a linked span below to reveal it.
+        its timing and evidence.
       </p>
       <div class="stats" id="stats"></div>
       <p id="outcome-note"></p>
@@ -327,16 +285,15 @@
       <section id="detail" hidden>
         <h2 id="span-name"></h2>
         <a id="source" target="_blank" rel="noreferrer">Open in Depot</a>
-        <ul id="dependencies" aria-label="Span dependencies"></ul>
         <pre id="attributes"></pre>
       </section>
       <details>
         <summary>Where these timings come from</summary>
         <p>
           Time to green runs from execution creation to the acknowledged test-result check update,
-          including workflow queuing and result validation. Older runs use the successful
-          early-green step’s end. Cleanup and report generation are excluded; their outcome remains
-          in Depot. Other workflows on the commit are outside this report.
+          including workflow queuing and result validation. Cleanup and report generation are
+          excluded; their outcome remains in Depot. Other workflows on the commit are outside this
+          report.
         </p>
         <p>
           Time to red uses the first failed producer job or test-result validation in this
@@ -358,11 +315,8 @@
         </p>
         <p>
           The download is an OpenTelemetry ExportTraceServiceRequest JSON object: one trace, stable
-          span IDs, parent IDs, nanosecond timestamps, attributes and span links. Dependency arrows
-          point from a prerequisite to the wait that requires it. Selecting a span shows only its
-          own links, not its children's. They represent explicit waits, not inferred critical paths.
-          A missing milestone is labelled “not observed”; older runs have no dependency records.
-          This page is self-contained and can be saved or shared without a tracing service.
+          span IDs, parent IDs, nanosecond timestamps and attributes. This page is self-contained
+          and can be saved or shared without a tracing service.
         </p>
       </details>
     </main>
@@ -381,20 +335,7 @@
         }));
       const root = spans.find((s) => !s.parentSpanId);
       const byId = new Map(spans.map((span) => [span.spanId, span]));
-      const dependencies = spans.flatMap((source) =>
-        (source.links || []).flatMap((link) => {
-          const target = byId.get(link.spanId);
-          if (!target || link.traceId !== source.traceId) return [];
-          const label =
-            link.attributes?.find((a) => a.key === "ci.link.label")?.value.stringValue ||
-            "Depends on";
-          return [{ source, target, label }];
-        }),
-      );
       const rows = new Map();
-      function related(span) {
-        return dependencies.filter((edge) => edge.source === span || edge.target === span);
-      }
       function spanLabel(span) {
         let job = span;
         while (job.parentSpanId && job.a["ci.kind"] !== "job") job = byId.get(job.parentSpanId);
@@ -510,34 +451,7 @@
           `parentSpanId: ${span.parentSpanId}`,
         ].join("\n");
         document.getElementById("source").href = span.a["ci.url"] || root.a["ci.url"];
-        const list = document.getElementById("dependencies");
-        list.replaceChildren();
-        for (const edge of related(span)) {
-          const item = document.createElement("li");
-          for (const [index, endpoint] of [edge.source, edge.target].entries()) {
-            if (index) item.append(` ${edge.label.toLowerCase()} → `);
-            const button = document.createElement("button");
-            button.textContent = spanLabel(endpoint);
-            button.onclick = () => {
-              // Reveal the actual endpoint even when it was collapsed or filtered out.
-              let parent = endpoint.parentSpanId;
-              while (parent) {
-                open.add(parent);
-                parent = byId.get(parent).parentSpanId;
-              }
-              document.getElementById("search").value = "";
-              if (endpoint.start < range[0] || endpoint.end > range[1]) range = fullRange;
-              showDetail(endpoint);
-              render();
-              rows.get(endpoint.spanId).row.scrollIntoView({ block: "nearest" });
-            };
-            item.append(button);
-          }
-          list.append(item);
-        }
-        if (!list.children.length)
-          list.textContent = "No explicit dependencies recorded for this span.";
-        drawLinks();
+        markSelected();
       }
       function render() {
         const container = document.getElementById("trace");
@@ -629,7 +543,7 @@
           };
           const bar = document.createElement("div");
           const state = span.a["ci.status"];
-          bar.className = `bar ${span.a["ci.kind"] === "milestone" ? "milestone" : ""} phase-${dependencies.some((edge) => edge.source === span) ? "wait" : span.a["ci.phase"] || ""} ${span.a["ci.kind"] === "test" && state === "passed" ? "passed" : ""} ${span.status.code === 2 ? "failed" : ""} ${state === "incomplete" || state === "cancelled" ? "incomplete" : ""}`;
+          bar.className = `bar phase-${span.a["ci.phase"] || ""} ${span.a["ci.kind"] === "test" && state === "passed" ? "passed" : ""} ${span.status.code === 2 ? "failed" : ""} ${state === "incomplete" || state === "cancelled" ? "incomplete" : ""}`;
           if (span.end >= range[0] && span.start <= range[1]) {
             bar.style.left = `${Math.max(0, ((span.start - range[0]) / (range[1] - range[0])) * 100)}%`;
             bar.style.width = `${Math.max(0, ((Math.min(span.end, range[1]) - Math.max(span.start, range[0])) / (range[1] - range[0])) * 100)}%`;
@@ -641,95 +555,11 @@
           if (expanded) nested.forEach((s) => visit(s, depth + 1));
         }
         visit(root, 0);
-        drawLinks();
+        markSelected();
       }
-      function svgElement(name, attributes) {
-        const element = document.createElementNS("http://www.w3.org/2000/svg", name);
-        for (const [key, value] of Object.entries(attributes)) element.setAttribute(key, value);
-        return element;
-      }
-      function drawLinks() {
-        const waterfall = document.querySelector(".waterfall");
-        if (!waterfall) return;
-        waterfall.querySelector(".dependency-overlay")?.remove();
+      function markSelected() {
         for (const [id, { row }] of rows) row.classList.toggle("selected", id === selected.spanId);
-        const edges = related(selected);
-        if (!edges.length) return;
-        const rect = waterfall.getBoundingClientRect();
-        const scroller = document.getElementById("trace");
-        const svg = svgElement("svg", {
-          class: "dependency-overlay",
-          "aria-hidden": "true",
-          viewBox: `0 0 ${rect.width} ${rect.height}`,
-        });
-        const marker = svgElement("marker", {
-          id: "arrow",
-          viewBox: "0 0 10 10",
-          refX: "9",
-          refY: "5",
-          markerWidth: "5",
-          markerHeight: "5",
-          orient: "auto",
-        });
-        marker.append(svgElement("polygon", { points: "0,0 10,5 0,10", fill: "#f2c875" }));
-        const defs = svgElement("defs", {});
-        defs.append(marker);
-        svg.append(defs);
-        function endpoint(span) {
-          if (span.a["ci.evidence"] === "No runner attempt started") return null;
-          let visible = span;
-          while (visible && !rows.has(visible.spanId)) visible = byId.get(visible.parentSpanId);
-          // Do not attach arrows to an unrelated ancestor hidden by a search filter.
-          if (!visible || visible === root) return null;
-          const timeline = rows.get(visible.spanId).timeline.getBoundingClientRect();
-          if (span.end < range[0] || span.end > range[1]) return null;
-          return {
-            x:
-              timeline.left -
-              rect.left +
-              ((span.end - range[0]) / (range[1] - range[0])) * timeline.width,
-            y: timeline.top - rect.top + 17,
-            left: timeline.left - rect.left,
-          };
-        }
-        for (const edge of edges) {
-          const from = endpoint(edge.target),
-            to = endpoint(edge.source);
-          if (!from || !to || (from.x === to.x && from.y === to.y)) continue;
-          const bend = Math.min(rect.width - 10, Math.max(from.x, to.x) + 65);
-          svg.append(
-            svgElement("path", {
-              d: `M ${from.x} ${from.y} C ${bend} ${from.y}, ${bend} ${to.y}, ${to.x} ${to.y}`,
-              "marker-end": "url(#arrow)",
-            }),
-          );
-          const labelWidth = Math.min(220, scroller.clientWidth - from.left - 16);
-          const x = Math.max(
-            from.left + scroller.scrollLeft + 8,
-            Math.min(bend + 8, scroller.scrollLeft + scroller.clientWidth - labelWidth - 8),
-          );
-          const label = svgElement("text", {
-            x,
-            y: (from.y + to.y) / 2 - 5,
-          });
-          const lines = [""];
-          for (const word of edge.label.split(" ")) {
-            const last = lines.length - 1;
-            if (lines[last] && (lines[last].length + word.length + 1) * 6 > labelWidth)
-              lines.push(word);
-            else lines[last] += `${lines[last] ? " " : ""}${word}`;
-          }
-          for (const [index, line] of lines.entries()) {
-            const text = svgElement("tspan", { x, dy: index ? 13 : 0 });
-            text.textContent = line;
-            label.append(text);
-          }
-          svg.append(label);
-        }
-        waterfall.append(svg);
       }
-      document.getElementById("trace").onscroll = drawLinks;
-      new ResizeObserver(drawLinks).observe(document.getElementById("trace"));
       document.getElementById("search").oninput = render;
       document.getElementById("expand").onclick = () => {
         open = new Set(spans.map((s) => s.spanId));

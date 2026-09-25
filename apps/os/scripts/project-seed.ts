@@ -42,7 +42,7 @@ async function target(env: string) {
     dopplerProject: OS_DOPPLER_PROJECT,
     env,
   });
-  // Match deploy.ts: only these two secrets are shipped, not legacy Doppler overrides.
+  // Match deploy.ts: only these two secrets are shipped.
   const config = parseAppConfig({
     APP_CONFIG: context.secrets.APP_CONFIG,
     APP_CONFIG_SECRETS__KEY: context.secrets.APP_CONFIG_SECRETS__KEY,

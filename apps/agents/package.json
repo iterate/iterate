@@ -1,5 +1,5 @@
 {
-  "name": "@iterate-com/agents",
+  "name": "@iterate-com/agents-app",
   "private": true,
   "type": "module",
   "scripts": {
@@ -26,8 +26,10 @@
     "@codemirror/state": "catalog:",
     "@codemirror/view": "catalog:",
     "@fsegurai/codemirror-theme-bundle": "catalog:",
+    "@iterate-com/agents": "workspace:*",
     "@iterate-com/shared": "workspace:*",
     "@iterate-com/ui": "workspace:*",
+    "@iterate-com/voice": "workspace:*",
     "@tanstack/react-router": "catalog:",
     "@tanstack/react-start": "catalog:",
     "capnweb": "catalog:",
@@ -36,7 +38,6 @@
     "codemirror-json5": "^1.0.3",
     "iterate": "workspace:*",
     "lucide-react": "catalog:",
-    "pako": "catalog:",
     "react": "catalog:",
     "react-dom": "catalog:",
     "sonner": "catalog:",
@@ -53,7 +54,6 @@
     "@types/react": "catalog:",
     "@types/react-dom": "catalog:",
     "@vitejs/plugin-react": "catalog:",
-    "esbuild": "catalog:",
     "trpc-cli": "catalog:",
     "tsx": "catalog:",
     "typescript": "catalog:",

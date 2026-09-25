@@ -26,8 +26,9 @@ export default {
   },
   workspaces: {
     ".": {
-      // The config-repo templates: the platform loads worker.ts as a project's config worker.
-      entry: ["configs/*/worker.ts"],
+      // The config-repo templates: the platform loads worker.ts as a project's config worker, and
+      // an app's folder (agents/index.ts) as that app's source.
+      entry: ["configs/*/worker.ts", "configs/*/*/index.ts"],
       project: ["*.ts", "specs/**/*.ts", "configs/**/*.{ts,js}"],
       ignoreDependencies: [
         // The .depot/workflows steps run this bin from the root.
@@ -87,18 +88,10 @@ export default {
       ignoreDependencies: ["cloudflare", "tailwindcss"],
     },
     "apps/agents": {
-      // scripts/build-voice-install.ts bundles the voice entries into the installer.
-      entry: [
-        "scripts/**/*.ts",
-        "voice/{voice-agent,voice-delegate,worker}.ts",
-        "e2e/**/*.e2e.test.ts",
-        "__workers-tests__/**/*.test.ts",
-      ],
+      entry: ["scripts/**/*.ts", "e2e/**/*.e2e.test.ts", "__workers-tests__/**/*.test.ts"],
       project: [
         "scripts/**/*.ts",
         "src/**/*.{ts,tsx,css}!",
-        "runtime/**/*.ts",
-        "voice/**/*.ts",
         "e2e/**/*.ts",
         "__workers-tests__/**/*.ts",
       ],
@@ -138,6 +131,17 @@ export default {
       // exports, no src/index.ts) — same posture as packages/shared.
       entry: ["src/**/*.test.{ts,tsx}"],
       project: ["src/**/*.{ts,tsx,css}"],
+    },
+    // The userspace apps a project installs: their export maps are the entries, and index.ts the
+    // classes a project's folder re-exports.
+    "packages/agents": {
+      entry: ["src/**/*.test.ts"],
+      project: ["src/**/*.ts", "tsdown*.ts"],
+      ignoreDependencies: ["cloudflare"],
+    },
+    "packages/voice": {
+      entry: ["src/**/*.test.ts"],
+      project: ["src/**/*.ts", "tsdown*.ts"],
     },
     "packages/cli": {
       // The `iterate` bin (package.json `bin`).

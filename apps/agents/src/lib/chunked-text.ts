@@ -97,35 +97,3 @@ export function sliceText(text: StreamText, start = 0, end = text.length): strin
   }
   return parts.join("");
 }
-
-/** Bound a transient preview without flattening or changing its recorded source. */
-export function takeText(text: StreamText, limit: number): StreamText {
-  if (text.length <= limit) return text;
-  if (typeof text === "string") return text.slice(0, limit).replace(/[\uD800-\uDBFF]$/, "");
-  const groups: ChunkedText["groups"] = {};
-  let length = 0;
-  let blockCount = 0;
-  for (const [key, group] of Object.entries(text.groups)) {
-    const kept: Record<string, string> = {};
-    let complete = true;
-    for (const [index, block] of Object.entries(group)) {
-      const prefix = block.slice(0, limit - length).replace(/[\uD800-\uDBFF]$/, "");
-      if (prefix === "") {
-        complete = false;
-        break;
-      }
-      kept[index] = prefix;
-      length += prefix.length;
-      blockCount += 1;
-      if (prefix.length < block.length) {
-        complete = false;
-        break;
-      }
-    }
-    if (Object.keys(kept).length === 0) break;
-    groups[key] = complete ? group : kept;
-    if (!complete || length >= limit) break;
-  }
-  const last = groups[Math.floor((blockCount - 1) / textGroupSize)]?.[blockCount - 1] ?? "";
-  return { length, blockCount, tailOffset: last.length, groups };
-}

@@ -11,6 +11,7 @@
 // name (`repoArtifactName` — the ONE place a name is spelled; every itx surface speaks paths).
 
 import { RpcTarget } from "capnweb";
+import type { ArtifactToken, CfArtifactRepoApi, CfArtifactsApi } from "iterate/api";
 
 /** Cloudflare Artifacts ("git for agents", beta) — the per-namespace binding, CONTROL PLANE ONLY, and
  *  typed minimally here: only what this proxy calls, although `@cloudflare/workers-types` now
@@ -26,7 +27,7 @@ export interface ArtifactsNamespace {
 interface ArtifactCreateResult {
   token: string;
 }
-/** The REAL repo handle `get()` yields (a live RPC stub), typed to what is read (`ArtifactsScope` says
+/** The REAL repo handle `get()` yields (a live RPC stub), typed to what is read (`projectScopedArtifacts` says
  *  why `fork` is withheld). */
 export interface ArtifactRepoHandle {
   /** the repo's metadata — its git-over-HTTPS `remote`, the binding's own word (account and namespace
@@ -34,11 +35,6 @@ export interface ArtifactRepoHandle {
   info(): Promise<{ remote: string }>;
   createToken(scope: "read" | "write", ttlSeconds: number): Promise<ArtifactToken>;
   fork(name: string, options?: { setDefaultBranch?: string }): Promise<ArtifactCreateResult>;
-}
-/** `createToken`'s result — `plaintext` is the git credential string. */
-export interface ArtifactToken {
-  plaintext: string;
-  expiresAt?: string;
 }
 /** `list`'s result: repos in the WHOLE namespace (the binding does NOT filter by name), one page. */
 interface ArtifactListResult {
@@ -56,7 +52,7 @@ interface ArtifactListResult {
  *  releases it (`withArtifactRepoHandle`), so each verb is one `namespace.get` and one call on it.
  *  Building it touches no binding: an itx chain `get(path).createToken(…)` walks `get(path)` once per
  *  dispatch, and a mid-chain handle is two dispatches (packages/iterate/src/expression.ts). */
-export class ScopedArtifactRepoRpcTarget extends RpcTarget {
+export class ScopedArtifactRepoRpcTarget extends RpcTarget implements CfArtifactRepoApi {
   readonly #namespace: ArtifactsNamespace;
   readonly #name: string;
   constructor(namespace: ArtifactsNamespace, name: string) {
@@ -64,7 +60,7 @@ export class ScopedArtifactRepoRpcTarget extends RpcTarget {
     this.#namespace = namespace;
     this.#name = name;
   }
-  createToken(scope: "read" | "write", ttlSeconds: number): Promise<ArtifactToken> {
+  createToken(...[scope, ttlSeconds]: Parameters<CfArtifactRepoApi["createToken"]>) {
     return retryingOnePlatformFailure("createToken", this.#name, () =>
       withArtifactRepoHandle(this.#namespace, this.#name, (handle) =>
         handle.createToken(scope, ttlSeconds),
@@ -74,7 +70,7 @@ export class ScopedArtifactRepoRpcTarget extends RpcTarget {
   /** `https://<account>.artifacts.cloudflare.net/git/<namespace>/<project>.<name>.git` (the binding's
    *  own word, its handle's `info()`) — what a git client POSTs `git-upload-pack` /
    *  `git-receive-pack` under, the token as the basic-auth password. */
-  async remote(): Promise<string> {
+  async remote() {
     const { remote } = await retryingOnePlatformFailure("remote", this.#name, () =>
       withArtifactRepoHandle(this.#namespace, this.#name, (handle) => handle.info()),
     );
@@ -190,31 +186,18 @@ async function retryingOnePlatformFailure<T>(
  *  names allow `.`. `list` is filtered to the prefix LOCALLY (the binding returns EVERY project's
  *  repos) and answers in paths, and `get` returns a `ScopedArtifactRepoRpcTarget` exposing `createToken` and
  *  `remote` only: the real handle's `fork(name)` takes an UNPREFIXED name — walked by the dispatcher
- *  regardless of the narrowed type — and would escape the wall, so it is withheld. */
-export interface ArtifactsScope {
-  /** The Artifacts repo, `main` unborn until the first commit; false when it already existed. It
-   *  answers only once the repo reads: a name Artifacts is still deleting is waited out
-   *  (`TAKEN_NAME_WAIT_MS`), then refused with the reason. */
-  create(path: string): Promise<{ created: boolean }>;
-  /** The repo's handle — `createToken(scope, ttlSeconds)` and `remote()`. A repo that does not exist
-   *  fails at those, with the binding's own error. */
-  get(path: string): Promise<ScopedArtifactRepoRpcTarget>;
-  /** This project's repos, as paths (one page of the binding's unfiltered list). */
-  list(options?: { limit?: number; cursor?: string }): Promise<{
-    repos: { path: string }[];
-    cursor?: string;
-  }>;
-  /** True when the repo existed; false when it was already gone (the binding's not-found signal,
-   *  API error 10200). Any other failure surfaces. */
-  delete(path: string): Promise<boolean>;
-}
-
-/** Pure and namespace-injected: unit-tests alone (cf-artifacts.test.ts). Every `path` is a repo's context
+ *  regardless of the narrowed type — and would escape the wall, so it is withheld. The shape is the
+ *  published one (iterate/api `CfArtifactsApi`). `create` answers only once the repo reads: a name
+ *  Artifacts is still deleting is waited out (`TAKEN_NAME_WAIT_MS`), then refused with the reason;
+ *  `delete` answers false on the binding's not-found signal (API error 10200), and any other
+ *  failure surfaces.
+ *
+ *  Pure and namespace-injected: unit-tests alone (cf-artifacts.test.ts). Every `path` is a repo's context
  *  path (`/repos/config`); `boundName` is the one step from it to the bound Artifacts name. */
 export function projectScopedArtifacts(input: {
   namespace: ArtifactsNamespace;
   projectId: string;
-}): ArtifactsScope {
+}): CfArtifactsApi {
   const prefix = `${input.projectId}.`;
   const boundName = (path: string): string => prefix + repoArtifactName(path);
   return {

@@ -1,20 +1,27 @@
 // secrets.ts — a project secret, the pure half: what a secret IS (material + a URL pin + an optional
-// refresh strategy), the placeholder grammar egress substitutes, and the two refresh strategies,
-// each a plain function of (strategy, material, fetch). No Cloudflare import — the node unit tests
+// refresh strategy), the placeholder grammar egress substitutes, and the refresh strategies that
+// need no platform credential, each a plain function of (strategy, material, fetch). No Cloudflare import — the node unit tests
 // cover every row — and only erasable TypeScript syntax, so a type-stripping loader can take it. The
 // host that keeps a record and runs these is the secret facet (secret/durable-object.ts); the verbs
 // that write one are `itx.secrets` (context/built-ins.ts).
 //
 // The invariant:
 // material goes in; nothing comes out except a request to a pinned host. Refresh runs INSIDE the
-// secret's own facet — a named strategy in trusted code whose exchange endpoint must itself
-// be pinned — so a credential that expires (an OAuth access token, a Waitrose session) is one secret,
-// not a worker.
+// secret's own facet — a named strategy in trusted code whose exchange endpoint must itself be
+// pinned, or the secret's own exchange code in a jail whose only egress is the pin
+// (secret/exchange-jail.ts) — so a credential that expires (an OAuth access token, a Waitrose or
+// Tesco session) is one secret, not a worker.
 
 // The shapes a caller sees — the material, the client-auth method and the refresh strategy — are the
 // SDK's (`iterate/api`, where the dash and every client read them).
-import type { ClientAuth, SecretMaterial, SecretRefresh } from "iterate/api";
-import { secretsEqual } from "./caller.ts";
+import type {
+  ClientAuth,
+  SecretHmacVerification,
+  SecretMaterial,
+  SecretRefresh,
+} from "iterate/api";
+import { secretsEqual, signClaims, verifyClaims } from "./caller.ts";
+import { exchange as exchangeWaitroseSession } from "./integrations/waitrose.ts";
 import { SecretRefreshKind } from "./secret/contract.ts";
 
 /** What the secret's facet stores: the material, the ORIGINS it may be sent to (never
@@ -24,6 +31,15 @@ export type SecretRecord = {
   urls: string[];
   refresh: SecretRefresh | null;
 };
+
+/** The most exchange code (`refresh: { kind: "worker", source }`) may be: it is sealed in the
+ *  secret's record beside the material, and a login is a few requests, not a bundle. */
+export const EXCHANGE_SOURCE_MAX_CHARS = 64 * 1024;
+
+/** The deployment's apps an `oauth-refresh-token` strategy may name as its client (`{ platform }`):
+ *  each refreshes with that app's credentials, attached in the secret's facet. GitHub's is the App's
+ *  user-authorization client, which a GitHub sign-in's token refreshes with. */
+const OAUTH_REFRESH_PLATFORMS = ["slack", "google", "cloudflare", "github"] as const;
 
 /** A secret's name: `[a-zA-Z0-9._-]+`, but never `.` or `..` — the two segments
  *  `resolveContextPath` resolves away, so `/secrets/..` would name its owner's ROOT (and
@@ -94,22 +110,62 @@ export function normalizeSecretRecord(
         `secrets: refresh.kind is one of ${SecretRefreshKind.options.join(", ")}, got ${JSON.stringify(isRecord(options.refresh) ? options.refresh.kind : options.refresh)}`,
       );
     const kind = parsedKind.data;
-    const endpointKey = kind === "oauth-refresh-token" ? "tokenEndpoint" : "graphqlUrl";
-    const endpoint = new URL(String(options.refresh[endpointKey]));
+    const strategy = options.refresh;
+    if (kind === "worker") {
+      const { source } = strategy;
+      if (typeof source !== "string" || !/\bexchange\b/.test(source))
+        throw new Error(
+          "secrets: refresh.source is an ES module exporting `async function exchange(material, fetch)`",
+        );
+      if (source.length > EXCHANGE_SOURCE_MAX_CHARS)
+        throw new Error(
+          `secrets: refresh.source is ${source.length} chars, over the ${EXCHANGE_SOURCE_MAX_CHARS}-char ceiling`,
+        );
+      return { material, urls, refresh: { kind, source } };
+    }
+    const endpointKey =
+      kind === "oauth-refresh-token"
+        ? "tokenEndpoint"
+        : kind === "waitrose-session"
+          ? "graphqlUrl"
+          : "apiOrigin";
+    const endpoint = new URL(String(strategy[endpointKey]));
     if (endpoint.protocol !== "http:" && endpoint.protocol !== "https:")
       throw new Error(`secrets: refresh.${endpointKey} must be an http(s) URL`);
     if (!urls.includes(endpoint.origin))
       throw new Error(
         `secrets: refresh.${endpointKey} ${endpoint.origin} is outside the pin ${urls.join(", ")} — a refresh only ever sends the material toward a pinned host`,
       );
-    refresh =
-      kind === "oauth-refresh-token"
-        ? {
-            kind,
-            tokenEndpoint: endpoint.href,
-            clientAuth: clientAuthOf(options.refresh.clientAuth),
-          }
-        : { kind, graphqlUrl: endpoint.href };
+    const client = isRecord(strategy.client) ? strategy.client : undefined;
+    if (kind === "oauth-refresh-token") {
+      const platform = OAUTH_REFRESH_PLATFORMS.find((name) => name === client?.platform);
+      if (client && !platform)
+        throw new Error(
+          `secrets: refresh.client is { platform: ${OAUTH_REFRESH_PLATFORMS.map((name) => JSON.stringify(name)).join(" | ")} }`,
+        );
+      refresh = {
+        kind,
+        tokenEndpoint: endpoint.href,
+        clientAuth: clientAuthOf(strategy.clientAuth),
+        ...(platform && { client: { platform } }),
+      };
+    } else if (kind === "waitrose-session") refresh = { kind, graphqlUrl: endpoint.href };
+    else {
+      const installationId = String(strategy.installationId ?? "");
+      // it lands in a URL path: GitHub's ids are digits, a fake's a slug
+      if (!/^[a-zA-Z0-9_-]+$/.test(installationId))
+        throw new Error("secrets: refresh.installationId is GitHub's id ([a-zA-Z0-9_-]+)");
+      if (client?.platform !== "github" && client?.project !== "github")
+        throw new Error(
+          'secrets: refresh.client is { platform: "github" } or { project: "github" }',
+        );
+      refresh = {
+        kind,
+        apiOrigin: endpoint.origin,
+        installationId,
+        client: client.platform === "github" ? { platform: "github" } : { project: "github" },
+      };
+    }
   }
   return { material, urls, refresh };
 }
@@ -182,6 +238,93 @@ export function secretPathsReferenced(request: Request): string[] {
   return [...paths];
 }
 
+// ── a WebSocket's frames ── the Discord shape: the upgrade carries no credential, the first client
+// frame does (IDENTIFY `{"op":2,"d":{"token":…}}`). An upgrade that asks for it names its secret in
+// `SECRET_FRAMES_HEADER` (which also routes it through egress to that secret), and the secret's facet
+// then terminates the caller's socket, dials the upstream itself and substitutes the placeholder in
+// every client→server TEXT frame (secret/durable-object.ts `#proxyFrames`).
+
+/** The upgrade header naming the secret whose placeholders the client's frames may spell:
+ *  `x-itx-secret-frames: getSecret("/secrets/discord")`. Never sent upstream. */
+export const SECRET_FRAMES_HEADER = "x-itx-secret-frames";
+
+/** The placeholder as it sits in a frame: as written, or inside a JSON string (`\"` quotes) —
+ *  a JSON frame's `"token": "getSecret(\"/secrets/x\")"`. */
+const FRAME_PLACEHOLDER = new RegExp(
+  String.raw`getSecret\(\s*(\\?)"(/secrets/${SECRET_NAME})\\?"\s*(?:,\s*\{\s*field\s*:\s*\\?"([^"\\\s]+)\\?"\s*\})?\s*\)`,
+  "g",
+);
+
+/** One client→server text frame with every placeholder of `path` (or `alias`, a lend's borrowed
+ *  path) substituted by the material — JSON-escaped where the placeholder sat inside a JSON string.
+ *  A placeholder naming any other secret is refused (`SecretRefused`): one socket, one secret. */
+export function substituteSecretInFrame(
+  frame: string,
+  paths: string[],
+  material: SecretMaterial,
+): string {
+  if (!frame.includes("getSecret(")) return frame;
+  return frame.replaceAll(FRAME_PLACEHOLDER, (_match, escaped: string, path: string, field) => {
+    const placeholder = placeholderOf(path, field);
+    if (!paths.includes(path))
+      throw new SecretRefused(`itx.fetch: ${placeholder} in a frame names another secret`);
+    const where = "a WebSocket frame";
+    let secret: string;
+    if (field) secret = secretFieldOf(material, field, placeholder, where);
+    else if (typeof material === "string") secret = material;
+    else
+      throw new SecretRefused(
+        `itx.fetch: ${placeholder} in ${where} names no field, but the secret is a JSON object`,
+      );
+    return escaped ? JSON.stringify(secret).slice(1, -1) : secret;
+  });
+}
+
+/** The secret paths one string's placeholders name. */
+export function secretPathsIn(value: string): string[] {
+  if (!value.includes("getSecret(")) return [];
+  return [...new Set([...value.matchAll(SECRET_PLACEHOLDER)].map(([, path = ""]) => path))];
+}
+
+// ── a lend's use on the fetch channel ── a borrowed path's use reaches the lender over `fetch`
+// (a 101's socket crosses no Workers-RPC method call — DataCloneError): the borrower's facet signs
+// the lend it holds into `LEND_USE_HEADER` for the lender's context, which admits it and hands the
+// request to its facet with the path it is lent as in `LENT_AS_HEADER`. Both sit under `x-itx-lend`,
+// which every egress strips — no caller's header ever reaches either hop.
+
+/** The borrower facet → the lender's context: the lend, signed with the deployment's key. */
+export const LEND_USE_HEADER = "x-itx-lend-use";
+/** The lender's context → its own facet, after admission: `{ as, borrower }` JSON. */
+export const LENT_AS_HEADER = "x-itx-lend-as";
+
+type LendUse = { kind: "lend-use"; lender: string; lendId: string; borrower: string; exp: number };
+
+export const signLendUse = (
+  lend: { lender: string; lendId: string; borrower: string },
+  key: string,
+): Promise<string> =>
+  signClaims({ kind: "lend-use", ...lend, exp: Date.now() + 60_000 } satisfies LendUse, key);
+
+/** The lend a `LEND_USE_HEADER` names, for the context `lender` — or null (forged, expired,
+ *  another lender's). */
+export async function verifyLendUse(
+  token: string,
+  key: string,
+  lender: string,
+): Promise<{ lendId: string; borrower: string } | null> {
+  // Signed by the deployment's key, so the shape is the platform's own (`signLendUse`).
+  const claims = (await verifyClaims(token, key)) as Partial<LendUse> | null;
+  if (
+    claims?.kind !== "lend-use" ||
+    claims.lender !== lender ||
+    !claims.lendId ||
+    !claims.borrower ||
+    !(claims.exp! >= Date.now())
+  )
+    return null;
+  return { lendId: claims.lendId, borrower: claims.borrower };
+}
+
 /**
  * Substitute every `getSecret("/secrets/<name>")` placeholder in the request URL AND headers. An
  * existing secret must never survive as a literal placeholder wherever it appears (a URL
@@ -250,16 +393,6 @@ export async function substituteProjectSecrets(
   return changed ? new Request(base, { headers }) : base;
 }
 
-/** What `itx.secrets.verifyHmac(path, …)` takes: the bytes a webhook signed (a string is its UTF-8),
- *  the hex HMAC-SHA256 it sent, and which field of a JSON material is the key (the whole material
- *  when omitted). Stripe signs `${t}.${body}`, GitHub the body (`sha256=<hex>`), Slack `v0:${t}:${body}`;
- *  the caller assembles the signed bytes and strips the scheme prefix. */
-export type SecretHmacVerification = {
-  payload: string | Uint8Array;
-  signature: string;
-  field?: string;
-};
-
 /** The material as an HMAC key: the whole value when it is a string and no field is named, else the
  *  string at `field` of an object material. Anything else — an object with no field named, a field
  *  on a string, a field with no string at it — is null: no key, so nothing verifies. */
@@ -268,6 +401,12 @@ export function secretMaterialStringOf(material: SecretMaterial, field?: string)
   let value: unknown = material;
   for (const segment of field.split(".")) value = isRecord(value) ? value[segment] : undefined;
   return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+/** SHA-256 of a string, hex: exchange code's identity (the catalog's `refreshSourceSha256`). */
+export async function sha256Hex(value: string): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
 /** Hex HMAC-SHA256 of `payload` under `key`. WebCrypto, present in every isolate. */
@@ -326,10 +465,6 @@ function stringField(record: Record<string, unknown>, field: string, kind: strin
   return value;
 }
 
-/** The Waitrose Android app's login mutation, retained verbatim. */
-const WAITROSE_NEW_SESSION_MUTATION =
-  "mutation NewSession($input: SessionInput) { generateSession(session: $input) { __typename ...SessionPayload failures { type message } } }  fragment SessionPayload on SetSessionPayload { accessToken refreshToken customerId customerOrderId customerOrderState defaultBranchId expiresIn }";
-
 /** A provider's JSON answer, read as a record — anything else (not JSON, a bare value) is `{}`, so
  *  every field read below falls through to the "returned no …" refusal. */
 async function jsonRecordOf(response: Response): Promise<Record<string, unknown>> {
@@ -386,6 +521,13 @@ export async function refreshSecretMaterial(
   fetchFn: (request: Request) => Promise<Response>,
 ): Promise<Record<string, unknown>> {
   const record = materialRecordOf(material);
+  // The deployment's client and a GitHub App's key are attached by the facet itself
+  // (secret/durable-object.ts), never read from material here.
+  if (
+    refresh.kind === "github-app-installation" ||
+    (refresh.kind === "oauth-refresh-token" && refresh.client)
+  )
+    throw new Error(`${refresh.kind}: the secret's facet attaches this credential itself`);
   if (refresh.kind === "oauth-refresh-token") {
     const refreshToken = stringField(record, "refreshToken", refresh.kind);
     const clientId = stringField(record, "clientId", refresh.kind);
@@ -402,41 +544,8 @@ export async function refreshSecretMaterial(
     // A provider may rotate the refresh token on use; keep the newest.
     return { ...record, ...(await oauthTokensOf(response, refresh.kind)) };
   }
-  const username = stringField(record, "username", refresh.kind);
-  const password = stringField(record, "password", refresh.kind);
-  const response = await fetchFn(
-    new Request(refresh.graphqlUrl, {
-      method: "POST",
-      headers: {
-        accept: "application/json",
-        "content-type": "application/json",
-        // Waitrose's edge answers UA-less requests with HTTP 520;
-        // the Android app's UA is the known-good request shape.
-        "user-agent": "Waitrose/3.9.1 (Android)",
-      },
-      body: JSON.stringify({
-        query: WAITROSE_NEW_SESSION_MUTATION,
-        variables: { input: { clientId: "ANDROID_APP", password, username } },
-      }),
-    }),
-  );
-  // The live API answers wrong credentials with a 401; the app-client contract is a 200 with a
-  // failures[] — read both, name the fix, never echo the credential.
-  if (response.status === 401)
-    throw new Error(
-      "waitrose-session: login refused (HTTP 401) — check the secret's username/password",
-    );
-  if (!response.ok) throw new Error(`waitrose-session: login answered HTTP ${response.status}`);
-  // `{ data: { generateSession: { accessToken, failures } } }` — each level read as a record.
-  const data = await jsonRecordOf(response);
-  const payload = isRecord(data.data) ? data.data : {};
-  const session = isRecord(payload.generateSession) ? payload.generateSession : {};
-  const failure =
-    Array.isArray(session.failures) && isRecord(session.failures[0])
-      ? session.failures[0].type
-      : undefined;
-  if (typeof failure === "string") throw new Error(`waitrose-session: login refused (${failure})`);
-  if (typeof session.accessToken !== "string")
-    throw new Error("waitrose-session: login returned no accessToken");
-  return { ...record, accessToken: session.accessToken };
+  // Waitrose's login is bundled exchange code of the same shape as a secret's own.
+  if (refresh.kind === "waitrose-session")
+    return exchangeWaitroseSession(material, fetchFn, { graphqlUrl: refresh.graphqlUrl });
+  throw new Error(`${refresh.kind}: the secret's facet runs this exchange code in its jail`);
 }

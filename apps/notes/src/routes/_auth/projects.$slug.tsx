@@ -79,7 +79,7 @@ function NotesPage() {
 const Commit = z.object({ commitOid: z.string().nullable(), changedPaths: z.array(z.string()) });
 
 /** The project facet's live state, the one field this page reads: where the project's own creation
- *  stands (null for a project born before the saga existed). */
+ *  stands (null until `project/create-requested` lands). */
 const ProjectLive = z.looseObject({
   creation: z.object({ status: z.enum(["requested", "created", "failed"]) }).nullable(),
 });
@@ -130,13 +130,11 @@ function Editor({
   const [pending, setPending] = useState(false);
   // A project is usable once its creation saga lands `project/created`: until then the saga is still
   // seeding the config repo, and a commit here races it ("the commit was refused: stale ref").
-  // The project facet's live state says where creation stands, the same signal the dash's overview
-  // reads; a project born before the saga existed has no creation record and is ready.
+  // The project facet's live state says where creation stands, as the dash's overview reads it.
   const context = useProjectContext(api, project);
   const live = useFacetLiveState(context, "project");
   const creation = ProjectLive.safeParse(live.value).data?.creation;
-  // oxlint-disable-next-line iterate/simple-truthiness-check -- null is a project with no creation record (ready); undefined is the live state not yet loaded (not ready)
-  const ready = creation === null || creation?.status === "created";
+  const ready = creation?.status === "created";
   async function save(event: FormEvent) {
     event.preventDefault();
     setPending(true);

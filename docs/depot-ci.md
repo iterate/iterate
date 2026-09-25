@@ -58,10 +58,12 @@ replays.
 
 Two GitHub Actions workflows are left, both for what Depot cannot do:
 
-- `.github/workflows/pkg-pr-new.yml` is not CI; it publishes the `iterate` SDK and the
-  `@iterate-com/cli` packages to [pkg.pr.new](https://pkg.pr.new) for every `main` push, and for
-  a PR that changes their inputs (`packages/iterate`, `packages/cli`, the root manifests and
-  lockfile, or the workflow itself): the **publish** and **Continuous Releases** checks.
+- `.github/workflows/pkg-pr-new.yml` is not CI; it publishes the `iterate` SDK, the
+  `@iterate-com/cli`, `@iterate-com/petshop-sdk`, `@iterate-com/agents` and `@iterate-com/voice`
+  packages to [pkg.pr.new](https://pkg.pr.new) for every `main` push, and for a PR that changes
+  their inputs (their `packages/*` folders, `packages/shared`, the root manifests and lockfile, or
+  the workflow itself): the **publish** and **Continuous Releases** checks. Projects install
+  agents and voice from these builds, and the e2e rows that prove it pin the PR head's.
 - `.github/workflows/merges-with-main.yml` is the **Merges with main** check, on
   `pull_request_target`: a PR that conflicts with main gets a red check instead of none
   ([Pull requests that conflict with main](#pull-requests-that-conflict-with-main)).
@@ -789,8 +791,8 @@ and `pnpm-lock.yaml`, and for OS and the five hosted clients the root
 pins the exceptions:
 
 - No client deploy runs for `apps/os`: no client imports it.
-- Deploy Kit and Deploy Voice also run for `apps/agents`: their
-  `vite.config.ts` builds `voice-install.json` from it.
+- Deploy Kit and Deploy Voice run for `packages/agents` and `packages/voice`:
+  their pages run the installer (`@iterate-com/voice/install`).
 - Deploy OS skips what never reaches the Worker: the markdown at the app root,
   `apps/os/docs`, `apps/os/e2e`, `apps/os/__workers-tests__`, `*.test.ts`,
   `apps/os/bench`, the preview and soak scripts, and `scripts/depot-ci` (it
