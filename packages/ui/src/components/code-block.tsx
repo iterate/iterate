@@ -1,4 +1,4 @@
-import { Suspense, lazy, type ComponentType } from "react";
+import { Suspense, lazy } from "react";
 import { cn } from "cn";
 import { Spinner } from "./spinner.tsx";
 import type { CodeBlockProps, SerializedObjectCodeBlockProps } from "./code-block.client.tsx";
@@ -6,7 +6,7 @@ import type { CodeBlockProps, SerializedObjectCodeBlockProps } from "./code-bloc
 // Keep CodeMirror (languages, theme, search) out of the server bundle: the
 // worker script has a 10 MiB upload limit and the editor only mounts in the
 // browser anyway. The type-only imports leave no runtime edge.
-const LazyCodeBlock: ComponentType<SourceCodeBlockProps> = import.meta.env.SSR
+const LazyCodeBlock = import.meta.env.SSR
   ? () => null
   : lazy(async () => {
       // The grammars load with CodeBlock alone: markdown brings html, css and javascript, which
@@ -26,7 +26,7 @@ const LazyCodeBlock: ComponentType<SourceCodeBlockProps> = import.meta.env.SSR
         ),
       };
     });
-const LazySerializedBlock: ComponentType<SerializedObjectCodeBlockProps> = import.meta.env.SSR
+const LazySerializedBlock = import.meta.env.SSR
   ? () => null
   : lazy(async () => ({
       default: (await import("./code-block.client.tsx")).SerializedObjectCodeBlock,
