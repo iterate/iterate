@@ -5,7 +5,7 @@ import { extname, join, matchesGlob } from "node:path";
 
 import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
 import { decode } from "@jridgewell/sourcemap-codec";
-import { parseSync } from "oxc-parser";
+import { parseSync, Visitor } from "oxc-parser";
 import { transformSync } from "oxc-transform";
 import { createCli } from "trpc-cli";
 
@@ -154,20 +154,14 @@ function jsxTextLines(content: string, path: string) {
     return line;
   };
   const lines: number[] = [];
-  const visit = (node: unknown): void => {
-    if (!node || typeof node !== "object") return;
-    if (Array.isArray(node)) return node.forEach(visit);
-    const { type, start, value } = node as { type?: string; start?: number; value?: unknown };
-    if (type === "JSXText" && typeof value === "string" && typeof start === "number") {
+  new Visitor({
+    JSXText(node) {
       // each non-blank line of the text, from where the text starts
-      value.split("\n").forEach((text, offset) => {
-        if (text.trim()) lines.push(lineOf(start) + offset);
+      node.value.split("\n").forEach((text, offset) => {
+        if (text.trim()) lines.push(lineOf(node.start) + offset);
       });
-      return;
-    }
-    for (const child of Object.values(node)) visit(child);
-  };
-  visit(parseSync(path, content).program);
+    },
+  }).visit(parseSync(path, content).program);
   return lines;
 }
 
