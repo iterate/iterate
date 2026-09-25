@@ -14,6 +14,9 @@ on:
 concurrency:
   group: ci-telemetry-sync
   cancel-in-progress: false
+env:
+  # The image's baked store: dependencies.mjs fingerprints it (docs/depot-ci.md#custom-image)
+  PNPM_CONFIG_STORE_DIR: /home/runner/.pnpm-store
 jobs:
   sync:
     runs-on:
@@ -28,8 +31,8 @@ jobs:
         uses: actions/checkout@v4
         with:
           clean: false
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile --prefer-offline
+      - name: Reconcile dependencies (baked)
+        run: node scripts/depot-ci/dependencies.mjs install
       # The Depot organization token lives in Doppler _shared/preview. The PostHog project key is
       # public and comes from envs.ts.
       - name: Send workflow and job telemetry to PostHog

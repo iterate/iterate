@@ -1,8 +1,7 @@
 /**
  * The e2e retry policy and timeout ladder, in one place.
  *
- * The policy (evidence and rationale: docs/testing.md#retries-and-timeouts,
- * distilled from the 50-run marathon audit in docs/preview-e2e-flake-hunt.md):
+ * The policy (evidence and rationale: docs/testing.md#retries-and-timeouts):
  *
  * 1. Retries live in exactly ONE layer: the individual test — the smallest
  *    unit that owns its state (every test provisions its own project). One

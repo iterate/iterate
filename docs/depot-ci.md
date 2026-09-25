@@ -587,13 +587,11 @@ when the commit's fingerprint (below) equals the image's own stamp, as after a
 `package.json` edit outside the install fields or a revert, it bakes nothing,
 because every bake leaves the next jobs paging in a new image. The schedule and
 a dispatch always bake, and runs for one tag go one at a time, so a push's check
-reads the image the bake before it published. The Preview OS, Preview sweep, Deploy OS, Main OS e2e,
-Lint and Typecheck, OS crash hunt and OS e2e soak jobs run
+reads the image the bake before it published. Jobs on the image take their dependencies with
 `node scripts/depot-ci/dependencies.mjs install`: an exact
 baked fingerprint reuses the installed tree without starting pnpm. A mismatch
 or missing receipt runs `pnpm install --frozen-lockfile --prefer-offline`.
-Other workflows still always run that pnpm command. The Test job does so
-deliberately: the image loads
+Only the Test job always runs that pnpm command, deliberately: the image loads
 lazily, and the install is what pages the tree in before the first tests (with
 reuse, 5 s test rows timed out in three of three runs). Jobs that consume the
 image must keep the image and checkout behavior, and set the store the image was

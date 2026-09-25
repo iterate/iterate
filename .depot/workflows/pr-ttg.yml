@@ -33,6 +33,9 @@ on:
 concurrency:
   group: pr-ttg
   cancel-in-progress: false
+env:
+  # The image's baked store: dependencies.mjs fingerprints it (docs/depot-ci.md#custom-image)
+  PNPM_CONFIG_STORE_DIR: /home/runner/.pnpm-store
 jobs:
   measure:
     runs-on:
@@ -47,8 +50,8 @@ jobs:
         uses: actions/checkout@v4
         with:
           clean: false
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile --prefer-offline
+      - name: Reconcile dependencies (baked)
+        run: node scripts/depot-ci/dependencies.mjs install
       # The Depot token reads the runs through the API and the previous state through the Depot CLI;
       # the Slack bot token comes from Doppler _shared/prd (scripts/ci/slack.ts).
       - name: Measure, page #error-pulse on a change of state
