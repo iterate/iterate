@@ -110,7 +110,12 @@ async function authorize(page: Page) {
   const signedIn = page
     .getByRole("button", { name: "Account", exact: true })
     .filter({ hasText: ADMIN_EMAIL });
-  await review.or(signedIn).waitFor();
+  // From Stop impersonating this is a post and two cross-origin redirects (the Dash's logout → its
+  // login → the issuer's consent), ~1.4 s on a preview; between them no page of ours is on screen.
+  await review.or(signedIn).waitFor({
+    // timeout: no loading UI can show mid-redirect, so the spinner-waiter has nothing to extend by
+    timeout: 10_000,
+  });
   if (!(await review.isVisible())) return;
   await review.click();
   // noWaitAfter: Authorize posts and the issuer hands the browser back to the app
