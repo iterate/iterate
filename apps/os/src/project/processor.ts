@@ -34,6 +34,7 @@ import type { WithItx } from "iterate/sdk";
 import { defaultFiles } from "../generated/config-templates.js";
 import type { ItxEntrypointScope } from "../iterate-context.ts";
 import { reduceSecretCatalog } from "../secret/contract.ts";
+import { reduceIntegrations } from "../integrations/contract.ts";
 import { ProjectContract, type ProjectState } from "./contract.ts";
 import { customHostnameProblem, type CustomHostnameProvider } from "./custom-hostnames.ts";
 
@@ -279,7 +280,10 @@ export class ProjectProcessor extends StreamProcessor<
         return { ...state, workspaces };
       }
       case "events.iterate.com/secret/set":
-      case "events.iterate.com/secret/deleted": {
+      case "events.iterate.com/secret/deleted":
+      case "events.iterate.com/secret/lent":
+      case "events.iterate.com/secret/borrowed":
+      case "events.iterate.com/secret/lend-revoked": {
         const secrets = reduceSecretCatalog(state.secrets, event);
         return secrets && { ...state, secrets };
       }
@@ -292,6 +296,19 @@ export class ProjectProcessor extends StreamProcessor<
             [event.payload.childPath]: { createdAt: event.createdAt },
           },
         };
+      case "events.iterate.com/slack/connected":
+      case "events.iterate.com/google/connected":
+      case "events.iterate.com/cloudflare/connected":
+      case "events.iterate.com/github/connected":
+      case "events.iterate.com/waitrose/connected":
+      case "events.iterate.com/slack/disconnected":
+      case "events.iterate.com/google/disconnected":
+      case "events.iterate.com/cloudflare/disconnected":
+      case "events.iterate.com/github/disconnected":
+      case "events.iterate.com/waitrose/disconnected": {
+        const integrations = reduceIntegrations(state.integrations, event);
+        return integrations && { ...state, integrations };
+      }
       case "events.iterate.com/repo/commit-completed":
         // Only the config repo moves the apex; another repo's commit is a fact for its own log.
         if (event.payload.path !== "/repos/config") return undefined;

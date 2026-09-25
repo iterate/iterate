@@ -261,8 +261,9 @@ export class IterateContextRpcTarget extends RpcTarget {
    *  the global namespace. THE GLOBAL NAMESPACE IS NOT NAVIGABLE: a global context is reached by
    *  IDENTITY only (`session.user`, `session.organizations.get`), so its `cd` is refused — and the
    *  DO's built-in `cd` refuses it too. This is the whole path mask: with no way to name another
-   *  user's path, there is no policy to get wrong. The one exception is a platform admin's handle
-   *  (`#globalPaths`), which walks `/`, `/users/<id>…` and `/organizations/<id>…`. */
+   *  user's path, there is no policy to get wrong. The one exception is the operator's handle
+   *  (`#globalPaths`), which walks `/`, `/users/<id>…`, `/organizations/<id>…` and the deployment's
+   *  own secrets, `/secrets/<name>`. */
   cd(path: string): IterateContextRpcTarget {
     if (this.#durableObjectAddress.projectId === GLOBAL_PROJECT_ID) {
       if (!this.#globalPaths)
@@ -271,10 +272,10 @@ export class IterateContextRpcTarget extends RpcTarget {
           "a global context is reached by identity (session.user, session.organizations), never by path",
         );
       const resolved = resolveContextPath(this.#durableObjectAddress.path, path);
-      if (!/^\/(?:(?:users|organizations)(?:\/.*)?)?$/.test(resolved))
+      if (!/^\/(?:(?:users|organizations|secrets)(?:\/.*)?)?$/.test(resolved))
         throw codedError(
           "INVALID_INPUT",
-          `cd(${JSON.stringify(path)}): a global context is /, /users… or /organizations…`,
+          `cd(${JSON.stringify(path)}): a global context is /, /users…, /organizations… or /secrets…`,
         );
     }
     // LOADED CODE's `cd` is an expression through THIS context's table (`itx.cd ⇒ null` is a wall,

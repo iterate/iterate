@@ -30,6 +30,7 @@ import {
   type CoreState,
 } from "../stream/core-processor.ts";
 import { AccountDurableObject } from "../account/durable-object.ts";
+import { InstanceDurableObject } from "../instance/durable-object.ts";
 import { type FIRST_PARTY_FACET_CLASSES, firstPartyFacetClassOf } from "../first-party-facets.ts";
 import { OrganizationDurableObject } from "../organization/durable-object.ts";
 import { ProjectDurableObject } from "../project/durable-object.ts";
@@ -109,6 +110,7 @@ export const UNCLAIMED_FACET_SWEEP_AFTER_QUIET_MS = 60_000;
  *  typecheck. */
 const FIRST_PARTY_FACET_PUBLIC_METHODS = {
   account: AccountDurableObject.publicMethods,
+  instance: InstanceDurableObject.publicMethods,
   organization: OrganizationDurableObject.publicMethods,
   project: ProjectDurableObject.publicMethods,
   repo: RepoDurableObject.publicMethods,

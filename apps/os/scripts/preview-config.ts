@@ -19,6 +19,10 @@ import { voice } from "../../voice/scripts/app.ts";
 import type { StartApp } from "../../../scripts/lib/start-app.ts";
 import { OBSERVABILITY } from "../../../scripts/lib/wrangler-config.ts";
 import { TEST_LINK_EMAIL_DOMAIN } from "../src/test-link.ts";
+import { PREVIEW_SLACK_APP } from "./preview-slack-app.ts";
+import { PREVIEW_GOOGLE_APP } from "./preview-google-app.ts";
+import { PREVIEW_CLOUDFLARE_APP } from "./preview-cloudflare-app.ts";
+import { PREVIEW_GITHUB_APP, previewGithubAppPrivateKey } from "./preview-github-app.ts";
 import { readWranglerBase } from "./generate-wrangler-config.ts";
 
 /** Beside Vite's built Worker config, so `main` and `assets.directory` resolve identically. */
@@ -542,6 +546,8 @@ export function previewWranglerConfig(input: {
   /** The preview's own D1 (`os-<preview>-db`), which scripts/preview.ts created and migrated. */
   databaseId: string;
   dashOrigin?: string;
+  /** iterate's GitHub App's throwaway key on a preview (preview-github-app.ts). */
+  githubAppPrivateKey: string;
 }) {
   const { template: base, previewName } = input;
   return {
@@ -600,6 +606,23 @@ export function previewWranglerConfig(input: {
         // in as (specs/admin). A preview already signs anyone in by password or test link, so an
         // admin here opens nothing that was closed.
         APP_CONFIG_ADMINS: JSON.stringify([PREVIEW_ADMIN_EMAIL]),
+        // "ITERATE'S" SLACK APP on a preview is the pet shop's Slack fake (PREVIEW_SLACK_APP).
+        APP_CONFIG_INTEGRATIONS__SLACK: JSON.stringify(PREVIEW_SLACK_APP),
+        // … and its Google client and GitHub App the shop's fakes too (PREVIEW_GOOGLE_APP,
+        // PREVIEW_GITHUB_APP — its throwaway key from Doppler at deploy time, never the real App's).
+        APP_CONFIG_INTEGRATIONS__GOOGLE: JSON.stringify(PREVIEW_GOOGLE_APP),
+        APP_CONFIG_INTEGRATIONS__GITHUB: JSON.stringify({
+          ...PREVIEW_GITHUB_APP,
+          privateKey: input.githubAppPrivateKey,
+        }),
+        APP_CONFIG_INTEGRATIONS__CLOUDFLARE: JSON.stringify(PREVIEW_CLOUDFLARE_APP),
+        // SIGN IN WITH GOOGLE, CLOUDFLARE AND GITHUB through those fakes, each keeping its token as
+        // the person's connection; a fake admits addresses under the test-link domain alone.
+        APP_CONFIG_LOGIN__GOOGLE: "{}",
+        APP_CONFIG_LOGIN__CLOUDFLARE: JSON.stringify({
+          scopes: ["openid", "user-details.read", "offline_access"],
+        }),
+        APP_CONFIG_LOGIN__GITHUB: "{}",
       },
     },
   };
@@ -625,7 +648,15 @@ export function writePreviewWranglerConfig(input: {
   );
   writeFileSync(
     configUrl,
-    `${JSON.stringify(previewWranglerConfig({ template: built, ...input }), null, 2)}\n`,
+    `${JSON.stringify(
+      previewWranglerConfig({
+        template: built,
+        githubAppPrivateKey: previewGithubAppPrivateKey(),
+        ...input,
+      }),
+      null,
+      2,
+    )}\n`,
   );
   return fileURLToPath(configUrl);
 }

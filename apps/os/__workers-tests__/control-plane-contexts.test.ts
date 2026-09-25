@@ -415,7 +415,7 @@ test("a user's kv is their own: A's put is A's get, not B's, not the global root
   expect(await b.user.kv.list()).toMatchObject({ keys: [] });
 });
 
-test("a user's secrets are their own: A's set lives at /users/<a>/secrets/x and is in A's catalog (the account facet on A's root), not B's, not the global root's (which owns none) — a context below A shares A's catalog", async () => {
+test("a user's secrets are their own: A's set lives at /users/<a>/secrets/x and is in A's catalog (the account facet on A's root), not B's, not the global root's (the deployment's own, the operator's alone) — a context below A shares A's catalog", async () => {
   const a = await userSession("secret-a@sec.test");
   const b = await userSession("secret-b@sec.test");
   const aId = (await a.whoami()).actor;
@@ -446,7 +446,7 @@ test("a user's secrets are their own: A's set lives at /users/<a>/secrets/x and 
         return String(error);
       }
     }),
-  ).toMatch(/the global root owns no secrets/);
+  ).toMatch(/the deployment's own secrets \(global:\/secrets\/<name>\) are the operator's/);
   expect(
     await stub(`global.iterate/users/${aId}/notes`).invoke(["itx", "secrets", ["list"]]),
   ).toEqual([aRow]);

@@ -198,6 +198,89 @@ export class BreakerDurableObject extends StreamProcessorDurableObject {
   processor = new BreakerProcessor();
 }`,
   },
+  // THE AI LINTER (a project's own, userspace): a processor on a GitHub connection's log
+  // (`/integrations/github/<connection>`) that answers each pull request opened, readied or pushed
+  // to with one Check Run. It reads the PR's files and posts the verdict with the connection's
+  // installation token (`getSecret("/secrets/github-<connection>")` through `itx.fetch`, the
+  // context's egress), asks `itx.ai` for the verdict, and skips a commit that already has its run
+  // (`external_id`), so a redelivery lints nothing twice. Enabled on a log with history, it lints
+  // none of it: whoever installs it appends `pr-linter-installed` beside the enable, and it lints
+  // only the webhooks after that event (enabling replays the whole log).
+  prLinter: {
+    "worker.js": `import { StreamProcessor, StreamProcessorDurableObject, defineProcessorContract, z } from "iterate/sdk";
+const WEBHOOK = "events.iterate.com/github/webhook-received";
+const INSTALLED = "pr-linter-installed";
+const CHECK = "Iterate GitHub AI linter";
+const MODEL = "@cf/meta/llama-3.1-8b-instruct";
+const contract = defineProcessorContract({
+  slug: "pr-linter",
+  version: "1.0.0",
+  description: "Lints each pull request a GitHub connection's webhooks announce, as one Check Run.",
+  stateSchema: z.object({ installedAt: z.number().nullable().default(null) }),
+  consumes: [WEBHOOK, INSTALLED],
+  emits: [],
+});
+class PrLinterProcessor extends StreamProcessor {
+  contract = contract;
+  constructor(withItx) { super(); this.withItx = withItx; }
+  reduce({ event, state }) {
+    if (event.type === INSTALLED && state.installedAt === null) return { installedAt: event.offset };
+  }
+  processEvent({ event, state, blockProcessorWhile }) {
+    if (state.installedAt === null || !event || event.type !== WEBHOOK) return;
+    const { delivery: github, body } = event.payload;
+    const pr = body.pull_request;
+    if (github.name !== "pull_request" || !pr || pr.draft || pr.state !== "open") return;
+    if (!["opened", "ready_for_review", "synchronize"].includes(body.action)) return;
+    blockProcessorWhile(() => this.lint(event.path, body));
+  }
+  async lint(path, body) {
+    const connection = path.split("/").pop();
+    const repo = body.repository.url; // the API's repository URL, the fake's on a preview
+    const headers = {
+      accept: "application/vnd.github+json",
+      authorization: 'Bearer getSecret("/secrets/github-' + connection + '", { field: "accessToken" })',
+      "user-agent": "iterate-pr-linter",
+    };
+    const github = async (url, init = {}) => {
+      const response = await this.withItx((itx) => itx.fetch(new Request(url, { ...init, headers: { ...headers, ...init.headers } })));
+      if (!response.ok) throw new Error("GitHub answered " + response.status + " to " + url + ": " + (await response.text()));
+      return response.json();
+    };
+    const sha = body.pull_request.head.sha;
+    const externalId = "pr-linter:" + body.repository.full_name + "#" + body.pull_request.number + "@" + sha;
+    const existing = await github(repo + "/commits/" + sha + "/check-runs?check_name=" + encodeURIComponent(CHECK));
+    if ((existing.check_runs || []).some((run) => run.external_id === externalId)) return;
+    const files = await github(repo + "/pulls/" + body.pull_request.number + "/files");
+    const patch = files.map((file) => "--- " + file.filename + "\\n" + (file.patch || "")).join("\\n");
+    const answer = await this.withItx((itx) =>
+      itx.ai.run(MODEL, {
+        messages: [
+          { role: "system", content: 'Review this diff. Answer JSON: {"conclusion":"success"|"neutral","summary":string}.' },
+          { role: "user", content: patch },
+        ],
+      }),
+    );
+    let verdict = { conclusion: "neutral", summary: "The linter could not read the model's answer." };
+    try { verdict = { ...verdict, ...JSON.parse(answer.response) }; } catch {}
+    await github(repo + "/check-runs", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        name: CHECK,
+        head_sha: sha,
+        status: "completed",
+        conclusion: verdict.conclusion === "success" ? "success" : "neutral",
+        external_id: externalId,
+        output: { title: CHECK, summary: verdict.summary },
+      }),
+    });
+  }
+}
+export class PrLinterDurableObject extends StreamProcessorDurableObject {
+  processor = new PrLinterProcessor((call) => this.withItx(call));
+}`,
+  },
   // A capnweb server as a LOADED WORKER, served behind a project host: pins the SDK's
   // `newWorkersRpcResponse` export (library-connectors.e2e) and, through `path()`,
   // that the host's `/<path>` reaches the service verbatim.

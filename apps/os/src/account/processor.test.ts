@@ -57,6 +57,7 @@ const rows: {
       memberships: {},
       endedMemberships: {},
       secrets: {},
+      integrations: {},
     },
   },
   {
@@ -71,6 +72,7 @@ const rows: {
       memberships: {},
       endedMemberships: {},
       secrets: {},
+      integrations: {},
     },
   },
   {
@@ -115,6 +117,7 @@ const rows: {
     state: {
       authentications: [],
       secrets: {},
+      integrations: {},
       personalAccessTokens: {
         pat_a: key("laptop", 9, expect.any(String)),
         pat_b: key("phone", null, expect.any(String)),
@@ -177,6 +180,7 @@ const rows: {
       memberships: { org_1: { role: "owner", since: new Date(1000).toISOString() } },
       endedMemberships: { org_2: { at: expect.any(String) } },
       secrets: {},
+      integrations: {},
     },
   },
   {
@@ -235,6 +239,7 @@ const rows: {
       },
       endedMemberships: { org_2: { at: expect.any(String) } },
       secrets: {},
+      integrations: {},
     },
   },
   {
@@ -256,6 +261,7 @@ const rows: {
       memberships: {},
       endedMemberships: {},
       secrets: {},
+      integrations: {},
     },
   },
   {
@@ -277,6 +283,7 @@ const rows: {
       memberships: {},
       endedMemberships: {},
       secrets: {},
+      integrations: {},
     },
   },
   {
@@ -310,9 +317,91 @@ const rows: {
       memberships: {},
       endedMemberships: {},
       secrets: {},
+      integrations: {},
+    },
+  },
+  {
+    name: "a sign-in's connection is the person's row, a disconnect drops it; the secret it keeps lists its lends until each is revoked; a person's own appends of either change nothing",
+    events: [
+      {
+        type: "events.iterate.com/secret/set",
+        payload: {
+          path: "/secrets/google-42",
+          urls: ["https://google.test"],
+          refresh: "oauth-refresh-token",
+        },
+        source: platform,
+      },
+      {
+        type: "events.iterate.com/google/connected",
+        payload: {
+          connection: "42",
+          client: "iterate",
+          account: "ada@example.com",
+          externalId: "42",
+          scopes: ["openid"],
+        },
+        source: platform,
+      },
+      {
+        type: "events.iterate.com/github/connected",
+        payload: { connection: "7", client: "iterate", account: "ada", externalId: "7" },
+        source: platform,
+      },
+      {
+        type: "events.iterate.com/github/disconnected",
+        payload: { connection: "7" },
+        source: platform,
+      },
+      {
+        type: "events.iterate.com/cloudflare/connected",
+        payload: { connection: "evil", client: "iterate", account: "x", externalId: "x" },
+      },
+      lent("lend_a", "prj_1"),
+      lent("lend_b", "prj_2"),
+      {
+        type: "events.iterate.com/secret/lend-revoked",
+        payload: { path: "/secrets/google-42", lendId: "lend_a", reason: "membership-ended" },
+        source: platform,
+      },
+    ],
+    state: {
+      authentications: [],
+      personalAccessTokens: {},
+      endedGrants: {},
+      grantUses: {},
+      consents: [],
+      memberships: {},
+      endedMemberships: {},
+      secrets: {
+        "/secrets/google-42": {
+          urls: ["https://google.test"],
+          refresh: "oauth-refresh-token",
+          createdAt: expect.any(String),
+          lends: { lend_b: { to: "prj_2", as: "/secrets/google-ada", since: expect.any(String) } },
+        },
+      },
+      integrations: {
+        "/integrations/google/42": {
+          provider: "google",
+          connection: "42",
+          client: "iterate",
+          account: "ada@example.com",
+          externalId: "42",
+          scopes: ["openid"],
+        },
+      },
     },
   },
 ];
 for (const { name, events, state } of rows)
   test(`AccountProcessor — the account state folded from facts: ${name}`, () =>
     expect(reduceProcessor(new AccountProcessor(), events)).toEqual(state));
+
+function lent(lendId: string, to: string) {
+  return {
+    type: "events.iterate.com/secret/lent",
+    payload: { path: "/secrets/google-42", lendId, to, as: "/secrets/google-ada" },
+    source: platform,
+  };
+}

@@ -10,6 +10,8 @@ declare global {
     interface Env extends WorkerEnv {
       /** The control plane's D1 migrations (vitest.config.ts), for apply-migrations.ts. */
       TEST_MIGRATIONS: D1Migration[];
+      /** The public half of the suite's throwaway GitHub App key (vitest.config.ts). */
+      TEST_GITHUB_APP_PUBLIC_KEY?: string;
     }
     interface GlobalProps {
       mainModule: typeof import("../src/worker.ts");

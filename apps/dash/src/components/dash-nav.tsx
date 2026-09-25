@@ -5,6 +5,7 @@
 import { getRouteApi, Link, useMatchRoute } from "@tanstack/react-router";
 import {
   Activity,
+  Blocks,
   Building2,
   ExternalLink,
   FolderKanban,
@@ -37,6 +38,7 @@ const PROJECT_PAGES = [
   { to: "/projects/$slug/contexts/$", label: "Contexts", icon: Waypoints },
   { to: "/projects/$slug/mcp", label: "MCP", icon: Plug },
   { to: "/projects/$slug/secrets", label: "Secrets", icon: LockKeyhole },
+  { to: "/projects/$slug/integrations", label: "Integrations", icon: Blocks },
   { to: "/projects/$slug/hostnames", label: "Hostnames", icon: Globe },
 ] as const;
 

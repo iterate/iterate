@@ -200,4 +200,17 @@ dash's projects page. That starts a new attempt.
     Assistant Voice Preview Edition) over USB from Chrome or Edge, so it talks to the project too.
     It installs the voice agent the same way.
 
-Google, Cloudflare or email-code sign-in, and custom domains: `apps/os/SELF-HOSTING.md`.
+## Integrations
+
+A self-host has none of iterate's Slack, Google, Cloudflare or GitHub apps. If the user wants an
+agent in Slack, Gmail or a GitHub repo, send them to the dash's project Integrations page and its
+**Use your own app** button: it shows the redirect/callback, webhook and (Slack) interactivity URLs
+to paste into the provider's console, and takes the app's credentials (client ID and secret; Slack's
+signing secret; GitHub's App ID, slug, private key and webhook secret). `apps/os/SELF-HOSTING.md`
+has the steps per provider. Signing in with Google, Cloudflare or GitHub needs `login.<provider>`
+and that provider's app in `APP_CONFIG` as `integrations.<provider>`, registered with
+`<origin>/.auth/identity/callback` (Google), `<origin>/.auth/identity/cloudflare/callback`
+(Cloudflare) or `<origin>/.auth/identity/github/callback` (GitHub).
+
+Google, Cloudflare or email-code sign-in, integrations, and custom domains:
+`apps/os/SELF-HOSTING.md`.

@@ -8,6 +8,7 @@
 import { type ConsumedEvent, type ReduceArgs, StreamProcessor } from "iterate/stream/processor";
 import { dropMembership, reduceMembership } from "../organization/contract.ts";
 import { reduceSecretCatalog } from "../secret/contract.ts";
+import { reduceIntegrations } from "../integrations/contract.ts";
 import { AccountContract, type AccountState } from "./contract.ts";
 
 export class AccountProcessor extends StreamProcessor<
@@ -87,9 +88,22 @@ export class AccountProcessor extends StreamProcessor<
         };
       }
       case "events.iterate.com/secret/set":
-      case "events.iterate.com/secret/deleted": {
+      case "events.iterate.com/secret/deleted":
+      case "events.iterate.com/secret/lent":
+      case "events.iterate.com/secret/lend-revoked": {
         const secrets = reduceSecretCatalog(state.secrets, event);
         return secrets && { ...state, secrets };
+      }
+      case "events.iterate.com/google/connected":
+      case "events.iterate.com/google/disconnected":
+      case "events.iterate.com/cloudflare/connected":
+      case "events.iterate.com/cloudflare/disconnected":
+      case "events.iterate.com/github/connected":
+      case "events.iterate.com/github/disconnected":
+      case "events.iterate.com/waitrose/connected":
+      case "events.iterate.com/waitrose/disconnected": {
+        const integrations = reduceIntegrations(state.integrations, event);
+        return integrations && { ...state, integrations };
       }
       default:
         return undefined;

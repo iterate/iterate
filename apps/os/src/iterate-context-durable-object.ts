@@ -69,9 +69,15 @@ import {
   CONTEXT_DESTROYED,
   DurableObjectNameCodec,
   GLOBAL_PROJECT_ID,
+  pathUnderOwner,
   resourceScope,
 } from "./context/paths.ts";
-import { secretPathsReferenced } from "./secrets.ts";
+import {
+  LEND_USE_HEADER,
+  LENT_AS_HEADER,
+  secretPathsReferenced,
+  verifyLendUse,
+} from "./secrets.ts";
 import { isDeployReset } from "./retryable-error.ts";
 import { appConfigOf, sessionSigningSecretOf, type AppConfigEnv } from "./app-config.ts";
 import {
@@ -702,11 +708,13 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       this.#controlPlane.primaryHostnameOf(this.#durableObjectAddress.projectId),
     projectId: this.#durableObjectAddress.projectId,
     path: this.#durableObjectAddress.path,
+    otherOwnerContext: (name) => this.env.ITERATE_CONTEXT.getByName(name),
     iterateContextName: this.#durableObjectAddress.name,
     env: this.env,
     deployId: this.#appConfig.deployId,
     ingressRouting: this.#appConfig.urls.ingressRouting,
     dashOrigin: this.#appConfig.urls.dash,
+    platformAdmins: () => this.#appConfig.admins,
     platformOrigin: () => this.#platformOrigin,
     signFileUrl: async (input) => {
       const platformOrigin = this.#platformOrigin;
@@ -1215,6 +1223,21 @@ export class IterateContextDurableObject extends DurableObject<Env> {
 
   async #serveFetch(request: Request): Promise<Response> {
     this.#stream.appendWakeRecord("request");
+    // A BORROWED SECRET'S USE (secret/durable-object.ts `fetch`): the lend, signed by the
+    // borrower's facet; anything else carrying the header is refused, never served as egress.
+    const lendUse = request.headers.get(LEND_USE_HEADER);
+    if (lendUse) {
+      const lend = await verifyLendUse(
+        lendUse,
+        await sessionSigningSecretOf(this.#appConfig),
+        this.#durableObjectAddress.name,
+      );
+      if (!lend)
+        return new Response("itx.fetch: a lend use this lender cannot verify\n", { status: 502 });
+      const headers = new Headers(request.headers);
+      headers.delete(LEND_USE_HEADER);
+      return this.#lentFetch(new Request(request, { headers }), lend);
+    }
     // The handlers, in order — each answers or declines: the rpc-stub pager and the rpc-stub fetch
     // upgrade leg; AN ITX-EXPRESSION FETCH (`x-itx-expression` names an itx expression — JSON from a session's
     // terminal `fetch(request)`, "" from a project host (the project's ingress target) or dotted text
@@ -1391,6 +1414,8 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     stampCallerHeaders(headers, null);
     headers.delete(ITX_EXPRESSION_FETCH_HEADER);
     headers.delete(FETCH_UPGRADE_RESUMABLE_HEADER); // the edge's ask of a lent stub, never an origin's
+    // A lend's headers are platform-to-platform (secrets.ts `LEND_USE_HEADER`): never a caller's.
+    for (const name of [...headers.keys()]) if (name.startsWith("x-itx-lend")) headers.delete(name);
     const outbound = new Request(request, { headers });
     const paths = secretPathsReferenced(outbound);
     if (paths.length === 0) return fetch(outbound);
@@ -1412,6 +1437,51 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       ]) as Promise<Response>;
     // Another context's: its own `fetch` lands in ITS `#egress`, the branch above.
     return this.#sibling(secretPath).fetch(outbound);
+  }
+
+  /** A BORROWED SECRET'S USE, from the borrower's `secret` facet (secret/durable-object.ts `fetch`)
+   *  over this DO's `fetch` — a fetch channel, so an upgrade's 101 crosses it — with the lend signed
+   *  in `LEND_USE_HEADER` (secrets.ts), which only platform code holding the deployment's key can
+   *  mint and every egress strips: this context is the lender's secret, whose facet admits the lend
+   *  — live, lent to `borrower`, the lender still in that project — and dispatches the request
+   *  itself. A lend refused because its lender left the project ends here
+   *  (`secret/lend-revoked { reason: "membership-ended" }` on both sides); every refusal is a 502. */
+  async #lentFetch(
+    request: Request,
+    lend: { lendId: string; borrower: string },
+  ): Promise<Response> {
+    // The facet's own answers (secret/durable-object.ts `admitLend`).
+    const verdict = (await this.#facetHost.callFacetAsPlatform("secret", [["admitLend", lend]])) as
+      | { as: string }
+      | { refused: string; revoke?: "membership-ended" };
+    if ("refused" in verdict) {
+      if (verdict.revoke) {
+        const { projectId, path } = this.#durableObjectAddress;
+        await this.invoke(
+          [
+            "itx",
+            "builtins",
+            "secrets",
+            [
+              "revokeLend",
+              pathUnderOwner(resourceScope(projectId, path), path),
+              lend.lendId,
+              { reason: verdict.revoke },
+            ],
+          ],
+          [],
+          { principal: null, platform: true },
+        );
+      }
+      return new Response(`itx.fetch: ${verdict.refused}\n`, { status: 502 });
+    }
+    // The facet's fetch channel, the path it is lent as beside the request: only this DO sets it
+    // (every egress strips `x-itx-lend*` before a request reaches the facet).
+    const headers = new Headers(request.headers);
+    headers.set(LENT_AS_HEADER, JSON.stringify({ as: verdict.as, borrower: lend.borrower }));
+    return this.#facetHost.callFacetAsPlatform("secret", [
+      ["fetch", new Request(request, { headers })],
+    ]) as Promise<Response>;
   }
 
   webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): void {

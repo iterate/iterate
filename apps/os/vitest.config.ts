@@ -23,6 +23,7 @@
 // Package test scripts run the Vite build before Vitest starts. Global setup refreshes generated
 // modules for unit tests and fixtures. Browser E2E is the root Playwright suite (specs/AGENTS.md).
 
+import { generateKeyPairSync } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { cloudflareTest, readD1Migrations } from "@cloudflare/vitest-plugin";
 import {
@@ -84,6 +85,16 @@ class LongPolesFirst extends BaseSequencer {
   }
 }
 
+/** THE WORKERS SUITE'S GITHUB APP — iterate's App at a fake GitHub (github.test,
+ *  __workers-tests__/integrations.test.ts), bound here rather than in wrangler.test.jsonc
+ *  because its key is a throwaway generated per run: no private key is ever in git. PKCS#1, the
+ *  shape GitHub hands out; the public half is the fake's. */
+const WORKERS_GITHUB_APP_KEY = generateKeyPairSync("rsa", {
+  modulusLength: 2048,
+  publicKeyEncoding: { type: "spki", format: "pem" },
+  privateKeyEncoding: { type: "pkcs1", format: "pem" },
+});
+
 export default defineConfig({
   test: {
     // The sequencer is a ROOT option — vitest reads `ctx.config.sequence.sequencer`, never a project's;
@@ -138,6 +149,16 @@ export default defineConfig({
                 TEST_MIGRATIONS: await readD1Migrations(
                   fileURLToPath(new URL("./src/control-plane/db/migrations", import.meta.url)),
                 ),
+                APP_CONFIG_INTEGRATIONS__GITHUB: JSON.stringify({
+                  appId: "github-test-app",
+                  appSlug: "iterate-test",
+                  oauthClientId: "petshop-default",
+                  oauthClientSecret: "petshop-default-secret",
+                  privateKey: WORKERS_GITHUB_APP_KEY.privateKey,
+                  webhookSecret: "github-test-webhook-secret",
+                  githubOrigin: "https://github.test",
+                }),
+                TEST_GITHUB_APP_PUBLIC_KEY: WORKERS_GITHUB_APP_KEY.publicKey,
               },
             },
           })),

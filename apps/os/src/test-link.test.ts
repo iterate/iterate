@@ -113,11 +113,11 @@ test("login.testLink: prd's own domain refuses it, even from a mistaken Doppler 
       APP_CONFIG_URLS__OS: "https://os.iterate.com",
       APP_CONFIG_LOGIN__TEST_LINK__EMAIL_DOMAIN: "preview.iterate.test",
     }),
-  ).toThrow(/APP_CONFIG login\.testLink .*only for a preview or local dev/);
+  ).toThrow(/APP_CONFIG login\.testLink .*only for a preview, local dev or a test/);
   // a blank urls.os (a self-host on each request's own origin) must name one first
   expect(() =>
     parseAppConfig({ ...base, APP_CONFIG: JSON.stringify({ login: { testLink: {} } }) }),
-  ).toThrow(/only for a preview or local dev/);
+  ).toThrow(/only for a preview, local dev or a test/);
 });
 
 const admins = {

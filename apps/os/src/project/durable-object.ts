@@ -4,7 +4,9 @@
 // `repos`, `workspaces` (collection.ts, one instance per entity): each reads the catalog
 // from this facet's `snapshot()` for `list()` and runs the entity's creation saga for `create(path)`,
 // reached as `itx.repos.list()` / `itx.repos.create(path)` through the library (library.ts, one
-// dispatch on this facet: `repos().list()`). Hosted from `ctx.exports` (first-party-facets.ts):
+// dispatch on this facet: `repos().list()`). And THE INTEGRATIONS (src/integrations/): a project's
+// connections to Slack, Google and GitHub, connected and disconnected here and finished here when
+// the provider's callback comes back. Hosted from `ctx.exports` (first-party-facets.ts):
 // ordinary bundled worker code, enabled as a row on `/` by `session.projects.create` (session.ts) —
 // and by the first `list()`, which hosts the facet without a row.
 import { StreamProcessorDurableObject, type ItxEntrypointService } from "iterate/sdk";
@@ -15,6 +17,16 @@ import { CONTEXT_DESTROYED, DurableObjectNameCodec } from "../context/paths.ts";
 import { ControlPlane } from "../control-plane/edge.ts";
 import type { ItxEntrypointScope } from "../iterate-context.ts";
 import type { Env as ContextEnv } from "../iterate-context-durable-object.ts";
+import type { IntegrationProvider } from "../integrations/contract.ts";
+import { assertConnectionName, type IntegrationScope } from "../integrations/connections.ts";
+import { acceptGithubCallback } from "../integrations/github.ts";
+import {
+  connectIntegration,
+  disconnectIntegration,
+  finishIntegrationConnect,
+  type ConnectInput,
+} from "../integrations/verbs.ts";
+import { connectWaitrose } from "../integrations/waitrose-connection.ts";
 import { EntityCollectionRpcTarget } from "./collection.ts";
 import type { ProjectState } from "./contract.ts";
 import { cloudflareCustomHostnameProvider } from "./custom-hostnames.ts";
@@ -29,8 +41,21 @@ export class ProjectDurableObject extends StreamProcessorDurableObject<
     AppConfigEnv,
   ItxEntrypointScope
 > {
-  /** The processor's reads, and the two collections `itx.repos` / `itx.workspaces` reach (library.ts). */
-  static override publicMethods = [...super.publicMethods, "repos", "workspaces"];
+  /** The processor's reads, the two collections `itx.repos` / `itx.workspaces` reach (library.ts),
+   *  and the integrations' verbs. `finishIntegrationConnect` and `acceptGithubCallback` are the
+   *  callbacks' (secret-oauth-callback.ts, integrations/github.ts): the first reports only what the
+   *  provider says of a token the project already holds, the second acts only for its attempt's
+   *  nonce, which only GitHub's redirect carries. */
+  static override publicMethods = [
+    ...super.publicMethods,
+    "repos",
+    "workspaces",
+    "connectIntegration",
+    "disconnectIntegration",
+    "finishIntegrationConnect",
+    "connectWaitrose",
+    "acceptGithubCallback",
+  ];
 
   processor = new ProjectProcessor(
     (call) => this.withItx(call),
@@ -117,5 +142,59 @@ export class ProjectDurableObject extends StreamProcessorDurableObject<
   /** `itx.workspaces`: the catalog's workspaces, and a workspace's creation on its path. */
   workspaces(): EntityCollectionRpcTarget {
     return this.#collection("workspace");
+  }
+
+  #integrationScope(): IntegrationScope {
+    return {
+      env: this.env,
+      projectId: DurableObjectNameCodec.parse(this.ctx.props.iterateContextName).projectId,
+      rootPath: "/",
+      withItx: (call) => this.withItx(call),
+      storage: this.ctx.storage,
+    };
+  }
+
+  /** CONNECT (integrations/verbs.ts): where to send a human to consent — through iterate's app
+   *  (`client: "iterate"`) or the project's own, whose credentials
+   *  `/secrets/<provider>-<connection>` already holds. The provider's callback stores the credential
+   *  and finishes the connection, then sends the human to `next` (the platform's or the Dash's
+   *  origin). Again for a connection that exists asks for more `scopes` on the same account. */
+  async connectIntegration(input: ConnectInput): Promise<{ authorizationUrl: string }> {
+    return connectIntegration(this.#integrationScope(), await this.#integrations(), input);
+  }
+
+  /** The OAuth callback stored a Slack, Google or Cloudflare token: finish the connection. */
+  async finishIntegrationConnect(input: {
+    provider: "slack" | "google" | "cloudflare";
+    connection: string;
+  }): Promise<void> {
+    await finishIntegrationConnect(this.#integrationScope(), await this.#integrations(), input);
+  }
+
+  /** GitHub sent the human back (integrations/github.ts `githubCallbackRoute`). */
+  acceptGithubCallback(input: Parameters<typeof acceptGithubCallback>[1]) {
+    return acceptGithubCallback(this.#integrationScope(), {
+      ...input,
+      connection: assertConnectionName(input?.connection),
+    });
+  }
+
+  /** WAITROSE (integrations/waitrose-connection.ts): the username and password are already in
+   *  `/secrets/waitrose-<connection>`; record the connection, `waitrose/connected` on `/`. */
+  async connectWaitrose(input: { connection: string; account: string }): Promise<void> {
+    await connectWaitrose(this.#integrationScope(), input);
+  }
+
+  /** DISCONNECT: the token revoked where the provider allows, the route and the secret gone, any
+   *  connect in flight dropped, `<provider>/disconnected` on `/`. */
+  async disconnectIntegration(input: {
+    provider: IntegrationProvider;
+    connection: string;
+  }): Promise<void> {
+    await disconnectIntegration(this.#integrationScope(), await this.#integrations(), input);
+  }
+
+  async #integrations() {
+    return (await this.snapshot()).state.integrations;
   }
 }

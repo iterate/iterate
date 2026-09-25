@@ -13,10 +13,12 @@ import {
   isSecretOAuthState,
   normalizeSecretOAuth,
   SECRET_OAUTH_TTL_MS,
+  secretOAuthCallbackPathOf,
 } from "./secret-oauth.ts";
 import { decryptSecretMaterial, encryptSecretMaterial } from "./secret-at-rest.ts";
 import {
   assertSecretPath,
+  EXCHANGE_SOURCE_MAX_CHARS,
   hmacSha256Hex,
   normalizeSecretRecord,
   originPinned,
@@ -24,7 +26,10 @@ import {
   refreshSecretMaterial,
   secretMaterialStringOf,
   secretPathsReferenced,
+  signLendUse,
   substituteProjectSecrets,
+  substituteSecretInFrame,
+  verifyLendUse,
   verifySecretHmac,
 } from "./secrets.ts";
 
@@ -239,6 +244,62 @@ test.each([
 
 // ── the pin ── never empty: a secret goes to its origins and nowhere else.
 // ── the verify operation ── `verifySecretHmac(material, { payload, signature, field? })`: one bit out.
+test.each([
+  {
+    name: "Discord IDENTIFY: a placeholder inside a JSON string is spliced JSON-escaped",
+    frame: JSON.stringify({ op: 2, d: { token: 'getSecret("/secrets/discord")' } }),
+    material: 'bot"tok\\en',
+    expected: JSON.stringify({ op: 2, d: { token: 'bot"tok\\en' } }),
+  },
+  {
+    name: "a lend's borrowed path is this secret too",
+    frame: 'Bot getSecret("/secrets/lent")',
+    material: "t",
+    expected: "Bot t",
+  },
+  {
+    name: "a field of an object material, in a JSON string",
+    frame: JSON.stringify({ token: 'getSecret("/secrets/discord", { field: "bot.token" })' }),
+    material: { bot: { token: "abc" } },
+    expected: JSON.stringify({ token: "abc" }),
+  },
+  {
+    name: "a frame with no placeholder is untouched",
+    frame: "ping",
+    material: "t",
+    expected: "ping",
+  },
+])("substituteSecretInFrame: $name", ({ frame, material, expected }) => {
+  expect(
+    substituteSecretInFrame(
+      frame,
+      ["/secrets/discord", "/secrets/lent"],
+      material as SecretMaterial,
+    ),
+  ).toBe(expected);
+});
+
+test("substituteSecretInFrame: a placeholder naming another secret, or a whole object material, is refused", () => {
+  expect(() =>
+    substituteSecretInFrame('getSecret("/secrets/other")', ["/secrets/discord"], "t"),
+  ).toThrow(SecretRefused);
+  expect(() =>
+    substituteSecretInFrame('getSecret("/secrets/discord")', ["/secrets/discord"], { a: "b" }),
+  ).toThrow(/names no field/);
+});
+
+test("signLendUse / verifyLendUse: the lend round-trips for its lender only, under the same key", async () => {
+  const lend = { lender: "global.iterate/users/u/secrets/g", lendId: "lend_1", borrower: "prj_1" };
+  const token = await signLendUse(lend, "key");
+  expect(await verifyLendUse(token, "key", lend.lender)).toEqual({
+    lendId: "lend_1",
+    borrower: "prj_1",
+  });
+  expect(await verifyLendUse(token, "key", "global.iterate/users/v/secrets/g")).toBeNull();
+  expect(await verifyLendUse(token, "other-key", lend.lender)).toBeNull();
+  expect(await verifyLendUse("forged", "key", lend.lender)).toBeNull();
+});
+
 test("hmacSha256Hex agrees with node's HMAC over a string and over bytes", async () => {
   const oracle = (key: string, payload: string | Uint8Array) =>
     createHmac("sha256", key).update(payload).digest("hex");
@@ -301,6 +362,42 @@ test("originPinned: only a pinned origin passes; an empty pin passes nothing", (
 });
 
 // ── the record ── `normalizeSecretRecord`: what `itx.secrets.set(path, material, options)` stores.
+test.for([
+  {
+    row: "a module exporting exchange is kept verbatim",
+    source: "export async function exchange(material, fetch) { return material; }",
+    outcome: {
+      refresh: {
+        kind: "worker",
+        source: "export async function exchange(material, fetch) { return material; }",
+      },
+    },
+  },
+  {
+    row: "a source with no exchange is refused",
+    source: "export default {}",
+    outcome: /exporting `async function exchange/,
+  },
+  {
+    row: "a source that is not a string is refused",
+    source: 42,
+    outcome: /exporting `async function exchange/,
+  },
+  {
+    row: "a source over the ceiling is refused",
+    source: `export async function exchange() {} //${"x".repeat(EXCHANGE_SOURCE_MAX_CHARS)}`,
+    outcome: /over the 65536-char ceiling/,
+  },
+])("normalizeSecretRecord, exchange code ($row)", ({ source, outcome }) => {
+  const normalize = () =>
+    normalizeSecretRecord(
+      { email: "e", password: "p" },
+      { urls: ["https://tesco.example"], refresh: { kind: "worker", source } },
+    );
+  if (outcome instanceof RegExp) expect(normalize).toThrow(outcome);
+  else expect(normalize()).toMatchObject(outcome);
+});
+
 test("normalizeSecretRecord: the pin is required and stored as origins (deduped); a strategy is named, lies within the pin, and names its client-auth method from the registry", () => {
   expect(
     normalizeSecretRecord("v", {
@@ -517,10 +614,13 @@ test("normalizeSecretOAuth: the pin defaults to the token endpoint's origin, mus
     tokenEndpoint: PROVIDER.tokenEndpoint,
     clientId: "c",
     clientSecret: "s",
+    client: null,
     clientAuth: "client_secret_post",
     scope: "repo",
     urls: ["https://api.example", "https://auth.example"],
     extra: { access_type: "offline" },
+    next: null,
+    expectAccount: null,
   });
   expect(() =>
     normalizeSecretOAuth({ ...PROVIDER, clientId: "c", urls: ["https://api.example"] }),
@@ -662,6 +762,223 @@ test("client_secret_post puts client_id + client_secret in the form for both gra
   expect(publicExchange.exchanges[0]!.body).not.toContain("client_secret");
 });
 
+// AN INTEGRATION'S CLIENT AND `next` (secret-oauth.ts): the options passed ⇒ what the attempt keeps,
+// or the refusal.
+test.for([
+  {
+    row: "the project's own client, in the clear",
+    options: { clientId: "c", clientSecret: "s" },
+    becomes: { clientId: "c", clientSecret: "s", client: null, next: null },
+  },
+  {
+    row: "iterate's Slack app",
+    options: { client: { platform: "slack" } },
+    becomes: { clientId: "", clientSecret: "", client: { platform: "slack" } },
+  },
+  {
+    row: "the project's own Google client, held by the secret",
+    options: { client: { project: "google" } },
+    becomes: { clientId: "", client: { project: "google" } },
+  },
+  {
+    row: "next on the Dash",
+    options: { clientId: "c", next: "https://dash.example/projects/p/integrations?x=1" },
+    becomes: { next: "https://dash.example/projects/p/integrations?x=1" },
+  },
+  {
+    row: "a client beside a clientId",
+    options: { clientId: "c", client: { platform: "slack" } },
+    refused: /not both/,
+  },
+  {
+    row: "a provider with no OAuth connect",
+    options: { client: { platform: "github" } },
+    refused: /client is/,
+  },
+  { row: "no client at all", options: {}, refused: /clientId \(or client\) is required/ },
+  {
+    row: "next on another origin",
+    options: { clientId: "c", next: "https://evil.example/" },
+    refused: /next is an absolute URL on https:\/\/os.example or/,
+  },
+  {
+    row: "next relative",
+    options: { clientId: "c", next: "/projects" },
+    refused: /next is an absolute URL/,
+  },
+  {
+    row: "next as javascript:",
+    options: { clientId: "c", next: "javascript:alert(1)" },
+    refused: /next is an absolute URL/,
+  },
+])("normalizeSecretOAuth, the client and next: $row", ({ options, becomes, refused }) => {
+  const normalize = () =>
+    normalizeSecretOAuth({ ...PROVIDER, ...options }, [
+      "https://os.example",
+      "https://dash.example",
+    ]);
+  if (refused) expect(normalize).toThrow(refused);
+  else expect(normalize()).toMatchObject(becomes!);
+});
+
+test("secretOAuthCallbackPathOf: an integration's client comes back to its provider's callback, every other attempt to the one secret callback", () => {
+  expect(secretOAuthCallbackPathOf({ platform: "slack" })).toBe("/api/integrations/slack/callback");
+  expect(secretOAuthCallbackPathOf({ project: "google" })).toBe(
+    "/api/integrations/google/callback",
+  );
+  expect(secretOAuthCallbackPathOf(null)).toBe("/.secrets/oauth/callback");
+});
+
+// THE RECORD AN INTEGRATION'S EXCHANGE WRITES: the client and the tokens ⇒ the record. iterate's
+// client never enters the material; a project's own app stays beside its tokens.
+test.for([
+  {
+    row: "iterate's Slack app, no refresh token",
+    client: { platform: "slack" },
+    tokens: { access_token: "xoxb" },
+    record: { material: { accessToken: "xoxb" }, refresh: null },
+  },
+  {
+    row: "iterate's Google client, a refresh token: the refresh names the same client",
+    client: { platform: "google" },
+    tokens: { access_token: "ya29", refresh_token: "1//r" },
+    record: {
+      material: { accessToken: "ya29", refreshToken: "1//r" },
+      refresh: {
+        kind: "oauth-refresh-token",
+        clientAuth: "client_secret_basic",
+        client: { platform: "google" },
+      },
+    },
+  },
+  {
+    row: "the project's own Slack app: its credentials kept beside the token",
+    client: { project: "slack" },
+    tokens: { access_token: "xoxb" },
+    record: {
+      material: {
+        clientId: "own",
+        clientSecret: "own-s",
+        signingSecret: "sig",
+        accessToken: "xoxb",
+      },
+      refresh: { kind: "oauth-refresh-token", clientAuth: "client_secret_basic" },
+    },
+  },
+])("completeSecretOAuth, an integration's record: $row", async ({ client, tokens, record }) => {
+  const { pending } = await beginSecretOAuth(
+    { ...normalizeSecretOAuth({ ...PROVIDER, client }), clientId: "resolved" },
+    { redirectUri: "https://os.example/cb", state: "st", nonce: "n" },
+  );
+  const credentials =
+    "platform" in client
+      ? { clientId: "iterate", clientSecret: "iterate-s", kept: {} }
+      : {
+          clientId: "own",
+          clientSecret: "own-s",
+          kept: { clientId: "own", clientSecret: "own-s", signingSecret: "sig" },
+        };
+  const provider = scripted(() => Response.json(tokens));
+  expect(await completeSecretOAuth(pending, "code", provider.fetchFn, credentials)).toEqual({
+    urls: ["https://auth.example"],
+    ...record,
+    refresh: record.refresh && { tokenEndpoint: PROVIDER.tokenEndpoint, ...record.refresh },
+  });
+  expect(provider.exchanges[0]!.headers).toMatchObject({
+    authorization: `Basic ${btoa(`${credentials.clientId}:${credentials.clientSecret}`)}`,
+  });
+});
+
+// A REFRESH STRATEGY NAMING WHOSE APP (normalizeSecretRecord): the strategy passed ⇒ what the record
+// keeps, or the refusal.
+test.for([
+  {
+    row: "iterate's Google client",
+    options: {
+      urls: ["https://oauth2.googleapis.com"],
+      refresh: {
+        kind: "oauth-refresh-token",
+        tokenEndpoint: "https://oauth2.googleapis.com/token",
+        client: { platform: "google" },
+      },
+    },
+    keeps: { client: { platform: "google" } },
+  },
+  {
+    row: "a provider the deployment has no app at",
+    options: {
+      urls: ["https://oauth2.googleapis.com"],
+      refresh: {
+        kind: "oauth-refresh-token",
+        tokenEndpoint: "https://oauth2.googleapis.com/token",
+        client: { platform: "linear" },
+      },
+    },
+    refused: /refresh\.client is \{ platform: "slack" \| "google" \| "cloudflare" \| "github" \}/,
+  },
+  {
+    row: "an installation of iterate's GitHub App",
+    options: {
+      urls: ["https://api.github.com"],
+      refresh: {
+        kind: "github-app-installation",
+        apiOrigin: "https://api.github.com/",
+        installationId: "123",
+        client: { platform: "github" },
+      },
+    },
+    keeps: {
+      kind: "github-app-installation",
+      apiOrigin: "https://api.github.com",
+      installationId: "123",
+      client: { platform: "github" },
+    },
+  },
+  {
+    row: "an installation of the project's own App",
+    options: {
+      urls: ["https://api.github.com"],
+      refresh: {
+        kind: "github-app-installation",
+        apiOrigin: "https://api.github.com",
+        installationId: "123",
+        client: { project: "github" },
+      },
+    },
+    keeps: { client: { project: "github" } },
+  },
+  {
+    row: "an API outside the pin",
+    options: {
+      urls: ["https://github.com"],
+      refresh: {
+        kind: "github-app-installation",
+        apiOrigin: "https://api.github.com",
+        installationId: "123",
+        client: { platform: "github" },
+      },
+    },
+    refused: /refresh\.apiOrigin https:\/\/api\.github\.com is outside the pin/,
+  },
+  {
+    row: "an installation id that would change the URL's path",
+    options: {
+      urls: ["https://api.github.com"],
+      refresh: {
+        kind: "github-app-installation",
+        apiOrigin: "https://api.github.com",
+        installationId: "../app",
+        client: { platform: "github" },
+      },
+    },
+    refused: /GitHub's id/,
+  },
+])("normalizeSecretRecord, whose app a strategy names: $row", ({ options, keeps, refused }) => {
+  const normalize = () => normalizeSecretRecord({}, options);
+  if (refused) expect(normalize).toThrow(refused);
+  else expect(normalize().refresh).toMatchObject(keeps!);
+});
+
 test("isSecretOAuthState: the signed claims must carry the kind, the secret's context and every field with its type — another claim set signed by the same key is not a state, nor is the old owner + name shape", () => {
   const state = { kind: "secret-oauth", context: "prj_x.iterate/secrets/shop", nonce: "x", exp: 1 };
   expect(isSecretOAuthState(state)).toBe(true);
@@ -672,6 +989,8 @@ test("isSecretOAuthState: the signed claims must carry the kind, the secret's co
     isSecretOAuthState({ kind: "secret-oauth", owner: "p", name: "n", nonce: "x", exp: 1 }),
   ).toBe(false);
   expect(isSecretOAuthState([state])).toBe(false);
+  expect(isSecretOAuthState({ ...state, next: "https://os.example/" })).toBe(true);
+  expect(isSecretOAuthState({ ...state, next: 1 })).toBe(false);
   expect(isSecretOAuthState(null)).toBe(false);
 });
 

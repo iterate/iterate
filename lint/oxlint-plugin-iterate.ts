@@ -54,6 +54,9 @@ function isAllowedRawDurableObjectBindingAccessFile(filename: string) {
   if (path.endsWith("/apps/os/src/worker.ts")) return true;
   if (path.endsWith("/apps/os/src/mcp.ts")) return true;
   if (path.endsWith("/apps/os/src/secret-oauth-callback.ts")) return true;
+  // The integrations' callbacks and webhooks (src/integrations/): a project the catalog admits or a
+  // signed state names, touched only after the signature or the member's session.
+  if (path.includes("/apps/os/src/integrations/")) return true;
 
   return (
     path.includes("/durable-objects/") ||
@@ -1208,7 +1211,7 @@ const plugin: StrictPlugin = {
                 `Raw env.${bindingName}.getByName(...) access is privileged platform authority. ` +
                 `Untrusted ingress should go through the root capability/capability adapter instead. ` +
                 `Allowed locations are Durable Objects, entrypoints, capability files, ` +
-                `iterate-context.ts and the edge entry points (worker.ts, mcp.ts, secret-oauth-callback.ts).`,
+                `iterate-context.ts and the edge entry points (worker.ts, mcp.ts, secret-oauth-callback.ts, integrations/).`,
             });
           },
         };

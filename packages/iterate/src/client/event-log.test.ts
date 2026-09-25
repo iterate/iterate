@@ -75,6 +75,27 @@ test("pushes and pages dedupe by offset, and a push past the head appends", asyn
   log.dispose();
 });
 
+test("a push that lands before the first read: the older events read as loading, never as the start of the log", async () => {
+  const context = fakeContext(offsetsWithGaps(3000));
+  const read = context.itx.readEvents.bind(context.itx);
+  let release = () => {};
+  const firstRead = new Promise<void>((resolve) => (release = resolve));
+  context.itx.readEvents = async (...args) => {
+    await firstRead;
+    return read(...args);
+  };
+  const log = connectEventLog(context.itx, { consumes: ["*"], history: "tail" });
+  await settle();
+  // the live subscription delivers the newest event while the head probe is still unanswered
+  context.push([context.head + 1]);
+  await settle();
+  expect(log.get()).toMatchObject({ caughtUp: false, older: { loading: true, exhausted: false } });
+  release();
+  await settle();
+  expect(log.get()).toMatchObject({ caughtUp: true, older: { loading: false, exhausted: false } });
+  log.dispose();
+});
+
 test("all: reads every page from the first and is exhausted at once", async () => {
   const context = fakeContext(offsetsWithGaps(3000));
   const log = connectEventLog(context.itx, { consumes: ["*"], history: "all" });

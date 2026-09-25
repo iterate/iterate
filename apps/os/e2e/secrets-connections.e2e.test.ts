@@ -4,6 +4,9 @@
 //   • `waitrose-session` — the username/password → session archetype (Waitrose's login; the
 //     petshop's GraphQL login speaks the same wire shape): the secret holds ONLY the account
 //     credential, its Durable Object logs in on first use and logs in again on 401.
+//   • `worker` — the same archetype for any vendor, as the secret's own exchange code: the pet shop's
+//     Tesco-shaped two-step login (a CSRF token and its cookie, then the form) runs in the secret's
+//     jail on first use and on 401, a project's own secret and a person's lent to the project.
 //   • `oauth-refresh-token`, tokens brought by a trusted party — the OAuth story with the consent
 //     walked by the test: discovery, code exchange, the secret, a call, expiry, rotation, revocation.
 //   • OAuth, the first tokens obtained by the platform, confidential client — `itx.secrets.beginOAuth`
@@ -25,6 +28,7 @@
 import { expect, test } from "vitest";
 import {
   adminCredentials,
+  cookieSession,
   freshCtx,
   openItx,
   readAll,
@@ -36,6 +40,7 @@ import {
   petshopBaseUrl,
   petshopConnect,
   petshopExpireGraphqlSessions,
+  petshopExpireTescoTokens,
   petshopExpireTokens,
   petshopFailTokenEndpoint,
   petshopFireAppWebhook,
@@ -43,8 +48,9 @@ import {
   petshopRegisterApp,
   petshopRegisterPublicClient,
   petshopRevokeRefreshToken,
+  petshopTescoExchangeSource,
 } from "./support/petshop.ts";
-import { oauthSession } from "./support/principal.ts";
+import { issuerCookie, oauthSession } from "./support/principal.ts";
 import {
   deployedOnly,
   freshDnsSafeProjectSlug,
@@ -108,6 +114,73 @@ test("waitrose-session: a username/password secret mints its session on first us
   expect(await setsOf(itx)).toEqual([changePayload]);
   expect(JSON.stringify([await readAll(itx), await readAll(secret)])).not.toContain(
     "correct-horse",
+  );
+});
+
+test("worker: a userspace Tesco login in the secret's own exchange code logs in on first use and again on a forced 401, and the catalog names the code by its hash — the password never leaves its Durable Object", async () => {
+  const itx = openItx(freshCtx("secrets-tesco"));
+  const petshop = petshopBaseUrl();
+  const email = `shopper-${Date.now().toString(36)}-${crypto.randomUUID().slice(0, 6)}@example.com`;
+  const source = petshopTescoExchangeSource();
+  await itx.secrets.set(
+    "/secrets/tesco",
+    { email, password: "correct-horse" },
+    { urls: [petshop], refresh: { kind: "worker", source } },
+  );
+  expect(await itx.secrets.list()).toEqual([
+    {
+      path: "/secrets/tesco",
+      urls: [petshop],
+      refresh: "worker",
+      refreshSourceSha256: await sha256Hex(source),
+      createdAt: expect.any(String),
+    },
+  ]);
+
+  expect(await bearerCall(itx, "/secrets/tesco", "/api/me")).toMatchObject({
+    status: 200,
+    body: { sub: email, clientId: `tesco-login:${email}` },
+  });
+  await petshopExpireTescoTokens(email);
+  expect(await bearerCall(itx, "/secrets/tesco", "/api/pets")).toMatchObject({
+    status: 200,
+    body: { owner: email, pets: expect.any(Array) },
+  });
+
+  const secret = itx.cd("/secrets/tesco");
+  expect(await refreshedFacts(secret)).toEqual([
+    { kind: "worker", ok: true },
+    { kind: "worker", ok: true },
+  ]);
+  expect(JSON.stringify([await readAll(itx), await readAll(secret)])).not.toContain(
+    "correct-horse",
+  );
+});
+
+test("worker: a person's Tesco login lent to their project — the project's uses log in at the lender, on first use and again on a forced 401", async () => {
+  const email = `lender-${Date.now().toString(36)}-${crypto.randomUUID().slice(0, 6)}@example.com`;
+  const api: any = await cookieSession(await issuerCookie(email));
+  const itx = await api.projects.create({ project: freshDnsSafeProjectSlug("tesco-lend") });
+  const { projectId } = await itx.whoami();
+  await api.user.secrets.set(
+    "/secrets/tesco-mine",
+    { email, password: "correct-horse" },
+    { urls: [petshopBaseUrl()], refresh: { kind: "worker", source: petshopTescoExchangeSource() } },
+  );
+  await api.user.secrets.lend("/secrets/tesco-mine", { to: projectId, as: "/secrets/tesco" });
+
+  expect(await bearerCall(itx, "/secrets/tesco", "/api/me")).toMatchObject({
+    status: 200,
+    body: { sub: email, clientId: `tesco-login:${email}` },
+  });
+  await petshopExpireTescoTokens(email);
+  expect(await bearerCall(itx, "/secrets/tesco", "/api/me")).toMatchObject({
+    status: 200,
+    body: { sub: email },
+  });
+  // the project holds the lend alone: no material, no strategy of its own
+  expect(await itx.secrets.list()).toContainEqual(
+    expect.objectContaining({ path: "/secrets/tesco", borrowed: expect.any(Object) }),
   );
 });
 
@@ -503,6 +576,12 @@ const bearerCall = async (itx: ReturnType<typeof openItx>, secret: string, path:
   }
   return { status: res.status, body };
 };
+
+/** SHA-256 of a string, hex: what the catalog names exchange code by. */
+async function sha256Hex(value: string): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
 
 /** The `secret/refreshed` facts on a SECRET's log (`itx.cd("/secrets/<name>")`), oldest first — the
  *  facet appends one per strategy run, before it answers the request that ran it. */

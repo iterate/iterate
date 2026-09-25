@@ -488,7 +488,12 @@ const template = {
     { binding: "OAUTH_KV", id: "2" },
   ],
 };
-const config = previewWranglerConfig({ template, previewName: "pr123", databaseId: "d1-pr123" });
+const config = previewWranglerConfig({
+  template,
+  previewName: "pr123",
+  databaseId: "d1-pr123",
+  githubAppPrivateKey: "preview-github-app-key",
+});
 
 test("the preview's wrangler config (a pure transform of Vite's built config): the top level provisions live classes, excluding deleted exports, as a legacy migrations entry", () => {
   expect(config).toMatchObject({
@@ -519,13 +524,40 @@ test("the preview's wrangler config (a pure transform of Vite's built config): K
   });
 });
 
-test("the preview's wrangler config (a pure transform of Vite's built config): vars are the preview's own origin, projects as paths, the one-click sign-in links on and one test admin; the secrets are the parent's Previews settings", () => {
+test("the preview's wrangler config (a pure transform of Vite's built config): vars are the preview's own origin, projects as paths, the one-click sign-in links on and iterate's Slack app, Google and Cloudflare clients and GitHub App the pet shop's fakes, which people sign in with too, and one test admin; the secrets are the parent's Previews settings", () => {
   expect(config.previews).toMatchObject({
     vars: {
       APP_CONFIG_URLS__OS: "https://pr123-os.iterate-dev-preview.workers.dev",
       APP_CONFIG_URLS__INGRESS_ROUTING: JSON.stringify({ type: "paths" }),
       APP_CONFIG_LOGIN__TEST_LINK__EMAIL_DOMAIN: "preview.iterate.test",
       APP_CONFIG_ADMINS: JSON.stringify(["admin@preview.iterate.test"]),
+      APP_CONFIG_INTEGRATIONS__SLACK: JSON.stringify({
+        oauthClientId: "petshop-default",
+        oauthClientSecret: "petshop-default-secret",
+        webhookSigningSecret: "preview-slack-signing-secret",
+        slackOrigin: "https://dummy-petshop.iterate.workers.dev",
+      }),
+      APP_CONFIG_INTEGRATIONS__GOOGLE: JSON.stringify({
+        oauthClientId: "petshop-default",
+        oauthClientSecret: "petshop-default-secret",
+        googleOrigin: "https://dummy-petshop.iterate.workers.dev",
+      }),
+      APP_CONFIG_INTEGRATIONS__GITHUB: JSON.stringify({
+        appId: "iterate-preview",
+        appSlug: "iterate-preview",
+        oauthClientId: "petshop-default",
+        oauthClientSecret: "petshop-default-secret",
+        webhookSecret: "preview-github-webhook-secret",
+        githubOrigin: "https://dummy-petshop.iterate.workers.dev",
+        privateKey: "preview-github-app-key",
+      }),
+      APP_CONFIG_INTEGRATIONS__CLOUDFLARE: JSON.stringify({
+        oauthClientId: "petshop-default",
+        oauthClientSecret: "petshop-default-secret",
+        cloudflareOrigin: "https://dummy-petshop.iterate.workers.dev",
+      }),
+      APP_CONFIG_LOGIN__GOOGLE: "{}",
+      APP_CONFIG_LOGIN__GITHUB: "{}",
     },
   });
   expect(previewResourceName("pr123", "db")).toBe("os-pr123-db");
@@ -538,6 +570,7 @@ test("the preview's wrangler config (a pure transform of Vite's built config): a
     previewName: "pr123",
     databaseId: "d1-pr123",
     dashOrigin,
+    githubAppPrivateKey: "preview-github-app-key",
   });
   expect(withDash.previews.vars).toMatchObject({ APP_CONFIG_URLS__DASH: dashOrigin });
   expect(config.previews.vars.APP_CONFIG_URLS__DASH).toBeUndefined();

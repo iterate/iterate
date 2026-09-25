@@ -21,6 +21,13 @@ import {
   setPrimaryHostname,
 } from "./db/queries/.generated/hostnames.sql.ts";
 import {
+  integrationRoute,
+  releaseIntegrationRoutes,
+  releaseOtherIntegrationRoutes,
+  releaseRoutesOfDeletedProject,
+  routeIntegration,
+} from "./db/queries/.generated/integration-routes.sql.ts";
+import {
   acceptInvitation,
   insertAcceptedMembership,
   insertInvitation,
@@ -130,6 +137,9 @@ export type InvitationPreview = InvitationRecord & {
   member: boolean;
   acceptedByYou: boolean;
 };
+/** Where the platform's own app routes a provider account's webhooks: the connection's log, `path`
+ *  in `projectId`. */
+export type IntegrationRouteRecord = { projectId: string; path: string };
 /** What a person can access: their organizations and every project of those, with their role. */
 export type AccessibleRecord = { organizations: OrganizationRecord[]; projects: ProjectRecord[] };
 
@@ -180,6 +190,13 @@ export class ControlPlaneDatabase {
       if (row) return { hostname, project: { id: row.id, slug: row.slug, orgId: row.orgId } };
     }
     return null;
+  }
+  /** The connection a provider account's webhooks go to (`routeIntegration`), or null. */
+  async integrationRoute(
+    provider: string,
+    externalId: string,
+  ): Promise<IntegrationRouteRecord | null> {
+    return integrationRoute(this.#client, { provider, externalId });
   }
   /** What a person can access: the organizations they belong to — the first by name is where a
    *  project goes when none is named — and every project of those, with their role. One batch, so
@@ -616,6 +633,9 @@ export class ControlPlaneDatabase {
     const results = await batch(this.#d1, [
       deleteProject.query({ id: project.id, ...guard }),
       organizationRole.query({ orgId: project.orgId, userId: guard.actorId }),
+      // its connections' webhook routes go with it, or an account it held could never be routed
+      // to another project (`routeIntegration`: first owner wins)
+      releaseRoutesOfDeletedProject.query({ projectId: project.id }),
     ]);
     if (changed(results[0])) return project;
     throw (
@@ -650,6 +670,38 @@ export class ControlPlaneDatabase {
   /** Release a project's claim on `hostname`; another project's claim, or none, is left alone. */
   async releaseHostname(projectId: string, hostname: string): Promise<void> {
     await releaseHostname(this.#client, { hostname, projectId });
+  }
+
+  /** Route `externalId` at `provider` to the connection at `path`: FIRST OWNER WINS — again for the
+   *  same connection is a no-op, and a route another connection holds is refused (its holder
+   *  disconnects first). The connection's route to any other account goes: one account each. One
+   *  batch, the guards in its statements: the insert only for a project that exists and an account
+   *  nobody holds, the release of the connection's other routes only once it holds this one. */
+  async routeIntegration(
+    provider: string,
+    externalId: string,
+    projectId: string,
+    path: string,
+  ): Promise<void> {
+    const route = { provider, externalId, projectId, path };
+    const results = await batch(this.#d1, [
+      routeIntegration.query(route),
+      releaseOtherIntegrationRoutes.query(route),
+      integrationRoute.query({ provider, externalId }),
+    ]);
+    const holder = rowsOf<integrationRoute.Result>(results, 2)[0];
+    if (holder?.projectId === projectId && holder.path === path) return;
+    if (!holder) throw codedError("INVALID_INPUT", `No project ${JSON.stringify(projectId)}.`);
+    throw codedError(
+      "INVALID_INPUT",
+      holder.projectId === projectId
+        ? `The ${provider} account '${externalId}' is already connected at ${holder.path}.`
+        : `The ${provider} account '${externalId}' is connected to another project.`,
+    );
+  }
+  /** Release every route of the connection at `path` in a project; another's are left alone. */
+  async releaseIntegrationRoutes(projectId: string, path: string): Promise<void> {
+    await releaseIntegrationRoutes(this.#client, { projectId, path });
   }
 
   /** Set a project's primary hostname, or clear it with null. */

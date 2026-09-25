@@ -47,6 +47,7 @@
     // THE FIRST-PARTY FACETS: Durable Object classes hosted as facets of a context through
     // `ctx.exports` — declared like any DO class (the facet's own SQLite is where their state lives).
     "AccountDurableObject": { "type": "durable-object", "storage": "sqlite" },
+    "InstanceDurableObject": { "type": "durable-object", "storage": "sqlite" },
     "OrganizationDurableObject": { "type": "durable-object", "storage": "sqlite" },
     "ProjectDurableObject": { "type": "durable-object", "storage": "sqlite" },
     "RepoDurableObject": { "type": "durable-object", "storage": "sqlite" },
@@ -76,13 +77,20 @@
     // mailbox handed to password-and-code-sign-in.ts directly
     "APP_CONFIG_LOGIN__PASSWORD": "test-password",
     "APP_CONFIG_LOGIN__EMAIL_CODE__FROM": "iterate <login@control.test>",
-    "APP_CONFIG_LOGIN__GOOGLE__CLIENT_ID": "google-test-client",
-    "APP_CONFIG_LOGIN__GOOGLE__CLIENT_SECRET": "google-test-secret",
-    "APP_CONFIG_LOGIN__CLOUDFLARE__CLIENT_ID": "cloudflare-test-client",
-    "APP_CONFIG_LOGIN__CLOUDFLARE__CLIENT_SECRET": "cloudflare-test-secret",
+    // Sign in with Google, Cloudflare and GitHub through the pet shop's fakes, iterate's clients
+    // below (__workers-tests__/identity.test.ts); a fake admits addresses under the test-link domain
+    "APP_CONFIG_LOGIN__GOOGLE": "{}",
+    "APP_CONFIG_LOGIN__CLOUDFLARE": "{\"scopes\":[\"openid\",\"user-details.read\",\"offline_access\"]}",
+    "APP_CONFIG_LOGIN__GITHUB": "{}",
+    "APP_CONFIG_LOGIN__TEST_LINK__EMAIL_DOMAIN": "signin.test",
     // the platform admin (admin-and-impersonation.test.ts)
     "APP_CONFIG_ADMINS": "[\"oauth-admin@example.com\"]",
     "APP_CONFIG_SECRETS__KEY": "test-secrets-key",
     "APP_CONFIG_SECRETS__ADMIN_BEARER": "test-admin-api-secret",
+    // iterate's Slack app and Google and Cloudflare clients, answered by the pet shop's fakes at
+    // slack.test, google.test and cloudflare.test (__workers-tests__/integrations.test.ts); its GitHub App is vitest.config.ts's
+    "APP_CONFIG_INTEGRATIONS__SLACK": "{\"oauthClientId\":\"petshop-default\",\"oauthClientSecret\":\"petshop-default-secret\",\"webhookSigningSecret\":\"slack-test-signing-secret\",\"slackOrigin\":\"https://slack.test\"}",
+    "APP_CONFIG_INTEGRATIONS__GOOGLE": "{\"oauthClientId\":\"petshop-default\",\"oauthClientSecret\":\"petshop-default-secret\",\"googleOrigin\":\"https://google.test\"}",
+    "APP_CONFIG_INTEGRATIONS__CLOUDFLARE": "{\"oauthClientId\":\"petshop-default\",\"oauthClientSecret\":\"petshop-default-secret\",\"cloudflareOrigin\":\"https://cloudflare.test\"}",
   },
 }

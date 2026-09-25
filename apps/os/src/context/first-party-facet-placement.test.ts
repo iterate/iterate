@@ -34,7 +34,7 @@ const FIRST_PARTY_FACET_PLACEMENT_ROWS = [
   { facet: "project", context: "global:/users/user_1", allowed: false },
   { facet: "project", context: "global:/organizations/org_1", allowed: false },
   { facet: "project", context: "global:/projects/prj_1", allowed: false },
-  // 4. `secret` — `/secrets/<name>` directly under its owner's root; the global root owns none.
+  // 4. `secret` — `/secrets/<name>` directly under its owner's root, the global root's included.
   { facet: "secret", context: "prj_1:/secrets/api-key", allowed: true },
   { facet: "secret", context: "prj_1:/secrets/a.b_c-1", allowed: true },
   { facet: "secret", context: "prj_1:/secrets/...", allowed: true },
@@ -49,7 +49,9 @@ const FIRST_PARTY_FACET_PLACEMENT_ROWS = [
   { facet: "secret", context: "global:/users/user_1", allowed: false },
   { facet: "secret", context: "global:/users/user_1/notes/secrets/api-key", allowed: false },
   { facet: "secret", context: "global:/organizations/org_1", allowed: false },
-  { facet: "secret", context: "global:/secrets/api-key", allowed: false },
+  { facet: "secret", context: "global:/secrets/api-key", allowed: true },
+  { facet: "secret", context: "global:/secrets", allowed: false },
+  { facet: "secret", context: "global:/notes/secrets/api-key", allowed: false },
   { facet: "secret", context: "global:/", allowed: false },
   // 5. `repo`, `workspace` — any context of a project; never the global namespace.
   { facet: "repo", context: "prj_1:/repos/config", allowed: true },
@@ -72,6 +74,11 @@ const FIRST_PARTY_FACET_PLACEMENT_ROWS = [
   { facet: "tally", context: "global:/organizations/org_1", allowed: false },
   { facet: "tally", context: "global:/", allowed: false },
   { facet: "toString", context: "global:/", allowed: false },
+  // 7. `instance` — the global root, and nowhere else.
+  { facet: "instance", context: "global:/", allowed: true },
+  { facet: "instance", context: "global:/secrets/api-key", allowed: false },
+  { facet: "instance", context: "global:/users/user_1", allowed: false },
+  { facet: "instance", context: "prj_1:/", allowed: false },
 ];
 
 /** 6., the stateless worker (`itx.workers.get({ source })`, and `itx.run`'s script through it). */

@@ -45,6 +45,7 @@ export async function loginState(
     cloudflare: config.login.cloudflare
       ? `/.auth/identity/cloudflare?next=${encodeURIComponent(next)}`
       : null,
+    github: config.login.github ? `/.auth/identity/github?next=${encodeURIComponent(next)}` : null,
     // where a signed-in person with nowhere else to go is sent (the landing page's pointer)
     dash: config.urls.dash || null,
   };

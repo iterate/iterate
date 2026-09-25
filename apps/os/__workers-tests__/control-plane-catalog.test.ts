@@ -552,6 +552,99 @@ test("hostnames: a project's primary hostname reads back only while the project 
   expect(await c.primaryHostnameOf(shop.id)).toBeNull();
 });
 
+// THE INTEGRATION ROUTES — catalog.ts `routeIntegration`, one row each: who holds the account, who
+// routes it, what happens. First owner wins, nothing steals.
+test.for([
+  {
+    rule: "an unrouted account: routed to the connection",
+    holder: null,
+    route: { project: "shop", path: "/integrations/slack/acme" },
+    refused: null,
+  },
+  {
+    rule: "again by the same connection: a no-op",
+    holder: { project: "shop", path: "/integrations/slack/acme" },
+    route: { project: "shop", path: "/integrations/slack/acme" },
+    refused: null,
+  },
+  {
+    rule: "another connection of the same project: refused, naming the holder",
+    holder: { project: "shop", path: "/integrations/slack/acme" },
+    route: { project: "shop", path: "/integrations/slack/other" },
+    refused: "The slack account 'T1' is already connected at /integrations/slack/acme.",
+  },
+  {
+    rule: "another project: refused",
+    holder: { project: "shop", path: "/integrations/slack/acme" },
+    route: { project: "blog", path: "/integrations/slack/acme" },
+    refused: "The slack account 'T1' is connected to another project.",
+  },
+  {
+    rule: "a project the catalog never heard of: refused",
+    holder: null,
+    route: { project: "prj_nobody", path: "/integrations/slack/acme" },
+    refused: 'No project "prj_nobody".',
+  },
+] as const)("integration routes: $rule", async ({ holder, route, refused }) => {
+  await emptyTables();
+  const ids: Record<string, string> = {
+    shop: (await c.createProject(admin, { project: "shop" })).id,
+    blog: (await c.createProject(admin, { project: "blog" })).id,
+  };
+  const projectId = (name: string) => ids[name] || name;
+  if (holder) await c.routeIntegration("slack", "T1", projectId(holder.project), holder.path);
+  const routing = c.routeIntegration("slack", "T1", projectId(route.project), route.path);
+  if (refused)
+    await expect(routing).rejects.toMatchObject({ code: "INVALID_INPUT", message: refused });
+  else await routing;
+  const winner = holder || (refused ? null : route);
+  expect(await c.integrationRoute("slack", "T1")).toEqual(
+    winner && { projectId: projectId(winner.project), path: winner.path },
+  );
+  expect(await c.integrationRoute("github", "T1")).toBeNull(); // a route is per provider
+});
+
+test("integration routes: released by the connection (project and path), after which another project may route the account; a connection holds one account; two projects routing one account at once leave one holder", async () => {
+  await emptyTables();
+  const shop = await c.createProject(admin, { project: "shop" });
+  const blog = await c.createProject(admin, { project: "blog" });
+  await c.routeIntegration("slack", "T1", shop.id, "/integrations/slack/acme");
+  await c.releaseIntegrationRoutes(blog.id, "/integrations/slack/acme");
+  await c.releaseIntegrationRoutes(shop.id, "/integrations/slack/other");
+  expect(await c.integrationRoute("slack", "T1")).toMatchObject({ projectId: shop.id });
+  await c.routeIntegration("slack", "T2", shop.id, "/integrations/slack/acme");
+  expect(await c.integrationRoute("slack", "T1")).toBeNull();
+  await c.releaseIntegrationRoutes(shop.id, "/integrations/slack/acme");
+  expect(await c.integrationRoute("slack", "T2")).toBeNull();
+  await c.routeIntegration("slack", "T2", blog.id, "/integrations/slack/acme");
+  expect(await c.integrationRoute("slack", "T2")).toMatchObject({ projectId: blog.id });
+  // fired together: exactly one wins, and the other is refused
+  const raced = await Promise.allSettled([
+    c.routeIntegration("github", "I9", shop.id, "/integrations/github/acme"),
+    c.routeIntegration("github", "I9", blog.id, "/integrations/github/acme"),
+  ]);
+  expect(raced.map((result) => result.status).sort()).toEqual(["fulfilled", "rejected"]);
+  expect(await rows("select project_id from integration_routes where external_id = 'I9'")).toEqual([
+    { project_id: raced[0]!.status === "fulfilled" ? shop.id : blog.id },
+  ]);
+});
+
+test("integration routes: a deleted project's routes go with its row, so another project may route the account; a refused deletion keeps them", async () => {
+  await emptyTables();
+  const shop = await c.createProject(admin, { project: "shop" });
+  const blog = await c.createProject(admin, { project: "blog" });
+  await c.routeIntegration("slack", "T1", shop.id, "/integrations/slack/acme");
+  await c.routeIntegration("slack", "T2", blog.id, "/integrations/slack/acme");
+  const stranger = await person("eve@example.com");
+  await expect(c.deleteProject(as(stranger), shop.id)).rejects.toMatchObject({ code: "FORBIDDEN" });
+  expect(await c.integrationRoute("slack", "T1")).toMatchObject({ projectId: shop.id });
+  await c.deleteProject(admin, shop.id);
+  expect(await c.integrationRoute("slack", "T1")).toBeNull();
+  expect(await c.integrationRoute("slack", "T2")).toMatchObject({ projectId: blog.id });
+  await c.routeIntegration("slack", "T1", blog.id, "/integrations/slack/other");
+  expect(await c.integrationRoute("slack", "T1")).toMatchObject({ projectId: blog.id });
+});
+
 // ── the OAuth provider's grants (oauth-grants.ts): KV's read, expiry and list semantics ──
 
 const T = 1_790_000_000;
@@ -627,6 +720,7 @@ async function emptyTables() {
     [
       "project_primary_hostnames",
       "project_hostnames",
+      "integration_routes",
       "invitations",
       "projects",
       "memberships",

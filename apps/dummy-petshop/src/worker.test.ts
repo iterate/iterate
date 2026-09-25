@@ -1,8 +1,8 @@
 /**
  * Unit tests for the whole pet-shop HTTP surface, run in plain Node: the
- * real route handlers and the real PetshopStateDurableObject, with only two
- * fakes — an in-memory storage map behind the DO (test/shop.ts), and the vitest alias that
- * swaps `cloudflare:workers` for src/test/cloudflare-workers-shim.ts.
+ * real route handlers and the real state store (state.ts) over an in-memory
+ * storage map (test/shop.ts), and the vitest alias that swaps
+ * `cloudflare:workers` for src/test/cloudflare-workers-shim.ts.
  */
 import { createHmac } from "node:crypto";
 import { expect, onTestFinished, test, vi } from "vitest";
