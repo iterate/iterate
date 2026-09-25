@@ -21,17 +21,26 @@
 //   4. A first-party class's list is read off the class; a loaded class's is asked of the facet once
 //      per startup memo (`listPublicMethods()`, which the shells answer). A loaded class that extends
 //      neither shell answers no list, so nothing on it is reached by expression.
+//   5. `forCaller` on a list says the facet serves callers beneath its context through the caller's
+//      own handle (context/caller-capability.ts). The platform calls it, naming the caller; a walk
+//      that starts with it is refused FORBIDDEN, so no caller names itself or another.
 import { codedError } from "iterate/lib";
 import { itxExpressionStepName, type ItxExpression } from "iterate/expression";
 
 /** Refuses — FORBIDDEN — a walk on the facet `facetName` whose first step is not one of the
- *  `publicMethods` its class lists (rule 1). The refusal names the step and the list. */
+ *  `publicMethods` its class lists (rule 1), or is `forCaller` (rule 5). The refusal names the step
+ *  and the list. */
 export function assertFacetMethodIsPublic(
   facetName: string,
   publicMethods: readonly string[],
   itxExpressionSteps: ItxExpression,
 ): void {
   const method = itxExpressionStepName(itxExpressionSteps[0]) ?? "";
+  if (method === "forCaller")
+    throw codedError(
+      "FORBIDDEN",
+      `facet "${facetName}": "forCaller" is the platform's — it names the caller, and only the platform does`,
+    );
   if (publicMethods.includes(method)) return;
   throw codedError(
     "FORBIDDEN",
