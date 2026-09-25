@@ -16,6 +16,9 @@ on:
       - envs.ts
       - scripts/lib/**
   workflow_dispatch:
+env:
+  # The image's baked store: dependencies.mjs fingerprints it (docs/depot-ci.md#custom-image)
+  PNPM_CONFIG_STORE_DIR: /home/runner/.pnpm-store
 jobs:
   deploy:
     runs-on:
@@ -26,7 +29,8 @@ jobs:
       - uses: actions/checkout@v4
         with:
           clean: false
-      - run: pnpm install --frozen-lockfile --prefer-offline
+      - name: Reconcile dependencies (baked)
+        run: node scripts/depot-ci/dependencies.mjs install
       - name: Deploy static assets and versioned extension bundle
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}

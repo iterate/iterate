@@ -24,6 +24,9 @@ on:
 concurrency:
   group: flake-dashboard
   cancel-in-progress: false
+env:
+  # The image's baked store: dependencies.mjs fingerprints it (docs/depot-ci.md#custom-image)
+  PNPM_CONFIG_STORE_DIR: /home/runner/.pnpm-store
 jobs:
   update:
     runs-on:
@@ -38,8 +41,8 @@ jobs:
         uses: actions/checkout@v4
         with:
           clean: false
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile --prefer-offline
+      - name: Reconcile dependencies (baked)
+        run: node scripts/depot-ci/dependencies.mjs install
       # The Cloudflare API token CI uploads the test evidence with (Doppler _shared/preview) reads
       # it back. The iterate GitHub App's id and key (Doppler os-legacy-backup/prd) mint the token
       # that writes the issue.

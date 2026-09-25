@@ -518,9 +518,6 @@ test.for([
   // its image, store and checkout: the next test, for every job that reconciles
   const reconcile = job.steps?.find((step) => step.name === "Reconcile dependencies (baked)");
   expect(reconcile?.run).toBe("node scripts/depot-ci/dependencies.mjs install");
-  // Any one of these means the job installs its own toolchain instead of using the baked one.
-  const installSteps = ["Setup pnpm", "Setup Node", "Install Doppler CLI"];
-  expect(job.steps?.filter((step) => installSteps.includes(step.name || ""))).toEqual([]);
 });
 
 // Reuse of the baked node_modules hangs on all three: the image's preinstalled workspace, the
@@ -566,6 +563,23 @@ test("a step named for the baked reconcile runs it", () => {
       ),
     );
   expect(misnamed).toEqual([]);
+});
+
+// The Test job installs on purpose: its install pages the lazily loaded image in (test.yml).
+test("jobs on the baked image install no toolchain or dependencies of their own, but Test", () => {
+  const install = /pnpm install|setup-node|action-setup|cli\.doppler\.com/;
+  const ownInstalls = depotWorkflowFiles.flatMap((file) =>
+    Object.entries(loadWorkflow(file).jobs).flatMap(([jobId, job]) =>
+      job["runs-on"].image === bakedImage
+        ? (job.steps || [])
+            .filter((step) => install.test(`${step.run} ${step.uses}`))
+            .map((step) => `${file} ${jobId}: ${step.name}`)
+        : [],
+    ),
+  );
+  expect(ownInstalls).toEqual([
+    ".depot/workflows/test.yml test: Install dependencies (pages the baked tree in)",
+  ]);
 });
 
 // People and agents use the parents (os.iterate-dev-preview.workers.dev, dash.…); what they leave
@@ -773,7 +787,7 @@ test.for(
 )("%s runs only on its schedule or on request", (file) => {
   expect(
     Object.keys(loadWorkflow(file).on || {}).filter(
-      (event) => !["schedule", "workflow_dispatch", "workflow_call"].includes(event),
+      (event) => !["schedule", "workflow_dispatch"].includes(event),
     ),
   ).toEqual([]);
 });

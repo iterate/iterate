@@ -56,6 +56,9 @@ on:
 concurrency:
   group: shadcn-drift-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
+env:
+  # The image's baked store: dependencies.mjs fingerprints it (docs/depot-ci.md#custom-image)
+  PNPM_CONFIG_STORE_DIR: /home/runner/.pnpm-store
 jobs:
   shadcn-drift:
     runs-on:
@@ -69,7 +72,7 @@ jobs:
         with:
           clean: false
           ref: ${{ github.sha }}
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile --prefer-offline
+      - name: Reconcile dependencies (baked)
+        run: node scripts/depot-ci/dependencies.mjs install
       - name: Compare the vendored files with shadcn add
         run: pnpm tsx scripts/ci/shadcn-drift.ts check
