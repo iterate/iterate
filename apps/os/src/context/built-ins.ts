@@ -58,6 +58,7 @@ import {
   type FetchRouteTable,
 } from "../fetch-routes.ts";
 import { normalizeSecretOAuth, type SecretOAuthOptions } from "../secret-oauth.ts";
+import { isDeployReset } from "../retryable-error.ts";
 import { FacetHandle, RpcStubHandle, materializeItxHandleReference } from "./dispatch.ts";
 import { assertFacetPlacement, assertLoadedCodePlacement } from "./first-party-facet-placement.ts";
 import {
@@ -1070,7 +1071,25 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
           const headers = new Headers(terminalFetch.request.headers);
           stampCallerHeaders(headers, hopCaller);
           headers.set(ITX_EXPRESSION_FETCH_HEADER, encodeFetchExpression(terminalFetch.steps));
-          return context.fetch(new Request(terminalFetch.request, { headers }));
+          const request = new Request(terminalFetch.request, { headers });
+          // A DEPLOY that resets the sibling under the fetch is expected: a Request that cannot do
+          // anything twice — a GET or HEAD with no body, never an upgrade — is sent once more, to the
+          // sibling's fresh incarnation on a fresh stub. Anything else fails, and the expression
+          // fetch answers it 503 (iterate-context-durable-object.ts).
+          const replayable =
+            !request.body &&
+            (request.method === "GET" || request.method === "HEAD") &&
+            !request.headers.has("upgrade");
+          return context.fetch(request).catch((error: unknown) => {
+            if (!replayable || !isDeployReset(error)) throw error;
+            console.warn({
+              event: "cd.deploy-reset-fetch-retry",
+              namespace: "iterate-context",
+              path: siblingPath,
+              message: String(error),
+            });
+            return deps.context(siblingPath).fetch(request);
+          });
         }
         // The sibling names a handle by expression (dispatch.ts): this context mints its own over the
         // sibling's stub, so a handle held here is one whole call per verb, never a session held open.

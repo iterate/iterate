@@ -434,64 +434,90 @@ async function readWindow(
       );
     return result.calculations[0]!.aggregates.map((row) => [row.groupKey, row.count]);
   };
-  // A fetch route whose target is an offline lent stub (`iterate tunnel` killed without Ctrl-C)
-  // answers 502 on purpose — the upstream's absence, not a fault — and logs `console.info({ event:
-  // "expression-fetch.rpc-stub-offline", … })` (apps/os iterate-context-durable-object.ts); a Vite tab left open
-  // re-requests it every second. Each hop of that request logs its own 502 summary at error level
-  // under its own requestId: the project host's Worker, the context DO's fetch, the ItxEntrypoint of
-  // the config worker's `env.ITX.fetch`, and the DO's fetch again. The loaded config worker starts a
-  // new traceId, so only the edge's rayId joins all four to the info line (a preview's Workers Logs,
-  // 2026-09-24). These filters keep every event EXCEPT a 502 summary in a ray that logged the info
-  // line: another status, another event or another ray still pages. One `not_in` takes 500 IDs here
-  // (2,000 answers "Internal error"). A capped or failed read excludes nothing: it can only remove
-  // noise, never lose an observed fault.
-  const notRpcStubOffline = await rows(
-    [{ key: "event", operation: "eq", value: "expression-fetch.rpc-stub-offline", type: "string" }],
-    "$metadata.rayId",
-  ).then(
-    (found) => {
-      const rays = found.map(([rayId]) => rayId).filter(Boolean);
-      const capped = rays.length >= 2000;
-      console.log(
-        JSON.stringify({
-          event: "prd-fault-alarm.rpc-stub-offline-evidence",
-          rays: rays.length,
-          capped,
-        }),
-      );
-      if (capped) return [];
-      const chunks: string[][] = [];
-      for (let start = 0; start < rays.length; start += 500)
-        chunks.push(rays.slice(start, start + 500));
-      return chunks.map((chunk) => ({
-        kind: "group",
-        filterCombination: "or",
-        filters: [
-          { key: "$metadata.type", operation: "is_null", type: "string" },
-          { key: "$metadata.type", operation: "neq", value: "cf-worker-event", type: "string" },
-          { key: "$workers.event.response.status", operation: "is_null", type: "number" },
-          { key: "$workers.event.response.status", operation: "neq", value: 502, type: "number" },
-          { key: "$metadata.rayId", operation: "is_null", type: "string" },
-          { key: "$metadata.rayId", operation: "not_in", value: chunk.join(","), type: "string" },
-        ],
-      }));
-    },
-    (error: unknown) => {
-      console.warn(
-        JSON.stringify({
-          event: "prd-fault-alarm.rpc-stub-offline-classification-failed",
-          error: error instanceof Error ? error.message : String(error),
-        }),
-      );
-      return [];
-    },
-  );
+  // Two expression-fetch answers are 5xx on purpose, each logged at info by the context DO that
+  // answered (apps/os iterate-context-durable-object.ts): a fetch route whose target is an offline
+  // lent stub (`iterate tunnel` killed without Ctrl-C) answers 502, the upstream's absence, logged
+  // `expression-fetch.rpc-stub-offline`, and a Vite tab left open re-requests it every second; a
+  // deploy that reset a context the fetch dialed, when the hop could not send it again (a request
+  // with a body), answers 503, logged `expression-fetch.deploy-reset`. Each hop of such a request
+  // logs its own summary at error level under its own requestId: the project host's Worker, the
+  // context DO's fetch, the ItxEntrypoint of the config worker's `env.ITX.fetch`, and the DO's fetch
+  // again. The loaded config worker starts a new traceId, so only the edge's rayId joins all four to
+  // the info line (a preview's Workers Logs, 2026-09-24). These filters keep every event EXCEPT a
+  // summary of the answer's status in a ray that logged its info line: another status, another
+  // event or another ray still pages. One `not_in` takes 500 IDs here (2,000 answers "Internal
+  // error"). A capped or failed read excludes nothing: it can only remove noise, never lose an
+  // observed fault.
+  const expectedAnswers = (
+    await Promise.all(
+      EXPECTED_EXPRESSION_FETCH_ANSWERS.map(({ event, status }) =>
+        rows(
+          [{ key: "event", operation: "eq", value: event, type: "string" }],
+          "$metadata.rayId",
+        ).then(
+          (found) => {
+            const rays = found.map(([rayId]) => rayId).filter(Boolean);
+            const capped = rays.length >= 2000;
+            console.log(
+              JSON.stringify({
+                event: "prd-fault-alarm.expected-answer-evidence",
+                answer: event,
+                rays: rays.length,
+                capped,
+              }),
+            );
+            if (capped) return [];
+            const chunks: string[][] = [];
+            for (let start = 0; start < rays.length; start += 500)
+              chunks.push(rays.slice(start, start + 500));
+            return chunks.map((chunk) => ({
+              kind: "group",
+              filterCombination: "or",
+              filters: [
+                { key: "$metadata.type", operation: "is_null", type: "string" },
+                {
+                  key: "$metadata.type",
+                  operation: "neq",
+                  value: "cf-worker-event",
+                  type: "string",
+                },
+                { key: "$workers.event.response.status", operation: "is_null", type: "number" },
+                {
+                  key: "$workers.event.response.status",
+                  operation: "neq",
+                  value: status,
+                  type: "number",
+                },
+                { key: "$metadata.rayId", operation: "is_null", type: "string" },
+                {
+                  key: "$metadata.rayId",
+                  operation: "not_in",
+                  value: chunk.join(","),
+                  type: "string",
+                },
+              ],
+            }));
+          },
+          (error: unknown) => {
+            console.warn(
+              JSON.stringify({
+                event: "prd-fault-alarm.expected-answer-classification-failed",
+                answer: event,
+                error: error instanceof Error ? error.message : String(error),
+              }),
+            );
+            return [];
+          },
+        ),
+      ),
+    )
+  ).flat();
   // Every 5xx pages, so they are counted twice: by URL, and in all. The ones the URL rows miss
   // (no URL logged, or past 2,000 groups) page as `unknown`.
   const readServerErrors = async () => {
     const status = [
       { key: "$workers.event.response.status", operation: "gte", value: 500, type: "number" },
-      ...notRpcStubOffline,
+      ...expectedAnswers,
     ];
     const [byUrl, all] = await Promise.all([
       rows(status, "$workers.event.request.url"),
@@ -515,7 +541,7 @@ async function readWindow(
     const common = [
       { key: "$metadata.level", operation: "eq", value: "error", type: "string" },
       { key, operation: "neq", value: "", type: "string" },
-      ...notRpcStubOffline,
+      ...expectedAnswers,
       ...filters,
     ];
     const [errors, apiUnreadBodyErrors] = await Promise.all([
@@ -656,6 +682,13 @@ async function readWindow(
     pagers,
   };
 }
+
+/** The expression fetch's expected 5xx: the info line the answering context DO logs, and the status
+ *  every hop's summary in that request's ray carries (`readWindow` drops exactly those). */
+const EXPECTED_EXPRESSION_FETCH_ANSWERS = [
+  { event: "expression-fetch.rpc-stub-offline", status: 502 },
+  { event: "expression-fetch.deploy-reset", status: 503 },
+] as const;
 
 const WorkerErrorEvent = z.object({
   timestamp: z.number(),
