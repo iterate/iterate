@@ -29,6 +29,7 @@ import {
   navigateProjectUrl,
   projectHostsAreLocal,
   projectUrl,
+  projectUrlSocket,
   publishConfigWorker,
   registerProject,
 } from "./support/project-host.ts";
@@ -259,8 +260,9 @@ deployedOnly(
     const slug = freshDnsSafeProjectSlug("ingress-ws");
     const itx = openItx(await registerProject(slug));
     await publishConfigWorker(itx, siteTarget());
-    const ws = new WebSocket(
-      projectUrl({ project: slug, routingSlug: "site", path: "/ws" }).href.replace(/^http/, "ws"),
+    // through the helper: under paths it goes as the project's member (support/project-host.ts)
+    const ws = await projectUrlSocket(
+      projectUrl({ project: slug, routingSlug: "site", path: "/ws" }),
     );
     const echo = await new Promise<string>((resolve, reject) => {
       const timer = setTimeout(() => reject(new Error("no echo within 10 s")), 10_000);
@@ -307,7 +309,10 @@ export default class extends WorkerEntrypoint {
       add(text: string): Promise<{ text: string }[]>;
       list(): Promise<{ text: string }[]>;
     }>(
-      projectUrl({ project: slug, routingSlug: "notes", path: "/rpc" }).href.replace(/^http/, "ws"),
+      // as any: undici's WebSocket, the helper's (under paths it goes as the project's member)
+      (await projectUrlSocket(
+        projectUrl({ project: slug, routingSlug: "notes", path: "/rpc" }),
+      )) as any,
     );
     expect(await notes.list()).toEqual([]);
     await notes.add("first");

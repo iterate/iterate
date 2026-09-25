@@ -26,8 +26,8 @@ origin's sign-in, so any app can act as whoever opens it, in every project that 
 Paths routing is for a deployment whose people all trust each other. The platform only lets a
 project's members open its paths: anyone else is sent to sign in (a page) or gets a 401 (anything
 else), and a signed-in non-member gets a 403. Signed file URLs (`/projects/<project>/files/…`) still
-work for anyone holding one. An app must serve under its base path (Vite: `--base`); one that only
-works at `/` does not work here.
+work for anyone holding one, served sandboxed so a file can never act as whoever opens it. An app
+must serve under its base path (Vite: `--base`); one that only works at `/` does not work here.
 
 For public apps, and apps on an origin of their own, give the deployment a
 [custom domain](#custom-domain-own-origins-for-apps-and-tunnels).

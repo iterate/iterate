@@ -103,14 +103,14 @@ localOnly(
 );
 
 localOnly(
-  "a stored file under /projects/<project>/files/… is served to anyone holding its signed URL, no sign-in and no sandbox",
+  "a stored file under /projects/<project>/files/… is served to anyone holding its signed URL, no sign-in — and sandboxed, the one thing on the platform's origin a non-member reaches",
   { timeout: 120_000 },
   async () => {
     await using paths = await pathsWorker();
     const itx = paths.worker.itx(paths.slug);
     await itx.files.get("/page.html").put({
-      // `data` is base64 (or a data: URL)
-      data: Buffer.from("<p>hello</p>").toString("base64"),
+      // `data` is base64 (or a data: URL): the bytes of a page that would call /api if it ran unsandboxed
+      data: Buffer.from("<script>fetch('/api')</script>").toString("base64"),
       contentType: "text/html",
     });
     const signed = (await itx.files.get("/page.html").url()) as { url: string };
@@ -118,7 +118,7 @@ localOnly(
     const served = await fetch(signed.url);
     expect(served, await served.clone().text()).toMatchObject({ status: 200 });
     expect(served.headers.get("content-type")).toMatch(/text\/html/);
-    expect(served.headers.get("content-security-policy") ?? "").not.toMatch(/\bsandbox\b/);
+    expect(served.headers.get("content-security-policy")).toMatch(/\bsandbox\b/);
   },
 );
 

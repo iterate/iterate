@@ -243,7 +243,16 @@ export default {
           request: withoutBasePath(request, projectHost.basePath),
         });
         logServedStale();
-        return file;
+        // Under paths a stored file is the one thing on the platform's origin a NON-member reaches
+        // (anyone holding the URL): an HTML or SVG file there runs sandboxed — an opaque origin, no
+        // cookie to spend — so it can never act as whoever opens it.
+        if (routing?.type !== "paths" || file.webSocket) return file;
+        const sandboxed = new Response(file.body, file);
+        sandboxed.headers.set(
+          "content-security-policy",
+          "sandbox allow-scripts allow-forms allow-popups allow-modals allow-downloads",
+        );
+        return sandboxed;
       }
       // The browser adapter's endpoints (`/api`, `/.auth/*`) are an app's OWN under subdomains — its
       // origin. Under paths the app shares the platform's origin, whose `/api` and `/.auth/*` are
