@@ -80,8 +80,8 @@ export async function flashDevice(input: {
 /**
  * Opens a board's serial port to read its logs, what esp-web-tools' "Logs & Console" did: the port
  * it was just flashed through (`flash` closed it), or one the person picks. Returns esp-web-tools'
- * console element for it, which starts reading once it's on the page (components/device-logs.tsx);
- * `closeDeviceLogs` stops it.
+ * console element for it, which starts reading once it's on the page, and `mount`, the ref that
+ * puts it there (components/device-logs.tsx). `closeDeviceLogs` stops it.
  */
 export async function openDeviceLogs(port: SerialPort | undefined) {
   const chosen = port || (await choosePort());
@@ -94,13 +94,27 @@ export async function openDeviceLogs(port: SerialPort | undefined) {
   logs.logger = console;
   logs.allowInput = false;
   logs.style.height = "100%";
-  return logs;
+  return {
+    logs,
+    // One function per session, so React attaches it once. Its cleanup lets go of the port however
+    // the view goes away: after Back (already closed), or unmounted by leaving the page.
+    mount: (host: HTMLElement | null) => {
+      if (!host) return;
+      host.appendChild(logs);
+      return () => {
+        closeDeviceLogs(logs).catch((error: unknown) =>
+          console.warn("kit.logs_close_failed", error),
+        );
+      };
+    },
+  };
 }
 
-/** Stops reading and lets go of the port, so flashing (or another tab) can open it next. */
+/** Stops reading and lets go of the port, so flashing (or another tab) can open it next. Safe to
+ *  call twice: a closed port has no `readable`. */
 export async function closeDeviceLogs(logs: EwtConsole) {
   await logs.disconnect();
-  await logs.port.close();
+  if (logs.port.readable) await logs.port.close();
 }
 
 function readableFailure(state: Extract<FlashState, { state: "error" }>, device: FirmwareDevice) {

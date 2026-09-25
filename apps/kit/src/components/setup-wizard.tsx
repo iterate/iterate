@@ -88,7 +88,7 @@ export function SetupWizard({
           flashing.reset();
           logging.reset();
         };
-        if (logging.isSuccess) closingLogs.mutate(logging.data, { onSettled: resetAll });
+        if (logging.isSuccess) closingLogs.mutate(logging.data.logs, { onSettled: resetAll });
         else resetAll();
       }}
       disablePointerDismissal
@@ -281,7 +281,10 @@ export function SetupWizard({
               </>
             )}
             {logging.isSuccess && (
-              <DeviceLogs logs={logging.data} onBack={() => closingLogs.mutate(logging.data)} />
+              <DeviceLogs
+                session={logging.data}
+                onBack={() => closingLogs.mutate(logging.data.logs)}
+              />
             )}
           </>
         )}
