@@ -49,14 +49,26 @@ deduplicates by it, so replaying an overlapping window does not double count.
 
 **Listing.** Depot's `ListWorkflows` returns at most the newest 200 and has no
 paging, so the sync lists each workflow named in `.depot/workflows` (on main)
-separately, plus one unnamed listing for workflows that exist only on a branch.
+separately, plus one unnamed listing for workflows that exist only on a branch
+and one of failed workflows for those Depot never started, which have no name.
 A workflow can finish up to two hours after it was created (the longest a push,
 pull-request or scheduled workflow runs; `os-e2e-soak` is dispatch-only), so
-each named listing has to reach two hours before the window. One that fills
-its 200 without reaching back holds every workflow of its name created since
-its oldest, and the window then starts two hours after that; the warning's
-`listings` names each such workflow and the oldest time its listing reaches.
-The listings take no time or branch filter to narrow them by.
+each named listing, and the failed one, has to reach two hours before the
+window. One that fills its 200 without reaching back holds every workflow of
+its name (or every failed one) created since its oldest, and the window then
+starts two hours after that; the warning's `listings` names each such workflow,
+or `failed`, and the oldest time its listing reaches. The listings take no time
+or branch filter to narrow them by.
+
+**Workflows Depot never started.** A pull request push whose merge ref GitHub
+has not updated, as for one that conflicts with main
+([Depot CI](depot-ci.md#pull-requests-that-conflict-with-main)), gets a Depot
+run with no commit and one failed workflow with no name, file or jobs. It sends
+a `ci workflow run finished` with `conclusion: failure`, no `workflow_name`,
+`workflow_path` or `sha`, and Depot's reason in `error_message`
+(`Merge ref refs/pull/<n>/merge is stale: …`). Any other run without a commit,
+or workflow without a name, is a shape the sync has not modelled (`RunMetrics`
+in the script), and it fails the sync.
 
 **Late re-runs are not reported.** A re-run keeps its workflow's original
 creation time, and Depot's listings offer no update or finish time to list by,
@@ -76,16 +88,17 @@ and other properties) and:
 
 | Property                                                                       | Meaning                                                                                                                                                                                                                                                                                                                                     |
 | ------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `workflow_name`                                                                | The workflow's `name:` (`Preview OS`)                                                                                                                                                                                                                                                                                                       |
+| `workflow_name`                                                                | The workflow's `name:` (`Preview OS`); absent for a workflow Depot never started                                                                                                                                                                                                                                                            |
 | `workflow_path`                                                                | Its file (`preview-os.yml`); absent for a workflow file run with `depot ci run`                                                                                                                                                                                                                                                             |
 | `workflow_id`                                                                  | Depot's workflow ID; `url` links to it on Depot                                                                                                                                                                                                                                                                                             |
 | `depot_run_id`                                                                 | The Depot run (one GitHub event) the workflow belongs to                                                                                                                                                                                                                                                                                    |
 | `trigger`                                                                      | `pull_request`, `push`, `schedule`, `workflow_dispatch`, `api` (`depot ci run`)                                                                                                                                                                                                                                                             |
-| `sha` / `head_sha`                                                             | The commit Depot ran (a pull request's test merge) and the pushed head                                                                                                                                                                                                                                                                      |
+| `sha` / `head_sha`                                                             | The commit Depot ran (a pull request's test merge) and the pushed head; no `sha` for a workflow Depot never started                                                                                                                                                                                                                         |
 | `pull_request_number`                                                          | The pull request; for a push to main, the pull request whose merge made the commit. Absent for schedules and dispatches                                                                                                                                                                                                                     |
 | `branch`                                                                       | The pull request's head branch, or the branch a merge landed on. Absent where Depot records no branch (schedules, dispatches by SHA)                                                                                                                                                                                                        |
 | `attempt`                                                                      | Execution number (workflow runs) or attempt number (job attempts)                                                                                                                                                                                                                                                                           |
 | `conclusion`                                                                   | `success`, `failure` or `cancelled`                                                                                                                                                                                                                                                                                                         |
+| `error_message`                                                                | Workflow runs only: why Depot failed a workflow it never started                                                                                                                                                                                                                                                                            |
 | `queued_at` / `started_at` / `finished_at`, `queue_duration_ms`, `duration_ms` | Depot's times; queue is created → started, duration is started → finished                                                                                                                                                                                                                                                                   |
 | `job_name`, `job_id`, `attempt_id`                                             | Job attempts only: the job's key in its file (`e2e`, `build-firmware:matrix-5`) and Depot's IDs                                                                                                                                                                                                                                             |
 | `runner_size`                                                                  | Job attempts only: the job's `runs-on` in the workflow file at `sha` (`4x16`, or a label such as `depot-ubuntu-24.04`)                                                                                                                                                                                                                      |
