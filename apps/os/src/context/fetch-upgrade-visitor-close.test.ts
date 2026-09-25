@@ -34,7 +34,32 @@ test("a visitor that closes its WebSocket to the edge's spliced upgrade ends the
       ticks: 3,
       closeCode: 1000,
     });
-  expect(await runtime.uncaughtAfterTheCloses()).toEqual([]);
+  expect((await runtime.settledLog()).filter(isUncaught)).toEqual([]);
+});
+
+// A visitor whose connection vanishes without a close frame (a laptop asleep, a network gone) is
+// the other expected end. The runtime fails the edge's invocation for it whatever the splice does
+// (its pump read a dead connection: "Network connection lost." on prd), so the splice says so in a
+// named line the prd fault alarm files that error under, and closes its end, or the invocation
+// waits on it for good and fails as "hung".
+test("a visitor whose connection vanishes without a close frame: the edge logs fetch-upgrade.local-gone and closes its end; the invocation's only error is the dead connection, never a hung invocation", async () => {
+  await using runtime = await bareWorkerd();
+  const socket = new WebSocket(`${runtime.origin}/spliced`);
+  const out = { ticks: 0, closeCode: 0 };
+  socket.on("message", () => {
+    if (++out.ticks === 3) socket.terminate();
+  });
+  socket.on("close", (code) => (out.closeCode = code));
+  await vi.waitFor(() => expect(out).toEqual({ ticks: 3, closeCode: 1006 }), { timeout: 15_000 });
+  const log = await runtime.settledLog();
+  expect({
+    localGone: log.filter((line) => line.includes("fetch-upgrade.local-gone")).length,
+    uncaughtOtherThanTheDeadConnection: log.filter(
+      (line) =>
+        isUncaught(line) &&
+        !line.includes("WebSocket disconnected between frames without sending `Close`"),
+    ),
+  }).toEqual({ localGone: 1, uncaughtOtherThanTheDeadConnection: [] });
 });
 
 // THE UPSTREAM DEFECT the splice works around (docs/engineering-invariants.md: a workaround stays only
@@ -48,7 +73,7 @@ createFailing(test, /the invocation failed: .*other end of WebSocketPipe was des
       ticks: 3,
       closeCode: 1000,
     });
-    const uncaught = await runtime.uncaughtAfterTheCloses();
+    const uncaught = (await runtime.settledLog()).filter(isUncaught);
     if (uncaught.length) throw new Error(`the invocation failed: ${uncaught.join(" | ")}`);
   },
 );
@@ -58,7 +83,11 @@ createFailing(test, /the invocation failed: .*other end of WebSocketPipe was des
  *  tunnel's /clock sends a tick a second); `/accepted-first` with the clock's own pair, its end
  *  accepted before the 101 — the defect alone. */
 const FIXTURE = `
-import { FetchUpgradeSpliceEnd, visitorEndOfSplice } from "./fetch-upgrade-splice.ts";
+import {
+  FetchUpgradeSpliceEnd,
+  reportFetchUpgradeSpliceEvent,
+  visitorEndOfSplice,
+} from "./fetch-upgrade-splice.ts";
 
 function clockSocket() {
   const pair = new WebSocketPair();
@@ -70,7 +99,7 @@ function clockSocket() {
 function end(side, local, socket) {
   return new FetchUpgradeSpliceEnd({
     side, upgradeId: "u", local, localGoneClose: { code: 1001, reason: "gone" }, socket,
-    deployId: "d", contextAbortedOffset: null, redial: async () => null, report: () => {},
+    deployId: "d", contextAbortedOffset: null, redial: async () => null, report: reportFetchUpgradeSpliceEvent,
   });
 }
 
@@ -94,8 +123,8 @@ export default {
 `;
 
 /** A bare workerd (the binary wrangler runs) serving FIXTURE on a free port, `--verbose` so its log
- *  names every invocation that failed. `uncaughtAfterTheCloses` waits out the invocations' ends
- *  and returns those lines. */
+ *  names every invocation that failed. `settledLog` waits out the invocations' ends and returns
+ *  the log's lines, the worker's console among them. */
 async function bareWorkerd() {
   const port = await freePort();
   const dir = await mkdtemp(join(tmpdir(), "fetch-upgrade-visitor-close-"));
@@ -132,15 +161,20 @@ const config :Workerd.Config = (
   );
   return {
     origin: `ws://127.0.0.1:${port}`,
-    async uncaughtAfterTheCloses() {
+    async settledLog() {
       await new Promise((resolve) => setTimeout(resolve, 500));
-      return log.split("\n").filter((line) => line.includes("uncaught exception"));
+      return log.split("\n");
     },
     async [Symbol.asyncDispose]() {
       child.kill();
       await rm(dir, { recursive: true, force: true });
     },
   };
+}
+
+/** A line of workerd's log naming an invocation that failed. */
+function isUncaught(line: string): boolean {
+  return line.includes("uncaught exception");
 }
 
 /** A port nothing listens on: the OS's pick for a listener closed at once. */

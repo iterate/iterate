@@ -118,29 +118,64 @@ test("an orderly close on either socket closes the other with its code and reaso
 });
 
 // A tunnel killed outright (`kill -9` on the CLI) ends its capnweb session, and the provider's socket
-// on the relay closes without a status (capnweb's tunneled socket, on the session's end) or fails.
-// The relay knows the provider is gone: the visitor's socket closes at once, not at the deadline.
+// on the relay closes without a status (capnweb's tunneled socket, on the session's end) or fails;
+// a visitor's network vanishing does the same to the visitor's socket on the edge. The end knows its
+// side is gone: it says so (`local-gone`, logged at info), the other side's socket closes at once,
+// not at the deadline, and its own socket is closed too (the runtime waits on it otherwise).
 test.for([
-  { name: "closes without a status (1006)", end: (provider: FakeSocket) => provider.other.cut() },
   {
-    name: "fails",
-    end: (provider: FakeSocket) => provider.other.emit("error", {}),
+    gone: "the provider's socket closes without a status (1006)",
+    end: (splice: ReturnType<typeof spliced>) => splice.provider.other.cut(),
+    expected: {
+      visitor: { closed: { code: 1001, reason: "tunnel disconnected" } },
+      reports: [{ type: "local-gone", side: "leg", upgradeId: "upgrade-1", code: 1006 }],
+    },
+  },
+  {
+    gone: "the provider's socket fails",
+    end: (splice: ReturnType<typeof spliced>) => splice.provider.other.emit("error", {}),
+    expected: {
+      visitor: { closed: { code: 1001, reason: "tunnel disconnected" } },
+      provider: { other: { closed: { code: 1001, reason: "tunnel disconnected" } } },
+      reports: [{ type: "local-gone", side: "leg", upgradeId: "upgrade-1", code: undefined }],
+    },
+  },
+  {
+    gone: "the visitor's socket fails",
+    end: (splice: ReturnType<typeof spliced>) => splice.visitor.other.emit("error", {}),
+    expected: {
+      provider: { closed: { code: 1001, reason: "visitor disconnected" } },
+      visitor: { other: { closed: { code: 1001, reason: "visitor disconnected" } } },
+      reports: [{ type: "local-gone", side: "eyeball", upgradeId: "upgrade-1", code: undefined }],
+    },
   },
 ])(
-  "the provider's socket $name — its tunnel's session ended: the visitor's socket closes at once, 1001 tunnel disconnected",
-  async ({ end }) => {
+  "$gone: the other side's socket closes at once, and the end says so",
+  async ({ end, expected }) => {
     vi.useFakeTimers();
     using splice = spliced();
     splice.connectEyeball();
     await vi.advanceTimersByTimeAsync(0);
-    end(splice.provider);
+    end(splice);
     await vi.advanceTimersByTimeAsync(0);
-    expect(splice).toMatchObject({
-      visitor: { closed: { code: 1001, reason: "tunnel disconnected" } },
-      reports: [],
-    });
+    expect(splice).toMatchObject(expected);
   },
 );
+
+test("an error after the local socket's own close is not its side gone: nothing more is said", async () => {
+  vi.useFakeTimers();
+  using splice = spliced();
+  splice.connectEyeball();
+  await vi.advanceTimersByTimeAsync(0);
+  splice.visitor.close(1000, "tab closed");
+  await vi.advanceTimersByTimeAsync(0);
+  splice.visitor.other.emit("error", {});
+  await vi.advanceTimersByTimeAsync(0);
+  expect(splice).toMatchObject({
+    provider: { closed: { code: 1000, reason: "tab closed" } },
+    reports: [],
+  });
+});
 
 test("the visitor closes while the context is down: its code and reason reach the provider once the ends resume, after the frames it sent first", async () => {
   vi.useFakeTimers();
