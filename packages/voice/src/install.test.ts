@@ -10,10 +10,18 @@ test("a project without voice gets the agents and voice folders committed, insta
   const root = project();
   expect(await ensureVoiceAgent(root as never, versions)).toBe("ready");
   expect(root.commits.map((commit) => commit.changes.map((change) => change.path))).toEqual([
-    ["agents/package.json", "agents/index.ts"],
-    ["voice/package.json", "voice/worker.ts"],
+    ["agents/package.json", "agents/index.ts", "package.json"],
+    ["voice/package.json", "voice/worker.ts", "package.json"],
   ]);
   expect(root.files["voice/package.json"]).toContain(versions.voice);
+  // the root lists both packages, so `tsc` over the repo resolves the folders' imports
+  expect(JSON.parse(root.files["package.json"]!)).toMatchObject({
+    devDependencies: {
+      "@iterate-com/agents": versions.agents,
+      "@iterate-com/voice": versions.voice,
+      typescript: "^7.0.2",
+    },
+  });
   expect(root.processors.enable).toHaveBeenCalledWith(
     "agents",
     expect.objectContaining({ className: "AgentCollectionDurableObject" }),
@@ -81,7 +89,9 @@ test("voice refuses a project without the agents app", async () => {
 
 /** A project root over an in-memory config repo, whose rewrite rules are the ones appended. */
 function project() {
-  const files: Record<string, string> = {};
+  const files: Record<string, string> = {
+    "package.json": `${JSON.stringify({ devDependencies: { typescript: "^7.0.2" } }, null, 2)}\n`,
+  };
   const commits: { message: string; changes: { path: string; content: string }[] }[] = [];
   const rules: Record<string, unknown> = {};
   const values: Record<string, string> = {};

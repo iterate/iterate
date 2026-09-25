@@ -15,7 +15,7 @@
 // ITERATE_BEARER_TOKEN (a personal access token for the project) works instead of the operator
 // secret.
 import { parseArgs } from "node:util";
-import { agentsFolder, installAgents } from "@iterate-com/agents/install";
+import { agentsFolder, installAgents, rootManifestListing } from "@iterate-com/agents/install";
 import { installVoice, voiceFolder } from "@iterate-com/voice/install";
 import type { RepoFileChange, RepoHandle } from "iterate/api";
 import { credentials, disposeSessions, session } from "./client.ts";
@@ -63,11 +63,21 @@ for (const path of paths) {
   changes.push({ path, content: rewritten });
   importsInstaller = true;
 }
+// The root lists each app's package: at runtime when its code imports the installer, else as a
+// devDependency, so `tsc` over the repo resolves the folders' imports.
+const manifestBefore = await repo.readFile("package.json");
+let manifest = manifestBefore;
 if (importsInstaller) {
-  const manifest = JSON.parse((await repo.readFile("package.json")) || "{}");
-  manifest.dependencies = { ...manifest.dependencies, "@iterate-com/agents": agents };
-  changes.push({ path: "package.json", content: `${JSON.stringify(manifest, null, 2)}\n` });
+  const parsed = JSON.parse(manifest || "{}");
+  parsed.dependencies = { ...parsed.dependencies, "@iterate-com/agents": agents };
+  manifest = `${JSON.stringify(parsed, null, 2)}\n`;
 }
+for (const [name, version] of [
+  ["@iterate-com/agents", agents],
+  ...(voice ? [["@iterate-com/voice", voice]] : []),
+] as const)
+  manifest = rootManifestListing(manifest, name, version) ?? manifest;
+if (manifest !== manifestBefore) changes.push({ path: "package.json", content: manifest! });
 
 console.log(`${project}: ${changes.length} changes to /repos/config`);
 for (const change of changes)

@@ -36,6 +36,29 @@ export function agentsFolder(version: string): Record<string, string> {
   };
 }
 
+/** A config repo's root package.json once it lists an installed app's package `name` at `version`
+ *  as a devDependency, or `undefined` when there is nothing to change. The app's folder pins what
+ *  the loader resolves; the root lists it too because `tsc` over the whole repo resolves the folder's
+ *  imports from the root's `node_modules`. A root that depends on the package at runtime (the
+ *  with-agents template's worker imports the installer) keeps its own pin. */
+export function rootManifestListing(
+  manifest: string | null,
+  name: string,
+  version: string,
+): string | undefined {
+  const parsed = JSON.parse(manifest || "{}") as {
+    dependencies?: Record<string, string>;
+    devDependencies?: Record<string, string>;
+  };
+  if (parsed.dependencies?.[name] || parsed.devDependencies?.[name] === version) return undefined;
+  const devDependencies = Object.fromEntries(
+    Object.entries({ ...parsed.devDependencies, [name]: version }).sort(([a], [b]) =>
+      a.localeCompare(b),
+    ),
+  );
+  return `${JSON.stringify({ ...parsed, devDependencies }, null, 2)}\n`;
+}
+
 /** Install the app into a project root from its source: a folder's files by name, as
  *  `repo.modules({ dir })` answers them (`agentsFolder`, or any source whose entry exports the two
  *  classes). Installing the same source again changes nothing; a new source is an upgrade, and every
@@ -97,14 +120,22 @@ export async function ensureAgents(
   if (settled.type !== "events.iterate.com/project/created")
     throw new Error("The project's creation failed, so there is no config repo to install into");
   const repo = project.repos.get("/repos/config");
+  const root = rootManifestListing(
+    await repo.readFile("package.json"),
+    "@iterate-com/agents",
+    version,
+  );
   const commit = (await repo.readFile("agents/package.json"))
     ? undefined
     : await repo.commitFiles({
         message: "Install the agents app",
-        changes: Object.entries(agentsFolder(version)).map(([name, content]) => ({
-          path: `agents/${name}`,
-          content,
-        })),
+        changes: [
+          ...Object.entries(agentsFolder(version)).map(([name, content]) => ({
+            path: `agents/${name}`,
+            content,
+          })),
+          ...(root ? [{ path: "package.json", content: root }] : []),
+        ],
       });
   // No commitOid (nothing committed, or a commit that changed nothing) reads the tip.
   const commitOid = commit?.commitOid ?? undefined;
