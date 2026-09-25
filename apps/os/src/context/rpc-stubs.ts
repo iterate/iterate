@@ -5,6 +5,7 @@
 //   rpc stub fetch     — the fetch-shaped transport under both (`dialRpcStubFetch`, `RpcStubFetchServer`)
 
 import { RpcTarget as WorkersRpcTarget } from "cloudflare:workers";
+import { retryPlatformFailures } from "@iterate-com/shared/platform-retry";
 import { z } from "zod";
 import { codedError, errorCode } from "iterate/lib";
 import { ITX_PRINCIPAL_HEADER } from "iterate/principal";
@@ -17,7 +18,7 @@ import {
   type Caller,
 } from "../caller.ts";
 import type { IterateContextDurableObject } from "../iterate-context-durable-object.ts";
-import { isRetryableTransportError } from "../retryable-error.ts";
+import { isPlatformFailure, isRetryableTransportError } from "../retryable-error.ts";
 import {
   FetchUpgradeSpliceEnd,
   reportFetchUpgradeSpliceEvent,
@@ -77,6 +78,9 @@ export const RPC_STUB_PAGER_KEEPALIVE_RESPONSE = "itx-pager-keepalive-ack";
 /** How long a paged relay has to lend before this side calls it dead. The relay answers a page
  *  immediately, so 10 s is a dead relay, not a slow one. */
 const RPC_STUB_PAGE_TIMEOUT_MS = 10_000;
+/** The relay's waits before each repeat of a lend the platform failed (`answerPage`, below): the
+ *  last repeat still lands well inside the page timeout above. */
+const RPC_STUB_RELEND_DELAYS_MS = [0, 1_000, 3_000];
 
 /** WHAT THIS SIDE BORROWS: the Workers-RPC stub a lender hands over — TWO methods: `invoke(steps)`
  *  walks the itx-expression steps on the client's rpc stub (a DIRECT dotted dispatch — never
@@ -626,6 +630,40 @@ export async function lendRpcStubOverPager(
     lendEnded.reason ||= reason;
     disposeRpcStub(sessionRpcStub);
   };
+  /** THE PAGE ANSWER: a fresh Workers-RPC leg around the session's capnweb stub, lent to the DO. A
+   *  lend the platform failed (retryable-error.ts `isPlatformFailure`: a relay's connection to the DO
+   *  can drop under a burst of lends, failing every lend in flight with "Network connection lost.")
+   *  is lent again on a fresh stub, logged as `rpc-stubs.platform-failure-relend`; re-lending a key
+   *  replaces its stub, so a repeat is harmless. A lend that still fails is logged, the DO's page
+   *  times out, and a push waiting on it is lost. */
+  const answerPage = async (): Promise<void> => {
+    try {
+      await retryPlatformFailures(
+        () =>
+          durableObjectStub().lendRpcStub({
+            rpcStubKey,
+            stub: new LentRpcStub(sessionRpcStub, rpcStubKey, lendEnded, durableObjectStub),
+          }),
+        {
+          event: "rpc-stubs.platform-failure-relend",
+          delaysMs: RPC_STUB_RELEND_DELAYS_MS,
+          platformFailure: (error) =>
+            isPlatformFailure(error) && !lendEnded.reason
+              ? { name: "lendRpcStub", rpcStubKey, message: String(error) }
+              : undefined,
+        },
+      );
+    } catch (error) {
+      if (lendEnded.reason) return; // recalled meanwhile: there is nothing left to lend
+      console.warn({
+        event: "rpc-stub-lend-failed",
+        namespace: "rpc-stubs",
+        message: "a page's lend failed: the DO's page times out, and a push waiting on it is lost",
+        rpcStubKey,
+        error: String(error),
+      });
+    }
+  };
   /** The pager in service — a re-dial replaces it. */
   let pagerWebSocket = response.webSocket;
   /** Take one accepted pager into service: the keepalive, the page answer, and what its close means. */
@@ -641,8 +679,7 @@ export async function lendRpcStubOverPager(
         clearInterval(keepalive);
       }
     }, 30_000);
-    // The page answer: a fresh Workers-RPC leg around the session's capnweb stub, lent to the DO. The
-    // keepalive ack rides this same socket, so anything that is not a page is ignored.
+    // The keepalive ack rides this same socket, so anything that is not a page is ignored.
     ws.addEventListener("message", (event: MessageEvent) => {
       if (typeof event.data !== "string") return;
       let page: unknown;
@@ -652,14 +689,7 @@ export async function lendRpcStubOverPager(
         return;
       }
       if ((page as { type?: string } | null)?.type !== "page") return;
-      waitUntil(
-        durableObjectStub()
-          .lendRpcStub({
-            rpcStubKey,
-            stub: new LentRpcStub(sessionRpcStub, rpcStubKey, lendEnded, durableObjectStub),
-          })
-          .catch(() => undefined), // offline throws — ignore; the DO's page times out on its own
-      );
+      waitUntil(answerPage());
     });
     ws.addEventListener("close", (event: CloseEvent) => {
       clearInterval(keepalive);

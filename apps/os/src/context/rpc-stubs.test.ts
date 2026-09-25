@@ -218,6 +218,89 @@ test("a relay registers onRpcBroken on the session's stub ONCE per session, not 
   relay.dispose();
 });
 
+// ── rpc stub relay ── A PAGE'S LEND THE PLATFORM FAILED IS LENT AGAIN. A relay's connection to
+// the DO can drop under a burst of lends, and workerd fails every lend in flight with a retryable
+// "Network connection lost.". The relay lends again on a fresh stub (a re-lend replaces the key's
+// stub, so a repeat is harmless) after 0, 1 and 3 s, inside the DO's 10 s page timeout, each repeat
+// a `rpc-stubs.platform-failure-relend` warn. A lend that still fails, or fails with the DO's own
+// error, is one `rpc-stub-lend-failed` warn: the DO's page times out and a push waiting on it is lost.
+
+test.each([
+  {
+    lendFails: "once with the transport cut",
+    failures: 1,
+    transportCut: true,
+    outcome: "lent again at once",
+    tries: 2,
+    events: ["rpc-stubs.platform-failure-relend"],
+  },
+  {
+    lendFails: "on every try with the transport cut",
+    failures: Infinity,
+    transportCut: true,
+    outcome: "four tries in 4 s, then given up",
+    tries: 4,
+    events: [
+      "rpc-stubs.platform-failure-relend",
+      "rpc-stubs.platform-failure-relend",
+      "rpc-stubs.platform-failure-relend",
+      "rpc-stub-lend-failed",
+    ],
+  },
+  {
+    lendFails: "with the DO's own error",
+    failures: 1,
+    transportCut: false,
+    outcome: "never lent again",
+    tries: 1,
+    events: ["rpc-stub-lend-failed"],
+  },
+])(
+  "a page whose lend fails $lendFails: $outcome",
+  async ({ failures, transportCut, tries, events }) => {
+    vi.useFakeTimers();
+    onTestFinished(() => void vi.useRealTimers());
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    warn.mockClear(); // an earlier test's spy on console.warn is this one: only this test's calls count
+    const session = { dup: () => session, onRpcBroken() {}, [Symbol.dispose]() {} };
+    const pager = new FakePagerWebSocket();
+    let lendTries = 0;
+    let lent = 0;
+    const context = {
+      fetch: async () => ({ status: 101, webSocket: pager }),
+      lendRpcStub: async () => {
+        lendTries += 1;
+        if (lendTries > failures) return void (lent += 1);
+        throw transportCut
+          ? Object.assign(new Error("Network connection lost."), { retryable: true })
+          : new Error("the DO refused the lend");
+      },
+    };
+    const waitedUntil: Promise<unknown>[] = [];
+    const relay = await lendRpcStubOverPager(
+      (() => context) as unknown as Parameters<typeof lendRpcStubOverPager>[0],
+      session as unknown as Parameters<typeof lendRpcStubOverPager>[1],
+      "subscription:fan-104",
+      [],
+      (p) => void waitedUntil.push(p),
+    );
+    onTestFinished(() => relay.dispose());
+    pager.page();
+    await vi.advanceTimersByTimeAsync(4_000); // the last repeat, well inside the DO's 10 s page timeout
+    await Promise.all(waitedUntil);
+    expect({ lendTries, lent }).toEqual({ lendTries: tries, lent: failures < tries ? 1 : 0 });
+    expect(warn.mock.calls.map(([line]) => (line as { event: string }).event)).toEqual(events);
+    if (transportCut)
+      expect(warn.mock.calls[0][0]).toMatchObject({
+        name: "lendRpcStub",
+        rpcStubKey: "subscription:fan-104",
+        message: "Error: Network connection lost.",
+        attempt: 1,
+        retryInMs: 0,
+      });
+  },
+);
+
 // ── rpc stub relay ── A LENT CALL IS BOUNDED BY THE CLIENT'S ANSWERS. A client whose network went
 // away without a close (a laptop asleep, a NAT mapping expired) answers nothing and its socket stays
 // open at the edge until the edge's TCP gives up: on prd 2026-09-25 a tunnel's visitors waited 12 to
