@@ -79,12 +79,15 @@ WebSocket upgrades included (a Vite dev server's hot module reloading works thro
 iterate tunnel 5173 --project my-project --name blog
 # https://blog--my-project.iterate.app → http://localhost:5173 (project members only). Press Ctrl-C to stop.
 iterate tunnel 3000 --project my-project --public   # anyone may use it; the name is random
+iterate tunnel 3000 --project my-project --name hello --hostname hello.tunnels.example.com
+# https://hello.tunnels.example.com/ → http://localhost:3000 (project members only). Press Ctrl-C to stop.
 ```
 
 The URL alone goes to stdout; everything else goes to stderr. The tunnel lends the local port to
 the project as `itx.tunnels.<name>` with the fetch route `tunnel-<name>` (`itx.fetchRoutes`)
-whose target is it; the project's config worker forwards a matched request to the route's target
-(`configs/default/worker.ts`). By default only signed-in project members get through; others are
+whose target is it. The route matches the name's host (`requestMatcher: { routingSlug }`), or
+with `--hostname` that one hostname of the project alone (`url: { hostname }`). The project's
+config worker forwards a matched request to the route's target (`configs/default/worker.ts`). By default only signed-in project members get through; others are
 sent to sign in. The route lives as long as the lend: Ctrl-C deletes it, and a tunnel that dies
 without it (killed, asleep, offline) leaves the host answering 502 until the platform notices,
 then the route is gone too, until the tunnel runs again.

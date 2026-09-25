@@ -165,7 +165,7 @@ test.for([
     reconnectDelaysMs: [],
     project: "p",
     port: 5173,
-    routingSlug: "blog",
+    tunnelName: "blog",
     public: visibility === "public",
   });
   await expect(run).rejects.toThrow("The tunnel disconnected and could not reconnect");
@@ -178,6 +178,52 @@ test.for([
     ([line]) => !String(line).includes(url) && String(line).includes("/projects/p/blog/"),
   );
   expect(basePathLines).toHaveLength(routing === "paths" ? 1 : 0);
+});
+
+// `--hostname`: the route matches that host alone (no routing slug) and travels with the lend, the
+// URL is the host's; a route of another tunnel on the host refuses the tunnel, a host that is not
+// one literal hostname too, both before anything is lent.
+test("a tunnel on a hostname: its route matches the host alone; a host another route takes, or a pattern, refuses it", async () => {
+  const fake = fakeProject("https://unused.example.com/");
+  using _stderr = vi.spyOn(console, "error").mockImplementation(() => {});
+  using stdout = vi.spyOn(console, "log").mockImplementation(() => {});
+  const tunnelOn = (hostname: string) =>
+    runTunnel({
+      connection: fake.connection(Promise.resolve({ code: 1006, reason: "" })),
+      reconnect: () => Promise.reject(new Error("unreachable")),
+      reconnectDelaysMs: [],
+      project: "p",
+      port: 5173,
+      tunnelName: "hello",
+      hostname,
+      public: true,
+    });
+  await expect(tunnelOn("hello.tunnels.example.com")).rejects.toThrow("could not reconnect");
+  expect(fake).toMatchObject({
+    calls: ["provide itx.tunnels.hello with route tunnel-hello"],
+    routes: [
+      {
+        fetchRouteName: "tunnel-hello",
+        requestMatcher: { url: { hostname: "hello.tunnels.example.com" } },
+        authRequirement: null,
+      },
+    ],
+  });
+  expect(stdout.mock).toMatchObject({ calls: [["https://hello.tunnels.example.com/"]] });
+
+  fake.listedRoutes.push({
+    fetchRouteName: "blog",
+    requestMatcher: { url: { hostname: "taken.tunnels.example.com" } },
+    target: ["itx", "blog"],
+  });
+  await expect(tunnelOn("taken.tunnels.example.com")).rejects.toThrow(
+    "The fetch route blog (target itx.blog) already has this name or host. Pick another --name or --hostname.",
+  );
+  await expect(tunnelOn("*.tunnels.example.com")).rejects.toThrow("is not one lowercase hostname");
+  await expect(tunnelOn("Hello.tunnels.example.com")).rejects.toThrow(
+    "is not one lowercase hostname",
+  );
+  expect(fake.calls).toHaveLength(1);
 });
 
 // A connection that closes under a live tunnel (its heartbeat found the network gone — a laptop
@@ -211,7 +257,7 @@ test("a tunnel whose connection closes reconnects, lends and routes again; it en
     reconnectDelaysMs: [0, 0],
     project: "p",
     port: 5173,
-    routingSlug: "blog",
+    tunnelName: "blog",
   });
   await expect(run).rejects.toThrow(
     "The tunnel disconnected and could not reconnect (still offline)",
@@ -255,7 +301,7 @@ test("a tunnel whose lend ends under a live connection reconnects, lends and rou
     reconnectDelaysMs: [0],
     project: "p",
     port: 5173,
-    routingSlug: "blog",
+    tunnelName: "blog",
   });
   await vi.waitFor(() => expect(fake.calls).toHaveLength(2));
   stopSecond();
@@ -279,6 +325,8 @@ function fakeProject(url: string) {
     calls: [] as string[],
     routes: [] as unknown[],
     disposedConnections: 0,
+    /** the routes `fetchRoutes.list()` answers */
+    listedRoutes: [] as unknown[],
     /** Each lend in turn ends when its entry resolves; a lend with none never ends on its own. */
     lendsEnded: [] as Promise<string>[],
     connection: (closed: Promise<{ code: number; reason: string }>) =>
@@ -291,7 +339,7 @@ function fakeProject(url: string) {
   const project = {
     url: async () => url,
     fetchRoutes: {
-      list: async () => [],
+      list: async () => fake.listedRoutes,
       set: async (name: string, route: unknown) => {
         fake.calls.push(`set ${name} ${route && "route"}`);
         fake.routes.push(route);
