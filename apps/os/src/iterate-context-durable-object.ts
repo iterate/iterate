@@ -359,7 +359,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         this.#sibling(ancestorPath).append({
           type: "events.iterate.com/context/child-created",
           idempotencyKey: `context/child-created:${path}`,
-          payload: { descendantPath: path },
+          payload: { childPath: path },
         }),
       ),
     ).then(

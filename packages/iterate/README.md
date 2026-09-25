@@ -108,8 +108,8 @@ that prefix belongs to whoever appends it and is opaque to the platform: tests u
   ingress target are core state, so they are `itx` even though only a project root's copy is read.
   A domain processor may consume an `itx` event (the agent consumes `itx/run-*`, the Project
   processor `itx/ingress-configured`); it names the core's catalog in its `processorDeps` rather than
-  defining the event itself. The core's checkpoint slug stays `core`: it is a storage key, not a
-  type prefix.
+  defining the event itself. The core's checkpoint slug is `core`: it is a storage key, not a type
+  prefix.
 - **A domain namespace** is the singular name of the kind of context whose log the event belongs
   to, which is the defining contract's slug when there is one: `account`, `organization`,
   `project`, `repo`, `workspace`, `secret`, `agent`, `voice-agent`, `flake-dashboard`. A fact
@@ -158,15 +158,14 @@ that prefix belongs to whoever appends it and is opaque to the platform: tests u
 - **Families and prefixes.** Code matches some families by prefix: `…/itx/run-`,
   `…/itx/subscription-`, `…/itx/schedule-`, `…/project/hostname-`. Before naming a new type, check
   it doesn't join one of these families by accident. Never match `…/itx/` as a whole: it is not a
-  permission boundary, and it catches live-state deltas, stub presence and descendant
+  permission boundary, and it catches live-state deltas, stub presence and child
   announcements.
 - **Code follows the type.** A constant, schema, test fixture or idempotency key built from a type
-  follows its name (`itx/descendant-created:<path>`). Broader concepts, modules and Workers log
+  follows its name (`itx/child-created:<path>`). Broader concepts, modules and Workers log
   event names keep theirs: the Stream, scheduled appends, `core`, `scheduled-append.completed`.
 - **Renaming.** A rename has to serve one of these rules, not taste. If a type is stored outside the
   platform's Durable Objects (device firmware, a published SDK, a project's config repo, CI state),
-  rename it only in a change that migrates that store too. Firmware takes two steps: first a release
-  that accepts both names, then the switch.
+  rename it only in a change that migrates that store too.
 
 | Namespace                                                           | Defined in                                                                                                                                                                                                                                 |
 | ------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |

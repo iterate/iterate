@@ -46,7 +46,6 @@ import type { StreamEvent, ReduceArgs, StreamEventInput } from "iterate/stream/p
 import type { RewriteRuleConfigured } from "iterate/api";
 import { RunRequested, RunSettled } from "iterate/stream/run";
 import { CoreEventCatalog } from "./core-events.ts";
-import { retiredEventTypeRefusal } from "./retired-event-types.ts";
 import { firstPartyFacetClassOf } from "../first-party-facets.ts";
 import {
   FetchRouteConfiguredPayload,
@@ -669,15 +668,13 @@ export const PLATFORM_ONLY_EVENT_TYPES = new Set<string>([
  *  sites write `itx.append({ type, payload })` with NO event-builder helper. A subscription/rewrite
  *  target is validated and normalized STRING→array before storage (the reduce must never string-parse
  *  a facet source — the codec's 2 KiB cap), and a malformed control event throws HERE instead of
- *  committing a durable no-op. A retired type (retired-event-types.ts) and a platform-only record
- *  (`PLATFORM_ONLY_EVENT_TYPES`) are refused. Every other event passes through untouched. The DO runs this on every append
+ *  committing a durable no-op. A platform-only record (`PLATFORM_ONLY_EVENT_TYPES`) is refused. Every
+ *  other event passes through untouched. The DO runs this on every append
  *  (iterate-context-durable-object.ts). */
 export function normalizeControlEvent(event: StreamEventInput, ownPath: string): StreamEventInput {
   // A fixed type list is a stopgap: it isolates the platform's own records, but it cannot say who
   // may append what to a given stream. That needs provenance on the event itself — e.g. events
   // signed by their appender, and processors that ignore an event whose signature does not check.
-  const retired = retiredEventTypeRefusal(event);
-  if (retired) throw new Error(retired);
   if (PLATFORM_ONLY_EVENT_TYPES.has(event.type))
     throw new Error(`${event.type} is the platform's own record: it cannot be appended`);
   // The operator's control events: checked, never rewritten — strict, so an unknown key throws
