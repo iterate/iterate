@@ -96,6 +96,45 @@ test("a run that cannot read prd fails: no Cloudflare credentials", async () => 
   expect(cloudflare.fetch).not.toHaveBeenCalled();
 });
 
+// Cloudflare's HTML error page, a 5xx or not, is its own failure, not an answer about the query.
+test.for([502, 200])(
+  "a Workers Logs query answered with an HTML %i is asked again, and the retry logged",
+  async (status) => {
+    await using cloudflare = workersLogs(serverErrorsOnly(0));
+    cloudflare.fetch.mockImplementationOnce(async () => cloudflareErrorPage(status));
+    using warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    await expect(summary()).resolves.toBe("prd is quiet");
+    // A quiet run's 11 queries, one of them twice.
+    expect(cloudflare.fetch).toHaveBeenCalledTimes(12);
+    expect(warn).toHaveBeenCalledOnce();
+    expect(warn).toHaveBeenCalledWith({
+      event: "prd-fault-alarm.platform-failure-retry",
+      view: "calculations",
+      status,
+      message: `Workers Logs query answered HTTP ${status} (text/html; charset=UTF-8): ${errorPage.slice(0, 200)}`,
+      attempt: 1,
+      retryInMs: 0,
+    });
+  },
+);
+
+test("a run that cannot read prd fails: Cloudflare keeps answering its HTML error page", async () => {
+  await using cloudflare = workersLogs(serverErrorsOnly(0));
+  cloudflare.fetch.mockImplementation(async () => cloudflareErrorPage(502));
+  using warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  const slack = fakeSlack();
+  await expect(summary(() => slack.client)).rejects.toMatchObject({
+    message: `Workers Logs query answered HTTP 502 (text/html; charset=UTF-8): ${errorPage.slice(0, 200)}`,
+  });
+  // Each of the 11 queries asked four times, the first and three repeats, then no more.
+  await vi.waitFor(() => expect(cloudflare.fetch).toHaveBeenCalledTimes(44));
+  expect(warn).toHaveBeenCalledWith(
+    expect.objectContaining({ event: "prd-fault-alarm.platform-failure-retry", attempt: 3 }),
+  );
+  expect(warn).not.toHaveBeenCalledWith(expect.objectContaining({ attempt: 4 }));
+  expect(slack).toMatchObject({ posts: [] });
+});
+
 // A dispatch on a branch reads and pages like any run, but must not move main's read window or its
 // open incidents.
 test.for([
@@ -756,9 +795,20 @@ function page(reading: Partial<FaultReading>) {
   return triageIncidents({ ...quiet, ...reading }, window, null).page?.text ?? null;
 }
 
-/** What one run without state over the half hour to `now` posts (or would post). */
+/** What one run without state over the half hour to `now` posts (or would post). A query
+ *  Cloudflare fails is asked again without a wait. */
 async function summary(slack: (() => WebClient) | null = null) {
-  return (await alarm({ window, state: null, cloudflare: credentials, slack })).summary;
+  return (await alarm({ window, state: null, cloudflare: credentials, slack, delaysMs: [0, 0, 0] }))
+    .summary;
+}
+
+/** Cloudflare's HTML error page, longer than the 200 bytes a failure's message quotes. */
+const errorPage = `<!DOCTYPE html>\n<html lang="en-US"><head><title>api.cloudflare.com | 502: Bad gateway</title></head><body>${'<div class="cf-error-details"></div>'.repeat(20)}</body></html>`;
+function cloudflareErrorPage(status: number) {
+  return new Response(errorPage, {
+    status,
+    headers: { "content-type": "text/html; charset=UTF-8" },
+  });
 }
 
 /** A Workers Logs API that answers each query with `answer(the field it groups by)`. */

@@ -27,6 +27,10 @@ import { createCli } from "trpc-cli";
 import { z } from "zod";
 import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
 import {
+  PLATFORM_FAILURE_DELAYS_MS,
+  retryPlatformFailures,
+} from "@iterate-com/shared/platform-retry";
+import {
   agentsEnvs,
   dashEnvs,
   kitEnvs,
@@ -149,9 +153,11 @@ export async function alarm(input: {
   state: AlarmState | null;
   cloudflare: CloudflareCredentials;
   slack: (() => WebClient) | null;
+  /** The waits before each repeat of a Workers Logs query Cloudflare failed (readWindow). */
+  delaysMs?: readonly number[];
 }) {
-  const { window } = input;
-  const reading = await readWindow(window, input.cloudflare);
+  const { window, delaysMs = PLATFORM_FAILURE_DELAYS_MS } = input;
+  const reading = await readWindow(window, input.cloudflare, delaysMs);
   console.log(JSON.stringify({ window, reading }));
   const triage = triageIncidents(reading, window, input.state);
   const pinned = pinnedWorkarounds(reading.healEvents, window, input.state);
@@ -365,51 +371,92 @@ function hhmm(date: Date) {
   return date.toISOString().slice(11, 16);
 }
 
+/** Cloudflare's own failure of a Workers Logs query: a 5xx, or an answer that is not JSON (its HTML
+ *  error page). The message names the status, the content type and the answer's first 200 bytes. */
+class CloudflarePlatformFailure extends Error {
+  readonly status: number;
+  constructor(response: Response, text: string) {
+    super(
+      `Workers Logs query answered HTTP ${response.status} (${response.headers.get("content-type") ?? "no content-type"}): ${text.slice(0, 200)}`,
+    );
+    this.status = response.status;
+  }
+}
+
 async function readWindow(
   window: LogWindow,
   { accountId, apiToken }: CloudflareCredentials,
+  delaysMs: readonly number[],
 ): Promise<FaultReading> {
   // One grouped count per signal. Its rows sum to a lower bound (events without the grouped field,
   // or past 2,000 groups, drop out) — a burst still pages.
-  const query = async (view: "calculations" | "events", filters: object[], parameters: object) => {
-    const response = await fetch(
-      `https://api.cloudflare.com/client/v4/accounts/${accountId}/workers/observability/telemetry/query`,
-      {
-        method: "POST",
-        signal: AbortSignal.timeout(30_000), // one bounded read; classification failures keep the original page
-        headers: { authorization: `Bearer ${apiToken}`, "content-type": "application/json" },
-        body: JSON.stringify({
-          queryId: "prd-fault-alarm",
-          view,
-          ...(view === "events" && { limit: 100 }),
-          timeframe: { from: window.from.getTime(), to: window.to.getTime() },
-          parameters: {
-            datasets: ["cloudflare-workers"],
-            ...parameters,
-            filters: [
-              {
-                key: "$metadata.service",
-                operation: "in",
-                value: PRD_WORKERS.join(","),
-                type: "string",
+  //
+  // A query only reads, so one that Cloudflare itself failed (CloudflarePlatformFailure, or a
+  // dropped connection) is asked again after each of `delaysMs`, with a
+  // `prd-fault-alarm.platform-failure-retry` warn per repeat; the last failure fails the run. A JSON
+  // answer below 500 is Cloudflare's answer about the query: a broken token (success: false) or a
+  // renamed field fails the run at once, never reads as a quiet prd.
+  const query = (view: "calculations" | "events", filters: object[], parameters: object) =>
+    retryPlatformFailures(
+      async () => {
+        const response = await fetch(
+          `https://api.cloudflare.com/client/v4/accounts/${accountId}/workers/observability/telemetry/query`,
+          {
+            method: "POST",
+            signal: AbortSignal.timeout(30_000), // one bounded read; classification failures keep the original page
+            headers: { authorization: `Bearer ${apiToken}`, "content-type": "application/json" },
+            body: JSON.stringify({
+              queryId: "prd-fault-alarm",
+              view,
+              ...(view === "events" && { limit: 100 }),
+              timeframe: { from: window.from.getTime(), to: window.to.getTime() },
+              parameters: {
+                datasets: ["cloudflare-workers"],
+                ...parameters,
+                filters: [
+                  {
+                    key: "$metadata.service",
+                    operation: "in",
+                    value: PRD_WORKERS.join(","),
+                    type: "string",
+                  },
+                  ...filters,
+                ],
               },
-              ...filters,
-            ],
+            }),
           },
-        }),
+        );
+        const text = await response.text();
+        if (response.status >= 500) throw new CloudflarePlatformFailure(response, text);
+        let answer: unknown;
+        try {
+          answer = JSON.parse(text);
+        } catch {
+          throw new CloudflarePlatformFailure(response, text);
+        }
+        const body = z
+          .object({
+            success: z.boolean(),
+            errors: z.unknown().optional(),
+            result: z.unknown().optional(),
+          })
+          .parse(answer);
+        if (!body.success)
+          throw new Error(`Workers Logs query failed: ${JSON.stringify(body.errors)}`);
+        return body.result;
+      },
+      {
+        event: "prd-fault-alarm.platform-failure-retry",
+        delaysMs,
+        // fetch rejects with a TypeError when the connection fails; a timeout is thrown as it is.
+        platformFailure: (error) =>
+          error instanceof TypeError
+            ? { view, status: "network", message: error.message }
+            : error instanceof CloudflarePlatformFailure
+              ? { view, status: error.status, message: error.message }
+              : undefined,
       },
     );
-    const body = z
-      .object({
-        success: z.boolean(),
-        errors: z.unknown().optional(),
-        result: z.unknown().optional(),
-      })
-      .parse(await response.json());
-    // A broken token or a renamed field must fail the run, never read as a quiet prd.
-    if (!body.success) throw new Error(`Workers Logs query failed: ${JSON.stringify(body.errors)}`);
-    return body.result;
-  };
   // Without `groupBy`, one row: ["", the total].
   const rows = async (filters: object[], groupBy?: string): Promise<[string, number][]> => {
     const result = z
