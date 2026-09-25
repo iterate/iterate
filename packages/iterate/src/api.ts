@@ -9,7 +9,7 @@
 // (context/built-ins.ts `BuiltInScope`, library.ts `LibraryRoots`), so a root or a verb the platform
 // implements and this file does not declare — or declares differently — fails to typecheck there.
 // The installed apps' roots (`itx.agents`) are here too, beside the context's own
-// (`IterateContextApiWith`).
+// (`IterateContextApiWith`); a userspace app augments `InstalledAppRoots` with its own from its code.
 
 import type { Ai, R2HTTPMetadata, R2Range } from "@cloudflare/workers-types";
 import type { InvokeHandle, ItxExpression, ItxExpressionInput } from "./expression.ts";
@@ -569,7 +569,11 @@ export interface AgentsApi {
 }
 
 /** The roots an installable app adds by rewrite rule — present only on a context whose table has
- *  the rule (a project that installed the app), so never part of `IterateContextApi` itself. */
+ *  the rule (a project that installed the app), so never part of `IterateContextApi` itself. An
+ *  installed app publishes its root by augmenting this interface from its own package
+ *  (`declare module "iterate/api" { interface InstalledAppRoots { myApp: MyAppApi } }`), so a root
+ *  the platform does not ship is never named here; a caller imports that module to spell
+ *  `IterateContextApiWith<"myApp">`. */
 export interface InstalledAppRoots {
   agents: AgentsApi;
 }

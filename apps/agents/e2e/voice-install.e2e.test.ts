@@ -1,3 +1,5 @@
+import type {} from "../voice/api.ts";
+import type { IterateContextApiWith } from "iterate/api";
 import { expect } from "vitest";
 import { buildVoiceInstall } from "../scripts/build-voice-install.ts";
 import { ensureVoiceAgent } from "../voice/install.ts";
@@ -29,7 +31,8 @@ deployedOnly(
     expect(downloads).toBe(0);
     expect(await project.rewriteRules.get("itx.voice")).toBeNull();
     expect(await ensureVoiceAgent(project, load, "kit-install-test-placeholder")).toBe("ready");
-    expect(await project.invoke(["itx", "voice", ["health"]])).toMatchObject({
+    const installed = project as typeof project & Pick<IterateContextApiWith<"voice">, "voice">;
+    expect(await installed.voice.health()).toMatchObject({
       ok: true,
       projectId,
     });

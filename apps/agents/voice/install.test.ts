@@ -25,7 +25,7 @@ test("a failed upload never publishes a broken voice service and retry completes
 test("a broken existing voice service is reported without replacing it", async () => {
   const root = project();
   root.rewriteRules.get.mockResolvedValue({ match: "itx.voice", target: "custom", context: "/" });
-  root.invoke.mockRejectedValue(new Error("existing service unavailable"));
+  root.voice.health.mockRejectedValue(new Error("existing service unavailable"));
   const load = vi.fn();
   await expect(ensureVoiceAgent(root, load)).rejects.toThrow("existing service unavailable");
   expect(load).not.toHaveBeenCalled();
@@ -49,5 +49,6 @@ const project = () => ({
     delete: vi.fn(),
   },
   append: vi.fn().mockResolvedValue([]),
-  invoke: vi.fn().mockResolvedValue({ ok: true }),
+  invoke: vi.fn(),
+  voice: { health: vi.fn().mockResolvedValue({ ok: true }) },
 });
