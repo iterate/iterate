@@ -119,7 +119,7 @@ export const ProjectContract = defineProcessorContract({
     },
     "events.iterate.com/project/context-deleted": {
       description:
-        "One of the project's contexts was destroyed by the deletion saga: its storage, its facets' and its alarm are gone. A record: nothing reads it back.",
+        "One of the project's contexts was destroyed by the deletion saga: its storage, its facets' and its alarm are gone. The processor takes it out of the registry, so a saga resumed after an eviction does not destroy it again.",
       payloadSchema: z.object({ path: z.string().min(1) }),
     },
     "events.iterate.com/project/deleted": {
@@ -169,6 +169,7 @@ export const ProjectContract = defineProcessorContract({
     "events.iterate.com/project/created",
     "events.iterate.com/project/create-failed",
     "events.iterate.com/project/delete-requested",
+    "events.iterate.com/project/context-deleted",
     "events.iterate.com/itx/child-created",
     "events.iterate.com/project/hostname-add-requested",
     "events.iterate.com/project/hostname-add-settled",

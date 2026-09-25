@@ -588,9 +588,8 @@ test("ProjectProcessor — a drained re-check knows the add it just answered pro
 
 // THE DELETION SAGA — driven by hand like the effects above, over a fake reach (processor.ts
 // `ProjectDeletion`) that records every call.
-test("ProjectProcessor — the deletion: the registry is kept on every delivery; the saga destroys each registered context deepest first, each answered by a keyed context-deleted, then the hostnames, the project's storage, the certificate, and `/` last — and no other saga runs meanwhile", async () => {
+test("ProjectProcessor — the deletion: the saga destroys each context the registry names deepest first, each answered by a keyed context-deleted that takes it out of the registry, then the hostnames, the project's storage, the certificate, and `/` last — and no other saga runs meanwhile", async () => {
   const calls: string[] = [];
-  const registry = new Set<string>();
   const processor = new ProjectProcessor(
     () => {
       calls.push("withItx (another saga ran)");
@@ -608,34 +607,23 @@ test("ProjectProcessor — the deletion: the registry is kept on every delivery;
       },
     }),
     () => ({
-      recordContext: (path) => void registry.add(path),
-      forgetContext: (path) => void registry.delete(path),
-      contextPaths: async () => [...registry],
       destroyContext: async (path) => void calls.push(`destroy ${path}`),
       deleteProjectStorage: async () => void calls.push("delete storage"),
     }),
   );
-  // the registry, as announcements and destructions arrive — caught up or not
-  for (const childPath of ["/repos", "/repos/config", "/agents/web/1", "/agents", "/agents/web"])
-    processor.processEvent({
-      event: { type: "events.iterate.com/itx/child-created", payload: { childPath } } as never,
-      state: empty,
-      previousState: empty,
-      delivery: { caughtUp: false },
-      append: (async () => []) as never,
-      blockProcessorWhile: () => {},
-      runInBackground: () => {},
-    });
-  expect([...registry].sort()).toEqual([
-    "/agents",
-    "/agents/web",
-    "/agents/web/1",
+  // the registry, as the announcements reduce into it (a non-canonical path is no context)
+  const announced = [
     "/repos",
     "/repos/config",
-  ]);
-  const appended: { type: string; idempotencyKey?: string }[] = [];
+    "/agents/web/1",
+    "/agents",
+    "/agents/web",
+    "/x/../y",
+  ].map(childCreated);
+  const registered = reduceProcessor(processorWithoutHostnames(), announced);
+  const appended: { type: string; idempotencyKey?: string; payload: unknown }[] = [];
   const state: ProjectState = {
-    ...empty,
+    ...registered,
     creation: { status: "requested", offset: 1 }, // would run the creation saga, were it not deleted
     deletion: { offset: 9 },
     hostnames: {
@@ -657,7 +645,6 @@ test("ProjectProcessor — the deletion: the registry is kept on every delivery;
     "delete storage",
     "destroy /",
   ]);
-  expect(registry).toMatchObject({ size: 0 }); // each row went as its context did
   expect(appended.map((event) => event.idempotencyKey)).toEqual([
     "project/context-deleted:/agents/web/1",
     "project/context-deleted:/agents/web",
@@ -666,6 +653,13 @@ test("ProjectProcessor — the deletion: the registry is kept on every delivery;
     "project/context-deleted:/repos",
     "project/deleted",
   ]);
+  // each context-deleted takes its context out of the registry: a resumed saga skips it
+  const deleted = appended.filter(
+    (event) => event.type === "events.iterate.com/project/context-deleted",
+  );
+  expect(
+    Object.keys(reduceProcessor(processorWithoutHostnames(), [...announced, ...deleted]).contexts),
+  ).toEqual(["/x/../y"]);
 });
 
 test("template provenance survives replay of the project creation request", () => {

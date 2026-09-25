@@ -7,9 +7,7 @@
 // dispatch on this facet: `repos().list()`). Hosted from `ctx.exports` (first-party-facets.ts):
 // ordinary bundled worker code, enabled as a row on `/` by `session.projects.create` (session.ts) —
 // and by the first `list()`, which hosts the facet without a row.
-import { resolveContextPath } from "iterate/lib";
 import { StreamProcessorDurableObject, type ItxEntrypointService } from "iterate/sdk";
-import type { StreamPage } from "iterate/api";
 import { downloadPublicGithubTemplate } from "../repo/github-template.ts";
 import { appConfigOf, type AppConfigEnv } from "../app-config.ts";
 import { projectScopedArtifacts } from "../context/cf-artifacts.ts";
@@ -41,46 +39,11 @@ export class ProjectDurableObject extends StreamProcessorDurableObject<
     () => this.#deletion(),
   );
 
-  /** THE DELETION SAGA's reach, for THIS project (processor.ts `ProjectDeletion`). The registry is a
-   *  table in this facet's own storage: a row per descendant that announced itself, added by the
-   *  processor as `itx/child-created` arrives and dropped by the saga as it destroys the context. A
-   *  table this incarnation finds unfilled is filled once from the root's log first, since a
-   *  processor only sees what arrives after its cursor. */
+  /** THE DELETION SAGA's reach, for THIS project (processor.ts `ProjectDeletion`): destroying one of
+   *  its contexts, and deleting its kv, files and Artifacts repos. */
   #deletion(): ProjectDeletion {
     const { projectId } = DurableObjectNameCodec.parse(this.ctx.props.iterateContextName);
-    const { sql, kv } = this.ctx.storage;
-    sql.exec("CREATE TABLE IF NOT EXISTS contexts (path TEXT PRIMARY KEY)");
-    // a canonical path below `/` only: the root is the saga's last step, never a registry row
-    const recordContext = (path: string) =>
-      void (
-        path !== "/" &&
-        resolveContextPath("/", path) === path &&
-        sql.exec("INSERT OR IGNORE INTO contexts (path) VALUES (?)", path)
-      );
     return {
-      recordContext,
-      forgetContext: (path) => void sql.exec("DELETE FROM contexts WHERE path = ?", path),
-      contextPaths: async () => {
-        if (!kv.get("contexts-filled-from-log")) {
-          for (let afterOffset = 0; ;) {
-            const page = (await this.withItx((itx) =>
-              itx.readEvents(afterOffset, 500),
-            )) as unknown as StreamPage;
-            for (const event of page.events) {
-              const { childPath } = event.payload as { childPath?: string };
-              if (event.type === "events.iterate.com/itx/child-created" && childPath)
-                recordContext(childPath);
-            }
-            if (page.atHead || page.scannedThroughOffset <= afterOffset) break;
-            afterOffset = page.scannedThroughOffset;
-          }
-          kv.put("contexts-filled-from-log", true);
-        }
-        return sql
-          .exec<{ path: string }>("SELECT path FROM contexts")
-          .toArray()
-          .map((row) => row.path);
-      },
       // the destroyed instance's reset rejects the call that asked for it: that rejection is done
       destroyContext: (path) =>
         this.env.ITERATE_CONTEXT.getByName(DurableObjectNameCodec.stringify({ projectId, path }))

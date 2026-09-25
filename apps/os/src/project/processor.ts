@@ -18,7 +18,7 @@
 // e2e/website-publication.e2e.test.ts: a commit publishes).
 
 import { z } from "zod";
-import { jsonEqual } from "iterate/lib";
+import { jsonEqual, resolveContextPath } from "iterate/lib";
 import {
   parseConfigRepoTemplateReference,
   type ConfigRepoTemplateReference,
@@ -93,16 +93,10 @@ export type ProjectHostnames = {
 const hostnameIsLive = (entry: ProjectState["hostnames"][string] | undefined) =>
   entry?.cloudflare?.status === "active" && entry.cloudflare.sslStatus === "active";
 
-/** What the deletion saga reaches, for THIS project (durable-object.ts builds it): the registry of
- *  its contexts (a table in the facet's own storage, kept from `itx/child-created`), a context's
- *  destruction, and the project's own kv, files and Artifacts repos. */
+/** What the deletion saga reaches, for THIS project (durable-object.ts builds it): a context's
+ *  destruction, and the project's own kv, files and Artifacts repos. The contexts it destroys are the
+ *  registry's (`state.contexts`). */
 export type ProjectDeletion = {
-  /** A descendant announced itself: its row in the registry. */
-  recordContext(path: string): void;
-  /** A descendant was destroyed: its row goes. */
-  forgetContext(path: string): void;
-  /** Every descendant the registry names (never `/`). */
-  contextPaths(): Promise<string[]>;
   /** Everything the context at `path` holds goes: its log, its facets' storage, its alarm. */
   destroyContext(path: string): Promise<void>;
   /** The project's kv keys, files and Artifacts repos. */
@@ -184,6 +178,12 @@ export class ProjectProcessor extends StreamProcessor<
         return state.creation?.status === "created"
           ? undefined
           : { ...state, creation: { status: "failed", offset: event.offset } };
+      case "events.iterate.com/project/context-deleted": {
+        // The saga's own record of a context it destroyed: it leaves the registry.
+        if (!state.contexts[event.payload.path]) return undefined;
+        const { [event.payload.path]: _deleted, ...contexts } = state.contexts;
+        return { ...state, contexts };
+      }
       case "events.iterate.com/project/delete-requested":
         // The platform's fact alone (the session appends it once the control plane dropped the
         // row): a member can append this type to `/`, and theirs deletes nothing.
@@ -332,21 +332,16 @@ export class ProjectProcessor extends StreamProcessor<
       blockProcessorWhile(
         async () => await this.hostnames()?.setPrimaryHostname(state.primaryHostname),
       );
-    // THE REGISTRY of the project's contexts, kept on every delivery (catch-up included): a row per
-    // announced descendant (`recordContext` keeps only a canonical path below `/`). A member can
-    // append this type too; a row it adds is one more context of this project the saga destroys.
-    if (event?.type === "events.iterate.com/itx/child-created")
-      this.deletion()?.recordContext(event.payload.childPath);
     if (!delivery.caughtUp) return;
     // THE DELETION SAGA — state-derived, at head, in the background, and alone: a project being
     // deleted starts none of the sagas below, and this one first waits out any this incarnation
     // already started. Deepest context first, so a retried destruction of one (which wakes it, and
-    // it announces itself) only reaches ancestors that still exist; each destroyed context's row goes
-    // as it goes, so a pass after an eviction resumes where the last stopped, and `context-deleted`
-    // records it. Then each custom hostname at Cloudflare and then its claim (the claim outlives the
+    // it announces itself) only reaches ancestors that still exist; each destroyed context's
+    // `context-deleted` takes it out of the registry, so a pass after an eviction resumes where the
+    // last stopped. Then each custom hostname at Cloudflare and then its claim (the claim outlives the
     // project's row, so no other project takes the name while Cloudflare still has it), kv, files and
     // Artifacts repos, the certificate, and `/` itself — the context this runs in, so nothing follows
-    // it. Only the platform's request opens it; none of the facts it writes are read back.
+    // it. Only the platform's request opens it.
     if (state.deletion) {
       if (this.#deleting) return;
       const deletion = this.deletion();
@@ -356,11 +351,13 @@ export class ProjectProcessor extends StreamProcessor<
         try {
           while (this.#creating || this.#publishing || this.#hostnameWork.size > 0)
             await new Promise((resolve) => setTimeout(resolve, 100));
-          const paths = await deletion.contextPaths();
+          // every descendant the registry names, as a canonical path below `/`: the root is last
+          const paths = Object.keys(state.contexts).filter(
+            (path) => path !== "/" && resolveContextPath("/", path) === path,
+          );
           paths.sort((a, b) => b.split("/").length - a.split("/").length || a.localeCompare(b));
           for (const path of paths) {
             await deletion.destroyContext(path);
-            deletion.forgetContext(path);
             await append({
               type: "events.iterate.com/project/context-deleted",
               idempotencyKey: `project/context-deleted:${path}`,
