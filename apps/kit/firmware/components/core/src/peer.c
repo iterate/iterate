@@ -214,6 +214,19 @@ void iterate_kit_peer_session_ended(struct iterate_kit_peer *peer) {
   }
 }
 
+void iterate_kit_peer_step(struct iterate_kit_peer *peer) {
+  size_t index;
+  if (peer == NULL || !peer->initialized) {
+    return;
+  }
+  for (index = 0U; index < peer->options.module_count; ++index) {
+    const struct iterate_kit_module *module = &peer->options.modules[index];
+    if (module->step != NULL) {
+      module->step(module->context);
+    }
+  }
+}
+
 struct iterate_kit_poll_result iterate_kit_peer_close(
     struct iterate_kit_peer *peer) {
   size_t index;

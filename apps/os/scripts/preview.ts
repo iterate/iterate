@@ -676,8 +676,9 @@ async function signInLinks(
 
 /** Seed the PR's test person and project — created as them through the operator's bearer (`as`),
  *  the same idempotent call as e2e/support/project-host.ts `registerProject`, so the Dash link
- *  lands inside it — then smoke the heading's link. Neither ever fails the deploy: they log, and
- *  the section says when the seed failed. */
+ *  lands inside it — then smoke apps/os's link: a good one signs nobody in yet, and sends the
+ *  browser to prd's `/oauth2/auth` to prove it is an admin's (src/test-link-admins.ts). Neither
+ *  ever fails the deploy: they log, and the section says when the seed failed. */
 async function seedSignIn(
   config: AppConfig,
   preview: { url: string; email: string; project: string; heading: string },
@@ -715,11 +716,15 @@ async function seedSignIn(
   const smoke = await fetch(preview.heading, { redirect: "manual" }).catch(
     (error: unknown) => error,
   );
-  if (smoke instanceof Response && smoke.status === 302 && smoke.headers.has("set-cookie"))
-    console.log(`sign-in: the heading link signs in (302 to ${smoke.headers.get("location")})`);
+  const location =
+    smoke instanceof Response && smoke.status === 302
+      ? new URL(smoke.headers.get("location") || "/", preview.url)
+      : undefined;
+  if (location?.pathname === "/oauth2/auth")
+    console.log(`sign-in: apps/os's link asks ${location.origin} who the browser is, as it should`);
   else
     console.warn(
-      `sign-in: the heading link did not sign in: ${smoke instanceof Response ? `${smoke.status} ${await smoke.text()}` : describe(smoke)}`,
+      `sign-in: apps/os's link did not ask prd who the browser is: ${smoke instanceof Response ? `${smoke.status} ${location || (await smoke.text())}` : describe(smoke)}`,
     );
   return seeded;
 }

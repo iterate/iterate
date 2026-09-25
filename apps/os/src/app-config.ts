@@ -9,7 +9,7 @@
 //
 //   {
 //     urls: { os, mcp, dash, ingressRouting: { type, hostname }, projectWildcard: { hostname, project, excludedHostnames } },
-//     login: { allowedEmails, password, emailCode: { from }, google: { clientId, clientSecret }, cloudflare: { clientId, clientSecret }, testLink: { emailDomain } },
+//     login: { allowedEmails, password, emailCode: { from }, google: { clientId, clientSecret }, cloudflare: { clientId, clientSecret }, testLink: { emailDomain, admins: { issuer, emails } } },
 //     admins,
 //     customHostnames: { zone, zoneId, dcvDelegationUuid, reservedZones }, cloudflareApiToken,
 //     posthogProjectKey,
@@ -28,6 +28,7 @@ import { z } from "zod";
 import {
   dnsName,
   fieldNameOf,
+  httpOrigin,
   optionalOrigin,
   parseAppConfigVars,
 } from "@iterate-com/shared/app-config";
@@ -67,6 +68,29 @@ function redacted<Schema extends z.ZodTypeAny>(schema: Schema) {
 
 /** A field's failure message names the SHAPE; `parseAppConfig` prefixes where it came from. */
 const REQUIRED = "required, but unset or blank";
+
+/** Email patterns (allowed-emails.ts): `*` for any run of characters — `["*@iterate.com",
+ *  "someone@example.com"]`. A JSON array, or as a var a comma-separated list too; never empty,
+ *  `empty` saying why. */
+const emailPatterns = (empty: string) =>
+  z.preprocess(
+    (value) =>
+      typeof value === "string"
+        ? value
+            .split(",")
+            .map((pattern) => pattern.trim())
+            .filter(Boolean)
+        : value,
+    z
+      .array(
+        z
+          .string()
+          .trim()
+          .toLowerCase()
+          .regex(/^[^@\s]+@[^@\s]+$/, 'expected email patterns like "*@iterate.com"'),
+      )
+      .min(1, empty),
+  );
 
 /** THE `APP_CONFIG` SCHEMA — PER-FIELD validation only; the cross-field rules (a distinct MCP origin,
  *  the ingress routing's hostname, at least one sign-in mechanism) live in `parseAppConfig`, because
@@ -133,26 +157,9 @@ export const AppConfig = z.object({
        *  `["*@iterate.com", "someone@example.com"]`. A JSON array, or as the var
        *  `APP_CONFIG_LOGIN__ALLOWED_EMAILS` a comma-separated list too. Every mechanism refuses an
        *  address it does not name, and a live grant for one stops working. Unset ⇒ everyone. */
-      allowedEmails: z
-        .preprocess(
-          (value) =>
-            typeof value === "string"
-              ? value
-                  .split(",")
-                  .map((pattern) => pattern.trim())
-                  .filter(Boolean)
-              : value,
-          z
-            .array(
-              z
-                .string()
-                .trim()
-                .toLowerCase()
-                .regex(/^[^@\s]+@[^@\s]+$/, 'expected email patterns like "*@iterate.com"'),
-            )
-            .min(1, "lists no pattern, so nobody could sign in — name one, or unset it"),
-        )
-        .optional(),
+      allowedEmails: emailPatterns(
+        "lists no pattern, so nobody could sign in — name one, or unset it",
+      ).optional(),
       /** A GLOBAL PASSWORD: anyone who knows it signs in as the email they type — the membership is
        *  the password, the email is the name tag. The self-host default; also how the specs sign in.
        *  Blank ⇒ off. */
@@ -182,7 +189,24 @@ export const AppConfig = z.object({
        *  workers.dev or localhost origin. Set in code, never in Doppler: a per-commit deployment's
        *  config (envs.ts `previewDeployment`'s `testLinks`) and local dev's, both
        *  scripts/generate-wrangler-config.ts's, as `APP_CONFIG_LOGIN__TEST_LINK__EMAIL_DOMAIN`. */
-      testLink: z.object({ emailDomain: dnsName.default(TEST_LINK_EMAIL_DOMAIN) }).optional(),
+      testLink: z
+        .object({
+          emailDomain: dnsName.default(TEST_LINK_EMAIL_DOMAIN),
+          /** WHO MAY REDEEM A LINK (test-link.ts): before a link signs anyone in, the browser signs
+           *  in at `issuer` — another iterate deployment, prd for a per-commit deployment — through
+           *  an OAuth grant that can only read who they are (the issuer's `/oauth2/userinfo`
+           *  resource), and only an address `emails` names redeems it. Required wherever the origin
+           *  is not localhost (`parseAppConfig`): a link in a public PR body is then no credential. A
+           *  per-commit deployment's config sets both (envs.ts `previewDeployment`'s
+           *  `testLinks.admins`), as `APP_CONFIG_LOGIN__TEST_LINK__ADMINS__ISSUER` and `…__EMAILS`. */
+          admins: z
+            .object({
+              issuer: httpOrigin,
+              emails: emailPatterns("lists no pattern, so no link could ever be redeemed"),
+            })
+            .optional(),
+        })
+        .optional(),
     })
     .prefault({}),
   /** THE PLATFORM ADMINS: exact email addresses, never a pattern — `["jonas@iterate.com"]`, or the
@@ -275,6 +299,16 @@ export function parseAppConfig(env: object, deployId = "unversioned"): AppConfig
     throw new Error(
       `${fieldNameOf(["login", "testLink"])}: only for a preview or local dev — urls.os must be a workers.dev or localhost origin, not ${JSON.stringify(urls.os)}`,
     );
+  // Off a laptop, a link alone signs nobody in: its redeemer proves at another issuer that they
+  // are one of `admins.emails` (test-link.ts). A preview's origin is public, and so is its PR body.
+  if (login.testLink && !login.testLink.admins && !isLocalhostOrigin(urls.os))
+    throw new Error(
+      `${fieldNameOf(["login", "testLink", "admins"])}: required off localhost — a preview's links are public, so who redeems one must prove who they are at another issuer`,
+    );
+  if (login.testLink?.admins && new URL(urls.os).protocol !== "https:")
+    throw new Error(
+      `${fieldNameOf(["login", "testLink", "admins"])}: only on an https urls.os — the issuer reads this deployment's client metadata document there`,
+    );
   if (!login.password.exposeSecret() && !login.emailCode && !login.google && !login.cloudflare)
     throw new Error(
       `${fieldNameOf(["login"])}: no sign-in mechanism — set login.password, login.emailCode, login.google or login.cloudflare`,
@@ -291,10 +325,12 @@ export function parseAppConfig(env: object, deployId = "unversioned"): AppConfig
 function isTestLinkOrigin(origin: string) {
   if (!origin) return false;
   const { protocol, hostname } = new URL(origin);
-  return (
-    (protocol === "https:" && hostname.endsWith(".workers.dev")) ||
-    ["localhost", "127.0.0.1"].includes(hostname)
-  );
+  return (protocol === "https:" && hostname.endsWith(".workers.dev")) || isLocalhostOrigin(origin);
+}
+
+/** A laptop's origin: localhost's or 127.0.0.1's. */
+function isLocalhostOrigin(origin: string) {
+  return ["localhost", "127.0.0.1"].includes(new URL(origin).hostname);
 }
 
 const appConfigByEnv = new WeakMap<object, AppConfig>();
@@ -344,7 +380,16 @@ export function atRestKeysOf(config: AppConfig): { current: string; previous?: s
  *  `/mcp`). The edge stamps every caller with the origin
  *  (`Caller.platformOrigin`); a context persists what its callers said, for the calls that carry
  *  none (a loaded worker's, an alarm's). */
-export type PlatformAddresses = { platformOrigin: string; api: string; mcp: string };
+export type PlatformAddresses = {
+  platformOrigin: string;
+  api: string;
+  mcp: string;
+  /** the third resource: who the bearer is, and nothing else (api.ts `userinfoResponse`) */
+  userinfo: string;
+};
+/** The userinfo resource's path on the platform origin (`PlatformAddresses.userinfo`). */
+export const USERINFO_PATH = "/oauth2/userinfo";
+
 export function platformAddressesOf(env: AppConfigEnv, request: Request): PlatformAddresses {
   const config = appConfigOf(env);
   const platformOrigin = config.urls.os || new URL(request.url).origin;
@@ -352,6 +397,7 @@ export function platformAddressesOf(env: AppConfigEnv, request: Request): Platfo
     platformOrigin,
     api: `${platformOrigin}/api`,
     mcp: config.urls.mcp ? `${config.urls.mcp}/` : `${platformOrigin}/mcp`,
+    userinfo: `${platformOrigin}${USERINFO_PATH}`,
   };
 }
 

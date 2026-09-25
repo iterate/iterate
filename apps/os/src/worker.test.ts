@@ -516,6 +516,8 @@ test("public protocol origins: a preview's one-click sign-in link (test-link.ts)
     ...MINIMAL,
     APP_CONFIG_URLS__OS: pr124,
     APP_CONFIG_LOGIN__TEST_LINK__EMAIL_DOMAIN: "preview.iterate.test",
+    APP_CONFIG_LOGIN__TEST_LINK__ADMINS__ISSUER: "https://os.iterate.com",
+    APP_CONFIG_LOGIN__TEST_LINK__ADMINS__EMAILS: "*@nustom.com",
   });
   expect(refused).toMatchObject({ status: 403 });
   expect(await refused.text()).toBe(`This sign-in link is for ${pr123}, not this deployment.\n`);

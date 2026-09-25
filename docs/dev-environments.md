@@ -151,28 +151,36 @@ read secrets.
   and the other RFC 2606/6761 names). No deployment ever mails them, because a
   bounce costs the sender's reputation; sign in as them with the deployment's
   password.
-- One-click sign-in: every hosted client (Dash, Agents, Notes, Voice, Kit) is
-  deployed next to the platform preview and wired to it, and the PR body's
-  preview section carries `Sign in ↗` links: one in the heading (into the
-  Dash's project, or the issuer's own page when the Dash wasn't previewed),
-  one per app, and with the Dash one per `configs` template ("New project
-  from template"), which lands in the Dash's New project sheet with that
+- One-click sign-in: every hosted client (Dash, Agents, Notes, Admin, Voice,
+  Kit) is deployed next to the platform in each per-commit deployment and wired
+  to it, and the PR body's section carries `Sign in ↗` links: one per worker
+  (apps/os's into the Dash's project), and with the Dash one per `configs`
+  template ("New project from template"), which lands in the Dash's New project sheet with that
   template chosen (`/projects?new=1&template=<name>`). A template the PR
   changes is linked at the PR head instead
   (`template=github:iterate/iterate#<head>&path:configs/<name>`, the
   custom field prefilled), so the project is born from the unmerged template.
-  A click signs a logged-out browser in as the PR's test person,
-  `pr<N>@preview.iterate.test`, and lands inside project `pr<N>`, with no
-  password and no Allow page. CI seeds that person and project on every deploy
-  (`apps/os/scripts/preview.ts` `previewSignIn`). The link is
+  The PR body is public, so a link alone signs nobody in: a click first sends
+  the browser to prd (`os.iterate.com`) to confirm it's an `*@nustom.com`
+  person, through an OAuth grant that can only read who they are (prd's
+  `/oauth2/userinfo` resource; `apps/os/src/test-link-admins.ts`). Then it
+  signs the browser in as the PR's test person, `pr<N>@preview.iterate.test`,
+  and lands inside project `pr<N>`, with no password and no Allow page on the
+  preview. An agent without an admin's prd session signs in to a preview with
+  its password instead (Doppler `os/preview`, `APP_CONFIG` `login.password`).
+  CI seeds that person and project on every deploy
+  (`apps/os/scripts/preview.ts` `seedSignIn`). The link is
   `/.auth/test-link?t=<token>` (`apps/os/src/test-link.ts`), signed with the
-  preview's `secrets.key` and bound to that preview's origin, so a pr123 link
-  is refused on pr124 even though every preview inherits the same key. It is
-  also bound to that one address, expires in 14 days (every push mints a fresh
-  one) and is deleted with the preview. The route exists only where
-  `login.testLink` is set. The preview config and local dev set it in code,
+  deployment's `secrets.key` and bound to its origin, so a link for one
+  deployment is refused on another even though every deployment ships the same
+  key. It is also bound to that one address, expires in 14 days (every push
+  mints a fresh one) and goes with its deployment. The route exists only where
+  `login.testLink` is set. A per-commit deployment's config (envs.ts
+  `previewDeployment`'s `testLinks`, with its admins) and local dev set it in code,
   never in Doppler, and `parseAppConfig` refuses it unless `urls.os` is a
-  workers.dev or localhost origin, so prd answers 404. Locally, mint one with
+  workers.dev or localhost origin, so prd answers 404, and off localhost
+  refuses it without `login.testLink.admins`, the issuer and email patterns
+  that gate it. Local dev redeems a link at once. Locally, mint one with
   the dev key (`specs/os/test-link.spec.ts` shows how). Anyone can still sign
   in with any email and the preview's password (Doppler
   `os/preview`, `APP_CONFIG.login.password`).

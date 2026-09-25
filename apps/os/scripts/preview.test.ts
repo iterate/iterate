@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { expect, onTestFinished, test } from "vitest";
 import { osEnvs, PREVIEW_DEPLOYMENT_APPS, previewDeployment } from "../../../envs.ts";
+import { parseAppConfig } from "../src/app-config.ts";
 import { viteWranglerConfig } from "./generate-wrangler-config.ts";
 import {
   APPS,
@@ -64,7 +65,7 @@ test("a deployment is derived from its name alone: seven plain workers on the de
       dashBaseUrl: "https://pr3144-a1b2c3d-dash.iterate-dev-preview.workers.dev",
       dopplerConfig: "preview",
       ingressRouting: { type: "paths" },
-      testLinks: true,
+      testLinks: { admins: { issuer: "https://os.iterate.com", emails: ["*@nustom.com"] } },
       artifactsNamespace: "pr3144-a1b2c3d-os-repos",
       resourceNamePrefix: "pr3144-a1b2c3d-os",
     },
@@ -280,14 +281,32 @@ test("a deployment's apps/os config: its own worker, KV binding-only for wrangle
   ]);
 });
 
-test("a deployment's apps/os config: vars are its own origin, its dash, projects as paths, the one-click sign-in links on and one test admin", () => {
+test("a deployment's apps/os config: vars are its own origin, its dash, projects as paths, the one-click sign-in links on behind prd's *@nustom.com check, and one test admin", () => {
   expect(viteWranglerConfig("pr3144-a1b2c3d", { localDev: false, port: "0" })).toMatchObject({
     vars: {
       APP_CONFIG_URLS__OS: "https://pr3144-a1b2c3d-os.iterate-dev-preview.workers.dev",
       APP_CONFIG_URLS__DASH: "https://pr3144-a1b2c3d-dash.iterate-dev-preview.workers.dev",
       APP_CONFIG_URLS__INGRESS_ROUTING: JSON.stringify({ type: "paths" }),
       APP_CONFIG_LOGIN__TEST_LINK__EMAIL_DOMAIN: "preview.iterate.test",
+      APP_CONFIG_LOGIN__TEST_LINK__ADMINS__ISSUER: "https://os.iterate.com",
+      APP_CONFIG_LOGIN__TEST_LINK__ADMINS__EMAILS: "*@nustom.com",
       APP_CONFIG_ADMINS: JSON.stringify(["admin@preview.iterate.test"]),
+    },
+  });
+});
+
+test("a deployment's apps/os config parses as its worker parses it, with the two secrets every deploy ships", () => {
+  const { vars } = viteWranglerConfig("pr3144-a1b2c3d", { localDev: false, port: "0" });
+  expect(
+    parseAppConfig({
+      ...vars,
+      APP_CONFIG: JSON.stringify({ login: { password: "p" }, secrets: { adminBearer: "b" } }),
+      APP_CONFIG_SECRETS__KEY: "k",
+    }),
+  ).toMatchObject({
+    urls: { os: "https://pr3144-a1b2c3d-os.iterate-dev-preview.workers.dev" },
+    login: {
+      testLink: { admins: { issuer: "https://os.iterate.com", emails: ["*@nustom.com"] } },
     },
   });
 });

@@ -103,6 +103,9 @@ struct board {
   size_t presented;
   bool started;
   bool microphone_muted;
+  /* What the loop calls on this board's capability module (below). */
+  size_t module_steps;
+  size_t module_sessions_ended;
 };
 
 static bool board_start(void *context, struct iterate_kit_board_audio *out) {
@@ -132,6 +135,28 @@ static void board_poll(void *context, struct iterate_kit_voice_intent *out) {
   }
 }
 
+/* A capability module with no methods: it counts the loop's step() and
+ * session_ended() calls, the two points a module that defers a reply (the
+ * screen) relies on. */
+static void module_step(void *context) {
+  ++((struct board *)context)->module_steps;
+}
+
+static void module_session_ended(void *context) {
+  ++((struct board *)context)->module_sessions_ended;
+}
+
+static size_t board_modules(
+    void *context, struct iterate_kit_module *out, size_t capacity) {
+  if (capacity == 0U) return 0U;
+  out[0] = (struct iterate_kit_module){
+    .context = context,
+    .session_ended = module_session_ended,
+    .step = module_step,
+  };
+  return 1U;
+}
+
 /*
  * The fixture reports only its mute level. It has no physical start/end control,
  * so every conversation intent below arrives over the mounted capability.
@@ -140,6 +165,7 @@ static const struct iterate_kit_board_ops board_ops = {
   .start = board_start,
   .present = board_present,
   .poll = board_poll,
+  .modules = board_modules,
 };
 
 static const struct iterate_kit_board_facts voice_facts = {
@@ -976,7 +1002,10 @@ static void losing_the_session_ends_the_call_and_the_next_press_opens_a_new_one(
   step();
   assert(board.last_view.wants_call);
 
+  const size_t sessions_ended = board.module_sessions_ended;
   iterate_kit_itx_connection_lost(iterate_kit_fake_platform_connection());
+  /* The modules hear that the session is gone. */
+  assert(board.module_sessions_ended == sessions_ended + 1U);
   iterate_kit_fake_platform_drain_control_outbox();
   next_inbound_call_id = 1;
   pending_open_connection_count = 0U;
@@ -986,8 +1015,11 @@ static void losing_the_session_ends_the_call_and_the_next_press_opens_a_new_one(
   iterate_kit_fake_platform_connect();
   after_reconnect = iterate_kit_fake_platform_sent_count();
   pump();
+  const size_t steps = board.module_steps;
   step();
   step(); /* the end lands in one pass; the board sees the view on the next */
+  /* Every pass steps the modules. */
+  assert(board.module_steps == steps + 2U);
   assert(!board.last_view.wants_call);
   assert(sent_after_count(
       after_reconnect, "\"type\":\"events.iterate.com/voice-agent/conversation-ended\"") == 1U);

@@ -469,6 +469,14 @@ export type ConsentAnswer =
       target: string;
       denyLocation: string;
     }
+  | {
+      /** a client asking only who the person is (the platform's `/oauth2/userinfo` resource) */
+      kind: "identify";
+      clientName: string;
+      clientId: string;
+      email: string;
+      denyLocation: string;
+    }
   | { kind: "redirect"; location: string }
   | { kind: "invalid"; description: string };
 

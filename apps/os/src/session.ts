@@ -22,7 +22,7 @@ import { base64url, sha256Hex, verifyAdminSecret, type Caller } from "./caller.t
 import { templates } from "./generated/config-templates.js";
 import type { ConsentRpcTarget } from "./consent.ts";
 import type { GrantsRpcTarget } from "./grants.ts";
-import { DurableObjectNameCodec, GLOBAL_PROJECT_ID } from "./context/paths.ts";
+import { CONTEXT_DESTROYED, DurableObjectNameCodec, GLOBAL_PROJECT_ID } from "./context/paths.ts";
 import {
   IterateContextRpcTarget,
   type IterateContextNamespace,
@@ -480,6 +480,7 @@ export class SessionRpcTarget extends RpcTarget {
   readonly #projects: ProjectCollectionRpcTarget;
   readonly #organizations: OrganizationCollectionRpcTarget;
   readonly #users: UserCollectionRpcTarget;
+  readonly #contexts: ContextSweepRpcTarget;
   readonly #input: SessionInput;
   readonly #authority: SessionAuthority;
 
@@ -498,6 +499,7 @@ export class SessionRpcTarget extends RpcTarget {
     this.#projects = new ProjectCollectionRpcTarget(session, sessionTeardown);
     this.#organizations = new OrganizationCollectionRpcTarget(session);
     this.#users = new UserCollectionRpcTarget(session);
+    this.#contexts = new ContextSweepRpcTarget(session);
   }
 
   [Symbol.dispose](): void {
@@ -631,6 +633,14 @@ export class SessionRpcTarget extends RpcTarget {
     if (reach !== "every" || !principal.email || !scopes?.includes("admin"))
       throw codedError("FORBIDDEN", "Only a platform admin opens the global namespace.");
     return this.#globalContext("/", true);
+  }
+
+  /** THE CONTEXT SWEEP's reach (scripts/ci/context-sweep.ts) — the operator's alone: every
+   *  context Cloudflare lists, by id. */
+  get contexts(): ContextSweepRpcTarget {
+    if (this.#authority.reach !== "every")
+      throw codedError("FORBIDDEN", "Only the operator sweeps contexts.");
+    return this.#contexts;
   }
 
   /** The signed-in human's own context in the deployment-global namespace — an ORDINARY
@@ -1177,6 +1187,62 @@ class ProjectCollectionRpcTarget extends RpcTarget {
       this.#session.input.waitUntil,
       this.#session.caller,
     );
+  }
+}
+
+/** THE CONTEXT SWEEP (scripts/ci/context-sweep.ts): the contexts Cloudflare lists, by id — each
+ *  says who it is from its own birth record (iterate-context-durable-object.ts `identity`), without
+ *  recording a wake — and an orphan's destruction: a context of a project the control plane no longer
+ *  holds, which its project's deletion missed. */
+class ContextSweepRpcTarget extends RpcTarget {
+  readonly #session: SessionOf;
+  constructor(session: SessionOf) {
+    super();
+    this.#session = session;
+  }
+
+  /** Who each id is — its project and path — or why it could not say. */
+  async identify(
+    ids: string[],
+  ): Promise<({ id: string; projectId: string; path: string } | { id: string; error: string })[]> {
+    const namespace = this.#session.input.contextNamespace;
+    return Promise.all(
+      z
+        .array(z.string().regex(/^[0-9a-f]{64}$/))
+        .parse(ids)
+        .map(async (id) => {
+          try {
+            return { id, ...(await namespace.get(namespace.idFromString(id)).identity()) };
+          } catch (error) {
+            return { id, error: String(error).slice(0, 300) };
+          }
+        }),
+    );
+  }
+
+  /** Destroy the context `id`, an orphan: refused for a global context, and for one whose project
+   *  the control plane still holds (its registry is the project deletion's to use). */
+  async destroy(id: string): Promise<{ projectId: string; path: string }> {
+    const namespace = this.#session.input.contextNamespace;
+    const stub = namespace.get(
+      namespace.idFromString(
+        z
+          .string()
+          .regex(/^[0-9a-f]{64}$/)
+          .parse(id),
+      ),
+    );
+    const { projectId, path } = await stub.identity();
+    if (projectId === GLOBAL_PROJECT_ID)
+      throw codedError("FORBIDDEN", `${path} is a global context: the sweep leaves it alone.`);
+    // by id alone: the lookup also answers a slug, and a stray born under a live project's SLUG
+    // (an operator addressing `templestein` as an id) is no part of that project
+    if ((await this.#session.input.controlPlane.getProject(projectId))?.id === projectId)
+      throw codedError("FORBIDDEN", `${projectId} still exists: ${path} is no orphan.`);
+    await stub.destroy().catch((error: unknown) => {
+      if (!String(error).includes(CONTEXT_DESTROYED)) throw error;
+    });
+    return { projectId, path };
   }
 }
 

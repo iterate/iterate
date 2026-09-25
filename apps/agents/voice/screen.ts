@@ -33,10 +33,6 @@ export const ScreenImageInput = z.object({
     .object({ html: z.string().min(1).max(24000), format: PixelFormat.optional() })
     .nullable(),
 });
-export const ScreenStatus = z.object({
-  uploadId: z.number().int().min(0).max(0xffffffff),
-  state: z.enum(["idle", "receiving", "pending", "shown", "failed"]),
-});
 
 function pngU32(bytes: Uint8Array, offset: number): number {
   return (

@@ -72,12 +72,13 @@ export default async function deploy(
 }
 /** A per-commit deployment's D1, R2 bucket and Artifacts namespace, by the names its config binds
  *  (generate-wrangler-config.ts `deploymentWranglerConfig`), each found or created; the KV is
- *  wrangler's to create during the deploy. Resolves to the D1's id. The delete that takes them is
+ *  wrangler's to create during the deploy. The D1 is created near this job (`automatic`, d1.ts
+ *  `D1Location`), which in CI is where the deployment's suites call it from. Resolves to the D1's id. The delete that takes them is
  *  scripts/preview.ts `deletePreviewDeployment`. */
 async function createResources(ctx: EnvContext<OsEnv | OsPreviewEnv>) {
   const bucketName = `${ctx.env.resourceNamePrefix}-files`;
   const [database] = await Promise.all([
-    ensureD1(ctx.cf, `${ctx.env.resourceNamePrefix}-db`),
+    ensureD1(ctx.cf, `${ctx.env.resourceNamePrefix}-db`, "automatic"),
     ensureArtifactsNamespace(ctx.cf, ctx.env.artifactsNamespace),
     ctx.cf(`/r2/buckets/${bucketName}`).catch(async (error) => {
       if (!isCloudflareError(error, 404, 10006)) throw error;

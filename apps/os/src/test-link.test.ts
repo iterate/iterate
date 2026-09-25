@@ -120,15 +120,51 @@ test("login.testLink: prd's own domain refuses it, even from a mistaken Doppler 
   ).toThrow(/only for a preview or local dev/);
 });
 
-test("login.testLink: a preview's workers.dev origin and localhost accept it; absent is off", () => {
-  for (const os of [pr123, "http://localhost:8788"])
-    expect(
-      parseAppConfig({
-        ...base,
-        APP_CONFIG_URLS__OS: os,
-        APP_CONFIG_LOGIN__TEST_LINK__EMAIL_DOMAIN: "preview.iterate.test",
-      }),
-    ).toMatchObject({ login: { testLink: { emailDomain: "preview.iterate.test" } } });
+const admins = {
+  APP_CONFIG_LOGIN__TEST_LINK__ADMINS__ISSUER: "https://os.iterate.com",
+  APP_CONFIG_LOGIN__TEST_LINK__ADMINS__EMAILS: "*@nustom.com, jonas@example.com",
+};
+
+test("login.testLink: a preview's workers.dev origin accepts it only with admins, localhost with or without; absent is off", () => {
+  expect(
+    parseAppConfig({
+      ...base,
+      APP_CONFIG_URLS__OS: pr123,
+      APP_CONFIG_LOGIN__TEST_LINK__EMAIL_DOMAIN: "preview.iterate.test",
+      ...admins,
+    }),
+  ).toMatchObject({
+    login: {
+      testLink: {
+        emailDomain: "preview.iterate.test",
+        admins: { issuer: "https://os.iterate.com", emails: ["*@nustom.com", "jonas@example.com"] },
+      },
+    },
+  });
+  // a public origin's links are in a public PR body: a bare link must never sign anyone in there
+  expect(() =>
+    parseAppConfig({
+      ...base,
+      APP_CONFIG_URLS__OS: pr123,
+      APP_CONFIG_LOGIN__TEST_LINK__EMAIL_DOMAIN: "preview.iterate.test",
+    }),
+  ).toThrow(/APP_CONFIG login\.testLink\.admins .*required off localhost/);
+  expect(
+    parseAppConfig({
+      ...base,
+      APP_CONFIG_URLS__OS: "http://localhost:8788",
+      APP_CONFIG_LOGIN__TEST_LINK__EMAIL_DOMAIN: "preview.iterate.test",
+    }),
+  ).toMatchObject({ login: { testLink: { emailDomain: "preview.iterate.test" } } });
+  // the admins' issuer fetches this deployment's client metadata document: https only
+  expect(() =>
+    parseAppConfig({
+      ...base,
+      APP_CONFIG_URLS__OS: "http://localhost:8788",
+      APP_CONFIG_LOGIN__TEST_LINK__EMAIL_DOMAIN: "preview.iterate.test",
+      ...admins,
+    }),
+  ).toThrow(/login\.testLink\.admins .*only on an https urls\.os/);
   expect(parseAppConfig({ ...base, APP_CONFIG_URLS__OS: pr123 })).not.toHaveProperty(
     "login.testLink",
   );

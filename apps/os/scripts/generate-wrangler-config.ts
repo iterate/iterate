@@ -24,7 +24,11 @@ function configVars(env: OsPreviewEnv) {
   // specs sign in as (specs/admin). A deployment that signs anyone in by password or test link
   // opens nothing more by making them an admin.
   const admins = [...(env.admins || []), ...(env.testLinks ? [PREVIEW_ADMIN_EMAIL] : [])];
-  if (env.testLinks) vars.APP_CONFIG_LOGIN__TEST_LINK__EMAIL_DOMAIN = TEST_LINK_EMAIL_DOMAIN;
+  if (env.testLinks) {
+    vars.APP_CONFIG_LOGIN__TEST_LINK__EMAIL_DOMAIN = TEST_LINK_EMAIL_DOMAIN;
+    vars.APP_CONFIG_LOGIN__TEST_LINK__ADMINS__ISSUER = env.testLinks.admins.issuer;
+    vars.APP_CONFIG_LOGIN__TEST_LINK__ADMINS__EMAILS = env.testLinks.admins.emails.join(",");
+  }
   if (admins.length) vars.APP_CONFIG_ADMINS = JSON.stringify(admins);
   if (env.posthogProjectKey) vars.APP_CONFIG_POSTHOG_PROJECT_KEY = env.posthogProjectKey;
   if (env.ingressRouting)

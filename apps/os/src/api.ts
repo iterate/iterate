@@ -21,7 +21,7 @@ const AUTHORIZATION_SERVER_PATHS = new Set([
   CLIENT_REGISTRATION_ENDPOINT,
 ]);
 
-/** THE PLATFORM'S OAUTH ROUTES: `/api` and `/mcp`, each a protected resource of the authorization
+/** THE PLATFORM'S OAUTH ROUTES: `/api`, `/mcp` and `/oauth2/userinfo`, each a protected resource of the authorization
  *  server hosted here (the library's `OAuthResourceServer`, which publishes the resource's RFC 9728
  *  metadata, challenges a request without a token, and validates one for its own resource alone);
  *  the authorization server's own endpoints; and everything else to `defaultHandler`. The
@@ -52,6 +52,8 @@ export function oauthResponse(
     return resourceServer(addresses, addresses.mcp, (request, env, _ctx, authorization) =>
       mcpResponse(request, env, authorization),
     ).fetch(request, env, ctx);
+  if (isResourceRequest(addresses.userinfo, url))
+    return resourceServer(addresses, addresses.userinfo, userinfoResponse).fetch(request, env, ctx);
   if (url.origin === addresses.platformOrigin && AUTHORIZATION_SERVER_PATHS.has(url.pathname))
     return authorizationServerFetch(env, addresses, request, ctx);
   return defaultHandler.fetch(request, env, ctx);
@@ -111,6 +113,22 @@ function isResourceRequest(resource: string, url: URL) {
       url.pathname === `/.well-known/oauth-protected-resource${pathname === "/" ? "" : pathname}`
     );
   return pathname === "/" || url.pathname === pathname || url.pathname.startsWith(`${pathname}/`);
+}
+
+/** `GET /oauth2/userinfo`: who the bearer is — the person's id and email — and nothing else. The
+ *  resource a client asks for when all it needs is to know who signed in (a preview's admin check,
+ *  test-link.ts): a token for it reaches no project, and `/api` and `/mcp` refuse it (RFC 8707). */
+async function userinfoResponse(
+  request: Request,
+  _env: Env,
+  _ctx: ExecutionContext,
+  authorization: Authorization,
+) {
+  if (request.method !== "GET") return new Response("Method not allowed", { status: 405 });
+  return Response.json(
+    { sub: authorization.principal.actor, email: authorization.principal.email },
+    { headers: { "cache-control": "no-store" } },
+  );
 }
 
 const notFound: Handler = { fetch: () => new Response("Not found", { status: 404 }) };

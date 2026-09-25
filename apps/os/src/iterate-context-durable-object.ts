@@ -72,6 +72,7 @@ import {
   resourceScope,
 } from "./context/paths.ts";
 import { secretPathsReferenced } from "./secrets.ts";
+import { isDeployReset } from "./retryable-error.ts";
 import { appConfigOf, sessionSigningSecretOf, type AppConfigEnv } from "./app-config.ts";
 import {
   ItxExpressionResolver,
@@ -90,12 +91,31 @@ import type { ArtifactsNamespace } from "./context/cf-artifacts.ts";
 import { Residency } from "./context/residency.ts";
 import { SubscriptionDelivery, type DeliveryDeadline } from "./stream/subscription-delivery.ts";
 
-function parseIterateContextDurableObjectName(name: string | undefined) {
-  if (!name)
+/** WHO THIS CONTEXT IS: its name, when it was reached by name (every caller but one); reached by
+ *  id alone — the context sweep (scripts/ci/context-sweep.ts), which knows only the ids Cloudflare
+ *  lists — its own birth record, `itx/created { projectId, path }` at offset 1. A context with no
+ *  birth record and no name is nobody: refused, so no id alone ever mints one. */
+function iterateContextAddressOf(ctx: DurableObjectState) {
+  if (ctx.id.name) return DurableObjectNameCodec.parse(ctx.id.name);
+  let body: string | undefined;
+  try {
+    body = ctx.storage.sql
+      .exec<{ body: string }>("SELECT body FROM events WHERE offset = 1")
+      .toArray()[0]?.body;
+  } catch {
+    // no events table: an empty store
+  }
+  const born = body
+    ? (JSON.parse(body) as { type?: string; payload?: { projectId?: string; path?: string } })
+    : undefined;
+  if (born?.type !== "events.iterate.com/itx/created" || !born.payload?.projectId)
     throw new Error(
-      "IterateContextDurableObject must be addressed by name (reach it via getByName).",
+      "IterateContextDurableObject must be addressed by name (reach it via getByName); by id, only a context that was born answers.",
     );
-  return DurableObjectNameCodec.parse(name);
+  return DurableObjectNameCodec.address({
+    projectId: born.payload.projectId,
+    path: born.payload.path || "/",
+  });
 }
 
 /** ONE ALARM PASS, as the DO saw it — the payload of the ephemeral `itx/alarm-trace` event,
@@ -176,7 +196,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
 
   /** WHO THIS DO IS: the DO name parsed ONCE into `{ name, projectId, path }`. A context is only
    *  ever reached `getByName`; an id-addressed instance fails right here, before it can touch anything. */
-  readonly #durableObjectAddress = parseIterateContextDurableObjectName(this.ctx.id.name);
+  readonly #durableObjectAddress = iterateContextAddressOf(this.ctx);
   /** The roots with an implicit row HERE (itx-expression-rewriting.ts `implicitRootsAt`): every built-in at the
    *  resource owner's root, the context roots anywhere else. Fixed for the DO's life — a path is. */
   readonly #implicitRoots = implicitRootsAt(
@@ -350,7 +370,10 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       // THE OVERDUE WATCH at birth (alarm-coordinator.ts): a stored alarm well past its time that a
       // source still wants is one the runtime held — an idle actor has no timer watching it; one no
       // source wants (the last incarnation's sweep) is superseded instead.
-      this.#alarmCoordinator.rearmIfOverdue(Date.now());
+      // Not for a context reached by id alone (the context sweep's `identity`): an orphan's held
+      // alarm brought forward would wake it, and a wake announces it to the ancestors its deleted
+      // project lost. An alarm the runtime delivers on its own still runs.
+      if (this.ctx.id.name) this.#alarmCoordinator.rearmIfOverdue(Date.now());
     });
   }
 
@@ -418,6 +441,14 @@ export class IterateContextDurableObject extends DurableObject<Env> {
 
   #destroyed = false;
 
+  /** WHO THIS CONTEXT IS, for the context sweep, which reaches it by id: its project and path.
+   *  Records no wake, so it announces nothing: an orphan asked must not re-create the ancestors its
+   *  deleted project lost. */
+  identity(): { projectId: string; path: string } {
+    const { projectId, path } = this.#durableObjectAddress;
+    return { projectId, path };
+  }
+
   /** DESTROY THIS CONTEXT (the project deletion saga, project/processor.ts): every byte it holds
    *  goes — its log, its kv, its alarm, and every facet's storage with it (`deleteAll` deletes the
    *  facets' databases too) — and the instance is reset in the SAME hold, so no call ever runs on an
@@ -429,6 +460,11 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     this.#destroyed = true;
     await this.ctx.blockConcurrencyWhile(async () => {
       await this.ctx.storage.deleteAll();
+      // An abort breaks the output gate, and a write not yet confirmed goes with it: without this
+      // sync the deletion itself is rolled back (prd, 2026-09-25: every context of a deleted project
+      // kept its data, and its root woke on its alarm every 40 s). Local workerd confirms at once,
+      // so only a deployed worker shows it. `#abortAfterTheAnswer` syncs for the same reason.
+      await this.ctx.storage.sync();
       // an alarm this reset interrupts must not run again: it would wake the destroyed context
       this.ctx.abort(CONTEXT_DESTROYED, { retryAlarm: false });
     });
@@ -1269,24 +1305,34 @@ export class IterateContextDurableObject extends DurableObject<Env> {
               ? 400
               : code === "RPC_STUB_OFFLINE"
                 ? 502
-                : 500;
+                : isDeployReset(error)
+                  ? 503
+                  : 500;
         if (status === 500)
           reportIssue("iterate-context.expression-fetch", error, {
             itxExpression: itxExpressionHeader,
           });
         // A lent stub offline (a tunnel killed or asleep, before its rule is un-set) is the
         // upstream's absence: a 502, logged at info and never reported, its header naming the
-        // expression to a client. The prd fault alarm (scripts/ci/prd-fault-alarm.ts) drops the 502
-        // summaries in this line's ray.
-        if (status === 502)
+        // expression to a client. A deploy that reset a context the fetch dialed, where the hop could
+        // not send it again (a request with a body, an upgrade; built-ins.ts `cd`), is a 503 the
+        // visitor retries in a second, logged at info and never reported. The prd fault alarm
+        // (scripts/ci/prd-fault-alarm.ts) drops the 502 and 503 summaries in these lines' rays.
+        if (status === 502 || status === 503)
           console.info({
-            event: "expression-fetch.rpc-stub-offline",
+            event:
+              status === 502
+                ? "expression-fetch.rpc-stub-offline"
+                : "expression-fetch.deploy-reset",
             itxExpression: itxExpressionHeader,
           });
         const message = error instanceof Error ? error.message : String(error);
         return new Response(`expression fetch error: ${message}\n`, {
           status,
-          headers: status === 502 ? { "x-iterate-rpc-stub-offline": itxExpressionHeader } : {},
+          headers: {
+            ...(status === 502 && { "x-iterate-rpc-stub-offline": itxExpressionHeader }),
+            ...(status === 503 && { "retry-after": "1", "cache-control": "no-store" }),
+          },
         });
       }
     }

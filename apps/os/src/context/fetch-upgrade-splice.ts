@@ -86,6 +86,13 @@ export type FetchUpgradeSpliceEvent =
       downMs: number;
       dials: number;
       why: string;
+    }
+  | {
+      type: "local-gone";
+      side: FetchUpgradeSide;
+      upgradeId: string;
+      /** the local socket's close code (1005, 1006), or undefined: it failed */
+      code: number | undefined;
     };
 
 type FetchUpgradeSide = "eyeball" | "leg";
@@ -161,14 +168,12 @@ export class FetchUpgradeSpliceEnd {
     this.#local.addEventListener("message", (event) =>
       this.#inOrder((event as SocketEventFields).data, (data) => this.#sendData(data)),
     );
-    const { code: goneCode, reason: goneReason } = this.#localGoneClose;
     this.#local.addEventListener("close", (event) => {
       const { code, reason } = event as SocketEventFields;
-      if (code === undefined || code === 1005 || code === 1006)
-        this.#endLocally(goneCode, goneReason);
+      if (code === undefined || code === 1005 || code === 1006) this.#localGone(code);
       else this.#endLocally(code, reason);
     });
-    this.#local.addEventListener("error", () => this.#endLocally(goneCode, goneReason));
+    this.#local.addEventListener("error", () => this.#localGone(undefined));
     // The first socket waits for the other end exactly as a re-dialed one does: the relay's leg is
     // up before the edge's socket exists, and neither end may wait forever.
     this.#downSince = Date.now();
@@ -228,6 +233,18 @@ export class FetchUpgradeSpliceEnd {
     frame.set(reasonBytes, 3);
     this.#closeFrame = frame.buffer;
     if (this.#downSince === null) this.#sendClose();
+  }
+
+  /** The local socket's far side is gone without a close frame (a visitor's network vanished, a
+   *  tunnel's session ended): reported, said to the other end as `localGoneClose`, and the local
+   *  socket closed too — left open, the runtime's pump of the visitor's socket waits on it for good
+   *  and fails the edge's invocation as "hung". An error after the socket's own close is not one. */
+  #localGone(code: number | undefined): void {
+    if (this.#ended || this.#closeFrame) return;
+    const { code: goneCode, reason: goneReason } = this.#localGoneClose;
+    this.#report({ type: "local-gone", side: this.#side, upgradeId: this.#upgradeId, code });
+    this.#endLocally(goneCode, goneReason);
+    closeQuietly(this.#local, goneCode, goneReason);
   }
 
   /** The local socket's close, owed to the other end until the splice is whole (`#endLocally`). */
@@ -450,6 +467,24 @@ export class FetchUpgradeSpliceEnd {
   }
 }
 
+/** THE VISITOR'S END of the edge's splice: the socket its 101 carries. `splice` gets the other end,
+ *  accepted, to splice to the DO socket — a turn later, once the runtime is sending the 101: a pair
+ *  end accepted before the runtime starts pumping the returned end to the network keeps that pump
+ *  reading past the visitor's close frame, and the accepted end's release then fails it ("other end
+ *  of WebSocketPipe was destroyed"), the edge's invocation ending in an uncaught "Network connection
+ *  lost." at every visitor's clean close (prd 2026-09-25: every tunnel /clock visit; workerd's,
+ *  pinned by fetch-upgrade-visitor-close.test.ts). Accept the DO socket in `splice` too:
+ *  its frames wait unread until then, where a frame for an unaccepted end would be lost. */
+export function visitorEndOfSplice(splice: (local: WebSocket) => void): WebSocket {
+  const pair = new WebSocketPair();
+  const [visitor, local] = [pair[0], pair[1]];
+  setTimeout(() => {
+    local.accept();
+    splice(local);
+  }, 0);
+  return visitor;
+}
+
 /** Binary messages as ArrayBuffers where the socket lets us choose (the runtime's `binaryType`). */
 function preferArrayBuffers(socket: SpliceSocket): void {
   if ("binaryType" in socket) (socket as { binaryType: string }).binaryType = "arraybuffer";
@@ -499,9 +534,24 @@ function truncateCloseReason(reason: string): string {
  *  under traffic (info), and one after a recorded `itx.abort()` is the reset someone asked for (info,
  *  naming its `itx/aborted`); any other healed a platform failure (the prd fault alarm pages on
  *  a burst of `platform-failure` heals). Giving up is the other end gone — a tunnel killed outright,
- *  a laptop asleep — or a platform failure that outlasted the deadline: a warn, with its reason. */
+ *  a laptop asleep — or a platform failure that outlasted the deadline: a warn, with its reason. A
+ *  local socket whose far side vanished without a close frame is a visitor or a tunnel gone (info);
+ *  on the edge the runtime also fails that invocation, "Network connection lost." (its pump of the
+ *  visitor's socket read a dead connection), which the prd fault alarm files under this line's ray. */
 export function reportFetchUpgradeSpliceEvent(event: FetchUpgradeSpliceEvent): void {
   const { type, side, ...fields } = event;
+  if (type === "local-gone") {
+    console.info({
+      event: "fetch-upgrade.local-gone",
+      name: `fetch-upgrade-${side}`,
+      message:
+        side === "eyeball"
+          ? "the visitor's connection ended without a close frame: the upgrade is closed"
+          : "the provider's socket ended without a close frame (its tunnel's session ended): the upgrade is closed",
+      ...fields,
+    });
+    return;
+  }
   if (type === "gave-up") {
     console.warn({
       event: "fetch-upgrade.resume-gave-up",

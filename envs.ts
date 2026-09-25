@@ -113,8 +113,10 @@ export interface OsEnv {
   cloudflareForSaas?: { zone: string; zoneId: string; dcvDelegationUuid: string };
   /** The one-click sign-in links (apps/os src/test-link.ts, `APP_CONFIG_LOGIN__TEST_LINK__…`), and
    *  the test domain's `admin@` as the one admin the admin app's specs sign in as. A per-commit
-   *  deployment's only: app-config.ts refuses the links off a workers.dev origin besides. */
-  testLinks?: boolean;
+   *  deployment's only: app-config.ts refuses the links off a workers.dev origin besides. The PR
+   *  body that carries them is public, so a link signs nobody in until its redeemer proves at
+   *  `admins.issuer` that they are an address `admins.emails` names (src/test-link-admins.ts). */
+  testLinks?: { admins: { issuer: string; emails: string[] } };
   resources: { oauthKvId: string; itxKvId: string; dbId: string };
 }
 
@@ -335,7 +337,7 @@ export function previewDeployment(name: string) {
     // named whether or not the run deploys the dash (a soak deploys apps/os alone)
     dashBaseUrl: origin("dash"),
     ingressRouting: { type: "paths" },
-    testLinks: true,
+    testLinks: { admins: { issuer: osEnvs.prd!.baseUrl, emails: ["*@nustom.com"] } },
     artifactsNamespace: `${osWorker}-repos`,
     resourceNamePrefix: osWorker,
   };

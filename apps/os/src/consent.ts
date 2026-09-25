@@ -71,6 +71,17 @@ export type ConsentView =
       target: string;
       denyLocation: string;
     }
+  | {
+      /** a client asking only who the person is (the `/oauth2/userinfo` resource, `#identify`) */
+      kind: "identify";
+      clientName: string;
+      clientId: string;
+      clientLogoUri?: string;
+      clientDomain?: string;
+      /** the person, signed in: what the client will learn */
+      email: string;
+      denyLocation: string;
+    }
   | { kind: "redirect"; location: string }
   | { kind: "invalid"; description: string };
 
@@ -96,6 +107,10 @@ export async function projectsForClient(
   const project = await controlPlane.getProject(host.project);
   return { projects: projects.filter((p) => p.id === project?.id), projectBound: true };
 }
+
+/** How long a userinfo grant (`kind: "identify"`) lives: the client reads who signed in once, at
+ *  once, and revokes it (test-link.ts); ten minutes bounds one it never revoked. */
+const IDENTIFY_GRANT_MS = 10 * 60_000;
 
 /** Expected OAuth refusals retain the validated client redirect when one exists. */
 function authorizationFailure(
@@ -161,7 +176,10 @@ export class ConsentRpcTarget extends RpcTarget {
     try {
       const request = await this.#request(query);
       const client = await oauthHelpers(env, this.#addresses).lookupClient(request.clientId);
+      const identify = request.resource === this.#addresses.userinfo;
       const actAs = await this.#actAs(query);
+      if (actAs && identify)
+        return { kind: "invalid", description: "act_as is not for the userinfo resource" };
       if (actAs && "error" in actAs) return { kind: "invalid", description: actAs.error };
       const testLinkApproval = actAs ? null : await this.#testLinkApproval(request, client);
       if (testLinkApproval) return { kind: "redirect", location: testLinkApproval.redirectTo };
@@ -171,6 +189,16 @@ export class ConsentRpcTarget extends RpcTarget {
       denied.searchParams.set("error_description", "The user declined access.");
       if (request.state) denied.searchParams.set("state", request.state);
       if (request.issuer) denied.searchParams.set("iss", request.issuer);
+      if (identify)
+        return {
+          kind: "identify",
+          clientName: display.clientName,
+          clientId: request.clientId,
+          clientLogoUri: display.logoUri,
+          clientDomain: display.clientDomain,
+          email: this.#grant.email,
+          denyLocation: denied.href,
+        };
       if (actAs)
         return {
           kind: "impersonate",
@@ -239,6 +267,8 @@ export class ConsentRpcTarget extends RpcTarget {
     try {
       const request = await this.#request(data.query);
       const client = await oauthHelpers(env, this.#addresses).lookupClient(request.clientId);
+      if (request.resource === this.#addresses.userinfo)
+        return await this.#complete(request, client, [], ["iterate"], IDENTIFY_GRANT_MS);
       const actAs = await this.#actAs(data.query);
       if (actAs)
         return "error" in actAs
@@ -361,6 +391,8 @@ export class ConsentRpcTarget extends RpcTarget {
     client: ClientInfo | null,
     projects: string[] | null,
     scope: string[],
+    // a platform admin's `admin` grant lives 12 hours: no refresh outlives its deadline
+    lifetimeMs = (scope.includes("admin") ? 12 : 30 * 24) * 3600_000,
   ) {
     const env = this.#env;
     const approved = await oauthHelpers(env, this.#addresses).completeAuthorization({
@@ -374,8 +406,7 @@ export class ConsentRpcTarget extends RpcTarget {
         userId: this.#grant.userId,
         email: this.#grant.email,
         projects,
-        // a platform admin's `admin` grant lives 12 hours: no refresh outlives its deadline
-        deadline: Date.now() + (scope.includes("admin") ? 12 : 30 * 24) * 3600_000,
+        deadline: Date.now() + lifetimeMs,
       } satisfies GrantProps,
     });
     publishPlatformFacts(

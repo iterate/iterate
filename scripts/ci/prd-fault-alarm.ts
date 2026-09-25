@@ -27,6 +27,10 @@ import { createCli } from "trpc-cli";
 import { z } from "zod";
 import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
 import {
+  PLATFORM_FAILURE_DELAYS_MS,
+  retryPlatformFailures,
+} from "@iterate-com/shared/platform-retry";
+import {
   agentsEnvs,
   dashEnvs,
   kitEnvs,
@@ -149,9 +153,11 @@ export async function alarm(input: {
   state: AlarmState | null;
   cloudflare: CloudflareCredentials;
   slack: (() => WebClient) | null;
+  /** The waits before each repeat of a Workers Logs query Cloudflare failed (readWindow). */
+  delaysMs?: readonly number[];
 }) {
-  const { window } = input;
-  const reading = await readWindow(window, input.cloudflare);
+  const { window, delaysMs = PLATFORM_FAILURE_DELAYS_MS } = input;
+  const reading = await readWindow(window, input.cloudflare, delaysMs);
   console.log(JSON.stringify({ window, reading }));
   const triage = triageIncidents(reading, window, input.state);
   const pinned = pinnedWorkarounds(reading.healEvents, window, input.state);
@@ -365,51 +371,92 @@ function hhmm(date: Date) {
   return date.toISOString().slice(11, 16);
 }
 
+/** Cloudflare's own failure of a Workers Logs query: a 5xx, or an answer that is not JSON (its HTML
+ *  error page). The message names the status, the content type and the answer's first 200 bytes. */
+class CloudflarePlatformFailure extends Error {
+  readonly status: number;
+  constructor(response: Response, text: string) {
+    super(
+      `Workers Logs query answered HTTP ${response.status} (${response.headers.get("content-type") ?? "no content-type"}): ${text.slice(0, 200)}`,
+    );
+    this.status = response.status;
+  }
+}
+
 async function readWindow(
   window: LogWindow,
   { accountId, apiToken }: CloudflareCredentials,
+  delaysMs: readonly number[],
 ): Promise<FaultReading> {
   // One grouped count per signal. Its rows sum to a lower bound (events without the grouped field,
   // or past 2,000 groups, drop out) — a burst still pages.
-  const query = async (view: "calculations" | "events", filters: object[], parameters: object) => {
-    const response = await fetch(
-      `https://api.cloudflare.com/client/v4/accounts/${accountId}/workers/observability/telemetry/query`,
-      {
-        method: "POST",
-        signal: AbortSignal.timeout(30_000), // one bounded read; classification failures keep the original page
-        headers: { authorization: `Bearer ${apiToken}`, "content-type": "application/json" },
-        body: JSON.stringify({
-          queryId: "prd-fault-alarm",
-          view,
-          ...(view === "events" && { limit: 100 }),
-          timeframe: { from: window.from.getTime(), to: window.to.getTime() },
-          parameters: {
-            datasets: ["cloudflare-workers"],
-            ...parameters,
-            filters: [
-              {
-                key: "$metadata.service",
-                operation: "in",
-                value: PRD_WORKERS.join(","),
-                type: "string",
+  //
+  // A query only reads, so one that Cloudflare itself failed (CloudflarePlatformFailure, or a
+  // dropped connection) is asked again after each of `delaysMs`, with a
+  // `prd-fault-alarm.platform-failure-retry` warn per repeat; the last failure fails the run. A JSON
+  // answer below 500 is Cloudflare's answer about the query: a broken token (success: false) or a
+  // renamed field fails the run at once, never reads as a quiet prd.
+  const query = (view: "calculations" | "events", filters: object[], parameters: object) =>
+    retryPlatformFailures(
+      async () => {
+        const response = await fetch(
+          `https://api.cloudflare.com/client/v4/accounts/${accountId}/workers/observability/telemetry/query`,
+          {
+            method: "POST",
+            signal: AbortSignal.timeout(30_000), // one bounded read; classification failures keep the original page
+            headers: { authorization: `Bearer ${apiToken}`, "content-type": "application/json" },
+            body: JSON.stringify({
+              queryId: "prd-fault-alarm",
+              view,
+              ...(view === "events" && { limit: 100 }),
+              timeframe: { from: window.from.getTime(), to: window.to.getTime() },
+              parameters: {
+                datasets: ["cloudflare-workers"],
+                ...parameters,
+                filters: [
+                  {
+                    key: "$metadata.service",
+                    operation: "in",
+                    value: PRD_WORKERS.join(","),
+                    type: "string",
+                  },
+                  ...filters,
+                ],
               },
-              ...filters,
-            ],
+            }),
           },
-        }),
+        );
+        const text = await response.text();
+        if (response.status >= 500) throw new CloudflarePlatformFailure(response, text);
+        let answer: unknown;
+        try {
+          answer = JSON.parse(text);
+        } catch {
+          throw new CloudflarePlatformFailure(response, text);
+        }
+        const body = z
+          .object({
+            success: z.boolean(),
+            errors: z.unknown().optional(),
+            result: z.unknown().optional(),
+          })
+          .parse(answer);
+        if (!body.success)
+          throw new Error(`Workers Logs query failed: ${JSON.stringify(body.errors)}`);
+        return body.result;
+      },
+      {
+        event: "prd-fault-alarm.platform-failure-retry",
+        delaysMs,
+        // fetch rejects with a TypeError when the connection fails; a timeout is thrown as it is.
+        platformFailure: (error) =>
+          error instanceof TypeError
+            ? { view, status: "network", message: error.message }
+            : error instanceof CloudflarePlatformFailure
+              ? { view, status: error.status, message: error.message }
+              : undefined,
       },
     );
-    const body = z
-      .object({
-        success: z.boolean(),
-        errors: z.unknown().optional(),
-        result: z.unknown().optional(),
-      })
-      .parse(await response.json());
-    // A broken token or a renamed field must fail the run, never read as a quiet prd.
-    if (!body.success) throw new Error(`Workers Logs query failed: ${JSON.stringify(body.errors)}`);
-    return body.result;
-  };
   // Without `groupBy`, one row: ["", the total].
   const rows = async (filters: object[], groupBy?: string): Promise<[string, number][]> => {
     const result = z
@@ -434,19 +481,92 @@ async function readWindow(
       );
     return result.calculations[0]!.aggregates.map((row) => [row.groupKey, row.count]);
   };
-  // A fetch route whose target is an offline lent stub (`iterate tunnel` killed without Ctrl-C)
-  // answers 502 on purpose — the upstream's absence, not a fault — and logs `console.info({ event:
-  // "expression-fetch.rpc-stub-offline", … })` (apps/os iterate-context-durable-object.ts); a Vite tab left open
-  // re-requests it every second. Each hop of that request logs its own 502 summary at error level
-  // under its own requestId: the project host's Worker, the context DO's fetch, the ItxEntrypoint of
-  // the config worker's `env.ITX.fetch`, and the DO's fetch again. The loaded config worker starts a
-  // new traceId, so only the edge's rayId joins all four to the info line (a preview's Workers Logs,
-  // 2026-09-24). These filters keep every event EXCEPT a 502 summary in a ray that logged the info
-  // line: another status, another event or another ray still pages. One `not_in` takes 500 IDs here
-  // (2,000 answers "Internal error"). A capped or failed read excludes nothing: it can only remove
-  // noise, never lose an observed fault.
-  const notRpcStubOffline = await rows(
-    [{ key: "event", operation: "eq", value: "expression-fetch.rpc-stub-offline", type: "string" }],
+  // Two expression-fetch answers are 5xx on purpose, each logged at info by the context DO that
+  // answered (apps/os iterate-context-durable-object.ts): a fetch route whose target is an offline
+  // lent stub (`iterate tunnel` killed without Ctrl-C) answers 502, the upstream's absence, logged
+  // `expression-fetch.rpc-stub-offline`, and a Vite tab left open re-requests it every second; a
+  // deploy that reset a context the fetch dialed, when the hop could not send it again (a request
+  // with a body), answers 503, logged `expression-fetch.deploy-reset`. Each hop of such a request
+  // logs its own summary at error level under its own requestId: the project host's Worker, the
+  // context DO's fetch, the ItxEntrypoint of the config worker's `env.ITX.fetch`, and the DO's fetch
+  // again. The loaded config worker starts a new traceId, so only the edge's rayId joins all four to
+  // the info line (a preview's Workers Logs, 2026-09-24). These filters keep every event EXCEPT a
+  // summary of the answer's status in a ray that logged its info line: another status, another
+  // event or another ray still pages. One `not_in` takes 500 IDs here (2,000 answers "Internal
+  // error"). A capped or failed read excludes nothing: it can only remove noise, never lose an
+  // observed fault.
+  const expectedAnswers = (
+    await Promise.all(
+      EXPECTED_EXPRESSION_FETCH_ANSWERS.map(({ event, status }) =>
+        rows(
+          [{ key: "event", operation: "eq", value: event, type: "string" }],
+          "$metadata.rayId",
+        ).then(
+          (found) => {
+            const rays = found.map(([rayId]) => rayId).filter(Boolean);
+            const capped = rays.length >= 2000;
+            console.log(
+              JSON.stringify({
+                event: "prd-fault-alarm.expected-answer-evidence",
+                answer: event,
+                rays: rays.length,
+                capped,
+              }),
+            );
+            if (capped) return [];
+            const chunks: string[][] = [];
+            for (let start = 0; start < rays.length; start += 500)
+              chunks.push(rays.slice(start, start + 500));
+            return chunks.map((chunk) => ({
+              kind: "group",
+              filterCombination: "or",
+              filters: [
+                { key: "$metadata.type", operation: "is_null", type: "string" },
+                {
+                  key: "$metadata.type",
+                  operation: "neq",
+                  value: "cf-worker-event",
+                  type: "string",
+                },
+                { key: "$workers.event.response.status", operation: "is_null", type: "number" },
+                {
+                  key: "$workers.event.response.status",
+                  operation: "neq",
+                  value: status,
+                  type: "number",
+                },
+                { key: "$metadata.rayId", operation: "is_null", type: "string" },
+                {
+                  key: "$metadata.rayId",
+                  operation: "not_in",
+                  value: chunk.join(","),
+                  type: "string",
+                },
+              ],
+            }));
+          },
+          (error: unknown) => {
+            console.warn(
+              JSON.stringify({
+                event: "prd-fault-alarm.expected-answer-classification-failed",
+                answer: event,
+                error: error instanceof Error ? error.message : String(error),
+              }),
+            );
+            return [];
+          },
+        ),
+      ),
+    )
+  ).flat();
+  // A visitor whose connection to a tunnel's WebSocket vanished without a close frame (a laptop
+  // asleep, a network gone): the edge logs `fetch-upgrade.local-gone` at info, and the runtime
+  // fails that invocation — its pump of the visitor's socket read a dead connection — with
+  // "Network connection lost." and an exception summary in the same ray
+  // (apps/os context/fetch-upgrade-splice.ts). Those two go; any other error in the ray still pages.
+  // Like the answers above, a capped or failed read excludes nothing.
+  const vanishedVisitors = await rows(
+    [{ key: "event", operation: "eq", value: "fetch-upgrade.local-gone", type: "string" }],
     "$metadata.rayId",
   ).then(
     (found) => {
@@ -454,32 +574,17 @@ async function readWindow(
       const capped = rays.length >= 2000;
       console.log(
         JSON.stringify({
-          event: "prd-fault-alarm.rpc-stub-offline-evidence",
+          event: "prd-fault-alarm.vanished-visitor-evidence",
           rays: rays.length,
           capped,
         }),
       );
-      if (capped) return [];
-      const chunks: string[][] = [];
-      for (let start = 0; start < rays.length; start += 500)
-        chunks.push(rays.slice(start, start + 500));
-      return chunks.map((chunk) => ({
-        kind: "group",
-        filterCombination: "or",
-        filters: [
-          { key: "$metadata.type", operation: "is_null", type: "string" },
-          { key: "$metadata.type", operation: "neq", value: "cf-worker-event", type: "string" },
-          { key: "$workers.event.response.status", operation: "is_null", type: "number" },
-          { key: "$workers.event.response.status", operation: "neq", value: 502, type: "number" },
-          { key: "$metadata.rayId", operation: "is_null", type: "string" },
-          { key: "$metadata.rayId", operation: "not_in", value: chunk.join(","), type: "string" },
-        ],
-      }));
+      return capped ? [] : withoutVanishedVisitorFailures(rays);
     },
     (error: unknown) => {
       console.warn(
         JSON.stringify({
-          event: "prd-fault-alarm.rpc-stub-offline-classification-failed",
+          event: "prd-fault-alarm.vanished-visitor-classification-failed",
           error: error instanceof Error ? error.message : String(error),
         }),
       );
@@ -491,7 +596,7 @@ async function readWindow(
   const readServerErrors = async () => {
     const status = [
       { key: "$workers.event.response.status", operation: "gte", value: 500, type: "number" },
-      ...notRpcStubOffline,
+      ...expectedAnswers,
     ];
     const [byUrl, all] = await Promise.all([
       rows(status, "$workers.event.request.url"),
@@ -515,7 +620,8 @@ async function readWindow(
     const common = [
       { key: "$metadata.level", operation: "eq", value: "error", type: "string" },
       { key, operation: "neq", value: "", type: "string" },
-      ...notRpcStubOffline,
+      ...expectedAnswers,
+      ...vanishedVisitors,
       ...filters,
     ];
     const [errors, apiUnreadBodyErrors] = await Promise.all([
@@ -655,6 +761,57 @@ async function readWindow(
     errors: [...errors, ...structuredErrors],
     pagers,
   };
+}
+
+/** The expression fetch's expected 5xx: the info line the answering context DO logs, and the status
+ *  every hop's summary in that request's ray carries (`readWindow` drops exactly those). */
+const EXPECTED_EXPRESSION_FETCH_ANSWERS = [
+  { event: "expression-fetch.rpc-stub-offline", status: 502 },
+  { event: "expression-fetch.deploy-reset", status: 503 },
+] as const;
+
+/** Filters keeping every row except, in `rays` (rays whose edge logged `fetch-upgrade.local-gone`),
+ *  the runtime's "Network connection lost." and the invocation's exception summary. One `not_in`
+ *  takes 500 IDs. Pure. */
+function withoutVanishedVisitorFailures(rays: string[]): object[] {
+  const chunks: string[][] = [];
+  for (let start = 0; start < rays.length; start += 500)
+    chunks.push(rays.slice(start, start + 500));
+  return chunks.map((chunk) => ({
+    kind: "group",
+    filterCombination: "or",
+    filters: [
+      { key: "$metadata.rayId", operation: "is_null", type: "string" },
+      { key: "$metadata.rayId", operation: "not_in", value: chunk.join(","), type: "string" },
+      {
+        kind: "group",
+        filterCombination: "and",
+        filters: [
+          {
+            kind: "group",
+            filterCombination: "or",
+            filters: [
+              { key: "$metadata.type", operation: "neq", value: "cf-worker", type: "string" },
+              {
+                key: "$metadata.message",
+                operation: "neq",
+                value: "Network connection lost.",
+                type: "string",
+              },
+            ],
+          },
+          {
+            kind: "group",
+            filterCombination: "or",
+            filters: [
+              { key: "$metadata.type", operation: "neq", value: "cf-worker-event", type: "string" },
+              { key: "$workers.outcome", operation: "neq", value: "exception", type: "string" },
+            ],
+          },
+        ],
+      },
+    ],
+  }));
 }
 
 const WorkerErrorEvent = z.object({

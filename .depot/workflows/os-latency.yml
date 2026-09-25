@@ -6,7 +6,10 @@
 # start, rule invocation, stream fan-out — every metric and its budget in apps/os/perf/latency.ts),
 # and judge the run. The deploy's readiness gate waits out a brand-new worker's first seconds
 # (main-os-e2e.yml); the run then deletes the guard's deployments before it. Every perf row mints its
-# own people and projects, so nothing it measures reads what earlier runs left.
+# own people and projects, so nothing it measures reads what earlier runs left. The deployment's D1
+# is created near whoever creates it (apps/os/scripts/d1.ts), and every uncached control-plane read
+# the suite times is a round trip to it: this workflow's own deploy creates each one, never a
+# laptop's `pnpm preview deploy --name latency`, which would place the D1 near the laptop.
 #
 # The judge (scripts/ci/os-latency-guard.ts) records every measurement to PostHog (`os latency
 # measured`) and pages Slack #error-pulse when a metric crosses its budget or regresses sharply

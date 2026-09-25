@@ -1,18 +1,21 @@
 // A per-PR preview's one-click sign-in (apps/os/src/test-link.ts): the PR body's `Sign in ↗` is a
-// link signed with the deployment's key, and opening it in a browser that has never signed in lands
-// signed in, no email typed and no password — inside the Dash's project, with no Allow page between
-// (consent.ts approves the sibling app the link names). Runs against the local worker (local dev
-// turns the links on; its key is apps/os/scripts/generate-wrangler-config.ts's) or, with
-// DEMO_BASE_URL, a per-commit deployment under `doppler run --config preview` (its key is that
-// config's `APP_CONFIG_SECRETS__KEY`).
-// A deployment on its own domain has the links off: nothing to prove there, so the specs skip.
+// link signed with the deployment's key. On local dev, opening it in a browser that has never
+// signed in lands signed in, no email typed and no password — inside the Dash's project, with no
+// Allow page between (consent.ts approves the sibling app the link names). On a preview the PR
+// body is public, so a link alone signs nobody in: it sends the browser to prd to prove it is an
+// admin's, asking only who they are (apps/os/src/test-link-admins.ts) — what the spec checks there,
+// since no spec holds an admin's prd session. Runs against the local worker (local dev turns the
+// links on; its key is apps/os/scripts/generate-wrangler-config.ts's) or, with DEMO_BASE_URL, a
+// per-commit deployment under `doppler run --config preview` (its key is that config's
+// `APP_CONFIG_SECRETS__KEY`). A deployment on its own domain has the links off: nothing to prove
+// there, so the specs skip.
 import { expect } from "@playwright/test";
 import { uniqueFixtureSlug } from "@iterate-com/shared/test-support/fixture-slug";
 import { mintTestLink, TEST_LINK_PATH } from "../../apps/os/src/test-link.ts";
 import { openOperatorSession } from "../test-support/operator.ts";
 import { test } from "../test-support/test.ts";
 
-test("a preview's sign-in link signs a fresh browser in as its test person; a link with a flipped byte is refused", async ({
+test("a sign-in link signs a fresh browser in as its test person, on a preview only once prd says it is an admin's; a link with a flipped byte is refused", async ({
   page,
   baseURL,
 }) => {
@@ -32,6 +35,30 @@ test("a preview's sign-in link signs a fresh browser in as its test person; a li
   const refused = await page.goto(`${TEST_LINK_PATH}?t=${flipped}`);
   expect(refused?.status()).toBe(403);
   await page.getByText("This sign-in link's signature is not valid here.").waitFor();
+  if (isPreview(origin)) {
+    // the link is good, and still signs nobody in: it asks prd who the browser is, for the
+    // userinfo resource alone, as this preview's own CIMD client
+    const response = await page.request.get(`${TEST_LINK_PATH}?t=${token}`, { maxRedirects: 0 });
+    expect(response.status()).toBe(302);
+    const authorize = new URL(response.headers().location!);
+    expect({
+      at: `${authorize.origin}${authorize.pathname}`,
+      clientId: authorize.searchParams.get("client_id"),
+      resource: authorize.searchParams.getAll("resource"),
+    }).toEqual({
+      at: `${PRD_ISSUER}/oauth2/auth`,
+      clientId: `${origin}${TEST_LINK_PATH}/client.json`,
+      resource: [`${PRD_ISSUER}/oauth2/userinfo`],
+    });
+    // nobody is signed in: the only cookie is the check's own
+    expect(
+      response
+        .headersArray()
+        .filter(({ name }) => name.toLowerCase() === "set-cookie")
+        .map(({ value }) => value.split("=")[0]),
+    ).toEqual(["__Host-iterate-test-link"]);
+    return;
+  }
   await page.goto(`${TEST_LINK_PATH}?t=${token}`);
   await page.getByText(`Signed in as ${email}.`).waitFor();
 });
@@ -43,6 +70,7 @@ test("the Dash's sign-in link lands inside the test person's project: one click,
 }) => {
   const origin = new URL(baseURL!).origin;
   const key = testLinkKeyOf(origin);
+  test.skip(isPreview(origin), "on a preview, redeeming a link needs an admin's prd sign-in");
   const dash = helpers.appOrigin("dash");
   // CI's seed (apps/os/scripts/preview.ts `previewSignIn`), for a fresh person: `<slug>@…` owning
   // the project `<slug>` — the email's local part is the project the link's grant is approved for
@@ -80,3 +108,10 @@ function testLinkKeyOf(origin: string) {
   );
   return key!;
 }
+
+/** Where every preview's admins prove who they are (envs.ts `previewDeployment`'s `testLinks`). */
+const PRD_ISSUER = "https://os.iterate.com";
+
+/** A preview, whose links need an admin (app-config.ts requires `login.testLink.admins` off
+ *  localhost) — not local dev. */
+const isPreview = (origin: string) => new URL(origin).hostname.endsWith(".workers.dev");

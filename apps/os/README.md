@@ -116,9 +116,10 @@ from main ([Run CI without a PR](../../docs/depot-ci.md#run-ci-without-a-pr)), n
 whose head would carry the result, and one suite alone never from the PR's branch
 ([why](../../docs/depot-ci.md#run-the-suites-against-a-deployed-preview)). `delete` removes every
 deployment of the PR or name. CI writes each deployment's links into the PR body: per worker, a
-one-click `Sign in ↗` as the PR's test person, `pr<N>@preview.iterate.test`, and its Cloudflare
-dashboard; one-click "New project from template" links into the Dash; and the previous commit's
-section folded while the next deploys ([dev environments](../../docs/dev-environments.md), `src/test-link.ts`). For an
+`Sign in ↗` as the PR's test person, `pr<N>@preview.iterate.test`, for whoever confirms at prd that
+they are `*@nustom.com` (`src/test-link-admins.ts`), and its Cloudflare dashboard; one-click "New
+project from template" links into the Dash; and the previous commit's section folded while the next
+deploys ([dev environments](../../docs/dev-environments.md), `src/test-link.ts`). For an
 operational change, verify the deployment's resulting state and telemetry as well as its checks.
 The [engineering invariant](../../docs/engineering-invariants.md) defines the required standard.
 
@@ -127,8 +128,9 @@ The [engineering invariant](../../docs/engineering-invariants.md) defines the re
 The control plane — users, identities, organizations, memberships, projects, invitations, custom
 hostnames and the OAuth provider's grants — is one D1 per deployment, bound as `DB`: `os-prd-db`,
 `os-parent-db` (main on dev), `<deployment>-os-db` for each per-commit deployment, and `os-dev-db`
-locally
-(`src/control-plane/db/`). [sqlfu](https://github.com/mmkal/sqlfu) authors it: the schema is
+locally (`src/control-plane/db/`). prd's and main on dev's primaries are in western Europe; a
+per-commit deployment's is created near the job that deploys it, which for CI is where its suites
+run (`scripts/d1.ts`). [sqlfu](https://github.com/mmkal/sqlfu) authors it: the schema is
 `definitions.sql`, the migrations `migrations/*.sql`, and every query a named statement in
 `queries/*.sql`, typed into `queries/.generated/` (committed); `db/index.ts` says why each write is
 one statement or one batch.
