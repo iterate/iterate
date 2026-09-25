@@ -137,10 +137,6 @@ export function AgentFeedItemRow({
         </div>
       );
     }
-    case "stream-woken":
-      // An apps/os actor quiesces after a short idle and wakes on the next request, so wakes
-      // are a fact of every turn, not a signal — the Events view lists them; the chat does not.
-      return null;
   }
 }
 

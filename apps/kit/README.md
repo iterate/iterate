@@ -30,7 +30,7 @@ Preparing installs voice when missing. The form asks for an OpenAI API key as so
 picked project turns out to have none. It verifies voice health before minting a ten-year token scoped to the
 chosen project, under the same OAuth client that was authorized. Existing voice
 services, secrets and project websites are preserved. Immutable voice files live
-under `kit/voice/` in project KV; the `itx.voice` mount is published only after all
+under `voice/` in project KV; the `itx.voice` mount is published only after all
 uploads succeed. The installer is `apps/agents/voice/install.ts`, shared with voice.iterate.com,
 which installs voice without a device.
 

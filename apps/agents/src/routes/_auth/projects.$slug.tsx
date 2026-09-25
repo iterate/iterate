@@ -215,7 +215,7 @@ function useAgentContext(
  *  subscription), then — for the chat and its traces — as the shared reducer reads it: the wire
  *  envelope tagged with the path, the context's script runs in the reducer's vocabulary
  *  (agent-events.ts). The raw log itself feeds the Events view untouched. */
-function useAgentLog(context: Context | undefined, path: string) {
+function useAgentLog(context: Context | undefined) {
   // "all": the chat folds the whole log, so it reads every page, not only the newest
   const iterateContext = useIterateContext(context, {
     consumes: FEED_SUBSCRIPTION,
@@ -225,11 +225,11 @@ function useAgentLog(context: Context | undefined, path: string) {
     () =>
       adaptContextRuns(
         iterateContext.events.flatMap((event) => {
-          const tagged = toAgentEvent(event, path);
-          return tagged ? [tagged] : [];
+          const committed = toAgentEvent(event);
+          return committed ? [committed] : [];
         }),
       ),
-    [iterateContext.events, path],
+    [iterateContext.events],
   );
   return {
     iterateContext,
@@ -274,8 +274,9 @@ function useAgentInterrupt(args: {
   };
 }
 
-/** The agent facet's live state, the fields the header reads (runtime/contract.ts `stateSchema`):
- *  a pause, the one open request, the one pending trigger. A script the agent asked for is the
+/** The agent facet's live state, the fields the header reads
+ *  (configs/with-agents/agents/contract.ts `stateSchema`): a pause, the one open request, the one
+ *  pending trigger. A script the agent asked for is the
  *  CONTEXT's obligation, not in this state — the feed's running code step says so. */
 const AgentLive = z.object({
   paused: z.object({ reason: z.string() }).nullable(),
@@ -289,7 +290,7 @@ function AgentConversation({ project, path }: { project: string; path: string })
   const navigate = useNavigate();
   const { slug } = Route.useParams();
   const { context, error: connectError } = useAgentContext(api, project, path);
-  const { iterateContext, events, caughtUp, error: logError } = useAgentLog(context, path);
+  const { iterateContext, events, caughtUp, error: logError } = useAgentLog(context);
   const error = connectError || logError;
   const live = useFacetLiveState(context, "agent");
   const facet = AgentLive.safeParse(live.value);

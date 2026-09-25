@@ -17,7 +17,7 @@ import { toast } from "sonner";
 import { Spinner } from "@iterate-com/ui/components/spinner";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@iterate-com/ui/components/tabs";
 import { cn } from "cn";
-import type { Event } from "../lib/events/types.ts";
+import type { StreamEvent } from "../lib/events/stream-event.ts";
 import {
   formatAgentUiDuration,
   type AgentUiActivity,
@@ -48,7 +48,7 @@ export function InspectorSheet({
   inspected,
   onInspect,
 }: {
-  events: readonly Event[];
+  events: readonly StreamEvent[];
   /** The reduced live activity, so an in-flight request's trace streams its raw response. */
   live: AgentUiActivity | null;
   inspected: Inspected;
@@ -94,7 +94,7 @@ function LlmTraceContent({
   liveStep,
   onInspect,
 }: {
-  events: readonly Event[];
+  events: readonly StreamEvent[];
   llmRequestOffset: number;
   liveStep: AgentUiLlmStep | undefined;
   onInspect: (next: Inspected) => void;
@@ -394,7 +394,7 @@ function ScriptTraceContent({
   events,
   executionId,
 }: {
-  events: readonly Event[];
+  events: readonly StreamEvent[];
   executionId: string;
 }) {
   const trace = scriptTrace(events, executionId);

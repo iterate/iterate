@@ -74,7 +74,7 @@ export function createVoiceInstall(sources: {
   const files: Record<string, string> = {};
   const add = (name: string, source: string) => {
     const hash = createHash("sha256").update(source).digest("hex");
-    const key = `kit/voice/${hash}/${name}`;
+    const key = `voice/${hash}/${name}`;
     files[key] = source;
     return { key, hash };
   };

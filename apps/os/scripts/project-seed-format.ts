@@ -48,9 +48,8 @@ export const ProjectSeed = z.object({
    *  it served at capture. */
   hostnames: z.array(z.string().regex(HOSTNAME)),
   /** The project's primary hostname at capture (`project/primary-hostname-configured`,
-   *  src/project/contract.ts `primaryHostname`), one of `hostnames`, or null. Archives captured
-   *  before it was recorded carry none. */
-  primaryHostname: z.string().regex(HOSTNAME).nullable().default(null),
+   *  src/project/contract.ts `primaryHostname`), one of `hostnames`, or null. */
+  primaryHostname: z.string().regex(HOSTNAME).nullable(),
 });
 export type ProjectSeed = z.infer<typeof ProjectSeed>;
 

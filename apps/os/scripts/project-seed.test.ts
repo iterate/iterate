@@ -64,9 +64,11 @@ test("hostnames: a well-formed one is kept; a malformed or repeated one is refus
     openProjectSeed({ ...seed, hostnames: ["garple.com", "garple.com"] }, keys),
   ).rejects.toThrow("Duplicate hostname: garple.com");
 });
-test("the primary hostname: one of the hostnames, or null — an archive from before it was recorded has none", async () => {
+test("the primary hostname: one of the hostnames, or null", async () => {
   const seed = { ...(await archive()), hostnames: ["garple.com"] };
   expect((await openProjectSeed(seed, keys)).seed).toMatchObject({ primaryHostname: null });
+  const { primaryHostname: _, ...withoutPrimary } = seed;
+  await expect(openProjectSeed(withoutPrimary, keys)).rejects.toThrow();
   expect(
     (await openProjectSeed({ ...seed, primaryHostname: "garple.com" }, keys)).seed,
   ).toMatchObject({ primaryHostname: "garple.com" });
@@ -150,6 +152,7 @@ async function archive() {
       },
     ],
     hostnames: [],
+    primaryHostname: null,
   };
 }
 

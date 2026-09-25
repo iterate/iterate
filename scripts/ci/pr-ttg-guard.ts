@@ -59,9 +59,8 @@ export const stateArtifact = {
   artifact: "pr-ttg-state",
   file: "state.json",
 };
-/** The checks a push waits for, by their workflows' `name:`, which outlived preview-os-next.yml's
- *  rename to preview-os.yml. LOC report and the PR dashboard gate nothing and finish within a
- *  minute; Kit Firmware runs only on firmware PRs. */
+/** The checks a push waits for, by their workflows' `name:`. LOC report and the PR dashboard gate
+ *  nothing and finish within a minute; Kit Firmware runs only on firmware PRs. */
 export const CHECKS = ["Lint and Typecheck", "Test", "Preview OS"];
 /** Preview OS's CI trace job: it only reports, so a push's wait ends before it. */
 const TRACE_JOB = "preview-os.yml:trace";

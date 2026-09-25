@@ -1,6 +1,7 @@
-// What the sidebar says about an agent, read from the agent facet's live state (runtime/contract.ts
-// `stateSchema`): whether it is working, waiting on a person, or idle; when its state last moved;
-// and what it is about — the first thing a person said to it. Pure, so the ordering and the status
+// What the sidebar says about an agent, read from the agent facet's live state
+// (configs/with-agents/agents/contract.ts `stateSchema`): whether it is working, waiting on a
+// person, or idle; when its state last moved; and what it is about — the first thing a person
+// said to it. Pure, so the ordering and the status
 // are unit rows (agent-summary.test.ts); use-agent-summaries.ts keeps them live.
 import { z } from "zod";
 import { parseCodemodeResponse } from "../../../../configs/with-agents/agents/codemode-format.ts";

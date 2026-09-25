@@ -1,7 +1,7 @@
 import { expect, test, vi } from "vitest";
 import { ensureVoiceAgent } from "./install.ts";
 
-const workerKey = `kit/voice/${"a".repeat(64)}/worker.js`;
+const workerKey = `voice/${"a".repeat(64)}/worker.js`;
 const bundle = {
   agentsRuntime: { "index.ts": "agents" },
   files: { [workerKey]: "worker" },
