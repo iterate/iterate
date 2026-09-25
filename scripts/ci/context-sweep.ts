@@ -22,18 +22,25 @@ export type SweptContext =
   | { id: string; projectId: string; path: string }
   | { id: string; error: string };
 
+/** What an object with no birth record answers (apps/os iterate-context-durable-object.ts
+ *  `iterateContextAddressOf`): it is empty — destroyed moments ago, and Cloudflare's list still
+ *  flags it as holding data for a few minutes (measured on prd, 2026-09-25: up to ~7 min). */
+const EMPTIED = "only a context that was born answers";
+
 /** What the sweep does with each object: a live project's context, a global context (users,
- *  organizations: never swept), an orphan of a project the control plane no longer holds, or one
- *  that could not say who it is. */
+ *  organizations: never swept), an orphan of a project the control plane no longer holds, one just
+ *  emptied (destroyed, the list not caught up), or one that could not say who it is. */
 export function classifyContexts(contexts: SweptContext[], liveProjectIds: ReadonlySet<string>) {
   const report = {
     live: [] as string[],
     global: [] as string[],
     orphans: [] as { id: string; projectId: string; path: string }[],
+    emptied: [] as string[],
     unidentified: [] as { id: string; error: string }[],
   };
   for (const context of contexts) {
-    if ("error" in context) report.unidentified.push(context);
+    if ("error" in context && context.error.includes(EMPTIED)) report.emptied.push(context.id);
+    else if ("error" in context) report.unidentified.push(context);
     else if (context.projectId === "global") report.global.push(context.id);
     else if (liveProjectIds.has(context.projectId)) report.live.push(context.id);
     else report.orphans.push(context);
@@ -137,6 +144,7 @@ async function main() {
       live: report.live.length,
       global: report.global.length,
       orphans: report.orphans.length,
+      emptied: report.emptied.length,
       unidentified: report.unidentified.length,
       destroyed: destroyed.length,
       destroyFailed: failed.length,
