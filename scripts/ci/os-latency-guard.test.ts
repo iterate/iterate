@@ -590,37 +590,6 @@ test("the state keeps the newest 20 runs", () => {
   );
 });
 
-test("a state from an older metrics table drops the metrics it no longer has, and one from before broken probes were remembered reads as none", () => {
-  expect(
-    GuardState.parse({
-      schemaVersion: 1,
-      runs: [
-        {
-          sha: "abc",
-          run: "r1",
-          at: "2026-09-24T08:00:00.000Z",
-          judged: { "sign-in": 1700, "project.create.x100.ready": 9000 },
-          over: ["project.create.x100.ready", "sign-in"],
-        },
-      ],
-      red: ["project.create.x100.ready"],
-    }),
-  ).toEqual({
-    schemaVersion: 1,
-    runs: [
-      {
-        sha: "abc",
-        run: "r1",
-        at: "2026-09-24T08:00:00.000Z",
-        judged: { "sign-in": 1700 },
-        over: ["sign-in"],
-        broken: [],
-      },
-    ],
-    red: [],
-  });
-});
-
 test("a run is remembered by each measured metric's median, what crossed, and what broke", () => {
   const readings = judgeRun({
     samples: { "rules.300.newest": [160, 170, 180], "rules.300.root": [20, 30, 40] },

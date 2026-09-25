@@ -248,9 +248,9 @@ export function fakeCloudflareCustomHostnames({ active = [] }: { active?: string
             id: `ch-${hostname}`,
             hostname,
             status: "active",
-            ssl: { wildcard: true, status: "active" },
+            ssl: { status: "active" },
           }
-        : { id: `ch-${hostname}`, hostname, status: "pending", ssl: { wildcard: true } };
+        : { id: `ch-${hostname}`, hostname, status: "pending" };
     if (request.method === "POST" || request.method === "DELETE")
       writes.push(`${request.method} ${url.pathname.split("/custom_hostnames")[1] || "/"}`);
     if (url.pathname.endsWith("/zones")) return ok([{ id: "zone-saas" }]);

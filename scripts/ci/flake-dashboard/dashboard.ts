@@ -366,10 +366,7 @@ function suiteCosts(runs: SuiteRun[]) {
   return COST_SUITES.flatMap((suite) => {
     const complete = runs
       .flatMap((run) =>
-        run.suite === suite &&
-        run.newest &&
-        run.summary?.status === "complete" &&
-        run.summary.tests.some((test) => test.durationMs !== undefined)
+        run.suite === suite && run.newest && run.summary?.status === "complete"
           ? [{ ...run.summary, main: run.main }]
           : [],
       )
@@ -392,11 +389,7 @@ function suiteCosts(runs: SuiteRun[]) {
     const incidents: { at: string; error: string; rows: number }[] = [];
     for (const run of complete) {
       const ends = run.tests
-        .flatMap((test) =>
-          test.startMs === undefined || test.durationMs === undefined
-            ? []
-            : [test.startMs + test.durationMs],
-        )
+        .flatMap((test) => (test.startMs === undefined ? [] : [test.startMs + test.durationMs]))
         .sort((a, b) => b - a);
       const [lastEnd = 0, nextEnd = 0] = ends;
       const sharedErrors = new Map<string, number>();
@@ -410,13 +403,12 @@ function suiteCosts(runs: SuiteRun[]) {
         ...runIncidents.map(([error, count]) => ({ at: run.startedAt, error, rows: count })),
       );
       for (const test of run.tests) {
-        if (test.durationMs === undefined) continue;
         const end = test.startMs === undefined ? undefined : test.startMs + test.durationMs;
         const marginalMs = end === lastEnd ? lastEnd - nextEnd : 0;
         const incident =
           !!test.error && runIncidents.some(([error]) => error === incidentError(test.error!));
         const retried = !incident && !!test.retries;
-        const failed = !incident && !!test.failed;
+        const failed = !incident && test.failed;
         if (test.durationMs < COST_SAMPLE_FLOOR_MS && !marginalMs && !retried && !failed) continue;
         rows.set(test.name, {
           tags: test.tags || [],

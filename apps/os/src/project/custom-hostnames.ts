@@ -52,7 +52,7 @@ export function customHostnameRecords(
 }
 
 /** What the project processor needs of Cloudflare, each idempotent: find-or-create (and so re-read)
- *  a wildcard custom hostname, upgrading one that is not, and delete one (none is done already). */
+ *  a wildcard custom hostname, and delete one (none is done already). */
 export type CustomHostnameProvider = {
   provision(hostname: string): Promise<CustomHostnameObservation>;
   remove(hostname: string): Promise<void>;
@@ -63,7 +63,7 @@ type CloudflareCustomHostname = {
   id: string;
   hostname: string;
   status: string;
-  ssl?: { status?: string; wildcard?: boolean };
+  ssl?: { status?: string };
 };
 
 /** Every custom hostname's certificate: `<hostname>` and `*.<hostname>`, which takes TXT validation. */
@@ -121,17 +121,9 @@ export function cloudflareCustomHostnameProvider(
           if (!winner) throw error;
           return winner;
         }));
-      // one made before hostnames were wildcards (HTTP-validated, the apex alone) becomes one; its
-      // certificate is reissued once the owner's `_acme-challenge` CNAME validates it
-      const entry = found.ssl?.wildcard
-        ? found
-        : await cloudflare<CloudflareCustomHostname>(`/${found.id}`, {
-            method: "PATCH",
-            body: JSON.stringify({ ssl: WILDCARD_SSL }),
-          });
       return {
-        status: entry.status,
-        sslStatus: entry.ssl?.status || "unknown",
+        status: found.status,
+        sslStatus: found.ssl?.status || "unknown",
         records: customHostnameRecords(hostname, saas),
       };
     },

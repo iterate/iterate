@@ -271,8 +271,7 @@ class AgentReference extends RpcTarget {
   ) {
     const path = this.path;
     const dead = new Error(`agent ${path}: deleted`);
-    // The catalog first: a dead agent's context is not even called, so a facet some earlier
-    // refusal hosted there (before this was so) is never reached again either.
+    // The catalog first: a dead agent's context is not even called.
     if ((await this.catalog()).deleted[path]) throw dead;
     try {
       return await this.withItx((itx) =>

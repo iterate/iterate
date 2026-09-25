@@ -60,9 +60,8 @@ export interface GraphqlSessionPayload {
   sub: string;
   /** The endpoint's revocation epoch at mint. */
   epoch: number;
-  /** The account's revocation epoch at mint (absent on a session minted
-   * before accounts had one: epoch 0). */
-  accountEpoch?: number;
+  /** The account's revocation epoch at mint. */
+  accountEpoch: number;
   exp: number;
 }
 
@@ -136,7 +135,7 @@ export async function graphqlSessionFromBearer(
   if (!session || session.t !== "graphql-session") return null;
   if (session.exp < nowSeconds()) return null;
   const { epoch, accountEpoch } = await deps.getAccessTokenEpochs(session.sub);
-  if (session.epoch !== epoch || (session.accountEpoch ?? 0) !== accountEpoch) return null;
+  if (session.epoch !== epoch || session.accountEpoch !== accountEpoch) return null;
   return session;
 }
 

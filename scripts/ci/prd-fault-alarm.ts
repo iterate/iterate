@@ -104,7 +104,7 @@ export const AlarmState = z.object({
     z.string(),
     z.object({ thread: z.string(), lastSeen: z.string(), count: z.number(), told: z.number() }),
   ),
-  pins: z.record(z.string(), z.object({ lastSeen: z.string(), told: z.boolean() })).optional(),
+  pins: z.record(z.string(), z.object({ lastSeen: z.string(), told: z.boolean() })),
 });
 export type AlarmState = z.infer<typeof AlarmState>;
 
@@ -193,10 +193,10 @@ export function pinnedWorkarounds(
   window: LogWindow,
   state: AlarmState | null,
 ) {
-  const pins: NonNullable<AlarmState["pins"]> = {};
+  const pins: AlarmState["pins"] = {};
   const posts: string[] = [];
   for (const pin of PINNED_WORKAROUNDS) {
-    const before = state?.pins?.[pin.event];
+    const before = state?.pins[pin.event];
     const seen = healEvents.some(([event, count]) => event.startsWith(pin.event) && count > 0);
     const lastSeen = seen || !before ? window.to.toISOString() : before.lastSeen;
     const told = !seen && before?.told === true;

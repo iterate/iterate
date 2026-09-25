@@ -19,7 +19,7 @@
 // Pushes are split by what their Preview OS E2E tests job ran, from its suite summary (`slowRows` in
 // packages/shared/src/test-support/flake-suite-summary.ts):
 //   slow rows skipped   the e2e rows tagged `slow` were left out, as they are for most PRs
-//   every row           they ran: the PR turned them on or edited one, or the summary predates the tag
+//   every row           they ran: the PR turned them on or edited one, or the suite has none
 //   no summary          e2e wrote none (its deploy failed, say), so which rows would have run is unknown
 //   no Preview OS       no preview: the push changed no preview path, so E2E tests skipped, or it
 //                       ran no Preview OS at all

@@ -126,7 +126,7 @@ function summary(unknownFlakeCount: number) {
     startedAt: "2026-01-10T09:00:00.000Z",
     finishedAt: "2026-01-10T09:10:00.000Z",
     testCount: 1,
-    tests: [{ name: "deploy", outcome: "pass" }],
+    tests: [{ name: "deploy", outcome: "pass", durationMs: 1_000, failed: false }],
     unknownFlakeCount,
     failedCount: 0,
     diagnostics: [],

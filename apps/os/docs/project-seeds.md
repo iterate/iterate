@@ -80,7 +80,7 @@ not restore exactly.
 `hostnames` lists every custom hostname the project serves at capture (a Cloudflare
 for SaaS custom hostname the processor provisioned, with no removal pending), for
 example `["garple.com"]`. A first add still in flight or one that was refused is not
-recorded. Archives captured before 2026-09-24 have no `hostnames` field and restore none.
+recorded.
 
 After the config is published, `apply` appends `project/hostname-add-requested` for
 each archived hostname the project does not serve. This is the same event the dash's

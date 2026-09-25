@@ -98,15 +98,6 @@ test("a value that is not an agent's state has no summary", () => {
   expect(summarizeAgentState({ phase: "listening" })).toBeUndefined();
 });
 
-test("a runtime older than lastActivityAt summarizes without it", () => {
-  const { lastActivityAt: _dropped, ...older } = stateAfter([...born, user("Hi")]);
-  expect(summarizeAgentState(older)).toEqual({
-    status: "running",
-    lastActivityAt: null,
-    title: "Hi",
-  });
-});
-
 const rows = [
   row("/agents/old", "2026-09-01T00:00:00.000Z", { lastActivityAt: "2026-09-01T00:00:01.000Z" }),
   row("/agents/just-messaged", "2026-09-02T00:00:00.000Z", {

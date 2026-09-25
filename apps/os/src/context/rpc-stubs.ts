@@ -898,8 +898,7 @@ const FETCH_UPGRADE_EYEBALL_HEADER = "x-itx-fetch-upgrade-eyeball";
  *  provider sees the Request. */
 export const FETCH_UPGRADE_RESUMABLE_HEADER = "x-itx-fetch-upgrade-resumable";
 /** THE ANSWER THAT IT IS: on the eyeball's 101, JSON `FetchUpgradeResume` — what the edge re-dials
- *  (the upgradeId, the context that serves it) and the deploy that answered. Absent: the socket is
- *  the provider's raw frames (the transport cannot resume: a relay on an older deploy). */
+ *  (the upgradeId, the context that serves it) and the deploy that answered. */
 const FETCH_UPGRADE_RESUME_HEADER = "x-itx-fetch-upgrade-resume";
 const FetchUpgradeResume = z.object({
   upgradeId: z.string().min(1),
@@ -932,12 +931,10 @@ const upgradeTag = (side: "eyeball" | "leg", upgradeId: string) =>
 
 /** The transport's answer when the provider upgraded: the socket already rides the dedicated
  *  leg, so only this marker crosses the RPC hop — with the provider's 101 headers the eyeball's 101
- *  must repeat (`FETCH_UPGRADE_RESPONSE_HEADERS`). `resumable`: the leg speaks the splice's wire
- *  (the Request asked for it, and this transport knows it — one on an older deploy answers without). */
+ *  must repeat (`FETCH_UPGRADE_RESPONSE_HEADERS`). */
 type FetchUpgradeMarker = {
   webSocketUpgrade: true;
   headers: [name: string, value: string][];
-  resumable?: true;
 };
 
 /** The provider's 101 response headers the eyeball's 101 carries: the subprotocol it chose. A browser
@@ -1078,7 +1075,7 @@ async function dialRpcStubFetch(
     const value = response.headers?.get(name);
     if (value) headers.push([name, value]);
   }
-  return { webSocketUpgrade: true, headers, ...(resumable && { resumable: true as const }) };
+  return { webSocketUpgrade: true, headers };
 }
 
 /** EDGE SIDE of a resumable upgrade: a project host's 101 that says it is resumable
@@ -1156,8 +1153,9 @@ export class RpcStubFetchServer {
   /** Serve one fetch-shaped call on a lent rpc stub: dial through the transport; pass a plain
    *  Response straight through; on the upgrade marker, mint the eyeball's pair (the leg arrived
    *  during the dial — the dial awaits its 101) — a real 101 only after the provider actually
-   *  upgraded, saying it is resumable when the transport's leg speaks the splice's wire. Provider
-   *  failures throw through with their own words (the itx-expression fetch answers non-101). */
+   *  upgraded, saying it is resumable when the Request asked (the leg then speaks the splice's
+   *  wire). Provider failures throw through with their own words (the itx-expression fetch answers
+   *  non-101). */
   async serve(
     transport: RpcStubFetchTransport,
     itxExpressionSteps: ItxExpression,
@@ -1168,7 +1166,7 @@ export class RpcStubFetchServer {
     const marker = result as Partial<FetchUpgradeMarker> | null;
     if (marker?.webSocketUpgrade !== true) return result;
     const headers = [...(marker.headers || [])];
-    if (marker.resumable === true && request.headers.has(FETCH_UPGRADE_RESUMABLE_HEADER))
+    if (request.headers.has(FETCH_UPGRADE_RESUMABLE_HEADER))
       headers.push([
         FETCH_UPGRADE_RESUME_HEADER,
         JSON.stringify({

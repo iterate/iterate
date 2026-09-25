@@ -905,9 +905,9 @@ CI trace, which only reports:
 
 Pushes are split by what their Preview OS E2E tests job ran, which its suite
 summary names (`slowRows`, [CI and test telemetry](ci-test-telemetry.md)): slow
-rows skipped, every row (including summaries written before the `slow` tag, when
-every row ran), no summary (e2e never ran), and no Preview OS (E2E tests
-skipped, since the push changed no preview path). The job log
+rows skipped, every row (including a suite with no row tagged `slow`), no summary
+(e2e never ran), and no Preview OS (E2E tests skipped, since the push changed no
+preview path). The job log
 prints each group's p50 and p90 over the last 24 hours and 7 days, and the
 share of Preview OS pushes that ran the slow rows. Each push is a PostHog event,
 `pr checks settled`.

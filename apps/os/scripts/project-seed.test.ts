@@ -52,9 +52,8 @@ test("duplicate file or secret paths cannot silently shadow an archived entry", 
   seed.secrets.push(seed.secrets[0]!);
   await expect(openProjectSeed(seed, keys)).rejects.toThrow("Duplicate secret");
 });
-test("hostnames: an archive from before they were recorded has none; a malformed or repeated one is refused", async () => {
+test("hostnames: a well-formed one is kept; a malformed or repeated one is refused", async () => {
   const seed = await archive();
-  expect((await openProjectSeed(seed, keys)).seed).toMatchObject({ hostnames: [] });
   expect((await openProjectSeed({ ...seed, hostnames: ["garple.com"] }, keys)).seed).toMatchObject({
     hostnames: ["garple.com"],
   });
@@ -140,6 +139,7 @@ async function archive() {
         material: await encryptSecretMaterial({ apiKey: "sensitive-key" }, binding, keys),
       },
     ],
+    hostnames: [],
   };
 }
 

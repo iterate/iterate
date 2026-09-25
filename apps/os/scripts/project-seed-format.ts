@@ -45,8 +45,8 @@ export const ProjectSeed = z.object({
   }),
   secrets: z.array(EncryptedSecretSeed),
   /** The project's own hostnames (`project/hostname-*`, src/project/custom-hostnames.ts): each one
-   *  it served at capture. Absent from an archive captured before they were recorded. */
-  hostnames: z.array(z.string().regex(HOSTNAME)).default([]),
+   *  it served at capture. */
+  hostnames: z.array(z.string().regex(HOSTNAME)),
 });
 export type ProjectSeed = z.infer<typeof ProjectSeed>;
 

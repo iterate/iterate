@@ -144,7 +144,7 @@ test.for([
   ["no state: the last half hour", null, "07:13"],
   ["a stale state: the last day at most", "2026-09-20T00:00:00Z", "2026-09-22T07:43"],
 ] as const)("a run reads %s", ([, readUntil, from]) => {
-  const state = readUntil && { readUntil, incidents: {} };
+  const state = readUntil && { readUntil, incidents: {}, pins: {} };
   expect(logWindow(new Date("2026-09-23T07:45:00Z"), state).from.toISOString()).toContain(from);
 });
 
@@ -268,7 +268,7 @@ test("a page and a thread reply show how the pagers recovered in the window", ()
   const recovery = "• pagers in the window: 4 dropped, 3 re-dialed, 1 gave up";
   const opened = triageIncidents(reading, window, null);
   expect(opened.page?.text).toContain(recovery);
-  const state = { readUntil: now.toISOString(), incidents: opened.incidents };
+  const state = { readUntil: now.toISOString(), incidents: opened.incidents, pins: {} };
   expect(triageIncidents(reading, window, state).replies[0]?.text).toContain(recovery);
   expect(triageIncidents({ ...reading, pagers: [] }, window, null).page?.text).not.toContain(
     "pagers",
@@ -318,7 +318,7 @@ test("every first-party prd Worker is read, not os-prd alone", async () => {
 
 test("heals page only in a burst, or as an incident already open", () => {
   const opened = triageIncidents({ ...quiet, heals: [["repo", 10]] }, window, null);
-  const state = { readUntil: now.toISOString(), incidents: opened.incidents };
+  const state = { readUntil: now.toISOString(), incidents: opened.incidents, pins: {} };
   expect(triageIncidents({ ...quiet, heals: [["repo", 1]] }, window, state).replies).toHaveLength(
     1,
   );
@@ -675,7 +675,7 @@ test("a run without a pin's state starts its count: a late post, never a false o
     pins: { [heldAlarm!.event]: { lastSeen: now.toISOString(), told: false } },
   });
   expect(
-    pinnedWorkarounds([], window, { readUntil: now.toISOString(), incidents: {} }),
+    pinnedWorkarounds([], window, { readUntil: now.toISOString(), incidents: {}, pins: {} }),
   ).toMatchObject({ posts: [] });
 });
 

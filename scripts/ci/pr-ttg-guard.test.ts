@@ -107,7 +107,7 @@ test.each<{
 test.each([
   { summary: { slowRows: "skipped" as const }, e2e: "slow-rows-skipped" },
   { summary: { slowRows: "ran" as const }, e2e: "every-row" },
-  // a summary written before the slow tag existed: every row ran
+  // a suite with no row tagged slow: every row ran
   { summary: {}, e2e: "every-row" },
   // e2e wrote no summary (its deploy failed, say)
   { summary: undefined, e2e: "no-summary" },

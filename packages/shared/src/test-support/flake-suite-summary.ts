@@ -16,11 +16,11 @@ export const FlakeSuiteSummary = z
         // What the flake dashboard's Cost section reads (scripts/ci/flake-dashboard/dashboard.ts):
         // how long the row ran, when it started after the suite did, its tags, its retries,
         // whether it failed after them, and its first failure's message.
-        durationMs: z.number().int().nonnegative().optional(),
+        durationMs: z.number().int().nonnegative(),
         startMs: z.number().int().nonnegative().optional(),
         tags: z.array(z.string()).optional(),
         retries: z.number().int().nonnegative().optional(),
-        failed: z.boolean().optional(),
+        failed: z.boolean(),
         error: z.string().max(300).optional(),
       }),
     ),
@@ -29,8 +29,8 @@ export const FlakeSuiteSummary = z
     unknownFlakeCount: z.number().int().nonnegative(),
     failedCount: z.number().int().nonnegative(),
     // The preview e2e suite only: whether it ran its rows tagged `slow`, which a PR that touches
-    // none of their code skips. Absent from summaries written before the tag existed, when every
-    // row ran. scripts/ci/pr-ttg-guard.ts splits the PR time to green on it.
+    // none of their code skips. Absent when the suite has no row tagged slow, so every row ran.
+    // scripts/ci/pr-ttg-guard.ts splits the PR time to green on it.
     slowRows: z.enum(["ran", "skipped"]).optional(),
     diagnostics: z.array(z.string()),
     runUrl: z.url(),
