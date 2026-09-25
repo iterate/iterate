@@ -45,9 +45,12 @@ test("cfArtifacts speaks paths, prefixes the derived name with a '.' delimiter, 
 
   // create is idempotent: the Artifacts repo is `prj_a.` + the path's `--`-joined segments.
   expect(await a.create("/repos/config")).toEqual({ created: true });
-  expect(calls.at(-1)).toEqual({ method: "create", name: "prj_a.repos--config" });
+  expect(calls).toEqual([{ method: "create", name: "prj_a.repos--config" }]); // no read first
   expect(await a.create("/repos/config")).toEqual({ created: false });
-  expect(calls.at(-1)).toEqual({ method: "get", name: "prj_a.repos--config" }); // found — no create
+  expect(calls.slice(1)).toEqual([
+    { method: "create", name: "prj_a.repos--config" }, // taken…
+    { method: "get", name: "prj_a.repos--config" }, // …by a repo that reads
+  ]);
 
   const callsBeforeGet = calls.length;
   const repo = await a.get("/repos/config");
@@ -119,8 +122,8 @@ test("every binding handle is released: create, createToken and remote leave non
     },
   };
   const a = scoped(counting, "prj_a");
-  await a.create("/repos/config"); // the probe: not found, then create
-  await a.create("/repos/config"); // the probe: found
+  await a.create("/repos/config"); // created: no probe
+  await a.create("/repos/config"); // taken: the probe finds it
   const repo = await a.get("/repos/config");
   expect(await repo.createToken("write", 60)).toMatchObject({
     plaintext: "write-prj_a.repos--config-60",
@@ -169,37 +172,94 @@ test("get(path) touches no binding; remote() is one get and one info, createToke
   await expect((await a.get("/repos/missing")).remote()).rejects.toThrow(/Repository not found/);
 });
 
+// ── a name Artifacts is still deleting ── Artifacts deletes asynchronously (its REST delete answers
+// 202): until the deletion lands, the name answers `create` "already exists" while `get` answers "not
+// found" (2–5 s on the preview account, measured 2026-09-25). A create in that window, and one
+// whose probe still reads the repo as it was, must end with a live repo or fail with its reason —
+// never answer for a repo that is going, which a project's saga then records as `repo/created`.
+
+test("a create right after a delete of the same name waits for the deletion to land, and ends with a live repo", async () => {
+  const artifacts = deletingNamespace({ createsRefused: 2 }, ["prj_a.repos--config"]);
+  const a = scoped(artifacts.namespace, "prj_a");
+  expect(await a.delete("/repos/config")).toBe(true);
+  expect(await settle(() => a.create("/repos/config"))).toMatchObject({
+    value: { created: true },
+    retries: [],
+    logs: [
+      {
+        event: "cfartifacts.create-waited-for-taken-name",
+        name: "prj_a.repos--config",
+        rounds: 3,
+        outcome: "created",
+      },
+    ],
+  });
+  expect(artifacts.live("prj_a.repos--config")).toBe(true);
+  expect(artifacts.calls.map((call) => call.method)).toEqual([
+    "delete",
+    "create (taken)",
+    "get", // not found: the deletion in flight
+    "create (taken)",
+    "get",
+    "create",
+  ]);
+});
+
+test("a create whose probe still reads the deleted repo creates it all the same", async () => {
+  const artifacts = deletingNamespace({ createsRefused: 0, staleReads: true }, [
+    "prj_a.repos--config",
+  ]);
+  const a = scoped(artifacts.namespace, "prj_a");
+  expect(await a.delete("/repos/config")).toBe(true);
+  expect(await (await a.get("/repos/config")).createToken("read", 60)).toMatchObject({
+    plaintext: "read-prj_a.repos--config-60", // the stale read
+  });
+  expect(await a.create("/repos/config")).toEqual({ created: true });
+  expect(artifacts.live("prj_a.repos--config")).toBe(true);
+});
+
+test("a name still taken past the bound is refused with its reason, and no repo is answered for", async () => {
+  const artifacts = deletingNamespace({ createsRefused: Infinity }, ["prj_a.repos--config"]);
+  const a = scoped(artifacts.namespace, "prj_a");
+  await a.delete("/repos/config");
+  expect(await settle(() => a.create("/repos/config"))).toMatchObject({
+    error: {
+      message: expect.stringMatching(
+        /the Artifacts repo name prj_a\.repos--config is taken, yet no repo by that name has read in 19000 ms — a deletion of that name Artifacts has not finished/,
+      ),
+    },
+    logs: [{ rounds: 7, waitedMs: 19_000, outcome: "still-taken" }],
+  });
+  expect(artifacts.live("prj_a.repos--config")).toBe(false);
+});
+
 // ── the binding's platform failure ── Artifacts API error 10400, "An internal error occurred.", which
 // the binding answered to create, get, list and delete on and off for nine minutes on 2026-09-23
 // (20:33–20:42 UTC), each call fine a moment later. Every verb retries it ONCE, a second later,
 // logged; a second one surfaces.
 
-test("after a platform failure, create retries a failed probe, and a failed create after checking it did not land", async () => {
-  const probe = flaky("get", [1]);
+test("after a platform failure, create retries a failed create, and a failed probe of a taken name", async () => {
+  const create = flaky("create", [1]);
   expect(
-    await settle(() => scoped(probe.namespace, "prj_a").create("/repos/config")),
+    await settle(() => scoped(create.namespace, "prj_a").create("/repos/config")),
   ).toMatchObject({
     value: { created: true },
     retries: [
       {
         event: "cfartifacts.platform-failure-retry",
         name: "prj_a.repos--config",
-        verb: "probe",
+        verb: "create",
         message: "An internal error occurred.",
       },
     ],
   });
+  expect(create.calls.map((call) => call.method)).toEqual(["create (failed)", "create"]);
 
-  const create = flaky("create", [1]);
+  const probe = flaky("get", [1], ["prj_a.repos--config"]);
   expect(
-    await settle(() => scoped(create.namespace, "prj_a").create("/repos/config")),
-  ).toMatchObject({ value: { created: true }, retries: [{ verb: "create" }] });
-  expect(create.calls.map((call) => call.method)).toEqual([
-    "get", // probe: not found
-    "create (failed)",
-    "get", // the retry checks first: not found
-    "create",
-  ]);
+    await settle(() => scoped(probe.namespace, "prj_a").create("/repos/config")),
+  ).toMatchObject({ value: { created: false }, retries: [{ verb: "probe" }] });
+  expect(probe.calls.map((call) => call.method)).toEqual(["create", "get (failed)", "get"]);
 });
 
 test("after a platform failure, a create that landed all the same is not created twice", async () => {
@@ -214,14 +274,16 @@ test("after a platform failure, a create that landed all the same is not created
   expect(
     await settle(() => scoped(landedThenFailed, "prj_a").create("/repos/config")),
   ).toMatchObject({ value: { created: true }, retries: [{ verb: "create" }] });
-  expect(recording.calls.map((call) => call.method)).toEqual(["get", "create", "get"]);
+  // the retry's create finds the name taken, and the probe reads the repo the first one made
+  expect(recording.calls.map((call) => call.method)).toEqual(["create", "create", "get"]);
 });
 
-test("after a platform failure, a create that landed all the same answers created when its retry's probe cannot see it yet: the create says it exists", async () => {
-  // 2026-09-24, prj_dc2c708e…: the create's 10400 came 13 s in, the probe a second later found
-  // nothing, and the retry's create answered "repo already exists" — the project's birth failed on it.
+test("after a platform failure, a create that landed all the same answers created once it reads", async () => {
+  // The create's 10400 came after it landed, and the landed repo did not read at once: the retry's
+  // create finds the name taken, and the probe does not find it until it reads.
   const recording = recordingNamespace();
   let answered = 0;
+  let unreadable = 2;
   const lagging: ArtifactsNamespace = {
     ...recording.namespace,
     create: async (name) => {
@@ -230,32 +292,30 @@ test("after a platform failure, a create that landed all the same answers create
       return created;
     },
     get: async (name) => {
-      recording.calls.push({ method: "get", name });
-      throw new Error("Repository not found (10200)"); // not readable yet
+      if (unreadable-- <= 0) return recording.namespace.get(name);
+      recording.calls.push({ method: "get (not yet)", name });
+      throw new Error("Repository not found (10200)");
     },
   };
   expect(await settle(() => scoped(lagging, "prj_a").create("/repos/config"))).toMatchObject({
     value: { created: true },
     retries: [{ verb: "create" }],
+    logs: [{ event: "cfartifacts.create-waited-for-taken-name", rounds: 3, outcome: "reads" }],
   });
-  expect(recording.calls.map((call) => call.method)).toEqual(["get", "create", "get", "create"]);
+  expect(recording.calls.map((call) => call.method)).toEqual([
+    "create",
+    "create",
+    "get (not yet)",
+    "create",
+    "get (not yet)",
+    "create",
+    "get",
+  ]);
 });
 
-test("a create answered 'already exists' after a 'not found' probe: the repo is there, and no one retries", async () => {
-  const recording = recordingNamespace(["prj_a.repos--config"]);
-  const lagging: ArtifactsNamespace = {
-    ...recording.namespace,
-    get: async () => {
-      throw new Error("Repository not found (10200)"); // another create landed, not readable yet
-    },
-  };
-  expect(await settle(() => scoped(lagging, "prj_a").create("/repos/config"))).toMatchObject({
-    value: { created: false },
-    retries: [],
-  });
-  // anything else a create answers still surfaces
+test("a create answered anything but 'already exists' surfaces, and no one retries", async () => {
   const refusing: ArtifactsNamespace = {
-    ...lagging,
+    ...recordingNamespace().namespace,
     create: async () => {
       throw new Error("Artifacts unavailable (503)");
     },
@@ -353,19 +413,67 @@ function flaky(method: keyof ArtifactsNamespace, failingCalls: number[], existin
   return { ...recording, namespace };
 }
 
-/** Run a verb with the retry's wait elapsed at once: its answer or error, and the warns it logged. */
+/** Artifacts' asynchronous delete over the recording namespace: `delete` answers at once and the
+ *  repo stops reading, but its name stays taken — `create` answers "already exists" — for the next
+ *  `createsRefused` creates, until the deletion lands. With `staleReads`, `get` still reads the
+ *  deleted repo meanwhile: a probe that answers for the repo as it was. */
+function deletingNamespace(
+  options: { createsRefused: number; staleReads?: boolean },
+  existing: string[],
+) {
+  const recording = recordingNamespace(existing);
+  const deleting = new Map<string, number>(); // name → creates still refused before the deletion lands
+  const namespace: ArtifactsNamespace = {
+    ...recording.namespace,
+    delete: async (name) => {
+      const deleted = await recording.namespace.delete(name);
+      deleting.set(name, options.createsRefused);
+      return deleted;
+    },
+    create: async (name) => {
+      const refused = deleting.get(name) ?? 0;
+      if (refused > 0) {
+        deleting.set(name, refused - 1);
+        recording.calls.push({ method: "create (taken)", name });
+        throw new Error(`repo already exists: ${name}`);
+      }
+      deleting.delete(name);
+      return recording.namespace.create(name);
+    },
+    get: async (name) => {
+      if (!options.staleReads || !deleting.has(name)) return recording.namespace.get(name);
+      recording.calls.push({ method: "get (stale)", name });
+      return {
+        info: async () => ({ remote: `https://acct.artifacts.cloudflare.net/git/ns/${name}.git` }),
+        createToken: async (scope: "read" | "write", ttlSeconds: number) => ({
+          plaintext: `${scope}-${name}-${ttlSeconds}`,
+        }),
+      } as unknown as ArtifactRepoHandle;
+    },
+  };
+  return { ...recording, namespace };
+}
+
+/** Run a verb with every wait it takes elapsed at once: its answer or error, the platform-failure
+ *  retries it warned, and what it logged at info. */
 async function settle<T>(run: () => Promise<T>) {
   vi.useFakeTimers();
   const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  const info = vi.spyOn(console, "info").mockImplementation(() => {});
   try {
     const outcome = run().then(
       (value) => ({ value }),
       (error: Error) => ({ error }),
     );
     await vi.runAllTimersAsync();
-    return { ...(await outcome), retries: warn.mock.calls.map(([entry]) => entry) };
+    return {
+      ...(await outcome),
+      retries: warn.mock.calls.map(([entry]) => entry),
+      logs: info.mock.calls.map(([entry]) => entry),
+    };
   } finally {
     warn.mockRestore();
+    info.mockRestore();
     vi.useRealTimers();
   }
 }
@@ -412,7 +520,12 @@ function recordingNamespace(existing: string[] = []) {
       return true;
     },
   };
-  return { namespace, calls, forkCalled: () => forkCalled };
+  return {
+    namespace,
+    calls,
+    forkCalled: () => forkCalled,
+    live: (name: string) => repos.has(name),
+  };
 }
 
 const scoped = (namespace: ArtifactsNamespace, projectId: string) =>

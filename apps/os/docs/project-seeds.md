@@ -191,3 +191,9 @@ confirmed predecessor's writers before erasing shared stores. The worker identit
 and routes remain; Durable Objects, the control plane's D1 rows, both KV stores, R2 objects
 and Artifacts repositories are emptied and verified. Deploy normally before applying
 seeds. No seed command erases or deploys anything implicitly.
+
+Artifacts deletes a repository asynchronously: its name stays taken for a while after
+the erase has verified the namespace empty. A config repo created meanwhile waits up to
+20 s for the name (`TAKEN_NAME_WAIT_MS` in `src/context/cf-artifacts.ts`), then fails the
+project's creation with that reason. Rerun `apply` for that seed once the deletion has
+landed.
