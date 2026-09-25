@@ -10,6 +10,11 @@ test.each([
     { orphans: [context("o", "prj_gone", "/agents/x")] },
   ],
   [
+    "one with no birth record was just destroyed (Cloudflare's list catches up in minutes): emptied, not a failure",
+    [{ id: "e", error: "Error: … by id, only a context that was born answers." }],
+    { emptied: ["e"] },
+  ],
+  [
     "one that could not say who it is is reported, never destroyed",
     [{ id: "u", error: "must be addressed by name" }],
     { unidentified: [{ id: "u", error: "must be addressed by name" }] },
@@ -19,6 +24,7 @@ test.each([
     live: [],
     global: [],
     orphans: [],
+    emptied: [],
     unidentified: [],
     ...expected,
   });
