@@ -42,7 +42,7 @@ test("rule 2: event N's slow blocker completes (by timestamp) before event N+1's
     stream: mem.stream,
     storage: memoryStorage(),
   });
-  mem.stream.append({ type: "e" }, { type: "e" }, { type: "e" }) as StreamEvent[];
+  mem.stream.append({ type: "e" }, { type: "e" }, { type: "e" });
   await p.catchUpFromLog();
   for (const offset of [1, 2]) {
     expect(blockedDoneAt.get(offset)).toBeDefined();
@@ -77,7 +77,7 @@ test("rule 2: a blocker registered from INSIDE a blocker holds the cursor (rule 
     stream: mem.stream,
     storage: memoryStorage(),
   });
-  mem.stream.append({ type: "e" }, { type: "e" }) as StreamEvent[];
+  mem.stream.append({ type: "e" }, { type: "e" });
   await p.catchUpFromLog();
   await settle(120); // let stragglers land so the trace is complete either way
   expect(trace.indexOf("start 2")).toBeGreaterThan(trace.indexOf("nested-done 1"));
@@ -105,7 +105,7 @@ test("rule 3: the batch commits (cursor persisted) while background work is stil
     }
   }
   const p = new ProcessorEngine(new BgProcessor(), { stream: mem.stream, storage });
-  const committed = mem.stream.append({ type: "e" }) as StreamEvent[];
+  const committed = commit(mem, { type: "e" });
   await p.processEventBatch(committed, { after: 0, through: 1 });
   // The batch is durably committed BEFORE the background work lands (overtaking allowed):
   expect(bgDone).toBe(false);
@@ -113,7 +113,7 @@ test("rule 3: the batch commits (cursor persisted) while background work is stil
   await settle(120);
   expect(bgDone).toBe(true); // and the attempt did run (droppable, not dropped here)
   // the failed background attempt never poisoned the chain — the next batch still commits
-  const next = mem.stream.append({ type: "e" }) as StreamEvent[];
+  const next = commit(mem, { type: "e" });
   await p.processEventBatch(next, { after: 1, through: 2 });
   expect(await p.snapshot()).toMatchObject({ offset: 2 });
 });
@@ -137,11 +137,12 @@ test("rule 4: a throwing REDUCE on the last event is contained: the batch still 
     }
   }
   const p = new ProcessorEngine(new RedThrowProcessor(), { stream: mem.stream, storage });
-  const committed = mem.stream.append(
+  const committed = commit(
+    mem,
     { type: "e" },
     { type: "e" },
     { type: "e", payload: { boom: true } },
-  ) as StreamEvent[];
+  );
   const before = storage.writes;
   await p.processEventBatch(committed, { after: 0, through: 3 });
   expect(storage.writes - before).toBe(1); // ONE persist: the checkpoint row, nothing extra
@@ -174,7 +175,7 @@ test("rule 4: a throwing BLOCKER on the LAST event persists NOTHING; the wake re
     }
   }
   const p = new ProcessorEngine(new LastFailProcessor(), { stream: mem.stream, storage });
-  const committed = mem.stream.append({ type: "e" }, { type: "e" }, { type: "e" }) as StreamEvent[];
+  const committed = commit(mem, { type: "e" }, { type: "e" }, { type: "e" });
   await expect(p.processEventBatch(committed, { after: 0, through: 3 })).rejects.toThrow(/boom/);
   expect(storage).toMatchObject({ writes: 0 }); // events 1+2 fully processed, yet NOTHING persisted
   await p.catchUpFromLog(); // retried whole — 1 and 2 run again (droppable-attempt semantics)
@@ -192,7 +193,7 @@ test("rule 5: last event of the batch NOT consumable → the last CONSUMABLE eve
     stream: mem.stream,
     storage: memoryStorage(),
   });
-  const committed = mem.stream.append({ type: "tick" }, { type: "noise" }) as StreamEvent[];
+  const committed = commit(mem, { type: "tick" }, { type: "noise" });
   await p.processEventBatch(committed, { after: 0, through: 2 });
   expect(deliveries.filter((d) => d.caughtUp)).toHaveLength(1);
   expect(deliveries).toEqual([{ offset: 1, caughtUp: true }]); // the tick, not a null pass
@@ -205,7 +206,7 @@ test("rule 5: no consumable event at all → exactly one eventless caughtUp pass
     stream: mem.stream,
     storage: memoryStorage(),
   });
-  const committed = mem.stream.append({ type: "noise" }, { type: "noise" }) as StreamEvent[];
+  const committed = commit(mem, { type: "noise" }, { type: "noise" });
   await p.processEventBatch(committed, { after: 0, through: 2 });
   expect(deliveries).toEqual([{ offset: null, caughtUp: true }]);
 });
@@ -220,9 +221,7 @@ test("rule 5: a catch-up whose log length is an exact page multiple (500) still 
     stream: mem.stream,
     storage: memoryStorage(),
   });
-  mem.stream.append(
-    ...Array.from({ length: 500 }, () => ({ type: "tick" }) as StreamEventInput),
-  ) as StreamEvent[];
+  mem.stream.append(...Array.from({ length: 500 }, () => ({ type: "tick" }) as StreamEventInput));
   await p.catchUpFromLog();
   expect(await p.snapshot()).toMatchObject({ offset: 500 }); // the reduce DID reach the head…
   expect(deliveries.filter((d) => d.caughtUp).length).toBeGreaterThanOrEqual(1); // …silently
@@ -238,7 +237,7 @@ test("waitUntilProcessed resolves for an offset that arrives via GAP REPAIR (no 
     storage: memoryStorage(),
   });
   // Three durable events exist but the processor was never pushed (fresh incarnation).
-  mem.stream.append({ type: "tick" }, { type: "tick" }, { type: "tick" }) as StreamEvent[];
+  mem.stream.append({ type: "tick" }, { type: "tick" }, { type: "tick" });
   await expect(p.waitUntilProcessed({ offset: 3, timeoutMs: 2000 })).resolves.toBeUndefined();
   expect(await p.snapshot()).toMatchObject({ offset: 3 });
 });
@@ -263,7 +262,7 @@ test("waitUntilProcessed: a waiter timing out concurrently with a resolving batc
     storage: memoryStorage(),
   });
   mem.engines.push(p);
-  mem.stream.append({ type: "e" }, { type: "e" }) as StreamEvent[];
+  mem.stream.append({ type: "e" }, { type: "e" });
   // A: unreachable offset, times out at ~25ms — DURING the batch's 60ms blocker.
   const a = p.waitUntilProcessed({ offset: 999, timeoutMs: 25 }).then(
     () => "resolved",
@@ -277,7 +276,7 @@ test("waitUntilProcessed: a waiter timing out concurrently with a resolving batc
   await expect(c).resolves.toBeUndefined();
   // The timed-out waiter left no residue: a NEW waiter for the next offset still works.
   const d = p.waitUntilProcessed({ offset: 3, timeoutMs: 5000 });
-  mem.stream.append({ type: "e" }) as StreamEvent[];
+  mem.stream.append({ type: "e" });
   await expect(d).resolves.toBeUndefined();
 });
 
@@ -292,10 +291,10 @@ test("version bump: a push in flight on a bumped incarnation keeps the NEW event
   const storage = memoryStorage();
   const effects: string[] = [];
   const p1 = makeVersioned(mem, storage, "1.0.0", effects);
-  mem.stream.append({ type: "e" }, { type: "e" }) as StreamEvent[];
+  mem.stream.append({ type: "e" }, { type: "e" });
   await p1.catchUpFromLog(); // v1 processed offsets 1,2 — cursor 2 persisted
   expect(effects).toEqual(["effect 1", "effect 2"]);
-  const committed = mem.stream.append({ type: "e" }) as StreamEvent[]; // offset 3 — v1 never saw it
+  const committed = commit(mem, { type: "e" }); // offset 3 — v1 never saw it
   const p2 = makeVersioned(mem, storage, "2.0.0", effects);
   // The in-flight push lands on the bumped incarnation's chain (contiguous with the durable cursor).
   await p2.processEventBatch(committed, { after: 2, through: 3 });
@@ -312,7 +311,7 @@ test("version bump: waitUntilProcessed before the first chain slot keeps the re-
   const storage = memoryStorage();
   const effects: string[] = [];
   const p1 = makeVersioned(mem, storage, "1.0.0", effects);
-  mem.stream.append({ type: "e" }, { type: "e" }) as StreamEvent[];
+  mem.stream.append({ type: "e" }, { type: "e" });
   await p1.catchUpFromLog(); // v1 processed 1,2 — effects ran once
   expect(effects).toEqual(["effect 1", "effect 2"]);
   const p2 = makeVersioned(mem, storage, "2.0.0", effects);
@@ -344,12 +343,12 @@ test("live state with a sometimes-throwing projection: state advances through th
   const changes = () =>
     mem.pushedEvents.filter((e) => e.type === "events.iterate.com/itx/live-state-changed");
 
-  mem.stream.append({ type: "tick" }) as StreamEvent[]; // n: 0→1 — projecting NEW state throws
+  mem.stream.append({ type: "tick" }); // n: 0→1 — projecting NEW state throws
   await settle();
   expect(await p.snapshot()).toMatchObject({ state: { n: 1 } }); // the batch committed anyway
   expect(changes()).toHaveLength(0); // only the notification was lost
 
-  mem.stream.append({ type: "tick" }) as StreamEvent[]; // n: 1→2 — projects again; the holder HEALS
+  mem.stream.append({ type: "tick" }); // n: 1→2 — projects again; the holder HEALS
   await settle();
   expect(await p.snapshot()).toMatchObject({ state: { n: 2 } });
   // The holder diffs the LAST GOOD projection it stored ({n:0}) against the new one ({n:2}),
@@ -359,7 +358,7 @@ test("live state with a sometimes-throwing projection: state advances through th
   const healed = changes()[0].payload as { from: number; to: number; patch: unknown };
   expect(healed).toMatchObject({ patch: [{ op: "replace", path: "/n", value: 2 }] });
 
-  mem.stream.append({ type: "tick" }) as StreamEvent[]; // n: 2→3 — the chain continues, linked
+  mem.stream.append({ type: "tick" }); // n: 2→3 — the chain continues, linked
   await settle();
   expect(await p.snapshot()).toMatchObject({ state: { n: 3 } });
   expect(changes()).toHaveLength(2);
@@ -376,18 +375,18 @@ test("ephemeral windows: a LIVE instance given a durable push whose scannedAfter
   const engine = new ProcessorEngine(a, { stream: mem.stream, storage });
   mem.engines.push(engine);
 
-  mem.stream.append({ type: "tick" }) as StreamEvent[]; // offset 1 — durable, cursor 1 persisted
+  mem.stream.append({ type: "tick" }); // offset 1 — durable, cursor 1 persisted
   await settle();
   const writesAfterDurable = storage.writes;
-  mem.stream.append({ type: "chunk", ephemeral: true }) as StreamEvent[]; // offset 2
-  mem.stream.append({ type: "chunk", ephemeral: true }) as StreamEvent[]; // offset 3
+  mem.stream.append({ type: "chunk", ephemeral: true }); // offset 2
+  mem.stream.append({ type: "chunk", ephemeral: true }); // offset 3
   await settle();
   expect(a).toMatchObject({ seen: ["tick@1", "chunk@2", "chunk@3"] }); // in-memory cursor rode to 3…
   expect(storage).toMatchObject({ writes: writesAfterDurable }); // …for ZERO storage writes (the ephemeral rule)
 
   // A durable push with a STALE scannedAfterOffset (1 — before the in-memory-only cursor 3):
   mem.engines.length = 0; // hand-deliver, so the pump doesn't also push the true range
-  const [t4] = mem.stream.append({ type: "tick" }) as StreamEvent[]; // offset 4
+  const [t4] = commit(mem, { type: "tick" }); // offset 4
   await engine.processEventBatch([t4], { after: 1, through: 4 });
   // The ephemerals were NOT consumed a second time and tick@4 arrived exactly once.
   expect(a).toMatchObject({ seen: ["tick@1", "chunk@2", "chunk@3", "tick@4"] });
@@ -398,11 +397,11 @@ test("ephemeral windows: EVICTION after an ephemeral-only window: the rebuilt in
   const mem = memoryStream();
   const storage = memoryStorage();
   mem.engines.push(new ProcessorEngine(new EphProcessor(), { stream: mem.stream, storage })); // the doomed incarnation
-  mem.stream.append({ type: "tick" }) as StreamEvent[]; // offset 1 — durable, cursor 1 persisted
+  mem.stream.append({ type: "tick" }); // offset 1 — durable, cursor 1 persisted
   await settle();
   const writesAfterDurable = storage.writes;
-  mem.stream.append({ type: "chunk", ephemeral: true }) as StreamEvent[]; // offset 2
-  mem.stream.append({ type: "chunk", ephemeral: true }) as StreamEvent[]; // offset 3
+  mem.stream.append({ type: "chunk", ephemeral: true }); // offset 2
+  mem.stream.append({ type: "chunk", ephemeral: true }); // offset 3
   await settle();
   expect(storage).toMatchObject({ writes: writesAfterDurable }); // the window persisted NOTHING (regression on eviction is by design)
 
@@ -412,7 +411,7 @@ test("ephemeral windows: EVICTION after an ephemeral-only window: the rebuilt in
   const engineB = new ProcessorEngine(b, { stream: mem.stream, storage });
   mem.engines.push(engineB);
   const readsBefore = mem.reads;
-  mem.stream.append({ type: "tick" }) as StreamEvent[]; // offset 4 — pushed as range (3,4]
+  mem.stream.append({ type: "tick" }); // offset 4 — pushed as range (3,4]
   await settle();
   // (3,4] is non-contiguous with b's durable cursor 1 → gap repair from the log: the dead
   // ephemerals are simply offset gaps; the durable events each reduce exactly once.
@@ -449,11 +448,11 @@ test("ephemeral windows: fresh NAMED ephemerals riding a non-contiguous push are
   }
   const p = new FlakyProcessor();
   mem.engines.push(new ProcessorEngine(p, { stream: mem.stream, storage }));
-  mem.stream.append({ type: "tick" }) as StreamEvent[]; // offset 1 — its push FAILS once (cursor stays 0)
+  mem.stream.append({ type: "tick" }); // offset 1 — its push FAILS once (cursor stays 0)
   await settle();
   // One push carrying a fresh named ephemeral + a durable event, range (1,3] — non-contiguous
   // with the (still unrepaired) cursor 0.
-  mem.stream.append({ type: "chunk", ephemeral: true }, { type: "tick" }) as StreamEvent[];
+  mem.stream.append({ type: "chunk", ephemeral: true }, { type: "tick" });
   await settle(50);
   expect(p.seen).toContain("tick@1"); // repaired from the log
   expect(p.seen).toContain("tick@3"); // repaired from the log
@@ -477,11 +476,11 @@ test('ephemeral windows: consumes ["*"] PLUS a named ephemeral in one contract: 
   const p = new StarPlusProcessor();
   const engine = new ProcessorEngine(p, { stream: mem.stream, storage: memoryStorage() });
   mem.engines.push(engine);
-  mem.stream.append({ type: "tick" }) as StreamEvent[]; // durable → swept by "*" (emits a live-state change)
+  mem.stream.append({ type: "tick" }); // durable → swept by "*" (emits a live-state change)
   await settle();
-  mem.stream.append({ type: "chunk", ephemeral: true }) as StreamEvent[]; // named → consumed
-  mem.stream.append({ type: "noise", ephemeral: true }) as StreamEvent[]; // unnamed → skipped
-  mem.stream.append({ type: "tock" }) as StreamEvent[]; // durable → swept
+  mem.stream.append({ type: "chunk", ephemeral: true }); // named → consumed
+  mem.stream.append({ type: "noise", ephemeral: true }); // unnamed → skipped
+  mem.stream.append({ type: "tock" }); // durable → swept
   await settle();
   const liveStateOffsets = mem.pushedEvents
     .filter((e) => e.type === "events.iterate.com/itx/live-state-changed")
@@ -498,7 +497,7 @@ test("version bump: an event the OLD version accepted and the NEW version's redu
   const storage = memoryStorage();
   const effects: string[] = [];
   const p1 = makeVersioned(mem, storage, "1.0.0", effects);
-  mem.stream.append({ type: "e" }, { type: "e" }, { type: "e" }) as StreamEvent[];
+  mem.stream.append({ type: "e" }, { type: "e" }, { type: "e" });
   await p1.catchUpFromLog(); // v1 reduced and processed 1..3
   const Contract = contractOf("vbump", "2.0.0", ["e"]);
   const p2 = new ProcessorEngine(
@@ -588,4 +587,10 @@ class EphProcessor extends StreamProcessor<{ n: number }> {
   override projectLiveState() {
     return null; // exact-offset suite: opt out of the default live-state emit
   }
+}
+
+/** `memoryStream` commits synchronously, but `ProcessorStream` declares `append` as
+ *  `Promise | array`: the one cast, so a test hands the committed events straight to a batch. */
+function commit(mem: ReturnType<typeof memoryStream>, ...events: StreamEventInput[]) {
+  return mem.stream.append(...events) as StreamEvent[];
 }

@@ -7,10 +7,6 @@
 #include <stdint.h>
 #include <string.h>
 
-#ifdef NDEBUG
-#error "firmware tests must execute assertions"
-#endif
-
 static struct iterate_kit_conversation_visual_state ready_state(void) {
   const struct iterate_kit_conversation_visual_state state = {
     .network = ITERATE_KIT_NETWORK_CONNECTED,

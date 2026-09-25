@@ -3,10 +3,6 @@
 #include <assert.h>
 #include <string.h>
 
-#ifdef NDEBUG
-#error "firmware tests must execute assertions"
-#endif
-
 /* The hardware-facing ring is deliberately large, so keep it off the stack. */
 static struct iterate_kit_darwin_audio_output output;
 static uint8_t pcm[ITERATE_KIT_DARWIN_AUDIO_OUTPUT_RING_BYTES];

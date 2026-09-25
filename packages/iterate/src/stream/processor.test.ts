@@ -163,7 +163,7 @@ test("rule 3 — runInBackground escapes the barrier", async () => {
     stream: mem.stream,
     storage: memoryStorage(),
   });
-  mem.stream.append({ type: "e" }, { type: "e" }) as StreamEvent[];
+  mem.stream.append({ type: "e" }, { type: "e" });
   await bg.catchUpFromLog();
   expect(order).toEqual(["fg 1", "fg 2"]); // background hasn't landed — it overtakes/loiters
   await new Promise((r) => setTimeout(r, 30));
@@ -177,7 +177,7 @@ test("rule 4 — one persist per pushed scannedOffsetRange, cursor advances only
     { type: "events.iterate.com/test/counter-ticked" },
     { type: "events.iterate.com/test/counter-ticked" },
     { type: "events.iterate.com/test/counter-ticked" },
-  ) as StreamEvent[];
+  );
   await engine.catchUpFromLog();
   await settle();
   // the whole 3-event scannedOffsetRange persists ONCE (one checkpoint row). The milestone lands as
@@ -187,7 +187,7 @@ test("rule 4 — one persist per pushed scannedOffsetRange, cursor advances only
 
 test("rule 5 — at-head pass fires exactly once when the scannedOffsetRange reaches the head", async () => {
   const { engine, processor, stream } = setup();
-  stream.append({ type: "unrelated" }) as StreamEvent[]; // consumed by nobody
+  stream.append({ type: "unrelated" }); // consumed by nobody
   await engine.catchUpFromLog();
   expect(processor).toMatchObject({ trace: ["at-head ticks=0"] }); // no consumable events → eventless pass
 });
@@ -227,7 +227,7 @@ test("a failing scannedOffsetRange persists nothing and the next wake retries it
   }
   const flaky = new ProcessorEngine(new FlakyProcessor(), { stream: mem.stream, storage });
   mem.engines.push(flaky);
-  mem.stream.append({ type: "e" }) as StreamEvent[]; // the auto-push fails (attempt 1)
+  mem.stream.append({ type: "e" }); // the auto-push fails (attempt 1)
   await settle();
   expect(storage.read("flaky")).toBeUndefined(); // nothing persisted
   await flaky.catchUpFromLog(); // retried whole
@@ -247,11 +247,11 @@ test("a contiguous push reduces WITHOUT reading the log (the fast path)", async 
 
 test("a gapped push triggers repair from the own cursor (nothing skipped)", async () => {
   const mem = memoryStream();
-  mem.stream.append({ type: "events.iterate.com/test/counter-ticked" }) as StreamEvent[]; // history
+  mem.stream.append({ type: "events.iterate.com/test/counter-ticked" }); // history
   const storage = memoryStorage();
   const late = new CounterProcessor();
   mem.engines.push(new ProcessorEngine(late, { stream: mem.stream, storage })); // registered AFTER history exists
-  mem.stream.append({ type: "events.iterate.com/test/counter-ticked" }) as StreamEvent[]; // gapped push
+  mem.stream.append({ type: "events.iterate.com/test/counter-ticked" }); // gapped push
   await settle();
   expect(late.trace.filter((t) => t.startsWith("start"))).toEqual(["start 1", "start 2"]);
   expect(mem.reads).toBeGreaterThan(0); // repair read the gap
@@ -353,9 +353,7 @@ test("fed by pushes: reads interleaved with appends never miss or skip an event 
     [];
   const counted: number[] = [];
   for (let i = 1; i <= 24; i++) {
-    const [event] = mem.stream.append({
-      type: i % 3 === 0 ? "noise" : "counted",
-    }) as StreamEvent[];
+    const [event] = commit(mem, { type: i % 3 === 0 ? "noise" : "counted" });
     if (event!.type === "counted") counted.push(event!.offset);
     if (i % 2 === 0) reads.push({ appendedBefore: [...counted], answered: engine.snapshot() });
     if (i % 5 === 0) await settle(1);
@@ -457,13 +455,13 @@ test("ephemeral events: shared offsets; named-type opt-in; '*' never sweeps; zer
   });
   mem.engines.push(eph, star);
 
-  mem.stream.append({ type: "loud" }) as StreamEvent[]; // offset 1, durable
+  mem.stream.append({ type: "loud" }); // offset 1, durable
   await settle();
   const ephWrites = ephStorage.writes;
   const starWrites = starStorage.writes;
 
-  mem.stream.append({ type: "chunk", ephemeral: true }) as StreamEvent[]; // offset 2, ephemeral
-  mem.stream.append({ type: "chunk", ephemeral: true }) as StreamEvent[]; // offset 3
+  mem.stream.append({ type: "chunk", ephemeral: true }); // offset 2, ephemeral
+  mem.stream.append({ type: "chunk", ephemeral: true }); // offset 3
   await settle();
   // the NAMED consumer reduced both ephemerals in memory…
   expect(await eph.snapshot()).toMatchObject({ state: { seen: ["loud@1", "chunk@2", "chunk@3"] } });
@@ -473,7 +471,7 @@ test("ephemeral events: shared offsets; named-type opt-in; '*' never sweeps; zer
   expect(ephStorage).toMatchObject({ writes: ephWrites });
   expect(starStorage).toMatchObject({ writes: starWrites });
 
-  mem.stream.append({ type: "loud" }) as StreamEvent[]; // offset 4 — durable, AFTER the gap
+  mem.stream.append({ type: "loud" }); // offset 4 — durable, AFTER the gap
   await settle();
   expect(await star.snapshot()).toMatchObject({ state: { seen: ["loud@1", "loud@4"] } }); // holes invisible
 });
@@ -492,10 +490,7 @@ test("a barrier that reaches the head BEFORE the commit's own push still leaves 
   mem.stream.append({ type: "loud" }); // offset 1, durable
   await p.catchUpFromLog();
   // one commit: durable loud@2 + ephemeral chunk@3 → range (1,3]; hand-delivered below
-  const committed = mem.stream.append(
-    { type: "loud" },
-    { type: "chunk", ephemeral: true },
-  ) as StreamEvent[];
+  const committed = commit(mem, { type: "loud" }, { type: "chunk", ephemeral: true });
   await p.waitUntilProcessed({ offset: 3, timeoutMs: 1000 }); // the barrier's wake wins the race…
   await p.processEventBatch(committed, { after: 1, through: 3 }); // …then the push lands
   expect(await p.snapshot()).toMatchObject({ state: { seen: ["loud@1", "loud@2", "chunk@3"] } });
@@ -520,7 +515,7 @@ test("⚠️ a processor that AWAITS its own append inside a blocker must not de
     }
   }
   mem.engines.push(new ProcessorEngine(new EchoerProcessor(), { stream: mem.stream, storage }));
-  mem.stream.append({ type: "ping" }) as StreamEvent[]; // would deadlock if the blocker held the append
+  mem.stream.append({ type: "ping" }); // would deadlock if the blocker held the append
   await settle();
   expect(mem.events.some((e) => e.type === "echoed")).toBe(true);
 }, 5000);
@@ -557,7 +552,7 @@ test("version bump re-reduces via reduce only — effects never re-run", async (
   mem.stream.append(
     { type: "events.iterate.com/test/counter-ticked" },
     { type: "events.iterate.com/test/counter-ticked" },
-  ) as StreamEvent[];
+  );
   await p1.catchUpFromLog();
   expect(effects).toHaveLength(2);
   // new incarnation with a bumped contract version: re-reduce, but NO new effects for old events
@@ -611,7 +606,7 @@ test("undeclared emit throws", async () => {
     stream: mem.stream,
     storage: memoryStorage(),
   });
-  mem.stream.append({ type: "e" }) as StreamEvent[];
+  mem.stream.append({ type: "e" });
   await expect(rogue.catchUpFromLog()).rejects.toThrow(/without declaring/);
 });
 
@@ -630,7 +625,7 @@ test("live state: a reduce that changes the projection emits ONE ephemeral chang
     storage: memoryStorage(),
   });
   mem.engines.push(p);
-  mem.stream.append({ type: "tick" }) as StreamEvent[];
+  mem.stream.append({ type: "tick" });
   await settle();
   expect(changes(mem)).toHaveLength(1); // ONE change event per changed scannedOffsetRange, not per event
   const [c] = changes(mem);
@@ -647,11 +642,11 @@ test("live state: revisions chain: each emission's `from` equals the previous em
     storage: memoryStorage(),
   });
   mem.engines.push(p);
-  mem.stream.append({ type: "tick" }) as StreamEvent[];
+  mem.stream.append({ type: "tick" });
   await settle();
-  mem.stream.append({ type: "other" }) as StreamEvent[]; // not consumed — a silent batch
+  mem.stream.append({ type: "other" }); // not consumed — a silent batch
   await settle();
-  mem.stream.append({ type: "tick" }) as StreamEvent[];
+  mem.stream.append({ type: "tick" });
   await settle();
   const [c1, c2] = changes(mem).map((e) => e.payload as { from: number; to: number });
   expect(c2).toMatchObject({ from: c1.to }); // the silent batch did NOT break the chain
@@ -664,11 +659,11 @@ test("liveSnapshot() mints the rev the next emission chains from ({rev,state} at
     storage: memoryStorage(),
   });
   mem.engines.push(p);
-  mem.stream.append({ type: "other" }) as StreamEvent[]; // advance the cursor, no projection change
+  mem.stream.append({ type: "other" }); // advance the cursor, no projection change
   await settle();
   const seed = await p.liveSnapshot();
   expect(seed).toEqual(expect.objectContaining({ state: { count: 0 } })); // exactly the projection: `secret` never leaks
-  mem.stream.append({ type: "tick" }) as StreamEvent[];
+  mem.stream.append({ type: "tick" });
   await settle();
   const [c] = changes(mem).map((e) => e.payload as { from: number });
   expect(c).toMatchObject({ from: seed.rev }); // seed → first patch, no re-seed needed
@@ -698,7 +693,7 @@ test("live state: no emission when consumed events leave the projection unchange
     storage: memoryStorage(),
   });
   mem.engines.push(p);
-  mem.stream.append({ type: "tick" }, { type: "tick" }) as StreamEvent[];
+  mem.stream.append({ type: "tick" }, { type: "tick" });
   await settle();
   expect(changes(mem)).toHaveLength(0);
 });
@@ -737,7 +732,7 @@ test("the loop guard: a processor's reduce never sees a live-state delta, even w
     storage: memoryStorage(),
   });
   mem.engines.push(tally, sneaky);
-  mem.stream.append({ type: "tick" }) as StreamEvent[]; // tally emits a change event
+  mem.stream.append({ type: "tick" }); // tally emits a change event
   await settle();
   expect(changes(mem)).toHaveLength(1);
   expect(await sneaky.snapshot()).toMatchObject({ state: { seen: 1 } }); // the tick — NOT the change event
@@ -781,7 +776,7 @@ test("a runtime field bumped inside processEvent (reduced in by projectLiveState
     storage: memoryStorage(),
   });
   mem.engines.push(p);
-  mem.stream.append({ type: "tick" }, { type: "tick" }) as StreamEvent[]; // ONE batch, two events
+  mem.stream.append({ type: "tick" }, { type: "tick" }); // ONE batch, two events
   await settle();
   // The reduce never moved (state is the same object), yet the engine's after-every-batch
   // re-projection sees the runtime field at 2 and emits exactly one delta — not one per event.
@@ -811,9 +806,9 @@ test("a batch that moves neither the reduce nor the projection emits NO delta (t
   const still = new StillProcessor();
   const mem = memoryStream();
   mem.engines.push(new ProcessorEngine(still, { stream: mem.stream, storage: memoryStorage() }));
-  mem.stream.append({ type: "tick" }) as StreamEvent[];
+  mem.stream.append({ type: "tick" });
   await settle();
-  mem.stream.append({ type: "tick" }, { type: "tick" }) as StreamEvent[];
+  mem.stream.append({ type: "tick" }, { type: "tick" });
   await settle();
   expect(still).toMatchObject({ fired: 3 }); // two batches ran every event to completion…
   expect(changes(mem)).toHaveLength(0); // …and re-projecting after each emitted nothing
@@ -845,7 +840,7 @@ test("a throwing/unserializable projection loses the notification, never the bat
     storage: memoryStorage(),
   });
   mem.engines.push(p);
-  mem.stream.append({ type: "tick" }) as StreamEvent[];
+  mem.stream.append({ type: "tick" });
   await settle();
   // the reduce committed and the read surface works — the failure was only the notification
   await expect(p.snapshot()).resolves.toMatchObject({ state: { n: 1 } });
@@ -1388,8 +1383,7 @@ function setup() {
     storage,
     processor, // the author instance — `trace` lives here
     engine, // drives it: wake / snapshot / processEventBatch
-    tick: () =>
-      (mem.stream.append({ type: "events.iterate.com/test/counter-ticked" }) as StreamEvent[])[0],
+    tick: () => commit(mem, { type: "events.iterate.com/test/counter-ticked" })[0],
   };
 }
 
@@ -1708,4 +1702,10 @@ class AttemptsProcessor extends StreamProcessor<object> {
       await new Promise<void>((end) => this.endings.push(end));
     });
   }
+}
+
+/** `memoryStream` commits synchronously, but `ProcessorStream` declares `append` as
+ *  `Promise | array`: the one cast, so a test reads the committed events straight back. */
+function commit(mem: ReturnType<typeof memoryStream>, ...events: StreamEventInput[]) {
+  return mem.stream.append(...events) as StreamEvent[];
 }

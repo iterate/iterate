@@ -32,109 +32,196 @@ type ScenarioRun = { kind: "survived" | "oom" | "other"; facts: ScenarioFacts; t
 /** 144 MiB of legal-sized events — more than the isolate, every one under the append ceiling. */
 const LOG_144_MIB = { eventCount: 24, eventChars: 6 * MiB };
 const CONTROL = { eventCount: 12, eventChars: 64 * 1024 };
+/** The largest legal keyed retry: 4 events at the ceiling is 32 MiB of args, the RPC cap. */
+const RETRY_4_AT_CEILING = { eventCount: 4, eventChars: 8 * MiB - 256 };
+/** 200 × 1 MiB ephemeral commits behind facets that never answer, across 20 rows. */
+const STUCK_ROWS_20 = { rowCount: 20, batchCount: 200, batchChars: 1 * MiB };
+/** A 16 MiB log (16 × 1 MiB) every cursor row is behind by — two budgeted pages each. */
+const CURSOR_ROWS_BEHIND_16_MIB = { eventCount: 16, eventChars: 1 * MiB, calleeCopy: 0 };
+/** Cursor rows on disjoint event types, sinks that never answer, 900 KiB ephemerals (under the
+ *  ring's 1 MiB) — two per row. */
+const CURSOR_ROWS_EPHEMERALS_FROM_RING = { batchChars: 900 * 1024 };
 
-// ── reads ──
-
-test("control: a client pages a 12 × 64 KiB log within the budget", { timeout: 60_000 }, () => {
-  const run = runScenario("read-whole-log", CONTROL);
-  expectSurvived(run, "read-whole-log");
-  expect(Number(run.facts.eventsRead)).toBe(12);
-});
-
-test(
-  "read: a client pages a 144 MiB log (24 × 6 MiB) — every page fits the isolate and the 32 MiB RPC result cap",
-  { timeout: 110_000 },
-  () => {
-    const run = runScenario("read-whole-log", LOG_144_MIB);
-    expectSurvived(run, "read-whole-log");
-    expect(Number(run.facts.eventsRead)).toBe(24);
-    expect(Number(run.facts.maxPageBytes)).toBeLessThanOrEqual(32 * MiB);
+// Every plain row runs its scenario in the capped child, asserts that it survived, then its `facts`
+// (exact) and its `bounds` (a numeric fact against a number), within `timeout` (60 s unless named).
+const rows: {
+  name: string;
+  scenario: ScenarioName;
+  args: Record<string, number>;
+  timeout?: number;
+  facts?: ScenarioFacts;
+  bounds?: [fact: string, comparison: keyof typeof comparisons, bound: number][];
+}[] = [
+  // ── reads ──
+  {
+    name: "control: a client pages a 12 × 64 KiB log within the budget",
+    scenario: "read-whole-log",
+    args: CONTROL,
+    facts: { eventsRead: 12 },
   },
-);
-
-// Concurrent readers — N clients paging one big log at once — can reset the DO: each read
-// returns a >=1-row page, so N readers coexist as N pages in flight, and the per-read byte
-// budget (the whole read-memory defense) bounds ONE read, not their sum. That is an ACCEPTED
-// client-behaviour limit (a client only resets its OWN DO; the durable log survives; it
-// reconnects) — deliberately not defended, to keep `read()` synchronous. The reproduction and
-// the full rationale (why okay, how it would be fixed) live in the deployed e2e:
-// e2e/isolate-ceilings-deployed.e2e.test.ts CONCURRENT READERS.
-// ── the replay loops: a facet's loopback catch-up, the core re-reduce in the DO constructor ──
-
-test("control: a facet catches up over a 12 × 64 KiB log", { timeout: 60_000 }, () => {
-  const run = runScenario("facet-catch-up", CONTROL);
-  expectSurvived(run, "facet-catch-up");
-  expect(Number(run.facts.reducedCount)).toBe(12);
-});
-
-test(
-  "facet catch-up: a processor reduces a 144 MiB log (24 × 6 MiB) through its loopback read",
-  { timeout: 110_000 },
-  () => {
-    const run = runScenario("facet-catch-up", LOG_144_MIB);
-    expectSurvived(run, "facet-catch-up");
-    expect(Number(run.facts.reducedCount)).toBe(24);
+  {
+    name: "read: a client pages a 144 MiB log (24 × 6 MiB) — every page fits the isolate and the 32 MiB RPC result cap",
+    scenario: "read-whole-log",
+    args: LOG_144_MIB,
+    timeout: 110_000,
+    facts: { eventsRead: 24 },
+    bounds: [["maxPageBytes", "<=", 32 * MiB]],
   },
-);
+  // Concurrent readers — N clients paging one big log at once — can reset the DO: each read
+  // returns a >=1-row page, so N readers coexist as N pages in flight, and the per-read byte
+  // budget (the whole read-memory defense) bounds ONE read, not their sum. That is an ACCEPTED
+  // client-behaviour limit (a client only resets its OWN DO; the durable log survives; it
+  // reconnects) — deliberately not defended, to keep `read()` synchronous. The reproduction and
+  // the full rationale (why okay, how it would be fixed) live in the deployed e2e:
+  // e2e/isolate-ceilings-deployed.e2e.test.ts CONCURRENT READERS.
 
-test(
-  "constructor re-reduce: a core-version bump re-reduces a 144 MiB log (24 × 6 MiB) inside the constructor (else a reboot loop)",
-  { timeout: 110_000 },
-  () => {
-    const run = runScenario("constructor-rereduce", LOG_144_MIB);
-    expectSurvived(run, "constructor-rereduce");
+  // ── the replay loops: a facet's loopback catch-up, the core re-reduce in the DO constructor ──
+  {
+    name: "control: a facet catches up over a 12 × 64 KiB log",
+    scenario: "facet-catch-up",
+    args: CONTROL,
+    facts: { reducedCount: 12 },
   },
-);
-
-// ── the delivery loop ──
-
-test(
-  "delivery backlog: 200 × 1 MiB commits behind ONE facet that never answers stay bounded",
-  { timeout: 110_000 },
-  () => {
-    const run = runScenario("stuck-facet-rows", {
-      rowCount: 1,
-      batchCount: 200,
-      batchChars: 1 * MiB,
-      disjointTypes: 0,
-    });
-    expectSurvived(run, "stuck-facet-rows");
-    expect(Number(run.facts.appended)).toBe(200);
+  {
+    name: "facet catch-up: a processor reduces a 144 MiB log (24 × 6 MiB) through its loopback read",
+    scenario: "facet-catch-up",
+    args: LOG_144_MIB,
+    timeout: 110_000,
+    facts: { reducedCount: 24 },
   },
-);
-
-// ── appends ──
-
-test(
-  "append: one event past the platform ceiling is refused on append with EVENT_TOO_LARGE",
-  { timeout: 60_000 },
-  () => {
-    const run = runScenario("append-oversize", { eventChars: 9 * MiB });
-    expectSurvived(run, "append-oversize");
-    expect(run.facts, run.tail).toMatchObject({ refusedCode: "EVENT_TOO_LARGE" });
+  {
+    name: "constructor re-reduce: a core-version bump re-reduces a 144 MiB log (24 × 6 MiB) inside the constructor (else a reboot loop)",
+    scenario: "constructor-rereduce",
+    args: LOG_144_MIB,
+    timeout: 110_000,
   },
-);
+
+  // ── the delivery loop ──
+  {
+    name: "delivery backlog: 200 × 1 MiB commits behind ONE facet that never answers stay bounded",
+    scenario: "stuck-facet-rows",
+    args: { rowCount: 1, batchCount: 200, batchChars: 1 * MiB, disjointTypes: 0 },
+    timeout: 110_000,
+    facts: { appended: 200 },
+  },
+
+  // ── appends ──
+  {
+    name: "append: one event past the platform ceiling is refused on append with EVENT_TOO_LARGE",
+    scenario: "append-oversize",
+    args: { eventChars: 9 * MiB },
+    facts: { refusedCode: "EVENT_TOO_LARGE" },
+  },
+  {
+    name: "control: a 4 × 8 MiB idempotent retry (32 MiB of args, every event a dedupe hit) fits the isolate and both RPC caps",
+    scenario: "idempotency-dedupe-retry",
+    args: RETRY_4_AT_CEILING,
+    facts: { dedupedCount: 4 },
+    bounds: [
+      ["argsBytes", "<=", 32 * MiB],
+      ["echoBytes", "<=", 32 * MiB],
+    ],
+  },
+
+  // ── live state: a large projection ──
+  {
+    name: "control: a 6 MiB live-state projection edited every batch survives — each one-item edit ships the whole array as the delta",
+    scenario: "live-state-large-projection",
+    args: { itemCount: 6, itemChars: 1 * MiB, batchCount: 5 },
+    facts: { deltasRefused: 0 },
+    bounds: [["deltasCommitted", ">=", 5]],
+  },
+  // CONTROL, once a pin: a 12 MiB projection's every delta is a whole-array replace, and while the
+  // append ceiling measured ephemerals too every delta was refused (EVENT_TOO_LARGE, swallowed by
+  // LiveState.set as a "lost notification" — the watcher got nothing, not even a chain gap). The
+  // ceiling now measures only what is STORED; an ephemeral rides the pending-push budget instead. The
+  // diff cost per set (stringify + parse of both sides, ~6× the projection transient) stays.
+  {
+    name: "live state: a 12 MiB projection still emits its deltas — an ephemeral is never stored, so the append ceiling does not apply to it",
+    scenario: "live-state-large-projection",
+    args: { itemCount: 12, itemChars: 1 * MiB, batchCount: 3 },
+    facts: { deltasRefused: 0 },
+  },
+
+  // ── the delivery loop: many rows ──
+  {
+    name: "control: 20 stuck facet rows consuming the SAME events retain one backlog between them (the StreamEvent objects are shared)",
+    scenario: "stuck-facet-rows",
+    args: { ...STUCK_ROWS_20, disjointTypes: 0 },
+    bounds: [["callsStarted", ">=", 20]], // every row called (a 16 MiB log is two pages a row)
+  },
+  // BORN RED (oom): the pending budget was PER ROW — 20 stuck rows on 20 disjoint event types kept
+  // 8 MiB of undelivered pushes EACH, 160 MiB in one isolate. Flipped by the per-context ledger
+  // (PENDING_PUSHES_TOTAL_BUDGET_CHARS across rows + DELIVERY_IN_FLIGHT_BUDGET_CHARS across calls).
+  {
+    name: "delivery backlog × rows: 20 stuck facet rows on DISJOINT event types share ONE pending budget and ONE in-flight budget — never 20 × 8 MiB",
+    scenario: "stuck-facet-rows",
+    args: { ...STUCK_ROWS_20, disjointTypes: 1 },
+  },
+  {
+    name: "control: 4 behind cursor rows (the alarm pass's concurrency) drain one commit within the budget",
+    scenario: "cursor-rows-behind-one-commit",
+    args: { ...CURSOR_ROWS_BEHIND_16_MIB, rowCount: 4 },
+    bounds: [["callsStarted", ">=", 4]], // every row called (a page may split under the read budget)
+  },
+  // BORN RED (oom): one commit drained every behind cursor row at once, each holding a budgeted page
+  // across its awaited call — 20 rows was 160 MiB. Flipped by the in-flight ledger: a cursor delivery
+  // waits for room, so the rows drain a few at a time (`maxCallsInFlight` says how many; the callees
+  // here answer after 250 ms). The rows are behind the natural way — a fresh incarnation whose cursors
+  // were never acked — and the commit is one small append.
+  {
+    name: "cursor rows: 20 behind cursor rows and ONE commit — the commit path drains them under the in-flight budget, never a page per row at once",
+    scenario: "cursor-rows-behind-one-commit",
+    args: { ...CURSOR_ROWS_BEHIND_16_MIB, rowCount: 20 },
+    bounds: [
+      ["callsStarted", ">=", 20], // every row called (a 16 MiB log is two pages a row)
+      ["maxCallsInFlight", "<", 20], // the ledger, not the row count, sets the fan-out
+    ],
+  },
+  {
+    name: "control: 2 cursor rows fed 900 KiB ephemerals from the ring stay within the budget",
+    scenario: "cursor-rows-ephemerals-from-ring",
+    args: { ...CURSOR_ROWS_EPHEMERALS_FROM_RING, rowCount: 2, batchCount: 4 },
+    bounds: [["callsStarted", ">=", 1]],
+  },
+  // BORN RED (oom): the loop remembered ONE pushed batch per cursor row outside every budget — the
+  // pending fold bounded, the in-flight ledgers bounded, this second copy bounded by nothing but the
+  // row count (160 rows × 900 KiB is 140 MiB). Flipped by reading a cursor row's ephemerals from the
+  // stream's recent-ephemerals ring (1 MiB) under the cursor-read budget: a row waiting for room holds
+  // nothing, so what is retained is the in-flight batches (8 MiB) and the ring, whatever the row count.
+  {
+    name: "cursor rows: 160 cursor rows fed 900 KiB ephemerals retain the ring and the in-flight batches, never a batch per row",
+    scenario: "cursor-rows-ephemerals-from-ring",
+    args: { ...CURSOR_ROWS_EPHEMERALS_FROM_RING, rowCount: 160, batchCount: 320 },
+    bounds: [
+      ["callsStarted", ">=", 2],
+      ["callsStarted", "<", 160], // the budget, not the row count, sets the fan-out
+    ],
+  },
+
+  // ── the history scan ──
+  {
+    name: "control: waitForEvent's history scan over a 300 MiB log (38 × 8 MiB, afterOffset 0, a type never seen) stays within the budget — a synchronous stall of scanMs, not a memory one",
+    scenario: "wait-for-event-history-scan",
+    args: { eventCount: 38, eventChars: 8 * MiB - 256 },
+    timeout: 110_000,
+    facts: { waitOutcome: "WAIT_TIMEOUT" },
+  },
+];
+for (const { name, scenario, args, timeout = 60_000, facts = {}, bounds = [] } of rows)
+  test(name, { timeout }, () => {
+    const run = runScenario(scenario, args);
+    expectSurvived(run, scenario);
+    expect(run.facts, run.tail).toMatchObject(facts);
+    for (const [fact, comparison, bound] of bounds)
+      expect(Number(run.facts[fact]), `${fact} ${comparison} ${bound}\n${run.tail}`)[
+        comparisons[comparison]
+      ](bound);
+  });
 
 // ═══ A pinned row's comment says what it dies of — `oom` (the child hit the heap limit) or a
 // named fact — so unwrapping it to `test` is the proof of its fix. The CONTROL rows beside them bound
 // the same path at a size that survives. ═══
-
-// ── appends: the idempotent retry, and the echo ──
-
-/** The largest legal keyed retry: 4 events at the ceiling is 32 MiB of args, the RPC cap. */
-const RETRY_4_AT_CEILING = { eventCount: 4, eventChars: 8 * MiB - 256 };
-
-test(
-  "control: a 4 × 8 MiB idempotent retry (32 MiB of args, every event a dedupe hit) fits the isolate and both RPC caps",
-  { timeout: 60_000 },
-  () => {
-    const run = runScenario("idempotency-dedupe-retry", RETRY_4_AT_CEILING);
-    expectSurvived(run, "idempotency-dedupe-retry");
-    expect(Number(run.facts.dedupedCount)).toBe(4);
-    expect(Number(run.facts.argsBytes)).toBeLessThanOrEqual(32 * MiB);
-    expect(Number(run.facts.echoBytes)).toBeLessThanOrEqual(32 * MiB);
-  },
-);
 
 // Dies of: the echo fact. 40,000 × 780-char events serialize to 31.1 MiB of args (legal); the
 // commit lands (durableOffset = 40,000); the reply — the same events plus offset, createdAt and
@@ -181,157 +268,6 @@ test(
       Number(run.facts.persistedBlobsThrough),
     ); // one row: the state holds exactly the durables its cursor claims
     expect(Number(run.facts.readsDuringWakes), run.tail).toBe(0); // the refusal is LATCHED: a wake rejects without re-reading the log
-  },
-);
-
-// ── live state: a large projection ──
-
-test(
-  "control: a 6 MiB live-state projection edited every batch survives — each one-item edit ships the whole array as the delta",
-  { timeout: 60_000 },
-  () => {
-    const run = runScenario("live-state-large-projection", {
-      itemCount: 6,
-      itemChars: 1 * MiB,
-      batchCount: 5,
-    });
-    expectSurvived(run, "live-state-large-projection");
-    expect(Number(run.facts.deltasCommitted)).toBeGreaterThanOrEqual(5);
-    expect(Number(run.facts.deltasRefused)).toBe(0);
-  },
-);
-
-// CONTROL, once a pin: a 12 MiB projection's every delta is a whole-array replace, and while the
-// append ceiling measured ephemerals too every delta was refused (EVENT_TOO_LARGE, swallowed by
-// LiveState.set as a "lost notification" — the watcher got nothing, not even a chain gap). The
-// ceiling now measures only what is STORED; an ephemeral rides the pending-push budget instead. The
-// diff cost per set (stringify + parse of both sides, ~6× the projection transient) stays.
-test(
-  "live state: a 12 MiB projection still emits its deltas — an ephemeral is never stored, so the append ceiling does not apply to it",
-  { timeout: 60_000 },
-  () => {
-    const run = runScenario("live-state-large-projection", {
-      itemCount: 12,
-      itemChars: 1 * MiB,
-      batchCount: 3,
-    });
-    expectSurvived(run, "live-state-large-projection");
-    expect(Number(run.facts.deltasRefused), run.tail).toBe(0);
-  },
-);
-
-// ── the delivery loop: many rows ──
-
-/** 200 × 1 MiB ephemeral commits behind facets that never answer, across 20 rows. */
-const STUCK_ROWS_20 = { rowCount: 20, batchCount: 200, batchChars: 1 * MiB };
-
-test(
-  "control: 20 stuck facet rows consuming the SAME events retain one backlog between them (the StreamEvent objects are shared)",
-  { timeout: 60_000 },
-  () => {
-    const run = runScenario("stuck-facet-rows", { ...STUCK_ROWS_20, disjointTypes: 0 });
-    expectSurvived(run, "stuck-facet-rows");
-    expect(Number(run.facts.callsStarted)).toBeGreaterThanOrEqual(20); // every row called (a 16 MiB log is two pages a row)
-  },
-);
-
-// BORN RED (oom): the pending budget was PER ROW — 20 stuck rows on 20 disjoint event types kept
-// 8 MiB of undelivered pushes EACH, 160 MiB in one isolate. Flipped by the per-context ledger
-// (PENDING_PUSHES_TOTAL_BUDGET_CHARS across rows + DELIVERY_IN_FLIGHT_BUDGET_CHARS across calls).
-test(
-  "delivery backlog × rows: 20 stuck facet rows on DISJOINT event types share ONE pending budget and ONE in-flight budget — never 20 × 8 MiB",
-  { timeout: 60_000 },
-  () => {
-    const run = runScenario("stuck-facet-rows", { ...STUCK_ROWS_20, disjointTypes: 1 });
-    expectSurvived(run, "stuck-facet-rows");
-  },
-);
-
-/** A 16 MiB log (16 × 1 MiB) every cursor row is behind by — two budgeted pages each. */
-const CURSOR_ROWS_BEHIND_16_MIB = { eventCount: 16, eventChars: 1 * MiB, calleeCopy: 0 };
-
-test(
-  "control: 4 behind cursor rows (the alarm pass's concurrency) drain one commit within the budget",
-  { timeout: 60_000 },
-  () => {
-    const run = runScenario("cursor-rows-behind-one-commit", {
-      ...CURSOR_ROWS_BEHIND_16_MIB,
-      rowCount: 4,
-    });
-    expectSurvived(run, "cursor-rows-behind-one-commit");
-    expect(Number(run.facts.callsStarted)).toBeGreaterThanOrEqual(4); // every row called (a page may split under the read budget)
-  },
-);
-
-// BORN RED (oom): one commit drained every behind cursor row at once, each holding a budgeted page
-// across its awaited call — 20 rows was 160 MiB. Flipped by the in-flight ledger: a cursor delivery
-// waits for room, so the rows drain a few at a time (`maxCallsInFlight` says how many; the callees
-// here answer after 250 ms). The rows are behind the natural way — a fresh incarnation whose cursors
-// were never acked — and the commit is one small append.
-test(
-  "cursor rows: 20 behind cursor rows and ONE commit — the commit path drains them under the in-flight budget, never a page per row at once",
-  { timeout: 60_000 },
-  () => {
-    const run = runScenario("cursor-rows-behind-one-commit", {
-      ...CURSOR_ROWS_BEHIND_16_MIB,
-      rowCount: 20,
-    });
-    expectSurvived(run, "cursor-rows-behind-one-commit");
-    expect(Number(run.facts.callsStarted)).toBeGreaterThanOrEqual(20); // every row called (a 16 MiB log is two pages a row)
-    expect(Number(run.facts.maxCallsInFlight)).toBeLessThan(20); // the ledger, not the row count, sets the fan-out
-  },
-);
-
-/** Cursor rows on disjoint event types, sinks that never answer, 900 KiB ephemerals (under the
- *  ring's 1 MiB) — two per row. */
-const CURSOR_ROWS_EPHEMERALS_FROM_RING = { batchChars: 900 * 1024 };
-
-test(
-  "control: 2 cursor rows fed 900 KiB ephemerals from the ring stay within the budget",
-  { timeout: 60_000 },
-  () => {
-    const run = runScenario("cursor-rows-ephemerals-from-ring", {
-      ...CURSOR_ROWS_EPHEMERALS_FROM_RING,
-      rowCount: 2,
-      batchCount: 4,
-    });
-    expectSurvived(run, "cursor-rows-ephemerals-from-ring");
-    expect(Number(run.facts.callsStarted)).toBeGreaterThanOrEqual(1);
-  },
-);
-
-// BORN RED (oom): the loop remembered ONE pushed batch per cursor row outside every budget — the
-// pending fold bounded, the in-flight ledgers bounded, this second copy bounded by nothing but the
-// row count (160 rows × 900 KiB is 140 MiB). Flipped by reading a cursor row's ephemerals from the
-// stream's recent-ephemerals ring (1 MiB) under the cursor-read budget: a row waiting for room holds
-// nothing, so what is retained is the in-flight batches (8 MiB) and the ring, whatever the row count.
-test(
-  "cursor rows: 160 cursor rows fed 900 KiB ephemerals retain the ring and the in-flight batches, never a batch per row",
-  { timeout: 60_000 },
-  () => {
-    const run = runScenario("cursor-rows-ephemerals-from-ring", {
-      ...CURSOR_ROWS_EPHEMERALS_FROM_RING,
-      rowCount: 160,
-      batchCount: 320,
-    });
-    expectSurvived(run, "cursor-rows-ephemerals-from-ring");
-    expect(Number(run.facts.callsStarted)).toBeGreaterThanOrEqual(2);
-    expect(Number(run.facts.callsStarted)).toBeLessThan(160); // the budget, not the row count, sets the fan-out
-  },
-);
-
-// ── the history scan ──
-
-test(
-  "control: waitForEvent's history scan over a 300 MiB log (38 × 8 MiB, afterOffset 0, a type never seen) stays within the budget — a synchronous stall of scanMs, not a memory one",
-  { timeout: 110_000 },
-  () => {
-    const run = runScenario("wait-for-event-history-scan", {
-      eventCount: 38,
-      eventChars: 8 * MiB - 256,
-    });
-    expectSurvived(run, "wait-for-event-history-scan");
-    expect(run.facts).toMatchObject({ waitOutcome: "WAIT_TIMEOUT" });
   },
 );
 
@@ -447,3 +383,10 @@ function runCoreRowsUntilCellCap() {
     rowsPerAppend: 1000,
   }));
 }
+
+/** A row's bound, as the matcher that checks it. */
+const comparisons = {
+  "<": "toBeLessThan",
+  "<=": "toBeLessThanOrEqual",
+  ">=": "toBeGreaterThanOrEqual",
+} as const;

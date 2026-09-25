@@ -2,6 +2,7 @@
 // directory) and the relay's one-registration rule. Node: the pager layer is never entered (no sockets).
 
 import type { ItxExpression } from "iterate/expression";
+import type { StreamEventInput } from "iterate/stream/processor";
 import { expect, onTestFinished, test, vi } from "vitest";
 import {
   type RpcStubFetchServer,
@@ -139,12 +140,7 @@ test("a page the relay never answers fails every call waiting on it after 10 s, 
     deserializeAttachment: () => ({ rpcStubKey: "fan-7" }),
     send: vi.fn(),
   };
-  const rpcStubDirectory = new RpcStubDirectory({
-    ctx: { acceptWebSocket: () => {}, getWebSockets: () => [pager as unknown as WebSocket] },
-    onPresence: () => {},
-    rpcStubFetch: { serve: async () => undefined } as unknown as RpcStubFetchServer,
-    appendEvents: () => {},
-  });
+  const rpcStubDirectory = directory([pager as unknown as WebSocket]);
   const waiting = [1, 2].map((round) =>
     rpcStubDirectory.invokeRpcStub("fan-7", [["", round]]).catch((error: unknown) => error),
   );
@@ -202,13 +198,7 @@ test("a relay registers onRpcBroken on the session's stub ONCE per session, not 
     lendRpcStub: async (_input: { rpcStubKey: string; stub: unknown }) => undefined,
   };
 
-  const relay = await lendRpcStubOverPager(
-    (() => context) as unknown as Parameters<typeof lendRpcStubOverPager>[0],
-    provider as unknown as Parameters<typeof lendRpcStubOverPager>[1],
-    "key-1",
-    [], // the events that name the key — none for a bare pager
-    () => {}, // waitUntil
-  );
+  const relay = await lend(context, provider, "key-1");
 
   // A long-lived, active device: five page/release cycles, each lending a fresh stub.
   const PAGES = 5;
@@ -279,9 +269,9 @@ test.for([
       },
     };
     const waitedUntil: Promise<unknown>[] = [];
-    const relay = await lendRpcStubOverPager(
-      (() => context) as unknown as Parameters<typeof lendRpcStubOverPager>[0],
-      session as unknown as Parameters<typeof lendRpcStubOverPager>[1],
+    const relay = await lend(
+      context,
+      session,
       "subscription:fan-104",
       [],
       (p) => void waitedUntil.push(p),
@@ -319,9 +309,9 @@ test("a lend recalled while its repeat waits is not lent again, and its failure 
     },
   };
   const waitedUntil: Promise<unknown>[] = [];
-  const relay = await lendRpcStubOverPager(
-    (() => context) as unknown as Parameters<typeof lendRpcStubOverPager>[0],
-    session as unknown as Parameters<typeof lendRpcStubOverPager>[1],
+  const relay = await lend(
+    context,
+    session,
     "subscription:fan-104",
     [],
     (p) => void waitedUntil.push(p),
@@ -387,13 +377,7 @@ test.for([
     fetch: async () => ({ status: 101, webSocket: pager }),
     lendRpcStub: async (input: { stub: BorrowedRpcStub }) => void lentStubs.push(input.stub),
   };
-  const relay = await lendRpcStubOverPager(
-    (() => context) as unknown as Parameters<typeof lendRpcStubOverPager>[0],
-    client as unknown as Parameters<typeof lendRpcStubOverPager>[1],
-    "itx.tunnels.laptop",
-    [],
-    () => {},
-  );
+  const relay = await lend(context, client, "itx.tunnels.laptop");
   onTestFinished(() => relay.dispose());
   pager.page();
   const call = lentStubs[0].invoke([["hello"]]).then(
@@ -689,13 +673,9 @@ test("a refused pager upgrade (the DO would not append what names the key) lends
     },
   };
 
-  const refusal = await lendRpcStubOverPager(
-    (() => context) as unknown as Parameters<typeof lendRpcStubOverPager>[0],
-    provider as unknown as Parameters<typeof lendRpcStubOverPager>[1],
-    "key-2",
-    [{ type: "events.iterate.com/itx/rewrite-rule-configured", payload: {} }],
-    () => {},
-  ).then(
+  const refusal = await lend(context, provider, "key-2", [
+    { type: "events.iterate.com/itx/rewrite-rule-configured", payload: {} },
+  ]).then(
     () => undefined,
     (e: unknown) => e as Error & { code?: string },
   );
@@ -727,15 +707,7 @@ test("a DO fetch that REJECTS releases the session's dup before the error propag
       );
     },
   };
-  await expect(
-    lendRpcStubOverPager(
-      (() => context) as unknown as Parameters<typeof lendRpcStubOverPager>[0],
-      provider as unknown as Parameters<typeof lendRpcStubOverPager>[1],
-      "key-3",
-      [],
-      () => {},
-    ),
-  ).rejects.toThrow(/APP_CONFIG_SECRETS__KEY/);
+  await expect(lend(context, provider, "key-3")).rejects.toThrow(/APP_CONFIG_SECRETS__KEY/);
   expect(disposed).toBe(1);
 });
 
@@ -755,9 +727,11 @@ function fakeBorrowedRpcStub(answer: () => Promise<unknown>) {
   return stub as typeof stub & BorrowedRpcStub;
 }
 
-const directory = () =>
+/** A directory over a fake Durable Object whose open stub-pager sockets are `pagers`. The one cast:
+ *  no test here serves a terminal fetch, so the fetch server is a stand-in. */
+const directory = (pagers: WebSocket[] = []) =>
   new RpcStubDirectory({
-    ctx: { acceptWebSocket: () => {}, getWebSockets: () => [] },
+    ctx: { acceptWebSocket: () => {}, getWebSockets: () => pagers },
     onPresence: () => {},
     rpcStubFetch: { serve: async () => undefined } as unknown as RpcStubFetchServer,
     appendEvents: () => {},
@@ -829,12 +803,30 @@ async function relayOverFakeDurableObject(
       fake.lends += 1;
     },
   };
-  const relay = await lendRpcStubOverPager(
-    (() => context) as unknown as Parameters<typeof lendRpcStubOverPager>[0],
-    { dup: () => lent } as unknown as Parameters<typeof lendRpcStubOverPager>[1],
+  const relay = await lend(
+    context,
+    { dup: () => lent },
     "key-4",
     [],
     (p) => void fake.waitedUntil.push(p),
   );
   return Object.assign(fake, { relay });
+}
+
+/** `lendRpcStubOverPager` over fakes: `context` is the DO stub with only the calls a relay makes,
+ *  `clientRpcStub` the client's stub with only what the relay touches, so both are cast once here. */
+function lend(
+  context: object,
+  clientRpcStub: object,
+  rpcStubKey: string,
+  appendEvents: StreamEventInput[] = [],
+  waitUntil: (p: Promise<unknown>) => void = () => {},
+) {
+  return lendRpcStubOverPager(
+    (() => context) as unknown as Parameters<typeof lendRpcStubOverPager>[0],
+    clientRpcStub as unknown as Parameters<typeof lendRpcStubOverPager>[1],
+    rpcStubKey,
+    appendEvents,
+    waitUntil,
+  );
 }

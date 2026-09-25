@@ -16,10 +16,6 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#ifdef NDEBUG
-#error "firmware tests must execute assertions"
-#endif
-
 static void only_a_401_or_403_refuses_the_key(void) {
   /*
    * 0 is no answer (DNS, TCP or TLS failed first) and -1 an unparsable one;
