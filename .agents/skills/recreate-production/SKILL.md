@@ -83,5 +83,7 @@ pnpm --dir apps/os project-seed verify-structure --env prd --file <absolute-path
   retained previous key.
 - Before an erase, inventory with `pnpm --dir apps/os erase-data --env prd --yes-i-mean-prd --dry-run`.
   The erase and deployment are separate operations; no seed command performs either implicitly.
+  The erase empties the control plane's D1 rows (users, organizations, projects, grants) with the
+  rest and keeps its schema, so the next deploy's migration is a no-op.
 - If a command fails, preserve the archive and fix the reported condition before retrying. Do not
   attempt recovery by appending legacy events or restoring database rows.

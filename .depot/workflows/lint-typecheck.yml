@@ -42,3 +42,8 @@ jobs:
             run: pnpm format:check
           - name: Run Knip
             run: pnpm knip
+          # The control plane's D1 (apps/os/src/control-plane/db): its migrations replay to
+          # definitions.sql, and the typed queries are what sqlfu generates from them. Every
+          # deployment runs the migrations; the types are checked against definitions.sql.
+          - name: Check the control plane's schema
+            run: pnpm --dir apps/os db:check && pnpm --dir apps/os db:generate && git diff --exit-code -- apps/os/src/control-plane/db

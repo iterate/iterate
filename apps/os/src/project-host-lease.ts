@@ -38,7 +38,7 @@ export function leasedProjectHostAnswer(
   projectId: string,
   answer: Response,
 ): Response {
-  const controlPlane = new ControlPlane(env.CONTROL_PLANE);
+  const controlPlane = new ControlPlane(env);
   const hold = (end: (reason: string) => void) =>
     holdGrantLease(
       env,

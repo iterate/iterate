@@ -73,7 +73,7 @@ const FORMER_PARENT = "os-preview";
 /** `pr<n>` for a pull request: its URLs are `pr<n>-os.…`, `pr<n>-dash.…`, one per PR whatever its
  *  branch is called. Without a number — a CI workflow's own preview, a laptop's experiment — the
  *  slugified name, which the sweep judges on age alone. A name whose resources would be one the
- *  account already has for something else (`dev` → local dev's `os-dev-repos`), or under the former
+ *  account already has for something else (`dev` → local dev's `os-dev-db`), or under the former
  *  parent's prefix, is refused. */
 export function resolvePreviewName({ name, prNumber }: { name?: string; prNumber?: string }) {
   const pr = (prNumber || "").trim();
@@ -100,11 +100,11 @@ export function previewPullRequestNumber(previewName: string) {
   return match ? Number(match[1]) : undefined;
 }
 
-/** Cloudflare's 10061 from `wrangler preview`: "Cannot create binding for class
- *  'ControlPlaneDurableObject' that is not exported by the script. [code: 10061]" — the build binds
- *  a Durable Object class the preview does not have. An existing Worker Preview cannot gain a class
- *  it lacked when it was created (2026-09-23, #2888's ControlPlaneDurableObject: every existing PR
- *  preview failed, a new one passed), so scripts/preview.ts deletes the preview and creates it again. */
+/** Cloudflare's 10061 from `wrangler preview`: "Cannot create binding for class '<class>' that is
+ *  not exported by the script. [code: 10061]" — the build binds a Durable Object class the preview
+ *  does not have. An existing Worker Preview cannot gain a class it lacked when it was created (every
+ *  existing PR preview failed, a new one passed), so scripts/preview.ts deletes the preview and
+ *  creates it again. */
 export function isDurableObjectClassNotExportedError(wranglerOutput: string) {
   return /Cannot create binding for class .* not exported by the script|\[code: 10061\]/.test(
     wranglerOutput,
@@ -148,9 +148,8 @@ export type PreviewResourceKind = "kv" | "r2" | "d1" | "artifacts";
 /** The suffix of every resource a preview owns (`previewResourceName(preview, suffix)`), by kind:
  *  the KV namespaces and the R2 bucket wrangler provisions for the template's bindings — the binding
  *  lowercased, `_` → `-` (workers-sdk `getPreviewResourceName`: `ITX_KV` → `…-itx-kv`) — and the
- *  Artifacts namespace scripts/preview.ts creates. The `db` D1 is no longer created (the control plane
- *  is a Durable Object now, not D1); its suffix stays so the sweep still recognizes and deletes the
- *  D1s earlier previews left behind. What deletePreview deletes and the sweep recognizes. */
+ *  control plane's D1 (`db`) and the Artifacts namespace scripts/preview.ts creates. What
+ *  deletePreview deletes and the sweep recognizes. */
 export function previewResourceSuffixes(
   template = readWranglerBase(),
 ): Record<PreviewResourceKind, string[]> {
@@ -164,19 +163,22 @@ export function previewResourceSuffixes(
 }
 
 /** THE ACCOUNT'S OTHER RESOURCES that still read as `<parent>-<preview>-<suffix>`: every OS
- *  deployment's own (envs.ts — the parent's `os-parent-files` reads as preview `parent`'s R2) and
- *  local dev's (wrangler.base.jsonc — `os-dev-repos` reads as preview `dev`'s Artifacts namespace).
- *  No preview may take a name that would claim one (resolvePreviewName), and the sweep never
- *  deletes one (preview-sweep.ts rule 4). KV is bound by id, so only its titles count. */
+ *  deployment's own (envs.ts — the parent's `os-parent-files` reads as preview `parent`'s R2, its
+ *  `os-parent-db` as that preview's D1) and local dev's (wrangler.base.jsonc — `os-dev-repos` reads
+ *  as preview `dev`'s Artifacts namespace). No preview may take a name that would claim one
+ *  (resolvePreviewName), and the sweep never deletes one (preview-sweep.ts rule 4). KV is bound by
+ *  id, so only its titles count. */
 export function accountResourceNames(template = readWranglerBase()) {
   return new Set([
     ...Object.values(osEnvs).flatMap((env) => [
       `${env.resourceNamePrefix}-oauth`,
       `${env.resourceNamePrefix}-itx`,
       `${env.resourceNamePrefix}-files`,
+      `${env.resourceNamePrefix}-db`,
       env.artifactsNamespace,
     ]),
     ...template.r2_buckets.map((bucket: { bucket_name: string }) => bucket.bucket_name),
+    ...template.d1_databases.map((database: { database_name: string }) => database.database_name),
     ...template.artifacts.map((artifacts: { namespace: string }) => artifacts.namespace),
   ]);
 }
@@ -521,20 +523,24 @@ export function renderPullRequestSection(input: {
 const bindingOnly = (resources: { binding: string }[] | undefined) =>
   (resources || []).map(({ binding }) => ({ binding }));
 
-/** The config `wrangler preview` reads, as a pure function of Vite's built Worker config and
- *  the preview's name — the shape of cloudflare-os's `buildPreviewConfigs`, unit-tested
+/** The config `wrangler preview` reads, as a pure function of Vite's built Worker config, the
+ *  preview's name and its D1 — the shape of cloudflare-os's `buildPreviewConfigs`, unit-tested
  *  in preview.test.ts. The top level names the parent (which worker, which account, the entry, the
  *  assets) and declares the Durable Object classes as a legacy `migrations` entry: the pkg.pr.new
  *  wrangler build that provisions per-preview KV and R2 predates `exports`, and a preview
  *  deployment provisions its own namespaces from that entry. The `previews` block is the ONE
  *  preview's bindings — a preview inherits nothing from the top level, so every binding the worker
- *  reads is here: KV and R2 binding-only (auto-provisioned) and the
- *  Artifacts namespace by name. Its vars name the preview's own origin, projects as paths and its
+ *  reads is here: KV and R2 binding-only (auto-provisioned; the pinned wrangler provisions no D1),
+ *  the D1 by id (a Worker Preview shares rows with any preview naming the same database_id,
+ *  https://developers.cloudflare.com/workers/previews/resources/) and the Artifacts namespace by
+ *  name. Its vars name the preview's own origin, projects as paths and its
  *  Dash when deployed, and turn the one-click sign-in links on; the secrets (`APP_CONFIG`,
  *  `APP_CONFIG_SECRETS__KEY`) are the parent's Previews settings, inherited. */
 export function previewWranglerConfig(input: {
   template: Record<string, any>;
   previewName: string;
+  /** The preview's own D1 (`os-<preview>-db`), which scripts/preview.ts created and migrated. */
+  databaseId: string;
   dashOrigin?: string;
 }) {
   const { template: base, previewName } = input;
@@ -569,6 +575,11 @@ export function previewWranglerConfig(input: {
       version_metadata: base.version_metadata,
       kv_namespaces: bindingOnly(base.kv_namespaces),
       r2_buckets: bindingOnly(base.r2_buckets),
+      d1_databases: base.d1_databases.map(({ binding }: { binding: string }) => ({
+        binding,
+        database_name: previewResourceName(previewName, "db"),
+        database_id: input.databaseId,
+      })),
       artifacts: base.artifacts.map(({ binding }: { binding: string }) => ({
         binding,
         namespace: previewResourceName(previewName, "repos"),
@@ -594,7 +605,11 @@ export function previewWranglerConfig(input: {
 const PREVIEW_ADMIN_EMAIL = `admin@${TEST_LINK_EMAIL_DOMAIN}`;
 
 /** Write a preview config beside Vite's built config and return its path. */
-export function writePreviewWranglerConfig(input: { previewName: string; dashOrigin?: string }) {
+export function writePreviewWranglerConfig(input: {
+  previewName: string;
+  databaseId: string;
+  dashOrigin?: string;
+}) {
   const configUrl = new URL(`../${PREVIEW_CONFIG_NAME}`, import.meta.url);
   const built = JSON.parse(
     readFileSync(new URL("../dist/server/wrangler.json", import.meta.url), "utf8"),

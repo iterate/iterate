@@ -20,6 +20,7 @@
     "build/",
     ".wrangler/",
     "routeTree.gen.ts",
+    "**/.generated/",
     "apps/kit/firmware/components/avatar/src/face_avatar_catalog_generated.inc",
     ".github/workflows/",
     ".git/",

@@ -53,11 +53,9 @@ It prints three grouped counts for the window, and each one is the next thing to
 Its `readWindow` holds the exact filters. Copy them rather than rewriting them, so that your
 drill-down excludes the same expected noise.
 
-A project host whose control-plane read failed or took over 3 s logs
-`control-plane.platform-failure-stale-project` (served from the control plane's last-known copy in
-`OAUTH_KV`) or, when a failed read had no copy, `control-plane.platform-failure-unavailable`
-(answered 503). A copy the control plane could not write or admission could not read logs
-`control-plane.last-known-copy-unwritten` or `-unread`.
+A control-plane call that D1 failed on the platform's side logs `control-plane.platform-failure-d1`
+(`name` is the catalog method); a project host answers it 503. An `/api` read still unanswered after
+3 s logs `control-plane.platform-failure-read-deadline`.
 
 ## Drill down
 

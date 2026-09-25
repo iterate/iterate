@@ -18,8 +18,8 @@
 //      KV `itx-kv`, `oauth-kv`; R2 `files`; D1 `db`; Artifacts `repos`) and `<preview>` a name a
 //      preview can have (lowercase letters and digits in hyphen-separated words, at most 28
 //      characters). Nothing else ever is: not one the account has for something else
-//      (preview-config.ts accountResourceNames: the parent's own `os-parent-files`, local dev's
-//      `os-dev-repos`), not `IterateDataResources-…`, not another worker's whose name begins
+//      (preview-config.ts accountResourceNames: the parent's own `os-parent-files` and
+//      `os-parent-db`, local dev's `os-dev-repos`), not `IterateDataResources-…`, not another worker's whose name begins
 //      `<parent>-` (the former parent `os-preview`'s `os-preview-files`);
 //   5. no listed preview, stale or kept, owns that exact name. The caller lists the previews AFTER
 //      the resources: wrangler creates a preview before it provisions the preview's KV and R2, so a

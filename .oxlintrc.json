@@ -48,6 +48,7 @@
     "packages/ui/src/components/tooltip.tsx",
     "packages/ui/src/hooks/use-mobile.ts",
     "**/routeTree.gen.ts",
+    "**/.generated/",
     "**/*.d.ts",
     "**/node_modules/",
     "**/dist/",

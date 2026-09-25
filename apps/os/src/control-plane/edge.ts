@@ -1,31 +1,30 @@
 // src/control-plane/edge.ts — THE CONTROL PLANE AS THE EDGE HOLDS IT: every question the stateless
 // worker asks — which project is this slug, may this session reach it, who is this email — and every
-// command it relays, each ONE call on the `CONTROL_PLANE` singleton Durable Object (durable-object.ts),
-// reached by binding (`getByName("global")`). Memos per isolate: a project's id, slug and
-// organization never change, so a hit is kept for the isolate's life, and a miss only by a project
-// host's admission, five seconds (`getProjectKeepingMisses`); a person's access is kept five
-// seconds — dropped at once here for the person a command was made by or for — and a refusal is
-// never memoized: a project not in a memoized access set is re-read once before it is refused, so
-// a creation is reachable at once. A READ that fails on the platform's side throws
-// ControlPlaneUnavailableError, which a project host's admission models (last-known-project.ts,
-// worker.ts).
+// command it relays, each ONE call on the deployment's D1 (catalog.ts, one statement or one batch).
+// Memos per isolate: a project's id, slug and organization never change, so a hit is kept for the
+// isolate's life, and a miss only by a project host's admission, five seconds
+// (`getProjectKeepingMisses`); a person's access is kept five seconds — dropped at once here for the
+// person a command was made by or for — and a refusal is never memoized: a project not in a memoized
+// access set is re-read once before it is refused, so a creation is reachable at once. A memo keeps
+// answers, never a read in flight: a request awaiting another's read hangs when that request ends
+// first, its I/O cancelled with it (https://developers.cloudflare.com/workers/observability/errors/).
+// A call that fails on the platform's side throws ControlPlaneUnavailableError (`d1Fault`), which a
+// project host answers 503 (worker.ts).
 import { customHostnameCandidatesOf, type ProjectAddress } from "iterate/project-ingress";
+import { SqlfuError } from "sqlfu";
 import type { Caller } from "../caller.ts";
 import { projectHostOf, type AppConfig } from "../app-config.ts";
+import type { Env } from "../env.ts";
 import type { OrganizationRole } from "../organization/contract.ts";
-import { isDeployReset, isRetryableTransportError } from "../retryable-error.ts";
-import type { ControlPlaneDurableObject } from "./durable-object.ts";
-import type {
-  AccessibleRecord,
-  InvitationPreview,
-  InvitationRecord,
-  MemberRecord,
-  OrganizationRecord,
-  ProjectRecord,
-  UserRecord,
+import {
+  type AccessibleRecord,
+  ControlPlaneDatabase,
+  type OrganizationRecord,
+  type ProjectRecord,
+  type UserRecord,
 } from "./catalog.ts";
 import type { IdentityProvider } from "./contract.ts";
-import type { OAuthGrantListing } from "./oauth-grants.ts";
+import { OAuthGrantTable } from "./oauth-grants.ts";
 
 /** Membership-derived access, optionally capped to selected projects. The administrator alone
  *  reaches every project; explicit empty selections reach none. */
@@ -39,29 +38,60 @@ export const describeReach = (reach: Reach): string =>
       ? `the projects of the orgs ${reach.userId} belongs to`
       : `bound to ${reach.projectIds.map((projectId) => JSON.stringify(projectId)).join(", ") || "no project"}`;
 
-/** A control-plane READ that failed on the platform's side: cut at the transport ("Network
- *  connection lost.", retryable-error.ts) or workerd's opaque "internal error; reference = …", what
- *  the 2026-09-24 outage threw after 12–15 s. A deploy's reset of the Durable Object
- *  (`isDeployReset`) is our own expected cut, not the platform being down, and a refusal the catalog
- *  coded or any other throw is not one either: each surfaces as what it is. A project host's
- *  admission models it (last-known-project.ts, worker.ts). Its message names the method and the
- *  cause only (the wait is `waitedMs`), so the fault alarm groups one failure as one row. */
+/** A control-plane call that failed on the PLATFORM's side (`d1Fault`): D1 unreachable, reset,
+ *  overloaded or timing out, or workerd's opaque "internal error; reference = …". A refusal the
+ *  catalog coded, a constraint, SQL or any other throw is not one: each surfaces as what it is. A
+ *  project host answers it 503 (worker.ts). Its message names the method and the cause only (the
+ *  wait is `waitedMs`), so the fault alarm groups one failure as one row. */
 export class ControlPlaneUnavailableError extends Error {
   override readonly name = "ControlPlaneUnavailableError";
-  /** the Durable Object method read (`project`, `accessibleTo`, …) */
+  /** the catalog method called (`project`, `accessibleTo`, …) */
   readonly method: string;
   readonly waitedMs: number;
-  /** The cause's transport flag, kept (oauth-store.ts asks a cut grant read again once), or true
-   *  for a read a holder's deadline gave up on (`readDeadlineMs`): it may answer when asked again.
-   *  An own property, so it reaches an /api client beside the message (iterate/lib's error channel). */
+  /** Whether the same call may be asked again: a read or an idempotent write that D1 says to send
+   *  again (oauth-store.ts asks a grant call again once), or a read a holder's deadline gave up on
+   *  (`readDeadlineMs`). A write whose answer was lost may have landed, so any other write is not.
+   *  An own property, so it reaches an /api client beside the message (iterate/lib's error
+   *  channel). */
   readonly retryable: boolean;
-  constructor(input: { method: string; waitedMs: number; cause: Error; retryable?: boolean }) {
-    const { method, waitedMs, cause, retryable = isRetryableTransportError(cause) } = input;
-    super(`The control plane failed ${method}: ${cause.message}`, { cause });
-    this.method = method;
-    this.waitedMs = waitedMs;
-    this.retryable = retryable;
+  constructor(input: { method: string; waitedMs: number; cause: Error; retryable: boolean }) {
+    super(`The control plane failed ${input.method}: ${input.cause.message}`, {
+      cause: input.cause,
+    });
+    this.method = input.method;
+    this.waitedMs = input.waitedMs;
+    this.retryable = input.retryable;
   }
+}
+
+/** Whether D1 failed on the PLATFORM's side, and whether Cloudflare says to send the query again
+ *  (https://developers.cloudflare.com/d1/observability/debug-d1/#error-list); undefined for anything
+ *  that is this call's own: SQL, a constraint, a type, a missing table. Read from the messages, as
+ *  Cloudflare's own retry example does
+ *  (https://developers.cloudflare.com/d1/best-practices/retry-queries/): the error's, and its
+ *  causes' (sqlfu wraps a D1 error, whose cause is the binding's). Overloaded, timed out, or reset
+ *  for its memory or CPU is not sent again: the database is failing every query queued on it, and
+ *  a query it gave up on may still be queued. */
+export function d1Fault(error: unknown): { retryable: boolean } | undefined {
+  const messages: string[] = [];
+  for (let cause = error, depth = 0; cause instanceof Error && depth < 3; depth++) {
+    messages.push(cause.message);
+    cause = cause.cause;
+  }
+  const text = messages.join("\n");
+  if (
+    /D1 DB is overloaded|storage operation exceeded timeout|exceeded its (memory|CPU time) limit and was reset|internal error; reference =/.test(
+      text,
+    )
+  )
+    return { retryable: false };
+  if (
+    /Network connection lost|storage caused object to be reset|reset because its code was updated|Replica disconnected|transient issue on remote node|client disconnected/.test(
+      text,
+    )
+  )
+    return { retryable: true };
+  return undefined;
 }
 
 const projectMemo = new Map<string, ProjectRecord>();
@@ -81,65 +111,41 @@ const memoize = (project: ProjectRecord) => {
 /** A host's address under projects' own hostnames, hit or miss, kept thirty seconds: a removed
  *  hostname stops routing within that (Cloudflare stops sending it sooner, the custom hostname
  *  deleted first). */
-const hostnameMemo = new Map<string, { at: number; value: Promise<ProjectAddress | null> }>();
-const accessMemo = new Map<string, { at: number; value: Promise<AccessibleRecord> }>();
+const hostnameMemo = new Map<string, { at: number; address: ProjectAddress | null }>();
+const accessMemo = new Map<string, { at: number; record: AccessibleRecord }>();
 /** A project's primary hostname by project id, hit or miss, kept thirty seconds (`primaryHostnameOf`). */
 const primaryHostnameMemo = new Map<string, { at: number; hostname: string | null }>();
 
 /** Who asked, as the control plane records it: the caller's principal and its connection. */
 const callerOf = (caller: Caller) => ({ principal: caller.principal, grant: caller.grant });
 
-/** The control plane as the edge holds it — ONE per request (worker.ts, rpc.ts), over the
- *  `CONTROL_PLANE` binding.
+/** The control plane as the edge holds it — ONE per request (worker.ts), or per socket (rpc.ts),
+ *  over the `DB` binding.
  *
  *  `readDeadlineMs`: how long this holder waits for a read before it throws
  *  ControlPlaneUnavailableError (retryable). `/api` sets one (rpc.ts): its caller is a client that
- *  can ask again, where a read that hangs would hold the call until the transport gives up. A
- *  project host's admission sets none: a copy stands in for its slow reads, and with no copy a
- *  slow answer is still the answer (last-known-project.ts). */
+ *  can ask again, where a read that hangs would hold the call until D1's own 30 s bound. A project
+ *  host sets none: a slow answer is still the answer. */
 export class ControlPlane {
-  readonly #namespace: DurableObjectNamespace<ControlPlaneDurableObject>;
-  #stub: DurableObjectStub<ControlPlaneDurableObject>;
+  readonly #db: ControlPlaneDatabase;
+  readonly #grants: OAuthGrantTable;
   readonly #readDeadlineMs: number | undefined;
-  constructor(
-    namespace: DurableObjectNamespace<ControlPlaneDurableObject>,
-    { readDeadlineMs }: { readDeadlineMs?: number } = {},
-  ) {
-    this.#namespace = namespace;
-    this.#stub = namespace.getByName("global");
+  constructor(env: Pick<Env, "DB">, { readDeadlineMs }: { readDeadlineMs?: number } = {}) {
+    this.#db = new ControlPlaneDatabase(env.DB);
+    this.#grants = new OAuthGrantTable(env.DB);
     this.#readDeadlineMs = readDeadlineMs;
   }
 
-  /** ONE method of the registry DO, awaited here so a pipelined RPC promise is never held (a copy of
-   *  a refusal would go unhandled); the answer is the plain data the method returns (catalog.ts),
-   *  which the wire copies. Typed loosely here; the method name and args are pinned by the callers'
-   *  own generics.
-   *
-   *  A BROKEN STUB is replaced (retryable-error.ts): a deploy resetting this Durable Object for its
-   *  new code cuts the call at the transport, and the stub that threw fails every later call the
-   *  same way. A holder that outlives one call (rpc.ts: one per socket, for its whole life) would
-   *  otherwise stay broken until it closed; the call that failed still throws, and the next one
-   *  reaches the new object. */
-  async #call<T>(method: string, ...args: unknown[]): Promise<T> {
-    const stub = this.#stub as unknown as Record<string, (...a: unknown[]) => Promise<unknown>>;
-    try {
-      return (await stub[method]!(...args)) as T;
-    } catch (error) {
-      if (isRetryableTransportError(error)) this.#stub = this.#namespace.getByName("global");
-      throw error;
-    }
-  }
-
-  /** ONE read (`#call`): failed on the platform's side, or unanswered at this holder's
-   *  `readDeadlineMs`, it throws ControlPlaneUnavailableError. */
-  #read<T>(method: string, ...args: unknown[]): Promise<T> {
-    return this.#withinDeadline(method, this.#request<T>(method, ...args));
+  /** ONE read: failed on the platform's side, or unanswered at this holder's `readDeadlineMs`, it
+   *  throws ControlPlaneUnavailableError. */
+  #read<T>(method: string, read: () => Promise<T>): Promise<T> {
+    return this.#withinDeadline(method, this.#call(method, read, true));
   }
 
   /** `read`, or ControlPlaneUnavailableError (retryable) once this holder's `readDeadlineMs` has
    *  passed without its answer, logged as `control-plane.platform-failure-read-deadline`
-   *  (scripts/ci/prd-fault-alarm.ts pages on a burst). The read itself runs on: a memo that holds
-   *  it (`accessibleTo`) still gets its answer, for holders with no deadline as well. */
+   *  (scripts/ci/prd-fault-alarm.ts pages on a burst). The read itself runs on, and a memo it
+   *  feeds (`accessibleTo`) still gets its answer. */
   async #withinDeadline<T>(method: string, read: Promise<T>): Promise<T> {
     const deadlineMs = this.#readDeadlineMs;
     if (!deadlineMs) return read;
@@ -170,24 +176,37 @@ export class ControlPlane {
     }
   }
 
-  /** The read itself, with no deadline: what an isolate memo keeps, since holders with and without
-   *  a deadline share it. */
-  async #request<T>(method: string, ...args: unknown[]): Promise<T> {
+  /** ONE call on the database, with no deadline. A platform fault (`d1Fault`) becomes
+   *  ControlPlaneUnavailableError, retryable when D1 says so and the call is `idempotent` (every
+   *  read, and the grant writes), logged once here as `control-plane.platform-failure-d1`
+   *  (scripts/ci/prd-fault-alarm.ts pages on a burst). Any other sqlfu error is thrown again with
+   *  its message only: its enumerable `query` holds the SQL and its bound values, which the /api
+   *  error channel would hand the client (iterate/lib's errors), and a cause passed to `Error` is
+   *  not enumerable. */
+  async #call<T>(method: string, call: () => Promise<T>, idempotent = false): Promise<T> {
     const started = Date.now();
     try {
-      return await this.#call<T>(method, ...args);
+      return await call();
     } catch (error) {
-      if (
-        error instanceof Error &&
-        !isDeployReset(error) &&
-        (isRetryableTransportError(error) ||
-          error.message.startsWith("internal error; reference ="))
-      )
-        throw new ControlPlaneUnavailableError({
+      const fault = d1Fault(error);
+      if (fault && error instanceof Error) {
+        const unavailable = new ControlPlaneUnavailableError({
           method,
           waitedMs: Date.now() - started,
           cause: error,
+          retryable: idempotent && fault.retryable,
         });
+        console.warn({
+          event: "control-plane.platform-failure-d1",
+          name: method,
+          waitedMs: unavailable.waitedMs,
+          retryable: unavailable.retryable,
+          message: unavailable.message,
+        });
+        throw unavailable;
+      }
+      if (error instanceof SqlfuError)
+        throw new Error(`The control plane failed ${method}: ${error.message}`, { cause: error });
       throw error;
     }
   }
@@ -197,21 +216,18 @@ export class ControlPlane {
   async getProject(ref: string): Promise<ProjectRecord | null> {
     const memoized = projectMemo.get(ref);
     if (memoized) return memoized;
-    const project = await this.#read<ProjectRecord | null>("project", ref);
+    const project = await this.#read("project", () => this.#db.project(ref));
     if (project) memoize(project);
     return project;
   }
 
-  /** `getProject` for a project host's admission (last-known-project.ts), whose ref is any label
-   *  under the wildcard, anyone's to ask for: a scanner sends a few hundred paths to one unknown
-   *  label within seconds. So here a MISS is kept too, five seconds per isolate: a burst reads once,
-   *  plus the reads already in flight when the first answers. A project created meanwhile is served
-   *  on the isolate that created it at once (`createProject` memoizes its row, even while a read
-   *  that missed it is in flight) and on any other within those five seconds. Every other caller
-   *  reads a miss again: its answer is a refusal, which a creation must lift at once. The answer is
-   *  kept, never the read in flight: a request awaiting another's read hangs when that request
-   *  ends first, its I/O cancelled with it
-   *  (https://developers.cloudflare.com/workers/observability/errors/). */
+  /** `getProject` for a project host's admission (worker.ts), whose ref is any label under the
+   *  wildcard, anyone's to ask for: a scanner sends a few hundred paths to one unknown label within
+   *  seconds. So here a MISS is kept too, five seconds per isolate: a burst reads once, plus the
+   *  reads already in flight when the first answers. A project created meanwhile is served on the
+   *  isolate that created it at once (`createProject` memoizes its row, even while a read that
+   *  missed it is in flight) and on any other within those five seconds. Every other caller reads a
+   *  miss again: its answer is a refusal, which a creation must lift at once. */
   async getProjectKeepingMisses(ref: string): Promise<ProjectRecord | null> {
     const now = Date.now();
     for (const [missed, at] of missMemo) {
@@ -231,28 +247,17 @@ export class ControlPlane {
   /** The project `url` is a host of — THE INGRESS ROUTING TABLE: the static rules first (app-config.ts
    *  `projectHostOf`: the ingress routing and the project wildcard), then a hostname a project added
    *  itself (project/custom-hostnames.ts): its apex, or one label under it a routing slug
-   *  (iterate/project-ingress `customHostnameCandidatesOf`), in ONE catalog read.
-   *  A deployment that serves no custom hostnames, the platform's own origins and anything under its
-   *  reserved zones never reach the table. What consent.ts binds a project's CIMD client to; a
-   *  request's own admission reads the same two halves through last-known-project.ts
-   *  `admitProjectHost`, which falls back to the control plane's KV copies when a read fails. */
+   *  (iterate/project-ingress `customHostnameCandidatesOf`), in ONE catalog read, memoized thirty
+   *  seconds per isolate, hit or miss. A deployment that serves no custom hostnames, the platform's
+   *  own origins and anything under its reserved zones never reach the table. A project host's
+   *  admission (worker.ts) and consent.ts, which binds a project's CIMD client to it, read it. */
   async projectHostOf(
     config: AppConfig,
     url: URL,
     platformOrigin: string,
   ): Promise<ProjectAddress | null> {
-    return (
-      projectHostOf(config, url, platformOrigin) ?? this.customHostOf(config, url, platformOrigin)
-    );
-  }
-
-  /** The table half of `projectHostOf`: the project that added `url`'s hostname itself, or null —
-   *  one catalog read, memoized thirty seconds per isolate, hit or miss. Also last-known-project.ts's. */
-  async customHostOf(
-    config: AppConfig,
-    url: URL,
-    platformOrigin: string,
-  ): Promise<ProjectAddress | null> {
+    const address = projectHostOf(config, url, platformOrigin);
+    if (address) return address;
     if (!config.customHostnames) return null;
     if (url.origin === platformOrigin || url.origin === config.urls.mcp) return null;
     const hostname = url.hostname.toLowerCase().replace(/\.$/, "");
@@ -263,35 +268,32 @@ export class ControlPlane {
     )
       return null;
     const memoized = hostnameMemo.get(hostname);
-    if (memoized && Date.now() - memoized.at < 30_000)
-      return this.#withinDeadline("projectByHostname", memoized.value);
+    if (memoized && Date.now() - memoized.at < 30_000) return memoized.address;
     const candidates = customHostnameCandidatesOf(hostname);
-    const value = this.#request<{ hostname: string; project: ProjectRecord } | null>(
-      "projectByHostname",
-      candidates.map((candidate) => candidate.hostname),
-    ).then((found) => {
-      if (!found) return null;
-      // the row came with it: the admission's next read (getProject) is a memo hit
-      memoize(found.project);
-      return {
-        routingSlug: candidates.find((candidate) => candidate.hostname === found.hostname)!
-          .routingSlug,
-        project: found.project.id,
-        basePath: "",
-      };
-    });
-    value.catch(() => hostnameMemo.delete(hostname));
-    hostnameMemo.set(hostname, { at: Date.now(), value });
-    return this.#withinDeadline("projectByHostname", value);
+    const found = await this.#read("projectByHostname", () =>
+      this.#db.projectByHostname(candidates.map((candidate) => candidate.hostname)),
+    );
+    // the row came with it: the admission's next read (getProject) is a memo hit
+    if (found) memoize(found.project);
+    const custom = found && {
+      routingSlug: candidates.find((candidate) => candidate.hostname === found.hostname)!
+        .routingSlug,
+      project: found.project.id,
+      basePath: "",
+    };
+    hostnameMemo.set(hostname, { at: Date.now(), address: custom });
+    return custom;
   }
 
   /** A project's primary hostname (project/contract.ts `primaryHostname`), or null — memoized
    *  thirty seconds per isolate, hit or miss, so a change reaches the edge's redirect and
-   *  `itx.url` within that. The answer is kept, never the read in flight (`getProjectKeepingMisses`). */
+   *  `itx.url` within that. */
   async primaryHostnameOf(projectId: string): Promise<string | null> {
     const memoized = primaryHostnameMemo.get(projectId);
     if (memoized && Date.now() - memoized.at < 30_000) return memoized.hostname;
-    const hostname = await this.#read<string | null>("primaryHostnameOf", projectId);
+    const hostname = await this.#read("primaryHostnameOf", () =>
+      this.#db.primaryHostnameOf(projectId),
+    );
     primaryHostnameMemo.set(projectId, { at: Date.now(), hostname });
     return hostname;
   }
@@ -305,14 +307,17 @@ export class ControlPlane {
   }
 
   /** What a person can access — memoized; `fresh` bypasses the memo (the re-read before a refusal). */
-  accessibleTo(userId: string, fresh = false): Promise<AccessibleRecord> {
+  async accessibleTo(userId: string, fresh = false): Promise<AccessibleRecord> {
     const memoized = accessMemo.get(userId);
-    if (!fresh && memoized && Date.now() - memoized.at < 5_000)
-      return this.#withinDeadline("accessibleTo", memoized.value);
-    const value = this.#request<AccessibleRecord>("accessibleTo", userId);
-    value.catch(() => accessMemo.delete(userId)); // a failed read is nobody's answer — its caller sees it
-    accessMemo.set(userId, { at: Date.now(), value });
-    return this.#withinDeadline("accessibleTo", value);
+    if (!fresh && memoized && Date.now() - memoized.at < 5_000) return memoized.record;
+    const read = this.#call("accessibleTo", () => this.#db.accessibleTo(userId), true);
+    return this.#withinDeadline(
+      "accessibleTo",
+      read.then((record) => {
+        accessMemo.set(userId, { at: Date.now(), record });
+        return record;
+      }),
+    );
   }
 
   /** Whether `reach` reaches `ref` — the admission behind `projects.get` (session.ts), a `/mcp`
@@ -361,7 +366,7 @@ export class ControlPlane {
     reach: Reach,
     expected: readonly string[] = [],
   ): Promise<ProjectRecord[]> {
-    if (reach === "every") return this.#read<ProjectRecord[]>("projects");
+    if (reach === "every") return this.#read("projects", () => this.#db.projects());
     if ("userId" in reach) {
       const { userId, projectIds } = reach;
       const named = [...expected, ...(projectIds || [])];
@@ -389,29 +394,29 @@ export class ControlPlane {
     );
   }
 
-  listOrganizations(): Promise<OrganizationRecord[]> {
-    return this.#read("organizations");
+  listOrganizations() {
+    return this.#read("organizations", () => this.#db.organizations());
   }
-  getOrganization(organizationId: string): Promise<OrganizationRecord | null> {
-    return this.#read("organization", organizationId);
+  getOrganization(organizationId: string) {
+    return this.#read("organization", () => this.#db.organization(organizationId));
   }
-  listMembers(organizationId: string): Promise<MemberRecord[]> {
-    return this.#read("members", organizationId);
+  listMembers(organizationId: string) {
+    return this.#read("members", () => this.#db.members(organizationId));
   }
   /** What an invitation link opens, for `userId` (null: nobody signed in) — by the token's hash. */
-  getInvitation(tokenHash: string, userId: string | null): Promise<InvitationPreview | null> {
-    return this.#read("invitation", tokenHash, userId);
+  getInvitation(tokenHash: string, userId: string | null) {
+    return this.#read("invitation", () => this.#db.invitation(tokenHash, userId, Date.now()));
   }
   /** A user by id or by email. */
-  getUser(ref: string): Promise<UserRecord | null> {
-    return this.#read("user", ref);
+  getUser(ref: string) {
+    return this.#read("user", () => this.#db.user(ref));
   }
   /** The user a provider's subject names. */
-  identity(provider: IdentityProvider, subject: string): Promise<UserRecord | null> {
-    return this.#read("identity", provider, subject);
+  identity(provider: IdentityProvider, subject: string) {
+    return this.#read("identity", () => this.#db.identity(provider, subject));
   }
-  listUsers(): Promise<UserRecord[]> {
-    return this.#read("users");
+  listUsers() {
+    return this.#read("users", () => this.#db.users());
   }
 
   // ── the commands: each one call, under the caller ──
@@ -419,7 +424,7 @@ export class ControlPlane {
   /** Find-or-create the person for an email. No caller: sign-in (`ensureUser`) and the operator's
    *  `session.users` (session.ts refuses everyone else) are its only callers. */
   createUser(input: { email: string }): Promise<UserRecord> {
-    return this.#call("createUser", input);
+    return this.#call("createUser", () => this.#db.createUser(input));
   }
   /** What sign-in calls (password-and-code-sign-in.ts, issuer-session.ts): the catalog first. */
   async ensureUser(email: string): Promise<UserRecord> {
@@ -428,17 +433,15 @@ export class ControlPlane {
   /** A verified sign-in's identity (identity.ts): link once by email, then by subject. The
    *  system's own write — no caller. */
   linkIdentity(provider: IdentityProvider, subject: string, email: string): Promise<UserRecord> {
-    return this.#call("linkIdentity", { provider, subject, email });
+    return this.#call("linkIdentity", () => this.#db.linkIdentity({ provider, subject, email }));
   }
 
   async createOrganization(
     caller: Caller,
     input: { name: string; ownerId?: string },
   ): Promise<OrganizationRecord> {
-    const organization = await this.#call<OrganizationRecord>(
-      "createOrganization",
-      callerOf(caller),
-      input,
+    const organization = await this.#call("createOrganization", () =>
+      this.#db.createOrganization(callerOf(caller), input),
     );
     this.#forget(caller.principal?.actor);
     if (input.ownerId) accessMemo.clear(); // the operator's: named by id or email
@@ -449,17 +452,16 @@ export class ControlPlane {
     organizationId: string,
     name: string,
   ): Promise<OrganizationRecord> {
-    const organization = await this.#call<OrganizationRecord>(
-      "renameOrganization",
-      callerOf(caller),
-      organizationId,
-      name,
+    const organization = await this.#call("renameOrganization", () =>
+      this.#db.renameOrganization(callerOf(caller), organizationId, name),
     );
     accessMemo.clear(); // the name rides every member's access record, not just the caller's
     return organization;
   }
   async deleteOrganization(caller: Caller, organizationId: string): Promise<void> {
-    await this.#call("deleteOrganization", callerOf(caller), organizationId);
+    await this.#call("deleteOrganization", () =>
+      this.#db.deleteOrganization(callerOf(caller), organizationId),
+    );
     accessMemo.clear(); // every member's access changed
   }
   /** Answers the id the membership holds (the caller may have named the person by email). */
@@ -468,7 +470,9 @@ export class ControlPlane {
     organizationId: string,
     input: { userId: string; role: OrganizationRole },
   ): Promise<string> {
-    const userId = await this.#call<string>("addMember", callerOf(caller), organizationId, input);
+    const userId = await this.#call("addMember", () =>
+      this.#db.addMember(callerOf(caller), organizationId, input),
+    );
     this.#forget(userId);
     return userId;
   }
@@ -478,11 +482,8 @@ export class ControlPlane {
     organizationId: string,
     input: { userId: string },
   ): Promise<string> {
-    const userId = await this.#call<string>(
-      "removeMember",
-      callerOf(caller),
-      organizationId,
-      input,
+    const userId = await this.#call("removeMember", () =>
+      this.#db.removeMember(callerOf(caller), organizationId, input),
     );
     this.#forget(userId);
     return userId;
@@ -491,24 +492,21 @@ export class ControlPlane {
     caller: Caller,
     organizationId: string,
     input: { tokenHash: string; role: OrganizationRole; emailHint?: string; expiresAt: number },
-  ): Promise<InvitationRecord> {
-    return this.#call("createInvitation", callerOf(caller), organizationId, input);
+  ) {
+    return this.#call("createInvitation", () =>
+      this.#db.createInvitation(callerOf(caller), organizationId, input, Date.now()),
+    );
   }
-  revokeInvitation(
-    caller: Caller,
-    organizationId: string,
-    invitationId: string,
-  ): Promise<InvitationRecord> {
-    return this.#call("revokeInvitation", callerOf(caller), organizationId, invitationId);
+  revokeInvitation(caller: Caller, organizationId: string, invitationId: string) {
+    return this.#call("revokeInvitation", () =>
+      this.#db.revokeInvitation(callerOf(caller), organizationId, invitationId, Date.now()),
+    );
   }
   /** The caller joins the organization the link opens; their access is re-read at once. */
   async acceptInvitation(caller: Caller, tokenHash: string) {
-    const accepted = await this.#call<{
-      invitation: InvitationRecord;
-      userId: string;
-      role: OrganizationRole;
-      accepted: boolean;
-    }>("acceptInvitation", callerOf(caller), tokenHash);
+    const accepted = await this.#call("acceptInvitation", () =>
+      this.#db.acceptInvitation(callerOf(caller), tokenHash, Date.now()),
+    );
     this.#forget(accepted.userId);
     return accepted;
   }
@@ -518,33 +516,55 @@ export class ControlPlane {
     caller: Caller,
     input: { project: string; organizationId?: string; restoreProjectId?: string },
   ): Promise<ProjectRecord> {
-    const project = await this.#call<ProjectRecord>("createProject", callerOf(caller), input);
+    const project = await this.#call("createProject", () =>
+      this.#db.createProject(callerOf(caller), input),
+    );
     memoize(project);
     this.#forget(caller.principal?.actor);
     return project;
   }
 
+  // ── a project's own hostnames, which project/processor.ts claims and releases ──
+
+  claimHostname(projectId: string, hostname: string): Promise<void> {
+    return this.#call("claimHostname", () => this.#db.claimHostname(projectId, hostname));
+  }
+  /** Another project's claim, or none, is left alone. */
+  releaseHostname(projectId: string, hostname: string): Promise<void> {
+    return this.#call("releaseHostname", () => this.#db.releaseHostname(projectId, hostname));
+  }
+  /** Set a project's primary hostname (project/processor.ts publishes it), or clear it with null:
+   *  the edge's redirect and `itx.url` read it within `primaryHostnameOf`'s thirty seconds. */
+  setPrimaryHostname(projectId: string, hostname: string | null): Promise<void> {
+    return this.#call("setPrimaryHostname", () => this.#db.setPrimaryHostname(projectId, hostname));
+  }
+
   // ── the OAuth provider's grants (oauth-grants.ts), for its store (oauth-store.ts) ──
 
   /** A grant's JSON as last written, or null. */
-  oauthGrant(key: string): Promise<string | null> {
-    return this.#read("oauthGrant", key);
+  oauthGrant(key: string) {
+    return this.#read("oauthGrant", () => this.#grants.get(key, nowSeconds()));
   }
-  listOAuthGrants(
-    prefix: string,
-    options: { cursor?: string; limit?: number },
-  ): Promise<OAuthGrantListing> {
-    return this.#read("listOAuthGrants", prefix, options);
+  listOAuthGrants(prefix: string, options: { cursor?: string; limit?: number }) {
+    return this.#read("listOAuthGrants", () => this.#grants.list(prefix, options, nowSeconds()));
   }
-  /** `expiresAt`: epoch seconds, or null for a grant that never expires. */
-  putOAuthGrant(key: string, value: string, expiresAt: number | null): Promise<void> {
-    return this.#call("putOAuthGrant", key, value, expiresAt);
+  /** `expiresAt`: epoch seconds, or null for a grant that never expires. A whole-row write, so
+   *  asking it again is safe (`idempotent`). */
+  putOAuthGrant(key: string, value: string, expiresAt: number | null) {
+    return this.#call(
+      "putOAuthGrant",
+      () => this.#grants.put(key, value, expiresAt, nowSeconds()),
+      true,
+    );
   }
-  deleteOAuthGrant(key: string): Promise<void> {
-    return this.#call("deleteOAuthGrant", key);
+  deleteOAuthGrant(key: string) {
+    return this.#call("deleteOAuthGrant", () => this.#grants.delete(key), true);
   }
 
   #forget(...userIds: (string | undefined)[]): void {
     for (const userId of userIds) if (userId) accessMemo.delete(userId);
   }
 }
+
+/** KV's clock: epoch seconds. */
+const nowSeconds = () => Math.floor(Date.now() / 1000);

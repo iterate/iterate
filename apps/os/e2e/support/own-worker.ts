@@ -35,6 +35,7 @@ export async function startOwnWorker(
     root: PACKAGE_DIR,
     workers: [{ config: e2eWorkerConfig(url.origin, opts.ingressRouting) }],
   });
+  await server.getWorker().applyD1Migrations("DB");
   const sessions: unknown[] = [];
   const admin = (as?: { email: string }) => {
     const s = newWebSocketRpcSession(`ws://${url.host}/api`);

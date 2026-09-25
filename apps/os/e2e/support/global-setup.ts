@@ -3,7 +3,7 @@
 // builds through the production build hook, runs in local workerd with local KV / Durable
 // Objects / the Worker Loader, and tests speak to it EXACTLY like production clients — capnweb over
 // WebSocket at /api. The control plane is in-process (worker.ts's catch-all), so nothing else boots;
-// its database is the `CONTROL_PLANE` singleton DO's own SQLite (src/control-plane/).
+// its database is the worker's local D1, migrated here once it is up (src/control-plane/db/).
 //
 // The URL is handed to tests via vitest `provide`/`inject` (see support/setup.ts + support/client.ts).
 
@@ -68,6 +68,7 @@ export default async function setup(project: TestProject): Promise<() => Promise
   });
   const { url } = await server.listen();
   await server.update({ root: PACKAGE_DIR, workers: [{ config: e2eWorkerConfig(url.origin) }] });
+  await server.getWorker().applyD1Migrations("DB");
   project.provide("workerBaseUrl", url.href);
   project.provide("adminApiSecret", E2E_ADMIN_API_SECRET);
   project.provide("loginPassword", E2E_LOGIN_PASSWORD);

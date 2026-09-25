@@ -132,6 +132,10 @@ async function serve(argv: string[]) {
   // it moved aside (`holder`) is gone by now, and its taker stops here, before any workerd
   if (lockPid() !== process.pid)
     throw new Error(`another dev server took this worktree's lock (pid ${lockPid()})`);
+  // the control plane's local D1 (wrangler.base.jsonc `DB`), migrated before workerd opens it: the
+  // lock is held, so nothing else writes it (`pnpm db:migrate`, wrangler's own applier)
+  const migrated = spawnSync("pnpm", ["db:migrate"], { cwd: root, stdio: "inherit" });
+  if (migrated.status !== 0) throw new Error(`pnpm db:migrate exited with ${migrated.status}`);
   const vite = spawn("pnpm", ["exec", "vite", "dev", ...viteArgs], {
     cwd: root,
     env: { ...process.env, CLOUDFLARE_ENV: "", OS_DEV_PORT: `${port}` },

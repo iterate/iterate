@@ -97,7 +97,7 @@ export interface OsEnv {
    *  shared store, and another Worker would read every project's repos. */
   artifactsNamespace: string;
   /** The prefix of the deployment's named Cloudflare resources (KV `<prefix>-oauth|-itx`, R2
-   *  `<prefix>-files`). Today it is the worker name; it is its own field so a worker can be renamed
+   *  `<prefix>-files`, the control plane's D1 `<prefix>-db`). Today it is the worker name; it is its own field so a worker can be renamed
    *  without renaming the data it binds. `ensure-resources`, erase-data and the wrangler generator
    *  derive the names from this, never from the worker name. */
   resourceNamePrefix: string;
@@ -112,7 +112,7 @@ export interface OsEnv {
    *  is the zone's Delegated DCV id (`GET /zones/:id/dcv_delegation/uuid`), which the owner's
    *  `_acme-challenge` CNAME names. */
   cloudflareForSaas?: { zone: string; zoneId: string; dcvDelegationUuid: string };
-  resources: { oauthKvId: string; itxKvId: string };
+  resources: { oauthKvId: string; itxKvId: string; dbId: string };
 }
 export const osEnvs: Record<string, OsEnv> = {
   // THE PARENT OF EVERY PER-PR PREVIEW (apps/os/scripts/preview.ts, the cloudflare-os recipe): a
@@ -137,6 +137,7 @@ export const osEnvs: Record<string, OsEnv> = {
     resources: {
       oauthKvId: "cc1ea2c05a104790aa2716a87f304b3a",
       itxKvId: "a5b73c18d78f4cafaa4fa5e67d7daadc",
+      dbId: "0189bd9e-baa4-48f5-b39c-f57b8829d864",
     },
   },
   prd: {
@@ -183,6 +184,7 @@ export const osEnvs: Record<string, OsEnv> = {
     resources: {
       oauthKvId: "5d23b869bff94a32a8f8049edc7de122",
       itxKvId: "c8432f0a49c94ae3984040c4f503b8c2",
+      dbId: "e97228d0-0a93-47c2-8075-8d6ede6e95df",
     },
   },
 };

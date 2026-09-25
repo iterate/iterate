@@ -150,7 +150,7 @@ export async function testLinkResponse(request: Request, env: Env) {
     });
   const user = await watchSignInStep(
     "ensure-user",
-    new ControlPlane(env.CONTROL_PLANE).ensureUser(decision.email),
+    new ControlPlane(env).ensureUser(decision.email),
   );
   const session = await startIssuerSession(env, request, user, "/login", {
     testLink: { clients: decision.clients, project: decision.project },

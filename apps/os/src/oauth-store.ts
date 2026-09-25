@@ -1,6 +1,6 @@
 // src/oauth-store.ts — THE PROVIDER'S STORE: `OAUTH_KV` as @cloudflare/workers-oauth-provider sees
 // it. The provider has one storage interface, `env.OAUTH_KV`, and oauth.ts hands it this object there. A
-// grant (`grant:<userId>:<grantId>`) lives in the control plane (control-plane/oauth-grants.ts),
+// grant (`grant:<userId>:<grantId>`) lives in the control plane's D1 (control-plane/oauth-grants.ts),
 // because the provider rewrites it on the code exchange and on every refresh and the next refresh
 // must read that write, which KV does not promise across locations. Every other key stays in KV.
 //
@@ -27,7 +27,7 @@
 //   • It calls these four members only, in the shapes below.
 import { ControlPlane } from "./control-plane/edge.ts";
 import type { Env } from "./env.ts";
-import { isDeployReset, isRetryableTransportError } from "./retryable-error.ts";
+import { isRetryableTransportError } from "./retryable-error.ts";
 import { watchSlowStep } from "./sign-in-watch.ts";
 
 const GRANT_KEY_PREFIX = "grant:";
@@ -35,18 +35,18 @@ const GRANT_KEY_PREFIX = "grant:";
 /** The provider's calls on its store: `get` as text or JSON, `put` of a string with an absolute
  *  (`expiration`) or relative (`expirationTtl`) expiry, `delete`, and `list` by prefix with a
  *  cursor. */
-export function providerStore(env: Pick<Env, "CONTROL_PLANE" | "OAUTH_KV">): KVNamespace {
+export function providerStore(env: Pick<Env, "DB" | "OAUTH_KV">): KVNamespace {
   const kv = env.OAUTH_KV;
-  const controlPlane = new ControlPlane(env.CONTROL_PLANE);
+  const controlPlane = new ControlPlane(env);
   /** A call on either store, still pending after five seconds, logs `oauth.step-slow` naming it
    *  while it waits (sign-in-watch.ts): a code exchange reads and rewrites its grant in the control
    *  plane and writes its access token to KV. A KV call names its key's kind, never the key. */
   const watched = <T>(step: string, work: PromiseLike<T>, key?: string | null) =>
     watchSlowStep({ event: "oauth.step-slow", step, keyKind: key?.split(":", 1)[0] }, work);
-  /** Asked again ONCE when the call was cut at the transport, and edge.ts replaces the stub the cut
-   *  call threw from. Each operation is idempotent (a read, or a whole-row write or delete); a second
-   *  failure throws. A deploy's reset of the control plane's Durable Object is expected; any other
-   *  cut is a platform failure, which the prd fault alarm counts. */
+  /** Asked again ONCE when D1 failed on the platform's side and says to send it again (edge.ts
+   *  `ControlPlaneUnavailableError`, `retryable`). Each operation is idempotent (a read, or a
+   *  whole-row write or delete); a second failure throws. The retry is a platform failure, which the
+   *  prd fault alarm counts. */
   const ask = async <T>(operation: string, call: () => Promise<T>): Promise<T> => {
     const step = `grant-store-${operation}`;
     try {
@@ -54,9 +54,7 @@ export function providerStore(env: Pick<Env, "CONTROL_PLANE" | "OAUTH_KV">): KVN
     } catch (error) {
       if (!isRetryableTransportError(error)) throw error;
       console.warn({
-        event: isDeployReset(error)
-          ? "oauth.deploy-reset-grant-store-retry"
-          : "oauth.platform-failure-grant-store-retry",
+        event: "oauth.platform-failure-grant-store-retry",
         name: step,
         message: String(error),
       });

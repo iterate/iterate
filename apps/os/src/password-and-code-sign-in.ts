@@ -94,10 +94,7 @@ export async function signInWithPassword(
   // one wrong password per run locks its machine out at the tenth run: every try renews the window).
   if (counts.some((count) => count > 0)) await Promise.all(keys.map((k) => env.OAUTH_KV.delete(k)));
   return {
-    user: await watchSignInStep(
-      "ensure-user",
-      new ControlPlane(env.CONTROL_PLANE).ensureUser(address),
-    ),
+    user: await watchSignInStep("ensure-user", new ControlPlane(env).ensureUser(address)),
   };
 }
 
@@ -211,7 +208,7 @@ export async function finishLoginCode(
   // the list may have changed since the code went out
   if (!emailAllowed(appConfigOf(env).login.allowedEmails, challenge.email))
     return { error: EMAIL_NOT_ALLOWED_MESSAGE, restart: true };
-  return { user: await new ControlPlane(env.CONTROL_PLANE).ensureUser(challenge.email) };
+  return { user: await new ControlPlane(env).ensureUser(challenge.email) };
 }
 
 /** The cookie's end — a sign-in finished, or the person starting over with another email. */

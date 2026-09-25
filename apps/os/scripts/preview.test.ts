@@ -51,9 +51,10 @@ test("the preview name: a long one is truncated with a stable hash, inside the l
 
 test("the preview name: one whose resources the account has for something else is refused", () => {
   expect(() => resolvePreviewName({ name: "dev" })).toThrow(
-    "preview name dev would take os-dev-repos, which is not a preview's",
+    "preview name dev would take os-dev-db, which is not a preview's",
   );
   expect(() => resolvePreviewName({ name: "parent" })).toThrow(/would take os-parent-/);
+  expect(() => resolvePreviewName({ name: "prd" })).toThrow(/would take os-prd-/);
   // the former parent's own stores, the legacy slots' namespaces, and the empty slug's fallback
   for (const name of ["preview", "preview-3", "--"])
     expect(() => resolvePreviewName({ name })).toThrow(
@@ -473,13 +474,21 @@ const template = {
     AgentDurableObject: { type: "durable-object", state: "deleted" },
   },
   r2_buckets: [{ binding: "FILES", bucket_name: "os-files" }],
+  d1_databases: [
+    {
+      binding: "DB",
+      database_name: "os-dev-db",
+      database_id: "os-dev-db",
+      migrations_dir: "../../src/control-plane/db/migrations",
+    },
+  ],
   artifacts: [{ binding: "ARTIFACTS", namespace: "os-dev-repos" }],
   kv_namespaces: [
     { binding: "ITX_KV", id: "1" },
     { binding: "OAUTH_KV", id: "2" },
   ],
 };
-const config = previewWranglerConfig({ template, previewName: "pr123" });
+const config = previewWranglerConfig({ template, previewName: "pr123", databaseId: "d1-pr123" });
 
 test("the preview's wrangler config (a pure transform of Vite's built config): the top level provisions live classes, excluding deleted exports, as a legacy migrations entry", () => {
   expect(config).toMatchObject({
@@ -496,12 +505,15 @@ test("the preview's wrangler config (a pure transform of Vite's built config): t
   expect(config).not.toHaveProperty("kv_namespaces");
 });
 
-test("the preview's wrangler config (a pure transform of Vite's built config): KV and R2 are binding-only (auto-provisioned per preview); the Artifacts namespace is the preview's own", () => {
+test("the preview's wrangler config (a pure transform of Vite's built config): KV and R2 are binding-only (auto-provisioned per preview); the D1 and the Artifacts namespace are the preview's own", () => {
   // oxlint-disable-next-line iterate/prefer-object-property-match -- binding-only is the point: a copied id must fail
   expect(config.previews.kv_namespaces).toEqual([{ binding: "ITX_KV" }, { binding: "OAUTH_KV" }]);
   // oxlint-disable-next-line iterate/prefer-object-property-match -- binding-only is the point: a copied id must fail
   expect(config.previews.r2_buckets).toEqual([{ binding: "FILES" }]);
-  expect(config.previews).not.toHaveProperty("d1_databases");
+  // oxlint-disable-next-line iterate/prefer-object-property-match -- the local id and migrations_dir must not ride along
+  expect(config.previews.d1_databases).toEqual([
+    { binding: "DB", database_name: "os-pr123-db", database_id: "d1-pr123" },
+  ]);
   expect(config.previews).toMatchObject({
     artifacts: [{ binding: "ARTIFACTS", namespace: "os-pr123-repos" }],
   });
@@ -524,6 +536,7 @@ test("the preview's wrangler config (a pure transform of Vite's built config): a
   const withDash = previewWranglerConfig({
     template,
     previewName: "pr123",
+    databaseId: "d1-pr123",
     dashOrigin,
   });
   expect(withDash.previews.vars).toMatchObject({ APP_CONFIG_URLS__DASH: dashOrigin });
@@ -585,6 +598,8 @@ test.each<[string, string, string | undefined]>([
   ["os-parent-repos", "repos", "parent"],
   ["os-preview-repos", "repos", "preview"],
   ["os-prd-project-repos", "repos", "prd-project"],
+  ["os-parent-db", "db", "parent"],
+  ["os-prd-db", "db", "prd"],
 ])(
   "the preview a resource name encodes (previewResourceName's inverse; the sweep's orphan passes): %s as %s → %s",
   (resourceName, binding, expected) => {
@@ -598,7 +613,6 @@ test("the preview a resource name encodes (previewResourceName's inverse; the sw
 });
 
 test.each([
-  // #2895's deploy after #2888 added ControlPlaneDurableObject (2026-09-23)
   {
     output:
       "A request to the Cloudflare API (/accounts/x/workers/workers/os-preview/previews/y/deployments) failed.\n  Cannot create binding for class 'ControlPlaneDurableObject' that is not exported by the script. [code: 10061]",

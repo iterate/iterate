@@ -71,6 +71,8 @@ export default {
         // library modules beside them (preview-config, preview-sweep, generate-wrangler-config) get
         // unused-export checks
         "scripts/{build,dev,deploy,preview,ensure-resources,erase-data,control-plane-load,project-seed,e2e-soak,inspect-context}.ts",
+        // read by the sqlfu CLI (`pnpm db:*`)
+        "sqlfu.config.ts",
         "scripts/*.test.ts",
         "examples/**/*.ts",
       ],
@@ -83,6 +85,9 @@ export default {
         "__workers-tests__/**/*.ts",
         "bench/**/*.ts",
       ],
+      // sqlfu writes these whole (`pnpm db:generate`): barrels and a migrations bundle the code
+      // does not import, beside the query modules it does.
+      ignore: ["src/control-plane/db/**/.generated/**"],
       // `cloudflare:workers` parses as the "cloudflare" package; knip does not count
       // src/styles.css's `@import "tailwindcss"`.
       ignoreDependencies: ["cloudflare", "tailwindcss"],

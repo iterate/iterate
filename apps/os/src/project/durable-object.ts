@@ -11,7 +11,7 @@ import { StreamProcessorDurableObject, type ItxEntrypointService } from "iterate
 import { downloadPublicGithubTemplate } from "../repo/github-template.ts";
 import { appConfigOf, type AppConfigEnv } from "../app-config.ts";
 import { DurableObjectNameCodec } from "../context/paths.ts";
-import type { ControlPlaneDurableObject } from "../control-plane/durable-object.ts";
+import { ControlPlane } from "../control-plane/edge.ts";
 import type { ItxEntrypointScope } from "../iterate-context.ts";
 import { EntityCollectionRpcTarget } from "./collection.ts";
 import type { ProjectState } from "./contract.ts";
@@ -22,7 +22,7 @@ export class ProjectDurableObject extends StreamProcessorDurableObject<
   ProjectState,
   {
     ITX?: ItxEntrypointService;
-    CONTROL_PLANE: DurableObjectNamespace<ControlPlaneDurableObject>;
+    DB: D1Database;
   } & AppConfigEnv,
   ItxEntrypointScope
 > {
@@ -36,17 +36,17 @@ export class ProjectDurableObject extends StreamProcessorDurableObject<
   );
 
   /** The custom-hostname effect's reach, for THIS project — built when a request runs, never at
-   *  construction: its claims and its primary in the control plane's hostname tables, and Cloudflare under the
-   *  deployment's `customHostnames` config. */
+   *  construction: its claims and its primary in the control plane's hostname tables, and
+   *  Cloudflare under the deployment's `customHostnames` config. */
   #hostnames(): ProjectHostnames {
     const { projectId } = DurableObjectNameCodec.parse(this.ctx.props.iterateContextName);
-    const controlPlane = () => this.env.CONTROL_PLANE.getByName("global");
+    const controlPlane = new ControlPlane(this.env);
     const config = appConfigOf(this.env);
     return {
       reservedZones: config.customHostnames?.reservedZones ?? [],
-      claim: (hostname) => controlPlane().claimHostname(projectId, hostname),
-      release: (hostname) => controlPlane().releaseHostname(projectId, hostname),
-      setPrimaryHostname: (hostname) => controlPlane().setPrimaryHostname(projectId, hostname),
+      claim: (hostname) => controlPlane.claimHostname(projectId, hostname),
+      release: (hostname) => controlPlane.releaseHostname(projectId, hostname),
+      setPrimaryHostname: (hostname) => controlPlane.setPrimaryHostname(projectId, hostname),
       provider: cloudflareCustomHostnameProvider(config),
     };
   }

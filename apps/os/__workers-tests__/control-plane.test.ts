@@ -3,15 +3,14 @@ import { newWebSocketRpcSession } from "capnweb";
 import { expect, onTestFinished, test, vi } from "vitest";
 import type { StreamEvent } from "iterate/stream/processor";
 import type { AccountState } from "../src/account/contract.ts";
-import type { ControlPlaneDurableObject } from "../src/control-plane/durable-object.ts";
-import { ControlPlane } from "../src/control-plane/edge.ts";
+import { ControlPlaneDatabase } from "../src/control-plane/catalog.ts";
+import { ControlPlane, ControlPlaneUnavailableError } from "../src/control-plane/edge.ts";
 import { DurableObjectNameCodec, GLOBAL_PROJECT_ID } from "../src/context/paths.ts";
 import { startLoginCode } from "../src/password-and-code-sign-in.ts";
 import type { OrganizationState } from "../src/organization/contract.ts";
 import type { IterateRpcTarget } from "../src/session.ts";
 import {
   adminSession,
-  controlPlaneStub,
   ORIGIN,
   publishConfigWorker,
   refused,
@@ -283,7 +282,7 @@ test("the operator's project in a named organization lands on the organization's
   ]);
   // a project the catalog holds and the record lacks (a creation whose landing failed after the
   // catalog's write): the next create lands it — once, however often it is asked
-  await controlPlaneStub().createProject(
+  await new ControlPlaneDatabase(env.DB).createProject(
     { principal: { actor: "admin" } },
     { project: "seeded-earlier", organizationId: org.id, restoreProjectId: "prj_seeded_earlier" },
   );
@@ -543,33 +542,51 @@ test("password sign-in rests an address after five wrong tries: the sixth is ref
   );
 });
 
-test("a control plane holder replaces the stub a deploy's reset broke; a refusal keeps it", async () => {
-  // What a deploy does to a holder that outlives one call (rpc.ts: one per socket): workerd cuts the
-  // in-flight call with `retryable: true`, and that stub fails every later call the same way.
-  const reset = Object.assign(new Error("Durable Object reset because its code was updated."), {
-    retryable: true,
-    durableObjectReset: true,
-  });
-  const refusal = new Error("no such user");
-  const broken = { projects: vi.fn(() => Promise.reject(reset)) };
-  const fresh = {
-    projects: vi
-      .fn()
-      .mockImplementationOnce(() => Promise.resolve([]))
-      .mockImplementationOnce(() => Promise.reject(refusal))
-      .mockImplementationOnce(() => Promise.resolve([])),
-  };
-  const getByName = vi.fn().mockReturnValueOnce(broken).mockReturnValue(fresh);
-  const controlPlane = new ControlPlane({
-    getByName,
-  } as unknown as DurableObjectNamespace<ControlPlaneDurableObject>);
-  await expect(controlPlane.reachableProjects("every")).rejects.toBe(reset);
-  await expect(controlPlane.reachableProjects("every")).resolves.toEqual([]);
-  await expect(controlPlane.reachableProjects("every")).rejects.toBe(refusal);
-  await expect(controlPlane.reachableProjects("every")).resolves.toEqual([]);
-  // one stub at construction, one after the reset — none after the refusal
-  expect(getByName).toHaveBeenCalledTimes(2);
-  expect(broken.projects).toHaveBeenCalledTimes(1);
+test("a control-plane call D1 fails on the platform's side is ControlPlaneUnavailableError, retryable where it may be asked again; our own error, or a refusal, is itself", async () => {
+  // D1's documented failures (https://developers.cloudflare.com/d1/observability/debug-d1/): the
+  // binding throws them from the call itself, a read's and a batch's alike
+  let failure = new Error("D1_ERROR: Network connection lost.");
+  const DB = {
+    prepare: () => ({
+      bind: () => ({ all: () => Promise.reject(failure), run: () => Promise.reject(failure) }),
+    }),
+    batch: () => Promise.reject(failure),
+  } as unknown as D1Database;
+  const controlPlane = new ControlPlane({ DB });
+  const unavailable = (method: string, retryable: boolean) =>
+    expect.objectContaining({
+      name: "ControlPlaneUnavailableError",
+      method,
+      retryable,
+      message: `The control plane failed ${method}: ${failure.message}`,
+    });
+  await expect(controlPlane.listOrganizations()).rejects.toEqual(
+    unavailable("organizations", true),
+  );
+  // a write whose answer was lost may have landed: never asked again for it
+  await expect(controlPlane.createUser({ email: "cut@example.com" })).rejects.toEqual(
+    unavailable("createUser", false),
+  );
+  // the grant writes are whole-row writes, safe to ask again (oauth-store.ts does, once)
+  await expect(controlPlane.deleteOAuthGrant("grant:user_a:g1")).rejects.toEqual(
+    unavailable("deleteOAuthGrant", true),
+  );
+  failure = new Error("D1_ERROR: D1 DB is overloaded. Requests queued for too long.");
+  await expect(controlPlane.getUser("cut@example.com")).rejects.toEqual(unavailable("user", false));
+  // ours is itself, with its message only: sqlfu's error holds the SQL and its bound values
+  failure = new Error("D1_ERROR: no such table: users: SQLITE_ERROR");
+  const own = await controlPlane.getUser("cut@example.com").catch((error: unknown) => error);
+  expect(own).not.toBeInstanceOf(ControlPlaneUnavailableError);
+  expect(own).toMatchObject({ message: `The control plane failed user: ${failure.message}` });
+  expect(Object.keys(own as Error)).toEqual([]);
+  // a refusal the catalog coded is no failure of the platform's
+  await expect(
+    new ControlPlane(env).renameOrganization(
+      { principal: { actor: "user_nobody", email: "nobody@example.com" } },
+      "org_nobody",
+      "Renamed",
+    ),
+  ).rejects.toMatchObject({ code: "FORBIDDEN" });
 });
 
 test("project ingress strips forged internal authority and never exposes platform credentials", async () => {
@@ -639,12 +656,14 @@ function postLogin(form: Record<string, string>, cookie?: string) {
   });
 }
 
-/** A read of the control-plane database — the `CONTROL_PLANE` singleton Durable Object's tables
- *  (src/control-plane/) — with no session between: `catalog("project", ref)`, `catalog("organization", orgId)`. */
+/** A read of the control-plane database (src/control-plane/catalog.ts, over this file's D1) with
+ *  no session between: `catalog("project", ref)`, `catalog("organization", orgId)`. */
 function catalog(method: string, ...args: unknown[]) {
-  return (controlPlaneStub() as unknown as Record<string, (...a: unknown[]) => Promise<unknown>>)[
-    method
-  ]!(...args);
+  const database = new ControlPlaneDatabase(env.DB) as unknown as Record<
+    string,
+    (...a: unknown[]) => Promise<unknown>
+  >;
+  return database[method]!.call(database, ...args);
 }
 
 /** A global context's log, whole — the root's (the control plane's record), an organization's. */

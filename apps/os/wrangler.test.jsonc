@@ -5,8 +5,9 @@
   //
   //  1. the two generated modules the worker imports are written by scripts/build.ts
   //     (vitest.global-setup.ts) — the same way for every suite.
-  //  2. no `ai` / `browser` binding (see the note by the bindings below); the in-process control
-  //     plane's OAuth KV is a fresh local namespace.
+  //  2. no `ai` / `browser` binding (see the note by the bindings below); the control plane's D1
+  //     and OAuth KV are fresh local ones, the D1 migrated by each file's setup
+  //     (__workers-tests__/apply-migrations.ts).
   //
   // KEPT identical on purpose: compatibility_date + flags, the declarative DO export, the LOADER
   // worker-loader binding, the DO binding, and the KV bindings (ids are meaningless locally —
@@ -38,7 +39,6 @@
     "bindings": [
       { "name": "ITERATE_CONTEXT", "class_name": "IterateContextDurableObject" },
       { "name": "BROWSER_SESSION", "class_name": "BrowserSession" },
-      { "name": "CONTROL_PLANE", "class_name": "ControlPlaneDurableObject" },
     ],
   },
   "exports": {
@@ -47,14 +47,14 @@
     // THE FIRST-PARTY FACETS: Durable Object classes hosted as facets of a context through
     // `ctx.exports` — declared like any DO class (the facet's own SQLite is where their state lives).
     "AccountDurableObject": { "type": "durable-object", "storage": "sqlite" },
-    "ControlPlaneDurableObject": { "type": "durable-object", "storage": "sqlite" },
     "OrganizationDurableObject": { "type": "durable-object", "storage": "sqlite" },
     "ProjectDurableObject": { "type": "durable-object", "storage": "sqlite" },
     "RepoDurableObject": { "type": "durable-object", "storage": "sqlite" },
     "SecretDurableObject": { "type": "durable-object", "storage": "sqlite" },
     "WorkspaceDurableObject": { "type": "durable-object", "storage": "sqlite" },
   },
-  // The control plane is in-process: a local OAuth KV so the worker loads. ids are meaningless locally.
+  // The control plane's D1 and OAuth KV. ids are meaningless locally.
+  "d1_databases": [{ "binding": "DB", "database_name": "os-test-db", "database_id": "test" }],
   "kv_namespaces": [
     { "binding": "ITX_KV", "id": "08df862920b04446b3503c22f9888b04" },
     { "binding": "OAUTH_KV", "id": "oauth-test" },

@@ -83,7 +83,7 @@ export async function secretOAuthCallback(
   } catch (error) {
     return answer(400, error instanceof Error ? error.message : String(error));
   }
-  if (!(await reachesSecretOwner(new ControlPlane(env.CONTROL_PLANE), authorization.reach, owner)))
+  if (!(await reachesSecretOwner(new ControlPlane(env), authorization.reach, owner)))
     return answer(403, `Your session cannot access the secrets of ${owner.kind} ${owner.id}.`);
   const denied = url.searchParams.get("error");
   if (denied) return answer(400, `The provider declined: ${denied}`);

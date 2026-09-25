@@ -116,6 +116,8 @@ test.each<{
       { rule: "4: the parent's own R2, which reads as preview parent's", kind: "r2", resource: "os-parent-files", createdHoursAgo: 1, orphanOf: false },
       { rule: "4: the parent's own Artifacts namespace, which reads as preview parent's", kind: "artifacts", resource: "os-parent-repos", createdHoursAgo: 25, orphanOf: false },
       { rule: "4: local dev's Artifacts namespace, which reads as preview dev's", kind: "artifacts", resource: "os-dev-repos", createdHoursAgo: 25, orphanOf: false },
+      { rule: "4: the parent's own D1, which reads as preview parent's", kind: "d1", resource: "os-parent-db", createdHoursAgo: 25, pullRequest: "missing", orphanOf: false },
+      { rule: "4: local dev's D1, which reads as preview dev's", kind: "d1", resource: "os-dev-db", createdHoursAgo: 25, pullRequest: "missing", orphanOf: false },
       { rule: "4: local dev's R2, nothing between the parent and the suffix", kind: "r2", resource: "os-files", createdHoursAgo: 1, orphanOf: false },
       { rule: "4: a D1 without the preview suffix", kind: "d1", resource: "os-directory", createdHoursAgo: 999, orphanOf: false },
       { rule: "4: a legacy slot's KV, no preview suffix", kind: "kv", resource: "os-preview-3-project-directory", orphanOf: false },

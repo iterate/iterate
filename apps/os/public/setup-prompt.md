@@ -85,10 +85,19 @@ their clipboard, and that it came from `.secrets` (give its absolute path) so th
 pnpm exec wrangler deploy --config dist/server/wrangler.json --secrets-file /abs/path/to/.secrets
 ```
 
-The first deploy creates the KV namespaces and R2 bucket by name. If a deploy fails
-after that, the next one fails with `10014 ... already exists`: delete the empty `iterate-itx-kv` /
-`iterate-oauth-kv` and retry. To update: `git pull`, rebuild, deploy. Without `--secrets-file` the
-existing secrets are kept.
+The first deploy creates the D1 database, the KV namespaces and the R2 bucket by name. If a deploy
+fails after that, the next one fails with `10014 ... already exists`: delete the empty
+`iterate-itx-kv` / `iterate-oauth-kv` and retry. Without `--secrets-file` the existing secrets are
+kept.
+
+The D1 database (`iterate-db`) holds the users, organizations and projects, and starts with no
+tables. Apply its migrations right after the first deploy, before anyone signs in:
+
+```bash
+pnpm exec wrangler d1 migrations apply iterate-db --remote --config dist/server/wrangler.json
+```
+
+To update: `git pull`, rebuild, apply the migrations (a no-op when there are none new), deploy.
 
 The deploy doesn't create the Artifacts namespace the config names (`iterate-repos`), and the
 Worker's binding doesn't either, whatever Cloudflare's docs say. Without it, project creation fails

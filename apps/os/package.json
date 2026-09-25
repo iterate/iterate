@@ -20,7 +20,11 @@
     "ensure-resources": "tsx scripts/ensure-resources.ts",
     "erase-data": "tsx scripts/erase-data.ts",
     "control-plane-load": "tsx scripts/control-plane-load.ts",
-    "project-seed": "tsx scripts/project-seed.ts"
+    "project-seed": "tsx scripts/project-seed.ts",
+    "db:generate": "sqlfu generate",
+    "db:check": "rm -f .sqlfu/app.db && sqlfu migrate --yes && sqlfu check",
+    "db:draft": "sqlfu draft",
+    "db:migrate": "wrangler d1 migrations apply DB --local --persist-to .wrangler/state -c wrangler.base.jsonc"
   },
   "dependencies": {
     "@cloudflare/workers-oauth-provider": "1.0.0",
@@ -38,6 +42,7 @@
     "posthog-node": "^5.53.0",
     "react": "catalog:",
     "react-dom": "catalog:",
+    "sqlfu": "0.1.1",
     "tailwindcss": "catalog:",
     "zod": "catalog:"
   },

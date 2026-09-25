@@ -66,7 +66,7 @@ export async function createConsentProject(
     {
       contextNamespace: env.ITERATE_CONTEXT,
       waitUntil: (promise) => ctx.waitUntil(promise),
-      controlPlane: new ControlPlane(env.CONTROL_PLANE),
+      controlPlane: new ControlPlane(env),
       appConfig: appConfigOf(env),
       platformOrigin: platformAddressesOf(env, request).platformOrigin,
     },

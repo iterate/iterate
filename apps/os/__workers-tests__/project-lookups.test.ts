@@ -1,4 +1,4 @@
-// How often a project's row is asked of the `CONTROL_PLANE` singleton. A project host's admission
+// How often a project's row is asked of the control plane's D1. A project host's admission
 // (src/control-plane/edge.ts `getProjectKeepingMisses`) keeps a label no project holds five seconds
 // per isolate, so a scanner's burst at one unknown label is one read, and a project created right
 // after its label was missed is still served promptly. A project's context keeps its own slug in
@@ -6,12 +6,11 @@
 import { runInDurableObject } from "cloudflare:test";
 import { exports } from "cloudflare:workers";
 import { expect, onTestFinished, test, vi } from "vitest";
-import type { ControlPlaneDurableObject } from "../src/control-plane/durable-object.ts";
-import { adminSession, controlPlaneStub, stub } from "./support.ts";
+import { adminSession, catalog, interceptCatalogReads, stub, until } from "./support.ts";
 
 test("a burst at a label no project holds is one control-plane read: the miss is kept five seconds, then read again", async () => {
   const label = freshLabel("unknown");
-  const reads = await spyOnProjectReads();
+  const reads = interceptCatalogReads().project;
 
   await expectNoProject(label);
   const burst = await Promise.all(
@@ -38,20 +37,32 @@ test("a project created through this isolate's edge right after its label was mi
 
 test("a read that missed a label while this isolate created its project keeps no miss: the next request is served", async () => {
   const label = freshLabel("created-mid-read");
-  const reads = await spyOnProjectReads();
-  const { promise: asked, resolve: ask } = Promise.withResolvers<void>();
-  const { promise: answered, resolve: answer } = Promise.withResolvers<void>();
-  // the Durable Object's method answers over RPC, where a promise answers as its value
-  reads.mockImplementationOnce((async () => {
-    ask();
-    await answered;
-    return null;
-  }) as unknown as () => null);
+  let held = false;
+  let missedRead = false;
+  let answering = false;
+  // the first read runs now, and misses; its answer reaches the edge only once the row lets it.
+  // Each side polls a flag on its own timer: a promise one request resolves for another does not
+  // wake it
+  interceptCatalogReads({
+    reads: ["project"],
+    with: <T>(read: () => Promise<T>) => {
+      if (held) return read();
+      held = true;
+      return read().then(
+        (missing) =>
+          new Promise<T>((resolve) => {
+            missedRead = true;
+            const wait = () => (answering ? resolve(missing) : setTimeout(wait, 20));
+            wait();
+          }),
+      );
+    },
+  });
 
   const missed = call(`https://${label}.projects.test/`);
-  await asked;
+  await until("the first read missed", () => missedRead);
   using _project = await (await operator()).projects.create({ project: label });
-  answer();
+  answering = true;
   expect(await missed).toMatchObject({ status: 421 });
 
   const served = await call(`https://${label}.projects.test/`);
@@ -63,7 +74,7 @@ test("a project created elsewhere right after its label was missed is served her
   await expectNoProject(label);
 
   // straight on the catalog, as another isolate's edge would: this isolate's miss stands
-  await controlPlaneStub().createProject({ principal: { actor: "admin" } }, { project: label });
+  await catalog().createProject({ principal: { actor: "admin" } }, { project: label });
   await expectNoProject(label);
 
   vi.useFakeTimers({ toFake: ["Date"] });
@@ -102,18 +113,6 @@ async function expectNoProject(label: string) {
   const answer = await call(`https://${label}.projects.test/`);
   expect(answer).toMatchObject({ status: 421 });
   expect(await answer.text()).toBe(`421: no project ${JSON.stringify(label)} is served here\n`);
-}
-
-/** The control plane Durable Object's `project` reads, observed and unchanged. The Durable Object
- *  runs in this isolate, so its class's method is replaced where every call finds it. */
-async function spyOnProjectReads() {
-  const reads = await runInDurableObject(
-    controlPlaneStub(),
-    (instance: ControlPlaneDurableObject) =>
-      vi.spyOn(Object.getPrototypeOf(instance) as ControlPlaneDurableObject, "project"),
-  );
-  onTestFinished(() => reads.mockRestore());
-  return reads;
 }
 
 /** An operator's /api session, disposed when the test finishes. */

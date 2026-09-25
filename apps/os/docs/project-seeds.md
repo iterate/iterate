@@ -180,6 +180,6 @@ every seed with the same `--organization` and `--owners` as the first run, then
 The erase refuses shared data resources while another worker still binds them,
 and refuses preview parents with multiple namespaces for a class. Retire any
 confirmed predecessor's writers before erasing shared stores. The worker identity
-and routes remain; Durable Objects, directory rows, both KV stores, R2 objects and
-Artifacts repositories are emptied and verified. Deploy normally before applying
+and routes remain; Durable Objects, the control plane's D1 rows, both KV stores, R2 objects
+and Artifacts repositories are emptied and verified. Deploy normally before applying
 seeds. No seed command erases or deploys anything implicitly.

@@ -82,7 +82,6 @@ import {
 } from "./context/itx-expression-rewriting.ts";
 import { signedFileUrl } from "./context/file-urls.ts";
 import { ControlPlane } from "./control-plane/edge.ts";
-import type { ControlPlaneDurableObject } from "./control-plane/durable-object.ts";
 import { buildBuiltIns, type SubscriptionListEntry } from "./context/built-ins.ts";
 import { FacetHost } from "./context/facet-host.ts";
 import { firstPartyFacetClassOf } from "./first-party-facets.ts";
@@ -144,8 +143,11 @@ export type AlarmTrace = {
  *  (OAuth KV, the browser sessions, the page files, the mailbox): the one worker's env. */
 export interface Env extends AppConfigEnv {
   ITERATE_CONTEXT: DurableObjectNamespace<IterateContextDurableObject>;
-  /** The control plane singleton — slug/project lookups from inside a context (control-plane/edge.ts). */
-  CONTROL_PLANE: DurableObjectNamespace<ControlPlaneDurableObject>;
+  /** THE CONTROL PLANE'S D1: the deployment's users, identities, organizations, memberships,
+   *  projects, invitations, custom hostnames and the OAuth provider's grants
+   *  (control-plane/db/definitions.sql), read and written through control-plane/edge.ts — here, a
+   *  context's own project's slug. */
+  DB: D1Database;
   LOADER: WorkerLoader;
   ITX_KV: KVNamespace;
   /** Workers AI — the built-in root `itx.ai`, the binding verbatim (context/built-ins.ts). */
@@ -594,11 +596,11 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   };
 
   /** The control plane as this context reads it: its own project's slug, once (`#projectSlug`). */
-  readonly #controlPlane = new ControlPlane(this.env.CONTROL_PLANE);
+  readonly #controlPlane = new ControlPlane(this.env);
 
   /** This context's project's slug; null for a global context (a user's, an organization's). A
    *  project's slug never changes — catalog.ts inserts a project's row and nothing updates or
-   *  deletes one, and an erase retires this storage with the catalog — so the control plane's
+   *  deletes one, and an erase empties the catalog with this storage — so the control plane's
    *  answer is kept in this context's own storage: read once in its life, not once per isolate (a
    *  config worker asks `whoami` on every request). */
   async #projectSlug() {
