@@ -7,15 +7,25 @@
 
 import { expect, onTestFinished, test, vi } from "vitest";
 import {
+  buildPack,
+  commitReaches,
   concat,
   createGitWireTransport,
   encodeCommit,
+  encodeFetchRequest,
+  gitRemoteOf,
   FLUSH,
   hashObject,
   manifestOf,
   parseCommit,
+  parsePack,
   parseTree,
+  readCapped,
+  pktFrames,
   pktLine,
+  pktText,
+  redactRemote,
+  type RawGitObject,
   type RepoManifest,
   treeObjectsOf,
   ZERO_OID,
@@ -32,7 +42,7 @@ test("a pkt-line body cut mid-header rejects instead of yielding an empty ref li
   vi.stubGlobal("fetch", async () => new Response("00", { status: 200 }));
   const transport = createGitWireTransport({
     remote: "https://account.artifacts.example/git/ns/prj.config.git",
-    token: "t",
+    authorization: "Basic eDp0",
   });
   await expect(transport.tipOf("refs/heads/main")).rejects.toThrow(/truncated pkt-line/);
 });
@@ -53,21 +63,27 @@ test.for([
     name: "a read answered 5xx twice fails with the second answer",
     send: "tipOf",
     statuses: [502, 503],
-    outcome: { error: "git-upload-pack responded 503 for https://artifacts.example/prj.git" },
+    outcome: {
+      error: "git-upload-pack responded 503 for https://artifacts.example/prj.git: unavailable",
+    },
     retries: [{ name: "git-upload-pack", status: 502, attempt: 1, retryInMs: 1_000 }],
   },
   {
     name: "a read answered 4xx fails at once: an answer about the request",
     send: "tipOf",
     statuses: [401],
-    outcome: { error: "git-upload-pack responded 401 for https://artifacts.example/prj.git" },
+    outcome: {
+      error: "git-upload-pack responded 401 for https://artifacts.example/prj.git: unavailable",
+    },
     retries: [],
   },
   {
     name: "a push answered 503 is never sent twice",
     send: "push",
     statuses: [503],
-    outcome: { error: "git-receive-pack responded 503 for https://artifacts.example/prj.git" },
+    outcome: {
+      error: "git-receive-pack responded 503 for https://artifacts.example/prj.git: unavailable",
+    },
     retries: [],
   },
 ] as const)("Artifacts 5xx: $name", async ({ send, statuses, outcome, retries }) => {
@@ -84,7 +100,7 @@ test.for([
   onTestFinished(() => void vi.useRealTimers());
   const transport = createGitWireTransport({
     remote: "https://artifacts.example/prj.git",
-    token: "t",
+    authorization: "Basic eDp0",
   });
   const settled = (
     send === "tipOf"
@@ -161,3 +177,132 @@ test("the tree codec against git's ids: hashObject is git's blob id; encodeCommi
     message: "first",
   });
 });
+
+// ── remotes ── a git remote is an http(s) URL; its userinfo becomes a Basic credential and leaves the
+// URL, as git and curl do. A secret placeholder may sit in it, raw or percent-encoded: egress
+// substitutes it inside the credential (secrets.ts), so no token is ever spelled here.
+
+const PLACEHOLDER = 'getSecret("/secrets/github-acme", { field: "accessToken" })';
+
+test.for([
+  {
+    remote: "https://github.com/acme/config.git",
+    becomes: { url: "https://github.com/acme/config.git", authorization: null },
+  },
+  {
+    remote: `https://x-access-token:${PLACEHOLDER}@github.com/acme/config.git`,
+    becomes: {
+      url: "https://github.com/acme/config.git",
+      authorization: basic(`x-access-token:${PLACEHOLDER}`),
+      userinfo: { user: "x-access-token", password: PLACEHOLDER },
+    },
+  },
+  {
+    remote: `https://x-access-token:${encodeURIComponent(PLACEHOLDER)}@github.com/acme/config.git`,
+    becomes: {
+      url: "https://github.com/acme/config.git",
+      authorization: basic(`x-access-token:${PLACEHOLDER}`),
+    },
+  },
+  {
+    remote: "http://someone@127.0.0.1:8123/repo.git/",
+    becomes: { url: "http://127.0.0.1:8123/repo.git", authorization: basic("someone:") },
+  },
+] as const)("gitRemoteOf($remote)", ({ remote, becomes }) => {
+  expect(gitRemoteOf(remote)).toMatchObject(becomes);
+});
+
+test.for([
+  "git@github.com:acme/config.git",
+  "ssh://git@github.com/acme/config.git",
+  "https://github.com/acme/config.git?x=1",
+  "https://github.com/acme/config.git#main",
+  "https:///acme/config.git",
+  "",
+])("gitRemoteOf(%j) refuses: not an http(s) git URL", (remote) => {
+  expect(() => gitRemoteOf(remote)).toThrow(/not an http\(s\) git URL/);
+});
+
+test("a fetch request names what the client has, so the pack carries only what it lacks", () => {
+  const lines = [
+    ...pktFrames(encodeFetchRequest({ wants: ["a".repeat(40)], haves: ["b".repeat(40)] })),
+  ]
+    .filter((frame) => frame.kind === "line")
+    .map((frame) => pktText(frame.payload));
+  expect(lines).toEqual([
+    "command=fetch",
+    `want ${"a".repeat(40)}`,
+    `have ${"b".repeat(40)}`,
+    "no-progress",
+    "done",
+  ]);
+});
+
+test("commitReaches: along every parent within the objects, and onto a parent the objects stop at", async () => {
+  const objects = new Map<string, RawGitObject>();
+  const commit = async (message: string, parents: string[]) => {
+    const payload = encodeCommit({
+      author: { name: "a", email: "a@example.com", date: new Date(0) },
+      message,
+      parents,
+      tree: "4b825dc642cb6eb9a060e54bf8d69288fbee4904",
+    });
+    const oid = await hashObject("commit", payload);
+    objects.set(oid, { oid, type: "commit", payload });
+    return oid;
+  };
+  const outside = "c".repeat(40); // a commit the client already has: the pack stops at it
+  const a = await commit("a", [outside]);
+  const b = await commit("b", [a]);
+  const side = await commit("side", [outside]);
+  const merge = await commit("merge", [b, side]);
+  expect(commitReaches(objects, merge, a)).toBe(true);
+  expect(commitReaches(objects, merge, side)).toBe(true);
+  expect(commitReaches(objects, merge, outside)).toBe(true);
+  expect(commitReaches(objects, merge, merge)).toBe(true);
+  expect(commitReaches(objects, a, b)).toBe(false);
+  expect(commitReaches(objects, b, side)).toBe(false);
+  expect(commitReaches(objects, b, "d".repeat(40))).toBe(false);
+});
+
+test("an untrusted pack is bounded: an object over the cap, or an entry that inflates past its declared size, fails before it is kept", async () => {
+  expect(
+    await parsePack(await buildPack([{ type: "blob", payload: new Uint8Array(10) }])),
+  ).toMatchObject([{ type: "blob" }]);
+  const big = await buildPack([{ type: "blob", payload: new Uint8Array(2_000_000) }]);
+  await expect(parsePack(big, { maxObjectBytes: 1_000_000 })).rejects.toThrow(
+    /exceeds 1000000 bytes/,
+  );
+  // One entry whose header declares ONE byte while its zlib stream inflates to a megabyte.
+  const honest = await buildPack([{ type: "blob", payload: new Uint8Array(1_000_000) }]);
+  let cursor = 12; // the entry's header: type and size, 7 bits a byte after the first 4
+  while (honest[cursor]! & 0x80) cursor += 1;
+  const lying = concat([
+    honest.subarray(0, 12),
+    Uint8Array.of((3 << 4) | 1),
+    honest.subarray(cursor + 1, honest.length - 20),
+  ]);
+  const digest = new Uint8Array(await crypto.subtle.digest("SHA-1", lying));
+  await expect(parsePack(concat([lying, digest]))).rejects.toThrow(
+    /inflates past its declared 1 byte/,
+  );
+});
+
+test("a response body over the cap is refused before it is all read", async () => {
+  await expect(readCapped(new Response(new Uint8Array(3_000)), 1_000)).rejects.toThrow(
+    /more than 1000 bytes/,
+  );
+  expect(await readCapped(new Response("ok"), 1_000)).toEqual(new TextEncoder().encode("ok"));
+});
+
+test("redactRemote drops a credential whatever the scheme or its case", () => {
+  expect(redactRemote("HTTPS://x:TOKEN@github.com/a/b.git")).toBe("HTTPS://github.com/a/b.git");
+  expect(redactRemote("ftp://u:TOKEN@example.com/r.git")).toBe("ftp://example.com/r.git");
+  expect(redactRemote("https://github.com/a/b.git")).toBe("https://github.com/a/b.git");
+  expect(redactRemote("https://x:p@ss@github.com/a/b.git")).toBe("https://github.com/a/b.git");
+});
+
+/** `user:password` as a Basic header value, UTF-8 first. */
+function basic(credential: string): string {
+  return `Basic ${btoa(String.fromCharCode(...new TextEncoder().encode(credential)))}`;
+}

@@ -244,7 +244,14 @@ export async function acceptGithubCallback(
   const secretPath = tokenSecretPathOf("github", connection);
   const path = connectionPathOf("github", connection);
   const secrets = await scope.withItx((itx) => itx.secrets.list());
-  const urls = secrets.find((secret) => secret.path === secretPath)?.urls ?? [apiOrigin];
+  // The API, and GitHub itself for git over HTTP (a repo's origin: `repo.pull()` / `repo.push()`).
+  const urls = [
+    ...new Set([
+      ...(secrets.find((secret) => secret.path === secretPath)?.urls ?? []),
+      attempt.origin,
+      apiOrigin,
+    ]),
+  ];
   const mintFor = (id: string) =>
     scope.withItx((itx) =>
       itx.secrets.set(
@@ -258,7 +265,10 @@ export async function acceptGithubCallback(
             installationId: id,
             client: attempt.client === "iterate" ? { platform: "github" } : { project: "github" },
           },
-          merge: true,
+          // iterate's App: the material is only the minted token, so the record is replaced whole
+          // and an older connection's pin gains GitHub itself (a merge keeps the pin). A project's
+          // own App keeps its material (the App's key), pinned to both from the start.
+          merge: attempt.client !== "iterate",
         },
       ),
     );

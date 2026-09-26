@@ -476,6 +476,14 @@ export type RepoLogEntry = {
 /** What a commit reports: the new tip (null on an unborn repo that stayed empty) and the paths it
  *  changed (none when the tree was already as asked). */
 export type RepoCommitResult = { commitOid: string | null; changedPaths: string[] };
+/** How a `pull` or `push` ended: `main` moved from `previousOid` to `commitOid` (`updated`), or both
+ *  sides were already at `commitOid` (`up-to-date`). Pulling or pushing without `force` when neither
+ *  side contains the other throws `NOT_FAST_FORWARD`, with `{ ours, theirs }` as its data. */
+export type RepoSyncResult = {
+  status: "updated" | "up-to-date";
+  commitOid: string | null;
+  previousOid: string | null;
+};
 /** `itx.repos.get(path)`: the repo's verbs, branch `main` only (the repo facet in apps/os). A
  *  `commitOid` pins a read to that commit; without one, a read is of the tip. */
 export type RepoHandle = InvokeHandle & {
@@ -492,6 +500,20 @@ export type RepoHandle = InvokeHandle & {
   }): Promise<RepoCommitResult>;
   writeFile(path: string, content: string): Promise<RepoCommitResult>;
   log(options?: { limit?: number }): Promise<RepoLogEntry[]>;
+  /** The one remote the repo remembers, as git's `origin`: a git URL over HTTP(S) whose userinfo may
+   *  hold a secret placeholder (`https://x-access-token:getSecret("/secrets/github-acme", { field:
+   *  "accessToken" })@github.com/acme/config.git`, the placeholder percent-encoded or not), never a
+   *  token; null when none. */
+  origin(): Promise<string | null>;
+  /** Remember `url` as origin, or forget it (`null`): a `repo/origin-set` fact on the repo's log. */
+  setOrigin(url: string | null): Promise<{ origin: string | null }>;
+  /** Bring the remote's `main` into this repo, the same commits and oids, fast-forward only unless
+   *  `force` (which resets `main` to the remote's). A pull that moves `main` lands
+   *  `repo/commit-completed` like a commit, so `/repos/config` publishes. `remote` defaults to origin. */
+  pull(options?: { remote?: string; force?: boolean }): Promise<RepoSyncResult>;
+  /** Send this repo's `main` to the remote's `main`, fast-forward only unless `force` (which
+   *  overwrites the remote's). `remote` defaults to origin. */
+  push(options?: { remote?: string; force?: boolean }): Promise<RepoSyncResult>;
   /** Append the repo's own events on its context; its lifecycle facts are the collection's. */
   append(...events: StreamEventInput[]): Promise<StreamEvent[]>;
 };

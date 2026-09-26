@@ -1036,12 +1036,12 @@ test("entities: the typed append refuses the entity's lifecycle facts, which onl
     () => config.append({ type: "events.iterate.com/repo/delete-requested", payload: {} }),
     () => config.append({ type: "events.iterate.com/repo/deleted", payload: { path: "/x" } }),
   ])
-    await expect(append()).rejects.toThrow(/is the repo's lifecycle/);
+    await expect(append()).rejects.toThrow(/is written by the repo itself/);
   await expect(
     workspaces
       .get("/workspaces/w")
       .append({ type: "events.iterate.com/workspace/delete-requested", payload: {} }),
-  ).rejects.toThrow(/is the workspace's lifecycle/);
+  ).rejects.toThrow(/is written by the workspace itself/);
   const commit = {
     type: "events.iterate.com/repo/commit-completed" as const,
     payload: { path: "/repos/config", commitOid: "abc", message: "m", changedPaths: ["worker.ts"] },

@@ -2,12 +2,14 @@
 // creation runs, where it stands: the `project` facet's LIVE STATE on `/` (apps/os/src/project/),
 // rendered as a creation checklist until `project/created` lands, or as the failure the
 // processor reported. The frame the project's own pages fill in over time. Its organization's owner
-// deletes the project here (`session.projects.delete`).
-import { useEffect, useState } from "react";
-import { createFileRoute, getRouteApi, useNavigate } from "@tanstack/react-router";
+// deletes the project here (`session.projects.delete`). The config repo's remote is linked, pulled
+// and pushed here too (`itx.repos.get("/repos/config")`: `origin`, `setOrigin`, `pull`, `push`).
+import { useCallback, useEffect, useRef, useState } from "react";
+import { createFileRoute, getRouteApi, Link, useNavigate } from "@tanstack/react-router";
 import { ArrowUpRight, CheckIcon, CircleXIcon, LoaderCircleIcon } from "lucide-react";
 import { z } from "zod";
 import type { AuthenticatedApp } from "iterate/app";
+import { errorCode } from "iterate/lib";
 import { useContextStub, useFacetLiveState } from "iterate/react";
 import {
   AlertDialog,
@@ -29,6 +31,17 @@ import {
   CardHeader,
   CardTitle,
 } from "@iterate-com/ui/components/card";
+import { Field, FieldDescription, FieldGroup, FieldLabel } from "@iterate-com/ui/components/field";
+import { Input } from "@iterate-com/ui/components/input";
+import {
+  Sheet,
+  SheetClose,
+  SheetContent,
+  SheetDescription,
+  SheetFooter,
+  SheetHeader,
+  SheetTitle,
+} from "@iterate-com/ui/components/sheet";
 import { Spinner } from "@iterate-com/ui/components/spinner";
 import { cn } from "cn";
 import { Identifier } from "../../../../components/identifier.tsx";
@@ -40,7 +53,7 @@ import { projectHostOf } from "../../../../lib/origins.ts";
 
 const shell = getRouteApi("/_auth");
 
-/** The project facet's live state, the one field this page reads: where the project's own creation
+/** The project facet's live state, the fields this page reads: where the project's own creation
  *  stands, as the offset of the event that says so (null until `project/create-requested` lands). */
 const ProjectLive = z.looseObject({
   creation: z
@@ -48,9 +61,20 @@ const ProjectLive = z.looseObject({
     .nullable(),
   /** the catalog's repos, by path: the seeded config repo is the saga's first visible step */
   repos: z.record(z.string(), z.unknown()),
+  /** the project's connections: its GitHub ones list the repositories the config repo can link to */
+  integrations: z
+    .record(
+      z.string(),
+      z.looseObject({ provider: z.string(), connection: z.string(), account: z.string() }),
+    )
+    .default({}),
 });
 
 export const Route = createFileRoute("/_auth/projects/$slug/")({
+  validateSearch: z.object({
+    /** The sheet that links the config repo to a remote. */
+    configRepo: z.literal("link").optional().catch(undefined),
+  }),
   component: ProjectOverview,
 });
 
@@ -69,6 +93,9 @@ function ProjectOverview() {
   const parsed = ProjectLive.safeParse(live.value).data;
   const creation = parsed?.creation ?? null;
   const configRepoSeeded = Boolean(parsed?.repos["/repos/config"]);
+  const githubConnections = Object.values(parsed?.integrations ?? {}).filter(
+    (row) => row.provider === "github",
+  );
   return (
     <div className="mx-auto flex w-full max-w-5xl flex-col gap-8 p-4 md:p-8">
       {creation?.status === "requested" ? (
@@ -106,7 +133,410 @@ function ProjectOverview() {
           <Identifier value={project.orgId} />
         </dd>
       </dl>
+      {/* a project still being created, or whose creation failed, may have no config repo yet */}
+      {creation?.status === "requested" || creation?.status === "failed" ? null : (
+        <ConfigRepo key={project.id} project={project} githubConnections={githubConnections} />
+      )}
       {org?.role === "owner" ? <DeleteProject project={project} /> : null}
+    </div>
+  );
+}
+
+/** What the config repo's section is doing, one action at a time. */
+type ConfigRepoAction = "link" | "pull" | "push" | "replace" | "force-push" | "unlink";
+
+/** A choice the sheet waits on, with the remote it is about: after a pull (`diverged`) or a push
+ *  (`behind`) against it that was not a fast-forward, or replacing iterate's main with it
+ *  (`replace`, the confirm). Its actions use that remote, whatever origin is by then. */
+type ConfigRepoChoice = {
+  kind: "diverged" | "behind" | "replace";
+  remote: ReturnType<typeof describeOrigin>;
+};
+
+/** The config repo's remote, git's `origin`, read again after every action, and its main pulled and
+ *  pushed by hand. Every pull and push names the remote the page shows, so a link changed elsewhere
+ *  since is never the one acted on, and a pending choice goes when a read finds origin changed. The
+ *  sheet links it (`?configRepo=link`) or holds the pending choice. */
+function ConfigRepo({
+  project,
+  githubConnections,
+}: {
+  project: { id: string; slug: string };
+  githubConnections: { connection: string; account: string }[];
+}) {
+  const { api } = shell.useRouteContext();
+  const search = Route.useSearch();
+  const navigate = useNavigate({ from: Route.fullPath });
+  const [read, setRead] = useState<{ origin: string | null }>();
+  const [busy, setBusy] = useState<ConfigRepoAction | null>(null);
+  const [outcome, setOutcome] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [choice, setChoice] = useState<ConfigRepoChoice | null>(null);
+  const firstField = useRef<HTMLInputElement>(null);
+  const configRepo = useCallback(
+    () => api.projects.get(project.id).repos.get("/repos/config"),
+    [api, project.id],
+  );
+  const readOrigin = useCallback(
+    () =>
+      configRepo()
+        .origin()
+        .then(
+          (origin) => {
+            setRead({ origin });
+            setChoice((pending) => (pending?.remote.url === origin ? pending : null));
+          },
+          (caught: unknown) => setError(messageOf(caught)),
+        ),
+    [configRepo],
+  );
+  useEffect(() => void readOrigin(), [readOrigin]);
+
+  const remote = read?.origin ? describeOrigin(read.origin) : null;
+  const linking = !choice && search.configRepo === "link";
+  const closeSheet = async () => {
+    setChoice(null);
+    setError(null);
+    await navigate({ search: {}, replace: true });
+  };
+  /** Pull or push main against `url`: the outcome said and the sheet closed, or, when it is not a
+   *  fast-forward (only an unforced one throws that), the sheet on the choice about that remote. */
+  const sync = async (verb: "pull" | "push", url: string, force?: true) => {
+    try {
+      const result = await configRepo()[verb]({ remote: url, force });
+      setOutcome(
+        result.status === "up-to-date"
+          ? "Already up to date"
+          : `${verb === "pull" ? "Pulled" : "Pushed"} ${(result.commitOid || "").slice(0, 7)}`,
+      );
+      await closeSheet();
+    } catch (caught) {
+      if (errorCode(caught) !== "NOT_FAST_FORWARD") throw caught;
+      setChoice({ kind: verb === "pull" ? "diverged" : "behind", remote: describeOrigin(url) });
+    }
+  };
+  const run = async (action: ConfigRepoAction, work: () => Promise<unknown>) => {
+    setBusy(action);
+    setError(null);
+    setOutcome(null);
+    await work().catch((caught: unknown) => setError(messageOf(caught)));
+    await readOrigin();
+    setBusy(null);
+  };
+  const link = (url: string) =>
+    run("link", async () => {
+      setRead(await configRepo().setOrigin(url));
+      await sync("pull", url);
+    });
+  /** A button that runs one action: disabled while any runs, its spinner while it does. */
+  const actionButton = (
+    action: ConfigRepoAction,
+    label: string,
+    work: () => Promise<unknown>,
+    variant: "outline" | "destructive" = "outline",
+  ) => (
+    <Button
+      type="button"
+      variant={variant}
+      disabled={Boolean(busy)}
+      onClick={() => void run(action, work)}
+    >
+      {busy === action ? <Spinner data-icon="inline-start" /> : null}
+      {label}
+    </Button>
+  );
+  const name = choice?.remote.name;
+  const copy =
+    choice &&
+    {
+      diverged: {
+        title: `${name}'s main and iterate's have diverged`,
+        description: `Each has commits the other lacks: keep ${name}'s, or push iterate's over it.`,
+      },
+      behind: {
+        title: `${name} has commits iterate's main doesn't`,
+        description: `Pushing anyway overwrites ${name}'s main with iterate's, and those commits go.`,
+      },
+      replace: {
+        title: `Replace iterate's main with ${name}'s?`,
+        description: `iterate's own commits since the two diverged are dropped from main, and the project republishes ${name}'s version.`,
+      },
+    }[choice.kind];
+
+  return (
+    <section aria-labelledby="config-repo-heading" className="flex flex-col gap-3">
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <div className="flex flex-col gap-1">
+          <h2 id="config-repo-heading" className="text-lg font-semibold tracking-tight">
+            Config repo
+          </h2>
+          <p className="text-sm text-muted-foreground">
+            The project&apos;s code, <code>/repos/config</code>: every commit to its main publishes.
+            Link it to a git remote to pull that main in and push it back.
+          </p>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          {remote ? (
+            <>
+              {actionButton("pull", "Pull now", () => sync("pull", remote.url))}
+              {actionButton("push", "Push now", () => sync("push", remote.url))}
+              <Button
+                variant="outline"
+                disabled={Boolean(busy)}
+                onClick={() => setChoice({ kind: "replace", remote })}
+              >
+                Replace with {remote.name}&apos;s
+              </Button>
+              {actionButton("unlink", "Unlink", () => configRepo().setOrigin(null))}
+            </>
+          ) : read ? (
+            <Button onClick={() => void navigate({ search: { configRepo: "link" } })}>Link</Button>
+          ) : null}
+        </div>
+      </div>
+      {read || error ? null : <p className="text-sm text-muted-foreground">Loading…</p>}
+      {read && !remote ? <p className="text-sm">Not linked</p> : null}
+      {remote ? (
+        <p className="text-sm">
+          Linked to{" "}
+          <a href={remote.href} target="_blank" rel="noreferrer" className="font-mono underline">
+            {remote.label}
+          </a>
+        </p>
+      ) : null}
+      {outcome ? (
+        <p role="status" className="text-sm text-muted-foreground">
+          {outcome}
+        </p>
+      ) : null}
+      {choice || linking ? null : <Failure error={error} />}
+      <Sheet
+        open={Boolean(choice) || linking}
+        onOpenChange={(open) => !open && !busy && void closeSheet()}
+      >
+        <SheetContent
+          side="right"
+          showCloseButton={!busy}
+          initialFocus={linking ? firstField : undefined}
+          className="overflow-y-auto data-[side=right]:w-full data-[side=right]:sm:max-w-md"
+        >
+          <form
+            className="flex h-full flex-col"
+            onSubmit={(event) => {
+              event.preventDefault();
+              // Only the link step has the URL field; a choice step submits nothing.
+              const url = new FormData(event.currentTarget).get("url");
+              if (typeof url === "string") void link(url.trim());
+            }}
+          >
+            <SheetHeader className="border-b">
+              <SheetTitle>{copy ? copy.title : "Link the config repo"}</SheetTitle>
+              <SheetDescription>
+                {copy
+                  ? `${copy.description} Cancel keeps the link and moves nothing.`
+                  : "iterate keeps the remote as the repo's origin and pulls its main."}
+              </SheetDescription>
+            </SheetHeader>
+            <FieldGroup className="flex-1 p-4">
+              {linking ? (
+                <>
+                  {githubConnections.map((row) => (
+                    <GithubRepositories
+                      key={row.connection}
+                      projectId={project.id}
+                      connection={row.connection}
+                      account={row.account}
+                      disabled={Boolean(busy)}
+                      onPick={link}
+                    />
+                  ))}
+                  <Field>
+                    <FieldLabel htmlFor="config-repo-url">Git URL</FieldLabel>
+                    <Input
+                      id="config-repo-url"
+                      name="url"
+                      ref={firstField}
+                      type="url"
+                      required
+                      pattern="https://[^@]+"
+                      title="An https:// URL with no credentials in it"
+                      placeholder="https://github.com/acme/site.git"
+                      className="font-mono"
+                    />
+                    <FieldDescription>
+                      Any public git remote over https.{" "}
+                      {githubConnections.length > 0 ? null : (
+                        <>
+                          Connect GitHub on{" "}
+                          <Link to="/projects/$slug/integrations" params={{ slug: project.slug }}>
+                            Integrations
+                          </Link>{" "}
+                          to pick a private repository.
+                        </>
+                      )}
+                    </FieldDescription>
+                  </Field>
+                </>
+              ) : null}
+              {choice ? (
+                <div className="flex flex-col items-start gap-3">
+                  {choice.kind === "diverged" ? (
+                    <Button
+                      type="button"
+                      variant="destructive"
+                      disabled={Boolean(busy)}
+                      onClick={() => setChoice({ ...choice, kind: "replace" })}
+                    >
+                      Replace with {choice.remote.name}&apos;s main
+                    </Button>
+                  ) : null}
+                  {choice.kind === "replace"
+                    ? actionButton(
+                        "replace",
+                        "Replace",
+                        () => sync("pull", choice.remote.url, true),
+                        "destructive",
+                      )
+                    : actionButton(
+                        "force-push",
+                        choice.kind === "diverged"
+                          ? `Push iterate's to ${choice.remote.name}`
+                          : "Push iterate's anyway",
+                        () => sync("push", choice.remote.url, true),
+                        "destructive",
+                      )}
+                </div>
+              ) : null}
+              <Failure error={error} />
+            </FieldGroup>
+            <SheetFooter className="border-t sm:flex-row sm:justify-end">
+              <SheetClose
+                disabled={Boolean(busy)}
+                render={<Button type="button" variant="outline" />}
+              >
+                Cancel
+              </SheetClose>
+              {linking ? (
+                <Button type="submit" disabled={Boolean(busy)}>
+                  {busy === "link" ? <Spinner data-icon="inline-start" /> : null}
+                  Link
+                </Button>
+              ) : null}
+            </SheetFooter>
+          </form>
+        </SheetContent>
+      </Sheet>
+    </section>
+  );
+}
+
+/** An origin for the page: its URL as stored, the remote's name, and how it shows and links. A
+ *  GitHub repository shows as `owner/repo`, any other remote as its URL. Either way without the
+ *  userinfo, where a secret's placeholder sits (unencoded, it holds slashes, so the host starts after
+ *  the last `@`). */
+function describeOrigin(url: string) {
+  const scheme = /^[a-z][a-z0-9+.-]*:\/\//i.exec(url)?.[0] ?? "";
+  const rest = url.slice(scheme.length);
+  const bare = scheme + rest.slice(rest.lastIndexOf("@") + 1);
+  const parsed = URL.parse(bare);
+  const github =
+    parsed?.host === "github.com"
+      ? /^\/([^/]+\/[^/]+?)(?:\.git)?\/?$/.exec(parsed.pathname)?.[1]
+      : null;
+  return github
+    ? { url, name: "GitHub", label: github, href: `https://github.com/${github}` }
+    : { url, name: parsed?.host || "the remote", label: bare, href: bare };
+}
+
+/** An error's words for the page, with any secret placeholder (`getSecret(…)`) cut out. */
+function messageOf(caught: unknown) {
+  return (caught instanceof Error ? caught.message : String(caught)).replace(
+    /getSecret\([^)]*\)?/g,
+    "…",
+  );
+}
+
+/** A failure's words, marked for the specs' ui-error-reporter. */
+function Failure({ error }: { error?: string | null }) {
+  return error ? (
+    <p role="alert" data-type="error" className="text-sm text-destructive">
+      {error}
+    </p>
+  ) : null;
+}
+
+/** GitHub's page of an installation's repositories, the one field read. */
+const InstallationRepositories = z.object({
+  repositories: z.array(z.object({ full_name: z.string() })),
+});
+
+/** One GitHub connection's repositories, every page, listed through the project's egress
+ *  with the connection's token as its placeholder. A pick links over the same placeholder, so the
+ *  origin never holds the token. */
+function GithubRepositories({
+  projectId,
+  connection,
+  account,
+  disabled,
+  onPick,
+}: {
+  projectId: string;
+  connection: string;
+  account: string;
+  disabled: boolean;
+  onPick: (url: string) => Promise<void>;
+}) {
+  const { api } = shell.useRouteContext();
+  const [listed, setListed] = useState<{ names: string[]; error?: string }>();
+  const token = `getSecret("/secrets/github-${connection}", { field: "accessToken" })`;
+  useEffect(() => {
+    const list = async () => {
+      const names: string[] = [];
+      for (let page = 1; ; page += 1) {
+        const url = `https://api.github.com/installation/repositories?per_page=100&page=${page}`;
+        const response = await api.projects.get(projectId).fetch(
+          new Request(url, {
+            headers: { accept: "application/vnd.github+json", authorization: `Bearer ${token}` },
+          }),
+        );
+        // the status alone: a failed egress's body can quote the placeholder
+        if (!response.ok) {
+          await response.body?.cancel();
+          throw new Error(`Couldn't list ${account}'s repositories (HTTP ${response.status})`);
+        }
+        const { repositories } = InstallationRepositories.parse(await response.json());
+        names.push(...repositories.map((repository) => repository.full_name));
+        if (repositories.length < 100) return names;
+      }
+    };
+    list().then(
+      (names) => setListed({ names }),
+      (caught: unknown) => setListed({ names: [], error: messageOf(caught) }),
+    );
+  }, [api, projectId, token, account]);
+  return (
+    <div className="flex flex-col gap-2">
+      <span className="text-sm font-medium">
+        {account} on GitHub{listed ? "" : ": loading repositories…"}
+      </span>
+      <Failure error={listed?.error} />
+      <ul className="flex flex-col divide-y" aria-label={`${account}'s repositories`}>
+        {listed?.names.map((name) => (
+          <li key={name} className="flex items-center justify-between gap-2 py-2">
+            <span className="font-mono text-sm">{name}</span>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={disabled}
+              aria-label={`Link ${name}`}
+              onClick={() => void onPick(`https://x-access-token:${token}@github.com/${name}.git`)}
+            >
+              Link
+            </Button>
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }

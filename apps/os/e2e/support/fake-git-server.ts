@@ -150,15 +150,27 @@ export class FakeGitServer {
     return files;
   }
 
+  /** A file's bytes at the tip (a picture as it was committed), or null when the tip has no such file. */
+  bytes(name: string, path: string): Uint8Array | null {
+    const repo = this.#repo(name);
+    const entry = this.#manifest(repo).get(path);
+    const blob = entry && repo.objects.get(entry.oid);
+    return blob?.type === "blob" ? blob.payload : null;
+  }
+
   /** ONE commit on `main` from OUTSIDE any facet — `changes` applied to the tip's tree (deletes
    *  first), the trees and the commit built with the facet's own codecs, the tip moved. The oid. */
-  async commit(name: string, message: string, changes: RepoFileChange[]): Promise<string> {
+  async commit(
+    name: string,
+    message: string,
+    changes: (RepoFileChange | { path: string; bytes: Uint8Array })[],
+  ): Promise<string> {
     const repo = this.#repo(name);
     const manifest = repo.tip ? this.#manifest(repo) : new Map();
     for (const change of changes) if ("delete" in change) manifest.delete(change.path);
     for (const change of changes) {
       if ("delete" in change) continue;
-      const payload = textEncoder.encode(change.content);
+      const payload = "bytes" in change ? change.bytes : textEncoder.encode(change.content);
       const oid = await hashObject("blob", payload);
       repo.objects.set(oid, { oid, type: "blob", payload });
       manifest.set(change.path, { oid, mode: manifest.get(change.path)?.mode ?? "100644" });
