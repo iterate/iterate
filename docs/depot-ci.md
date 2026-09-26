@@ -763,8 +763,9 @@ Git merges `pnpm-lock.yaml` line by line, so two changes to different lines merg
 lockfile pnpm may reject, and a PR's CI tested it against the main of its last push. So
 `pnpm-lock.yaml.sha256` holds the lockfile's hash on one line: a PR that changed the lockfile
 conflicts with a main whose lockfile changed since its base, and GitHub refuses the merge, whoever
-merges it. Rebase, run `pnpm install` (its root `prepare` rewrites the stamp), commit both files
-and push; CI then tests the result. Lint and Typecheck's **Check the lockfile stamp** fails a
+merges it. Rebase, run `pnpm install` (its root `prepare` rewrites the stamp, except where `CI` is
+set: then run `node scripts/lockfile-stamp.ts`), commit both files and push; CI then tests the
+result. Lint and Typecheck's **Check the lockfile stamp** fails a
 commit whose stamp is not its lockfile's hash. The reasons are in `scripts/lockfile-stamp.ts`.
 
 ## Which PRs get a preview

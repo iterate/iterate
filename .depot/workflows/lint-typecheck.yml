@@ -44,7 +44,12 @@ jobs:
             run: pnpm knip
           # A commit whose pnpm-lock.yaml.sha256 is not its lockfile's hash fails (scripts/lockfile-stamp.ts).
           - name: Check the lockfile stamp
-            run: node scripts/lockfile-stamp.ts && test -z "$(git status --porcelain -- pnpm-lock.yaml.sha256)"
+            run: |
+              node scripts/lockfile-stamp.ts
+              test -z "$(git status --porcelain -- pnpm-lock.yaml.sha256)" || {
+                echo 'Run `node scripts/lockfile-stamp.ts` at the repo root and commit pnpm-lock.yaml.sha256.' >&2
+                exit 1
+              }
           # The control plane's D1 (apps/os/src/control-plane/db): its migrations replay to
           # definitions.sql, and the typed queries are what sqlfu generates from them. Every
           # deployment runs the migrations; the types are checked against definitions.sql.

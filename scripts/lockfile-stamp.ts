@@ -18,8 +18,8 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 
 const hash = createHash("sha256").update(readFileSync("pnpm-lock.yaml")).digest("hex");
 const stamp = `# pnpm-lock.yaml's sha256, which \`pnpm install\` writes (scripts/lockfile-stamp.ts says why).
-# A conflict on the line below means main's lockfile changed too: run \`pnpm install\` on the
-# rebased branch and commit both files.
+# A conflict on the line below means main's lockfile changed too: on the rebased branch run
+# \`pnpm install\` and \`node scripts/lockfile-stamp.ts\`, then commit both files.
 ${hash}
 `;
 const path = "pnpm-lock.yaml.sha256";

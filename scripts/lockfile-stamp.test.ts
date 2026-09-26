@@ -1,7 +1,7 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { temporaryDirectory } from "@iterate-com/shared/test-support/temporary-directory";
 import { expect, test } from "vitest";
 
 // Each row branches `main` and `pull-request` from one base commit, edits the lockfile's lines on
@@ -45,11 +45,13 @@ test.for<{
   repository.commit("pull request", pullRequest);
   repository.git("checkout", "-q", "main");
   repository.commit("main", main);
+  // Exact on purpose: the stamp must be the only conflicted path, so the lockfiles still merge.
   expect(repository.merge("main", "pull-request")).toEqual(conflicts);
 });
 
 function gitRepository() {
-  const cwd = mkdtempSync(join(tmpdir(), "lockfile-stamp-"));
+  const directory = temporaryDirectory();
+  const cwd = directory.path;
   const env = {
     ...process.env,
     GIT_CONFIG_GLOBAL: "/dev/null",
@@ -86,6 +88,6 @@ function gitRepository() {
       if (merge.status !== 0 && merge.status !== 1) throw new Error(merge.stderr);
       return merge.stdout.trim().split("\n").slice(1);
     },
-    [Symbol.dispose]: () => rmSync(cwd, { recursive: true, force: true }),
+    [Symbol.dispose]: directory[Symbol.dispose],
   };
 }
