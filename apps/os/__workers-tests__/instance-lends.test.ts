@@ -260,12 +260,11 @@ function usedBy(path: string, borrower: string) {
  *  `Authorization: Bearer <key>` and 401 to anything else. */
 function serveKeyedApi(key: string) {
   const network = globalThis.fetch;
-  const spy = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+  vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
     const request = new Request(input, init);
     if (new URL(request.url).origin !== KEYED) return network(request);
     return request.headers.get("authorization") === `Bearer ${key}`
       ? Response.json({ me: "instance" })
       : new Response("invalid_key", { status: 401 });
   });
-  onTestFinished(() => spy.mockRestore());
 }

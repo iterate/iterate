@@ -246,7 +246,7 @@ function serveGateways() {
   const token = `gateway-token-${crypto.randomUUID()}`;
   const upstreamCloses: number[] = [];
   const network = globalThis.fetch;
-  const spy = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+  vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
     const request = new Request(input, init);
     if (new URL(request.url).origin !== SHOP) return network(request);
     const { pathname } = new URL(request.url);
@@ -271,7 +271,6 @@ function serveGateways() {
     });
     return new Response(null, { status: 101, webSocket: client });
   });
-  onTestFinished(() => spy.mockRestore());
   return { token, upstreamCloses };
 }
 

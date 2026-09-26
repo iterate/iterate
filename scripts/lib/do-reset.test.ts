@@ -103,7 +103,6 @@ function fakeWrangler() {
           }
         : undefined,
     [Symbol.dispose]() {
-      vi.unstubAllEnvs();
       rmSync(dir, { recursive: true, force: true });
     },
   };

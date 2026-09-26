@@ -235,10 +235,10 @@ test.for([
   "a resume $resumed is logged as $logged.event ($logged.level)",
   ({ deployReset, contextAbortedOffset, logged }) => {
     const lines: { level: string; event: unknown }[] = [];
-    const info = vi.spyOn(console, "info").mockImplementation((line: { event: unknown }) => {
+    vi.spyOn(console, "info").mockImplementation((line: { event: unknown }) => {
       lines.push({ level: "info", event: line.event });
     });
-    const warn = vi.spyOn(console, "warn").mockImplementation((line: { event: unknown }) => {
+    vi.spyOn(console, "warn").mockImplementation((line: { event: unknown }) => {
       lines.push({ level: "warn", event: line.event });
     });
     reportFetchUpgradeSpliceEvent({
@@ -251,8 +251,6 @@ test.for([
       deployReset,
       contextAbortedOffset,
     });
-    info.mockRestore();
-    warn.mockRestore();
     expect(lines).toEqual([logged]);
   },
 );

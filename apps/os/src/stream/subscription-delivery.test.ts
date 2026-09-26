@@ -909,59 +909,55 @@ test("alarm claim: an ephemeral that outgrows the ring while caught-up rows wait
   // so each reserves the ring's 1 MiB and waits. A 5 MiB ephemeral lands meanwhile. Woken, each
   // must reserve what the ring now holds: 5 + 5 MiB is past the budget, so one reads and the other
   // waits for it — never two 5 MiB batches in flight on 2 MiB of room.
-  const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
-  try {
-    const parked: Record<string, (() => void)[]> = { big: [], a: [], b: [] };
-    const pushes: Record<string, number[][]> = { big: [], a: [], b: [] };
-    const rig = incarnation((printed) => {
-      const name = printed.replace(/^itx\./, "");
-      return (
-        name in parked && {
-          push: (events: { payload?: { n?: number } }[]) => {
-            pushes[name].push(ns(events));
-            return new Promise<void>((resolve) => parked[name].push(resolve));
-          },
-        }
-      );
-    });
-    const release = async (name: string) => {
-      parked[name].splice(0).forEach((resolve) => resolve());
-      await drainDeliveries();
-    };
-    for (const [name, consumes] of [
-      ["a", "demo/ping"],
-      ["b", "demo/ping"],
-      ["big", "blob"],
-    ] as const)
-      rig.stream.append(
-        normalizeControlEvent(
-          {
-            type: "events.iterate.com/itx/subscription-configured",
-            payload: { name, target: `itx.${name}.push`, consumes: [consumes] },
-          },
-          "/",
-        ),
-      );
+  vi.spyOn(console, "warn").mockImplementation(() => undefined);
+  const parked: Record<string, (() => void)[]> = { big: [], a: [], b: [] };
+  const pushes: Record<string, number[][]> = { big: [], a: [], b: [] };
+  const rig = incarnation((printed) => {
+    const name = printed.replace(/^itx\./, "");
+    return (
+      name in parked && {
+        push: (events: { payload?: { n?: number } }[]) => {
+          pushes[name].push(ns(events));
+          return new Promise<void>((resolve) => parked[name].push(resolve));
+        },
+      }
+    );
+  });
+  const release = async (name: string) => {
+    parked[name].splice(0).forEach((resolve) => resolve());
     await drainDeliveries();
-    rig.stream.append({ type: "blob", payload: { n: 0, blob: "x".repeat(7.5 * MiB) } });
-    await drainDeliveries(); // `big` parks holding ~7.5 MiB; `a` and `b` were moved along: at the mark
-    rig.stream.append({ type: "demo/ping", ephemeral: true, payload: { n: 1 } });
-    await drainDeliveries(); // both reserved the ring's 1 MiB and wait for room
-    rig.stream.append({
-      type: "demo/ping",
-      ephemeral: true,
-      payload: { n: 2, blob: "x".repeat(5 * MiB) },
-    });
-    await drainDeliveries();
-    expect({ a: pushes.a, b: pushes.b }).toEqual({ a: [], b: [] });
-    await release("big");
-    expect(pushes.a.length + pushes.b.length).toBe(1); // one 5 MiB batch in flight, the other waits
-    await release("a");
-    await release("b");
-    expect({ a: pushes.a, b: pushes.b }).toEqual({ a: [[2]], b: [[2]] }); // n=1 was evicted by n=2
-  } finally {
-    warn.mockRestore();
-  }
+  };
+  for (const [name, consumes] of [
+    ["a", "demo/ping"],
+    ["b", "demo/ping"],
+    ["big", "blob"],
+  ] as const)
+    rig.stream.append(
+      normalizeControlEvent(
+        {
+          type: "events.iterate.com/itx/subscription-configured",
+          payload: { name, target: `itx.${name}.push`, consumes: [consumes] },
+        },
+        "/",
+      ),
+    );
+  await drainDeliveries();
+  rig.stream.append({ type: "blob", payload: { n: 0, blob: "x".repeat(7.5 * MiB) } });
+  await drainDeliveries(); // `big` parks holding ~7.5 MiB; `a` and `b` were moved along: at the mark
+  rig.stream.append({ type: "demo/ping", ephemeral: true, payload: { n: 1 } });
+  await drainDeliveries(); // both reserved the ring's 1 MiB and wait for room
+  rig.stream.append({
+    type: "demo/ping",
+    ephemeral: true,
+    payload: { n: 2, blob: "x".repeat(5 * MiB) },
+  });
+  await drainDeliveries();
+  expect({ a: pushes.a, b: pushes.b }).toEqual({ a: [], b: [] });
+  await release("big");
+  expect(pushes.a.length + pushes.b.length).toBe(1); // one 5 MiB batch in flight, the other waits
+  await release("a");
+  await release("b");
+  expect({ a: pushes.a, b: pushes.b }).toEqual({ a: [[2]], b: [[2]] }); // n=1 was evicted by n=2
 });
 
 test("alarm claim: two ephemeral batches that land during ONE in-flight cursor call BOTH reach the target, in one delivery, from the ring", async () => {
@@ -1003,38 +999,34 @@ test("alarm claim: an ephemeral over the ring's whole budget reaches a caught-up
 
 test("alarm claim: ephemerals the ring evicts before a busy cursor row reads them are reported, as a dropped push is", async () => {
   const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
-  try {
-    const rig = parkedSinkRig();
-    rig.stream.append({ type: "demo/ping", payload: { n: 1 } });
-    await drainDeliveries(); // n=1 is in flight, parked
-    // ~400 KiB each: the third evicts the first from the 1 MiB ring before the row reads on
-    const [lost] = rig.stream.append({
+  const rig = parkedSinkRig();
+  rig.stream.append({ type: "demo/ping", payload: { n: 1 } });
+  await drainDeliveries(); // n=1 is in flight, parked
+  // ~400 KiB each: the third evicts the first from the 1 MiB ring before the row reads on
+  const [lost] = rig.stream.append({
+    type: "demo/ping",
+    ephemeral: true,
+    payload: { n: 2, blob: "x".repeat(400 * 1024) },
+  });
+  for (const n of [3, 4])
+    rig.stream.append({
       type: "demo/ping",
       ephemeral: true,
-      payload: { n: 2, blob: "x".repeat(400 * 1024) },
+      payload: { n, blob: "x".repeat(400 * 1024) },
     });
-    for (const n of [3, 4])
-      rig.stream.append({
-        type: "demo/ping",
-        ephemeral: true,
-        payload: { n, blob: "x".repeat(400 * 1024) },
-      });
-    await rig.release(); // acks n=1; the loop reads the ring, which no longer holds n=2
-    await rig.release();
-    expect(rig).toMatchObject({ pushes: [[1], [3, 4]] }); // the loss itself is the contract
-    expect(
-      warn,
-      "the ring's eviction of ephemerals a cursor row had not read should be reported",
-    ).toHaveBeenCalledWith(
-      expect.objectContaining({
-        event: "delivery.cursor.ephemerals-evicted",
-        name: "s",
-        lostThroughOffset: lost.offset,
-      }),
-    );
-  } finally {
-    warn.mockRestore();
-  }
+  await rig.release(); // acks n=1; the loop reads the ring, which no longer holds n=2
+  await rig.release();
+  expect(rig).toMatchObject({ pushes: [[1], [3, 4]] }); // the loss itself is the contract
+  expect(
+    warn,
+    "the ring's eviction of ephemerals a cursor row had not read should be reported",
+  ).toHaveBeenCalledWith(
+    expect.objectContaining({
+      event: "delivery.cursor.ephemerals-evicted",
+      name: "s",
+      lostThroughOffset: lost.offset,
+    }),
+  );
 });
 
 test("alarm claim: a pass that finds a call in flight WAITS for it: the deadline it leaves is derived after the ack — never a claim now past, never one for a row since caught up", async () => {
@@ -1443,8 +1435,6 @@ test.for([
     issues: events(error, "issue"),
     removals: events(log, "delivery.facet-removed-in-flight"),
   }).toEqual(expected);
-  error.mockRestore();
-  log.mockRestore();
 });
 
 function nextMacrotask() {

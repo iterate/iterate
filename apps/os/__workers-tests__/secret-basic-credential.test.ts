@@ -7,7 +7,7 @@
 //
 // THE UPSTREAM IS IN-PROCESS: the secret facet's terminal `fetch` is the isolate's global fetch,
 // answered below for every `.test` origin, each request recorded as the upstream saw it.
-import { expect, onTestFinished, test, vi } from "vitest";
+import { expect, test, vi } from "vitest";
 import type { StreamEvent } from "iterate/stream/processor";
 import { DurableObjectNameCodec } from "../src/context/paths.ts";
 import { projectWithMember, stub } from "./support.ts";
@@ -72,13 +72,12 @@ function basic(credential: string): string {
 function serveTestOrigins() {
   const requests: { url: string; authorization: string | null }[] = [];
   const network = globalThis.fetch;
-  const spy = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+  vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
     const request = new Request(input, init);
     if (!new URL(request.url).hostname.endsWith(".test")) return network(request);
     requests.push({ url: request.url, authorization: request.headers.get("authorization") });
     return new Response("ok");
   });
-  onTestFinished(() => spy.mockRestore());
   return { requests };
 }
 
@@ -87,13 +86,12 @@ function captureLogs() {
   const lines: string[] = [];
   for (const method of ["log", "info", "warn", "error", "debug"] as const) {
     const original = console[method];
-    const spy = vi.spyOn(console, method).mockImplementation((...args: unknown[]) => {
+    vi.spyOn(console, method).mockImplementation((...args: unknown[]) => {
       lines.push(
         args.map((arg) => (typeof arg === "string" ? arg : JSON.stringify(arg))).join(" "),
       );
       original(...args);
     });
-    onTestFinished(() => spy.mockRestore());
   }
   return { lines };
 }

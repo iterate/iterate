@@ -358,14 +358,10 @@ const appConfigRows: {
 for (const { vars, becomes, throws, warns } of appConfigRows)
   test(`parseAppConfig: ${JSON.stringify(vars)} → ${throws ? `throws ${throws}` : JSON.stringify(becomes)}`, () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    try {
-      if (throws) expect(() => parseAppConfig(vars)).toThrow(throws);
-      else expect(expose(parseAppConfig(vars))).toEqual(becomes);
-      if (warns !== undefined) expect(warn).toHaveBeenCalledTimes(warns);
-      else expect(warn).not.toHaveBeenCalled();
-    } finally {
-      warn.mockRestore();
-    }
+    if (throws) expect(() => parseAppConfig(vars)).toThrow(throws);
+    else expect(expose(parseAppConfig(vars))).toEqual(becomes);
+    if (warns !== undefined) expect(warn).toHaveBeenCalledTimes(warns);
+    else expect(warn).not.toHaveBeenCalled();
   });
 test("parseAppConfig: a secret never prints", () => {
   const { secrets } = parseAppConfig(MINIMAL);

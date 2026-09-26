@@ -5,7 +5,7 @@ const noDelays = [0, 0, 0];
 
 // Preview OS trace, PR #2970, attempt 144gszhm0r: "Error: Depot GetJobAttemptLogs returned HTTP 500".
 test("a read Depot answers with one 500 is asked again, with a warn, and succeeds", async () => {
-  using depot = depotAnswering(500, 200);
+  const depot = depotAnswering(500, 200);
 
   await expect(
     depotCiApi("GetJobAttemptLogs", { attemptId: "a" }, "token", {
@@ -27,7 +27,7 @@ test("a read Depot answers with one 500 is asked again, with a warn, and succeed
 });
 
 test("a read whose connection fails is asked again", async () => {
-  using depot = depotAnswering("reset", 200);
+  const depot = depotAnswering("reset", 200);
 
   await expect(
     depotCiApi("ListArtifacts", { runId: "r" }, "token", {
@@ -48,7 +48,7 @@ test.for([
   { method: "DispatchWorkflow", answer: 500, error: "Depot DispatchWorkflow returned HTTP 500" },
   { method: "RetryJob", answer: "reset" as const, error: "fetch failed" },
 ])("$method answered $answer fails at once", async ({ method, answer, error }) => {
-  using depot = depotAnswering(answer, 200);
+  const depot = depotAnswering(answer, 200);
 
   await expect(
     depotCiApi(method, {}, "token", { fetch: depot.fetch, delaysMs: noDelays }),
@@ -72,12 +72,5 @@ function depotAnswering(...answers: (number | "reset")[]) {
     });
   }) as unknown as typeof globalThis.fetch;
   const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-  return {
-    fetch,
-    calls,
-    warn,
-    [Symbol.dispose]() {
-      warn.mockRestore();
-    },
-  };
+  return { fetch, calls, warn };
 }

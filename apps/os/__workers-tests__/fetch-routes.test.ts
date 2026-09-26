@@ -167,8 +167,8 @@ test("a route whose target is a lent stub that is offline answers 502, logged at
     target: "itx.tunnels.ghost",
   });
   await publishConfigWorker(itx, ["itx", "workers", ["get", { source: SRC_FETCH_ROUTER }]]);
-  using info = vi.spyOn(console, "info");
-  using error = vi.spyOn(console, "error");
+  const info = vi.spyOn(console, "info");
+  const error = vi.spyOn(console, "error");
   const offline = await exports.default.fetch(`https://ghost--${project}.projects.test/`);
   expect({
     status: offline.status,

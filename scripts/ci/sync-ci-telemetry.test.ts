@@ -238,7 +238,6 @@ test.for<[Parameters<typeof busyDepot>[0], string]>([
       listings: { [label]: "2026-09-24T19:01:00.000Z" },
     });
     expect(runs).toHaveLength(200);
-    warn.mockRestore();
   },
 );
 
@@ -256,7 +255,6 @@ test("a full listing that reaches back leaves the window whole", async () => {
   expect(warn).not.toHaveBeenCalled();
   // created from 19:30, two hours before the window
   expect(runs).toHaveLength(171);
-  warn.mockRestore();
 });
 
 test("reads each job's runner size or label from the workflow file", () => {

@@ -241,29 +241,24 @@ async function deleting(cf: Cf) {
   const waits: number[] = [];
   const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
   const log = vi.spyOn(console, "log").mockImplementation(() => {});
-  try {
-    const { stuck, error } = await deleteArtifactsNamespace(cf, NAMESPACE, async (ms) => {
-      waits.push(ms);
-    }).then(
-      (stuck) => ({ stuck, error: undefined }),
-      (failure: Error) => ({ stuck: undefined, error: failure }),
-    );
-    const warns = warn.mock.calls.map(([entry]) => entry);
-    return {
-      error,
-      stuck,
-      waits,
-      warns,
-      logs: log.mock.calls.map(([entry]) => entry),
-      stuckEvents: warns.filter(
-        (entry) => entry?.event === "preview.platform-failure-stuck-namespace",
-      ),
-      platformFailureRetries: warns.filter(
-        (entry) => entry?.event === "preview.platform-failure-retry",
-      ),
-    };
-  } finally {
-    warn.mockRestore();
-    log.mockRestore();
-  }
+  const { stuck, error } = await deleteArtifactsNamespace(cf, NAMESPACE, async (ms) => {
+    waits.push(ms);
+  }).then(
+    (stuck) => ({ stuck, error: undefined }),
+    (failure: Error) => ({ stuck: undefined, error: failure }),
+  );
+  const warns = warn.mock.calls.map(([entry]) => entry);
+  return {
+    error,
+    stuck,
+    waits,
+    warns,
+    logs: log.mock.calls.map(([entry]) => entry),
+    stuckEvents: warns.filter(
+      (entry) => entry?.event === "preview.platform-failure-stuck-namespace",
+    ),
+    platformFailureRetries: warns.filter(
+      (entry) => entry?.event === "preview.platform-failure-retry",
+    ),
+  };
 }

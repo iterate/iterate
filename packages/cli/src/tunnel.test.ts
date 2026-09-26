@@ -156,8 +156,8 @@ test.for([
       ? "https://os.example.com/projects/p/blog/"
       : "https://blog--p.example.com/";
   const fake = fakeProject(url);
-  using stderr = vi.spyOn(console, "error").mockImplementation(() => {});
-  using stdout = vi.spyOn(console, "log").mockImplementation(() => {});
+  const stderr = vi.spyOn(console, "error").mockImplementation(() => {});
+  const stdout = vi.spyOn(console, "log").mockImplementation(() => {});
   const run = runTunnel({
     // the tunnel ends as soon as it is live: the connection is already closed, and no reconnect
     connection: fake.connection(Promise.resolve({ code: 1006, reason: "" })),
@@ -185,8 +185,8 @@ test.for([
 // one literal hostname too, both before anything is lent.
 test("a tunnel on a hostname: its route matches the host alone; a host another route takes, or a pattern, refuses it", async () => {
   const fake = fakeProject("https://unused.example.com/");
-  using _stderr = vi.spyOn(console, "error").mockImplementation(() => {});
-  using stdout = vi.spyOn(console, "log").mockImplementation(() => {});
+  vi.spyOn(console, "error").mockImplementation(() => {});
+  const stdout = vi.spyOn(console, "log").mockImplementation(() => {});
   const tunnelOn = (hostname: string) =>
     runTunnel({
       connection: fake.connection(Promise.resolve({ code: 1006, reason: "" })),
@@ -232,8 +232,8 @@ test("a tunnel on a hostname: its route matches the host alone; a host another r
 // it end, with an error. 2026-09-25: a tunnel sat 55 minutes on a dead connection, unaware.
 test("a tunnel whose connection closes reconnects, lends and routes again; it ends only when every attempt fails", async () => {
   const fake = fakeProject("https://blog--p.example.com/");
-  using stderr = vi.spyOn(console, "error").mockImplementation(() => {});
-  using _stdout = vi.spyOn(console, "log").mockImplementation(() => {});
+  const stderr = vi.spyOn(console, "error").mockImplementation(() => {});
+  vi.spyOn(console, "log").mockImplementation(() => {});
   let dropSecond!: () => void;
   const reconnects = [
     () => Promise.reject(new Error("getaddrinfo ENOTFOUND os.example.com")), // Wi-Fi not back yet
@@ -284,8 +284,8 @@ test("a tunnel whose connection closes reconnects, lends and routes again; it en
 // is lent again, with its route, over a fresh connection.
 test("a tunnel whose lend ends under a live connection reconnects, lends and routes again", async () => {
   const fake = fakeProject("https://blog--p.example.com/");
-  using stderr = vi.spyOn(console, "error").mockImplementation(() => {});
-  using _stdout = vi.spyOn(console, "log").mockImplementation(() => {});
+  const stderr = vi.spyOn(console, "error").mockImplementation(() => {});
+  vi.spyOn(console, "log").mockImplementation(() => {});
   fake.lendsEnded.push(
     Promise.resolve("went offline (its pager dropped and could not be re-dialed)"),
   );
