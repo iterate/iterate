@@ -179,8 +179,9 @@ async function endSessionInDash(page: Page, dash: Client, client: Client) {
   await consent(page, dash);
   await page.getByRole("heading", { name: "Sessions", exact: true }).waitFor();
   const session = page
-    .getByRole("row")
-    .filter({ has: page.getByText(client.name, { exact: true }) });
+    .getByRole("list", { name: "Sessions" })
+    .getByRole("listitem")
+    .filter({ hasText: client.name });
   await session.getByRole("button", { name: "Log out", exact: true }).click();
   // the list reloads without it
   await expect.poll(() => session.count()).toBe(0);

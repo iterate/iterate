@@ -1,15 +1,15 @@
 // __workers-tests__/secret-exchange-code.test.ts — A SECRET REFRESHED BY ITS OWN EXCHANGE CODE
 // (`refresh: { kind: "worker", source }`, src/secret/exchange-jail.ts): the secret's facet loads the
 // source through Worker Loader and runs `exchange(material, fetch)` on first use and on a 401, its
-// egress the pin alone. And Waitrose, the platform's bundled exchange code, as a person's connection
-// they lend. The shop is in-process: a Tesco-shaped two-step login (a CSRF token and the cookie that
+// egress the pin alone — on a project's own secret, and on the deployment's lent to a project. And
+// Waitrose, the platform's bundled exchange code, as a person's account connected to their project. The shop is in-process: a Tesco-shaped two-step login (a CSRF token and the cookie that
 // binds it, then the form), Waitrose's GraphQL `NewSession` and a bearer-protected `/api/me`,
 // answered for `SHOP` by `serveShop` below — the jail's `PinnedOutbound` and the facet's dispatch
 // both use this isolate's global `fetch`.
 import { expect, onTestFinished, test, vi } from "vitest";
 import type { StreamEvent } from "iterate/stream/processor";
 import { DurableObjectNameCodec, GLOBAL_PROJECT_ID } from "../src/context/paths.ts";
-import { projectWithMember, stub } from "./support.ts";
+import { adminSession, projectWithMember, stub } from "./support.ts";
 
 const SHOP = "https://tesco.test";
 const ELSEWHERE = "https://elsewhere.test";
@@ -75,29 +75,36 @@ test("a thrown error comes back redacted of the material, and no env reaches the
   ]);
 });
 
-test("a person's exchange-code secret lent to a project: the project's first use logs in at the lender", async () => {
-  const lender = await projectWithMember("exchange-code-lend");
+test("the deployment's exchange-code secret lent to a project: the project's first use logs in at the lender", async () => {
+  const borrower = await projectWithMember("exchange-code-lend");
   const shop = serveShop();
-  await lender.session.user.secrets.set(
-    "/secrets/tesco-mine",
+  const sessions: Disposable[] = [];
+  const global = (await adminSession(sessions)).global;
+  const name = `/secrets/tesco-${crypto.randomUUID().slice(0, 8)}`;
+  await global.secrets.set(
+    name,
     { email: "lender@example.com", password: PASSWORD },
     { urls: [SHOP], refresh: { kind: "worker", source: TESCO_EXCHANGE } },
   );
-  await lender.session.user.secrets.lend("/secrets/tesco-mine", {
-    to: lender.projectId,
+  const { lendId } = await global.secrets.lend(name, {
+    to: borrower.projectId,
     as: "/secrets/tesco",
   });
+  onTestFinished(async () => {
+    await global.secrets.revokeLend(name, lendId);
+    await global.secrets.delete(name);
+    for (const session of sessions) session[Symbol.dispose]();
+  });
 
-  expect(await me(lender.projectId)).toMatchObject({
+  expect(await me(borrower.projectId)).toMatchObject({
     status: 200,
     body: { sub: "lender@example.com" },
   });
   shop.expireAll();
-  expect(await me(lender.projectId)).toMatchObject({ status: 200 });
-  const { actor } = await lender.session.whoami();
+  expect(await me(borrower.projectId)).toMatchObject({ status: 200 });
   const lenderSecret = DurableObjectNameCodec.stringify({
     projectId: GLOBAL_PROJECT_ID,
-    path: `/users/${actor}/secrets/tesco-mine`,
+    path: name,
   });
   expect(await refreshed(lenderSecret, "")).toEqual([
     { kind: "worker", ok: true },
@@ -105,7 +112,7 @@ test("a person's exchange-code secret lent to a project: the project's first use
   ]);
 });
 
-test("a person connects Waitrose on their own account with a username and password, and lends it: the project's first use logs in at the lender", async () => {
+test("a person connects Waitrose on their own account with a username and password, then to their project: the project's first use logs in at their connection", async () => {
   const lender = await projectWithMember("waitrose-lend");
   const shop = serveShop();
   const account = lender.session.user.facets.get("account");
@@ -126,19 +133,22 @@ test("a person connects Waitrose on their own account with a username and passwo
     },
   });
 
-  await lender.session.user.secrets.lend("/secrets/waitrose-mum", {
-    to: lender.projectId,
-    as: "/secrets/tesco",
-  });
+  // no consent to ask for, nor scopes to add (an agent's ask names some): connected at once
+  expect(
+    await lender.itx.integrations.connect("waitrose", {
+      account: "mum@example.com",
+      scopes: ["orders:read"],
+    }),
+  ).toEqual({ connection: "mum" });
   expect(await lender.itx.secrets.list()).toContainEqual(
     expect.objectContaining({
-      path: "/secrets/tesco",
+      path: "/secrets/waitrose-mum",
       borrowed: expect.objectContaining({
         integration: expect.objectContaining({ provider: "waitrose", account: "mum@example.com" }),
       }),
     }),
   );
-  expect(await me(lender.projectId)).toMatchObject({
+  expect(await me(lender.projectId, "/secrets/waitrose-mum")).toMatchObject({
     status: 200,
     body: { sub: "mum@example.com" },
   });
@@ -202,10 +212,10 @@ async function setSecret(project: string, source: string) {
 }
 
 /** `/api/me` through the context's egress, the secret's `accessToken` as the bearer. */
-async function me(ctx: string) {
+async function me(ctx: string, path = "/secrets/tesco") {
   const response = await stub(ctx).fetch(
     new Request(`${SHOP}/api/me`, {
-      headers: { authorization: 'Bearer getSecret("/secrets/tesco", { field: "accessToken" })' },
+      headers: { authorization: `Bearer getSecret("${path}", { field: "accessToken" })` },
     }),
   );
   const text = await response.text();

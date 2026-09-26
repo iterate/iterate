@@ -68,7 +68,7 @@ test("the refusal names the facet, the step and the list", () => {
       ["processEventBatch"],
     ]),
   ).toThrow(
-    `facet "account": "processEventBatch" is not one of its public methods (fetch, snapshot, liveSnapshot, waitUntilProcessed, connectIntegration, disconnectIntegration, finishIntegrationConnect, connectWaitrose)`,
+    `facet "account": "processEventBatch" is not one of its public methods (fetch, snapshot, liveSnapshot, waitUntilProcessed, connectIntegration, disconnectIntegration, connectWaitrose)`,
   );
   expect(() => assertFacetMethodIsPublic("plain", [], [["hello"]])).toThrow(
     `facet "plain": "hello" is not one of its public methods (it lists none)`,

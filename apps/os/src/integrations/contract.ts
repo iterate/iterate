@@ -16,7 +16,7 @@ export const IntegrationConnectionRow = z.object({
    *  log `/integrations/<provider>/<connection>`. A person's connection is named by the account's
    *  stable id at the provider, never its email. */
   connection: z.string().min(1),
-  /** Whose app: iterate's (the deployment's) or the project's own. */
+  /** Which OAuth app the token was issued to: iterate's (the deployment's) or the project's own. */
   client: z.enum(["iterate", "project"]),
   /** What the provider calls the account: a Slack workspace's name, a Google or Cloudflare address,
    *  a GitHub login, a Waitrose username. */
@@ -24,8 +24,15 @@ export const IntegrationConnectionRow = z.object({
   /** Its id there: the Slack team, the Google or Cloudflare user, the GitHub installation (a
    *  project's) or user (a person's). */
   externalId: z.string().min(1),
-  /** The scopes the provider says it granted, where it says (Google, Cloudflare). */
+  /** The scopes granted, where the provider has them (Google, Cloudflare): what the token response
+   *  of the sign-in or the connect says was granted (rules.ts `grantedScopesOf`), never what was
+   *  asked for unless the response names none. */
   scopes: z.array(z.string()).optional(),
+  /** WHOSE ACCOUNT, on a project: a member's own (their connection on `/users/<id>`, from signing in
+   *  or connecting it there), which the project uses while it stays connected and they stay a
+   *  member — absent for the project's own. Their address, as their sign-in verified it. */
+  ownerUserId: z.string().min(1).optional(),
+  ownerEmail: z.string().optional(),
 });
 export type IntegrationConnectionRow = z.infer<typeof IntegrationConnectionRow>;
 
@@ -35,8 +42,13 @@ const connected = (description: string) => ({
 });
 const disconnected = {
   description:
-    "The connection was disconnected: its token revoked where the provider allows, its route and secret gone.",
-  payloadSchema: z.object({ connection: z.string().min(1) }),
+    "The connection was disconnected: the project's own had its token revoked where the provider allows, its route and secret gone; a member's account stopped being used by the project, and stays theirs.",
+  payloadSchema: z.object({
+    connection: z.string().min(1),
+    /** Not the owner's own choice: a GitHub installation moved to another project. It stays on the
+     *  project's log; the project's list of connections drops the row all the same. */
+    reason: z.enum(["moved"]).optional(),
+  }),
 };
 
 /** The facts, a catalog the owners' contracts depend on (`processorDeps`). */

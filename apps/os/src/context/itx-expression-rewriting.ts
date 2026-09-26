@@ -72,9 +72,9 @@ export const BUILT_IN_ROOT_DESCRIPTIONS = {
   url: "this project's public URL over HTTP — the apex or a routing slug's host, at a path: `url({ routingSlug?, path? })`; only from a session that reached the platform on an origin",
   kv: "key-value strings, the project's own: `kv.get(k)` · `kv.put(k, v)` · `kv.list(prefix)` · `kv.delete(k)`",
   secrets:
-    "names only, never values: `secrets.list()`; `secrets.collectFromUser({ path, egress, description? })` returns an authenticated collection link; a `getSecret(\"/secrets/x\")` placeholder in an outbound request is substituted at egress; `secrets.verifyHmac(path, { payload, signature })` checks a webhook's HMAC-SHA256 hex signature without revealing the secret; on a person's own context `secrets.lend(path, { to, as })` lends one to a project (`revokeLend(path, lendId)` ends it)",
+    'names only, never values: `secrets.list()`; `secrets.collectFromUser({ path, egress, description? })` returns an authenticated collection link; a `getSecret("/secrets/x")` placeholder in an outbound request is substituted at egress; `secrets.verifyHmac(path, { payload, signature })` checks a webhook\'s HMAC-SHA256 hex signature without revealing the secret',
   integrations:
-    "connect a provider through this deployment's app: `integrations.connect(provider, { scopes? })` → { authorizationUrl, connection } (send the human there); `integrations.requestFromUser(provider, { scopes, lendTo? })` → a Dash link asking the signed-in person to connect",
+    "connect a provider through this deployment's app: `integrations.connect(provider, { scopes? })` → { authorizationUrl, connection } (send the human there); a person connects one of their own accounts to a project with `integrations.connect(provider, { account })` from their own session; `integrations.requestFromUser(provider, { scopes? })` → a Dash link asking a person to connect their account (or another) to this project, which then uses it as `/secrets/<provider>-<connection>`",
   fetchRoutes:
     "which itx expression a request on this project's hosts goes to: `fetchRoutes.set(name, { requestMatcher: { routingSlug?, url?, headers? }, target, authRequirement?, priority? } | null)` · `list()` · `match({ url, headers })`; the config worker forwards a match to `route.target`",
   ai: "Workers AI, verbatim: `ai.run(model, inputs)`",

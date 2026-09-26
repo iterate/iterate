@@ -9,7 +9,9 @@ import {
   githubInstallationIdOf,
   githubInstallationRefusal,
   githubSignatureValid,
+  grantedScopesOf,
   lendVerdict,
+  missingScopes,
   signInAuthorizeParams,
   signInNeedsConsent,
   slackPayloadOf,
@@ -413,6 +415,78 @@ test.for([
   },
 ] as const)("a lend's use — $row", ({ lend, borrower, borrowing, lender, verdict }) =>
   expect(lendVerdict({ lend, borrower, borrowing, lender })).toEqual(verdict),
+);
+
+// A PERSON'S ACCOUNT FOR A PROJECT: connected at once when it holds every scope asked, else the
+// scopes it lacks are what Google or Cloudflare is asked to add.
+test.for([
+  {
+    row: "a Google sign-in with Gmail, asked the project's default",
+    provider: "google",
+    granted: ["openid", "email", "profile", "https://www.googleapis.com/auth/gmail.modify"],
+    asked: [
+      "openid",
+      "https://www.googleapis.com/auth/userinfo.email",
+      "https://www.googleapis.com/auth/userinfo.profile",
+      "https://www.googleapis.com/auth/gmail.modify",
+    ],
+    missing: [],
+  },
+  {
+    row: "a Google sign-in with the identity alone",
+    provider: "google",
+    granted: ["openid", "email", "profile"],
+    asked: ["openid", "https://www.googleapis.com/auth/gmail.modify"],
+    missing: ["https://www.googleapis.com/auth/gmail.modify"],
+  },
+  {
+    row: "a connection that recorded no scopes",
+    provider: "google",
+    granted: [],
+    asked: ["openid", "openid"],
+    missing: ["openid"],
+  },
+  {
+    row: "Cloudflare, where email is not an alias",
+    provider: "cloudflare",
+    granted: ["openid", "https://www.googleapis.com/auth/userinfo.email"],
+    asked: ["openid", "email"],
+    missing: ["email"],
+  },
+  {
+    row: "nothing asked (GitHub, Waitrose)",
+    provider: "github",
+    granted: [],
+    asked: [],
+    missing: [],
+  },
+] as const)("a person's account for a project — $row", ({ provider, granted, asked, missing }) =>
+  expect(missingScopes(provider, granted, asked)).toEqual(missing),
+);
+
+// WHAT A CONSENT GRANTED: the token response's own `scope`, never what was asked, unless it names none.
+test.for([
+  {
+    row: "Google, Gmail unticked",
+    response: { access_token: "x", scope: "openid https://www.googleapis.com/auth/userinfo.email" },
+    asked: "openid email https://www.googleapis.com/auth/gmail.modify",
+    granted: ["openid", "https://www.googleapis.com/auth/userinfo.email"],
+  },
+  {
+    row: "comma-separated",
+    response: { access_token: "x", scope: "chat:write,users:read" },
+    asked: "chat:write",
+    granted: ["chat:write", "users:read"],
+  },
+  {
+    row: "no scope in the answer: exactly what was asked",
+    response: { access_token: "x" },
+    asked: "openid user-details.read",
+    granted: ["openid", "user-details.read"],
+  },
+  { row: "no answer at all", response: null, asked: "", granted: [] },
+] as const)("the scopes a consent granted — $row", ({ response, asked, granted }) =>
+  expect(grantedScopesOf(response, asked)).toEqual(granted),
 );
 
 function hmacHexMatches(payload: string, signature: string) {

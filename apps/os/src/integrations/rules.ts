@@ -1,6 +1,7 @@
 // src/integrations/rules.ts — the pure rules the providers' webhooks, GitHub's connect, an
-// incremental consent, a sign-in that keeps its token (identity.ts) and a lend (secret/durable-object.ts)
-// apply, covered row by row in rules.test.ts.
+// incremental consent, a sign-in that keeps its token (identity.ts), a person's account connected to
+// a project (context/built-ins.ts `integrations.connect`) and the one-token pointer behind it
+// (secret/durable-object.ts) apply, covered row by row in rules.test.ts.
 //
 // THE WEBHOOK RESPONSE CODES. A Slack app or a GitHub App is one webhook URL for every workspace or
 // installation it is in, and Slack disables an app's deliveries to all of them once most of an
@@ -232,4 +233,38 @@ export function lendVerdict(input: {
       revoke: "membership-ended",
     };
   return { as: input.lend.as };
+}
+
+/** Google's short names for its identity scopes, which a sign-in asks for and a token response may
+ *  answer in either spelling. */
+const GOOGLE_SCOPE_ALIASES: Record<string, string> = {
+  email: "https://www.googleapis.com/auth/userinfo.email",
+  profile: "https://www.googleapis.com/auth/userinfo.profile",
+};
+
+/** WHAT A PERSON'S ACCOUNT LACKS for a project (`itx.integrations.connect(provider, { account })`):
+ *  the scopes `asked` that `granted` does not hold, in the order asked — none means the account is
+ *  connected at once, any means an incremental consent on the person's own connection first. Google
+ *  spells `email` and `profile` two ways; every other scope is compared as written. */
+export function missingScopes(
+  provider: string,
+  granted: readonly string[],
+  asked: readonly string[],
+): string[] {
+  const spelled = (scope: string) =>
+    provider === "google" ? GOOGLE_SCOPE_ALIASES[scope] || scope : scope;
+  const held = new Set(granted.map(spelled));
+  return [...new Set(asked)].filter((scope) => !held.has(spelled(scope)));
+}
+
+/** WHAT A CONSENT GRANTED, off the token response (RFC 6749 §5.1): its `scope`, space-separated
+ *  (a comma-separated one, as some providers send, too); the `asked` scope when the response names
+ *  none, which the RFC allows only when the grant is exactly what was asked. A connection records
+ *  these, never what it asked for, so a scope the person unticked is not claimed. */
+export function grantedScopesOf(tokenResponse: unknown, asked: string): string[] {
+  const scope =
+    isRecord(tokenResponse) && typeof tokenResponse.scope === "string"
+      ? tokenResponse.scope
+      : asked;
+  return [...new Set(scope.split(/[\s,]+/).filter(Boolean))];
 }

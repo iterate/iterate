@@ -33,3 +33,18 @@ delete from integration_routes where project_id = :projectId and path = :path;
 /** @name releaseRoutesOfDeletedProject */
 delete from integration_routes
 where project_id = :projectId and project_id not in (select id from projects);
+
+/** @name moveIntegrationRoute */
+update integration_routes
+set project_id = :toProjectId, path = :toPath
+where provider = :provider
+  and external_id = :externalId
+  and project_id = :fromProjectId
+  and path = :fromPath;
+
+/** @name releaseIntegrationRoute */
+delete from integration_routes
+where provider = :provider
+  and external_id = :externalId
+  and project_id = :projectId
+  and path = :path;

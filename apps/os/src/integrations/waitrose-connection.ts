@@ -11,6 +11,7 @@ import { codedError } from "iterate/lib";
 import { z } from "zod";
 import {
   appendPlatformFact,
+  deleteTokenSecret,
   assertConnectionName,
   tokenSecretPathOf,
   type IntegrationScope,
@@ -38,10 +39,7 @@ export async function connectWaitrose(
 }
 
 export async function disconnectWaitrose(scope: IntegrationScope, connection: string) {
-  // a secret already gone is the goal
-  await scope
-    .withItx((itx) => itx.secrets.delete(tokenSecretPathOf("waitrose", connection)))
-    .catch(() => {});
+  await deleteTokenSecret(scope, "waitrose", connection);
   await appendPlatformFact(scope.env, scope.projectId, scope.rootPath, {
     type: "events.iterate.com/waitrose/disconnected",
     payload: { connection },

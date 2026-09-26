@@ -1,8 +1,10 @@
 // sign-in-connections.e2e.test.ts — signing in with Google, Cloudflare and GitHub on a deployed
 // worker, through the deployed pet shop's fakes (a preview's iterate clients, scripts/preview-*-app.ts):
-// each sign-in keeps its token as the person's own connection. Google's is then lent to the person's
-// project, used there through egress, refreshed at the lender after a forced expiry, and refused once
-// the lend is revoked. Deployed only: the fakes' redirects come back to a public origin.
+// each sign-in keeps its token as the person's own connection. Google's is then connected to the
+// person's project in one click (`itx.integrations.connect("google", { account })`), used there
+// through egress, refreshed at the person's connection after a forced expiry, and refused once
+// disconnected from the project, which leaves the person's connection standing. Deployed only: the
+// fakes' redirects come back to a public origin.
 import { expect } from "vitest";
 import { TEST_LINK_EMAIL_DOMAIN } from "../src/test-link.ts";
 import { cookieSession, workerUrl } from "./support/client.ts";
@@ -10,32 +12,45 @@ import { petshopBaseUrl, petshopExpireTokens } from "./support/petshop.ts";
 import { deployedOnly, freshDnsSafeProjectSlug } from "./support/project-host.ts";
 
 deployedOnly(
-  "Sign in with Google keeps its token: the person's own connection, lent to their project, used there through egress, refreshed at the lender, refused once revoked",
+  "Sign in with Google keeps its token as your account: a project connects it in one click, uses it through egress, refreshed at your connection, and disconnecting it there leaves it yours",
   async ({ skip }) => {
     const email = `${freshDnsSafeProjectSlug("google")}@${TEST_LINK_EMAIL_DOMAIN}`;
     const cookie = await signInThroughFake("/.auth/identity", { email });
     if (!cookie) return skip("this deployment's Google client is not the pet shop's fake");
     const api: any = await cookieSession(cookie);
-    const [connection] = Object.values(
-      (await api.user.facets.get("account").snapshot()).state.integrations,
-    ) as { provider: string; connection: string; account: string }[];
-    expect(connection).toMatchObject({ provider: "google", account: email });
-    const path = `/secrets/google-${connection!.connection}`;
+    const yours = async () =>
+      Object.values((await api.user.facets.get("account").snapshot()).state.integrations) as {
+        provider: string;
+        connection: string;
+        account: string;
+      }[];
+    const [account] = await yours();
+    expect(account).toMatchObject({ provider: "google", account: email });
+    const path = `/secrets/google-${account!.connection}`;
     expect(await api.user.secrets.list()).toContainEqual(
       expect.objectContaining({ path, refresh: "oauth-refresh-token" }),
     );
-    const itx = await api.projects.create({ project: freshDnsSafeProjectSlug("lend") });
-    const { projectId } = await itx.whoami();
-    const { lendId } = await api.user.secrets.lend(path, {
-      to: projectId,
-      as: "/secrets/google-me",
+    const itx = await api.projects.create({ project: freshDnsSafeProjectSlug("connect") });
+    // the sign-in granted what the project asks for: no provider round-trip
+    expect(await itx.integrations.connect("google", { account: email })).toEqual({
+      connection: account!.connection,
     });
-    expect(await gmailProfile(itx)).toMatchObject({ status: 200, body: { emailAddress: email } });
-    // every outstanding token of the fake's client answers 401 now: the lender's secret refreshes
+    expect(await gmailProfile(itx, path)).toMatchObject({
+      status: 200,
+      body: { emailAddress: email },
+    });
+    // every outstanding token of the fake's client answers 401 now: the person's secret refreshes
     await petshopExpireTokens("petshop-default");
-    expect(await gmailProfile(itx)).toMatchObject({ status: 200, body: { emailAddress: email } });
-    await api.user.secrets.revokeLend(path, lendId);
-    expect(await gmailProfile(itx)).toMatchObject({ status: 502 });
+    expect(await gmailProfile(itx, path)).toMatchObject({
+      status: 200,
+      body: { emailAddress: email },
+    });
+    await itx.facets
+      .get("project")
+      .disconnectIntegration({ provider: "google", connection: account!.connection });
+    expect(await gmailProfile(itx, path)).toMatchObject({ status: 502 });
+    expect(await yours()).toContainEqual(expect.objectContaining({ account: email }));
+    expect(await gmailProfile(api.user, path)).toMatchObject({ status: 200 });
   },
 );
 
@@ -139,11 +154,11 @@ async function callbackThroughFake(
   return response;
 }
 
-async function gmailProfile(itx: any) {
+async function gmailProfile(itx: any, path: string) {
   const response: Response = await itx.fetch(
     new Request(`${petshopBaseUrl()}/gmail/v1/users/me/profile`, {
       headers: {
-        authorization: `Bearer getSecret("/secrets/google-me", { field: "accessToken" })`,
+        authorization: `Bearer getSecret("${path}", { field: "accessToken" })`,
       },
     }),
   );

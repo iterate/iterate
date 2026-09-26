@@ -39,7 +39,7 @@ import {
 } from "./control-plane/catalog.ts";
 import { type ControlPlane, describeReach, type Reach } from "./control-plane/edge.ts";
 import { OrganizationRole, type OrganizationState } from "./organization/contract.ts";
-import type { AppConfig } from "./app-config.ts";
+import { iterateAppScopesOf, type AppConfig } from "./app-config.ts";
 import { isRetryableTransportError } from "./retryable-error.ts";
 import type { AccountState, AuthenticationFact } from "./account/contract.ts";
 import { IntegrationProvider } from "./integrations/contract.ts";
@@ -266,8 +266,9 @@ async function foldPlatformFacts(
   );
 }
 
-/** A person who left an organization lends nothing to a project they no longer reach: each such
- *  lend of theirs ends (`secret/lend-revoked { reason: "membership-ended" }` on both sides). Their
+/** A person who left an organization: every project they no longer reach stops using their
+ *  accounts — each such lend of theirs ends (`secret/lend-revoked { reason: "membership-ended" }` on
+ *  both sides, and `<provider>/disconnected` on the project's root). Their
  *  reach is read fresh, past the edge's memo, since it just changed. A use the sweep has not reached
  *  yet is refused at the lender all the same (secret/durable-object.ts `admitLend`). */
 async function endLendsOutOfReach(
@@ -615,6 +616,7 @@ export class SessionRpcTarget extends RpcTarget {
         (provider): provider is Exclude<IntegrationProvider, "waitrose"> =>
           provider !== "waitrose" && !!this.#input.appConfig.integrations[provider],
       ),
+      iterateAppScopes: iterateAppScopesOf(this.#input.appConfig),
     };
   }
 
@@ -638,10 +640,12 @@ export class SessionRpcTarget extends RpcTarget {
 
   /** WHO this session is, as an event's stamp: the principal and the grant it acts through. */
   get #caller(): Caller {
+    const { principal, grant, scopes } = this.#authority;
     return {
-      principal: this.#authority.principal,
-      grant: this.#authority.grant,
+      principal,
+      grant,
       platformOrigin: this.#input.platformOrigin,
+      ...(grant && scopes?.includes("account") && !principal.impersonatedBy && { account: true }),
     };
   }
 

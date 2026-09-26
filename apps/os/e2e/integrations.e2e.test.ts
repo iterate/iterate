@@ -167,6 +167,64 @@ deployedOnly(
 );
 
 deployedOnly(
+  "GitHub: an installation another project holds is offered to the person who administers it, and one confirmation moves its webhooks here and disconnects the other project's connection",
+  async ({ skip }) => {
+    const { itx: holder, installation } = await githubConnected("github-holder");
+    if (!installation) return skip("this deployment's GitHub App is not the pet shop's fake");
+    const { itx: mover, memberBearer } = await projectWithMember("github-mover");
+    const { authorizationUrl } = await mover.facets.get("project").connectIntegration({
+      provider: "github",
+      connection: "acme",
+      client: "iterate",
+      next: workerUrl("/"),
+    });
+    // the same admin installs for the second project: the fake's page sends them straight back
+    const page = new URL(authorizationUrl);
+    page.searchParams.set("installation_id", installation.installationId);
+    page.searchParams.set("login", installation.adminLogin);
+    const github = await fetch(page, { redirect: "manual" });
+    expect(github, await github.clone().text()).toMatchObject({ status: 302 });
+    const back = await fetch(github.headers.get("location")!, {
+      redirect: "manual",
+      headers: { authorization: `Bearer ${memberBearer}` },
+    });
+    expect(back, await back.clone().text()).toMatchObject({ status: 303 });
+    const offer = new URL(back.headers.get("location")!).searchParams.get("move");
+    expect(offer).toEqual(expect.any(String));
+    expect(await integrationRows(holder)).toMatchObject({
+      "/integrations/github/acme": { externalId: installation.installationId },
+    });
+    await mover.facets.get("project").confirmGithubMove({ offer });
+    await until(
+      "the installation moved",
+      async () =>
+        Object.keys(await integrationRows(holder)).length === 0 &&
+        Object.keys(await integrationRows(mover)).length === 1,
+    );
+    expect(await integrationRows(mover)).toMatchObject({
+      "/integrations/github/acme": { externalId: installation.installationId },
+    });
+    const deliveryId = crypto.randomUUID();
+    expect(
+      await petshopGithubFireWebhook({
+        installationId: installation.installationId,
+        url: workerUrl("/api/integrations/github/webhook"),
+        event: {
+          ref: "refs/heads/main",
+          installation: { id: Number(installation.installationId) },
+        },
+        deliveryId,
+        eventName: "push",
+      }),
+    ).toMatchObject({ status: 200, body: { ok: true } });
+    expect(await webhooksOn(mover, "/integrations/github/acme", "github")).toMatchObject([
+      { idempotencyKey: `github-webhook:${deliveryId}` },
+    ]);
+    expect(await webhooksOn(holder, "/integrations/github/acme", "github")).toEqual([]);
+  },
+);
+
+deployedOnly(
   "the project's own AI linter, a processor on the GitHub connection's log: one Check Run per pull request commit, through the connection's token and a shadowed itx.ai, none for a pull request from before it was installed, none twice",
   async ({ skip }) => {
     const { itx, installation } = await githubConnected("github-linter");

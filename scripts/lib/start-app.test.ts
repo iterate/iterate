@@ -127,7 +127,7 @@ test("every request starts the app's Worker but its static files: vite's /assets
     "prd",
   );
   expect(dash.assets).toMatchObject({
-    run_worker_first: ["/*", "!/assets/*", "!/client-logo.svg"],
+    run_worker_first: ["/*", "!/assets/*", "!/client-logo.svg", "!/logos/*"],
   });
   // a directory of public files is one rule
   const kit = startAppWorkerConfig(

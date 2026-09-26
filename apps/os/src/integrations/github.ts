@@ -19,8 +19,8 @@
 //                          stays installed; only its account can uninstall it)
 //   githubWebhookRoute   → `POST /api/integrations/github/webhook` (iterate's App, routed) and
 //                          `…/webhook/<projectId>/<connection>` (a project's own App)
-import { codedError } from "iterate/lib";
-import { signClaims, verifyClaims } from "../caller.ts";
+import { codedError, reportIssue } from "iterate/lib";
+import { bytesFromBase64url, signClaims, verifyClaims } from "../caller.ts";
 import { appConfigOf, sessionSigningSecretOf, type PlatformAddresses } from "../app-config.ts";
 import { DurableObjectNameCodec } from "../context/paths.ts";
 import { ControlPlane } from "../control-plane/edge.ts";
@@ -30,7 +30,9 @@ import { nextUrlOf, SECRET_OAUTH_TTL_MS } from "../secret-oauth.ts";
 import { isRecord, verifySecretHmac } from "../secrets.ts";
 import {
   appendPlatformFact,
+  deleteTokenSecret,
   attemptKeyOf,
+  dropAttemptsOf,
   connectionPathOf,
   connectionRowOf,
   ignoredWebhook,
@@ -66,7 +68,46 @@ type GithubAttempt = ConnectionAttempt & {
   /** The `redirect_uri` the authorize fallback named, which the code exchange repeats (RFC 6749
    *  4.1.3); an install redirect's code names none. */
   redirectUri?: string;
+  /** The human proved they administer the installation, but another project's connection holds
+   *  its route: what moving it here takes (`confirmGithubMove`), and how far the move got —
+   *  `moving` once a confirmation claimed it, `moved` once the route and the connection are here
+   *  and only the holder's cleanup is left, which the same offer retries. */
+  move?: {
+    installationId: string;
+    account: string;
+    holder: { projectId: string; path: string };
+    stage?: "moving" | "moved";
+  };
 };
+
+/** The platform-signed offer to move an installation here, which the callback hands the human's
+ *  landing (`?move=`): the attempt it belongs to (its nonce, spent by the move), the account, and
+ *  the project holding it when the human can see that project. Short-lived. */
+export type GithubMoveOffer = {
+  kind: "github-move";
+  projectId: string;
+  connection: string;
+  nonce: string;
+  account: string;
+  holderSlug: string | null;
+  exp: number;
+};
+
+/** The connection a move offer names, read before its signature is checked — for serializing the
+ *  confirmation on that connection only; `confirmGithubMove` verifies the offer. */
+export function githubMoveOfferConnectionOf(offer: unknown): string {
+  try {
+    const claims: unknown = JSON.parse(
+      new TextDecoder().decode(bytesFromBase64url(String(offer).split(".")[0]!)),
+    );
+    return isRecord(claims) ? String(claims.connection) : "";
+  } catch {
+    return "";
+  }
+}
+
+/** How long a move offer stands: the human reads one sentence and presses one button. */
+const GITHUB_MOVE_OFFER_TTL_MS = 10 * 60_000;
 
 /** The platform-signed `state` both GitHub redirects carry back. */
 type GithubConnectState = {
@@ -97,6 +138,11 @@ export async function connectGithub(
     /** A project's own App's public half (its URL slug and OAuth client id); iterate's is config. */
     appSlug?: string;
     clientId?: string;
+    /** An installation the App already has (the person's GitHub lists it): the human authorizes
+     *  the App as themself at once, never GitHub's configure page, and comes back to
+     *  `platformOrigin`'s callback with the code the admin proof needs. */
+    installationId?: string;
+    platformOrigin?: string;
   },
 ): Promise<{ authorizationUrl: string }> {
   const { connection, client } = input;
@@ -130,6 +176,29 @@ export async function connectGithub(
     // platform on (a self-host names no `urls.os`, and the project facet knows no request)
     next: input.next || null,
   };
+  if (input.installationId) {
+    if (!/^[a-zA-Z0-9_-]+$/.test(input.installationId))
+      throw codedError("INVALID_INPUT", "GitHub: an installation id is letters, digits, - and _.");
+    const origin = URL.canParse(input.platformOrigin || "")
+      ? new URL(input.platformOrigin!).origin
+      : null;
+    if (!origin || origin !== input.platformOrigin)
+      throw codedError(
+        "INVALID_INPUT",
+        "GitHub: an installation's connect names the platform origin its callback hangs under.",
+      );
+    const known: GithubAttempt = {
+      ...attempt,
+      installationId: input.installationId,
+      redirectUri: `${origin}${GITHUB_CALLBACK_PATH}`,
+    };
+    await scope.storage.put(attemptKeyOf("github", connection), known);
+    const authorize = new URL(`${app.origin}/login/oauth/authorize`);
+    authorize.searchParams.set("client_id", app.clientId);
+    authorize.searchParams.set("redirect_uri", known.redirectUri!);
+    authorize.searchParams.set("state", await signedState(scope, connection, known));
+    return { authorizationUrl: authorize.href };
+  }
   await scope.storage.put(attemptKeyOf("github", connection), attempt);
   const install = new URL(
     `${app.origin}/apps/${encodeURIComponent(app.appSlug)}/installations/new`,
@@ -150,7 +219,12 @@ export async function acceptGithubCallback(
     code?: string;
     setupAction?: string;
   },
-): Promise<{ redirect: string | null }> {
+): Promise<{
+  redirect: string | null;
+  /** Another project's connection holds the installation: the offer to move it here, for the
+   *  callback to sign (with the holder's name when the human can see it). */
+  move?: Omit<GithubMoveOffer, "kind" | "holderSlug" | "exp"> & { holderProjectId: string };
+}> {
   const { env, projectId } = scope;
   const { connection } = input;
   const key = attemptKeyOf("github", connection);
@@ -239,6 +313,159 @@ export async function acceptGithubCallback(
   });
   if (refusal) throw codedError("INVALID_INPUT", `GitHub: ${refusal}.`);
 
+  // Held by another project's connection (iterate's App routes each installation to one): nothing
+  // connects yet; the human is offered the move, bound to a fresh nonce of this attempt.
+  if (attempt.client === "iterate") {
+    const holder = await new ControlPlane(env).integrationRouteOf("github", installationId);
+    if (holder && holder.projectId !== projectId) {
+      const offered: GithubAttempt = {
+        ...attempt,
+        nonce: crypto.randomUUID(),
+        until: Date.now() + GITHUB_MOVE_OFFER_TTL_MS,
+        move: { installationId, account: login, holder },
+      };
+      await scope.storage.put(key, offered);
+      return {
+        redirect: landing,
+        move: {
+          projectId,
+          connection,
+          nonce: offered.nonce,
+          account: login,
+          holderProjectId: holder.projectId,
+        },
+      };
+    }
+  }
+  await connectGithubInstallation(scope, connection, attempt, installationId, login, "route");
+  await scope.storage.delete(key);
+  return { redirect: landing };
+}
+
+/** THE MOVE, on the human's confirmation of the offer the callback signed: the route moves here in
+ *  one batch, only while the holder still holds THIS installation (catalog.ts
+ *  `moveIntegrationRoute`), the installation connects here, and the holder's connection is
+ *  disconnected — only while it still names this installation (`github/disconnected { reason:
+ *  "moved" }`, its secret gone). The offer's nonce is the attempt's; a confirmation claims it before
+ *  anything is called out, so it moves once. A move that fails before it lands puts every route back
+ *  as it was, the destination's previous installation included. The holder's cleanup is the last
+ *  step: when it fails, the confirmation fails too, saying so, and the same offer retries the cleanup
+ *  alone until it is done (the holder's tokens are refused meanwhile: secret/durable-object.ts
+ *  re-checks an installation's route on use). The human proved they administer the installation's
+ *  account; they need not reach the holder's project. */
+export async function confirmGithubMove(
+  scope: IntegrationScope,
+  input: { offer: string },
+): Promise<void> {
+  const { env, projectId } = scope;
+  const expired = () =>
+    codedError("INVALID_INPUT", "This offer to move it here has expired — connect again.");
+  const claims = (await verifyClaims(
+    String(input?.offer),
+    await sessionSigningSecretOf(appConfigOf(env)),
+  )) as Partial<GithubMoveOffer> | null;
+  if (
+    claims?.kind !== "github-move" ||
+    claims.projectId !== projectId ||
+    !claims.connection ||
+    !claims.exp ||
+    claims.exp <= Date.now()
+  )
+    throw expired();
+  const connection = claims.connection;
+  const key = attemptKeyOf("github", connection);
+  const attempt = await scope.storage.get<GithubAttempt>(key);
+  if (!attempt?.move || attempt.nonce !== claims.nonce || attempt.until < Date.now())
+    throw expired();
+  if (attempt.move.stage === "moving")
+    throw codedError("INVALID_INPUT", "This move is already under way — reload in a moment.");
+  const move = attempt.move;
+  const { installationId, account, holder } = move;
+  if (move.stage !== "moved") {
+    // claimed before anything is called out: a second confirmation never moves it again
+    await scope.storage.put<GithubAttempt>(key, { ...attempt, move: { ...move, stage: "moving" } });
+    const path = connectionPathOf("github", connection);
+    const controlPlane = new ControlPlane(env);
+    // what this connection held before, whose route the move releases and a failure restores
+    const before = await connectionRowOf(env, projectId, path);
+    try {
+      await controlPlane.moveIntegrationRoute("github", installationId, holder, {
+        projectId,
+        path,
+      });
+    } catch (error) {
+      await scope.storage.delete(key);
+      throw error;
+    }
+    try {
+      await connectGithubInstallation(scope, connection, attempt, installationId, account, "held");
+    } catch (error) {
+      await controlPlane.moveIntegrationRoute(
+        "github",
+        installationId,
+        { projectId, path },
+        holder,
+      );
+      if (before?.client === "iterate" && before.externalId !== installationId)
+        await controlPlane.routeIntegration("github", before.externalId, projectId, path);
+      await scope.storage.delete(key);
+      throw error;
+    }
+    await scope.storage.put<GithubAttempt>(key, { ...attempt, move: { ...move, stage: "moved" } });
+  }
+  // The holder's connection goes, but only while it still names this installation: its route is
+  // gone already, so its secret mints no more and every use of it is refused within
+  // INSTALLATION_ROUTE_RECHECK_MS; this removes the secret and its row, `reason: "moved"` on its log.
+  try {
+    await env.ITERATE_CONTEXT.getByName(
+      DurableObjectNameCodec.stringify({ projectId: holder.projectId, path: "/" }),
+    ).invoke(
+      [
+        "itx",
+        "builtins",
+        "facets",
+        ["get", "project"],
+        [
+          "disconnectIntegration",
+          {
+            provider: "github",
+            connection: holder.path.slice("/integrations/github/".length),
+            movedInstallationId: installationId,
+          },
+        ],
+      ],
+      [],
+      { principal: null, platform: true },
+    );
+  } catch (error) {
+    reportIssue("integrations.github-move-holder-disconnect", error, {
+      installationId,
+      projectId,
+      holderProjectId: holder.projectId,
+    });
+    throw codedError(
+      "INVALID_INPUT",
+      `${account} moved here, but the other project still lists it — press Move again to finish.`,
+    );
+  }
+  await scope.storage.delete(key);
+}
+
+/** THE INSTALLATION CONNECTED HERE, once the human proved they administer it: the connection's
+ *  secret mints its token (iterate's App's key, or the project's own), one mint as proof, then
+ *  `github/connected`. `routing` "route" routes it here for the landing (iterate's App: first owner
+ *  wins, and a failure puts the routes back); "held" means the route is this connection's already
+ *  (a move). */
+async function connectGithubInstallation(
+  scope: IntegrationScope,
+  connection: string,
+  attempt: GithubAttempt,
+  installationId: string,
+  login: string,
+  routing: "route" | "held",
+): Promise<void> {
+  const { env, projectId } = scope;
+  const apiOrigin = githubApiOriginOf(attempt.origin);
   // The user token was proof only; the connection acts as the installation from here on. A
   // project's own App's secret keeps its material (the App's key) and gains the strategy.
   const secretPath = tokenSecretPathOf("github", connection);
@@ -252,11 +479,13 @@ export async function acceptGithubCallback(
       apiOrigin,
     ]),
   ];
+  // The material keeps a project App's key, but never the token of the installation it held
+  // before (a reconnect, a move): `accessToken: null` is a miss, so the first use mints for `id`.
   const mintFor = (id: string) =>
     scope.withItx((itx) =>
       itx.secrets.set(
         secretPath,
-        {},
+        { accessToken: null },
         {
           urls,
           refresh: {
@@ -314,15 +543,13 @@ export async function acceptGithubCallback(
       },
     });
   };
-  if (attempt.client === "iterate")
+  if (attempt.client === "iterate" && routing === "route")
     await routedWhile(
       env,
       { provider: "github", externalId: installationId, projectId, path },
       land,
     );
   else await land();
-  await scope.storage.delete(key);
-  return { redirect: landing };
 }
 
 /** The human's user token for the code: iterate's App's client secret from APP_CONFIG, a project's
@@ -363,19 +590,24 @@ async function githubUserTokenOf(
   return data.access_token;
 }
 
-export async function disconnectGithub(scope: IntegrationScope, connection: string): Promise<void> {
+export async function disconnectGithub(
+  scope: IntegrationScope,
+  connection: string,
+  /** Not the owner's own choice: this installation of theirs moved to another project, and only
+   *  its route goes (one the connection took since stays). */
+  moved?: { installationId: string },
+): Promise<void> {
   const { env, projectId } = scope;
-  await new ControlPlane(env).releaseIntegrationRoutes(
-    projectId,
-    connectionPathOf("github", connection),
-  );
-  await scope
-    .withItx((itx) => itx.secrets.delete(tokenSecretPathOf("github", connection)))
-    .catch(() => {});
-  await scope.storage.delete(attemptKeyOf("github", connection));
+  const path = connectionPathOf("github", connection);
+  const controlPlane = new ControlPlane(env);
+  if (moved)
+    await controlPlane.releaseIntegrationRoute("github", moved.installationId, projectId, path);
+  else await controlPlane.releaseIntegrationRoutes(projectId, path);
+  await deleteTokenSecret(scope, "github", connection);
+  await dropAttemptsOf(scope.storage, "github", connection);
   await appendPlatformFact(env, projectId, scope.rootPath, {
     type: "events.iterate.com/github/disconnected",
-    payload: { connection },
+    payload: { connection, reason: moved ? "moved" : undefined },
   });
 }
 
@@ -418,9 +650,10 @@ export async function githubCallbackRoute(
   const param = (name: string) => url.searchParams.get(name) || undefined;
   if (param("error")) return answer(400, `GitHub declined: ${param("error")}`);
   let redirect: string | null;
+  let move: Awaited<ReturnType<typeof acceptGithubCallback>>["move"];
   try {
     // The platform's own call on the project root; `invoke` is untyped across the DO hop.
-    ({ redirect } = (await env.ITERATE_CONTEXT.getByName(
+    ({ redirect, move } = (await env.ITERATE_CONTEXT.getByName(
       DurableObjectNameCodec.stringify({ projectId: claims.projectId, path: "/" }),
     ).invoke(
       [
@@ -442,12 +675,46 @@ export async function githubCallbackRoute(
       ],
       [],
       { principal: null },
-    )) as { redirect: string | null });
+    )) as Awaited<ReturnType<typeof acceptGithubCallback>>);
   } catch (error) {
     return answer(
       400,
       `Connecting GitHub failed: ${error instanceof Error ? error.message : String(error)}`,
     );
+  }
+  if (move) {
+    // Held by another project: the human's landing offers the move, signed here, naming the
+    // holder only when this human can see it.
+    const controlPlane = new ControlPlane(env);
+    const holderSlug = (await controlPlane.reachesProject(
+      authorization.reach,
+      move.holderProjectId,
+    ))
+      ? ((await controlPlane.getProject(move.holderProjectId))?.slug ?? null)
+      : null;
+    const offer: GithubMoveOffer = {
+      kind: "github-move",
+      projectId: move.projectId,
+      connection: move.connection,
+      nonce: move.nonce,
+      account: move.account,
+      holderSlug,
+      exp: Date.now() + GITHUB_MOVE_OFFER_TTL_MS,
+    };
+    if (!redirect)
+      return answer(
+        409,
+        `The ${move.account} GitHub account is connected to ${holderSlug || "another project"}. Connect it from the Dash's Integrations page to move it here.`,
+      );
+    const landing = new URL(redirect);
+    landing.searchParams.set(
+      "move",
+      await signClaims(offer, await sessionSigningSecretOf(appConfigOf(env))),
+    );
+    return new Response(null, {
+      status: 303,
+      headers: { location: landing.href, "cache-control": "no-store" },
+    });
   }
   if (redirect)
     return new Response(null, {

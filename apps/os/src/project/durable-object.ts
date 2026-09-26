@@ -19,12 +19,17 @@ import type { ItxEntrypointScope } from "../iterate-context.ts";
 import type { Env as ContextEnv } from "../iterate-context-durable-object.ts";
 import type { IntegrationProvider } from "../integrations/contract.ts";
 import { assertConnectionName, type IntegrationScope } from "../integrations/connections.ts";
-import { acceptGithubCallback } from "../integrations/github.ts";
+import {
+  acceptGithubCallback,
+  confirmGithubMove,
+  githubMoveOfferConnectionOf,
+} from "../integrations/github.ts";
 import {
   connectIntegration,
   disconnectIntegration,
   finishIntegrationConnect,
   type ConnectInput,
+  type FinishConnectInput,
 } from "../integrations/verbs.ts";
 import { connectWaitrose } from "../integrations/waitrose-connection.ts";
 import { EntityCollectionRpcTarget } from "./collection.ts";
@@ -42,17 +47,17 @@ export class ProjectDurableObject extends StreamProcessorDurableObject<
   ItxEntrypointScope
 > {
   /** The processor's reads, the two collections `itx.repos` / `itx.workspaces` reach (library.ts),
-   *  and the integrations' verbs. `finishIntegrationConnect` and `acceptGithubCallback` are the
-   *  callbacks' (secret-oauth-callback.ts, integrations/github.ts): the first reports only what the
-   *  provider says of a token the project already holds, the second acts only for its attempt's
-   *  nonce, which only GitHub's redirect carries. */
+   *  and the integrations' verbs. `acceptGithubCallback` is GitHub's callback's (integrations/github.ts)
+   *  and acts only for its attempt's nonce, which only GitHub's redirect carries;
+   *  `finishIntegrationConnect` is not published at all — the platform's callback reaches it
+   *  (secret-oauth-callback.ts, through context/built-ins.ts `integrations.finishConnect`). */
   static override publicMethods = [
     ...super.publicMethods,
     "repos",
     "workspaces",
     "connectIntegration",
     "disconnectIntegration",
-    "finishIntegrationConnect",
+    "confirmGithubMove",
     "connectWaitrose",
     "acceptGithubCallback",
   ];
@@ -144,6 +149,34 @@ export class ProjectDurableObject extends StreamProcessorDurableObject<
     return this.#collection("workspace");
   }
 
+  /** Each connection's integration verbs, one at a time (`#onConnection`): the tail of its chain. */
+  readonly #connectionVerbChains = new Map<string, Promise<unknown>>();
+
+  /** ONE INTEGRATION VERB AT A TIME PER CONNECTION: a verb on `provider/connection` starts once the
+   *  one before it on that connection settled, and reads the connections caught up through the log
+   *  itself (`catchUpFromLog`, not only through the last pushed head: a verb that just appended
+   *  `<provider>/connected` may not have been pushed back yet) — so a check and the destructive steps
+   *  after it (a moved installation's cleanup) run with no other verb on that connection in between,
+   *  such as a reconnect to another account. */
+  #onConnection<T>(
+    provider: unknown,
+    connection: unknown,
+    verb: (integrations: ProjectState["integrations"]) => Promise<T>,
+  ): Promise<T> {
+    const key = `${String(provider)}/${String(connection)}`;
+    const previous = this.#connectionVerbChains.get(key) ?? Promise.resolve();
+    const run = previous.then(async () => {
+      await this.catchUpFromLog();
+      return verb((await this.snapshot()).state.integrations);
+    });
+    const tail = run.catch(() => {});
+    this.#connectionVerbChains.set(key, tail);
+    void tail.then(() => {
+      if (this.#connectionVerbChains.get(key) === tail) this.#connectionVerbChains.delete(key);
+    });
+    return run;
+  }
+
   #integrationScope(): IntegrationScope {
     return {
       env: this.env,
@@ -159,42 +192,56 @@ export class ProjectDurableObject extends StreamProcessorDurableObject<
    *  `/secrets/<provider>-<connection>` already holds. The provider's callback stores the credential
    *  and finishes the connection, then sends the human to `next` (the platform's or the Dash's
    *  origin). Again for a connection that exists asks for more `scopes` on the same account. */
-  async connectIntegration(input: ConnectInput): Promise<{ authorizationUrl: string }> {
-    return connectIntegration(this.#integrationScope(), await this.#integrations(), input);
+  connectIntegration(input: ConnectInput): Promise<{ authorizationUrl: string }> {
+    return this.#onConnection(input?.provider, input?.connection, (integrations) =>
+      connectIntegration(this.#integrationScope(), integrations, input),
+    );
   }
 
-  /** The OAuth callback stored a Slack, Google or Cloudflare token: finish the connection. */
-  async finishIntegrationConnect(input: {
-    provider: "slack" | "google" | "cloudflare";
-    connection: string;
-  }): Promise<void> {
-    await finishIntegrationConnect(this.#integrationScope(), await this.#integrations(), input);
+  /** The OAuth callback stored a Slack, Google or Cloudflare token: finish the connection — the
+   *  callback's alone, not published (context/built-ins.ts `integrations.finishConnect`). */
+  finishIntegrationConnect(input: FinishConnectInput): Promise<void> {
+    return this.#onConnection(input?.provider, input?.connection, (integrations) =>
+      finishIntegrationConnect(this.#integrationScope(), integrations, input),
+    );
   }
 
   /** GitHub sent the human back (integrations/github.ts `githubCallbackRoute`). */
   acceptGithubCallback(input: Parameters<typeof acceptGithubCallback>[1]) {
-    return acceptGithubCallback(this.#integrationScope(), {
-      ...input,
-      connection: assertConnectionName(input?.connection),
-    });
+    return this.#onConnection("github", input?.connection, () =>
+      acceptGithubCallback(this.#integrationScope(), {
+        ...input,
+        connection: assertConnectionName(input?.connection),
+      }),
+    );
   }
 
   /** WAITROSE (integrations/waitrose-connection.ts): the username and password are already in
    *  `/secrets/waitrose-<connection>`; record the connection, `waitrose/connected` on `/`. */
-  async connectWaitrose(input: { connection: string; account: string }): Promise<void> {
-    await connectWaitrose(this.#integrationScope(), input);
+  connectWaitrose(input: { connection: string; account: string }): Promise<void> {
+    return this.#onConnection("waitrose", input?.connection, () =>
+      connectWaitrose(this.#integrationScope(), input),
+    );
   }
 
   /** DISCONNECT: the token revoked where the provider allows, the route and the secret gone, any
    *  connect in flight dropped, `<provider>/disconnected` on `/`. */
-  async disconnectIntegration(input: {
+  disconnectIntegration(input: {
     provider: IntegrationProvider;
     connection: string;
+    movedInstallationId?: string;
   }): Promise<void> {
-    await disconnectIntegration(this.#integrationScope(), await this.#integrations(), input);
+    return this.#onConnection(input?.provider, input?.connection, (integrations) =>
+      disconnectIntegration(this.#integrationScope(), integrations, input),
+    );
   }
 
-  async #integrations() {
-    return (await this.snapshot()).state.integrations;
+  /** MOVE A GITHUB INSTALLATION HERE (integrations/github.ts `confirmGithubMove`): the human's
+   *  confirmation of the offer GitHub's callback signed, once they proved they administer it. */
+  confirmGithubMove(input: { offer: string }): Promise<void> {
+    // on the connection the offer names (github.ts verifies the offer itself)
+    return this.#onConnection("github", githubMoveOfferConnectionOf(input?.offer), () =>
+      confirmGithubMove(this.#integrationScope(), input),
+    );
   }
 }

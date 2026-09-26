@@ -11,9 +11,12 @@ import { codedError } from "iterate/lib";
 import { appConfigOf } from "../app-config.ts";
 import { SECRET_OAUTH_TTL_MS } from "../secret-oauth.ts";
 import { isRecord } from "../secrets.ts";
+import type { IntegrationConnectionRow } from "./contract.ts";
 import {
   appendPlatformFact,
-  attemptKeyOf,
+  deleteTokenSecret,
+  consentAttemptKeyOf,
+  dropAttemptsOf,
   ownerEgress,
   tokenSecretPathOf,
   type ConnectionAttempt,
@@ -46,6 +49,8 @@ export async function connectCloudflare(
     next?: string;
     scopes?: readonly string[];
     expectAccount?: string;
+    /** A person's connect a project asked for (connections.ts `ConnectionAttempt`). */
+    connectToProject?: ConnectionAttempt["connectToProject"];
   },
 ): Promise<{ authorizationUrl: string }> {
   const cloudflare = appConfigOf(scope.env).integrations.cloudflare;
@@ -55,13 +60,14 @@ export async function connectCloudflare(
       "Cloudflare connects through this deployment's Cloudflare client (APP_CONFIG integrations.cloudflare) alone.",
     );
   const endpoints = cloudflareEndpointsOf(cloudflare.cloudflareOrigin);
-  const { authorizationUrl } = await scope.withItx((itx) =>
+  const asked = [...new Set([...cloudflare.scopes, ...(input.scopes || [])])];
+  const { authorizationUrl, nonce } = await scope.withItx((itx) =>
     itx.secrets.beginOAuth(tokenSecretPathOf("cloudflare", input.connection), {
       authorizationEndpoint: endpoints.authorizationEndpoint,
       tokenEndpoint: endpoints.tokenEndpoint,
       client: { platform: "cloudflare" },
       clientAuth: "client_secret_post",
-      scope: [...new Set([...cloudflare.scopes, ...(input.scopes || [])])].join(" "),
+      scope: asked.join(" "),
       urls: endpoints.urls,
       next: input.next,
       expectAccount: input.expectAccount,
@@ -71,8 +77,9 @@ export async function connectCloudflare(
     client: "iterate",
     origin: cloudflare.cloudflareOrigin || "",
     until: Date.now() + SECRET_OAUTH_TTL_MS,
+    connectToProject: input.connectToProject,
   };
-  await scope.storage.put(attemptKeyOf("cloudflare", input.connection), attempt);
+  await scope.storage.put(consentAttemptKeyOf("cloudflare", input.connection, nonce), attempt);
   return { authorizationUrl };
 }
 
@@ -80,7 +87,9 @@ export async function finishCloudflareConnect(
   scope: IntegrationScope,
   connection: string,
   attempt: ConnectionAttempt,
-): Promise<void> {
+  /** What Cloudflare granted (the token response's `scope`, rules.ts `grantedScopesOf`). */
+  grantedScopes: string[],
+): Promise<IntegrationConnectionRow> {
   const endpoints = cloudflareEndpointsOf(attempt.origin);
   const response = await ownerEgress(
     scope.env,
@@ -95,15 +104,20 @@ export async function finishCloudflareConnect(
   const user = isRecord(body) && isRecord(body.result) ? body.result : null;
   if (!response.ok || typeof user?.id !== "string")
     throw new Error(`Cloudflare's /user answered ${response.status}`);
+  const row: IntegrationConnectionRow = {
+    provider: "cloudflare",
+    connection,
+    client: "iterate",
+    account: typeof user.email === "string" ? user.email : user.id,
+    externalId: user.id,
+    scopes: grantedScopes,
+  };
+  const { provider: _provider, ...payload } = row;
   await appendPlatformFact(scope.env, scope.projectId, scope.rootPath, {
     type: "events.iterate.com/cloudflare/connected",
-    payload: {
-      connection,
-      client: "iterate",
-      account: typeof user.email === "string" ? user.email : user.id,
-      externalId: user.id,
-    },
+    payload,
   });
+  return row;
 }
 
 export async function disconnectCloudflare(
@@ -112,9 +126,8 @@ export async function disconnectCloudflare(
 ): Promise<void> {
   // Cloudflare's revocation takes the token in the body, which egress never fills in: deleting the
   // secret is the disconnect (the person revokes the grant at dash.cloudflare.com).
-  const secretPath = tokenSecretPathOf("cloudflare", connection);
-  await scope.withItx((itx) => itx.secrets.delete(secretPath)).catch(() => {});
-  await scope.storage.delete(attemptKeyOf("cloudflare", connection));
+  await deleteTokenSecret(scope, "cloudflare", connection);
+  await dropAttemptsOf(scope.storage, "cloudflare", connection);
   await appendPlatformFact(scope.env, scope.projectId, scope.rootPath, {
     type: "events.iterate.com/cloudflare/disconnected",
     payload: { connection },

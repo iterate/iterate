@@ -5,6 +5,7 @@
 // `…/disconnected`, which the project processor folds into `state.integrations` (the Dash's list).
 // The project facet (project/durable-object.ts) runs connect and disconnect, and finishes a connect
 // when the provider's callback comes back; the webhooks are plain fetch functions in worker.ts.
+import { errorCode } from "iterate/lib";
 import type { StreamEventInput } from "iterate/stream/processor";
 import type { AppConfigEnv } from "../app-config.ts";
 import { DurableObjectNameCodec } from "../context/paths.ts";
@@ -31,13 +32,23 @@ export type IntegrationScope = {
   storage: DurableObjectStorage;
 };
 
-/** A connect in flight, kept by the project facet until the provider's callback finishes it (or a
+/** A connect in flight, kept by the owner's facet until the provider's callback finishes it (or a
  *  disconnect drops it, so a late callback finishes nothing): whose app, where the provider answers,
  *  and until when. GitHub's also carries its nonce and what its callback needs. */
 export type ConnectionAttempt = {
-  client: IntegrationConnectionRow["client"];
+  client: "iterate" | "project";
   origin: string;
   until: number;
+  /** A person's connect a project asked for (`itx.integrations.connect(provider, { account })` on
+   *  it, the account lacking scopes): once the consent granted `requiredScopes`, the account is
+   *  connected to that project — unless `reconnect` (the project had it already) and the project
+   *  disconnected it meanwhile. */
+  connectToProject?: { projectId: string; requiredScopes: string[]; reconnect: boolean };
+  /** Its finish began (verbs.ts `finishIntegrationConnect`), claimed before any call out: a second
+   *  callback for the same consent — concurrent, or a refresh — never runs it again. */
+  finishing?: true;
+  /** Why that finish refused to connect the account to the project: a refresh refuses the same. */
+  refused?: { code: "FORBIDDEN" | "INVALID_INPUT"; message: string };
 };
 
 /** A connection's name: a secret name's grammar, so `/secrets/<provider>-<name>` always is one. */
@@ -55,6 +66,24 @@ export const tokenSecretPathOf = (provider: IntegrationProvider, connection: str
   `/secrets/${provider}-${connection}`;
 export const attemptKeyOf = (provider: IntegrationProvider, connection: string) =>
   `integration-attempt:${provider}/${connection}`;
+/** A consent's attempt (Slack, Google, Cloudflare): keyed by the OAuth attempt's nonce too, so the
+ *  callback finishes the attempt it completed, never one begun after it on the same connection. */
+export const consentAttemptKeyOf = (
+  provider: IntegrationProvider,
+  connection: string,
+  nonce: string,
+) => `${attemptKeyOf(provider, connection)}#${nonce}`;
+
+/** Every attempt in flight on a connection dropped (a disconnect): a late callback finishes none. */
+export async function dropAttemptsOf(
+  storage: DurableObjectStorage,
+  provider: IntegrationProvider,
+  connection: string,
+): Promise<void> {
+  const key = attemptKeyOf(provider, connection);
+  const keys = [key, ...(await storage.list({ prefix: `${key}#` })).keys()];
+  await storage.delete(keys);
+}
 
 /** One event onto a project context's log as the platform's own (`source.platform`, no principal):
  *  a connection's `connected`/`disconnected` on `/`, a webhook on the connection's log. */
@@ -126,3 +155,18 @@ export async function routedWhile<T>(
 /** The answer to a signed webhook that is not for any connection here: 200, so the provider keeps
  *  delivering to every other workspace or installation (rules.ts). */
 export const ignoredWebhook = (reason: string) => Response.json({ ok: true, ignored: reason });
+
+/** A disconnect's delete of the connection's secret: one never set (a consent never finished, or
+ *  a delete that already ran) is gone already; any other failure is the caller's, so the disconnect
+ *  fails with the row standing and can be retried, never reporting a token gone that is not. */
+export async function deleteTokenSecret(
+  scope: Pick<IntegrationScope, "withItx">,
+  provider: IntegrationProvider,
+  connection: string,
+): Promise<void> {
+  await scope
+    .withItx((itx) => itx.secrets.delete(tokenSecretPathOf(provider, connection)))
+    .catch((error: unknown) => {
+      if (errorCode(error) !== "SECRET_NOT_SET") throw error;
+    });
+}
