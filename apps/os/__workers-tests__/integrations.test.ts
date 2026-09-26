@@ -426,6 +426,96 @@ test("Slack: the token a move offer held is deleted when the offer runs out, on 
   expect(admitted).toMatch(/no token is held/);
 });
 
+test("Slack: a holder that disconnects while its cleanup is pending revokes nothing, and its own app's connection of the same workspace survives the retry", async () => {
+  const holder = await projectWithMember("slack-late-holder");
+  const petshop = petshopFakes();
+  await connected(petshop, holder, "slack", "team=T13LATE");
+  const mover = await otherProject(holder, "slack-late-mover");
+  const offer = moveOfferOf(await consented(petshop, mover, "slack", "team=T13LATE"));
+  const prepare = env.DB.prepare.bind(env.DB);
+  const prepares = vi.spyOn(env.DB, "prepare").mockImplementation((sql: string) => {
+    if (!sql.startsWith("delete from integration_routes\nwhere provider")) return prepare(sql);
+    prepares.mockRestore();
+    throw new Error("D1 is unavailable");
+  });
+  await expect(projectFacet(mover.itx).confirmIntegrationMove({ offer })).rejects.toThrow(
+    /press Move again/,
+  );
+  // the holder's own disconnect: the route is the mover's, so the workspace's token is not revoked
+  await projectFacet(holder.itx).disconnectIntegration({ provider: "slack", connection: "acme" });
+  expect(await petshop.state.getState()).toMatchObject({ revokedRefreshTokenIds: [] });
+  expect(await (await slackAuthTest(mover.itx)).json()).toMatchObject({ team_id: "T13LATE" });
+  // …and it connects the same workspace again through an app of its own
+  const app = await petshop.state.createClient({});
+  await holder.itx.secrets.set(
+    "/secrets/slack-acme",
+    { ...app, signingSecret: "own-signing-secret" },
+    { urls: ["https://slack.test"] },
+  );
+  await connected(petshop, holder, "slack", "team=T13LATE", { client: "project" });
+  await projectFacet(mover.itx).confirmIntegrationMove({ offer });
+  await vi.waitFor(async () =>
+    expect(await integrationsOf(holder.itx)).toMatchObject({
+      "/integrations/slack/acme": { client: "project", externalId: "T13LATE" },
+    }),
+  );
+  expect(await disconnectedFacts(holder.projectId, "slack")).toEqual([{ connection: "acme" }]);
+});
+
+test("Slack: a move whose held token is gone leaves what the destination's secret holds alone", async () => {
+  const holder = await projectWithMember("slack-replaced");
+  const petshop = petshopFakes();
+  await connected(petshop, holder, "slack", "team=T14KEEP");
+  const mover = await otherProject(holder, "slack-replaced-mover");
+  const offer = moveOfferOf(await consented(petshop, mover, "slack", "team=T14KEEP"));
+  // the destination writes the connection's secret meanwhile, which drops the held token
+  await mover.itx.secrets.set(
+    "/secrets/slack-acme",
+    { accessToken: "the destination's own" },
+    { urls: ["https://slack.test"] },
+  );
+  await expect(projectFacet(mover.itx).confirmIntegrationMove({ offer })).rejects.toThrow(
+    /no token is held/,
+  );
+  expect(await catalog().integrationRoute("slack", "T14KEEP")).toMatchObject({
+    projectId: holder.projectId,
+  });
+  expect(await secretPathsOf(mover.itx)).toContain("/secrets/slack-acme");
+});
+
+test("Slack: a token stored before its record named its workspace is refused too, once its workspace moved", async () => {
+  const holder = await projectWithMember("slack-legacy");
+  const petshop = petshopFakes();
+  await connected(petshop, holder, "slack", "team=T15OLD");
+  // the holder's secret as a record from before `routedAccount`: iterate's app's token alone
+  await holder.itx.secrets.set(
+    "/secrets/slack-acme",
+    { accessToken: await slackBotToken(petshop, "T15OLD") },
+    { urls: ["https://slack.test"] },
+  );
+  const mover = await otherProject(holder, "slack-legacy-mover");
+  const offer = moveOfferOf(await consented(petshop, mover, "slack", "team=T15OLD"));
+  const prepare = env.DB.prepare.bind(env.DB);
+  const prepares = vi.spyOn(env.DB, "prepare").mockImplementation((sql: string) => {
+    if (!sql.startsWith("delete from integration_routes\nwhere provider")) return prepare(sql);
+    prepares.mockRestore();
+    throw new Error("D1 is unavailable");
+  });
+  await expect(projectFacet(mover.itx).confirmIntegrationMove({ offer })).rejects.toThrow(
+    /press Move again/,
+  );
+  // past the re-check of the route the holder's own connect read
+  vi.useFakeTimers({ toFake: ["Date"] });
+  onTestFinished(() => void vi.useRealTimers());
+  vi.setSystemTime(Date.now() + 31_000);
+  const refused = await slackAuthTest(holder.itx);
+  vi.useRealTimers();
+  expect({ status: refused.status, text: await refused.text() }).toMatchObject({
+    status: 502,
+    text: expect.stringContaining("Slack workspace T15OLD is connected to another project"),
+  });
+});
+
 test("Slack: a move that fails to connect puts the team's route back and keeps no token here", async () => {
   const holder = await projectWithMember("slack-restore");
   const petshop = petshopFakes();
@@ -1131,6 +1221,32 @@ function installationRepositories(itx: Member["itx"], secretPath: string): Promi
       headers: { authorization: bearerOf(secretPath) },
     }),
   );
+}
+
+/** A bot token of iterate's app (the fake's default client) for `team`, minted at the fake directly. */
+async function slackBotToken(petshop: Petshop, team: string): Promise<string> {
+  const redirectUri = `${ORIGIN}/api/integrations/slack/callback`;
+  const authorize = new URL("https://slack.test/oauth/v2/authorize");
+  for (const [key, value] of Object.entries({
+    client_id: "petshop-default",
+    redirect_uri: redirectUri,
+    team,
+  }))
+    authorize.searchParams.set(key, value);
+  const consent = (await petshop.handle(new Request(authorize, { redirect: "manual" })))!;
+  const code = new URL(consent.headers.get("location")!).searchParams.get("code")!;
+  const exchange = (await petshop.handle(
+    new Request("https://slack.test/api/oauth.v2.access", {
+      method: "POST",
+      body: new URLSearchParams({
+        client_id: "petshop-default",
+        client_secret: "petshop-default-secret",
+        code,
+        redirect_uri: redirectUri,
+      }),
+    }),
+  ))!;
+  return ((await exchange.json()) as { access_token: string }).access_token;
 }
 
 /** Slack's auth.test with the connection's token, through egress. */

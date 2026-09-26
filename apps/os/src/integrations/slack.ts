@@ -23,6 +23,7 @@ import { ControlPlane } from "../control-plane/edge.ts";
 import type { Env } from "../env.ts";
 import { SECRET_OAUTH_TTL_MS } from "../secret-oauth.ts";
 import { verifySecretHmac } from "../secrets.ts";
+import type { IntegrationConnectionRow } from "./contract.ts";
 import {
   appendPlatformFact,
   attemptKeyOf,
@@ -155,7 +156,24 @@ export async function finishSlackConnect(
       await scope.storage.put(attemptKeyOf("slack", connection), offered);
       return slackMoveOffered(scope, connection, offered.nonce, offered.until, move);
     }
-    await admitHeldToken(scope, connection, held.nonce);
+    // Released meanwhile: the workspace is routed here first (first owner wins), and only then is
+    // the token stored — a project that took it in between refuses the route, the token stays held,
+    // and the callback again offers the move.
+    const path = connectionPathOf("slack", connection);
+    await routedWhile(
+      env,
+      { provider: "slack", externalId: held.externalId, projectId, path },
+      async () => {
+        await admitHeldToken(scope, connection, held.nonce);
+        const identity = await slackIdentityOf(scope, attempt.origin, connection);
+        if (identity.teamId !== held.externalId)
+          throw new Error(
+            `Slack's auth.test names workspace ${identity.teamId}, not ${held.externalId}`,
+          );
+        await slackConnected(scope, connection, attempt, identity);
+      },
+    );
+    return undefined;
   }
   const identity = await slackIdentityOf(scope, attempt.origin, connection);
   const connected = () => slackConnected(scope, connection, attempt, identity);
@@ -208,17 +226,20 @@ function slackMoveOffered(
 
 /** A WORKSPACE MOVED HERE (verbs.ts `confirmIntegrationMove`, its route this connection's already):
  *  the token the consent's exchange held aside stored in the connection's secret, `auth.test` through
- *  egress proving it names that workspace, then `slack/connected`. A failure keeps no token here: the
- *  connection had none (a connection that holds a workspace is only ever asked for more of the same
- *  one), so its secret is deleted again. */
+ *  egress proving it names that workspace, then `slack/connected`. A failure after the token went in
+ *  keeps no token here: the connection had none (a connection that holds a workspace is only ever
+ *  asked for more of the same one), so its secret is deleted again. */
 export async function connectMovedSlackTeam(
   scope: IntegrationScope,
   connection: string,
   attempt: ConnectionAttempt,
   move: IntegrationMove,
 ): Promise<void> {
+  // A refusal stored nothing, and leaves whatever the secret holds alone. (An admit whose fact
+  // failed stored the token: its use is refused while another project holds the workspace,
+  // secret/durable-object.ts `#assertWorkspaceNotMoved`, and the rollback gives it back.)
+  await admitHeldToken(scope, connection, move.heldTokenNonce || "");
   try {
-    await admitHeldToken(scope, connection, move.heldTokenNonce || "");
     const identity = await slackIdentityOf(scope, attempt.origin, connection);
     if (identity.teamId !== move.externalId)
       throw new Error(
@@ -306,22 +327,32 @@ function slackConnected(
 export async function disconnectSlack(
   scope: IntegrationScope,
   connection: string,
-  client: ConnectionAttempt["client"] | null,
+  row: Pick<IntegrationConnectionRow, "client" | "externalId"> | null,
   /** Not the owner's own choice: this workspace moved to another project, and only its route goes. */
   moved?: { externalId: string },
 ): Promise<void> {
   const { env, projectId } = scope;
   const path = connectionPathOf("slack", connection);
-  // A token already dead is the goal, so the revoke is best-effort. A moved workspace's is not
-  // revoked: Slack keeps one bot token per app and workspace, the one now connected where it moved.
-  if (client && !moved)
-    await slackAppOf(scope, client, connection)
-      .then(({ origin }) => slackApi(scope, origin, "auth.revoke", connection))
-      .then((response) => response.body?.cancel())
-      .catch(() => {});
   const controlPlane = new ControlPlane(env);
   if (moved) await controlPlane.releaseIntegrationRoute("slack", moved.externalId, projectId, path);
-  else await controlPlane.releaseIntegrationRoutes(projectId, path);
+  else {
+    // Slack keeps one bot token per app and workspace, so revoking iterate's app's ends it for every
+    // connection of the workspace: only the connection that still holds the route may, which its
+    // own release answers (one statement: a move of the route and this release never both win). A
+    // moved workspace's token is the one now connected where it went. A project's own app routes
+    // nothing.
+    const revokes =
+      row?.client === "iterate"
+        ? await controlPlane.releaseIntegrationRoute("slack", row.externalId, projectId, path)
+        : row?.client === "project";
+    // a token already dead is the goal, so the revoke is best-effort
+    if (row && revokes)
+      await slackAppOf(scope, row.client, connection)
+        .then(({ origin }) => slackApi(scope, origin, "auth.revoke", connection))
+        .then((response) => response.body?.cancel())
+        .catch(() => {});
+    await controlPlane.releaseIntegrationRoutes(projectId, path);
+  }
   await deleteTokenSecret(scope, "slack", connection);
   await dropAttemptsOf(scope.storage, "slack", connection);
   await appendPlatformFact(env, projectId, "/", {
