@@ -483,9 +483,12 @@ own job and required check. A deploy that did not succeed turns both red rather
 than letting them report green. The section opens with a status line
 (`<!-- os-preview-status:begin -->…end`) naming the commit, the CI job and
 when: `deploying`, then `deployed` or `deploy failed` (with the error's tail,
-and the links below marked as the last good deploy's). Under it each suite's
-job writes its own line, `E2E tests` or `Browser specs`, `passed` or `failed`;
-a new deploy clears them. Each job rewrites only its own line.
+and the links below marked as the last good deploy's). Under it go the suites'
+lines, `E2E tests` and `Browser specs`, `passed` or `failed`, each linking its
+job; a new deploy clears them. The suites write nothing to GitHub: each hands
+its line over as its job's output, and the **CI trace** job, which runs after
+both, writes the two in one edit, so a suite's check turns green or red without
+waiting on the PR body. A suite that did not run keeps its line.
 
 Closing or merging the PR runs `pnpm preview delete`, which deletes the
 preview, its D1, Artifacts namespace, KV namespaces and R2 bucket, and the

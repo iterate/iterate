@@ -1,14 +1,15 @@
 // scripts/preview-config.ts — the pure half of scripts/preview.ts, what preview.test.ts pins: the
 // preview's name (`pr<n>`, or a slug without a PR), the parent it branches from (envs.ts
 // `osEnvs.preview`) and the URL and resource names that follow from the two, which apps on top a
-// change touches, the PR body's managed section and its status line, the template quick-launch
-// links, the config `wrangler preview` reads — a
-// transform of Vite's built Worker config, the shape of cloudflare-os's `buildPreviewConfigs` —
-// and whether node_modules was installed from the checkout's lockfile.
+// change touches, the PR body's managed section, its status line and the suites' lines, and the
+// write that puts them there, the template quick-launch links, the config `wrangler preview`
+// reads — a transform of Vite's built Worker config, the shape of cloudflare-os's
+// `buildPreviewConfigs` — and whether node_modules was installed from the checkout's lockfile.
 import { createHash } from "node:crypto";
 import { readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { z } from "zod";
 import { osEnvs } from "../../../envs.ts";
 import { agents } from "../../agents/scripts/app.ts";
 import { dash } from "../../dash/scripts/app.ts";
@@ -249,8 +250,9 @@ export const PREVIEW_SUITES = { e2e: "E2E tests", specs: "Browser specs" } as co
 export type PreviewSuite = keyof typeof PREVIEW_SUITES;
 const SUITE_ORDER: PreviewSuite[] = ["e2e", "specs"];
 
-/** A suite's line under the status line, which its own job writes once it ran: passed or failed,
- *  on the commit it tested. Both jobs run at once, so each rewrites its own line alone. */
+/** A suite's line under the status line: passed or failed, on the commit it tested. Its job hands
+ *  the line over as its `status` output (`suiteLineOutput`), and the CI trace job, which runs after
+ *  both, writes the two into the PR body at once (`spliceSuiteLines`, preview-os.yml). */
 export type PreviewSuiteStatus = Omit<PreviewStatus, "state"> & {
   suite: PreviewSuite;
   state: "passed" | "failed";
@@ -273,8 +275,7 @@ export function renderPreviewStatus(status: PreviewStatus | PreviewSuiteStatus) 
     ...(status.runUrl ? [`[CI job ↗](${status.runUrl})`] : []),
     `updated ${status.at.toISOString().slice(0, 16).replace("T", " ")} UTC`,
   ].join(" · ");
-  const [summary = "", ...rest] = (status.error || "").trim().split("\n");
-  const detail = lastLines(rest.join("\n"), 40).slice(-4000).trim();
+  const { summary, detail } = errorShown(status.error);
   // a fence longer than any backtick run in the output
   const fence = "`".repeat(
     Math.max(3, ...(detail.match(/`+/g) || []).map((run) => run.length + 1)),
@@ -298,6 +299,12 @@ export function renderPreviewStatus(status: PreviewStatus | PreviewSuiteStatus) 
         ]
       : []),
   ].join("\n");
+}
+
+/** What a line shows of an error: its first line, the summary, and the tail of the rest. */
+function errorShown(error = "") {
+  const [summary = "", ...rest] = error.trim().split("\n");
+  return { summary, detail: lastLines(rest.join("\n"), 40).slice(-4000).trim() };
 }
 
 const statusBlock = (status: PreviewStatus) =>
@@ -372,24 +379,91 @@ export function splicePreviewSuite(body: string, status: PreviewSuiteStatus) {
   });
 }
 
-/** Whether another suite's job may still overwrite this suite's line: the two jobs write at once,
- *  each a read, a splice and a PATCH, and a PATCH made from a read that predates this line's write
- *  drops it. Once every other suite's line names this line's commit, their writes have landed and
- *  none can: so only the first of the two to finish waits to look again (scripts/preview.ts
- *  `writePullRequestBody`), never the one that decides the run's time to green. */
-export function suiteLineMayBeOverwritten(body: string, status: PreviewSuiteStatus) {
-  const commit = `on \`${status.commit.slice(0, 9)}\``;
-  return SUITE_ORDER.some((suite) => {
-    if (suite === status.suite) return false;
-    const [begin, end] = suiteMarkers(suite);
-    const from = body.indexOf(begin);
-    const to = body.indexOf(end, from);
-    return from < 0 || to < from || !body.slice(from, to).includes(commit);
+/** A suite's line as its job hands it to the CI trace job, as the job's `status` output
+ *  (preview-os.yml): one line of JSON, the error cut to what the line shows of it. */
+export function suiteLineOutput(status: PreviewSuiteStatus) {
+  const { summary, detail } = errorShown(status.error);
+  return JSON.stringify({
+    ...status,
+    error: [summary, detail].filter(Boolean).join("\n") || undefined,
   });
 }
 
+const SuiteLineOutput = z.object({
+  suite: z.enum(["e2e", "specs"]),
+  state: z.enum(["passed", "failed"]),
+  commit: z.string().regex(/^[0-9a-f]{9,40}$/),
+  runUrl: z.url().optional(),
+  at: z.coerce.date(),
+  error: z.string().optional(),
+}) satisfies z.ZodType<PreviewSuiteStatus, unknown>;
+
+/** The suites' lines their jobs handed over, one output a line; a job that handed over none (it
+ *  never ran its suite, was cancelled first, or ran the slow rows alone) leaves an empty one. */
+export function parseSuiteLineOutputs(outputs: string) {
+  return outputs
+    .split("\n")
+    .filter((output) => output.trim())
+    .map((output) => SuiteLineOutput.parse(JSON.parse(output)));
+}
+
+/** The CI trace job's one write of the suites' lines, each in its place (`splicePreviewSuite`). A
+ *  suite with no line here keeps the one the body has. */
+export function spliceSuiteLines(body: string, statuses: PreviewSuiteStatus[]) {
+  return statuses.reduce(splicePreviewSuite, body);
+}
+
+/** A pull request's body as GitHub holds it: read, and replaced whole. */
+export type PullRequestBody = {
+  number: string;
+  read: () => Promise<string>;
+  /** one PATCH, not asked again on a 5xx (scripts/ci/github.ts `askOnce`) */
+  replace: (body: string) => Promise<void>;
+};
+
+/** Read, splice, write, read back: the PR body has no conditional update, so a person editing the
+ *  description in the same seconds, or the LOC report writing its own section, could lose one
+ *  write or the other. Reading it back and re-splicing onto whatever is there now converges on
+ *  both edits within a few rounds. `what` names the write in the log: the whole preview section,
+ *  its status line, or the suites' lines. Our own writes never overlap: the deploy's run in order
+ *  in its job, and the suites' lines go out from the CI trace job once both suites finished. Every
+ *  PATCH goes out once, straight after its read: a failed one is not sent again with a body read
+ *  seconds earlier; the next round reads anew after `retryDelayMs`, and finds the body written
+ *  when the failure was GitHub's answer, not its write. */
+export async function writePullRequestBody(
+  pullRequest: PullRequestBody,
+  what: string,
+  splice: (body: string) => string,
+  { retryDelayMs = 5000 } = {},
+) {
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    const before = await pullRequest.read();
+    const body = splice(before);
+    if (body === before)
+      return console.log(`PR #${pullRequest.number}'s body already carries ${what}`);
+    const replaced = await pullRequest.replace(body).then(
+      () => true,
+      (error: unknown) => {
+        console.warn(`${error instanceof Error ? error.message : String(error)}; reading anew`);
+        return false;
+      },
+    );
+    if (!replaced) {
+      await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
+      continue;
+    }
+    const after = await pullRequest.read();
+    if (splice(after) === after)
+      return console.log(`wrote ${what} into the body of PR #${pullRequest.number}`);
+    console.warn(
+      `PR #${pullRequest.number}'s body changed under the write (attempt ${attempt}); re-splicing`,
+    );
+  }
+  throw new Error(`could not write ${what} into PR #${pullRequest.number}'s body in three rounds`);
+}
+
 /** A deploy's status writes around its steps. The PR body has no conditional update, so the last
- *  write wins (scripts/preview.ts `writePullRequestBody`): `deploying` goes out beside the steps,
+ *  write wins (`writePullRequestBody`): `deploying` goes out beside the steps,
  *  which do not wait for GitHub, and what follows it lands after it — `deploy failed` here, and the
  *  steps' `deployed` section, which awaits the `deploying` write it is handed. `write` never
  *  rejects: a status write that fails is logged, never the deploy's failure. */
