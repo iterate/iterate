@@ -1,19 +1,9 @@
 #include "iterate/kit/websocket_tx.h"
 
+#include <assert.h>
 #include <stddef.h>
 #include <stdint.h>
-#include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
-
-#define CHECK(condition)                                                     \
-  do {                                                                       \
-    if (!(condition)) {                                                      \
-      fprintf(stderr, "%s:%d: check failed: %s\n",                         \
-          __FILE__, __LINE__, #condition);                                   \
-      abort();                                                               \
-    }                                                                        \
-  } while (0)
 
 struct fake_raw_writer {
   uint8_t bytes[128];
@@ -38,8 +28,8 @@ fake_raw_write(
   written = byte_count < writer->maximum_write
       ? byte_count
       : writer->maximum_write;
-  CHECK(written > 0U);
-  CHECK(written <= sizeof(writer->bytes) - writer->byte_count);
+  assert(written > 0U);
+  assert(written <= sizeof(writer->bytes) - writer->byte_count);
   memcpy(writer->bytes + writer->byte_count, bytes, written);
   writer->byte_count += written;
   *bytes_written = written;
@@ -70,7 +60,7 @@ static void initialize(
     .random = fixed_random,
     .random_context = next_random,
   };
-  CHECK(iterate_kit_websocket_tx_init(tx, &options) ==
+  assert(iterate_kit_websocket_tx_init(tx, &options) ==
       ITERATE_KIT_OK);
 }
 
@@ -112,8 +102,8 @@ static void partial_writes_and_would_block_resume_one_frame(
       ITERATE_KIT_WEBSOCKET_BINARY,
       payload,
       sizeof(payload));
-  CHECK(result == ITERATE_KIT_WEBSOCKET_TX_DEFERRED);
-  CHECK(raw.byte_count == 0U);
+  assert(result == ITERATE_KIT_WEBSOCKET_TX_DEFERRED);
+  assert(raw.byte_count == 0U);
 
   do {
     result = iterate_kit_websocket_tx_send(
@@ -123,9 +113,9 @@ static void partial_writes_and_would_block_resume_one_frame(
         sizeof(payload));
   } while (result == ITERATE_KIT_WEBSOCKET_TX_PROGRESS);
 
-  CHECK(result == ITERATE_KIT_WEBSOCKET_TX_SENT);
-  CHECK(raw.byte_count == sizeof(expected));
-  CHECK(memcmp(raw.bytes, expected, sizeof(expected)) == 0);
+  assert(result == ITERATE_KIT_WEBSOCKET_TX_SENT);
+  assert(raw.byte_count == sizeof(expected));
+  assert(memcmp(raw.bytes, expected, sizeof(expected)) == 0);
 }
 
 /*
@@ -162,17 +152,17 @@ static void pong_waits_until_the_data_frame_boundary(void) {
       sizeof(storage),
       &raw,
       &next_random);
-  CHECK(iterate_kit_websocket_tx_send(
+  assert(iterate_kit_websocket_tx_send(
       &tx,
       ITERATE_KIT_WEBSOCKET_BINARY,
       data,
       sizeof(data)) == ITERATE_KIT_WEBSOCKET_TX_PROGRESS);
-  CHECK(iterate_kit_websocket_tx_queue_control(
+  assert(iterate_kit_websocket_tx_queue_control(
       &tx,
       ITERATE_KIT_WEBSOCKET_PONG,
       ping_payload,
       sizeof(ping_payload)) == ITERATE_KIT_OK);
-  CHECK(iterate_kit_websocket_tx_poll_control(&tx) ==
+  assert(iterate_kit_websocket_tx_poll_control(&tx) ==
       ITERATE_KIT_WEBSOCKET_TX_DEFERRED);
 
   do {
@@ -182,15 +172,15 @@ static void pong_waits_until_the_data_frame_boundary(void) {
         data,
         sizeof(data));
   } while (result == ITERATE_KIT_WEBSOCKET_TX_PROGRESS);
-  CHECK(result == ITERATE_KIT_WEBSOCKET_TX_SENT);
-  CHECK(raw.byte_count == 9U);
+  assert(result == ITERATE_KIT_WEBSOCKET_TX_SENT);
+  assert(raw.byte_count == 9U);
 
   do {
     result = iterate_kit_websocket_tx_poll_control(&tx);
   } while (result == ITERATE_KIT_WEBSOCKET_TX_PROGRESS);
-  CHECK(result == ITERATE_KIT_WEBSOCKET_TX_SENT);
-  CHECK(raw.byte_count == sizeof(expected));
-  CHECK(memcmp(raw.bytes, expected, sizeof(expected)) == 0);
+  assert(result == ITERATE_KIT_WEBSOCKET_TX_SENT);
+  assert(raw.byte_count == sizeof(expected));
+  assert(memcmp(raw.bytes, expected, sizeof(expected)) == 0);
 }
 
 /*
@@ -221,20 +211,20 @@ static void newest_pending_pong_replaces_the_older_payload(void) {
       sizeof(storage),
       &raw,
       &next_random);
-  CHECK(iterate_kit_websocket_tx_queue_control(
+  assert(iterate_kit_websocket_tx_queue_control(
       &tx,
       ITERATE_KIT_WEBSOCKET_PONG,
       first,
       sizeof(first)) == ITERATE_KIT_OK);
-  CHECK(iterate_kit_websocket_tx_queue_control(
+  assert(iterate_kit_websocket_tx_queue_control(
       &tx,
       ITERATE_KIT_WEBSOCKET_PONG,
       second,
       sizeof(second)) == ITERATE_KIT_OK);
-  CHECK(iterate_kit_websocket_tx_poll_control(&tx) ==
+  assert(iterate_kit_websocket_tx_poll_control(&tx) ==
       ITERATE_KIT_WEBSOCKET_TX_SENT);
-  CHECK(raw.byte_count == sizeof(expected));
-  CHECK(memcmp(raw.bytes, expected, sizeof(expected)) == 0);
+  assert(raw.byte_count == sizeof(expected));
+  assert(memcmp(raw.bytes, expected, sizeof(expected)) == 0);
 }
 
 /*
@@ -266,20 +256,20 @@ static void close_replaces_a_pending_pong(void) {
       sizeof(storage),
       &raw,
       &next_random);
-  CHECK(iterate_kit_websocket_tx_queue_control(
+  assert(iterate_kit_websocket_tx_queue_control(
       &tx,
       ITERATE_KIT_WEBSOCKET_PONG,
       ping_payload,
       sizeof(ping_payload)) == ITERATE_KIT_OK);
-  CHECK(iterate_kit_websocket_tx_queue_control(
+  assert(iterate_kit_websocket_tx_queue_control(
       &tx,
       ITERATE_KIT_WEBSOCKET_CLOSE,
       close_payload,
       sizeof(close_payload)) == ITERATE_KIT_OK);
-  CHECK(iterate_kit_websocket_tx_poll_control(&tx) ==
+  assert(iterate_kit_websocket_tx_poll_control(&tx) ==
       ITERATE_KIT_WEBSOCKET_TX_SENT);
-  CHECK(raw.byte_count == sizeof(expected));
-  CHECK(memcmp(raw.bytes, expected, sizeof(expected)) == 0);
+  assert(raw.byte_count == sizeof(expected));
+  assert(memcmp(raw.bytes, expected, sizeof(expected)) == 0);
 }
 
 /*
@@ -315,14 +305,14 @@ static void close_waits_behind_an_active_control_frame(void) {
       sizeof(storage),
       &raw,
       &next_random);
-  CHECK(iterate_kit_websocket_tx_queue_control(
+  assert(iterate_kit_websocket_tx_queue_control(
       &tx,
       ITERATE_KIT_WEBSOCKET_PONG,
       pong_payload,
       sizeof(pong_payload)) == ITERATE_KIT_OK);
-  CHECK(iterate_kit_websocket_tx_poll_control(&tx) ==
+  assert(iterate_kit_websocket_tx_poll_control(&tx) ==
       ITERATE_KIT_WEBSOCKET_TX_PROGRESS);
-  CHECK(iterate_kit_websocket_tx_queue_control(
+  assert(iterate_kit_websocket_tx_queue_control(
       &tx,
       ITERATE_KIT_WEBSOCKET_CLOSE,
       close_payload,
@@ -331,13 +321,13 @@ static void close_waits_behind_an_active_control_frame(void) {
   do {
     result = iterate_kit_websocket_tx_poll_control(&tx);
   } while (result == ITERATE_KIT_WEBSOCKET_TX_PROGRESS);
-  CHECK(result == ITERATE_KIT_WEBSOCKET_TX_SENT);
+  assert(result == ITERATE_KIT_WEBSOCKET_TX_SENT);
   do {
     result = iterate_kit_websocket_tx_poll_control(&tx);
   } while (result == ITERATE_KIT_WEBSOCKET_TX_PROGRESS);
-  CHECK(result == ITERATE_KIT_WEBSOCKET_TX_SENT);
-  CHECK(raw.byte_count == sizeof(expected));
-  CHECK(memcmp(raw.bytes, expected, sizeof(expected)) == 0);
+  assert(result == ITERATE_KIT_WEBSOCKET_TX_SENT);
+  assert(raw.byte_count == sizeof(expected));
+  assert(memcmp(raw.bytes, expected, sizeof(expected)) == 0);
 }
 
 /*
@@ -368,35 +358,35 @@ static void pending_wire_bytes_track_partial_data_and_control(
       sizeof(storage),
       &raw,
       &next_random);
-  CHECK(iterate_kit_websocket_tx_send(
+  assert(iterate_kit_websocket_tx_send(
       &tx,
       ITERATE_KIT_WEBSOCKET_BINARY,
       data,
       sizeof(data)) == ITERATE_KIT_WEBSOCKET_TX_DEFERRED);
   iterate_kit_websocket_tx_metrics(&tx, &metrics);
-  CHECK(metrics.pending_wire_bytes == 9U);
+  assert(metrics.pending_wire_bytes == 9U);
 
-  CHECK(iterate_kit_websocket_tx_queue_control(
+  assert(iterate_kit_websocket_tx_queue_control(
       &tx,
       ITERATE_KIT_WEBSOCKET_PONG,
       ping_payload,
       sizeof(ping_payload)) == ITERATE_KIT_OK);
   iterate_kit_websocket_tx_metrics(&tx, &metrics);
-  CHECK(metrics.pending_wire_bytes == 17U);
-  CHECK(metrics.maximum_pending_wire_bytes == 17U);
-  CHECK(metrics.capacity_wire_bytes ==
+  assert(metrics.pending_wire_bytes == 17U);
+  assert(metrics.maximum_pending_wire_bytes == 17U);
+  assert(metrics.capacity_wire_bytes ==
       sizeof(storage) +
           (2U *
            ITERATE_KIT_WEBSOCKET_CLIENT_FRAME_BYTES(
                ITERATE_KIT_WEBSOCKET_CONTROL_PAYLOAD_MAX_BYTES)));
 
-  CHECK(iterate_kit_websocket_tx_send(
+  assert(iterate_kit_websocket_tx_send(
       &tx,
       ITERATE_KIT_WEBSOCKET_BINARY,
       data,
       sizeof(data)) == ITERATE_KIT_WEBSOCKET_TX_PROGRESS);
   iterate_kit_websocket_tx_metrics(&tx, &metrics);
-  CHECK(metrics.pending_wire_bytes == 15U);
+  assert(metrics.pending_wire_bytes == 15U);
 
   do {
     result = iterate_kit_websocket_tx_send(
@@ -405,17 +395,17 @@ static void pending_wire_bytes_track_partial_data_and_control(
         data,
         sizeof(data));
   } while (result == ITERATE_KIT_WEBSOCKET_TX_PROGRESS);
-  CHECK(result == ITERATE_KIT_WEBSOCKET_TX_SENT);
+  assert(result == ITERATE_KIT_WEBSOCKET_TX_SENT);
   iterate_kit_websocket_tx_metrics(&tx, &metrics);
-  CHECK(metrics.pending_wire_bytes == 8U);
+  assert(metrics.pending_wire_bytes == 8U);
 
   do {
     result = iterate_kit_websocket_tx_poll_control(&tx);
   } while (result == ITERATE_KIT_WEBSOCKET_TX_PROGRESS);
-  CHECK(result == ITERATE_KIT_WEBSOCKET_TX_SENT);
+  assert(result == ITERATE_KIT_WEBSOCKET_TX_SENT);
   iterate_kit_websocket_tx_metrics(&tx, &metrics);
-  CHECK(metrics.pending_wire_bytes == 0U);
-  CHECK(metrics.maximum_pending_wire_bytes == 17U);
+  assert(metrics.pending_wire_bytes == 0U);
+  assert(metrics.maximum_pending_wire_bytes == 17U);
 }
 
 /*
@@ -445,21 +435,21 @@ static void unwritten_data_can_be_cancelled_without_losing_pong(
       sizeof(storage),
       &raw,
       &next_random);
-  CHECK(iterate_kit_websocket_tx_send(
+  assert(iterate_kit_websocket_tx_send(
       &tx,
       ITERATE_KIT_WEBSOCKET_BINARY,
       data,
       sizeof(data)) == ITERATE_KIT_WEBSOCKET_TX_DEFERRED);
-  CHECK(iterate_kit_websocket_tx_queue_control(
+  assert(iterate_kit_websocket_tx_queue_control(
       &tx,
       ITERATE_KIT_WEBSOCKET_PONG,
       ping,
       sizeof(ping)) == ITERATE_KIT_OK);
-  CHECK(iterate_kit_websocket_tx_cancel_unwritten_data(&tx) ==
+  assert(iterate_kit_websocket_tx_cancel_unwritten_data(&tx) ==
       ITERATE_KIT_WEBSOCKET_TX_DATA_CANCELLED);
-  CHECK(iterate_kit_websocket_tx_poll_control(&tx) ==
+  assert(iterate_kit_websocket_tx_poll_control(&tx) ==
       ITERATE_KIT_WEBSOCKET_TX_SENT);
-  CHECK(raw.byte_count ==
+  assert(raw.byte_count ==
       ITERATE_KIT_WEBSOCKET_CLIENT_FRAME_BYTES(sizeof(ping)));
 }
 
@@ -485,16 +475,16 @@ static void partially_written_data_cannot_be_cancelled(void) {
       sizeof(storage),
       &raw,
       &next_random);
-  CHECK(iterate_kit_websocket_tx_send(
+  assert(iterate_kit_websocket_tx_send(
       &tx,
       ITERATE_KIT_WEBSOCKET_BINARY,
       data,
       sizeof(data)) == ITERATE_KIT_WEBSOCKET_TX_PROGRESS);
-  CHECK(raw.byte_count == 1U);
-  CHECK(iterate_kit_websocket_tx_cancel_unwritten_data(&tx) ==
+  assert(raw.byte_count == 1U);
+  assert(iterate_kit_websocket_tx_cancel_unwritten_data(&tx) ==
       ITERATE_KIT_WEBSOCKET_TX_DATA_PARTIALLY_WRITTEN);
-  CHECK(tx.active_kind == ITERATE_KIT_WEBSOCKET_TX_ACTIVE_DATA);
-  CHECK(tx.frame.frame_offset == 1U);
+  assert(tx.active_kind == ITERATE_KIT_WEBSOCKET_TX_ACTIVE_DATA);
+  assert(tx.frame.frame_offset == 1U);
 }
 
 /*
@@ -519,13 +509,13 @@ static void a_client_ping_is_written(void) {
   struct iterate_kit_websocket_tx tx;
 
   initialize(&tx, storage, sizeof(storage), &raw, &next_random);
-  CHECK(iterate_kit_websocket_tx_queue_control(
+  assert(iterate_kit_websocket_tx_queue_control(
       &tx, ITERATE_KIT_WEBSOCKET_PING, payload, sizeof(payload)) ==
       ITERATE_KIT_OK);
-  CHECK(iterate_kit_websocket_tx_poll_control(&tx) ==
+  assert(iterate_kit_websocket_tx_poll_control(&tx) ==
       ITERATE_KIT_WEBSOCKET_TX_SENT);
-  CHECK(raw.byte_count == sizeof(expected));
-  CHECK(memcmp(raw.bytes, expected, sizeof(expected)) == 0);
+  assert(raw.byte_count == sizeof(expected));
+  assert(memcmp(raw.bytes, expected, sizeof(expected)) == 0);
 }
 
 /*
@@ -542,22 +532,22 @@ static void a_reply_pong_outranks_our_own_ping(void) {
   struct iterate_kit_websocket_tx tx;
 
   initialize(&tx, storage, sizeof(storage), &raw, &next_random);
-  CHECK(iterate_kit_websocket_tx_queue_control(
+  assert(iterate_kit_websocket_tx_queue_control(
       &tx, ITERATE_KIT_WEBSOCKET_PING, ping_payload, sizeof(ping_payload)) ==
       ITERATE_KIT_OK);
-  CHECK(iterate_kit_websocket_tx_queue_control(
+  assert(iterate_kit_websocket_tx_queue_control(
       &tx, ITERATE_KIT_WEBSOCKET_PONG, pong_payload, sizeof(pong_payload)) ==
       ITERATE_KIT_OK);
-  CHECK(iterate_kit_websocket_tx_poll_control(&tx) ==
+  assert(iterate_kit_websocket_tx_poll_control(&tx) ==
       ITERATE_KIT_WEBSOCKET_TX_SENT);
   /* PONG first. */
-  CHECK(raw.bytes[0] == 0x8aU);
+  assert(raw.bytes[0] == 0x8aU);
   raw.byte_count = 0U;
-  CHECK(iterate_kit_websocket_tx_poll_control(&tx) ==
+  assert(iterate_kit_websocket_tx_poll_control(&tx) ==
       ITERATE_KIT_WEBSOCKET_TX_SENT);
   /* ...and only then ours. */
-  CHECK(raw.bytes[0] == 0x89U);
-  CHECK(iterate_kit_websocket_tx_poll_control(&tx) ==
+  assert(raw.bytes[0] == 0x89U);
+  assert(iterate_kit_websocket_tx_poll_control(&tx) ==
       ITERATE_KIT_WEBSOCKET_TX_IDLE);
 }
 
@@ -574,15 +564,15 @@ static void close_discards_an_unsent_ping(void) {
   struct iterate_kit_websocket_tx tx;
 
   initialize(&tx, storage, sizeof(storage), &raw, &next_random);
-  CHECK(iterate_kit_websocket_tx_queue_control(
+  assert(iterate_kit_websocket_tx_queue_control(
       &tx, ITERATE_KIT_WEBSOCKET_PING, ping_payload, sizeof(ping_payload)) ==
       ITERATE_KIT_OK);
-  CHECK(iterate_kit_websocket_tx_queue_control(
+  assert(iterate_kit_websocket_tx_queue_control(
       &tx, ITERATE_KIT_WEBSOCKET_CLOSE, NULL, 0U) == ITERATE_KIT_OK);
-  CHECK(iterate_kit_websocket_tx_poll_control(&tx) ==
+  assert(iterate_kit_websocket_tx_poll_control(&tx) ==
       ITERATE_KIT_WEBSOCKET_TX_SENT);
-  CHECK(raw.bytes[0] == 0x88U);
-  CHECK(iterate_kit_websocket_tx_poll_control(&tx) ==
+  assert(raw.bytes[0] == 0x88U);
+  assert(iterate_kit_websocket_tx_poll_control(&tx) ==
       ITERATE_KIT_WEBSOCKET_TX_IDLE);
 }
 
@@ -605,17 +595,17 @@ static void newest_pending_ping_replaces_the_older_payload(void) {
   struct iterate_kit_websocket_tx tx;
 
   initialize(&tx, storage, sizeof(storage), &raw, &next_random);
-  CHECK(iterate_kit_websocket_tx_queue_control(
+  assert(iterate_kit_websocket_tx_queue_control(
       &tx, ITERATE_KIT_WEBSOCKET_PING, first, sizeof(first)) ==
       ITERATE_KIT_OK);
-  CHECK(iterate_kit_websocket_tx_queue_control(
+  assert(iterate_kit_websocket_tx_queue_control(
       &tx, ITERATE_KIT_WEBSOCKET_PING, second, sizeof(second)) ==
       ITERATE_KIT_OK);
-  CHECK(iterate_kit_websocket_tx_poll_control(&tx) ==
+  assert(iterate_kit_websocket_tx_poll_control(&tx) ==
       ITERATE_KIT_WEBSOCKET_TX_SENT);
-  CHECK(raw.byte_count == sizeof(expected));
-  CHECK(memcmp(raw.bytes, expected, sizeof(expected)) == 0);
-  CHECK(iterate_kit_websocket_tx_poll_control(&tx) ==
+  assert(raw.byte_count == sizeof(expected));
+  assert(memcmp(raw.bytes, expected, sizeof(expected)) == 0);
+  assert(iterate_kit_websocket_tx_poll_control(&tx) ==
       ITERATE_KIT_WEBSOCKET_TX_IDLE);
 }
 
