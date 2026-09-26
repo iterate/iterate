@@ -19,14 +19,18 @@
 // a bearer on a WebSocket, and a personal access token is never a cookie session.
 import { reportIssue } from "iterate/lib";
 import {
+  failureKind,
+  isPlatformFailureKind,
+  logPlatformFailure,
+} from "@iterate-com/shared/platform-retry";
+import {
   DROPPED_CLOSE_CODE,
   relayedCloseCode,
   truncateCloseReason,
 } from "./context/websocket-close.ts";
-import { ControlPlane, ControlPlaneUnavailableError, type Reach } from "./control-plane/edge.ts";
+import { ControlPlane, type Reach } from "./control-plane/edge.ts";
 import type { Env } from "./env.ts";
 import { grantIsLive, type AccessGrant } from "./oauth.ts";
-import { isDeployReset, isRetryableTransportError } from "./retryable-error.ts";
 
 /** How often a held connection's grant is read again, and how long the connection stays good
  *  without a read that succeeded. */
@@ -101,15 +105,14 @@ export function holdGrantLease(
       arm(Math.min(started + LEASE_MS, grant.expiresAt));
     } catch (error) {
       if (released) return;
-      // A RETRYABLE READ (a deploy resets the Durable Objects the tick reads, and workerd marks the
-      // cut call retryable) or a control plane that is down (ControlPlaneUnavailableError) is asked
-      // again within the lease's bound: the platform failed, not the grant. The event tells a
-      // deploy's expected reset from a failure the prd fault alarm counts.
-      if (isRetryableTransportError(error) || error instanceof ControlPlaneUnavailableError) {
-        console.warn({
-          event: isDeployReset(error)
-            ? "oauth.deploy-reset-live-authorization-retry"
-            : "oauth.platform-failure-live-authorization-retry",
+      // A PLATFORM FAILURE (a deploy resets the Durable Objects the tick reads, a lost connection,
+      // an overloaded control plane) is asked again two seconds later, within the lease's bound: the
+      // platform failed, not the grant. A ladder the lease bounds, so an overload is waited out
+      // too, never repeated at once. The line tells a deploy's expected reset from a failure the prd
+      // fault alarm counts.
+      const kind = failureKind(error);
+      if (isPlatformFailureKind(kind)) {
+        logPlatformFailure("oauth", "retry", kind, {
           name,
           grantId: grant.grantId,
           message: String(error),

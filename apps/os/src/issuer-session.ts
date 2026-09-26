@@ -1,12 +1,16 @@
 import { startAppSession } from "iterate/app-server";
 import { reportIssue, sameOriginPath } from "iterate/lib";
 import { OAuthScope } from "iterate/oauth-scopes";
+import {
+  failureKind,
+  isPlatformFailureKind,
+  type PlatformFailureKind,
+} from "@iterate-com/shared/platform-retry";
 import { clientDisplay } from "./client-display.ts";
 import { platformAddressesOf } from "./app-config.ts";
 import type { Env } from "./env.ts";
 import type { UserRecord } from "./control-plane/catalog.ts";
 import { oauthHelpers, parseAuthorization, type GrantProps } from "./oauth.ts";
-import { isRetryableTransportError } from "./retryable-error.ts";
 import { watchSignInStep } from "./sign-in-watch.ts";
 
 /** What the person reads when the platform failed their sign-in, on the sign-in page. */
@@ -22,11 +26,12 @@ const PLATFORM_FAILURE_MESSAGE = "Sign-in failed on our side. Try again.";
  * exchange is never retried here; every caller sends the person back to the sign-in page with the
  * error, and a fresh sign-in is the recovery. How the failure is logged is the split:
  *  - a PLATFORM FAILURE (`codeExchangeFailure`) — the exchange timed out (the browser session
- *    bounds it at 10 s), its call was cut at the transport (a Durable Object reset, a lost
- *    connection), or the token endpoint answered a status instead of a token (a 500 when its own
- *    grant checks failed) — logs a warn `issuer.platform-failure-sign-in` with its `reason`, which
- *    the prd fault alarm counts. It names the person, so a timeout joins the line the token
- *    request logged about the hop it was still waiting on (`oauth.step-slow`, oauth.ts);
+ *    bounds it at 10 s), its call failed on the platform's side (a deploy's reset, a lost
+ *    connection, an overload: its `failureKind`), or the token endpoint answered a status instead
+ *    of a token (a 500 when its own grant checks failed) — logs a warn
+ *    `issuer.platform-failure-sign-in` with its `reason`, which the prd fault alarm counts. It
+ *    names the person, so a timeout joins the line the token request logged about the hop it was
+ *    still waiting on (`oauth.step-slow`, oauth.ts);
  *  - anything else is a defect of ours, reported at error level (`issuer.code-exchange-failed`),
  *    which the prd fault alarm pages on. The person still lands on the sign-in page, not a 1101.
  * The earlier steps' failures throw. */
@@ -116,11 +121,14 @@ export async function startIssuerSession(
 
 /** Why a code exchange failed on the platform's side, or null when it did not (a defect of ours).
  *  Read off what crosses the browser session's Durable Object RPC: workerd carries a DOMException
- *  as one, name and all, stamps a cut call `retryable`, and the session names the token endpoint's
- *  status in its own message (iterate/app-session.ts `#endOnDeadGrant`). */
-function codeExchangeFailure(error: unknown): "timeout" | "transport" | "token-endpoint" | null {
+ *  as one, name and all, stamps a platform failure with its kind (`failureKind`), and the session
+ *  names the token endpoint's status in its own message (iterate/app-session.ts `#endOnDeadGrant`). */
+function codeExchangeFailure(
+  error: unknown,
+): "timeout" | PlatformFailureKind | "token-endpoint" | null {
   if (error instanceof DOMException && error.name === "TimeoutError") return "timeout";
-  if (isRetryableTransportError(error)) return "transport";
+  const kind = failureKind(error);
+  if (isPlatformFailureKind(kind)) return kind;
   if (error instanceof Error && /^Iterate token exchange failed \(\d+\)/.test(error.message))
     return "token-endpoint";
   return null;

@@ -152,16 +152,24 @@ test("the token endpoint rides out a deploy's reset of the person's Durable Obje
       createExecutionContext(),
     );
   };
+  const info = vi.spyOn(console, "info");
   const warn = vi.spyOn(console, "warn");
   const healed = await exchange(1);
   expect(healed, await healed.clone().text()).toMatchObject({ status: 200 });
-  // a deploy's reset is expected, never a platform failure the prd fault alarm counts
-  expect(warn).toHaveBeenCalledExactlyOnceWith({
-    event: "oauth.deploy-reset-account-state-retry",
-    name: "account-state",
-    userId: user.id,
+  // a deploy's reset is expected, at info: never a platform failure the prd fault alarm counts
+  expect(info).toHaveBeenCalledExactlyOnceWith({
+    event: "oauth.deploy-reset-retry",
+    kind: "deploy-reset",
+    name: "itx.facets.get.snapshot",
+    projectId: "global",
+    path: `/users/${user.id}`,
     message: "Error: Durable Object reset because its code was updated.",
+    attempt: 1,
+    retryInMs: 0,
   });
+  expect(warn).not.toHaveBeenCalledWith(
+    expect.objectContaining({ event: expect.stringContaining("platform-failure") }),
+  );
   // bounded: a second reset in a row fails the exchange, which the sign-in answers as above
   await expect(exchange(2)).rejects.toThrow(/Durable Object reset because its code was updated/);
 });

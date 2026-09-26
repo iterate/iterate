@@ -3,7 +3,7 @@ import { newWebSocketRpcSession } from "capnweb";
 import { expect, onTestFinished, test } from "vitest";
 import type { StreamEvent } from "iterate/stream/processor";
 import { ControlPlaneDatabase } from "../src/control-plane/catalog.ts";
-import { ControlPlane, ControlPlaneUnavailableError } from "../src/control-plane/edge.ts";
+import { ControlPlane } from "../src/control-plane/edge.ts";
 import { DurableObjectNameCodec, GLOBAL_PROJECT_ID } from "../src/context/paths.ts";
 import { startLoginCode } from "../src/password-and-code-sign-in.ts";
 import type { IterateRpcTarget } from "../src/session.ts";
@@ -510,7 +510,7 @@ test("password sign-in rests an address after five wrong tries: the sixth is ref
   );
 });
 
-test("a control-plane call D1 fails on the platform's side is ControlPlaneUnavailableError, retryable where it may be asked again; our own error, or a refusal, is itself", async () => {
+test("a control-plane call D1 fails on the platform's side is UNAVAILABLE, of the kind D1's failure is; our own error, or a refusal, is itself", async () => {
   // D1's documented failures (https://developers.cloudflare.com/d1/observability/debug-d1/): the
   // binding throws them from the call itself, a read's and a batch's alike
   let failure = new Error("D1_ERROR: Network connection lost.");
@@ -521,30 +521,29 @@ test("a control-plane call D1 fails on the platform's side is ControlPlaneUnavai
     batch: () => Promise.reject(failure),
   } as unknown as D1Database;
   const controlPlane = new ControlPlane({ DB });
-  const unavailable = (method: string, retryable: boolean) =>
-    expect.objectContaining({
-      name: "ControlPlaneUnavailableError",
-      method,
-      retryable,
-      message: `The control plane failed ${method}: ${failure.message}`,
-    });
-  await expect(controlPlane.listOrganizations()).rejects.toEqual(
-    unavailable("organizations", true),
+  const unavailable = (method: string, kind: string, retryAfterMs: number) => ({
+    code: "UNAVAILABLE",
+    data: { kind, retryAfterMs },
+    message: `The control plane failed ${method}: ${failure.message}`,
+  });
+  await expect(controlPlane.listOrganizations()).rejects.toMatchObject(
+    unavailable("organizations", "disconnected", 1_000),
   );
-  // a write whose answer was lost may have landed: never asked again for it
-  await expect(controlPlane.createUser({ email: "cut@example.com" })).rejects.toEqual(
-    unavailable("createUser", false),
-  );
-  // the grant writes are whole-row writes, safe to ask again (oauth-store.ts does, once)
-  await expect(controlPlane.deleteOAuthGrant("grant:user_a:g1")).rejects.toEqual(
-    unavailable("deleteOAuthGrant", true),
+  // a write's too: whether to ask again is its caller's, who knows whether the write may land twice
+  await expect(controlPlane.createUser({ email: "cut@example.com" })).rejects.toMatchObject(
+    unavailable("createUser", "disconnected", 1_000),
   );
   failure = new Error("D1_ERROR: D1 DB is overloaded. Requests queued for too long.");
-  await expect(controlPlane.getUser("cut@example.com")).rejects.toEqual(unavailable("user", false));
+  await expect(controlPlane.getUser("cut@example.com")).rejects.toMatchObject(
+    unavailable("user", "overloaded", 10_000),
+  );
+  failure = new Error("D1_ERROR: D1 DB reset because its code was updated.");
+  await expect(controlPlane.deleteOAuthGrant("grant:user_a:g1")).rejects.toMatchObject(
+    unavailable("deleteOAuthGrant", "deploy-reset", 1_000),
+  );
   // ours is itself, with its message only: sqlfu's error holds the SQL and its bound values
   failure = new Error("D1_ERROR: no such table: users: SQLITE_ERROR");
   const own = await controlPlane.getUser("cut@example.com").catch((error: unknown) => error);
-  expect(own).not.toBeInstanceOf(ControlPlaneUnavailableError);
   expect(own).toMatchObject({ message: `The control plane failed user: ${failure.message}` });
   expect(Object.keys(own as Error)).toEqual([]);
   // a refusal the catalog coded is no failure of the platform's

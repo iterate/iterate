@@ -378,7 +378,10 @@ test("the platform-failure retry is bounded: a second one surfaces, and any othe
   const twice = flaky("list", [1, 2]);
   expect(await settle(() => scoped(twice.namespace, "prj_a").list())).toMatchObject({
     error: { message: "An internal error occurred." },
-    retries: [{ verb: "list" }],
+    retries: [
+      { event: "cfartifacts.platform-failure-retry", verb: "list" },
+      { event: "cfartifacts.platform-failure-gave-up", verb: "list", attempts: 2 },
+    ],
   });
 
   const unavailable: ArtifactsNamespace = {

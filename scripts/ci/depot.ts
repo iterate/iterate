@@ -6,9 +6,10 @@ import { promisify } from "node:util";
 import { z } from "zod";
 
 import {
+  CI_HTTP,
   HttpAnswerError,
-  httpPlatformFailure,
-  PLATFORM_FAILURE_DELAYS_MS,
+  httpFailureFields,
+  httpFailureKind,
   retryPlatformFailures,
 } from "@iterate-com/shared/platform-retry";
 
@@ -55,7 +56,7 @@ export async function depotCiApi(
   token: string,
   options: { fetch?: typeof fetch; delaysMs?: readonly number[] } = {},
 ): Promise<unknown> {
-  const { fetch: fetchImpl = fetch, delaysMs = PLATFORM_FAILURE_DELAYS_MS } = options;
+  const { fetch: fetchImpl = fetch, delaysMs = CI_HTTP.delaysMs } = options;
   return retryPlatformFailures(
     async () => {
       const response = await fetchImpl(`https://api.depot.dev/depot.ci.v1.CIService/${method}`, {
@@ -76,9 +77,11 @@ export async function depotCiApi(
       );
     },
     {
-      event: "depot.platform-failure-retry",
-      delaysMs: /^(Get|List)[A-Z]/.test(method) ? delaysMs : [],
-      platformFailure: (error) => httpPlatformFailure(error, { method }),
+      area: "depot",
+      schedule: { ...CI_HTTP, delaysMs },
+      idempotent: /^(Get|List)[A-Z]/.test(method),
+      kind: httpFailureKind,
+      describe: (error) => ({ method, ...httpFailureFields(error) }),
     },
   );
 }

@@ -8,14 +8,22 @@
 // access set is re-read once before it is refused, so a creation is reachable at once. A memo keeps
 // answers, never a read in flight: a request awaiting another's read hangs when that request ends
 // first, its I/O cancelled with it (https://developers.cloudflare.com/workers/observability/errors/).
-// A call that fails on the platform's side throws ControlPlaneUnavailableError (`d1Fault`), which a
-// project host answers 503 (worker.ts).
+// A call that fails on the platform's side throws UNAVAILABLE (unavailable.ts), which a project host
+// answers 503 (worker.ts).
 import { customHostnameCandidatesOf, type ProjectAddress } from "iterate/project-ingress";
 import { SqlfuError } from "sqlfu";
+import { errorCode, withTimeout } from "iterate/lib";
+import {
+  failureKind,
+  isOpaqueInternalError,
+  isPlatformFailureKind,
+  logPlatformFailure,
+} from "@iterate-com/shared/platform-retry";
 import type { Caller } from "../caller.ts";
 import { projectHostOf, type AppConfig } from "../app-config.ts";
 import type { Env } from "../env.ts";
 import type { OrganizationRole } from "../organization/contract.ts";
+import { unavailableError } from "../unavailable.ts";
 import {
   type AccessibleRecord,
   ControlPlaneDatabase,
@@ -38,62 +46,6 @@ export const describeReach = (reach: Reach): string =>
     : "userId" in reach
       ? `the projects of the orgs ${reach.userId} belongs to`
       : `bound to ${reach.projectIds.map((projectId) => JSON.stringify(projectId)).join(", ") || "no project"}`;
-
-/** A control-plane call that failed on the PLATFORM's side (`d1Fault`): D1 unreachable, reset,
- *  overloaded or timing out, or workerd's opaque "internal error; reference = …". A refusal the
- *  catalog coded, a constraint, SQL or any other throw is not one: each surfaces as what it is. A
- *  project host answers it 503 (worker.ts). Its message names the method and the cause only (the
- *  wait is `waitedMs`), so the fault alarm groups one failure as one row. */
-export class ControlPlaneUnavailableError extends Error {
-  override readonly name = "ControlPlaneUnavailableError";
-  /** the catalog method called (`project`, `accessibleTo`, …) */
-  readonly method: string;
-  readonly waitedMs: number;
-  /** Whether the same call may be asked again: a read or an idempotent write that D1 says to send
-   *  again (oauth-store.ts asks a grant call again once), or a read a holder's deadline gave up on
-   *  (`readDeadlineMs`). A write whose answer was lost may have landed, so any other write is not.
-   *  An own property, so it reaches an /api client beside the message (iterate/lib's error
-   *  channel). */
-  readonly retryable: boolean;
-  constructor(input: { method: string; waitedMs: number; cause: Error; retryable: boolean }) {
-    super(`The control plane failed ${input.method}: ${input.cause.message}`, {
-      cause: input.cause,
-    });
-    this.method = input.method;
-    this.waitedMs = input.waitedMs;
-    this.retryable = input.retryable;
-  }
-}
-
-/** Whether D1 failed on the PLATFORM's side, and whether Cloudflare says to send the query again
- *  (https://developers.cloudflare.com/d1/observability/debug-d1/#error-list); undefined for anything
- *  that is this call's own: SQL, a constraint, a type, a missing table. Read from the messages, as
- *  Cloudflare's own retry example does
- *  (https://developers.cloudflare.com/d1/best-practices/retry-queries/): the error's, and its
- *  causes' (sqlfu wraps a D1 error, whose cause is the binding's). Overloaded, timed out, or reset
- *  for its memory or CPU is not sent again: the database is failing every query queued on it, and
- *  a query it gave up on may still be queued. */
-export function d1Fault(error: unknown): { retryable: boolean } | undefined {
-  const messages: string[] = [];
-  for (let cause = error, depth = 0; cause instanceof Error && depth < 3; depth++) {
-    messages.push(cause.message);
-    cause = cause.cause;
-  }
-  const text = messages.join("\n");
-  if (
-    /D1 DB is overloaded|storage operation exceeded timeout|exceeded its (memory|CPU time) limit and was reset|internal error; reference =/.test(
-      text,
-    )
-  )
-    return { retryable: false };
-  if (
-    /Network connection lost|storage caused object to be reset|reset because its code was updated|Replica disconnected|transient issue on remote node|client disconnected/.test(
-      text,
-    )
-  )
-    return { retryable: true };
-  return undefined;
-}
 
 const projectMemo = new Map<string, ProjectRecord>();
 /** The refs a project host's admission found no project for, and when (`getProjectKeepingMisses`),
@@ -123,10 +75,10 @@ const callerOf = (caller: Caller) => ({ principal: caller.principal, grant: call
 /** The control plane as the edge holds it — ONE per request (worker.ts), or per socket (rpc.ts),
  *  over the `DB` binding.
  *
- *  `readDeadlineMs`: how long this holder waits for a read before it throws
- *  ControlPlaneUnavailableError (retryable). `/api` sets one (rpc.ts): its caller is a client that
- *  can ask again, where a read that hangs would hold the call until D1's own 30 s bound. A project
- *  host sets none: a slow answer is still the answer. */
+ *  `readDeadlineMs`: how long this holder waits for a read before it throws UNAVAILABLE
+ *  (overloaded). `/api` sets one (rpc.ts): its caller is a client that can ask again, where a read
+ *  that hangs would hold the call until D1's own 30 s bound. A project host sets none: a slow
+ *  answer is still the answer. */
 export class ControlPlane {
   readonly #db: ControlPlaneDatabase;
   readonly #grants: OAuthGrantTable;
@@ -138,70 +90,59 @@ export class ControlPlane {
   }
 
   /** ONE read: failed on the platform's side, or unanswered at this holder's `readDeadlineMs`, it
-   *  throws ControlPlaneUnavailableError. */
+   *  throws UNAVAILABLE. */
   #read<T>(method: string, read: () => Promise<T>): Promise<T> {
-    return this.#withinDeadline(method, this.#call(method, read, true));
+    return this.#withinDeadline(method, this.#call(method, read));
   }
 
-  /** `read`, or ControlPlaneUnavailableError (retryable) once this holder's `readDeadlineMs` has
-   *  passed without its answer, logged as `control-plane.platform-failure-read-deadline`
-   *  (scripts/ci/prd-fault-alarm.ts pages on a burst). The read itself runs on, and a memo it
-   *  feeds (`accessibleTo`) still gets its answer. */
+  /** `read`, or UNAVAILABLE (overloaded: capnp's word for "the operation timed out") once this
+   *  holder's `readDeadlineMs` has passed without its answer, logged as
+   *  `control-plane.platform-failure-read-deadline` (scripts/ci/prd-fault-alarm.ts pages on a
+   *  burst). The read itself runs on, and a memo it feeds (`accessibleTo`) still gets its answer. */
   async #withinDeadline<T>(method: string, read: Promise<T>): Promise<T> {
     const deadlineMs = this.#readDeadlineMs;
     if (!deadlineMs) return read;
-    let timer: ReturnType<typeof setTimeout> | undefined;
     try {
-      return await Promise.race([
-        read,
-        new Promise<never>((_, reject) => {
-          timer = setTimeout(() => {
-            console.warn({
-              event: "control-plane.platform-failure-read-deadline",
-              method,
-              waitedMs: deadlineMs,
-            });
-            reject(
-              new ControlPlaneUnavailableError({
-                method,
-                waitedMs: deadlineMs,
-                cause: new Error(`no answer within ${deadlineMs} ms`),
-                retryable: true,
-              }),
-            );
-          }, deadlineMs);
-        }),
-      ]);
-    } finally {
-      clearTimeout(timer);
+      return await withTimeout(read, deadlineMs, `the control plane's ${method}`);
+    } catch (error) {
+      if (errorCode(error) !== "TIMEOUT") throw error;
+      console.warn({
+        event: "control-plane.platform-failure-read-deadline",
+        method,
+        waitedMs: deadlineMs,
+      });
+      throw unavailableError(
+        "overloaded",
+        `The control plane failed ${method}: no answer within ${deadlineMs} ms`,
+      );
     }
   }
 
-  /** ONE call on the database, with no deadline. A platform fault (`d1Fault`) becomes
-   *  ControlPlaneUnavailableError, retryable when D1 says so and the call is `idempotent` (every
-   *  read, and the grant writes), logged once here as `control-plane.platform-failure-d1`
-   *  (scripts/ci/prd-fault-alarm.ts pages on a burst). Any other sqlfu error is thrown again with
-   *  its message only: its enumerable `query` holds the SQL and its bound values, which the /api
-   *  error channel would hand the client (iterate/lib's errors), and a cause passed to `Error` is
-   *  not enumerable. */
-  async #call<T>(method: string, call: () => Promise<T>, idempotent = false): Promise<T> {
+  /** ONE call on the database, with no deadline. A failure of the platform's own (`failureKind`: a
+   *  deploy's reset of D1, a lost connection, an overload) becomes UNAVAILABLE, logged once here as
+   *  `control-plane.platform-failure-d1` (scripts/ci/prd-fault-alarm.ts pages on a burst), or at
+   *  info as `control-plane.deploy-reset-d1`; whether to ask again is the caller's, who knows
+   *  whether the call is idempotent (oauth-store.ts asks a grant call again once). workerd's opaque
+   *  internal error (`isOpaqueInternalError`) is an overload here: D1 runs no code of ours or a
+   *  project's, so it is the runtime's own failure, and in a Cloudflare outage every call meets it
+   *  for minutes, so it is never repeated at once and a project host answers it 503. Any other sqlfu
+   *  error is thrown again with its message only: its enumerable `query` holds the SQL and its bound
+   *  values, which the /api error channel would hand the client (iterate/lib's errors), and a cause
+   *  passed to `Error` is not enumerable. */
+  async #call<T>(method: string, call: () => Promise<T>): Promise<T> {
     const started = Date.now();
     try {
       return await call();
     } catch (error) {
-      const fault = d1Fault(error);
-      if (fault && error instanceof Error) {
-        const unavailable = new ControlPlaneUnavailableError({
-          method,
-          waitedMs: Date.now() - started,
-          cause: error,
-          retryable: idempotent && fault.retryable,
-        });
-        console.warn({
-          event: "control-plane.platform-failure-d1",
+      const kind = isOpaqueInternalError(error) ? "overloaded" : failureKind(error);
+      if (isPlatformFailureKind(kind) && error instanceof Error) {
+        const unavailable = unavailableError(
+          kind,
+          `The control plane failed ${method}: ${error.message}`,
+        );
+        logPlatformFailure("control-plane", "d1", kind, {
           name: method,
-          waitedMs: unavailable.waitedMs,
-          retryable: unavailable.retryable,
+          waitedMs: Date.now() - started,
           message: unavailable.message,
         });
         throw unavailable;
@@ -319,7 +260,7 @@ export class ControlPlane {
   async accessibleTo(userId: string, fresh = false): Promise<AccessibleRecord> {
     const memoized = accessMemo.get(userId);
     if (!fresh && memoized && Date.now() - memoized.at < 5_000) return memoized.record;
-    const read = this.#call("accessibleTo", () => this.#db.accessibleTo(userId), true);
+    const read = this.#call("accessibleTo", () => this.#db.accessibleTo(userId));
     return this.#withinDeadline(
       "accessibleTo",
       read.then((record) => {
@@ -641,16 +582,12 @@ export class ControlPlane {
     return this.#read("listOAuthGrants", () => this.#grants.list(prefix, options, nowSeconds()));
   }
   /** `expiresAt`: epoch seconds, or null for a grant that never expires. A whole-row write, so
-   *  asking it again is safe (`idempotent`). */
+   *  asking it again is safe (oauth-store.ts does). */
   putOAuthGrant(key: string, value: string, expiresAt: number | null) {
-    return this.#call(
-      "putOAuthGrant",
-      () => this.#grants.put(key, value, expiresAt, nowSeconds()),
-      true,
-    );
+    return this.#call("putOAuthGrant", () => this.#grants.put(key, value, expiresAt, nowSeconds()));
   }
   deleteOAuthGrant(key: string) {
-    return this.#call("deleteOAuthGrant", () => this.#grants.delete(key), true);
+    return this.#call("deleteOAuthGrant", () => this.#grants.delete(key));
   }
 
   #forget(...userIds: (string | undefined)[]): void {

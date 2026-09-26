@@ -2,8 +2,8 @@
 // `appendPlatformFacts` (the revocation truth: a failed append must fail the verb), and a sign-in's
 // connection awaits it FOLDED (the answer implies the fold); the account's sign-ins and consents and
 // an organization's activity go through `publishPlatformFacts`, best-effort in waitUntil: each fact
-// is keyed, so an append the platform cut is sent once more and lands once, and a second failure is
-// reported.
+// is keyed, so an append the platform cut is sent once more (`ownerContext`, context-stub.ts) and
+// lands once, and a second failure is reported.
 
 import { expect, test, vi } from "vitest";
 import type { ItxExpression } from "iterate/expression";
@@ -24,7 +24,7 @@ test("appendPlatformFacts enables the owner's processor, then appends stamped pl
   await expect(
     appendPlatformFacts(namespace, { account: "u1" }, fact, { principal: null }),
   ).rejects.toThrow("append refused");
-  expect(names).toEqual([globalName("/users/u1")]);
+  expect(names).toEqual([globalName("/users/u1"), globalName("/users/u1")]); // a stub per call
   expect(calls).toEqual([
     [["itx", "processors", ["enable", "account"]], [], { principal: null }],
     [["itx", "builtins", ["append", fact]], [], { principal: null, platform: true }],
@@ -36,7 +36,7 @@ test("an organization's facts land on its own context, its processor enabled fir
   await expect(
     appendPlatformFacts(namespace, { organization: "org_1" }, [fact, fact], { principal: null }),
   ).rejects.toThrow("append refused");
-  expect(names).toEqual([globalName("/organizations/org_1")]);
+  expect(names).toEqual([globalName("/organizations/org_1"), globalName("/organizations/org_1")]);
   expect(calls).toEqual([
     [["itx", "processors", ["enable", "organization"]], [], { principal: null }],
     [["itx", "builtins", ["append", fact, fact]], [], { principal: null, platform: true }],
@@ -73,11 +73,15 @@ test.for([
     name: "a deploy's reset that cut the answer after the fact landed is sent again: the stream answers with the fact it holds",
     failures: [{ failure: "deploy reset", afterLanding: true }],
     landed: 1,
-    retries: [
-      {
-        event: "session.deploy-reset-platform-fact-retry",
-        message: "Error: Durable Object reset because its code was updated.",
-      },
+    lines: [
+      [
+        "info",
+        appendLine("session.deploy-reset-retry", "deploy-reset", {
+          message: "Error: Durable Object reset because its code was updated.",
+          attempt: 1,
+          retryInMs: 0,
+        }),
+      ],
     ],
     reported: undefined,
   },
@@ -85,11 +89,15 @@ test.for([
     name: "a lost connection that cut the append before it landed is sent again and lands it",
     failures: [{ failure: "connection lost", afterLanding: false }],
     landed: 1,
-    retries: [
-      {
-        event: "session.platform-failure-platform-fact-retry",
-        message: "Error: Network connection lost.",
-      },
+    lines: [
+      [
+        "warn",
+        appendLine("session.platform-failure-retry", "disconnected", {
+          message: "Error: Network connection lost.",
+          attempt: 1,
+          retryInMs: 0,
+        }),
+      ],
     ],
     reported: undefined,
   },
@@ -100,11 +108,22 @@ test.for([
       { failure: "connection lost", afterLanding: false },
     ],
     landed: 0,
-    retries: [
-      {
-        event: "session.platform-failure-platform-fact-retry",
-        message: "Error: Network connection lost.",
-      },
+    lines: [
+      [
+        "warn",
+        appendLine("session.platform-failure-retry", "disconnected", {
+          message: "Error: Network connection lost.",
+          attempt: 1,
+          retryInMs: 0,
+        }),
+      ],
+      [
+        "warn",
+        appendLine("session.platform-failure-gave-up", "disconnected", {
+          message: "Error: Network connection lost.",
+          attempts: 2,
+        }),
+      ],
     ],
     reported: "Network connection lost.",
   },
@@ -112,17 +131,19 @@ test.for([
     name: "a refusal is reported at once",
     failures: [{ failure: "refusal", afterLanding: false }],
     landed: 0,
-    retries: [],
+    lines: [],
     reported: "append refused",
   },
 ] satisfies {
   name: string;
   failures: { failure: Failure; afterLanding: boolean }[];
   landed: number;
-  retries: { event: string; message: string }[];
+  lines: [string, object][];
   reported: string | undefined;
-}[])("publishPlatformFacts: $name", async ({ failures, landed, retries, reported }) => {
-  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+}[])("publishPlatformFacts: $name", async ({ failures, landed, lines, reported }) => {
+  const logged: [string, unknown][] = [];
+  vi.spyOn(console, "info").mockImplementation((line) => void logged.push(["info", line]));
+  vi.spyOn(console, "warn").mockImplementation((line) => void logged.push(["warn", line]));
   const issue = vi.spyOn(console, "error").mockImplementation(() => {});
   const { stream, events } = nodeSqliteStream();
   const left = [...failures];
@@ -152,17 +173,11 @@ test.for([
   expect(events.map((event) => event.idempotencyKey)).toEqual(
     Array.from({ length: landed }, () => keyedFact.idempotencyKey),
   );
-  expect(getByName).toHaveBeenCalledTimes(1 + retries.length); // each attempt on a fresh stub
-  expect(warn.mock.calls.map(([line]) => line)).toEqual(
-    retries.map((retry) => ({
-      name: "platform-fact",
-      path: "/users/u1",
-      type: keyedFact.type,
-      attempt: 1,
-      retryInMs: 0,
-      ...retry,
-    })),
-  );
+  // the enable, then each append on a fresh stub
+  const retries = lines.filter(([, line]) => "retryInMs" in line).length;
+  expect(getByName).toHaveBeenCalledTimes(2 + retries);
+  // Exact: the lines are the prd fault alarm's input.
+  expect(logged).toEqual(lines);
   expect(issue.mock.calls.map(([line]) => line)).toEqual(
     reported
       ? [
@@ -233,8 +248,8 @@ const undo = (log: string[], label: string) => ({ dispose: () => void log.push(l
 
 type Failure = "deploy reset" | "connection lost" | "refusal";
 
-/** Each failure as workerd hands it to the caller (retryable-error.ts): a DISCONNECTED one stamped
- *  `retryable`, a deploy's also `durableObjectReset`; the callee's own refusal carries neither. */
+/** Each failure as workerd hands it to the caller: a DISCONNECTED one stamped `retryable`, a
+ *  deploy's also `durableObjectReset`; the callee's own refusal carries neither. */
 function platformError(failure: Failure): Error {
   if (failure === "deploy reset")
     return Object.assign(new Error("Durable Object reset because its code was updated."), {
@@ -244,4 +259,16 @@ function platformError(failure: Failure): Error {
   if (failure === "connection lost")
     return Object.assign(new Error("Network connection lost."), { retryable: true });
   return new Error("append refused");
+}
+
+/** A line the keyed append's repeat, or giving up on it, logs. */
+function appendLine(event: string, kind: string, fields: object) {
+  return {
+    event,
+    kind,
+    name: "itx.builtins.append",
+    projectId: "global",
+    path: "/users/u1",
+    ...fields,
+  };
 }

@@ -40,6 +40,11 @@ import type { RewriteRuleListEntry, StreamPage, SubscriptionListEntry } from "it
 import { ITERATE_ROUTING_SLUG_HEADER } from "iterate/project-ingress";
 import { RunRequested, type RunSettlement } from "iterate/stream/run";
 import {
+  failureKind,
+  isPlatformFailureKind,
+  logPlatformFailure,
+} from "@iterate-com/shared/platform-retry";
+import {
   ITX_APP_HEADER,
   ITX_CALLER_PATH_HEADER,
   ITX_GRANT_HEADER,
@@ -78,7 +83,7 @@ import {
   secretPathsReferenced,
   verifyLendUse,
 } from "./secrets.ts";
-import { isDeployReset } from "./retryable-error.ts";
+import { unavailableAnswer } from "./unavailable.ts";
 import {
   appConfigOf,
   iterateAppScopesOf,
@@ -1360,18 +1365,17 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       } catch (error) {
         // A project host makes this path public: default-deny is a 404 (a visitor's "no such app" is
         // no issue), a WebSocket upgrade aimed at a facet-hosted app is the caller's 400 (context/facet-host.ts),
-        // anything else a 500 — the message alone every way, the stack REPORTED, never served.
+        // a lent stub offline or a platform failure the edge's one answer (`unavailableAnswer`: a 502,
+        // a 503 with its Retry-After), anything else a 500 — the message alone every way, the stack
+        // REPORTED, never served.
         const code = errorCode(error);
+        const unavailable = unavailableAnswer(error);
         const status =
           code === "NO_ITX_EXPRESSION_MATCH"
             ? 404
             : code === "FACET_NO_UPGRADE"
               ? 400
-              : code === "RPC_STUB_OFFLINE"
-                ? 502
-                : isDeployReset(error)
-                  ? 503
-                  : 500;
+              : (unavailable?.status ?? 500);
         if (status === 500)
           reportIssue("iterate-context.expression-fetch", error, {
             itxExpression: itxExpressionHeader,
@@ -1381,8 +1385,10 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         // expression to a client. A deploy that reset a context the fetch dialed, where the hop could
         // not send it again (a request with a body, an upgrade; built-ins.ts `cd`), is a 503 the
         // visitor retries in a second, logged at info and never reported. The prd fault alarm
-        // (scripts/ci/prd-fault-alarm.ts) drops the 502 and 503 summaries in these lines' rays.
-        if (status === 502 || status === 503)
+        // (scripts/ci/prd-fault-alarm.ts) drops the 502 and 503 summaries in these lines' rays. Any
+        // other platform failure is a 503 the alarm counts: a lost connection, an overload.
+        const kind = failureKind(error);
+        if (status === 502 || kind === "deploy-reset")
           console.info({
             event:
               status === 502
@@ -1390,12 +1396,18 @@ export class IterateContextDurableObject extends DurableObject<Env> {
                 : "expression-fetch.deploy-reset",
             itxExpression: itxExpressionHeader,
           });
+        else if (isPlatformFailureKind(kind))
+          logPlatformFailure("expression-fetch", "answered", kind, {
+            name: "expression-fetch",
+            itxExpression: itxExpressionHeader,
+            message: String(error),
+          });
         const message = error instanceof Error ? error.message : String(error);
         return new Response(`expression fetch error: ${message}\n`, {
           status,
           headers: {
+            ...unavailable?.headers,
             ...(status === 502 && { "x-iterate-rpc-stub-offline": itxExpressionHeader }),
-            ...(status === 503 && { "retry-after": "1", "cache-control": "no-store" }),
           },
         });
       }

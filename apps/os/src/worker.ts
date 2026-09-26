@@ -26,7 +26,8 @@ import {
 import { secretOAuthCallback } from "./secret-oauth-callback.ts";
 import { slackWebhookRoute } from "./integrations/slack.ts";
 import { githubCallbackRoute, githubWebhookRoute } from "./integrations/github.ts";
-import { ControlPlane, ControlPlaneUnavailableError } from "./control-plane/edge.ts";
+import { ControlPlane } from "./control-plane/edge.ts";
+import { unavailableAnswer } from "./unavailable.ts";
 import { oauthResponse } from "./api.ts";
 import { issuerHandler } from "./issuer-pages.ts";
 import {
@@ -68,13 +69,15 @@ function withoutBasePath(request: Request, basePath: string): Request {
 }
 
 /** A project host's answer when a control-plane read it needed failed on the platform's side
- *  (ControlPlaneUnavailableError, which edge.ts logged): a 503 (scripts/ci/prd-fault-alarm.ts
- *  pages on the 5xx), not an exception. Any other error is rethrown. */
+ *  (UNAVAILABLE, which edge.ts logged): the edge's one answer to it (`unavailableAnswer`), a 503
+ *  with its Retry-After (scripts/ci/prd-fault-alarm.ts pages on the 5xx), not an exception. Any
+ *  other error is rethrown. */
 function controlPlaneUnavailable(error: unknown, hostname: string): Response {
-  if (!(error instanceof ControlPlaneUnavailableError)) throw error;
+  const answer = unavailableAnswer(error);
+  if (!answer) throw error;
   return new Response(
-    `503: the platform could not look up ${hostname} just now; try again in a minute\n`,
-    { status: 503, headers: { "cache-control": "no-store", "retry-after": "60" } },
+    `${answer.status}: the platform could not look up ${hostname} just now; try again shortly\n`,
+    answer,
   );
 }
 

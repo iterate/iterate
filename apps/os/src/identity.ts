@@ -591,7 +591,7 @@ async function githubSignIn(
 
 /** The person's own context: `global:/users/<id>`. */
 const personContext = (env: Env, user: UserRecord) =>
-  ownerContext(env.ITERATE_CONTEXT, { account: user.id });
+  ownerContext(env.ITERATE_CONTEXT, { account: user.id }, "identity");
 
 /** The name of the person's connection to this account at the provider — one a connect made
  *  before (under its own name), or a sign-in's (named by the subject) — or null. */

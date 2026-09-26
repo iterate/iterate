@@ -116,6 +116,7 @@ test.for([502, 200])(
     expect(warn).toHaveBeenCalledOnce();
     expect(warn).toHaveBeenCalledWith({
       event: "prd-fault-alarm.platform-failure-retry",
+      kind: "disconnected",
       view: "calculations",
       status,
       message: `Workers Logs query answered HTTP ${status} (text/html; charset=UTF-8): ${errorPage.slice(0, 200)}`,

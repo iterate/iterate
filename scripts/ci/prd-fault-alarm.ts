@@ -26,9 +26,10 @@ import { createCli } from "trpc-cli";
 import { z } from "zod";
 import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
 import {
+  CI_HTTP,
   HttpAnswerError,
-  httpPlatformFailure,
-  PLATFORM_FAILURE_DELAYS_MS,
+  httpFailureFields,
+  httpFailureKind,
   retryPlatformFailures,
 } from "@iterate-com/shared/platform-retry";
 import {
@@ -167,7 +168,7 @@ export async function alarm(input: {
   /** The waits before each repeat of a Workers Logs query Cloudflare failed (readWindow). */
   delaysMs?: readonly number[];
 }) {
-  const { window, delaysMs = PLATFORM_FAILURE_DELAYS_MS } = input;
+  const { window, delaysMs = CI_HTTP.delaysMs } = input;
   const reading = await readWindow(window, input.cloudflare, delaysMs);
   console.log(JSON.stringify({ window, reading }));
   const triage = triageIncidents(reading, window, input.state);
@@ -653,13 +654,13 @@ async function readWindow(
         return body.result;
       },
       {
-        event: "prd-fault-alarm.platform-failure-retry",
-        delaysMs,
+        area: "prd-fault-alarm",
+        schedule: { ...CI_HTTP, delaysMs },
+        idempotent: true,
         // Every HttpAnswerError thrown above is Cloudflare's own failure, the HTML page included.
-        platformFailure: (error) =>
-          error instanceof HttpAnswerError
-            ? { view, status: error.status, message: error.message }
-            : httpPlatformFailure(error, { view }),
+        kind: (error) =>
+          error instanceof HttpAnswerError ? "disconnected" : httpFailureKind(error),
+        describe: (error) => ({ view, ...httpFailureFields(error) }),
       },
     );
   // Without `groupBy`, one row: ["", the total].

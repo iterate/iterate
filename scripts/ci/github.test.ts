@@ -15,6 +15,7 @@ test("asks a GET again after GitHub's 500 and returns the answer (the PR #2899 L
   expect(fixture.warn).toHaveBeenCalledOnce();
   expect(fixture.warn).toHaveBeenCalledWith({
     event: "github.platform-failure-retry",
+    kind: "disconnected",
     route: "GET /repos/{owner}/{repo}/pulls/{pull_number}",
     status: 500,
     requestId: "BC32:2F0597:157166:45E4D9:6AB4315E",
@@ -53,7 +54,8 @@ test("throws GitHub's last failure once every delay is spent", async () => {
     },
   );
   expect(fixture.fetch).toHaveBeenCalledTimes(4);
-  expect(fixture.warn.mock.calls.map(([entry]) => entry.status)).toEqual([502, 503, 500]);
+  // three repeats, then the one give-up
+  expect(fixture.warn.mock.calls.map(([entry]) => entry.status)).toEqual([502, 503, 500, 504]);
 });
 
 test("never asks a POST again: a 5xx may have landed, and a repeat would create a second one", async () => {
