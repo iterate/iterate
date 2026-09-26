@@ -734,14 +734,21 @@ export class ControlPlaneDatabase {
     );
   }
   /** Release ONE account's route, only while the connection at `path` holds it: a connection that
-   *  took another account since keeps that one's. */
+   *  took another account since keeps that one's. Answers whether it held it — one statement, so a
+   *  move of the route (`moveIntegrationRoute`) and this release never both win. */
   async releaseIntegrationRoute(
     provider: string,
     externalId: string,
     projectId: string,
     path: string,
-  ): Promise<void> {
-    await releaseIntegrationRoute(this.#client, { provider, externalId, projectId, path });
+  ): Promise<boolean> {
+    const released = await releaseIntegrationRoute(this.#client, {
+      provider,
+      externalId,
+      projectId,
+      path,
+    });
+    return Boolean(released.rowsAffected);
   }
   /** Release every route of the connection at `path` in a project; another's are left alone. */
   async releaseIntegrationRoutes(projectId: string, path: string): Promise<void> {

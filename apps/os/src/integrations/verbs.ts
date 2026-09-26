@@ -310,11 +310,11 @@ export async function disconnectIntegration(
   const movedExternalId = z.string().min(1).optional().parse(input.movedExternalId);
   const moved = movedExternalId ? { externalId: movedExternalId } : undefined;
   const row = integrations[connectionPathOf(input.provider, connection)];
-  // the connection since took another account (or none): nothing of the moved one is left here
-  if (moved && row?.externalId !== moved.externalId) return;
+  // the connection since took another account, or the same one through its own app (or none):
+  // nothing of the moved one is left here
+  if (moved && (row?.externalId !== moved.externalId || row.client !== "iterate")) return;
   if (row?.ownerUserId) return disconnectPersonalAccount(scope, row);
-  if (input.provider === "slack")
-    await disconnectSlack(scope, connection, row?.client ?? null, moved);
+  if (input.provider === "slack") await disconnectSlack(scope, connection, row || null, moved);
   else if (input.provider === "google")
     await disconnectGoogle(scope, connection, row?.client ?? null);
   else if (input.provider === "cloudflare") await disconnectCloudflare(scope, connection);

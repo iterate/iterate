@@ -49,7 +49,12 @@ import { DurableObjectNameCodec, pathUnderOwner, resourceScope } from "../contex
 import type { ItxEntrypointScope } from "../iterate-context.ts";
 import { ControlPlane } from "../control-plane/edge.ts";
 import type { IterateContextDurableObject } from "../iterate-context-durable-object.ts";
-import { MOVE_OFFER_TTL_MS, type HeldToken } from "../integrations/connections.ts";
+import {
+  connectionPathOf,
+  connectionRowOf,
+  MOVE_OFFER_TTL_MS,
+  type HeldToken,
+} from "../integrations/connections.ts";
 import { grantedScopesOf, lendVerdict, slackTeamOfTokenResponse } from "../integrations/rules.ts";
 import { googleEndpointsOf } from "../integrations/google.ts";
 import { githubApiOriginOf } from "../integrations/github.ts";
@@ -187,6 +192,9 @@ export class SecretDurableObject extends StreamProcessorDurableObject<
   readonly #installationRouteReadAt = new Map<string, number>();
   /** When each iterate-Slack-app workspace's route was last read for a use (`#assertWorkspaceNotMoved`). */
   readonly #workspaceRouteReadAt = new Map<string, number>();
+  /** The stored revisions whose record predates `routedAccount` and whose connection row was read
+   *  already (`#routedAccountOf`): one read per record and incarnation. */
+  readonly #connectionRowsRead = new Set<number>();
 
   /** This facet's identity, from its context's name (`ctx.props`, sdk/index.ts): the context, and
    *  the PATH THE PLACEHOLDER SPELLS — the context's path relative to the resource owner's root
@@ -861,7 +869,7 @@ export class SecretDurableObject extends StreamProcessorDurableObject<
         );
       let stored = await read();
       if (stored) await this.#assertInstallationRouted(stored.record.refresh);
-      if (stored) await this.#assertWorkspaceNotMoved(stored.record.routedAccount);
+      if (stored) await this.#assertWorkspaceNotMoved(await this.#routedAccountOf(stored));
       // This facet answers for ONE secret: a placeholder naming another is refused here, not only
       // at the egress that routed the request (the facet is the boundary that holds the bytes).
       const resolve = (named: string) => {
@@ -938,6 +946,40 @@ export class SecretDurableObject extends StreamProcessorDurableObject<
       );
     }
     this.#installationRouteReadAt.set(installationId, Date.now());
+  }
+
+  /** THE WORKSPACE A STORED SLACK TOKEN IS FOR, when its record predates `routedAccount`: iterate's
+   *  app's token at a project's `/secrets/slack-<connection>` (its material holds no app of its own)
+   *  is for the workspace that connection's row names. Read once, and kept on the stored record —
+   *  outside the material's binding, so no write — for every read after. */
+  async #routedAccountOf(stored: {
+    revision: number;
+    record: SecretRecord;
+  }): Promise<SecretRecord["routedAccount"]> {
+    const { record, revision } = stored;
+    if (record.routedAccount) return record.routedAccount;
+    const { context, path } = this.#address();
+    const { projectId, path: contextPath } = DurableObjectNameCodec.parse(context);
+    const connection = /^\/secrets\/slack-(.+)$/.exec(path)?.[1];
+    if (
+      !connection ||
+      resourceScope(projectId, contextPath).kind !== "project" ||
+      !isRecord(record.material) ||
+      "clientId" in record.material ||
+      this.#connectionRowsRead.has(revision)
+    )
+      return undefined;
+    const row = await connectionRowOf(this.env, projectId, connectionPathOf("slack", connection));
+    this.#connectionRowsRead.add(revision);
+    if (row?.client !== "iterate") return undefined;
+    const routedAccount = { provider: "slack" as const, externalId: row.externalId };
+    const current = await this.ctx.storage.get<Stored>("stored");
+    if (current?.revision === revision)
+      await this.ctx.storage.put<Stored>("stored", {
+        ...current,
+        record: { ...current.record, routedAccount },
+      });
+    return routedAccount;
   }
 
   /** A WORKSPACE'S TOKEN IS REFUSED ONCE IT MOVED: iterate's Slack app's token for a workspace

@@ -235,15 +235,18 @@ written again. Either callback lands on `next` with a signed, ten-minute offer (
 holder only when the human can see it), and the project facet's `confirmIntegrationMove({ offer })`
 moves the route in one D1 batch that re-points it only while the holder still holds that account
 (`moveIntegrationRoute`), connects it here, and disconnects the holder's connection only while it
-still names that account (`<provider>/disconnected { reason: "moved" }`, its secret gone; Slack's
-token is not revoked, because Slack keeps one bot token per app and workspace, the one now connected
-here). A move that fails to connect puts the routes back, the destination's previous one included,
-and keeps no token here. When the holder's cleanup fails, the confirmation says so and the same offer
-retries the cleanup alone; the offer works once otherwise. Either way the holder stops using the
-account: a secret facet re-reads the route of an iterate-App installation, or of iterate's Slack
-app's workspace, at most every 30 s of use and refuses a token for one routed to another project
-(`#assertInstallationRouted`, `#assertWorkspaceNotMoved`). The human need not be a member of the
-holder.
+still names that account through iterate's app (`<provider>/disconnected { reason: "moved" }`, its
+secret gone). Slack keeps one bot token per app and workspace, so the moved workspace's token is not
+revoked, and an ordinary Slack disconnect revokes only when its own release of the route wins (one
+D1 statement, which a move of the route and the release never both win). A move that fails to
+connect puts the routes back, the destination's previous one included, and keeps no token here.
+When the holder's cleanup fails, the confirmation says so and the same offer retries the cleanup
+alone; the offer works once otherwise, and the callback again lands on the same offer. Either way
+the holder stops using the account: a secret facet re-reads the route of an iterate-App
+installation, or of iterate's Slack app's workspace, at most every 30 s of use and refuses a token
+for one routed to another project (`#assertInstallationRouted`, `#assertWorkspaceNotMoved`; a Slack
+token stored before its record named its workspace learns it once from its connection's row). The
+human need not be a member of the holder.
 
 iterate's apps each receive every account's webhooks on one URL
 (`POST /api/integrations/slack/webhook` and `/interactivity-webhook`, and
