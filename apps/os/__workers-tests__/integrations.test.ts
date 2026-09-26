@@ -648,6 +648,51 @@ test("Slack: a move whose connect fails does not route the workspace back to a h
   await vi.waitFor(async () => expect(await integrationsOf(holder.itx)).toEqual({}));
 });
 
+test("Slack: a move back confirmed while a move's proof runs does not deadlock the two: each gives up its wait on the other in time, and the move back finishes", async () => {
+  const holder = await projectWithMember("slack-crossed");
+  const petshop = petshopFakes();
+  await connected(petshop, holder, "slack", "team=T21BACK");
+  const mover = await otherProject(holder, "slack-crossed-mover");
+  const offer = moveOfferOf(await consented(petshop, mover, "slack", "team=T21BACK"));
+  // The move's proof (the first auth.test once armed) waits for the move back to take the route,
+  // then fails. Flags, polled, as above.
+  let armed = false;
+  let proofReached = false;
+  let movedBack = false;
+  const answered = vi.mocked(globalThis.fetch).getMockImplementation()!;
+  vi.mocked(globalThis.fetch).mockImplementation(async (input, init) => {
+    const request = new Request(input, init);
+    if (!armed || request.url !== "https://slack.test/api/auth.test") return answered(request);
+    armed = false;
+    proofReached = true;
+    for (const until = Date.now() + 20_000; !movedBack && Date.now() < until;)
+      await scheduler.wait(20);
+    return Response.json({ ok: false, error: "account_inactive" });
+  });
+  armed = true;
+  const moving = projectFacet(mover.itx).confirmIntegrationMove({ offer });
+  await vi.waitFor(() => expect(proofReached).toBe(true));
+  // the holder installs into the workspace again: the route is the mover's now, so it is offered back
+  const back = moveOfferOf(await consented(petshop, holder, "slack", "team=T21BACK"));
+  const returning = projectFacet(holder.itx).confirmIntegrationMove({ offer: back });
+  await vi.waitFor(async () =>
+    expect(await catalog().integrationRoute("slack", "T21BACK")).toMatchObject({
+      projectId: holder.projectId,
+    }),
+  );
+  movedBack = true;
+  await expect(moving).rejects.toThrow(/auth\.test/);
+  // Each waited on the other's queue, and whichever waited first gave up within the bound: the
+  // move's undo, or the move back's cleanup ("press Move again"), which the same offer finishes.
+  await returning.catch(() => projectFacet(holder.itx).confirmIntegrationMove({ offer: back }));
+  expect(await catalog().integrationRoute("slack", "T21BACK")).toEqual({
+    projectId: holder.projectId,
+    path: "/integrations/slack/acme",
+  });
+  expect(await integrationsOf(mover.itx)).toEqual({});
+  expect(await secretPathsOf(mover.itx)).not.toContain("/secrets/slack-acme");
+});
+
 test("Slack: a move whose held token is gone leaves what the destination's secret holds alone", async () => {
   const holder = await projectWithMember("slack-replaced");
   const petshop = petshopFakes();

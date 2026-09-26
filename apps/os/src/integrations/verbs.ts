@@ -9,7 +9,7 @@
 // project leaves the person's own connection standing. `finishIntegrationConnect` and a connect with
 // `connectToProject` are the platform's alone: the facets do not publish them. An account another
 // project holds (Slack, GitHub) is offered to move here, and `confirmIntegrationMove` moves it.
-import { codedError, errorCode, reportIssue } from "iterate/lib";
+import { codedError, errorCode, reportIssue, withTimeout } from "iterate/lib";
 import { z } from "zod";
 import { appConfigOf, sessionSigningSecretOf } from "../app-config.ts";
 import { verifyClaims } from "../caller.ts";
@@ -357,6 +357,11 @@ export async function restoreMovedIntegrationRoute(
   );
 }
 
+/** How long a move waits on the holder connection's own queue (its cleanup, a failed move's undo):
+ *  two moves crossing between the same two connections each hold their own queue while waiting on
+ *  the other's, so the wait is bounded, and a holder that does not answer is one that failed. */
+const HOLDER_QUEUE_WAIT_MS = 10_000;
+
 /** The claims of a move offer (connections.ts `IntegrationMoveOffer`), once its signature checked. */
 const MoveOfferClaims = z.object({
   kind: z.literal("integration-move"),
@@ -444,8 +449,9 @@ export async function confirmIntegrationMove(
       try {
         // Back to the holder only while its connection still names this account (asked on its own
         // queue, `restoreMovedIntegrationRoute`); else it is released from here. The platform's own
-        // call; `invoke` is untyped across the DO hop, and the built-in answers a boolean.
-        const restored = (await env.ITERATE_CONTEXT.getByName(
+        // call, which answers a boolean. An undo with no answer in time is no undo: the release
+        // below leaves a late one nothing to move back.
+        const undo = env.ITERATE_CONTEXT.getByName(
           DurableObjectNameCodec.stringify({ projectId: holder.projectId, path: "/" }),
         ).invoke(
           [
@@ -464,7 +470,21 @@ export async function confirmIntegrationMove(
           ],
           [],
           { principal: null, platform: true },
-        )) as boolean;
+        );
+        const restored = await withTimeout(
+          Promise.resolve(undo).then((answer: unknown) => answer === true),
+          HOLDER_QUEUE_WAIT_MS,
+          "the holder's undo of the move",
+        ).catch((undoError: unknown) => {
+          if (errorCode(undoError) !== "TIMEOUT") throw undoError;
+          reportIssue("integrations.move-undo-timeout", undoError, {
+            provider,
+            externalId,
+            projectId,
+            holderProjectId: holder.projectId,
+          });
+          return false;
+        });
         if (!restored)
           await controlPlane.releaseIntegrationRoute(provider, externalId, projectId, path);
         if (before?.client === "iterate" && before.externalId !== externalId)
@@ -486,25 +506,31 @@ export async function confirmIntegrationMove(
   // The holder's connection goes, but only while it still names this account: its route is gone
   // already; this removes the secret and its row, `reason: "moved"` on its log.
   try {
-    await env.ITERATE_CONTEXT.getByName(
-      DurableObjectNameCodec.stringify({ projectId: holder.projectId, path: "/" }),
-    ).invoke(
-      [
-        "itx",
-        "builtins",
-        "facets",
-        ["get", "project"],
-        [
-          "disconnectIntegration",
-          {
-            provider,
-            connection: holder.path.slice(`/integrations/${provider}/`.length),
-            movedExternalId: externalId,
-          },
-        ],
-      ],
-      [],
-      { principal: null, platform: true },
+    await withTimeout(
+      Promise.resolve(
+        env.ITERATE_CONTEXT.getByName(
+          DurableObjectNameCodec.stringify({ projectId: holder.projectId, path: "/" }),
+        ).invoke(
+          [
+            "itx",
+            "builtins",
+            "facets",
+            ["get", "project"],
+            [
+              "disconnectIntegration",
+              {
+                provider,
+                connection: holder.path.slice(`/integrations/${provider}/`.length),
+                movedExternalId: externalId,
+              },
+            ],
+          ],
+          [],
+          { principal: null, platform: true },
+        ),
+      ),
+      HOLDER_QUEUE_WAIT_MS,
+      "the holder's cleanup of the move",
     );
   } catch (error) {
     reportIssue("integrations.move-holder-disconnect", error, {
