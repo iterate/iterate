@@ -2,9 +2,10 @@
 // built from a class this worker exports (a first-party facet) or loaded from source
 // (context/facet-host.ts), and the loaded workers the same loader builds (context/worker-loader.ts).
 // Every row needs what only workerd has: a real `ctx.facets` and its abort, a real LOADER, the
-// context's live instance, eviction and the alarm on demand. The loaded code is ./sources.ts. The
-// two rows that wait out the real 60 s facet watchdog are files of their own, so they run beside
-// each other: facet-push-timeout-heals.test.ts and facet-timeout-restart-heals-sibling-push.test.ts.
+// context's live instance, eviction and the alarm on demand. The shared loaded code is ./sources.ts;
+// a source one row uses is inline in it. The two rows that wait out the real 60 s facet watchdog are
+// files of their own, so they run beside each other: facet-push-timeout-heals.test.ts and
+// facet-timeout-restart-heals-sibling-push.test.ts.
 //
 // The rows share one worker, in file order: the rows that read the console come before the rows
 // that leave a project's creation running in the background.
