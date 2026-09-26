@@ -14,6 +14,7 @@ import { expect, test, vi } from "vitest";
 import { Input } from "./input.tsx";
 import { NotRecorded } from "./not-recorded.tsx";
 import { posthogInitOptions } from "./posthog.tsx";
+import { Textarea } from "./textarea.tsx";
 
 test("a replay masks what is typed and leaves out a NotRecorded block, and no event carries an invitation token", async () => {
   const token = "phc_FAKE_replay_privacy_test";
@@ -45,15 +46,9 @@ test("a replay masks what is typed and leaves out a NotRecorded block, and no ev
   await vi.waitFor(() => expect(posthog.sessionRecording).toMatchObject({ status: "active" }));
 
   // types as a person does: the value through the DOM's own setter, so React's onChange sees it
-  const field = document.querySelector<HTMLInputElement>("#plain")!;
-  await act(async () => {
-    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(
-      field,
-      "FAKE-typed",
-    );
-    field.dispatchEvent(new Event("input", { bubbles: true }));
-    field.dispatchEvent(new Event("change", { bubbles: true }));
-  });
+  await type(document.querySelector<HTMLInputElement>("#plain")!, "FAKE-typed");
+  // rrweb records a textarea's value on its own path, so it gets its own field
+  await type(document.querySelector<HTMLTextAreaElement>("#area")!, "FAKE-area-typed");
   for (const selector of ["#visible", "#minted", "[role=status] a"])
     document.querySelector<HTMLElement>(selector)!.click();
   // the person joins and lands on the organization: `$prev_pageview_*` names the invitation page
@@ -73,9 +68,16 @@ test("a replay masks what is typed and leaves out a NotRecorded block, and no ev
   // the replay and autocapture work: the field is there, with what was typed as asterisks
   expect(replay).toContain('"id":"plain"');
   expect(replay).toContain(`"text":"${"*".repeat("FAKE-typed".length)}"`);
+  expect(replay).toContain('"id":"area"');
+  expect(replay).toContain(`"value":"${"*".repeat("FAKE-area-typed".length)}"`);
   expect(autocapture).toContain("Visible button");
   // no secret reaches PostHog, in the replay or in any event
-  for (const secret of ["FAKE-typed", "itk_FAKE_shown_once", "FAKE-invite-token"])
+  for (const secret of [
+    "FAKE-typed",
+    "FAKE-area-typed",
+    "itk_FAKE_shown_once",
+    "FAKE-invite-token",
+  ])
     expect(everything).not.toContain(secret);
   // a NotRecorded block is left out, not just masked: an empty box in the replay, no autocapture
   expect(replay).not.toContain('"id":"minted"');
@@ -94,9 +96,11 @@ test("a replay masks what is typed and leaves out a NotRecorded block, and no ev
 
 function Page() {
   const [plain, setPlain] = useState("");
+  const [area, setArea] = useState("");
   return (
     <form>
       <Input id="plain" value={plain} onChange={(event) => setPlain(event.target.value)} />
+      <Textarea id="area" value={area} onChange={(event) => setArea(event.target.value)} />
       <NotRecorded role="status">
         <code id="minted">itk_FAKE_shown_once</code>
         <a
@@ -111,6 +115,14 @@ function Page() {
       </button>
     </form>
   );
+}
+
+async function type(field: HTMLInputElement | HTMLTextAreaElement, text: string) {
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(Object.getPrototypeOf(field), "value")!.set!.call(field, text);
+    field.dispatchEvent(new Event("input", { bubbles: true }));
+    field.dispatchEvent(new Event("change", { bubbles: true }));
+  });
 }
 
 /** posthog-js gzips a full snapshot's data and a mutation's fields into latin1 strings. */

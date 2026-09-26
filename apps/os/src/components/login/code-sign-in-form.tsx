@@ -22,6 +22,7 @@ export function CodeSignInForm({ next, codeSentTo }: { next: string; codeSentTo:
             name="code"
             inputMode="numeric"
             autoComplete="one-time-code"
+            spellCheck={false}
             pattern="[0-9]{6}"
             maxLength={6}
             required
