@@ -46,6 +46,7 @@ const HostnamesLive = z.looseObject({
 
 export const Route = createFileRoute("/_auth/projects/$slug/hostnames")({
   validateSearch: z.object({ add: z.literal(1).optional().catch(undefined) }),
+  staticData: { page: "Hostnames" },
   head: ({ params }) => ({ meta: [{ title: `Hostnames · ${params.slug} · Dash` }] }),
   component: ProjectHostnames,
 });
