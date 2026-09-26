@@ -14,6 +14,7 @@ import { createFileRoute, Link, useNavigate, useRouter } from "@tanstack/react-r
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { CheckIcon, CopyIcon } from "lucide-react";
 import { z } from "zod";
+import { cn } from "cn";
 import type { GrantKind, GrantRecord } from "iterate/api";
 import { Avatar, AvatarFallback, AvatarImage } from "@iterate-com/ui/components/avatar";
 import { Button, buttonVariants } from "@iterate-com/ui/components/button";
@@ -521,7 +522,7 @@ function ConnectedAccounts({ projects }: { projects: { id: string; slug: string 
   const { waitrose, error: addError } = Route.useSearch();
   const addGithub =
     live.value &&
-    info.iterateAppProviders.includes("github") &&
+    info.signInProviders.includes("github") &&
     !accounts.some((row) => row.provider === "github")
       ? addGithubSignInHref(info, next)
       : null;
@@ -556,7 +557,7 @@ function ConnectedAccounts({ projects }: { projects: { id: string; slug: string 
             />
           ))}
           {addGithub && (
-            <a href={addGithub} className={buttonVariants({ variant: "outline", size: "sm" })}>
+            <a href={addGithub} className={cn(buttonVariants({ variant: "outline", size: "sm" }))}>
               Connect GitHub
             </a>
           )}

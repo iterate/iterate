@@ -601,6 +601,61 @@ test.for<[string, "google" | "cloudflare" | "github", Record<string, string>, st
       account,
       externalId: subject,
     });
+    // signing in with it from now on signs the browser in as them, their email still theirs
+    const later = await signInThroughFake(petshop, provider, choices);
+    expect(await principalOf(later.response)).toEqual({ actor: person.id, email });
+    expect(await controlPlane().getUser(person.id)).toEqual(person);
+  },
+);
+
+test.for<{
+  name: string;
+  rounds: Record<string, string>[];
+  switched: boolean;
+  added: string | null;
+}>([
+  {
+    name: "cancels it",
+    rounds: [{ email: "g-cancel@signin.test" }, { cancel: "1" }],
+    switched: false,
+    added: null,
+  },
+  {
+    name: "answers it as another of their Google accounts",
+    rounds: [{ email: "g-first@signin.test" }, { email: "g-second@signin.test" }],
+    switched: false,
+    added: "g-second@signin.test",
+  },
+  {
+    name: "is signed in as someone else by then",
+    rounds: [{ email: "g-late@signin.test" }],
+    switched: true,
+    added: null,
+  },
+])(
+  "Google: a person adding their account who $name at the consent screen adds only the account they consented as",
+  async ({ rounds, switched, added }) => {
+    const email = rounds[0]!.email!.replace("@signin.test", "@example.test");
+    const { cookie } = await signedInMember(email);
+    const { cookie: other } = await signedInMember(`other-${email}`);
+    const person = (await controlPlane().getUser(email))!;
+    const petshop = petshopFakes();
+    const { response, authorizations } = await signInThroughFake(petshop, "google", rounds, {
+      session: cookie,
+      next: DASH_SESSIONS,
+      sessionAtCallback: switched ? [cookie, other] : cookie,
+    });
+    // the account picker, then the consent screen for a refresh token
+    expect(authorizations).toHaveLength(2);
+    expect(nextPageOf(response)).toMatchObject({
+      href: DASH_SESSIONS,
+      error: added ? null : expect.any(String),
+    });
+    for (const round of rounds.filter((picked) => picked.email))
+      expect(
+        await controlPlane().identity("google", String(fakeUserIdOf(round.email!))),
+        round.email,
+      ).toEqual(round.email === added ? person : null);
   },
 );
 
@@ -636,30 +691,38 @@ test("adding a sign-in the person already has keeps its token again, and they st
   expect(Object.keys(after.account.integrations)).toEqual([`/integrations/github/${subject}`]);
 });
 
-test("adding a sign-in whose browser is signed in as someone else by the time the provider answers is refused, back on next with why", async () => {
-  const { cookie: ada } = await signedInMember("ada-add@example.test");
-  const { cookie: bob } = await signedInMember("bob-add@example.test");
-  const petshop = petshopFakes();
-  const refusals = vi.spyOn(console, "info");
-  const { response } = await signInThroughFake(
-    petshop,
-    "github",
-    { login: "gh-switched", email: "gh-switched@signin.test" },
-    { session: ada, next: DASH_SESSIONS, sessionAtCallback: bob },
-  );
-  expect(nextPageOf(response)).toEqual({
-    href: DASH_SESSIONS,
-    error: "Your sign-in changed while you were at GitHub. Please start again.",
-  });
-  expect(refusals).toHaveBeenCalledWith(
-    expect.objectContaining({
-      event: "identity.sign-in-refused",
-      provider: "github",
-      reason: "link-session-changed",
-    }),
-  );
-  expect(await controlPlane().identity("github", String(fakeUserIdOf("gh-switched")))).toBeNull();
-});
+test.for(["signed in as someone else", "signed out"])(
+  "adding a sign-in whose browser is %s by the time the provider answers is refused, back on next with why",
+  async (by) => {
+    const { cookie: ada } = await signedInMember(`ada-${by.length}@example.test`);
+    const { cookie: bob } = await signedInMember(`bob-${by.length}@example.test`);
+    const petshop = petshopFakes();
+    const refusals = vi.spyOn(console, "info");
+    const login = `gh-switched-${by.length}`;
+    const { response } = await signInThroughFake(
+      petshop,
+      "github",
+      { login, email: `${login}@signin.test` },
+      {
+        session: ada,
+        next: DASH_SESSIONS,
+        sessionAtCallback: by === "signed out" ? "__Host-itx-session=signed-out" : bob,
+      },
+    );
+    expect(nextPageOf(response)).toEqual({
+      href: DASH_SESSIONS,
+      error: "Your sign-in changed while you were at GitHub. Please start again.",
+    });
+    expect(refusals).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "identity.sign-in-refused",
+        provider: "github",
+        reason: "link-session-changed",
+      }),
+    );
+    expect(await controlPlane().identity("github", String(fakeUserIdOf(login)))).toBeNull();
+  },
+);
 
 test("adding a GitHub account another person signs in with is refused, back on next with why", async () => {
   const { cookie } = await signedInMember("taker@example.test");
@@ -714,12 +777,14 @@ test("adding a sign-in starts only from a signed-in browser, and only toward the
  *  authorize URL recorded, `choices` added as the person's picks), the fake's consent at once, and
  *  the platform's callback — again while the platform sends the browser back for consent. With
  *  `link`, the browser signed in as `session` adds the account to that person instead, back to
- *  `next` (`sessionAtCallback`: the session the browser holds by the time the provider answers). */
+ *  `next` (`sessionAtCallback`: the session the browser holds by the time the provider answers).
+ *  A list of `choices` or of `sessionAtCallback` is one per round, its last repeated; a round's
+ *  `cancel` declines at the provider. */
 async function signInThroughFake(
   petshop: ReturnType<typeof petshopFakes>,
   provider: "google" | "cloudflare" | "github",
-  choices: Record<string, string>,
-  link?: { session: string; next: string; sessionAtCallback?: string },
+  choices: Record<string, string> | Record<string, string>[],
+  link?: { session: string; next: string; sessionAtCallback?: string | string[] },
 ) {
   const path = {
     google: "/.auth/identity",
@@ -733,19 +798,44 @@ async function signInThroughFake(
     { redirect: "manual", ...(link && { headers: { cookie: link.session } }) },
   );
   const authorizations: URL[] = [];
+  const at = <T>(value: T | T[], round: number) =>
+    Array.isArray(value) ? value[Math.min(round, value.length - 1)]! : value;
   while (response.status === 302 && authorizations.length < 3) {
+    const round = authorizations.length;
     const flow = response.headers.get("set-cookie")!.split(";")[0]!;
     const authorization = new URL(response.headers.get("location")!);
     authorizations.push(new URL(authorization));
-    for (const [key, value] of Object.entries(choices)) authorization.searchParams.set(key, value);
-    const consent = (await petshop.handle(new Request(authorization)))!;
-    const session = link && (link.sessionAtCallback || link.session);
-    response = await exports.default.fetch(consent.headers.get("location")!, {
+    const picks = at(choices, round);
+    let back: string;
+    if (picks.cancel)
+      back = `${authorization.searchParams.get("redirect_uri")}?${new URLSearchParams({ error: "access_denied", state: authorization.searchParams.get("state")! })}`;
+    else {
+      for (const [key, value] of Object.entries(picks)) authorization.searchParams.set(key, value);
+      back = (await petshop.handle(new Request(authorization)))!.headers.get("location")!;
+    }
+    const session = link && at(link.sessionAtCallback || link.session, round);
+    response = await exports.default.fetch(back, {
       headers: { cookie: session ? `${session}; ${flow}` : flow },
       redirect: "manual",
     });
   }
   return { response, authorizations };
+}
+
+/** Whom a sign-in's answer signed the browser in as: its new session's principal. */
+async function principalOf(response: Response) {
+  const cookie = response.headers
+    .getSetCookie()
+    .find((value) => value.startsWith("__Host-itx-session="))!
+    .split(";")[0]!;
+  const session = appSession(env.BROWSER_SESSION, new Request(ORIGIN, { headers: { cookie } }))!;
+  const auth = await authorizationForToken(
+    env,
+    (await session.bearer())!,
+    platformAddressesOf(env, new Request(ORIGIN)),
+    "browser-session",
+  );
+  return auth?.principal;
 }
 
 /** Where an added sign-in's refusal sent the browser: back to `next`, the `error` beside it. */

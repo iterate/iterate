@@ -1258,10 +1258,12 @@ function GithubInstallations({
   if (!state) return null;
   if (!secretPath || !apiOrigin) {
     // back to this sheet once the issuer has added it (or says why not)
-    const addSignIn = addGithubSignInHref(
-      info,
-      `${window.location.origin}/projects/${project.slug}/integrations?connect=github`,
-    );
+    const addSignIn = info.signInProviders.includes("github")
+      ? addGithubSignInHref(
+          info,
+          `${window.location.origin}/projects/${project.slug}/integrations?connect=github`,
+        )
+      : null;
     return (
       <div className="flex flex-col gap-1">
         <p className="text-sm text-muted-foreground">

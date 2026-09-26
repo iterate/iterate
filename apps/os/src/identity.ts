@@ -317,7 +317,7 @@ export async function identityResponse(request: Request, env: Env) {
       headers.set("Location", signInHref(`${url.pathname}${url.search}`));
       return new Response(null, { status: 302, headers });
     }
-    return authorize(await discover(), newFlow(next, false, person));
+    return authorize(await discover(), newFlow(next, false, person.id));
   }
   if (url.pathname === PATHS[provider])
     return authorize(
@@ -359,12 +359,13 @@ export async function identityResponse(request: Request, env: Env) {
     let user: UserRecord;
     if (flow.linkTo) {
       // only while this browser is still signed in as the person the flow began for
-      if ((await issuerSessionPersonOf(env, request)) !== flow.linkTo)
+      const person = await issuerSessionPersonOf(env, request);
+      if (!person || person.id !== flow.linkTo)
         throw new SignInRefused(
           `Your sign-in changed while you were at ${IDENTITY_PROVIDER_NAMES[provider]}. Please start again.`,
           "link-session-changed",
         );
-      user = await new ControlPlane(env).addIdentity(flow.linkTo, provider, identity.sub);
+      user = person;
     } else {
       if (!emailAllowed(config.login.allowedEmails, identity.email))
         throw new SignInRefused(EMAIL_NOT_ALLOWED_MESSAGE, "email-not-allowed");
@@ -382,6 +383,10 @@ export async function identityResponse(request: Request, env: Env) {
       })
     )
       return authorize(as, newFlow(flow.next, true, flow.linkTo), identity.email);
+    // An added sign-in joins the person only now that nothing is left to ask: a consent screen
+    // they cancel adds nothing, and one they answer as another account adds that one.
+    if (flow.linkTo)
+      user = await new ControlPlane(env).addIdentity(flow.linkTo, provider, identity.sub);
     // The person is signed in whatever becomes of the token: a failure to keep it is reported, and
     // the next sign-in (or a connect) keeps one.
     await keepSignInToken(env, client, provider, user, signedIn, connection).catch(
@@ -435,10 +440,10 @@ export async function identityResponse(request: Request, env: Env) {
 
 /** The person this browser is signed in to the issuer as: its own session, never a grant an admin
  *  signed in as them (consent.ts `#impersonate`) — or null. */
-async function issuerSessionPersonOf(env: Env, request: Request): Promise<string | null> {
-  const session = await browserAuthorization(env, request);
-  return session?.grant?.kind === "issuer" && !session.principal.impersonatedBy
-    ? session.principal.actor
+async function issuerSessionPersonOf(env: Env, request: Request): Promise<UserRecord | null> {
+  const grant = (await browserAuthorization(env, request))?.grant;
+  return grant?.kind === "issuer" && !grant.impersonatedBy
+    ? { id: grant.userId, email: grant.email }
     : null;
 }
 
