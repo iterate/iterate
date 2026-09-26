@@ -14,7 +14,8 @@ import { request } from "undici";
 import { expect } from "vitest";
 import { startOwnWorker } from "./support/own-worker.ts";
 import { issuerCookie } from "./support/principal.ts";
-import { freshDnsSafeProjectSlug, localOnly, publishConfigWorker } from "./support/project-host.ts";
+import { publishConfigWorker } from "./support/config-worker.ts";
+import { freshDnsSafeProjectSlug, localOnly } from "./support/project-host.ts";
 
 /** A config worker that answers a routing slug with what it was handed: the URL it saw, its base
  *  path, its routing slug, the cookie and principal it was given; `/private` asks for a signed-in

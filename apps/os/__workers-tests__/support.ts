@@ -21,8 +21,6 @@ import type { IterateContextDurableObject } from "../src/iterate-context-durable
 import type { IterateRpcTarget } from "../src/session.ts";
 import { memoryPetshop } from "../../dummy-petshop/src/memory-state.ts";
 
-export { publishConfigWorker } from "../e2e/support/config-worker.ts";
-
 /** This suite's platform origin (wrangler.test.jsonc `APP_CONFIG_URLS__OS`). */
 export const ORIGIN = "https://control.test";
 

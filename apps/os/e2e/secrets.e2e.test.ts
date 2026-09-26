@@ -31,12 +31,12 @@ import {
 } from "./support/client.ts";
 import { petshopBaseUrl, petshopLegacyBearer } from "./support/petshop.ts";
 import { oauthSession } from "./support/principal.ts";
+import { publishConfigWorker } from "./support/config-worker.ts";
 import {
   deployedOnly,
   deployedSubdomainsOnly,
   freshDnsSafeProjectSlug,
   projectUrl,
-  publishConfigWorker,
   registerProject,
 } from "./support/project-host.ts";
 

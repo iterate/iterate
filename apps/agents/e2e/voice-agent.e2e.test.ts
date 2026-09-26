@@ -9,11 +9,11 @@ import { DEFAULT_AGENT_SYSTEM_PROMPT } from "@iterate-com/agents/system-prompt";
 import { installVoice } from "@iterate-com/voice/install";
 import { openItx, readAll, runId, until, untilValue } from "../../os/e2e/support/client.ts";
 import { oauthSession } from "../../os/e2e/support/principal.ts";
+import { publishConfigWorker } from "../../os/e2e/support/config-worker.ts";
 import {
   deployedOnly,
   freshDnsSafeProjectSlug,
   projectUrl,
-  publishConfigWorker,
   registerProject,
 } from "../../os/e2e/support/project-host.ts";
 import { agentsWorkspaceSource } from "./agents-source.ts";

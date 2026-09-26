@@ -15,8 +15,6 @@ import { test } from "vitest";
 import { projectUrlOf, type IngressRouting } from "iterate/project-ingress";
 import { adminCredentials, runId, session, workerSlot, workerUrl } from "./client.ts";
 
-export { publishConfigWorker } from "./config-worker.ts";
-
 const LOCAL_HOSTNAMES = new Set(["localhost", "127.0.0.1"]);
 const worker = (): URL => new URL(workerUrl("/"));
 /** Is the worker under test the LOCAL one global-setup booted (its project hosts hang under

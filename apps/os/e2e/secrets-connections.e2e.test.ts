@@ -50,11 +50,11 @@ import {
   petshopTescoExchangeSource,
 } from "./support/petshop.ts";
 import { oauthSession } from "./support/principal.ts";
+import { publishConfigWorker } from "./support/config-worker.ts";
 import {
   deployedOnly,
   freshDnsSafeProjectSlug,
   projectUrl,
-  publishConfigWorker,
   registerProject,
 } from "./support/project-host.ts";
 

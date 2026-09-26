@@ -1,6 +1,5 @@
-// e2e/support/config-worker.ts — publishing a project's config worker, one copy for both suites:
-// e2e tests get it through project-host.ts, Workers tests through __workers-tests__/support.ts. It
-// imports nothing, so it loads in Node and in workerd alike.
+// e2e/support/config-worker.ts — publishing a project's config worker, one copy for the e2e and
+// Workers suites. It imports nothing, so it loads in Node and in workerd alike.
 
 /** Publish `target` as the project's config worker — what EVERY host of the project reaches, the
  *  routing slug in `x-iterate-routing-slug` — once the project's own creation saga has settled: the

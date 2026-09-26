@@ -9,11 +9,11 @@ import { DurableObjectNameCodec, GLOBAL_PROJECT_ID } from "../src/context/paths.
 import { startLoginCode } from "../src/password-and-code-sign-in.ts";
 import type { OrganizationState } from "../src/organization/contract.ts";
 import type { IterateRpcTarget } from "../src/session.ts";
+import { publishConfigWorker } from "../e2e/support/config-worker.ts";
 import {
   adminSession,
   fetchReachesThisWorker,
   ORIGIN,
-  publishConfigWorker,
   refused,
   SRC_ECHO_APP,
   stub,

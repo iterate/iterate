@@ -36,10 +36,10 @@ import {
   PUSH_TALLY,
   TICK_TALLY,
 } from "./sources.ts";
+import { publishConfigWorker } from "../e2e/support/config-worker.ts";
 import {
   adminCredentials,
   openSession,
-  publishConfigWorker,
   readLog,
   releasePins,
   signedInSession,

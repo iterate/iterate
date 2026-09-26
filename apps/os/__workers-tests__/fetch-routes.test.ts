@@ -18,7 +18,8 @@
 import { exports } from "cloudflare:workers";
 import { RpcTarget } from "capnweb";
 import { expect, test, vi } from "vitest";
-import { adminCredentials, openSession, publishConfigWorker } from "./support.ts";
+import { publishConfigWorker } from "../e2e/support/config-worker.ts";
+import { adminCredentials, openSession } from "./support.ts";
 
 test("a config worker routes by `itx.fetchRoutes.match` to a lent stub: HTTP, a WebSocket that keeps its subprotocol, the private route's 401 challenge, a 404 once the lend is recalled", async () => {
   const project = "fetch-routes-tunnel";
