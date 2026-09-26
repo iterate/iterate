@@ -14,7 +14,9 @@
 #                    The rows tagged `slow` run only when the PR carries the `slow-e2e` label or
 #                    edits one of them (SLOW_ROW_PATHS) (docs/testing.md#slow-rows)
 #   Browser specs    beside E2E tests: the Playwright specs, the same way, and the Playwright report.
-#                    One job definition, E2E tests', differing only in the suite it names
+#                    Every project but `os-phone`, the issuer's pages at a phone's width, which Main
+#                    OS e2e runs on every main push. One job definition, E2E tests', differing only
+#                    in the suite it names
 #   CI trace         after all three, whatever their outcome, reporting only: the CI trace
 #                    (docs/ci-traces.md), an artifact plus the "CI trace" and "Playwright report"
 #                    commit statuses, which open them in the ci-reports viewer
@@ -275,6 +277,8 @@ jobs:
           E2E_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
           # the e2e suite's rows tagged `slow`; the specs have none
           E2E_SLOW_ROWS: ${{ inputs.slow-rows }}
+          # the specs at a phone's width run on main only: Main OS e2e runs every project
+          SPEC_SKIP_PROJECTS: os-phone
         run: doppler run -- pnpm preview "$SUITE"
       # Fails when the runner left no complete artifact, and writes the suite summary next to its
       # flake lines. A cancelled run keeps its partial evidence without reporting it as failures.

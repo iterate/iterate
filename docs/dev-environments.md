@@ -335,7 +335,8 @@ parent's (`apps/os/e2e/support/deployed-target.ts`). `DEMO_BASE_URL` is the
 only target override; when it is unset, Playwright boots the local dev server.
 It never infers credentials from redirects.
 
-The `os-phone` project covers the platform's own pages at phone width.
+The `os-phone` project covers the platform's own pages at phone width. Main OS e2e
+runs it on every main push; a PR's Browser specs leave it out (`SPEC_SKIP_PROJECTS`).
 
 ### Minting in production
 

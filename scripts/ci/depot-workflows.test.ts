@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, matchesGlob, relative, resolve } from "node:path";
-import { expect, test } from "vitest";
+import { expect, test, vi } from "vitest";
 import { parse as parseYaml } from "yaml";
 import { testEvidencePaths } from "@iterate-com/shared/test-support/test-evidence";
 import { CI_WORKFLOW_PREVIEWS } from "../../apps/os/scripts/preview-sweep.ts";
@@ -765,6 +765,32 @@ test("Main OS e2e's two suite jobs are one definition, a PR preview's suite step
         name: String(step.with?.name).replace(/^main-/u, "preview-"),
       }).toEqual(twin.with);
   }
+});
+
+// The specs at a phone's width run on main only: Main OS e2e runs every Playwright project, and a
+// PR's Browser specs every one but `os-phone` (SPEC_SKIP_PROJECTS in playwright.config.ts).
+test("a PR's Browser specs leave out os-phone, and Main OS e2e runs every spec project", async () => {
+  expect(
+    stepsAsRun(".depot/workflows/preview-os.yml", "specs").flatMap(
+      (step) => step.env?.SPEC_SKIP_PROJECTS ?? [],
+    ),
+  ).toEqual(["os-phone"]);
+  expect(readFileSync(resolve(repoRoot, ".depot/workflows/main-os-e2e.yml"), "utf8")).not.toContain(
+    "SPEC_SKIP_PROJECTS",
+  );
+
+  const projectNames = async (skip: string) => {
+    vi.stubEnv("SPEC_SKIP_PROJECTS", skip);
+    vi.resetModules();
+    const { default: config } = await import("../../playwright.config.ts");
+    return config.projects?.map((project) => project.name);
+  };
+  const every = await projectNames("");
+  expect(every).toContain("os-phone");
+  expect(await projectNames("os-phone")).toEqual(every?.filter((name) => name !== "os-phone"));
+  await expect(projectNames("os_phone")).rejects.toThrow(
+    "SPEC_SKIP_PROJECTS names no project: os_phone",
+  );
 });
 
 // A scheduled run reports on main's head commit, and a push or PR run of a workflow whose job
