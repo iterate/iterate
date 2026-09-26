@@ -42,13 +42,13 @@ kind (`failureKind` in
 [platform-retry.ts](../packages/shared/src/platform-retry.ts)), and the kind
 rides on as own properties, which Workers RPC and capnweb keep.
 
-| Kind           | Recognized by                                                                                                                                                        | Repeated                                                                               | Answered as            |
-| -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- | ---------------------- |
-| `refused`      | a `code` from iterate/lib's `ErrorCode`                                                                                                                              | never                                                                                  | 4xx or a typed answer  |
-| `deploy-reset` | "reset because its code was updated" (a Durable Object's or D1's)                                                                                                    | once, at once, on a fresh stub, if idempotent                                          | 503, `Retry-After: 1`  |
-| `disconnected` | workerd's `retryable: true`; a storage reset; D1's documented transient errors; an HTTP 5xx or dropped connection; Artifacts 10400; Browser Run 6002 on inline HTML  | once, at once on a fresh stub (RPC) or a second later (an upstream API), if idempotent | 503, `Retry-After: 1`  |
-| `overloaded`   | workerd's `overloaded: true` (a storage timeout, a memory limit); workerd's opaque "internal error; reference = …"; D1's overload; HTTP 429 or 408; our own deadline | never at once: only a durable ladder, or the caller after `Retry-After`                | 503, `Retry-After: 10` |
-| `failed`       | anything else, our own defects included                                                                                                                              | never, except a named workaround with a pin                                            | 500, and `reportIssue` |
+| Kind           | Recognized by                                                                                                                                                                        | Repeated                                                                               | Answered as            |
+| -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------- | ---------------------- |
+| `refused`      | a `code` from iterate/lib's `ErrorCode`                                                                                                                                              | never                                                                                  | 4xx or a typed answer  |
+| `deploy-reset` | "reset because its code was updated" (a Durable Object's or D1's)                                                                                                                    | once, at once, on a fresh stub, if idempotent                                          | 503, `Retry-After: 1`  |
+| `disconnected` | workerd's `retryable: true`; a storage reset; D1's documented transient errors; an HTTP 5xx or dropped connection; Artifacts 10400; Browser Run 6002 on inline HTML                  | once, at once on a fresh stub (RPC) or a second later (an upstream API), if idempotent | 503, `Retry-After: 1`  |
+| `overloaded`   | workerd's `overloaded: true` (a storage timeout, a memory limit); D1's overload, or workerd's opaque "internal error; reference = …" on a D1 call; HTTP 429 or 408; our own deadline | never at once: only a durable ladder, or the caller after `Retry-After`                | 503, `Retry-After: 10` |
+| `failed`       | anything else, our own defects and workerd's opaque internal error on any other call included                                                                                        | never, except a named workaround with a pin                                            | 500, and `reportIssue` |
 
 - **Idempotency decides whether a call is repeated; the kind decides when.**
   Idempotent means a read, an append whose every event is durable and keyed, a
@@ -57,9 +57,11 @@ rides on as own properties, which Workers RPC and capnweb keep.
   ([context-stub.ts](../apps/os/src/context-stub.ts)) applies this to every
   call the platform makes on a context Durable Object, whichever hop makes it.
 - **Schedules come from one short list**: `ONCE_NOW`, `UPSTREAM_ONCE`,
-  `RELAY_BURST`, `CI_HTTP`, and the durable ladder (1 s·2ⁿ, capped at 30
-  minutes). Each wait is jittered, each schedule is bounded, and giving up on an
-  idempotent call is logged once.
+  `RELAY_BURST`, `CI_HTTP`, the durable ladder (1 s·2ⁿ, capped at 30
+  minutes), and the socket re-dial
+  ([redial.ts](../apps/os/src/context/redial.ts): at once, then 250 ms doubling
+  to 8 s, within 30 s of the drop). Each schedule is bounded, each wait but the
+  re-dial's is jittered, and giving up on an idempotent call is logged once.
 - **A platform failure that stands crosses a hop as `UNAVAILABLE`**, its
   `data` `{ kind, retryAfterMs }`, and the edge answers it 503 with that
   `Retry-After` ([unavailable.ts](../apps/os/src/unavailable.ts)). "Never retry

@@ -41,13 +41,7 @@ export function failureKind(error: unknown): FailureKind {
   if (stamped.code === "UNAVAILABLE")
     return isPlatformFailureKind(stamped.data?.kind) ? stamped.data.kind : "failed";
   if (typeof stamped.code === "string") return "refused";
-  const messages: string[] = [];
-  // sqlfu wraps a D1 error, whose cause is the binding's own.
-  for (let cause: unknown = error, depth = 0; cause instanceof Error && depth < 3; depth++) {
-    messages.push(cause.message);
-    cause = cause.cause;
-  }
-  const text = messages.join("\n");
+  const text = messagesOf(error);
   if (/reset because its code was updated/.test(text)) return "deploy-reset";
   if (stamped.overloaded === true || OVERLOADED_MESSAGE.test(text)) return "overloaded";
   if (stamped.retryable === true || DISCONNECTED_MESSAGE.test(text)) return "disconnected";
@@ -60,14 +54,30 @@ export function failureKind(error: unknown): FailureKind {
  *  (https://developers.cloudflare.com/d1/observability/debug-d1/#error-list), and a storage reset
  *  is stamped by the type the storage failed with, which may be FAILED (workerd io/actor-cache.c++:
  *  "Pass through exception type"). A storage timeout is OVERLOADED (workerd io/worker.c++
- *  `makeTimeoutPromise`). workerd's opaque "internal error; reference = …" (jsg/util.c++
- *  `renderInternalError`) is the runtime's own failure, hidden from JavaScript: in a Cloudflare
- *  outage every call fails with it for minutes (188 s on 2026-09-24), so it is an overload, never
- *  repeated at once and answered 503. */
+ *  `makeTimeoutPromise`). */
 const OVERLOADED_MESSAGE =
-  /is overloaded|exceeded timeout which caused object to be reset|exceeded its (memory|CPU time) limit and was reset|(^|: )internal error; reference = /m;
+  /is overloaded|exceeded timeout which caused object to be reset|exceeded its (memory|CPU time) limit and was reset/;
 const DISCONNECTED_MESSAGE =
   /Network connection lost|storage\b.*\bcaused object to be reset|Replica disconnected|transient issue on remote node|client disconnected/;
+
+/** A failure's message and those of the causes it wraps, one per line: sqlfu wraps a D1 error, whose
+ *  cause is the binding's own. */
+function messagesOf(error: unknown): string {
+  const messages: string[] = [];
+  for (let cause: unknown = error, depth = 0; cause instanceof Error && depth < 3; depth++) {
+    messages.push(cause.message);
+    cause = cause.cause;
+  }
+  return messages.join("\n");
+}
+
+/** Whether `error`, or a cause it wraps, is workerd's opaque "internal error; reference = …"
+ *  (jsg/util.c++ `renderInternalError`): a failure hidden from JavaScript, whether the runtime's own
+ *  or a defect of the code it ran (a facet whose class is not exported fails the same way), so
+ *  `failureKind` reads it as `failed`. Only a caller whose callee runs no code of ours or a
+ *  project's can read it as the runtime's own (control-plane/edge.ts, over D1). */
+export const isOpaqueInternalError = (error: unknown): boolean =>
+  /(^|: )internal error; reference = /m.test(messagesOf(error));
 
 export const isPlatformFailureKind = (kind: unknown): kind is PlatformFailureKind =>
   kind === "deploy-reset" || kind === "disconnected" || kind === "overloaded";

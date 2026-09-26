@@ -15,6 +15,7 @@ import { SqlfuError } from "sqlfu";
 import { errorCode, withTimeout } from "iterate/lib";
 import {
   failureKind,
+  isOpaqueInternalError,
   isPlatformFailureKind,
   logPlatformFailure,
 } from "@iterate-com/shared/platform-retry";
@@ -121,7 +122,10 @@ export class ControlPlane {
    *  deploy's reset of D1, a lost connection, an overload) becomes UNAVAILABLE, logged once here as
    *  `control-plane.platform-failure-d1` (scripts/ci/prd-fault-alarm.ts pages on a burst), or at
    *  info as `control-plane.deploy-reset-d1`; whether to ask again is the caller's, who knows
-   *  whether the call is idempotent (oauth-store.ts asks a grant call again once). Any other sqlfu
+   *  whether the call is idempotent (oauth-store.ts asks a grant call again once). workerd's opaque
+   *  internal error (`isOpaqueInternalError`) is an overload here: D1 runs no code of ours or a
+   *  project's, so it is the runtime's own failure, and in a Cloudflare outage every call meets it
+   *  for minutes, so it is never repeated at once and a project host answers it 503. Any other sqlfu
    *  error is thrown again with its message only: its enumerable `query` holds the SQL and its bound
    *  values, which the /api error channel would hand the client (iterate/lib's errors), and a cause
    *  passed to `Error` is not enumerable. */
@@ -130,7 +134,7 @@ export class ControlPlane {
     try {
       return await call();
     } catch (error) {
-      const kind = failureKind(error);
+      const kind = isOpaqueInternalError(error) ? "overloaded" : failureKind(error);
       if (isPlatformFailureKind(kind) && error instanceof Error) {
         const unavailable = unavailableError(
           kind,

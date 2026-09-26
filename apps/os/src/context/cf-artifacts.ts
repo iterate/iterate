@@ -155,13 +155,12 @@ const PROBE_TOKEN_TTL_SECONDS = 60;
 const TAKEN_NAME_WAIT_MS = 20_000;
 
 /** A verb, and ONE retry of it a second later after the binding's platform failure — Artifacts API
- *  error 10400, "An internal error occurred." (on 2026-09-23, 20:35–20:42 UTC, it answered create,
- *  get, list and delete on and off, each fine a moment later; a project's birth failed on it), or a
- *  lost connection to the binding — logged as `cfartifacts.platform-failure-retry`
- *  (scripts/ci/prd-fault-alarm.ts pages on a burst).
- *  A second failure, and every other failure, surfaces as what it is. Only for a verb that is safe to run
- *  twice: a read, a token, a delete (a second one answers "not found"), a create (a name its failed
- *  attempt took reads as created: `attempt`'s `isRetry`). */
+ *  error 10400, "An internal error occurred.", which any verb can answer and a moment later not, or
+ *  a lost connection to the binding — logged as `cfartifacts.platform-failure-retry`
+ *  (scripts/ci/prd-fault-alarm.ts pages on a burst). A second failure, and every other failure,
+ *  surfaces as what it is. Only for a verb that is safe to run twice: a read, a token, a delete (a
+ *  second one answers "not found"), a create (a name its failed attempt took reads as created:
+ *  `attempt`'s `isRetry`). */
 function retryingOnePlatformFailure<T>(
   verb: string,
   name: string,

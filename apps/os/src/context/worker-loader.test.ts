@@ -10,7 +10,9 @@
 // `getCode` (a cold isolate only) and is refused without a cacheKey. The last row pins the workerd
 // WORKAROUND (worker-loader.ts `loaderIdGenerations`): a producer that threw marks its id dead, the
 // next attempt produces outside the loader and loads literally under the id's next generation, and
-// the callers that find it dead while that attempt runs wait on it (two rows, under load).
+// the callers that find it dead while that attempt runs wait on it (two rows, under load). A
+// producer's lost connection is read once more first (platform-retry.ts `ONCE_NOW`), so only a
+// failure that stands marks the id dead.
 import { expect, test } from "vitest";
 import { DurableObjectNameCodec } from "./paths.ts";
 import {
@@ -159,16 +161,16 @@ test("a source that keeps failing to resolve mints one loader id, not one per re
 test("WORKAROUND, under load: every caller that finds the id dead while its recovery runs waits on that one recovery — 50 concurrent callers run the producer once, not 50 times", async () => {
   // prd, 2026-09-24 14:36 UTC: the config worker's first load after a deploy failed, a scanner sent
   // 4,502 requests in 31 s, and each ran its own producer — ~915 `repo.modules` calls at once.
-  const { env, keys } = fakeLoaderEnv();
+  const { env, keys, warm } = fakeLoaderEnv();
   const host = {} as Fetcher; // a context's one `itxEntrypoint` stub per incarnation
   let produced = 0;
-  let failFirst = true;
+  let failures = 2;
   let release!: () => void;
   const slow = new Promise<void>((resolve) => (release = resolve));
   const invoke = async () => {
     produced++;
-    if (failFirst) {
-      failFirst = false;
+    if (failures > 0) {
+      failures--;
       throw new Error("Network connection lost.");
     }
     await slow; // a cold repo fetch: 1–2 s on prd, 40–60 s under the herd
@@ -182,17 +184,45 @@ test("WORKAROUND, under load: every caller that finds the id dead while its reco
       invoke,
     });
   const dead = JSON.stringify(["worker", "deploy-1", null, "prj_u.iterate/", "c0ffee"]);
-  await load(); // the first load's producer throws inside getCode: the id is dead
-  await settled();
-  expect(produced).toBe(1);
+  // the first load's producer loses its connection, and again on its one repeat, inside getCode:
+  // the id is dead
+  await load();
+  await expect(warm.get(dead)).rejects.toThrow(/Network connection lost/);
+  expect(produced).toBe(2);
   const herd = Array.from({ length: 50 }, () => load());
   await settled();
-  expect(produced).toBe(2); // one recovery, however many callers
+  expect(produced).toBe(3); // one recovery, however many callers
   release();
   const recovered = await Promise.all(herd);
   expect(new Set(recovered.map((r) => r.loaderId))).toEqual(new Set([`${dead}#1`]));
-  expect(produced).toBe(2);
+  expect(produced).toBe(3);
   expect(new Set(keys)).toEqual(new Set([dead, `${dead}#1`]));
+});
+
+test("a producer that loses its connection once inside getCode is read once more, and the id stays live: no dead mark, no next generation", async () => {
+  const { env, keys, warm } = fakeLoaderEnv();
+  let produced = 0;
+  const invoke = async () => {
+    produced++;
+    if (produced === 1) throw new Error("Network connection lost.");
+    return { "worker.js": "export default class Site {}" };
+  };
+  const load = () =>
+    loadConfined(env, {
+      owner: "prj_lost_once.iterate/",
+      source: "itx.build('site')",
+      cacheKey: "site@lost-once",
+      invoke,
+    });
+  const first = await load();
+  await expect(warm.get(first.loaderId)).resolves.toMatchObject({
+    modules: { "worker.js": "export default class Site {}" },
+  });
+  expect(produced).toBe(2);
+  // warm under the same id: the lost connection marked nothing dead
+  await expect(load()).resolves.toMatchObject({ loaderId: first.loaderId });
+  expect(produced).toBe(2);
+  expect(new Set(keys)).toEqual(new Set([first.loaderId]));
 });
 
 test("WORKAROUND, under load: a recovery that fails fails every caller waiting on it, and the next caller starts a fresh one; a recovery another incarnation started is never waited on", async () => {

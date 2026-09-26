@@ -7,6 +7,7 @@ import {
   type FailureKind,
   HttpAnswerError,
   httpFailureKind,
+  isOpaqueInternalError,
   ONCE_NOW,
   retryPlatformFailures,
   type Schedule,
@@ -64,13 +65,8 @@ test.for([
     kind: "disconnected",
   },
   {
-    name: "workerd's opaque internal error is the platform's, not to be repeated at once",
+    name: "workerd's opaque internal error is failed: a facet whose class is not exported meets it too",
     error: new Error("internal error; reference = 0123"),
-    kind: "overloaded",
-  },
-  {
-    name: "our own message that only mentions an internal error is failed",
-    error: new Error("the parser met an internal error; reference = 0123"),
     kind: "failed",
   },
   { name: "a thrown string is failed", error: "boom", kind: "failed" },
@@ -103,7 +99,6 @@ test.for([
       "D1 DB storage operation exceeded timeout which caused object to be reset.",
       "D1 DB's isolate exceeded its memory limit and was reset.",
       "D1 DB exceeded its CPU time limit and was reset.",
-      "internal error; reference = 0123",
     ],
   },
   {
@@ -122,6 +117,21 @@ test.for([
     expect(messages.map((message) => failureKind(d1(message)))).toEqual(messages.map(() => kind));
   },
 );
+
+// The control plane reads workerd's opaque internal error as an overload (control-plane/edge.ts):
+// D1 runs no code of ours, so there it is the runtime's own failure.
+test("isOpaqueInternalError: workerd's opaque internal error, through the cause sqlfu wraps, never a message that only mentions one", () => {
+  expect(isOpaqueInternalError(new Error("internal error; reference = 0123"))).toBe(true);
+  expect(
+    isOpaqueInternalError(
+      new Error("wrapped", { cause: new Error("D1_ERROR: internal error; reference = 0123") }),
+    ),
+  ).toBe(true);
+  expect(
+    isOpaqueInternalError(new Error("the parser met an internal error; reference = 0123")),
+  ).toBe(false);
+  expect(isOpaqueInternalError("internal error; reference = 0123")).toBe(false);
+});
 
 test.for([
   { name: "a 500", answer: new HttpAnswerError("HTTP 500", 500), kind: "disconnected" },
