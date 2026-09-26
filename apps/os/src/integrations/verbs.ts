@@ -389,7 +389,7 @@ export async function confirmIntegrationMove(
     const controlPlane = new ControlPlane(env);
     // what this connection held before, whose route the move releases and a failure restores
     const before = await connectionRowOf(env, projectId, path);
-    // the offer is spent, and a token held for it is dropped
+    // the offer is spent, and what its consent left here is dropped
     const abandon = async () => {
       await scope.storage.delete(key);
       if (move.heldTokenNonce) await dropHeldSlackToken(scope, connection, move.heldTokenNonce);
@@ -405,7 +405,12 @@ export async function confirmIntegrationMove(
         await connectGithubInstallation(scope, connection, attempt, externalId, account, "held");
       else await connectMovedSlackTeam(scope, connection, attempt, move);
     } catch (error) {
-      await controlPlane.moveIntegrationRoute(provider, externalId, { projectId, path }, holder);
+      // Back to the holder only while its connection still names this account: one that took
+      // another since keeps that one's route (a move back releases the holder's other routes).
+      const holderRow = await connectionRowOf(env, holder.projectId, holder.path);
+      if (holderRow?.client === "iterate" && holderRow.externalId === externalId)
+        await controlPlane.moveIntegrationRoute(provider, externalId, { projectId, path }, holder);
+      else await controlPlane.releaseIntegrationRoute(provider, externalId, projectId, path);
       if (before?.client === "iterate" && before.externalId !== externalId)
         await controlPlane.routeIntegration(provider, before.externalId, projectId, path);
       await abandon();

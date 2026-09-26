@@ -111,8 +111,9 @@ type PlatformSecretsVerbs = {
    *  the token its consent's exchange held aside (secret/durable-object.ts `admitHeldToken`) stored,
    *  then `secret/set`, like `completeOAuth`. You never call it. */
   admitHeldToken(path: string, input: { nonce: string }): Promise<{ path: string }>;
-  /** The platform's, when that move failed: the held token dropped. You never call it. */
-  dropHeldToken(path: string, input: { nonce: string }): Promise<void>;
+  /** The platform's, when that move failed: the held token dropped, or `admitted` when the record
+   *  is still the one it stored (the caller deletes it). You never call it. */
+  dropHeldToken(path: string, input: { nonce: string }): Promise<"held" | "admitted" | "gone">;
   revokeLend(
     path: string,
     lendId: string,
@@ -1232,9 +1233,12 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
       },
       dropHeldToken: (secretPath, input) => {
         assertPlatformCaller("secrets.dropHeldToken");
-        return onSecretContext(secretPath, ["dropHeldToken", secretPath, input], async () => {
-          await secretFacet(["dropHeldToken", input]);
-        });
+        return onSecretContext(
+          secretPath,
+          ["dropHeldToken", secretPath, input],
+          // the platform's own SecretDurableObject.dropHeldToken's declared answer, `unknown` over the hop
+          async () => (await secretFacet(["dropHeldToken", input])) as "held" | "admitted" | "gone",
+        );
       },
       // The facet FIRST here, the reverse of `set`: each verb runs its steps in the order whose
       // crash window fails LOUD. A clear not yet followed by its fact leaves a log that says set

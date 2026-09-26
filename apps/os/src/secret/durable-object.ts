@@ -780,10 +780,20 @@ export class SecretDurableObject extends StreamProcessorDurableObject<
     else await this.withItx((itx) => itx.processors.claim(this.ctx.props.name, held.until));
   }
 
-  /** THE HELD TOKEN DROPPED: its move failed, so it will never be admitted. */
-  async dropHeldToken(input: { nonce: string }): Promise<void> {
+  /** WHAT A FAILED MOVE LEFT OF ITS CONSENT: the held token, dropped here (`held`); or the record, when
+   *  it is still the one that consent's admit stored (`admitted`, for the built-in to delete like any
+   *  other — a write since is someone else's, and stays); or nothing (`gone`). */
+  async dropHeldToken(input: { nonce: string }): Promise<"held" | "admitted" | "gone"> {
     const held = await this.ctx.storage.get<HeldExchange>("held");
-    if (held?.nonce === input.nonce) await this.ctx.storage.delete("held");
+    if (held?.nonce === input.nonce) {
+      await this.ctx.storage.delete("held");
+      return "held";
+    }
+    const completed = await this.ctx.storage.get<{ nonce: string; revision: number }>("completed");
+    const stored = await this.ctx.storage.get<Stored>("stored");
+    return completed?.nonce === input.nonce && stored?.revision === completed.revision
+      ? "admitted"
+      : "gone";
   }
 
   /** Substitute, pin, dispatch — refresh and retry once on a mintable miss or a 401. A refusal is
@@ -948,10 +958,11 @@ export class SecretDurableObject extends StreamProcessorDurableObject<
     this.#installationRouteReadAt.set(installationId, Date.now());
   }
 
-  /** THE WORKSPACE A STORED SLACK TOKEN IS FOR, when its record predates `routedAccount`: iterate's
-   *  app's token at a project's `/secrets/slack-<connection>` (its material holds no app of its own)
-   *  is for the workspace that connection's row names. Read once, and kept on the stored record —
-   *  outside the material's binding, so no write — for every read after. */
+  /** THE WORKSPACE A STORED SLACK TOKEN IS FOR, when its record predates `routedAccount`: the token at
+   *  a project's `/secrets/slack-<connection>` whose row says iterate's app is for the workspace that
+   *  row names — the row, a platform fact, never the material a caller may merge into. Read once per
+   *  record and incarnation, and kept on the stored record (outside the material's binding, so no
+   *  write) for every read after. */
   async #routedAccountOf(stored: {
     revision: number;
     record: SecretRecord;
@@ -964,8 +975,6 @@ export class SecretDurableObject extends StreamProcessorDurableObject<
     if (
       !connection ||
       resourceScope(projectId, contextPath).kind !== "project" ||
-      !isRecord(record.material) ||
-      "clientId" in record.material ||
       this.#connectionRowsRead.has(revision)
     )
       return undefined;

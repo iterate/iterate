@@ -462,6 +462,43 @@ test("Slack: a holder that disconnects while its cleanup is pending revokes noth
   expect(await disconnectedFacts(holder.projectId, "slack")).toEqual([{ connection: "acme" }]);
 });
 
+test("Slack: a move whose connect fails after the holder took another workspace at the same connection releases the moved one, and the holder keeps its new route", async () => {
+  const holder = await projectWithMember("slack-rollback");
+  const petshop = petshopFakes();
+  await connected(petshop, holder, "slack", "team=T16X");
+  const mover = await otherProject(holder, "slack-rollback-mover");
+  const offer = moveOfferOf(await consented(petshop, mover, "slack", "team=T16X"));
+  // The move's proof (the first auth.test once armed) waits for the holder to connect another
+  // workspace at `acme`, then fails. Flags, polled: a promise one side resolves would run the
+  // other's continuation in the wrong Durable Object's I/O context.
+  let armed = false;
+  let proofReached = false;
+  let holderReplaced = false;
+  const answered = vi.mocked(globalThis.fetch).getMockImplementation()!;
+  vi.mocked(globalThis.fetch).mockImplementation(async (input, init) => {
+    const request = new Request(input, init);
+    if (!armed || request.url !== "https://slack.test/api/auth.test") return answered(request);
+    armed = false;
+    proofReached = true;
+    for (const until = Date.now() + 5_000; !holderReplaced && Date.now() < until;)
+      await scheduler.wait(20);
+    return Response.json({ ok: false, error: "account_inactive" });
+  });
+  armed = true;
+  const moved = projectFacet(mover.itx).confirmIntegrationMove({ offer });
+  await vi.waitFor(() => expect(proofReached).toBe(true));
+  await projectFacet(holder.itx).disconnectIntegration({ provider: "slack", connection: "acme" });
+  await connected(petshop, holder, "slack", "team=T16Y");
+  holderReplaced = true;
+  await expect(moved).rejects.toThrow(/auth\.test/);
+  expect(await catalog().integrationRoute("slack", "T16Y")).toEqual({
+    projectId: holder.projectId,
+    path: "/integrations/slack/acme",
+  });
+  expect(await catalog().integrationRoute("slack", "T16X")).toBeNull();
+  expect(await integrationsOf(mover.itx)).toEqual({});
+});
+
 test("Slack: a move whose held token is gone leaves what the destination's secret holds alone", async () => {
   const holder = await projectWithMember("slack-replaced");
   const petshop = petshopFakes();
@@ -483,7 +520,7 @@ test("Slack: a move whose held token is gone leaves what the destination's secre
   expect(await secretPathsOf(mover.itx)).toContain("/secrets/slack-acme");
 });
 
-test("Slack: a token stored before its record named its workspace is refused too, once its workspace moved", async () => {
+test("Slack: a token stored before its record named its workspace is refused too, once its workspace moved, whatever was merged into it", async () => {
   const holder = await projectWithMember("slack-legacy");
   const petshop = petshopFakes();
   await connected(petshop, holder, "slack", "team=T15OLD");
@@ -492,6 +529,12 @@ test("Slack: a token stored before its record named its workspace is refused too
     "/secrets/slack-acme",
     { accessToken: await slackBotToken(petshop, "T15OLD") },
     { urls: ["https://slack.test"] },
+  );
+  // an app's field merged in does not make it the project's own app's token
+  await holder.itx.secrets.set(
+    "/secrets/slack-acme",
+    { clientId: "not-an-app" },
+    { urls: ["https://slack.test"], merge: true },
   );
   const mover = await otherProject(holder, "slack-legacy-mover");
   const offer = moveOfferOf(await consented(petshop, mover, "slack", "team=T15OLD"));
