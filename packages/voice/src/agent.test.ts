@@ -11,10 +11,10 @@ const screenContext = readFileSync(new URL("./screen-context.md", import.meta.ur
 // budget.
 vi.setConfig({ testTimeout: 10_000 });
 
-// September 21 calls: the supplied Markdown was dropped and the agent edited the
-// project website. The fixture keeps each call's first concrete maths request verbatim, and the
-// test puts the screen guide the press adds (worker.ts) before it. Audio, transcripts (already in
-// the request) and unrelated lifecycle events are omitted.
+// The fixture is each of two prd voice calls' first concrete maths request, recorded 2026-09-21,
+// verbatim; audio, transcripts (already in the request) and unrelated lifecycle events are
+// omitted. The test puts the screen guide the press adds (worker.ts) before it. The fake model
+// draws on the device only when that guide reached it.
 test.for([
   ...fixtures.map(({ device, events }) => ({
     device,
