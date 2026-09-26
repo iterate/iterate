@@ -423,9 +423,9 @@ test("the host's word leaves a push's at-head judgement alone: a push the log al
         append: () => [],
         read: (after = 0) =>
           Promise.resolve({
-            events: [committedEvent(1, "t"), committedEvent(2, "t"), committedEvent(3, "t")].filter(
-              (event) => event.offset > after,
-            ),
+            events: [1, 2, 3]
+              .filter((offset) => offset > after)
+              .map((offset) => committedEvent(offset, "t")),
             scannedThroughOffset: 3,
             atHead: true,
           }),

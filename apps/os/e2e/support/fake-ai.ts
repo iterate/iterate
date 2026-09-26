@@ -3,9 +3,9 @@
 // model (docs/testing.md#real-model-rows).
 import { RpcTarget } from "capnweb";
 
-/** One `run(model, inputs, options)` as the fake received it: a chat's `inputs` carry its
- *  `messages`, the Responses API's its `input`. */
-export type FakeAiCall = {
+/** One `run(model, inputs, options)` as the fake received it. `messages` is typed because chat rows
+ *  read it; the Responses API's `input`, or a bare `prompt`, arrive instead, through the index. */
+type FakeAiCall = {
   model: string;
   inputs: { messages: { role: string; content: string }[]; [field: string]: any };
   options?: unknown;
