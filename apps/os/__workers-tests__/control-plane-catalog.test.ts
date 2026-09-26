@@ -115,6 +115,13 @@ test("people: a signed-in person adds a sign-in to their account: the subject be
     await c.linkIdentity({ provider: "github", subject: "gh-ada", email: "ada@elsewhere.example" }),
   ).toEqual(ada);
   expect(await c.user(ada.id)).toEqual(ada);
+  // nor can any other write, an older version's `linkIdentity` among them: the database refuses it
+  await expect(
+    env.DB.prepare("update users set email = 'ada@elsewhere.example' where id = ?")
+      .bind(ada.id)
+      .run(),
+  ).rejects.toThrow(/an added sign-in keeps its person's email/);
+  expect(await c.user(ada.id)).toEqual(ada);
   // two people adding one subject at once: one holds it, the other is refused
   const both = await Promise.allSettled([
     add(ada.id, "google", "g-x"),
