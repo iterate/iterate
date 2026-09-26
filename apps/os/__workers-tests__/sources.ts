@@ -1,8 +1,9 @@
-// __workers-tests__/sources.ts — the loaded code more than one Workers row shares, handed over inline
-// like a person's own: a facet spec (`{ source, className }`) for `itx.facets.get(name, spec)` and
-// `itx.processors.enable`, or a worker source for `itx.workers.get`. A source only one row uses stays
-// inline in that row. A processor that counts is built on `counter`, the counter processor every
-// counting fixture shares.
+// __workers-tests__/sources.ts — named loaded code the Workers rows hand over inline like a person's
+// own: a facet spec (`{ source, className }`) for `itx.facets.get(name, spec)` and
+// `itx.processors.enable`, or a worker source for `itx.workers.get`. It holds COUNTER_SOURCE, which
+// several files build on, and the facet rows' (facets.test.ts) sources; other rows keep their own
+// source inline. A processor that counts is built on `counter`, the counter processor every counting
+// fixture shares.
 import type { FacetSpec, WorkerSource } from "iterate/api";
 
 /** A module whose `CounterProcessor` counts every durable event (`{ n }`), with `host` — the

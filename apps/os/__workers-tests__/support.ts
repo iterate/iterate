@@ -4,8 +4,8 @@
 // (disposed at teardown — importing this module registers the afterAll), a live value to lend
 // (`Echo`, tagged per instance), the production pins' release on demand, the alarm a context owes,
 // the one poll-until, a signed-in member with their browser cookie, and the pet shop's integration
-// fakes. The loaded sources more than one row shares (COUNTER_SOURCE and the facet rows') are
-// ./sources.ts.
+// fakes. The named loaded sources (COUNTER_SOURCE and the facet rows') are ./sources.ts; other
+// rows inline their own.
 import { runInDurableObject } from "cloudflare:test";
 import { env, exports } from "cloudflare:workers";
 import { newWebSocketRpcSession, RpcTarget } from "capnweb";
