@@ -120,10 +120,10 @@ whose head would carry the result, and one suite alone never from the PR's branc
 preview's state before redeploying; `delete` removes it. CI publishes URLs and operation links in
 the PR body, under a status line (deploying, deployed, deploy failed, with the CI job) and a line
 per suite (`E2E tests` and `Browser specs`: passed or failed, each with its CI job),
-with `Sign in ↗` links as the PR's test person, `pr<N>@preview.iterate.test`, for whoever
-confirms at prd that they are `*@nustom.com` (`src/test-link-admins.ts`), and
-one-click "New project from template" links into the Dash
-([dev environments](../../docs/dev-environments.md), `src/test-link.ts`).
+with `Sign in ↗` links that sign an app in as the PR's test person, `pr<N>@preview.iterate.test`,
+once one of prd's admins signs in to the preview through prd (`src/admin-sign-in.ts`) and confirms
+"Sign in as someone else" on the consent page, and "New project from template" links into the Dash
+([dev environments](../../docs/dev-environments.md#local-dev)).
 For an operational change, verify the preview's resulting state and telemetry as well as its checks.
 The [engineering invariant](../../docs/engineering-invariants.md) defines the required standard.
 
@@ -262,7 +262,7 @@ platform `<provider>/connected` on `/users/<id>`, which the account folds into `
 the same row a project keeps (`src/integrations/contract.ts`), with the scopes the provider granted.
 Google issues a refresh token only on a consent, so a first sign-in without one goes back once for
 the consent screen; every Google and GitHub sign-in shows the provider's account picker. A provider
-pointed at a fake signs in addresses under `login.testLink.emailDomain` alone. Identities stay keyed
+pointed at a fake signs in addresses under `login.testEmailDomain` alone. Identities stay keyed
 by (provider, subject).
 
 A sign-in links a provider's account to a person once by its verified email, so a GitHub account

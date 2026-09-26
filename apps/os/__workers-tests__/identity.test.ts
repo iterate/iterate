@@ -418,7 +418,7 @@ test("signing in with the Google account a person connected before keeps that on
   ]);
 });
 
-test("a fake provider signs in an address under the test-link domain alone", async () => {
+test("a fake provider signs in an address under the test email domain alone", async () => {
   const petshop = petshopFakes();
   const { response } = await signInThroughFake(petshop, "google", { email: "ada@iterate.com" });
   expect(signInPageOf(response)).toEqual({

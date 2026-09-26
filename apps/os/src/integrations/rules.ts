@@ -198,16 +198,16 @@ export function signInNeedsConsent(input: {
 }
 
 /** Why a sign-in through a FAKE provider (a preview's pet shop, which mints any address) is
- *  refused: only addresses under the test-link domain may sign in that way, and none where the
- *  deployment has no test links. Null when admitted. */
+ *  refused: only addresses under the deployment's test email domain (`login.testEmailDomain`) may
+ *  sign in that way, and none where it has none. Null when admitted. */
 export function fakeProviderEmailRefusal(
   email: string,
-  testLinkDomain: string | null,
+  testEmailDomain: string | undefined,
 ): string | null {
-  if (!testLinkDomain) return "this deployment signs in with no fake provider";
-  return email.toLowerCase().endsWith(`@${testLinkDomain}`)
+  if (!testEmailDomain) return "this deployment signs in with no fake provider";
+  return email.toLowerCase().endsWith(`@${testEmailDomain}`)
     ? null
-    : `a fake provider signs in addresses under ${testLinkDomain} alone`;
+    : `a fake provider signs in addresses under ${testEmailDomain} alone`;
 }
 
 /** A LEND (secret/durable-object.ts): the lender's secret answers a borrower's use only while the

@@ -6,7 +6,7 @@
 // disconnected from the project, which leaves the person's connection standing. Deployed only: the
 // fakes' redirects come back to a public origin.
 import { expect } from "vitest";
-import { TEST_LINK_EMAIL_DOMAIN } from "../src/test-link.ts";
+import { TEST_EMAIL_DOMAIN } from "../src/test-email-domain.ts";
 import { cookieSession, workerUrl } from "./support/client.ts";
 import { petshopBaseUrl, petshopExpireTokens } from "./support/petshop.ts";
 import { deployedOnly, freshDnsSafeProjectSlug } from "./support/project-host.ts";
@@ -14,7 +14,7 @@ import { deployedOnly, freshDnsSafeProjectSlug } from "./support/project-host.ts
 deployedOnly(
   "Sign in with Google keeps its token as your account: a project connects it in one click, uses it through egress, refreshed at your connection, and disconnecting it there leaves it yours",
   async ({ skip }) => {
-    const email = `${freshDnsSafeProjectSlug("google")}@${TEST_LINK_EMAIL_DOMAIN}`;
+    const email = `${freshDnsSafeProjectSlug("google")}@${TEST_EMAIL_DOMAIN}`;
     const cookie = await signInThroughFake("/.auth/identity", { email });
     if (!cookie) return skip("this deployment's Google client is not the pet shop's fake");
     const api: any = await cookieSession(cookie);
@@ -60,14 +60,14 @@ deployedOnly(
     for (const [path, choices, api] of [
       [
         "/.auth/identity/cloudflare",
-        { email: `${freshDnsSafeProjectSlug("cf")}@${TEST_LINK_EMAIL_DOMAIN}` },
+        { email: `${freshDnsSafeProjectSlug("cf")}@${TEST_EMAIL_DOMAIN}` },
         `${petshopBaseUrl()}/client/v4/user`,
       ],
       [
         "/.auth/identity/github",
         {
           login: freshDnsSafeProjectSlug("gh"),
-          email: `${freshDnsSafeProjectSlug("gh")}@${TEST_LINK_EMAIL_DOMAIN}`,
+          email: `${freshDnsSafeProjectSlug("gh")}@${TEST_EMAIL_DOMAIN}`,
         },
         `${petshopBaseUrl()}/user`,
       ],
@@ -97,7 +97,7 @@ deployedOnly(
     const login = freshDnsSafeProjectSlug("gh-noemail");
     const response = await callbackThroughFake("/.auth/identity/github", {
       login,
-      email: `${login}@${TEST_LINK_EMAIL_DOMAIN}`,
+      email: `${login}@${TEST_EMAIL_DOMAIN}`,
       emails: "none",
     });
     if (!response) return skip("this deployment's GitHub client is not the pet shop's fake");

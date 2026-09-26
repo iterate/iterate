@@ -40,14 +40,9 @@ const ALLOWED_UNDATED: AllowedUndated[] = [
     note: "env-gated: runs where the deployment offers email-code sign-in (login.emailCode), which a local worker does not",
   },
   {
-    file: "specs/os/test-link.spec.ts",
-    match: "test links exist only on a preview or local dev, and minting one needs its key",
-    note: "env-gated: a deployment on its own domain (prd) has login.testLink off by construction (apps/os/src/app-config.ts), and a preview run needs its key from `doppler run`",
-  },
-  {
-    file: "specs/os/test-link.spec.ts",
-    match: "on a preview, redeeming a link needs an admin's prd sign-in",
-    note: "env-gated: a preview's links redeem only after an admin signs in at prd (apps/os/src/test-link-admins.ts), which no spec holds; the first row proves the redirect there instead",
+    file: "specs/dash/sign-in-link.spec.ts",
+    match: "only a preview's admins sign in through prd",
+    note: "env-gated: only a preview sets login.adminIssuer (apps/os/scripts/preview-config.ts); app-config.ts refuses it off an https workers.dev or .test origin",
   },
   // -- Structural (fixture): the skip is the subject of the test, not a parked bug.
   {

@@ -53,8 +53,8 @@ pnpm dev start --detach   # the same, in the background; returns once /version a
 pnpm dev status           # pid, port, URL (exit 1: not running)
 pnpm dev attach           # follow its log, apps/os/.wrangler/dev.log
 pnpm dev kill             # or `restart`
-pnpm getin                # a browser signed in as test@preview.iterate.test, in project `test`
-pnpm -s getin --print     # the one-click sign-in URL alone, for Playwright and agents
+pnpm getin                # a browser on project `test` of test@preview.iterate.test (password `dev`)
+pnpm -s getin --print     # that URL alone, for Playwright and agents
 ```
 
 OS local dev needs no Doppler. `doppler.yaml` still maps each app directory to
@@ -85,11 +85,11 @@ read secrets.
   is how `status`, `kill` and `pnpm getin` find it. Without `--port` the port is
   the worktree's last recorded one, else `8788`, else a free one. `pnpm getin`
   (`apps/os/scripts/getin.ts`) starts the server if need be, creates the project as the
-  person through the operator bearer (idempotent), and opens a one-click sign-in
-  link (below) signed with the local key. With a local Dash up at
-  `http://localhost:5173` whose `APP_CONFIG_URLS__OS` is this server, it lands on the
-  Dash's project page with no Allow page; else on `/login`. `-e`/`-p` pick
-  another `@preview.iterate.test` person and project; `--dash` another Dash.
+  person through the operator bearer (idempotent), and opens the project's page
+  in a local Dash up at `http://localhost:5173` whose `APP_CONFIG_URLS__OS` is
+  this server, else `/login`. A browser not signed in yet signs in there as the
+  person with the password `dev`. `-e`/`-p` pick another `@preview.iterate.test`
+  person and project; `--dash` another Dash.
   `pnpm -s getin --token` prints a personal access token for that person and
   project instead (30 days): their bearer at `/api`, `/mcp` and the project's
   hosts.
@@ -151,39 +151,36 @@ read secrets.
   and the other RFC 2606/6761 names). No deployment ever mails them, because a
   bounce costs the sender's reputation; sign in as them with the deployment's
   password.
-- One-click sign-in: every hosted client (Dash, Agents, Notes, Voice, Kit) is
+- PR sign-in links: every hosted client (Dash, Agents, Notes, Voice, Kit) is
   deployed next to the platform preview and wired to it, and the PR body's
   preview section carries `Sign in ↗` links: one in the heading (into the
-  Dash's project, or the issuer's own page when the Dash wasn't previewed),
-  one per app, and with the Dash one per `configs` template ("New project
-  from template"), which lands in the Dash's New project sheet with that
-  template chosen (`/projects?new=1&template=<name>`). A template the PR
+  Dash's project, or the issuer's own sign-in page when the Dash wasn't
+  previewed), one per app, and with the Dash one per `configs` template ("New
+  project from template"), which lands in the Dash's New project sheet with
+  that template chosen (`/projects?new=1&template=<name>`). A template the PR
   changes is linked at the PR head instead
   (`template=github:iterate/iterate#<head>&path:configs/<name>`, the
   custom field prefilled), so the project is born from the unmerged template.
-  The PR body is public, so a link alone signs nobody in: a click first sends
-  the browser to prd (`os.iterate.com`) to confirm it's an `*@nustom.com`
-  person, through an OAuth grant that can only read who they are (prd's
-  `/oauth2/userinfo` resource; `apps/os/src/test-link-admins.ts`). Then it
-  signs the browser in as the PR's test person, `pr<N>@preview.iterate.test`,
-  and lands inside project `pr<N>`, with no password and no Allow page on the
-  preview. An agent without an admin's prd session signs in to a preview with
-  its password instead (Doppler `os/preview`, `APP_CONFIG` `login.password`).
-  CI seeds that person and project on every deploy
-  (`apps/os/scripts/preview.ts` `previewSignIn`). The link is
-  `/.auth/test-link?t=<token>` (`apps/os/src/test-link.ts`), signed with the
-  preview's `secrets.key` and bound to that preview's origin, so a pr123 link
-  is refused on pr124 even though every preview inherits the same key. It is
-  also bound to that one address, expires in 14 days (every push mints a fresh
-  one) and is deleted with the preview. The route exists only where
-  `login.testLink` is set. The preview config and local dev set it in code,
-  never in Doppler, and `parseAppConfig` refuses it unless `urls.os` is a
-  workers.dev or localhost origin, so prd answers 404, and off localhost
-  refuses it without `login.testLink.admins`, the issuer and email patterns
-  that gate it. Local dev redeems a link at once. Locally, mint one with
-  the dev key (`specs/os/test-link.spec.ts` shows how). Anyone can still sign
-  in with any email and the preview's password (Doppler
-  `os/preview`, `APP_CONFIG.login.password`).
+  Each link is the app's own sign-in naming the PR's test person,
+  `<app>/.auth/login?next=<page>&login_hint=pr<N>@preview.iterate.test`
+  (`appSignInLink` in `apps/os/scripts/preview-config.ts`). CI seeds that
+  person and their project `pr<N>` on every deploy (`apps/os/scripts/preview.ts`
+  `seedSignIn`). The PR body is public, so a link grants nothing. The app
+  passes `login_hint` on to the issuer, whose consent page opens an admin's
+  **Sign in as someone else…** with that person filled in, only for one of our
+  own apps. One confirm signs the app in as them for an hour (see
+  [Acting as users and admins](#acting-as-users-and-admins)). Anyone else gets
+  the ordinary consent page. A preview's admins are prd's (`envs.ts` `admins`)
+  plus the specs' `admin@preview.iterate.test`, and they sign in to the
+  preview as themselves with **Continue with os.iterate.com**: prd confirms who
+  they are through an OAuth grant that can only read that (prd's
+  `/oauth2/userinfo` resource; `apps/os/src/admin-sign-in.ts`). The preview
+  config sets `login.adminIssuer` in code, never in Doppler, and
+  `parseAppConfig` refuses it off an https workers.dev or `.test` origin, so
+  prd has no such route. The admin app's link names nobody: an admin opens it
+  as themselves. An agent without an admin's prd session signs in to a
+  preview with its password instead (Doppler `os/preview`, `APP_CONFIG`
+  `login.password`), as any email, `admin@preview.iterate.test` included.
 
 - Template-carrying projects: a project can be born from a config template
   still in flight on a PR. `projects.create({ project, configRepoTemplate })`
@@ -230,7 +227,10 @@ menu's **Switch account…**): the issuer's consent page offers an admin, and
 nobody else, **Sign in as someone else…** — their email, then a confirm that
 names who the client is (its verified host, where the code goes, the resource,
 the permissions) and warns about anything that is not one of our apps. It works
-for any client, third parties and `/mcp` included. The grant is the person's, for
+for any client, third parties and `/mcp` included. A link can name the person:
+an app's `/.auth/login?login_hint=<email>` opens that step with them filled in,
+for one of our own apps (the PR body's `Sign in ↗`); the admin still confirms.
+The grant is the person's, for
 an hour: every event names the admin in `source.principal.impersonatedBy`, their
 Sessions list it as started by the admin, their account records
 `account/impersonation-started` and the admin's `account/impersonation-performed`

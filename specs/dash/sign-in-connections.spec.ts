@@ -5,7 +5,7 @@
 // project leaves it the person's. A preview's providers are the pet shop's fakes
 // (apps/os/scripts/preview-{google,github,cloudflare}-app.ts): each asks which account on a picker
 // page, as the real one does, then consents at once. A fake signs in addresses under the preview's
-// test-link domain alone. The Dash is signed in to with its own scopes, `account` among them: the
+// test email domain alone. The Dash is signed in to with its own scopes, `account` among them: the
 // person's own connections are the account's. A person signed in another way adds GitHub to their
 // own account from /sessions (the issuer's link mode, apps/os identity.ts), whatever address GitHub
 // reports.
@@ -20,7 +20,7 @@ import {
   PREVIEW_GITHUB_APP,
   previewGithubAppPrivateKey,
 } from "../../apps/os/scripts/preview-github-app.ts";
-import { TEST_LINK_EMAIL_DOMAIN } from "../../apps/os/src/test-link.ts";
+import { TEST_EMAIL_DOMAIN } from "../../apps/os/src/test-email-domain.ts";
 import { dashScopes } from "../../apps/dash/src/lib/scopes.ts";
 import { readOsPlaywrightAuthConfig } from "../test-support/auth-config.ts";
 import { openOperatorSession } from "../test-support/operator.ts";
@@ -150,7 +150,7 @@ test("a person signed in with the password adds GitHub to their account, and the
     .click({ noWaitAfter: true });
   // GitHub's account picker: an account whose address is not the person's
   await page.getByRole("textbox", { name: "Username" }).fill(login);
-  await page.getByRole("textbox", { name: "Email" }).fill(`${login}@${TEST_LINK_EMAIL_DOMAIN}`);
+  await page.getByRole("textbox", { name: "Email" }).fill(`${login}@${TEST_EMAIL_DOMAIN}`);
   await page.getByRole("button", { name: "Continue", exact: true }).click({ noWaitAfter: true });
   // back on /sessions, still signed in as themself
   await page
@@ -161,11 +161,11 @@ test("a person signed in with the password adds GitHub to their account, and the
     .waitFor();
 });
 
-/** A fresh person under the preview's test-link domain who owns a fresh project (made as them by
+/** A fresh person under the preview's test email domain who owns a fresh project (made as them by
  *  the operator): their address, and the GitHub login they pick. */
 async function personWithProject(prefix: string) {
   const slug = uniqueFixtureSlug(prefix);
-  const email = `${slug}@${TEST_LINK_EMAIL_DOMAIN}`;
+  const email = `${slug}@${TEST_EMAIL_DOMAIN}`;
   using operator = openOperatorSession();
   await operator.authenticate({ email }).projects.create({ project: slug }).whoami();
   return { email, login: slug, slug };

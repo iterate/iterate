@@ -2,22 +2,18 @@ import { startAppSession } from "iterate/app-server";
 import { reportIssue, sameOriginPath } from "iterate/lib";
 import { OAuthScope } from "iterate/oauth-scopes";
 import { clientDisplay } from "./client-display.ts";
-import { appConfigOf, platformAddressesOf } from "./app-config.ts";
+import { platformAddressesOf } from "./app-config.ts";
 import type { Env } from "./env.ts";
 import type { UserRecord } from "./control-plane/catalog.ts";
-import { ControlPlane } from "./control-plane/edge.ts";
 import { oauthHelpers, parseAuthorization, type GrantProps } from "./oauth.ts";
 import { isRetryableTransportError } from "./retryable-error.ts";
 import { watchSignInStep } from "./sign-in-watch.ts";
-import { emailAllowed } from "./allowed-emails.ts";
-import { redeemTestLink } from "./test-link.ts";
-import { clearAdminCheckCookie, finishAdminCheck, startAdminCheck } from "./test-link-admins.ts";
 
 /** What the person reads when the platform failed their sign-in, on the sign-in page. */
 const PLATFORM_FAILURE_MESSAGE = "Sign-in failed on our side. Try again.";
 
-/** Verified Google login and explicitly enabled test/administrator login call this tail.
- * Its grant is the issuer's sole browser identity: ordinary storage, public token
+/** Every sign-in ends in this tail: the password and code forms, a provider (identity.ts) and an
+ * admin through another issuer (admin-sign-in.ts). Its grant is the issuer's sole browser identity: ordinary storage, public token
  * exchange, admission, expiry and revocation. No separate identity cookie. `picture` is the
  * identity provider's picture of the person, when it gave one (Google does).
  *
@@ -40,9 +36,9 @@ export async function startIssuerSession(
   request: Request,
   user: UserRecord,
   next: string,
-  /** what the grant carries beyond the person: what the identity provider said about them
-   *  (Google's profile; an email sign-in has none), and a test link's pre-approved clients */
-  extras: Pick<GrantProps, "picture" | "name" | "testLink"> = {},
+  /** what the identity provider said about the person (Google's profile; an email sign-in has
+   *  none), which the grant carries beside them */
+  extras: Pick<GrantProps, "picture" | "name"> = {},
 ): Promise<{ setCookie: string; location: string } | { error: string }> {
   const addresses = platformAddressesOf(env, request);
   const { platformOrigin, api } = addresses;
@@ -86,7 +82,6 @@ export async function startIssuerSession(
         email: user.email,
         picture: extras.picture,
         name: extras.name,
-        testLink: extras.testLink,
         projects: null,
         deadline: Date.now() + 30 * 24 * 3600_000,
       } satisfies GrantProps,
@@ -129,115 +124,4 @@ function codeExchangeFailure(error: unknown): "timeout" | "transport" | "token-e
   if (error instanceof Error && /^Iterate token exchange failed \(\d+\)/.test(error.message))
     return "token-endpoint";
   return null;
-}
-
-/** `GET /.auth/test-link?t=` (test-link.ts; routed by worker.ts on the platform origin): a
- *  preview's one-click sign-in. The pure decision refuses what is not this deployment's to honour.
- *  Where `login.testLink.admins` is set — every preview — a good link then sends the browser to
- *  prove at the admins' issuer that it is one of them (test-link-admins.ts), and the callback
- *  (`testLinkCallbackResponse`) redeems it; on a laptop it is redeemed at once. */
-export async function testLinkResponse(request: Request, env: Env) {
-  const config = appConfigOf(env);
-  const token = new URL(request.url).searchParams.get("t");
-  const decision = await testLinkDecision(env, request, token);
-  if (decision.status !== 302) return plainRefusal(decision.status, decision.message);
-  const admins = config.login.testLink?.admins;
-  if (!admins) return signInAsTestPerson(request, env, decision);
-  const check = await startAdminCheck({
-    issuer: admins.issuer,
-    platformOrigin: platformAddressesOf(env, request).platformOrigin,
-    key: config.secrets.key.exposeSecret(),
-    token: token!,
-  });
-  return new Response(null, {
-    status: 302,
-    headers: {
-      location: check.location,
-      "set-cookie": check.setCookie,
-      "cache-control": "no-store",
-      "referrer-policy": "no-referrer",
-    },
-  });
-}
-
-/** `GET /.auth/test-link/callback`: the admins' issuer's answer (test-link-admins.ts). An address
- *  `login.testLink.admins.emails` names redeems the link the check began with, decided afresh —
- *  it may have expired meanwhile; anyone else is refused, and every outcome is logged with the
- *  address the issuer vouched for. */
-export async function testLinkCallbackResponse(request: Request, env: Env) {
-  const config = appConfigOf(env);
-  const admins = config.login.testLink?.admins;
-  if (!admins) return plainRefusal(404, "Not found");
-  const checked = await finishAdminCheck({
-    issuer: admins.issuer,
-    platformOrigin: platformAddressesOf(env, request).platformOrigin,
-    key: config.secrets.key.exposeSecret(),
-    request,
-  }).catch((error: unknown) => {
-    console.warn({ event: "test-link.admin-check-failed", message: String(error) });
-    return { error: `Could not confirm who you are at ${admins.issuer}. Open the link again.` };
-  });
-  if ("error" in checked) return plainRefusal(403, checked.error, clearAdminCheckCookie);
-  if (!emailAllowed(admins.emails, checked.email)) {
-    console.warn({ event: "test-link.refused-not-admin", email: checked.email });
-    return plainRefusal(
-      403,
-      `${checked.email} may not use this preview's sign-in link: it is for ${admins.emails.join(", ")}.`,
-      clearAdminCheckCookie,
-    );
-  }
-  const decision = await testLinkDecision(env, request, checked.token);
-  if (decision.status !== 302)
-    return plainRefusal(decision.status, decision.message, clearAdminCheckCookie);
-  console.info({ event: "test-link.redeemed", admin: checked.email, email: decision.email });
-  const response = await signInAsTestPerson(request, env, decision);
-  response.headers.append("set-cookie", clearAdminCheckCookie);
-  return response;
-}
-
-/** The pure decision (test-link.ts `redeemTestLink`) for this deployment, now. */
-function testLinkDecision(env: Env, request: Request, token: string | null) {
-  const config = appConfigOf(env);
-  return redeemTestLink(token, {
-    testLink: config.login.testLink,
-    key: config.secrets.key.exposeSecret(),
-    platformOrigin: platformAddressesOf(env, request).platformOrigin,
-    now: Date.now(),
-  });
-}
-
-/** A good link's effect: find or create its test person, start the issuer session exactly as a
- *  password sign-in does — stamped with the link's sibling app clients, which consent.ts then
- *  approves without the Allow page — and send the browser to the link's `next`. The
- *  password-attempt counters are never touched: a shared link clicked many times locks nobody
- *  out. */
-async function signInAsTestPerson(
-  request: Request,
-  env: Env,
-  decision: { email: string; project: string; next: string; clients: string[] },
-) {
-  const user = await watchSignInStep(
-    "ensure-user",
-    new ControlPlane(env).ensureUser(decision.email),
-  );
-  const session = await startIssuerSession(env, request, user, "/login", {
-    testLink: { clients: decision.clients, project: decision.project },
-  });
-  const headers = new Headers({ "cache-control": "no-store", "referrer-policy": "no-referrer" });
-  if ("error" in session) {
-    headers.set("location", `/login?${new URLSearchParams({ error: session.error })}`);
-    return new Response(null, { status: 303, headers });
-  }
-  headers.set("location", decision.next);
-  headers.set("set-cookie", session.setCookie);
-  return new Response(null, { status: 302, headers });
-}
-
-function plainRefusal(status: number, message: string, setCookie?: string) {
-  const headers = new Headers({
-    "content-type": "text/plain; charset=utf-8",
-    "cache-control": "no-store",
-  });
-  if (setCookie) headers.set("set-cookie", setCookie);
-  return new Response(`${message}\n`, { status, headers });
 }

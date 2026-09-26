@@ -47,7 +47,7 @@ import { createOctokit, getOctokit, getRepo } from "../../../scripts/ci/github.t
 import { getSlackClient, slackChannelIds } from "../../../scripts/ci/slack.ts";
 import { traceOperation } from "../../../scripts/ci/tracing/tracing.ts";
 import { parseAppConfig, type AppConfig } from "../src/app-config.ts";
-import { mintTestLink, TEST_LINK_PATH, testLinkIdentityOf } from "../src/test-link.ts";
+import { TEST_EMAIL_DOMAIN } from "../src/test-email-domain.ts";
 import { buildOs } from "./build.ts";
 import { applyD1Migrations, ensureD1, findD1, type D1Row } from "./d1.ts";
 import deployOs from "./deploy.ts";
@@ -67,6 +67,7 @@ import {
   APPS,
   appPreviewOrigins,
   appPreviewUrl,
+  appSignInLink,
   assertFreshInstall,
   changedApps,
   configTemplateNames,
@@ -781,12 +782,7 @@ async function deployPreviewSteps(
     console.log(`\npreview ${previewName}: ${url}`);
     const config = parseAppConfig(collectSecrets(ctx, ["APP_CONFIG", "APP_CONFIG_SECRETS__KEY"]));
     const signIn = prNumber
-      ? await signInLinks(config, {
-          url,
-          prNumber,
-          apps: deployedApps,
-          changedPaths: await changed,
-        })
+      ? signInLinks({ url, prNumber, apps: deployedApps, changedPaths: await changed })
       : undefined;
     const publish = async (seeded: boolean) => {
       const summary = {
@@ -828,66 +824,58 @@ async function deployPreviewSteps(
   }
 }
 
-/** THE ONE-CLICK SIGN-IN a PR's body links (src/test-link.ts): the heading's link, one per app,
- *  and with the Dash one per config template into its New project sheet (preview-config.ts
- *  `templateQuickLaunches`), all as the PR's test person `pr<N>@preview.iterate.test`, whose
- *  project `pr<N>` seedSignIn creates. Each link is signed with the preview's own key for this
- *  preview's origin, expires in 14 days (every push mints a fresh one) and pre-approves this run's
- *  app previews (consent.ts: no Allow page). The heading's lands in the Dash's `/projects/pr<N>`
- *  when the Dash was previewed, else on the issuer's own `/login` ("Signed in as"). */
-async function signInLinks(
-  config: AppConfig,
-  preview: {
-    url: string;
-    prNumber: string;
-    apps: { name: string; url: string }[];
-    changedPaths: string[];
-  },
-) {
-  const { email, project } = testLinkIdentityOf(preview.prNumber);
-  const clients = preview.apps.map((app) => new URL(app.url).origin);
-  const link = async (next: string) =>
-    `${preview.url}${TEST_LINK_PATH}?${new URLSearchParams({
-      t: await mintTestLink({
-        key: config.secrets.key.exposeSecret(),
-        audience: preview.url,
-        email,
-        next,
-        clients,
-        expiresAt: Date.now() + 14 * 24 * 3600_000,
-      }),
-    })}`;
-  const landing = (app: { name: string; url: string }) =>
-    app.name === "dash" ? `${app.url}/projects/${project}` : app.url;
+/** THE SIGN-IN a PR's body links (preview-config.ts `appSignInLink`): the heading's link, one per
+ *  app, and with the Dash one per config template into its New project sheet (preview-config.ts
+ *  `templateQuickLaunches`), each the app's own sign-in naming the PR's test person
+ *  `pr<N>@preview.iterate.test`, whose project `pr<N>` seedSignIn creates. The link is public and
+ *  grants nothing: a reviewer signs in to the preview as themselves, one of prd's admins
+ *  (src/admin-sign-in.ts), and confirms signing the app in as the test person on the consent page,
+ *  which the link pre-fills (src/consent.ts). The admin app's names nobody: an admin opens it as
+ *  themselves. The heading's lands in the Dash's `/projects/pr<N>` when the Dash was previewed,
+ *  else on the issuer's own sign-in page. */
+function signInLinks(preview: {
+  url: string;
+  prNumber: string;
+  apps: { name: string; url: string }[];
+  changedPaths: string[];
+}) {
+  const project = `pr${preview.prNumber}`;
+  const email = `${project}@${TEST_EMAIL_DOMAIN}`;
+  const link = (app: { name: string; url: string }) =>
+    appSignInLink(
+      app.name === "dash" ? `${app.url}/projects/${project}` : app.url,
+      app.name === "admin" ? undefined : email,
+    );
   const dash = preview.apps.find((app) => app.name === "dash");
-  const heading = await link(dash ? landing(dash) : `${preview.url}/login`);
-  const apps = Object.fromEntries(
-    await Promise.all(preview.apps.map(async (app) => [app.name, await link(landing(app))])),
-  );
-  const templates = dash
-    ? await Promise.all(
-        templateQuickLaunches({
+  return {
+    heading: dash ? link(dash) : `${preview.url}/login`,
+    apps: Object.fromEntries(preview.apps.map((app) => [app.name, link(app)])),
+    templates: dash
+      ? templateQuickLaunches({
           dashUrl: dash.url,
           templates: configTemplateNames(REPO_ROOT),
           changedPaths: preview.changedPaths,
           // the PR head (the workflow's), which GitHub keeps; a laptop's checkout is its head
           headSha: process.env.PREVIEW_HEAD_SHA || checkedOutCommit(),
-        }).map(async ({ name, fromHead, next }) => ({ name, fromHead, link: await link(next) })),
-      )
-    : [];
-  return { heading, apps, templates, email, project };
+        }).map(({ name, fromHead, next }) => ({
+          name,
+          fromHead,
+          link: appSignInLink(next, email),
+        }))
+      : [],
+    email,
+    project,
+  };
 }
 
 /** Seed the PR's test person and project — created as them through the operator's bearer (`as`),
  *  the same idempotent call as e2e/support/project-host.ts `registerProject`, so the Dash link
- *  lands inside it — then smoke the heading's link. Neither ever fails the deploy: they log, and
- *  the section says when the seed failed. */
+ *  lands inside it. It never fails the deploy: it logs, and the section says when it failed. */
 async function seedSignIn(
   config: AppConfig,
-  preview: { url: string; email: string; project: string; heading: string },
+  preview: { url: string; email: string; project: string },
 ) {
   const { email, project } = preview;
-  let seeded = false;
   try {
     const socketUrl = new URL("/api", preview.url);
     socketUrl.protocol = "wss:";
@@ -911,21 +899,12 @@ async function seedSignIn(
     } finally {
       socket.close();
     }
-    seeded = true;
     console.log(`sign-in: seeded ${email} with project ${project}`);
+    return true;
   } catch (error) {
     console.warn(`sign-in: seeding ${email} with project ${project} failed: ${describe(error)}`);
+    return false;
   }
-  const smoke = await fetch(preview.heading, { redirect: "manual" }).catch(
-    (error: unknown) => error,
-  );
-  if (smoke instanceof Response && smoke.status === 302 && smoke.headers.has("set-cookie"))
-    console.log(`sign-in: the heading link signs in (302 to ${smoke.headers.get("location")})`);
-  else
-    console.warn(
-      `sign-in: the heading link did not sign in: ${smoke instanceof Response ? `${smoke.status} ${await smoke.text()}` : describe(smoke)}`,
-    );
-  return seeded;
 }
 
 /** The preview, then everything it owned, each found by its name: its D1 and its Artifacts

@@ -510,10 +510,19 @@ export async function appAuth(request: Request, config: AppAuth): Promise<Respon
       { origin: url.origin, issuer: target.issuer, resource: target.resource, scopes, client },
       next,
     );
+    // A LOGIN HINT rides on to the issuer as OpenID Connect's `login_hint` (Core 1.0 §3.1.2.1,
+    // https://openid.net/specs/openid-connect-core-1_0.html#AuthRequest): whom the link that
+    // started this sign-in was for. A hint, never a credential: the platform's consent page
+    // pre-fills an admin's "Sign in as someone else…" with it, which the admin still confirms
+    // (apps/os consent.ts). A browser still signed in above never gets this far, so the hint
+    // changes nothing about a session that already works.
+    const loginHint = url.searchParams.get("login_hint");
+    const authorize = new URL(location);
+    if (loginHint) authorize.searchParams.set("login_hint", loginHint);
     return new Response(null, {
       status: 302,
       headers: {
-        Location: location,
+        Location: authorize.href,
         "Set-Cookie": setCookie,
         "Cache-Control": "no-store",
         "Referrer-Policy": "no-referrer",

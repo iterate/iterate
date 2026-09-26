@@ -40,7 +40,7 @@
 // and the browser goes back to `next` — with `error` on it when refused.
 //
 // A provider pointed at a FAKE (a preview's pet shop, which mints any address) signs in addresses
-// under `login.testLink.emailDomain` alone (integrations/rules.ts `fakeProviderEmailRefusal`), and
+// under `login.testEmailDomain` alone (integrations/rules.ts `fakeProviderEmailRefusal`), and
 // adds no others.
 import * as oauth from "oauth4webapi";
 import { z } from "zod";
@@ -360,10 +360,7 @@ export async function identityResponse(request: Request, env: Env) {
       : await githubSignIn(client, url, flow, redirectUri);
     const { identity } = signedIn;
     if (client.fake) {
-      const refusal = fakeProviderEmailRefusal(
-        identity.email,
-        config.login.testLink?.emailDomain ?? null,
-      );
+      const refusal = fakeProviderEmailRefusal(identity.email, config.login.testEmailDomain);
       if (refusal)
         throw new SignInRefused(
           `${IDENTITY_PROVIDER_NAMES[provider]}: ${refusal}.`,

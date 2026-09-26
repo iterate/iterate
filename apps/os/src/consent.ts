@@ -72,6 +72,12 @@ export type ConsentView =
         metadataHost?: string;
         /** one of this deployment's own apps, as far as the issuer can tell (`isOwnApp`) */
         ownApp: boolean;
+        /** THE PERSON A LINK NAMED: the authorization's `login_hint` (iterate/app-server.ts
+         *  `/.auth/login`; a PR body's `Sign in ↗`, scripts/preview.ts), when it is one of `people`
+         *  and the client one of our own apps. The page opens on "Sign in as someone else" with
+         *  them filled in, and the admin still confirms: `approve` never reads the hint, only the
+         *  page's own post. */
+        suggested?: string;
       };
     }
   | {
@@ -112,7 +118,7 @@ export async function projectsForClient(
 }
 
 /** How long a userinfo grant (`kind: "identify"`) lives: the client reads who signed in once, at
- *  once, and revokes it (test-link.ts); ten minutes bounds one it never revoked. */
+ *  once, and revokes it (admin-sign-in.ts); ten minutes bounds one it never revoked. */
 const IDENTIFY_GRANT_MS = 10 * 60_000;
 
 /** The host of a CIMD client id (`https://<host>/…`, its metadata document's URL): the one fact of
@@ -125,12 +131,16 @@ function cimdHostOf(clientId: string) {
 /** Whether a client is one of this deployment's own apps, as far as the issuer can tell: the app
  *  SDK's CIMD document (`/.auth/client.json`, iterate/app-server.ts) on a sibling of the platform's
  *  host — dash.iterate.com beside os.iterate.com, a preview's `pr1-dash` beside its `pr1-os` —
- *  and not a project's host, which is userspace. Only the impersonation confirm's warning reads it:
- *  it grants nothing. */
-function isOwnApp(clientId: string, platformOrigin: string, projectBound: boolean) {
-  const url = URL.canParse(clientId) ? new URL(clientId) : null;
-  if (projectBound || url?.protocol !== "https:" || url.pathname !== "/.auth/client.json")
-    return false;
+ *  and not a project's host, which is userspace. On a laptop's platform every app returning to the
+ *  laptop counts: a local app registers itself (iterate/app-session.ts), and nothing there is
+ *  anyone's real data. It grants nothing: the impersonation confirm's warning reads it, and
+ *  whether a link may pre-fill that confirm (`#impersonation`). */
+function isOwnApp(request: AuthRequest, platformOrigin: string, projectBound: boolean) {
+  if (projectBound) return false;
+  const loopback = (url: string) => ["localhost", "127.0.0.1"].includes(new URL(url).hostname);
+  if (loopback(platformOrigin)) return loopback(request.redirectUri);
+  const url = URL.canParse(request.clientId) ? new URL(request.clientId) : null;
+  if (url?.protocol !== "https:" || url.pathname !== "/.auth/client.json") return false;
   const parentOf = (hostname: string) => hostname.slice(hostname.indexOf(".") + 1);
   return parentOf(url.hostname) === parentOf(new URL(platformOrigin).hostname);
 }
@@ -209,8 +219,6 @@ export class ConsentRpcTarget extends RpcTarget {
       const request = await this.#request(query);
       const client = await oauthHelpers(env, this.#addresses).lookupClient(request.clientId);
       const identify = request.resource === this.#addresses.userinfo;
-      const testLinkApproval = await this.#testLinkApproval(request, client);
-      if (testLinkApproval) return { kind: "redirect", location: testLinkApproval.redirectTo };
       const display = clientDisplay(client, request.clientId);
       const denied = new URL(request.redirectUri);
       denied.searchParams.set("error", "access_denied");
@@ -261,27 +269,39 @@ export class ConsentRpcTarget extends RpcTarget {
         }),
         ...bound,
         ...(isAdmin(env, this.#grant.email) && {
-          impersonation: {
-            people: (await controlPlane.listUsers()).filter(
-              (user) => user.id !== this.#grant.userId,
-            ),
-            scopes: request.scope
-              .filter((scope) => scope !== "admin")
-              .map((scope) => {
-                const name = OAuthScope.parse(scope);
-                return { name, ...OAuthScopeDescriptions[name] };
-              }),
-            resource: request.resource === this.#addresses.mcp ? "MCP" : "API",
-            redirectHost: new URL(request.redirectUri).host,
-            metadataHost: cimdHostOf(request.clientId),
-            ownApp: isOwnApp(request.clientId, this.#addresses.platformOrigin, bound.projectBound),
-          },
+          impersonation: await this.#impersonation(request, query, bound.projectBound),
         }),
       };
     } catch (error) {
       return authorizationFailure(error);
     }
   }
+
+  /** What an admin's "Sign in as someone else…" offers for `request` (`ConsentView`'s
+   *  `impersonation`), `query` its raw authorization query. */
+  async #impersonation(request: AuthRequest, query: string, projectBound: boolean) {
+    const people = (await new ControlPlane(this.#env).listUsers()).filter(
+      (user) => user.id !== this.#grant.userId,
+    );
+    const ownApp = isOwnApp(request, this.#addresses.platformOrigin, projectBound);
+    // a link to anything but one of our apps pre-fills nobody: the choice stays the admin's to make
+    const hint = new URLSearchParams(query).get("login_hint")?.trim().toLowerCase();
+    return {
+      people,
+      scopes: request.scope
+        .filter((scope) => scope !== "admin")
+        .map((scope) => {
+          const name = OAuthScope.parse(scope);
+          return { name, ...OAuthScopeDescriptions[name] };
+        }),
+      resource: request.resource === this.#addresses.mcp ? "MCP" : "API",
+      redirectHost: new URL(request.redirectUri).host,
+      metadataHost: cimdHostOf(request.clientId),
+      ownApp,
+      suggested: ownApp ? people.find((person) => person.email === hint)?.email : undefined,
+    } satisfies Extract<ConsentView, { kind: "consent" }>["impersonation"];
+  }
+
   /** Approve: the projects ticked (`["*"]` = every current and future project) and, task-based
    *  consent, the scopes left ticked — `iterate` always, never one the request did not ask for; the
    *  grant and its tokens carry exactly that set (`session.info().scopes` tells the app). Without
@@ -478,36 +498,5 @@ export class ConsentRpcTarget extends RpcTarget {
       },
     );
     return approved;
-  }
-
-  /** ONE CLICK, NOT TWO: an issuer session a preview's test link started (issuer-session.ts
-   *  `testLinkResponse`) approves, without the Allow page, a sibling app preview the link signed —
-   *  an authorization that returns to the app's own `/.auth/callback` at one of the grant's
-   *  `testLink.clients` (the redirect, not the client id: an app previewed on https is its CIMD
-   *  client, one on localhost registers itself — iterate/app-session.ts — and either way the
-   *  code can only land at that app) — once the test person's project (`pr<N>`, CI's seed) exists,
-   *  with the scopes the app asked for and "All my projects": the person is a throwaway preview
-   *  identity, and a grant narrowed to named projects could not create another in the Dash.
-   *  Anything else (another app, no project yet, every other session) gets the page. */
-  async #testLinkApproval(request: AuthRequest, client: ClientInfo | null) {
-    const testLink = this.#grant.testLink;
-    // an admin always gets the page: it is where "Sign in as someone else…" is
-    if (!testLink || isAdmin(this.#env, this.#grant.email)) return null;
-    const returnsTo = new URL(request.redirectUri);
-    if (returnsTo.pathname !== "/.auth/callback" || !testLink.clients.includes(returnsTo.origin))
-      return null;
-    const project = await new ControlPlane(this.#env).getProject(testLink.project);
-    if (!project) return null;
-    // `expected`: CI may have seeded the project on another isolate moments ago (the specs do)
-    const { projects, projectBound } = await projectsForClient(
-      this.#env,
-      this.#addresses.platformOrigin,
-      request.clientId,
-      this.#grant.userId,
-      [project.id],
-    );
-    // a project host's own client is bound to its one project: never "All my projects"
-    if (projectBound || !projects.some((reachable) => reachable.id === project.id)) return null;
-    return this.#complete(request, client, null, this.#grantable(request, projectBound));
   }
 }

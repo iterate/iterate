@@ -1,7 +1,7 @@
-// `pnpm getin` — one command to a browser signed in to this worktree's local platform, inside a
-// project that exists, through the one-click sign-in link (src/test-link.ts) that local dev enables:
+// `pnpm getin` — one command to this worktree's local platform, with a person and a project that
+// exist, and the browser on that project:
 //
-//   pnpm getin                    # signed in as test@preview.iterate.test, in project `test`
+//   pnpm getin                    # project `test`, owned by test@preview.iterate.test
 //   pnpm -s getin --print         # only the URL, on stdout — for Playwright and agents
 //   pnpm -s getin --token         # only a personal access token for that person and project, on
 //                                 # stdout: their bearer at /api, /mcp and the project's hosts
@@ -10,36 +10,35 @@
 // 1. the worktree's dev server: `pnpm dev start --detach` (scripts/dev.ts), which returns at
 //    once when it is already up, then its record, .wrangler/dev-server.json;
 // 2. the person and their project: `projects.create` as them through the local operator bearer —
-//    the same idempotent call as preview.ts `previewSignIn` and e2e's `registerProject`, so a second
+//    the same idempotent call as preview.ts `seedSignIn` and e2e's `registerProject`, so a second
 //    run reuses both;
-// 3. a test link signed with the local `secrets.key`, for this server's origin, landing in the local
-//    Dash's project page when a Dash wired to this server is up (and pre-approving it: no Allow
-//    page), else on the issuer's `/login` ("Signed in as");
-// 4. open it, or print it; or, for `--token`, sign the person in with local dev's password and
-//    mint them a personal access token for the project (src/grants.ts `mint`), 30 days.
+// 3. the local Dash's project page when a Dash wired to this server is up, else the issuer's
+//    `/login`, opened or printed; a browser not signed in yet signs in there with local dev's
+//    password, `dev`. Or, for `--token`, sign the person in with that password and mint them a
+//    personal access token for the project (src/grants.ts `mint`), 30 days.
 //
 // Local dev only: the credentials are local dev's (scripts/generate-wrangler-config.ts
-// `viteWranglerConfig`); a deployment answers the link's `aud` with a 403, prd with a 404.
+// `viteWranglerConfig`).
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import process from "node:process";
 import { newHttpBatchRpcSession, newWebSocketRpcSession } from "capnweb";
 import { createCli } from "trpc-cli";
 import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
-import { mintTestLink, TEST_LINK_EMAIL_DOMAIN, TEST_LINK_PATH } from "../src/test-link.ts";
+import { TEST_EMAIL_DOMAIN } from "../src/test-email-domain.ts";
 
-/** Open a browser signed in to local OS, in a project — starting the dev server and creating the project when missing */
+/** Open a browser on a project of local OS — starting the dev server and creating the project when missing */
 export default async function getin(
   options: {
-    /** who to sign in as — an address under preview.iterate.test
+    /** whose project it is — an address under preview.iterate.test
      * @alias e
      */
     email?: string;
-    /** the project to create if missing and land in (default: the email's local part — the Dash's Allow page is skipped only for that one)
+    /** the project to create if missing and land in (default: the email's local part)
      * @alias p
      */
     project?: string;
-    /** print the sign-in URL on stdout instead of opening a browser */
+    /** print the URL on stdout instead of opening a browser */
     print?: boolean;
     /** print a personal access token for the person and project on stdout instead: their bearer at /api, /mcp and the project's hosts, for 30 days */
     token?: boolean;
@@ -47,10 +46,10 @@ export default async function getin(
     dash?: string;
   } = {},
 ) {
-  const email = options.email || `test@${TEST_LINK_EMAIL_DOMAIN}`;
+  const email = options.email || `test@${TEST_EMAIL_DOMAIN}`;
   const [local, domain] = email.split("@");
-  if (!local || domain !== TEST_LINK_EMAIL_DOMAIN)
-    throw new Error(`--email must be an address under ${TEST_LINK_EMAIL_DOMAIN}, not ${email}`);
+  if (!local || domain !== TEST_EMAIL_DOMAIN)
+    throw new Error(`--email must be an address under ${TEST_EMAIL_DOMAIN}, not ${email}`);
   const project = options.project || local;
   const os = new URL("..", import.meta.url);
 
@@ -70,26 +69,17 @@ export default async function getin(
   if (options.token) return console.log(await mintToken(server.baseUrl, { email, projectId }));
 
   const dash = await localDash(options.dash || "http://localhost:5173", server.baseUrl);
-  const token = await mintTestLink({
-    // local dev's `secrets.key` (generate-wrangler-config.ts `viteWranglerConfig`)
-    key: "dev-secrets-key",
-    audience: server.baseUrl,
-    email,
-    next: dash ? `${dash}/projects/${project}` : `${server.baseUrl}/login`,
-    clients: dash ? [dash] : [],
-    expiresAt: Date.now() + 24 * 3600_000,
-  });
-  const url = `${server.baseUrl}${TEST_LINK_PATH}?${new URLSearchParams({ t: token })}`;
+  const url = dash
+    ? `${dash}/projects/${project}`
+    : `${server.baseUrl}/login?${new URLSearchParams({ email })}`;
   if (!dash)
     console.error(
       `no local Dash on this server — landing on ${server.baseUrl}/login. For the Dash: APP_CONFIG_URLS__OS=${server.baseUrl} in apps/dash/.dev.vars, then \`pnpm --dir apps/dash dev\``,
     );
-  if (dash && project !== local)
-    console.error(
-      `the Dash may ask to Allow once: a link skips that page only when project ${local} exists (apps/os/src/consent.ts)`,
-    );
+  // local dev's `login.password` (generate-wrangler-config.ts `viteWranglerConfig`)
+  console.error(`not signed in yet? sign in as ${email} with the password dev`);
   if (options.print) return console.log(url);
-  console.error(`opening ${dash ? `${dash}/projects/${project}` : server.baseUrl} as ${email}`);
+  console.error(`opening ${url}`);
   spawnSync(process.platform === "darwin" ? "open" : "xdg-open", [url], { stdio: "inherit" });
 }
 
@@ -99,7 +89,7 @@ async function createProject(baseUrl: string, input: { email: string; project: s
   const url = new URL("/api", baseUrl);
   url.protocol = "ws:";
   // The one call it makes, typed here: `iterate/api`'s types need the worker's lib (preview.ts
-  // `previewSignIn` does the same).
+  // `seedSignIn` does the same).
   using rpc = newWebSocketRpcSession<{
     authenticate(credentials: { type: "admin-secret"; secret: string; as: { email: string } }): {
       projects: {

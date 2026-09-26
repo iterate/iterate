@@ -38,11 +38,12 @@ fingerprinted `/assets/*`.
    JS graph, auth, socket and first read, live fan-out, or an optional heavy runtime. For
    route, loader, split or hydration work, also read [TanStack Start](references/tanstack-start.md).
 2. Measure on the PR's own preview, never only on local dev. The PR body lists every app's
-   preview URL (`appPreviewUrl` in `apps/os/scripts/preview-config.ts`) with a one-click
-   `Sign in ↗` link. The link signs a fresh browser in as `pr<n>@preview.iterate.test` and
-   lands in project `pr<n>`, once prd confirms the browser is an `*@nustom.com` person's; an
-   isolated session has no such prd sign-in, so sign in with the preview's password (Doppler
-   `os/preview`, `APP_CONFIG` `login.password`) instead. Use an isolated Playwriter session
+   preview URL (`appPreviewUrl` in `apps/os/scripts/preview-config.ts`) with a `Sign in ↗`
+   link. It signs the app in as `pr<n>@preview.iterate.test`, inside project `pr<n>`, once an
+   admin signed in to the preview confirms **Sign in as someone else** on the consent page. prd's
+   admins sign in through prd; an isolated session has no prd sign-in, so sign in as
+   `admin@preview.iterate.test` with the preview's password (Doppler `os/preview`, `APP_CONFIG`
+   `login.password`), then open the link. Use an isolated Playwriter session
    ([browser testing](../../../docs/browser-testing.md)), never the developer's own Chrome.
    Record cold, warm, and in-app navigation on the same route, with
    [the evidence the playbook lists](references/playbook.md#measure-what-people-get).

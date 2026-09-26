@@ -295,7 +295,7 @@ test.for([
 
 test.for([
   {
-    row: "under the test-link domain",
+    row: "under the test email domain",
     email: "ada@preview.iterate.test",
     domain: "preview.iterate.test",
     refused: false,
@@ -318,7 +318,12 @@ test.for([
     domain: "preview.iterate.test",
     refused: true,
   },
-  { row: "no test links (prd)", email: "ada@preview.iterate.test", domain: null, refused: true },
+  {
+    row: "no test email domain (prd)",
+    email: "ada@preview.iterate.test",
+    domain: undefined,
+    refused: true,
+  },
 ])("a fake provider signs in $row ⇒ refused: $refused", ({ email, domain, refused }) =>
   expect(fakeProviderEmailRefusal(email, domain) !== null).toBe(refused),
 );

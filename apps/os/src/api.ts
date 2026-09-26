@@ -116,8 +116,9 @@ function isResourceRequest(resource: string, url: URL) {
 }
 
 /** `GET /oauth2/userinfo`: who the bearer is — the person's id and email — and nothing else. The
- *  resource a client asks for when all it needs is to know who signed in (a preview's admin check,
- *  test-link.ts): a token for it reaches no project, and `/api` and `/mcp` refuse it (RFC 8707). */
+ *  resource a client asks for when all it needs is to know who signed in (a preview's admin
+ *  sign-in, admin-sign-in.ts): a token for it reaches no project, and `/api` and `/mcp` refuse it
+ *  (RFC 8707). */
 async function userinfoResponse(
   request: Request,
   _env: Env,
