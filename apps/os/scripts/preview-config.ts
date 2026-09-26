@@ -400,15 +400,15 @@ const SuiteLineOutput = z.object({
 
 /** The suites' lines their jobs handed over, one output a line; a job that handed over none (it
  *  never ran its suite, was cancelled first, or ran the slow rows alone) leaves an empty one. */
-export function parseSuiteLineOutputs(outputs: string): PreviewSuiteStatus[] {
+export function parseSuiteLineOutputs(outputs: string) {
   return outputs
     .split("\n")
     .filter((output) => output.trim())
     .map((output) => SuiteLineOutput.parse(JSON.parse(output)));
 }
 
-/** The CI trace job's one write of the suites' lines: each in its place, as its own job's write of
- *  it used to leave the body. A suite with no line here keeps the one the body has. */
+/** The CI trace job's one write of the suites' lines, each in its place (`splicePreviewSuite`). A
+ *  suite with no line here keeps the one the body has. */
 export function spliceSuiteLines(body: string, statuses: PreviewSuiteStatus[]) {
   return statuses.reduce(splicePreviewSuite, body);
 }
