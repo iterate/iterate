@@ -13,10 +13,10 @@
 # `preview reset`, which places the D1 near the laptop.
 #
 # The health job judges each scheduled run's report (scripts/monitors/latency.ts), so a run whose perf
-# suite failed stays green here. Not on main pushes: every 3 hours the baseline spans about 30 hours,
-# where a busy merge day's pushes filled it in two and a lasting regression became it. A dispatch
-# measures a branch, which the health job never judges, and redeploys the preview with the branch;
-# the next run of main puts main back.
+# suite failed stays green here. Every 3 hours rather than on main pushes, so the baseline (the last
+# 10 runs) spans about 30 hours whatever the merge rate. A dispatch measures a branch, which the
+# health job never judges, and redeploys the preview with the branch; the next run of main puts main
+# back.
 #
 # Nothing waits on it: its own concurrency group. One run at a time, since each redeploys the preview
 # the run before measures: a run that lands meanwhile queues, and a running measurement is never cut
