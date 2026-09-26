@@ -922,11 +922,11 @@ that judges what the measuring workflows left and pages #error-pulse on a change
 of state, all its pages in one message, each a red or green block with its
 details and a link to the run, then every signal's state now:
 
-- **main e2e** and **slow e2e rows**: the newest push run of Main OS e2e, from
-  its jobs' results and the suite summaries its E2E tests and Browser specs jobs
+- **main e2e** and **slow e2e rows**: each push run of Main OS e2e, from its
+  jobs' results and the suite summaries its E2E tests and Browser specs jobs
   upload with their flake records.
-- **real-model e2e**: the `REAL:` rows of the newest scheduled or push run of OS
-  real model, from its telemetry.
+- **real-model e2e**: the `REAL:` rows of each scheduled or push run of OS real
+  model, from its telemetry.
 - **latency**: each new scheduled OS latency report, against the budgets and a
   rolling baseline, red once two runs in a row cross a line.
 - **PR time to green** ([below](#pr-time-to-green)).
@@ -935,11 +935,13 @@ details and a link to the run, then every signal's state now:
 A red page mentions Jonas once. A page leaves the run green; a check that could
 not read Depot, or found its probe broken (a report with no rows, a suite that
 did not run), fails the run once the others have paged. A red main e2e run
-pages at the next hourly run, not at its own end. Its memory is its own
-`health-state` artifact; a state of another `schemaVersion` is not read, and the
-run starts over. Dispatch it with `--input test-page=true` to post every
-check's verdict as a 🧪 test page that mentions nobody, keeps no state and sends
-PostHog nothing; a run off main without it posts nothing.
+pages at the next hourly run, not at its own end, and each run since the last
+is judged, oldest first, so a page names the run where its suite changed state.
+Its memory is its own `health-state` artifact; a state of another
+`schemaVersion` is not read, and the run starts over. Dispatch it with
+`--input test-page=true` to post every check's verdict as a 🧪 test page that
+mentions nobody, keeps no state and sends PostHog nothing; a run off main
+without it posts nothing.
 
 ### PR time to green
 
