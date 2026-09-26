@@ -36,14 +36,35 @@ test("a project connects Slack through iterate's app, lists the workspace, and d
     .getByRole("dialog")
     .getByRole("button", { name: "Connect a Slack workspace", exact: true })
     .click({ noWaitAfter: true });
-  // Slack's consent, then back here, where the workspace is listed
+  // Slack's consent, then back here, where the workspace is listed and the row offers another
   const workspace = slack.getByRole("listitem");
+  await slack
+    .getByRole("button", { name: "Connect another Slack workspace", exact: true })
+    .waitFor();
   await workspace.getByRole("button", { name: "Disconnect", exact: true }).click();
   await page
     .getByRole("alertdialog")
     .getByRole("button", { name: "Disconnect", exact: true })
     .click();
   await slack.getByText("Not connected", { exact: true }).waitFor();
+});
+
+test("another service: the sheet gives the MCP command and a prompt for the person's agent that names the service", async ({
+  page,
+  baseURL,
+  helpers,
+}) => {
+  helpers.appOrigin("dash");
+  await using fixture = await helpers.createFixture("integrations-other", { app: baseURL });
+  await page.getByRole("link", { name: "Integrations", exact: true }).click();
+  await page.getByRole("button", { name: "Connect another service", exact: true }).click();
+  const sheet = page.getByRole("dialog");
+  await sheet.getByText("claude mcp add --transport http iterate", { exact: false }).waitFor();
+  await sheet.getByRole("textbox", { name: "2. The service" }).fill("Linear");
+  await sheet
+    .getByText(`Connect Linear to my iterate project "${fixture.project.slug}"`, { exact: false })
+    .waitFor();
+  await sheet.getByText('path: "/secrets/linear"', { exact: false }).waitFor();
 });
 
 test("a project connects Google through iterate's client, lists the account, and disconnects it", async ({
