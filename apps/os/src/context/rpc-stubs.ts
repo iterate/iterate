@@ -20,12 +20,16 @@ import {
 import type { IterateContextDurableObject } from "../iterate-context-durable-object.ts";
 import { isPlatformFailure, isRetryableTransportError } from "../retryable-error.ts";
 import {
+  contextAbortedOffsetOf,
+  FETCH_UPGRADE_CONTEXT_ABORTED_OFFSET_HEADER,
+  FETCH_UPGRADE_DEPLOY_ID_HEADER,
   FetchUpgradeSpliceEnd,
   reportFetchUpgradeSpliceEvent,
   type SpliceSocket,
   visitorEndOfSplice,
 } from "./fetch-upgrade-splice.ts";
-import { sendableCloseCode, truncateCloseReason } from "./websocket-close.ts";
+import { redial } from "./redial.ts";
+import { relayedCloseCode, truncateCloseReason } from "./websocket-close.ts";
 
 // ── rpc stub directory ── THE RPC STUBS, DO side: the `itx.rpcStubs` built-in's backing
 // table — physical, never event-sourced. Two layers:
@@ -576,8 +580,8 @@ async function whileClientAnswers(
  *  pager is a connection between this isolate and the DO, never the client's own socket, and it
  *  drops while the session lives — a fault on the hop between colos, a DO reset (which kills every
  *  hibernatable socket with no close handler run). A pager that closes with neither side having
- *  ended the lend is RE-DIALED: the DO's attach re-appends `appendEvents`, and the directory treats
- *  a second pager at the key as a reconnect, never a detach. */
+ *  ended the lend is RE-DIALED (redial.ts): the DO's attach re-appends `appendEvents`, and the
+ *  directory treats a second pager at the key as a reconnect, never a detach. */
 export async function lendRpcStubOverPager(
   /** Minted per use, never held: a DurableObjectStub that saw a reset replays it on every later call
    *  (Cloudflare's error-handling guide), and a re-dial after a reset must reach the fresh incarnation. */
@@ -677,7 +681,6 @@ export async function lendRpcStubOverPager(
   /** Take one accepted pager into service: the keepalive, the page answer, and what its close means. */
   const attachPager = (ws: WebSocket): void => {
     pagerWebSocket = ws;
-    ws.accept();
     /** When the DO last answered on this pager (a keepalive ack or a page), and how many keepalives
      *  it has left unanswered since. */
     let answeredAt = Date.now();
@@ -746,16 +749,10 @@ export async function lendRpcStubOverPager(
       waitUntil(redialPager({ code: event.code, reason: event.reason, answeredAt }));
     });
   };
-  /** The leg dropped under a live lend: dial again and take the new pager into service. Bounded:
-   *  five tries over ~30 s (a deploy's reset answers 503 for seconds, and in prd four tries were
-   *  too few for it, 2026-09-24), all inside 60 s of the drop — a dial the DO never answers
-   *  must not hold the loop. Tries are sequential and a dial is abandoned only when the whole
-   *  re-dial gives up: an abandoned dial the DO accepts later would otherwise REPLACE a pager a
-   *  later try brought back (the DO closes the older one with 1000, which ends the lend). A 5xx is
-   *  the DO not ready yet and is tried again; any other non-101 is its refusal (a paused stream)
-   *  and ends it. A lend recalled meanwhile ends it too, quietly: a session that is ending (a voice
-   *  board gone, its /api socket closing) often loses its pager a moment before its own end reaches
-   *  this lend, so the drop is logged with its outcome, only once the session proved live — back in
+  /** The leg dropped under a live lend: re-dial it (redial.ts) and take the new pager into service.
+   *  A lend recalled meanwhile ends the re-dial quietly: a session that is ending (a voice board
+   *  gone, its /api socket closing) often loses its pager a moment before its own end reaches this
+   *  lend, so the drop is logged with its outcome, only once the session proved live — back in
    *  service (a warn) or not (an ERROR: the client is still connected but unreachable through its
    *  key, and the prd fault alarm pages on errors). `downMs` counts from the pager's last answer,
    *  the last moment the key was known reachable: a close heard late is downtime too. */
@@ -764,83 +761,36 @@ export async function lendRpcStubOverPager(
     reason: string;
     answeredAt: number;
   }): Promise<void> => {
-    const droppedAt = Date.now();
-    let lastFailure = "";
-    const delaysMs = [0, 2_000, 4_000, 8_000, 16_000];
-    for (const [index, delayMs] of delaysMs.entries()) {
-      const attempt = index + 1;
-      if (delayMs) await new Promise((resolve) => setTimeout(resolve, delayMs));
-      if (lendEnded.reason) return;
-      const dial = dialPager();
-      let deadline: ReturnType<typeof setTimeout> | undefined;
-      let redialed: Response | null;
-      try {
-        redialed = await Promise.race([
-          dial,
-          new Promise<null>(
-            (resolve) =>
-              (deadline = setTimeout(() => resolve(null), droppedAt + 60_000 - Date.now())),
-          ),
-        ]);
-      } catch (error) {
-        // the DO did not answer (a reset in progress): the next try
-        lastFailure = error instanceof Error ? error.message : String(error);
-        continue;
-      } finally {
-        clearTimeout(deadline);
-      }
-      if (!redialed) {
-        lastFailure = "no answer within 60 s of the drop";
-        // The lend ends below, so a pager this dial brings later is closed, never taken into
-        // service: the DO un-sets what named the key when its last pager closes.
-        void dial.then(
-          (late) => {
-            late.webSocket?.accept();
-            late.webSocket?.close(1000, "re-dial gave up");
-          },
-          () => undefined,
-        );
-        break;
-      }
-      lastFailure = `the DO answered ${redialed.status}`;
-      if (redialed.status === 101 && redialed.webSocket) {
-        if (lendEnded.reason) {
-          // recalled while the dial was in flight: nothing to take into service
-          redialed.webSocket.accept();
-          redialed.webSocket.close(1000, "pager disposed");
-          return;
-        }
-        attachPager(redialed.webSocket);
-        console.warn({
-          event: "rpc-stub-pager-redialed",
-          namespace: "rpc-stubs",
-          message:
-            "a lent stub's pager dropped under a live session and is back in service; the DO re-appended what names the key",
-          rpcStubKey,
-          code: dropped.code,
-          reason: dropped.reason,
-          attempt,
-          downMs: Date.now() - dropped.answeredAt,
-        });
-        return;
-      }
-      await redialed.body?.cancel();
-      if (redialed.status < 500) break; // refused (a paused stream): the DO's answer, not a fault to retry
-    }
-    if (lendEnded.reason) return; // recalled meanwhile: the lend ended on purpose, nothing failed
-    console.error({
-      event: "rpc-stub-pager-redial-failed",
+    const redialed = await redial(dialPager, () => Boolean(lendEnded.reason));
+    if (!redialed) return;
+    const drop = {
       namespace: "rpc-stubs",
-      message:
-        "a lent stub's pager dropped under a live session and could not be re-dialed; the lend ends, and the DO un-sets what named it on the pager's close or, when the DO reset took the pager with no close run, on its next wake",
       rpcStubKey,
       code: dropped.code,
       reason: dropped.reason,
-      lastFailure,
       downMs: Date.now() - dropped.answeredAt,
+    };
+    if ("socket" in redialed) {
+      attachPager(redialed.socket);
+      console.warn({
+        event: "rpc-stub-pager-redialed",
+        message:
+          "a lent stub's pager dropped under a live session and is back in service; the DO re-appended what names the key",
+        ...drop,
+        attempt: redialed.dials,
+      });
+      return;
+    }
+    console.error({
+      event: "rpc-stub-pager-redial-failed",
+      message:
+        "a lent stub's pager dropped under a live session and could not be re-dialed; the lend ends, and the DO un-sets what named it on the pager's close or, when the DO reset took the pager with no close run, on its next wake",
+      ...drop,
+      lastFailure: redialed.gaveUp,
     });
     disposeSessionRpcStub("went offline (its pager dropped and could not be re-dialed)");
   };
+  pagerWebSocket.accept();
   attachPager(pagerWebSocket);
   // capnweb's own death signal, registered ONCE: set the shared reason AND close the pager NOW so the
   // DO returns the stub immediately — without this the presence list lies until a page times out.
@@ -1053,18 +1003,6 @@ const FetchUpgradeResume = z.object({
   deployId: z.string(),
 });
 type FetchUpgradeResume = z.infer<typeof FetchUpgradeResume>;
-/** On a dialed upgrade socket's 101 (a leg, a re-dialed eyeball): the deploy that answered it, so a
- *  re-dialing end can tell a deploy's reset from a platform failure. */
-const FETCH_UPGRADE_DEPLOY_ID_HEADER = "x-itx-deploy-id";
-/** On every upgrade socket's 101 from a context whose incarnation began with the reset a recorded
- *  `itx.abort()` asked for: that `itx/aborted` event's offset, so a re-dialing end can tell the
- *  deliberate reset from a platform failure (fetch-upgrade-splice.ts). Absent otherwise. */
-const FETCH_UPGRADE_CONTEXT_ABORTED_OFFSET_HEADER = "x-itx-context-aborted-offset";
-/** The `itx/aborted` offset a DO's 101 names (`FETCH_UPGRADE_CONTEXT_ABORTED_OFFSET_HEADER`). */
-const contextAbortedOffsetOf = (response: Response): number | null => {
-  const offset = response.headers.get(FETCH_UPGRADE_CONTEXT_ABORTED_OFFSET_HEADER);
-  return offset ? Number(offset) : null;
-};
 
 /** One upgrade socket's attachment (survives hibernation — so the upgrade does too): which
  *  upgrade it belongs to and which SIDE it is (`eyeball` = the caller's pair half, `leg` = the
@@ -1157,23 +1095,11 @@ async function dialRpcStubFetch(
       // capnweb's TunneledWebSocket dispatches the runtime's own events (MessageEvent, CloseEvent)
       local: providerSocket as unknown as SpliceSocket,
       // the provider's socket closes without a status when the tunnel's session ends
-      localGoneClose: { code: 1001, reason: "tunnel disconnected" },
+      localGoneReason: "tunnel disconnected",
       socket: leg,
       deployId: legResponse.headers.get(FETCH_UPGRADE_DEPLOY_ID_HEADER),
       contextAbortedOffset: contextAbortedOffsetOf(legResponse),
-      redial: async () => {
-        const redialed = await dialLeg();
-        if (!redialed.webSocket) {
-          await redialed.body?.cancel();
-          return null;
-        }
-        redialed.webSocket.accept();
-        return {
-          socket: redialed.webSocket,
-          deployId: redialed.headers.get(FETCH_UPGRADE_DEPLOY_ID_HEADER),
-          contextAbortedOffset: contextAbortedOffsetOf(redialed),
-        };
-      },
+      dial: dialLeg,
       report: reportFetchUpgradeSpliceEvent,
     });
   } else {
@@ -1187,7 +1113,7 @@ async function dialRpcStubFetch(
       });
       from.addEventListener("close", (ev) => {
         try {
-          to.close(sendableCloseCode(ev.code), truncateCloseReason(ev.reason || ""));
+          to.close(relayedCloseCode(ev.code), truncateCloseReason(ev.reason || ""));
         } catch {
           /* already closing */
         }
@@ -1228,25 +1154,14 @@ export function spliceEyeballAnswer(
       side: "eyeball",
       upgradeId: resume.upgradeId,
       local,
-      localGoneClose: { code: 1001, reason: "visitor disconnected" },
+      localGoneReason: "visitor disconnected",
       socket: eyeball,
       deployId: resume.deployId,
       contextAbortedOffset: contextAbortedOffsetOf(answer),
-      redial: async () => {
-        const redialed = await contextOf(resume.path).fetch("https://fetch-upgrade.internal/", {
+      dial: () =>
+        contextOf(resume.path).fetch("https://fetch-upgrade.internal/", {
           headers: { Upgrade: "websocket", [FETCH_UPGRADE_EYEBALL_HEADER]: resume.upgradeId },
-        });
-        if (!redialed.webSocket) {
-          await redialed.body?.cancel();
-          return null;
-        }
-        redialed.webSocket.accept();
-        return {
-          socket: redialed.webSocket,
-          deployId: redialed.headers.get(FETCH_UPGRADE_DEPLOY_ID_HEADER),
-          contextAbortedOffset: contextAbortedOffsetOf(redialed),
-        };
-      },
+        }),
       report: reportFetchUpgradeSpliceEvent,
     });
   });
@@ -1377,7 +1292,7 @@ export class RpcStubFetchServer {
     // oxlint-disable-next-line iterate/simple-truthiness-check -- #peerOf three-way: undefined = not ours (bail); null = ours-but-peer-gone (fall through to still close ws below)
     if (peer === undefined) return false;
     try {
-      peer?.close(sendableCloseCode(code), truncateCloseReason(reason));
+      peer?.close(relayedCloseCode(code), truncateCloseReason(reason));
     } catch {
       /* already closing */
     }
@@ -1385,7 +1300,7 @@ export class RpcStubFetchServer {
     // auto-echo a peer-initiated close, so without this the initiator (an eyeball, or the relay's
     // leg) never sees its own close confirmed and hangs until its timeout.
     try {
-      ws.close(sendableCloseCode(code), truncateCloseReason(reason));
+      ws.close(relayedCloseCode(code), truncateCloseReason(reason));
     } catch {
       /* already closing */
     }

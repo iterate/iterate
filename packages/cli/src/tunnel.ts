@@ -129,11 +129,11 @@ export class LocalPortRpcTarget extends RpcTarget {
       },
     );
     visitorSide.addEventListener("close", (event: { code?: number; reason?: string }) => {
-      local.close(sendableCloseCode(event.code), event.reason);
+      local.close(relayedCloseCode(event.code), event.reason);
     });
     local.on("close", (code, reason) => {
       try {
-        visitorSide.close(sendableCloseCode(code), reason.toString());
+        visitorSide.close(relayedCloseCode(code), reason.toString());
       } catch {
         /* already closing */
       }
@@ -151,13 +151,13 @@ export class LocalPortRpcTarget extends RpcTarget {
   }
 }
 
-/** A close code a WebSocket may send: the ones only a runtime reports (1005 none, 1006 abnormal,
- *  1015 TLS) and anything out of range become 1000. */
-function sendableCloseCode(code: number | undefined): number {
-  if (code === undefined) return 1000;
-  if (code === 1000 || (code >= 1001 && code <= 1003) || (code >= 1007 && code <= 1014))
-    return code;
-  return code >= 3000 && code <= 4999 ? code : 1000;
+/** The platform's close-code policy (apps/os src/context/websocket-close.ts `relayedCloseCode`),
+ *  copied, since this package is published on its own: no code (1005) is 1000; a drop (1006), 1015,
+ *  1004 and anything no endpoint may send become 1011. */
+function relayedCloseCode(code: number | undefined): number {
+  if (code === undefined || code === 1005) return 1000;
+  if ((code >= 1000 && code <= 1003) || (code >= 1007 && code <= 1014)) return code;
+  return code >= 3000 && code <= 4999 ? code : 1011;
 }
 
 /** undici hides the reason a dial failed (ECONNREFUSED) in `cause`. */

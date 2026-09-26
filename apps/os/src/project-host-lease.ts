@@ -18,7 +18,11 @@
 // A cookie session's connection (a browser on an app's own host) is not held: a browser cannot put
 // a bearer on a WebSocket, and a personal access token is never a cookie session.
 import { reportIssue } from "iterate/lib";
-import { truncateCloseReason } from "./context/websocket-close.ts";
+import {
+  DROPPED_CLOSE_CODE,
+  relayedCloseCode,
+  truncateCloseReason,
+} from "./context/websocket-close.ts";
 import { ControlPlane, ControlPlaneUnavailableError, type Reach } from "./control-plane/edge.ts";
 import type { Env } from "./env.ts";
 import { grantIsLive, type AccessGrant } from "./oauth.ts";
@@ -122,7 +126,7 @@ export function holdGrantLease(
 }
 
 /** A WebSocket relayed through a pair the edge owns: every message passes through, a close on
- *  either end closes the other (a drop as 1011, `relayCloseCode`), and the lease's end closes
+ *  either end closes the other (`relayedCloseCode`: a drop as 1011), and the lease's end closes
  *  both with 1008. The app's handshake headers (a chosen subprotocol) are the client's. */
 function relayed(
   answer: Response,
@@ -141,7 +145,7 @@ function relayed(
     release();
     for (const socket of [server, upstream]) {
       try {
-        socket.close(relayCloseCode(code), truncateCloseReason(reason));
+        socket.close(relayedCloseCode(code), truncateCloseReason(reason));
       } catch {
         // already closed
       }
@@ -151,15 +155,15 @@ function relayed(
     try {
       to.send(event.data);
     } catch {
-      close(1011, "Relay failed");
+      close(DROPPED_CLOSE_CODE, "Relay failed");
     }
   };
   server.addEventListener("message", forward(upstream));
   upstream.addEventListener("message", forward(server));
   server.addEventListener("close", (event) => close(event.code, event.reason));
   upstream.addEventListener("close", (event) => close(event.code, event.reason));
-  server.addEventListener("error", () => close(1011, "Connection failed"));
-  upstream.addEventListener("error", () => close(1011, "Connection failed"));
+  server.addEventListener("error", () => close(DROPPED_CLOSE_CODE, "Connection failed"));
+  upstream.addEventListener("error", () => close(DROPPED_CLOSE_CODE, "Connection failed"));
   release = hold((reason) => close(REVOKED_CLOSE_CODE, reason));
   return new Response(null, { status: 101, webSocket: client, headers: answer.headers });
 }
@@ -181,14 +185,4 @@ function piped(
     })
     .finally(release);
   return new Response(readable, answer);
-}
-
-/** A close code a WebSocket may send in place of `code`. A close frame that carried no code (1005)
- *  was an orderly close: 1000. A connection that dropped without one (1006; 1015 for TLS) did not
- *  close normally, and a client told 1000 may take the end as meant and not reconnect: 1011, as for
- *  the reserved 1004 and anything out of range. */
-function relayCloseCode(code: number): number {
-  if (code === 1005) return 1000;
-  const sendable = code >= 1000 && code < 5000 && ![1004, 1006, 1015].includes(code);
-  return sendable ? code : 1011;
 }
