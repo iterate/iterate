@@ -1206,6 +1206,57 @@ test("the app wall (`Caller.app`): on the INPUT expression only, `itx.builtins` 
   expect(row("events.iterate.com/itx/rewrite-rule-configured", null)).not.toThrow();
   expect(row("events.iterate.com/note/added", "itx.builtins.cd('/')")).not.toThrow(); // not a row
 });
+// A SOURCE PRODUCER runs at the host as the context itself when the code loads, so it is walled like
+// the call around it, at the context the walk has reached: in a call's spec and in a row's target.
+const PRODUCER_ROWS: { call: string; refused?: RegExp }[] = [
+  {
+    call: "itx.workers.get({ source: \"itx.repos.get('/repos/config').modules()\", cacheKey: 'k' }).run()",
+  },
+  {
+    call: "itx.cd('./b').workers.get({ source: \"itx.cd('./c').kv.get('src')\", cacheKey: 'k' }).run()",
+  },
+  {
+    call: "itx.workers.get({ source: \"itx.builtins.cd('/').append({ type: 'x' })\", cacheKey: 'k' }).run()",
+    refused: /not a loaded worker's word/,
+  },
+  {
+    call: "itx.facets.get('f', { source: \"itx.cd('/').append({ type: 'x' })\", className: 'F', cacheKey: 'k' }).x()",
+    refused: /goes down only/,
+  },
+  {
+    call: "itx.processors.enable('p', { source: \"itx.cd('..').kv.get('src')\", className: 'P', cacheKey: 'k' })",
+    refused: /goes down only/,
+  },
+  {
+    call: "itx.cd('./b').workers.get({ source: \"itx.cd('/agents/a').kv.get('src')\", cacheKey: 'k' }).run()",
+    refused: /goes down only/,
+  },
+];
+test.for(PRODUCER_ROWS)("the app wall walls a source producer: `$call`", ({ call, refused }) => {
+  const resolve = () => appResolverAt("/agents/a", CHILD).resolve(call);
+  if (refused) expect(resolve).toThrow(refused);
+  else expect(resolve).not.toThrow();
+});
+test("the app wall on a row walls the source producer in its target too", () => {
+  const row = (source: string) => () =>
+    admitLoadedCodeRow(
+      {
+        type: "events.iterate.com/itx/subscription-configured",
+        payload: {
+          name: "p",
+          target: [
+            "itx",
+            "facets",
+            ["get", "p", { source, className: "P", cacheKey: "k" }],
+            "processEventBatch",
+          ],
+        },
+      },
+      "/agents/a",
+    );
+  expect(row("itx.builtins.cd('/').kv.get('src')")).toThrow(/not a loaded worker's word/);
+  expect(row("itx.kv.get('src')")).not.toThrow();
+});
 test("the app wall (`Caller.app`): on the INPUT expression only, `itx.builtins` is refused and `cd` goes down only — from the root too: a row has no way round the wall: loaded code removes no row (`ifTarget`, null or not), a scheduled batch is walled event by event as it is scheduled, and a fetch route is set only from the project's root", () => {
   const append =
     (event: { type: string; payload?: unknown }, base = "/agents/a") =>
