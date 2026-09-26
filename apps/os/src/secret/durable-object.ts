@@ -49,7 +49,8 @@ import { DurableObjectNameCodec, pathUnderOwner, resourceScope } from "../contex
 import type { ItxEntrypointScope } from "../iterate-context.ts";
 import { ControlPlane } from "../control-plane/edge.ts";
 import type { IterateContextDurableObject } from "../iterate-context-durable-object.ts";
-import { grantedScopesOf, lendVerdict } from "../integrations/rules.ts";
+import { MOVE_OFFER_TTL_MS, type HeldToken } from "../integrations/connections.ts";
+import { grantedScopesOf, lendVerdict, slackTeamOfTokenResponse } from "../integrations/rules.ts";
 import { googleEndpointsOf } from "../integrations/google.ts";
 import { githubApiOriginOf } from "../integrations/github.ts";
 import { cloudflareEndpointsOf } from "../integrations/cloudflare.ts";
@@ -107,6 +108,19 @@ type OAuthPlatform = NonNullable<
 type Stored = {
   record: Omit<SecretRecord, "material"> & { material: EncryptedMaterial };
   revision: number;
+};
+
+/** A CONSENT'S EXCHANGE HELD ASIDE (storage `held`): iterate's Slack app's token for a workspace
+ *  another project's connection holds, never stored here (`completeOAuth`'s gate) — it waits,
+ *  unused, until that workspace's move here admits it (`admitHeldToken`), before `until`. Its
+ *  material encrypted like `stored`'s, at the revision it was held at: any write since (`write`,
+ *  `clear`, a new `beginOAuth`) drops it, and so do the move's failure (`dropHeldToken`) and its
+ *  expiry (`revive`, on the context's alarm). */
+type HeldExchange = Stored & {
+  nonce: string;
+  scopes: string[];
+  until: number;
+  team: { id: string; name: string };
 };
 
 /** THE LENDS of this secret (storage `lends`), by lend id: the project it is lent to (or
@@ -171,6 +185,8 @@ export class SecretDurableObject extends StreamProcessorDurableObject<
   /** When each iterate-App installation's route to this project was last read for a use
    *  (`#assertInstallationRouted`), by installation id. */
   readonly #installationRouteReadAt = new Map<string, number>();
+  /** When each iterate-Slack-app workspace's route was last read for a use (`#assertWorkspaceNotMoved`). */
+  readonly #workspaceRouteReadAt = new Map<string, number>();
 
   /** This facet's identity, from its context's name (`ctx.props`, sdk/index.ts): the context, and
    *  the PATH THE PLACEHOLDER SPELLS — the context's path relative to the resource owner's root
@@ -199,16 +215,18 @@ export class SecretDurableObject extends StreamProcessorDurableObject<
       const kept = isRecord(opened.material) ? { ...opened.material } : {};
       if (!jsonEqual(opened.refresh || null, record.refresh || null))
         for (const field of MINTED_FIELDS) delete kept[field];
+      // the workspace a token is refused for travels with it, like the pin
       record = {
         ...record,
         material: { ...kept, ...(isRecord(record.material) && record.material) },
+        routedAccount: opened.routedAccount,
       };
     }
     const revision = await this.#bump();
     await this.ctx.storage.put<Stored>("stored", await this.#sealed(record, revision));
-    // A write supersedes any OAuth attempt in flight: its callback must not overwrite this material;
-    // and material of its own replaces a borrowed record.
-    await this.ctx.storage.delete(["pending", "borrowed"]);
+    // A write supersedes any OAuth attempt in flight, a held one included: its callback must not
+    // overwrite this material; and material of its own replaces a borrowed record.
+    await this.ctx.storage.delete(["pending", "held", "borrowed"]);
   }
 
   /** The record as storage holds it: the material encrypted under the deployment's key, bound to
@@ -290,7 +308,7 @@ export class SecretDurableObject extends StreamProcessorDurableObject<
     }
     const borrowed = (await this.ctx.storage.get<Borrowed>("borrowed")) ?? null;
     await this.ctx.storage.put<EndingLends>("ending", ending);
-    await this.ctx.storage.delete(["stored", "pending", "completed", "lends", "borrowed"]);
+    await this.ctx.storage.delete(["stored", "pending", "held", "completed", "lends", "borrowed"]);
     // what the clear ended, for the built-in to end on the other side (context/built-ins.ts `delete`)
     return { lends, borrowed };
   }
@@ -497,6 +515,7 @@ export class SecretDurableObject extends StreamProcessorDurableObject<
     );
     await this.#bump(); // a new attempt is a write: an exchange started before it will not land
     await this.ctx.storage.put<PendingSecretOAuth>("pending", pending);
+    await this.ctx.storage.delete("held");
     // the nonce names this attempt to whoever finishes it (integrations/verbs.ts): the callback
     // carries it, signed, in `state`
     return { authorizationUrl, nonce };
@@ -586,31 +605,27 @@ export class SecretDurableObject extends StreamProcessorDurableObject<
    *  append failed) runs no second exchange and answers the same pin, as long as the record is still
    *  the one this attempt wrote — so the log can always catch up with a live facet. `exchanged` says
    *  which happened: THIS call wrote the record (the caller may undo it if its fact append fails), or
-   *  a replay found it. */
+   *  a replay found it. `held` says the record was NOT written: iterate's Slack app's token for a
+   *  workspace another project holds waits aside (`HeldExchange`) — the same callback again answers
+   *  it again. */
   async completeOAuth(input: { code: string; nonce: string }): Promise<{
     urls: string[];
     refresh?: SecretRefresh["kind"];
     exchanged: boolean;
     scopes: string[];
+    held?: HeldToken;
   }> {
-    const completed = await this.ctx.storage.get<{
-      nonce: string;
-      revision: number;
-      scopes: string[];
-    }>("completed");
-    if (completed?.nonce === input.nonce) {
-      const stored = await this.ctx.storage.get<Stored>("stored");
-      if (stored?.revision === completed.revision)
-        return {
-          urls: stored.record.urls,
-          refresh: stored.record.refresh?.kind,
-          exchanged: false,
-          scopes: completed.scopes,
-        };
-      throw new Error(
-        "this attempt completed, but the secret was written or cleared since — begin again",
-      );
-    }
+    const replayed = await this.#completed(input.nonce);
+    if (replayed) return { ...replayed, exchanged: false };
+    const kept = await this.ctx.storage.get<HeldExchange>("held");
+    if (kept?.nonce === input.nonce && kept.until > Date.now())
+      return {
+        urls: kept.record.urls,
+        refresh: kept.record.refresh?.kind,
+        exchanged: false,
+        scopes: kept.scopes,
+        held: { externalId: kept.team.id, account: kept.team.name, until: kept.until },
+      };
     const pending = await this.ctx.storage.get<PendingSecretOAuth>("pending");
     if (!pending || pending.nonce !== input.nonce)
       throw new Error("no pending attempt matches this callback — begin again");
@@ -620,8 +635,9 @@ export class SecretDurableObject extends StreamProcessorDurableObject<
     }
     const started = await this.ctx.storage.get<number>("revision");
     const credentials = await this.#oauthClientOf(pending.options);
-    // What the provider says it granted, off the token response (rules.ts `grantedScopesOf`).
+    // What the provider says it granted, and the Slack workspace, off the token response (rules.ts).
     let scopes: string[] = [];
+    const answered: { team: ReturnType<typeof slackTeamOfTokenResponse> } = { team: null };
     const record = await completeSecretOAuth(
       pending,
       input.code,
@@ -629,25 +645,133 @@ export class SecretDurableObject extends StreamProcessorDurableObject<
         if (!originPinned(exchange.url, pending.options.urls))
           throw new Error(`the token endpoint ${new URL(exchange.url).origin} is outside the pin`);
         const response = await dispatch(exchange);
-        scopes = grantedScopesOf(
-          await response
-            .clone()
-            .json()
-            .catch(() => null),
-          pending.options.scope || "",
-        );
+        const answer: unknown = await response
+          .clone()
+          .json()
+          .catch(() => null);
+        scopes = grantedScopesOf(answer, pending.options.scope || "");
+        answered.team = slackTeamOfTokenResponse(answer);
         return response;
       },
       credentials,
     );
+    const { client } = pending.options;
+    const slackTeam =
+      client && "platform" in client && client.platform === "slack" ? answered.team : null;
+    if (slackTeam) record.routedAccount = { provider: "slack", externalId: slackTeam.id };
+    // read before the fence, which only storage awaits may follow
+    const hold = Boolean(slackTeam && (await this.#routedToAnotherProject(slackTeam.id)));
+    const until = Date.now() + MOVE_OFFER_TTL_MS;
+    // the context's alarm revives this facet when the offer runs out, which drops the token
+    if (hold) await this.withItx((itx) => itx.processors.claim(this.ctx.props.name, until));
     if ((await this.ctx.storage.get<number>("revision")) !== started)
       throw new Error(
         "the secret was changed while the provider was answering — the tokens were discarded; begin again",
       );
+    if (slackTeam && hold) {
+      const held: HeldExchange = {
+        ...(await this.#sealed(record, started ?? 0)),
+        nonce: input.nonce,
+        scopes,
+        until,
+        team: slackTeam,
+      };
+      await this.ctx.storage.put<HeldExchange>("held", held);
+      await this.ctx.storage.delete("pending");
+      return {
+        urls: record.urls,
+        refresh: record.refresh?.kind,
+        exchanged: true,
+        scopes,
+        held: { externalId: slackTeam.id, account: slackTeam.name, until },
+      };
+    }
     await this.write(record);
     const revision = await this.ctx.storage.get<number>("revision");
     await this.ctx.storage.put("completed", { nonce: input.nonce, revision, scopes });
     return { urls: record.urls, refresh: record.refresh?.kind, exchanged: true, scopes };
+  }
+
+  /** What the attempt `nonce` completed, while the record is still the one it wrote (a replay's
+   *  answer), or null; one it completed that was written or cleared since is refused. */
+  async #completed(
+    nonce: string,
+  ): Promise<{ urls: string[]; refresh?: SecretRefresh["kind"]; scopes: string[] } | null> {
+    const completed = await this.ctx.storage.get<{
+      nonce: string;
+      revision: number;
+      scopes: string[];
+    }>("completed");
+    if (completed?.nonce !== nonce) return null;
+    const stored = await this.ctx.storage.get<Stored>("stored");
+    if (stored?.revision !== completed.revision)
+      throw new Error(
+        "this attempt completed, but the secret was written or cleared since — begin again",
+      );
+    return {
+      urls: stored.record.urls,
+      refresh: stored.record.refresh?.kind,
+      scopes: completed.scopes,
+    };
+  }
+
+  /** THE GATE ON ITERATE'S SLACK APP'S TOKENS: one for a workspace another project's connection
+   *  holds is never stored here, where egress would substitute it, but held aside until that
+   *  workspace moves here; and one stored here is refused on use once another project holds the
+   *  workspace (`#assertWorkspaceNotMoved`) — as iterate's GitHub App's tokens are used only while
+   *  their installation is routed here (`#assertInstallationRouted`). A project's own app routes
+   *  nothing. */
+  async #routedToAnotherProject(teamId: string): Promise<boolean> {
+    const route = await new ControlPlane(this.env).integrationRouteOf("slack", teamId);
+    const { projectId } = DurableObjectNameCodec.parse(this.#address().context);
+    return Boolean(route && route.projectId !== projectId);
+  }
+
+  /** THE HELD TOKEN ADMITTED (the platform's move of its workspace here, integrations/verbs.ts
+   *  `confirmIntegrationMove`, once the route is this project's): the record written like any other,
+   *  while nothing was written since it was held and before it expires, then marked `completed` — so
+   *  the same call again, after the built-in's fact failed, answers the same without a second write.
+   *  Answers the pin and the strategy kind, what the fact carries. */
+  async admitHeldToken(input: {
+    nonce: string;
+  }): Promise<{ urls: string[]; refresh?: SecretRefresh["kind"] }> {
+    const replayed = await this.#completed(input.nonce);
+    if (replayed) return replayed;
+    const held = await this.ctx.storage.get<HeldExchange>("held");
+    if (held?.nonce !== input.nonce)
+      throw new Error("no token is held for this consent any more — connect again");
+    await this.ctx.storage.delete("held");
+    const revision = (await this.ctx.storage.get<number>("revision")) ?? 0;
+    if (held.until <= Date.now() || revision !== held.revision)
+      throw new Error(
+        "the token held for this consent expired, or the secret was written since — connect again",
+      );
+    const { material } = await decryptSecretMaterial(
+      held.record.material,
+      { context: this.#address().context, urls: held.record.urls, revision: held.revision },
+      this.#keys(),
+    );
+    await this.write({ ...held.record, material });
+    await this.ctx.storage.put("completed", {
+      nonce: input.nonce,
+      revision: await this.ctx.storage.get<number>("revision"),
+      scopes: held.scopes,
+    });
+    return { urls: held.record.urls, refresh: held.record.refresh?.kind };
+  }
+
+  /** THE REVIVE the context's alarm owes this facet — also when a held token's offer ran out
+   *  (`completeOAuth` claims it for `until`): that token is dropped first. */
+  override async revive(): Promise<void> {
+    const held = await this.ctx.storage.get<HeldExchange>("held");
+    if (held && held.until <= Date.now()) await this.ctx.storage.delete("held");
+    await super.revive();
+  }
+
+  /** THE HELD TOKEN DROPPED: its move failed, so it will never be admitted. */
+  async dropHeldToken(input: { nonce: string }): Promise<void> {
+    const held = await this.ctx.storage.get<HeldExchange>("held");
+    if (held?.nonce === input.nonce) await this.ctx.storage.delete("held");
   }
 
   /** Substitute, pin, dispatch — refresh and retry once on a mintable miss or a 401. A refusal is
@@ -733,6 +857,7 @@ export class SecretDurableObject extends StreamProcessorDurableObject<
         );
       let stored = await read();
       if (stored) await this.#assertInstallationRouted(stored.record.refresh);
+      if (stored) await this.#assertWorkspaceNotMoved(stored.record.routedAccount);
       // This facet answers for ONE secret: a placeholder naming another is refused here, not only
       // at the egress that routed the request (the facet is the boundary that holds the bytes).
       const resolve = (named: string) => {
@@ -809,6 +934,23 @@ export class SecretDurableObject extends StreamProcessorDurableObject<
       );
     }
     this.#installationRouteReadAt.set(installationId, Date.now());
+  }
+
+  /** A WORKSPACE'S TOKEN IS REFUSED ONCE IT MOVED: iterate's Slack app's token for a workspace
+   *  another project's connection now holds (a move took it while this project's cleanup had not
+   *  run) — re-read at most every INSTALLATION_ROUTE_RECHECK_MS, like an installation's. A workspace
+   *  no project holds is not refused: its connect routes it after the token's first use. */
+  async #assertWorkspaceNotMoved(routed: SecretRecord["routedAccount"]): Promise<void> {
+    if (!routed) return;
+    const readAt = this.#workspaceRouteReadAt.get(routed.externalId);
+    if (readAt !== undefined && Date.now() - readAt < INSTALLATION_ROUTE_RECHECK_MS) return;
+    if (await this.#routedToAnotherProject(routed.externalId)) {
+      this.#workspaceRouteReadAt.delete(routed.externalId);
+      throw new SecretRefused(
+        `itx.fetch: Slack workspace ${routed.externalId} is connected to another project`,
+      );
+    }
+    this.#workspaceRouteReadAt.set(routed.externalId, Date.now());
   }
 
   #refresh(revision: number): Promise<void> {

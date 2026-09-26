@@ -223,19 +223,27 @@ A GitHub installation iterate's App already has connects without GitHub's config
 asks for sudo and carries no state of ours back): `connectIntegration({ provider: "github",
 installationId, platformOrigin, … })` sends the human straight to authorize the App, and the code
 proves they administer it as above. The Dash lists those installations from the person's GitHub
-sign-in (`GET /user/installations` with its token, through their own egress). An installation
-another project holds is not refused: once the human proved they administer it, the callback lands
-on `next` with a signed, ten-minute offer (`?move=`, naming the holder only when the human can see
-it), and the project facet's `confirmGithubMove({ offer })` moves the route in one D1 batch that
-re-points it only while the holder still holds that installation (`moveIntegrationRoute`), connects
-it here, and disconnects the holder's connection only while it still names that installation
-(`github/disconnected { reason: "moved" }`, its secret gone). A move that fails to connect puts both
-installations' routes back, the destination's previous one included. When the holder's cleanup
-fails, the confirmation says so and the same offer retries the cleanup alone; the offer works once
-otherwise. Either way the holder stops using the installation: a secret facet re-reads an
-iterate-App installation's route at most every 30 s of use (`#assertInstallationRouted`) and refuses
-a token for one routed elsewhere, from any secret path. The human need not be a member of the
-holder. Slack still refuses a team another project holds.
+sign-in (`GET /user/installations` with its token, through their own egress).
+
+An account another project holds is not refused, for either provider with webhook routes. A GitHub
+installation is offered once the human proved they administer it. A Slack workspace is offered once
+Slack's own consent finished: Slack lets only someone who may install apps there install into it,
+which is the proof. The token Slack issued is never stored in this project first: iterate's Slack
+app's token for a workspace another project holds is held aside in the secret facet, encrypted and
+unused, until the move admits it (`admitHeldToken`), and dropped when the move fails or the secret is
+written again. Either callback lands on `next` with a signed, ten-minute offer (`?move=`, naming the
+holder only when the human can see it), and the project facet's `confirmIntegrationMove({ offer })`
+moves the route in one D1 batch that re-points it only while the holder still holds that account
+(`moveIntegrationRoute`), connects it here, and disconnects the holder's connection only while it
+still names that account (`<provider>/disconnected { reason: "moved" }`, its secret gone; Slack's
+token is not revoked, because Slack keeps one bot token per app and workspace, the one now connected
+here). A move that fails to connect puts the routes back, the destination's previous one included,
+and keeps no token here. When the holder's cleanup fails, the confirmation says so and the same offer
+retries the cleanup alone; the offer works once otherwise. Either way the holder stops using the
+account: a secret facet re-reads the route of an iterate-App installation, or of iterate's Slack
+app's workspace, at most every 30 s of use and refuses a token for one routed to another project
+(`#assertInstallationRouted`, `#assertWorkspaceNotMoved`). The human need not be a member of the
+holder.
 
 iterate's apps each receive every account's webhooks on one URL
 (`POST /api/integrations/slack/webhook` and `/interactivity-webhook`, and
