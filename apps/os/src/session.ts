@@ -444,8 +444,9 @@ async function borrowEveryProjectLends(
  *  platform cut is therefore sent ONCE more, on a fresh stub (retryable-error.ts): a deploy
  *  resetting the owner's Durable Object, expected on every deploy under traffic, logs
  *  `session.deploy-reset-platform-fact-retry`; a lost connection or a storage reset logs
- *  `session.platform-failure-platform-fact-retry`, which the prd fault alarm counts. A second
- *  failure, and any other, is reported, as oauth.ts reports a grant use it could not record. */
+ *  `session.platform-failure-platform-fact-retry` named `platform-fact`, which the prd fault alarm
+ *  counts by name. A second failure, and any other, is reported, as oauth.ts reports a grant use
+ *  it could not record. */
 export function publishPlatformFacts(
   input: Pick<SessionInput, "contextNamespace" | "waitUntil">,
   owner: FactOwner,
@@ -461,10 +462,12 @@ export function publishPlatformFacts(
         if (isDeployReset(error))
           return {
             event: "session.deploy-reset-platform-fact-retry",
+            name: "platform-fact",
             ...attributes,
             message: String(error),
           };
-        if (isPlatformFailure(error)) return { ...attributes, message: String(error) };
+        if (isPlatformFailure(error))
+          return { name: "platform-fact", ...attributes, message: String(error) };
         return undefined;
       },
     }).catch((error) => reportIssue("session.platform-fact-not-recorded", error, attributes)),

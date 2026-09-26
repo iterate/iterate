@@ -154,6 +154,7 @@ test.for([
   expect(getByName).toHaveBeenCalledTimes(1 + retries.length); // each attempt on a fresh stub
   expect(warn.mock.calls.map(([line]) => line)).toEqual(
     retries.map((retry) => ({
+      name: "platform-fact",
       path: "/users/u1",
       type: keyedFact.type,
       attempt: 1,
