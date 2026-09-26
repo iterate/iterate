@@ -14,6 +14,7 @@ import {
   adminSession,
   projectWithMember,
   refused,
+  readLog,
   signedInSession,
   stub,
   until,
@@ -132,11 +133,11 @@ test("a revocation that could not tell its project fails, and revoked again, it 
   expect((await project.itx.secrets.list()).map((row: { path: string }) => row.path)).not.toContain(
     "/secrets/kept",
   );
-  const lenderLog = (await stub(
+  const lenderLog = await readLog(
     DurableObjectNameCodec.stringify({ projectId: GLOBAL_PROJECT_ID, path: name }),
-  ).invoke(["itx", ["readEvents", 0, 500]])) as { events: StreamEvent[] };
+  );
   expect(
-    lenderLog.events.filter((event) => event.type === "events.iterate.com/secret/lend-revoked"),
+    lenderLog.filter((event) => event.type === "events.iterate.com/secret/lend-revoked"),
   ).toHaveLength(1);
   await global.secrets.delete(name);
 });
@@ -161,11 +162,11 @@ test("a revocation of a lend to every project that could not tell one project fa
   expect(await pathsOf(untold)).toContain(as);
   await global.secrets.revokeLend(name, lendId);
   expect(await pathsOf(untold)).not.toContain(as);
-  const lenderLog = (await stub(
+  const lenderLog = await readLog(
     DurableObjectNameCodec.stringify({ projectId: GLOBAL_PROJECT_ID, path: name }),
-  ).invoke(["itx", ["readEvents", 0, 500]])) as { events: StreamEvent[] };
+  );
   expect(
-    lenderLog.events.filter((event) => event.type === "events.iterate.com/secret/lend-revoked"),
+    lenderLog.filter((event) => event.type === "events.iterate.com/secret/lend-revoked"),
   ).toHaveLength(1);
   await global.secrets.delete(name);
 });

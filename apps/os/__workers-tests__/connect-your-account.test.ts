@@ -26,6 +26,7 @@ import {
   petshopFakes,
   projectWithMember,
   refused,
+  readLog,
   signedInMember,
   stub,
   until,
@@ -554,13 +555,7 @@ async function personalLends(member: Member, path: string) {
 
 /** The person's secret's own log. */
 async function personalLog(member: Member, path: string): Promise<StreamEvent[]> {
-  const { actor } = await member.session.whoami();
-  const name = DurableObjectNameCodec.stringify({
-    projectId: GLOBAL_PROJECT_ID,
-    path: `/users/${actor}${path}`,
-  });
-  return ((await stub(name).invoke(["itx", ["readEvents", 0, 500]])) as { events: StreamEvent[] })
-    .events;
+  return readLog(await personalSecretName(member, path));
 }
 
 /** Why each project's use of the person's secret ended, as their secret recorded it. */
@@ -587,10 +582,7 @@ async function personalSecretName(member: Member, path: string) {
 
 /** The facts of one type on a context's log. */
 async function factsOf(name: string, type: string): Promise<StreamEvent[]> {
-  const { events } = (await stub(name).invoke(["itx", ["readEvents", 0, 500]])) as {
-    events: StreamEvent[];
-  };
-  return events.filter((event) => event.type === `events.iterate.com/${type}`);
+  return (await readLog(name)).filter((event) => event.type === `events.iterate.com/${type}`);
 }
 
 /** Every `google/connected` on a project's root. */

@@ -1191,7 +1191,6 @@ function GithubInstallations({
             headers: {
               accept: "application/vnd.github+json",
               authorization: `Bearer getSecret("${secretPath}", { field: "accessToken" })`,
-              "user-agent": "iterate",
             },
           }),
         );

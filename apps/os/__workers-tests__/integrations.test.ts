@@ -19,6 +19,7 @@ import {
   ORIGIN,
   petshopFakes,
   projectWithMember,
+  readLog,
   stub,
 } from "./support.ts";
 
@@ -1037,10 +1038,7 @@ function base64(base64url: string) {
 
 /** Every `github/disconnected` on a project's root. */
 async function disconnectedFacts(projectId: string) {
-  const { events } = (await stub(projectId).invoke(["itx", ["readEvents", 0, 500]])) as {
-    events: StreamEvent[];
-  };
-  return events
+  return (await readLog(projectId))
     .filter((event) => event.type === "events.iterate.com/github/disconnected")
     .map((event) => event.payload);
 }
