@@ -98,8 +98,9 @@ function clockSocket() {
 
 function end(side, local, socket) {
   return new FetchUpgradeSpliceEnd({
-    side, upgradeId: "u", local, localGoneClose: { code: 1001, reason: "gone" }, socket,
-    deployId: "d", contextAbortedOffset: null, redial: async () => null, report: reportFetchUpgradeSpliceEvent,
+    side, upgradeId: "u", local, localGoneReason: "gone", socket, deployId: "d",
+    contextAbortedOffset: null, dial: async () => { throw new Error("no re-dial here"); },
+    report: reportFetchUpgradeSpliceEvent,
   });
 }
 

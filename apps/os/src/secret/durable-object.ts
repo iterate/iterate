@@ -46,6 +46,7 @@ import {
   type AppConfigEnv,
 } from "../app-config.ts";
 import { DurableObjectNameCodec, pathUnderOwner, resourceScope } from "../context/paths.ts";
+import { DROPPED_CLOSE_CODE, relayedCloseCode } from "../context/websocket-close.ts";
 import type { ItxEntrypointScope } from "../iterate-context.ts";
 import { ControlPlane } from "../control-plane/edge.ts";
 import type { IterateContextDurableObject } from "../iterate-context-durable-object.ts";
@@ -1025,20 +1026,17 @@ function proxyFrames(upstream: Response, paths: string[], material: SecretMateri
     }
   });
   outbound.addEventListener("message", (event) => inbound.send(event.data));
-  // 1005 (no code) and 1006 (abnormal) are never sent on the wire: relayed as no code, and as a
-  // going-away.
   const relayClose = (to: WebSocket) => (event: CloseEvent) => {
     try {
-      if (event.code === 1005) to.close();
-      else to.close(event.code === 1006 ? 1001 : event.code, event.reason);
+      to.close(relayedCloseCode(event.code), event.reason);
     } catch {
       // already closed
     }
   };
   inbound.addEventListener("close", relayClose(outbound));
   outbound.addEventListener("close", relayClose(inbound));
-  inbound.addEventListener("error", () => closeBoth(1011, "caller socket error"));
-  outbound.addEventListener("error", () => closeBoth(1011, "upstream socket error"));
+  inbound.addEventListener("error", () => closeBoth(DROPPED_CLOSE_CODE, "caller socket error"));
+  outbound.addEventListener("error", () => closeBoth(DROPPED_CLOSE_CODE, "upstream socket error"));
   const protocol = upstream.headers.get("sec-websocket-protocol");
   return new Response(null, {
     status: 101,
