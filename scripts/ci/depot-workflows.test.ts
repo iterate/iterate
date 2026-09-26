@@ -726,10 +726,7 @@ test("Main OS e2e names its checks as Preview OS does and traces them the same w
   );
 });
 
-// ONE DEFINITION in each workflow, and the same one in both: Browser specs is E2E tests' runner and
-// steps (YAML aliases), the two differing only in the suite their env names. Main's steps are a PR
-// preview's less its guard and its PR's checkouts; every step they share runs the same command and
-// uploads the same files.
+// Why the two suite jobs share one definition: .depot/workflows/main-os-e2e.yml.
 test("Main OS e2e's two suite jobs are one definition, a PR preview's suite steps on its runner", () => {
   const source = readFileSync(resolve(repoRoot, ".depot/workflows/main-os-e2e.yml"), "utf8");
   const main = loadWorkflow(".depot/workflows/main-os-e2e.yml");

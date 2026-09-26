@@ -12,17 +12,11 @@
 # preview delete --name latency`) and let this workflow's deploy create it again, never a laptop's
 # `preview reset`, which places the D1 near the laptop.
 #
-# The hourly health job (health.yml, scripts/monitors/latency.ts) judges each scheduled run's report:
-# every measurement to PostHog (`os latency measured`), and a page to #error-pulse when a metric
-# crosses its budget or regresses sharply against its rolling baseline two runs in a row, green once
-# it is back. A broken probe fails the health run. A run whose perf suite failed stays green here: the
-# report is the evidence, and the health job its judge.
-#
-# Not on main pushes: every 3 hours the baseline (the last 10 runs) spans about 30 hours, where a busy
-# merge day's pushes filled it in two and a lasting regression became it. A regression pages 3 to 6
-# hours after it lands (two crossings in a row). A dispatch measures a branch, which the health job
-# never judges (it reads scheduled runs only), and redeploys the preview with the branch; the next run
-# of main puts main back.
+# The health job judges each scheduled run's report (scripts/monitors/latency.ts), so a run whose perf
+# suite failed stays green here. Not on main pushes: every 3 hours the baseline spans about 30 hours,
+# where a busy merge day's pushes filled it in two and a lasting regression became it. A dispatch
+# measures a branch, which the health job never judges, and redeploys the preview with the branch;
+# the next run of main puts main back.
 #
 # Nothing waits on it: its own concurrency group. One run at a time, since each redeploys the preview
 # the run before measures: a run that lands meanwhile queues, and a running measurement is never cut
