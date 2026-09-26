@@ -36,7 +36,7 @@ const LOOKBACK_HOURS = 26;
 /** A breach that lasts pages every third hourly run. */
 const PAGE_REPEAT_HOURS = 3;
 
-const ACCOUNTS = [
+export const ACCOUNTS = [
   {
     dopplerConfig: "dev",
     label: "dev/preview",
@@ -53,14 +53,15 @@ const ACCOUNTS = [
   {
     dopplerConfig: "prd",
     label: "prd",
-    // Pre-incident baseline ~100 DO-hours/hour. Since 2026-09-03 11:00 the
-    // standalone os-next/IterateContextDurableObject sits ~540 on top
-    // (not this repo's; routed to its owner) — ≈ $3/hour, visible in the
-    // headline every hour without a reply. ≈ $3.40/hour ceiling.
-    maxAccountDoHours: 600,
-    // ≈ 2,130 DO-hours/hour, 3.6× the ceiling like dev/preview; prd's worst
-    // breach on record ran ~880 ≈ $4.95/h (09-04..08).
-    pageUsdPerHour: 12,
+    // The account's hourly total, 2026-08-25..09-26: p50 1.0, p95 1.1, busiest
+    // hour 1.7 DO-hours. Most of it is tunnels-prd's one CaptunServerShard
+    // (another repo's Worker), awake while a tunnel is open; os-prd runs
+    // 0.01–1. 2× the p95; the probe reads whole DO-hours, so a breach is an
+    // hour of 2.5 or more. ≈ $0.01/hour.
+    maxAccountDoHours: 2,
+    // 5× the ceiling, about ten Durable Objects that never go idle: an alarm
+    // loop or a pinned facet pages long before it costs money. ≈ $0.06/hour.
+    pageUsdPerHour: 10 * USD_PER_DO_HOUR,
   },
 ];
 
