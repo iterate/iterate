@@ -624,14 +624,10 @@ async function deployOsPreview(
       `expected preview URL ${previewUrl(previewName)}, but wrangler returned ${url}`,
     );
   }
-  // The readiness gate is apps/os's smoke, asked as soon as `wrangler preview` returns: each probe
-  // asks which version its edge runs, the id `/version` answers with (src/worker.ts), and then what
-  // `/version` cannot show — a brand-new preview's Durable Objects answer `internal error;
-  // reference = …` for seconds after its edge serves, and a preview redeployed in place still runs
-  // the previous version in places (preview-readiness.ts). Nothing is handed on — the PR body's
-  // links, the sign-in seed, the e2e job — until three rounds of eight in a row answer in full on
-  // this deployment. A preview that does not within 150 s fails the deploy, naming what it
-  // answered: the slowest of 17 in-place soak redeploys took 58 s (2026-09-25).
+  // apps/os's smoke is the readiness gate (preview-readiness.ts), asked as soon as `wrangler
+  // preview` returns. Nothing is handed on — the PR body's links, the sign-in seed, the e2e job —
+  // until three rounds of eight in a row answer in full on this deployment. A preview that does not
+  // within 150 s fails the deploy: the slowest of 17 in-place soak redeploys took 58 s (2026-09-25).
   await traceOperation("Readiness gate", () =>
     awaitPreviewReady(url, {
       adminSecret: parseAppConfig(
