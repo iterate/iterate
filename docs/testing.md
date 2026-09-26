@@ -143,9 +143,11 @@ so exclusion is always visible where the test lives: `deployedOnly`,
 `apps/os/e2e/support/project-host.ts` are the one gate each ("never copy the regex").
 
 Smoke-testing a deployment: `apps/os/scripts/deploy.ts` probes the deployment
-it just made (`/version`), the preview deploy waits for `/version` to name the
-new deployment and for every client's `/healthz`, and production's deploy runs
-only those non-mutating readiness probes plus a read-only check of the project
+it just made (`/version`), the preview deploy waits for the readiness gate
+(`apps/os/scripts/preview-readiness.ts`), whose probes check that the edge and
+brand-new contexts run the new version, and for every client's `/healthz`, and
+production's deploy runs only non-mutating smoke probes (`/version`, OAuth
+discovery, each client's `/healthz`) plus a read-only check of the project
 hosts (`scripts/ci/prd-post-deploy-check.ts`). The mutating suites run on
 isolated previews: the PR's, and Main OS e2e's own preview, redeployed with
 each main push.
