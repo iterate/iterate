@@ -1,17 +1,29 @@
 import { createRouter } from "@tanstack/react-router";
+import { createIsomorphicFn } from "@tanstack/react-start";
+import { getRequest } from "@tanstack/react-start/server";
 import {
   DefaultErrorComponent,
   DefaultNotFoundComponent,
   DefaultPendingComponent,
 } from "@iterate-com/ui/components/route-defaults";
+import { basePathOf, basePathRewrite, documentBasePath } from "./base-path.ts";
 import { routeTree } from "./routeTree.gen.ts";
+
+/** The base path this page is served under (base-path.ts): the request's in the server render,
+ *  the document's in the browser. */
+const basePath = createIsomorphicFn()
+  .server(() => basePathOf(getRequest().headers))
+  .client(() => documentBasePath());
 
 // routeTree.gen.ts registers `router: ReturnType<typeof getRouter>` on Start's Register interface,
 // so this function's inferred return type IS the app's router type. Components passed as options
 // are wrapped in lambdas so checking them doesn't traverse the registered router types (TS7023).
 export function getRouter() {
+  const base = basePath();
   return createRouter({
     routeTree,
+    context: { basePath: base },
+    rewrite: basePathRewrite(base),
     defaultPreload: "intent",
     scrollRestoration: true,
     defaultErrorComponent: (props) => <DefaultErrorComponent {...props} />,

@@ -19,4 +19,11 @@ export default defineConfig({
     viteReact(),
     tailwindcss(),
   ],
+  experimental: {
+    // A chunk's preloaded dependencies resolve beside it, not at the origin's root: a proxied Notes
+    // serves its chunks under a base path (src/base-path.ts). Only the browser's scripts: a `?url`
+    // stays a root path that the page prefixes itself, the same in the server render and the browser.
+    renderBuiltUrl: (filename, { hostType, ssr }) =>
+      !ssr && hostType === "js" && filename.endsWith(".js") ? { relative: true } : undefined,
+  },
 });
