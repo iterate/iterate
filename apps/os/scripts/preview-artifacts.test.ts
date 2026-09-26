@@ -2,6 +2,7 @@ import { expect, test, vi } from "vitest";
 import { CloudflareApiError } from "../../../scripts/lib/env-context.ts";
 import {
   deleteArtifactsNamespace,
+  ensureArtifactsNamespace,
   renderStuckArtifactsNamespacesPage,
   type Cf,
 } from "./preview-artifacts.ts";
@@ -173,6 +174,59 @@ test("an accepted namespace delete is confirmed by three reads before it counts 
   expect(api.requests.filter((request) => request === `GET ${ROUTE}`)).toHaveLength(4);
 });
 
+// ── a namespace create that meets another create of it in flight (409/10306 or 409/10201) ──────
+
+test.for([
+  {
+    name: "409/10306 (activation already in progress)",
+    code: 10306,
+    readsBeforeActive: 3,
+    waits: [2000, 2000],
+    logs: [
+      { event: "preview.artifacts-namespace-activating", refusedWith: 10306, read: 1 },
+      { event: "preview.artifacts-namespace-activating", refusedWith: 10306, read: 2 },
+      `found Artifacts namespace ${NAMESPACE} once its activation landed`,
+    ],
+    requests: [
+      `GET ${ROUTE}`,
+      "POST /artifacts/namespaces",
+      `GET ${ROUTE}`,
+      `GET ${ROUTE}`,
+      `GET ${ROUTE}`,
+    ],
+  },
+  {
+    name: "409/10201 (already exists)",
+    code: 10201,
+    readsBeforeActive: 1,
+    waits: [],
+    logs: [`found Artifacts namespace ${NAMESPACE} once its activation landed`],
+    requests: [`GET ${ROUTE}`, "POST /artifacts/namespaces", `GET ${ROUTE}`],
+  },
+])(
+  "a create answering $name reads the namespace until the other create lands, each wait logged",
+  async ({ code, readsBeforeActive, waits, logs, requests }) => {
+    const api = fakeArtifactsApi([], createInFlight(code, readsBeforeActive));
+
+    expect(await ensuring(api.cf)).toMatchObject({ error: undefined, waits, logs });
+    expect(api).toMatchObject({ requests });
+  },
+);
+
+test("an activation that never lands gives up after 30 reads 2 s apart — bounded", async () => {
+  const api = fakeArtifactsApi([], createInFlight(10306, Number.POSITIVE_INFINITY));
+
+  const outcome = await ensuring(api.cf);
+
+  expect(outcome).toMatchObject({
+    error: {
+      message: `Artifacts namespace ${NAMESPACE} still reads 404 after 30 reads 2 s apart; its create answered 409/10306, another create of it in flight`,
+    },
+  });
+  expect(outcome.waits.reduce((sum, ms) => sum + ms, 0)).toBe(58_000);
+  expect(api.requests.filter((request) => request === `GET ${ROUTE}`)).toHaveLength(31);
+});
+
 test("the sweep's page names each stuck namespace, what to escalate, and the run", () => {
   const page = renderStuckArtifactsNamespacesPage(
     [{ namespace: NAMESPACE, repoCount: 1, createdAt: "2026-09-22T13:11:36Z" }],
@@ -234,6 +288,31 @@ function fakeArtifactsApi(
     throw new Error(`unexpected ${method} ${path}`);
   }) as Cf;
   return { cf, requests, state: () => ({ repos: [...repos], namespaceExists }) };
+}
+
+/** Cloudflare's answers while another create of the namespace is in flight: a create answers 409
+ *  with `code`, and the namespace reads 404 `readsBeforeActive` times before its row. */
+function createInFlight(code: number, readsBeforeActive: number) {
+  let reads = 0;
+  return (method: string, path: string) => {
+    if (method === "POST") return new CloudflareApiError(method, path, 409, [{ code }]);
+    if (path === ROUTE && reads++ < readsBeforeActive)
+      return new CloudflareApiError(method, path, 404, [{ code: 10200 }]);
+    return undefined;
+  };
+}
+
+/** Ensure the namespace with every wait recorded instead of slept; its logs. */
+async function ensuring(cf: Cf) {
+  const waits: number[] = [];
+  const log = vi.spyOn(console, "log").mockImplementation(() => {});
+  const error = await ensureArtifactsNamespace(cf, NAMESPACE, async (ms) => {
+    waits.push(ms);
+  }).then(
+    () => undefined,
+    (failure: Error) => failure,
+  );
+  return { error, waits, logs: log.mock.calls.map(([entry]) => entry) };
 }
 
 /** Delete the namespace with every wait recorded instead of slept; its warns, split. */
