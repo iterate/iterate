@@ -69,18 +69,20 @@ test("Preview OS names each job for the check it is: deploy, then the two suites
   expect(runs("deploy")).not.toContain(suiteRun);
 });
 
-// ONE DEFINITION: Browser specs is E2E tests' runner and steps (YAML aliases), and the two jobs
-// differ only in the suite their env names and in the dispatch that skips them.
+// ONE DEFINITION: Browser specs is E2E tests' runner, outputs and steps (YAML aliases), and the two
+// jobs differ only in the suite their env names and in the dispatch that skips them.
 test("Preview OS's two suite jobs are one definition, differing only in the suite they name", () => {
   const [e2e, specs] = [preview.jobs.e2e!, preview.jobs.specs!];
   expect(specs).toMatchObject({
     steps: e2e.steps,
+    outputs: e2e.outputs,
     "runs-on": e2e["runs-on"],
     "timeout-minutes": e2e["timeout-minutes"],
   });
   // written once: the second job aliases the first's
   expect(source.match(/^ {4}steps: \*suite-steps$/gmu)).toHaveLength(1);
   expect(source.match(/^ {4}runs-on: \*suite-runner$/gmu)).toHaveLength(1);
+  expect(source.match(/^ {4}outputs: \*suite-outputs$/gmu)).toHaveLength(1);
   const suiteEnv = ["SUITE", "FLAKE_SUITE", "TEST_TELEMETRY_EXPECTED_WORKSPACES"];
   const shared = (env: Record<string, string> = {}) =>
     Object.fromEntries(Object.entries(env).filter(([name]) => !suiteEnv.includes(name)));
@@ -145,6 +147,29 @@ test("Preview OS deploys the PR merged into main, and the test jobs use that ver
   expect(
     preview.jobs.trace!.steps?.find((step) => step.name === "Record the traced commit")?.env,
   ).toEqual({ HEAD_SHA: "${{ needs.deploy.outputs.head-sha }}" });
+});
+
+// A suite's check turns green or red without waiting on GitHub: its step hands its line over as the
+// job's output (apps/os/scripts/preview.ts `handOverSuiteLine`), and the trace job, after both,
+// writes the two into the PR body in one write, before anything that could fail the trace.
+test("Preview OS: the suites hand their lines to the trace job, which writes both into the PR body at once", () => {
+  for (const suite of suites)
+    expect(preview.jobs[suite.job]!).toMatchObject({
+      outputs: { status: "${{ steps.suite.outputs.status }}" },
+    });
+  const steps = preview.jobs.trace!.steps || [];
+  const write = steps.findIndex((step) => step.name === "Write the suites' lines into the PR body");
+  expect(steps[write]).toMatchObject({
+    run: "pnpm preview suite-lines",
+    env: {
+      PREVIEW_PR_NUMBER: "${{ env.PR_NUMBER }}",
+      PREVIEW_SUITE_LINES: suites
+        .map((suite) => `\${{ needs.${suite.job}.outputs.status }}`)
+        .join("\n"),
+    },
+  });
+  expect(write).toBe(steps.findIndex((step) => step.name === "Reconcile dependencies (baked)") + 1);
+  expect(write).toBeLessThan(steps.findIndex((step) => step.id === "trace"));
 });
 
 test("Preview OS: only the trace runs after the suites, so the next push's deploy waits for nothing else", () => {

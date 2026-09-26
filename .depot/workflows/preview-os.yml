@@ -9,15 +9,16 @@
 #                    `pr<n>` of the parent worker `os` (and of each app's), and writes the URL, the
 #                    tested commit and the operations into the PR body, under a status line:
 #                    deploying, deployed or deploy failed
-#   E2E tests        after Deploy preview: the vitest e2e suite against the preview, its line under
-#                    the status line (passed or failed), then its test telemetry and flake records.
-#                    The rows tagged `slow` run only when the PR carries the `slow-e2e` label or
-#                    edits one of them (SLOW_ROW_PATHS) (docs/testing.md#slow-rows)
+#   E2E tests        after Deploy preview: the vitest e2e suite against the preview, its line for
+#                    the PR body (passed or failed) as its `status` output, then its test telemetry
+#                    and flake records. The rows tagged `slow` run only when the PR carries the
+#                    `slow-e2e` label or edits one of them (SLOW_ROW_PATHS) (docs/testing.md#slow-rows)
 #   Browser specs    beside E2E tests: the Playwright specs, the same way, and the Playwright report.
 #                    One job definition, E2E tests', differing only in the suite it names
-#   CI trace         after all three, whatever their outcome, reporting only: the CI trace
-#                    (docs/ci-traces.md), an artifact plus the "CI trace" and "Playwright report"
-#                    commit statuses, which open them in the ci-reports viewer
+#   CI trace         after all three, whatever their outcome, reporting only: the two suites' lines
+#                    under the status line, in one write; the CI trace (docs/ci-traces.md), an
+#                    artifact plus the "CI trace" and "Playwright report" commit statuses, which
+#                    open them in the ci-reports viewer
 #
 # E2E TESTS AND BROWSER SPECS ARE REQUIRED CHECKS (docs/pull-requests.md), so each reports on every
 # pull request, and the workflow has no `paths` filter: GitHub leaves a required check "Pending" when
@@ -180,8 +181,9 @@ jobs:
         run: doppler run -- pnpm preview "$ACTION"
 
   # THE TWO SUITES, E2E tests and Browser specs: one job each, side by side after the deploy, and ONE
-  # DEFINITION. Browser specs runs E2E tests' runner and steps (the `suite-runner` and `suite-steps`
-  # anchors); the two differ only in the suite their env names and in which dispatch skips them.
+  # DEFINITION. Browser specs runs E2E tests' runner, outputs and steps (the `suite-runner`,
+  # `suite-outputs` and `suite-steps` anchors); the two differ only in the suite their env names and
+  # in which dispatch skips them.
   # E2E tests is the full mutating proof (docs/testing.md): the vitest e2e suite, whose project-
   # creating rows this isolated preview owns (production runs only its deploy-script readiness
   # probes). Browser specs is the browser proof: the root Playwright specs (specs/AGENTS.md) against
@@ -190,6 +192,10 @@ jobs:
   # REQUIRED CHECKS: each skips only for a PR that changes no preview path, or a dispatch of the other
   # suite alone. `always()` starts it behind any deploy, and its first step fails it when there is no
   # deployed preview to test: a failed or cancelled deploy, or a test-only dispatch that names none.
+  #
+  # THE SUITE'S LINE in the PR body is the CI trace job's to write, after both suites: the suite's
+  # step hands it over as the job's `status` output (apps/os/scripts/preview.ts `handOverSuiteLine`),
+  # so the check turns green or red without waiting on GitHub.
   #
   # 2x8 RUNNERS: both suites wait on a remote preview. On 4x16 they peaked at 2.1 vCPUs and 3.2 GB,
   # and on 2x8 their p50 is within 6 s of 4x16's (measured 2026-09-24;
@@ -217,6 +223,8 @@ jobs:
       TEST_TELEMETRY_ARTIFACT_DIR: test-results/ci-telemetry/raw
       TEST_TELEMETRY_BRANCH: ${{ github.head_ref || github.ref_name }}
       TEST_TELEMETRY_PULL_REQUEST_NUMBER: ${{ env.PR_NUMBER }}
+    outputs: &suite-outputs
+      status: ${{ steps.suite.outputs.status }}
     steps: &suite-steps
       # EVIDENCE PER JOB ATTEMPT (docs/depot-ci.md#artifacts-per-job-attempt): the artifacts this job
       # uploads carry its attempt's id, so a retry's uploads sit beside the failed attempt's instead of
@@ -374,14 +382,16 @@ jobs:
       TEST_TELEMETRY_ARTIFACT_DIR: test-results/ci-telemetry/raw
       TEST_TELEMETRY_BRANCH: ${{ github.head_ref || github.ref_name }}
       TEST_TELEMETRY_PULL_REQUEST_NUMBER: ${{ env.PR_NUMBER }}
+    outputs: *suite-outputs
     steps: *suite-steps
 
-  # THE CI TRACE (docs/ci-traces.md), reporting only: the Depot timings and `@@ci-trace` markers of
-  # the jobs it needs as trace.html and trace.json, this job's artifact, then two commit statuses
-  # opening the ci-reports viewer (apps/ci-reports): "CI trace", whose description is the time to
-  # green (the last test job's success) or to red (the first failed job), and "Playwright report",
-  # the Browser specs job's HTML report. After the three settle, whatever their outcome; never when
-  # none ran, nor for a PR that changes no preview path. Main OS e2e has the same job
+  # THE SUITES' LINES AND THE CI TRACE (docs/ci-traces.md), reporting only: the two suites' lines in
+  # the PR body, then the Depot timings and `@@ci-trace` markers of the jobs it needs as trace.html
+  # and trace.json, this job's artifact, then two commit statuses opening the ci-reports viewer
+  # (apps/ci-reports): "CI trace", whose description is the time to green (the last test job's
+  # success) or to red (the first failed job), and "Playwright report", the Browser specs job's HTML
+  # report. After the three settle, whatever their outcome; never when none ran, nor for a PR that
+  # changes no preview path. Main OS e2e has the same job less the suites' lines, as it has no PR
   # (scripts/ci/depot-workflows.test.ts keeps them alike).
   trace:
     name: CI trace
@@ -407,6 +417,20 @@ jobs:
         run: echo "CI_TRACE_STATUS_SHA=${HEAD_SHA:-$(git rev-parse HEAD)}" >> "$GITHUB_ENV"
       - name: Reconcile dependencies (baked)
         run: node scripts/depot-ci/dependencies.mjs install
+      # THE SUITES' LINES under the PR body's status line, both in one write, from the lines their
+      # jobs handed over (one a line; a suite that handed over none keeps its line). First, so a
+      # trace that cannot be collected costs no line; a write that fails is a warning.
+      - name: Write the suites' lines into the PR body
+        timeout-minutes: 2
+        working-directory: apps/os
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          PREVIEW_PR_NUMBER: ${{ env.PR_NUMBER }}
+          PREVIEW_SUITE_LINES: |-
+            ${{ needs.e2e.outputs.status }}
+            ${{ needs.specs.outputs.status }}
+        run: pnpm preview suite-lines
       # The Depot organization token CI telemetry uses (Doppler _shared/preview) reads the workflow
       # and its jobs' logs; only `@@ci-trace` lines are kept.
       - name: Collect the trace
