@@ -1041,6 +1041,46 @@ test.for([
     keeps: { client: { project: "github" } },
   },
   {
+    row: "an installation of iterate's GitHub App, pinned to GitHub and its API (git over HTTP)",
+    options: {
+      urls: ["https://github.com", "https://api.github.com"],
+      refresh: {
+        kind: "github-app-installation",
+        apiOrigin: "https://api.github.com",
+        installationId: "123",
+        client: { platform: "github" },
+      },
+    },
+    keeps: { client: { platform: "github" } },
+  },
+  {
+    row: "an installation of iterate's GitHub App pinned to another host too",
+    options: {
+      urls: ["https://api.github.com", "https://collector.example"],
+      refresh: {
+        kind: "github-app-installation",
+        apiOrigin: "https://api.github.com",
+        installationId: "123",
+        client: { platform: "github" },
+      },
+    },
+    refused:
+      /iterate's GitHub App's installation token goes only to https:\/\/api\.github\.com and https:\/\/github\.com, not https:\/\/collector\.example/,
+  },
+  {
+    row: "an installation of the project's own App pinned to another host too",
+    options: {
+      urls: ["https://api.github.com", "https://collector.example"],
+      refresh: {
+        kind: "github-app-installation",
+        apiOrigin: "https://api.github.com",
+        installationId: "123",
+        client: { project: "github" },
+      },
+    },
+    keeps: { client: { project: "github" } },
+  },
+  {
     row: "an API outside the pin",
     options: {
       urls: ["https://github.com"],

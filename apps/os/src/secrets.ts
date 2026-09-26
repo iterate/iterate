@@ -160,6 +160,20 @@ export function normalizeSecretRecord(
         throw new Error(
           'secrets: refresh.client is { platform: "github" } or { project: "github" }',
         );
+      if (client.platform === "github") {
+        // iterate's App's token acts for whichever project holds the installation's route, and a
+        // project that loses it must not keep a copy: it goes only to GitHub, its API and git over
+        // HTTP (github.com beside api.github.com; one origin for an Enterprise Server or a fake)
+        const github = [
+          endpoint.origin,
+          endpoint.origin === "https://api.github.com" ? "https://github.com" : endpoint.origin,
+        ];
+        const stray = urls.find((url) => !github.includes(url));
+        if (stray)
+          throw new Error(
+            `secrets: iterate's GitHub App's installation token goes only to ${[...new Set(github)].join(" and ")}, not ${stray}`,
+          );
+      }
       refresh = {
         kind,
         apiOrigin: endpoint.origin,
