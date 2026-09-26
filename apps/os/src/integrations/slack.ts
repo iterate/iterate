@@ -226,30 +226,20 @@ function slackMoveOffered(
 
 /** A WORKSPACE MOVED HERE (verbs.ts `confirmIntegrationMove`, its route this connection's already):
  *  the token the consent's exchange held aside stored in the connection's secret, `auth.test` through
- *  egress proving it names that workspace, then `slack/connected`. A failure after the token went in
- *  keeps no token here: the connection had none (a connection that holds a workspace is only ever
- *  asked for more of the same one), so its secret is deleted again. */
+ *  egress proving it names that workspace, then `slack/connected`. On a failure the confirm drops
+ *  what the consent left (`dropHeldSlackToken`): the connection had no token of its own (one that
+ *  holds a workspace is only ever asked for more of the same one). */
 export async function connectMovedSlackTeam(
   scope: IntegrationScope,
   connection: string,
   attempt: ConnectionAttempt,
   move: IntegrationMove,
 ): Promise<void> {
-  // A refusal stored nothing, and leaves whatever the secret holds alone. (An admit whose fact
-  // failed stored the token: its use is refused while another project holds the workspace,
-  // secret/durable-object.ts `#assertWorkspaceNotMoved`, and the rollback gives it back.)
   await admitHeldToken(scope, connection, move.heldTokenNonce || "");
-  try {
-    const identity = await slackIdentityOf(scope, attempt.origin, connection);
-    if (identity.teamId !== move.externalId)
-      throw new Error(
-        `Slack's auth.test names workspace ${identity.teamId}, not ${move.externalId}`,
-      );
-    await slackConnected(scope, connection, attempt, identity);
-  } catch (error) {
-    await deleteTokenSecret(scope, "slack", connection);
-    throw error;
-  }
+  const identity = await slackIdentityOf(scope, attempt.origin, connection);
+  if (identity.teamId !== move.externalId)
+    throw new Error(`Slack's auth.test names workspace ${identity.teamId}, not ${move.externalId}`);
+  await slackConnected(scope, connection, attempt, identity);
 }
 
 /** The held token stored in the connection's secret (secret/durable-object.ts `admitHeldToken`): the
@@ -269,13 +259,15 @@ async function admitHeldToken(scope: IntegrationScope, connection: string, nonce
   );
 }
 
-/** A move that failed before its token was stored: the held token dropped. */
+/** WHAT A FAILED MOVE LEFT OF ITS CONSENT, gone: the held token, or the token its admit stored while
+ *  the secret still holds that one (deleted like any other); a write since is someone else's. */
 export async function dropHeldSlackToken(
   scope: IntegrationScope,
   connection: string,
   nonce: string,
 ): Promise<void> {
-  await scope.env.ITERATE_CONTEXT.getByName(
+  // the built-in's own answer (context/built-ins.ts `dropHeldToken`)
+  const left = (await scope.env.ITERATE_CONTEXT.getByName(
     DurableObjectNameCodec.stringify({ projectId: scope.projectId, path: "/" }),
   ).invoke(
     [
@@ -286,7 +278,8 @@ export async function dropHeldSlackToken(
     ],
     [],
     { principal: null, platform: true },
-  );
+  )) as "held" | "admitted" | "gone";
+  if (left === "admitted") await deleteTokenSecret(scope, "slack", connection);
 }
 
 /** The workspace the connection's token is for: Slack's `auth.test` through egress. */
