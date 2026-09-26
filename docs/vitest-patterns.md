@@ -34,7 +34,7 @@ Every new or edited test follows these nine rules.
    quiet window for a test. Unit tests use fake timers or an injected clock. A
    Workers row may move the clock past a production constant it imports
    (`vi.useFakeTimers({ toFake: ["Date"] })`, `vi.setSystemTime`, then
-   `runDurableObjectAlarm`, as `facet-birth-reset.test.ts` does). A timer the
+   `runDurableObjectAlarm`, as the sweep rows in `facets.test.ts` do). A timer the
    clock cannot move, such as an in-memory watchdog or re-check, is waited out,
    and so is every timer in e2e. A row whose real wait takes it past its
    suite's budget is marked: an e2e row is tagged `slow`
