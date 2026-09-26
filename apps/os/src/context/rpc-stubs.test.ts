@@ -213,9 +213,10 @@ test("a relay registers onRpcBroken on the session's stub ONCE per session, not 
 // ── rpc stub relay ── A PAGE'S LEND THE PLATFORM FAILED IS LENT AGAIN. A relay's connection to
 // the DO can drop under a burst of lends, and workerd fails every lend in flight with a retryable
 // "Network connection lost.". The relay lends again on a fresh stub (a re-lend replaces the key's
-// stub, so a repeat is harmless) after 0, 1 and 3 s, inside the DO's 10 s page timeout, each repeat
-// a `rpc-stubs.platform-failure-relend` warn. A lend that still fails, or fails with the DO's own
-// error, is one `rpc-stub-lend-failed` warn: the DO's page times out and a push waiting on it is lost.
+// stub, so a repeat is harmless) on the RELAY_BURST schedule, inside the DO's 10 s page timeout,
+// each repeat a `rpc-stubs.platform-failure-retry` warn. A lend that still fails, or fails with the
+// DO's own error, is one `rpc-stub-lend-failed` warn: the DO's page times out and a push waiting on
+// it is lost.
 
 test.for([
   {
@@ -224,7 +225,7 @@ test.for([
     transportCut: true,
     outcome: "lent again at once",
     tries: 2,
-    events: ["rpc-stubs.platform-failure-relend"],
+    events: ["rpc-stubs.platform-failure-retry"],
   },
   {
     lendFails: "on every try with the transport cut",
@@ -233,9 +234,10 @@ test.for([
     outcome: "four tries in 4 s, then given up",
     tries: 4,
     events: [
-      "rpc-stubs.platform-failure-relend",
-      "rpc-stubs.platform-failure-relend",
-      "rpc-stubs.platform-failure-relend",
+      "rpc-stubs.platform-failure-retry",
+      "rpc-stubs.platform-failure-retry",
+      "rpc-stubs.platform-failure-retry",
+      "rpc-stubs.platform-failure-gave-up",
       "rpc-stub-lend-failed",
     ],
   },
@@ -296,6 +298,7 @@ test("a lend recalled while its repeat waits is not lent again, and its failure 
   vi.useFakeTimers();
   onTestFinished(() => void vi.useRealTimers());
   const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  vi.spyOn(Math, "random").mockReturnValue(0.5); // the 1 s wait jittered to 750 ms
   const session = { dup: () => session, onRpcBroken() {}, [Symbol.dispose]() {} };
   const pager = new FakePagerWebSocket();
   let lendTries = 0;
@@ -315,14 +318,14 @@ test("a lend recalled while its repeat waits is not lent again, and its failure 
     (p) => void waitedUntil.push(p),
   );
   pager.page();
-  await vi.advanceTimersByTimeAsync(500); // the first try and its repeat at 0 ms failed; the next waits 1 s
+  await vi.advanceTimersByTimeAsync(500); // the first try and its repeat at 0 ms failed; the next waits 750 ms
   relay.dispose();
   await vi.advanceTimersByTimeAsync(4_000);
   await Promise.all(waitedUntil);
   expect(lendTries).toBe(2);
   expect(warn.mock.calls.map(([line]) => (line as { event: string }).event)).toEqual([
-    "rpc-stubs.platform-failure-relend",
-    "rpc-stubs.platform-failure-relend",
+    "rpc-stubs.platform-failure-retry",
+    "rpc-stubs.platform-failure-retry",
   ]);
 });
 

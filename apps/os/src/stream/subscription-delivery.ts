@@ -8,7 +8,7 @@
 //     delivery chain per subscription;
 //   • anything else cannot own progress, so THE STREAM KEEPS A CURSOR for it (a `subscription_cursors`
 //     row, never in the log): the awaited call IS the ack, one bounded retry ladder (1s·2ⁿ, ≤30 min,
-//     15 attempts, `retryable: false` halts at once) then a `subscription-delivery-halted` fact; an
+//     15 attempts, PERMANENT_FAILURE halts at once) then a `subscription-delivery-halted` fact; an
 //     operator's `subscription-delivery-resumed` un-halts and may seek. Retries ride the DO's own
 //     alarm (facets have none, workerd#6810 — which is why this is kernel code, not a facet processor).
 //
@@ -35,6 +35,7 @@
 
 import type { ItxExpression } from "iterate/expression";
 import { errorCode, reportIssue, withTimeout } from "iterate/lib";
+import { durableLadderDelayMs } from "@iterate-com/shared/platform-retry";
 import type { StreamPage } from "iterate/api";
 import { type StreamEvent, consumesEvent, type ScannedRange } from "iterate/stream/processor";
 import { callOn, walkSteps, FacetHandle, RpcStubHandle } from "../context/dispatch.ts";
@@ -82,14 +83,13 @@ const CURSOR_READ_BUDGET_CHARS = 8 * 1024 * 1024;
  *  payloads the same way the in-flight budget does (above). */
 const PENDING_PUSHES_TOTAL_BUDGET_CHARS = 8 * 1024 * 1024;
 
-/** A failure that can only repeat — halt the row now, not after the ladder: `retryable: false`, our
- *  own stamp (processor.ts's ReduceCheckpointTable; workerd only ever sets `retryable: true`), or one
- *  of OUR codes that a retry cannot change (a target that is not callable, a checkpoint or an event
- *  over its ceiling). Never NO_ITX_EXPRESSION_MATCH: a target nothing resolves DANGLES
- *  (`danglingUnder`), it is not halted. */
+/** A failure that can only repeat — halt the row now, not after the ladder: a subscriber's
+ *  PERMANENT_FAILURE, or one of OUR codes that a retry cannot change (a target that is not callable,
+ *  a checkpoint or an event over its ceiling). Never NO_ITX_EXPRESSION_MATCH: a target nothing
+ *  resolves DANGLES (`danglingUnder`), it is not halted. */
 const deterministicFailure = (error: unknown): boolean =>
-  (error as { retryable?: unknown } | null)?.retryable === false ||
   [
+    "PERMANENT_FAILURE",
     "NOT_A_METHOD",
     "REDUCE_CHECKPOINT_TOO_LARGE",
     "EVENT_TOO_LARGE",
@@ -1024,10 +1024,7 @@ export class SubscriptionDelivery {
               this.#haltCursorRow(name, row, cursor, attempt, error);
               return;
             }
-            const backoff =
-              // 1s·2ⁿ, topped at half an hour
-              Math.min(1000 * 2 ** (attempt - 1), 30 * 60_000) * (0.8 + Math.random() * 0.4);
-            const nextAttemptAtMs = Date.now() + Math.round(backoff);
+            const nextAttemptAtMs = Date.now() + durableLadderDelayMs(attempt);
             // The ladder's time IS the row's claim from here (durable, so it survives eviction).
             this.#adoptCursor(name, { ...cursor, attempt, nextAttemptAtMs }, true);
             return;

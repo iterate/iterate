@@ -3,8 +3,9 @@ import { readFileSync } from "node:fs";
 import { Octokit } from "@octokit/rest";
 
 import {
-  PLATFORM_FAILURE_DELAYS_MS,
+  CI_HTTP,
   retryPlatformFailures,
+  type FailureKind,
 } from "@iterate-com/shared/platform-retry";
 
 export function getOctokit() {
@@ -17,7 +18,7 @@ export function getOctokit() {
 
 /** Every CI script's Octokit: one that asks again when GitHub itself fails an idempotent call. */
 export function createOctokit(auth: string | undefined) {
-  return retryGithubPlatformFailures(new Octokit({ auth }), PLATFORM_FAILURE_DELAYS_MS);
+  return retryGithubPlatformFailures(new Octokit({ auth }), CI_HTTP.delaysMs);
 }
 
 /**
@@ -41,12 +42,11 @@ export function retryGithubPlatformFailures(octokit: Octokit, delaysMs: readonly
       (idempotentMethods.has(options.method) || repeatableRoutes.has(route)) &&
       options.request?.askOnce !== true;
     return retryPlatformFailures(async () => request(options), {
-      event: "github.platform-failure-retry",
-      delaysMs: repeatable ? delaysMs : [],
-      platformFailure: (error) => {
-        const failure = githubPlatformFailure(error);
-        return failure && { route, ...failure };
-      },
+      area: "github",
+      schedule: { ...CI_HTTP, delaysMs },
+      idempotent: repeatable,
+      kind: githubFailureKind,
+      describe: (error) => ({ route, ...githubFailureFields(error) }),
     });
   });
   return octokit;
@@ -58,20 +58,28 @@ const repeatableRoutes = new Set(["POST /repos/{owner}/{repo}/statuses/{sha}"]);
 /**
  * `@octokit/request` throws an `HttpError` for every failure: with a `response` when GitHub
  * answered, without one when `fetch` itself failed (connection reset, DNS), which it reports as
- * status 500. An abort is rethrown as the `AbortError` it is, and is not GitHub's failure.
- * Returns what to log for a GitHub-side failure (its request id is what GitHub support asks
- * for), else undefined.
+ * status 500. A 5xx or a failed connection is GitHub's failure; an abort is rethrown as the
+ * `AbortError` it is, and is not GitHub's failure.
  */
-function githubPlatformFailure(error: unknown) {
-  if (!(error instanceof Error) || error.name !== "HttpError") return undefined;
-  const { status, response } = error as Error & {
-    status: number;
-    response?: { headers: Record<string, string | undefined> };
-  };
+function githubFailureKind(error: unknown): FailureKind {
+  if (!(error instanceof Error) || error.name !== "HttpError") return "failed";
+  const { status, response } = githubHttpError(error);
+  return !response || status >= 500 ? "disconnected" : "refused";
+}
+
+/** What to log for GitHub's failure: its request id is what GitHub support asks for. */
+function githubFailureFields(error: unknown) {
+  if (!(error instanceof Error)) return {};
+  const { status, response } = githubHttpError(error);
   if (!response) return { status: "network", message: error.message };
-  if (status < 500) return undefined;
   return { status, requestId: response.headers["x-github-request-id"], message: error.message };
 }
+
+/** `@octokit/request`'s `HttpError`, as the two readers above use it: asserted, since both only
+ *  compare `status` and read `response` when it is there, and `describe` runs only on the errors
+ *  `githubFailureKind` found to be GitHub's. */
+const githubHttpError = (error: Error) =>
+  error as Error & { status: number; response?: { headers: Record<string, string | undefined> } };
 
 export function getRepo() {
   const repository = process.env.GITHUB_REPOSITORY;

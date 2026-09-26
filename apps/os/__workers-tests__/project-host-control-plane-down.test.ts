@@ -11,11 +11,23 @@ import { expect, type MockInstance, onTestFinished, test, vi } from "vitest";
 import { catalog, type CatalogRead, interceptCatalogReads, signedInSession } from "./support.ts";
 
 test.for([
-  ["throws", "internal error; reference = workers-test", false],
-  ["is cut", "D1_ERROR: Network connection lost.", true],
+  {
+    name: "throw workerd's opaque internal error",
+    how: "throws",
+    message: "internal error; reference = workers-test",
+    kind: "overloaded",
+    retryAfter: "10",
+  },
+  {
+    name: "are cut",
+    how: "is cut",
+    message: "D1_ERROR: Network connection lost.",
+    kind: "disconnected",
+    retryAfter: "1",
+  },
 ] as const)(
-  "the control plane's reads %s: a project host answers 503 at once, the failure logged once as the platform's",
-  async ([how, message, retryable]) => {
+  "the control plane's reads $name: a project host answers 503 at once, the failure logged once as the platform's",
+  async ({ how, message, kind, retryAfter }) => {
     const { host } = await catalogOnlyProject(`down-${how.replace(" ", "-")}`);
     // a host under the wildcard reads its project's row, never the hostname table
     failReads(how, ["project"]);
@@ -24,13 +36,13 @@ test.for([
     const started = Date.now();
     const refused = await call(host);
     expect(Date.now() - started).toBeLessThan(1_000);
-    await expectUnavailable(refused, new URL(host).hostname);
+    await expectUnavailable(refused, new URL(host).hostname, retryAfter);
     expect(controlPlaneWarns(warn)).toEqual([
       {
         event: "control-plane.platform-failure-d1",
+        kind,
         name: "project",
         waitedMs: expect.any(Number),
-        retryable,
         message: `The control plane failed project: ${message}`,
       },
     ]);
@@ -67,7 +79,7 @@ test("a signed-in visitor while admission found the control plane down: a 503 be
   const outage = failReads("throws", ["projectByHostname", "accessibleTo"]);
 
   const refused = await call(host, { authorization: `Bearer ${visitor.token}` });
-  await expectUnavailable(refused, new URL(host).hostname);
+  await expectUnavailable(refused, new URL(host).hostname, "10");
   expect(outage.reads.accessibleTo).not.toHaveBeenCalled();
 });
 
@@ -83,13 +95,13 @@ test("a signed-in visitor whose access read fails while admission read through: 
 
   const refused = await call(host, { authorization: `Bearer ${visitor.token}` });
   vi.useRealTimers();
-  await expectUnavailable(refused, new URL(host).hostname);
+  await expectUnavailable(refused, new URL(host).hostname, "10");
   expect(controlPlaneWarns(warn)).toEqual([
     expect.objectContaining({ event: "control-plane.platform-failure-d1", name: "accessibleTo" }),
   ]);
 });
 
-test("/api while the control plane's reads hang: projects.get answers a retryable ControlPlaneUnavailableError at its 3 s deadline, logged once, and the late answer serves the next call", async () => {
+test("/api while the control plane's reads hang: projects.get answers UNAVAILABLE (overloaded) at its 3 s deadline, logged once, and the late answer serves the next call", async () => {
   const session = await signedInSession(
     `api-deadline-${crypto.randomUUID().slice(0, 8)}@example.com`,
   );
@@ -110,10 +122,11 @@ test("/api while the control plane's reads hang: projects.get answers a retryabl
     (error: unknown) => error,
   );
   const waited = performance.now() - started;
-  expect(refusal).toMatchObject({ retryable: true, method: "accessibleTo", waitedMs: 3_000 });
-  expect(String(refusal)).toContain(
-    "The control plane failed accessibleTo: no answer within 3000 ms",
-  );
+  expect(refusal).toMatchObject({
+    code: "UNAVAILABLE",
+    data: { kind: "overloaded", retryAfterMs: 10_000 },
+    message: "The control plane failed accessibleTo: no answer within 3000 ms",
+  });
   expect(waited).toBeGreaterThanOrEqual(2_900);
   expect(waited).toBeLessThan(4_500);
   expect(controlPlaneWarns(warn)).toEqual([
@@ -138,12 +151,15 @@ function controlPlaneWarns(warn: MockInstance<typeof console.warn>) {
     .filter((entry) => String(entry?.event).startsWith("control-plane."));
 }
 
-/** The project host's 503 when the control plane is down. */
-async function expectUnavailable(response: Response, hostname: string) {
+/** The project host's 503 when the control plane is down, with the Retry-After of its kind. */
+async function expectUnavailable(response: Response, hostname: string, retryAfter: string) {
   expect(response).toMatchObject({ status: 503 });
-  expect(response.headers.get("cache-control")).toBe("no-store");
+  expect(Object.fromEntries(response.headers)).toMatchObject({
+    "cache-control": "no-store",
+    "retry-after": retryAfter,
+  });
   expect(await response.text()).toBe(
-    `503: the platform could not look up ${hostname} just now; try again in a minute\n`,
+    `503: the platform could not look up ${hostname} just now; try again shortly\n`,
   );
 }
 

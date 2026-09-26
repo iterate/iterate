@@ -10,9 +10,10 @@ import { createHash } from "node:crypto";
 import { AwsClient } from "aws4fetch";
 import { z } from "zod";
 import {
+  CI_HTTP,
   HttpAnswerError,
-  httpPlatformFailure,
-  PLATFORM_FAILURE_DELAYS_MS,
+  httpFailureFields,
+  httpFailureKind,
   retryPlatformFailures,
 } from "@iterate-com/shared/platform-retry";
 import { FlakeSuiteSummary } from "@iterate-com/shared/test-support/flake-suite-summary";
@@ -241,9 +242,11 @@ async function ciBucket(input: { accountId: string; bucketName: string; apiToken
         );
       },
       {
-        event: "flake-dashboard.platform-failure-retry",
-        delaysMs: PLATFORM_FAILURE_DELAYS_MS,
-        platformFailure: (error) => httpPlatformFailure(error, { what }),
+        area: "flake-dashboard",
+        schedule: CI_HTTP,
+        idempotent: true,
+        kind: httpFailureKind,
+        describe: (error) => ({ what, ...httpFailureFields(error) }),
       },
     );
   return {

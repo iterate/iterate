@@ -32,6 +32,7 @@ import type {
   WorkerSource,
 } from "iterate/api";
 import { projectPublicUrlOf, type IngressRouting } from "iterate/project-ingress";
+import { failureKind, ONCE_NOW, retryPlatformFailures } from "@iterate-com/shared/platform-retry";
 import { stampCaller, type Caller } from "../caller.ts";
 import { FIRST_PARTY_FACET_CLASSES, firstPartyFacetClassOf } from "../first-party-facets.ts";
 import { ScheduleKey, ScheduleReceipt, type ScheduledAppend } from "../stream/scheduled-appends.ts";
@@ -62,7 +63,6 @@ import {
   type FetchRouteTable,
 } from "../fetch-routes.ts";
 import { normalizeSecretOAuth } from "../secret-oauth.ts";
-import { isDeployReset } from "../retryable-error.ts";
 import { FacetHandle, RpcStubHandle, materializeItxHandleReference } from "./dispatch.ts";
 import { assertFacetPlacement, assertLoadedCodePlacement } from "./first-party-facet-placement.ts";
 import {
@@ -1842,14 +1842,10 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
         const siblingPath = resolveContextPath(base, contextPath);
         // Global contexts are addressed by identity, never navigated through cd.
         if (projectId === GLOBAL_PROJECT_ID)
-          throw Object.assign(
-            codedError(
-              "FORBIDDEN",
-              "a global context is reached by identity (session.user, session.organizations), never by path",
-            ),
-            { retryable: false },
+          throw codedError(
+            "FORBIDDEN",
+            "a global context is reached by identity (session.user, session.organizations), never by path",
           );
-        const context = deps.context(siblingPath); // a ReachableContext
         // The caller crosses with the call — the sibling runs it under the same Caller, so an event
         // appended there is attributed too — stamped with the context it originated at (once, at the
         // first hop) so a relative path there still means the caller's.
@@ -1861,27 +1857,24 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
           stampCallerHeaders(headers, hopCaller);
           headers.set(ITX_EXPRESSION_FETCH_HEADER, encodeFetchExpression(terminalFetch.steps));
           const request = new Request(terminalFetch.request, { headers });
-          // A DEPLOY that resets the sibling under the fetch is expected: a Request that cannot do
-          // anything twice — a GET or HEAD with no body, never an upgrade — is sent once more, to the
-          // sibling's fresh incarnation on a fresh stub. Anything else fails, and the expression
-          // fetch answers it 503 (iterate-context-durable-object.ts).
-          const replayable =
-            !request.body &&
-            (request.method === "GET" || request.method === "HEAD") &&
-            !request.headers.has("upgrade");
-          return context.fetch(request).catch((error: unknown) => {
-            if (!replayable || !isDeployReset(error)) throw error;
-            console.warn({
-              event: "cd.deploy-reset-fetch-retry",
-              namespace: "iterate-context",
-              path: siblingPath,
-              message: String(error),
-            });
-            return deps.context(siblingPath).fetch(request);
+          // A Request that cannot do anything twice — a GET or HEAD with no body, never an upgrade —
+          // a deploy's reset or a lost connection failed is sent once more, to the sibling's fresh
+          // incarnation on a fresh stub. Anything else fails, and the expression fetch answers a
+          // platform failure 503 (iterate-context-durable-object.ts).
+          return retryPlatformFailures(() => deps.context(siblingPath).fetch(request), {
+            area: "cd",
+            schedule: ONCE_NOW,
+            idempotent:
+              !request.body &&
+              (request.method === "GET" || request.method === "HEAD") &&
+              !request.headers.has("upgrade"),
+            kind: failureKind,
+            describe: () => ({ name: "fetch", path: siblingPath }),
           });
         }
         // The sibling names a handle by expression (dispatch.ts): this context mints its own over the
         // sibling's stub, so a handle held here is one whole call per verb, never a session held open.
+        const context = deps.context(siblingPath); // a ReachableContext
         return Promise.resolve(context.invoke(["itx", ...itxExpressionSteps], [], hopCaller)).then(
           (result) =>
             materializeItxHandleReference(result, (expression) =>

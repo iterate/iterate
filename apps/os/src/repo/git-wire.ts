@@ -12,7 +12,12 @@
 // no blob.
 
 import { deflate, Inflate } from "pako";
-import { retryPlatformFailures } from "@iterate-com/shared/platform-retry";
+import {
+  HttpAnswerError,
+  httpFailureKind,
+  retryPlatformFailures,
+  UPSTREAM_ONCE,
+} from "@iterate-com/shared/platform-retry";
 
 /** The "no such object" oid a first push names as the old value of an unborn ref. */
 export const ZERO_OID = "0".repeat(40);
@@ -818,9 +823,6 @@ export function commitReaches(
 const MAX_RESPONSE_BYTES = 16 * 1024 * 1024;
 export const MAX_INFLATED_BYTES = 24 * 1024 * 1024;
 
-/** The wait before the one repeat of a read Artifacts answered 5xx. */
-const UPLOAD_PACK_RETRY_DELAYS_MS = [1_000];
-
 /**
  * HTTP transport against one git remote — the verbs the repo facet (repo/durable-object.ts) calls:
  * `tipOf(ref)` (the branch tip's oid, or undefined for an unborn branch), `fetchObjects` (a v2 fetch;
@@ -832,10 +834,10 @@ const UPLOAD_PACK_RETRY_DELAYS_MS = [1_000];
  * in the credential is substituted.
  *
  * Artifacts answers a git request 5xx now and then, and the same request a moment later is fine.
- * A `git-upload-pack` (`tipOf`, `fetchObjects`) only reads, so one it answered 5xx is sent ONCE
- * more, `UPLOAD_PACK_RETRY_DELAYS_MS` later, logged as `repo.platform-failure-retry`; a second 5xx,
- * and any other failure, throws. A `git-receive-pack` is a push, never sent twice: the caller reads
- * the tip again and decides.
+ * A `git-upload-pack` (`tipOf`, `fetchObjects`) only reads, so one answered 5xx, or whose
+ * connection failed, is sent ONCE more a second later (`UPSTREAM_ONCE`), logged as
+ * `repo.platform-failure-retry`; a second failure, a 429, and any other failure, throws. A
+ * `git-receive-pack` is a push, never sent twice: the caller reads the tip again and decides.
  */
 export function createGitWireTransport(input: {
   remote: string;
@@ -844,11 +846,8 @@ export function createGitWireTransport(input: {
 }) {
   const send = input.fetch || ((request: Request) => fetch(request));
   const post = async (service: string, body: Uint8Array<ArrayBuffer>): Promise<Uint8Array> => {
-    /** The status the attempt's answer failed with, 0 when it failed before an answer. */
-    let failedStatus = 0;
     return retryPlatformFailures(
       async () => {
-        failedStatus = 0;
         const headers = new Headers({
           "content-type": `application/x-${service}-request`,
           "git-protocol": "version=2",
@@ -864,24 +863,27 @@ export function createGitWireTransport(input: {
           }),
         );
         if (!response.ok) {
-          failedStatus = response.status;
           // The answer's first words say why (a refusal from GitHub, or from the caller's own rules
           // for egress); read no further than a few KiB, since an unread body keeps its connection.
           const why = await readCapped(response, 4_096).catch(() => new Uint8Array());
           const text = textDecoder.decode(why.subarray(0, 200)).trim();
-          throw new Error(
+          throw new HttpAnswerError(
             `${service} responded ${response.status} for ${input.remote}${text ? `: ${text}` : ""}`,
+            response.status,
           );
         }
         return readCapped(response, MAX_RESPONSE_BYTES);
       },
       {
-        event: "repo.platform-failure-retry",
-        delaysMs: service === "git-upload-pack" ? UPLOAD_PACK_RETRY_DELAYS_MS : [],
-        platformFailure: () =>
-          failedStatus >= 500
-            ? { name: service, status: failedStatus, remote: input.remote }
-            : undefined,
+        area: "repo",
+        schedule: UPSTREAM_ONCE,
+        idempotent: service === "git-upload-pack",
+        kind: httpFailureKind,
+        describe: (error) => ({
+          name: service,
+          status: error instanceof HttpAnswerError ? error.status : "network",
+          remote: input.remote,
+        }),
       },
     );
   };

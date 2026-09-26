@@ -11,7 +11,11 @@
 // name (`repoArtifactName` — the ONE place a name is spelled; every itx surface speaks paths).
 
 import { RpcTarget } from "capnweb";
-import { retryPlatformFailures } from "@iterate-com/shared/platform-retry";
+import {
+  failureKind,
+  retryPlatformFailures,
+  UPSTREAM_ONCE,
+} from "@iterate-com/shared/platform-retry";
 import type { ArtifactToken, CfArtifactRepoApi, CfArtifactsApi } from "iterate/api";
 
 /** Cloudflare Artifacts ("git for agents", beta) — the per-namespace binding, CONTROL PLANE ONLY, and
@@ -152,8 +156,9 @@ const TAKEN_NAME_WAIT_MS = 20_000;
 
 /** A verb, and ONE retry of it a second later after the binding's platform failure — Artifacts API
  *  error 10400, "An internal error occurred." (on 2026-09-23, 20:35–20:42 UTC, it answered create,
- *  get, list and delete on and off, each fine a moment later; a project's birth failed on it) —
- *  logged as `cfartifacts.platform-failure-retry` (scripts/ci/prd-fault-alarm.ts pages on a burst).
+ *  get, list and delete on and off, each fine a moment later; a project's birth failed on it), or a
+ *  lost connection to the binding — logged as `cfartifacts.platform-failure-retry`
+ *  (scripts/ci/prd-fault-alarm.ts pages on a burst).
  *  A second failure, and every other failure, surfaces as what it is. Only for a verb that is safe to run
  *  twice: a read, a token, a delete (a second one answers "not found"), a create (a name its failed
  *  attempt took reads as created: `attempt`'s `isRetry`). */
@@ -164,14 +169,20 @@ function retryingOnePlatformFailure<T>(
 ): Promise<T> {
   let attempts = 0;
   return retryPlatformFailures(() => attempt(attempts++ > 0), {
-    event: "cfartifacts.platform-failure-retry",
-    delaysMs: [1000],
-    platformFailure: (error) => {
-      const message = error instanceof Error ? error.message : String(error);
-      return /An internal error occurred|\b10400\b/.test(message)
-        ? { namespace: "iterate-context", name, verb, message }
-        : undefined;
-    },
+    area: "cfartifacts",
+    schedule: UPSTREAM_ONCE,
+    idempotent: true,
+    kind: (error) =>
+      /An internal error occurred|\b10400\b/.test(
+        error instanceof Error ? error.message : String(error),
+      )
+        ? "disconnected"
+        : failureKind(error),
+    describe: (error) => ({
+      name,
+      verb,
+      message: error instanceof Error ? error.message : String(error),
+    }),
   });
 }
 

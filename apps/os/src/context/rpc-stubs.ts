@@ -5,7 +5,11 @@
 //   rpc stub fetch     — the fetch-shaped transport under both (`dialRpcStubFetch`, `RpcStubFetchServer`)
 
 import { RpcTarget as WorkersRpcTarget } from "cloudflare:workers";
-import { retryPlatformFailures } from "@iterate-com/shared/platform-retry";
+import {
+  failureKind,
+  RELAY_BURST,
+  retryPlatformFailures,
+} from "@iterate-com/shared/platform-retry";
 import { z } from "zod";
 import { codedError, errorCode } from "iterate/lib";
 import { ITX_PRINCIPAL_HEADER } from "iterate/principal";
@@ -18,7 +22,6 @@ import {
   type Caller,
 } from "../caller.ts";
 import type { IterateContextDurableObject } from "../iterate-context-durable-object.ts";
-import { isPlatformFailure, isRetryableTransportError } from "../retryable-error.ts";
 import {
   contextAbortedOffsetOf,
   FETCH_UPGRADE_CONTEXT_ABORTED_OFFSET_HEADER,
@@ -82,11 +85,9 @@ const RPC_STUB_PAGER_WEBSOCKET_TAG = "itx-rpc-stub-pager-websocket";
 export const RPC_STUB_PAGER_KEEPALIVE_REQUEST = "itx-pager-keepalive";
 export const RPC_STUB_PAGER_KEEPALIVE_RESPONSE = "itx-pager-keepalive-ack";
 /** How long a paged relay has to lend before this side calls it dead. The relay answers a page
- *  immediately, so 10 s is a dead relay, not a slow one. */
+ *  immediately, so 10 s is a dead relay, not a slow one. The relay's repeats of a lend the platform
+ *  failed (`answerPage`, below: `RELAY_BURST`) land well inside it. */
 const RPC_STUB_PAGE_TIMEOUT_MS = 10_000;
-/** The relay's waits before each repeat of a lend the platform failed (`answerPage`, below): the
- *  last repeat still lands well inside the page timeout above. */
-const RPC_STUB_RELEND_DELAYS_MS = [0, 1_000, 3_000];
 
 /** WHAT THIS SIDE BORROWS: the Workers-RPC stub a lender hands over — TWO methods: `invoke(steps)`
  *  walks the itx-expression steps on the client's rpc stub (a DIRECT dotted dispatch — never
@@ -193,10 +194,11 @@ export class RpcStubDirectory {
       // way until the pins' release, while its pager may already lend a live one — so the NEXT call
       // pages again. Only the stub THIS call rode: a re-lend that landed meanwhile is the live one.
       // The failed call is not retried.
-      // A transport failure is the lender's worker gone mid-call ("Network connection lost." when
-      // the edge closed a dead client's socket, 2026-09-25): the stub is offline, coded so (a 502),
-      // never an uncoded 500.
-      if (!isRetryableTransportError(error)) throw error;
+      // A lost connection is the lender's worker gone mid-call ("Network connection lost." when
+      // the edge closed a dead client's socket): the stub is offline, coded so (a 502), never an
+      // uncoded 500.
+      const kind = failureKind(error);
+      if (kind !== "disconnected" && kind !== "deploy-reset") throw error;
       if (this.#borrowedRpcStubs.get(rpcStubKey) === borrowed) {
         this.#borrowedRpcStubs.delete(rpcStubKey);
         disposeRpcStub(borrowed);
@@ -641,11 +643,12 @@ export async function lendRpcStubOverPager(
     resolveLendEnded(lendEnded.reason);
   };
   /** THE PAGE ANSWER: a fresh Workers-RPC leg around the session's capnweb stub, lent to the DO. A
-   *  lend the platform failed (retryable-error.ts `isPlatformFailure`: a relay's connection to the DO
-   *  can drop under a burst of lends, failing every lend in flight with "Network connection lost.")
-   *  is lent again on a fresh stub, logged as `rpc-stubs.platform-failure-relend`; re-lending a key
-   *  replaces its stub, so a repeat is harmless. A lend that still fails is logged, the DO's page
-   *  times out, and a push waiting on it is lost. */
+   *  lend the platform failed (a relay's connection to the DO can drop under a burst of lends,
+   *  failing every lend in flight with "Network connection lost."; a deploy's reset) is lent again
+   *  on a fresh stub on the `RELAY_BURST` schedule, logged `rpc-stubs.platform-failure-retry`;
+   *  re-lending a key replaces its stub, so a repeat is harmless. An overloaded DO is not lent to
+   *  again at once. A lend that still fails is logged, the DO's page times out, and a push waiting on
+   *  it is lost. */
   const answerPage = async (): Promise<void> => {
     try {
       await retryPlatformFailures(
@@ -657,12 +660,12 @@ export async function lendRpcStubOverPager(
           });
         },
         {
-          event: "rpc-stubs.platform-failure-relend",
-          delaysMs: RPC_STUB_RELEND_DELAYS_MS,
-          platformFailure: (error) =>
-            isPlatformFailure(error) && !lendEnded.reason
-              ? { name: "lendRpcStub", rpcStubKey, message: String(error) }
-              : undefined,
+          area: "rpc-stubs",
+          schedule: RELAY_BURST,
+          idempotent: true,
+          // A lend recalled meanwhile has nothing left to lend: its failure is no platform failure.
+          kind: (error) => (lendEnded.reason ? "failed" : failureKind(error)),
+          describe: () => ({ name: "lendRpcStub", rpcStubKey }),
         },
       );
     } catch (error) {

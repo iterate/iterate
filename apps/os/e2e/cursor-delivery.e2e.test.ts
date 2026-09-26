@@ -2,7 +2,7 @@
 // progress — a Worker-Loader entrypoint's `processEventBatch(events, range)`, the stateless "project
 // worker" — is delivered at-least-once from a cursor THE STREAM keeps
 // (`itx.subscriptions.get(name).cursor`): the awaited call is the ack; a plain throw climbs the one
-// retry ladder (1s·2ⁿ ≤ 30 min, 15 attempts) on the DO's own alarm; `retryable: false` HALTS at once
+// retry ladder (1s·2ⁿ ≤ 30 min, 15 attempts) on the DO's own alarm; PERMANENT_FAILURE HALTS at once
 // with a `subscription-delivery-halted` fact; recovery is the operator's ONE event,
 // `subscription-delivery-resumed { name, afterOffset? }` — un-halt, and seek. Nothing is declared: the
 // loop evaluates the target and looks at the value (an entrypoint handle ⇒ cursor; a live stub or a
@@ -47,7 +47,7 @@ type Range = { after: number; through: number };
 
 /** `ledger:calls` / `ledger:log` (= the delivered offsets per call), so the test observes cursor
  *  delivery from outside without a live callback in the loop. `ctx.props.firstCall` scripts delivery #1:
- *  "throw" (a plain, retryable Error — the ladder) or "hold" (2s in flight — a resume races it). */
+ *  "throw" (a plain Error — the ladder) or "hold" (2s in flight — a resume races it). */
 const SRC_LEDGER = {
   "worker.js": `import { WorkerEntrypoint } from "cloudflare:workers";
 import { withItx } from "iterate/sdk";
@@ -69,7 +69,7 @@ export class Ledger extends WorkerEntrypoint {
 type LedgerEntry = { range: Range; offsets: number[] };
 // ─────────────────────────────── the halt / resume story ───────────────────────────────
 
-test("the digest worker is delivered from a stream-kept cursor; retryable:false halts with the fact; a resumed event un-halts and seeks past the poison", async () => {
+test("the digest worker is delivered from a stream-kept cursor; PERMANENT_FAILURE halts with the fact; a resumed event un-halts and seeks past the poison", async () => {
   const itx = openItx(freshCtx("cursor"));
 
   // 1. rewrite itx.digest onto the stateless digest worker and subscribe its processEventBatch BY
@@ -103,8 +103,8 @@ test("the digest worker is delivered from a stream-kept cursor; retryable:false 
     "tab",
   ]);
 
-  // 3. a poison mark: digest stamps `retryable: false`, so the loop HALTS NOW — no ladder burned on
-  //    an error that can never succeed (the stamped-flag doctrine, lib.ts) — and appends the
+  // 3. a poison mark: digest throws PERMANENT_FAILURE, so the loop HALTS NOW — no ladder burned on
+  //    an error that can never succeed (the error channel's codes, lib.ts) — and appends the
   //    halted FACT; a good mark stuck behind it waits. ONE policy, no skip, no pinning.
   const [poisoned] = await itx.append({ type: "mark", payload: { poison: true } });
   const [stuck] = await itx.append({ type: "mark" });
@@ -113,7 +113,7 @@ test("the digest worker is delivered from a stream-kept cursor; retryable:false 
     async () => (await itx.subscriptions.get("digest"))?.halted,
     30_000,
   );
-  expect(halted).toMatchObject({ attempts: 1 }); // retryable: false → one attempt, not fifteen
+  expect(halted).toMatchObject({ attempts: 1 }); // PERMANENT_FAILURE → one attempt, not fifteen
   expect(halted.afterOffset).toBeGreaterThanOrEqual(marks[2].offset); // the cursor stood after the good marks…
   expect(halted.afterOffset).toBeLessThan(poisoned.offset); // …and before the poison
   expect(halted.error).toMatch(/poison/);
@@ -161,7 +161,7 @@ test("a plain throw climbs the retry ladder on the DO's alarm — redelivered wi
   await ledgerSubscribe(itx, "throw");
 
   const [m1] = await itx.append({ type: "mark", payload: { n: 1 } });
-  // delivery #1 throws (a plain Error — retryable) → attempt 1, the next try armed on the alarm
+  // delivery #1 throws (a plain Error) → attempt 1, the next try armed on the alarm
   const backingOff = await until("ladder step", async () => {
     const r = await itx.subscriptions.get("ledger");
     return r?.cursor && r.cursor.attempt >= 1 ? r : undefined;
@@ -400,7 +400,7 @@ test("removing a row (subscribe { target: null }) during an in-flight delivery l
 test("row isolation — one halted row never blocks its neighbor", async () => {
   const itx = openItx(freshCtx("iso"));
   const good = collector();
-  await digestSubscribe(itx, "bad", ["mark"]); // halts NOW on the poison (retryable: false)
+  await digestSubscribe(itx, "bad", ["mark"]); // halts NOW on the poison (PERMANENT_FAILURE)
   await cursorSubscribe(itx, "good", good.fn, ["mark"]);
   const [m1] = await itx.append({ type: "mark", payload: { poison: true, n: 1 } });
   await until("bad halted", async () => (await itx.subscriptions.get("bad"))?.halted, 8_000);
@@ -595,7 +595,7 @@ const haltFactsFor = async (itx: any, name: string): Promise<any[]> =>
  *  entrypoint cannot own it): its `processEventBatch(events, range)` hands the batch to a LIVE hook
  *  the test lent behind the rule `itx.<hook>`, so a collector sees exactly what the cursor delivery delivered
  *  (offsets, ranges, attempts) and a hook that throws makes the awaited delivery FAIL — a plain
- *  throw, the ladder's case (the never-retryable case is the `digest` fixture's poison). */
+ *  throw, the ladder's case (the halt-now case is the `digest` fixture's poison). */
 const HOOKED_SOURCE = (hook: string) => ({
   "worker.js": `import { WorkerEntrypoint } from "cloudflare:workers";
 import { withItx } from "iterate/sdk";
@@ -641,7 +641,7 @@ async function cursorSubscribe(
 }
 
 /** The `digest` fixture (e2e/support/sources.ts) on the cursor delivery: counts delivered events into
- *  kv `digested`; a `payload.poison` mark makes it throw `retryable: false` — the halt-NOW case. */
+ *  kv `digested`; a `payload.poison` mark makes it throw PERMANENT_FAILURE — the halt-NOW case. */
 async function digestSubscribe(itx: any, name: string, consumes?: string[]): Promise<void> {
   await itx.provide("itx.digest", ["itx", "workers", ["get", { source: SOURCES.digest }]]);
   await itx.subscribe({

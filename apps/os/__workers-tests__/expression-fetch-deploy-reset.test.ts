@@ -20,7 +20,7 @@ test.for([
     name: "a GET is sent again to the fresh context and answers",
     init: { method: "GET" },
     answer: { status: 200, text: "GET served", retryAfter: null },
-    logs: [["warn", "cd.deploy-reset-fetch-retry"]],
+    logs: [["info", "cd.deploy-reset-retry"]],
   },
   {
     name: "a POST with a body is not sent again: a 503 to retry in a second, never reported",
@@ -64,7 +64,7 @@ test("a cold loader's producer read that meets the deploy is read again, and the
   ])({ method: "POST", body: "form=1" });
   await resetMidCall(`${project}.iterate/repos/config`);
   expect(await served).toEqual({ status: 200, text: "POST served", retryAfter: null });
-  expect(events()).toEqual([["warn", "workers.deploy-reset-source-retry"]]);
+  expect(events()).toEqual([["info", "worker-loader.deploy-reset-retry"]]);
 });
 
 /** A context's expression fetch of `expression`, answered as status, text and `Retry-After`. */

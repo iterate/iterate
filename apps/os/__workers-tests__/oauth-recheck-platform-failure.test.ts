@@ -6,14 +6,15 @@ import { env } from "cloudflare:workers";
 import { newWebSocketRpcSession } from "capnweb";
 import { expect, onTestFinished, test, vi } from "vitest";
 import { platformAddressesOf } from "../src/app-config.ts";
-import { ControlPlane, ControlPlaneUnavailableError } from "../src/control-plane/edge.ts";
+import { ControlPlane } from "../src/control-plane/edge.ts";
 import { authorizationForToken } from "../src/oauth.ts";
 import { rpcResponse } from "../src/rpc.ts";
 import type { IterateRpcTarget } from "../src/session.ts";
+import { unavailableError } from "../src/unavailable.ts";
 import { grant } from "./oauth-support.ts";
 import { fetchReachesThisWorker, ORIGIN, until } from "./support.ts";
 
-test("a live session rides out control-plane reads that failed on the platform's side during its re-check: each is retried, and logged as the platform's failure", async () => {
+test("a live session rides out control-plane reads that failed on the platform's side during its re-check: each is retried two seconds later, and logged by its kind", async () => {
   fetchReachesThisWorker();
   const flow = await grant([`${ORIGIN}/api`]);
   // THE GUARD FROM SOURCE (src/rpc.ts), not through `exports.default`: it serves the built worker, whose own
@@ -40,31 +41,28 @@ test("a live session rides out control-plane reads that failed on the platform's
   const root = transport.authenticate({ type: "from-server-cookie" });
   using context = await root.projects.get(flow.oauthA.id);
   await context.invoke("itx.kv.get('live-auth-probe')"); // holds the project: the tick reads membership
-  // What Cloudflare's own deploy of D1 does to the tick's membership read (control-plane/edge.ts
-  // `d1Fault`: retryable), then what an outage does to it (not retryable): the control plane is
-  // down, not the session
+  // What Cloudflare's own deploy of D1 does to the tick's membership read (control-plane/edge.ts:
+  // UNAVAILABLE, a deploy's reset), then what an outage does to it (overloaded): the control plane
+  // is down, not the session
   const membershipReads = vi
     .spyOn(ControlPlane.prototype, "reachableProjects")
     .mockImplementationOnce(() =>
       Promise.reject(
-        new ControlPlaneUnavailableError({
-          method: "accessibleTo",
-          waitedMs: 40,
-          cause: new Error("D1_ERROR: D1 DB reset because its code was updated."),
-          retryable: true,
-        }),
+        unavailableError(
+          "deploy-reset",
+          "The control plane failed accessibleTo: D1_ERROR: D1 DB reset because its code was updated.",
+        ),
       ),
     )
     .mockImplementationOnce(() =>
       Promise.reject(
-        new ControlPlaneUnavailableError({
-          method: "accessibleTo",
-          waitedMs: 12_000,
-          cause: new Error("internal error; reference = workers-test"),
-          retryable: false,
-        }),
+        unavailableError(
+          "overloaded",
+          "The control plane failed accessibleTo: internal error; reference = workers-test",
+        ),
       ),
     );
+  const infos = vi.spyOn(console, "info");
   const warns = vi.spyOn(console, "warn");
   // Real elapsed time: the 30 s tick meets the reset, its retry 2 s later the outage, and the next
   // retry reads through.
@@ -76,20 +74,23 @@ test("a live session rides out control-plane reads that failed on the platform's
   const reads = membershipReads.mock.calls.length; // mockRestore clears the record
   membershipReads.mockRestore();
   expect(reads).toBeGreaterThanOrEqual(3);
-  // each is a platform failure the fault alarm counts, retried all the same
-  expect(warns).toHaveBeenCalledWith({
-    event: "oauth.platform-failure-live-authorization-retry",
+  // a deploy's reset is expected, at info; the outage is a platform failure the fault alarm counts;
+  // each is retried all the same
+  expect(infos).toHaveBeenCalledWith({
+    event: "oauth.deploy-reset-retry",
+    kind: "deploy-reset",
     name: "live-authorization",
     grantId: flow.token!.access_token.split(":")[1],
     message:
-      "ControlPlaneUnavailableError: The control plane failed accessibleTo: D1_ERROR: D1 DB reset because its code was updated.",
+      "Error: The control plane failed accessibleTo: D1_ERROR: D1 DB reset because its code was updated.",
   });
   expect(warns).toHaveBeenCalledWith({
-    event: "oauth.platform-failure-live-authorization-retry",
+    event: "oauth.platform-failure-retry",
+    kind: "overloaded",
     name: "live-authorization",
     grantId: flow.token!.access_token.split(":")[1],
     message:
-      "ControlPlaneUnavailableError: The control plane failed accessibleTo: internal error; reference = workers-test",
+      "Error: The control plane failed accessibleTo: internal error; reference = workers-test",
   });
   expect(await root.whoami()).toMatchObject({ actor: flow.user.id });
   await context.invoke("itx.kv.get('live-auth-probe')"); // the project it holds still answers

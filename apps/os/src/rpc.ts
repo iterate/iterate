@@ -51,8 +51,8 @@ export async function rpcResponse(
   const input: SessionInput = {
     contextNamespace: env.ITERATE_CONTEXT,
     waitUntil: (promise) => ctx.waitUntil(promise),
-    // A read unanswered in 3 s is a retryable ControlPlaneUnavailableError, not a call held until
-    // D1's own 30 s bound.
+    // A read unanswered in 3 s is UNAVAILABLE (overloaded), not a call held until D1's own 30 s
+    // bound.
     controlPlane: new ControlPlane(env, { readDeadlineMs: 3_000 }),
     appConfig: appConfigOf(env),
     platformOrigin,

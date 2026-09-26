@@ -1,49 +1,78 @@
-// src/oauth-store.test.ts — the provider's store over a fake control-plane D1: a grant call D1 failed
-// on the platform's side, and says to send again, is asked once more, its retry logged as a platform
-// failure the prd fault alarm counts (beside the failure edge.ts logs); anything else throws at once.
-// A call that stalls is named while it waits.
+// src/oauth-store.test.ts — the provider's store over a fake control-plane D1: a grant call a
+// deploy's reset of D1 or a lost connection failed is asked once more, its retry logged by the one
+// failure model (a deploy's at info, any other as a platform failure the prd fault alarm counts); an
+// overload, and anything else, throws at once. A call that stalls is named while it waits.
 import { expect, onTestFinished, test, vi } from "vitest";
 import { providerStore } from "./oauth-store.ts";
 
 test.for([
-  "D1_ERROR: Network connection lost.",
-  "D1_ERROR: D1 DB reset because its code was updated.",
-  "D1_ERROR: Internal error in D1 DB storage caused object to be reset.",
-])("a grant read D1 says to send again (%s) is asked once more, and logged", async (message) => {
-  const warns = vi.spyOn(console, "warn").mockImplementation(() => {});
+  {
+    name: "a lost connection",
+    message: "D1_ERROR: Network connection lost.",
+    retry: ["warn", "oauth.platform-failure-retry", "disconnected"],
+  },
+  {
+    name: "D1's deploy reset",
+    message: "D1_ERROR: D1 DB reset because its code was updated.",
+    retry: ["info", "oauth.deploy-reset-retry", "deploy-reset"],
+  },
+  {
+    name: "D1's storage reset",
+    message: "D1_ERROR: Internal error in D1 DB storage caused object to be reset.",
+    retry: ["warn", "oauth.platform-failure-retry", "disconnected"],
+  },
+])("a grant read failed by $name is asked once more, and logged", async ({ message, retry }) => {
+  const lines = logLines();
   const store = storeOver([
     () => Promise.reject(new Error(message)),
     () => Promise.resolve({ results: [{ value: '{"id":"g1"}' }] }),
   ]);
   expect(await store.get("grant:user_a:g1", { type: "json" })).toEqual({ id: "g1" });
-  expect(retries(warns)).toEqual([
-    {
-      event: "oauth.platform-failure-grant-store-retry",
-      name: "grant-store-get",
-      message: `ControlPlaneUnavailableError: The control plane failed oauthGrant: ${message}`,
-    },
+  const [level, event, kind] = retry;
+  expect(lines.filter(([, line]) => line.event.startsWith("oauth."))).toEqual([
+    [
+      level,
+      {
+        event,
+        kind,
+        name: "grant-store-get",
+        message: `Error: The control plane failed oauthGrant: ${message}`,
+        attempt: 1,
+        retryInMs: 0,
+      },
+    ],
   ]);
 });
 
 test("a second failure throws: the grant store never retries twice", async () => {
-  const warns = vi.spyOn(console, "warn").mockImplementation(() => {});
+  const lines = logLines();
   const store = storeOver([
     () => Promise.reject(new Error("D1_ERROR: Network connection lost.")),
     () => Promise.reject(new Error("D1_ERROR: Network connection lost.")),
     () => Promise.resolve({ results: [{ value: '{"id":"never read"}' }] }),
   ]);
-  await expect(store.get("grant:user_a:g1", { type: "json" })).rejects.toThrow(
-    /The control plane failed oauthGrant: D1_ERROR: Network connection lost/,
-  );
-  expect(retries(warns)).toHaveLength(1);
+  await expect(store.get("grant:user_a:g1", { type: "json" })).rejects.toMatchObject({
+    code: "UNAVAILABLE",
+    message: "The control plane failed oauthGrant: D1_ERROR: Network connection lost.",
+  });
+  expect(
+    lines.filter(([, line]) => line.event.startsWith("oauth.")).map(([, line]) => line.event),
+  ).toEqual(["oauth.platform-failure-retry", "oauth.platform-failure-gave-up"]);
 });
 
 test.for([
-  // the platform's, but not to be sent again: the query may still be queued
-  ["D1_ERROR: D1 DB is overloaded. Requests queued for too long.", /failed oauthGrant/],
-  // ours
-  ["D1_ERROR: no such table: oauth_grants: SQLITE_ERROR", /failed oauthGrant: D1_ERROR: no such/],
-] as const)("a grant read failing with %s is not asked again", async ([message, thrown]) => {
+  {
+    name: "an overload, never asked again at once: the query may still be queued",
+    message: "D1_ERROR: D1 DB is overloaded. Requests queued for too long.",
+    thrown: /failed oauthGrant/,
+  },
+  {
+    name: "our own SQL",
+    message: "D1_ERROR: no such table: oauth_grants: SQLITE_ERROR",
+    thrown: /failed oauthGrant: D1_ERROR: no such/,
+  },
+])("a grant read failing with $name is not asked again", async ({ message, thrown }) => {
+  logLines();
   const store = storeOver([
     () => Promise.reject(new Error(message)),
     () => Promise.resolve({ results: [{ value: '{"id":"never read"}' }] }),
@@ -82,11 +111,16 @@ test("a grant read or a KV write still waiting after five seconds names its step
   await write;
 });
 
-/** The grant store's own retries among the warns. */
-const retries = (warns: { mock: { calls: unknown[][] } }) =>
-  warns.mock.calls
-    .map(([entry]) => entry as { event?: string })
-    .filter((entry) => entry.event?.startsWith("oauth."));
+/** Every line logged at info or warn from here on, in order, as [level, line]. */
+function logLines() {
+  const lines: [string, { event: string }][] = [];
+  // Every line the store and the control plane log names its event.
+  const push = (level: string) => (line: unknown) =>
+    void lines.push([level, line as { event: string }]);
+  vi.spyOn(console, "info").mockImplementation(push("info"));
+  vi.spyOn(console, "warn").mockImplementation(push("warn"));
+  return lines;
+}
 
 /** The store over a control-plane D1 whose every query answers with the next of `answers`. KV is
  *  never reached. */

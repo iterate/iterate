@@ -122,8 +122,8 @@ test("halt once: a push queued behind an in-flight delivery is NOT delivered to 
   expect(rig).toMatchObject({ facetMethods: ["catchUpFromLog"], pushes: [] });
 });
 
-test("halt once: a facet catch-up refused for good (retryable: false — a latched checkpoint) HALTS the row at once, ONE fact; on a resume, the catch-up and the resumed event's push see the same refusal and append ONE more fact, not two", async () => {
-  const latched = Object.assign(new Error("checkpoint latched"), { retryable: false });
+test("halt once: a facet catch-up refused for good (REDUCE_CHECKPOINT_TOO_LARGE, a latched checkpoint) HALTS the row at once, ONE fact; on a resume, the catch-up and the resumed event's push see the same refusal and append ONE more fact, not two", async () => {
+  const latched = codedError("REDUCE_CHECKPOINT_TOO_LARGE", "checkpoint latched");
   const facetMethods: string[] = [];
   const rig = incarnation(
     () =>
@@ -229,7 +229,7 @@ test("halt once: a refusal of a call made for a row since REPLACED halts nothing
   await drainDeliveries(); // the push is in flight, parked
   const replacement = configure(); // REPLACES the row (a new identity) under the parked push
   await drainDeliveries();
-  refuseInFlightPush(Object.assign(new Error("poison"), { retryable: false }));
+  refuseInFlightPush(codedError("PERMANENT_FAILURE", "poison"));
   await drainDeliveries();
   expect(haltFactsFor(rig.stream, "swap")).toEqual([]);
   expect(rig.stream.coreReducedState.subscriptions.swap).toMatchObject({

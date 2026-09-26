@@ -12,7 +12,6 @@ import {
   parseConfigRepoTemplateReference,
   formatConfigRepoTemplateReference,
 } from "@iterate-com/shared/config-repo-template/reference";
-import { retryPlatformFailures } from "@iterate-com/shared/platform-retry";
 import type { IterateApi } from "iterate/api";
 import { codedError, reportIssue } from "iterate/lib";
 import { OAuthScope } from "iterate/oauth-scopes";
@@ -41,7 +40,7 @@ import {
 import { type ControlPlane, describeReach, type Reach } from "./control-plane/edge.ts";
 import { OrganizationRole } from "./organization/contract.ts";
 import { iterateAppScopesOf, type AppConfig } from "./app-config.ts";
-import { isDeployReset, isPlatformFailure } from "./retryable-error.ts";
+import { contextStub } from "./context-stub.ts";
 import type { AccountState, AuthenticationFact } from "./account/contract.ts";
 import { IntegrationProvider } from "./integrations/contract.ts";
 import { IdentityProvider } from "./control-plane/contract.ts";
@@ -195,13 +194,20 @@ const ownerAddress = (owner: FactOwner) =>
     : { processor: "organization", path: `/organizations/${owner.organization}` };
 
 /** The owner's own context on the global project — where its facts land and its fold is read
- *  (oauth.ts `accountStateOf`). */
-export function ownerContext(contextNamespace: IterateContextNamespace, owner: FactOwner) {
-  return contextNamespace.getByName(
-    DurableObjectNameCodec.stringify({
+ *  (oauth.ts `accountStateOf`) — called under the failure model (`contextStub`), its lines named
+ *  `<area>.…`. */
+export function ownerContext(
+  contextNamespace: IterateContextNamespace,
+  owner: FactOwner,
+  area: string,
+) {
+  return contextStub(
+    contextNamespace,
+    DurableObjectNameCodec.address({
       projectId: GLOBAL_PROJECT_ID,
       path: ownerAddress(owner).path,
     }),
+    area,
   );
 }
 
@@ -225,7 +231,7 @@ export async function appendPlatformFacts(
   caller: Caller,
   { folded = false }: { folded?: boolean } = {},
 ): Promise<void> {
-  const context = ownerContext(contextNamespace, owner);
+  const context = ownerContext(contextNamespace, owner, "session");
   const events = Array.isArray(facts) ? facts : [facts];
   const { processor } = ownerAddress(owner);
   await context.invoke(["itx", "processors", ["enable", processor]], [], caller);
@@ -277,7 +283,7 @@ async function endLendsOutOfReach(
   input: Pick<SessionInput, "contextNamespace" | "controlPlane">,
   userId: string,
 ): Promise<void> {
-  const account = ownerContext(input.contextNamespace, { account: userId });
+  const account = ownerContext(input.contextNamespace, { account: userId }, "session");
   // The platform's own read of the account facet: its contract's state.
   const { state } = (await account.invoke(
     ["itx", "builtins", "facets", ["get", "account"], ["snapshot"]],
@@ -364,12 +370,8 @@ type KeyedFact = StreamEventInput & { idempotencyKey: string };
  *  sign-ins and consents, and an organization's activity — facts no answer depends on. Each is
  *  KEYED (its sign-in's operation, its consent's grant, its organization verb's operation), so
  *  running the append twice lands the fact once: the stream answers a key it holds with the event
- *  it already has. An append the platform cut is therefore sent ONCE more, on a fresh stub
- *  (retryable-error.ts): a deploy resetting the owner's Durable Object, expected on every deploy
- *  under traffic, logs `session.deploy-reset-platform-fact-retry`; a lost connection or a storage
- *  reset logs `session.platform-failure-platform-fact-retry` named `platform-fact`, which the prd
- *  fault alarm counts by name. A second failure, and any other, is reported, as oauth.ts reports a
- *  grant use it could not record. */
+ *  it already has, and `ownerContext` sends an append the platform cut ONCE more. A second failure,
+ *  and any other, is reported, as oauth.ts reports a grant use it could not record. */
 export function publishPlatformFacts(
   input: Pick<SessionInput, "contextNamespace" | "waitUntil">,
   owner: FactOwner,
@@ -377,30 +379,13 @@ export function publishPlatformFacts(
   caller: Caller,
 ): void {
   const events = Array.isArray(facts) ? facts : [facts];
-  const attributes = {
-    path: ownerAddress(owner).path,
-    type: events.map((event) => event.type).join(" "),
-  };
   input.waitUntil(
-    retryPlatformFailures(
-      () => appendPlatformFacts(input.contextNamespace, owner, events, caller),
-      {
-        event: "session.platform-failure-platform-fact-retry",
-        delaysMs: [0],
-        platformFailure: (error) => {
-          if (isDeployReset(error))
-            return {
-              event: "session.deploy-reset-platform-fact-retry",
-              name: "platform-fact",
-              ...attributes,
-              message: String(error),
-            };
-          if (isPlatformFailure(error))
-            return { name: "platform-fact", ...attributes, message: String(error) };
-          return undefined;
-        },
-      },
-    ).catch((error) => reportIssue("session.platform-fact-not-recorded", error, attributes)),
+    appendPlatformFacts(input.contextNamespace, owner, events, caller).catch((error) =>
+      reportIssue("session.platform-fact-not-recorded", error, {
+        path: ownerAddress(owner).path,
+        type: events.map((event) => event.type).join(" "),
+      }),
+    ),
   );
 }
 

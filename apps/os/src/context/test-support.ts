@@ -2,7 +2,8 @@
 import { vi } from "vitest";
 
 /** Run `run` with every wait it takes elapsed at once: its answer or error, the warns it logged
- *  (`retries`: each `retryPlatformFailures` repeat logs one), and what it logged at info. */
+ *  (`retries`: each platform-failure repeat and give-up of `retryPlatformFailures` logs one), and
+ *  what it logged at info. */
 export async function settle<T>(run: () => Promise<T>) {
   vi.useFakeTimers();
   const warn = vi.spyOn(console, "warn").mockImplementation(() => {});

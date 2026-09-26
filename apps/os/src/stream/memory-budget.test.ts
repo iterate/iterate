@@ -250,10 +250,9 @@ createFailing(test, /the echo should fit the 32 MiB RPC result cap/, { timeoutMs
 // ── the checkpoint cell: a reduce whose state outgrows it ──
 
 // 64 × 64 KiB events into a reduce that keeps every payload: the 32nd batch's state no longer fits
-// the checkpoint cell and is refused CODED (REDUCE_CHECKPOINT_TOO_LARGE, stamped `retryable: false`)
-// before any write — the checkpoint stays consistent — and the engine LATCHES it: every later push
-// and wake rejects at once, without re-reading the log (the parent's delivery loop halts the row on
-// the same stamp). BORN RED twice: first as a TORN checkpoint (the cursor landed, the state did not,
+// the checkpoint cell and is refused CODED (REDUCE_CHECKPOINT_TOO_LARGE) before any write — the
+// checkpoint stays consistent — and the engine LATCHES it: every later push and wake rejects at once,
+// without re-reading the log (the parent's delivery loop halts the row on the same code). BORN RED twice: first as a TORN checkpoint (the cursor landed, the state did not,
 // the next incarnation silently skipped 33 events — the one-row checkpoint), then as a wedge that
 // re-read and re-reduced on every push and wake (the latch).
 test(

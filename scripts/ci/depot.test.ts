@@ -18,6 +18,7 @@ test("a read Depot answers with one 500 is asked again, with a warn, and succeed
   expect(depot.warn).toHaveBeenCalledOnce();
   expect(depot.warn).toHaveBeenCalledWith({
     event: "depot.platform-failure-retry",
+    kind: "disconnected",
     method: "GetJobAttemptLogs",
     status: 500,
     message: "Depot GetJobAttemptLogs returned HTTP 500",

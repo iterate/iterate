@@ -7,13 +7,15 @@ export const MiB = 1024 * 1024;
 /** A blob of `chars` code units — the payload that fills a body toward the 8 MiB append ceiling. */
 export const blob = (chars: number): string => "q".repeat(chars);
 
-/** The stamped signal of an UNCONTROLLED reset: `.durableObjectReset` after the DO → edge → capnweb
- *  hops, or the raw message if a hop dropped the stamp. NOT a loaded-isolate OOM ("Worker exceeded
- *  memory limit.", `.overloaded` only) and NOT a facet wedge (SQLITE_TOOBIG). */
+/** The signal of an UNCONTROLLED reset: `.durableObjectReset` where a hop kept workerd's stamp, or
+ *  the reset's own message, which the edge keeps when it answers the failure UNAVAILABLE
+ *  (apps/os/src/unavailable.ts): "…isolate exceeded its memory limit and was reset.", "…caused
+ *  object to be reset…". NOT a loaded-isolate OOM ("Worker exceeded memory limit.") and NOT a facet
+ *  wedge (SQLITE_TOOBIG). */
 export const isDurableObjectReset = (e: any): boolean =>
   e != null &&
   (e.durableObjectReset === true ||
-    /isolate exceeded its memory limit and was reset/i.test(String(e.message ?? e)));
+    /\b(was|to be) reset\b|Durable Object reset\b/i.test(String(e.message ?? e)));
 
 /** Settle a promise to a tagged outcome so a reset never escapes as an unhandled rejection (the e2e
  *  config only forgives WebSocket/RPC-session noise; a `durableObjectReset` message would be fatal). */

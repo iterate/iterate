@@ -48,8 +48,8 @@ test("a pkt-line body cut mid-header rejects instead of yielding an empty ref li
 });
 
 // ── Artifacts 5xx ── a git-upload-pack only reads, so the one Artifacts answered 5xx is sent ONCE
-// more a second later, logged as `repo.platform-failure-retry`; a second 5xx, a 4xx and a push's 5xx
-// fail at once.
+// more a second later (jittered to between half and all of it), logged as
+// `repo.platform-failure-retry`; a second 5xx, a 4xx and a push's 5xx fail at once.
 
 test.for([
   {
@@ -57,7 +57,7 @@ test.for([
     send: "tipOf",
     statuses: [503, 200],
     outcome: { answer: TIP },
-    retries: [{ name: "git-upload-pack", status: 503, attempt: 1, retryInMs: 1_000 }],
+    lines: [{ event: "repo.platform-failure-retry", status: 503, attempt: 1, retryInMs: 750 }],
   },
   {
     name: "a read answered 5xx twice fails with the second answer",
@@ -66,7 +66,10 @@ test.for([
     outcome: {
       error: "git-upload-pack responded 503 for https://artifacts.example/prj.git: unavailable",
     },
-    retries: [{ name: "git-upload-pack", status: 502, attempt: 1, retryInMs: 1_000 }],
+    lines: [
+      { event: "repo.platform-failure-retry", status: 502, attempt: 1, retryInMs: 750 },
+      { event: "repo.platform-failure-gave-up", status: 503, attempts: 2 },
+    ],
   },
   {
     name: "a read answered 4xx fails at once: an answer about the request",
@@ -75,7 +78,7 @@ test.for([
     outcome: {
       error: "git-upload-pack responded 401 for https://artifacts.example/prj.git: unavailable",
     },
-    retries: [],
+    lines: [],
   },
   {
     name: "a push answered 503 is never sent twice",
@@ -84,10 +87,11 @@ test.for([
     outcome: {
       error: "git-receive-pack responded 503 for https://artifacts.example/prj.git: unavailable",
     },
-    retries: [],
+    lines: [],
   },
-] as const)("Artifacts 5xx: $name", async ({ send, statuses, outcome, retries }) => {
+] as const)("Artifacts 5xx: $name", async ({ send, statuses, outcome, lines }) => {
   vi.useFakeTimers();
+  vi.spyOn(Math, "random").mockReturnValue(0.5); // a 1 s wait jittered to 750 ms
   const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
   const answers = [...statuses];
   const fetch = vi.fn(async () => {
@@ -119,10 +123,12 @@ test.for([
   expect(await settled).toEqual(outcome);
   expect(fetch).toHaveBeenCalledTimes(statuses.length);
   expect(warn.mock.calls.map(([line]) => line)).toEqual(
-    retries.map((retry) => ({
-      event: "repo.platform-failure-retry",
+    lines.map((line) => ({
+      kind: "disconnected",
+      name: "git-upload-pack",
       remote: "https://artifacts.example/prj.git",
-      ...retry,
+      message: `Error: git-upload-pack responded ${line.status} for https://artifacts.example/prj.git: unavailable`,
+      ...line,
     })),
   );
 });

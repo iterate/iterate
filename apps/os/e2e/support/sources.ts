@@ -62,7 +62,7 @@ export class KeeperDurableObject extends FacetDurableObject {
   },
   // The stateless "project worker" shape: a WorkerEntrypoint whose processEventBatch(events, range) the
   // stream calls at-least-once from a cursor it keeps (resolving IS the ack; throwing ⇒ retry;
-  // `retryable: false` ⇒ halt now).
+  // code PERMANENT_FAILURE ⇒ halt now).
   digest: {
     "worker.js": `import { WorkerEntrypoint } from "cloudflare:workers";
 import { withItx } from "iterate/sdk";
@@ -71,7 +71,7 @@ export default class Digest extends WorkerEntrypoint {
     const poison = events.find((e) => e.payload && e.payload.poison);
     if (poison)
       throw Object.assign(new Error("digest: refusing poison at offset " + poison.offset), {
-        retryable: false, // our stamp, not workerd's (it only sets true): halts NOW, not in 30 min
+        code: "PERMANENT_FAILURE", // halts NOW, not in 30 min
       });
     return withItx(this.env.ITX, async (itx) => {
       const n = Number((await itx.kv.get("digested")) ?? 0) + events.length;

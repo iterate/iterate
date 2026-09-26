@@ -53,7 +53,7 @@ test("quickAction on inline HTML: one retry, a second later, logged as browser.p
     retries: [
       {
         event: "browser.platform-failure-retry",
-        action: "screenshot",
+        name: "screenshot",
         message: expect.stringContaining('"code":6002'),
       },
     ],
@@ -65,7 +65,10 @@ test("quickAction's timeout retry is bounded: a second timeout surfaces; a url p
   const twice = binding(timedOut, timedOut);
   expect(await settle(() => twice.browser.quickAction("screenshot", inline))).toMatchObject({
     error: { message: expect.stringContaining('"code":6002') },
-    retries: [{ event: "browser.platform-failure-retry" }],
+    retries: [
+      { event: "browser.platform-failure-retry" },
+      { event: "browser.platform-failure-gave-up", attempts: 2 },
+    ],
   });
   expect(twice.calls).toHaveLength(2);
 
