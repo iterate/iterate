@@ -92,7 +92,7 @@ export namespace updateUserEmail {
 }
 
 const identityUserSql = `
-select u.id, u.email
+select u.id, u.email, (select count(*) from identities j where j.user_id = u.id) as sign_ins
 from identities i
 join users u on u.id = i.user_id
 where i.provider = ? and i.subject = ?
@@ -104,12 +104,20 @@ const identityUserQuery = (params: identityUser.Params) => ({
 	args: [params.provider, params.subject],
 });
 
+function identityUserMapResult(row: identityUser.RawResult): identityUser.Result {
+	return {
+		id: row.id,
+		email: row.email,
+		signIns: row.sign_ins,
+	};
+}
+
 export const identityUser = Object.assign(
 	async function identityUser(client: Client, params: identityUser.Params): Promise<identityUser.Result | null> {
-		const rows = await client.all<identityUser.Result>(identityUserQuery(params));
-		return rows.length > 0 ? rows[0] : null;
+		const rows = await client.all<identityUser.RawResult>(identityUserQuery(params));
+		return rows.length > 0 ? identityUserMapResult(rows[0]!) : null;
 	},
-	{ sql: identityUserSql, query: identityUserQuery },
+	{ sql: identityUserSql, query: identityUserQuery, mapResult: identityUserMapResult },
 );
 
 export namespace identityUser {
@@ -117,9 +125,15 @@ export namespace identityUser {
 		provider: string;
 		subject: string;
 	};
+	export type RawResult = {
+		id: string;
+		email: string;
+		sign_ins?: number;
+	};
 	export type Result = {
 		id: string;
 		email: string;
+		signIns?: number;
 	};
 }
 

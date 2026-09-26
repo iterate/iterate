@@ -68,6 +68,29 @@ test("people: an identity links once by verified email, then by subject: a chang
   ]);
 });
 
+test("people: a person with more than one sign-in keeps their email when one sign-in's provider reports another address; with one sign-in, the email follows it", async () => {
+  await emptyTables();
+  const ada = await person("ada@example.com");
+  const link = (provider: "google" | "github", subject: string, email: string) =>
+    c.linkIdentity({ provider, subject, email });
+  expect(await link("google", "g-ada", ada.email)).toEqual(ada);
+  // GitHub's subject moved onto Ada by an operator, as when two of her accounts are merged
+  expect(await link("github", "gh-ada", "ada@elsewhere.example")).not.toMatchObject({ id: ada.id });
+  await rows(
+    `update identities set user_id = '${ada.id}' where provider = 'github' and subject = 'gh-ada'`,
+  );
+  await rows(`delete from users where email = 'ada@elsewhere.example'`);
+  // GitHub still says her other address: Ada keeps hers, and Google's sign-in still finds her
+  expect(await link("github", "gh-ada", "ada@elsewhere.example")).toEqual(ada);
+  expect(await c.identity("google", "g-ada")).toEqual(ada);
+  // one sign-in only: its new address follows it
+  const bob = await link("google", "g-bob", "bob@example.com");
+  expect(await link("google", "g-bob", "bob2@example.com")).toEqual({
+    id: bob.id,
+    email: "bob2@example.com",
+  });
+});
+
 test("organizations: created with the caller its owner; the operator alone names another owner, one who exists", async () => {
   await emptyTables();
   const ada = await person("ada@example.com");

@@ -162,8 +162,9 @@ export class ControlPlaneDatabase {
     return listUsers(this.#client);
   }
   /** The user a provider's subject names. */
-  identity(provider: IdentityProvider, subject: string): Promise<UserRecord | null> {
-    return identityUser(this.#client, { provider, subject });
+  async identity(provider: IdentityProvider, subject: string): Promise<UserRecord | null> {
+    const user = await identityUser(this.#client, { provider, subject });
+    return user && { id: user.id, email: user.email };
   }
   organization(organizationId: string): Promise<OrganizationRecord | null> {
     return organizationById(this.#client, { id: organizationId });
@@ -245,7 +246,8 @@ export class ControlPlaneDatabase {
   }
 
   /** A verified sign-in: link once by verified email, then resolve by the provider's stable
-   *  subject. A linked subject's changed email follows it, unless another person holds that email;
+   *  subject. A linked subject's changed email follows it when it is the person's only sign-in,
+   *  unless another person holds that email;
    *  a second subject of the same provider cannot adopt an already-linked person. Takes no caller —
    *  it is the sign-in system linking a verified identity, never a person's own command.
    *
@@ -265,10 +267,13 @@ export class ControlPlaneDatabase {
       insertIdentity.query({ provider, subject, email }),
       identityUser.query({ provider, subject }),
     ]);
-    const linked = rowsOf<identityUser.Result>(results, 2)[0];
+    const linked = rowsOf<identityUser.RawResult>(results, 2)[0];
     if (!linked)
       throw codedError("IDENTITY_CONFLICT", "This email belongs to another linked account.");
-    if (linked.email === email) return linked;
+    // The email follows a person's only sign-in. With more than one (Google and GitHub, say), each
+    // provider may report its own address, and none of them rewrites the person's.
+    if (linked.email === email || (linked.sign_ins ?? 1) > 1)
+      return { id: linked.id, email: linked.email };
     try {
       await updateUserEmail(this.#client, { email }, { id: linked.id });
     } catch (error) {
