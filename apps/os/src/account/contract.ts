@@ -24,10 +24,11 @@ import { IntegrationConnectionRow, IntegrationEventCatalog } from "../integratio
 
 // Each fact's payload is spelled once and used twice — by its event and by the state that keeps it.
 
-/** `events.iterate.com/account/authenticated` (idempotency key `authenticated/<operationId>`): NO
- *  credential material — only which KIND, when, and a stable op id (dedup on retry). A client can
- *  append this type to its own account, but only the platform's is stamped `source.platform`, and
- *  the account processor folds nothing else (processor.ts). */
+/** `events.iterate.com/account/authenticated` (idempotency key
+ *  `account/authenticated/<operationId>`): NO credential material — only which KIND, when, and a
+ *  stable op id (dedup on retry). A client can append this type to its own account, but only the
+ *  platform's is stamped `source.platform`, and the account processor folds nothing else
+ *  (processor.ts). */
 const AuthenticationFact = z.object({
   credential: z.enum(["from-server-cookie", "admin-secret"]),
   at: z.number(),
@@ -71,8 +72,8 @@ export const GrantUsed = z.object({ grantId: z.string().min(1), at: z.number() }
 export type GrantUsed = z.infer<typeof GrantUsed>;
 /** `events.iterate.com/account/consent-approved`: the person approved a client at consent
  *  (consent.ts): which client, the projects ticked (`null` = every project, current and future)
- *  and the scopes left ticked. The grant's id is not known at approval — the provider mints it
- *  on the code exchange — so the client and the moment are the record. */
+ *  and the scopes left ticked. Keyed by the grant the approval minted
+ *  (`account/consent-approved/<grantId>`), so a repeat of its append lands it once. */
 export const ConsentApproved = z.object({
   clientId: z.string().min(1),
   clientName: z.string(),
