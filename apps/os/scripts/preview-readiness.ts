@@ -115,7 +115,9 @@ function probeRound(url: string, options: { adminSecret: string; version: string
 /** How many brand-new contexts each probe asks the version of: its own and one that exists only to
  *  be asked. A brand-new Durable Object starts on whichever version its host runs, so the gate
  *  samples placements: with one per probe, 6 of 48 soak redeploys still had an e2e context start on
- *  the previous version after the gate passed; with four, 2 of 48 (2026-09-24). SOAK-PENDING */
+ *  the previous version after the gate passed; with four, 2 of 48 (2026-09-24). With two, and three
+ *  rounds in a row, 1 of 20 still ran calls on the previous version, as did 1 of 20 with four and
+ *  five rounds beside it (2026-09-26). */
 const CONTEXTS_PER_PROBE = 2;
 
 /** ONE PROBE, at most 20 s: a bare upgrade of `/api` (its status and body are the evidence when it
@@ -123,7 +125,7 @@ const CONTEXTS_PER_PROBE = 2;
  *  on a fresh project context (the context Durable Object), a secret set there (a facet it hosts,
  *  SecretDurableObject) and a one-line `run` (a loaded isolate through the Worker Loader) — the
  *  three things the e2e rows that failed on brand-new previews were doing — then `versions`, which
- *  version its edge, that context and more brand-new ones run. Every project is
+ *  version its edge, that context and another brand-new one run. Every project is
  *  `prj_readiness_<uuid>`, so every probe materializes Durable Objects that never existed. A miss
  *  names the step it stopped at. */
 async function probe(url: string, adminSecret: string, version: string): Promise<ProbeOutcome> {
