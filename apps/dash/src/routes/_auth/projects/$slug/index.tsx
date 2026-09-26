@@ -6,7 +6,7 @@
 // and pushed here too (`itx.repos.get("/repos/config")`: `origin`, `setOrigin`, `pull`, `push`).
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createFileRoute, getRouteApi, Link, useNavigate } from "@tanstack/react-router";
-import { ArrowUpRight, CheckIcon, CircleXIcon, LoaderCircleIcon } from "lucide-react";
+import { ArrowUpRight, CheckIcon, CircleXIcon } from "lucide-react";
 import { z } from "zod";
 import type { AuthenticatedApp } from "iterate/app";
 import { errorCode } from "iterate/lib";
@@ -630,11 +630,7 @@ function ProjectCreationProgress({ configRepoSeeded }: { configRepoSeeded: boole
                   : "border-muted-foreground/30 text-muted-foreground",
               )}
             >
-              {step.done ? (
-                <CheckIcon aria-hidden="true" className="size-4" />
-              ) : (
-                <LoaderCircleIcon aria-hidden="true" className="size-4 animate-spin" />
-              )}
+              {step.done ? <CheckIcon aria-hidden="true" className="size-4" /> : <Spinner />}
             </span>
             <span className={step.done ? "text-foreground" : "text-muted-foreground"}>
               {step.label}
