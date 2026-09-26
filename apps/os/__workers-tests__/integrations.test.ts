@@ -636,7 +636,6 @@ test("GitHub: the holder reconnecting to another installation while a move's cle
     };
     return statement;
   });
-  onTestFinished(() => prepares.mockRestore());
   const moved = projectFacet(mover.itx).confirmGithubMove({ offer });
   await vi.waitFor(() => expect(cleanupReached).toBe(true));
   await connected(petshop, holder, "github", "installation_id=9852");

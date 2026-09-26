@@ -194,8 +194,6 @@ async function collectedTrace(
         )
         .map(([, init]) => JSON.parse(init?.body || "")),
     async [Symbol.asyncDispose]() {
-      vi.unstubAllEnvs();
-      vi.unstubAllGlobals();
       await rm(directory, { recursive: true, force: true });
     },
   };
@@ -290,8 +288,6 @@ async function tracedWorkflow(workflow: {
   return {
     directory,
     async [Symbol.asyncDispose]() {
-      vi.unstubAllEnvs();
-      vi.unstubAllGlobals();
       await rm(directory, { recursive: true, force: true });
     },
   };

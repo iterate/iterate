@@ -2,7 +2,7 @@ import { expect, test, vi } from "vitest";
 import { openSocketWithRetry } from "./socket.ts";
 
 test("openSocketWithRetry: a connection that fails twice and opens on the third attempt resolves after two waits, one warn each", async () => {
-  using warn = captureWarn();
+  const warn = captureWarn();
   const waits: number[] = [];
   const Socket = fakeSocketClass(2);
   const socket = await openSocketWithRetry("wss://example.test/api", {
@@ -34,7 +34,7 @@ test("openSocketWithRetry: a connection that fails twice and opens on the third 
 });
 
 test("openSocketWithRetry: a connection that never opens rejects after the last attempt with its close code and cause, every wait spent", async () => {
-  using warn = captureWarn();
+  const warn = captureWarn();
   const waits: number[] = [];
   const Socket = fakeSocketClass(Infinity);
   await expect(
@@ -56,7 +56,7 @@ test("openSocketWithRetry: a connection that never opens rejects after the last 
 });
 
 test("openSocketWithRetry: a connection that opens first time makes one attempt, no wait and no warn", async () => {
-  using warn = captureWarn();
+  const warn = captureWarn();
   const Socket = fakeSocketClass(0);
   await openSocketWithRetry("wss://example.test/api", { WebSocket: Socket, delaysMs: [1] });
   expect({ constructions: Socket.constructions(), warns: warn.calls.length }).toEqual({
@@ -66,7 +66,7 @@ test("openSocketWithRetry: a connection that opens first time makes one attempt,
 });
 
 test("openSocketWithRetry: an attempt whose handshake never answers is closed at the handshake bound, explained and tried again", async () => {
-  using warn = captureWarn();
+  const warn = captureWarn();
   const Socket = fakeSocketClass(0, { silent: 1 });
   const socket = await openSocketWithRetry("wss://example.test/api", {
     WebSocket: Socket,
@@ -85,7 +85,7 @@ test("openSocketWithRetry: an attempt whose handshake never answers is closed at
 });
 
 test("openSocketWithRetry: a handshake that never answers on the last attempt rejects, naming the bound", async () => {
-  using _warn = captureWarn();
+  captureWarn();
   const Socket = fakeSocketClass(0, { silent: Infinity });
   await expect(
     openSocketWithRetry("wss://example.test/api", {
@@ -144,13 +144,12 @@ function fakeSocketClass(failures: number, { silent = 0 }: { silent?: number } =
   };
 }
 
-/** console.warn captured for one test, restored on dispose; `calls` are the first arguments. */
+/** console.warn captured for one test; `calls` are the first arguments. */
 function captureWarn() {
   const spy = vi.spyOn(console, "warn").mockImplementation(() => {});
   return {
     get calls() {
       return spy.mock.calls.map(([first]) => first);
     },
-    [Symbol.dispose]: () => spy.mockRestore(),
   };
 }

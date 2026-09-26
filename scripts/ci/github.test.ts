@@ -6,7 +6,7 @@ import { retryGithubPlatformFailures } from "./github.ts";
 const repo = { owner: "iterate", repo: "iterate" };
 
 test("asks a GET again after GitHub's 500 and returns the answer (the PR #2899 LOC report)", async () => {
-  using fixture = githubAnswering(unexpectedError(), json(200, { number: 2899, body: "before" }));
+  const fixture = githubAnswering(unexpectedError(), json(200, { number: 2899, body: "before" }));
 
   const { data } = await fixture.github.rest.pulls.get({ ...repo, pull_number: 2899 });
 
@@ -25,7 +25,7 @@ test("asks a GET again after GitHub's 500 and returns the answer (the PR #2899 L
 });
 
 test("asks a PATCH again after the connection drops", async () => {
-  using fixture = githubAnswering(
+  const fixture = githubAnswering(
     new TypeError("fetch failed", { cause: new Error("read ECONNRESET") }),
     json(200, { number: 2899 }),
   );
@@ -39,7 +39,7 @@ test("asks a PATCH again after the connection drops", async () => {
 });
 
 test("throws GitHub's last failure once every delay is spent", async () => {
-  using fixture = githubAnswering(
+  const fixture = githubAnswering(
     json(502, { message: "Bad gateway" }),
     json(503, { message: "Unavailable" }),
     json(500, { message: "Server Error" }),
@@ -57,7 +57,7 @@ test("throws GitHub's last failure once every delay is spent", async () => {
 });
 
 test("never asks a POST again: a 5xx may have landed, and a repeat would create a second one", async () => {
-  using fixture = githubAnswering(unexpectedError());
+  const fixture = githubAnswering(unexpectedError());
 
   await expect(
     fixture.github.rest.issues.createComment({ ...repo, issue_number: 2899, body: "once" }),
@@ -67,7 +67,7 @@ test("never asks a POST again: a 5xx may have landed, and a repeat would create 
 });
 
 test("asks a commit status again after GitHub's 503: the latest status per context is what shows", async () => {
-  using fixture = githubAnswering(
+  const fixture = githubAnswering(
     json(503, { message: "No server is currently available to service your request." }),
     json(201, { state: "success", context: "CI trace" }),
   );
@@ -91,7 +91,7 @@ test("asks a commit status again after GitHub's 503: the latest status per conte
 });
 
 test("asks a PATCH once when the caller says so: a PR body written from a read seconds earlier", async () => {
-  using fixture = githubAnswering(unexpectedError());
+  const fixture = githubAnswering(unexpectedError());
 
   await expect(
     fixture.github.rest.pulls.update({
@@ -106,7 +106,7 @@ test("asks a PATCH once when the caller says so: a PR body written from a read s
 });
 
 test("never asks again after a 4xx: it is GitHub's answer about the request", async () => {
-  using fixture = githubAnswering(json(404, { message: "Not Found" }));
+  const fixture = githubAnswering(json(404, { message: "Not Found" }));
 
   await expect(fixture.github.rest.pulls.get({ ...repo, pull_number: 1 })).rejects.toMatchObject({
     status: 404,
@@ -116,7 +116,7 @@ test("never asks again after a 4xx: it is GitHub's answer about the request", as
 });
 
 test("never asks again after an abort: the caller chose to stop", async () => {
-  using fixture = githubAnswering(new DOMException("aborted", "AbortError"));
+  const fixture = githubAnswering(new DOMException("aborted", "AbortError"));
 
   await expect(fixture.github.rest.pulls.get({ ...repo, pull_number: 1 })).rejects.toMatchObject({
     name: "AbortError",
@@ -127,7 +127,7 @@ test("never asks again after an abort: the caller chose to stop", async () => {
 
 /**
  * An Octokit whose `fetch` answers from `responses` in order, with no wait between attempts,
- * and the `console.warn` spy it logs to (restored when the fixture is disposed).
+ * and the `console.warn` spy it logs to.
  */
 function githubAnswering(...responses: Array<Response | Error>) {
   const fetch = vi.fn(async () => {
@@ -141,7 +141,7 @@ function githubAnswering(...responses: Array<Response | Error>) {
     [0, 0, 0],
   );
   const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-  return { github, fetch, warn, [Symbol.dispose]: () => warn.mockRestore() };
+  return { github, fetch, warn };
 }
 
 function unexpectedError() {

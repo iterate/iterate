@@ -182,45 +182,37 @@ test("a pass throws 'Flaky test passed this run' (green) and records a pass line
 test("a non-matching failure returns success (red) and records an unexpected-error line", async () => {
   using recordDir = flakeRecordDir();
   const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
-  try {
-    const body = registerWithFakeRunner(/CPU startup time exceeded \d+ms/, async () => {
-      throw new Error("ECONNREFUSED: the test infra broke");
-    });
+  const body = registerWithFakeRunner(/CPU startup time exceeded \d+ms/, async () => {
+    throw new Error("ECONNREFUSED: the test infra broke");
+  });
 
-    // Resolving WITHOUT throwing is the inverted failure signal: the
-    // expected-fail machinery rejects a successful body, so the test goes red.
-    await expect(body()).resolves.toBeUndefined();
-    expect(consoleError).toHaveBeenCalledWith(
-      expect.stringMatching(/does not match the allowed flake pattern/),
-      expect.objectContaining({ message: expect.stringContaining("ECONNREFUSED") }),
-    );
-    expect(recordDir.records()).toMatchObject([
-      { outcome: "unexpected-error", error: "Error: ECONNREFUSED: the test infra broke" },
-    ]);
-  } finally {
-    consoleError.mockRestore();
-  }
+  // Resolving WITHOUT throwing is the inverted failure signal: the
+  // expected-fail machinery rejects a successful body, so the test goes red.
+  await expect(body()).resolves.toBeUndefined();
+  expect(consoleError).toHaveBeenCalledWith(
+    expect.stringMatching(/does not match the allowed flake pattern/),
+    expect.objectContaining({ message: expect.stringContaining("ECONNREFUSED") }),
+  );
+  expect(recordDir.records()).toMatchObject([
+    { outcome: "unexpected-error", error: "Error: ECONNREFUSED: the test infra broke" },
+  ]);
 });
 
 test("a hung body goes red at the wrapper's own deadline and records the hang", async () => {
   using recordDir = flakeRecordDir();
   const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
-  try {
-    const body = registerWithFakeRunner(/flaked/, async () => new Promise(() => {}), {
-      timeoutMs: 50,
-    });
+  const body = registerWithFakeRunner(/flaked/, async () => new Promise(() => {}), {
+    timeoutMs: 50,
+  });
 
-    // Without the wrapper's own deadline this would ride to the RUNNER's test
-    // timeout, which the expected-fail machinery counts as satisfied — the
-    // hang would pass vacuously.
-    await expect(body()).resolves.toBeUndefined();
-    expect(consoleError).toHaveBeenCalledWith(expect.stringMatching(/still running after 50ms/));
-    expect(recordDir.records()).toMatchObject([
-      { outcome: "unexpected-error", error: "hung: still running after 50ms" },
-    ]);
-  } finally {
-    consoleError.mockRestore();
-  }
+  // Without the wrapper's own deadline this would ride to the RUNNER's test
+  // timeout, which the expected-fail machinery counts as satisfied — the
+  // hang would pass vacuously.
+  await expect(body()).resolves.toBeUndefined();
+  expect(consoleError).toHaveBeenCalledWith(expect.stringMatching(/still running after 50ms/));
+  expect(recordDir.records()).toMatchObject([
+    { outcome: "unexpected-error", error: "hung: still running after 50ms" },
+  ]);
 });
 
 test("a relative FLAKE_RECORD_DIR is rebased against GITHUB_WORKSPACE", async () => {

@@ -33,7 +33,7 @@ test.for([
     sleeps: [],
   },
 ])("$name", async ({ answers, backoffMs, maxRetryAfterMs, outcome, sleeps }) => {
-  using warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
   const sleep = vi.fn(async (_ms: number) => {});
   let call = 0;
   const doFetch = vi.fn(async () => {
@@ -59,7 +59,7 @@ test.for([
 });
 
 test("each retry logs a cloudflare-api.rate-limited-retry warn", async () => {
-  using warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
   const doFetch = vi
     .fn(async () => new Response(null, { status: 200 }))
     .mockResolvedValueOnce(new Response(null, { status: 429, headers: { "retry-after": "9" } }));

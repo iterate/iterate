@@ -130,7 +130,7 @@ for (const { header, name, becomes } of cookieRows)
 
 test("reportIssue hands each issue to the forwarder — bounded attributes, the caught value itself — and a throwing forwarder never reaches the caller", () => {
   const seen: Issue[] = [];
-  const quiet = vi.spyOn(console, "error").mockImplementation(() => {});
+  vi.spyOn(console, "error").mockImplementation(() => {});
   const boom = new Error("boom");
   forwardIssues((issue) => seen.push(issue));
   reportIssue("site.a", boom, { projectId: "prj_1", skipped: undefined, long: "x".repeat(300) });
@@ -146,7 +146,6 @@ test("reportIssue hands each issue to the forwarder — bounded attributes, the 
   });
   expect(() => reportIssue("site.b", boom)).not.toThrow();
   forwardIssues(() => {});
-  quiet.mockRestore();
 });
 
 test("releaseRpcSessions releases each once, the last first; one that throws is reported, the rest still released", () => {
@@ -158,15 +157,11 @@ test("releaseRpcSessions releases each once, the last first; one that throws is 
     },
   });
   const reported = vi.spyOn(console, "error").mockImplementation(() => undefined);
-  try {
-    expect(() =>
-      releaseRpcSessions([session("first"), session("middle", true), session("last")]),
-    ).not.toThrow();
-    expect(released).toEqual(["last", "middle", "first"]);
-    expect(reported).toHaveBeenCalled();
-  } finally {
-    reported.mockRestore();
-  }
+  expect(() =>
+    releaseRpcSessions([session("first"), session("middle", true), session("last")]),
+  ).not.toThrow();
+  expect(released).toEqual(["last", "middle", "first"]);
+  expect(reported).toHaveBeenCalled();
 });
 
 const roundtrip = (a: unknown, b: unknown) => {

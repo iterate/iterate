@@ -45,27 +45,23 @@ test("registration lands on the runner's own expected-fail variant", async () =>
 
 test("every outcome writes a kind-failing record when FLAKE_RECORD_DIR is set", async () => {
   using records = scopedFlakeRecordDir();
-  const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
-  try {
-    const registered: ((...args: unknown[]) => Promise<unknown>)[] = [];
-    const fake = Object.assign(vi.fn(), {
-      fails: (...args: unknown[]) => registered.push(args.at(-1) as any),
-    });
-    const fail = createFailing(fake, /pinned/);
-    fail("holds", async () => {
-      throw new Error("pinned as expected");
-    });
-    fail("fixed?", async () => {});
-    await expect(registered[0]!()).rejects.toThrow(/pinned/);
-    await expect(registered[1]!()).resolves.toBeUndefined();
+  vi.spyOn(console, "error").mockImplementation(() => {});
+  const registered: ((...args: unknown[]) => Promise<unknown>)[] = [];
+  const fake = Object.assign(vi.fn(), {
+    fails: (...args: unknown[]) => registered.push(args.at(-1) as any),
+  });
+  const fail = createFailing(fake, /pinned/);
+  fail("holds", async () => {
+    throw new Error("pinned as expected");
+  });
+  fail("fixed?", async () => {});
+  await expect(registered[0]!()).rejects.toThrow(/pinned/);
+  await expect(registered[1]!()).resolves.toBeUndefined();
 
-    expect(records.records()).toMatchObject([
-      { name: "holds", kind: "failing", outcome: "pinned-fail", pattern: "pinned" },
-      { name: "fixed?", kind: "failing", outcome: "unexpected-pass" },
-    ]);
-  } finally {
-    consoleError.mockRestore();
-  }
+  expect(records.records()).toMatchObject([
+    { name: "holds", kind: "failing", outcome: "pinned-fail", pattern: "pinned" },
+    { name: "fixed?", kind: "failing", outcome: "unexpected-pass" },
+  ]);
 });
 
 test("a playwright-shaped test object registers through .fail", async () => {
@@ -92,27 +88,23 @@ test("a body failing for a different reason returns success, so the native machi
   // kind-failing records into the CI run's real FLAKE_RECORD_DIR.
   using _records = scopedFlakeRecordDir();
   const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
-  try {
-    const registered: ((...args: unknown[]) => Promise<unknown>)[] = [];
-    const fake = Object.assign(vi.fn(), {
-      fails: (...args: unknown[]) => registered.push(args.at(-1) as any),
-    });
-    createFailing(fake, /foo bar exploded/)("name", async () => {
-      throw new Error("ECONNREFUSED: the test infra broke");
-    });
+  const registered: ((...args: unknown[]) => Promise<unknown>)[] = [];
+  const fake = Object.assign(vi.fn(), {
+    fails: (...args: unknown[]) => registered.push(args.at(-1) as any),
+  });
+  createFailing(fake, /foo bar exploded/)("name", async () => {
+    throw new Error("ECONNREFUSED: the test infra broke");
+  });
 
-    // Resolving WITHOUT throwing is the inverted failure signal: test.fails /
-    // test.fail reject a successful body ("Expect test to fail" / "passed
-    // unexpectedly"), so the pin goes red — where a bare test.fails would have
-    // stayed silently green. The reason lives in the adjacent log line.
-    await expect(registered[0]!()).resolves.toBeUndefined();
-    expect(consoleError).toHaveBeenCalledWith(
-      expect.stringMatching(/Expected failure to match \/foo bar exploded\//),
-      expect.objectContaining({ message: expect.stringContaining("ECONNREFUSED") }),
-    );
-  } finally {
-    consoleError.mockRestore();
-  }
+  // Resolving WITHOUT throwing is the inverted failure signal: test.fails /
+  // test.fail reject a successful body ("Expect test to fail" / "passed
+  // unexpectedly"), so the pin goes red — where a bare test.fails would have
+  // stayed silently green. The reason lives in the adjacent log line.
+  await expect(registered[0]!()).resolves.toBeUndefined();
+  expect(consoleError).toHaveBeenCalledWith(
+    expect.stringMatching(/Expected failure to match \/foo bar exploded\//),
+    expect.objectContaining({ message: expect.stringContaining("ECONNREFUSED") }),
+  );
 });
 
 test("a body that succeeds returns success with delete-the-wrapper instructions in the log", async () => {
@@ -120,22 +112,18 @@ test("a body that succeeds returns success with delete-the-wrapper instructions 
   // kind-failing records into the CI run's real FLAKE_RECORD_DIR.
   using _records = scopedFlakeRecordDir();
   const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
-  try {
-    const registered: ((...args: unknown[]) => Promise<unknown>)[] = [];
-    const fake = Object.assign(vi.fn(), {
-      fails: (...args: unknown[]) => registered.push(args.at(-1) as any),
-    });
-    createFailing(fake, /foo bar exploded/)("name", async () => {
-      expect(1 + 1).toBe(2);
-    });
+  const registered: ((...args: unknown[]) => Promise<unknown>)[] = [];
+  const fake = Object.assign(vi.fn(), {
+    fails: (...args: unknown[]) => registered.push(args.at(-1) as any),
+  });
+  createFailing(fake, /foo bar exploded/)("name", async () => {
+    expect(1 + 1).toBe(2);
+  });
 
-    await expect(registered[0]!()).resolves.toBeUndefined();
-    expect(consoleError).toHaveBeenCalledWith(
-      expect.stringMatching(/should have failed .* delete the createFailing\(\) wrapper/s),
-    );
-  } finally {
-    consoleError.mockRestore();
-  }
+  await expect(registered[0]!()).resolves.toBeUndefined();
+  expect(consoleError).toHaveBeenCalledWith(
+    expect.stringMatching(/should have failed .* delete the createFailing\(\) wrapper/s),
+  );
 });
 
 test("a hung body reports as not-the-pinned-failure at the wrapper's own deadline", async () => {
@@ -143,21 +131,17 @@ test("a hung body reports as not-the-pinned-failure at the wrapper's own deadlin
   // kind-failing records into the CI run's real FLAKE_RECORD_DIR.
   using _records = scopedFlakeRecordDir();
   const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
-  try {
-    const registered: ((...args: unknown[]) => Promise<unknown>)[] = [];
-    const fake = Object.assign(vi.fn(), {
-      fails: (...args: unknown[]) => registered.push(args.at(-1) as any),
-    });
-    createFailing(fake, /pinned/, { timeoutMs: 50 })("name", async () => new Promise(() => {}));
+  const registered: ((...args: unknown[]) => Promise<unknown>)[] = [];
+  const fake = Object.assign(vi.fn(), {
+    fails: (...args: unknown[]) => registered.push(args.at(-1) as any),
+  });
+  createFailing(fake, /pinned/, { timeoutMs: 50 })("name", async () => new Promise(() => {}));
 
-    // Without the wrapper's own deadline this would ride to the RUNNER's test
-    // timeout, which the expected-fail machinery counts as the pin holding —
-    // the hang would pass vacuously.
-    await expect(registered[0]!()).resolves.toBeUndefined();
-    expect(consoleError).toHaveBeenCalledWith(expect.stringMatching(/still running after 50ms/));
-  } finally {
-    consoleError.mockRestore();
-  }
+  // Without the wrapper's own deadline this would ride to the RUNNER's test
+  // timeout, which the expected-fail machinery counts as the pin holding —
+  // the hang would pass vacuously.
+  await expect(registered[0]!()).resolves.toBeUndefined();
+  expect(consoleError).toHaveBeenCalledWith(expect.stringMatching(/still running after 50ms/));
 });
 
 // A failure that proves nothing is retried by the wrapper, because vitest's
@@ -165,71 +149,63 @@ test("a hung body reports as not-the-pinned-failure at the wrapper's own deadlin
 test("a failure that proves nothing re-runs the body once, and the pin holds on the retry", async () => {
   using records = scopedFlakeRecordDir();
   const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
-  try {
-    const pin = pinWithRetry([
-      async () => {
-        throw new Error("internal error; reference = 5vdta3r5q0132pecveeqsvkr");
-      },
-      async () => {
-        throw new Error("pinned: woke 3 times after dispose");
-      },
-    ]);
-    await expect(pin.run()).rejects.toThrow(/pinned/);
-    expect(pin.calls()).toBe(2);
-    // Never silent: one record per attempt.
-    expect(records.records().map((r) => r.outcome)).toEqual(["unexpected-error", "pinned-fail"]);
-    expect(consoleError).toHaveBeenCalledWith(
-      expect.stringMatching(/proves nothing about the pinned bug; retry 1 of 1/),
-      expect.objectContaining({ message: expect.stringContaining("internal error") }),
-    );
-  } finally {
-    consoleError.mockRestore();
-  }
+  const pin = pinWithRetry([
+    async () => {
+      throw new Error("internal error; reference = 5vdta3r5q0132pecveeqsvkr");
+    },
+    async () => {
+      throw new Error("pinned: woke 3 times after dispose");
+    },
+  ]);
+  await expect(pin.run()).rejects.toThrow(/pinned/);
+  expect(pin.calls()).toBe(2);
+  // Never silent: one record per attempt.
+  expect(records.records().map((r) => r.outcome)).toEqual(["unexpected-error", "pinned-fail"]);
+  expect(consoleError).toHaveBeenCalledWith(
+    expect.stringMatching(/proves nothing about the pinned bug; retry 1 of 1/),
+    expect.objectContaining({ message: expect.stringContaining("internal error") }),
+  );
 });
 
 test("a second failure that proves nothing goes red; a pass or the pinned failure never retries", async () => {
   using records = scopedFlakeRecordDir();
-  const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
-  try {
-    const blip = async () => {
-      throw new Error("Network connection lost.");
-    };
-    const twice = pinWithRetry([blip, blip]);
-    await expect(twice.run()).resolves.toBeUndefined(); // success = the native machinery goes red
-    expect(twice.calls()).toBe(2);
-    // No pause past the deadline: with 20ms left of a 100ms budget and a 50ms
-    // pause, the runner's timeout would fire mid-pause and count as the pin
-    // holding — so the first attempt's failure goes red at once instead.
-    const registered: ((...args: unknown[]) => Promise<unknown>)[] = [];
-    const fake = Object.assign(vi.fn(), {
-      fails: (...args: unknown[]) => registered.push(args.at(-1) as any),
-    });
-    const late = vi.fn(
-      () => new Promise((_, reject) => setTimeout(() => reject(new Error("blip")), 80)),
-    );
-    createFailing(fake, /pinned/, { timeoutMs: 100, retries: 1, retryDelayMs: 50 })("name", late);
-    await expect(registered[0]!()).resolves.toBeUndefined();
-    expect(late).toHaveBeenCalledTimes(1);
-    const passed = pinWithRetry([async () => undefined]);
-    await expect(passed.run()).resolves.toBeUndefined();
-    expect(passed.calls()).toBe(1);
-    const held = pinWithRetry([
-      async () => {
-        throw new Error("pinned");
-      },
-    ]);
-    await expect(held.run()).rejects.toThrow(/pinned/);
-    expect(held.calls()).toBe(1);
-    expect(records.records().map((r) => r.outcome)).toEqual([
-      "unexpected-error",
-      "unexpected-error",
-      "unexpected-error",
-      "unexpected-pass",
-      "pinned-fail",
-    ]);
-  } finally {
-    consoleError.mockRestore();
-  }
+  vi.spyOn(console, "error").mockImplementation(() => {});
+  const blip = async () => {
+    throw new Error("Network connection lost.");
+  };
+  const twice = pinWithRetry([blip, blip]);
+  await expect(twice.run()).resolves.toBeUndefined(); // success = the native machinery goes red
+  expect(twice.calls()).toBe(2);
+  // No pause past the deadline: with 20ms left of a 100ms budget and a 50ms
+  // pause, the runner's timeout would fire mid-pause and count as the pin
+  // holding — so the first attempt's failure goes red at once instead.
+  const registered: ((...args: unknown[]) => Promise<unknown>)[] = [];
+  const fake = Object.assign(vi.fn(), {
+    fails: (...args: unknown[]) => registered.push(args.at(-1) as any),
+  });
+  const late = vi.fn(
+    () => new Promise((_, reject) => setTimeout(() => reject(new Error("blip")), 80)),
+  );
+  createFailing(fake, /pinned/, { timeoutMs: 100, retries: 1, retryDelayMs: 50 })("name", late);
+  await expect(registered[0]!()).resolves.toBeUndefined();
+  expect(late).toHaveBeenCalledTimes(1);
+  const passed = pinWithRetry([async () => undefined]);
+  await expect(passed.run()).resolves.toBeUndefined();
+  expect(passed.calls()).toBe(1);
+  const held = pinWithRetry([
+    async () => {
+      throw new Error("pinned");
+    },
+  ]);
+  await expect(held.run()).rejects.toThrow(/pinned/);
+  expect(held.calls()).toBe(1);
+  expect(records.records().map((r) => r.outcome)).toEqual([
+    "unexpected-error",
+    "unexpected-error",
+    "unexpected-error",
+    "unexpected-pass",
+    "pinned-fail",
+  ]);
 });
 
 // expectFailure is the standalone assertion for use INSIDE a plain test,

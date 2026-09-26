@@ -247,7 +247,7 @@ function serveShop() {
   const requests: string[] = [];
   const state = { logins: 0 };
   const network = globalThis.fetch;
-  const spy = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+  vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
     const request = new Request(input, init);
     const { origin, pathname } = new URL(request.url);
     if (origin !== SHOP && origin !== ELSEWHERE) return network(request);
@@ -291,7 +291,6 @@ function serveShop() {
       ? Response.json({ sub })
       : Response.json({ error: "invalid_token" }, { status: 401 });
   });
-  onTestFinished(() => spy.mockRestore());
   return {
     requests,
     get logins() {

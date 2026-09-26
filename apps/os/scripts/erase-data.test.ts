@@ -80,11 +80,10 @@ test("a failed resource deletion aborts instead of reporting a successful erase"
 /** One preview deployment's Cloudflare account as fakes: the worker and its Durable Object
  *  namespaces (the erase's services), the Cloudflare API behind the context's `cf`, and the four
  *  data stores behind the listing `fetch`. The flags set before an erase shape what it finds;
- *  `operations` records what it did, in order. Fake timers, the `fetch` stub and the console spy
- *  are restored on dispose. */
+ *  `operations` records what it did, in order. Fake timers are restored on dispose. */
 function eraseFixture() {
   vi.useFakeTimers();
-  const log = vi.spyOn(console, "log").mockImplementation(() => {});
+  vi.spyOn(console, "log").mockImplementation(() => {});
   const fixture = {
     parked: false,
     retainNamespace: false,
@@ -154,8 +153,6 @@ function eraseFixture() {
     } as unknown as Parameters<typeof eraseDataWith>[1],
     [Symbol.dispose]() {
       vi.useRealTimers();
-      vi.unstubAllGlobals();
-      log.mockRestore();
     },
   };
   /** The D1 `/query` API: each `;`-separated statement's results. */

@@ -68,7 +68,6 @@ function stubbedFetch(mock: ReturnType<typeof vi.fn<typeof fetch>>) {
   return {
     fetch: mock,
     [Symbol.dispose]() {
-      vi.unstubAllGlobals();
       vi.useRealTimers();
     },
   };

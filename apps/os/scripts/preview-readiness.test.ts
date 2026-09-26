@@ -2,7 +2,7 @@ import { expect, test, vi } from "vitest";
 import { awaitFullRounds } from "./preview-readiness.ts";
 
 test("awaitFullRounds: a brand-new preview's misses reset the streak, each one a platform-failure warn; ready after the full rounds in a row", async () => {
-  using warn = captureWarn();
+  const warn = captureWarn();
   // the shape measured on brand-new previews (2026-09-24): every probe missing, then fewer, then none
   const rounds = [
     [miss, miss],
@@ -40,7 +40,7 @@ test("awaitFullRounds: a brand-new preview's misses reset the streak, each one a
 });
 
 test("awaitFullRounds: a preview still missing at the deadline fails the deploy, naming its misses", async () => {
-  using warn = captureWarn();
+  const warn = captureWarn();
   await expect(
     awaitFullRounds(async () => [miss], {
       label: "https://pr2-os-preview.example",
@@ -55,7 +55,7 @@ test("awaitFullRounds: a preview still missing at the deadline fails the deploy,
 });
 
 test("awaitFullRounds: a preview that answers at once passes after exactly the rounds asked for, no warn", async () => {
-  using warn = captureWarn();
+  const warn = captureWarn();
   let calls = 0;
   await awaitFullRounds(
     async () => {
@@ -70,18 +70,14 @@ test("awaitFullRounds: a preview that answers at once passes after exactly the r
 const ok = { ok: true as const, ms: 5 };
 const miss = { ok: false as const, stage: "whoami", detail: "internal error; reference = abc" };
 
-/** console.warn (the misses) and console.log (the verdict) captured for one test, restored on
- *  dispose; `calls` are the warns' first arguments. */
+/** console.warn (the misses) and console.log (the verdict) captured for one test; `calls` are
+ *  the warns' first arguments. */
 function captureWarn() {
   const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-  const log = vi.spyOn(console, "log").mockImplementation(() => {});
+  vi.spyOn(console, "log").mockImplementation(() => {});
   return {
     get calls() {
       return warn.mock.calls.map(([first]) => String(first));
-    },
-    [Symbol.dispose]: () => {
-      warn.mockRestore();
-      log.mockRestore();
     },
   };
 }

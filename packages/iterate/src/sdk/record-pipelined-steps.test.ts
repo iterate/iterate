@@ -72,16 +72,12 @@ test("a release that throws is reported, the rest are still released and the ans
       }),
   };
   const reported = vi.spyOn(console, "error").mockImplementation(() => undefined);
-  try {
-    const answered = await withItx({ get: () => itx }, (scope: any) =>
-      scope.cd("/d").append({ type: "y" }),
-    );
-    expect(answered).toEqual({ appended: [{ type: "y" }] });
-    expect(log).toEqual(["dispose cd(/d).append", "dispose cd(/d)"]);
-    expect(reported).toHaveBeenCalled();
-  } finally {
-    reported.mockRestore();
-  }
+  const answered = await withItx({ get: () => itx }, (scope: any) =>
+    scope.cd("/d").append({ type: "y" }),
+  );
+  expect(answered).toEqual({ appended: [{ type: "y" }] });
+  expect(log).toEqual(["dispose cd(/d).append", "dispose cd(/d)"]);
+  expect(reported).toHaveBeenCalled();
 });
 
 test("a void call is recorded as undefined and a recorded argument crosses as the value it wraps", () => {
