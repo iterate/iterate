@@ -147,18 +147,6 @@ export default class Echo extends WorkerEntrypoint {
 }`,
 };
 
-/** Publish `target` as the project's config worker — what EVERY host of the project reaches, the
- *  routing slug in `x-iterate-routing-slug` — once the project's own creation saga has settled: the
- *  saga publishes the seeded config repo, and an append before it lands would be overwritten. */
-export async function publishConfigWorker(itx: any, target: unknown): Promise<void> {
-  await itx.waitForEvent({
-    type: ["events.iterate.com/project/created", "events.iterate.com/project/create-failed"],
-    afterOffset: 0,
-    timeoutMs: 30_000,
-  });
-  await itx.append({ type: "events.iterate.com/itx/ingress-configured", payload: { target } });
-}
-
 // capnweb sessions live for the whole file; disposed at teardown (sessions left open turn into
 // unhandled-rejection noise).
 const sessions: unknown[] = [];

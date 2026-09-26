@@ -10,7 +10,7 @@
 import { expect, test } from "vitest";
 import { parse, print, type ItxExpression, type ItxExpressionInput } from "iterate/expression";
 import type { StreamEvent } from "iterate/stream/processor";
-import { nodeSqliteDurableObjectStorage } from "iterate/stream/test-support";
+import { committedEvent as at, nodeSqliteDurableObjectStorage } from "iterate/stream/test-support";
 import {
   CoreContract,
   facetIsPushedByARow,
@@ -1373,11 +1373,6 @@ test("rule 8 at a child: behind a bare null the physical spelling of a context r
     description: "a jail",
   });
 });
-
-/** A committed DURABLE event at `offset`; createdAt derives from the offset so identity pins read. */
-function at(offset: number, type: string, payload?: Record<string, unknown>): StreamEvent {
-  return { type, payload, offset, createdAt: new Date(offset * 1000).toISOString(), path: "/" };
-}
 
 function reduceAll(events: StreamEvent[], initial = CoreContract.initialState()): CoreState {
   return events.reduce((s, e) => reduceCoreEvent({ event: e, state: s }) ?? s, initial);

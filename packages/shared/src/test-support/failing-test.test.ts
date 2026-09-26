@@ -1,8 +1,8 @@
-import { mkdtempSync, readdirSync, readFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, test, vi } from "vitest";
 import { expectFailure, createFailing } from "./failing-test.ts";
+import { temporaryDirectory } from "./temporary-directory.ts";
 
 // The wrapper through vitest's REAL expected-fail machinery is proven by the
 // child-process fixture in ./flake-test-fixture (the createFailing case): a
@@ -234,17 +234,18 @@ test("expectFailure: success throws with delete-the-wrapper instructions", async
 // real telemetry, and read back what was written.
 function scopedFlakeRecordDir() {
   const previous = process.env.FLAKE_RECORD_DIR;
-  const dir = mkdtempSync(join(tmpdir(), "failing-test-"));
-  process.env.FLAKE_RECORD_DIR = dir;
+  const directory = temporaryDirectory();
+  process.env.FLAKE_RECORD_DIR = directory.path;
   return {
     records: () =>
-      readdirSync(dir).flatMap((file) =>
-        readFileSync(join(dir, file), "utf8")
+      readdirSync(directory.path).flatMap((file) =>
+        readFileSync(join(directory.path, file), "utf8")
           .trim()
           .split("\n")
           .map((line) => JSON.parse(line)),
       ),
     [Symbol.dispose]() {
+      directory[Symbol.dispose]();
       if (previous) process.env.FLAKE_RECORD_DIR = previous;
       else delete process.env.FLAKE_RECORD_DIR;
     },

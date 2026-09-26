@@ -3,11 +3,11 @@ import { env, exports } from "cloudflare:workers";
 import { newWebSocketRpcSession } from "capnweb";
 import { expect, test } from "vitest";
 import type { IterateRpcTarget } from "../src/session.ts";
+import { publishConfigWorker } from "../e2e/support/config-worker.ts";
 import {
   catalog,
   fakeCloudflareCustomHostnames,
   ORIGIN,
-  publishConfigWorker,
   releasePins,
   SRC_ECHO_APP,
   stub,

@@ -1,9 +1,9 @@
 import { execFile } from "node:child_process";
-import { mkdtemp, readFile, rm, writeFile, mkdir } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
+import { temporaryDirectory } from "@iterate-com/shared/test-support/temporary-directory";
 import { newHttpBatchRpcSession } from "capnweb";
 import { connectIterate } from "iterate/node";
 import { test } from "vitest";
@@ -25,16 +25,16 @@ test(
     const slug = freshDnsSafeProjectSlug("cli");
     const member = { email: `${slug}@example.com` };
     const project = await registerProject(slug, member);
-    const directory = await mkdtemp(join(tmpdir(), "iterate-cli-e2e-"));
-    const path = join(directory, "iterate/config.json");
-    await mkdir(join(directory, "iterate"));
+    using directory = temporaryDirectory();
+    const path = join(directory.path, "iterate/config.json");
+    await mkdir(join(directory.path, "iterate"));
     await writeFile(
       path,
       JSON.stringify({ default: "e2e", configs: { e2e: { osBaseUrl: workerUrl("/") } } }),
     );
     const env = {
       ...process.env,
-      XDG_CONFIG_HOME: directory,
+      XDG_CONFIG_HOME: directory.path,
       ITERATE_FORCE_BUILT_PACKAGE: "1",
       ITERATE_SKIP_BROWSER_OPEN: "1",
       ITERATE_BEARER_TOKEN: "",
@@ -143,7 +143,6 @@ test(
       await expect(run(["ping"], key)).rejects.toThrow(/Invalid or revoked bearer/);
     } finally {
       for (const child of children) child.kill();
-      await rm(directory, { recursive: true, force: true });
     }
   },
 );

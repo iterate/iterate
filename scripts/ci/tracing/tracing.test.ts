@@ -1,8 +1,8 @@
 import { execFile } from "node:child_process";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { promisify } from "node:util";
+import { temporaryDirectory } from "@iterate-com/shared/test-support/temporary-directory";
 import { expect, test } from "vitest";
 import { assembleTrace, jobKeyInWorkflow, renderTrace, stepCommands } from "./tracing.ts";
 
@@ -306,24 +306,20 @@ test("the shell hook preserves failures and does not double-count nested bash", 
 test.for([0, 7])(
   "the shell hook makes exit %s available to the next step without Depot logs",
   async (exitCode) => {
-    const directory = await mkdtemp(resolve(tmpdir(), "ci-verdict-"));
-    try {
-      const output = resolve(directory, "step-output");
-      const result = await promisify(execFile)("bash", ["-c", `exit ${exitCode}`], {
-        env: {
-          ...process.env,
-          BASH_ENV: resolve("ci/tracing/shell.sh"),
-          CI_TRACE_SHELL: "",
-          GITHUB_OUTPUT: output,
-        },
-      }).catch((error) => error);
-      expect(result.code || 0).toBe(exitCode);
-      const record = JSON.parse((await readFile(output, "utf8")).trim().split("ci-trace-end=")[1]);
-      expect(record).toEqual(markers(result.stdout).at(-1));
-      expect(record).toMatchObject({ kind: "shell-end", exitCode, time: expect.any(Number) });
-    } finally {
-      await rm(directory, { recursive: true, force: true });
-    }
+    using directory = temporaryDirectory();
+    const output = resolve(directory.path, "step-output");
+    const result = await promisify(execFile)("bash", ["-c", `exit ${exitCode}`], {
+      env: {
+        ...process.env,
+        BASH_ENV: resolve("ci/tracing/shell.sh"),
+        CI_TRACE_SHELL: "",
+        GITHUB_OUTPUT: output,
+      },
+    }).catch((error) => error);
+    expect(result.code || 0).toBe(exitCode);
+    const record = JSON.parse((await readFile(output, "utf8")).trim().split("ci-trace-end=")[1]);
+    expect(record).toEqual(markers(result.stdout).at(-1));
+    expect(record).toMatchObject({ kind: "shell-end", exitCode, time: expect.any(Number) });
   },
 );
 

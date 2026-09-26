@@ -32,12 +32,12 @@ import { expect, test } from "vitest";
 import { E2E_CI_RETRIES } from "@iterate-com/shared/test-support/e2e-policy";
 import { createFailing } from "@iterate-com/shared/test-support/failing-test";
 import { adminCredentials, freshCtx, openItx, session, workerUrl } from "./support/client.ts";
+import { publishConfigWorker } from "./support/config-worker.ts";
 import {
   appSeesUrl,
   fetchProjectUrl,
   freshDnsSafeProjectSlug,
   projectUrl,
-  publishConfigWorker,
   registerProject,
   wsRoundTripOnProjectUrl,
 } from "./support/project-host.ts";

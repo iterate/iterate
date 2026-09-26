@@ -1,8 +1,8 @@
 import { spawnSync } from "node:child_process";
-import { copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { copyFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
+import { temporaryDirectory } from "@iterate-com/shared/test-support/temporary-directory";
 import { expect, test } from "vitest";
 
 const projectDir = join(import.meta.dirname, "..", "..");
@@ -107,7 +107,8 @@ test.for<Record<string, string>>([{}, { CLAUDE_CODE_CHILD_SESSION: "1" }, { AGEN
 // detector it loads from the same path as in this repo. The environment keeps none of this
 // process's agent markers or GIT_* variables.
 function scratchRepo(marker: Record<string, string | undefined>) {
-  const dir = mkdtempSync(join(tmpdir(), "prepare-commit-msg-"));
+  const directory = temporaryDirectory();
+  const dir = directory.path;
   mkdirSync(join(dir, "hooks"));
   copyFileSync(
     join(projectDir, ".husky/prepare-commit-msg"),
@@ -142,7 +143,7 @@ function scratchRepo(marker: Record<string, string | undefined>) {
     git,
     shell,
     write: (file: string, text: string) => writeFileSync(join(dir, file), text),
-    [Symbol.dispose]: () => rmSync(dir, { recursive: true, force: true }),
+    [Symbol.dispose]: directory[Symbol.dispose],
   };
 }
 

@@ -1,11 +1,11 @@
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
-import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, test } from "vitest";
 import { TestTelemetryArtifact } from "../ci-telemetry.ts";
+import { temporaryDirectory } from "../temporary-directory.ts";
 
 const CHILD_VITEST_MS = 30_000;
 
@@ -27,29 +27,24 @@ test.for([
   "preserves a %s failure even when other tests pass",
   { timeout: CHILD_VITEST_MS },
   ([failure, source]) => {
-    using fixture = {
-      directory: mkdtempSync(join(tmpdir(), "vitest-collection-errors-")),
-      [Symbol.dispose]() {
-        rmSync(this.directory, { recursive: true, force: true });
-      },
-    };
+    using fixture = temporaryDirectory();
     const reporter = fileURLToPath(new URL("./retry-telemetry-reporter.ts", import.meta.url));
-    writeFileSync(join(fixture.directory, "passing.test.js"), 'test("unrelated pass", () => {});');
-    writeFileSync(join(fixture.directory, "broken.test.js"), source);
+    writeFileSync(join(fixture.path, "passing.test.js"), 'test("unrelated pass", () => {});');
+    writeFileSync(join(fixture.path, "broken.test.js"), source);
     writeFileSync(
-      join(fixture.directory, "vitest.config.mjs"),
+      join(fixture.path, "vitest.config.mjs"),
       `export default ${JSON.stringify({
         test: { globals: true, include: ["*.test.js"], reporters: [reporter] },
       })};`,
     );
     const require = createRequire(import.meta.url);
     const vitestBin = join(dirname(require.resolve("vitest/package.json")), "vitest.mjs");
-    const artifactDirectory = join(fixture.directory, "telemetry");
+    const artifactDirectory = join(fixture.path, "telemetry");
     const result = spawnSync(
       process.execPath,
       [vitestBin, "run", "--config", "vitest.config.mjs"],
       {
-        cwd: fixture.directory,
+        cwd: fixture.path,
         encoding: "utf8",
         timeout: CHILD_VITEST_MS,
         env: {
@@ -64,7 +59,7 @@ test.for([
             ),
           ),
           TEST_TELEMETRY_ARTIFACT_DIR: artifactDirectory,
-          FLAKE_RECORD_DIR: join(fixture.directory, "flakes"),
+          FLAKE_RECORD_DIR: join(fixture.path, "flakes"),
         },
       },
     );

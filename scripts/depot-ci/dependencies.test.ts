@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
+import { temporaryDirectory } from "@iterate-com/shared/test-support/temporary-directory";
 import { expect, test } from "vitest";
 
 const command = resolve(import.meta.dirname, "dependencies.mjs");
@@ -98,7 +98,8 @@ test("a different install environment changes the fingerprint", () => {
 });
 
 function fixture() {
-  const cwd = mkdtempSync(join(tmpdir(), "iterate-baked-deps-"));
+  const directory = temporaryDirectory();
+  const cwd = directory.path;
   const env = { ...process.env, CI: "true", NODE_ENV: "development" };
   function write(path: string, contents: string) {
     mkdirSync(dirname(join(cwd, path)), { recursive: true });
@@ -140,6 +141,6 @@ function fixture() {
     write,
     env,
     run: (mode: "fingerprint" | "seal") => exec(process.execPath, [command, mode]),
-    [Symbol.dispose]: () => rmSync(cwd, { recursive: true, force: true }),
+    [Symbol.dispose]: directory[Symbol.dispose],
   };
 }

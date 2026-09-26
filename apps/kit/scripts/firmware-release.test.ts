@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
+import { temporaryDirectory } from "@iterate-com/shared/test-support/temporary-directory";
 import { expect, test, vi } from "vitest";
 import { FIRMWARE_VERSION_PATTERN, findFirmwareDevice } from "../src/firmware/catalog.ts";
 import {
@@ -440,7 +440,8 @@ function summary(plan: ReturnType<typeof planFirmwareReleases>) {
  * `components/x`, host-only files, tests, docs and the builder.
  */
 function firmwareRepository() {
-  const root = mkdtempSync(join(tmpdir(), "kit-firmware-plan-"));
+  const directory = temporaryDirectory();
+  const root = directory.path;
   const devices = [
     { id: "device-a", target: "a" },
     { id: "device-b", target: "b" },
@@ -510,7 +511,7 @@ function firmwareRepository() {
         headVersion: version(head()),
         ...input,
       }),
-    [Symbol.dispose]: () => rmSync(root, { recursive: true, force: true }),
+    [Symbol.dispose]: directory[Symbol.dispose],
   };
 }
 

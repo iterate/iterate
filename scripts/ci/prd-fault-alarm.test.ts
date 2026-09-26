@@ -1,6 +1,6 @@
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync } from "node:fs";
 import { join } from "node:path";
+import { temporaryDirectory } from "@iterate-com/shared/test-support/temporary-directory";
 import type { WebClient } from "@slack/web-api";
 import { expect, test, vi } from "vitest";
 import { z } from "zod";
@@ -152,14 +152,10 @@ test.for([
   workersLogs(serverErrorsOnly(0));
   vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", credentials.accountId);
   vi.stubEnv("CLOUDFLARE_API_TOKEN", credentials.apiToken);
-  const directory = mkdtempSync(join(tmpdir(), "prd-fault-alarm-"));
-  try {
-    const stateOut = join(directory, "state.json");
-    await expect(run({ ref, stateOut })).resolves.toBe("prd is quiet");
-    expect(existsSync(stateOut)).toBe(kept);
-  } finally {
-    rmSync(directory, { recursive: true });
-  }
+  using directory = temporaryDirectory();
+  const stateOut = join(directory.path, "state.json");
+  await expect(run({ ref, stateOut })).resolves.toBe("prd is quiet");
+  expect(existsSync(stateOut)).toBe(kept);
 });
 
 // Each fault is an incident: a new one pages, its repeats go into that page's thread.

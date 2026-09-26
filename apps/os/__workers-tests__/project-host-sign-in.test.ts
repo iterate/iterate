@@ -5,7 +5,8 @@
 // challenge under both routings, are in e2e/ingress-project-host.e2e.test.ts.
 import { exports } from "cloudflare:workers";
 import { expect, test, vi } from "vitest";
-import { publishConfigWorker, signedInSession, SRC_ECHO_APP } from "./support.ts";
+import { publishConfigWorker } from "../e2e/support/config-worker.ts";
+import { signedInSession, SRC_ECHO_APP } from "./support.ts";
 
 test("a member's session cookie on a project host: a read from anywhere and a write or WebSocket upgrade from the host itself carry the principal; a cross-site write or upgrade arrives anonymous", async () => {
   const { origin, cookie, principal } = await hostCookieSession("cookie-csrf");

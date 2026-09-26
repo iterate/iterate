@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { temporaryDirectory } from "@iterate-com/shared/test-support/temporary-directory";
 import { expect, test } from "vitest";
 
 const script = resolve(import.meta.dirname, "esp-idf.sh");
@@ -43,10 +43,10 @@ test.for([
 });
 
 function fixture() {
-  const root = mkdtempSync(join(tmpdir(), "iterate-esp-idf-"));
-  const idfPath = join(root, "esp-idf");
-  const toolsPath = join(root, "espressif");
-  const githubEnv = join(root, "github-env");
+  const root = temporaryDirectory();
+  const idfPath = join(root.path, "esp-idf");
+  const toolsPath = join(root.path, "espressif");
+  const githubEnv = join(root.path, "github-env");
   writeFileSync(githubEnv, "");
   const env = {
     ...process.env,
@@ -68,6 +68,6 @@ function fixture() {
       writeFileSync(join(toolsPath, "iterate-esp-idf.receipt"), `${contents}\n`);
     },
     ensure: () => spawnSync(script, ["ensure"], { env, encoding: "utf8" }),
-    [Symbol.dispose]: () => rmSync(root, { recursive: true, force: true }),
+    [Symbol.dispose]: root[Symbol.dispose],
   };
 }

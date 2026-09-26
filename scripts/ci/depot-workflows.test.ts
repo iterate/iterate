@@ -1,9 +1,9 @@
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { dirname, join, matchesGlob, relative, resolve } from "node:path";
 import { expect, test } from "vitest";
 import { parse as parseYaml } from "yaml";
+import { temporaryDirectory } from "@iterate-com/shared/test-support/temporary-directory";
 import { testEvidencePaths } from "@iterate-com/shared/test-support/test-evidence";
 import { CI_WORKFLOW_PREVIEWS } from "../../apps/os/scripts/preview-sweep.ts";
 import { stateArtifact as osLatencyState } from "./os-latency-guard.ts";
@@ -1018,37 +1018,33 @@ test("the CI telemetry sync's test evidence jobs are the jobs that upload a fold
 });
 
 test("the fallback report names a failed evidence step that did not report itself, once, and never fails", () => {
-  const runner = mkdtempSync(join(tmpdir(), "test-evidence-unreported-"));
-  const summary = join(runner, "summary.md");
+  using runner = temporaryDirectory();
+  const summary = join(runner.path, "summary.md");
   const report = (write: string, upload: string) => {
     writeFileSync(summary, "");
     const result = spawnSync(
       "bash",
       [resolve(repoRoot, "scripts/ci/test-evidence-unreported.sh"), write, upload],
       {
-        env: { PATH: process.env.PATH, GITHUB_STEP_SUMMARY: summary, RUNNER_TEMP: runner },
+        env: { PATH: process.env.PATH, GITHUB_STEP_SUMMARY: summary, RUNNER_TEMP: runner.path },
         encoding: "utf8",
       },
     );
     return { status: result.status, stdout: result.stdout, summary: readFileSync(summary, "utf8") };
   };
-  try {
-    // Doppler refused: the upload never reached the script
-    const unreported = report("success", "failure");
-    expect(unreported).toEqual({
-      status: 0,
-      stdout: `::warning title=${stepFailureTitles.upload}::the upload step failed before it could say why (Doppler, pnpm or the step's timeout); its log has the rest\n`,
-      summary: `**${stepFailureTitles.upload}**: the upload step failed before it could say why (Doppler, pnpm or the step's timeout); its log has the rest. The tests' result is unaffected.\n`,
-    });
-    const write = report("failure", "skipped");
-    expect(write.stdout).toContain(`::warning title=${stepFailureTitles.write}::the write step`);
+  // Doppler refused: the upload never reached the script
+  const unreported = report("success", "failure");
+  expect(unreported).toEqual({
+    status: 0,
+    stdout: `::warning title=${stepFailureTitles.upload}::the upload step failed before it could say why (Doppler, pnpm or the step's timeout); its log has the rest\n`,
+    summary: `**${stepFailureTitles.upload}**: the upload step failed before it could say why (Doppler, pnpm or the step's timeout); its log has the rest. The tests' result is unaffected.\n`,
+  });
+  const write = report("failure", "skipped");
+  expect(write.stdout).toContain(`::warning title=${stepFailureTitles.write}::the write step`);
 
-    // the script reported the upload itself (reportStepFailure's marker): nothing more to say
-    writeFileSync(join(runner, "test-evidence-upload.reported"), "R2 PUT …: 500\n");
-    expect(report("success", "failure")).toEqual({ status: 0, stdout: "", summary: "" });
-  } finally {
-    rmSync(runner, { recursive: true });
-  }
+  // the script reported the upload itself (reportStepFailure's marker): nothing more to say
+  writeFileSync(join(runner.path, "test-evidence-upload.reported"), "R2 PUT …: 500\n");
+  expect(report("success", "failure")).toEqual({ status: 0, stdout: "", summary: "" });
 });
 
 test("Kit's host tests write CTest's JUnit XML into the test evidence folder", () => {
@@ -1073,9 +1069,9 @@ test("the test jobs' flake records go into the test evidence folder", () => {
 
 test("the attempt step reads the job attempt's id from DEPOT_JOB_URL, and fails without one", () => {
   const run = loadWorkflow(".depot/workflows/test.yml").jobs.test?.steps?.[0]?.run ?? "";
-  const directory = mkdtempSync(join(tmpdir(), "job-attempt-"));
+  using directory = temporaryDirectory();
   const attempt = (jobUrl: string) => {
-    const output = join(directory, "output");
+    const output = join(directory.path, "output");
     writeFileSync(output, "");
     const result = spawnSync("bash", ["-e", "-c", run], {
       env: { PATH: process.env.PATH, GITHUB_OUTPUT: output, DEPOT_JOB_URL: jobUrl },
@@ -1083,20 +1079,16 @@ test("the attempt step reads the job attempt's id from DEPOT_JOB_URL, and fails 
     });
     return { status: result.status, output: readFileSync(output, "utf8") };
   };
-  try {
-    expect(
-      attempt(
-        "https://depot.dev/orgs/0p91s0lz49/workflows/x37szwmr3k?job=xv1qfjsdbq&attempt=7wxvtkb2rg",
-      ),
-    ).toEqual({ status: 0, output: "id=7wxvtkb2rg\n" });
-    expect(attempt("")).toEqual({ status: 1, output: "" });
-    expect(attempt("https://depot.dev/orgs/0p91s0lz49/workflows/x37szwmr3k")).toEqual({
-      status: 1,
-      output: "",
-    });
-  } finally {
-    rmSync(directory, { recursive: true });
-  }
+  expect(
+    attempt(
+      "https://depot.dev/orgs/0p91s0lz49/workflows/x37szwmr3k?job=xv1qfjsdbq&attempt=7wxvtkb2rg",
+    ),
+  ).toEqual({ status: 0, output: "id=7wxvtkb2rg\n" });
+  expect(attempt("")).toEqual({ status: 1, output: "" });
+  expect(attempt("https://depot.dev/orgs/0p91s0lz49/workflows/x37szwmr3k")).toEqual({
+    status: 1,
+    output: "",
+  });
 });
 
 test.for([

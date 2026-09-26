@@ -2,13 +2,14 @@
 // windows (one of the suite's longest rows) and runs beside the other agent stories.
 import { expect, test } from "vitest";
 import { collector, freshCtx, until } from "../../os/e2e/support/client.ts";
+import { FakeAi } from "../../os/e2e/support/fake-ai.ts";
 import { openAgentItx } from "./support.ts";
-import { ScriptedAi, configureModel, settledLog } from "./fixtures.ts";
+import { configureModel, settledLog } from "./fixtures.ts";
 
 test("streamed: the answer reaches a live subscriber as ephemeral chunk windows before it settles — never a stored row", async () => {
   const itx = await openAgentItx(freshCtx("agent-chunks"));
   const support = itx.cd("/agents/support");
-  const ai = new ScriptedAi(["Four words, no code."]);
+  const ai = new FakeAi(["Four words, no code."]);
   await support.provide("itx.ai", ai);
   const windows = collector();
   await support.subscribe({
