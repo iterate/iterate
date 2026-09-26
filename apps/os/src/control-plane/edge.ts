@@ -571,6 +571,30 @@ export class ControlPlane {
       this.#db.routeIntegration(provider, externalId, projectId, path),
     );
   }
+  /** Move a provider account's route from the connection holding it to another, atomically
+   *  (catalog.ts `moveIntegrationRoute`). */
+  moveIntegrationRoute(
+    provider: string,
+    externalId: string,
+    from: { projectId: string; path: string },
+    to: { projectId: string; path: string },
+  ): Promise<void> {
+    return this.#call("moveIntegrationRoute", () =>
+      this.#db.moveIntegrationRoute(provider, externalId, from, to),
+    );
+  }
+  /** Release one account's route, only while the connection at `path` holds it (catalog.ts
+   *  `releaseIntegrationRoute`). */
+  releaseIntegrationRoute(
+    provider: string,
+    externalId: string,
+    projectId: string,
+    path: string,
+  ): Promise<void> {
+    return this.#call("releaseIntegrationRoute", () =>
+      this.#db.releaseIntegrationRoute(provider, externalId, projectId, path),
+    );
+  }
   /** Release every route of the connection at `path`; another connection's are left alone. */
   releaseIntegrationRoutes(projectId: string, path: string): Promise<void> {
     return this.#call("releaseIntegrationRoutes", () =>

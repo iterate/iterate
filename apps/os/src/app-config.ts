@@ -507,6 +507,22 @@ export function appConfigOf(env: AppConfigEnv): AppConfig {
   return appConfig;
 }
 
+/** WHAT iterate's APP ASKS FOR, by provider: its configured scopes — what a project's connect
+ *  through it asks, and so what a person's account needs before a project uses it
+ *  (context/built-ins.ts `integrations.connect`). A GitHub App's permissions are the App's, and a
+ *  provider without iterate's app is absent. */
+export function iterateAppScopesOf(
+  config: AppConfig,
+): Partial<Record<"slack" | "google" | "cloudflare", string[]>> {
+  const scopes: Partial<Record<"slack" | "google" | "cloudflare", string[]>> = {};
+  const providers: ("slack" | "google" | "cloudflare")[] = ["slack", "google", "cloudflare"];
+  for (const provider of providers) {
+    const app = config.integrations[provider];
+    if (app) scopes[provider] = [...app.scopes];
+  }
+  return scopes;
+}
+
 const sessionSigningSecretByConfig = new WeakMap<AppConfig, Promise<string>>();
 
 /** THE SESSION-SIGNING SECRET (caller.ts `signClaims`/`verifyClaims`: the login flow's cookie, a

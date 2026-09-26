@@ -5,7 +5,7 @@
 // connection here is named `acme`.
 import { createHmac } from "node:crypto";
 import { env, exports } from "cloudflare:workers";
-import { expect, test, vi } from "vitest";
+import { expect, onTestFinished, test, vi } from "vitest";
 import type { StreamEvent } from "iterate/stream/processor";
 import { fakeUserIdOf } from "../../dummy-petshop/src/state.ts";
 import { DurableObjectNameCodec } from "../src/context/paths.ts";
@@ -430,6 +430,308 @@ test("GitHub: a callback with an installation but no code sends the human on to 
   });
 });
 
+test("GitHub: an installation iterate's App already has connects without its configure page — the person authorizes the App at once, and the admin proof connects it", async () => {
+  const member = await projectWithMember("github-installed");
+  const petshop = petshopFakes();
+  await registerIterateInstallation(petshop, { installationId: "9601" });
+  const { authorizationUrl } = await projectFacet(member.itx).connectIntegration({
+    provider: "github",
+    connection: "acme",
+    client: "iterate",
+    next: NEXT,
+    installationId: "9601",
+    platformOrigin: ORIGIN,
+  });
+  const authorize = new URL(authorizationUrl);
+  expect({
+    at: authorize.href.split("?")[0],
+    ...Object.fromEntries(authorize.searchParams),
+  }).toMatchObject({
+    at: "https://github.test/login/oauth/authorize",
+    redirect_uri: GITHUB_CALLBACK,
+  });
+  const back = await followConsent(petshop, `${authorizationUrl}&login=admin-9601`, member.cookie);
+  expect(back, await back.clone().text()).toMatchObject({ status: 303 });
+  expect(await catalog().integrationRoute("github", "9601")).toEqual({
+    projectId: member.projectId,
+    path: "/integrations/github/acme",
+  });
+});
+
+test("GitHub: an installation another project holds is offered to move here; confirming moves its webhooks here in one step and disconnects the other project's connection, and the offer works once", async () => {
+  const { member: holder, petshop } = await githubInstalled("github-held", {
+    installationId: "9701",
+  });
+  const mover = await otherProject(holder, "github-mover");
+  // the same person proves they administer it, for the second project
+  const back = await consented(petshop, mover, "github", "installation_id=9701");
+  expect(back, await back.clone().text()).toMatchObject({ status: 303 });
+  const landing = new URL(back.headers.get("location")!);
+  expect(landing.href.split("?")[0]).toBe(NEXT);
+  const offer = landing.searchParams.get("move")!;
+  expect(JSON.parse(atob(base64(offer.split(".")[0]!)))).toMatchObject({
+    kind: "github-move",
+    account: "org-9701",
+    holderSlug: "github-held",
+  });
+  // nothing moved yet: the holder keeps its route and its row
+  expect(await catalog().integrationRoute("github", "9701")).toMatchObject({
+    projectId: holder.projectId,
+  });
+  expect(await integrationsOf(mover.itx)).toEqual({});
+
+  await projectFacet(mover.itx).confirmGithubMove({ offer });
+  expect(await catalog().integrationRoute("github", "9701")).toEqual({
+    projectId: mover.projectId,
+    path: "/integrations/github/acme",
+  });
+  await vi.waitFor(async () => {
+    expect(await integrationsOf(mover.itx)).toMatchObject({
+      "/integrations/github/acme": { account: "org-9701", externalId: "9701" },
+    });
+    expect(await integrationsOf(holder.itx)).toEqual({});
+  });
+  expect(await disconnectedFacts(holder.projectId)).toEqual([
+    { connection: "acme", reason: "moved" },
+  ]);
+  const push = { installation: { id: 9701 } };
+  await githubPost(GITHUB_WEBHOOK, push, ITERATE_GITHUB_WEBHOOK_SECRET, "d-move");
+  expect(await webhooksOn(mover.projectId, "/integrations/github/acme")).toHaveLength(1);
+  expect(await webhooksOn(holder.projectId, "/integrations/github/acme")).toEqual([]);
+  // the offer is spent
+  await expect(projectFacet(mover.itx).confirmGithubMove({ offer })).rejects.toThrow(/expired/);
+});
+
+test("GitHub: an offer for an installation its holder has since given up moves nothing, and leaves the holder's new installation alone", async () => {
+  const { member: holder, petshop } = await githubInstalled("github-stale", {
+    installationId: "9801",
+  });
+  const mover = await otherProject(holder, "github-stale-mover");
+  const back = await consented(petshop, mover, "github", "installation_id=9801");
+  const offer = new URL(back.headers.get("location")!).searchParams.get("move")!;
+  // the holder's connection takes another installation meanwhile
+  await registerIterateInstallation(petshop, { installationId: "9802" });
+  await connected(petshop, holder, "github", "installation_id=9802");
+  await expect(projectFacet(mover.itx).confirmGithubMove({ offer })).rejects.toThrow(
+    /moved meanwhile/,
+  );
+  expect(await catalog().integrationRoute("github", "9801")).toBeNull();
+  expect(await catalog().integrationRoute("github", "9802")).toEqual({
+    projectId: holder.projectId,
+    path: "/integrations/github/acme",
+  });
+  await vi.waitFor(async () =>
+    expect(await integrationsOf(holder.itx)).toMatchObject({
+      "/integrations/github/acme": { externalId: "9802" },
+    }),
+  );
+  expect(await disconnectedFacts(holder.projectId)).toEqual([]);
+});
+
+test("GitHub: the project that lost an installation stops using it, even at another secret path it minted it at, within the route re-check", async () => {
+  const { member: holder, petshop } = await githubInstalled("github-lost", {
+    installationId: "9811",
+  });
+  // a second path of the holder's own, minting the same installation while it holds it
+  await holder.itx.secrets.set(
+    "/secrets/github-copy",
+    {},
+    {
+      urls: ["https://github.test"],
+      refresh: {
+        kind: "github-app-installation",
+        apiOrigin: "https://github.test",
+        installationId: "9811",
+        client: { platform: "github" },
+      },
+    },
+  );
+  expect(await installationRepositories(holder.itx, "/secrets/github-copy")).toMatchObject({
+    status: 200,
+  });
+  const mover = await otherProject(holder, "github-lost-mover");
+  const back = await consented(petshop, mover, "github", "installation_id=9811");
+  const offer = new URL(back.headers.get("location")!).searchParams.get("move")!;
+  await projectFacet(mover.itx).confirmGithubMove({ offer });
+  // past the re-check, within the token's own life (the fake's installation tokens last 60 s)
+  vi.useFakeTimers({ toFake: ["Date"] });
+  onTestFinished(() => void vi.useRealTimers());
+  vi.setSystemTime(Date.now() + 31_000);
+  const refused = await installationRepositories(holder.itx, "/secrets/github-copy");
+  vi.useRealTimers();
+  expect({ status: refused.status, text: await refused.text() }).toMatchObject({
+    status: 502,
+    text: expect.stringContaining("not connected to this project"),
+  });
+});
+
+test("GitHub: a secret that minted an installation's token and is set again without its refresh keeps no token, so it cannot use the installation once it moved", async () => {
+  const { member: holder, petshop } = await githubInstalled("github-strip", {
+    installationId: "9841",
+  });
+  await holder.itx.secrets.set(
+    "/secrets/github-copy",
+    {},
+    {
+      urls: ["https://github.test"],
+      refresh: {
+        kind: "github-app-installation",
+        apiOrigin: "https://github.test",
+        installationId: "9841",
+        client: { platform: "github" },
+      },
+    },
+  );
+  expect(await installationRepositories(holder.itx, "/secrets/github-copy")).toMatchObject({
+    status: 200,
+  });
+  // merged over, the refresh left out: what it minted goes with it
+  await holder.itx.secrets.set(
+    "/secrets/github-copy",
+    {},
+    { urls: ["https://github.test"], merge: true },
+  );
+  const mover = await otherProject(holder, "github-strip-mover");
+  const back = await consented(petshop, mover, "github", "installation_id=9841");
+  const offer = new URL(back.headers.get("location")!).searchParams.get("move")!;
+  await projectFacet(mover.itx).confirmGithubMove({ offer });
+  const refused = await installationRepositories(holder.itx, "/secrets/github-copy");
+  expect({ status: refused.status, text: await refused.text() }).toMatchObject({
+    status: 502,
+    text: expect.stringContaining("accessToken"),
+  });
+});
+
+test("GitHub: the holder reconnecting to another installation while a move's cleanup runs there keeps that installation", async () => {
+  const { member: holder, petshop } = await githubInstalled("github-race", {
+    installationId: "9851",
+  });
+  const mover = await otherProject(holder, "github-race-mover");
+  const back = await consented(petshop, mover, "github", "installation_id=9851");
+  const offer = new URL(back.headers.get("location")!).searchParams.get("move")!;
+  await registerIterateInstallation(petshop, { installationId: "9852" });
+  // The cleanup's route release (the first delete of a route here) waits for the reconnect, or
+  // two seconds for a reconnect that waits for the cleanup. Flags, polled: a promise one side
+  // resolves would run the other's continuation in the wrong Durable Object's I/O context.
+  let cleanupReached = false;
+  let reconnected = false;
+  const prepare = env.DB.prepare.bind(env.DB);
+  const prepares = vi.spyOn(env.DB, "prepare").mockImplementation((sql: string) => {
+    const statement = prepare(sql);
+    if (!sql.startsWith("delete from integration_routes") || /exists|not in/.test(sql))
+      return statement;
+    prepares.mockRestore();
+    const bind = statement.bind.bind(statement);
+    statement.bind = (...args: unknown[]) => {
+      const bound = bind(...args);
+      const run = bound.run.bind(bound);
+      bound.run = (async () => {
+        cleanupReached = true;
+        for (const until = Date.now() + 2_000; !reconnected && Date.now() < until;)
+          await scheduler.wait(20);
+        return run();
+      }) as typeof bound.run;
+      return bound;
+    };
+    return statement;
+  });
+  onTestFinished(() => prepares.mockRestore());
+  const moved = projectFacet(mover.itx).confirmGithubMove({ offer });
+  await vi.waitFor(() => expect(cleanupReached).toBe(true));
+  await connected(petshop, holder, "github", "installation_id=9852");
+  reconnected = true;
+  await moved;
+  await vi.waitFor(async () =>
+    expect(await integrationsOf(holder.itx)).toMatchObject({
+      "/integrations/github/acme": { externalId: "9852" },
+    }),
+  );
+  expect(await catalog().integrationRoute("github", "9852")).toEqual({
+    projectId: holder.projectId,
+    path: "/integrations/github/acme",
+  });
+  expect(await installationRepositories(holder.itx, "/secrets/github-acme")).toMatchObject({
+    status: 200,
+  });
+});
+
+test("GitHub: a move whose cleanup at the holder fails says so, and the same offer finishes it", async () => {
+  const { member: holder, petshop } = await githubInstalled("github-cleanup", {
+    installationId: "9821",
+  });
+  const mover = await otherProject(holder, "github-cleanup-mover");
+  const back = await consented(petshop, mover, "github", "installation_id=9821");
+  const offer = new URL(back.headers.get("location")!).searchParams.get("move")!;
+  const holderRoot = stub(holder.projectId);
+  await holderRoot.append({ type: "events.iterate.com/itx/paused", payload: { reason: "test" } });
+  await expect(projectFacet(mover.itx).confirmGithubMove({ offer })).rejects.toThrow(
+    /press Move again/,
+  );
+  // moved already: the route is the mover's
+  expect(await catalog().integrationRoute("github", "9821")).toMatchObject({
+    projectId: mover.projectId,
+  });
+  await holderRoot.append({ type: "events.iterate.com/itx/resumed", payload: {} });
+  await projectFacet(mover.itx).confirmGithubMove({ offer });
+  await vi.waitFor(async () => expect(await integrationsOf(holder.itx)).toEqual({}));
+  expect(await disconnectedFacts(holder.projectId)).toEqual([
+    { connection: "acme", reason: "moved" },
+  ]);
+  // done: the offer is spent now
+  await expect(projectFacet(mover.itx).confirmGithubMove({ offer })).rejects.toThrow(/expired/);
+});
+
+test("GitHub: a move that fails to connect puts both installations' routes back where they were", async () => {
+  const { member: holder, petshop } = await githubInstalled("github-restore", {
+    installationId: "9831",
+  });
+  const mover = await otherProject(holder, "github-restore-mover");
+  await registerIterateInstallation(petshop, { installationId: "9832" });
+  await connected(petshop, mover, "github", "installation_id=9832");
+  const back = await consented(petshop, mover, "github", "installation_id=9831");
+  const offer = new URL(back.headers.get("location")!).searchParams.get("move")!;
+  // the installation's key no longer verifies: minting its first token here fails
+  await petshop.state.registerApp({
+    publicKeyPem: "not a key",
+    appId: "github-test-app",
+    appSlug: "iterate-test",
+    callbackUrl: GITHUB_CALLBACK,
+    installationId: "9831",
+    account: { login: "org-9831" },
+    users: [{ login: "admin-9831", role: "admin" }],
+  });
+  await expect(projectFacet(mover.itx).confirmGithubMove({ offer })).rejects.toThrow(
+    /Minting the installation's token failed/,
+  );
+  expect(await catalog().integrationRoute("github", "9831")).toEqual({
+    projectId: holder.projectId,
+    path: "/integrations/github/acme",
+  });
+  expect(await catalog().integrationRoute("github", "9832")).toEqual({
+    projectId: mover.projectId,
+    path: "/integrations/github/acme",
+  });
+});
+
+test("GitHub: a move offer is refused for another project, and one someone forged", async () => {
+  const { member: holder, petshop } = await githubInstalled("github-held-2", {
+    installationId: "9702",
+  });
+  const mover = await otherProject(holder, "github-mover-2");
+  const back = await consented(petshop, mover, "github", "installation_id=9702");
+  const offer = new URL(back.headers.get("location")!).searchParams.get("move")!;
+  const third = await otherProject(holder, "github-third-2");
+  await expect(projectFacet(third.itx).confirmGithubMove({ offer })).rejects.toThrow(/expired/);
+  const [payload, signature] = offer.split(".");
+  const forged = `${btoa(atob(base64(payload!)).replace("github-held-2", "x")).replaceAll("=", "")}.${signature}`;
+  await expect(projectFacet(mover.itx).confirmGithubMove({ offer: forged })).rejects.toThrow(
+    /expired/,
+  );
+  expect(await catalog().integrationRoute("github", "9702")).toMatchObject({
+    projectId: holder.projectId,
+  });
+});
+
 test("GitHub: a secret in another project naming iterate's App and a routed installation cannot mint", async () => {
   const { member } = await githubInstalled("github-mint-gate", { installationId: "9301" });
   const other = await otherProject(member, "github-mint-thief");
@@ -515,7 +817,7 @@ function projectFacet(itx: Member["itx"]) {
   // `facets.get` answers the SDK's facet shell over the wire; the class it hosts is ours.
   return itx.cd("/").facets.get("project") as Pick<
     ProjectDurableObject,
-    "connectIntegration" | "disconnectIntegration"
+    "connectIntegration" | "disconnectIntegration" | "confirmGithubMove"
   > & { snapshot(): Promise<{ state: ProjectState }> };
 }
 
@@ -725,4 +1027,20 @@ function githubScopeWithoutUrlsOs(): IntegrationScope {
     withItx: () => Promise.reject(new Error("no itx in this test")),
     storage,
   };
+}
+
+/** base64url → base64, for `atob`. */
+function base64(base64url: string) {
+  const plain = base64url.replaceAll("-", "+").replaceAll("_", "/");
+  return plain + "=".repeat((4 - (plain.length % 4)) % 4);
+}
+
+/** Every `github/disconnected` on a project's root. */
+async function disconnectedFacts(projectId: string) {
+  const { events } = (await stub(projectId).invoke(["itx", ["readEvents", 0, 500]])) as {
+    events: StreamEvent[];
+  };
+  return events
+    .filter((event) => event.type === "events.iterate.com/github/disconnected")
+    .map((event) => event.payload);
 }

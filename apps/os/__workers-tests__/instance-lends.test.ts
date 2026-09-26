@@ -114,6 +114,62 @@ test("a project returning a lend to every project ends it for that project alone
   await global.secrets.revokeLend(name, lendId);
 });
 
+test("a revocation that could not tell its project fails, and revoked again, it finishes: the project's path goes, its fact lands once", async () => {
+  const key = `instance-key-${crypto.randomUUID()}`;
+  const global = await operatorGlobal();
+  const name = `/secrets/instance-retry-${crypto.randomUUID().slice(0, 8)}`;
+  await global.secrets.set(name, key, { urls: [KEYED] });
+  const project = await projectWithMember(`instance-retry-${crypto.randomUUID().slice(0, 8)}`);
+  const { lendId } = await global.secrets.lend(name, {
+    to: project.projectId,
+    as: "/secrets/kept",
+  });
+  const borrowed = stub(`${project.projectId}.iterate/secrets/kept`);
+  await borrowed.append({ type: "events.iterate.com/itx/paused", payload: { reason: "test" } });
+  await expect(global.secrets.revokeLend(name, lendId)).rejects.toThrow(/paused/);
+  await borrowed.append({ type: "events.iterate.com/itx/resumed", payload: {} });
+  await global.secrets.revokeLend(name, lendId);
+  expect((await project.itx.secrets.list()).map((row: { path: string }) => row.path)).not.toContain(
+    "/secrets/kept",
+  );
+  const lenderLog = (await stub(
+    DurableObjectNameCodec.stringify({ projectId: GLOBAL_PROJECT_ID, path: name }),
+  ).invoke(["itx", ["readEvents", 0, 500]])) as { events: StreamEvent[] };
+  expect(
+    lenderLog.events.filter((event) => event.type === "events.iterate.com/secret/lend-revoked"),
+  ).toHaveLength(1);
+  await global.secrets.delete(name);
+});
+
+test("a revocation of a lend to every project that could not tell one project fails, and revoked again, it tells that project", async () => {
+  const key = `instance-key-${crypto.randomUUID()}`;
+  const global = await operatorGlobal();
+  const run = crypto.randomUUID().slice(0, 8);
+  const name = `/secrets/instance-every-retry-${run}`;
+  const as = `/secrets/keyed-${run}`;
+  await global.secrets.set(name, key, { urls: [KEYED] });
+  const { lendId } = await global.secrets.lend(name, { to: "every-project", as });
+  const told = await projectWithMember(`instance-told-${run}`);
+  const untold = await projectWithMember(`instance-untold-${run}`);
+  const pathsOf = async (project: typeof told) =>
+    (await project.itx.secrets.list()).map((row: { path: string }) => row.path);
+  const borrowed = stub(`${untold.projectId}.iterate${as}`);
+  await borrowed.append({ type: "events.iterate.com/itx/paused", payload: { reason: "test" } });
+  await expect(global.secrets.revokeLend(name, lendId)).rejects.toThrow(/paused/);
+  await borrowed.append({ type: "events.iterate.com/itx/resumed", payload: {} });
+  expect(await pathsOf(told)).not.toContain(as);
+  expect(await pathsOf(untold)).toContain(as);
+  await global.secrets.revokeLend(name, lendId);
+  expect(await pathsOf(untold)).not.toContain(as);
+  const lenderLog = (await stub(
+    DurableObjectNameCodec.stringify({ projectId: GLOBAL_PROJECT_ID, path: name }),
+  ).invoke(["itx", ["readEvents", 0, 500]])) as { events: StreamEvent[] };
+  expect(
+    lenderLog.events.filter((event) => event.type === "events.iterate.com/secret/lend-revoked"),
+  ).toHaveLength(1);
+  await global.secrets.delete(name);
+});
+
 test("only the operator sets and lends the instance's secrets: a person reaches no global root, and one who forges their way to it is refused", async () => {
   const person = await signedInSession(
     `instance-stranger-${crypto.randomUUID().slice(0, 8)}@example.test`,
@@ -121,7 +177,7 @@ test("only the operator sets and lends the instance's secrets: a person reaches 
   await expect(Promise.resolve(person.global)).rejects.toThrow(/Only a platform admin/);
   await expect(
     person.user.secrets.lend("/secrets/anything", { to: "every-project", as: "/secrets/x" }),
-  ).rejects.toThrow(/not a member/);
+  ).rejects.toThrow(/the deployment's own secrets/);
   const root = stub(DurableObjectNameCodec.stringify({ projectId: GLOBAL_PROJECT_ID, path: "/" }));
   const stranger = { principal: { actor: "user_stranger", email: "stranger@example.test" } };
   await refused(

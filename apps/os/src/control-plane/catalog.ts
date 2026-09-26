@@ -22,6 +22,8 @@ import {
 } from "./db/queries/.generated/hostnames.sql.ts";
 import {
   integrationRoute,
+  moveIntegrationRoute,
+  releaseIntegrationRoute,
   releaseIntegrationRoutes,
   releaseOtherIntegrationRoutes,
   releaseRoutesOfDeletedProject,
@@ -698,6 +700,43 @@ export class ControlPlaneDatabase {
         ? `The ${provider} account '${externalId}' is already connected at ${holder.path}.`
         : `The ${provider} account '${externalId}' is connected to another project.`,
     );
+  }
+  /** MOVE a provider account's route from the connection that holds it (`from`) to another (`to`):
+   *  one batch — the route re-pointed ONLY while `from` still holds this account (a compare-and-swap
+   *  on the row), then `to`'s other routes released only once `to` holds it. So the account is never
+   *  routed to both or neither, and when `from` no longer holds it (it gave it up, or moved it
+   *  meanwhile) the batch changes nothing and the move is refused. */
+  async moveIntegrationRoute(
+    provider: string,
+    externalId: string,
+    from: { projectId: string; path: string },
+    to: { projectId: string; path: string },
+  ): Promise<void> {
+    const route = { provider, externalId, ...to };
+    const results = await batch(this.#d1, [
+      moveIntegrationRoute.query(
+        { toProjectId: to.projectId, toPath: to.path },
+        { provider, externalId, fromProjectId: from.projectId, fromPath: from.path },
+      ),
+      releaseOtherIntegrationRoutes.query(route),
+      integrationRoute.query({ provider, externalId }),
+    ]);
+    const holder = rowsOf<integrationRoute.Result>(results, 2)[0];
+    if (holder?.projectId === to.projectId && holder.path === to.path) return;
+    throw codedError(
+      "INVALID_INPUT",
+      `The ${provider} account '${externalId}' moved meanwhile — connect it again.`,
+    );
+  }
+  /** Release ONE account's route, only while the connection at `path` holds it: a connection that
+   *  took another account since keeps that one's. */
+  async releaseIntegrationRoute(
+    provider: string,
+    externalId: string,
+    projectId: string,
+    path: string,
+  ): Promise<void> {
+    await releaseIntegrationRoute(this.#client, { provider, externalId, projectId, path });
   }
   /** Release every route of the connection at `path` in a project; another's are left alone. */
   async releaseIntegrationRoutes(projectId: string, path: string): Promise<void> {

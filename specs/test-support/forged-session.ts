@@ -28,6 +28,8 @@ export async function createProjectFixture(
 
   return {
     project,
+    /** The fixture's person, for a second project of theirs (`operator.authenticate({ email })`). */
+    email,
     itx: input.operator.authenticate().projects.get(project.id),
     [Symbol.asyncDispose]() {
       // A fixture's project is left behind (a spec that deletes one does so itself): a preview's

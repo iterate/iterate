@@ -38,6 +38,12 @@ export type Caller = {
    *  those facts require; the fixed point is what no rewrite rule redirects, so nothing else runs
    *  under it. */
   platform?: true;
+  /** THE PERSON THEMSELVES, managing their own account: the principal's own OAuth grant holds the
+   *  `account` scope and nobody acts as them (session.ts `#caller`). Absent for a grant bound to
+   *  projects or without `account`, an admin's sign-in as someone, the admin secret (with or without
+   *  `as`) and the kernel. What connecting their own account to a project needs
+   *  (context/built-ins.ts `integrations.connect(provider, { account })`). */
+  account?: true;
 };
 /** The grant's header beside it (the caller's `grant`), set and stripped exactly where the
  *  principal's is. */
@@ -77,7 +83,8 @@ export const base64url = (bytes: Uint8Array): string =>
     .replaceAll("+", "-")
     .replaceAll("/", "_")
     .replace(/=+$/, "");
-const bytesFromBase64url = (text: string): Uint8Array<ArrayBuffer> =>
+/** The bytes of base64url text, padded or not. */
+export const bytesFromBase64url = (text: string): Uint8Array<ArrayBuffer> =>
   Uint8Array.from(
     atob(
       text

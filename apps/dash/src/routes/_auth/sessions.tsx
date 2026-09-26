@@ -1,36 +1,47 @@
 // /sessions: every grant the signed-in user holds (browsers and connected apps, which are OAuth
 // grants; personal access tokens and devices' keys), each endable on its own, and the one place in
-// the Dash a personal access token is minted: a name, the projects it may reach and when it expires
-// → `api.grants.mint` → the key, shown ONCE (the account keeps only its hash). The list is one page
+// the Dash a personal access token is minted, in the New token sheet (`?token=1`): a name, the
+// projects it may reach and when it expires → `api.grants.mint` → the key, shown ONCE in the sheet
+// (the account keeps only its hash). The list is one page
 // of `grants.list(cursor)` — the route's loader, `?cursor=` in the URL; a mint or an end
-// invalidates the router, which reloads it.
-import { createFileRoute, Link, useRouter } from "@tanstack/react-router";
-import { useRef, useState, type FormEvent } from "react";
+// invalidates the router, which reloads it. "Connected accounts" are the person's own connections
+// (the `account` facet's live `integrations` on `session.user`): a sign-in with Google, Cloudflare or
+// GitHub keeps one, and so does connecting Google or Cloudflare here. A project uses one when its
+// Integrations page connects it there; disconnecting one here ends every project's use of it.
+import { createFileRoute, Link, useNavigate, useRouter } from "@tanstack/react-router";
+import { useEffect, useRef, useState, type FormEvent } from "react";
+import { CheckIcon, CopyIcon } from "lucide-react";
 import { z } from "zod";
 import type { GrantKind } from "iterate/api";
 import { Avatar, AvatarFallback, AvatarImage } from "@iterate-com/ui/components/avatar";
-import { Badge } from "@iterate-com/ui/components/badge";
 import { Button } from "@iterate-com/ui/components/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@iterate-com/ui/components/card";
 import { Checkbox } from "@iterate-com/ui/components/checkbox";
 import { Input } from "@iterate-com/ui/components/input";
 import { Label } from "@iterate-com/ui/components/label";
 import { NativeSelect, NativeSelectOption } from "@iterate-com/ui/components/native-select";
 import { NotRecorded } from "@iterate-com/ui/components/not-recorded";
 import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@iterate-com/ui/components/table";
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetFooter,
+  SheetHeader,
+  SheetTitle,
+} from "@iterate-com/ui/components/sheet";
+import { Spinner } from "@iterate-com/ui/components/spinner";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@iterate-com/ui/components/alert-dialog";
+import { ConnectButton } from "@iterate-com/ui/components/connect-button";
+import { useContextStub, useFacetLiveState } from "iterate/react";
 import { Identifier } from "../../components/identifier.tsx";
 import { AllowAccount } from "../../components/allow-account.tsx";
 
@@ -42,7 +53,11 @@ const GRANT_KIND_LABELS: Record<GrantKind, string> = {
 };
 
 export const Route = createFileRoute("/_auth/sessions")({
-  validateSearch: z.object({ cursor: z.string().optional().catch(undefined) }),
+  validateSearch: z.object({
+    cursor: z.string().optional().catch(undefined),
+    /** The New token sheet. */
+    token: z.literal(1).optional().catch(undefined),
+  }),
   loaderDeps: ({ search }) => ({ cursor: search.cursor }),
   staticData: { page: "Sessions" },
   // `account` is optional at consent: without it there is no list to load — the page offers the
@@ -61,13 +76,18 @@ const TOKEN_LIFETIMES = [
   { value: "never", label: "No expiry" },
 ];
 
+/** A date as a person reads it, the same on the server and in the browser. */
+const dateOf = (at: number) =>
+  new Intl.DateTimeFormat("en-GB", { dateStyle: "medium", timeZone: "UTC" }).format(at);
+
 /** A personal access token as the form just minted it — held only in this page's state, shown
  *  once; a reload forgets it, as the server already has. */
 type MintedPersonalAccessToken = { name: string; token: string; expiresAt: number | null };
 
 function SessionsPage() {
   const data = Route.useLoaderData();
-  const { cursor } = Route.useSearch();
+  const { cursor, token: tokenSheet } = Route.useSearch();
+  const navigate = useNavigate({ from: Route.fullPath });
   const { api, info } = Route.useRouteContext();
   const router = useRouter();
   const [error, setError] = useState<string | null>(null);
@@ -80,6 +100,10 @@ function SessionsPage() {
   // Ending THIS browser's grant is a sign-out: the app's own logout clears the session and its
   // cookie too (a bare redirect to `/` would bounce a still-cached token back into /projects).
   const logout = useRef<HTMLFormElement>(null);
+  // A minted key lives only while its sheet is open: closed any way (Back included), it is gone.
+  useEffect(() => {
+    if (!tokenSheet) setMinted(null);
+  }, [tokenSheet]);
   if (!data)
     return (
       <AllowAccount
@@ -129,6 +153,13 @@ function SessionsPage() {
     }
   };
 
+  const closeTokenSheet = () => {
+    if (minting) return;
+    setMinted(null);
+    setError(null);
+    void navigate({ search: { cursor }, replace: true });
+  };
+
   return (
     <div className="mx-auto flex w-full max-w-5xl flex-col gap-8 p-4 md:p-8">
       <form ref={logout} method="post" action="/.auth/logout" hidden />
@@ -140,210 +171,218 @@ function SessionsPage() {
           <Identifier value={info.principal.actor} textClassName="text-xs" />
         </p>
       </div>
-      {error && (
+      {error && !tokenSheet && (
         <p role="alert" data-type="error" className="text-sm text-destructive">
           {error}
         </p>
       )}
-      <div className="overflow-x-auto rounded-lg border">
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>Name</TableHead>
-              <TableHead>Type</TableHead>
-              <TableHead>Last used</TableHead>
-              <TableHead>Expires</TableHead>
-              <TableHead>Action</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {items.map((item) => (
-              <TableRow key={item.id}>
-                <TableCell className="font-medium">
-                  <div className="flex items-center gap-3">
-                    <Avatar className="rounded-md after:rounded-md" aria-hidden="true">
-                      {/* Base UI applies the prop to its preloader; render also sets it on the visible image. */}
-                      <AvatarImage
-                        src={item.logoUri}
-                        alt=""
-                        referrerPolicy="no-referrer"
-                        render={<img alt="" referrerPolicy="no-referrer" />}
-                        className="rounded-md object-contain"
-                      />
-                      <AvatarFallback className="rounded-md text-xs">
-                        {item.name.slice(0, 2).toUpperCase()}
-                      </AvatarFallback>
-                    </Avatar>
-                    <div className="flex flex-col gap-0.5">
-                      <span>
-                        {item.name}
-                        {item.current && (
-                          <Badge variant="secondary" className="ml-2">
-                            this browser
-                          </Badge>
-                        )}
-                      </span>
-                      {item.clientDomain && (
-                        <span
-                          className="max-w-64 truncate text-xs font-normal text-muted-foreground"
-                          title={item.clientDomain}
-                        >
-                          {item.clientDomain}
-                        </span>
-                      )}
-                      {item.projects && (
-                        <span className="max-w-64 truncate font-mono text-xs font-normal text-muted-foreground">
-                          {item.projects.map((id) => slugOf.get(id) ?? id).join(", ")}
-                        </span>
-                      )}
-                      {item.impersonatedBy && (
-                        <span className="max-w-64 truncate text-xs font-normal text-muted-foreground">
-                          Started by {item.impersonatedBy}, signed in as you
-                        </span>
-                      )}
-                      {item.mintedBy && (
-                        <span className="max-w-64 truncate text-xs font-normal text-muted-foreground">
-                          Minted by{" "}
-                          {items.find((session) => session.id === item.mintedBy)?.name ??
-                            "a session no longer listed"}
-                        </span>
-                      )}
-                    </div>
-                  </div>
-                </TableCell>
-                <TableCell>
-                  {GRANT_KIND_LABELS[item.kind]}
-                  {item.resource && (
-                    <span className="text-muted-foreground">
-                      {" · "}
-                      {item.resource === "mcp" ? "MCP" : "API"}
-                    </span>
-                  )}
-                </TableCell>
-                <TableCell className="text-muted-foreground">
-                  {item.lastUsedAt ? new Date(item.lastUsedAt).toISOString() : "Not used yet"}
-                </TableCell>
-                <TableCell className="text-muted-foreground">
-                  {item.expired
-                    ? "Expired"
-                    : item.expiresAt
-                      ? new Date(item.expiresAt).toISOString()
-                      : "Never"}
-                </TableCell>
-                <TableCell>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    onClick={async () => {
-                      setError(null);
-                      try {
-                        await api.grants.end(item.id);
-                        if (item.current) logout.current?.requestSubmit();
-                        else await router.invalidate();
-                      } catch (caught) {
-                        setError(caught instanceof Error ? caught.message : String(caught));
-                      }
-                    }}
-                  >
-                    {item.expired
-                      ? "Remove"
-                      : item.kind === "personal" || item.kind === "device"
-                        ? "Revoke"
-                        : "Log out"}
-                  </Button>
-                </TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
-      </div>
-      {!items.length && <p className="text-sm text-muted-foreground">No sessions on this page.</p>}
-      <p className="flex gap-3 text-sm">
-        {cursor && (
-          <Link to="/sessions" search={{}} className="underline-offset-4 hover:underline">
-            First page
-          </Link>
-        )}
-        {nextCursor && (
-          <Link
-            to="/sessions"
-            search={{ cursor: nextCursor }}
-            className="underline-offset-4 hover:underline"
-          >
-            Next page
-          </Link>
-        )}
-      </p>
-
-      <Card>
-        <CardHeader>
-          <CardTitle>Personal access tokens</CardTitle>
-          <CardDescription>
-            A personal access token is your API key: it acts as you, on the projects you choose,
-            until it expires or you revoke it from the list above. It is shown once. Send it as{" "}
-            <code>Authorization: Bearer</code> to <code>/api</code>, to <code>/mcp</code> from an
-            MCP client, or to your projects' hosts.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="flex flex-col gap-4">
-          {minted && (
-            // never in a session replay or autocapture: the key is shown once, here
-            <NotRecorded
-              role="status"
-              data-testid="minted"
-              className="flex flex-wrap items-center gap-2 rounded-md border bg-muted/40 p-3 text-sm"
+      <section className="flex flex-col gap-2" aria-labelledby="sessions-heading">
+        <div className="flex items-center justify-between gap-3">
+          <h2 id="sessions-heading" className="font-medium">
+            Signed in
+          </h2>
+          {canMintToken && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => void navigate({ search: { cursor, token: 1 } })}
             >
-              <strong>{minted.name}</strong> — copy it now; it is not shown again.{" "}
-              {minted.expiresAt
-                ? `Expires ${new Date(minted.expiresAt).toISOString()}.`
-                : "It never expires."}{" "}
-              <code data-testid="minted-token" className="break-all">
-                {minted.token}
-              </code>
-              <Button type="button" size="sm" variant="outline" onClick={copyMintedToken}>
-                {copied ? "Copied" : "Copy"}
-              </Button>
-              <Button type="button" size="sm" variant="ghost" onClick={() => setMinted(null)}>
-                Dismiss
-              </Button>
-            </NotRecorded>
+              New token
+            </Button>
           )}
-          {canMintToken ? (
-            <form onSubmit={mintPersonalAccessToken} className="flex flex-col gap-4">
-              <Label className="flex flex-col items-start gap-2">
-                Name
-                <Input
-                  aria-label="Token name"
-                  value={tokenName}
-                  onChange={(event) => setTokenName(event.target.value)}
-                  maxLength={100}
-                  placeholder="My script"
-                  required
-                  className="max-w-sm"
-                />
-              </Label>
-              <Label className="flex flex-col items-start gap-2">
-                Expires
-                <NativeSelect
-                  aria-label="Token expiry"
-                  value={tokenLifetime}
-                  disabled={minting}
-                  onChange={(event) => setTokenLifetime(event.target.value)}
+        </div>
+        {items.length === 0 ? (
+          <p className="text-sm text-muted-foreground">Nothing on this page.</p>
+        ) : (
+          <ul className="flex flex-col divide-y border-y" aria-label="Sessions">
+            {items.map((item) => (
+              <li key={item.id} className="flex items-center gap-3 py-3">
+                <Avatar className="rounded-md after:rounded-md" aria-hidden="true">
+                  {/* Base UI applies the prop to its preloader; render also sets it on the visible image. */}
+                  <AvatarImage
+                    src={item.logoUri}
+                    alt=""
+                    referrerPolicy="no-referrer"
+                    render={<img alt="" referrerPolicy="no-referrer" />}
+                    className="rounded-md object-contain"
+                  />
+                  <AvatarFallback className="rounded-md text-xs">
+                    {item.name.slice(0, 2).toUpperCase()}
+                  </AvatarFallback>
+                </Avatar>
+                <div className="min-w-0 flex-1">
+                  <p className="font-medium [overflow-wrap:anywhere]">
+                    {item.name}
+                    {item.current && (
+                      <span className="ml-2 text-xs font-normal text-muted-foreground">
+                        This browser
+                      </span>
+                    )}
+                  </p>
+                  <p className="text-xs text-muted-foreground [overflow-wrap:anywhere]">
+                    {[
+                      item.resource === "mcp"
+                        ? `${GRANT_KIND_LABELS[item.kind]} (MCP)`
+                        : GRANT_KIND_LABELS[item.kind],
+                      item.clientDomain,
+                      item.projects?.map((id) => slugOf.get(id) ?? id).join(", "),
+                      item.lastUsedAt ? `Used ${dateOf(item.lastUsedAt)}` : "Not used yet",
+                      item.expired
+                        ? "Expired"
+                        : item.expiresAt
+                          ? `Expires ${dateOf(item.expiresAt)}`
+                          : null,
+                    ]
+                      .filter(Boolean)
+                      .join(" · ")}
+                  </p>
+                  {item.impersonatedBy && (
+                    <p className="text-xs text-muted-foreground">
+                      Started by {item.impersonatedBy}, signed in as you
+                    </p>
+                  )}
+                  {item.mintedBy && (
+                    <p className="text-xs text-muted-foreground">
+                      Made by{" "}
+                      {items.find((session) => session.id === item.mintedBy)?.name ??
+                        "a session no longer listed"}
+                    </p>
+                  )}
+                </div>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={async () => {
+                    setError(null);
+                    try {
+                      await api.grants.end(item.id);
+                      if (item.current) logout.current?.requestSubmit();
+                      else await router.invalidate();
+                    } catch (caught) {
+                      setError(caught instanceof Error ? caught.message : String(caught));
+                    }
+                  }}
                 >
-                  {TOKEN_LIFETIMES.map((lifetime) => (
-                    <NativeSelectOption key={lifetime.value} value={lifetime.value}>
-                      {lifetime.label}
-                    </NativeSelectOption>
-                  ))}
-                </NativeSelect>
-              </Label>
-              <div
-                aria-label="Projects the token may reach"
-                className="flex flex-wrap gap-x-5 gap-y-2 text-sm"
+                  {item.expired
+                    ? "Remove"
+                    : item.kind === "personal" || item.kind === "device"
+                      ? "Revoke"
+                      : "Log out"}
+                </Button>
+              </li>
+            ))}
+          </ul>
+        )}
+        {(cursor || nextCursor) && (
+          <p className="flex gap-3 text-sm">
+            {cursor && (
+              <Link to="/sessions" search={{}} className="underline-offset-4 hover:underline">
+                First page
+              </Link>
+            )}
+            {nextCursor && (
+              <Link
+                to="/sessions"
+                search={{ cursor: nextCursor }}
+                className="underline-offset-4 hover:underline"
               >
-                {projects.length > 0
-                  ? projects.map((project) => (
+                Next page
+              </Link>
+            )}
+          </p>
+        )}
+      </section>
+
+      <ConnectedAccounts projects={projects} />
+
+      <Sheet
+        open={Boolean(tokenSheet && canMintToken)}
+        onOpenChange={(open) => !open && closeTokenSheet()}
+      >
+        <SheetContent
+          side="right"
+          showCloseButton={!minting}
+          className="overflow-y-auto data-[side=right]:w-full data-[side=right]:sm:max-w-md"
+        >
+          {minted ? (
+            // never in a session replay or autocapture: the key is shown once, here
+            <NotRecorded role="status" data-testid="minted" className="flex h-full flex-col">
+              <SheetHeader>
+                <SheetTitle>{minted.name}</SheetTitle>
+                <SheetDescription>
+                  Copy it now: it isn't shown again.{" "}
+                  {minted.expiresAt ? `Expires ${dateOf(minted.expiresAt)}.` : "No expiry."}
+                </SheetDescription>
+              </SheetHeader>
+              <div className="flex items-start gap-2 px-4">
+                <code
+                  data-testid="minted-token"
+                  className="min-w-0 flex-1 rounded-md bg-muted px-2 py-1.5 text-xs break-all"
+                >
+                  {minted.token}
+                </code>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="icon-sm"
+                  title={copied ? "Copied" : "Copy token"}
+                  onClick={copyMintedToken}
+                >
+                  {copied ? <CheckIcon /> : <CopyIcon />}
+                </Button>
+              </div>
+              {error && (
+                <p role="alert" data-type="error" className="px-4 text-sm text-destructive">
+                  {error}
+                </p>
+              )}
+              <SheetFooter className="border-t sm:flex-row sm:justify-end">
+                <Button type="button" onClick={closeTokenSheet}>
+                  Done
+                </Button>
+              </SheetFooter>
+            </NotRecorded>
+          ) : (
+            <form onSubmit={mintPersonalAccessToken} className="flex h-full flex-col">
+              <SheetHeader>
+                <SheetTitle>New token</SheetTitle>
+                <SheetDescription>
+                  Acts as you on the projects you pick. Send it as{" "}
+                  <code>Authorization: Bearer</code>.
+                </SheetDescription>
+              </SheetHeader>
+              <div className="flex flex-1 flex-col gap-4 px-4 pb-4">
+                <Label className="flex flex-col items-start gap-2">
+                  Name
+                  <Input
+                    aria-label="Token name"
+                    value={tokenName}
+                    onChange={(event) => setTokenName(event.target.value)}
+                    maxLength={100}
+                    placeholder="My script"
+                    required
+                  />
+                </Label>
+                <Label className="flex flex-col items-start gap-2">
+                  Expires
+                  <NativeSelect
+                    aria-label="Token expiry"
+                    value={tokenLifetime}
+                    disabled={minting}
+                    onChange={(event) => setTokenLifetime(event.target.value)}
+                  >
+                    {TOKEN_LIFETIMES.map((lifetime) => (
+                      <NativeSelectOption key={lifetime.value} value={lifetime.value}>
+                        {lifetime.label}
+                      </NativeSelectOption>
+                    ))}
+                  </NativeSelect>
+                </Label>
+                <fieldset className="flex flex-col gap-2">
+                  <legend className="mb-2 text-sm font-medium">Projects</legend>
+                  {projects.length > 0 ? (
+                    projects.map((project) => (
                       <Label key={project.id} className="gap-2 font-mono font-normal">
                         <Checkbox
                           checked={!excludedProjectIds.has(project.id)}
@@ -360,26 +399,190 @@ function SessionsPage() {
                         {project.slug}
                       </Label>
                     ))
-                  : "Create a project first — a token is scoped to the projects it may reach."}
+                  ) : (
+                    <p className="text-sm text-muted-foreground">Create a project first.</p>
+                  )}
+                </fieldset>
+                {error && (
+                  <p role="alert" data-type="error" className="text-sm text-destructive">
+                    {error}
+                  </p>
+                )}
               </div>
-              <div>
+              <SheetFooter className="border-t sm:flex-row sm:justify-end">
                 <Button
                   type="submit"
                   disabled={
                     minting || selectedProjectIds.length === 0 || tokenName.trim().length === 0
                   }
                 >
-                  {minting ? "Creating…" : "Create personal access token"}
+                  {minting ? <Spinner data-icon="inline-start" /> : null}
+                  Create token
                 </Button>
-              </div>
+              </SheetFooter>
             </form>
-          ) : (
-            <p className="text-sm text-muted-foreground">
-              Personal access tokens require an HTTPS deployment.
-            </p>
           )}
-        </CardContent>
-      </Card>
+        </SheetContent>
+      </Sheet>
     </div>
+  );
+}
+
+/** The providers a person connects on their own account here (GitHub comes from signing in). */
+const PERSONAL_CONNECT_PROVIDERS: ("google" | "cloudflare")[] = ["google", "cloudflare"];
+
+/** The provider names a person's connection shows. */
+const PROVIDER_TITLES: Record<string, string> = {
+  slack: "Slack",
+  google: "Google",
+  cloudflare: "Cloudflare",
+  github: "GitHub",
+  waitrose: "Waitrose",
+};
+
+const AccountConnections = z.looseObject({
+  integrations: z
+    .record(
+      z.string(),
+      z.object({ provider: z.string(), connection: z.string(), account: z.string() }),
+    )
+    .default({}),
+  /** The account's secrets, with the projects each one's connection is connected to (its lends). */
+  secrets: z
+    .record(
+      z.string(),
+      z.looseObject({ lends: z.record(z.string(), z.object({ to: z.string() })).optional() }),
+    )
+    .default({}),
+});
+
+/** THE PERSON'S CONNECTED ACCOUNTS: listed live with the projects using each, disconnected (every
+ *  project's use ends with it), or connected here through iterate's app (Google, Cloudflare). */
+function ConnectedAccounts({ projects }: { projects: { id: string; slug: string }[] }) {
+  const { api, info } = Route.useRouteContext();
+  const person = useContextStub(() => Promise.resolve(api.user), [api]);
+  const live = useFacetLiveState(person.stub, "account");
+  const state = AccountConnections.safeParse(live.value).data;
+  const accounts = Object.values(state?.integrations ?? {});
+  const slugOf = new Map(projects.map((project) => [project.id, project.slug]));
+  /** The projects a connection is connected to, by slug. */
+  const usedBy = (row: { provider: string; connection: string }) =>
+    Object.values(state?.secrets[`/secrets/${row.provider}-${row.connection}`]?.lends ?? {}).map(
+      (lend) => slugOf.get(lend.to) || lend.to,
+    );
+  const [error, setError] = useState<string | null>(null);
+  const [disconnecting, setDisconnecting] = useState<string | null>(null);
+  const next = `${window.location.origin}/sessions`;
+  const loadError = person.error || live.error;
+  return (
+    <section className="flex flex-col gap-2" aria-labelledby="connected-accounts-heading">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h2 id="connected-accounts-heading" className="font-medium">
+          Connected accounts
+        </h2>
+        <div className="flex gap-2">
+          {PERSONAL_CONNECT_PROVIDERS.filter((provider) =>
+            info.iterateAppProviders.includes(provider),
+          ).map((provider) => (
+            <ConnectButton
+              key={provider}
+              provider={provider}
+              variant="outline"
+              size="sm"
+              connect={async (input) =>
+                z
+                  .object({ authorizationUrl: z.string().url() })
+                  .parse(await api.user.integrations.connect(input.provider, { next }))
+              }
+              onError={(caught) =>
+                setError(caught instanceof Error ? caught.message : String(caught))
+              }
+            />
+          ))}
+        </div>
+      </div>
+      {error && (
+        <p role="alert" data-type="error" className="text-sm text-destructive">
+          {error}
+        </p>
+      )}
+      {loadError ? (
+        <p role="alert" data-type="error" className="text-sm text-destructive">
+          Couldn't load your connected accounts: {loadError}
+        </p>
+      ) : !live.value ? (
+        <p role="status" className="text-sm text-muted-foreground">
+          Loading…
+        </p>
+      ) : accounts.length === 0 ? (
+        <p className="text-sm text-muted-foreground">None yet.</p>
+      ) : (
+        <ul className="flex flex-col divide-y border-y" aria-label="Connected accounts">
+          {accounts.map((row) => {
+            const projectsUsing = usedBy(row);
+            return (
+              <li
+                key={`${row.provider}-${row.connection}`}
+                className="flex items-center gap-3 py-3"
+              >
+                <div className="min-w-0 flex-1">
+                  <p className="font-medium [overflow-wrap:anywhere]">{row.account}</p>
+                  <p className="text-xs text-muted-foreground [overflow-wrap:anywhere]">
+                    {PROVIDER_TITLES[row.provider] || row.provider}
+                    {projectsUsing.length > 0 && ` · Used by ${projectsUsing.join(", ")}`}
+                  </p>
+                </div>
+                <AlertDialog>
+                  <AlertDialogTrigger
+                    render={<Button variant="ghost" size="sm" />}
+                    disabled={Boolean(disconnecting)}
+                  >
+                    {disconnecting === row.connection ? <Spinner data-icon="inline-start" /> : null}
+                    Disconnect
+                  </AlertDialogTrigger>
+                  <AlertDialogContent>
+                    <AlertDialogHeader>
+                      <AlertDialogTitle>Disconnect {row.account}?</AlertDialogTitle>
+                      <AlertDialogDescription>
+                        {projectsUsing.length > 0
+                          ? `${projectsUsing.join(", ")} ${projectsUsing.length === 1 ? "stops" : "stop"} using it, and its token is deleted.`
+                          : "Its token is deleted."}{" "}
+                        Sign in with it or connect it again to get it back.
+                      </AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                      <AlertDialogCancel>Cancel</AlertDialogCancel>
+                      <AlertDialogAction
+                        variant="destructive"
+                        onClick={async () => {
+                          setError(null);
+                          setDisconnecting(row.connection);
+                          try {
+                            await api.user.facets
+                              .get("account")
+                              .invoke([
+                                [
+                                  "disconnectIntegration",
+                                  { provider: row.provider, connection: row.connection },
+                                ],
+                              ]);
+                          } catch (caught) {
+                            setError(caught instanceof Error ? caught.message : String(caught));
+                          } finally {
+                            setDisconnecting(null);
+                          }
+                        }}
+                      >
+                        Disconnect
+                      </AlertDialogAction>
+                    </AlertDialogFooter>
+                  </AlertDialogContent>
+                </AlertDialog>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </section>
   );
 }

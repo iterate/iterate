@@ -1,5 +1,6 @@
 // __workers-tests__/secret-sockets-over-lends.test.ts — OUTBOUND WEBSOCKETS THROUGH A SECRET, over
-// every hop a use can take: a project's own secret, and a person's secret LENT to the project (the
+// every hop a use can take: a project's own secret, and the deployment's secret LENT to the project
+// by its operator — the same one-token pointer a person's account connected to a project is (the
 // dialler's context → the borrowed path's context and its facet → the lender's context and its facet
 // → the upstream). Two auth shapes, the two the pet shop's gateways model (apps/dummy-petshop
 // src/gateway.ts): the OpenAI-Realtime shape (`/gateway-header`, the bearer on the UPGRADE) and the
@@ -33,14 +34,10 @@ test("OpenAI-Realtime shape, a project's own secret: the bearer is substituted o
   socket.close();
 });
 
-test("OpenAI-Realtime shape, a person's secret LENT to the project: the upgrade crosses the borrowed path to the lender's facet and the 101 comes back", async () => {
+test("OpenAI-Realtime shape, the deployment's secret LENT to one project: the upgrade crosses the borrowed path to the lender's facet and the 101 comes back", async () => {
   const lender = await projectWithMember("ws-lend-header");
   const { token } = serveGateways();
-  await lender.session.user.secrets.set("/secrets/realtime-mine", token, { urls: [SHOP] });
-  await lender.session.user.secrets.lend("/secrets/realtime-mine", {
-    to: lender.projectId,
-    as: "/secrets/realtime",
-  });
+  await lentByTheDeployment(lender.projectId, token, "/secrets/realtime");
   const socket = await upgrade(`${lender.projectId}.iterate/agents/dialler`, "/gateway-header", {
     authorization: 'Bearer getSecret("/secrets/realtime")',
   });
@@ -81,14 +78,10 @@ test("OpenAI-Realtime shape, the INSTANCE's key lent to every project: the upgra
 test("a lend is one hop by construction: a project's borrowed secret cannot be lent on", async () => {
   const lender = await projectWithMember("ws-lend-of-lend");
   serveGateways();
-  await lender.session.user.secrets.set("/secrets/mine", "t", { urls: [SHOP] });
-  await lender.session.user.secrets.lend("/secrets/mine", {
-    to: lender.projectId,
-    as: "/secrets/borrowed",
-  });
+  await lentByTheDeployment(lender.projectId, "t", "/secrets/borrowed");
   await expect(
     lender.itx.secrets.lend("/secrets/borrowed", { to: lender.projectId, as: "/secrets/again" }),
-  ).rejects.toThrow(/a person lends their own secrets/);
+  ).rejects.toThrow(/the deployment's own secrets/);
 });
 
 test("Discord shape, a project's own secret: the upgrade names the secret, and the placeholder in the IDENTIFY frame is substituted", async () => {
@@ -136,14 +129,10 @@ test("Discord shape without the frames header: the placeholder reaches the upstr
   await expect(socket.next()).rejects.toThrow(/closed 4001/);
 });
 
-test("Discord shape, a person's secret LENT to the project: the frame placeholder is substituted at the lender", async () => {
+test("Discord shape, the deployment's secret LENT to one project: the frame placeholder is substituted at the lender", async () => {
   const lender = await projectWithMember("ws-lend-frame");
   const { token } = serveGateways();
-  await lender.session.user.secrets.set("/secrets/discord-mine", token, { urls: [SHOP] });
-  await lender.session.user.secrets.lend("/secrets/discord-mine", {
-    to: lender.projectId,
-    as: "/secrets/discord",
-  });
+  await lentByTheDeployment(lender.projectId, token, "/secrets/discord");
   const socket = await upgrade(`${lender.projectId}.iterate/agents/bot`, "/gateway", {
     "x-itx-secret-frames": 'getSecret("/secrets/discord")',
   });
@@ -158,11 +147,7 @@ test("Discord shape, a person's secret LENT to the project: the frame placeholde
 test("the deepest chain: LOADED CODE's fetch (an app context's itx.fetch, through its parent) → the borrowed path → the lender, Discord shape", async () => {
   const lender = await projectWithMember("ws-lend-app");
   const { token } = serveGateways();
-  await lender.session.user.secrets.set("/secrets/discord-mine", token, { urls: [SHOP] });
-  await lender.session.user.secrets.lend("/secrets/discord-mine", {
-    to: lender.projectId,
-    as: "/secrets/discord",
-  });
+  await lentByTheDeployment(lender.projectId, token, "/secrets/discord");
   const child = `${lender.projectId}.iterate/agents/voice`;
   await stub(child).invoke([
     "itx",
@@ -288,4 +273,19 @@ function serveGateways() {
   });
   onTestFinished(() => spy.mockRestore());
   return { token, upstreamCloses };
+}
+
+/** The deployment's own secret holding `token`, set by the operator and lent to one project as
+ *  `as`; the lend revoked and the secret deleted when the test finishes. */
+async function lentByTheDeployment(projectId: string, token: string, as: string) {
+  const sessions: Disposable[] = [];
+  const global = (await adminSession(sessions)).global;
+  const name = `/secrets/ws-${crypto.randomUUID().slice(0, 8)}`;
+  await global.secrets.set(name, token, { urls: [SHOP] });
+  const { lendId } = await global.secrets.lend(name, { to: projectId, as });
+  onTestFinished(async () => {
+    await global.secrets.revokeLend(name, lendId);
+    await global.secrets.delete(name);
+    for (const session of sessions) session[Symbol.dispose]();
+  });
 }

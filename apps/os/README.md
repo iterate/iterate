@@ -219,6 +219,24 @@ they are an active admin of. After that it is discarded, and the secret's
 `github-app-installation` strategy mints installation tokens instead. With iterate's key it mints
 only for an installation the control plane routes to this project.
 
+A GitHub installation iterate's App already has connects without GitHub's configure page (which
+asks for sudo and carries no state of ours back): `connectIntegration({ provider: "github",
+installationId, platformOrigin, … })` sends the human straight to authorize the App, and the code
+proves they administer it as above. The Dash lists those installations from the person's GitHub
+sign-in (`GET /user/installations` with its token, through their own egress). An installation
+another project holds is not refused: once the human proved they administer it, the callback lands
+on `next` with a signed, ten-minute offer (`?move=`, naming the holder only when the human can see
+it), and the project facet's `confirmGithubMove({ offer })` moves the route in one D1 batch that
+re-points it only while the holder still holds that installation (`moveIntegrationRoute`), connects
+it here, and disconnects the holder's connection only while it still names that installation
+(`github/disconnected { reason: "moved" }`, its secret gone). A move that fails to connect puts both
+installations' routes back, the destination's previous one included. When the holder's cleanup
+fails, the confirmation says so and the same offer retries the cleanup alone; the offer works once
+otherwise. Either way the holder stops using the installation: a secret facet re-reads an
+iterate-App installation's route at most every 30 s of use (`#assertInstallationRouted`) and refuses
+a token for one routed elsewhere, from any secret path. The human need not be a member of the
+holder. Slack still refuses a team another project holds.
+
 iterate's apps each receive every account's webhooks on one URL
 (`POST /api/integrations/slack/webhook` and `/interactivity-webhook`, and
 `POST /api/integrations/github/webhook`). The control plane's `integration_routes` sends each
@@ -230,7 +248,7 @@ throws, so the provider retries. A deployment without the app answers 503. A per
 are the dummy pet shop's fakes (`scripts/preview-{slack,google,github}-app.ts`), which
 `e2e/integrations.e2e.test.ts` drives.
 
-### Sign-in keeps tokens · lends · connect
+### Sign-in keeps tokens · your accounts in a project
 
 One OAuth client per provider serves signing in and connecting, because a refresh token only works
 with the client that issued it: `login.<provider>` holds only the scopes a sign-in asks for, and the
@@ -238,29 +256,70 @@ client is `integrations.<provider>`. A provider's sign-in button shows only when
 sign-in with Google, Cloudflare or GitHub (the GitHub App's user authorization) keeps its token as
 the person's own connection: the secret `global:/users/<id>/secrets/<provider>-<subject>` and a
 platform `<provider>/connected` on `/users/<id>`, which the account folds into `state.integrations`,
-the same row a project keeps (`src/integrations/contract.ts`). Google issues a refresh token only on
-a consent, so a first sign-in without one goes back once for the consent screen; every Google and
-GitHub sign-in shows the provider's account picker. A provider pointed at a fake signs in addresses
-under `login.testLink.emailDomain` alone. Identities stay keyed by (provider, subject).
+the same row a project keeps (`src/integrations/contract.ts`), with the scopes the provider granted.
+Google issues a refresh token only on a consent, so a first sign-in without one goes back once for
+the consent screen; every Google and GitHub sign-in shows the provider's account picker. A provider
+pointed at a fake signs in addresses under `login.testLink.emailDomain` alone. Identities stay keyed
+by (provider, subject).
 
-A person LENDS a connection to a project they are a member of:
-`session.user.secrets.lend(path, { to: projectId, as: "/secrets/google-me" })`. The project's path
-holds only the lend; each `getSecret("/secrets/google-me")` is forwarded to the lender's context
-over its `fetch`, the lend signed with the deployment's key in `x-itx-lend-use` (60 s; every egress
-strips `x-itx-lend*`, so no caller can speak for a lend). The lender's secret facet admits it (the
-lend live, lent to this project, the lender still a member), refreshes and dispatches it. The lend
-ends with `revokeLend`, the project deleting its path, or the lender leaving the organization;
-`secret/lent`, `secret/borrowed` and `secret/lend-revoked` land on both sides.
+A project uses a member's own account when they connect it there, on the project's root:
 
-`itx.integrations.connect(provider, { scopes?, connection?, next? })` connects the context's owner
-(a project's root, or `session.user`) and answers `{ authorizationUrl, connection }`; again for a
-connection that exists asks for more on the same account and refuses another account's tokens.
-`itx.integrations.requestFromUser(provider, { scopes, lendTo? })` answers a Dash link that asks the
-signed-in person to connect and lend it to the project, as the path `lendTo` when given. The Dash's Integrations page uses `ConnectButton`
-(`packages/ui`), lists "Your connections", and lends from a sheet (`?lend=<path>`). It offers
-iterate's app only for the providers in `session.info().iterateAppProviders` (APP_CONFIG
-`integrations`); a deployment without them, such as a self-host, connects through "Use your own
-app". GitHub's callback URL is the origin the callback request reached, so it needs no `urls.os`.
+```ts
+const { authorizationUrl, connection } = await project.integrations.connect("google", {
+  account: "ada@example.com", // one of YOURS, as session.user's state.integrations names it
+  scopes: ["https://www.googleapis.com/auth/contacts.readonly"], // beyond iterate's app's, optional
+  next: "https://dash.iterate.com/…",
+});
+// no authorizationUrl: connected. Else Google adds what the account lacks, on your own connection
+// (include_granted_scopes, login_hint, the same account or refused), and the callback connects it.
+await fetch("https://gmail.googleapis.com/gmail/v1/users/me/profile", {
+  headers: {
+    authorization: `Bearer getSecret("/secrets/google-${connection}", { field: "accessToken" })`,
+  },
+});
+await project.facets.get("project").disconnectIntegration({ provider: "google", connection });
+// the project stops using it; it stays yours
+```
+
+Only the person themselves connects an account of theirs: their own grant must hold the `account`
+scope (a key bound to projects, an admin signed in as them, and the admin secret are refused), and
+the account is picked from their own connections alone. It is connected at once when it holds the
+scopes the project asks for: iterate's app's (`session.info().iterateAppScopes`), plus `scopes`
+(`rules.ts` `missingScopes`). Otherwise the consent runs on the person's own connection; its
+callback finishes the attempt it completed (keyed by the OAuth nonce), records the scopes the token
+response says were granted (`grantedScopesOf`, never the ones asked), and connects the account to the
+project only when those cover what it needs, the human who consented is the person with the `account`
+scope, and — for an account the project already had — the project has not disconnected it
+meanwhile. The project then lists it as `<provider>/connected { ownerUserId, ownerEmail }` on its
+root (`client` stays the OAuth app's, iterate's), and its path `/secrets/<provider>-<connection>`
+holds only a pointer to the person's secret: one token, whose every use is forwarded to the person's
+context over its `fetch`, signed with the deployment's key in `x-itx-lend-use` (60 s; every egress
+strips `x-itx-lend*`, so no caller can speak for one). The person's secret facet admits the use
+(connected to this project, the person still a member), refreshes and dispatches it. The project's
+use ends when it disconnects the account (or deletes the path), when the person disconnects their
+account (on the Dash's /sessions page), or when they leave the organization; each lands
+`<provider>/disconnected` on the project's root. Each step's facts are keyed by the lend, so a retry
+after a partial failure lands what is missing once, and a lend ended at the person's secret stays
+recorded there (`EndingLends`) until its project has been told: a retry of the revocation or of the
+disconnect finishes it. A consent callback claims its finish before calling anything out, so a
+second callback for the same consent never connects the account again. Two limits: a WebSocket already open through the
+pointer keeps the material it dialled with until it closes (the end refuses the next use, not the
+open socket), and a membership check may answer from the control plane's five-second cache. Under
+the hood the pointer is the same lend the deployment's own keys use (`secret/lent`, `secret/borrowed`
+and `secret/lend-revoked` on both sides), and `itx.secrets.lend` is the operator's alone.
+
+`itx.integrations.connect(provider, { scopes?, connection?, next? })` otherwise connects the
+context's owner (a project's root, or `session.user`) through iterate's app and answers
+`{ authorizationUrl, connection }`; again for a connection that exists asks for more on the same
+account and refuses another account's tokens. `itx.integrations.requestFromUser(provider,
+{ scopes? })` answers a Dash link (`?connect=<provider>`) that asks a person to connect their account,
+or another, to the project. On the Dash's Integrations page each provider's one action is Connect:
+a sheet that offers the person's own accounts first ("Use ada@example.com", or what the provider
+will ask to add), then another account through iterate's app (`ConnectButton`, `packages/ui`), then
+"Use your own app". It offers iterate's app only for the providers in
+`session.info().iterateAppProviders` (APP_CONFIG `integrations`); a deployment without them, such as
+a self-host, connects through "Use your own app". GitHub's callback URL is the origin the callback
+request reached, so it needs no `urls.os`.
 
 ### Instance lends
 
@@ -289,7 +348,7 @@ A project returns a lend by deleting its path, which ends the lend for that proj
 `revokeLend` ends it for every borrower, whose next use is a 502. A use works like any other lend,
 WebSocket upgrades included, and appends `secret/used { borrower }` to the deployment's secret. Every
 project's calls therefore append to that one Durable Object, which becomes a hot object once many
-projects use one key. The Dash's Integrations page lists "Lent by this instance".
+projects use one key. The Dash's Integrations page lists them under "From this deployment".
 
 `scripts/seed-instance-secrets.ts --env <name> [--pr <n>] [--lend-to-every-project]` sets
 `/secrets/exa`, `/secrets/parallel` and `/secrets/openai` from Doppler: `os-legacy-2026-04`'s
@@ -298,7 +357,7 @@ default, and `--env prd` also needs `--confirm-prd`.
 
 ### WebSockets through a secret
 
-An upgrade through egress is a dispatch like any other, own secret or lent: every hop is a fetch
+An upgrade through egress is a dispatch like any other, the project's own secret or a pointer: every hop is a fetch
 channel, because a 101's socket cannot cross a Workers-RPC call. Dial with `https://` and
 `Upgrade: websocket`; workerd's `fetch` refuses a `wss://` URL. A credential on the upgrade (a
 header, a subprotocol) is substituted like any header. A credential inside the frames, such as
@@ -317,8 +376,8 @@ The secret's facet then holds the upstream socket, hands the caller its own, and
 placeholder in every client-to-server text frame (JSON-escaped inside a JSON string, so RESUME
 works too); a frame naming another secret closes both sides with 1008. The upstream is pinned to the
 secret's origins. An open outbound socket keeps every Durable Object on its path resident: 2 for
-the project's own secret (the dialler's context and the secret's), 3 for a lent one (plus the
-lender's). A deploy closes it, so a bot reconnects on close.
+the project's own secret (the dialler's context and the secret's), 3 for a person's account or
+the deployment's key (plus the context that holds the token). A deploy closes it, so a bot reconnects on close.
 
 ### Session logins: Waitrose and exchange code
 
@@ -326,7 +385,7 @@ Some vendors have no OAuth: a username and password buy a short session, and log
 the refresh. The secret holds the credential and the facet logs in on first use and on a 401, never
 per call. Waitrose's login is bundled (`refresh: { kind: "waitrose-session", graphqlUrl }`,
 `src/integrations/waitrose.ts`). The Dash connects Waitrose for a project or a person with a
-username and password, and a person lends it like Google. Any other vendor is the secret's own
+username and password, and a person's is connected to a project like Google. Any other vendor is the secret's own
 exchange code, an ES module exporting `exchange(material, fetch)` that returns the next material.
 This Tesco-shaped login is the pet shop's (`/api/tesco/login`):
 

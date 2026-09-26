@@ -143,3 +143,66 @@ export namespace releaseRoutesOfDeletedProject {
 		projectId: string;
 	};
 }
+
+const moveIntegrationRouteSql = `
+update integration_routes
+set project_id = ?, path = ?
+where provider = ?
+  and external_id = ?
+  and project_id = ?
+  and path = ?;
+`.trim();
+const moveIntegrationRouteQuery = (data: moveIntegrationRoute.Data, params: moveIntegrationRoute.Params) => ({
+	name: "moveIntegrationRoute",
+	sql: moveIntegrationRouteSql,
+	args: [data.toProjectId, data.toPath, params.provider, params.externalId, params.fromProjectId, params.fromPath],
+});
+
+export const moveIntegrationRoute = Object.assign(
+	async function moveIntegrationRoute(client: Client, data: moveIntegrationRoute.Data, params: moveIntegrationRoute.Params) {
+		return client.run(moveIntegrationRouteQuery(data, params));
+	},
+	{ sql: moveIntegrationRouteSql, query: moveIntegrationRouteQuery },
+);
+
+export namespace moveIntegrationRoute {
+	export type Data = {
+		toProjectId: string;
+		toPath: string;
+	};
+	export type Params = {
+		provider: string;
+		externalId: string;
+		fromProjectId: string;
+		fromPath: string;
+	};
+}
+
+const releaseIntegrationRouteSql = `
+delete from integration_routes
+where provider = ?
+  and external_id = ?
+  and project_id = ?
+  and path = ?;
+`.trim();
+const releaseIntegrationRouteQuery = (params: releaseIntegrationRoute.Params) => ({
+	name: "releaseIntegrationRoute",
+	sql: releaseIntegrationRouteSql,
+	args: [params.provider, params.externalId, params.projectId, params.path],
+});
+
+export const releaseIntegrationRoute = Object.assign(
+	async function releaseIntegrationRoute(client: Client, params: releaseIntegrationRoute.Params) {
+		return client.run(releaseIntegrationRouteQuery(params));
+	},
+	{ sql: releaseIntegrationRouteSql, query: releaseIntegrationRouteQuery },
+);
+
+export namespace releaseIntegrationRoute {
+	export type Params = {
+		provider: string;
+		externalId: string;
+		projectId: string;
+		path: string;
+	};
+}

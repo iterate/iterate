@@ -6,7 +6,7 @@
 //     credential, its Durable Object logs in on first use and logs in again on 401.
 //   • `worker` — the same archetype for any vendor, as the secret's own exchange code: the pet shop's
 //     Tesco-shaped two-step login (a CSRF token and its cookie, then the form) runs in the secret's
-//     jail on first use and on 401, a project's own secret and a person's lent to the project.
+//     jail on first use and on 401.
 //   • `oauth-refresh-token`, tokens brought by a trusted party — the OAuth story with the consent
 //     walked by the test: discovery, code exchange, the secret, a call, expiry, rotation, revocation.
 //   • OAuth, the first tokens obtained by the platform, confidential client — `itx.secrets.beginOAuth`
@@ -28,7 +28,6 @@
 import { expect, test } from "vitest";
 import {
   adminCredentials,
-  cookieSession,
   freshCtx,
   openItx,
   readAll,
@@ -50,7 +49,7 @@ import {
   petshopRevokeRefreshToken,
   petshopTescoExchangeSource,
 } from "./support/petshop.ts";
-import { issuerCookie, oauthSession } from "./support/principal.ts";
+import { oauthSession } from "./support/principal.ts";
 import {
   deployedOnly,
   freshDnsSafeProjectSlug,
@@ -154,33 +153,6 @@ test("worker: a userspace Tesco login in the secret's own exchange code logs in 
   ]);
   expect(JSON.stringify([await readAll(itx), await readAll(secret)])).not.toContain(
     "correct-horse",
-  );
-});
-
-test("worker: a person's Tesco login lent to their project — the project's uses log in at the lender, on first use and again on a forced 401", async () => {
-  const email = `lender-${Date.now().toString(36)}-${crypto.randomUUID().slice(0, 6)}@example.com`;
-  const api: any = await cookieSession(await issuerCookie(email));
-  const itx = await api.projects.create({ project: freshDnsSafeProjectSlug("tesco-lend") });
-  const { projectId } = await itx.whoami();
-  await api.user.secrets.set(
-    "/secrets/tesco-mine",
-    { email, password: "correct-horse" },
-    { urls: [petshopBaseUrl()], refresh: { kind: "worker", source: petshopTescoExchangeSource() } },
-  );
-  await api.user.secrets.lend("/secrets/tesco-mine", { to: projectId, as: "/secrets/tesco" });
-
-  expect(await bearerCall(itx, "/secrets/tesco", "/api/me")).toMatchObject({
-    status: 200,
-    body: { sub: email, clientId: `tesco-login:${email}` },
-  });
-  await petshopExpireTescoTokens(email);
-  expect(await bearerCall(itx, "/secrets/tesco", "/api/me")).toMatchObject({
-    status: 200,
-    body: { sub: email },
-  });
-  // the project holds the lend alone: no material, no strategy of its own
-  expect(await itx.secrets.list()).toContainEqual(
-    expect.objectContaining({ path: "/secrets/tesco", borrowed: expect.any(Object) }),
   );
 });
 

@@ -79,7 +79,12 @@ import {
   verifyLendUse,
 } from "./secrets.ts";
 import { isDeployReset } from "./retryable-error.ts";
-import { appConfigOf, sessionSigningSecretOf, type AppConfigEnv } from "./app-config.ts";
+import {
+  appConfigOf,
+  iterateAppScopesOf,
+  sessionSigningSecretOf,
+  type AppConfigEnv,
+} from "./app-config.ts";
 import {
   ItxExpressionResolver,
   describeRewriteRules,
@@ -733,6 +738,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     ingressRouting: this.#appConfig.urls.ingressRouting,
     dashOrigin: this.#appConfig.urls.dash,
     platformAdmins: () => this.#appConfig.admins,
+    iterateAppScopes: () => iterateAppScopesOf(this.#appConfig),
     platformOrigin: () => this.#platformOrigin,
     signFileUrl: async (input) => {
       const platformOrigin = this.#platformOrigin;

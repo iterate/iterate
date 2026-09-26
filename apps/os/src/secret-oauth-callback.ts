@@ -18,6 +18,7 @@ import {
 import { ControlPlane, type Reach } from "./control-plane/edge.ts";
 import type { Env } from "./env.ts";
 import { authorizationForToken } from "./oauth.ts";
+import type { FinishConnectInput } from "./integrations/verbs.ts";
 import { isSecretOAuthState, OAUTH_INTEGRATION_PROVIDERS } from "./secret-oauth.ts";
 
 /** The human at a callback: their platform session — a browser cookie, or a bearer — or null. */
@@ -113,14 +114,31 @@ export async function secretOAuthCallback(
   // the secret's facet and lands the facts, in the order every other write to that path takes; the
   // platform's own call, no principal.
   try {
-    await env.ITERATE_CONTEXT.getByName(claims.context).invoke(
+    const { scopes } = (await env.ITERATE_CONTEXT.getByName(claims.context).invoke(
       ["itx", "builtins", "secrets", ["completeOAuth", owner.path, { code, nonce: claims.nonce }]],
       [],
       { principal: null },
-    );
-    if (provider && owner.kind !== "organizations")
+    )) as { scopes: string[] }; // the built-in's own answer (context/built-ins.ts `completeOAuth`)
+    if (provider && owner.kind !== "organizations") {
       // The platform's own call on the owner's root: its facet (a project's `project`, a person's
-      // `account`) finishes the connection its attempt names (integrations/verbs.ts).
+      // `account`) finishes the attempt this callback completed (integrations/verbs.ts), told what
+      // the provider granted and whether the human who consented is the owner themselves, with the
+      // `account` scope — what connecting a person's account to a project needs.
+      const { principal, grant } = authorization;
+      const finish: FinishConnectInput = {
+        provider,
+        connection: owner.path.slice(`/secrets/${provider}-`.length),
+        nonce: claims.nonce,
+        grantedScopes: scopes,
+        consentedBy: {
+          person:
+            owner.kind === "users" &&
+            principal.actor === owner.id &&
+            !principal.impersonatedBy &&
+            Boolean(grant?.scope.includes("account")),
+          email: principal.email,
+        },
+      };
       await env.ITERATE_CONTEXT.getByName(
         owner.kind === "project"
           ? DurableObjectNameCodec.stringify({ projectId: owner.id, path: "/" })
@@ -128,20 +146,11 @@ export async function secretOAuthCallback(
               projectId: GLOBAL_PROJECT_ID,
               path: `/users/${owner.id}`,
             }),
-      ).invoke(
-        [
-          "itx",
-          "builtins",
-          "facets",
-          ["get", owner.kind === "project" ? "project" : "account"],
-          [
-            "finishIntegrationConnect",
-            { provider, connection: owner.path.slice(`/secrets/${provider}-`.length) },
-          ],
-        ],
-        [],
-        { principal: null },
-      );
+      ).invoke(["itx", "builtins", "integrations", ["finishConnect", finish]], [], {
+        principal: null,
+        platform: true,
+      });
+    }
   } catch (error) {
     return answer(
       400,

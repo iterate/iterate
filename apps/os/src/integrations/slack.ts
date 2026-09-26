@@ -21,7 +21,9 @@ import { SECRET_OAUTH_TTL_MS } from "../secret-oauth.ts";
 import { isRecord, verifySecretHmac } from "../secrets.ts";
 import {
   appendPlatformFact,
-  attemptKeyOf,
+  deleteTokenSecret,
+  consentAttemptKeyOf,
+  dropAttemptsOf,
   connectionPathOf,
   connectionRowOf,
   ignoredWebhook,
@@ -93,7 +95,7 @@ export async function connectSlack(
 ): Promise<{ authorizationUrl: string }> {
   const { connection, client } = input;
   const { origin, scopes } = await slackAppOf(scope, client, connection);
-  const { authorizationUrl } = await scope.withItx((itx) =>
+  const { authorizationUrl, nonce } = await scope.withItx((itx) =>
     itx.secrets.beginOAuth(tokenSecretPathOf("slack", connection), {
       authorizationEndpoint: `${origin}/oauth/v2/authorize`,
       tokenEndpoint: `${origin}/api/oauth.v2.access`,
@@ -107,7 +109,7 @@ export async function connectSlack(
     }),
   );
   const attempt: ConnectionAttempt = { client, origin, until: Date.now() + SECRET_OAUTH_TTL_MS };
-  await scope.storage.put(attemptKeyOf("slack", connection), attempt);
+  await scope.storage.put(consentAttemptKeyOf("slack", connection, nonce), attempt);
   return { authorizationUrl };
 }
 
@@ -157,11 +159,8 @@ export async function disconnectSlack(
     projectId,
     connectionPathOf("slack", connection),
   );
-  // a secret never set (consent never finished) throws, having dropped the attempt in flight
-  await scope
-    .withItx((itx) => itx.secrets.delete(tokenSecretPathOf("slack", connection)))
-    .catch(() => {});
-  await scope.storage.delete(attemptKeyOf("slack", connection));
+  await deleteTokenSecret(scope, "slack", connection);
+  await dropAttemptsOf(scope.storage, "slack", connection);
   await appendPlatformFact(env, projectId, "/", {
     type: "events.iterate.com/slack/disconnected",
     payload: { connection },

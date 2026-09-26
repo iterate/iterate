@@ -184,8 +184,9 @@ export type SecretCatalogEntry = {
   /** For exchange code (`refresh.kind` "worker"): the SHA-256 of its source, hex — which code it is. */
   refreshSourceSha256?: string;
   createdAt: string;
-  /** A borrowed secret (`itx.secrets.lend`): whose — a person's, or the deployment's own (lent by
-   *  its operator) — under which lend, and the connection it is. */
+  /** A path that forwards every use to a secret elsewhere: a person's account connected to this
+   *  project (`integrations.connect(provider, { account })`), or the deployment's own secret its
+   *  operator lent (`itx.secrets.lend`) — whose, under which lend, and the connection it is. */
   borrowed?: {
     lendId: string;
     lender: { userId: string; email?: string } | { instance: true };
@@ -682,8 +683,13 @@ export interface IterateContextApi {
     /** OAuth's first tokens: the provider's authorize URL to send a human to. The provider
      *  redirects them to the platform's callback (they must be signed in as someone who reaches the
      *  secret's owner), the secret's facet exchanges the code, `secret/set` lands, and the callback
-     *  redirects to `next`. Only from a session, which carries the platform's origin. */
-    beginOAuth(path: string, options: SecretOAuthOptions): Promise<{ authorizationUrl: string }>;
+     *  redirects to `next`. Only from a session, which carries the platform's origin. `nonce`
+     *  names this attempt (the callback's signed `state` carries it); a later `beginOAuth` on the
+     *  same path replaces it. */
+    beginOAuth(
+      path: string,
+      options: SecretOAuthOptions,
+    ): Promise<{ authorizationUrl: string; nonce: string }>;
     delete(path: string): Promise<{ path: string }>;
     list(): Promise<SecretCatalogEntry[]>;
     /** Build the authenticated Dash link where a person enters a value an agent must never see in
@@ -694,12 +700,12 @@ export interface IterateContextApi {
      *  constant-time, run in the secret's facet. A secret never set (or a material with no key at
      *  the field) answers false, never a description. */
     verifyHmac(path: string, input: SecretHmacVerification): Promise<boolean>;
-    /** On a person's own context (`session.user`): lend one of their secrets to a project they are a
-     *  member of, as the project's path `as`; the project's uses are forwarded to this secret, and
-     *  the material never leaves it. `revokeLend` ends it; so does the project deleting its path,
-     *  or the person leaving the project. On the global root (`session.global`), the operator
-     *  lends the deployment's own secret to a project, or `to: "every-project"`: every project,
-     *  one created later included, borrows it unless its path holds a secret of its own. */
+    /** The operator's, on the global root (`session.global`): lend the deployment's own secret to
+     *  a project, as the project's path `as`, or `to: "every-project"`: every project, one created
+     *  later included, borrows it unless its path holds a secret of its own. The project's uses are
+     *  forwarded to this secret, and the material never leaves it. `revokeLend` ends it; so does a
+     *  project deleting its path, for that project alone. (A person's account reaches a project
+     *  through `integrations.connect(provider, { account })` instead.) */
     lend(
       path: string,
       input: { to: string; as: string },
@@ -708,17 +714,23 @@ export interface IterateContextApi {
   };
   /** Connect this context's owner — a project (its root), or a person (`session.user`) — to a
    *  provider through the deployment's app: `connect` answers where to send the human (and the
-   *  connection's name; again for one that exists asks for more `scopes` on the same account);
-   *  `requestFromUser` answers a Dash link asking the signed-in person to connect it, and with
-   *  lend it to this project, as the path `lendTo` (`/secrets/<name>`) when given. */
+   *  connection's name; again for one that exists asks for more `scopes` on the same account). On a
+   *  project, `account` connects one of YOUR accounts instead — the address the provider gives it,
+   *  as `session.user`'s `state.integrations` lists it: with no `authorizationUrl` when it already
+   *  holds what the project asks for, else one that asks the provider to add it. The project then
+   *  uses it as `/secrets/<provider>-<connection>` while it stays connected and you stay a member;
+   *  disconnecting it there leaves it yours. `requestFromUser` answers a Dash link asking the
+   *  signed-in person to connect the provider to this project. */
   integrations: {
     connect(
-      provider: OAuthIntegrationProvider | "github",
-      options?: { scopes?: string[]; connection?: string; next?: string },
-    ): Promise<{ authorizationUrl: string; connection: string }>;
+      provider: OAuthIntegrationProvider | "github" | "waitrose",
+      options?:
+        | { scopes?: string[]; next?: string; connection?: string; account?: never }
+        | { scopes?: string[]; next?: string; account: string; connection?: never },
+    ): Promise<{ authorizationUrl?: string; connection: string }>;
     requestFromUser(
-      provider: "google" | "cloudflare",
-      options?: { scopes?: string[]; lendTo?: string },
+      provider: OAuthIntegrationProvider | "github",
+      options?: { scopes?: string[] },
     ): Promise<{ url: string }>;
   };
   /** The project's fetch routes, on its root `/`: which itx expression, the route's `target`, a
@@ -948,6 +960,9 @@ export interface IterateSessionApi {
     /** the providers whose iterate app this deployment holds (APP_CONFIG `integrations`): a
      *  project connects through iterate's app only there, and brings its own app anywhere */
     iterateAppProviders: ("slack" | "google" | "cloudflare" | "github")[];
+    /** what iterate's app asks for there, by provider — what a project needs of your account before
+     *  it uses it (`integrations.connect(provider, { account })`) */
+    iterateAppScopes: Partial<Record<"slack" | "google" | "cloudflare", string[]>>;
   };
   /** The grants this session may manage (a signed-in person's with the `account` scope): list and
    *  end its sessions and personal access tokens, and mint a personal access token — its bearer
