@@ -5,8 +5,3 @@
 # base64: `openssl rand -base64 32`. Rotating it only invalidates outstanding
 # fake tokens, which tests re-mint anyway.
 PETSHOP_SEAL_KEY="ZHVtbXktcGV0c2hvcC1sb2NhbC1kZXYtc2VhbC1rZXk="
-
-# When set, every /__backdoor/* route requires this exact value in the
-# `x-petshop-backdoor` request header (403 otherwise). Unset (locally and on the
-# deployed worker), the backdoor is open.
-# PETSHOP_BACKDOOR_SECRET="choose-a-shared-secret"

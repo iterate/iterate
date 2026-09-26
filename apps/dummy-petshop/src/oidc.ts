@@ -5,7 +5,7 @@
  * them exactly as it verifies Google's or Cloudflare's.
  */
 import { base64Url, nowSeconds } from "./seal.ts";
-import type { IntegrationFakeDeps } from "./state.ts";
+import type { ShopDeps } from "./state.ts";
 
 /** The discovery document for an issuer whose endpoints hang under it (`<issuer>/<path>`). */
 export function discoveryDocument(
@@ -26,14 +26,14 @@ export function discoveryDocument(
   };
 }
 
-export async function jwks(deps: IntegrationFakeDeps) {
+export async function jwks(deps: ShopDeps) {
   const key = await deps.state.oidcSigningKey();
   return { keys: [{ ...key.publicJwk, kid: key.kid, alg: "RS256", use: "sig" }] };
 }
 
 /** An ID token for `claims`, from `issuer` to `clientId`, valid for ten minutes. */
 export async function signIdToken(
-  deps: IntegrationFakeDeps,
+  deps: ShopDeps,
   input: { issuer: string; clientId: string; claims: Record<string, unknown> },
 ): Promise<string> {
   const key = await deps.state.oidcSigningKey();
@@ -61,20 +61,6 @@ export async function signIdToken(
   return `${signingInput}.${base64Url(new Uint8Array(signature))}`;
 }
 
-/** The client a token request authenticates as: HTTP Basic, or `client_id` and `client_secret` in
- *  the form (both are what Google and Cloudflare accept). */
-export function tokenRequestClient(
-  request: Request,
-  form: Record<string, string>,
-): { clientId: string; clientSecret: string | undefined } {
-  const basic = /^Basic\s+(\S+)$/i.exec(request.headers.get("authorization") ?? "")?.[1];
-  if (basic) {
-    const [clientId = "", clientSecret] = atob(basic).split(":");
-    return { clientId, clientSecret };
-  }
-  return { clientId: form.client_id || "", clientSecret: form.client_secret };
-}
-
 /** THE FAKES' ACCOUNT PICKER — what a real provider's sign-in page is for: a form asking which
  *  account (`fields`: `email`, and GitHub's `login`), submitted back to the same authorize URL
  *  with the rest of its query kept. A fake shows it when the request names no account and asks for
@@ -99,7 +85,7 @@ export function accountPicker(url: URL, fields: readonly ("email" | "login")[]):
   );
 }
 
-/** Escape text for an HTML attribute value or text node: the fakes' account picker and consent page. */
-export function escapeHtml(value: string): string {
+/** Escape text for an HTML attribute value or text node: the fakes' account picker. */
+function escapeHtml(value: string): string {
   return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/"/g, "&quot;");
 }

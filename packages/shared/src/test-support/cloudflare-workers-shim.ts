@@ -1,5 +1,5 @@
-// Node-side stand-in for the `cloudflare:workers` module, aliased by the Node unit tests of apps/os,
-// apps/dummy-petshop and packages/iterate (each vitest.config.ts). It exists so a module whose only
+// Node-side stand-in for the `cloudflare:workers` module, aliased by the Node unit tests of apps/os
+// and packages/iterate (each vitest.config.ts). It exists so a module whose only
 // platform dependency is a base class (RpcTarget, WorkerEntrypoint, DurableObject) can load in plain
 // Node without a per-file `vi.mock("cloudflare:workers")` (iterate/no-vi-mock). It proves nothing
 // about the runtime: class bodies never run as Workers here, and `env` is empty. Behaviour that needs

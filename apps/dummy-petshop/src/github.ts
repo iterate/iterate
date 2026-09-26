@@ -35,66 +35,40 @@
  *   POST /repos/<o>/<r>/check-runs        a check run, kept (installation token)
  *   GET  /repos/<o>/<r>/commits/<sha>/check-runs[?check_name]   the check runs on a commit
  *
- * An installation is registered with `registerApp` (state.ts; the shop's
- * `POST /__backdoor/apps`). Codes and tokens are sealed blobs (seal.ts).
+ * An installation is registered with `POST /__backdoor/apps` (state.ts `registerApp`). The OAuth
+ * steps are the fakes' one authorization server (authorization-server.ts).
  */
+import { z } from "zod";
+import {
+  fakeAuthorizationServer,
+  openAccessToken,
+  redirectTo,
+  sealAccessToken,
+  tokenClient,
+} from "./authorization-server.ts";
 import { verifyAppJwt } from "./github-app.ts";
 import { accountPicker } from "./oidc.ts";
-import { nowSeconds, seal, unseal } from "./seal.ts";
-import {
-  accessTokenEpochFor,
-  fakeUserIdOf,
-  type GithubPull,
-  type IntegrationFakeDeps,
-} from "./state.ts";
+import { hmacSha256Hex, nowSeconds } from "./seal.ts";
+import { DEFAULT_INSTALLATION_ID, fakeUserIdOf, type ShopDeps } from "./state.ts";
 
 /** Installation tokens are short (60 s) so an integration that caches one exercises re-minting. */
 export const INSTALLATION_TOKEN_TTL_SECONDS = 60;
 
-/** An installation token: a bearer on the installation API and, like an OAuth access token, on the
- *  pet shop's own API (worker.ts), bound to the App's revocation epoch. */
-export interface GithubInstallationTokenPayload {
-  t: "installation";
-  sub: string;
-  clientId: string;
+/** The `t` of an installation token: a bearer on the installation API and on the pet shop's own
+ *  API (worker.ts), bound to the App's revocation epoch. */
+export const INSTALLATION_TOKEN = "github-installation";
+
+/** What an installation token names. */
+export interface InstallationGrant {
   installationId: string;
   appId: string;
-  epoch: number;
-  exp: number;
 }
 
-interface GithubUserCodePayload {
-  t: "github-user-code";
-  jti: string;
-  clientId: string;
-  redirectUri: string;
-  /** The authorize request named `redirect_uri`, so the exchange must repeat it (RFC 6749 4.1.3);
-   *  an install redirect's code went to the App's Callback URL unnamed. */
-  redirectUriNamed?: true;
+interface GithubUserGrant {
   login: string;
   email?: string;
   /** The user never approved the App's "Email addresses" account permission. */
   emailsDenied?: true;
-  exp: number;
-}
-
-interface GithubUserTokenPayload {
-  t: "github-user";
-  login: string;
-  email?: string;
-  emailsDenied?: true;
-  clientId: string;
-  /** The client's revocation epoch, so `/__backdoor/expire-tokens` forces a refresh. */
-  epoch?: number;
-  exp: number;
-}
-
-interface GithubRefreshTokenPayload {
-  t: "github-refresh";
-  login: string;
-  email?: string;
-  emailsDenied?: true;
-  clientId: string;
 }
 
 /** How long a user token lives: GitHub's eight hours. */
@@ -103,130 +77,79 @@ const USER_TOKEN_TTL_SECONDS = 8 * 60 * 60;
 /** GitHub's paths on this origin, or null when the request is not one of them. */
 export async function handleGithubRequest(
   request: Request,
-  deps: IntegrationFakeDeps,
+  deps: ShopDeps,
 ): Promise<Response | null> {
   const url = new URL(request.url);
   const key = `${request.method} ${url.pathname}`;
   const query = Object.fromEntries(url.searchParams);
-  const bearer = /^(?:Bearer|token)\s+(\S+)$/i.exec(
-    request.headers.get("authorization") || "",
-  )?.[1];
-  const sealUserCode = (
-    clientId: string,
-    redirectUri: string,
-    login: string,
-    email?: string,
-    redirectUriNamed?: true,
-    emailsDenied?: true,
-  ) =>
-    seal(
-      {
-        t: "github-user-code",
-        jti: crypto.randomUUID(),
-        clientId,
-        redirectUri,
-        redirectUriNamed,
-        login,
-        email,
-        emailsDenied,
-        exp: nowSeconds() + 600,
-      } satisfies GithubUserCodePayload,
-      deps.sealKey,
-    );
+  const bearer =
+    /^(?:Bearer|token)\s+(\S+)$/i.exec(request.headers.get("authorization") || "")?.[1] || "";
+  const github = fakeAuthorizationServer<GithubUserGrant>(deps, "github");
 
   const install = /^\/apps\/([^/]+)\/installations\/new$/.exec(url.pathname);
   if (request.method === "GET" && install) {
     const app = (await deps.state.getState()).apps[query.installation_id || ""];
     if (!app?.callbackUrl || app.appSlug !== decodeURIComponent(install[1]!))
       return Response.json({ message: "Not Found" }, { status: 404 });
-    const target = new URL(app.callbackUrl);
-    if (query.request === "1") target.searchParams.set("setup_action", "request");
-    else {
-      const login = query.login || app.users?.[0]?.login || "petshop-user";
-      target.searchParams.set(
-        "code",
-        await sealUserCode(app.oauthClientId || "", app.callbackUrl, login),
-      );
-      target.searchParams.set("installation_id", app.installationId);
-      target.searchParams.set("setup_action", "install");
-    }
-    target.searchParams.set("state", query.state || "");
-    return Response.redirect(target.toString(), 302);
+    if (query.request === "1")
+      return redirectTo(app.callbackUrl, { setup_action: "request", state: query.state });
+    const code = await github.code({
+      clientId: app.oauthClientId || "",
+      grant: { login: query.login || app.users?.[0]?.login || "petshop-user" },
+    });
+    return redirectTo(app.callbackUrl, {
+      code,
+      installation_id: app.installationId,
+      setup_action: "install",
+      state: query.state,
+    });
   }
   if (key === "GET /login/oauth/authorize") {
-    if (!(await deps.state.getState()).clients[query.client_id || ""])
-      return Response.json({ message: "Not Found" }, { status: 404 });
-    if (!URL.canParse(query.redirect_uri || ""))
-      return Response.json({ message: "redirect_uri is not an absolute URL" }, { status: 400 });
+    const refusal = await github.authorizeRefusal(query.client_id || "", query.redirect_uri || "");
+    if (refusal) return refusal;
     if (query.prompt === "select_account" && !query.login)
       return accountPicker(url, ["login", "email"]);
-    const target = new URL(query.redirect_uri!);
-    target.searchParams.set(
-      "code",
-      await sealUserCode(
-        query.client_id!,
-        query.redirect_uri!,
-        query.login || "petshop-user",
-        query.email,
-        true,
-        query.emails === "none" || undefined,
-      ),
-    );
-    target.searchParams.set("state", query.state || "");
-    return Response.redirect(target.toString(), 302);
+    const code = await github.code({
+      clientId: query.client_id!,
+      redirectUri: query.redirect_uri!,
+      grant: {
+        login: query.login || "petshop-user",
+        email: query.email,
+        emailsDenied: query.emails === "none" || undefined,
+      },
+    });
+    return redirectTo(query.redirect_uri!, { code, state: query.state });
   }
   if (key === "POST /login/oauth/access_token") {
     const params = { ...query, ...Object.fromEntries(new URLSearchParams(await request.text())) };
-    const client = (await deps.state.getState()).clients[params.client_id || ""];
+    const client = await tokenClient(deps, request, params);
     // GitHub answers a refused exchange with HTTP 200 and an `error`
-    if (!client || client.public || client.clientSecret !== params.client_secret)
+    if (!client || client.client.public)
       return Response.json({ error: "incorrect_client_credentials" });
-    let user: { login: string; email?: string; emailsDenied?: true };
+    let user: GithubUserGrant;
     if (params.grant_type === "refresh_token") {
-      const refresh = await unseal<GithubRefreshTokenPayload>(
-        params.refresh_token || "",
-        deps.sealKey,
-      );
-      if (refresh?.t !== "github-refresh" || refresh.clientId !== params.client_id)
-        return Response.json({ error: "bad_refresh_token" });
-      user = refresh;
+      const refresh = await github.openRefreshToken(params.refresh_token || "", client.clientId);
+      if (!refresh) return Response.json({ error: "bad_refresh_token" });
+      user = refresh.grant;
     } else {
-      const code = await unseal<GithubUserCodePayload>(params.code || "", deps.sealKey);
-      if (
-        code?.t !== "github-user-code" ||
-        code.clientId !== params.client_id ||
-        code.exp <= nowSeconds() ||
-        !(await deps.state.consumeAuthorizationCode(code.jti))
-      )
-        return Response.json({ error: "bad_verification_code" });
-      if (
-        (code.redirectUriNamed || params.redirect_uri) &&
-        params.redirect_uri !== code.redirectUri
-      )
-        return Response.json({ error: "redirect_uri_mismatch" });
-      user = code;
+      const redeemed = await github.redeemCode(params.code || "", {
+        ...client,
+        redirectUri: params.redirect_uri,
+        codeVerifier: params.code_verifier,
+      });
+      if ("refused" in redeemed)
+        return Response.json({
+          error:
+            redeemed.refused === "redirect_uri mismatch"
+              ? "redirect_uri_mismatch"
+              : "bad_verification_code",
+        });
+      user = redeemed.grant;
     }
-    const clientId = params.client_id!;
-    const token: GithubUserTokenPayload = {
-      t: "github-user",
-      login: user.login,
-      email: user.email,
-      emailsDenied: user.emailsDenied,
-      clientId,
-      epoch: accessTokenEpochFor(await deps.state.getState(), clientId),
-      exp: nowSeconds() + USER_TOKEN_TTL_SECONDS,
-    };
-    const refresh: GithubRefreshTokenPayload = {
-      t: "github-refresh",
-      login: user.login,
-      email: user.email,
-      emailsDenied: user.emailsDenied,
-      clientId,
-    };
     return Response.json({
-      access_token: await seal(token, deps.sealKey),
+      access_token: await github.accessToken(client.clientId, user, USER_TOKEN_TTL_SECONDS),
       expires_in: USER_TOKEN_TTL_SECONDS,
-      refresh_token: await seal(refresh, deps.sealKey),
+      refresh_token: await github.refreshToken(client.clientId, user),
       token_type: "bearer",
     });
   }
@@ -243,7 +166,7 @@ export async function handleGithubRequest(
         { status: 401 },
       );
     const verification = await verifyAppJwt({
-      jwt: bearer || "",
+      jwt: bearer,
       publicKeyPem: app.publicKeyPem,
       expectedAppId: app.appId,
       now: nowSeconds(),
@@ -253,23 +176,16 @@ export async function handleGithubRequest(
         { error: "invalid_jwt", error_description: verification.reason },
         { status: 401 },
       );
-    const token: GithubInstallationTokenPayload = {
-      t: "installation",
-      sub: `installation:${installationId}`,
-      clientId: app.appId,
-      installationId,
-      appId: app.appId,
-      // read at seal time: the App's tokens expired while the JWT was verified stay expired
-      epoch: accessTokenEpochFor(await deps.state.getState(), app.appId),
-      exp: nowSeconds() + INSTALLATION_TOKEN_TTL_SECONDS,
-    };
-    return Response.json(
-      {
-        token: await seal(token, deps.sealKey),
-        expires_at: new Date(token.exp * 1000).toISOString(),
-      },
-      { status: 201 },
+    // sealed after the JWT is verified: the App's tokens expired meanwhile stay expired
+    const token = await sealAccessToken<InstallationGrant>(
+      deps,
+      INSTALLATION_TOKEN,
+      app.appId,
+      { installationId, appId: app.appId },
+      INSTALLATION_TOKEN_TTL_SECONDS,
     );
+    const expiresAt = new Date((nowSeconds() + INSTALLATION_TOKEN_TTL_SECONDS) * 1000);
+    return Response.json({ token, expires_at: expiresAt.toISOString() }, { status: 201 });
   }
   const badCredentials = () => Response.json({ message: "Bad credentials" }, { status: 401 });
   // A repository's pull request files and check runs, for an installation token of an
@@ -278,20 +194,25 @@ export async function handleGithubRequest(
     /^\/repos\/([^/]+)\/([^/]+)\/(pulls\/(\d+)\/files|check-runs|commits\/([^/]+)\/check-runs)$/.exec(
       url.pathname,
     );
-  if (repository) {
-    const token = await unseal<GithubInstallationTokenPayload>(bearer || "", deps.sealKey);
+  if (repository || key === "GET /installation/repositories") {
+    const token = await openAccessToken<InstallationGrant>(deps, INSTALLATION_TOKEN, bearer);
     const state = await deps.state.getState();
-    const app = token && state.apps[token.installationId];
-    const [, owner, repo, route, number, ref] = repository;
-    if (
-      token?.t !== "installation" ||
-      token.exp <= nowSeconds() ||
-      token.epoch !== accessTokenEpochFor(state, token.clientId) ||
-      app?.account?.login !== owner
-    )
+    const app = token && state.apps[token.grant.installationId];
+    // a repository's routes answer only an installation on its owner
+    if (!token || !app || (repository && repository[1] !== app.account?.login))
       return badCredentials();
+    const owner = app.account?.login || "petshop-org";
+    const { installationId } = token.grant;
+    if (!repository)
+      return Response.json({
+        total_count: 1,
+        repositories: [
+          { id: 1, name: "pets", full_name: `${owner}/pets`, owner: { login: owner } },
+        ],
+      });
+    const [, , repo, route, number, ref] = repository;
     if (request.method === "GET" && number) {
-      const pull = (state.githubPulls?.[token.installationId] || []).find(
+      const pull = (state.githubPulls?.[installationId] || []).find(
         (known) => known.owner === owner && known.repo === repo && known.number === Number(number),
       );
       return pull
@@ -300,8 +221,8 @@ export async function handleGithubRequest(
     }
     if (request.method === "POST" && route === "check-runs") {
       const input = (await request.json()) as Record<string, unknown>;
-      const run = await deps.state.recordGithubCheckRun(token.installationId, {
-        owner: owner!,
+      const run = await deps.state.recordGithubCheckRun(installationId, {
+        owner,
         repo: repo!,
         name: String(input.name || ""),
         head_sha: String(input.head_sha || ""),
@@ -314,7 +235,7 @@ export async function handleGithubRequest(
     }
     if (request.method === "GET" && ref) {
       const name = query.check_name;
-      const runs = (state.githubCheckRuns?.[token.installationId] || []).filter(
+      const runs = (state.githubCheckRuns?.[installationId] || []).filter(
         (run) =>
           run.owner === owner &&
           run.repo === repo &&
@@ -325,42 +246,20 @@ export async function handleGithubRequest(
     }
     return Response.json({ message: "Not Found" }, { status: 404 });
   }
-  if (request.method !== "GET") return null;
-  if (key === "GET /installation/repositories") {
-    const token = await unseal<GithubInstallationTokenPayload>(bearer || "", deps.sealKey);
-    const state = await deps.state.getState();
-    const app = token && state.apps[token.installationId];
-    if (
-      token?.t !== "installation" ||
-      token.exp <= nowSeconds() ||
-      !app ||
-      token.epoch !== accessTokenEpochFor(state, token.clientId)
-    )
-      return badCredentials();
-    const owner = app.account?.login || "petshop-org";
-    return Response.json({
-      total_count: 1,
-      repositories: [{ id: 1, name: "pets", full_name: `${owner}/pets`, owner: { login: owner } }],
-    });
-  }
   const membership = /^\/user\/memberships\/orgs\/([^/]+)$/.exec(url.pathname);
   if (
     key !== "GET /user" &&
     key !== "GET /user/emails" &&
     key !== "GET /user/installations" &&
-    !membership
+    !(request.method === "GET" && membership)
   )
     return null;
-  const token = await unseal<GithubUserTokenPayload>(bearer || "", deps.sealKey);
-  if (
-    token?.t !== "github-user" ||
-    token.exp <= nowSeconds() ||
-    (token.epoch ?? 0) !== accessTokenEpochFor(await deps.state.getState(), token.clientId)
-  )
-    return badCredentials();
+  const token = await github.openAccessToken(bearer);
+  if (!token) return badCredentials();
+  const user = token.grant;
   if (key === "GET /user")
-    return Response.json({ login: token.login, id: fakeUserIdOf(token.login), type: "User" });
-  if (key === "GET /user/emails" && token.emailsDenied)
+    return Response.json({ login: user.login, id: fakeUserIdOf(user.login), type: "User" });
+  if (key === "GET /user/emails" && user.emailsDenied)
     return Response.json(
       {
         message: "Resource not accessible by integration",
@@ -373,7 +272,7 @@ export async function handleGithubRequest(
   if (key === "GET /user/emails")
     return Response.json([
       {
-        email: token.email || `${token.login}@users.petshop.test`,
+        email: user.email || `${user.login}@users.petshop.test`,
         primary: true,
         verified: true,
         visibility: "private",
@@ -382,16 +281,17 @@ export async function handleGithubRequest(
   const apps = Object.values((await deps.state.getState()).apps);
   if (membership) {
     const org = decodeURIComponent(membership[1]!);
-    const user = apps
+    const member = apps
       .filter((app) => app.account?.type === "Organization" && app.account.login === org)
       .flatMap((app) => app.users || [])
-      .find((user) => user.login === token.login);
-    if (!user) return Response.json({ message: "Not Found" }, { status: 404 });
-    return Response.json({ state: "active", role: user.role, organization: { login: org } });
+      .find((candidate) => candidate.login === user.login);
+    if (!member) return Response.json({ message: "Not Found" }, { status: 404 });
+    return Response.json({ state: "active", role: member.role, organization: { login: org } });
   }
   const reachable = apps.filter(
     (app) =>
-      app.oauthClientId === token.clientId && app.users?.some((user) => user.login === token.login),
+      app.oauthClientId === token.clientId &&
+      app.users?.some((candidate) => candidate.login === user.login),
   );
   return Response.json({
     total_count: reachable.length,
@@ -406,15 +306,81 @@ export async function handleGithubRequest(
   });
 }
 
-/** The GitHub fake's test controls: seed a pull request an installation reaches
- *  (`POST /__backdoor/github/pulls { installationId, owner, repo, number, headSha, files }`), and
- *  read the check runs it was sent (`GET /__backdoor/github/check-runs?installation=`). */
+/**
+ * The GitHub fake's test controls, or null:
+ *   POST /__backdoor/apps                 `registerApp`'s input → register or replace an
+ *                                         installation (its App's PUBLIC key; the private key
+ *                                         stays with the caller)
+ *   POST /__backdoor/apps/fire-webhook    { installationId?, url, event?, badSignature?,
+ *                                         deliveryId?, eventName? } → POST `event` to `url` as
+ *                                         GitHub delivers a webhook: signed x-hub-signature-256
+ *                                         with the installation's webhook secret, named by
+ *                                         x-github-delivery and x-github-event
+ *   POST /__backdoor/github/pulls         seed a pull request an installation reaches
+ *   GET  /__backdoor/github/check-runs?installation=   the check runs it was sent
+ */
 export async function handleGithubTestControls(
   request: Request,
-  deps: IntegrationFakeDeps,
+  deps: ShopDeps,
 ): Promise<Response | null> {
   const url = new URL(request.url);
   const key = `${request.method} ${url.pathname}`;
+  const body = () => request.json().catch(() => null);
+  const invalid = (error_description: string) =>
+    Response.json({ error: "invalid_request", error_description }, { status: 400 });
+  if (key === "POST /__backdoor/apps") {
+    const input = RegisterApp.safeParse(await body());
+    if (!input.success) return invalid(`registerApp's input: ${input.error.message}`);
+    return Response.json(await deps.state.registerApp(input.data), { status: 201 });
+  }
+  if (key === "POST /__backdoor/apps/fire-webhook") {
+    const parsed = FireWebhook.safeParse(await body());
+    const installationId = parsed.data?.installationId || DEFAULT_INSTALLATION_ID;
+    const app = (await deps.state.getState()).apps[installationId];
+    if (!parsed.success || !app)
+      return invalid("a registered installationId and an absolute url are required");
+    const input = parsed.data;
+    const payload = JSON.stringify(
+      input.event ?? {
+        event: "installation.ping",
+        installationId,
+        firedAt: new Date().toISOString(),
+      },
+    );
+    const secret = input.badSignature ? "definitely-not-the-webhook-secret" : app.webhookSecret;
+    const signature = `sha256=${await hmacSha256Hex(secret, payload)}`;
+    const deliveryId = input.deliveryId || crypto.randomUUID();
+    const delivered = await fetch(input.url, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-hub-signature-256": signature,
+        "x-github-delivery": deliveryId,
+        "x-github-event": input.eventName || "ping",
+      },
+      body: payload,
+      signal: AbortSignal.timeout(10_000),
+    }).then(
+      async (response) => {
+        // the receiver's answer: its JSON, or its text when it is not JSON
+        const text = await response.text().catch(() => "");
+        return { status: response.status, body: parsedOrText(text) };
+      },
+      // status 0: the POST itself failed, and why
+      (cause: unknown) => ({
+        status: 0,
+        error: cause instanceof Error ? String(cause.cause ?? cause) : String(cause),
+      }),
+    );
+    return Response.json({
+      installationId,
+      deliveryId,
+      url: input.url,
+      signature,
+      payload,
+      ...delivered,
+    });
+  }
   if (key === "GET /__backdoor/github/check-runs") {
     const installation = url.searchParams.get("installation") || "";
     return Response.json({
@@ -422,9 +388,53 @@ export async function handleGithubTestControls(
     });
   }
   if (key !== "POST /__backdoor/github/pulls") return null;
-  const { installationId, ...pull } = (await request.json()) as GithubPull & {
-    installationId: string;
-  };
+  const input = SeedPull.safeParse(await body());
+  if (!input.success) return invalid(`a pull request: ${input.error.message}`);
+  const { installationId, ...pull } = input.data;
   await deps.state.recordGithubPull(installationId, pull);
   return Response.json({ ok: true });
+}
+
+const RegisterApp = z.object({
+  publicKeyPem: z.string().min(1),
+  appId: z.string().optional(),
+  installationId: z.string().optional(),
+  webhookSecret: z.string().optional(),
+  appSlug: z.string().optional(),
+  callbackUrl: z.url().optional(),
+  account: z
+    .object({
+      login: z.string(),
+      id: z.number().optional(),
+      type: z.enum(["Organization", "User"]).optional(),
+    })
+    .optional(),
+  users: z.array(z.object({ login: z.string(), role: z.enum(["admin", "member"]) })).optional(),
+  oauthClientId: z.string().optional(),
+});
+
+const FireWebhook = z.object({
+  installationId: z.string().optional(),
+  url: z.url(),
+  event: z.unknown().optional(),
+  badSignature: z.boolean().optional(),
+  deliveryId: z.string().optional(),
+  eventName: z.string().optional(),
+});
+
+const SeedPull = z.object({
+  installationId: z.string(),
+  owner: z.string(),
+  repo: z.string(),
+  number: z.number(),
+  headSha: z.string(),
+  files: z.array(z.object({ filename: z.string(), status: z.string(), patch: z.string() })),
+});
+
+function parsedOrText(text: string): unknown {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return text;
+  }
 }
