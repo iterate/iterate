@@ -128,6 +128,11 @@ export default {
       entry: ["public/app.js"],
       ignoreDependencies: ["@iterate-com/capnweb"],
     },
+    "apps/browser-extension": {
+      // public/index.html loads panel.js; its ./capnweb.js is the one the build copies into dist/.
+      entry: ["public/panel.js"],
+      ignoreUnresolved: ["./capnweb.js"],
+    },
     "packages/ui": {
       // The package.json export map is the public entry surface (many subpath
       // exports, no src/index.ts) — same posture as packages/shared.

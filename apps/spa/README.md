@@ -24,6 +24,6 @@ Production deploys automatically on main via `.depot/workflows/deploy-spa.yml`, 
 in `apps/browser-extension`. `envs.ts` owns worker names/accounts; Doppler `os`
 supplies credentials. `--env preview` targets the separate preview account.
 
-`pnpm --filter @iterate-com/spa build` copies the static files and packages the Chrome extension
-using Python 3's standard ZIP library. `/downloads/` serves the versioned unpacked extension and
-installation/update instructions. The app itself still needs no build or server to run.
+`pnpm --filter @iterate-com/spa build` copies the static files, builds the Chrome extension
+(`apps/browser-extension`'s `dist/`) and zips it with fflate. `/downloads/` serves the versioned
+unpacked extension and installation/update instructions. The app itself still needs no build or server to run.

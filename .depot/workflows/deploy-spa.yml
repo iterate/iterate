@@ -7,8 +7,8 @@ concurrency:
 on:
   push:
     branches: [main]
-    # No root manifests or lockfile: what ships is public/ and the zipped extension, with no npm
-    # dependency inside.
+    # No root manifests or lockfile: what ships is public/ and the zipped extension, and a bump of
+    # the extension's one npm dependency, capnweb, ships with the next deploy rather than its own.
     paths:
       - .depot/workflows/deploy-spa.yml
       - apps/spa/**
