@@ -1,6 +1,6 @@
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { temporaryDirectory } from "@iterate-com/shared/test-support/temporary-directory";
 import { expect, test, vi } from "vitest";
 import { stringify } from "yaml";
 import CiTrace, { duration } from "./cli.ts";
@@ -152,9 +152,9 @@ async function collectedTrace(
   attributes: Record<string, string>,
   artifacts: { artifactId: string; name: string; createdAt: string }[],
 ) {
-  const directory = await mkdtemp(join(tmpdir(), "ci-trace-"));
+  const directory = temporaryDirectory();
   await writeFile(
-    join(directory, "trace.json"),
+    join(directory.path, "trace.json"),
     JSON.stringify({
       resourceSpans: [
         {
@@ -184,7 +184,7 @@ async function collectedTrace(
   vi.stubEnv("DEPOT_CI_TELEMETRY_TOKEN", "token");
   vi.stubEnv("DEPOT_JOB_URL", "https://depot.dev/orgs/0p91s0lz49/workflows/w?job=j&attempt=a");
   return {
-    directory,
+    directory: directory.path,
     /** The commit statuses posted, in order. */
     statuses: () =>
       fetch.mock.calls
@@ -193,9 +193,7 @@ async function collectedTrace(
             url === `https://api.github.com/repos/iterate/iterate/statuses/${"a".repeat(40)}`,
         )
         .map(([, init]) => JSON.parse(init?.body || "")),
-    async [Symbol.asyncDispose]() {
-      await rm(directory, { recursive: true, force: true });
-    },
+    [Symbol.dispose]: directory[Symbol.dispose],
   };
 }
 
@@ -210,7 +208,7 @@ async function tracedWorkflow(workflow: {
   jobs: [key: string, status: string, startedAt: number, finishedAt: number][];
   needs: string[];
 }) {
-  const directory = await mkdtemp(join(tmpdir(), "ci-trace-"));
+  const directory = temporaryDirectory();
   const at = (seconds: number) =>
     new Date(Date.UTC(2026, 8, 23, 12) + seconds * 1000).toISOString();
   const job = ([key, status, startedAt, finishedAt]: (typeof workflow.jobs)[number]) => ({
@@ -286,9 +284,7 @@ async function tracedWorkflow(workflow: {
     "https://depot.dev/orgs/0p91s0lz49/workflows/workflow?job=trace-job&attempt=trace-attempt",
   );
   return {
-    directory,
-    async [Symbol.asyncDispose]() {
-      await rm(directory, { recursive: true, force: true });
-    },
+    directory: directory.path,
+    [Symbol.dispose]: directory[Symbol.dispose],
   };
 }

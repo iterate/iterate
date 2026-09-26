@@ -16,16 +16,16 @@
 // through a stand-in context socket — from a bare workerd, and reads workerd's own log.
 
 import { spawn, type ChildProcess } from "node:child_process";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { writeFile } from "node:fs/promises";
 import { createServer, type AddressInfo } from "node:net";
 import { createRequire } from "node:module";
-import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
 import { WebSocket } from "ws";
 import { expect, test, vi } from "vitest";
 import { createFailing } from "@iterate-com/shared/test-support/failing-test";
+import { temporaryDirectory } from "@iterate-com/shared/test-support/temporary-directory";
 
 test("a visitor that closes its WebSocket to the edge's spliced upgrade ends the invocation without an uncaught error", async () => {
   await using runtime = await bareWorkerd();
@@ -127,7 +127,8 @@ export default {
  *  the log's lines, the worker's console among them. */
 async function bareWorkerd() {
   const port = await freePort();
-  const dir = await mkdtemp(join(tmpdir(), "fetch-upgrade-visitor-close-"));
+  const directory = temporaryDirectory();
+  const dir = directory.path;
   const bundle = await build({
     stdin: { contents: FIXTURE, resolveDir: dirname(fileURLToPath(import.meta.url)) },
     bundle: true,
@@ -167,7 +168,7 @@ const config :Workerd.Config = (
     },
     async [Symbol.asyncDispose]() {
       child.kill();
-      await rm(dir, { recursive: true, force: true });
+      directory[Symbol.dispose]();
     },
   };
 }

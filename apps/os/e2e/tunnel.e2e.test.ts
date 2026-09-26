@@ -19,13 +19,13 @@
 
 import { execFile, type ChildProcess } from "node:child_process";
 import { createServer } from "node:http";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import { connect, type AddressInfo, type Socket } from "node:net";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { connect as tlsConnect } from "node:tls";
 import { fileURLToPath } from "node:url";
+import { temporaryDirectory } from "@iterate-com/shared/test-support/temporary-directory";
 import { WebSocketServer } from "ws";
 import { expect, test } from "vitest";
 import { adminCredentials, session, until, untilValue, workerUrl } from "./support/client.ts";
@@ -330,10 +330,10 @@ async function localServer() {
 /** A CLI config pointing at the worker under test, the operator's credentials in the environment,
  *  and `tunnel(args)`: the bin running `iterate tunnel …`, the URL it prints on stdout awaited. */
 async function cliConfig() {
-  const directory = await mkdtemp(join(tmpdir(), "iterate-tunnel-e2e-"));
-  await mkdir(join(directory, "iterate"));
+  const directory = temporaryDirectory();
+  await mkdir(join(directory.path, "iterate"));
   await writeFile(
-    join(directory, "iterate/config.json"),
+    join(directory.path, "iterate/config.json"),
     JSON.stringify({ default: "e2e", configs: { e2e: { osBaseUrl: workerUrl("/") } } }),
   );
   const children: ChildProcess[] = [];
@@ -342,7 +342,7 @@ async function cliConfig() {
       const child = execFile(process.execPath, [bin, "tunnel", ...args], {
         env: {
           ...process.env,
-          XDG_CONFIG_HOME: directory,
+          XDG_CONFIG_HOME: directory.path,
           APP_CONFIG_ADMIN_API_SECRET: adminCredentials().secret,
           ITERATE_BEARER_TOKEN: "",
         },
@@ -367,7 +367,7 @@ async function cliConfig() {
     },
     [Symbol.asyncDispose]: async () => {
       for (const child of children) child.kill("SIGKILL");
-      await rm(directory, { recursive: true, force: true });
+      directory[Symbol.dispose]();
     },
   };
 }

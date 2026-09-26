@@ -1,6 +1,6 @@
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { temporaryDirectory } from "@iterate-com/shared/test-support/temporary-directory";
 import { expect, test, vi } from "vitest";
 import { runCloudflareCommandWith429Retry, runAsync, smokeResponse } from "./deploy-helpers.ts";
 
@@ -19,8 +19,8 @@ test("rejects a nonzero child exit", async () => {
 
 // ── runCloudflareCommandWith429Retry ──
 test("retries an explicit Wrangler 429 and then succeeds", async () => {
-  const directory = mkdtempSync(join(tmpdir(), "deploy-command-retry-"));
-  const attemptFile = join(directory, "attempts");
+  using directory = temporaryDirectory();
+  const attemptFile = join(directory.path, "attempts");
   const script = `
       const fs = require("node:fs");
       const file = ${JSON.stringify(attemptFile)};
@@ -33,21 +33,17 @@ test("retries an explicit Wrangler 429 and then succeeds", async () => {
     `;
   const sleep = vi.fn(async () => {});
 
-  try {
-    await expect(
-      runCloudflareCommandWith429Retry(
-        process.execPath,
-        ["--eval", script],
-        { cwd: process.cwd() },
-        { backoffMs: [7], sleep },
-      ),
-    ).resolves.toBeUndefined();
+  await expect(
+    runCloudflareCommandWith429Retry(
+      process.execPath,
+      ["--eval", script],
+      { cwd: process.cwd() },
+      { backoffMs: [7], sleep },
+    ),
+  ).resolves.toBeUndefined();
 
-    expect(readFileSync(attemptFile, "utf8")).toBe("2");
-    expect(sleep).toHaveBeenCalledExactlyOnceWith(7);
-  } finally {
-    rmSync(directory, { recursive: true, force: true });
-  }
+  expect(readFileSync(attemptFile, "utf8")).toBe("2");
+  expect(sleep).toHaveBeenCalledExactlyOnceWith(7);
 });
 
 test.for([

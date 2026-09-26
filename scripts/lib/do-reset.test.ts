@@ -1,6 +1,6 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { temporaryDirectory } from "@iterate-com/shared/test-support/temporary-directory";
 import { expect, test, vi } from "vitest";
 import { resetWorkerDurableObjects } from "./do-reset.ts";
 
@@ -76,7 +76,8 @@ function resetCtx(workers: string[], namespaces: unknown[]) {
 /** A `pnpm` on PATH that records the parked deploy instead of running wrangler: the command, the
  *  credentials it was handed, and the config and module it would upload. */
 function fakeWrangler() {
-  const dir = mkdtempSync(join(tmpdir(), "do-reset-test-"));
+  const directory = temporaryDirectory();
+  const dir = directory.path;
   writeFileSync(
     join(dir, "pnpm"),
     [
@@ -102,8 +103,6 @@ function fakeWrangler() {
             worker: read("worker.js"),
           }
         : undefined,
-    [Symbol.dispose]() {
-      rmSync(dir, { recursive: true, force: true });
-    },
+    [Symbol.dispose]: directory[Symbol.dispose],
   };
 }

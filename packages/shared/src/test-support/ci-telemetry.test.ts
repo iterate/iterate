@@ -1,5 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, test } from "vitest";
 import {
@@ -10,6 +9,7 @@ import {
   writeTestTelemetryFailureSentinel,
   type TestTelemetryArtifact,
 } from "./ci-telemetry.ts";
+import { temporaryDirectory } from "./temporary-directory.ts";
 
 test("normalizes arbitrary runner errors into one JSON-safe model", () => {
   expect(normalizeTestTelemetryError(new TypeError("boom"))).toMatchObject({
@@ -24,7 +24,7 @@ test("normalizes arbitrary runner errors into one JSON-safe model", () => {
 });
 
 test("writes an immediate file and a durable CI-directory copy from one artifact", () => {
-  const repositoryRoot = mkdtempSync(join(tmpdir(), "ci-telemetry-contract-"));
+  using repository = temporaryDirectory();
   const artifact: TestTelemetryArtifact = {
     artifactSchemaVersion: 2,
     artifactId: "vitest:@iterate/example:123:456",
@@ -50,24 +50,23 @@ test("writes an immediate file and a durable CI-directory copy from one artifact
   };
 
   writeTestTelemetryArtifact(artifact, {
-    GITHUB_WORKSPACE: repositoryRoot,
+    GITHUB_WORKSPACE: repository.path,
     TEST_TELEMETRY_ARTIFACT_FILE: "immediate.json",
     TEST_TELEMETRY_ARTIFACT_DIR: "test-results/ci-telemetry/raw",
   });
 
-  const immediate = join(repositoryRoot, "immediate.json");
+  const immediate = join(repository.path, "immediate.json");
   const durable = resolveTestTelemetryArtifactPath("vitest:@iterate/example:123:456", {
-    GITHUB_WORKSPACE: repositoryRoot,
+    GITHUB_WORKSPACE: repository.path,
     TEST_TELEMETRY_ARTIFACT_DIR: "test-results/ci-telemetry/raw",
   })!;
   expect(existsSync(immediate)).toBe(true);
   expect(existsSync(durable)).toBe(true);
   expect(readFileSync(durable, "utf8")).toBe(readFileSync(immediate, "utf8"));
-  rmSync(repositoryRoot, { recursive: true });
 });
 
 test("leaves an explicit failure artifact when a runner never reaches its end hook", () => {
-  const artifactDirectory = mkdtempSync(join(tmpdir(), "ci-telemetry-sentinel-"));
+  using artifactDirectory = temporaryDirectory();
   writeTestTelemetryFailureSentinel(
     {
       artifactId: "vitest:sentinel",
@@ -82,11 +81,11 @@ test("leaves an explicit failure artifact when a runner never reaches its end ho
       },
       context: { framework: "vitest", testKind: "unit", suite: "unit" },
     },
-    { TEST_TELEMETRY_ARTIFACT_DIR: artifactDirectory },
+    { TEST_TELEMETRY_ARTIFACT_DIR: artifactDirectory.path },
   );
 
   const artifactPath = resolveTestTelemetryArtifactPath("vitest:sentinel", {
-    TEST_TELEMETRY_ARTIFACT_DIR: artifactDirectory,
+    TEST_TELEMETRY_ARTIFACT_DIR: artifactDirectory.path,
   })!;
   const written = JSON.parse(readFileSync(artifactPath, "utf8")) as TestTelemetryArtifact;
   expect(written.run).toMatchObject({
@@ -96,7 +95,6 @@ test("leaves an explicit failure artifact when a runner never reaches its end ho
   expect(written.runners[0]?.collectionErrors[0]).toContain(
     "did not write its completed telemetry",
   );
-  rmSync(artifactDirectory, { recursive: true });
 });
 
 test("uses explicit preview identity and collision-resistant artifact filenames", () => {

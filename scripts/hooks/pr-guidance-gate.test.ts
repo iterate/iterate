@@ -1,9 +1,9 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
+import { temporaryDirectory } from "@iterate-com/shared/test-support/temporary-directory";
 import { expect, test } from "vitest";
 
 const projectDir = join(import.meta.dirname, "..", "..");
@@ -60,22 +60,22 @@ test("a stale hash — the doc changed since it was read — is blocked again", 
 // The tests above use this machine's PATH, so they cover only the hash tool it has. These cover
 // each case on every machine.
 test.for(["sha1sum", "shasum"])("with only %s on the PATH, the gate blocks and acks", (tool) => {
-  using path = pathWith([tool]);
-  const denied = runHook(`gh pr create --title "hello"`, path.dir);
+  using bin = pathWith([tool]);
+  const denied = runHook(`gh pr create --title "hello"`, bin.path);
   expect(denied).toMatchObject({ status: 2 });
   expect(denied.stderr).toContain(`PR_GUIDANCE_HASH=${currentHash()}`);
   expect(
-    runHook(`PR_GUIDANCE_HASH=${currentHash()} gh pr create --title "hello"`, path.dir),
+    runHook(`PR_GUIDANCE_HASH=${currentHash()} gh pr create --title "hello"`, bin.path),
   ).toMatchObject({ status: 0, stderr: "" });
 });
 
 test("with no hash tool, a gated command is blocked rather than let through", () => {
-  using path = pathWith([]);
-  expect(runHook(`gh pr create --title "hello"`, path.dir)).toMatchObject({
+  using bin = pathWith([]);
+  expect(runHook(`gh pr create --title "hello"`, bin.path)).toMatchObject({
     status: 2,
     stderr: "pr-guidance-gate: need shasum or sha1sum to hash docs/pull-requests.md\n",
   });
-  expect(runHook("pnpm test", path.dir)).toMatchObject({ status: 0, stderr: "" });
+  expect(runHook("pnpm test", bin.path)).toMatchObject({ status: 0, stderr: "" });
 });
 
 // spawn the real hook script the way Claude Code does: PreToolUse payload on stdin,
@@ -104,13 +104,13 @@ function currentHash() {
 // tools. Each hash tool runs whichever SHA-1 tool this machine has (macOS ships `shasum`, Arch
 // Linux only `sha1sum`), so both of the hook's branches hash for real on every machine.
 function pathWith(hashTools: string[]) {
-  const dir = mkdtempSync(join(tmpdir(), "pr-guidance-gate-"));
-  for (const tool of ["cat", "cut"]) symlinkSync(which(tool), join(dir, tool));
+  const bin = temporaryDirectory();
+  for (const tool of ["cat", "cut"]) symlinkSync(which(tool), join(bin.path, tool));
   const sha1 = which("sha1sum", "shasum");
   for (const tool of hashTools) {
-    writeFileSync(join(dir, tool), `#!${bash}\nexec ${sha1} "$@"\n`, { mode: 0o755 });
+    writeFileSync(join(bin.path, tool), `#!${bash}\nexec ${sha1} "$@"\n`, { mode: 0o755 });
   }
-  return { dir, [Symbol.dispose]: () => rmSync(dir, { recursive: true, force: true }) };
+  return bin;
 }
 
 // the path of the first of `tools` on this machine's PATH

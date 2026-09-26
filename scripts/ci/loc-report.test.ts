@@ -1,9 +1,9 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 import { expect, test } from "vitest";
+import { temporaryDirectory } from "@iterate-com/shared/test-support/temporary-directory";
 
 import { computeReport, getChangedFiles, renderBodySection } from "./loc-report.ts";
 
@@ -205,11 +205,12 @@ test.for([
 });
 
 function createGitRepo() {
-  const path = mkdtempSync(join(tmpdir(), "loc-report-test-"));
+  const directory = temporaryDirectory();
+  const { path } = directory;
   execFileSync("git", ["init", "--quiet"], { cwd: path });
 
   return {
-    path,
+    ...directory,
     commit(files: Record<string, string>) {
       for (const [file, content] of Object.entries(files)) {
         const fullPath = join(path, file);
@@ -232,9 +233,6 @@ function createGitRepo() {
         { cwd: path },
       );
       return execFileSync("git", ["rev-parse", "HEAD"], { cwd: path, encoding: "utf8" }).trim();
-    },
-    [Symbol.dispose]() {
-      rmSync(path, { recursive: true, force: true });
     },
   };
 }

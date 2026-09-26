@@ -1,8 +1,8 @@
-import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
-import { expect, onTestFinished, test, vi } from "vitest";
+import { expect, test, vi } from "vitest";
 import type { TestTelemetryArtifact } from "../ci-telemetry.ts";
+import { temporaryDirectory } from "../temporary-directory.ts";
 import { RetryTelemetryReporter } from "./retry-telemetry-reporter.ts";
 
 test("records module timing when Vitest omits the queued callback", () => {
@@ -22,39 +22,38 @@ test("records module timing when Vitest omits the queued callback", () => {
 
 test("writes its pessimistic sentinel only when the Vitest run starts", () => {
   vi.stubEnv("TEST_TELEMETRY_ARTIFACT_FILE", undefined);
-  const directory = mkdtempSync(join(tmpdir(), "vitest-telemetry-start-"));
-  vi.stubEnv("TEST_TELEMETRY_ARTIFACT_DIR", directory);
+  using directory = temporaryDirectory();
+  vi.stubEnv("TEST_TELEMETRY_ARTIFACT_DIR", directory.path);
 
   const reporter = new RetryTelemetryReporter();
-  expect(readdirSync(directory)).toHaveLength(0);
+  expect(readdirSync(directory.path)).toHaveLength(0);
 
   reporter.onTestRunStart();
-  expect(readdirSync(directory)).toHaveLength(1);
-  rmSync(directory, { recursive: true });
+  expect(readdirSync(directory.path)).toHaveLength(1);
 });
 
 test("preserves an interrupted Vitest run instead of reporting a test failure", async () => {
   vi.stubEnv("TEST_TELEMETRY_ARTIFACT_FILE", undefined);
-  const directory = mkdtempSync(join(tmpdir(), "vitest-telemetry-interrupted-"));
-  vi.stubEnv("TEST_TELEMETRY_ARTIFACT_DIR", directory);
+  using directory = temporaryDirectory();
+  vi.stubEnv("TEST_TELEMETRY_ARTIFACT_DIR", directory.path);
 
   await new RetryTelemetryReporter().onTestRunEnd([], [], "interrupted");
 
   const artifact = JSON.parse(
-    readFileSync(join(directory, readdirSync(directory)[0]!), "utf8"),
+    readFileSync(join(directory.path, readdirSync(directory.path)[0]!), "utf8"),
   ) as TestTelemetryArtifact;
   expect(artifact).toMatchObject({
     run: { status: "interrupted" },
     runners: [expect.objectContaining({ status: "interrupted" })],
   });
-  rmSync(directory, { recursive: true });
 });
 
 test("records the first failed attempt when a retry passes", async () => {
-  const file = join(tmpdir(), `retry-telemetry-${process.pid}-${Date.now()}.json`);
+  using directory = temporaryDirectory();
+  const file = join(directory.path, "telemetry.json");
   // Scoped: the flaky fixture below writes an unknown-flake record, which
   // must land here and never in the CI run's real FLAKE_RECORD_DIR.
-  const flakeRecordDir = mkdtempSync(join(tmpdir(), "retry-flake-records-"));
+  const flakeRecordDir = join(directory.path, "flake-records");
   vi.stubEnv("FLAKE_RECORD_DIR", flakeRecordDir);
   vi.stubEnv("TEST_TELEMETRY_ARTIFACT_DIR", undefined);
   vi.stubEnv("TEST_TELEMETRY_KIND", undefined);
@@ -150,14 +149,13 @@ test("records the first failed attempt when a retry passes", async () => {
   expect(log).toHaveBeenCalledWith(
     "[retry-telemetry] 1 test(s) needed retries: network > reconnects (x1) — Network connection lost",
   );
-  rmSync(file);
 });
 
 test("a plain test that failed every attempt leaves an unexpected-error flake record", async () => {
-  const directory = mkdtempSync(join(tmpdir(), "vitest-hard-failure-"));
-  const flakeRecordDir = join(directory, "flake-records");
+  using directory = temporaryDirectory();
+  const flakeRecordDir = join(directory.path, "flake-records");
   vi.stubEnv("FLAKE_RECORD_DIR", flakeRecordDir);
-  vi.stubEnv("TEST_TELEMETRY_ARTIFACT_FILE", join(directory, "telemetry.json"));
+  vi.stubEnv("TEST_TELEMETRY_ARTIFACT_FILE", join(directory.path, "telemetry.json"));
   vi.stubEnv("TEST_TELEMETRY_ARTIFACT_DIR", undefined);
   vi.spyOn(console, "log").mockImplementation(() => {});
   const testCase = (name: string, state: string, options?: { fails: boolean }) => ({
@@ -200,13 +198,12 @@ test("a plain test that failed every attempt leaves an unexpected-error flake re
       error: "socket closed before the stream opened",
     },
   ]);
-  rmSync(directory, { recursive: true });
 });
 
 test("writes unit tests without performing network I/O", async () => {
   vi.stubEnv("TEST_TELEMETRY_ARTIFACT_FILE", undefined);
-  const directory = mkdtempSync(join(tmpdir(), "vitest-telemetry-artifacts-"));
-  vi.stubEnv("TEST_TELEMETRY_ARTIFACT_DIR", directory);
+  using directory = temporaryDirectory();
+  vi.stubEnv("TEST_TELEMETRY_ARTIFACT_DIR", directory.path);
   vi.stubEnv("npm_package_name", "@iterate/example");
   vi.stubEnv("GITHUB_WORKSPACE", "/repo");
   const fetchMock = vi.spyOn(globalThis, "fetch");
@@ -232,23 +229,21 @@ test("writes unit tests without performing network I/O", async () => {
   await new RetryTelemetryReporter().onTestRunEnd([testModule]);
 
   expect(fetchMock).not.toHaveBeenCalled();
-  const files = readdirSync(directory);
+  const files = readdirSync(directory.path);
   expect(files).toHaveLength(1);
   const artifact = JSON.parse(
-    readFileSync(join(directory, files[0]!), "utf8"),
+    readFileSync(join(directory.path, files[0]!), "utf8"),
   ) as TestTelemetryArtifact;
   expect(artifact).toMatchObject({
     producer: "vitest-retry-telemetry-reporter",
     context: { framework: "vitest", testKind: "unit", workspace: "@iterate/example" },
     tests: [expect.objectContaining({ fullName: "math > adds", durationMs: 12 })],
   });
-  rmSync(directory, { recursive: true });
 });
 
 test("prints the e2e rows that ran past the row budget's warning", async () => {
-  const directory = mkdtempSync(join(tmpdir(), "vitest-row-budget-"));
-  onTestFinished(() => rmSync(directory, { recursive: true }));
-  vi.stubEnv("TEST_TELEMETRY_ARTIFACT_FILE", join(directory, "telemetry.json"));
+  using directory = temporaryDirectory();
+  vi.stubEnv("TEST_TELEMETRY_ARTIFACT_FILE", join(directory.path, "telemetry.json"));
   vi.stubEnv("TEST_TELEMETRY_ARTIFACT_DIR", undefined);
   vi.stubEnv("FLAKE_RECORD_DIR", undefined);
   const log = vi.spyOn(console, "log").mockImplementation(() => {});

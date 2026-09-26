@@ -1,11 +1,11 @@
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readdirSync, readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
-import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, test, vi } from "vitest";
 import { createFlake } from "./flake-test.ts";
+import { temporaryDirectory } from "./temporary-directory.ts";
 
 const CHILD_VITEST_MS = 30_000;
 
@@ -29,9 +29,9 @@ test(
       (JSON.parse(readFileSync(vitestPackagePath, "utf8")) as any).bin.vitest,
     );
     const fixtureDir = join(dirname(fileURLToPath(import.meta.url)), "flake-test-fixture");
-    const scratchDir = mkdtempSync(join(tmpdir(), "flake-fixture-"));
-    const outputFile = join(scratchDir, "results.json");
-    const recordDir = join(scratchDir, "records");
+    using scratch = temporaryDirectory();
+    const outputFile = join(scratch.path, "results.json");
+    const recordDir = join(scratch.path, "records");
 
     const result = spawnSync(
       process.execPath,
@@ -220,15 +220,15 @@ test("a relative FLAKE_RECORD_DIR is rebased against GITHUB_WORKSPACE", async ()
   // rebase each package would write under itself and the repo-root CI
   // reporter would find nothing (the bug this test pins).
   const previous = { dir: process.env.FLAKE_RECORD_DIR, root: process.env.GITHUB_WORKSPACE };
-  const workspaceRoot = mkdtempSync(join(tmpdir(), "flake-workspace-"));
-  process.env.GITHUB_WORKSPACE = workspaceRoot;
+  using workspace = temporaryDirectory();
+  process.env.GITHUB_WORKSPACE = workspace.path;
   process.env.FLAKE_RECORD_DIR = "test-results/flake-records";
   try {
     const body = registerWithFakeRunner(/flaked/, async () => {
       throw new Error("flaked again");
     });
     await expect(body()).rejects.toThrow(/flaked/);
-    const files = readdirSync(join(workspaceRoot, "test-results/flake-records"));
+    const files = readdirSync(join(workspace.path, "test-results/flake-records"));
     expect(files).toHaveLength(1);
   } finally {
     if (previous.dir) process.env.FLAKE_RECORD_DIR = previous.dir;
@@ -268,17 +268,18 @@ function registerWithFakeRunner(
 /** Point FLAKE_RECORD_DIR at a fresh temp dir for the duration of the test. */
 function flakeRecordDir() {
   const previous = process.env.FLAKE_RECORD_DIR;
-  const dir = mkdtempSync(join(tmpdir(), "flake-test-"));
-  process.env.FLAKE_RECORD_DIR = dir;
+  const directory = temporaryDirectory();
+  process.env.FLAKE_RECORD_DIR = directory.path;
   return {
     records: () =>
-      readdirSync(dir).flatMap((file) =>
-        readFileSync(join(dir, file), "utf8")
+      readdirSync(directory.path).flatMap((file) =>
+        readFileSync(join(directory.path, file), "utf8")
           .trim()
           .split("\n")
           .map((line) => JSON.parse(line)),
       ),
     [Symbol.dispose]() {
+      directory[Symbol.dispose]();
       if (previous) process.env.FLAKE_RECORD_DIR = previous;
       else delete process.env.FLAKE_RECORD_DIR;
     },
