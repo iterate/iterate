@@ -10,7 +10,7 @@
 # spent it and turned every PR's preview e2e red (docs/testing.md#real-model-rows). A run here costs
 # about $0.06.
 #
-# The health job judges the newest scheduled or push run from its telemetry
+# The health job judges each scheduled or push run from its telemetry
 # (scripts/monitors/e2e.ts). A dispatch is never judged; it redeploys the workflow's preview with
 # the branch, and the next run of main puts main back. One run at a time, each run's deploy waiting
 # for the run before it to finish with the preview.

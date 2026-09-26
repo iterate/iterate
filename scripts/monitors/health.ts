@@ -2,8 +2,8 @@
 // job that judges what the measuring workflows left and pages #error-pulse on a change of state, in
 // one message per run. Its checks, in the order the message lists their pages:
 //
-//   main e2e, slow e2e rows   the newest push run of Main OS e2e (./e2e.ts)
-//   real-model e2e            the newest run of OS real model (./e2e.ts)
+//   main e2e, slow e2e rows   each new push run of Main OS e2e (./e2e.ts)
+//   real-model e2e            each new run of OS real model (./e2e.ts)
 //   latency                   each new report of OS latency's perf suite (./latency.ts)
 //   PR time to green          how long pull request pushes waited for their checks (./ttg.ts)
 //   DO cost                   Durable Object hours on both accounts (./do-cost.ts), in its own daily

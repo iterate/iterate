@@ -6,7 +6,7 @@ import { parse as parseYaml } from "yaml";
 import { temporaryDirectory } from "@iterate-com/shared/test-support/temporary-directory";
 import { testEvidencePaths } from "@iterate-com/shared/test-support/test-evidence";
 import { CI_WORKFLOW_PREVIEWS } from "../../apps/os/scripts/preview-sweep.ts";
-import { realModelTelemetry } from "../monitors/e2e.ts";
+import { mainE2eRecords, realModelTelemetry } from "../monitors/e2e.ts";
 import { stateArtifact as healthState } from "../monitors/health.ts";
 import { latencyReport } from "../monitors/latency.ts";
 import { CHECKS } from "../monitors/ttg.ts";
@@ -503,6 +503,31 @@ test.for([
     with: { path },
   });
 });
+
+// The main e2e checks read the suite summary each Main OS e2e suite job's newest attempt keeps with
+// its flake records, by the job's key and its attempt's id.
+test.for(mainE2eRecords.jobs)(
+  "the health job reads $jobKey's $suite suite summary",
+  ({ jobKey, suite }) => {
+    const [file, jobId = ""] = jobKey.split(":");
+    const path = `.depot/workflows/${file}`;
+    expect(loadWorkflow(path)).toMatchObject({ name: mainE2eRecords.workflow });
+    const records = stepsAsRun(path, jobId).find(
+      (step) =>
+        step.with?.name === mainE2eRecords.artifact(suite, "${{ steps.attempt.outputs.id }}"),
+    );
+    expect(records).toMatchObject({
+      if: "always()",
+      uses: "actions/upload-artifact@v4",
+      with: { path: `test-results/flake-records/${suite}` },
+    });
+    // the finalizer that writes this suite's summary into that folder (scripts/ci/flake-suite-summary.ts)
+    const finalizer = stepsAsRun(path, jobId).find((step) =>
+      step.run?.includes("scripts/ci/upload-test-telemetry.ts"),
+    );
+    expect(finalizer?.run).toContain(`--flake-suites ${suite}`);
+  },
+);
 
 // ── Depot validation capacity ──
 test("refreshes the baked workspace when dependency inputs land on main", () => {

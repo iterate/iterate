@@ -107,6 +107,7 @@ const ListedWorkflows = z.object({
     )
     .default([]),
 });
+export type SettledWorkflow = z.infer<typeof ListedWorkflows>["workflows"][number];
 
 /**
  * The workflows named `name` (its `name:`) that one of `triggers` started and that settled, finished

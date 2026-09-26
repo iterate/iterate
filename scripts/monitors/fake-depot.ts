@@ -1,4 +1,10 @@
+import { z } from "zod";
 import type { DepotApi } from "../ci/depot.ts";
+
+/** The fields of Depot's CI API requests the fake answers from, by method. */
+const Listing = z.object({ name: z.string(), status: z.array(z.string()) });
+const OfWorkflow = z.object({ workflowId: z.string() });
+const OfArtifact = z.object({ artifactId: z.string() });
 
 /** A workflow as the fake lists it, with its jobs and each artifact's files by path. */
 type FakeWorkflow = {
@@ -22,22 +28,24 @@ type FakeWorkflow = {
  *  as a zip, which `fetch` reads like Depot's storage. */
 export function fakeDepot(workflows: Record<string, FakeWorkflow[]>) {
   const all = Object.values(workflows).flat();
-  const byId = (workflowId: unknown) => {
+  const byId = (workflowId: string) => {
     const workflow = all.find((candidate) => candidate.workflowId === workflowId);
-    if (!workflow) throw new Error(`the fake has no workflow ${String(workflowId)}`);
+    if (!workflow) throw new Error(`the fake has no workflow ${workflowId}`);
     return workflow;
   };
   const depot: DepotApi = async (method, request) => {
-    const body = request as Record<string, unknown>;
-    if (method === "ListWorkflows")
+    if (method === "ListWorkflows") {
+      const { name, status } = Listing.parse(request);
       return {
-        workflows: (workflows[String(body.name)] || [])
-          .filter((workflow) => (body.status as string[]).includes(workflow.status))
+        workflows: (workflows[name] || [])
+          .filter((workflow) => status.includes(workflow.status))
           .map(({ jobs: _jobs, artifacts: _artifacts, ...listed }) => listed),
       };
-    if (method === "GetWorkflow") return { jobs: byId(body.workflowId).jobs || [] };
+    }
+    if (method === "GetWorkflow")
+      return { jobs: byId(OfWorkflow.parse(request).workflowId).jobs || [] };
     if (method === "ListArtifacts") {
-      const workflow = byId(body.workflowId);
+      const workflow = byId(OfWorkflow.parse(request).workflowId);
       return {
         artifacts: Object.keys(workflow.artifacts || {}).map((name) => ({
           artifactId: `${workflow.workflowId}/${name}`,
@@ -47,8 +55,10 @@ export function fakeDepot(workflows: Record<string, FakeWorkflow[]>) {
       };
     }
     if (method === "GetArtifactDownloadURL") {
-      const [workflowId, name] = String(body.artifactId).split("/");
-      const files = byId(workflowId).artifacts![name!]!;
+      const { artifactId } = OfArtifact.parse(request);
+      const [workflowId = "", name = ""] = artifactId.split("/");
+      const files = byId(workflowId).artifacts?.[name];
+      if (!files) throw new Error(`the fake has no artifact ${artifactId}`);
       return { url: `data:application/zip;base64,${storedZip(files).toString("base64")}` };
     }
     throw new Error(`the fake does not answer ${method}`);

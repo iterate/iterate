@@ -209,7 +209,7 @@ test.for<{ label: string; rows: TelemetryTest[]; status?: string; verdict: unkno
   });
 });
 
-test("main e2e is the newest settled push run: its jobs, the failing rows of both suites, its slow rows; a dispatch or a newer run in progress is not judged", async () => {
+test("a first run judges only the newest settled push run of main e2e: its jobs, the failing rows of both suites, its slow rows; a dispatch or a newer run in progress is not judged", async () => {
   const depot = fakeDepot({
     "Main OS e2e": [
       mainRun("old", "2026-09-26T19:00:00Z", {}),
@@ -256,6 +256,60 @@ test("main e2e is the newest settled push run: its jobs, the failing rows of bot
   // judged once: the next hour, with nothing newer, pages nothing and remembers the same
   const again = await checkMainE2e({ depot, memory: judged.memory, testRun: false, subject });
   expect(again).toEqual({ pages: [], memory: judged.memory, failures: [] });
+});
+
+test("each run since the last judged pages where its suite changed state: green, red, red again pages red at the first red run", async () => {
+  const depot = fakeDepot({
+    "Main OS e2e": [
+      mainRun("judged", "2026-09-26T19:00:00Z", {}),
+      mainRun("green", "2026-09-26T19:05:00Z", {}),
+      mainRun("firstred", "2026-09-26T19:30:00Z", {
+        e2e: "failed",
+        e2eTests: [
+          { name: "a slow row", tags: ["slow"] },
+          { name: "a plain row", failed: true },
+        ],
+      }),
+      mainRun("stillred", "2026-09-26T19:55:00Z", {
+        e2e: "failed",
+        e2eTests: [
+          { name: "a slow row", tags: ["slow"], failed: true },
+          { name: "a plain row", failed: true },
+        ],
+      }),
+    ],
+  });
+
+  const judged = await checkMainE2e({
+    depot,
+    memory: {
+      suites: { "main e2e": "green", "slow e2e rows": "green" },
+      judgedAt: { "Main OS e2e": "2026-09-26T19:00:00Z" },
+    },
+    testRun: false,
+    subject,
+  });
+
+  expect(judged).toMatchObject({
+    pages: [
+      {
+        tone: "red",
+        headline: "main e2e red at `firstreda` (the subject of fir)",
+        link: "https://depot.dev/orgs/0p91s0lz49/workflows/wf-firstred",
+      },
+      {
+        tone: "red",
+        headline: "slow e2e rows red at `stillreda` (the subject of sti)",
+        link: "https://depot.dev/orgs/0p91s0lz49/workflows/wf-stillred",
+      },
+    ],
+    memory: {
+      suites: { "main e2e": "red", "slow e2e rows": "red" },
+      judgedAt: { "Main OS e2e": "2026-09-26T19:55:00Z" },
+    },
+    failures: [],
+  });
+  expect(judged.pages).toHaveLength(2);
 });
 
 test("a main run whose deploy failed is red, and its skipped suites judge no slow rows", async () => {
@@ -313,24 +367,50 @@ test("an E2E tests job that ran and kept no suite summary is a broken probe, jud
   });
 });
 
-test("real-model e2e is the newest scheduled or push run's REAL: rows, from its telemetry", async () => {
-  const run = (id: string, createdAt: string, rows: TelemetryTest[], trigger = "schedule") => ({
-    workflowId: `wf-${id}`,
-    runId: `run-${id}`,
-    status: "finished",
-    trigger,
-    sha: id.padEnd(40, "b"),
-    createdAt,
-    artifacts: {
-      "os-real-model-telemetry": {
-        "raw/vitest-os.json": JSON.stringify(telemetry(rows)),
-      },
-    },
-  });
+test("real-model e2e is the REAL: rows of each scheduled or push run since the last judged, from its telemetry", async () => {
   const depot = fakeDepot({
     "OS real model": [
-      run("pushed", "2026-09-26T05:47:00Z", [{ name: "REAL: a turn", state: "passed" }], "push"),
-      run("daily", "2026-09-26T06:00:00Z", [
+      realModelRun("judged", "2026-09-25T05:47:00Z", [{ name: "REAL: a turn", state: "passed" }]),
+      realModelRun(
+        "broke",
+        "2026-09-26T05:47:00Z",
+        [{ name: "REAL: a turn", state: "failed", firstFailure: "Error: spend cap" }],
+        "push",
+      ),
+      realModelRun("fixed", "2026-09-26T06:00:00Z", [{ name: "REAL: a turn", state: "passed" }]),
+    ],
+  });
+  const judged = await checkRealModel({
+    depot,
+    memory: {
+      suites: { "real-model e2e": "green" },
+      judgedAt: { "OS real model": "2026-09-25T05:47:00Z" },
+    },
+    testRun: false,
+    subject,
+  });
+  expect(judged).toMatchObject({
+    pages: [
+      { tone: "red", headline: "real-model e2e red at `brokebbbb` (the subject of bro)" },
+      { tone: "green", headline: "real-model e2e green again at `fixedbbbb` (the subject of fix)" },
+    ],
+    memory: {
+      suites: { "real-model e2e": "green" },
+      judgedAt: { "OS real model": "2026-09-26T06:00:00Z" },
+    },
+  });
+});
+
+test("a first run judges only the newest real-model run", async () => {
+  const depot = fakeDepot({
+    "OS real model": [
+      realModelRun(
+        "pushed",
+        "2026-09-26T05:47:00Z",
+        [{ name: "REAL: a turn", state: "failed", firstFailure: "Error: an older failure" }],
+        "push",
+      ),
+      realModelRun("daily", "2026-09-26T06:00:00Z", [
         { name: "REAL: a turn", state: "failed", firstFailure: "Error: spend cap" },
       ]),
     ],
@@ -359,6 +439,23 @@ test("real-model e2e is the newest scheduled or push run's REAL: rows, from its 
 });
 
 const empty: E2eMemory = { suites: {}, judgedAt: {} };
+
+/** A settled run of OS real model: the raw telemetry of its `rows` in the artifact it keeps. */
+function realModelRun(id: string, createdAt: string, rows: TelemetryTest[], trigger = "schedule") {
+  return {
+    workflowId: `wf-${id}`,
+    runId: `run-${id}`,
+    status: "finished",
+    trigger,
+    sha: id.padEnd(40, "b"),
+    createdAt,
+    artifacts: {
+      "os-real-model-telemetry": {
+        "raw/vitest-os.json": JSON.stringify(telemetry(rows)),
+      },
+    },
+  };
+}
 
 /** A commit's subject, as GitHub would answer it. */
 async function subject(sha: string) {
