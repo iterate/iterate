@@ -1,10 +1,7 @@
-# PR TIME TO GREEN (scripts/ci/pr-ttg-guard.ts): every hour, how long each pull request push waited
-# for its checks (Lint and Typecheck, Test, and Preview OS), read from Depot's API and split by what
-# the Preview OS E2E tests job ran. Each push is a PostHog event (`pr checks settled`), and
-# Slack #error-pulse is paged on a change of state: red once when the pushes that skipped the slow
-# e2e rows took a median over 165 s or a p90 over 200 s across the last 24 hours (at least 20 of
-# them), green once when both are back under. Those lines are defaults for the owner to confirm. A
-# page leaves the run green; a run that could not read Depot fails.
+# PR TIME TO GREEN: every hour, how long each pull request push waited for its checks, a PostHog
+# event per push (`pr checks settled`), and a page to Slack #error-pulse when that gets slow. What it
+# measures and when it pages: scripts/ci/pr-ttg-guard.ts. A page leaves the run green; a run that
+# could not read Depot fails.
 #
 # Its memory is its own `pr-ttg-state` artifact, which the next run reads back (Depot organization
 # token from Doppler _shared/preview). Test a branch, and the Slack hookup, by dispatching it:
@@ -54,7 +51,7 @@ jobs:
         run: node scripts/depot-ci/dependencies.mjs install
       # The Depot token reads the runs through the API and the previous state through the Depot CLI;
       # the Slack bot token comes from Doppler _shared/prd (scripts/ci/slack.ts).
-      - name: Measure, page #error-pulse on a change of state
+      - name: Measure, page #error-pulse when over the lines, worse, or back under
         run: |-
           set -euo pipefail
           export DEPOT_TOKEN

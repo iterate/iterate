@@ -5,9 +5,9 @@ import {
   measurePush,
   pageFor,
   pushEvents,
+  readState,
   renderPage,
   summarizePushes,
-  TtgState,
   type RunMetrics,
 } from "./pr-ttg-guard.ts";
 
@@ -23,6 +23,29 @@ const pxt90nlfvh: RunMetrics = {
     workflow("xtjdzfvjhk", "LOC report", "finished", "2026-09-24T11:49:51.782Z"),
     workflow("nsbcf2f8mt", "Preview OS", "finished", "2026-09-24T11:54:25.587Z"),
     workflow("r70khb2kt1", "Test", "finished", "2026-09-24T11:52:21.228Z"),
+  ],
+};
+
+// Depot's GetRunMetrics for run xwhttppx6h (PR #3197, 2026-09-25), cut to the fields the guard reads.
+const xwhttppx6h: RunMetrics = {
+  run: {
+    runId: "xwhttppx6h",
+    ref: "refs/pull/3197/merge",
+    createdAt: "2026-09-25T21:12:29.946Z",
+  },
+  workflows: [
+    check("clw7764jds", "Lint and Typecheck", "finished", "2026-09-25T21:13:30.104Z", {
+      "lint-typecheck.yml:lint-typecheck": ["2026-09-25T21:13:27.395Z"],
+    }),
+    check("p48hfnzxh8", "Test", "finished", "2026-09-25T21:15:10.466Z", {
+      "test.yml:test": ["2026-09-25T21:15:07.380Z"],
+    }),
+    previewOs("1pbtqdpdbt", "finished", "2026-09-25T21:17:10.931Z", {
+      deploy: ["2026-09-25T21:14:01.290Z"],
+      e2e: ["2026-09-25T21:15:13.748Z"],
+      specs: ["2026-09-25T21:16:14.801Z"],
+      trace: ["2026-09-25T21:17:06.769Z"],
+    }),
   ],
 };
 
@@ -42,17 +65,21 @@ test("a green push's time to green runs from the run's creation to its last chec
     // Preview OS's end, 11:54:25.587; LOC report is not a check
     e2e: "every-row",
     seconds: 316,
+    // the cut keeps none of its jobs: the check's name
+    lastJob: "Preview OS",
   });
 });
 
 // Depot's GetRunMetrics for run l9b40r65b2 (PR #3094) and v7gm132nt1 (PR #3009, whose e2e failed
 // and passed on a re-run), cut to the fields the guard reads.
 test.for<{
+  name: string;
   metrics: RunMetrics;
   firstExecutions: Parameters<typeof measurePush>[0]["firstExecutions"];
   expected: object;
 }>([
   {
+    name: "E2E tests end Preview OS, not the CI trace 48 s later",
     metrics: {
       run: {
         runId: "l9b40r65b2",
@@ -71,10 +98,10 @@ test.for<{
       ],
     },
     firstExecutions: {},
-    // E2E tests' end, 48 s before the trace's
-    expected: { outcome: "green", seconds: 330.9 },
+    expected: { outcome: "green", seconds: 330.9, lastJob: "preview-os.yml:e2e" },
   },
   {
+    name: "a red first execution ends at its first E2E tests attempt, before the trace and the re-run",
     metrics: {
       run: {
         runId: "v7gm132nt1",
@@ -92,17 +119,86 @@ test.for<{
       ],
     },
     firstExecutions: { "2lprg4f8q9": { status: "failed", finishedAt: "2026-09-24T11:43:01Z" } },
-    // the first E2E tests attempt's end, before its trace and the re-run
-    expected: { outcome: "red", seconds: 296.8 },
+    expected: { outcome: "red", seconds: 296.8, lastJob: "preview-os.yml:e2e" },
   },
-])(
-  "Preview OS reaches its verdict at its last job but the CI trace: $metrics.run.runId",
-  ({ metrics, firstExecutions, expected }) => {
-    expect(
-      measurePush({ metrics, firstExecutions, nextRunAt: undefined, summary: {} }),
-    ).toMatchObject(expected);
+  {
+    name: "Browser specs end the push, 61 s after E2E tests and 64 s after Test",
+    metrics: xwhttppx6h,
+    firstExecutions: {},
+    expected: { outcome: "green", seconds: 224.9, lastJob: "preview-os.yml:specs" },
   },
-);
+])("$name", ({ metrics, firstExecutions, expected }) => {
+  expect(
+    measurePush({ metrics, firstExecutions, nextRunAt: undefined, summary: {} }),
+  ).toMatchObject(expected);
+});
+
+// Depot's GetRunMetrics for run 7cjwv9crwz (PR #3192, 2026-09-25), which changed no preview path, cut
+// to the fields the guard reads.
+const r7cjwv9crwz: RunMetrics = {
+  run: {
+    runId: "7cjwv9crwz",
+    ref: "refs/pull/3192/merge",
+    createdAt: "2026-09-25T20:13:27.979Z",
+  },
+  workflows: [
+    check("x3nn5v3l3x", "Lint and Typecheck", "finished", "2026-09-25T20:14:37.692Z", {
+      "lint-typecheck.yml:lint-typecheck": ["2026-09-25T20:14:34.961Z"],
+    }),
+    check("k2rn3vd449", "Test", "finished", "2026-09-25T20:16:18Z", {
+      "test.yml:test": ["2026-09-25T20:16:14.704Z"],
+    }),
+    {
+      workflow: {
+        workflowId: "ppzs6zfbpk",
+        name: "Preview OS",
+        status: "finished",
+        finishedAt: "2026-09-25T20:13:38.400Z",
+      },
+      jobs: [
+        {
+          job: { jobKey: "preview-os.yml:deploy", status: "finished" },
+          attempts: [{ attempt: { attempt: 1, finishedAt: "2026-09-25T20:13:35.959Z" } }],
+        },
+        ...["e2e", "specs", "trace"].map((job) => ({
+          job: { jobKey: `preview-os.yml:${job}`, status: "skipped" },
+          attempts: [],
+        })),
+      ],
+    },
+  ],
+};
+
+test.for([
+  {
+    name: "Test ends a push whose Preview OS ran no suite",
+    metrics: r7cjwv9crwz,
+    expected: { e2e: "no-preview", seconds: 170, lastJob: "test.yml:test" },
+  },
+  {
+    name: "a matrix's legs are one job, whichever leg finished last",
+    metrics: {
+      ...xwhttppx6h,
+      workflows: xwhttppx6h.workflows.map((entry) =>
+        entry.workflow.name === "Preview OS"
+          ? previewOs("1pbtqdpdbt", "finished", "2026-09-25T21:17:10.931Z", {
+              deploy: ["2026-09-25T21:14:01.290Z"],
+              e2e: ["2026-09-25T21:15:13.748Z"],
+              "specs:matrix-0": ["2026-09-25T21:15:50.000Z"],
+              "specs:matrix-1": ["2026-09-25T21:16:14.801Z"],
+              "specs:matrix-2": ["2026-09-25T21:16:01.000Z"],
+              trace: ["2026-09-25T21:17:06.769Z"],
+            })
+          : entry,
+      ),
+    },
+    expected: { seconds: 224.9, lastJob: "preview-os.yml:specs" },
+  },
+])("$name", ({ metrics, expected }) => {
+  expect(
+    measurePush({ metrics, firstExecutions: {}, nextRunAt: undefined, summary: undefined }),
+  ).toMatchObject({ outcome: "green", ...expected });
+});
 
 test.for([
   { summary: { slowRows: "skipped" as const }, e2e: "slow-rows-skipped" },
@@ -260,41 +356,78 @@ test("summarizes the window's pushes by what their e2e ran, with interpolated pe
   const summary = summarizePushes(
     [
       ...[100, 110, 120, 130, 200].map((seconds, index) =>
-        push({ seconds, e2e: "slow-rows-skipped", minute: index }),
+        push({
+          seconds,
+          e2e: "slow-rows-skipped",
+          minute: index,
+          lastJob: index % 2 ? "preview-os.yml:e2e" : "preview-os.yml:specs",
+        }),
       ),
-      push({ seconds: 400, e2e: "slow-rows-skipped", outcome: "red", minute: 5 }),
-      push({ seconds: 300, e2e: "every-row", minute: 6 }),
-      push({ seconds: 180, e2e: "no-preview", minute: 7 }),
-      push({ outcome: "superseded", minute: 8 }),
+      // a red push's last job does not count
+      ...[5, 6].map((minute) =>
+        push({
+          seconds: 400,
+          e2e: "slow-rows-skipped",
+          outcome: "red",
+          minute,
+          lastJob: "preview-os.yml:e2e",
+        }),
+      ),
+      push({ seconds: 300, e2e: "every-row", minute: 7, lastJob: "preview-os.yml:e2e" }),
+      push({ seconds: 180, e2e: "no-preview", minute: 8, lastJob: "test.yml:test" }),
+      push({ outcome: "superseded", minute: 9 }),
       // created before the window
       push({ seconds: 999, e2e: "slow-rows-skipped", minute: -1 }),
     ],
     { from: Date.parse("2026-09-24T12:00:00Z"), to: Date.parse("2026-09-24T13:00:00Z") },
   );
   expect(summary.byRows["slow-rows-skipped"]).toEqual({
-    pushes: 6,
-    red: 1,
+    pushes: 7,
+    red: 2,
     timeToGreen: { n: 5, p50: 120, p90: 172 },
-    firstVerdict: { n: 6, p50: 125, p90: 300 },
+    firstVerdict: { n: 7, p50: 130, p90: 400 },
+    lastJob: { job: "preview-os.yml:specs", pushes: 3 },
   });
   expect(summary.byRows["no-summary"]).toEqual({
     pushes: 0,
     red: 0,
     timeToGreen: undefined,
     firstVerdict: undefined,
+    lastJob: undefined,
   });
-  expect(summary.all).toMatchObject({ pushes: 8, red: 1, timeToGreen: { n: 7 } });
-  expect(summary).toMatchObject({ slowRowsShare: 1 / 7, superseded: 1 });
+  // 3 each for E2E tests and Browser specs: the first by name
+  expect(summary.all).toMatchObject({
+    pushes: 9,
+    red: 2,
+    timeToGreen: { n: 7 },
+    lastJob: { job: "preview-os.yml:e2e", pushes: 3 },
+  });
+  expect(summary).toMatchObject({ slowRowsShare: 1 / 8, superseded: 1 });
 });
 
 test.for([
-  { seconds: [150], judgement: "too-few" },
-  { seconds: Array(20).fill(150), judgement: "under" },
-  { seconds: Array(20).fill(165), judgement: "under" },
-  { seconds: Array(20).fill(166), judgement: "over" },
-  // p50 150 s, p90 over 200 s
-  { seconds: [...Array(17).fill(150), 250, 250, 250], judgement: "over" },
-])("judges $judgement", ({ seconds, judgement }) => {
+  { name: "one push is too few to judge", seconds: [150], judged: { judgement: "too-few" } },
+  {
+    name: "20 pushes at 150 s are under",
+    seconds: Array(20).fill(150),
+    judged: { judgement: "under", p50: 150 },
+  },
+  {
+    name: "a median on the line is under",
+    seconds: Array(20).fill(165),
+    judged: { judgement: "under", p50: 165 },
+  },
+  {
+    name: "a median a second over the line is over",
+    seconds: Array(20).fill(166),
+    judged: { judgement: "over", p50: 166 },
+  },
+  {
+    name: "a p90 over 200 s is over with the median under",
+    seconds: [...Array(17).fill(150), 250, 250, 250],
+    judged: { judgement: "over", p50: 150 },
+  },
+])("$name", ({ seconds, judged }) => {
   const pushes = seconds.map((value, minute) =>
     push({ seconds: value, e2e: "slow-rows-skipped", minute }),
   );
@@ -302,6 +435,7 @@ test.for([
   pushes.push(
     ...Array.from({ length: 30 }, (_, minute) => push({ seconds: 999, e2e: "every-row", minute })),
   );
+  // exact: a judgement too few pushes made carries no median
   expect(
     judge(
       summarizePushes(pushes, {
@@ -309,62 +443,185 @@ test.for([
         to: Date.parse("2026-09-24T13:00:00Z"),
       }),
     ),
-  ).toBe(judgement);
-  expect(LINES).toEqual({ p50: 165, p90: 200, minPushes: 20 });
+  ).toEqual(judged);
+  expect(LINES).toEqual({ p50: 165, p90: 200, worse: 20, minPushes: 20 });
 });
 
 test.for([
-  { paged: "under", judgement: "over", page: "over" },
-  { paged: "over", judgement: "over", page: null },
-  { paged: "over", judgement: "under", page: "under" },
-  { paged: "under", judgement: "under", page: null },
-  { paged: "over", judgement: "too-few", page: null },
-  { paged: "under", judgement: "too-few", page: null },
-] as const)("told $paged, judged $judgement → pages $page", ({ paged, judgement, page }) => {
-  expect(pageFor(paged, judgement)).toBe(page);
+  {
+    name: "over before any page pages red",
+    lastPage: undefined,
+    judged: { judgement: "over", p50: 170 },
+    page: "over",
+    next: { judgement: "over", bestP50: 170 },
+  },
+  {
+    name: "over after a green page pages red",
+    lastPage: { judgement: "under", bestP50: 150 },
+    judged: { judgement: "over", p50: 170 },
+    page: "over",
+    next: { judgement: "over", bestP50: 170 },
+  },
+  {
+    name: "still over, 20 s over the best since the red page, pages nothing",
+    lastPage: { judgement: "over", bestP50: 198 },
+    judged: { judgement: "over", p50: 218 },
+    page: null,
+    next: { judgement: "over", bestP50: 198 },
+  },
+  {
+    name: "still over, more than 20 s over the best since the red page, pages red again",
+    lastPage: { judgement: "over", bestP50: 198 },
+    judged: { judgement: "over", p50: 218.1 },
+    page: "worse",
+    next: { judgement: "over", bestP50: 218.1 },
+  },
+  {
+    name: "still over and better lowers the best, and pages nothing",
+    lastPage: { judgement: "over", bestP50: 218 },
+    judged: { judgement: "over", p50: 190 },
+    page: null,
+    next: { judgement: "over", bestP50: 190 },
+  },
+  {
+    name: "back under after a red page pages green",
+    lastPage: { judgement: "over", bestP50: 190 },
+    judged: { judgement: "under", p50: 160 },
+    page: "under",
+    next: { judgement: "under", bestP50: 160 },
+  },
+  {
+    name: "under and 40 s worse than the green page pages nothing: under the lines only the lines page",
+    lastPage: { judgement: "under", bestP50: 120 },
+    judged: { judgement: "under", p50: 160 },
+    page: null,
+    next: { judgement: "under", bestP50: 120 },
+  },
+  {
+    name: "under before any page pages nothing and keeps nothing",
+    lastPage: undefined,
+    judged: { judgement: "under", p50: 160 },
+    page: null,
+    next: undefined,
+  },
+  {
+    name: "too few pushes page nothing and keep what the channel was told",
+    lastPage: { judgement: "over", bestP50: 218 },
+    judged: { judgement: "too-few" },
+    page: null,
+    next: { judgement: "over", bestP50: 218 },
+  },
+  {
+    name: "too few pushes before any page page nothing",
+    lastPage: undefined,
+    judged: { judgement: "too-few" },
+    page: null,
+    next: undefined,
+  },
+] as const)("$name", ({ lastPage, judged, page, next }) => {
+  // exact: the state keeps what the channel was told and the best median since, nothing more
+  expect(pageFor(lastPage, judged)).toEqual({ page, lastPage: next });
 });
 
-test("a red page names the lines and each group, and mentions Jonas unless it is a test", () => {
-  const summary = summarizePushes(
-    [
-      ...Array.from({ length: 20 }, (_, minute) =>
-        push({ seconds: 170 + minute, e2e: "slow-rows-skipped", minute }),
-      ),
-      push({ seconds: 300, e2e: "every-row", outcome: "red", minute: 21 }),
-      push({ seconds: 190, e2e: "no-preview", minute: 22 }),
-    ],
-    { from: Date.parse("2026-09-24T12:00:00Z"), to: Date.parse("2026-09-24T13:00:00Z") },
-  );
+// Medians the guard judged, replayed from its state: its red page (2026-09-24 18:47, 23 pushes),
+// then every third hourly run from 19:47 to 09-26 19:47. They fell to 180 s without going under the
+// lines and rose past 200 s from 09-25 22:47. Against the red page's median that rise is never 20 s;
+// against the best since, it pages once.
+test("a median that recovers while over and then rises more than 20 s pages red again, once", () => {
+  const medians = [
+    234.1, 210.4, 195.3, 186.2, 184.8, 181.9, 179.9, 183, 189, 183, 202.9, 205.9, 205.1, 207.3,
+    208.2, 208.2, 210.2, 208.3,
+  ];
+  let lastPage: Parameters<typeof pageFor>[0];
+  const pages = medians.flatMap((p50) => {
+    const owed = pageFor(lastPage, { judgement: "over", p50 });
+    lastPage = owed.lastPage;
+    return owed.page ? [{ p50, page: owed.page }] : [];
+  });
+  // exact: these two pages and no others
+  expect(pages).toEqual([
+    { p50: 234.1, page: "over" },
+    { p50: 202.9, page: "worse" },
+  ]);
+  expect(lastPage).toEqual({ judgement: "over", bestP50: 202.9 });
+});
+
+// 20 pushes that skipped the slow rows, all green and ended by Browser specs, a red one that ran every
+// row and a green one without Preview OS.
+const twentyPushes = summarizePushes(
+  [
+    ...Array.from({ length: 20 }, (_, minute) =>
+      push({ seconds: 170 + minute, e2e: "slow-rows-skipped", minute }),
+    ),
+    push({ seconds: 300, e2e: "every-row", outcome: "red", minute: 21 }),
+    push({ seconds: 190, e2e: "no-preview", minute: 22, lastJob: "test.yml:test" }),
+  ],
+  { from: Date.parse("2026-09-24T12:00:00Z"), to: Date.parse("2026-09-24T13:00:00Z") },
+);
+
+test("a red page lists its lines, the job that ends the pushes and each group, mentioning Jonas", () => {
   expect(
-    renderPage({ page: "over", summary, runUrl: "https://depot.dev/run", testRun: false }),
+    renderPage({
+      page: "over",
+      summary: twentyPushes,
+      lastPage: undefined,
+      runUrl: "https://depot.dev/run",
+      testRun: false,
+    }),
   ).toBe(
     [
       "🔴 PR time to green over its lines <@U067G4QRFK2>: pushes that skipped the slow rows, last 24 h: p50 180 s (line 165 s), p90 187 s (line 200 s), n=20",
-      "• Preview OS, slow rows skipped: time to green p50 180 s, p90 187 s (n=20); first verdict p50 180 s, p90 187 s (n=20, 0 % red)",
+      "Their critical path ends with preview-os.yml:specs on 20 of the 20",
+      "• Preview OS, slow rows skipped: time to green p50 180 s, p90 187 s (n=20; 20 ended by preview-os.yml:specs); first verdict p50 180 s, p90 187 s (n=20, 0 % red)",
       "• Preview OS, every row: none green; first verdict p50 300 s, p90 300 s (n=1, 100 % red)",
       "• Preview OS, no e2e summary: no pushes",
-      "• no Preview OS: time to green p50 190 s, p90 190 s (n=1); first verdict p50 190 s, p90 190 s (n=1, 0 % red)",
-      "• every push: time to green p50 180 s, p90 188 s (n=21); first verdict p50 181 s, p90 189 s (n=22, 5 % red)",
+      "• no Preview OS: time to green p50 190 s, p90 190 s (n=1; 1 ended by test.yml:test); first verdict p50 190 s, p90 190 s (n=1, 0 % red)",
+      "• every push: time to green p50 180 s, p90 188 s (n=21; 20 ended by preview-os.yml:specs); first verdict p50 181 s, p90 189 s (n=22, 5 % red)",
       "slow rows ran in 5 % of Preview OS pushes; 0 superseded pushes left out",
       "<https://depot.dev/run|the run>",
     ].join("\n"),
   );
-  const test = renderPage({ page: "over", summary, testRun: true });
-  expect(test).toMatch(/^🧪 TEST RUN 🔴 PR time to green over its lines: /);
-  expect(test).not.toContain("<@");
-  expect(renderPage({ page: "under", summary, testRun: false })).toMatch(
-    /^🟢 PR time to green back under its lines: /,
-  );
-  // a test page before any push skipped the slow rows
-  expect(
-    renderPage({
-      page: "too-few",
-      summary: summarizePushes([], { from: 0, to: 1 }),
-      testRun: true,
-    }).split("\n")[0],
-  ).toBe(
-    "🧪 TEST RUN ⚪ PR time to green not judged below 20 pushes: pushes that skipped the slow rows, last 24 h: none green",
-  );
+});
+
+test.for([
+  {
+    name: "a red page again gives the best median since the last page",
+    page: "worse",
+    summary: twentyPushes,
+    lastPage: { judgement: "over", bestP50: 158 },
+    testRun: false,
+    heading:
+      "🔴 PR time to green more than 20 s worse again <@U067G4QRFK2>: pushes that skipped the slow rows, last 24 h: p50 180 s (line 165 s; 158 s at best since the last page), p90 187 s (line 200 s), n=20",
+  },
+  {
+    name: "a test page mentions nobody",
+    page: "over",
+    summary: twentyPushes,
+    lastPage: undefined,
+    testRun: true,
+    heading:
+      "🧪 TEST RUN 🔴 PR time to green over its lines: pushes that skipped the slow rows, last 24 h: p50 180 s (line 165 s), p90 187 s (line 200 s), n=20",
+  },
+  {
+    name: "a green page mentions nobody",
+    page: "under",
+    summary: twentyPushes,
+    lastPage: { judgement: "over", bestP50: 180 },
+    testRun: false,
+    heading:
+      "🟢 PR time to green back under its lines: pushes that skipped the slow rows, last 24 h: p50 180 s (line 165 s; 180 s at best since the last page), p90 187 s (line 200 s), n=20",
+  },
+  {
+    name: "a test page before any push skipped the slow rows judges nothing",
+    page: "too-few",
+    summary: summarizePushes([], { from: 0, to: 1 }),
+    lastPage: undefined,
+    testRun: true,
+    heading:
+      "🧪 TEST RUN ⚪ PR time to green not judged below 20 pushes: pushes that skipped the slow rows, last 24 h: none green",
+  },
+] as const)("$name", ({ heading, ...input }) => {
+  expect(renderPage(input).split("\n")[0]).toBe(heading);
 });
 
 test("one PostHog event per push with a verdict, the same id whenever it is sent", () => {
@@ -379,6 +636,7 @@ test("one PostHog event per push with a verdict, the same id whenever it is sent
       e2e_rows: "slow-rows-skipped",
       time_to_green_s: 150,
       pull_request_number: 1,
+      last_job: "preview-os.yml:specs",
     },
     {
       outcome: "red",
@@ -396,38 +654,81 @@ test("one PostHog event per push with a verdict, the same id whenever it is sent
   );
 });
 
-test("the state round-trips through its schema", () => {
+// The newest pr-ttg-state artifact of schemaVersion 1 (2026-09-26), cut to one push.
+const schemaVersion1 = {
+  schemaVersion: 1,
+  pushes: [
+    {
+      run: "j200wskz5n",
+      pr: 3225,
+      createdAt: "2026-09-26T19:42:23.012Z",
+      outcome: "green",
+      e2e: "slow-rows-skipped",
+      seconds: 178.6,
+    },
+  ],
+  paged: "over",
+};
+
+test.for([
+  { name: "no previous state starts empty", previous: undefined },
+  { name: "a state of another schemaVersion starts over", previous: schemaVersion1 },
+])("$name", ({ previous }) => {
+  // exact: starting over keeps no push and no page
+  expect(readState(previous)).toEqual({ schemaVersion: 2, pushes: [] });
+});
+
+test("a state of this version reads back as written, and one that does not parse throws", () => {
   const state = {
-    schemaVersion: 1,
+    schemaVersion: 2,
     pushes: [
       push({ seconds: 150, e2e: "no-summary", minute: 0 }),
       push({ outcome: "not-a-push", minute: 1 }),
     ],
-    paged: "over",
+    lastPage: { judgement: "over", bestP50: 208 },
   };
-  expect(TtgState.parse(JSON.parse(JSON.stringify(state)))).toEqual(state);
+  // exact: the state reads back untouched
+  expect(readState(JSON.parse(JSON.stringify(state)))).toEqual(state);
+  expect(() => readState({ ...schemaVersion1, schemaVersion: 2 })).toThrow();
 });
 
 function workflow(workflowId: string, name: string, status: string, finishedAt: string) {
   return { workflow: { workflowId, name, status, finishedAt }, jobs: [{ attempts: [{}] }] };
 }
 
-/** A Preview OS workflow whose jobs (by their key in preview-os.yml) ended each attempt at `ends`. */
-function previewOs(
+/** A check whose jobs (by their Depot job key) finished each attempt at `ends`. */
+function check(
   workflowId: string,
+  name: string,
   status: string,
   finishedAt: string,
   ends: Record<string, string[]>,
 ): RunMetrics["workflows"][number] {
   return {
-    workflow: { workflowId, name: "Preview OS", status, finishedAt },
-    jobs: Object.entries(ends).map(([job, attempts]) => ({
-      job: { jobKey: `preview-os.yml:${job}`, status: "finished" },
+    workflow: { workflowId, name, status, finishedAt },
+    jobs: Object.entries(ends).map(([jobKey, attempts]) => ({
+      job: { jobKey, status: "finished" },
       attempts: attempts.map((end, index) => ({
         attempt: { attempt: index + 1, finishedAt: end },
       })),
     })),
   };
+}
+
+/** A Preview OS workflow whose jobs (by their key in preview-os.yml) finished each attempt at `ends`. */
+function previewOs(
+  workflowId: string,
+  status: string,
+  finishedAt: string,
+  ends: Record<string, string[]>,
+) {
+  return check(
+    workflowId,
+    "Preview OS",
+    status,
+    finishedAt,
+    Object.fromEntries(Object.entries(ends).map(([job, at]) => [`preview-os.yml:${job}`, at])),
+  );
 }
 
 function withWorkflow(
@@ -452,6 +753,7 @@ function push(input: {
   seconds?: number;
   e2e?: "slow-rows-skipped" | "every-row" | "no-summary" | "no-preview";
   outcome?: "green" | "red" | "superseded" | "not-a-push";
+  lastJob?: string;
 }) {
   const base = {
     run: `run${input.minute}`,
@@ -460,6 +762,12 @@ function push(input: {
   };
   const outcome = input.outcome || "green";
   return outcome === "green" || outcome === "red"
-    ? { ...base, outcome, e2e: input.e2e!, seconds: input.seconds! }
+    ? {
+        ...base,
+        outcome,
+        e2e: input.e2e!,
+        seconds: input.seconds!,
+        lastJob: input.lastJob || "preview-os.yml:specs",
+      }
     : { ...base, outcome };
 }
