@@ -1039,7 +1039,7 @@ async function runSuite(
   requestedSlowRows: SlowRows | undefined,
 ) {
   const url = previewUrl(previewName);
-  const env = { WORKER_BASE_URL: url, DEMO_BASE_URL: url };
+  const env = { WORKER_BASE_URL: url };
   const appUrl = (name: string) =>
     appPreviewUrl(
       APPS.find((app) => app.name === name)!,

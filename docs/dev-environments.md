@@ -320,7 +320,7 @@ deployed runs:
 pnpm spec
 
 # deployed preview: the Doppler config supplies the preview's APP_CONFIG
-DEMO_BASE_URL=https://pr<n>-os.iterate-dev-preview.workers.dev \
+WORKER_BASE_URL=https://pr<n>-os.iterate-dev-preview.workers.dev \
   doppler run --project os --config preview -- pnpm spec
 
 # a single spec, headed, while working on it
@@ -331,7 +331,7 @@ Against a deployment, the specs validate one env contract. The config reads
 the deployment's credentials out of `APP_CONFIG` (the password for sign-in, the
 operator bearer for fixture setup), its project routing and MCP origin out of
 the `envs.ts` entry the URL falls under, so a per-PR preview inherits its
-parent's (`apps/os/e2e/support/deployed-target.ts`). `DEMO_BASE_URL` is the
+parent's (`apps/os/e2e/support/deployed-target.ts`). `WORKER_BASE_URL` is the
 only target override; when it is unset, Playwright boots the local dev server.
 It never infers credentials from redirects.
 
@@ -527,7 +527,7 @@ WORKER_BASE_URL=$PREVIEW doppler run --project os --config preview -- \
 One spec, repeated, from the repo root (`pnpm spec` is the root's script):
 
 ```bash
-DEMO_BASE_URL=$PREVIEW doppler run --project os --config preview -- \
+WORKER_BASE_URL=$PREVIEW doppler run --project os --config preview -- \
   pnpm spec specs/os/auth.spec.ts --repeat-each 25
 ```
 
@@ -570,7 +570,7 @@ doppler run --project os --config preview -- pnpm preview deploy --name exp-<you
 
 # sign in there with any email and the preview password, drive it as operator,
 # or run the specs against it:
-DEMO_BASE_URL=https://exp-<you>-os.iterate-dev-preview.workers.dev \
+WORKER_BASE_URL=https://exp-<you>-os.iterate-dev-preview.workers.dev \
   doppler run --project os --config preview -- pnpm spec
 
 # delete it when done; otherwise the sweep takes it 24 h after its last deploy

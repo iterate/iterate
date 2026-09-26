@@ -31,7 +31,7 @@ export default function setup() {
  *  (apps/os/e2e/support/deployed-target.ts, which the vitest e2e suite reads too). */
 function osTargetEnv(): Record<string, string> {
   const origin = new URL(
-    process.env.DEMO_BASE_URL || `http://localhost:${process.env.DEMO_PORT || 8788}`,
+    process.env.WORKER_BASE_URL || `http://localhost:${process.env.DEMO_PORT || 8788}`,
   ).origin;
   if (new URL(origin).hostname === "localhost") {
     return {
