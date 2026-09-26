@@ -24,10 +24,13 @@
 //    failure, a warn `identity.platform-failure-<step>` the prd fault alarm counts;
 //  - anything else is a defect of ours, reported at error level (`identity.sign-in-failed`).
 //
-// ADD A SIGN-IN (link mode, `/.auth/identity/<provider>?link=1&next=`): a browser signed in to the
-// issuer adds the provider's account to that person instead of signing anyone in. Nobody signed in
-// is sent to sign in first; `next` is an absolute URL on the platform's origin or the Dash's
-// (`nextUrlOf`), else refused. The signed flow cookie carries `linkTo`, the person, and the
+// ADD A SIGN-IN (link mode, `/.auth/identity/<provider>?link=<userId>&next=`): a browser signed in
+// to the issuer as the person the link names adds the provider's account to them instead of
+// signing anyone in. Nobody signed in is sent to sign in first, and someone else is refused
+// (`link-person-mismatch`): the Dash's session and the issuer's are two, and the link says which
+// person it was made for — a comparison, never a grant. `next` is an absolute URL on the
+// platform's origin or the Dash's (`nextUrlOf`), else refused. The signed flow cookie (kind
+// `identity-link`, which a sign-in's callback refuses) carries `linkTo`, the person, and the
 // callback goes on only while the issuer session is still theirs (else `link-session-changed`):
 // that binding, the state and PKCE in the flow cookie are what keep another browser's callback,
 // or another person's, from adding an account to them. The control plane links the subject to them
@@ -78,7 +81,9 @@ const PATHS = {
 } satisfies Record<IdentityProvider, string>;
 const cookieAttributes = "HttpOnly; Secure; SameSite=Lax; Path=/";
 const Flow = z.object({
-  kind: z.literal("identity-login"),
+  /** `identity-link` for an added sign-in (`linkTo`): a kind of its own, so a handler that knows
+   *  only sign-ins (an older version's) refuses it instead of signing someone in. */
+  kind: z.enum(["identity-login", "identity-link"]),
   provider: IdentityProvider,
   clientId: z.string(),
   redirectUri: z.string(),
@@ -260,7 +265,7 @@ export async function identityResponse(request: Request, env: Env) {
     return new Response(null, { status: 302, headers });
   };
   const newFlow = (next: string, bounced: boolean, linkTo?: string): Flow => ({
-    kind: "identity-login",
+    kind: linkTo ? "identity-link" : "identity-login",
     provider,
     clientId: client.clientId,
     redirectUri,
@@ -313,10 +318,19 @@ export async function identityResponse(request: Request, env: Env) {
         ),
       );
     const person = await issuerSessionPersonOf(env, request);
+    const here = `${url.pathname}${url.search}`;
     if (!person) {
-      headers.set("Location", signInHref(`${url.pathname}${url.search}`));
+      headers.set("Location", signInHref(here));
       return new Response(null, { status: 302, headers });
     }
+    if (person.id !== url.searchParams.get("link"))
+      return refused(
+        { next: here },
+        new SignInRefused(
+          "This browser is signed in to iterate as someone else. Switch account to add it to yours.",
+          "link-person-mismatch",
+        ),
+      );
     return authorize(await discover(), newFlow(next, false, person.id));
   }
   if (url.pathname === PATHS[provider])

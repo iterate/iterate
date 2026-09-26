@@ -264,12 +264,15 @@ by (provider, subject).
 
 A sign-in links a provider's account to a person once by its verified email, so a GitHub account
 whose primary address is not the person's would sign in as someone new. A signed-in person adds it
-to their own account instead: `/.auth/identity/<provider>?link=1&next=<url>` on the issuer (the
-Dash's /sessions "Connect GitHub", and "Add GitHub sign-in" on a project's GitHub sheet). Nobody
-signed in there is sent to sign in first; `next` must be on the platform's origin or the Dash's.
-The flow cookie carries the person, and the callback adds the account only while the browser is
-still signed in to the issuer as them (catalog.ts `addIdentity`): refused when it already signs in
-to someone else, or when they have another account of that provider. It keeps the token as a
+to their own account instead: `/.auth/identity/<provider>?link=<userId>&next=<url>` on the issuer
+(the Dash's /sessions "Connect GitHub", and "Add GitHub sign-in" on a project's GitHub sheet, each
+naming the Dash session's person). Nobody signed in there is sent to sign in first, and a browser
+signed in to the issuer as someone else is refused; `next` must be on the platform's origin or the
+Dash's. The flow cookie carries the person, and the callback adds the account only while the
+browser is still signed in to the issuer as them, after Google's consent screen when it shows one
+(catalog.ts `addIdentity`): refused when it already signs in to someone else, or when they have
+another account of that provider. `session.info().signInProviders` says which providers can be
+added. It keeps the token as a
 sign-in does, and the person stays signed in as they were, back on `next` (`?error=` when refused).
 Their email never changes, then or on a later sign-in with the added account, and
 `login.allowedEmails` asks nothing of the added account's own address; signing in with it later is

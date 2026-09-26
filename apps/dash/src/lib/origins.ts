@@ -25,10 +25,14 @@ export function projectHostOf(
   return origin ? projectUrlOf(info.ingressRouting, origin, { project: slug })?.href || null : null;
 }
 
-/** The issuer's link that adds a GitHub sign-in to the person signed in there (apps/os identity.ts,
- *  "ADD A SIGN-IN"): it lands back on `next`, with `?error=` when refused. Null when the platform's
- *  origin is not an http(s) one. */
-export function addGithubSignInHref(info: { platformOrigin: string }, next: string): string | null {
+/** The issuer's link that adds a GitHub sign-in to this session's person (apps/os identity.ts,
+ *  "ADD A SIGN-IN"), which the issuer follows only while it is signed in as them too: it lands back
+ *  on `next`, with `?error=` when refused. Null when the platform's origin is not an http(s) one. */
+export function addGithubSignInHref(
+  info: { platformOrigin: string; principal: { actor: string } },
+  next: string,
+): string | null {
   const origin = httpOriginOf(info.platformOrigin);
-  return origin && `${origin}/.auth/identity/github?${new URLSearchParams({ link: "1", next })}`;
+  const query = new URLSearchParams({ link: info.principal.actor, next });
+  return origin && `${origin}/.auth/identity/github?${query}`;
 }

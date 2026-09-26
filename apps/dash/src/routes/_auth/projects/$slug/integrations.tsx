@@ -1258,7 +1258,7 @@ function GithubInstallations({
   if (!state) return null;
   if (!secretPath || !apiOrigin) {
     // back to this sheet once the issuer has added it (or says why not)
-    const addSignIn = info.signInProviders.includes("github")
+    const addSignIn = info.signInProviders?.includes("github")
       ? addGithubSignInHref(
           info,
           `${window.location.origin}/projects/${project.slug}/integrations?connect=github`,

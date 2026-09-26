@@ -1,7 +1,13 @@
 import { env, exports } from "cloudflare:workers";
 import { expect, test, vi } from "vitest";
 import { appSession } from "iterate/app-server";
-import { DEFAULT_GOOGLE_SIGN_IN_SCOPES, platformAddressesOf } from "../src/app-config.ts";
+import {
+  appConfigOf,
+  DEFAULT_GOOGLE_SIGN_IN_SCOPES,
+  platformAddressesOf,
+  sessionSigningSecretOf,
+} from "../src/app-config.ts";
+import { verifyClaims } from "../src/caller.ts";
 import { authorizationForToken } from "../src/oauth.ts";
 import { fakeUserIdOf } from "../../dummy-petshop/src/state.ts";
 import type { AccountState } from "../src/account/contract.ts";
@@ -586,6 +592,7 @@ test.for<[string, "google" | "cloudflare" | "github", Record<string, string>, st
     const petshop = petshopFakes();
     const { response } = await signInThroughFake(petshop, provider, choices, {
       session: cookie,
+      person: person.id,
       next: DASH_SESSIONS,
     });
     expect(response, await response.clone().text()).toMatchObject({ status: 303 });
@@ -642,6 +649,7 @@ test.for<{
     const petshop = petshopFakes();
     const { response, authorizations } = await signInThroughFake(petshop, "google", rounds, {
       session: cookie,
+      person: person.id,
       next: DASH_SESSIONS,
       sessionAtCallback: switched ? [cookie, other] : cookie,
     });
@@ -683,6 +691,7 @@ test("adding a sign-in the person already has keeps its token again, and they st
   expect(Object.keys((await personOf("github", subject)).account.integrations)).toEqual([]);
   const { response } = await signInThroughFake(petshop, "github", choices, {
     session,
+    person: user.id,
     next: DASH_SESSIONS,
   });
   expect(response.headers.get("location")).toBe(DASH_SESSIONS);
@@ -695,6 +704,7 @@ test.for(["signed in as someone else", "signed out"])(
   "adding a sign-in whose browser is %s by the time the provider answers is refused, back on next with why",
   async (by) => {
     const { cookie: ada } = await signedInMember(`ada-${by.length}@example.test`);
+    const adaId = (await controlPlane().getUser(`ada-${by.length}@example.test`))!.id;
     const { cookie: bob } = await signedInMember(`bob-${by.length}@example.test`);
     const petshop = petshopFakes();
     const refusals = vi.spyOn(console, "info");
@@ -705,6 +715,7 @@ test.for(["signed in as someone else", "signed out"])(
       { login, email: `${login}@signin.test` },
       {
         session: ada,
+        person: adaId,
         next: DASH_SESSIONS,
         sessionAtCallback: by === "signed out" ? "__Host-itx-session=signed-out" : bob,
       },
@@ -735,6 +746,7 @@ test("adding a GitHub account another person signs in with is refused, back on n
   const next = "https://dash.test/projects/p/integrations?connect=github";
   const { response } = await signInThroughFake(petshop, "github", choices, {
     session: cookie,
+    person: (await controlPlane().getUser("taker@example.test"))!.id,
     next,
   });
   expect(nextPageOf(response)).toEqual({
@@ -744,47 +756,70 @@ test("adding a GitHub account another person signs in with is refused, back on n
   expect(await controlPlane().identity("github", String(fakeUserIdOf("gh-taken")))).toEqual(holder);
 });
 
-test("adding a sign-in starts only from a signed-in browser, and only toward the platform or the Dash", async () => {
+test("adding a sign-in starts only from a browser signed in as the person the link names, and only toward the platform or the Dash", async () => {
   const start = (query: Record<string, string>, cookie?: string) =>
     exports.default.fetch(`${ORIGIN}/.auth/identity/github?${new URLSearchParams(query)}`, {
       redirect: "manual",
       ...(cookie && { headers: { cookie } }),
     });
-  // nobody signed in: sign in first, and come back to add it
-  const anonymous = await start({ link: "1", next: DASH_SESSIONS });
-  expect(anonymous).toMatchObject({ status: 302 });
-  expect(anonymous.headers.get("location")).toBe(
-    `/login?${new URLSearchParams({ next: `/.auth/identity/github?${new URLSearchParams({ link: "1", next: DASH_SESSIONS })}` })}`,
-  );
   const { cookie } = await signedInMember("starter@example.test");
+  const starter = (await controlPlane().getUser("starter@example.test"))!;
+  // nobody signed in: sign in first, and come back to add it
+  const link = `/.auth/identity/github?${new URLSearchParams({ link: starter.id, next: DASH_SESSIONS })}`;
+  const anonymous = await start({ link: starter.id, next: DASH_SESSIONS });
+  expect(anonymous).toMatchObject({ status: 302 });
+  expect(anonymous.headers.get("location")).toBe(`/login?${new URLSearchParams({ next: link })}`);
+  // signed in as someone else than the Dash that made the link: switch account first
+  const { cookie: someoneElse } = await signedInMember("someone-else@example.test");
+  const refusals = vi.spyOn(console, "info");
+  expect(signInPageOf(await start({ link: starter.id, next: DASH_SESSIONS }, someoneElse))).toEqual(
+    {
+      next: link,
+      error:
+        "This browser is signed in to iterate as someone else. Switch account to add it to yours.",
+    },
+  );
+  expect(refusals).toHaveBeenCalledWith(
+    expect.objectContaining({ event: "identity.sign-in-refused", reason: "link-person-mismatch" }),
+  );
   for (const next of ["https://evil.test/sessions", "//evil.test/", "javascript:alert(1)"]) {
-    const response = await start({ link: "1", next }, cookie);
+    const response = await start({ link: starter.id, next }, cookie);
     expect(signInPageOf(response), next).toEqual({
       next: "/",
       error: "That link can't add a sign-in. Please start again from your account.",
     });
   }
-  for (const next of [DASH_SESSIONS, "/login"]) {
-    const response = await start({ link: "1", next }, cookie);
+  for (const [next, landing] of [
+    [DASH_SESSIONS, DASH_SESSIONS],
+    ["/login", `${ORIGIN}/login`],
+  ] as const) {
+    const response = await start({ link: starter.id, next }, cookie);
     expect(response, next).toMatchObject({ status: 302 });
     expect(new URL(response.headers.get("location")!), next).toMatchObject({
       origin: "https://github.test",
     });
+    // a flow of its own kind, which a sign-in's callback (an older version's too) refuses
+    const flow = response.headers.getSetCookie()[0]!.split(";")[0]!.split("=")[1]!;
+    expect(
+      await verifyClaims(flow, await sessionSigningSecretOf(appConfigOf(env))),
+      next,
+    ).toMatchObject({ kind: "identity-link", linkTo: starter.id, next: landing });
   }
 });
 
 /** A browser signing in through a pet-shop fake: the platform's redirect to the provider (its
  *  authorize URL recorded, `choices` added as the person's picks), the fake's consent at once, and
  *  the platform's callback — again while the platform sends the browser back for consent. With
- *  `link`, the browser signed in as `session` adds the account to that person instead, back to
- *  `next` (`sessionAtCallback`: the session the browser holds by the time the provider answers).
+ *  `link`, the browser signed in as `session` adds the account to `person` (the Dash's link names
+ *  them) instead, back to `next` (`sessionAtCallback`: the session the browser holds by the time
+ *  the provider answers).
  *  A list of `choices` or of `sessionAtCallback` is one per round, its last repeated; a round's
  *  `cancel` declines at the provider. */
 async function signInThroughFake(
   petshop: ReturnType<typeof petshopFakes>,
   provider: "google" | "cloudflare" | "github",
   choices: Record<string, string> | Record<string, string>[],
-  link?: { session: string; next: string; sessionAtCallback?: string | string[] },
+  link?: { session: string; person: string; next: string; sessionAtCallback?: string | string[] },
 ) {
   const path = {
     google: "/.auth/identity",
@@ -793,7 +828,7 @@ async function signInThroughFake(
   }[provider];
   let response = await exports.default.fetch(
     link
-      ? `${ORIGIN}${path}?${new URLSearchParams({ link: "1", next: link.next })}`
+      ? `${ORIGIN}${path}?${new URLSearchParams({ link: link.person, next: link.next })}`
       : `${ORIGIN}${path}?next=%2F`,
     { redirect: "manual", ...(link && { headers: { cookie: link.session } }) },
   );

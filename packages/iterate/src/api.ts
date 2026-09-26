@@ -964,8 +964,9 @@ export interface IterateSessionApi {
      *  it uses it (`integrations.connect(provider, { account })`) */
     iterateAppScopes: Partial<Record<"slack" | "google" | "cloudflare", string[]>>;
     /** the providers a person signs in with here: the ones a signed-in person can add to their
-     *  account (the issuer's `/.auth/identity/<provider>?link=1`) */
-    signInProviders: ("google" | "cloudflare" | "github")[];
+     *  account (the issuer's `/.auth/identity/<provider>?link=<userId>`); absent from a platform
+     *  older than it, which offers none */
+    signInProviders?: ("google" | "cloudflare" | "github")[];
   };
   /** The grants this session may manage (a signed-in person's with the `account` scope): list and
    *  end its sessions and personal access tokens, and mint a personal access token — its bearer

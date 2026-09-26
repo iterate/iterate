@@ -522,7 +522,7 @@ function ConnectedAccounts({ projects }: { projects: { id: string; slug: string 
   const { waitrose, error: addError } = Route.useSearch();
   const addGithub =
     live.value &&
-    info.signInProviders.includes("github") &&
+    info.signInProviders?.includes("github") &&
     !accounts.some((row) => row.provider === "github")
       ? addGithubSignInHref(info, next)
       : null;
