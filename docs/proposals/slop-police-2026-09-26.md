@@ -15,7 +15,7 @@ What survived that pass merged overnight as ten PRs ([Already landed](#already-l
 ## Decided (2026-09-26)
 
 - **In progress, no decision needed:** 7, 9, 11, 13, 19, 22 (the facet-file fold, one copy of each fixture, one vitest config if clean), 39, 40 (a nod given), 42 and 44. Each is its own PR, merged after review.
-- **1, yes.** Browser specs get capacity: bigger Depot runners and/or Playwright sharding, as the old stack did (#2659). The readiness gate goes from 5 rounds to 3, os-phone runs on Main OS e2e only, and the TTG guard pages again on a 20 s regression. Also in flight: the trace job writes the suite lines once, and a bigger deploy runner if measured faster.
+- **1, yes.** Browser specs get capacity: bigger Depot runners and/or Playwright sharding, as the old stack did (#2659). The readiness gate goes from 5 rounds to 3, and the TTG guard pages again on a 20 s regression (#3241). **CI-M11 is withdrawn:** phone-width specs stay on every PR ("Phone width really matters a lot"), and #3232 is closed. Also in flight: the trace job writes the suite lines once, and a bigger deploy runner if measured faster.
 - **2, yes.** "The shape of a test" goes into `docs/vitest-patterns.md`. Rule 6 keeps production timings, per 3.
 - **3, no.** Tests keep production timings: "I want it to be like in production."
 - **4, yes.** The DO cost alarm is set from a measured baseline, and prd is checked for runaway Durable Objects first.
