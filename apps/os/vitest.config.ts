@@ -127,6 +127,9 @@ export default defineConfig({
           restoreMocks: true,
           unstubGlobals: true,
           unstubEnvs: true,
+          // `$name` titles print whole (docs/vitest-patterns.md), in each project: an inline project
+          // inherits none of the root's `test` options.
+          chaiConfig: { truncateThreshold: 0 },
           // The edge and DO modules reach the control plane, whose OAuth provider imports
           // cloudflare:workers; inlined so the alias below covers it.
           server: { deps: { inline: ["@cloudflare/workers-oauth-provider"] } },
@@ -182,6 +185,7 @@ export default defineConfig({
           restoreMocks: true,
           unstubGlobals: true,
           unstubEnvs: true,
+          chaiConfig: { truncateThreshold: 0 },
           // First test pays workerd boot + the 200-client attach storm (the cloudflare-os
           // cold-start lesson, scaled up).
           testTimeout: 120_000,
@@ -193,6 +197,7 @@ export default defineConfig({
           name: "e2e",
           environment: "node",
           include: ["e2e/**/*.e2e.test.ts", "../agents/e2e/**/*.e2e.test.ts"],
+          chaiConfig: { truncateThreshold: 0 },
           // Boots the one shared worker and provides its URL (support/setup.ts injects it per file).
           globalSetup: ["./e2e/support/global-setup.ts"],
           setupFiles: ["./e2e/support/setup.ts"],
@@ -238,6 +243,7 @@ export default defineConfig({
           name: "perf",
           environment: "node",
           include: ["perf/**/*.perf.test.ts"],
+          chaiConfig: { truncateThreshold: 0 },
           globalSetup: ["./e2e/support/global-setup.ts"],
           // perf/setup.ts: what a failed row leaves for the latency guard beside its message
           setupFiles: ["./e2e/support/setup.ts", "./perf/setup.ts"],

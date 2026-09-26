@@ -42,8 +42,9 @@ const CURSOR_ROWS_BEHIND_16_MIB = { eventCount: 16, eventChars: 1 * MiB, calleeC
  *  ring's 1 MiB) — two per row. */
 const CURSOR_ROWS_EPHEMERALS_FROM_RING = { batchChars: 900 * 1024 };
 
-// Every plain row runs its scenario in the capped child, asserts that it survived, then its `facts`
-// (exact) and its `bounds` (a numeric fact against a number), within `timeout` (60 s unless named).
+// Every plain row runs its scenario in the capped child, killed after the row's `timeout` (60 s
+// unless named), asserts that it survived, then its `facts` (exact) and its `bounds` (a numeric fact
+// against a number).
 const rows: {
   name: string;
   scenario: ScenarioName;
@@ -207,16 +208,20 @@ const rows: {
     facts: { waitOutcome: "WAIT_TIMEOUT" },
   },
 ];
-for (const { name, scenario, args, timeout = 60_000, facts = {}, bounds = [] } of rows)
-  test(name, { timeout }, () => {
-    const run = runScenario(scenario, args);
+// The table's timeout is above every row's: the child's own cap is what fails a slow row.
+test.for(rows)(
+  "$name",
+  { timeout: 120_000 },
+  ({ scenario, args, timeout = 60_000, facts = {}, bounds = [] }) => {
+    const run = runScenario(scenario, args, timeout);
     expectSurvived(run, scenario);
     expect(run.facts, run.tail).toMatchObject(facts);
     for (const [fact, comparison, bound] of bounds)
       expect(Number(run.facts[fact]), `${fact} ${comparison} ${bound}\n${run.tail}`)[
         comparisons[comparison]
       ](bound);
-  });
+  },
+);
 
 // ═══ A pinned row's comment says what it dies of — `oom` (the child hit the heap limit) or a
 // named fact — so unwrapping it to `test` is the proof of its fix. The CONTROL rows beside them bound
@@ -341,7 +346,11 @@ createFailing(test, /read-object-dense-page: child oom at 128 MiB/, { timeoutMs:
   },
 );
 
-function runScenario(name: ScenarioName, args: Record<string, number>): ScenarioRun {
+function runScenario(
+  name: ScenarioName,
+  args: Record<string, number>,
+  timeoutMs = 110_000,
+): ScenarioRun {
   const child = spawnSync(
     process.execPath,
     [
@@ -352,9 +361,10 @@ function runScenario(name: ScenarioName, args: Record<string, number>): Scenario
       name,
       JSON.stringify(args),
     ],
-    { encoding: "utf8", timeout: 110_000, maxBuffer: 64 * MiB },
+    { encoding: "utf8", timeout: timeoutMs, maxBuffer: 64 * MiB },
   );
-  const output = `${child.stdout}\n${child.stderr}`;
+  // A child killed at its timeout ends its tail with `spawnSync … ETIMEDOUT`.
+  const output = `${child.stdout}\n${child.stderr}\n${child.error?.message ?? ""}`;
   const report = /^\{.*\}$/m.exec(child.stdout)?.[0];
   const kind = report ? "survived" : OOM_SIGNATURE.test(output) ? "oom" : "other";
   return {
