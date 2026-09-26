@@ -163,10 +163,7 @@ export class IterateContextRpcTarget extends RpcTarget {
    *  it is one whole expression back through `invoke`, so what the client holds is an object of this
    *  stateless worker, and no session onto the actor outlives a call.
    *
-   *  The call rides `contextStub`: an idempotent call a deploy's reset or a lost connection failed
-   *  is sent ONCE more on a fresh stub, logged `itx.deploy-reset-retry` or
-   *  `itx.platform-failure-retry`; an overloaded one never; a platform failure that stands reaches
-   *  the client as UNAVAILABLE. */
+   *  The call rides `contextStub` (context-stub.ts), which owns its retry and failure policy. */
   async #invokeOnDurableObject(
     itxExpression: ItxExpression,
     args: unknown[] = [],
