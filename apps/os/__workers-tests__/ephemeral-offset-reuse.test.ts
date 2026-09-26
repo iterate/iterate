@@ -10,7 +10,8 @@ import { evictDurableObject, runInDurableObject } from "cloudflare:test";
 import { expect, test } from "vitest";
 import type { StreamPage } from "iterate/api";
 import type { ItxExpression } from "iterate/expression";
-import { COUNTER_SOURCE, releasePins, snapshot, stub, until } from "./support.ts";
+import { COUNTER_SOURCE } from "./sources.ts";
+import { releasePins, snapshot, stub, until } from "./support.ts";
 
 const DIGEST_MODULES = {
   "worker.js": /* js */ `

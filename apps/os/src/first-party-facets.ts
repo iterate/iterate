@@ -6,7 +6,7 @@
 // TABLE IS THE ONLY PATH from a facet name to `ctx.exports`: no FacetSpec names a class of this
 // worker, and a reserved name refuses a spec (context/facet-host.ts `FacetHost#callFacet`,
 // context/built-ins.ts `processors.enable`); the reduce marks a hosting row for a reserved name
-// without a source (stream/core-processor.ts). Pinned: __workers-tests__/facet-from-exports.test.ts.
+// without a source (stream/core-processor.ts). Pinned: __workers-tests__/facets.test.ts.
 // WHERE each one may be hosted is context/first-party-facet-placement.ts's rules.
 export const FIRST_PARTY_FACET_CLASSES = {
   account: "AccountDurableObject",

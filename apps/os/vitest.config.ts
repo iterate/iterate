@@ -70,6 +70,8 @@ const LONG_POLES = [
   "__workers-tests__/oauth-recheck-no-project.test.ts",
   "__workers-tests__/oauth-recheck-revoked.test.ts",
   "__workers-tests__/oauth-recheck-membership.test.ts",
+  // Every facet row but the watchdog's, in one worker: 19–21 s (measured locally 2026-09-26).
+  "__workers-tests__/facets.test.ts",
   "src/stream/memory-budget.test.ts",
   "e2e/session.e2e.test.ts",
   "e2e/scheduled-appends-dormant.e2e.test.ts",

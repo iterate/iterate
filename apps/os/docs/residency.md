@@ -125,9 +125,9 @@ preview, 2026-09-23). So:
 - Lint: [`lint/oxlint-plugin-no-raw-itx-get.test.ts`](../../../lint/oxlint-plugin-no-raw-itx-get.test.ts)
   decides what `iterate/no-raw-itx-get` refuses, so no first-party code leans on 5 and 6.
 - Workers suite: `__workers-tests__/alarm-and-pins.test.ts` (4),
-  `__workers-tests__/facet-birth-reset.test.ts` (5, 6, and the sweep's alarm waking a fresh
+  `__workers-tests__/facets.test.ts` (5, 6, and the sweep's alarm waking a fresh
   incarnation).
-- Workers suite, the sweep's clock: `facet-birth-reset.test.ts` also decides that loaded code's
+- Workers suite, the sweep's clock: `facets.test.ts` also decides that loaded code's
   calls never restart it and a project host's HTTP always does.
 - Deployed: `e2e/context-residency.e2e.test.ts` reads wakes across idles for 1–3, 5 and 6, the
   resets a birth names on its wake record, and that a careless facet is no longer running once its

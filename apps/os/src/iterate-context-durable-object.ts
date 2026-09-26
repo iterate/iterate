@@ -1449,7 +1449,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
    *  outbound. The hop counter stays — the edge's re-entry guard reads it when an app fetches its
    *  own host. WS-safe: only the headers are rewritten, and every hop is a fetch channel — the
    *  other context's `fetch`, then `ctx.facets.get(name).fetch` — so a 101 flows straight back
-   *  either way (measured: __workers-tests__/secret-facet-proxies-a-socket.test.ts). */
+   *  either way (measured: __workers-tests__/facets.test.ts). */
   #egress(request: Request): Promise<Response> {
     const headers = new Headers(request.headers);
     stampCallerHeaders(headers, null);

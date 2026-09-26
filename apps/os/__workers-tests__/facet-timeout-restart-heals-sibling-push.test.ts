@@ -3,7 +3,7 @@
 // restart's abort cuts off every OTHER call still in flight on that instance. The timed-out call
 // is the one that failed: it stays TIMEOUT. The others did not time out — the facet they ran on
 // was restarted under them — so they reject FACET_RESTARTED, exactly like a call a restart under a
-// new loaded identity cut off (facet-restart-heals-cut-off-push.test.ts): a cut-off PUSH is owed
+// new loaded identity cut off (facets.test.ts): a cut-off PUSH is owed
 // one catch-up from the log on the new instance, logged as `delivery.facet-restarted-in-flight`,
 // never a `subscription-delivery.deliver` issue.
 //

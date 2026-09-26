@@ -38,9 +38,9 @@ import { expect, test, vi } from "vitest";
 import type { ItxExpression } from "iterate/expression";
 import type { StreamEvent } from "iterate/stream/processor";
 import type { AlarmTrace } from "../src/iterate-context-durable-object.ts";
+import { COUNTER_SOURCE } from "./sources.ts";
 import {
   adminCredentials,
-  COUNTER_SOURCE,
   Echo,
   openSession,
   owedAlarmOf,
@@ -317,7 +317,7 @@ test("A '*' FACET WAKE OWES NOTHING: a facet-hosting context owes no alarm after
   const before = (await wokens()).length;
   // A due schedule fires into an evicted actor: the fresh incarnation's wake record materializes
   // the counter for the push, and the pass arms nothing for it. (An alarm with nothing durable due
-  // wakes nothing at all — facet-birth-reset.test.ts.) The schedule's own event is pushed to the
+  // wakes nothing at all — facets.test.ts.) The schedule's own event is pushed to the
   // counter first, so its push settles before the release un-pins the facet.
   await s.invoke([
     "itx",
@@ -351,7 +351,7 @@ test("A WAKE MAKES NO LOOP: an incarnation the alarm woke ends with no alarm —
   const before = (await wokens()).length;
   // A due schedule (set on the quiet incarnation, which is then evicted) fires for real and wakes a
   // FRESH incarnation, whose wake record says so. (An alarm with nothing durable due — a stray one a
-  // dead incarnation left — wakes nothing at all: facet-birth-reset.test.ts.)
+  // dead incarnation left — wakes nothing at all: facets.test.ts.)
   await s.invoke([
     "itx",
     "schedules",

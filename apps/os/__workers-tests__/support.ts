@@ -3,8 +3,8 @@
 // snapshot read through it, the control plane's database, a capnweb session over the worker's /api
 // (disposed at teardown — importing this module registers the afterAll), a live value to lend
 // (`Echo`, tagged per instance), the production pins' release on demand, the alarm a context owes,
-// the one poll-until, a signed-in member with their browser cookie, the counter processor's source,
-// and the pet shop's integration fakes.
+// the one poll-until, a signed-in member with their browser cookie, and the pet shop's integration
+// fakes. The loaded code the suite hosts is ./sources.ts.
 import { runInDurableObject } from "cloudflare:test";
 import { env, exports } from "cloudflare:workers";
 import { newWebSocketRpcSession, RpcTarget } from "capnweb";
@@ -281,28 +281,6 @@ export async function projectWithMember(slug: string) {
   const { projectId } = (await itx.whoami()) as { projectId: string };
   return { itx, projectId, session, cookie };
 }
-
-/** A tiny userspace processor: counts every durable event. The tally fixture's shape
- *  (e2e/support/sources.ts), reduced to one number — the pure `CounterProcessor` plus its host
- *  `CounterDurableObject`, which is what the load chain names. */
-export const COUNTER_SOURCE = /* js */ `
-import { StreamProcessor, StreamProcessorDurableObject, defineProcessorContract, z } from "iterate/sdk";
-const contract = defineProcessorContract({
-  slug: "counter",
-  version: "1.0.0",
-  description: "counts durable events",
-  stateSchema: z.object({ n: z.number().default(0) }),
-  consumes: ["*"],
-  emits: [],
-});
-class CounterProcessor extends StreamProcessor {
-  contract = contract;
-  reduce({ state }) { return { n: state.n + 1 }; }
-}
-export class CounterDurableObject extends StreamProcessorDurableObject {
-  processor = new CounterProcessor();
-}
-`;
 
 /** The hosts the pet shop's Slack, Google, Cloudflare and GitHub fakes answer on in this suite
  *  (APP_CONFIG `integrations`, wrangler.test.jsonc and vitest.config.ts). */
