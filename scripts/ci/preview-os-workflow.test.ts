@@ -149,9 +149,7 @@ test("Preview OS deploys the PR merged into main, and the test jobs use that ver
   ).toEqual({ HEAD_SHA: "${{ needs.deploy.outputs.head-sha }}" });
 });
 
-// A suite's check turns green or red without waiting on GitHub: its step hands its line over as the
-// job's output (apps/os/scripts/preview.ts `handOverSuiteLine`), and the trace job, after both,
-// writes the two into the PR body in one write, before anything that could fail the trace.
+// Why: apps/os/scripts/preview.ts `handOverSuiteLine` and `writeSuiteLines`.
 test("Preview OS: the suites hand their lines to the trace job, which writes both into the PR body at once", () => {
   for (const suite of suites)
     expect(preview.jobs[suite.job]!).toMatchObject({
