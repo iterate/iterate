@@ -65,8 +65,8 @@ const ACTIVATION_READS = 30;
  *  Cloudflare answers a create with 409/10306 ("Namespace activation is already in progress") or
  *  409/10201 ("Namespace already exists") while the namespace's activation is still settling: when
  *  a concurrent create races it (measured 2026-09-26), and when a slow create conflicts with itself
- *  (#3204's deploy, where no other create existed). The namespace is read again until it reads 200,
- *  each wait logged as `preview.platform-failure-retry`, at most ACTIVATION_READS times. */
+ *  with no other create in flight. The namespace is read again until it reads 200, each wait
+ *  logged as `preview.platform-failure-retry`, at most ACTIVATION_READS times. */
 export async function ensureArtifactsNamespace(
   cf: Cf,
   artifactsNamespaceName: string,
