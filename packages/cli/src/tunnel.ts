@@ -152,8 +152,7 @@ export class LocalPortRpcTarget extends RpcTarget {
 }
 
 /** The platform's close-code policy (apps/os src/context/websocket-close.ts `relayedCloseCode`),
- *  copied, since this package is published on its own: no code (1005) is 1000; a drop (1006), 1015,
- *  1004 and anything no endpoint may send become 1011. */
+ *  copied, since this package is published on its own. */
 function relayedCloseCode(code: number | undefined): number {
   if (code === undefined || code === 1005) return 1000;
   if ((code >= 1000 && code <= 1003) || (code >= 1007 && code <= 1014)) return code;
