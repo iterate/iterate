@@ -8,6 +8,8 @@ import {
   sessionSigningSecretOf,
 } from "../src/app-config.ts";
 import { verifyClaims } from "../src/caller.ts";
+import type { Env } from "../src/env.ts";
+import { identityResponse } from "../src/identity.ts";
 import { authorizationForToken } from "../src/oauth.ts";
 import { fakeUserIdOf } from "../../dummy-petshop/src/state.ts";
 import type { AccountState } from "../src/account/contract.ts";
@@ -734,6 +736,42 @@ test.for(["signed in as someone else", "signed out"])(
     expect(await controlPlane().identity("github", String(fakeUserIdOf(login)))).toBeNull();
   },
 );
+
+test("login.allowedEmails asks nothing of an added account's own address, and a later sign-in with that account is still asked", async () => {
+  const email = "listed-adder@example.test";
+  const { cookie } = await signedInMember(email);
+  const person = (await controlPlane().getUser(email))!;
+  const listed = { ...env, APP_CONFIG_LOGIN__ALLOWED_EMAILS: email } as Env;
+  const petshop = petshopFakes();
+  const choices = { login: "gh-unlisted", email: "gh-unlisted@signin.test" };
+  /** The browser from the issuer to GitHub's fake and back, on the listed deployment. */
+  const through = async (start: string, session?: string) => {
+    const begin = await identityResponse(
+      new Request(`${ORIGIN}${start}`, { headers: session ? { cookie: session } : {} }),
+      listed,
+    );
+    const flow = begin!.headers.get("set-cookie")!.split(";")[0]!;
+    const authorization = new URL(begin!.headers.get("location")!);
+    for (const [key, value] of Object.entries(choices)) authorization.searchParams.set(key, value);
+    const back = (await petshop.handle(new Request(authorization)))!.headers.get("location")!;
+    return identityResponse(
+      new Request(back, { headers: { cookie: session ? `${session}; ${flow}` : flow } }),
+      listed,
+    );
+  };
+  const added = await through(
+    `/.auth/identity/github?${new URLSearchParams({ link: person.id, next: DASH_SESSIONS })}`,
+    cookie,
+  );
+  expect(added!.headers.get("location")).toBe(DASH_SESSIONS);
+  expect(await controlPlane().identity("github", String(fakeUserIdOf("gh-unlisted")))).toEqual(
+    person,
+  );
+  expect(signInPageOf((await through("/.auth/identity/github?next=%2F"))!)).toEqual({
+    next: "/",
+    error: "That email can't sign in here.",
+  });
+});
 
 test("adding a GitHub account another person signs in with is refused, back on next with why", async () => {
   const { cookie } = await signedInMember("taker@example.test");
