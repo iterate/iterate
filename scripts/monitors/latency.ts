@@ -432,7 +432,7 @@ export function renderPage(input: {
     headline:
       input.page === "red"
         ? `latency over its lines at ${commit}`
-        : `latency back under its lines at ${commit}`,
+        : `latency ${input.metrics.length > 0 ? "back " : ""}under its lines at ${commit}`,
     details: [
       ...lines,
       ...(input.stillRed.length > 0 ? [`still red: ${input.stillRed.join(", ")}`] : []),
