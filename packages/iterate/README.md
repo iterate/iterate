@@ -174,8 +174,8 @@ that prefix belongs to whoever appends it and is opaque to the platform: tests u
 | `test`                                                              | tests only                                                                                                                                                                                                                                                                                                 |
 
 Two types break these rules until one change migrates the Kit firmware and each project's pinned
-`@iterate-com/voice` together: a device and voice.iterate.com must use the names of the voice
-the project installed.
+`@iterate-com/voice` together: a device's firmware, voice.iterate.com and the project's pinned
+voice must all use the same names.
 
 - `voice-agent/spk-frame` will become `voice-agent/speaker-frame`.
 - `voice-agent/conversation-ended` will become `voice-agent/call-ended`. It pairs with `call-started`
