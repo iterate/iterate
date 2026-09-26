@@ -13,8 +13,9 @@
 # (one message per UTC day: latest hour, today's total, hours over the
 # ceiling, per account). A breach in the last two hours or a probe that could
 # not run is a reply in that thread. An account at its page tier (dev/preview
-# $10/hour, prd $12/hour) also gets a new top-level message that @-mentions
-# Jonas and names the top namespaces, at most every 3 hours while it lasts.
+# $10/hour, prd 10 DO-hours/hour ≈ $0.06) also gets a new top-level message
+# that @-mentions Jonas and names the top namespaces, at most every 3 hours
+# while it lasts.
 # The run goes red only when a probe could not run or Slack refused a post: a
 # breach is paged, and a scheduled run reports on main's head commit, where
 # red reads as "this commit broke".
@@ -44,7 +45,7 @@ on:
       threshold-do-hours:
         description: >-
           Override BOTH accounts' active-time ceiling (DO-hours per hour).
-          Empty uses the per-account defaults (dev/preview 500, prd 600).
+          Empty uses the per-account defaults (dev/preview 500, prd 2).
           Set 1 to force an alert and test the Slack hookup.
         type: string
         default: ""

@@ -1,6 +1,7 @@
 import type { WebClient } from "@slack/web-api";
 import { expect, test } from "vitest";
 import {
+  ACCOUNTS,
   type AccountReading,
   postDailyThread,
   postPageUnlessRecent,
@@ -68,7 +69,7 @@ test("the headline is one sentence about $/day; the table and the breach are rep
 
   // Current usage is the last complete hour (04:00 at 05:41): 812 DO-hours × 24 × $0.005625,
   // above 05:00 projected to a full hour (401 × 60/41 = 587). dev/preview had no row for
-  // either hour, so it is $0. $4.57/h is under prd's $12/h page tier.
+  // either hour, so it is $0. $4.57/h is under this reading's $12/h page tier.
   expect(thread).toMatchObject({
     headline:
       "We're spending $110/day on durable objects based on current usage ($0 dev/preview, $110 prd)",
@@ -241,10 +242,66 @@ test.for([
     now: new Date(now),
     runUrl,
     testRun: false,
-    readings: [devPreview(hours)],
+    readings: [reading("dev/preview", hours)],
   });
   expect({
     usdPerDay: thread.headline.match(/spending (\S+)\/day/)?.[1],
+    severity: thread.replies.map((reply) => reply.split("\n")[0]),
+    pagedAccounts: thread.pages.map((page) => page.label),
+  }).toEqual(expected);
+});
+
+// prd's thresholds against its measured hours (ceiling 2 DO-hours ≈ $0.01/h, page tier 10 ≈ $0.06/h):
+// the account total ran p95 1.1 and at most 1.7 over 2026-08-25..09-26, and os-prd's previous
+// platform ~48 an hour (2026-09-15..20).
+test.for([
+  {
+    name: "an hour with one tunnel shard awake: no reply, no page",
+    hours: [
+      { hour: "2026-09-24T19:00:00Z", doHours: 1 },
+      { hour: "2026-09-24T20:00:00Z", doHours: 1 },
+    ],
+    expected: { severity: [], pagedAccounts: [] },
+  },
+  {
+    name: "the busiest hour on record, 1.7 read as 2: no reply, no page",
+    hours: [{ hour: "2026-09-24T19:00:00Z", doHours: 2 }],
+    expected: { severity: [], pagedAccounts: [] },
+  },
+  {
+    name: "three DO-hours: a reply that says how bad, no page",
+    hours: [{ hour: "2026-09-24T19:00:00Z", doHours: 3 }],
+    expected: {
+      severity: ["🚨 Durable Objects hours over 2. account: prd. Now 1.5× the ceiling (~$0.02/h)."],
+      pagedAccounts: [],
+    },
+  },
+  {
+    name: "ten Durable Objects that never go idle page",
+    hours: [{ hour: "2026-09-24T19:00:00Z", doHours: 10 }],
+    expected: {
+      severity: ["🚨 Durable Objects hours over 2. account: prd. Now 5.0× the ceiling (~$0.06/h)."],
+      pagedAccounts: ["prd"],
+    },
+  },
+  {
+    name: "the previous platform's ordinary hour (48) pages",
+    hours: [{ hour: "2026-09-24T19:00:00Z", doHours: 48 }],
+    expected: {
+      severity: [
+        "🚨 Durable Objects hours over 2. account: prd. Now 24.0× the ceiling (~$0.27/h).",
+      ],
+      pagedAccounts: ["prd"],
+    },
+  },
+])("prd tiers: $name", ({ hours, expected }) => {
+  const thread = renderDailyThread({
+    now: new Date("2026-09-24T20:41:00Z"),
+    runUrl,
+    testRun: false,
+    readings: [reading("prd", hours)],
+  });
+  expect({
     severity: thread.replies.map((reply) => reply.split("\n")[0]),
     pagedAccounts: thread.pages.map((page) => page.label),
   }).toEqual(expected);
@@ -269,7 +326,7 @@ test("a page names the rate, the multiple, Jonas and the top spenders; a test ru
   const input = {
     now: new Date("2026-09-21T22:41:00Z"),
     runUrl,
-    readings: [devPreview(hours, topNamespaces)],
+    readings: [reading("dev/preview", hours, topNamespaces)],
   };
 
   // 8,307 DO-hours/hour × $0.005625 = $46.73/h; 5,520 → $31.05/h; 2,311 → $13.00/h; 16 → $0.09/h.
@@ -315,7 +372,7 @@ test.for([
     now,
     runUrl,
     testRun: false,
-    readings: [devPreview([{ hour: "2026-09-04T04:00:00Z", doHours: 3 }])],
+    readings: [reading("dev/preview", [{ hour: "2026-09-04T04:00:00Z", doHours: 3 }])],
   }).details;
   const slack = fakeSlack(
     thread.map((message) => ({ ...message, text: message.text.replace("TABLE", table) })),
@@ -406,7 +463,7 @@ test.for([
       slack: slack.client,
       channel: "C1",
       now: new Date("2026-09-21T21:41:00Z"),
-      readings: [devPreview(hours)],
+      readings: [reading("dev/preview", hours)],
       runUrl,
       testRun: false,
     }),
@@ -444,20 +501,24 @@ test("a probe that could not run fails the run once its reply is posted", async 
   ]);
 });
 
-function devPreview(
+/** An account's reading as the hourly run builds it: the ceiling and page tier are the account's own
+ * in `ACCOUNTS`, and the probe lists the hours over the ceiling. */
+function reading(
+  label: "dev/preview" | "prd",
   hours: Array<{ hour: string; doHours: number }>,
   topNamespaces: Array<{ namespace: string; doHours: number }> = [],
 ): AccountReading {
+  const account = ACCOUNTS.find((candidate) => candidate.label === label)!;
   return {
-    label: "dev/preview",
-    ceilingDoHours: 500,
-    pageUsdPerHour: 10,
+    label,
+    ceilingDoHours: account.maxAccountDoHours,
+    pageUsdPerHour: account.pageUsdPerHour,
     failure: null,
     summary: {
       activeTime: {
-        ceilingDoHours: 500,
+        ceilingDoHours: account.maxAccountDoHours,
         hours,
-        breachedHours: hours.filter((row) => row.doHours > 500),
+        breachedHours: hours.filter((row) => row.doHours > account.maxAccountDoHours),
         topNamespaces,
       },
       pinnedInvocations: { thresholdHours: 1, rows: [] },
