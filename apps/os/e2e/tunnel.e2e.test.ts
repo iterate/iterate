@@ -7,8 +7,6 @@
 //     under paths (a per-PR preview) as under subdomains
 //   • public: HTTP reaches the local server; a WebSocket asking for `vite-hmr` opens with it, echoes
 //   • a context reset (what every deploy does) leaves the WebSocket open, nothing lost
-//   • a real Vite dev server's HMR socket outlives a context reset: an edit after it reaches the page
-//     as an HMR update, and the page's own messages still reach Vite
 //   • Ctrl-C deletes the route: the host is the template's own 404 again
 //   • a tunnel killed outright closes a visitor's WebSocket at once, 1011 "tunnel disconnected",
 //     and its route goes with its lend: the host is the template's own 404 again
@@ -219,9 +217,11 @@ test(
 // What the splice is for (context/fetch-upgrade-splice.ts): a Vite dev server behind a tunnel, whose
 // HMR socket would otherwise close at every deploy and reload the page, losing its state. A real
 // Vite serves the page's module and its HMR socket, and the page's side is Vite's client's
-// handshake: the page's base, the token the served client carries, `vite-hmr`.
+// handshake: the page's base, the token the served client carries, `vite-hmr`. After the reset
+// (what every deploy does) an edit reaches the page as an HMR update, and the page's own messages
+// still reach Vite.
 test(
-  "iterate tunnel: a Vite dev server's HMR socket outlives a context reset (what every deploy does): an edit after it reaches the page as an HMR update, and the page's messages still reach Vite",
+  "iterate tunnel: a Vite dev server's HMR socket outlives a context reset and still delivers HMR updates",
   { timeout: 60_000 },
   async () => {
     await using local = await localViteServer();

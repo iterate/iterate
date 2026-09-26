@@ -299,6 +299,63 @@ test("the other end never comes back (its relay died with the tunnel): the edge'
   });
 });
 
+// An end gives up as soon as its re-dial does (redial.ts), not at the resume deadline: at once on a
+// refusal (an answer under 500 without a socket), and after its eighth try (at 23.75 s) when every
+// answer is the context not ready (a 5xx), before the 30 s deadline. The other end still waits.
+test.for([
+  {
+    name: "a refusal (409) gives up at once",
+    answers: [409],
+    expected: {
+      visitor: {
+        closed: {
+          code: 1011,
+          reason: "the context answered no re-dial (the context answered 409)",
+        },
+      },
+      reports: [
+        {
+          type: "gave-up",
+          side: "eyeball",
+          downMs: 0,
+          dials: 1,
+          why: "the context answered no re-dial (the context answered 409)",
+        },
+      ],
+    },
+  },
+  {
+    name: "only 503s give up at 23.75 s, before the 30 s resume deadline",
+    answers: Array<number>(10).fill(503),
+    expected: {
+      visitor: {
+        closed: {
+          code: 1011,
+          reason: "the context answered no re-dial (the context answered 503)",
+        },
+      },
+      reports: [
+        {
+          type: "gave-up",
+          side: "eyeball",
+          downMs: 23_750,
+          dials: 8,
+          why: "the context answered no re-dial (the context answered 503)",
+        },
+      ],
+    },
+  },
+])("the edge's re-dial answered without a socket: $name", async ({ answers, expected }) => {
+  vi.useFakeTimers();
+  using splice = spliced();
+  splice.connectEyeball();
+  await vi.advanceTimersByTimeAsync(0);
+  splice.context.answering.eyeball = [...answers];
+  splice.context.drop("eyeball");
+  await vi.advanceTimersByTimeAsync(expected.reports[0]!.downMs);
+  expect(splice).toMatchObject(expected);
+});
+
 test("acknowledged frames are forgotten: 20 MiB flows through an end whose cap on unacknowledged bytes is 16 MiB", async () => {
   vi.useFakeTimers();
   using splice = spliced();
@@ -403,6 +460,9 @@ class FakeContext {
 
   /** Dials of a side that fail next (a slow relay's re-dial). */
   readonly failing = { eyeball: 0, leg: 0 };
+  /** The statuses the next dials of a side are answered with, without a socket: a refusal (under
+   *  500) or the context not ready (5xx). */
+  readonly answering: Record<"eyeball" | "leg", number[]> = { eyeball: [], leg: [] };
 
   /** A dial of `side`, answered as the DO's 101 is: the socket, the deploy, and the abort its
    *  incarnation began after (`FETCH_UPGRADE_*_HEADER`). */
@@ -413,6 +473,8 @@ class FakeContext {
       this.failing[side] -= 1;
       throw new Error("the dial failed");
     }
+    const status = this.answering[side].shift();
+    if (status !== undefined) return answer({ status, body: null });
     for (const older of this.#listed.filter((entry) => entry.side === side)) {
       older.replaced = true;
       older.socket.close(1000, "replaced");
@@ -434,8 +496,7 @@ class FakeContext {
     const headers = new Headers({ [FETCH_UPGRADE_DEPLOY_ID_HEADER]: this.deployId });
     if (this.contextAbortedOffset !== null)
       headers.set(FETCH_UPGRADE_CONTEXT_ABORTED_OFFSET_HEADER, String(this.contextAbortedOffset));
-    // the 101's shape as an end reads it: a Response cannot carry a socket the runtime did not make
-    return { status: 101, webSocket: end, headers } as unknown as Response;
+    return answer({ status: 101, webSocket: end, headers });
   }
 
   /** The first dial of `side`, as an end is constructed with it. */
@@ -484,6 +545,17 @@ class FakeContext {
     entry.socket.other.cut();
     this.#closed(entry);
   }
+}
+
+/** The context's answer to a dial, shaped as an end reads it: a Response cannot carry a socket the
+ *  runtime did not make. */
+function answer(fields: {
+  status: number;
+  webSocket?: FakeSocket;
+  headers?: Headers;
+  body?: null;
+}): Response {
+  return fields as unknown as Response;
 }
 
 /** A provider's socket (the relay's local end), the leg end over the fake context, and — once

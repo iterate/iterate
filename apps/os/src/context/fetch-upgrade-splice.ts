@@ -516,10 +516,11 @@ function closeQuietly(socket: SpliceSocket | null, code: number, reason: string)
  *  under traffic (info), and one after a recorded `itx.abort()` is the reset someone asked for (info,
  *  naming its `itx/aborted`); any other healed a platform failure (the prd fault alarm pages on
  *  a burst of `platform-failure` heals). Giving up is the other end gone — a tunnel killed outright,
- *  a laptop asleep — or a platform failure that outlasted the deadline: a warn, with its reason. A
- *  local socket whose far side vanished without a close frame is a visitor or a tunnel gone (info);
- *  on the edge the runtime also fails that invocation, "Network connection lost." (its pump of the
- *  visitor's socket read a dead connection), which the prd fault alarm files under this line's ray. */
+ *  a laptop asleep — or a platform failure that outlasted the deadline or this end's re-dial: a
+ *  warn, with its reason. A local socket whose far side vanished without a close frame is a visitor
+ *  or a tunnel gone (info); on the edge the runtime also fails that invocation, "Network connection
+ *  lost." (its pump of the visitor's socket read a dead connection), which the prd fault alarm files
+ *  under this line's ray. */
 export function reportFetchUpgradeSpliceEvent(event: FetchUpgradeSpliceEvent): void {
   const { type, side, ...fields } = event;
   if (type === "local-gone") {
@@ -538,7 +539,7 @@ export function reportFetchUpgradeSpliceEvent(event: FetchUpgradeSpliceEvent): v
     console.warn({
       event: "fetch-upgrade.resume-gave-up",
       name: `fetch-upgrade-${side}`,
-      message: "a resumable upgrade's other end did not come back: its socket is closed",
+      message: "a resumable upgrade could not be resumed: its socket is closed",
       ...fields,
     });
     return;

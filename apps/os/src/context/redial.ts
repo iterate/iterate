@@ -46,7 +46,8 @@ async function dialOnce<Answer extends DialAnswer>(
   dial: () => Promise<Answer>,
   deadline: number,
 ): Promise<{ socket: WebSocket; answer: Answer } | { failure: string; final: boolean }> {
-  const dialing = dial();
+  // a dial that throws before its promise is a failed try too, not a rejection of the re-dial
+  const dialing = Promise.resolve().then(dial);
   let timer: ReturnType<typeof setTimeout> | undefined;
   let answer: Answer | null;
   try {
