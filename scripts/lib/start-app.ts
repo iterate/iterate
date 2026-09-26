@@ -235,6 +235,8 @@ async function ensureResources(app: StartApp, options: { env?: string }) {
 async function generateRouteTree(app: StartApp, options: { check?: boolean }) {
   const root = path.resolve(fileURLToPath(app.root));
   const routeTreePath = path.resolve(root, "src/routeTree.gen.ts");
+  // an app with a Start entry (src/start.ts) registers its options too
+  const start = existsSync(path.resolve(root, "src/start.ts"));
 
   const config = getConfig(
     {
@@ -252,11 +254,14 @@ async function generateRouteTree(app: StartApp, options: { check?: boolean }) {
       routeTreeFileFooter: [
         [
           'import type { getRouter } from "./router.tsx";',
-          'import type { createStart } from "@tanstack/react-start";',
+          start
+            ? 'import type { startInstance } from "./start.ts";'
+            : 'import type { createStart } from "@tanstack/react-start";',
           'declare module "@tanstack/react-start" {',
           "  interface Register {",
           "    ssr: true;",
           "    router: Awaited<ReturnType<typeof getRouter>>;",
+          ...(start ? ["    config: Awaited<ReturnType<typeof startInstance.getOptions>>;"] : []),
           "  }",
           "}",
         ].join("\n"),

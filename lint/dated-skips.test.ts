@@ -35,11 +35,6 @@ const ALLOWED_UNDATED: AllowedUndated[] = [
   // -- Structural (env-gated): legitimately undated — the gate describes the
   // deployment under test, not a parked bug.
   {
-    file: "specs/os/mini-app.spec.ts",
-    match: "the deployment routes projects by paths or not at all; this spec dials a subdomain",
-    note: "env-gated: a preview routes projects by paths on its workers.dev origin; the mini-app spec dials `<project>.<hostname>`",
-  },
-  {
     file: "specs/os/issuer-pages.spec.ts",
     match: "email-code sign-in is not configured",
     note: "env-gated: runs where the deployment offers email-code sign-in (login.emailCode), which a local worker does not",

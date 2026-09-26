@@ -48,14 +48,14 @@ export const Route = createFileRoute("/_auth/projects/$slug")({
 
 function NotesPage() {
   const data = Route.useLoaderData();
-  const { info } = Route.useRouteContext();
+  const { info, basePath } = Route.useRouteContext();
   const href = useRouterState({ select: (state) => state.location.href });
   return (
     <AppShell
       app="Notes"
       projects={data.projects}
       activeProjectId={data.project.id}
-      projectHref={(item) => `/projects/${item.slug}`}
+      projectHref={(item) => `${basePath}/projects/${item.slug}`}
       header={
         <Breadcrumb>
           <BreadcrumbList>

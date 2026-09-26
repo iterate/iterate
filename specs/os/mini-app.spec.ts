@@ -1,12 +1,13 @@
 // A no-build userspace mini-app (Preact + capnweb from esm.sh, ONE HTML file) served by a project.
 // Proves the "super simple mini-app" path end to end: publish a config worker that routes the `notes`
-// routing slug to the app module in plain code, open its project host, and a note round-trips through the app's OWN capnweb API
+// routing slug to the app module in plain code, open it, and a note round-trips through the app's OWN capnweb API
 // (backed by the project's itx.kv). SWAPPABLE via WORKER_BASE_URL like the other specs; the signed-in
 // person and their project are the signed-in session fixture's, so it works local and deployed.
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { uniqueFixtureSlug } from "@iterate-com/shared/test-support/fixture-slug";
 import { transformSync } from "esbuild";
+import { projectUrlOf } from "iterate/project-ingress";
 import { readOsPlaywrightAuthConfig } from "../test-support/auth-config.ts";
 import { test } from "../test-support/test.ts";
 
@@ -17,14 +18,6 @@ test("a no-build mini-app served by a project persists a note through its own ca
 }) => {
   const origin = new URL(baseURL!).origin;
   const { ingressRouting } = readOsPlaywrightAuthConfig();
-  // The project's host: `<project>.<hostname>` — `localhost` under the local worker (scripts/dev.ts),
-  // the deployment's subdomain routing otherwise (PROJECT_INGRESS_ROUTING, as the e2e suite spells it).
-  const base = ingressRouting?.type === "subdomains" ? ingressRouting.hostname : undefined;
-  test.skip(
-    !base,
-    "the deployment routes projects by paths or not at all; this spec dials a subdomain",
-  );
-  if (!base) return;
 
   // A signed-in person who owns a fresh project (the platform has no dashboard: creating a project
   // is the OS app's or a script's — here the fixture's, over /api with the admin bearer).
@@ -64,10 +57,13 @@ export default class extends WorkerEntrypoint {
     },
   });
 
-  // Open the app on notes--<project>.<base> and prove a note round-trips through /rpc.
-  const appOrigin = new URL(origin);
-  appOrigin.hostname = `notes--${project.slug}.${base}`;
-  await page.goto(appOrigin.origin);
+  // Open the app on its routing slug, in the deployment's own routing (PROJECT_INGRESS_ROUTING, as
+  // the e2e suite spells it): notes--<project>.<hostname> under subdomains — `localhost` under the
+  // local worker (scripts/dev.ts) — and <platform>/projects/<project>/notes/ under paths. Then prove
+  // a note round-trips through /rpc.
+  await page.goto(
+    projectUrlOf(ingressRouting, origin, { project: project.slug, routingSlug: "notes" })!.href,
+  );
   await page.getByRole("heading", { name: "Mini Notes" }).waitFor();
   await page
     .getByTestId("status")
