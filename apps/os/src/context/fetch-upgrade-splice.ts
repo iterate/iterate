@@ -12,9 +12,9 @@
 // visitor's socket, the relay holding the provider's — and they outlive a DO reset (a deploy leaves
 // running invocations on the version they started on). So each end is a `FetchUpgradeSpliceEnd`:
 // it numbers the frames it sends, keeps them until the other end acknowledges them, and when its
-// DO socket drops it dials the DO again under the same upgradeId, says what it has received
-// (`resume`), and sends again what the other end has not. The visitor's and the provider's sockets
-// never see the drop; nothing is lost or delivered twice.
+// DO socket drops it dials the DO again under the same upgradeId (redial.ts), says what it has
+// received (`resume`), and sends again what the other end has not. The visitor's and the
+// provider's sockets never see the drop; nothing is lost or delivered twice.
 //
 // THE WIRE between the two ends (the DO forwards it untouched): every message is binary.
 //   data   [1 text | 2 binary][seq: float64][payload — UTF-8 for text]
@@ -23,31 +23,30 @@
 //   close  [5][code: uint16][reason: UTF-8]
 // `close` is the only orderly end: a DO socket that closes without one is a drop.
 //
-// A LOCAL SOCKET WHOSE FAR SIDE IS GONE is an orderly end too, said at once: the provider's socket
-// on the relay closes without a status when the tunnel's capnweb session ends (a CLI killed
-// outright), so the leg end sends `close` 1001 "tunnel disconnected" and the visitor's socket closes
-// with it — likewise the edge's end for a visitor that vanished. A local socket that closes with a
-// code sends that code. Only a DO socket's drop, whose cause nobody can tell, waits for a resume.
+// A LOCAL SOCKET WHOSE FAR SIDE IS GONE is an end too, said at once: the provider's socket on the
+// relay closes without a status when the tunnel's capnweb session ends (a CLI killed outright), so
+// the leg end sends `close` 1011 "tunnel disconnected" (websocket-close.ts: a drop is 1011) and the
+// visitor's socket closes with it — likewise the edge's end for a visitor that vanished. A local
+// socket that closes with a code sends that code. Only a DO socket's drop, whose cause nobody can
+// tell, waits for a resume.
 //
 // BOUNDED: an end whose other end has not resumed within `FETCH_UPGRADE_RESUME_DEADLINE_MS` of the
-// drop gives up and closes its own socket (1011): the other end is gone without a word (its
-// invocation died). Frames kept for the other end are capped (`FETCH_UPGRADE_UNACKED_MAX_BYTES`);
-// past the cap the end gives up the same way. The edge's invocation dying is beyond any of this:
-// the visitor's connection terminates in it, so the visitor's socket dies with it.
+// drop, or whose re-dial gave up, gives up and closes its own socket (1011): the other end is gone
+// without a word (its invocation died). Frames kept for the other end are capped
+// (`FETCH_UPGRADE_UNACKED_MAX_BYTES`); past the cap the end gives up the same way. The edge's
+// invocation dying is beyond any of this: the visitor's connection terminates in it, so the
+// visitor's socket dies with it.
 
-import { sendableCloseCode, truncateCloseReason } from "./websocket-close.ts";
+import { redial } from "./redial.ts";
+import { DROPPED_CLOSE_CODE, relayedCloseCode, truncateCloseReason } from "./websocket-close.ts";
 
 /** How long an end keeps trying after its DO socket dropped: re-dials, then the other end's
- *  resume. A deploy's reset answers again within seconds (the rpc-stub pager's re-dial: 0.2–4 s
- *  on prd 2026-09-24). */
+ *  resume. */
 export const FETCH_UPGRADE_RESUME_DEADLINE_MS = 30_000;
 /** How long after a re-dial found a new deploy a further reset still counts as that deploy's: the
  *  runtime resets a context again after a deploy's first reset — 5 s, 14 s, 40 s and 90 s later on
  *  prd 2026-09-24 (the new version reaching the context's other callers). */
 const DEPLOY_SETTLE_MS = 180_000;
-/** The re-dials after a drop, their delays from the drop: the first at once. The deadline, counted
- *  from the first drop the other end has not resumed since, bounds them all. */
-const REDIAL_DELAYS_MS = [0, 1_000, 2_000, 4_000, 8_000];
 /** Bytes of sent frames an end keeps for the other end until acknowledged. */
 export const FETCH_UPGRADE_UNACKED_MAX_BYTES = 16 * 1024 * 1024;
 /** An end acknowledges after this many frames received, or this many bytes, whichever comes first. */
@@ -55,6 +54,19 @@ const ACK_EVERY_FRAMES = 32;
 const ACK_EVERY_BYTES = 256 * 1024;
 
 const KIND = { text: 1, binary: 2, resume: 3, ack: 4, close: 5 } as const;
+
+/** On a dialed upgrade socket's 101 (a leg, a re-dialed eyeball): the deploy that answered it, so a
+ *  re-dialing end can tell a deploy's reset from a platform failure. */
+export const FETCH_UPGRADE_DEPLOY_ID_HEADER = "x-itx-deploy-id";
+/** On every upgrade socket's 101 from a context whose incarnation began with the reset a recorded
+ *  `itx.abort()` asked for: that `itx/aborted` event's offset, so a re-dialing end can tell the
+ *  deliberate reset from a platform failure. Absent otherwise. */
+export const FETCH_UPGRADE_CONTEXT_ABORTED_OFFSET_HEADER = "x-itx-context-aborted-offset";
+/** The `itx/aborted` offset a DO's 101 names (`FETCH_UPGRADE_CONTEXT_ABORTED_OFFSET_HEADER`). */
+export function contextAbortedOffsetOf(response: Pick<Response, "headers">): number | null {
+  const offset = response.headers.get(FETCH_UPGRADE_CONTEXT_ABORTED_OFFSET_HEADER);
+  return offset ? Number(offset) : null;
+}
 
 /** The socket an end holds — the runtime's WebSocket, and capnweb's tunneled one on the relay. */
 export type SpliceSocket = {
@@ -99,21 +111,13 @@ export type FetchUpgradeSpliceEvent =
 
 type FetchUpgradeSide = "eyeball" | "leg";
 
-/** A re-dial's answer: the DO socket, open, the deploy that answered it, and the `itx/aborted`
- *  event whose reset began the incarnation that answered it (null: none did). */
-type Redialed = {
-  socket: SpliceSocket;
-  deployId: string | null;
-  contextAbortedOffset: number | null;
-};
-
 /** One end of a spliced upgrade (the file header). */
 export class FetchUpgradeSpliceEnd {
   readonly #side: FetchUpgradeSide;
   readonly #upgradeId: string;
   readonly #local: SpliceSocket;
-  readonly #localGoneClose: { code: number; reason: string };
-  readonly #redial: () => Promise<Redialed | null>;
+  readonly #localGoneReason: string;
+  readonly #dial: () => Promise<Response>;
   readonly #report: (event: FetchUpgradeSpliceEvent) => void;
 
   /** The DO socket in service, null while re-dialing. */
@@ -146,22 +150,23 @@ export class FetchUpgradeSpliceEnd {
     /** The socket this end serves: the visitor's (the edge) or the provider's (the relay). Frames
      *  on it are the application's, untouched. */
     local: SpliceSocket;
-    /** What this end says when the local socket's far side is gone — it closed without a status
-     *  (1005 none, 1006 abnormal) or failed — rather than closed: the leg's "tunnel disconnected". */
-    localGoneClose: { code: number; reason: string };
+    /** The reason this end gives when the local socket's far side is gone — it closed without a
+     *  status (1005 none, 1006 abnormal) or failed — rather than closed: the leg's "tunnel
+     *  disconnected". */
+    localGoneReason: string;
     /** The first DO socket, the deploy it was answered on, and the abort its incarnation began after. */
     socket: SpliceSocket;
     deployId: string | null;
     contextAbortedOffset: number | null;
-    /** Dial the DO for this side again: an open socket, or null when it answered no socket. */
-    redial: () => Promise<Redialed | null>;
+    /** One dial of this side's DO socket again (redial.ts tries it until the DO answers). */
+    dial: () => Promise<Response>;
     report: (event: FetchUpgradeSpliceEvent) => void;
   }) {
     this.#side = input.side;
     this.#upgradeId = input.upgradeId;
     this.#local = input.local;
-    this.#localGoneClose = input.localGoneClose;
-    this.#redial = input.redial;
+    this.#localGoneReason = input.localGoneReason;
+    this.#dial = input.dial;
     this.#report = input.report;
     this.#deployId = input.deployId;
     this.#contextAbortedOffset = input.contextAbortedOffset;
@@ -231,22 +236,22 @@ export class FetchUpgradeSpliceEnd {
     const reasonBytes = new TextEncoder().encode(truncateCloseReason(reason || ""));
     const frame = new Uint8Array(3 + reasonBytes.byteLength);
     frame[0] = KIND.close;
-    new DataView(frame.buffer).setUint16(1, sendableCloseCode(code));
+    new DataView(frame.buffer).setUint16(1, relayedCloseCode(code));
     frame.set(reasonBytes, 3);
     this.#closeFrame = frame.buffer;
     if (this.#downSince === null) this.#sendClose();
   }
 
   /** The local socket's far side is gone without a close frame (a visitor's network vanished, a
-   *  tunnel's session ended): reported, said to the other end as `localGoneClose`, and the local
-   *  socket closed too — left open, the runtime's pump of the visitor's socket waits on it for good
-   *  and fails the edge's invocation as "hung". An error after the socket's own close is not one. */
+   *  tunnel's session ended): a drop, reported, said to the other end with `localGoneReason`, and
+   *  the local socket closed too — left open, the runtime's pump of the visitor's socket waits on it
+   *  for good and fails the edge's invocation as "hung". An error after the socket's own close is
+   *  not one. */
   #localGone(code: number | undefined): void {
     if (this.#ended || this.#closeFrame) return;
-    const { code: goneCode, reason: goneReason } = this.#localGoneClose;
     this.#report({ type: "local-gone", side: this.#side, upgradeId: this.#upgradeId, code });
-    this.#endLocally(goneCode, goneReason);
-    closeQuietly(this.#local, goneCode, goneReason);
+    this.#endLocally(DROPPED_CLOSE_CODE, this.#localGoneReason);
+    closeQuietly(this.#local, DROPPED_CLOSE_CODE, this.#localGoneReason);
   }
 
   /** The local socket's close, owed to the other end until the splice is whole (`#endLocally`). */
@@ -328,7 +333,7 @@ export class FetchUpgradeSpliceEnd {
       const reason = new TextDecoder().decode(bytes.subarray(3));
       this.#ended = true;
       this.#clearDeadline();
-      closeQuietly(this.#local, sendableCloseCode(code), reason);
+      closeQuietly(this.#local, relayedCloseCode(code), reason);
       closeQuietly(this.#socket, 1000, "closed");
       this.#socket = null;
     }
@@ -397,38 +402,29 @@ export class FetchUpgradeSpliceEnd {
       this.#downSince = Date.now();
       this.#armDeadline();
     }
-    const droppedAt = Date.now();
-    for (const delayMs of REDIAL_DELAYS_MS) {
-      const wait = droppedAt + delayMs - Date.now();
-      if (wait > 0) await new Promise<void>((resolve) => setTimeout(resolve, wait));
-      if (this.#ended || this.#socket) return;
-      this.#dials += 1;
-      let dialed: Redialed | null;
-      try {
-        dialed = await this.#redial();
-      } catch {
-        continue; // the DO did not answer (a reset in progress): the next try
-      }
-      if (!dialed) continue;
-      if (this.#ended) {
-        closeQuietly(dialed.socket, 1000, "closed");
-        return;
-      }
-      if (dialed.deployId !== this.#deployId) {
-        this.#deployReset = true;
-        this.#deployChangedAt = Date.now();
-      }
-      this.#deployId = dialed.deployId;
-      if (
-        dialed.contextAbortedOffset !== null &&
-        dialed.contextAbortedOffset !== this.#contextAbortedOffset
-      )
-        this.#contextAbortReset = dialed.contextAbortedOffset;
-      this.#contextAbortedOffset = dialed.contextAbortedOffset;
-      this.#attach(dialed.socket);
+    const redialed = await redial(
+      () => {
+        this.#dials += 1;
+        return this.#dial();
+      },
+      () => this.#ended,
+    );
+    if (!redialed) return;
+    if ("gaveUp" in redialed) {
+      this.#giveUp(`the context answered no re-dial (${redialed.gaveUp})`);
       return;
     }
-    // every try failed; the deadline ends it
+    const deployId = redialed.answer.headers.get(FETCH_UPGRADE_DEPLOY_ID_HEADER);
+    const contextAbortedOffset = contextAbortedOffsetOf(redialed.answer);
+    if (deployId !== this.#deployId) {
+      this.#deployReset = true;
+      this.#deployChangedAt = Date.now();
+    }
+    this.#deployId = deployId;
+    if (contextAbortedOffset !== null && contextAbortedOffset !== this.#contextAbortedOffset)
+      this.#contextAbortReset = contextAbortedOffset;
+    this.#contextAbortedOffset = contextAbortedOffset;
+    this.#attach(redialed.socket);
   }
 
   #armDeadline(): void {
@@ -463,8 +459,8 @@ export class FetchUpgradeSpliceEnd {
       dials: this.#dials,
       why,
     });
-    closeQuietly(this.#local, 1011, truncateCloseReason(why));
-    closeQuietly(this.#socket, 1011, "gave up");
+    closeQuietly(this.#local, DROPPED_CLOSE_CODE, truncateCloseReason(why));
+    closeQuietly(this.#socket, DROPPED_CLOSE_CODE, "gave up");
     this.#socket = null;
   }
 }

@@ -6,6 +6,9 @@
 
 import { expect, test, vi } from "vitest";
 import {
+  contextAbortedOffsetOf,
+  FETCH_UPGRADE_CONTEXT_ABORTED_OFFSET_HEADER,
+  FETCH_UPGRADE_DEPLOY_ID_HEADER,
   FETCH_UPGRADE_RESUME_DEADLINE_MS,
   FETCH_UPGRADE_UNACKED_MAX_BYTES,
   FetchUpgradeSpliceEnd,
@@ -48,11 +51,11 @@ test("a deploy resets the context mid-stream: both ends re-dial, what was in fli
   await vi.advanceTimersByTimeAsync(0);
   expect(splice.provider).toMatchObject({ received: ["v1", "v2", "v3", "v4"], closed: null });
   expect(splice.visitor).toMatchObject({ received: ["p1", "p2", "p3"], closed: null });
-  // dials at 0 s and 1 s met the reset; the one at 2 s was answered on the new deploy
+  // dials at 0, 0.25 and 0.75 s met the reset; the one at 1.75 s was answered on the new deploy
   expect(splice).toMatchObject({
     reports: [
-      { type: "resumed", deployReset: true, dials: 3, resent: 2 },
-      { type: "resumed", deployReset: true, dials: 3, resent: 2 },
+      { type: "resumed", deployReset: true, dials: 4, resent: 2 },
+      { type: "resumed", deployReset: true, dials: 4, resent: 2 },
     ],
   });
 });
@@ -120,14 +123,15 @@ test("an orderly close on either socket closes the other with its code and reaso
 // A tunnel killed outright (`kill -9` on the CLI) ends its capnweb session, and the provider's socket
 // on the relay closes without a status (capnweb's tunneled socket, on the session's end) or fails;
 // a visitor's network vanishing does the same to the visitor's socket on the edge. The end knows its
-// side is gone: it says so (`local-gone`, logged at info), the other side's socket closes at once,
-// not at the deadline, and its own socket is closed too (the runtime waits on it otherwise).
+// side is gone: it says so (`local-gone`, logged at info), the other side's socket closes at once
+// with 1011, a drop's code (websocket-close.ts), not at the deadline, and its own socket is closed
+// too (the runtime waits on it otherwise).
 test.for([
   {
     gone: "the provider's socket closes without a status (1006)",
     end: (splice: ReturnType<typeof spliced>) => splice.provider.other.cut(),
     expected: {
-      visitor: { closed: { code: 1001, reason: "tunnel disconnected" } },
+      visitor: { closed: { code: 1011, reason: "tunnel disconnected" } },
       reports: [{ type: "local-gone", side: "leg", upgradeId: "upgrade-1", code: 1006 }],
     },
   },
@@ -135,8 +139,8 @@ test.for([
     gone: "the provider's socket fails",
     end: (splice: ReturnType<typeof spliced>) => splice.provider.other.emit("error", {}),
     expected: {
-      visitor: { closed: { code: 1001, reason: "tunnel disconnected" } },
-      provider: { other: { closed: { code: 1001, reason: "tunnel disconnected" } } },
+      visitor: { closed: { code: 1011, reason: "tunnel disconnected" } },
+      provider: { other: { closed: { code: 1011, reason: "tunnel disconnected" } } },
       reports: [{ type: "local-gone", side: "leg", upgradeId: "upgrade-1", code: undefined }],
     },
   },
@@ -144,8 +148,8 @@ test.for([
     gone: "the visitor's socket fails",
     end: (splice: ReturnType<typeof spliced>) => splice.visitor.other.emit("error", {}),
     expected: {
-      provider: { closed: { code: 1001, reason: "visitor disconnected" } },
-      visitor: { other: { closed: { code: 1001, reason: "visitor disconnected" } } },
+      provider: { closed: { code: 1011, reason: "visitor disconnected" } },
+      visitor: { other: { closed: { code: 1011, reason: "visitor disconnected" } } },
       reports: [{ type: "local-gone", side: "eyeball", upgradeId: "upgrade-1", code: undefined }],
     },
   },
@@ -259,7 +263,7 @@ test("the platform cuts every socket, and a stale close reaches the context afte
   vi.useFakeTimers();
   using splice = spliced();
   splice.connectEyeball();
-  splice.context.failing.leg = 1; // the relay's first re-dial fails: its next is 1 s later
+  splice.context.failing.leg = 1; // the relay's first re-dial fails: its next is 250 ms later
   splice.context.cutAll(5);
   splice.visitor.send("v1");
   splice.provider.send("p1");
@@ -334,6 +338,7 @@ class FakeSocket {
   readonly received: unknown[] = [];
   closed: { code: number; reason: string } | null = null;
   readonly #listeners = new Map<string, Listener[]>();
+  accept(): void {}
   addEventListener(type: string, listener: Listener): void {
     this.#listeners.set(type, [...(this.#listeners.get(type) ?? []), listener]);
   }
@@ -399,11 +404,9 @@ class FakeContext {
   /** Dials of a side that fail next (a slow relay's re-dial). */
   readonly failing = { eyeball: 0, leg: 0 };
 
-  dial(side: "eyeball" | "leg"): {
-    socket: FakeSocket;
-    deployId: string;
-    contextAbortedOffset: number | null;
-  } | null {
+  /** A dial of `side`, answered as the DO's 101 is: the socket, the deploy, and the abort its
+   *  incarnation began after (`FETCH_UPGRADE_*_HEADER`). */
+  dial(side: "eyeball" | "leg"): Response {
     this.dials += 1;
     if (Date.now() < this.#downUntil) throw new Error("the context is resetting");
     if (this.failing[side] > 0) {
@@ -428,10 +431,20 @@ class FakeContext {
         peer.socket.send((event as MessageEvent).data as ArrayBuffer);
     });
     held.addEventListener("close", () => this.#closed(entry));
+    const headers = new Headers({ [FETCH_UPGRADE_DEPLOY_ID_HEADER]: this.deployId });
+    if (this.contextAbortedOffset !== null)
+      headers.set(FETCH_UPGRADE_CONTEXT_ABORTED_OFFSET_HEADER, String(this.contextAbortedOffset));
+    // the 101's shape as an end reads it: a Response cannot carry a socket the runtime did not make
+    return { status: 101, webSocket: end, headers } as unknown as Response;
+  }
+
+  /** The first dial of `side`, as an end is constructed with it. */
+  connect(side: "eyeball" | "leg") {
+    const answer = this.dial(side);
     return {
-      socket: end,
-      deployId: this.deployId,
-      contextAbortedOffset: this.contextAbortedOffset,
+      socket: answer.webSocket as unknown as FakeSocket,
+      deployId: answer.headers.get(FETCH_UPGRADE_DEPLOY_ID_HEADER),
+      contextAbortedOffset: contextAbortedOffsetOf(answer),
     };
   }
 
@@ -485,9 +498,9 @@ function spliced() {
     side: "leg",
     upgradeId,
     local: providerLocal,
-    localGoneClose: { code: 1001, reason: "tunnel disconnected" },
-    ...context.dial("leg")!,
-    redial: dial("leg"),
+    localGoneReason: "tunnel disconnected",
+    ...context.connect("leg"),
+    dial: dial("leg"),
     report: (event) => reports.push(event),
   });
   const [visitor, visitorLocal] = socketPair();
@@ -501,9 +514,9 @@ function spliced() {
         side: "eyeball",
         upgradeId,
         local: visitorLocal,
-        localGoneClose: { code: 1001, reason: "visitor disconnected" },
-        ...context.dial("eyeball")!,
-        redial: dial("eyeball"),
+        localGoneReason: "visitor disconnected",
+        ...context.connect("eyeball"),
+        dial: dial("eyeball"),
         report: (event) => reports.push(event),
       });
     },
