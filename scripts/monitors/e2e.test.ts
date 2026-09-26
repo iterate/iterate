@@ -114,7 +114,7 @@ test("a test page shows the suite's verdict whatever the channel was told", () =
 });
 
 // The rows tagged `slow` of main's E2E tests job, from its suite summary.
-test.for<{ label: string; tests: SummaryTest[]; verdict: unknown }>([
+test.for<{ label: string; tests: SummaryTest[]; status?: "incomplete"; verdict: unknown }>([
   {
     label: "every slow row passed, the rest of the run skipped or failed",
     tests: [
@@ -138,6 +138,12 @@ test.for<{ label: string; tests: SummaryTest[]; verdict: unknown }>([
     verdict: { broken: "no row tagged slow" },
   },
   {
+    label: "an incomplete run, a cancelled job's, which cannot say which rows never ran",
+    tests: [{ name: "the careless facet", tags: ["slow"] }],
+    status: "incomplete",
+    verdict: { broken: "an incomplete run: CI run cancelled" },
+  },
+  {
     label: "a slow row not run",
     tests: [
       { name: "the careless facet", tags: ["slow"] },
@@ -145,8 +151,8 @@ test.for<{ label: string; tests: SummaryTest[]; verdict: unknown }>([
     ],
     verdict: { broken: "1 row(s) tagged slow did not run: the chatty facet" },
   },
-])("tagged slow: $label", ({ tests, verdict }) => {
-  expect(suiteVerdict(summaryRows(summary(tests)), { tag: "slow" })).toEqual(verdict);
+])("tagged slow: $label", ({ tests, status, verdict }) => {
+  expect(suiteVerdict(summaryRows(summary(tests, status)), { tag: "slow" })).toEqual(verdict);
 });
 
 test("a job that wrote no suite summary proves nothing", () => {
@@ -293,6 +299,20 @@ test("slow rows the run proves nothing about fail the health run and page nothin
   });
 });
 
+test("an E2E tests job that ran and kept no suite summary is a broken probe, judged once", async () => {
+  const withoutRecords = mainRun("norecords", "2026-09-26T20:00:00Z", {});
+  withoutRecords.artifacts = Object.fromEntries(
+    Object.entries(withoutRecords.artifacts).filter(([name]) => !name.includes("preview-e2e")),
+  );
+  const depot = fakeDepot({ "Main OS e2e": [withoutRecords] });
+  const judged = await checkMainE2e({ depot, memory: empty, testRun: false, subject });
+  expect(judged).toMatchObject({
+    pages: [],
+    failures: ["slow e2e rows: broken probe: no suite summary"],
+    memory: { judgedAt: { "Main OS e2e": "2026-09-26T20:00:00Z" } },
+  });
+});
+
 test("real-model e2e is the newest scheduled or push run's REAL: rows, from its telemetry", async () => {
   const run = (id: string, createdAt: string, rows: TelemetryTest[], trigger = "schedule") => ({
     workflowId: `wf-${id}`,
@@ -354,11 +374,11 @@ type SummaryTest = {
 };
 
 /** A suite summary as the finalizer writes it (packages/shared/src/test-support/flake-suite-summary.ts). */
-function summary(tests: SummaryTest[]) {
+function summary(tests: SummaryTest[], status: "complete" | "incomplete" = "complete") {
   return {
     headSha: "abc",
     branch: "main",
-    status: "complete" as const,
+    status,
     startedAt: "2026-09-26T20:00:00.000Z",
     finishedAt: "2026-09-26T20:05:00.000Z",
     testCount: tests.length,
@@ -372,7 +392,7 @@ function summary(tests: SummaryTest[]) {
     })),
     unknownFlakeCount: 0,
     failedCount: tests.filter((test) => test.failed).length,
-    diagnostics: [],
+    diagnostics: status === "incomplete" ? ["CI run cancelled"] : [],
     runUrl: "https://depot.dev/run",
   };
 }

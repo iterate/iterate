@@ -101,12 +101,14 @@ export function suiteVerdict(
   return { verdict: failingRows.length > 0 ? "red" : "green", failingRows };
 }
 
-/** A suite summary's rows (the e2e jobs'), or why it proves nothing. A row its runner never
- *  finished is a skip there, so it did not run. Pure. */
+/** A suite summary's rows (the e2e jobs'), or why it proves nothing: none, or an incomplete one,
+ *  whose rows cannot say which rows never ran (a cancelled job's, a runner cut short). Pure. */
 export function summaryRows(
   summary: z.infer<typeof FlakeSuiteSummary> | undefined,
 ): Row[] | { broken: string } {
   if (!summary) return { broken: "no suite summary" };
+  if (summary.status === "incomplete")
+    return { broken: `an incomplete run: ${summary.diagnostics[0] || "no diagnostic"}` };
   return summary.tests.map((test) => ({
     name: test.name,
     tags: test.tags || [],
@@ -234,12 +236,14 @@ export async function checkMainE2e(input: {
   );
   // A workflow Depot failed before any job ran has no job to name.
   const verdict: Verdict | undefined = mainJobs.length === 0 ? "red" : mainE2eVerdict(results);
+  // A job that ran (an attempt) and left no summary proves nothing; one its deploy's failure
+  // skipped (no attempt) judges nothing.
   const summary = async (jobKey: string, suite: string) => {
     const newest = jobs
       .find((job) => job.jobKey === jobKey)
       ?.attempts.toSorted((a, b) => a.attempt - b.attempt)
       .at(-1);
-    if (!newest) return undefined;
+    if (!newest) return { ran: false as const };
     const bytes = (
       await workflowArtifact(
         input.depot,
@@ -247,14 +251,19 @@ export async function checkMainE2e(input: {
         (name) => name === `flake-records-${suite}-attempt-${newest.attemptId}`,
       )
     )?.["suite-summary.json"];
-    return bytes && FlakeSuiteSummary.parse(JSON.parse(new TextDecoder().decode(bytes)));
+    return {
+      ran: true as const,
+      summary: bytes && FlakeSuiteSummary.parse(JSON.parse(new TextDecoder().decode(bytes))),
+    };
   };
   const e2e = await summary("main-os-e2e.yml:e2e", "preview-e2e");
   const specs = await summary("main-os-e2e.yml:specs", "specs");
-  const failingRows = [e2e, specs].flatMap(
-    (ran) => ran?.tests.filter((test) => test.failed).map((test) => test.name) ?? [],
+  const failingRows = [e2e, specs].flatMap((job) =>
+    job.ran && job.summary
+      ? job.summary.tests.filter((test) => test.failed).map((test) => test.name)
+      : [],
   );
-  const slow = e2e ? suiteVerdict(summaryRows(e2e), { tag: "slow" }) : undefined;
+  const slow = e2e.ran ? suiteVerdict(summaryRows(e2e.summary), { tag: "slow" }) : undefined;
   console.log(JSON.stringify({ run: run.workflowId, results, verdict, failingRows, slow }));
   const commit = { sha: run.sha, subject: await input.subject(run.sha) };
   const pages = [
