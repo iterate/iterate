@@ -1296,6 +1296,7 @@ test("the app wall on a row walls the source producer in its target too", () => 
         },
       },
       "/agents/a",
+      "/agents/a",
     );
   expect(row("itx.builtins.cd('/').kv.get('src')")).toThrow(/not a loaded worker's word/);
   expect(row("itx.kv.get('src')")).not.toThrow();
