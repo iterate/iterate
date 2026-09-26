@@ -11,7 +11,7 @@ import { unitTestWorkspaces } from "./test-telemetry-completeness.ts";
 import { finalizeTestTelemetry, unitRowBudget } from "./upload-test-telemetry.ts";
 
 const artifact: TestTelemetryArtifact = {
-  artifactSchemaVersion: 2,
+  artifactSchemaVersion: 3,
   artifactId: "preview:123:1",
   producer: "test-fixture",
   createdAt: "2026-07-21T10:00:12.000Z",
@@ -25,9 +25,7 @@ const artifact: TestTelemetryArtifact = {
     workflowRunAttempt: "1",
     workflowRunUrl: "https://example.test/runs/123",
     jobName: "preview",
-    runnerProvider: "depot",
     depotJobUrl: "https://depot.test/jobs/1",
-    executionContext: "ci",
   },
   context: { framework: "playwright", testKind: "e2e", suite: "preview" },
   run: {
@@ -35,79 +33,20 @@ const artifact: TestTelemetryArtifact = {
     startedAt: "2026-07-21T10:00:00.000Z",
     finishedAt: "2026-07-21T10:00:12.000Z",
     durationMs: 12_000,
+    collectionErrors: [],
   },
-  runners: [
-    {
-      context: { framework: "playwright", testKind: "e2e", suite: "preview", app: "os" },
-      status: "passed",
-      durationMs: 12_000,
-      exitCode: 0,
-      testCount: 1,
-      retryCount: 1,
-      collectionErrors: [],
-    },
-  ],
   tests: [
     {
       fullName: "feed resumes",
       moduleId: "specs/resume.spec.ts",
       tags: ["@recovery"],
-      annotations: [{ type: "slow", description: "real liveness timeout" }],
-      context: { framework: "playwright", suite: "playwright", app: "os", testProject: "os" },
       retryCount: 1,
       passedAfterRetry: true,
       state: "passed",
       durationMs: 10_000,
-      attemptDetail: "complete",
       startedAt: "2026-07-21T10:00:01.000Z",
-      startedAtSource: "runner",
-      attempts: [
-        {
-          attemptIndex: 0,
-          state: "failed",
-          durationMs: 7_000,
-          startedAt: "2026-07-21T10:00:01.000Z",
-          startedAtSource: "runner",
-          error: { message: "socket stalled" },
-          phases: [
-            {
-              name: "probe eviction",
-              category: "test.step",
-              durationMs: 5_000,
-              startedAt: "2026-07-21T10:00:01.000Z",
-            },
-          ],
-        },
-        {
-          attemptIndex: 1,
-          state: "passed",
-          durationMs: 3_000,
-          startedAt: "2026-07-21T10:00:09.000Z",
-          startedAtSource: "runner",
-          phases: [],
-        },
-      ],
-      phases: [],
       errors: [{ message: "socket stalled" }],
       firstFailure: "socket stalled",
-    },
-  ],
-  modules: [
-    {
-      moduleId: "specs/resume.spec.ts",
-      environmentSetupDurationMs: 0,
-      prepareDurationMs: 0,
-      collectDurationMs: 0,
-      setupDurationMs: 0,
-      testAndHookDurationMs: 10_000,
-      importDurationMs: 900,
-      imports: [
-        {
-          moduleId: "specs/test-support/session.ts",
-          selfDurationMs: 900,
-          totalDurationMs: 1_200,
-        },
-      ],
     },
   ],
 };
@@ -224,9 +163,7 @@ test("fails on a runner's unreplaced sentinel after retaining it", async () => {
           message: "reporter did not write its completed telemetry artifact",
         },
       },
-      runners: [{ ...artifact.runners[0]!, status: "failed", collectionErrors: [] }],
       tests: [],
-      modules: [],
     },
     { TEST_TELEMETRY_ARTIFACT_DIR: join(root.path, "raw") },
   );
@@ -244,16 +181,10 @@ test("a runner that finished with an error is failure evidence, not incomplete e
       ...artifact,
       run: {
         ...artifact.run,
-        status: "failed",
+        status: "timedout",
         error: { name: "Error", message: "worker stopped responding" },
+        collectionErrors: ["worker stopped responding"],
       },
-      runners: [
-        {
-          ...artifact.runners[0]!,
-          status: "timedout",
-          collectionErrors: ["worker stopped responding"],
-        },
-      ],
     },
     { TEST_TELEMETRY_ARTIFACT_DIR: join(root.path, "raw") },
   );

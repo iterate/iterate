@@ -161,9 +161,8 @@ artifact API can return 404 for that URL.
 ### Artifacts per job attempt
 
 The Test job and the preview and main test jobs name every evidence artifact
-after the job attempt that uploaded it: `unit-test-telemetry-attempt-<id>`,
-`flake-records-<suite>-attempt-<id>`, `preview-os-test-artifacts-attempt-<id>`
-and so on. The job's first step reads `<id>` from `DEPOT_JOB_URL`
+after the job attempt that uploaded it: `flake-records-<suite>-attempt-<id>`
+and `<unit|preview-os|main-os>-test-artifacts-attempt-<id>`. The job's first step reads `<id>` from `DEPOT_JOB_URL`
 (`…?job=<job>&attempt=<id>`), and `depot ci artifacts list` shows the same id
 as each artifact's `attempt_id`. A retried job therefore keeps the failed
 attempt's telemetry, flake records and Playwright traces beside the retry's.
@@ -974,5 +973,5 @@ into the job log, and upload two artifacts even when the suite fails:
 Fetch either with `depot ci artifacts` as shown above, unzip, and open it with
 `pnpm exec playwright show-report <dir>` or
 `pnpm exec playwright show-trace <trace.zip>`. The Test workflow uploads
-`unit-test-telemetry-attempt-<id>` and `flake-records-unit-attempt-<id>`; its
-[test evidence](test-evidence.md) manifest goes only to R2.
+`unit-test-artifacts-attempt-<id>` and `flake-records-unit-attempt-<id>` the
+same way.

@@ -283,9 +283,9 @@ jobs:
         if: always() && steps.suite.outcome != 'skipped'
         run: pnpm tsx scripts/ci/upload-test-telemetry.ts --flake-suites "$FLAKE_SUITE" ${{ cancelled() && '--cancelled' || '' }}
       # THE TEST EVIDENCE FOLDER (docs/test-evidence.md): test-results/ holds everything this job
-      # attempt's tests left, and target.json the deployment they ran against. This adds one row per
-      # test (tables/tests.parquet), then manifest.json: the run's result (from the suite's step and
-      # the finalizer's check), the tested commit and tree, the job attempt and every file's sha256.
+      # attempt's tests left, and target.json the deployment they ran against. This adds
+      # manifest.json: the run's result (from the suite's step and the finalizer's check), the
+      # tested commit and tree, the job attempt and every file's sha256.
       # Neither this nor the upload decides the job; the tests did.
       # After the suite started only: a job whose guard found no preview has no folder.
       - name: Write the test evidence manifest
@@ -301,8 +301,8 @@ jobs:
       - fail-fast: false
         parallel:
           # With the Cloudflare API token preview deploys use (Doppler _shared/preview), as S3 keys.
-          # A cancelled or timed-out job's folder too: its manifest says so, and it gets no tables/
-          # copy. A failure is a warning and a line of the job's summary, never the job's result.
+          # A cancelled or timed-out job's folder too: its manifest says so. A failure is a warning
+          # and a line of the job's summary, never the job's result.
           - name: Upload the test evidence to R2
             id: evidence-upload
             if: ${{ always() && hashFiles('test-results/manifest.json') != '' }}
@@ -319,14 +319,6 @@ jobs:
               name: flake-records-${{ env.FLAKE_SUITE }}-attempt-${{ steps.attempt.outputs.id }}
               path: test-results/flake-records/${{ env.FLAKE_SUITE }}
               if-no-files-found: ignore
-          - name: Upload test telemetry artifacts
-            if: always() && steps.suite.outcome != 'skipped'
-            uses: actions/upload-artifact@v4
-            with:
-              name: preview-test-telemetry-attempt-${{ steps.attempt.outputs.id }}
-              path: test-results/ci-telemetry
-              include-hidden-files: true
-              if-no-files-found: error
           # EVERYTHING THE RUN WROTE under test-results/, whatever the suite's outcome
           # (docs/depot-ci.md#browser-reports-from-artifacts): the telemetry, and for the specs each
           # failed spec's trace.zip, screenshot and error-context.md under playwright-output/ and

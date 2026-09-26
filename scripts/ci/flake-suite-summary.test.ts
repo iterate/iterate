@@ -209,7 +209,7 @@ test.for([
 
 function browserResult() {
   return TestTelemetryArtifact.parse({
-    artifactSchemaVersion: 2,
+    artifactSchemaVersion: 3,
     artifactId: "playwright-1",
     producer: "playwright-telemetry-reporter",
     createdAt: "2026-09-15T12:01:00.000Z",
@@ -219,8 +219,6 @@ function browserResult() {
       branch: "main",
       workflowRunId: "1",
       workflowRunAttempt: "1",
-      runnerProvider: "depot",
-      executionContext: "ci",
       depotJobUrl: "https://depot.dev/runs/1",
     },
     context: {
@@ -234,6 +232,7 @@ function browserResult() {
       startedAt: "2026-09-15T12:00:00.000Z",
       finishedAt: "2026-09-15T12:01:00.000Z",
       durationMs: 60_000,
+      collectionErrors: [],
     },
     tests: [
       {
@@ -243,17 +242,11 @@ function browserResult() {
         state: "passed",
         outcome: "expected",
         tags: [],
-        annotations: [],
         retryCount: 0,
         passedAfterRetry: false,
         durationMs: 20,
-        attemptDetail: "complete",
-        attempts: [],
-        phases: [],
         errors: [],
       },
     ],
-    modules: [],
-    runners: [],
   });
 }

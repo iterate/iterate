@@ -5,7 +5,6 @@ import type {
   Suite,
   TestCase,
   TestError,
-  TestStep,
 } from "@playwright/test/reporter";
 import {
   appendFlakeRecord,
@@ -21,13 +20,13 @@ import {
   type TestTelemetryError,
   type TestTelemetryArtifact,
   type TestTelemetryContext,
-  type TestTelemetryPhase,
   type TestTelemetryRecord,
 } from "@iterate-com/shared/test-support/ci-telemetry";
 
 /**
- * Playwright reporter for the canonical runner-neutral artifact contract.
- * It records all attempts and nested steps, but performs no network I/O.
+ * The browser specs' telemetry (docs/ci-test-telemetry.md): every test after its attempts, and a
+ * flake record for each plain test that failed. It performs no network I/O; the CI trace's
+ * `@@ci-trace` lines are ./tracing/tracing.ts's.
  */
 export default class PlaywrightTelemetryReporter implements Reporter {
   private artifactId: string | null = null;
@@ -66,8 +65,7 @@ export default class PlaywrightTelemetryReporter implements Reporter {
   async onEnd(result: FullResult) {
     if (!this.config || !this.suite || !this.artifactId || !this.ci || !this.context)
       throw new Error("Playwright telemetry ended before it began");
-    const testCases = this.suite.allTests();
-    const tests = testCases.map((test) => toTestRecord(test, result.startTime.getTime()));
+    const tests = this.suite.allTests().map(toTestRecord);
     // A plain test that failed, whether a retry then passed or not, is an
     // unclassified flake: record it for the test-health dashboard, error
     // sample included, so it can be adopted into createFlake (see shared
@@ -93,19 +91,9 @@ export default class PlaywrightTelemetryReporter implements Reporter {
         finishedAt: new Date(finishedAtMs).toISOString(),
         durationMs,
         ...(this.globalErrors[0] && { error: this.globalErrors[0] }),
+        collectionErrors: this.globalErrors.map((error) => error.message),
       },
-      runners: [
-        {
-          context: this.context,
-          status,
-          durationMs,
-          testCount: tests.length,
-          retryCount: tests.reduce((total, test) => total + test.retryCount, 0),
-          collectionErrors: this.globalErrors.map((error) => error.message),
-        },
-      ],
       tests,
-      modules: [],
     });
   }
 
@@ -114,118 +102,35 @@ export default class PlaywrightTelemetryReporter implements Reporter {
   }
 }
 
-function toTestRecord(test: TestCase, runStartedAtMs: number): TestTelemetryRecord {
-  const attempts = test.results.map((result, index) => {
-    const error = firstResultError(result.errors, result.error);
-    const previous = test.results[index - 1];
-    const scheduleReferenceMs = previous
-      ? previous.startTime.getTime() + nonnegativeDuration(previous.duration)
-      : runStartedAtMs;
-    return {
-      attemptIndex: result.retry,
-      state: result.status,
-      durationMs: nonnegativeDuration(result.duration),
-      startedAt: result.startTime.toISOString(),
-      startedAtSource: "runner" as const,
-      scheduleDelayMs: Math.max(0, result.startTime.getTime() - scheduleReferenceMs),
-      workerIndex: result.workerIndex,
-      parallelIndex: result.parallelIndex,
-      attachmentCount: result.attachments?.length ?? 0,
-      stdoutBytes: outputSize(result.stdout || []),
-      stderrBytes: outputSize(result.stderr || []),
-      error,
-      phases: flattenSteps(result.steps),
-    };
-  });
-  const finalAttempt = attempts.at(-1);
+function toTestRecord(test: TestCase): TestTelemetryRecord {
   const errors = test.results.flatMap((result) =>
-    result.errors.length > 0
-      ? result.errors.map(normalizePlaywrightError)
-      : result.error
-        ? [normalizePlaywrightError(result.error)]
-        : [],
+    (result.errors.length > 0 ? result.errors : result.error ? [result.error] : []).map(
+      normalizePlaywrightError,
+    ),
   );
-  const retryCount = Math.max(0, ...attempts.map((attempt) => attempt.attemptIndex));
-  const firstStartedAt = attempts[0]?.startedAt;
-  const testProject = test.parent.project()?.name;
   return {
     fullName: test.titlePath().filter(Boolean).join(" › "),
     leafName: test.title,
     moduleId: test.location.file,
-    testLine: test.location.line,
-    testColumn: test.location.column,
-    runnerTestId: test.id,
     expectedState: test.expectedStatus,
-    configuredTimeoutMs: test.timeout,
-    repeatIndex: test.repeatEachIndex,
     tags: test.tags || [],
-    annotations: (test.annotations || []).map(({ type, description }) => ({
-      type,
-      description,
-    })),
-    context: { testProject },
-    retryCount,
+    retryCount: Math.max(0, ...test.results.map((result) => result.retry)),
     passedAfterRetry: test.outcome() === "flaky",
-    state: finalAttempt?.state ?? "skipped",
+    state: test.results.at(-1)?.status ?? "skipped",
     outcome: test.outcome(),
-    durationMs: attempts.reduce((total, attempt) => total + attempt.durationMs, 0),
-    attemptDetail: "complete",
-    startedAt: firstStartedAt,
-    ...(firstStartedAt && { startedAtSource: "runner" as const }),
-    ...(attempts[0] && { scheduleDelayMs: attempts[0].scheduleDelayMs }),
-    attempts,
-    phases: [],
+    durationMs: test.results.reduce(
+      (total, result) => total + nonnegativeDuration(result.duration),
+      0,
+    ),
+    ...(test.results[0] && { startedAt: test.results[0].startTime.toISOString() }),
     errors,
     ...(errors[0] && { firstFailure: errors[0].message.slice(0, 300) }),
   };
 }
 
-function flattenSteps(steps: readonly TestStep[]): TestTelemetryPhase[] {
-  return steps.flatMap((step) => {
-    const unfinished = step.duration < 0;
-    return [
-      {
-        name: step.titlePath().filter(Boolean).join(" › "),
-        category: step.category,
-        durationMs: nonnegativeDuration(step.duration),
-        ...(step.startTime && { startedAt: step.startTime.toISOString() }),
-        attachmentCount: step.attachments?.length ?? 0,
-        ...(step.location && {
-          sourceFile: step.location.file,
-          sourceLine: step.location.line,
-          sourceColumn: step.location.column,
-        }),
-        ...(step.error
-          ? { error: normalizePlaywrightError(step.error) }
-          : unfinished
-            ? {
-                error: {
-                  name: "PlaywrightIncompleteStepError",
-                  message: "Playwright step did not finish before runner shutdown",
-                },
-              }
-            : {}),
-      },
-      ...flattenSteps(step.steps),
-    ];
-  });
-}
-
 /** Playwright uses -1 for work that was still active when a run was interrupted. */
 function nonnegativeDuration(durationMs: number) {
   return Number.isFinite(durationMs) ? Math.max(0, durationMs) : 0;
-}
-
-function outputSize(chunks: Array<string | Buffer>) {
-  return chunks.reduce(
-    (total, chunk) => total + (typeof chunk === "string" ? Buffer.byteLength(chunk) : chunk.length),
-    0,
-  );
-}
-
-function firstResultError(errors: readonly TestError[], error: TestError | undefined) {
-  const first = errors[0] ?? error;
-  return first ? normalizePlaywrightError(first) : undefined;
 }
 
 function normalizePlaywrightError(error: TestError): TestTelemetryError {

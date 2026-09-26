@@ -2,7 +2,6 @@ import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { parquetReadObjects } from "hyparquet";
 import type { TestTelemetryArtifact } from "@iterate-com/shared/test-support/ci-telemetry";
 import { temporaryDirectory } from "@iterate-com/shared/test-support/temporary-directory";
 import {
@@ -15,7 +14,6 @@ import {
   reportStepFailure,
   testEvidencePrefix,
   testEvidenceSource,
-  testEvidenceTableKey,
   testEvidenceUploadedPrefix,
   uploadTestEvidence,
   uploadedSummaryLine,
@@ -63,7 +61,7 @@ const target = {
   checkedAt: "2026-09-24T07:22:58.000Z",
 };
 
-test("writes the tests table, then a manifest: the job attempt from the environment, the result from the test steps and the finalizer's check, the deployed target, and every file with its sha256", async () => {
+test("writes a manifest: the job attempt from the environment, the result from the test steps and the finalizer's check, the deployed target, and every file with its sha256", async () => {
   using folder = evidenceFolder({
     artifacts: [
       artifact("vitest:os:1", "2026-09-24T07:23:01.000Z", "2026-09-24T07:25:00.000Z"),
@@ -121,7 +119,6 @@ test("writes the tests table, then a manifest: the job attempt from the environm
     "flake-records/specs/flake-records-1.jsonl",
     "playwright-output/.last-run.json",
     "playwright-output/os-sign-in/trace.zip",
-    "tables/tests.parquet",
     "target.json",
   ]);
   expect(manifest.files).toContainEqual({
@@ -133,10 +130,6 @@ test("writes the tests table, then a manifest: the job attempt from the environm
     JSON.parse(readFileSync(join(folder.path, testEvidencePaths.manifest), "utf8")),
   );
   expect(written).toEqual(manifest);
-  expect(await testsTable(folder.path)).toMatchObject([
-    { test_run_id: "testrun_1nxc464grh", full_name: "stream › appends round-trip" },
-    { test_run_id: "testrun_1nxc464grh", full_name: "stream › appends round-trip" },
-  ]);
 });
 
 test("a job whose runners left nothing still gets a manifest, and it says incomplete and why", async () => {
@@ -156,8 +149,6 @@ test("a job whose runners left nothing still gets a manifest, and it says incomp
   });
   expect(manifest.timings).toBeUndefined();
   expect(manifest.completeness).toBeUndefined();
-  // an empty table, every column still there
-  expect(await testsTable(folder.path)).toEqual([]);
 });
 
 test.for([
@@ -198,7 +189,7 @@ test.for([
   expect(manifest).toMatchObject({ result });
 });
 
-test("what cannot be read or matched is a diagnostic; the table and the manifest are still written", async () => {
+test("another attempt's telemetry is a diagnostic, left out of the runners; the manifest is still written", async () => {
   const retried = artifact("vitest:os:0", "2026-09-24T07:20:01.000Z", "2026-09-24T07:21:00.000Z");
   retried.ci = { ...retried.ci, depotJobUrl: depotJobUrl.replace("1nxc464grh", "0earlier") };
   using folder = evidenceFolder({
@@ -207,26 +198,14 @@ test("what cannot be read or matched is a diagnostic; the table and the manifest
       retried,
     ],
     check: completeCheck,
-    flakeRecords: `${JSON.stringify({
-      name: "a test that was renamed",
-      kind: "failing",
-      outcome: "pinned-fail",
-      pattern: "boom",
-      durationMs: 1,
-      at: "2026-09-24T07:24:00.000Z",
-    })}\n`,
   });
 
   const manifest = await write(folder.path);
 
   expect(manifest).toMatchObject({
     runners: [{ artifactId: "vitest:os:1" }],
-    diagnostics: [
-      "test telemetry from another job attempt, left out of the rows: vitest:os:0",
-      'The failing record "a test that was renamed" names 0 expected-fail tests in this job attempt, not 1; it is on no row',
-    ],
+    diagnostics: ["test telemetry from another job attempt, left out of the runners: vitest:os:0"],
   });
-  expect(await testsTable(folder.path)).toHaveLength(1);
 });
 
 test("keys a run's folder by trust, the day its manifest was written and its Depot job, each a claim of the job's OIDC token", async () => {
@@ -235,9 +214,6 @@ test("keys a run's folder by trust, the day its manifest was written and its Dep
   const pullRequest = await write(folder.path, { createdAt: late });
   expect(testEvidencePrefix(pullRequest)).toBe(
     "evidence/ci/trust=pr/date=2026-09-24/job=jcc9z1d62z/testrun_1nxc464grh/",
-  );
-  expect(testEvidenceTableKey(pullRequest)).toBe(
-    "tables/tests/trust=pr/date=2026-09-24/job=jcc9z1d62z/testrun_1nxc464grh.parquet",
   );
 
   const onMain = {
@@ -296,7 +272,7 @@ const bucket = { accountId: "376ef7ed81b0573f93524de763666c15", bucketName: "ite
 const apiToken = "cf-api-token";
 const apiTokenId = "0123456789abcdef0123456789abcdef";
 
-test("PUTs every listed file write-once with its manifest sha256 as the signed payload hash, then the manifest, then the table's copy for the loader, with the API token as S3 keys", async () => {
+test("PUTs every listed file write-once with its manifest sha256 as the signed payload hash, then the manifest, with the API token as S3 keys", async () => {
   using folder = evidenceFolder({
     artifacts: [artifact("vitest:os:1", "2026-09-24T07:23:01.000Z", "2026-09-24T07:25:00.000Z")],
     check: completeCheck,
@@ -306,26 +282,23 @@ test("PUTs every listed file write-once with its manifest sha256 as the signed p
 
   const uploaded = await uploadTestEvidence({ repoRoot: folder.path, ...bucket, apiToken, ...api });
 
-  const { prefix, tableKey } = uploaded;
+  const { prefix } = uploaded;
   const requests = api.r2Requests();
   const urls = requests.map((request) => new URL(request.url));
   expect(new Set(urls.map((url) => url.host))).toEqual(
     new Set(["376ef7ed81b0573f93524de763666c15.r2.cloudflarestorage.com"]),
   );
   const keys = urls.map((url) => decodeURIComponent(url.pathname));
-  // the files in parallel, in any order; the table's copy for the loader; the manifest last, the
-  // commit point for both
-  expect(keys.slice(0, -2).sort()).toEqual(
+  // the files in parallel, in any order; the manifest last, the commit point
+  expect(keys.slice(0, -1).sort()).toEqual(
     manifest.files.map((file) => `/iterate-ci/${prefix}${file.path}`),
   );
-  expect(keys.slice(-2)).toEqual([`/iterate-ci/${tableKey}`, `/iterate-ci/${prefix}manifest.json`]);
+  expect(keys.at(-1)).toBe(`/iterate-ci/${prefix}manifest.json`);
   expect(prefix).toBe("evidence/ci/trust=pr/date=2026-09-24/job=jcc9z1d62z/testrun_1nxc464grh/");
-  const table = manifest.files.find((file) => file.path === "tables/tests.parquet")!;
   const manifestBytes = readFileSync(join(folder.path, testEvidencePaths.manifest)).byteLength;
   expect(uploaded).toMatchObject({
-    objects: manifest.files.length + 2,
-    bytes:
-      manifest.files.reduce((total, file) => total + file.bytes, 0) + table.bytes + manifestBytes,
+    objects: manifest.files.length + 1,
+    bytes: manifest.files.reduce((total, file) => total + file.bytes, 0) + manifestBytes,
     retries: 0,
   });
   // `=` is sent percent-encoded, as S3 clients sign it; R2 stores it decoded (measured 2026-09-24)
@@ -359,25 +332,7 @@ test("PUTs every listed file write-once with its manifest sha256 as the signed p
   expect(trace.headers.get("authorization")).toMatch(
     new RegExp(`^AWS4-HMAC-SHA256 Credential=${apiTokenId}/\\d{8}/auto/s3/aws4_request, `),
   );
-  expect(requests.at(-2)!.headers.get("content-type")).toBe("application/vnd.apache.parquet");
   expect(requests.at(-1)!.headers.get("content-type")).toBe("application/json");
-});
-
-test("a cancelled run's folder is uploaded without a copy of its tests table, whose rows stop part way", async () => {
-  using folder = evidenceFolder({
-    artifacts: [artifact("vitest:os:1", "2026-09-24T07:23:01.000Z", "2026-09-24T07:25:00.000Z")],
-    check: completeCheck,
-  });
-  const manifest = await write(folder.path, { cancelled: true });
-  const api = cloudflare();
-
-  const uploaded = await uploadTestEvidence({ repoRoot: folder.path, ...bucket, apiToken, ...api });
-
-  expect(manifest).toMatchObject({ result: "cancelled" });
-  expect(uploaded).toMatchObject({ tableKey: undefined, objects: manifest.files.length + 1 });
-  const keys = api.r2Requests().map((request) => decodeURIComponent(new URL(request.url).pathname));
-  expect(keys.filter((key) => key.includes("/tables/tests/"))).toEqual([]);
-  expect(keys.at(-1)).toBe(`/iterate-ci/${uploaded.prefix}manifest.json`);
 });
 
 test("a Cloudflare 5xx, 429 or dropped connection is retried, each retry a platform-failure warn, and the upload completes", async () => {
@@ -737,7 +692,6 @@ function evidenceFolder(input: {
   artifacts: TestTelemetryArtifact[];
   check?: object;
   target?: object;
-  flakeRecords?: string;
 }) {
   const folder = temporaryDirectory();
   const put = (path: string, contents: string) => {
@@ -751,17 +705,10 @@ function evidenceFolder(input: {
     );
   if (input.check) put(testEvidencePaths.telemetryCheck, JSON.stringify(input.check));
   if (input.target) put(testEvidencePaths.target, JSON.stringify(input.target));
-  put(`${testEvidencePaths.flakeRecords}/specs/flake-records-1.jsonl`, input.flakeRecords || "");
+  put(`${testEvidencePaths.flakeRecords}/specs/flake-records-1.jsonl`, "");
   put(`${testEvidencePaths.playwrightOutput}/.last-run.json`, '{"status":"passed"}');
   put(`${testEvidencePaths.playwrightOutput}/os-sign-in/trace.zip`, "trace");
   return folder;
-}
-
-async function testsTable(repoRoot: string) {
-  return parquetReadObjects({
-    // a copy: a small file's Buffer is a slice of Node's shared pool, so its `.buffer` holds other bytes
-    file: new Uint8Array(readFileSync(join(repoRoot, testEvidencePaths.testsTable))).buffer,
-  });
 }
 
 function artifact(
@@ -770,7 +717,7 @@ function artifact(
   finishedAt: string,
 ): TestTelemetryArtifact {
   return {
-    artifactSchemaVersion: 2,
+    artifactSchemaVersion: 3,
     artifactId,
     producer: "vitest-retry-telemetry-reporter",
     createdAt: finishedAt,
@@ -783,31 +730,22 @@ function artifact(
       workflowRunId: "151191957946117",
       workflowRunAttempt: "1",
       jobName: "e2e",
-      workspaceRoot: "/home/runner/work/iterate/iterate",
-      runnerProvider: "depot",
       depotJobUrl,
-      executionContext: "ci",
     },
     context: { framework: "vitest", testKind: "e2e", suite: "vitest", workspace: "os" },
-    run: { status: "passed", startedAt, finishedAt, durationMs: 1 },
-    runners: [],
+    run: { status: "passed", startedAt, finishedAt, durationMs: 1, collectionErrors: [] },
     tests: [
       {
         fullName: "stream › appends round-trip",
         leafName: "appends round-trip",
         moduleId: "/home/runner/work/iterate/iterate/apps/os/src/stream.test.ts",
         tags: [],
-        annotations: [],
         retryCount: 0,
         passedAfterRetry: false,
         state: "passed",
         durationMs: 12.5,
-        attemptDetail: "aggregate-only",
-        attempts: [],
-        phases: [],
         errors: [],
       },
     ],
-    modules: [],
   };
 }
