@@ -35,6 +35,7 @@ import {
 import { Spinner } from "@iterate-com/ui/components/spinner";
 import { SecretInput } from "@iterate-com/ui/components/not-recorded";
 import { Textarea } from "@iterate-com/ui/components/textarea";
+import { errorCode } from "iterate/lib";
 import { useContextStub, useFacetLiveState } from "iterate/react";
 import { stepUpUrl } from "../../../../lib/scopes.ts";
 
@@ -145,8 +146,10 @@ function ProjectIntegrations() {
         : "loading";
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
-  /** The account whose Use last failed, said on its own row (the raw reason goes to the console). */
-  const [failedUse, setFailedUse] = useState<string | null>(null);
+  /** The account whose Use last failed and what its row says: a refusal's own words (it is meant for
+   *  the person, and trying again won't change it), else "try again" (the raw reason goes to the
+   *  console). */
+  const [failedUse, setFailedUse] = useState<{ connection: string; message: string } | null>(null);
   const firstField = useRef<HTMLInputElement>(null);
 
   const projectFacet = () => api.projects.get(project.id).facets.get("project");
@@ -198,7 +201,12 @@ function ProjectIntegrations() {
       await closeSheet();
     } catch (caught) {
       console.error("Connecting your account failed", caught);
-      setFailedUse(row.connection);
+      const refused = ["FORBIDDEN", "INVALID_INPUT"].includes(errorCode(caught) ?? "");
+      setFailedUse({
+        connection: row.connection,
+        message:
+          refused && caught instanceof Error ? caught.message : "Couldn't connect it. Try again.",
+      });
       setBusy(null);
     }
   };
@@ -688,7 +696,7 @@ function YourAccounts({
   askedScopes: string[];
   busy: string | null;
   /** The account whose Use failed last. */
-  failedUse: string | null;
+  failedUse: { connection: string; message: string } | null;
   /** Where the step-up to the `account` scope comes back to. */
   stepUpNext: string;
   onUse: (row: Connection) => void;
@@ -742,9 +750,9 @@ function YourAccounts({
               <div className="min-w-0 flex-1">
                 <p className="[overflow-wrap:anywhere]">{row.account}</p>
                 {meta && <p className="text-xs text-muted-foreground">{meta}</p>}
-                {failedUse === row.connection && (
+                {failedUse?.connection === row.connection && (
                   <p role="alert" data-type="error" className="text-xs text-destructive">
-                    Couldn't connect it. Try again.
+                    {failedUse.message}
                   </p>
                 )}
               </div>

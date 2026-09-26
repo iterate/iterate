@@ -6,7 +6,7 @@
 // of `grants.list(cursor)` — the route's loader, `?cursor=` in the URL; a mint or an end
 // invalidates the router, which reloads it. "Connected accounts" are the person's own connections
 // (the `account` facet's live `integrations` on `session.user`): a sign-in with Google, Cloudflare or
-// GitHub keeps one, and so does connecting Google or Cloudflare here. A project uses one when its
+// GitHub keeps one, and so does connecting Google, Cloudflare or Waitrose here (`?waitrose=1`). A project uses one when its
 // Integrations page connects it there; disconnecting one here ends every project's use of it.
 import { createFileRoute, Link, useNavigate, useRouter } from "@tanstack/react-router";
 import { useEffect, useRef, useState, type FormEvent } from "react";
@@ -19,7 +19,7 @@ import { Checkbox } from "@iterate-com/ui/components/checkbox";
 import { Input } from "@iterate-com/ui/components/input";
 import { Label } from "@iterate-com/ui/components/label";
 import { NativeSelect, NativeSelectOption } from "@iterate-com/ui/components/native-select";
-import { NotRecorded } from "@iterate-com/ui/components/not-recorded";
+import { NotRecorded, SecretInput } from "@iterate-com/ui/components/not-recorded";
 import {
   Sheet,
   SheetContent,
@@ -57,6 +57,8 @@ export const Route = createFileRoute("/_auth/sessions")({
     cursor: z.string().optional().catch(undefined),
     /** The New token sheet. */
     token: z.literal(1).optional().catch(undefined),
+    /** The sheet that connects your own Waitrose account. */
+    waitrose: z.literal(1).optional().catch(undefined),
   }),
   loaderDeps: ({ search }) => ({ cursor: search.cursor }),
   staticData: { page: "Sessions" },
@@ -100,7 +102,10 @@ function SessionsPage() {
   // Ending THIS browser's grant is a sign-out: the app's own logout clears the session and its
   // cookie too (a bare redirect to `/` would bounce a still-cached token back into /projects).
   const logout = useRef<HTMLFormElement>(null);
-  // A minted key lives only while its sheet is open: closed any way (Back included), it is gone.
+  // A minted key lives only while its sheet is open: closed any way (Back included), it is gone —
+  // and one whose mint answers after its sheet closed is never shown (it is listed, to revoke).
+  const tokenSheetOpen = useRef(false);
+  tokenSheetOpen.current = Boolean(tokenSheet);
   useEffect(() => {
     if (!tokenSheet) setMinted(null);
   }, [tokenSheet]);
@@ -133,7 +138,7 @@ function SessionsPage() {
             ? undefined
             : Date.now() + Number(tokenLifetime) * 24 * 3600_000,
       });
-      setMinted({ name, token, expiresAt });
+      if (tokenSheetOpen.current) setMinted({ name, token, expiresAt });
       setCopied(false);
       setTokenName("");
       await router.invalidate({ sync: true });
@@ -181,7 +186,7 @@ function SessionsPage() {
           <h2 id="sessions-heading" className="font-medium">
             Signed in
           </h2>
-          {canMintToken && (
+          {canMintToken ? (
             <Button
               variant="outline"
               size="sm"
@@ -189,6 +194,8 @@ function SessionsPage() {
             >
               New token
             </Button>
+          ) : (
+            <span className="text-xs text-muted-foreground">Tokens need an HTTPS deployment</span>
           )}
         </div>
         {items.length === 0 ? (
@@ -474,6 +481,12 @@ function ConnectedAccounts({ projects }: { projects: { id: string; slug: string 
   const [disconnecting, setDisconnecting] = useState<string | null>(null);
   const next = `${window.location.origin}/sessions`;
   const loadError = person.error || live.error;
+  const { waitrose } = Route.useSearch();
+  const navigate = useNavigate({ from: Route.fullPath });
+  const closeWaitrose = () =>
+    void navigate({ search: (prev) => ({ ...prev, waitrose: undefined }), replace: true });
+  /** A Waitrose connect in flight: its sheet stays open until it answers. */
+  const [waitrosePending, setWaitrosePending] = useState(false);
   return (
     <section className="flex flex-col gap-2" aria-labelledby="connected-accounts-heading">
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -499,6 +512,13 @@ function ConnectedAccounts({ projects }: { projects: { id: string; slug: string 
               }
             />
           ))}
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => void navigate({ search: (prev) => ({ ...prev, waitrose: 1 }) })}
+          >
+            Connect Waitrose
+          </Button>
         </div>
       </div>
       {error && (
@@ -583,6 +603,117 @@ function ConnectedAccounts({ projects }: { projects: { id: string; slug: string 
           })}
         </ul>
       )}
+      <Sheet
+        open={Boolean(waitrose)}
+        onOpenChange={(open) => !open && !waitrosePending && closeWaitrose()}
+      >
+        <SheetContent
+          side="right"
+          showCloseButton={!waitrosePending}
+          className="overflow-y-auto data-[side=right]:w-full data-[side=right]:sm:max-w-md"
+        >
+          {waitrose && (
+            <WaitroseForm
+              onPendingChange={setWaitrosePending}
+              onConnect={async ({ username, password }) => {
+                // your own: the secret and its connection on your account, like a sign-in's
+                const connection = crypto.randomUUID().slice(0, 8);
+                const secretPath = `/secrets/waitrose-${connection}`;
+                await api.user.secrets.set(
+                  secretPath,
+                  { username, password },
+                  {
+                    urls: [new URL(WAITROSE_GRAPHQL_URL).origin],
+                    refresh: { kind: "waitrose-session", graphqlUrl: WAITROSE_GRAPHQL_URL },
+                  },
+                );
+                await api.user.facets
+                  .get("account")
+                  .invoke([["connectWaitrose", { connection, account: username }]])
+                  .catch(async (caught: unknown) => {
+                    await api.user.secrets.delete(secretPath).catch(() => {});
+                    throw caught;
+                  });
+                closeWaitrose();
+              }}
+            />
+          )}
+        </SheetContent>
+      </Sheet>
     </section>
+  );
+}
+
+/** Where Waitrose logs in (apps/os/src/integrations/waitrose.ts): the connection's secret's pin. */
+const WAITROSE_GRAPHQL_URL = "https://www.waitrose.com/api/graphql";
+
+/** Your Waitrose username and password, for your own connection's secret. They go to the secret
+ *  alone: the platform logs in with them on first use and whenever Waitrose answers 401. */
+function WaitroseForm({
+  onConnect,
+  onPendingChange,
+}: {
+  onConnect: (credentials: { username: string; password: string }) => Promise<void>;
+  /** Whether a connect is in flight, for the sheet around it (it stays open until the answer). */
+  onPendingChange: (pending: boolean) => void;
+}) {
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const submit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setError(null);
+    setPending(true);
+    onPendingChange(true);
+    try {
+      await onConnect({ username, password });
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+      setPending(false);
+    } finally {
+      onPendingChange(false);
+    }
+  };
+  return (
+    <form onSubmit={(event) => void submit(event)} className="flex h-full flex-col">
+      <SheetHeader>
+        <SheetTitle>Connect Waitrose</SheetTitle>
+        <SheetDescription>The password is only ever sent to waitrose.com.</SheetDescription>
+      </SheetHeader>
+      <div className="flex flex-1 flex-col gap-4 px-4 pb-4">
+        <Label className="flex flex-col items-start gap-2">
+          Email
+          <Input
+            type="email"
+            autoComplete="off"
+            required
+            value={username}
+            onChange={(event) => setUsername(event.target.value.trim())}
+          />
+        </Label>
+        <Label className="flex flex-col items-start gap-2">
+          Password
+          <SecretInput
+            type="password"
+            autoComplete="off"
+            required
+            value={password}
+            onChange={(event) => setPassword(event.target.value)}
+          />
+        </Label>
+        {error && (
+          <p role="alert" data-type="error" className="text-sm text-destructive">
+            {error}
+          </p>
+        )}
+      </div>
+      <SheetFooter className="border-t sm:flex-row sm:justify-end">
+        <Button type="submit" disabled={pending}>
+          {pending ? <Spinner data-icon="inline-start" /> : null}
+          Connect
+        </Button>
+      </SheetFooter>
+    </form>
   );
 }
