@@ -9,13 +9,7 @@
 import { createHash } from "node:crypto";
 import { AwsClient } from "aws4fetch";
 import { z } from "zod";
-import {
-  CI_HTTP,
-  HttpAnswerError,
-  httpFailureFields,
-  httpFailureKind,
-  retryPlatformFailures,
-} from "@iterate-com/shared/platform-retry";
+import { fetchRetryingPlatformFailures } from "@iterate-com/shared/platform-retry";
 import { FlakeSuiteSummary } from "@iterate-com/shared/test-support/flake-suite-summary";
 import { mapConcurrent } from "../depot.ts";
 
@@ -229,26 +223,15 @@ async function ciBucket(input: { accountId: string; bucketName: string; apiToken
     region: "auto",
   });
   const origin = `https://${input.accountId}.r2.cloudflarestorage.com/${input.bucketName}`;
-  const request = (url: string, what: string) =>
-    retryPlatformFailures(
-      async () => {
-        const response = await fetch(await client.sign(url), {
-          signal: AbortSignal.timeout(30_000),
-        });
-        if (response.ok) return response.text();
-        throw new HttpAnswerError(
-          `R2 ${what}: HTTP ${response.status} ${await response.text()}`,
-          response.status,
-        );
-      },
-      {
-        area: "flake-dashboard",
-        schedule: CI_HTTP,
-        idempotent: true,
-        kind: httpFailureKind,
-        describe: (error) => ({ what, ...httpFailureFields(error) }),
-      },
+  const request = async (url: string, what: string) => {
+    const response = await fetchRetryingPlatformFailures(
+      `R2 ${what}`,
+      async (signal) => fetch(await client.sign(url), { signal }),
+      { area: "flake-dashboard", idempotent: true },
     );
+    if (response.ok) return response.text();
+    throw new Error(`R2 ${what} answered HTTP ${response.status}: ${await response.text()}`);
+  };
   return {
     /** Every object under `prefix`: ListObjectsV2, a page of up to 1,000 keys at a time. */
     async list(prefix: string) {

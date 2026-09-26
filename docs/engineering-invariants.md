@@ -53,15 +53,19 @@ rides on as own properties, which Workers RPC and capnweb keep.
 - **Idempotency decides whether a call is repeated; the kind decides when.**
   Idempotent means a read, an append whose every event is durable and keyed, a
   `processors.enable`, a GET or HEAD with no body, or a script's call on a
-  method that names its whole end state. `contextStub`
+  method that names its whole end state. A request answered 429 was refused
+  unrun, so a script sends it again whatever its method. `contextStub`
   ([context-stub.ts](../apps/os/src/context-stub.ts)) applies this to every
   call the platform makes on a context Durable Object, whichever hop makes it.
 - **Schedules come from one short list**: `ONCE_NOW`, `UPSTREAM_ONCE`,
-  `RELAY_BURST`, `CI_HTTP`, the durable ladder (1 s·2ⁿ, capped at 30
-  minutes), and the socket re-dial
+  `RELAY_BURST`, `CI_HTTP`, `CLOUDFLARE_API`, the durable ladder (1 s·2ⁿ,
+  capped at 30 minutes), and the socket re-dial
   ([redial.ts](../apps/os/src/context/redial.ts): at once, then 250 ms doubling
   to 8 s, within 30 s of the drop). Each schedule is bounded, each wait but the
-  re-dial's is jittered, and giving up on an idempotent call is logged once.
+  re-dial's is jittered, and giving up on an idempotent call is logged once. A
+  `Retry-After` longer than a wait replaces it, up to the schedule's longest
+  wait. A script's HTTP call goes through `fetchRetryingPlatformFailures`, whose
+  attempt that gets no answer in time is our own deadline, an overload.
 - **A platform failure that stands crosses a hop as `UNAVAILABLE`**, its
   `data` `{ kind, retryAfterMs }`, and the edge answers it 503 with that
   `Retry-After` ([unavailable.ts](../apps/os/src/unavailable.ts)). "Never retry

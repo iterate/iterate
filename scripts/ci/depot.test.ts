@@ -19,9 +19,9 @@ test("a read Depot answers with one 500 is asked again, with a warn, and succeed
   expect(depot.warn).toHaveBeenCalledWith({
     event: "depot.platform-failure-retry",
     kind: "disconnected",
-    method: "GetJobAttemptLogs",
+    request: "Depot GetJobAttemptLogs",
     status: 500,
-    message: "Depot GetJobAttemptLogs returned HTTP 500",
+    message: 'Depot GetJobAttemptLogs answered HTTP 500: {"code":"internal"}',
     attempt: 1,
     retryInMs: 0,
   });
@@ -39,14 +39,14 @@ test("a read whose connection fails is asked again", async () => {
 
   expect(depot.calls).toHaveLength(2);
   expect(depot.warn).toHaveBeenCalledWith(
-    expect.objectContaining({ status: "network", message: "fetch failed" }),
+    expect.objectContaining({ status: "network", message: "Depot ListArtifacts: fetch failed" }),
   );
 });
 
 test.for([
-  { method: "GetWorkflow", answer: 404, error: "Depot GetWorkflow returned HTTP 404" },
-  { method: "GetWorkflow", answer: 401, error: "Depot GetWorkflow returned HTTP 401" },
-  { method: "DispatchWorkflow", answer: 500, error: "Depot DispatchWorkflow returned HTTP 500" },
+  { method: "GetWorkflow", answer: 404, error: "Depot GetWorkflow answered HTTP 404" },
+  { method: "GetWorkflow", answer: 401, error: "Depot GetWorkflow answered HTTP 401" },
+  { method: "DispatchWorkflow", answer: 500, error: "Depot DispatchWorkflow answered HTTP 500" },
   { method: "RetryJob", answer: "reset" as const, error: "fetch failed" },
 ])("$method answered $answer fails at once", async ({ method, answer, error }) => {
   const depot = depotAnswering(answer, 200);

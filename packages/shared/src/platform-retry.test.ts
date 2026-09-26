@@ -4,6 +4,7 @@ import { expect, onTestFinished, test, vi } from "vitest";
 import {
   CI_HTTP,
   failureKind,
+  fetchRetryingPlatformFailures,
   type FailureKind,
   HttpAnswerError,
   httpFailureKind,
@@ -134,15 +135,11 @@ test("isOpaqueInternalError: workerd's opaque internal error, through the cause 
 });
 
 test.for([
-  { name: "a 500", answer: new HttpAnswerError("HTTP 500", 500), kind: "disconnected" },
+  { name: "a 500", answer: answerError(500), kind: "disconnected" },
   { name: "a 503 Response", answer: new Response(null, { status: 503 }), kind: "disconnected" },
-  { name: "a 429", answer: new HttpAnswerError("HTTP 429", 429), kind: "overloaded" },
-  { name: "a 408", answer: new HttpAnswerError("HTTP 408", 408), kind: "overloaded" },
-  {
-    name: "a 404, an answer about the request",
-    answer: new HttpAnswerError("HTTP 404", 404),
-    kind: "refused",
-  },
+  { name: "a 429", answer: answerError(429), kind: "overloaded" },
+  { name: "a 408", answer: answerError(408), kind: "overloaded" },
+  { name: "a 404, an answer about the request", answer: answerError(404), kind: "refused" },
   { name: "a connection that failed", answer: new TypeError("fetch failed"), kind: "disconnected" },
   {
     name: "a timeout of the caller's own",
@@ -277,6 +274,171 @@ test.for([
   );
 });
 
+// RFC 9110 §10.2.3: delay-seconds or an HTTP-date. A script is the caller waiting a 429 out, so
+// it waits as long as the far side asks, but never past its schedule's longest wait.
+test.for([
+  { name: "a shorter one leaves the wait as it was", retryAfter: "1", retryInMs: 2_000 },
+  { name: "a longer one replaces the wait", retryAfter: "9", retryInMs: 9_000 },
+  {
+    name: "one past the schedule's longest wait stops there",
+    retryAfter: "600",
+    retryInMs: 10_000,
+  },
+  {
+    name: "an HTTP-date is read as the time until it",
+    retryAfter: "Sat, 26 Sep 2026 12:00:07 GMT",
+    retryInMs: 7_000,
+  },
+])("a 429's Retry-After: $name", async ({ retryAfter, retryInMs }) => {
+  vi.useFakeTimers({ now: NOW });
+  onTestFinished(() => void vi.useRealTimers());
+  vi.spyOn(Math, "random").mockReturnValue(1);
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  let calls = 0;
+  const answer = retryPlatformFailures(
+    async () => {
+      if (++calls === 1) throw answerError(429, { "retry-after": retryAfter });
+      return "answered";
+    },
+    {
+      area: "ci",
+      schedule: CI_HTTP,
+      idempotent: true,
+      kind: httpFailureKind,
+      describe: () => ({}),
+    },
+  );
+  await vi.runAllTimersAsync();
+  await expect(answer).resolves.toBe("answered");
+  expect(warn.mock.calls.map(([line]) => line)).toMatchObject([
+    { event: "ci.platform-failure-retry", retryInMs },
+  ]);
+});
+
+test.for([
+  {
+    name: "a 5xx is sent again, and the answer after it returned",
+    answers: [503, 200],
+    idempotent: true,
+    outcome: { status: 200 },
+    lines: ["retry"],
+  },
+  {
+    name: "a connection that failed is sent again",
+    answers: ["reset", 200],
+    idempotent: true,
+    outcome: { status: 200 },
+    lines: ["retry"],
+  },
+  {
+    name: "an answer about the request is the caller's, sent once",
+    answers: [404],
+    idempotent: true,
+    outcome: { status: 404 },
+    lines: [],
+  },
+  {
+    name: "a request that is not idempotent is sent once, its 5xx thrown quoting the answer",
+    answers: [500],
+    idempotent: false,
+    outcome: { error: "POST /things answered HTTP 500: down" },
+    lines: [],
+  },
+  {
+    name: "a 429 is sent again whatever the request: the far side refused it unrun",
+    answers: [429, 200],
+    idempotent: false,
+    outcome: { status: 200 },
+    lines: ["retry"],
+  },
+  {
+    name: "the schedule is bounded: the last failure is thrown, and the give-up logged",
+    answers: [502, 502, 502, 502],
+    idempotent: true,
+    outcome: { error: "POST /things answered HTTP 502: down" },
+    lines: ["retry", "retry", "retry", "gave-up"],
+  },
+] satisfies {
+  name: string;
+  answers: (number | "reset")[];
+  idempotent: boolean;
+  outcome: { status: number } | { error: string };
+  lines: string[];
+}[])("fetchRetryingPlatformFailures: $name", async ({ answers, idempotent, outcome, lines }) => {
+  vi.useFakeTimers();
+  onTestFinished(() => void vi.useRealTimers());
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  const left = [...answers];
+  const send = vi.fn(async () => {
+    const answer = left.shift();
+    if (answer === "reset") throw new TypeError("fetch failed");
+    return new Response(answer === 200 ? "ok" : "down", { status: answer });
+  });
+  const settled = fetchRetryingPlatformFailures("POST /things", send, {
+    area: "things",
+    idempotent,
+  }).then(
+    (response) => ({ status: response.status }),
+    (error: Error) => ({ error: error.message }),
+  );
+  await vi.runAllTimersAsync();
+  expect(await settled).toEqual(outcome);
+  expect(send).toHaveBeenCalledTimes(answers.length);
+  expect(warn.mock.calls.map(([line]) => line)).toMatchObject(
+    lines.map((outcome) => ({
+      event: `things.platform-failure-${outcome}`,
+      request: "POST /things",
+    })),
+  );
+});
+
+test("fetchRetryingPlatformFailures: an attempt with no answer in its time is our own deadline, an overload, sent again", async () => {
+  // The attempt's deadline is a real AbortSignal.timeout; the wait after it runs on the fake clock.
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  vi.setTimerTickMode("nextTimerAsync");
+  onTestFinished(() => void vi.useRealTimers());
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  let calls = 0;
+  const response = await fetchRetryingPlatformFailures(
+    "GET /slow",
+    async (signal) => {
+      if (++calls > 1) return new Response("ok");
+      await new Promise((resolve) => signal.addEventListener("abort", resolve));
+      throw signal.reason;
+    },
+    { area: "slow", idempotent: true, timeoutMs: 10 },
+  );
+  expect(response).toMatchObject({ status: 200 });
+  expect(warn.mock.calls.map(([line]) => line)).toMatchObject([
+    {
+      event: "slow.platform-failure-retry",
+      kind: "overloaded",
+      status: "network",
+      message: "GET /slow: no answer within 0.01 s",
+    },
+  ]);
+});
+
+test("fetchRetryingPlatformFailures: once the caller's signal aborts, no retry starts", async () => {
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  const caller = new AbortController();
+  const send = vi.fn(async () => {
+    caller.abort();
+    return new Response("down", { status: 503 });
+  });
+  await expect(
+    fetchRetryingPlatformFailures("GET /late", send, {
+      area: "late",
+      idempotent: true,
+      signal: caller.signal,
+    }),
+  ).rejects.toThrow("GET /late answered HTTP 503: down");
+  expect(send).toHaveBeenCalledOnce();
+  expect(warn.mock.calls.map(([line]) => line)).toMatchObject([
+    { event: "late.platform-failure-gave-up", attempts: 1 },
+  ]);
+});
+
 /** A row's failure is an Error whose message names its kind, so the rows exercise the loop's
  *  decisions apart from failureKind's. */
 function kindNamedByMessage(error: unknown) {
@@ -315,3 +477,11 @@ function stamped(message: string, stamps: object): Error {
 function d1(message: string): Error {
   return new Error(`D1_ERROR: ${message}`);
 }
+
+/** A failed HTTP answer, as a script's call throws it. */
+function answerError(status: number, headers: Record<string, string> = {}) {
+  return new HttpAnswerError(`HTTP ${status}`, new Response(null, { status, headers }));
+}
+
+/** The clock the Retry-After rows run on: seven seconds before their HTTP-date. */
+const NOW = Date.parse("2026-09-26T12:00:00Z");

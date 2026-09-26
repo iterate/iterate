@@ -48,17 +48,24 @@ test("posts batches of 1,000 to the project's batch endpoint and retries a faile
   ]);
 });
 
-test("fails after three failed requests for one batch", async () => {
+test("fails once PostHog has failed one batch four times, and at once on an answer about the request", async () => {
   using posthog = stubbedFetch(
     vi.fn<typeof fetch>().mockImplementation(async () => new Response("no", { status: 500 })),
   );
   const event = systemEvent("ci job attempt finished", "a", "w:1", {}, "2026-09-24T05:00:00Z");
+  const project = { apiKey: "phc_test", host: "https://eu.i.posthog.com" };
 
-  const sent = sendPostHogEvents([event], { apiKey: "phc_test", host: "https://eu.i.posthog.com" });
-  const failure = expect(sent).rejects.toThrow("PostHog CI telemetry delivery failed");
+  const sent = sendPostHogEvents([event], project);
+  const failure = expect(sent).rejects.toThrow("/batch/ answered HTTP 500: no");
   await vi.runAllTimersAsync();
   await failure;
-  expect(posthog.fetch).toHaveBeenCalledTimes(3);
+  expect(posthog.fetch).toHaveBeenCalledTimes(4);
+
+  posthog.fetch.mockClear().mockResolvedValue(new Response("bad key", { status: 401 }));
+  await expect(sendPostHogEvents([event], project)).rejects.toThrow(
+    "PostHog CI telemetry delivery failed: 401 bad key",
+  );
+  expect(posthog.fetch).toHaveBeenCalledOnce();
 });
 
 /** `fetch` replaced by `mock`, with fake timers so retry delays pass at once. */

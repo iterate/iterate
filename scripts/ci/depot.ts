@@ -5,13 +5,7 @@ import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 import { z } from "zod";
 
-import {
-  CI_HTTP,
-  HttpAnswerError,
-  httpFailureFields,
-  httpFailureKind,
-  retryPlatformFailures,
-} from "@iterate-com/shared/platform-retry";
+import { CI_HTTP, fetchRetryingPlatformFailures } from "@iterate-com/shared/platform-retry";
 
 /** Iterate's Depot organization, which runs every workflow in .depot/workflows (docs/depot-ci.md). */
 export const DEPOT_ORG = "0p91s0lz49";
@@ -45,9 +39,9 @@ export async function mapConcurrent<Input, Output>(
  *
  * A read (`Get…`, `List…`, the only methods CI calls) that Depot answers with a 5xx or a 429, or
  * whose connection fails, is asked again after each of `delaysMs`, with a
- * `depot.platform-failure-retry` warn per repeat (`retryPlatformFailures`). Any other 4xx is an
- * answer about the request and fails at once, as does any other method (Connect sends every call
- * as a POST, so only the name says it changes nothing). A single 500 on GetJobAttemptLogs is
+ * `depot.platform-failure-retry` warn per repeat (`fetchRetryingPlatformFailures`). Any other 4xx
+ * is an answer about the request and fails at once, as does any other method (Connect sends every
+ * call as a POST, so only the name says it changes nothing). A single 500 on GetJobAttemptLogs is
  * enough to fail a trace job without the repeat.
  */
 export async function depotCiApi(
@@ -57,9 +51,10 @@ export async function depotCiApi(
   options: { fetch?: typeof fetch; delaysMs?: readonly number[] } = {},
 ): Promise<unknown> {
   const { fetch: fetchImpl = fetch, delaysMs = CI_HTTP.delaysMs } = options;
-  return retryPlatformFailures(
-    async () => {
-      const response = await fetchImpl(`https://api.depot.dev/depot.ci.v1.CIService/${method}`, {
+  const response = await fetchRetryingPlatformFailures(
+    `Depot ${method}`,
+    (signal) =>
+      fetchImpl(`https://api.depot.dev/depot.ci.v1.CIService/${method}`, {
         method: "POST",
         headers: {
           authorization: `Bearer ${token}`,
@@ -67,23 +62,16 @@ export async function depotCiApi(
           "x-depot-org": DEPOT_ORG,
         },
         body: JSON.stringify(body),
-        signal: AbortSignal.timeout(30_000),
-      });
-      if (response.ok) return await response.json();
-      await response.body?.cancel();
-      throw new HttpAnswerError(
-        `Depot ${method} returned HTTP ${response.status}`,
-        response.status,
-      );
-    },
+        signal,
+      }),
     {
       area: "depot",
       schedule: { ...CI_HTTP, delaysMs },
       idempotent: /^(Get|List)[A-Z]/.test(method),
-      kind: httpFailureKind,
-      describe: (error) => ({ method, ...httpFailureFields(error) }),
     },
   );
+  if (response.ok) return response.json();
+  throw new Error(`Depot ${method} answered HTTP ${response.status}: ${await response.text()}`);
 }
 
 /** A workflow's page on Depot. */

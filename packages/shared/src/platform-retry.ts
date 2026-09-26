@@ -82,13 +82,26 @@ export const isOpaqueInternalError = (error: unknown): boolean =>
 export const isPlatformFailureKind = (kind: unknown): kind is PlatformFailureKind =>
   kind === "deploy-reset" || kind === "disconnected" || kind === "overloaded";
 
-/** An HTTP answer that is not a success: its status is what `httpFailureKind` reads. */
+/** An HTTP answer that is not a success: its status is what `httpFailureKind` reads, and its
+ *  `Retry-After` how long the far side asked to be left alone, which `retryPlatformFailures`
+ *  honors. */
 export class HttpAnswerError extends Error {
   readonly status: number;
-  constructor(message: string, status: number) {
+  readonly retryAfterMs: number | undefined;
+  constructor(message: string, answer: Pick<Response, "status" | "headers">) {
     super(message);
-    this.status = status;
+    this.status = answer.status;
+    this.retryAfterMs = retryAfterMs(answer.headers.get("retry-after"));
   }
+}
+
+/** A `Retry-After` in ms: delay-seconds, or an HTTP-date (RFC 9110 §10.2.3). */
+function retryAfterMs(header: string | null): number | undefined {
+  if (!header) return undefined;
+  const seconds = Number(header);
+  if (Number.isFinite(seconds) && seconds >= 0) return seconds * 1_000;
+  const untilMs = Date.parse(header) - Date.now();
+  return Number.isFinite(untilMs) ? Math.max(untilMs, 0) : undefined;
 }
 
 /** A failed HTTP call's kind: a 429 or 408 is the far side asking for a slower pace (overloaded), a
@@ -117,7 +130,8 @@ export function httpFailureFields(error: unknown) {
  * When a call the platform failed is made again: the wait before each repeat, and whether an
  * overloaded failure is repeated too. Each wait is jittered down to between half and all of itself
  * ("equal jitter", https://aws.amazon.com/blogs/architecture/exponential-backoff-and-jitter/), so a
- * burst's repeats spread out and the schedule's total stays its bound.
+ * burst's repeats spread out. A `Retry-After` longer than a wait replaces it, up to the schedule's
+ * longest wait, so no wait runs past that.
  */
 export type Schedule = { delaysMs: readonly number[]; repeatsOverload: boolean };
 
@@ -135,6 +149,15 @@ export const RELAY_BURST: Schedule = { delaysMs: [0, 1_000, 3_000], repeatsOverl
 /** A CI script's call on another service's API: about 17 s in all. A 429 is repeated too: the
  *  script is the caller waiting it out. */
 export const CI_HTTP: Schedule = { delaysMs: [2_000, 5_000, 10_000], repeatsOverload: true };
+/** A deploy's or a preview's call on Cloudflare's API, a wrangler command's included: about two
+ *  minutes in all. The API allows 1,200 requests per five minutes per user
+ *  (https://developers.cloudflare.com/fundamentals/api/reference/limits/), which parallel preview
+ *  deploys share, so a rate-limited window lasts minutes: on 2026-07-14 one answered
+ *  `Retry-After: 120`. */
+export const CLOUDFLARE_API: Schedule = {
+  delaysMs: [5_000, 15_000, 30_000, 75_000],
+  repeatsOverload: true,
+};
 
 /** THE DURABLE LADDER's wait before attempt `attempt` (1-based) of a delivery that failed: 1 s·2ⁿ,
  *  capped at 30 minutes, ±20% jitter. Durable: the rung is written down and an alarm fires it, so an
@@ -146,7 +169,9 @@ export const durableLadderDelayMs = (attempt: number) =>
  * `attempt`, made again after each of the schedule's waits while it fails with a platform failure
  * and running it twice is running it once (`idempotent`). An overloaded failure is repeated only by
  * a schedule that `repeatsOverload`; every other kind (a refusal, our own defect) is thrown at once.
- * Recovery is bounded: the last failure is thrown.
+ * `idempotent` may read the failure: a request the far side refused unrun is safe to send again.
+ * Recovery is bounded: the last failure is thrown, and once the caller's `signal` aborts no repeat
+ * starts and no wait runs on.
  *
  * Each repeat logs one line, and so does giving up on an idempotent call the platform still fails
  * (`logPlatformFailure`): `<area>.deploy-reset-retry` at info, `<area>.platform-failure-retry` at
@@ -158,28 +183,119 @@ export async function retryPlatformFailures<T>(
   options: {
     area: string;
     schedule: Schedule;
-    idempotent: boolean;
+    idempotent: boolean | ((error: unknown) => boolean);
     kind: (error: unknown) => FailureKind;
     describe: (error: unknown) => Record<string, unknown>;
+    signal?: AbortSignal;
   },
 ): Promise<T> {
+  const { schedule, signal } = options;
   for (let attempts = 1; ; attempts++) {
     try {
       return await attempt();
     } catch (error) {
       const kind = options.kind(error);
-      if (!options.idempotent || !isPlatformFailureKind(kind)) throw error;
-      const delayMs = options.schedule.delaysMs[attempts - 1];
+      const idempotent =
+        typeof options.idempotent === "function" ? options.idempotent(error) : options.idempotent;
+      if (!idempotent || !isPlatformFailureKind(kind)) throw error;
       const fields = { message: String(error), ...options.describe(error) };
-      if (delayMs === undefined || (kind === "overloaded" && !options.schedule.repeatsOverload)) {
-        logPlatformFailure(options.area, "gave-up", kind, { ...fields, attempts });
-        throw error;
+      const delayMs = schedule.delaysMs[attempts - 1];
+      const repeats =
+        delayMs !== undefined &&
+        (kind !== "overloaded" || schedule.repeatsOverload) &&
+        !signal?.aborted;
+      if (repeats) {
+        const askedMs = error instanceof HttpAnswerError ? (error.retryAfterMs ?? 0) : 0;
+        const retryInMs = Math.max(
+          Math.round(delayMs / 2 + (Math.random() * delayMs) / 2),
+          Math.min(askedMs, Math.max(...schedule.delaysMs)),
+        );
+        logPlatformFailure(options.area, "retry", kind, {
+          ...fields,
+          attempt: attempts,
+          retryInMs,
+        });
+        await pause(retryInMs, signal);
+        if (!signal?.aborted) continue;
       }
-      const retryInMs = Math.round(delayMs / 2 + (Math.random() * delayMs) / 2);
-      logPlatformFailure(options.area, "retry", kind, { ...fields, attempt: attempts, retryInMs });
-      await new Promise((resolve) => setTimeout(resolve, retryInMs));
+      logPlatformFailure(options.area, "gave-up", kind, { ...fields, attempts });
+      throw error;
     }
   }
+}
+
+/** `ms` of waiting, cut short when `signal` aborts. */
+function pause(ms: number, signal: AbortSignal | undefined) {
+  return new Promise<void>((resolve) => {
+    const done = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", done);
+      resolve();
+    };
+    const timer = setTimeout(done, ms);
+    signal?.addEventListener("abort", done, { once: true });
+  });
+}
+
+/**
+ * A script's HTTP request on another service's API, sent again as `retryPlatformFailures` makes a
+ * call again, on `schedule` (CI_HTTP unless named): the first answer that is not the far side's
+ * failure (a success, or an answer about the request, which is the caller's). A 5xx, a 429 or 408,
+ * a connection that failed and an attempt that got no answer within `timeoutMs` (our own deadline,
+ * an overload) are the far side's; the last of them is thrown, an answer's as an HttpAnswerError
+ * that quotes it. Only an `idempotent` request is sent again, except after a 429, which the far side
+ * refused unrun (RFC 6585 §4). Each retry is a `<area>.platform-failure-retry` warn naming the
+ * request (`what`). The caller's `signal` aborts the attempt in flight and ends the schedule.
+ */
+export async function fetchRetryingPlatformFailures(
+  what: string,
+  send: (signal: AbortSignal) => Promise<Response>,
+  options: {
+    area: string;
+    idempotent: boolean;
+    schedule?: Schedule;
+    timeoutMs?: number;
+    signal?: AbortSignal;
+  },
+): Promise<Response> {
+  const { signal, timeoutMs = 30_000 } = options;
+  return retryPlatformFailures(
+    async () => {
+      const timeout = AbortSignal.timeout(timeoutMs);
+      const response = await send(signal ? AbortSignal.any([signal, timeout]) : timeout).catch(
+        (error: unknown) => {
+          if (signal?.aborted) throw error;
+          // Stamped as workerd stamps its own timeouts (capnp's OVERLOADED, kj/exception.h), so
+          // failureKind reads an overload.
+          if (timeout.aborted)
+            throw Object.assign(new Error(`${what}: no answer within ${timeoutMs / 1_000} s`), {
+              overloaded: true,
+            });
+          // A failed connection, named for its request as a failed answer is, and why: undici's
+          // "fetch failed" says it only in its cause.
+          if (!(error instanceof TypeError)) throw error;
+          const why = error.cause instanceof Error ? `: ${error.cause.message}` : "";
+          throw new TypeError(`${what}: ${error.message}${why}`);
+        },
+      );
+      if (!isPlatformFailureKind(httpFailureKind(response))) return response;
+      // Read to the end, so no unread answer holds its connection through the wait.
+      const text = await response.text().catch(() => "");
+      throw new HttpAnswerError(
+        `${what} answered HTTP ${response.status}: ${text.slice(0, 500)}`,
+        response,
+      );
+    },
+    {
+      area: options.area,
+      schedule: options.schedule || CI_HTTP,
+      idempotent: (error) =>
+        options.idempotent || (error instanceof HttpAnswerError && error.status === 429),
+      kind: httpFailureKind,
+      describe: (error) => ({ request: what, ...httpFailureFields(error) }),
+      signal,
+    },
+  );
 }
 
 /** One line about a platform failure, named `<area>.<outcome>` by the one rule: a deploy's reset

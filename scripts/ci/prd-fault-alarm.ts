@@ -633,7 +633,7 @@ async function readWindow(
         // The message names the status, the content type and the answer's first 200 bytes.
         const failed = new HttpAnswerError(
           `Workers Logs query answered HTTP ${response.status} (${response.headers.get("content-type") ?? "no content-type"}): ${text.slice(0, 200)}`,
-          response.status,
+          response,
         );
         if (response.status >= 500 || response.status === 429) throw failed;
         let answer: unknown;

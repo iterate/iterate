@@ -7,6 +7,7 @@ import { extname, join, relative, resolve } from "node:path";
 import { AwsClient } from "aws4fetch";
 import { z } from "zod";
 import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
+import { fetchRetryingPlatformFailures } from "@iterate-com/shared/platform-retry";
 import { createCli } from "trpc-cli";
 import { ciTelemetrySourceFromEnvironment } from "@iterate-com/shared/test-support/ci-telemetry";
 import {
@@ -285,16 +286,12 @@ function testEvidencePartition(manifest: TestEvidenceManifest) {
   ].join("/");
 }
 
-/** Retries of one request whose failure is Cloudflare's (sendRetryingPlatformFailures). */
-const PLATFORM_FAILURE_RETRIES = 3;
 /** One request's ceiling: a folder's largest file, a failed spec's trace, is a few megabytes. */
 const REQUEST_TIMEOUT_MS = 60_000;
 /** The whole upload's: no retry starts after it and the request in flight is aborted, so a Cloudflare
  *  outage costs the job a minute and a half. The e2e job is a pull request's slowest check, and this
  *  evidence decides nothing. */
 const UPLOAD_DEADLINE_MS = 90_000;
-/** The longest wait before a retry, whatever a 429's Retry-After asks. */
-const RETRY_WAIT_CEILING_MS = 5_000;
 
 /**
  * PUTs the folder into the CI bucket through R2's S3 API (https://developers.cloudflare.com/r2/api/s3/api/):
@@ -325,18 +322,27 @@ export async function uploadTestEvidence(input: {
   /** Doppler `_shared/preview`'s CLOUDFLARE_API_TOKEN. */
   apiToken: string;
   fetch: typeof fetch;
-  wait?: (ms: number) => Promise<void>;
   /** Aborts the upload: the request in flight, and any retry after it. UPLOAD_DEADLINE_MS by default. */
   deadline?: AbortSignal;
 }) {
-  const context: RequestContext = {
-    fetch: input.fetch,
-    wait: input.wait || ((ms) => new Promise((resolve) => setTimeout(resolve, ms))),
-    deadline: input.deadline || AbortSignal.timeout(UPLOAD_DEADLINE_MS),
-    retries: 0,
+  const deadline = input.deadline || AbortSignal.timeout(UPLOAD_DEADLINE_MS);
+  /** Platform-failure retries so far, for the step summary. */
+  let retries = 0;
+  /** One request to Cloudflare, sent again when the failure is Cloudflare's: every one here is
+   *  idempotent, a PUT's repeat after it landed answering 412 (below). */
+  const send: Send = (what, request) => {
+    let sent = 0;
+    return fetchRetryingPlatformFailures(
+      what,
+      (signal) => {
+        if (sent++ > 0) retries++;
+        return request(signal);
+      },
+      { area: "test-evidence", idempotent: true, timeoutMs: REQUEST_TIMEOUT_MS, signal: deadline },
+    );
   };
   const client = new AwsClient({
-    accessKeyId: await apiTokenId(input, context),
+    accessKeyId: await apiTokenId(input, send),
     secretAccessKey: sha256(new TextEncoder().encode(input.apiToken)),
     service: "s3",
     region: "auto",
@@ -350,31 +356,25 @@ export async function uploadTestEvidence(input: {
   const put = async (key: string, path: string, body: Uint8Array, payloadSha256: string) => {
     if (sha256(body) !== payloadSha256)
       throw new Error(`${path} changed after the manifest listed it; nothing more is uploaded`);
-    const response = await sendRetryingPlatformFailures(
-      `PUT ${key}`,
-      async (signal) =>
-        context.fetch(
-          await client.sign(objectUrl(key), {
-            method: "PUT",
-            body,
-            headers: {
-              "content-type": contentTypes[extname(path)] || "application/octet-stream",
-              "if-none-match": "*",
-              "x-amz-content-sha256": payloadSha256,
-            },
-          }),
-          { signal },
-        ),
-      context,
+    const response = await send(`PUT ${key}`, async (signal) =>
+      input.fetch(
+        await client.sign(objectUrl(key), {
+          method: "PUT",
+          body,
+          headers: {
+            "content-type": contentTypes[extname(path)] || "application/octet-stream",
+            "if-none-match": "*",
+            "x-amz-content-sha256": payloadSha256,
+          },
+        }),
+        { signal },
+      ),
     );
     if (response.ok) return;
     const answer = `${response.status} ${await response.text()}`;
     if (response.status === 412) {
-      const held = await sendRetryingPlatformFailures(
-        `HEAD ${key}`,
-        async (signal) =>
-          context.fetch(await client.sign(objectUrl(key), { method: "HEAD" }), { signal }),
-        context,
+      const held = await send(`HEAD ${key}`, async (signal) =>
+        input.fetch(await client.sign(objectUrl(key), { method: "HEAD" }), { signal }),
       );
       // Cloudflare's edge compresses a JSON answer and so marks its ETag weak: `W/"<md5>"`.
       const etag = held.headers.get("etag")?.match(/^(?:W\/)?"([0-9a-f]{32})"$/u)?.[1];
@@ -407,34 +407,30 @@ export async function uploadTestEvidence(input: {
     /** Every PUT: the listed files, then the manifest. */
     objects: manifest.files.length + 1,
     bytes: bytes + manifestBytes.byteLength,
-    retries: context.retries,
+    retries,
   };
 }
 
-type RequestContext = {
-  fetch: typeof fetch;
-  wait: (ms: number) => Promise<void>;
-  /** The upload's deadline: aborts the request in flight, and no retry starts after it. */
-  deadline: AbortSignal;
-  /** Platform-failure retries so far, for the step summary. */
-  retries: number;
-};
+type Send = (
+  what: string,
+  request: (signal: AbortSignal) => Promise<Response>,
+) => Promise<Response>;
 
 /**
  * The API token's id, which is its S3 access key id. A user token answers `/user/tokens/verify`,
  * an account-owned one its account's (https://developers.cloudflare.com/api/resources/user/subresources/tokens/methods/verify/).
  */
-async function apiTokenId(input: { accountId: string; apiToken: string }, context: RequestContext) {
+async function apiTokenId(
+  input: { accountId: string; apiToken: string; fetch: typeof fetch },
+  send: Send,
+) {
   const answers: string[] = [];
   for (const path of ["/user/tokens/verify", `/accounts/${input.accountId}/tokens/verify`]) {
-    const response = await sendRetryingPlatformFailures(
-      `GET ${path}`,
-      (signal) =>
-        context.fetch(`https://api.cloudflare.com/client/v4${path}`, {
-          headers: { authorization: `Bearer ${input.apiToken}` },
-          signal,
-        }),
-      context,
+    const response = await send(`GET ${path}`, (signal) =>
+      input.fetch(`https://api.cloudflare.com/client/v4${path}`, {
+        headers: { authorization: `Bearer ${input.apiToken}` },
+        signal,
+      }),
     );
     if (response.ok) return TokenVerification.parse(await response.json()).result.id;
     answers.push(`${path}: ${response.status}`);
@@ -443,55 +439,6 @@ async function apiTokenId(input: { accountId: string; apiToken: string }, contex
 }
 
 const TokenVerification = z.object({ result: z.object({ id: z.string().min(1) }) });
-
-/**
- * One request to Cloudflare, sent again when the failure is Cloudflare's: a 5xx, a 429, or no
- * answer (a reset connection, REQUEST_TIMEOUT_MS). Each retry is a warn whose `event` is
- * `test-evidence.platform-failure-retry` (docs/engineering-invariants.md), after a wait of 1, 2 and
- * then 4 seconds, or what a 429's Retry-After asks, up to RETRY_WAIT_CEILING_MS. After
- * PLATFORM_FAILURE_RETRIES, or at the upload's deadline, the failure is thrown. Every other answer, a
- * 4xx included, is the caller's.
- */
-async function sendRetryingPlatformFailures(
-  what: string,
-  send: (signal: AbortSignal) => Promise<Response>,
-  context: RequestContext,
-) {
-  for (let attempt = 1; ; attempt++) {
-    let failure: { status?: number; answer: string; retryAfterSeconds?: number };
-    try {
-      const response = await send(
-        AbortSignal.any([context.deadline, AbortSignal.timeout(REQUEST_TIMEOUT_MS)]),
-      );
-      if (response.status < 500 && response.status !== 429) return response;
-      failure = {
-        status: response.status,
-        answer: (await response.text()).slice(0, 500),
-        retryAfterSeconds: Number(response.headers.get("retry-after")) || undefined,
-      };
-    } catch (error) {
-      failure = { answer: describeError(error) };
-    }
-    if (attempt > PLATFORM_FAILURE_RETRIES || context.deadline.aborted)
-      throw new Error(
-        `${what}: ${failure.status ?? "no answer"} ${failure.answer} (after ${attempt - 1} retries)`,
-      );
-    const waitMs = Math.min(
-      (failure.retryAfterSeconds ?? 2 ** (attempt - 1)) * 1000,
-      RETRY_WAIT_CEILING_MS,
-    );
-    context.retries++;
-    console.warn({
-      event: "test-evidence.platform-failure-retry",
-      request: what,
-      attempt,
-      status: failure.status,
-      answer: failure.answer,
-      waitMs,
-    });
-    await context.wait(waitMs);
-  }
-}
 
 function describeError(error: unknown): string {
   if (!(error instanceof Error)) return String(error);
