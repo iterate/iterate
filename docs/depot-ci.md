@@ -626,7 +626,7 @@ reinstall), workspace config, pnpm hook, npm config, patches, local file depende
 bake script and workflow, verifier, checkout path, Node version, OS/architecture and install
 configuration environment. Reuse also checks pnpm's installed metadata and the
 workspace module directory listings. New workspace lifecycle scripts disable
-reuse; the current root `is-ci || husky` prepare is a no-op in CI.
+reuse; the current root `is-ci || (husky && node scripts/lockfile-stamp.ts)` prepare is a no-op in CI.
 
 This receipt is for a pristine Depot filesystem snapshot, consumed immediately
 after `checkout` with `clean: false`. It is not a general cache-integrity checker:
@@ -756,6 +756,17 @@ Actions workflow. On every push, open and reopen it reads the PR's `mergeable` a
 only the base branch's script, never the PR's code. The check is not required: a conflicted PR
 cannot merge anyway. A PR that main moves under keeps its earlier checks, and its next push gets
 the red check.
+
+### A PR and main that both changed the lockfile
+
+Git merges `pnpm-lock.yaml` line by line, so two changes to different lines merge cleanly into a
+lockfile pnpm may reject, and a PR's CI tested it against the main of its last push. So
+`pnpm-lock.yaml.sha256` holds the lockfile's hash on one line: a PR that changed the lockfile
+conflicts with a main whose lockfile changed since its base, and GitHub refuses the merge, whoever
+merges it. Rebase, run `pnpm install` (its root `prepare` rewrites the stamp, except where `CI` is
+set: then run `node scripts/lockfile-stamp.ts`), commit both files and push; CI then tests the
+result. Lint and Typecheck's **Check the lockfile stamp** fails a
+commit whose stamp is not its lockfile's hash. The reasons are in `scripts/lockfile-stamp.ts`.
 
 ## Which PRs get a preview
 
