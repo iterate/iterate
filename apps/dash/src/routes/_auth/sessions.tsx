@@ -19,7 +19,7 @@ import { Checkbox } from "@iterate-com/ui/components/checkbox";
 import { Input } from "@iterate-com/ui/components/input";
 import { Label } from "@iterate-com/ui/components/label";
 import { NativeSelect, NativeSelectOption } from "@iterate-com/ui/components/native-select";
-import { NotRecorded, SecretInput } from "@iterate-com/ui/components/not-recorded";
+import { NotRecorded } from "@iterate-com/ui/components/not-recorded";
 import {
   Sheet,
   SheetContent,
@@ -725,7 +725,7 @@ function WaitroseForm({
         </Label>
         <Label className="flex flex-col items-start gap-2">
           Password
-          <SecretInput
+          <Input
             type="password"
             autoComplete="off"
             required

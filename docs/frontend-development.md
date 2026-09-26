@@ -283,26 +283,18 @@ route `loader` or subscribe with `useLiveState`/`useIterateContext` at the leaf.
 
 ## Secrets on the page
 
-In production every app, and the platform's sign-in pages, record PostHog session replays of what
-people type and see. `posthogPrivacy()` in `packages/ui/src/components/not-recorded.tsx` is the
-privacy every `posthog.init` spreads last. Secrets never go in a replay:
+In production every app, and the platform's sign-in pages, record PostHog session replays with
+PostHog's own privacy defaults ([session replay privacy](https://posthog.com/docs/session-replay/privacy)):
+every input is masked. Masking is set in the PostHog project, not in code.
 
-- A field that takes a secret (a password, an API key, a secret's value, a sign-in code) is a
-  `SecretInput` or `SecretTextarea`. `iterate/secret-field-not-recorded` flags a raw input or
-  textarea that says it takes one: its `type`, `autoComplete`, `id`, `name`, `aria-label`,
-  `placeholder` or label.
 - A secret on screen (a personal access token or an invite link shown once, a link whose URL holds
-  one) goes inside a `NotRecorded`. `iterate/secret-shown-not-recorded` flags a value named like a
-  secret (`token`, `apiKey`, `clientSecret`) rendered outside one.
-- A route whose path holds a secret (`/invitations/<token>`) adds its pattern to
-  `redactSecretPaths` in `packages/ui/src/lib/secret-text.ts`. Page URLs are in every event and
-  replay, and no component can hide them.
+  one) goes inside a `NotRecorded` (`packages/ui/src/components/not-recorded.tsx`), PostHog's
+  `ph-no-capture` class: the replay draws an empty box, and autocapture skips it.
+- A route whose path holds a secret (`/invitations/<token>`) adds its pattern to `redactSecretPaths`
+  in `packages/ui/src/components/posthog.tsx`. Page URLs are in every event and replay, and no
+  component can hide them.
 
-Both components replay as an empty box, and autocapture skips them. Behind them, the replay masks
-at runtime whatever the lint cannot see: a raw field that says it takes a secret (the same test as
-the lint, `namesSecret`) replays as asterisks, and a key or invitation link typed into any other
-field is masked. `posthog-replay.test.tsx` runs posthog-js's own recorder on a React page of these
-components, and `posthog-privacy.test.ts` fails on any other replay or `before_send` setting.
+`posthog-replay.test.tsx` runs posthog-js's own recorder on a React page with both.
 
 ## Where this is going
 

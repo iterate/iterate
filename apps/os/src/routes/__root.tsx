@@ -19,8 +19,7 @@ export const Route = createRootRoute({
 
 /** The sign-in and consent pages: the apps' PostHog (packages/ui posthog.tsx), anonymous — the
  *  person is identified in the apps they sign in to (dash), and PostHog's shared `*.iterate.com`
- *  cookie joins this visit to them. The apps' privacy covers the password and the mailed code
- *  (`SecretInput`s). */
+ *  cookie joins this visit to them. */
 function RootDocument() {
   // `data-hydrated` is false in the server's HTML and true once React owns the page: the specs'
   // hydration-waiter (specs/AGENTS.md) waits on it before touching controls that do nothing yet.

@@ -33,7 +33,6 @@ import {
   SheetTitle,
 } from "@iterate-com/ui/components/sheet";
 import { Spinner } from "@iterate-com/ui/components/spinner";
-import { SecretInput } from "@iterate-com/ui/components/not-recorded";
 import { Textarea } from "@iterate-com/ui/components/textarea";
 import { errorCode } from "iterate/lib";
 import { useContextStub, useFacetLiveState } from "iterate/react";
@@ -1092,7 +1091,7 @@ function WaitroseForm({
         </Field>
         <Field>
           <FieldLabel htmlFor="waitrose-password">Password</FieldLabel>
-          <SecretInput
+          <Input
             id="waitrose-password"
             type="password"
             autoComplete="off"
