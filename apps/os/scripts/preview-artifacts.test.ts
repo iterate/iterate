@@ -2,6 +2,7 @@ import { expect, test, vi } from "vitest";
 import { CloudflareApiError } from "../../../scripts/lib/env-context.ts";
 import {
   deleteArtifactsNamespace,
+  ensureArtifactsNamespace,
   renderStuckArtifactsNamespacesPage,
   type Cf,
 } from "./preview-artifacts.ts";
@@ -173,6 +174,79 @@ test("an accepted namespace delete is confirmed by three reads before it counts 
   expect(api.requests.filter((request) => request === `GET ${ROUTE}`)).toHaveLength(4);
 });
 
+// ── a namespace create answered 409/10306 or 409/10201 while its activation settles ────────────
+
+test.for([
+  {
+    name: "409/10306 (activation already in progress)",
+    code: 10306,
+    readsBeforeActive: 3,
+    waits: [2000, 2000],
+    warns: [
+      { event: "preview.platform-failure-retry", name: NAMESPACE, codes: [10306], read: 1 },
+      { event: "preview.platform-failure-retry", name: NAMESPACE, codes: [10306], read: 2 },
+    ],
+    requests: [
+      `GET ${ROUTE}`,
+      "POST /artifacts/namespaces",
+      `GET ${ROUTE}`,
+      `GET ${ROUTE}`,
+      `GET ${ROUTE}`,
+    ],
+  },
+  {
+    name: "409/10201 (already exists)",
+    code: 10201,
+    readsBeforeActive: 1,
+    waits: [],
+    warns: [],
+    requests: [`GET ${ROUTE}`, "POST /artifacts/namespaces", `GET ${ROUTE}`],
+  },
+])(
+  "a create answering $name reads the namespace until its activation lands, each wait a platform-failure warn",
+  async ({ code, readsBeforeActive, waits, warns, requests }) => {
+    const api = fakeArtifactsApi([], activationSettling(code, readsBeforeActive));
+
+    expect(await ensuring(api.cf)).toMatchObject({
+      error: undefined,
+      waits,
+      warns,
+      logs: [`found Artifacts namespace ${NAMESPACE} once its activation landed`],
+    });
+    expect(api).toMatchObject({ requests });
+  },
+);
+
+test("an activation that never lands gives up after 30 reads 2 s apart — bounded", async () => {
+  const api = fakeArtifactsApi([], activationSettling(10306, Number.POSITIVE_INFINITY));
+
+  const outcome = await ensuring(api.cf);
+
+  expect(outcome).toMatchObject({
+    error: {
+      message: `Artifacts namespace ${NAMESPACE} still reads 404 after 30 reads 2 s apart; its create answered 409/10306`,
+    },
+  });
+  expect(outcome.waits.reduce((sum, ms) => sum + ms, 0)).toBe(58_000);
+  expect(outcome.warns).toHaveLength(29);
+  expect(api.requests.filter((request) => request === `GET ${ROUTE}`)).toHaveLength(31);
+});
+
+test("a create refused any other way throws at once, never read again", async () => {
+  const api = fakeArtifactsApi([], (method, path) =>
+    method === "POST"
+      ? new CloudflareApiError(method, path, 403, [{ code: 10000 }])
+      : new CloudflareApiError(method, path, 404, [{ code: 10200 }]),
+  );
+
+  expect(await ensuring(api.cf)).toMatchObject({
+    error: { message: expect.stringMatching(/POST \/artifacts\/namespaces failed \(403\)/) },
+    waits: [],
+    warns: [],
+  });
+  expect(api).toMatchObject({ requests: [`GET ${ROUTE}`, "POST /artifacts/namespaces"] });
+});
+
 test("the sweep's page names each stuck namespace, what to escalate, and the run", () => {
   const page = renderStuckArtifactsNamespacesPage(
     [{ namespace: NAMESPACE, repoCount: 1, createdAt: "2026-09-22T13:11:36Z" }],
@@ -234,6 +308,37 @@ function fakeArtifactsApi(
     throw new Error(`unexpected ${method} ${path}`);
   }) as Cf;
   return { cf, requests, state: () => ({ repos: [...repos], namespaceExists }) };
+}
+
+/** Cloudflare's answers while the namespace's activation settles: a create answers 409 with
+ *  `code`, and the namespace reads 404 `readsBeforeActive` times before its row. */
+function activationSettling(code: number, readsBeforeActive: number) {
+  let reads = 0;
+  return (method: string, path: string) => {
+    if (method === "POST") return new CloudflareApiError(method, path, 409, [{ code }]);
+    if (path === ROUTE && reads++ < readsBeforeActive)
+      return new CloudflareApiError(method, path, 404, [{ code: 10200 }]);
+    return undefined;
+  };
+}
+
+/** Ensure the namespace with every wait recorded instead of slept; its warns and logs. */
+async function ensuring(cf: Cf) {
+  const waits: number[] = [];
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  const log = vi.spyOn(console, "log").mockImplementation(() => {});
+  const error = await ensureArtifactsNamespace(cf, NAMESPACE, async (ms) => {
+    waits.push(ms);
+  }).then(
+    () => undefined,
+    (failure: Error) => failure,
+  );
+  return {
+    error,
+    waits,
+    warns: warn.mock.calls.map(([entry]) => entry),
+    logs: log.mock.calls.map(([entry]) => entry),
+  };
 }
 
 /** Delete the namespace with every wait recorded instead of slept; its warns, split. */

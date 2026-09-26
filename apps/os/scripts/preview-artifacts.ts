@@ -1,7 +1,9 @@
 // scripts/preview-artifacts.ts — a preview's Artifacts namespace (not auto-provisioned: created by
 // the deploy, deleted by the delete and the sweep), and the Cloudflare refusal predicate every
-// preview resource delete tells an expected answer apart by. Its own module so the delete's loop
-// unit-tests against a fake API (preview-artifacts.test.ts); scripts/preview.ts is the caller.
+// preview resource delete tells an expected answer apart by. Its own module so the create's and the
+// delete's loops unit-test against a fake API (preview-artifacts.test.ts); scripts/preview.ts is
+// the caller.
+import { setTimeout as sleep } from "node:timers/promises";
 import { z } from "zod";
 import type { OsEnv } from "../../../envs.ts";
 import { onCallMention } from "../../../scripts/ci/slack.ts";
@@ -17,8 +19,9 @@ export type ArtifactsNamespaceRow = { namespace: string; repo_count?: number; cr
 const CloudflareErrors = z.array(z.object({ code: z.number() }));
 
 /** A Cloudflare refusal with this status and error code. Each one used here was measured:
- *  Artifacts 404/10200 (no such namespace, or repo), 409/10202 (namespace still holds repos) and
- *  409/10305 (another delete of the namespace in flight: deleteArtifactsNamespace); KV
+ *  Artifacts 404/10200 (no such namespace, or repo), 409/10202 (namespace still holds repos),
+ *  409/10305 (another delete of the namespace in flight: deleteArtifactsNamespace), 409/10306 and
+ *  409/10201 (the namespace's activation still settling: ensureArtifactsNamespace); KV
  *  404/10013 (no such namespace); R2 404/10006 (no such bucket); Worker Previews 404/10025 (no such
  *  preview). */
 export const isCloudflareError = (error: unknown, status: number, code: number) =>
@@ -49,22 +52,63 @@ export type StuckArtifactsNamespace = {
   createdAt: string | undefined;
 };
 
+/** How many reads, 2 s apart, a namespace may answer 404 after its create answered 409/10306 or
+ *  409/10201 before the ensure gives up (~1 minute). A create racing another answers either at
+ *  once, and the namespace reads 200 within a second (measured 2026-09-26); a deploy's lone create
+ *  took 20 s to answer 10306. */
+const ACTIVATION_READS = 30;
+
 /** A preview's namespace, by name. The worker's repo create does NOT provision one: on a missing
  *  namespace it fails with "Namespace is not active" (measured 2026-09-22), and the binding names
- *  the namespace only. */
-export async function ensureArtifactsNamespace(cf: Cf, artifactsNamespaceName: string) {
-  const existing = await cf<ArtifactsNamespaceRow>(
-    `/artifacts/namespaces/${encodeURIComponent(artifactsNamespaceName)}`,
-  ).catch((error) => {
-    if (isCloudflareError(error, 404, 10200)) return undefined;
-    throw error;
-  });
-  if (!existing)
-    await cf("/artifacts/namespaces", {
-      method: "POST",
-      body: JSON.stringify({ namespace: artifactsNamespaceName }),
+ *  the namespace only.
+ *
+ *  Cloudflare answers a create with 409/10306 ("Namespace activation is already in progress") or
+ *  409/10201 ("Namespace already exists") while the namespace's activation is still settling: when
+ *  a concurrent create races it (measured 2026-09-26), and when a slow create conflicts with itself
+ *  with no other create in flight. The namespace is read again until it reads 200, each wait
+ *  logged as `preview.platform-failure-retry`, at most ACTIVATION_READS times. */
+export async function ensureArtifactsNamespace(
+  cf: Cf,
+  artifactsNamespaceName: string,
+  wait = (ms: number) => sleep(ms),
+) {
+  const route = `/artifacts/namespaces/${encodeURIComponent(artifactsNamespaceName)}`;
+  if (await readArtifactsNamespace(cf, route)) {
+    console.log(`found Artifacts namespace ${artifactsNamespaceName}`);
+    return;
+  }
+  const refusedWith = await cf("/artifacts/namespaces", {
+    method: "POST",
+    body: JSON.stringify({ namespace: artifactsNamespaceName }),
+  }).then(
+    () => undefined,
+    (error) => {
+      const code = [10306, 10201].find((known) => isCloudflareError(error, 409, known));
+      if (!code) throw error;
+      return code;
+    },
+  );
+  if (!refusedWith) {
+    console.log(`created Artifacts namespace ${artifactsNamespaceName}`);
+    return;
+  }
+  for (let read = 1; ; read++) {
+    if (await readArtifactsNamespace(cf, route)) break;
+    if (read === ACTIVATION_READS)
+      throw new Error(
+        `Artifacts namespace ${artifactsNamespaceName} still reads 404 after ${read} reads 2 s apart; its create answered 409/${refusedWith}`,
+      );
+    console.warn({
+      event: "preview.platform-failure-retry",
+      name: artifactsNamespaceName,
+      read,
+      status: 409,
+      codes: [refusedWith],
+      retryInMs: 2000,
     });
-  console.log(`${existing ? "found" : "created"} Artifacts namespace ${artifactsNamespaceName}`);
+    await wait(2000);
+  }
+  console.log(`found Artifacts namespace ${artifactsNamespaceName} once its activation landed`);
 }
 
 /** Delete a preview's Artifacts namespace: every repo first (the API refuses a namespace that is
@@ -92,19 +136,12 @@ export async function ensureArtifactsNamespace(cf: Cf, artifactsNamespaceName: s
 export async function deleteArtifactsNamespace(
   cf: Cf,
   artifactsNamespaceName: string,
-  wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms)),
+  wait = (ms: number) => sleep(ms),
 ): Promise<StuckArtifactsNamespace | undefined> {
   const route = `/artifacts/namespaces/${encodeURIComponent(artifactsNamespaceName)}`;
-  // The namespace itself is what answers "does not exist" (404, code 10200); its repos list answers
-  // an empty page for a missing namespace (measured 2026-09-22), so the check is on the namespace.
-  const readNamespace = () =>
-    cf<ArtifactsNamespaceRow>(route).catch((error) => {
-      if (isCloudflareError(error, 404, 10200)) return undefined;
-      throw error;
-    });
   /** A read that met a 5xx: the namespace's state unknown, to be read again on a later round. */
   const readThroughPlatformFailure = () =>
-    readNamespace().catch((error) => {
+    readArtifactsNamespace(cf, route).catch((error) => {
       if (!isPlatformFailure(error)) throw error;
       return "unread" as const;
     });
@@ -118,7 +155,7 @@ export async function deleteArtifactsNamespace(
   };
   // One read, not three: a 404 here while another run's delete is in flight leaves the namespace to
   // that run, and to the sweep if it fails.
-  if (!(await readNamespace())) {
+  if (!(await readArtifactsNamespace(cf, route))) {
     console.warn(`Artifacts namespace ${artifactsNamespaceName} did not exist; continuing.`);
     return undefined;
   }
@@ -190,6 +227,15 @@ export function renderStuckArtifactsNamespacesPage(
     .filter(Boolean)
     .join("\n");
 }
+
+/** The namespace's row, or undefined for its 404/10200. The namespace itself is what answers "does
+ *  not exist": its repos list answers an empty page for a missing namespace (measured
+ *  2026-09-22). */
+const readArtifactsNamespace = (cf: Cf, route: string) =>
+  cf<ArtifactsNamespaceRow>(route).catch((error) => {
+    if (isCloudflareError(error, 404, 10200)) return undefined;
+    throw error;
+  });
 
 /** A Cloudflare 5xx: the platform failed the request, not refused it. */
 const isPlatformFailure = (error: unknown): error is CloudflareApiError =>
