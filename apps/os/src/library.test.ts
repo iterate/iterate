@@ -5,6 +5,7 @@ import { expect, onTestFinished, test, vi } from "vitest";
 import { codedError } from "iterate/lib";
 import type { OpenApiDocument, WaitForEventFilter } from "iterate/api";
 import type { StreamEvent, StreamEventInput } from "iterate/stream/processor";
+import { committedEvent } from "iterate/stream/test-support";
 import {
   buildLibrary,
   type LibraryItx,
@@ -1148,13 +1149,8 @@ function host(settlements: (StreamEvent | "timeout")[] = []): {
   return { itx, loaded, appended, waits, runs: () => ran };
 }
 
-const settledAt = (offset: number, requestOffset: number, settlement: unknown): StreamEvent => ({
-  type: "events.iterate.com/itx/run-settled",
-  payload: { requestOffset, settlement },
-  offset,
-  createdAt: "t",
-  path: "/",
-});
+const settledAt = (offset: number, requestOffset: number, settlement: unknown) =>
+  committedEvent(offset, "events.iterate.com/itx/run-settled", { requestOffset, settlement });
 
 /** THE MODULE, RUN: the text the loader gets, imported here as a module with its imports stood in
  *  for (`WorkerEntrypoint`, which only hands `env` over; `iterate/with-itx`, the real module), so

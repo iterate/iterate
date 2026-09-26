@@ -22,7 +22,7 @@ import {
   type ScannedRange,
   type StreamEventInput,
 } from "./processor.ts";
-import { memoryStorage, memoryStream, settle } from "./test-support.ts";
+import { committedEvent, memoryStorage, memoryStream, settle } from "./test-support.ts";
 
 // ── contract ──
 
@@ -272,15 +272,15 @@ test("caughtUp: two contiguous pushes enqueued back-to-back — only the one rea
   // when the through=1 batch runs: that batch is not at head. Contiguity alone never earns the
   // at-head pass — the reconcile work it triggers must run against the head reduce, not a stale one.
   const { probe, engine } = caughtUpProbe();
-  const first = engine.processEventBatch([ev(1)], { after: 0, through: 1 });
-  const second = engine.processEventBatch([ev(2)], { after: 1, through: 2 });
+  const first = engine.processEventBatch([committedEvent(1, "t")], { after: 0, through: 1 });
+  const second = engine.processEventBatch([committedEvent(2, "t")], { after: 1, through: 2 });
   await Promise.all([first, second]);
   expect(probe).toMatchObject({ caughtUps: 1 });
 });
 
 test("caughtUp: a single push that reaches the shown head fires caughtUp once", async () => {
   const { probe, engine } = caughtUpProbe();
-  await engine.processEventBatch([ev(1)], { after: 0, through: 1 });
+  await engine.processEventBatch([committedEvent(1, "t")], { after: 0, through: 1 });
   expect(probe).toMatchObject({ caughtUps: 1 });
 });
 
@@ -423,7 +423,9 @@ test("the host's word leaves a push's at-head judgement alone: a push the log al
         append: () => [],
         read: (after = 0) =>
           Promise.resolve({
-            events: [ev(1), ev(2), ev(3)].filter((event) => event.offset > after),
+            events: [committedEvent(1, "t"), committedEvent(2, "t"), committedEvent(3, "t")].filter(
+              (event) => event.offset > after,
+            ),
             scannedThroughOffset: 3,
             atHead: true,
           }),
@@ -433,7 +435,7 @@ test("the host's word leaves a push's at-head judgement alone: a push the log al
       fedByPushes,
     });
     await engine.snapshot(); // reduces 1–3 from the log; its at-head pass is one caught-up
-    await engine.processEventBatch([ev(2)], { after: 1, through: 2 }); // a push the log beat
+    await engine.processEventBatch([committedEvent(2, "t")], { after: 1, through: 2 }); // a push the log beat
     results.push(probe.caughtUps);
   }
   expect(results).toEqual([2, 2]);
@@ -743,9 +745,11 @@ test("the loop guard: a processor's reduce never sees a live-state delta, even w
 test("the author class stands alone: constructible bare, `reduce` callable with no engine", () => {
   // No stream, no storage, no constructor arguments — a processor is a unit-testable plain object.
   const bare = new CounterProcessor();
-  const ticked = ev(1, "events.iterate.com/test/counter-ticked");
+  const ticked = committedEvent(1, "events.iterate.com/test/counter-ticked");
   expect(bare.reduce({ event: ticked, state: { ticks: 0 } })).toEqual({ ticks: 1 });
-  expect(bare.reduce({ event: ev(2, "unrelated"), state: { ticks: 1 } })).toBeUndefined();
+  expect(
+    bare.reduce({ event: committedEvent(2, "unrelated"), state: { ticks: 1 } }),
+  ).toBeUndefined();
   expect(bare.idempotencyKey("k")).toBe("counter/k");
   expect(bare.idempotencyKey("k", ticked)).toBe("counter/k@1");
 });
@@ -1388,16 +1392,6 @@ function setup() {
 }
 
 // ── the at-head pass is tied to the SHOWN head ──
-
-function ev(offset: number, type = "t"): StreamEvent {
-  return {
-    type,
-    payload: { n: offset },
-    createdAt: new Date(offset).toISOString(),
-    offset,
-    path: "/",
-  };
-}
 
 const CaughtUpContract = defineProcessorContract({
   slug: "caughtup-probe",
