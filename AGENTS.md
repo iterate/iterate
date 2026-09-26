@@ -21,7 +21,7 @@ Read when relevant:
 
 - [Repository map](README.md) · [Platform](apps/os/README.md) · [Kit firmware](apps/kit/firmware/AGENTS.md)
 - [Dev environments](docs/dev-environments.md): local dev, per-PR previews, and acting as users and operators
-- [Testing](docs/testing.md) · [Browser specs](specs/AGENTS.md) · [Vitest patterns](docs/vitest-patterns.md); a PR that changes residency, alarms, claims or facet lifetimes turns on the [slow e2e rows](docs/testing.md#slow-rows)
+- [Testing](docs/testing.md) · [Browser specs](specs/AGENTS.md) · [Vitest patterns and the shape of a test](docs/vitest-patterns.md); a PR that changes residency, alarms, claims or facet lifetimes turns on the [slow e2e rows](docs/testing.md#slow-rows)
 - [Depot CI](docs/depot-ci.md): workflows, running CI without a PR, runs, logs, artifacts, and waiting on checks
 - TypeScript style: [coding style](docs/coding-style.md) · [conventions](docs/typescript-conventions.md) · [code rules](docs/jonasland-rules.md) · [identifiers](docs/identifiers.md)
 - [Event types](packages/iterate/README.md#event-types): naming rules for every `events.iterate.com` type; `lint/event-types.test.ts` enforces them
