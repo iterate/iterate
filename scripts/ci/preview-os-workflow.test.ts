@@ -151,7 +151,7 @@ test("Preview OS deploys the PR merged into main, and the test jobs use that ver
   ).toEqual({ HEAD_SHA: "${{ needs.deploy.outputs.head-sha }}" });
 });
 
-// Why: apps/os/scripts/preview.ts `handOverSuiteLine` and `writeSuiteLines`.
+// Why: apps/os/scripts/preview.ts `handOverSuiteLine` and `writeSuiteLines`, and the step's comment.
 test("Preview OS: the suites hand their lines to the trace job, which writes both into the PR body at once", () => {
   for (const suite of suites)
     expect(preview.jobs[suite.job]!).toMatchObject({
@@ -161,7 +161,6 @@ test("Preview OS: the suites hand their lines to the trace job, which writes bot
   const write = steps.findIndex((step) => step.name === "Write the suites' lines into the PR body");
   expect(steps[write]).toMatchObject({
     run: "pnpm preview suite-lines",
-    // a failure here costs the line, never the trace or its report statuses after it
     "continue-on-error": true,
     "timeout-minutes": 2,
     env: {
