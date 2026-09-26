@@ -938,7 +938,8 @@ did not run), fails the run once the others have paged. A red main e2e run
 pages at the next hourly run, not at its own end. Its memory is its own
 `health-state` artifact; a state of another `schemaVersion` is not read, and the
 run starts over. Dispatch it with `--input test-page=true` to post every
-check's verdict as a 🧪 test page that mentions nobody and keeps no state.
+check's verdict as a 🧪 test page that mentions nobody, keeps no state and sends
+PostHog nothing; a run off main without it posts nothing.
 
 ### PR time to green
 
