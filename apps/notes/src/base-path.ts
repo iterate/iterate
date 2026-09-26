@@ -11,14 +11,14 @@ import { ITERATE_BASE_PATH_HEADER } from "iterate/project-ingress";
 
 /** The base path a request says, or "" — plain path segments only: the header reaches Notes' own
  *  origin from anyone, and what it says is written into the page's links. */
-export function basePathOf(headers: Headers): string {
+export function basePathOf(headers: Headers) {
   const value = headers.get(ITERATE_BASE_PATH_HEADER) || "";
   return /^(?:\/[a-z0-9-]+)+$/.test(value) ? value : "";
 }
 
 /** The base path in the browser: the server render writes it on `<html data-base-path>`
  *  (routes/__root.tsx), before any script runs. */
-export function documentBasePath(): string {
+export function documentBasePath() {
   return document.documentElement.dataset.basePath || "";
 }
 
