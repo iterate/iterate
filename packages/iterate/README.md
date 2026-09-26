@@ -55,6 +55,31 @@ reach takes a `WithItx` accessor (`(call) => withItx(this.env.ITX, call)`), neve
 that outlives the call runs under a processor's `runInBackground` claim. Lint refuses a raw
 `ITX.get()` in this repository (`iterate/no-raw-itx-get`).
 
+## Who wrote an event
+
+A project is one trust boundary. Inside it, anyone may append any event to any context, and nothing
+forges where an event came from: the platform replaces every event's `source` as it commits
+(`EventSource` in `iterate/stream/processor`). `origin` is the context whose code or session wrote
+it, `principal` the member, and `platform` says the platform itself vouches for it. A reader decides
+whom it listens to. An event is trusted at a context X when the platform vouches for it, a member
+wrote it, or code at X or above X wrote it (`trusts`). A processor's contract says, per type, whom
+it hears; an undeclared type hears the trusted writers only:
+
+```ts
+defineProcessorContract({
+  slug: "inbox",
+  consumes: ["acme/ticket-opened", "acme/ticket-closed"],
+  trust: { "acme/ticket-opened": "anyone" }, // or "platform", or (source, event) => boolean
+  // …
+});
+```
+
+The engine skips what the contract does not admit (`admits`), and logs
+`processor.untrusted-event-ignored`. A subscription callback and `waitForEvent` hear the trusted
+writers too, unless they pass `from: "anyone"`, as the event-log view does. Control events
+(`events.iterate.com/itx/*`) are always admitted: the platform refuses loaded code's control above
+the context its call started at when it is written.
+
 ## Testing a processor
 
 `iterate/stream/test-support` (Node) is the harness the SDK's own engine tests use:

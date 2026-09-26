@@ -1026,28 +1026,28 @@ test("entities: create and delete reach only strictly beneath the caller's origi
   ]);
 });
 
-test("entities: the typed append refuses the entity's lifecycle facts, which only the collection writes, and appends the entity's other events on its context", async () => {
-  const { repos, workspaces, dispatched } = entities("/jail");
+test("entities: the typed append validates each event against the entity's contract and appends it on its context, lifecycle facts included — stamped with the caller, whom the entity's processor may not listen to", async () => {
+  const { repos, dispatched } = entities("/jail");
   const config = repos.get("/repos/config");
-  for (const append of [
-    () => config.append({ type: "events.iterate.com/repo/create-requested", payload: {} }),
-    () => config.append({ type: "events.iterate.com/repo/created", payload: { path: "/x" } }),
-    () => config.append({ type: "events.iterate.com/repo/create-failed", payload: { error: "" } }),
-    () => config.append({ type: "events.iterate.com/repo/delete-requested", payload: {} }),
-    () => config.append({ type: "events.iterate.com/repo/deleted", payload: { path: "/x" } }),
-  ])
-    await expect(append()).rejects.toThrow(/is written by the repo itself/);
-  await expect(
-    workspaces
-      .get("/workspaces/w")
-      .append({ type: "events.iterate.com/workspace/delete-requested", payload: {} }),
-  ).rejects.toThrow(/is written by the workspace itself/);
+  const deleteRequested = {
+    type: "events.iterate.com/repo/delete-requested" as const,
+    payload: {},
+  };
+  await config.append(deleteRequested);
   const commit = {
     type: "events.iterate.com/repo/commit-completed" as const,
     payload: { path: "/repos/config", commitOid: "abc", message: "m", changedPaths: ["worker.ts"] },
   };
   await config.append(commit);
-  expect(dispatched).toEqual([{ at: "/repos/config", steps: [["append", commit]] }]);
+  expect(dispatched).toEqual([
+    { at: "/repos/config", steps: [["append", deleteRequested]] },
+    { at: "/repos/config", steps: [["append", commit]] },
+  ]);
+  // a type the contract does not own is refused, naming both (wire-fed: the static type says so too)
+  const unowned = { type: "events.iterate.com/note/added", payload: {} };
+  await expect(config.append(unowned as unknown as typeof commit)).rejects.toThrow(
+    /is not an event the repo contract owns/,
+  );
 });
 
 // ── the library boundary ── THE LIBRARY RULE, pinned: a library module takes `itx` and nothing else,

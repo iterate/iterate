@@ -186,6 +186,8 @@ export function connectEventLog(
   (async () => {
     const handle = await itx.subscribe({
       consumes: opts.consumes,
+      // The log as it is, every writer's events: a view, not a reader that acts.
+      from: "anyone",
       target: (batch) => !disposed && take(toStreamEvents(batch)),
     });
     // disposed while the subscribe was pending: release it here, or the server keeps delivering

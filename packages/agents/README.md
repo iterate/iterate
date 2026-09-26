@@ -26,12 +26,23 @@ await installAgents(
 ```
 
 `installAgents` enables the catalog processor on `/`, writes the `itx.agents` rewrite rule to the
-collection facet, and rebinds every existing agent to the source; `ensureAgents` commits the folder
+collection facet, and rebinds every existing agent to the source (each agent hosts the collection's
+own source, its `ctx.props.spec`); `ensureAgents` commits the folder
 first when the repo has none (the Agents app's **Install agents**). The loader resolves the pinned
 build through esm.sh and locks its first resolution, so upgrade by pinning a newer commit.
 
 Importing the package registers `itx.agents` on iterate/api's `InstalledAppRoots`:
 `itx as IterateContextApiWith<"agents">` types `create`, `get(path).message`, `list` and `delete`.
+
+Every context linked to the root reaches the same collection, which serves a caller beneath `/` AS
+THAT CALLER (`forCaller`): a relative path is the caller's, what it creates is linked to it, and
+creating or deleting outside the caller's own subtree is refused by the platform's wall.
+`get(path).message(…)` and `get(path).append(…)` are the caller's own appends on the agent's
+context, stamped by the platform with who wrote them: one agent messages another. An agent hears a
+user's words from anyone in the project — named to the model as `[from <context>]`, without
+attachments, counted toward the autonomous-turn bound when the writer is neither a member nor code
+at or above the agent — and everything else only from the platform, a member, or code at or above it
+(`src/contract.ts` `trust`).
 
 - `src/contract.ts` — an agent's events and state; `src/processor.ts` — the reduce and the loop;
   `src/processor.test.ts` — the processor's spec.

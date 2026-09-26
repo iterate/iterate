@@ -25,7 +25,13 @@ test("install and reinstall preserve existing agents, sandbox grants and convers
   await configureModel(context);
   await itx.agents.get("/agents/support").message("Remember this conversation.");
   await until("first reply", async () => assistantWords(await readAll(context)).length === 1);
-  const grants = await sandbox.rewriteRules.list();
+  // The sandbox's own grants: every other row it lists is inherited from the root, the installed
+  // `itx.agents` among them, and changes with the install.
+  const ownRows = async () =>
+    ((await sandbox.rewriteRules.list()) as { context: string }[]).filter(
+      (row) => row.context === "/agents/support/sandbox",
+    );
+  const grants = await ownRows();
   const history = await readAll(context);
   const previous = await context.processors.list();
 
@@ -33,7 +39,7 @@ test("install and reinstall preserve existing agents, sandbox grants and convers
   expect(await itx.agents.list()).toEqual([
     { path: "/agents/support", createdAt: expect.any(String) },
   ]);
-  expect(await sandbox.rewriteRules.list()).toEqual(grants);
+  expect(await ownRows()).toEqual(grants);
   expect((await readAll(context)).slice(0, history.length)).toEqual(history);
   expect(await context.processors.list()).not.toEqual(previous);
   await itx.agents.get("/agents/support").message("Continue after the upgrade.");
@@ -43,7 +49,7 @@ test("install and reinstall preserve existing agents, sandbox grants and convers
   const installedRows = await context.processors.list();
   await installAgents(itx, source);
   expect(await context.processors.list()).toEqual(installedRows);
-  expect(await sandbox.rewriteRules.list()).toEqual(grants);
+  expect(await ownRows()).toEqual(grants);
   await installAgents(itx, oldSource);
   expect(await itx.rewriteRules.get("itx.agents")).toEqual(oldRule);
 });

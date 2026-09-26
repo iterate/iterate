@@ -2,7 +2,7 @@
 // stream/test-support.ts — the REAL Stream over node:sqlite for apps/os's unit tests. The processor
 // harness (`reduceProcessor`, `memoryStream`, `memoryStorage`, `settle`) and the node:sqlite Durable
 // Object storage are the SDK's, `iterate/stream/test-support`: every processor author tests with them.
-import type { StreamEvent } from "iterate/stream/processor";
+import type { StreamEvent, StreamEventInput } from "iterate/stream/processor";
 import { nodeSqliteDurableObjectStorage } from "iterate/stream/test-support";
 import { Stream } from "./stream.ts";
 
@@ -18,4 +18,16 @@ export function nodeSqliteStream() {
     onCommit: (fresh) => void events.push(...fresh),
   });
   return { stream, events };
+}
+
+/** The REAL Stream, appended to as the DO appends: every event stamped before it commits (the DO
+ *  refuses an unstamped one). An event that names no `source` was written by this context's own
+ *  code, as `stampCaller` stamps a call that started here (src/caller.ts); one that names a source
+ *  is a test about that writer. */
+export class StampedStream extends Stream {
+  override append(...events: StreamEventInput[]): StreamEvent[] {
+    return super.append(
+      ...events.map((event) => ({ ...event, source: event.source || { origin: this.path } })),
+    );
+  }
 }

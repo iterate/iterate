@@ -7,6 +7,12 @@
 // answer. It prints the plan and changes nothing without --apply. Old voice bundles in project KV
 // (`voice/<sha256>/…`) are left where they are: a past call's facets name them.
 //
+// Then what the collection wrote before an agent inherited `itx.agents` through its parent links
+// (authority v3): each agent's and each sandbox's own `itx.agents ⇒ itx.cd('/').agents.at(<path>)`
+// row goes, compare-and-set so a row written since stays, and so do the runtimes kept in project KV
+// (`agents/runtime`, `voice/runtime`): the collection hosts its agents from its own source now, and
+// voice's rule hands the worker its own.
+//
 //   WORKER_BASE_URL=https://os.iterate.com APP_CONFIG_ADMIN_API_SECRET=… \
 //   pnpm exec tsx scripts/install-packages.ts --project prj_… \
 //     --agents https://pkg.pr.new/iterate/iterate/@iterate-com/agents@<sha> \
@@ -93,7 +99,20 @@ if (!apply) {
   const at = commitOid || undefined;
   console.log(`committed ${commitOid || "nothing (the repo already had these files)"}`);
   await installAgents(root, await repo.modules({ dir: "agents", commitOid: at }));
-  console.log("agents installed:", await root.agents.list());
+  const installed = await root.agents.list();
+  console.log("agents installed:", installed);
+  for (const { path } of installed)
+    for (const context of [path, `${path}/sandbox`])
+      await root.cd(context).append({
+        type: "events.iterate.com/itx/rewrite-rule-configured",
+        payload: {
+          match: "itx.agents",
+          target: null,
+          ifTarget: `itx.cd('/').agents.at(${JSON.stringify(context)})`,
+        },
+      });
+  for (const key of ["agents/runtime", "voice/runtime"]) await root.kv.delete(key);
+  console.log(`dropped ${installed.length * 2} per-agent itx.agents rows and the kv runtimes`);
   if (voice) {
     await installVoice(root, await repo.modules({ dir: "voice", commitOid: at }));
     console.log("voice installed:", await root.voice.health());

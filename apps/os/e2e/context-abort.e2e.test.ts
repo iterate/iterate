@@ -101,7 +101,8 @@ test("cd(path).abort() resets that context only — through the root's own cd to
   expect(aborted).toMatchObject({
     type: "events.iterate.com/itx/aborted",
     path: "/child",
-    payload: { reason: "child only", callerPath: "/" },
+    payload: { reason: "child only" },
+    source: { origin: "/", principal: { actor: "admin" } },
   });
   await child.whoami();
   expect(wakes(await readAll(child))).toBe(childWakes + 1);
@@ -165,12 +166,13 @@ test("scope: loaded code aborts its own context and those below it, never above 
   expect(await worker().say("itx.builtins.abort('fixed point')")).toMatchObject({
     error: expect.stringMatching(/not a loaded worker's word/),
   });
-  // Below its own context it may: the fact says loaded code asked, and from where.
+  // Below its own context it may: the stamp says the code at /x asked.
   expect(await worker().say("itx.cd('./y').abort('down')")).toMatchObject({
     ok: {
       type: "events.iterate.com/itx/aborted",
       path: "/x/y",
-      payload: { reason: "down", callerPath: "/x", app: true },
+      payload: { reason: "down" },
+      source: { origin: "/x" },
     },
   });
   for (const itx of [root, root.cd("/x")])

@@ -4,6 +4,7 @@
 // `secretsEqual`. Only this worker sets or reads any of it; what user code sees of a caller is the
 // SDK's `Principal` and `ITX_PRINCIPAL_HEADER` (iterate/principal).
 import type { Principal } from "iterate/principal";
+import type { EventSource } from "iterate/stream/processor";
 
 /** WHO is making a call: the acting principal (null = anonymous). The one thing carried through every
  *  dispatch and every sibling hop (`invoke(call, args, caller)`). Set ONLY by trusted code — the edge
@@ -34,9 +35,9 @@ export type Caller = {
   /** Set ONLY by the platform's own code, on the one `itx.builtins.append` of a fact it vouches for
    *  on the principal's behalf — an account's or an organization's (apps/os session.ts
    *  `appendPlatformFacts`, the secrets built-ins' catalog cross-post) — never by a client, who never
-   *  supplies a Caller. `stampCaller` stamps it as `source.platform`, which the processors folding
-   *  those facts require; the fixed point is what no rewrite rule redirects, so nothing else runs
-   *  under it. */
+   *  supplies a Caller. `stampCaller` stamps it as `source.platform`, which the readers folding
+   *  those facts require (their contract's `trust`); the fixed point is what no rewrite rule
+   *  redirects, so nothing else runs under it. */
   platform?: true;
 };
 /** The grant's header beside it (the caller's `grant`), set and stripped exactly where the
@@ -48,27 +49,31 @@ export const ITX_APP_HEADER = "x-itx-app";
 /** Originating context of a native fetch forwarded by a trusted context. */
 export const ITX_CALLER_PATH_HEADER = "x-itx-caller-path";
 
-/** The event as the log stores it: `source.principal`, `source.grant` and `source.platform` are the
- *  platform's — set from the admitted caller, client-supplied ones dropped (an anonymous session's
- *  event carries none, the kernel's none). */
-export function stampCaller<E extends { source?: Record<string, unknown> }>(
+/** THE PROVENANCE STAMP (iterate/stream/processor `EventSource`): the event as the log stores it,
+ *  its `source` built WHOLE from the admitted caller — a writer's own is dropped, so nothing forges
+ *  its origin, principal, grant or platform. `origin` is where the call started (`Caller.path`,
+ *  stamped at the first hop), else `here`, the context appended to. */
+export function stampCaller<E extends { source?: unknown }>(
   event: E,
   caller: Caller,
-): E {
-  const {
-    principal: _clientPrincipal,
-    grant: _clientGrant,
-    platform: _clientPlatform,
-    ...source
-  } = event.source || {};
-  const stamped: Record<string, unknown> = { ...source };
-  if (caller.principal) stamped.principal = caller.principal;
-  if (caller.principal && caller.grant) stamped.grant = caller.grant;
-  if (caller.platform) stamped.platform = true;
-  return Object.keys(stamped).length > 0
-    ? { ...event, source: stamped }
-    : (({ source: _dropped, ...rest }) => rest as E)(event);
+  here: string,
+): E & { source: EventSource } {
+  return {
+    ...event,
+    source: {
+      origin: caller.path || here,
+      // oxlint-disable-next-line iterate/simple-truthiness-check -- the stamp is a canonical record: stored as JSON, compared whole (an idempotent echo, a replay), so an absent field must stay absent, never `principal: undefined`
+      ...(caller.principal && { principal: caller.principal }),
+      ...(caller.principal && caller.grant && { grant: caller.grant }),
+      ...(caller.platform && { platform: true as const }),
+    },
+  };
 }
+
+/** The stamp of what the platform writes as the context at `here` itself: its birth and wake, a
+ *  run's settlement, a child's announcement, the un-set of a dead lend's rows. */
+export const platformSource = (here: string): EventSource => ({ origin: here, platform: true });
+
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 /** Bytes as base64url, unpadded. */

@@ -36,8 +36,8 @@ export function toAgentEvent(raw: unknown): StreamEvent | null {
 }
 
 /** apps/os's script events as the reducer reads them. An `itx/run-requested` the agent
- *  appended while processing an assistant item (`source.processor.whileProcessing`, the engine's
- *  stamp) is the reducer's `script-run-requested` with the id it keys on,
+ *  appended while processing an assistant item (`metadata.causedBy`, the engine's word) is the
+ *  reducer's `script-run-requested` with the id it keys on,
  *  `agent-output:<that offset>`, and one any other caller asked for (`itx.run` on the agent's path)
  *  is `run:<its offset>`; its `itx/run-settled` names the request by offset, so the settlement
  *  takes the same id. `expiresAt` is the run's deadline — apps/os's runner settles a script
@@ -49,7 +49,8 @@ export function adaptContextRuns(events: readonly StreamEvent[]): StreamEvent[] 
   return events.map((event) => {
     if (event.type === "events.iterate.com/itx/run-requested") {
       const payload = isRecord(event.payload) ? event.payload : {};
-      const askedWhile = event.source?.processor?.whileProcessing?.offset;
+      const causedBy = isRecord(event.metadata?.causedBy) ? event.metadata.causedBy : {};
+      const askedWhile = typeof causedBy.offset === "number" ? causedBy.offset : undefined;
       const executionId =
         askedWhile === undefined
           ? `run:${String(event.offset)}`

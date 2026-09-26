@@ -36,13 +36,17 @@ test("an OAuth grant: identity, unforgeable append attribution, project boundary
   const { api, token, principal } = await oauthSession(projectId, member);
   expect(principal).toMatchObject({ email: member.email });
   const itx = api.projects.get(projectId);
-  await itx.append({ type: "note", payload: { n: 1 }, source: { principal: { actor: "forged" } } });
+  await itx.append({
+    type: "note",
+    payload: { n: 1 },
+    source: { origin: "/forged", principal: { actor: "forged" } },
+  });
   await itx.provide("itx.demo", "itx.builtins.kv");
   const admin = openItx(projectId);
   await admin.append({
     type: "note",
     payload: { n: 2 },
-    source: { principal: { actor: "forged" } },
+    source: { origin: "/forged", principal: { actor: "forged" } },
   });
   const events = await readAll(admin);
   expect(events.find((e) => e.type === "note" && e.payload?.n === 1)?.source?.principal).toEqual(

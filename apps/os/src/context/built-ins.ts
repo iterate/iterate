@@ -11,12 +11,20 @@
 // Dynamic code has two entry points, one per host kind: `workers.get(spec)` (stateless) and
 // `facets.get(name, spec)` (durable) — the `BuiltInScope` members below say what each takes.
 
-import { codedError, errorCode, jsonEqual, reportIssue, resolveContextPath } from "iterate/lib";
-import { z } from "zod";
-import type { StreamEventInput } from "iterate/stream/processor";
 import {
+  codedError,
+  errorCode,
+  jsonEqual,
+  releaseRpcSessions,
+  reportIssue,
+  resolveContextPath,
+} from "iterate/lib";
+import { z } from "zod";
+import type { ItxCaller } from "iterate/sdk";
+import { trusts, type StreamEventInput } from "iterate/stream/processor";
+import {
+  itxExpressionStepName,
   normalizedItxExpression,
-  print,
   type ItxExpression,
   type ItxExpressionStep,
   InvokeHandle,
@@ -51,7 +59,14 @@ import {
 } from "../fetch-routes.ts";
 import { normalizeSecretOAuth } from "../secret-oauth.ts";
 import { isDeployReset } from "../retryable-error.ts";
-import { FacetHandle, RpcStubHandle, materializeItxHandleReference } from "./dispatch.ts";
+import {
+  FacetHandle,
+  RpcStubHandle,
+  awaitAnswerReleasedIfRejected,
+  materializeItxHandleReference,
+  walkSteps,
+} from "./dispatch.ts";
+import { stepsForCaller } from "./caller-capability.ts";
 import { assertFacetPlacement, assertLoadedCodePlacement } from "./first-party-facet-placement.ts";
 import {
   ITX_EXPRESSION_FETCH_HEADER,
@@ -224,7 +239,7 @@ export interface BuiltInScope extends LibraryRoots {
   append: IterateContextApi["append"];
   /** RESET THIS CONTEXT — Cloudflare's `ctx.abort`, asked for: the Durable Object's in-memory state
    *  is discarded and the next call builds a fresh incarnation from durable storage (a new
-   *  `itx/woken`). The FACT comes first — `itx/aborted { reason?, callerPath?, app? }`,
+   *  `itx/woken`). The FACT comes first — `itx/aborted { reason? }`, stamped with who asked,
    *  attributed like any append (`source.principal`) and durable before anything resets — then the
    *  answer (that event), then the reset, one zero-delay turn after the answer left
    *  (iterate-context-durable-object.ts `#abortAfterTheAnswer`). SURVIVES: the log and everything
@@ -372,6 +387,10 @@ function abortReasonOf(reason: unknown, verb: string): string | undefined {
   return parsed.data;
 }
 
+/** How many events a writer a context does not trust may append there per window (built-ins
+ *  `append`): a sibling's messages, not a flood. */
+const UNTRUSTED_APPENDS = { events: 120, windowMs: 60_000 };
+
 /** What the CONTEXT (the DO) injects: identity, the bindings, and the operations only it can serve. */
 interface BuildBuiltInsDeps {
   projectInfo: () => Promise<{ projectSlug?: string }>;
@@ -457,6 +476,9 @@ interface BuildBuiltInsDeps {
   abortAfterTheAnswer: (message: string) => Promise<void>;
   /** The DO's claim table for hosted processors (`processors.claim`). */
   claimFacetAlarm: (name: string, at: number | null) => void;
+  /** What a service that serves callers is handed for a caller at `path` beneath this context:
+   *  `{ path, itx }`, `itx` the loopback code loaded at `path` holds (context/caller-capability.ts). */
+  itxCallerAt: (path: string) => ItxCaller;
   /** The `ItxEntrypoint` stub a loaded worker gets as `env.ITX` and `globalOutbound` — the loopback
    *  minted for this context at its current origin (the DO's `#itxEntrypoint`; iterate-context.ts's `ItxEntrypoint` for why it is never a
    *  raw getByName stub). */
@@ -478,24 +500,44 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
   const kvPrefix = `${owner.id}:`;
   const r2Prefix = `${owner.id}/`;
   const ownContext = () => deps.context(path);
-  /** THE append: every event appended through this scope carries WHO appended it — the DO's own
-   *  stamp, never a client's (src/caller.ts `stampCaller`): the session's verified principal, or none. */
+  /** THE append: every event appended through this scope is stamped with WHO wrote it — the
+   *  platform's stamp built from the caller, never a writer's own (src/caller.ts `stampCaller`).
+   *  Loaded code configures only its own context and those beneath it, and its rows are walled
+   *  (itx-expression-rewriting.ts `admitLoadedCodeRow`); any other event lands wherever it is sent,
+   *  and its readers decide whether to listen (iterate/stream/processor `admits`). */
   const append = (...events: StreamEventInput[]) => {
     const caller = deps.caller();
-    // Loaded code can delegate its scope to descendants through durable rows; child code
-    // keeps its own ceiling. The append boundary validates the rest of each control event.
-    if (caller.app) for (const event of events) admitLoadedCodeRow(event, caller.path || path);
-    // `account/…` and `organization/…` keys are the platform's facts on a global context (grants.ts,
-    // session.ts): a key a person took first would answer the platform's fact with theirs, which the
-    // owner's fold ignores (a grant that never ends).
-    if (projectId === GLOBAL_PROJECT_ID && !caller.platform)
-      for (const { idempotencyKey } of events)
-        if (/^(?:account|organization)\//.test(String(idempotencyKey)))
-          throw codedError(
-            "FORBIDDEN",
-            `idempotency key ${JSON.stringify(idempotencyKey)} is the platform's`,
-          );
-    return ownContext().append(...events.map((event) => stampCaller(event, caller)));
+    const stamped = events.map((event) => stampCaller(event, caller, path));
+    if (caller.app)
+      for (const event of stamped) admitLoadedCodeRow(event, event.source.origin, path);
+    const [first] = stamped;
+    if (first && !trusts(path, first.source))
+      boundUntrustedAppends(first.source.origin, stamped.length);
+    return ownContext().append(...stamped);
+  };
+  /** OPEN APPEND IS BOUNDED: a writer this context does not trust (iterate/stream/processor
+   *  `trusts` — code beside it or beneath it) appends at most `UNTRUSTED_APPENDS.events` events per
+   *  origin per window, per incarnation; past it the append is refused RATE_LIMITED and logged. */
+  const untrustedAppends = new Map<string, { since: number; events: number }>();
+  const boundUntrustedAppends = (origin: string, events: number) => {
+    const now = Date.now();
+    const seen = untrustedAppends.get(origin);
+    const window =
+      seen && now - seen.since < UNTRUSTED_APPENDS.windowMs ? seen : { since: now, events: 0 };
+    window.events += events;
+    untrustedAppends.set(origin, window);
+    if (window.events <= UNTRUSTED_APPENDS.events) return;
+    console.warn({
+      event: "append.untrusted-rate-limited",
+      namespace: "iterate-context",
+      path,
+      origin,
+      events: window.events,
+    });
+    throw codedError(
+      "RATE_LIMITED",
+      `${JSON.stringify(origin)} appended more than ${UNTRUSTED_APPENDS.events} events to ${JSON.stringify(path)} in ${UNTRUSTED_APPENDS.windowMs / 1000} s: this context does not trust it, so its appends are bounded`,
+    );
   };
   /** THE PLATFORM'S OWN HOP: the caller rides — principal and grant (the facts stay attributed),
    *  path and origin — but never its `app`: the app wall (itx-expression-rewriting.ts `#admit`) is
@@ -599,8 +641,10 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
       platform: true,
     });
   };
+  /** Stamped `platform` on the secret's own path too: the secret's processor there folds it, and
+   *  the caller who asked is not trusted beneath the root it asked through. */
   const secretFact = async (secret: ReachableContext, event: StreamEventInput): Promise<void> => {
-    await secret.append(stampCaller(event, deps.caller()));
+    await secret.append(stampCaller(event, { ...deps.caller(), platform: true }, path));
     await crossPostSecretFact(event);
   };
   /** A deleted secret's lends end with it, on both sides: the lends of a lender's secret
@@ -1416,14 +1460,11 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
     append,
     abort: async (reasonInput) => {
       const reason = abortReasonOf(reasonInput, "itx.abort");
-      // WHO ASKED, beyond what the append stamps (`source.principal`): the context the call started
-      // at when it hopped here, and whether loaded code asked — loaded code carries no principal.
-      const { path: callerPath, app } = deps.caller();
-      // THE FACT FIRST, through `append` (attributed, pause-exempt — stream.ts), then durable, then
-      // the answer; the reset is the DO's, after it.
+      // THE FACT FIRST, through `append` (stamped with who asked, pause-exempt — stream.ts), then
+      // durable, then the answer; the reset is the DO's, after it.
       const [aborted] = await append({
         type: "events.iterate.com/itx/aborted",
-        payload: { reason, callerPath, app },
+        payload: { reason },
       });
       // The runtime logs this message as an error line (uncatchable); the prd fault alarm
       // (scripts/ci/prd-fault-alarm.ts) excludes its prefix as the expected outcome it is.
@@ -1529,11 +1570,10 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
       // instance, never the one going away.
       abort: async (name, reasonInput) => {
         const reason = abortReasonOf(reasonInput, "itx.facets.abort");
-        const { path: callerPath, app } = deps.caller(); // who asked, as for `abort` above
         await deps.facets.abort(name, reason);
         const [aborted] = await append({
           type: "events.iterate.com/itx/facet-aborted",
-          payload: { name, reason, callerPath, app },
+          payload: { name, reason },
         });
         return aborted;
       },
@@ -1603,22 +1643,34 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
     // A genuine InvokeHandle so `workers.get(spec).run()` pipelines over every transport (workerd#6873). A
     // terminal `fetch(request)` is this same call: `entrypoint.fetch(request)` IS the entrypoint's
     // fetch channel, socket-bearing Responses included (context/rpc-stubs.ts doctrine, point 4).
-    // Re-resolves per call; the loader caches by key, so a warm isolate is reused and a producer
-    // expression never re-runs.
+    // A chained walk (`make(7).ping()`) walks each step on what the one before answered, as a
+    // facet's does. A spec that says `servesCallers` serves a caller beneath this context as that
+    // caller (context/caller-capability.ts): `forCaller(caller)` first, the caller's steps on what it
+    // answers; the platform alone names a caller. Re-resolves per call; the loader caches by key, so
+    // a warm isolate is reused and a producer expression never re-runs.
     workers: {
       get: (spec: {
         source: WorkerSource;
         cacheKey?: string;
         className?: string;
         props?: unknown;
-      }) =>
-        new InvokeHandle(async (methodSteps) => {
-          const [call] = methodSteps;
-          if (methodSteps.length !== 1 || !Array.isArray(call) || call[0] === "")
-            throw new Error(
-              `workers.get(spec).${print(methodSteps)}: a WorkerEntrypoint exposes flat methods`,
+        servesCallers?: true;
+      }) => {
+        // The context the call ORIGINATED at, captured when the handle is made (as `cd`'s is).
+        const origin = deps.caller().path || path;
+        return new InvokeHandle(async (walk) => {
+          if (itxExpressionStepName(walk[0]) === "forCaller")
+            throw codedError(
+              "FORBIDDEN",
+              `workers.get(spec): "forCaller" is the platform's — it names the caller, and only the platform does`,
             );
-          const [method, ...args] = call;
+          const steps = stepsForCaller({
+            host: path,
+            origin,
+            servesCallers: spec.servesCallers === true,
+            steps: walk,
+            callerAt: deps.itxCallerAt,
+          });
           // Loaded code runs only inside a project (first-party-facet-placement.ts rule 6) —
           // refused before a source expression runs or anything loads.
           assertLoadedCodePlacement("workers.get", { projectId, path });
@@ -1645,26 +1697,40 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
               invoke: deps.invoke,
               where: "workers.get",
             });
+            // What the walk steps past holds a session onto the worker until disposed: released once
+            // the answer is in (facet-host.ts `#call`).
+            const rpcSessionsSteppedPast: unknown[] = [];
             try {
               const entrypoint = load().getEntrypoint(
                 spec.className,
                 spec.props === undefined ? undefined : { props: spec.props },
-                // A loaded entrypoint's methods are the author's; `fn` is checked to be one below.
-              ) as Fetcher & Record<string, (...a: unknown[]) => Promise<unknown>>;
-              const fn = entrypoint[method];
-              if (typeof fn !== "function")
-                throw new Error(`workers.get(spec): the entrypoint has no method "${method}"`);
-              return await Reflect.apply(fn, entrypoint, args);
+              );
+              const { value } = await walkSteps(
+                { value: entrypoint, receiver: undefined },
+                steps,
+                rpcSessionsSteppedPast,
+              );
+              return await awaitAnswerReleasedIfRejected(value);
             } catch (error) {
               if (isCloneVersionFailure(error)) retire();
               throw error;
+            } finally {
+              releaseRpcSessions(rpcSessionsSteppedPast);
             }
           };
           try {
             return await attempt();
           } catch (error) {
             if (!isCloneVersionFailure(error)) throw error;
-            const request = method === "fetch" && args[0] instanceof Request ? args[0] : undefined;
+            // Only a walk that is one `fetch(request)` may be replayed.
+            const [first] = steps;
+            const request =
+              steps.length === 1 &&
+              Array.isArray(first) &&
+              first[0] === "fetch" &&
+              first[1] instanceof Request
+                ? first[1]
+                : undefined;
             const replayable =
               request?.body === null && (request.method === "GET" || request.method === "HEAD");
             console.warn({
@@ -1673,14 +1739,15 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
                 : "workers.platform-failure-retire",
               namespace: "iterate-context",
               name: iterateContextName,
-              method,
+              method: itxExpressionStepName(first),
               requestMethod: request?.method,
               message: error.message,
             });
             if (!replayable) throw error;
             return await attempt();
           }
-        }),
+        });
+      },
     },
     ...deps.library, // THE LIBRARY (library.ts), built and owned by the DO
   } satisfies Omit<BuiltInScope, "builtins">;

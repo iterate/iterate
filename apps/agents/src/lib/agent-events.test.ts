@@ -1,7 +1,7 @@
 // agent-events.test.ts — the apps/os log through the shared reducer: `adaptContextRuns` turns the
 // CONTEXT's runs (`itx/run-requested` / `run-settled`, the request's offset as identity) into the
 // script vocabulary the shared reducer folds (`capability-host/script-run-*`, an executionId the
-// reducer links to the assistant's message — from the processor's `whileProcessing` stamp), so a
+// reducer links to the assistant's message — from the processor's `metadata.causedBy`), so a
 // turn renders as one activity with its code step.
 import { expect, test } from "vitest";
 import { adaptContextRuns, reduceAgentFeed, scriptTrace, toAgentEvent } from "./agent-events.ts";
@@ -41,7 +41,7 @@ test("a failed settlement reaches the shared reducer exactly as the platform wro
       { code: "async () => 1" },
       {
         idempotencyKey: "agent/run-requested@6",
-        source: byAgentWhile(6),
+        metadata: byAgentWhile(6),
       },
     ),
     at(9, "events.iterate.com/itx/run-settled", {
@@ -90,7 +90,7 @@ const at = (
   offset: number,
   type: string,
   payload: unknown,
-  extra: { idempotencyKey?: string; source?: unknown } = {},
+  extra: { idempotencyKey?: string; metadata?: Record<string, unknown> } = {},
 ) =>
   toAgentEvent({
     offset,
@@ -100,9 +100,9 @@ const at = (
     ...extra,
   })!;
 
-/** The engine's stamp on an event the agent processor appended while processing offset 6. */
+/** The engine's word on an event the agent processor appended while processing offset 6. */
 const byAgentWhile = (offset: number) => ({
-  processor: { slug: "agent", whileProcessing: { offset, type: "x" } },
+  causedBy: { processor: "agent", offset, type: "x" },
 });
 
 /** One turn as the agent's own log lays it out: the person asks, the model answers with a codemode
@@ -135,7 +135,7 @@ const turn = () => [
     8,
     "events.iterate.com/itx/run-requested",
     { code: "async (itx) => { await itx.kv.put('answer', '42'); return { stored: true } }" },
-    { idempotencyKey: "agent/run-requested@6", source: byAgentWhile(6) },
+    { idempotencyKey: "agent/run-requested@6", metadata: byAgentWhile(6) },
   ),
   // the visible message: the tag's prose, sent directly
   at(9, "events.iterate.com/agent/web-message-sent", { message: "Storing.", llmRequestOffset: 4 }),

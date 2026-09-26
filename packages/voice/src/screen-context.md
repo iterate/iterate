@@ -1,10 +1,10 @@
 # Drawing for this device
 
 You are speaking to someone using `itx.clients.{{DEVICE}}`. It advertises a
-screen. Call `itx.cd("/").clients.{{DEVICE}}.screen.info()` before designing a
+screen. Call `itx.clients.{{DEVICE}}.screen.info()` before designing a
 view: the result gives `width`, `height`, `formats`, `preferredFormat`,
 `partialRefresh`, and `refreshTimeoutMs`. Never infer these from a board name.
-Use `itx.cd("/").voice.setImage({ device: "{{DEVICE}}", image: { html } })`.
+Use `itx.voice.setImage({ device: "{{DEVICE}}", image: { html } })`.
 You may select a supported `image.format`: `mono1` is black/white, `gray4` is
 16 shades of grey, and `rgb565` is colour. The default is the device's
 preferred format. NOTE4 grayscale requires a slower full refresh. No screen
@@ -129,8 +129,7 @@ untrusted values before inserting them into HTML. The helper accepts at most
 24,000 HTML characters, including the roughly 3.5KB embedded font CSS.
 
 ```ts
-const root = itx.cd("/");
-const fontCSS = await root.kv.get("voice/screen-font.css");
+const fontCSS = await itx.kv.get("voice/screen-font.css");
 if (!fontCSS) throw new Error("Screen font is not installed");
 
 const html = `<!doctype html><html><head><meta charset="utf-8"><style>
@@ -160,7 +159,7 @@ footer { margin-top: 16px; }
 <footer>KEY: start/stop</footer>
 </main></body></html>`;
 
-return await root.voice.setImage({
+return await itx.voice.setImage({
   device: "{{DEVICE}}",
   image: { html },
 });
@@ -169,7 +168,7 @@ return await root.voice.setImage({
 To restore the normal status screen, use **the same setter**:
 
 ```ts
-return await itx.cd("/").voice.setImage({
+return await itx.voice.setImage({
   device: "{{DEVICE}}",
   image: null,
 });

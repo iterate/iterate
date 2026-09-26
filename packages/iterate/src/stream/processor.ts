@@ -47,7 +47,16 @@
 import type { SqlStorageValue } from "@cloudflare/workers-types";
 import { z } from "zod";
 import { reportIssue, jsonEqual, codedError, diff } from "../lib.ts";
-import type { Principal } from "../principal.ts";
+import { admits, type EventSource, type TrustRule } from "./provenance.ts";
+
+export {
+  admits,
+  certifiesItself,
+  isAtOrBeneath,
+  trusts,
+  type EventSource,
+  type TrustRule,
+} from "./provenance.ts";
 
 /** What a processor declares: its checkpoint slug and reducer version, what it consumes and emits,
  *  and its initial state (`defineProcessorContract` below builds one from zod schemas). */
@@ -61,6 +70,11 @@ export type ProcessorContract<State = unknown> = {
   consumes: readonly string[];
   /** What its `append` is allowed to emit. */
   emits: readonly string[];
+  /** WHOM IT LISTENS TO, per consumed type (stream/provenance.ts): `"anyone"` in the project,
+   *  `"platform"`, or a rule over the stamp; `"*"` for every type it does not name. An undeclared
+   *  type is `"trusted"`: the platform, a member, or code at this context or above it wrote it. The
+   *  engine neither folds nor acts on an event its rule refuses. */
+  trust?: Readonly<Record<string, TrustRule>>;
   /** The schema-initial state ("{} with every field defaulted" for zod contracts). */
   initialState: () => State;
   /** The zod payload schema for a consumed event type (owned or a dep's), or undefined if the type
@@ -595,6 +609,18 @@ export class ProcessorEngine<State> {
     event: StreamEvent,
     state: State,
   ): { state: State; event: StreamEvent; valid: boolean } {
+    // WHOM IT LISTENS TO (stream/provenance.ts): an event from a writer the contract's `trust`
+    // refuses is neither folded nor acted on — on a push, a catch-up and a re-reduce alike.
+    if (!admits(event, this.#contract.trust)) {
+      console.warn({
+        event: "processor.untrusted-event-ignored",
+        slug: this.#contract.slug,
+        type: event.type,
+        origin: event.source?.origin,
+        offset: event.offset,
+      });
+      return { state, event, valid: false };
+    }
     // oxlint-disable-next-line iterate/simple-truthiness-check -- only a null/undefined payload defaults to {}; a falsy NON-object payload off the wire (0, false, "") must fail schema validation and be reported, not be folded as an empty object
     const parsed = this.#contract.payloadSchemaFor?.(event.type)?.safeParse(event.payload ?? {});
     if (parsed && !parsed.success) {
@@ -624,7 +650,7 @@ export class ProcessorEngine<State> {
     state: State,
     caughtUp: boolean,
   ): Promise<{ state: State; processed: boolean }> {
-    const { slug, version, emits } = this.#contract;
+    const { slug, emits } = this.#contract;
     const previousState = state;
     if (event) {
       // Validate + normalize + fold via the ONE shared path (so replay can't diverge). On the valid
@@ -637,22 +663,18 @@ export class ProcessorEngine<State> {
     }
     // FIFO blocker chain for THIS event (rule 2); background work escapes it (rule 3).
     let blockers: Promise<unknown> = Promise.resolve();
-    // Validated against the declared `emits` and stamped with provenance. A certificate an entity
+    // Validated against the declared `emits`, and told what caused it: `metadata.causedBy`, the
+    // processor's own claim (who wrote it is the platform's stamp). A certificate an entity
     // cross-posts to ANOTHER context (`/`, the project catalog) is its own `itx.cd(path).append(...)`
     // through the host's `withItx` — the context's own append, no second verb here.
+    const causedBy = { processor: slug, ...(event && { offset: event.offset, type: event.type }) };
     const stamped = (emittedEvents: StreamEventInput[]): StreamEventInput[] => {
       for (const emitted of emittedEvents) {
         if (!emits.includes(emitted.type))
           throw new Error(
             `processor "${slug}" emits ${JSON.stringify(emitted.type)} without declaring it`,
           );
-        emitted.source = {
-          processor: {
-            slug,
-            version,
-            ...(event && { whileProcessing: { offset: event.offset, type: event.type } }),
-          },
-        };
+        emitted.metadata = { ...emitted.metadata, causedBy };
       }
       return emittedEvents;
     };
@@ -714,33 +736,11 @@ export type StreamEventInput = {
   type: string;
   payload?: Record<string, unknown>;
   metadata?: Record<string, unknown>;
-  /** Provenance: which processor (while processing what) appended this — stamped by the engine's
-   *  `append` — and WHO: the session's verified principal (src/principal.ts), set by the DO's append
-   *  root from the session's project token and never taken from a client. */
-  source?: {
-    /** The durable schedule definition responsible for this occurrence. */
-    schedule?: {
-      key: string;
-      scheduledAtOffset: number;
-      at: string;
-      /** Attribution of the definition, distinct from the platform writing the occurrence. */
-      definedBy?: Omit<NonNullable<StreamEventInput["source"]>, "schedule">;
-    };
-    processor?: {
-      slug: string;
-      version: string;
-      whileProcessing?: { offset: number; type: string };
-    };
-    principal?: Principal;
-    /** THE CONNECTION the principal acted through: the OAuth grant's id — one per
-     *  connected client (a Claude Code install, a dash sign-in, a personal token). Stamped beside
-     *  `principal` by the platform when it appends; absent for the admin secret and the kernel. */
-    grant?: string;
-    /** THE PLATFORM WROTE THIS FACT, on the principal's behalf:
-     *  what a processor folding an account's or an organization's facts requires — a client can
-     *  append any type to a context it holds, never this. */
-    platform?: true;
-  };
+  /** PROVENANCE, the platform's (stream/provenance.ts): who wrote the event — the context whose
+   *  code or session wrote it, the member, whether the platform vouches for it, the schedule that
+   *  fired it. Stamped whole as the event commits; a writer's own `source` is dropped, so nothing
+   *  forges it. What a writer says of itself (a processor's `causedBy`) is `metadata`. */
+  source?: EventSource;
   /** Same key + same body = dedupe (the existing event is returned); different body = loud error. */
   idempotencyKey?: string;
   /** OPTIONAL PRECONDITION: land at exactly this offset or refuse the whole batch with
@@ -770,10 +770,13 @@ export function sameIdempotentEvent(
   existingEvent: StreamEventInput,
   requestedEvent: StreamEventInput,
 ): boolean {
+  // A processor's `causedBy` names the delivery it wrote under, which a retry from a later one
+  // changes: the claim is not the event.
+  const said = ({ causedBy: _causedBy, ...metadata }: Record<string, unknown> = {}) => metadata;
   return (
     existingEvent.type === requestedEvent.type &&
     jsonEqual(existingEvent.payload, requestedEvent.payload) &&
-    jsonEqual(existingEvent.metadata, requestedEvent.metadata)
+    jsonEqual(said(existingEvent.metadata), said(requestedEvent.metadata))
   );
 }
 
@@ -1160,6 +1163,8 @@ export function defineProcessorContract<
   processorDeps?: Deps;
   consumes: Consumes;
   emits: Emits;
+  /** Whom it listens to, per consumed type (`ProcessorContract.trust`). */
+  trust?: Readonly<Record<string, TrustRule>>;
 }): DefinedProcessorContract<StateSchema, Events, Consumes, Deps, Emits> {
   if (!contract.stateSchema.safeParse({}).success)
     throw new Error(`contract "${contract.slug}": stateSchema must parse {} (default every field)`);
@@ -1189,6 +1194,7 @@ export function defineProcessorContract<
     description: contract.description,
     consumes: contract.consumes,
     emits: contract.emits,
+    trust: contract.trust,
     stateSchema: contract.stateSchema,
     events,
     processorDeps,

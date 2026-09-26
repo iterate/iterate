@@ -23,7 +23,7 @@ test.for([
   },
   {
     row: "a certificate the platform did not cross-post changes nothing",
-    events: [setFact(), { ...lentFact(), source: {} }],
+    events: [setFact(), { ...lentFact(), source: { origin: "/" } }],
     secrets: catalog(undefined),
   },
 ])("the instance's catalog — $row", ({ events, secrets }) =>
@@ -34,7 +34,7 @@ function setFact() {
   return {
     type: "events.iterate.com/secret/set",
     payload: { path: "/secrets/openai", urls: ["https://api.openai.com"] },
-    source: { platform: true as const },
+    source: { origin: "/", platform: true as const },
   };
 }
 
@@ -47,7 +47,7 @@ function lentFact() {
       to: "every-project",
       as: "/secrets/openai",
     },
-    source: { platform: true as const },
+    source: { origin: "/", platform: true as const },
   };
 }
 
@@ -55,7 +55,7 @@ function revokedFact(payload: Record<string, unknown>) {
   return {
     type: "events.iterate.com/secret/lend-revoked",
     payload: { path: "/secrets/openai", lendId: "lend_1", ...payload },
-    source: { platform: true as const },
+    source: { origin: "/", platform: true as const },
   };
 }
 

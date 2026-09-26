@@ -39,7 +39,7 @@ credentials are excluded from source and public releases.
 ## Display
 
 ```ts
-await itx.cd("/").voice.setImage({
+await itx.voice.setImage({
   device: "waveshare_rlcd_4_2",
   image: { html: "<h1>Hello</h1>" },
 });

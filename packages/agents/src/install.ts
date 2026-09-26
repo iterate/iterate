@@ -1,14 +1,14 @@
 // install.ts — how a project installs the agents app. The app is a SOURCE the project owns: a folder
 // of its config repo (`agents/` by convention) holding a package.json that pins this package and an
 // index.ts that re-exports its two Durable Object classes (`agentsFolder`). `installAgents` mounts
-// that source: the collection facet as the `itx.agents` rewrite rule, the `agents` processor on `/`,
-// and the same source for every agent's facet. Nothing here is the runtime, so a config worker
-// imports `@iterate-com/agents/install` without loading it.
+// that source: the collection facet as the `itx.agents` rewrite rule and the `agents` processor on
+// `/`; every agent's facet hosts the collection's own source (its `ctx.props.spec`, catalog.ts), so
+// nothing is kept anywhere else. Nothing here is the runtime, so a config worker imports
+// `@iterate-com/agents/install` without loading it.
 import type { IterateContextApi, RepoHandle } from "iterate/api";
 
 /** What `installAgents` needs of the project's root. */
 type InstallTarget = Pick<IterateContextApi, "whoami" | "append" | "invoke"> & {
-  kv: Pick<IterateContextApi["kv"], "put">;
   processors: Pick<IterateContextApi["processors"], "enable">;
 };
 
@@ -79,7 +79,6 @@ export async function installAgents(itx: InstallTarget, source: Record<string, s
   const cacheKey = Array.from(new Uint8Array(digest), (byte) =>
     byte.toString(16).padStart(2, "0"),
   ).join("");
-  await itx.kv.put("agents/runtime", JSON.stringify({ cacheKey, source }));
   const spec = { cacheKey, source, className: "AgentCollectionDurableObject" };
   await itx.processors.enable("agents", {
     ...spec,

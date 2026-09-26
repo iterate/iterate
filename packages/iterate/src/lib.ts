@@ -46,6 +46,7 @@ type ErrorCode =
   | "FACET_ABORTED" // the facet instance this call ran on was reset by `itx.facets.abort` (apps/os context/facet-host.ts) — its next call starts it fresh
   | "FACET_RESTARTED" // the facet instance this call ran on was restarted by the platform under it — its source or loader identity changed, or another call on it timed out (apps/os context/facet-host.ts) — its next call runs on the new instance
   | "FACET_NO_UPGRADE" // a WebSocket upgrade aimed at a facet: a facet answers RPC and plain HTTP, never a socket — sockets terminate at the edge (apps/os context/facet-host.ts)
+  | "RATE_LIMITED" // a writer a context does not trust appended past its bound there (apps/os context/built-ins.ts `append`)
   | "WAIT_TIMEOUT" // waitForEvent expired with no matching event committed
   | "NOT_FAST_FORWARD" // a repo's pull or push without `force` where neither main contains the other (apps/os repo/durable-object.ts) — `data` is { ours, theirs }
   | "TIMEOUT"; // lib.ts withTimeout: the call did not answer within its deadline

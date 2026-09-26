@@ -196,13 +196,11 @@ test("a client cannot forge a platform fact in its own user context: its account
     ],
   ])) as { source?: { platform?: true; principal?: { actor: string } } }[];
   const { actor } = await a.whoami();
-  expect
-    .soft(forged.map((event) => event.source))
-    .toEqual([
-      { principal: expect.objectContaining({ actor }) },
-      { principal: expect.objectContaining({ actor }) },
-      { principal: expect.objectContaining({ actor }) },
-    ]);
+  expect.soft(forged.map((event) => event.source)).toEqual([
+    { origin: expect.any(String), principal: expect.objectContaining({ actor }) },
+    { origin: expect.any(String), principal: expect.objectContaining({ actor }) },
+    { origin: expect.any(String), principal: expect.objectContaining({ actor }) },
+  ]);
   const { state } = await account();
   expect.soft(state.authentications.map((fact) => fact.operationId)).not.toContain("forged");
   expect.soft(state.personalAccessTokens).not.toHaveProperty("pat_forged");
@@ -254,32 +252,18 @@ test("a member cannot forge their organization's facts: it folds only what the p
   expect(state.members).not.toHaveProperty("user_forged");
 });
 
-test("a person cannot take the platform's keys first: `account/…` on their own account (a grant's end) and `organization/…` on their organization (a project's landing) are refused, so the platform's fact still folds", async () => {
+test("a person's keys are their own: `account/…` on their own account (a grant's end) and `organization/…` on their organization (a project's landing) stand beside the platform's same keys, so the platform's fact still lands and folds", async () => {
   const s = await userSession("squat@sec.test");
   const { actor } = await s.whoami();
   // A grant's end is keyed on the grant's id (grants.ts), and the holder of a grant knows its id.
-  // Taken first with the same body, the platform's end would be answered with the person's event,
-  // which the account never folds: the grant would live on.
+  // A key names an event among its writer's own (src/stream/stream.ts `writerScopedKey`): the
+  // person's is theirs, and the platform's end lands under the platform's.
   const grantEnded = {
     type: "events.iterate.com/account/grant-ended",
     payload: { grantId: "grant_squatted" },
     idempotencyKey: "account/grant-ended/grant_squatted",
   };
-  await refused(() => s.user.invoke(["itx", ["append", grantEnded]]), "FORBIDDEN", /platform's/);
-  await refused(() => s.user.invoke(["itx", "builtins", ["append", grantEnded]]), "FORBIDDEN");
-  await refused(
-    () =>
-      s.user.invoke([
-        "itx",
-        "schedules",
-        [
-          "set",
-          { key: "squat", when: { afterMs: 60_000 }, events: [{ type: "note" }] },
-          { idempotencyKey: "account/grant-ended/grant_squatted" },
-        ],
-      ]),
-    "FORBIDDEN",
-  );
+  await s.user.invoke(["itx", ["append", grantEnded]]);
   await endGrantOnAccount(actor, "grant_squatted");
   const account = (await s.user.invoke(["itx", "facets", ["get", "account"], ["snapshot"]])) as {
     state: { endedGrants: Record<string, unknown> };
@@ -288,21 +272,27 @@ test("a person cannot take the platform's keys first: `account/…` on their own
   // An organization's project, members and creation are keyed the same way (session.ts
   // `landProjectOnOrganization`).
   const org = await s.organizations.create({ name: "squat" });
-  await refused(
-    () =>
-      s.organizations.get(org.id).invoke([
-        "itx",
-        [
-          "append",
-          {
-            type: "events.iterate.com/organization/project-added",
-            payload: { projectId: "prj_squatted", slug: "squatted" },
-            idempotencyKey: "organization/project-added:prj_squatted",
-          },
-        ],
-      ]),
-    "FORBIDDEN",
-  );
+  const organization = s.organizations.get(org.id);
+  await organization.invoke([
+    "itx",
+    [
+      "append",
+      {
+        type: "events.iterate.com/organization/project-added",
+        payload: { projectId: "prj_squatted", slug: "squatted" },
+        idempotencyKey: "organization/project-added:prj_squatted",
+      },
+    ],
+  ]);
+  const record = (await organization.invoke([
+    "itx",
+    "facets",
+    ["get", "organization"],
+    ["snapshot"],
+  ])) as {
+    state: { projects: Record<string, unknown> };
+  };
+  expect(record.state.projects).not.toHaveProperty("prj_squatted"); // a person's, not the platform's
   // any other key is still the person's own
   const [own] = (await s.user.invoke([
     "itx",

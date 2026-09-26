@@ -156,7 +156,7 @@ test("MCP has its authorized project's root capabilities: read, commit, publish,
   const secondGrantId = second.id;
   expect(
     afterSecond.filter((e) => e.type === "events.iterate.com/itx/run-requested").at(-1)?.source,
-  ).toEqual({ principal, grant: secondGrantId });
+  ).toEqual({ origin: "/", principal, grant: secondGrantId });
 
   const otherEvents = await readAll(openItx(other));
   const denied = await run(

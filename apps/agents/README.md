@@ -16,15 +16,15 @@ A project installs the app from a folder of its config repo: `agents/package.jso
 `@iterate-com/agents/install` mounts that folder's files (configs/with-agents does it on
 `project/created` and on every commit that changes `agents/`). Choose **With agents** when creating
 a project, or open this app on a minimal project and click **Install agents**, which commits the
-folder pinned to this app's build. Installation stores the source in project KV, enables the
-catalog processor, and writes the `itx.agents` rewrite. `itx.agents.create(path)` installs an agent
+folder pinned to this app's build. Installation enables the catalog processor and writes the
+`itx.agents` rewrite, whose facet's own source every agent hosts. `itx.agents.create(path)` installs an agent
 at that context; `get(path).message(text)` sends a message. The project owns the pin and its data.
 
-The collection delegates capabilities to each agent and its script context. Restrict scripts by
-narrowing the sandbox's rewrite rules. A fully masked sandbox can still receive prose replies;
-denied capability introspection advertises no tools to the model. To allow scripts, retain an
-explicit `run` grant and grant `rewriteRules.list` so the model can inspect its allowed capabilities.
-Mask the sandbox's specific `itx.agents` grant too when denying access to the collection.
+Each agent and its script context inherit the project's capabilities through their parent links.
+Restrict scripts by narrowing the sandbox's rewrite rules. A fully masked sandbox (a bare
+`itx ⇒ null`) can still receive prose replies; denied capability introspection advertises no tools
+to the model. To allow scripts, retain an explicit `run` grant and grant `rewriteRules.list` so the
+model can inspect its allowed capabilities.
 
 The loader resolves the pinned package through esm.sh and locks it. Installation also rebinds
 existing normal agents to the current runtime; their grants and history are retained. Reinstalling

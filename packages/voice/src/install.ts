@@ -1,8 +1,8 @@
 // install.ts — how a project installs voice. Like the agents app it builds on, voice is a SOURCE the
 // project owns: a folder of its config repo (`voice/` by convention) holding a package.json that pins
 // this package and a worker.ts that re-exports the voice worker and its two facet classes
-// (`voiceFolder`). `installVoice` mounts that source as `itx.voice`; the press's facets load the
-// same source. Nothing here is the runtime, so a config worker imports `@iterate-com/voice/install`
+// (`voiceFolder`). `installVoice` mounts that source as `itx.voice`, and hands the worker the same
+// source as its props, which the press's facets load. Nothing here is the runtime, so a config worker imports `@iterate-com/voice/install`
 // without loading it.
 import type {} from "./api.ts";
 // registers `itx.voice` on InstalledAppRoots
@@ -49,15 +49,19 @@ export async function installVoice(
   const cacheKey = Array.from(new Uint8Array(digest), (byte) =>
     byte.toString(16).padStart(2, "0"),
   ).join("");
-  // Written before the rule: the worker reads its facets' source from here (worker.ts).
-  await itx.kv.put("voice/runtime", JSON.stringify({ cacheKey, source }));
   // A screen script embeds this in its HTML (screen-context.md).
   await itx.kv.put("voice/screen-font.css", SCREEN_FONT_CSS);
+  // The worker serves a caller beneath the root as that caller (worker.ts `forCaller`), and its
+  // props are its own source: the press's facets load it.
   await itx.append({
     type: "events.iterate.com/itx/rewrite-rule-configured",
     payload: {
       match: "itx.voice",
-      target: ["itx", "workers", ["get", { source, cacheKey }]],
+      target: [
+        "itx",
+        "workers",
+        ["get", { source, cacheKey, servesCallers: true, props: { source, cacheKey } }],
+      ],
       description:
         "The project's installed voice service: setupVoiceAgent({ activation }), setImage({ device, image }), health()",
     },

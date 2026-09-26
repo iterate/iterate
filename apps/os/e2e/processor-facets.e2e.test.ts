@@ -384,9 +384,12 @@ test("a burst past the breaker's capacity pauses the stream (the facet appends `
   expect(paused).toMatchObject({
     payload: { reason: "breaker: durable events exceeded the bucket" },
   });
-  // provenance: the engine stamps every processor emit with its slug — the log says WHO paused it
-  expect(paused.source?.processor).toMatchObject({ slug: "breaker", version: "1.0.0" });
-  expect(paused.source?.processor?.whileProcessing?.type).toBe("burst");
+  // provenance: the platform stamps WHO wrote it (the breaker's code, at `/`), and the engine adds
+  // the processor's own word on what caused it
+  expect(paused).toMatchObject({
+    source: { origin: "/" },
+    metadata: { causedBy: { processor: "breaker", type: "burst" } },
+  });
   expect(paused.idempotencyKey).toMatch(/^breaker\/trip@\d+$/); // a replay can never double-pause
 
   // the stream is paused: a further append is refused, coded, with the breaker's reason

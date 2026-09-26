@@ -31,6 +31,8 @@ export const InstanceContract = defineProcessorContract({
     "events.iterate.com/secret/lend-revoked",
   ],
   emits: [],
+  // Every fact folded here is the platform's to write (caller.ts `Caller.platform`): an append by the operator's own hand changes nothing.
+  trust: { "*": "platform" },
 });
 
 /** The instance's reduced state (the contract's `stateSchema`). */

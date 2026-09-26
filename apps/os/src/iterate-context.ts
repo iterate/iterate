@@ -462,6 +462,8 @@ export class IterateContextRpcTarget extends RpcTarget {
     consumes?: string[];
     /** Where the cursor starts (0 = the whole log); absent = from now. A push target ignores it. */
     afterOffset?: number;
+    /** Whom the target hears: absent, the trusted writers; `"anyone"` in the project. */
+    from?: "anyone";
   }): Promise<SubscriptionHandleRpcTarget> {
     // LOADED CODE may lend a live callback (its own, fed its own context's events); an expression
     // target is a ROW the delivery loop runs as the kernel — that is `itx.append`'s business, through
@@ -481,6 +483,7 @@ export class IterateContextRpcTarget extends RpcTarget {
     const delivery = {
       consumes: input.consumes,
       afterOffset: input.afterOffset,
+      from: input.from,
     };
     if (input.target && typeof input.target !== "string" && !Array.isArray(input.target)) {
       // A LIVE callback: the row rides the pager upgrade exactly as `provide`'s rule does (built
@@ -630,16 +633,20 @@ export class ItxEntrypoint extends cloudflareWorkers.WorkerEntrypoint<
     // `ctx.exports` are its own module's, so the prop cannot be forged from inside one. Either speaks
     // for the project (no principal) at the origin the context was minted with (platform-origin
     // persisted on the DO): every hop from here — this context, a `cd` to a sibling — carries it, so
-    // a sibling never reached from the edge still composes URLs.
+    // a sibling never reached from the edge still composes URLs. The platform's own class names its
+    // context as the call's origin up front: its `cd` is the edge's, a direct hop that no built-in
+    // stamps, and what it writes elsewhere is still its context's (src/caller.ts `stampCaller`).
+    // Loaded code's origin is stamped by the built-in `cd` it hops through.
+    const address = DurableObjectNameCodec.parse(this.ctx.props.iterateContextName);
     return new IterateContextRpcTarget(
       this.env.ITERATE_CONTEXT,
-      DurableObjectNameCodec.parse(this.ctx.props.iterateContextName),
+      address,
       new SessionTeardown(),
       (p) => this.ctx.waitUntil(p),
       {
         principal: null,
         platformOrigin: this.ctx.props.platformOrigin,
-        ...(!this.ctx.props.platform && { app: true as const }),
+        ...(this.ctx.props.platform ? { path: address.path } : { app: true as const }),
       },
     );
   }

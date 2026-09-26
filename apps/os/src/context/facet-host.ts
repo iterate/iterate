@@ -10,7 +10,8 @@
 //
 // TWO WAYS INTO A FACET, one call beneath both. A caller's itx expression reaches one only through
 // `handle` — what `itx.facets.get` hands out — whose every walk is checked against the methods the
-// facet's class lists (context/facet-public-methods.ts). The platform's own calls take
+// facet's class lists (context/facet-public-methods.ts), and runs as the caller where the class
+// serves callers beneath this context (context/caller-capability.ts). The platform's own calls take
 // `callFacetAsPlatform`, which no walk can land on, and are checked against nothing.
 
 import { z } from "zod";
@@ -22,8 +23,9 @@ import {
   type ItxExpression,
   type ItxExpressionInput,
 } from "iterate/expression";
-import type { FacetProps } from "iterate/sdk";
+import type { FacetProps, ItxCaller } from "iterate/sdk";
 import type { FacetSpec } from "iterate/api";
+import type { Caller } from "../caller.ts";
 import {
   CoreContract,
   facetIsPushedByARow,
@@ -39,6 +41,7 @@ import { RepoDurableObject } from "../repo/durable-object.ts";
 import { SecretDurableObject } from "../secret/durable-object.ts";
 import type { Stream } from "../stream/stream.ts";
 import { WorkspaceDurableObject } from "../workspace/durable-object.ts";
+import { stepsForCaller } from "./caller-capability.ts";
 import { walkSteps, awaitAnswerReleasedIfRejected, FacetHandle } from "./dispatch.ts";
 import { assertFacetMethodIsPublic } from "./facet-public-methods.ts";
 import { assertFacetPlacement } from "./first-party-facet-placement.ts";
@@ -138,6 +141,11 @@ type FacetHostDeps = {
   platformOrigin: () => string | null;
   /** The `env.ITX` stub every worker this context loads receives (the DO's `#itxEntrypoint`). */
   itxEntrypoint: () => Fetcher;
+  /** WHO is calling right now (the DO's ambient caller): the origin a caller's walk ran from. */
+  caller: () => Caller;
+  /** What a facet that serves callers is handed for a caller at `path` beneath this context:
+   *  `{ path, itx }`, `itx` the loopback code loaded at `path` holds (context/caller-capability.ts). */
+  itxCallerAt: (path: string) => ItxCaller;
   /** The DO's dispatch: a source expression's producer runs through it (worker-loader.ts). */
   invoke: (call: ItxExpressionInput) => Promise<unknown>;
   /** The chain of rewrites for an expression (the resolver's `resolve`): how a hosting target is
@@ -595,6 +603,8 @@ export class FacetHost {
    *  `callFacetAsPlatform` — never through the handle's walk. The facets view is PARENT-LOCAL — the
    *  facets live here and can never move (workerd#6702: sockets never leave the parent). */
   handle(name: string, spec?: FacetSpec): FacetHandle {
+    // The context the call ORIGINATED at, captured when the handle is made, as `cd`'s is (built-ins.ts).
+    const origin = this.#deps.caller().path || this.#deps.path;
     const facetHandle = new FacetHandle((itxExpressionSteps) => {
       // A FACET REACHED BY ITX EXPRESSION ANSWERS RPC AND PLAIN HTTP — NEVER A WEBSOCKET. A
       // socket terminates at the edge (a session's /api pager socket on this DO, a project host's
@@ -614,7 +624,7 @@ export class FacetHost {
           "FACET_NO_UPGRADE",
           `facet "${name}": a facet answers RPC and plain HTTP, never a WebSocket — a socket terminates at the edge; reach the facet by itx expression`,
         );
-      return this.#callFacet(name, spec, itxExpressionSteps, { byItxExpression: true });
+      return this.#callFacet(name, spec, itxExpressionSteps, origin);
     });
     this.#facetAddressByFacetHandle.set(facetHandle, { name, spec });
     return facetHandle;
@@ -642,12 +652,13 @@ export class FacetHost {
    *  `#materialize` (the loaded identity, resolved not loaded; the racing-delete/reconfigure check;
    *  the restart marker; the facet, its class minted only when it STARTS) → `#call` (the watchdog,
    *  copy + dispose the answer) — and on the platform failure at facet start, a restart and the same
-   *  two steps once more. */
+   *  two steps once more. `callerOrigin`, the context a caller's walk originated at, decides what
+   *  that walk runs as (context/caller-capability.ts); the platform's own call has none. */
   async #callFacet(
     name: string,
     spec: FacetSpec | undefined,
     itxExpressionSteps: ItxExpression,
-    { byItxExpression } = { byItxExpression: false },
+    callerOrigin?: string,
   ): Promise<unknown> {
     // oxlint-disable-next-line iterate/simple-truthiness-check -- name arrives as a client-authored itx expression argument; the static string type is the API contract, not a runtime guarantee, so a non-string is rejected with a usage error
     if (typeof name !== "string")
@@ -686,15 +697,20 @@ export class FacetHost {
     const facetStartupMemo = firstPartyClassName
       ? undefined
       : this.#facetStartupMemoFor(name, spec);
-    if (byItxExpression)
-      assertFacetMethodIsPublic(
-        name,
-        facetStartupMemo
-          ? await this.#loadedFacetPublicMethods(name, facetStartupMemo)
-          : // `name` hosts a first-party class, so it is one of the table's keys; the type system cannot see it.
-            FIRST_PARTY_FACET_PUBLIC_METHODS[name as keyof typeof FIRST_PARTY_FACET_PUBLIC_METHODS],
-        itxExpressionSteps,
-      );
+    if (callerOrigin) {
+      const publicMethods = facetStartupMemo
+        ? await this.#loadedFacetPublicMethods(name, facetStartupMemo)
+        : // `name` hosts a first-party class, so it is one of the table's keys; the type system cannot see it.
+          FIRST_PARTY_FACET_PUBLIC_METHODS[name as keyof typeof FIRST_PARTY_FACET_PUBLIC_METHODS];
+      assertFacetMethodIsPublic(name, publicMethods, itxExpressionSteps);
+      itxExpressionSteps = stepsForCaller({
+        host: this.#deps.path,
+        origin: callerOrigin,
+        servesCallers: publicMethods.includes("forCaller"),
+        steps: itxExpressionSteps,
+        callerAt: this.#deps.itxCallerAt,
+      });
+    }
     this.#markRan(name);
     this.#facetWorkInFlight++;
     try {
@@ -869,6 +885,7 @@ export class FacetHost {
       ({
         iterateContextName: this.#deps.iterateContextName,
         name,
+        spec: facetStartupMemo, // a loaded facet's own code; none for a first-party class
         ...(facetIsPushedByARow(this.#deps.stream.coreReducedState, name) && {
           fedByPushes: true,
         }),

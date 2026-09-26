@@ -15,8 +15,10 @@ voice/worker.ts      export { default, VoiceAgentDurableObject, VoiceDelegateDur
 ```
 
 `installVoice(itx, await itx.repos.get("/repos/config").modules({ dir: "voice" }))`
-(`@iterate-com/voice/install`) mounts that source at `itx.voice`, keeps it in project KV
-(`voice/runtime`) for the press's facets, and stores the screen font. `ensureVoiceAgent`, which Kit's
+(`@iterate-com/voice/install`) mounts that source at `itx.voice`, hands it to the worker as its
+props (the press's facets load it), and stores the screen font. The worker serves a caller beneath
+the root as that caller (`forCaller`): a jail's or a sandbox's call is created through its own
+`itx.agents`, beneath it and linked to it, and its screens are the `itx.clients` it inherits. `ensureVoiceAgent`, which Kit's
 Prepare and voice.iterate.com run, also stores the OpenAI key and commits both folders when the
 project has none. To upgrade, pin a newer build and install again.
 
@@ -31,7 +33,8 @@ in. The agent retains supplied context messages and passes them to the model
 unchanged; it has no screen-specific matching logic. Script calls and results
 are retained through the same context events, so a later question can refer to
 the exercises or other content already displayed. Its display action is
-`itx.cd("/").voice.setImage({ device, image: { html } })`. The renderer uses
+`itx.voice.setImage({ device, image: { html } })`, which the agent's sandbox inherits from the
+root through its parent links. The renderer uses
 `screen.info()` for dimensions and supported monochrome, grayscale or colour
 formats. Set `image: null` to restore the normal call-status view.
 Capture waits for `<img>` decoding and font readiness, with a five-second

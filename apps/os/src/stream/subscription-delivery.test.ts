@@ -34,11 +34,12 @@ import { AlarmCoordinator } from "../alarm-coordinator.ts";
 import { registerPipelinedRpcBrand, FacetHandle } from "../context/dispatch.ts";
 import {
   RECENT_EPHEMERALS_BUDGET_CHARS,
-  Stream,
+  type Stream,
   type DurableObjectStorageSlice,
 } from "./stream.ts";
 import { SubscriptionDelivery } from "./subscription-delivery.ts";
 import { normalizeControlEvent } from "./core-processor.ts";
+import { StampedStream } from "./test-support.ts";
 
 const MiB = 1024 * 1024;
 
@@ -508,6 +509,7 @@ test.for([
   const overhead = JSON.stringify({
     type: "blob",
     payload: { blob: "" },
+    source: { origin: "/" }, // the stamp is stored with the body
     createdAt: new Date().toISOString(),
   }).length;
   const [big] = rig.stream.append({
@@ -1481,7 +1483,7 @@ function incarnation(
     held: () => false,
     onOverdue: () => {},
   });
-  const stream = new Stream({
+  const stream = new StampedStream({
     storage,
     path: "/",
     projectId: "prj_delivery",

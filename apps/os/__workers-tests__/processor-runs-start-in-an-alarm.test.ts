@@ -57,7 +57,7 @@ test("a run the context died owing its alarm is settled `interrupted` by the inc
     await instance.append({
       type: "events.iterate.com/itx/run-requested",
       payload: { code: "async () => 'never'" },
-      source: { processor: { slug: "looper", version: "1.0.0" } },
+      metadata: { causedBy: { processor: "looper" } },
     });
     await state.storage.sync();
     state.abort("killed before its alarm pass");

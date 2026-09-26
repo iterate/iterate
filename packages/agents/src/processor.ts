@@ -29,6 +29,8 @@ import {
   type ProcessEventArgs,
   type ReduceArgs,
   StreamProcessor,
+  trusts,
+  type StreamEvent,
 } from "iterate/stream/processor";
 import type { WithItx } from "iterate/sdk";
 import type { RewriteRuleListEntry } from "iterate/api";
@@ -76,6 +78,8 @@ export function buildChatMessages(
 ): ChatMessage[] {
   const messages = items.map((item): ChatMessage => {
     const role = item.role === "developer" ? "system" : item.role;
+    // A stranger's words are named: the model knows who in the project is speaking.
+    if (item.from) return { role, content: `[from ${item.from}] ${item.content}` };
     if (!item.files?.length) return { role, content: item.content };
     const parts: Extract<ChatMessage["content"], unknown[]> = [];
     const hints: string[] = [];
@@ -290,6 +294,20 @@ function responsesInput(messages: ChatMessage[]) {
 }
 
 type AgentEvent = ConsumedEvent<typeof AgentContract>;
+
+/** A STRANGER: the context that wrote `event` when this agent does not trust it — a sibling, its own
+ *  sandbox (iterate/stream/processor `trusts`: the platform, a member, or code here or above).
+ *  Undefined for the trusted. */
+const strangerOf = (event: Pick<StreamEvent, "path" | "source">): string | undefined =>
+  event.source && !trusts(event.path, event.source) ? event.source.origin : undefined;
+
+/** THE INTERRUPT's trigger: a person's or a developer's words whose policy cuts the running answer
+ *  short — from a writer this agent trusts. A stranger's words wait their turn, whatever they ask. */
+export const interrupts = (event: AgentEvent | null | undefined): boolean =>
+  event?.type === "events.iterate.com/agent/context-added" &&
+  event.payload.llmRequestPolicy?.behaviour === "interrupt-current-request" &&
+  (event.payload.role === "user" || event.payload.role === "developer") &&
+  !strangerOf(event);
 type AgentArgs = ProcessEventArgs<AgentState, AgentEvent, AgentEmitted>;
 /** What the loop appends: each type the contract emits, its payload as the catalog spells it. */
 type AgentEmitted = EmittedEventInput<typeof AgentContract>;
@@ -416,6 +434,11 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
 
       case "events.iterate.com/agent/context-added": {
         const { role, content, actor, llmRequestPolicy, llmRequestOffset } = event.payload;
+        // A STRANGER'S WORDS (the contract admits a user's from anyone): named to the model, without
+        // attachments — they would point this agent's own `itx.files` at the project's — and
+        // counted as the loop's own, so two agents talking cannot run past the turn bound. Trusted
+        // is the platform, a member, or code here or above.
+        const stranger = strangerOf(event);
         const next: AgentState = {
           ...state,
           contextItems: [
@@ -426,7 +449,8 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
               content,
               actor,
               llmRequestOffset,
-              files: event.payload.files,
+              files: stranger ? undefined : event.payload.files,
+              from: stranger,
             },
           ],
         };
@@ -437,7 +461,9 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
           llmRequestPolicy?.behaviour !== "dont-trigger-request";
         if (!triggers) return next;
         const source =
-          actor?.type === "script" || actor?.type === "agent" ? "agent-loop" : "external";
+          stranger || actor?.type === "script" || actor?.type === "agent"
+            ? "agent-loop"
+            : "external";
         return {
           ...next,
           pendingLlmRequestTrigger: {
@@ -530,12 +556,7 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
     // script), and settle the request cancelled — blocked, so an eviction can never leave the
     // request open for the next at-head pass to adopt. Their reduce already moved the trigger; the
     // settlement's own delivery re-runs the at-head pass, which then records the next request.
-    if (
-      event?.type === "events.iterate.com/agent/context-added" &&
-      event.payload.llmRequestPolicy?.behaviour === "interrupt-current-request" &&
-      (event.payload.role === "user" || event.payload.role === "developer") &&
-      state.openRequest
-    ) {
+    if (interrupts(event) && state.openRequest) {
       const open = state.openRequest;
       const inFlight = this.#llmRequestsInFlight.get(open.requestedAtOffset);
       inFlight?.controller.abort(new InterruptedError());
@@ -641,9 +662,11 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
 
     // THE SAGA — the birth, from state at head, in the background: at most once per incarnation,
     // and any later delivery over the same state runs it again, so an attempt lost to an eviction
-    // costs nothing. Nothing to provision: the certificate goes to `/` (the project catalog) first,
-    // then lands here in ONE append with the default system prompt beside it — both keyed, so a
-    // retry appends nothing twice. An operator's instructions are their own `context-added` after.
+    // costs nothing. Nothing to provision: the certificate goes to `/` (the project catalog) first —
+    // this agent's own append there, stamped with its path, which is how the catalog knows the
+    // agent certified itself (catalog.ts) — then lands here in ONE append with the default system
+    // prompt beside it; both keyed, so a retry appends nothing twice. An operator's instructions
+    // are their own `context-added` after.
     if (state.creation?.status === "requested") {
       if (this.#creating) return;
       this.#creating = true;
@@ -656,9 +679,7 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
             payload: { path },
             idempotencyKey: `agent/created:${path}`,
           };
-          await this.deps.withItx((itx) =>
-            itx.invoke(["itx", "agents", ["announce", certificate]]),
-          ); // the project catalog first
+          await this.deps.withItx((itx) => itx.cd("/").append(certificate)); // the catalog first
           await append(certificate, {
             // this path last: the certificate closes the obligation, the prompt rides with it
             type: "events.iterate.com/agent/context-added",
@@ -697,9 +718,7 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
             payload: { path },
             idempotencyKey: `agent/deleted:${path}`,
           };
-          await this.deps.withItx((itx) =>
-            itx.invoke(["itx", "agents", ["announce", certificate]]),
-          ); // the project catalog first
+          await this.deps.withItx((itx) => itx.cd("/").append(certificate)); // the catalog first
           await append(certificate); // this path last: closes the obligation
         } finally {
           this.#deleting = false;

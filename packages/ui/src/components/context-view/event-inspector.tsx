@@ -117,13 +117,9 @@ export function EventInspector({
   const envelope: [label: string, value: string][] = event
     ? [
         ["Who", actorLabel(event)],
+        ["From", event.source?.origin || ""],
         ["Grant", event.source?.grant || ""],
-        [
-          "Processor",
-          event.source?.processor
-            ? `${event.source.processor.slug}@${event.source.processor.version}`
-            : "",
-        ],
+        ["Processor", causedByProcessor(event)],
       ].filter((row): row is [string, string] => Boolean(row[1]))
     : [];
   const sincePrevious = event && previous && elapsedBetween(previous.createdAt, event.createdAt);
@@ -214,4 +210,11 @@ export function EventInspector({
       </SheetContent>
     </Sheet>
   );
+}
+
+/** The processor that says it wrote the event, from its own claim (`metadata.causedBy`, the SDK
+ *  engine's): what it was processing, not who it is — that is the stamp's `origin`. */
+function causedByProcessor(event: ContextViewEvent): string {
+  const causedBy = event.metadata?.causedBy as { processor?: unknown } | undefined;
+  return typeof causedBy?.processor === "string" ? causedBy.processor : "";
 }

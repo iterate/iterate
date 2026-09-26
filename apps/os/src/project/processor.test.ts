@@ -5,7 +5,7 @@
 // e2e/session.e2e.test.ts.
 
 import { expect, onTestFinished, test, vi } from "vitest";
-import type { StreamEventInput } from "iterate/stream/processor";
+import type { EventSource, StreamEventInput } from "iterate/stream/processor";
 import { reduceProcessor } from "iterate/stream/test-support";
 import { normalizeControlEvent } from "../stream/core-processor.ts";
 import { ProjectProcessor } from "./processor.ts";
@@ -18,6 +18,9 @@ const requested = {
 const created = { type: "events.iterate.com/project/created", payload: {} };
 const failed = { type: "events.iterate.com/project/create-failed", payload: { error: "boom" } };
 const deleted = { type: "events.iterate.com/project/deleted", payload: {} };
+
+/** A member's append on `/` (the dash): trusted, never the platform. */
+const member: EventSource = { origin: "/", principal: { actor: "member" } };
 
 /** The empty state; a row spreads it and names only what its events changed. */
 const empty: ProjectState = {
@@ -37,7 +40,7 @@ const empty: ProjectState = {
 
 const reduceRows: {
   name: string;
-  events: { type: string; payload?: unknown; source?: { platform: true } }[];
+  events: { type: string; payload?: unknown; source?: EventSource }[];
   state: ProjectState;
 }[] = [
   { name: "the empty state", events: [], state: empty },
@@ -222,8 +225,8 @@ const reduceRows: {
       integrationFact("github", "connected", "acme"),
       integrationFact("slack", "connected", "beta"),
       integrationFact("slack", "disconnected", "beta"),
-      { ...integrationFact("slack", "disconnected", "acme"), source: undefined },
-      { ...integrationFact("google", "connected", "evil"), source: undefined },
+      { ...integrationFact("slack", "disconnected", "acme"), source: member },
+      { ...integrationFact("google", "connected", "evil"), source: member },
     ],
     state: {
       ...empty,
@@ -360,8 +363,8 @@ const reduceRows: {
     events: [
       requested,
       created,
-      deleteRequested({ platform: true }),
-      deleteRequested({ platform: true }),
+      deleteRequested({ origin: "/", platform: true }),
+      deleteRequested({ origin: "/", platform: true }),
       { type: "events.iterate.com/project/context-deleted", payload: { path: "/a" } },
       deleted,
     ],
@@ -369,7 +372,13 @@ const reduceRows: {
   },
   {
     name: "a member's delete request (no platform stamp), or their forged certificate, deletes nothing and stops nothing",
-    events: [requested, created, deleteRequested(), deleted, deleteRequested({ platform: true })],
+    events: [
+      requested,
+      created,
+      deleteRequested(),
+      deleted,
+      deleteRequested({ origin: "/", platform: true }),
+    ],
     state: { ...empty, creation: { status: "created", offset: 2 }, deletion: { offset: 5 } },
   },
 ];
@@ -874,27 +883,42 @@ function processorWithoutHostnames() {
   );
 }
 
+/** An entity's certificates cross-posted to `/`: each names its entity, whose own code wrote it
+ *  (`certifiesItself`). */
 function repoBorn(path: string) {
-  return { type: "events.iterate.com/repo/created", payload: { path } };
+  return { type: "events.iterate.com/repo/created", payload: { path }, source: { origin: path } };
 }
 
 function workspaceBorn(path: string) {
-  return { type: "events.iterate.com/workspace/created", payload: { path } };
+  return {
+    type: "events.iterate.com/workspace/created",
+    payload: { path },
+    source: { origin: path },
+  };
 }
 
 function committed(path: string, commitOid: string) {
   return {
     type: "events.iterate.com/repo/commit-completed",
     payload: { path, commitOid, message: "m", changedPaths: ["worker.ts"] },
+    source: { origin: path },
   };
 }
 
 function secretSet(path: string, urls: string[], refresh?: string) {
-  return { type: "events.iterate.com/secret/set", payload: { path, urls, refresh } };
+  return {
+    type: "events.iterate.com/secret/set",
+    payload: { path, urls, refresh },
+    source: { origin: "/", platform: true as const },
+  };
 }
 
 function secretDeleted(path: string) {
-  return { type: "events.iterate.com/secret/deleted", payload: { path } };
+  return {
+    type: "events.iterate.com/secret/deleted",
+    payload: { path },
+    source: { origin: "/", platform: true as const },
+  };
 }
 
 const tip = (commitOid: string, offset: number) => ({ commitOid, offset });
@@ -972,7 +996,7 @@ function integrationFact(
   return {
     type: `events.iterate.com/${provider}/${fact}`,
     payload: fact === "connected" ? connected : { connection },
-    source: { platform: true as const },
+    source: { origin: "/", platform: true as const },
   };
 }
 
@@ -989,7 +1013,7 @@ function childCreated(childPath: string) {
   return { type: "events.iterate.com/itx/child-created", payload: { childPath } };
 }
 
-function deleteRequested(source?: { platform: true }) {
+function deleteRequested(source: EventSource = member) {
   return { type: "events.iterate.com/project/delete-requested", payload: {}, source };
 }
 
@@ -1024,6 +1048,7 @@ function borrowed(path: string, lendId: string) {
       urls: ["https://google.test"],
       integration: { provider: "google", account: "ada@example.com", externalId: "42" },
     },
+    source: { origin: "/", platform: true as const },
   };
 }
 
@@ -1031,5 +1056,6 @@ function lendRevoked(path: string, lendId: string) {
   return {
     type: "events.iterate.com/secret/lend-revoked",
     payload: { path, lendId, reason: "lender" },
+    source: { origin: "/", platform: true as const },
   };
 }

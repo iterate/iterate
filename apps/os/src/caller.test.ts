@@ -1,12 +1,15 @@
 // caller.test.ts — the signed-claims codec as a table: what verifies, what does not; the digest and
-// the secrets' compare; and `stampCaller`, the attribution an event is stored with.
+// the secrets' compare; and `stampCaller`, the provenance an event is stored with.
 import { createHash } from "node:crypto";
 import { expect, test } from "vitest";
+import type { EventSource } from "iterate/stream/processor";
 import {
   secretsEqual,
   sha256Hex,
   signClaims,
+  platformSource,
   stampCaller,
+  type Caller,
   verifyAdminSecret,
   verifyClaims,
 } from "./caller.ts";
@@ -74,90 +77,67 @@ for (const { candidate, secret, becomes } of adminRows)
     expect(await verifyAdminSecret(candidate, secret)).toEqual(becomes ? { actor: "admin" } : null);
   });
 
-// ── stampCaller — the platform's attribution on an event ──
-const event: { type: string; payload: { n: number }; source?: Record<string, unknown> } = {
-  type: "x",
-  payload: { n: 1 },
+// ── stampCaller — the platform's provenance stamp on an event ──
+// Every row's event arrives with a forged source (every field a writer might claim); the stamp is
+// built from the caller alone, so the forged fields never survive.
+const FORGED = {
+  origin: "/elsewhere",
+  principal: { actor: "forged" },
+  grant: "grant_forged",
+  platform: true,
+  processor: { slug: "p", version: "1" },
+  schedule: { key: "k", scheduledAtOffset: 1, at: "2026-01-01T00:00:00.000Z" },
 };
-test("a person through a grant: source.principal and source.grant, a client-supplied stamp replaced", () => {
-  expect(
-    stampCaller(
-      {
-        ...event,
-        source: {
-          principal: { actor: "forged" },
-          grant: "grant_forged",
-          processor: { slug: "p", version: "1" },
-        },
-      },
-      { principal: { actor: "user_1", email: "a@b.c" }, grant: "grant_abc" },
-    ),
-  ).toEqual({
-    ...event,
-    source: {
-      processor: { slug: "p", version: "1" },
-      principal: { actor: "user_1", email: "a@b.c" },
-      grant: "grant_abc",
-    },
+const viewed = {
+  actor: "user_bob",
+  email: "bob@example.com",
+  impersonatedBy: { actor: "user_admin", email: "admin@example.com" },
+};
+const STAMP_ROWS: { writer: string; caller: Caller; source: EventSource }[] = [
+  {
+    writer: "a person through a grant, at the context they addressed",
+    caller: { principal: { actor: "user_1", email: "a@b.c" }, grant: "grant_abc" },
+    source: { origin: "/here", principal: { actor: "user_1", email: "a@b.c" }, grant: "grant_abc" },
+  },
+  {
+    writer: "an admin signed in as someone: both people, as the platform admitted them",
+    caller: { principal: viewed, grant: "g" },
+    source: { origin: "/here", principal: viewed, grant: "g" },
+  },
+  {
+    writer: "the admin secret: a principal and no grant",
+    caller: { principal: { actor: "admin" } },
+    source: { origin: "/here", principal: { actor: "admin" } },
+  },
+  {
+    writer: "loaded code at this context: the context alone",
+    caller: { principal: null, app: true },
+    source: { origin: "/here" },
+  },
+  {
+    writer: "loaded code whose call started at /agents/a/sandbox: that context",
+    caller: { principal: null, app: true, path: "/agents/a/sandbox" },
+    source: { origin: "/agents/a/sandbox" },
+  },
+  {
+    writer: "the platform writing a fact on a person's behalf: attributed to them, and `platform`",
+    caller: { principal: { actor: "user_1" }, grant: "g", platform: true },
+    source: { origin: "/here", principal: { actor: "user_1" }, grant: "g", platform: true },
+  },
+  {
+    writer: "a grant without a principal is no one's: no grant",
+    caller: { principal: null, grant: "g" },
+    source: { origin: "/here" },
+  },
+];
+test.for(STAMP_ROWS)("$writer", ({ caller, source }) => {
+  expect(stampCaller({ type: "x", payload: { n: 1 }, source: FORGED }, caller, "/here")).toEqual({
+    type: "x",
+    payload: { n: 1 },
+    source,
   });
 });
-test("an admin signed in as someone: both stamped; a client's claim of one is dropped with its principal", () => {
-  const viewed = {
-    actor: "user_bob",
-    email: "bob@example.com",
-    impersonatedBy: { actor: "user_admin", email: "admin@example.com" },
-  };
-  const forged = {
-    ...event,
-    source: { principal: { actor: "user_bob", impersonatedBy: { actor: "user_x", email: "x@y" } } },
-  };
-  expect(stampCaller(forged, { principal: viewed, grant: "g" })).toEqual({
-    ...event,
-    source: { principal: viewed, grant: "g" },
-  });
-  expect(
-    stampCaller(forged, { principal: { actor: "user_bob", email: "bob@example.com" }, grant: "g" }),
-  ).toEqual({
-    ...event,
-    source: { principal: { actor: "user_bob", email: "bob@example.com" }, grant: "g" },
-  });
-});
-test("the admin secret: a principal, no grant key at all", () => {
-  expect(stampCaller(event, { principal: { actor: "admin" } })).toEqual({
-    ...event,
-    source: { principal: { actor: "admin" } },
-  });
-});
-test("nobody (the kernel, an anonymous session): a client's stamp is dropped; an empty source is dropped whole", () => {
-  expect(
-    stampCaller(
-      { ...event, source: { principal: { actor: "forged" }, grant: "g" } },
-      { principal: null },
-    ),
-  ).toEqual(event);
-  expect(
-    stampCaller(
-      { ...event, source: { grant: "g", processor: { slug: "p", version: "1" } } },
-      { principal: null },
-    ),
-  ).toEqual({
-    ...event,
-    source: { processor: { slug: "p", version: "1" } },
-  });
-});
-test("a client's claim that the platform wrote its event is dropped, whoever it is", () => {
-  const claimed = { ...event, source: { platform: true } };
-  expect(stampCaller(claimed, { principal: { actor: "user_1" }, grant: "g" })).toEqual({
-    ...event,
-    source: { principal: { actor: "user_1" }, grant: "g" },
-  });
-  expect(stampCaller(claimed, { principal: null, app: true })).toEqual(event);
-});
-test("the platform writing a fact on a person's behalf: attributed to them, and stamped `platform`", () => {
-  expect(
-    stampCaller(event, { principal: { actor: "user_1" }, grant: "g", platform: true }),
-  ).toEqual({
-    ...event,
-    source: { principal: { actor: "user_1" }, grant: "g", platform: true },
-  });
+
+test("the platform's own records are stamped as the context itself, vouched for", () => {
+  expect(platformSource("/agents/a")).toEqual({ origin: "/agents/a", platform: true });
 });

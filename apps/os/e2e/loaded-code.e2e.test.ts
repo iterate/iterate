@@ -1,13 +1,15 @@
 // loaded-code.e2e.test.ts — WHAT LOADED CODE MAY SAY (the app wall, context/itx-expression-rewriting.ts
 // `admitLoadedCodeExpression`; iterate-context.ts `ItxEntrypoint`): a worker's, a facet's, a script's `env.ITX` runs every
 // call as `Caller.app`. On what it hands in, the fixed point `itx.builtins` is not a word and `cd`
-// goes down only — self and descendants; the rows a call rewrites through are the owner's and are never
-// checked, so a parent link carries a script up exactly as far as its owner said. `provide` and
+// goes down only — self and descendants, but for one `append` anywhere in the project, a message its
+// readers decide whether to hear (provenance.e2e.test.ts); the rows a call rewrites through are the
+// owner's and are never checked, so a parent link carries a script up exactly as far as its owner
+// said. Its control (`itx/*`) lands only at its own context and beneath. `provide` and
 // `subscribe` are a session's verbs (loaded code writes rows with `itx.append`). A raw `fetch()` is
 // `itx.fetch(request)` at the worker's context, through the table — no row below the owner root, no
 // egress. The chain a child inherits: own rows → the parent link → … → the root's rows → the built-ins.
 import { expect, test, type TestContext } from "vitest";
-import { freshCtx, openItx, readAll } from "./support/client.ts";
+import { freshCtx, openItx } from "./support/client.ts";
 import { FakeArtifacts } from "./support/fake-artifacts.ts";
 
 /** A loaded worker that hands its `env.ITX` whatever the test asks it to say, and reports the refusal. */
@@ -156,12 +158,16 @@ test("owner-written physical redirects survive a loaded-code hop, while fresh ca
   expect(await worker().say("itx.cd('/').whoami()")).toMatchObject({
     error: expect.stringMatching(/goes down only/),
   });
+  // A row it writes through the grant lands at `/`, above it: loaded code configures only its own
+  // context and those beneath it (itx-expression-rewriting.ts `admitLoadedCodeRow`).
   expect(
     await worker().say("itx.write", {
       type: "events.iterate.com/itx/rewrite-rule-configured",
       payload: { match: "itx.escape", target: "itx.builtins.kv" },
     }),
-  ).toMatchObject({ error: expect.stringMatching(/not a loaded worker's word/) });
+  ).toMatchObject({
+    error: expect.stringMatching(/configures only the context its call started at/),
+  });
   expect(await root.builtins.rewriteRules.get("itx.escape")).toBeNull();
 });
 
@@ -227,7 +233,7 @@ test("a script beneath a mask cannot set a project fetch route, which the config
   const set = await jail.builtins.run(
     "async (itx) => itx.fetchRoutes.set('leak', { requestMatcher: { routingSlug: 'leak' }, target: 'itx.tool' }).then(() => 'set', (e) => String(e.message))",
   );
-  expect(set).toMatch(/fetch routes are set only from the project's root/);
+  expect(set).toMatch(/configures only the context its call started at \("\/jail"\)/);
   expect(await root.fetchRoutes.list()).toEqual([]);
 });
 
@@ -257,21 +263,21 @@ test("a script beneath a mask cannot delete the config repo: `itx.repos.delete` 
   expect(artifacts).toMatchObject({ deleted: [] });
 });
 
-test("a script beneath a mask cannot delete the config repo by appending its request: the typed append refuses the repo's lifecycle facts", async (context) => {
+test("a script beneath a mask cannot delete the config repo by appending its request: the request lands stamped with the script's context, and the repo does not listen to it", async (context) => {
   const { root, jail } = await beneathAMask("repo-request-from-below");
-  await configRepo(root, context);
-  const appended = await jail.builtins.run(
-    "async (itx) => itx.repos.get('/repos/config').append({ type: 'events.iterate.com/repo/delete-requested', payload: {} }).then(() => 'appended', (e) => String(e.message))",
-  );
-  expect(appended).toMatch(/is written by the repo itself/);
-  expect(
-    (await readAll(root.cd("/repos/config"))).filter(
-      (e: { type: string }) => e.type === "events.iterate.com/repo/delete-requested",
-    ),
-  ).toEqual([]);
-  expect((await root.repos.list()).map((repo: { path: string }) => repo.path)).toEqual([
+  const artifacts = await configRepo(root, context);
+  const [requested] = (await jail.builtins.run(
+    "async (itx) => itx.repos.get('/repos/config').append({ type: 'events.iterate.com/repo/delete-requested', payload: {} })",
+  )) as { offset: number; source?: unknown }[];
+  const { source, offset } = requested!;
+  expect(source).toEqual({ origin: "/jail" });
+  const repo = root.cd("/repos/config").facets.get("repo");
+  await repo.waitUntilProcessed({ offset });
+  expect((await repo.snapshot()).state.deletion).toBeNull();
+  expect((await root.repos.list()).map((entry: { path: string }) => entry.path)).toEqual([
     "/repos/config",
   ]);
+  expect(artifacts).toMatchObject({ deleted: [] });
 });
 
 test("a script beneath a mask cannot plant a workspace outside itself: `itx.workspaces.create` reaches only beneath the caller", async () => {

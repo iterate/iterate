@@ -55,7 +55,7 @@ test("the directory keeps creation, listing, membership and event attribution co
   });
   const [event] = await project.append({
     type: "note",
-    source: { principal: { actor: "forged" } },
+    source: { origin: "/forged", principal: { actor: "forged" } },
   });
   expect(event.source?.principal).toEqual(principal);
   const bob = await operator("bob@directory.test");
@@ -310,23 +310,15 @@ test("the operator's project in a named organization lands on the organization's
     "prj_seeded",
     "prj_seeded_earlier",
   ]);
-  // a member can't take a project's key first (src/context/built-ins.ts `append`): the same event
-  // unkeyed stays on the log, attributed to them, and the fold ignores it; the platform's lands once
+  // a member's key is the member's own (src/stream/stream.ts `writerScopedKey`): the platform's
+  // key taken first stands beside the platform's fact, stays on the log, attributed to them, and
+  // the fold ignores it (organization/contract.ts `trust`); the platform's lands once
   using ownersRecord = await owner.organizations.get(org.id);
-  const squat = {
+  await ownersRecord.append({
     type: "events.iterate.com/organization/project-added",
     payload: { projectId: "prj_squatted", slug: "someone-elses" },
-  };
-  await refused(
-    () =>
-      ownersRecord.append({
-        ...squat,
-        idempotencyKey: "organization/project-added:prj_squatted",
-      }),
-    "FORBIDDEN",
-    /the platform's/,
-  );
-  await ownersRecord.append(squat);
+    idempotencyKey: "organization/project-added:prj_squatted",
+  });
   using _squatted = await restore("squatted", "prj_squatted");
   expect((await organizationState(owner, org.id)).projects).toMatchObject({
     prj_squatted: { slug: "squatted" },

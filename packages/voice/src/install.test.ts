@@ -29,20 +29,15 @@ test("a project without voice gets the agents and voice folders committed, insta
   const voiceRule = root.append.mock.calls
     .map(([event]) => event.payload)
     .find((payload) => payload.match === "itx.voice");
-  expect(voiceRule).toMatchObject({
-    target: [
-      "itx",
-      "workers",
-      [
-        "get",
-        { source: voiceFolder(versions.voice), cacheKey: expect.stringMatching(/^[0-9a-f]{64}$/) },
-      ],
-    ],
-  });
-  expect(JSON.parse(root.kv.values["voice/runtime"]!)).toEqual({
-    cacheKey: voiceRule.target[2][1].cacheKey,
+  // The worker serves callers beneath the root as themselves, and its props are its own source.
+  const runtime = {
     source: voiceFolder(versions.voice),
+    cacheKey: expect.stringMatching(/^[0-9a-f]{64}$/),
+  };
+  expect(voiceRule).toMatchObject({
+    target: ["itx", "workers", ["get", { ...runtime, servesCallers: true, props: runtime }]],
   });
+  expect(root.kv.values).not.toHaveProperty("voice/runtime");
   expect(root.kv.values["voice/screen-font.css"]).toContain("Iterate Pixel");
 });
 
@@ -56,7 +51,12 @@ test("a voice/ folder the project already has is installed as it is, never overw
   root.files["voice/worker.ts"] = own["worker.ts"];
   expect(await ensureVoiceAgent(root, versions)).toBe("ready");
   expect(root.commits.map((commit) => commit.changes[0]!.path)).toEqual(["agents/package.json"]);
-  expect(JSON.parse(root.kv.values["voice/runtime"]!)).toMatchObject({ source: own });
+  const voiceRule = root.append.mock.calls
+    .map(([event]) => event.payload)
+    .find((payload) => payload.match === "itx.voice");
+  expect(voiceRule).toMatchObject({
+    target: ["itx", "workers", ["get", { source: own, props: { source: own } }]],
+  });
 });
 
 test("a project without an OpenAI key and none given is asked for one, and nothing is installed", async () => {
