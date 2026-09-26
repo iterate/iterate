@@ -31,7 +31,6 @@ import {
   findBuiltWranglerConfig,
   runAsync,
   smoke,
-  smokeResponse,
 } from "../../../scripts/lib/deploy-helpers.ts";
 import {
   CloudflareApiError,
@@ -574,8 +573,8 @@ async function uploadPreviewSecrets(wrangler: string, ctx: EnvContext<OsEnv>) {
 
 /** The OS's own preview, from an OS build already made, its D1 (`databaseId`, migrated), its
  *  Artifacts namespace and the Previews secrets already in place: its config (naming the PR's Dash
- *  preview when this run deploys one), `wrangler preview`, and the smoke that the new deployment
- *  serves. */
+ *  preview when this run deploys one), `wrangler preview`, and the readiness gate on the new
+ *  deployment. */
 async function deployOsPreview(
   ctx: EnvContext<OsEnv>,
   previewName: string,
@@ -629,25 +628,14 @@ async function deployOsPreview(
       `expected preview URL ${previewUrl(previewName)}, but wrangler returned ${url}`,
     );
   }
-  // apps/os's smoke is `/version` naming the new deployment (src/worker.ts), asked every 5 s. Not
-  // sooner: it hands straight on to the readiness gate, and an in-place redeploy's old version
-  // still answers for seconds after. Asked every 0.5 s it saved at most ~3.5 s, and the gate then
-  // missed in its first two rounds on 3 of 7 in-place redeploys (#3035).
-  await traceOperation("Smoke /version", () =>
-    smokeResponse(
-      `${url}/version`,
-      async (response) =>
-        response.status === 200 && (await response.text()).startsWith(deploymentId),
-      "version names the deployment",
-    ),
-  );
-  // `/version` answering is not the preview answering: a brand-new preview's Durable Objects
-  // answer `internal error; reference = …` for seconds after it (19 of 20 brand-new previews on
-  // 2026-09-24, for 6–27 s), and a preview redeployed in place still runs the previous version in
-  // places (preview-readiness.ts). Nothing is handed on — the PR body's links, the sign-in seed,
-  // the e2e job — until five rounds of eight in a row answer in full on this deployment. A preview
-  // that does not within 150 s fails the deploy, naming what it answered: the slowest of 17
-  // in-place soak redeploys took 58 s (2026-09-25).
+  // The readiness gate is apps/os's smoke, asked as soon as `wrangler preview` returns: each probe
+  // asks which version its edge runs, the id `/version` answers with (src/worker.ts), and then what
+  // `/version` cannot show — a brand-new preview's Durable Objects answer `internal error;
+  // reference = …` for seconds after its edge serves, and a preview redeployed in place still runs
+  // the previous version in places (preview-readiness.ts). Nothing is handed on — the PR body's
+  // links, the sign-in seed, the e2e job — until three rounds of eight in a row answer in full on
+  // this deployment. A preview that does not within 150 s fails the deploy, naming what it
+  // answered: the slowest of 17 in-place soak redeploys took 58 s (2026-09-25).
   await traceOperation("Readiness gate", () =>
     awaitPreviewReady(url, {
       adminSecret: parseAppConfig(
@@ -655,7 +643,7 @@ async function deployOsPreview(
       ).secrets.adminBearer.exposeSecret(),
       version: deploymentId,
       width: 8,
-      consecutive: 5,
+      consecutive: 3,
       deadlineMs: 150_000,
     }),
   );
