@@ -6,6 +6,7 @@
 #include "iterate/kit/stream_subscription.h"
 #include "iterate/kit/voice_device_profile.h"
 
+#include <assert.h>
 #include <inttypes.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -51,16 +52,6 @@ struct fixture {
   struct observer live;
   int64_t next_callback_result;
 };
-
-static void failed(const char *expression, const char *file, int line) {
-  fprintf(stderr, "%s:%d: assertion failed: %s\n", file, line, expression);
-  abort();
-}
-
-#define check(expression) \
-  do { \
-    if (!(expression)) failed(#expression, __FILE__, __LINE__); \
-  } while (0)
 
 static enum capnweb_status capture(
     void *context,
@@ -131,7 +122,7 @@ static void start_session(struct fixture *fixture) {
     fixture->output,
     sizeof(fixture->output),
   };
-  check(capnweb_session_init(&fixture->session, &options) == CAPNWEB_OK);
+  assert(capnweb_session_init(&fixture->session, &options) == CAPNWEB_OK);
   fixture->next_callback_result = 1;
 }
 
@@ -146,7 +137,7 @@ static void receive(struct fixture *fixture, const char *message) {
   if (status != CAPNWEB_OK) {
     fprintf(stderr, "receive failed (%d): %s\n", (int)status, message);
   }
-  check(status == CAPNWEB_OK);
+  assert(status == CAPNWEB_OK);
 }
 
 static size_t exports_used(const struct fixture *fixture) {
@@ -205,10 +196,10 @@ static int64_t number_after(const char *message, const char *needle) {
   const char *at = strstr(message, needle);
   long long value;
 
-  check(at != NULL);
+  assert(at != NULL);
   at += strlen(needle);
   value = strtoll(at, &end, 10);
-  check(end != at);
+  assert(end != at);
   return (int64_t)value;
 }
 
@@ -224,7 +215,7 @@ static void resolve_latest_pull(struct fixture *fixture, int64_t capability) {
       "[\"resolve\",%" PRId64 ",[\"export\",%" PRId64 "]]",
       latest_pull(fixture),
       capability);
-  check(written > 0 && (size_t)written < sizeof(message));
+  assert(written > 0 && (size_t)written < sizeof(message));
   receive(fixture, message);
 }
 
@@ -243,17 +234,17 @@ static void start_mount(struct fixture *fixture) {
     .capability = {inert_dispatch, fixture, NULL},
   };
 
-  check(iterate_kit_itx_mount_start(&fixture->mount, &options) == CAPNWEB_OK);
-  check(messages_with(fixture, "\"authenticate\"") == 1U);
+  assert(iterate_kit_itx_mount_start(&fixture->mount, &options) == CAPNWEB_OK);
+  assert(messages_with(fixture, "\"authenticate\"") == 1U);
   resolve_latest_pull(fixture, -101);
   resolve_latest_pull(fixture, -102);
   resolve_latest_pull(fixture, -103);
-  check(fixture->mount.state == ITERATE_KIT_ITX_MOUNT_READY);
-  check(fixture->mount.has_project_capability);
-  check(fixture->mount.project_capability.id == -102);
-  check(fixture->mount.has_rule_capability);
-  check(fixture->mount.rule_capability.id == -103);
-  check(calls_used(fixture) == 0U);
+  assert(fixture->mount.state == ITERATE_KIT_ITX_MOUNT_READY);
+  assert(fixture->mount.has_project_capability);
+  assert(fixture->mount.project_capability.id == -102);
+  assert(fixture->mount.has_rule_capability);
+  assert(fixture->mount.rule_capability.id == -103);
+  assert(calls_used(fixture) == 0U);
 }
 
 /*
@@ -272,43 +263,43 @@ static void observe(
   struct capnweb_value value;
   struct capnweb_value events;
 
-  check(observer != NULL);
-  check(owner_epoch == observer->epoch);
+  assert(observer != NULL);
+  assert(owner_epoch == observer->epoch);
   ++observer->calls;
 
   if (capnweb_value_get_expression_array(update, &events)) {
     struct capnweb_value event;
     size_t length = 0U;
 
-    check(range != NULL);
-    check(capnweb_value_object_get(range, "after", &value));
-    check(capnweb_value_get_int64(&value, &observer->after));
-    check(capnweb_value_object_get(range, "through", &value));
-    check(capnweb_value_get_int64(&value, &observer->through));
-    check(capnweb_value_array_at(&events, 0U, &event));
+    assert(range != NULL);
+    assert(capnweb_value_object_get(range, "after", &value));
+    assert(capnweb_value_get_int64(&value, &observer->after));
+    assert(capnweb_value_object_get(range, "through", &value));
+    assert(capnweb_value_get_int64(&value, &observer->through));
+    assert(capnweb_value_array_at(&events, 0U, &event));
     /* The path now rides the EVENT, which is where an event's identity lives. */
-    check(capnweb_value_object_get(&event, "path", &value));
-    check(capnweb_value_copy_string(
+    assert(capnweb_value_object_get(&event, "path", &value));
+    assert(capnweb_value_copy_string(
         &value, observer->path, sizeof(observer->path), &length) == CAPNWEB_OK);
-    check(length > 0U);
-    check(capnweb_value_object_get(&event, "offset", &value));
-    check(capnweb_value_get_int64(&value, &observer->offset));
+    assert(length > 0U);
+    assert(capnweb_value_object_get(&event, "offset", &value));
+    assert(capnweb_value_get_int64(&value, &observer->offset));
     return;
   }
 
-  check(range == NULL);
-  check(capnweb_value_object_get(update, "type", &value));
+  assert(range == NULL);
+  assert(capnweb_value_object_get(update, "type", &value));
   if (capnweb_value_string_equals(&value, "snapshot")) {
-    check(capnweb_value_object_get(update, "revision", &value));
-    check(capnweb_value_get_int64(&value, &observer->revision));
+    assert(capnweb_value_object_get(update, "revision", &value));
+    assert(capnweb_value_get_int64(&value, &observer->revision));
     observer->snapshot = true;
     return;
   }
-  check(capnweb_value_string_equals(&value, "patch"));
-  check(capnweb_value_object_get(update, "from", &value));
-  check(capnweb_value_get_int64(&value, &observer->from));
-  check(capnweb_value_object_get(update, "to", &value));
-  check(capnweb_value_get_int64(&value, &observer->to));
+  assert(capnweb_value_string_equals(&value, "patch"));
+  assert(capnweb_value_object_get(update, "from", &value));
+  assert(capnweb_value_get_int64(&value, &observer->from));
+  assert(capnweb_value_object_get(update, "to", &value));
+  assert(capnweb_value_get_int64(&value, &observer->to));
   observer->patch = true;
 }
 
@@ -321,7 +312,7 @@ static void deliver(
       "[\"push\",[\"pipeline\",%" PRId64 ",[],[%s]]]",
       callback,
       payload);
-  check(written > 0 && (size_t)written < sizeof(message));
+  assert(written > 0 && (size_t)written < sizeof(message));
   receive(fixture, message);
 
   written = snprintf(
@@ -329,7 +320,7 @@ static void deliver(
       sizeof(message),
       "[\"release\",%" PRId64 ",1]",
       fixture->next_callback_result++);
-  check(written > 0 && (size_t)written < sizeof(message));
+  assert(written > 0 && (size_t)written < sizeof(message));
   receive(fixture, message);
 }
 
@@ -337,7 +328,7 @@ static void release_callback(struct fixture *fixture, int64_t callback) {
   char message[96];
   const int written = snprintf(
       message, sizeof(message), "[\"release\",%" PRId64 ",1]", callback);
-  check(written > 0 && (size_t)written < sizeof(message));
+  assert(written > 0 && (size_t)written < sizeof(message));
   receive(fixture, message);
 }
 
@@ -348,47 +339,47 @@ static void opens_on_one_mounted_session(struct fixture *fixture) {
   const struct capnweb_remote_capability project =
       fixture->mount.project_capability;
 
-  check(iterate_kit_stream_get(
+  assert(iterate_kit_stream_get(
       &fixture->stream_a, &fixture->session, project,
       "/agents/voice/v24/multiplex-a") == CAPNWEB_OK);
   resolve_latest_pull(fixture, -201);
-  check(iterate_kit_stream_get(
+  assert(iterate_kit_stream_get(
       &fixture->stream_b, &fixture->session, project,
       "/agents/voice/v24/multiplex-b") == CAPNWEB_OK);
   resolve_latest_pull(fixture, -202);
 
   fixture->a.epoch = 11U;
-  check(iterate_kit_stream_subscription_open(
+  assert(iterate_kit_stream_subscription_open(
       &fixture->subscription_a, &fixture->stream_a, "multiplex-a",
       event_types, sizeof(event_types) / sizeof(event_types[0]), observe, &fixture->a, fixture->a.epoch) == CAPNWEB_OK);
   /* `{name, consumes, target}` — and the CAPABILITY is the target itself. */
-  check(strstr(
+  assert(strstr(
       latest_with(fixture, "\"name\":\"multiplex-a\""),
       "[\"subscribe\"]") != NULL);
-  check(strstr(
+  assert(strstr(
       latest_with(fixture, "\"name\":\"multiplex-a\""),
       "\"consumes\":[[\"events.iterate.com/voice-agent/spk-frame\"]]") != NULL);
-  check(strstr(
+  assert(strstr(
       latest_with(fixture, "\"name\":\"multiplex-a\""),
       "\"target\":[\"export\",") != NULL);
   resolve_latest_pull(fixture, -301);
 
   fixture->b.epoch = 12U;
-  check(iterate_kit_stream_subscription_open(
+  assert(iterate_kit_stream_subscription_open(
       &fixture->subscription_b, &fixture->stream_b, "multiplex-b",
       event_types, sizeof(event_types) / sizeof(event_types[0]), observe, &fixture->b, fixture->b.epoch) == CAPNWEB_OK);
   resolve_latest_pull(fixture, -302);
 
   fixture->live.epoch = 13U;
-  check(iterate_kit_live_state_subscription_open(
+  assert(iterate_kit_live_state_subscription_open(
       &fixture->live_state, &fixture->session, project,
       observe, &fixture->live, fixture->live.epoch) == CAPNWEB_OK);
-  check(latest_with(fixture, "[\"liveState\",\"subscribe\"]") != NULL);
+  assert(latest_with(fixture, "[\"liveState\",\"subscribe\"]") != NULL);
   resolve_latest_pull(fixture, -303);
 
-  check(fixture->subscription_a.state == ITERATE_KIT_SUBSCRIPTION_OPEN);
-  check(fixture->subscription_b.state == ITERATE_KIT_SUBSCRIPTION_OPEN);
-  check(fixture->live_state.state == ITERATE_KIT_SUBSCRIPTION_OPEN);
+  assert(fixture->subscription_a.state == ITERATE_KIT_SUBSCRIPTION_OPEN);
+  assert(fixture->subscription_b.state == ITERATE_KIT_SUBSCRIPTION_OPEN);
+  assert(fixture->live_state.state == ITERATE_KIT_SUBSCRIPTION_OPEN);
 }
 
 static void multiplexes_and_reclaims(void) {
@@ -408,10 +399,10 @@ static void multiplexes_and_reclaims(void) {
   callback_a = callback_from(&fixture, "\"name\":\"multiplex-a\"");
   callback_b = callback_from(&fixture, "\"name\":\"multiplex-b\"");
   callback_live = callback_from(&fixture, "[\"liveState\",\"subscribe\"]");
-  check(callback_a < 0 && callback_b < 0 && callback_live < 0);
-  check(callback_a != callback_b);
-  check(callback_a != callback_live);
-  check(callback_b != callback_live);
+  assert(callback_a < 0 && callback_b < 0 && callback_live < 0);
+  assert(callback_a != callback_b);
+  assert(callback_a != callback_live);
+  assert(callback_b != callback_live);
 
   /*
    * The mount keeps one export and these independent callbacks add three.
@@ -419,12 +410,12 @@ static void multiplexes_and_reclaims(void) {
    * owners; the Cap'n Web import table instead tracks only unresolved outgoing
    * calls and returns to its mount baseline.
    */
-  check(exports_used(&fixture) == mounted_exports + 3U);
-  check(exports_used(&fixture) <= ITERATE_KIT_VOICE_EXPORT_CAPACITY);
-  check(imports_used(&fixture) == mounted_imports);
-  check(calls_used(&fixture) == 0U);
-  check(messages_with(&fixture, "\"authenticate\"") == 1U);
-  check(capnweb_session_get_state(&fixture.session) == CAPNWEB_SESSION_OPEN);
+  assert(exports_used(&fixture) == mounted_exports + 3U);
+  assert(exports_used(&fixture) <= ITERATE_KIT_VOICE_EXPORT_CAPACITY);
+  assert(imports_used(&fixture) == mounted_imports);
+  assert(calls_used(&fixture) == 0U);
+  assert(messages_with(&fixture, "\"authenticate\"") == 1U);
+  assert(capnweb_session_get_state(&fixture.session) == CAPNWEB_SESSION_OPEN);
 
   deliver(&fixture, callback_a,
       "[[{\"type\":\"events.iterate.test/a\",\"offset\":40,"
@@ -440,74 +431,74 @@ static void multiplexes_and_reclaims(void) {
       "{\"type\":\"patch\",\"from\":7,\"to\":8,"
       "\"patch\":{\"fields\":{\"active\":{\"set\":false}}}}");
 
-  check(fixture.a.calls == 1U);
-  check(strcmp(fixture.a.path, "/agents/voice/v24/multiplex-a") == 0);
-  check(fixture.a.offset == 40);
-  check(fixture.a.after == 39 && fixture.a.through == 40);
-  check(fixture.b.calls == 1U);
-  check(strcmp(fixture.b.path, "/agents/voice/v24/multiplex-b") == 0);
-  check(fixture.b.offset == 41);
-  check(fixture.b.after == 40 && fixture.b.through == 41);
-  check(fixture.live.calls == 2U);
-  check(fixture.live.snapshot && fixture.live.patch);
-  check(fixture.live.revision == 7);
-  check(fixture.live.from == 7 && fixture.live.to == 8);
+  assert(fixture.a.calls == 1U);
+  assert(strcmp(fixture.a.path, "/agents/voice/v24/multiplex-a") == 0);
+  assert(fixture.a.offset == 40);
+  assert(fixture.a.after == 39 && fixture.a.through == 40);
+  assert(fixture.b.calls == 1U);
+  assert(strcmp(fixture.b.path, "/agents/voice/v24/multiplex-b") == 0);
+  assert(fixture.b.offset == 41);
+  assert(fixture.b.after == 40 && fixture.b.through == 41);
+  assert(fixture.live.calls == 2U);
+  assert(fixture.live.snapshot && fixture.live.patch);
+  assert(fixture.live.revision == 7);
+  assert(fixture.live.from == 7 && fixture.live.to == 8);
 
   /*
    * Closing A sends close + releases the handle, but the remote still owns its
    * callback. A late A callback is acknowledged and ignored until that remote
    * reference releases. B and live state continue independently.
    */
-  check(iterate_kit_stream_subscription_close(&fixture.subscription_a) == CAPNWEB_OK);
+  assert(iterate_kit_stream_subscription_close(&fixture.subscription_a) == CAPNWEB_OK);
   {
     const size_t after_first_close = fixture.sent_count;
-    check(iterate_kit_stream_subscription_close(&fixture.subscription_a) == CAPNWEB_OK);
-    check(fixture.sent_count == after_first_close);
+    assert(iterate_kit_stream_subscription_close(&fixture.subscription_a) == CAPNWEB_OK);
+    assert(fixture.sent_count == after_first_close);
   }
-  check(fixture.subscription_a.state == ITERATE_KIT_SUBSCRIPTION_CLOSING);
+  assert(fixture.subscription_a.state == ITERATE_KIT_SUBSCRIPTION_CLOSING);
   deliver(&fixture, callback_a,
       "[[{\"offset\":42,\"path\":\"/agents/voice/v24/multiplex-a\"}]],"
       "{\"after\":41,\"through\":42}");
-  check(fixture.a.calls == 1U);
+  assert(fixture.a.calls == 1U);
   deliver(&fixture, callback_b,
       "[[{\"offset\":43,\"path\":\"/agents/voice/v24/multiplex-b\"}]],"
       "{\"after\":42,\"through\":43}");
-  check(fixture.b.calls == 2U);
+  assert(fixture.b.calls == 2U);
   deliver(&fixture, callback_live,
       "{\"type\":\"patch\",\"from\":8,\"to\":9,\"patch\":{}}");
-  check(fixture.live.calls == 3U);
+  assert(fixture.live.calls == 3U);
 
   release_callback(&fixture, callback_a);
-  check(fixture.subscription_a.state == ITERATE_KIT_SUBSCRIPTION_CLOSED);
-  check(iterate_kit_stream_subscription_reclaimable(&fixture.subscription_a));
+  assert(fixture.subscription_a.state == ITERATE_KIT_SUBSCRIPTION_CLOSED);
+  assert(iterate_kit_stream_subscription_reclaimable(&fixture.subscription_a));
 
-  check(iterate_kit_stream_subscription_close(&fixture.live_state) == CAPNWEB_OK);
-  check(latest_with(&fixture, "[\"unsubscribe\"]") != NULL);
+  assert(iterate_kit_stream_subscription_close(&fixture.live_state) == CAPNWEB_OK);
+  assert(latest_with(&fixture, "[\"unsubscribe\"]") != NULL);
   release_callback(&fixture, callback_live);
-  check(fixture.live_state.state == ITERATE_KIT_SUBSCRIPTION_CLOSED);
-  check(iterate_kit_stream_subscription_reclaimable(&fixture.live_state));
+  assert(fixture.live_state.state == ITERATE_KIT_SUBSCRIPTION_CLOSED);
+  assert(iterate_kit_stream_subscription_reclaimable(&fixture.live_state));
 
   deliver(&fixture, callback_b,
       "[[{\"offset\":44,\"path\":\"/agents/voice/v24/multiplex-b\"}]],"
       "{\"after\":43,\"through\":44}");
-  check(fixture.b.calls == 3U);
+  assert(fixture.b.calls == 3U);
 
-  check(iterate_kit_stream_subscription_close(&fixture.subscription_b) == CAPNWEB_OK);
+  assert(iterate_kit_stream_subscription_close(&fixture.subscription_b) == CAPNWEB_OK);
   release_callback(&fixture, callback_b);
-  check(fixture.subscription_b.state == ITERATE_KIT_SUBSCRIPTION_CLOSED);
-  check(iterate_kit_stream_subscription_reclaimable(&fixture.subscription_b));
+  assert(fixture.subscription_b.state == ITERATE_KIT_SUBSCRIPTION_CLOSED);
+  assert(iterate_kit_stream_subscription_reclaimable(&fixture.subscription_b));
 
-  check(iterate_kit_stream_close(&fixture.stream_a) == CAPNWEB_OK);
-  check(iterate_kit_stream_close(&fixture.stream_b) == CAPNWEB_OK);
-  check(iterate_kit_stream_reclaimable(&fixture.stream_a));
-  check(iterate_kit_stream_reclaimable(&fixture.stream_b));
-  check(exports_used(&fixture) == mounted_exports);
-  check(imports_used(&fixture) == mounted_imports);
-  check(calls_used(&fixture) == 0U);
-  check(messages_with(&fixture, "\"authenticate\"") == 1U);
-  check(fixture.mount.state == ITERATE_KIT_ITX_MOUNT_READY);
-  check(fixture.mount.has_project_capability);
-  check(capnweb_session_get_state(&fixture.session) == CAPNWEB_SESSION_OPEN);
+  assert(iterate_kit_stream_close(&fixture.stream_a) == CAPNWEB_OK);
+  assert(iterate_kit_stream_close(&fixture.stream_b) == CAPNWEB_OK);
+  assert(iterate_kit_stream_reclaimable(&fixture.stream_a));
+  assert(iterate_kit_stream_reclaimable(&fixture.stream_b));
+  assert(exports_used(&fixture) == mounted_exports);
+  assert(imports_used(&fixture) == mounted_imports);
+  assert(calls_used(&fixture) == 0U);
+  assert(messages_with(&fixture, "\"authenticate\"") == 1U);
+  assert(fixture.mount.state == ITERATE_KIT_ITX_MOUNT_READY);
+  assert(fixture.mount.has_project_capability);
+  assert(capnweb_session_get_state(&fixture.session) == CAPNWEB_SESSION_OPEN);
 }
 
 static void pending_open_close_waits_for_remote_callback_release(void) {
@@ -528,36 +519,36 @@ static void pending_open_close_waits_for_remote_callback_release(void) {
     .has_capability = true,
   };
   fixture.a.epoch = 21U;
-  check(iterate_kit_stream_subscription_open(
+  assert(iterate_kit_stream_subscription_open(
       &fixture.subscription_a, &fixture.stream_a, "pending-stream",
       event_types, sizeof(event_types) / sizeof(event_types[0]), observe, &fixture.a, fixture.a.epoch) == CAPNWEB_OK);
   stream_pull = latest_pull(&fixture);
   callback_stream = fixture.subscription_a.callback.id;
 
   fixture.live.epoch = 22U;
-  check(iterate_kit_live_state_subscription_open(
+  assert(iterate_kit_live_state_subscription_open(
       &fixture.live_state, &fixture.session,
       (struct capnweb_remote_capability){-402},
       observe, &fixture.live, fixture.live.epoch) == CAPNWEB_OK);
   live_pull = latest_pull(&fixture);
   callback_live = fixture.live_state.callback.id;
 
-  check(iterate_kit_stream_subscription_close(&fixture.subscription_a) == CAPNWEB_OK);
-  check(iterate_kit_stream_subscription_close(&fixture.live_state) == CAPNWEB_OK);
-  check(!iterate_kit_stream_subscription_reclaimable(&fixture.subscription_a));
-  check(!iterate_kit_stream_subscription_reclaimable(&fixture.live_state));
+  assert(iterate_kit_stream_subscription_close(&fixture.subscription_a) == CAPNWEB_OK);
+  assert(iterate_kit_stream_subscription_close(&fixture.live_state) == CAPNWEB_OK);
+  assert(!iterate_kit_stream_subscription_reclaimable(&fixture.subscription_a));
+  assert(!iterate_kit_stream_subscription_reclaimable(&fixture.live_state));
 
   {
     char message[96];
     int written = snprintf(
         message, sizeof(message),
         "[\"resolve\",%" PRId64 ",[\"export\",-501]]", stream_pull);
-    check(written > 0 && (size_t)written < sizeof(message));
+    assert(written > 0 && (size_t)written < sizeof(message));
     receive(&fixture, message);
     written = snprintf(
         message, sizeof(message),
         "[\"resolve\",%" PRId64 ",[\"export\",-502]]", live_pull);
-    check(written > 0 && (size_t)written < sizeof(message));
+    assert(written > 0 && (size_t)written < sizeof(message));
     receive(&fixture, message);
   }
 
@@ -566,22 +557,22 @@ static void pending_open_close_waits_for_remote_callback_release(void) {
    * `close()`, so calling one would reject — and on this client a rejection is
    * indistinguishable from a network fault. Live state still has `unsubscribe`.
    */
-  check(latest_with(&fixture, "[\"close\"]") == NULL);
-  check(latest_with(&fixture, "[\"unsubscribe\"]") != NULL);
+  assert(latest_with(&fixture, "[\"close\"]") == NULL);
+  assert(latest_with(&fixture, "[\"unsubscribe\"]") != NULL);
   deliver(&fixture, callback_stream,
       "[[{\"offset\":1,\"path\":\"/agents/voice/v24/pending\"}]],"
       "{\"after\":0,\"through\":1}");
   deliver(&fixture, callback_live,
       "{\"type\":\"snapshot\",\"revision\":1,\"state\":{}}");
-  check(fixture.a.calls == 0U);
-  check(fixture.live.calls == 0U);
+  assert(fixture.a.calls == 0U);
+  assert(fixture.live.calls == 0U);
 
   release_callback(&fixture, callback_stream);
   release_callback(&fixture, callback_live);
-  check(iterate_kit_stream_subscription_reclaimable(&fixture.subscription_a));
-  check(iterate_kit_stream_subscription_reclaimable(&fixture.live_state));
-  check(calls_used(&fixture) == 0U);
-  check(capnweb_session_get_state(&fixture.session) == CAPNWEB_SESSION_OPEN);
+  assert(iterate_kit_stream_subscription_reclaimable(&fixture.subscription_a));
+  assert(iterate_kit_stream_subscription_reclaimable(&fixture.live_state));
+  assert(calls_used(&fixture) == 0U);
+  assert(capnweb_session_get_state(&fixture.session) == CAPNWEB_SESSION_OPEN);
 }
 
 static void invalid_types_and_export_exhaustion_leave_reclaimable_storage(void) {
@@ -601,34 +592,34 @@ static void invalid_types_and_export_exhaustion_leave_reclaimable_storage(void) 
   };
   {
     const char *const invalid_types[] = {NULL};
-    check(iterate_kit_stream_subscription_open(
+    assert(iterate_kit_stream_subscription_open(
         &fixture.subscription_a, &fixture.stream_a, "invalid-types",
         invalid_types, sizeof(invalid_types) / sizeof(invalid_types[0]),
         observe, &fixture.a, 31U) == CAPNWEB_E_INVALID_ARGUMENT);
   }
-  check(exports_used(&fixture) == 0U);
-  check(iterate_kit_stream_subscription_reclaimable(&fixture.subscription_a));
+  assert(exports_used(&fixture) == 0U);
+  assert(iterate_kit_stream_subscription_reclaimable(&fixture.subscription_a));
 
   for (index = 0U; index < ITERATE_KIT_VOICE_EXPORT_CAPACITY; ++index) {
-    check(capnweb_session_export_capability(
+    assert(capnweb_session_export_capability(
         &fixture.session, (struct capnweb_capability){inert_dispatch, &fixture, NULL},
         &fillers[index]) == CAPNWEB_OK);
   }
-  check(exports_used(&fixture) == ITERATE_KIT_VOICE_EXPORT_CAPACITY);
-  check(iterate_kit_stream_subscription_open(
+  assert(exports_used(&fixture) == ITERATE_KIT_VOICE_EXPORT_CAPACITY);
+  assert(iterate_kit_stream_subscription_open(
       &fixture.subscription_b, &fixture.stream_a, "exhausted",
       event_types, sizeof(event_types) / sizeof(event_types[0]), observe, &fixture.b, 32U) == CAPNWEB_E_LIMIT);
-  check(fixture.subscription_b.state == ITERATE_KIT_SUBSCRIPTION_FAILED);
-  check(iterate_kit_stream_subscription_close(&fixture.subscription_b) == CAPNWEB_OK);
-  check(iterate_kit_stream_subscription_reclaimable(&fixture.subscription_b));
-  check(exports_used(&fixture) == ITERATE_KIT_VOICE_EXPORT_CAPACITY);
+  assert(fixture.subscription_b.state == ITERATE_KIT_SUBSCRIPTION_FAILED);
+  assert(iterate_kit_stream_subscription_close(&fixture.subscription_b) == CAPNWEB_OK);
+  assert(iterate_kit_stream_subscription_reclaimable(&fixture.subscription_b));
+  assert(exports_used(&fixture) == ITERATE_KIT_VOICE_EXPORT_CAPACITY);
 
   for (index = 0U; index < ITERATE_KIT_VOICE_EXPORT_CAPACITY; ++index) {
-    check(capnweb_session_release_local_capability(
+    assert(capnweb_session_release_local_capability(
         &fixture.session, fillers[index]) == CAPNWEB_OK);
   }
-  check(exports_used(&fixture) == 0U);
-  check(calls_used(&fixture) == 0U);
+  assert(exports_used(&fixture) == 0U);
+  assert(calls_used(&fixture) == 0U);
 }
 
 static void session_loss_clears_pending_children_before_new_session(void) {
@@ -645,10 +636,10 @@ static void session_loss_clears_pending_children_before_new_session(void) {
     .has_capability = true,
   };
   fixture.a.epoch = 41U;
-  check(iterate_kit_stream_subscription_open(
+  assert(iterate_kit_stream_subscription_open(
       &fixture.subscription_a, &fixture.stream_a, "lost-open",
       event_types, sizeof(event_types) / sizeof(event_types[0]), observe, &fixture.a, fixture.a.epoch) == CAPNWEB_OK);
-  check(iterate_kit_stream_get(
+  assert(iterate_kit_stream_get(
       &fixture.stream_b, &fixture.session,
       (struct capnweb_remote_capability){-702},
       "/agents/voice/v24/lost-get") == CAPNWEB_OK);
@@ -656,25 +647,25 @@ static void session_loss_clears_pending_children_before_new_session(void) {
   capnweb_session_close(&fixture.session);
   iterate_kit_stream_session_ended(&fixture.stream_b);
   iterate_kit_stream_subscription_session_ended(&fixture.subscription_a);
-  check(iterate_kit_stream_reclaimable(&fixture.stream_b));
-  check(iterate_kit_stream_subscription_reclaimable(&fixture.subscription_a));
+  assert(iterate_kit_stream_reclaimable(&fixture.stream_b));
+  assert(iterate_kit_stream_subscription_reclaimable(&fixture.subscription_a));
 
   start_session(&fixture);
-  check(iterate_kit_stream_get(
+  assert(iterate_kit_stream_get(
       &fixture.stream_b, &fixture.session,
       (struct capnweb_remote_capability){-703},
       "/agents/voice/v24/new-session") == CAPNWEB_OK);
-  check(strstr(
+  assert(strstr(
       latest_with(&fixture, "[\"cd\"]"),
       "-703") != NULL);
   resolve_latest_pull(&fixture, -704);
   fixture.b.epoch = 42U;
-  check(iterate_kit_stream_subscription_open(
+  assert(iterate_kit_stream_subscription_open(
       &fixture.subscription_a, &fixture.stream_b, "new-session",
       event_types, sizeof(event_types) / sizeof(event_types[0]), observe, &fixture.b, fixture.b.epoch) == CAPNWEB_OK);
   resolve_latest_pull(&fixture, -705);
-  check(fixture.subscription_a.state == ITERATE_KIT_SUBSCRIPTION_OPEN);
-  check(capnweb_session_get_state(&fixture.session) == CAPNWEB_SESSION_OPEN);
+  assert(fixture.subscription_a.state == ITERATE_KIT_SUBSCRIPTION_OPEN);
+  assert(capnweb_session_get_state(&fixture.session) == CAPNWEB_SESSION_OPEN);
 }
 
 int main(void) {

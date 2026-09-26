@@ -1,19 +1,9 @@
 #include "iterate/kit/websocket_rx.h"
 
+#include <assert.h>
 #include <stddef.h>
 #include <stdint.h>
-#include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
-
-#define CHECK(condition)                                                     \
-  do {                                                                       \
-    if (!(condition)) {                                                      \
-      fprintf(stderr, "%s:%d: check failed: %s\n",                         \
-          __FILE__, __LINE__, #condition);                                   \
-      abort();                                                               \
-    }                                                                        \
-  } while (0)
 
 /*
  * WebSocket libraries commonly write a control header and payload separately,
@@ -39,20 +29,20 @@ static void a_ping_split_across_reads_is_delivered_once(void) {
     .has_frame = true,
   };
 
-  CHECK(iterate_kit_websocket_rx_init(&rx) == ITERATE_KIT_OK);
-  CHECK(iterate_kit_websocket_rx_feed(&rx, &read, &chunk) ==
+  assert(iterate_kit_websocket_rx_init(&rx) == ITERATE_KIT_OK);
+  assert(iterate_kit_websocket_rx_feed(&rx, &read, &chunk) ==
       ITERATE_KIT_WEBSOCKET_RX_PARTIAL);
 
   read.bytes = second;
   read.byte_count = sizeof(second);
-  CHECK(iterate_kit_websocket_rx_feed(&rx, &read, &chunk) ==
+  assert(iterate_kit_websocket_rx_feed(&rx, &read, &chunk) ==
       ITERATE_KIT_WEBSOCKET_RX_CONTROL);
-  CHECK(chunk.opcode == ITERATE_KIT_WEBSOCKET_PING);
-  CHECK(chunk.final);
-  CHECK(chunk.payload_offset == 0U);
-  CHECK(chunk.payload_size == sizeof(expected));
-  CHECK(chunk.byte_count == sizeof(expected));
-  CHECK(memcmp(chunk.bytes, expected, sizeof(expected)) == 0);
+  assert(chunk.opcode == ITERATE_KIT_WEBSOCKET_PING);
+  assert(chunk.final);
+  assert(chunk.payload_offset == 0U);
+  assert(chunk.payload_size == sizeof(expected));
+  assert(chunk.byte_count == sizeof(expected));
+  assert(memcmp(chunk.bytes, expected, sizeof(expected)) == 0);
 }
 
 /*
@@ -75,22 +65,22 @@ static void data_chunks_preserve_their_frame_offsets(void) {
     .has_frame = true,
   };
 
-  CHECK(iterate_kit_websocket_rx_init(&rx) == ITERATE_KIT_OK);
-  CHECK(iterate_kit_websocket_rx_feed(&rx, &read, &chunk) ==
+  assert(iterate_kit_websocket_rx_init(&rx) == ITERATE_KIT_OK);
+  assert(iterate_kit_websocket_rx_feed(&rx, &read, &chunk) ==
       ITERATE_KIT_WEBSOCKET_RX_DATA);
-  CHECK(chunk.bytes == first);
-  CHECK(chunk.byte_count == sizeof(first));
-  CHECK(chunk.payload_size == sizeof(first) + sizeof(second));
-  CHECK(chunk.payload_offset == 0U);
+  assert(chunk.bytes == first);
+  assert(chunk.byte_count == sizeof(first));
+  assert(chunk.payload_size == sizeof(first) + sizeof(second));
+  assert(chunk.payload_offset == 0U);
 
   read.bytes = second;
   read.byte_count = sizeof(second);
-  CHECK(iterate_kit_websocket_rx_feed(&rx, &read, &chunk) ==
+  assert(iterate_kit_websocket_rx_feed(&rx, &read, &chunk) ==
       ITERATE_KIT_WEBSOCKET_RX_DATA);
-  CHECK(chunk.bytes == second);
-  CHECK(chunk.byte_count == sizeof(second));
-  CHECK(chunk.payload_size == sizeof(first) + sizeof(second));
-  CHECK(chunk.payload_offset == sizeof(first));
+  assert(chunk.bytes == second);
+  assert(chunk.byte_count == sizeof(second));
+  assert(chunk.payload_size == sizeof(first) + sizeof(second));
+  assert(chunk.payload_offset == sizeof(first));
 }
 
 /*
@@ -114,18 +104,18 @@ static void oversized_control_is_dropped_without_poisoning_the_peer(void) {
     .has_frame = true,
   };
 
-  CHECK(iterate_kit_websocket_rx_init(&rx) == ITERATE_KIT_OK);
-  CHECK(iterate_kit_websocket_rx_feed(&rx, &read, &chunk) ==
+  assert(iterate_kit_websocket_rx_init(&rx) == ITERATE_KIT_OK);
+  assert(iterate_kit_websocket_rx_feed(&rx, &read, &chunk) ==
       ITERATE_KIT_WEBSOCKET_RX_DROPPED);
 
   read.bytes = valid;
   read.byte_count = sizeof(valid);
   read.payload_size = sizeof(valid);
-  CHECK(iterate_kit_websocket_rx_feed(&rx, &read, &chunk) ==
+  assert(iterate_kit_websocket_rx_feed(&rx, &read, &chunk) ==
       ITERATE_KIT_WEBSOCKET_RX_CONTROL);
-  CHECK(chunk.opcode == ITERATE_KIT_WEBSOCKET_PING);
-  CHECK(chunk.byte_count == sizeof(valid));
-  CHECK(chunk.bytes[0] == valid[0]);
+  assert(chunk.opcode == ITERATE_KIT_WEBSOCKET_PING);
+  assert(chunk.byte_count == sizeof(valid));
+  assert(chunk.bytes[0] == valid[0]);
 }
 
 /*
@@ -146,8 +136,8 @@ static void an_empty_binary_frame_is_dropped_without_a_restart(void) {
     .has_frame = true,
   };
 
-  CHECK(iterate_kit_websocket_rx_init(&rx) == ITERATE_KIT_OK);
-  CHECK(iterate_kit_websocket_rx_feed(&rx, &read, &chunk) ==
+  assert(iterate_kit_websocket_rx_init(&rx) == ITERATE_KIT_OK);
+  assert(iterate_kit_websocket_rx_feed(&rx, &read, &chunk) ==
       ITERATE_KIT_WEBSOCKET_RX_DROPPED);
 
   /*
@@ -158,11 +148,11 @@ static void an_empty_binary_frame_is_dropped_without_a_restart(void) {
   read.bytes = valid;
   read.byte_count = sizeof(valid);
   read.payload_size = sizeof(valid);
-  CHECK(iterate_kit_websocket_rx_feed(&rx, &read, &chunk) ==
+  assert(iterate_kit_websocket_rx_feed(&rx, &read, &chunk) ==
       ITERATE_KIT_WEBSOCKET_RX_DATA);
-  CHECK(chunk.payload_offset == 0U);
-  CHECK(chunk.byte_count == sizeof(valid));
-  CHECK(chunk.bytes == valid);
+  assert(chunk.payload_offset == 0U);
+  assert(chunk.byte_count == sizeof(valid));
+  assert(chunk.bytes == valid);
 }
 
 /*
@@ -181,8 +171,8 @@ static void an_empty_text_frame_is_dropped_without_a_restart(void) {
     .has_frame = true,
   };
 
-  CHECK(iterate_kit_websocket_rx_init(&rx) == ITERATE_KIT_OK);
-  CHECK(iterate_kit_websocket_rx_feed(&rx, &read, &chunk) ==
+  assert(iterate_kit_websocket_rx_init(&rx) == ITERATE_KIT_OK);
+  assert(iterate_kit_websocket_rx_feed(&rx, &read, &chunk) ==
       ITERATE_KIT_WEBSOCKET_RX_DROPPED);
 }
 
@@ -209,8 +199,8 @@ static void fragmented_control_is_dropped_without_poisoning_the_peer(void) {
     .has_frame = true,
   };
 
-  CHECK(iterate_kit_websocket_rx_init(&rx) == ITERATE_KIT_OK);
-  CHECK(iterate_kit_websocket_rx_feed(&rx, &read, &chunk) ==
+  assert(iterate_kit_websocket_rx_init(&rx) == ITERATE_KIT_OK);
+  assert(iterate_kit_websocket_rx_feed(&rx, &read, &chunk) ==
       ITERATE_KIT_WEBSOCKET_RX_DROPPED);
 
   read.bytes = continuation;
@@ -218,17 +208,17 @@ static void fragmented_control_is_dropped_without_poisoning_the_peer(void) {
   read.payload_size = sizeof(continuation);
   read.opcode = ITERATE_KIT_WEBSOCKET_CONTINUATION;
   read.final = true;
-  CHECK(iterate_kit_websocket_rx_feed(&rx, &read, &chunk) ==
+  assert(iterate_kit_websocket_rx_feed(&rx, &read, &chunk) ==
       ITERATE_KIT_WEBSOCKET_RX_DATA);
-  CHECK(chunk.opcode == ITERATE_KIT_WEBSOCKET_CONTINUATION);
+  assert(chunk.opcode == ITERATE_KIT_WEBSOCKET_CONTINUATION);
 
   read.bytes = valid;
   read.byte_count = sizeof(valid);
   read.payload_size = sizeof(valid);
   read.opcode = ITERATE_KIT_WEBSOCKET_PING;
-  CHECK(iterate_kit_websocket_rx_feed(&rx, &read, &chunk) ==
+  assert(iterate_kit_websocket_rx_feed(&rx, &read, &chunk) ==
       ITERATE_KIT_WEBSOCKET_RX_CONTROL);
-  CHECK(chunk.bytes[0] == valid[0]);
+  assert(chunk.bytes[0] == valid[0]);
 }
 
 /*
@@ -244,12 +234,12 @@ static void peer_close_status_code_is_decoded_from_the_complete_control_payload(
   };
   static const uint8_t malformed[] = {0x03U};
 
-  CHECK(iterate_kit_websocket_close_status_code(
+  assert(iterate_kit_websocket_close_status_code(
       normal, sizeof(normal)) == 1000);
-  CHECK(iterate_kit_websocket_close_status_code(
+  assert(iterate_kit_websocket_close_status_code(
       going_away_with_reason, sizeof(going_away_with_reason)) == 1001);
-  CHECK(iterate_kit_websocket_close_status_code(NULL, 0U) == 0);
-  CHECK(iterate_kit_websocket_close_status_code(
+  assert(iterate_kit_websocket_close_status_code(NULL, 0U) == 0);
+  assert(iterate_kit_websocket_close_status_code(
       malformed, sizeof(malformed)) == 0);
 }
 
@@ -275,23 +265,23 @@ static void a_zero_byte_payload_stall_preserves_data_offset(void) {
     .has_frame = true,
   };
 
-  CHECK(iterate_kit_websocket_rx_init(&rx) == ITERATE_KIT_OK);
-  CHECK(iterate_kit_websocket_rx_feed(&rx, &read, &chunk) ==
+  assert(iterate_kit_websocket_rx_init(&rx) == ITERATE_KIT_OK);
+  assert(iterate_kit_websocket_rx_feed(&rx, &read, &chunk) ==
       ITERATE_KIT_WEBSOCKET_RX_DATA);
-  CHECK(chunk.payload_offset == 0U);
+  assert(chunk.payload_offset == 0U);
 
   read.bytes = NULL;
   read.byte_count = 0U;
-  CHECK(iterate_kit_websocket_rx_feed(&rx, &read, &chunk) ==
+  assert(iterate_kit_websocket_rx_feed(&rx, &read, &chunk) ==
       ITERATE_KIT_WEBSOCKET_RX_IDLE);
 
   read.bytes = second;
   read.byte_count = sizeof(second);
-  CHECK(iterate_kit_websocket_rx_feed(&rx, &read, &chunk) ==
+  assert(iterate_kit_websocket_rx_feed(&rx, &read, &chunk) ==
       ITERATE_KIT_WEBSOCKET_RX_DATA);
-  CHECK(chunk.bytes == second);
-  CHECK(chunk.payload_offset == sizeof(first));
-  CHECK(chunk.byte_count == sizeof(second));
+  assert(chunk.bytes == second);
+  assert(chunk.payload_offset == sizeof(first));
+  assert(chunk.byte_count == sizeof(second));
 }
 
 int main(void) {
