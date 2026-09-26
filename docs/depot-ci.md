@@ -936,9 +936,9 @@ share of Preview OS pushes that ran the slow rows. Each push is a PostHog event,
 The guard pages #error-pulse red when the pushes that skipped the slow rows
 took a p50 over 165 s or a p90 over 200 s across the last 24 hours, judged from
 20 such pushes up. It pages red again whenever that p50 is more than 20 s over
-the one its last page gave, and green once both are back under. The owner's
-rule is a push green within 3 minutes, and he confirmed these lines on
-2026-09-26 (`LINES` in the script). Each page names the job that finished last
+the lowest it judged since its last page, and green once both are back under.
+The lines hold the owner's rule that a push is green within 3 minutes (`LINES`
+in the script). Each page names the job that finished last
 on most of those pushes, the end of their critical path (`preview-os.yml:specs`,
 say); the job log names it for every group. Its state is its own
 `pr-ttg-state` artifact; a state of another `schemaVersion` is not read, and

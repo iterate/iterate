@@ -58,7 +58,7 @@ import { getSlackClient, onCallMention, slackChannelIds } from "./slack.ts";
  *  far a median still over them must rise past the lowest judged since the last page to page red
  *  again; and the fewest such pushes in the last 24 hours it judges. The owner's rule is a push green within 3
  *  minutes: the p50 line pages with 15 s of it left, the p90 line once the slowest tenth are 20 s
- *  past it (confirmed by the owner 2026-09-26). */
+ *  past it. */
 export const LINES = { p50: 165, p90: 200, worse: 20, minPushes: 20 };
 /** Where one run leaves its state for the next: the workflow's `name:`, its artifact, the file in it. */
 export const stateArtifact = {
@@ -239,11 +239,13 @@ type PushSummary = ReturnType<typeof summarizePushes>;
 
 /** The last 24 hours against LINES: `over` when the time to green of the pushes that skipped the
  *  slow rows crossed either line, with their median; `too-few` below LINES.minPushes of them. Pure. */
-export function judge(summary: PushSummary) {
+export function judge(
+  summary: PushSummary,
+): { judgement: "too-few" } | { judgement: "over" | "under"; p50: number } {
   const green = summary.byRows["slow-rows-skipped"].timeToGreen;
-  if (!green || green.n < LINES.minPushes) return { judgement: "too-few" } as const;
+  if (!green || green.n < LINES.minPushes) return { judgement: "too-few" };
   const over = green.p50 > LINES.p50 || green.p90 > LINES.p90;
-  return { judgement: over ? "over" : "under", p50: green.p50 } as const;
+  return { judgement: over ? "over" : "under", p50: green.p50 };
 }
 
 /** The page a judgement owes the channel, given what it was last told, and what the state keeps of
