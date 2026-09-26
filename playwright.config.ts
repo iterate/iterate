@@ -34,6 +34,18 @@ const desktopWebUse = {
 const recordedAtViewport = <Use extends { viewport: { width: number; height: number } }>(
   use: Use,
 ) => (videoMode ? { ...use, video: { mode: "on" as const, size: use.viewport } } : use);
+/** SPEC_SKIP_PROJECTS, comma-separated project names, leaves those projects out of the run. A name
+ *  no project has fails the run instead of quietly skipping nothing. */
+const withoutSkippedProjects = <Project extends { name: string }>(projects: Project[]) => {
+  const skipped = (process.env.SPEC_SKIP_PROJECTS || "")
+    .split(",")
+    .map((name) => name.trim())
+    .filter(Boolean);
+  const unknown = skipped.filter((name) => !projects.some((project) => project.name === name));
+  if (unknown.length > 0)
+    throw new Error(`SPEC_SKIP_PROJECTS names no project: ${unknown.join(", ")}`);
+  return projects.filter((project) => !skipped.includes(project.name));
+};
 
 export default defineConfig({
   testDir: "specs",
@@ -77,13 +89,13 @@ export default defineConfig({
     video: videoMode ? "on" : videoArtifactsEnabled ? "retain-on-failure" : "off",
   },
   // One project per app host: its specs live in specs/<app>/ and its baseURL is that app.
-  projects: [
+  projects: withoutSkippedProjects([
     {
       name: "os",
       testDir: "specs/os",
       use: recordedAtViewport(desktopWebUse),
     },
-    // the OS issuer's pages once more at a phone's width, with touch
+    // the OS issuer's pages once more at a phone's width, with touch (runs: docs/testing.md#suites)
     {
       name: "os-phone",
       testDir: "specs/os",
@@ -117,7 +129,7 @@ export default defineConfig({
       testMatch: ["flake-sentinel.spec.ts", "test-support/*.spec.ts"],
       use: desktopWebUse,
     },
-  ],
+  ]),
   webServer: configuredOsBaseUrl
     ? []
     : [
