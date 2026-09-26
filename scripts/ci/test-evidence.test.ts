@@ -345,6 +345,8 @@ test("PUTs every listed file write-once with its manifest sha256 as the signed p
 
 test("a Cloudflare 5xx, 429 or dropped connection is retried, each retry a platform-failure warn, and the upload completes", async () => {
   using folder = evidenceFolder({ artifacts: [], check: completeCheck });
+  using _clock = fakeClock();
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
   await write(folder.path);
   const failures = [
     new Response("<Error><Code>InternalError</Code></Error>", { status: 503 }),
@@ -357,39 +359,43 @@ test("a Cloudflare 5xx, 429 or dropped connection is retried, each retry a platf
     if (failure instanceof Error) throw failure;
     return failure;
   });
-  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 
   const uploaded = await uploadTestEvidence({ repoRoot: folder.path, ...bucket, apiToken, ...api });
 
   expect(uploaded).toMatchObject({ retries: 3 });
   expect(api.r2Requests().filter((request) => request.url.endsWith("trace.zip"))).toHaveLength(4);
-  // 1 s, then the 429's Retry-After capped at 5 s, then 4 s
-  expect(api).toMatchObject({ waits: [1000, 5000, 4000] });
-  expect(warn.mock.calls.map(([entry]) => entry)).toEqual([
-    expect.objectContaining({
+  expect(warn.mock.calls.map(([entry]) => entry)).toMatchObject([
+    {
       event: "test-evidence.platform-failure-retry",
       request: expect.stringMatching(/^PUT evidence\/ci\/.*\/trace\.zip$/u),
       attempt: 1,
       status: 503,
-    }),
-    expect.objectContaining({ attempt: 2, status: 429, waitMs: 5000 }),
-    expect.objectContaining({ attempt: 3, answer: "fetch failed: ECONNRESET" }),
+    },
+    // the 429's Retry-After, up to CI_HTTP's longest wait
+    { attempt: 2, status: 429, retryInMs: 10_000 },
+    { attempt: 3, status: "network", message: expect.stringMatching(/fetch failed: ECONNRESET$/u) },
   ]);
 });
 
 test("the retries are bounded: a Cloudflare 5xx that persists fails the upload, and the manifest never lands", async () => {
   using folder = evidenceFolder({ artifacts: [], check: completeCheck });
+  using _clock = fakeClock();
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
   await write(folder.path);
   const api = cloudflare((request) =>
     request.url.endsWith("trace.zip") ? new Response("down", { status: 500 }) : ok(),
   );
-  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 
   await expect(
     uploadTestEvidence({ repoRoot: folder.path, ...bucket, apiToken, ...api }),
-  ).rejects.toThrow(/trace\.zip: 500 down \(after 3 retries\)$/u);
+  ).rejects.toThrow(/trace\.zip answered HTTP 500: down$/u);
   expect(api.r2Requests().filter((request) => request.url.endsWith("trace.zip"))).toHaveLength(4);
-  expect(warn).toHaveBeenCalledTimes(3);
+  expect(warn.mock.calls.map(([entry]) => entry.event)).toEqual([
+    "test-evidence.platform-failure-retry",
+    "test-evidence.platform-failure-retry",
+    "test-evidence.platform-failure-retry",
+    "test-evidence.platform-failure-gave-up",
+  ]);
   expect(
     api.requests.some((request) => request.url.endsWith("/testrun_1nxc464grh/manifest.json")),
   ).toBe(false);
@@ -397,6 +403,8 @@ test("the retries are bounded: a Cloudflare 5xx that persists fails the upload, 
 
 test("no retry starts after the upload's deadline, and the manifest never lands", async () => {
   using folder = evidenceFolder({ artifacts: [], check: completeCheck });
+  using _clock = fakeClock();
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
   await write(folder.path);
   const deadline = new AbortController();
   const api = cloudflare((request) => {
@@ -414,8 +422,10 @@ test("no retry starts after the upload's deadline, and the manifest never lands"
       ...api,
       deadline: deadline.signal,
     }),
-  ).rejects.toThrow(/trace\.zip: 503 down \(after 0 retries\)$/u);
-  expect(api).toMatchObject({ waits: [] });
+  ).rejects.toThrow(/trace\.zip answered HTTP 503: down$/u);
+  expect(warn.mock.calls.map(([entry]) => entry)).toMatchObject([
+    { event: "test-evidence.platform-failure-gave-up", attempts: 1 },
+  ]);
   expect(
     api.requests.some((request) => request.url.endsWith("/testrun_1nxc464grh/manifest.json")),
   ).toBe(false);
@@ -455,7 +465,6 @@ test("a key that exists (412) is this upload's own when it holds the same bytes,
   expect(
     forbidden.r2Requests().filter((request) => request.url.endsWith("trace.zip")),
   ).toHaveLength(1);
-  expect(forbidden).toMatchObject({ waits: [] });
 });
 
 test("a token Cloudflare does not verify sends nothing to R2", async () => {
@@ -521,6 +530,7 @@ test("a failed step says why in a warning annotation and a line of the job's sum
 test("nothing the upload logs or reports carries the API token or the S3 secret derived from it", async () => {
   using folder = evidenceFolder({ artifacts: [], check: completeCheck });
   using runner = temporaryDirectory();
+  using _clock = fakeClock();
   await write(folder.path);
   const output: unknown[] = [];
   for (const level of ["log", "warn", "error"] as const)
@@ -668,16 +678,7 @@ function cloudflare(r2: (request: Request) => Response | Promise<Response> = () 
       return new Response(null, { status: 401 });
     return r2(request);
   };
-  const waits: number[] = [];
-  return {
-    fetch,
-    wait: async (ms: number) => {
-      waits.push(ms);
-    },
-    waits,
-    requests,
-    r2Requests: () => requests.slice(1),
-  };
+  return { fetch, requests, r2Requests: () => requests.slice(1) };
 }
 const ok = () => new Response(null, { status: 200 });
 const md5 = (text: string) => createHash("md5").update(text).digest("hex");
@@ -755,5 +756,17 @@ function artifact(
         errors: [],
       },
     ],
+  };
+}
+
+/** The retries' waits on a fake clock that moves on whenever nothing else is left to run: CI_HTTP's
+ *  schedule kept, while the upload reads its files for real. */
+function fakeClock() {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  vi.setTimerTickMode("nextTimerAsync");
+  return {
+    [Symbol.dispose]() {
+      vi.useRealTimers();
+    },
   };
 }

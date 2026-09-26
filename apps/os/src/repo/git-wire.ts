@@ -869,7 +869,7 @@ export function createGitWireTransport(input: {
           const text = textDecoder.decode(why.subarray(0, 200)).trim();
           throw new HttpAnswerError(
             `${service} responded ${response.status} for ${input.remote}${text ? `: ${text}` : ""}`,
-            response.status,
+            response,
           );
         }
         return readCapped(response, MAX_RESPONSE_BYTES);

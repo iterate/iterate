@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
+import { CLOUDFLARE_API, fetchRetryingPlatformFailures } from "@iterate-com/shared/platform-retry";
 import { UNPROVISIONED } from "../../envs.ts";
-import { fetchCloudflareWith429Retry } from "./cloudflare-429-retry.ts";
 
 /**
  * The minimum an app's envs.ts entry must carry for the deploy tooling:
@@ -97,35 +97,51 @@ export async function resolveEnvContext<E extends DeployableEnv>(options: {
     );
   }
 
-  const cfV4 = async <T>(path: string, init?: RequestInit): Promise<T> => {
-    // This fetch is THE choke point for every Cloudflare API call the deploy
-    // tooling makes (ctx.cf / ctx.cfV4 across deploy, ensure-resources and
-    // erase-data scripts), so 429 backoff lives here once instead of at each
-    // call site. Request bodies are always strings (see the content-type
-    // sniff below), so replaying the same init per attempt is safe.
-    const response = await fetchCloudflareWith429Retry(
-      `${init?.method ?? "GET"} ${path}`,
-      () =>
+  const cfV4 = cloudflareApi(secrets.CLOUDFLARE_API_TOKEN);
+  return {
+    name,
+    env,
+    secrets,
+    cf: <T>(path: string, init?: RequestInit) => cfV4<T>(`/accounts/${accountId}${path}`, init),
+    cfV4,
+  };
+}
+
+/**
+ * Cloudflare's API with `apiToken`, `path` under /client/v4: THE choke point for every Cloudflare API
+ * call the deploy tooling makes (ctx.cf / ctx.cfV4 across deploy, ensure-resources and erase-data),
+ * so this is where a call Cloudflare failed is sent again (CLOUDFLARE_API's schedule): after a 429
+ * whatever its method, after a 5xx or a lost connection only when its method names its whole end
+ * state. Request bodies are always strings (see the content-type sniff below), so replaying the
+ * same init per attempt is safe.
+ */
+export function cloudflareApi(apiToken: string) {
+  return async <T>(path: string, init?: RequestInit): Promise<T> => {
+    const method = init?.method ?? "GET";
+    const response = await fetchRetryingPlatformFailures(
+      `${method} ${path}`,
+      (signal) =>
         fetch(`https://api.cloudflare.com/client/v4${path}`, {
           ...init,
           headers: {
-            authorization: `Bearer ${secrets.CLOUDFLARE_API_TOKEN}`,
+            authorization: `Bearer ${apiToken}`,
             ...(init?.body &&
               typeof init.body === "string" && { "content-type": "application/json" }),
             ...init?.headers,
           },
+          signal,
         }),
-      // A caller's abort also cuts the backoff wait short, not just the fetch.
-      { signal: init?.signal ?? undefined },
+      {
+        area: "cloudflare-api",
+        schedule: CLOUDFLARE_API,
+        idempotent: ["GET", "HEAD", "PUT", "PATCH", "DELETE"].includes(method),
+        timeoutMs: 60_000,
+        signal: init?.signal ?? undefined,
+      },
     );
     const body: any = await response.json().catch(() => null);
     if (!response.ok || body?.success === false) {
-      throw new CloudflareApiError(
-        init?.method ?? "GET",
-        path,
-        response.status,
-        body?.errors ?? body,
-      );
+      throw new CloudflareApiError(method, path, response.status, body?.errors ?? body);
     }
     // Fail loudly instead of silently acting on a truncated listing.
     const info = body?.result_info;
@@ -145,13 +161,6 @@ export async function resolveEnvContext<E extends DeployableEnv>(options: {
     // A 2xx with no JSON body answers undefined — Artifacts accepts a repo delete with a 202 and
     // nothing else, and deletes a namespace the same way.
     return body?.result as T;
-  };
-  return {
-    name,
-    env,
-    secrets,
-    cf: <T>(path: string, init?: RequestInit) => cfV4<T>(`/accounts/${accountId}${path}`, init),
-    cfV4,
   };
 }
 

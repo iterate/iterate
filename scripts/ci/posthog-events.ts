@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { fetchRetryingPlatformFailures } from "@iterate-com/shared/platform-retry";
 
 export type PostHogEvent = {
   event: string;
@@ -12,6 +13,9 @@ export type PostHogEvent = {
  * (https://posthog.com/docs/api/capture#batch-events). Only the CI telemetry sync calls this, with
  * one event per Depot workflow run and job attempt: #2494 cut delivery to zero because per-test
  * events were over 70% of the project's ingestion, and test data stays in the Depot artifacts.
+ *
+ * A batch PostHog failed is sent again (fetchRetryingPlatformFailures): PostHog deduplicates a
+ * re-sent event by its UUID (systemEvent), so a batch that landed after all counts once.
  */
 export async function sendPostHogEvents(
   events: readonly PostHogEvent[],
@@ -21,25 +25,21 @@ export async function sendPostHogEvents(
   // below it.
   for (let start = 0; start < events.length; start += 1_000) {
     const batch = events.slice(start, start + 1_000);
-    let lastError: unknown;
-    for (let attempt = 0; attempt < 3; attempt += 1) {
-      try {
-        const response = await fetch(`${project.host}/batch/`, {
+    const response = await fetchRetryingPlatformFailures(
+      `POST ${project.host}/batch/`,
+      (signal) =>
+        fetch(`${project.host}/batch/`, {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({ api_key: project.apiKey, batch }),
-          signal: AbortSignal.timeout(15_000),
-        });
-        if (!response.ok)
-          throw new Error(`PostHog returned ${response.status}: ${await response.text()}`);
-        lastError = undefined;
-        break;
-      } catch (error) {
-        lastError = error;
-        if (attempt < 2) await new Promise((resolve) => setTimeout(resolve, 1_000));
-      }
-    }
-    if (lastError) throw new Error("PostHog CI telemetry delivery failed", { cause: lastError });
+          signal,
+        }),
+      { area: "posthog", idempotent: true, timeoutMs: 15_000 },
+    );
+    if (!response.ok)
+      throw new Error(
+        `PostHog CI telemetry delivery failed: ${response.status} ${await response.text()}`,
+      );
   }
 }
 

@@ -325,18 +325,17 @@ bucket on 2026-09-24:
   stores them decoded.
 
 The upload sends one request per object, eight at a time. A Cloudflare 5xx, a
-429 or no answer at all is sent again up to three times, after 1, 2 and 4
-seconds or what a 429's `Retry-After` asks (up to 5), and each retry logs a
-warn whose `event` is `test-evidence.platform-failure-retry`
-([engineering invariant](engineering-invariants.md)); the summary line counts
-them. A request times out after 60 seconds, and 90 seconds into the upload
-the request in flight is aborted and no retry starts: the e2e job is a pull
-request's slowest check, a healthy upload adds about five seconds to it, and
-this evidence decides nothing, so a degraded R2 costs it at most about a
-minute and a half. Anything else, a 4xx included, or a fourth failure, fails
-the step: the warning annotation and the summary line say why, the e2e jobs'
-folder is still in their Depot artifact, and without a manifest nothing
-downstream picks the partial folder up.
+429 or no answer at all is sent again on `CI_HTTP`'s schedule
+([failures and retries](engineering-invariants.md#failures-and-retries)), and
+each retry logs a warn whose `event` is `test-evidence.platform-failure-retry`;
+the summary line counts them. A request times out after 60 seconds, and 90
+seconds into the upload the request in flight is aborted and no retry starts:
+the e2e job is a pull request's slowest check, a healthy upload adds about five
+seconds to it, and this evidence decides nothing, so a degraded R2 costs it at
+most about a minute and a half. Anything else, a 4xx included, or a fourth
+failure, fails the step: the warning annotation and the summary line say why,
+the e2e jobs' folder is still in their Depot artifact, and without a manifest
+nothing downstream picks the partial folder up.
 
 ### Reading it back
 

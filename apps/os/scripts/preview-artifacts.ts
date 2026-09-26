@@ -10,7 +10,7 @@ import { onCallMention } from "../../../scripts/ci/slack.ts";
 import { CloudflareApiError, type EnvContext } from "../../../scripts/lib/env-context.ts";
 
 /** The Cloudflare API on the parent's account (scripts/lib/env-context.ts: the envelope checked,
- *  429s retried, a truncated listing refused). */
+ *  Cloudflare's failures sent again, a truncated listing refused). */
 export type Cf = EnvContext<OsEnv>["cf"];
 
 export type ArtifactsNamespaceRow = { namespace: string; repo_count?: number; created_at?: string };
@@ -28,12 +28,6 @@ export const isCloudflareError = (error: unknown, status: number, code: number) 
   error instanceof CloudflareApiError &&
   error.status === status &&
   (CloudflareErrors.safeParse(error.details).data ?? []).some((entry) => entry.code === code);
-
-/** How many rounds of a namespace delete may meet a Cloudflare 5xx before the delete gives up; the
- *  wait before the next round doubles from 2 s to 15 s at most (~1.5 min in all). The Artifacts API
- *  answered 500/10400 "An internal error occurred." on and off for nine minutes on 2026-09-23
- *  (20:33–20:42 UTC): two PR-close deletes each failed on one repo delete. */
-const MAX_PLATFORM_FAILURE_ROUNDS = 8;
 
 /** How many rounds, 2 s apart, an empty namespace may answer "not empty" before it is reported
  *  stuck (~2 minutes). Accepted repo deletes land well inside that: 89 landed in under 15 s in the
@@ -118,9 +112,9 @@ export async function ensureArtifactsNamespace(
  *  deploy created one, a re-run of the cleanup job, the sweep racing the close job — is the
  *  expected case.
  *
- *  A round that meets a Cloudflare 5xx — a platform failure; every request here is idempotent and
- *  the next round lists what is left — logs `preview.platform-failure-retry`, waits and goes again,
- *  at most MAX_PLATFORM_FAILURE_ROUNDS times, after which the 5xx surfaces as what it is.
+ *  Every request here is idempotent, so the Cloudflare API client sends one Cloudflare failed (an
+ *  Artifacts 500/10400 "An internal error occurred." among them) again itself
+ *  (env-context's `cloudflareApi`).
  *
  *  An empty namespace that keeps answering "not empty" for STUCK_AFTER_REFUSED_ROUNDS is Cloudflare's
  *  (StuckArtifactsNamespace): logged as `preview.platform-failure-stuck-namespace` and resolved to,
@@ -139,17 +133,11 @@ export async function deleteArtifactsNamespace(
   wait = (ms: number) => sleep(ms),
 ): Promise<StuckArtifactsNamespace | undefined> {
   const route = `/artifacts/namespaces/${encodeURIComponent(artifactsNamespaceName)}`;
-  /** A read that met a 5xx: the namespace's state unknown, to be read again on a later round. */
-  const readThroughPlatformFailure = () =>
-    readArtifactsNamespace(cf, route).catch((error) => {
-      if (!isPlatformFailure(error)) throw error;
-      return "unread" as const;
-    });
   /** Gone when three reads 2 s apart all answer 404: one 404 can be another delete in flight. */
   const confirmedGone = async () => {
     for (let read = 0; read < 3; read++) {
       if (read > 0) await wait(2000);
-      if (await readThroughPlatformFailure()) return false;
+      if (await readArtifactsNamespace(cf, route)) return false;
     }
     return true;
   };
@@ -160,24 +148,19 @@ export async function deleteArtifactsNamespace(
     return undefined;
   }
   let deletedRepos = 0;
-  let platformFailureRounds = 0;
   let refusedRounds = 0;
   for (let round = 1; ; round++) {
     if (round > 200)
       throw new Error(
         `Artifacts namespace ${artifactsNamespaceName} still lists repos after ${deletedRepos} repo deletes`,
       );
-    const outcome: ArtifactsDeleteRound = await deleteArtifactsRound(cf, route).catch((error) => {
-      if (!isPlatformFailure(error)) throw error;
-      return { deletedRepos: 0, next: "again", platformFailure: error };
-    });
+    const outcome = await deleteArtifactsRound(cf, route);
     deletedRepos += outcome.deletedRepos;
     if (outcome.deletedRepos > 0) refusedRounds = 0;
     if (outcome.next === "accepted" && (await confirmedGone())) break;
     if (outcome.next === "accepted" || outcome.next === "not-empty") refusedRounds++;
     if (refusedRounds >= STUCK_AFTER_REFUSED_ROUNDS) {
-      const read = await readThroughPlatformFailure();
-      const row = read === "unread" ? undefined : read;
+      const row = await readArtifactsNamespace(cf, route);
       const stuck = {
         namespace: artifactsNamespaceName,
         repoCount: row?.repo_count,
@@ -191,20 +174,7 @@ export async function deleteArtifactsNamespace(
       });
       return stuck;
     }
-    if (outcome.platformFailure) {
-      const error = outcome.platformFailure;
-      if (++platformFailureRounds > MAX_PLATFORM_FAILURE_ROUNDS) throw error;
-      console.warn({
-        event: "preview.platform-failure-retry",
-        name: artifactsNamespaceName,
-        round,
-        platformFailureRounds,
-        status: error.status,
-        codes: (CloudflareErrors.safeParse(error.details).data ?? []).map((entry) => entry.code),
-        message: error.message,
-      });
-      await wait(Math.min(2000 * 2 ** (platformFailureRounds - 1), 15_000));
-    } else if (outcome.next !== "again") await wait(2000); // accepted deletes still landing
+    if (outcome.next !== "again") await wait(2000); // accepted deletes still landing
   }
   console.log(`deleted Artifacts namespace ${artifactsNamespaceName} (${deletedRepos} repos)`);
   return undefined;
@@ -237,27 +207,19 @@ const readArtifactsNamespace = (cf: Cf, route: string) =>
     throw error;
   });
 
-/** A Cloudflare 5xx: the platform failed the request, not refused it. */
-const isPlatformFailure = (error: unknown): error is CloudflareApiError =>
-  error instanceof CloudflareApiError && error.status >= 500;
-
 type ArtifactsDeleteRound = {
   deletedRepos: number;
   /** `again`: repos were deleted, list again; `accepted`: the namespace delete was accepted (or it
    *  answered 404), to be confirmed; `not-empty`: it answered 409/10202 or 409/10305 */
   next: "accepted" | "again" | "not-empty";
-  /** the round's first 5xx — its other requests still ran */
-  platformFailure?: CloudflareApiError;
 };
 
 /** One round: the first page of repos (read again each round until it is empty — that is the
- *  loop's pagination), each deleted; once none is left, the namespace. A repo delete's 5xx is
- *  returned, after the round's other deletes ran; any other failure throws. */
+ *  loop's pagination), each deleted; once none is left, the namespace. */
 async function deleteArtifactsRound(cf: Cf, route: string): Promise<ArtifactsDeleteRound> {
   // `page=1` is named (env-context refuses a truncated listing that names no page).
   const repos = await cf<{ name: string }[]>(`${route}/repos?limit=200&page=1`);
   if (repos.length > 0) {
-    const platformFailures: CloudflareApiError[] = [];
     // ten at a time: one delete answers in ~1 s (measured), and a preview's e2e run leaves hundreds
     for (let i = 0; i < repos.length; i += 10) {
       await Promise.all(
@@ -265,18 +227,13 @@ async function deleteArtifactsRound(cf: Cf, route: string): Promise<ArtifactsDel
           // one already gone (a delete accepted on an earlier round) is fine
           cf(`${route}/repos/${encodeURIComponent(repo.name)}`, { method: "DELETE" }).catch(
             (error) => {
-              if (isPlatformFailure(error)) platformFailures.push(error);
-              else if (!isCloudflareError(error, 404, 10200)) throw error;
+              if (!isCloudflareError(error, 404, 10200)) throw error;
             },
           ),
         ),
       );
     }
-    return {
-      deletedRepos: repos.length - platformFailures.length,
-      next: "again",
-      platformFailure: platformFailures[0],
-    };
+    return { deletedRepos: repos.length, next: "again" };
   }
   // Accepted, or already gone (the sweep and the close job can race): the caller confirms it. Not
   // empty yet (accepted repo deletes still landing) or another delete of it in flight: asked again.
