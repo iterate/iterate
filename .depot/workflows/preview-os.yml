@@ -419,8 +419,11 @@ jobs:
         run: node scripts/depot-ci/dependencies.mjs install
       # THE SUITES' LINES under the PR body's status line, both in one write, from the lines their
       # jobs handed over (one a line; a suite that handed over none keeps its line). First, so a
-      # trace that cannot be collected costs no line; a write that fails is a warning.
+      # trace that cannot be collected costs no line. Whatever fails here (GitHub's answers, an
+      # output it cannot parse, the timeout) fails this step alone: the trace and its report
+      # statuses still go out, and a PR body line never turns the CI trace red.
       - name: Write the suites' lines into the PR body
+        continue-on-error: true
         timeout-minutes: 2
         working-directory: apps/os
         env:

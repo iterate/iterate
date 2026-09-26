@@ -4,11 +4,13 @@ import { expect, test } from "vitest";
 import { parse as parseYaml } from "yaml";
 
 type PreviewStep = {
+  "continue-on-error"?: boolean;
   id?: string;
   if?: string;
   name?: string;
   parallel?: PreviewStep[];
   run?: string;
+  "timeout-minutes"?: number;
   uses?: string;
   with?: { ref?: string; name?: string };
   env?: Record<string, string>;
@@ -159,6 +161,9 @@ test("Preview OS: the suites hand their lines to the trace job, which writes bot
   const write = steps.findIndex((step) => step.name === "Write the suites' lines into the PR body");
   expect(steps[write]).toMatchObject({
     run: "pnpm preview suite-lines",
+    // a failure here costs the line, never the trace or its report statuses after it
+    "continue-on-error": true,
+    "timeout-minutes": 2,
     env: {
       PREVIEW_PR_NUMBER: "${{ env.PR_NUMBER }}",
       PREVIEW_SUITE_LINES: suites
