@@ -417,7 +417,7 @@ export class RepoDurableObject extends StreamProcessorDurableObject<
     toPush.push({ payload: commitBytes, type: "commit" });
     // The fact this push will owe, kept in storage until it has landed on both logs — so a retry after
     // a lost append lands the same event (above), never a different one under the same key.
-    const committed: OwedFact = {
+    const committed = {
       path,
       commitOid,
       message: input.message,
@@ -555,7 +555,7 @@ export class RepoDurableObject extends StreamProcessorDurableObject<
       ours ? this.#tipSnapshot(artifacts, ours) : null,
       this.#tipSnapshot(remote.transport, theirs),
     ]);
-    const committed: OwedFact = {
+    const committed = {
       path,
       commitOid: theirs,
       message: parseCommit(after.objects.get(theirs)!.payload).message,
