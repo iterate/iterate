@@ -1208,31 +1208,37 @@ test("the app wall (`Caller.app`): on the INPUT expression only, `itx.builtins` 
 });
 // A SOURCE PRODUCER runs at the host as the context itself when the code loads, so it is walled like
 // the call around it, at the context the walk has reached: in a call's spec and in a row's target.
-const PRODUCER_ROWS: { call: string; refused?: RegExp }[] = [
+const PRODUCER_ROWS: { name: string; call: string; refused?: RegExp }[] = [
   {
+    name: "the config repo's modules: passes",
     call: "itx.workers.get({ source: \"itx.repos.get('/repos/config').modules()\", cacheKey: 'k' }).run()",
   },
   {
+    name: "a descendant's kv, from a descendant: passes",
     call: "itx.cd('./b').workers.get({ source: \"itx.cd('./c').kv.get('src')\", cacheKey: 'k' }).run()",
   },
   {
+    name: "the fixed point in a worker's producer: refused",
     call: "itx.workers.get({ source: \"itx.builtins.cd('/').append({ type: 'x' })\", cacheKey: 'k' }).run()",
     refused: /not a loaded worker's word/,
   },
   {
+    name: "a cd to the root in a facet's producer: refused",
     call: "itx.facets.get('f', { source: \"itx.cd('/').append({ type: 'x' })\", className: 'F', cacheKey: 'k' }).x()",
     refused: /goes down only/,
   },
   {
+    name: "a cd up in a processor's producer: refused",
     call: "itx.processors.enable('p', { source: \"itx.cd('..').kv.get('src')\", className: 'P', cacheKey: 'k' })",
     refused: /goes down only/,
   },
   {
+    name: "walled where the walk has reached: a descendant's producer may not name its base",
     call: "itx.cd('./b').workers.get({ source: \"itx.cd('/agents/a').kv.get('src')\", cacheKey: 'k' }).run()",
     refused: /goes down only/,
   },
 ];
-test.for(PRODUCER_ROWS)("the app wall walls a source producer: `$call`", ({ call, refused }) => {
+test.for(PRODUCER_ROWS)("the app wall walls a source producer: $name", ({ call, refused }) => {
   const resolve = () => appResolverAt("/agents/a", CHILD).resolve(call);
   if (refused) expect(resolve).toThrow(refused);
   else expect(resolve).not.toThrow();

@@ -754,7 +754,8 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         platformOrigin,
       });
     },
-    invoke: (call) => this.#invokeInProcess(call, [], { principal: null }),
+    // A producer is loaded code's word: walled on its input and on every row it appends.
+    invoke: (call) => this.#invokeInProcess(call, [], { principal: null, app: true }),
     // a sibling context by path; the own path is this DO itself — a ReachableContext structurally (stream.ts)
     context: (p) => (p === this.#durableObjectAddress.path ? this.#localContext : this.#sibling(p)),
     egress: (request) => this.#egress(request),
@@ -935,7 +936,8 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     path: this.#durableObjectAddress.path,
     platformOrigin: () => this.#platformOrigin,
     itxEntrypoint: () => this.#itxEntrypoint,
-    invoke: (call) => this.#invokeInProcess(call, [], { principal: null }),
+    // A producer is loaded code's word: walled on its input and on every row it appends.
+    invoke: (call) => this.#invokeInProcess(call, [], { principal: null, app: true }),
     resolveItxExpression: (expression) => this.#itxExpressionResolver.resolve(expression),
     stream: this.#stream,
     reconcileAlarm: () => this.#alarmCoordinator.reconcile(),

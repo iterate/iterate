@@ -498,10 +498,10 @@ export function rowsNamingRpcStub(args: {
 /** THE APP WALL, as one check over an expression loaded code hands in (the resolver's INPUT, or the
  *  TARGET of a row it appends): never the fixed point, never a `cd` above `base` (self and descendants
  *  only, resolved step by step). A spec's SOURCE EXPRESSION in a call's arguments (`workers.get`,
- *  `facets.get`, `processors.enable`) is walled too, at the context the walk has reached: its
- *  producer runs there as the context itself when the code loads (worker-loader.ts), so unwalled it
- *  would spell `itx.builtins.cd('/')` for its writer. Codec-style — nothing here is policy: the rows
- *  a call rewrites through are the owner's and are never checked. */
+ *  `facets.get`, `processors.enable`) is walled too, at the context the walk has reached, so the
+ *  call fails where it is made; the producer also runs there as loaded code when the code loads
+ *  (the DO's `invoke`). Codec-style — nothing here is policy: the rows a call rewrites through are
+ *  the owner's and are never checked. */
 function admitLoadedCodeExpression(expression: ItxExpression, base: string): void {
   let at = base;
   for (const step of expression) {
@@ -513,9 +513,9 @@ function admitLoadedCodeExpression(expression: ItxExpression, base: string): voi
       );
     if (Array.isArray(step))
       for (const arg of step.slice(1)) {
-        const source = (arg as { source?: unknown } | null)?.source;
+        const source = typeof arg === "object" && arg && "source" in arg ? arg.source : undefined;
         if (typeof source === "string" || Array.isArray(source))
-          admitLoadedCodeExpression(normalizedItxExpression(source as ItxExpressionInput), at);
+          admitLoadedCodeExpression(normalizedItxExpression(source), at);
       }
     if (Array.isArray(step) && step[0] === "cd" && typeof step[1] === "string") {
       const to = resolveContextPath(at, step[1]);

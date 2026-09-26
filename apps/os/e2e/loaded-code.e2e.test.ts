@@ -112,6 +112,17 @@ test("a spec's source expression is walled like the call around it: loaded code 
       error: expect.stringMatching(refused),
     });
   expect(await root.builtins.rewriteRules.get("itx.planted")).toBeNull();
+  // The producer RUNS as loaded code too: a row it appends on its own context meets the row wall.
+  const reparent = JSON.stringify(
+    "itx.append({ type: 'events.iterate.com/itx/rewrite-rule-configured', payload: { match: 'itx', target: ['itx', 'builtins', ['cd', '/']] } })",
+  );
+  expect(
+    await root
+      .cd("/x")
+      .workers.get({ source: PROBE })
+      .say(`itx.workers.get({ source: ${reparent}, cacheKey: 'reparent' }).x()`),
+  ).toMatchObject({ error: expect.stringMatching(/not a loaded worker's word/) });
+  expect(await root.cd("/x").builtins.rewriteRules.get("itx")).toBeNull();
 });
 
 test("a raw fetch() from loaded code is itx.fetch at its context, through the table: refused at a child with no row, egress at the root", async () => {
