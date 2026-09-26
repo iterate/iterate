@@ -73,7 +73,7 @@ export function analyzeTestTelemetryCompleteness(
  *  failed or timed-out state. */
 export function testTelemetryFailed(
   test: Pick<TestTelemetryArtifact["tests"][number], "outcome" | "state">,
-): boolean {
+) {
   if (test.outcome) return test.outcome === "unexpected";
   return ["failed", "timedout"].includes(test.state.toLowerCase());
 }

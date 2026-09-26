@@ -117,9 +117,9 @@ export async function checkDoCost(options: { testRun: boolean; dryRun: boolean; 
 
 /**
  * Posts this run's pages, upkeeps the day's thread, then ends. A breach ends it quietly: the page
- * and the reply are the alarm (on 09-21 a day of red runs reached nobody). A probe that could not
- * run throws once its reply is posted, so a broken token never passes for a quiet account; so does
- * any Slack error. The health job fails its run on either, after its other checks.
+ * and the reply are the alarm. A probe that could not run throws once its reply is posted, so a
+ * broken token never passes for a quiet account; so does any Slack error. The health job fails its
+ * run on either, after its other checks.
  */
 export async function postDailyThread(input: {
   slack: WebClient;
