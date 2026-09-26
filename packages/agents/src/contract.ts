@@ -2,9 +2,9 @@
 // convention) — a conversation driven by a model that acts by writing scripts against that
 // context's `itx`. Its facts live on that path's log, and THIS FILE is the only place they are
 // spelled. The rest of the folder derives from it: processor.ts reduces these events, runs the
-// creation and deletion sagas and THE LOOP, durable-object.ts is the processor's shell plus
-// `message()`, collection.ts is `itx.agents` (`list`, `create`, `delete`, and the handle
-// `itx.agents.get(path)`). Deletion is the creation's mirror: `delete-requested` opens it, the
+// creation and deletion sagas and THE LOOP, durable-object.ts is the processor's shell,
+// collection.ts is `itx.agents` (`list`, `create`, `delete`, and the handle `itx.agents.get(path)`,
+// whose `message()` is its caller's own append). Deletion is the creation's mirror: `delete-requested` opens it, the
 // processor lands `deleted` — cross-posted to `/` so the catalog drops the entry and keeps the death —
 // and a deleted agent runs no more turns. Every type is derived here, never hand-kept:
 //   AgentState                        = ProcessorState<typeof AgentContract>  the reduced state below
@@ -28,7 +28,7 @@
 // with a failure's backoff folded into the same window. The script runs against this context's
 // `itx` as it is: no capability host, typecheck or preamble.
 import { z } from "zod";
-import { defineProcessorContract, type ProcessorState } from "iterate/stream/processor";
+import { defineProcessorContract, trusts, type ProcessorState } from "iterate/stream/processor";
 import { RunContract } from "iterate/stream/run";
 
 /** Who put words into the context: a person, a script's result, or the loop itself (a format
@@ -148,6 +148,9 @@ export const AgentContract = defineProcessorContract({
           actor: Actor.optional(),
           llmRequestOffset: z.number().int().positive().optional(),
           files: z.array(FileAttachment).optional(),
+          /** A user's words from a writer this agent does not trust — a sibling, its own sandbox:
+           *  the context that wrote them (the platform's stamp), named to the model. */
+          from: z.string().optional(),
         }),
       )
       .default([]),
@@ -358,6 +361,15 @@ export const AgentContract = defineProcessorContract({
     "events.iterate.com/agent/resumed",
     "events.iterate.com/itx/run-requested",
   ],
+  // WHOM IT LISTENS TO (iterate/stream/processor `admits`): a user's words from anyone in the
+  // project — one agent messages another — and everything else, other roles, the configuration and
+  // the lifecycle included, only from the trusted: the platform, a member, or code at this agent or
+  // above it. A stranger's words lose their attachments and count as the loop's own (processor.ts).
+  trust: {
+    "events.iterate.com/agent/context-added": (source, event) =>
+      (event.payload as { role?: string } | undefined)?.role === "user" ||
+      trusts(event.path, source),
+  },
 });
 
 /** The agent's reduced state: where its creation and deletion stand, the conversation, and the

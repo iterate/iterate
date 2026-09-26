@@ -48,7 +48,7 @@ export type TrustRule =
 
 /** A certificate its subject wrote about itself: the event names a `path`, and the code at that path
  *  wrote it — an entity's birth or death cross-posted to `/`, which is below none of its readers. */
-export const certifiesItself: TrustRule = (source, event) =>
+export const certifiesItself = (source: EventSource, event: StreamEvent): boolean =>
   source.origin === (event.payload as { path?: unknown } | undefined)?.path;
 
 /** The platform's own entities certify themselves on `/` (their facets cross-post there): the

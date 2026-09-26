@@ -1,40 +1,58 @@
 /// <reference path="./markdown.d.ts" />
 /**
- * The voice service, explicitly mounted at `itx.voice`, is what
- * a device calls on the button press:
+ * The voice service, explicitly mounted at `itx.voice`, is what a device calls on the button press:
  *
  *   await root.voice.setupVoiceAgent({ streamPath, activation })   // → { streamPath }
  *
  * Normal agent creation establishes the parent link, sandbox and catalog entry. Then the voice
  * processors replace the default agent processor: one append installs their subscriptions and
  * starts the call, so the relay dials the provider before the first microphone frame arrives.
- * The device carries no source or class name: both facets load the project's installed voice
- * source, the one this worker runs (install.ts keeps it in project KV).
+ * The device carries no source or class name: both facets load the voice source this worker runs,
+ * which its rule hands it as props (install.ts).
+ *
+ * A caller beneath `/` — a voice agent's sandbox showing a picture, a jail setting up its own call —
+ * is served AS THAT CALLER (`forCaller`, apps/os context/caller-capability.ts): its agent is created
+ * through its own `itx.agents`, beneath it and linked to it; its screens are the `itx.clients` it
+ * inherits. A caller at `/` (Kit's press, the voice app) is served as `/`.
  */
 import type {} from "@iterate-com/agents";
 // registers `itx.agents` on InstalledAppRoots
+import { RpcTarget } from "cloudflare:workers";
 import { bytesToBase64 } from "@iterate-com/shared/base64";
 import type { IterateContextApiWith } from "iterate/api";
-import { ConfigWorker, z } from "iterate/sdk";
+import { resolveContextPath } from "iterate/lib";
+import { ConfigWorker, withItx, z, type ItxCaller, type ItxScope, type WithItx } from "iterate/sdk";
 import type { VoiceApi } from "./api.ts";
 import { VOICE_DELEGATE_CONSUMES } from "./events.ts";
 import { ScreenInfo, ScreenImageInput, renderScreenPixels } from "./screen.ts";
 import SCREEN_CONTEXT from "./screen-context.md";
 
-/** What install.ts writes at `voice/runtime`: the installed source and its content hash, which the
- *  loader caches an isolate under, so a new source is a new key. */
+/** What the rule hands this worker as props (install.ts): the installed source and its content
+ *  hash, which the loader caches an isolate under, so a new source is a new key. */
 const VoiceRuntime = z.object({
   cacheKey: z.string().min(1),
   source: z.record(z.string(), z.string()),
 });
+type VoiceRuntime = z.infer<typeof VoiceRuntime>;
 
-export default class VoiceWorker extends ConfigWorker implements VoiceApi {
+/** `itx.voice` for one caller: every reach through `withItx` — the caller's own handle
+ *  (`forCaller`), or the worker's (`env.ITX`, `/`). */
+class VoiceService extends RpcTarget implements VoiceApi {
+  private readonly withItx: WithItx<ItxScope>;
+  private readonly runtime: VoiceRuntime;
+  /** The caller's context: what a relative `streamPath` means. */
+  private readonly base: string;
+
+  constructor(withItx: WithItx<ItxScope>, runtime: VoiceRuntime, base: string) {
+    super();
+    this.withItx = withItx;
+    this.runtime = runtime;
+    this.base = base;
+  }
+
   async health() {
-    const { projectId, cacheKey } = await this.withItx(async (itx) => ({
-      ...(await itx.whoami()),
-      ...(await installedRuntime(itx)),
-    }));
-    return { ok: true as const, projectId, cacheKey };
+    const { projectId } = await this.withItx((itx) => itx.whoami());
+    return { ok: true as const, projectId, cacheKey: this.runtime.cacheKey };
   }
 
   /** Render to the resolution and pixel format advertised by the target. */
@@ -157,17 +175,18 @@ export default class VoiceWorker extends ConfigWorker implements VoiceApi {
   /** The press. `activation` is the device's call identity: the call starts under it at boot and
    * the microphone frames carry it. */
   async setupVoiceAgent(options: Parameters<VoiceApi["setupVoiceAgent"]>[0]) {
-    const streamPath = options.streamPath || `/agents/voice/${crypto.randomUUID()}`;
-    if (!streamPath.startsWith("/")) {
-      throw new Error(`voice streamPath must be absolute; received ${JSON.stringify(streamPath)}`);
-    }
+    // The caller's own: a relative path is beneath the caller (Kit, at `/`, names absolute ones).
+    const streamPath = resolveContextPath(
+      this.base,
+      options.streamPath || `./agents/voice/${crypto.randomUUID()}`,
+    );
     const deviceMatch = /^\/agents\/voice\/v23\/([A-Za-z0-9_-]+)\//.exec(streamPath);
     const screenDevice =
       options.screen === true && deviceMatch?.[1] ? deviceMatch[1].replaceAll("-", "_") : undefined;
     return this.withItx(async (scope) => {
       // `itx.agents` is the rewrite rule the agents app mounts, which install.ts requires first.
       const itx = scope as IterateContextApiWith<"agents">;
-      const { cacheKey, source } = await installedRuntime(itx);
+      const { cacheKey, source } = this.runtime;
       // Normal agent creation establishes the creator link and script sandbox before
       // either loaded voice processor needs project code, egress or tools.
       await itx.agents.create(streamPath);
@@ -238,9 +257,24 @@ export default class VoiceWorker extends ConfigWorker implements VoiceApi {
   }
 }
 
-/** The voice source the project installed (install.ts). */
-async function installedRuntime(itx: { kv: { get(key: string): Promise<string | null> } }) {
-  const stored = await itx.kv.get("voice/runtime");
-  if (!stored) throw new Error("Voice is not installed: project KV has no voice/runtime");
-  return VoiceRuntime.parse(JSON.parse(stored));
+export default class VoiceWorker extends ConfigWorker implements VoiceApi {
+  /** A caller beneath `/`, served as that caller (the header says why). */
+  forCaller(caller: ItxCaller) {
+    return new VoiceService((call) => withItx(caller.itx, call), this.#runtime(), caller.path);
+  }
+  health() {
+    return this.#asRoot().health();
+  }
+  setImage(input: Parameters<VoiceApi["setImage"]>[0]) {
+    return this.#asRoot().setImage(input);
+  }
+  setupVoiceAgent(options: Parameters<VoiceApi["setupVoiceAgent"]>[0]) {
+    return this.#asRoot().setupVoiceAgent(options);
+  }
+  #asRoot() {
+    return new VoiceService((call) => this.withItx(call), this.#runtime(), "/");
+  }
+  #runtime() {
+    return VoiceRuntime.parse(this.ctx.props);
+  }
 }

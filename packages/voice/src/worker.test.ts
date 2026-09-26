@@ -202,7 +202,8 @@ test("an abandoned refresh times out", async () => {
   );
 });
 
-/** The installed voice source as install.ts stores it; both facets of a press load it. */
+/** The installed voice source as install.ts hands it to the worker as props; both facets of a
+ *  press load it. */
 const RUNTIME = JSON.stringify({ cacheKey: "c".repeat(64), source: { "worker.ts": "voice" } });
 
 let voiceWorker: Promise<any> | undefined;
@@ -233,12 +234,21 @@ function loadVoiceWorker(): Promise<any> {
               path: "processor",
               namespace: "test-runtime",
             }));
+            // The worker's RpcTarget base: nothing of the runtime's, a class to extend.
+            builder.onResolve({ filter: /^cloudflare:workers$/ }, () => ({
+              path: "cloudflare-workers",
+              namespace: "test-runtime",
+            }));
             // The SDK's real `withItx` (node-safe), so the rows run the worker's reach through
             // the same recording proxy and release as a deployed config worker.
-            builder.onLoad({ filter: /.*/, namespace: "test-runtime" }, () => ({
+            builder.onLoad({ filter: /^cloudflare-workers$/, namespace: "test-runtime" }, () => ({
+              contents: "export class RpcTarget {}",
+            }));
+            builder.onLoad({ filter: /^processor$/, namespace: "test-runtime" }, () => ({
               contents: [
                 `import { withItx } from ${JSON.stringify(recordPipelinedSteps)};`,
-                "export class ConfigWorker { constructor(env) { this.env = env; } withItx(call) { return withItx(this.env.ITX, call); } }",
+                "export class ConfigWorker { constructor(env, props) { this.env = env; this.ctx = { props }; } withItx(call) { return withItx(this.env.ITX, call); } }",
+                "export { withItx };",
                 'export { z } from "zod";',
               ].join("\n"),
               resolveDir: new URL(".", import.meta.url).pathname,
@@ -328,14 +338,13 @@ async function harness(image = png(3, 0), infoOverride = {}) {
   });
   const disable = vi.fn(async () => undefined);
   const itx = {
-    kv: { get: vi.fn(async (key: string) => (key === "voice/runtime" ? RUNTIME : null)) },
     agents: { create: vi.fn(async () => ({})) },
     browser: { quickAction },
     clients: { waveshare_rlcd_4_2: { screen }, zectrix_note4: { screen }, tiny: { screen } },
     cd: vi.fn(() => ({ append, processors: { disable } })),
   };
   return {
-    worker: new VoiceWorker({ ITX: { get: () => itx } }),
+    worker: new VoiceWorker({ ITX: { get: () => itx } }, JSON.parse(RUNTIME)),
     quickAction,
     setImage,
     append,

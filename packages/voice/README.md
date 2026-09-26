@@ -15,8 +15,10 @@ voice/worker.ts      export { default, VoiceAgentDurableObject, VoiceDelegateDur
 ```
 
 `installVoice(itx, await itx.repos.get("/repos/config").modules({ dir: "voice" }))`
-(`@iterate-com/voice/install`) mounts that source at `itx.voice`, keeps it in project KV
-(`voice/runtime`) for the press's facets, and stores the screen font. `ensureVoiceAgent`, which Kit's
+(`@iterate-com/voice/install`) mounts that source at `itx.voice`, hands it to the worker as its
+props (the press's facets load it), and stores the screen font. The worker serves a caller beneath
+the root as that caller (`forCaller`): a jail's or a sandbox's call is created through its own
+`itx.agents`, beneath it and linked to it, and its screens are the `itx.clients` it inherits. `ensureVoiceAgent`, which Kit's
 Prepare and voice.iterate.com run, also stores the OpenAI key and commits both folders when the
 project has none. To upgrade, pin a newer build and install again.
 

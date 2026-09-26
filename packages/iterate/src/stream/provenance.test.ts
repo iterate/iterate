@@ -116,9 +116,8 @@ test.for(ADMITS_ROWS)("admits: $row", ({ event, admitted }) =>
 
 test("certifiesItself: the writer is the path the event names", () => {
   const certificate = event("x/created", "/", { origin: "/agents/a" }, { path: "/agents/a" });
-  expect(certifiesItself === "anyone" || typeof certifiesItself === "function").toBe(true);
-  if (typeof certifiesItself === "function")
-    expect(certifiesItself({ origin: "/agents/a" }, certificate)).toBe(true);
+  expect(certifiesItself({ origin: "/agents/a" }, certificate)).toBe(true);
+  expect(certifiesItself({ origin: "/agents/b" }, certificate)).toBe(false);
 });
 
 // THE ENGINE: an event the contract's trust refuses is neither folded nor acted on, and the skip is

@@ -63,10 +63,11 @@ test(
       );
       throw error;
     });
-    // The installed source is the folder's two files, nothing else.
-    const runtime = JSON.parse(await root.kv.get("agents/runtime"));
-    expect(Object.keys(runtime.source).sort()).toEqual(["index.ts", "package.json"]);
-    expect(runtime.source["package.json"]).toContain(version);
+    // The installed source is the folder's two files, nothing else: the collection's rule names
+    // them, and every agent hosts the collection's own source (packages/agents catalog.ts).
+    expect(installed.target).toContain("'index.ts':");
+    expect(installed.target).toContain("'package.json':");
+    expect(installed.target).toContain(version);
 
     const path = "/agents/first";
     const agent = root.cd(path);
@@ -85,13 +86,11 @@ test(
       message: "Touch the agents folder",
       changes: [{ path: "agents/index.ts", content: `${index}// upgraded\n` }],
     });
-    await until("reinstalled from the commit", async () => {
+    const reinstalled = await until("reinstalled from the commit", async () => {
       const rule = await root.rewriteRules.get("itx.agents");
-      return JSON.stringify(rule.target) !== JSON.stringify(installed.target);
+      return JSON.stringify(rule.target) !== JSON.stringify(installed.target) ? rule : undefined;
     });
-    expect(JSON.parse(await root.kv.get("agents/runtime")).source["index.ts"]).toContain(
-      "// upgraded",
-    );
+    expect(reinstalled.target).toContain("// upgraded");
     const events = await readAll(root);
     expect(events.filter((event) => /failed$/.test(event.type))).toEqual([]);
     expect(

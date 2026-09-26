@@ -1,4 +1,11 @@
-// The installed catalog delegates project capabilities to each agent and its script context.
+// collection.ts — `itx.agents` (api.ts `AgentsApi`) for ONE CALLER. The collection facet at `/`
+// (catalog.ts) serves a caller beneath it through `forCaller(caller)` (apps/os
+// context/caller-capability.ts): everything here then acts through the caller's own walled handle,
+// so a relative path is the caller's, a new agent is linked to the caller, and its rows and its
+// request land as the caller's own appends — beneath the caller, or refused by the wall. A caller at
+// `/` is served as `/`. Messages need no service: `get(path).message(…)` is the caller's own append
+// on the agent's context, stamped with who wrote it, and the agent decides whether to listen
+// (contract.ts `trust`).
 //
 // A DELETED AGENT'S FACET IS NEVER HOSTED AGAIN. `delete` ends with the `agent` row gone and
 // `ctx.facets.delete` taking the facet's storage with it (apps/os context/facet-host.ts
@@ -6,11 +13,9 @@
 // (catalog.ts), never by `facets.get("agent", spec)` on its context. That call hosted the facet
 // again — a new database folded from the whole log, a startup memo, an instance that can run on past
 // the context's incarnation — so the dead agent's context carried a loaded facet for good, and the
-// next birth aborted it (apps/os context/residency.ts, the birth reset). The e2e row "a deleted
-// agent's refusals keep neither the root nor the agent's context resident" failed about once in
-// fourteen CI runs (2026-09-23/24) on exactly that birth's first call: "Internal error in Durable
-// Object storage caused object to be reset". Aborting a running loaded facet is how Cloudflare comes
-// to reset a whole object (apps/os e2e/facet-abort-storage-reset.e2e.test.ts measures it).
+// next birth aborted it (apps/os context/residency.ts, the birth reset). Aborting a running loaded
+// facet is how Cloudflare comes to reset a whole object (apps/os
+// e2e/facet-abort-storage-reset.e2e.test.ts measures it).
 import { RpcTarget } from "cloudflare:workers";
 import type { WithItx } from "iterate/sdk";
 import type { StreamEvent } from "iterate/stream/processor";
@@ -19,21 +24,22 @@ import { codedError, errorCode, resolveContextPath } from "iterate/lib";
 import type { FacetSpec } from "iterate/api";
 import type { AgentHandleApi, AgentsApi } from "./api.ts";
 import type { AgentCatalogState } from "./catalog.ts";
-import type { AgentState } from "./contract.ts";
+import type { AgentState, FileAttachment } from "./contract.ts";
 
-/** `itx.agents` (api.ts `AgentsApi`) over one base: the root's at `/`, an agent's own at its
- *  path (`at(base)`, catalog.ts). */
 export class AgentCollectionRpcTarget extends RpcTarget implements AgentsApi {
+  /** The caller's own handle (`forCaller`), or the collection's host's. */
   private readonly withItx: WithItx<ItxEntrypointScope>;
   private readonly catalog: () => Promise<AgentCatalogState>;
-  private readonly spec: () => Promise<FacetSpec>;
+  /** The agent runtime every agent's facet hosts: the collection's own source (catalog.ts). */
+  private readonly spec: FacetSpec;
+  /** The caller's context: what a relative path means, and the parent link of what it creates. */
   private readonly base: string;
 
   constructor(
     withItx: WithItx<ItxEntrypointScope>,
     catalog: () => Promise<AgentCatalogState>,
-    spec: () => Promise<FacetSpec>,
-    base = "/",
+    spec: FacetSpec,
+    base: string,
   ) {
     super();
     this.withItx = withItx;
@@ -42,22 +48,15 @@ export class AgentCollectionRpcTarget extends RpcTarget implements AgentsApi {
     this.base = base;
   }
 
-  announce(input: unknown) {
-    return this.withItx((itx) =>
-      itx.invoke(["itx", "facets", ["get", "agents"], ["announce", input]]),
-    );
-  }
-
   /** Rebind existing normal agents when this app is installed or updated. Voice processors
    * keep their own code; grants, sandbox rules and conversation history are untouched. */
   async upgrade() {
-    const spec = await this.spec();
     for (const { path } of await this.list()) {
       await this.withItx(async (itx) => {
         const context = itx.cd(path);
         const rows = await context.processors.list();
         if (rows.some((row) => row.name === "agent"))
-          await context.processors.enable("agent", spec);
+          await context.processors.enable("agent", this.spec);
       });
     }
   }
@@ -65,10 +64,10 @@ export class AgentCollectionRpcTarget extends RpcTarget implements AgentsApi {
   get(path: string) {
     path = resolveContextPath(this.base, path);
     if (path === "/") throw new Error("An agent needs its own context path");
-    return new AgentReference(this.withItx, path, this.spec, this.catalog);
+    return new AgentReference(this.withItx, path, this.catalog);
   }
 
-  /** Every agent born under the project, by path — the certificates cross-posted to `/`, folded. */
+  /** Every agent born under the project, by path — the certificates each lands on `/`, folded. */
   async list() {
     return Object.entries((await this.catalog()).agents).map(([path, row]) => ({ path, ...row }));
   }
@@ -79,17 +78,15 @@ export class AgentCollectionRpcTarget extends RpcTarget implements AgentsApi {
    *  at once, and a creation already open is WAITED ON, never requested again — the terminal is
    *  sought after the request that opened it, so a certificate landing between the read and the
    *  wait is seen, not missed. A deleted agent is not re-creatable: thrown. Data back, never the
-   *  handle: `itx.agents.get(path)` addresses it. */
+   *  handle: `itx.agents.get(path)` addresses it. Everything lands through the caller's own handle,
+   *  so a path outside the caller's subtree is refused by the wall at the first step. */
   create(path: string) {
     return this.withItx(async (itx) => {
       path = resolveContextPath(this.base, path);
       if (path === "/") throw new Error("An agent needs its own context path");
-      // The parent link goes to this collection's base — the context whose own `itx.agents` row
-      // reached it — and never to a context `create` names: a script could otherwise link its child
-      // above its own masks. The base itself is still the caller's to choose through the public
-      // `at(base)`, and the root's is `/` for every context linked to it: both pinned in
-      // apps/agents/e2e/inherited-capabilities.e2e.test.ts.
-      const creator = resolveContextPath("/", this.base);
+      // The parent link goes to the caller, whose own handle writes it: a child never holds more
+      // than the context that created it.
+      const creator = this.base;
       // Writing a parent link on an ancestor would point back down to its child.
       // Refuse before loading a facet or changing any context rows.
       if (creator.startsWith(`${path}/`))
@@ -98,7 +95,6 @@ export class AgentCollectionRpcTarget extends RpcTarget implements AgentsApi {
       const dead = new Error(`agent ${path}: deleted — not re-creatable`);
       if ((await this.catalog()).deleted[path]) throw dead;
       const context = itx.cd(path);
-      const spec = await this.spec();
       // The facet is this app's AgentDurableObject and `snapshot()` the engine's
       // `{ offset, state }`, its state the contract's parsed shape — ours, so asserted, not re-validated.
       const snapshot = async (facet: [method: "get", name: "agent", spec?: FacetSpec]) =>
@@ -114,17 +110,17 @@ export class AgentCollectionRpcTarget extends RpcTarget implements AgentsApi {
       } catch (error) {
         if (errorCode(error) !== "NO_FACET") throw error;
         if ((await this.catalog()).deleted[path]) throw dead;
-        ({ state } = await snapshot(["get", "agent", spec]));
+        ({ state } = await snapshot(["get", "agent", this.spec]));
       }
       if (state.deletion) throw dead;
       // Rebind existing agents after an app upgrade without changing their grants or history.
-      await context.processors.enable("agent", spec);
+      await context.processors.enable("agent", this.spec);
       if (state.creation?.status === "created") return { path };
       let requestedAtOffset: number;
       if (state.creation?.status === "requested") requestedAtOffset = state.creation.offset;
       else {
-        // The collection owns the project scope and delegates it to this child. The
-        // processor and its scripts get distinct contexts so their grants can be narrowed separately.
+        // The agent and its scripts get distinct contexts so their grants can be narrowed
+        // separately; each inherits every name it does not claim through its parent link.
         const sandbox = `${path}/sandbox`;
         const rule = (match: string, target: string, key: string) => ({
           type: "events.iterate.com/itx/rewrite-rule-configured",
@@ -134,22 +130,10 @@ export class AgentCollectionRpcTarget extends RpcTarget implements AgentsApi {
         await context.append(
           rule("itx", `itx.cd(${JSON.stringify(creator)})`, `agent-parent:${path}`),
           rule("itx.run", `itx.cd(${JSON.stringify(sandbox)}).run`, `agent-sandbox:${path}`),
-          rule(
-            "itx.agents",
-            `itx.cd('/').agents.at(${JSON.stringify(path)})`,
-            `agent-collection:${path}`,
-          ),
         );
         await itx
           .cd(sandbox)
-          .append(
-            rule("itx", `itx.cd(${JSON.stringify(path)})`, `agent-parent:${sandbox}`),
-            rule(
-              "itx.agents",
-              `itx.cd('/').agents.at(${JSON.stringify(sandbox)})`,
-              `agent-collection:${sandbox}`,
-            ),
-          );
+          .append(rule("itx", `itx.cd(${JSON.stringify(path)})`, `agent-parent:${sandbox}`));
         // Over the loopback stub an append's answer types as an RPC result, not the array the context
         // declares (`append(...events): Promise<StreamEvent[]>`); the wire copied it.
         const [requested] = (await context.append({
@@ -174,7 +158,8 @@ export class AgentCollectionRpcTarget extends RpcTarget implements AgentsApi {
    *  deleted agent answers at once, and a deletion already open is WAITED ON, never requested again
    *  — the certificate is sought after the request that opened it, so one landing between the read
    *  and the wait is seen, not missed. An agent never created has nothing to delete: thrown.
-   *  Terminal: a deleted agent is not re-creatable. */
+   *  Terminal: a deleted agent is not re-creatable. Through the caller's own handle: its first read
+   *  of a path outside the caller's subtree is refused by the wall. */
   delete(path: string) {
     return this.withItx(async (itx) => {
       path = resolveContextPath(this.base, path);
@@ -204,7 +189,7 @@ export class AgentCollectionRpcTarget extends RpcTarget implements AgentsApi {
       } catch (error) {
         if (errorCode(error) !== "NO_FACET") throw error;
         if (catalog.deleted[path] || (await this.catalog()).deleted[path]) return { path };
-        ({ state } = await snapshot(["get", "agent", await this.spec()]));
+        ({ state } = await snapshot(["get", "agent", this.spec]));
       }
       if (state.deletion?.status !== "deleted") {
         if (state.creation?.status !== "created")
@@ -236,58 +221,68 @@ export class AgentCollectionRpcTarget extends RpcTarget implements AgentsApi {
   }
 }
 
-/** `itx.agents.get(path)` (api.ts `AgentHandleApi`): the agent at one path. */
+/** `itx.agents.get(path)` (api.ts `AgentHandleApi`): the agent at one path, reached with the
+ *  caller's own handle. Every verb is the caller's own append on the agent's context. */
 class AgentReference extends RpcTarget implements AgentHandleApi {
   private readonly withItx: WithItx<ItxEntrypointScope>;
   private readonly path: string;
-  private readonly spec: () => Promise<FacetSpec>;
   private readonly catalog: () => Promise<AgentCatalogState>;
 
   constructor(
     withItx: WithItx<ItxEntrypointScope>,
     path: string,
-    spec: () => Promise<FacetSpec>,
     catalog: () => Promise<AgentCatalogState>,
   ) {
     super();
     this.withItx = withItx;
     this.path = path;
-    this.spec = spec;
     this.catalog = catalog;
   }
 
-  /** A person's words: a dead agent refuses from the catalog (the header: its facet is never hosted
-   *  again); a live one's words go to the facet its context hosts, by NAME — never by spec, so no
-   *  facet is hosted for an agent that has none. NO_FACET is then a context without an `agent` row
-   *  or facet: never born, or a live agent whose processors replace it (a voice agent's), which is
-   *  hosted from the spec as it always was. */
+  /** Words for the agent: ONE `context-added`, the trigger of its next turn — with the attachments,
+   *  each stored first under the agent's path (`itx.files`, `<path>/<8 of a uuid>-<name>`) and named
+   *  on the event; an image among them is what the model will see. The caller's own append, stamped
+   *  with who wrote it: the agent hears a user's words from anyone in the project, and names a
+   *  stranger to the model without its attachments (processor.ts). A dead agent, or one never
+   *  created, refuses from the catalog; the event is answered so a caller can wait for what follows. */
   async message(input: Parameters<AgentHandleApi["message"]>[0]) {
     const path = this.path;
-    const dead = new Error(`agent ${path}: deleted`);
-    // The catalog first: a dead agent's context is not even called.
-    if ((await this.catalog()).deleted[path]) throw dead;
-    // The facet is this app's AgentDurableObject, whose `message` answers the event it appended
-    // (durable-object.ts, `implements Pick<AgentHandleApi, "message">`) — ours, so asserted.
-    try {
-      return (await this.withItx((itx) =>
-        itx.cd(path).invoke(["itx", "facets", ["get", "agent"], ["message", input]]),
-      )) as StreamEvent;
-    } catch (error) {
-      if (errorCode(error) !== "NO_FACET") throw error;
-    }
-    // Read AGAIN before hosting anything: a delete that finished since the first read has taken the
-    // row and the facet, and only a fresh read knows it (as `create()` does).
     const catalog = await this.catalog();
-    if (catalog.deleted[path]) throw dead;
+    if (catalog.deleted[path]) throw new Error(`agent ${path}: deleted`);
     if (!catalog.agents[path])
       throw new Error(
         `agent ${path}: not created — itx.agents.create(${JSON.stringify(path)}) first`,
       );
-    const spec = await this.spec();
-    return (await this.withItx((itx) =>
-      itx.cd(path).invoke(["itx", "facets", ["get", "agent", spec], ["message", input]]),
-    )) as StreamEvent;
+    const { message, files = [] } = typeof input === "string" ? { message: input } : input;
+    return this.withItx(async (itx) => {
+      const attachments: FileAttachment[] = [];
+      for (const file of files) {
+        const filename = file.filename.replace(/[^A-Za-z0-9._-]+/g, "-");
+        const stored = await itx.files
+          .get(`${path}/${crypto.randomUUID().slice(0, 8)}-${filename}`)
+          .put({ contentType: file.contentType, data: file.data });
+        attachments.push({
+          contentType: stored.contentType,
+          filename: file.filename,
+          path: stored.path,
+          size: stored.size,
+        });
+      }
+      // Over the loopback stub the append's answer types as an RPC result, not the array the
+      // context declares (`append(...events): Promise<StreamEvent[]>`); the wire copied it.
+      const [appended] = (await itx.cd(path).append({
+        type: "events.iterate.com/agent/context-added",
+        payload: {
+          role: "user",
+          content: message,
+          actor: { type: "user" },
+          ...(attachments.length > 0 && { files: attachments }),
+        },
+      })) as unknown as StreamEvent[];
+      return appended!;
+    });
   }
+
   append(...events: Parameters<AgentHandleApi["append"]>) {
     return this.withItx((itx) => itx.cd(this.path).append(...events));
   }

@@ -39,16 +39,11 @@ test("a fully masked visitor sandbox can receive a prose reply without gaining t
   const support = itx.cd(path);
   await support.provide("itx.ai", new ScriptedAi(["Here is a domain from the catalogue."]));
   await itx.agents.create(path);
-  await itx.cd(`${path}/sandbox`).append(
-    {
-      type: "events.iterate.com/itx/rewrite-rule-configured",
-      payload: { match: "itx", target: null },
-    },
-    {
-      type: "events.iterate.com/itx/rewrite-rule-configured",
-      payload: { match: "itx.agents", target: null },
-    },
-  );
+  // One bare null jails the sandbox: nothing is inherited, `itx.agents` included.
+  await itx.cd(`${path}/sandbox`).append({
+    type: "events.iterate.com/itx/rewrite-rule-configured",
+    payload: { match: "itx", target: null },
+  });
   await configureModel(support);
   await itx.agents.get(path).message("Suggest a name in prose.");
   const log = await until("prose reply with no sandbox capabilities", async () => {
@@ -611,10 +606,6 @@ test("THE JAIL: a bare null on the agent's sandbox plus one grant — an injecte
     {
       type: "events.iterate.com/itx/rewrite-rule-configured",
       payload: { match: "itx.rewriteRules", target: "itx.builtins.rewriteRules" },
-    },
-    {
-      type: "events.iterate.com/itx/rewrite-rule-configured",
-      payload: { match: "itx.agents", target: null },
     },
   );
   const rootRulesBefore = await itx.rewriteRules.list();
