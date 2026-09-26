@@ -5,8 +5,8 @@
 // (`&scopes=` from an agent's `requestFromUser`), `?own=<provider>&connection=<name>`, `?waitrose=1`,
 // `?move=<offer>`.
 import { useEffect, useRef, useState, type FormEvent, type RefObject } from "react";
-import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { CheckIcon, CopyIcon, ShoppingBasket } from "lucide-react";
+import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
+import { Blocks, CheckIcon, CopyIcon, ShoppingBasket } from "lucide-react";
 import { z } from "zod";
 import {
   AlertDialog,
@@ -37,6 +37,7 @@ import { SecretInput } from "@iterate-com/ui/components/not-recorded";
 import { Textarea } from "@iterate-com/ui/components/textarea";
 import { errorCode } from "iterate/lib";
 import { useContextStub, useFacetLiveState } from "iterate/react";
+import { httpOriginOf } from "../../../../lib/origins.ts";
 import { stepUpUrl } from "../../../../lib/scopes.ts";
 
 const Provider = z.enum(["slack", "google", "cloudflare", "github", "waitrose"]);
@@ -105,6 +106,8 @@ export const Route = createFileRoute("/_auth/projects/$slug/integrations")({
     /** GitHub's callback's offer to move an installation another project holds here (signed by the
      *  platform, apps/os integrations/github.ts `GithubMoveOffer`). */
     move: z.string().optional().catch(undefined),
+    /** Another service: how to connect one this page has no row for. */
+    other: z.literal(1).optional().catch(undefined),
   }),
   staticData: { page: "Integrations" },
   head: ({ params }) => ({ meta: [{ title: `Integrations · ${params.slug} · Dash` }] }),
@@ -278,7 +281,9 @@ function ProjectIntegrations() {
                 <Button
                   variant="outline"
                   size="sm"
-                  aria-label={`Connect ${title}`}
+                  aria-label={
+                    connections.length > 0 ? `Connect another ${title} ${noun}` : `Connect ${title}`
+                  }
                   disabled={Boolean(busy)}
                   onClick={() => {
                     setError(null);
@@ -295,7 +300,7 @@ function ProjectIntegrations() {
                     });
                   }}
                 >
-                  Connect
+                  {connections.length > 0 ? "Connect another" : "Connect"}
                 </Button>
               </div>
               {connections.length > 0 && (
@@ -321,6 +326,23 @@ function ProjectIntegrations() {
             </section>
           );
         })}
+        <section className="py-3" aria-labelledby="other-heading">
+          <div className="flex items-center gap-3">
+            <Blocks aria-hidden="true" className="size-5 text-muted-foreground" />
+            <h2 id="other-heading" className="flex-1 font-medium">
+              Other services
+            </h2>
+            <Button
+              variant="outline"
+              size="sm"
+              aria-label="Connect another service"
+              disabled={Boolean(busy)}
+              onClick={() => void navigate({ search: { other: 1 } })}
+            >
+              Connect
+            </Button>
+          </div>
+        </section>
       </div>
       {fromDeployment.length > 0 && (
         <section className="flex flex-col gap-2" aria-labelledby="deployment-heading">
@@ -369,7 +391,7 @@ function ProjectIntegrations() {
       )}
       {/* ONE sheet: the Connect picker, and the forms it leads to (your own app, Waitrose) */}
       <Sheet
-        open={Boolean(connecting || own || search.waitrose || moveOffer)}
+        open={Boolean(connecting || own || search.waitrose || moveOffer || search.other)}
         onOpenChange={(open) => !open && !blocking && void closeSheet()}
       >
         <SheetContent
@@ -391,12 +413,21 @@ function ProjectIntegrations() {
               }
             />
           )}
+          {search.other && !connecting && !own && !search.waitrose && !moveOffer && (
+            <OtherService
+              projectSlug={project.slug}
+              mcpServer={mcpServerOf(info)}
+              platformOrigin={httpOriginOf(info.platformOrigin)}
+            />
+          )}
           {connecting && !own && !search.waitrose && !moveOffer && (
             <div className="flex h-full flex-col">
               <SheetHeader>
                 <SheetTitle className="flex items-center gap-2">
                   <ProviderLogo provider={connecting.provider} />
-                  Connect {connecting.title}
+                  {rows.some((row) => row.provider === connecting.provider)
+                    ? `Connect another ${connecting.title} ${connecting.noun}`
+                    : `Connect ${connecting.title}`}
                 </SheetTitle>
                 {askedScopes && (
                   <SheetDescription>
@@ -1272,6 +1303,164 @@ function GithubInstallations({
           );
         })}
       </ul>
+    </div>
+  );
+}
+
+/** The project's MCP server, as the MCP page gives it: the deployment's own MCP origin, else `/mcp`
+ *  on the platform's; null when the deployment reports neither as an http(s) origin. */
+function mcpServerOf(info: { mcpOrigin: string; platformOrigin: string }) {
+  const mcpOrigin = httpOriginOf(info.mcpOrigin);
+  const platformOrigin = httpOriginOf(info.platformOrigin);
+  return mcpOrigin ? `${mcpOrigin}/` : platformOrigin ? `${platformOrigin}/mcp` : null;
+}
+
+/** What a person pastes to their coding agent, once it reaches this project over MCP: connect
+ *  `service` with the platform's own verbs, keys never in the chat. */
+function agentPromptOf(service: string, projectSlug: string, platformOrigin: string | null) {
+  const name = service.trim() || "<service>";
+  const slug =
+    name
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-|-$/g, "") || "service";
+  return [
+    `Connect ${name} to my iterate project "${projectSlug}", using iterate's MCP server.`,
+    `- API key: ask me for it with itx.secrets.collectFromUser({ path: "/secrets/${slug}", egress: { urls: [<${name}'s API origin>] } }) and send me the link, never in the chat.`,
+    `- OAuth: tell me how to register an OAuth app${platformOrigin ? ` (redirect URL ${platformOrigin}/.secrets/oauth/callback)` : ""}, collect its client secret the same way, then send me the link from itx.secrets.beginOAuth("/secrets/${slug}", …).`,
+    `- Put getSecret("/secrets/${slug}") wherever the key goes; the platform swaps the real key in on the way out.`,
+    `- If ${name} has an MCP server or an OpenAPI document, use itx.connectToMcp(url, { headers }) or itx.connectToOpenApi(url, { headers }); else its npm SDK in the config repo.`,
+    `Finish with one read-only call to ${name} that shows it works.`,
+  ].join("\n");
+}
+
+/** ANOTHER SERVICE: the easiest way is the person's own coding agent, connected to this project over
+ *  MCP and asked to connect it; the ways it would use are listed below for doing it by hand. */
+function OtherService({
+  projectSlug,
+  mcpServer,
+  platformOrigin,
+}: {
+  projectSlug: string;
+  mcpServer: string | null;
+  platformOrigin: string | null;
+}) {
+  const [service, setService] = useState("");
+  const [copied, setCopied] = useState<string | null>(null);
+  const prompt = agentPromptOf(service, projectSlug, platformOrigin);
+  const copy = (label: string, value: string) =>
+    void navigator.clipboard.writeText(value).then(() => setCopied(label));
+  return (
+    <div className="flex h-full flex-col">
+      <SheetHeader>
+        <SheetTitle className="flex items-center gap-2">
+          <Blocks aria-hidden="true" className="size-5 text-muted-foreground" />
+          Connect another service
+        </SheetTitle>
+        <SheetDescription>
+          The easiest way: connect your coding agent to this project over MCP, then ask it to
+          connect the service.
+        </SheetDescription>
+      </SheetHeader>
+      <FieldGroup className="flex-1 px-4 pb-4">
+        {mcpServer && (
+          <Field>
+            <FieldLabel>1. Add this project to Claude Code</FieldLabel>
+            <div className="flex items-start gap-2">
+              <code className="min-w-0 flex-1 rounded-md bg-muted px-2 py-1.5 text-xs break-all">
+                claude mcp add --transport http iterate {mcpServer}
+              </code>
+              <Button
+                type="button"
+                variant="outline"
+                size="icon-sm"
+                title={copied === "mcp" ? "Copied" : "Copy the command"}
+                onClick={() => copy("mcp", `claude mcp add --transport http iterate ${mcpServer}`)}
+              >
+                {copied === "mcp" ? <CheckIcon /> : <CopyIcon />}
+              </Button>
+            </div>
+            <FieldDescription>
+              Then run <code>/mcp</code> in Claude Code and sign in, ticking {projectSlug}. Other
+              agents: the{" "}
+              <Link
+                to="/projects/$slug/mcp"
+                params={{ slug: projectSlug }}
+                className="underline underline-offset-4"
+              >
+                MCP page
+              </Link>
+              .
+            </FieldDescription>
+          </Field>
+        )}
+        <Field>
+          <FieldLabel htmlFor="other-service">{mcpServer ? "2. " : ""}The service</FieldLabel>
+          <Input
+            id="other-service"
+            placeholder="Linear, Stripe, Notion…"
+            value={service}
+            onChange={(event) => setService(event.target.value)}
+          />
+        </Field>
+        <Field>
+          <div className="flex items-center justify-between gap-2">
+            <FieldLabel>{mcpServer ? "3. " : ""}Paste this to your agent</FieldLabel>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => copy("prompt", prompt)}
+            >
+              {copied === "prompt" ? (
+                <CheckIcon data-icon="inline-start" />
+              ) : (
+                <CopyIcon data-icon="inline-start" />
+              )}
+              {copied === "prompt" ? "Copied" : "Copy"}
+            </Button>
+          </div>
+          <pre className="rounded-md bg-muted px-3 py-2 text-xs whitespace-pre-wrap">{prompt}</pre>
+        </Field>
+        <div className="flex flex-col gap-2 text-sm">
+          <p className="font-medium">By hand</p>
+          <ul className="flex flex-col gap-1.5 text-muted-foreground">
+            <li>
+              <span className="text-foreground">An API key:</span> add it on the{" "}
+              <Link
+                to="/projects/$slug/secrets"
+                params={{ slug: projectSlug }}
+                className="underline underline-offset-4"
+              >
+                Secrets page
+              </Link>
+              , then send <code>getSecret("/secrets/name")</code> where the key goes.
+            </li>
+            <li>
+              <span className="text-foreground">OAuth:</span> <code>itx.secrets.beginOAuth</code>
+              {platformOrigin ? (
+                <>
+                  , redirect URL{" "}
+                  <code className="break-all">{platformOrigin}/.secrets/oauth/callback</code>
+                </>
+              ) : null}
+              .
+            </li>
+            <li>
+              <span className="text-foreground">An MCP server:</span>{" "}
+              <code>itx.connectToMcp(url, {"{ headers }"})</code>.
+            </li>
+            <li>
+              <span className="text-foreground">An OpenAPI document:</span>{" "}
+              <code>itx.connectToOpenApi(url, {"{ headers }"})</code>.
+            </li>
+            <li>
+              <span className="text-foreground">An npm SDK:</span> a dependency in the config repo,
+              with the placeholder as its token.
+            </li>
+          </ul>
+        </div>
+      </FieldGroup>
     </div>
   );
 }
