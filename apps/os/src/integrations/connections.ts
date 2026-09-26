@@ -7,9 +7,11 @@
 // when the provider's callback comes back; the webhooks are plain fetch functions in worker.ts.
 import { errorCode } from "iterate/lib";
 import type { StreamEventInput } from "iterate/stream/processor";
-import type { AppConfigEnv } from "../app-config.ts";
+import { z } from "zod";
+import { appConfigOf, sessionSigningSecretOf, type AppConfigEnv } from "../app-config.ts";
+import { bytesFromBase64url, signClaims } from "../caller.ts";
 import { DurableObjectNameCodec } from "../context/paths.ts";
-import { ControlPlane } from "../control-plane/edge.ts";
+import { ControlPlane, type Reach } from "../control-plane/edge.ts";
 import type { Env } from "../env.ts";
 import type { ItxEntrypointScope } from "../iterate-context.ts";
 import type { ProjectState } from "../project/contract.ts";
@@ -50,6 +52,111 @@ export type ConnectionAttempt = {
   /** Why that finish refused to connect the account to the project: a refresh refuses the same. */
   refused?: { code: "FORBIDDEN" | "INVALID_INPUT"; message: string };
 };
+
+/** The providers whose accounts iterate's app routes to one connection each (control-plane/catalog.ts
+ *  `integration_routes`): the ones an account is moved between projects of. */
+export const ROUTED_PROVIDERS = ["slack", "github"] as const satisfies IntegrationProvider[];
+export type RoutedProvider = (typeof ROUTED_PROVIDERS)[number];
+
+/** THE MOVE OF AN ACCOUNT ANOTHER PROJECT HOLDS (verbs.ts `confirmIntegrationMove`): the human
+ *  proved they may connect it (GitHub: they administer the installation's account; Slack: Slack
+ *  let them install into the workspace), and another project's connection holds its route. What
+ *  moving it here takes, and how far the move got: `moving` once a confirmation claimed it, `moved`
+ *  once the route and the connection are here and only the holder's cleanup is left, which the same
+ *  offer retries. */
+export type IntegrationMove = {
+  externalId: string;
+  account: string;
+  holder: { projectId: string; path: string };
+  stage?: "moving" | "moved";
+  /** Slack: the consent whose token the connection's secret holds aside, unused, until the move
+   *  (secret/durable-object.ts `admitHeldToken`). GitHub keeps none: the installation's token is
+   *  minted on use. */
+  heldTokenNonce?: string;
+};
+
+/** A connect whose account another project holds, waiting at `attemptKeyOf(provider, connection)`
+ *  for the human's confirmation until `until`: its nonce, which the offer names and the move spends. */
+export type MovableAttempt = ConnectionAttempt & { nonce: string; move?: IntegrationMove };
+
+/** The platform-signed offer to move an account here, which a provider's callback hands the human's
+ *  landing (`?move=`): the connection it moves to, the attempt it belongs to (its nonce), the account,
+ *  and the project holding it — by its slug, and only when the human can see that project. */
+export type IntegrationMoveOffer = {
+  kind: "integration-move";
+  provider: RoutedProvider;
+  projectId: string;
+  connection: string;
+  nonce: string;
+  externalId: string;
+  account: string;
+  holderSlug: string | null;
+  exp: number;
+};
+
+/** What a provider's callback signs into the offer, and the project holding the account (named in
+ *  the offer only if the human reaches it). */
+export type MoveOffered = Omit<IntegrationMoveOffer, "kind" | "holderSlug"> & {
+  holderProjectId: string;
+};
+
+/** A consent's token its secret held aside because another project holds the account
+ *  (secret/durable-object.ts `completeOAuth`): the account, and until when a move can admit it. */
+export type HeldToken = { externalId: string; account: string; until: number };
+
+/** How long a move offer stands: the human reads one sentence and presses one button. */
+export const MOVE_OFFER_TTL_MS = 10 * 60_000;
+
+const PROVIDER_TITLES: Record<RoutedProvider, string> = { slack: "Slack", github: "GitHub" };
+
+/** The provider and connection a move offer names, read before its signature is checked — for
+ *  serializing its confirmation on that connection only; `confirmIntegrationMove` verifies it. */
+export function moveOfferConnectionOf(offer: unknown): { provider: string; connection: string } {
+  try {
+    const claims = z
+      .object({ provider: z.string(), connection: z.string() })
+      .safeParse(
+        JSON.parse(new TextDecoder().decode(bytesFromBase64url(String(offer).split(".")[0]!))),
+      );
+    return claims.success ? claims.data : { provider: "", connection: "" };
+  } catch {
+    return { provider: "", connection: "" };
+  }
+}
+
+/** A callback's answer once the account turned out to be held by another project: the human's
+ *  landing with the signed offer (`?move=`), naming the holder only when `reach` reaches it; with
+ *  nowhere to land, a 409 that says where to move it from. */
+export async function moveOfferLanding(
+  env: Env,
+  reach: Reach,
+  move: MoveOffered,
+  landing: string | null,
+): Promise<Response> {
+  const { holderProjectId, ...offered } = move;
+  const controlPlane = new ControlPlane(env);
+  const holderSlug = (await controlPlane.reachesProject(reach, holderProjectId))
+    ? ((await controlPlane.getProject(holderProjectId))?.slug ?? null)
+    : null;
+  if (!landing)
+    return new Response(
+      `The ${PROVIDER_TITLES[move.provider]} account ${move.account} is connected to ${holderSlug || "another project"}. Connect it from the Dash's Integrations page to move it here.\n`,
+      {
+        status: 409,
+        headers: { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store" },
+      },
+    );
+  const offer: IntegrationMoveOffer = { kind: "integration-move", ...offered, holderSlug };
+  const url = new URL(landing);
+  url.searchParams.set(
+    "move",
+    await signClaims(offer, await sessionSigningSecretOf(appConfigOf(env))),
+  );
+  return new Response(null, {
+    status: 303,
+    headers: { location: url.href, "cache-control": "no-store" },
+  });
+}
 
 /** A connection's name: a secret name's grammar, so `/secrets/<provider>-<name>` always is one. */
 export function assertConnectionName(connection: unknown): string {

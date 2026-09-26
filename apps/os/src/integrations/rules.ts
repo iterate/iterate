@@ -19,6 +19,7 @@
 // token lists every installation the user can merely read, while the connection's token acts with
 // the whole installation's permissions. So the human proves they administer the installation's
 // account: it is their own user account, or an organization they are an active admin of.
+import { z } from "zod";
 import { isRecord } from "../secrets.ts";
 
 /** How far a request's `x-slack-request-timestamp` may be from now: Slack's own advice, which stops
@@ -130,6 +131,18 @@ function tokenResponseAccountOf(data: unknown): string | null {
     return null;
   }
 }
+
+/** The Slack workspace a token endpoint's answer installed the app into (`oauth.v2.access`'s
+ *  `team`), or null for an answer that names none. */
+export function slackTeamOfTokenResponse(data: unknown): { id: string; name: string } | null {
+  const parsed = SlackTokenResponseTeam.safeParse(data);
+  if (!parsed.success) return null;
+  const { id, name } = parsed.data.team;
+  return { id, name: name || id };
+}
+const SlackTokenResponseTeam = z.object({
+  team: z.object({ id: z.string().min(1), name: z.string().optional() }),
+});
 
 /** Why an incremental consent is refused — the provider answered for another account than the
  *  connection holds, or for one it does not name — or null when it is the same account. */

@@ -18,17 +18,19 @@ import { ControlPlane } from "../control-plane/edge.ts";
 import type { ItxEntrypointScope } from "../iterate-context.ts";
 import type { Env as ContextEnv } from "../iterate-context-durable-object.ts";
 import type { IntegrationProvider } from "../integrations/contract.ts";
-import { assertConnectionName, type IntegrationScope } from "../integrations/connections.ts";
 import {
-  acceptGithubCallback,
-  confirmGithubMove,
-  githubMoveOfferConnectionOf,
-} from "../integrations/github.ts";
+  assertConnectionName,
+  moveOfferConnectionOf,
+  type IntegrationScope,
+} from "../integrations/connections.ts";
+import { acceptGithubCallback } from "../integrations/github.ts";
 import {
+  confirmIntegrationMove,
   connectIntegration,
   disconnectIntegration,
   finishIntegrationConnect,
   type ConnectInput,
+  type FinishConnectAnswer,
   type FinishConnectInput,
 } from "../integrations/verbs.ts";
 import { connectWaitrose } from "../integrations/waitrose-connection.ts";
@@ -57,7 +59,7 @@ export class ProjectDurableObject extends StreamProcessorDurableObject<
     "workspaces",
     "connectIntegration",
     "disconnectIntegration",
-    "confirmGithubMove",
+    "confirmIntegrationMove",
     "connectWaitrose",
     "acceptGithubCallback",
   ];
@@ -200,7 +202,7 @@ export class ProjectDurableObject extends StreamProcessorDurableObject<
 
   /** The OAuth callback stored a Slack, Google or Cloudflare token: finish the connection — the
    *  callback's alone, not published (context/built-ins.ts `integrations.finishConnect`). */
-  finishIntegrationConnect(input: FinishConnectInput): Promise<void> {
+  finishIntegrationConnect(input: FinishConnectInput): Promise<FinishConnectAnswer> {
     return this.#onConnection(input?.provider, input?.connection, (integrations) =>
       finishIntegrationConnect(this.#integrationScope(), integrations, input),
     );
@@ -229,19 +231,21 @@ export class ProjectDurableObject extends StreamProcessorDurableObject<
   disconnectIntegration(input: {
     provider: IntegrationProvider;
     connection: string;
-    movedInstallationId?: string;
+    movedExternalId?: string;
   }): Promise<void> {
     return this.#onConnection(input?.provider, input?.connection, (integrations) =>
       disconnectIntegration(this.#integrationScope(), integrations, input),
     );
   }
 
-  /** MOVE A GITHUB INSTALLATION HERE (integrations/github.ts `confirmGithubMove`): the human's
-   *  confirmation of the offer GitHub's callback signed, once they proved they administer it. */
-  confirmGithubMove(input: { offer: string }): Promise<void> {
-    // on the connection the offer names (github.ts verifies the offer itself)
-    return this.#onConnection("github", githubMoveOfferConnectionOf(input?.offer), () =>
-      confirmGithubMove(this.#integrationScope(), input),
+  /** MOVE AN ACCOUNT ANOTHER PROJECT HOLDS HERE (integrations/verbs.ts `confirmIntegrationMove`): the
+   *  human's confirmation of the offer a provider's callback signed — a GitHub installation they
+   *  administer, a Slack workspace Slack let them install into. */
+  confirmIntegrationMove(input: { offer: string }): Promise<void> {
+    // on the connection the offer names (verbs.ts verifies the offer itself)
+    const { provider, connection } = moveOfferConnectionOf(input?.offer);
+    return this.#onConnection(provider, connection, () =>
+      confirmIntegrationMove(this.#integrationScope(), input),
     );
   }
 }

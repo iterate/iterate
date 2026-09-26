@@ -19,6 +19,7 @@ import {
   disconnectIntegration,
   finishIntegrationConnect,
   type ConnectInput,
+  type FinishConnectAnswer,
   type FinishConnectInput,
 } from "../integrations/verbs.ts";
 import type { ConnectionAttempt } from "../integrations/connections.ts";
@@ -78,8 +79,8 @@ export class AccountDurableObject extends StreamProcessorDurableObject<
   }
 
   /** The OAuth callback's, not published (context/built-ins.ts `integrations.finishConnect`). */
-  async finishIntegrationConnect(input: FinishConnectInput): Promise<void> {
-    await finishIntegrationConnect(this.#integrationScope(), await this.#integrations(), input);
+  async finishIntegrationConnect(input: FinishConnectInput): Promise<FinishConnectAnswer> {
+    return finishIntegrationConnect(this.#integrationScope(), await this.#integrations(), input);
   }
 
   /** WAITROSE (integrations/waitrose-connection.ts): the username and password are already in
