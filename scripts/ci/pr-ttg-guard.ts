@@ -25,16 +25,20 @@
 //                       ran no Preview OS at all
 //
 // THE PAGE: when the time to green of the pushes that skipped the slow rows, over the last 24 hours
-// and at least 20 of them, has a median over 165 s or a p90 over 200 s, #error-pulse is paged red,
-// once; green once when both are back under their lines. Fewer pushes change nothing. The lines are
-// defaults for the owner to confirm. A page leaves the run green (a scheduled run reports on main's
-// head, where red reads as "this commit broke"); failing to read Depot fails it.
+// and at least 20 of them, has a median over 165 s or a p90 over 200 s, #error-pulse is paged red;
+// red again whenever that median is more than 20 s over the lowest judged since the last page; green
+// once when both are back under their lines (`pageFor`). Fewer pushes change nothing. Every page
+// names the job that finished last on most of those pushes, which ends their critical path. A page
+// leaves the run green (a scheduled run reports on main's head, where red reads as "this commit
+// broke"); failing to read Depot fails it.
 //
 // The memory between runs is the previous main run's `pr-ttg-state` artifact (depot.ts
 // `saveNewestArtifactFile`): the pushes of the last 7 days as measured, and what the channel was last
-// told. Each run lists the PR runs of the last 26 hours and measures those it has not. Every push it
-// measures is also a PostHog event, `pr checks settled`. A run off main, or with `--test-page`, keeps
-// no state and sends nothing to PostHog; `--test-page` posts its numbers marked 🧪, mentioning nobody.
+// told. A state of another `schemaVersion` is not read: the run starts over, as a first run does, and
+// writes this version. Each run lists the PR runs of the last 26 hours and measures those it has not.
+// Every push it measures is also a PostHog event, `pr checks settled`. A run off main, or with
+// `--test-page`, keeps no state and sends nothing to PostHog; `--test-page` posts its numbers marked
+// 🧪, mentioning nobody.
 //
 //   pnpm tsx scripts/ci/pr-ttg-guard.ts previous-state --out <state.json>
 //   DEPOT_TOKEN=… pnpm tsx scripts/ci/pr-ttg-guard.ts measure --ref <git ref> [--state <state.json>] \
@@ -50,9 +54,12 @@ import { depotCiApi, mapConcurrent, saveNewestArtifactFile, unzip } from "./depo
 import { sendPostHogEvents, systemEvent } from "./posthog-events.ts";
 import { getSlackClient, onCallMention, slackChannelIds } from "./slack.ts";
 
-/** The page's lines on the time to green of the pushes that skipped the slow rows, in seconds, and
- *  the fewest such pushes in the last 24 hours it judges. Defaults: the owner has yet to confirm them. */
-export const LINES = { p50: 165, p90: 200, minPushes: 20 };
+/** The page's lines on the time to green of the pushes that skipped the slow rows, in seconds; how
+ *  far a median still over them must rise past the lowest judged since the last page to page red
+ *  again; and the fewest such pushes in the last 24 hours it judges. The owner's rule is a push green within 3
+ *  minutes: the p50 line pages with 15 s of it left, the p90 line once the slowest tenth are 20 s
+ *  past it (confirmed by the owner 2026-09-26). */
+export const LINES = { p50: 165, p90: 200, worse: 20, minPushes: 20 };
 /** Where one run leaves its state for the next: the workflow's `name:`, its artifact, the file in it. */
 export const stateArtifact = {
   workflow: "PR time to green",
@@ -78,18 +85,31 @@ const Push = z.discriminatedUnion("outcome", [
     e2e: E2eRows,
     /** The time to first verdict; for a green push, its time to green. */
     seconds: z.number().nonnegative(),
+    /** The job whose end was the push's verdict, the end of its critical path: its Depot job key
+     *  (`preview-os.yml:specs`), one for all of a matrix's legs, or the check's name when no job of
+     *  it finished. */
+    lastJob: z.string(),
   }),
   z.object({ ...pushFields, outcome: z.enum(["superseded", "not-a-push"]) }),
 ]);
 type Push = z.infer<typeof Push>;
 
 export const TtgState = z.object({
-  schemaVersion: z.literal(1),
+  schemaVersion: z.literal(2),
   pushes: z.array(Push),
-  /** What #error-pulse was last told: `over` in red, `under` in green. */
-  paged: z.enum(["over", "under"]),
+  /** What #error-pulse was last told, `over` in red or `under` in green, and the lowest median
+   *  judged since, that page's included. None before the first page. */
+  lastPage: z.object({ judgement: z.enum(["over", "under"]), bestP50: z.number() }).optional(),
 });
 export type TtgState = z.infer<typeof TtgState>;
+
+/** The state a run starts from: the previous run's, or none when it has another `schemaVersion` or
+ *  there was none. One of this version that does not parse throws. Pure. */
+export function readState(previous: unknown): TtgState {
+  if (!TtgState.pick({ schemaVersion: true }).safeParse(previous).success)
+    return { schemaVersion: 2, pushes: [] };
+  return TtgState.parse(previous);
+}
 
 /** One settled run as a push. `firstExecutions` holds each re-run check's first execution, by
  *  workflow id (Depot's `GetWorkflow`); `nextRunAt` is when the PR's next run was created, if one
@@ -105,10 +125,11 @@ export function measurePush(input: {
   const base = { run: run.runId, pr: Number(run.ref.split("/")[2]), createdAt: run.createdAt };
   const checks = workflows
     .filter(({ workflow }) => CHECKS.includes(workflow.name))
-    .map(({ workflow, jobs }) => {
-      const first = input.firstExecutions[workflow.workflowId] || workflow;
-      return { name: workflow.name, ...first, verdictAt: verdictEnd(first.finishedAt, jobs) };
-    });
+    .map(({ workflow, jobs }) => ({
+      name: workflow.name,
+      ...(input.firstExecutions[workflow.workflowId] || workflow),
+      jobs,
+    }));
   if (!checks.some((check) => check.name === "Test")) return { ...base, outcome: "not-a-push" };
   if (checks.some((check) => !check.finishedAt)) return undefined;
   // Every check cancels its run in progress when the PR's next push starts (their `concurrency:`), so
@@ -120,7 +141,7 @@ export function measurePush(input: {
     )
   )
     return { ...base, outcome: "superseded" };
-  const verdictAt = Math.max(...checks.map((check) => Date.parse(check.verdictAt)));
+  const verdict = checks.map(verdictOf).toSorted((a, b) => b.at - a.at)[0]!;
   return {
     ...base,
     outcome: checks.every((check) => check.status === "finished") ? "green" : "red",
@@ -131,19 +152,33 @@ export function measurePush(input: {
         : input.summary.slowRows === "skipped"
           ? "slow-rows-skipped"
           : "every-row",
-    seconds: Math.round((verdictAt - Date.parse(run.createdAt)) / 100) / 10,
+    seconds: Math.round((verdict.at - Date.parse(run.createdAt)) / 100) / 10,
+    lastJob: verdict.job,
   };
 }
 
-/** When a settled check's first execution reached its verdict: its end or, when it has a CI trace
- *  job, the end of the first attempt of its last job but that one. Pure. */
-function verdictEnd(finishedAt: string, jobs: RunMetrics["workflows"][number]["jobs"]) {
-  if (!finishedAt || !jobs.some(({ job }) => job?.jobKey === TRACE_JOB)) return finishedAt;
-  const ends = jobs.flatMap(({ job, attempts }) => {
-    const first = attempts.find(({ attempt }) => attempt?.attempt === 1)?.attempt;
-    return job?.jobKey !== TRACE_JOB && first?.finishedAt ? [Date.parse(first.finishedAt)] : [];
-  });
-  return ends.length ? new Date(Math.max(...ends)).toISOString() : finishedAt;
+/** When a settled check's first execution reached its verdict, and the job that ended it: the job
+ *  whose first attempt finished last, but the CI trace, which only reports. A check with a CI trace
+ *  reaches its verdict at that job's end, any other at its own. A matrix's legs are one job:
+ *  `kit-firmware.yml:build-firmware:matrix-5` counts as `kit-firmware.yml:build-firmware`. Pure. */
+function verdictOf(check: {
+  name: string;
+  finishedAt: string;
+  jobs: RunMetrics["workflows"][number]["jobs"];
+}) {
+  const last = check.jobs
+    .flatMap(({ job, attempts }) => {
+      const first = attempts.find(({ attempt }) => attempt?.attempt === 1)?.attempt;
+      return job && job.jobKey !== TRACE_JOB && first?.finishedAt
+        ? [{ job: job.jobKey.replace(/:matrix-\d+$/u, ""), at: Date.parse(first.finishedAt) }]
+        : [];
+    })
+    .toSorted((a, b) => b.at - a.at)[0];
+  const traced = check.jobs.some(({ job }) => job?.jobKey === TRACE_JOB);
+  return {
+    at: traced && last ? last.at : Date.parse(check.finishedAt),
+    job: last?.job || check.name,
+  };
 }
 
 /** Whether the push's Preview OS tested a preview: it ran, and its E2E tests job was not skipped,
@@ -171,13 +206,17 @@ export function summarizePushes(pushes: Push[], window: { from: number; to: numb
   );
   const group = (e2e?: E2eRows) => {
     const members = verdicts.filter((push) => !e2e || push.e2e === e2e);
+    const green = members.filter((push) => push.outcome === "green");
     return {
       pushes: members.length,
       red: members.filter((push) => push.outcome === "red").length,
-      timeToGreen: percentiles(
-        members.filter((push) => push.outcome === "green").map((push) => push.seconds),
-      ),
+      timeToGreen: percentiles(green.map((push) => push.seconds)),
       firstVerdict: percentiles(members.map((push) => push.seconds)),
+      /** The job that finished last on the most green pushes (the first by name on a tie), and on
+       *  how many. */
+      lastJob: [...Map.groupBy(green, (push) => push.lastJob)]
+        .map(([job, ended]) => ({ job, pushes: ended.length }))
+        .toSorted((a, b) => b.pushes - a.pushes || a.job.localeCompare(b.job))[0],
     };
   };
   const byRows = {
@@ -199,37 +238,59 @@ export function summarizePushes(pushes: Push[], window: { from: number; to: numb
 type PushSummary = ReturnType<typeof summarizePushes>;
 
 /** The last 24 hours against LINES: `over` when the time to green of the pushes that skipped the
- *  slow rows crossed either line, `too-few` below LINES.minPushes of them. Pure. */
-export function judge(summary: PushSummary): "over" | "under" | "too-few" {
+ *  slow rows crossed either line, with their median; `too-few` below LINES.minPushes of them. Pure. */
+export function judge(summary: PushSummary) {
   const green = summary.byRows["slow-rows-skipped"].timeToGreen;
-  if (!green || green.n < LINES.minPushes) return "too-few";
-  return green.p50 > LINES.p50 || green.p90 > LINES.p90 ? "over" : "under";
+  if (!green || green.n < LINES.minPushes) return { judgement: "too-few" } as const;
+  const over = green.p50 > LINES.p50 || green.p90 > LINES.p90;
+  return { judgement: over ? "over" : "under", p50: green.p50 } as const;
 }
 
-/** The page a judgement owes the channel, which was last told `paged`, if any. Pure. */
-export function pageFor(paged: TtgState["paged"], judgement: ReturnType<typeof judge>) {
-  return judgement === "too-few" || judgement === paged ? null : judgement;
+/** The page a judgement owes the channel, given what it was last told, and what the state keeps of
+ *  that: red on crossing a line; red again once the median is more than LINES.worse over the lowest
+ *  judged since the last page, so a regression after a recovery that stayed over the lines is
+ *  heard as well as one that never recovered; green on coming back under. Pure. */
+export function pageFor(
+  lastPage: TtgState["lastPage"],
+  judged: ReturnType<typeof judge>,
+): { page: "over" | "worse" | "under" | null; lastPage: TtgState["lastPage"] } {
+  if (judged.judgement === "too-few") return { page: null, lastPage };
+  const told = { judgement: judged.judgement, bestP50: judged.p50 };
+  // Under the lines before any page: there is nothing to tell.
+  if (!lastPage && judged.judgement === "under") return { page: null, lastPage };
+  if (lastPage?.judgement !== judged.judgement) return { page: judged.judgement, lastPage: told };
+  if (judged.judgement === "over" && judged.p50 - lastPage.bestP50 > LINES.worse)
+    return { page: "worse", lastPage: told };
+  return { page: null, lastPage: { ...lastPage, bestP50: Math.min(lastPage.bestP50, judged.p50) } };
 }
 
-/** The Slack message: the judgement, then each group of the last 24 hours. Only a test page is
- *  ever `too-few`. Pure. */
+/** The Slack message: the page, the job that finished last, then each group of the last 24 hours.
+ *  Only a test page is ever `too-few`. Pure. */
 export function renderPage(input: {
-  page: ReturnType<typeof judge>;
+  page: NonNullable<ReturnType<typeof pageFor>["page"]> | "too-few";
   summary: PushSummary;
+  lastPage: TtgState["lastPage"];
   runUrl?: string;
   testRun: boolean;
 }) {
-  const green = input.summary.byRows["slow-rows-skipped"].timeToGreen;
+  const { timeToGreen: green, lastJob } = input.summary.byRows["slow-rows-skipped"];
+  const sinceLastPage =
+    input.lastPage && `; ${seconds(input.lastPage.bestP50)} at best since the last page`;
   const numbers = green
-    ? `p50 ${seconds(green.p50)} (line ${LINES.p50} s), p90 ${seconds(green.p90)} (line ${LINES.p90} s), n=${green.n}`
+    ? `p50 ${seconds(green.p50)} (line ${LINES.p50} s${sinceLastPage || ""}), p90 ${seconds(green.p90)} (line ${LINES.p90} s), n=${green.n}`
     : "none green";
+  const mention = input.testRun ? "" : ` ${onCallMention}`;
   const heading = {
-    over: `🔴 PR time to green over its lines${input.testRun ? "" : ` ${onCallMention}`}`,
+    over: `🔴 PR time to green over its lines${mention}`,
+    worse: `🔴 PR time to green more than ${LINES.worse} s worse again${mention}`,
     under: "🟢 PR time to green back under its lines",
     "too-few": `⚪ PR time to green not judged below ${LINES.minPushes} pushes`,
   }[input.page];
   return [
     `${input.testRun ? "🧪 TEST RUN " : ""}${heading}: pushes that skipped the slow rows, last 24 h: ${numbers}`,
+    lastJob &&
+      green &&
+      `Their critical path ends with ${lastJob.job} on ${lastJob.pushes} of the ${green.n}`,
     ...renderGroups(input.summary),
     input.runUrl && `<${input.runUrl}|the run>`,
   ]
@@ -237,7 +298,8 @@ export function renderPage(input: {
     .join("\n");
 }
 
-/** One line per group and a closing line on the slow rows' share, for the page and the log. Pure. */
+/** One line per group, with the job that finished last on most of its green pushes, and a closing
+ *  line on the slow rows' share, for the page and the log. Pure. */
 function renderGroups(summary: PushSummary) {
   const names: Record<E2eRows, string> = {
     "slow-rows-skipped": "Preview OS, slow rows skipped",
@@ -245,11 +307,15 @@ function renderGroups(summary: PushSummary) {
     "no-summary": "Preview OS, no e2e summary",
     "no-preview": "no Preview OS",
   };
-  const line = (name: string, { pushes, red, timeToGreen, firstVerdict }: PushSummary["all"]) => {
+  const line = (
+    name: string,
+    { pushes, red, timeToGreen, firstVerdict, lastJob }: PushSummary["all"],
+  ) => {
     if (!firstVerdict) return `• ${name}: no pushes`;
-    const green = timeToGreen
-      ? `time to green p50 ${seconds(timeToGreen.p50)}, p90 ${seconds(timeToGreen.p90)} (n=${timeToGreen.n})`
-      : "none green";
+    const green =
+      timeToGreen && lastJob
+        ? `time to green p50 ${seconds(timeToGreen.p50)}, p90 ${seconds(timeToGreen.p90)} (n=${timeToGreen.n}; ${lastJob.pushes} ended by ${lastJob.job})`
+        : "none green";
     return `• ${name}: ${green}; first verdict p50 ${seconds(firstVerdict.p50)}, p90 ${seconds(firstVerdict.p90)} (n=${pushes}, ${Math.round((red / pushes) * 100)} % red)`;
   };
   return [
@@ -275,6 +341,7 @@ export function pushEvents(pushes: Push[]) {
               e2e_rows: push.e2e,
               time_to_first_verdict_s: push.seconds,
               time_to_green_s: push.outcome === "green" ? push.seconds : undefined,
+              last_job: push.lastJob,
               created_at: push.createdAt,
             },
             new Date(Date.parse(push.createdAt) + push.seconds * 1000).toISOString(),
@@ -285,7 +352,7 @@ export function pushEvents(pushes: Push[]) {
 }
 
 /** Measure the last 24 hours of PR pushes' time to green (DEPOT_TOKEN reads Depot CI), page
- *  #error-pulse on a change of judgement, keep the state and send PostHog each push. */
+ *  #error-pulse when `pageFor` says so, keep the state and send PostHog each push. */
 export async function measure(options: {
   /** The run's git ref: only refs/heads/main keeps state and sends PostHog events. */
   ref: string;
@@ -305,10 +372,15 @@ export async function measure(options: {
   const depot = (method: string, body: object) => depotCiApi(method, body, token);
   const testRun = options.testPage || options.ref !== "refs/heads/main";
   const now = Date.now();
-  const state: TtgState =
+  const previous =
     options.state && existsSync(options.state)
-      ? TtgState.parse(JSON.parse(readFileSync(options.state, "utf8")))
-      : { schemaVersion: 1, pushes: [], paged: "under" };
+      ? JSON.parse(readFileSync(options.state, "utf8"))
+      : undefined;
+  const state = readState(previous);
+  if (previous && previous.schemaVersion !== state.schemaVersion)
+    console.log(
+      `[pr-ttg] the previous state has schemaVersion ${previous.schemaVersion}, not ${state.schemaVersion}: starting over`,
+    );
 
   // 26 hours: the page's 24, and two for a run that settled late or an hourly run that failed.
   const listed = await listPullRequestRuns(depot, now - 26 * HOUR_MS);
@@ -342,16 +414,23 @@ export async function measure(options: {
   console.log(
     ["last 7 days:", ...renderGroups(week), "last 24 hours:", ...renderGroups(day)].join("\n"),
   );
-  const judgement = judge(day);
-  const change = pageFor(state.paged, judgement);
+  const judged = judge(day);
+  const owed = pageFor(state.lastPage, judged);
   // A test page shows this run's judgement whatever the channel was last told; any other run off
   // main pages nothing.
-  const page = testRun ? (options.testPage ? judgement : null) : change;
+  const page = testRun ? (options.testPage ? judged.judgement : null) : owed.page;
   const text =
-    page && renderPage({ page, summary: day, runUrl: process.env.DEPOT_JOB_URL, testRun });
-  console.log(JSON.stringify({ testRun, judgement, paged: state.paged, page }));
+    page &&
+    renderPage({
+      page,
+      summary: day,
+      lastPage: state.lastPage,
+      runUrl: process.env.DEPOT_JOB_URL,
+      testRun,
+    });
+  console.log(JSON.stringify({ testRun, judged, lastPage: state.lastPage, page }));
   if (text) console.log(`\n${text}\n`);
-  else console.log("pr-ttg: no change of state, nothing to page");
+  else console.log("pr-ttg: nothing to page");
 
   // The order is the state's: the page first, since a colour the state records must have been
   // posted (a page that could not post leaves the state as it was, so the next run owes it again);
@@ -360,7 +439,7 @@ export async function measure(options: {
     await getSlackClient().chat.postMessage({ channel: slackChannelIds["#error-pulse"], text });
   if (testRun) return;
   if (options.stateOut) {
-    const next: TtgState = { schemaVersion: 1, pushes, paged: change || state.paged };
+    const next: TtgState = { schemaVersion: 2, pushes, lastPage: owed.lastPage };
     mkdirSync(dirname(options.stateOut), { recursive: true });
     writeFileSync(options.stateOut, `${JSON.stringify(next)}\n`);
   }

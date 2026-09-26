@@ -96,7 +96,7 @@ Anything else that needs GitHub-only triggers, such as `pull_request_target`, `i
 | `os-real-model.yml`          | Daily, main push to the agents runtime, dispatch    | **OS real model**: the `REAL:` rows against main's preview `real-model`; pages on a change of state     |
 | `flake-dashboard.yml`        | Hourly, dispatch                                    | Recomputes [#2580](https://github.com/iterate/iterate/issues/2580) from the flake records in R2         |
 | `ci-telemetry.yml`           | Hourly, dispatch                                    | One PostHog event per Depot workflow run and job attempt                                                |
-| `pr-ttg.yml`                 | Hourly, dispatch                                    | **PR time to green**: how long each PR push waited for its checks; PostHog; pages on a change of state  |
+| `pr-ttg.yml`                 | Hourly, dispatch                                    | **PR time to green**: how long each PR push waited for its checks; PostHog; pages when over or worse    |
 | `release.yml`                | Daily, dispatch                                     | A dated `v…` release with a changelog when main moved                                                   |
 | `shadcn-drift.yml`           | PR touching the vendored shadcn files, dispatch     | **shadcn drift**: fails when a vendored file differs from `shadcn add` (packages/ui/AGENTS.md)          |
 | `shadcn-upstream.yml`        | Daily, dispatch                                     | Posts to #ci when shadcn's registry moves past packages/ui's vendored files                             |
@@ -933,13 +933,17 @@ prints each group's p50 and p90 over the last 24 hours and 7 days, and the
 share of Preview OS pushes that ran the slow rows. Each push is a PostHog event,
 `pr checks settled`.
 
-The guard pages #error-pulse on a change of state: red once when the pushes
-that skipped the slow rows took a p50 over 165 s or a p90 over 200 s across the
-last 24 hours, judged from 20 such pushes up; green once when both are back
-under. These lines are defaults for the owner to confirm (`LINES` in the
-script). Its state is its own `pr-ttg-state` artifact. Dispatch it with
-`--input test-page=true` to post its numbers as a 🧪 test page that mentions
-nobody and keeps no state.
+The guard pages #error-pulse red when the pushes that skipped the slow rows
+took a p50 over 165 s or a p90 over 200 s across the last 24 hours, judged from
+20 such pushes up. It pages red again whenever that p50 is more than 20 s over
+the one its last page gave, and green once both are back under. The owner's
+rule is a push green within 3 minutes, and he confirmed these lines on
+2026-09-26 (`LINES` in the script). Each page names the job that finished last
+on most of those pushes, the end of their critical path (`preview-os.yml:specs`,
+say); the job log names it for every group. Its state is its own
+`pr-ttg-state` artifact; a state of another `schemaVersion` is not read, and
+the run starts over. Dispatch it with `--input test-page=true` to post its
+numbers as a 🧪 test page that mentions nobody and keeps no state.
 
 The CI trace's time to green ([CI traces](ci-traces.md)) is one workflow's; this
 is the push's, across every check.
