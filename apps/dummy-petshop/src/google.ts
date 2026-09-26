@@ -123,8 +123,7 @@ export async function handleGoogleRequest(
   }
   if (key === "POST /revoke") {
     const token = url.searchParams.get("token") || "";
-    const known =
-      (await google.revokeRefreshToken(token)) || (await google.openAccessToken(token)) !== null;
+    const known = (await google.revokeRefreshToken(token)) || (await google.openAccessToken(token));
     return known ? Response.json({}) : googleError("invalid_token");
   }
   if (key === "GET /oauth2/v2/userinfo" || key === "GET /gmail/v1/users/me/profile") {

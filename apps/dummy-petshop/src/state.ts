@@ -76,8 +76,8 @@ export interface GithubInstallationUser {
 /**
  * The whole service's mutable state — one JSON blob in one Durable Object.
  * Tokens are sealed AES-GCM blobs (seal.ts), so only the things that genuinely must be shared and
- * mutable live here: the client registry, revocation facts, the fakes' records and backdoor
- * toggles.
+ * mutable live here: the client registry, revocation facts, the fakes' records and scheduled
+ * token-endpoint failures.
  */
 export interface PetshopState {
   /** Per-client revocation epochs. A token seals the epoch for its `clientId`,
