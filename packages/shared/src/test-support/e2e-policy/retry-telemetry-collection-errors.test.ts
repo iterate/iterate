@@ -75,9 +75,7 @@ test.for([
     expect(artifact.run).toMatchObject({
       status: "failed",
       error: { message: `${failure} failed` },
+      collectionErrors: [`${failure} failed`],
     });
-    expect(artifact.runners).toContainEqual(
-      expect.objectContaining({ collectionErrors: [`${failure} failed`] }),
-    );
   },
 );
