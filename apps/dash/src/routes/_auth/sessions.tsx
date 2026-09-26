@@ -80,36 +80,29 @@ const TOKEN_LIFETIMES = [
 
 /** A date as a person reads it, the same on the server and in the browser. */
 const dateOf = (at: number) =>
-  new Intl.DateTimeFormat("en-GB", { dateStyle: "medium", timeZone: "UTC" }).format(at);
+  new Intl.DateTimeFormat("en-GB", {
+    day: "numeric",
+    month: "short",
+    ...(new Date(at).getUTCFullYear() !== new Date().getUTCFullYear() && { year: "numeric" }),
+    timeZone: "UTC",
+  }).format(at);
 
-/** A session row's details, in order. A host or the projects may wrap anywhere; every other part
- *  stays whole, so a date never breaks in the middle. */
+/** A session row's details on two lines: what it is (its kind, host and projects), then when (since,
+ *  last used, expiry). */
 function metaOf(item: GrantRecord, slugOf: Map<string, string>) {
-  const parts = [
-    {
-      text:
-        item.resource === "mcp"
-          ? `${GRANT_KIND_LABELS[item.kind]} (MCP)`
-          : GRANT_KIND_LABELS[item.kind],
-      wraps: false,
-    },
-    { text: item.clientDomain, wraps: true },
-    { text: item.projects?.map((id) => slugOf.get(id) ?? id).join(", "), wraps: true },
-    { text: `Since ${dateOf(item.createdAt)}`, wraps: false },
-    {
-      text: item.lastUsedAt ? `Used ${dateOf(item.lastUsedAt)}` : "Not used yet",
-      wraps: false,
-    },
-    {
-      text: item.expired
-        ? "Expired"
-        : item.expiresAt
-          ? `Expires ${dateOf(item.expiresAt)}`
-          : undefined,
-      wraps: false,
-    },
+  const what = [
+    item.resource === "mcp"
+      ? `${GRANT_KIND_LABELS[item.kind]} (MCP)`
+      : GRANT_KIND_LABELS[item.kind],
+    item.clientDomain,
+    item.projects?.map((id) => slugOf.get(id) ?? id).join(", "),
   ];
-  return parts.filter((part): part is { text: string; wraps: boolean } => Boolean(part.text));
+  const when = [
+    `Since ${dateOf(item.createdAt)}`,
+    item.lastUsedAt ? `used ${dateOf(item.lastUsedAt)}` : "not used yet",
+    item.expired ? "expired" : item.expiresAt ? `expires ${dateOf(item.expiresAt)}` : undefined,
+  ];
+  return [what, when].map((line) => line.filter((part): part is string => Boolean(part)));
 }
 
 /** A personal access token as the form just minted it — held only in this page's state, shown
@@ -264,17 +257,16 @@ function SessionsPage() {
                         </span>
                       )}
                     </p>
-                    <p className="flex flex-wrap gap-x-1.5 text-xs text-muted-foreground">
-                      {metaOf(item, slugOf).map((part, index) => (
-                        <span
-                          key={part.text}
-                          className={part.wraps ? "[overflow-wrap:anywhere]" : "whitespace-nowrap"}
-                        >
-                          {index > 0 ? "· " : ""}
-                          {part.text}
-                        </span>
-                      ))}
-                    </p>
+                    {metaOf(item, slugOf).map((line) => (
+                      <p key={line[0]} className="text-xs text-muted-foreground">
+                        {line.map((part, index) => (
+                          <span key={part}>
+                            {index > 0 ? " · " : ""}
+                            <span className="[overflow-wrap:anywhere]">{part}</span>
+                          </span>
+                        ))}
+                      </p>
+                    ))}
                     {item.impersonatedBy && (
                       <p className="text-xs text-muted-foreground">
                         Started by {item.impersonatedBy}, signed in as you
@@ -525,7 +517,7 @@ function ConnectedAccounts({ projects }: { projects: { id: string; slug: string 
         <h2 id="connected-accounts-heading" className="font-medium">
           Connected accounts
         </h2>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           {PERSONAL_CONNECT_PROVIDERS.filter((provider) =>
             info.iterateAppProviders.includes(provider),
           ).map((provider) => (
