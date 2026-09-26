@@ -257,12 +257,19 @@ function SessionsPage() {
                         </span>
                       )}
                     </p>
-                    {metaOf(item, slugOf).map((line) => (
+                    {metaOf(item, slugOf).map((line, lineIndex) => (
                       <p key={line[0]} className="text-xs text-muted-foreground">
                         {line.map((part, index) => (
                           <span key={part}>
                             {index > 0 ? " · " : ""}
-                            <span className="[overflow-wrap:anywhere]">{part}</span>
+                            {/* a host may break anywhere; a date stays whole */}
+                            <span
+                              className={
+                                lineIndex === 0 ? "[overflow-wrap:anywhere]" : "whitespace-nowrap"
+                              }
+                            >
+                              {part}
+                            </span>
                           </span>
                         ))}
                       </p>
