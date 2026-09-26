@@ -1,16 +1,15 @@
-import { readFileSync, writeFileSync } from "node:fs";
-import { join, resolve } from "node:path";
-import { expect, test, vi } from "vitest";
-import { temporaryDirectory } from "@iterate-com/shared/test-support/temporary-directory";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+import { expect, test } from "vitest";
 import { LATENCY_METRICS, type LatencyMetricName } from "../../apps/os/perf/latency.ts";
 import {
   baselineWindow,
   brokenEvents,
   brokenLine,
   brokenProbes,
-  GuardState,
-  judge,
+  brokenReport,
   judgeBroken,
+  judgeReport,
   judgeRun,
   latencyEvents,
   readReport,
@@ -18,9 +17,10 @@ import {
   renderPage,
   transition,
   type BrokenProbe,
+  type LatencyMemory,
   type PlatformFailure,
   type Reading,
-} from "./os-latency-guard.ts";
+} from "./latency.ts";
 
 test("a report's metrics come off each row's meta; a row that missed only budgets is not broken, anything else is", () => {
   const budgetMiss =
@@ -167,7 +167,7 @@ test.for(redRunsOfMain)(
         },
       ],
     });
-    const readings = judgeRun({ samples: everyMetricBut(unrecorded), history: [], scale: 1 });
+    const readings = judgeRun({ samples: everyMetricBut(unrecorded), history: [] });
     const broken = brokenProbes(report.broken, readings);
     expect(broken).toMatchObject([{ probe: row, platform, evidence }]);
     expect(judgeBroken(broken, stateRun("the run before", []))).toMatchObject([
@@ -229,7 +229,6 @@ test("a metric no row recorded is broken on its own unless a row or file of its 
   const readings = judgeRun({
     samples: everyMetricBut(["mcp.call", "sign-in", "rules.300.root"]),
     history: [],
-    scale: 1,
   });
   expect(brokenProbes(broken, readings)).toEqual([
     ...broken,
@@ -313,8 +312,8 @@ test("every metric names the perf file that records it", () => {
     ).toContain(`"${metric}"`);
 });
 
-// THE JUDGE, end to end on a report file: the verdict is its exit (a throw), the step summary, a
-// warning, and the state the next run reads — a dry run, so nothing is posted or sent.
+// ONE REPORT JUDGED: the verdict on its broken probes, the job summary and warnings they give, and
+// the memory the next report is judged by.
 test.for([
   {
     name: "a probe the platform broke is recorded: a warning and a summary line, and the run stays green",
@@ -326,13 +325,10 @@ test.for([
     brokenBefore: ["an MCP tool call on a project, with a personal access token"],
     red: true,
   },
-])("the judge: $name", async ({ brokenBefore, red }) => {
-  using dir = temporaryDirectory();
-  const path = (name: string) => join(dir.path, name);
+])("a report: $name", ({ brokenBefore, red }) => {
   const mcpRow = "an MCP tool call on a project, with a personal access token";
-  writeFileSync(
-    path("report.json"),
-    JSON.stringify({
+  const judged = judgeReport({
+    report: {
       testResults: [
         {
           name: "/w/apps/os/perf/sign-in-and-mcp.perf.test.ts",
@@ -353,47 +349,43 @@ test.for([
           ],
         },
       ],
-    }),
-  );
-  writeFileSync(
-    path("state.json"),
-    JSON.stringify({
-      schemaVersion: 1,
-      runs: [{ ...stateRun("the run before", []), broken: brokenBefore }],
-      red: [],
-    }),
-  );
-  writeFileSync(path("summary.md"), "");
-  vi.stubEnv("GITHUB_STEP_SUMMARY", path("summary.md"));
-  const log = vi.spyOn(console, "log").mockImplementation(() => {});
-
-  const judged = judge({
-    report: path("report.json"),
-    state: path("state.json"),
-    stateOut: path("next.json"),
-    run: "42-1",
-    ref: "refs/heads/main",
-    trigger: "schedule",
-    budgetScale: 1,
-    dryRun: true,
+    },
+    memory: { runs: [{ ...stateRun("the run before", []), broken: brokenBefore }], red: [] },
+    run: { sha: "abc", subject: "A change", run: "w42", at: "2026-09-26T21:29:00.000Z" },
+    testRun: false,
   });
-  if (red) await expect(judged).rejects.toThrow(`RED, broken in the run before too: ${mcpRow}`);
-  else await judged;
 
-  const summary = readFileSync(path("summary.md"), "utf8");
+  expect(judged.broken).toMatchObject([
+    {
+      probe: mcpRow,
+      platform: "connection-reset",
+      redBecause: red ? "broken in the run before too" : undefined,
+    },
+  ]);
+  const { summary, warnings } = brokenReport(judged.broken);
   expect(summary).toContain("### Broken latency probes");
   expect(summary).toContain(
     `${red ? "RED, broken in the run before too" : "RECORDED, broken by the platform"}: ${mcpRow}: TypeError: fetch failed`,
   );
-  const warnings = log.mock.calls.flat().filter((line) => String(line).startsWith("::warning"));
   expect(warnings).toHaveLength(red ? 0 : 1);
-  // the state remembers the broken probe either way, for the next run's verdict
-  expect(
-    GuardState.parse(JSON.parse(readFileSync(path("next.json"), "utf8"))).runs.at(-1),
-  ).toMatchObject({
-    run: "42-1",
-    broken: [mcpRow],
+  // the memory remembers the broken probe either way, for the next report's verdict, and the report
+  expect(judged.memory).toMatchObject({ judgedAt: "2026-09-26T21:29:00.000Z" });
+  expect(judged.memory.runs.at(-1)).toMatchObject({ run: "w42", broken: [mcpRow] });
+});
+
+test("a run that kept no report is red: the report and every metric it would have recorded are broken", () => {
+  const judged = judgeReport({
+    report: undefined,
+    memory: { runs: [], red: [] },
+    run: { sha: "abc", subject: "", run: "w43", at: "2026-09-26T21:29:00.000Z" },
+    testRun: false,
   });
+  expect(judged.broken.map(({ probe, redBecause }) => ({ probe, redBecause }))).toEqual(
+    ["the perf report", ...Object.keys(LATENCY_METRICS)].map((probe) => ({
+      probe,
+      redBecause: "not a platform failure",
+    })),
+  );
 });
 
 test.for([
@@ -401,21 +393,18 @@ test.for([
     name: "x25 ready under both lines",
     metric: "project.create.x25.ready" as const,
     samples: [1900, 2000, 2100],
-    scale: 1,
     expected: { value: 2000, budget: 20_000, baseline: 2000, regressionLine: 6000, over: false },
   },
   {
     name: "x25 ready, a sharp regression still under its budget",
     metric: "project.create.x25.ready" as const,
     samples: [7000, 7000, 7000],
-    scale: 1,
     expected: { value: 7000, overBudget: false, regressed: true, over: true },
   },
   {
     name: "x25 ready over its budget",
     metric: "project.create.x25.ready" as const,
     samples: [20_500, 21_000, 21_500],
-    scale: 1,
     expected: { value: 21_000, overBudget: true, regressed: true, over: true },
   },
   // three times a 21 ms round trip is weather: the line is 250 ms above it
@@ -423,24 +412,16 @@ test.for([
     name: "rules.300.newest at three times its baseline, under the floor",
     metric: "rules.300.newest" as const,
     samples: [66, 66, 66],
-    scale: 1,
     expected: { value: 66, regressionLine: 271, overBudget: false, regressed: false, over: false },
   },
-  {
-    name: "a forced alert: x25 ready's budget scaled to 200 ms",
-    metric: "project.create.x25.ready" as const,
-    samples: [1900, 2000, 2100],
-    scale: 0.01,
-    expected: { value: 2000, budget: 200, overBudget: true, regressed: false, over: true },
-  },
-])("$name", ({ metric, samples, scale, expected }) => {
+])("$name", ({ metric, samples, expected }) => {
   // five runs at 2 s (x25 ready) and 21 ms (the rule table), none over its lines
   const history = Array.from({ length: 5 }, (_, i) => ({
     ...stateRun(`r${i}`, []),
     judged: { "project.create.x25.ready": 2000, "rules.300.newest": 21 },
   }));
   expect(
-    judgeRun({ samples: { [metric]: samples }, history, scale }).find(
+    judgeRun({ samples: { [metric]: samples }, history }).find(
       (reading) => reading.metric === metric,
     ),
   ).toMatchObject(expected);
@@ -454,7 +435,6 @@ test("a rate's budget is a floor, and a third of its baseline is a regression; a
   const readings = judgeRun({
     samples: { "push.flood.throughput": [2000, 2500, 2900] },
     history,
-    scale: 1,
   });
   expect(readings.find((reading) => reading.metric === "push.flood.throughput")).toMatchObject({
     value: 2500,
@@ -492,7 +472,6 @@ test("a metric whose runs spread wide regresses only beyond the slowest of them"
     judgeRun({
       samples: { "project.create.x25.all-ready": [seconds * 1000] },
       history,
-      scale: 1,
     }).find((reading) => reading.metric === "project.create.x25.all-ready");
   expect(reading(30)).toMatchObject({ baseline: 9000, regressionLine: 35_000, regressed: false });
   expect(reading(36)).toMatchObject({ regressed: true });
@@ -512,13 +491,12 @@ test("a run that crossed a line does not raise the line the next run is judged b
     judgeRun({
       samples: { "project.create.x25.ready": [35_000] },
       history: [...history, slow],
-      scale: 1,
     }).find((reading) => reading.metric === "project.create.x25.ready"),
   ).toMatchObject({ baseline: 10_000, regressionLine: 30_000, regressed: true });
 });
 
 test("a metric turns red when it crossed in two runs in a row, and pages once", () => {
-  const empty: GuardState = { schemaVersion: 1, runs: [], red: [] };
+  const empty: LatencyMemory = { runs: [], red: [] };
   const first = transition({
     state: empty,
     readings: [],
@@ -550,7 +528,7 @@ test("a metric turns red when it crossed in two runs in a row, and pages once", 
 });
 
 test("a run whose row broke neither breaks a streak of crossings nor completes one", () => {
-  const crossed: GuardState = { schemaVersion: 1, runs: [stateRun("r1", ["sign-in"])], red: [] };
+  const crossed: LatencyMemory = { runs: [stateRun("r1", ["sign-in"])], red: [] };
   // r2 measured nothing of sign-in (its row broke)
   const broken = transition({
     state: crossed,
@@ -563,8 +541,7 @@ test("a run whose row broke neither breaks a streak of crossings nor completes o
 });
 
 test("a red metric clears after two measured runs under its lines; green pages once nothing is red", () => {
-  const red: GuardState = {
-    schemaVersion: 1,
+  const red: LatencyMemory = {
     runs: [stateRun("r1", ["sign-in", "mcp.call"]), stateRun("r2", ["sign-in", "mcp.call"])],
     red: ["sign-in", "mcp.call"],
   };
@@ -588,8 +565,7 @@ test("a red metric clears after two measured runs under its lines; green pages o
 });
 
 test("the state keeps the newest 20 runs", () => {
-  const state: GuardState = {
-    schemaVersion: 1,
+  const state: LatencyMemory = {
     runs: Array.from({ length: 20 }, (_, i) => stateRun(`r${i}`, [])),
     red: [],
   };
@@ -603,7 +579,6 @@ test("a run is remembered by each measured metric's median, what crossed, and wh
   const readings = judgeRun({
     samples: { "rules.300.newest": [160, 170, 180], "rules.300.root": [20, 30, 40] },
     history: [],
-    scale: 1,
   });
   expect(
     rememberRun(readings, { sha: "abc", run: "r1", at: "2026-09-24T08:00:00.000Z" }, [
@@ -621,39 +596,32 @@ test("a run is remembered by each measured metric's median, what crossed, and wh
 
 test.for([
   {
-    name: "red: mentions Jonas, and says which line each metric crossed",
+    name: "red says which line each metric crossed, and what is still red",
     page: "red" as const,
-    testRun: undefined,
-    expected: [
-      "🔴 latency over its lines at `3b6b1c8b0` (A &lt;change&gt;) <@U067G4QRFK2>",
-      "• *rules.300.newest* median 170 ms: over its budget of 150 ms (baseline 21 ms, 8.1×); n=3, max 180",
-      "still red: sign-in",
-      "<https://depot.dev/run|the run>",
-    ].join("\n"),
-  },
-  {
-    name: "a test run: marked, and mentions nobody",
-    page: "red" as const,
-    testRun: { scale: 0.01 },
-    expected: [
-      "🧪 TEST RUN (budgets × 0.01) 🔴 latency over its lines at `3b6b1c8b0` (A &lt;change&gt;)",
-      "• *rules.300.newest* median 170 ms: over its budget of 150 ms (baseline 21 ms, 8.1×); n=3, max 180",
-      "still red: sign-in",
-      "<https://depot.dev/run|the run>",
-    ].join("\n"),
+    expected: {
+      tone: "red",
+      headline: "latency over its lines at `3b6b1c8b0` (A &lt;change&gt;)",
+      details: [
+        "*rules.300.newest* median 170 ms: over its budget of 150 ms (baseline 21 ms, 8.1×); n=3, max 180",
+        "still red: sign-in",
+      ],
+      link: "https://depot.dev/run",
+    },
   },
   {
     name: "green",
     page: "green" as const,
-    testRun: undefined,
-    expected: [
-      "🟢 latency back under its lines at `3b6b1c8b0` (A &lt;change&gt;)",
-      "• rules.300.newest median 170 ms (budget 150, baseline 21 ms, 8.1×)",
-      "still red: sign-in",
-      "<https://depot.dev/run|the run>",
-    ].join("\n"),
+    expected: {
+      tone: "green",
+      headline: "latency back under its lines at `3b6b1c8b0` (A &lt;change&gt;)",
+      details: [
+        "rules.300.newest median 170 ms (budget 150, baseline 21 ms, 8.1×)",
+        "still red: sign-in",
+      ],
+      link: "https://depot.dev/run",
+    },
   },
-])("the page, $name", ({ page, testRun, expected }) => {
+])("the page, $name", ({ page, expected }) => {
   const history = Array.from({ length: 5 }, (_, i) => ({
     ...stateRun(`r${i}`, []),
     judged: { "rules.300.newest": 21 },
@@ -664,15 +632,13 @@ test.for([
       readings: judgeRun({
         samples: { "rules.300.newest": [160, 170, 180] },
         history,
-        scale: 1,
       }),
       metrics: ["rules.300.newest"],
       stillRed: ["sign-in"],
       commit: { sha: "3b6b1c8b0aaaaaaa", subject: "A <change>" },
       runUrl: "https://depot.dev/run",
-      testRun,
     }),
-  ).toBe(expected);
+  ).toEqual(expected);
 });
 
 test("a rate's page line says it fell under its budget, and its lowest round", () => {
@@ -682,25 +648,22 @@ test("a rate's page line says it fell under its budget, and its lowest round", (
       readings: judgeRun({
         samples: { "push.flood.throughput": [600, 800, 900] },
         history: [],
-        scale: 1,
       }),
       metrics: ["push.flood.throughput"],
       stillRed: [],
       commit: { sha: "3b6b1c8b0aaaaaaa", subject: "A change" },
     }),
-  ).toBe(
-    [
-      "🔴 latency over its lines at `3b6b1c8b0` (A change) <@U067G4QRFK2>",
-      "• *push.flood.throughput* median 800 events/s: under its budget of 1,000 events/s (no baseline yet); n=3, min 600",
-    ].join("\n"),
-  );
+  ).toMatchObject({
+    details: [
+      "*push.flood.throughput* median 800 events/s: under its budget of 1,000 events/s (no baseline yet); n=3, min 600",
+    ],
+  });
 });
 
 test("PostHog gets one event per measured metric and percentile, deduplicated per run attempt", () => {
   const readings: Reading[] = judgeRun({
     samples: { "rules.300.newest": [10, 20, 30, 40, 50] },
     history: [],
-    scale: 1,
   });
   const events = latencyEvents(readings, {
     sha: "abc",
@@ -762,8 +725,8 @@ test("PostHog gets one event per measured metric and percentile, deduplicated pe
 /** A remembered main run that measured `over` over its lines and `under` under them (each at 1). */
 function stateRun(
   run: string,
-  over: GuardState["runs"][number]["over"],
-  under: GuardState["runs"][number]["over"] = [],
+  over: LatencyMemory["runs"][number]["over"],
+  under: LatencyMemory["runs"][number]["over"] = [],
 ) {
   return {
     sha: "abc",
@@ -772,7 +735,7 @@ function stateRun(
     judged: Object.fromEntries([...over, ...under].map((metric) => [metric, 1])),
     over,
     broken: [],
-  } satisfies GuardState["runs"][number];
+  } satisfies LatencyMemory["runs"][number];
 }
 
 /** A sample of every metric but `unrecorded`, each under its budget. */

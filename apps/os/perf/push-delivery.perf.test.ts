@@ -51,7 +51,7 @@ test("200 push subscribers: one append reaches all 200 in under 2 s, and a whoam
 }) => {
   const itx = openItx(freshCtx("fan200"));
   // on the row before the warm ping: a ping that then misses callbacks is the platform's only when
-  // these stalled too (scripts/ci/os-latency-guard.ts `edge-stall`)
+  // these stalled too (scripts/monitors/latency.ts `edge-stall`)
   const fan = await pushSubscribers(itx, 200, (batchMs) => (task.meta.subscribeBatchMs = batchMs));
   const wallMs: number[] = [];
   const whoamiMs: number[] = [];

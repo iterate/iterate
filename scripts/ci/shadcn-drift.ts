@@ -8,23 +8,19 @@
 //
 // `check` (.depot/workflows/shadcn-drift.yml, a pull request that touches a vendored file or the
 // pin) fails on any difference and prints the CLI's diff of each file. Either someone edited a
-// vendored file, or upstream moved since the last refresh; the fix is the same, `refresh`.
-// `report` (.depot/workflows/shadcn-upstream.yml, daily on main) posts to #ci when the set of files
-// upstream has moved changes, and passes: upstream moving is news, not a broken main. Either fails
-// when it could not ask the registry, with no retry: neither is a required check, and the next run
-// asks again.
+// vendored file, or upstream moved since the last refresh; the fix is the same, `refresh`. It fails
+// when it could not ask the registry, with no retry: it is not a required check, and a re-run asks
+// again.
 // `refresh` overwrites every vendored file with upstream's, and lets the CLI add any dependency a
 // new version needs; review the diff before committing it.
 //
 //   pnpm tsx scripts/ci/shadcn-drift.ts check
-//   pnpm tsx scripts/ci/shadcn-drift.ts report [--dry-run]
 //   pnpm tsx scripts/ci/shadcn-drift.ts refresh
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
 import { createCli } from "trpc-cli";
-import { getSlackClient, slackChannelIds } from "./slack.ts";
 
 /** The registry items packages/ui vendors: what `shadcn add` is asked for. Each writes
  *  src/components/<item>.tsx. components.json's `aliases.utils` is the `cn` package itself, so the
@@ -117,40 +113,6 @@ export function driftOf(
   ];
 }
 
-/** A report's first words: how the next run finds the last one in #ci. */
-const REPORT = "🧩 shadcn upstream";
-
-/** The report to post when the drifted set changed since the last one (the newest bot message in
- *  the channel that starts with REPORT), or null. No report counts as in sync. Pure. */
-export function upstreamReport(input: {
-  drift: string[];
-  messages: { text?: string; bot_id?: string }[];
-  runUrl?: string;
-}) {
-  const last = input.messages.find((message) => message.bot_id && message.text?.startsWith(REPORT));
-  const headline =
-    input.drift.length === 0
-      ? `${REPORT}: packages/ui's vendored files match upstream again`
-      : input.drift.length === 1
-        ? `${REPORT} moved: 1 vendored file in packages/ui differs from \`shadcn add\``
-        : `${REPORT} moved: ${input.drift.length} vendored files in packages/ui differ from \`shadcn add\``;
-  const body = [headline, ...input.drift.map((line) => `• ${line}`)].join("\n");
-  // the last report's headline and file list; its refresh hint and run link are not its state
-  const previous = last?.text
-    ?.split("\n")
-    .filter((line) => line.startsWith(REPORT) || line.startsWith("• "))
-    .join("\n");
-  if (previous === body || (!last && input.drift.length === 0)) return null;
-  return [
-    body,
-    input.drift.length > 0 &&
-      "Refresh with `pnpm tsx scripts/ci/shadcn-drift.ts refresh` and review the diff (packages/ui/AGENTS.md).",
-    input.runUrl && `<${input.runUrl}|the run>`,
-  ]
-    .filter(Boolean)
-    .join("\n");
-}
-
 const repoRoot = resolve(import.meta.dirname, "../..");
 
 /** Runs the pinned CLI in packages/ui with `args` after `add <every item>`. */
@@ -210,34 +172,6 @@ export async function check() {
       "`pnpm tsx scripts/ci/shadcn-drift.ts refresh` and review the diff; never edit one by hand " +
       "(packages/ui/AGENTS.md).",
   );
-}
-
-/** Posts upstream's changes to the vendored files to #ci, once a week per drift. */
-export async function report(
-  options: {
-    /** Print the message instead of posting it. */
-    dryRun?: boolean;
-  } = {},
-) {
-  const found = drift();
-  console.log(JSON.stringify({ drift: found }));
-  const slack = getSlackClient();
-  const channel = slackChannelIds["#ci"];
-  // A week of history: a drift nobody refreshed is reported again a week after its last report.
-  const history = await slack.conversations.history({
-    channel,
-    oldest: String(Date.now() / 1000 - 7 * 86_400),
-    limit: 999,
-  });
-  const text = upstreamReport({
-    drift: found,
-    messages: history.messages || [],
-    runUrl: process.env.DEPOT_JOB_URL,
-  });
-  if (!text)
-    return console.log("shadcn upstream: no change since the last report, nothing to post");
-  console.log(text);
-  if (!options.dryRun) await slack.chat.postMessage({ channel, text });
 }
 
 /** Rewrites every vendored file with `shadcn add <every item> -o -y`. */

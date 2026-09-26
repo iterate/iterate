@@ -456,16 +456,17 @@ names the new version, GETs each production project host and pages
 #error-pulse on a 421, a 5xx or no answer that four tries 10 s apart do not
 clear (`scripts/ci/prd-post-deploy-check.ts`). In parallel, **Main OS e2e**
 (`main-os-e2e.yml`) redeploys the pushed commit in place to its own preview,
-`main`, runs the e2e suite and the browser specs against it, and pages
-#error-pulse only when main goes red or green again. Its runs never cancel each other: the
-pushes that land during a run queue behind it, collapsed to the newest, so
-every run that starts reaches a verdict unless someone cancels it by hand. A
-job that hangs until its timeout counts as red. The full mutating proof is each
-PR's preview.
+`main`, and runs the e2e suite and the browser specs against it; the hourly
+**Health** job (`health.yml`) pages #error-pulse when a run turns main red or
+green again ([Depot CI](depot-ci.md#health)). Main OS e2e's runs never cancel
+each other: the pushes that land during a run queue behind it, collapsed to the
+newest, so every run that starts reaches a verdict unless someone cancels it by
+hand. A job that hangs until its timeout counts as red. The full mutating proof
+is each PR's preview.
 
 What still exercises deployed code on a schedule: the nightly **OS crash hunt**
 drives isolate-ceiling rows against prd (`os-crash-hunt.yml`), the hourly
-**DO duration probe** watches Durable Object cost, the 15-minute **prd fault
+**Health** job runs the Durable Object cost alarm, the 15-minute **prd fault
 alarm** reads production's Workers Logs for 5xx and error bursts, and the
 dispatch-only **OS e2e soak** runs the suite N times against one deployed
 worker (next story).

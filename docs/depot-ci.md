@@ -21,7 +21,7 @@ replays.
 - Main OS e2e (its preview redeployed in place, then e2e) may run in parallel, but nothing waits
   on it ([Main OS e2e keeps one preview](#main-os-e2e-keeps-one-preview)).
 - No job sleeps or waits minutes for analytics or logs to settle. Put slow-arriving signals
-  (Durable Object cost, prd faults) in a scheduled alarm (`do-duration-probe.yml`,
+  (Durable Object cost, prd faults) in a scheduled alarm (`health.yml`,
   `prd-fault-alarm.yml`), not in a gate on the merge path.
 - A scheduled run reports on main's head commit, so an alarm stays green unless it is broken: it
   pages and passes, and fails only when it could not measure or could not post. The nightly crash
@@ -82,24 +82,22 @@ Anything else that needs GitHub-only triggers, such as `pull_request_target`, `i
 | `preview-os.yml`             | Every PR, dispatch                                  | **Preview OS**: Deploy preview, then **E2E tests** and **Browser specs**, then CI trace                 |
 | `preview-delete.yml`         | Such a PR closing, dispatch                         | Deletes the PR's preview                                                                                |
 | `preview-sweep.yml`          | Nightly, dispatch                                   | Deletes stale previews and orphaned preview resources                                                   |
-| `main-os-e2e.yml`            | Main push touching the preview paths, dispatch      | **Main OS e2e**: main redeployed in place to preview `main`, E2E tests, Browser specs, trace, alert     |
+| `main-os-e2e.yml`            | Main push touching the preview paths, dispatch      | **Main OS e2e**: main redeployed in place to preview `main`, E2E tests, Browser specs, trace            |
 | `deploy-os.yml`              | Main push touching what OS ships, dispatch          | **Deploy OS**: production, then the project-host check                                                  |
 | `deploy-<app>.yml`           | Main push touching what the app ships, dispatch     | Deploy of Dash, Agents, Notes, Voice, Kit, SPA, dummy-petshop or ci-reports                             |
 | `kit-firmware.yml`           | Firmware PR and main push, daily, dispatch          | Builds the changed boards; main publishes their releases                                                |
 | `build-preview-ci-image.yml` | Main push touching install inputs, weekly, dispatch | Bakes the CI image ([Custom Image](#custom-image)) when the live image's stamp is stale                 |
 | `build-esp-idf-image.yml`    | Main push touching `esp-idf.sh`, weekly, dispatch   | Bakes Kit Firmware's legs' image: Node 24 and ESP-IDF ([Kit firmware releases](#kit-firmware-releases)) |
-| `do-duration-probe.yml`      | Hourly, dispatch                                    | Durable Object cost alarm for both Cloudflare accounts                                                  |
 | `prd-fault-alarm.yml`        | Every 15 minutes, dispatch                          | Reads production's Workers Logs and pages #error-pulse on faults                                        |
+| `health.yml`                 | Hourly, dispatch                                    | **Health**: judges the runs below and PR time to green; one #error-pulse message per change of state    |
 | `os-crash-hunt.yml`          | Nightly, dispatch                                   | The opt-in isolate-ceiling rows against production                                                      |
 | `os-e2e-soak.yml`            | Dispatch                                            | The e2e suite N times against one deployed worker, each run then the perf budgets                       |
-| `os-latency.yml`             | Every 3 hours, dispatch                             | **OS latency**: the perf suite against main's preview `latency`; to PostHog; pages on a change of state |
-| `os-real-model.yml`          | Daily, main push to the agents runtime, dispatch    | **OS real model**: the `REAL:` rows against main's preview `real-model`; pages on a change of state     |
+| `os-latency.yml`             | Every 3 hours, dispatch                             | **OS latency**: the perf suite against main's preview `latency`, its report for the health job          |
+| `os-real-model.yml`          | Daily, main push to the agents runtime, dispatch    | **OS real model**: the `REAL:` rows against main's preview `real-model`, for the health job             |
 | `flake-dashboard.yml`        | Hourly, dispatch                                    | Recomputes [#2580](https://github.com/iterate/iterate/issues/2580) from the flake records in R2         |
 | `ci-telemetry.yml`           | Hourly, dispatch                                    | One PostHog event per Depot workflow run and job attempt                                                |
-| `pr-ttg.yml`                 | Hourly, dispatch                                    | **PR time to green**: how long each PR push waited for its checks; PostHog; pages when over or worse    |
 | `release.yml`                | Daily, dispatch                                     | A dated `v…` release with a changelog when main moved                                                   |
 | `shadcn-drift.yml`           | PR touching the vendored shadcn files, dispatch     | **shadcn drift**: fails when a vendored file differs from `shadcn add` (packages/ui/AGENTS.md)          |
-| `shadcn-upstream.yml`        | Daily, dispatch                                     | Posts to #ci when shadcn's registry moves past packages/ui's vendored files                             |
 
 Each file's header comment and `on:` block are the details.
 
@@ -530,8 +528,8 @@ freshness:
   `Sandbox terminated before worker reported completion` (#1952, #2030, July
   2026; a retry passed), so watch main's Test job for that. Deploy OS uses `4x16`; the client
   deploys (Dash, Agents, Notes, Voice, Kit, SPA, dummy-petshop, ci-reports),
-  the trace jobs, Main OS e2e's alert job, and the jobs that only call APIs (LOC report, PR
-  dashboard, Release) use `2x8`. So do the E2E tests and Browser specs jobs of Preview OS and
+  the trace jobs, and the jobs that only call APIs (LOC report, PR dashboard, Release, Health)
+  use `2x8`. So do the E2E tests and Browser specs jobs of Preview OS and
   Main OS e2e, which wait on a remote preview: on `4x16`, 151 attempts on 2026-09-24 peaked at
   1.7 vCPUs and 2.9 GB (E2E tests) and 2.1 vCPUs and 3.2 GB (Browser specs). On `2x8`, ten runs
   of each against one preview took 68 s and 70 s at the p50, against 62 s and 70 s for nine on
@@ -540,7 +538,7 @@ freshness:
 These defaults keep a normal all-app main push to 42 requested vCPUs (lint 8,
 test 8, Deploy OS 4, 2 for each of the seven client deploys, 4 for the preview
 parents, and 4 for Main OS e2e, whose deploy job runs first, then its E2E tests
-and Browser specs side by side on 2 each; its trace and alert jobs follow
+and Browser specs side by side on 2 each; its trace job follows
 them), without reducing the parallel lint job that
 uses the larger machine. The sizing pass that set them cut the then-larger
 workflow set from 72 requested vCPUs to 28.
@@ -917,13 +915,41 @@ has started. A dispatch of `test`, `e2e` or `specs` runs its own trace job. See
 [CI traces](./ci-traces.md) for the timing model, the viewer, replay commands
 and OTLP JSON export.
 
-## PR time to green
+## Health
 
-`pr-ttg.yml` runs `scripts/ci/pr-ttg-guard.ts` every hour. It reads from
-Depot's API how long each pull request push waited for its checks: Lint and
-Typecheck, Test, and Preview OS. The wait runs from the run's creation (about
-the push) to the end of the last check, Preview OS's at its last job before the
-CI trace, which only reports:
+`health.yml` runs `scripts/monitors/health.ts` every hour: one scheduled job
+that judges what the measuring workflows left and pages #error-pulse on a change
+of state, all its pages in one message, each a red or green block with its
+details and a link to the run, then every signal's state now:
+
+- **main e2e** and **slow e2e rows**: each push run of Main OS e2e, from its
+  jobs' results and the suite summaries its E2E tests and Browser specs jobs
+  upload with their flake records.
+- **real-model e2e**: the `REAL:` rows of each scheduled or push run of OS real
+  model, from its telemetry.
+- **latency**: each new scheduled OS latency report, against the budgets and a
+  rolling baseline, red once two runs in a row cross a line.
+- **PR time to green** ([below](#pr-time-to-green)).
+- **DO cost**: the Durable Object cost alarm, in its own daily thread and pages.
+
+A red page mentions Jonas once. A page leaves the run green; a check that could
+not read Depot, or found its probe broken (a report with no rows, a suite that
+did not run), fails the run once the others have paged. A red main e2e run
+pages at the next hourly run, not at its own end, and each run since the last
+is judged, oldest first, so a page names the run where its suite changed state.
+Its memory is its own `health-state` artifact; a state of another
+`schemaVersion` is not read, and the run starts over. Dispatch it with
+`--input test-page=true` to post every check's verdict as a 🧪 test page that
+mentions nobody, keeps no state and sends PostHog nothing; a run off main
+without it posts nothing.
+
+### PR time to green
+
+The health job reads from Depot's API how long each pull request push waited for
+its checks (`scripts/monitors/ttg.ts`): Lint and Typecheck, Test, and Preview
+OS. The wait runs from the run's creation (about the push) to the end of the
+last check, Preview OS's at its last job before the CI trace, which only
+reports:
 
 - **Time to green**: the pushes whose checks all passed on their first
   execution.
@@ -940,17 +966,14 @@ prints each group's p50 and p90 over the last 24 hours and 7 days, and the
 share of Preview OS pushes that ran the slow rows. Each push is a PostHog event,
 `pr checks settled`.
 
-The guard pages #error-pulse red when the pushes that skipped the slow rows
-took a p50 over 165 s or a p90 over 200 s across the last 24 hours, judged from
-20 such pushes up. It pages red again whenever that p50 is more than 20 s over
-the lowest it judged since its last page, and green once both are back under.
-The lines hold the owner's rule that a push is green within 3 minutes (`LINES`
-in the script). Each page names the job that finished last
-on most of those pushes, the end of their critical path (`preview-os.yml:specs`,
-say); the job log names it for every group. Its state is its own
-`pr-ttg-state` artifact; a state of another `schemaVersion` is not read, and
-the run starts over. Dispatch it with `--input test-page=true` to post its
-numbers as a 🧪 test page that mentions nobody and keeps no state.
+It pages red when the pushes that skipped the slow rows took a p50 over 165 s or
+a p90 over 200 s across the last 24 hours, judged from 20 such pushes up. It
+pages red again whenever that p50 is more than 20 s over the lowest it judged
+since its last page, and green once both are back under. The lines hold the
+owner's rule that a push is green within 3 minutes (`LINES` in the script). Each
+page names the job that finished last on most of those pushes, the end of their
+critical path (`preview-os.yml:specs`, say); the job log names it for every
+group.
 
 The CI trace's time to green ([CI traces](ci-traces.md)) is one workflow's; this
 is the push's, across every check.

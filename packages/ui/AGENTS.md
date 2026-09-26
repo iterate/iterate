@@ -62,8 +62,6 @@ To bump the CLI, change the `shadcn` pin in `package.json` and refresh. To vendo
   The fix is a refresh, even when the difference is upstream moving rather than a hand edit. It is
   not a required check, and a pull request that leaves these files alone never runs it: it needs
   the network.
-- **Daily**, `.depot/workflows/shadcn-upstream.yml` runs `shadcn-drift.ts report` on main and posts
-  to Slack #ci when the set of files upstream has moved changes.
 
 ### Where the local changes went
 

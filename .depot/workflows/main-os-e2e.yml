@@ -14,18 +14,14 @@
 # Runs never cancel each other: one at a time, since each redeploys the preview the run before it
 # tests, and a push that lands meanwhile queues, where Depot keeps only the newest (a burst of merges
 # tests its last commit). So every started run that is not cancelled by hand reaches a verdict, a
-# job that hits its timeout counting as red. The `alert` job pages #error-pulse only when main
-# changes state — once when it goes red, naming the failed jobs and the failing rows, once when it is
-# green again (scripts/ci/main-e2e-alert.ts) — and pages the rows tagged `slow` the same way under
-# their own name, "slow e2e rows", so a slow row that breaks while main is already red still pages
-# (docs/testing.md#slow-rows). A run off main pages nobody: it prints what it would post. Nothing is
-# written to any PR. The `trace` job, beside
-# alert, posts the "CI trace" and "Playwright report" statuses on the pushed commit, as a PR
-# preview's does (docs/ci-traces.md).
+# job that hits its timeout counting as red. The health job pages its changes of state from the
+# jobs' results and the suite summaries they upload with their flake records
+# (docs/depot-ci.md#health). Nothing is written to any PR. The `trace` job
+# posts the "CI trace" and "Playwright report" statuses on the pushed commit, as a PR preview's does
+# (docs/ci-traces.md).
 #
 # The script is apps/os/scripts/preview.ts (the same commands as a PR's preview, keyed by name).
-# The only Depot secret is DOPPLER_TOKEN; Doppler os/preview supplies the Cloudflare
-# credentials, _shared/prd the Slack token and the telemetry finalizer's config.
+# The only Depot secret is DOPPLER_TOKEN; Doppler os/preview supplies the Cloudflare credentials.
 
 name: Main OS e2e
 
@@ -122,10 +118,10 @@ jobs:
         run: doppler run -- pnpm preview deploy
 
   # THE TWO SUITES, as a PR's Preview OS runs them (preview-os.yml): E2E tests and Browser specs,
-  # side by side after the deploy, and ONE DEFINITION. Browser specs runs E2E tests' runner, outputs
-  # and steps (the `suite-runner`, `suite-outputs` and `suite-steps` anchors); the two differ only in
-  # the suite their env names. Their steps are a PR preview's, less the guard and the PR's checkouts,
-  # plus the failing rows the alert names (scripts/ci/depot-workflows.test.ts keeps them alike).
+  # side by side after the deploy, and ONE DEFINITION. Browser specs runs E2E tests' runner and steps
+  # (the `suite-runner` and `suite-steps` anchors); the two differ only in the suite their env names.
+  # Their steps are a PR preview's, less the guard and the PR's checkouts
+  # (scripts/ci/depot-workflows.test.ts keeps them alike).
   e2e:
     name: E2E tests
     needs: deploy
@@ -140,18 +136,13 @@ jobs:
       FLAKE_SUITE: preview-e2e
       TEST_TELEMETRY_EXPECTED_WORKSPACES: os
       # every row, the ones tagged `slow` too: most PRs skip them (docs/testing.md#slow-rows). The
-      # alert pages them under their own name, from the verdict the failing-rows step judges.
+      # health job pages them under their own name.
       E2E_SLOW_ROWS: run
-      JUDGED_SUITE: slow e2e rows
-      JUDGED_TAG: slow
       # TEST TELEMETRY, as a PR preview's test jobs write it; main's flake records and suite
       # summaries feed the flake dashboard through the test evidence in R2.
       TEST_TELEMETRY_ARTIFACT_DIR: test-results/ci-telemetry/raw
       TEST_TELEMETRY_BRANCH: main
       TEST_TELEMETRY_HEAD_SHA: ${{ github.sha }}
-    outputs: &suite-outputs
-      failing-rows: ${{ steps.failing-rows.outputs.failing-rows }}
-      suite-verdict: ${{ steps.failing-rows.outputs.suite-verdict }}
     steps: &suite-steps
       # EVIDENCE PER JOB ATTEMPT (docs/depot-ci.md#artifacts-per-job-attempt): the artifacts this job
       # uploads carry its attempt's id, so a retry's uploads sit beside the failed attempt's instead of
@@ -182,15 +173,6 @@ jobs:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           E2E_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
         run: doppler run -- pnpm preview "$SUITE"
-      # The rows the alert names when main goes red, and the verdict of the suite the job judges
-      # (JUDGED_SUITE, the rows tagged JUDGED_TAG), which the alert pages under its own name. A job
-      # that judges none (both empty) outputs only its failing rows.
-      - name: Collect the failing rows
-        id: failing-rows
-        if: always()
-        run: >-
-          pnpm tsx scripts/ci/main-e2e-alert.ts failing-rows --dir test-results/ci-telemetry/raw
-          --suite "$JUDGED_SUITE" --tag "$JUDGED_TAG"
       - name: Check test telemetry and write the suite summary
         if: always()
         run: pnpm tsx scripts/ci/upload-test-telemetry.ts --flake-suites "$FLAKE_SUITE" ${{ cancelled() && '--cancelled' || '' }}
@@ -274,12 +256,11 @@ jobs:
       TEST_TELEMETRY_ARTIFACT_DIR: test-results/ci-telemetry/raw
       TEST_TELEMETRY_BRANCH: main
       TEST_TELEMETRY_HEAD_SHA: ${{ github.sha }}
-    outputs: *suite-outputs
     steps: *suite-steps
 
   # THE CI TRACE, as a PR preview's trace job makes it (preview-os.yml): the deploy and two
   # test jobs' timings and markers, uploaded, then the "CI trace" and "Playwright report" statuses on
-  # the pushed commit. Beside alert, which waits for none of it.
+  # the pushed commit.
   trace:
     name: CI trace
     needs: [deploy, e2e, specs]
@@ -326,28 +307,3 @@ jobs:
         run: >-
           doppler run --project _shared --config preview --
           pnpm exec trpc-cli scripts/ci/tracing/cli.ts publish ci-trace.ignoreme
-
-  # Main's and the slow rows' state changes only: red once, green again once. A job that hit its
-  # timeout is red; a run cancelled by hand gets no alert, and a run off main pages nobody.
-  alert:
-    name: alert
-    needs: [deploy, e2e, specs]
-    if: ${{ !cancelled() }}
-    runs-on:
-      size: 2x8
-      image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
-    timeout-minutes: 10
-    steps:
-      - name: Checkout main
-        uses: actions/checkout@v4
-        with:
-          clean: false
-          ref: ${{ github.sha }}
-      - name: Reconcile dependencies (baked)
-        run: node scripts/depot-ci/dependencies.mjs install
-      - name: Page #error-pulse when main changes state
-        env:
-          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-          NEEDS: ${{ toJSON(needs) }}
-        run: >-
-          pnpm tsx scripts/ci/main-e2e-alert.ts alert --ref "${{ github.ref }}"

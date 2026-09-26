@@ -4,10 +4,10 @@ The Preview OS workflow (`.depot/workflows/preview-os.yml`) and Main OS e2e
 (`.depot/workflows/main-os-e2e.yml`) each end in a CI trace job (`trace`),
 reporting only. It runs once the jobs it `needs` have settled, whatever their
 outcome: Deploy preview, E2E tests and Browser specs (`deploy`, `e2e`, `specs`)
-in both workflows (main's `alert` runs beside it and waits for none of it). A PR
-that changes no preview path deploys nothing and gets no trace. A PR's trace
-job first writes the two suites' lines into the PR body (`pnpm preview
-suite-lines`, from the lines the suites hand over as their jobs' outputs).
+in both workflows. A PR that changes no preview path deploys nothing and gets no
+trace. A PR's trace job first writes the two suites' lines into the PR body
+(`pnpm preview suite-lines`, from the lines the suites hand over as their jobs'
+outputs).
 `scripts/ci/tracing/cli.ts current` reads
 the run from Depot and writes `trace.html` and `trace.json` for exactly those
 jobs; the job uploads them as the `public-ci-trace-<workflow>-<execution>`
@@ -56,7 +56,7 @@ labelled upper bound.
 
 This is the Preview OS or Main OS e2e workflow's own time to green. How long a
 PR push waits for every check, Lint and Test included, is measured hourly across
-all pushes by the PR time to green guard
+all pushes by the health job's PR time to green
 ([Depot CI](depot-ci.md#pr-time-to-green)), from the same clock.
 
 Elapsed metrics start at the run's creation, so they include time waiting to

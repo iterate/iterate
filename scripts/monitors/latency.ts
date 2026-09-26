@@ -1,9 +1,10 @@
-// scripts/ci/os-latency-guard.ts — THE LATENCY GUARD'S JUDGE (.depot/workflows/os-latency.yml, every
-// 3 hours, against main redeployed to a preview that nothing else touches). It reads
-// one run of apps/os's perf suite — Vitest's JSON report, where each row left its raw samples on its
-// meta (apps/os/perf/record.ts) — and judges every metric's median against two lines:
+// scripts/monitors/latency.ts — THE LATENCY CHECK of the hourly health job (./health.ts). Every 3
+// hours .depot/workflows/os-latency.yml runs apps/os's perf suite against main redeployed to a preview
+// that nothing else touches and keeps Vitest's JSON report, where each row left its raw samples on its
+// meta (apps/os/perf/record.ts), as its `os-latency-report` artifact. The health job judges each
+// report it has not judged, in order, every metric's median against two lines:
 //   • its BUDGET (apps/os/perf/latency.ts, calibrated on main with headroom), and
-//   • a sharp REGRESSION against the guard's own rolling baseline, the last 10 main runs: more than
+//   • a sharp REGRESSION against the check's own rolling baseline, the last 10 main runs: more than
 //     3× their median (the calibration's runs of one commit spread up to 2.4× theirs: fan50.all,
 //     x10.answered) and 250 ms more (below that a round trip's weather decides, and the budget
 //     guards), AND slower than the slowest of them that crossed no line — so a metric whose runs
@@ -11,51 +12,42 @@
 //     own spread, and one slow run does not raise the line the next run is judged by. For a rate:
 //     under a third of the median and under the lowest. A regression that lasts moves the median in ~6
 //     runs; the metric then clears, and its green page names the baseline it moved to.
-// Every measurement goes to PostHog (`os latency measured`: metric, percentile, value, sha, run). The
-// page is the alarm and it pages #error-pulse on a change of state only: RED once when a metric
-// crossed a line in two runs in a row (one slow run is weather; the next one confirms it — at most 3
-// hours later), GREEN once when every red metric stayed under its lines two runs in a row. A page
-// leaves the run green: a scheduled run reports on main's head, where red reads as "this commit
-// broke". A BROKEN PROBE fails the run instead: a row that failed for anything but a budget, a metric
-// no row recorded, no report — unless the platform broke it (PLATFORM_FAILURES below): ONE row that
-// a platform failure broke, and that did not break in the run before, is RECORDED — a warning, a
-// line of the step summary and a PostHog event (`os latency probe broken`) — and the run stays green.
-// The same probe broken two runs in a row, two probes broken in one run, or anything else, fails it.
-// Recorded or red, every broken probe is on the step summary and in PostHog.
+// Every measurement goes to PostHog (`os latency measured`: metric, percentile, value, sha, run). It
+// pages on a change of state only: RED once when a metric crossed a line in two runs in a row (one
+// slow run is weather; the next one confirms it — at most 3 hours later), GREEN once when every red
+// metric stayed under its lines two runs in a row. A BROKEN PROBE fails the health run instead: a row
+// that failed for anything but a budget, a metric no row recorded, no report — unless the platform
+// broke it (PLATFORM_FAILURES below): ONE row that a platform failure broke, and that did not break in
+// the run before, is RECORDED — a warning, a line of the step summary and a PostHog event (`os latency
+// probe broken`). The same probe broken two runs in a row, two probes broken in one run, or anything
+// else, is red. Recorded or red, every broken probe is on the step summary and in PostHog.
 //
-// The memory between runs is the previous main run's `os-latency-state` artifact (depot.ts
-// `saveNewestArtifactFile`, `stateArtifact` below): the last 20 main runs' medians, what each
-// crossed and which probes broke, and which metrics are red. A run off main, or with a budget scale (the dispatch's forced alert), is a TEST RUN: it
-// pages whatever crossed in this run alone, marked 🧪 and mentioning nobody, and keeps no state.
-//
-//   pnpm tsx scripts/ci/os-latency-guard.ts previous-state --out <state.json>
-//   pnpm tsx scripts/ci/os-latency-guard.ts judge --report <vitest.json> [--state <state.json>] \
-//     [--state-out <next.json>] --run <id> --ref <git ref> --trigger <event> [--budget-scale 0.01] [--dry-run]
-import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
-import { execFileSync } from "node:child_process";
-import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
-import { createCli } from "trpc-cli";
+// Its memory, in the health job's state, is the last 20 main runs' medians, what each crossed and
+// which probes broke, which metrics are red, and the newest report it judged.
+import { appendFileSync } from "node:fs";
 import { z } from "zod";
 import {
   BUDGET_MISSED,
-  budgetLine,
   crosses,
   LATENCY_METRICS,
   summarize,
   type LatencyMetricName,
 } from "../../apps/os/perf/latency.ts";
-import { osEnvs } from "../../envs.ts";
-import { saveNewestArtifactFile } from "./depot.ts";
-import { sendPostHogEvents, systemEvent } from "./posthog-events.ts";
-import { getSlackClient, onCallMention, slackChannelIds, slackEscape } from "./slack.ts";
+import {
+  depotWorkflowUrl,
+  settledWorkflows,
+  workflowArtifact,
+  type DepotApi,
+} from "../ci/depot.ts";
+import { systemEvent } from "../ci/posthog-events.ts";
+import { commitText, type Page } from "./page.ts";
 
-/** Where one run leaves its state for the next: the workflow's `name:`, the artifact
- *  .depot/workflows/os-latency.yml uploads, the file in it. */
-export const stateArtifact = {
+/** What the check reads: the scheduled runs of this workflow (its `name:`), and this file of the
+ *  artifact each keeps. */
+export const latencyReport = {
   workflow: "OS latency",
-  artifact: "os-latency-state",
-  file: "state.json",
+  artifact: "os-latency-report",
+  file: "perf-report.json",
 };
 /** How many main runs the state remembers. */
 const HISTORY_RUNS = 20;
@@ -72,9 +64,9 @@ const REGRESSION_FLOOR_MS = 250;
 
 const MetricName = z.enum(Object.keys(LATENCY_METRICS) as [LatencyMetricName]);
 
-/** What one run hands the next: the main runs it knows, oldest first, and the metrics paged red. */
-export const GuardState = z.object({
-  schemaVersion: z.literal(1),
+/** What the check remembers between runs, in the health job's state: the main runs it knows, oldest
+ *  first, the metrics paged red, and when the newest report it judged was measured. */
+export const LatencyMemory = z.object({
   runs: z.array(
     z.object({
       sha: z.string(),
@@ -89,8 +81,10 @@ export const GuardState = z.object({
     }),
   ),
   red: z.array(MetricName),
+  /** The newest OS latency workflow judged: its creation, which orders them. */
+  judgedAt: z.iso.datetime().optional(),
 });
-export type GuardState = z.infer<typeof GuardState>;
+export type LatencyMemory = z.infer<typeof LatencyMemory>;
 
 /** What a perf row leaves on its meta (apps/os/perf/record.ts `TaskMeta`): its samples, and, when
  *  it failed, the causes and lost sockets behind the failure (perf/setup.ts) and the push row's
@@ -261,7 +255,7 @@ export function brokenProbes(broken: BrokenProbe[], readings: Reading[]): Broken
  *  remembers); otherwise RED, `redBecause` saying why. Pure. */
 export function judgeBroken(
   broken: BrokenProbe[],
-  previous: GuardState["runs"][number] | undefined,
+  previous: LatencyMemory["runs"][number] | undefined,
 ) {
   return broken.map((probe) => {
     const redBecause = !probe.platform
@@ -290,19 +284,18 @@ export function brokenLine(probe: BrokenVerdict) {
     : `RECORDED, broken by the platform: ${what}. The run stays green; broken again in the next run, it is red.`;
 }
 
-/** Every metric of this run against its budget (times `scale`) and the baseline `history` gives it;
- *  a metric no row recorded is `missing`. Pure. */
+/** Every metric of this run against its budget and the baseline `history` gives it; a metric no row
+ *  recorded is `missing`. Pure. */
 export function judgeRun(input: {
   samples: Partial<Record<LatencyMetricName, number[]>>;
-  history: GuardState["runs"];
-  scale: number;
+  history: LatencyMemory["runs"];
 }) {
   return MetricName.options.map((metric) => {
     const recorded = input.samples[metric];
     if (!recorded?.length) return { metric, missing: true as const };
     const summary = summarize(recorded);
     const value = summary.p50;
-    const budget = budgetLine(metric, input.scale);
+    const budget = LATENCY_METRICS[metric].budget;
     const window = baselineWindow(metric, input.history);
     const baseline = window && summarize(window.map((run) => run.value)).p50;
     const regressionLine = window && regressionLineOf(metric, window);
@@ -327,7 +320,7 @@ type Measured = Extract<Reading, { missing: false }>;
 
 /** The metric's median in each of the newest BASELINE_RUNS runs that measured it, and whether
  *  it crossed a line there, or undefined below BASELINE_MIN_RUNS. Pure. */
-export function baselineWindow(metric: LatencyMetricName, history: GuardState["runs"]) {
+export function baselineWindow(metric: LatencyMetricName, history: LatencyMemory["runs"]) {
   const window = history
     .flatMap((run) => {
       const value = run.judged[metric];
@@ -356,16 +349,18 @@ function regressionLineOf(
  *  lines in both.
  *  `red` pages the metrics that just turned; `green` pages once nothing is red any more. Pure. */
 export function transition(input: {
-  state: GuardState;
+  state: LatencyMemory;
   readings: Reading[];
-  run: GuardState["runs"][number];
+  run: LatencyMemory["runs"][number];
 }) {
   // "the run before" is the newest run that measured the metric: a run whose row broke says
   // nothing about it, so it neither breaks a streak of crossings nor one of runs under the lines
   const before = (metric: LatencyMetricName) =>
     input.state.runs.findLast((run) => run.judged[metric] !== undefined);
-  const measuredUnder = (run: GuardState["runs"][number] | undefined, metric: LatencyMetricName) =>
-    run?.judged[metric] !== undefined && !run.over.includes(metric);
+  const measuredUnder = (
+    run: LatencyMemory["runs"][number] | undefined,
+    metric: LatencyMetricName,
+  ) => run?.judged[metric] !== undefined && !run.over.includes(metric);
   const turnedRed = input.run.over.filter(
     (metric) => before(metric)?.over.includes(metric) && !input.state.red.includes(metric),
   );
@@ -373,10 +368,10 @@ export function transition(input: {
     (metric) => measuredUnder(input.run, metric) && measuredUnder(before(metric), metric),
   );
   const red = [...input.state.red.filter((metric) => !cleared.includes(metric)), ...turnedRed];
-  const next: GuardState = {
-    schemaVersion: 1,
+  const next: LatencyMemory = {
     runs: [...input.state.runs, input.run].slice(-HISTORY_RUNS),
     red,
+    judgedAt: input.state.judgedAt,
   };
   const page =
     turnedRed.length > 0 ? "red" : input.state.red.length > 0 && red.length === 0 ? "green" : null;
@@ -398,8 +393,8 @@ export function rememberRun(
   };
 }
 
-/** The Slack message for a page: red names each metric that turned (or, in a test run, crossed) with
- *  its value, the line it crossed and the baseline; green names what came back. Pure. */
+/** The page: red names each metric that turned (or, on a test page, crossed) with its value, the
+ *  line it crossed and the baseline; green names what came back. Pure. */
 export function renderPage(input: {
   page: "red" | "green";
   readings: Reading[];
@@ -407,13 +402,12 @@ export function renderPage(input: {
   stillRed: LatencyMetricName[];
   commit: { sha: string; subject: string };
   runUrl?: string;
-  testRun?: { scale: number };
-}) {
-  const commit = `\`${input.commit.sha.slice(0, 9)}\` (${slackEscape(input.commit.subject)})`;
+}): Page {
+  const commit = commitText(input.commit);
   const byMetric = new Map(input.readings.map((reading) => [reading.metric, reading]));
   const lines = input.metrics.map((metric) => {
     const reading = byMetric.get(metric);
-    if (!reading || reading.missing) return `• ${metric}: not measured`;
+    if (!reading || reading.missing) return `${metric}: not measured`;
     const { unit } = LATENCY_METRICS[metric];
     const rate = unit === "events/s";
     const value = `median ${format(reading.value)} ${unit}`;
@@ -430,22 +424,21 @@ export function renderPage(input: {
       ? `min ${format(reading.summary.min)}`
       : `max ${format(reading.summary.max)}`;
     return input.page === "red"
-      ? `• *${metric}* ${value}: ${crossed.join(" and ")} (${baseline}); n=${reading.summary.n}, ${extreme}`
-      : `• ${metric} ${value} (budget ${format(reading.budget)}, ${baseline})`;
+      ? `*${metric}* ${value}: ${crossed.join(" and ")} (${baseline}); n=${reading.summary.n}, ${extreme}`
+      : `${metric} ${value} (budget ${format(reading.budget)}, ${baseline})`;
   });
-  const test = input.testRun ? `🧪 TEST RUN (budgets × ${input.testRun.scale}) ` : "";
-  const heading =
-    input.page === "red"
-      ? `${test}🔴 latency over its lines at ${commit}${input.testRun ? "" : ` ${onCallMention}`}`
-      : `${test}🟢 latency back under its lines at ${commit}`;
-  return [
-    heading,
-    ...lines,
-    input.stillRed.length > 0 && `still red: ${input.stillRed.join(", ")}`,
-    input.runUrl && `<${input.runUrl}|the run>`,
-  ]
-    .filter(Boolean)
-    .join("\n");
+  return {
+    tone: input.page,
+    headline:
+      input.page === "red"
+        ? `latency over its lines at ${commit}`
+        : `latency ${input.metrics.length > 0 ? "back " : ""}under its lines at ${commit}`,
+    details: [
+      ...lines,
+      ...(input.stillRed.length > 0 ? [`still red: ${input.stillRed.join(", ")}`] : []),
+    ],
+    link: input.runUrl,
+  };
 }
 
 type EventContext = {
@@ -515,134 +508,148 @@ export function latencyEvents(readings: Reading[], context: EventContext) {
     );
 }
 
-/** Judge one run of the perf suite: log every metric, page on a change of state, keep the state,
- *  send PostHog its events, and throw when the probe is broken in a way that turns the run red. */
-export async function judge(options: {
-  /** The perf suite's vitest JSON report. */
-  report: string;
-  /** The previous run's state (`previous-state --out`). */
-  state?: string;
-  /** Where to write the state for the next run (only a real run on main writes one). */
-  stateOut?: string;
-  /** The run's id. */
-  run: string;
-  /** The run's git ref. */
-  ref: string;
-  /** The event that started the run. */
-  trigger: string;
-  /** Scales every budget (the dispatch's forced alert); anything but 1 is a test run. Default 1. */
-  budgetScale?: number;
-  /** Print the page and the events instead of sending them. */
-  dryRun?: boolean;
+/** Judge one perf report (undefined when the run kept none) against `memory`: log every metric,
+ *  and return the memory after it, the page it owes (on a test run, whatever crossed in this run
+ *  alone, and no memory), its PostHog events and its broken probes. */
+export function judgeReport(input: {
+  report: unknown;
+  memory: LatencyMemory;
+  run: { sha: string; subject: string; run: string; at: string; url?: string };
+  testRun: boolean;
 }) {
-  const budgetScale = z
-    .number()
-    .positive()
-    .parse(options.budgetScale ?? 1);
-  const testRun = budgetScale !== 1 || options.ref !== "refs/heads/main";
-  const state: GuardState =
-    options.state && existsSync(options.state)
-      ? GuardState.parse(JSON.parse(readFileSync(options.state, "utf8")))
-      : { schemaVersion: 1, runs: [], red: [] };
-  const report = existsSync(options.report)
-    ? readReport(VitestReport.parse(JSON.parse(readFileSync(options.report, "utf8"))))
-    : {
-        samples: {},
-        broken: [{ probe: options.report, error: "no report: the perf suite did not run" }],
-      };
-  const readings = judgeRun({
-    samples: report.samples,
-    history: state.runs,
-    scale: budgetScale,
-  });
-  const broken = judgeBroken(brokenProbes(report.broken, readings), state.runs.at(-1));
-  const sha = execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim();
-  const subject = execFileSync("git", ["log", "-1", "--format=%s"], { encoding: "utf8" }).trim();
-  const at = new Date().toISOString();
-  const run = rememberRun(readings, { sha, run: options.run, at }, broken);
+  const { memory, run: measured } = input;
+  const report =
+    input.report === undefined
+      ? {
+          samples: {},
+          broken: [{ probe: "the perf report", error: "no report: the perf suite did not run" }],
+        }
+      : readReport(VitestReport.parse(input.report));
+  const readings = judgeRun({ samples: report.samples, history: memory.runs });
+  const broken = judgeBroken(brokenProbes(report.broken, readings), memory.runs.at(-1));
+  const run = rememberRun(readings, measured, broken);
   for (const reading of readings)
     if (!reading.missing)
       console.log(
         `${reading.over ? "OVER " : "     "}${reading.metric}: median ${format(reading.value)} — budget ${format(reading.budget)}${reading.baseline === undefined ? "" : `, baseline ${format(reading.baseline)}, regression line ${format(reading.regressionLine!)}`} (n=${reading.summary.n} p50=${format(reading.summary.p50)} p95=${format(reading.summary.p95)} max=${format(reading.summary.max)})`,
       );
-
-  const outcome = testRun
+  const outcome = input.testRun
     ? {
-        next: undefined,
-        page: run.over.length > 0 ? ("red" as const) : null,
+        next: memory,
+        page: run.over.length > 0 ? ("red" as const) : ("green" as const),
         turnedRed: run.over,
         cleared: [],
       }
-    : transition({ state, readings, run });
+    : transition({ state: memory, readings, run });
   const page =
     outcome.page &&
     renderPage({
       page: outcome.page,
       readings,
       metrics: outcome.page === "red" ? outcome.turnedRed : outcome.cleared,
-      stillRed: outcome.next?.red.filter((metric) => !outcome.turnedRed.includes(metric)) ?? [],
-      commit: { sha, subject },
-      runUrl: process.env.DEPOT_JOB_URL,
-      testRun: testRun ? { scale: budgetScale } : undefined,
+      stillRed: outcome.next.red.filter((metric) => !outcome.turnedRed.includes(metric)),
+      commit: measured,
+      runUrl: measured.url,
     });
   console.log(
     JSON.stringify({
-      testRun,
+      run: measured.run,
       over: run.over,
-      red: outcome.next?.red,
+      red: outcome.next.red,
       turnedRed: outcome.turnedRed,
       cleared: outcome.cleared,
       broken: broken.map(({ probe, platform, redBecause }) => ({ probe, platform, redBecause })),
     }),
   );
-  if (page) console.log(`\n${page}\n`);
-  else console.log("latency: no change of state, nothing to page");
-  // Every broken probe on the job's summary, whatever its verdict, and a recorded one as a warning
-  // too: nothing else marks its run.
-  if (broken.length > 0 && process.env.GITHUB_STEP_SUMMARY)
-    appendFileSync(
-      process.env.GITHUB_STEP_SUMMARY,
-      `### Broken latency probes\n\n${broken.map((probe) => `- ${brokenLine(probe)}\n`).join("")}`,
-    );
-  for (const probe of broken)
-    if (!probe.redBecause)
-      console.log(
-        `::warning title=Latency probe broken by the platform::${escapeData(brokenLine(probe))}`,
-      );
-
-  // The order is the state's: the page first, since a red it records must have been posted (a page
-  // that could not post leaves the state as it was, so the next run owes it again); then the state,
-  // so neither a PostHog outage nor a broken probe costs the guard its memory; then PostHog.
-  if (page && !options.dryRun)
-    await getSlackClient().chat.postMessage({
-      channel: slackChannelIds["#error-pulse"],
-      text: page,
-    });
-  if (options.stateOut && outcome.next) {
-    mkdirSync(dirname(options.stateOut), { recursive: true });
-    writeFileSync(options.stateOut, `${JSON.stringify(outcome.next, null, 2)}\n`);
-  }
   const context = {
-    sha,
-    run: options.run,
-    ref: options.ref,
-    trigger: options.trigger,
-    testRun,
-    at,
+    sha: measured.sha,
+    run: measured.run,
+    ref: "refs/heads/main",
+    trigger: "schedule",
+    testRun: input.testRun,
+    at: measured.at,
   };
-  const events = [...latencyEvents(readings, context), ...brokenEvents(broken, context)];
-  if (options.dryRun) console.log(`dry run: ${events.length} PostHog events and the page not sent`);
-  // The iterate project in PostHog EU, as the CI telemetry sync reports to it.
-  else
-    await sendPostHogEvents(events, {
-      apiKey: z.string().parse(osEnvs.prd?.posthogProjectKey),
-      host: "https://eu.i.posthog.com",
-    });
-  const red = broken.filter((probe) => probe.redBecause);
-  if (red.length > 0)
-    throw new Error(
-      `the latency probe is broken:\n${red.map((probe) => `  ${brokenLine(probe)}`).join("\n")}`,
+  return {
+    memory: { ...outcome.next, judgedAt: measured.at },
+    page,
+    events: [...latencyEvents(readings, context), ...brokenEvents(broken, context)],
+    broken,
+  };
+}
+
+/** Judge the OS latency reports measured since `memory.judgedAt`, oldest first (on a test run, the
+ *  newest alone). With no `judgedAt` (the first run) every listed report builds the history, and only
+ *  the newest pages, sends PostHog its events or fails the run (brokenReport). */
+export async function checkLatency(input: {
+  depot: DepotApi;
+  memory: LatencyMemory;
+  testRun: boolean;
+  subject: (sha: string) => Promise<string>;
+}) {
+  const settled = await settledWorkflows(input.depot, {
+    name: latencyReport.workflow,
+    triggers: ["schedule"],
+    after: input.testRun ? undefined : input.memory.judgedAt,
+  });
+  const workflows = input.testRun ? settled.slice(-1) : settled;
+  let memory = input.memory;
+  const pages: Page[] = [];
+  const events: ReturnType<typeof judgeReport>["events"] = [];
+  const red: BrokenVerdict[] = [];
+  for (const [index, workflow] of workflows.entries()) {
+    const counts = index === workflows.length - 1 || !!input.memory.judgedAt;
+    const files = await workflowArtifact(
+      input.depot,
+      workflow,
+      (name) => name === latencyReport.artifact,
     );
+    const bytes = files?.[latencyReport.file];
+    const judged = judgeReport({
+      report: bytes && JSON.parse(new TextDecoder().decode(bytes)),
+      memory,
+      run: {
+        sha: workflow.sha,
+        subject: await input.subject(workflow.sha),
+        run: workflow.workflowId,
+        at: workflow.createdAt,
+        url: depotWorkflowUrl(workflow.workflowId),
+      },
+      testRun: input.testRun,
+    });
+    memory = judged.memory;
+    if (!counts) continue;
+    if (judged.page) pages.push(judged.page);
+    events.push(...judged.events);
+    red.push(...judged.broken.filter((probe) => probe.redBecause));
+    const reported = brokenReport(judged.broken);
+    if (reported.summary && process.env.GITHUB_STEP_SUMMARY)
+      appendFileSync(process.env.GITHUB_STEP_SUMMARY, reported.summary);
+    for (const warning of reported.warnings) console.log(warning);
+  }
+  return {
+    memory,
+    pages,
+    status: memory.red.length > 0 ? ("red" as const) : ("green" as const),
+    events,
+    failures: red.map((probe) => `the latency probe is broken: ${brokenLine(probe)}`),
+  };
+}
+
+/** The job summary's section for a run's broken probes, whatever their verdict, and a warning
+ *  annotation for each recorded one: nothing else marks its run. Pure. */
+export function brokenReport(broken: BrokenVerdict[]) {
+  return {
+    summary:
+      broken.length > 0
+        ? `### Broken latency probes\n\n${broken.map((probe) => `- ${brokenLine(probe)}\n`).join("")}`
+        : undefined,
+    warnings: broken
+      .filter((probe) => !probe.redBecause)
+      .map(
+        (probe) =>
+          `::warning title=Latency probe broken by the platform::${escapeData(brokenLine(probe))}`,
+      ),
+  };
 }
 
 function format(value: number) {
@@ -653,14 +660,3 @@ function format(value: number) {
 function escapeData(text: string) {
   return text.replaceAll("%", "%25").replaceAll("\r", "%0D").replaceAll("\n", "%0A");
 }
-
-/** Save the previous main run's state artifact to --out, for `judge --state`. */
-export async function previousState(options: {
-  /** Where to save the state file. */
-  out: string;
-}) {
-  console.log(await saveNewestArtifactFile({ ...stateArtifact, out: options.out }));
-}
-
-if (isMainModule(import.meta.url))
-  void createCli({ ...import.meta, name: "os-latency-guard" }).run();

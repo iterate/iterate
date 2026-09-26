@@ -164,10 +164,10 @@ writes nothing. File names carry a short hash of the full artifact ID.
 `TEST_TELEMETRY_PULL_REQUEST_NUMBER` pin the tested source when it differs from
 the workflow's ref.
 
-A raw artifact lives for one CI run: the same job's finalizer reads it, and so
-does Main OS e2e's failing-rows step (`scripts/ci/main-e2e-alert.ts`). Change
-its schema in place, together with those readers; there is no versioned
-migration.
+A raw artifact lives for one CI run: the same job's finalizer reads it, and the
+health job reads OS real model's (`scripts/monitors/e2e.ts`, which parses only
+the fields it reads). Change its schema in place, together with those readers;
+there is no versioned migration.
 
 What the artifacts hold, by runner:
 
@@ -273,7 +273,7 @@ reporters, unexecuted tests, wrong commits, interrupted runs and damaged/missing
 records cannot certify a clean result. Focused local runs do not publish complete
 suite summaries. The preview e2e suite's summary also says whether it ran the
 rows tagged `slow` (`slowRows: "ran" | "skipped"`; absent when no row is tagged `slow`, so every
-row ran), which the PR time to green guard splits pushes on ([Depot CI](depot-ci.md#pr-time-to-green)).
+row ran), which PR time to green splits pushes on ([Depot CI](depot-ci.md#pr-time-to-green)).
 
 Each suite shows its latest complete main commit, run, test count and failure
 count. An incomplete attempt keeps that provenance visible with a warning,

@@ -7,7 +7,7 @@ import {
   postPageUnlessRecent,
   renderDailyThread,
   upsertDetailsReply,
-} from "./do-duration-alert.ts";
+} from "./do-cost.ts";
 
 const now = new Date("2026-09-04T05:41:00Z");
 const runUrl = "https://github.com/iterate/iterate/actions/runs/1";

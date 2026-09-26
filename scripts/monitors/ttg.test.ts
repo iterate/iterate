@@ -5,11 +5,10 @@ import {
   measurePush,
   pageFor,
   pushEvents,
-  readState,
   renderPage,
   summarizePushes,
   type RunMetrics,
-} from "./pr-ttg-guard.ts";
+} from "./ttg.ts";
 
 // Depot's GetRunMetrics for run pxt90nlfvh (PR #3009, 2026-09-24), cut to the fields the guard reads.
 const pxt90nlfvh: RunMetrics = {
@@ -559,28 +558,21 @@ const twentyPushes = summarizePushes(
   { from: Date.parse("2026-09-24T12:00:00Z"), to: Date.parse("2026-09-24T13:00:00Z") },
 );
 
-test("a red page lists its lines, the job that ends the pushes and each group, mentioning Jonas", () => {
+test("a red page gives its lines and the job that ends the pushes", () => {
   expect(
     renderPage({
       page: "over",
       summary: twentyPushes,
       lastPage: undefined,
       runUrl: "https://depot.dev/run",
-      testRun: false,
     }),
-  ).toBe(
-    [
-      "🔴 PR time to green over its lines <@U067G4QRFK2>: pushes that skipped the slow rows, last 24 h: p50 180 s (line 165 s), p90 187 s (line 200 s), n=20",
-      "Their critical path ends with preview-os.yml:specs on 20 of the 20",
-      "• Preview OS, slow rows skipped: time to green p50 180 s, p90 187 s (n=20; 20 ended by preview-os.yml:specs); first verdict p50 180 s, p90 187 s (n=20, 0 % red)",
-      "• Preview OS, every row: none green; first verdict p50 300 s, p90 300 s (n=1, 100 % red)",
-      "• Preview OS, no e2e summary: no pushes",
-      "• no Preview OS: time to green p50 190 s, p90 190 s (n=1; 1 ended by test.yml:test); first verdict p50 190 s, p90 190 s (n=1, 0 % red)",
-      "• every push: time to green p50 180 s, p90 188 s (n=21; 20 ended by preview-os.yml:specs); first verdict p50 181 s, p90 189 s (n=22, 5 % red)",
-      "slow rows ran in 5 % of Preview OS pushes; 0 superseded pushes left out",
-      "<https://depot.dev/run|the run>",
-    ].join("\n"),
-  );
+  ).toEqual({
+    tone: "red",
+    headline:
+      "PR time to green over its lines: pushes that skipped the slow rows, last 24 h: p50 180 s (line 165 s), p90 187 s (line 200 s), n=20",
+    details: ["their critical path ends with preview-os.yml:specs on 20 of the 20"],
+    link: "https://depot.dev/run",
+  });
 });
 
 test.for([
@@ -589,39 +581,30 @@ test.for([
     page: "worse",
     summary: twentyPushes,
     lastPage: { judgement: "over", bestP50: 158 },
-    testRun: false,
-    heading:
-      "🔴 PR time to green more than 20 s worse again <@U067G4QRFK2>: pushes that skipped the slow rows, last 24 h: p50 180 s (line 165 s; 158 s at best since the last page), p90 187 s (line 200 s), n=20",
+    tone: "red",
+    headline:
+      "PR time to green more than 20 s worse again: pushes that skipped the slow rows, last 24 h: p50 180 s (line 165 s; 158 s at best since the last page), p90 187 s (line 200 s), n=20",
   },
   {
-    name: "a test page mentions nobody",
-    page: "over",
-    summary: twentyPushes,
-    lastPage: undefined,
-    testRun: true,
-    heading:
-      "🧪 TEST RUN 🔴 PR time to green over its lines: pushes that skipped the slow rows, last 24 h: p50 180 s (line 165 s), p90 187 s (line 200 s), n=20",
-  },
-  {
-    name: "a green page mentions nobody",
+    name: "a green page",
     page: "under",
     summary: twentyPushes,
     lastPage: { judgement: "over", bestP50: 180 },
-    testRun: false,
-    heading:
-      "🟢 PR time to green back under its lines: pushes that skipped the slow rows, last 24 h: p50 180 s (line 165 s; 180 s at best since the last page), p90 187 s (line 200 s), n=20",
+    tone: "green",
+    headline:
+      "PR time to green back under its lines: pushes that skipped the slow rows, last 24 h: p50 180 s (line 165 s; 180 s at best since the last page), p90 187 s (line 200 s), n=20",
   },
   {
     name: "a test page before any push skipped the slow rows judges nothing",
     page: "too-few",
     summary: summarizePushes([], { from: 0, to: 1 }),
     lastPage: undefined,
-    testRun: true,
-    heading:
-      "🧪 TEST RUN ⚪ PR time to green not judged below 20 pushes: pushes that skipped the slow rows, last 24 h: none green",
+    tone: "none",
+    headline:
+      "PR time to green not judged below 20 pushes: pushes that skipped the slow rows, last 24 h: none green",
   },
-] as const)("$name", ({ heading, ...input }) => {
-  expect(renderPage(input).split("\n")[0]).toBe(heading);
+] as const)("$name", ({ tone, headline, ...input }) => {
+  expect(renderPage(input)).toMatchObject({ tone, headline });
 });
 
 test("one PostHog event per push with a verdict, the same id whenever it is sent", () => {
@@ -652,44 +635,6 @@ test("one PostHog event per push with a verdict, the same id whenever it is sent
   expect(pushEvents([push({ seconds: 150, e2e: "no-preview", minute: 0 })])[0]?.uuid).toBe(
     events[0]?.uuid,
   );
-});
-
-// The newest pr-ttg-state artifact of schemaVersion 1 (2026-09-26), cut to one push.
-const schemaVersion1 = {
-  schemaVersion: 1,
-  pushes: [
-    {
-      run: "j200wskz5n",
-      pr: 3225,
-      createdAt: "2026-09-26T19:42:23.012Z",
-      outcome: "green",
-      e2e: "slow-rows-skipped",
-      seconds: 178.6,
-    },
-  ],
-  paged: "over",
-};
-
-test.for([
-  { name: "no previous state starts empty", previous: undefined },
-  { name: "a state of another schemaVersion starts over", previous: schemaVersion1 },
-])("$name", ({ previous }) => {
-  // exact: starting over keeps no push and no page
-  expect(readState(previous)).toEqual({ schemaVersion: 2, pushes: [] });
-});
-
-test("a state of this version reads back as written, and one that does not parse throws", () => {
-  const state = {
-    schemaVersion: 2,
-    pushes: [
-      push({ seconds: 150, e2e: "no-summary", minute: 0 }),
-      push({ outcome: "not-a-push", minute: 1 }),
-    ],
-    lastPage: { judgement: "over", bestP50: 208 },
-  };
-  // exact: the state reads back untouched
-  expect(readState(JSON.parse(JSON.stringify(state)))).toEqual(state);
-  expect(() => readState({ ...schemaVersion1, schemaVersion: 2 })).toThrow();
 });
 
 function workflow(workflowId: string, name: string, status: string, finishedAt: string) {
