@@ -687,14 +687,15 @@ test("Main OS e2e runs on every main push a PR preview would run for", () => {
 
 // The checks a main push shows are the ones a PR's preview shows, and main is traced as a PR preview
 // is (docs/ci-traces.md). Only the trace's checkout and traced commit differ: main's pushed commit; a
-// PR's tested merge commit, with the statuses on its head.
+// PR's tested merge commit, with the statuses on its head. Main has no PR body, so no suites' lines.
 test("Main OS e2e names its checks as Preview OS does and traces them the same way", () => {
   const main = loadWorkflow(".depot/workflows/main-os-e2e.yml");
   const preview = loadWorkflow(".depot/workflows/preview-os.yml");
+  const prOnly = ["Record the traced commit", "Write the suites' lines into the PR body"];
   const trace = (workflow: Workflow) => ({
     env: { BASH_ENV: workflow.env?.BASH_ENV, CI_TRACE_ENABLED: workflow.env?.CI_TRACE_ENABLED },
     steps: (workflow.jobs.trace?.steps || []).filter(
-      (step) => step.uses !== "actions/checkout@v4" && step.name !== "Record the traced commit",
+      (step) => step.uses !== "actions/checkout@v4" && !prOnly.includes(step.name!),
     ),
   });
 

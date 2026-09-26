@@ -5,14 +5,15 @@
 // deploy (build, the D1 migrated and the Artifacts namespace, the secrets, `wrangler preview`, the
 // PR body and its status line), e2e and specs (the vitest e2e suite, `--slow-rows` picking the rows
 // tagged `slow`, scripts/slow-rows.ts, or the Playwright specs, against the live preview; the
-// suite's line under the status line), reset (delete, then deploy), delete (the preview, its D1,
+// suite's line, handed to the CI trace job), suite-lines (the CI trace job's: both suites' lines
+// under the status line, in one write), reset (delete, then deploy), delete (the preview, its D1,
 // Artifacts namespace, KV namespaces and R2 bucket, the apps on top), sweep (the stale previews and
 // the resources that outlived theirs — the rules are scripts/preview-sweep.ts), deploy-parents (the
 // workers every preview branches from, from this checkout: preview-parents.yml on every push to
 // main), reset-parent (the `os` parent's own data erased, then the parent deployed again:
 // preview-sweep.yml, nightly). `--dry-run` prints the plan.
 import { spawn, spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import process from "node:process";
@@ -72,6 +73,7 @@ import {
   configTemplateNames,
   deployWithStatus,
   lastLines,
+  parseSuiteLineOutputs,
   PREVIEW_CONFIG_NAME,
   PREVIEW_PARENT,
   isDurableObjectClassNotExportedError,
@@ -83,14 +85,16 @@ import {
   resolvePreviewName,
   PREVIEW_SUITES,
   splicePreviewStatus,
-  splicePreviewSuite,
   splicePullRequestBody,
-  suiteLineMayBeOverwritten,
+  spliceSuiteLines,
+  suiteLineOutput,
   templateQuickLaunches,
   writePreviewWranglerConfig,
+  writePullRequestBody,
   type PreviewStatus,
   type PreviewSuite,
   type PreviewSuiteStatus,
+  type PullRequestBody,
 } from "./preview-config.ts";
 import {
   planPreviewSweep,
@@ -122,6 +126,7 @@ const Command = z.enum([
   "sweep",
   "deploy-parents",
   "reset-parent",
+  "suite-lines",
 ]);
 type Command = z.infer<typeof Command>;
 /** The apps on top: every one by default, none, or (auto) the ones whose paths this PR changes. */
@@ -220,44 +225,20 @@ async function listAll<T>(cf: Cf, route: string) {
 /** The pull request `number` of this repository (GITHUB_REPOSITORY), as Octokit's parameters. */
 const pullRequest = (number: string | number) => ({ ...getRepo(), pull_number: Number(number) });
 
-/** Read, splice, write, read back: the PR body has no conditional update, so a person editing the
- *  description in the same seconds could lose one write or the other. Reading it back and
- *  re-splicing onto whatever is there now converges on both edits within a few rounds. `what` names
- *  the write in the log: the whole preview section, its status line, or a suite's line. A writer
- *  that may run at the same moment (the other suite's job: `mayBeOverwritten`, given the body just
- *  written) waits out that writer's read and PATCH before it reads back, since a PATCH made from a
- *  read that predates this write drops it. So every PATCH goes out once, straight after its read: a
- *  5xx is not asked again with a body read seconds earlier, the next round reads anew. */
-async function writePullRequestBody(
-  prNumber: string,
-  what: string,
-  splice: (body: string) => string,
-  mayBeOverwritten: (body: string) => boolean = () => false,
-) {
+/** The PR's body on GitHub, read and replaced (preview-config.ts `writePullRequestBody`). */
+function pullRequestBody(prNumber: string): PullRequestBody {
   const github = getOctokit();
-  const readBody = async () => (await github.rest.pulls.get(pullRequest(prNumber))).data.body || "";
-  for (let attempt = 1; attempt <= 3; attempt++) {
-    const before = await readBody();
-    const body = splice(before);
-    if (body === before) return console.log(`PR #${prNumber}'s body already carries ${what}`);
-    const patchError = await github.rest.pulls
-      .update({ ...pullRequest(prNumber), body, request: { askOnce: true } })
-      .then(
-        () => undefined,
-        (error: unknown) => error,
-      );
-    if (patchError) {
-      console.warn(`${describe(patchError)}; reading the body again`);
-      await new Promise((resolve) => setTimeout(resolve, 5000));
-    } else if (mayBeOverwritten(body)) await new Promise((resolve) => setTimeout(resolve, 3000));
-    const after = await readBody();
-    if (splice(after) === after)
-      return console.log(`wrote ${what} into the body of PR #${prNumber}`);
-    console.warn(
-      `PR #${prNumber}'s body changed under the write (attempt ${attempt}); re-splicing`,
-    );
-  }
-  throw new Error(`could not write ${what} into PR #${prNumber}'s body: it kept changing`);
+  return {
+    number: prNumber,
+    read: async () => (await github.rest.pulls.get(pullRequest(prNumber))).data.body || "",
+    replace: async (body) => {
+      await github.rest.pulls.update({
+        ...pullRequest(prNumber),
+        body,
+        request: { askOnce: true },
+      });
+    },
+  };
 }
 
 /** The commit this checkout is: the one the job deployed or tested (the PR merged into main in CI). */
@@ -267,35 +248,49 @@ function checkedOutCommit() {
   return result.stdout.trim();
 }
 
-/** Where the preview stands, as the PR body's status line (preview-config.ts `PreviewStatus`), or
- *  a suite's line under it (`PreviewSuiteStatus`): this checkout's commit, this CI job
- *  (`DEPOT_JOB_URL`), now. Only with a PR and a token; a write that fails is logged, never the
- *  job's failure — the job's own outcome stands. */
+/** Where the preview stands, as the PR body's status line (preview-config.ts `PreviewStatus`):
+ *  this checkout's commit, this CI job (`DEPOT_JOB_URL`), now. Only with a PR and a token; a write
+ *  that fails is logged, never the job's failure — the job's own outcome stands. */
 async function writeStatus(
   prNumber: string | undefined,
-  status:
-    | Pick<PreviewStatus, "state" | "error">
-    | Pick<PreviewSuiteStatus, "suite" | "state" | "error">,
+  status: Pick<PreviewStatus, "state" | "error">,
 ) {
   if (!prNumber || !process.env.GITHUB_TOKEN) return;
-  const what =
-    "suite" in status
-      ? `the ${PREVIEW_SUITES[status.suite]} line (${status.state})`
-      : `the preview status (${status.state})`;
+  const what = `the preview status (${status.state})`;
   const stamp = { commit: checkedOutCommit(), runUrl: process.env.DEPOT_JOB_URL, at: new Date() };
-  const write =
-    "suite" in status
-      ? writePullRequestBody(
-          prNumber,
-          what,
-          (body) => splicePreviewSuite(body, { ...status, ...stamp }),
-          (body) => suiteLineMayBeOverwritten(body, { ...status, ...stamp }),
-        )
-      : writePullRequestBody(prNumber, what, (body) =>
-          splicePreviewStatus(body, { ...status, ...stamp }),
-        );
-  await write.catch((error: unknown) =>
-    console.warn(`could not write ${what}: ${describe(error)}`),
+  await writePullRequestBody(pullRequestBody(prNumber), what, (body) =>
+    splicePreviewStatus(body, { ...status, ...stamp }),
+  ).catch((error: unknown) => console.warn(`could not write ${what}: ${describe(error)}`));
+}
+
+/** A suite's line (preview-config.ts `PreviewSuiteStatus`) for the PR body, stamped like the status
+ *  line, handed to the CI trace job as this job's `status` output (preview-os.yml): the suite writes
+ *  nothing to GitHub itself, so its check waits on no PR body write. Only in CI (`GITHUB_OUTPUT`)
+ *  and with a PR. */
+function handOverSuiteLine(
+  prNumber: string | undefined,
+  status: Pick<PreviewSuiteStatus, "suite" | "state" | "error">,
+) {
+  if (!prNumber || !process.env.GITHUB_OUTPUT) return;
+  const stamp = { commit: checkedOutCommit(), runUrl: process.env.DEPOT_JOB_URL, at: new Date() };
+  appendFileSync(process.env.GITHUB_OUTPUT, `status=${suiteLineOutput({ ...status, ...stamp })}\n`);
+  console.log(`handed the ${PREVIEW_SUITES[status.suite]} line (${status.state}) to the CI trace`);
+}
+
+/** THE SUITES' LINES, the CI trace job's one write after both suites (preview-os.yml): the lines
+ *  their jobs handed over (`handOverSuiteLine`), one a line in `outputs`, each in its place under
+ *  the status line. A suite that handed over none keeps the line the body has. Like the status
+ *  line, a write that fails is a warning, never the job's failure. */
+async function writeSuiteLines(prNumber: string | undefined, outputs: string) {
+  const statuses = parseSuiteLineOutputs(outputs);
+  if (!prNumber || !process.env.GITHUB_TOKEN || statuses.length === 0)
+    return console.log("no suite line to write: no PR, no token, or no suite handed one over");
+  const lines = statuses.map((status) => `${PREVIEW_SUITES[status.suite]} ${status.state}`);
+  const what = `the suites' lines (${lines.join(", ")})`;
+  await writePullRequestBody(pullRequestBody(prNumber), what, (body) =>
+    spliceSuiteLines(body, statuses),
+  ).catch((error: unknown) =>
+    console.log(`::warning title=PR body not updated::could not write ${what}: ${describe(error)}`),
   );
 }
 
@@ -812,7 +807,7 @@ async function deployPreviewSteps(
       await deploying;
       const section = renderPullRequestSection(summary);
       await traceOperation("Write the PR section", () =>
-        writePullRequestBody(prNumber, "the preview section", (body) =>
+        writePullRequestBody(pullRequestBody(prNumber), "the preview section", (body) =>
           splicePullRequestBody(body, section),
         ),
       );
@@ -1027,8 +1022,8 @@ async function writeDeployedTarget(previewName: string, apps: TestEvidenceTarget
  *  specs in specs/setup.ts. Every spec project runs, the notes and voice projects against this
  *  preview's Notes, Voice, Dash and Admin apps, the Notes session specs signing out in its Dash
  *  (NOTES_BASE_URL, VOICE_BASE_URL, DASH_BASE_URL, ADMIN_BASE_URL; their specs fail in CI without
- *  them). The suite's line under the
- *  PR body's status line then says `passed` or `failed`. The e2e rows tagged `slow` run as asked,
+ *  them). The suite's line, `passed` or `failed`, then goes to the CI trace job, which writes it
+ *  under the PR body's status line (`handOverSuiteLine`). The e2e rows tagged `slow` run as asked,
  *  else as the PR's label and paths say (scripts/slow-rows.ts); `only` runs them alone and is no
  *  verdict on the PR, so it writes no line. Vitest gets the choice as E2E_SLOW_ROWS, which holds each
  *  row to its timeout ceiling (e2e/support/setup.ts). */
@@ -1091,10 +1086,10 @@ async function runSuite(
       });
     }
   } catch (error) {
-    await writeStatus(statusPr, { suite, state: "failed", error: describe(error) });
+    handOverSuiteLine(statusPr, { suite, state: "failed", error: describe(error) });
     throw new Error(`${PREVIEW_SUITES[suite]} failed against ${url}: ${describe(error)}`);
   }
-  await writeStatus(statusPr, { suite, state: "passed" });
+  handOverSuiteLine(statusPr, { suite, state: "passed" });
 }
 
 // ── sweep (cloudflare-os: GitHub has no `environment.auto_stop_in`) ────────────────────────────
@@ -1383,6 +1378,11 @@ export default class Preview {
   async resetParent(options: PreviewOptions = {}) {
     await main("reset-parent", options);
   }
+  /** the CI trace job's: both suites' lines, as their jobs handed them over (PREVIEW_SUITE_LINES,
+   *  one a line), into the PR body at once */
+  async suiteLines(options: PreviewOptions = {}) {
+    await main("suite-lines", options);
+  }
 }
 
 async function main(command: Command, options: PreviewOptions) {
@@ -1396,6 +1396,8 @@ async function main(command: Command, options: PreviewOptions) {
     });
   if (parsed.command === "deploy-parents") return deployParents(await parentContext());
   if (parsed.command === "reset-parent") return resetParent({ dryRun: parsed.dryRun });
+  if (parsed.command === "suite-lines")
+    return writeSuiteLines(pr, process.env.PREVIEW_SUITE_LINES || "");
   const previewName = resolvePreviewName({
     name: parsed.name || process.env.PREVIEW_NAME,
     prNumber: pr,
