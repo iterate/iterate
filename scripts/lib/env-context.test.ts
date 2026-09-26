@@ -24,8 +24,7 @@ test("native Node scripts can import and inspect Cloudflare API errors", () => {
   });
 });
 
-// Cloudflare's answers: the Artifacts API's 500/10400 (recorded 2026-09-23 on a repo delete), its
-// rate limit's 429, and a refusal.
+// Cloudflare's answers: the Artifacts API's 500/10400, its rate limit's 429, and a refusal.
 test.for([
   {
     name: "a DELETE Cloudflare failed with a 5xx is sent again",

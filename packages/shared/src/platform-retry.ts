@@ -149,13 +149,14 @@ export const RELAY_BURST: Schedule = { delaysMs: [0, 1_000, 3_000], repeatsOverl
 /** A CI script's call on another service's API: about 17 s in all. A 429 is repeated too: the
  *  script is the caller waiting it out. */
 export const CI_HTTP: Schedule = { delaysMs: [2_000, 5_000, 10_000], repeatsOverload: true };
-/** A deploy's or a preview's call on Cloudflare's API, a wrangler command's included: about two
+/** A deploy's or a preview's call on Cloudflare's API, a wrangler command's included: two to four
  *  minutes in all. The API allows 1,200 requests per five minutes per user
  *  (https://developers.cloudflare.com/fundamentals/api/reference/limits/), which parallel preview
- *  deploys share, so a rate-limited window lasts minutes: on 2026-07-14 one answered
- *  `Retry-After: 120`. */
+ *  deploys share, so a rate-limited window lasts minutes: Cloudflare has answered
+ *  `Retry-After: 120`. The last wait is that long, so a direct call waits out the whole window it
+ *  was asked to, and a wrangler command, which cannot see the header, runs a last time after it. */
 export const CLOUDFLARE_API: Schedule = {
-  delaysMs: [5_000, 15_000, 30_000, 75_000],
+  delaysMs: [5_000, 15_000, 30_000, 75_000, 120_000],
   repeatsOverload: true,
 };
 
@@ -243,9 +244,10 @@ function pause(ms: number, signal: AbortSignal | undefined) {
  * failure (a success, or an answer about the request, which is the caller's). A 5xx, a 429 or 408,
  * a connection that failed and an attempt that got no answer within `timeoutMs` (our own deadline,
  * an overload) are the far side's; the last of them is thrown, an answer's as an HttpAnswerError
- * that quotes it. Only an `idempotent` request is sent again, except after a 429, which the far side
- * refused unrun (RFC 6585 §4). Each retry is a `<area>.platform-failure-retry` warn naming the
- * request (`what`). The caller's `signal` aborts the attempt in flight and ends the schedule.
+ * that quotes it. Anything else `send` throws is our own, thrown at once. Only an `idempotent`
+ * request is sent again, except after a 429, which the far side refused unrun (RFC 6585 §4). Each
+ * retry is a `<area>.platform-failure-retry` warn naming the request (`what`). The caller's
+ * `signal` aborts the attempt in flight and ends the schedule.
  */
 export async function fetchRetryingPlatformFailures(
   what: string,
@@ -271,11 +273,13 @@ export async function fetchRetryingPlatformFailures(
             throw Object.assign(new Error(`${what}: no answer within ${timeoutMs / 1_000} s`), {
               overloaded: true,
             });
-          // A failed connection, named for its request as a failed answer is, and why: undici's
-          // "fetch failed" says it only in its cause.
-          if (!(error instanceof TypeError)) throw error;
+          // A failed connection is undici's "fetch failed", which says why only in its cause: named
+          // for its request as a failed answer is, and stamped as workerd stamps a lost connection
+          // (capnp's DISCONNECTED), so failureKind reads it. Any other throw, a TypeError of our
+          // own included (a bad URL or header), is the caller's defect, thrown as it came.
+          if (!(error instanceof TypeError && error.message === "fetch failed")) throw error;
           const why = error.cause instanceof Error ? `: ${error.cause.message}` : "";
-          throw new TypeError(`${what}: ${error.message}${why}`);
+          throw Object.assign(new Error(`${what}: fetch failed${why}`), { retryable: true });
         },
       );
       if (!isPlatformFailureKind(httpFailureKind(response))) return response;
@@ -291,7 +295,10 @@ export async function fetchRetryingPlatformFailures(
       schedule: options.schedule || CI_HTTP,
       idempotent: (error) =>
         options.idempotent || (error instanceof HttpAnswerError && error.status === 429),
-      kind: httpFailureKind,
+      // An answer is read by its status; anything else the attempt threw by its stamp, and an
+      // unstamped throw is our own.
+      kind: (error) =>
+        error instanceof HttpAnswerError ? httpFailureKind(error) : failureKind(error),
       describe: (error) => ({ request: what, ...httpFailureFields(error) }),
       signal,
     },

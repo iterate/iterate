@@ -331,6 +331,13 @@ test.for([
     lines: ["retry"],
   },
   {
+    name: "a TypeError of our own, such as a bad header, is thrown at once and never sent again",
+    answers: ["bad header"],
+    idempotent: true,
+    outcome: { error: 'Headers.append: "a\nb" is an invalid header value.' },
+    lines: [],
+  },
+  {
     name: "an answer about the request is the caller's, sent once",
     answers: [404],
     idempotent: true,
@@ -360,7 +367,7 @@ test.for([
   },
 ] satisfies {
   name: string;
-  answers: (number | "reset")[];
+  answers: (number | "reset" | "bad header")[];
   idempotent: boolean;
   outcome: { status: number } | { error: string };
   lines: string[];
@@ -372,6 +379,8 @@ test.for([
   const send = vi.fn(async () => {
     const answer = left.shift();
     if (answer === "reset") throw new TypeError("fetch failed");
+    // A request built wrong fails in the building, as fetch's own Headers does.
+    if (answer === "bad header") return new Response("ok", { headers: { "x-name": "a\nb" } });
     return new Response(answer === 200 ? "ok" : "down", { status: answer });
   });
   const settled = fetchRetryingPlatformFailures("POST /things", send, {
@@ -393,10 +402,16 @@ test.for([
 });
 
 test("fetchRetryingPlatformFailures: an attempt with no answer in its time is our own deadline, an overload, sent again", async () => {
-  // The attempt's deadline is a real AbortSignal.timeout; the wait after it runs on the fake clock.
+  // The fake clock cannot move AbortSignal.timeout's own timer, so the attempt's deadline is kept at
+  // its default and made a fake setTimeout that aborts as the real one does.
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   vi.setTimerTickMode("nextTimerAsync");
   onTestFinished(() => void vi.useRealTimers());
+  vi.spyOn(AbortSignal, "timeout").mockImplementation((ms) => {
+    const deadline = new AbortController();
+    setTimeout(() => deadline.abort(new DOMException("timed out", "TimeoutError")), ms);
+    return deadline.signal;
+  });
   const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
   let calls = 0;
   const response = await fetchRetryingPlatformFailures(
@@ -406,7 +421,7 @@ test("fetchRetryingPlatformFailures: an attempt with no answer in its time is ou
       await new Promise((resolve) => signal.addEventListener("abort", resolve));
       throw signal.reason;
     },
-    { area: "slow", idempotent: true, timeoutMs: 10 },
+    { area: "slow", idempotent: true },
   );
   expect(response).toMatchObject({ status: 200 });
   expect(warn.mock.calls.map(([line]) => line)).toMatchObject([
@@ -414,7 +429,7 @@ test("fetchRetryingPlatformFailures: an attempt with no answer in its time is ou
       event: "slow.platform-failure-retry",
       kind: "overloaded",
       status: "network",
-      message: "GET /slow: no answer within 0.01 s",
+      message: "GET /slow: no answer within 30 s",
     },
   ]);
 });

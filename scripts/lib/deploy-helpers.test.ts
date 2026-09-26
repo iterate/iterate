@@ -80,7 +80,8 @@ test("the last 429 fails once the schedule is spent", async () => {
     { event: "cloudflare-api.platform-failure-retry", attempt: 2 },
     { event: "cloudflare-api.platform-failure-retry", attempt: 3 },
     { event: "cloudflare-api.platform-failure-retry", attempt: 4 },
-    { event: "cloudflare-api.platform-failure-gave-up", attempts: 5 },
+    { event: "cloudflare-api.platform-failure-retry", attempt: 5 },
+    { event: "cloudflare-api.platform-failure-gave-up", attempts: 6 },
   ]);
 });
 

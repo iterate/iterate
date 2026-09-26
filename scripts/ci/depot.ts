@@ -38,7 +38,7 @@ export async function mapConcurrent<Input, Output>(
  * the camelCase field names). `token` is an organization API token (`DEPOT_CI_TELEMETRY_TOKEN`).
  *
  * A read (`Get…`, `List…`, the only methods CI calls) that Depot answers with a 5xx or a 429, or
- * whose connection fails, is asked again after each of `delaysMs`, with a
+ * whose connection fails, is asked again on CI_HTTP's schedule, with a
  * `depot.platform-failure-retry` warn per repeat (`fetchRetryingPlatformFailures`). Any other 4xx
  * is an answer about the request and fails at once, as does any other method (Connect sends every
  * call as a POST, so only the name says it changes nothing). A single 500 on GetJobAttemptLogs is
@@ -48,9 +48,9 @@ export async function depotCiApi(
   method: string,
   body: object,
   token: string,
-  options: { fetch?: typeof fetch; delaysMs?: readonly number[] } = {},
+  options: { fetch?: typeof fetch } = {},
 ): Promise<unknown> {
-  const { fetch: fetchImpl = fetch, delaysMs = CI_HTTP.delaysMs } = options;
+  const { fetch: fetchImpl = fetch } = options;
   const response = await fetchRetryingPlatformFailures(
     `Depot ${method}`,
     (signal) =>
@@ -66,7 +66,7 @@ export async function depotCiApi(
       }),
     {
       area: "depot",
-      schedule: { ...CI_HTTP, delaysMs },
+      schedule: CI_HTTP,
       idempotent: /^(Get|List)[A-Z]/.test(method),
     },
   );
