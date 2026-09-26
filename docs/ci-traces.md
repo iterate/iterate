@@ -5,7 +5,9 @@ The Preview OS workflow (`.depot/workflows/preview-os.yml`) and Main OS e2e
 reporting only. It runs once the jobs it `needs` have settled, whatever their
 outcome: Deploy preview, E2E tests and Browser specs (`deploy`, `e2e`, `specs`)
 in both workflows (main's `alert` runs beside it and waits for none of it). A PR
-that changes no preview path deploys nothing and gets no trace.
+that changes no preview path deploys nothing and gets no trace. A PR's trace
+job first writes the two suites' lines into the PR body (`pnpm preview
+suite-lines`, from the lines the suites hand over as their jobs' outputs).
 `scripts/ci/tracing/cli.ts current` reads
 the run from Depot and writes `trace.html` and `trace.json` for exactly those
 jobs; the job uploads them as the `public-ci-trace-<workflow>-<execution>`

@@ -822,8 +822,10 @@ Preview OS runs four jobs, each a check named for what it proves:
   its suite (`SUITE`, `FLAKE_SUITE`, the workspace its telemetry names). The
   Vitest rows tagged `slow` run only when the PR carries the `slow-e2e` label
   or edits one of them ([slow rows](testing.md#slow-rows)).
-- **CI trace** runs after the three, whatever their outcome, and reports only
-  ([Interactive trace reports](#interactive-trace-reports)).
+- **CI trace** runs after the three, whatever their outcome, and reports only:
+  it writes the two suites' lines into the PR body, which the suites hand over
+  as their jobs' `status` output instead of writing it themselves, then the
+  trace ([Interactive trace reports](#interactive-trace-reports)).
 
 The two suites report on every PR, so a ruleset can require them. Each skips
 only when there is nothing for it to prove: a PR that changes no preview path,

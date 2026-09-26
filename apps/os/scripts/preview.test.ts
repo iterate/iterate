@@ -12,6 +12,7 @@ import {
   isDurableObjectClassNotExportedError,
   lastLines,
   MAX_PREVIEW_NAME_LENGTH,
+  parseSuiteLineOutputs,
   previewNameOfResource,
   previewPullRequestNumber,
   previewResourceName,
@@ -23,8 +24,10 @@ import {
   splicePreviewStatus,
   splicePreviewSuite,
   splicePullRequestBody,
-  suiteLineMayBeOverwritten,
+  spliceSuiteLines,
+  suiteLineOutput,
   templateQuickLaunches,
+  writePullRequestBody,
   type PreviewStatus,
   type PreviewSuiteStatus,
 } from "./preview-config.ts";
@@ -305,7 +308,7 @@ test("the status splice makes a body without a section (the first deploy failed)
 
 // ── each suite's line, under the status line ──
 
-test("the two suites' jobs write their own lines, in either order, under the status line: E2E tests first", () => {
+test("the two suites' lines go under the status line in either order: E2E tests first", () => {
   const body = `Intro.\n\n${splicePullRequestBody("", deployedSection())}`;
   const write = (
     text: string,
@@ -329,21 +332,115 @@ test("the two suites' jobs write their own lines, in either order, under the sta
   expect(splicePreviewStatus(deploying, deployed)).toBe(body);
 });
 
-// Both suites' jobs write at once. Only the first to finish, which finds no line of the other for
-// its commit, waits to look again; the second finds the first's and writes over nothing.
-test("a suite's line may be overwritten until the other suite's line names the same commit", () => {
-  const e2e = { ...deployed, runUrl: undefined, suite: "e2e" as const, state: "passed" as const };
+// ── the CI trace job's one write of both suites' lines ──
+
+const e2ePassed: PreviewSuiteStatus = { ...deployed, suite: "e2e", state: "passed" };
+const specsFailed: PreviewSuiteStatus = {
+  ...deployed,
+  suite: "specs",
+  state: "failed",
+  error: "pnpm spec exited with 1",
+};
+
+test("the CI trace job writes both suites' lines at once, and the body reads as each suite's own write left it", () => {
   const body = `Intro.\n\n${splicePullRequestBody("", deployedSection())}`;
-  expect(suiteLineMayBeOverwritten(splicePreviewSuite(body, e2e), e2e)).toBe(true);
-  const withSpecs = splicePreviewSuite(body, { ...e2e, suite: "specs", state: "failed" });
-  expect(suiteLineMayBeOverwritten(splicePreviewSuite(withSpecs, e2e), e2e)).toBe(false);
-  // the other suite's line from an earlier commit is an earlier run's: its job may still write
-  const olderSpecs = splicePreviewSuite(body, {
-    ...e2e,
-    suite: "specs",
-    commit: "ddddddddd0123",
+  const asTheSuitesWroteThem = splicePreviewSuite(splicePreviewSuite(body, e2ePassed), specsFailed);
+  // the trace job's env: one output a line, in either order
+  for (const outputs of [
+    `${suiteLineOutput(e2ePassed)}\n${suiteLineOutput(specsFailed)}`,
+    `${suiteLineOutput(specsFailed)}\n${suiteLineOutput(e2ePassed)}`,
+  ])
+    expect(spliceSuiteLines(body, parseSuiteLineOutputs(outputs))).toBe(asTheSuitesWroteThem);
+  expect(asTheSuitesWroteThem).toContain(
+    [
+      "<!-- os-preview-status:end -->",
+      "<!-- os-preview-e2e:begin -->",
+      `E2E tests: **passed** on \`ccccccccc\` · [CI job ↗](${JOB}) · updated 2026-09-24 10:32 UTC`,
+      "<!-- os-preview-e2e:end -->",
+      "<!-- os-preview-specs:begin -->",
+      `Browser specs: **failed** on \`ccccccccc\` · [CI job ↗](${JOB}) · updated 2026-09-24 10:32 UTC`,
+      "",
+      "`pnpm spec exited with 1`",
+      "<!-- os-preview-specs:end -->",
+    ].join("\n"),
+  );
+});
+
+// A dispatch of one suite skips the other, and a job that never ran its suite (no preview, or
+// cancelled first) or ran the slow rows alone hands over nothing: its output is empty.
+test("a suite whose job handed over no line keeps the one the body has", () => {
+  const body = spliceSuiteLines(`Intro.\n\n${splicePullRequestBody("", deployedSection())}`, [
+    { ...e2ePassed, state: "failed" },
+    specsFailed,
+  ]);
+  const statuses = parseSuiteLineOutputs(`${suiteLineOutput(e2ePassed)}\n`);
+  expect(statuses).toEqual([e2ePassed]);
+  expect(spliceSuiteLines(body, statuses)).toBe(splicePreviewSuite(body, e2ePassed));
+  expect(parseSuiteLineOutputs("\n")).toEqual([]);
+});
+
+test("a suite's line survives the hand-over: one line of JSON that renders as the suite's own, its error cut to what the line shows", () => {
+  const status: PreviewSuiteStatus = {
+    ...specsFailed,
+    error: `pnpm spec exited with 1\n\x1b[31m${numberedLines(1, 60)}\n\`\`\`\x1b[0m`,
+  };
+  const output = suiteLineOutput(status);
+  expect(output).not.toContain("\n");
+  const [handedOver] = parseSuiteLineOutputs(output);
+  expect(renderPreviewStatus(handedOver!)).toBe(renderPreviewStatus(status));
+  expect(handedOver!.error!.split("\n")).toHaveLength(41);
+  // from a laptop there is no CI job to link, and a pass has no error
+  const [laptop] = parseSuiteLineOutputs(suiteLineOutput({ ...e2ePassed, runUrl: undefined }));
+  expect(laptop).toEqual({ ...e2ePassed, runUrl: undefined });
+});
+
+test("an output that is not a suite's line fails the trace job's write rather than writing it", () => {
+  expect(() => parseSuiteLineOutputs('{"suite":"lint","state":"passed"}')).toThrow();
+  expect(() => parseSuiteLineOutputs("E2E tests: passed")).toThrow();
+});
+
+test("the PR body write: one read, one PATCH, one read back, and nothing waits", async () => {
+  const pr = fakePullRequest(`Intro.\n\n${splicePullRequestBody("", deployedSection())}`);
+  const before = pr.body();
+  await writePullRequestBody(pr, "the suites' lines", withBothLines);
+  expect(pr).toMatchObject({ events: ["read", "replace", "read"] });
+  expect(pr.body()).toBe(withBothLines(before));
+  // a body that already carries both is not written again
+  await writePullRequestBody(pr, "the suites' lines", withBothLines);
+  expect(pr.events.slice(3)).toEqual(["read"]);
+});
+
+test("the PR body write: a person's edit saved over it is kept, and the lines re-spliced onto it", async () => {
+  const body = `Intro.\n\n${splicePullRequestBody("", deployedSection())}`;
+  const edited = body.replace("Intro.", "Intro, edited.");
+  const pr = fakePullRequest(body, { edits: [edited] });
+  await writePullRequestBody(pr, "the suites' lines", withBothLines);
+  expect(pr).toMatchObject({ events: ["read", "replace", "read", "read", "replace", "read"] });
+  expect(pr.body()).toBe(withBothLines(edited));
+});
+
+test("the PR body write: a PATCH that failed is not sent again from the old read; the next round reads anew", async () => {
+  const pr = fakePullRequest(`Intro.\n\n${splicePullRequestBody("", deployedSection())}`, {
+    failures: 1,
   });
-  expect(suiteLineMayBeOverwritten(splicePreviewSuite(olderSpecs, e2e), e2e)).toBe(true);
+  const before = pr.body();
+  await writePullRequestBody(pr, "the suites' lines", withBothLines, { retryDelayMs: 0 });
+  expect(pr).toMatchObject({ events: ["read", "replace", "read", "replace", "read"] });
+  expect(pr.body()).toBe(withBothLines(before));
+  // a failure whose write had landed: the next round finds it, and writes nothing
+  const landed = fakePullRequest(before, { failures: 1, failuresLand: true });
+  await writePullRequestBody(landed, "the suites' lines", withBothLines, { retryDelayMs: 0 });
+  expect(landed).toMatchObject({ events: ["read", "replace", "read"] });
+  expect(landed.body()).toBe(withBothLines(before));
+});
+
+test("the PR body write gives up after three rounds of other writes over it", async () => {
+  const body = `Intro.\n\n${splicePullRequestBody("", deployedSection())}`;
+  const pr = fakePullRequest(body, { edits: [body, body, body] });
+  await expect(writePullRequestBody(pr, "the suites' lines", withBothLines)).rejects.toThrow(
+    "could not write the suites' lines into PR #123's body in three rounds",
+  );
+  expect(pr.events.filter((event) => event === "replace")).toHaveLength(3);
 });
 
 test("a suite's line without a status line goes at the top of the section, or is the section", () => {
@@ -747,3 +844,35 @@ function suiteLine(suite: PreviewSuiteStatus["suite"], state: PreviewSuiteStatus
     .replace("<!-- os-preview:begin -->\n", "")
     .replace("\n<!-- os-preview:end -->\n", "");
 }
+
+/** A PR body on a fake GitHub: `edits` are other writers' bodies, one landing after each of our
+ *  PATCHes (a person saving the description, read before ours), and the first `failures` PATCHes
+ *  fail, having written the body when `failuresLand` (GitHub failed its answer, not its write). */
+function fakePullRequest(
+  body: string,
+  options: { edits?: string[]; failures?: number; failuresLand?: boolean } = {},
+) {
+  const edits = [...(options.edits || [])];
+  let failures = options.failures || 0;
+  const events: string[] = [];
+  return {
+    events,
+    body: () => body,
+    number: "123",
+    read: async () => {
+      events.push("read");
+      return body;
+    },
+    replace: async (next: string) => {
+      events.push("replace");
+      if (failures-- > 0) {
+        if (options.failuresLand) body = next;
+        throw new Error("HttpError: 502");
+      }
+      body = next;
+      body = edits.shift() ?? body;
+    },
+  };
+}
+
+const withBothLines = (body: string) => spliceSuiteLines(body, [e2ePassed, specsFailed]);
