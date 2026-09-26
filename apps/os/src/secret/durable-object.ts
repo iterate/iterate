@@ -206,9 +206,10 @@ export class SecretDurableObject extends StreamProcessorDurableObject<
   readonly #installationRouteReadAt = new Map<string, number>();
   /** When each iterate-Slack-app workspace's route was last read for a use (`#assertWorkspaceNotMoved`). */
   readonly #workspaceRouteReadAt = new Map<string, number>();
-  /** The stored revisions whose record predates `routedAccount` and whose connection row was read
-   *  already (`#routedAccountOf`): one read per record and incarnation. */
-  readonly #connectionRowsRead = new Set<number>();
+  /** The stored revisions without a mark whose connection's row named no account of iterate's app
+   *  when read (`#routedAccountOf`): one read per record and incarnation. A workspace found is noted
+   *  in storage instead. */
+  readonly #revisionsWithNoIterateRow = new Set<number>();
 
   /** This facet's identity, from its context's name (`ctx.props`, sdk/index.ts): the context, and
    *  the PATH THE PLACEHOLDER SPELLS — the context's path relative to the resource owner's root
@@ -1009,12 +1010,14 @@ export class SecretDurableObject extends StreamProcessorDurableObject<
     const { projectId, path: contextPath } = DurableObjectNameCodec.parse(context);
     const connection = /^\/secrets\/slack-(.+)$/.exec(path)?.[1];
     if (!connection || resourceScope(projectId, contextPath).kind !== "project") return undefined;
-    if (this.#connectionRowsRead.has(revision)) return undefined;
     const noted = await this.ctx.storage.get<RoutedAccountNoted>("routed-account");
     if (noted?.revision === revision) return noted.routedAccount;
+    if (this.#revisionsWithNoIterateRow.has(revision)) return undefined;
     const row = await connectionRowOf(this.env, projectId, connectionPathOf("slack", connection));
-    this.#connectionRowsRead.add(revision);
-    if (row?.client !== "iterate") return undefined;
+    if (row?.client !== "iterate") {
+      this.#revisionsWithNoIterateRow.add(revision);
+      return undefined;
+    }
     const routedAccount = { provider: "slack" as const, externalId: row.externalId };
     await this.ctx.storage.put<RoutedAccountNoted>("routed-account", { revision, routedAccount });
     return routedAccount;

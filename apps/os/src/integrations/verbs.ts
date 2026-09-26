@@ -22,6 +22,7 @@ import {
   attemptKeyOf,
   connectionPathOf,
   connectionRowOf,
+  connectionRowThroughHeadOf,
   consentAttemptKeyOf,
   ROUTED_PROVIDERS,
   tokenSecretPathOf,
@@ -435,7 +436,7 @@ export async function confirmIntegrationMove(
         // Read again once it is back: a holder that disconnected meanwhile released its routes
         // before this one returned, so it goes again.
         const holderNamesIt = async () => {
-          const row = await connectionRowOf(env, holder.projectId, holder.path);
+          const row = await connectionRowThroughHeadOf(env, holder.projectId, holder.path);
           return row?.client === "iterate" && row.externalId === externalId;
         };
         const restored =

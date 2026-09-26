@@ -742,6 +742,62 @@ test("Slack: a move and a move back that both land leave the workspace with the 
   expect(await (await slackAuthTest(holder.itx)).json()).toMatchObject({ team_id: "T22BOTH" });
 });
 
+test("Slack: a move whose connect fails while the holder is part-way through disconnecting leaves the workspace routed nowhere once the disconnect finishes", async () => {
+  const holder = await projectWithMember("slack-half-gone");
+  const petshop = petshopFakes();
+  await connected(petshop, holder, "slack", "team=T23HALF");
+  const mover = await otherProject(holder, "slack-half-gone-mover");
+  const offer = moveOfferOf(await consented(petshop, mover, "slack", "team=T23HALF"));
+  // The move's proof waits for the holder's disconnect to pass its route releases, then fails; the
+  // disconnect waits there, its row still standing, for the move's undo. Flags, polled, as above.
+  let armed = false;
+  let proofReached = false;
+  let disconnectPaused = false;
+  let undoDone = false;
+  const answered = vi.mocked(globalThis.fetch).getMockImplementation()!;
+  vi.mocked(globalThis.fetch).mockImplementation(async (input, init) => {
+    const request = new Request(input, init);
+    if (!armed || request.url !== "https://slack.test/api/auth.test") return answered(request);
+    armed = false;
+    proofReached = true;
+    for (const until = Date.now() + 5_000; !disconnectPaused && Date.now() < until;)
+      await scheduler.wait(20);
+    return Response.json({ ok: false, error: "account_inactive" });
+  });
+  const prepare = env.DB.prepare.bind(env.DB);
+  const prepares = vi.spyOn(env.DB, "prepare").mockImplementation((sql: string) => {
+    const statement = prepare(sql);
+    if (!sql.startsWith("delete from integration_routes where project_id")) return statement;
+    prepares.mockRestore();
+    const bind = statement.bind.bind(statement);
+    statement.bind = (...args: unknown[]) => {
+      const bound = bind(...args);
+      const run = bound.run.bind(bound);
+      bound.run = (async () => {
+        const result = await run();
+        disconnectPaused = true;
+        for (const until = Date.now() + 5_000; !undoDone && Date.now() < until;)
+          await scheduler.wait(20);
+        return result;
+      }) as typeof bound.run;
+      return bound;
+    };
+    return statement;
+  });
+  armed = true;
+  const moved = projectFacet(mover.itx).confirmIntegrationMove({ offer });
+  await vi.waitFor(() => expect(proofReached).toBe(true));
+  const disconnecting = projectFacet(holder.itx).disconnectIntegration({
+    provider: "slack",
+    connection: "acme",
+  });
+  await expect(moved).rejects.toThrow(/auth\.test/);
+  undoDone = true;
+  await disconnecting;
+  expect(await catalog().integrationRoute("slack", "T23HALF")).toBeNull();
+  await vi.waitFor(async () => expect(await integrationsOf(holder.itx)).toEqual({}));
+});
+
 test("Slack: a move whose held token is gone leaves what the destination's secret holds alone", async () => {
   const holder = await projectWithMember("slack-replaced");
   const petshop = petshopFakes();
@@ -794,12 +850,16 @@ test("Slack: a token stored before its record named its workspace is refused too
   vi.useFakeTimers({ toFake: ["Date"] });
   onTestFinished(() => void vi.useRealTimers());
   vi.setSystemTime(Date.now() + 31_000);
-  const refused = await slackAuthTest(holder.itx);
+  // refused on every use, not only the first
+  for (const use of [1, 2]) {
+    const refused = await slackAuthTest(holder.itx);
+    expect({ use, status: refused.status, text: await refused.text() }).toMatchObject({
+      use,
+      status: 502,
+      text: expect.stringContaining("Slack workspace T15OLD is connected to another project"),
+    });
+  }
   vi.useRealTimers();
-  expect({ status: refused.status, text: await refused.text() }).toMatchObject({
-    status: 502,
-    text: expect.stringContaining("Slack workspace T15OLD is connected to another project"),
-  });
 });
 
 test("Slack: a move that fails to connect puts the team's route back and keeps no token here", async () => {

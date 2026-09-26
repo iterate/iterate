@@ -353,6 +353,9 @@ export async function disconnectSlack(
     type: "events.iterate.com/slack/disconnected",
     payload: { connection, reason: moved ? "moved" : undefined },
   });
+  // Again, once the row is gone: a failed move's undo that read the row before it went, and put
+  // the route back here meanwhile, finds it released (verbs.ts `confirmIntegrationMove`).
+  if (!moved) await controlPlane.releaseIntegrationRoutes(projectId, path);
 }
 
 const SLACK_WEBHOOK_PATH =

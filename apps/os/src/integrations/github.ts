@@ -470,6 +470,9 @@ export async function disconnectGithub(
     type: "events.iterate.com/github/disconnected",
     payload: { connection, reason: moved ? "moved" : undefined },
   });
+  // Again, once the row is gone: a failed move's undo that read the row before it went, and put
+  // the route back here meanwhile, finds it released (verbs.ts `confirmIntegrationMove`).
+  if (!moved) await controlPlane.releaseIntegrationRoutes(projectId, path);
 }
 
 /** Where GitHub sends the human back, or null when the path is not the callback's. The signed
