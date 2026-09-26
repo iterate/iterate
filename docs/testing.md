@@ -319,7 +319,7 @@ doppler run --project os --config prd -- env WORKER_BASE_URL=https://os.iterate.
 ```
 
 Specs take the same shape, `pnpm spec` in place of `pnpm os e2e`; without
-`WORKER_BASE_URL` Playwright starts `pnpm dev` on `DEMO_PORT` (8788) and reuses
+`WORKER_BASE_URL` Playwright starts `pnpm dev` on `WORKER_PORT` (8788) and reuses
 an existing server locally. To run both suites against a preview exactly as CI
 does, run
 `pnpm preview e2e --pr <number> --name <branch>` and `pnpm preview specs` with
@@ -348,7 +348,7 @@ for it. The Playwright config additionally honors the Playwright-conventional
 | Variable                                | Set by                                                      | Controls                                                                                                                                          | Default                                     |
 | --------------------------------------- | ----------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------- |
 | `WORKER_BASE_URL`                       | You, the preview script, the soak and crash hunt            | THE deployed OS for `pnpm os e2e`, `pnpm spec` (and the issuer for the `notes` project), the soak and bench                                       | Local workerd (`pnpm dev` for specs)        |
-| `DEMO_PORT`                             | You                                                         | Port for the local server Playwright starts                                                                                                       | `8788`                                      |
+| `WORKER_PORT`                           | You                                                         | Port for the local server Playwright starts                                                                                                       | `8788`                                      |
 | `APP_CONFIG`, `APP_CONFIG_SECRETS__KEY` | Doppler (`os`, `preview` / `prd`)                           | The deployed target's credentials and login (`deployed-target.ts`)                                                                                | None — deployed runs throw without them     |
 | `E2E_RUN_ID`                            | Preview CI (`<run id>-<attempt>`), or you                   | The run's id, folded into every identifier a test mints                                                                                           | Minted once per run                         |
 | `PETSHOP_BASE_URL`                      | You                                                         | Which dummy petshop the secret and connection rows dial                                                                                           | `https://dummy-petshop.iterate.workers.dev` |

@@ -22,9 +22,9 @@ import {
 } from "../../apps/os/scripts/preview-github-app.ts";
 import { TEST_EMAIL_DOMAIN } from "../../apps/os/src/test-email-domain.ts";
 import { dashScopes } from "../../apps/dash/src/lib/scopes.ts";
-import { readOsPlaywrightAuthConfig } from "../test-support/auth-config.ts";
 import { openOperatorSession } from "../test-support/operator.ts";
 import { test } from "../test-support/test.ts";
+import { workerBaseUrl } from "../test-support/worker-base-url.ts";
 
 for (const { provider, account } of [
   { provider: "Google", account: (email: string) => email },
@@ -98,7 +98,6 @@ test("a person who signed in with GitHub connects an organization iterate's app 
   helpers,
 }) => {
   helpers.appOrigin("dash");
-  const { osBaseUrl } = readOsPlaywrightAuthConfig();
   const { email, login, slug } = await personWithProject("connect-installed");
   const accountLogin = `org-${crypto.randomUUID().slice(0, 8)}`;
   await petshopRegisterGithubInstallation({
@@ -111,7 +110,7 @@ test("a person who signed in with GitHub connects an organization iterate's app 
       .export({ type: "spki", format: "pem" })
       .toString(),
     webhookSecret: PREVIEW_GITHUB_APP.webhookSecret,
-    callbackUrl: `${osBaseUrl}/api/integrations/github/callback`,
+    callbackUrl: `${workerBaseUrl}/api/integrations/github/callback`,
   });
   await page.goto(
     `/.auth/login?${new URLSearchParams({ next: `/projects/${slug}/integrations`, scope: dashScopes.join(" ") })}`,

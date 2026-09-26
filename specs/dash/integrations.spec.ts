@@ -16,9 +16,9 @@ import {
   petshopBaseUrl,
   petshopRegisterGithubInstallation,
 } from "../../apps/os/e2e/support/petshop.ts";
-import { readOsPlaywrightAuthConfig } from "../test-support/auth-config.ts";
 import { openOperatorSession } from "../test-support/operator.ts";
 import { test } from "../test-support/test.ts";
+import { workerBaseUrl } from "../test-support/worker-base-url.ts";
 
 test("a project connects Slack through iterate's app, lists the workspace, and disconnects it", async ({
   page,
@@ -98,7 +98,6 @@ test("a project installs iterate's GitHub App, lists the account it is installed
   helpers,
 }) => {
   helpers.appOrigin("dash");
-  const { osBaseUrl } = readOsPlaywrightAuthConfig();
   const installation = {
     installationId: String(Math.floor(1e9 + Math.random() * 8e9)),
     accountLogin: `org-${crypto.randomUUID().slice(0, 8)}`,
@@ -114,7 +113,7 @@ test("a project installs iterate's GitHub App, lists the account it is installed
       .export({ type: "spki", format: "pem" })
       .toString(),
     webhookSecret: PREVIEW_GITHUB_APP.webhookSecret,
-    callbackUrl: `${osBaseUrl}/api/integrations/github/callback`,
+    callbackUrl: `${workerBaseUrl}/api/integrations/github/callback`,
   });
   // on GitHub's install page a person picks the account; here, the installation registered above
   await page.route(`${petshopBaseUrl()}/apps/*/installations/new*`, (route) => {
@@ -146,7 +145,6 @@ test("a person moves a GitHub installation another of their projects holds: the 
   helpers,
 }) => {
   helpers.appOrigin("dash");
-  const { osBaseUrl } = readOsPlaywrightAuthConfig();
   const installation = {
     installationId: String(Math.floor(1e9 + Math.random() * 8e9)),
     accountLogin: `org-${crypto.randomUUID().slice(0, 8)}`,
@@ -160,7 +158,7 @@ test("a person moves a GitHub installation another of their projects holds: the 
       .export({ type: "spki", format: "pem" })
       .toString(),
     webhookSecret: PREVIEW_GITHUB_APP.webhookSecret,
-    callbackUrl: `${osBaseUrl}/api/integrations/github/callback`,
+    callbackUrl: `${workerBaseUrl}/api/integrations/github/callback`,
   });
   await page.route(`${petshopBaseUrl()}/apps/*/installations/new*`, (route) => {
     const url = new URL(route.request().url());

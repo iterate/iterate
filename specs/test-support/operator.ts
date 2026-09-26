@@ -1,6 +1,7 @@
 import { newWebSocketRpcSession } from "capnweb";
 import type { IterateApi } from "iterate/api";
 import { readOsPlaywrightAuthConfig } from "./auth-config.ts";
+import { workerBaseUrl } from "./worker-base-url.ts";
 
 /**
  * The operator's capnweb session on the OS platform under test: `/api` over a WebSocket, opened
@@ -9,8 +10,8 @@ import { readOsPlaywrightAuthConfig } from "./auth-config.ts";
  * Specs seed state through it instead of the UI where the state is not their subject. Dispose it.
  */
 export function openOperatorSession() {
-  const { adminApiSecret: secret, osBaseUrl } = readOsPlaywrightAuthConfig();
-  const url = new URL("/api", osBaseUrl);
+  const { adminApiSecret: secret } = readOsPlaywrightAuthConfig();
+  const url = new URL("/api", workerBaseUrl);
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
   const api = newWebSocketRpcSession<IterateApi>(url.href);
   return {

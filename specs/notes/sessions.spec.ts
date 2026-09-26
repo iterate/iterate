@@ -9,6 +9,7 @@ import { transformSync } from "esbuild";
 import { projectUrlOf } from "iterate/project-ingress";
 import { readOsPlaywrightAuthConfig } from "../test-support/auth-config.ts";
 import { test } from "../test-support/test.ts";
+import { workerBaseUrl } from "../test-support/worker-base-url.ts";
 
 // the note's textbox is named by the file it edits (apps/notes/src/routes/_auth/projects.$slug.tsx)
 const noteFile = "/repos/config/notes/log.md";
@@ -46,7 +47,7 @@ test("the Notes app works through a project config worker, and its session there
   context,
   helpers,
 }) => {
-  const { ingressRouting, osBaseUrl } = readOsPlaywrightAuthConfig();
+  const { ingressRouting } = readOsPlaywrightAuthConfig();
   const { notes, dash } = appClients(helpers.appOrigin);
   await using fixture = await helpers.createFixture("notes-proxy");
   const { project } = fixture;
@@ -54,7 +55,11 @@ test("the Notes app works through a project config worker, and its session there
   // the same app on the project's `notes` routing slug: notes--<project>.<hostname> under
   // subdomains, <platform>/projects/<project>/notes/ under paths (apps/notes/src/base-path.ts)
   const proxied = (path: string) =>
-    projectUrlOf(ingressRouting, osBaseUrl, { project: project.slug, routingSlug: "notes", path })!;
+    projectUrlOf(ingressRouting, workerBaseUrl, {
+      project: project.slug,
+      routingSlug: "notes",
+      path,
+    })!;
   // WHOSE SIGN-IN the proxied app runs on: its host's `/.auth/*` (apps/os/src/worker.ts). Under
   // subdomains that host is an origin of its own, a client of its own whose document names no app,
   // so consent names it by its host. Under paths it is the platform's origin, whose sign-in the
@@ -63,7 +68,7 @@ test("the Notes app works through a project config worker, and its session there
   const proxiedHost = proxied("/").host;
   const proxiedClient = ownOrigin
     ? { origin: proxied("/").origin, name: proxiedHost, host: proxiedHost }
-    : { origin: new URL(osBaseUrl).origin, name: "iterate", host: new URL(osBaseUrl).host };
+    : { origin: workerBaseUrl, name: "iterate", host: new URL(workerBaseUrl).host };
   // The repository's actual config-worker source, preserving its auth.require gate, pointed at the
   // Notes app under test: its host and protocol (the source names production's, over https; a local
   // Notes answers http).
