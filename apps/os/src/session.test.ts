@@ -1,8 +1,9 @@
 // session.test.ts — the platform-fact append's await-vs-best-effort split: a grant's end awaits
-// `appendPlatformFacts` (the revocation truth: a failed append must fail the verb), and the
-// organization verbs await it FOLDED (the answer implies the fold); the account's sign-ins, mints and
-// consents go through `publishPlatformFacts`, best-effort in waitUntil: each fact is keyed, so an
-// append the platform cut is sent once more and lands once, and a second failure is reported.
+// `appendPlatformFacts` (the revocation truth: a failed append must fail the verb), and a sign-in's
+// connection awaits it FOLDED (the answer implies the fold); the account's sign-ins and consents and
+// an organization's activity go through `publishPlatformFacts`, best-effort in waitUntil: each fact
+// is keyed, so an append the platform cut is sent once more and lands once, and a second failure is
+// reported.
 
 import { expect, test, vi } from "vitest";
 import type { ItxExpression } from "iterate/expression";
@@ -30,7 +31,7 @@ test("appendPlatformFacts enables the owner's processor, then appends stamped pl
   ]);
 });
 
-test("an organization's facts land on its own context, folded by the organization processor", async () => {
+test("an organization's facts land on its own context, its processor enabled first", async () => {
   const { namespace, calls, names } = failingAppendNamespace();
   await expect(
     appendPlatformFacts(namespace, { organization: "org_1" }, [fact, fact], { principal: null }),
@@ -55,13 +56,13 @@ test("appendPlatformFacts `folded` waits on the owner's processor barrier throug
   >[0];
   await appendPlatformFacts(
     namespace,
-    { organization: "org_1" },
+    { account: "u1" },
     [fact, fact],
     { principal: null },
     { folded: true },
   );
   expect(calls.at(-1)).toEqual([
-    ["itx", "facets", ["get", "organization"], ["waitUntilProcessed", { offset: 8 }]],
+    ["itx", "facets", ["get", "account"], ["waitUntilProcessed", { offset: 8 }]],
     [],
     { principal: null },
   ]);

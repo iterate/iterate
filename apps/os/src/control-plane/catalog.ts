@@ -35,6 +35,7 @@ import {
   insertInvitation,
   invitationById,
   invitationByToken,
+  openInvitations,
   revokeInvitation,
 } from "./db/queries/.generated/invitations.sql.ts";
 import {
@@ -47,7 +48,6 @@ import {
   listMembers,
   listOrganizations,
   memberOf,
-  organizationById,
   organizationRole,
   renameOrganization,
   upsertMembership,
@@ -167,9 +167,6 @@ export class ControlPlaneDatabase {
     const user = await identityUser(this.#client, { provider, subject });
     return user && { id: user.id, email: user.email };
   }
-  organization(organizationId: string): Promise<OrganizationRecord | null> {
-    return organizationById(this.#client, { id: organizationId });
-  }
   organizations(): Promise<OrganizationRecord[]> {
     return listOrganizations(this.#client);
   }
@@ -214,6 +211,19 @@ export class ControlPlaneDatabase {
       organizations: rowsOf<accessibleOrganizations.Result>(results, 0),
       projects: rowsOf<accessibleProjects.Result>(results, 1),
     };
+  }
+  /** An organization's invitation links still open — neither accepted nor revoked (an expired one
+   *  stays until revoked) — oldest first: its owners' read, and the operator's. */
+  async openInvitations(caller: Caller, organizationId: string): Promise<InvitationRecord[]> {
+    const verb = "list the invitations of";
+    const guard = this.#ownerGuard(caller, verb);
+    const results = await batch(this.#d1, [
+      openInvitations.query({ orgId: organizationId, ...guard }),
+      organizationRole.query({ orgId: organizationId, userId: guard.actorId }),
+    ]);
+    const refusal = ownerRefusal(rowsOf<organizationRole.Result>(results, 1)[0], guard, verb);
+    if (refusal) throw refusal;
+    return rowsOf<openInvitations.Result>(results, 0).map(invitationRecord);
   }
   /** What a link opens, for the person holding it — null for a token no invitation hashes to (an
    *  organization's deletion takes its invitations). `userId` is the reader, for `member`. */
@@ -571,11 +581,11 @@ export class ControlPlaneDatabase {
    *  organization is the one case that takes two: the first finds none and reads their email, and
    *  the second mints their own, named after it (sqlfu 0.1.1 types no `substr`, so the name is cut
    *  here, not in SQL) — only while they still belong nowhere and the slug is free, so two first
-   *  creations at once make one. */
+   *  creations at once make one. The one that made it answers its name (`mintedOrganization`). */
   async createProject(
     caller: Caller,
     input: { project: string; organizationId?: string; restoreProjectId?: string },
-  ): Promise<ProjectRecord> {
+  ): Promise<ProjectRecord & { mintedOrganization?: string }> {
     const restoring = input.restoreProjectId;
     // oxlint-disable-next-line iterate/simple-truthiness-check -- an empty restore id is refused, never read as "mint a new one"
     if (restoring !== undefined) {
@@ -621,25 +631,22 @@ export class ControlPlaneDatabase {
     const held = rowsOf<projectsByRef.Result>(first, 2);
     const user = rowsOf<userByRef.Result>(first, 3)[0];
     if (target || held.length || !user) return created(held, project, target?.id, restoring);
-    const orgId = newId("org");
+    const organization = { id: newId("org"), name: user.email.split("@")[0]! };
     const minted = await batch(this.#d1, [
-      insertPersonalOrganization.query({
-        id: orgId,
-        name: user.email.split("@")[0]!,
-        userId,
-        slug,
-      }),
-      insertOwner.query({ userId, orgId }),
+      insertPersonalOrganization.query({ ...organization, userId, slug }),
+      insertOwner.query({ userId, orgId: organization.id }),
       insertFirstOrganizationProject.query({ ...project, userId }),
       firstOrganizationOf.query({ userId }),
       projectsByRef.query(project),
     ]);
-    return created(
+    const record = created(
       rowsOf<projectsByRef.Result>(minted, 4),
       project,
       rowsOf<firstOrganizationOf.Result>(minted, 3)[0]?.id,
       restoring,
     );
+    // this batch made the person's organization: the session lands its creation (session.ts)
+    return changed(minted[0]) ? { ...record, mintedOrganization: organization.name } : record;
   }
 
   /** The project `caller` may delete — the owner of its organization, or the operator — or a

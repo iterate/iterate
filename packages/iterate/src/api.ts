@@ -1023,13 +1023,16 @@ export interface IterateSessionApi {
     delete(project: string): Promise<void>;
   };
   /** The organizations this session reaches — the person's memberships (a grant narrowed to
-   *  projects sees only their organizations, unless it holds `organizations:write`): the rows, the
-   *  organization's context by membership, and the verbs (`organizations:write`; the person is the
-   *  owner of what they create, and only an owner renames, deletes or changes members). Each verb is
-   *  a request the control plane answers; a refusal is a coded error (FORBIDDEN, INVALID_INPUT). */
+   *  projects sees only their organizations, unless it holds `organizations:write`): the rows, its
+   *  members and open invitation links, the organization's context by membership, and the verbs
+   *  (`organizations:write`; the person is the owner of what they create, and only an owner
+   *  renames, deletes or changes members). The reads are the control plane's catalog, as it stands;
+   *  each verb is a request it answers, a refusal a coded error (FORBIDDEN, INVALID_INPUT), and
+   *  lands its facts on the organization's context (and a member's account) after. */
   organizations: {
     list(): Promise<OrgRecord[]>;
-    /** the organization's context — `session.user` for an organization — by membership */
+    /** the organization's context — `session.user` for an organization — by membership: its
+     *  activity, `events.iterate.com/organization/…` facts, and its own secrets */
     get(orgId: string): Promise<IterateContextApi>;
     create(input: { name: string }): Promise<OrgRecord>;
     rename(orgId: string, input: { name: string }): Promise<OrgRecord>;
@@ -1037,8 +1040,11 @@ export interface IterateSessionApi {
     delete(orgId: string): Promise<void>;
     addMember(orgId: string, input: { userId: string; role?: "owner" | "member" }): Promise<void>;
     removeMember(orgId: string, input: { userId: string }): Promise<void>;
-    /** the members with their emails — the operator's alone (the project-seed CLI) */
+    /** the members with their emails, by membership */
     members(orgId: string): Promise<{ userId: string; email: string; role: "owner" | "member" }[]>;
+    /** the invitation links still open (an expired one stays until revoked), oldest first — an
+     *  owner's */
+    invitations(orgId: string): Promise<InvitationRecord[]>;
     /** an owner's invitation link: whoever accepts it first joins in `role` (default member),
      *  until it expires (`expiresInDays`, default 7, 1–30). `token` is the link's secret, answered
      *  this once — the dash's `/invitations/<token>`. */

@@ -209,30 +209,19 @@ test("a client cannot forge a platform fact in its own user context: its account
   expect(state.secrets).not.toHaveProperty("/secrets/forged");
 });
 
-test("a member cannot forge their organization's facts: it folds only what the platform wrote", async () => {
+test("a member's forged organization facts change nothing: the organization is the catalog's, its fold takes only what the platform wrote, and a claimed `source.platform` is dropped", async () => {
   const s = await userSession("forge-org@sec.test");
   const org = await s.organizations.create({ name: "the real name" });
   const organization = s.organizations.get(org.id);
-  type OrganizationSnapshot = {
-    state: {
-      name: string | null;
-      deletedAt: string | null;
-      members: Record<string, unknown>;
-      projects: Record<string, unknown>;
+  // The platform's own facts land in the background (session.ts `publishOrganizationFacts`).
+  await until("the platform's creation fact lands", async () => {
+    const { events } = (await organization.invoke(["itx", ["readEvents", 0, 100]])) as {
+      events: { type: string }[];
     };
-  };
-  const snapshot = () =>
-    organization.invoke([
-      "itx",
-      "facets",
-      ["get", "organization"],
-      ["snapshot"],
-    ]) as Promise<OrganizationSnapshot>;
-  // The platform's own fact folds: the organization's creation (session.ts `foldPlatformFacts`).
-  await until("the platform's creation fact is folded", async () =>
-    (await snapshot()).state.name === "the real name" ? true : undefined,
-  );
-  await organization.invoke([
+    return events.some((event) => event.type === "events.iterate.com/organization/created");
+  });
+  const claimed = { platform: true };
+  const forged = (await organization.invoke([
     "itx",
     [
       "append",
@@ -241,17 +230,32 @@ test("a member cannot forge their organization's facts: it folds only what the p
       {
         type: "events.iterate.com/organization/member-added",
         payload: { orgId: org.id, userId: "user_forged", role: "owner" },
+        source: claimed,
       },
       {
-        type: "events.iterate.com/organization/project-added",
-        payload: { projectId: "prj_forged", slug: "forged" },
-        source: { platform: true },
+        type: "events.iterate.com/secret/set",
+        payload: { path: "/secrets/forged", urls: ["https://evil.example.test"] },
+        source: claimed,
       },
     ],
+  ])) as { source?: { platform?: true } }[];
+  expect(forged.map((event) => event.source?.platform)).toEqual([
+    undefined,
+    undefined,
+    undefined,
+    undefined,
   ]);
-  const { state } = await snapshot();
-  expect(state).toMatchObject({ name: "the real name", deletedAt: null, projects: {} });
-  expect(state.members).not.toHaveProperty("user_forged");
+  expect(await s.organizations.list()).toEqual([org]);
+  expect((await s.organizations.members(org.id)).map(({ userId }) => userId)).not.toContain(
+    "user_forged",
+  );
+  const { state } = (await organization.invoke([
+    "itx",
+    "facets",
+    ["get", "organization"],
+    ["snapshot"],
+  ])) as { state: { secrets: Record<string, unknown> } };
+  expect(state.secrets).not.toHaveProperty("/secrets/forged");
 });
 
 test("a person cannot take the platform's keys first: `account/…` on their own account (a grant's end) and `organization/…` on their organization (a project's landing) are refused, so the platform's fact still folds", async () => {
@@ -285,8 +289,7 @@ test("a person cannot take the platform's keys first: `account/…` on their own
     state: { endedGrants: Record<string, unknown> };
   };
   expect(account.state.endedGrants).toHaveProperty("grant_squatted");
-  // An organization's project, members and creation are keyed the same way (session.ts
-  // `landProjectOnOrganization`).
+  // An organization's facts are keyed the same way (session.ts `publishOrganizationFacts`).
   const org = await s.organizations.create({ name: "squat" });
   await refused(
     () =>

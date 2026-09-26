@@ -1,8 +1,7 @@
 // /projects/<slug> — the project layout: the project resolved by its slug (its id works too) from
 // the tree (components/organization-tree.tsx) when the shell has it open — a navigation within
-// the shell — else from the session's catalog: a fresh page load, before the tree has loaded, or
-// a session that lists rather than reads (a narrowed grant). One this sign-in lacks sends the
-// browser to sign in again. Handed to every section below.
+// the shell — else from the session's catalog: a fresh page load, before the tree has loaded. One
+// this sign-in lacks sends the browser to sign in again. Handed to every section below.
 import { createFileRoute, Outlet } from "@tanstack/react-router";
 import { readOrganizationTree } from "../../../../components/organization-tree.tsx";
 

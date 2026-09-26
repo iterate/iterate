@@ -1,6 +1,7 @@
-// /organizations/<organization>/activity — the organization's record: created, renamed, the
-// projects added to it — the context view over `session.organizations.get(orgId)`'s log, with
-// the organization fold enabled on first visit. Reached from the organization's page; the name is
+// /organizations/<organization>/activity — the organization's activity: created, renamed, its
+// members, invitation links and projects — the context view over
+// `session.organizations.get(orgId)`'s log, with the organization's fold (its own secrets)
+// enabled on first visit. Reached from the organization's page; the name is
 // the tree's (components/organization-tree.tsx), and an organization the tree does not hold is not
 // found. A sibling of the settings route, not its child (the `_` in the file name): the settings
 // page renders no outlet.
@@ -35,7 +36,8 @@ function OrganizationActivity() {
           <span className="text-muted-foreground">· Activity</span>
         </h1>
         <p className="text-sm text-muted-foreground">
-          The organization's record: created, renamed, and every project added to it.
+          Everything that happened to the organization: its name, its members, its invitation links
+          and its projects.
         </p>
       </div>
       <ContextActivity

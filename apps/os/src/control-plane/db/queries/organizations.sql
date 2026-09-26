@@ -1,8 +1,3 @@
-/** @name organizationById */
-select o.id, o.name, coalesce((select count(*) from projects p where p.org_id = o.id), 0) as projects
-from organizations o
-where o.id = :id;
-
 /** @name listOrganizations */
 select o.id, o.name, coalesce((select count(*) from projects p where p.org_id = o.id), 0) as projects
 from organizations o

@@ -1,35 +1,5 @@
 import type {Client} from 'sqlfu';
 
-const organizationByIdSql = `
-select o.id, o.name, coalesce((select count(*) from projects p where p.org_id = o.id), 0) as projects
-from organizations o
-where o.id = ?;
-`.trim();
-const organizationByIdQuery = (params: organizationById.Params) => ({
-	name: "organizationById",
-	sql: organizationByIdSql,
-	args: [params.id],
-});
-
-export const organizationById = Object.assign(
-	async function organizationById(client: Client, params: organizationById.Params): Promise<organizationById.Result | null> {
-		const rows = await client.all<organizationById.Result>(organizationByIdQuery(params));
-		return rows.length > 0 ? rows[0] : null;
-	},
-	{ sql: organizationByIdSql, query: organizationByIdQuery },
-);
-
-export namespace organizationById {
-	export type Params = {
-		id: string;
-	};
-	export type Result = {
-		id: string;
-		name: string;
-		projects: number;
-	};
-}
-
 const listOrganizationsSql = `
 select o.id, o.name, coalesce((select count(*) from projects p where p.org_id = o.id), 0) as projects
 from organizations o

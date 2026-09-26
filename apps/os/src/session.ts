@@ -39,7 +39,7 @@ import {
   type UserRecord,
 } from "./control-plane/catalog.ts";
 import { type ControlPlane, describeReach, type Reach } from "./control-plane/edge.ts";
-import { OrganizationRole, type OrganizationState } from "./organization/contract.ts";
+import { OrganizationRole } from "./organization/contract.ts";
 import { iterateAppScopesOf, type AppConfig } from "./app-config.ts";
 import { isDeployReset, isPlatformFailure } from "./retryable-error.ts";
 import type { AccountState, AuthenticationFact } from "./account/contract.ts";
@@ -212,19 +212,12 @@ export function ownerContext(contextNamespace: IterateContextNamespace, owner: F
  *  the one thing the processor folding them trusts (a person can append any type to their own
  *  context; the platform's fixed point, which no rewrite rule redirects, is the only writer of the
  *  stamp). A grant's end (grants.ts, the revocation truth) and a grant's use (oauth.ts) await it;
- *  the organization verbs await it `folded` (`foldPlatformFacts`); the rest goes through
- *  `publishPlatformFacts`.
+ *  the rest goes through `publishPlatformFacts`.
  *
  *  `folded` then waits on the owner's processor's read-your-writes barrier (`waitUntilProcessed`,
  *  which catches up from the log itself and rejects after its ten seconds) through the last fact's
  *  offset: the processor's push is asynchronous, so an append alone does not mean a read of the fold
- *  sees it.
- *
- *  THE CONTROL-PLANE DATABASE IS THE TRUTH; these facts are the fold the dash renders and the entity's
- *  activity, not the source of authority. Two CONCURRENT conflicting commands from different callers
- *  to the same context (a membership added and removed at once) have no ordering between them — the
- *  fold can settle opposite to the database's own order until the next authoritative read.
- *  Acceptable here: the edge authorizes every action against the database, never the fold. */
+ *  sees it. */
 export async function appendPlatformFacts(
   contextNamespace: IterateContextNamespace,
   owner: FactOwner,
@@ -249,23 +242,30 @@ export async function appendPlatformFacts(
     );
 }
 
-/** AN ORGANIZATION VERB'S FACTS — on the organization and on each member's account — appended and
- *  FOLDED before the verb answers. The control-plane database already decided the write; the answer
- *  now also means the folds hold it, so a caller's next read sees it and one caller's facts land in
- *  the order it made its calls. Fire-and-forget once let a cold organization context take a rename
- *  before the creation it renamed, and the fold kept the old name for good. A failed append fails
- *  the verb, loudly: the database's write stands (the same rename or membership again lands the
- *  same fact, which the fold absorbs), and the fold is never silently behind it. */
-async function foldPlatformFacts(
-  input: Pick<SessionInput, "contextNamespace">,
-  landings: [FactOwner, StreamEventInput | StreamEventInput[]][],
+/** AN ORGANIZATION'S ACTIVITY: a verb's facts — on the organization's own context and, for a
+ *  membership, on the member's account — published in the background (`publishPlatformFacts`) once
+ *  the control-plane database has made the write. THE DATABASE IS THE TRUTH of organizations,
+ *  members, invitations and projects, and what the dash reads (`organizations.list`, `members`,
+ *  `invitations`, `projects.list`); a fact is the record of who did what, and the dash's signal to
+ *  read again (apps/dash components/organization-tree.tsx), so it lands after the write it records.
+ *  Each fact is keyed by this operation (or by its own key: a project is added once), so the one
+ *  retry lands it once. */
+function publishOrganizationFacts(
+  input: Pick<SessionInput, "contextNamespace" | "waitUntil">,
   caller: Caller,
-): Promise<void> {
-  await Promise.all(
-    landings.map(([owner, facts]) =>
-      appendPlatformFacts(input.contextNamespace, owner, facts, caller, { folded: true }),
-    ),
-  );
+  landings: [FactOwner, StreamEventInput[]][],
+): void {
+  const operation = crypto.randomUUID();
+  for (const [owner, facts] of landings)
+    publishPlatformFacts(
+      input,
+      owner,
+      facts.map((fact, index) => ({
+        idempotencyKey: `organization/${operation}/${index}`,
+        ...fact,
+      })),
+      caller,
+    );
 }
 
 /** A person who left an organization: every project they no longer reach stops using their
@@ -336,86 +336,6 @@ class CreateWaits {
   }
 }
 
-/** A PROJECT ON ITS ORGANIZATION'S RECORD — the fold the dash tree lists an organization's projects
- *  from (session-fed: the control-plane database is imperative). ONE path for every creation —
- *  a person's, the operator's acting as one, and the operator's own into a named organization (a
- *  project seed's `apply`) — and for a creation asked again: it lands what the record LACKS, read
- *  at head, so the same creation again (a rerun `apply`, a retry) appends nothing. An organization
- *  the record has never heard of is one this creation minted (a person's first project,
- *  catalog.ts): its creation and its members come first, in one ordered append, so the fold sees
- *  the organization before its project. Each of those memberships also lands on the member's
- *  account, in the BACKGROUND
- *  (`publishPlatformFacts`): the answer never waits on a person's account. A brand-new account's
- *  first write can take Cloudflare seconds to confirm (21.9 s on 2026-09-24), and its output gate
- *  holds every answer until then. Nothing before the answer needs the account: the dash reads it
- *  through live state, and every access check reads the control plane. Landing late, the
- *  membership may arrive after a later membership fact of the same organization, so it is marked
- *  `mint` and the account never lets it override one (account/processor.ts). The deployment's own
- *  organization (the operator's projects with no `orgId`) has no members and no page: nothing
- *  lands there.
- *
- *  TWO AT ONCE both read the record without it, so each fact lands under an idempotency key: the
- *  stream keeps the first event under a key and answers every later one with it. A minted
- *  organization's first members are keyed as that first landing (`:mint`), never as the membership
- *  itself, so a later removal and re-add is never swallowed. Only the platform takes an
- *  `organization/…` key (context/built-ins.ts `append`), so the event a key answers with is always
- *  one the fold keeps. */
-async function landProjectOnOrganization(
-  input: Pick<SessionInput, "contextNamespace" | "controlPlane" | "waitUntil">,
-  project: ProjectRecord,
-  caller: Caller,
-  waits: CreateWaits,
-): Promise<void> {
-  if (project.orgId === ADMIN_ORG_ID) return;
-  // The record at head (the facet catches up from its log before answering), its processor enabled
-  // first: an organization this creation just minted has no row yet, and a second enable appends
-  // nothing. `invoke` answers `unknown` across the DO hop; the `organization` facet is the
-  // platform's own OrganizationDurableObject and `snapshot()` the engine's `{ offset, state }`.
-  const organizationContext = ownerContext(input.contextNamespace, { organization: project.orgId });
-  await waits.time("organizationEnable", () =>
-    organizationContext.invoke(["itx", "processors", ["enable", "organization"]], [], caller),
-  );
-  const { state: record } = (await waits.time("organizationSnapshot", () =>
-    organizationContext.invoke(
-      ["itx", "facets", ["get", "organization"], ["snapshot"]],
-      [],
-      caller,
-    ),
-  )) as { state: OrganizationState };
-  const onOrganization: StreamEventInput[] = [];
-  if (!record.name) {
-    const organization = await waits.time("controlPlaneOrganization", () =>
-      input.controlPlane.getOrganization(project.orgId),
-    );
-    const members = await waits.time("controlPlaneMembers", () =>
-      input.controlPlane.listMembers(project.orgId),
-    );
-    onOrganization.push({
-      ...orgCreatedFact(organization?.name ?? project.orgId),
-      idempotencyKey: "organization/created",
-    });
-    for (const { userId, role } of members) {
-      if (record.members[userId]?.role === role) continue;
-      const membership = {
-        ...memberAddedFact(project.orgId, userId, role, { mint: true }),
-        idempotencyKey: `organization/member-added:${project.orgId}:${userId}:mint`,
-      };
-      onOrganization.push(membership);
-      publishPlatformFacts(input, { account: userId }, membership, caller);
-    }
-  }
-  // a project is created once and its slug never changes: every landing of it is the same event
-  if (!record.projects[project.id])
-    onOrganization.push({
-      ...projectAddedFact(project.id, project.slug),
-      idempotencyKey: `organization/project-added:${project.id}`,
-    });
-  if (onOrganization.length)
-    await waits.time("organizationFold", () =>
-      foldPlatformFacts(input, [[{ organization: project.orgId }, onOrganization]], caller),
-    );
-}
-
 /** THE DEPLOYMENT'S LENDS TO EVERY PROJECT, borrowed by a project just created (context/built-ins.ts
  *  `borrowEveryProjectLends`, on the global root), before the answer: the project's first
  *  `getSecret` of a lent path finds it. Never fails the creation: a borrow that fails is reported
@@ -438,90 +358,94 @@ async function borrowEveryProjectLends(
   }
 }
 
+type KeyedFact = StreamEventInput & { idempotencyKey: string };
+
 /** `appendPlatformFacts` best-effort and ASYNC (waitUntil), off the verb's own path: the account's
- *  sign-ins, mints and consents — facts no answer depends on. Each is KEYED (its sign-in's
- *  operation, its mint's membership, its consent's grant), so running the append twice lands the
- *  fact once: the stream answers a key it holds with the event it already has. An append the
- *  platform cut is therefore sent ONCE more, on a fresh stub (retryable-error.ts): a deploy
- *  resetting the owner's Durable Object, expected on every deploy under traffic, logs
- *  `session.deploy-reset-platform-fact-retry`; a lost connection or a storage reset logs
- *  `session.platform-failure-platform-fact-retry` named `platform-fact`, which the prd fault alarm
- *  counts by name. A second failure, and any other, is reported, as oauth.ts reports a grant use
- *  it could not record. */
+ *  sign-ins and consents, and an organization's activity — facts no answer depends on. Each is
+ *  KEYED (its sign-in's operation, its consent's grant, its organization verb's operation), so
+ *  running the append twice lands the fact once: the stream answers a key it holds with the event
+ *  it already has. An append the platform cut is therefore sent ONCE more, on a fresh stub
+ *  (retryable-error.ts): a deploy resetting the owner's Durable Object, expected on every deploy
+ *  under traffic, logs `session.deploy-reset-platform-fact-retry`; a lost connection or a storage
+ *  reset logs `session.platform-failure-platform-fact-retry` named `platform-fact`, which the prd
+ *  fault alarm counts by name. A second failure, and any other, is reported, as oauth.ts reports a
+ *  grant use it could not record. */
 export function publishPlatformFacts(
   input: Pick<SessionInput, "contextNamespace" | "waitUntil">,
   owner: FactOwner,
-  fact: StreamEventInput & { idempotencyKey: string },
+  facts: KeyedFact | KeyedFact[],
   caller: Caller,
 ): void {
-  const attributes = { path: ownerAddress(owner).path, type: fact.type };
+  const events = Array.isArray(facts) ? facts : [facts];
+  const attributes = {
+    path: ownerAddress(owner).path,
+    type: events.map((event) => event.type).join(" "),
+  };
   input.waitUntil(
-    retryPlatformFailures(() => appendPlatformFacts(input.contextNamespace, owner, fact, caller), {
-      event: "session.platform-failure-platform-fact-retry",
-      delaysMs: [0],
-      platformFailure: (error) => {
-        if (isDeployReset(error))
-          return {
-            event: "session.deploy-reset-platform-fact-retry",
-            name: "platform-fact",
-            ...attributes,
-            message: String(error),
-          };
-        if (isPlatformFailure(error))
-          return { name: "platform-fact", ...attributes, message: String(error) };
-        return undefined;
+    retryPlatformFailures(
+      () => appendPlatformFacts(input.contextNamespace, owner, events, caller),
+      {
+        event: "session.platform-failure-platform-fact-retry",
+        delaysMs: [0],
+        platformFailure: (error) => {
+          if (isDeployReset(error))
+            return {
+              event: "session.deploy-reset-platform-fact-retry",
+              name: "platform-fact",
+              ...attributes,
+              message: String(error),
+            };
+          if (isPlatformFailure(error))
+            return { name: "platform-fact", ...attributes, message: String(error) };
+          return undefined;
+        },
       },
-    }).catch((error) => reportIssue("session.platform-fact-not-recorded", error, attributes)),
+    ).catch((error) => reportIssue("session.platform-fact-not-recorded", error, attributes)),
   );
 }
 
-/** The organization's facts, built once (the same membership fact rides the organization's context
- *  and the member's account). Their shapes are the organization contract's (src/organization/). */
+/** A project on its organization's activity: `organization/project-added`, keyed by the project
+ *  (a creation asked again lands it once), after the organization's creation and its owner when
+ *  this creation minted it (a person's first project, catalog.ts `createProject`) — the owner's
+ *  membership on their account too. The deployment's own organization (the operator's projects
+ *  with no `orgId`) has no members and no page: nothing lands there. */
+function publishProjectAdded(
+  input: Pick<SessionInput, "contextNamespace" | "waitUntil">,
+  project: ProjectRecord & { mintedOrganization?: string },
+  caller: Caller,
+): void {
+  if (project.orgId === ADMIN_ORG_ID) return;
+  const added = {
+    type: "events.iterate.com/organization/project-added",
+    payload: { projectId: project.id, slug: project.slug },
+    idempotencyKey: `organization/project-added:${project.id}`,
+  };
+  if (!project.mintedOrganization)
+    return publishOrganizationFacts(input, caller, [[{ organization: project.orgId }, [added]]]);
+  const membership = memberAddedFact(project.orgId, caller.principal!.actor, "owner");
+  publishOrganizationFacts(input, caller, [
+    [
+      { organization: project.orgId },
+      [orgCreatedFact(project.mintedOrganization), membership, added],
+    ],
+    [{ account: caller.principal!.actor }, [membership]],
+  ]);
+}
+
+/** The facts more than one verb lands (their shapes are the organization contract's,
+ *  src/organization/): a membership rides the organization's log and the member's account alike. */
 const orgCreatedFact = (name: string): StreamEventInput => ({
   type: "events.iterate.com/organization/created",
   payload: { name },
+  idempotencyKey: "organization/created",
 });
-const orgRenamedFact = (name: string): StreamEventInput => ({
-  type: "events.iterate.com/organization/renamed",
-  payload: { name },
-});
-const orgDeletedFact = (): StreamEventInput => ({
-  type: "events.iterate.com/organization/deleted",
-  payload: {},
-});
-const memberAddedFact = (
-  orgId: string,
-  userId: string,
-  role: OrganizationRole,
-  { mint }: { mint?: true } = {},
-): StreamEventInput => ({
+const memberAddedFact = (orgId: string, userId: string, role: OrganizationRole) => ({
   type: "events.iterate.com/organization/member-added",
-  payload: { orgId, userId, role, mint },
+  payload: { orgId, userId, role },
 });
-const memberRemovedFact = (orgId: string, userId: string): StreamEventInput => ({
+const memberRemovedFact = (orgId: string, userId: string) => ({
   type: "events.iterate.com/organization/member-removed",
   payload: { orgId, userId },
-});
-const invitationCreatedFact = (invitation: InvitationRecord): StreamEventInput => ({
-  type: "events.iterate.com/organization/invitation-created",
-  payload: {
-    invitationId: invitation.id,
-    role: invitation.role,
-    emailHint: invitation.emailHint,
-    expiresAt: invitation.expiresAt,
-  },
-});
-const invitationAcceptedFact = (invitationId: string, userId: string): StreamEventInput => ({
-  type: "events.iterate.com/organization/invitation-accepted",
-  payload: { invitationId, userId },
-});
-const invitationRevokedFact = (invitationId: string): StreamEventInput => ({
-  type: "events.iterate.com/organization/invitation-revoked",
-  payload: { invitationId },
-});
-const projectAddedFact = (projectId: string, slug: string): StreamEventInput => ({
-  type: "events.iterate.com/organization/project-added",
-  payload: { projectId, slug },
 });
 
 /** What you authenticate into: a catalog that vends contexts. A session is NOT a context — it is
@@ -771,14 +695,16 @@ type SessionOf = {
   organizationsWriter(verb: string): void;
 };
 
-/** The organization catalog. `list()` is the person's organizations, with their role (a grant
- *  narrowed to projects sees only the organizations those projects belong to — unless it holds
- *  `organizations:write`, which is the organizations themselves); `get(orgId)` vends the
- *  organization's context BY MEMBERSHIP (an org the session does not reach is FORBIDDEN, exactly as
- *  `projects.get` outside its reach); `create`, `rename`, `delete`, `addMember`, `removeMember`,
- *  `createInvitation`, `revokeInvitation` and `acceptInvitation` are each one call on the control
- *  plane under this caller, which checks the rest (an owner? the last owner? projects still held?
- *  a link still open?) against its catalog. */
+/** The organization catalog — THE DASH'S READ of organizations, straight from the control-plane
+ *  database: `list()` is the person's organizations, with their role (a grant narrowed to projects
+ *  sees only the organizations those projects belong to — unless it holds `organizations:write`,
+ *  which is the organizations themselves); `members(orgId)` and an owner's `invitations(orgId)` are
+ *  one organization's; `get(orgId)` vends the organization's context — its activity — BY MEMBERSHIP
+ *  (an org the session does not reach is FORBIDDEN, exactly as `projects.get` outside its reach).
+ *  `create`, `rename`, `delete`, `addMember`, `removeMember`, `createInvitation`,
+ *  `revokeInvitation` and `acceptInvitation` are each one call on the control plane under this
+ *  caller, which checks the rest (an owner? the last owner? projects still held? a link still
+ *  open?) against its catalog, and then publish the verb's facts (`publishOrganizationFacts`). */
 class OrganizationCollectionRpcTarget extends RpcTarget {
   readonly #session: SessionOf;
   constructor(session: SessionOf) {
@@ -787,8 +713,7 @@ class OrganizationCollectionRpcTarget extends RpcTarget {
   }
 
   /** The organizations this session reaches, narrowed as the docstring says. `fresh` re-reads the
-   *  person's memberships past the isolate's memo — the re-read before a refusal (edge.ts's rule),
-   *  so a membership that just landed elsewhere is admitted at once. */
+   *  person's memberships past the isolate's memo. */
   async #reachable(fresh = false): Promise<OrganizationRecord[]> {
     const { reach, scopes } = this.#session.authority;
     const { controlPlane } = this.#session.input;
@@ -803,11 +728,12 @@ class OrganizationCollectionRpcTarget extends RpcTarget {
     );
   }
 
-  list(): Promise<OrganizationRecord[]> {
-    return this.#reachable();
-  }
-
-  async get(orgId: string): Promise<IterateContextRpcTarget> {
+  /** `orgId`, when this session reaches it, as `list()` narrows it: a grant bound to projects
+   *  reaches only the organizations those projects belong to (unless it holds
+   *  `organizations:write`), so a personal access token opens no other organization. The admin
+   *  reaches every one. A miss is re-read once past the memo before it is refused: a membership
+   *  that just landed is admitted at once. */
+  async #reached(verb: string, orgId: string): Promise<string> {
     // ONE path segment — the catalog's `org_<hex>` — never a path: the id is interpolated into
     // `/organizations/<id>`, and `..` or `x/../users/<id>` would canonicalize onto another global
     // context (the admin reaches every org, so the membership check alone would not catch it).
@@ -815,12 +741,8 @@ class OrganizationCollectionRpcTarget extends RpcTarget {
     if (!/^[A-Za-z0-9_-]+$/.test(id))
       throw codedError(
         "FORBIDDEN",
-        `organizations.get(${JSON.stringify(id)}): an organization id is one path segment, never a path`,
+        `organizations.${verb}(${JSON.stringify(id)}): an organization id is one path segment, never a path`,
       );
-    // BY MEMBERSHIP, AS `list()` NARROWS IT: a grant bound to projects reaches only the organizations
-    // those projects belong to (unless it holds `organizations:write`), so a personal access token
-    // opens no other organization's context. The admin reaches every one. A miss is re-read once
-    // past the memo before it is refused: a membership that just landed is admitted at once.
     const reaches = (organizations: OrganizationRecord[]) =>
       organizations.some((organization) => organization.id === id);
     const reachable =
@@ -830,17 +752,33 @@ class OrganizationCollectionRpcTarget extends RpcTarget {
     if (!reachable)
       throw codedError(
         "FORBIDDEN",
-        `organizations.get(${JSON.stringify(id)}): not an organization this session belongs to`,
+        `organizations.${verb}(${JSON.stringify(id)}): not an organization this session belongs to`,
       );
-    return this.#session.globalContext(`/organizations/${id}`);
+    return id;
   }
 
-  /** An organization's members with their emails — the operator's alone (the project-seed CLI
-   *  captures an organization's membership with the project). */
+  /** Read fresh, past the isolate's memo: the dash reads it again when a fact says it changed. */
+  list(): Promise<OrganizationRecord[]> {
+    return this.#reachable(true);
+  }
+
+  async get(orgId: string): Promise<IterateContextRpcTarget> {
+    return this.#session.globalContext(`/organizations/${await this.#reached("get", orgId)}`);
+  }
+
+  /** An organization's members, with their emails — for every session that reaches it (the dash's
+   *  members table, the project-seed CLI's capture). */
   async members(orgId: string): Promise<MemberRecord[]> {
-    if (this.#session.authority.reach !== "every")
-      throw codedError("FORBIDDEN", "Only the operator lists an organization's members.");
-    return this.#session.input.controlPlane.listMembers(z.string().min(1).parse(orgId));
+    const id = await this.#reached("members", orgId);
+    return this.#session.input.controlPlane.listMembers(id);
+  }
+
+  /** An organization's invitation links still open, oldest first — its owners' (the dash's list
+   *  to revoke from), and the operator's; anyone else is refused FORBIDDEN. An expired link stays
+   *  until revoked: `expiresAt` says it. */
+  async invitations(orgId: string): Promise<InvitationRecord[]> {
+    const { input, caller } = this.#session;
+    return input.controlPlane.listInvitations(caller, await this.#reached("invitations", orgId));
   }
 
   /** A new organization named `name`, the person its owner. The operator may name the owner. */
@@ -854,25 +792,17 @@ class OrganizationCollectionRpcTarget extends RpcTarget {
       .parse(input);
     const { input: sessionInput, caller } = this.#session;
     const record = await sessionInput.controlPlane.createOrganization(caller, data);
-    // Land the organization on its own context (the fold the dash renders); the owner's membership
-    // rides there — after the creation, in one ordered append — and on their account. The operator's
-    // scripts add members themselves (an owner named by the operator gets no session here).
+    // The operator's scripts add members themselves (an owner named by the operator gets no
+    // session here).
+    const created = orgCreatedFact(record.name);
     if (record.role === "owner") {
       const membership = memberAddedFact(record.id, caller.principal!.actor, "owner");
-      await foldPlatformFacts(
-        sessionInput,
-        [
-          [{ organization: record.id }, [orgCreatedFact(record.name), membership]],
-          [{ account: caller.principal!.actor }, membership],
-        ],
-        caller,
-      );
+      publishOrganizationFacts(sessionInput, caller, [
+        [{ organization: record.id }, [created, membership]],
+        [{ account: caller.principal!.actor }, [membership]],
+      ]);
     } else
-      await foldPlatformFacts(
-        sessionInput,
-        [[{ organization: record.id }, orgCreatedFact(record.name)]],
-        caller,
-      );
+      publishOrganizationFacts(sessionInput, caller, [[{ organization: record.id }, [created]]]);
     return record;
   }
 
@@ -889,16 +819,17 @@ class OrganizationCollectionRpcTarget extends RpcTarget {
       organizationId,
       data.name,
     );
-    await foldPlatformFacts(
-      sessionInput,
-      [[{ organization: organizationId }, orgRenamedFact(record.name)]],
-      caller,
-    );
+    publishOrganizationFacts(sessionInput, caller, [
+      [
+        { organization: organizationId },
+        [{ type: "events.iterate.com/organization/renamed", payload: { name: record.name } }],
+      ],
+    ]);
     return { ...record, role: "owner" };
   }
 
   /** Delete an organization the person owns, while it holds no project. The deletion lands on the
-   *  organization's own context, and each membership ends on the member's account. */
+   *  organization's own context, and each membership's end on the member's account. */
   async delete(orgId: string): Promise<void> {
     this.#session.organizationsWriter("delete");
     const { input: sessionInput, caller } = this.#session;
@@ -906,17 +837,22 @@ class OrganizationCollectionRpcTarget extends RpcTarget {
     // The members, read before the delete refuses or succeeds — to end their memberships below.
     const members = await sessionInput.controlPlane.listMembers(organizationId);
     await sessionInput.controlPlane.deleteOrganization(caller, organizationId);
-    await foldPlatformFacts(
-      sessionInput,
+    publishOrganizationFacts(sessionInput, caller, [
+      ...members.map(({ userId }): [FactOwner, StreamEventInput[]] => [
+        { account: userId },
+        [memberRemovedFact(organizationId, userId)],
+      ]),
       [
-        ...members.map(({ userId }): [FactOwner, StreamEventInput] => [
-          { account: userId },
-          memberRemovedFact(organizationId, userId),
-        ]),
-        [{ organization: organizationId }, orgDeletedFact()],
+        { organization: organizationId },
+        [
+          {
+            type: "events.iterate.com/organization/deleted",
+            payload: {},
+            idempotencyKey: "organization/deleted",
+          },
+        ],
       ],
-      caller,
-    );
+    ]);
   }
 
   /** Add a person to an organization the caller owns, as an owner or a member. */
@@ -932,14 +868,10 @@ class OrganizationCollectionRpcTarget extends RpcTarget {
     const organizationId = z.string().min(1).parse(orgId);
     const userId = await sessionInput.controlPlane.addMember(caller, organizationId, data);
     const fact = memberAddedFact(organizationId, userId, data.role);
-    await foldPlatformFacts(
-      sessionInput,
-      [
-        [{ organization: organizationId }, fact],
-        [{ account: userId }, fact],
-      ],
-      caller,
-    );
+    publishOrganizationFacts(sessionInput, caller, [
+      [{ organization: organizationId }, [fact]],
+      [{ account: userId }, [fact]],
+    ]);
   }
 
   /** Remove a person from an organization the caller owns. */
@@ -950,23 +882,19 @@ class OrganizationCollectionRpcTarget extends RpcTarget {
     const organizationId = z.string().min(1).parse(orgId);
     const userId = await sessionInput.controlPlane.removeMember(caller, organizationId, data);
     const fact = memberRemovedFact(organizationId, userId);
-    await foldPlatformFacts(
-      sessionInput,
-      [
-        [{ organization: organizationId }, fact],
-        [{ account: userId }, fact],
-      ],
-      caller,
-    );
+    publishOrganizationFacts(sessionInput, caller, [
+      [{ organization: organizationId }, [fact]],
+      [{ account: userId }, [fact]],
+    ]);
     await endLendsOutOfReach(sessionInput, userId);
   }
 
   /** A new INVITATION LINK to an organization the caller owns: whoever signs in and accepts it
    *  first joins in `role` (default member), until it expires (`expiresInDays`, default 7, at most
    *  30). Answers the invitation with its `token` — the link's secret, shown this once (the
-   *  control plane keeps only its SHA-256); the dash puts it in `/invitations/<token>`. The
-   *  organization's record lists it as pending until it is accepted or revoked. `emailHint` is who
-   *  it is meant for, a note for the owners — never checked against who accepts. */
+   *  control plane keeps only its SHA-256); the dash puts it in `/invitations/<token>`.
+   *  `invitations(orgId)` lists it as open until it is accepted or revoked. `emailHint` is who it
+   *  is meant for, a note for the owners — never checked against who accepts. */
   async createInvitation(
     orgId: string,
     input: { role?: OrganizationRole; emailHint?: string; expiresInDays?: number } = {},
@@ -993,11 +921,22 @@ class OrganizationCollectionRpcTarget extends RpcTarget {
       emailHint: data.emailHint,
       expiresAt: Date.now() + data.expiresInDays * 86_400_000,
     });
-    await foldPlatformFacts(
-      sessionInput,
-      [[{ organization: organizationId }, invitationCreatedFact(invitation)]],
-      caller,
-    );
+    publishOrganizationFacts(sessionInput, caller, [
+      [
+        { organization: organizationId },
+        [
+          {
+            type: "events.iterate.com/organization/invitation-created",
+            payload: {
+              invitationId: invitation.id,
+              role: invitation.role,
+              emailHint: invitation.emailHint,
+              expiresAt: invitation.expiresAt,
+            },
+          },
+        ],
+      ],
+    ]);
     return { ...invitation, token };
   }
 
@@ -1009,11 +948,17 @@ class OrganizationCollectionRpcTarget extends RpcTarget {
     const { input: sessionInput, caller } = this.#session;
     const organizationId = z.string().min(1).parse(orgId);
     await sessionInput.controlPlane.revokeInvitation(caller, organizationId, data.invitationId);
-    await foldPlatformFacts(
-      sessionInput,
-      [[{ organization: organizationId }, invitationRevokedFact(data.invitationId)]],
-      caller,
-    );
+    publishOrganizationFacts(sessionInput, caller, [
+      [
+        { organization: organizationId },
+        [
+          {
+            type: "events.iterate.com/organization/invitation-revoked",
+            payload: { invitationId: data.invitationId },
+          },
+        ],
+      ],
+    ]);
   }
 
   /** What an invitation link opens, for the signed-in person holding it — the organization's name
@@ -1042,21 +987,23 @@ class OrganizationCollectionRpcTarget extends RpcTarget {
       caller,
       await sha256Hex(z.string().min(1).parse(token)),
     );
-    // landed again on a retry by the same person: the fold absorbs both, and `role` is the
-    // membership as it stands, so a promotion since is never rewound
+    // published again on a retry by the same person: `role` is the membership as it stands, so the
+    // activity never shows a promotion since rewound
     if (accepted) {
       const membership = memberAddedFact(invitation.orgId, userId, role);
-      await foldPlatformFacts(
-        sessionInput,
+      publishOrganizationFacts(sessionInput, caller, [
         [
+          { organization: invitation.orgId },
           [
-            { organization: invitation.orgId },
-            [invitationAcceptedFact(invitation.id, userId), membership],
+            {
+              type: "events.iterate.com/organization/invitation-accepted",
+              payload: { invitationId: invitation.id, userId },
+            },
+            membership,
           ],
-          [{ account: userId }, membership],
         ],
-        caller,
-      );
+        [{ account: userId }, [membership]],
+      ]);
     }
     const row = (await sessionInput.controlPlane.accessibleTo(userId, true)).organizations.find(
       (organization) => organization.id === invitation.orgId,
@@ -1081,9 +1028,14 @@ class ProjectCollectionRpcTarget extends RpcTarget {
 
   /** The projects this session reaches, as catalog rows: the projects of the orgs the user
    *  belongs to, with their role — narrowed to the projects a grant chose; for the admin secret,
-   *  every project (no role). */
+   *  every project (no role). Read fresh, past the isolate's memo: the dash reads it again when a
+   *  fact says it changed. */
   list(): Promise<ProjectRecord[]> {
-    return this.#session.input.controlPlane.reachableProjects(this.#session.authority.reach);
+    return this.#session.input.controlPlane.reachableProjects(
+      this.#session.authority.reach,
+      [],
+      true,
+    );
   }
 
   /** The built-in config repo templates a creation may name (generated/config-templates.js); naming
@@ -1101,10 +1053,11 @@ class ProjectCollectionRpcTarget extends RpcTarget {
    *  tree); the control plane refuses a slug ANY other organization holds (PROJECT_NAME_TAKEN),
    *  answers the same organization's again with the same project, and opens the project's own saga
    *  on its root (src/project/processor.ts seeds it from the template — the dash watches that
-   *  facet's live state). Whoever creates it, the project then lands on its organization's record,
-   *  which the dash lists (`landProjectOnOrganization`); the same creation again lands nothing
-   *  twice, so a project seed's `apply` converges an existing project through this same call. A
-   *  grant narrowed to named projects creates none: FORBIDDEN. */
+   *  facet's live state). Whoever creates it, `organization/project-added` then lands on its
+   *  organization's activity, keyed by the project, so the same creation again (a project seed's
+   *  `apply` converging an existing project) lands it once; an organization the creation minted
+   *  gets its creation and its owner first. A grant narrowed to named projects creates none:
+   *  FORBIDDEN. */
   async create(input: {
     project: string;
     orgId?: string;
@@ -1166,9 +1119,7 @@ class ProjectCollectionRpcTarget extends RpcTarget {
           ],
         ]),
       );
-      // The organization's record, before the answer: the dash lists the project as soon as it has
-      // it. The member's account is not waited on.
-      await landProjectOnOrganization(sessionInput, created, caller, waits);
+      publishProjectAdded(sessionInput, created, caller);
       await waits.time("everyProjectLends", () =>
         borrowEveryProjectLends(sessionInput, created.id, caller),
       );
@@ -1210,11 +1161,11 @@ class ProjectCollectionRpcTarget extends RpcTarget {
 
   /** DELETE the project — the owner of its organization, or the operator. Every step is keyed, so
    *  a delete that failed part way is simply asked again: the control plane says who may (catalog.ts
-   *  `projectToDelete`); the root is asked to delete it, as the platform's own fact; the project
-   *  leaves its organization's record; and the control plane drops its row, from which moment
-   *  nothing reaches it. The deletion saga on the root (project/processor.ts) destroys every
-   *  context, its hostnames, kv, files and repos, and the root last; the answer does not wait for
-   *  it. */
+   *  `projectToDelete`); the root is asked to delete it, as the platform's own fact; and the
+   *  control plane drops its row, from which moment nothing reaches it, and then
+   *  `organization/project-removed` lands on its organization's activity. The deletion saga on the
+   *  root (project/processor.ts) destroys every context, its hostnames, kv, files and repos, and the
+   *  root last; the answer does not wait for it. */
   async delete(project: string): Promise<void> {
     const { input: sessionInput, caller } = this.#session;
     const address = DurableObjectNameCodec.parse(project);
@@ -1248,19 +1199,20 @@ class ProjectCollectionRpcTarget extends RpcTarget {
       [],
       { ...caller, platform: true },
     );
-    if (doomed.orgId !== ADMIN_ORG_ID)
-      await appendPlatformFacts(
-        sessionInput.contextNamespace,
-        { organization: doomed.orgId },
-        {
-          type: "events.iterate.com/organization/project-removed",
-          idempotencyKey: `organization/project-removed:${id}`,
-          payload: { projectId: id, slug: doomed.slug },
-        },
-        caller,
-        { folded: true },
-      );
     await sessionInput.controlPlane.deleteProject(caller, id);
+    if (doomed.orgId !== ADMIN_ORG_ID)
+      publishOrganizationFacts(sessionInput, caller, [
+        [
+          { organization: doomed.orgId },
+          [
+            {
+              type: "events.iterate.com/organization/project-removed",
+              idempotencyKey: `organization/project-removed:${id}`,
+              payload: { projectId: id, slug: doomed.slug },
+            },
+          ],
+        ],
+      ]);
   }
 
   #context(projectId: string): IterateContextRpcTarget {

@@ -151,7 +151,6 @@ test("organizations: created with the caller its owner; the operator alone names
     role: "owner",
     projects: 0,
   });
-  expect(await c.organization(org.id)).toEqual({ id: org.id, name: "Booper", projects: 0 });
   expect(await c.members(org.id)).toEqual([{ userId: ada.id, email: ada.email, role: "owner" }]);
   expect(await c.accessibleTo(ada.id)).toEqual({ organizations: [org], projects: [] });
   await expect(c.createOrganization(as(ada), { name: "X", ownerId: bob.id })).rejects.toMatchObject(
@@ -271,7 +270,7 @@ test("organizations: a removed owner's own verbs are refused and write nothing; 
     NOW,
   );
   await c.deleteOrganization(as(ada), empty.id);
-  expect(await c.organization(empty.id)).toBeNull();
+  expect((await c.organizations()).map((organization) => organization.id)).not.toContain(empty.id);
   expect(await c.accessibleTo(bob.id)).toEqual({ organizations: [], projects: [] });
   expect(await rows("select id from invitations")).toEqual([]);
   // a delete racing a project's creation in it: the project in its organization, or neither
@@ -280,14 +279,14 @@ test("organizations: a removed owner's own verbs are refused and write nothing; 
     c.deleteOrganization(as(ada), raced.id),
     c.createProject(as(ada), { project: "raced", organizationId: raced.id }),
   ]);
-  expect(await c.organization(raced.id)).toEqual(
-    (await c.project("raced")) ? expect.objectContaining({ projects: 1 }) : null,
+  expect((await c.organizations()).find((organization) => organization.id === raced.id)).toEqual(
+    (await c.project("raced")) ? expect.objectContaining({ projects: 1 }) : undefined,
   );
 });
 
-test("invitations: an owner creates a link — the record by id, never the hash; the holder previews the organization; a stranger or a member cannot create one, nor one already expired", async () => {
+test("invitations: an owner creates a link — the record by id, never the hash — and lists the open ones; the holder previews the organization; a stranger or a member cannot create one or list them, nor create one already expired", async () => {
   await emptyTables();
-  const { ada, bob, org, invitation } = await invited();
+  const { ada, bob, carol, org, invitation } = await invited();
   expect(invitation).toEqual({
     id: expect.stringMatching(/^inv_[0-9a-f]{32}$/),
     orgId: org.id,
@@ -311,7 +310,19 @@ test("invitations: an owner creates a link — the record by id, never the hash;
   await c.addMember(as(ada), org.id, { userId: bob.id, role: "member" });
   await expect(create(as(bob))).rejects.toMatchObject({ code: "FORBIDDEN" });
   await expect(create(as(ada), NOW)).rejects.toMatchObject({ code: "INVALID_INPUT" });
-  expect(await create(as(ada))).toMatchObject({ emailHint: null });
+  const second = await create(as(ada));
+  expect(second).toMatchObject({ emailHint: null });
+  // the links still open are an owner's to list, and the operator's; a member's or a stranger's
+  // read is refused
+  const open = [invitation, second].sort((a, b) => a.id.localeCompare(b.id));
+  const listed = async (caller: Caller) =>
+    (await c.openInvitations(caller, org.id)).sort((a, b) => a.id.localeCompare(b.id));
+  expect(await listed(as(ada))).toEqual(open);
+  expect(await listed(admin)).toEqual(open);
+  await expect(c.openInvitations(as(bob), org.id)).rejects.toMatchObject({ code: "FORBIDDEN" });
+  await expect(c.openInvitations(as(carol), org.id)).rejects.toMatchObject({
+    code: "FORBIDDEN",
+  });
 });
 
 test("invitations: accepted, the person joins in the link's role — once: again by them is the same answer, a second person is refused, and a member removed since cannot reuse it, even at the same millisecond", async () => {
@@ -319,6 +330,7 @@ test("invitations: accepted, the person joins in the link's role — once: again
   const { ada, bob, carol, org, invitation } = await invited("owner");
   const accepted = { invitation, userId: bob.id, role: "owner", accepted: true };
   expect(await c.acceptInvitation(as(bob), "hash-1", NOW + 1)).toEqual(accepted);
+  expect(await c.openInvitations(as(ada), org.id)).toEqual([]);
   expect(await c.accessibleTo(bob.id)).toMatchObject({
     organizations: [{ id: org.id, name: "Booper", role: "owner", projects: 0 }],
   });
@@ -395,8 +407,11 @@ test("invitations: expired or revoked, a link is refused and joins nobody; revok
   await expect(c.revokeInvitation(as(ada), other.id, invitation.id, NOW)).rejects.toThrow(
     "No such invitation to this organization.",
   );
+  // expired, a link stays open until revoked
+  expect(await c.openInvitations(as(ada), org.id)).toEqual([invitation]);
   expect(await c.revokeInvitation(as(ada), org.id, invitation.id, NOW)).toEqual(invitation);
   expect(await c.revokeInvitation(as(ada), org.id, invitation.id, NOW + 1)).toEqual(invitation);
+  expect(await c.openInvitations(as(ada), org.id)).toEqual([]);
   expect(await c.invitation("hash-1", bob.id, NOW)).toMatchObject({ status: "revoked" });
   await expect(c.acceptInvitation(as(bob), "hash-1", NOW)).rejects.toThrow(
     "This invitation was revoked.",
@@ -498,19 +513,24 @@ test("projects: with no organization named: the person's first by name, made on 
   expect(await c.accessibleTo(ada.id)).toMatchObject({
     organizations: [{ id: one.orgId, name: "ada.lovelace", role: "owner", projects: 2 }],
   });
+  // the one that made it says so (the session lands the organization's creation from it)
+  const minted = (created: { mintedOrganization?: string }[]) =>
+    created.map(({ mintedOrganization }) => mintedOrganization).filter(Boolean);
+  expect(minted([one, two])).toEqual(["ada.lovelace"]);
   const bob = await person("bob@example.com");
   const [first, again] = await Promise.all([
     c.createProject(as(bob), { project: "same" }),
     c.createProject(as(bob), { project: "same" }),
   ]);
-  expect(first).toEqual(again);
+  expect(minted([first, again])).toEqual(["bob"]);
+  expect({ ...first, mintedOrganization: undefined }).toEqual({
+    ...again,
+    mintedOrganization: undefined,
+  });
+  expect(minted([await c.createProject(as(bob), { project: "later" })])).toEqual([]);
   expect((await c.accessibleTo(bob.id)).organizations).toHaveLength(1);
   expect(await c.createProject(admin, { project: "ops" })).toMatchObject({ orgId: ADMIN_ORG_ID });
-  expect(await c.organization(ADMIN_ORG_ID)).toEqual({
-    id: ADMIN_ORG_ID,
-    name: "admin",
-    projects: 1,
-  });
+  expect(await c.organizations()).toContainEqual({ id: ADMIN_ORG_ID, name: "admin", projects: 1 });
   expect(await c.members(ADMIN_ORG_ID)).toEqual([]);
   // the operator names any organization, one that exists
   expect(

@@ -143,9 +143,10 @@ export const Route = createFileRoute("/_auth/projects/$slug/secrets")({
 
 The shell's session reads, the organization tree, are made once by
 `<OrganizationTree>` (`apps/dash/src/components/organization-tree.tsx`) and
-shared by every page through `useOrganizationTree()`: live state on `api.user`
-and `api.organizations.get(orgId)`, or `organizations.list()` and
-`projects.list()` when the session cannot open the account. Resolve the
+shared by every page through `useOrganizationTree()`: `organizations.list()`
+and `projects.list()`, read again whenever a fact lands on `api.user` or an
+`api.organizations.get(orgId)` it subscribes to, and after the page's own
+write (`await reloadOrganizationTree()`). Resolve the
 connection _per call_ through `api` (never a render-captured stub of a closed
 socket): the proxy hands every call to the live connection.
 

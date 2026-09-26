@@ -63,11 +63,10 @@ pnpm --dir apps/os project-seed apply \
 
 `apply` creates or converges the selected project through normal project, repository, and secret
 operations. It restores the config tree, organization membership, and secrets into fresh project
-identity bindings. It lands the project on its organization's record, the list the dash shows,
-and restores the custom hostnames, then the primary hostname, on the deployment the seed was
-captured from (a primary whose certificate is not yet active is reported, not set). It verifies the
-Git tree, published commit, membership roles, the organization's record, secret readback and
-each hostname's Cloudflare answer before returning. Project IDs are kept; user and organization
+identity bindings, and restores the custom hostnames, then the primary hostname, on the deployment
+the seed was captured from (a primary whose certificate is not yet active is reported, not set). It
+verifies the Git tree, published commit, membership roles, secret readback and each hostname's
+Cloudflare answer before returning. Project IDs are kept; user and organization
 IDs are minted afresh.
 
 After every seed is applied, compare the whole structure with the capture:

@@ -1,8 +1,8 @@
 // The path in the shell's header: Projects › <organization> › <project>, then the project's page
 // when it names itself (› Contexts, › Integrations), or Organizations › <organization>. An
-// organization shows once its record has named it, never as its id. The project is the one its route resolved (the shell hands it down); the
-// organization's name comes from the tree (components/organization-tree.tsx, live); the leading
-// segments hide on narrow screens.
+// organization shows by its name, never its id. The project is the one its route resolved (the
+// shell hands it down); the organization's name comes from the tree
+// (components/organization-tree.tsx); the leading segments hide on narrow screens.
 import { Link, useParams } from "@tanstack/react-router";
 import {
   Breadcrumb,
@@ -25,11 +25,11 @@ export function DashBreadcrumbs({
 }) {
   const { slug, orgId } = useParams({ strict: false });
   const tree = useOrganizationTree();
-  // an organization's name once its record has said it: until then the tree holds its id, which
-  // is no name to show
+  // an organization the session reaches only through a project is named by its id in the tree,
+  // which is no name to show
   const org = tree.organizations.find(
     (candidate) =>
-      candidate.id === (project ? project.orgId : orgId) && candidate.status === "live",
+      candidate.id === (project ? project.orgId : orgId) && candidate.name !== candidate.id,
   );
   const projectSlug = project?.slug || slug;
   const crumbs: { label: string; to?: string; hideOnMobile?: boolean; mono?: boolean }[] = slug

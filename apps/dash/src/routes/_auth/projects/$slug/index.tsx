@@ -81,7 +81,7 @@ export const Route = createFileRoute("/_auth/projects/$slug/")({
 function ProjectOverview() {
   const { project } = Route.useRouteContext();
   const { api, info } = shell.useRouteContext();
-  // its organization — the name and the person's role — from the tree, live
+  // its organization — the name and the person's role — from the tree
   const org = useOrganizationTree().organizations.find(
     (candidate) => candidate.id === project.orgId,
   );
@@ -542,8 +542,8 @@ function GithubRepositories({
 }
 
 /** Its organization's owner deletes the project: the verb answers once its row is gone, and the
- *  organization's live record drops it from the list; its contexts and storage go after, on the
- *  project's own deletion saga. */
+ *  tree, read again, drops it from the list; its contexts and storage go after, on the project's
+ *  own deletion saga. */
 function DeleteProject({ project }: { project: { id: string; slug: string } }) {
   const { api } = shell.useRouteContext();
   const navigate = useNavigate();
@@ -554,7 +554,7 @@ function DeleteProject({ project }: { project: { id: string; slug: string } }) {
     setDeleting(true);
     try {
       await api.projects.delete(project.id);
-      reloadOrganizationTree(); // the listed tree's; the live one follows by itself
+      await reloadOrganizationTree();
       await navigate({ to: "/projects", replace: true });
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));

@@ -1,12 +1,10 @@
 // src/account/processor.ts — THE ACCOUNT PROCESSOR: the pure reduce of the account's facts into its
-// state — the membership facts the session lands here (session.ts `foldPlatformFacts`, after the
-// control-plane database writes them) among them — and of the user's own secrets' certificates (cross-posted from
+// state, and of the user's own secrets' certificates (cross-posted from
 // `/users/<id>/secrets/<name>`) into their catalog; the kernel's `ProcessorEngine` drives it and
 // projects it to live state, exactly as a project processor. No effect lives here: a PURE FOLD.
 // Imports only the pure kernel, so a unit test constructs it with `new` and reduces rows
 // (processor.test.ts, in node).
 import { type ConsumedEvent, type ReduceArgs, StreamProcessor } from "iterate/stream/processor";
-import { dropMembership, reduceMembership } from "../organization/contract.ts";
 import { reduceSecretCatalog } from "../secret/contract.ts";
 import { reduceIntegrations } from "../integrations/contract.ts";
 import { AccountContract, type AccountState } from "./contract.ts";
@@ -66,27 +64,6 @@ export class AccountProcessor extends StreamProcessor<
           ...state,
           consents: [...state.consents, { ...event.payload, at: event.createdAt }],
         };
-      case "events.iterate.com/organization/member-added": {
-        const { orgId, role, mint } = event.payload;
-        // A MINT is the organization's first membership, landed here in the background once the
-        // creation that minted it answered (session.ts `landProjectOnOrganization`). Any other
-        // membership fact of the organization is later than it, even one that lands first, so a
-        // mint never overrides a membership the account holds, nor revives one that ended.
-        if (mint && (state.memberships[orgId] || state.endedMemberships[orgId])) return undefined;
-        const memberships = reduceMembership(state.memberships, orgId, role, event.createdAt);
-        if (!memberships) return undefined;
-        const { [orgId]: _rejoined, ...endedMemberships } = state.endedMemberships;
-        return { ...state, memberships, endedMemberships };
-      }
-      case "events.iterate.com/organization/member-removed": {
-        // the end is kept even for a membership the account never held: its mint may land after it
-        const { orgId } = event.payload;
-        return {
-          ...state,
-          memberships: dropMembership(state.memberships, orgId) ?? state.memberships,
-          endedMemberships: { ...state.endedMemberships, [orgId]: { at: event.createdAt } },
-        };
-      }
       case "events.iterate.com/secret/set":
       case "events.iterate.com/secret/deleted":
       case "events.iterate.com/secret/lent":

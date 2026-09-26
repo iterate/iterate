@@ -1,6 +1,6 @@
 // The signed-in shell: authenticate once (the SDK client; a missing session leaves for the issuer's
-// login), open the tree every page shares — the person's organizations and their projects, LIVE
-// (components/organization-tree.tsx) — and frame every child in the shared `AppShell` (packages/ui,
+// login), open the tree every page shares — the person's organizations and their projects, read
+// again as they change (components/organization-tree.tsx) — and frame every child in the shared `AppShell` (packages/ui,
 // the same frame agents, notes and voice use). Consent is task-based: the dash asks for `iterate`,
 // `account` and `organizations:write`, the person may untick the optional two, and the pages read
 // `info.scopes` for what they may do.
@@ -93,10 +93,9 @@ function Shell() {
     })),
   );
   // THE PAGE'S PROJECT, NAMED AT ONCE: a fresh page load resolves it from the catalog
-  // (projects/$slug/route.tsx) before the live tree has answered, and until the tree lists it the
+  // (projects/$slug/route.tsx) before the tree has answered, and until the tree lists it the
   // switcher would read "(select project)" on that very project's page — a second or more on a busy
-  // platform. It names the project the page shows, its organization by id (as the tree does before
-  // an organization's record lands).
+  // platform. It names the project the page shows, its organization by id.
   const switcherProjects =
     active && !treeProjects.some((project) => project.id === active.id)
       ? [
