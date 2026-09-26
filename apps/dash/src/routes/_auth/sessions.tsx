@@ -12,7 +12,7 @@ import { createFileRoute, Link, useNavigate, useRouter } from "@tanstack/react-r
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { CheckIcon, CopyIcon } from "lucide-react";
 import { z } from "zod";
-import type { GrantKind } from "iterate/api";
+import type { GrantKind, GrantRecord } from "iterate/api";
 import { Avatar, AvatarFallback, AvatarImage } from "@iterate-com/ui/components/avatar";
 import { Button } from "@iterate-com/ui/components/button";
 import { Checkbox } from "@iterate-com/ui/components/checkbox";
@@ -81,6 +81,36 @@ const TOKEN_LIFETIMES = [
 /** A date as a person reads it, the same on the server and in the browser. */
 const dateOf = (at: number) =>
   new Intl.DateTimeFormat("en-GB", { dateStyle: "medium", timeZone: "UTC" }).format(at);
+
+/** A session row's details, in order. A host or the projects may wrap anywhere; every other part
+ *  stays whole, so a date never breaks in the middle. */
+function metaOf(item: GrantRecord, slugOf: Map<string, string>) {
+  const parts = [
+    {
+      text:
+        item.resource === "mcp"
+          ? `${GRANT_KIND_LABELS[item.kind]} (MCP)`
+          : GRANT_KIND_LABELS[item.kind],
+      wraps: false,
+    },
+    { text: item.clientDomain, wraps: true },
+    { text: item.projects?.map((id) => slugOf.get(id) ?? id).join(", "), wraps: true },
+    { text: `Since ${dateOf(item.createdAt)}`, wraps: false },
+    {
+      text: item.lastUsedAt ? `Used ${dateOf(item.lastUsedAt)}` : "Not used yet",
+      wraps: false,
+    },
+    {
+      text: item.expired
+        ? "Expired"
+        : item.expiresAt
+          ? `Expires ${dateOf(item.expiresAt)}`
+          : undefined,
+      wraps: false,
+    },
+  ];
+  return parts.filter((part): part is { text: string; wraps: boolean } => Boolean(part.text));
+}
 
 /** A personal access token as the form just minted it — held only in this page's state, shown
  *  once; a reload forgets it, as the server already has. */
@@ -202,83 +232,85 @@ function SessionsPage() {
           <p className="text-sm text-muted-foreground">Nothing on this page.</p>
         ) : (
           <ul className="flex flex-col divide-y border-y" aria-label="Sessions">
-            {items.map((item) => (
-              <li key={item.id} className="flex items-center gap-3 py-3">
-                <Avatar className="rounded-md after:rounded-md" aria-hidden="true">
-                  {/* Base UI applies the prop to its preloader; render also sets it on the visible image. */}
-                  <AvatarImage
-                    src={item.logoUri}
-                    alt=""
-                    referrerPolicy="no-referrer"
-                    render={<img alt="" referrerPolicy="no-referrer" />}
-                    className="rounded-md object-contain"
-                  />
-                  <AvatarFallback className="rounded-md text-xs">
-                    {item.name.slice(0, 2).toUpperCase()}
-                  </AvatarFallback>
-                </Avatar>
-                <div className="min-w-0 flex-1">
-                  <p className="font-medium [overflow-wrap:anywhere]">
-                    {item.name}
-                    {item.current && (
-                      <span className="ml-2 text-xs font-normal text-muted-foreground">
-                        This browser
-                      </span>
+            {[...items]
+              // this browser first, then by last use, newest first (a page of the list, as listed)
+              .sort(
+                (a, b) =>
+                  Number(Boolean(b.current)) - Number(Boolean(a.current)) ||
+                  (b.lastUsedAt ?? 0) - (a.lastUsedAt ?? 0) ||
+                  b.createdAt - a.createdAt,
+              )
+              .map((item) => (
+                <li key={item.id} className="flex items-center gap-3 py-3">
+                  <Avatar className="rounded-md after:rounded-md" aria-hidden="true">
+                    {/* Base UI applies the prop to its preloader; render also sets it on the visible image. */}
+                    <AvatarImage
+                      src={item.logoUri}
+                      alt=""
+                      referrerPolicy="no-referrer"
+                      render={<img alt="" referrerPolicy="no-referrer" />}
+                      className="rounded-md object-contain"
+                    />
+                    <AvatarFallback className="rounded-md text-xs">
+                      {item.name.slice(0, 2).toUpperCase()}
+                    </AvatarFallback>
+                  </Avatar>
+                  <div className="min-w-0 flex-1">
+                    <p className="font-medium [overflow-wrap:anywhere]">
+                      {item.name}
+                      {item.current && (
+                        <span className="ml-2 text-xs font-normal text-muted-foreground">
+                          This browser
+                        </span>
+                      )}
+                    </p>
+                    <p className="flex flex-wrap gap-x-1.5 text-xs text-muted-foreground">
+                      {metaOf(item, slugOf).map((part, index) => (
+                        <span
+                          key={part.text}
+                          className={part.wraps ? "[overflow-wrap:anywhere]" : "whitespace-nowrap"}
+                        >
+                          {index > 0 ? "· " : ""}
+                          {part.text}
+                        </span>
+                      ))}
+                    </p>
+                    {item.impersonatedBy && (
+                      <p className="text-xs text-muted-foreground">
+                        Started by {item.impersonatedBy}, signed in as you
+                      </p>
                     )}
-                  </p>
-                  <p className="text-xs text-muted-foreground [overflow-wrap:anywhere]">
-                    {[
-                      item.resource === "mcp"
-                        ? `${GRANT_KIND_LABELS[item.kind]} (MCP)`
-                        : GRANT_KIND_LABELS[item.kind],
-                      item.clientDomain,
-                      item.projects?.map((id) => slugOf.get(id) ?? id).join(", "),
-                      item.lastUsedAt ? `Used ${dateOf(item.lastUsedAt)}` : "Not used yet",
-                      item.expired
-                        ? "Expired"
-                        : item.expiresAt
-                          ? `Expires ${dateOf(item.expiresAt)}`
-                          : null,
-                    ]
-                      .filter(Boolean)
-                      .join(" · ")}
-                  </p>
-                  {item.impersonatedBy && (
-                    <p className="text-xs text-muted-foreground">
-                      Started by {item.impersonatedBy}, signed in as you
-                    </p>
-                  )}
-                  {item.mintedBy && (
-                    <p className="text-xs text-muted-foreground">
-                      Made by{" "}
-                      {items.find((session) => session.id === item.mintedBy)?.name ??
-                        "a session no longer listed"}
-                    </p>
-                  )}
-                </div>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  onClick={async () => {
-                    setError(null);
-                    try {
-                      await api.grants.end(item.id);
-                      if (item.current) logout.current?.requestSubmit();
-                      else await router.invalidate();
-                    } catch (caught) {
-                      setError(caught instanceof Error ? caught.message : String(caught));
-                    }
-                  }}
-                >
-                  {item.expired
-                    ? "Remove"
-                    : item.kind === "personal" || item.kind === "device"
-                      ? "Revoke"
-                      : "Log out"}
-                </Button>
-              </li>
-            ))}
+                    {item.mintedBy && (
+                      <p className="text-xs text-muted-foreground">
+                        Made by{" "}
+                        {items.find((session) => session.id === item.mintedBy)?.name ??
+                          "a session no longer listed"}
+                      </p>
+                    )}
+                  </div>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={async () => {
+                      setError(null);
+                      try {
+                        await api.grants.end(item.id);
+                        if (item.current) logout.current?.requestSubmit();
+                        else await router.invalidate();
+                      } catch (caught) {
+                        setError(caught instanceof Error ? caught.message : String(caught));
+                      }
+                    }}
+                  >
+                    {item.expired
+                      ? "Remove"
+                      : item.kind === "personal" || item.kind === "device"
+                        ? "Revoke"
+                        : "Log out"}
+                  </Button>
+                </li>
+              ))}
           </ul>
         )}
         {(cursor || nextCursor) && (
