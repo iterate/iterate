@@ -29,19 +29,24 @@ Every new or edited test follows these nine rules.
 5. **A title says the behaviour in one line of about 100 characters.** The why
    goes in a comment. A file header names the subject and what is out of scope;
    it never re-lists the tests.
-6. **Tests keep production's timings.** Unit tests use fake timers or an
-   injected clock. Workers and e2e rows run with the deployment's real
-   timeouts: nothing shortens a watchdog, re-check interval or quiet window for
-   a test. A row that waits one out is marked: an e2e row past the row budget
-   is tagged `slow` ([slow rows](testing.md#slow-rows)), and a Workers row is
-   listed, with the timeout it waits, in `UNIT_ROW_WARN_EXEMPTIONS`
-   (`e2e-policy/budgets.ts`). A fixed sleep is a negative wait, proving that
-   something does not happen, with a comment naming what it outlasts; every
-   other wait polls for the outcome
+6. **Tests keep production's timings.** No test changes a timing constant or
+   the deployment's config: nothing shortens a watchdog, re-check interval or
+   quiet window for a test. Unit tests use fake timers or an injected clock. A
+   Workers row may move the clock past a production constant it imports
+   (`vi.useFakeTimers({ toFake: ["Date"] })`, `vi.setSystemTime`, then
+   `runDurableObjectAlarm`, as `facet-birth-reset.test.ts` does). A timer the
+   clock cannot move, such as an in-memory watchdog or re-check, is waited out,
+   and so is every timer in e2e. A row whose real wait takes it past its
+   suite's budget is marked: an e2e row is tagged `slow`
+   ([slow rows](testing.md#slow-rows)), and a Workers row is listed, with the
+   timeout it waits, in `UNIT_ROW_WARN_EXEMPTIONS`
+   (`packages/shared/src/test-support/e2e-policy/budgets.ts`). A fixed sleep is
+   a negative wait, proving that something does not happen, with a comment
+   naming what it outlasts; every other wait polls for the outcome
    ([below](#polling-and-waiting-for-conditions)).
-7. **Restore by config.** The vitest configs set `restoreMocks`,
-   `unstubGlobals` and `unstubEnvs`, so a test restores no spy, global or env
-   var itself; fake timers are the exception
+7. **Restore by config.** The vitest configs (not the os e2e project) set
+   `restoreMocks`, `unstubGlobals` and `unstubEnvs`, so a test restores no spy,
+   global or env var itself; fake timers are the exception
    ([no lifecycle hooks](../lint/test-style-rules.md#no-lifecycle-hooks)).
 8. **Tests don't read source text.** A rule over source, such as an import
    boundary, is lint. When two files must agree, make one the source of the
