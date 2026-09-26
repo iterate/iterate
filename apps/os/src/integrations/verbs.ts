@@ -40,6 +40,7 @@ import {
   disconnectSlack,
   dropHeldSlackToken,
   finishSlackConnect,
+  slackMoveOfferedAgain,
 } from "./slack.ts";
 import { disconnectWaitrose } from "./waitrose-connection.ts";
 import { missingScopes } from "./rules.ts";
@@ -158,6 +159,12 @@ export async function finishIntegrationConnect(
   const key = consentAttemptKeyOf(input.provider, connection, nonce);
   const attempt = await scope.storage.get<ConnectionAttempt>(key);
   if (!attempt || attempt.until < Date.now()) {
+    // the same callback again, after its finish offered the move: that offer again
+    const move =
+      input.provider === "slack" && held
+        ? await slackMoveOfferedAgain(scope, connection, nonce)
+        : undefined;
+    if (move) return { move };
     if (integrations[connectionPathOf(input.provider, connection)]) return {};
     throw new Error("no connect of this connection is in flight — connect again");
   }

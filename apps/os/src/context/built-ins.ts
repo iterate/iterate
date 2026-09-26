@@ -1192,6 +1192,8 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
       // catches the log up. Until then `list()` does not show the secret while egress already honours it.
       completeOAuth: (secretPath, input) =>
         onSecretContext(secretPath, ["completeOAuth", secretPath, input], async (secret) => {
+          // A facet call answers `unknown` over the hop; this is the platform's own
+          // SecretDurableObject.completeOAuth's declared answer.
           const { urls, refresh, scopes, held } = (await secretFacet(["completeOAuth", input])) as {
             urls: string[];
             refresh?: SecretRefresh["kind"];
@@ -1214,6 +1216,8 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
           secretPath,
           ["admitHeldToken", secretPath, input],
           async (secret) => {
+            // A facet call answers `unknown` over the hop; this is the platform's own
+            // SecretDurableObject.admitHeldToken's declared answer.
             const { urls, refresh } = (await secretFacet(["admitHeldToken", input])) as {
               urls: string[];
               refresh?: SecretRefresh["kind"];

@@ -139,29 +139,21 @@ export async function finishSlackConnect(
   if (held) {
     const holder = await new ControlPlane(env).integrationRouteOf("slack", held.externalId);
     if (holder && holder.projectId !== projectId) {
+      const move: IntegrationMove = {
+        externalId: held.externalId,
+        account: held.account,
+        holder,
+        heldTokenNonce: held.nonce,
+      };
       const offered: MovableAttempt = {
         client: attempt.client,
         origin: attempt.origin,
         until: held.until,
         nonce: crypto.randomUUID(),
-        move: {
-          externalId: held.externalId,
-          account: held.account,
-          holder,
-          heldTokenNonce: held.nonce,
-        },
+        move,
       };
       await scope.storage.put(attemptKeyOf("slack", connection), offered);
-      return {
-        provider: "slack",
-        projectId,
-        connection,
-        nonce: offered.nonce,
-        externalId: held.externalId,
-        account: held.account,
-        holderProjectId: holder.projectId,
-        exp: held.until,
-      };
+      return slackMoveOffered(scope, connection, offered.nonce, offered.until, move);
     }
     await admitHeldToken(scope, connection, held.nonce);
   }
@@ -175,6 +167,43 @@ export async function finishSlackConnect(
     { provider: "slack", externalId: identity.teamId, projectId, path },
     connected,
   );
+}
+
+/** The offer this consent's finish made already, while it stands untouched: a replay of its callback
+ *  (a refreshed tab, an answer lost on the way) lands on the same offer. */
+export async function slackMoveOfferedAgain(
+  scope: IntegrationScope,
+  connection: string,
+  heldTokenNonce: string,
+): Promise<MoveOffered | undefined> {
+  const offered = await scope.storage.get<MovableAttempt>(attemptKeyOf("slack", connection));
+  if (
+    !offered?.move ||
+    offered.move.heldTokenNonce !== heldTokenNonce ||
+    offered.move.stage ||
+    offered.until <= Date.now()
+  )
+    return undefined;
+  return slackMoveOffered(scope, connection, offered.nonce, offered.until, offered.move);
+}
+
+function slackMoveOffered(
+  scope: IntegrationScope,
+  connection: string,
+  nonce: string,
+  until: number,
+  move: IntegrationMove,
+): MoveOffered {
+  return {
+    provider: "slack",
+    projectId: scope.projectId,
+    connection,
+    nonce,
+    externalId: move.externalId,
+    account: move.account,
+    holderProjectId: move.holder.projectId,
+    exp: until,
+  };
 }
 
 /** A WORKSPACE MOVED HERE (verbs.ts `confirmIntegrationMove`, its route this connection's already):

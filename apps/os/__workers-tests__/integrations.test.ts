@@ -4,7 +4,7 @@
 // callback finishing it, the routes, egress with each connection's secret, and the webhooks. Every
 // connection here is named `acme`.
 import { createHmac } from "node:crypto";
-import { runDurableObjectAlarm } from "cloudflare:test";
+import { evictDurableObject, runDurableObjectAlarm } from "cloudflare:test";
 import { env, exports } from "cloudflare:workers";
 import { expect, onTestFinished, test, vi } from "vitest";
 import type { StreamEvent } from "iterate/stream/processor";
@@ -21,6 +21,7 @@ import {
   petshopFakes,
   projectWithMember,
   readLog,
+  releasePins,
   stub,
 } from "./support.ts";
 
@@ -274,6 +275,35 @@ test("Slack: a team another project holds is offered to move here, the token Sla
   );
 });
 
+test("Slack: the same callback again, a refreshed tab, lands on the same offer", async () => {
+  const holder = await projectWithMember("slack-replay");
+  const petshop = petshopFakes();
+  await connected(petshop, holder, "slack", "team=T11AGAIN");
+  const mover = await otherProject(holder, "slack-replay-mover");
+  const { authorizationUrl } = await projectFacet(mover.itx).connectIntegration({
+    provider: "slack",
+    connection: "acme",
+    client: "iterate",
+    next: NEXT,
+  });
+  const consent = (await petshop.handle(
+    new Request(`${authorizationUrl}&team=T11AGAIN`, { redirect: "manual" }),
+  ))!;
+  const callback = () =>
+    exports.default.fetch(
+      new Request(consent.headers.get("location")!, {
+        headers: { cookie: mover.cookie },
+        redirect: "manual",
+      }),
+    );
+  const offer = moveOfferOf(await callback());
+  expect(offerClaimsOf(moveOfferOf(await callback()))).toEqual(offerClaimsOf(offer));
+  await projectFacet(mover.itx).confirmIntegrationMove({ offer });
+  expect(await catalog().integrationRoute("slack", "T11AGAIN")).toMatchObject({
+    projectId: mover.projectId,
+  });
+});
+
 test("Slack: an offer for a team its holder has since given up moves nothing, and leaves the holder's new team alone", async () => {
   const holder = await projectWithMember("slack-stale");
   const petshop = petshopFakes();
@@ -354,7 +384,7 @@ test("Slack: a move whose cleanup at the holder fails says so, the holder's toke
   );
 });
 
-test("Slack: the token a move offer held is deleted when the offer runs out, on the secret's own alarm", async () => {
+test("Slack: the token a move offer held is deleted when the offer runs out, on the secret's own alarm, even after a new incarnation revived it early", async () => {
   const holder = await projectWithMember("slack-expiry");
   const petshop = petshopFakes();
   await connected(petshop, holder, "slack", "team=T10GONE");
@@ -370,13 +400,17 @@ test("Slack: the token a move offer held is deleted when the offer runs out, on 
     nonce: string;
   };
   moveOfferOf(await followConsent(petshop, `${authorizationUrl}&team=T10GONE`, mover.cookie));
-  vi.useFakeTimers({ toFake: ["Date"] });
-  onTestFinished(() => void vi.useRealTimers());
-  vi.setSystemTime(Date.now() + 10 * 60_000 + 1_000);
   const secretContext = DurableObjectNameCodec.stringify({
     projectId: mover.projectId,
     path: "/secrets/slack-acme",
   });
+  // a new incarnation: the secret facet's claim falls due at its birth, long before the offer ends
+  await releasePins(secretContext);
+  await evictDurableObject(stub(secretContext));
+  expect(await runDurableObjectAlarm(stub(secretContext))).toBe(true);
+  vi.useFakeTimers({ toFake: ["Date"] });
+  onTestFinished(() => void vi.useRealTimers());
+  vi.setSystemTime(Date.now() + 10 * 60_000 + 1_000);
   expect(await runDurableObjectAlarm(stub(secretContext))).toBe(true);
   vi.useRealTimers();
   const admitted = await Promise.resolve(
