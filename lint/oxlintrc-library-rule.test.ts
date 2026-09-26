@@ -1,7 +1,5 @@
-// The library rule (apps/os/src/library.ts): library.ts and library/*.ts import at runtime only
-// capnweb, cloudflare:workers, zod, iterate/expression, iterate/lib, the entities' contracts and
-// each other; type-only imports are free. The files below are linted once, by the real oxlint
-// binary, under .oxlintrc.json's own override for those files, copied verbatim.
+// Runs .oxlintrc.json's own overrides for the library rule (apps/os/src/library.ts), copied verbatim,
+// over the fixtures below, linted once by the real oxlint binary.
 
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -23,6 +21,7 @@ test("a library file imports at runtime only what a userspace worker could, and 
     "apps/os/src/library/h.ts": 'import { refuseUnlessOk } from "./connection.ts";',
     "apps/os/src/library/i.ts": 'import { buildLibrary } from "../library.ts";',
     "apps/os/src/library/j.ts": 'import { RpcTarget } from "capnweb";',
+    "apps/os/src/library/k.ts": 'import { connectToMcp } from "./mcp.ts";',
     "apps/os/src/other.ts": 'import { s } from "./stream/stream.ts";',
   };
   const config = JSON.parse(
@@ -31,7 +30,7 @@ test("a library file imports at runtime only what a userspace worker could, and 
   using fixture = createOxlintFixture({
     rules: {},
     overrides: config.overrides.filter((override) =>
-      override.files.includes("apps/os/src/library.ts"),
+      override.files.some((glob) => glob.startsWith("apps/os/src/library")),
     ),
   });
   const files = { ...flagged, ...allowed };

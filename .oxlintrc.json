@@ -290,7 +290,7 @@
       }
     },
     {
-      "files": ["apps/os/src/library.ts", "apps/os/src/library/**"],
+      "files": ["apps/os/src/library.ts"],
       "rules": {
         "no-restricted-imports": [
           "error",
@@ -306,8 +306,34 @@
                   "!iterate/lib",
                   "!./repo/contract.ts",
                   "!./workspace/contract.ts",
-                  "!./library/*.ts",
-                  "!./connection.ts",
+                  "!./library/*.ts"
+                ],
+                "allowTypeImports": true,
+                "message": "The library rule (apps/os/src/library.ts): a library module takes `itx` and nothing else, so at runtime it imports only what a userspace worker could too: npm packages it would bundle (capnweb, cloudflare:workers, zod), the SDK's pure `iterate/expression` and `iterate/lib`, the entities' contracts and the library's own files. Type-only imports are free."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": ["apps/os/src/library/**"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": [
+                  "**",
+                  "!capnweb",
+                  "!cloudflare:workers",
+                  "!zod",
+                  "!iterate/expression",
+                  "!iterate/lib",
+                  "!../repo/contract.ts",
+                  "!../workspace/contract.ts",
+                  "!./*.ts",
                   "!../library.ts"
                 ],
                 "allowTypeImports": true,
