@@ -157,7 +157,7 @@ async function whoSignedIn(input: {
   // the library serves revocation at its token endpoint (RFC 7009)
   const as = { ...authorizationServer(input.issuer) };
   as.revocation_endpoint = as.token_endpoint;
-  const client: oauth.Client = { client_id: `${input.platformOrigin}${ADMIN_SIGN_IN_CLIENT_PATH}` };
+  const client = { client_id: `${input.platformOrigin}${ADMIN_SIGN_IN_CLIENT_PATH}` };
   let callback: URLSearchParams;
   try {
     callback = oauth.validateAuthResponse(
