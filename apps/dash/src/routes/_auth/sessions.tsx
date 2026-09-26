@@ -485,6 +485,8 @@ function ConnectedAccounts({ projects }: { projects: { id: string; slug: string 
   const navigate = useNavigate({ from: Route.fullPath });
   const closeWaitrose = () =>
     void navigate({ search: (prev) => ({ ...prev, waitrose: undefined }), replace: true });
+  /** A Waitrose connect in flight: its sheet stays open until it answers. */
+  const [waitrosePending, setWaitrosePending] = useState(false);
   return (
     <section className="flex flex-col gap-2" aria-labelledby="connected-accounts-heading">
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -601,13 +603,18 @@ function ConnectedAccounts({ projects }: { projects: { id: string; slug: string 
           })}
         </ul>
       )}
-      <Sheet open={Boolean(waitrose)} onOpenChange={(open) => !open && closeWaitrose()}>
+      <Sheet
+        open={Boolean(waitrose)}
+        onOpenChange={(open) => !open && !waitrosePending && closeWaitrose()}
+      >
         <SheetContent
           side="right"
+          showCloseButton={!waitrosePending}
           className="overflow-y-auto data-[side=right]:w-full data-[side=right]:sm:max-w-md"
         >
           {waitrose && (
             <WaitroseForm
+              onPendingChange={setWaitrosePending}
               onConnect={async ({ username, password }) => {
                 // your own: the secret and its connection on your account, like a sign-in's
                 const connection = crypto.randomUUID().slice(0, 8);
@@ -644,8 +651,11 @@ const WAITROSE_GRAPHQL_URL = "https://www.waitrose.com/api/graphql";
  *  alone: the platform logs in with them on first use and whenever Waitrose answers 401. */
 function WaitroseForm({
   onConnect,
+  onPendingChange,
 }: {
   onConnect: (credentials: { username: string; password: string }) => Promise<void>;
+  /** Whether a connect is in flight, for the sheet around it (it stays open until the answer). */
+  onPendingChange: (pending: boolean) => void;
 }) {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
@@ -655,11 +665,14 @@ function WaitroseForm({
     event.preventDefault();
     setError(null);
     setPending(true);
+    onPendingChange(true);
     try {
       await onConnect({ username, password });
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
       setPending(false);
+    } finally {
+      onPendingChange(false);
     }
   };
   return (
