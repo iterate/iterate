@@ -195,8 +195,10 @@ What we do NOT want:
 ## Shared preview setup
 
 OS preview CI waits for the deployment to be live before starting either
-Playwright or Vitest: the `deploy` job only succeeds once `/version` names the
-new deployment and every client answers `/healthz`, and the `e2e` job only
+Playwright or Vitest: the `deploy` job only succeeds once the readiness gate
+has seen the new deployment answer in full (its edge and brand-new contexts on
+the new version, `apps/os/scripts/preview-readiness.ts`) and every client
+answers `/healthz`, and the `e2e` job only
 starts after a successful deploy. This shared readiness time belongs to
 CI setup, not individual test durations. Both suites run concurrently once
 ready; browser installation overlaps the Vitest run. Playwright's worker count

@@ -868,10 +868,11 @@ waits that out. A preview redeployed in place has no such window, but it has ano
 releases the new version eventually consistently, so for a while an edge can still serve the
 previous version and a brand-new Durable Object can still start on it, and an object on it later
 resets with "Durable Object reset because its code was updated.", failing every call in flight. So
-each of the gate's probes also asks which version its edge and four brand-new contexts run (the
-operator's `session.versions`), and the gate passes once five rounds in a row run the deployment
-everywhere. It fails the deploy after 150 s. A PR's preview, redeployed in place on every push, goes
-through the same gate.
+each of the gate's probes also asks which version its edge and two brand-new contexts run (the
+operator's `session.versions`), and the gate passes once three rounds in a row run the deployment
+everywhere. The gate starts as soon as `wrangler preview` returns, with no `/version` smoke before
+it: the edge's version it asks for is the id `/version` answers with. It fails the deploy after
+150 s. A PR's preview, redeployed in place on every push, goes through the same gate.
 
 Soaks of the e2e suite at `--retry=0` (`os-e2e-soak.yml`), every run redeployed in place. With e2e
 as soon as a gate without the version check passed, 7 of 48 runs had a row fail on a platform
