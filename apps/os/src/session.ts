@@ -12,6 +12,7 @@ import {
   parseConfigRepoTemplateReference,
   formatConfigRepoTemplateReference,
 } from "@iterate-com/shared/config-repo-template/reference";
+import { retryPlatformFailures } from "@iterate-com/shared/platform-retry";
 import type { IterateApi } from "iterate/api";
 import { codedError, reportIssue } from "iterate/lib";
 import { OAuthScope } from "iterate/oauth-scopes";
@@ -40,7 +41,7 @@ import {
 import { type ControlPlane, describeReach, type Reach } from "./control-plane/edge.ts";
 import { OrganizationRole, type OrganizationState } from "./organization/contract.ts";
 import { iterateAppScopesOf, type AppConfig } from "./app-config.ts";
-import { isRetryableTransportError } from "./retryable-error.ts";
+import { isDeployReset, isPlatformFailure } from "./retryable-error.ts";
 import type { AccountState, AuthenticationFact } from "./account/contract.ts";
 import { IntegrationProvider } from "./integrations/contract.ts";
 import { assertSecretPath } from "./secrets.ts";
@@ -175,7 +176,7 @@ export class IterateRpcTarget extends RpcTarget implements IterateApi {
       {
         type: "events.iterate.com/account/authenticated",
         payload: { credential, at: Date.now(), operationId } satisfies AuthenticationFact,
-        idempotencyKey: `authenticated/${operationId}`,
+        idempotencyKey: `account/authenticated/${operationId}`,
       },
       { principal },
     );
@@ -437,36 +438,36 @@ async function borrowEveryProjectLends(
 }
 
 /** `appendPlatformFacts` best-effort and ASYNC (waitUntil), off the verb's own path: the account's
- *  sign-ins, mints and consents — facts no answer depends on. A lost fact is a gap in the record,
- *  never a failed action. A deploy resetting the
- *  owner's Durable Object cuts in-flight appends at the transport (retryable-error.ts) — expected on
- *  every deploy under traffic, so a warning; any other failure is reported, as oauth.ts reports a
- *  grant use it could not record. */
+ *  sign-ins, mints and consents — facts no answer depends on. Each is KEYED (its sign-in's
+ *  operation, its mint's membership, its consent's grant), so running the append twice lands the
+ *  fact once: the stream answers a key it holds with the event it already has. An append the
+ *  platform cut is therefore sent ONCE more, on a fresh stub (retryable-error.ts): a deploy
+ *  resetting the owner's Durable Object, expected on every deploy under traffic, logs
+ *  `session.deploy-reset-platform-fact-retry`; a lost connection or a storage reset logs
+ *  `session.platform-failure-platform-fact-retry`, which the prd fault alarm counts. A second
+ *  failure, and any other, is reported, as oauth.ts reports a grant use it could not record. */
 export function publishPlatformFacts(
   input: Pick<SessionInput, "contextNamespace" | "waitUntil">,
   owner: FactOwner,
-  facts: StreamEventInput | StreamEventInput[],
+  fact: StreamEventInput & { idempotencyKey: string },
   caller: Caller,
 ): void {
+  const attributes = { path: ownerAddress(owner).path, type: fact.type };
   input.waitUntil(
-    appendPlatformFacts(input.contextNamespace, owner, facts, caller).catch((error) => {
-      const attributes = {
-        path: ownerAddress(owner).path,
-        types: [facts]
-          .flat()
-          .map((fact) => fact.type)
-          .join(","),
-      };
-      if (isRetryableTransportError(error)) {
-        console.warn({
-          event: "session.platform-fact-cut",
-          ...attributes,
-          message: String(error),
-        });
-        return;
-      }
-      reportIssue("session.platform-fact-not-recorded", error, attributes);
-    }),
+    retryPlatformFailures(() => appendPlatformFacts(input.contextNamespace, owner, fact, caller), {
+      event: "session.platform-failure-platform-fact-retry",
+      delaysMs: [0],
+      platformFailure: (error) => {
+        if (isDeployReset(error))
+          return {
+            event: "session.deploy-reset-platform-fact-retry",
+            ...attributes,
+            message: String(error),
+          };
+        if (isPlatformFailure(error)) return { ...attributes, message: String(error) };
+        return undefined;
+      },
+    }).catch((error) => reportIssue("session.platform-fact-not-recorded", error, attributes)),
   );
 }
 

@@ -135,6 +135,15 @@ function isOwnApp(clientId: string, platformOrigin: string, projectBound: boolea
   return parentOf(url.hostname) === parentOf(new URL(platformOrigin).hostname);
 }
 
+/** The grant an approval minted: `completeAuthorization` stores it before it answers, and its code
+ *  is `<userId>:<grantId>:<secret>` (@cloudflare/workers-oauth-provider; this issuer offers no
+ *  implicit flow, so the code always rides the redirect's query). */
+function grantIdOf(approved: { redirectTo: string }) {
+  const grantId = new URL(approved.redirectTo).searchParams.get("code")?.split(":")[1];
+  if (!grantId) throw new Error("The authorization code names no grant.");
+  return grantId;
+}
+
 /** Expected OAuth refusals retain the validated client redirect when one exists. */
 function authorizationFailure(
   error: unknown,
@@ -390,10 +399,8 @@ export class ConsentRpcTarget extends RpcTarget {
         impersonatedBy,
       } satisfies GrantProps,
     });
-    // the provider's code is `<userId>:<grantId>:<secret>`: the records keep the grant's id, never
-    // the code, so either person can find and end it
-    const grantId = new URL(approved.redirectTo).searchParams.get("code")?.split(":")[1];
-    if (!grantId) throw new Error("The authorization code names no grant.");
+    // the records keep the grant's id, never the code, so either person can find and end it
+    const grantId = grantIdOf(approved);
     const payload = {
       grantId,
       target: { userId: target.id, email: target.email },
@@ -457,6 +464,7 @@ export class ConsentRpcTarget extends RpcTarget {
       { account: this.#grant.userId },
       {
         type: "events.iterate.com/account/consent-approved",
+        idempotencyKey: `account/consent-approved/${grantIdOf(approved)}`,
         payload: {
           clientId: request.clientId,
           clientName: client?.clientName ?? request.clientId,

@@ -7,7 +7,9 @@ export const PLATFORM_FAILURE_DELAYS_MS: readonly number[] = [2_000, 5_000, 10_0
  * is bounded and a lasting outage still fails the call. `platformFailure` returns what to log for
  * such a failure, or undefined for an answer about the request (a 4xx, an abort), which is thrown at
  * once. Each repeat logs an `event` warn (`<area>.platform-failure-retry`) with the attempt and the
- * wait.
+ * wait, or the `event` the failure names itself: a deploy's reset is expected, not the platform's
+ * failure, so its repeat logs `<area>.deploy-reset-<action>`, which the prd fault alarm does not
+ * count.
  *
  * The caller decides whether a repeat is safe: a call that could create a second copy passes no
  * delays.
