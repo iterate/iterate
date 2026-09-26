@@ -595,14 +595,26 @@ export class ControlPlane {
       this.#db.moveIntegrationRoute(provider, externalId, from, to),
     );
   }
-  /** Release one account's route, only while the connection at `path` holds it (catalog.ts
-   *  `releaseIntegrationRoute`). */
+  /** A failed move's undo, answering whether the route went back (catalog.ts
+   *  `restoreIntegrationRoute`). */
+  restoreIntegrationRoute(
+    provider: string,
+    externalId: string,
+    from: { projectId: string; path: string },
+    to: { projectId: string; path: string },
+  ): Promise<boolean> {
+    return this.#call("restoreIntegrationRoute", () =>
+      this.#db.restoreIntegrationRoute(provider, externalId, from, to),
+    );
+  }
+  /** Release one account's route, only while the connection at `path` holds it, answering whether
+   *  it did (catalog.ts `releaseIntegrationRoute`). */
   releaseIntegrationRoute(
     provider: string,
     externalId: string,
     projectId: string,
     path: string,
-  ): Promise<void> {
+  ): Promise<boolean> {
     return this.#call("releaseIntegrationRoute", () =>
       this.#db.releaseIntegrationRoute(provider, externalId, projectId, path),
     );

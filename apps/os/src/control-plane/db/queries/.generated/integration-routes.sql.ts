@@ -178,6 +178,48 @@ export namespace moveIntegrationRoute {
 	};
 }
 
+const restoreIntegrationRouteSql = `
+update integration_routes
+set project_id = ?, path = ?
+where provider = ?
+  and external_id = ?
+  and project_id = ?
+  and path = ?
+  and not exists (
+    select 1
+    from integration_routes held
+    where held.project_id = ?
+      and held.path = ?
+  );
+`.trim();
+const restoreIntegrationRouteQuery = (data: restoreIntegrationRoute.Data, params: restoreIntegrationRoute.Params) => ({
+	name: "restoreIntegrationRoute",
+	sql: restoreIntegrationRouteSql,
+	args: [data.toProjectId, data.toPath, params.provider, params.externalId, params.fromProjectId, params.fromPath, params.toProjectId, params.toPath],
+});
+
+export const restoreIntegrationRoute = Object.assign(
+	async function restoreIntegrationRoute(client: Client, data: restoreIntegrationRoute.Data, params: restoreIntegrationRoute.Params) {
+		return client.run(restoreIntegrationRouteQuery(data, params));
+	},
+	{ sql: restoreIntegrationRouteSql, query: restoreIntegrationRouteQuery },
+);
+
+export namespace restoreIntegrationRoute {
+	export type Data = {
+		toProjectId: string;
+		toPath: string;
+	};
+	export type Params = {
+		provider: string;
+		externalId: string;
+		fromProjectId: string;
+		fromPath: string;
+		toProjectId: string;
+		toPath: string;
+	};
+}
+
 const releaseIntegrationRouteSql = `
 delete from integration_routes
 where provider = ?

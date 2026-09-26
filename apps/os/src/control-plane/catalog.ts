@@ -24,6 +24,7 @@ import {
   integrationRoute,
   moveIntegrationRoute,
   releaseIntegrationRoute,
+  restoreIntegrationRoute,
   releaseIntegrationRoutes,
   releaseOtherIntegrationRoutes,
   releaseRoutesOfDeletedProject,
@@ -770,15 +771,46 @@ export class ControlPlaneDatabase {
       `The ${provider} account '${externalId}' moved meanwhile — connect it again.`,
     );
   }
+  /** A FAILED MOVE'S UNDO: the route back from `from` to the connection it came from (`to`), only
+   *  while `from` still holds it and `to` holds no route at all — a connection that took another
+   *  account since keeps that one, and never gains a second. One statement; answers whether it went
+   *  back. */
+  async restoreIntegrationRoute(
+    provider: string,
+    externalId: string,
+    from: { projectId: string; path: string },
+    to: { projectId: string; path: string },
+  ): Promise<boolean> {
+    const restored = await restoreIntegrationRoute(
+      this.#client,
+      { toProjectId: to.projectId, toPath: to.path },
+      {
+        provider,
+        externalId,
+        fromProjectId: from.projectId,
+        fromPath: from.path,
+        toProjectId: to.projectId,
+        toPath: to.path,
+      },
+    );
+    return Boolean(restored.rowsAffected);
+  }
   /** Release ONE account's route, only while the connection at `path` holds it: a connection that
-   *  took another account since keeps that one's. */
+   *  took another account since keeps that one's. Answers whether it held it — one statement, so a
+   *  move of the route (`moveIntegrationRoute`) and this release never both win. */
   async releaseIntegrationRoute(
     provider: string,
     externalId: string,
     projectId: string,
     path: string,
-  ): Promise<void> {
-    await releaseIntegrationRoute(this.#client, { provider, externalId, projectId, path });
+  ): Promise<boolean> {
+    const released = await releaseIntegrationRoute(this.#client, {
+      provider,
+      externalId,
+      projectId,
+      path,
+    });
+    return Boolean(released.rowsAffected);
   }
   /** Release every route of the connection at `path` in a project; another's are left alone. */
   async releaseIntegrationRoutes(projectId: string, path: string): Promise<void> {

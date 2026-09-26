@@ -42,6 +42,20 @@ where provider = :provider
   and project_id = :fromProjectId
   and path = :fromPath;
 
+/** @name restoreIntegrationRoute */
+update integration_routes
+set project_id = :toProjectId, path = :toPath
+where provider = :provider
+  and external_id = :externalId
+  and project_id = :fromProjectId
+  and path = :fromPath
+  and not exists (
+    select 1
+    from integration_routes held
+    where held.project_id = :toProjectId
+      and held.path = :toPath
+  );
+
 /** @name releaseIntegrationRoute */
 delete from integration_routes
 where provider = :provider

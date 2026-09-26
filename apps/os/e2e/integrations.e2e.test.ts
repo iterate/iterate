@@ -194,7 +194,7 @@ deployedOnly(
     expect(await integrationRows(holder)).toMatchObject({
       "/integrations/github/acme": { externalId: installation.installationId },
     });
-    await mover.facets.get("project").confirmGithubMove({ offer });
+    await mover.facets.get("project").confirmIntegrationMove({ offer });
     await until(
       "the installation moved",
       async () =>

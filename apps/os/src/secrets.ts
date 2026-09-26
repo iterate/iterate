@@ -31,6 +31,9 @@ export type SecretRecord = {
   material: SecretMaterial;
   urls: string[];
   refresh: SecretRefresh | null;
+  /** The workspace whose iterate's-Slack-app token this is (secret/durable-object.ts
+   *  `completeOAuth`): refused on use while another project's connection holds its route. */
+  routedAccount?: { provider: "slack"; externalId: string };
 };
 
 /** The most exchange code (`refresh: { kind: "worker", source }`) may be: it is sealed in the

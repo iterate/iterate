@@ -3,8 +3,8 @@
 // `state` naming the secret's context; this admits the human by the secret's owner and hands the code
 // to the secret's facet, which runs the exchange. On an integration's callback
 // (`/api/integrations/<provider>/callback`) the owner's facet then finishes the connection
-// (src/integrations/verbs.ts). The human goes on to the attempt's `next` when it named one. Called by
-// worker.ts.
+// (src/integrations/verbs.ts). The human goes on to the attempt's `next` when it named one — with
+// the offer to move the account here when another project holds it (Slack). Called by worker.ts.
 
 import { verifyClaims } from "./caller.ts";
 import { appConfigOf, sessionSigningSecretOf, type PlatformAddresses } from "./app-config.ts";
@@ -18,7 +18,8 @@ import {
 import { ControlPlane, type Reach } from "./control-plane/edge.ts";
 import type { Env } from "./env.ts";
 import { authorizationForToken } from "./oauth.ts";
-import type { FinishConnectInput } from "./integrations/verbs.ts";
+import { moveOfferLanding } from "./integrations/connections.ts";
+import type { FinishConnectAnswer, FinishConnectInput } from "./integrations/verbs.ts";
 import { isSecretOAuthState, OAUTH_INTEGRATION_PROVIDERS } from "./secret-oauth.ts";
 
 /** The human at a callback: their platform session — a browser cookie, or a bearer — or null. */
@@ -113,12 +114,14 @@ export async function secretOAuthCallback(
   // On the secret's own context — `itx.secrets.completeOAuth` (built-ins.ts) runs the exchange in
   // the secret's facet and lands the facts, in the order every other write to that path takes; the
   // platform's own call, no principal.
+  let move: FinishConnectAnswer["move"];
   try {
-    const { scopes } = (await env.ITERATE_CONTEXT.getByName(claims.context).invoke(
+    // the built-in's own answer (context/built-ins.ts `completeOAuth`)
+    const { scopes, held } = (await env.ITERATE_CONTEXT.getByName(claims.context).invoke(
       ["itx", "builtins", "secrets", ["completeOAuth", owner.path, { code, nonce: claims.nonce }]],
       [],
       { principal: null },
-    )) as { scopes: string[] }; // the built-in's own answer (context/built-ins.ts `completeOAuth`)
+    )) as { scopes: string[]; held?: FinishConnectInput["held"] };
     if (provider && owner.kind !== "organizations") {
       // The platform's own call on the owner's root: its facet (a project's `project`, a person's
       // `account`) finishes the attempt this callback completed (integrations/verbs.ts), told what
@@ -130,6 +133,7 @@ export async function secretOAuthCallback(
         connection: owner.path.slice(`/secrets/${provider}-`.length),
         nonce: claims.nonce,
         grantedScopes: scopes,
+        held,
         consentedBy: {
           person:
             owner.kind === "users" &&
@@ -139,7 +143,8 @@ export async function secretOAuthCallback(
           email: principal.email,
         },
       };
-      await env.ITERATE_CONTEXT.getByName(
+      // the built-in's own answer (context/built-ins.ts `finishConnect`)
+      ({ move } = (await env.ITERATE_CONTEXT.getByName(
         owner.kind === "project"
           ? DurableObjectNameCodec.stringify({ projectId: owner.id, path: "/" })
           : DurableObjectNameCodec.stringify({
@@ -149,7 +154,7 @@ export async function secretOAuthCallback(
       ).invoke(["itx", "builtins", "integrations", ["finishConnect", finish]], [], {
         principal: null,
         platform: true,
-      });
+      })) as FinishConnectAnswer);
     }
   } catch (error) {
     return answer(
@@ -157,6 +162,8 @@ export async function secretOAuthCallback(
       `${provider ? `Connecting ${provider}` : `Storing the tokens for ${owner.path}`} failed: ${error instanceof Error ? error.message : String(error)}`,
     );
   }
+  // Held by another project: the human's landing offers the move (`next` or nowhere).
+  if (move) return moveOfferLanding(env, authorization.reach, move, claims.next || null);
   // `next` was checked against the platform's and the Dash's origins before it was signed.
   if (claims.next)
     return new Response(null, {
