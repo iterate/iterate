@@ -20,6 +20,20 @@ What survived that pass merged overnight as ten PRs ([Already landed](#already-l
 - **3, no.** Tests keep production timings: "I want it to be like in production."
 - **4, yes.** The DO cost alarm is set from a measured baseline, and prd is checked for runaway Durable Objects first.
 - **5, yes.** A lockfile guard that holds at merge time.
+- **6, simplify, with limits.** Keep the traces viewer and the flake machinery for now. One scheduled health job, the Slack posts summarised, and no shadcn news post.
+- **8 and 23, yes.** Both retry rules, one failure module, and the `UNAVAILABLE` code.
+- **10, yes.** D1 is the only source of truth for orgs and projects.
+- **14, no.** The admin app stays separate.
+- **15, yes.** Use whatever PostHog recommends, and delete the custom masking.
+- **20, keep and simplify.** One re-dial and one close-code policy; Vite HMR behind tunnels must keep working.
+- **21, on hold** until it's clear how Misha's handwritten docs are treated.
+- **28, not now.** The oversized files stay unsplit.
+- **30, yes.** Impersonation only, provided PR bodies can deep-link to it.
+- **32, yes.** The Kit firmware leftovers go.
+- **34, no.**
+- **35, yes.** `WORKER_BASE_URL` is the one name.
+- **36, no.** Parallel work would race on strict `APP_CONFIG` keys.
+- **37, yes.** Every spec passes under path-based project URLs.
 
 ## Already landed
 
