@@ -4,13 +4,75 @@ This document covers detailed testing patterns used in this codebase. For the
 test suites themselves — what exists, how to run each against local dev /
 previews / prd, and the canonical env vars — see [Testing](testing.md).
 
-## Core Principles
+## The shape of a test
 
-- Use `vi.useFakeTimers()` for time-based assertions and injected fakes (`vi.fn`,
-  `vi.spyOn`, `vi.stubGlobal`) for dependencies; never `vi.mock`
-- Prefer table-based tests with hand-written literal expectations (`test.for`
-  with object rows) over snapshots
-- Tests are colocated next to source files as `*.test.ts`
+Every new or edited test follows these nine rules.
+
+1. **Many inputs, one behaviour: a table.** `test.for` with object rows keyed
+   `name`, titled `"$name"` ([below](#table-based-testing-with-testfor)). No
+   `test.each`, tuple rows or printf titles. A body with four or more
+   `expect(f(…))` on one `f` is a table.
+2. **One fixture home per suite.** Unit files use their domain harness
+   (`iterate/stream/test-support`), Workers files `__workers-tests__/support.ts`,
+   e2e files `e2e/support/`, specs `specs/test-support/`. A helper two suites
+   need moves down a layer, never into a copy
+   ([where test helpers live](testing.md#where-test-helpers-live)).
+3. **No casts in test bodies.** One typed builder at the bottom of the file,
+   with defaults, casting at most once, with a comment. When production takes
+   more than it uses, narrow its parameter (`Pick<>`) instead of casting at
+   every call. The Workers suite reads the platform through `readLog` and
+   `snapshot`, not `invoke(…) as {…}`.
+4. **Assert the object.** `toMatchObject` on the whole value; `toEqual` only
+   where exactness is the point, and say so
+   ([exact equality](../lint/test-style-rules.md#exact-equality)). No
+   `toBe(true)` on a derived boolean: assert the collection.
+5. **A title says the behaviour in one line of about 100 characters.** The why
+   goes in a comment. A file header names the subject and what is out of scope;
+   it never re-lists the tests.
+6. **Tests keep production's timings.** Unit tests use fake timers or an
+   injected clock. Workers and e2e rows run with the deployment's real
+   timeouts: nothing shortens a watchdog, re-check interval or quiet window for
+   a test. A row that waits one out is marked: an e2e row past the row budget
+   is tagged `slow` ([slow rows](testing.md#slow-rows)), and a Workers row is
+   listed, with the timeout it waits, in `UNIT_ROW_WARN_EXEMPTIONS`
+   (`e2e-policy/budgets.ts`). A fixed sleep is a negative wait, proving that
+   something does not happen, with a comment naming what it outlasts; every
+   other wait polls for the outcome
+   ([below](#polling-and-waiting-for-conditions)).
+7. **Restore by config.** The vitest configs set `restoreMocks`,
+   `unstubGlobals` and `unstubEnvs`, so a test restores no spy, global or env
+   var itself; fake timers are the exception
+   ([no lifecycle hooks](../lint/test-style-rules.md#no-lifecycle-hooks)).
+8. **Tests don't read source text.** A rule over source, such as an import
+   boundary, is lint. When two files must agree, make one the source of the
+   other.
+9. **A row no CI runs is not a test.** Every suite runs in CI or is marked
+   manual in [Suites](testing.md#suites), and an opt-in variable has a real
+   setter. An investigation probe lives in `scripts/`, or goes.
+
+Lint enforces parts of rules 3 and 4 ([below](#test-style-lint-rules)):
+helpers sit below the tests, a property assertion is `toMatchObject`, and a
+spec never asserts `toBe(true)`. The configs enforce rule 7, and the
+[row budget](testing.md#the-row-budget) bounds rule 6's waits in e2e. The rest,
+rule 1 included, is review.
+
+Each kind of test has one shape:
+
+| Kind                     | Lives in                                             | Shape                                                                                                                                                 |
+| ------------------------ | ---------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Pure function            | `x.test.ts` beside `x.ts`                            | One `test.for`, one assertion body, the expected value a literal in the row; wide inputs from one typed builder                                       |
+| Processor or reducer     | `processor.test.ts`, `core-processor.test.ts`        | Rows of `{ name, events, expected }`, events from short builders below the tests, and a re-reduce row ([ship-with rules](testing.md#ship-with-rules)) |
+| Stateful unit            | `rpc-stubs.test.ts`, `library.test.ts`               | One typed builder per collaborator, with defaults; a test passes only what differs                                                                    |
+| Workers                  | `apps/os/__workers-tests__/<topic>.test.ts`          | Only cases that need `cloudflare:test` controls; `readLog` and `snapshot`; files named by topic, not by incident                                      |
+| OS e2e                   | `apps/os/e2e/<topic>.e2e.test.ts`                    | One story per test on its own project (`freshCtx`); whole responses with `toMatchObject`; gates from `project-host.ts`                                |
+| Agents e2e               | `apps/agents/e2e/`                                   | As OS e2e; scenarios that differ only in the fake `itx.ai` are rows                                                                                   |
+| Browser spec             | `specs/<app>/*.spec.ts`                              | [specs/AGENTS.md](../specs/AGENTS.md); Playwright has no `test.for`, so `for (const row of rows) test(…)` is the table                                |
+| Perf                     | `apps/os/perf/<topic>.perf.test.ts`                  | Rows of `{ metric, load }`; budgets in `perf/latency.ts`                                                                                              |
+| CI script                | `scripts/**`, `apps/*/scripts/`                      | A table over the pure decision function, IO injected; no tests of argument parsing, log wording or another file's text                                |
+| Config conformance       | `depot-workflows.test.ts`, `lint/oxlintrc-*.test.ts` | Only invariants that guard cost or security, each a rule over every workflow or config                                                                |
+| Lint rule                | `lint/oxlint-plugin-*.test.ts`                       | Rows of `{ name, source, reports }`, each source a template literal, one body through `lintOne`                                                       |
+| Test support's own tests | `packages/shared/src/test-support/`                  | A fake run from one typed builder per reporter                                                                                                        |
+| Firmware host            | `apps/kit/firmware/tests/*_test.c`                   | `<assert.h>` (CMake passes `-UNDEBUG`), shared fixtures in a header (`capnweb_capture.h`), no per-file assert macros                                  |
 
 ## Test-style lint rules
 
@@ -31,10 +93,10 @@ entire row as a single argument, so it destructures cleanly:
 
 ```typescript
 test.for([
-  { user: "Alice", role: "admin", canDelete: true },
-  { user: "Bob", role: "user", canDelete: false },
-  { user: "Charlie", role: "guest", canDelete: false },
-])("$user with $role role", ({ user, role, canDelete }) => {
+  { name: "an admin can delete", role: "admin", canDelete: true },
+  { name: "a user cannot delete", role: "user", canDelete: false },
+  { name: "a guest cannot delete", role: "guest", canDelete: false },
+])("$name", ({ role, canDelete }) => {
   expect(getPermissions(role)).toMatchObject({ canDelete });
 });
 ```
@@ -72,6 +134,10 @@ const row = await until("subscription row", async () =>
   (await subscriptions(itx)).find((s) => s.name === name),
 );
 ```
+
+A row that waits out a real timeout gives `until` a deadline past it:
+`facet-push-timeout-heals.test.ts` waits for the 60 s facet watchdog's heal
+with `WATCHDOG_MS + 20_000`.
 
 Unit tests, which cannot import those helpers, use Vitest's own
 [`expect.poll`](https://vitest.dev/api/expect.html#poll) and
