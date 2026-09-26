@@ -106,6 +106,7 @@ export const Route = createFileRoute("/_auth/projects/$slug/integrations")({
      *  platform, apps/os integrations/github.ts `GithubMoveOffer`). */
     move: z.string().optional().catch(undefined),
   }),
+  staticData: { page: "Integrations" },
   head: ({ params }) => ({ meta: [{ title: `Integrations · ${params.slug} · Dash` }] }),
   component: ProjectIntegrations,
 });
@@ -1217,7 +1218,14 @@ function GithubInstallations({
       current = false;
     };
   }, [person, secretPath, apiOrigin]);
-  if (!secretPath || !apiOrigin) return null;
+  // your account not read yet, or not readable by this session: "Your accounts" says which
+  if (!state) return null;
+  if (!secretPath || !apiOrigin)
+    return (
+      <p className="text-sm text-muted-foreground">
+        Your account has no GitHub sign-in, so where iterate's app is installed can't be listed.
+      </p>
+    );
   if (installations === "loading")
     return (
       <p role="status" className="flex items-center gap-2 text-sm text-muted-foreground">

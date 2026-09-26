@@ -69,6 +69,7 @@ export const Route = createFileRoute("/_auth/projects/$slug/secrets")({
   loader: async ({ context }) => ({
     secrets: await context.api.projects.get(context.project.id).secrets.list(),
   }),
+  staticData: { page: "Secrets" },
   head: ({ params }) => ({ meta: [{ title: `Secrets · ${params.slug} · Dash` }] }),
   component: ProjectSecrets,
 });
