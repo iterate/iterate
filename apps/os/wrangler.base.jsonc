@@ -7,10 +7,12 @@
   // Start renders the landing and sign-in pages; consent and shared static files live in public/.
   // Worker-first routing keeps assets off project hosts and lets the Worker gate consent.
   "assets": { "directory": "./public", "binding": "ASSETS", "run_worker_first": true },
+  // No compatibility_date here: it is the one every Iterate Worker shares
+  // (scripts/lib/wrangler-config.ts COMPATIBILITY_DATE), which scripts/generate-wrangler-config.ts
+  // readWranglerBase sets.
   // nodejs_compat, spelled out: the DO's AsyncLocalStorage (node:async_hooks) needs it. Loaded
   // userspace isolates are the pure-play half — context/worker-loader.ts mints them with
   // no_nodejs_compat, so what runs inside a context stays portable across workerd builds.
-  "compatibility_date": "2026-09-01",
   // allow_irrevocable_stub_storage (experimental, undocumented): lets loaded code STORE its env.ITX
   // stub in its own durable storage and replay it (e2e/workers-and-facets.e2e.test.ts pins it); every worker
   // in the chain needs it, so the loaded isolates carry it too (context/worker-loader.ts).

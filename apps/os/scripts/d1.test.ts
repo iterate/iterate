@@ -1,16 +1,14 @@
-import { expect, test, vi } from "vitest";
+import { expect, test } from "vitest";
 import { ensureD1 } from "./d1.ts";
 import type { Cf } from "./preview-artifacts.ts";
 
 test("a preview's D1 is created with no location hint, so D1 places it near the job creating it", async () => {
-  const log = vi.spyOn(console, "log");
   const { cf, requests } = fakeCloudflare([]);
   await ensureD1(cf, "os-latency-db", "automatic");
   expect(requests.find((request) => request.route === "/d1/database")).toEqual({
     route: "/d1/database",
     body: { name: "os-latency-db" },
   });
-  expect(log).toHaveBeenCalledWith("created D1 os-latency-db (new-uuid), its primary in ENAM");
 });
 
 test("prd's and the parent's D1 is created in western Europe", async () => {

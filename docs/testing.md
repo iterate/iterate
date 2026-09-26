@@ -628,8 +628,9 @@ and prints its choice as `[slow-rows] <run|skip|only>: <reason>`:
 Turn them on for a PR that can change how long a context or facet stays
 running, what wakes it, its alarms, its claims or what its birth resets: the
 facet host, residency, RPC stubs and built-ins (`apps/os/src/context/`), the
-context Durable Object, the alarm coordinator, the processors or
-`apps/os/wrangler.base.jsonc`. Add the `slow-e2e` label
+context Durable Object, the alarm coordinator, the processors,
+`apps/os/wrangler.base.jsonc` or the compatibility date (`COMPATIBILITY_DATE`
+in `scripts/lib/wrangler-config.ts`). Add the `slow-e2e` label
 (`gh api -X POST repos/iterate/iterate/issues/<n>/labels -f 'labels[]=slow-e2e'`),
 or run them against the PR's preview as the table says. The label is read
 when the e2e job starts, so add it before the push, or dispatch the run

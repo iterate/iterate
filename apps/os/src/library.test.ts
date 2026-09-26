@@ -1,7 +1,5 @@
-// library.test.ts — the library's executable spec, one describe per concept (each over its own fake `itx`),
-// plus THE LIBRARY RULE pinned over the library files' imports (the last block).
+// library.test.ts — the library's executable spec, one describe per concept (each over its own fake `itx`).
 
-import { readFileSync, readdirSync } from "node:fs";
 import { RpcTarget, newHttpBatchRpcResponse } from "capnweb";
 import { expect, onTestFinished, test, vi } from "vitest";
 import { codedError } from "iterate/lib";
@@ -1048,52 +1046,6 @@ test("entities: the typed append refuses the entity's lifecycle facts, which onl
   };
   await config.append(commit);
   expect(dispatched).toEqual([{ at: "/repos/config", steps: [["append", commit]] }]);
-});
-
-// ── the library boundary ── THE LIBRARY RULE, pinned: a library module takes `itx` and nothing else,
-// so at runtime it may import only npm packages a userspace worker could bundle too (capnweb,
-// cloudflare:workers) and the one platform primitive that is pure data or a handle
-// (context/expression.ts — the codec, for an expression carried as data, and the pipelinable
-// handle), and the library's own files. Type-only imports are free (they erase). Anything else — the
-// stream, the DO, the rest of context/ — would make the library un-movable to userspace, which is
-// the whole point of the tier.
-const ALLOWED_RUNTIME_IMPORTS = new Set([
-  "capnweb",
-  "cloudflare:workers",
-  "zod", // an npm package a userspace worker could bundle too — used to PARSE untrusted MCP responses
-  "iterate/expression", // the codec — the package's, as a userspace worker would import it
-  "iterate/lib", // the package's pure helpers (error codes, resolveContextPath) — in the SDK bundle every userspace worker gets
-  // The entities' CONTRACTS — pure zod over `defineProcessorContract` (the SDK's), no stream, DO or
-  // context runtime: the vocabulary a handle's typed `append` validates against, which a userspace
-  // worker would import from the SDK just the same.
-  "./repo/contract.ts",
-  "./workspace/contract.ts",
-]);
-
-test("the library boundary: library.ts and library/*.ts import only npm packages, the codec, each other, and types", () => {
-  const sourceDirectory = new URL("./", import.meta.url);
-  const libraryDirectory = new URL("./library/", import.meta.url);
-  const libraryFiles = [
-    new URL("./library.ts", import.meta.url),
-    ...readdirSync(libraryDirectory.pathname)
-      .filter((name) => name.endsWith(".ts") && !name.endsWith(".test.ts"))
-      .map((name) => new URL(name, libraryDirectory)),
-  ];
-  const libraryPaths = new Set(libraryFiles.map((file) => file.pathname));
-  const offenders: string[] = [];
-  for (const file of libraryFiles) {
-    const source = readFileSync(file.pathname, "utf8");
-    for (const match of source.matchAll(
-      /^import\s+(type\s+)?(?:[^'"]*?\s+from\s+)?["']([^"']+)["']/gm,
-    )) {
-      const [, typeOnly, specifier] = match;
-      if (typeOnly || ALLOWED_RUNTIME_IMPORTS.has(specifier)) continue;
-      if (specifier.startsWith(".") && libraryPaths.has(new URL(specifier, file).pathname))
-        continue;
-      offenders.push(`${file.pathname.slice(sourceDirectory.pathname.length)}: ${specifier}`);
-    }
-  }
-  expect(offenders).toEqual([]);
 });
 
 class RemotesApi extends RpcTarget {

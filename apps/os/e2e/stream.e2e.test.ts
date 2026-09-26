@@ -21,23 +21,10 @@
 //     boundary survives (the JSON is sliced by UTF-16 code units)
 //   • `waitForEvent` through a LOADED worker's `withItx(env.ITX, …)` — the scope's method waits on
 //     the DO and returns the committed event (the Workers-RPC path no other suite drives)
-//   • OPT-IN, deployed only (RUN_WAKE_LOOP_PROBE=1): the self-wake trace — a stuck cursor delivery on
-//     a dormant context self-wakes on the DO's alarm, and the probe prints each wake's story
 
 import { expect, test } from "vitest";
-import type { StreamEvent } from "iterate/stream/processor";
-import type { AlarmTrace } from "../src/iterate-context-durable-object.ts";
-import {
-  disposeSessions,
-  freshCtx,
-  openItx,
-  readAll,
-  readHead,
-  rejection,
-  sleep,
-  until,
-} from "./support/client.ts";
-import { projectHostsAreLocal } from "./support/project-host.ts";
+import { EVENT_CHUNK_SIZE } from "../src/stream/stream.ts";
+import { freshCtx, openItx, readAll, readHead, rejection, sleep, until } from "./support/client.ts";
 import { enableFixtureProcessor } from "./support/sources.ts";
 
 // ── the wake record ──
@@ -418,7 +405,6 @@ test("read paging across a chunked event keeps the scanned-offset-range proof ho
   expect(page2).toMatchObject({ scannedThroughOffset: e5.offset });
 }, 60_000);
 
-const EVENT_CHUNK_SIZE = 512 * 1024; // must match src/stream/stream.ts
 const EMOJI = String.fromCodePoint(0x1f600); // "grinning face" = high+low surrogate pair
 
 test("a surrogate pair straddling a chunk boundary round-trips byte-identically", async () => {
@@ -490,99 +476,6 @@ export default class Waiter extends WorkerEntrypoint {
   expect(got).toMatchObject({ payload: { via: "entrypoint" } });
   expect(got.offset).toBeGreaterThan(head);
 });
-
-// ── THE WAKE TRACE PROBE (opt-in, deployed): `itx/woken { reason }` is the durable
-// incarnation boundary and says what woke it; every alarm pass of the CURRENT incarnation is an
-// ephemeral `events.iterate.com/itx/alarm-trace`, read back with `readEvents(…, { includeEphemeral })`.
-// A stuck cursor delivery is the fastest self-waker (its ladder is 1s·2ⁿ); this prints each wake's
-// story from the ring, landing inside the incarnation each wake made:
-//
-//   RUN_WAKE_LOOP_PROBE=1 WORKER_BASE_URL=https://os.iterate.com \
-//     pnpm e2e stream.e2e ──
-
-const OPT_IN = process.env.RUN_WAKE_LOOP_PROBE === "1";
-const probe = test.skipIf(projectHostsAreLocal() || !OPT_IN);
-
-/** A cursor target that ALWAYS throws a plain (retryable) error — the stuck delivery whose retry
- *  ladder self-wakes fastest (the stream keeps its cursor; an entrypoint cannot own progress). */
-const THROWING_WORKER = {
-  "worker.js": `import { WorkerEntrypoint } from "cloudflare:workers";
-export default class Thrower extends WorkerEntrypoint {
-  async processEventBatch(events, range) { throw new Error("wake-loop: this delivery always fails (retryable)"); }
-}`,
-};
-
-probe(
-  "OBSERVE (opt-in): a stuck cursor delivery on a dormant context self-wakes on its ladder — each wake's alarm decisions, printed from the ring",
-  { timeout: 5 * 60_000 },
-  async () => {
-    const ctx = freshCtx("wake-loop");
-    const traces = async (client: ReturnType<typeof openItx>) =>
-      (
-        (await client.invoke(["itx", ["readEvents", 0, 500, { includeEphemeral: true }]])) as {
-          events: StreamEvent[];
-        }
-      ).events
-        .filter((event) => event.type === "events.iterate.com/itx/alarm-trace")
-        .map((event) => event.payload as unknown as AlarmTrace);
-    const story = (ring: AlarmTrace[]) =>
-      ring
-        .map(
-          (t) =>
-            `  ${new Date(t.at).toISOString()} ${t.reason} ` +
-            `${t.alarm.before}→${t.alarm.after} ` +
-            `delivery=${JSON.stringify(t.deadlines.delivery.map((d) => [d.name, d.at, d.attempt]))} ` +
-            `claims=${JSON.stringify(t.deadlines.claims)} facets=${JSON.stringify(t.liveFacets)}`,
-        )
-        .join("\n");
-    let itx = openItx(ctx);
-    // The row is appended RAW with the worker inlined in its target: a session's `provide` and
-    // `subscribe` are removed when the session is disposed below, and the ladder must outlive
-    // every session here.
-    await itx.append({
-      type: "events.iterate.com/itx/subscription-configured",
-      payload: {
-        name: "faildeliver",
-        target: ["itx", "workers", ["get", { source: THROWING_WORKER }], "processEventBatch"],
-        consumes: ["kick"],
-      },
-    });
-    try {
-      await itx.append({ type: "kick", payload: { n: 1 } }); // kicks the ladder
-      await sleep(2_000); // the first attempt fails and the ladder arms
-      let ring = await traces(itx);
-      console.log(`kick:\n${story(ring)}`);
-      let nextWakeAt = ring.at(-1)?.alarm.after ?? null;
-      disposeSessions(); // disconnect — the ladder runs off the DO's own alarm, untouched
-      // Six wakes: ladder rungs 1s…32s, about a minute.
-      for (let wake = 1; wake <= 6 && nextWakeAt !== null; wake++) {
-        await sleep(Math.max(0, nextWakeAt + 5_000 - Date.now()));
-        itx = openItx(ctx);
-        ring = await traces(itx);
-        console.log(
-          `wake ${wake} (expected at ${new Date(nextWakeAt).toISOString()}):\n${story(ring)}`,
-        );
-        nextWakeAt = ring.at(-1)?.alarm.after ?? null;
-        disposeSessions();
-      }
-      const events = await readAll(openItx(ctx));
-      const wokens = events.filter((e) => e.type === "events.iterate.com/itx/woken");
-      console.log(
-        `wake-loop OBSERVE: woken=${wokens.length} reasons=${JSON.stringify(wokens.map((e) => (e.payload as { reason?: string }).reason))}`,
-      );
-      // The context is never poisoned by the loop; the durable log survives.
-      const [ev] = await openItx(ctx).append({ type: "after-observe" });
-      expect(ev.offset).toBeGreaterThan(0);
-    } finally {
-      // The row is removed WHATEVER happened above: a deployed context must not keep laddering
-      // after the observation, a failed assertion included.
-      await openItx(ctx).append({
-        type: "events.iterate.com/itx/subscription-configured",
-        payload: { name: "faildeliver", target: null },
-      });
-    }
-  },
-);
 
 const read = (
   itx: any,

@@ -66,8 +66,7 @@ const isFacetStartPlatformFailure = (error: unknown): error is Error =>
 /** How long one facet call may take before the facet is aborted (a call that never answers would
  *  hold the pins' release, and with it this actor, forever). */
 const FACET_CALL_WATCHDOG_MS = 60_000;
-/** WORKAROUND for a platform defect — e2e/facet-abort-storage-reset.e2e.test.ts (the pin and the
- *  measurements).
+/** WORKAROUND for a platform defect — e2e/facet-abort-storage-reset.e2e.test.ts pins it.
  *  On the edge (never in local workerd), a facet whose SQLite database took a few dozen pages of
  *  writes and then STOPS — aborted (`ctx.facets.abort`), or evicted with its context — makes one of
  *  the context's next storage commits fail with "Internal error in Durable Object storage caused

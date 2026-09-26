@@ -33,6 +33,7 @@ import {
 import { defineConfig } from "vitest/config";
 import { BaseSequencer, type TestSpecification } from "vitest/node";
 import { vitestReporters } from "../../packages/shared/src/test-support/e2e-policy/vitest-reporters.ts";
+import { COMPATIBILITY_DATE } from "../../scripts/lib/wrangler-config.ts";
 
 /** Teardown/async-transport noise only: disposing a capnweb session whose peer still delivers (a
  *  deliberate move in the reconnect/unsubscribe tests, and pager sockets still parked at teardown)
@@ -160,6 +161,7 @@ export default defineConfig({
             main: "./dist/server/index.js",
             wrangler: { configPath: "./wrangler.test.jsonc" },
             miniflare: {
+              compatibilityDate: COMPATIBILITY_DATE,
               bindings: {
                 TEST_MIGRATIONS: await readD1Migrations(
                   fileURLToPath(new URL("./src/control-plane/db/migrations", import.meta.url)),
