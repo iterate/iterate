@@ -223,8 +223,8 @@ dev/preview account (`ciBucketEnvs.ci` in `envs.ts`):
 
 `evidence/local/` and `state/` are kept for laptop runs and the guards'
 state, neither of which exists yet ([#3110](https://github.com/iterate/iterate/issues/3110)).
-`tables/tests/` holds the per-test Parquet copies runs uploaded until
-2026-09-26; nothing writes or reads it now.
+`tables/tests/` holds the per-test Parquet copies runs uploaded before
+[#3247](https://github.com/iterate/iterate/pull/3247); nothing writes or reads it now.
 
 **Why one bucket.** A second bucket isolates data only through credentials:
 an R2 API token can be scoped to buckets, never to a prefix. Today CI has one
@@ -361,37 +361,39 @@ the S3 API, with the credentials the upload derives, and reads the
 
 ### Sizes and costs
 
-Measured on real artifacts from 2026-09-24, less the per-test Parquet table
-they carried then:
+Measured on the passing runs of [#3247](https://github.com/iterate/iterate/pull/3247)
+on 2026-09-26, the first to carry this schema's raw telemetry:
 
-| Test run (passing) | Files | Unzipped | Of which                                                                           |
-| ------------------ | ----- | -------- | ---------------------------------------------------------------------------------- |
-| Test job attempt   | 17    | 3.5 MB   | raw telemetry 2.8 MB, flake suite summary 0.65 MB, CTest's JUnit XML 0.01 MB       |
-| Preview OS e2e     | 37    | 3.5 MB   | telemetry 1.4 MB, HTML report 0.7 MB, 18 screenshots 0.65 MB, JSON results 0.68 MB |
+| Job attempt (passing) | Objects | Bytes   | Of which                                                                                   |
+| --------------------- | ------- | ------- | ------------------------------------------------------------------------------------------ |
+| Test                  | 21      | 3.0 MB  | raw telemetry 2.1 MB (3,554 tests), flake suite summary 0.84 MB, CTest's JUnit XML 0.01 MB |
+| E2E tests             | 11      | 0.33 MB | raw telemetry 0.23 MB, flake suite summary 0.09 MB                                         |
+| Browser specs         | 29      | 2.4 MB  | JSON results 0.92 MB, HTML report 0.77 MB, 16 screenshots 0.66 MB, raw telemetry 0.03 MB   |
 
-Each is one run's folder; the upload adds the manifest, so 18 and 38 objects.
+Objects include the manifest.
 
-A failing Preview OS attempt with two failed specs was 68 files and 9.9 MB:
-two `trace.zip` files of 2.35 MB together, their copies in the report, and
-the report's trace viewer. Depot ran 178 to 377 pull-request runs and 173 to
-384 push runs a day from 2026-09-21 to 2026-09-23; assume at most 500 Test
-and 300 e2e job attempts a day (PostHog's `ci job attempt finished` can
-confirm it). At [R2 Standard pricing](https://developers.cloudflare.com/r2/pricing/)
+A failing Preview OS attempt with two failed specs was 68 files and 9.9 MB
+on 2026-09-24: two `trace.zip` files of 2.35 MB together, their copies in
+the report, and the report's trace viewer. Depot ran 178 to 377
+pull-request runs and 173 to 384 push runs a day from 2026-09-21 to
+2026-09-23; assume at most 500 Test job attempts a day, and 300 each of E2E
+tests and Browser specs (PostHog's `ci job attempt finished` can confirm
+it). At [R2 Standard pricing](https://developers.cloudflare.com/r2/pricing/)
 ($0.015 per GB-month after 10 GB free, Class A $4.50 per million after 1
 million free, no egress fees):
 
-- **Volume**: about 2.6 GB a day before failures, 80 GB a month. Assume
+- **Volume**: about 2.3 GB a day before failures, 70 GB a month. Assume
   half of it main's and half pull requests' (the run counts above split
   about evenly).
-- **Storage** at steady state: main's folders for 365 days, about 475 GB;
-  pull requests' for 90 days, about 120 GB. About 600 GB, **about $9 a
-  month**. Keeping pull requests' folders a year too would be about $15.
-- **Writes**: about 21,000 PUTs a day, 630,000 a month. The free million
+- **Storage** at steady state: main's folders for 365 days, about 420 GB;
+  pull requests' for 90 days, about 105 GB. About 525 GB, **about $8 a
+  month**. Keeping pull requests' folders a year too would be about $13.
+- **Writes**: about 22,500 PUTs a day, 675,000 a month. The free million
   Class A operations are the whole dev/preview account's, previews
   included, so count on paying for them: **about $3 a month**.
 
-Raw telemetry JSON compresses about 16× (a Test attempt's 2.6 MB zips to
-165 KB). Storing it gzipped would cut storage by two thirds but make every
+Raw telemetry JSON compresses about 13× (a Test attempt's 2.1 MB gzips to
+166 KB). Storing it gzipped would cut storage by about half but make every
 reader decompress; not worth it at these prices.
 
 ### Retention

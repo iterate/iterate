@@ -264,6 +264,14 @@ test("a job with no Depot job attempt has no test run to file evidence under", a
   await expect(
     write(folder.path, { environment: { ...environment, DEPOT_JOB_URL: undefined } }),
   ).rejects.toThrow("depotJobUrl");
+  await expect(
+    write(folder.path, {
+      environment: {
+        ...environment,
+        DEPOT_JOB_URL: "https://depot.dev/orgs/0p91s0lz49/workflows/ntb262kdvq",
+      },
+    }),
+  ).rejects.toThrow("DEPOT_JOB_URL names no job and attempt");
   expect(existsSync(join(folder.path, testEvidencePaths.manifest))).toBe(false);
 });
 

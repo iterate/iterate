@@ -166,16 +166,16 @@ artifact ID.
 `TEST_TELEMETRY_PULL_REQUEST_NUMBER` pin the tested source when it differs from
 the workflow's ref.
 
-A raw artifact lives for one CI run: the same job's finalizer reads it, and the
-health job reads OS real model's (`scripts/monitors/e2e.ts`, which parses only
-the fields it reads). Change its schema in place, together with those readers;
-there is no versioned migration.
+A raw artifact has two readers: the same job's finalizer, and the health job,
+which reads OS real model's from an earlier run (`scripts/monitors/e2e.ts`,
+which parses only the fields it reads). Change its schema in place, together
+with those readers; there is no versioned migration.
 
 Each test is one record after all its attempts: its file and titles, tags,
 expected state and (Playwright) outcome, final state, retry count and whether a
 retry rescued it, start and total duration, its errors and first failure. That
-is what the suite summary, the row budget, the flake records and Main OS e2e's
-failing rows read; a field nothing reads is not recorded. Vitest's public
+is what the suite summary, the row budget, the flake records and the health
+job's real-model rows read; a field nothing reads is not recorded. Vitest's public
 reporter receives one final `onTestCaseResult` with aggregate duration and
 retry count, not each attempt's duration: do not rank a retried row as a
 no-retry sample. Where a spec's time went is in its Playwright report and the

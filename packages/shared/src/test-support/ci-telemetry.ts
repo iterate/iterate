@@ -22,7 +22,7 @@ const TestTelemetryContext = z.object({
 });
 
 /** One test, after all its attempts: what the suite summary, the row budget, the flake records and
- *  Main OS e2e's failing rows read. */
+ *  the health job's real-model rows read. */
 const TestTelemetryRecord = z.object({
   fullName: z.string(),
   /** Bare title, shared with createFlake/createFailing records. */
