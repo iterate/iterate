@@ -42,9 +42,7 @@ jobs:
             run: pnpm format:check
           - name: Run Knip
             run: pnpm knip
-          # pnpm-lock.yaml.sha256 is the lockfile's hash, so two pull requests that both change the
-          # lockfile conflict and GitHub refuses the stale one's merge (scripts/lockfile-stamp.ts).
-          # The script rewrites (or recreates) a stamp that is not this lockfile's, which fails the step.
+          # A commit whose pnpm-lock.yaml.sha256 is not its lockfile's hash fails (scripts/lockfile-stamp.ts).
           - name: Check the lockfile stamp
             run: node scripts/lockfile-stamp.ts && test -z "$(git status --porcelain -- pnpm-lock.yaml.sha256)"
           # The control plane's D1 (apps/os/src/control-plane/db): its migrations replay to
