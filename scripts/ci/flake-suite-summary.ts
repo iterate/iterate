@@ -62,7 +62,7 @@ export async function writeFlakeSuiteSummary(input: {
       ...(artifact.run.error
         ? [`Runner ${artifact.artifactId}: ${artifact.run.error.message}`]
         : []),
-      ...artifact.runners.flatMap((result) => result.collectionErrors),
+      ...artifact.run.collectionErrors,
       ...artifact.tests
         .filter(
           (test) =>

@@ -853,11 +853,11 @@ test.each([
 ])("$file $jobId always finalizes and retains $suite test telemetry", ({ file, jobId, suite }) => {
   const steps = stepsAsRun(file, jobId);
   const finalizer = steps.find((step) => step.run?.includes("scripts/ci/upload-test-telemetry.ts"));
-  // Flake records have their own upload. Select the complete telemetry directory this
-  // retention guard is about.
+  // Flake records have their own upload; the raw telemetry and its manifest travel in the whole
+  // test evidence folder's.
   const upload = steps.find(
     (step) =>
-      step.uses === "actions/upload-artifact@v4" && step.with?.path === "test-results/ci-telemetry",
+      step.uses === "actions/upload-artifact@v4" && step.with?.path === testEvidencePaths.root,
   );
   // whatever the suite's outcome; a preview test job's once its suite started, since a job whose
   // guard found no deployed preview has nothing to keep (preview-os-workflow.test.ts)
@@ -874,10 +874,7 @@ test.each([
   );
   expect(upload, `${file} must retain the raw telemetry and its manifest`).toMatchObject({
     if: always,
-    with: expect.objectContaining({
-      path: expect.stringContaining("test-results"),
-      "if-no-files-found": "error",
-    }),
+    with: expect.objectContaining({ "include-hidden-files": true, "if-no-files-found": "error" }),
   });
   expect(steps.indexOf(finalizer!)).toBeLessThan(steps.indexOf(upload!));
   // The suite's records (and the summary the finalizer wrote beside them) leave the job after the

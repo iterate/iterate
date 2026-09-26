@@ -358,12 +358,10 @@ for it. The Playwright config additionally honors the Playwright-conventional
 | `E2E_SLOW_ROWS`                         | Main OS e2e (`run`), a Preview OS dispatch, you             | Which rows tagged `slow` `pnpm preview e2e` runs: `run`, `skip`, `only` (alone); vitest then holds each row to its timeout ceiling                | Unset → the PR's paths and label            |
 | `BENCH_OUT`                             | You                                                         | Writes the bench's raw samples as JSON                                                                                                            | Unset → no file                             |
 | `FLAKE_RECORD_DIR`                      | CI (the Test workflow; the preview script, per suite)       | Where flake wrappers and retried plain tests append one JSON line per outcome                                                                     | Unset → nothing recorded                    |
-| `TEST_TELEMETRY_ARTIFACT_FILE`          | You                                                         | Optional named immediate canonical JSON copy                                                                                                      | Unset → no immediate copy                   |
 | `TEST_TELEMETRY_ARTIFACT_DIR`           | CI (Test workflow: `test-results/ci-telemetry/raw`), or you | Durable canonical JSON directory consumed by the always-running finalizer                                                                         | Unset → reporter does not write             |
 | `TEST_TELEMETRY_KIND`                   | CI                                                          | Shared `unit`, `integration`, or `e2e` dimension                                                                                                  | Runner-appropriate default                  |
 | `TEST_TELEMETRY_SUITE`                  | CI                                                          | Shared suite dimension (`unit`, `vitest`, `playwright`, …)                                                                                        | Runner-appropriate default                  |
 | `TEST_TELEMETRY_WORKSPACE`              | The preview script, per suite                               | Shared workspace dimension (`os`, `iterate-root`)                                                                                                 | The running package's name                  |
-| `TEST_TELEMETRY_APP`                    | No setter today                                             | The deployed application dimension                                                                                                                | Unset                                       |
 | `TEST_TELEMETRY_HEAD_SHA`               | CI                                                          | Exact tested commit identity, including manually dispatched runs                                                                                  | Ambient `GITHUB_SHA`, then local HEAD       |
 | `TEST_TELEMETRY_BRANCH`                 | CI                                                          | Exact tested source branch, including manually dispatched runs                                                                                    | Ambient GitHub head/ref name                |
 | `TEST_TELEMETRY_PULL_REQUEST_NUMBER`    | CI                                                          | Exact selected PR identity for manually dispatched runs                                                                                           | Ambient pull-request ref, then unset        |
@@ -378,13 +376,13 @@ for it. The Playwright config additionally honors the Playwright-conventional
 - **Every instrumented runner** atomically writes schema-validated JSON under
   `test-results/ci-telemetry/raw`. The finalizer
   (`scripts/ci/upload-test-telemetry.ts`) writes `manifest.json` beside them.
-  Both remain in the uploaded workflow artifact (`unit-test-telemetry-attempt-<id>`,
-  one per job attempt) even when a test fails, next to
+  Both remain in the uploaded workflow artifact (`unit-test-artifacts-attempt-<id>`,
+  all of `test-results/`, one per job attempt) even when a test fails, next to
   `flake-records-unit-attempt-<id>`. See
   [CI and test telemetry](ci-test-telemetry.md) for downloading and checking one.
 - **The test evidence folder**: `test-results/` is one test run's evidence.
-  After the finalizer, `scripts/ci/test-evidence.ts write` adds one row per
-  test (`tables/tests.parquet`) and `manifest.json` (the run's result, the
+  After the finalizer, `scripts/ci/test-evidence.ts write` adds
+  `manifest.json` (the run's result, the
   tested commit and tree, the job attempt, the deployed target in the e2e
   jobs, and every file's sha256). Kit's CTest writes its JUnit XML there too.
   Then `upload` puts the folder in the `iterate-ci` R2 bucket; the step's
@@ -397,12 +395,12 @@ for it. The Playwright config additionally honors the Playwright-conventional
   captures), the HTML report in `playwright-html/`, and
   `playwright-results.json`.
 - **Preview CI** writes the deployed preview's summary to
-  `apps/os/output/preview.json` and the URLs into the PR body. Its `e2e` job
-  uploads `preview-test-telemetry` (the canonical telemetry of both runners),
-  the `flake-records-specs` and `flake-records-preview-e2e` artifacts, the
-  Playwright HTML report (`public-playwright-report`) and all of
-  `test-results/` (`preview-os-test-artifacts`: failed specs' traces,
-  screenshots and error context), even when a suite fails. All but the HTML
+  `apps/os/output/preview.json` and the URLs into the PR body. Its E2E tests
+  and Browser specs jobs upload the `flake-records-preview-e2e` and
+  `flake-records-specs` artifacts, all of `test-results/`
+  (`preview-os-test-artifacts`: the telemetry, and failed specs' traces,
+  screenshots and error context) and the Playwright HTML report
+  (`public-playwright-report`), even when a suite fails. All but the HTML
   report end in `-attempt-<id>`, so a retried job keeps the failed attempt's
   ([per job attempt](depot-ci.md#artifacts-per-job-attempt)). Fetch them with
   `depot ci artifacts` ([Depot CI](depot-ci.md#browser-reports-from-artifacts)).
@@ -657,12 +655,12 @@ be diagnosed, even though the same test outcome remains green in normal CI.
   records retain the first failed attempt's compact error even when the retry
   passes. Grep any run log for `retry-telemetry`. Playwright's `list` reporter
   marks retried specs.
-- **CI**: the Test workflow's runners write canonical telemetry to the
-  durable directory, and the finalizer keeps it as the
-  `unit-test-telemetry-attempt-<id>` artifact. A plain test that failed and
-  then passed on its CI retry also gets a `kind: "unknown"` flake record
-  (below), and so does one that failed every attempt. Preview jobs upload their
-  telemetry as the `preview-test-telemetry-attempt-<id>` artifact. Every
+- **CI**: every test job's runners write canonical telemetry to the
+  durable directory, and the job keeps it in its
+  `<unit|preview-os|main-os>-test-artifacts-attempt-<id>` artifact. A plain
+  test that failed and then passed on its CI retry also gets a
+  `kind: "unknown"` flake record (below), and so does one that failed every
+  attempt. Every
   artifact carries its job attempt's id, so a retried job keeps the failed
   attempt's evidence ([per job attempt](depot-ci.md#artifacts-per-job-attempt)). Nothing folds preview
   retries into the PR body or annotates a run with four or more retries (which

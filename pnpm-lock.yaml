@@ -1245,9 +1245,6 @@ importers:
       aws4fetch:
         specifier: 1.0.20
         version: 1.0.20
-      hyparquet-writer:
-        specifier: 0.16.10
-        version: 0.16.10
       yaml:
         specifier: 'catalog:'
         version: 2.9.1
@@ -1267,9 +1264,6 @@ importers:
       '@types/node':
         specifier: 'catalog:'
         version: 24.13.6
-      hyparquet:
-        specifier: 1.31.1
-        version: 1.31.1
       oxc-parser:
         specifier: ^0.151.0
         version: 0.151.0
@@ -5825,12 +5819,6 @@ packages:
     resolution: {integrity: sha512-5gs5ytaNjBrh5Ow3zrvdUUY+0VxIuWVL4i9irt6friV+BqdCfmV11CQTWMiBYWHbXhco+J1kHfTOUkePhCDvMA==}
     engines: {node: '>=18'}
     hasBin: true
-
-  hyparquet-writer@0.16.10:
-    resolution: {integrity: sha512-53fpiA57kdJ2V7X97/VSAzHr8rb8Z2cr126T1pTL9TapZNOP/wNJqFh+jc7dRwwg9TpVMYeRNDMb+r5oiLqwjg==}
-
-  hyparquet@1.31.1:
-    resolution: {integrity: sha512-tF9580Xb+41+Eb+mH0av1k7m1PWl+PSKrX66Yd7UOZ760cwEXP9/enwHRMSCeVncaubRI8XPb3v580/ujYKK5w==}
 
   iconv-lite@0.7.3:
     resolution: {integrity: sha512-IKXpvIzjnC9XTAUbVBcMfGS0EPaIXtW6v+zr+RRp+hqULEpo0owZax6wyRwPOJbWbzjYspQwusTsfVr0ifh4uQ==}
@@ -12812,12 +12800,6 @@ snapshots:
   human-signals@8.0.1: {}
 
   husky@9.1.7: {}
-
-  hyparquet-writer@0.16.10:
-    dependencies:
-      hyparquet: 1.31.1
-
-  hyparquet@1.31.1: {}
 
   iconv-lite@0.7.3:
     dependencies:

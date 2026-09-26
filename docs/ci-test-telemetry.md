@@ -14,8 +14,9 @@ Two things, kept apart on purpose:
   Nothing from here goes to PostHog.
 
 Both feed a third: the [test evidence folder](test-evidence.md), each job
-attempt's `test-results/` with a manifest and one Parquet row per test, which
-CI puts in the `iterate-ci` R2 bucket.
+attempt's `test-results/` with a manifest, which CI puts in the `iterate-ci` R2
+bucket. The raw telemetry is the one per-test record; the suite summary the
+flake dashboard reads is derived from it.
 
 Per-test events were over 70% of the PostHog project's ingestion (millions a
 month), which is why #2494 cut CI delivery to zero. The workflow and job events
@@ -142,7 +143,8 @@ Vitest (retry-telemetry-reporter.ts) / Playwright (playwright-telemetry-reporter
      writes the job's suite's suite-summary.json beside its flake records
                     │
                     ▼  if: always(), if-no-files-found: error
-  actions/upload-artifact: {unit,preview,main}-test-telemetry-attempt-<job attempt id>
+  actions/upload-artifact: {unit,preview-os,main-os}-test-artifacts-attempt-<job attempt id>
+     all of test-results/, the evidence folder (test-evidence.md)
 ```
 
 The contract is `packages/shared/src/test-support/ci-telemetry.ts`. Two
@@ -158,8 +160,8 @@ nothing.
 
 `TEST_TELEMETRY_ARTIFACT_DIR` (CI sets `test-results/ci-telemetry/raw`) is the
 directory the finalizer reads; relative paths resolve from `GITHUB_WORKSPACE`.
-`TEST_TELEMETRY_ARTIFACT_FILE` adds a named copy. With neither set a reporter
-writes nothing. File names carry a short hash of the full artifact ID.
+Without it a reporter writes nothing. File names carry a short hash of the full
+artifact ID.
 `TEST_TELEMETRY_HEAD_SHA`, `TEST_TELEMETRY_BRANCH` and
 `TEST_TELEMETRY_PULL_REQUEST_NUMBER` pin the tested source when it differs from
 the workflow's ref.
@@ -169,21 +171,15 @@ does Main OS e2e's failing-rows step (`scripts/ci/main-e2e-alert.ts`). Change
 its schema in place, together with those readers; there is no versioned
 migration.
 
-What the artifacts hold, by runner:
-
-| Runner     | Attempts                   | Detail                                                                                                              |
-| ---------- | -------------------------- | ------------------------------------------------------------------------------------------------------------------- |
-| Playwright | every attempt              | every nested step including hooks, fixtures, expects and API calls; worker and parallel index; errors; output sizes |
-| Vitest     | aggregate retry count only | before/after-each and body time, `e2e-phase` annotations, module lifecycle and import costs                         |
-
-Vitest's public reporter receives one final `onTestCaseResult` with aggregate
-duration and retry count, not each attempt's duration: do not rank a retried
-Vitest row as a no-retry sample or manufacture attempt durations. Playwright
-nested steps overlap their parents, so group or rank them rather than summing.
-Playwright only creates steps for its own APIs, hooks, fixtures, assertions and
-explicit `test.step` calls; wrap long domain helpers in a stable `test.step`
-name or their time stays unattributed (`helpers.createFixture` does this for
-every spec). The reporters follow the runners' reporter APIs
+Each test is one record after all its attempts: its file and titles, tags,
+expected state and (Playwright) outcome, final state, retry count and whether a
+retry rescued it, start and total duration, its errors and first failure. That
+is what the suite summary, the row budget, the flake records and Main OS e2e's
+failing rows read; a field nothing reads is not recorded. Vitest's public
+reporter receives one final `onTestCaseResult` with aggregate duration and
+retry count, not each attempt's duration: do not rank a retried row as a
+no-retry sample. Where a spec's time went is in its Playwright report and the
+[CI trace](ci-traces.md). The reporters follow the runners' reporter APIs
 ([Playwright](https://playwright.dev/docs/api/class-reporter),
 [Vitest](https://vitest.dev/api/advanced/reporters)) rather than parsing
 console text.
@@ -219,26 +215,25 @@ a GitHub-looking URL that `gh run download` cannot fetch):
 depot_run_id="$(depot ci run list --org 0p91s0lz49 --repo iterate/iterate \
   --sha "$(git rev-parse HEAD)" --output json | jq -r '.[0].run_id')"
 artifact_id="$(depot ci artifacts list "$depot_run_id" --org 0p91s0lz49 --output json \
-  | jq -r '[.artifacts[] | select(.name | startswith("unit-test-telemetry-attempt-"))]
+  | jq -r '[.artifacts[] | select(.name | startswith("unit-test-artifacts-attempt-"))]
     | max_by(.attempt) | .artifact_id')"
 depot ci artifacts download "$artifact_id" --org 0p91s0lz49 --output-file /tmp/unit.zip
 unzip -q /tmp/unit.zip -d /tmp/unit
-jq '.tests[] | {moduleId, fullName, durationMs, retryCount, phases}' /tmp/unit/raw/*.json
+jq '.tests[] | {moduleId, fullName, durationMs, retryCount, firstFailure}' /tmp/unit/ci-telemetry/raw/*.json
 ```
 
 Re-run the check on a downloaded artifact with
-`pnpm tsx scripts/ci/upload-test-telemetry.ts --artifact-root /tmp/unit`.
+`pnpm tsx scripts/ci/upload-test-telemetry.ts --artifact-root /tmp/unit/ci-telemetry`.
 
 ### Adding or changing a reporter
 
 1. Extend the Zod schema only with runner-neutral fields; a capability a
    runner lacks stays optional.
 2. Write raw artifacts only; a reporter performs no network I/O.
-3. Include every final test, failed attempt and error, partial phase, module
-   and run status. Never drop a failed or incomplete result. Normalize runner
-   placeholders before validation: Playwright reports negative durations for
-   steps still active at interruption, so the reporter records zero duration
-   and a `PlaywrightIncompleteStepError`.
+3. Include every final test, its errors and the run's status. Never drop a
+   failed or incomplete result. Normalize runner placeholders before
+   validation: Playwright reports a negative duration for an attempt still
+   active at interruption, so the reporter records zero.
 4. Write the sentinel from the first real lifecycle hook.
 5. Pin `TEST_TELEMETRY_WORKSPACE` in the command's environment. A unit
    workspace is expected once it has a `test` script; a preview job's runner
