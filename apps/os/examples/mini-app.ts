@@ -7,13 +7,15 @@
 //   if (request.headers.get("x-iterate-routing-slug") === "notes")
 //     return new MiniApp(this.ctx, this.env).fetch(request);
 //
-// and it is reachable at  https://notes--<project>.<base>/  (deployed) or
+// and it is reachable at  https://notes--<project>.<base>/  (subdomains),
+//   <platform>/projects/<project>/notes/  (paths, a preview) or
 //   http://notes.<project>.localhost:<port>/  (dev). No bundler, no framework build, no deploy step.
 //
 // It serves ONE no-build HTML page at "/" — Preact + htm + capnweb from an esm.sh importmap, the exact
 // shape of the platform's own preact mini-app — and its own tiny capnweb API at "/rpc" that the page
-// dials over a WebSocket. Persistence is the PROJECT's own itx.kv (this loaded code speaks for the
-// project), so the notes are shared and durable. `RpcTarget`/`WorkerEntrypoint` are the runtime's own
+// dials over a WebSocket, under the base path the edge says (`x-iterate-base-path`, paths only).
+// Persistence is the PROJECT's own itx.kv (this loaded code speaks for the project), so the notes
+// are shared and durable. `RpcTarget`/`WorkerEntrypoint` are the runtime's own
 // (inside a loaded isolate capnweb's RpcTarget IS the native one); `newWorkersRpcResponse` — which
 // serves BOTH the WebSocket upgrade and a one-shot HTTP batch — and `withItx` come from `iterate/sdk`,
 // which the loader links to this deployment's own SDK build. The API holds no scope for its socket's
@@ -53,12 +55,14 @@ export default class MiniApp extends WorkerEntrypoint<{ ITX: { get(): Itx } }> {
   fetch(request: Request): Response | Promise<Response> {
     if (new URL(request.url).pathname === "/rpc")
       return newWorkersRpcResponse(request, new Notes((call) => withItx(this.env.ITX, call)));
-    return new Response(PAGE, { headers: { "content-type": "text/html; charset=utf-8" } });
+    // the path the browser addresses /rpc at: under paths, the base path the edge stripped
+    const rpc = `${request.headers.get("x-iterate-base-path") || ""}/rpc`;
+    return new Response(page(rpc), { headers: { "content-type": "text/html; charset=utf-8" } });
   }
 }
 
 /** The one no-build page: Preact + htm + capnweb from an esm.sh importmap. */
-const PAGE = `<!doctype html>
+const page = (rpcPath: string) => `<!doctype html>
 <html lang="en">
   <head>
     <meta charset="utf-8" />
@@ -91,7 +95,7 @@ const PAGE = `<!doctype html>
 
       // The app dials its OWN capnweb API at /rpc — same host, one WebSocket, no auth (it speaks for
       // the project). capnweb pipelines, so \`api\` is usable immediately.
-      const rpc = new URL("/rpc", location.href);
+      const rpc = new URL(${JSON.stringify(rpcPath)}, location.href);
       rpc.protocol = rpc.protocol === "https:" ? "wss:" : "ws:";
       const api = newWebSocketRpcSession(rpc.toString());
 

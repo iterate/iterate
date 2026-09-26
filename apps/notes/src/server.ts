@@ -1,9 +1,11 @@
-import handler, { createServerEntry } from "@tanstack/react-start/server-entry";
+import { createServerEntry } from "@tanstack/react-start/server-entry";
+import { createStartHandler, defaultStreamHandler } from "@tanstack/react-start/server";
 import { env } from "cloudflare:workers";
 import { proxyPosthogRequest } from "@iterate-com/shared/posthog";
 import { startAppConfigOf } from "@iterate-com/shared/start-app-config";
 import { appAuth, appSession } from "iterate/app-server";
 import type { BrowserSession } from "iterate/app-session";
+import { basePathOf } from "./base-path.ts";
 export { BrowserSession } from "iterate/app-session";
 
 declare global {
@@ -19,9 +21,22 @@ declare global {
   }
 }
 
+/** TanStack Start's pages, their scripts and stylesheets under the request's base path
+ *  (base-path.ts) — per request, since a proxied page names its own. */
+const pages = createStartHandler({
+  handler: defaultStreamHandler,
+  transformAssets: {
+    createTransform: (context) => {
+      const basePath = context.warmup ? "" : basePathOf(context.request.headers);
+      return ({ url }) => `${basePath}${url}`;
+    },
+    cache: false,
+  },
+});
+
 /** The app's own origin signs a person in through the platform's OAuth (`appAuth`) and proxies
- *  the authenticated /api; it works through project ingress too.
- *  Everything else is TanStack Start's: the built assets, then its pages. */
+ *  the authenticated /api; it works through project ingress too, under the base path the edge
+ *  says (base-path.ts). Everything else is TanStack Start's: the built assets, then its pages. */
 export default createServerEntry({
   async fetch(request) {
     // parsed on the first request, /healthz's included: a malformed config fails the deploy's smoke
@@ -51,6 +66,13 @@ export default createServerEntry({
     }
     const asset = await env.ASSETS.fetch(request);
     if (asset.status !== 404) return asset;
-    return handler.fetch(request);
+    // A page renders at the URL the browser addressed, its base path back on: at the stripped URL
+    // the router would redirect to its canonical one, the base path on, which the edge strips
+    // again. A server function is Start's `/_serverFn/<id>`, served as it came.
+    const basePath = basePathOf(request.headers);
+    if (!basePath || url.pathname.startsWith("/_serverFn/")) return pages(request);
+    const addressed = new URL(url);
+    addressed.pathname = `${basePath}${addressed.pathname}`;
+    return pages(new Request(addressed, request));
   },
 });

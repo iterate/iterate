@@ -4,7 +4,9 @@ import { usePosthogIdentity } from "@iterate-com/ui/components/posthog";
 const iterate = createIterateClient();
 export const Route = createFileRoute("/_auth")({
   ssr: false,
-  beforeLoad: ({ location }) => iterate.authenticate(location.href),
+  // back to the page the browser addressed, its base path included
+  beforeLoad: ({ context, location }) =>
+    iterate.authenticate(`${context.basePath}${location.href}`),
   component: Identified,
 });
 

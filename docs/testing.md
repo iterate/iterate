@@ -782,8 +782,8 @@ test.skip("…", () => {});
 
 Markers without a date are for **structural** reasons only:
 platform- or env-gated suites that cannot run in a given context (the
-mini-app spec skips on a deployment that routes projects by paths, because it
-dials a subdomain — that is a property of the target, not a parked bug).
+issuer-pages spec skips its email-code row where the deployment offers no
+email-code sign-in — that is a property of the target, not a parked bug).
 
 [`lint/dated-skips.test.ts`](../lint/dated-skips.test.ts) enforces this in the
 unit suite (`pnpm test`): it scans the test corpus for skip/fixme/todo markers

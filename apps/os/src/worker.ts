@@ -8,7 +8,11 @@
 import { proxyPosthogRequest } from "@iterate-com/shared/posthog";
 import { ITX_PRINCIPAL_HEADER, type Principal } from "iterate/principal";
 import { forwardIssues } from "iterate/lib";
-import { ITERATE_ROUTING_SLUG_HEADER, primaryHostnameUrlOf } from "iterate/project-ingress";
+import {
+  ITERATE_BASE_PATH_HEADER,
+  ITERATE_ROUTING_SLUG_HEADER,
+  primaryHostnameUrlOf,
+} from "iterate/project-ingress";
 import { primaryHostnameRedirectOf } from "./primary-hostname-redirect.ts";
 import { ITX_GRANT_HEADER } from "./caller.ts";
 import { IterateContextDurableObject } from "./iterate-context-durable-object.ts";
@@ -52,13 +56,6 @@ import { projectHostCallerOf, projectHostSignInAnswerOf } from "./project-host-s
  *  the edge refuses past a few. A fresh Request starts at zero — an app looping its own project
  *  with fresh Requests is its own cost. */
 const PROJECT_HOST_HOPS_HEADER = "x-itx-expression-hops";
-
-/** THE BASE PATH a project host is served under (paths ingress: `/projects/<project>[/<routingSlug>]`),
- *  alongside `x-iterate-routing-slug`: the edge strips it from the URL the config worker sees and
- *  says it here, so the site's own links and its browser adapter can compose absolute paths. Set or
- *  deleted by the edge on every project request, so a visitor's spelling never reaches the project.
- *  Empty under subdomains (each routing slug owns its origin). */
-const ITERATE_BASE_PATH_HEADER = "x-iterate-base-path";
 
 /** The Request without its base path (paths ingress): the same method, body and upgrade, the URL
  *  starting at the app's root. */

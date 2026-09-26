@@ -18,7 +18,11 @@ Publish [config-worker.ts](config-worker.ts) as the project's config worker
 (`itx/ingress-configured` with `["itx", "workers", ["get", { source }]]`): every host of the
 project reaches its `fetch`, and it serves only the `notes` routing slug (`x-iterate-routing-slug`),
 so `notes--<project>.iterate.app` reaches Notes (see
-[specs/notes/sessions.spec.ts](../../specs/notes/sessions.spec.ts)).
+[specs/notes/sessions.spec.ts](../../specs/notes/sessions.spec.ts)). Under paths ingress (every
+preview) it is `<platform>/projects/<project>/notes/`: the edge strips that base path and says it in
+`x-iterate-base-path`, and Notes puts it back on every path the browser addresses — links, assets,
+server functions — while the router drops it ([src/base-path.ts](src/base-path.ts)). The page's
+`/.auth/*` and `/api` stay root paths: they are its host's, the platform's own under paths.
 
 The project host stamps `x-itx-principal` only for a project member, so the guard is one check.
 Signed out, `auth.require` answers `401` with the platform's challenge, and the edge turns a page
