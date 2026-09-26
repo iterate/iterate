@@ -1,6 +1,6 @@
 // worker.ts — the one worker's fetch entry: the request is sorted top to bottom — a project host
 // (the files host, else the project's config worker), the MCP origin, then the platform origin's
-// own paths (`/version`, a preview's one-click `/.auth/test-link`, the secret-OAuth callback, the
+// own paths (`/version`, a preview's admin sign-in through prd, the secret-OAuth callback, the
 // integrations' callbacks and webhooks, Google identity, `/mcp`, the browser adapter's `/api` and `/.auth/*`) and, last, the OAuth provider with
 // the issuer's pages as its catch-all.
 // Cap’n Web terminates at `/api`; a project host's request rides into the context DO.
@@ -29,13 +29,14 @@ import { githubCallbackRoute, githubWebhookRoute } from "./integrations/github.t
 import { ControlPlane, ControlPlaneUnavailableError } from "./control-plane/edge.ts";
 import { oauthResponse } from "./api.ts";
 import { issuerHandler } from "./issuer-pages.ts";
-import { testLinkCallbackResponse, testLinkResponse } from "./issuer-session.ts";
-import { TEST_LINK_PATH } from "./test-link.ts";
 import {
-  TEST_LINK_CALLBACK_PATH,
-  TEST_LINK_CLIENT_PATH,
-  testLinkClientMetadata,
-} from "./test-link-admins.ts";
+  ADMIN_SIGN_IN_CALLBACK_PATH,
+  ADMIN_SIGN_IN_CLIENT_PATH,
+  ADMIN_SIGN_IN_PATH,
+  adminSignInCallbackResponse,
+  adminSignInClientMetadata,
+  adminSignInResponse,
+} from "./admin-sign-in.ts";
 import { appConfigOf, platformAddressesOf, sessionSigningSecretOf } from "./app-config.ts";
 import { captureIssueInPosthog } from "./posthog.ts";
 import { FILES_ROUTING_SLUG, serveProjectFileRequest } from "./context/file-urls.ts";
@@ -361,16 +362,18 @@ export default {
     // `<deployId> <platformOrigin>`: Cloudflare's version id of this deploy — the stamp a smoke
     // waits for (`wrangler deploy` prints it) — and the origin this deployment answers on.
     if (url.pathname === "/version") return new Response(`${deployId} ${platformOrigin}\n`);
-    // A preview's one-click sign-in (test-link.ts): a 404 wherever `login.testLink` is off — prd,
-    // and every deployment on its own domain, which app-config.ts refuses it on.
-    if (url.pathname === TEST_LINK_PATH && request.method === "GET")
-      return testLinkResponse(request, env);
-    // …and where one is proven an admin's (test-link-admins.ts): the admins' issuer's answer, and
-    // this deployment's client metadata document, which that issuer fetches
-    if (appConfig.login.testLink?.admins && request.method === "GET") {
-      if (url.pathname === TEST_LINK_CALLBACK_PATH) return testLinkCallbackResponse(request, env);
-      if (url.pathname === TEST_LINK_CLIENT_PATH)
-        return Response.json(testLinkClientMetadata(platformOrigin), {
+    // An admin's sign-in through another issuer (admin-sign-in.ts), prd's for a preview: its start,
+    // that issuer's answer, and this deployment's client metadata document, which the issuer
+    // fetches. None of them exists where `login.adminIssuer` is unset — prd, and every deployment
+    // on its own domain, which app-config.ts refuses it on.
+    const adminIssuer = appConfig.login.adminIssuer;
+    if (adminIssuer && request.method === "GET") {
+      if (url.pathname === ADMIN_SIGN_IN_PATH)
+        return adminSignInResponse(request, env, adminIssuer);
+      if (url.pathname === ADMIN_SIGN_IN_CALLBACK_PATH)
+        return adminSignInCallbackResponse(request, env, adminIssuer);
+      if (url.pathname === ADMIN_SIGN_IN_CLIENT_PATH)
+        return Response.json(adminSignInClientMetadata(platformOrigin), {
           headers: { "cache-control": "public, max-age=300" },
         });
     }

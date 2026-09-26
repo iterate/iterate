@@ -1,7 +1,7 @@
 // __workers-tests__/admin-and-impersonation.test.ts — the platform admin (app-config.ts `admins`,
 // wrangler.test.jsonc lists oauth-admin@example.com): the `admin` scope and signing a client in as
 // someone else, through the real sign-in, consent, code exchange and admission.
-import { env } from "cloudflare:workers";
+import { env, exports } from "cloudflare:workers";
 import { expect, test, vi } from "vitest";
 import { platformAddressesOf } from "../src/app-config.ts";
 import { authorizationForToken } from "../src/oauth.ts";
@@ -217,6 +217,66 @@ test("signing a client in as someone: offered to an admin alone, the person's gr
   });
 });
 
+test("a sign-in link naming a test person (`login_hint`, a PR body's `Sign in ↗`) pre-fills an admin's Sign in as someone else for one of our own apps, and signs nobody in as them by itself", async () => {
+  fetchReachesThisWorker();
+  // under the test email domain (wrangler.test.jsonc `login.testEmailDomain`), as a PR's pr<N>@…
+  const target = await approverFor("hinted@signin.test");
+  const outside = await approverFor("hinted-outside@example.com");
+  const admin = await approverFor(ADMIN);
+  // the Dash beside this platform (control.test): one of its own apps, a CIMD client on a sibling
+  const clientId = "https://dash.test/.auth/client.json";
+  vi.mocked(globalThis.fetch).mockImplementation((input, init) => {
+    const request = new Request(input, init);
+    if (request.url === clientId)
+      return Promise.resolve(
+        Response.json({
+          client_id: clientId,
+          client_name: "iterate Dash",
+          redirect_uris: ["https://dash.test/.auth/callback"],
+          token_endpoint_auth_method: "none",
+        }),
+      );
+    return exports.default.fetch(request);
+  });
+  const { query } = await authorizationRequest(clientId, [addresses.api]);
+  query.set("redirect_uri", "https://dash.test/.auth/callback");
+  query.set("login_hint", "Hinted@Signin.test");
+  expect(await admin.approver.consent.describe(`?${query}`)).toMatchObject({
+    kind: "consent",
+    email: ADMIN,
+    impersonation: { ownApp: true, suggested: "hinted@signin.test" },
+  });
+  // anyone but an admin is offered nothing, named or not
+  const theirs = await target.approver.consent.describe(`?${query}`);
+  expect(theirs.kind === "consent" && theirs.impersonation).toBeUndefined();
+  // an address nobody signed in as pre-fills nobody
+  query.set("login_hint", "nobody-yet@signin.test");
+  const nobody = await admin.approver.consent.describe(`?${query}`);
+  expect(nobody.kind === "consent" && nobody.impersonation?.suggested).toBeUndefined();
+  // nor does a real person, outside the test email domain: prd, which has none, pre-fills nobody
+  query.set("login_hint", outside.user.email);
+  const real = await admin.approver.consent.describe(`?${query}`);
+  expect(real.kind === "consent" && real.impersonation?.suggested).toBeUndefined();
+
+  // a third party's link pre-fills nobody, and approved as posted, without the page's own
+  // `impersonate`, the grant is the admin's: the hint names, it never signs in
+  const thirdParty = await authorize(admin.approver, {
+    scope: "iterate",
+    loginHint: target.user.email,
+  });
+  expect(thirdParty.view).toMatchObject({ kind: "consent", impersonation: { ownApp: false } });
+  expect(
+    thirdParty.view.kind === "consent" && thirdParty.view.impersonation?.suggested,
+  ).toBeUndefined();
+  expect(await authorizationForToken(env, thirdParty.token!, addresses, "api")).toMatchObject({
+    principal: { actor: admin.user.id, email: ADMIN },
+  });
+  expect(
+    (await authorizationForToken(env, thirdParty.token!, addresses, "api"))!.principal
+      .impersonatedBy,
+  ).toBeUndefined();
+});
+
 test("an impersonation's access token never outlives its hour: a code exchanged late gets a token that ends with it", async () => {
   fetchReachesThisWorker();
   const target = await approverFor("impersonated-late@example.com");
@@ -269,15 +329,16 @@ async function approverFor(email: string) {
   return { approver, user: await controlPlane().ensureUser(email) };
 }
 
-/** A client's authorization for `scope` on `resource` (`act_as` in its query when given), approved
- *  by `approver` with every project — or as the person `impersonate` names — and its code
- *  exchanged: the access token, or the refusal. */
+/** A client's authorization for `scope` on `resource` (`act_as` and `login_hint` in its query when
+ *  given), approved by `approver` with every project — or as the person `impersonate` names — and
+ *  its code exchanged: the access token, or the refusal. */
 async function authorize(
   approver: Awaited<ReturnType<typeof approverFor>>["approver"],
   input: {
     scope: string;
     resource?: string;
     actAs?: string;
+    loginHint?: string;
     impersonate?: string;
     /** how long after approval the code is exchanged */
     exchangeAfterMs?: number;
@@ -295,6 +356,7 @@ async function authorize(
   ]);
   query.set("scope", input.scope);
   if (input.actAs) query.set("act_as", input.actAs);
+  if (input.loginHint) query.set("login_hint", input.loginHint);
   const view = await approver.consent.describe(`?${query}`);
   const approval = await approver.consent.approve({
     query: `?${query}`,

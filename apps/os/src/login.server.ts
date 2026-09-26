@@ -2,6 +2,7 @@
 // do. The route (routes/login.tsx) renders the first and hands POST /login to the second.
 
 import { errorCode, sameOriginPath } from "iterate/lib";
+import { ADMIN_SIGN_IN_PATH } from "./admin-sign-in.ts";
 import { startIssuerSession } from "./issuer-session.ts";
 import {
   clearLoginCookie,
@@ -46,6 +47,13 @@ export async function loginState(
       ? `/.auth/identity/cloudflare?next=${encodeURIComponent(next)}`
       : null,
     github: config.login.github ? `/.auth/identity/github?next=${encodeURIComponent(next)}` : null,
+    // an admin through another issuer (admin-sign-in.ts): prd, on a preview
+    adminIssuer: config.login.adminIssuer
+      ? {
+          host: new URL(config.login.adminIssuer).host,
+          href: `${ADMIN_SIGN_IN_PATH}?${new URLSearchParams({ next })}`,
+        }
+      : null,
     // where a signed-in person with nowhere else to go is sent (the landing page's pointer)
     dash: config.urls.dash || null,
   };

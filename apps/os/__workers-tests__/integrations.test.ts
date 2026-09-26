@@ -1014,12 +1014,12 @@ function githubScopeWithoutUrlsOs(): IntegrationScope {
     delete: async (key: string) => kept.delete(key),
   } as unknown as DurableObjectStorage;
   return {
-    // a self-host's shape: no urls.os, so neither test links nor admins beside the global password
+    // a self-host's shape: no urls.os, so neither fake providers nor admins beside the global password
     // (app-config.ts refuses both off a preview, local or `.test` origin)
     env: {
       ...env,
       APP_CONFIG_URLS__OS: "",
-      APP_CONFIG_LOGIN__TEST_LINK__EMAIL_DOMAIN: undefined,
+      APP_CONFIG_LOGIN__TEST_EMAIL_DOMAIN: undefined,
       APP_CONFIG_ADMINS: undefined,
     },
     projectId: "prj_selfhost",

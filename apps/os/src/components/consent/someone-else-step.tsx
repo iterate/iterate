@@ -8,9 +8,10 @@ import { ConsentPanel, StepHeading, type ConsentFrame } from "./consent-step.tsx
 /** A PLATFORM ADMIN'S "Sign in as someone else…" (the consent view's `impersonation`, admins only):
  *  whom, typed with the platform's people as suggestions, and who the client really is — its
  *  verified host, where the code goes, the resource and the permissions it would hold as them, and
- *  a warning for anything that is not one of this deployment's own apps. Submit is a plain POST to
- *  this very authorization URL carrying `impersonate=<user id>` in the body, which the platform
- *  checks again (consent.ts `approve`). */
+ *  a warning for anything that is not one of this deployment's own apps. A link naming someone fills
+ *  them in (`impersonation.suggested`); nothing is signed in until the admin submits. Submit is a
+ *  plain POST to this very authorization URL carrying `impersonate=<user id>` in the body, which
+ *  the platform checks again (consent.ts `approve`). */
 export function SomeoneElseStep({
   headingRef,
   frame,
@@ -27,7 +28,7 @@ export function SomeoneElseStep({
   onBack: () => void;
 }) {
   const formId = useId();
-  const [email, setEmail] = useState("");
+  const [email, setEmail] = useState(impersonation.suggested || "");
   const [submitting, setSubmitting] = useState(false);
   // the form posts the person's id, never the address typed: only someone on the list can be picked
   const chosen = impersonation.people.find((person) => person.email === email.trim().toLowerCase());

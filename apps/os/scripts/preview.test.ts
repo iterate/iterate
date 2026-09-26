@@ -5,6 +5,7 @@ import { expect, onTestFinished, test } from "vitest";
 import {
   APPS,
   appPreviewOrigins,
+  appSignInLink,
   assertFreshInstall,
   changedApps,
   configTemplateNames,
@@ -119,16 +120,16 @@ test("the PR body's managed section: names the commit the run deployed when the 
   expect(withCommit).not.toContain("tested");
 });
 
-test("the PR body's managed section: on a PR the heading, every app and every config template carry a one-click `Sign in ↗`, and the section says as whom", () => {
+test("the PR body's managed section: on a PR the heading, every app and every config template carry a `Sign in ↗`, and the section says as whom and how", () => {
   const dash = "https://pr123-dash.iterate-dev-preview.workers.dev";
   const notes = "https://pr123-notes.iterate-dev-preview.workers.dev";
   const os = "https://pr123-os.iterate-dev-preview.workers.dev";
   const signIn = {
-    heading: `${os}/.auth/test-link?t=heading`,
-    apps: { dash: `${os}/.auth/test-link?t=dash`, notes: `${os}/.auth/test-link?t=notes` },
+    heading: `${dash}/.auth/login?next=heading`,
+    apps: { dash: `${dash}/.auth/login?next=dash`, notes: `${notes}/.auth/login?next=notes` },
     templates: [
-      { name: "default", link: `${os}/.auth/test-link?t=default`, fromHead: "bbbbbbbbb0123456" },
-      { name: "with-agents", link: `${os}/.auth/test-link?t=with-agents` },
+      { name: "default", link: `${dash}/.auth/login?next=default`, fromHead: "bbbbbbbbb0123456" },
+      { name: "with-agents", link: `${dash}/.auth/login?next=with-agents` },
     ],
     email: "pr123@preview.iterate.test",
     project: "pr123",
@@ -154,21 +155,21 @@ test("the PR body's managed section: on a PR the heading, every app and every co
     Status: **deployed** on \`ccccccccc\` · [CI job ↗](https://depot.dev/orgs/0p91s0lz49/workflows/w?job=j&attempt=a) · updated 2026-09-24 10:32 UTC
     <!-- os-preview-status:end -->
 
-    **https://pr123-os.iterate-dev-preview.workers.dev** · [Sign in ↗](https://pr123-os.iterate-dev-preview.workers.dev/.auth/test-link?t=heading) · deployment \`bd68a9bb\` · [Cloudflare dashboard](https://dash.cloudflare.com/x) · deleted when this PR closes
+    **https://pr123-os.iterate-dev-preview.workers.dev** · [Sign in ↗](https://pr123-dash.iterate-dev-preview.workers.dev/.auth/login?next=heading) · deployment \`bd68a9bb\` · [Cloudflare dashboard](https://dash.cloudflare.com/x) · deleted when this PR closes
 
     | App on top, signed in against this preview | | |
     | --- | --- | --- |
-    | dash | https://pr123-dash.iterate-dev-preview.workers.dev | [Sign in ↗](https://pr123-os.iterate-dev-preview.workers.dev/.auth/test-link?t=dash) |
-    | notes | https://pr123-notes.iterate-dev-preview.workers.dev | [Sign in ↗](https://pr123-os.iterate-dev-preview.workers.dev/.auth/test-link?t=notes) |
+    | dash | https://pr123-dash.iterate-dev-preview.workers.dev | [Sign in ↗](https://pr123-dash.iterate-dev-preview.workers.dev/.auth/login?next=dash) |
+    | notes | https://pr123-notes.iterate-dev-preview.workers.dev | [Sign in ↗](https://pr123-notes.iterate-dev-preview.workers.dev/.auth/login?next=notes) |
 
-    New project from template: [default at this PR's \`bbbbbbbbb\` ↗](https://pr123-os.iterate-dev-preview.workers.dev/.auth/test-link?t=default) · [with-agents ↗](https://pr123-os.iterate-dev-preview.workers.dev/.auth/test-link?t=with-agents)
+    New project from template: [default at this PR's \`bbbbbbbbb\` ↗](https://pr123-dash.iterate-dev-preview.workers.dev/.auth/login?next=default) · [with-agents ↗](https://pr123-dash.iterate-dev-preview.workers.dev/.auth/login?next=with-agents)
 
-    \`Sign in ↗\` signs you in as \`pr123@preview.iterate.test\` with project \`pr123\` once you confirm at https://os.iterate.com that you are one of \`*@nustom.com\`; no password and no Allow page on the preview. The link is for this preview only and expires in 14 days; every push mints a fresh one.
+    \`Sign in ↗\` signs the app in as \`pr123@preview.iterate.test\` (project \`pr123\`) for an hour. First sign in to this preview as yourself with **os.iterate.com** (prd's admins only), then confirm **Sign in as someone else**. The admin app's link signs you in as you.
 
     Every push redeploys it in place. Reset, e2e, delete and the laptop commands: [apps/os/README.md](https://github.com/iterate/iterate/blob/main/apps/os/README.md)."
   `);
   expect(render(false)).toContain(
-    "Seeding `pr123` failed this run (the deploy log says why), so the apps ask for consent.",
+    "Seeding `pr123` failed this run (the deploy log says why), so there is nobody to sign in as yet.",
   );
   expect(section).not.toContain("Sign in");
 });
@@ -440,6 +441,22 @@ test.for([
   ).toEqual(expected);
 });
 
+test("a `Sign in ↗` link is the app's own sign-in, landing where the link lands and naming whom the consent page pre-fills; the admin app's names nobody", () => {
+  const dash = "https://pr123-dash.iterate-dev-preview.workers.dev";
+  const link = appSignInLink(
+    `${dash}/projects?new=1&template=with-agents`,
+    "pr123@preview.iterate.test",
+  );
+  expect(link.startsWith(`${dash}/.auth/login?`)).toBe(true);
+  expect(Object.fromEntries(new URL(link).searchParams)).toEqual({
+    next: "/projects?new=1&template=with-agents",
+    login_hint: "pr123@preview.iterate.test",
+  });
+  expect(appSignInLink("https://pr123-admin.iterate-dev-preview.workers.dev")).toBe(
+    "https://pr123-admin.iterate-dev-preview.workers.dev/.auth/login?next=%2F",
+  );
+});
+
 test("template quick-launch: the Dash reads the PR head's reference back out of the link", () => {
   const [link] = templateQuickLaunches({
     dashUrl: DASH,
@@ -524,13 +541,18 @@ test("the preview's wrangler config (a pure transform of Vite's built config): K
   });
 });
 
-test("the preview's wrangler config (a pure transform of Vite's built config): vars are the preview's own origin, projects as paths, the one-click sign-in links on and iterate's Slack app, Google and Cloudflare clients and GitHub App the pet shop's fakes, which people sign in with too, and one test admin; the secrets are the parent's Previews settings", () => {
+test("the preview's wrangler config (a pure transform of Vite's built config): vars are the preview's own origin, projects as paths, prd's admins signing in through prd beside one test admin, and iterate's Slack app, Google and Cloudflare clients and GitHub App the pet shop's fakes, which test people sign in with too; the secrets are the parent's Previews settings", () => {
   expect(config.previews).toMatchObject({
     vars: {
       APP_CONFIG_URLS__OS: "https://pr123-os.iterate-dev-preview.workers.dev",
       APP_CONFIG_URLS__INGRESS_ROUTING: JSON.stringify({ type: "paths" }),
-      APP_CONFIG_LOGIN__TEST_LINK__EMAIL_DOMAIN: "preview.iterate.test",
-      APP_CONFIG_ADMINS: JSON.stringify(["admin@preview.iterate.test"]),
+      APP_CONFIG_LOGIN__TEST_EMAIL_DOMAIN: "preview.iterate.test",
+      APP_CONFIG_ADMINS: JSON.stringify([
+        "admin@preview.iterate.test",
+        "jonas@nustom.com",
+        "misha@nustom.com",
+      ]),
+      APP_CONFIG_LOGIN__ADMIN_ISSUER: "https://os.iterate.com",
       APP_CONFIG_INTEGRATIONS__SLACK: JSON.stringify({
         oauthClientId: "petshop-default",
         oauthClientSecret: "petshop-default-secret",

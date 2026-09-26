@@ -18,7 +18,7 @@ import { admin } from "../../admin/scripts/app.ts";
 import { voice } from "../../voice/scripts/app.ts";
 import type { StartApp } from "../../../scripts/lib/start-app.ts";
 import { OBSERVABILITY } from "../../../scripts/lib/wrangler-config.ts";
-import { TEST_LINK_EMAIL_DOMAIN } from "../src/test-link.ts";
+import { TEST_EMAIL_DOMAIN } from "../src/test-email-domain.ts";
 import { PREVIEW_SLACK_APP } from "./preview-slack-app.ts";
 import { PREVIEW_GOOGLE_APP } from "./preview-google-app.ts";
 import { PREVIEW_CLOUDFLARE_APP } from "./preview-cloudflare-app.ts";
@@ -409,6 +409,19 @@ export async function deployWithStatus(
   }
 }
 
+// ── the PR body's sign-in links ───────────────────────────────────────────────────────────────
+
+/** A `Sign in ↗` link (scripts/preview.ts `signInLinks`): the app's own sign-in
+ *  (iterate/app-server.ts `/.auth/login`), landing at `landing` — a URL on the app's origin — and,
+ *  with `loginHint`, naming whom the consent page pre-fills under "Sign in as someone else" for an
+ *  admin (src/consent.ts). The admin still confirms it: the link is public, and grants nothing. */
+export function appSignInLink(landing: string, loginHint?: string) {
+  const url = new URL(landing);
+  const query = new URLSearchParams({ next: `${url.pathname}${url.search}` });
+  if (loginHint) query.set("login_hint", loginHint);
+  return `${url.origin}/.auth/login?${query}`;
+}
+
 // ── template quick-launch links ────────────────────────────────────────────────────────────────
 
 /** The config templates a project can be born from: the directories of configs/. */
@@ -443,7 +456,7 @@ export function templateQuickLaunches(input: {
 }
 
 /** The status line, the URL, the deployment, the apps on top previewed this run and, on a PR, the
- *  one-click `Sign in ↗` links (src/test-link.ts) — the heading's into the Dash (or the issuer's own
+ *  `Sign in ↗` links (`appSignInLink`) — the heading's into the Dash (or the issuer's own sign-in
  *  page), each app's into that app, and with the Dash one per config template into its New project
  *  sheet; the operations (reset, e2e, delete, the laptop commands) are the README's, linked, not
  *  spelled here a second time. */
@@ -456,7 +469,7 @@ export function renderPullRequestSection(input: {
   apps: { name: string; url: string }[];
   /** Which commit the run deployed (scripts/ci/preview-tested-commit.ts). */
   testedCommit?: string;
-  /** The test person's links (scripts/preview.ts `previewSignIn`): only with a PR number. */
+  /** The test person's links (scripts/preview.ts `signInLinks`): only with a PR number. */
   signIn?: {
     heading: string;
     /** app name → its link */
@@ -512,7 +525,7 @@ export function renderPullRequestSection(input: {
       : []),
     ...(signIn
       ? [
-          `\`Sign in ↗\` signs you in as \`${signIn.email}\` with project \`${signIn.project}\` once you confirm at ${TEST_LINK_ADMINS_ISSUER} that you are one of ${TEST_LINK_ADMIN_EMAILS.map((pattern) => `\`${pattern}\``).join(", ")}; no password and no Allow page on the preview. The link is for this preview only and expires in 14 days; every push mints a fresh one.${signIn.seeded ? "" : ` Seeding \`${signIn.project}\` failed this run (the deploy log says why), so the apps ask for consent.`}`,
+          `\`Sign in ↗\` signs the app in as \`${signIn.email}\` (project \`${signIn.project}\`) for an hour. First sign in to this preview as yourself with **${new URL(PREVIEW_ADMIN_ISSUER).host}** (prd's admins only), then confirm **Sign in as someone else**. The admin app's link signs you in as you.${signIn.seeded ? "" : ` Seeding \`${signIn.project}\` failed this run (the deploy log says why), so there is nobody to sign in as yet.`}`,
           "",
         ]
       : []),
@@ -537,9 +550,9 @@ const bindingOnly = (resources: { binding: string }[] | undefined) =>
  *  reads is here: KV and R2 binding-only (auto-provisioned; the pinned wrangler provisions no D1),
  *  the D1 by id (a Worker Preview shares rows with any preview naming the same database_id,
  *  https://developers.cloudflare.com/workers/previews/resources/) and the Artifacts namespace by
- *  name. Its vars name the preview's own origin, projects as paths and its
- *  Dash when deployed, and turn the one-click sign-in links on; the secrets (`APP_CONFIG`,
- *  `APP_CONFIG_SECRETS__KEY`) are the parent's Previews settings, inherited. */
+ *  name. Its vars name the preview's own origin, projects as paths and its Dash when deployed, and
+ *  let prd's admins sign in; the secrets (`APP_CONFIG`, `APP_CONFIG_SECRETS__KEY`) are the parent's
+ *  Previews settings, inherited. */
 export function previewWranglerConfig(input: {
   template: Record<string, any>;
   previewName: string;
@@ -594,18 +607,15 @@ export function previewWranglerConfig(input: {
         APP_CONFIG_URLS__OS: previewUrl(previewName),
         APP_CONFIG_URLS__DASH: input.dashOrigin,
         APP_CONFIG_URLS__INGRESS_ROUTING: JSON.stringify(PREVIEW_PARENT.ingressRouting),
-        // THE ONE-CLICK SIGN-IN (src/test-link.ts), on for a per-PR preview only: this config is
-        // only ever what `wrangler preview` reads (deploy.ts never does), and app-config.ts refuses
-        // the block off a workers.dev origin besides. The PR body's `Sign in ↗` links redeem here —
-        // but the PR body is public, so a link signs nobody in until its redeemer signs in at prd
-        // as one of `TEST_LINK_ADMIN_EMAILS` (src/test-link-admins.ts).
-        APP_CONFIG_LOGIN__TEST_LINK__EMAIL_DOMAIN: TEST_LINK_EMAIL_DOMAIN,
-        APP_CONFIG_LOGIN__TEST_LINK__ADMINS__ISSUER: TEST_LINK_ADMINS_ISSUER,
-        APP_CONFIG_LOGIN__TEST_LINK__ADMINS__EMAILS: TEST_LINK_ADMIN_EMAILS.join(","),
-        // THE PREVIEW'S ADMIN (app-config.ts `admins`): one test person the admin app's specs sign
-        // in as (specs/admin). A preview already signs anyone in by password or test link, so an
-        // admin here opens nothing that was closed.
-        APP_CONFIG_ADMINS: JSON.stringify([PREVIEW_ADMIN_EMAIL]),
+        // THE PREVIEW'S ADMINS (app-config.ts `admins`): prd's (envs.ts), who sign in here through
+        // prd (src/admin-sign-in.ts) and sign an app in as the PR's test person from the consent
+        // page — what the PR body's `Sign in ↗` links open — and one test person the admin app's
+        // specs sign in as (specs/admin). A preview already signs anyone in by password, so an
+        // admin here opens nothing that was closed. This config is only ever what `wrangler
+        // preview` reads (deploy.ts never does), and app-config.ts refuses `login.adminIssuer` off
+        // a workers.dev origin besides.
+        APP_CONFIG_ADMINS: JSON.stringify([PREVIEW_ADMIN_EMAIL, ...osEnvs.prd!.admins!]),
+        APP_CONFIG_LOGIN__ADMIN_ISSUER: PREVIEW_ADMIN_ISSUER,
         // "ITERATE'S" SLACK APP on a preview is the pet shop's Slack fake (PREVIEW_SLACK_APP).
         APP_CONFIG_INTEGRATIONS__SLACK: JSON.stringify(PREVIEW_SLACK_APP),
         // … and its Google client and GitHub App the shop's fakes too (PREVIEW_GOOGLE_APP,
@@ -617,7 +627,8 @@ export function previewWranglerConfig(input: {
         }),
         APP_CONFIG_INTEGRATIONS__CLOUDFLARE: JSON.stringify(PREVIEW_CLOUDFLARE_APP),
         // SIGN IN WITH GOOGLE, CLOUDFLARE AND GITHUB through those fakes, each keeping its token as
-        // the person's connection; a fake admits addresses under the test-link domain alone.
+        // the person's connection; a fake admits addresses under the test email domain alone.
+        APP_CONFIG_LOGIN__TEST_EMAIL_DOMAIN: TEST_EMAIL_DOMAIN,
         APP_CONFIG_LOGIN__GOOGLE: "{}",
         APP_CONFIG_LOGIN__CLOUDFLARE: JSON.stringify({
           scopes: ["openid", "user-details.read", "offline_access"],
@@ -628,13 +639,11 @@ export function previewWranglerConfig(input: {
   };
 }
 
-/** The per-PR preview's one admin (`APP_CONFIG_ADMINS` above; specs/admin signs in as them). */
-const PREVIEW_ADMIN_EMAIL = `admin@${TEST_LINK_EMAIL_DOMAIN}`;
+/** The per-PR preview's test admin (`APP_CONFIG_ADMINS` above; specs/admin signs in as them). */
+const PREVIEW_ADMIN_EMAIL = `admin@${TEST_EMAIL_DOMAIN}`;
 
-/** Who may redeem a preview's sign-in link (src/test-link-admins.ts): an address these patterns
- *  name, as the issuer says who signed in there. */
-const TEST_LINK_ADMINS_ISSUER = osEnvs.prd!.baseUrl;
-const TEST_LINK_ADMIN_EMAILS = ["*@nustom.com"];
+/** Where a preview's admins sign in (`APP_CONFIG_LOGIN__ADMIN_ISSUER` above): prd. */
+const PREVIEW_ADMIN_ISSUER = osEnvs.prd!.baseUrl;
 
 /** Write a preview config beside Vite's built config and return its path. */
 export function writePreviewWranglerConfig(input: {

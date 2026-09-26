@@ -6,7 +6,7 @@ import {
   OBSERVABILITY,
   registrableDomainOf,
 } from "../../../scripts/lib/wrangler-config.ts";
-import { TEST_LINK_EMAIL_DOMAIN } from "../src/test-link.ts";
+import { TEST_EMAIL_DOMAIN } from "../src/test-email-domain.ts";
 
 /** The half of `APP_CONFIG` (src/app-config.ts) a deployment gets from envs.ts — its `urls`, the
  *  zones of its projects' custom hostnames (`customHostnames`), its `admins` and its PostHog key —
@@ -162,13 +162,17 @@ export function viteWranglerConfig(
           hostname: "localhost",
         }),
         ...(options.localDev && {
-          // one-click sign-in links (src/test-link.ts) — the specs' test-link.spec.ts mints one
-          APP_CONFIG_LOGIN__TEST_LINK__EMAIL_DOMAIN: TEST_LINK_EMAIL_DOMAIN,
           APP_CONFIG: JSON.stringify({
-            login: { password: "dev", emailCode: { from: "iterate <login@localhost>" } },
+            login: {
+              password: "dev",
+              emailCode: { from: "iterate <login@localhost>" },
+              // its test people's (getin's, the specs'), as a preview's: a sign-in link naming
+              // one pre-fills an admin's "Sign in as someone else" (consent.ts)
+              testEmailDomain: TEST_EMAIL_DOMAIN,
+            },
             // `pnpm getin`'s person, so the admin app and "view as" work locally, and the admin
             // the specs sign in as (specs/admin, as on a per-PR preview: preview-config.ts)
-            admins: [`test@${TEST_LINK_EMAIL_DOMAIN}`, `admin@${TEST_LINK_EMAIL_DOMAIN}`],
+            admins: [`test@${TEST_EMAIL_DOMAIN}`, `admin@${TEST_EMAIL_DOMAIN}`],
             secrets: { adminBearer: "dev-admin-api-secret" },
           }),
           APP_CONFIG_SECRETS__KEY: "dev-secrets-key",

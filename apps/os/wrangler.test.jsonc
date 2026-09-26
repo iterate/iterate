@@ -78,11 +78,11 @@
     "APP_CONFIG_LOGIN__PASSWORD": "test-password",
     "APP_CONFIG_LOGIN__EMAIL_CODE__FROM": "iterate <login@control.test>",
     // Sign in with Google, Cloudflare and GitHub through the pet shop's fakes, iterate's clients
-    // below (__workers-tests__/identity.test.ts); a fake admits addresses under the test-link domain
+    // below (__workers-tests__/identity.test.ts); a fake admits addresses under the test email domain
     "APP_CONFIG_LOGIN__GOOGLE": "{}",
     "APP_CONFIG_LOGIN__CLOUDFLARE": "{\"scopes\":[\"openid\",\"user-details.read\",\"offline_access\"]}",
     "APP_CONFIG_LOGIN__GITHUB": "{}",
-    "APP_CONFIG_LOGIN__TEST_LINK__EMAIL_DOMAIN": "signin.test",
+    "APP_CONFIG_LOGIN__TEST_EMAIL_DOMAIN": "signin.test",
     // the platform admin (admin-and-impersonation.test.ts)
     "APP_CONFIG_ADMINS": "[\"oauth-admin@example.com\"]",
     "APP_CONFIG_SECRETS__KEY": "test-secrets-key",

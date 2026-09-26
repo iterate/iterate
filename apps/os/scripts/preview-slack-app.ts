@@ -6,7 +6,7 @@ import { dummyPetshopEnvs } from "../../../envs.ts";
 /** A PREVIEW'S SLACK APP — APP_CONFIG `integrations.slack` for every per-PR preview: the pet shop's
  *  Slack fake (apps/dummy-petshop/src/slack.ts) at its deployed origin, its seeded OAuth client, and a
  *  signing secret the e2e signs webhooks with (e2e/integrations.e2e.test.ts). Fake credentials
- *  for a fake service, so they live here in code like the test-link switch; a preview can never
+ *  for a fake service, so they live here in code like the admin issuer; a preview can never
  *  reach a real Slack workspace through iterate's app, and prd's app is Doppler's. */
 export const PREVIEW_SLACK_APP = {
   oauthClientId: "petshop-default",

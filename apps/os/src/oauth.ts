@@ -39,10 +39,6 @@ export const GrantProps = z.object({
    *  organization name */
   picture: z.string().optional(),
   name: z.string().optional(),
-  /** An issuer session a preview's test link started (test-link.ts, issuer-session.ts
-   *  `testLinkResponse`): the sibling app previews' origins the link signed, and the test person's
-   *  project — consent.ts approves such a client for that project without the Allow page. */
-  testLink: z.object({ clients: z.array(z.string()), project: z.string() }).optional(),
   projects: z.array(z.string()).nullable(),
   /** Epoch ms: the grant is refused from here on, however recently it was used (`grantLifetime`). */
   deadline: z.number().int().positive(),
@@ -402,10 +398,10 @@ export const CLIENT_REGISTRATION_ENDPOINT = "/oauth2/register";
 /** THE AUTHORIZATION SERVER at `addresses` (the library's role-based API, its
  *  docs/resource-servers.md "Same Worker"): the issuer, for the platform's three resources, `/api`
  *  (Cap'n Web), `/mcp` and `/oauth2/userinfo` (who the bearer is, and nothing else — what another
- *  deployment asks to know an admin by, test-link.ts) — each hosted in this worker by api.ts. Every
- *  grant and access token is bound to exactly one of them (RFC 8707): a userinfo token is refused
- *  at `/api` and `/mcp` by the audience check itself. Built per request: where `urls.os` is unset the addresses
- *  are the request's own. */
+ *  deployment asks to know an admin by, admin-sign-in.ts) — each hosted in this worker by api.ts.
+ *  Every grant and access token is bound to exactly one of them (RFC 8707): a userinfo token is
+ *  refused at `/api` and `/mcp` by the audience check itself. Built per request: where `urls.os` is
+ *  unset the addresses are the request's own. */
 function authorizationServer(env: Env, { platformOrigin, api, mcp, userinfo }: PlatformAddresses) {
   return new OAuthAuthorizationServer<Env>({
     issuer: platformOrigin,
