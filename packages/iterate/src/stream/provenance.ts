@@ -70,7 +70,7 @@ export function admits(
   trust?: Readonly<Record<string, TrustRule>>,
 ): boolean {
   if (event.type.startsWith("events.iterate.com/itx/")) return true;
-  const rule = trust?.[event.type] ?? FIRST_PARTY_TRUST[event.type] ?? trust?.["*"] ?? "trusted";
+  const rule = trust?.[event.type] ?? trust?.["*"] ?? FIRST_PARTY_TRUST[event.type] ?? "trusted";
   if (rule === "anyone") return true;
   if (rule === "platform") return event.source?.platform === true;
   const source = event.source;

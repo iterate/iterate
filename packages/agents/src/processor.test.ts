@@ -11,6 +11,7 @@ import { type AgentState } from "./contract.ts";
 import {
   AgentProcessor,
   buildChatMessages,
+  interrupts,
   renderCapabilityTree,
   renderScriptSettlement,
 } from "./processor.ts";
@@ -378,6 +379,53 @@ test("buildChatMessages: a stranger's words are named, so the model knows who in
       new Map(),
     ),
   ).toEqual([{ role: "user", content: "[from /agents/a/sandbox] hello" }]));
+// THE INTERRUPT is new input from someone this agent trusts: a stranger's words, whatever policy
+// they carry, wait for the running answer (the rows' log is `/agents/b`).
+test.for<{ name: string; role: string; source?: EventSource; cuts: boolean }>([
+  {
+    name: "a member's words",
+    role: "user",
+    source: { origin: "/", principal: { actor: "u" } },
+    cuts: true,
+  },
+  {
+    name: "the web chat's developer note",
+    role: "developer",
+    source: { origin: "/agents/b" },
+    cuts: true,
+  },
+  { name: "words written before stamps", role: "user", cuts: true },
+  { name: "a sibling's words", role: "user", source: { origin: "/agents/a/sandbox" }, cuts: false },
+  {
+    name: "its own sandbox's words",
+    role: "user",
+    source: { origin: "/agents/b/sandbox" },
+    cuts: false,
+  },
+  {
+    name: "the assistant's own words",
+    role: "assistant",
+    source: { origin: "/agents/b" },
+    cuts: false,
+  },
+])(
+  "interrupts: $name with the interrupt policy → cuts the answer short: $cuts",
+  ({ role, source, cuts }) =>
+    expect(
+      interrupts({
+        type: "events.iterate.com/agent/context-added",
+        payload: {
+          role,
+          content: "stop",
+          llmRequestPolicy: { behaviour: "interrupt-current-request" },
+        },
+        source,
+        offset: 9,
+        createdAt: "2026-09-26T00:00:00.000Z",
+        path: "/agents/b",
+      } as Parameters<typeof interrupts>[0]),
+    ).toBe(cuts),
+);
 test("buildChatMessages: text items stay text; the developer's notes read as system", () =>
   expect(buildChatMessages(items(), new Map())).toEqual([
     { role: "system", content: "Be terse." },

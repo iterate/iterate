@@ -30,6 +30,7 @@ import {
   type ReduceArgs,
   StreamProcessor,
   trusts,
+  type StreamEvent,
 } from "iterate/stream/processor";
 import type { WithItx } from "iterate/sdk";
 import type { RewriteRuleListEntry } from "iterate/api";
@@ -293,6 +294,20 @@ function responsesInput(messages: ChatMessage[]) {
 }
 
 type AgentEvent = ConsumedEvent<typeof AgentContract>;
+
+/** A STRANGER: the context that wrote `event` when this agent does not trust it — a sibling, its own
+ *  sandbox (iterate/stream/processor `trusts`: the platform, a member, or code here or above).
+ *  Undefined for the trusted, and for words written before stamps. */
+const strangerOf = (event: Pick<StreamEvent, "path" | "source">): string | undefined =>
+  event.source?.origin && !trusts(event.path, event.source) ? event.source.origin : undefined;
+
+/** THE INTERRUPT's trigger: a person's or a developer's words whose policy cuts the running answer
+ *  short — from a writer this agent trusts. A stranger's words wait their turn, whatever they ask. */
+export const interrupts = (event: AgentEvent | null | undefined): boolean =>
+  event?.type === "events.iterate.com/agent/context-added" &&
+  event.payload.llmRequestPolicy?.behaviour === "interrupt-current-request" &&
+  (event.payload.role === "user" || event.payload.role === "developer") &&
+  !strangerOf(event);
 type AgentArgs = ProcessEventArgs<AgentState, AgentEvent, AgentEmitted>;
 /** What the loop appends: each type the contract emits, its payload as the catalog spells it. */
 type AgentEmitted = EmittedEventInput<typeof AgentContract>;
@@ -423,10 +438,7 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
         // attachments — they would point this agent's own `itx.files` at the project's — and
         // counted as the loop's own, so two agents talking cannot run past the turn bound. Trusted
         // is the platform, a member, or code here or above; a message written before stamps too.
-        const stranger =
-          event.source?.origin && !trusts(event.path, event.source)
-            ? event.source.origin
-            : undefined;
+        const stranger = strangerOf(event);
         const next: AgentState = {
           ...state,
           contextItems: [
@@ -544,12 +556,7 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
     // script), and settle the request cancelled — blocked, so an eviction can never leave the
     // request open for the next at-head pass to adopt. Their reduce already moved the trigger; the
     // settlement's own delivery re-runs the at-head pass, which then records the next request.
-    if (
-      event?.type === "events.iterate.com/agent/context-added" &&
-      event.payload.llmRequestPolicy?.behaviour === "interrupt-current-request" &&
-      (event.payload.role === "user" || event.payload.role === "developer") &&
-      state.openRequest
-    ) {
+    if (interrupts(event) && state.openRequest) {
       const open = state.openRequest;
       const inFlight = this.#llmRequestsInFlight.get(open.requestedAtOffset);
       inFlight?.controller.abort(new InterruptedError());

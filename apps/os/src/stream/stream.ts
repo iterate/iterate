@@ -24,6 +24,7 @@ import { codedError, errorCode, reportIssue } from "iterate/lib";
 import type { ItxExpressionInput } from "iterate/expression";
 import type { StreamPage, WaitForEventFilter } from "iterate/api";
 import {
+  admits,
   idempotencyConflictMessage,
   sameIdempotentEvent,
   type EventSource,
@@ -91,6 +92,8 @@ const PAUSE_EXEMPT_EVENT_TYPES = new Set([
 type WaitForEventWaiter = {
   /** The types that resolve it; empty = any. */
   types: string[];
+  /** Whether it hears an event's writer (the filter's `from`). */
+  hears: (event: StreamEvent) => boolean;
   afterOffset: number;
   resolve: (event: StreamEvent) => void;
   reject: (error: Error) => void;
@@ -558,19 +561,24 @@ export class Stream {
    *  events resolve waits too — but only while a waiter is registered, since they never hit the log. */
   waitForEvent(filter: WaitForEventFilter = {}): Promise<StreamEvent> {
     const types = filter.type ? [filter.type].flat() : [];
+    // A waiter is a reader: it hears the trusted writers unless it asks for anyone's, so a stranger's
+    // `create-failed` never answers a creator's wait (iterate/stream/processor `admits`).
+    const hears = (event: StreamEvent) => filter.from === "anyone" || admits(event);
     const afterOffset = filter.afterOffset ?? this.highestAssignedOffset();
     const timeoutMs = Math.min(filter.timeoutMs ?? 30_000, 120_000);
     let cursor = afterOffset;
     for (;;) {
       const page = this.read(cursor, 500);
       for (const event of page.events)
-        if (types.length === 0 || types.includes(event.type)) return Promise.resolve(event);
+        if ((types.length === 0 || types.includes(event.type)) && hears(event))
+          return Promise.resolve(event);
       if (page.atHead) break;
       cursor = page.scannedThroughOffset; // cut by `limit` or the byte budget: read on
     }
     return new Promise<StreamEvent>((resolve, reject) => {
       const waiter: WaitForEventWaiter = {
         types,
+        hears,
         afterOffset,
         resolve,
         reject,
@@ -599,7 +607,7 @@ export class Stream {
       if (this.#waitForEventWaiters.length === 0) return;
       for (const w of [...this.#waitForEventWaiters]) {
         if (w.types.length > 0 && !w.types.includes(event.type)) continue;
-        if (event.offset <= w.afterOffset) continue;
+        if (event.offset <= w.afterOffset || !w.hears(event)) continue;
         this.#waitForEventWaiters.splice(this.#waitForEventWaiters.indexOf(w), 1);
         clearTimeout(w.timer);
         w.resolve(event);

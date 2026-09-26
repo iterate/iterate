@@ -40,6 +40,9 @@ export type WaitForEventFilter = {
   type?: string | string[];
   afterOffset?: number;
   timeoutMs?: number;
+  /** Whom the wait hears: absent, the trusted writers (iterate/stream/processor `admits`), as a
+   *  subscription's; `"anyone"` in the project. */
+  from?: "anyone";
 };
 
 /** The `rewrite-rule-configured` event's payload — what `itx.append` writes durably and `provide`

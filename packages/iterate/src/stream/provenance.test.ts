@@ -113,6 +113,16 @@ const ADMITS_ROWS: { row: string; event: StreamEvent; admitted: boolean }[] = [
 test.for(ADMITS_ROWS)("admits: $row", ({ event, admitted }) =>
   expect(admits(event, RULES)).toBe(admitted),
 );
+test("admits: a contract's own word, `*` included, comes before the platform's first-party default", () => {
+  const certificate = event(
+    "events.iterate.com/repo/created",
+    "/",
+    { origin: "/repos/r" },
+    { path: "/repos/r" },
+  );
+  expect(admits(certificate)).toBe(true);
+  expect(admits(certificate, { "*": "platform" })).toBe(false);
+});
 
 test("certifiesItself: the writer is the path the event names", () => {
   const certificate = event("x/created", "/", { origin: "/agents/a" }, { path: "/agents/a" });

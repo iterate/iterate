@@ -146,6 +146,24 @@ test("a jail's bare null closes it both ways: nothing it says leaves it, and no 
   });
 });
 
+test("a waiter hears the trusted writers by default: a stranger's fact never answers it, and `from: 'anyone'` hears it", async () => {
+  const root = openItx(freshCtx("provenance-waiter"));
+  const y = root.cd("/y");
+  const [born] = await y.append({ type: "note/born" });
+  const told = await say(root, "/x", "itx.cd('/y').append({ type: 'note/told' })");
+  expect(
+    await y.waitForEvent({ type: "note/told", afterOffset: born.offset, from: "anyone" }),
+  ).toMatchObject({ offset: told.ok[0].offset, source: { origin: "/x" } });
+  expect(
+    (
+      await rejection(
+        y.waitForEvent({ type: "note/told", afterOffset: born.offset, timeoutMs: 500 }),
+      )
+    ).message,
+    "a stranger's fact should never answer a wait that did not ask for anyone's",
+  ).toMatch(/no "note\/told" event/);
+});
+
 test("open append is bounded: a writer a context does not trust appends at most 120 events a minute there", async () => {
   const root = openItx(freshCtx("provenance-bounded"));
   const flood = "Array.from({ length: 121 }, (_, i) => ({ type: 'note/flood', payload: { i } }))";
