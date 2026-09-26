@@ -6,6 +6,7 @@
 // streams' activity and a project's own creation saga are the session's (session.ts), proven on the
 // worker (control-plane.test.ts, e2e/organizations.e2e.test.ts).
 import { env } from "cloudflare:workers";
+import { createD1Client } from "sqlfu";
 import { expect, test } from "vitest";
 import {
   ADMIN_ORG_ID,
@@ -14,6 +15,7 @@ import {
   projectSlug,
 } from "../src/control-plane/catalog.ts";
 import { listOAuthGrants } from "../src/control-plane/db/queries/.generated/oauth-grants.sql.ts";
+import { updateUserEmail } from "../src/control-plane/db/queries/.generated/users.sql.ts";
 import { OAuthGrantTable } from "../src/control-plane/oauth-grants.ts";
 
 const admin: Caller = { principal: { actor: "admin" } };
@@ -120,8 +122,13 @@ test("people: a signed-in person adds a sign-in to their account: the subject be
     env.DB.prepare("update users set email = 'ada@elsewhere.example' where id = ?")
       .bind(ada.id)
       .run(),
-  ).rejects.toThrow(/an added sign-in keeps its person's email/);
+  ).rejects.toThrow(/a person with an added sign-in keeps their email/);
   expect(await c.user(ada.id)).toEqual(ada);
+  // the sign-in's own email update holds the rule in its `where`: a sign-in added between its read
+  // and its write stops it quietly, never failing that sign-in on the trigger
+  expect(
+    await updateUserEmail(createD1Client(env.DB), { email: "ada3@example.com" }, { id: ada.id }),
+  ).toMatchObject({ rowsAffected: 0 });
   // two people adding one subject at once: one holds it, the other is refused
   const both = await Promise.allSettled([
     add(ada.id, "google", "g-x"),

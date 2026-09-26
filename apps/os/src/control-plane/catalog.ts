@@ -268,22 +268,22 @@ export class ControlPlaneDatabase {
       insertIdentity.query({ provider, subject, email }),
       identityUser.query({ provider, subject }),
     ]);
-    const linked = rowsOf<identityUser.RawResult>(results, 2)[0];
+    const linked = rowsOf<identityUser.Result>(results, 2)[0];
     if (!linked)
       throw codedError("IDENTITY_CONFLICT", "This email belongs to another linked account.");
-    // The email follows a person's only sign-in. With more than one (Google and GitHub, say), each
+    if (linked.email === email) return linked;
+    // The email follows a person's only sign-in, which `updateUserEmail`'s own `where` says (so a
+    // sign-in added meanwhile stops it too). With more than one (Google and GitHub, say), each
     // provider may report its own address, and none of them rewrites the person's; nor does one the
     // person added to their account, whose address was never theirs.
-    if (linked.email === email || (linked.sign_ins ?? 1) > 1 || linked.added_at)
-      return { id: linked.id, email: linked.email };
     try {
-      await updateUserEmail(this.#client, { email }, { id: linked.id });
+      const { rowsAffected } = await updateUserEmail(this.#client, { email }, { id: linked.id });
+      return { id: linked.id, email: rowsAffected ? email : linked.email };
     } catch (error) {
       if (error instanceof SqlfuError && error.kind === "unique_violation")
         throw codedError("IDENTITY_CONFLICT", "This email belongs to another account.");
       throw error;
     }
-    return { id: linked.id, email };
   }
 
   /** A sign-in a signed-in person adds to their own account (identity.ts's link mode): the
@@ -303,7 +303,7 @@ export class ControlPlaneDatabase {
       insertAddedIdentity.query({ provider, subject, userId, addedAt: input.now }),
       identityUser.query({ provider, subject }),
     ]);
-    const holder = rowsOf<identityUser.RawResult>(results, 1)[0];
+    const holder = rowsOf<identityUser.Result>(results, 1)[0];
     if (holder?.id === userId) return { id: holder.id, email: holder.email };
     const name = IDENTITY_PROVIDER_NAMES[provider];
     throw codedError(
