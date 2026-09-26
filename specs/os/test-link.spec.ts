@@ -5,7 +5,7 @@
 // body is public, so a link alone signs nobody in: it sends the browser to prd to prove it is an
 // admin's, asking only who they are (apps/os/src/test-link-admins.ts) — what the spec checks there,
 // since no spec holds an admin's prd session. Runs against the local worker (local dev turns the
-// links on; its key is apps/os/scripts/generate-wrangler-config.ts's) or, with DEMO_BASE_URL, a
+// links on; its key is apps/os/scripts/generate-wrangler-config.ts's) or, with WORKER_BASE_URL, a
 // preview under `doppler run` (its key is the Previews' `APP_CONFIG_SECRETS__KEY`). A deployment
 // on its own domain has the links off: nothing to prove there, so the specs skip.
 import { expect } from "@playwright/test";

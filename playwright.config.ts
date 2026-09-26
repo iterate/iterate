@@ -12,8 +12,8 @@ const videoMode = process.env.VIDEO_MODE === "1";
 // leave ffmpeg workers alive after a retry and keep the job open.
 const videoArtifactsEnabled = videoMode || !process.env.CI;
 
-/** Note: we use DEMO_BASE_URL as the *os* base url; unset boots a local OS worker. */
-const configuredOsBaseUrl = process.env.DEMO_BASE_URL?.replace(/\/+$/, "");
+/** The OS under test, as for the vitest e2e suite; unset boots a local OS worker. */
+const configuredOsBaseUrl = process.env.WORKER_BASE_URL?.replace(/\/+$/, "");
 const localOsPort = Number(process.env.DEMO_PORT || 8788);
 const osBaseUrl = configuredOsBaseUrl || `http://localhost:${localOsPort}`;
 /** The Notes app deployed against that OS: the notes project's baseURL. Its session specs also

@@ -1,7 +1,7 @@
 // A no-build userspace mini-app (Preact + capnweb from esm.sh, ONE HTML file) served by a project.
 // Proves the "super simple mini-app" path end to end: publish a config worker that routes the `notes`
 // routing slug to the app module in plain code, open its project host, and a note round-trips through the app's OWN capnweb API
-// (backed by the project's itx.kv). SWAPPABLE via DEMO_BASE_URL like the other specs; the signed-in
+// (backed by the project's itx.kv). SWAPPABLE via WORKER_BASE_URL like the other specs; the signed-in
 // person and their project are the signed-in session fixture's, so it works local and deployed.
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
