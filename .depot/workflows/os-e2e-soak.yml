@@ -69,6 +69,8 @@ on:
 env:
   # The image's baked store: dependencies.mjs fingerprints it (docs/depot-ci.md#custom-image)
   PNPM_CONFIG_STORE_DIR: /home/runner/.pnpm-store
+  # soak instrumentation only: the deploy's spans (Smoke /version, Readiness gate) as @@ci-trace lines
+  CI_TRACE_ENABLED: "1"
 
 jobs:
   soak:
