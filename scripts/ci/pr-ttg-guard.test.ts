@@ -73,11 +73,13 @@ test("a green push's time to green runs from the run's creation to its last chec
 // Depot's GetRunMetrics for run l9b40r65b2 (PR #3094) and v7gm132nt1 (PR #3009, whose e2e failed
 // and passed on a re-run), cut to the fields the guard reads.
 test.for<{
+  name: string;
   metrics: RunMetrics;
   firstExecutions: Parameters<typeof measurePush>[0]["firstExecutions"];
   expected: object;
 }>([
   {
+    name: "E2E tests end Preview OS, not the CI trace 48 s later",
     metrics: {
       run: {
         runId: "l9b40r65b2",
@@ -96,10 +98,10 @@ test.for<{
       ],
     },
     firstExecutions: {},
-    // E2E tests' end, 48 s before the trace's
     expected: { outcome: "green", seconds: 330.9, lastJob: "preview-os.yml:e2e" },
   },
   {
+    name: "a red first execution ends at its first E2E tests attempt, before the trace and the re-run",
     metrics: {
       run: {
         runId: "v7gm132nt1",
@@ -117,23 +119,19 @@ test.for<{
       ],
     },
     firstExecutions: { "2lprg4f8q9": { status: "failed", finishedAt: "2026-09-24T11:43:01Z" } },
-    // the first E2E tests attempt's end, before its trace and the re-run
     expected: { outcome: "red", seconds: 296.8, lastJob: "preview-os.yml:e2e" },
   },
   {
+    name: "Browser specs end the push, 61 s after E2E tests and 64 s after Test",
     metrics: xwhttppx6h,
     firstExecutions: {},
-    // Browser specs' end, 61 s after E2E tests' and 64 s after Test's
     expected: { outcome: "green", seconds: 224.9, lastJob: "preview-os.yml:specs" },
   },
-])(
-  "Preview OS reaches its verdict at its last job but the CI trace: $metrics.run.runId",
-  ({ metrics, firstExecutions, expected }) => {
-    expect(
-      measurePush({ metrics, firstExecutions, nextRunAt: undefined, summary: {} }),
-    ).toMatchObject(expected);
-  },
-);
+])("$name", ({ metrics, firstExecutions, expected }) => {
+  expect(
+    measurePush({ metrics, firstExecutions, nextRunAt: undefined, summary: {} }),
+  ).toMatchObject(expected);
+});
 
 // Depot's GetRunMetrics for run 7cjwv9crwz (PR #3192, 2026-09-25), which changed no preview path, cut
 // to the fields the guard reads.
@@ -437,6 +435,7 @@ test.for([
   pushes.push(
     ...Array.from({ length: 30 }, (_, minute) => push({ seconds: 999, e2e: "every-row", minute })),
   );
+  // exact: a judgement too few pushes made carries no median
   expect(
     judge(
       summarizePushes(pushes, {
@@ -520,6 +519,7 @@ test.for([
     next: undefined,
   },
 ] as const)("$name", ({ lastPage, judged, page, next }) => {
+  // exact: the state keeps what the channel was told and the best median since, nothing more
   expect(pageFor(lastPage, judged)).toEqual({ page, lastPage: next });
 });
 
@@ -538,6 +538,7 @@ test("a median that recovers while over and then rises more than 20 s pages red 
     lastPage = owed.lastPage;
     return owed.page ? [{ p50, page: owed.page }] : [];
   });
+  // exact: these two pages and no others
   expect(pages).toEqual([
     { p50: 234.1, page: "over" },
     { p50: 202.9, page: "worse" },
@@ -545,21 +546,24 @@ test("a median that recovers while over and then rises more than 20 s pages red 
   expect(lastPage).toEqual({ judgement: "over", bestP50: 202.9 });
 });
 
-test("a red page names the lines, the job that ended the pushes and each group, and mentions Jonas unless it is a test", () => {
-  const summary = summarizePushes(
-    [
-      ...Array.from({ length: 20 }, (_, minute) =>
-        push({ seconds: 170 + minute, e2e: "slow-rows-skipped", minute }),
-      ),
-      push({ seconds: 300, e2e: "every-row", outcome: "red", minute: 21 }),
-      push({ seconds: 190, e2e: "no-preview", minute: 22, lastJob: "test.yml:test" }),
-    ],
-    { from: Date.parse("2026-09-24T12:00:00Z"), to: Date.parse("2026-09-24T13:00:00Z") },
-  );
+// 20 pushes that skipped the slow rows, all green and ended by Browser specs, a red one that ran every
+// row and a green one without Preview OS.
+const twentyPushes = summarizePushes(
+  [
+    ...Array.from({ length: 20 }, (_, minute) =>
+      push({ seconds: 170 + minute, e2e: "slow-rows-skipped", minute }),
+    ),
+    push({ seconds: 300, e2e: "every-row", outcome: "red", minute: 21 }),
+    push({ seconds: 190, e2e: "no-preview", minute: 22, lastJob: "test.yml:test" }),
+  ],
+  { from: Date.parse("2026-09-24T12:00:00Z"), to: Date.parse("2026-09-24T13:00:00Z") },
+);
+
+test("a red page lists its lines, the job that ends the pushes and each group, mentioning Jonas", () => {
   expect(
     renderPage({
       page: "over",
-      summary,
+      summary: twentyPushes,
       lastPage: undefined,
       runUrl: "https://depot.dev/run",
       testRun: false,
@@ -577,38 +581,47 @@ test("a red page names the lines, the job that ended the pushes and each group, 
       "<https://depot.dev/run|the run>",
     ].join("\n"),
   );
-  expect(
-    renderPage({
-      page: "worse",
-      summary,
-      lastPage: { judgement: "over", bestP50: 158 },
-      testRun: false,
-    }).split("\n")[0],
-  ).toBe(
-    "🔴 PR time to green more than 20 s worse again <@U067G4QRFK2>: pushes that skipped the slow rows, last 24 h: p50 180 s (line 165 s; 158 s at best since the last page), p90 187 s (line 200 s), n=20",
-  );
-  const test = renderPage({ page: "over", summary, lastPage: undefined, testRun: true });
-  expect(test).toMatch(/^🧪 TEST RUN 🔴 PR time to green over its lines: /);
-  expect(test).not.toContain("<@");
-  expect(
-    renderPage({
-      page: "under",
-      summary,
-      lastPage: { judgement: "over", bestP50: 180 },
-      testRun: false,
-    }),
-  ).toMatch(/^🟢 PR time to green back under its lines: /);
-  // a test page before any push skipped the slow rows
-  expect(
-    renderPage({
-      page: "too-few",
-      summary: summarizePushes([], { from: 0, to: 1 }),
-      lastPage: undefined,
-      testRun: true,
-    }).split("\n")[0],
-  ).toBe(
-    "🧪 TEST RUN ⚪ PR time to green not judged below 20 pushes: pushes that skipped the slow rows, last 24 h: none green",
-  );
+});
+
+test.for([
+  {
+    name: "a red page again gives the best median since the last page",
+    page: "worse",
+    summary: twentyPushes,
+    lastPage: { judgement: "over", bestP50: 158 },
+    testRun: false,
+    heading:
+      "🔴 PR time to green more than 20 s worse again <@U067G4QRFK2>: pushes that skipped the slow rows, last 24 h: p50 180 s (line 165 s; 158 s at best since the last page), p90 187 s (line 200 s), n=20",
+  },
+  {
+    name: "a test page mentions nobody",
+    page: "over",
+    summary: twentyPushes,
+    lastPage: undefined,
+    testRun: true,
+    heading:
+      "🧪 TEST RUN 🔴 PR time to green over its lines: pushes that skipped the slow rows, last 24 h: p50 180 s (line 165 s), p90 187 s (line 200 s), n=20",
+  },
+  {
+    name: "a green page mentions nobody",
+    page: "under",
+    summary: twentyPushes,
+    lastPage: { judgement: "over", bestP50: 180 },
+    testRun: false,
+    heading:
+      "🟢 PR time to green back under its lines: pushes that skipped the slow rows, last 24 h: p50 180 s (line 165 s; 180 s at best since the last page), p90 187 s (line 200 s), n=20",
+  },
+  {
+    name: "a test page before any push skipped the slow rows judges nothing",
+    page: "too-few",
+    summary: summarizePushes([], { from: 0, to: 1 }),
+    lastPage: undefined,
+    testRun: true,
+    heading:
+      "🧪 TEST RUN ⚪ PR time to green not judged below 20 pushes: pushes that skipped the slow rows, last 24 h: none green",
+  },
+] as const)("$name", ({ heading, ...input }) => {
+  expect(renderPage(input).split("\n")[0]).toBe(heading);
 });
 
 test("one PostHog event per push with a verdict, the same id whenever it is sent", () => {
@@ -661,6 +674,7 @@ test.for([
   { name: "no previous state starts empty", previous: undefined },
   { name: "a state of another schemaVersion starts over", previous: schemaVersion1 },
 ])("$name", ({ previous }) => {
+  // exact: starting over keeps no push and no page
   expect(readState(previous)).toEqual({ schemaVersion: 2, pushes: [] });
 });
 
@@ -673,6 +687,7 @@ test("a state of this version reads back as written, and one that does not parse
     ],
     lastPage: { judgement: "over", bestP50: 208 },
   };
+  // exact: the state reads back untouched
   expect(readState(JSON.parse(JSON.stringify(state)))).toEqual(state);
   expect(() => readState({ ...schemaVersion1, schemaVersion: 2 })).toThrow();
 });
