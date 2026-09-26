@@ -152,12 +152,13 @@ test.each(["kit", "voice"])(
   },
 );
 
-test("deploy-spa.yml ignores the root manifests and lockfile: no npm dependency ships", () => {
+test("deploy-spa.yml ignores the root manifests and lockfile: capnweb ships with the next deploy", () => {
   const paths = loadWorkflow(".depot/workflows/deploy-spa.yml").on?.push?.paths ?? [];
   for (const file of ["package.json", "pnpm-lock.yaml", "pnpm-workspace.yaml"]) {
     expect(triggers(paths, file), `${file} does not deploy`).toBe(false);
   }
   expect(triggers(paths, "apps/spa/public/index.html")).toBe(true);
+  expect(triggers(paths, "apps/browser-extension/public/panel.js")).toBe(true);
 });
 
 test("deploy-os.yml runs for what reaches the Worker, not the app's docs, tests or preview tooling", () => {

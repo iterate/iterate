@@ -54,8 +54,7 @@
     "**/dist/",
     "**/build/",
     "pnpm-lock.yaml",
-    "test-results/**",
-    "apps/browser-extension/capnweb.js"
+    "test-results/**"
   ],
   "jsPlugins": [
     "./lint/oxlint-plugin-iterate.ts",

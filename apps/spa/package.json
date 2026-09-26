@@ -9,6 +9,7 @@
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
+    "fflate": "catalog:",
     "trpc-cli": "catalog:",
     "tsx": "catalog:",
     "typescript": "catalog:",

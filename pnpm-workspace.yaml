@@ -7,6 +7,7 @@ packages:
   - apps/voice
   - apps/kit
   - apps/spa
+  - apps/browser-extension
   - apps/dummy-petshop
   - apps/ci-reports
   - packages/agents
@@ -52,6 +53,7 @@ catalog:
   cn: ^0.4.0
   codemirror: ^6.0.2
   esbuild: ^0.28.2
+  fflate: 0.8.3
   json5: ^2.2.3
   lucide-react: ^1.48.0
   oauth4webapi: ^3.8.8

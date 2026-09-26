@@ -3,7 +3,7 @@
 // presented IN the `authenticate` call, and this Chrome lent to the project's root context as
 // `itx.chrome` — a live RpcTarget (open a page, raw CDP on the tabs the project may drive) that the
 // project's agents and workers call back into while the panel is open. capnweb.js is the package's
-// own browser bundle, copied verbatim (README).
+// own browser bundle, which the build copies beside this file from node_modules (README).
 import { newWebSocketRpcSession, RpcTarget } from "./capnweb.js";
 
 // The toolbar action opens the side panel from now on (persisted; the first time, open the panel

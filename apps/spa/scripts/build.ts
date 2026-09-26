@@ -1,28 +1,30 @@
 import { execFileSync } from "node:child_process";
-import { cpSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { zipSync } from "fflate";
 import { z } from "zod";
 
 const output = new URL("../dist/", import.meta.url);
 const dist = new URL("assets/", output);
 rmSync(output, { recursive: true, force: true });
-mkdirSync(dist, { recursive: true });
+mkdirSync(new URL("downloads/", dist), { recursive: true });
 cpSync(new URL("../public/", import.meta.url), dist, { recursive: true });
-execFileSync(
-  "python3",
-  [
-    fileURLToPath(new URL("../../browser-extension/package.py", import.meta.url)),
-    fileURLToPath(new URL("downloads/", dist)),
-  ],
-  { stdio: "inherit" },
-);
+
+// The Chrome extension's build writes the unpacked extension to its dist/; the download is that, zipped.
+const extension = new URL("../../browser-extension/", import.meta.url);
+execFileSync("pnpm", ["--dir", fileURLToPath(extension), "run", "build"], { stdio: "inherit" });
+const unpacked = new URL("dist/", extension);
 const manifest = z
   .object({ version: z.string().regex(/^\d+(\.\d+){0,3}$/) })
-  .parse(
-    JSON.parse(
-      readFileSync(new URL("../../browser-extension/manifest.json", import.meta.url), "utf8"),
+  .parse(JSON.parse(readFileSync(new URL("manifest.json", unpacked), "utf8")));
+writeFileSync(
+  new URL(`downloads/iterate-chrome-extension-${manifest.version}.zip`, dist),
+  zipSync(
+    Object.fromEntries(
+      readdirSync(unpacked).map((name) => [name, readFileSync(new URL(name, unpacked))]),
     ),
-  );
+  ),
+);
 writeFileSync(
   new URL("downloads/index.html", dist),
   `<!doctype html>
