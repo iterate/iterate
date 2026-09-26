@@ -7,25 +7,41 @@
 // by `itx.integrations.connect(provider, { account })` on the project (context/built-ins.ts), or here
 // when the consent it needed finishes (the attempt's `connectToProject`); disconnecting it from the
 // project leaves the person's own connection standing. `finishIntegrationConnect` and a connect with
-// `connectToProject` are the platform's alone: the facets do not publish them.
-import { codedError, errorCode } from "iterate/lib";
+// `connectToProject` are the platform's alone: the facets do not publish them. An account another
+// project holds (Slack, GitHub) is offered to move here, and `confirmIntegrationMove` moves it.
+import { codedError, errorCode, reportIssue } from "iterate/lib";
 import { z } from "zod";
+import { appConfigOf, sessionSigningSecretOf } from "../app-config.ts";
+import { verifyClaims } from "../caller.ts";
 import { DurableObjectNameCodec } from "../context/paths.ts";
+import { ControlPlane } from "../control-plane/edge.ts";
 import type { IntegrationConnectionRow, IntegrationProvider } from "./contract.ts";
 import {
   appendPlatformFact,
   assertConnectionName,
+  attemptKeyOf,
   connectionPathOf,
   connectionRowOf,
   consentAttemptKeyOf,
+  ROUTED_PROVIDERS,
   tokenSecretPathOf,
   type ConnectionAttempt,
+  type HeldToken,
   type IntegrationScope,
+  type MovableAttempt,
+  type MoveOffered,
 } from "./connections.ts";
 import { connectCloudflare, disconnectCloudflare, finishCloudflareConnect } from "./cloudflare.ts";
-import { connectGithub, disconnectGithub } from "./github.ts";
+import { connectGithub, connectGithubInstallation, disconnectGithub } from "./github.ts";
 import { connectGoogle, disconnectGoogle, finishGoogleConnect } from "./google.ts";
-import { connectSlack, disconnectSlack, finishSlackConnect } from "./slack.ts";
+import {
+  connectMovedSlackTeam,
+  connectSlack,
+  disconnectSlack,
+  dropHeldSlackToken,
+  finishSlackConnect,
+  slackMoveOfferedAgain,
+} from "./slack.ts";
 import { disconnectWaitrose } from "./waitrose-connection.ts";
 import { missingScopes } from "./rules.ts";
 
@@ -108,7 +124,17 @@ export type FinishConnectInput = {
   nonce: string;
   grantedScopes: string[];
   consentedBy: { person: boolean; email?: string };
+  /** The secret held the token aside: another project holds the account (Slack). */
+  held?: HeldToken;
 };
+
+/** What the finish hands the callback: the offer to move the account here, when another project
+ *  holds it, for the callback to sign. */
+export type FinishConnectAnswer = { move?: MoveOffered };
+
+const HeldTokenInput = z
+  .object({ externalId: z.string().min(1), account: z.string(), until: z.number() })
+  .optional();
 
 /** THE CALLBACK FINISHES THE ATTEMPT IT COMPLETED — the platform's alone (context/built-ins.ts
  *  `integrations.finishConnect`): the attempt its nonce names, never one begun after it on the same
@@ -125,26 +151,40 @@ export async function finishIntegrationConnect(
   scope: IntegrationScope,
   integrations: Record<string, IntegrationConnectionRow>,
   input: FinishConnectInput,
-): Promise<void> {
+): Promise<FinishConnectAnswer> {
   const connection = assertConnectionName(input?.connection);
   const nonce = z.string().min(1).parse(input.nonce);
   const grantedScopes = z.array(z.string()).parse(input.grantedScopes);
+  const held = HeldTokenInput.parse(input.held);
   const key = consentAttemptKeyOf(input.provider, connection, nonce);
   const attempt = await scope.storage.get<ConnectionAttempt>(key);
   if (!attempt || attempt.until < Date.now()) {
-    if (integrations[connectionPathOf(input.provider, connection)]) return;
+    // the same callback again, after its finish offered the move: that offer again
+    const move =
+      input.provider === "slack" && held
+        ? await slackMoveOfferedAgain(scope, connection, nonce)
+        : undefined;
+    if (move) return { move };
+    if (integrations[connectionPathOf(input.provider, connection)]) return {};
     throw new Error("no connect of this connection is in flight — connect again");
   }
-  if (attempt.finishing)
-    return answerAgain(scope, integrations, { provider: input.provider, connection }, attempt);
+  if (attempt.finishing) {
+    await answerAgain(scope, integrations, { provider: input.provider, connection }, attempt);
+    return {};
+  }
   await scope.storage.put<ConnectionAttempt>(key, { ...attempt, finishing: true });
   if (input.provider === "slack") {
-    await finishSlackConnect(scope, connection, attempt).catch(async (error: unknown) => {
+    const move = await finishSlackConnect(
+      scope,
+      connection,
+      attempt,
+      held && { ...held, nonce },
+    ).catch(async (error: unknown) => {
       await scope.storage.put<ConnectionAttempt>(key, attempt); // nothing connected: a refresh retries
       throw error;
     });
     await scope.storage.delete(key);
-    return;
+    return { move };
   }
   const row = await (
     input.provider === "google"
@@ -172,6 +212,7 @@ export async function finishIntegrationConnect(
     await connectAccountToProject(scope, row, target, input.consentedBy);
   }
   await scope.storage.delete(key);
+  return {};
 }
 
 /** A second callback for a consent whose finish was claimed: the first one's answer again. */
@@ -260,33 +301,159 @@ export async function disconnectIntegration(
   input: {
     provider: IntegrationProvider;
     connection: string;
-    /** GitHub: this connection's installation moved to another project (github.ts
-     *  `confirmGithubMove`) — disconnected only while it still names that installation. */
-    movedInstallationId?: string;
+    /** Slack, GitHub: this connection's account moved to another project
+     *  (`confirmIntegrationMove`) — disconnected only while it still names that account. */
+    movedExternalId?: string;
   },
 ): Promise<void> {
   const connection = assertConnectionName(input?.connection);
-  const movedInstallationId = z.string().min(1).optional().parse(input.movedInstallationId);
+  const movedExternalId = z.string().min(1).optional().parse(input.movedExternalId);
+  const moved = movedExternalId ? { externalId: movedExternalId } : undefined;
   const row = integrations[connectionPathOf(input.provider, connection)];
-  // the connection since took another installation (or none): nothing of the moved one is left here
-  if (movedInstallationId && row?.externalId !== movedInstallationId) return;
+  // the connection since took another account, or the same one through its own app (or none):
+  // nothing of the moved one is left here
+  if (moved && (row?.externalId !== moved.externalId || row.client !== "iterate")) return;
   if (row?.ownerUserId) return disconnectPersonalAccount(scope, row);
-  if (input.provider === "slack") await disconnectSlack(scope, connection, row?.client ?? null);
+  if (input.provider === "slack") await disconnectSlack(scope, connection, row || null, moved);
   else if (input.provider === "google")
     await disconnectGoogle(scope, connection, row?.client ?? null);
   else if (input.provider === "cloudflare") await disconnectCloudflare(scope, connection);
-  else if (input.provider === "github")
-    await disconnectGithub(
-      scope,
-      connection,
-      movedInstallationId ? { installationId: movedInstallationId } : undefined,
-    );
+  else if (input.provider === "github") await disconnectGithub(scope, connection, moved);
   else if (input.provider === "waitrose") await disconnectWaitrose(scope, connection);
   else
     throw codedError(
       "INVALID_INPUT",
       `integrations: no provider ${JSON.stringify(input.provider)}`,
     );
+}
+
+/** The claims of a move offer (connections.ts `IntegrationMoveOffer`), once its signature checked. */
+const MoveOfferClaims = z.object({
+  kind: z.literal("integration-move"),
+  provider: z.enum(ROUTED_PROVIDERS),
+  projectId: z.string(),
+  connection: z.string(),
+  nonce: z.string(),
+  externalId: z.string(),
+  account: z.string(),
+  exp: z.number(),
+});
+
+/** THE MOVE, on the human's confirmation of the offer a provider's callback signed: the route moves
+ *  here in one batch, only while the holder still holds THIS account (catalog.ts
+ *  `moveIntegrationRoute`), the account connects here (GitHub: its installation's token is minted
+ *  here; Slack: the token its consent's exchange held aside goes into this connection's secret), and
+ *  the holder's connection is disconnected — only while it still names this account
+ *  (`<provider>/disconnected { reason: "moved" }`, its secret gone). The offer's nonce is the
+ *  attempt's; a confirmation claims it before anything is called out, so it moves once. A move that
+ *  fails before it lands puts every route back as it was, the destination's previous account
+ *  included, and keeps no token here. The holder's cleanup is the last step: when it fails, the
+ *  confirmation fails too, saying so, and the same offer retries the cleanup alone until it is done
+ *  (meanwhile the holder gets no events, its route gone, and its secret facet refuses the account's
+ *  token within 30 s of use: secret/durable-object.ts `#assertInstallationRouted`,
+ *  `#assertWorkspaceNotMoved`). The human proved they may connect the account; they need not reach
+ *  the holder's project. */
+export async function confirmIntegrationMove(
+  scope: IntegrationScope,
+  input: { offer: string },
+): Promise<void> {
+  const { env, projectId } = scope;
+  const expired = () =>
+    codedError("INVALID_INPUT", "This offer to move it here has expired — connect again.");
+  const claims = MoveOfferClaims.safeParse(
+    await verifyClaims(String(input?.offer), await sessionSigningSecretOf(appConfigOf(env))),
+  );
+  if (!claims.success || claims.data.projectId !== projectId || claims.data.exp <= Date.now())
+    throw expired();
+  const { provider, connection, externalId } = claims.data;
+  const key = attemptKeyOf(provider, connection);
+  const attempt = await scope.storage.get<MovableAttempt>(key);
+  if (
+    !attempt?.move ||
+    attempt.nonce !== claims.data.nonce ||
+    attempt.move.externalId !== externalId ||
+    attempt.until < Date.now()
+  )
+    throw expired();
+  const { move } = attempt;
+  if (move.stage === "moving")
+    throw codedError("INVALID_INPUT", "This move is already under way — reload in a moment.");
+  const { account, holder } = move;
+  if (move.stage !== "moved") {
+    // claimed before anything is called out: a second confirmation never moves it again
+    await scope.storage.put<MovableAttempt>(key, {
+      ...attempt,
+      move: { ...move, stage: "moving" },
+    });
+    const path = connectionPathOf(provider, connection);
+    const controlPlane = new ControlPlane(env);
+    // what this connection held before, whose route the move releases and a failure restores
+    const before = await connectionRowOf(env, projectId, path);
+    // the offer is spent, and what its consent left here is dropped
+    const abandon = async () => {
+      await scope.storage.delete(key);
+      if (move.heldTokenNonce) await dropHeldSlackToken(scope, connection, move.heldTokenNonce);
+    };
+    try {
+      await controlPlane.moveIntegrationRoute(provider, externalId, holder, { projectId, path });
+    } catch (error) {
+      await abandon();
+      throw error;
+    }
+    try {
+      if (provider === "github")
+        await connectGithubInstallation(scope, connection, attempt, externalId, account, "held");
+      else await connectMovedSlackTeam(scope, connection, attempt, move);
+    } catch (error) {
+      // Back to the holder only while its connection still names this account: one that took
+      // another since keeps that one's route (a move back releases the holder's other routes).
+      const holderRow = await connectionRowOf(env, holder.projectId, holder.path);
+      if (holderRow?.client === "iterate" && holderRow.externalId === externalId)
+        await controlPlane.moveIntegrationRoute(provider, externalId, { projectId, path }, holder);
+      else await controlPlane.releaseIntegrationRoute(provider, externalId, projectId, path);
+      if (before?.client === "iterate" && before.externalId !== externalId)
+        await controlPlane.routeIntegration(provider, before.externalId, projectId, path);
+      await abandon();
+      throw error;
+    }
+    await scope.storage.put<MovableAttempt>(key, { ...attempt, move: { ...move, stage: "moved" } });
+  }
+  // The holder's connection goes, but only while it still names this account: its route is gone
+  // already; this removes the secret and its row, `reason: "moved"` on its log.
+  try {
+    await env.ITERATE_CONTEXT.getByName(
+      DurableObjectNameCodec.stringify({ projectId: holder.projectId, path: "/" }),
+    ).invoke(
+      [
+        "itx",
+        "builtins",
+        "facets",
+        ["get", "project"],
+        [
+          "disconnectIntegration",
+          {
+            provider,
+            connection: holder.path.slice(`/integrations/${provider}/`.length),
+            movedExternalId: externalId,
+          },
+        ],
+      ],
+      [],
+      { principal: null, platform: true },
+    );
+  } catch (error) {
+    reportIssue("integrations.move-holder-disconnect", error, {
+      provider,
+      externalId,
+      projectId,
+      holderProjectId: holder.projectId,
+    });
+    throw codedError(
+      "INVALID_INPUT",
+      `${account} moved here, but the other project still lists it — press Move again to finish.`,
+    );
+  }
+  await scope.storage.delete(key);
 }
 
 /** A person's account out of a project: the project's path, a pointer to the person's connection,

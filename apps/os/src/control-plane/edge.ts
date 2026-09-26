@@ -583,14 +583,14 @@ export class ControlPlane {
       this.#db.moveIntegrationRoute(provider, externalId, from, to),
     );
   }
-  /** Release one account's route, only while the connection at `path` holds it (catalog.ts
-   *  `releaseIntegrationRoute`). */
+  /** Release one account's route, only while the connection at `path` holds it, answering whether
+   *  it did (catalog.ts `releaseIntegrationRoute`). */
   releaseIntegrationRoute(
     provider: string,
     externalId: string,
     projectId: string,
     path: string,
-  ): Promise<void> {
+  ): Promise<boolean> {
     return this.#call("releaseIntegrationRoute", () =>
       this.#db.releaseIntegrationRoute(provider, externalId, projectId, path),
     );

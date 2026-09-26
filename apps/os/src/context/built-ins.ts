@@ -44,8 +44,13 @@ import {
   connectionPathOf,
   tokenSecretPathOf,
   type ConnectionAttempt,
+  type HeldToken,
 } from "../integrations/connections.ts";
-import type { ConnectInput, FinishConnectInput } from "../integrations/verbs.ts";
+import type {
+  ConnectInput,
+  FinishConnectAnswer,
+  FinishConnectInput,
+} from "../integrations/verbs.ts";
 import { missingScopes } from "../integrations/rules.ts";
 import type { ProjectState } from "../project/contract.ts";
 import type { AccountState } from "../account/contract.ts";
@@ -101,7 +106,14 @@ type PlatformSecretsVerbs = {
   completeOAuth(
     path: string,
     input: { code: string; nonce: string },
-  ): Promise<{ path: string; scopes: string[] }>;
+  ): Promise<{ path: string; scopes: string[]; held?: HeldToken }>;
+  /** The platform's move of a Slack workspace here (integrations/verbs.ts `confirmIntegrationMove`):
+   *  the token its consent's exchange held aside (secret/durable-object.ts `admitHeldToken`) stored,
+   *  then `secret/set`, like `completeOAuth`. You never call it. */
+  admitHeldToken(path: string, input: { nonce: string }): Promise<{ path: string }>;
+  /** The platform's, when that move failed: the held token dropped, or `admitted` when the record
+   *  is still the one it stored (the caller deletes it). You never call it. */
+  dropHeldToken(path: string, input: { nonce: string }): Promise<"held" | "admitted" | "gone">;
   revokeLend(
     path: string,
     lendId: string,
@@ -148,7 +160,7 @@ type PlatformIntegrationsVerbs = {
   connectForProject(
     input: ConnectInput & { connectToProject: NonNullable<ConnectionAttempt["connectToProject"]> },
   ): Promise<{ authorizationUrl: string }>;
-  finishConnect(input: FinishConnectInput): Promise<void>;
+  finishConnect(input: FinishConnectInput): Promise<FinishConnectAnswer>;
 };
 
 /** THE built-in scope, as one interface — the platform's kernel surface; the library's verbs
@@ -1181,12 +1193,17 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
       // catches the log up. Until then `list()` does not show the secret while egress already honours it.
       completeOAuth: (secretPath, input) =>
         onSecretContext(secretPath, ["completeOAuth", secretPath, input], async (secret) => {
-          const { urls, refresh, scopes } = (await secretFacet(["completeOAuth", input])) as {
+          // A facet call answers `unknown` over the hop; this is the platform's own
+          // SecretDurableObject.completeOAuth's declared answer.
+          const { urls, refresh, scopes, held } = (await secretFacet(["completeOAuth", input])) as {
             urls: string[];
             refresh?: SecretRefresh["kind"];
             exchanged: boolean;
             scopes: string[];
+            held?: HeldToken;
           };
+          // held aside, not stored: nothing on the log until a move admits it (`admitHeldToken`)
+          if (held) return { path: secretPath, scopes, held };
           await secretFact(secret, {
             type: "events.iterate.com/secret/set",
             payload: { path: secretPath, urls, refresh },
@@ -1194,6 +1211,35 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
           // what the provider granted, for the connection the callback finishes (integrations/verbs.ts)
           return { path: secretPath, scopes };
         }),
+      admitHeldToken: (secretPath, input) => {
+        assertPlatformCaller("secrets.admitHeldToken");
+        return onSecretContext(
+          secretPath,
+          ["admitHeldToken", secretPath, input],
+          async (secret) => {
+            // A facet call answers `unknown` over the hop; this is the platform's own
+            // SecretDurableObject.admitHeldToken's declared answer.
+            const { urls, refresh } = (await secretFacet(["admitHeldToken", input])) as {
+              urls: string[];
+              refresh?: SecretRefresh["kind"];
+            };
+            await secretFact(secret, {
+              type: "events.iterate.com/secret/set",
+              payload: { path: secretPath, urls, refresh },
+            });
+            return { path: secretPath };
+          },
+        );
+      },
+      dropHeldToken: (secretPath, input) => {
+        assertPlatformCaller("secrets.dropHeldToken");
+        return onSecretContext(
+          secretPath,
+          ["dropHeldToken", secretPath, input],
+          // the platform's own SecretDurableObject.dropHeldToken's declared answer, `unknown` over the hop
+          async () => (await secretFacet(["dropHeldToken", input])) as "held" | "admitted" | "gone",
+        );
+      },
       // The facet FIRST here, the reverse of `set`: each verb runs its steps in the order whose
       // crash window fails LOUD. A clear not yet followed by its fact leaves a log that says set
       // while egress answers 502 ("no stored project secret") until the delete is retried; the
@@ -1648,9 +1694,10 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
         assertPlatformCaller("integrations.finishConnect");
         if (path !== owner.rootPath)
           throw codedError("INVALID_CONTEXT", "itx.integrations.finishConnect: the owner's root");
-        await deps.callFacetAsPlatform(integrationsFacet("finishConnect"), [
+        // the owner facet's own answer (integrations/verbs.ts `finishIntegrationConnect`)
+        return (await deps.callFacetAsPlatform(integrationsFacet("finishConnect"), [
           ["finishIntegrationConnect", input],
-        ]);
+        ])) as FinishConnectAnswer;
       },
     },
     fetchRoutes: {

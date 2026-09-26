@@ -3,8 +3,9 @@
 // listed, and disconnects it. A preview's iterate apps are the pet shop's fakes
 // (apps/os/scripts/preview-{slack,google,github}-app.ts): their pages send the browser straight back
 // through the platform's callback, which finishes the connection; GitHub's install page is where a
-// person picks the account, which the spec does by naming an installation it registered. An
-// installation another project holds comes back as an offer to move it, which one button takes.
+// person picks the account, which the spec does by naming an installation it registered (and Slack's
+// consent page the workspace, by naming a team). An installation or a workspace another project
+// holds comes back as an offer to move it, which one button takes.
 import { createPublicKey } from "node:crypto";
 import { uniqueFixtureSlug } from "@iterate-com/shared/test-support/fixture-slug";
 import {
@@ -208,6 +209,68 @@ test("a person moves a GitHub installation another of their projects holds: the 
   await page.goto(`/projects/${holderSlug}/integrations`);
   await page
     .getByRole("region", { name: "GitHub" })
+    .getByText("Not connected", { exact: true })
+    .waitFor();
+});
+
+test("a person moves a Slack workspace another of their projects holds: installing iterate's app into it again offers the move, and one button moves it", async ({
+  page,
+  baseURL,
+  helpers,
+}) => {
+  helpers.appOrigin("dash");
+  const team = `T${crypto.randomUUID().slice(0, 8).toUpperCase()}`;
+  const workspace = `Pet Shop ${team}`;
+  // on Slack's consent page a person picks the workspace; here, the same one both times
+  await page.route(`${petshopBaseUrl()}/oauth/v2/authorize*`, (route) => {
+    const url = new URL(route.request().url());
+    url.searchParams.set("team", team);
+    return route.continue({ url: url.href });
+  });
+  await using fixture = await helpers.createFixture("integrations-slack-move", { app: baseURL });
+  // a second project of the same person, which connects the workspace first
+  const holderSlug = uniqueFixtureSlug("integrations-slack-held");
+  {
+    using operator = openOperatorSession();
+    await operator
+      .authenticate({ email: fixture.email })
+      .projects.create({ project: holderSlug })
+      .whoami();
+  }
+  const installThrough = async (slug: string) => {
+    await page.goto(`/projects/${slug}/integrations`);
+    await page
+      .getByRole("region", { name: "Slack" })
+      .getByRole("button", { name: "Connect Slack", exact: true })
+      .click();
+    await page
+      .getByRole("dialog")
+      .getByRole("button", { name: "Connect a Slack workspace", exact: true })
+      .click({ noWaitAfter: true });
+  };
+  await installThrough(holderSlug);
+  await page
+    .getByRole("region", { name: "Slack" })
+    .getByRole("listitem")
+    .filter({ hasText: workspace })
+    .waitFor();
+  // now the fixture's own project: Slack let the person install into the workspace, and the
+  // platform offers the move
+  await installThrough(fixture.project.slug);
+  const prompt = page.getByRole("dialog");
+  await prompt.getByText(`${workspace} is connected to ${holderSlug}.`, { exact: false }).waitFor();
+  await prompt
+    .getByText("stops that project's Slack access and events", { exact: false })
+    .waitFor();
+  await prompt.getByRole("button", { name: "Move here", exact: true }).click();
+  await page
+    .getByRole("region", { name: "Slack" })
+    .getByRole("listitem")
+    .filter({ hasText: workspace })
+    .waitFor();
+  await page.goto(`/projects/${holderSlug}/integrations`);
+  await page
+    .getByRole("region", { name: "Slack" })
     .getByText("Not connected", { exact: true })
     .waitFor();
 });

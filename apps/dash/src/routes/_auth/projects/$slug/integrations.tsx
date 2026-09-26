@@ -1,6 +1,6 @@
 // /projects/<slug>/integrations — the project's connections (the `project` facet's live state on
 // `/`), each provider's Connect sheet and the forms it leads to. The flows themselves — a person's own
-// account, iterate's app or your own, Waitrose's login, a GitHub installation's move — are apps/os
+// account, iterate's app or your own, Waitrose's login, moving an account another project holds — are apps/os
 // README "Integrations" and "Sign-in keeps tokens". The sheet is one URL: `?connect=<provider>`
 // (`&scopes=` from an agent's `requestFromUser`), `?own=<provider>&connection=<name>`, `?waitrose=1`,
 // `?move=<offer>`.
@@ -103,8 +103,8 @@ export const Route = createFileRoute("/_auth/projects/$slug/integrations")({
     connection: z.string().optional().catch(undefined),
     /** Another Waitrose account, signed in with a username and password. */
     waitrose: z.literal(1).optional().catch(undefined),
-    /** GitHub's callback's offer to move an installation another project holds here (signed by the
-     *  platform, apps/os integrations/github.ts `GithubMoveOffer`). */
+    /** A provider's callback's offer to move an account another project holds here (signed by the
+     *  platform, apps/os integrations/connections.ts `IntegrationMoveOffer`). */
     move: z.string().optional().catch(undefined),
     /** Another service: how to connect one this page has no row for. */
     other: z.literal(1).optional().catch(undefined),
@@ -407,7 +407,7 @@ function ProjectIntegrations() {
               error={error}
               onConfirm={() =>
                 run("move", async () => {
-                  await projectFacet().invoke([["confirmGithubMove", { offer: search.move }]]);
+                  await projectFacet().invoke([["confirmIntegrationMove", { offer: search.move }]]);
                   await closeSheet();
                 })
               }
@@ -1125,7 +1125,8 @@ function WaitroseForm({
 /** What the Dash reads of a move offer: the platform signed it, and the platform checks it again on
  *  the move; the page only words it. */
 const MoveOfferShown = z.object({
-  kind: z.literal("github-move"),
+  kind: z.literal("integration-move"),
+  provider: z.enum(["slack", "github"]),
   account: z.string(),
   holderSlug: z.string().nullable(),
 });
@@ -1140,8 +1141,9 @@ function moveOfferOf(token: string) {
   }
 }
 
-/** THE MOVE: an installation another project holds, which the person proved they administer — one
- *  sentence on what the other project loses, one button. */
+/** THE MOVE: an account another project holds, which the person proved they may connect (a GitHub
+ *  installation they administer, a Slack workspace Slack let them install into) — one sentence on
+ *  what the other project loses, one button. */
 function MoveOffer({
   offer,
   pending,
@@ -1153,16 +1155,17 @@ function MoveOffer({
   error: string | null;
   onConfirm: () => void;
 }) {
+  const { title } = PROVIDERS.find((known) => known.provider === offer.provider)!;
   return (
     <div className="flex h-full flex-col">
       <SheetHeader>
         <SheetTitle className="flex items-center gap-2">
-          <ProviderLogo provider="github" />
+          <ProviderLogo provider={offer.provider} />
           Move {offer.account} here?
         </SheetTitle>
         <SheetDescription>
           {offer.account} is connected to {offer.holderSlug || "another project"}. Moving it here
-          stops that project's GitHub access and events.
+          stops that project's {title} access and events.
         </SheetDescription>
       </SheetHeader>
       {error && (

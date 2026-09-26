@@ -5,7 +5,10 @@
 //   connectSlack      → the consent URL (`itx.secrets.beginOAuth` with iterate's app,
 //                       `client: { platform: "slack" }`, or the project's, `{ project: "slack" }`)
 //   finishSlackConnect → the callback stored the token: `auth.test` names the workspace, iterate's
-//                       app routes it here (control-plane/catalog.ts), `slack/connected` lands on `/`
+//                       app routes it here (control-plane/catalog.ts), `slack/connected` lands on `/`;
+//                       or, for a workspace another project holds, the secret held the token aside
+//                       and the human is offered the move (Slack let them install into it: the proof)
+//   connectMovedSlackTeam → the move (verbs.ts `confirmIntegrationMove`): the held token stored here
 //   disconnectSlack   → `auth.revoke`, the route released, the secret deleted, `slack/disconnected`
 //   slackWebhookRoute → Slack's inbound requests, on the legacy platform's URLs:
 //     POST /api/integrations/slack/{webhook,interactivity-webhook}                       iterate's app
@@ -13,14 +16,17 @@
 // A signed request lands on `<project>:/integrations/slack/<connection>` as
 // `slack/webhook-received`, keyed `slack-webhook:<event_id|trigger_id>` (the codes: rules.ts).
 import { codedError } from "iterate/lib";
+import { z } from "zod";
 import { appConfigOf, DEFAULT_SLACK_BOT_SCOPES } from "../app-config.ts";
 import { DurableObjectNameCodec } from "../context/paths.ts";
 import { ControlPlane } from "../control-plane/edge.ts";
 import type { Env } from "../env.ts";
 import { SECRET_OAUTH_TTL_MS } from "../secret-oauth.ts";
-import { isRecord, verifySecretHmac } from "../secrets.ts";
+import { verifySecretHmac } from "../secrets.ts";
+import type { IntegrationConnectionRow } from "./contract.ts";
 import {
   appendPlatformFact,
+  attemptKeyOf,
   deleteTokenSecret,
   consentAttemptKeyOf,
   dropAttemptsOf,
@@ -31,7 +37,11 @@ import {
   routedWhile,
   tokenSecretPathOf,
   type ConnectionAttempt,
+  type HeldToken,
+  type IntegrationMove,
   type IntegrationScope,
+  type MovableAttempt,
+  type MoveOffered,
 } from "./connections.ts";
 import {
   slackPayloadOf,
@@ -110,60 +120,237 @@ export async function connectSlack(
   );
   const attempt: ConnectionAttempt = { client, origin, until: Date.now() + SECRET_OAUTH_TTL_MS };
   await scope.storage.put(consentAttemptKeyOf("slack", connection, nonce), attempt);
+  // a new consent supersedes an offer to move a workspace here (its held token went with `beginOAuth`)
+  await scope.storage.delete(attemptKeyOf("slack", connection));
   return { authorizationUrl };
 }
 
+/** The callback's finish (verbs.ts `finishIntegrationConnect`). `held`: the secret held the token
+ *  aside, because another project's connection held the workspace when Slack answered — Slack let
+ *  the human install iterate's app into it, which is all a move asks, so they are offered the move
+ *  (answered for the callback to sign), bound to a fresh nonce; a workspace released meanwhile has
+ *  its token stored and connects like any other. */
 export async function finishSlackConnect(
   scope: IntegrationScope,
   connection: string,
   attempt: ConnectionAttempt,
-): Promise<void> {
+  held?: HeldToken & { nonce: string },
+): Promise<MoveOffered | undefined> {
   const { env, projectId } = scope;
-  const response = await slackApi(scope, attempt.origin, "auth.test", connection);
-  const identity: unknown = await response.json().catch(() => null);
-  if (!isRecord(identity) || identity.ok !== true || typeof identity.team_id !== "string")
-    throw new Error(`Slack's auth.test answered ${response.status}`);
-  const connected = () =>
-    appendPlatformFact(env, projectId, "/", {
-      type: "events.iterate.com/slack/connected",
-      payload: {
-        connection,
+  if (held) {
+    const holder = await new ControlPlane(env).integrationRouteOf("slack", held.externalId);
+    if (holder && holder.projectId !== projectId) {
+      const move: IntegrationMove = {
+        externalId: held.externalId,
+        account: held.account,
+        holder,
+        heldTokenNonce: held.nonce,
+      };
+      const offered: MovableAttempt = {
         client: attempt.client,
-        account: typeof identity.team === "string" ? identity.team : identity.team_id,
-        externalId: identity.team_id,
+        origin: attempt.origin,
+        until: held.until,
+        nonce: crypto.randomUUID(),
+        move,
+      };
+      await scope.storage.put(attemptKeyOf("slack", connection), offered);
+      return slackMoveOffered(scope, connection, offered.nonce, offered.until, move);
+    }
+    // Released meanwhile: the workspace is routed here first (first owner wins), and only then is
+    // the token stored — a project that took it in between refuses the route, the token stays held,
+    // and the callback again offers the move.
+    const path = connectionPathOf("slack", connection);
+    await routedWhile(
+      env,
+      { provider: "slack", externalId: held.externalId, projectId, path },
+      async () => {
+        await admitHeldToken(scope, connection, held.nonce);
+        const identity = await slackIdentityOf(scope, attempt.origin, connection);
+        if (identity.teamId !== held.externalId)
+          throw new Error(
+            `Slack's auth.test names workspace ${identity.teamId}, not ${held.externalId}`,
+          );
+        await slackConnected(scope, connection, attempt, identity);
       },
-    });
+    );
+    return undefined;
+  }
+  const identity = await slackIdentityOf(scope, attempt.origin, connection);
+  const connected = () => slackConnected(scope, connection, attempt, identity);
   // iterate's app routes the team here while `connected` lands; a failure puts the routes back
-  if (attempt.client !== "iterate") return connected();
+  if (attempt.client !== "iterate") return void (await connected());
   const path = connectionPathOf("slack", connection);
   await routedWhile(
     env,
-    { provider: "slack", externalId: identity.team_id, projectId, path },
+    { provider: "slack", externalId: identity.teamId, projectId, path },
     connected,
   );
+}
+
+/** The offer this consent's finish made already, while it stands untouched: a replay of its callback
+ *  (a refreshed tab, an answer lost on the way) lands on the same offer. */
+export async function slackMoveOfferedAgain(
+  scope: IntegrationScope,
+  connection: string,
+  heldTokenNonce: string,
+): Promise<MoveOffered | undefined> {
+  const offered = await scope.storage.get<MovableAttempt>(attemptKeyOf("slack", connection));
+  if (
+    !offered?.move ||
+    offered.move.heldTokenNonce !== heldTokenNonce ||
+    offered.move.stage ||
+    offered.until <= Date.now()
+  )
+    return undefined;
+  return slackMoveOffered(scope, connection, offered.nonce, offered.until, offered.move);
+}
+
+function slackMoveOffered(
+  scope: IntegrationScope,
+  connection: string,
+  nonce: string,
+  until: number,
+  move: IntegrationMove,
+): MoveOffered {
+  return {
+    provider: "slack",
+    projectId: scope.projectId,
+    connection,
+    nonce,
+    externalId: move.externalId,
+    account: move.account,
+    holderProjectId: move.holder.projectId,
+    exp: until,
+  };
+}
+
+/** A WORKSPACE MOVED HERE (verbs.ts `confirmIntegrationMove`, its route this connection's already):
+ *  the token the consent's exchange held aside stored in the connection's secret, `auth.test` through
+ *  egress proving it names that workspace, then `slack/connected`. On a failure the confirm drops
+ *  what the consent left (`dropHeldSlackToken`): the connection had no token of its own (one that
+ *  holds a workspace is only ever asked for more of the same one). */
+export async function connectMovedSlackTeam(
+  scope: IntegrationScope,
+  connection: string,
+  attempt: ConnectionAttempt,
+  move: IntegrationMove,
+): Promise<void> {
+  await admitHeldToken(scope, connection, move.heldTokenNonce || "");
+  const identity = await slackIdentityOf(scope, attempt.origin, connection);
+  if (identity.teamId !== move.externalId)
+    throw new Error(`Slack's auth.test names workspace ${identity.teamId}, not ${move.externalId}`);
+  await slackConnected(scope, connection, attempt, identity);
+}
+
+/** The held token stored in the connection's secret (secret/durable-object.ts `admitHeldToken`): the
+ *  platform's own call, which no member's itx reaches. */
+async function admitHeldToken(scope: IntegrationScope, connection: string, nonce: string) {
+  await scope.env.ITERATE_CONTEXT.getByName(
+    DurableObjectNameCodec.stringify({ projectId: scope.projectId, path: "/" }),
+  ).invoke(
+    [
+      "itx",
+      "builtins",
+      "secrets",
+      ["admitHeldToken", tokenSecretPathOf("slack", connection), { nonce }],
+    ],
+    [],
+    { principal: null, platform: true },
+  );
+}
+
+/** WHAT A FAILED MOVE LEFT OF ITS CONSENT, gone: the held token, or the token its admit stored while
+ *  the secret still holds that one (deleted like any other); a write since is someone else's. */
+export async function dropHeldSlackToken(
+  scope: IntegrationScope,
+  connection: string,
+  nonce: string,
+): Promise<void> {
+  // the built-in's own answer (context/built-ins.ts `dropHeldToken`)
+  const left = (await scope.env.ITERATE_CONTEXT.getByName(
+    DurableObjectNameCodec.stringify({ projectId: scope.projectId, path: "/" }),
+  ).invoke(
+    [
+      "itx",
+      "builtins",
+      "secrets",
+      ["dropHeldToken", tokenSecretPathOf("slack", connection), { nonce }],
+    ],
+    [],
+    { principal: null, platform: true },
+  )) as "held" | "admitted" | "gone";
+  if (left === "admitted") await deleteTokenSecret(scope, "slack", connection);
+}
+
+/** The workspace the connection's token is for: Slack's `auth.test` through egress. */
+async function slackIdentityOf(
+  scope: IntegrationScope,
+  origin: string,
+  connection: string,
+): Promise<{ teamId: string; team: string }> {
+  const response = await slackApi(scope, origin, "auth.test", connection);
+  const identity = SlackAuthTest.safeParse(await response.json().catch(() => null));
+  if (!identity.success)
+    throw new Error(`Slack's auth.test answered ${response.status}, naming no workspace`);
+  return { teamId: identity.data.team_id, team: identity.data.team || identity.data.team_id };
+}
+const SlackAuthTest = z.object({
+  ok: z.literal(true),
+  team_id: z.string().min(1),
+  team: z.string().optional(),
+});
+
+function slackConnected(
+  scope: IntegrationScope,
+  connection: string,
+  attempt: ConnectionAttempt,
+  identity: { teamId: string; team: string },
+) {
+  return appendPlatformFact(scope.env, scope.projectId, "/", {
+    type: "events.iterate.com/slack/connected",
+    payload: {
+      connection,
+      client: attempt.client,
+      account: identity.team,
+      externalId: identity.teamId,
+    },
+  });
 }
 
 export async function disconnectSlack(
   scope: IntegrationScope,
   connection: string,
-  client: ConnectionAttempt["client"] | null,
+  row: Pick<IntegrationConnectionRow, "client" | "externalId"> | null,
+  /** Not the owner's own choice: this workspace moved to another project, and only its route goes. */
+  moved?: { externalId: string },
 ): Promise<void> {
   const { env, projectId } = scope;
-  // a token already dead is the goal, so the revoke is best-effort
-  if (client)
-    await slackAppOf(scope, client, connection)
-      .then(({ origin }) => slackApi(scope, origin, "auth.revoke", connection))
-      .then((response) => response.body?.cancel())
-      .catch(() => {});
-  await new ControlPlane(env).releaseIntegrationRoutes(
-    projectId,
-    connectionPathOf("slack", connection),
-  );
+  const path = connectionPathOf("slack", connection);
+  const controlPlane = new ControlPlane(env);
+  if (moved) await controlPlane.releaseIntegrationRoute("slack", moved.externalId, projectId, path);
+  else {
+    // Slack keeps one bot token per app and workspace, so revoking iterate's app's ends it for every
+    // connection of the workspace: only the connection that still holds the route may, which its
+    // own release answers (one statement: a move of the route and this release never both win). A
+    // moved workspace's token is the one now connected where it went. A project's own app routes
+    // nothing.
+    const revokes =
+      row?.client === "iterate"
+        ? await controlPlane.releaseIntegrationRoute("slack", row.externalId, projectId, path)
+        : row?.client === "project";
+    // a token already dead is the goal, so the revoke is best-effort
+    if (row && revokes)
+      await slackAppOf(scope, row.client, connection)
+        .then(({ origin }) => slackApi(scope, origin, "auth.revoke", connection))
+        .then((response) => response.body?.cancel())
+        .catch(() => {});
+    await controlPlane.releaseIntegrationRoutes(projectId, path);
+  }
   await deleteTokenSecret(scope, "slack", connection);
   await dropAttemptsOf(scope.storage, "slack", connection);
   await appendPlatformFact(env, projectId, "/", {
     type: "events.iterate.com/slack/disconnected",
-    payload: { connection },
+    payload: { connection, reason: moved ? "moved" : undefined },
   });
 }
 

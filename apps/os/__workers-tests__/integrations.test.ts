@@ -4,6 +4,7 @@
 // callback finishing it, the routes, egress with each connection's secret, and the webhooks. Every
 // connection here is named `acme`.
 import { createHmac } from "node:crypto";
+import { evictDurableObject, runDurableObjectAlarm } from "cloudflare:test";
 import { env, exports } from "cloudflare:workers";
 import { expect, onTestFinished, test, vi } from "vitest";
 import type { StreamEvent } from "iterate/stream/processor";
@@ -20,6 +21,7 @@ import {
   petshopFakes,
   projectWithMember,
   readLog,
+  releasePins,
   stub,
 } from "./support.ts";
 
@@ -210,20 +212,380 @@ test("Slack: a team released by one project and connected by another routes its 
   ]);
 });
 
-test("Slack: a second project cannot take a routed team, and the first keeps it", async () => {
-  const first = await projectWithMember("slack-first-owner");
+test("Slack: a team another project holds is offered to move here, the token Slack issued kept from this project until then; confirming moves its webhooks here and disconnects the other project's connection, and the offer works once", async () => {
+  const holder = await projectWithMember("slack-held");
   const petshop = petshopFakes();
-  await connected(petshop, first, "slack", "team=T6TAKEN");
-  const second = await otherProject(first, "slack-second-owner");
-  const back = await consented(petshop, second, "slack", "team=T6TAKEN");
-  expect({ status: back.status, text: await back.text() }).toMatchObject({
-    status: 400,
-    text: expect.stringContaining("connected to another project"),
+  await connected(petshop, holder, "slack", "team=T6TAKEN");
+  const mover = await otherProject(holder, "slack-mover");
+  // the same person installs iterate's app into the workspace for the second project
+  const back = await consented(petshop, mover, "slack", "team=T6TAKEN");
+  expect(back, await back.clone().text()).toMatchObject({ status: 303 });
+  const landing = new URL(back.headers.get("location")!);
+  expect(landing.href.split("?")[0]).toBe(NEXT);
+  const offer = landing.searchParams.get("move")!;
+  expect(offerClaimsOf(offer)).toMatchObject({
+    kind: "integration-move",
+    provider: "slack",
+    externalId: "T6TAKEN",
+    account: "Pet Shop T6TAKEN",
+    holderSlug: "slack-held",
   });
+  // nothing moved yet, and the token Slack just issued is not this project's to use, or to take
+  expect(await catalog().integrationRoute("slack", "T6TAKEN")).toMatchObject({
+    projectId: holder.projectId,
+  });
+  expect(await integrationsOf(mover.itx)).toEqual({});
+  expect(await secretPathsOf(mover.itx)).not.toContain("/secrets/slack-acme");
+  expect(await slackAuthTest(mover.itx)).toMatchObject({ status: 502 });
+  // the platform's own verb, which the member's itx does not type
+  const secrets = mover.itx.secrets as unknown as {
+    admitHeldToken(path: string, input: { nonce: string }): Promise<unknown>;
+  };
+  await expect(secrets.admitHeldToken("/secrets/slack-acme", { nonce: "any" })).rejects.toThrow();
+
+  await projectFacet(mover.itx).confirmIntegrationMove({ offer });
   expect(await catalog().integrationRoute("slack", "T6TAKEN")).toEqual({
-    projectId: first.projectId,
+    projectId: mover.projectId,
     path: "/integrations/slack/acme",
   });
+  await vi.waitFor(async () => {
+    expect(await integrationsOf(mover.itx)).toMatchObject({
+      "/integrations/slack/acme": {
+        client: "iterate",
+        account: "Pet Shop T6TAKEN",
+        externalId: "T6TAKEN",
+      },
+    });
+    expect(await integrationsOf(holder.itx)).toEqual({});
+  });
+  expect(await disconnectedFacts(holder.projectId, "slack")).toEqual([
+    { connection: "acme", reason: "moved" },
+  ]);
+  expect(await (await slackAuthTest(mover.itx)).json()).toMatchObject({ team_id: "T6TAKEN" });
+  expect(await secretPathsOf(holder.itx)).not.toContain("/secrets/slack-acme");
+  // Slack's bot token for iterate's app in a workspace is one token: revoking the holder's would end
+  // the one just moved here
+  expect(await petshop.state.getState()).toMatchObject({ revokedRefreshTokenIds: [] });
+  const event = { type: "event_callback", team_id: "T6TAKEN", event_id: "Ev6-moved" };
+  await slackPost(SLACK_WEBHOOK, event, ITERATE_SLACK_SIGNING_SECRET);
+  expect(await webhooksOn(mover.projectId, "/integrations/slack/acme")).toHaveLength(1);
+  expect(await webhooksOn(holder.projectId, "/integrations/slack/acme")).toEqual([]);
+  await expect(projectFacet(mover.itx).confirmIntegrationMove({ offer })).rejects.toThrow(
+    /expired/,
+  );
+});
+
+test("Slack: the same callback again, a refreshed tab, lands on the same offer", async () => {
+  const holder = await projectWithMember("slack-replay");
+  const petshop = petshopFakes();
+  await connected(petshop, holder, "slack", "team=T11AGAIN");
+  const mover = await otherProject(holder, "slack-replay-mover");
+  const { authorizationUrl } = await projectFacet(mover.itx).connectIntegration({
+    provider: "slack",
+    connection: "acme",
+    client: "iterate",
+    next: NEXT,
+  });
+  const consent = (await petshop.handle(
+    new Request(`${authorizationUrl}&team=T11AGAIN`, { redirect: "manual" }),
+  ))!;
+  const callback = () =>
+    exports.default.fetch(
+      new Request(consent.headers.get("location")!, {
+        headers: { cookie: mover.cookie },
+        redirect: "manual",
+      }),
+    );
+  const offer = moveOfferOf(await callback());
+  expect(offerClaimsOf(moveOfferOf(await callback()))).toEqual(offerClaimsOf(offer));
+  await projectFacet(mover.itx).confirmIntegrationMove({ offer });
+  expect(await catalog().integrationRoute("slack", "T11AGAIN")).toMatchObject({
+    projectId: mover.projectId,
+  });
+});
+
+test("Slack: an offer for a team its holder has since given up moves nothing, and leaves the holder's new team alone", async () => {
+  const holder = await projectWithMember("slack-stale");
+  const petshop = petshopFakes();
+  await connected(petshop, holder, "slack", "team=T7STALE");
+  const mover = await otherProject(holder, "slack-stale-mover");
+  const offer = moveOfferOf(await consented(petshop, mover, "slack", "team=T7STALE"));
+  // the holder gives the team up and connects another one under the same name
+  await projectFacet(holder.itx).disconnectIntegration({ provider: "slack", connection: "acme" });
+  await connected(petshop, holder, "slack", "team=T7NEW");
+  await expect(projectFacet(mover.itx).confirmIntegrationMove({ offer })).rejects.toThrow(
+    /moved meanwhile/,
+  );
+  expect(await catalog().integrationRoute("slack", "T7STALE")).toBeNull();
+  expect(await catalog().integrationRoute("slack", "T7NEW")).toEqual({
+    projectId: holder.projectId,
+    path: "/integrations/slack/acme",
+  });
+  await vi.waitFor(async () =>
+    expect(await integrationsOf(holder.itx)).toMatchObject({
+      "/integrations/slack/acme": { externalId: "T7NEW" },
+    }),
+  );
+  expect(await integrationsOf(mover.itx)).toEqual({});
+  expect(await secretPathsOf(mover.itx)).not.toContain("/secrets/slack-acme");
+  expect(await disconnectedFacts(holder.projectId, "slack")).toEqual([{ connection: "acme" }]);
+  await expect(projectFacet(mover.itx).confirmIntegrationMove({ offer })).rejects.toThrow(
+    /expired/,
+  );
+});
+
+test("Slack: a move whose cleanup at the holder fails says so, the holder's token is refused within the route re-check meanwhile, and the same offer finishes it", async () => {
+  const holder = await projectWithMember("slack-cleanup");
+  const petshop = petshopFakes();
+  await connected(petshop, holder, "slack", "team=T8CLEAN");
+  const mover = await otherProject(holder, "slack-cleanup-mover");
+  const offer = moveOfferOf(await consented(petshop, mover, "slack", "team=T8CLEAN"));
+  // the holder's release of its route fails once, before its secret goes
+  const prepare = env.DB.prepare.bind(env.DB);
+  const prepares = vi.spyOn(env.DB, "prepare").mockImplementation((sql: string) => {
+    if (!sql.startsWith("delete from integration_routes\nwhere provider")) return prepare(sql);
+    prepares.mockRestore();
+    throw new Error("D1 is unavailable");
+  });
+  await expect(projectFacet(mover.itx).confirmIntegrationMove({ offer })).rejects.toThrow(
+    /press Move again/,
+  );
+  // moved already: the route and the connection are the mover's
+  expect(await catalog().integrationRoute("slack", "T8CLEAN")).toMatchObject({
+    projectId: mover.projectId,
+  });
+  await vi.waitFor(async () =>
+    expect(await integrationsOf(mover.itx)).toMatchObject({
+      "/integrations/slack/acme": { externalId: "T8CLEAN" },
+    }),
+  );
+  // the holder's connection and secret still stand, but past the re-check its token no longer
+  // speaks for the workspace
+  expect(await integrationsOf(holder.itx)).toMatchObject({
+    "/integrations/slack/acme": { externalId: "T8CLEAN" },
+  });
+  vi.useFakeTimers({ toFake: ["Date"] });
+  onTestFinished(() => void vi.useRealTimers());
+  vi.setSystemTime(Date.now() + 31_000);
+  const refused = await slackAuthTest(holder.itx);
+  vi.useRealTimers();
+  expect({ status: refused.status, text: await refused.text() }).toMatchObject({
+    status: 502,
+    text: expect.stringContaining("Slack workspace T8CLEAN is connected to another project"),
+  });
+  await projectFacet(mover.itx).confirmIntegrationMove({ offer });
+  await vi.waitFor(async () => expect(await integrationsOf(holder.itx)).toEqual({}));
+  expect(await disconnectedFacts(holder.projectId, "slack")).toEqual([
+    { connection: "acme", reason: "moved" },
+  ]);
+  expect(await secretPathsOf(holder.itx)).not.toContain("/secrets/slack-acme");
+  await expect(projectFacet(mover.itx).confirmIntegrationMove({ offer })).rejects.toThrow(
+    /expired/,
+  );
+});
+
+test("Slack: the token a move offer held is deleted when the offer runs out, on the secret's own alarm, even after a new incarnation revived it early", async () => {
+  const holder = await projectWithMember("slack-expiry");
+  const petshop = petshopFakes();
+  await connected(petshop, holder, "slack", "team=T10GONE");
+  const mover = await otherProject(holder, "slack-expiry-mover");
+  const { authorizationUrl } = await projectFacet(mover.itx).connectIntegration({
+    provider: "slack",
+    connection: "acme",
+    client: "iterate",
+    next: NEXT,
+  });
+  // the consent's nonce, which the platform's own admit names (the callback's signed state)
+  const { nonce } = offerClaimsOf(new URL(authorizationUrl).searchParams.get("state")!) as {
+    nonce: string;
+  };
+  moveOfferOf(await followConsent(petshop, `${authorizationUrl}&team=T10GONE`, mover.cookie));
+  const secretContext = DurableObjectNameCodec.stringify({
+    projectId: mover.projectId,
+    path: "/secrets/slack-acme",
+  });
+  // a new incarnation: the secret facet's claim falls due at its birth, long before the offer ends
+  await releasePins(secretContext);
+  await evictDurableObject(stub(secretContext));
+  expect(await runDurableObjectAlarm(stub(secretContext))).toBe(true);
+  vi.useFakeTimers({ toFake: ["Date"] });
+  onTestFinished(() => void vi.useRealTimers());
+  vi.setSystemTime(Date.now() + 10 * 60_000 + 1_000);
+  expect(await runDurableObjectAlarm(stub(secretContext))).toBe(true);
+  vi.useRealTimers();
+  const admitted = await Promise.resolve(
+    stub(mover.projectId).invoke(
+      ["itx", "builtins", "secrets", ["admitHeldToken", "/secrets/slack-acme", { nonce }]],
+      [],
+      { principal: null, platform: true },
+    ),
+  ).then(
+    () => "admitted",
+    (error: unknown) => String(error),
+  );
+  expect(admitted).toMatch(/no token is held/);
+});
+
+test("Slack: a holder that disconnects while its cleanup is pending revokes nothing, and its own app's connection of the same workspace survives the retry", async () => {
+  const holder = await projectWithMember("slack-late-holder");
+  const petshop = petshopFakes();
+  await connected(petshop, holder, "slack", "team=T13LATE");
+  const mover = await otherProject(holder, "slack-late-mover");
+  const offer = moveOfferOf(await consented(petshop, mover, "slack", "team=T13LATE"));
+  const prepare = env.DB.prepare.bind(env.DB);
+  const prepares = vi.spyOn(env.DB, "prepare").mockImplementation((sql: string) => {
+    if (!sql.startsWith("delete from integration_routes\nwhere provider")) return prepare(sql);
+    prepares.mockRestore();
+    throw new Error("D1 is unavailable");
+  });
+  await expect(projectFacet(mover.itx).confirmIntegrationMove({ offer })).rejects.toThrow(
+    /press Move again/,
+  );
+  // the holder's own disconnect: the route is the mover's, so the workspace's token is not revoked
+  await projectFacet(holder.itx).disconnectIntegration({ provider: "slack", connection: "acme" });
+  expect(await petshop.state.getState()).toMatchObject({ revokedRefreshTokenIds: [] });
+  expect(await (await slackAuthTest(mover.itx)).json()).toMatchObject({ team_id: "T13LATE" });
+  // …and it connects the same workspace again through an app of its own
+  const app = await petshop.state.createClient({});
+  await holder.itx.secrets.set(
+    "/secrets/slack-acme",
+    { ...app, signingSecret: "own-signing-secret" },
+    { urls: ["https://slack.test"] },
+  );
+  await connected(petshop, holder, "slack", "team=T13LATE", { client: "project" });
+  await projectFacet(mover.itx).confirmIntegrationMove({ offer });
+  await vi.waitFor(async () =>
+    expect(await integrationsOf(holder.itx)).toMatchObject({
+      "/integrations/slack/acme": { client: "project", externalId: "T13LATE" },
+    }),
+  );
+  expect(await disconnectedFacts(holder.projectId, "slack")).toEqual([{ connection: "acme" }]);
+});
+
+test("Slack: a move whose connect fails after the holder took another workspace at the same connection releases the moved one, and the holder keeps its new route", async () => {
+  const holder = await projectWithMember("slack-rollback");
+  const petshop = petshopFakes();
+  await connected(petshop, holder, "slack", "team=T16X");
+  const mover = await otherProject(holder, "slack-rollback-mover");
+  const offer = moveOfferOf(await consented(petshop, mover, "slack", "team=T16X"));
+  // The move's proof (the first auth.test once armed) waits for the holder to connect another
+  // workspace at `acme`, then fails. Flags, polled: a promise one side resolves would run the
+  // other's continuation in the wrong Durable Object's I/O context.
+  let armed = false;
+  let proofReached = false;
+  let holderReplaced = false;
+  const answered = vi.mocked(globalThis.fetch).getMockImplementation()!;
+  vi.mocked(globalThis.fetch).mockImplementation(async (input, init) => {
+    const request = new Request(input, init);
+    if (!armed || request.url !== "https://slack.test/api/auth.test") return answered(request);
+    armed = false;
+    proofReached = true;
+    for (const until = Date.now() + 5_000; !holderReplaced && Date.now() < until;)
+      await scheduler.wait(20);
+    return Response.json({ ok: false, error: "account_inactive" });
+  });
+  armed = true;
+  const moved = projectFacet(mover.itx).confirmIntegrationMove({ offer });
+  await vi.waitFor(() => expect(proofReached).toBe(true));
+  await projectFacet(holder.itx).disconnectIntegration({ provider: "slack", connection: "acme" });
+  await connected(petshop, holder, "slack", "team=T16Y");
+  holderReplaced = true;
+  await expect(moved).rejects.toThrow(/auth\.test/);
+  expect(await catalog().integrationRoute("slack", "T16Y")).toEqual({
+    projectId: holder.projectId,
+    path: "/integrations/slack/acme",
+  });
+  expect(await catalog().integrationRoute("slack", "T16X")).toBeNull();
+  expect(await integrationsOf(mover.itx)).toEqual({});
+});
+
+test("Slack: a move whose held token is gone leaves what the destination's secret holds alone", async () => {
+  const holder = await projectWithMember("slack-replaced");
+  const petshop = petshopFakes();
+  await connected(petshop, holder, "slack", "team=T14KEEP");
+  const mover = await otherProject(holder, "slack-replaced-mover");
+  const offer = moveOfferOf(await consented(petshop, mover, "slack", "team=T14KEEP"));
+  // the destination writes the connection's secret meanwhile, which drops the held token
+  await mover.itx.secrets.set(
+    "/secrets/slack-acme",
+    { accessToken: "the destination's own" },
+    { urls: ["https://slack.test"] },
+  );
+  await expect(projectFacet(mover.itx).confirmIntegrationMove({ offer })).rejects.toThrow(
+    /no token is held/,
+  );
+  expect(await catalog().integrationRoute("slack", "T14KEEP")).toMatchObject({
+    projectId: holder.projectId,
+  });
+  expect(await secretPathsOf(mover.itx)).toContain("/secrets/slack-acme");
+});
+
+test("Slack: a token stored before its record named its workspace is refused too, once its workspace moved, whatever was merged into it", async () => {
+  const holder = await projectWithMember("slack-legacy");
+  const petshop = petshopFakes();
+  await connected(petshop, holder, "slack", "team=T15OLD");
+  // the holder's secret as a record from before `routedAccount`: iterate's app's token alone
+  await holder.itx.secrets.set(
+    "/secrets/slack-acme",
+    { accessToken: await slackBotToken(petshop, "T15OLD") },
+    { urls: ["https://slack.test"] },
+  );
+  // an app's field merged in does not make it the project's own app's token
+  await holder.itx.secrets.set(
+    "/secrets/slack-acme",
+    { clientId: "not-an-app" },
+    { urls: ["https://slack.test"], merge: true },
+  );
+  const mover = await otherProject(holder, "slack-legacy-mover");
+  const offer = moveOfferOf(await consented(petshop, mover, "slack", "team=T15OLD"));
+  const prepare = env.DB.prepare.bind(env.DB);
+  const prepares = vi.spyOn(env.DB, "prepare").mockImplementation((sql: string) => {
+    if (!sql.startsWith("delete from integration_routes\nwhere provider")) return prepare(sql);
+    prepares.mockRestore();
+    throw new Error("D1 is unavailable");
+  });
+  await expect(projectFacet(mover.itx).confirmIntegrationMove({ offer })).rejects.toThrow(
+    /press Move again/,
+  );
+  // past the re-check of the route the holder's own connect read
+  vi.useFakeTimers({ toFake: ["Date"] });
+  onTestFinished(() => void vi.useRealTimers());
+  vi.setSystemTime(Date.now() + 31_000);
+  const refused = await slackAuthTest(holder.itx);
+  vi.useRealTimers();
+  expect({ status: refused.status, text: await refused.text() }).toMatchObject({
+    status: 502,
+    text: expect.stringContaining("Slack workspace T15OLD is connected to another project"),
+  });
+});
+
+test("Slack: a move that fails to connect puts the team's route back and keeps no token here", async () => {
+  const holder = await projectWithMember("slack-restore");
+  const petshop = petshopFakes();
+  await connected(petshop, holder, "slack", "team=T9BACK");
+  const mover = await otherProject(holder, "slack-restore-mover");
+  const offer = moveOfferOf(await consented(petshop, mover, "slack", "team=T9BACK"));
+  // Slack refuses the moved token's auth.test: the proof fails once the token is in the secret
+  const answered = vi.mocked(globalThis.fetch).getMockImplementation()!;
+  vi.mocked(globalThis.fetch).mockImplementation(async (input, init) => {
+    const request = new Request(input, init);
+    if (request.url === "https://slack.test/api/auth.test")
+      return Response.json({ ok: false, error: "account_inactive" });
+    return answered(request);
+  });
+  await expect(projectFacet(mover.itx).confirmIntegrationMove({ offer })).rejects.toThrow(
+    /auth\.test/,
+  );
+  expect(await catalog().integrationRoute("slack", "T9BACK")).toEqual({
+    projectId: holder.projectId,
+    path: "/integrations/slack/acme",
+  });
+  expect(await integrationsOf(mover.itx)).toEqual({});
+  expect(await secretPathsOf(mover.itx)).not.toContain("/secrets/slack-acme");
+  expect(await integrationsOf(holder.itx)).toMatchObject({
+    "/integrations/slack/acme": { externalId: "T9BACK" },
+  });
+  expect(await disconnectedFacts(holder.projectId, "slack")).toEqual([]);
 });
 
 // ── Google ──
@@ -470,8 +832,10 @@ test("GitHub: an installation another project holds is offered to move here; con
   const landing = new URL(back.headers.get("location")!);
   expect(landing.href.split("?")[0]).toBe(NEXT);
   const offer = landing.searchParams.get("move")!;
-  expect(JSON.parse(atob(base64(offer.split(".")[0]!)))).toMatchObject({
-    kind: "github-move",
+  expect(offerClaimsOf(offer)).toMatchObject({
+    kind: "integration-move",
+    provider: "github",
+    externalId: "9701",
     account: "org-9701",
     holderSlug: "github-held",
   });
@@ -481,7 +845,7 @@ test("GitHub: an installation another project holds is offered to move here; con
   });
   expect(await integrationsOf(mover.itx)).toEqual({});
 
-  await projectFacet(mover.itx).confirmGithubMove({ offer });
+  await projectFacet(mover.itx).confirmIntegrationMove({ offer });
   expect(await catalog().integrationRoute("github", "9701")).toEqual({
     projectId: mover.projectId,
     path: "/integrations/github/acme",
@@ -492,7 +856,7 @@ test("GitHub: an installation another project holds is offered to move here; con
     });
     expect(await integrationsOf(holder.itx)).toEqual({});
   });
-  expect(await disconnectedFacts(holder.projectId)).toEqual([
+  expect(await disconnectedFacts(holder.projectId, "github")).toEqual([
     { connection: "acme", reason: "moved" },
   ]);
   const push = { installation: { id: 9701 } };
@@ -500,7 +864,9 @@ test("GitHub: an installation another project holds is offered to move here; con
   expect(await webhooksOn(mover.projectId, "/integrations/github/acme")).toHaveLength(1);
   expect(await webhooksOn(holder.projectId, "/integrations/github/acme")).toEqual([]);
   // the offer is spent
-  await expect(projectFacet(mover.itx).confirmGithubMove({ offer })).rejects.toThrow(/expired/);
+  await expect(projectFacet(mover.itx).confirmIntegrationMove({ offer })).rejects.toThrow(
+    /expired/,
+  );
 });
 
 test("GitHub: an offer for an installation its holder has since given up moves nothing, and leaves the holder's new installation alone", async () => {
@@ -513,7 +879,7 @@ test("GitHub: an offer for an installation its holder has since given up moves n
   // the holder's connection takes another installation meanwhile
   await registerIterateInstallation(petshop, { installationId: "9802" });
   await connected(petshop, holder, "github", "installation_id=9802");
-  await expect(projectFacet(mover.itx).confirmGithubMove({ offer })).rejects.toThrow(
+  await expect(projectFacet(mover.itx).confirmIntegrationMove({ offer })).rejects.toThrow(
     /moved meanwhile/,
   );
   expect(await catalog().integrationRoute("github", "9801")).toBeNull();
@@ -526,7 +892,7 @@ test("GitHub: an offer for an installation its holder has since given up moves n
       "/integrations/github/acme": { externalId: "9802" },
     }),
   );
-  expect(await disconnectedFacts(holder.projectId)).toEqual([]);
+  expect(await disconnectedFacts(holder.projectId, "github")).toEqual([]);
 });
 
 test("GitHub: the project that lost an installation stops using it, even at another secret path it minted it at, within the route re-check", async () => {
@@ -553,7 +919,7 @@ test("GitHub: the project that lost an installation stops using it, even at anot
   const mover = await otherProject(holder, "github-lost-mover");
   const back = await consented(petshop, mover, "github", "installation_id=9811");
   const offer = new URL(back.headers.get("location")!).searchParams.get("move")!;
-  await projectFacet(mover.itx).confirmGithubMove({ offer });
+  await projectFacet(mover.itx).confirmIntegrationMove({ offer });
   // past the re-check, within the token's own life (the fake's installation tokens last 60 s)
   vi.useFakeTimers({ toFake: ["Date"] });
   onTestFinished(() => void vi.useRealTimers());
@@ -595,7 +961,7 @@ test("GitHub: a secret that minted an installation's token and is set again with
   const mover = await otherProject(holder, "github-strip-mover");
   const back = await consented(petshop, mover, "github", "installation_id=9841");
   const offer = new URL(back.headers.get("location")!).searchParams.get("move")!;
-  await projectFacet(mover.itx).confirmGithubMove({ offer });
+  await projectFacet(mover.itx).confirmIntegrationMove({ offer });
   const refused = await installationRepositories(holder.itx, "/secrets/github-copy");
   expect({ status: refused.status, text: await refused.text() }).toMatchObject({
     status: 502,
@@ -636,7 +1002,7 @@ test("GitHub: the holder reconnecting to another installation while a move's cle
     };
     return statement;
   });
-  const moved = projectFacet(mover.itx).confirmGithubMove({ offer });
+  const moved = projectFacet(mover.itx).confirmIntegrationMove({ offer });
   await vi.waitFor(() => expect(cleanupReached).toBe(true));
   await connected(petshop, holder, "github", "installation_id=9852");
   reconnected = true;
@@ -664,7 +1030,7 @@ test("GitHub: a move whose cleanup at the holder fails says so, and the same off
   const offer = new URL(back.headers.get("location")!).searchParams.get("move")!;
   const holderRoot = stub(holder.projectId);
   await holderRoot.append({ type: "events.iterate.com/itx/paused", payload: { reason: "test" } });
-  await expect(projectFacet(mover.itx).confirmGithubMove({ offer })).rejects.toThrow(
+  await expect(projectFacet(mover.itx).confirmIntegrationMove({ offer })).rejects.toThrow(
     /press Move again/,
   );
   // moved already: the route is the mover's
@@ -672,13 +1038,15 @@ test("GitHub: a move whose cleanup at the holder fails says so, and the same off
     projectId: mover.projectId,
   });
   await holderRoot.append({ type: "events.iterate.com/itx/resumed", payload: {} });
-  await projectFacet(mover.itx).confirmGithubMove({ offer });
+  await projectFacet(mover.itx).confirmIntegrationMove({ offer });
   await vi.waitFor(async () => expect(await integrationsOf(holder.itx)).toEqual({}));
-  expect(await disconnectedFacts(holder.projectId)).toEqual([
+  expect(await disconnectedFacts(holder.projectId, "github")).toEqual([
     { connection: "acme", reason: "moved" },
   ]);
   // done: the offer is spent now
-  await expect(projectFacet(mover.itx).confirmGithubMove({ offer })).rejects.toThrow(/expired/);
+  await expect(projectFacet(mover.itx).confirmIntegrationMove({ offer })).rejects.toThrow(
+    /expired/,
+  );
 });
 
 test("GitHub: a move that fails to connect puts both installations' routes back where they were", async () => {
@@ -700,7 +1068,7 @@ test("GitHub: a move that fails to connect puts both installations' routes back 
     account: { login: "org-9831" },
     users: [{ login: "admin-9831", role: "admin" }],
   });
-  await expect(projectFacet(mover.itx).confirmGithubMove({ offer })).rejects.toThrow(
+  await expect(projectFacet(mover.itx).confirmIntegrationMove({ offer })).rejects.toThrow(
     /Minting the installation's token failed/,
   );
   expect(await catalog().integrationRoute("github", "9831")).toEqual({
@@ -721,10 +1089,12 @@ test("GitHub: a move offer is refused for another project, and one someone forge
   const back = await consented(petshop, mover, "github", "installation_id=9702");
   const offer = new URL(back.headers.get("location")!).searchParams.get("move")!;
   const third = await otherProject(holder, "github-third-2");
-  await expect(projectFacet(third.itx).confirmGithubMove({ offer })).rejects.toThrow(/expired/);
+  await expect(projectFacet(third.itx).confirmIntegrationMove({ offer })).rejects.toThrow(
+    /expired/,
+  );
   const [payload, signature] = offer.split(".");
   const forged = `${btoa(atob(base64(payload!)).replace("github-held-2", "x")).replaceAll("=", "")}.${signature}`;
-  await expect(projectFacet(mover.itx).confirmGithubMove({ offer: forged })).rejects.toThrow(
+  await expect(projectFacet(mover.itx).confirmIntegrationMove({ offer: forged })).rejects.toThrow(
     /expired/,
   );
   expect(await catalog().integrationRoute("github", "9702")).toMatchObject({
@@ -817,7 +1187,7 @@ function projectFacet(itx: Member["itx"]) {
   // `facets.get` answers the SDK's facet shell over the wire; the class it hosts is ours.
   return itx.cd("/").facets.get("project") as Pick<
     ProjectDurableObject,
-    "connectIntegration" | "disconnectIntegration" | "confirmGithubMove"
+    "connectIntegration" | "disconnectIntegration" | "confirmIntegrationMove"
   > & { snapshot(): Promise<{ state: ProjectState }> };
 }
 
@@ -892,6 +1262,42 @@ function installationRepositories(itx: Member["itx"], secretPath: string): Promi
   return itx.fetch(
     new Request("https://github.test/installation/repositories", {
       headers: { authorization: bearerOf(secretPath) },
+    }),
+  );
+}
+
+/** A bot token of iterate's app (the fake's default client) for `team`, minted at the fake directly. */
+async function slackBotToken(petshop: Petshop, team: string): Promise<string> {
+  const redirectUri = `${ORIGIN}/api/integrations/slack/callback`;
+  const authorize = new URL("https://slack.test/oauth/v2/authorize");
+  for (const [key, value] of Object.entries({
+    client_id: "petshop-default",
+    redirect_uri: redirectUri,
+    team,
+  }))
+    authorize.searchParams.set(key, value);
+  const consent = (await petshop.handle(new Request(authorize, { redirect: "manual" })))!;
+  const code = new URL(consent.headers.get("location")!).searchParams.get("code")!;
+  const exchange = (await petshop.handle(
+    new Request("https://slack.test/api/oauth.v2.access", {
+      method: "POST",
+      body: new URLSearchParams({
+        client_id: "petshop-default",
+        client_secret: "petshop-default-secret",
+        code,
+        redirect_uri: redirectUri,
+      }),
+    }),
+  ))!;
+  return ((await exchange.json()) as { access_token: string }).access_token;
+}
+
+/** Slack's auth.test with the connection's token, through egress. */
+function slackAuthTest(itx: Member["itx"]): Promise<Response> {
+  return itx.fetch(
+    new Request("https://slack.test/api/auth.test", {
+      method: "POST",
+      headers: { authorization: bearerOf("/secrets/slack-acme") },
     }),
   );
 }
@@ -1035,9 +1441,20 @@ function base64(base64url: string) {
   return plain + "=".repeat((4 - (plain.length % 4)) % 4);
 }
 
-/** Every `github/disconnected` on a project's root. */
-async function disconnectedFacts(projectId: string) {
+/** Every `<provider>/disconnected` on a project's root. */
+async function disconnectedFacts(projectId: string, provider: "slack" | "github") {
   return (await readLog(projectId))
-    .filter((event) => event.type === "events.iterate.com/github/disconnected")
+    .filter((event) => event.type === `events.iterate.com/${provider}/disconnected`)
     .map((event) => event.payload);
+}
+
+/** A move offer's claims: its signed token's payload, base64url JSON before the signature. */
+function offerClaimsOf(offer: string): unknown {
+  return JSON.parse(atob(base64(offer.split(".")[0]!)));
+}
+
+/** The move offer a callback's landing carries (`?move=`). */
+function moveOfferOf(back: Response): string {
+  expect(back, `the callback answered ${back.status}`).toMatchObject({ status: 303 });
+  return new URL(back.headers.get("location")!).searchParams.get("move")!;
 }
