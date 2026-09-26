@@ -75,9 +75,9 @@ Use `health()` before and after an air-path proof.
 speaker, checks board microphone uplink, playout and transcript, then hangs up;
 never run it on a board in use.
 
-The legacy `spkDrops` counter counts response-start controls, even when no PCM
-is queued. Use `spkDiscarded` for discarded PCM, `spkSupersededMidplay` for
-replacement during playback, `spkOverflow` for queue admission loss, and
+`spkAnswerStarts` counts answers, even ones that queued no PCM. Use
+`spkDiscarded` for discarded PCM, `spkSupersededMidplay` for replacement during
+playback, `spkOverflow` for queue admission loss, and
 `spkStarvedMs`/`spkStarveEvents` for hardware starvation. Compare before/after
 deltas; lifetime codec counters can include startup activity.
 

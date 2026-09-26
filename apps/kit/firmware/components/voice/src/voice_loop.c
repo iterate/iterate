@@ -309,9 +309,8 @@ EXT_RAM_BSS_ATTR static struct {
   uint32_t answers_started;
   /** Answers that replaced speaker audio not yet heard. */
   uint32_t answers_superseded_midplay;
-  /* Replacement controls observed, and the time of the latest one. */
-  uint32_t speaker_drops;
-  uint32_t last_drop_uptime_ms;
+  /* Board uptime when the latest answer started. */
+  uint32_t last_answer_start_uptime_ms;
   uint32_t voice_stream_generation;
   /* Health serialization must fit completely; truncation is not sent. */
   char stats_buffer[2816];
@@ -680,9 +679,7 @@ static void on_control(
      * and disarms its starvation accounting on this task. */
     if (abandon_speaker_audio() > 0U) ++runtime.answers_superseded_midplay;
     ++runtime.answers_started;
-    /* Timestamp the local observation for health diagnostics. */
-    ++runtime.speaker_drops;
-    runtime.last_drop_uptime_ms = (uint32_t)(esp_timer_get_time() / 1000);
+    runtime.last_answer_start_uptime_ms = (uint32_t)(esp_timer_get_time() / 1000);
     atomic_store_explicit(
         &runtime.answer_declared_done, false, memory_order_release);
     runtime.view.screen = ITERATE_KIT_VOICE_SCREEN_LISTENING;
@@ -2021,11 +2018,9 @@ static size_t health_json(char *out, size_t capacity) {
     {"spkAnswerStarts", runtime.answers_started},
     /* The subset that cost the listener audio: superseded while still playing. */
     {"spkSupersededMidplay", runtime.answers_superseded_midplay},
-    /* Drops obeyed, and the board uptime at the last one. Compare against
-     * `uptimeMs` in this same payload to get how long ago it happened, on
-     * a clock that owes nothing to the event stream. */
-    {"spkDrops", runtime.speaker_drops},
-    {"spkLastDropUptimeMs", runtime.last_drop_uptime_ms},
+    /* Compare against `uptimeMs` in this same payload to get how long ago the
+     * latest answer started, on a clock that owes nothing to the event stream. */
+    {"spkLastAnswerStartUptimeMs", runtime.last_answer_start_uptime_ms},
     {"spkWaitPriming", runtime.playout.stats.waits_priming},
     {"spkAnswerDrains", runtime.playout.stats.waits_dry},
     {"batches", runtime.voice_stream->batches_on_connection},
