@@ -499,6 +499,72 @@ test("Slack: a move whose connect fails after the holder took another workspace 
   expect(await integrationsOf(mover.itx)).toEqual({});
 });
 
+test("Slack: a move whose connect and whose route rollback both fail still spends its offer and keeps no token here", async () => {
+  const holder = await projectWithMember("slack-rollback-fails");
+  const petshop = petshopFakes();
+  await connected(petshop, holder, "slack", "team=T17UNDO");
+  const mover = await otherProject(holder, "slack-rollback-fails-mover");
+  const offer = moveOfferOf(await consented(petshop, mover, "slack", "team=T17UNDO"));
+  const answered = vi.mocked(globalThis.fetch).getMockImplementation()!;
+  vi.mocked(globalThis.fetch).mockImplementation(async (input, init) => {
+    const request = new Request(input, init);
+    if (request.url === "https://slack.test/api/auth.test")
+      return Response.json({ ok: false, error: "account_inactive" });
+    return answered(request);
+  });
+  // the move's route update lands; the rollback's (the second) fails
+  let updates = 0;
+  const prepare = env.DB.prepare.bind(env.DB);
+  vi.spyOn(env.DB, "prepare").mockImplementation((sql: string) => {
+    if (sql.startsWith("update integration_routes") && ++updates === 2)
+      throw new Error("D1 is unavailable");
+    return prepare(sql);
+  });
+  await expect(projectFacet(mover.itx).confirmIntegrationMove({ offer })).rejects.toThrow(
+    /auth\.test/,
+  );
+  expect(await secretPathsOf(mover.itx)).not.toContain("/secrets/slack-acme");
+  await expect(projectFacet(mover.itx).confirmIntegrationMove({ offer })).rejects.toThrow(
+    /expired/,
+  );
+});
+
+test("Slack: a disconnect revokes nothing once another project routed the workspace the moment it was released", async () => {
+  const holder = await projectWithMember("slack-snatched");
+  const petshop = petshopFakes();
+  await connected(petshop, holder, "slack", "team=T18SNATCH");
+  const other = await otherProject(holder, "slack-snatcher");
+  // right after the holder's release of its route, another project routes the workspace
+  const prepare = env.DB.prepare.bind(env.DB);
+  const prepares = vi.spyOn(env.DB, "prepare").mockImplementation((sql: string) => {
+    const statement = prepare(sql);
+    if (!sql.startsWith("delete from integration_routes\nwhere provider")) return statement;
+    prepares.mockRestore();
+    const bind = statement.bind.bind(statement);
+    statement.bind = (...args: unknown[]) => {
+      const bound = bind(...args);
+      const run = bound.run.bind(bound);
+      bound.run = (async () => {
+        const result = await run();
+        await catalog().routeIntegration(
+          "slack",
+          "T18SNATCH",
+          other.projectId,
+          "/integrations/slack/acme",
+        );
+        return result;
+      }) as typeof bound.run;
+      return bound;
+    };
+    return statement;
+  });
+  await projectFacet(holder.itx).disconnectIntegration({ provider: "slack", connection: "acme" });
+  expect(await petshop.state.getState()).toMatchObject({ revokedRefreshTokenIds: [] });
+  expect(await catalog().integrationRoute("slack", "T18SNATCH")).toMatchObject({
+    projectId: other.projectId,
+  });
+});
+
 test("Slack: a move whose held token is gone leaves what the destination's secret holds alone", async () => {
   const holder = await projectWithMember("slack-replaced");
   const petshop = petshopFakes();

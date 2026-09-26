@@ -24,6 +24,7 @@ import {
   integrationRoute,
   moveIntegrationRoute,
   releaseIntegrationRoute,
+  restoreIntegrationRoute,
   releaseIntegrationRoutes,
   releaseOtherIntegrationRoutes,
   releaseRoutesOfDeletedProject,
@@ -769,6 +770,30 @@ export class ControlPlaneDatabase {
       "INVALID_INPUT",
       `The ${provider} account '${externalId}' moved meanwhile — connect it again.`,
     );
+  }
+  /** A FAILED MOVE'S UNDO: the route back from `from` to the connection it came from (`to`), only
+   *  while `from` still holds it and `to` holds no route at all — a connection that took another
+   *  account since keeps that one, and never gains a second. One statement; answers whether it went
+   *  back. */
+  async restoreIntegrationRoute(
+    provider: string,
+    externalId: string,
+    from: { projectId: string; path: string },
+    to: { projectId: string; path: string },
+  ): Promise<boolean> {
+    const restored = await restoreIntegrationRoute(
+      this.#client,
+      { toProjectId: to.projectId, toPath: to.path },
+      {
+        provider,
+        externalId,
+        fromProjectId: from.projectId,
+        fromPath: from.path,
+        toProjectId: to.projectId,
+        toPath: to.path,
+      },
+    );
+    return Boolean(restored.rowsAffected);
   }
   /** Release ONE account's route, only while the connection at `path` holds it: a connection that
    *  took another account since keeps that one's. Answers whether it held it — one statement, so a

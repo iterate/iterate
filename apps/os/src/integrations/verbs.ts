@@ -405,15 +405,33 @@ export async function confirmIntegrationMove(
         await connectGithubInstallation(scope, connection, attempt, externalId, account, "held");
       else await connectMovedSlackTeam(scope, connection, attempt, move);
     } catch (error) {
-      // Back to the holder only while its connection still names this account: one that took
-      // another since keeps that one's route (a move back releases the holder's other routes).
-      const holderRow = await connectionRowOf(env, holder.projectId, holder.path);
-      if (holderRow?.client === "iterate" && holderRow.externalId === externalId)
-        await controlPlane.moveIntegrationRoute(provider, externalId, { projectId, path }, holder);
-      else await controlPlane.releaseIntegrationRoute(provider, externalId, projectId, path);
-      if (before?.client === "iterate" && before.externalId !== externalId)
-        await controlPlane.routeIntegration(provider, before.externalId, projectId, path);
-      await abandon();
+      try {
+        // Back to the holder only while its connection still names this account and holds no other
+        // route (`restoreIntegrationRoute`, one statement); else it is released from here.
+        const holderRow = await connectionRowOf(env, holder.projectId, holder.path);
+        const restored =
+          holderRow?.client === "iterate" &&
+          holderRow.externalId === externalId &&
+          (await controlPlane.restoreIntegrationRoute(
+            provider,
+            externalId,
+            { projectId, path },
+            holder,
+          ));
+        if (!restored)
+          await controlPlane.releaseIntegrationRoute(provider, externalId, projectId, path);
+        if (before?.client === "iterate" && before.externalId !== externalId)
+          await controlPlane.routeIntegration(provider, before.externalId, projectId, path);
+      } catch (rollbackError) {
+        reportIssue("integrations.move-rollback", rollbackError, {
+          provider,
+          externalId,
+          projectId,
+          holderProjectId: holder.projectId,
+        });
+      } finally {
+        await abandon();
+      }
       throw error;
     }
     await scope.storage.put<MovableAttempt>(key, { ...attempt, move: { ...move, stage: "moved" } });

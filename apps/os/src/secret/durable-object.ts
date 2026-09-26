@@ -781,10 +781,13 @@ export class SecretDurableObject extends StreamProcessorDurableObject<
     else await this.withItx((itx) => itx.processors.claim(this.ctx.props.name, held.until));
   }
 
-  /** WHAT A FAILED MOVE LEFT OF ITS CONSENT: the held token, dropped here (`held`); or the record, when
-   *  it is still the one that consent's admit stored (`admitted`, for the built-in to delete like any
-   *  other — a write since is someone else's, and stays); or nothing (`gone`). */
-  async dropHeldToken(input: { nonce: string }): Promise<"held" | "admitted" | "gone"> {
+  /** WHAT A FAILED MOVE LEFT OF ITS CONSENT, gone: the held token (`held`); or the record, cleared,
+   *  while it is still the one that consent's admit stored — checked and cleared with storage alone
+   *  between, so a write since (someone else's) stays — answering what the clear ended for the
+   *  built-in's facts; or nothing (`gone`). */
+  async dropHeldToken(input: {
+    nonce: string;
+  }): Promise<"held" | "gone" | { lends: EndedLends; borrowed: Borrowed | null }> {
     const held = await this.ctx.storage.get<HeldExchange>("held");
     if (held?.nonce === input.nonce) {
       await this.ctx.storage.delete("held");
@@ -792,9 +795,8 @@ export class SecretDurableObject extends StreamProcessorDurableObject<
     }
     const completed = await this.ctx.storage.get<{ nonce: string; revision: number }>("completed");
     const stored = await this.ctx.storage.get<Stored>("stored");
-    return completed?.nonce === input.nonce && stored?.revision === completed.revision
-      ? "admitted"
-      : "gone";
+    if (completed?.nonce !== input.nonce || stored?.revision !== completed.revision) return "gone";
+    return this.clear();
   }
 
   /** Substitute, pin, dispatch — refresh and retry once on a mintable miss or a 401. A refusal is

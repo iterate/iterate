@@ -260,14 +260,14 @@ async function admitHeldToken(scope: IntegrationScope, connection: string, nonce
 }
 
 /** WHAT A FAILED MOVE LEFT OF ITS CONSENT, gone: the held token, or the token its admit stored while
- *  the secret still holds that one (deleted like any other); a write since is someone else's. */
+ *  the secret still holds that one; a write since is someone else's (secret/durable-object.ts
+ *  `dropHeldToken`). */
 export async function dropHeldSlackToken(
   scope: IntegrationScope,
   connection: string,
   nonce: string,
 ): Promise<void> {
-  // the built-in's own answer (context/built-ins.ts `dropHeldToken`)
-  const left = (await scope.env.ITERATE_CONTEXT.getByName(
+  await scope.env.ITERATE_CONTEXT.getByName(
     DurableObjectNameCodec.stringify({ projectId: scope.projectId, path: "/" }),
   ).invoke(
     [
@@ -278,8 +278,7 @@ export async function dropHeldSlackToken(
     ],
     [],
     { principal: null, platform: true },
-  )) as "held" | "admitted" | "gone";
-  if (left === "admitted") await deleteTokenSecret(scope, "slack", connection);
+  );
 }
 
 /** The workspace the connection's token is for: Slack's `auth.test` through egress. */
@@ -330,13 +329,15 @@ export async function disconnectSlack(
   if (moved) await controlPlane.releaseIntegrationRoute("slack", moved.externalId, projectId, path);
   else {
     // Slack keeps one bot token per app and workspace, so revoking iterate's app's ends it for every
-    // connection of the workspace: only the connection that still holds the route may, which its
-    // own release answers (one statement: a move of the route and this release never both win). A
-    // moved workspace's token is the one now connected where it went. A project's own app routes
-    // nothing.
+    // connection of the workspace: only the connection that still held the route may, which its
+    // own release answers (one statement: a move of the route and this release never both win),
+    // and only while no project routed the workspace since — read again, fresh, right before the
+    // revoke. A moved workspace's token is the one now connected where it went. A project's own app
+    // routes nothing.
     const revokes =
       row?.client === "iterate"
-        ? await controlPlane.releaseIntegrationRoute("slack", row.externalId, projectId, path)
+        ? (await controlPlane.releaseIntegrationRoute("slack", row.externalId, projectId, path)) &&
+          !(await controlPlane.integrationRouteOf("slack", row.externalId))
         : row?.client === "project";
     // a token already dead is the goal, so the revoke is best-effort
     if (row && revokes)

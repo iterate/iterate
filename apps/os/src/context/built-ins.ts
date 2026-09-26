@@ -111,8 +111,8 @@ type PlatformSecretsVerbs = {
    *  the token its consent's exchange held aside (secret/durable-object.ts `admitHeldToken`) stored,
    *  then `secret/set`, like `completeOAuth`. You never call it. */
   admitHeldToken(path: string, input: { nonce: string }): Promise<{ path: string }>;
-  /** The platform's, when that move failed: the held token dropped, or `admitted` when the record
-   *  is still the one it stored (the caller deletes it). You never call it. */
+  /** The platform's, when that move failed: the held token dropped, or the record deleted while it
+   *  is still the one the admit stored (`admitted`, with `secret/deleted`). You never call it. */
   dropHeldToken(path: string, input: { nonce: string }): Promise<"held" | "admitted" | "gone">;
   revokeLend(
     path: string,
@@ -1233,12 +1233,30 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
       },
       dropHeldToken: (secretPath, input) => {
         assertPlatformCaller("secrets.dropHeldToken");
-        return onSecretContext(
-          secretPath,
-          ["dropHeldToken", secretPath, input],
+        return onSecretContext(secretPath, ["dropHeldToken", secretPath, input], async (secret) => {
           // the platform's own SecretDurableObject.dropHeldToken's declared answer, `unknown` over the hop
-          async () => (await secretFacet(["dropHeldToken", input])) as "held" | "admitted" | "gone",
-        );
+          const dropped = (await secretFacet(["dropHeldToken", input])) as
+            | "held"
+            | "gone"
+            | {
+                lends: Record<string, { to: string; as: string; borrowers: string[] }>;
+                borrowed: { lender: string; lenderPath: string; lendId: string } | null;
+              };
+          if (typeof dropped === "string") return dropped;
+          // the admitted record, cleared in the facet: its deletion's facts, as `delete` lands them
+          await secretFact(secret, {
+            type: "events.iterate.com/secret/deleted",
+            payload: { path: secretPath },
+          });
+          await endLendsOf(secret, secretPath, dropped);
+          if ((await secretRows(secret)).some((row) => row.name === "secret"))
+            await secret.invoke(
+              ["itx", "builtins", "processors", ["disable", "secret"]],
+              [],
+              hopCaller(),
+            );
+          return "admitted";
+        });
       },
       // The facet FIRST here, the reverse of `set`: each verb runs its steps in the order whose
       // crash window fails LOUD. A clear not yet followed by its fact leaves a log that says set

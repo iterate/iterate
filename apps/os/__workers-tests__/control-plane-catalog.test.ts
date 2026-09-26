@@ -721,6 +721,28 @@ test("integration routes: released by the connection (project and path), after w
   ]);
 });
 
+test("integration routes: a failed move's undo returns the route only while the move still holds it and the connection it came from holds none; a release answers whether it held the route", async () => {
+  await emptyTables();
+  const shop = await c.createProject(admin, { project: "shop" });
+  const blog = await c.createProject(admin, { project: "blog" });
+  const held = { projectId: shop.id, path: "/integrations/slack/acme" };
+  const moved = { projectId: blog.id, path: "/integrations/slack/acme" };
+  await c.routeIntegration("slack", "T1", held.projectId, held.path);
+  await c.moveIntegrationRoute("slack", "T1", held, moved);
+  // the holder took another workspace at the same connection meanwhile: T1 stays where it moved
+  await c.routeIntegration("slack", "T2", held.projectId, held.path);
+  expect(await c.restoreIntegrationRoute("slack", "T1", moved, held)).toBe(false);
+  expect(await c.integrationRoute("slack", "T1")).toEqual(moved);
+  expect(await c.integrationRoute("slack", "T2")).toEqual(held);
+  // once the holder's connection holds nothing, the undo lands
+  expect(await c.releaseIntegrationRoute("slack", "T2", held.projectId, held.path)).toBe(true);
+  expect(await c.releaseIntegrationRoute("slack", "T2", held.projectId, held.path)).toBe(false);
+  expect(await c.restoreIntegrationRoute("slack", "T1", moved, held)).toBe(true);
+  expect(await c.integrationRoute("slack", "T1")).toEqual(held);
+  // and only from where the move put it
+  expect(await c.restoreIntegrationRoute("slack", "T1", moved, held)).toBe(false);
+});
+
 test("integration routes: a deleted project's routes go with its row, so another project may route the account; a refused deletion keeps them", async () => {
   await emptyTables();
   const shop = await c.createProject(admin, { project: "shop" });

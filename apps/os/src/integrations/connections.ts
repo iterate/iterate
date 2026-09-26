@@ -107,7 +107,10 @@ export type HeldToken = { externalId: string; account: string; until: number };
 /** How long a move offer stands: the human reads one sentence and presses one button. */
 export const MOVE_OFFER_TTL_MS = 10 * 60_000;
 
-const PROVIDER_TITLES: Record<RoutedProvider, string> = { slack: "Slack", github: "GitHub" };
+const PROVIDER_TITLES = { slack: "Slack", github: "GitHub" } satisfies Record<
+  RoutedProvider,
+  string
+>;
 
 /** The provider and connection a move offer names, read before its signature is checked — for
  *  serializing its confirmation on that connection only; `confirmIntegrationMove` verifies it. */
