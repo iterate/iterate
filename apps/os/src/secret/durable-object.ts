@@ -760,12 +760,16 @@ export class SecretDurableObject extends StreamProcessorDurableObject<
     return { urls: held.record.urls, refresh: held.record.refresh?.kind };
   }
 
-  /** THE REVIVE the context's alarm owes this facet — also when a held token's offer ran out
-   *  (`completeOAuth` claims it for `until`): that token is dropped first. */
+  /** THE REVIVE the context's alarm owes this facet — also for a held token's offer running out
+   *  (`completeOAuth` claims it for `until`): a token past it is dropped. A revive before then (a new
+   *  incarnation's: a first-party facet's claim falls due at its context's birth) spent that claim,
+   *  so the offer's end is claimed again. */
   override async revive(): Promise<void> {
-    const held = await this.ctx.storage.get<HeldExchange>("held");
-    if (held && held.until <= Date.now()) await this.ctx.storage.delete("held");
     await super.revive();
+    const held = await this.ctx.storage.get<HeldExchange>("held");
+    if (!held) return;
+    if (held.until <= Date.now()) await this.ctx.storage.delete("held");
+    else await this.withItx((itx) => itx.processors.claim(this.ctx.props.name, held.until));
   }
 
   /** THE HELD TOKEN DROPPED: its move failed, so it will never be admitted. */
