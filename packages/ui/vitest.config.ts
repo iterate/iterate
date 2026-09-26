@@ -7,6 +7,7 @@ export default defineConfig({
     restoreMocks: true,
     unstubGlobals: true,
     unstubEnvs: true,
+    chaiConfig: { truncateThreshold: 0 },
     silent: "passed-only",
   },
 });

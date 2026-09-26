@@ -43,6 +43,13 @@ The Cloudflare refusal table in `apps/os/__workers-tests__/identity.test.ts`
 is a model: each refusal case as a row of data with a literal expected status,
 `$name` as the title, and one assertion body.
 
+A `$field` title prints the row's value quoted and whole: every vitest config
+(each `apps/os` project too) sets `chaiConfig: { truncateThreshold: 0 }`, where
+Vitest's default cuts it at 40 characters with `…`. The same setting prints a
+failed assertion's values whole. `test.for`'s options apply to every row, so a
+per-row bound such as a timeout goes to the code it bounds
+(`memory-budget.test.ts` passes each row's timeout to its child process).
+
 Expectations are literals a reviewer can read against the row's inputs — not
 snapshots. `.toMatchInlineSnapshot()` regenerates on demand, which turns
 review into accepting machine output and lets wrong output get ratified; it's
