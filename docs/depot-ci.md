@@ -868,10 +868,11 @@ waits that out. A preview redeployed in place has no such window, but it has ano
 releases the new version eventually consistently, so for a while an edge can still serve the
 previous version and a brand-new Durable Object can still start on it, and an object on it later
 resets with "Durable Object reset because its code was updated.", failing every call in flight. So
-each of the gate's probes also asks which version its edge and four brand-new contexts run (the
-operator's `session.versions`), and the gate passes once five rounds in a row run the deployment
-everywhere. It fails the deploy after 150 s. A PR's preview, redeployed in place on every push, goes
-through the same gate.
+each of the gate's probes also asks which version its edge and two brand-new contexts run (the
+operator's `session.versions`), and the gate passes once three rounds in a row run the deployment
+everywhere. The gate starts as soon as `wrangler preview` returns, with no `/version` smoke before
+it: the edge's version it asks for is the id `/version` answers with. It fails the deploy after
+150 s. A PR's preview, redeployed in place on every push, goes through the same gate.
 
 Soaks of the e2e suite at `--retry=0` (`os-e2e-soak.yml`), every run redeployed in place. With e2e
 as soon as a gate without the version check passed, 7 of 48 runs had a row fail on a platform
@@ -880,8 +881,12 @@ the deploy's start to the first test took 173 s at the median (p90 182 s). With 
 (2026-09-25, 17 runs, before and after the control plane moved to D1) it took 42 s (p90 72 s): stale
 rounds held 12 of the 17 gates, for up to 42 s, and every "code was updated" reset landed on a probe
 inside a gate. One row failed on a platform signature, a socket dropped 2 s after the gate with no
-trace on the Worker's side. A storage reset or a dropped socket can still fail a row in any shape,
-and CI's one retry absorbs it.
+trace on the Worker's side. With three rounds of two contexts and no `/version` smoke before them
+(2026-09-26, 21 in-place and 18 brand-new runs, beside 21 and 19 runs of five rounds of four after
+the smoke), `wrangler preview`'s return to the first test took 16.5 s at the median in place (p90
+25 s, against 22.8 s and 34 s) and 14.7 s brand-new (p90 21 s, against 19.8 s and 39 s), and no row
+failed on a deploy signature (two rows in one brand-new run of the five-round gate). A storage reset
+or a dropped socket can still fail a row in any shape, and CI's one retry absorbs it.
 
 - Each workflow's runs are serialized (`cancel-in-progress: false`), so no deploy lands under another
   run's tests.
