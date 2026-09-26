@@ -15,6 +15,8 @@ import { test } from "vitest";
 import { projectUrlOf, type IngressRouting } from "iterate/project-ingress";
 import { adminCredentials, runId, session, workerSlot, workerUrl } from "./client.ts";
 
+export { publishConfigWorker } from "./config-worker.ts";
+
 const LOCAL_HOSTNAMES = new Set(["localhost", "127.0.0.1"]);
 const worker = (): URL => new URL(workerUrl("/"));
 /** Is the worker under test the LOCAL one global-setup booted (its project hosts hang under
@@ -136,18 +138,6 @@ const projectHostUrl = (scheme: "http" | "ws", host: string, path: string): stri
 export async function registerProject(slug: string, as?: { email: string }): Promise<string> {
   using itx = await session().authenticate(adminCredentials(as)).projects.create({ project: slug });
   return (await itx.whoami()).projectId;
-}
-
-/** Publish `target` as the project's config worker — what EVERY host of the project reaches, the
- *  routing slug in `x-iterate-routing-slug` — once the project's own creation saga has settled: the
- *  saga publishes the seeded config repo, and an append before it lands would be overwritten. */
-export async function publishConfigWorker(itx: any, target: unknown): Promise<void> {
-  await itx.waitForEvent({
-    type: ["events.iterate.com/project/created", "events.iterate.com/project/create-failed"],
-    afterOffset: 0,
-    timeoutMs: 60_000,
-  });
-  await itx.append({ type: "events.iterate.com/itx/ingress-configured", payload: { target } });
 }
 
 /** A fresh project slug — a DNS label, the one the project's hosts carry (`freshCtx` names carry
