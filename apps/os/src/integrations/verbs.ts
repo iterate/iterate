@@ -313,6 +313,18 @@ export async function disconnectIntegration(
   // the connection since took another account, or the same one through its own app (or none):
   // nothing of the moved one is left here
   if (moved && (row?.externalId !== moved.externalId || row.client !== "iterate")) return;
+  // …or it holds the account's route again (a move back): the move away is undone, not its cleanup
+  if (moved) {
+    const route = await new ControlPlane(scope.env).integrationRouteOf(
+      input.provider,
+      moved.externalId,
+    );
+    if (
+      route?.projectId === scope.projectId &&
+      route.path === connectionPathOf(input.provider, connection)
+    )
+      return;
+  }
   if (row?.ownerUserId) return disconnectPersonalAccount(scope, row);
   if (input.provider === "slack") await disconnectSlack(scope, connection, row || null, moved);
   else if (input.provider === "google")
@@ -327,39 +339,10 @@ export async function disconnectIntegration(
     );
 }
 
-/** A failed move's undo, asked of the holder (`restoreMovedIntegrationRoute`). */
-export type RestoreMovedRouteInput = {
-  provider: IntegrationProvider;
-  connection: string;
-  externalId: string;
-  /** Where the move put the route: the destination connection. */
-  from: { projectId: string; path: string };
-};
-
-/** A FAILED MOVE'S UNDO, on the holder — the platform's alone (context/built-ins.ts
- *  `integrations.restoreMovedRoute`), run on the holder connection's queue, so none of its own
- *  disconnects or connects interleaves: the route comes back only while the connection still names
- *  the account through iterate's app, and only while the move still holds it and the connection holds
- *  no other route (catalog.ts `restoreIntegrationRoute`). Answers whether it came back. */
-export async function restoreMovedIntegrationRoute(
-  scope: IntegrationScope,
-  integrations: Record<string, IntegrationConnectionRow>,
-  input: RestoreMovedRouteInput,
-): Promise<boolean> {
-  const path = connectionPathOf(input.provider, assertConnectionName(input?.connection));
-  const row = integrations[path];
-  if (row?.client !== "iterate" || row.externalId !== input.externalId) return false;
-  return new ControlPlane(scope.env).restoreIntegrationRoute(
-    input.provider,
-    input.externalId,
-    input.from,
-    { projectId: scope.projectId, path },
-  );
-}
-
-/** How long a move waits on the holder connection's own queue (its cleanup, a failed move's undo):
- *  two moves crossing between the same two connections each hold their own queue while waiting on
- *  the other's, so the wait is bounded, and a holder that does not answer is one that failed. */
+/** How long a move waits on the holder connection's own queue for its cleanup: two moves crossing
+ *  between the same two connections each hold their own queue while their cleanups wait on the
+ *  other's, so the wait is bounded, and a cleanup with no answer is one that failed (the same offer
+ *  retries it). */
 const HOLDER_QUEUE_WAIT_MS = 10_000;
 
 /** The claims of a move offer (connections.ts `IntegrationMoveOffer`), once its signature checked. */
@@ -447,46 +430,31 @@ export async function confirmIntegrationMove(
       else await connectMovedSlackTeam(scope, connection, attempt, move);
     } catch (error) {
       try {
-        // Back to the holder only while its connection still names this account (asked on its own
-        // queue, `restoreMovedIntegrationRoute`); else it is released from here. The platform's own
-        // call, which answers a boolean. An undo with no answer in time is no undo: the release
-        // below leaves a late one nothing to move back.
-        const undo = env.ITERATE_CONTEXT.getByName(
-          DurableObjectNameCodec.stringify({ projectId: holder.projectId, path: "/" }),
-        ).invoke(
-          [
-            "itx",
-            "builtins",
-            "integrations",
-            [
-              "restoreMovedRoute",
-              {
-                provider,
-                connection: holder.path.slice(`/integrations/${provider}/`.length),
-                externalId,
-                from: { projectId, path },
-              } satisfies RestoreMovedRouteInput,
-            ],
-          ],
-          [],
-          { principal: null, platform: true },
-        );
-        const restored = await withTimeout(
-          Promise.resolve(undo).then((answer: unknown) => answer === true),
-          HOLDER_QUEUE_WAIT_MS,
-          "the holder's undo of the move",
-        ).catch((undoError: unknown) => {
-          if (errorCode(undoError) !== "TIMEOUT") throw undoError;
-          reportIssue("integrations.move-undo-timeout", undoError, {
+        // Back to the holder only while its connection still names this account, in one statement
+        // that never displaces another route (`restoreIntegrationRoute`); else released from here.
+        // Read again once it is back: a holder that disconnected meanwhile released its routes
+        // before this one returned, so it goes again.
+        const holderNamesIt = async () => {
+          const row = await connectionRowOf(env, holder.projectId, holder.path);
+          return row?.client === "iterate" && row.externalId === externalId;
+        };
+        const restored =
+          (await holderNamesIt()) &&
+          (await controlPlane.restoreIntegrationRoute(
             provider,
             externalId,
-            projectId,
-            holderProjectId: holder.projectId,
-          });
-          return false;
-        });
+            { projectId, path },
+            holder,
+          ));
         if (!restored)
           await controlPlane.releaseIntegrationRoute(provider, externalId, projectId, path);
+        else if (!(await holderNamesIt()))
+          await controlPlane.releaseIntegrationRoute(
+            provider,
+            externalId,
+            holder.projectId,
+            holder.path,
+          );
         if (before?.client === "iterate" && before.externalId !== externalId)
           await controlPlane.routeIntegration(provider, before.externalId, projectId, path);
       } catch (rollbackError) {

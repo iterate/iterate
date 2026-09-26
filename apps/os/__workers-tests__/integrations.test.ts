@@ -648,7 +648,7 @@ test("Slack: a move whose connect fails does not route the workspace back to a h
   await vi.waitFor(async () => expect(await integrationsOf(holder.itx)).toEqual({}));
 });
 
-test("Slack: a move back confirmed while a move's proof runs does not deadlock the two: each gives up its wait on the other in time, and the move back finishes", async () => {
+test("Slack: a move back confirmed while a move's proof runs does not deadlock the two: the failed move's undo waits on no other project, and the move back finishes", async () => {
   const holder = await projectWithMember("slack-crossed");
   const petshop = petshopFakes();
   await connected(petshop, holder, "slack", "team=T21BACK");
@@ -682,15 +682,64 @@ test("Slack: a move back confirmed while a move's proof runs does not deadlock t
   );
   movedBack = true;
   await expect(moving).rejects.toThrow(/auth\.test/);
-  // Each waited on the other's queue, and whichever waited first gave up within the bound: the
-  // move's undo, or the move back's cleanup ("press Move again"), which the same offer finishes.
-  await returning.catch(() => projectFacet(holder.itx).confirmIntegrationMove({ offer: back }));
+  await returning;
   expect(await catalog().integrationRoute("slack", "T21BACK")).toEqual({
     projectId: holder.projectId,
     path: "/integrations/slack/acme",
   });
   expect(await integrationsOf(mover.itx)).toEqual({});
   expect(await secretPathsOf(mover.itx)).not.toContain("/secrets/slack-acme");
+});
+
+test("Slack: a move and a move back that both land leave the workspace with the project that took it last, and neither cleanup disconnects it", async () => {
+  const holder = await projectWithMember("slack-both-land");
+  const petshop = petshopFakes();
+  await connected(petshop, holder, "slack", "team=T22BOTH");
+  const mover = await otherProject(holder, "slack-both-land-mover");
+  const offer = moveOfferOf(await consented(petshop, mover, "slack", "team=T22BOTH"));
+  // The move's proof (the first auth.test once armed) waits for the move back to take the route,
+  // then passes. Flags, polled, as above.
+  let armed = false;
+  let proofReached = false;
+  let movedBack = false;
+  const answered = vi.mocked(globalThis.fetch).getMockImplementation()!;
+  vi.mocked(globalThis.fetch).mockImplementation(async (input, init) => {
+    const request = new Request(input, init);
+    if (!armed || request.url !== "https://slack.test/api/auth.test") return answered(request);
+    armed = false;
+    proofReached = true;
+    for (const until = Date.now() + 20_000; !movedBack && Date.now() < until;)
+      await scheduler.wait(20);
+    return answered(request);
+  });
+  armed = true;
+  const moving = projectFacet(mover.itx).confirmIntegrationMove({ offer });
+  await vi.waitFor(() => expect(proofReached).toBe(true));
+  const back = moveOfferOf(await consented(petshop, holder, "slack", "team=T22BOTH"));
+  const returning = projectFacet(holder.itx).confirmIntegrationMove({ offer: back });
+  await vi.waitFor(async () =>
+    expect(await catalog().integrationRoute("slack", "T22BOTH")).toMatchObject({
+      projectId: holder.projectId,
+    }),
+  );
+  movedBack = true;
+  // Each cleanup waits on the other's queue; whichever gives up first ("press Move again") is
+  // finished by pressing Move again, once the other is done.
+  await Promise.all([
+    moving.catch(() => projectFacet(mover.itx).confirmIntegrationMove({ offer })),
+    returning.catch(() => projectFacet(holder.itx).confirmIntegrationMove({ offer: back })),
+  ]);
+  expect(await catalog().integrationRoute("slack", "T22BOTH")).toEqual({
+    projectId: holder.projectId,
+    path: "/integrations/slack/acme",
+  });
+  await vi.waitFor(async () => {
+    expect(await integrationsOf(holder.itx)).toMatchObject({
+      "/integrations/slack/acme": { externalId: "T22BOTH" },
+    });
+    expect(await integrationsOf(mover.itx)).toEqual({});
+  });
+  expect(await (await slackAuthTest(holder.itx)).json()).toMatchObject({ team_id: "T22BOTH" });
 });
 
 test("Slack: a move whose held token is gone leaves what the destination's secret holds alone", async () => {

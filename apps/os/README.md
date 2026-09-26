@@ -247,8 +247,10 @@ connection still names the account and holds no other route, `restoreIntegration
 destination's previous one included, and keeps no token here.
 When the holder's cleanup fails, the confirmation says so and the same offer retries the cleanup
 alone; the offer works once otherwise, and the callback again lands on the same offer. A move waits
-at most 10 s on the holder connection's queue (its cleanup, a failed move's undo), so two moves
-crossing between the same connections never wait on each other for good. Either way
+at most 10 s on the holder connection's queue for its cleanup, so two moves crossing between the
+same connections never wait on each other for good, and a cleanup never disconnects a connection
+that holds the account's route again. A failed move's undo waits on no other project: it restores
+from the mover's side and releases again if the holder disconnected meanwhile. Either way
 the holder stops using the account: a secret facet re-reads the route of an iterate-App
 installation, or of iterate's Slack app's workspace, at most every 30 s of use and refuses a token
 for one routed to another project (`#assertInstallationRouted`, `#assertWorkspaceNotMoved`; a Slack

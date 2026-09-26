@@ -113,8 +113,8 @@ export const UNIT_ROW_WARN_EXEMPTIONS: Record<string, string> = {
     "a heap-capped child process; its cursor watchdogs keep it alive after its report",
   "cursor rows: 20 behind cursor rows and ONE commit — the commit path drains them under the in-flight budget, never a page per row at once":
     "a heap-capped child process",
-  "Slack: a move back confirmed while a move's proof runs does not deadlock the two: each gives up its wait on the other in time, and the move back finishes":
-    "waits a move's real 10 s bound on the holder connection's queue",
+  "Slack: a move and a move back that both land leave the workspace with the project that took it last, and neither cleanup disconnects it":
+    "waits a move's real 10 s bound on the holder connection's queue for its cleanup",
 };
 
 /**

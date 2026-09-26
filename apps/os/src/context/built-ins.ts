@@ -50,7 +50,6 @@ import type {
   ConnectInput,
   FinishConnectAnswer,
   FinishConnectInput,
-  RestoreMovedRouteInput,
 } from "../integrations/verbs.ts";
 import { missingScopes } from "../integrations/rules.ts";
 import type { ProjectState } from "../project/contract.ts";
@@ -154,16 +153,14 @@ type PlatformSecretsVerbs = {
 };
 
 /** THE PLATFORM'S OWN `itx.integrations` VERBS — not published, the platform's hops alone
- *  (`assertPlatformCaller`): a person's connect a project asked for, on the person's own root; the
- *  OAuth callback's finish, on the owner's root; and a failed move's undo, on the holder's root.
- *  Each reaches its first-party facet's method that the facet does not publish
- *  (integrations/verbs.ts). */
+ *  (`assertPlatformCaller`): a person's connect a project asked for, on the person's own root, and
+ *  the OAuth callback's finish, on the owner's root. Each reaches its first-party facet's method that
+ *  the facet does not publish (integrations/verbs.ts). */
 type PlatformIntegrationsVerbs = {
   connectForProject(
     input: ConnectInput & { connectToProject: NonNullable<ConnectionAttempt["connectToProject"]> },
   ): Promise<{ authorizationUrl: string }>;
   finishConnect(input: FinishConnectInput): Promise<FinishConnectAnswer>;
-  restoreMovedRoute(input: RestoreMovedRouteInput): Promise<boolean>;
 };
 
 /** THE built-in scope, as one interface — the platform's kernel surface; the library's verbs
@@ -1719,18 +1716,6 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
         return (await deps.callFacetAsPlatform(integrationsFacet("finishConnect"), [
           ["finishIntegrationConnect", input],
         ])) as FinishConnectAnswer;
-      },
-      restoreMovedRoute: async (input) => {
-        assertPlatformCaller("integrations.restoreMovedRoute");
-        if (projectId === GLOBAL_PROJECT_ID || path !== owner.rootPath)
-          throw codedError(
-            "INVALID_CONTEXT",
-            "itx.integrations.restoreMovedRoute: a project's root",
-          );
-        // the project facet's own answer (integrations/verbs.ts `restoreMovedIntegrationRoute`)
-        return (await deps.callFacetAsPlatform("project", [
-          ["restoreMovedIntegrationRoute", input],
-        ])) as boolean;
       },
     },
     fetchRoutes: {
