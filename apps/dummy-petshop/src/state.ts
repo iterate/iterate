@@ -83,7 +83,7 @@ export interface PetshopState {
   /** Per-client revocation epochs. A token seals the epoch for its `clientId`,
    * so concurrent integration tests can expire their own credentials without
    * invalidating an unrelated client's freshly refreshed token. An id with a colon is one
-   * account's (`graphqlSessionAccountClientId`, `tescoLoginClientId`), and the
+   * account's (`graphqlSessionAccountClientId`, `tesco-login:<email>`), and the
    * `MINTED_RECORDS_KEPT` most recently revoked accounts are kept; a minted client's epoch goes
    * with the client. */
   accessTokenEpochs: Record<string, number>;
