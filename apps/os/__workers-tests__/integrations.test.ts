@@ -565,6 +565,89 @@ test("Slack: a disconnect revokes nothing once another project routed the worksp
   });
 });
 
+test("Slack: a holder that connects its own app to the same workspace while its cleanup is pending keeps that connection, and the retry leaves it alone", async () => {
+  const holder = await projectWithMember("slack-own-late");
+  const petshop = petshopFakes();
+  await connected(petshop, holder, "slack", "team=T19OWN");
+  const mover = await otherProject(holder, "slack-own-late-mover");
+  const offer = moveOfferOf(await consented(petshop, mover, "slack", "team=T19OWN"));
+  const prepare = env.DB.prepare.bind(env.DB);
+  const prepares = vi.spyOn(env.DB, "prepare").mockImplementation((sql: string) => {
+    if (!sql.startsWith("delete from integration_routes\nwhere provider")) return prepare(sql);
+    prepares.mockRestore();
+    throw new Error("D1 is unavailable");
+  });
+  await expect(projectFacet(mover.itx).confirmIntegrationMove({ offer })).rejects.toThrow(
+    /press Move again/,
+  );
+  // the holder's connection, still iterate's app's, reconnects through an app of its own, past the
+  // re-check of the route its first connect read
+  vi.useFakeTimers({ toFake: ["Date"] });
+  onTestFinished(() => void vi.useRealTimers());
+  vi.setSystemTime(Date.now() + 31_000);
+  const app = await petshop.state.createClient({});
+  await holder.itx.secrets.set(
+    "/secrets/slack-acme",
+    { ...app, signingSecret: "own-signing-secret" },
+    { urls: ["https://slack.test"] },
+  );
+  await connected(petshop, holder, "slack", "team=T19OWN", { client: "project" });
+  vi.useRealTimers();
+  await projectFacet(mover.itx).confirmIntegrationMove({ offer });
+  await vi.waitFor(async () =>
+    expect(await integrationsOf(holder.itx)).toMatchObject({
+      "/integrations/slack/acme": { client: "project", externalId: "T19OWN" },
+    }),
+  );
+  expect(await (await slackAuthTest(holder.itx)).json()).toMatchObject({ team_id: "T19OWN" });
+});
+
+test("Slack: a move whose connect fails does not route the workspace back to a holder that disconnects during the undo", async () => {
+  const holder = await projectWithMember("slack-undo-race");
+  const petshop = petshopFakes();
+  await connected(petshop, holder, "slack", "team=T20RACE");
+  const mover = await otherProject(holder, "slack-undo-race-mover");
+  const offer = moveOfferOf(await consented(petshop, mover, "slack", "team=T20RACE"));
+  const answered = vi.mocked(globalThis.fetch).getMockImplementation()!;
+  vi.mocked(globalThis.fetch).mockImplementation(async (input, init) => {
+    const request = new Request(input, init);
+    if (request.url === "https://slack.test/api/auth.test" && !restoreReached)
+      return Response.json({ ok: false, error: "account_inactive" });
+    return answered(request);
+  });
+  // The undo's restore statement waits for the holder's disconnect, or two seconds for one that
+  // waits for the undo. Flags, polled, as above.
+  let restoreReached = false;
+  let holderDisconnected = false;
+  const prepare = env.DB.prepare.bind(env.DB);
+  const prepares = vi.spyOn(env.DB, "prepare").mockImplementation((sql: string) => {
+    const statement = prepare(sql);
+    if (!sql.startsWith("update integration_routes") || !sql.includes("not exists"))
+      return statement;
+    prepares.mockRestore();
+    const bind = statement.bind.bind(statement);
+    statement.bind = (...args: unknown[]) => {
+      const bound = bind(...args);
+      const run = bound.run.bind(bound);
+      bound.run = (async () => {
+        restoreReached = true;
+        for (const until = Date.now() + 2_000; !holderDisconnected && Date.now() < until;)
+          await scheduler.wait(20);
+        return run();
+      }) as typeof bound.run;
+      return bound;
+    };
+    return statement;
+  });
+  const moved = projectFacet(mover.itx).confirmIntegrationMove({ offer });
+  await vi.waitFor(() => expect(restoreReached).toBe(true));
+  await projectFacet(holder.itx).disconnectIntegration({ provider: "slack", connection: "acme" });
+  holderDisconnected = true;
+  await expect(moved).rejects.toThrow(/auth\.test/);
+  expect(await catalog().integrationRoute("slack", "T20RACE")).toBeNull();
+  await vi.waitFor(async () => expect(await integrationsOf(holder.itx)).toEqual({}));
+});
+
 test("Slack: a move whose held token is gone leaves what the destination's secret holds alone", async () => {
   const holder = await projectWithMember("slack-replaced");
   const petshop = petshopFakes();

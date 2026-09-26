@@ -114,6 +114,11 @@ type OAuthPlatform = NonNullable<
 type Stored = {
   record: Omit<SecretRecord, "material"> & { material: EncryptedMaterial };
   revision: number;
+  /** Issued here — an OAuth completion or a held token's admit — since records name the workspace
+   *  their token is routed by: `routedAccount` names it, or the record has none. A record written
+   *  otherwise (before that, or by `itx.secrets.set`) has no mark, and a Slack connection's row names
+   *  its workspace (`#routedAccountOf`); a merge keeps the mark it found, as it keeps the token. */
+  routedAccountKnown?: true;
 };
 
 /** A CONSENT'S EXCHANGE HELD ASIDE (storage `held`): iterate's Slack app's token for a workspace
@@ -214,7 +219,7 @@ export class SecretDurableObject extends StreamProcessorDurableObject<
    *  minted under one strategy — an installation's, which its route guards — never outlives it
    *  under another, or under none. The caller (`itx.secrets.set`) has appended the fact already;
    *  this is the value. */
-  async write(record: SecretRecord, merge = false): Promise<void> {
+  async write(record: SecretRecord, merge = false, issued = false): Promise<void> {
     const stored = merge ? await this.ctx.storage.get<Stored>("stored") : undefined;
     if (stored) {
       // the pin travels with the material it guards: a merge never moves stored material elsewhere
@@ -232,7 +237,10 @@ export class SecretDurableObject extends StreamProcessorDurableObject<
       };
     }
     const revision = await this.#bump();
-    await this.ctx.storage.put<Stored>("stored", await this.#sealed(record, revision));
+    await this.ctx.storage.put<Stored>("stored", {
+      ...(await this.#sealed(record, revision)),
+      routedAccountKnown: merge ? stored?.routedAccountKnown : issued || undefined,
+    });
     // A write supersedes any OAuth attempt in flight, a held one included: its callback must not
     // overwrite this material; and material of its own replaces a borrowed record.
     await this.ctx.storage.delete(["pending", "held", "borrowed"]);
@@ -268,7 +276,10 @@ export class SecretDurableObject extends StreamProcessorDurableObject<
     if (opened.rotated) {
       const current = await this.ctx.storage.get<Stored>("stored");
       if (current?.revision === stored.revision)
-        await this.ctx.storage.put<Stored>("stored", await this.#sealed(record, stored.revision));
+        await this.ctx.storage.put<Stored>("stored", {
+          ...stored,
+          ...(await this.#sealed(record, stored.revision)),
+        });
     }
     return record;
   }
@@ -695,7 +706,7 @@ export class SecretDurableObject extends StreamProcessorDurableObject<
         held: { externalId: slackTeam.id, account: slackTeam.name, until },
       };
     }
-    await this.write(record);
+    await this.write(record, false, true);
     const revision = await this.ctx.storage.get<number>("revision");
     await this.ctx.storage.put("completed", { nonce: input.nonce, revision, scopes });
     return { urls: record.urls, refresh: record.refresh?.kind, exchanged: true, scopes };
@@ -760,7 +771,7 @@ export class SecretDurableObject extends StreamProcessorDurableObject<
       { context: this.#address().context, urls: held.record.urls, revision: held.revision },
       this.#keys(),
     );
-    await this.write({ ...held.record, material });
+    await this.write({ ...held.record, material }, false, true);
     await this.ctx.storage.put("completed", {
       nonce: input.nonce,
       revision: await this.ctx.storage.get<number>("revision"),
@@ -847,7 +858,11 @@ export class SecretDurableObject extends StreamProcessorDurableObject<
       if (!stored) return null;
       if (!originPinned(request.url, stored.record.urls))
         throw pinRefusal(path, request.url, stored.record.urls);
-      return { revision: stored.revision, record: await this.#opened(stored) };
+      return {
+        revision: stored.revision,
+        record: await this.#opened(stored),
+        routedAccountKnown: stored.routedAccountKnown,
+      };
     };
     const used = (response: Response): Response => {
       this.ctx.waitUntil(
@@ -961,7 +976,8 @@ export class SecretDurableObject extends StreamProcessorDurableObject<
     this.#installationRouteReadAt.set(installationId, Date.now());
   }
 
-  /** THE WORKSPACE A STORED SLACK TOKEN IS FOR, when its record predates `routedAccount`: the token at
+  /** THE WORKSPACE A STORED SLACK TOKEN IS FOR, when its record predates `routedAccount` (it has no
+   *  `routedAccountKnown` mark): the token at
    *  a project's `/secrets/slack-<connection>` whose row says iterate's app is for the workspace that
    *  row names — the row, a platform fact, never the material a caller may merge into. Read once per
    *  record and incarnation, and kept on the stored record (outside the material's binding, so no
@@ -969,9 +985,10 @@ export class SecretDurableObject extends StreamProcessorDurableObject<
   async #routedAccountOf(stored: {
     revision: number;
     record: SecretRecord;
+    routedAccountKnown?: true;
   }): Promise<SecretRecord["routedAccount"]> {
     const { record, revision } = stored;
-    if (record.routedAccount) return record.routedAccount;
+    if (record.routedAccount || stored.routedAccountKnown) return record.routedAccount;
     const { context, path } = this.#address();
     const { projectId, path: contextPath } = DurableObjectNameCodec.parse(context);
     const connection = /^\/secrets\/slack-(.+)$/.exec(path)?.[1];
@@ -990,6 +1007,7 @@ export class SecretDurableObject extends StreamProcessorDurableObject<
       await this.ctx.storage.put<Stored>("stored", {
         ...current,
         record: { ...current.record, routedAccount },
+        routedAccountKnown: true,
       });
     return routedAccount;
   }
@@ -1082,10 +1100,10 @@ export class SecretDurableObject extends StreamProcessorDurableObject<
     }
     const current = await this.ctx.storage.get<Stored>("stored");
     if (current?.revision !== revision) return;
-    await this.ctx.storage.put<Stored>(
-      "stored",
-      await this.#sealed({ ...record, material: next }, revision),
-    );
+    await this.ctx.storage.put<Stored>("stored", {
+      ...current,
+      ...(await this.#sealed({ ...record, material: next }, revision)),
+    });
     await this.#fact({
       type: "events.iterate.com/secret/refreshed",
       payload: { kind: refresh.kind, ok: true },

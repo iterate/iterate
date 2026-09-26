@@ -327,6 +327,36 @@ export async function disconnectIntegration(
     );
 }
 
+/** A failed move's undo, asked of the holder (`restoreMovedIntegrationRoute`). */
+export type RestoreMovedRouteInput = {
+  provider: IntegrationProvider;
+  connection: string;
+  externalId: string;
+  /** Where the move put the route: the destination connection. */
+  from: { projectId: string; path: string };
+};
+
+/** A FAILED MOVE'S UNDO, on the holder — the platform's alone (context/built-ins.ts
+ *  `integrations.restoreMovedRoute`), run on the holder connection's queue, so none of its own
+ *  disconnects or connects interleaves: the route comes back only while the connection still names
+ *  the account through iterate's app, and only while the move still holds it and the connection holds
+ *  no other route (catalog.ts `restoreIntegrationRoute`). Answers whether it came back. */
+export async function restoreMovedIntegrationRoute(
+  scope: IntegrationScope,
+  integrations: Record<string, IntegrationConnectionRow>,
+  input: RestoreMovedRouteInput,
+): Promise<boolean> {
+  const path = connectionPathOf(input.provider, assertConnectionName(input?.connection));
+  const row = integrations[path];
+  if (row?.client !== "iterate" || row.externalId !== input.externalId) return false;
+  return new ControlPlane(scope.env).restoreIntegrationRoute(
+    input.provider,
+    input.externalId,
+    input.from,
+    { projectId: scope.projectId, path },
+  );
+}
+
 /** The claims of a move offer (connections.ts `IntegrationMoveOffer`), once its signature checked. */
 const MoveOfferClaims = z.object({
   kind: z.literal("integration-move"),
@@ -389,10 +419,16 @@ export async function confirmIntegrationMove(
     const controlPlane = new ControlPlane(env);
     // what this connection held before, whose route the move releases and a failure restores
     const before = await connectionRowOf(env, projectId, path);
-    // the offer is spent, and what its consent left here is dropped
+    // The offer is spent, and what its consent left here is dropped. A drop that fails (its
+    // `secret/deleted` lost after the clear, as a delete's can be) is reported, never thrown over
+    // the move's own error: the token's use is refused meanwhile, and the connection's next
+    // disconnect or connect finishes the secret.
     const abandon = async () => {
       await scope.storage.delete(key);
-      if (move.heldTokenNonce) await dropHeldSlackToken(scope, connection, move.heldTokenNonce);
+      if (move.heldTokenNonce)
+        await dropHeldSlackToken(scope, connection, move.heldTokenNonce).catch((error: unknown) =>
+          reportIssue("integrations.move-drop", error, { provider, externalId, projectId }),
+        );
     };
     try {
       await controlPlane.moveIntegrationRoute(provider, externalId, holder, { projectId, path });
@@ -406,18 +442,29 @@ export async function confirmIntegrationMove(
       else await connectMovedSlackTeam(scope, connection, attempt, move);
     } catch (error) {
       try {
-        // Back to the holder only while its connection still names this account and holds no other
-        // route (`restoreIntegrationRoute`, one statement); else it is released from here.
-        const holderRow = await connectionRowOf(env, holder.projectId, holder.path);
-        const restored =
-          holderRow?.client === "iterate" &&
-          holderRow.externalId === externalId &&
-          (await controlPlane.restoreIntegrationRoute(
-            provider,
-            externalId,
-            { projectId, path },
-            holder,
-          ));
+        // Back to the holder only while its connection still names this account (asked on its own
+        // queue, `restoreMovedIntegrationRoute`); else it is released from here. The platform's own
+        // call; `invoke` is untyped across the DO hop, and the built-in answers a boolean.
+        const restored = (await env.ITERATE_CONTEXT.getByName(
+          DurableObjectNameCodec.stringify({ projectId: holder.projectId, path: "/" }),
+        ).invoke(
+          [
+            "itx",
+            "builtins",
+            "integrations",
+            [
+              "restoreMovedRoute",
+              {
+                provider,
+                connection: holder.path.slice(`/integrations/${provider}/`.length),
+                externalId,
+                from: { projectId, path },
+              } satisfies RestoreMovedRouteInput,
+            ],
+          ],
+          [],
+          { principal: null, platform: true },
+        )) as boolean;
         if (!restored)
           await controlPlane.releaseIntegrationRoute(provider, externalId, projectId, path);
         if (before?.client === "iterate" && before.externalId !== externalId)

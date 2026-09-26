@@ -29,9 +29,11 @@ import {
   connectIntegration,
   disconnectIntegration,
   finishIntegrationConnect,
+  restoreMovedIntegrationRoute,
   type ConnectInput,
   type FinishConnectAnswer,
   type FinishConnectInput,
+  type RestoreMovedRouteInput,
 } from "../integrations/verbs.ts";
 import { connectWaitrose } from "../integrations/waitrose-connection.ts";
 import { EntityCollectionRpcTarget } from "./collection.ts";
@@ -235,6 +237,14 @@ export class ProjectDurableObject extends StreamProcessorDurableObject<
   }): Promise<void> {
     return this.#onConnection(input?.provider, input?.connection, (integrations) =>
       disconnectIntegration(this.#integrationScope(), integrations, input),
+    );
+  }
+
+  /** A FAILED MOVE'S UNDO, on this connection's queue — the mover's alone, not published
+   *  (context/built-ins.ts `integrations.restoreMovedRoute`, integrations/verbs.ts). */
+  restoreMovedIntegrationRoute(input: RestoreMovedRouteInput): Promise<boolean> {
+    return this.#onConnection(input?.provider, input?.connection, (integrations) =>
+      restoreMovedIntegrationRoute(this.#integrationScope(), integrations, input),
     );
   }
 

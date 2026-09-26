@@ -241,8 +241,10 @@ moves the route in one D1 batch that re-points it only while the holder still ho
 still names that account through iterate's app (`<provider>/disconnected { reason: "moved" }`, its
 secret gone). Slack keeps one bot token per app and workspace, so the moved workspace's token is not
 revoked, and an ordinary Slack disconnect revokes only when its own release of the route wins (one
-D1 statement, which a move of the route and the release never both win). A move that fails to
-connect puts the routes back, the destination's previous one included, and keeps no token here.
+D1 statement, which a move of the route and the release never both win) and no project routed the
+workspace since. A move that fails to connect puts the routes back (to the holder only while its
+connection still names the account and holds no other route, `restoreIntegrationRoute`), the
+destination's previous one included, and keeps no token here.
 When the holder's cleanup fails, the confirmation says so and the same offer retries the cleanup
 alone; the offer works once otherwise, and the callback again lands on the same offer. Either way
 the holder stops using the account: a secret facet re-reads the route of an iterate-App
