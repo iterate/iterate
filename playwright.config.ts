@@ -95,8 +95,7 @@ export default defineConfig({
       testDir: "specs/os",
       use: recordedAtViewport(desktopWebUse),
     },
-    // the OS issuer's pages once more at a phone's width, with touch. Main OS e2e runs it on every
-    // main push; a PR's Browser specs leave it out (SPEC_SKIP_PROJECTS in preview-os.yml).
+    // the OS issuer's pages once more at a phone's width, with touch (runs: docs/testing.md#suites)
     {
       name: "os-phone",
       testDir: "specs/os",

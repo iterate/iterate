@@ -767,8 +767,7 @@ test("Main OS e2e's two suite jobs are one definition, a PR preview's suite step
   }
 });
 
-// The specs at a phone's width run on main only: Main OS e2e runs every Playwright project, and a
-// PR's Browser specs every one but `os-phone` (SPEC_SKIP_PROJECTS in playwright.config.ts).
+// docs/testing.md#suites: which spec projects each workflow runs.
 test("a PR's Browser specs leave out os-phone, and Main OS e2e runs every spec project", async () => {
   expect(
     stepsAsRun(".depot/workflows/preview-os.yml", "specs").flatMap(
