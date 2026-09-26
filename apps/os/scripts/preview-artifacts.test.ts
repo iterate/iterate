@@ -10,8 +10,8 @@ import {
 const NAMESPACE = "os-preview-pr1-repos";
 const ROUTE = `/artifacts/namespaces/${NAMESPACE}`;
 
-// A failure of Cloudflare's own is sent again by the API client itself (env-context's `cf`, on the
-// module's rows in packages/shared/src/platform-retry.test.ts); what reaches the delete is its answer.
+// A failure of Cloudflare's own is sent again by the API client (env-context's `cloudflareApi`, and
+// its rows in env-context.test.ts); what reaches the delete is Cloudflare's answer.
 test("a refusal surfaces at once, never asked again", async () => {
   const api = fakeArtifactsApi(["prj_a.repos--config"], (method, path) =>
     method === "DELETE" ? new CloudflareApiError(method, path, 403, [{ code: 10000 }]) : undefined,

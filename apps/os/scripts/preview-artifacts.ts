@@ -112,9 +112,9 @@ export async function ensureArtifactsNamespace(
  *  deploy created one, a re-run of the cleanup job, the sweep racing the close job — is the
  *  expected case.
  *
- *  Every request here is idempotent, so the Cloudflare API sends one Cloudflare failed again itself
- *  (env-context's `cf`): the Artifacts API answered 500/10400 "An internal error occurred." on and
- *  off for nine minutes on 2026-09-23 (20:33–20:42 UTC).
+ *  Every request here is idempotent, so the Cloudflare API client sends one Cloudflare failed (an
+ *  Artifacts 500/10400 "An internal error occurred." among them) again itself
+ *  (env-context's `cloudflareApi`).
  *
  *  An empty namespace that keeps answering "not empty" for STUCK_AFTER_REFUSED_ROUNDS is Cloudflare's
  *  (StuckArtifactsNamespace): logged as `preview.platform-failure-stuck-namespace` and resolved to,

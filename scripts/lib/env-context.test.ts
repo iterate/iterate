@@ -24,8 +24,8 @@ test("native Node scripts can import and inspect Cloudflare API errors", () => {
   });
 });
 
-// What the Artifacts API answered two PR-close repo deletes on 2026-09-23, on and off for nine
-// minutes, and what a rate-limited preview deploy's D1 query met on 2026-07-14.
+// Cloudflare's answers: the Artifacts API's 500/10400 (recorded 2026-09-23 on a repo delete), its
+// rate limit's 429, and a refusal.
 test.for([
   {
     name: "a DELETE Cloudflare failed with a 5xx is sent again",
