@@ -3,7 +3,7 @@ import { mkdirSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { z } from "zod";
 
-export const TEST_TELEMETRY_ARTIFACT_SCHEMA_VERSION = 2;
+export const TEST_TELEMETRY_ARTIFACT_SCHEMA_VERSION = 3;
 export const TEST_TELEMETRY_INCOMPLETE_ERROR_NAME = "TestTelemetryIncompleteError";
 const Timestamp = z.iso.datetime({ offset: true });
 const RunStatus = z.enum(["passed", "failed", "skipped", "timedout", "interrupted", "cancelled"]);
@@ -14,119 +14,35 @@ const TestTelemetryError = z.object({
   stack: z.string().optional(),
 });
 
-const TestTelemetryPhase = z.object({
-  name: z.string(),
-  durationMs: z.number().nonnegative(),
-  category: z.string().optional(),
-  startedAt: Timestamp.optional(),
-  attachmentCount: z.number().int().nonnegative().optional(),
-  sourceFile: z.string().optional(),
-  sourceLine: z.number().int().optional(),
-  sourceColumn: z.number().int().optional(),
-  error: TestTelemetryError.optional(),
-});
-
-const AnnotationRecord = z.object({
-  type: z.string().min(1),
-  description: z.string().optional(),
-});
-
 const TestTelemetryContext = z.object({
   framework: z.enum(["vitest", "playwright"]),
   testKind: z.enum(["unit", "integration", "e2e"]),
   suite: z.string().min(1),
   workspace: z.string().optional(),
-  app: z.string().optional(),
-  testProject: z.string().optional(),
 });
 
-const TestTelemetryAttempt = z.object({
-  attemptIndex: z.number().int().nonnegative(),
-  state: z.string().min(1),
-  durationMs: z.number().nonnegative(),
-  startedAt: Timestamp.optional(),
-  startedAtSource: z.enum(["runner", "reporter-clock", "inferred"]).optional(),
-  scheduleDelayMs: z.number().nonnegative().optional(),
-  workerIndex: z.number().int().optional(),
-  parallelIndex: z.number().int().optional(),
-  attachmentCount: z.number().int().nonnegative().optional(),
-  stdoutBytes: z.number().int().nonnegative().optional(),
-  stderrBytes: z.number().int().nonnegative().optional(),
-  error: TestTelemetryError.optional(),
-  phases: z.array(TestTelemetryPhase),
-});
-
+/** One test, after all its attempts: what the suite summary, the row budget, the flake records and
+ *  Main OS e2e's failing rows read. */
 const TestTelemetryRecord = z.object({
   fullName: z.string(),
   /** Bare title, shared with createFlake/createFailing records. */
   leafName: z.string().optional(),
   moduleId: z.string(),
-  testNumber: z.number().int().optional(),
-  testLine: z.number().int().optional(),
-  testColumn: z.number().int().optional(),
-  runnerTestId: z.string().optional(),
+  /** `failed` for a createFlake/createFailing registration (the runner's expected-fail mode). */
   expectedState: z.string().optional(),
+  /** Playwright's verdict against `expectedState`; vitest has none. */
   outcome: z.string().optional(),
-  configuredTimeoutMs: z.number().nonnegative().optional(),
-  repeatIndex: z.number().int().nonnegative().optional(),
-  repeatCount: z.number().int().nonnegative().optional(),
-  slow: z.boolean().optional(),
-  heapBytes: z.number().int().nonnegative().optional(),
   tags: z.array(z.string()),
-  annotations: z.array(AnnotationRecord),
-  context: TestTelemetryContext.partial().optional(),
   retryCount: z.number().int().nonnegative(),
   passedAfterRetry: z.boolean(),
+  /** The final attempt's state. */
   state: z.string().min(1),
+  /** Every attempt together. */
   durationMs: z.number().nonnegative(),
   startedAt: Timestamp.optional(),
-  startedAtSource: z.enum(["runner", "reporter-clock", "inferred"]).optional(),
-  attemptDetail: z.enum(["complete", "aggregate-only"]),
-  scheduleDelayMs: z.number().nonnegative().optional(),
-  beforeEachDurationMs: z.number().nonnegative().optional(),
-  afterEachDurationMs: z.number().nonnegative().optional(),
-  bodyDurationMs: z.number().nonnegative().optional(),
-  attempts: z.array(TestTelemetryAttempt),
-  phases: z.array(TestTelemetryPhase),
   errors: z.array(TestTelemetryError),
+  /** The first failure, on one line and at most 300 characters. */
   firstFailure: z.string().optional(),
-});
-
-const ModuleTelemetryRecord = z.object({
-  moduleId: z.string(),
-  context: TestTelemetryContext.partial().optional(),
-  environmentSetupDurationMs: z.number().nonnegative(),
-  prepareDurationMs: z.number().nonnegative(),
-  collectDurationMs: z.number().nonnegative(),
-  setupDurationMs: z.number().nonnegative(),
-  testAndHookDurationMs: z.number().nonnegative(),
-  importDurationMs: z.number().nonnegative(),
-  imports: z.array(
-    z.object({
-      moduleId: z.string(),
-      selfDurationMs: z.number().nonnegative(),
-      totalDurationMs: z.number().nonnegative().optional(),
-    }),
-  ),
-  queuedAt: Timestamp.optional(),
-  collectedAt: Timestamp.optional(),
-  startedAt: Timestamp.optional(),
-  finishedAt: Timestamp.optional(),
-  queueDurationMs: z.number().nonnegative().optional(),
-  executionWallDurationMs: z.number().nonnegative().optional(),
-});
-
-const TestTelemetryRunner = z.object({
-  context: TestTelemetryContext,
-  status: RunStatus,
-  durationMs: z.number().nonnegative(),
-  exitCode: z.number().int().nullable().optional(),
-  testCount: z.number().int().nonnegative(),
-  retryCount: z.number().int().nonnegative(),
-  // Runner/global errors that are not attributable to one test. These are
-  // valid failure evidence; only the explicit run sentinel means collection
-  // stopped before the reporter could write a complete artifact.
-  collectionErrors: z.array(z.string()),
 });
 
 /**
@@ -149,10 +65,7 @@ export const TestTelemetryArtifact = z.object({
     workflowRunAttempt: z.string().min(1),
     workflowRunUrl: z.string().optional(),
     jobName: z.string().optional(),
-    workspaceRoot: z.string().optional(),
-    runnerProvider: z.enum(["depot", "github-actions", "local"]),
     depotJobUrl: z.string().optional(),
-    executionContext: z.enum(["ci", "local"]),
   }),
   context: TestTelemetryContext,
   run: z.object({
@@ -161,20 +74,17 @@ export const TestTelemetryArtifact = z.object({
     finishedAt: Timestamp,
     durationMs: z.number().nonnegative(),
     error: TestTelemetryError.optional(),
+    // Errors no one test owns (an import, a suite hook, an unhandled rejection): failure evidence
+    // too. Only the sentinel's TEST_TELEMETRY_INCOMPLETE_ERROR_NAME means the runner never finished.
+    collectionErrors: z.array(z.string()),
   }),
-  runners: z.array(TestTelemetryRunner),
   tests: z.array(TestTelemetryRecord),
-  modules: z.array(ModuleTelemetryRecord),
 });
 
 export type TestTelemetryArtifact = z.infer<typeof TestTelemetryArtifact>;
 export type TestTelemetryContext = z.infer<typeof TestTelemetryContext>;
 export type TestTelemetryError = z.infer<typeof TestTelemetryError>;
-export type TestTelemetryPhase = z.infer<typeof TestTelemetryPhase>;
-export type TestTelemetryAttempt = z.infer<typeof TestTelemetryAttempt>;
 export type TestTelemetryRecord = z.infer<typeof TestTelemetryRecord>;
-export type ModuleTelemetryRecord = z.infer<typeof ModuleTelemetryRecord>;
-export type TestTelemetryRunner = z.infer<typeof TestTelemetryRunner>;
 
 /** Convert an arbitrary runner/orchestrator failure into the shared JSON-safe shape. */
 export function normalizeTestTelemetryError(
@@ -190,29 +100,28 @@ export function normalizeTestTelemetryError(
   };
 }
 
-/** Writes a validated artifact atomically so a killed runner cannot leave valid-looking partial JSON. */
+/** Writes a validated artifact atomically into TEST_TELEMETRY_ARTIFACT_DIR (a relative one from
+ *  GITHUB_WORKSPACE), so a killed runner cannot leave valid-looking partial JSON. Without the
+ *  variable (a laptop) it writes nothing and returns null. */
 export function writeTestTelemetryArtifact(
   artifact: TestTelemetryArtifact,
   environment: NodeJS.ProcessEnv = process.env,
 ): string | null {
-  const outputFiles = resolveTestTelemetryArtifactPaths(artifact.artifactId, environment);
-  if (outputFiles.length === 0) return null;
+  const outputFile = resolveTestTelemetryArtifactPath(artifact.artifactId, environment);
+  if (!outputFile) return null;
   const validated = TestTelemetryArtifact.parse(artifact);
-  const contents = `${JSON.stringify(validated, null, 2)}\n`;
-  for (const outputFile of outputFiles) {
-    mkdirSync(dirname(outputFile), { recursive: true });
-    const temporaryFile = `${outputFile}.${process.pid}.tmp`;
-    writeFileSync(temporaryFile, contents);
-    renameSync(temporaryFile, outputFile);
-  }
-  return outputFiles[0]!;
+  mkdirSync(dirname(outputFile), { recursive: true });
+  const temporaryFile = `${outputFile}.${process.pid}.tmp`;
+  writeFileSync(temporaryFile, `${JSON.stringify(validated, null, 2)}\n`);
+  renameSync(temporaryFile, outputFile);
+  return outputFile;
 }
 
 /**
  * Writes a pessimistic run-start sentinel that the completed artifact replaces.
  * If the process is killed before its reporter's end hook, the always-running
  * finalizer retains an explicit incomplete artifact instead of silently losing
- * the runner from failure-rate and duration analysis.
+ * the runner.
  */
 export function writeTestTelemetryFailureSentinel(
   input: {
@@ -239,19 +148,9 @@ export function writeTestTelemetryFailureSentinel(
         finishedAt: input.startedAt,
         durationMs: 0,
         error: { name: TEST_TELEMETRY_INCOMPLETE_ERROR_NAME, message },
+        collectionErrors: [message],
       },
-      runners: [
-        {
-          context: input.context,
-          status: "failed",
-          durationMs: 0,
-          testCount: 0,
-          retryCount: 0,
-          collectionErrors: [message],
-        },
-      ],
       tests: [],
-      modules: [],
     },
     environment,
   );
@@ -261,26 +160,11 @@ export function resolveTestTelemetryArtifactPath(
   artifactId: string,
   environment: NodeJS.ProcessEnv = process.env,
 ): string | null {
-  return resolveTestTelemetryArtifactPaths(artifactId, environment)[0] ?? null;
-}
-
-/**
- * A named file lets an orchestrator read a runner immediately; the directory
- * copy is the durable input consumed later by CI's finalizer.
- */
-export function resolveTestTelemetryArtifactPaths(
-  artifactId: string,
-  environment: NodeJS.ProcessEnv = process.env,
-): string[] {
-  const explicit = environment.TEST_TELEMETRY_ARTIFACT_FILE?.trim();
   const directory = environment.TEST_TELEMETRY_ARTIFACT_DIR?.trim();
+  if (!directory) return null;
+  const path = join(directory, `${safeFilePart(artifactId)}.json`);
   const repositoryRoot = environment.GITHUB_WORKSPACE?.trim();
-  const fromRepositoryRoot = (path: string) =>
-    repositoryRoot ? resolve(repositoryRoot, path) : path;
-  return [
-    ...(explicit ? [fromRepositoryRoot(explicit)] : []),
-    ...(directory ? [fromRepositoryRoot(join(directory, `${safeFilePart(artifactId)}.json`))] : []),
-  ].filter((path, index, paths) => paths.indexOf(path) === index);
+  return repositoryRoot ? resolve(repositoryRoot, path) : path;
 }
 
 export function testTelemetryArtifactId(...parts: Array<string | number | undefined>) {
@@ -289,8 +173,7 @@ export function testTelemetryArtifactId(...parts: Array<string | number | undefi
 
 export function testTelemetryContextFromEnvironment(
   framework: TestTelemetryContext["framework"],
-  defaults: Pick<TestTelemetryContext, "testKind" | "suite"> &
-    Partial<Omit<TestTelemetryContext, "framework" | "testKind" | "suite">>,
+  defaults: Omit<TestTelemetryContext, "framework">,
   environment: NodeJS.ProcessEnv = process.env,
 ): TestTelemetryContext {
   return TestTelemetryContext.parse({
@@ -298,8 +181,6 @@ export function testTelemetryContextFromEnvironment(
     testKind: environment.TEST_TELEMETRY_KIND || defaults.testKind,
     suite: environment.TEST_TELEMETRY_SUITE || defaults.suite,
     workspace: environment.TEST_TELEMETRY_WORKSPACE || defaults.workspace,
-    app: environment.TEST_TELEMETRY_APP || defaults.app,
-    testProject: environment.TEST_TELEMETRY_PROJECT || defaults.testProject,
   });
 }
 
@@ -335,14 +216,7 @@ export function ciTelemetrySourceFromEnvironment(
         workflowRunUrl: `${environment.GITHUB_SERVER_URL}/${environment.GITHUB_REPOSITORY}/actions/runs/${environment.GITHUB_RUN_ID}`,
       }),
     jobName: environment.GITHUB_JOB || undefined,
-    workspaceRoot: environment.GITHUB_WORKSPACE || process.cwd(),
-    runnerProvider: environment.DEPOT_JOB_URL
-      ? "depot"
-      : environment.GITHUB_RUN_ID
-        ? "github-actions"
-        : "local",
     depotJobUrl: environment.DEPOT_JOB_URL || undefined,
-    executionContext: environment.GITHUB_RUN_ID ? "ci" : "local",
   };
 }
 

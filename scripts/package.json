@@ -12,7 +12,6 @@
     "@octokit/rest": "^22.0.0",
     "@slack/web-api": "^8.1.1",
     "aws4fetch": "1.0.20",
-    "hyparquet-writer": "0.16.10",
     "yaml": "catalog:",
     "zod": "catalog:"
   },
@@ -21,7 +20,6 @@
     "@playwright/test": "catalog:",
     "@tanstack/router-generator": "1.167.38",
     "@types/node": "catalog:",
-    "hyparquet": "1.31.1",
     "oxc-parser": "^0.151.0",
     "oxc-transform": "^0.151.0",
     "trpc-cli": "catalog:",

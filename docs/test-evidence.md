@@ -11,7 +11,7 @@ So each test run in CI also writes **one folder, with one manifest, uploaded
 straight to R2, into one bucket, `iterate-ci`**. The Test job and the E2E tests
 and Browser specs jobs of Preview OS and Main OS e2e write it. The folder holds
 the run's result, the deployed target of the e2e jobs, Kit's CTest results as
-JUnit XML and the per-test Parquet rows. CI writes the bucket with the
+JUnit XML and each runner's raw telemetry, one record per test. CI writes the bucket with the
 Cloudflare API token it already holds. One reader is built: the
 [flake dashboard](https://github.com/iterate/iterate/issues/2580) reads the
 recent folders' flake records and suite summaries back every hour
@@ -34,7 +34,6 @@ so none of today's readers had to move.
 ```text
 test-results/
 ├── manifest.json                   written last; the result, and every other file with its sha256
-├── tables/tests.parquet            one row per test, the analytics input
 ├── target.json                     the e2e jobs: the preview and the deployment the suites ran against
 ├── ctest/junit.xml                 the Test job: Kit's firmware host tests
 ├── ci-telemetry/
@@ -78,16 +77,16 @@ today's main, which need not be what the earlier deploy built. Comparing
 
 ### How each producer writes into it
 
-| Producer                                                                          | Writes                                                              | How it gets there                                                                                    |
-| --------------------------------------------------------------------------------- | ------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
-| Vitest, every unit workspace and the OS e2e suite (`retry-telemetry-reporter.ts`) | `ci-telemetry/raw/`                                                 | `TEST_TELEMETRY_ARTIFACT_DIR`, set by the workflows                                                  |
-| Playwright telemetry reporter                                                     | `ci-telemetry/raw/`                                                 | the same variable                                                                                    |
-| createFlake, createFailing, retried plain tests                                   | `flake-records/`                                                    | `FLAKE_RECORD_DIR`: test.yml, and `apps/os/scripts/preview.ts` per suite (from `testEvidencePaths`)  |
-| Playwright output, HTML and JSON reporters                                        | `playwright-output/`, `playwright-html/`, `playwright-results.json` | `playwright.config.ts`, from `testEvidencePaths`                                                     |
-| The telemetry finalizer                                                           | `ci-telemetry/manifest.json`, `suite-summary.json`                  | `scripts/ci/upload-test-telemetry.ts`                                                                |
-| The evidence writer                                                               | `tables/tests.parquet`, then `manifest.json`                        | `scripts/ci/test-evidence.ts write`                                                                  |
-| Kit firmware host tests (CTest)                                                   | `ctest/junit.xml`                                                   | `--output-junit`, which `pnpm --dir apps/kit firmware:test:host` passes to CTest; not yet table rows |
-| The deployed target (e2e jobs)                                                    | `target.json`                                                       | `runSuite`, before the suite: the preview, the OS deployment `/version` names, the apps' URLs        |
+| Producer                                                                          | Writes                                                              | How it gets there                                                                                      |
+| --------------------------------------------------------------------------------- | ------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| Vitest, every unit workspace and the OS e2e suite (`retry-telemetry-reporter.ts`) | `ci-telemetry/raw/`                                                 | `TEST_TELEMETRY_ARTIFACT_DIR`, set by the workflows                                                    |
+| Playwright telemetry reporter                                                     | `ci-telemetry/raw/`                                                 | the same variable                                                                                      |
+| createFlake, createFailing, retried plain tests                                   | `flake-records/`                                                    | `FLAKE_RECORD_DIR`: test.yml, and `apps/os/scripts/preview.ts` per suite (from `testEvidencePaths`)    |
+| Playwright output, HTML and JSON reporters                                        | `playwright-output/`, `playwright-html/`, `playwright-results.json` | `playwright.config.ts`, from `testEvidencePaths`                                                       |
+| The telemetry finalizer                                                           | `ci-telemetry/manifest.json`, `suite-summary.json`                  | `scripts/ci/upload-test-telemetry.ts`                                                                  |
+| The evidence writer                                                               | `manifest.json`                                                     | `scripts/ci/test-evidence.ts write`                                                                    |
+| Kit firmware host tests (CTest)                                                   | `ctest/junit.xml`                                                   | `--output-junit`, which `pnpm --dir apps/kit firmware:test:host` passes to CTest; not in the telemetry |
+| The deployed target (e2e jobs)                                                    | `target.json`                                                       | `runSuite`, before the suite: the preview, the OS deployment `/version` names, the apps' URLs          |
 
 Videos are off in CI: `playwright.config.ts` keeps them only under
 `VIDEO_MODE=1` or on local failures, because retained videos left ffmpeg
@@ -110,24 +109,22 @@ In each of those jobs, after the telemetry finalizer:
    the outcome of every step that runs tests in `TEST_EVIDENCE_STEPS`
    (`tests=… kit-host-tests=…` in the Test job, `e2e=…` or `specs=…` in the
    others). It
-   builds `tables/tests.parquet` from this attempt's raw telemetry and flake
-   records, then hashes every file in the folder and writes `manifest.json`.
+   hashes every file in the folder and writes `manifest.json`.
    On real artifacts it takes about half a second (37 files, 3.5 MB).
 2. **Upload the test evidence to R2**
    (`pnpm tsx scripts/ci/test-evidence.ts upload`), `if: always()` when a
    manifest exists (`continue-on-error`, three minutes at most; Doppler
    `_shared/preview` supplies `CLOUDFLARE_API_TOKEN`). A cancelled or
    timed-out job's folder goes too, when the runner gives `always()` steps
-   the time: its manifest says `cancelled`, and it gets no copy under
-   `tables/`, since its rows stop part way and would skew durations. The
+   the time: its manifest says `cancelled`. The
    step prints the run's prefix
    (`[test-evidence] r2://iterate-ci/evidence/ci/trust=pr/date=…/job=…/testrun_…/`)
    and writes it as a line of the job's summary. It runs in one `parallel:`
    block beside the Depot artifact uploads, since each only reads the folder
-   ([parallel steps](depot-ci.md#parallel-steps)). The e2e jobs' artifacts
-   keep the whole folder as `{preview,main}-os-test-artifacts-attempt-<id>`;
-   the Test job's keep its telemetry and flake records, and its manifest
-   reaches only R2.
+   ([parallel steps](depot-ci.md#parallel-steps)). Each job's artifacts
+   keep the whole folder as `{unit,preview-os,main-os}-test-artifacts-attempt-<id>`,
+   and its suite's flake records and summary as
+   `flake-records-<suite>-attempt-<id>`.
 3. **Report a test evidence step that could not**
    (`scripts/ci/test-evidence-unreported.sh`), after that block, when either
    step's outcome is `failure` ([below](#a-failed-step)).
@@ -135,8 +132,8 @@ In each of those jobs, after the telemetry finalizer:
 The write step fails when the job has no Depot job attempt to name the run
 after, when git cannot record the source (`testEvidenceSource`), or when a
 runner's fields do not fit the manifest's schema. Everything else it cannot
-read (telemetry that does not parse, no finalizer check, a flake record that
-names no test, a table it cannot write) goes into the manifest's
+read (telemetry that does not parse, another attempt's telemetry, no finalizer
+check) goes into the manifest's
 `diagnostics`, and the manifest is written anyway: the run whose runner
 crashed is the one whose evidence matters most.
 
@@ -171,13 +168,13 @@ both steps are `continue-on-error`, and a failure is made visible instead:
 `TestEvidenceManifest` (the same module) is the schema; readers parse with it.
 
 - `testRunId` is `testrun_<Depot job attempt id>`, the id every artifact name
-  of that attempt already ends in ([per job attempt](depot-ci.md#artifacts-per-job-attempt)),
-  and the `test_run_id` of every row in the folder's tables. It and the rest
+  of that attempt already ends in ([per job attempt](depot-ci.md#artifacts-per-job-attempt)).
+  It and the rest
   of the job's identity come from the job's environment (`DEPOT_JOB_URL`,
   `GITHUB_*`, `TEST_TELEMETRY_*`, read by the same
   `ciTelemetrySourceFromEnvironment` the reporters use), not from the
   telemetry, so a job whose runners never started still has one. Telemetry
-  from another attempt is left out of the rows and named in `diagnostics`.
+  from another attempt is left out of `runners` and named in `diagnostics`.
 - `result` is `cancelled` when the job was; `incomplete` when the finalizer
   found a workspace missing, a runner cut short or another attempt's
   artifact, wrote no check, or a step that runs tests was skipped or passed
@@ -220,13 +217,14 @@ both steps are `continue-on-error`, and a failure is made visible instead:
 Everything CI keeps in R2 lives in one bucket, **`iterate-ci`**, on the
 dev/preview account (`ciBucketEnvs.ci` in `envs.ts`):
 
-| Prefix      | Holds                                                   | Expires                                     |
-| ----------- | ------------------------------------------------------- | ------------------------------------------- |
-| `evidence/` | Each test run's folder, under `evidence/ci/…`           | By lifecycle rule ([retention](#retention)) |
-| `tables/`   | A copy of each run's `tests.parquet`, for later loading | Never                                       |
+| Prefix      | Holds                                         | Expires                                     |
+| ----------- | --------------------------------------------- | ------------------------------------------- |
+| `evidence/` | Each test run's folder, under `evidence/ci/…` | By lifecycle rule ([retention](#retention)) |
 
 `evidence/local/` and `state/` are kept for laptop runs and the guards'
 state, neither of which exists yet ([#3110](https://github.com/iterate/iterate/issues/3110)).
+`tables/tests/` holds the per-test Parquet copies runs uploaded until
+2026-09-26; nothing writes or reads it now.
 
 **Why one bucket.** A second bucket isolates data only through credentials:
 an R2 API token can be scoped to buckets, never to a prefix. Today CI has one
@@ -252,17 +250,14 @@ public gets a bucket of its own.
 
 ```text
 evidence/ci/trust=<main|pr>/date=<YYYY-MM-DD>/job=<Depot job id>/<testRunId>/<path in the folder>
-tables/tests/trust=<main|pr>/date=<YYYY-MM-DD>/job=<Depot job id>/<testRunId>.parquet
 ```
 
 For example
 `evidence/ci/trust=pr/date=2026-09-24/job=7zncg7grdw/testrun_1tf879r75h/playwright-html/index.html`
-(`testEvidencePrefix` and `testEvidenceTableKey` in
-`scripts/ci/test-evidence.ts`).
+(`testEvidencePrefix` in `scripts/ci/test-evidence.ts`).
 
 - **`evidence/` first**, so the folders, which expire, sit apart from
-  `tables/` and `state/`, which never do: no rule on `evidence/…` can reach
-  them.
+  `state/`, which never does: no rule on `evidence/…` can reach it.
 - **Then `trust`.** R2 lifecycle rules and bucket locks match by key prefix
   only, so main's runs and everything else need different prefixes to get
   different retention, and a run of main's workflow never shares a namespace
@@ -288,14 +283,6 @@ For example
 - The `key=value` segments are Hive-style: DuckDB's `hive_partitioning` turns
   them into `trust`, `date` and `job` columns and skips whole prefixes by
   them.
-- **The tables' copy.** Before the manifest, the upload PUTs
-  `tables/tests.parquet` again under `tables/tests/` (not for a cancelled
-  run). A loader can list that prefix, one object per run, instead of every
-  object under `evidence/` (about 7 million a year), and it never expires,
-  so every run can be replayed, not only the last year's folders. The run's
-  manifest, at the same `trust`, `date` and `job` under `evidence/`, is the
-  commit point for the copy too: a copy whose manifest is not there is from
-  a failed upload.
 
 ### Addressed by run, verified by content
 
@@ -330,7 +317,7 @@ bucket on 2026-09-24:
   holds the very bytes being sent (a single PUT's ETag is the body's MD5) is
   this upload's own earlier try, landed after all, or the step run again; the
   upload goes on. Other bytes at that key fail it.
-- The manifest goes last, after every file and the tables' copy. A folder
+- The manifest goes last, after every file. A folder
   whose manifest is in R2 is complete, and the manifest's own sha256 is the
   content address of the whole run: anyone holding it can re-hash every
   file.
@@ -364,21 +351,8 @@ doppler run --project _shared --config preview -- pnpm --dir apps/os exec wrangl
 Every file the manifest lists is at `<prefix><path>`, its bytes hashing to
 the listed sha256.
 
-The per-test rows of many runs read as one table with DuckDB over the
-tables' copies. Its R2 secret takes S3 keys: CI's token gives them as the
-upload derives them ([credentials](#credentials)), or an R2 API token with
-Object Read on the bucket gives its own:
-
-```sql
-CREATE SECRET iterate_ci (TYPE r2, KEY_ID '<token id>', SECRET '<sha256 of the token>', ACCOUNT_ID '376ef7ed81b0573f93524de763666c15');
-
-SELECT module_path, full_name, count(*) AS runs, quantile_cont(duration_ms, 0.95) AS p95_ms
-FROM read_parquet('r2://iterate-ci/tables/tests/*/*/*/*.parquet', hive_partitioning = true, union_by_name = true)
-WHERE trust = 'main' AND date >= current_date - 14 AND state = 'passed' AND retry_count = 0
-GROUP BY ALL ORDER BY p95_ms DESC LIMIT 25;
-```
-
-A downloaded folder works too: `read_parquet('test-results/tables/tests.parquet')`.
+Each runner's tests are one JSON record apiece in `ci-telemetry/raw/*.json`
+(`TestTelemetryArtifact` in `packages/shared/src/test-support/ci-telemetry.ts`).
 
 The flake dashboard (`scripts/ci/flake-dashboard/evidence.ts`) lists
 `evidence/ci/trust=<main|pr>/date=<day>/` for the last eight UTC days through
@@ -387,15 +361,15 @@ the S3 API, with the credentials the upload derives, and reads the
 
 ### Sizes and costs
 
-Measured on real artifacts from 2026-09-24:
+Measured on real artifacts from 2026-09-24, less the per-test Parquet table
+they carried then:
 
-| Test run (passing) | Files | Unzipped | Of which                                                                                                                     |
-| ------------------ | ----- | -------- | ---------------------------------------------------------------------------------------------------------------------------- |
-| Test job attempt   | 18    | 3.8 MB   | raw telemetry 2.8 MB, flake suite summary 0.65 MB, `tests.parquet` 0.26 MB (about 2,300 rows), CTest's JUnit XML 0.01 MB     |
-| Preview OS e2e     | 38    | 3.6 MB   | telemetry 1.4 MB, HTML report 0.7 MB, 18 screenshots 0.65 MB, JSON results 0.68 MB, `tests.parquet` 0.06 MB (about 370 rows) |
+| Test run (passing) | Files | Unzipped | Of which                                                                           |
+| ------------------ | ----- | -------- | ---------------------------------------------------------------------------------- |
+| Test job attempt   | 17    | 3.5 MB   | raw telemetry 2.8 MB, flake suite summary 0.65 MB, CTest's JUnit XML 0.01 MB       |
+| Preview OS e2e     | 37    | 3.5 MB   | telemetry 1.4 MB, HTML report 0.7 MB, 18 screenshots 0.65 MB, JSON results 0.68 MB |
 
-Each is one run's folder; the upload adds the manifest and the table's copy,
-so 20 and 40 objects.
+Each is one run's folder; the upload adds the manifest, so 18 and 38 objects.
 
 A failing Preview OS attempt with two failed specs was 68 files and 9.9 MB:
 two `trace.zip` files of 2.35 MB together, their copies in the report, and
@@ -410,10 +384,8 @@ million free, no egress fees):
   half of it main's and half pull requests' (the run counts above split
   about evenly).
 - **Storage** at steady state: main's folders for 365 days, about 475 GB;
-  pull requests' for 90 days, about 120 GB; the tables' copies, about 140 MB
-  a day and never deleted, about 50 GB a year. About 650 GB, **about $10 a
-  month**, the tables adding under $1 a month for every year kept. Keeping
-  pull requests' folders a year too would be about $15.
+  pull requests' for 90 days, about 120 GB. About 600 GB, **about $9 a
+  month**. Keeping pull requests' folders a year too would be about $15.
 - **Writes**: about 21,000 PUTs a day, 630,000 a month. The free million
   Class A operations are the whole dev/preview account's, previews
   included, so count on paying for them: **about $3 a month**.
@@ -433,12 +405,11 @@ Lifecycle rules on `iterate-ci`, set when it was created ([setup](#setup)):
   the flake history after.
 - `evidence/local/`: 30 days (`evidence-local-after-30-days`), in place
   before any laptop writes there.
-- `tables/` and `state/`: never deleted. Every run's rows, so a table built
-  from them can always be rebuilt from R2.
+- `tables/` and `state/`: never deleted.
 - R2's own default rule aborts incomplete multipart uploads after 7 days; the
   upload makes none.
 - **No bucket lock is set.** A [bucket lock](https://developers.cloudflare.com/r2/buckets/bucket-locks/)
-  on `evidence/ci/trust=main/` and `tables/` for 30 days would keep anyone,
+  on `evidence/ci/trust=main/` for 30 days would keep anyone,
   CI's token included, from deleting or overwriting them; a lock takes
   precedence over a lifecycle rule, and 30 days is shorter than every
   expiry. Whether to set it is open ([#3110](https://github.com/iterate/iterate/issues/3110)).
@@ -465,8 +436,8 @@ Nothing in CI deletes objects.
   included, and every CI job holding `DOPPLER_TOKEN` can read it, pull
   request jobs included. Write-once PUTs only keep the honest uploader from
   replacing a run's evidence; they are no defence against the token, which
-  can plant, replace or delete any object, `trust=main` and `tables/`
-  included, and no bucket lock is set. That is acceptable while evidence
+  can plant, replace or delete any object, `trust=main` included, and no
+  bucket lock is set. That is acceptable while evidence
   proves nothing and no guard keeps its memory in the bucket; it is not
   acceptable once evidence can skip CI. Before then, jobs get credentials
   scoped to their own run's prefix, from Depot OIDC and a notary Worker
@@ -477,60 +448,6 @@ Nothing in CI deletes objects.
   is private, but `public-playwright-report`, the same folder as a Depot
   artifact, is open to anyone with the viewer link, so it exposes them
   already.
-
-## Tables
-
-`tables/tests.parquet` has one row per test the runners reported, skipped
-tests included. Its columns (`scripts/ci/test-results-parquet.ts`; a test
-holds this table to that file):
-
-| Column                  | Type      | Meaning                                                                                                                                                                          |
-| ----------------------- | --------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `test_run_id`           | STRING    | The folder's `testRunId`: joins a row to its manifest and its evidence                                                                                                           |
-| `repository`            | STRING    | `iterate/iterate`                                                                                                                                                                |
-| `workflow_name`         | STRING    | Workflow display name (`Test`, `Preview OS`)                                                                                                                                     |
-| `workflow_run_id`       | STRING    | `GITHUB_RUN_ID` as Depot sets it                                                                                                                                                 |
-| `workflow_run_attempt`  | STRING    | `GITHUB_RUN_ATTEMPT`                                                                                                                                                             |
-| `job_name`              | STRING    | `GITHUB_JOB` (`test`, `e2e`)                                                                                                                                                     |
-| `job_attempt_id`        | STRING    | Depot's job attempt id                                                                                                                                                           |
-| `depot_job_url`         | STRING    | The job attempt's Depot page                                                                                                                                                     |
-| `head_sha`              | STRING    | The tested PR head or main commit (`TEST_TELEMETRY_HEAD_SHA`)                                                                                                                    |
-| `branch`                | STRING    | Source branch (`main` for main pushes)                                                                                                                                           |
-| `pull_request_number`   | INT32     | Null outside pull requests                                                                                                                                                       |
-| `producer`              | STRING    | `vitest-retry-telemetry-reporter` or `playwright-telemetry-reporter`                                                                                                             |
-| `framework`             | STRING    | `vitest` or `playwright`                                                                                                                                                         |
-| `test_kind`             | STRING    | `unit`, `integration` or `e2e`                                                                                                                                                   |
-| `workspace`             | STRING    | pnpm workspace the runner ran in (`os`, `@iterate-com/shared`, `iterate-root`)                                                                                                   |
-| `test_project`          | STRING    | Playwright project (`os`, `voice`, …); null for Vitest                                                                                                                           |
-| `module_path`           | STRING    | Test file, relative to the repository root                                                                                                                                       |
-| `full_name`             | STRING    | Suite path and title as the runner names it                                                                                                                                      |
-| `leaf_name`             | STRING    | Bare title, the name flake records and the flake dashboard use                                                                                                                   |
-| `test_line`             | INT32     | Line of the test in `module_path` (Playwright)                                                                                                                                   |
-| `state`                 | STRING    | Final state: `passed`, `failed`, `skipped`, `timedout`, …                                                                                                                        |
-| `expected_state`        | STRING    | `passed`; `failed` for createFlake/createFailing/`test.fails`; `skip`                                                                                                            |
-| `outcome`               | STRING    | Playwright's verdict: `expected`, `unexpected`, `flaky`, `skipped`                                                                                                               |
-| `retry_count`           | INT32     | Retries the runner made                                                                                                                                                          |
-| `passed_after_retry`    | BOOLEAN   | A retry rescued it                                                                                                                                                               |
-| `started_at`            | TIMESTAMP | When the test started, by the runner's clock (UTC, milliseconds)                                                                                                                 |
-| `duration_ms`           | DOUBLE    | The runner's reported duration                                                                                                                                                   |
-| `configured_timeout_ms` | DOUBLE    | The test's timeout                                                                                                                                                               |
-| `first_failure`         | STRING    | First failed attempt's error text                                                                                                                                                |
-| `errors`                | JSON      | Final errors: `[{ name?, message, stack? }]`; null when none                                                                                                                     |
-| `attempts`              | JSON      | `[{ attemptIndex, state, durationMs, startedAt?, error? }]` when the runner reports attempts (Playwright); null otherwise. Playwright's per-step phases stay in the raw artifact |
-| `tags`                  | JSON      | Test tags; null when none                                                                                                                                                        |
-| `flake_kind`            | STRING    | `flake` (createFlake) or `failing` (createFailing); null for other tests                                                                                                         |
-| `flake_pattern`         | STRING    | The wrapper's tracked-error pattern                                                                                                                                              |
-| `flake_outcomes`        | JSON      | Its records' outcomes, one per recorded run: `["pinned-fail"]`, `["flake-fail","pass"]`                                                                                          |
-
-Kind `unknown` flake records are not joined: they restate a plain test's
-`passed_after_retry` and final `state`, which the row already has. A
-createFlake or createFailing record that names no test, or more than one,
-is on no row and is named in the manifest's `diagnostics`, never silently
-dropped and never the reason a folder has no manifest.
-
-Vitest reports one aggregate duration and retry count per test, not each
-attempt's ([ci-test-telemetry.md](ci-test-telemetry.md)), so a retried Vitest
-row's `duration_ms` is not a clean sample: rank passed rows with no retry.
 
 ## Setup
 

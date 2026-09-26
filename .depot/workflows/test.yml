@@ -89,10 +89,9 @@ jobs:
         # the tree whose tests ran.
         run: pnpm tsx scripts/ci/upload-test-telemetry.ts --flake-suites unit --expect-unit-workspaces ${{ cancelled() && '--cancelled' || '' }}
       # THE TEST EVIDENCE FOLDER (docs/test-evidence.md): test-results/ holds everything this job
-      # attempt's tests left. This adds one row per test (tables/tests.parquet), then manifest.json:
-      # the run's result (from the steps below and the finalizer's check), the tested commit and
-      # tree, the job attempt and every file's sha256. Neither this nor the upload decides the job;
-      # the tests did.
+      # attempt's tests left. This adds manifest.json: the run's result (from the steps below and the
+      # finalizer's check), the tested commit and tree, the job attempt and every file's sha256.
+      # Neither this nor the upload decides the job; the tests did.
       - name: Write the test evidence manifest
         id: evidence-write
         if: always()
@@ -109,8 +108,8 @@ jobs:
       - fail-fast: false
         parallel:
           # With the Cloudflare API token preview deploys use (Doppler _shared/preview), as S3 keys.
-          # A cancelled or timed-out job's folder too: its manifest says so, and it gets no tables/
-          # copy. A failure is a warning and a line of the job's summary, never the job's result.
+          # A cancelled or timed-out job's folder too: its manifest says so. A failure is a warning
+          # and a line of the job's summary, never the job's result.
           - name: Upload the test evidence to R2
             id: evidence-upload
             if: ${{ always() && hashFiles('test-results/manifest.json') != '' }}
@@ -129,12 +128,13 @@ jobs:
               name: flake-records-unit-attempt-${{ steps.attempt.outputs.id }}
               path: test-results/flake-records
               if-no-files-found: ignore
-          - name: Upload test telemetry artifacts
+          # Everything the run wrote under test-results/, as the e2e jobs keep theirs.
+          - name: Upload results
             if: always()
             uses: actions/upload-artifact@v4
             with:
-              name: unit-test-telemetry-attempt-${{ steps.attempt.outputs.id }}
-              path: test-results/ci-telemetry
+              name: unit-test-artifacts-attempt-${{ steps.attempt.outputs.id }}
+              path: test-results
               include-hidden-files: true
               if-no-files-found: error
       # Either step that failed before it could say why (Doppler, pnpm, its timeout) gets its

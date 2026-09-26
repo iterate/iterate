@@ -6,8 +6,8 @@ import { z } from "zod";
  * or main's e2e job); a run on a laptop is next. Every producer writes below `root`: the Playwright
  * config reads these paths, and the workflows set TEST_TELEMETRY_ARTIFACT_DIR and FLAKE_RECORD_DIR to
  * them (scripts/ci/depot-workflows.test.ts holds them equal). After the runners,
- * `scripts/ci/test-evidence.ts write` adds the per-test rows and then the manifest, which lists
- * every other file with its sha256; `upload` puts the folder in R2 as it is.
+ * `scripts/ci/test-evidence.ts write` adds the manifest, which lists every other file with its
+ * sha256; `upload` puts the folder in R2 as it is.
  *
  * Paths are relative to the repository root and are the ones the producers already used, so no
  * reader moved.
@@ -30,8 +30,6 @@ export const testEvidencePaths = {
   ctestJunit: "test-results/ctest/junit.xml",
   /** A `TestEvidenceTarget`: the deployment an e2e job's suites ran against. */
   target: "test-results/target.json",
-  /** One row per test, the analytics input (scripts/ci/test-results-parquet.ts). */
-  testsTable: "test-results/tables/tests.parquet",
 };
 
 const Timestamp = z.iso.datetime({ offset: true });
@@ -77,7 +75,7 @@ export const TestEvidenceCompleteness = z.object({
  */
 export const TestEvidenceManifest = z.object({
   manifestSchemaVersion: z.literal(1),
-  /** `testrun_<Depot job attempt id>`: the `test_run_id` of every row in the folder's tables. */
+  /** `testrun_<Depot job attempt id>`, the id every artifact name of that attempt ends in. */
   testRunId: z.string().regex(/^testrun_[a-z0-9]+$/u),
   createdAt: Timestamp,
   /**
@@ -154,8 +152,8 @@ export const TestEvidenceManifest = z.object({
     }),
   ),
   /**
-   * What the writer could not read or build: telemetry it could not parse, flake records that name
-   * no test, a tests table it could not write. The manifest is written anyway; the result says
+   * What the writer could not read: telemetry it could not parse, another attempt's telemetry, a
+   * finalizer check or target it could not read. The manifest is written anyway; the result says
    * whether the tests passed.
    */
   diagnostics: z.array(z.string()),

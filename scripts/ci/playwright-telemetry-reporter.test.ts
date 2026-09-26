@@ -12,7 +12,7 @@ import type { TestTelemetryArtifact } from "@iterate-com/shared/test-support/ci-
 import { temporaryDirectory } from "@iterate-com/shared/test-support/temporary-directory";
 import PlaywrightTelemetryReporter from "./playwright-telemetry-reporter.ts";
 
-test("records every Playwright attempt and nested step without uploading", async () => {
+test("records each test after its attempts, and a flake record for a retried pass, without uploading", async () => {
   isolateTelemetryEnvironment();
   using artifactDirectory = temporaryDirectory();
   vi.stubEnv("TEST_TELEMETRY_ARTIFACT_DIR", artifactDirectory.path);
@@ -23,19 +23,8 @@ test("records every Playwright attempt and nested step without uploading", async
     status: "failed",
     duration: 500,
     startTime: new Date("2026-07-21T12:00:00Z"),
-    workerIndex: 2,
-    parallelIndex: 1,
     error: { message: "connection lost", stack: "stack" },
     errors: [{ message: "connection lost", stack: "stack" }],
-    steps: [
-      {
-        title: "wait for greeting",
-        titlePath: () => ["wait for greeting"],
-        category: "test.step",
-        duration: 450,
-        steps: [],
-      },
-    ],
   } as unknown as TestResult;
   const secondResult = {
     ...firstResult,
@@ -81,23 +70,16 @@ test("records every Playwright attempt and nested step without uploading", async
   expect(artifact.tests[0]).toMatchObject({
     fullName: "chromium › greeting.spec.ts › greets",
     leafName: "greets",
+    moduleId: "/repo/specs/greeting.spec.ts",
     durationMs: 800,
     retryCount: 1,
     passedAfterRetry: true,
     state: "passed",
     outcome: "flaky",
+    startedAt: "2026-07-21T12:00:00.000Z",
+    errors: [{ message: "connection lost", stack: "stack" }],
+    firstFailure: "connection lost",
   });
-  expect(artifact.tests[0]?.attempts).toEqual([
-    expect.objectContaining({ attemptIndex: 0, state: "failed" }),
-    expect.objectContaining({ attemptIndex: 1, state: "passed" }),
-  ]);
-  expect(artifact.tests[0]?.attempts[0]?.phases).toEqual([
-    expect.objectContaining({
-      name: "wait for greeting",
-      category: "test.step",
-      durationMs: 450,
-    }),
-  ]);
 
   // The flaky (passed-after-retry) test also produced an unknown-flake
   // record — the test-health dashboard's adoption-funnel signal — while the
@@ -124,10 +106,7 @@ test("keeps Playwright's raw result status separate from its expected outcome", 
     status: "failed",
     duration: 100,
     startTime: new Date("2026-07-21T12:00:00Z"),
-    workerIndex: 0,
-    parallelIndex: 0,
     errors: [{ message: "expected failure" }],
-    steps: [],
   } as unknown as TestResult;
   const test = {
     results: [failedAsExpected],
@@ -165,10 +144,7 @@ test("a plain spec that failed every attempt leaves an unexpected-error flake re
       status: "failed",
       duration: 400,
       startTime: new Date(`2026-07-21T12:00:0${retry}Z`),
-      workerIndex: 0,
-      parallelIndex: 0,
       errors: [{ message: `attempt ${retry}: locator('chat') not visible` }],
-      steps: [],
     }) as unknown as TestResult;
   const test = {
     results: [attempt(0), attempt(1)],
@@ -231,14 +207,11 @@ test("preserves timed-out runs and run-level Playwright errors", async () => {
   expect(artifact.run).toMatchObject({
     status: "timedout",
     error: { message: "worker stopped responding", stack: "stack" },
-  });
-  expect(artifact.runners[0]).toMatchObject({
-    status: "timedout",
     collectionErrors: ["worker stopped responding"],
   });
 });
 
-test("preserves interrupted attempts whose unfinished Playwright steps use negative durations", async () => {
+test("an interrupted attempt's negative duration is recorded as zero", async () => {
   isolateTelemetryEnvironment();
   using artifactDirectory = temporaryDirectory();
   vi.stubEnv("TEST_TELEMETRY_ARTIFACT_DIR", artifactDirectory.path);
@@ -247,17 +220,7 @@ test("preserves interrupted attempts whose unfinished Playwright steps use negat
     status: "interrupted",
     duration: -1,
     startTime: new Date("2026-07-21T12:00:00Z"),
-    workerIndex: 0,
-    parallelIndex: 0,
     errors: [],
-    steps: [
-      {
-        titlePath: () => ["wait for worker"],
-        category: "test.step",
-        duration: -1,
-        steps: [],
-      },
-    ],
   } as unknown as TestResult;
   const test = {
     results: [interruptedResult],
@@ -281,20 +244,7 @@ test("preserves interrupted attempts whose unfinished Playwright steps use negat
     readFileSync(join(artifactDirectory.path, readdirSync(artifactDirectory.path)[0]!), "utf8"),
   ) as TestTelemetryArtifact;
   expect(artifact.run).toMatchObject({ status: "interrupted", durationMs: 0 });
-  expect(artifact.tests[0]?.attempts[0]).toMatchObject({
-    state: "interrupted",
-    durationMs: 0,
-    phases: [
-      {
-        name: "wait for worker",
-        durationMs: 0,
-        error: {
-          name: "PlaywrightIncompleteStepError",
-          message: "Playwright step did not finish before runner shutdown",
-        },
-      },
-    ],
-  });
+  expect(artifact.tests[0]).toMatchObject({ state: "interrupted", durationMs: 0 });
 });
 
 /** Each test starts from a clean telemetry environment, and every variable it stubs is restored

@@ -3,11 +3,12 @@ import { createHash } from "node:crypto";
 import { appendFileSync, existsSync, writeFileSync } from "node:fs";
 import { copyFile, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, extname, join, relative, resolve } from "node:path";
+import { extname, join, relative, resolve } from "node:path";
 import { AwsClient } from "aws4fetch";
 import { z } from "zod";
 import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
 import { createCli } from "trpc-cli";
+import { ciTelemetrySourceFromEnvironment } from "@iterate-com/shared/test-support/ci-telemetry";
 import {
   TestEvidenceCompleteness,
   TestEvidenceManifest,
@@ -15,15 +16,13 @@ import {
   testEvidencePaths,
 } from "@iterate-com/shared/test-support/test-evidence";
 import { ciBucketEnvs } from "../../envs.ts";
-import { FlakeRecord } from "./flake-dashboard/evidence.ts";
-import { ciJobAttempt, testResultsParquet, testResultsTable } from "./test-results-parquet.ts";
 import { loadTestTelemetryArtifacts } from "./upload-test-telemetry.ts";
 
 /**
  * THE TEST EVIDENCE FOLDER'S MANIFEST, AND ITS UPLOAD TO R2 (docs/test-evidence.md). Two commands,
  * each a step after a CI job's telemetry finalizer, run from the repository root:
  *
- *   pnpm tsx scripts/ci/test-evidence.ts write [--cancelled]  # tests.parquet, then manifest.json
+ *   pnpm tsx scripts/ci/test-evidence.ts write [--cancelled]  # manifest.json
  *   pnpm tsx scripts/ci/test-evidence.ts upload               # into R2, the manifest last
  *
  * `upload` runs in the Test, Preview OS and Main OS e2e jobs (testEvidenceJobs), with Doppler
@@ -70,18 +69,13 @@ export async function writeTestEvidence(input: {
       ),
     [],
   );
-  // Another attempt's artifacts (the finalizer's foreign ones) are listed, never labelled as ours.
+  // Another attempt's artifacts (the finalizer's foreign ones) are named, never counted as ours.
   const artifacts = loaded.filter((artifact) => artifact.ci.depotJobUrl === job.depotJobUrl);
   const foreign = loaded.filter((artifact) => !artifacts.includes(artifact));
   if (foreign.length > 0)
     diagnostics.push(
-      `test telemetry from another job attempt, left out of the rows: ${foreign.map(({ artifactId }) => artifactId).join(", ")}`,
+      `test telemetry from another job attempt, left out of the runners: ${foreign.map(({ artifactId }) => artifactId).join(", ")}`,
     );
-  const flakeRecords = await attempt(
-    "flake records",
-    () => loadFlakeRecords(path(testEvidencePaths.flakeRecords)),
-    [],
-  );
   const completeness = await attempt(
     "the telemetry finalizer's check",
     async () =>
@@ -103,16 +97,6 @@ export async function writeTestEvidence(input: {
   const steps = testEvidenceSteps(environment.TEST_EVIDENCE_STEPS, diagnostics);
 
   await mkdir(path(testEvidencePaths.root), { recursive: true });
-  await attempt(
-    "tables/tests.parquet",
-    async () => {
-      const { rows, problems } = testResultsTable({ job, artifacts, flakeRecords });
-      diagnostics.push(...problems);
-      await mkdir(dirname(path(testEvidencePaths.testsTable)), { recursive: true });
-      await writeFile(path(testEvidencePaths.testsTable), testResultsParquet(rows));
-    },
-    undefined,
-  );
 
   const root = path(testEvidencePaths.root);
   const manifestFile = path(testEvidencePaths.manifest);
@@ -185,6 +169,35 @@ export async function writeTestEvidence(input: {
 }
 
 /**
+ * The CI job attempt this process runs in: the manifest's identity. It comes from the job's
+ * environment (DEPOT_JOB_URL, GITHUB_*, TEST_TELEMETRY_*), read the way the reporters read it
+ * (`ciTelemetrySourceFromEnvironment`), not from the telemetry, so a job whose runners crashed or
+ * never started still has one. Without a Depot job attempt (a laptop) there is none.
+ */
+function ciJobAttempt(environment: NodeJS.ProcessEnv) {
+  const job = CiJob.parse(ciTelemetrySourceFromEnvironment(environment));
+  const url = new URL(job.depotJobUrl);
+  const jobId = url.searchParams.get("job");
+  const jobAttemptId = url.searchParams.get("attempt");
+  if (!jobId || !jobAttemptId)
+    throw new Error(`DEPOT_JOB_URL names no job and attempt: ${job.depotJobUrl}`);
+  return { ...job, jobId, jobAttemptId, testRunId: `testrun_${jobAttemptId}` };
+}
+
+/** The fields the manifest needs, which a laptop's environment does not have. */
+const CiJob = z.object({
+  repository: z.string(),
+  workflowName: z.string().min(1),
+  workflowRunId: z.string(),
+  workflowRunAttempt: z.string(),
+  jobName: z.string().min(1),
+  depotJobUrl: z.url(),
+  headSha: z.string().min(1).optional(),
+  branch: z.string().min(1).optional(),
+  pullRequestNumber: z.number().int().optional(),
+});
+
+/**
  * `main` for a push or schedule on refs/heads/main that tested that very commit: the files on disk
  * are its tree, unchanged. `depot ci run` applies a laptop's changes to the checkout as a patch, so a
  * run whose tree is not the pushed commit's is filed as `pr`, with a diagnostic saying why. Everything
@@ -254,8 +267,7 @@ function testRunResult(input: {
 /**
  * Where a test run's folder lives in the CI bucket (docs/test-evidence.md#object-keys):
  * `evidence/ci/trust=<main|pr>/date=<YYYY-MM-DD>/job=<Depot job id>/<testRunId>/`, the date being the
- * UTC day the manifest was written. `evidence/` keeps the folders apart from the bucket's `tables/`
- * and `state/`, which never expire. Every segment after `ci/` but the last is one a Depot OIDC
+ * UTC day the manifest was written. Every segment after `ci/` but the last is one a Depot OIDC
  * token's claims give (`ref` and `event_name`, `iat`, `job_id`), so the notary that later mints
  * per-job credentials can derive the prefix rather than take it from the job. `trust` before the
  * date, because R2 lifecycle rules and bucket locks match by prefix. The `key=value` segments are
@@ -263,11 +275,6 @@ function testRunResult(input: {
  */
 export function testEvidencePrefix(manifest: TestEvidenceManifest) {
   return `evidence/ci/${testEvidencePartition(manifest)}/${manifest.testRunId}/`;
-}
-
-/** The copy of the run's tests table the loader lists (docs/test-evidence.md#object-keys). */
-export function testEvidenceTableKey(manifest: TestEvidenceManifest) {
-  return `tables/tests/${testEvidencePartition(manifest)}/${manifest.testRunId}.parquet`;
 }
 
 function testEvidencePartition(manifest: TestEvidenceManifest) {
@@ -291,10 +298,8 @@ const RETRY_WAIT_CEILING_MS = 5_000;
 
 /**
  * PUTs the folder into the CI bucket through R2's S3 API (https://developers.cloudflare.com/r2/api/s3/api/):
- * every file the manifest lists, eight at a time, then a copy of `tables/tests.parquet` under
- * `tables/` for the loader (not for a cancelled run, whose rows stop part way), then the manifest.
- * The manifest is the commit point: a folder, or a table's copy, whose manifest is in R2 is complete,
- * and the loader skips a copy whose manifest is not.
+ * every file the manifest lists, eight at a time, then the manifest. The manifest is the commit
+ * point: a folder whose manifest is in R2 is complete.
  *
  * The credentials are the Cloudflare API token CI already holds (Doppler `_shared/preview`'s
  * CLOUDFLARE_API_TOKEN, the one preview deploys use): an API token with R2 permissions is also an
@@ -380,31 +385,28 @@ export async function uploadTestEvidence(input: {
     }
     throw new Error(`R2 PUT ${input.bucketName}/${key}: ${answer}`);
   };
-  const putFile = async (key: string, file: TestEvidenceManifest["files"][number]) =>
-    put(key, file.path, await readFile(join(root, file.path)), file.sha256);
-
   for (let start = 0; start < manifest.files.length; start += 8) {
     await Promise.all(
-      manifest.files.slice(start, start + 8).map((file) => putFile(`${prefix}${file.path}`, file)),
+      manifest.files
+        .slice(start, start + 8)
+        .map(async (file) =>
+          put(
+            `${prefix}${file.path}`,
+            file.path,
+            await readFile(join(root, file.path)),
+            file.sha256,
+          ),
+        ),
     );
   }
-  const testsTable =
-    manifest.result === "cancelled"
-      ? undefined
-      : manifest.files.find(
-          (file) => file.path === relative(testEvidencePaths.root, testEvidencePaths.testsTable),
-        );
-  const tableKey = testsTable && testEvidenceTableKey(manifest);
-  if (testsTable && tableKey) await putFile(tableKey, testsTable);
   const manifestPath = relative(testEvidencePaths.root, testEvidencePaths.manifest);
   await put(`${prefix}${manifestPath}`, manifestPath, manifestBytes, sha256(manifestBytes));
   const bytes = manifest.files.reduce((total, file) => total + file.bytes, 0);
   return {
     prefix,
-    tableKey,
-    /** Every PUT: the listed files, the table's copy when there is one, and the manifest. */
-    objects: manifest.files.length + (testsTable ? 1 : 0) + 1,
-    bytes: bytes + (testsTable?.bytes ?? 0) + manifestBytes.byteLength,
+    /** Every PUT: the listed files, then the manifest. */
+    objects: manifest.files.length + 1,
+    bytes: bytes + manifestBytes.byteLength,
     retries: context.retries,
   };
 }
@@ -539,28 +541,10 @@ const contentTypes: Record<string, string> = {
   ".jpeg": "image/jpeg",
   ".webm": "video/webm",
   ".zip": "application/zip",
-  // https://www.iana.org/assignments/media-types/application/vnd.apache.parquet
-  ".parquet": "application/vnd.apache.parquet",
 };
 
 function sha256(bytes: Uint8Array) {
   return createHash("sha256").update(bytes).digest("hex");
-}
-
-/** Every `*.jsonl` line below `$FLAKE_RECORD_DIR`; the directory exists only once a test recorded. */
-async function loadFlakeRecords(directory: string) {
-  const files = existsSync(directory) ? await readdir(directory, { recursive: true }) : [];
-  const lines = await Promise.all(
-    files
-      .filter((file) => file.endsWith(".jsonl"))
-      .map(async (file) =>
-        (await readFile(join(directory, file), "utf8"))
-          .split("\n")
-          .filter((line) => line.trim() !== "")
-          .map((line) => FlakeRecord.parse(JSON.parse(line))),
-      ),
-  );
-  return lines.flat();
 }
 
 /**
@@ -632,7 +616,7 @@ function stepSummary(environment: NodeJS.ProcessEnv, line: string) {
   if (environment.GITHUB_STEP_SUMMARY) appendFileSync(environment.GITHUB_STEP_SUMMARY, `${line}\n`);
 }
 
-/** tests.parquet, then manifest.json, in the job's test evidence folder. */
+/** manifest.json, in the job's test evidence folder. */
 export async function write(
   options: {
     /** The job was cancelled (the workflow's `cancelled()`). */
