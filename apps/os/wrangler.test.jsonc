@@ -9,13 +9,13 @@
   //     and OAuth KV are fresh local ones, the D1 migrated by each file's setup
   //     (__workers-tests__/apply-migrations.ts).
   //
-  // KEPT identical on purpose: compatibility_date + flags, the declarative DO export, the LOADER
+  // KEPT identical on purpose: the compatibility flags, the declarative DO export, the LOADER
   // worker-loader binding, the DO binding, and the KV bindings (ids are meaningless locally —
-  // miniflare keys namespaces by binding).
+  // miniflare keys namespaces by binding). The compatibility date is the shared one
+  // (scripts/lib/wrangler-config.ts COMPATIBILITY_DATE), which vitest.config.ts sets.
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "os",
   "main": "src/worker.ts",
-  "compatibility_date": "2026-09-01",
   "compatibility_flags": [
     "nodejs_compat",
     "allow_irrevocable_stub_storage",

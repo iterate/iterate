@@ -3,7 +3,14 @@
 // written against `itx.fetch` alone, so a userspace worker could carry them unchanged. `run` and the
 // entity roots (`repos`, `workspaces`) are platform sugar spelled at the fixed point,
 // `itx.builtins` — the word loaded code may not say; `files` is a path namespace over `itx.r2`.
-// library.test.ts pins what every library file may import at runtime.
+//
+// THE LIBRARY RULE: a library module takes `itx` and nothing else, so at runtime this file and
+// library/*.ts import only npm packages a userspace worker could bundle too (capnweb,
+// cloudflare:workers, zod), the SDK's pure `iterate/expression` (the codec and the pipelinable
+// handle) and `iterate/lib`, the entities' contracts (pure zod, the vocabulary a handle's typed
+// `append` validates against) and each other. Type-only imports are free. Anything else (the
+// stream, the DO, the rest of context/) would make the library un-movable to userspace, which is
+// the whole point of the tier. Lint enforces it (`no-restricted-imports` in .oxlintrc.json).
 
 import { z } from "zod";
 import { keySortedForPrint, InvokeHandle, print, type ItxExpression } from "iterate/expression";
@@ -338,7 +345,7 @@ export async function runScript(itx: LibraryItx, script: unknown): Promise<unkno
     afterOffset = settled.offset;
     // Validated at the append boundary against CoreContract's schema (core-processor.ts), so the
     // payload IS a RunSettled: read as such, never re-parsed — the library takes only itx, and the
-    // contract's TYPE is free to import where its runtime is not (library.test.ts, the boundary).
+    // contract's TYPE is free to import where its runtime is not (the library rule, above).
     const { requestOffset: settledOffset, settlement } = settled.payload as RunSettled;
     if (settledOffset !== requestOffset) continue;
     if (settlement.status === "succeeded") return settlement.result;

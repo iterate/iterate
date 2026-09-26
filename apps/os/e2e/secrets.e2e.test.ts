@@ -441,51 +441,24 @@ test("a set refused by a paused stream on the secret's path leaves no value behi
   expect(await res.text()).toContain('no stored project secret for getSecret("/secrets/ghost")');
 });
 
-test("verifyHmac: a webhook's HMAC-SHA256 hex signature is checked inside the secret's facet — true for the right key and signed bytes (a string or bytes, hex in either case, the whole material or one field of an object), false for a tampered payload, a wrong signature, a wrong field or a secret never set; the same from loaded code through its creator's link; no fact and no value leaves the facet", async () => {
+// The verdicts themselves (hex case, a field of an object, a wrong key, a short signature) are
+// secrets.test.ts's `verifySecretHmac` table; this row proves the wire and the facet around it.
+test("verifyHmac checks a webhook's HMAC-SHA256 inside the secret's facet: true for the signed string or its bytes, false for a tampered payload or a secret never set or deleted; loaded code verifies through its creator's link; no fact and no value leaves the facet", async () => {
   const itx = openItx(freshCtx("secrets-verify"));
-  const urls = ["https://api.stripe.com"];
-  await itx.secrets.set("/secrets/hook", "whsec_test_key", { urls });
-  await itx.secrets.set("/secrets/hook-json", { signing: "whsec_json_key", n: 1 }, { urls });
+  await itx.secrets.set("/secrets/hook", "whsec_test_key", { urls: ["https://api.stripe.com"] });
   const payload =
     "1700000000." + JSON.stringify({ id: "evt_1", type: "checkout.session.completed" });
-  const sign = (key: string) => createHmac("sha256", key).update(payload).digest("hex");
-  const signature = sign("whsec_test_key");
+  const signature = createHmac("sha256", "whsec_test_key").update(payload).digest("hex");
   expect(await itx.secrets.verifyHmac("/secrets/hook", { payload, signature })).toBe(true);
   expect(
     await itx.secrets.verifyHmac("/secrets/hook", {
       payload: new TextEncoder().encode(payload),
-      signature: signature.toUpperCase(),
+      signature,
     }),
   ).toBe(true);
   expect(await itx.secrets.verifyHmac("/secrets/hook", { payload: `${payload} `, signature })).toBe(
     false,
   );
-  expect(
-    await itx.secrets.verifyHmac("/secrets/hook", { payload, signature: "00".repeat(32) }),
-  ).toBe(false);
-  expect(
-    await itx.secrets.verifyHmac("/secrets/hook", { payload, signature: sign("whsec_json_key") }),
-  ).toBe(false);
-  expect(
-    await itx.secrets.verifyHmac("/secrets/hook-json", {
-      payload,
-      signature: sign("whsec_json_key"),
-      field: "signing",
-    }),
-  ).toBe(true);
-  expect(
-    await itx.secrets.verifyHmac("/secrets/hook-json", {
-      payload,
-      signature: sign("whsec_json_key"),
-    }),
-  ).toBe(false); // an object needs a field
-  expect(
-    await itx.secrets.verifyHmac("/secrets/hook-json", {
-      payload,
-      signature: sign("1"),
-      field: "n",
-    }),
-  ).toBe(false);
   expect(await itx.secrets.verifyHmac("/secrets/never-set", { payload, signature })).toBe(false);
   // loaded code: a script in a child context, through its creator's link, verifies the same way
   const child = itx.cd("/agents/hook");

@@ -1,7 +1,11 @@
 import { readFileSync } from "node:fs";
 import JSON5 from "json5";
 import { osEnvs, PREVIEW_AND_DEV_ACCOUNT_ID, type OsEnv } from "../../../envs.ts";
-import { OBSERVABILITY, registrableDomainOf } from "../../../scripts/lib/wrangler-config.ts";
+import {
+  COMPATIBILITY_DATE,
+  OBSERVABILITY,
+  registrableDomainOf,
+} from "../../../scripts/lib/wrangler-config.ts";
 import { TEST_LINK_EMAIL_DOMAIN } from "../src/test-link.ts";
 
 /** The half of `APP_CONFIG` (src/app-config.ts) a deployment gets from envs.ts — its `urls`, the
@@ -62,7 +66,10 @@ export function routedHostnames(env: OsEnv) {
 
 /** wrangler.base.jsonc, the template every deployment's and preview's config derives from. */
 export function readWranglerBase() {
-  return JSON5.parse(readFileSync(new URL("../wrangler.base.jsonc", import.meta.url), "utf8"));
+  const base = JSON5.parse(
+    readFileSync(new URL("../wrangler.base.jsonc", import.meta.url), "utf8"),
+  );
+  return { ...base, compatibility_date: COMPATIBILITY_DATE };
 }
 
 /** Runtime bindings stay with the app; deployed names and IDs come from envs.ts. The top-level

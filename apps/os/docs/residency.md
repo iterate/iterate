@@ -54,7 +54,7 @@ facet is never reset.
 On the edge, a facet that wrote a few dozen pages and then stops — aborted, or evicted with its
 context — makes one of the context's next commits fail with "Internal error in Durable Object
 storage caused object to be reset", and the whole context resets
-([`e2e/facet-abort-storage-reset.e2e.test.ts`](../e2e/facet-abort-storage-reset.e2e.test.ts) measures
+([`e2e/facet-abort-storage-reset.e2e.test.ts`](../e2e/facet-abort-storage-reset.e2e.test.ts) pins
 it). A facet started again before the context commits anything more avoids it. So every abort the
 platform makes (5, 6, `itx.facets.abort`, the call watchdog, a new loaded identity) is followed by a
 start under `blockConcurrencyWhile`, and a birth starts every facet the last incarnation called,
@@ -140,5 +140,4 @@ preview, 2026-09-23). So:
   their call and evicted a context mid-traffic while the control plane stalled (#2899, #2921,
   #2939). The latency guard never runs them.
 - Deployed: `e2e/facet-abort-storage-reset.e2e.test.ts` pins the raw fault (a `createFailing` tagged
-  `slow`), and, opt-in (`RUN_FACET_ABORT_REPRO=1`), drives every abort, and an eviction, with a
-  storage-heavy facet.
+  `slow`).

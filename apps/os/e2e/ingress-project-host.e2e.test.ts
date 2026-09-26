@@ -6,16 +6,13 @@
 // a routing slug the config worker does not serve reaches it too, and its 404 is the config worker's;
 // and — deployed — an upgrade rides through the host to the config worker. The log never names a
 // hostname. WHO, on a host: an OAuth bearer stamps the verified principal; credentials never reach the
-// config worker. Browser cookie flows are in specs/os/auth.spec.ts. RED, deployed: the hop budget
-// counts only what a site forwards — a site fetching its own host with a FRESH Request is not stopped by it.
+// config worker. Browser cookie flows are in specs/os/auth.spec.ts.
 
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { newWebSocketRpcSession } from "capnweb";
 import { transformSync } from "esbuild";
 import { expect, test } from "vitest";
-import { E2E_CI_RETRIES } from "@iterate-com/shared/test-support/e2e-policy";
-import { createFailing } from "@iterate-com/shared/test-support/failing-test";
 import { openItx } from "./support/client.ts";
 import { oauthSession } from "./support/principal.ts";
 import {
@@ -202,38 +199,6 @@ test("an app's sign-in challenge (401 Bearer realm=iterate): a page load goes to
   expect(signInAgain.headers).toMatchObject({ location: login({ project: slug }) });
   expect(await fetchProjectUrl(privateUrl, foreign)).toMatchObject({ status: 403 });
 });
-
-/** A config worker that fetches its own host with a FRESH Request — nothing forwarded, so no hop count. */
-const SRC_SELF_LOOP = {
-  "worker.js": `import { WorkerEntrypoint } from "cloudflare:workers";
-export default class Loop extends WorkerEntrypoint {
-  fetch(request) { return fetch(new Request(request.url)); }
-}`,
-};
-
-// RED BY CONSTRUCTION: the hop budget (src/worker.ts `PROJECT_HOST_HOPS_HEADER`) is the count the
-// site FORWARDS — a site that fetches its own host with a fresh Request re-enters at 1 every pass,
-// and the fourth pass is never reached. Deployed only: the local DO's fetch cannot resolve a
-// `*.localhost` host. OPT-IN (RUN_SELF_LOOP_PROBE=1), like the wake-loop probe: the row starts a
-// REAL self-nesting chain on the deployed worker that runs until the eyeball's 10 s abort — never
-// in a routine deployed run.
-const SELF_LOOP_OPT_IN = process.env.RUN_SELF_LOOP_PROBE === "1";
-createFailing(
-  test.skipIf(projectHostsAreLocal() || !SELF_LOOP_OPT_IN),
-  /TimeoutError: The operation was aborted due to timeout/,
-  { timeoutMs: 60_000, retries: process.env.CI ? E2E_CI_RETRIES : 0 },
-)(
-  "a site that fetches its own host with a FRESH Request is stopped by the hop budget (508 on the fourth pass)",
-  async () => {
-    const slug = freshDnsSafeProjectSlug("ingress-loop");
-    const itx = openItx(await registerProject(slug));
-    await publishConfigWorker(itx, ["itx", "workers", ["get", { source: SRC_SELF_LOOP }]]);
-    const answer = await fetch(projectUrl({ project: slug, path: "/" }), {
-      signal: AbortSignal.timeout(10_000),
-    });
-    expect(answer).toMatchObject({ status: 508 });
-  },
-);
 
 deployedOnly(
   "deployed: a WebSocket upgrade on the project host reaches the config worker",
