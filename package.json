@@ -14,7 +14,7 @@
     "lint": "oxlint . --threads 1 --deny-warnings --report-unused-disable-directives-severity error",
     "lint:fix": "oxlint . --fix --threads 1",
     "knip": "knip",
-    "prepare": "is-ci || husky",
+    "prepare": "is-ci || (husky && node scripts/lockfile-stamp.ts)",
     "spec": "playwright test --config playwright.config.ts",
     "test": "pnpm -r --parallel test"
   },
