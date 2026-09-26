@@ -445,6 +445,13 @@ export class ControlPlane {
   linkIdentity(provider: IdentityProvider, subject: string, email: string): Promise<UserRecord> {
     return this.#call("linkIdentity", () => this.#db.linkIdentity({ provider, subject, email }));
   }
+  /** A sign-in a signed-in person adds to their account (identity.ts's link mode). The system's
+   *  own write — no caller. */
+  addIdentity(userId: string, provider: IdentityProvider, subject: string): Promise<UserRecord> {
+    return this.#call("addIdentity", () =>
+      this.#db.addIdentity({ userId, provider, subject, now: Date.now() }),
+    );
+  }
 
   async createOrganization(
     caller: Caller,

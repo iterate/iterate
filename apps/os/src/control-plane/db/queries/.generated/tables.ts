@@ -5,6 +5,7 @@ export type IdentitiesRow = {
 	provider: string;
 	subject: string;
 	user_id: string;
+	added_at: number | null;
 };
 
 export type IntegrationRoutesRow = {

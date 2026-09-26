@@ -6,7 +6,9 @@
 // (apps/os/scripts/preview-{google,github,cloudflare}-app.ts): each asks which account on a picker
 // page, as the real one does, then consents at once. A fake signs in addresses under the preview's
 // test-link domain alone. The Dash is signed in to with its own scopes, `account` among them: the
-// person's own connections are the account's.
+// person's own connections are the account's. A person signed in another way adds GitHub to their
+// own account from /sessions (the issuer's link mode, apps/os identity.ts), whatever address GitHub
+// reports.
 import { createPublicKey } from "node:crypto";
 import { uniqueFixtureSlug } from "@iterate-com/shared/test-support/fixture-slug";
 import type { Page } from "@playwright/test";
@@ -132,6 +134,31 @@ test("a person who signed in with GitHub connects an organization iterate's app 
     .getByRole("button", { name: `Connect ${accountLogin}`, exact: true })
     .click({ noWaitAfter: true });
   await github.getByRole("listitem").filter({ hasText: accountLogin }).waitFor();
+});
+
+test("a person signed in with the password adds GitHub to their account, and the Dash lists it among their connected accounts", async ({
+  page,
+  helpers,
+}) => {
+  await using fixture = await helpers.createFixture("add-github", {
+    app: helpers.appOrigin("dash"),
+  });
+  const login = fixture.project.slug;
+  await page.goto("/sessions");
+  await page
+    .getByRole("link", { name: "Connect GitHub", exact: true })
+    .click({ noWaitAfter: true });
+  // GitHub's account picker: an account whose address is not the person's
+  await page.getByRole("textbox", { name: "Username" }).fill(login);
+  await page.getByRole("textbox", { name: "Email" }).fill(`${login}@${TEST_LINK_EMAIL_DOMAIN}`);
+  await page.getByRole("button", { name: "Continue", exact: true }).click({ noWaitAfter: true });
+  // back on /sessions, still signed in as themself
+  await page
+    .getByRole("list", { name: "Connected accounts" })
+    .getByRole("listitem")
+    .filter({ hasText: login })
+    .getByText("GitHub", { exact: true })
+    .waitFor();
 });
 
 /** A fresh person under the preview's test-link domain who owns a fresh project (made as them by

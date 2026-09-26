@@ -44,6 +44,7 @@ import { iterateAppScopesOf, type AppConfig } from "./app-config.ts";
 import { isDeployReset, isPlatformFailure } from "./retryable-error.ts";
 import type { AccountState, AuthenticationFact } from "./account/contract.ts";
 import { IntegrationProvider } from "./integrations/contract.ts";
+import { IdentityProvider } from "./control-plane/contract.ts";
 import { assertSecretPath } from "./secrets.ts";
 
 /** What `IterateRpcTarget.authenticate` accepts. `from-server-cookie` is the browser and `bearer` is
@@ -621,6 +622,12 @@ export class SessionRpcTarget extends RpcTarget {
           provider !== "waitrose" && !!this.#input.appConfig.integrations[provider],
       ),
       iterateAppScopes: iterateAppScopesOf(this.#input.appConfig),
+      // as identity.ts `signInClientOf`: the sign-in's block, and the integration's client it uses
+      signInProviders: IdentityProvider.options.filter(
+        (provider) =>
+          Boolean(this.#input.appConfig.login[provider]) &&
+          Boolean(this.#input.appConfig.integrations[provider]),
+      ),
     };
   }
 

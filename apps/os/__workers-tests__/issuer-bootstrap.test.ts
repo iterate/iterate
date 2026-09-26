@@ -44,6 +44,7 @@ test("first consent creates organization and project through the ordinary sessio
   expect(await api.info()).toMatchObject({
     principal: { actor: user.id, email: user.email },
     iterateAppProviders: ["slack", "google", "cloudflare", "github"],
+    signInProviders: ["google", "cloudflare", "github"],
   });
   expect(await api.organizations.list()).toEqual([]);
   expect(await api.projects.list()).toEqual([]);

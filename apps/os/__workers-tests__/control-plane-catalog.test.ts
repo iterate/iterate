@@ -6,6 +6,7 @@
 // streams' activity and a project's own creation saga are the session's (session.ts), proven on the
 // worker (control-plane.test.ts, e2e/organizations.e2e.test.ts).
 import { env } from "cloudflare:workers";
+import { createD1Client } from "sqlfu";
 import { expect, test } from "vitest";
 import {
   ADMIN_ORG_ID,
@@ -14,6 +15,7 @@ import {
   projectSlug,
 } from "../src/control-plane/catalog.ts";
 import { listOAuthGrants } from "../src/control-plane/db/queries/.generated/oauth-grants.sql.ts";
+import { updateUserEmail } from "../src/control-plane/db/queries/.generated/users.sql.ts";
 import { OAuthGrantTable } from "../src/control-plane/oauth-grants.ts";
 
 const admin: Caller = { principal: { actor: "admin" } };
@@ -89,6 +91,53 @@ test("people: a person with more than one sign-in keeps their email when one sig
     id: bob.id,
     email: "bob2@example.com",
   });
+});
+
+test("people: a signed-in person adds a sign-in to their account: the subject becomes theirs, again unchanged, never one another person holds or a second of the provider, and it never moves their email", async () => {
+  await emptyTables();
+  const ada = await person("ada@example.com");
+  const bob = await person("bob@example.com");
+  const add = (userId: string, provider: "google" | "github", subject: string) =>
+    c.addIdentity({ userId, provider, subject, now: NOW });
+  expect(await add(ada.id, "github", "gh-ada")).toEqual(ada);
+  expect(await c.identity("github", "gh-ada")).toEqual(ada);
+  expect(await add(ada.id, "github", "gh-ada")).toEqual(ada);
+  await expect(add(bob.id, "github", "gh-ada")).rejects.toMatchObject({
+    code: "IDENTITY_CONFLICT",
+    message: "This GitHub account signs in to another iterate account.",
+  });
+  await expect(add(ada.id, "github", "gh-ada-2")).rejects.toMatchObject({
+    code: "IDENTITY_CONFLICT",
+    message: "Your account already signs in with another GitHub account.",
+  });
+  expect(await c.identity("github", "gh-ada-2")).toBeNull();
+  // signing in with it later finds Ada, and the address GitHub reports is not hers: she keeps
+  // hers, though it is her only sign-in
+  expect(
+    await c.linkIdentity({ provider: "github", subject: "gh-ada", email: "ada@elsewhere.example" }),
+  ).toEqual(ada);
+  expect(await c.user(ada.id)).toEqual(ada);
+  // nor can any other write, an older version's `linkIdentity` among them: the database refuses it
+  await expect(
+    env.DB.prepare("update users set email = 'ada@elsewhere.example' where id = ?")
+      .bind(ada.id)
+      .run(),
+  ).rejects.toThrow(/a person with an added sign-in keeps their email/);
+  expect(await c.user(ada.id)).toEqual(ada);
+  // the sign-in's own email update holds the rule in its `where`: a sign-in added between its read
+  // and its write stops it quietly, never failing that sign-in on the trigger
+  expect(
+    await updateUserEmail(createD1Client(env.DB), { email: "ada3@example.com" }, { id: ada.id }),
+  ).toMatchObject({ rowsAffected: 0 });
+  // two people adding one subject at once: one holds it, the other is refused
+  const both = await Promise.allSettled([
+    add(ada.id, "google", "g-x"),
+    add(bob.id, "google", "g-x"),
+  ]);
+  expect(both.map((result) => result.status).sort()).toEqual(["fulfilled", "rejected"]);
+  expect(await rows("select count(*) as n from identities where subject = 'g-x'")).toEqual([
+    { n: 1 },
+  ]);
 });
 
 test("organizations: created with the caller its owner; the operator alone names another owner, one who exists", async () => {

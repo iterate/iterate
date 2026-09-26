@@ -68,7 +68,12 @@ export namespace insertUserIfNew {
 	};
 }
 
-const updateUserEmailSql = `update users set email = ? where id = ?;`;
+const updateUserEmailSql = `
+update users set email = ?
+where id = ?
+  and (select count(*) from identities i where i.user_id = users.id) = 1
+  and not exists (select 1 from identities i where i.user_id = users.id and i.added_at is not null);
+`.trim();
 const updateUserEmailQuery = (data: updateUserEmail.Data, params: updateUserEmail.Params) => ({
 	name: "updateUserEmail",
 	sql: updateUserEmailSql,
@@ -92,7 +97,7 @@ export namespace updateUserEmail {
 }
 
 const identityUserSql = `
-select u.id, u.email, (select count(*) from identities j where j.user_id = u.id) as sign_ins
+select u.id, u.email
 from identities i
 join users u on u.id = i.user_id
 where i.provider = ? and i.subject = ?
@@ -104,20 +109,12 @@ const identityUserQuery = (params: identityUser.Params) => ({
 	args: [params.provider, params.subject],
 });
 
-function identityUserMapResult(row: identityUser.RawResult): identityUser.Result {
-	return {
-		id: row.id,
-		email: row.email,
-		signIns: row.sign_ins,
-	};
-}
-
 export const identityUser = Object.assign(
 	async function identityUser(client: Client, params: identityUser.Params): Promise<identityUser.Result | null> {
-		const rows = await client.all<identityUser.RawResult>(identityUserQuery(params));
-		return rows.length > 0 ? identityUserMapResult(rows[0]!) : null;
+		const rows = await client.all<identityUser.Result>(identityUserQuery(params));
+		return rows.length > 0 ? rows[0] : null;
 	},
-	{ sql: identityUserSql, query: identityUserQuery, mapResult: identityUserMapResult },
+	{ sql: identityUserSql, query: identityUserQuery },
 );
 
 export namespace identityUser {
@@ -125,15 +122,9 @@ export namespace identityUser {
 		provider: string;
 		subject: string;
 	};
-	export type RawResult = {
-		id: string;
-		email: string;
-		sign_ins?: number;
-	};
 	export type Result = {
 		id: string;
 		email: string;
-		signIns?: number;
 	};
 }
 
@@ -188,5 +179,32 @@ export namespace insertIdentity {
 		provider: string;
 		subject: string;
 		email: string;
+	};
+}
+
+const insertAddedIdentitySql = `
+insert into identities (provider, subject, user_id, added_at)
+values (?, ?, ?, ?)
+on conflict do nothing;
+`.trim();
+const insertAddedIdentityQuery = (params: insertAddedIdentity.Params) => ({
+	name: "insertAddedIdentity",
+	sql: insertAddedIdentitySql,
+	args: [params.provider, params.subject, params.userId, params.addedAt],
+});
+
+export const insertAddedIdentity = Object.assign(
+	async function insertAddedIdentity(client: Client, params: insertAddedIdentity.Params) {
+		return client.run(insertAddedIdentityQuery(params));
+	},
+	{ sql: insertAddedIdentitySql, query: insertAddedIdentityQuery },
+);
+
+export namespace insertAddedIdentity {
+	export type Params = {
+		provider: string;
+		subject: string;
+		userId: string;
+		addedAt: number | null;
 	};
 }
