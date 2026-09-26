@@ -55,7 +55,9 @@ static bool clock_slug(char *out, size_t capacity);
  */
 static uint32_t abandon_speaker_audio(void);
 static void end_local_activation(const char *reason, const char *status);
+#include "iterate/kit/announcer.h"
 #include "iterate/kit/configuration.h"
+#include "iterate/kit/tinyvoice.h"
 #include "iterate/kit/itx_connection.h"
 #include "iterate/kit/microphone_flush.h"
 #include "iterate/kit/peer.h"
@@ -445,6 +447,28 @@ EXT_RAM_BSS_ATTR static struct {
    * difference between an answer that ended and an answer that was cut off.
    */
   atomic_bool answer_declared_done;
+  /*
+   * THE BOARD'S OWN VOICE: its connection status, out loud, before and without
+   * a conversation. The announcer says what and when; tinyvoice renders it on
+   * this task, and the board plays it. A clip player keeps the pointer, so a
+   * rendered phrase stays allocated until well after it has played.
+   */
+  struct {
+    bool enabled;
+    enum iterate_kit_tinyvoice_tune tune;
+    struct iterate_kit_announcer announcer;
+    struct iterate_kit_tinyvoice synth;
+    /* Hello and Call ended, rendered once and kept: every call uses them. */
+    int16_t *kept[ITERATE_KIT_ANNOUNCEMENT_COUNT];
+    size_t kept_samples[ITERATE_KIT_ANNOUNCEMENT_COUNT];
+    /* The status phrase playing, freed once it has played. */
+    int16_t *status;
+    /* Last pass had a session open or opening, to see one end. */
+    bool was_in_session;
+    uint64_t busy_until_ms;
+    /* A clip may have raised a gated amplifier that nothing else will lower. */
+    bool speaker_raised;
+  } status_voice;
 } runtime;
 
 /*
@@ -2364,6 +2388,148 @@ static bool start_board(void) {
   }
 }
 
+enum {
+  /*
+   * A clip counts as playing until this long after its last sample was handed
+   * over: the DMA ring (up to 120 ms), a gated amplifier's settle (80 ms) and
+   * the codec copying its last slice after it stops reporting the clip.
+   */
+  STATUS_VOICE_TAIL_MS = 300,
+  /* tools/make-sounds.py's SPEECH_PEAK: spoken status on a board with no extra gain. */
+  STATUS_VOICE_DEFAULT_PEAK = 19339,
+};
+
+static enum iterate_kit_tinyvoice_tune status_voice_tune(enum iterate_kit_status_voice voice) {
+  switch (voice) {
+    case ITERATE_KIT_STATUS_VOICE_DAISY_BELL:
+      return ITERATE_KIT_TINYVOICE_DAISY_BELL;
+    case ITERATE_KIT_STATUS_VOICE_AULD_LANG_SYNE:
+      return ITERATE_KIT_TINYVOICE_AULD_LANG_SYNE;
+    case ITERATE_KIT_STATUS_VOICE_LASS_OF_AUGHRIM:
+      return ITERATE_KIT_TINYVOICE_LASS_OF_AUGHRIM;
+    case ITERATE_KIT_STATUS_VOICE_SPOKEN:
+    case ITERATE_KIT_STATUS_VOICE_OFF:
+      return ITERATE_KIT_TINYVOICE_SPOKEN;
+    case ITERATE_KIT_STATUS_VOICE_GREENSLEEVES:
+    default:
+      return ITERATE_KIT_TINYVOICE_GREENSLEEVES;
+  }
+}
+
+static void status_voice_init(void) {
+  const enum iterate_kit_status_voice voice =
+      (enum iterate_kit_status_voice)runtime.configuration.status_voice;
+  runtime.status_voice.enabled =
+      runtime.board->play_clip != NULL && voice != ITERATE_KIT_STATUS_VOICE_OFF;
+  runtime.status_voice.tune = status_voice_tune(voice);
+  const bool narrate = iterate_kit_platform_reset_by_person();
+  iterate_kit_announcer_init(&runtime.status_voice.announcer, narrate, now_ms(NULL));
+  ESP_LOGI(
+      tag, "status voice: %s%s (reset: %s)", iterate_kit_status_voice_name(voice),
+      runtime.board->play_clip == NULL ? ", but this board plays no clips"
+      : !runtime.status_voice.enabled   ? ""
+      : narrate                         ? ", narrating this boot"
+                                        : ", quiet: nobody caused this boot",
+      iterate_kit_platform_reset_reason_name());
+}
+
+/* Render (or reuse) a phrase and hand it to the board. Only called once the last clip is over. */
+static void status_voice_say(enum iterate_kit_announcement phrase, uint64_t now) {
+  const bool keep = phrase == ITERATE_KIT_ANNOUNCEMENT_HELLO || phrase == ITERATE_KIT_ANNOUNCEMENT_CALL_ENDED;
+  int16_t *pcm = runtime.status_voice.kept[phrase];
+  size_t samples = runtime.status_voice.kept_samples[phrase];
+  const int64_t started_us = esp_timer_get_time();
+  if (pcm == NULL) {
+    samples = iterate_kit_tinyvoice_prepare(
+        &runtime.status_voice.synth, iterate_kit_announcement_script(phrase),
+        runtime.status_voice.tune);
+    pcm = samples == 0U ? NULL
+                        : heap_caps_malloc(samples * sizeof(int16_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (pcm == NULL) {
+      ESP_LOGE(tag, "status voice: no room to render \"%s\" (%u samples)",
+               iterate_kit_announcement_text(phrase), (unsigned)samples);
+      return;
+    }
+    iterate_kit_tinyvoice_render(&runtime.status_voice.synth, pcm);
+    /* As loud as this board's speech level. */
+    int32_t peak = 1;
+    for (size_t i = 0; i < samples; i++) peak = pcm[i] > peak ? pcm[i] : -pcm[i] > peak ? -pcm[i] : peak;
+    const int32_t target = runtime.facts->clip_peak != 0U ? runtime.facts->clip_peak : STATUS_VOICE_DEFAULT_PEAK;
+    for (size_t i = 0; i < samples; i++) pcm[i] = (int16_t)((int32_t)pcm[i] * target / peak);
+    if (keep) {
+      runtime.status_voice.kept[phrase] = pcm;
+      runtime.status_voice.kept_samples[phrase] = samples;
+    } else {
+      runtime.status_voice.status = pcm;
+    }
+  }
+  runtime.board->play_clip(runtime.board_context, pcm, samples);
+  runtime.status_voice.speaker_raised = true;
+  runtime.status_voice.busy_until_ms =
+      now + samples * 1000U / ITERATE_KIT_TINYVOICE_SAMPLE_RATE_HZ + STATUS_VOICE_TAIL_MS;
+  ESP_LOGI(
+      tag, "status voice: \"%s\" (%u ms, ready in %u ms)", iterate_kit_announcement_text(phrase),
+      (unsigned)(samples * 1000U / ITERATE_KIT_TINYVOICE_SAMPLE_RATE_HZ),
+      (unsigned)((esp_timer_get_time() - started_us) / 1000));
+}
+
+/*
+ * One pass: tell the announcer what happened, and say what it asks for when
+ * the speaker is free. `started` is this pass's session start, if any, as the
+ * board's controls made it (`wake_word`: the wake word made it).
+ */
+static void status_voice_step(bool started, bool wake_word) {
+  const uint64_t now = now_ms(NULL);
+  const bool speaker_free = now >= runtime.status_voice.busy_until_ms;
+  /* The board chose chime or no chime for this start by the promise it last saw. */
+  const bool answered = started && (wake_word ? runtime.view.voice_answers_wake_word
+                                              : runtime.view.voice_answers_press);
+  runtime.view.voice_answers_wake_word =
+      runtime.status_voice.enabled && iterate_kit_announcer_answers(true, runtime.view.api_ready, speaker_free);
+  runtime.view.voice_answers_press =
+      runtime.status_voice.enabled && iterate_kit_announcer_answers(false, runtime.view.api_ready, speaker_free);
+  /* "Call ended." waits for the speaker if a phrase is still playing; a muted board keeps quiet. */
+  const bool in_session = runtime.view.wants_call || runtime.view.call_active;
+  const bool call_ended =
+      runtime.status_voice.was_in_session && !in_session && !runtime.intent.microphone_muted;
+  runtime.status_voice.was_in_session = in_session;
+  if (!runtime.status_voice.enabled) return;
+  if (speaker_free && runtime.status_voice.status != NULL) {
+    heap_caps_free(runtime.status_voice.status);
+    runtime.status_voice.status = NULL;
+  }
+  if (speaker_free && runtime.status_voice.speaker_raised && !runtime.view.wants_call &&
+      !runtime.view.call_active) {
+    /* What an idle answer path would say: a gated amplifier can go back down. */
+    board_phase(ITERATE_KIT_VOICE_PHASE_QUIET);
+    runtime.status_voice.speaker_raised = false;
+  }
+  struct iterate_kit_itx_transport_metrics metrics;
+  iterate_kit_itx_transport_metrics(&transport, &metrics);
+  const struct iterate_kit_announcer_input input = {
+      .now_ms = now,
+      .wifi = metrics.wifi_status,
+      .key_refused = metrics.credential_refused,
+      .connected = runtime.view.api_ready,
+      .in_session = in_session,
+      .woken = answered && wake_word,
+      .pressed = answered && !wake_word,
+      .call_ended = call_ended,
+  };
+  iterate_kit_announcer_step(&runtime.status_voice.announcer, &input);
+  /*
+   * Nothing starts during a call: a clip holds the speaker, and an answer's
+   * frames would fail behind it. Whatever was due is dropped, not saved.
+   */
+  if (runtime.view.call_active) {
+    (void)iterate_kit_announcer_take(&runtime.status_voice.announcer);
+    return;
+  }
+  if (!speaker_free) return;
+  const enum iterate_kit_announcement phrase = iterate_kit_announcer_take(&runtime.status_voice.announcer);
+  if (phrase != ITERATE_KIT_ANNOUNCEMENT_NONE) status_voice_say(phrase, now);
+}
+
 bool iterate_kit_voice_loop_init(
     const struct iterate_kit_board_ops *ops,
     const struct iterate_kit_board_facts *facts,
@@ -2425,6 +2591,7 @@ bool iterate_kit_voice_loop_init(
   if (!start_board()) {
     park_with_fault("board bring-up failed");
   }
+  status_voice_init();
   runtime.view.screen = ITERATE_KIT_VOICE_SCREEN_CONNECTING;
   runtime.view.status = ("connecting to iterate");
   ESP_LOGI(
@@ -2631,14 +2798,19 @@ void iterate_kit_voice_loop_step(void) {
       end_local_activation("button", "call ended");
       ESP_LOGI(tag, "control: ending call");
     }
-    if (runtime.intent.start_call && !runtime.intent.microphone_muted &&
-        !runtime.voice_stream->call_active &&
-        runtime.pending_terminal_count < TERMINAL_PENDING_CAPACITY) {
+    const bool session_started = runtime.intent.start_call && !runtime.intent.microphone_muted &&
+                                 !runtime.voice_stream->call_active &&
+                                 runtime.pending_terminal_count < TERMINAL_PENDING_CAPACITY;
+    if (session_started) {
       runtime.view.wants_call = true;
       ESP_LOGI(tag, "control: starting call");
     }
+    /* The board's start, accepted or not: it chimed or stayed quiet for it already. */
+    status_voice_step(
+        runtime.intent.start_call && !runtime.intent.microphone_muted, runtime.intent.wake_word);
     runtime.intent.start_call = false;
     runtime.intent.end_call = false;
+    runtime.intent.wake_word = false;
     /* Capture starts at activation and remains open until an explicit end. */
     {
       if (runtime.view.wants_call && !runtime.activation_live) {

@@ -168,8 +168,69 @@ static void decodes_the_flashed_image_with_an_unprefixed_project_and_a_full_leng
   CHECK(strcmp(configuration.project_api_key, key) == 0);
 }
 
+/* The golden image with a status-voice field appended, its checksum redone. */
+static size_t with_status_voice(uint8_t *out, size_t capacity, const char *name) {
+  const size_t golden = sizeof(iterate_kit_test_configuration_image);
+  const size_t name_length = strlen(name);
+  const size_t size = golden + 3U + name_length;
+  uint32_t payload_size;
+  uint32_t crc = UINT32_C(0xffffffff);
+  CHECK(size <= capacity);
+  memcpy(out, iterate_kit_test_configuration_image, golden);
+  out[golden] = 6U;
+  out[golden + 1U] = (uint8_t)name_length;
+  out[golden + 2U] = 0U;
+  memcpy(out + golden + 3U, name, name_length);
+  payload_size = (uint32_t)(size - ITERATE_KIT_CONFIGURATION_HEADER_SIZE);
+  for (size_t i = ITERATE_KIT_CONFIGURATION_HEADER_SIZE; i < size; i++) {
+    crc ^= out[i];
+    for (int bit = 0; bit < 8; bit++) crc = (crc >> 1) ^ ((crc & 1U) != 0U ? UINT32_C(0xedb88320) : 0U);
+  }
+  crc ^= UINT32_C(0xffffffff);
+  for (int i = 0; i < 4; i++) {
+    out[8 + i] = (uint8_t)(payload_size >> (8 * i));
+    out[12 + i] = (uint8_t)(crc >> (8 * i));
+  }
+  return size;
+}
+
+/*
+ * The status voice is the one optional field: every image written before it
+ * existed has none, and Kit may one day write a name this firmware has never
+ * heard of. Neither may cost the board its Wi-Fi and key, so both sing the
+ * default rather than failing the whole image.
+ */
+static void decodes_the_status_voice_and_defaults_what_it_does_not_know(void) {
+  uint8_t image[256];
+  struct iterate_kit_configuration configuration;
+
+  CHECK(iterate_kit_configuration_decode(
+            &configuration, iterate_kit_test_configuration_image,
+            sizeof(iterate_kit_test_configuration_image)) == ITERATE_KIT_CONFIGURATION_OK);
+  CHECK(configuration.status_voice == ITERATE_KIT_STATUS_VOICE_GREENSLEEVES);
+
+  CHECK(iterate_kit_configuration_decode(
+            &configuration, image, with_status_voice(image, sizeof(image), "daisy-bell")) ==
+        ITERATE_KIT_CONFIGURATION_OK);
+  CHECK(configuration.status_voice == ITERATE_KIT_STATUS_VOICE_DAISY_BELL);
+  CHECK(strcmp(configuration.wifi_ssid, "studio") == 0);
+
+  CHECK(iterate_kit_configuration_decode(
+            &configuration, image, with_status_voice(image, sizeof(image), "off")) ==
+        ITERATE_KIT_CONFIGURATION_OK);
+  CHECK(configuration.status_voice == ITERATE_KIT_STATUS_VOICE_OFF);
+  CHECK(strcmp(iterate_kit_status_voice_name(ITERATE_KIT_STATUS_VOICE_OFF), "off") == 0);
+
+  CHECK(iterate_kit_configuration_decode(
+            &configuration, image, with_status_voice(image, sizeof(image), "sea-shanty")) ==
+        ITERATE_KIT_CONFIGURATION_OK);
+  CHECK(configuration.status_voice == ITERATE_KIT_STATUS_VOICE_GREENSLEEVES);
+  CHECK(strcmp(configuration.project_api_key, "itxk_secret") == 0);
+}
+
 int main(void) {
   decodes_the_typescript_golden_image();
+  decodes_the_status_voice_and_defaults_what_it_does_not_know();
   decodes_the_flashed_image_with_an_unprefixed_project_and_a_full_length_key();
   classifies_corruption_without_partial_credentials();
   rejects_truncated_and_wrong_version_images();

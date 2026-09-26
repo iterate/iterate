@@ -50,6 +50,8 @@ static struct {
   bool message_open;
   bool fail_next_send;
   bool credential_refused;
+  enum iterate_kit_wifi_status wifi_status;
+  bool reset_by_person;
   size_t restarts_requested;
   uint32_t pongs;
   uint32_t frames_received;
@@ -72,6 +74,14 @@ void iterate_kit_fake_platform_set_state(
 
 void iterate_kit_fake_platform_set_credential_refused(bool refused) {
   platform.credential_refused = refused;
+}
+
+void iterate_kit_fake_platform_set_wifi_status(enum iterate_kit_wifi_status status) {
+  platform.wifi_status = status;
+}
+
+void iterate_kit_fake_platform_set_reset_by_person(bool by_person) {
+  platform.reset_by_person = by_person;
 }
 
 void iterate_kit_fake_platform_connect(void) {
@@ -185,6 +195,7 @@ const char *iterate_kit_platform_provisioning_status_name(
 /* --- restart bookkeeping -------------------------------------------------- */
 
 const char *iterate_kit_platform_reset_reason_name(void) { return "fake"; }
+bool iterate_kit_platform_reset_by_person(void) { return platform.reset_by_person; }
 
 /*
  * RECORDED, NOT HONOURED, for the same reason esp_restart() is: this does not
@@ -319,6 +330,7 @@ void iterate_kit_itx_transport_metrics(
   metrics->websocket_frames_received = platform.frames_received;
   metrics->ready_socket_generation = transport->ready_socket_generation;
   metrics->credential_refused = platform.credential_refused;
+  metrics->wifi_status = platform.wifi_status;
   metrics->control_inbox_capacity_slots = 1U;
   metrics->control_outbox_capacity_slots = 1U;
 }

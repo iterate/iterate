@@ -1,4 +1,4 @@
-# Generate the two reviewed PCM clips in the component build directory.
+# Generate the reviewed press chime (and the board's speech level) in the component build directory.
 # Inputs are committed WAVs; this rule never contacts a service or needs a secret.
 get_filename_component(ITERATE_KIT_BAKED_SOUNDS_ROOT "${CMAKE_CURRENT_LIST_DIR}/.." ABSOLUTE)
 
@@ -24,12 +24,11 @@ function(iterate_kit_add_baked_sounds)
     COMMAND "${PYTHON}" "${ITERATE_KIT_BAKED_SOUNDS_ROOT}/tools/make-sounds.py"
       --output "${sound_include}"
       "${ITERATE_KIT_BAKED_SOUNDS_ROOT}/assets/sounds"
-      chime_press=center_button_press.wav chime_ended=call_ended.wav
+      chime_press=center_button_press.wav
       ${sound_arguments}
     DEPENDS
       "${ITERATE_KIT_BAKED_SOUNDS_ROOT}/tools/make-sounds.py"
       "${ITERATE_KIT_BAKED_SOUNDS_ROOT}/assets/sounds/center_button_press.wav"
-      "${ITERATE_KIT_BAKED_SOUNDS_ROOT}/assets/sounds/call_ended.wav"
     VERBATIM)
   add_custom_target("${COMPONENT_LIB}_baked_sounds" DEPENDS "${sound_include}")
   add_dependencies("${COMPONENT_LIB}" "${COMPONENT_LIB}_baked_sounds")

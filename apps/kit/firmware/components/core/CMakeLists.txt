@@ -1,4 +1,5 @@
 set(ITERATE_KIT_CORE_SOURCES
+  src/announcer.c
   src/button.c
   src/configuration.c
   src/conversation_lights.c

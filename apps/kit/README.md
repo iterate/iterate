@@ -13,8 +13,9 @@ directly over USB.
 Choose your board at `k.iterate.com`, then click **Log in with iterate**. Consent
 shows that board's name and vendor icon; choose its project and authorize access.
 Each setup starts a unique OAuth client before consent, including two boards of
-the same model. After sign-in, pick the project, enter Wi-Fi (2.4 GHz) and click **Flash
-device**. A dialog prepares the project, says which serial port to pick, flashes with
+the same model. After sign-in, pick the project, enter Wi-Fi (2.4 GHz), pick how the board says its
+connection status (**Status voice**: Greensleeves by default, another tune, spoken, or off) and click
+**Flash device**. A dialog prepares the project, says which serial port to pick, flashes with
 esp-web-tools' `flash` (`src/firmware/flash-device.ts`), then says how to start a call on that
 board (`startCall` in `src/firmware/catalog.ts`). The browser's password manager can keep the
 Wi-Fi. **Set up another device** returns to the public selector and starts fresh

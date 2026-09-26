@@ -9,6 +9,7 @@
 #include "iterate/kit/spsc_ring.h"
 #include "iterate/kit/status.h"
 #include "iterate/kit/websocket_text.h"
+#include "iterate/kit/wifi_status.h"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -90,6 +91,8 @@ struct iterate_kit_itx_transport_metrics {
   /* The Mac's client does not read a refused upgrade's status, so a refused
    * key is an ordinary failed connect here and this stays false. */
   bool credential_refused;
+  /** A Mac has no Wi-Fi to join: always ITERATE_KIT_WIFI_JOINED. */
+  enum iterate_kit_wifi_status wifi_status;
   bool fatal_failure_latched;
   enum iterate_kit_itx_fatal_failure_reason fatal_failure_reason;
   struct iterate_kit_spsc_ring_metrics control_inbox;
