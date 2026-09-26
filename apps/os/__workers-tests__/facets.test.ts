@@ -19,6 +19,7 @@ import type { ItxExpression, ItxExpressionInput } from "iterate/expression";
 import { errorCode } from "iterate/lib";
 import { UNCLAIMED_FACET_SWEEP_AFTER_QUIET_MS } from "../src/context/facet-host.ts";
 import { hmacSha256Hex } from "../src/secrets.ts";
+import { publishConfigWorker } from "../e2e/support/config-worker.ts";
 import {
   APP_FACET,
   CLONE_VERSION_TEXT,
@@ -36,7 +37,6 @@ import {
   PUSH_TALLY,
   TICK_TALLY,
 } from "./sources.ts";
-import { publishConfigWorker } from "../e2e/support/config-worker.ts";
 import {
   adminCredentials,
   openSession,
