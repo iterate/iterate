@@ -2,7 +2,6 @@ import { useId } from "react";
 import { Button } from "@iterate-com/ui/components/button";
 import { Field, FieldLabel } from "@iterate-com/ui/components/field";
 import { Input } from "@iterate-com/ui/components/input";
-import { SecretInput } from "@iterate-com/ui/components/not-recorded";
 import { focusOnMount } from "../focus-on-mount.ts";
 
 /** Email, then either a mailed code or the deployment's password. With both configured the code is
@@ -44,7 +43,7 @@ export function EmailSignInForm({
       {usePassword ? (
         <Field>
           <FieldLabel htmlFor={passwordId}>Password</FieldLabel>
-          <SecretInput
+          <Input
             id={passwordId}
             type="password"
             name="password"
