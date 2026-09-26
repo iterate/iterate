@@ -528,16 +528,27 @@ freshness:
   2026; a retry passed), so watch main's Test job for that. Deploy OS uses `4x16`; the client
   deploys (Dash, Agents, Notes, Voice, Kit, SPA, dummy-petshop, ci-reports),
   the trace jobs, and the jobs that only call APIs (LOC report, PR dashboard, Release, Health)
-  use `2x8`. So do the E2E tests and Browser specs jobs of Preview OS and
-  Main OS e2e, which wait on a remote preview: on `4x16`, 151 attempts on 2026-09-24 peaked at
-  1.7 vCPUs and 2.9 GB (E2E tests) and 2.1 vCPUs and 3.2 GB (Browser specs). On `2x8`, ten runs
-  of each against one preview took 68 s and 70 s at the p50, against 62 s and 70 s for nine on
-  `4x16`, for half the price. Re-check with `depot ci metrics --run <run-id>` before increasing a size.
+  use `2x8`. So does the E2E tests job of Preview OS and Main OS e2e, which
+  waits on a remote preview: on `4x16`, 151 attempts on 2026-09-24 peaked at 1.7 vCPUs and
+  2.9 GB, and on `2x8` ten runs against one preview took 68 s at the p50, against 62 s for nine
+  on `4x16`, for half the price. Browser specs runs on a `4x16`. Its six Playwright workers are
+  six browsers, and by 2026-09-26 (50 specs) they used all of a `2x8`: 1.7 of its 2 vCPUs at the
+  peak, 1.3 on average, and each spec took about 35 % longer than on a `4x16`, where they peak at
+  2.7 vCPUs. Against one preview, beside the e2e suite, alternating (#3257): the job took 96 s at
+  the p50 and 123 s at the p90 on the `2x8` (27 runs), 79 s and 104 s on the `4x16` (11 runs), with
+  0.26 and 0.27 retried specs a run and no red run. Two `2x8` shards of 6 took 84 s and 97 s with
+  the job that merges them (6 runs). More specs at once against the preview were faster and less
+  reliable: 12 workers on a `4x16` took 63 s and 95 s but retried 0.55 specs a run (22 runs); 16 on
+  an `8x32`, three `2x8` shards of 6, and two `4x16` shards of 10 retried 0.7 to 1 a run, and the
+  first two failed runs. The retries are Dash specs that wait on the server with nothing on screen
+  that says so, which the 1 s action budget ([specs/AGENTS.md](../specs/AGENTS.md)) fails when the
+  preview is busier. Re-check with `depot ci metrics --run <run-id>` before
+  increasing a size, and the retries before adding workers or shards.
 
-These defaults keep a normal all-app main push to 42 requested vCPUs (lint 8,
+These defaults keep a normal all-app main push to 44 requested vCPUs (lint 8,
 test 8, Deploy OS 4, 2 for each of the seven client deploys, 4 for the preview
-parents, and 4 for Main OS e2e, whose deploy job runs first, then its E2E tests
-and Browser specs side by side on 2 each; its trace job follows
+parents, and 6 for Main OS e2e, whose deploy job runs first, then its E2E tests
+and Browser specs side by side on 2 and 4; its trace job follows
 them), without reducing the parallel lint job that
 uses the larger machine. The sizing pass that set them cut the then-larger
 workflow set from 72 requested vCPUs to 28.
@@ -575,8 +586,8 @@ The baked image is built by `.depot/workflows/build-preview-ci-image.yml` using
 
 It contains Node, pnpm, workspace dependencies, Doppler CLI and the preview
 browser; Kit Firmware's ESP-IDF has an image of its own ([Kit firmware releases](#kit-firmware-releases)). A snapshot is independent of sandbox size: choose `2x8`, `4x16`,
-`8x32`, or `16x64` from measured workload demand. Deploy preview runs on `4x16`,
-and E2E tests and Browser specs each on a `2x8` of its own.
+`8x32`, or `16x64` from measured workload demand. Deploy preview and Browser specs
+run on `4x16`, and E2E tests on a `2x8`.
 The image rebuilds when
 dependency manifests or its bake inputs land on `main`, with a weekly scheduled
 rebuild as drift repair. A push's run first checks the live image on `2x8`:
@@ -824,9 +835,10 @@ Preview OS runs four jobs, each a check named for what it proves:
   ([the trace's spans](ci-traces.md#steps-and-phases)).
 - **E2E tests** (the Vitest e2e suite, `pnpm preview e2e`) and **Browser specs**
   (the Playwright specs, `pnpm preview specs`) then start side by side, each on
-  a `2x8` runner of its own, so neither shares CPU with the other. They are one
-  job definition: Browser specs aliases E2E tests' runner and steps (YAML
-  anchors, [Editing Workflows](#editing-workflows)), and each job's env names
+  a runner of its own, so neither shares CPU with the other: a `2x8` for E2E
+  tests, a `4x16` for the specs' six browsers ([reliability defaults](#reliability-defaults)).
+  They are one job definition: Browser specs aliases E2E tests' steps and
+  outputs (YAML anchors, [Editing Workflows](#editing-workflows)), and each job's env names
   its suite (`SUITE`, `FLAKE_SUITE`, the workspace its telemetry names). The
   Vitest rows tagged `slow` run only when the PR carries the `slow-e2e` label
   or edits one of them ([slow rows](testing.md#slow-rows)).

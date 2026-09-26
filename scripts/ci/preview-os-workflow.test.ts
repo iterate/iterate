@@ -71,19 +71,17 @@ test("Preview OS names each job for the check it is: deploy, then the two suites
   expect(runs("deploy")).not.toContain(suiteRun);
 });
 
-// ONE DEFINITION: Browser specs is E2E tests' runner, outputs and steps (YAML aliases), and the two
-// jobs differ only in the suite their env names and in the dispatch that skips them.
+// ONE DEFINITION: Browser specs is E2E tests' outputs and steps (YAML aliases), and the two jobs
+// differ only in the suite their env names, in the dispatch that skips them and in their runners.
 test("Preview OS's two suite jobs are one definition, differing only in the suite they name", () => {
   const [e2e, specs] = [preview.jobs.e2e!, preview.jobs.specs!];
   expect(specs).toMatchObject({
     steps: e2e.steps,
     outputs: e2e.outputs,
-    "runs-on": e2e["runs-on"],
     "timeout-minutes": e2e["timeout-minutes"],
   });
   // written once: the second job aliases the first's
   expect(source.match(/^ {4}steps: \*suite-steps$/gmu)).toHaveLength(1);
-  expect(source.match(/^ {4}runs-on: \*suite-runner$/gmu)).toHaveLength(1);
   expect(source.match(/^ {4}outputs: \*suite-outputs$/gmu)).toHaveLength(1);
   const suiteEnv = ["SUITE", "FLAKE_SUITE", "TEST_TELEMETRY_EXPECTED_WORKSPACES"];
   const shared = (env: Record<string, string> = {}) =>
@@ -97,10 +95,12 @@ test("Preview OS's two suite jobs are one definition, differing only in the suit
   expect(specs.if?.replace("inputs.action != 'e2e'", "inputs.action != 'specs'")).toBe(e2e.if);
 });
 
-// Both suites wait on a remote preview: on 4x16 they peaked at 53 % of four vCPUs and 20 % of 16 GB
-// (measured 2026-09-24; docs/depot-ci.md#reliability-defaults).
-test("Preview OS's suites run on the smallest runner", () => {
+// E2E tests waits on a remote preview: on 4x16 it peaked at 43 % of four vCPUs and 18 % of 16 GB
+// (measured 2026-09-24). Browser specs' six browsers used all of a 2x8's two vCPUs, and each spec
+// took about 35 % longer there than on a 4x16 (docs/depot-ci.md#reliability-defaults).
+test("Preview OS's E2E tests run on the smallest runner, and Browser specs on a 4x16", () => {
   expect(preview.jobs.e2e!["runs-on"]?.size).toBe("2x8");
+  expect(preview.jobs.specs!["runs-on"]?.size).toBe("4x16");
 });
 
 // A required check has to report on every pull request: GitHub leaves one "Pending" when a `paths`

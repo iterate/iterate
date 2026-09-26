@@ -752,21 +752,22 @@ test("Main OS e2e names its checks as Preview OS does and traces them the same w
 });
 
 // Why the two suite jobs share one definition: .depot/workflows/main-os-e2e.yml.
-test("Main OS e2e's two suite jobs are one definition, a PR preview's suite steps on its runner", () => {
+test("Main OS e2e's two suite jobs are one definition, a PR preview's suite steps on its runners", () => {
   const source = readFileSync(resolve(repoRoot, ".depot/workflows/main-os-e2e.yml"), "utf8");
   const main = loadWorkflow(".depot/workflows/main-os-e2e.yml");
   const preview = loadWorkflow(".depot/workflows/preview-os.yml");
   const [e2e, specs] = [main.jobs.e2e!, main.jobs.specs!];
   expect(specs).toMatchObject({
     steps: e2e.steps,
-    "runs-on": e2e["runs-on"],
     "timeout-minutes": e2e["timeout-minutes"],
   });
   expect(source.match(/^ {4}steps: \*suite-steps$/gmu)).toHaveLength(1);
-  expect(e2e).toMatchObject({
-    "runs-on": preview.jobs.e2e?.["runs-on"],
-    "timeout-minutes": preview.jobs.e2e?.["timeout-minutes"],
-  });
+  // each on a PR preview's runner for its suite, so main's specs run as a PR's do
+  for (const job of ["e2e", "specs"])
+    expect(main.jobs[job], job).toMatchObject({
+      "runs-on": preview.jobs[job]?.["runs-on"],
+      "timeout-minutes": preview.jobs[job]?.["timeout-minutes"],
+    });
   // each suite as a PR preview names it; E2E tests runs every row, the slow ones too, which the
   // health job pages under their own name
   for (const job of ["e2e", "specs"])
