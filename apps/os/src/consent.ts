@@ -74,7 +74,8 @@ export type ConsentView =
         ownApp: boolean;
         /** THE PERSON A LINK NAMED: the authorization's `login_hint` (iterate/app-server.ts
          *  `/.auth/login`; a PR body's `Sign in ↗`, scripts/preview.ts), when it is one of `people`
-         *  and the client one of our own apps. The page opens on "Sign in as someone else" with
+         *  under the test email domain (`login.testEmailDomain`, none on prd) and the client one of
+         *  our own apps. The page opens on "Sign in as someone else" with
          *  them filled in, and the admin still confirms: `approve` never reads the hint, only the
          *  page's own post. */
         suggested?: string;
@@ -284,8 +285,11 @@ export class ConsentRpcTarget extends RpcTarget {
       (user) => user.id !== this.#grant.userId,
     );
     const ownApp = isOwnApp(request, this.#addresses.platformOrigin, projectBound);
-    // a link to anything but one of our apps pre-fills nobody: the choice stays the admin's to make
+    // a link pre-fills only a test person (a PR body's `pr<N>@…`), and only for one of our apps:
+    // prd has no test email domain, so there, like for a third party, the choice stays the admin's
+    const testEmailDomain = appConfigOf(this.#env).login.testEmailDomain;
     const hint = new URLSearchParams(query).get("login_hint")?.trim().toLowerCase();
+    const named = ownApp && testEmailDomain && hint?.endsWith(`@${testEmailDomain}`);
     return {
       people,
       scopes: request.scope
@@ -298,7 +302,7 @@ export class ConsentRpcTarget extends RpcTarget {
       redirectHost: new URL(request.redirectUri).host,
       metadataHost: cimdHostOf(request.clientId),
       ownApp,
-      suggested: ownApp ? people.find((person) => person.email === hint)?.email : undefined,
+      suggested: named ? people.find((person) => person.email === hint)?.email : undefined,
     } satisfies Extract<ConsentView, { kind: "consent" }>["impersonation"];
   }
 

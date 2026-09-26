@@ -217,9 +217,11 @@ test("signing a client in as someone: offered to an admin alone, the person's gr
   });
 });
 
-test("a sign-in link naming someone (`login_hint`, a PR body's `Sign in ↗`) pre-fills an admin's Sign in as someone else for one of our own apps, and signs nobody in as them by itself", async () => {
+test("a sign-in link naming a test person (`login_hint`, a PR body's `Sign in ↗`) pre-fills an admin's Sign in as someone else for one of our own apps, and signs nobody in as them by itself", async () => {
   fetchReachesThisWorker();
-  const target = await approverFor("hinted@example.com");
+  // under the test email domain (wrangler.test.jsonc `login.testEmailDomain`), as a PR's pr<N>@…
+  const target = await approverFor("hinted@signin.test");
+  const outside = await approverFor("hinted-outside@example.com");
   const admin = await approverFor(ADMIN);
   // the Dash beside this platform (control.test): one of its own apps, a CIMD client on a sibling
   const clientId = "https://dash.test/.auth/client.json";
@@ -238,19 +240,23 @@ test("a sign-in link naming someone (`login_hint`, a PR body's `Sign in ↗`) pr
   });
   const { query } = await authorizationRequest(clientId, [addresses.api]);
   query.set("redirect_uri", "https://dash.test/.auth/callback");
-  query.set("login_hint", "Hinted@Example.com");
+  query.set("login_hint", "Hinted@Signin.test");
   expect(await admin.approver.consent.describe(`?${query}`)).toMatchObject({
     kind: "consent",
     email: ADMIN,
-    impersonation: { ownApp: true, suggested: "hinted@example.com" },
+    impersonation: { ownApp: true, suggested: "hinted@signin.test" },
   });
   // anyone but an admin is offered nothing, named or not
   const theirs = await target.approver.consent.describe(`?${query}`);
   expect(theirs.kind === "consent" && theirs.impersonation).toBeUndefined();
   // an address nobody signed in as pre-fills nobody
-  query.set("login_hint", "nobody-yet@example.com");
+  query.set("login_hint", "nobody-yet@signin.test");
   const nobody = await admin.approver.consent.describe(`?${query}`);
   expect(nobody.kind === "consent" && nobody.impersonation?.suggested).toBeUndefined();
+  // nor does a real person, outside the test email domain: prd, which has none, pre-fills nobody
+  query.set("login_hint", outside.user.email);
+  const real = await admin.approver.consent.describe(`?${query}`);
+  expect(real.kind === "consent" && real.impersonation?.suggested).toBeUndefined();
 
   // a third party's link pre-fills nobody, and approved as posted, without the page's own
   // `impersonate`, the grant is the admin's: the hint names, it never signs in

@@ -163,7 +163,13 @@ export function viteWranglerConfig(
         }),
         ...(options.localDev && {
           APP_CONFIG: JSON.stringify({
-            login: { password: "dev", emailCode: { from: "iterate <login@localhost>" } },
+            login: {
+              password: "dev",
+              emailCode: { from: "iterate <login@localhost>" },
+              // its test people's (getin's, the specs'), as a preview's: a sign-in link naming
+              // one pre-fills an admin's "Sign in as someone else" (consent.ts)
+              testEmailDomain: TEST_EMAIL_DOMAIN,
+            },
             // `pnpm getin`'s person, so the admin app and "view as" work locally, and the admin
             // the specs sign in as (specs/admin, as on a per-PR preview: preview-config.ts)
             admins: [`test@${TEST_EMAIL_DOMAIN}`, `admin@${TEST_EMAIL_DOMAIN}`],
