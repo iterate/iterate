@@ -176,10 +176,7 @@ jobs:
       - name: Check test telemetry and write the suite summary
         if: always()
         run: pnpm tsx scripts/ci/upload-test-telemetry.ts --flake-suites "$FLAKE_SUITE" ${{ cancelled() && '--cancelled' || '' }}
-      # THE TEST EVIDENCE FOLDER (docs/test-evidence.md): test-results/ holds everything this job
-      # attempt's tests left, and target.json the deployment they ran against. This adds
-      # manifest.json: the run's result (from the suite's step and the finalizer's check), the
-      # tested commit and tree, the job attempt and every file's sha256.
+      # THE TEST EVIDENCE FOLDER (docs/test-evidence.md): this adds test-results/manifest.json.
       # Neither this nor the upload decides the job; the tests did.
       - name: Write the test evidence manifest
         id: evidence-write

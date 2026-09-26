@@ -88,9 +88,7 @@ jobs:
         # --expect-unit-workspaces reads the workspaces from the checkout, so the list has one source:
         # the tree whose tests ran.
         run: pnpm tsx scripts/ci/upload-test-telemetry.ts --flake-suites unit --expect-unit-workspaces ${{ cancelled() && '--cancelled' || '' }}
-      # THE TEST EVIDENCE FOLDER (docs/test-evidence.md): test-results/ holds everything this job
-      # attempt's tests left. This adds manifest.json: the run's result (from the steps below and the
-      # finalizer's check), the tested commit and tree, the job attempt and every file's sha256.
+      # THE TEST EVIDENCE FOLDER (docs/test-evidence.md): this adds test-results/manifest.json.
       # Neither this nor the upload decides the job; the tests did.
       - name: Write the test evidence manifest
         id: evidence-write
