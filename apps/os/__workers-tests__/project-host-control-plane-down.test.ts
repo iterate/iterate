@@ -3,7 +3,9 @@
 // under test (Vite's built worker, in this isolate) has never looked either up — a fresh isolate, as
 // a deploy's are — then makes the worker's catalog reads to D1 throw workerd's opaque internal
 // error, lose their connection, or not answer until the row lets them. An /api session's reads
-// give up at their own 3 s deadline instead (src/rpc.ts).
+// give up at their own 3 s deadline instead (src/rpc.ts). The worker also answers requests no row
+// made — a local port prober's `GET /` on its socket reads the hostname table for `localhost` — so
+// a row fails only the kinds of read its own host makes, and counts a read by what it asked.
 import { exports } from "cloudflare:workers";
 import { expect, type MockInstance, onTestFinished, test, vi } from "vitest";
 import { catalog, type CatalogRead, interceptCatalogReads, signedInSession } from "./support.ts";
@@ -15,7 +17,8 @@ test.for([
   "the control plane's reads %s: a project host answers 503 at once, the failure logged once as the platform's",
   async ([how, message, retryable]) => {
     const { host } = await catalogOnlyProject(`down-${how.replace(" ", "-")}`);
-    failReads(how);
+    // a host under the wildcard reads its project's row, never the hostname table
+    failReads(how, ["project"]);
     const warn = vi.spyOn(console, "warn");
 
     const started = Date.now();
@@ -50,7 +53,10 @@ test("a slow read is waited for: the control plane's late answer serves the host
   expect(await served.text()).toMatch(/has no site yet/);
   expect(controlPlaneWarns(warn)).toEqual([]);
   // the hostname's read brought the row: the admission's second read was a memo hit
-  expect(outage.reads.projectByHostname).toHaveBeenCalledOnce();
+  const hostname = new URL(host).hostname;
+  expect(
+    outage.reads.projectByHostname.mock.calls.filter(([asked]) => asked === hostname),
+  ).toHaveLength(1);
   expect(outage.reads.project).not.toHaveBeenCalled();
 });
 
