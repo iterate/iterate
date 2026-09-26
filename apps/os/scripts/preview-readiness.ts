@@ -1,12 +1,13 @@
-// scripts/preview-readiness.ts — IS A WORKER PREVIEW READY FOR TRAFFIC? `/version` naming the
-// deployment (the deploy's smoke) proves the stateless Worker serves the new code. It does not
-// prove what every e2e row needs next: a WebSocket upgrade on `/api`, and a Durable Object — a fresh
-// context and a facet it hosts — answering over it. On a brand-new preview they do not, for seconds
-// after `/version` does: the preview's freshly provisioned Durable Object namespace answers calls
-// with workerd's opaque `internal error; reference = …` before any Durable Object is invoked (no
-// invocation is logged for them). Cloudflare's, not iterate's: github.com/iterate/fresh-preview-repro
-// reproduces it with one 20-line Durable Object class (8 of 12 brand-new previews, for up to 24 s; none of 10
-// in-place redeploys; 1 call in ~30,000 on the parent). In CI it failed whole e2e runs:
+// scripts/preview-readiness.ts — IS A WORKER PREVIEW READY FOR TRAFFIC? The deploy's smoke of
+// apps/os, asked as soon as `wrangler preview` returns. Every e2e row needs a WebSocket upgrade on
+// `/api`, and a Durable Object — a fresh context and a facet it hosts — answering over it on the
+// deploy's version. On a brand-new preview they do not, for seconds after its edge serves the new
+// version (`/version` naming it): the preview's freshly provisioned Durable Object namespace
+// answers calls with workerd's opaque `internal error; reference = …` before any Durable Object is
+// invoked (no invocation is logged for them). Cloudflare's, not iterate's:
+// github.com/iterate/fresh-preview-repro reproduces it with one 20-line Durable Object class (8 of
+// 12 brand-new previews, for up to 24 s; none of 10 in-place redeploys; 1 call in ~30,000 on the
+// parent). In CI it failed whole e2e runs:
 // main-2eb7238 2026-09-24T00:53 (139 of 145 failed attempts), main-c0812a4 09:00:57, and a fresh-
 // preview soak with e2e started at once had 16 of 20 runs fail 50–269 rows each.
 //
@@ -22,9 +23,9 @@
 // an edge can still serve it and a brand-new Durable Object can still start on it, and an object on
 // it later resets with "Durable Object reset because its code was updated.", failing every call in
 // flight. So each probe also asks the operator's `session.versions` (src/session.ts) which version
-// its edge, its own context and more brand-new ones run, and misses (`stage: "version"`) when any is
-// not the deploy's: the gate passes once `consecutive` rounds in a row run the deploy's version
-// everywhere they look.
+// its edge (the id `/version` answers with), its own context and another brand-new one run, and
+// misses (`stage: "version"`) when any is not the deploy's: the gate passes once `consecutive`
+// rounds in a row run the deploy's version everywhere they look.
 import { randomBytes, randomUUID } from "node:crypto";
 import { request } from "node:https";
 import { newWebSocketRpcSession } from "capnweb";
@@ -111,11 +112,11 @@ function probeRound(url: string, options: { adminSecret: string; version: string
   );
 }
 
-/** How many brand-new contexts each probe asks the version of: its own and three that exist only to
+/** How many brand-new contexts each probe asks the version of: its own and one that exists only to
  *  be asked. A brand-new Durable Object starts on whichever version its host runs, so the gate
  *  samples placements: with one per probe, 6 of 48 soak redeploys still had an e2e context start on
- *  the previous version after the gate passed; with four, 2 of 48 (2026-09-24). */
-const CONTEXTS_PER_PROBE = 4;
+ *  the previous version after the gate passed; with four, 2 of 48 (2026-09-24). SOAK-PENDING */
+const CONTEXTS_PER_PROBE = 2;
 
 /** ONE PROBE, at most 20 s: a bare upgrade of `/api` (its status and body are the evidence when it
  *  fails — a WebSocket client never sees them), then a capnweb session on a second socket: `whoami`
