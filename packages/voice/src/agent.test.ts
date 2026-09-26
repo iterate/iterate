@@ -1,7 +1,10 @@
+import { readFileSync } from "node:fs";
 import { build } from "esbuild";
 import { expect, test, vi } from "vitest";
 import type { DelegationMessage } from "./delegation-turn.ts";
 import fixtures from "./screen-context-repro.json";
+
+const screenContext = readFileSync(new URL("./screen-context.md", import.meta.url), "utf8");
 
 // Whichever row runs first pays for bundling the processor with esbuild
 // (`loadVoiceDelegateProcessor()`), which used to run under the hook budget; every row gets that
@@ -9,43 +12,43 @@ import fixtures from "./screen-context-repro.json";
 vi.setConfig({ testTimeout: 10_000 });
 
 // September 21 calls: the supplied Markdown was dropped and the agent edited the
-// project website. Fixture keeps context + first concrete maths request verbatim;
-// audio, transcripts (already in the request), and unrelated lifecycle events omitted.
+// project website. The fixture keeps each call's first concrete maths request verbatim, and the
+// test puts the screen guide the press adds (worker.ts) before it. Audio, transcripts (already in
+// the request) and unrelated lifecycle events are omitted.
 test.for([
-  ...fixtures,
+  ...fixtures.map(({ device, events }) => ({
+    device,
+    guide: screenContext.replaceAll("{{DEVICE}}", device),
+    events,
+  })),
   {
     device: "future_colour_device",
-    events: fixtures[0]!.events.map((event) =>
-      event.type.endsWith("/context-added")
-        ? {
-            ...event,
-            payload: {
-              role: "developer",
-              content:
-                "# An entirely different device guide\nRender HTML using future_colour_device. Its screen can show colour.",
-            },
-          }
-        : event,
-    ),
+    guide:
+      "# An entirely different device guide\nRender HTML using future_colour_device. Its screen can show colour.",
+    events: fixtures[0]!.events,
   },
 ])(
   "$device: supplied context reaches the model and updates the device",
-  async ({ device, events }) => {
+  async ({ device, guide, events }) => {
     const VoiceDelegateProcessor = await loadVoiceDelegateProcessor();
-    const instruction = events[0]!.payload;
+    const instruction = { role: "developer", content: guide };
     const runScript = vi.fn(async () => '{"shown":true}');
     const complete = vi.fn(async (messages: DelegationMessage[]) => {
       if (messages.at(-1)!.content.startsWith("Script result:"))
         return "The exercises are on your screen.";
       const hasInstructions = messages.some((message) =>
-        message.content.includes(instruction.content!),
+        message.content.includes(instruction.content),
       );
       if (!hasInstructions) return "The website has the exercises.";
       return `<codemode>\nreturn await itx.cd("/").voice.setImage({device: "${device}", image: {html: "<h1>Maths practice</h1>"}})\n</codemode>`;
     });
     const processor = new VoiceDelegateProcessor({ complete, runScript });
     let state = processor.contract.initialState();
-    for (const event of events) state = processor.reduce({ state, event });
+    for (const event of [
+      { type: "events.iterate.com/agent/context-added", payload: instruction },
+      ...events,
+    ])
+      state = processor.reduce({ state, event });
     // A new incarnation answers from durable reduced context, just like recovery.
     const resumed = new VoiceDelegateProcessor({ complete, runScript });
     const work: Promise<unknown>[] = [];

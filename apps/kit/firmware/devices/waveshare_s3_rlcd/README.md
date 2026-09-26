@@ -52,7 +52,7 @@ and writes only complete frames. ST7305 command **0x20** gives the required
 a frame as it takes it, so the last chunk is answered at once. Health exposes
 uploads and failures.
 HTML, fonts and conversion stay on the server. The
-[drawing guide](../../../../agents/voice/screen-context.md)
+[drawing guide](../../../../../packages/voice/src/screen-context.md)
 is supplied through the screen capability, with a licensed ASCII pixel font
 embedded in project KV; it needs no external font fetch.
 
