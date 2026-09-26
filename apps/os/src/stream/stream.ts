@@ -43,8 +43,8 @@ import {
 } from "./core-processor.ts";
 
 /** THE IDEMPOTENCY INDEX'S KEY: the writer's own key under its writer — the platform, or the
- *  context whose code or session wrote it (iterate/stream/processor `EventSource`). An unstamped
- *  event (the stream's own records) keys as written. */
+ *  context whose code or session wrote it (iterate/stream/processor `EventSource`). Every committed
+ *  event is stamped (the DO refuses one that is not), so the bare key is only a test's. */
 const writerScopedKey = (source: EventSource | undefined, idempotencyKey: string): string =>
   source ? `${source.platform ? "platform" : source.origin} ${idempotencyKey}` : idempotencyKey;
 

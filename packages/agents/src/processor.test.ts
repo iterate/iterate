@@ -394,7 +394,6 @@ test.for<{ name: string; role: string; source?: EventSource; cuts: boolean }>([
     source: { origin: "/agents/b" },
     cuts: true,
   },
-  { name: "words written before stamps", role: "user", cuts: true },
   { name: "a sibling's words", role: "user", source: { origin: "/agents/a/sandbox" }, cuts: false },
   {
     name: "its own sandbox's words",

@@ -10,7 +10,8 @@ import { expect, test } from "vitest";
 import { errorCode } from "iterate/lib";
 import type { StreamEvent, SqlStorageHandle } from "iterate/stream/processor";
 import { nodeSqliteDurableObjectStorage } from "iterate/stream/test-support";
-import { Stream, type DurableObjectStorageSlice } from "./stream.ts";
+import type { Stream, DurableObjectStorageSlice } from "./stream.ts";
+import { StampedStream } from "./test-support.ts";
 
 test("waitForEvent: a registered waiter resolves with the committed event, fed from the fresh batch", async () => {
   const batches: StreamEvent[][] = [];
@@ -689,8 +690,8 @@ test("a paused stream admits an idempotent replay of an explicitly configured su
 });
 
 /** THE ONE way a test constructs a Stream: over a fresh node:sqlite store unless given one (a
- *  second incarnation reuses the first's). `batches` records each `fresh` batch the fan-out was fed;
- *  `onCommit` runs beside it. */
+ *  second incarnation reuses the first's), each append stamped as the DO stamps it (`StampedStream`).
+ *  `batches` records each `fresh` batch the fan-out was fed; `onCommit` runs beside it. */
 function bareStream(
   opts: {
     storage?: DurableObjectStorageSlice;
@@ -698,7 +699,7 @@ function bareStream(
     onCommit?: (fresh: StreamEvent[]) => void;
   } = {},
 ): Stream {
-  return new Stream({
+  return new StampedStream({
     storage: opts.storage || nodeSqliteDurableObjectStorage(),
     path: "/",
     projectId: "prj_bare",

@@ -31,8 +31,9 @@ import {
 import { nodeSqliteDurableObjectStorage } from "iterate/stream/test-support";
 import { FacetHandle } from "../context/dispatch.ts";
 import { CoreContract, normalizeControlEvent } from "./core-processor.ts";
-import { Stream, type DurableObjectStorageSlice } from "./stream.ts";
+import type { Stream, DurableObjectStorageSlice } from "./stream.ts";
 import { SubscriptionDelivery } from "./subscription-delivery.ts";
+import { StampedStream } from "./test-support.ts";
 
 /** The facet host's platform entries (context/facet-host.ts), stood in for by each fake
  *  FacetHandle's own walk. */
@@ -82,7 +83,7 @@ const bareStream = (
     afterOffset: number,
     throughOffset: number,
   ) => void = () => {},
-) => new Stream({ storage, path: "/", projectId: "prj_memory", onCommit });
+) => new StampedStream({ storage, path: "/", projectId: "prj_memory", onCommit });
 
 /** `eventCount` durable events, each carrying a `eventChars`-char string — appended ONE PER CALL so
  *  the append path itself stays within the budget; the scenarios are about what happens after. */

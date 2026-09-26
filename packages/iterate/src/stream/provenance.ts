@@ -63,8 +63,8 @@ const FIRST_PARTY_TRUST: Readonly<Record<string, TrustRule>> = {
 
 /** Whether a reader acts on `event`: its `trust` rule for the type (`"*"` for every type it does not
  *  name), else the platform's first-party rule, else `"trusted"`. A core `itx/*` event is always
- *  admitted: the context refused a misplaced one when it was written. An event written before
- *  stamps (no origin) is read as it was. */
+ *  admitted: the context refused a misplaced one when it was written. An unstamped event is
+ *  admitted by no one: the platform stamps every event it commits. */
 export function admits(
   event: Pick<StreamEvent, "type" | "path" | "source" | "payload">,
   trust?: Readonly<Record<string, TrustRule>>,
@@ -74,6 +74,6 @@ export function admits(
   if (rule === "anyone") return true;
   if (rule === "platform") return event.source?.platform === true;
   const source = event.source;
-  if (!source?.origin) return true;
+  if (!source) return false;
   return rule === "trusted" ? trusts(event.path, source) : rule(source, event as StreamEvent);
 }

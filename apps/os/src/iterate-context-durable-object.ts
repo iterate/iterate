@@ -516,7 +516,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
    *  turn it accepted the socket. */
   #appendAndRunCommittedEffects(events: StreamEventInput[]): StreamEvent[] {
     // STAMPING IS TOTAL: every path to the log stamps who wrote the event (src/caller.ts); one that
-    // forgot fails here, loudly, rather than reading as history (iterate/stream/processor `admits`).
+    // forgot fails here, loudly, rather than being ignored by every reader (iterate/stream `admits`).
     for (const event of events)
       if (!event.source?.origin)
         throw new Error(

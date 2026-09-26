@@ -14,14 +14,25 @@ import { EntityLifecycleProcessor } from "./entity-lifecycle.ts";
 for (const contract of [RepoContract, WorkspaceContract]) {
   const slug = contract.slug;
   const path = `/${slug}s/x`;
+  // A certificate names its entity, and the entity's own code wrote it (`certifiesItself`).
+  const byTheEntity = { origin: path };
   const requested = { type: `events.iterate.com/${slug}/create-requested`, payload: {} };
-  const created = { type: `events.iterate.com/${slug}/created`, payload: { path } };
+  const created = {
+    type: `events.iterate.com/${slug}/created`,
+    payload: { path },
+    source: byTheEntity,
+  };
   const failed = { type: `events.iterate.com/${slug}/create-failed`, payload: { error: "boom" } };
   const deleteRequested = { type: `events.iterate.com/${slug}/delete-requested`, payload: {} };
-  const deleted = { type: `events.iterate.com/${slug}/deleted`, payload: { path } };
+  const deleted = {
+    type: `events.iterate.com/${slug}/deleted`,
+    payload: { path },
+    source: byTheEntity,
+  };
   const committed = {
     type: "events.iterate.com/repo/commit-completed",
     payload: { path, commitOid: "a", message: "m", changedPaths: ["worker.ts"] },
+    source: byTheEntity,
   };
   const rows = [
     { name: "the empty state", events: [], state: { creation: null, deletion: null } },

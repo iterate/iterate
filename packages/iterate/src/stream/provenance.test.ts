@@ -70,8 +70,8 @@ const ADMITS_ROWS: { row: string; event: StreamEvent; admitted: boolean }[] = [
     admitted: true,
   },
   {
-    row: "the platform's type written before stamps: refused (it never said platform)",
-    event: event("account/fact", "/users/u"),
+    row: "an unstamped event: refused (the platform stamps every event it commits)",
+    event: event("note/added", "/b"),
     admitted: false,
   },
   {
@@ -83,11 +83,6 @@ const ADMITS_ROWS: { row: string; event: StreamEvent; admitted: boolean }[] = [
     row: "an own rule — an assistant's words from a sibling: refused",
     event: event("chat/said", "/b", { origin: "/a" }, { role: "assistant" }),
     admitted: false,
-  },
-  {
-    row: "any type written before stamps (no origin): read as it was",
-    event: event("note/added", "/b"),
-    admitted: true,
   },
   {
     row: "a core itx/* event from a sibling: admitted (the context refused a misplaced one at write)",

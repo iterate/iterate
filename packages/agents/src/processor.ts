@@ -297,9 +297,9 @@ type AgentEvent = ConsumedEvent<typeof AgentContract>;
 
 /** A STRANGER: the context that wrote `event` when this agent does not trust it — a sibling, its own
  *  sandbox (iterate/stream/processor `trusts`: the platform, a member, or code here or above).
- *  Undefined for the trusted, and for words written before stamps. */
+ *  Undefined for the trusted. */
 const strangerOf = (event: Pick<StreamEvent, "path" | "source">): string | undefined =>
-  event.source?.origin && !trusts(event.path, event.source) ? event.source.origin : undefined;
+  event.source && !trusts(event.path, event.source) ? event.source.origin : undefined;
 
 /** THE INTERRUPT's trigger: a person's or a developer's words whose policy cuts the running answer
  *  short — from a writer this agent trusts. A stranger's words wait their turn, whatever they ask. */
@@ -437,7 +437,7 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
         // A STRANGER'S WORDS (the contract admits a user's from anyone): named to the model, without
         // attachments — they would point this agent's own `itx.files` at the project's — and
         // counted as the loop's own, so two agents talking cannot run past the turn bound. Trusted
-        // is the platform, a member, or code here or above; a message written before stamps too.
+        // is the platform, a member, or code here or above.
         const stranger = strangerOf(event);
         const next: AgentState = {
           ...state,

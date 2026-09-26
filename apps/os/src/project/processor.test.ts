@@ -19,6 +19,9 @@ const created = { type: "events.iterate.com/project/created", payload: {} };
 const failed = { type: "events.iterate.com/project/create-failed", payload: { error: "boom" } };
 const deleted = { type: "events.iterate.com/project/deleted", payload: {} };
 
+/** A member's append on `/` (the dash): trusted, never the platform. */
+const member: EventSource = { origin: "/", principal: { actor: "member" } };
+
 /** The empty state; a row spreads it and names only what its events changed. */
 const empty: ProjectState = {
   creation: null,
@@ -222,8 +225,8 @@ const reduceRows: {
       integrationFact("github", "connected", "acme"),
       integrationFact("slack", "connected", "beta"),
       integrationFact("slack", "disconnected", "beta"),
-      { ...integrationFact("slack", "disconnected", "acme"), source: undefined },
-      { ...integrationFact("google", "connected", "evil"), source: undefined },
+      { ...integrationFact("slack", "disconnected", "acme"), source: member },
+      { ...integrationFact("google", "connected", "evil"), source: member },
     ],
     state: {
       ...empty,
@@ -880,18 +883,25 @@ function processorWithoutHostnames() {
   );
 }
 
+/** An entity's certificates cross-posted to `/`: each names its entity, whose own code wrote it
+ *  (`certifiesItself`). */
 function repoBorn(path: string) {
-  return { type: "events.iterate.com/repo/created", payload: { path } };
+  return { type: "events.iterate.com/repo/created", payload: { path }, source: { origin: path } };
 }
 
 function workspaceBorn(path: string) {
-  return { type: "events.iterate.com/workspace/created", payload: { path } };
+  return {
+    type: "events.iterate.com/workspace/created",
+    payload: { path },
+    source: { origin: path },
+  };
 }
 
 function committed(path: string, commitOid: string) {
   return {
     type: "events.iterate.com/repo/commit-completed",
     payload: { path, commitOid, message: "m", changedPaths: ["worker.ts"] },
+    source: { origin: path },
   };
 }
 
@@ -1003,7 +1013,7 @@ function childCreated(childPath: string) {
   return { type: "events.iterate.com/itx/child-created", payload: { childPath } };
 }
 
-function deleteRequested(source: EventSource = { origin: "/", principal: { actor: "member" } }) {
+function deleteRequested(source: EventSource = member) {
   return { type: "events.iterate.com/project/delete-requested", payload: {}, source };
 }
 

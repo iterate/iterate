@@ -54,7 +54,7 @@ export function reduceProcessor<State>(
     const event = {
       type: input.type,
       payload: parsed?.success ? parsed.data : input.payload,
-      source: input.source,
+      source: input.source || { origin: "/" }, // unsaid, the context's own code wrote it
       offset: index + 1,
       createdAt: new Date((index + 1) * 1000).toISOString(),
       path: "/",
@@ -93,6 +93,7 @@ export function memoryStream(path = "/") {
         maxAssigned += 1;
         const committedEvent: StreamEvent = {
           ...event,
+          source: event.source || { origin: path }, // the platform stamps; unsaid, the context's code
           offset: maxAssigned,
           createdAt: new Date(0).toISOString(),
           path,
