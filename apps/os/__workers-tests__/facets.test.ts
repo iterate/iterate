@@ -1102,7 +1102,7 @@ test("a WebSocket 101 through a secret: the caller's context forwards to /secret
 
 test("a WebSocket whose credential rides in Sec-WebSocket-Protocol: egress substitutes the placeholder there, the shop's /gateway-subprotocol accepts the upgrade and selects its real subprotocol, and the frames round-trip", async () => {
   // A browser cannot set Authorization on a WebSocket, so browser-shaped APIs carry the credential
-  // as one of the offered subprotocols, as apps/dummy-petshop/src/gateway.ts reads it.
+  // as one of the offered subprotocols. `serveShop`'s /gateway-subprotocol reads it.
   const accessToken = serveShop();
 
   const project = "prj_secret_facet_subprotocol";

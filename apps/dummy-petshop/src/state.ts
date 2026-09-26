@@ -1,7 +1,6 @@
 /**
- * How long an access token lives unless a backdoor-minted client overrides
- * it. Deliberately short so integration e2e hits real expiry (and therefore
- * real refresh) without waiting an hour.
+ * How long an access token lives. Deliberately short so integration e2e hits
+ * real expiry (and therefore real refresh) without waiting an hour.
  */
 export const DEFAULT_ACCESS_TTL_SECONDS = 120;
 
@@ -42,7 +41,7 @@ export interface OauthClient {
  * One registered GitHub App installation. petshop stores ONLY the app's PUBLIC
  * key (RS256 SPKI PEM): the installation-token endpoint verifies a presented App
  * JWT's signature against it, and the matching private key never leaves the OS
- * side's secret. `webhookSecret` is the App-webhook HMAC key, the GitHub analogue of `webhookSigningSecret` for OAuth webhooks.
+ * side's secret. `webhookSecret` is the key its webhooks are signed with.
  */
 export interface GithubApp {
   appId: string;
@@ -50,11 +49,6 @@ export interface GithubApp {
   publicKeyPem: string;
   installationId: string;
   webhookSecret: string;
-  /** The GitHub fake's (github.ts) view of the installation — each optional, so a state saved
-   *  before the fake existed still loads; `githubInstallationOf` fills the defaults. The App's URL
-   *  handle (`/apps/<appSlug>/installations/new`), where the install redirects (the App's Setup URL),
-   *  the account it is installed on, the users whose `/user/installations` lists it, the OAuth
-   *  client those users authorize, and whether it covers all the account's repositories. */
   /** The GitHub fake's (github.ts) view of the installation, filled by `registerApp` (absent on
    *  an installation registered before the fake existed): the App's URL handle
    *  (`/apps/<appSlug>/installations/new`), its Callback URL, the account it is installed on, the
@@ -82,29 +76,26 @@ export interface GithubInstallationUser {
 /**
  * The whole service's mutable state — one JSON blob in one Durable Object.
  * Tokens are sealed AES-GCM blobs (seal.ts), so only the things that genuinely must be shared and
- * mutable live here: the client registry, revocation facts, the webhook
- * signing secret, and backdoor toggles.
+ * mutable live here: the client registry, revocation facts, the fakes' records and scheduled
+ * token-endpoint failures.
  */
 export interface PetshopState {
   /** Per-client revocation epochs. A token seals the epoch for its `clientId`,
    * so concurrent integration tests can expire their own credentials without
    * invalidating an unrelated client's freshly refreshed token. An id with a colon is one
-   * account's (`graphqlSessionAccountClientId`, `tescoLoginClientId`), and the
+   * account's (`graphqlSessionAccountClientId`, `tesco-login:<email>`), and the
    * `MINTED_RECORDS_KEPT` most recently revoked accounts are kept; a minted client's epoch goes
    * with the client. */
   accessTokenEpochs: Record<string, number>;
   /** The seeded client and the newest `MINTED_RECORDS_KEPT` minted ones, oldest first. */
   clients: Record<string, OauthClient>;
-  /** `jti` values of revoked long-lived tokens: the OAuth provider's refresh tokens
-   * (`/__backdoor/revoke-refresh-token`), the Google fake's refresh tokens and the Slack fake's
-   * bot tokens. The newest `RECORDS_KEPT` are kept. */
+  /** `jti` values of revoked refresh tokens (authorization-server.ts; the Slack fake's bot tokens
+   * are refresh tokens). The newest `RECORDS_KEPT` are kept. */
   revokedRefreshTokenIds: string[];
   /** `jti` values of authorization codes already exchanged — codes are
    * single-use (RFC 6749 §4.1.2), so a replayed code is rejected. The newest
    * `MINTED_RECORDS_KEPT` are kept, far more than are exchanged while a code lives. */
   usedAuthorizationCodeIds: string[];
-  /** Current webhook HMAC secret; rotatable via the backdoor. */
-  webhookSigningSecret: string;
   /** Scheduled POST /oauth/token failures, scoped by OAuth client so one test's
    * fault injection cannot break another concurrently running integration. */
   tokenEndpointFailuresRemainingByClient: Record<string, number>;
@@ -210,8 +201,8 @@ export function accessTokenEpochFor(state: PetshopState, clientId: string): numb
 }
 
 /** The seeded default GitHub App installation — well-known ids, no verifying
- * key yet (see {@link GithubApp}); its webhook secret is random per environment
- * like `webhookSigningSecret`, so signature specs prove real verification. */
+ * key yet (see {@link GithubApp}); its webhook secret is random per environment,
+ * so signature specs prove real verification. */
 function defaultGithubApp(): GithubApp {
   return {
     appId: DEFAULT_APP_ID,
@@ -254,10 +245,6 @@ export class PetshopStore {
       },
       revokedRefreshTokenIds: [],
       usedAuthorizationCodeIds: [],
-      // Random per environment so signature specs prove real verification,
-      // not a hardcoded constant. Persisted immediately so it is stable
-      // across reads; readable (and rotatable) through the backdoor.
-      webhookSigningSecret: crypto.randomUUID(),
       tokenEndpointFailuresRemainingByClient: {},
       apps: { [DEFAULT_INSTALLATION_ID]: defaultGithubApp() },
       installationOrder: [DEFAULT_INSTALLATION_ID],
@@ -276,7 +263,6 @@ export class PetshopStore {
   }
 
   async createClient(input: {
-    accessTokenTtlSeconds?: number;
     redirectUris?: string[];
     public?: boolean;
   }): Promise<{ clientId: string; clientSecret: string }> {
@@ -286,7 +272,7 @@ export class PetshopStore {
     const clientSecret = input.public ? "" : crypto.randomUUID();
     state.clients[clientId] = {
       clientSecret,
-      accessTokenTtlSeconds: input.accessTokenTtlSeconds ?? DEFAULT_ACCESS_TTL_SECONDS,
+      accessTokenTtlSeconds: DEFAULT_ACCESS_TTL_SECONDS,
       redirectUris: input.redirectUris,
       ...(input.public && { public: true }),
     };
@@ -322,13 +308,6 @@ export class PetshopStore {
     state.usedAuthorizationCodeIds.push(codeId);
     await this.#save(state);
     return true;
-  }
-
-  async rotateSigningSecret(): Promise<string> {
-    const state = await this.#load();
-    state.webhookSigningSecret = crypto.randomUUID();
-    await this.#save(state);
-    return state.webhookSigningSecret;
   }
 
   /**
@@ -468,14 +447,20 @@ export class PetshopStore {
   }
 }
 
-/** What the Slack, Google and GitHub fakes need from the shop: the store methods they call and the
- *  key that seals their codes and tokens. */
-export interface IntegrationFakeDeps {
+/** What every route needs from the shop: its state, and the key that seals its codes and tokens.
+ *  `state` is the Durable Object's RPC stub in production and a plain PetshopStore over a map in
+ *  tests (memory-state.ts); Pick<> keeps the two structurally interchangeable. */
+export interface ShopDeps {
   state: Pick<
     PetshopStore,
     | "getState"
-    | "consumeAuthorizationCode"
+    | "createClient"
+    | "expireAccessTokens"
     | "revokeToken"
+    | "consumeAuthorizationCode"
+    | "setTokenEndpointFailures"
+    | "consumeTokenEndpointFailure"
+    | "registerApp"
     | "recordSlackMessage"
     | "oidcSigningKey"
     | "recordGithubPull"

@@ -1,5 +1,5 @@
 /**
- * The pet shop's Slack, Google and GitHub fakes over in-memory state, for tests
+ * The pet shop's Slack, Google, Cloudflare and GitHub fakes over in-memory state, for tests
  * that import them instead of dialing the deployed shop (apps/os's workers
  * tests). Seeded like the deployed shop: the OAuth client `petshop-default` /
  * `petshop-default-secret` and the keyless `petshop-installation`. Nothing

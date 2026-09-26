@@ -18,7 +18,6 @@ export default defineConfig({
           bindings: [{ name: "PETSHOP_STATE", class_name: "PetshopStateDurableObject" }],
         },
         // PETSHOP_SEAL_KEY is a worker secret, set once (`wrangler secret put`); deploys keep it.
-        // PETSHOP_BACKDOOR_SECRET stays unset, so the apps/os e2e rows can call /__backdoor/* directly.
         secrets: { required: ["PETSHOP_SEAL_KEY"] },
       },
     }),

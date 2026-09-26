@@ -2,8 +2,8 @@
 // or a person: no consent and no app, a username and a password. The Dash (or any caller) sets
 // `/secrets/waitrose-<connection>` to `{ username, password }` with the `waitrose-session` strategy
 // (waitrose.ts logs in on first use and on a 401), then `connectWaitrose` records the connection:
-// a platform `waitrose/connected` on the owner's root naming the username. A person lends it to a
-// project like any connection of theirs.
+// a platform `waitrose/connected` on the owner's root naming the username. A project connects a
+// person's as it is, like any account of theirs (`itx.integrations.connect("waitrose", { account })`).
 //   connectWaitrose    → the secret checked, then `waitrose/connected`
 //   disconnectWaitrose → the secret deleted, then `waitrose/disconnected`
 // Waitrose sends no webhooks, so nothing is routed.

@@ -1,8 +1,8 @@
 /**
  * The pet shop as a capnweb API, served at `/capnweb` — an HTTP batch (`POST`)
  * or a WebSocket session (`GET` + `Upgrade: websocket`), both answered by
- * capnweb's `newWorkersRpcResponse`. It exposes the same pets surface the oRPC
- * procedures (rpc.ts) and the MCP tools (mcp.ts) expose, as ONE RpcTarget a
+ * capnweb's `newWorkersRpcResponse`. It exposes the same pets surface the OpenAPI
+ * procedures (openapi.ts) and the MCP tools (mcp.ts) expose, as ONE RpcTarget a
  * client calls (and pipelines) directly:
  *
  *   - `listPets()`                    — the account's pets.
@@ -20,7 +20,7 @@
  */
 import { RpcTarget, newWorkersRpcResponse } from "capnweb";
 import type { Pet } from "./pets.ts";
-import type { PetsContext } from "./rpc.ts";
+import type { PetsContext } from "./openapi.ts";
 
 /** The remote main object a capnweb client holds: the pets API for one authenticated owner. */
 class PetshopCapnwebApi extends RpcTarget {

@@ -1,13 +1,12 @@
 /**
  * The pet shop's (entirely fictional) inventory — the single source of truth
- * shared by the three surfaces that expose it: the plain `GET /api/pets`
- * endpoint, the oRPC/OpenAPI procedures (rpc.ts), and the MCP tools (mcp.ts).
+ * shared by the surfaces that expose it: the plain `GET /api/pets` endpoint,
+ * the OpenAPI procedures (openapi.ts), the capnweb API (capnweb.ts) and the MCP
+ * tools (mcp.ts).
  *
- * The catalogue is a per-instance in-memory array rather than durable state:
+ * The catalogue is a per-isolate in-memory array rather than durable state:
  * the pet shop persists only its OAuth facts in the one Durable Object
- * (state.ts), and pets are fake demo data. Each worker isolate — and each
- * unit-test shop — gets its own `seedPets()` array, so `createPet` mutations
- * are isolated and never leak between tests.
+ * (state.ts), and pets are fake demo data.
  */
 
 /** One pet in the shop's catalogue. */

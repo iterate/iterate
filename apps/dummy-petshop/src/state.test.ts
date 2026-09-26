@@ -71,7 +71,7 @@ test("a state stored with more than the bounds keeps only the newest of each at 
   }
   blobs.set("state", state);
 
-  await store.rotateSigningSecret();
+  await store.revokeToken("any-token");
 
   const bounded = await store.getState();
   expect(Object.keys(bounded.clients)).toEqual([

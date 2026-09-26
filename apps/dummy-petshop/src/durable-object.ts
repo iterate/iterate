@@ -24,9 +24,6 @@ export class PetshopStateDurableObject extends DurableObject {
   consumeAuthorizationCode(...args: Parameters<PetshopStore["consumeAuthorizationCode"]>) {
     return this.#store.consumeAuthorizationCode(...args);
   }
-  rotateSigningSecret() {
-    return this.#store.rotateSigningSecret();
-  }
   registerApp(...args: Parameters<PetshopStore["registerApp"]>) {
     return this.#store.registerApp(...args);
   }

@@ -15,8 +15,7 @@
  * token — never by re-encoding — so there is no possible header/payload
  * canonicalisation mismatch with the signer.
  *
- * Pure functions of (jwt, publicKeyPem, …): no state, no DO, just WebCrypto,
- * so the whole thing unit-tests in plain Node (see github-app.test.ts).
+ * A pure function of (jwt, publicKeyPem, …): no state, no DO, just WebCrypto.
  */
 import { bytesFromBase64Url } from "./seal.ts";
 

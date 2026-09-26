@@ -6,7 +6,7 @@
  * GCM provides both confidentiality and integrity, so a sealed blob can be
  * handed to untrusted parties (OAuth clients, test suites) and later trusted
  * on return — no server-side token storage required. Expiry and revocation
- * handles live inside the payload; see the token payload types in worker.ts.
+ * handles live inside the payload; see the token types in authorization-server.ts.
  */
 
 const VERSION = 1;

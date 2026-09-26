@@ -1,11 +1,6 @@
 /**
- * The pet shop's typed "pets" API, defined once as oRPC procedures and served
- * two ways from the one worker:
- *
- *   - `POST /rpc/*`      — the oRPC RPC protocol (what an @orpc/client talks).
- *   - `GET  /openapi.json` — an OpenAPI 3.1 document generated from the same
- *                            procedures, plus `GET|POST /api/v2/*` served
- *                            through the OpenAPI (REST-shaped) handler.
+ * The pet shop's typed "pets" API, defined once as oRPC procedures: `GET /openapi.json` is the
+ * OpenAPI 3.1 document generated from them, and `GET|POST /api/v2/*` serves them REST-shaped.
  *
  * Every procedure runs behind the same OAuth bearer check as the rest of the
  * shop: the worker resolves the request's access token with `accessGrant`
@@ -19,7 +14,6 @@
 import { OpenAPIGenerator } from "@orpc/openapi";
 import { OpenAPIHandler } from "@orpc/openapi/fetch";
 import { ORPCError, os } from "@orpc/server";
-import { RPCHandler } from "@orpc/server/fetch";
 import { ZodToJsonSchemaConverter } from "@orpc/zod/zod4";
 import { z } from "zod";
 import type { Pet } from "./pets.ts";
@@ -72,15 +66,13 @@ const createPet = base
     return pet;
   });
 
-/** The pet shop's whole typed surface — the router both handlers and the OpenAPI generator read. */
-export const petsRouter = { listPets, getPet, createPet };
+const petsRouter = { listPets, getPet, createPet };
 
-// One converter/generator/handler set at module scope: they are pure over the
-// router and only the per-request `context` varies (passed to `.handle`).
+// One generator and handler at module scope: they are pure over the router, and only the
+// per-request `context` varies (passed to `.handle`).
 const openapiGenerator = new OpenAPIGenerator({
   schemaConverters: [new ZodToJsonSchemaConverter()],
 });
-const rpcHandler = new RPCHandler(petsRouter);
 const openapiHandler = new OpenAPIHandler(petsRouter);
 
 /** The generated OpenAPI 3.1 document for the pets procedures. */
@@ -95,22 +87,14 @@ export async function petshopOpenApiDocument(baseUrl: string) {
   });
 }
 
-/**
- * Serve an oRPC request against the pets router with the authenticated owner
- * as context. `mode` selects the protocol: `rpc` for `POST /rpc/*` (the
- * @orpc/client wire format) or `openapi` for the REST-shaped `/api/v2/*`
- * surface. Returns null when the handler didn't match the path, so the worker
- * can fall through to its 404.
- */
-export async function handlePetsRpcRequest(
+/** Serve `/api/v2/*` with the authenticated owner as context; null when no procedure matched. */
+export async function handlePetsApiRequest(
   request: Request,
   context: PetsContext,
-  mode: "rpc" | "openapi",
 ): Promise<Response | null> {
-  const { prefix, handler } =
-    mode === "rpc"
-      ? { prefix: "/rpc" as const, handler: rpcHandler }
-      : { prefix: "/api/v2" as const, handler: openapiHandler };
-  const { matched, response } = await handler.handle(request, { prefix, context });
+  const { matched, response } = await openapiHandler.handle(request, {
+    prefix: "/api/v2",
+    context,
+  });
   return matched ? response : null;
 }
