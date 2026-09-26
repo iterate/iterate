@@ -3,26 +3,13 @@
 // (`retryPlatformFailures` on one of the named schedules, or a durable ladder's rung). The policy
 // and the sources it rests on: docs/engineering-invariants.md#failures-and-retries.
 
-/**
- * The five kinds of failure. The hop that first sees a failure decides its kind, and the kind rides
- * on as own properties (code UNAVAILABLE and its `data.kind`), which Workers RPC and capnweb both
- * keep.
- *
- * - `refused`: an expected outcome, coded (iterate/lib's `ErrorCode`). Never repeated.
- * - `deploy-reset`: a deploy reset the Durable Object (or D1) for its new code. Expected on every
- *   deploy under traffic; a fresh instance answers at once.
- * - `disconnected`: capnp's DISCONNECTED, which workerd stamps `retryable: true` (the connection
- *   under the call was lost, the object reset by its storage). "Re-establish connections and try
- *   again" (capnp kj/exception.h).
- * - `overloaded`: capnp's OVERLOADED, which workerd stamps `overloaded: true` (a storage operation
- *   past its 30 s timeout, an isolate past its memory limit), D1's overload, an HTTP 429 or 408,
- *   our own deadline. "It should NOT be repeated immediately as this may simply exacerbate the
- *   problem" (capnp kj/exception.h). Also workerd's opaque "internal error; reference = …", the
- *   runtime's own failure it hides from JavaScript (jsg/util.c++ `renderInternalError`): in a
- *   Cloudflare outage every call fails with it for minutes (188 s on 2026-09-24), so it is the
- *   platform's, never repeated at once, and answered 503.
- * - `failed`: anything else, our own defects included. capnp's FAILED would fail again unchanged.
- */
+/** The five kinds of failure (docs/engineering-invariants.md#failures-and-retries): an expected
+ *  outcome, coded (`refused`); a deploy's reset of a Durable Object or of D1 (`deploy-reset`);
+ *  capnp's DISCONNECTED, "re-establish connections and try again" (`disconnected`); capnp's
+ *  OVERLOADED, "should NOT be repeated immediately as this may simply exacerbate the problem"
+ *  (`overloaded`; both kj/exception.h); anything else, our own defects included (`failed`). The hop
+ *  that first sees a failure decides its kind, and the kind rides on as code UNAVAILABLE's
+ *  `data.kind`, which Workers RPC and capnweb both keep. */
 export type FailureKind = "refused" | PlatformFailureKind | "failed";
 
 /** A failure of the platform's own: the kinds code UNAVAILABLE carries. */
@@ -73,7 +60,10 @@ export function failureKind(error: unknown): FailureKind {
  *  (https://developers.cloudflare.com/d1/observability/debug-d1/#error-list), and a storage reset
  *  is stamped by the type the storage failed with, which may be FAILED (workerd io/actor-cache.c++:
  *  "Pass through exception type"). A storage timeout is OVERLOADED (workerd io/worker.c++
- *  `makeTimeoutPromise`). */
+ *  `makeTimeoutPromise`). workerd's opaque "internal error; reference = …" (jsg/util.c++
+ *  `renderInternalError`) is the runtime's own failure, hidden from JavaScript: in a Cloudflare
+ *  outage every call fails with it for minutes (188 s on 2026-09-24), so it is an overload, never
+ *  repeated at once and answered 503. */
 const OVERLOADED_MESSAGE =
   /is overloaded|exceeded timeout which caused object to be reset|exceeded its (memory|CPU time) limit and was reset|(^|: )internal error; reference = /m;
 const DISCONNECTED_MESSAGE =
