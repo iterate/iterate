@@ -117,11 +117,6 @@ test("organizations.create writes the catalog row, which every read answers at o
   expect(onAccount).toMatchObject({
     payload: { orgId: org.id, userId: principal.actor, role: "owner" },
   });
-  expect(await catalog("organization", org.id)).toEqual({
-    id: org.id,
-    name: "Ada's organization",
-    projects: 0,
-  });
   expect(await catalog("accessibleTo", principal.actor)).toEqual({
     organizations: [{ id: org.id, name: "Ada's organization", role: "owner", projects: 0 }],
     projects: [],
@@ -619,7 +614,7 @@ function postLogin(form: Record<string, string>, cookie?: string) {
 }
 
 /** A read of the control-plane database (src/control-plane/catalog.ts, over this file's D1) with
- *  no session between: `catalog("project", ref)`, `catalog("organization", orgId)`. */
+ *  no session between: `catalog("organizations")`, `catalog("accessibleTo", userId)`. */
 function catalog(method: string, ...args: unknown[]) {
   const database = new ControlPlaneDatabase(env.DB) as unknown as Record<
     string,

@@ -48,7 +48,6 @@ import {
   listMembers,
   listOrganizations,
   memberOf,
-  organizationById,
   organizationRole,
   renameOrganization,
   upsertMembership,
@@ -167,9 +166,6 @@ export class ControlPlaneDatabase {
   async identity(provider: IdentityProvider, subject: string): Promise<UserRecord | null> {
     const user = await identityUser(this.#client, { provider, subject });
     return user && { id: user.id, email: user.email };
-  }
-  organization(organizationId: string): Promise<OrganizationRecord | null> {
-    return organizationById(this.#client, { id: organizationId });
   }
   organizations(): Promise<OrganizationRecord[]> {
     return listOrganizations(this.#client);

@@ -75,7 +75,7 @@ function settle(ask: number) {
   waiting = waiting.filter((wait) => wait.ask > ask);
 }
 
-async function read(): Promise<void> {
+async function read() {
   if (reading) return;
   reading = true;
   try {
@@ -134,7 +134,7 @@ function treeOf(
 /** Read the tree again: after a write of this page's own, awaited before a navigation that relies
  *  on it; and whenever a fact says it changed. Resolves once a read that started after the call
  *  has answered (at once when no tree is mounted). */
-export function reloadOrganizationTree(): Promise<void> {
+export function reloadOrganizationTree() {
   if (!reader) return Promise.resolve();
   const ask = ++asked;
   const answeredAsk = new Promise<void>((resolve) => waiting.push({ ask, resolve }));
@@ -156,15 +156,14 @@ export function readOrganizationTree(): OrganizationTreeState {
   return published;
 }
 
-/** One organization of the tree, by id — `org` when the tree lists it; `missing` once the tree has
- *  loaded without it. Until then, neither: the page is pending. */
-export function useOrganizationTreeEntry(orgId: string): {
-  org: TreeOrganization | undefined;
-  missing: boolean;
-} {
+/** One organization of the tree, by id — `org` when the tree lists it; `missing` once a read has
+ *  answered without it. Before the first read, and while the last read failed, neither: the tree a
+ *  failed read leaves lacks an organization written a moment ago, so the page shows `error`, not a
+ *  404. */
+export function useOrganizationTreeEntry(orgId: string) {
   const tree = useOrganizationTree();
   const org = tree.organizations.find((candidate) => candidate.id === orgId);
-  return { org, missing: !org && tree.loaded };
+  return { org, missing: !org && tree.loaded && !tree.error, error: tree.error };
 }
 
 /** The facts that change the tree: a membership of the person's, on their account; anything that

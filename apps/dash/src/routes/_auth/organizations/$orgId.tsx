@@ -118,13 +118,23 @@ function OrganizationPage() {
 }
 
 function OrganizationSettings({ orgId }: { orgId: string }) {
-  const { org, missing } = useOrganizationTreeEntry(orgId);
+  const { org, missing, error } = useOrganizationTreeEntry(orgId);
   // a delete, or removing yourself, drops the membership from the tree before the verb answers:
   // the page is on its way to the list, not to not-found
   const [leaving, setLeaving] = useState(false);
   if (!org) {
     if (missing && !leaving) throw notFound();
-    return <DefaultPendingComponent />;
+    if (!error) return <DefaultPendingComponent />;
+    return (
+      <div className="mx-auto flex w-full max-w-5xl flex-col items-start gap-3 p-4 md:p-8">
+        <p role="alert" data-type="error" className="text-sm text-destructive">
+          Your organizations could not be read: {error}
+        </p>
+        <Button variant="outline" size="sm" onClick={() => void reloadOrganizationTree()}>
+          Try again
+        </Button>
+      </div>
+    );
   }
   return <OrganizationSettingsFor org={org} onLeaving={() => setLeaving(true)} />;
 }

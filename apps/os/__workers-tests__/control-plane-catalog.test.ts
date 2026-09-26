@@ -151,7 +151,6 @@ test("organizations: created with the caller its owner; the operator alone names
     role: "owner",
     projects: 0,
   });
-  expect(await c.organization(org.id)).toEqual({ id: org.id, name: "Booper", projects: 0 });
   expect(await c.members(org.id)).toEqual([{ userId: ada.id, email: ada.email, role: "owner" }]);
   expect(await c.accessibleTo(ada.id)).toEqual({ organizations: [org], projects: [] });
   await expect(c.createOrganization(as(ada), { name: "X", ownerId: bob.id })).rejects.toMatchObject(
@@ -271,7 +270,7 @@ test("organizations: a removed owner's own verbs are refused and write nothing; 
     NOW,
   );
   await c.deleteOrganization(as(ada), empty.id);
-  expect(await c.organization(empty.id)).toBeNull();
+  expect((await c.organizations()).map((organization) => organization.id)).not.toContain(empty.id);
   expect(await c.accessibleTo(bob.id)).toEqual({ organizations: [], projects: [] });
   expect(await rows("select id from invitations")).toEqual([]);
   // a delete racing a project's creation in it: the project in its organization, or neither
@@ -280,8 +279,8 @@ test("organizations: a removed owner's own verbs are refused and write nothing; 
     c.deleteOrganization(as(ada), raced.id),
     c.createProject(as(ada), { project: "raced", organizationId: raced.id }),
   ]);
-  expect(await c.organization(raced.id)).toEqual(
-    (await c.project("raced")) ? expect.objectContaining({ projects: 1 }) : null,
+  expect((await c.organizations()).find((organization) => organization.id === raced.id)).toEqual(
+    (await c.project("raced")) ? expect.objectContaining({ projects: 1 }) : undefined,
   );
 });
 
@@ -531,11 +530,7 @@ test("projects: with no organization named: the person's first by name, made on 
   expect(minted([await c.createProject(as(bob), { project: "later" })])).toEqual([]);
   expect((await c.accessibleTo(bob.id)).organizations).toHaveLength(1);
   expect(await c.createProject(admin, { project: "ops" })).toMatchObject({ orgId: ADMIN_ORG_ID });
-  expect(await c.organization(ADMIN_ORG_ID)).toEqual({
-    id: ADMIN_ORG_ID,
-    name: "admin",
-    projects: 1,
-  });
+  expect(await c.organizations()).toContainEqual({ id: ADMIN_ORG_ID, name: "admin", projects: 1 });
   expect(await c.members(ADMIN_ORG_ID)).toEqual([]);
   // the operator names any organization, one that exists
   expect(
