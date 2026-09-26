@@ -11,7 +11,8 @@ insert into users (id, email) values (:id, :email) on conflict (email) do nothin
 update users set email = :email where id = :id;
 
 /** @name identityUser */
-select u.id, u.email, (select count(*) from identities j where j.user_id = u.id) as sign_ins
+select u.id, u.email, (select count(*) from identities j where j.user_id = u.id) as sign_ins,
+  i.added_at
 from identities i
 join users u on u.id = i.user_id
 where i.provider = :provider and i.subject = :subject
@@ -26,4 +27,9 @@ on conflict (email) do nothing;
 /** @name insertIdentity */
 insert into identities (provider, subject, user_id)
 select :provider, :subject, u.id from users u where u.email = :email
+on conflict do nothing;
+
+/** @name insertAddedIdentity */
+insert into identities (provider, subject, user_id, added_at)
+values (:provider, :subject, :userId, :addedAt)
 on conflict do nothing;

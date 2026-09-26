@@ -24,3 +24,11 @@ export function projectHostOf(
   const origin = httpOriginOf(info.platformOrigin);
   return origin ? projectUrlOf(info.ingressRouting, origin, { project: slug })?.href || null : null;
 }
+
+/** The issuer's link that adds a GitHub sign-in to the person signed in there (apps/os identity.ts,
+ *  "ADD A SIGN-IN"): it lands back on `next`, with `?error=` when refused. Null when the platform's
+ *  origin is not an http(s) one. */
+export function addGithubSignInHref(info: { platformOrigin: string }, next: string): string | null {
+  const origin = httpOriginOf(info.platformOrigin);
+  return origin && `${origin}/.auth/identity/github?${new URLSearchParams({ link: "1", next })}`;
+}

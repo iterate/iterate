@@ -92,7 +92,8 @@ export namespace updateUserEmail {
 }
 
 const identityUserSql = `
-select u.id, u.email, (select count(*) from identities j where j.user_id = u.id) as sign_ins
+select u.id, u.email, (select count(*) from identities j where j.user_id = u.id) as sign_ins,
+  i.added_at
 from identities i
 join users u on u.id = i.user_id
 where i.provider = ? and i.subject = ?
@@ -109,6 +110,7 @@ function identityUserMapResult(row: identityUser.RawResult): identityUser.Result
 		id: row.id,
 		email: row.email,
 		signIns: row.sign_ins,
+		addedAt: row.added_at,
 	};
 }
 
@@ -129,11 +131,13 @@ export namespace identityUser {
 		id: string;
 		email: string;
 		sign_ins?: number;
+		added_at?: number;
 	};
 	export type Result = {
 		id: string;
 		email: string;
 		signIns?: number;
+		addedAt?: number;
 	};
 }
 
@@ -188,5 +192,32 @@ export namespace insertIdentity {
 		provider: string;
 		subject: string;
 		email: string;
+	};
+}
+
+const insertAddedIdentitySql = `
+insert into identities (provider, subject, user_id, added_at)
+values (?, ?, ?, ?)
+on conflict do nothing;
+`.trim();
+const insertAddedIdentityQuery = (params: insertAddedIdentity.Params) => ({
+	name: "insertAddedIdentity",
+	sql: insertAddedIdentitySql,
+	args: [params.provider, params.subject, params.userId, params.addedAt],
+});
+
+export const insertAddedIdentity = Object.assign(
+	async function insertAddedIdentity(client: Client, params: insertAddedIdentity.Params) {
+		return client.run(insertAddedIdentityQuery(params));
+	},
+	{ sql: insertAddedIdentitySql, query: insertAddedIdentityQuery },
+);
+
+export namespace insertAddedIdentity {
+	export type Params = {
+		provider: string;
+		subject: string;
+		userId: string;
+		addedAt: number | null;
 	};
 }

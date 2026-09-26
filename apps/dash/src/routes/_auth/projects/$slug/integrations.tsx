@@ -39,6 +39,7 @@ import { errorCode } from "iterate/lib";
 import { useContextStub, useFacetLiveState } from "iterate/react";
 import { httpOriginOf } from "../../../../lib/origins.ts";
 import { stepUpUrl } from "../../../../lib/scopes.ts";
+import { addGithubSignInHref } from "../../../../lib/origins.ts";
 
 const Provider = z.enum(["slack", "google", "cloudflare", "github", "waitrose"]);
 type Provider = z.infer<typeof Provider>;
@@ -108,6 +109,8 @@ export const Route = createFileRoute("/_auth/projects/$slug/integrations")({
     move: z.string().optional().catch(undefined),
     /** Another service: how to connect one this page has no row for. */
     other: z.literal(1).optional().catch(undefined),
+    /** Why the issuer refused to add a GitHub sign-in (apps/os identity.ts, "ADD A SIGN-IN"). */
+    error: z.string().optional().catch(undefined),
   }),
   staticData: { page: "Integrations" },
   head: ({ params }) => ({ meta: [{ title: `Integrations · ${params.slug} · Dash` }] }),
@@ -1249,14 +1252,34 @@ function GithubInstallations({
       current = false;
     };
   }, [person, secretPath, apiOrigin]);
+  const { info, project } = Route.useRouteContext();
+  const { error } = Route.useSearch();
   // your account not read yet, or not readable by this session: "Your accounts" says which
   if (!state) return null;
-  if (!secretPath || !apiOrigin)
-    return (
-      <p className="text-sm text-muted-foreground">
-        Your account has no GitHub sign-in, so where iterate's app is installed can't be listed.
-      </p>
+  if (!secretPath || !apiOrigin) {
+    // back to this sheet once the issuer has added it (or says why not)
+    const addSignIn = addGithubSignInHref(
+      info,
+      `${window.location.origin}/projects/${project.slug}/integrations?connect=github`,
     );
+    return (
+      <div className="flex flex-col gap-1">
+        <p className="text-sm text-muted-foreground">
+          Your account has no GitHub sign-in, so where iterate's app is installed can't be listed.{" "}
+          {addSignIn && (
+            <a href={addSignIn} className="underline underline-offset-4">
+              Add GitHub sign-in
+            </a>
+          )}
+        </p>
+        {error && (
+          <p role="alert" data-type="error" className="text-sm text-destructive">
+            {error}
+          </p>
+        )}
+      </div>
+    );
+  }
   if (installations === "loading")
     return (
       <p role="status" className="flex items-center gap-2 text-sm text-muted-foreground">

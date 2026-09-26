@@ -11,10 +11,13 @@ create table users (
 );
 
 -- A provider's stable subject, linked to a person once: one subject per provider per person.
+-- added_at: when the person, signed in, added it to their account (catalog.ts `addIdentity`); null
+-- for one a sign-in linked by its email. The address an added one's provider reports is never theirs.
 create table identities (
   provider text not null,
   subject text not null,
   user_id text not null references users (id),
+  added_at integer,
   primary key (provider, subject),
   unique (provider, user_id)
 );

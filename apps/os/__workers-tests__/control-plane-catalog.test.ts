@@ -91,6 +91,41 @@ test("people: a person with more than one sign-in keeps their email when one sig
   });
 });
 
+test("people: a signed-in person adds a sign-in to their account: the subject becomes theirs, again unchanged, never one another person holds or a second of the provider, and it never moves their email", async () => {
+  await emptyTables();
+  const ada = await person("ada@example.com");
+  const bob = await person("bob@example.com");
+  const add = (userId: string, provider: "google" | "github", subject: string) =>
+    c.addIdentity({ userId, provider, subject, now: NOW });
+  expect(await add(ada.id, "github", "gh-ada")).toEqual(ada);
+  expect(await c.identity("github", "gh-ada")).toEqual(ada);
+  expect(await add(ada.id, "github", "gh-ada")).toEqual(ada);
+  await expect(add(bob.id, "github", "gh-ada")).rejects.toMatchObject({
+    code: "IDENTITY_CONFLICT",
+    message: "This GitHub account signs in to another iterate account.",
+  });
+  await expect(add(ada.id, "github", "gh-ada-2")).rejects.toMatchObject({
+    code: "IDENTITY_CONFLICT",
+    message: "Your account already signs in with another GitHub account.",
+  });
+  expect(await c.identity("github", "gh-ada-2")).toBeNull();
+  // signing in with it later finds Ada, and the address GitHub reports is not hers: she keeps
+  // hers, though it is her only sign-in
+  expect(
+    await c.linkIdentity({ provider: "github", subject: "gh-ada", email: "ada@elsewhere.example" }),
+  ).toEqual(ada);
+  expect(await c.user(ada.id)).toEqual(ada);
+  // two people adding one subject at once: one holds it, the other is refused
+  const both = await Promise.allSettled([
+    add(ada.id, "google", "g-x"),
+    add(bob.id, "google", "g-x"),
+  ]);
+  expect(both.map((result) => result.status).sort()).toEqual(["fulfilled", "rejected"]);
+  expect(await rows("select count(*) as n from identities where subject = 'g-x'")).toEqual([
+    { n: 1 },
+  ]);
+});
+
 test("organizations: created with the caller its owner; the operator alone names another owner, one who exists", async () => {
   await emptyTables();
   const ada = await person("ada@example.com");

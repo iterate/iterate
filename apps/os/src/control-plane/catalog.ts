@@ -10,7 +10,7 @@ import { codedError } from "iterate/lib";
 import { createD1Client, SqlfuError } from "sqlfu";
 import type { Caller as PrincipalCaller } from "../caller.ts";
 import type { OrganizationRole } from "../organization/contract.ts";
-import type { IdentityProvider } from "./contract.ts";
+import { IDENTITY_PROVIDER_NAMES, type IdentityProvider } from "./contract.ts";
 import { batch } from "./db/index.ts";
 import {
   claimHostname,
@@ -65,6 +65,7 @@ import {
 } from "./db/queries/.generated/projects.sql.ts";
 import {
   identityUser,
+  insertAddedIdentity,
   insertIdentity,
   insertUserIfNew,
   insertUserUnlessLinked,
@@ -246,8 +247,8 @@ export class ControlPlaneDatabase {
   }
 
   /** A verified sign-in: link once by verified email, then resolve by the provider's stable
-   *  subject. A linked subject's changed email follows it when it is the person's only sign-in,
-   *  unless another person holds that email;
+   *  subject. A linked subject's changed email follows it when it is the person's only sign-in and
+   *  was not added to their account (`addIdentity`), unless another person holds that email;
    *  a second subject of the same provider cannot adopt an already-linked person. Takes no caller —
    *  it is the sign-in system linking a verified identity, never a person's own command.
    *
@@ -271,8 +272,9 @@ export class ControlPlaneDatabase {
     if (!linked)
       throw codedError("IDENTITY_CONFLICT", "This email belongs to another linked account.");
     // The email follows a person's only sign-in. With more than one (Google and GitHub, say), each
-    // provider may report its own address, and none of them rewrites the person's.
-    if (linked.email === email || (linked.sign_ins ?? 1) > 1)
+    // provider may report its own address, and none of them rewrites the person's; nor does one the
+    // person added to their account, whose address was never theirs.
+    if (linked.email === email || (linked.sign_ins ?? 1) > 1 || linked.added_at)
       return { id: linked.id, email: linked.email };
     try {
       await updateUserEmail(this.#client, { email }, { id: linked.id });
@@ -282,6 +284,34 @@ export class ControlPlaneDatabase {
       throw error;
     }
     return { id: linked.id, email };
+  }
+
+  /** A sign-in a signed-in person adds to their own account (identity.ts's link mode): the
+   *  provider's subject becomes theirs — again, unchanged — and their email stays. Refused when the
+   *  subject signs in to another person, or when this person already has another subject of the
+   *  provider (`unique (provider, user_id)`). Takes no caller: the issuer proved the person (their
+   *  session) and the subject (the provider). One batch: the insert does nothing under either
+   *  constraint, and the read after it says whose the subject is. */
+  async addIdentity(input: {
+    userId: string;
+    provider: IdentityProvider;
+    subject: string;
+    now: number;
+  }): Promise<UserRecord> {
+    const { userId, provider, subject } = input;
+    const results = await batch(this.#d1, [
+      insertAddedIdentity.query({ provider, subject, userId, addedAt: input.now }),
+      identityUser.query({ provider, subject }),
+    ]);
+    const holder = rowsOf<identityUser.RawResult>(results, 1)[0];
+    if (holder?.id === userId) return { id: holder.id, email: holder.email };
+    const name = IDENTITY_PROVIDER_NAMES[provider];
+    throw codedError(
+      "IDENTITY_CONFLICT",
+      holder
+        ? `This ${name} account signs in to another iterate account.`
+        : `Your account already signs in with another ${name} account.`,
+    );
   }
 
   /** A new organization, the caller its owner. The operator may name another owner, or none (the

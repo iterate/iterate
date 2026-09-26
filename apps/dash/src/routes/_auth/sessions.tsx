@@ -6,15 +6,17 @@
 // of `grants.list(cursor)` — the route's loader, `?cursor=` in the URL; a mint or an end
 // invalidates the router, which reloads it. "Connected accounts" are the person's own connections
 // (the `account` facet's live `integrations` on `session.user`): a sign-in with Google, Cloudflare or
-// GitHub keeps one, and so does connecting Google, Cloudflare or Waitrose here (`?waitrose=1`). A project uses one when its
-// Integrations page connects it there; disconnecting one here ends every project's use of it.
+// GitHub keeps one, and so does connecting Google, Cloudflare or Waitrose here (`?waitrose=1`), or
+// GitHub, which adds it as a sign-in to the account (`?error=` when the issuer refused). A project
+// uses one when its Integrations page connects it there; disconnecting one here ends every
+// project's use of it.
 import { createFileRoute, Link, useNavigate, useRouter } from "@tanstack/react-router";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { CheckIcon, CopyIcon } from "lucide-react";
 import { z } from "zod";
 import type { GrantKind, GrantRecord } from "iterate/api";
 import { Avatar, AvatarFallback, AvatarImage } from "@iterate-com/ui/components/avatar";
-import { Button } from "@iterate-com/ui/components/button";
+import { Button, buttonVariants } from "@iterate-com/ui/components/button";
 import { Checkbox } from "@iterate-com/ui/components/checkbox";
 import { Input } from "@iterate-com/ui/components/input";
 import { Label } from "@iterate-com/ui/components/label";
@@ -43,6 +45,7 @@ import {
 import { ConnectButton } from "@iterate-com/ui/components/connect-button";
 import { useContextStub, useFacetLiveState } from "iterate/react";
 import { Identifier } from "../../components/identifier.tsx";
+import { addGithubSignInHref } from "../../lib/origins.ts";
 import { AllowAccount } from "../../components/allow-account.tsx";
 
 const GRANT_KIND_LABELS: Record<GrantKind, string> = {
@@ -59,6 +62,8 @@ export const Route = createFileRoute("/_auth/sessions")({
     token: z.literal(1).optional().catch(undefined),
     /** The sheet that connects your own Waitrose account. */
     waitrose: z.literal(1).optional().catch(undefined),
+    /** Why the issuer refused to add a sign-in (apps/os identity.ts, "ADD A SIGN-IN"). */
+    error: z.string().optional().catch(undefined),
   }),
   loaderDeps: ({ search }) => ({ cursor: search.cursor }),
   staticData: { page: "Sessions" },
@@ -495,7 +500,8 @@ const AccountConnections = z.looseObject({
 });
 
 /** THE PERSON'S CONNECTED ACCOUNTS: listed live with the projects using each, disconnected (every
- *  project's use ends with it), or connected here through iterate's app (Google, Cloudflare). */
+ *  project's use ends with it), or connected here through iterate's app (Google, Cloudflare; and
+ *  GitHub, until they have one, as a sign-in added to their account). */
 function ConnectedAccounts({ projects }: { projects: { id: string; slug: string }[] }) {
   const { api, info } = Route.useRouteContext();
   const person = useContextStub(() => Promise.resolve(api.user), [api]);
@@ -512,7 +518,13 @@ function ConnectedAccounts({ projects }: { projects: { id: string; slug: string 
   const [disconnecting, setDisconnecting] = useState<string | null>(null);
   const next = `${window.location.origin}/sessions`;
   const loadError = person.error || live.error;
-  const { waitrose } = Route.useSearch();
+  const { waitrose, error: addError } = Route.useSearch();
+  const addGithub =
+    live.value &&
+    info.iterateAppProviders.includes("github") &&
+    !accounts.some((row) => row.provider === "github")
+      ? addGithubSignInHref(info, next)
+      : null;
   const navigate = useNavigate({ from: Route.fullPath });
   const closeWaitrose = () =>
     void navigate({ search: (prev) => ({ ...prev, waitrose: undefined }), replace: true });
@@ -543,6 +555,11 @@ function ConnectedAccounts({ projects }: { projects: { id: string; slug: string 
               }
             />
           ))}
+          {addGithub && (
+            <a href={addGithub} className={buttonVariants({ variant: "outline", size: "sm" })}>
+              Connect GitHub
+            </a>
+          )}
           <Button
             variant="outline"
             size="sm"
@@ -552,9 +569,9 @@ function ConnectedAccounts({ projects }: { projects: { id: string; slug: string 
           </Button>
         </div>
       </div>
-      {error && (
+      {(error || addError) && (
         <p role="alert" data-type="error" className="text-sm text-destructive">
-          {error}
+          {error || addError}
         </p>
       )}
       {loadError ? (

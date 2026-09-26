@@ -14,7 +14,8 @@
 // token acts with the App's permissions, and its primary verified address is the email.
 //
 // A CALLBACK NEVER THROWS: whatever goes wrong after the provider sends the browser back lands the
-// person on the sign-in page with why (`/login?next&error`, 303), split three ways in the logs:
+// person on the sign-in page with why (`/login?next&error`, 303; an added sign-in's `next`), split
+// three ways in the logs:
 //  - a REFUSAL (`SignInRefused`: an expired or foreign flow, a declined consent, a code the provider
 //    will not exchange, an unverified email, a GitHub user who never approved the App's "Email
 //    addresses" permission, an identity conflict) is an expected outcome, logged at info as
@@ -23,8 +24,21 @@
 //    failure, a warn `identity.platform-failure-<step>` the prd fault alarm counts;
 //  - anything else is a defect of ours, reported at error level (`identity.sign-in-failed`).
 //
+// ADD A SIGN-IN (link mode, `/.auth/identity/<provider>?link=1&next=`): a browser signed in to the
+// issuer adds the provider's account to that person instead of signing anyone in. Nobody signed in
+// is sent to sign in first; `next` is an absolute URL on the platform's origin or the Dash's
+// (`nextUrlOf`), else refused. The signed flow cookie carries `linkTo`, the person, and the
+// callback goes on only while the issuer session is still theirs (else `link-session-changed`):
+// that binding, the state and PKCE in the flow cookie are what keep another browser's callback,
+// or another person's, from adding an account to them. The control plane links the subject to them
+// (catalog.ts `addIdentity`: refused while it signs in to someone else, or while they have another
+// account of the provider); their email and their session stay as they are, `login.allowedEmails`
+// is not asked (the account's own email is what it admits), the token is kept as a sign-in's is,
+// and the browser goes back to `next` — with `error` on it when refused.
+//
 // A provider pointed at a FAKE (a preview's pet shop, which mints any address) signs in addresses
-// under `login.testLink.emailDomain` alone (integrations/rules.ts `fakeProviderEmailRefusal`).
+// under `login.testLink.emailDomain` alone (integrations/rules.ts `fakeProviderEmailRefusal`), and
+// adds no others.
 import * as oauth from "oauth4webapi";
 import { z } from "zod";
 import { cookieValueOf, errorCode, reportIssue, sameOriginPath } from "iterate/lib";
@@ -38,9 +52,12 @@ import {
   type AppConfig,
 } from "./app-config.ts";
 import { startIssuerSession } from "./issuer-session.ts";
+import { browserAuthorization } from "./browser-client.ts";
 import { ControlPlane } from "./control-plane/edge.ts";
 import type { UserRecord } from "./control-plane/catalog.ts";
-import { IdentityProvider } from "./control-plane/contract.ts";
+import { IDENTITY_PROVIDER_NAMES, IdentityProvider } from "./control-plane/contract.ts";
+import { signInHref } from "./login-search.ts";
+import { nextUrlOf } from "./secret-oauth.ts";
 import type { AccountState } from "./account/contract.ts";
 import { appendPlatformFacts, ownerContext } from "./session.ts";
 import { cloudflareEndpointsOf } from "./integrations/cloudflare.ts";
@@ -59,7 +76,6 @@ const PATHS = {
   cloudflare: "/.auth/identity/cloudflare",
   github: "/.auth/identity/github",
 } satisfies Record<IdentityProvider, string>;
-const NAMES = { google: "Google", cloudflare: "Cloudflare", github: "GitHub" };
 const cookieAttributes = "HttpOnly; Secure; SameSite=Lax; Path=/";
 const Flow = z.object({
   kind: z.literal("identity-login"),
@@ -73,6 +89,9 @@ const Flow = z.object({
   expiresAt: z.number(),
   /** Google went back for the consent screen once already (`signInNeedsConsent`). */
   bounced: z.boolean().default(false),
+  /** ADD A SIGN-IN: the person (a user id) the provider's account is added to, instead of signing
+   *  anyone in; `next` is then an absolute URL. */
+  linkTo: z.string().optional(),
 });
 type Flow = z.infer<typeof Flow>;
 const VerifiedIdentity = z.object({
@@ -194,7 +213,10 @@ export async function identityResponse(request: Request, env: Env) {
   if (request.method !== "GET") return new Response("Method not allowed", { status: 405 });
   const config = appConfigOf(env);
   const client = signInClientOf(config, provider);
-  if (!client) return new Response(`${NAMES[provider]} sign-in is not configured`, { status: 503 });
+  if (!client)
+    return new Response(`${IDENTITY_PROVIDER_NAMES[provider]} sign-in is not configured`, {
+      status: 503,
+    });
   const cookie = `__Host-itx-${provider}-identity-flow`;
   /** Google's and Cloudflare's OpenID configuration (GitHub has none). */
   const discover = () =>
@@ -237,7 +259,7 @@ export async function identityResponse(request: Request, env: Env) {
     headers.set("Location", authorization.href);
     return new Response(null, { status: 302, headers });
   };
-  const newFlow = (next: string, bounced: boolean): Flow => ({
+  const newFlow = (next: string, bounced: boolean, linkTo?: string): Flow => ({
     kind: "identity-login",
     provider,
     clientId: client.clientId,
@@ -248,27 +270,61 @@ export async function identityResponse(request: Request, env: Env) {
     next,
     expiresAt: Date.now() + 600_000,
     bounced,
+    linkTo,
   });
-  if (url.pathname === PATHS[provider])
-    return authorize(
-      await discover(),
-      newFlow(sameOriginPath(url.searchParams.get("next") || "/", platformOrigin), false),
-    );
-  headers.append("Set-Cookie", `${cookie}=; ${cookieAttributes}; Max-Age=0`);
-  /** Back to the sign-in page, `error` on it. */
-  const toSignInPage = (next: string, error: string) => {
-    headers.set("Location", `/login?${new URLSearchParams({ next, error })}`);
+  /** Where the person reads what went wrong: back where an added sign-in began, `error` on it; else
+   *  the sign-in page. */
+  const failed = (flow: Pick<Flow, "next" | "linkTo">, error: string) => {
+    if (flow.linkTo) {
+      const back = new URL(flow.next);
+      back.searchParams.set("error", error);
+      headers.set("Location", back.href);
+    } else headers.set("Location", `/login?${new URLSearchParams({ next: flow.next, error })}`);
     return new Response(null, { status: 303, headers });
   };
-  const refused = (next: string, refusal: SignInRefused) => {
+  const refused = (flow: Pick<Flow, "next" | "linkTo">, refusal: SignInRefused) => {
     console.info({
       ...refusal.details,
       event: "identity.sign-in-refused",
       provider,
       reason: refusal.reason,
     });
-    return toSignInPage(next, refusal.message);
+    return failed(flow, refusal.message);
   };
+  if (url.pathname === PATHS[provider] && url.searchParams.has("link")) {
+    let next: string | null;
+    try {
+      next = nextUrlOf(
+        new URL(url.searchParams.get("next") || "/", platformOrigin).href,
+        [platformOrigin, config.urls.dash].filter(Boolean),
+      );
+    } catch {
+      next = null;
+    }
+    if (!next)
+      return refused(
+        { next: "/" },
+        new SignInRefused(
+          "That link can't add a sign-in. Please start again from your account.",
+          "link-next-invalid",
+          {
+            next: url.searchParams.get("next") ?? undefined,
+          },
+        ),
+      );
+    const person = await issuerSessionPersonOf(env, request);
+    if (!person) {
+      headers.set("Location", signInHref(`${url.pathname}${url.search}`));
+      return new Response(null, { status: 302, headers });
+    }
+    return authorize(await discover(), newFlow(next, false, person));
+  }
+  if (url.pathname === PATHS[provider])
+    return authorize(
+      await discover(),
+      newFlow(sameOriginPath(url.searchParams.get("next") || "/", platformOrigin), false),
+    );
+  headers.append("Set-Cookie", `${cookie}=; ${cookieAttributes}; Max-Age=0`);
   const signed = cookieValueOf(request.headers.get("cookie"), cookie);
   const parsedFlow = Flow.safeParse(signed && (await verifyClaims(signed, signingSecret)));
   if (
@@ -278,7 +334,10 @@ export async function identityResponse(request: Request, env: Env) {
     parsedFlow.data.clientId !== client.clientId ||
     parsedFlow.data.redirectUri !== redirectUri
   )
-    return refused("/", new SignInRefused("Sign-in expired. Please start again.", "flow-expired"));
+    return refused(
+      { next: "/" },
+      new SignInRefused("Sign-in expired. Please start again.", "flow-expired"),
+    );
   const flow = parsedFlow.data;
   try {
     const as = await discover();
@@ -292,13 +351,27 @@ export async function identityResponse(request: Request, env: Env) {
         config.login.testLink?.emailDomain ?? null,
       );
       if (refusal)
-        throw new SignInRefused(`${NAMES[provider]}: ${refusal}.`, "fake-provider-email");
+        throw new SignInRefused(
+          `${IDENTITY_PROVIDER_NAMES[provider]}: ${refusal}.`,
+          "fake-provider-email",
+        );
     }
-    if (!emailAllowed(config.login.allowedEmails, identity.email))
-      throw new SignInRefused(EMAIL_NOT_ALLOWED_MESSAGE, "email-not-allowed");
-    // The provider and its stable subject together name the person (the control plane's rule: link
-    // once by verified email, then by the subject); an email change cannot change the actor.
-    const user = await new ControlPlane(env).linkIdentity(provider, identity.sub, identity.email);
+    let user: UserRecord;
+    if (flow.linkTo) {
+      // only while this browser is still signed in as the person the flow began for
+      if ((await issuerSessionPersonOf(env, request)) !== flow.linkTo)
+        throw new SignInRefused(
+          `Your sign-in changed while you were at ${IDENTITY_PROVIDER_NAMES[provider]}. Please start again.`,
+          "link-session-changed",
+        );
+      user = await new ControlPlane(env).addIdentity(flow.linkTo, provider, identity.sub);
+    } else {
+      if (!emailAllowed(config.login.allowedEmails, identity.email))
+        throw new SignInRefused(EMAIL_NOT_ALLOWED_MESSAGE, "email-not-allowed");
+      // The provider and its stable subject together name the person (the control plane's rule:
+      // link once by verified email, then by the subject); an email change cannot change the actor.
+      user = await new ControlPlane(env).linkIdentity(provider, identity.sub, identity.email);
+    }
     const connection = await personConnectionOf(env, user, provider, identity.sub);
     if (
       signInNeedsConsent({
@@ -308,26 +381,31 @@ export async function identityResponse(request: Request, env: Env) {
         bounced: flow.bounced,
       })
     )
-      return authorize(as, newFlow(flow.next, true), identity.email);
+      return authorize(as, newFlow(flow.next, true, flow.linkTo), identity.email);
     // The person is signed in whatever becomes of the token: a failure to keep it is reported, and
     // the next sign-in (or a connect) keeps one.
     await keepSignInToken(env, client, provider, user, signedIn, connection).catch(
       (error: unknown) => reportIssue("identity.keep-token-failed", error, { provider }),
     );
+    if (flow.linkTo) {
+      console.info({ event: "identity.sign-in-added", provider, userId: user.id });
+      headers.set("Location", flow.next);
+      return new Response(null, { status: 303, headers });
+    }
     const session = await startIssuerSession(env, request, user, flow.next, {
       picture: identity.picture,
       name: identity.name,
     });
     // its failures are logged where they happen (issuer-session.ts)
-    if ("error" in session) return toSignInPage(flow.next, session.error);
+    if ("error" in session) return failed(flow, session.error);
     headers.append("Set-Cookie", session.setCookie);
     headers.set("Location", session.location);
     return new Response(null, { status: 303, headers });
   } catch (error) {
-    if (error instanceof SignInRefused) return refused(flow.next, error);
+    if (error instanceof SignInRefused) return refused(flow, error);
     if (errorCode(error) === "IDENTITY_CONFLICT")
       return refused(
-        flow.next,
+        flow,
         new SignInRefused(
           error instanceof Error ? error.message : "Account identity conflict",
           "identity-conflict",
@@ -338,18 +416,30 @@ export async function identityResponse(request: Request, env: Env) {
       error instanceof oauth.OperationProcessingError ||
       (error instanceof oauth.ResponseBodyError && error.error === "invalid_grant")
     )
-      return refused(flow.next, new SignInRefused(REFUSED, "provider-refused"));
+      return refused(flow, new SignInRefused(REFUSED, "provider-refused"));
     if (error instanceof ProviderUnavailable) {
       console.warn({
         event: `identity.platform-failure-${error.step}`,
         provider,
         message: error.message,
       });
-      return toSignInPage(flow.next, `${NAMES[provider]} didn't answer. Please try again.`);
+      return failed(flow, `${IDENTITY_PROVIDER_NAMES[provider]} didn't answer. Please try again.`);
     }
     reportIssue("identity.sign-in-failed", error, { provider });
-    return toSignInPage(flow.next, `Sign-in with ${NAMES[provider]} failed. Please try again.`);
+    return failed(
+      flow,
+      `Sign-in with ${IDENTITY_PROVIDER_NAMES[provider]} failed. Please try again.`,
+    );
   }
+}
+
+/** The person this browser is signed in to the issuer as: its own session, never a grant an admin
+ *  signed in as them (consent.ts `#impersonate`) — or null. */
+async function issuerSessionPersonOf(env: Env, request: Request): Promise<string | null> {
+  const session = await browserAuthorization(env, request);
+  return session?.grant?.kind === "issuer" && !session.principal.impersonatedBy
+    ? session.principal.actor
+    : null;
 }
 
 /** Google's and Cloudflare's answer: the code exchanged (PKCE, the nonce checked), the ID token's
@@ -385,7 +475,7 @@ async function oidcSignIn(
   const identity = VerifiedIdentity.safeParse(oauth.getValidatedIdTokenClaims(tokens));
   if (!identity.success)
     throw new SignInRefused(
-      `${NAMES[flow.provider]} must verify your email before you can sign in.`,
+      `${IDENTITY_PROVIDER_NAMES[flow.provider]} must verify your email before you can sign in.`,
       "email-unverified",
     );
   return {
