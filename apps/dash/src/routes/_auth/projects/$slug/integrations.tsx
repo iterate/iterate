@@ -1325,13 +1325,11 @@ function agentPromptOf(service: string, projectSlug: string, platformOrigin: str
       .replace(/[^a-z0-9]+/g, "-")
       .replace(/^-|-$/g, "") || "service";
   return [
-    `Connect ${name} to my iterate project "${projectSlug}", through iterate's MCP server (its run tool).`,
-    "",
-    `- An API key: ask me for it with itx.secrets.collectFromUser({ path: "/secrets/${slug}", egress: { urls: [<${name}'s API origin>] } }) and send me the link. Never ask me to paste a key into the chat.`,
-    `- OAuth: tell me how to register an OAuth app with ${name}${platformOrigin ? ` (its redirect URL is ${platformOrigin}/.secrets/oauth/callback)` : ""}, collect its client secret the same way, then start the flow with itx.secrets.beginOAuth("/secrets/${slug}", …) and send me the link.`,
-    `- Calls send getSecret("/secrets/${slug}") where the key goes (a header, or an SDK's token): the platform swaps the real key in on the way out, so no code ever sees it.`,
-    `- If ${name} has an MCP server, use itx.connectToMcp(url, { headers }); if it has an OpenAPI document, itx.connectToOpenApi(url, { headers }); if it has an npm SDK, add it to the project's config repo.`,
-    "",
+    `Connect ${name} to my iterate project "${projectSlug}", using iterate's MCP server.`,
+    `- API key: ask me for it with itx.secrets.collectFromUser({ path: "/secrets/${slug}", egress: { urls: [<${name}'s API origin>] } }) and send me the link, never in the chat.`,
+    `- OAuth: tell me how to register an OAuth app${platformOrigin ? ` (redirect URL ${platformOrigin}/.secrets/oauth/callback)` : ""}, collect its client secret the same way, then send me the link from itx.secrets.beginOAuth("/secrets/${slug}", …).`,
+    `- Put getSecret("/secrets/${slug}") wherever the key goes; the platform swaps the real key in on the way out.`,
+    `- If ${name} has an MCP server or an OpenAPI document, use itx.connectToMcp(url, { headers }) or itx.connectToOpenApi(url, { headers }); else its npm SDK in the config repo.`,
     `Finish with one read-only call to ${name} that shows it works.`,
   ].join("\n");
 }
@@ -1406,21 +1404,23 @@ function OtherService({
           />
         </Field>
         <Field>
-          <FieldLabel>{mcpServer ? "3. " : ""}Paste this to your agent</FieldLabel>
+          <div className="flex items-center justify-between gap-2">
+            <FieldLabel>{mcpServer ? "3. " : ""}Paste this to your agent</FieldLabel>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => copy("prompt", prompt)}
+            >
+              {copied === "prompt" ? (
+                <CheckIcon data-icon="inline-start" />
+              ) : (
+                <CopyIcon data-icon="inline-start" />
+              )}
+              {copied === "prompt" ? "Copied" : "Copy"}
+            </Button>
+          </div>
           <pre className="rounded-md bg-muted px-3 py-2 text-xs whitespace-pre-wrap">{prompt}</pre>
-          <Button
-            type="button"
-            variant="outline"
-            className="self-start"
-            onClick={() => copy("prompt", prompt)}
-          >
-            {copied === "prompt" ? (
-              <CheckIcon data-icon="inline-start" />
-            ) : (
-              <CopyIcon data-icon="inline-start" />
-            )}
-            {copied === "prompt" ? "Copied" : "Copy"}
-          </Button>
         </Field>
         <div className="flex flex-col gap-2 text-sm">
           <p className="font-medium">By hand</p>
