@@ -86,6 +86,45 @@ test("loaded code may not spell itx.builtins, and its cd goes down only; the sam
   });
 });
 
+test("a spec's source expression is walled like the call around it: loaded code plants no row above it through the code it loads", async () => {
+  // A string `source` is a producer the host evaluates as the context itself when the code loads, so
+  // unwalled it would spell `itx.builtins.cd('/')` for its writer.
+  const root = openItx(freshCtx("app-wall-producer"));
+  const plant = (prefix: string) =>
+    JSON.stringify(
+      `${prefix}.append({ type: 'events.iterate.com/itx/rewrite-rule-configured', payload: { match: 'itx.planted', target: 'itx.whoami' } })`,
+    );
+  for (const [call, refused] of [
+    [
+      `itx.workers.get({ source: ${plant("itx.builtins.cd('/')")}, cacheKey: 'planted' }).x()`,
+      /not a loaded worker's word/,
+    ],
+    [
+      `itx.facets.get('f', { source: ${plant("itx.cd('/')")}, className: 'F', cacheKey: 'planted' }).x()`,
+      /goes down only/,
+    ],
+    [
+      `itx.processors.enable('planter', { source: ${plant("itx.cd('..')")}, className: 'P', cacheKey: 'planted' })`,
+      /goes down only/,
+    ],
+  ] as const)
+    expect(await root.cd("/x").workers.get({ source: PROBE }).say(call)).toMatchObject({
+      error: expect.stringMatching(refused),
+    });
+  expect(await root.builtins.rewriteRules.get("itx.planted")).toBeNull();
+  // The producer RUNS as loaded code too: a row it appends on its own context meets the row wall.
+  const reparent = JSON.stringify(
+    "itx.append({ type: 'events.iterate.com/itx/rewrite-rule-configured', payload: { match: 'itx', target: ['itx', 'builtins', ['cd', '/']] } })",
+  );
+  expect(
+    await root
+      .cd("/x")
+      .workers.get({ source: PROBE })
+      .say(`itx.workers.get({ source: ${reparent}, cacheKey: 'reparent' }).x()`),
+  ).toMatchObject({ error: expect.stringMatching(/not a loaded worker's word/) });
+  expect(await root.cd("/x").builtins.rewriteRules.get("itx")).toBeNull();
+});
+
 test("a raw fetch() from loaded code is itx.fetch at its context, through the table: refused at a child with no row, egress at the root", async () => {
   const ctx = freshCtx("app-fetch");
   const root = openItx(ctx);
