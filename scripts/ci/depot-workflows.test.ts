@@ -6,9 +6,11 @@ import { parse as parseYaml } from "yaml";
 import { temporaryDirectory } from "@iterate-com/shared/test-support/temporary-directory";
 import { testEvidencePaths } from "@iterate-com/shared/test-support/test-evidence";
 import { CI_WORKFLOW_PREVIEWS } from "../../apps/os/scripts/preview-sweep.ts";
-import { stateArtifact as osLatencyState } from "./os-latency-guard.ts";
+import { realModelTelemetry } from "../monitors/e2e.ts";
+import { stateArtifact as healthState } from "../monitors/health.ts";
+import { latencyReport } from "../monitors/latency.ts";
+import { CHECKS } from "../monitors/ttg.ts";
 import { stepFailureTitles, testEvidenceJobs } from "./test-evidence.ts";
-import { CHECKS, stateArtifact as prTtgState } from "./pr-ttg-guard.ts";
 import { stateArtifact as prdFaultAlarmState } from "./prd-fault-alarm.ts";
 import { previewPaths } from "./preview-paths.ts";
 import { unitTestWorkspaces } from "./test-telemetry-completeness.ts";
@@ -343,7 +345,7 @@ test.each([
     permissions: { contents: "read" },
   },
   {
-    file: ".depot/workflows/pr-ttg.yml",
+    file: ".depot/workflows/health.yml",
     permissions: { contents: "read" },
   },
 ])("$file grants only its required GitHub permissions", ({ file, permissions }) => {
@@ -436,14 +438,13 @@ test("the iterate GitHub App's key is read only by the flake dashboard, which ne
   );
 });
 
-// Each scheduled guard hands its state to its next run as an artifact of its own workflow
-// (scripts/ci/depot.ts newestArtifactFile): the workflow the guard names uploads the file the guard
-// wrote, whatever the run's outcome, and the guard reads back what its previous-state step saved.
-// The scripts decide which runs write one: the latency, time-to-green and fault guards only a real
-// run on main (their `--ref`).
+// Each scheduled job that pages on a change of state hands its state to its next run as an
+// artifact of its own workflow (scripts/ci/depot.ts newestArtifactFile): the workflow the script
+// names uploads the file it wrote, whatever the run's outcome, and the script reads back what its
+// previous-state step saved. The scripts decide which runs write one: only a real run on main
+// (their `--ref`).
 const guards = [
-  { script: "scripts/ci/os-latency-guard.ts", state: osLatencyState },
-  { script: "scripts/ci/pr-ttg-guard.ts", state: prTtgState },
+  { script: "scripts/monitors/health.ts", state: healthState },
   { script: "scripts/ci/prd-fault-alarm.ts", state: prdFaultAlarmState },
 ];
 test.each(guards)("$script keeps its state for its next run", ({ script, state }) => {
@@ -481,9 +482,26 @@ test("every artifact kept as a run's state is a guard's", () => {
   expect(kept.toSorted()).toEqual(guards.map(({ state }) => state.artifact).toSorted());
 });
 
-test("the PR time-to-green guard's checks are workflows by their names", () => {
+test("the PR time-to-green check's checks are workflows by their names", () => {
   const names = depotWorkflowFiles.map((file) => loadWorkflow(file).name);
   for (const check of CHECKS) expect(names, check).toContain(check);
+});
+
+// The health job reads what other workflows keep (scripts/monitors): each is a workflow by its name
+// that uploads the artifact the check reads, whatever its tests' outcome, and the file in it.
+test.for([
+  { ...latencyReport, path: `apps/os/output/${latencyReport.file}` },
+  { ...realModelTelemetry, path: "test-results/ci-telemetry" },
+])("the health job reads $workflow's $artifact", ({ workflow, artifact, path }) => {
+  const [measured] = depotWorkflowFiles
+    .map((file) => loadWorkflow(file))
+    .filter((candidate) => candidate.name === workflow);
+  const steps = Object.values(measured?.jobs ?? {}).flatMap((job) => job.steps || []);
+  expect(steps.find((step) => step.with?.name === artifact)).toMatchObject({
+    if: "always()",
+    uses: "actions/upload-artifact@v4",
+    with: { path },
+  });
 });
 
 // ── Depot validation capacity ──
@@ -708,10 +726,10 @@ test("Main OS e2e names its checks as Preview OS does and traces them the same w
   );
 });
 
-// ONE DEFINITION in each workflow, and the same one in both: Browser specs is E2E tests' runner,
-// outputs and steps (YAML aliases), the two differing only in the suite their env names. Main's
-// steps are a PR preview's less its guard and its PR's checkouts, plus the failing rows the alert
-// names; every step they share runs the same command and uploads the same files.
+// ONE DEFINITION in each workflow, and the same one in both: Browser specs is E2E tests' runner and
+// steps (YAML aliases), the two differing only in the suite their env names. Main's steps are a PR
+// preview's less its guard and its PR's checkouts; every step they share runs the same command and
+// uploads the same files.
 test("Main OS e2e's two suite jobs are one definition, a PR preview's suite steps on its runner", () => {
   const source = readFileSync(resolve(repoRoot, ".depot/workflows/main-os-e2e.yml"), "utf8");
   const main = loadWorkflow(".depot/workflows/main-os-e2e.yml");
@@ -719,7 +737,6 @@ test("Main OS e2e's two suite jobs are one definition, a PR preview's suite step
   const [e2e, specs] = [main.jobs.e2e!, main.jobs.specs!];
   expect(specs).toMatchObject({
     steps: e2e.steps,
-    outputs: e2e.outputs,
     "runs-on": e2e["runs-on"],
     "timeout-minutes": e2e["timeout-minutes"],
   });
@@ -728,17 +745,12 @@ test("Main OS e2e's two suite jobs are one definition, a PR preview's suite step
     "runs-on": preview.jobs.e2e?.["runs-on"],
     "timeout-minutes": preview.jobs.e2e?.["timeout-minutes"],
   });
-  // each suite as a PR preview names it; E2E tests runs every row and judges the slow ones, which
-  // the alert pages under their own name, and Browser specs judges none
+  // each suite as a PR preview names it; E2E tests runs every row, the slow ones too, which the
+  // health job pages under their own name
   for (const job of ["e2e", "specs"])
     for (const name of ["SUITE", "FLAKE_SUITE", "TEST_TELEMETRY_EXPECTED_WORKSPACES"])
       expect(main.jobs[job]?.env?.[name], `${job} ${name}`).toBe(preview.jobs[job]?.env?.[name]);
-  expect(e2e.env).toMatchObject({
-    E2E_SLOW_ROWS: "run",
-    JUDGED_SUITE: "slow e2e rows",
-    JUDGED_TAG: "slow",
-  });
-  expect(Object.keys(specs.env || {})).not.toContain("JUDGED_SUITE");
+  expect(e2e.env).toMatchObject({ E2E_SLOW_ROWS: "run" });
 
   const mainSteps = e2e.steps || [];
   const previewSteps = preview.jobs.e2e?.steps || [];
@@ -751,11 +763,6 @@ test("Main OS e2e's two suite jobs are one definition, a PR preview's suite step
     .map((step) => step.name!)
     .filter((name) => !prOnly.includes(name))
     .map((name) => (name === "Checkout the tested commit" ? "Checkout main" : name));
-  expected.splice(
-    expected.indexOf("Run the suite against the preview") + 1,
-    0,
-    "Collect the failing rows",
-  );
   expect(mainSteps.map((step) => step.name)).toEqual(expected);
   for (const step of mainSteps) {
     const twin = previewSteps.find((candidate) => candidate.name === step.name);

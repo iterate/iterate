@@ -15,8 +15,8 @@
 // Run it under a Doppler config that carries CLOUDFLARE_API_TOKEN +
 // CLOUDFLARE_ACCOUNT_ID (the same creds the deploy uses):
 //
-//   doppler run --config prd        -- pnpm tsx scripts/ci/do-duration-probe.ts
-//   doppler run --config preview_3  -- pnpm tsx scripts/ci/do-duration-probe.ts --hours 6
+//   doppler run --config prd        -- pnpm tsx scripts/monitors/do-duration-probe.ts
+//   doppler run --config preview_3  -- pnpm tsx scripts/monitors/do-duration-probe.ts --hours 6
 //
 // Flags:
 //   --hours N                 lookback window in hours (default 24)
@@ -75,7 +75,7 @@ type PinnedInvocationRow = {
   requests: number;
 };
 /** The machine-readable result printed as one JSON line under `--json`,
- * consumed by scripts/ci/do-duration-alert.ts to build the Slack message. */
+ * consumed by scripts/monitors/do-cost.ts to build the Slack message. */
 export type ProbeSummary = {
   activeTime: {
     ceilingDoHours: number;

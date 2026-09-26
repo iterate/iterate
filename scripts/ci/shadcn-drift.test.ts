@@ -2,7 +2,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { matchesGlob, resolve } from "node:path";
 import { expect, test } from "vitest";
 import { parse as parseYaml } from "yaml";
-import { driftOf, parseView, upstreamReport, VENDORED_FILES } from "./shadcn-drift.ts";
+import { driftOf, parseView, VENDORED_FILES } from "./shadcn-drift.ts";
 
 const repoRoot = resolve(import.meta.dirname, "../..");
 
@@ -77,49 +77,6 @@ test("drift names an overwritten file, whitespace the CLI ignores, a file off th
     "packages/ui/src/styles/globals.css (update)",
     "packages/ui/src/components/input-group.tsx (upstream no longer writes it)",
   ]);
-});
-
-test("reports upstream moving once, again when the set of files changes, and once back in sync", () => {
-  const drift = ["packages/ui/src/components/button.tsx (overwrite)"];
-  const first = upstreamReport({ drift, messages: [], runUrl: "https://depot.dev/run" });
-  expect(first).toBe(
-    [
-      "🧩 shadcn upstream moved: 1 vendored file in packages/ui differs from `shadcn add`",
-      "• packages/ui/src/components/button.tsx (overwrite)",
-      "Refresh with `pnpm tsx scripts/ci/shadcn-drift.ts refresh` and review the diff (packages/ui/AGENTS.md).",
-      "<https://depot.dev/run|the run>",
-    ].join("\n"),
-  );
-
-  const history = [
-    { text: "someone chatting", bot_id: undefined },
-    { text: first!, bot_id: "B1" },
-  ];
-  expect(upstreamReport({ drift, messages: history })).toBeNull();
-  expect(
-    upstreamReport({
-      drift: [...drift, "packages/ui/src/components/tabs.tsx (overwrite)"],
-      messages: history,
-    }),
-  ).toMatch(/^🧩 shadcn upstream moved: 2 vendored files/);
-  expect(upstreamReport({ drift: [], messages: history })).toBe(
-    "🧩 shadcn upstream: packages/ui's vendored files match upstream again",
-  );
-});
-
-test("in sync with no earlier report posts nothing", () => {
-  expect(upstreamReport({ drift: [], messages: [] })).toBeNull();
-  expect(
-    upstreamReport({
-      drift: [],
-      messages: [
-        {
-          text: "🧩 shadcn upstream: packages/ui's vendored files match upstream again",
-          bot_id: "B1",
-        },
-      ],
-    }),
-  ).toBeNull();
 });
 
 // The vendored files are excluded from our own tooling, and a pull request that touches one runs

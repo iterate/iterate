@@ -1,7 +1,7 @@
 // perf/setup.ts — what a perf row that FAILED leaves on its meta beside the failure message, the one
 // thing Vitest's JSON report keeps of an error (perf/record.ts `failure`): the code of every cause
 // behind its errors, and every session socket it lost with no Close frame. The latency guard
-// (scripts/ci/os-latency-guard.ts) records both with a probe the platform broke; without them the
+// (scripts/monitors/latency.ts) records both with a probe the platform broke; without them the
 // report says `TypeError: fetch failed` and never `read ECONNRESET` (main 927f7a835, 2026-09-24),
 // and the lost sockets' timings are only in the job's log.
 

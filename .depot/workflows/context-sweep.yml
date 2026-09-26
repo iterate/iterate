@@ -14,7 +14,7 @@ name: Context sweep
 permissions:
   contents: read
 on:
-  # Nightly, off the hour (deploys land at :00, the DO probe at :41, the crash hunt at 03:17).
+  # Nightly, off the hour (deploys land at :00, the health job at :41, the crash hunt at 03:17).
   schedule:
     - cron: "43 2 * * *"
   workflow_dispatch: {}

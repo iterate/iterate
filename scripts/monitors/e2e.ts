@@ -1,0 +1,346 @@
+// scripts/monitors/e2e.ts — THE E2E CHECKS of the hourly health job (./health.ts): main's e2e run and
+// the suites that run beside it, each red or green, paged on a change of state.
+//
+//   main e2e        the newest settled push run of Main OS e2e (.depot/workflows/main-os-e2e.yml):
+//                   red when a job failed or timed out (Depot cancels a timed-out job), green when
+//                   Deploy preview, E2E tests and Browser specs all passed. Its page names the failed
+//                   jobs and the failing rows.
+//   slow e2e rows   the rows tagged `slow` in that run's E2E tests job, which most PRs skip
+//                   (docs/testing.md#slow-rows): a suite of their own, so a slow row that breaks while
+//                   main is already red still pages.
+//   real-model e2e  the `REAL:` rows of the newest settled scheduled or push run of OS real model
+//                   (.depot/workflows/os-real-model.yml).
+//
+// Each run is judged once, from Depot's records: the jobs' results, and the rows from what the jobs
+// kept, the suite summary beside the e2e jobs' flake records (`flake-records-<suite>-attempt-<id>`)
+// and the real-model job's telemetry (`os-real-model-telemetry`). A suite whose run proves nothing (no
+// results, a runner that did not finish, one of its rows not run) is a BROKEN PROBE: it pages nothing
+// and fails the health run. A run a person cancelled, or a push a newer one replaced in the queue, is
+// left out.
+import { z } from "zod";
+import { FlakeSuiteSummary } from "@iterate-com/shared/test-support/flake-suite-summary";
+import {
+  depotWorkflowUrl,
+  settledWorkflows,
+  workflowArtifact,
+  type DepotApi,
+} from "../ci/depot.ts";
+import { testTelemetryFailed } from "../ci/test-telemetry-completeness.ts";
+import { commitText, type Page } from "./page.ts";
+
+export const SUITES = ["main e2e", "slow e2e rows", "real-model e2e"] as const;
+const Verdict = z.enum(["green", "red"]);
+type Verdict = z.infer<typeof Verdict>;
+
+/** What the checks remember between runs, in the health job's state: each suite's last verdict,
+ *  and the newest run of each workflow judged. */
+export const E2eMemory = z.object({
+  suites: z.partialRecord(z.enum(SUITES), Verdict),
+  judgedAt: z.partialRecord(z.enum(["Main OS e2e", "OS real model"]), z.iso.datetime()),
+});
+export type E2eMemory = z.infer<typeof E2eMemory>;
+
+/** What the real-model check reads: the runs of this workflow (its `name:`), and the raw telemetry
+ *  under `raw/` in the artifact each keeps. */
+export const realModelTelemetry = {
+  workflow: "OS real model",
+  artifact: "os-real-model-telemetry",
+};
+
+/** The Main OS e2e jobs whose results are main's verdict, by job key; the trace only reports. */
+const MAIN_JOBS = ["main-os-e2e.yml:deploy", "main-os-e2e.yml:e2e", "main-os-e2e.yml:specs"];
+
+/** The run's verdict from its jobs' results: red when a job failed or was cancelled, green when every
+ *  job succeeded, and none when nothing failed but not everything ran. A cancelled job hit its
+ *  timeout: Depot ends a timed-out job by cancelling it, and a run cancelled by hand is left out
+ *  before this. Pure. */
+export function mainE2eVerdict(results: Record<string, string>): Verdict | undefined {
+  const values = Object.values(results);
+  if (values.some((result) => result === "failed" || result === "cancelled")) return "red";
+  if (values.length > 0 && values.every((result) => result === "finished")) return "green";
+  return undefined;
+}
+
+/** The jobs a red page names: each failed one, and each cancelled one as timed out. Pure. */
+export function mainE2eFailedJobs(results: Record<string, string>): string[] {
+  return Object.entries(results).flatMap(([job, result]) =>
+    result === "failed" ? [job] : result === "cancelled" ? [`${job} (timed out)`] : [],
+  );
+}
+
+/** One row of a suite's run, from a suite summary or a runner's telemetry. */
+type Row = { name: string; tags: string[]; ran: boolean; failed: boolean; error?: string };
+
+/** A suite's rows: those tagged `tag`, or those whose title begins with `titlePrefix`. */
+export type SuiteRows = { tag: string } | { titlePrefix: string };
+
+/** A suite's verdict from a run's rows: green when every one of its rows passed (on its retry too),
+ *  red naming each failed row with its first failure, or broken when the run proves nothing: no
+ *  results, none of its rows, or one of them not run. Rows outside the suite are not its verdict,
+ *  whatever their state. Pure. */
+export function suiteVerdict(
+  rows: Row[] | { broken: string },
+  select: SuiteRows,
+): { verdict: Verdict; failingRows: string[] } | { broken: string } {
+  if ("broken" in rows) return rows;
+  const which = "tag" in select ? `tagged ${select.tag}` : `titled ${select.titlePrefix}`;
+  const suite = rows.filter((row) =>
+    "tag" in select ? row.tags.includes(select.tag) : row.name.startsWith(select.titlePrefix),
+  );
+  if (suite.length === 0) return { broken: `no row ${which}` };
+  const unrun = suite.filter((row) => !row.ran);
+  if (unrun.length > 0)
+    return { broken: `${unrun.length} row(s) ${which} did not run: ${unrun[0]!.name}` };
+  const failingRows = [
+    ...new Set(
+      suite
+        .filter((row) => row.failed)
+        .map((row) => (row.error ? `${row.name} (${row.error})` : row.name)),
+    ),
+  ];
+  return { verdict: failingRows.length > 0 ? "red" : "green", failingRows };
+}
+
+/** A suite summary's rows (the e2e jobs'), or why it proves nothing. A row its runner never
+ *  finished is a skip there, so it did not run. Pure. */
+export function summaryRows(
+  summary: z.infer<typeof FlakeSuiteSummary> | undefined,
+): Row[] | { broken: string } {
+  if (!summary) return { broken: "no suite summary" };
+  return summary.tests.map((test) => ({
+    name: test.name,
+    tags: test.tags || [],
+    ran: test.outcome !== "skip",
+    failed: test.failed,
+    error: test.error,
+  }));
+}
+
+/** The parts of a runner's raw telemetry (packages/shared/src/test-support/ci-telemetry.ts) the
+ *  real-model suite's verdict reads. */
+const RawTelemetry = z.object({
+  run: z.object({ status: z.string() }),
+  tests: z.array(
+    z.object({
+      fullName: z.string(),
+      leafName: z.string().optional(),
+      state: z.string(),
+      outcome: z.string().optional(),
+      tags: z.array(z.string()),
+      firstFailure: z.string().optional(),
+    }),
+  ),
+});
+
+/** The rows of a run's raw telemetry (the real-model job's), or why it proves nothing: no telemetry,
+ *  or a runner that did not finish. Pure. */
+export function telemetryRows(
+  artifacts: z.infer<typeof RawTelemetry>[],
+): Row[] | { broken: string } {
+  if (artifacts.length === 0) return { broken: "no test telemetry" };
+  const unfinished = artifacts.find(
+    (artifact) => !["passed", "failed"].includes(artifact.run.status),
+  );
+  if (unfinished) return { broken: `a test run ended ${unfinished.run.status}` };
+  return artifacts.flatMap((artifact) =>
+    artifact.tests.map((test) => {
+      const failed = testTelemetryFailed(test);
+      return {
+        name: test.leafName || test.fullName,
+        tags: test.tags,
+        ran: test.state === "passed" || failed,
+        failed,
+        error: test.firstFailure,
+      };
+    }),
+  );
+}
+
+/** The page for a change of state, or null; on a test page, the suite's verdict whatever it was.
+ *  Pure. */
+export function suitePage(input: {
+  suite: (typeof SUITES)[number];
+  previous: Verdict | undefined;
+  verdict: Verdict | undefined;
+  commit: { sha: string; subject: string };
+  failedJobs: string[];
+  failingRows: string[];
+  runUrl?: string;
+  testRun: boolean;
+}): Page | null {
+  if (!input.verdict) return null;
+  if (!input.testRun && input.verdict === (input.previous || "green")) return null;
+  const commit = commitText(input.commit);
+  if (input.verdict === "green")
+    return {
+      tone: "green",
+      headline: `${input.suite} green${input.previous === "red" ? " again" : ""} at ${commit}`,
+      details: [],
+      link: input.runUrl,
+    };
+  const shown = input.failingRows.slice(0, 8);
+  return {
+    tone: "red",
+    headline: `${input.suite} red at ${commit}`,
+    details: [
+      ...(input.failedJobs.length > 0 ? [`failed: ${input.failedJobs.join(", ")}`] : []),
+      ...(shown.length > 0
+        ? [
+            `failing rows: ${shown.join("; ")}${input.failingRows.length > shown.length ? `; … and ${input.failingRows.length - shown.length} more` : ""}`,
+          ]
+        : []),
+    ],
+    link: input.runUrl,
+  };
+}
+
+// Connect's JSON omits empty lists and strings (https://protobuf.dev/programming-guides/json/).
+const WorkflowJobs = z.object({
+  jobs: z
+    .array(
+      z.object({
+        jobKey: z.string(),
+        jobDisplayName: z.string().default(""),
+        status: z.string(),
+        attempts: z.array(z.object({ attemptId: z.string(), attempt: z.number() })).default([]),
+      }),
+    )
+    .default([]),
+});
+
+/** Judge the newest settled push run of Main OS e2e that `memory` has not (on a test run, the
+ *  newest whatever was judged): main e2e from its jobs, and its slow rows from its E2E tests job's
+ *  suite summary, which a job its deploy's failure skipped never wrote. */
+export async function checkMainE2e(input: {
+  depot: DepotApi;
+  memory: E2eMemory;
+  testRun: boolean;
+  subject: (sha: string) => Promise<string>;
+}) {
+  const run = (
+    await settledWorkflows(input.depot, {
+      name: "Main OS e2e",
+      triggers: ["push"],
+      after: input.testRun ? undefined : input.memory.judgedAt["Main OS e2e"],
+    })
+  ).at(-1);
+  if (!run) return { pages: [], memory: input.memory, failures: [] };
+  const { jobs } = WorkflowJobs.parse(
+    await input.depot("GetWorkflow", { workflowId: run.workflowId }),
+  );
+  const mainJobs = jobs.filter((job) => MAIN_JOBS.includes(job.jobKey));
+  const results = Object.fromEntries(
+    mainJobs.map((job) => [job.jobDisplayName || job.jobKey, job.status]),
+  );
+  // A workflow Depot failed before any job ran has no job to name.
+  const verdict: Verdict | undefined = mainJobs.length === 0 ? "red" : mainE2eVerdict(results);
+  const summary = async (jobKey: string, suite: string) => {
+    const newest = jobs
+      .find((job) => job.jobKey === jobKey)
+      ?.attempts.toSorted((a, b) => a.attempt - b.attempt)
+      .at(-1);
+    if (!newest) return undefined;
+    const bytes = (
+      await workflowArtifact(
+        input.depot,
+        run,
+        (name) => name === `flake-records-${suite}-attempt-${newest.attemptId}`,
+      )
+    )?.["suite-summary.json"];
+    return bytes && FlakeSuiteSummary.parse(JSON.parse(new TextDecoder().decode(bytes)));
+  };
+  const e2e = await summary("main-os-e2e.yml:e2e", "preview-e2e");
+  const specs = await summary("main-os-e2e.yml:specs", "specs");
+  const failingRows = [e2e, specs].flatMap(
+    (ran) => ran?.tests.filter((test) => test.failed).map((test) => test.name) ?? [],
+  );
+  const slow = e2e ? suiteVerdict(summaryRows(e2e), { tag: "slow" }) : undefined;
+  console.log(JSON.stringify({ run: run.workflowId, results, verdict, failingRows, slow }));
+  const commit = { sha: run.sha, subject: await input.subject(run.sha) };
+  const pages = [
+    suitePage({
+      suite: "main e2e",
+      previous: input.memory.suites["main e2e"],
+      verdict,
+      commit,
+      failedJobs: mainJobs.length === 0 ? ["the workflow"] : mainE2eFailedJobs(results),
+      failingRows,
+      runUrl: depotWorkflowUrl(run.workflowId),
+      testRun: input.testRun,
+    }),
+    slow &&
+      !("broken" in slow) &&
+      suitePage({
+        suite: "slow e2e rows",
+        previous: input.memory.suites["slow e2e rows"],
+        verdict: slow.verdict,
+        commit,
+        failedJobs: [],
+        failingRows: slow.failingRows,
+        runUrl: depotWorkflowUrl(run.workflowId),
+        testRun: input.testRun,
+      }),
+  ].filter((page) => !!page);
+  return {
+    pages,
+    memory: {
+      // a run whose verdict is none leaves the suite's last one standing
+      suites: {
+        ...input.memory.suites,
+        "main e2e": verdict || input.memory.suites["main e2e"],
+        "slow e2e rows":
+          slow && !("broken" in slow) ? slow.verdict : input.memory.suites["slow e2e rows"],
+      },
+      judgedAt: { ...input.memory.judgedAt, "Main OS e2e": run.createdAt },
+    },
+    failures: slow && "broken" in slow ? [`slow e2e rows: broken probe: ${slow.broken}`] : [],
+  };
+}
+
+/** Judge the `REAL:` rows of the newest settled scheduled or push run of OS real model that
+ *  `memory` has not (on a test run, the newest whatever was judged), from its job's telemetry. */
+export async function checkRealModel(input: {
+  depot: DepotApi;
+  memory: E2eMemory;
+  testRun: boolean;
+  subject: (sha: string) => Promise<string>;
+}) {
+  const run = (
+    await settledWorkflows(input.depot, {
+      name: realModelTelemetry.workflow,
+      triggers: ["schedule", "push"],
+      after: input.testRun ? undefined : input.memory.judgedAt["OS real model"],
+    })
+  ).at(-1);
+  if (!run) return { pages: [], memory: input.memory, failures: [] };
+  const judgedAt = { ...input.memory.judgedAt, "OS real model": run.createdAt };
+  const files =
+    (await workflowArtifact(input.depot, run, (name) => name === realModelTelemetry.artifact)) ??
+    {};
+  const artifacts = Object.entries(files)
+    .filter(([path]) => /^raw\/.+\.json$/u.test(path))
+    .map(([, bytes]) => RawTelemetry.parse(JSON.parse(new TextDecoder().decode(bytes))));
+  const outcome = suiteVerdict(telemetryRows(artifacts), { titlePrefix: "REAL:" });
+  console.log(JSON.stringify({ run: run.workflowId, outcome }));
+  if ("broken" in outcome)
+    return {
+      pages: [],
+      memory: { ...input.memory, judgedAt },
+      failures: [`real-model e2e: broken probe: ${outcome.broken}`],
+    };
+  const page = suitePage({
+    suite: "real-model e2e",
+    previous: input.memory.suites["real-model e2e"],
+    verdict: outcome.verdict,
+    commit: { sha: run.sha, subject: await input.subject(run.sha) },
+    failedJobs: [],
+    failingRows: outcome.failingRows,
+    runUrl: depotWorkflowUrl(run.workflowId),
+    testRun: input.testRun,
+  });
+  return {
+    pages: page ? [page] : [],
+    memory: { suites: { ...input.memory.suites, "real-model e2e": outcome.verdict }, judgedAt },
+    failures: [],
+  };
+}

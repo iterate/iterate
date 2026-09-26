@@ -1,5 +1,5 @@
-// Hourly Durable Objects cost alarm (do-duration-probe.yml). Runs the
-// duration probe (scripts/ci/do-duration-probe.ts --json) against both
+// Hourly Durable Objects cost alarm, one check of the health job (./health.ts). Runs the
+// duration probe (scripts/monitors/do-duration-probe.ts --json) against both
 // Cloudflare accounts and keeps ONE Slack thread per UTC day in #error-pulse.
 // The headline is one sentence, rewritten every hour: "We're spending $X/day
 // on durable objects based on current usage ($A dev/preview, $B prd)". The
@@ -14,16 +14,13 @@
 // for 28 hours before a human noticed it on the bill — and the 2026-09-21
 // os-next preview pin runaway reached $87/hour with this alarm red for a day,
 // its replies unread in the thread.
-//
-//   pnpm tsx scripts/ci/do-duration-alert.ts run
-//   pnpm tsx scripts/ci/do-duration-alert.ts run --threshold-do-hours 1   # force an alert (Slack hookup test)
+// Its own thread and pages, not the health job's message: its state is the channel's history.
+// A health test page runs it with a ceiling of 1 DO-hour, which forces an alert and a page without
+// the mention, marked 🧪 TEST RUN.
 import { execFileSync } from "node:child_process";
 import type { WebClient } from "@slack/web-api";
-import { createBuiltInPrompts, createCli, isAgent, yamlTableConsoleLogger } from "trpc-cli";
-import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
+import { getSlackClient, onCallMention, slackChannelIds } from "../ci/slack.ts";
 import type { ProbeSummary } from "./do-duration-probe.ts";
-import { getRunUrl } from "./github.ts";
-import { getSlackClient, onCallMention, slackChannelIds } from "./slack.ts";
 
 /** $12.50 per million GB-seconds at 128 MB: one DO-hour is 450 GB-s. */
 const USD_PER_DO_HOUR = 0.005625;
@@ -75,14 +72,12 @@ export type AccountReading = {
   failure: string | null;
 };
 
-export async function run(options: {
-  /** Override BOTH accounts' active-time ceiling (DO-hours/hour). Set very low
-   * (e.g. 1) to force an alert and prove the Slack hookup end to end. */
-  thresholdDoHours?: number;
-}) {
-  const override = options.thresholdDoHours;
-  // Absent outside GitHub Actions (local runs of this script).
-  const runUrl = process.env.GITHUB_RUN_ID ? getRunUrl() : null;
+/** Probe both accounts and upkeep the day's thread (postDailyThread). A test run overrides BOTH
+ *  accounts' active-time ceiling with 1 DO-hour an hour, which forces an alert and a page and proves
+ *  the Slack hookup end to end; a dry run prints the thread and posts nothing. */
+export async function checkDoCost(options: { testRun: boolean; dryRun: boolean; runUrl?: string }) {
+  const override = options.testRun ? 1 : undefined;
+  const runUrl = options.runUrl || null;
   const now = new Date();
 
   const readings: AccountReading[] = [];
@@ -99,22 +94,32 @@ export async function run(options: {
     });
   }
 
-  return postDailyThread({
+  if (options.dryRun) {
+    const thread = renderDailyThread({ now, readings, runUrl, testRun: options.testRun });
+    return console.log(
+      [
+        thread.headline,
+        thread.details,
+        ...thread.replies,
+        ...thread.pages.map((page) => page.text),
+      ].join("\n\n"),
+    );
+  }
+  await postDailyThread({
     slack: getSlackClient(),
     channel: slackChannelIds["#error-pulse"],
     now,
     readings,
     runUrl,
-    testRun: override !== undefined,
+    testRun: options.testRun,
   });
 }
 
 /**
- * Posts this run's pages, upkeeps the day's thread, then ends the run. A breach ends it green: the
- * page and the reply are the alarm, and a scheduled run reports on main's head commit, where red
- * reads as "this commit broke" (on 09-21 a day of red runs reached nobody). A probe that could not
+ * Posts this run's pages, upkeeps the day's thread, then ends. A breach ends it quietly: the page
+ * and the reply are the alarm (on 09-21 a day of red runs reached nobody). A probe that could not
  * run throws once its reply is posted, so a broken token never passes for a quiet account; so does
- * any Slack error.
+ * any Slack error. The health job fails its run on either, after its other checks.
  */
 export async function postDailyThread(input: {
   slack: WebClient;
@@ -176,7 +181,7 @@ function probe(dopplerConfig: string, ceilingDoHours: number) {
       // prettier-ignore
       [
         "run", "--project", "os", "--config", dopplerConfig, "--",
-        "pnpm", "tsx", "scripts/ci/do-duration-probe.ts",
+        "pnpm", "tsx", "scripts/monitors/do-duration-probe.ts",
         "--hours", String(LOOKBACK_HOURS), "--max-account-do-hours", String(ceilingDoHours), "--json",
       ],
       { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
@@ -191,7 +196,7 @@ function probe(dopplerConfig: string, ceilingDoHours: number) {
   const lastLine = stdout.trim().split("\n").at(-1) || "";
   try {
     // The probe's --json contract: its LAST stdout line is one ProbeSummary
-    // (scripts/ci/do-duration-probe.ts prints it after the human report
+    // (scripts/monitors/do-duration-probe.ts prints it after the human report
     // moves to stderr). Anything else — a crash before the summary, a stray
     // line — fails JSON.parse and is reported as a probe failure, so a wrong
     // shape cannot masquerade as a clean account.
@@ -460,15 +465,4 @@ export async function postPageUnlessRecent(input: {
   }
   await input.slack.chat.postMessage({ channel: input.channel, text: input.page.text });
   return true;
-}
-
-if (isMainModule(import.meta.url)) {
-  void createCli({
-    ...import.meta,
-    name: "do-duration-alert",
-    jsonInput: "auto",
-  }).run({
-    logger: yamlTableConsoleLogger,
-    prompts: isAgent() ? undefined : createBuiltInPrompts(),
-  });
 }

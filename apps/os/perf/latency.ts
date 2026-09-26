@@ -1,9 +1,9 @@
 // perf/latency.ts — THE LATENCY GUARD'S LINES: every metric the perf suite records, what one sample of
 // it is, and the budget its median must stay on the right side of — with the measurements each
 // budget came from. The perf rows record through perf/record.ts and
-// hold themselves to these budgets (a local `pnpm perf`, the soak); the scheduled guard
-// (scripts/ci/os-latency-guard.ts, .depot/workflows/os-latency.yml) judges every run against the
-// same budgets AND against its own rolling baseline, and pages #error-pulse. Pure: no vitest, no I/O.
+// hold themselves to these budgets (a local `pnpm perf`, the soak); the health job's latency check
+// (scripts/monitors/latency.ts) judges every run of .depot/workflows/os-latency.yml against the same
+// budgets AND against its own rolling baseline, and pages #error-pulse. Pure: no vitest, no I/O.
 //
 // A run is judged by each metric's MEDIAN — of a row's rounds, or of the projects in a concurrent
 // round: one stall moves one sample, a regression moves them all. The p95 and max go to PostHog
@@ -185,7 +185,7 @@ export const LATENCY_METRICS = {
   string,
   {
     /** The perf file whose row records it (under apps/os/): a metric a broken row left unrecorded
-     *  is that row's breakage, not a second one (scripts/ci/os-latency-guard.ts). */
+     *  is that row's breakage, not a second one (scripts/monitors/latency.ts). */
     file: `perf/${string}.perf.test.ts`;
     /** What one sample is. */
     sample: string;
@@ -216,11 +216,4 @@ export function summarize(samples: number[]) {
  *  `events/s`. */
 export function crosses(metric: LatencyMetricName, value: number, line: number) {
   return LATENCY_METRICS[metric].unit === "events/s" ? value < line : value > line;
-}
-
-/** The budget, scaled toward breaching by `scale` < 1 (the dispatch's forced alert): a ceiling
- *  times `scale`, a floor divided by it. */
-export function budgetLine(metric: LatencyMetricName, scale: number) {
-  const { budget, unit } = LATENCY_METRICS[metric];
-  return unit === "events/s" ? budget / scale : budget * scale;
 }
