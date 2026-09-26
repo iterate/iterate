@@ -74,7 +74,7 @@ export { applyPatch, diff, jsonEqual, type PatchOp } from "../lib.ts";
 // `static override publicMethods = [...super.publicMethods, "message"]`.
 //
 // IDENTITY is `ctx.props` — `{ iterateContextName, name }`, minted by the parent, the only party
-// that knows it (pinned in __workers-tests__/facet-props.test.ts), plus `fedByPushes` when a row
+// that knows it (pinned in __workers-tests__/facets.test.ts), plus `fedByPushes` when a row
 // pushes it (FacetProps). THE STREAM is the itx scope `this.withItx(fn)` hands `fn` (apps/os
 // iterate-context.ts `ItxEntrypoint`); the engine's `append`/`read` ride it like any other dotted call.
 //
@@ -213,7 +213,7 @@ export abstract class StreamProcessorDurableObject<
   /** The loopback to this facet's context: a LOADED class gets it as `env.ITX` (the loader bakes the
    *  stub in, worker-loader.ts); a class of THIS worker hosted through `ctx.exports` has the
    *  worker's real env and mints the same stub itself from its props — `ctx.exports` is populated
-   *  inside a facet (__workers-tests__/facet-props.test.ts). */
+   *  inside a facet (__workers-tests__/facets.test.ts). */
   #itxEntrypoint(): { get(): Scope } {
     return (this.env.ITX ??
       (

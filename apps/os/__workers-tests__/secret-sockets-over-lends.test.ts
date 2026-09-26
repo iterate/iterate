@@ -7,7 +7,7 @@
 // Discord shape (`/gateway`, no auth on the upgrade — the token rides INSIDE the first client frame,
 // IDENTIFY `{"op":2,"d":{"token":…}}`).
 //
-// THE UPSTREAM IS IN-PROCESS, as in secret-facet-proxies-a-socket.test.ts: the facet's terminal
+// THE UPSTREAM IS IN-PROCESS, as in facets.test.ts: the facet's terminal
 // `fetch` is the isolate's global fetch, answered for `SHOP` by `serveGateways` below.
 
 import { expect, onTestFinished, test, vi } from "vitest";

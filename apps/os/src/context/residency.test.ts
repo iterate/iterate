@@ -1,6 +1,6 @@
 // context/residency.test.ts — `Residency` against fake deps and a fake clock: the sweep's one
 // decision as a table, which activity moves its quiet clock, what the alarm pass then does, and when
-// the pins' timer releases. The same mechanisms inside workerd: __workers-tests__/facet-birth-reset.test.ts,
+// the pins' timer releases. The same mechanisms inside workerd: __workers-tests__/facets.test.ts,
 // alarm-and-pins.test.ts.
 
 import { expect, onTestFinished, test, vi } from "vitest";

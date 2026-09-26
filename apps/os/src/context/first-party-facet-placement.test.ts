@@ -1,7 +1,7 @@
 // context/first-party-facet-placement.test.ts — every rule of first-party-facet-placement.ts as table
 // rows: the facet (or a stateless worker), the context written `<projectId>:<path>`, and whether it
 // may be hosted there. The refusal end to end, through a person who signed in, is
-// __workers-tests__/first-party-facet-placement.test.ts.
+// __workers-tests__/facets.test.ts.
 import { expect, test } from "vitest";
 import { errorCode } from "iterate/lib";
 import { FIRST_PARTY_FACET_CLASSES } from "../first-party-facets.ts";

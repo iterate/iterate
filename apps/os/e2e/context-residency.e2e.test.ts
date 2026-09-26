@@ -427,7 +427,7 @@ test(
 // flight. A careless facet that calls its own context every few seconds keeps that context resident,
 // so no birth would ever reset it; it is reset in place a quiet minute after the last outside call.
 // That outside HTTP restarts the clock is decided in the Workers suite
-// (__workers-tests__/facet-birth-reset.test.ts); that a context under 5 s of traffic keeps one
+// (__workers-tests__/facets.test.ts); that a context under 5 s of traffic keeps one
 // instance is Cloudflare's, timed in the opt-in perf file: here that row saw two when the control
 // plane stalled 12.8 s mid-traffic and the context, reached by nothing for 16 s, evicted (#2899).
 
