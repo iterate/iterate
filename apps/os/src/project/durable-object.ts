@@ -242,10 +242,10 @@ export class ProjectDurableObject extends StreamProcessorDurableObject<
    *  human's confirmation of the offer a provider's callback signed — a GitHub installation they
    *  administer, a Slack workspace Slack let them install into. */
   confirmIntegrationMove(input: { offer: string }): Promise<void> {
-    // on the connection the offer names (verbs.ts verifies the offer itself)
+    // its steps on the connection the offer names (verbs.ts verifies the offer itself)
     const { provider, connection } = moveOfferConnectionOf(input?.offer);
-    return this.#onConnection(provider, connection, () =>
-      confirmIntegrationMove(this.#integrationScope(), input),
+    return confirmIntegrationMove(this.#integrationScope(), input, (step) =>
+      this.#onConnection(provider, connection, step),
     );
   }
 }

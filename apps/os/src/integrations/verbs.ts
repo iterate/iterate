@@ -340,10 +340,9 @@ export async function disconnectIntegration(
     );
 }
 
-/** How long a move waits on the holder connection's own queue for its cleanup: two moves crossing
- *  between the same two connections each hold their own queue while their cleanups wait on the
- *  other's, so the wait is bounded, and a cleanup with no answer is one that failed (the same offer
- *  retries it). */
+/** How long a move waits on the holder connection's queue for its cleanup: a holder busy past it (a
+ *  verb of its own on that connection, such as its own move's proof) fails the cleanup, and the same
+ *  offer retries it. */
 const HOLDER_QUEUE_WAIT_MS = 10_000;
 
 /** The claims of a move offer (connections.ts `IntegrationMoveOffer`), once its signature checked. */
@@ -371,11 +370,73 @@ const MoveOfferClaims = z.object({
  *  (meanwhile the holder gets no events, its route gone, and its secret facet refuses the account's
  *  token within 30 s of use: secret/durable-object.ts `#assertInstallationRouted`,
  *  `#assertWorkspaceNotMoved`). The human proved they may connect the account; they need not reach
- *  the holder's project. */
+ *  the holder's project.
+ *
+ *  The move and the offer's end run on this connection's queue (`onConnection`); the holder's
+ *  cleanup between them waits on the holder's queue alone. A move and a move back crossing between
+ *  the same two connections each clean up the other, so a cleanup that held its own queue too would
+ *  wait on a cleanup waiting on it. */
 export async function confirmIntegrationMove(
   scope: IntegrationScope,
   input: { offer: string },
+  /** A step on the queue of the connection the offer names (project/durable-object.ts). */
+  onConnection: <T>(step: () => Promise<T>) => Promise<T>,
 ): Promise<void> {
+  const { provider, externalId, account, holder, key, nonce } = await onConnection(() =>
+    moveHere(scope, input),
+  );
+  // The holder's connection goes, but only while it still names this account: its route is gone
+  // already; this removes the secret and its row, `reason: "moved"` on its log.
+  try {
+    await withTimeout(
+      Promise.resolve(
+        scope.env.ITERATE_CONTEXT.getByName(
+          DurableObjectNameCodec.stringify({ projectId: holder.projectId, path: "/" }),
+        ).invoke(
+          [
+            "itx",
+            "builtins",
+            "facets",
+            ["get", "project"],
+            [
+              "disconnectIntegration",
+              {
+                provider,
+                connection: holder.path.slice(`/integrations/${provider}/`.length),
+                movedExternalId: externalId,
+              },
+            ],
+          ],
+          [],
+          { principal: null, platform: true },
+        ),
+      ),
+      HOLDER_QUEUE_WAIT_MS,
+      "the holder's cleanup of the move",
+    );
+  } catch (error) {
+    reportIssue("integrations.move-holder-disconnect", error, {
+      provider,
+      externalId,
+      projectId: scope.projectId,
+      holderProjectId: holder.projectId,
+    });
+    throw codedError(
+      "INVALID_INPUT",
+      `${account} moved here, but the other project still lists it — press Move again to finish.`,
+    );
+  }
+  // the offer spent, unless this connection's disconnect or a consent since dropped or replaced it
+  await onConnection(async () => {
+    if ((await scope.storage.get<MovableAttempt>(key))?.nonce === nonce)
+      await scope.storage.delete(key);
+  });
+}
+
+/** The move itself, on the connection's queue: the offer checked, its attempt claimed, the route
+ *  moved here and the account connected (or all of it put back), `moved` recorded. An offer `moved`
+ *  already only answers what its cleanup's retry needs. */
+async function moveHere(scope: IntegrationScope, input: { offer: string }) {
   const { env, projectId } = scope;
   const expired = () =>
     codedError("INVALID_INPUT", "This offer to move it here has expired — connect again.");
@@ -472,48 +533,7 @@ export async function confirmIntegrationMove(
     }
     await scope.storage.put<MovableAttempt>(key, { ...attempt, move: { ...move, stage: "moved" } });
   }
-  // The holder's connection goes, but only while it still names this account: its route is gone
-  // already; this removes the secret and its row, `reason: "moved"` on its log.
-  try {
-    await withTimeout(
-      Promise.resolve(
-        env.ITERATE_CONTEXT.getByName(
-          DurableObjectNameCodec.stringify({ projectId: holder.projectId, path: "/" }),
-        ).invoke(
-          [
-            "itx",
-            "builtins",
-            "facets",
-            ["get", "project"],
-            [
-              "disconnectIntegration",
-              {
-                provider,
-                connection: holder.path.slice(`/integrations/${provider}/`.length),
-                movedExternalId: externalId,
-              },
-            ],
-          ],
-          [],
-          { principal: null, platform: true },
-        ),
-      ),
-      HOLDER_QUEUE_WAIT_MS,
-      "the holder's cleanup of the move",
-    );
-  } catch (error) {
-    reportIssue("integrations.move-holder-disconnect", error, {
-      provider,
-      externalId,
-      projectId,
-      holderProjectId: holder.projectId,
-    });
-    throw codedError(
-      "INVALID_INPUT",
-      `${account} moved here, but the other project still lists it — press Move again to finish.`,
-    );
-  }
-  await scope.storage.delete(key);
+  return { provider, externalId, account, holder, key, nonce: attempt.nonce };
 }
 
 /** A person's account out of a project: the project's path, a pointer to the person's connection,

@@ -691,7 +691,7 @@ test("Slack: a move back confirmed while a move's proof runs does not deadlock t
   expect(await secretPathsOf(mover.itx)).not.toContain("/secrets/slack-acme");
 });
 
-test("Slack: a move and a move back that both land leave the workspace with the project that took it last, and neither cleanup disconnects it", async () => {
+test("Slack: a move and a move back that both land each finish on the first confirmation, leave the workspace with the project that took it last, and neither cleanup disconnects it", async () => {
   const holder = await projectWithMember("slack-both-land");
   const petshop = petshopFakes();
   await connected(petshop, holder, "slack", "team=T22BOTH");
@@ -723,12 +723,8 @@ test("Slack: a move and a move back that both land leave the workspace with the 
     }),
   );
   movedBack = true;
-  // Each cleanup waits on the other's queue; whichever gives up first ("press Move again") is
-  // finished by pressing Move again, once the other is done.
-  await Promise.all([
-    moving.catch(() => projectFacet(mover.itx).confirmIntegrationMove({ offer })),
-    returning.catch(() => projectFacet(holder.itx).confirmIntegrationMove({ offer: back })),
-  ]);
+  // each cleanup waits on the other's connection's queue, which neither confirmation holds
+  await Promise.all([moving, returning]);
   expect(await catalog().integrationRoute("slack", "T22BOTH")).toEqual({
     projectId: holder.projectId,
     path: "/integrations/slack/acme",
