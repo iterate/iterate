@@ -258,8 +258,8 @@ seconds?
 
 An agent's turn goes to a real model only in the daily real-model suite. Every
 other run (PR previews, Main OS e2e, local runs, the soak) plays the provider
-with a fake: the test shadows the agent's `itx.ai`
-(`support.provide("itx.ai", fake)`), so the whole deployed runtime still runs
+with a fake: the test shadows the agent's `itx.ai` with `FakeAi`
+(`apps/os/e2e/support/fake-ai.ts`), so the whole deployed runtime still runs
 above it (the turn loop, the attachment turned into a vision input, the byte
 transport, the chunk windows, the settlement and the context report), the fake
 asserts what the runtime asked for (the model, the Responses API request, the

@@ -6,12 +6,12 @@
 // Deployed only: the shop fires the webhooks, and it cannot reach a local worker.
 import { createPublicKey } from "node:crypto";
 import { Octokit } from "@octokit/rest";
-import { RpcTarget } from "capnweb";
 import { WebClient } from "@slack/web-api";
 import { expect } from "vitest";
 import { PREVIEW_GITHUB_APP, previewGithubAppPrivateKey } from "../scripts/preview-github-app.ts";
 import { PREVIEW_SLACK_APP } from "../scripts/preview-slack-app.ts";
 import { readAll, until, workerUrl } from "./support/client.ts";
+import { FakeAi } from "./support/fake-ai.ts";
 import { SOURCES } from "./support/sources.ts";
 import {
   connectThroughProvider,
@@ -268,7 +268,8 @@ deployedOnly(
       type: "events.iterate.com/itx/rewrite-rule-configured",
       payload: { match: "itx.fetch", target: "itx.builtins.cd('/').fetch" },
     });
-    const ai = new VerdictAi({ conclusion: "neutral", summary: "1 finding" });
+    // the model answers with the linter's verdict as its text
+    const ai = new FakeAi([JSON.stringify({ conclusion: "neutral", summary: "1 finding" })]);
     await connection.provide("itx.ai", ai);
     await connection.processors.enable("pr-linter", {
       source: SOURCES.prLinter,
@@ -334,21 +335,6 @@ async function githubConnected(prefix: string) {
     memberBearer,
   );
   return { itx, installation: connected ? installation : null };
-}
-
-/** `itx.ai` shadowed for the linter: Workers AI's answer shape, the verdict as its text; each call
- *  recorded. */
-class VerdictAi extends RpcTarget {
-  readonly calls: { model: string; input: unknown }[] = [];
-  readonly #verdict: object;
-  constructor(verdict: object) {
-    super();
-    this.#verdict = verdict;
-  }
-  run(model: string, input: unknown) {
-    this.calls.push({ model, input });
-    return { response: JSON.stringify(this.#verdict) };
-  }
 }
 
 /** The real Slack SDK, unmodified but for its transport: its token is the placeholder and its

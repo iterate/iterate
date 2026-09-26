@@ -6,7 +6,8 @@
 import { readFile } from "node:fs/promises";
 import { expect, test } from "vitest";
 import { freshCtx, openItx, readAll, until } from "../../os/e2e/support/client.ts";
-import { ScriptedAi, assistantWords, configureModel } from "./fixtures.ts";
+import { FakeAi } from "../../os/e2e/support/fake-ai.ts";
+import { assistantWords, configureModel } from "./fixtures.ts";
 import { publishedPackage } from "./support.ts";
 
 const TEMPLATE_FILES = [
@@ -70,7 +71,7 @@ test(
 
     const path = "/agents/first";
     const agent = root.cd(path);
-    await agent.provide("itx.ai", new ScriptedAi(["Hello from the published package."]));
+    await agent.provide("itx.ai", new FakeAi(["Hello from the published package."]));
     await root.agents.create(path);
     expect(await root.agents.list()).toEqual([{ path, createdAt: expect.any(String) }]);
     await configureModel(agent);

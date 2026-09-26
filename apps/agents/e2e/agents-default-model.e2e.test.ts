@@ -10,9 +10,9 @@
 // on Cloudflare's billing and a pinned Workers AI model. What only a provider can prove: that it
 // accepts the request and answers the question. About $0.05 a run on the preview account's AI
 // Gateway, whose daily spend cap every run shares.
-import { RpcTarget } from "capnweb";
 import { expect, test } from "vitest";
 import { collector, freshCtx, until } from "../../os/e2e/support/client.ts";
+import { FakeAi, sseResponse } from "../../os/e2e/support/fake-ai.ts";
 import { realModelOnly } from "../../os/e2e/support/project-host.ts";
 import {
   RED_PNG_BASE64,
@@ -29,13 +29,13 @@ const COLOUR = "What colour is this image? Answer with one word, no code block."
 
 test("one turn through the default model, the provider intercepted: the runtime asks for OpenAI's astra, streamed from the Responses API at low effort through the AI Gateway with the turn's metadata; chunk windows fly, the settlement carries the usage", async () => {
   const ctx = freshCtx("agent-default");
-  const ai = new InterceptedResponsesAi("pong. A pong is the answer a ping gets back.");
+  const ai = responsesAi("pong. A pong is the answer a ping gets back.");
   const { log, chunkEvents } = await pongTurn(ctx, ai);
   expectStreamedTurn(log, chunkEvents);
   expect(ai.calls).toHaveLength(1);
   expect(ai.calls[0]).toMatchObject({
     model: "openai/gpt-6-astra",
-    input: {
+    inputs: {
       stream: true,
       store: false,
       reasoning: { effort: "low", summary: "auto" },
@@ -53,12 +53,12 @@ test("one turn through the default model, the provider intercepted: the runtime 
 }, 60_000);
 
 test("the default model is SHOWN an attached image, the provider intercepted: the person's words and the stored pixels reach astra as one user input, the text and the PNG as a data: URL", async () => {
-  const ai = new InterceptedResponsesAi("Red.");
+  const ai = responsesAi("Red.");
   expect(await colourTurn(freshCtx("agent-vision-default"), { ai })).toEqual(["Red."]);
   expect(ai.calls).toHaveLength(1);
   expect(ai.calls[0]).toMatchObject({ model: "openai/gpt-6-astra" });
   expect(
-    (ai.calls[0]!.input.input as { role: string }[]).filter((item) => item.role === "user"),
+    (ai.calls[0]!.inputs.input as { role: string }[]).filter((item) => item.role === "user"),
   ).toEqual([
     {
       role: "user",
@@ -100,41 +100,23 @@ realModelOnly(
   150_000,
 );
 
-/** The provider, played: every `itx.ai.run` the agent makes is recorded, and answered as the
- *  Responses API streams, one SSE event per word and then the usage. */
-class InterceptedResponsesAi extends RpcTarget {
-  readonly calls: { model: string; input: any; options: any }[] = [];
-  readonly #reply: string;
-  constructor(reply: string) {
-    super();
-    this.#reply = reply;
-  }
-  run(model: string, input: unknown, options: unknown) {
-    this.calls.push({ model, input, options });
-    const events = [
-      ...this.#reply
-        .split(/(?<= )/)
-        .map((delta) => ({ type: "response.output_text.delta", delta })),
-      {
-        type: "response.completed",
-        response: { usage: { input_tokens: 2_083, output_tokens: 25 } },
-      },
-    ];
-    const encoder = new TextEncoder();
-    const body = new ReadableStream<Uint8Array>({
-      start(controller) {
-        for (const event of events)
-          controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
-        controller.close();
-      },
-    });
-    return new Response(body, { headers: { "content-type": "text/event-stream" } });
-  }
-}
+/** The provider, played: every `itx.ai.run` the agent makes is answered as the Responses API
+ *  streams, one SSE event per word and then the usage. */
+const responsesAi = (reply: string) =>
+  new FakeAi([
+    () =>
+      sseResponse([
+        ...reply.split(/(?<= )/).map((delta) => ({ type: "response.output_text.delta", delta })),
+        {
+          type: "response.completed",
+          response: { usage: { input_tokens: 2_083, output_tokens: 25 } },
+        },
+      ]),
+  ]);
 
 /** An agent at /agents/support on the default model asked for a pong, its chunk windows collected;
  *  `ai` shadows the provider. */
-async function pongTurn(ctx: string, ai?: InterceptedResponsesAi) {
+async function pongTurn(ctx: string, ai?: FakeAi) {
   const itx = await openAgentItx(ctx);
   const support = itx.cd("/agents/support");
   if (ai) await support.provide("itx.ai", ai);
@@ -182,10 +164,7 @@ function expectStreamedTurn(log: any[], chunkEvents: any[]) {
 
 /** An agent at /agents/support asked the colour of a red square; `model` pins one by
  *  agent/configured, `ai` shadows the provider. What the assistant said. */
-async function colourTurn(
-  ctx: string,
-  { ai, model }: { ai?: InterceptedResponsesAi; model?: string } = {},
-) {
+async function colourTurn(ctx: string, { ai, model }: { ai?: FakeAi; model?: string } = {}) {
   const itx = await openAgentItx(ctx);
   const support = itx.cd("/agents/support");
   if (ai) await support.provide("itx.ai", ai);

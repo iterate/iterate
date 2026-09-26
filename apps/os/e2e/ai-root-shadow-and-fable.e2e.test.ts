@@ -9,10 +9,10 @@
 // (WORKER_BASE_URL not local) with E2E_REAL_MODELS=1, the daily real-model suite, the last test asks
 // the real binding for `models()` and runs ONE inference through `itx.fable`.
 
-import { RpcTarget } from "capnweb";
 import { expect, test } from "vitest";
 import { errorCode } from "iterate/lib";
 import { freshCtx, openItx, rejection, until } from "./support/client.ts";
+import { FakeAi, type FakeAiReply } from "./support/fake-ai.ts";
 import { realModelOnly } from "./support/project-host.ts";
 
 const MODEL = "@cf/meta/llama-3.2-1b-instruct";
@@ -25,7 +25,7 @@ test("MISHA'S TEST on the real root: provide('itx.ai', fake) shadows the binding
     target: "itx.builtins.ai",
     context: "/",
   });
-  const fake = new FakeAi();
+  const fake = new FakeAi([deterministic]);
   const handle = await itx.provide("itx.ai", fake);
   expect(await itx.ai.run("@cf/x", { prompt: "hi" })).toEqual({
     response: "deterministic:@cf/x",
@@ -56,7 +56,7 @@ test("MISHA'S TEST on the real root: provide('itx.ai', fake) shadows the binding
 test("THE DREAM: `itx.fable ⇒ itx.ai.run('@cf/…', @)` pins the model; the caller's inputs (and options) fill `@`; the row is string-at-rest with `@` in it", async () => {
   const ctx = freshCtx("fable");
   const itx = openItx(ctx);
-  const fake = new FakeAi();
+  const fake = new FakeAi([deterministic]);
   await itx.provide("itx.ai", fake);
   await itx.provide("itx.fable", `itx.ai.run('${MODEL}', @)`);
   expect(await itx.rewriteRules.get("itx.fable")).toEqual({
@@ -94,7 +94,7 @@ test("THE DREAM: `itx.fable ⇒ itx.ai.run('@cf/…', @)` pins the model; the ca
 test("THE GATEWAY SHAPE: `...@` merges the caller's fields under a pinned model (the template wins); a nested `@` takes exactly one argument", async () => {
   const ctx = freshCtx("gateway");
   const itx = openItx(ctx);
-  await itx.provide("itx.ai", new FakeAi());
+  await itx.provide("itx.ai", new FakeAi([deterministic]));
   await itx.provide(
     "itx.claude",
     "itx.ai.gateway('g').run({ provider: 'anthropic', endpoint: 'v1/messages', query: { model: 'claude-x', ...@ } })",
@@ -152,29 +152,8 @@ realModelOnly(
   90_000,
 );
 
-/** The binding's gateway half, as an RpcTarget so the DO's mid-chain `.run(req)` rides back here. */
-class FakeAiGateway extends RpcTarget {
-  readonly #id: string;
-  constructor(id: string) {
-    super();
-    this.#id = id;
-  }
-  run(request: unknown) {
-    return { gateway: this.#id, request };
-  }
-}
-
-/** A deterministic `env.AI`: the same three methods, canned answers, every call recorded. */
-class FakeAi extends RpcTarget {
-  readonly calls: { model: string; inputs: unknown; options?: unknown }[] = [];
-  run(model: string, inputs: unknown, options?: unknown) {
-    this.calls.push({ model, inputs, options });
-    return { response: `deterministic:${model}`, inputs };
-  }
-  gateway(id: string) {
-    return new FakeAiGateway(id);
-  }
-  models() {
-    return [{ name: "@cf/fake/model" }];
-  }
-}
+/** A canned answer naming the model, the inputs handed back. */
+const deterministic: FakeAiReply = ({ model, inputs }) => ({
+  response: `deterministic:${model}`,
+  inputs,
+});

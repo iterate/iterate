@@ -22,10 +22,10 @@ import {
   until,
   untilValue,
 } from "../../os/e2e/support/client.ts";
+import { FakeAi } from "../../os/e2e/support/fake-ai.ts";
 import { openAgentItx } from "./support.ts";
 import {
   RED_PNG_BASE64,
-  ScriptedAi,
   WORKERS_AI_MODEL,
   assistantWords,
   configureModel,
@@ -37,7 +37,7 @@ test("a fully masked visitor sandbox can receive a prose reply without gaining t
   const itx = await openAgentItx(freshCtx("agent-no-tools"));
   const path = "/agents/visitor";
   const support = itx.cd(path);
-  await support.provide("itx.ai", new ScriptedAi(["Here is a domain from the catalogue."]));
+  await support.provide("itx.ai", new FakeAi(["Here is a domain from the catalogue."]));
   await itx.agents.create(path);
   await itx.cd(`${path}/sandbox`).append(
     {
@@ -118,7 +118,7 @@ test("itx.agents.create(path) births the agent — the processor row, the reques
 test("the loop: a person's words → the model → a script run against itx → its result → the model → prose, then idle; the script's write is real", async () => {
   const itx = await openAgentItx(freshCtx("agent-loop"));
   const support = itx.cd("/agents/support");
-  const ai = new ScriptedAi([
+  const ai = new FakeAi([
     'Let me store that.\n<codemode status="Storing the answer">\nawait itx.kv.put("answer", "42")\nreturn { stored: true }\n</codemode>',
     "Stored 42 under answer.",
   ]);
@@ -198,7 +198,7 @@ test("the loop: a person's words → the model → a script run against itx → 
   // The second call saw the whole conversation: both prompts, person, its own script, the result.
   expect(ai.calls).toHaveLength(2);
   expect(ai.calls[1]).toMatchObject({ model: WORKERS_AI_MODEL });
-  expect(ai.calls[1]!.messages.map((m) => m.role)).toEqual([
+  expect(ai.calls[1]!.inputs.messages.map((m) => m.role)).toEqual([
     "system", // the journaled default prompt
     "system", // the operator's
     "system", // the capability tree, rendered this turn
@@ -206,7 +206,7 @@ test("the loop: a person's words → the model → a script run against itx → 
     "assistant",
     "system",
   ]);
-  expect(ai.calls[1]!.messages[5]!.content).toContain('"stored": true');
+  expect(ai.calls[1]!.inputs.messages[5]!.content).toContain('"stored": true');
   // Idle: no obligation open, one autonomous turn counted, nothing paused.
   expect((await support.facets.get("agent").snapshot()).state).toMatchObject({
     openRequest: null,
@@ -220,7 +220,7 @@ test("the loop: a person's words → the model → a script run against itx → 
 test("debounced: two messages inside the window are answered by ONE request that saw both; a message after the answer is another turn", async () => {
   const itx = await openAgentItx(freshCtx("agent-debounce"));
   const support = itx.cd("/agents/support");
-  const ai = new ScriptedAi(["Both noted.", "Third noted."]);
+  const ai = new FakeAi(["Both noted.", "Third noted."]);
   await support.provide("itx.ai", ai);
   await itx.agents.create("/agents/support");
   const agent = itx.agents.get("/agents/support");
@@ -253,7 +253,7 @@ test("debounced: two messages inside the window are answered by ONE request that
   expect(short(first).filter((t) => t === "agent/llm-request-settled")).toHaveLength(1);
   expect(ai.calls).toHaveLength(1);
   // The one call saw both messages — the prompt is built from the log at run time.
-  expect(ai.calls[0]!.messages.map((m) => m.role)).toEqual([
+  expect(ai.calls[0]!.inputs.messages.map((m) => m.role)).toEqual([
     "system", // the default prompt
     "system", // the operator's
     "system", // the capability tree
@@ -280,7 +280,7 @@ test("debounced: two messages inside the window are answered by ONE request that
 test("a script that returns nothing ends the turn: no result item, no further request — over every RPC hop", async () => {
   const itx = await openAgentItx(freshCtx("agent-quiet"));
   const support = itx.cd("/agents/support");
-  const ai = new ScriptedAi([
+  const ai = new FakeAi([
     'On it.\n<codemode status="Writing">\nawait itx.kv.put("note", "written")\n</codemode>',
     "SHOULD NEVER BE ASKED",
   ]);
@@ -325,10 +325,7 @@ test("bounded: a model that never stops scripting trips the autonomous-turn brea
   const support = itx.cd("/agents/support");
   // Three scripted answers (the person's turn and two self-triggered ones), then the model is down.
   const script = '<codemode status="Looping">\nreturn { again: true }\n</codemode>';
-  await support.provide(
-    "itx.ai",
-    new ScriptedAi([script, script, script, new Error("model down")]),
-  );
+  await support.provide("itx.ai", new FakeAi([script, script, script, new Error("model down")]));
   await itx.agents.create("/agents/support");
   const agent = itx.agents.get("/agents/support");
   await operatorPrompt(agent);
@@ -401,7 +398,7 @@ test("bounded: a model that never stops scripting trips the autonomous-turn brea
 test("an attached image is stored under the agent's path and SHOWN to the model as an image part; a non-image is named", async () => {
   const itx = await openAgentItx(freshCtx("agent-vision"));
   const support = itx.cd("/agents/support");
-  const ai = new ScriptedAi(["A red square and a note."]);
+  const ai = new FakeAi(["A red square and a note."]);
   await support.provide("itx.ai", ai);
   await itx.agents.create("/agents/support");
   const agent = itx.agents.get("/agents/support");
@@ -444,7 +441,7 @@ test("an attached image is stored under the agent's path and SHOWN to the model 
   // The model saw the pixels (a data: URL of the stored bytes) and was told about the note.
   const [call] = ai.calls;
   // the default prompt, the operator's, the capability tree, then the person's words with their attachments
-  const message = call!.messages[3] as unknown as {
+  const message = call!.inputs.messages[3] as unknown as {
     role: string;
     content: { type: string; text?: string; image_url?: { url: string } }[];
   };
@@ -463,7 +460,13 @@ test("interrupted: the person's next words cut the running answer short — sett
   const itx = await openAgentItx(freshCtx("agent-interrupt"));
   const support = itx.cd("/agents/support");
   // The first answer takes long enough to be cut short; the second is what the person gets.
-  const ai = new ScriptedAi([{ text: "A long answer that never lands.", afterMs: 8_000 }, "Sure."]);
+  const ai = new FakeAi([
+    async () => {
+      await sleep(8_000);
+      return { response: "A long answer that never lands." };
+    },
+    "Sure.",
+  ]);
   await support.provide("itx.ai", ai);
   await itx.agents.create("/agents/support");
   const agent = itx.agents.get("/agents/support");
@@ -508,7 +511,9 @@ test("interrupted: the person's next words cut the running answer short — sett
   // interruption as the newest words.
   expect(assistantWords(log)).toEqual(["Sure."]);
   expect(ai.calls).toHaveLength(2);
-  expect(ai.calls[1]!.messages.at(-1)!.content).toContain("interrupted the in-progress response");
+  expect(ai.calls[1]!.inputs.messages.at(-1)!.content).toContain(
+    "interrupted the in-progress response",
+  );
   expect((await support.facets.get("agent").snapshot()).state).toMatchObject({
     openRequest: null,
     pendingLlmRequestTrigger: null,
@@ -521,7 +526,7 @@ test("interrupted: the person's next words cut the running answer short — sett
 test("the model is shown the SANDBOX's rewriteRules.list() every turn: a capability provided at the root with a description reaches the prompt, tagged with the context it came from", async () => {
   const itx = await openAgentItx(freshCtx("agent-tree"));
   const support = itx.cd("/agents/support");
-  const ai = new ScriptedAi(["Nothing to do."]);
+  const ai = new FakeAi(["Nothing to do."]);
   await support.provide("itx.ai", ai);
   await itx.provide("itx.tool", "itx.whoami", {
     description: "who this project is, really: itx.tool()",
@@ -532,7 +537,9 @@ test("the model is shown the SANDBOX's rewriteRules.list() every turn: a capabil
   await configureModel(support);
   await agent.message("hello");
   await until("the model was asked", () => (ai.calls.length > 0 ? true : undefined));
-  const system = ai.calls[0]!.messages.filter((m) => m.role === "system").map((m) => m.content);
+  const system = ai.calls[0]!.inputs.messages.filter((m) => m.role === "system").map(
+    (m) => m.content,
+  );
   const tree = system.find((content) =>
     content.includes("CAPABILITY TREE (`await itx.rewriteRules.list()`)"),
   );
@@ -565,7 +572,7 @@ test("THE JAIL: a bare null on the agent's sandbox plus one grant — an injecte
     "return await itx.catalogue.search({ q: 'ship' })",
     "return await itx.repos.list()",
   ];
-  const ai = new ScriptedAi([
+  const ai = new FakeAi([
     ...scripts.map((code) => `<codemode status="probing">\n${code}\n</codemode>`),
     "Done probing.",
   ]);
@@ -714,7 +721,7 @@ test("an agent's script has as many hops left at its fifth turn as at its first,
   const probe = `for (let n = 1; n <= ${chain}; n++) { try { await itx.cd("./chain/" + (${chain} - n)).hop(); } catch { return n - 1; } } return ${chain};`;
   await support.provide(
     "itx.ai",
-    new ScriptedAi([
+    new FakeAi([
       ...Array.from({ length: turns }, () => `<codemode status="counting">\n${probe}\n</codemode>`),
       "Counted.",
     ]),
