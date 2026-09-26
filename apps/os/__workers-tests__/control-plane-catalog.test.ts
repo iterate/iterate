@@ -285,9 +285,9 @@ test("organizations: a removed owner's own verbs are refused and write nothing; 
   );
 });
 
-test("invitations: an owner creates a link — the record by id, never the hash; the holder previews the organization; a stranger or a member cannot create one, nor one already expired", async () => {
+test("invitations: an owner creates a link — the record by id, never the hash — and lists the open ones; the holder previews the organization; a stranger or a member cannot create one or list them, nor create one already expired", async () => {
   await emptyTables();
-  const { ada, bob, org, invitation } = await invited();
+  const { ada, bob, carol, org, invitation } = await invited();
   expect(invitation).toEqual({
     id: expect.stringMatching(/^inv_[0-9a-f]{32}$/),
     orgId: org.id,
@@ -311,7 +311,19 @@ test("invitations: an owner creates a link — the record by id, never the hash;
   await c.addMember(as(ada), org.id, { userId: bob.id, role: "member" });
   await expect(create(as(bob))).rejects.toMatchObject({ code: "FORBIDDEN" });
   await expect(create(as(ada), NOW)).rejects.toMatchObject({ code: "INVALID_INPUT" });
-  expect(await create(as(ada))).toMatchObject({ emailHint: null });
+  const second = await create(as(ada));
+  expect(second).toMatchObject({ emailHint: null });
+  // the links still open are an owner's to list, and the operator's; a member's or a stranger's
+  // read is refused
+  const open = [invitation, second].sort((a, b) => a.id.localeCompare(b.id));
+  const listed = async (caller: Caller) =>
+    (await c.openInvitations(caller, org.id)).sort((a, b) => a.id.localeCompare(b.id));
+  expect(await listed(as(ada))).toEqual(open);
+  expect(await listed(admin)).toEqual(open);
+  await expect(c.openInvitations(as(bob), org.id)).rejects.toMatchObject({ code: "FORBIDDEN" });
+  await expect(c.openInvitations(as(carol), org.id)).rejects.toMatchObject({
+    code: "FORBIDDEN",
+  });
 });
 
 test("invitations: accepted, the person joins in the link's role — once: again by them is the same answer, a second person is refused, and a member removed since cannot reuse it, even at the same millisecond", async () => {
@@ -319,6 +331,7 @@ test("invitations: accepted, the person joins in the link's role — once: again
   const { ada, bob, carol, org, invitation } = await invited("owner");
   const accepted = { invitation, userId: bob.id, role: "owner", accepted: true };
   expect(await c.acceptInvitation(as(bob), "hash-1", NOW + 1)).toEqual(accepted);
+  expect(await c.openInvitations(as(ada), org.id)).toEqual([]);
   expect(await c.accessibleTo(bob.id)).toMatchObject({
     organizations: [{ id: org.id, name: "Booper", role: "owner", projects: 0 }],
   });
@@ -395,8 +408,11 @@ test("invitations: expired or revoked, a link is refused and joins nobody; revok
   await expect(c.revokeInvitation(as(ada), other.id, invitation.id, NOW)).rejects.toThrow(
     "No such invitation to this organization.",
   );
+  // expired, a link stays open until revoked
+  expect(await c.openInvitations(as(ada), org.id)).toEqual([invitation]);
   expect(await c.revokeInvitation(as(ada), org.id, invitation.id, NOW)).toEqual(invitation);
   expect(await c.revokeInvitation(as(ada), org.id, invitation.id, NOW + 1)).toEqual(invitation);
+  expect(await c.openInvitations(as(ada), org.id)).toEqual([]);
   expect(await c.invitation("hash-1", bob.id, NOW)).toMatchObject({ status: "revoked" });
   await expect(c.acceptInvitation(as(bob), "hash-1", NOW)).rejects.toThrow(
     "This invitation was revoked.",
@@ -498,12 +514,21 @@ test("projects: with no organization named: the person's first by name, made on 
   expect(await c.accessibleTo(ada.id)).toMatchObject({
     organizations: [{ id: one.orgId, name: "ada.lovelace", role: "owner", projects: 2 }],
   });
+  // the one that made it says so (the session lands the organization's creation from it)
+  const minted = (created: { mintedOrganization?: string }[]) =>
+    created.map(({ mintedOrganization }) => mintedOrganization).filter(Boolean);
+  expect(minted([one, two])).toEqual(["ada.lovelace"]);
   const bob = await person("bob@example.com");
   const [first, again] = await Promise.all([
     c.createProject(as(bob), { project: "same" }),
     c.createProject(as(bob), { project: "same" }),
   ]);
-  expect(first).toEqual(again);
+  expect(minted([first, again])).toEqual(["bob"]);
+  expect({ ...first, mintedOrganization: undefined }).toEqual({
+    ...again,
+    mintedOrganization: undefined,
+  });
+  expect(minted([await c.createProject(as(bob), { project: "later" })])).toEqual([]);
   expect((await c.accessibleTo(bob.id)).organizations).toHaveLength(1);
   expect(await c.createProject(admin, { project: "ops" })).toMatchObject({ orgId: ADMIN_ORG_ID });
   expect(await c.organization(ADMIN_ORG_ID)).toEqual({

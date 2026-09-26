@@ -1,75 +1,55 @@
 // THE TREE the dash navigates — the signed-in person → their organizations → each organization's
-// projects — read from LIVE STATE, not listed: which organizations the person belongs to is the
-// account fold on `session.user` (`memberships`, apps/os/src/account/contract.ts); what an
-// organization is called, who belongs to it and which projects it holds is the organization fold on
-// `session.organizations.get(orgId)` (apps/os/src/organization/contract.ts). ONE subscription per
-// organization and one for the account, never one per project (every open live state is a
-// subscription row and a pinned Durable Object): a project's own live state opens on its page alone.
+// projects — READ FROM /api: `organizations.list()` and `projects.list()`, the control plane's
+// database as it stands (apps/os src/session.ts). The streams are activity logs: a fact landing on
+// the person's account (a membership of theirs) or on an organization's own context (renamed, a
+// member, an invitation, a project) only INVALIDATES the read, and the tree reads again. ONE
+// subscription per organization and one for the account, never one per project (every open
+// subscription is a row and a pinned Durable Object).
 // `<OrganizationTree>` is mounted once by the shell and renders nothing; it publishes the tree it
-// folds, and the nav, the switcher, the breadcrumbs and every page read the same tree through
+// reads, and the nav, the switcher, the breadcrumbs and every page read the same tree through
 // `useOrganizationTree()` — a route's `beforeLoad`, which cannot use a hook, through
-// `readOrganizationTree()`.
-//
-// A session that cannot open the account — `account` unticked at consent, or a grant bound to
-// projects (a personal access token), which `api.user` refuses FORBIDDEN — gets the LISTED tree
-// instead: `organizations.list()` and `projects.list()`, read once, and again on
-// `reloadOrganizationTree()` after a write; it carries no members.
+// `readOrganizationTree()`. A page that made a write awaits `reloadOrganizationTree()` before it
+// relies on the tree: the fact that would say so lands after the answer. An organization's members
+// and invitation links are its page's own read (routes/_auth/organizations/$orgId.tsx), again
+// whenever the tree reads again (`revision`).
 // oxlint-disable react/only-export-components -- the tree's hook and its loader-side reads are the component's own API: one file, one place.
-import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
-import { z } from "zod";
+import { useCallback, useEffect, useSyncExternalStore } from "react";
 import type { AuthenticatedApp } from "iterate/app";
-import { useContextStub, useFacetLiveState } from "iterate/react";
+import { useContextStub } from "iterate/react";
 
 export type OrganizationRole = "owner" | "member";
-type TreeProject = {
-  id: string;
-  slug: string;
-  orgId: string;
-  /** when the organization's record says it was created; null in the listed tree */
-  createdAt: string | null;
-};
+type TreeProject = { id: string; slug: string; orgId: string };
 export type TreeOrganization = {
   id: string;
-  /** the name as the organization's record last folded it — its id until the first fact lands */
   name: string;
-  /** the person's role, from the account's memberships (the listed tree: the session's row) */
+  /** the person's role; none for an organization the session reaches only through a project */
   role?: OrganizationRole;
-  /** who belongs, by user id — the organization's record; empty in the listed tree */
-  members: Record<string, { role: OrganizationRole; since: string }>;
-  /** the invitation links still open, by invitation id — the organization's record; empty in the
-   *  listed tree */
-  invitations: Record<string, z.infer<typeof Invitation>>;
-  /** in creation order */
+  /** by slug */
   projects: TreeProject[];
-  /** the organization's live state: connecting, live, or failed — `error` says how */
-  status: "connecting" | "live" | "error";
-  error?: string;
 };
 type OrganizationTreeState = {
-  /** live: the account's memberships and every organization's record, pushed as they change;
-   *  listed: the session's lists, read once */
-  source: "live" | "listed";
-  /** the memberships are known and every organization has answered (or failed) */
+  /** the first read answered (or failed) */
   loaded: boolean;
-  /** in membership order — the organization joined first, first */
+  /** by name */
   organizations: TreeOrganization[];
   /** every organization's projects, in the organizations' order */
   projects: TreeProject[];
-  /** the account's live state (or the lists) could not be read */
+  /** the last read failed: the tree is the one before it */
   error?: string;
+  /** how many reads have answered — what a page's own read of an organization follows */
+  revision: number;
 };
 
 const EMPTY: OrganizationTreeState = {
-  source: "live",
   loaded: false,
   organizations: [],
   projects: [],
+  revision: 0,
 };
 
 // ── the store: what the mounted `<OrganizationTree>` last published ──
 let published: OrganizationTreeState = EMPTY;
 const listeners = new Set<() => void>();
-let reload: () => void = () => {};
 function publish(tree: OrganizationTreeState) {
   published = tree;
   for (const listener of listeners) listener();
@@ -77,6 +57,89 @@ function publish(tree: OrganizationTreeState) {
 function subscribe(listener: () => void) {
   listeners.add(listener);
   return () => listeners.delete(listener);
+}
+
+// ── the reads: one in flight; asked for meanwhile, one more after it ──
+type Api = AuthenticatedApp["api"];
+/** the mounted tree's session; null while none is mounted */
+let reader: Api | null = null;
+/** reads asked for, and the last ask a read answered (a read answers every ask before it began) */
+let asked = 0;
+let answered = 0;
+let reading = false;
+let waiting: { ask: number; resolve: () => void }[] = [];
+
+/** Resolve the waits for every ask through `ask`. */
+function settle(ask: number) {
+  for (const wait of waiting) if (wait.ask <= ask) wait.resolve();
+  waiting = waiting.filter((wait) => wait.ask > ask);
+}
+
+async function read(): Promise<void> {
+  if (reading) return;
+  reading = true;
+  try {
+    while (reader && answered < asked) {
+      const api = reader;
+      const through = asked;
+      try {
+        const [orgs, projects] = await Promise.all([api.organizations.list(), api.projects.list()]);
+        if (reader === api) publish(treeOf(orgs, projects, published.revision + 1));
+      } catch (caught) {
+        if (reader === api)
+          publish({
+            ...published,
+            loaded: true,
+            error: caught instanceof Error ? caught.message : String(caught),
+            revision: published.revision + 1,
+          });
+      }
+      answered = through;
+      settle(through);
+    }
+  } finally {
+    reading = false;
+  }
+}
+
+/** The tree from the session's lists. A project whose organization the session does not list (a
+ *  grant bound to projects) sits under the organization's id. */
+function treeOf(
+  orgs: { id: string; name: string; role?: OrganizationRole }[],
+  projects: TreeProject[],
+  revision: number,
+): OrganizationTreeState {
+  const ids = [
+    ...new Set([...orgs.map((org) => org.id), ...projects.map((project) => project.orgId)]),
+  ];
+  const organizations = ids.map((id): TreeOrganization => {
+    const org = orgs.find((candidate) => candidate.id === id);
+    return {
+      id,
+      name: org?.name || id,
+      role: org?.role,
+      projects: projects
+        .filter((project) => project.orgId === id)
+        .map(({ id: projectId, slug, orgId }) => ({ id: projectId, slug, orgId })),
+    };
+  });
+  return {
+    loaded: true,
+    organizations,
+    projects: organizations.flatMap((org) => org.projects),
+    revision,
+  };
+}
+
+/** Read the tree again: after a write of this page's own, awaited before a navigation that relies
+ *  on it; and whenever a fact says it changed. Resolves once a read that started after the call
+ *  has answered (at once when no tree is mounted). */
+export function reloadOrganizationTree(): Promise<void> {
+  if (!reader) return Promise.resolve();
+  const ask = ++asked;
+  const answeredAsk = new Promise<void>((resolve) => waiting.push({ ask, resolve }));
+  void read();
+  return answeredAsk;
 }
 
 /** The tree as every component reads it; re-renders as it changes. */
@@ -92,224 +155,116 @@ export function useOrganizationTree(): OrganizationTreeState {
 export function readOrganizationTree(): OrganizationTreeState {
   return published;
 }
-/** How long a page waits for an organization the loaded tree does not list yet: a creation answers
- *  before the account's live-state push lands in this client, so the tree is `loaded` and the
- *  organization absent for a moment. After the grace it is missing. */
-const ORGANIZATION_GRACE_MS = 8_000;
 
-/** One organization of the tree, by id — `org` when the tree lists it; `missing` once the tree is
- *  loaded, has waited the grace, and still does not. Until then, neither: the page is pending. */
+/** One organization of the tree, by id — `org` when the tree lists it; `missing` once the tree has
+ *  loaded without it. Until then, neither: the page is pending. */
 export function useOrganizationTreeEntry(orgId: string): {
   org: TreeOrganization | undefined;
   missing: boolean;
 } {
   const tree = useOrganizationTree();
   const org = tree.organizations.find((candidate) => candidate.id === orgId);
-  // the organization whose grace ran out — keyed, so the next organization gets its own grace
-  const [graceOverFor, setGraceOverFor] = useState<string | null>(null);
-  useEffect(() => {
-    if (org || !tree.loaded) return;
-    const timer = setTimeout(() => setGraceOverFor(orgId), ORGANIZATION_GRACE_MS);
-    return () => clearTimeout(timer);
-  }, [org, tree.loaded, orgId]);
-  return { org, missing: !org && tree.loaded && graceOverFor === orgId };
+  return { org, missing: !org && tree.loaded };
 }
 
-/** The listed tree reads its lists again (after a create); the live tree already has it. */
-export function reloadOrganizationTree(): void {
-  reload();
-}
+/** The facts that change the tree: a membership of the person's, on their account; anything that
+ *  happens to an organization, on its own context (apps/os src/organization/contract.ts). */
+const ACCOUNT_FACTS = [
+  "events.iterate.com/organization/member-added",
+  "events.iterate.com/organization/member-removed",
+];
+const ORGANIZATION_FACTS = [
+  "events.iterate.com/organization/renamed",
+  "events.iterate.com/organization/deleted",
+  "events.iterate.com/organization/member-added",
+  "events.iterate.com/organization/member-removed",
+  "events.iterate.com/organization/invitation-created",
+  "events.iterate.com/organization/invitation-accepted",
+  "events.iterate.com/organization/invitation-revoked",
+  "events.iterate.com/organization/project-added",
+  "events.iterate.com/organization/project-removed",
+];
 
-type Api = AuthenticatedApp["api"];
-
-const Membership = z.object({ role: z.enum(["owner", "member"]), since: z.string() });
-/** The account fold, the one field the tree reads. */
-const AccountLive = z.looseObject({ memberships: z.record(z.string(), Membership).default({}) });
-const Invitation = z.object({
-  role: z.enum(["owner", "member"]),
-  emailHint: z.string().nullable(),
-  expiresAt: z.string(),
-  createdAt: z.string(),
-});
-/** The organization fold, the fields the tree reads. */
-const OrganizationLive = z.looseObject({
-  name: z.string().nullable().default(null),
-  members: z.record(z.string(), Membership).default({}),
-  invitations: z.record(z.string(), Invitation).default({}),
-  projects: z.record(z.string(), z.object({ slug: z.string(), createdAt: z.string() })).default({}),
-});
-
-/** Mounted once, by the shell: opens the account's live state — or, for a session that cannot,
- *  lists — and publishes the tree. Renders nothing. */
+/** Mounted once, by the shell: reads the tree, and again on every fact the person's account and
+ *  each organization's context take. Renders nothing. */
 export function OrganizationTree({ api, info }: { api: Api; info: AuthenticatedApp["info"] }) {
-  // each session (or scope set) opens its own account. `api.user` is pipelined: the round trip is
-  // the await, and a grant bound to projects rejects it (FORBIDDEN) — the listed tree then, as for
-  // a session without `account`
+  useEffect(() => {
+    reader = api;
+    void reloadOrganizationTree();
+    return () => {
+      // this session's tree goes with it; a wait for it is over
+      reader = null;
+      settle(asked);
+      publish(EMPTY);
+    };
+  }, [api]);
+  const invalidate = useCallback(() => void reloadOrganizationTree(), []);
+  const tree = useOrganizationTree();
+  // the account opens only with the `account` scope; a grant bound to projects is refused it
+  // (FORBIDDEN), and follows its organizations alone
   const account = useContextStub(
     info.scopes.includes("account") ? () => Promise.resolve(api.user) : null,
     [api, info.scopes],
   );
-  useEffect(() => () => publish(EMPTY), []);
-  if (account.pending) return null;
-  return account.stub ? <LiveTree api={api} user={account.stub} /> : <ListedTree api={api} />;
+  return (
+    <>
+      <Facts stub={account.stub} consumes={ACCOUNT_FACTS} onFact={invalidate} />
+      {tree.organizations.map((org) => (
+        <OrganizationFacts key={org.id} api={api} orgId={org.id} onFact={invalidate} />
+      ))}
+    </>
+  );
 }
 
-/** One organization's live state as its branch reports it up. */
-type Branch = { value: unknown; status: "connecting" | "live" | "error"; error?: string };
-
-/** A global context stub the session vends — `api.user`, `api.organizations.get(orgId)`. */
-type GlobalContext = Awaited<Api["user"]>;
-
-/** The live tree: the account's memberships, and a branch per membership. */
-function LiveTree({ api, user }: { api: Api; user: GlobalContext }) {
-  const account = useFacetLiveState(user, "account");
-  const memberships = useMemo(
-    () => AccountLive.safeParse(account.value).data?.memberships ?? {},
-    [account.value],
-  );
-  const [branches, setBranches] = useState<Record<string, Branch>>({});
-  const report = useCallback((orgId: string, branch: Branch | null) => {
-    setBranches((previous) => {
-      if (branch) return { ...previous, [orgId]: branch };
-      const { [orgId]: _gone, ...rest } = previous;
-      return rest;
-    });
-  }, []);
-  // the organization joined first, first; the id breaks a tie
-  const orgIds = useMemo(
-    () =>
-      Object.entries(memberships)
-        .sort(([idA, a], [idB, b]) => a.since.localeCompare(b.since) || idA.localeCompare(idB))
-        .map(([id]) => id),
-    [memberships],
-  );
-  const tree = useMemo((): OrganizationTreeState => {
-    const organizations = orgIds.map((id): TreeOrganization => {
-      const branch = branches[id];
-      const record =
-        branch?.value === undefined ? undefined : OrganizationLive.safeParse(branch.value).data;
-      return {
-        id,
-        name: record?.name || id,
-        role: memberships[id]?.role,
-        members: record?.members ?? {},
-        invitations: record?.invitations ?? {},
-        projects: Object.entries(record?.projects ?? {})
-          .sort(
-            ([idA, a], [idB, b]) =>
-              a.createdAt.localeCompare(b.createdAt) || idA.localeCompare(idB),
-          )
-          .map(([projectId, project]) => ({
-            id: projectId,
-            slug: project.slug,
-            orgId: id,
-            createdAt: project.createdAt,
-          })),
-        status: branch?.status ?? "connecting",
-        error: branch?.error,
-      };
-    });
-    const seeded = account.value !== undefined || account.status === "error";
-    // an organization that failed before its live state ever answered holds no projects we know
-    // of — the tree says so rather than reading as "none" (a failure after it answered keeps the
-    // last state)
-    const unread = orgIds.find(
-      (id) => branches[id]?.status === "error" && branches[id].value === undefined,
-    );
-    return {
-      source: "live",
-      loaded: seeded && organizations.every((org) => org.status !== "connecting"),
-      organizations,
-      projects: organizations.flatMap((org) => org.projects),
-      error:
-        account.value === undefined
-          ? account.error
-          : unread && `The organization ${unread} did not load: ${branches[unread]!.error}`,
-    };
-  }, [orgIds, branches, memberships, account.value, account.status, account.error]);
-  useEffect(() => publish(tree), [tree]);
-  // this account's tree goes with it: a new session's (or the listed one) publishes its own
-  useEffect(() => () => publish(EMPTY), []);
-  return orgIds.map((orgId) => (
-    <OrganizationBranch key={orgId} api={api} orgId={orgId} report={report} />
-  ));
-}
-
-/** One membership: the organization's context, held for the branch's life, and its live state,
- *  reported up. Renders nothing. */
-function OrganizationBranch({
+/** One organization's context, held for as long as the tree lists it, and its facts. */
+function OrganizationFacts({
   api,
   orgId,
-  report,
+  onFact,
 }: {
   api: Api;
   orgId: string;
-  report: (orgId: string, branch: Branch | null) => void;
+  onFact: () => void;
 }) {
   const context = useContextStub(() => api.organizations.get(orgId), [api, orgId]);
-  const live = useFacetLiveState(context.stub, "organization");
-  useEffect(() => {
-    report(orgId, {
-      value: live.value,
-      status: context.error ? "error" : live.status,
-      error: context.error || live.error,
-    });
-  }, [orgId, report, live.value, live.status, live.error, context.error]);
-  useEffect(() => () => report(orgId, null), [orgId, report]);
-  return null;
+  return <Facts stub={context.stub} consumes={ORGANIZATION_FACTS} onFact={onFact} />;
 }
 
-/** The listed tree — the session's lists, read once and on `reloadOrganizationTree()`. */
-function ListedTree({ api }: { api: Api }) {
-  const [generation, setGeneration] = useState(0);
+type FactContext = {
+  subscribe(input: {
+    consumes: string[];
+    target: (events: unknown[]) => void;
+  }): Promise<{ [Symbol.dispose](): void }>;
+};
+
+/** A subscription to `consumes` on a held context: `onFact` on every batch it pushes, and once as
+ *  it opens — a fact that landed before it did is read with it. A subscription refused leaves the
+ *  tree as it is: it reads again on the next fact, or the next write. Renders nothing. */
+function Facts({
+  stub,
+  consumes,
+  onFact,
+}: {
+  stub: FactContext | undefined;
+  consumes: string[];
+  onFact: () => void;
+}) {
   useEffect(() => {
-    reload = () => setGeneration((previous) => previous + 1);
-    return () => {
-      reload = () => {};
-    };
-  }, []);
-  useEffect(() => {
+    if (!stub) return;
     let disposed = false;
-    Promise.all([api.organizations.list(), api.projects.list()]).then(
-      ([orgs, projects]) => {
-        if (disposed) return;
-        // a project whose organization the session does not list sits under the organization's id
-        const ids = [
-          ...new Set([...orgs.map((org) => org.id), ...projects.map((project) => project.orgId)]),
-        ];
-        const organizations = ids.map((id): TreeOrganization => {
-          const org = orgs.find((candidate) => candidate.id === id);
-          return {
-            id,
-            name: org?.name || id,
-            role: org?.role,
-            members: {},
-            invitations: {},
-            projects: projects
-              .filter((project) => project.orgId === id)
-              .map((project) => ({ ...project, createdAt: null })),
-            status: "live",
-          };
-        });
-        publish({
-          source: "listed",
-          loaded: true,
-          organizations,
-          projects: organizations.flatMap((org) => org.projects),
-        });
+    let handle: { [Symbol.dispose](): void } | undefined;
+    stub.subscribe({ consumes, target: () => !disposed && onFact() }).then(
+      (opened) => {
+        if (disposed) return opened[Symbol.dispose]();
+        handle = opened;
+        onFact();
       },
-      (caught: unknown) =>
-        !disposed &&
-        publish({
-          ...EMPTY,
-          source: "listed",
-          loaded: true,
-          error: caught instanceof Error ? caught.message : String(caught),
-        }),
+      (caught: unknown) => console.warn("organization tree: a subscription was refused", caught),
     );
     return () => {
       disposed = true;
+      handle?.[Symbol.dispose]();
     };
-  }, [api, generation]);
+  }, [stub, consumes, onFact]);
   return null;
 }

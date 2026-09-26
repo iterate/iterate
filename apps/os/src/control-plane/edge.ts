@@ -371,17 +371,19 @@ export class ControlPlane {
    *  the named ones (a name the catalog never heard of is no record). `expected` names the ids the
    *  caller refuses without (consent's ticked projects, a socket's held ones): one of them, or of
    *  the reach's own selection, missing from the memoized access set is re-read once first — the
-   *  project may have been created on another isolate within the memo's five seconds. */
+   *  project may have been created on another isolate within the memo's five seconds. `fresh`
+   *  reads past the memo (a list a person reads again because something changed: session.ts). */
   async reachableProjects(
     reach: Reach,
     expected: readonly string[] = [],
+    fresh = false,
   ): Promise<ProjectRecord[]> {
     if (reach === "every") return this.#read("projects", () => this.#db.projects());
     if ("userId" in reach) {
       const { userId, projectIds } = reach;
       const named = [...expected, ...(projectIds || [])];
-      let record = await this.accessibleTo(userId);
-      if (!named.every((id) => record.projects.some((project) => project.id === id)))
+      let record = await this.accessibleTo(userId, fresh);
+      if (!fresh && !named.every((id) => record.projects.some((project) => project.id === id)))
         record = await this.accessibleTo(userId, true);
       return projectIds
         ? record.projects.filter((project) => projectIds.includes(project.id))
@@ -407,11 +409,14 @@ export class ControlPlane {
   listOrganizations() {
     return this.#read("organizations", () => this.#db.organizations());
   }
-  getOrganization(organizationId: string) {
-    return this.#read("organization", () => this.#db.organization(organizationId));
-  }
   listMembers(organizationId: string) {
     return this.#read("members", () => this.#db.members(organizationId));
+  }
+  /** An organization's open invitation links — its owners', or the operator's (catalog.ts). */
+  listInvitations(caller: Caller, organizationId: string) {
+    return this.#read("openInvitations", () =>
+      this.#db.openInvitations(callerOf(caller), organizationId),
+    );
   }
   /** What an invitation link opens, for `userId` (null: nobody signed in) — by the token's hash. */
   getInvitation(tokenHash: string, userId: string | null) {
@@ -532,13 +537,13 @@ export class ControlPlane {
   async createProject(
     caller: Caller,
     input: { project: string; organizationId?: string; restoreProjectId?: string },
-  ): Promise<ProjectRecord> {
-    const project = await this.#call("createProject", () =>
+  ): Promise<ProjectRecord & { mintedOrganization?: string }> {
+    const { mintedOrganization, ...project } = await this.#call("createProject", () =>
       this.#db.createProject(callerOf(caller), input),
     );
     memoize(project);
     this.#forget(caller.principal?.actor);
-    return project;
+    return mintedOrganization ? { ...project, mintedOrganization } : project;
   }
 
   /** The project `caller` may delete (catalog.ts `projectToDelete`), or a refusal. */

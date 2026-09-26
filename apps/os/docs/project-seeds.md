@@ -39,8 +39,7 @@ owner cannot export encrypted cells.
 Restore preserves the archived project ID when the project is absent. It recreates users and
 organization memberships, restores secrets, then commits the config file tree
 through the normal repository API. It verifies decrypted secret readback, the Git
-tree, the project processor's published commit, membership roles, and that the
-organization's record lists the project. Every step converges: reapplying
+tree, the project processor's published commit and membership roles. Every step converges: reapplying
 converges on the same project, config tree and hostnames, and finishes an apply
 that a failure or a deploy cut short.
 
@@ -60,9 +59,8 @@ operator's `organizations.create` and `organizations.addMember`.
 `apply` creates the project with the operator's `projects.create` into the named
 organization, and calls it again for a project that already exists. Every creation,
 a person's or the operator's, lands `organization/project-added` on the
-organization's record (the `organization` fold the dash lists an organization's
-projects from) unless the record already has it, under an idempotency key. So a
-rerun, or two creations at once, write no second event.
+organization's activity under the project's idempotency key, so a rerun, or two
+creations at once, write no second event.
 
 `--organization` changes the destination organization. `--owners` replaces the
 archive's requested member list with explicit owners. Without these flags, the

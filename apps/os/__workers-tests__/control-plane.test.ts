@@ -2,12 +2,10 @@ import { env, exports } from "cloudflare:workers";
 import { newWebSocketRpcSession } from "capnweb";
 import { expect, onTestFinished, test } from "vitest";
 import type { StreamEvent } from "iterate/stream/processor";
-import type { AccountState } from "../src/account/contract.ts";
 import { ControlPlaneDatabase } from "../src/control-plane/catalog.ts";
 import { ControlPlane, ControlPlaneUnavailableError } from "../src/control-plane/edge.ts";
 import { DurableObjectNameCodec, GLOBAL_PROJECT_ID } from "../src/context/paths.ts";
 import { startLoginCode } from "../src/password-and-code-sign-in.ts";
-import type { OrganizationState } from "../src/organization/contract.ts";
 import type { IterateRpcTarget } from "../src/session.ts";
 import { publishConfigWorker } from "../e2e/support/config-worker.ts";
 import {
@@ -22,7 +20,6 @@ import {
 
 const secret = env.APP_CONFIG_SECRETS__ADMIN_BEARER!;
 const password = env.APP_CONFIG_LOGIN__PASSWORD!;
-type Session = Awaited<ReturnType<typeof operator>>;
 
 // Public OAuth lifecycle and browser clients are covered by oauth.test.ts.
 test("the directory keeps creation, listing, membership and event attribution coherent", async () => {
@@ -86,7 +83,7 @@ test("the directory keeps creation, listing, membership and event attribution co
   });
 });
 
-test("organizations.create writes the catalog row and lands the facts on the organization and the owner's account under the asker", async () => {
+test("organizations.create writes the catalog row, which every read answers at once, and lands the facts on the organization and the owner's account under the asker", async () => {
   const ada = await operator("Orgs-Owner@directory.test");
   const principal = await ada.whoami();
   const org = await ada.organizations.create({ name: "  Ada's organization " });
@@ -96,19 +93,14 @@ test("organizations.create writes the catalog row and lands the facts on the org
     role: "owner",
     projects: 0,
   });
+  // what the dash reads: the control-plane database, as it stands
   expect(await ada.organizations.list()).toEqual([org]);
-  // the membership is folded on the person's account; the name and the members on the organization
-  expect(await accountState(ada)).toMatchObject({
-    memberships: { [org.id]: { role: "owner", since: expect.any(String) } },
-  });
-  expect(await organizationState(ada, org.id)).toMatchObject({
-    name: "Ada's organization",
-    members: { [principal.actor]: { role: "owner", since: expect.any(String) } },
-  });
-  // the facts on the organization's own log, stamped with who asked
-  const facts = (await globalLog(`/organizations/${org.id}`)).filter((event) =>
-    event.type.startsWith("events.iterate.com/organization/"),
-  );
+  expect(await ada.organizations.members(org.id)).toEqual([
+    { userId: principal.actor, email: "orgs-owner@directory.test", role: "owner" },
+  ]);
+  expect(await ada.organizations.invitations(org.id)).toEqual([]);
+  // the activity on the organization's own log and the owner's account, stamped with who asked
+  const facts = await organizationFacts(org.id, 2);
   expect(facts.map(({ type, payload }) => ({ type, payload }))).toEqual([
     { type: "events.iterate.com/organization/created", payload: { name: "Ada's organization" } },
     {
@@ -117,7 +109,14 @@ test("organizations.create writes the catalog row and lands the facts on the org
     },
   ]);
   expect(facts.every((event) => event.source?.principal?.actor === principal.actor)).toBe(true);
-  // the control-plane database — the source of truth behind the folds — answers the same rows
+  const onAccount = await until("the membership lands on the owner's account", async () =>
+    (await globalLog(`/users/${principal.actor}`)).find(
+      (event) => event.type === "events.iterate.com/organization/member-added",
+    ),
+  );
+  expect(onAccount).toMatchObject({
+    payload: { orgId: org.id, userId: principal.actor, role: "owner" },
+  });
   expect(await catalog("organization", org.id)).toEqual({
     id: org.id,
     name: "Ada's organization",
@@ -256,62 +255,48 @@ test("concurrent restores through the control plane: one slug never answers a di
   ]);
 });
 
-test("the operator's project in a named organization lands on the organization's record — the list the dash shows — as a person's does; the same creation again (a project seed's apply, rerun, or two at once) lands nothing twice, and lands one the record lacks", async () => {
+test("a project's creation lands `organization/project-added` on its organization's activity, keyed by the project: the same creation again (a project seed's apply, rerun, or two at once) lands it once; the operator's own organization gets nothing", async () => {
   const admin = await operator();
   // what a seed's apply does: the owner (the operator acting as them) makes the organization, the
   // operator itself makes the project under its archived id
   const owner = await operator("seed-owner@directory.test");
   const { actor: ownerActor } = await owner.whoami();
   const org = await owner.organizations.create({ name: "Seeded organization" });
-  const projectFacts = async () =>
-    (await globalLog(`/organizations/${org.id}`))
-      .filter((event) => event.type === "events.iterate.com/organization/project-added")
-      .map(({ payload, source }) => ({ payload, platform: source?.platform }));
+  const projectFacts = async (count: number) => {
+    const facts = await until(`${count} project-added facts land`, async () => {
+      const landed = (await globalLog(`/organizations/${org.id}`)).filter(
+        (event) => event.type === "events.iterate.com/organization/project-added",
+      );
+      return landed.length >= count && landed;
+    });
+    return facts.map(({ payload, source }) => ({ payload, platform: source?.platform }));
+  };
   const restore = (project: string, restoreProjectId: string) =>
     admin.projects.create({ project, orgId: org.id, restoreProjectId });
   using _seeded = await restore("seeded", "prj_seeded");
-  expect(await organizationState(owner, org.id)).toMatchObject({
-    projects: { prj_seeded: { slug: "seeded", createdAt: expect.any(String) } },
-  });
+  expect(await projectFacts(1)).toEqual([
+    { payload: { projectId: "prj_seeded", slug: "seeded" }, platform: true },
+  ]);
   // the operator lands the project, never itself: the organization's members are still the owner
-  expect(Object.keys((await organizationState(owner, org.id)).members)).toEqual([ownerActor]);
+  expect((await owner.organizations.members(org.id)).map(({ userId }) => userId)).toEqual([
+    ownerActor,
+  ]);
   // the same creation again answers the same project and lands no second fact
   using again = await restore("seeded", "prj_seeded");
   expect(await again.whoami()).toMatchObject({ projectId: "prj_seeded" });
-  expect(await projectFacts()).toEqual([
-    { payload: { projectId: "prj_seeded", slug: "seeded" }, platform: true },
-  ]);
-  // a project the catalog holds and the record lacks (a creation whose landing failed after the
-  // catalog's write): the next create lands it — once, however often it is asked
-  await new ControlPlaneDatabase(env.DB).createProject(
-    { principal: { actor: "admin" } },
-    { project: "seeded-earlier", organizationId: org.id, restoreProjectId: "prj_seeded_earlier" },
-  );
-  expect((await organizationState(owner, org.id)).projects).not.toHaveProperty(
-    "prj_seeded_earlier",
-  );
-  for (let attempt = 0; attempt < 2; attempt++) {
-    using _converged = await restore("seeded-earlier", "prj_seeded_earlier");
-  }
-  expect(await projectFacts()).toEqual([
-    { payload: { projectId: "prj_seeded", slug: "seeded" }, platform: true },
-    { payload: { projectId: "prj_seeded_earlier", slug: "seeded-earlier" }, platform: true },
-  ]);
-  // two creations at the same moment both read the record without it: the key lands it once
+  // two creations at the same moment: the key lands it once
   const raced = await Promise.all([restore("raced", "prj_raced"), restore("raced", "prj_raced")]);
   for (const context of raced) context[Symbol.dispose]();
-  expect(await projectFacts()).toEqual([
+  expect(await projectFacts(2)).toEqual([
     { payload: { projectId: "prj_seeded", slug: "seeded" }, platform: true },
-    { payload: { projectId: "prj_seeded_earlier", slug: "seeded-earlier" }, platform: true },
     { payload: { projectId: "prj_raced", slug: "raced" }, platform: true },
   ]);
-  expect(Object.keys((await organizationState(owner, org.id)).projects).sort()).toEqual([
+  expect((await owner.projects.list()).map(({ id }) => id).sort()).toEqual([
     "prj_raced",
     "prj_seeded",
-    "prj_seeded_earlier",
   ]);
   // a member can't take a project's key first (src/context/built-ins.ts `append`): the same event
-  // unkeyed stays on the log, attributed to them, and the fold ignores it; the platform's lands once
+  // unkeyed stays on the log, attributed to them; the platform's lands beside it
   using ownersRecord = await owner.organizations.get(org.id);
   const squat = {
     type: "events.iterate.com/organization/project-added",
@@ -328,14 +313,11 @@ test("the operator's project in a named organization lands on the organization's
   );
   await ownersRecord.append(squat);
   using _squatted = await restore("squatted", "prj_squatted");
-  expect((await organizationState(owner, org.id)).projects).toMatchObject({
-    prj_squatted: { slug: "squatted" },
-  });
-  expect((await projectFacts()).slice(3)).toEqual([
+  expect((await projectFacts(4)).slice(2)).toEqual([
     { payload: { projectId: "prj_squatted", slug: "someone-elses" }, platform: undefined },
     { payload: { projectId: "prj_squatted", slug: "squatted" }, platform: true },
   ]);
-  // the deployment's own organization (the operator's projects with no orgId) has no record to land on
+  // the deployment's own organization (the operator's projects with no orgId) has no activity
   using _own = await admin.projects.create({ project: "operator-own" });
   expect(
     (await globalLog("/organizations/org_admin")).filter((event) =>
@@ -344,48 +326,38 @@ test("the operator's project in a named organization lands on the organization's
   ).toEqual([]);
 });
 
-test("a person's first project mints their organization: its record gets the creation, the owner and the project in that order; the owner's account the membership, in the background", async () => {
+test("a person's first project mints their organization: its activity gets the creation, the owner and the project in that order, the owner's account the membership", async () => {
   const person = await operator("first-project@directory.test");
   const { actor } = await person.whoami();
   using _project = await person.projects.create({ project: "first-of-mine" });
   const [org] = await person.organizations.list();
   expect(org).toMatchObject({ name: "first-project", role: "owner", projects: 1 });
-  const facts = (await globalLog(`/organizations/${org!.id}`)).filter((event) =>
-    event.type.startsWith("events.iterate.com/organization/"),
-  );
   const { id: projectId } = (await person.projects.list())[0]!;
-  expect(facts.map(({ type, payload }) => ({ type, payload }))).toEqual([
+  expect(
+    (await organizationFacts(org!.id, 3)).map(({ type, payload }) => ({ type, payload })),
+  ).toEqual([
     { type: "events.iterate.com/organization/created", payload: { name: "first-project" } },
     {
       type: "events.iterate.com/organization/member-added",
-      payload: { orgId: org!.id, userId: actor, role: "owner", mint: true },
+      payload: { orgId: org!.id, userId: actor, role: "owner" },
     },
     {
       type: "events.iterate.com/organization/project-added",
       payload: { projectId, slug: "first-of-mine" },
     },
   ]);
-  expect(await organizationState(person, org!.id)).toMatchObject({
-    name: "first-project",
-    members: { [actor]: { role: "owner" } },
-    projects: { [projectId]: { slug: "first-of-mine" } },
-  });
-  // the account's membership lands in the background: the creation never waits on it
-  // (project-create-holds-no-account.test.ts)
   expect(
-    await until(
-      "the membership lands on the owner's account",
-      async () => (await accountState(person)).memberships[org!.id],
+    await until("the membership lands on the owner's account", async () =>
+      (await globalLog(`/users/${actor}`)).find(
+        (event) => event.type === "events.iterate.com/organization/member-added",
+      ),
     ),
-  ).toMatchObject({ role: "owner" });
+  ).toMatchObject({ payload: { orgId: org!.id, role: "owner" } });
   // the next one lands in the same organization, and only the project lands
   using _second = await person.projects.create({ project: "second-of-mine" });
-  expect(
-    (await globalLog(`/organizations/${org!.id}`))
-      .filter((event) => event.type.startsWith("events.iterate.com/organization/"))
-      .map(({ type }) => type)
-      .slice(3),
-  ).toEqual(["events.iterate.com/organization/project-added"]);
+  expect((await organizationFacts(org!.id, 4)).map(({ type }) => type).slice(3)).toEqual([
+    "events.iterate.com/organization/project-added",
+  ]);
   // a person's first two projects at once mint one organization, created and joined once
   const racer = await operator("first-two@directory.test");
   const racing = await Promise.all([
@@ -396,9 +368,9 @@ test("a person's first project mints their organization: its record gets the cre
   const racerOrgs = await racer.organizations.list();
   expect(racerOrgs).toMatchObject([{ name: "first-two", projects: 2 }]);
   expect(
-    (await globalLog(`/organizations/${racerOrgs[0]!.id}`))
-      .filter((event) => event.type.startsWith("events.iterate.com/organization/"))
-      .map(({ type }) => type.replace("events.iterate.com/organization/", "")),
+    (await organizationFacts(racerOrgs[0]!.id, 4))
+      .map(({ type }) => type.replace("events.iterate.com/organization/", ""))
+      .sort(),
   ).toEqual(["created", "member-added", "project-added", "project-added"]);
 });
 
@@ -666,22 +638,14 @@ async function globalLog(path: string) {
   ).events;
 }
 
-/** The person's account, folded (src/account/contract.ts) — read through their own context. */
-async function accountState(session: Session) {
-  return (
-    (await session.user.invoke(["itx", "facets", ["get", "account"], ["snapshot"]])) as {
-      state: AccountState;
-    }
-  ).state;
-}
-
-/** The organization's record, folded (src/organization/contract.ts) — read by membership. */
-async function organizationState(session: Session, orgId: string) {
-  return (
-    (await (
-      await session.organizations.get(orgId)
-    ).invoke(["itx", "facets", ["get", "organization"], ["snapshot"]])) as {
-      state: OrganizationState;
-    }
-  ).state;
+/** An organization's activity — its `events.iterate.com/organization/…` facts, oldest first — once
+ *  at least `count` have landed: a verb publishes them in the background (session.ts
+ *  `publishOrganizationFacts`). */
+async function organizationFacts(orgId: string, count: number) {
+  return until(`${count} facts land on ${orgId}`, async () => {
+    const facts = (await globalLog(`/organizations/${orgId}`)).filter((event) =>
+      event.type.startsWith("events.iterate.com/organization/"),
+    );
+    return facts.length >= count && facts;
+  });
 }

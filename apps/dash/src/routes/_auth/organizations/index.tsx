@@ -1,4 +1,4 @@
-// /organizations — every organization in the tree (components/organization-tree.tsx, live), in the
+// /organizations — every organization in the tree (components/organization-tree.tsx), in the
 // projects page's layout: a table (the name → its settings, the id, the person's role, how many
 // projects), and "New organization" (`?new=1`, a sheet: a name) when the grant holds
 // `organizations:write`, a step-up link otherwise.
@@ -95,13 +95,7 @@ function OrganizationsPage() {
                   <Identifier value={org.id} textClassName="text-xs" />
                 </TableCell>
                 <TableCell className="text-muted-foreground">{org.role || "—"}</TableCell>
-                <TableCell className="text-right tabular-nums">
-                  {org.status === "connecting" ? (
-                    <Spinner className="ml-auto" />
-                  ) : (
-                    org.projects.length
-                  )}
-                </TableCell>
+                <TableCell className="text-right tabular-nums">{org.projects.length}</TableCell>
               </TableRow>
             ))}
           </TableBody>
@@ -133,8 +127,7 @@ function OrganizationsPage() {
 }
 
 /** The sheet's body — mounted with the sheet, so every opening starts blank. A created
- *  organization opens on its settings: the control plane answered once the person's membership
- *  was on their account, so the tree has it. */
+ *  organization opens on its settings, once the tree has read it. */
 function NewOrganizationForm({
   canWrite,
   pending,
@@ -154,7 +147,7 @@ function NewOrganizationForm({
     setPending(true);
     try {
       const created = await api.organizations.create({ name: name.trim() });
-      reloadOrganizationTree();
+      await reloadOrganizationTree();
       await navigate({ to: "/organizations/$orgId", params: { orgId: created.id } });
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));

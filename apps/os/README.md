@@ -137,7 +137,9 @@ created near the job that creates it, which for CI is where its suites run (`scr
 [sqlfu](https://github.com/mmkal/sqlfu) authors it: the schema is
 `definitions.sql`, the migrations `migrations/*.sql`, and every query a named statement in
 `queries/*.sql`, typed into `queries/.generated/` (committed); `db/index.ts` says why each write is
-one statement or one batch.
+one statement or one batch. It is the one truth of organizations, members, invitations and projects:
+`session.organizations` and `session.projects` read it as it stands (the Dash reads nothing else),
+and the facts a verb lands on an organization's context and a member's account are their activity.
 
 To change the schema, edit `definitions.sql`, write the next migration (`pnpm --dir apps/os db:draft`
 drafts it), then:
