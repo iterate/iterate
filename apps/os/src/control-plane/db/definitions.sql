@@ -55,7 +55,8 @@ create table memberships (
 );
 create index memberships_user on memberships (user_id);
 
--- A row is inserted once and never updated: the edge's memo and a context's stored slug rely on it.
+-- A row is inserted once and never updated, only deleted: a context's stored slug relies on it (a
+-- deletion destroys that storage too), and the edge keeps a row five seconds (edge.ts `KEPT_MS`).
 -- No cascade: an organization that holds a project cannot be deleted.
 create table projects (
   id text primary key,
