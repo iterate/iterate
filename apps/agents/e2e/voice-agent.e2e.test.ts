@@ -124,7 +124,7 @@ export default class extends WorkerEntrypoint {
     const received: { type: string; payload: Record<string, unknown>; createdAt?: string }[] = [];
     await call.subscribe({
       name: "device",
-      consumes: ["*", "events.iterate.com/voice-agent/spk-frame"],
+      consumes: ["*", "events.iterate.com/voice-agent/speaker-frame"],
       target: (events: unknown[]) => {
         received.push(...JSON.parse(JSON.stringify(events)));
       },
@@ -136,7 +136,7 @@ export default class extends WorkerEntrypoint {
         received.find(
           (event) =>
             event.type === "events.iterate.com/voice-agent/conversation-accepted" ||
-            event.type === "events.iterate.com/voice-agent/conversation-ended",
+            event.type === "events.iterate.com/voice-agent/call-ended",
         ),
       );
       expect(outcome, JSON.stringify(outcome)).toMatchObject({
@@ -155,7 +155,7 @@ export default class extends WorkerEntrypoint {
         await until("microphone audio returned to the speaker", () =>
           received.some(
             (event) =>
-              event.type === "events.iterate.com/voice-agent/spk-frame" &&
+              event.type === "events.iterate.com/voice-agent/speaker-frame" &&
               event.payload.pcm === encoded,
           ),
         );
@@ -193,7 +193,7 @@ export default class extends WorkerEntrypoint {
       expect(
         received.filter((event) =>
           [
-            "events.iterate.com/voice-agent/conversation-ended",
+            "events.iterate.com/voice-agent/call-ended",
             "events.iterate.com/voice-agent/provider-error-reported",
             "events.iterate.com/voice-agent/provider-disconnected",
           ].includes(event.type),
@@ -299,7 +299,7 @@ export default class extends WorkerEntrypoint {
       expect(JSON.stringify(await readAll(call))).not.toContain(token);
     } finally {
       await call.append({
-        type: "events.iterate.com/voice-agent/conversation-ended",
+        type: "events.iterate.com/voice-agent/call-ended",
         payload: { activation, reason: "e2e complete" },
       });
     }

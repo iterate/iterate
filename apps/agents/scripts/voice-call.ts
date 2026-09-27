@@ -137,8 +137,8 @@ export default async function voiceCall(
     consumes: [
       "events.iterate.com/voice-agent/call-started",
       "events.iterate.com/voice-agent/conversation-accepted",
-      "events.iterate.com/voice-agent/conversation-ended",
-      "events.iterate.com/voice-agent/spk-frame",
+      "events.iterate.com/voice-agent/call-ended",
+      "events.iterate.com/voice-agent/speaker-frame",
       "events.iterate.com/voice-agent/utterance-transcribed",
       "events.iterate.com/voice-agent/answer-transcribed",
       "events.iterate.com/voice-agent/delegation-requested",
@@ -150,8 +150,8 @@ export default async function voiceCall(
         const event = JSON.parse(JSON.stringify(raw));
         const p = event.payload ?? {};
         switch (event.type) {
-          case "events.iterate.com/voice-agent/spk-frame":
-            marks.firstSpkFrame ??= at();
+          case "events.iterate.com/voice-agent/speaker-frame":
+            marks.firstSpeakerFrame ??= at();
             if (p.pcm) speaker.push(Buffer.from(p.pcm, "base64"));
             if (p.lastFrameOfAnswer) marks[`answerDone#${speaker.length}`] = at();
             break;
@@ -161,7 +161,7 @@ export default async function voiceCall(
             marks.upgradeTookMs = p.upgradeTookMs;
             accepted?.();
             break;
-          case "events.iterate.com/voice-agent/conversation-ended":
+          case "events.iterate.com/voice-agent/call-ended":
             ended = String(p.reason);
             marks.ended = at();
             break;
@@ -247,7 +247,7 @@ export default async function voiceCall(
   while (pending > 0) await sleep(20);
 
   await itx.append({
-    type: "events.iterate.com/voice-agent/conversation-ended",
+    type: "events.iterate.com/voice-agent/call-ended",
     payload: { activation, reason: "voice-call script done" },
   });
   marks.terminalSent = at();

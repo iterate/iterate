@@ -4,7 +4,7 @@
  * `voice_loop_intent_test.c` drives the loop from the CONTROL side — a press
  * arrives as bytes and becomes an intent. Nothing drove it from the AUDIO side,
  * and that is exactly where the bug lived: `on_control` is static and reachable
- * only by delivering a `spk-frame` batch, so the branch that decides what a new
+ * only by delivering a `speaker-frame` batch, so the branch that decides what a new
  * answer does to the playout timeline was in no host build at all. Two boards
  * played a fifth of every answer after the first for a week.
  *
@@ -386,7 +386,7 @@ static void end_local_call(void) {
   step();
 }
 
-/** Deliver one `spk-frame` chunk, exactly as the stream delivers one. */
+/** Deliver one `speaker-frame` chunk, exactly as the stream delivers one. */
 static void deliver_chunk(bool drop, bool last, size_t frames) {
   static char message[16384];
   char release[64];
@@ -398,7 +398,7 @@ static void deliver_chunk(bool drop, bool last, size_t frames) {
       message,
       sizeof(message),
       "[\"push\",[\"pipeline\",%ld,[],[[["
-      "{\"type\":\"events.iterate.com/voice-agent/spk-frame\",\"offset\":%lld,"
+      "{\"type\":\"events.iterate.com/voice-agent/speaker-frame\",\"offset\":%lld,"
       "\"payload\":{\"activation\":\"%s\",%s%s\"pcm\":\"%s\"}}"
       "]],{\"after\":%lld,\"through\":%lld}]]]",
       callback_export_id(),
@@ -422,7 +422,7 @@ static void deliver_chunk(bool drop, bool last, size_t frames) {
 /**
  * Deliver the call's acceptance, exactly as the stream delivers it.
  *
- * The delivery stream refuses `spk-frame`s for a call the device is not on —
+ * The delivery stream refuses `speaker-frame`s for a call the device is not on —
  * that refusal is what stops an ended call's in-flight tail from playing
  * after the end chime — so an answer with no accepted call in front of it
  * is now silence by design, in this harness as on the desk.

@@ -334,7 +334,7 @@ static void release_callback(struct fixture *fixture, int64_t callback) {
 
 static void opens_on_one_mounted_session(struct fixture *fixture) {
   static const char *const event_types[] = {
-    "events.iterate.com/voice-agent/spk-frame",
+    "events.iterate.com/voice-agent/speaker-frame",
   };
   const struct capnweb_remote_capability project =
       fixture->mount.project_capability;
@@ -358,7 +358,7 @@ static void opens_on_one_mounted_session(struct fixture *fixture) {
       "[\"subscribe\"]") != NULL);
   assert(strstr(
       latest_with(fixture, "\"name\":\"multiplex-a\""),
-      "\"consumes\":[[\"events.iterate.com/voice-agent/spk-frame\"]]") != NULL);
+      "\"consumes\":[[\"events.iterate.com/voice-agent/speaker-frame\"]]") != NULL);
   assert(strstr(
       latest_with(fixture, "\"name\":\"multiplex-a\""),
       "\"target\":[\"export\",") != NULL);
@@ -503,7 +503,7 @@ static void multiplexes_and_reclaims(void) {
 
 static void pending_open_close_waits_for_remote_callback_release(void) {
   static const char *const event_types[] = {
-    "events.iterate.com/voice-agent/spk-frame",
+    "events.iterate.com/voice-agent/speaker-frame",
   };
   struct fixture fixture;
   int64_t stream_pull;
@@ -577,7 +577,7 @@ static void pending_open_close_waits_for_remote_callback_release(void) {
 
 static void invalid_types_and_export_exhaustion_leave_reclaimable_storage(void) {
   static const char *const event_types[] = {
-    "events.iterate.com/voice-agent/spk-frame",
+    "events.iterate.com/voice-agent/speaker-frame",
   };
   struct fixture fixture;
   struct capnweb_local_capability fillers[ITERATE_KIT_VOICE_EXPORT_CAPACITY];
@@ -624,7 +624,7 @@ static void invalid_types_and_export_exhaustion_leave_reclaimable_storage(void) 
 
 static void session_loss_clears_pending_children_before_new_session(void) {
   static const char *const event_types[] = {
-    "events.iterate.com/voice-agent/spk-frame",
+    "events.iterate.com/voice-agent/speaker-frame",
   };
   struct fixture fixture;
 
