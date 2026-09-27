@@ -35,6 +35,8 @@
   // Email Sending, simulated: the sign-in code's mail goes nowhere (the tests hand the code
   // sign-in a fake mailbox when they need to read the code, and the test code otherwise).
   "send_email": [{ "name": "EMAIL" }],
+  // The files bucket: inbound email's attachments land in it (src/email/mailbox.ts).
+  "r2_buckets": [{ "binding": "FILES", "bucket_name": "os-test-files" }],
   "durable_objects": {
     "bindings": [
       { "name": "ITERATE_CONTEXT", "class_name": "IterateContextDurableObject" },
@@ -47,6 +49,7 @@
     // THE FIRST-PARTY FACETS: Durable Object classes hosted as facets of a context through
     // `ctx.exports` — declared like any DO class (the facet's own SQLite is where their state lives).
     "AccountDurableObject": { "type": "durable-object", "storage": "sqlite" },
+    "EmailDurableObject": { "type": "durable-object", "storage": "sqlite" },
     "InstanceDurableObject": { "type": "durable-object", "storage": "sqlite" },
     "OrganizationDurableObject": { "type": "durable-object", "storage": "sqlite" },
     "ProjectDurableObject": { "type": "durable-object", "storage": "sqlite" },

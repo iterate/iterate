@@ -1,6 +1,6 @@
 // env.ts — the one worker's bindings: the context DO's (iterate-context-durable-object.ts `Env`,
 // the control plane's D1 among them) plus the issuer's own — the OAuth provider's KV, the browser
-// sessions, the issuer's page files and the mailbox.
+// sessions and the issuer's page files.
 
 import type { BrowserSession } from "iterate/app-session";
 import type { Env as DurableObjectEnv } from "./iterate-context-durable-object.ts";
@@ -15,10 +15,6 @@ export interface Env extends DurableObjectEnv {
   /** Static assets for the Start client and the consent page. The Worker handles platform requests
    *  first, then asks this binding for public files (issuer-pages.ts). */
   ASSETS: Fetcher;
-  /** Email Sending (wrangler `send_email`) — how the sign-in code reaches the person
-   *  (password-and-code-sign-in.ts). Simulated by wrangler dev and the test configs; absent where a
-   *  deployment has no mailbox. */
-  EMAIL?: SendEmail;
 }
 
 /** A worker handler with a REQUIRED fetch: the issuer's pages behind the platform's OAuth routes

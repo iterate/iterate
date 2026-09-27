@@ -79,6 +79,11 @@ const FIRST_PARTY_FACET_PLACEMENT_ROWS = [
   { facet: "instance", context: "global:/secrets/api-key", allowed: false },
   { facet: "instance", context: "global:/users/user_1", allowed: false },
   { facet: "instance", context: "prj_1:/", allowed: false },
+  // 8. `email` — a project's `/integrations/email`, and nowhere else.
+  { facet: "email", context: "prj_1:/integrations/email", allowed: true },
+  { facet: "email", context: "prj_1:/", allowed: false },
+  { facet: "email", context: "prj_1:/integrations/email/x", allowed: false },
+  { facet: "email", context: "global:/integrations/email", allowed: false },
 ];
 
 /** 6., the stateless worker (`itx.workers.get({ source })`, and `itx.run`'s script through it). */

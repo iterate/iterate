@@ -21,6 +21,7 @@ import { identityResponse } from "./identity.ts";
 import { OAUTH_INTEGRATION_PROVIDERS } from "./integrations/contract.ts";
 import { SECRET_OAUTH_CALLBACK_PATH, secretOAuthCallbackPathOf } from "./secret-oauth.ts";
 import { secretOAuthCallback } from "./secret-oauth-callback.ts";
+import { receiveEmail } from "./integrations/email.ts";
 import { slackWebhookRoute } from "./integrations/slack.ts";
 import { githubCallbackRoute, githubWebhookRoute } from "./integrations/github.ts";
 import { ControlPlane } from "./control-plane/edge.ts";
@@ -152,6 +153,7 @@ export { BrowserSession } from "iterate/app-session";
 // `ctx.exports` (first-party-facets.ts FIRST_PARTY_FACET_CLASSES) — ordinary bundled
 // worker code with the worker's real env, never a loaded source.
 export { AccountDurableObject } from "./account/durable-object.ts";
+export { EmailDurableObject } from "./email/durable-object.ts";
 export { InstanceDurableObject } from "./instance/durable-object.ts";
 export { OrganizationDurableObject } from "./organization/durable-object.ts";
 export { ProjectDurableObject } from "./project/durable-object.ts";
@@ -412,5 +414,10 @@ export default {
     // issuer's pages — the authorize endpoint's consent page among them — as its catch-all
     // (issuer-pages.ts): every one an open path, or a 404.
     return oauthResponse(request, env, ctx, issuerHandler);
+  },
+
+  // Cloudflare Email Routing's catch-all on the project email domain (integrations/email.ts).
+  async email(message: ForwardableEmailMessage, env: WorkerEnv) {
+    await receiveEmail(message, env);
   },
 };
