@@ -52,9 +52,7 @@ test("deleting a project drops its row at once, then destroys every context it a
   expect(await env.ITX_KV.list({ prefix: `${projectId}:` })).toMatchObject({ keys: [] });
 });
 
-// A request that read the project's row just before the delete (an isolate's memo) still reaches the
-// root by name; so does the operator, who may address any `prj_…` id. Neither bears a new root, until
-// a seed restores the project under its id.
+// iterate-context-durable-object.ts `#refuseBirthOfDeletedProjectRoot` and `#unbornStill`.
 test("a deleted project's root is never born again: whatever reaches it is refused, and nothing is stored, until the project is restored", async () => {
   const admin = (await openSession()).authenticate(adminCredentials());
   const slug = `reborn-${crypto.randomUUID().slice(0, 8)}`;
