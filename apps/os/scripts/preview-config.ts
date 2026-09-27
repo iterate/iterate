@@ -10,7 +10,7 @@ import { readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
-import { osEnvs } from "../../../envs.ts";
+import { ciReportsEnvs, osEnvs, spaEnvs } from "../../../envs.ts";
 import { agents } from "../../agents/scripts/app.ts";
 import { dash } from "../../dash/scripts/app.ts";
 import { kit } from "../../kit/scripts/app.ts";
@@ -76,10 +76,9 @@ export function slugifyPreviewName(raw: string) {
 const FORMER_PARENT = "os-preview";
 
 /** THE FORMER PARENTS: `os-preview` and the apps' `<app>-preview` workers, which no deploy names.
- *  Nothing redeploys or deletes the Worker Previews still hanging from them, and each holds a
- *  Durable Object namespace per class of the account's 500, so the sweep deletes them
- *  (preview-sweep.ts rule 0). The workers stay, and so do `os-preview`'s previews' KV, R2 and
- *  Artifacts namespaces (`os-preview-<preview>-…`), another worker's to rule 4. */
+ *  Nothing redeploys or deletes them or the Worker Previews still hanging from them, and each holds
+ *  a Durable Object namespace per class of the account's 500, so the sweep deletes the previews
+ *  (preview-sweep.ts rule 0), then each worker with everything under its name (rule 9). */
 export const FORMER_PARENTS = [
   FORMER_PARENT,
   "dash-preview",
@@ -200,6 +199,18 @@ export function accountResourceNames(template = readWranglerBase()) {
     ...template.d1_databases.map((database: { database_name: string }) => database.database_name),
     ...template.artifacts.map((artifacts: { namespace: string }) => artifacts.namespace),
   ]);
+}
+
+/** envs.ts's workers on the parent's account: the parents (`os`, each app's) and every other
+ *  deployment there (the CI reports viewer, the SPA example). The sweep never deletes one
+ *  (preview-sweep.ts rule 10). */
+export function accountWorkerNames() {
+  return new Set(
+    [osEnvs, ...APPS.map((app) => app.envs), spaEnvs, ciReportsEnvs]
+      .flatMap((envs) => Object.values(envs))
+      .filter((env) => env.cloudflareAccountId === PREVIEW_PARENT.cloudflareAccountId)
+      .map((env) => env.workerName),
+  );
 }
 
 /** The preview a per-preview resource name encodes — `previewResourceName`'s inverse — or undefined

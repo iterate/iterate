@@ -1,6 +1,9 @@
 import { expect, test } from "vitest";
+import { PRD_ACCOUNT_ID, PREVIEW_AND_DEV_ACCOUNT_ID } from "../../../envs.ts";
 import {
   accountResourceNames,
+  accountWorkerNames,
+  PREVIEW_PARENT,
   previewResourceSuffixes,
   type PreviewResourceKind,
 } from "./preview-config.ts";
@@ -8,6 +11,8 @@ import {
   planPreviewSweep,
   type PreviewSweepInput,
   type PullRequestState,
+  type SweptResource,
+  type SweptWorker,
 } from "./preview-sweep.ts";
 
 const NOW = Date.parse("2026-09-23T12:00:00Z");
@@ -144,7 +149,7 @@ test.each<{
 )("$rule: $resource ⇒ $orphanOf", ({ kind, resource, createdHoursAgo, pullRequest, orphanOf }) => {
   const plan = planPreviewSweep(
     input({
-      workerNames: ["os", "os-preview"],
+      workers: [{ name: "os", createdAt: hoursAgo(1000) }, { name: "os-preview" }],
       previews: [
         { name: "soak", lastDeployedAt: hoursAgo(1) },
         { name: "pr2847", lastDeployedAt: hoursAgo(1) },
@@ -186,7 +191,7 @@ test.each<{
   ({ kind, resource, createdHoursAgo, orphanOf }) => {
     const plan = planPreviewSweep(
       input({
-        parentCreatedAt: undefined,
+        workers: [{ name: "os" }],
         resources: [
           {
             kind,
@@ -260,14 +265,258 @@ test("5: a stale preview's resources are not orphans — deletePreview takes the
   });
 });
 
-const hoursAgo = (hours: number) => new Date(NOW - hours * 3_600_000).toISOString();
+test("4: once the former parent's worker is gone, nothing under its prefix reads as a preview of os's", () => {
+  const plan = planPreviewSweep(
+    input({
+      resources: [
+        { kind: "artifacts", name: "os-preview-1-repos", id: "a", createdAt: hoursAgo(1) },
+        { kind: "r2", name: "os-preview-soak-files", id: "b", createdAt: hoursAgo(1) },
+        { kind: "kv", name: "os-preview-soak-itx-kv", id: "c" },
+      ],
+    }),
+  );
+  expect(plan).toMatchObject({ orphans: [] });
+});
+
+// Rule 8: per-commit deployments, each `[name, its members created hours ago, its workers]`. Every
+// deployment below has the D1 and R2 bucket apps/os's deploy creates, and the workers named.
+test.for<{
+  rule: string;
+  deployments: [name: string, createdHoursAgo: number | undefined, workers?: string[]][];
+  pullRequest?: PullRequestState;
+  openBranches?: string[];
+  verdicts: Record<string, "stale" | "keep">;
+}>(
+  // prettier-ignore
+  [
+    { rule: "an open PR's only deployment", deployments: [["pr7-aaaaaaa", 30]], pullRequest: "open", verdicts: { "pr7-aaaaaaa": "keep" } },
+    { rule: "8a: an open PR's newest, 8 days old", deployments: [["pr7-aaaaaaa", 192]], pullRequest: "open", verdicts: { "pr7-aaaaaaa": "stale" } },
+    { rule: "8b: its PR closed, an hour old", deployments: [["pr7-aaaaaaa", 1]], pullRequest: "closed", verdicts: { "pr7-aaaaaaa": "stale" } },
+    { rule: "8b: its PR does not exist", deployments: [["pr7-aaaaaaa", 1]], pullRequest: "missing", verdicts: { "pr7-aaaaaaa": "stale" } },
+    { rule: "8c: an open PR's earlier commit, 2 h old", deployments: [["pr7-aaaaaaa", 3], ["pr7-bbbbbbb", 2]], pullRequest: "open", verdicts: { "pr7-aaaaaaa": "stale", "pr7-bbbbbbb": "keep" } },
+    { rule: "8c: an earlier commit, PR lookup failed", deployments: [["pr7-aaaaaaa", 3], ["pr7-bbbbbbb", 2]], pullRequest: "unknown", verdicts: { "pr7-aaaaaaa": "stale", "pr7-bbbbbbb": "keep" } },
+    { rule: "8c: an earlier commit under an hour old", deployments: [["pr7-aaaaaaa", 0.5], ["pr7-bbbbbbb", 0.2]], pullRequest: "open", verdicts: { "pr7-aaaaaaa": "keep", "pr7-bbbbbbb": "keep" } },
+    { rule: "8c: a later push in flight, apps/os not uploaded yet", deployments: [["pr7-aaaaaaa", 3], ["pr7-bbbbbbb", 0.2, ["dash"]]], pullRequest: "open", verdicts: { "pr7-aaaaaaa": "keep", "pr7-bbbbbbb": "keep" } },
+    { rule: "8c: a later push that failed before apps/os", deployments: [["pr7-aaaaaaa", 3], ["pr7-bbbbbbb", 2, []]], pullRequest: "open", verdicts: { "pr7-aaaaaaa": "keep", "pr7-bbbbbbb": "stale" } },
+    { rule: "8c: a leftover with no stamped member", deployments: [["pr7-aaaaaaa", undefined]], pullRequest: "open", verdicts: { "pr7-aaaaaaa": "stale" } },
+    { rule: "Main OS e2e's newest, a quiet day", deployments: [["main-aaaaaaa", 50], ["main-bbbbbbb", 30]], verdicts: { "main-aaaaaaa": "stale", "main-bbbbbbb": "keep" } },
+    { rule: "8d: a hand-named prefix idle a day", deployments: [["exp-x-aaaaaaa", 25]], verdicts: { "exp-x-aaaaaaa": "stale" } },
+    { rule: "8d: a hand-named prefix an open PR's branch slugifies to", deployments: [["exp-x-aaaaaaa", 25]], openBranches: ["exp/x"], verdicts: { "exp-x-aaaaaaa": "keep" } },
+    { rule: "8d: a hand-named prefix, 23 h old", deployments: [["exp-x-aaaaaaa", 23]], verdicts: { "exp-x-aaaaaaa": "keep" } },
+  ],
+)("8: $rule", ({ deployments, pullRequest, openBranches, verdicts }) => {
+  const plan = planPreviewSweep(
+    input({
+      workers: [
+        { name: "os", createdAt: hoursAgo(1000) },
+        ...deployments.flatMap(([name, createdHoursAgo, workers = ["os", "dash"]]) =>
+          workers.map((worker): SweptWorker => ({
+            name: `${name}-${worker}`,
+            createdAt: stamp(createdHoursAgo),
+          })),
+        ),
+      ],
+      resources: deployments.flatMap(([name, createdHoursAgo]): SweptResource[] => [
+        { kind: "d1", name: `${name}-os-db`, id: `${name}-db`, createdAt: stamp(createdHoursAgo) },
+        { kind: "kv", name: `${name}-os-itx-kv`, id: `${name}-kv` },
+        {
+          kind: "r2",
+          name: `${name}-os-files`,
+          id: `${name}-os-files`,
+          createdAt: stamp(createdHoursAgo),
+        },
+      ]),
+      pullRequestStates: new Map<number, PullRequestState>(pullRequest ? [[7, pullRequest]] : []),
+      openPullRequestBranches: openBranches || [],
+    }),
+  );
+  expect(Object.fromEntries(plan.deployments.map(({ name, verdict }) => [name, verdict]))).toEqual(
+    verdicts,
+  );
+  // a deployment's resources are its own, never rule 4's orphans
+  expect(plan).toMatchObject({ orphans: [] });
+});
+
+test("8: a deployment is every worker and resource of its name, and nothing else is one", () => {
+  const plan = planPreviewSweep(
+    input({
+      workers: [
+        { name: "os", createdAt: hoursAgo(1000) },
+        ...["os", "dash", "agents", "notes", "admin", "voice", "kit"].map((app) => ({
+          name: `pr7-aaaaaaa-${app}`,
+          createdAt: hoursAgo(2),
+        })),
+        ...["ci-reports", "iterate-spa-preview", "do-alarm-held-repro", "iterate"].map((name) => ({
+          name,
+        })),
+      ],
+      resources: [
+        { kind: "kv", name: "pr7-aaaaaaa-os-itx-kv", id: "k1" },
+        { kind: "kv", name: "pr7-aaaaaaa-os-oauth-kv", id: "k2" },
+        { kind: "r2", name: "pr7-aaaaaaa-os-files", id: "pr7-aaaaaaa-os-files" },
+        { kind: "d1", name: "pr7-aaaaaaa-os-db", id: "d" },
+        { kind: "artifacts", name: "pr7-aaaaaaa-os-repos", id: "pr7-aaaaaaa-os-repos" },
+        // a Worker Preview's, and names of other shapes
+        { kind: "r2", name: "os-pr7-files", id: "os-pr7-files" },
+        { kind: "r2", name: "pr7-aaaaaaa-dash-files", id: "pr7-aaaaaaa-dash-files" },
+        { kind: "r2", name: "pr7-aaaaaa-os-files", id: "pr7-aaaaaa-os-files" },
+      ],
+      pullRequestStates: new Map([[7, "closed"]]),
+    }),
+  );
+  expect(plan).toMatchObject({
+    deployments: [
+      {
+        name: "pr7-aaaaaaa",
+        prefix: "pr7",
+        verdict: "stale",
+        reason: "PR #7 is closed",
+        workers: ["os", "dash", "agents", "notes", "admin", "voice", "kit"].map((app) => ({
+          name: `pr7-aaaaaaa-${app}`,
+        })),
+        resources: ["os-itx-kv", "os-oauth-kv", "os-files", "os-db", "os-repos"].map((suffix) => ({
+          name: `pr7-aaaaaaa-${suffix}`,
+        })),
+      },
+    ],
+    // the Worker Preview's is rule 4's; the other two shapes are nobody's
+    orphans: [{ name: "os-pr7-files", previewName: "pr7" }],
+  });
+});
+
+// Rule 9: a former parent with no preview left goes, with everything under its name but a legacy
+// slot's.
+const OS_PREVIEW_RESOURCES: SweptResource[] = [
+  { kind: "kv", name: "os-preview-itx", id: "k1" },
+  { kind: "kv", name: "os-preview-oauth", id: "k2" },
+  { kind: "r2", name: "os-preview-files", id: "os-preview-files", createdAt: hoursAgo(100) },
+  { kind: "artifacts", name: "os-preview-repos", id: "os-preview-repos", createdAt: hoursAgo(100) },
+  { kind: "kv", name: "os-preview-soak-itx-kv", id: "k3" },
+  {
+    kind: "r2",
+    name: "os-preview-soak-files",
+    id: "os-preview-soak-files",
+    createdAt: hoursAgo(90),
+  },
+  {
+    kind: "artifacts",
+    name: "os-preview-pr3061-worker-bundler-repos",
+    id: "os-preview-pr3061-worker-bundler-repos",
+    createdAt: hoursAgo(90),
+  },
+];
+const NOT_OS_PREVIEWS: SweptResource[] = [
+  // the legacy platform's slots, and a name of no suffix of its kind
+  {
+    kind: "artifacts",
+    name: "os-preview-1-repos",
+    id: "os-preview-1-repos",
+    createdAt: hoursAgo(3000),
+  },
+  {
+    kind: "artifacts",
+    name: "os-preview-16-repos",
+    id: "os-preview-16-repos",
+    createdAt: hoursAgo(1500),
+  },
+  { kind: "kv", name: "os-preview-3-project-directory", id: "k4" },
+  { kind: "r2", name: "os-preview-soak-itx-kv", id: "os-preview-soak-itx-kv" },
+  // os's own and its previews'
+  { kind: "r2", name: "os-parent-files", id: "os-parent-files", createdAt: hoursAgo(90) },
+  { kind: "r2", name: "os-pr7-files", id: "os-pr7-files", createdAt: hoursAgo(1) },
+];
+
+test.for<{
+  rule: string;
+  workers: string[];
+  previewsLeft: string[];
+  expected: { name: string; worker: boolean; verdict: "stale" | "keep" }[];
+}>(
+  // prettier-ignore
+  [
+    { rule: "no preview left: the worker and everything under its name go", workers: ["os", "os-preview"], previewsLeft: [], expected: [{ name: "os-preview", worker: true, verdict: "stale" }] },
+    { rule: "a preview left: rule 0 first", workers: ["os", "os-preview"], previewsLeft: ["soak"], expected: [{ name: "os-preview", worker: true, verdict: "keep" }] },
+    { rule: "the worker gone, its resources left: tried again", workers: ["os"], previewsLeft: [], expected: [{ name: "os-preview", worker: false, verdict: "stale" }] },
+    { rule: "an app's former parent, which has no resources", workers: ["os", "os-preview", "dash-preview"], previewsLeft: [], expected: [{ name: "os-preview", worker: true, verdict: "stale" }, { name: "dash-preview", worker: true, verdict: "stale" }] },
+  ],
+)("9: a former parent, $rule", ({ workers, previewsLeft, expected }) => {
+  const plan = planPreviewSweep(
+    input({
+      workers: workers.map((name) => ({ name, createdAt: hoursAgo(name === "os" ? 80 : 120) })),
+      formerParentPreviews: previewsLeft.map((name) => ({
+        parent: "os-preview",
+        name,
+        lastDeployedAt: hoursAgo(1),
+      })),
+      previews: [{ name: "pr7", lastDeployedAt: hoursAgo(1) }],
+      pullRequestStates: new Map([[7, "open"]]),
+      resources: [...OS_PREVIEW_RESOURCES, ...NOT_OS_PREVIEWS],
+    }),
+  );
+  expect(plan).toMatchObject({
+    formerParents: expected.map((parent) => ({
+      ...parent,
+      resources: parent.name === "os-preview" ? OS_PREVIEW_RESOURCES : [],
+    })),
+    orphans: [],
+  });
+});
+
+test("10: only a preview's worker is ever deleted; the ones envs.ts does not name are listed", () => {
+  const plan = planPreviewSweep(
+    input({
+      workers: [
+        ...accountWorkerNames(),
+        "os-preview",
+        "pr7-aaaaaaa-os",
+        "iterate",
+        "do-alarm-held-repro",
+        "captun",
+      ].map((name) => ({ name, createdAt: hoursAgo(200) })),
+      pullRequestStates: new Map([[7, "closed"]]),
+    }),
+  );
+  expect(plan).toMatchObject({ unmappedWorkers: ["iterate", "do-alarm-held-repro", "captun"] });
+  const deleted = [
+    ...plan.deployments
+      .filter(({ verdict }) => verdict === "stale")
+      .flatMap(({ workers }) => workers),
+    ...plan.formerParents.filter(({ verdict }) => verdict === "stale"),
+  ].map(({ name }) => name);
+  expect(deleted).toEqual(["pr7-aaaaaaa-os", "os-preview"]);
+});
+
+test("the sweep deletes on the dev/preview account, and envs.ts's workers there are the parents and CI's", () => {
+  expect(PREVIEW_PARENT).toMatchObject({ cloudflareAccountId: PREVIEW_AND_DEV_ACCOUNT_ID });
+  expect(PREVIEW_AND_DEV_ACCOUNT_ID).not.toBe(PRD_ACCOUNT_ID);
+  expect([...accountWorkerNames()].toSorted()).toEqual([
+    "admin",
+    "agents",
+    "ci-reports",
+    "dash",
+    "iterate-spa-preview",
+    "kit",
+    "notes",
+    "os",
+    "voice",
+  ]);
+});
+
+// declarations, hoisted: the rule 9 table's rows are stamped when the module loads
+function hoursAgo(hours: number) {
+  return new Date(NOW - hours * 3_600_000).toISOString();
+}
+
+function stamp(hours: number | undefined) {
+  return hours === undefined ? undefined : hoursAgo(hours);
+}
 
 const input = (overrides: Partial<PreviewSweepInput>): PreviewSweepInput => ({
   now: NOW,
-  workerNames: ["os", "dash"],
+  // the parent older than every resource the tables below stamp, but the legacy slots' (rule 7)
+  workers: [{ name: "os", createdAt: hoursAgo(1000) }, { name: "dash" }],
+  deployedWorkerNames: accountWorkerNames(),
   accountResourceNames: accountResourceNames(),
-  // older than every resource the tables below stamp, but the legacy slots' (rule 7)
-  parentCreatedAt: hoursAgo(1000),
   resourceSuffixes: { kv: ["itx-kv", "oauth-kv"], r2: ["files"], d1: ["db"], artifacts: ["repos"] },
   previews: [],
   formerParentPreviews: [],
