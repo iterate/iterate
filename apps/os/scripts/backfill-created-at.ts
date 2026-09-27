@@ -23,7 +23,6 @@ import { connectIterate } from "iterate/node";
 import { OS_DOPPLER_PROJECT, osEnvs } from "../../../envs.ts";
 import { resolveEnvContext } from "../../../scripts/lib/env-context.ts";
 import { parseAppConfig } from "../src/app-config.ts";
-import { ADMIN_ORG_ID } from "../src/control-plane/catalog.ts";
 import {
   dateMembership,
   dateOrganization,
@@ -93,13 +92,15 @@ export default async function backfillCreatedAt(options: {
     baseUrl,
     auth: { type: "admin-secret", secret: adminSecret },
   });
-  // The deployment's own organization gets no facts: reading its log would only wake its context.
+  // The deployment's own organization (catalog.ts `ADMIN_ORG_ID`, which scripts cannot import: the
+  // module is typed against the Workers runtime) gets no facts, so reading its log would only wake
+  // its context.
   const orgIds = new Set([
     ...rows.organizations.map((row) => row.id),
     ...rows.memberships.map((row) => row.orgId),
     ...rows.projects.map((row) => row.orgId),
   ]);
-  orgIds.delete(ADMIN_ORG_ID);
+  orgIds.delete("org_admin");
   const logs = new Map<string, ReturnType<typeof activityDates>>();
   for (const orgId of [...orgIds].sort()) {
     using organization = await connection.session.organizations.get(orgId);
