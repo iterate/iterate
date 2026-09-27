@@ -1,10 +1,7 @@
 # THE NIGHTLY PREVIEW SWEEP (`pnpm preview sweep`, apps/os/scripts/preview.ts), dev/preview account
 # only; what it deletes is apps/os/scripts/preview-sweep.ts's rules.
 #
-# A scheduled run reports on main's head commit, where red reads as "this commit broke", so the run
-# goes red only when the sweep could not act. An Artifacts namespace Cloudflare will not delete, or a
-# Durable Object namespace that outlived its worker, is a page to #error-pulse instead, checked again
-# the next night.
+# When a run goes red, and what it pages to #error-pulse instead: the end of preview.ts's `sweep`.
 #
 # Beside it, the reset of the `os` parent's own data (`pnpm preview reset-parent`): what people and
 # agents left on https://os.iterate-dev-preview.workers.dev and the app parents signed in against

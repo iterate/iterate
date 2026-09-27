@@ -1191,8 +1191,7 @@ async function sweep(cf: Cf, options: { dryRun: boolean; jobUrl: string | undefi
   const workers = (await cf<{ id: string; created_on?: string }[]>("/workers/scripts")).map(
     (script) => ({ name: script.id, createdAt: script.created_on }),
   );
-  const listNamespaces = () => listAll<SweptNamespace>(cf, "/workers/durable_objects/namespaces");
-  const namespaces = await listNamespaces();
+  const namespaces = await listAll<SweptNamespace>(cf, "/workers/durable_objects/namespaces");
   const deployedWorkerNames = accountWorkerNames();
   const resourceSuffixes = previewResourceSuffixes();
   const accountResources = accountResourceNames();
@@ -1334,7 +1333,8 @@ async function sweep(cf: Cf, options: { dryRun: boolean; jobUrl: string | undefi
     staleFormerParents.length === 0;
   if (dryRun) return;
   const failures: string[] = [];
-  // Cloudflare's, not the sweep's: paged, and tried again the next night (StuckArtifactsNamespace).
+  // The Artifacts namespaces Cloudflare will not delete (StuckArtifactsNamespace): paged, and tried
+  // again the next night.
   const stuckNamespaces: StuckArtifactsNamespace[] = [];
   const noteStuck = (stuck: StuckArtifactsNamespace | undefined) => {
     if (stuck) stuckNamespaces.push(stuck);
@@ -1418,7 +1418,7 @@ async function sweep(cf: Cf, options: { dryRun: boolean; jobUrl: string | undefi
   // Once the deletes are done, each namespace they took should be gone from the listing. One still
   // listed after deletes that all succeeded is Cloudflare's: a warn now, and rule 11's page from the
   // next run, which finds it workerless (so a namespace Cloudflare drops a moment late pages no one).
-  const listedAfter = await listNamespaces();
+  const listedAfter = await listAll<SweptNamespace>(cf, "/workers/durable_objects/namespaces");
   const outlived = listedAfter.filter(({ id }) => freedNamespaceIds.has(id));
   if (failures.length === 0 && outlived.length > 0)
     console.warn({
