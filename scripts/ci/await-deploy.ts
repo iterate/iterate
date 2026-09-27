@@ -9,14 +9,30 @@
 // once on a deploy that finished in an earlier attempt, and one re-run beside a re-run deploy waits
 // for that deploy's new attempt. It waits on no other job. It gives up after AWAIT_DEPLOY.boundMs,
 // the deploy's own `timeout-minutes`, in case Depot never reports the deploy ending, and logs one
-// line per change of the deploy's state. Depot's answers that fail on the platform's side are asked
-// again on CI_HTTP's schedule with a warn each (scripts/ci/depot.ts `depotCiApi`).
+// line per change of the deploy's state.
+//
+// Depot failing on its own side does not fail the suite. A call Depot answers with a 5xx or a 429,
+// or whose connection fails, is asked again on CI_HTTP's schedule with a warn each
+// (scripts/ci/depot.ts `depotCiApi`); a call that still fails after that is one more warn here, and
+// the wait asks again a second later. Only an outage, every call failing for AWAIT_DEPLOY.outageMs,
+// fails the suite. An answer about the request (a 401 or 403, a missing token, an answer the wait
+// cannot read) fails it at once.
 import { z } from "zod";
+import {
+  httpFailureFields,
+  httpFailureKind,
+  isPlatformFailureKind,
+} from "@iterate-com/shared/platform-retry";
 import { depotCiApi, type DepotApi } from "./depot.ts";
 
-/** How often the wait asks Depot, and how long it waits at most: the deploy jobs' own
- *  `timeout-minutes` (preview-os-workflow.test.ts keeps the suite jobs' timeouts above it). */
-export const AWAIT_DEPLOY = { pollMs: 1_000, boundMs: 40 * 60_000 };
+/** How often the wait asks Depot; how long it waits at most, the deploy jobs' own `timeout-minutes`;
+ *  and how long Depot may fail every call before the wait gives up on it. */
+export const AWAIT_DEPLOY = { pollMs: 1_000, boundMs: 40 * 60_000, outageMs: 5 * 60_000 };
+
+/** How long a suite runs at most once the wait is over: the suite jobs' whole timeout before they
+ *  waited for the deploy themselves (apps/os/scripts/preview.ts `runSuite`). The suite jobs'
+ *  `timeout-minutes` is the wait's bound and then this (preview-os-workflow.test.ts). */
+export const SUITE_BOUND_MS = 30 * 60_000;
 
 /** A job's statuses that end the wait with no preview (Depot's terminal statuses but `finished`:
  *  https://github.com/depot/cli/blob/main/pkg/cmd/ci/logs.go). */
@@ -37,18 +53,44 @@ const WorkflowJobs = z.object({
 });
 
 /** Wait until the job `job` (its id in the workflow file, `deploy`) of the workflow run
- *  `workflowId` has finished; throw once it failed, was cancelled or skipped, or after the bound. */
+ *  `workflowId` has finished; throw once it failed, was cancelled or skipped, after the bound, after
+ *  an outage of Depot's, or on an answer about the request. */
 export async function awaitDeploy(input: {
   depot: DepotApi;
   workflowId: string;
   job: string;
   log?: (line: string) => void;
+  warn?: (line: string) => void;
 }) {
-  const { depot, workflowId, job, log = console.log } = input;
+  const { depot, workflowId, job, log = console.log, warn = console.warn } = input;
   const started = Date.now();
+  const seconds = (ms: number) => `${(ms / 1000).toFixed(1)} s`;
   let reported = "";
+  /** When the first of the calls Depot has failed since its last answer was made. */
+  let failingSince: number | undefined;
   for (;;) {
-    const { jobs } = WorkflowJobs.parse(await depot("GetWorkflow", { workflowId }));
+    const askedAt = Date.now();
+    let answer: unknown;
+    try {
+      answer = await depot("GetWorkflow", { workflowId });
+    } catch (error) {
+      if (!isPlatformFailureKind(httpFailureKind(error))) throw error;
+      failingSince ??= askedAt;
+      const { message } = httpFailureFields(error);
+      const failingMs = Date.now() - failingSince;
+      if (failingMs >= AWAIT_DEPLOY.outageMs || Date.now() - started >= AWAIT_DEPLOY.boundMs)
+        throw new Error(
+          `Depot has failed every GetWorkflow for the last ${seconds(failingMs)} (${message}), so the wait for ${job} gives up.`,
+          { cause: error },
+        );
+      warn(
+        `[await-deploy] ${seconds(Date.now() - started)}: ${message}; asking again in ${seconds(AWAIT_DEPLOY.pollMs)}, until ${AWAIT_DEPLOY.outageMs / 60_000} minutes of failures`,
+      );
+      await new Promise((resolve) => setTimeout(resolve, AWAIT_DEPLOY.pollMs));
+      continue;
+    }
+    failingSince = undefined;
+    const { jobs } = WorkflowJobs.parse(answer);
     // `<file>:<job id>`, a matrix leg's with `:matrix-<n>` after it
     const deploy = jobs.find((candidate) => candidate.jobKey.split(":")[1] === job);
     if (!deploy) throw new Error(`Depot lists no job ${job} in workflow ${workflowId} to wait for`);
@@ -56,7 +98,7 @@ export async function awaitDeploy(input: {
     const attempt = Math.max(0, ...deploy.attempts.map((candidate) => candidate.attempt));
     const state = `${name}${attempt ? ` (attempt ${attempt})` : ""} ${deploy.status}`;
     const waitedMs = Date.now() - started;
-    if (state !== reported) log(`[await-deploy] ${(waitedMs / 1000).toFixed(1)} s: ${state}`);
+    if (state !== reported) log(`[await-deploy] ${seconds(waitedMs)}: ${state}`);
     reported = state;
     if (deploy.status === "finished") return;
     if (NO_PREVIEW.includes(deploy.status))
