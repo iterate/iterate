@@ -74,6 +74,14 @@ test("itx.agents.create(path) births the agent — the processor row, the reques
   await expect(agent.message("hi")).rejects.toThrow(
     /not created — itx\.agents\.create\("\/agents\/support"\) first/,
   );
+  // anyone may append anywhere: a birth certificate appended on `/` ahead of the agent, under the
+  // key the agent's own certificate carries on its path, counts for nothing and takes nothing away
+  await itx.append({
+    type: "events.iterate.com/agent/created",
+    payload: { path: "/agents/support" },
+    idempotencyKey: "agent/created:/agents/support",
+  });
+  expect(await itx.agents.list()).toEqual([]);
   expect(await itx.agents.create("/agents/support")).toEqual({ path: "/agents/support" });
   // The operator's instructions ADD to the default prompt — their own keyed item after the
   // birth, a plain append on the agent's context; a system item raises no turn.
@@ -106,14 +114,15 @@ test("itx.agents.create(path) births the agent — the processor row, the reques
       .filter((e) => e.type === "events.iterate.com/itx/subscription-configured")
       .map((e) => e.payload.name),
   ).toEqual(["agent"]);
-  // only the certificate crosses to /, stamped with the agent it names
+  // only the certificate crosses to /, stamped with the agent it names (after the one from `/`)
   const rootLog = await readAll(itx);
-  expect(short(rootLog)).toEqual(["agent/created"]);
-  expect(rootLog.find((e) => e.type === "events.iterate.com/agent/created")).toMatchObject({
-    source: { origin: "/agents/support" },
-  });
-  // anyone may append anywhere, and the catalog counts a certificate only from the agent it names:
-  // a death appended from anywhere else lands, and changes nothing
+  expect(short(rootLog)).toEqual(["agent/created", "agent/created"]);
+  expect(
+    rootLog
+      .filter((e) => e.type === "events.iterate.com/agent/created")
+      .map((e) => e.source.origin),
+  ).toEqual(["/", "/agents/support"]);
+  // …and a death appended from anywhere but the agent lands, and changes nothing
   await itx.append({
     type: "events.iterate.com/agent/deleted",
     payload: { path: "/agents/support" },

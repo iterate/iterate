@@ -46,7 +46,7 @@ class AgentCatalogProcessor extends StreamProcessor<
     const path = event.payload.path;
     if (event.source?.origin && event.source.origin !== path) return;
     if (event.type === "events.iterate.com/agent/created") {
-      if (state.agents[path]) return;
+      if (state.agents[path] || state.deleted[path]) return; // born once; dead is terminal
       return { ...state, agents: { ...state.agents, [path]: { createdAt: event.createdAt } } };
     }
     if (state.deleted[path]) return;
