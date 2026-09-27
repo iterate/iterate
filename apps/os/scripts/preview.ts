@@ -1133,7 +1133,7 @@ type ListedPreview = { name: string; created_on?: string; deployed_on?: string }
 const listWorkerPreviews = (cf: Cf, workerName: string) =>
   listAll<ListedPreview>(cf, `/workers/workers/${workerName}/previews`).catch((error) => {
     if (!isMissingWorkerError(describe(error))) throw error;
-    return [] as ListedPreview[];
+    return [];
   });
 
 const RESOURCE_KIND_LABELS: Record<SweptResource["kind"], string> = {

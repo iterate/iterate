@@ -163,12 +163,16 @@ export function planPreviewSweep(input: PreviewSweepInput): PreviewSweepPlan {
     return keep(`no PR, ${deployed}`);
   });
 
-  const formerParentPreviews = input.formerParentPreviews.map((preview) => {
-    const hours = hoursSince(preview.lastDeployedAt);
-    // rule 0: NaN, an unknown last deploy, compares false and keeps it
-    const verdict = hours > 24 ? ("stale" as const) : ("keep" as const);
-    return { ...preview, verdict, reason: `former parent ${preview.parent}, ${lastDeploy(hours)}` };
-  });
+  const formerParentPreviews: PreviewSweepPlan["formerParentPreviews"] =
+    input.formerParentPreviews.map((preview) => {
+      const hours = hoursSince(preview.lastDeployedAt);
+      return {
+        ...preview,
+        // rule 0: NaN, an unknown last deploy, compares false and keeps it
+        verdict: hours > 24 ? "stale" : "keep",
+        reason: `former parent ${preview.parent}, ${lastDeploy(hours)}`,
+      };
+    });
 
   // Rule 5: every name a listed preview owns, by any suffix of any kind.
   const allSuffixes = Object.values(input.resourceSuffixes).flat();

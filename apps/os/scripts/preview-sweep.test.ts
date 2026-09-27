@@ -203,7 +203,8 @@ test.each<{
 
 // Rule 0: a former parent's previews go once idle a day, whatever their name or PR, and whether or
 // not a preview of `os` has the same name.
-test.each<{
+test.for<{
+  name: string;
   parent: string;
   preview: string;
   deployedHoursAgo?: number;
@@ -211,15 +212,15 @@ test.each<{
 }>(
   // prettier-ignore
   [
-    { parent: "os-preview", preview: "pr3061-worker-bundler", deployedHoursAgo: 25, verdict: "stale" },
-    { parent: "os-preview", preview: "latency", deployedHoursAgo: 25, verdict: "stale" },
-    { parent: "os-preview", preview: "pr7", deployedHoursAgo: 25, verdict: "stale" },
-    { parent: "dash-preview", preview: "pr3061-worker-bundler", deployedHoursAgo: 60, verdict: "stale" },
-    { parent: "os-preview", preview: "soak", deployedHoursAgo: 23, verdict: "keep" },
-    { parent: "kit-preview", preview: "soak", verdict: "keep" },
+    { name: "a legacy PR-and-branch name, a day idle", parent: "os-preview", preview: "pr3061-worker-bundler", deployedHoursAgo: 25, verdict: "stale" },
+    { name: "a CI workflow's name, a day idle", parent: "os-preview", preview: "latency", deployedHoursAgo: 25, verdict: "stale" },
+    { name: "the name of a preview of os whose PR is open, a day idle", parent: "os-preview", preview: "pr7", deployedHoursAgo: 25, verdict: "stale" },
+    { name: "an app's former parent", parent: "dash-preview", preview: "pr3061-worker-bundler", deployedHoursAgo: 60, verdict: "stale" },
+    { name: "deployed 23 h ago", parent: "os-preview", preview: "soak", deployedHoursAgo: 23, verdict: "keep" },
+    { name: "last deploy unknown", parent: "kit-preview", preview: "soak", verdict: "keep" },
   ],
 )(
-  "0: $parent's preview $preview deployed $deployedHoursAgo h ago ⇒ $verdict",
+  "0: a former parent's preview, $name ⇒ $verdict",
   ({ parent, preview, deployedHoursAgo, verdict }) => {
     const plan = planPreviewSweep(
       input({
