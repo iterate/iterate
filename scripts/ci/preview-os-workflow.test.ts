@@ -373,12 +373,8 @@ test("a test job names its preview by the PR's number, or by preview-name withou
   expect(preview.on.workflow_dispatch?.inputs).toHaveProperty("preview-name");
 });
 
-// Without a preview there is nothing to keep: the finalizer keeps the folder once the suite read the
-// deployed target it writes when its preview is there (apps/os/scripts/preview.ts
-// `writeDeployedTarget`, scripts/ci/test-evidence.ts `finalize --only-with-target`), not after the
-// guard, the path check or the wait. Every evidence step after it follows its outputs, which say what
-// the folder holds, never a `hashFiles()` of its own: each costs the runner about 0.2 s, one at a
-// time even inside a parallel block.
+// The evidence is kept once the suite read its deployed target, and the steps after the finalizer
+// follow its outputs (scripts/ci/test-evidence.ts `finalize`).
 test("a test job keeps its evidence whenever its suite read its deployed target, and only then", () => {
   for (const suite of suites) {
     const steps = preview.jobs[suite.job]!.steps || [];

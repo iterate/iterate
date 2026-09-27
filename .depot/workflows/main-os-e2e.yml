@@ -166,10 +166,7 @@ jobs:
               path: ~/.cache/ms-playwright
               key: ms-playwright-${{ hashFiles('pnpm-lock.yaml') }}
               restore-keys: ${{ github.ref != 'refs/heads/main' && 'ms-playwright-' || '' }}
-      # _SHARED/PREVIEW'S SECRETS FOR THE EVIDENCE UPLOAD, fetched before the suite, while the deploy
-      # it waits for runs, into Doppler's encrypted fallback file: the upload after the suite reads
-      # them without a request (docs/test-evidence.md#what-ci-does). A failed fetch is a warning; the
-      # upload then fetches them itself.
+      # The evidence upload's secrets, fetched while the deploy runs (docs/test-evidence.md#what-ci-does).
       - name: Fetch the evidence upload's secrets
         continue-on-error: true
         timeout-minutes: 1
@@ -189,10 +186,8 @@ jobs:
           # the job whose end starts the suite (scripts/ci/await-deploy.ts)
           PREVIEW_AWAIT_DEPLOY_JOB: deploy
         run: doppler run --project os --config preview -- pnpm preview "$SUITE"
-      # The telemetry finalizer, then the test evidence manifest, as a PR preview's test jobs run them
-      # (scripts/ci/test-evidence.ts `finalize`). Once the suite read its deployed target only
-      # (--only-with-target, test-results/target.json): a job whose deploy did not finish has nothing
-      # to keep.
+      # The telemetry finalizer, then the test evidence manifest, once the suite read its deployed
+      # target, as in a PR preview's test jobs (scripts/ci/test-evidence.ts `finalize --only-with-target`).
       - name: Check test telemetry, write the suite summary and the test evidence manifest
         id: evidence-write
         if: ${{ always() && steps.suite.outcome != 'skipped' }}

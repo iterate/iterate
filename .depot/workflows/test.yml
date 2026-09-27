@@ -77,10 +77,7 @@ jobs:
             run: |
               mkdir -p test-results/ctest
               nice -n 19 pnpm --dir apps/kit firmware:test:host --output-junit "$PWD/test-results/ctest/junit.xml"
-          # _SHARED/PREVIEW'S SECRETS FOR THE EVIDENCE UPLOAD, fetched beside the tests into Doppler's
-          # encrypted fallback file, so the upload after them reads them without a request
-          # (docs/test-evidence.md#what-ci-does). A failed fetch is a warning; the upload then
-          # fetches them itself.
+          # The evidence upload's secrets, fetched beside the tests (docs/test-evidence.md#what-ci-does).
           - name: Fetch the evidence upload's secrets
             continue-on-error: true
             timeout-minutes: 1
@@ -89,12 +86,8 @@ jobs:
             run: |
               doppler run --project _shared --config preview --fallback "$RUNNER_TEMP/doppler-shared-preview" -- true ||
                 echo "::warning title=Doppler prefetch::_shared/preview not saved; the evidence upload fetches it"
-      # THE STEP AFTER THE TESTS, one Node process (scripts/ci/test-evidence.ts `finalize`, which says
-      # what fails it): the telemetry finalizer, which fails the job when a test workspace left no
-      # complete artifact and writes the unit suite summary next to its flake lines, then the test
-      # evidence manifest, test-results/manifest.json (docs/test-evidence.md). A superseded run still
-      # keeps its raw evidence, but the job's own cancelled outcome is the record; killed runner
-      # sentinels are not test failures.
+      # THE STEP AFTER THE TESTS, cancelled runs too: the telemetry finalizer, then the test evidence
+      # manifest (scripts/ci/test-evidence.ts `finalize` says what fails it).
       - name: Check test telemetry, write the suite summary and the test evidence manifest
         id: evidence-write
         if: always()

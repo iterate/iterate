@@ -416,7 +416,7 @@ type Send = (
 /**
  * `put` for every file, the largest first, up to UPLOAD_CONCURRENCY at once and holding at most
  * UPLOAD_BYTES_IN_FLIGHT of their bytes (a file larger than that goes alone). The first failure
- * rejects at once and nothing more starts, as `Promise.all` over a round did.
+ * rejects at once and nothing more starts.
  */
 function inPool(
   files: TestEvidenceManifest["files"],
@@ -606,10 +606,9 @@ function stepSummary(environment: NodeJS.ProcessEnv, line: string) {
  * THE STEP AFTER A JOB'S TESTS, in one process (docs/test-evidence.md#what-ci-does): the telemetry
  * finalizer (upload-test-telemetry.ts: every expected runner left a complete artifact, the unit row
  * budget, the suite's suite-summary.json), then the test evidence manifest. The finalizer decides
- * the step, as it decided its own: missing, incomplete or foreign telemetry fails it, once the
- * manifest is written. The manifest decides nothing, as when it was a `continue-on-error` step of
- * its own: a failure to write it is a warning and a line of the job's summary (reportStepFailure),
- * and the step's result stays the finalizer's.
+ * the step: missing, incomplete or foreign telemetry fails it, once the manifest is written. The
+ * manifest decides nothing: a failure to write it is a warning and a line of the job's summary
+ * (reportStepFailure), and the step's result stays the finalizer's.
  *
  * The step's outputs say what the folder holds, each as soon as it is true: `evidence=kept` before
  * anything else, `manifest=written`, and `playwright-report=written` when it holds Playwright's HTML

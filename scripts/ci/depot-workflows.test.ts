@@ -1190,11 +1190,7 @@ test.each([
     const upload = steps[index("scripts/ci/test-evidence.ts upload")];
     const report = steps[index("scripts/ci/test-evidence-unreported.sh")];
 
-    // ONE STEP, ONE NODE PROCESS after the tests (test-evidence.ts `finalize`): the telemetry
-    // finalizer, which fails the job on incomplete telemetry, so the step is not continue-on-error,
-    // then the manifest, which decides nothing and reports its own failure. Always, a cancelled
-    // job's folder saying so; bounded, so a hang cannot reach the job's timeout. A preview test
-    // job's once its suite read its deployed target: one that never had a preview has no folder.
+    // one bounded step after the tests, wired to test-evidence.ts `finalize`'s contract
     expect(write).toMatchObject({
       id: "evidence-write",
       if: expect.toSatisfy(
@@ -1230,10 +1226,7 @@ test.each([
         `doppler run --project _shared --config preview --fallback "${dopplerFallback}" "\${offline[@]}" -- node scripts/ci/test-evidence.ts upload`,
       ),
     });
-    // ONE DOPPLER FETCH, off the job's critical path: a step before the finalizer saves
-    // _shared/preview's secrets into the fallback file the upload then reads offline (and fetches
-    // them itself without it), beside the Test job's tests, and before a suite job's suite, which
-    // waits for its deploy; a failed fetch is a warning, never the job's result
+    // the prefetch's placement and the upload's offline read (docs/test-evidence.md#what-ci-does)
     expect(upload?.run).toContain(
       `if [ -s "${dopplerFallback}" ]; then offline=(--fallback-only); fi`,
     );
@@ -1420,9 +1413,7 @@ test("Kit's host tests write CTest's JUnit XML into the test evidence folder", (
   expect(kit?.run).toContain(`mkdir -p ${dirname(testEvidencePaths.ctestJunit)}`);
 });
 
-// Kit's host tests need none of `pnpm test`'s outputs and build in their own directory, so they run
-// beside it instead of after it, at the lowest priority so the vitest rows keep the CPU; neither
-// cancels the other, and a failed setup hides no firmware result.
+// Kit's scheduling beside `pnpm test`, as .depot/workflows/test.yml explains it.
 test("the Test job runs Kit's host tests beside pnpm test, neither cancelling the other", () => {
   const steps = readWorkflow(".depot/workflows/test.yml").jobs.test?.steps ?? [];
   const block = steps.find((step) => step.parallel?.some((inner) => inner.id === "tests"));
