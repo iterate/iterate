@@ -148,8 +148,9 @@ export const AgentContract = defineProcessorContract({
           actor: Actor.optional(),
           llmRequestOffset: z.number().int().positive().optional(),
           files: z.array(FileAttachment).optional(),
-          /** The context that appended it, when another one did: the platform's stamp
-           *  (`source.origin`), which the model reads as `[from <context>]`. */
+          /** The context it came from, when another one sent it: the event's `source.origin`, or the
+           *  sender the collection relayed (`from` on the payload). The model reads it as
+           *  `[from <context>]`. */
           from: z.string().optional(),
         }),
       )
@@ -233,6 +234,10 @@ export const AgentContract = defineProcessorContract({
         actor: Actor.optional(),
         /** What rides with the words: files stored under this agent's path (`message()` stores them). */
         files: z.array(FileAttachment).optional(),
+        /** The context that sent the words through `itx.agents.get(path).message(…)`: the
+         *  collection's base, which the sender's own `itx.agents` row names (collection.ts). The
+         *  agent's own facet appends them, so their `source.origin` is the agent itself. */
+        from: z.string().optional(),
         /** The policies: `dont-trigger-request` (words that raise no turn), `after-current-request`
          *  (the default: the next turn), `interrupt-current-request` (cut the running answer short —
          *  the request settles cancelled with what streamed so far, and these words start the next). */

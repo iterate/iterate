@@ -90,7 +90,7 @@ export function buildChatMessages(
         });
       else hints.push(fileHintLine(file));
     }
-    const text = [content, ...hints].filter((line) => line !== "").join("\n");
+    const text = [content, ...hints].filter(Boolean).join("\n");
     if (parts.length === 0) return { role, content: text };
     return { role, content: [{ type: "text", text }, ...parts] };
   });
@@ -418,6 +418,7 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
 
       case "events.iterate.com/agent/context-added": {
         const { role, content, actor, llmRequestPolicy, llmRequestOffset } = event.payload;
+        const origin = event.source?.origin;
         const next: AgentState = {
           ...state,
           contextItems: [
@@ -429,9 +430,10 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
               actor,
               llmRequestOffset,
               files: event.payload.files,
-              // WHO SENT IT, when another context did: the platform's stamp, so a sender need
-              // not sign its words and cannot pass for another.
-              from: event.source?.origin !== event.path ? event.source?.origin : undefined,
+              // WHO SENT IT, when another context did: the platform's stamp, else the sender the
+              // collection relayed through this agent's own facet (`message`). The sender signs
+              // nothing, and the label is advisory (apps/os caller.ts `stampCaller` says why).
+              from: origin && origin !== event.path ? origin : event.payload.from,
             },
           ],
         };

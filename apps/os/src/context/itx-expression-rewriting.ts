@@ -86,7 +86,7 @@ export const BUILT_IN_ROOT_DESCRIPTIONS = {
     "durable future appends: `schedules.set({ key, when, events })` · `schedules.cancel(key)`",
   readEvents: "read this log: `(await itx.readEvents(afterOffset, limit)).events`",
   waitForEvent: "block until an event lands: `waitForEvent({ type, afterOffset, timeoutMs })`",
-  cd: "a context below this one: `itx.cd('./sandbox')`",
+  cd: "another context: `itx.cd('./sandbox')` goes below this one; `itx.cd(path).append({ type, payload })` writes to any context of the project",
   fetch: "the internet through the project's egress: `itx.fetch(new Request(url))`",
   rpcStubs: "live values clients lent here: `rpcStubs.list()` · `rpcStubs.get(key)`",
   rewriteRules: "this table, described: `await rewriteRules.list()`",
@@ -784,12 +784,12 @@ export class ItxExpressionResolver {
     this.#caller = args.caller;
   }
 
-  /** THE APP WALL (`admitLoadedCodeExpression`): loaded code hands in short names and nothing else — never the fixed
-   *  point, never a `cd` above its own context (self and descendants only, resolved step by step)
-   *  but for `cd(path).append(…)`, which reaches the whole project. On
-   *  the INPUT only: the rows a call rewrites through are the owner's grants and are never checked, so
-   *  a parent link `itx ⇒ itx.builtins.cd('/agents/x')` carries a script up exactly as far as its
-   *  owner said. Codec-style, kin to the reserved names `parse` refuses — nothing here is policy. */
+  /** THE APP WALL (`admitLoadedCodeExpression`): loaded code hands in short names and nothing else —
+   *  never the fixed point, never a `cd` above its own context (self and descendants only, resolved
+   *  step by step) but for `cd(path).append(…)`, which reaches the whole project. On the INPUT only:
+   *  the rows a call rewrites through are the owner's grants and are never checked, so a parent link
+   *  `itx ⇒ itx.builtins.cd('/agents/x')` carries a script up exactly as far as its owner said.
+   *  Codec-style, kin to the reserved names `parse` refuses — nothing here is policy. */
   #admit(expression: ItxExpression): void {
     const caller = this.#caller();
     // Only a trusted cd hop stamps path, after the whole input expression passed this check.

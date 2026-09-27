@@ -198,7 +198,7 @@ test("owner-written physical redirects survive a loaded-code hop, while fresh ca
 // The collection writes a new entity's parent link from the library's caller; a request appended
 // by hand names nothing the processor acts on.
 for (const kind of ["repo", "workspace"] as const)
-  test(`a ${kind}'s parent link is the context that created it: one born through itx.${kind}s.create links to its caller, one whose create-requested loaded code appended by hand links to nothing the request named — a script beneath a mask cannot reach past it`, async () => {
+  test(`a ${kind}'s parent link is the context that created it: one born through itx.${kind}s.create links to its caller, one whose create-requested loaded code appended by hand links to nothing the request named`, async () => {
     const root = openItx(freshCtx(`hand-${kind}`));
     await root.provide("itx.tool", () => "hello-from-root");
     await root.workspaces.create("/jail");
@@ -228,11 +228,12 @@ for (const kind of ["repo", "workspace"] as const)
   });
 
 // A SCRIPT BENEATH A MASK — `/jail`, a workspace linked to the root with the root's `itx.tool`
-// masked there, as an agent's sandbox is linked to its agent — gets no way round the mask: loaded
-// code removes no row, a batch it schedules meets the wall as it is scheduled, it sets no project
-// fetch route (the config worker serves those at the root), and it creates and deletes only
-// beneath itself, the lifecycle facts included.
-test("a script beneath a mask cannot lift it: loaded code removes no row (`ifTarget`)", async () => {
+// masked there, as an agent's sandbox is linked to its agent — meets each verb's own refusal:
+// loaded code removes no row, a batch it schedules meets the wall as it is scheduled, it sets no
+// project fetch route (the config worker serves those at the root), and it creates and deletes only
+// beneath itself. A mask is not a boundary: the script may append a `run-requested` to any context,
+// which runs there with that context's reach. A jail is the boundary ("anyone appends anywhere", above).
+test("loaded code removes no row (`ifTarget`): a script beneath a mask appends no removal of the mask", async () => {
   const { jail } = await beneathAMask("lift-mask");
   const { removal, tool } = await jail.builtins.run(`async (itx) => {
     const removal = await itx.append({ type: 'events.iterate.com/itx/rewrite-rule-configured', payload: { match: 'itx.tool', target: null, ifTarget: null } }).then(() => 'removed', (e) => String(e.message));
@@ -242,7 +243,7 @@ test("a script beneath a mask cannot lift it: loaded code removes no row (`ifTar
   expect(removal).toMatch(/removes no row/);
 });
 
-test("a script beneath a mask cannot schedule a row past it: a scheduled batch meets the wall when it is scheduled", async () => {
+test("`schedules.set` walls a scheduled batch when it is scheduled: a row it carries from beneath a mask is refused", async () => {
   const { jail } = await beneathAMask("scheduled-row");
   const { scheduled, tool } = await jail.builtins.run(`async (itx) => {
     const scheduled = await itx.schedules.set({ key: 'escape', when: { afterMs: 0 }, events: [{ type: 'events.iterate.com/itx/rewrite-rule-configured', payload: { match: 'itx.tool', target: "itx.builtins.cd('/').tool" } }] }).then((receipt) => receipt, (e) => String(e.message));
@@ -252,7 +253,7 @@ test("a script beneath a mask cannot schedule a row past it: a scheduled batch m
   expect(tool, "the tool should stay masked").toMatch(/is masked/);
 });
 
-test("a script beneath a mask cannot set a project fetch route, which the config worker would serve at the root", async () => {
+test("`fetchRoutes.set` refuses loaded code below the root: a script beneath a mask sets no route through it, which the config worker would serve at the root", async () => {
   const { root, jail } = await beneathAMask("route-from-below");
   const set = await jail.builtins.run(
     "async (itx) => itx.fetchRoutes.set('leak', { requestMatcher: { routingSlug: 'leak' }, target: 'itx.tool' }).then(() => 'set', (e) => String(e.message))",
@@ -274,7 +275,7 @@ test("a script beneath a mask still asks the project's fetch routes: `itx.fetchR
   ).toMatchObject({ fetchRouteName: "blog" });
 });
 
-test("a script beneath a mask cannot delete the config repo: `itx.repos.delete` reaches only beneath the caller", async (context) => {
+test("`itx.repos.delete` reaches only beneath the caller: a script beneath a mask deletes no config repo through it", async (context) => {
   const { root, jail } = await beneathAMask("repo-delete-from-below");
   const artifacts = await configRepo(root, context);
   const deleted = await jail.builtins.run(
@@ -287,7 +288,7 @@ test("a script beneath a mask cannot delete the config repo: `itx.repos.delete` 
   expect(artifacts).toMatchObject({ deleted: [] });
 });
 
-test("a script beneath a mask cannot plant a workspace outside itself: `itx.workspaces.create` reaches only beneath the caller", async () => {
+test("`itx.workspaces.create` reaches only beneath the caller: a script beneath a mask plants no workspace outside itself through it", async () => {
   const { root, jail } = await beneathAMask("plant-from-below");
   const planted = await jail.builtins.run(
     "async (itx) => itx.workspaces.create('/other/x').then(() => 'planted', (e) => String(e.message))",

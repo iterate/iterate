@@ -17,8 +17,9 @@ export type AgentMessageInput =
 /** `itx.agents.get(path)`: one agent. */
 export interface AgentHandleApi {
   /** A person's words: ONE `events.iterate.com/agent/context-added`, the trigger of the agent's
-   *  next turn, answered so a caller can wait for what follows it. A deleted agent, or one never
-   *  created, refuses. */
+   *  next turn, answered so a caller can wait for what follows it. Sent from another agent, the
+   *  model reads them as `[from <sender's context>]`. A deleted agent, or one never created,
+   *  refuses. */
   message(input: AgentMessageInput): Promise<StreamEvent>;
   /** Append to the agent's context. */
   append(...events: StreamEventInput[]): Promise<StreamEvent[]>;

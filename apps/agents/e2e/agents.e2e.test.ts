@@ -217,6 +217,39 @@ test("the loop: a person's words → the model → a script run against itx → 
   expect(await itx.agents.list()).toHaveLength(1);
 });
 
+/** WHO SENT IT: an agent's script says its words to another agent through `itx.agents` or a plain
+ *  append, and signs neither. The other agent's model reads both as from the sender's sandbox,
+ *  where its scripts run; a person's words through the root say nothing of a sender. */
+test("an agent's words to another say who sent them, by message() or by a plain append: the other's model reads `[from /agents/a/sandbox]`, a person's words no sender", async () => {
+  const itx = await openAgentItx(freshCtx("agent-to-agent"));
+  const b = JSON.stringify("/agents/b");
+  const aAi = new FakeAi([
+    `<codemode status="Telling b">\nawait itx.agents.get(${b}).message("by message");\nawait itx.cd(${b}).append({ type: "events.iterate.com/agent/context-added", payload: { role: "user", content: "by append" } });\n</codemode>`,
+    "Told b.",
+  ]);
+  const bAi = new FakeAi(["Heard."]);
+  await itx.cd("/agents/a").provide("itx.ai", aAi);
+  await itx.cd("/agents/b").provide("itx.ai", bAi);
+  for (const path of ["/agents/a", "/agents/b"]) {
+    await itx.agents.create(path);
+    await configureModel(itx.cd(path));
+  }
+  await itx.agents.get("/agents/a").message("Tell b.");
+  const userWords = (ai: FakeAi) =>
+    (ai.calls.at(-1)?.inputs.messages ?? [])
+      .filter((message) => message.role === "user")
+      .map((message) => message.content);
+  expect(
+    await untilValue(
+      "b's model reads both words",
+      async () => userWords(bAi),
+      (words) => words.length === 2,
+      { timeoutMs: 40_000 },
+    ),
+  ).toEqual(["[from /agents/a/sandbox] by message", "[from /agents/a/sandbox] by append"]);
+  expect(userWords(aAi)[0]).toBe("Tell b.");
+});
+
 test("debounced: two messages inside the window are answered by ONE request that saw both; a message after the answer is another turn", async () => {
   const itx = await openAgentItx(freshCtx("agent-debounce"));
   const support = itx.cd("/agents/support");

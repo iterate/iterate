@@ -26,7 +26,8 @@ export type Caller = {
   path?: string;
   /** Set when the caller is LOADED CODE — a worker, a facet, a script — holding a context through
    *  `env.ITX`. Under it the resolver refuses the fixed point (`itx.builtins…`) and any `cd` above
-   *  the caller's own context on the INPUT expression; rewrites the owner wrote are never subject. */
+   *  the caller's own context on the INPUT expression, but for a final `cd(path).append(…)`, which
+   *  reaches the whole project; rewrites the owner wrote are never subject. */
   app?: true;
   /** THE PLATFORM ORIGIN the caller reached the platform on — what a public URL is composed from
    *  (`itx.url`, a signed file URL). Absent for a caller with none (a loaded worker's `env.ITX`, the
@@ -58,9 +59,10 @@ export const ITX_CALLER_PATH_HEADER = "x-itx-caller-path";
 /** THE PROVENANCE STAMP: the event as the log stores it, its `source` the platform's. `origin` is
  *  the context the call started at (`Caller.path`, set at the first hop, else `here`, where the call
  *  runs); `principal`, `grant` and `platform` are the admitted caller's. A writer's own `source` is
- *  dropped, so nothing forges where an event came from — all but `processor`, the SDK engine's label
- *  for which processor wrote it: the writer's word, filed under the stamped `origin`, so only code
- *  at that context can say it. */
+ *  dropped, all but `processor`, the SDK engine's label for which processor wrote it: the writer's
+ *  word, filed under the stamped `origin`. `origin` names the context whose code ran, not who asked
+ *  it to run: a `run-requested` anyone appends runs at the context it lands on, and what that script
+ *  appends is stamped there. So `origin` is advisory, and a jail is the one boundary in a project. */
 export function stampCaller<E extends { source?: StreamEventInput["source"] }>(
   event: E,
   caller: Caller,

@@ -65,7 +65,7 @@ export class AgentCollectionRpcTarget extends RpcTarget implements AgentsApi {
   get(path: string) {
     path = resolveContextPath(this.base, path);
     if (path === "/") throw new Error("An agent needs its own context path");
-    return new AgentReference(this.withItx, path, this.spec, this.catalog);
+    return new AgentReference(this.withItx, path, this.spec, this.catalog, this.base);
   }
 
   /** Every agent born under the project, by path — the certificates cross-posted to `/`, folded. */
@@ -236,33 +236,40 @@ export class AgentCollectionRpcTarget extends RpcTarget implements AgentsApi {
   }
 }
 
-/** `itx.agents.get(path)` (api.ts `AgentHandleApi`): the agent at one path. */
+/** `itx.agents.get(path)` (api.ts `AgentHandleApi`): the agent at one path, reached from the
+ *  collection's base. */
 class AgentReference extends RpcTarget implements AgentHandleApi {
   private readonly withItx: WithItx<ItxEntrypointScope>;
   private readonly path: string;
   private readonly spec: () => Promise<FacetSpec>;
   private readonly catalog: () => Promise<AgentCatalogState>;
+  private readonly base: string;
 
   constructor(
     withItx: WithItx<ItxEntrypointScope>,
     path: string,
     spec: () => Promise<FacetSpec>,
     catalog: () => Promise<AgentCatalogState>,
+    base: string,
   ) {
     super();
     this.withItx = withItx;
     this.path = path;
     this.spec = spec;
     this.catalog = catalog;
+    this.base = base;
   }
 
   /** A person's words: a dead agent refuses from the catalog (the header: its facet is never hosted
    *  again); a live one's words go to the facet its context hosts, by NAME — never by spec, so no
    *  facet is hosted for an agent that has none. NO_FACET is then a context without an `agent` row
    *  or facet: never born, or a live agent whose processors replace it (a voice agent's), which is
-   *  hosted from the spec as it always was. */
+   *  hosted from the spec as it always was. Words from another context say who sent them: the base,
+   *  which the sender's own `itx.agents` row pins (`itx.cd('/').agents.at(<sender>)`, written by
+   *  `create`). The root's words are the people's, through the dash, and carry no sender. */
   async message(input: Parameters<AgentHandleApi["message"]>[0]) {
     const path = this.path;
+    const from = this.base === "/" ? [] : [this.base];
     const dead = new Error(`agent ${path}: deleted`);
     // The catalog first: a dead agent's context is not even called.
     if ((await this.catalog()).deleted[path]) throw dead;
@@ -270,7 +277,7 @@ class AgentReference extends RpcTarget implements AgentHandleApi {
     // (durable-object.ts, `implements Pick<AgentHandleApi, "message">`) — ours, so asserted.
     try {
       return (await this.withItx((itx) =>
-        itx.cd(path).invoke(["itx", "facets", ["get", "agent"], ["message", input]]),
+        itx.cd(path).invoke(["itx", "facets", ["get", "agent"], ["message", input, ...from]]),
       )) as StreamEvent;
     } catch (error) {
       if (errorCode(error) !== "NO_FACET") throw error;
@@ -285,7 +292,7 @@ class AgentReference extends RpcTarget implements AgentHandleApi {
       );
     const spec = await this.spec();
     return (await this.withItx((itx) =>
-      itx.cd(path).invoke(["itx", "facets", ["get", "agent", spec], ["message", input]]),
+      itx.cd(path).invoke(["itx", "facets", ["get", "agent", spec], ["message", input, ...from]]),
     )) as StreamEvent;
   }
   append(...events: Parameters<AgentHandleApi["append"]>) {

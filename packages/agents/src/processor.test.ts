@@ -305,17 +305,25 @@ test.for<{
   expect(reduceProcessor(processor(), events)).toMatchObject(state);
 });
 
-test("the reduce: words another context appended name it, from the platform's stamp; the agent's own do not", () => {
+test("the reduce: words another context appended name it, from the platform's stamp; words the agent's own facet relayed name the sender it was handed; the agent's own do not", () => {
+  const relayed = (content: string, from: string) => ({
+    ...user(content),
+    payload: { ...user(content).payload, from },
+  });
   const { contextItems } = reduceProcessor(processor(), [
     ...born,
     { ...user("hi from a"), source: { origin: "/agents/a/sandbox" } },
     { ...user("hi from here"), source: { origin: "/" } }, // the harness's context is `/`
     user("hi, unstamped"),
+    { ...relayed("relayed", "/agents/a/sandbox"), source: { origin: "/" } },
+    { ...relayed("the stamp first", "/agents/c"), source: { origin: "/agents/a/sandbox" } },
   ]);
   expect(contextItems.map(({ content, from }) => ({ content, from }))).toEqual([
     { content: "hi from a", from: "/agents/a/sandbox" },
     { content: "hi from here", from: undefined },
     { content: "hi, unstamped", from: undefined },
+    { content: "relayed", from: "/agents/a/sandbox" },
+    { content: "the stamp first", from: "/agents/a/sandbox" },
   ]);
 });
 

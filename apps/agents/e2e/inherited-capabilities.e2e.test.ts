@@ -130,25 +130,6 @@ createFailing(test, /should land beneath the context that asked/)(
   },
 );
 
-createFailing(test, /should not reach past the mask/)(
-  "an agent's script cannot unmask itself by appending a parent link through `itx.agents.get(path).append`",
-  async () => {
-    const root = await openAgentItx(freshCtx("agent-reference-append"));
-    await root.provide("itx.tool", () => "hello-from-root");
-    await root.agents.create("/agents/a");
-    await root.cd("/agents/a").provide("itx.tool", null);
-    // The script runs in /agents/a/sandbox, beneath the mask; the facet appends with the root's authority.
-    const tool = await root
-      .cd("/agents/a")
-      .run(
-        "async (itx) => { await itx.agents.get('./x').append({ type: 'events.iterate.com/itx/rewrite-rule-configured', payload: { match: 'itx', target: \"itx.cd('/')\" } }).catch(() => {}); return itx.cd('./x').tool().then((v) => v, (e) => String(e.message)); }",
-      );
-    expect(tool, "a script beneath a mask should not reach past the mask").not.toBe(
-      "hello-from-root",
-    );
-  },
-);
-
 createFailing(test, /voice agent's parent link should be the context that asked/, {
   timeoutMs: 60_000,
 })(

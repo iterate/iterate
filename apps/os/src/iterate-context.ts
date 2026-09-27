@@ -203,8 +203,9 @@ export class IterateContextRpcTarget extends RpcTarget {
         );
     }
     // LOADED CODE's `cd` is an expression through THIS context's table (`itx.cd ⇒ null` is a wall,
-    // and the resolver's app wall keeps it to self and descendants) — the dotted surface of the handle
-    // it gets back accumulates onto one `invoke`, exactly as the built-in `cd` root answers.
+    // and the resolver's app wall keeps it to self and descendants, but for a final `append`) — the
+    // dotted surface of the handle it gets back accumulates onto one `invoke`, exactly as the
+    // built-in `cd` root answers.
     if (this.#caller.app)
       return new InvokeHandle(
         (steps) =>
@@ -533,10 +534,10 @@ export class ItxEntrypoint extends cloudflareWorkers.WorkerEntrypoint<
    *  gets from `projects.get(id)` (capnweb's RpcTarget IS the native `cloudflare:workers` RpcTarget
    *  on workerd), under `Caller.app` unless minted `platform: true`, so loaded code writes plain
    *  dotted access and mid-chain handles pipeline natively while the fixed point and a `cd` above
-   *  its context are refused. A
-   *  fresh SessionTeardown per call: this hop lends nothing session-long (a loaded worker's callbacks
-   *  ride as Workers-RPC stubs through the call args, never the pager). Re-resolved per call — never
-   *  a stub held across calls (the back-channel rule). */
+   *  its context are refused, but for `cd(path).append(…)`, which reaches the whole project. A fresh
+   *  SessionTeardown per call: this hop lends nothing session-long (a loaded worker's callbacks ride
+   *  as Workers-RPC stubs through the call args, never the pager). Re-resolved per call — never a
+   *  stub held across calls (the back-channel rule). */
   get(): IterateContextRpcTarget {
     // LOADED code's handle runs as app code; a class of THIS worker mints its stub with
     // `platform: true` from its own exports (sdk/index.ts) and gets the full handle. A loaded isolate's

@@ -68,8 +68,12 @@ await itx.cd("/agents/b").append({
   type: "events.iterate.com/agent/context-added",
   payload: { role: "user", content: "hello" },
 });
-// Stamped { origin: "/agents/a/sandbox" }. Agent b's model reads "[from /agents/a/sandbox] hello".
+// Stamped { origin: "/agents/a/sandbox" }. Agent b's model reads "[from /agents/a/sandbox] hello",
+// and the same from `itx.agents.get("/agents/b").message("hello")`.
 ```
+
+`origin` is the context whose code ran, not who asked it to run. A `run-requested` runs where it
+lands, so the label is advisory.
 
 The exception is a jail, a context with a bare `itx ⇒ null` row. Its code appends nowhere, and no
 code appends into it.
