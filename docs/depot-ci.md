@@ -752,7 +752,11 @@ link to the run, then the state now of every signal the job pages:
 
 A red page mentions Jonas once. A page leaves the job green; a check that could
 not read Depot, or found its probe broken (a report with no rows, a suite that
-did not run), fails the job once the others have paged. Each run since the last
+did not run), fails the job once the others have paged. Main OS e2e's page job
+reports on the commit its run tested, where red reads as "main e2e broke": a
+broken probe of its slow rows (a slow row not run, an incomplete or missing suite
+summary) is a ⚪ "unjudged" page on its change of state instead, and the job
+fails only when it cannot judge its run or post. Each run since the last
 judged is judged, oldest first, so a page names the run where its suite changed
 state: Main OS e2e's page job judges its own run after any settled one whose
 page was lost. A settled run that Depot ended before its jobs started has no

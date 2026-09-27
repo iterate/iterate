@@ -17,7 +17,9 @@
 // signal the job pages; the health job's also names main e2e's, from Main OS e2e's state. A check
 // that could not read what it judges, or found its probe broken, fails the job after the others have
 // paged: a scheduled run reports on main's head, where red reads as "this commit broke", so a page
-// never turns a job red.
+// never turns a job red. Main OS e2e's page job reports on the commit its run tested, so a broken
+// probe of the slow rows is a ⚪ page there, on its change of state (./e2e.ts), and the job fails only
+// when it cannot judge its run or post.
 //
 // Each job's memory between runs is its own state artifact (`stateArtifacts`, depot.ts
 // `saveNewestArtifactFile`), which only a real run on main writes. A state of another `schemaVersion`
@@ -41,7 +43,14 @@ import { getOctokit } from "../ci/github.ts";
 import { sendPostHogEvents } from "../ci/posthog-events.ts";
 import { getSlackClient, onCallMention, slackChannelIds } from "../ci/slack.ts";
 import { checkDoCost } from "./do-cost.ts";
-import { checkMainE2e, checkRealModel, E2eMemory, MAIN_SUITES, mainE2eRecords } from "./e2e.ts";
+import {
+  checkMainE2e,
+  checkRealModel,
+  E2eMemory,
+  MAIN_SUITES,
+  mainE2eRecords,
+  type SuiteState,
+} from "./e2e.ts";
 import { checkLatency, LatencyMemory } from "./latency.ts";
 import type { Page } from "./page.ts";
 import { checkTtg, TtgMemory } from "./ttg.ts";
@@ -62,8 +71,9 @@ export const HealthState = z.object({
 });
 export type HealthState = z.infer<typeof HealthState>;
 
-/** Main OS e2e's page job's state: main e2e's and slow e2e rows' memory. */
-export const MainE2eState = z.object({ schemaVersion: z.literal(1), e2e: E2eMemory });
+/** Main OS e2e's page job's state: main e2e's and slow e2e rows' memory. Version 2 can hold slow e2e
+ *  rows `broken`, which version 1's readers cannot parse. */
+export const MainE2eState = z.object({ schemaVersion: z.literal(2), e2e: E2eMemory });
 export type MainE2eState = z.infer<typeof MainE2eState>;
 
 /** The state a health run starts from: the previous run's, or an empty one when there was none or
@@ -82,7 +92,7 @@ export function readState(previous: unknown): HealthState {
 /** readState for Main OS e2e's page job. Pure. */
 export function readMainE2eState(previous: unknown): MainE2eState {
   if (!MainE2eState.pick({ schemaVersion: true }).safeParse(previous).success)
-    return { schemaVersion: 1, e2e: { suites: {}, judgedAt: {} } };
+    return { schemaVersion: 2, e2e: { suites: {}, judgedAt: {} } };
   return MainE2eState.parse(previous);
 }
 
@@ -90,6 +100,11 @@ const EMOJI = { red: "🔴", green: "🟢", none: "⚪" };
 
 /** A signal as a message's last line names it, with its state now. */
 type Signal = { name: string; tone: Page["tone"] };
+
+/** An e2e suite's state as a signal's tone: none when it is broken or has none. Pure. */
+function suiteTone(state: SuiteState | undefined): Page["tone"] {
+  return state === "red" || state === "green" ? state : "none";
+}
 
 /** The run's one message: each page as a block, the first red one mentioning Jonas (a test run
  *  mentions nobody), then every signal's state now. Pure. */
@@ -122,8 +137,8 @@ export async function run(options: {
 }) {
   const depot = depotApi();
   const { testRun, dryRun, keep } = runMode(options);
-  const state = readState(readStateFile(options.state));
-  const mainState = readMainE2eState(readStateFile(options.mainE2eState));
+  const state = readState(readStateFile(options.state, 1));
+  const mainState = readMainE2eState(readStateFile(options.mainE2eState, 2));
   const runUrl = process.env.DEPOT_JOB_URL;
   const subject = commitSubjects();
   const failures: string[] = [];
@@ -173,11 +188,11 @@ export async function run(options: {
       now: [
         ...MAIN_SUITES.map((suite): Signal => ({
           name: suite,
-          tone: mainState.e2e.suites[suite] ?? "none",
+          tone: suiteTone(mainState.e2e.suites[suite]),
         })),
         {
           name: "real-model e2e",
-          tone: next.e2e.suites["real-model e2e"] ?? "none",
+          tone: suiteTone(next.e2e.suites["real-model e2e"]),
         },
         {
           name: "latency",
@@ -200,7 +215,8 @@ export async function run(options: {
 }
 
 /** Main OS e2e's page job (main-os-e2e.yml `alert`): judge this run (`judgeMainE2eRun`), post its
- *  message and keep the state; then throw when a probe was broken. */
+ *  message and keep the state; then throw when a check failed. Its checks page a broken probe
+ *  instead (./e2e.ts `checkMainE2e`): it throws before when it cannot judge its run or post. */
 export async function mainE2e(options: {
   /** The run's git ref: only refs/heads/main pages and keeps state. */
   ref: string;
@@ -218,7 +234,7 @@ export async function mainE2e(options: {
   const { testRun, dryRun, keep } = runMode(options);
   const judged = await judgeMainE2eRun({
     depot: depotApi(),
-    state: readMainE2eState(readStateFile(options.state)),
+    state: readMainE2eState(readStateFile(options.state, 2)),
     workflowId:
       options.workflowId ||
       z
@@ -269,14 +285,14 @@ export async function judgeMainE2eRun(input: {
       createdAt: workflow.workflowCreatedAt,
     },
   });
-  const next: MainE2eState = { schemaVersion: 1, e2e: judged.memory };
+  const next: MainE2eState = { schemaVersion: 2, e2e: judged.memory };
   const text =
     judged.pages.length > 0 &&
     renderMessage({
       pages: judged.pages,
       now: MAIN_SUITES.map((suite): Signal => ({
         name: suite,
-        tone: next.e2e.suites[suite] ?? "none",
+        tone: suiteTone(next.e2e.suites[suite]),
       })),
       testRun: input.testRun,
     });
@@ -305,12 +321,12 @@ function runMode(options: { ref: string; testPage?: boolean; dryRun?: boolean })
 }
 
 /** The previous run's state file as JSON, or undefined when there is none. One of another
- *  `schemaVersion` is logged, since the run then starts over. */
-function readStateFile(path: string | undefined): unknown {
+ *  `schemaVersion` than the reader's is logged, since the run then starts over. */
+function readStateFile(path: string | undefined, schemaVersion: 1 | 2): unknown {
   if (!path || !existsSync(path)) return undefined;
   const previous: unknown = JSON.parse(readFileSync(path, "utf8"));
-  if (!z.object({ schemaVersion: z.literal(1) }).safeParse(previous).success)
-    console.log(`[health] ${path} is not a state of schemaVersion 1: starting over`);
+  if (!z.object({ schemaVersion: z.literal(schemaVersion) }).safeParse(previous).success)
+    console.log(`[health] ${path} is not a state of schemaVersion ${schemaVersion}: starting over`);
   return previous;
 }
 

@@ -153,12 +153,7 @@ export class RetryTelemetryReporter {
             leafName: test.name,
             moduleId: testModule.moduleId,
             ...(test.options && {
-              expectedState:
-                test.options.mode === "skip" || test.options.mode === "todo"
-                  ? test.options.mode
-                  : test.options.fails
-                    ? "failed"
-                    : "passed",
+              expectedState: expectedStateOf(test.options, result.state, reason),
             }),
             tags: [...(test.tags || [])],
             retryCount: diagnostic?.retryCount ?? 0,
@@ -247,6 +242,20 @@ export class RetryTelemetryReporter {
 }
 
 export default RetryTelemetryReporter;
+
+/** What a test was to do: skip or todo as declared, or skip when it skipped itself (`ctx.skip()`),
+ *  which Vitest records under its declared mode `run` where Playwright's `test.skip()` sets the
+ *  expected status to skipped. A cancelled run's skipped tests were cut short and keep what they
+ *  were to do: fail (`test.fails`) or pass. */
+function expectedStateOf(
+  options: NonNullable<ReportedTestCase["options"]>,
+  state: string,
+  reason: "passed" | "interrupted" | "failed" | undefined,
+) {
+  if (options.mode === "skip" || options.mode === "todo") return options.mode;
+  if (state === "skipped" && reason !== "interrupted") return "skip";
+  return options.fails ? "failed" : "passed";
+}
 
 /** Keep retry evidence useful in one-line logs, annotations, and PR tables. */
 export function compactRetryFailure(error: unknown): string | undefined {
