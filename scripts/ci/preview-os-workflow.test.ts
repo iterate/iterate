@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { expect, test } from "vitest";
 import { parse as parseYaml } from "yaml";
+import { AWAIT_DEPLOY } from "./await-deploy.ts";
 
 type PreviewStep = {
   "continue-on-error"?: boolean;
@@ -51,7 +52,7 @@ const suites = [
 ] as const;
 const suiteRun = 'doppler run -- pnpm preview "$SUITE"';
 
-test("Preview OS names each job for the check it is: deploy, then the two suites side by side, then the trace", () => {
+test("Preview OS names each job for the check it is: deploy and the two suites side by side, then the trace", () => {
   expect(
     Object.fromEntries(Object.entries(preview.jobs).map(([id, job]) => [id, job.name])),
   ).toEqual({
@@ -63,7 +64,8 @@ test("Preview OS names each job for the check it is: deploy, then the two suites
   const runs = (job: string) => (preview.jobs[job]?.steps || []).map((step) => step.run);
   expect(runs("deploy")).toContain('doppler run -- pnpm preview "$ACTION"');
   for (const suite of suites) {
-    expect([preview.jobs[suite.job]!.needs].flat()).toEqual(["deploy"]);
+    // started with the run, beside the deploy: the suite step waits for it (below)
+    expect(preview.jobs[suite.job]!.needs).toBeUndefined();
     // one suite per job: specs share no runner's CPU with vitest
     expect(preview.jobs[suite.job]!.env?.SUITE).toBe(suite.suite);
     expect(runs(suite.job)).toContain(suiteRun);
@@ -120,6 +122,7 @@ test("Preview OS runs on every pull request, and Deploy preview decides whether 
 });
 
 test("Preview OS deploys the PR merged into main, and the test jobs use that very commit", () => {
+  const suiteSteps = preview.jobs.e2e!.steps || [];
   const deploySteps = preview.jobs.deploy!.steps || [];
   const resolve = deploySteps.findIndex((step) => step.id === "tested");
   const deploy = deploySteps.findIndex((step) => step.run?.includes('pnpm preview "$ACTION"'));
@@ -137,11 +140,21 @@ test("Preview OS deploys the PR merged into main, and the test jobs use that ver
     "${{ steps.tested.outputs.description }}",
   );
   expect(preview.jobs.deploy!.outputs?.["tested-sha"]).toBe("${{ steps.tested.outputs.sha }}");
-  // the test jobs and the trace run the scripts of the tree deploy tested, not of the PR head alone
-  for (const job of [preview.jobs.e2e!, preview.jobs.specs!, preview.jobs.trace!]) {
-    const checkout = job.steps?.find((step) => step.uses === "actions/checkout@v4");
-    expect(checkout?.with?.ref).toMatch(/^\$\{\{ needs\.deploy\.outputs\.tested-sha \|\| /);
-  }
+  // the trace runs the scripts of the tree deploy tested, not of the PR head alone
+  expect(
+    preview.jobs.trace!.steps?.find((step) => step.uses === "actions/checkout@v4")?.with?.ref,
+  ).toMatch(/^\$\{\{ needs\.deploy\.outputs\.tested-sha \|\| /);
+  // the suites, which start beside the deploy, resolve that commit by the same rules: on a push the
+  // run's own commit, which deploy tests (PREVIEW_RUN_SHA above); on a dispatch the same script,
+  // after checking out the PR's head as deploy does
+  const checkout = suiteSteps.find((step) => step.uses === "actions/checkout@v4");
+  expect(checkout?.with?.ref).toBe(
+    "${{ github.event_name == 'pull_request' && github.sha || (inputs.pull-request-number != '' && format('refs/pull/{0}/head', inputs.pull-request-number)) || github.sha }}",
+  );
+  expect(suiteSteps.find((step) => step.id === "tested")).toMatchObject({
+    if: "github.event_name == 'workflow_dispatch' && inputs.pull-request-number != ''",
+    run: deploySteps[resolve]?.run,
+  });
   // the trace's statuses still go on the PR head
   expect(
     preview.jobs.trace!.steps?.find((step) => step.name === "Record the traced commit")?.env,
@@ -191,10 +204,43 @@ test("Preview OS: a PR's next push cancels its run in progress; a dispatch cance
   expect(cancels("workflow_dispatch")).toBe(false);
 });
 
+// Why the suites start with the run: .depot/workflows/preview-os.yml (STARTED WITH THE RUN). Each
+// decides whether the PR changes a preview path as Deploy preview does, before it installs anything,
+// and the steps after that pass on a PR that changes none.
+test("Preview OS's suites decide as Deploy preview does whether there is a preview, then wait for it", () => {
+  const deploySteps = preview.jobs.deploy!.steps || [];
+  const steps = preview.jobs.e2e!.steps || [];
+  const changes = steps.findIndex((step) => step.id === "changes");
+  expect(steps[changes]).toEqual(deploySteps.find((step) => step.id === "changes"));
+  expect(changes).toBe(steps.findIndex((step) => step.uses === "actions/checkout@v4") + 1);
+  const after = steps.slice(changes + 1, steps.findIndex((step) => step.id === "suite") + 1);
+  expect(after.filter((step) => step.id !== "tested").map((step) => step.if)).toEqual(
+    after
+      .filter((step) => step.id !== "tested")
+      .map(() => "steps.changes.outputs.preview != 'false'"),
+  );
+  expect(steps.findIndex((step) => step.name === "Reconcile dependencies (baked)")).toBeGreaterThan(
+    changes,
+  );
+});
+
+// The wait is bounded by the deploy's own timeout, and the suite keeps its 30 minutes after it.
+test("Preview OS's suite jobs outlast the deploy they wait for, and then their suite's 30 minutes", () => {
+  expect(AWAIT_DEPLOY).toMatchObject({
+    boundMs: preview.jobs.deploy!["timeout-minutes"]! * 60_000,
+  });
+  for (const suite of suites)
+    expect(preview.jobs[suite.job]!["timeout-minutes"]).toBe(
+      preview.jobs.deploy!["timeout-minutes"]! + 30,
+    );
+});
+
 // THE REQUIRED CHECKS' TRUTH TABLE (docs/depot-ci.md#preview-job-shape). GitHub counts a skipped
-// job as passing, so each suite's job skips only when there is nothing for it to prove: a PR that
-// changes no preview path, or a dispatch of the other suite alone. Wherever a preview was needed
-// and none was deployed, the job runs and its "Require a deployed preview" step fails it.
+// job as passing, so each suite's job skips only on a dispatch of the other suite alone, and on a PR
+// that changes no preview path it passes having tested nothing. Wherever a preview was needed and
+// none was deployed, it fails: its "Require a preview to test" step on a dispatch that names none,
+// its wait for this run's deploy (PREVIEW_AWAIT_DEPLOY_JOB, scripts/ci/await-deploy.ts) on a deploy
+// that did not finish.
 type Run = {
   event: "pull_request" | "workflow_dispatch";
   action?: string;
@@ -212,7 +258,7 @@ test.each<[string, Run, { e2e: string; specs: string; trace: boolean }]>([
   [
     "a PR that changes none",
     { event: "pull_request", deploy: "success", preview: "false" },
-    { e2e: "skipped", specs: "skipped", trace: false },
+    { e2e: "passes", specs: "passes", trace: false },
   ],
   [
     "a PR whose deploy failed",
@@ -280,17 +326,31 @@ test.each<[string, Run, { e2e: string; specs: string; trace: boolean }]>([
   };
   const outcome = (job: string) => {
     const steps = preview.jobs[job]!.steps || [];
-    const guard = steps.find((step) => step.name === "Require a deployed preview");
+    const guard = steps.find((step) => step.name === "Require a preview to test");
     // first after naming the attempt: nothing is checked out or installed for a job that fails
     expect(steps.indexOf(guard!)).toBe(1);
     if (!evaluate(preview.jobs[job]!.if, context)) return "skipped";
-    // the job's own suite, from its env
-    const jobContext = { ...context, "env.SUITE": preview.jobs[job]!.env!.SUITE! };
-    return evaluate(guard!.if, jobContext) ? "fails" : "tests";
+    // the job's own suite, from its env, and whether its path check ran and what it said
+    const jobContext = {
+      ...context,
+      "env.SUITE": preview.jobs[job]!.env!.SUITE!,
+      "steps.changes.outputs.preview": run.event === "pull_request" ? run.preview || "true" : "",
+    };
+    if (evaluate(guard!.if, jobContext)) return "fails";
+    const suite = steps.find((step) => step.id === "suite")!;
+    if (!evaluate(suite.if, jobContext)) return "passes";
+    const awaited = evaluate(
+      suite.env!.PREVIEW_AWAIT_DEPLOY_JOB!.replace(/^\$\{\{ (.*) \}\}$/, "$1"),
+      jobContext,
+    );
+    if (!awaited) return "tests";
+    // the wait's rule: this run's deploy job finished, or there is no preview to test
+    expect(awaited).toBe("deploy");
+    return run.deploy === "success" ? "tests" : "fails";
   };
   const e2e = outcome("e2e");
   const specs = outcome("specs");
-  const result = (value: string) => (value === "tests" ? "success" : value);
+  const result = (value: string) => (["tests", "passes"].includes(value) ? "success" : value);
   const trace = evaluate(preview.jobs.trace!.if, {
     ...context,
     "needs.e2e.result": e2e === "fails" ? "failure" : result(e2e),
@@ -311,10 +371,11 @@ test("a test job names its preview by the PR's number, or by preview-name withou
   expect(preview.on.workflow_dispatch?.inputs).toHaveProperty("preview-name");
 });
 
-// Without a preview there is nothing to keep: the evidence steps follow the suite, not the guard.
-// The R2 upload and its fallback report follow the manifest's write, and the Playwright report
-// exists only once the specs ran.
-test("a test job keeps its evidence whenever its suite started, and only then", () => {
+// Without a preview there is nothing to keep: the evidence steps follow the deployed target the suite
+// reads once its preview is there (apps/os/scripts/preview.ts `writeDeployedTarget`), not the guard,
+// the path check or the wait. The R2 upload and its fallback report follow the manifest's write, and
+// the Playwright report exists only once the specs ran.
+test("a test job keeps its evidence whenever its suite read its deployed target, and only then", () => {
   for (const suite of suites) {
     const steps = preview.jobs[suite.job]!.steps || [];
     const evidence = steps.slice(steps.findIndex((step) => step.id === "suite") + 1);
@@ -327,7 +388,7 @@ test("a test job keeps its evidence whenever its suite started, and only then", 
     expect(evidence.length - followers.length).toBeGreaterThan(0);
     for (const step of evidence.filter((step) => !followers.includes(step)))
       expect(step, step.name).toMatchObject({
-        if: "always() && steps.suite.outcome != 'skipped'",
+        if: "${{ always() && hashFiles('test-results/target.json') != '' }}",
       });
     // the Playwright report only the specs write
     expect(followers.map((step) => step.if)).toEqual([
@@ -341,10 +402,10 @@ test("a test job keeps its evidence whenever its suite started, and only then", 
 /**
  * Enough of the expression language for these conditions: the jobs' `always()`, then quoted strings,
  * ==, !=, !, &&, || and parentheses are JavaScript once each context path is replaced by its value.
- * A step's condition without a status function is `success() && (...)`, true here: only the attempt
- * step ran before the guard.
+ * A step's condition without a status function is `success() && (...)`, true here: the steps before
+ * the ones it evaluates passed.
  */
-function evaluate(condition: string | undefined, context: Record<string, string>) {
+function evaluate(condition: string | undefined, context: Record<string, string>): unknown {
   const javascript = (condition || "true")
     .replaceAll("always()", "true")
     .replace(/[a-z_]+(?:\.[A-Za-z0-9_-]+)+/g, (path) => {
@@ -352,5 +413,5 @@ function evaluate(condition: string | undefined, context: Record<string, string>
       return JSON.stringify(context[path]);
     });
   // oxlint-disable-next-line no-new-func -- evaluating the workflow's own condition IS the test
-  return new Function(`return (${javascript});`)() as boolean;
+  return new Function(`return (${javascript});`)();
 }
