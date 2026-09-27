@@ -52,6 +52,21 @@ test.for([
     expected: { memberships: {}, projects: { prj_2: "12:02" } },
   },
   {
+    // two facts published close together on a cold context can land out of order
+    name: "a member or project whose fact landed before the organization's is dated with it",
+    events: [
+      fact("events.iterate.com/organization/member-added", "12:00", member("usr_b", "member")),
+      fact("events.iterate.com/organization/project-added", "12:00", project("prj_1")),
+      fact("events.iterate.com/organization/created", "12:01", { name: "Acme" }),
+      fact("events.iterate.com/organization/member-added", "12:01", member("usr_a", "owner")),
+    ],
+    expected: {
+      organization: "12:01",
+      memberships: { usr_a: "12:01", usr_b: "12:01" },
+      projects: { prj_1: "12:01" },
+    },
+  },
+  {
     // a member can append any type to the organization's context; only the platform stamps it
     name: "a fact a client appended dates nothing",
     events: [

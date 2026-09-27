@@ -169,13 +169,16 @@ export default async function backfillCreatedAt(options: {
  *  context. The earliest `created` dates the organization. A membership is dated by the `member-added`
  *  that began it: a later one (a change of role) keeps that date, and a `member-removed` ends it, so
  *  a member who rejoined is dated by the rejoin. A project is dated by its `project-added`, and its
- *  `project-removed` ends that the same way. */
+ *  `project-removed` ends that the same way. Neither is dated before the organization: facts
+ *  published close together on a cold context can land out of order (session.ts
+ *  `publishPlatformFacts` appends each in the background), and a member added just after the
+ *  organization was made can land before its `created`. */
 function activityDates(events: unknown[]) {
   let organization: number | undefined;
   const memberships = new Map<string, number>();
   const projects = new Map<string, number>();
   for (const event of z.array(LogEvent).parse(events)) {
-    if (event.source?.platform !== true) continue;
+    if (!event.source?.platform) continue;
     const at = Date.parse(event.createdAt);
     switch (event.type) {
       case "events.iterate.com/organization/created":
@@ -199,6 +202,9 @@ function activityDates(events: unknown[]) {
         break;
     }
   }
+  const notBefore = organization ?? 0;
+  for (const dates of [memberships, projects])
+    for (const [id, at] of dates) dates.set(id, Math.max(at, notBefore));
   return { organization, memberships, projects };
 }
 // A list, not an `export function`: trpc-cli makes every exported declaration a command.
