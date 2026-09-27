@@ -61,10 +61,10 @@ named Worker routes such as `os.iterate.com`, `mcp.iterate.com`, `dash.iterate.c
 `k.iterate.com` take precedence. The zone has an active `*.iterate.com` edge certificate.
 
 The Preview OS workflow's Deploy preview job deploys a platform preview and all five hosted clients
-(Dash, Agents, Notes, Voice, Kit); then its E2E tests job runs the integration suite and its Browser
-specs job the browser specs against them, side by side, each a required check. A PR that changes no
-preview path deploys nothing and skips both. The commands to run them from a checkout or from CI are
-below.
+(Dash, Agents, Notes, Voice, Kit). Beside it, its E2E tests job sets up the integration suite and its
+Browser specs job the browser specs, and each runs its suite against them once the deploy has
+finished, each a required check. A PR that changes no preview path deploys nothing and passes both
+without testing. The commands to run them from a checkout or from CI are below.
 
 A PR's previews are named `pr<n>`: `https://pr<n>-os.iterate-dev-preview.workers.dev` for the
 platform, `https://pr<n>-dash.iterate-dev-preview.workers.dev` and so on for the clients. Each is a

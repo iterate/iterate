@@ -20,6 +20,9 @@ const bakedImage = "0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm
 const espIdfImage = "0p91s0lz49.registry.depot.dev/iterate-esp-idf-ci:node24";
 /** What a test job's evidence artifacts end with: the job attempt's id (docs/depot-ci.md#artifacts-per-job-attempt). */
 const attemptSuffix = "-attempt-${{ steps.attempt.outputs.id }}";
+/** When the preview and main suite jobs keep their evidence: once their suite read the deployed
+ *  target (apps/os/scripts/preview.ts `writeDeployedTarget`), whatever its outcome. */
+const afterTheDeployedTarget = `\${{ always() && hashFiles('${testEvidencePaths.target}') != '' }}`;
 
 type WorkflowStep = {
   "continue-on-error"?: boolean;
@@ -525,8 +528,9 @@ test.for(mainE2eRecords.jobs)(
       (step) =>
         step.with?.name === mainE2eRecords.artifact(suite, "${{ steps.attempt.outputs.id }}"),
     );
+    // whatever the suite's outcome, once it had a preview to test (preview-os-workflow.test.ts)
     expect(records).toMatchObject({
-      if: "always()",
+      if: afterTheDeployedTarget,
       uses: "actions/upload-artifact@v4",
       with: { path: `test-results/flake-records/${suite}` },
     });
@@ -888,11 +892,17 @@ test("Main OS e2e's two suite jobs are one definition, a PR preview's suite step
     for (const name of ["SUITE", "FLAKE_SUITE", "TEST_TELEMETRY_EXPECTED_WORKSPACES"])
       expect(main.jobs[job]?.env?.[name], `${job} ${name}`).toBe(preview.jobs[job]?.env?.[name]);
   expect(e2e.env).toMatchObject({ E2E_SLOW_ROWS: "run" });
+  // started with the run, each waits in its suite step for the deploy every main run makes
+  for (const job of [e2e, specs]) expect(job.needs).toBeUndefined();
+  expect(e2e.steps?.find((step) => step.id === "suite")?.env).toMatchObject({
+    PREVIEW_AWAIT_DEPLOY_JOB: "deploy",
+  });
 
   const mainSteps = e2e.steps || [];
   const previewSteps = preview.jobs.e2e?.steps || [];
   const prOnly = [
-    "Require a deployed preview",
+    "Require a preview to test",
+    "Decide whether the PR changes a preview path",
     "Record the PR head for test telemetry",
     "Check out the PR merged into main",
   ];
@@ -1004,10 +1014,10 @@ test.each([
     (step) =>
       step.uses === "actions/upload-artifact@v4" && step.with?.path === testEvidencePaths.root,
   );
-  // whatever the suite's outcome; a preview test job's once its suite started, since a job whose
-  // guard found no deployed preview has nothing to keep (preview-os-workflow.test.ts)
-  const always = expect.stringMatching(
-    /^always\(\)( && steps\.[a-z0-9-]+\.outcome != 'skipped')?$/u,
+  // whatever the suite's outcome; a preview test job's once its suite read its deployed target,
+  // since a job that never had a preview has nothing to keep (preview-os-workflow.test.ts)
+  const always = expect.toSatisfy(
+    (condition: string) => condition === "always()" || condition === afterTheDeployedTarget,
   );
 
   expect(finalizer, `${file} must normalize telemetry`).toMatchObject({ if: always });
@@ -1086,10 +1096,13 @@ test.each([
     const report = steps[index("scripts/ci/test-evidence-unreported.sh")];
 
     // always, a cancelled job's folder saying so; bounded, so a hang cannot reach the job's timeout.
-    // A preview test job's once its suite started: one whose guard found no preview has no folder.
+    // A preview test job's once its suite read its deployed target: one that never had a preview
+    // has no folder.
     expect(write).toMatchObject({
       id: "evidence-write",
-      if: expect.stringMatching(/^always\(\)( && steps\.[a-z0-9-]+\.outcome != 'skipped')?$/u),
+      if: expect.toSatisfy(
+        (condition: string) => condition === "always()" || condition === afterTheDeployedTarget,
+      ),
       "continue-on-error": true,
       "timeout-minutes": expect.any(Number),
       run: expect.stringContaining("cancelled() && '--cancelled'"),
@@ -1319,7 +1332,7 @@ test.for([
 
     // the root config writes per-test output and the HTML report into the test evidence folder
     expect(results).toMatchObject({
-      if: expect.stringMatching(/^always\(\)/u),
+      if: afterTheDeployedTarget,
       uses: "actions/upload-artifact@v4",
       with: expect.objectContaining({ path: testEvidencePaths.root }),
     });

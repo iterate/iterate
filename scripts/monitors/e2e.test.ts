@@ -13,7 +13,7 @@ import {
 import { fakeDepot, mainRun, summary, type SummaryTest } from "./fake-depot.ts";
 
 // Depot's job statuses: a job that hit its timeout is `cancelled` (a run cancelled by hand is left
-// out before this), a job its deploy's failure skipped is `skipped`.
+// out before this), a job skipped by its `if` or its needs is `skipped`.
 test.for<{ results: Record<string, string>; verdict: string | undefined }>([
   { results: { deploy: "finished", e2e: "finished", specs: "finished" }, verdict: "green" },
   { results: { deploy: "finished", e2e: "failed", specs: "finished" }, verdict: "red" },
@@ -455,32 +455,41 @@ test("an older run Depot failed before its jobs started has no verdict: the stat
   });
 });
 
-test("a main run whose deploy failed is red, and its skipped suites judge no slow rows", async () => {
-  const depot = fakeDepot({
-    "Main OS e2e": [
-      mainRun("deployfailed", "2026-09-26T20:00:00Z", {
-        deploy: "failed",
-        e2e: "skipped",
-        specs: "skipped",
-      }),
-    ],
-  });
-  const judged = await checkMainE2e({
-    depot,
-    memory: { suites: { "main e2e": "green", "slow e2e rows": "green" }, judgedAt: {} },
-    testRun: false,
-    subject,
-  });
-  expect(judged).toMatchObject({
-    pages: [
-      {
-        headline: "main e2e red at `deployfai` (the subject of dep)",
-        details: ["failed: Deploy preview"],
-      },
-    ],
-    memory: { suites: { "main e2e": "red", "slow e2e rows": "green" } },
-  });
-});
+// A deploy that failed is the run's verdict alone, whether its suites failed waiting for it or were
+// skipped.
+test.for([
+  { name: "suites that failed waiting for it", suites: "failed" },
+  { name: "skipped suites", suites: "skipped" },
+])(
+  "a main run whose deploy failed is red for its deploy alone, and its $name judge no slow rows",
+  async ({ suites }) => {
+    const depot = fakeDepot({
+      "Main OS e2e": [
+        mainRun("deployfailed", "2026-09-26T20:00:00Z", {
+          deploy: "failed",
+          e2e: suites,
+          specs: suites,
+        }),
+      ],
+    });
+    const judged = await checkMainE2e({
+      depot,
+      memory: { suites: { "main e2e": "green", "slow e2e rows": "green" }, judgedAt: {} },
+      testRun: false,
+      subject,
+    });
+    expect(judged).toMatchObject({
+      pages: [
+        {
+          headline: "main e2e red at `deployfai` (the subject of dep)",
+          details: ["failed: Deploy preview"],
+        },
+      ],
+      memory: { suites: { "main e2e": "red", "slow e2e rows": "green" } },
+      failures: [],
+    });
+  },
+);
 
 test("slow rows the run proves nothing about fail the health run and page nothing", async () => {
   const depot = fakeDepot({

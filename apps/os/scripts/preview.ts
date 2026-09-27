@@ -12,7 +12,7 @@
 // scripts/preview-sweep.ts), deploy-parents (the workers every preview branches from, from this
 // checkout: preview-parents.yml on every push to main), reset-parent (the `os` parent's own data
 // erased, then the parent deployed again: preview-sweep.yml, nightly). `--dry-run` prints the plan.
-import { spawn, spawnSync } from "node:child_process";
+import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { appendFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -43,6 +43,7 @@ import {
   writeStartAppPreviewConfig,
   type StartApp,
 } from "../../../scripts/lib/start-app.ts";
+import { awaitDeployOfThisRun, SUITE_BOUND_MS } from "../../../scripts/ci/await-deploy.ts";
 import { createOctokit, getOctokit, getRepo } from "../../../scripts/ci/github.ts";
 import { getSlackClient, slackChannelIds } from "../../../scripts/ci/slack.ts";
 import { traceOperation } from "../../../scripts/ci/tracing/tracing.ts";
@@ -1004,7 +1005,16 @@ async function writeDeployedTarget(previewName: string, apps: TestEvidenceTarget
  *  under the PR body's status line (`handOverSuiteLine`). The e2e rows tagged `slow` run as asked,
  *  else as the PR's label and paths say (scripts/slow-rows.ts); `only` runs them alone and is no
  *  verdict on the PR, so it writes no line. Vitest gets the choice as E2E_SLOW_ROWS, which holds each
- *  row to its timeout ceiling (e2e/support/setup.ts). */
+ *  row to its timeout ceiling (e2e/support/setup.ts).
+ *
+ *  A CI job that deploys its preview in the same run starts beside the deploy, not after it
+ *  (PREVIEW_AWAIT_DEPLOY_JOB names the deploy job). It sets the suite up while the preview deploys,
+ *  with everything before the first test that needs no preview: the slow rows' choice and
+ *  Chromium's install, and beside them the warm-ups (`warmUp`). Then it waits for the deploy
+ *  (scripts/ci/await-deploy.ts), stops any warm-up still running without waiting for it to exit,
+ *  and only then reads the deployed target and starts the suite, which it stops after its 30 minutes
+ *  (`runBounded`). A deploy that did not finish fails the job with no suite line, once its warm-ups
+ *  have exited: the PR body's status line already says the deploy failed. */
 async function runSuite(
   suite: PreviewSuite,
   previewName: string,
@@ -1012,22 +1022,76 @@ async function runSuite(
   requestedSlowRows: SlowRows | undefined,
 ) {
   const url = previewUrl(previewName);
-  const env = { WORKER_BASE_URL: url };
   const appUrl = (name: string) =>
     appPreviewUrl(
       APPS.find((app) => app.name === name)!,
       previewName,
     );
-  await writeDeployedTarget(
-    previewName,
-    // the client apps the specs run against; the vitest rows use none
+  const env: Record<string, string> =
     suite === "specs"
-      ? ["notes", "voice", "dash", "admin"].map((name) => ({ name, url: appUrl(name) }))
-      : [],
-  );
+      ? {
+          WORKER_BASE_URL: url,
+          NOTES_BASE_URL: appUrl("notes"),
+          VOICE_BASE_URL: appUrl("voice"),
+          DASH_BASE_URL: appUrl("dash"),
+          ADMIN_BASE_URL: appUrl("admin"),
+        }
+      : { WORKER_BASE_URL: url };
+  const deployJob = process.env.PREVIEW_AWAIT_DEPLOY_JOB;
+  const warmUps: ReturnType<typeof warmUp>[] = [];
+  if (deployJob && suite === "e2e")
+    warmUps.push(
+      warmUp(
+        "the e2e suite's modules",
+        "pnpm",
+        ["exec", "vitest", "list", "--configLoader", "runner", "--project", "e2e"],
+        { cwd: ROOT, env },
+      ),
+    );
+  if (deployJob && suite === "specs")
+    warmUps.push(
+      // --list loads the config and every spec, and runs no global setup
+      warmUp(
+        "the specs' modules",
+        "pnpm",
+        [
+          "exec",
+          "playwright",
+          "test",
+          "--config",
+          "playwright.config.ts",
+          "--list",
+          "--reporter=null",
+        ],
+        { cwd: REPO_ROOT, env },
+      ),
+      // one launch of the browser the specs launch, headless, which the image already holds
+      warmUp(
+        "Chromium",
+        "node",
+        [
+          "--input-type=module",
+          "-e",
+          "import { chromium } from '@playwright/test'; await (await chromium.launch()).close();",
+        ],
+        { cwd: REPO_ROOT },
+      ),
+    );
   let statusPr = prNumber;
+  const failed = (error: unknown) => {
+    handOverSuiteLine(statusPr, { suite, state: "failed", error: describe(error) });
+    return new Error(`${PREVIEW_SUITES[suite]} failed against ${url}: ${describe(error)}`);
+  };
+  let tests: { args: string[]; env: Record<string, string> };
   try {
-    if (suite === "e2e") {
+    tests = await traceOperation("Set up the suite", async () => {
+      if (suite === "specs") {
+        if (process.env.CI)
+          await runAsync("pnpm", ["exec", "playwright", "install", "chromium"], {
+            cwd: REPO_ROOT,
+          });
+        return { args: ["spec"], env: { ...env, ...PREVIEW_SUITE_TELEMETRY.specs } };
+      }
       const { slowRows, reason } = await chooseSlowRows({
         requested: requestedSlowRows,
         prNumber,
@@ -1042,32 +1106,183 @@ async function runSuite(
       console.log(`[slow-rows] ${slowRows}: ${reason}`);
       if (slowRows === "only") statusPr = undefined;
       // `e2e:run`, not `e2e`: the deployed target needs no local build.
-      await runAsync("pnpm", ["e2e:run", ...slowRowsTagsFilter(slowRows)], {
-        cwd: ROOT,
+      return {
+        args: ["e2e:run", ...slowRowsTagsFilter(slowRows)],
         env: { ...env, E2E_SLOW_ROWS: slowRows, ...PREVIEW_SUITE_TELEMETRY["preview-e2e"] },
-      });
-    } else {
-      if (process.env.CI)
-        await runAsync("pnpm", ["exec", "playwright", "install", "chromium"], {
-          cwd: REPO_ROOT,
-        });
-      await runAsync("pnpm", ["spec"], {
-        cwd: REPO_ROOT,
-        env: {
-          ...env,
-          NOTES_BASE_URL: appUrl("notes"),
-          VOICE_BASE_URL: appUrl("voice"),
-          DASH_BASE_URL: appUrl("dash"),
-          ADMIN_BASE_URL: appUrl("admin"),
-          ...PREVIEW_SUITE_TELEMETRY.specs,
-        },
-      });
-    }
+      };
+    });
   } catch (error) {
-    handOverSuiteLine(statusPr, { suite, state: "failed", error: describe(error) });
-    throw new Error(`${PREVIEW_SUITES[suite]} failed against ${url}: ${describe(error)}`);
+    await Promise.all(warmUps.map((warm) => warm.stop()));
+    throw failed(error);
+  }
+  if (deployJob) {
+    try {
+      await traceOperation("Wait for Deploy preview", () => awaitDeployOfThisRun(deployJob));
+    } catch (error) {
+      await Promise.all(warmUps.map((warm) => warm.stop()));
+      throw error;
+    }
+    // A warm-up still running exits beside the suite's start, not before it: a Chromium launch
+    // stopped mid-launch can take the whole 3 s grace (`warmUp`).
+    for (const warm of warmUps) void warm.stop();
+  }
+  await writeDeployedTarget(
+    previewName,
+    // the client apps the specs run against; the vitest rows use none
+    suite === "specs"
+      ? ["notes", "voice", "dash", "admin"].map((name) => ({ name, url: appUrl(name) }))
+      : [],
+  );
+  const run = { cwd: suite === "specs" ? REPO_ROOT : ROOT, env: tests.env };
+  try {
+    // A job that waited for its deploy has the wait's bound in its timeout, and bounds the suite
+    // itself to what is left of it.
+    if (deployJob) await runBounded("pnpm", tests.args, { ...run, boundMs: SUITE_BOUND_MS });
+    else await runAsync("pnpm", tests.args, run);
+  } catch (error) {
+    throw failed(error);
   }
   handOverSuiteLine(statusPr, { suite, state: "passed" });
+}
+
+/** `command` run as deploy-helpers' `runAsync` runs it, its output inherited, but in a process
+ *  group of its own, which is stopped once `boundMs` has passed: SIGTERM, which lets vitest and
+ *  Playwright report what they ran and close their browsers, then SIGKILL 10 s later, and once the
+ *  command has exited, SIGKILL for anything it left running. It fails either way. A SIGINT or
+ *  SIGTERM this process gets while the command runs is passed on to its group, as it would reach a
+ *  child in this process's own. */
+function runBounded(
+  command: string,
+  args: string[],
+  options: { cwd: string; env: Record<string, string>; boundMs: number },
+) {
+  const commandLine = `${command} ${args.join(" ")}`;
+  console.log(`$ ${commandLine}`);
+  return new Promise<void>((resolve, reject) => {
+    const child = spawn(command, args, {
+      cwd: options.cwd,
+      stdio: "inherit",
+      env: { ...process.env, ...options.env },
+      detached: true,
+    });
+    const signal = (name: NodeJS.Signals) => signalGroup(child, name);
+    let stopped = false;
+    let killer: NodeJS.Timeout | undefined;
+    const bound = setTimeout(() => {
+      stopped = true;
+      console.error(
+        `[suite] ${commandLine} is still running after ${options.boundMs / 60_000} minutes, the suite's bound: stopping it`,
+      );
+      signal("SIGTERM");
+      killer = setTimeout(() => signal("SIGKILL"), 10_000);
+    }, options.boundMs);
+    process.on("SIGINT", signal);
+    process.on("SIGTERM", signal);
+    const done = () => {
+      clearTimeout(bound);
+      clearTimeout(killer);
+      process.off("SIGINT", signal);
+      process.off("SIGTERM", signal);
+    };
+    child.once("error", (error) => {
+      done();
+      reject(error);
+    });
+    child.once("exit", (code, exitSignal) => {
+      done();
+      if (stopped) {
+        signal("SIGKILL");
+        reject(
+          new Error(`${commandLine} ran past the suite's ${options.boundMs / 60_000} minutes`),
+        );
+      } else if (code === 0) resolve();
+      else
+        reject(
+          new Error(`${commandLine} exited with ${code ?? `signal ${exitSignal || "unknown"}`}`),
+        );
+    });
+  });
+}
+
+/** A command run only to read, while the preview deploys, what its suite reads before its first
+ *  test: the CI image loads lazily, so a cold runner's first read of node_modules, a test file or
+ *  Chromium's binary costs seconds (docs/depot-ci.md#custom-image), and Playwright keeps what it
+ *  compiles for the specs in its transform cache (each entry checked against its hash when read).
+ *  Nothing it runs reaches the preview or writes test evidence: the variables that make a runner
+ *  write telemetry, flake records or trace markers are left out. Its output stays out of the log,
+ *  and its failure is a warning, since the suite that follows reports what is wrong itself.
+ *
+ *  `stop()` ends it, and every process it started (its own process group), once the deploy has
+ *  ended: whatever it has not read yet, the suite reads anyway, so it would only take the suite's
+ *  CPU. SIGTERM first, which lets Playwright close the browser it launched, then SIGKILL 3 s later;
+ *  it resolves once the group has exited. */
+function warmUp(
+  what: string,
+  command: string,
+  args: string[],
+  options: { cwd: string; env?: Record<string, string> },
+) {
+  const started = Date.now();
+  const took = () => `${((Date.now() - started) / 1000).toFixed(1)} s`;
+  const env = Object.fromEntries(
+    Object.entries({ ...process.env, ...options.env }).filter(
+      ([name]) => !/^(TEST_TELEMETRY_|FLAKE_RECORD_DIR$|CI_TRACE_ENABLED$)/.test(name),
+    ),
+  );
+  console.log(`[warm-up] ${what}: ${command} ${args.join(" ")}`);
+  const child = spawn(command, args, {
+    cwd: options.cwd,
+    env,
+    stdio: ["ignore", "pipe", "pipe"],
+    detached: true,
+  });
+  let output = "";
+  const keep = (data: string) => (output = lastLines(output + data, 20));
+  child.stdout.setEncoding("utf8").on("data", keep);
+  child.stderr.setEncoding("utf8").on("data", keep);
+  let stopping = false;
+  let closed = false;
+  const exited = traceOperation(
+    `Warm up ${what}`,
+    () =>
+      new Promise<void>((resolve) => {
+        child.once("error", (error) => {
+          console.warn(`[warm-up] ${what} did not start: ${error.message}`);
+          resolve();
+        });
+        child.once("close", (code) => {
+          closed = true;
+          if (stopping) console.log(`[warm-up] ${what}: stopped after ${took()}`);
+          else if (code === 0) console.log(`[warm-up] ${what}: done in ${took()}`);
+          else
+            console.warn(
+              `[warm-up] ${what} exited ${code} after ${took()}; the suite runs anyway:\n${output}`,
+            );
+          resolve();
+        });
+      }),
+  );
+  return {
+    async stop() {
+      if (closed || !child.pid) return exited;
+      stopping = true;
+      signalGroup(child, "SIGTERM");
+      const killer = setTimeout(() => signalGroup(child, "SIGKILL"), 3_000);
+      await exited;
+      clearTimeout(killer);
+    },
+  };
+}
+
+/** `name` to every process of the group `child` leads (spawned `detached`), and to none once the
+ *  group has exited. */
+function signalGroup(child: ChildProcess, name: NodeJS.Signals) {
+  try {
+    if (child.pid) process.kill(-child.pid, name);
+  } catch (error) {
+    // ESRCH: the group has already exited
+    if (!(error instanceof Error && "code" in error && error.code === "ESRCH")) throw error;
+  }
 }
 
 // ── sweep (cloudflare-os: GitHub has no `environment.auto_stop_in`) ────────────────────────────

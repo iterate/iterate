@@ -35,11 +35,13 @@ test-results/
 
 Each test job of Preview OS and Main OS e2e expects its own workspace in
 `TEST_TELEMETRY_EXPECTED_WORKSPACES` (`os` for E2E tests, `iterate-root` for Browser specs), passes
-its own `TEST_EVIDENCE_STEPS` (`e2e=…`, `specs=…`), and on a PR writes and uploads only once the
-suite started. `runSuite` (`apps/os/scripts/preview.ts`) writes `target.json` before the suite: the
-preview, the OS deployment `/version` named, and the apps' URLs. A dispatch against a preview
-already deployed can test a different tree than the deploy built: compare `target.deploymentId`
-with the deploy's own `preview.json`.
+its own `TEST_EVIDENCE_STEPS` (`e2e=…`, `specs=…`), and writes and uploads only once its suite read
+the deployed target. The suite jobs start beside the deploy and wait for it
+([Depot CI](depot-ci.md#suites-start-with-the-run)); `runSuite` (`apps/os/scripts/preview.ts`)
+writes `target.json` once there is a preview, before the suite: the preview, the OS deployment
+`/version` named, and the apps' URLs. So a job whose deploy failed or was cancelled, or that never
+had a preview, keeps no folder. A dispatch against a preview already deployed can test a different
+tree than the deploy built: compare `target.deploymentId` with the deploy's own `preview.json`.
 
 ### How each producer writes into it
 
