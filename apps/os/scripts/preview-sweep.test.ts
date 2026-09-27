@@ -201,6 +201,47 @@ test.each<{
   },
 );
 
+// Rule 0: a former parent's previews go once idle a day, whatever their name or PR, and whether or
+// not a preview of `os` has the same name.
+test.each<{
+  parent: string;
+  preview: string;
+  deployedHoursAgo?: number;
+  verdict: "stale" | "keep";
+}>(
+  // prettier-ignore
+  [
+    { parent: "os-preview", preview: "pr3061-worker-bundler", deployedHoursAgo: 25, verdict: "stale" },
+    { parent: "os-preview", preview: "latency", deployedHoursAgo: 25, verdict: "stale" },
+    { parent: "os-preview", preview: "pr7", deployedHoursAgo: 25, verdict: "stale" },
+    { parent: "dash-preview", preview: "pr3061-worker-bundler", deployedHoursAgo: 60, verdict: "stale" },
+    { parent: "os-preview", preview: "soak", deployedHoursAgo: 23, verdict: "keep" },
+    { parent: "kit-preview", preview: "soak", verdict: "keep" },
+  ],
+)(
+  "0: $parent's preview $preview deployed $deployedHoursAgo h ago ⇒ $verdict",
+  ({ parent, preview, deployedHoursAgo, verdict }) => {
+    const plan = planPreviewSweep(
+      input({
+        previews: [{ name: "pr7", lastDeployedAt: hoursAgo(1) }],
+        formerParentPreviews: [
+          {
+            parent,
+            name: preview,
+            lastDeployedAt: deployedHoursAgo === undefined ? undefined : hoursAgo(deployedHoursAgo),
+          },
+        ],
+        pullRequestStates: new Map([[7, "open"]]),
+        openPullRequestBranches: ["latency", "soak"],
+      }),
+    );
+    expect(plan).toMatchObject({
+      previews: [expect.objectContaining({ name: "pr7", verdict: "keep" })],
+      formerParentPreviews: [expect.objectContaining({ parent, name: preview, verdict })],
+    });
+  },
+);
+
 test("5: a stale preview's resources are not orphans — deletePreview takes them with it", () => {
   const plan = planPreviewSweep(
     input({
@@ -228,6 +269,7 @@ const input = (overrides: Partial<PreviewSweepInput>): PreviewSweepInput => ({
   parentCreatedAt: hoursAgo(1000),
   resourceSuffixes: { kv: ["itx-kv", "oauth-kv"], r2: ["files"], d1: ["db"], artifacts: ["repos"] },
   previews: [],
+  formerParentPreviews: [],
   resources: [],
   pullRequestStates: new Map(),
   openPullRequestBranches: [],

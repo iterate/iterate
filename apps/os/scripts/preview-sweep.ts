@@ -13,6 +13,13 @@
 // Anything else is kept. A GitHub lookup that failed never makes a preview stale: a PR state of
 // "unknown", or no open-branch list, leaves rule 1 alone.
 //
+// A preview of a FORMER PARENT (preview-config.ts FORMER_PARENTS: `os-preview`, `dash-preview`, …)
+// is STALE when
+//   0. its last deploy is more than 24 h old, whatever its name. No deploy names a former parent, so
+//      nothing else ever deletes it; the day is for a checkout that still deploys there. A preview
+//      whose last deploy is unknown is kept. The Worker Preview goes, its Durable Object namespaces
+//      with it; its KV, R2 and Artifacts namespaces are another worker's to rule 4.
+//
 // A resource is an ORPHAN (deleted on its own) when all of these hold:
 //   4. its name is `<parent>-<preview>-<suffix>` with a suffix of its kind (previewResourceSuffixes:
 //      KV `itx-kv`, `oauth-kv`; R2 `files`; D1 `db`; Artifacts `repos`) and `<preview>` a name a
@@ -51,6 +58,9 @@ export type PullRequestState = "open" | "closed" | "missing" | "unknown";
 /** One preview of the parent, from the Worker Previews listing (`deployed_on`). */
 export type SweptPreview = { name: string; lastDeployedAt?: string };
 
+/** One preview of a former parent (rule 0), named with the worker it hangs from. */
+export type SweptFormerParentPreview = SweptPreview & { parent: string };
+
 /** THE CI WORKFLOWS' OWN PREVIEWS, by name: one per serialized workflow of main, redeployed in place
  *  by every run of it and deleted by none — Main OS e2e's `main` (.depot/workflows/main-os-e2e.yml),
  *  the latency guard's `latency` (os-latency.yml) and the real-model suite's `real-model`
@@ -79,6 +89,8 @@ export type PreviewSweepInput = {
   parentCreatedAt: string | undefined;
   resourceSuffixes: Record<PreviewResourceKind, string[]>;
   previews: SweptPreview[];
+  /** Every preview of every former parent (rule 0). */
+  formerParentPreviews: SweptFormerParentPreview[];
   resources: SweptResource[];
   /** By PR number; a number missing here is "unknown". */
   pullRequestStates: ReadonlyMap<number, PullRequestState>;
@@ -88,6 +100,10 @@ export type PreviewSweepInput = {
 
 export type PreviewSweepPlan = {
   previews: { name: string; verdict: "stale" | "keep"; reason: string }[];
+  formerParentPreviews: (SweptFormerParentPreview & {
+    verdict: "stale" | "keep";
+    reason: string;
+  })[];
   orphans: (SweptResource & { previewName: string; reason: string })[];
 };
 
@@ -119,6 +135,8 @@ export function previewNameOfSweptResource(
 export function planPreviewSweep(input: PreviewSweepInput): PreviewSweepPlan {
   const hoursSince = (stamp: string | undefined) =>
     stamp ? (input.now - Date.parse(stamp)) / 3_600_000 : NaN;
+  const lastDeploy = (hours: number) =>
+    Number.isNaN(hours) ? "last deploy unknown" : `last deployed ${hours.toFixed(1)} h ago`;
   const pullRequestState = (previewName: string) => {
     const number = previewPullRequestNumber(previewName);
     if (number === undefined) return undefined;
@@ -127,9 +145,7 @@ export function planPreviewSweep(input: PreviewSweepInput): PreviewSweepPlan {
 
   const previews = input.previews.map(({ name, lastDeployedAt }) => {
     const hours = hoursSince(lastDeployedAt);
-    const deployed = Number.isNaN(hours)
-      ? "last deploy unknown"
-      : `last deployed ${hours.toFixed(1)} h ago`;
+    const deployed = lastDeploy(hours);
     const pullRequest = pullRequestState(name);
     const stale = (reason: string) => ({ name, verdict: "stale" as const, reason });
     const keep = (reason: string) => ({ name, verdict: "keep" as const, reason });
@@ -145,6 +161,13 @@ export function planPreviewSweep(input: PreviewSweepInput): PreviewSweepPlan {
     if (openBranch) return keep(`open PR branch ${openBranch}, ${deployed}`);
     if (hours > 24) return stale(`no PR and no open branch of that name, ${deployed}`); // rule 3
     return keep(`no PR, ${deployed}`);
+  });
+
+  const formerParentPreviews = input.formerParentPreviews.map((preview) => {
+    const hours = hoursSince(preview.lastDeployedAt);
+    // rule 0: NaN, an unknown last deploy, compares false and keeps it
+    const verdict = hours > 24 ? ("stale" as const) : ("keep" as const);
+    return { ...preview, verdict, reason: `former parent ${preview.parent}, ${lastDeploy(hours)}` };
   });
 
   // Rule 5: every name a listed preview owns, by any suffix of any kind.
@@ -178,5 +201,5 @@ export function planPreviewSweep(input: PreviewSweepInput): PreviewSweepPlan {
     }
     orphans.push({ ...resource, previewName, reason });
   }
-  return { previews, orphans };
+  return { previews, formerParentPreviews, orphans };
 }

@@ -411,8 +411,11 @@ invariants:
   owned (`preview-delete.yml`). The nightly sweep (`preview-sweep.yml`) is the safety valve: it
   deletes a preview whose PR closed without a delete, a preview whose last
   deploy is more than 7 days old, a hand-named preview idle for 24 hours with no
-  open PR branch of that name, and any per-preview resource that outlived its
-  preview. The rules are a pure table in `apps/os/scripts/preview-sweep.ts`.
+  open PR branch of that name, a preview idle for 24 hours on a former parent
+  (`os-preview`, `<app>-preview`, which no deploy names), and any per-preview
+  resource that outlived its preview. The rules are a pure table in
+  `apps/os/scripts/preview-sweep.ts`. Every preview's Durable Object classes
+  count toward the account's 500 namespaces (about 15 per PR, apps included).
   Kept short on purpose, because a live preview costs Cloudflare resources and
   its Durable Objects can keep waking.
 - **In-test cleanup is never the guarantee.** Every e2e run provisions its own

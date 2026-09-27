@@ -72,6 +72,7 @@ import {
   changedApps,
   configTemplateNames,
   deployWithStatus,
+  FORMER_PARENTS,
   lastLines,
   parseSuiteLineOutputs,
   PREVIEW_CONFIG_NAME,
@@ -1127,6 +1128,14 @@ async function listSweptResources(cf: Cf): Promise<SweptResource[]> {
 
 type ListedPreview = { name: string; created_on?: string; deployed_on?: string };
 
+/** A worker's previews; none for a worker that does not exist (a parent never deployed, or one
+ *  already deleted). */
+const listWorkerPreviews = (cf: Cf, workerName: string) =>
+  listAll<ListedPreview>(cf, `/workers/workers/${workerName}/previews`).catch((error) => {
+    if (!isMissingWorkerError(describe(error))) throw error;
+    return [] as ListedPreview[];
+  });
+
 const RESOURCE_KIND_LABELS: Record<SweptResource["kind"], string> = {
   kv: "KV namespace",
   r2: "R2 bucket",
@@ -1150,15 +1159,20 @@ async function sweep(cf: Cf, options: { dryRun: boolean; jobUrl: string | undefi
   // An app's preview without an apps/os preview of the same name is a leftover of a failed delete.
   const appPreviews: { app: StartApp; name: string }[] = [];
   for (const app of APPS) {
-    const parent = app.envs.preview!.workerName;
-    const listed = await listAll<ListedPreview>(cf, `/workers/workers/${parent}/previews`).catch(
-      (error) => {
-        if (!isMissingWorkerError(describe(error))) throw error;
-        return [] as ListedPreview[]; // a parent never deployed holds no previews
-      },
-    );
+    const listed = await listWorkerPreviews(cf, app.envs.preview!.workerName);
     for (const preview of listed) appPreviews.push({ app, name: preview.name });
   }
+  const formerParentPreviews = (
+    await Promise.all(
+      FORMER_PARENTS.map(async (parent) =>
+        (await listWorkerPreviews(cf, parent)).map((preview) => ({
+          parent,
+          name: preview.name,
+          lastDeployedAt: preview.deployed_on || preview.created_on,
+        })),
+      ),
+    )
+  ).flat();
   const scripts = await cf<{ id: string; created_on?: string }[]>("/workers/scripts");
   const workerNames = scripts.map((script) => script.id);
   const resourceSuffixes = previewResourceSuffixes();
@@ -1195,11 +1209,15 @@ async function sweep(cf: Cf, options: { dryRun: boolean; jobUrl: string | undefi
       name: preview.name,
       lastDeployedAt: preview.deployed_on || preview.created_on,
     })),
+    formerParentPreviews,
     resources,
     pullRequestStates,
     openPullRequestBranches: await openPullRequestBranches(),
   });
   const stale = plan.previews.filter((preview) => preview.verdict === "stale");
+  const staleFormerParentPreviews = plan.formerParentPreviews.filter(
+    (preview) => preview.verdict === "stale",
+  );
   const staleNames = new Set(stale.map(({ name }) => name));
   const listedNames = new Set(previews.map((preview) => preview.name));
   const staleAppPreviews = appPreviews.filter(
@@ -1213,14 +1231,22 @@ async function sweep(cf: Cf, options: { dryRun: boolean; jobUrl: string | undefi
     );
   for (const { app, name } of staleAppPreviews)
     console.log(`  delete apps/${app.name} preview ${name}`);
+  for (const { parent, name, verdict, reason } of plan.formerParentPreviews)
+    console.log(
+      `  ${verdict === "stale" ? "delete" : "keep  "} ${parent} preview ${name}: ${reason}`,
+    );
   const orphanCounts = Object.entries(RESOURCE_KIND_LABELS).map(
     ([kind, label]) => `${plan.orphans.filter((orphan) => orphan.kind === kind).length} ${label}`,
   );
   console.log(
-    `plan: ${stale.length} stale preview(s); orphans: ${orphanCounts.join(", ")}; ${staleAppPreviews.length} app preview(s)`,
+    `plan: ${stale.length} stale preview(s); orphans: ${orphanCounts.join(", ")}; ${staleAppPreviews.length} app preview(s); ${staleFormerParentPreviews.length} former parents' preview(s)`,
   );
-  if (dryRun || (stale.length === 0 && plan.orphans.length === 0 && staleAppPreviews.length === 0))
-    return;
+  const nothingToDelete =
+    stale.length === 0 &&
+    plan.orphans.length === 0 &&
+    staleAppPreviews.length === 0 &&
+    staleFormerParentPreviews.length === 0;
+  if (dryRun || nothingToDelete) return;
   const wrangler = preparePreviewWrangler();
   try {
     await wrangler.ready;
@@ -1268,6 +1294,15 @@ async function sweep(cf: Cf, options: { dryRun: boolean; jobUrl: string | undefi
     for (const { app, name } of staleAppPreviews) {
       await deleteWorkerPreview(app.envs.preview!, name, wrangler.command).catch((error) =>
         failures.push(`apps/${app.name} ${name}: ${describe(error)}`),
+      );
+    }
+    for (const { parent, name } of staleFormerParentPreviews) {
+      const worker = {
+        workerName: parent,
+        cloudflareAccountId: PREVIEW_PARENT.cloudflareAccountId,
+      };
+      await deleteWorkerPreview(worker, name, wrangler.command).catch((error) =>
+        failures.push(`${parent} ${name}: ${describe(error)}`),
       );
     }
     // The run is red only when the sweep could not act. A scheduled run reports on main's head

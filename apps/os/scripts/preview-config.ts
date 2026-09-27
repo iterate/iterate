@@ -75,6 +75,20 @@ export function slugifyPreviewName(raw: string) {
  *  name is refused whether or not the worker still exists. */
 const FORMER_PARENT = "os-preview";
 
+/** THE FORMER PARENTS: `os-preview` and the apps' `<app>-preview` workers, which no deploy names.
+ *  Nothing redeploys or deletes the Worker Previews still hanging from them, and each holds a
+ *  Durable Object namespace per class of the account's 500, so the sweep deletes them
+ *  (preview-sweep.ts rule 0). The workers stay, and so do `os-preview`'s previews' KV, R2 and
+ *  Artifacts namespaces (`os-preview-<preview>-…`), another worker's to rule 4. */
+export const FORMER_PARENTS = [
+  FORMER_PARENT,
+  "dash-preview",
+  "agents-preview",
+  "notes-preview",
+  "voice-preview",
+  "kit-preview",
+];
+
 /** `pr<n>` for a pull request: its URLs are `pr<n>-os.…`, `pr<n>-dash.…`, one per PR whatever its
  *  branch is called. Without a number — a CI workflow's own preview, a laptop's experiment — the
  *  slugified name, which the sweep judges on age alone. A name whose resources would be one the
