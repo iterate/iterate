@@ -17,6 +17,7 @@ import {
   testEvidenceUploadedPrefix,
   uploadTestEvidence,
   uploadedSummaryLine,
+  writeManifest,
   writeTestEvidence,
 } from "./test-evidence.ts";
 
@@ -746,6 +747,40 @@ test("finalize: a suite job whose suite never read a deployed target keeps nothi
   expect(job.outputs()).toBe("");
   expect(existsSync(join(job.repo, testEvidencePaths.telemetryCheck))).toBe(false);
   expect(existsSync(join(job.repo, testEvidencePaths.manifest))).toBe(false);
+});
+
+test("a manifest not written within a minute is a failed write: reported, and the step goes on to its result", async () => {
+  using folder = evidenceFolder({ artifacts: [], check: completeCheck });
+  using runner = temporaryDirectory();
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  using _clock = { [Symbol.dispose]: () => vi.useRealTimers() };
+  vi.spyOn(console, "log").mockImplementation(() => {});
+  vi.spyOn(console, "error").mockImplementation(() => {});
+
+  let settled = false;
+  const written = writeManifest({
+    repoRoot: folder.path,
+    environment: {
+      ...environment,
+      GITHUB_STEP_SUMMARY: join(runner.path, "summary.md"),
+      RUNNER_TEMP: runner.path,
+    },
+    cancelled: false,
+    // a source that never arrives
+    source: () => new Promise(() => {}),
+  }).finally(() => {
+    settled = true;
+  });
+  await vi.advanceTimersByTimeAsync(59_999);
+  expect(settled).toBe(false);
+  await vi.advanceTimersByTimeAsync(1);
+
+  expect(await written).toBeUndefined();
+  expect(readFileSync(join(runner.path, "summary.md"), "utf8")).toBe(
+    "**No test evidence manifest**: not written within 60 s. The tests' result is unaffected.\n",
+  );
+  expect(existsSync(join(runner.path, "test-evidence-write.reported"))).toBe(true);
+  expect(existsSync(join(folder.path, testEvidencePaths.manifest))).toBe(false);
 });
 
 test("the source's tree is the files on disk, changes and new files included, and the index is left alone", async () => {

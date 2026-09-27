@@ -334,7 +334,9 @@ jobs:
         run: node scripts/ci/test-evidence.ts finalize --only-with-target --flake-suites "$FLAKE_SUITE" ${{ cancelled() && '--cancelled' || '' }}
       # THE UPLOADS, side by side: each only reads test-results/, and `fail-fast: false` lets every
       # one finish whatever another does (docs/depot-ci.md#parallel-steps). Each follows the step
-      # above by its outcome or its outputs, never `hashFiles()` (test-evidence.ts `finalize`).
+      # above by its outcome or its outputs, never `hashFiles()` (test-evidence.ts `finalize`). The
+      # Depot artifacts follow its failure too: a Node that failed before `evidence=kept` still keeps
+      # a failed suite's traces and flake lines.
       - fail-fast: false
         parallel:
           # With the Cloudflare API token preview deploys use (Doppler _shared/preview), as S3 keys.
@@ -355,7 +357,7 @@ jobs:
               doppler run --project _shared --config preview --fallback "$RUNNER_TEMP/doppler-shared-preview" "${offline[@]}" -- node scripts/ci/test-evidence.ts upload
           # One artifact per suite and job attempt; PR time to green reads its suite summary.
           - name: Upload flake records
-            if: ${{ always() && steps.evidence-write.outputs.evidence == 'kept' }}
+            if: ${{ always() && (steps.evidence-write.outputs.evidence == 'kept' || steps.evidence-write.outcome == 'failure') }}
             uses: actions/upload-artifact@v4
             with:
               name: flake-records-${{ env.FLAKE_SUITE }}-attempt-${{ steps.attempt.outputs.id }}
@@ -366,7 +368,7 @@ jobs:
           # failed spec's trace.zip, screenshot and error-context.md under playwright-output/ and
           # playwright-results.json.
           - name: Upload results
-            if: ${{ always() && steps.evidence-write.outputs.evidence == 'kept' }}
+            if: ${{ always() && (steps.evidence-write.outputs.evidence == 'kept' || steps.evidence-write.outcome == 'failure') }}
             uses: actions/upload-artifact@v4
             with:
               name: preview-os-test-artifacts-attempt-${{ steps.attempt.outputs.id }}

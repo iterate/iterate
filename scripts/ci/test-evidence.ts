@@ -497,6 +497,8 @@ export async function testEvidenceSource(repoRoot: string) {
       cwd: repoRoot,
       encoding: "utf8",
       env: { ...process.env, ...env },
+      // a git that never answers holds the event loop, so the manifest's deadline could not pass
+      timeout: WRITE_DEADLINE_MS,
     }).trim();
   const directory = await mkdtemp(join(tmpdir(), "test-evidence-index-"));
   try {
@@ -573,11 +575,12 @@ export const stepFailureTitles = {
 };
 
 /**
- * A failed step's report. The step is `continue-on-error`, so the job's result stays the tests';
- * this makes the missing evidence visible on the run's page: a warning annotation and a line of the
- * job's summary saying why. Then a marker in the runner's temporary directory says it reported, so
- * the workflow's next step (scripts/ci/test-evidence-unreported.sh), which reports a step that
- * failed before it got here (Doppler, pnpm, the step's timeout), does not report it twice.
+ * A failed write's or upload's report. Neither decides the job (the upload's step is
+ * `continue-on-error`, and a failed write leaves `finalize` the finalizer's result), so this makes
+ * the missing evidence visible on the run's page: a warning annotation and a line of the job's
+ * summary saying why. Then a marker in the runner's temporary directory says it reported, so the
+ * workflow's next step (scripts/ci/test-evidence-unreported.sh), which reports a step that failed
+ * before it got here (Node, Doppler, the step's timeout), does not report it twice.
  */
 export function reportStepFailure(input: {
   command: keyof typeof stepFailureTitles;
@@ -645,7 +648,11 @@ export async function finalize(
     () => undefined,
     (error: unknown) => ({ error }),
   );
-  const manifest = await writeManifest({ cancelled });
+  const manifest = await writeManifest({
+    repoRoot: process.cwd(),
+    environment: process.env,
+    cancelled,
+  });
   if (manifest) {
     stepOutput("manifest", "written");
     const report = `${relative(testEvidencePaths.root, testEvidencePaths.playwrightReport)}/index.html`;
@@ -660,19 +667,40 @@ function stepOutput(name: string, value: string) {
   if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, `${name}=${value}\n`);
 }
 
-/** manifest.json, in the job's test evidence folder. A failure is reported (reportStepFailure),
- *  never thrown: the manifest decides nothing. */
-async function writeManifest(options: { cancelled: boolean }) {
-  const repoRoot = process.cwd();
+/** How long the manifest may take, a second or two in CI: one pass over the folder and a git tree.
+ *  Past it the manifest is a failed write, so one that never finishes cannot run its step, which
+ *  also carries the finalizer's result, into the step's two-minute timeout. */
+const WRITE_DEADLINE_MS = 60_000;
+
+/** manifest.json, in the job's test evidence folder. A failure, or no manifest by
+ *  WRITE_DEADLINE_MS, is reported (reportStepFailure), never thrown: the manifest decides nothing. */
+export async function writeManifest(input: {
+  repoRoot: string;
+  /** The job's, as writeTestEvidence reads it, and the report's GITHUB_STEP_SUMMARY and RUNNER_TEMP. */
+  environment: NodeJS.ProcessEnv;
+  cancelled: boolean;
+  /** The source the manifest records, testEvidenceSource's by default. */
+  source?: (repoRoot: string) => ReturnType<typeof testEvidenceSource>;
+}) {
+  const { repoRoot, environment, source = testEvidenceSource } = input;
+  const pastDeadline = Promise.withResolvers<never>();
+  const deadline = setTimeout(
+    () => pastDeadline.reject(new Error(`not written within ${WRITE_DEADLINE_MS / 1000} s`)),
+    WRITE_DEADLINE_MS,
+  );
   try {
-    const manifest = await writeTestEvidence({
-      repoRoot,
-      environment: process.env,
-      cancelled: options.cancelled,
-      source: await testEvidenceSource(repoRoot),
-      toolchain: { node: process.version, platform: process.platform, arch: process.arch },
-      createdAt: new Date(),
-    });
+    const manifest = await Promise.race([
+      (async () =>
+        writeTestEvidence({
+          repoRoot,
+          environment,
+          cancelled: input.cancelled,
+          source: await source(repoRoot),
+          toolchain: { node: process.version, platform: process.platform, arch: process.arch },
+          createdAt: new Date(),
+        }))(),
+      pastDeadline.promise,
+    ]);
     const bytes = manifest.files.reduce((total, file) => total + file.bytes, 0);
     console.log(
       `[test-evidence] ${manifest.testRunId} ${manifest.result}: ${manifest.files.length} files, ${bytes} bytes, tree ${manifest.source.tree}${manifest.source.dirty ? " (not the commit's)" : ""}`,
@@ -680,9 +708,11 @@ async function writeManifest(options: { cancelled: boolean }) {
     for (const diagnostic of manifest.diagnostics) console.log(`[test-evidence] ${diagnostic}`);
     return manifest;
   } catch (error) {
-    reportStepFailure({ command: "write", error, environment: process.env });
+    reportStepFailure({ command: "write", error, environment });
     console.error(error);
     return undefined;
+  } finally {
+    clearTimeout(deadline);
   }
 }
 

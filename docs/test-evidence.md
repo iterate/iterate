@@ -78,7 +78,9 @@ side, a suite job's suite):
    `manifest.json`. Its outputs say what the folder holds, each once it is true: `evidence=kept`,
    `manifest=written`, and `playwright-report=written`. The steps after it read those instead of
    `hashFiles()`, which costs the runner about 0.2 s per condition, one at a time
-   ([parallel steps](depot-ci.md#parallel-steps)).
+   ([parallel steps](depot-ci.md#parallel-steps)). A suite job's Depot artifact uploads (results
+   and flake records) also run when this step failed, so a Node that failed before `evidence=kept`
+   still keeps a failed suite's traces and flake lines.
 2. **Upload the test evidence to R2** (`node scripts/ci/test-evidence.ts upload`, `if: always()`
    once the manifest is written, `continue-on-error`, three minutes at most), in one `parallel:`
    block beside the Depot artifact uploads. Its Doppler secrets (`_shared/preview`) come without
@@ -96,9 +98,10 @@ side, a suite job's suite):
    that block, when either step's outcome is `failure`.
 
 The write fails only when the job has no Depot job attempt to name the run after, git cannot
-record the source, or a runner's fields do not fit the schema. Everything else it cannot read goes
-into the manifest's `diagnostics`, and the manifest is written anyway: the run whose runner crashed
-is the one whose evidence matters most.
+record the source, a runner's fields do not fit the schema, or it is not done within a minute (a
+second or two is usual), which keeps a stuck manifest from running the step into its timeout.
+Everything else it cannot read goes into the manifest's `diagnostics`, and the manifest is written
+anyway: the run whose runner crashed is the one whose evidence matters most.
 
 Neither the manifest nor the upload decides the job; the tests' own steps and the finalizer do. The
 first step fails when the finalizer does (missing, incomplete or foreign telemetry, once the

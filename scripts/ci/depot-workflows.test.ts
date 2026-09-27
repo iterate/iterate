@@ -22,9 +22,10 @@ const attemptSuffix = "-attempt-${{ steps.attempt.outputs.id }}";
  *  its outcome. It keeps evidence once the suite read the deployed target
  *  (apps/os/scripts/preview.ts `writeDeployedTarget`; test-evidence.ts `finalize --only-with-target`). */
 const afterTheSuite = "${{ always() && steps.suite.outcome != 'skipped' }}";
-/** The suite jobs' evidence steps after the finalizer's: once it kept the folder (its `evidence`
- *  output), never a `hashFiles()` of their own. */
-const afterTheFinalizer = "${{ always() && steps.evidence-write.outputs.evidence == 'kept' }}";
+/** The suite jobs' Depot artifact uploads after the finalizer's step: once it kept the folder (its
+ *  `evidence` output) or failed, perhaps before it could say so, never a `hashFiles()` of their own. */
+const afterTheFinalizer =
+  "${{ always() && (steps.evidence-write.outputs.evidence == 'kept' || steps.evidence-write.outcome == 'failure') }}";
 /** Where each test job's Doppler step saves _shared/preview's secrets for the evidence upload. */
 const dopplerFallback = "$RUNNER_TEMP/doppler-shared-preview";
 
