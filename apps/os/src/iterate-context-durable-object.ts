@@ -731,8 +731,9 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       const slug = await this.#projectSlug();
       return slug ? { projectSlug: slug } : {};
     },
-    primaryHostname: () =>
-      this.#controlPlane.primaryHostnameOf(this.#durableObjectAddress.projectId),
+    primaryHostname: async () =>
+      (await this.#controlPlane.getProject(this.#durableObjectAddress.projectId))
+        ?.primaryHostname ?? null,
     projectId: this.#durableObjectAddress.projectId,
     path: this.#durableObjectAddress.path,
     otherOwnerContext: (name) => this.env.ITERATE_CONTEXT.getByName(name),

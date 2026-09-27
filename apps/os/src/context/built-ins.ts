@@ -195,9 +195,10 @@ export interface BuiltInScope extends LibraryRoots {
   /** THE PUBLIC URL of this project over HTTP — the apex or a `routingSlug`'s host (both reach the
    *  config worker's `fetch`, which reads the slug from `x-iterate-routing-slug`), at `path`
    *  (default "/") — on the project's primary hostname when it has one (`<routingSlug>.<primary>/…`,
-   *  the control plane's copy, up to thirty seconds old), else composed from the deployment's
-   *  ingress routing (iterate/project-ingress: `<routingSlug>--<slug>.<hostname>/…` under
-   *  subdomains, `<origin>/projects/<slug>/<routingSlug>/…` under paths). Refused on a deployment with no project ingress, and on a call carrying no
+   *  the project row the control plane keeps, up to five seconds old: control-plane/edge.ts
+   *  `KEPT_MS`), else composed from the deployment's ingress routing (iterate/project-ingress:
+   *  `<routingSlug>--<slug>.<hostname>/…` under subdomains, `<origin>/projects/<slug>/<routingSlug>/…`
+   *  under paths). Refused on a deployment with no project ingress, and on a call carrying no
    *  platform origin (a processor's own turn, a loaded worker: hold the URL a session handed you
    *  instead). Only a project's context has one. */
   url: IterateContextApi["url"];

@@ -1,5 +1,15 @@
 /** @name projectsByHostnames */
-select h.hostname, p.id, p.slug, p.org_id as orgId
+select
+  h.hostname,
+  p.id,
+  p.slug,
+  p.org_id as orgId,
+  (
+    select ph.hostname
+    from project_primary_hostnames pp
+    join project_hostnames ph on ph.hostname = pp.hostname and ph.project_id = pp.project_id
+    where pp.project_id = p.id
+  ) as primaryHostname
 from project_hostnames h
 join projects p on p.id = h.project_id
 where h.hostname in (:hostnames);
@@ -24,10 +34,3 @@ on conflict (project_id) do update set hostname = excluded.hostname;
 
 /** @name clearPrimaryHostname */
 delete from project_primary_hostnames where project_id = :projectId;
-
-/** @name primaryHostnameOf */
-select h.hostname
-from project_primary_hostnames p
-join project_hostnames h on h.hostname = p.hostname and h.project_id = p.project_id
-where p.project_id = :projectId
-limit 1;

@@ -1,6 +1,7 @@
 // How long an isolate keeps what it asked the control plane's D1 (src/control-plane/edge.ts `Kept`):
-// a project's row and a host's address five seconds, a label no project holds never. A project's
-// context keeps its own slug in its storage (src/iterate-context-durable-object.ts `#projectSlug`).
+// a project's row (its primary hostname with it) and a host's address five seconds, a label no
+// project holds never. A project's context keeps its own slug in its storage
+// (src/iterate-context-durable-object.ts `#projectSlug`).
 import { runInDurableObject } from "cloudflare:test";
 import { exports } from "cloudflare:workers";
 import { expect, onTestFinished, test, vi } from "vitest";
@@ -44,6 +45,33 @@ test("a project deleted on another isolate is refused here once five seconds hav
   await expectNoProject(label);
 });
 
+test("a primary hostname cleared on another isolate stops redirecting here once five seconds have passed", async () => {
+  const clock = standingClock();
+  const label = freshLabel("cleared-primary");
+  const project = await catalog().createProject(
+    { principal: { actor: "admin" } },
+    { project: label },
+    Date.now(),
+  );
+  const primary = `www.${label}.test`;
+  await catalog().claimHostname(project.id, primary);
+  await catalog().setPrimaryHostname(project.id, primary);
+  const navigate = { headers: { "sec-fetch-mode": "navigate", "sec-fetch-dest": "document" } };
+  const redirected = await call(`https://echo--${label}.projects.test/a?b=1`, navigate);
+  expect(redirected).toMatchObject({ status: 308 });
+  expect(redirected.headers.get("location")).toBe(`https://echo.${primary}/a?b=1`);
+
+  // straight on the catalog, as the project's processor on another isolate would: within the five
+  // seconds this isolate keeps the row, its navigations still go to the primary
+  await catalog().setPrimaryHostname(project.id, null);
+  expect(await call(`https://${label}.projects.test/`, navigate)).toMatchObject({ status: 308 });
+  clock.pass(6_000);
+  // served: the project's own context answers (it has no site yet)
+  const served = await call(`https://${label}.projects.test/`, navigate);
+  expect(served, await served.clone().text()).toMatchObject({ status: 404 });
+  expect(await served.text()).toMatch(/has no site yet/);
+});
+
 test("a made-up hostname's miss is kept five seconds, then read again", async () => {
   const clock = standingClock();
   const hostname = `${freshLabel("made-up")}.nowhere.test`;
@@ -77,8 +105,8 @@ test("a project's context reads its slug from the control plane once and keeps i
 
 const freshLabel = (prefix: string) => `${prefix}-${crypto.randomUUID().slice(0, 8)}`;
 
-function call(url: string) {
-  return exports.default.fetch(new Request(url, { redirect: "manual" }));
+function call(url: string, init?: RequestInit) {
+  return exports.default.fetch(new Request(url, { redirect: "manual", ...init }));
 }
 
 async function expectNoProject(label: string) {
