@@ -44,6 +44,7 @@
 // adds no others.
 import * as oauth from "oauth4webapi";
 import { z } from "zod";
+import { INTEGRATION_PROVIDER_NAMES } from "iterate/api";
 import { cookieValueOf, errorCode, reportIssue, sameOriginPath } from "iterate/lib";
 import { signClaims, verifyClaims } from "./caller.ts";
 import type { Env } from "./env.ts";
@@ -58,7 +59,7 @@ import { startIssuerSession } from "./issuer-session.ts";
 import { browserAuthorization } from "./browser-client.ts";
 import { ControlPlane } from "./control-plane/edge.ts";
 import type { UserRecord } from "./control-plane/catalog.ts";
-import { IDENTITY_PROVIDER_NAMES, IdentityProvider } from "./control-plane/contract.ts";
+import { IdentityProvider } from "./control-plane/contract.ts";
 import { signInHref } from "./login-search.ts";
 import { nextUrlOf } from "./secret-oauth.ts";
 import type { AccountState } from "./account/contract.ts";
@@ -219,7 +220,7 @@ export async function identityResponse(request: Request, env: Env) {
   const config = appConfigOf(env);
   const client = signInClientOf(config, provider);
   if (!client)
-    return new Response(`${IDENTITY_PROVIDER_NAMES[provider]} sign-in is not configured`, {
+    return new Response(`${INTEGRATION_PROVIDER_NAMES[provider]} sign-in is not configured`, {
       status: 503,
     });
   const cookie = `__Host-itx-${provider}-identity-flow`;
@@ -363,7 +364,7 @@ export async function identityResponse(request: Request, env: Env) {
       const refusal = fakeProviderEmailRefusal(identity.email, config.login.testEmailDomain);
       if (refusal)
         throw new SignInRefused(
-          `${IDENTITY_PROVIDER_NAMES[provider]}: ${refusal}.`,
+          `${INTEGRATION_PROVIDER_NAMES[provider]}: ${refusal}.`,
           "fake-provider-email",
         );
     }
@@ -373,7 +374,7 @@ export async function identityResponse(request: Request, env: Env) {
       const person = await issuerSessionPersonOf(env, request);
       if (!person || person.id !== flow.linkTo)
         throw new SignInRefused(
-          `Your sign-in changed while you were at ${IDENTITY_PROVIDER_NAMES[provider]}. Please start again.`,
+          `Your sign-in changed while you were at ${INTEGRATION_PROVIDER_NAMES[provider]}. Please start again.`,
           "link-session-changed",
         );
       user = person;
@@ -439,12 +440,15 @@ export async function identityResponse(request: Request, env: Env) {
         provider,
         message: error.message,
       });
-      return failed(flow, `${IDENTITY_PROVIDER_NAMES[provider]} didn't answer. Please try again.`);
+      return failed(
+        flow,
+        `${INTEGRATION_PROVIDER_NAMES[provider]} didn't answer. Please try again.`,
+      );
     }
     reportIssue("identity.sign-in-failed", error, { provider });
     return failed(
       flow,
-      `Sign-in with ${IDENTITY_PROVIDER_NAMES[provider]} failed. Please try again.`,
+      `Sign-in with ${INTEGRATION_PROVIDER_NAMES[provider]} failed. Please try again.`,
     );
   }
 }
@@ -491,7 +495,7 @@ async function oidcSignIn(
   const identity = VerifiedIdentity.safeParse(oauth.getValidatedIdTokenClaims(tokens));
   if (!identity.success)
     throw new SignInRefused(
-      `${IDENTITY_PROVIDER_NAMES[flow.provider]} must verify your email before you can sign in.`,
+      `${INTEGRATION_PROVIDER_NAMES[flow.provider]} must verify your email before you can sign in.`,
       "email-unverified",
     );
   return {

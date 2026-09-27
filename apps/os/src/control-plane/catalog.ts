@@ -6,11 +6,12 @@
 // moment ago, a link someone else just used). Why a write was refused is read back later in the same
 // batch, never decided by a read before it. The clock comes in as `now` (epoch ms), and an
 // invitation's token already hashed (session.ts mints and hashes it).
+import { INTEGRATION_PROVIDER_NAMES } from "iterate/api";
 import { codedError } from "iterate/lib";
 import { createD1Client, SqlfuError } from "sqlfu";
 import type { Caller as PrincipalCaller } from "../caller.ts";
 import type { OrganizationRole } from "../organization/contract.ts";
-import { IDENTITY_PROVIDER_NAMES, type IdentityProvider } from "./contract.ts";
+import type { IdentityProvider } from "./contract.ts";
 import { batch } from "./db/index.ts";
 import {
   claimHostname,
@@ -329,7 +330,7 @@ export class ControlPlaneDatabase {
     ]);
     const holder = rowsOf<identityUser.Result>(results, 1)[0];
     if (holder?.id === userId) return { id: holder.id, email: holder.email };
-    const name = IDENTITY_PROVIDER_NAMES[provider];
+    const name = INTEGRATION_PROVIDER_NAMES[provider];
     throw codedError(
       "IDENTITY_CONFLICT",
       holder

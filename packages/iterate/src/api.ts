@@ -232,6 +232,15 @@ export const INTEGRATION_PROVIDERS = [
 ] as const;
 export type IntegrationProvider = (typeof INTEGRATION_PROVIDERS)[number];
 
+/** Each provider's name as a person reads it, wherever a page or a message names one. */
+export const INTEGRATION_PROVIDER_NAMES = {
+  slack: "Slack",
+  google: "Google",
+  cloudflare: "Cloudflare",
+  github: "GitHub",
+  waitrose: "Waitrose",
+} as const satisfies Record<IntegrationProvider, string>;
+
 /** The providers a deployment holds an app of iterate's at (APP_CONFIG `integrations`): every one
  *  but Waitrose, a username and a password. */
 export type IterateAppProvider = Exclude<IntegrationProvider, "waitrose">;
