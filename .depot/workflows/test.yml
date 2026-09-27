@@ -1,4 +1,8 @@
 name: Test
+# Read-only: the job token of a run that restored a store from Depot Cache, which any branch can
+# write (docs/depot-ci.md#the-test-job-runs-on-depots-stock-image), can push nothing.
+permissions:
+  contents: read
 on:
   push:
     branches:
@@ -172,11 +176,9 @@ jobs:
               path: test-results
               include-hidden-files: true
               if-no-files-found: error
-          # PNPM'S STORE FOR THE NEXT RUNS, the one pruned above. Depot Cache has no branch scope:
-          # any run can write any key, a pull request's too, by editing this file. So only main's
-          # runs save, pnpm checks each file it links against the store's index
-          # (`verify-store-integrity`, on by default), and nothing but this job reads the cache
-          # (scripts/ci/depot-workflows.test.ts): never a deploy.
+          # PNPM'S STORE FOR THE NEXT RUNS, the one pruned above. Depot Cache has no branch scope,
+          # so no job but this one reads it, never a deploy
+          # (docs/depot-ci.md#the-test-job-runs-on-depots-stock-image).
           - name: Save pnpm's store
             if: ${{ !cancelled() && steps.prune-store.outcome == 'success' }}
             uses: actions/cache/save@v4

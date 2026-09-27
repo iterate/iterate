@@ -644,6 +644,7 @@ test("the Test job sets up its toolchain on Depot's stock image, with pnpm's sto
   const step = (name: string) => steps.find((candidate) => candidate.name === name);
 
   expect(workflow.jobs.test["runs-on"]).toBe("depot-ubuntu-24.04-8");
+  expect(workflow.permissions).toEqual({ contents: "read" });
   // Node from .nvmrc and pnpm from the root `packageManager`, the versions every checkout declares
   expect(step("Setup Node")).toMatchObject({
     uses: "actions/setup-node@v4",
