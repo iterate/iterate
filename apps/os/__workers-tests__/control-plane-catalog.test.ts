@@ -596,7 +596,7 @@ test("projects: an owner or the operator deletes a project's row, which frees it
   expect(await c.deleteProject(admin, again.id)).toEqual(again);
 });
 
-test("projects: with no organization named: the person's first by name, made on first use after their email, one when created at once; the operator's own organization, made on first use", async () => {
+test("projects: with no organization named: the person's oldest, made on first use after their email, one when created at once; the operator's own organization, made on first use", async () => {
   await emptyTables();
   const ada = await person("ada.lovelace@example.com");
   const [one, two] = await Promise.all([

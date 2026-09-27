@@ -1001,7 +1001,7 @@ export interface IterateSessionApi {
     }): Promise<{ redirectTo: string } | { error: string }>;
   };
   projects: {
-    /** oldest first */
+    /** oldest first (a grant bound to projects with no user: in the grant's order) */
     list(): Promise<ProjectRecord[]>;
     /** the project's root context, by its slug or its id */
     get(project: string): Promise<IterateContextApi>;

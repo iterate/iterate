@@ -1014,8 +1014,9 @@ class ProjectCollectionRpcTarget extends RpcTarget {
 
   /** The projects this session reaches, as catalog rows, oldest first: the projects of the orgs
    *  the user belongs to, with their role — narrowed to the projects a grant chose; for the admin
-   *  secret, every project (no role). Read fresh, past the isolate's memo: the dash reads it again
-   *  when a fact says it changed. */
+   *  secret, every project (no role). A grant bound to projects with no user lists them in the
+   *  grant's order. Read fresh, past the isolate's memo: the dash reads it again when a fact says
+   *  it changed. */
   list(): Promise<ProjectRecord[]> {
     return this.#session.input.controlPlane.reachableProjects(
       this.#session.authority.reach,
