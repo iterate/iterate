@@ -742,7 +742,8 @@ class OrganizationCollectionRpcTarget extends RpcTarget {
     return id;
   }
 
-  /** Read fresh, past the isolate's memo: the dash reads it again when a fact says it changed. */
+  /** Oldest first, read fresh, past the isolate's memo: the dash reads it again when a fact says it
+   *  changed. */
   list(): Promise<OrganizationRecord[]> {
     return this.#reachable(true);
   }
@@ -751,8 +752,8 @@ class OrganizationCollectionRpcTarget extends RpcTarget {
     return this.#session.globalContext(`/organizations/${await this.#reached("get", orgId)}`);
   }
 
-  /** An organization's members, with their emails — for every session that reaches it (the dash's
-   *  members table, the project-seed CLI's capture). */
+  /** An organization's members, with their emails and when they joined, in that order — for every
+   *  session that reaches it (the dash's members table, the project-seed CLI's capture). */
   async members(orgId: string): Promise<MemberRecord[]> {
     const id = await this.#reached("members", orgId);
     return this.#session.input.controlPlane.listMembers(id);
@@ -1011,10 +1012,10 @@ class ProjectCollectionRpcTarget extends RpcTarget {
     this.#sessionTeardown = sessionTeardown;
   }
 
-  /** The projects this session reaches, as catalog rows: the projects of the orgs the user
-   *  belongs to, with their role — narrowed to the projects a grant chose; for the admin secret,
-   *  every project (no role). Read fresh, past the isolate's memo: the dash reads it again when a
-   *  fact says it changed. */
+  /** The projects this session reaches, as catalog rows, oldest first: the projects of the orgs
+   *  the user belongs to, with their role — narrowed to the projects a grant chose; for the admin
+   *  secret, every project (no role). Read fresh, past the isolate's memo: the dash reads it again
+   *  when a fact says it changed. */
   list(): Promise<ProjectRecord[]> {
     return this.#session.input.controlPlane.reachableProjects(
       this.#session.authority.reach,
@@ -1032,8 +1033,8 @@ class ProjectCollectionRpcTarget extends RpcTarget {
   /** Create the project named `project` (slugified into its hostname label; its id is minted —
    *  or, for the operator restoring a project seed, the archived `restoreProjectId` — the returned
    *  context's `whoami()` says it, so does `list()`) — in the organization named, or
-   *  the user's own (the first by name when they have several, created on first use when they
-   *  have none), or in the deployment's own for the admin secret — and vend its root context. The
+   *  the user's own (the oldest when they have several, created on first use when they have
+   *  none), or in the deployment's own for the admin secret — and vend its root context. The
    *  config repo template is PINNED to a commit here (a resumed creation always reads the same
    *  tree); the control plane refuses a slug ANY other organization holds (PROJECT_NAME_TAKEN),
    *  answers the same organization's again with the same project, and opens the project's own saga

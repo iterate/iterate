@@ -347,9 +347,11 @@ export class ControlPlane {
     );
   }
 
+  /** Every organization, oldest first. */
   listOrganizations() {
     return this.#read("organizations", () => this.#db.organizations());
   }
+  /** An organization's members, in the order they joined. */
   listMembers(organizationId: string) {
     return this.#read("members", () => this.#db.members(organizationId));
   }
@@ -404,7 +406,7 @@ export class ControlPlane {
     input: { name: string; ownerId?: string },
   ): Promise<OrganizationRecord> {
     const organization = await this.#call("createOrganization", () =>
-      this.#db.createOrganization(callerOf(caller), input),
+      this.#db.createOrganization(callerOf(caller), input, Date.now()),
     );
     this.#forget(caller.principal?.actor);
     if (input.ownerId) accessMemo.clear(); // the operator's: named by id or email
@@ -434,7 +436,7 @@ export class ControlPlane {
     input: { userId: string; role: OrganizationRole },
   ): Promise<string> {
     const userId = await this.#call("addMember", () =>
-      this.#db.addMember(callerOf(caller), organizationId, input),
+      this.#db.addMember(callerOf(caller), organizationId, input, Date.now()),
     );
     this.#forget(userId);
     return userId;
@@ -480,7 +482,7 @@ export class ControlPlane {
     input: { project: string; organizationId?: string; restoreProjectId?: string },
   ): Promise<ProjectRecord & { mintedOrganization?: string }> {
     const { mintedOrganization, ...project } = await this.#call("createProject", () =>
-      this.#db.createProject(callerOf(caller), input),
+      this.#db.createProject(callerOf(caller), input, Date.now()),
     );
     memoize(project);
     this.#forget(caller.principal?.actor);

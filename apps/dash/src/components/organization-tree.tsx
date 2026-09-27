@@ -24,13 +24,13 @@ export type TreeOrganization = {
   name: string;
   /** the person's role; none for an organization the session reaches only through a project */
   role?: OrganizationRole;
-  /** by slug */
+  /** oldest first */
   projects: TreeProject[];
 };
 type OrganizationTreeState = {
   /** the first read answered (or failed) */
   loaded: boolean;
-  /** by name */
+  /** oldest first */
   organizations: TreeOrganization[];
   /** every organization's projects, in the organizations' order */
   projects: TreeProject[];

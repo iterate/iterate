@@ -2,6 +2,8 @@
 -- membership, project, invitation, custom hostname and OAuth grant. sqlfu types the queries in
 -- queries/*.sql against this file; migrations/ is what a database runs (`pnpm db:check` holds the
 -- two equal). Times are epoch ms, except oauth_grants.expires_at, which is epoch s (KV's unit).
+-- created_at on an organization, a membership and a project: when the row was written; null for a
+-- row older than the column (migrations/0004_created_at.sql), which a list by it holds first.
 -- D1 enforces foreign keys (https://developers.cloudflare.com/d1/sql-api/foreign-keys/).
 
 -- email: trimmed and lower-cased (catalog.ts `emailAddress`). A user is never deleted.
@@ -38,13 +40,16 @@ END;
 
 create table organizations (
   id text primary key,
-  name text not null
+  name text not null,
+  created_at integer
 );
 
+-- created_at: when the person joined; a change of role keeps it.
 create table memberships (
   org_id text not null references organizations (id) on delete cascade,
   user_id text not null references users (id),
   role text not null check (role in ('owner', 'member')),
+  created_at integer,
   primary key (org_id, user_id)
 );
 create index memberships_user on memberships (user_id);
@@ -54,7 +59,8 @@ create index memberships_user on memberships (user_id);
 create table projects (
   id text primary key,
   slug text not null unique,
-  org_id text not null references organizations (id)
+  org_id text not null references organizations (id),
+  created_at integer
 );
 create index projects_org on projects (org_id);
 

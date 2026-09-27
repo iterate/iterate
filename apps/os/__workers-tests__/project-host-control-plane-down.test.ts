@@ -172,6 +172,7 @@ async function catalogOnlyProject(prefix: string, options: { ownHostname?: boole
   const { id: projectId } = await catalog().createProject(
     { principal: { actor: "admin" } },
     { project: slug },
+    Date.now(),
   );
   if (!options.ownHostname) return { slug, projectId, host: `https://${slug}.projects.test/` };
   await catalog().claimHostname(projectId, `${slug}.example.test`);

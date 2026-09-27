@@ -74,7 +74,7 @@ test("a project created elsewhere right after its label was missed is served her
   await expectNoProject(label);
 
   // straight on the catalog, as another isolate's edge would: this isolate's miss stands
-  await catalog().createProject({ principal: { actor: "admin" } }, { project: label });
+  await catalog().createProject({ principal: { actor: "admin" } }, { project: label }, Date.now());
   await expectNoProject(label);
 
   vi.useFakeTimers({ toFake: ["Date"] });
