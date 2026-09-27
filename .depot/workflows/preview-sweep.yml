@@ -1,14 +1,7 @@
-# THE NIGHTLY PREVIEW SWEEP (`pnpm preview sweep`, apps/os/scripts/preview.ts): deletes the previews
-# of `os` and of the apps on top whose PR closed without a delete, that went stale, or
-# that were hand-named and left idle, every preview still on a former parent (`os-preview`,
-# `<app>-preview`) once idle a day, plus any per-preview resource that outlived its preview. A CI
-# workflow's own preview (`main`, `latency`, `real-model`) goes only once that workflow has not
-# deployed it for a week. The rules are apps/os/scripts/preview-sweep.ts. What stops a force-closed PR, or a
-# failed cleanup, from leaking a preview.
+# THE NIGHTLY PREVIEW SWEEP (`pnpm preview sweep`, apps/os/scripts/preview.ts), dev/preview account
+# only; what it deletes is apps/os/scripts/preview-sweep.ts's rules.
 #
-# A scheduled run reports on main's head commit, where red reads as "this commit broke", so the run
-# goes red only when the sweep could not act. An Artifacts namespace Cloudflare will not delete is a
-# page to #error-pulse instead (preview.ts: StuckArtifactsNamespace), tried again the next night.
+# When a run goes red, and what it pages to #error-pulse instead: the end of preview.ts's `sweep`.
 #
 # Beside it, the reset of the `os` parent's own data (`pnpm preview reset-parent`): what people and
 # agents left on https://os.iterate-dev-preview.workers.dev and the app parents signed in against
@@ -61,7 +54,7 @@ jobs:
         run: doppler setup --config preview --project os
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-      - name: Sweep previews whose PR is closed, or older than 7 days
+      - name: Sweep stale previews, per-commit deployments and former parents
         working-directory: apps/os
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
