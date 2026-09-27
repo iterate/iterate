@@ -4,7 +4,8 @@
 //                  on the email domain delivers every message here; the local part names the
 //                  project (a `+tag` after it is ignored). Each attachment becomes a project file
 //                  under `/email/<message key>/`, then `email/received` lands on `/integrations/email`,
-//                  keyed by the Message-ID, so a redelivery lands nothing new. Mail for no project
+//                  keyed by the Message-ID and the address it reached, so a redelivery lands nothing
+//                  new and a copy to another of the project's addresses is its own. Mail for no project
 //                  is rejected (a bounce the sender sees); a failure of ours throws, and the sending
 //                  server retries.
 //   sendEmail    — `itx.email.send` (context/built-ins.ts): from the project's own address, with
@@ -66,7 +67,7 @@ export async function receiveEmail(message: ForwardableEmailMessage, env: Env): 
     { principal: null },
     {
       type: "events.iterate.com/email/received",
-      idempotencyKey: `email/received:${messageKey}`,
+      idempotencyKey: `email/received:${messageKey}:${message.to.toLowerCase()}`,
       payload: {
         messageId,
         from,

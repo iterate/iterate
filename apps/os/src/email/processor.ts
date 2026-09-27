@@ -21,10 +21,11 @@ export class EmailProcessor extends StreamProcessor<
       case "events.iterate.com/email/received":
       case "events.iterate.com/email/sent": {
         const { messageId, inReplyTo, references, subject } = event.payload;
-        // A reply joins the thread of the message it answers, else of its nearest known ancestor
-        // (References lists them oldest first); a message with none known here starts a thread.
+        // Another copy of a known message (to another of our addresses, or ours come back) joins
+        // its thread; a reply the thread of the message it answers, else of its nearest known
+        // ancestor (References lists them oldest first); a message with none known starts one.
         const threadOffset =
-          [inReplyTo, ...references.toReversed()]
+          [messageId, inReplyTo, ...references.toReversed()]
             .map((id) => (id ? state.threadOffsetByMessageId[id] : undefined))
             .find((offset) => offset !== undefined) ?? event.offset;
         const thread = state.threads[threadOffset] ?? { subject, messageOffsets: [] };

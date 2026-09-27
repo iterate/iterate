@@ -9,7 +9,7 @@ import { receiveEmail } from "../src/integrations/email.ts";
 import type { Env } from "../src/env.ts";
 import { projectWithMember, readLog, snapshot } from "./support.ts";
 
-test("a message to a project lands once on /integrations/email with its attachment a project file, and a reply threads with it", async () => {
+test("a message lands once per project address on /integrations/email with its attachment a project file, and a reply threads with it", async () => {
   const member = await projectWithMember("mailbox");
   const inbox = DurableObjectNameCodec.stringify({
     projectId: member.projectId,
@@ -35,11 +35,13 @@ test("a message to a project lands once on /integrations/email with its attachme
     "aGVsbG8=",
     "--b--",
   ].join("\r\n");
-  for (const _delivery of [1, 2])
-    expect(await deliver("mailbox@projects.test", invoice)).toMatchObject({ rejected: [] });
+  // delivered twice to one address, and once to another of the project's
+  for (const to of ["mailbox@projects.test", "mailbox@projects.test", "mailbox+cc@projects.test"])
+    expect(await deliver(to, invoice)).toMatchObject({ rejected: [] });
 
-  const [received, ...again] = mailOf(await readLog(inbox));
+  const [received, copy, ...again] = mailOf(await readLog(inbox));
   expect(again).toEqual([]);
+  expect(copy).toMatchObject({ payload: { envelope: { to: "mailbox+cc@projects.test" } } });
   expect(received).toMatchObject({
     type: "events.iterate.com/email/received",
     payload: {
@@ -94,7 +96,7 @@ test("a message to a project lands once on /integrations/email with its attachme
       threads: {
         [received!.offset]: {
           subject: "Invoice",
-          messageOffsets: [received!.offset, reply.offset, answer.offset],
+          messageOffsets: [received!.offset, copy!.offset, reply.offset, answer.offset],
         },
       },
     }),

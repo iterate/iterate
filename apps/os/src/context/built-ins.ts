@@ -276,11 +276,7 @@ export interface BuiltInScope extends LibraryRoots {
    *  domain object `itx.repos.get(path)` — THE way a project touches its repos): it mints its token and
    *  learns its remote here, then speaks git-over-HTTPS from inside its own worker. */
   cfArtifacts: IterateContextApi["cfArtifacts"];
-  /** THE PROJECT'S MAIL (src/email/): `send` mails from the project's own address,
-   *  `<slug>@<email domain>` (email/contract.ts `emailDomainOf`), through the `EMAIL` binding, then
-   *  records `email/sent` on `/integrations/email` (integrations/email.ts `sendEmail`), where the worker's
-   *  `email()` handler records what arrives. Only a project has an address, and only on a
-   *  deployment whose projects are subdomains. */
+  /** The project's mail: email/contract.ts for its address, integrations/email.ts for sending. */
   email: IterateContextApi["email"];
   /** Append to this context's append-only event log (the facets that REDUCE it are
    *  `itx.facets.get(name)`). A top-level root, so the expression surface mirrors the edge

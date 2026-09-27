@@ -44,6 +44,15 @@ test.for([
     },
   },
   {
+    row: "a second copy of a message, to another of our addresses, joins its thread",
+    events: [
+      received({ messageId: "a@x", subject: "Hi" }),
+      received({ messageId: "a@x", subject: "Hi" }),
+      received({ messageId: "c@x", inReplyTo: "a@x", references: ["a@x"] }),
+    ],
+    threads: { 1: { subject: "Hi", messageOffsets: [1, 2, 3] } },
+  },
+  {
     row: "a message's own append by a member threads nothing",
     events: [{ ...received({ messageId: "a@x" }), source: {} }],
     threads: {},
