@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { expect, test } from "vitest";
 import { parse as parseYaml } from "yaml";
-import { AWAIT_DEPLOY } from "./await-deploy.ts";
+import { AWAIT_DEPLOY, SUITE_BOUND_MS } from "./await-deploy.ts";
 
 type PreviewStep = {
   "continue-on-error"?: boolean;
@@ -224,14 +224,16 @@ test("Preview OS's suites decide as Deploy preview does whether there is a previ
   );
 });
 
-// The wait is bounded by the deploy's own timeout, and the suite keeps its 30 minutes after it.
+// The wait is bounded by the deploy's own timeout, and the suite by its 30 minutes after it
+// (apps/os/scripts/preview.ts `runBounded`), so the job's timeout is never what stops a suite.
 test("Preview OS's suite jobs outlast the deploy they wait for, and then their suite's 30 minutes", () => {
-  expect(AWAIT_DEPLOY).toMatchObject({
+  expect({ ...AWAIT_DEPLOY, suiteMs: SUITE_BOUND_MS }).toMatchObject({
     boundMs: preview.jobs.deploy!["timeout-minutes"]! * 60_000,
+    suiteMs: 30 * 60_000,
   });
   for (const suite of suites)
-    expect(preview.jobs[suite.job]!["timeout-minutes"]).toBe(
-      preview.jobs.deploy!["timeout-minutes"]! + 30,
+    expect(preview.jobs[suite.job]!["timeout-minutes"]! * 60_000).toBe(
+      AWAIT_DEPLOY.boundMs + SUITE_BOUND_MS,
     );
 });
 

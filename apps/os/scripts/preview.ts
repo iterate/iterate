@@ -12,7 +12,7 @@
 // scripts/preview-sweep.ts), deploy-parents (the workers every preview branches from, from this
 // checkout: preview-parents.yml on every push to main), reset-parent (the `os` parent's own data
 // erased, then the parent deployed again: preview-sweep.yml, nightly). `--dry-run` prints the plan.
-import { spawn, spawnSync } from "node:child_process";
+import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { appendFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -43,7 +43,7 @@ import {
   writeStartAppPreviewConfig,
   type StartApp,
 } from "../../../scripts/lib/start-app.ts";
-import { awaitDeployOfThisRun } from "../../../scripts/ci/await-deploy.ts";
+import { awaitDeployOfThisRun, SUITE_BOUND_MS } from "../../../scripts/ci/await-deploy.ts";
 import { createOctokit, getOctokit, getRepo } from "../../../scripts/ci/github.ts";
 import { getSlackClient, slackChannelIds } from "../../../scripts/ci/slack.ts";
 import { traceOperation } from "../../../scripts/ci/tracing/tracing.ts";
@@ -1012,9 +1012,9 @@ async function writeDeployedTarget(previewName: string, apps: TestEvidenceTarget
  *  with everything before the first test that needs no preview: the slow rows' choice and
  *  Chromium's install, and beside them the warm-ups (`warmUp`). Then it waits for the deploy
  *  (scripts/ci/await-deploy.ts), stops any warm-up still running without waiting for it to exit,
- *  and only then reads the deployed target and starts the suite. A deploy that did not finish fails
- *  the job with no suite line, once its warm-ups have exited: the PR body's status line already
- *  says the deploy failed. */
+ *  and only then reads the deployed target and starts the suite, which it stops after its 30 minutes
+ *  (`runBounded`). A deploy that did not finish fails the job with no suite line, once its warm-ups
+ *  have exited: the PR body's status line already says the deploy failed. */
 async function runSuite(
   suite: PreviewSuite,
   previewName: string,
@@ -1133,15 +1133,75 @@ async function runSuite(
       ? ["notes", "voice", "dash", "admin"].map((name) => ({ name, url: appUrl(name) }))
       : [],
   );
+  const run = { cwd: suite === "specs" ? REPO_ROOT : ROOT, env: tests.env };
   try {
-    await runAsync("pnpm", tests.args, {
-      cwd: suite === "specs" ? REPO_ROOT : ROOT,
-      env: tests.env,
-    });
+    // A job that waited for its deploy has the wait's bound in its timeout, and bounds the suite
+    // itself to what is left of it.
+    if (deployJob) await runBounded("pnpm", tests.args, { ...run, boundMs: SUITE_BOUND_MS });
+    else await runAsync("pnpm", tests.args, run);
   } catch (error) {
     throw failed(error);
   }
   handOverSuiteLine(statusPr, { suite, state: "passed" });
+}
+
+/** `command` run as deploy-helpers' `runAsync` runs it, its output inherited, but in a process
+ *  group of its own, which is stopped once `boundMs` has passed: SIGTERM, which lets vitest and
+ *  Playwright report what they ran and close their browsers, then SIGKILL 10 s later, and once the
+ *  command has exited, SIGKILL for anything it left running. It fails either way. A SIGINT or
+ *  SIGTERM this process gets while the command runs is passed on to its group, as it would reach a
+ *  child in this process's own. */
+function runBounded(
+  command: string,
+  args: string[],
+  options: { cwd: string; env: Record<string, string>; boundMs: number },
+) {
+  const commandLine = `${command} ${args.join(" ")}`;
+  console.log(`$ ${commandLine}`);
+  return new Promise<void>((resolve, reject) => {
+    const child = spawn(command, args, {
+      cwd: options.cwd,
+      stdio: "inherit",
+      env: { ...process.env, ...options.env },
+      detached: true,
+    });
+    const signal = (name: NodeJS.Signals) => signalGroup(child, name);
+    let stopped = false;
+    let killer: NodeJS.Timeout | undefined;
+    const bound = setTimeout(() => {
+      stopped = true;
+      console.error(
+        `[suite] ${commandLine} is still running after ${options.boundMs / 60_000} minutes, the suite's bound: stopping it`,
+      );
+      signal("SIGTERM");
+      killer = setTimeout(() => signal("SIGKILL"), 10_000);
+    }, options.boundMs);
+    process.on("SIGINT", signal);
+    process.on("SIGTERM", signal);
+    const done = () => {
+      clearTimeout(bound);
+      clearTimeout(killer);
+      process.off("SIGINT", signal);
+      process.off("SIGTERM", signal);
+    };
+    child.once("error", (error) => {
+      done();
+      reject(error);
+    });
+    child.once("exit", (code, exitSignal) => {
+      done();
+      if (stopped) {
+        signal("SIGKILL");
+        reject(
+          new Error(`${commandLine} ran past the suite's ${options.boundMs / 60_000} minutes`),
+        );
+      } else if (code === 0) resolve();
+      else
+        reject(
+          new Error(`${commandLine} exited with ${code ?? `signal ${exitSignal || "unknown"}`}`),
+        );
+    });
+  });
 }
 
 /** A command run only to read, while the preview deploys, what its suite reads before its first
@@ -1202,24 +1262,27 @@ function warmUp(
         });
       }),
   );
-  const signal = (name: NodeJS.Signals) => {
-    try {
-      process.kill(-child.pid!, name);
-    } catch (error) {
-      // ESRCH: the group has already exited
-      if (!(error instanceof Error && "code" in error && error.code === "ESRCH")) throw error;
-    }
-  };
   return {
     async stop() {
       if (closed || !child.pid) return exited;
       stopping = true;
-      signal("SIGTERM");
-      const killer = setTimeout(() => signal("SIGKILL"), 3_000);
+      signalGroup(child, "SIGTERM");
+      const killer = setTimeout(() => signalGroup(child, "SIGKILL"), 3_000);
       await exited;
       clearTimeout(killer);
     },
   };
+}
+
+/** `name` to every process of the group `child` leads (spawned `detached`), and to none once the
+ *  group has exited. */
+function signalGroup(child: ChildProcess, name: NodeJS.Signals) {
+  try {
+    if (child.pid) process.kill(-child.pid, name);
+  } catch (error) {
+    // ESRCH: the group has already exited
+    if (!(error instanceof Error && "code" in error && error.code === "ESRCH")) throw error;
+  }
 }
 
 // ── sweep (cloudflare-os: GitHub has no `environment.auto_stop_in`) ────────────────────────────
