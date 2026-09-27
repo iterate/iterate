@@ -91,7 +91,7 @@ jobs:
         if: steps.check_changes.outputs.commits != '0'
         uses: ./.depot/actions/setup
         with:
-          # a production deploy never reads Depot Cache (docs/depot-ci.md#depot-cache)
+          # a job whose token can write the repository never reads Depot Cache (docs/depot-ci.md#depot-cache)
           pnpm-store: none
       - name: Create release
         if: steps.check_changes.outputs.commits != '0'
