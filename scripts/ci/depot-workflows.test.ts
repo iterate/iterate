@@ -633,10 +633,9 @@ test("jobs on the baked image install no toolchain or dependencies of their own"
   expect(ownInstalls).toEqual([]);
 });
 
-// Depot's stock image starts warm on any host, and the Test job writes the files its tests read
-// (docs/depot-ci.md#the-test-job-runs-on-depots-stock-image). Depot Cache has no branch scope: a
-// run on any branch can write any key. So its one reader is the Test job, never a deploy, and only
-// a main push writes pnpm's store.
+// docs/depot-ci.md#the-test-job-runs-on-depots-stock-image. Depot Cache has no branch scope: a run
+// on any branch can write any key. So its one reader is the Test job, never a deploy, and only a
+// main push writes pnpm's store.
 test("the Test job sets up its toolchain on Depot's stock image, with pnpm's store from Depot Cache", () => {
   const workflow = loadWorkflow(".depot/workflows/test.yml");
   const steps = workflow.jobs.test.steps || [];
@@ -684,6 +683,11 @@ test("the Test job sets up its toolchain on Depot's stock image, with pnpm's sto
     run: "pnpm install --frozen-lockfile --prefer-offline",
   });
   expect(steps.indexOf(restore!)).toBeLessThan(install);
+  // a failed restore, only a warning, cancels no setup step beside it
+  const toolchain = readWorkflow(".depot/workflows/test.yml").jobs.test?.steps?.find((candidate) =>
+    candidate.parallel?.some((inner) => inner.id === "pnpm-store"),
+  );
+  expect(toolchain?.["fail-fast"]).toBe(false);
   // saved from a main push that missed the exact key
   expect(step("Save pnpm's store")).toMatchObject({
     if: "${{ !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.install.outcome == 'success' && steps.pnpm-store.outputs.cache-hit != 'true' }}",

@@ -26,9 +26,7 @@ env:
 
 jobs:
   test:
-    # Depot's stock image, not the baked one the other workflows run on: every Depot job shares it,
-    # so it boots warm on any host, and this job writes the files its tests read. The baked image
-    # loads lazily and boots cold on a host that has not run it since its last bake
+    # Depot's stock image, not the baked one
     # (docs/depot-ci.md#the-test-job-runs-on-depots-stock-image).
     # 8x32 for apps/os's seven vitest slots (apps/os/vitest.config.ts `maxWorkers`): 22 runs each on
     # 2026-09-24, the test step took 80 s at the p50 here and 87 s on 4x16 (151 s at three slots),
@@ -56,8 +54,10 @@ jobs:
         uses: actions/checkout@v4
         with:
           ref: ${{ github.sha }}
-      # THE TOOLCHAIN AND PNPM'S STORE, side by side (docs/depot-ci.md#parallel-steps).
-      - parallel:
+      # THE TOOLCHAIN AND PNPM'S STORE, side by side (docs/depot-ci.md#parallel-steps). A failed
+      # restore is a warning, and `fail-fast: false` keeps it from cancelling a setup step.
+      - fail-fast: false
+        parallel:
           - name: Setup Node
             uses: actions/setup-node@v4
             with:
