@@ -408,6 +408,7 @@ export class FetchUpgradeSpliceEnd {
         return this.#dial();
       },
       () => this.#ended,
+      FETCH_UPGRADE_RESUME_DEADLINE_MS,
     );
     if (!redialed) return;
     if ("gaveUp" in redialed) {
