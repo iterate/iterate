@@ -98,7 +98,9 @@ const hostnameIsLive = (entry: ProjectState["hostnames"][string] | undefined) =>
  *  destruction, and the project's own kv, files and Artifacts repos. The contexts it destroys are the
  *  registry's (`state.contexts`). */
 export type ProjectDeletion = {
-  /** Everything the context at `path` holds goes: its log, its facets' storage, its alarm. */
+  /** Everything the context at `path` holds goes: its log, its facets' storage, its alarm. The
+   *  root's only once the catalog holds the project as deleted: before, it throws (the pass is run
+   *  again). */
   destroyContext(path: string): Promise<void>;
   /** The project's kv keys, files and Artifacts repos. */
   deleteProjectStorage(): Promise<void>;
@@ -186,8 +188,8 @@ export class ProjectProcessor extends StreamProcessor<
           ? undefined
           : { ...state, creation: { status: "failed", offset: event.offset } };
       case "events.iterate.com/project/delete-requested":
-        // The platform's fact alone (the session appends it once the control plane dropped the
-        // row): a member can append this type to `/`, and theirs deletes nothing.
+        // The platform's fact alone (the session appends it just before the control plane drops
+        // the row): a member can append this type to `/`, and theirs deletes nothing.
         if (event.source?.platform !== true || state.deletion) return undefined;
         return { ...state, deletion: { offset: event.offset } };
       case "events.iterate.com/project/hostname-add-requested": {

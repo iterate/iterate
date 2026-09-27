@@ -76,13 +76,20 @@ export class ProjectDurableObject extends StreamProcessorDurableObject<
   #deletion(): ProjectDeletion {
     const { projectId } = DurableObjectNameCodec.parse(this.ctx.props.iterateContextName);
     return {
-      // the destroyed instance's reset rejects the call that asked for it: that rejection is done
-      destroyContext: (path) =>
-        this.env.ITERATE_CONTEXT.getByName(DurableObjectNameCodec.stringify({ projectId, path }))
+      // the destroyed instance's reset rejects the call that asked for it: that rejection is done.
+      // The root only once its row is gone (the verb drops it a moment after it asks for this):
+      // destroyed while the row stood, the next request would bear it again, nothing to refuse it
+      destroyContext: async (path) => {
+        if (path === "/" && !(await new ControlPlane(this.env).deletedProject(projectId)))
+          throw new Error(`project ${projectId} still has its row: its root is not destroyed yet`);
+        await this.env.ITERATE_CONTEXT.getByName(
+          DurableObjectNameCodec.stringify({ projectId, path }),
+        )
           .destroy()
           .catch((error: unknown) => {
             if (!String(error).includes(CONTEXT_DESTROYED)) throw error;
-          }),
+          });
+      },
       deleteProjectStorage: async () => {
         for (let cursor: string | undefined; ;) {
           const page = await this.env.ITX_KV.list({ prefix: `${projectId}:`, cursor });

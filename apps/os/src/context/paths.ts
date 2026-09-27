@@ -74,6 +74,10 @@ export function ancestorPathsOf(path: string): string[] {
  *  the answer its caller reads as done (project/durable-object.ts). */
 export const CONTEXT_DESTROYED = "destroyed: its project was deleted";
 
+/** What a deleted project's root answers, coded FORBIDDEN, after `project <id> `: it is never born
+ *  again (iterate-context-durable-object.ts `#refuseBirthOfDeletedProjectRoot`). */
+export const PROJECT_DELETED = "was deleted: nothing is left of it";
+
 /** A context's path relative to its owner's root (`resourceScope`) — what a secret's placeholder
  *  spells: `/secrets/shop` for a project's `/secrets/shop` and a user's `/users/<id>/secrets/shop`
  *  alike. */

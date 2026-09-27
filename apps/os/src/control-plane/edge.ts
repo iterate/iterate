@@ -195,6 +195,12 @@ export class ControlPlane {
     return project;
   }
 
+  /** Whether `projectId` names a deleted project (catalog.ts `deletedProject`): asked at a root
+   *  context's birth and before the deletion saga destroys it, so never kept. */
+  deletedProject(projectId: string): Promise<boolean> {
+    return this.#read("deletedProject", () => this.#db.deletedProject(projectId));
+  }
+
   /** The project `url` is a host of — THE INGRESS ROUTING TABLE: the static rules first (app-config.ts
    *  `projectHostOf`: the ingress routing and the project wildcard), then a hostname a project added
    *  itself (project/custom-hostnames.ts): its apex, or one label under it a routing slug

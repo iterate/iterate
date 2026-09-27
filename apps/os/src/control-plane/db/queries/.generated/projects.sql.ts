@@ -267,3 +267,56 @@ export namespace deleteProject {
 		actorId: string;
 	};
 }
+
+const insertDeletedProjectSql = `
+insert into deleted_projects (id)
+select d.id from (select ? as id) d
+where not exists (select 1 from projects p where p.id = d.id)
+on conflict (id) do nothing;
+`.trim();
+const insertDeletedProjectQuery = (params: insertDeletedProject.Params) => ({
+	name: "insertDeletedProject",
+	sql: insertDeletedProjectSql,
+	args: [params.id],
+});
+
+export const insertDeletedProject = Object.assign(
+	async function insertDeletedProject(client: Client, params: insertDeletedProject.Params) {
+		return client.run(insertDeletedProjectQuery(params));
+	},
+	{ sql: insertDeletedProjectSql, query: insertDeletedProjectQuery },
+);
+
+export namespace insertDeletedProject {
+	export type Params = {
+		id: string;
+	};
+}
+
+const deletedProjectSql = `
+select d.id
+from deleted_projects d
+where d.id = ? and not exists (select 1 from projects p where p.id = d.id);
+`.trim();
+const deletedProjectQuery = (params: deletedProject.Params) => ({
+	name: "deletedProject",
+	sql: deletedProjectSql,
+	args: [params.id],
+});
+
+export const deletedProject = Object.assign(
+	async function deletedProject(client: Client, params: deletedProject.Params): Promise<deletedProject.Result | null> {
+		const rows = await client.all<deletedProject.Result>(deletedProjectQuery(params));
+		return rows.length > 0 ? rows[0] : null;
+	},
+	{ sql: deletedProjectSql, query: deletedProjectQuery },
+);
+
+export namespace deletedProject {
+	export type Params = {
+		id: string;
+	};
+	export type Result = {
+		id: string;
+	};
+}

@@ -66,6 +66,14 @@ create table projects (
 );
 create index projects_org on projects (org_id);
 
+-- A DELETED PROJECT'S ID, written by `deleteProject`'s batch as it deletes the row: a root context
+-- is never born for an id here that no project holds (iterate-context-durable-object.ts). An id the
+-- catalog never heard of (the operator's made-up `prj_…`) is not here; one a seed restored holds its
+-- row again.
+create table deleted_projects (
+  id text primary key
+);
+
 -- An invitation link: the token's SHA-256 is the lookup (the token itself is never stored), the id
 -- the owners' handle. Single use: `accepted_by` is set once, and `acceptance_id` names the request
 -- that set it, so only that request's batch adds the membership (catalog.ts `acceptInvitation`).

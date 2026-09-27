@@ -54,9 +54,11 @@ import {
   upsertMembership,
 } from "./db/queries/.generated/organizations.sql.ts";
 import {
+  deletedProject,
   deleteProject,
   firstOrganizationOf,
   insertAdminOrganization,
+  insertDeletedProject,
   insertFirstOrganizationProject,
   insertMemberProject,
   insertPersonalOrganization,
@@ -195,6 +197,11 @@ export class ControlPlaneDatabase {
   async project(ref: string): Promise<ProjectRow | null> {
     const [row] = await projectsByRef(this.#client, { id: ref, slug: ref });
     return row ? projectRow(row) : null;
+  }
+  /** Whether `projectId` names a project that was deleted and is not held again (a seed restores
+   *  one under its id): a root context is never born for it (iterate-context-durable-object.ts). */
+  async deletedProject(projectId: string): Promise<boolean> {
+    return Boolean(await deletedProject(this.#client, { id: projectId }));
   }
   /** Every project, oldest first. */
   projects(): Promise<ProjectRecord[]> {
@@ -710,6 +717,8 @@ export class ControlPlaneDatabase {
       // its connections' webhook routes go with it, or an account it held could never be routed
       // to another project (`routeIntegration`: first owner wins)
       releaseRoutesOfDeletedProject.query({ projectId: project.id }),
+      // its id stays behind once the row is gone, so its root is never born again (`deletedProject`)
+      insertDeletedProject.query({ id: project.id }),
     ]);
     if (changed(results[0])) return project;
     throw (
