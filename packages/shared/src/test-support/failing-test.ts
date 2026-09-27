@@ -59,8 +59,8 @@ import { E2E_CI_RETRY_DELAY_MS } from "./e2e-policy/budgets.ts";
  * (which is also why registration pins `retry: 0`). A pin opts in with
  * `options.retries` (an e2e pin passes `process.env.CI ? E2E_CI_RETRIES : 0`:
  * the CI retry count every plain e2e test gets, zero at a desk): a non-matching failure
- * re-runs the body that many times, after `retryDelayMs` (default: the e2e
- * suites' CI retry pause), with what is left of `timeoutMs` — never sleeping
+ * re-runs the body that many times, after the e2e suites' CI retry pause
+ * (`E2E_CI_RETRY_DELAY_MS`), with what is left of `timeoutMs` — never sleeping
  * past the deadline, so the runner's timeout cannot fire during the pause and
  * count as the pin holding. Each attempt writes its own record. A pass and a
  * hang are never retried.
@@ -68,11 +68,10 @@ import { E2E_CI_RETRY_DELAY_MS } from "./e2e-policy/budgets.ts";
 export function createFailing<TestFn extends (...args: any[]) => any>(
   test: TestFn,
   failure: RegExp,
-  options?: { timeoutMs?: number; retries?: number; retryDelayMs?: number },
+  options?: { timeoutMs?: number; retries?: number },
 ): TestFn {
   const timeoutMs = options?.timeoutMs || 30_000;
   const retries = options?.retries ?? 0;
-  const retryDelayMs = options?.retryDelayMs ?? E2E_CI_RETRY_DELAY_MS;
   const failer: unknown = "fails" in test ? test.fails : "fail" in test ? test.fail : undefined;
   if (typeof failer !== "function") {
     throw new Error(
@@ -132,14 +131,14 @@ export function createFailing<TestFn extends (...args: any[]) => any>(
       let outcome = await attempt();
       for (let retry = 1; retry <= retries; retry += 1) {
         if (outcome.kind !== "failed" || failure.test(String(outcome.error))) break;
-        if (deadline - Date.now() <= retryDelayMs) break; // no pause past the deadline
+        if (deadline - Date.now() <= E2E_CI_RETRY_DELAY_MS) break; // no pause past the deadline
         await record("unexpected-error", outcome.error);
         console.error(
           `[failing-test] Expected failure to match /${failure.source}/, got a different failure — ` +
-            `it proves nothing about the pinned bug; retry ${retry} of ${retries} in ${retryDelayMs}ms:`,
+            `it proves nothing about the pinned bug; retry ${retry} of ${retries} in ${E2E_CI_RETRY_DELAY_MS}ms:`,
           outcome.error,
         );
-        await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
+        await new Promise((resolve) => setTimeout(resolve, E2E_CI_RETRY_DELAY_MS));
         startedAt = Date.now();
         outcome = await attempt();
       }
