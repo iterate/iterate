@@ -100,7 +100,9 @@ export function ConsentCard({
         // An ended session is redirected to sign-in: useServerFn has already navigated there and
         // resolves with nothing, so this page has nothing left to update.
         if (!result) return;
-        await router.invalidate();
+        // `sync`: "Creating project…" stays up until the description shows the new project, rather
+        // than ending on the old one (docs/frontend-development.md#act-mutations).
+        await router.invalidate({ sync: true });
         // An organization made for a refused project stays chosen for the retry.
         const orgId = result.orgId || draft.orgId;
         if (result.error) {
