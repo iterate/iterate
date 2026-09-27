@@ -45,7 +45,7 @@ import { createOctokit, getOctokit, getRepo } from "../../../scripts/ci/github.t
 import { getSlackClient, slackChannelIds } from "../../../scripts/ci/slack.ts";
 import { traceOperation } from "../../../scripts/ci/tracing/tracing.ts";
 import { parseAppConfig, type AppConfig } from "../src/app-config.ts";
-import { mintTestLink, TEST_LINK_PATH, testLinkIdentityOf } from "../src/test-link.ts";
+import { TEST_EMAIL_DOMAIN } from "../src/test-email-domain.ts";
 import { buildOs } from "./build.ts";
 import type { D1Row } from "./d1.ts";
 import deployOs from "./deploy.ts";
@@ -62,9 +62,11 @@ import {
 } from "./preview-artifacts.ts";
 import {
   APPS,
+  appSignInLink,
   assertFreshInstall,
   configTemplateNames,
   foldPreviousPreviewSection,
+  FORMER_PARENTS,
   MAIN_ON_DEV,
   previewDeploymentName,
   previewDeploymentUrls,
@@ -73,10 +75,13 @@ import {
   resolvePreviewPrefix,
   splicePullRequestBody,
   templateQuickLaunches,
+  writePullRequestBody,
+  type PullRequestBody,
 } from "./preview-config.ts";
 import {
   groupPreviewDeployments,
   newestPreviewDeployment,
+  planLegacyWorkerPreviewSweep,
   planPreviewSweep,
   planSupersededCleanup,
   previewMemberSuffixes,
@@ -135,41 +140,20 @@ async function listAll<T>(cf: Cf, route: string) {
 /** The pull request `number` of this repository (GITHUB_REPOSITORY), as Octokit's parameters. */
 const pullRequest = (number: string | number) => ({ ...getRepo(), pull_number: Number(number) });
 
-/** Read, splice, write, read back: the PR body has no conditional update, so a person editing the
- *  description in the same seconds could lose one write or the other. Reading it back and
- *  re-splicing onto whatever is there now converges on both edits within a few rounds. `what` names
- *  the write in the log: the fold of the previous section, or the section. Every PATCH goes out
- *  once, straight after its read: a 5xx is not asked again with a body read seconds earlier, the
- *  next round reads anew. */
-async function writePullRequestBody(
-  prNumber: string,
-  what: string,
-  splice: (body: string) => string,
-) {
+/** The PR's body on GitHub, read and replaced (preview-config.ts `writePullRequestBody`). */
+function pullRequestBody(prNumber: string): PullRequestBody {
   const github = getOctokit();
-  const readBody = async () => (await github.rest.pulls.get(pullRequest(prNumber))).data.body || "";
-  for (let attempt = 1; attempt <= 3; attempt++) {
-    const before = await readBody();
-    const body = splice(before);
-    if (body === before) return console.log(`PR #${prNumber}'s body already carries ${what}`);
-    const patchError = await github.rest.pulls
-      .update({ ...pullRequest(prNumber), body, request: { askOnce: true } })
-      .then(
-        () => undefined,
-        (error: unknown) => error,
-      );
-    if (patchError) {
-      console.warn(`${describe(patchError)}; reading the body again`);
-      await new Promise((resolve) => setTimeout(resolve, 5000));
-    }
-    const after = await readBody();
-    if (splice(after) === after)
-      return console.log(`wrote ${what} into the body of PR #${prNumber}`);
-    console.warn(
-      `PR #${prNumber}'s body changed under the write (attempt ${attempt}); re-splicing`,
-    );
-  }
-  throw new Error(`could not write ${what} into PR #${prNumber}'s body: it kept changing`);
+  return {
+    number: prNumber,
+    read: async () => (await github.rest.pulls.get(pullRequest(prNumber))).data.body || "",
+    replace: async (body) => {
+      await github.rest.pulls.update({
+        ...pullRequest(prNumber),
+        body,
+        request: { askOnce: true },
+      });
+    },
+  };
 }
 
 /** The commit this checkout is: the one the job deployed or tested (the PR merged into main in CI). */
@@ -478,7 +462,11 @@ async function deployPreview(
   const folded =
     prNumber && process.env.GITHUB_TOKEN
       ? traceOperation("Fold the previous section", () =>
-          writePullRequestBody(prNumber, "the folded previous section", foldPreviousPreviewSection),
+          writePullRequestBody(
+            pullRequestBody(prNumber),
+            "the folded previous section",
+            foldPreviousPreviewSection,
+          ),
         ).catch((error: unknown) =>
           console.warn(`could not fold the previous section: ${describe(error)}`),
         )
@@ -550,25 +538,19 @@ async function deployPreviewSteps(
   // `/version` answering is not the deployment answering: a brand-new worker's Durable Objects
   // answer `internal error; reference = …` for seconds after it (19 of 20 brand-new Worker Previews
   // on 2026-09-24, for 6–27 s; preview-readiness.ts). Nothing is handed on — the PR body's links,
-  // the sign-in seed, the e2e job — until five rounds of eight in a row answer in full on this
-  // version. One that does not within 150 s fails the deploy, naming what it answered.
+  // the sign-in seed, the e2e job — until three rounds of eight in a row answer in full on this
+  // version. One that misses the gate's deadline fails the deploy, naming what it answered.
   await traceOperation("Readiness gate", () =>
     awaitPreviewReady(url, {
       adminSecret: config.secrets.adminBearer.exposeSecret(),
       version: versionId,
       width: 8,
-      consecutive: 5,
-      deadlineMs: 150_000,
+      consecutive: 3,
     }),
   );
   console.log(`\ndeployment ${name}: ${url}`);
   const signIn = prNumber
-    ? await signInLinks(config, {
-        url,
-        prNumber,
-        apps: deployedApps,
-        changedPaths: await changed,
-      })
+    ? signInLinks({ url, prNumber, apps: deployedApps, changedPaths: await changed })
     : undefined;
   const publish = async (seeded: boolean) => {
     mkdirSync(OUTPUT_DIR, { recursive: true });
@@ -594,7 +576,7 @@ async function deployPreviewSteps(
       seed: { project: signIn.project, seeded },
     });
     await traceOperation("Write the PR section", () =>
-      writePullRequestBody(prNumber, "the preview section", (body) =>
+      writePullRequestBody(pullRequestBody(prNumber), "the preview section", (body) =>
         splicePullRequestBody(body, section),
       ),
     );
@@ -630,67 +612,58 @@ async function changedPaths(prNumber: string | undefined) {
     .filter(Boolean);
 }
 
-/** THE ONE-CLICK SIGN-IN a PR's body links (src/test-link.ts): the heading's link, one per app,
- *  and with the Dash one per config template into its New project sheet (preview-config.ts
- *  `templateQuickLaunches`), all as the PR's test person `pr<N>@preview.iterate.test`, whose
- *  project `pr<N>` seedSignIn creates. Each link is signed with the preview's own key for this
- *  preview's origin, expires in 14 days (every push mints a fresh one) and pre-approves this run's
- *  app previews (consent.ts: no Allow page). The heading's lands in the Dash's `/projects/pr<N>`
- *  when the Dash was previewed, else on the issuer's own `/login` ("Signed in as"). */
-async function signInLinks(
-  config: AppConfig,
-  preview: {
-    url: string;
-    prNumber: string;
-    apps: { name: string; url: string }[];
-    changedPaths: string[];
-  },
-) {
-  const { email, project } = testLinkIdentityOf(preview.prNumber);
-  const clients = preview.apps.map((app) => new URL(app.url).origin);
-  const link = async (next: string) =>
-    `${preview.url}${TEST_LINK_PATH}?${new URLSearchParams({
-      t: await mintTestLink({
-        key: config.secrets.key.exposeSecret(),
-        audience: preview.url,
-        email,
-        next,
-        clients,
-        expiresAt: Date.now() + 14 * 24 * 3600_000,
-      }),
-    })}`;
-  const landing = (app: { name: string; url: string }) =>
-    app.name === "dash" ? `${app.url}/projects/${project}` : app.url;
+/** THE SIGN-IN a PR's body links (preview-config.ts `appSignInLink`): the heading's link, one per
+ *  app, and with the Dash one per config template into its New project sheet (preview-config.ts
+ *  `templateQuickLaunches`), each the app's own sign-in naming the PR's test person
+ *  `pr<N>@preview.iterate.test`, whose project `pr<N>` seedSignIn creates. The link is public and
+ *  grants nothing: a reviewer signs in to the deployment as themselves, one of prd's admins
+ *  (src/admin-sign-in.ts), and confirms signing the app in as the test person on the consent page,
+ *  which the link pre-fills (src/consent.ts). The admin app's names nobody: an admin opens it as
+ *  themselves. The heading's lands in the Dash's `/projects/pr<N>` when the Dash was deployed,
+ *  else on the issuer's own sign-in page. */
+function signInLinks(preview: {
+  url: string;
+  prNumber: string;
+  apps: { name: string; url: string }[];
+  changedPaths: string[];
+}) {
+  const project = `pr${preview.prNumber}`;
+  const email = `${project}@${TEST_EMAIL_DOMAIN}`;
+  const link = (app: { name: string; url: string }) =>
+    appSignInLink(
+      app.name === "dash" ? `${app.url}/projects/${project}` : app.url,
+      app.name === "admin" ? undefined : email,
+    );
   const dash = preview.apps.find((app) => app.name === "dash");
-  const heading = await link(dash ? landing(dash) : `${preview.url}/login`);
-  const apps = Object.fromEntries(
-    await Promise.all(preview.apps.map(async (app) => [app.name, await link(landing(app))])),
-  );
-  const templates = dash
-    ? await Promise.all(
-        templateQuickLaunches({
+  return {
+    heading: dash ? link(dash) : `${preview.url}/login`,
+    apps: Object.fromEntries(preview.apps.map((app) => [app.name, link(app)])),
+    templates: dash
+      ? templateQuickLaunches({
           dashUrl: dash.url,
           templates: configTemplateNames(REPO_ROOT),
           changedPaths: preview.changedPaths,
           // the PR head (the workflow's), which GitHub keeps; a laptop's checkout is its head
           headSha: process.env.PREVIEW_HEAD_SHA || checkedOutCommit(),
-        }).map(async ({ name, fromHead, next }) => ({ name, fromHead, link: await link(next) })),
-      )
-    : [];
-  return { heading, apps, templates, email, project };
+        }).map(({ name, fromHead, next }) => ({
+          name,
+          fromHead,
+          link: appSignInLink(next, email),
+        }))
+      : [],
+    email,
+    project,
+  };
 }
 
 /** Seed the PR's test person and project — created as them through the operator's bearer (`as`),
  *  the same idempotent call as e2e/support/project-host.ts `registerProject`, so the Dash link
- *  lands inside it — then smoke apps/os's link: a good one signs nobody in yet, and sends the
- *  browser to prd's `/oauth2/auth` to prove it is an admin's (src/test-link-admins.ts). Neither
- *  ever fails the deploy: they log, and the section says when the seed failed. */
+ *  lands inside it. It never fails the deploy: it logs, and the section says when it failed. */
 async function seedSignIn(
   config: AppConfig,
-  preview: { url: string; email: string; project: string; heading: string },
+  preview: { url: string; email: string; project: string },
 ) {
   const { email, project } = preview;
-  let seeded = false;
   try {
     const socketUrl = new URL("/api", preview.url);
     socketUrl.protocol = "wss:";
@@ -714,25 +687,12 @@ async function seedSignIn(
     } finally {
       socket.close();
     }
-    seeded = true;
     console.log(`sign-in: seeded ${email} with project ${project}`);
+    return true;
   } catch (error) {
     console.warn(`sign-in: seeding ${email} with project ${project} failed: ${describe(error)}`);
+    return false;
   }
-  const smoke = await fetch(preview.heading, { redirect: "manual" }).catch(
-    (error: unknown) => error,
-  );
-  const location =
-    smoke instanceof Response && smoke.status === 302
-      ? new URL(smoke.headers.get("location") || "/", preview.url)
-      : undefined;
-  if (location?.pathname === "/oauth2/auth")
-    console.log(`sign-in: apps/os's link asks ${location.origin} who the browser is, as it should`);
-  else
-    console.warn(
-      `sign-in: apps/os's link did not ask prd who the browser is: ${smoke instanceof Response ? `${smoke.status} ${location || (await smoke.text())}` : describe(smoke)}`,
-    );
-  return seeded;
 }
 
 /** Each suite's test telemetry identity, pinned rather than read from pnpm's ambient package name:
@@ -805,7 +765,7 @@ async function runSuite(
 ) {
   const urls = previewDeploymentUrls(name);
   const url = urls.os;
-  const env = { WORKER_BASE_URL: url, DEMO_BASE_URL: url };
+  const env = { WORKER_BASE_URL: url };
   const appUrl = (app: string) => urls.apps[app]!;
   await writeDeployedTarget(
     name,
@@ -888,52 +848,73 @@ async function openPullRequestBranches() {
   }
 }
 
-/** LEGACY, from before per-commit deployments (2026-09-25): the Worker Previews of main on dev's
- *  workers that each PR used to get, and apps/os's previews' resources (`os-<preview>-<binding>`).
- *  Every run finds fewer; delete this, and the sweep's call, once one logs "no Worker Previews
- *  left". */
+/** LEGACY, from before per-commit deployments (2026-09-25): the Worker Previews each PR used to get
+ *  on main on dev's workers and, before those were renamed, on the former parents (preview-config.ts
+ *  FORMER_PARENTS), each holding a Durable Object namespace per class of the account's 500 — and
+ *  apps/os's previews' resources (`<os worker>-<preview>-<binding>`). The stale ones go
+ *  (preview-sweep.ts `planLegacyWorkerPreviewSweep`). Delete this, and the sweep's call, once a run
+ *  logs "no Worker Previews left". */
 async function deleteLegacyWorkerPreviews(cf: Cf, options: { dryRun: boolean }) {
-  const failures: string[] = [];
-  const osPreviews: string[] = [];
-  for (const worker of [
-    MAIN_ON_DEV.workerName,
-    ...APPS.map((app) => app.envs.preview!.workerName),
-  ]) {
-    const previews = await listAll<{ name: string }>(cf, `/workers/workers/${worker}/previews`);
-    for (const { name } of previews) {
-      if (worker === MAIN_ON_DEV.workerName) osPreviews.push(name);
-      console.log(
-        `  ${options.dryRun ? "would delete" : "delete"} legacy Worker Preview ${name} of ${worker}`,
-      );
-      if (options.dryRun) continue;
-      await cf(`/workers/workers/${worker}/previews/${name}?force=true`, {
-        method: "DELETE",
-      }).catch((error) => failures.push(`${worker} preview ${name}: ${describe(error)}`));
-    }
+  const osWorkers = [MAIN_ON_DEV.workerName, "os-preview"];
+  const workers = [
+    ...new Set([
+      MAIN_ON_DEV.workerName,
+      ...APPS.map((app) => app.envs.preview!.workerName),
+      ...FORMER_PARENTS,
+    ]),
+  ];
+  const listed = (
+    await Promise.all(
+      workers.map(async (worker) =>
+        (
+          await listAll<{ name: string; created_on?: string; deployed_on?: string }>(
+            cf,
+            `/workers/workers/${worker}/previews`,
+          ).catch((error) => {
+            // a worker already deleted holds no previews
+            if (!isCloudflareError(error, 404, 10007)) throw error;
+            return [];
+          })
+        ).map((preview) => ({
+          worker,
+          name: preview.name,
+          lastDeployedAt: preview.deployed_on || preview.created_on,
+        })),
+      ),
+    )
+  ).flat();
+  if (listed.length === 0) {
+    console.log("no Worker Previews left");
+    return [];
   }
-  if (osPreviews.length === 0 && failures.length === 0) console.log("no Worker Previews left");
-  const legacyName = (preview: string, binding: string) =>
-    `${MAIN_ON_DEV.workerName}-${preview}-${binding}`;
+  const plan = planLegacyWorkerPreviewSweep(Date.now(), listed);
+  for (const { worker, name, verdict, reason } of plan)
+    console.log(
+      `  ${verdict === "stale" ? "delete" : "keep  "} legacy Worker Preview ${name} of ${worker}: ${reason}`,
+    );
+  if (options.dryRun) return [];
+  const failures: string[] = [];
+  const stale = plan.filter(({ verdict }) => verdict === "stale");
+  for (const { worker, name } of stale)
+    await cf(`/workers/workers/${worker}/previews/${name}?force=true`, { method: "DELETE" }).catch(
+      (error) => failures.push(`${worker} preview ${name}: ${describe(error)}`),
+    );
   const [kv, d1] = await Promise.all([
     listAll<KvNamespaceRow>(cf, "/storage/kv/namespaces"),
     listAll<D1Row>(cf, "/d1/database"),
   ]);
-  for (const preview of osPreviews) {
-    if (options.dryRun) continue;
+  for (const { worker, name } of stale.filter(({ worker }) => osWorkers.includes(worker))) {
+    const resource = (binding: string) => `${worker}-${name}-${binding}`;
     const removals = [
       ...kv
-        .filter((row) =>
-          [legacyName(preview, "itx-kv"), legacyName(preview, "oauth-kv")].includes(row.title),
-        )
+        .filter((row) => [resource("itx-kv"), resource("oauth-kv")].includes(row.title))
         .map((row) => () => deleteKvNamespace(cf, row)),
-      ...d1
-        .filter((row) => row.name === legacyName(preview, "db"))
-        .map((row) => () => deleteD1(cf, row)),
-      () => deleteR2Bucket(cf, legacyName(preview, "files")),
-      () => deleteArtifactsNamespace(cf, legacyName(preview, "repos")).then(() => undefined),
+      ...d1.filter((row) => row.name === resource("db")).map((row) => () => deleteD1(cf, row)),
+      () => deleteR2Bucket(cf, resource("files")),
+      () => deleteArtifactsNamespace(cf, resource("repos")).then(() => undefined),
     ];
     for (const remove of removals)
-      await remove().catch((error) => failures.push(`${preview}: ${describe(error)}`));
+      await remove().catch((error) => failures.push(`${worker} ${name}: ${describe(error)}`));
   }
   return failures;
 }

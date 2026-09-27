@@ -8,7 +8,10 @@ select id, email from users order by email;
 insert into users (id, email) values (:id, :email) on conflict (email) do nothing;
 
 /** @name updateUserEmail */
-update users set email = :email where id = :id;
+update users set email = :email
+where id = :id
+  and (select count(*) from identities i where i.user_id = users.id) = 1
+  and not exists (select 1 from identities i where i.user_id = users.id and i.added_at is not null);
 
 /** @name identityUser */
 select u.id, u.email
@@ -26,4 +29,9 @@ on conflict (email) do nothing;
 /** @name insertIdentity */
 insert into identities (provider, subject, user_id)
 select :provider, :subject, u.id from users u where u.email = :email
+on conflict do nothing;
+
+/** @name insertAddedIdentity */
+insert into identities (provider, subject, user_id, added_at)
+values (:provider, :subject, :userId, :addedAt)
 on conflict do nothing;

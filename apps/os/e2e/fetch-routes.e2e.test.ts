@@ -15,12 +15,12 @@
 import { RpcTarget, upgradeWebSocketResponse, WebSocketPair } from "capnweb";
 import { expect, test } from "vitest";
 import { adminCredentials, rejection, session, untilValue } from "./support/client.ts";
+import { publishConfigWorker } from "./support/config-worker.ts";
 import {
   fetchProjectUrl,
   freshDnsSafeProjectSlug,
   navigateProjectUrl,
   projectUrl,
-  publishConfigWorker,
   registerProject,
   wsRoundTripOnProjectUrl,
 } from "./support/project-host.ts";

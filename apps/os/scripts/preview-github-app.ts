@@ -6,7 +6,7 @@ import { dummyPetshopEnvs } from "../../../envs.ts";
 /** A PREVIEW'S GITHUB APP — APP_CONFIG `integrations.github` for every per-PR preview, but its key:
  *  the pet shop's GitHub fake (apps/dummy-petshop/src/github.ts), which serves github.com's and
  *  api.github.com's paths at its deployed origin (`githubOrigin`), and its seeded OAuth client. Fake
- *  credentials for a fake service, so they live here in code like the test-link switch; the App's
+ *  credentials for a fake service, so they live here in code like the admin issuer; the App's
  *  private key is a throwaway generated for this fake alone and kept in Doppler `os/preview`
  *  (`previewGithubAppPrivateKey`) — no key is ever in git. A preview can never reach a real GitHub
  *  installation through iterate's App, and prd's App is Doppler's `os/prd`. */

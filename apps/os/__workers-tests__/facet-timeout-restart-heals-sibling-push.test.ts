@@ -3,7 +3,7 @@
 // restart's abort cuts off every OTHER call still in flight on that instance. The timed-out call
 // is the one that failed: it stays TIMEOUT. The others did not time out — the facet they ran on
 // was restarted under them — so they reject FACET_RESTARTED, exactly like a call a restart under a
-// new loaded identity cut off (facet-restart-heals-cut-off-push.test.ts): a cut-off PUSH is owed
+// new loaded identity cut off (facets.test.ts): a cut-off PUSH is owed
 // one catch-up from the log on the new instance, logged as `delivery.facet-restarted-in-flight`,
 // never a `subscription-delivery.deliver` issue.
 //
@@ -12,8 +12,8 @@
 // Long by nature: ~62 s (a long pole, apps/os/vitest.config.ts).
 
 import { errorCode } from "iterate/lib";
-import { expect, onTestFinished, test, vi } from "vitest";
-import { stub, until } from "./support.ts";
+import { expect, test, vi } from "vitest";
+import { readLog, stub, until } from "./support.ts";
 
 /** FACET_CALL_WATCHDOG_MS (not exported — a copy, so a change to the constant shows up here). */
 const WATCHDOG_MS = 60_000;
@@ -60,10 +60,6 @@ test(
 
     const errors = vi.spyOn(console, "error");
     const logs = vi.spyOn(console, "log");
-    onTestFinished(() => {
-      errors.mockRestore();
-      logs.mockRestore();
-    });
 
     // The watchdog times the stalled call out and restarts the facet; that call stays TIMEOUT.
     const timedOut = await stalled;
@@ -84,8 +80,7 @@ test(
       return p.checkpoints.some((c) => c.reduced_through_offset >= owed!.offset) ? p : undefined;
     });
     expect(healed.seen.filter((row) => Number(row.hung) === 1)).toHaveLength(1); // never re-pushed
-    const events = ((await s.invoke(["itx", ["readEvents", 0, 500]])) as { events: unknown[] })
-      .events;
+    const events = await readLog(ctx);
     expect(JSON.parse(healed.checkpoints[0]!.state)).toEqual({ n: events.length }); // each once
     expect(
       ((await s.invoke(["itx", "subscriptions", ["get", name]])) as { halted?: unknown }).halted,

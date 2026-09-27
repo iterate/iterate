@@ -22,7 +22,7 @@ test("known types: consumed first (sorted, with who consumes them), then the log
   ]);
 });
 
-test.each([
+test.for([
   { name: "after `type: `", draft: "type: |", from: 6, labels: "types" },
   { name: "part of a type typed", draft: "type: man|", from: 6, labels: "types" },
   { name: "a quoted type", draft: 'type: "man|', from: 7, labels: "types" },

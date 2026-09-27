@@ -8,7 +8,6 @@ import { expect, type TestContext } from "vitest";
 import type { SocketLost } from "../e2e/support/client.ts";
 import {
   BUDGET_MISSED,
-  budgetLine,
   crosses,
   LATENCY_METRICS,
   summarize,
@@ -46,8 +45,7 @@ export function recordLatency(
 ) {
   (task.meta.latency ||= {})[metric] = samples;
   const summary = summarize(samples);
-  const { unit } = LATENCY_METRICS[metric];
-  const line = budgetLine(metric, 1);
+  const { unit, budget: line } = LATENCY_METRICS[metric];
   const value = summary.p50;
   console.log(
     `[latency] ${metric}: n=${summary.n} p50=${round(summary.p50)} p95=${round(summary.p95)} max=${round(summary.max)} ${unit} — the median against a budget of ${line}`,

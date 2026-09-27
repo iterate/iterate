@@ -12,14 +12,9 @@
  * refresh takes seconds, so the reply is deferred (`capnweb_reply_defer`) and
  * `step`, which the device loop runs every pass, answers it; a driver that
  * shows at once (a reflective LCD) is answered on the spot.
- *
- * `status` stays for the voice workers projects already run: a project keeps
- * the worker it installed (packages/voice/src/install.ts), and those ask
- * `status` after the last chunk.
  */
 
 static const char *const formats[] = {"mono1", "gray4", "rgb565"};
-static const char *const states[] = {"idle", "pending", "shown", "failed"};
 
 size_t iterate_kit_screen_frame_bytes(uint16_t width, uint16_t height,
                                     enum iterate_kit_screen_format format) {
@@ -59,17 +54,6 @@ static enum capnweb_status info(void *context, const struct capnweb_call *call,
     "\"maxChunkBytes\":4096,\"refreshTimeoutMs\":%lu,\"partialRefresh\":%s}",
     screen->driver.width, screen->driver.height, supported, preferred,
     (unsigned long)screen->driver.refresh_timeout_ms, screen->driver.partial_refresh ? "true" : "false");
-  return capnweb_reply_set_borrowed_expression(reply, json, (size_t)length, NULL, NULL);
-}
-
-static enum capnweb_status status(void *context, const struct capnweb_call *call,
-                                 struct capnweb_reply *reply) {
-  (void)call;
-  struct iterate_kit_screen *screen = context;
-  const enum iterate_kit_screen_state state = refresh_state(screen);
-  static char json[96];
-  const int length = snprintf(json, sizeof(json), "{\"uploadId\":%lu,\"state\":\"%s\"}",
-    (unsigned long)screen->upload_id, screen->uploading ? "receiving" : states[state]);
   return capnweb_reply_set_borrowed_expression(reply, json, (size_t)length, NULL, NULL);
 }
 
@@ -199,8 +183,8 @@ bool iterate_kit_screen_init(struct iterate_kit_screen *screen,
 }
 
 struct iterate_kit_module iterate_kit_screen_module(struct iterate_kit_screen *screen) {
-  static const char *const paths[][2] = {{"screen", "info"}, {"screen", "setImage"}, {"screen", "status"}};
-  static const struct iterate_kit_method methods[] = {{paths[0], 2, info}, {paths[1], 2, set_image}, {paths[2], 2, status}};
-  return (struct iterate_kit_module){.methods = methods, .method_count = 3,
+  static const char *const paths[][2] = {{"screen", "info"}, {"screen", "setImage"}};
+  static const struct iterate_kit_method methods[] = {{paths[0], 2, info}, {paths[1], 2, set_image}};
+  return (struct iterate_kit_module){.methods = methods, .method_count = 2,
     .context = screen, .session_ended = session_ended, .step = step};
 }

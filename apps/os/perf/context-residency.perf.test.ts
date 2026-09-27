@@ -26,12 +26,12 @@ import {
   sleep,
   until,
 } from "../e2e/support/client.ts";
+import { publishConfigWorker } from "../e2e/support/config-worker.ts";
 import {
   fetchProjectUrl,
   freshDnsSafeProjectSlug,
   projectHostsAreLocal,
   projectUrl,
-  publishConfigWorker,
   registerProject,
 } from "../e2e/support/project-host.ts";
 import {

@@ -1,6 +1,6 @@
 import { useEffect } from "react";
+import type { PostHogConfig } from "posthog-js";
 import type { Principal } from "iterate/principal";
-import { posthogPrivacy } from "./not-recorded.tsx";
 
 // posthog-js only ever runs in the browser; the SSR branch keeps it out of the
 // server bundle.
@@ -15,21 +15,60 @@ export interface PosthogGroup {
 }
 
 // Only a deployment that should report is given a key (envs.ts: prd), so an initialized SDK sends.
-// Replays record what people type, except secrets, and no event carries a secret URL
-// (`posthogPrivacy`, not-recorded.tsx): a field that takes a secret replays as `***`, and a secret
-// field (`SecretInput`, `SecretTextarea`) or a secret on screen (`NotRecorded`) is not recorded at
-// all. `api_host` is the page's own `/e` proxy (proxyPosthogRequest in @iterate-com/shared/posthog).
+// `api_host` is the page's own `/e` proxy (proxyPosthogRequest in @iterate-com/shared/posthog).
 // `defaults` sets the rest: pageviews on history changes, page leaves, identified-only person
 // profiles, no URL hashes.
+//
+// Session replay keeps PostHog's privacy defaults (https://posthog.com/docs/session-replay/privacy):
+// every input is masked, and a `ph-no-capture` element (`NotRecorded`) is not recorded. Masking is
+// the PostHog project's setting, so nothing here sets it. The two additions are PostHog's own
+// guidance for a secret in a URL: an invitation link's token is redacted from the page URLs a replay
+// records (`maskCapturedNetworkRequestFn`, same page, "URL redaction") and from every event
+// (`before_send`, https://posthog.com/docs/libraries/js/usage#redacting-information-in-events).
+// That function replaces posthog-js's own scrubbing of request bodies, so headers and bodies are
+// never recorded (https://posthog.com/docs/session-replay/network-recording).
 export function posthogInitOptions() {
   return {
     api_host: "/e",
     ui_host: "https://eu.posthog.com",
-    defaults: "2026-08-30" as const,
+    defaults: "2026-08-30",
     capture_exceptions: true,
     strict_script_versioning: true,
-    ...posthogPrivacy(),
-  };
+    session_recording: {
+      maskCapturedNetworkRequestFn: (request) => ({
+        ...request,
+        name: redactSecretPaths(request.name),
+      }),
+      recordHeaders: false,
+      recordBody: false,
+    },
+    before_send: (event) => event && redactSecretPathsIn(event),
+  } satisfies Partial<PostHogConfig>;
+}
+
+/** `text` with the secret in each URL path that carries one replaced by its route parameter:
+ *  `/invitations/<token>` (the Dash's invitation link, which joins its organization) becomes
+ *  `/invitations/:token`, URL-encoded too (`?next=%2Finvitations%2F<token>`, the Dash's step-up
+ *  link). A new route whose path holds a secret adds its pattern here. */
+function redactSecretPaths(text: string) {
+  return text.replace(/((?:\/|%2F)invitations(?:\/|%2F))[^/?#&"'\s%]+/gi, "$1:token");
+}
+
+/** `value` with `redactSecretPaths` applied to every string and object key in it, except a replay
+ *  batch's `$snapshot_data`: its payloads are gzipped, and `maskCapturedNetworkRequestFn` already
+ *  redacted the URLs in them. The casts are safe: each branch rebuilds the value it was given with
+ *  strings in place of strings, which TypeScript cannot follow through `Object.fromEntries`. */
+function redactSecretPathsIn<T>(value: T): T {
+  if (typeof value === "string") return redactSecretPaths(value) as T;
+  if (Array.isArray(value)) return value.map(redactSecretPathsIn) as T;
+  if (value && typeof value === "object" && !(value instanceof Date))
+    return Object.fromEntries(
+      Object.entries(value).map(([key, entry]) => [
+        redactSecretPaths(key),
+        key === "$snapshot_data" ? entry : redactSecretPathsIn(entry),
+      ]),
+    ) as T;
+  return value;
 }
 
 let posthogInitStarted = false;

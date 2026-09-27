@@ -5,12 +5,23 @@
 Take three captures of the same signed-in route on a deployment: cold direct navigation, warm
 direct navigation, and in-app navigation after hydration. A PR preview is the default target.
 Its apps are production builds on workers.dev; sign in with the preview's password (the PR
-body's `Sign in ↗` link needs an admin's prd sign-in). Local dev serves source modules and rebuilds on demand, so use it for red/green
+body's `Sign in ↗` link needs an admin signed in to the preview). Local dev serves source modules and rebuilds on demand, so use it for red/green
 behavior only, never for timings.
 
-For each capture, record the document TTFB and HTML, FCP, LCP (and which element), INP, CLS,
-requests and bytes before FCP/LCP, cache status and initiators, console and page errors, and,
-for a client, when the `/api` socket opened and when the first live value arrived.
+For each capture, record the commit, route, browser, viewport, network and CPU conditions, UTC
+window and whether the cache was cold; then the document TTFB and HTML, FCP, LCP (and which
+element), INP, CLS, requests and bytes before FCP/LCP, cache status and initiators, console and
+page errors, and, for a client, when the `/api` socket opened and when the first live value
+arrived. Compare identical URLs.
+
+A Playwright spec is the durable product assertion (PostHog is the field distribution, Cloudflare
+telemetry the server-side explanation). For a server-rendered route it:
+
+- creates an authenticated project fixture;
+- navigates directly and reads `page.goto()`'s response body;
+- asserts meaningful stable UI is in that HTML;
+- interacts with the hydrated locator;
+- fails on all page and hydration errors.
 
 ## Asset caching
 

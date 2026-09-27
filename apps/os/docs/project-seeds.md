@@ -39,8 +39,7 @@ owner cannot export encrypted cells.
 Restore preserves the archived project ID when the project is absent. It recreates users and
 organization memberships, restores secrets, then commits the config file tree
 through the normal repository API. It verifies decrypted secret readback, the Git
-tree, the project processor's published commit, membership roles, and that the
-organization's record lists the project. Every step converges: reapplying
+tree, the project processor's published commit and membership roles. Every step converges: reapplying
 converges on the same project, config tree and hostnames, and finishes an apply
 that a failure or a deploy cut short.
 
@@ -60,9 +59,8 @@ operator's `organizations.create` and `organizations.addMember`.
 `apply` creates the project with the operator's `projects.create` into the named
 organization, and calls it again for a project that already exists. Every creation,
 a person's or the operator's, lands `organization/project-added` on the
-organization's record (the `organization` fold the dash lists an organization's
-projects from) unless the record already has it, under an idempotency key. So a
-rerun, or two creations at once, write no second event.
+organization's activity under the project's idempotency key, so a rerun, or two
+creations at once, write no second event.
 
 `--organization` changes the destination organization. `--owners` replaces the
 archive's requested member list with explicit owners. Without these flags, the
@@ -147,7 +145,7 @@ and the old one keeps its data until its owner deletes it. Deploy the new Worker
 beside the old one, restore onto it, then move the routes:
 
 ```sh
-pnpm --dir apps/os ensure-resources --env prd   # KV, R2 and Artifacts namespace; commit the ids
+pnpm --dir apps/os ensure-resources --env prd   # D1, KV, R2 and Artifacts namespace; commit the ids
 pnpm --dir apps/os run deploy --env prd --without-routes
 ```
 
@@ -165,9 +163,7 @@ pnpm --dir apps/os erase-data --env prd --yes-i-mean-prd --dry-run
 
 **Pause merges to `main` from the erase until the last `apply` and `verify-structure`
 have passed.** Every merge that touches the Worker runs Deploy OS, which redeploys prd
-in the middle of the restore. On 2026-09-24 two merges redeployed prd during a
-recreate: #3032's deploy reset the Durable Objects under an `apply` ("Durable Object
-reset because its code was updated"), and #3033's landed during verification.
+in the middle of the restore (#3032's deploy reset the Durable Objects under an `apply`).
 Nothing enforces the pause. The owner,
 or the agent running the recreate, announces it where the team merges, before the
 erase, and lifts it after verification. Before the erase, check that no Deploy OS run

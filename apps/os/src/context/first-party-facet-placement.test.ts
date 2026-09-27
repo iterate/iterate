@@ -1,7 +1,7 @@
 // context/first-party-facet-placement.test.ts — every rule of first-party-facet-placement.ts as table
 // rows: the facet (or a stateless worker), the context written `<projectId>:<path>`, and whether it
 // may be hosted there. The refusal end to end, through a person who signed in, is
-// __workers-tests__/first-party-facet-placement.test.ts.
+// __workers-tests__/facets.test.ts.
 import { expect, test } from "vitest";
 import { errorCode } from "iterate/lib";
 import { FIRST_PARTY_FACET_CLASSES } from "../first-party-facets.ts";
@@ -90,7 +90,7 @@ const LOADED_WORKER_PLACEMENT_ROWS = [
   { context: "global:/", allowed: false },
 ];
 
-test.each(FIRST_PARTY_FACET_PLACEMENT_ROWS)(
+test.for(FIRST_PARTY_FACET_PLACEMENT_ROWS)(
   "facet $facet on $context: allowed $allowed",
   ({ facet, context, allowed }) => {
     expect(refusalOf(() => assertFacetPlacement(facet, contextAddress(context)))).toBe(
@@ -99,7 +99,7 @@ test.each(FIRST_PARTY_FACET_PLACEMENT_ROWS)(
   },
 );
 
-test.each(LOADED_WORKER_PLACEMENT_ROWS)(
+test.for(LOADED_WORKER_PLACEMENT_ROWS)(
   "a loaded worker on $context: allowed $allowed",
   ({ context, allowed }) => {
     expect(refusalOf(() => assertLoadedCodePlacement("workers.get", contextAddress(context)))).toBe(

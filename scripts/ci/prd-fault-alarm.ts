@@ -6,11 +6,10 @@
 //
 // Each fault is an incident: a 5xx host, a healed facet's name, or an error message. A new one pages
 // at the top level, mentioning Jonas; its repeats go quietly into that page's thread, back in the
-// channel (and mentioning Jonas) once it grows tenfold; a day unseen closes it. Until 2026-09-24 the
-// alarm held every page for an hour after any page while reading only the last half hour, so a
-// different 500 in that hour was never posted. The memory is the run's `prd-fault-alarm-state`
-// artifact: where the next read starts and the open incidents' threads. Without it a run reads the
-// last half hour and pages everything as new — a repeat, never a miss.
+// channel (and mentioning Jonas) once it grows tenfold; a day unseen closes it. The memory is the
+// run's `prd-fault-alarm-state` artifact: where the next read starts and the open incidents'
+// threads. Without it a run reads the last half hour and pages everything as new — a repeat, never
+// a miss.
 //
 // A workaround that heals a platform fault logs `console.warn({ event:
 // "<area>.platform-failure-<action>", name, … })` (apps/os context/facet-host.ts); naming it so
@@ -27,7 +26,10 @@ import { createCli } from "trpc-cli";
 import { z } from "zod";
 import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
 import {
-  PLATFORM_FAILURE_DELAYS_MS,
+  CI_HTTP,
+  HttpAnswerError,
+  httpFailureFields,
+  httpFailureKind,
   retryPlatformFailures,
 } from "@iterate-com/shared/platform-retry";
 import {
@@ -92,6 +94,16 @@ export const PINNED_WORKAROUNDS = [
     /** The post, once the heal has been absent `PIN_QUIET_DAYS`. */
     post: "Cloudflare seems to have fixed held Durable Object alarms: delete the overdue watch in apps/os/src/alarm-coordinator.ts",
   },
+  // The Worker Loader defect at facet start (https://github.com/iterate/alarm-loader-facet-repro),
+  // healed at both of its call sites; worker-loader.ts `retire` serves both, and goes with the last.
+  {
+    event: "facet.platform-failure-",
+    post: "Cloudflare seems to have fixed the Worker Loader defect at facet start: delete the restart in apps/os/src/context/facet-host.ts (`isFacetStartPlatformFailure`)",
+  },
+  {
+    event: "workers.platform-failure-",
+    post: "Cloudflare seems to have fixed the Worker Loader clone-version defect in workers.get: delete its retire and replay in apps/os/src/context/built-ins.ts",
+  },
 ];
 export const PIN_QUIET_DAYS = 28;
 
@@ -153,11 +165,9 @@ export async function alarm(input: {
   state: AlarmState | null;
   cloudflare: CloudflareCredentials;
   slack: (() => WebClient) | null;
-  /** The waits before each repeat of a Workers Logs query Cloudflare failed (readWindow). */
-  delaysMs?: readonly number[];
 }) {
-  const { window, delaysMs = PLATFORM_FAILURE_DELAYS_MS } = input;
-  const reading = await readWindow(window, input.cloudflare, delaysMs);
+  const { window } = input;
+  const reading = await readWindow(window, input.cloudflare);
   console.log(JSON.stringify({ window, reading }));
   const triage = triageIncidents(reading, window, input.state);
   const pinned = pinnedWorkarounds(reading.healEvents, window, input.state);
@@ -369,18 +379,6 @@ function renderFaultPage(
 
 function hhmm(date: Date) {
   return date.toISOString().slice(11, 16);
-}
-
-/** Cloudflare's own failure of a Workers Logs query: a 5xx, or an answer that is not JSON (its HTML
- *  error page). The message names the status, the content type and the answer's first 200 bytes. */
-class CloudflarePlatformFailure extends Error {
-  readonly status: number;
-  constructor(response: Response, text: string) {
-    super(
-      `Workers Logs query answered HTTP ${response.status} (${response.headers.get("content-type") ?? "no content-type"}): ${text.slice(0, 200)}`,
-    );
-    this.status = response.status;
-  }
 }
 
 /** A Workers Logs filter: a leaf, or a group combining its filters. */
@@ -596,17 +594,16 @@ export const DEPLOY_RESET_SUMMARIES = {
 async function readWindow(
   window: LogWindow,
   { accountId, apiToken }: CloudflareCredentials,
-  delaysMs: readonly number[],
 ): Promise<FaultReading> {
   // One grouped count per signal: one query, or with exclusions several over disjoint rows
   // (exclusionQueries). Its rows sum to a lower bound (events without the grouped field, or past
   // 2,000 groups in a query, drop out) — a burst still pages.
   //
-  // A query only reads, so one that Cloudflare itself failed (CloudflarePlatformFailure, or a
-  // dropped connection) is asked again after each of `delaysMs`, with a
-  // `prd-fault-alarm.platform-failure-retry` warn per repeat; the last failure fails the run. A JSON
-  // answer below 500 is Cloudflare's answer about the query: a broken token (success: false) or a
-  // renamed field fails the run at once, never reads as a quiet prd.
+  // A query only reads, so one that Cloudflare itself failed (a 5xx, a 429, an answer that is not
+  // JSON — its HTML error page, whatever the status — or a dropped connection) is asked again after
+  // each of CI_HTTP's waits, with a `prd-fault-alarm.platform-failure-retry` warn per repeat; the last
+  // failure fails the run. Any other JSON answer is Cloudflare's answer about the query: a broken
+  // token (success: false) or a renamed field fails the run at once, never reads as a quiet prd.
   const query = (view: "calculations" | "events", filters: LogFilter[], parameters: object) =>
     retryPlatformFailures(
       async () => {
@@ -630,12 +627,17 @@ async function readWindow(
           },
         );
         const text = await response.text();
-        if (response.status >= 500) throw new CloudflarePlatformFailure(response, text);
+        // The message names the status, the content type and the answer's first 200 bytes.
+        const failed = new HttpAnswerError(
+          `Workers Logs query answered HTTP ${response.status} (${response.headers.get("content-type") ?? "no content-type"}): ${text.slice(0, 200)}`,
+          response,
+        );
+        if (response.status >= 500 || response.status === 429) throw failed;
         let answer: unknown;
         try {
           answer = JSON.parse(text);
         } catch {
-          throw new CloudflarePlatformFailure(response, text);
+          throw failed;
         }
         const body = z
           .object({
@@ -649,15 +651,13 @@ async function readWindow(
         return body.result;
       },
       {
-        event: "prd-fault-alarm.platform-failure-retry",
-        delaysMs,
-        // fetch rejects with a TypeError when the connection fails; a timeout is thrown as it is.
-        platformFailure: (error) =>
-          error instanceof TypeError
-            ? { view, status: "network", message: error.message }
-            : error instanceof CloudflarePlatformFailure
-              ? { view, status: error.status, message: error.message }
-              : undefined,
+        area: "prd-fault-alarm",
+        schedule: CI_HTTP,
+        idempotent: true,
+        // Every HttpAnswerError thrown above is Cloudflare's own failure, the HTML page included.
+        kind: (error) =>
+          error instanceof HttpAnswerError ? "disconnected" : httpFailureKind(error),
+        describe: (error) => ({ view, ...httpFailureFields(error) }),
       },
     );
   // Without `groupBy`, one row: ["", the total].

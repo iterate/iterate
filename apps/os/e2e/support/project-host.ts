@@ -138,18 +138,6 @@ export async function registerProject(slug: string, as?: { email: string }): Pro
   return (await itx.whoami()).projectId;
 }
 
-/** Publish `target` as the project's config worker — what EVERY host of the project reaches, the
- *  routing slug in `x-iterate-routing-slug` — once the project's own creation saga has settled: the
- *  saga publishes the seeded config repo, and an append before it lands would be overwritten. */
-export async function publishConfigWorker(itx: any, target: unknown): Promise<void> {
-  await itx.waitForEvent({
-    type: ["events.iterate.com/project/created", "events.iterate.com/project/create-failed"],
-    afterOffset: 0,
-    timeoutMs: 60_000,
-  });
-  await itx.append({ type: "events.iterate.com/itx/ingress-configured", payload: { target } });
-}
-
 /** A fresh project slug — a DNS label, the one the project's hosts carry (`freshCtx` names carry
  *  `_`, which no hostname may). `registerProject(slug)` turns it into a project and hands back the id. */
 let counter = 0;
@@ -217,11 +205,17 @@ export async function fetchProjectHost(
 }
 
 /** A WebSocket on a project address (`projectUrl`, its scheme turned to ws/wss) with `headers` (a
- *  bearer: a browser cannot send one, a script or device can), through `projectHostDispatcher`,
- *  held open for the caller: it opens, echoes and closes as the row drives it. */
-export function projectUrlSocket(url: URL, headers: Record<string, string> = {}): UndiciWebSocket {
+ *  bearer: a browser cannot send one, a script or device can), asking for `protocols`, through
+ *  `projectHostDispatcher`, held open for the caller: it opens, echoes and closes as the row drives
+ *  it. */
+export function projectUrlSocket(
+  url: URL,
+  headers: Record<string, string> = {},
+  protocols: string[] = [],
+): UndiciWebSocket {
   return new UndiciWebSocket(url.href.replace(/^http/, "ws"), {
     headers,
+    protocols,
     dispatcher: projectHostDispatcher(),
   });
 }

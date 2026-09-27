@@ -2,20 +2,18 @@
 # how an agent calls its model, and on dispatch, deploy the commit as `real-model-<sha7>` (the same
 # deployment again, in place, when it has not changed since the last run), run the rows titled
 # `REAL:` against real models (OpenAI's astra on Cloudflare's billing, the default model, and
-# Workers AI), and judge the run. The deploy's readiness gate waits out a brand-new worker's first
-# seconds (main-os-e2e.yml); the run then deletes the workflow's deployments before it.
+# Workers AI), and keep their telemetry. The deploy's readiness gate waits out a brand-new worker's
+# first seconds (main-os-e2e.yml); the run then deletes the workflow's deployments before it.
 #
 # Every other run (PR previews, Main OS e2e, the soak) runs those turns against a fake provider and
 # spends nothing: one AI Gateway spend cap covers the preview account, and on 2026-09-24 a day of soaks
 # spent it and turned every PR's preview e2e red (docs/testing.md#real-model-rows). A run here costs
 # about $0.06.
 #
-# The judge (scripts/ci/main-e2e-alert.ts `judge`, reading the run's test telemetry) pages Slack
-# #error-pulse on a change of state only: red once, green again once, with the channel's last page as
-# its state, the way Main OS e2e pages. A page leaves the run green; a BROKEN PROBE (the deploy, no
-# telemetry, a REAL: row not run) fails the run. A run off main never pages: it prints what it would post. A dispatch deploys the branch's commit
-# under the workflow's prefix; the next run of main deploys main's again. One run at a time, each
-# run's deploy waiting for the run before it to finish with its deployment.
+# The health job judges each scheduled or push run from its telemetry
+# (scripts/monitors/e2e.ts). A dispatch is never judged; it deploys the branch's commit under the
+# workflow's prefix, and the next run of main deploys main's again. One run at a time, each run's
+# deploy waiting for the run before it to finish with its deployment.
 #
 #   depot ci dispatch --org 0p91s0lz49 --repo iterate/iterate --workflow os-real-model.yml --ref <branch>
 #
@@ -36,7 +34,6 @@ on:
     # How an agent calls its model: the default model, the request, the byte transport, and this suite.
     paths:
       - .depot/workflows/os-real-model.yml
-      - scripts/ci/main-e2e-alert.ts
       - packages/agents/**
       - apps/agents/e2e/agents-default-model.e2e.test.ts
   workflow_dispatch:
@@ -59,7 +56,7 @@ jobs:
       size: 4x16
       image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
     timeout-minutes: 30
-    # The vitest reporter's telemetry (`pnpm e2e:run`), which the judge reads.
+    # The vitest reporter's telemetry (`pnpm e2e:run`), which the health job reads.
     env:
       TEST_TELEMETRY_ARTIFACT_DIR: test-results/ci-telemetry/raw
       TEST_TELEMETRY_BRANCH: ${{ github.ref_name }}
@@ -94,8 +91,8 @@ jobs:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           PREVIEW_DEPLOYMENT: ${{ steps.deploy.outputs.deployment }}
         run: doppler run -- pnpm preview cleanup-superseded
-      # The files that hold the REAL: rows, opted in. A failed row is the judge's verdict, so it does
-      # not stop the job here. Credentials: Doppler os/preview's APP_CONFIG (e2e/support/global-setup.ts).
+      # The files that hold the REAL: rows, opted in. A failed row is the health job's verdict, so it
+      # does not stop the job here. Credentials: Doppler os/preview's APP_CONFIG (e2e/support/global-setup.ts).
       - name: Run the real-model rows
         working-directory: apps/os
         env:
@@ -105,13 +102,7 @@ jobs:
         run: |-
           export WORKER_BASE_URL="$(node -p 'require("./output/preview.json").url')"
           doppler run -- pnpm e2e:run agents-default-model ai-root-shadow-and-fable \
-            || echo "the real-model rows exited $?: the judge decides"
-      - name: Judge, page #error-pulse on a change of state
-        env:
-          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-        run: >-
-          pnpm tsx scripts/ci/main-e2e-alert.ts judge --dir test-results/ci-telemetry/raw
-          --suite "real-model e2e" --title-prefix "REAL:" --ref "${{ github.ref }}"
+            || echo "the real-model rows exited $?: the health job judges their telemetry"
       - name: Keep the telemetry
         if: always()
         uses: actions/upload-artifact@v4

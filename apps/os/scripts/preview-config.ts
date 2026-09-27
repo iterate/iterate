@@ -1,8 +1,8 @@
 // scripts/preview-config.ts — the pure half of scripts/preview.ts, what preview.test.ts pins: the
 // name of a run's per-commit deployment (`pr<n>-<sha7>`, or a slug's; envs.ts `previewDeployment`
-// derives every worker, URL and resource from it), the PR body's managed section and its fold into
-// a previous commit's, the template quick-launch links, and whether node_modules was installed from
-// the checkout's lockfile.
+// derives every worker, URL and resource from it), the PR body's managed section, its fold into a
+// previous commit's and the write that puts them there, the sign-in and template quick-launch
+// links, and whether node_modules was installed from the checkout's lockfile.
 import { createHash } from "node:crypto";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
@@ -26,6 +26,19 @@ export const MAX_PREVIEW_PREFIX_LENGTH = 28;
 
 /** The apps on top, each deployed beside apps/os as `<deployment>-<app>`. */
 export const APPS: StartApp[] = [dash, agents, notes, voice, kit, admin];
+
+/** THE FORMER PARENTS: `os-preview` and the apps' `<app>-preview` workers, which no deploy names
+ *  since main on dev became `os` and `<app>`. The sweep deletes the Worker Previews still hanging
+ *  from them, as it does main on dev's (scripts/preview.ts `deleteLegacyWorkerPreviews`): each holds
+ *  a Durable Object namespace per class of the account's 500. The workers themselves stay. */
+export const FORMER_PARENTS = [
+  "os-preview",
+  "dash-preview",
+  "agents-preview",
+  "notes-preview",
+  "voice-preview",
+  "kit-preview",
+];
 
 // ── naming ─────────────────────────────────────────────────────────────────────────────────────
 
@@ -126,6 +139,66 @@ export function foldPreviousPreviewSection(body: string) {
   );
 }
 
+/** A pull request's body as GitHub holds it: read, and replaced whole. */
+export type PullRequestBody = {
+  number: string;
+  read: () => Promise<string>;
+  /** one PATCH, not asked again on a 5xx (scripts/ci/github.ts `askOnce`) */
+  replace: (body: string) => Promise<void>;
+};
+
+/** Read, splice, write, read back: the PR body has no conditional update, so a person editing the
+ *  description in the same seconds, or the LOC report writing its own section, could lose one
+ *  write or the other. Reading it back and re-splicing onto whatever is there now converges on
+ *  both edits within a few rounds. `what` names the write in the log: the fold of the previous
+ *  section, or the section. Our own writes never overlap: the deploy's run in order in its job.
+ *  Every PATCH goes out once, straight after its read: a failed one is not sent again with a body
+ *  read seconds earlier; the next round reads anew 5 s later, and finds the body written when the
+ *  failure was GitHub's answer, not its write. */
+export async function writePullRequestBody(
+  pullRequest: PullRequestBody,
+  what: string,
+  splice: (body: string) => string,
+) {
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    const before = await pullRequest.read();
+    const body = splice(before);
+    if (body === before)
+      return console.log(`PR #${pullRequest.number}'s body already carries ${what}`);
+    const replaced = await pullRequest.replace(body).then(
+      () => true,
+      (error: unknown) => {
+        console.warn(`${error instanceof Error ? error.message : String(error)}; reading anew`);
+        return false;
+      },
+    );
+    if (!replaced) {
+      await new Promise((resolve) => setTimeout(resolve, 5_000));
+      continue;
+    }
+    const after = await pullRequest.read();
+    if (splice(after) === after)
+      return console.log(`wrote ${what} into the body of PR #${pullRequest.number}`);
+    console.warn(
+      `PR #${pullRequest.number}'s body changed under the write (attempt ${attempt}); re-splicing`,
+    );
+  }
+  throw new Error(`could not write ${what} into PR #${pullRequest.number}'s body in three rounds`);
+}
+
+// ── the PR body's sign-in links ───────────────────────────────────────────────────────────────
+
+/** A `Sign in ↗` link (scripts/preview.ts `signInLinks`): the app's own sign-in
+ *  (iterate/app-server.ts `/.auth/login`), landing at `landing` — a URL on the app's origin — and,
+ *  with `loginHint`, naming whom the consent page pre-fills under "Sign in as someone else" for an
+ *  admin (src/consent.ts). The admin still confirms it: the link is public, and grants nothing. */
+export function appSignInLink(landing: string, loginHint?: string) {
+  const url = new URL(landing);
+  const query = new URLSearchParams({ next: `${url.pathname}${url.search}` });
+  if (loginHint) query.set("login_hint", loginHint);
+  return `${url.origin}/.auth/login?${query}`;
+}
+
 // ── template quick-launch links ────────────────────────────────────────────────────────────────
 
 /** The config templates a project can be born from: the directories of configs/. */
@@ -162,11 +235,13 @@ export function templateQuickLaunches(input: {
 /** THE SECTION: quick links for a reader who already knows how per-commit deployments work
  *  (docs/dev-environments.md). It never explains itself; what needs explaining goes in a comment
  *  here. The CI checks carry the deploy's and the suites' verdicts, so it has no status of its own.
- *  One row per worker, apps/os first: its origin, its one-click `Sign in ↗` (src/test-link.ts, as
- *  the PR's test person: apps/os's into the Dash's project `pr<N>`, each app's into that app;
- *  signed for this deployment, 14 days) and its Cloudflare dashboard page. With the Dash, one
- *  quick-launch link per config template into its New project sheet (`templateQuickLaunches`). And,
- *  only when CI's seed of the test project failed, that fact: the links then ask for consent. */
+ *  One row per worker, apps/os first: its origin, its `Sign in ↗` (`appSignInLink`: apps/os's into
+ *  the Dash's project `pr<N>`, each app's into that app, as the PR's test person, whom a reviewer —
+ *  one of prd's admins, signed in through prd (src/admin-sign-in.ts) — confirms signing in as on
+ *  the consent page; the admin app's as the reviewer) and its Cloudflare dashboard page. With the
+ *  Dash, one quick-launch link per config template into its New project sheet
+ *  (`templateQuickLaunches`). And, only when CI's seed of the test project failed, that fact: there
+ *  is then nobody to sign in as. */
 export function renderPullRequestSection(input: {
   /** the deployment's name, `pr<n>-<sha7>` */
   deployment: string;
@@ -198,7 +273,7 @@ export function renderPullRequestSection(input: {
       ? []
       : [
           "",
-          `Seeding \`${input.seed.project}\` failed (the deploy log says why): the links ask for consent.`,
+          `Seeding \`${input.seed.project}\` failed (the deploy log says why): there is nobody to sign in as yet.`,
         ]),
   ].join("\n");
 }

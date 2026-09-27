@@ -252,7 +252,7 @@ const VoiceAgentContract = defineProcessorContract({
         heldMicFrames: z.number(),
       }),
     },
-    "events.iterate.com/voice-agent/conversation-ended": {
+    "events.iterate.com/voice-agent/call-ended": {
       description: "The call is over; the device appends it too (the hang-up button).",
       payloadSchema: z.looseObject({ activation: Activation, reason: z.string() }),
     },
@@ -291,7 +291,7 @@ const VoiceAgentContract = defineProcessorContract({
         "The live model handed a request to the backend, with the words said so far; the answer is a commentary naming the same delegationId.",
       payloadSchema: DelegationRequestedPayload,
     },
-    "events.iterate.com/voice-agent/spk-frame": {
+    "events.iterate.com/voice-agent/speaker-frame": {
       description: "One chunk of the answer, forwarded as it arrived.",
       ephemeral: true,
       payloadSchema: z.looseObject({
@@ -310,7 +310,7 @@ const VoiceAgentContract = defineProcessorContract({
     "events.iterate.com/voice-agent/thinking-added",
     "events.iterate.com/voice-agent/commentary-added",
     "events.iterate.com/voice-agent/call-started",
-    "events.iterate.com/voice-agent/conversation-ended",
+    "events.iterate.com/voice-agent/call-ended",
     /* Consumed so the fold sees its own appends and the recap survives an eviction. */
     "events.iterate.com/voice-agent/utterance-transcribed",
     "events.iterate.com/voice-agent/answer-transcribed",
@@ -323,12 +323,12 @@ const VoiceAgentContract = defineProcessorContract({
     "events.iterate.com/voice-agent/commentary-added",
     "events.iterate.com/voice-agent/thinking-added",
     "events.iterate.com/voice-agent/conversation-accepted",
-    "events.iterate.com/voice-agent/conversation-ended",
+    "events.iterate.com/voice-agent/call-ended",
     "events.iterate.com/voice-agent/provider-error-reported",
     "events.iterate.com/voice-agent/provider-disconnected",
     "events.iterate.com/voice-agent/utterance-transcribed",
     "events.iterate.com/voice-agent/answer-transcribed",
-    "events.iterate.com/voice-agent/spk-frame",
+    "events.iterate.com/voice-agent/speaker-frame",
   ],
 });
 type VoiceAgentContract = typeof VoiceAgentContract;
@@ -509,7 +509,7 @@ class VoiceAgentProcessor extends StreamProcessor<VoiceState, ConsumedEvent<Voic
               },
             };
 
-      case "events.iterate.com/voice-agent/conversation-ended":
+      case "events.iterate.com/voice-agent/call-ended":
         return state.call?.activation === event.payload.activation
           ? {
               ...state,
@@ -657,7 +657,7 @@ class VoiceAgentProcessor extends StreamProcessor<VoiceState, ConsumedEvent<Voic
         return;
       }
 
-      case "events.iterate.com/voice-agent/conversation-ended": {
+      case "events.iterate.com/voice-agent/call-ended": {
         /* The device's own obituary (the hang-up button) reaches the dial only here; without this
          * arm a dead provider socket would squat `#dial` until the idle tick. */
         const dial = this.#dial;
@@ -1038,7 +1038,7 @@ class VoiceAgentProcessor extends StreamProcessor<VoiceState, ConsumedEvent<Voic
           dial.clearSpeakerBufferBeforeNextFrame = false;
           try {
             await this.#append({
-              type: "events.iterate.com/voice-agent/spk-frame",
+              type: "events.iterate.com/voice-agent/speaker-frame",
               /* The engine's append stamps provenance, not the catalog's ephemeral marker, and a
                * persisted frame is a row. */
               ephemeral: true,
@@ -1154,7 +1154,7 @@ class VoiceAgentProcessor extends StreamProcessor<VoiceState, ConsumedEvent<Voic
     }
     try {
       await this.#append({
-        type: "events.iterate.com/voice-agent/conversation-ended",
+        type: "events.iterate.com/voice-agent/call-ended",
         idempotencyKey: this.idempotencyKey(`ended:${activation}`),
         payload: { activation, reason },
       });

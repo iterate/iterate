@@ -37,7 +37,8 @@
 import { exports } from "cloudflare:workers";
 import { newWebSocketRpcSession, RpcTarget } from "capnweb";
 import { expect, test, vi } from "vitest";
-import { adminCredentials, openSession, publishConfigWorker, until } from "./support.ts";
+import { publishConfigWorker } from "../e2e/support/config-worker.ts";
+import { adminCredentials, openSession, until } from "./support.ts";
 
 // ─────────────── the passing halves: plain fetch works; the failing hop is NAMED ───────────────
 
@@ -141,8 +142,8 @@ test("a lent-stub WebSocket outlives a context reset (what every deploy does): t
 
 // A tunnel killed outright (`kill -9` on the CLI) takes its /api socket and capnweb session with it,
 // and the provider's socket on the relay closes. The relay KNOWS the provider is gone, so its end
-// says `close` at once and the visitor's socket closes with the provider's code — it does not wait
-// out the resume deadline, which is for a drop nobody can explain (context/fetch-upgrade-splice.ts).
+// says `close` at once and the visitor's socket closes 1011, a drop's code — it does not wait out
+// the resume deadline, which is for a drop nobody can explain (context/fetch-upgrade-splice.ts).
 test("a lent-stub WebSocket whose provider's session dies: the visitor's socket closes within a second, not at the resume deadline", async () => {
   const project = "ws101-provider-killed";
   const itx = await createProject(project);
@@ -176,7 +177,7 @@ test("a lent-stub WebSocket whose provider's session dies: the visitor's socket 
   providerSocket.webSocket.close(1000, "the CLI was killed");
   await until("the visitor's socket closes", () => Boolean(closed), 5_000);
   expect(closed).toMatchObject({
-    code: 1001,
+    code: 1011,
     reason: "tunnel disconnected",
     afterMs: expect.toSatisfy((ms: number) => ms < 1_000),
   });

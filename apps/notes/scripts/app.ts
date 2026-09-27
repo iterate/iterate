@@ -1,3 +1,4 @@
+import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
 import { notesEnvs } from "../../../envs.ts";
 import { startAppCli } from "../../../scripts/lib/start-app.ts";
 
@@ -7,4 +8,4 @@ export const notes = {
   root: new URL("..", import.meta.url),
   envs: notesEnvs,
 };
-if (process.argv[1]?.endsWith("app.ts")) void startAppCli(notes).run();
+if (isMainModule(import.meta.url)) void startAppCli(notes).run();

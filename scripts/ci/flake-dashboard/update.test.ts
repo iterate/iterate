@@ -4,7 +4,7 @@ import { iterateAppIssuesToken } from "./update.ts";
 
 test("the iterate app's token is asked for issues: write on this repository only", async () => {
   const { privateKey, publicKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
-  await using github = gitHubApp();
+  const github = gitHubApp();
 
   const token = await iterateAppIssuesToken({
     appId: "2001598",
@@ -55,10 +55,5 @@ function gitHubApp() {
         ),
   );
   vi.stubGlobal("fetch", fetch);
-  return {
-    fetch,
-    async [Symbol.asyncDispose]() {
-      vi.unstubAllGlobals();
-    },
-  };
+  return { fetch };
 }

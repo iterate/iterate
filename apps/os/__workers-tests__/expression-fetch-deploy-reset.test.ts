@@ -9,7 +9,7 @@
 // `expression-fetch.deploy-reset` at info and never reported (iterate-context-durable-object.ts).
 // The reset is the test's: `state.abort` with the deploy's words, mid-call, on the context dialed.
 import { runInDurableObject } from "cloudflare:test";
-import { expect, onTestFinished, test, vi } from "vitest";
+import { expect, test, vi } from "vitest";
 import type { ItxExpression } from "iterate/expression";
 import { stub } from "./support.ts";
 
@@ -20,7 +20,7 @@ test.for([
     name: "a GET is sent again to the fresh context and answers",
     init: { method: "GET" },
     answer: { status: 200, text: "GET served", retryAfter: null },
-    logs: [["warn", "cd.deploy-reset-fetch-retry"]],
+    logs: [["info", "cd.deploy-reset-retry"]],
   },
   {
     name: "a POST with a body is not sent again: a 503 to retry in a second, never reported",
@@ -64,7 +64,7 @@ test("a cold loader's producer read that meets the deploy is read again, and the
   ])({ method: "POST", body: "form=1" });
   await resetMidCall(`${project}.iterate/repos/config`);
   expect(await served).toEqual({ status: 200, text: "POST served", retryAfter: null });
-  expect(events()).toEqual([["warn", "workers.deploy-reset-source-retry"]]);
+  expect(events()).toEqual([["info", "worker-loader.deploy-reset-retry"]]);
 });
 
 /** A context's expression fetch of `expression`, answered as status, text and `Retry-After`. */
@@ -96,7 +96,6 @@ function logEvents() {
   const spies = (["info", "warn", "error"] as const).map(
     (level) => [level, vi.spyOn(console, level)] as const,
   );
-  onTestFinished(() => spies.forEach(([, spy]) => spy.mockRestore()));
   return () => {
     const lines = spies.flatMap(([level, spy]) =>
       spy.mock.calls.map(([line]) => [level, String((line as { event?: unknown })?.event)]),

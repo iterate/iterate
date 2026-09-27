@@ -5,7 +5,8 @@
 # deployment (`main-…`, `latency-…`, `real-model-…`) goes only once that workflow has not deployed
 # for a week. The rules are apps/os/scripts/preview-sweep.ts. What stops a force-closed PR, a
 # cancelled or failed cleanup, or a half-made deployment from leaking workers. Until it finds none,
-# it also deletes the Worker Previews each PR used to get, and their resources.
+# it also deletes the Worker Previews each PR used to get, on `os`, `<app>` and the former parents
+# (`os-preview`, `<app>-preview`), once idle a day, and their resources.
 #
 # A scheduled run reports on main's head commit, where red reads as "this commit broke", so the run
 # goes red only when the sweep could not act. An Artifacts namespace Cloudflare will not delete is a

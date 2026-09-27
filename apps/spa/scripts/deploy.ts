@@ -5,6 +5,7 @@ import { OS_DOPPLER_PROJECT, spaEnvs } from "../../../envs.ts";
 import { resolveEnvContext } from "../../../scripts/lib/env-context.ts";
 import { smokeResponse } from "../../../scripts/lib/deploy-helpers.ts";
 import { COMPATIBILITY_DATE } from "../../../scripts/lib/wrangler-config.ts";
+import { isMainModule } from "../../../packages/shared/src/dev/is-main-module.ts";
 
 /** scripts/build.ts (static files + the packaged extension) → wrangler deploy → the deployed
  *  oauth.js, client logo and extension bundle match this checkout. */
@@ -49,7 +50,7 @@ export default async function deploy(options: { env?: string } = {}) {
   }
 }
 
-if (process.argv[1]?.endsWith("deploy.ts")) {
+if (isMainModule(import.meta.url)) {
   void createCli({ ...import.meta, name: "deploy" }).run({
     logger: yamlTableConsoleLogger,
     prompts: isAgent() ? undefined : createBuiltInPrompts(),

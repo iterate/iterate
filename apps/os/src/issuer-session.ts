@@ -1,23 +1,23 @@
 import { startAppSession } from "iterate/app-server";
 import { reportIssue, sameOriginPath } from "iterate/lib";
 import { OAuthScope } from "iterate/oauth-scopes";
+import {
+  failureKind,
+  isPlatformFailureKind,
+  type PlatformFailureKind,
+} from "@iterate-com/shared/platform-retry";
 import { clientDisplay } from "./client-display.ts";
-import { appConfigOf, platformAddressesOf } from "./app-config.ts";
+import { platformAddressesOf } from "./app-config.ts";
 import type { Env } from "./env.ts";
 import type { UserRecord } from "./control-plane/catalog.ts";
-import { ControlPlane } from "./control-plane/edge.ts";
 import { oauthHelpers, parseAuthorization, type GrantProps } from "./oauth.ts";
-import { isRetryableTransportError } from "./retryable-error.ts";
 import { watchSignInStep } from "./sign-in-watch.ts";
-import { emailAllowed } from "./allowed-emails.ts";
-import { redeemTestLink } from "./test-link.ts";
-import { clearAdminCheckCookie, finishAdminCheck, startAdminCheck } from "./test-link-admins.ts";
 
 /** What the person reads when the platform failed their sign-in, on the sign-in page. */
 const PLATFORM_FAILURE_MESSAGE = "Sign-in failed on our side. Try again.";
 
-/** Verified Google login and explicitly enabled test/administrator login call this tail.
- * Its grant is the issuer's sole browser identity: ordinary storage, public token
+/** Every sign-in ends in this tail: the password and code forms, a provider (identity.ts) and an
+ * admin through another issuer (admin-sign-in.ts). Its grant is the issuer's sole browser identity: ordinary storage, public token
  * exchange, admission, expiry and revocation. No separate identity cookie. `picture` is the
  * identity provider's picture of the person, when it gave one (Google does).
  *
@@ -26,11 +26,12 @@ const PLATFORM_FAILURE_MESSAGE = "Sign-in failed on our side. Try again.";
  * exchange is never retried here; every caller sends the person back to the sign-in page with the
  * error, and a fresh sign-in is the recovery. How the failure is logged is the split:
  *  - a PLATFORM FAILURE (`codeExchangeFailure`) — the exchange timed out (the browser session
- *    bounds it at 10 s), its call was cut at the transport (a Durable Object reset, a lost
- *    connection), or the token endpoint answered a status instead of a token (a 500 when its own
- *    grant checks failed) — logs a warn `issuer.platform-failure-sign-in` with its `reason`, which
- *    the prd fault alarm counts. It names the person, so a timeout joins the line the token
- *    request logged about the hop it was still waiting on (`oauth.step-slow`, oauth.ts);
+ *    bounds it at 10 s), its call failed on the platform's side (a deploy's reset, a lost
+ *    connection, an overload: its `failureKind`), or the token endpoint answered a status instead
+ *    of a token (a 500 when its own grant checks failed) — logs a warn
+ *    `issuer.platform-failure-sign-in` with its `reason`, which the prd fault alarm counts. It
+ *    names the person, so a timeout joins the line the token request logged about the hop it was
+ *    still waiting on (`oauth.step-slow`, oauth.ts);
  *  - anything else is a defect of ours, reported at error level (`issuer.code-exchange-failed`),
  *    which the prd fault alarm pages on. The person still lands on the sign-in page, not a 1101.
  * The earlier steps' failures throw. */
@@ -40,9 +41,9 @@ export async function startIssuerSession(
   request: Request,
   user: UserRecord,
   next: string,
-  /** what the grant carries beyond the person: what the identity provider said about them
-   *  (Google's profile; an email sign-in has none), and a test link's pre-approved clients */
-  extras: Pick<GrantProps, "picture" | "name" | "testLink"> = {},
+  /** what the identity provider said about the person (Google's profile; an email sign-in has
+   *  none), which the grant carries beside them */
+  extras: Pick<GrantProps, "picture" | "name"> = {},
 ): Promise<{ setCookie: string; location: string } | { error: string }> {
   const addresses = platformAddressesOf(env, request);
   const { platformOrigin, api } = addresses;
@@ -86,7 +87,6 @@ export async function startIssuerSession(
         email: user.email,
         picture: extras.picture,
         name: extras.name,
-        testLink: extras.testLink,
         projects: null,
         deadline: Date.now() + 30 * 24 * 3600_000,
       } satisfies GrantProps,
@@ -121,123 +121,15 @@ export async function startIssuerSession(
 
 /** Why a code exchange failed on the platform's side, or null when it did not (a defect of ours).
  *  Read off what crosses the browser session's Durable Object RPC: workerd carries a DOMException
- *  as one, name and all, stamps a cut call `retryable`, and the session names the token endpoint's
- *  status in its own message (iterate/app-session.ts `#endOnDeadGrant`). */
-function codeExchangeFailure(error: unknown): "timeout" | "transport" | "token-endpoint" | null {
+ *  as one, name and all, stamps a platform failure with its kind (`failureKind`), and the session
+ *  names the token endpoint's status in its own message (iterate/app-session.ts `#endOnDeadGrant`). */
+function codeExchangeFailure(
+  error: unknown,
+): "timeout" | PlatformFailureKind | "token-endpoint" | null {
   if (error instanceof DOMException && error.name === "TimeoutError") return "timeout";
-  if (isRetryableTransportError(error)) return "transport";
+  const kind = failureKind(error);
+  if (isPlatformFailureKind(kind)) return kind;
   if (error instanceof Error && /^Iterate token exchange failed \(\d+\)/.test(error.message))
     return "token-endpoint";
   return null;
-}
-
-/** `GET /.auth/test-link?t=` (test-link.ts; routed by worker.ts on the platform origin): a
- *  preview's one-click sign-in. The pure decision refuses what is not this deployment's to honour.
- *  Where `login.testLink.admins` is set — every preview — a good link then sends the browser to
- *  prove at the admins' issuer that it is one of them (test-link-admins.ts), and the callback
- *  (`testLinkCallbackResponse`) redeems it; on a laptop it is redeemed at once. */
-export async function testLinkResponse(request: Request, env: Env) {
-  const config = appConfigOf(env);
-  const token = new URL(request.url).searchParams.get("t");
-  const decision = await testLinkDecision(env, request, token);
-  if (decision.status !== 302) return plainRefusal(decision.status, decision.message);
-  const admins = config.login.testLink?.admins;
-  if (!admins) return signInAsTestPerson(request, env, decision);
-  const check = await startAdminCheck({
-    issuer: admins.issuer,
-    platformOrigin: platformAddressesOf(env, request).platformOrigin,
-    key: config.secrets.key.exposeSecret(),
-    token: token!,
-  });
-  return new Response(null, {
-    status: 302,
-    headers: {
-      location: check.location,
-      "set-cookie": check.setCookie,
-      "cache-control": "no-store",
-      "referrer-policy": "no-referrer",
-    },
-  });
-}
-
-/** `GET /.auth/test-link/callback`: the admins' issuer's answer (test-link-admins.ts). An address
- *  `login.testLink.admins.emails` names redeems the link the check began with, decided afresh —
- *  it may have expired meanwhile; anyone else is refused, and every outcome is logged with the
- *  address the issuer vouched for. */
-export async function testLinkCallbackResponse(request: Request, env: Env) {
-  const config = appConfigOf(env);
-  const admins = config.login.testLink?.admins;
-  if (!admins) return plainRefusal(404, "Not found");
-  const checked = await finishAdminCheck({
-    issuer: admins.issuer,
-    platformOrigin: platformAddressesOf(env, request).platformOrigin,
-    key: config.secrets.key.exposeSecret(),
-    request,
-  }).catch((error: unknown) => {
-    console.warn({ event: "test-link.admin-check-failed", message: String(error) });
-    return { error: `Could not confirm who you are at ${admins.issuer}. Open the link again.` };
-  });
-  if ("error" in checked) return plainRefusal(403, checked.error, clearAdminCheckCookie);
-  if (!emailAllowed(admins.emails, checked.email)) {
-    console.warn({ event: "test-link.refused-not-admin", email: checked.email });
-    return plainRefusal(
-      403,
-      `${checked.email} may not use this preview's sign-in link: it is for ${admins.emails.join(", ")}.`,
-      clearAdminCheckCookie,
-    );
-  }
-  const decision = await testLinkDecision(env, request, checked.token);
-  if (decision.status !== 302)
-    return plainRefusal(decision.status, decision.message, clearAdminCheckCookie);
-  console.info({ event: "test-link.redeemed", admin: checked.email, email: decision.email });
-  const response = await signInAsTestPerson(request, env, decision);
-  response.headers.append("set-cookie", clearAdminCheckCookie);
-  return response;
-}
-
-/** The pure decision (test-link.ts `redeemTestLink`) for this deployment, now. */
-function testLinkDecision(env: Env, request: Request, token: string | null) {
-  const config = appConfigOf(env);
-  return redeemTestLink(token, {
-    testLink: config.login.testLink,
-    key: config.secrets.key.exposeSecret(),
-    platformOrigin: platformAddressesOf(env, request).platformOrigin,
-    now: Date.now(),
-  });
-}
-
-/** A good link's effect: find or create its test person, start the issuer session exactly as a
- *  password sign-in does — stamped with the link's sibling app clients, which consent.ts then
- *  approves without the Allow page — and send the browser to the link's `next`. The
- *  password-attempt counters are never touched: a shared link clicked many times locks nobody
- *  out. */
-async function signInAsTestPerson(
-  request: Request,
-  env: Env,
-  decision: { email: string; project: string; next: string; clients: string[] },
-) {
-  const user = await watchSignInStep(
-    "ensure-user",
-    new ControlPlane(env).ensureUser(decision.email),
-  );
-  const session = await startIssuerSession(env, request, user, "/login", {
-    testLink: { clients: decision.clients, project: decision.project },
-  });
-  const headers = new Headers({ "cache-control": "no-store", "referrer-policy": "no-referrer" });
-  if ("error" in session) {
-    headers.set("location", `/login?${new URLSearchParams({ error: session.error })}`);
-    return new Response(null, { status: 303, headers });
-  }
-  headers.set("location", decision.next);
-  headers.set("set-cookie", session.setCookie);
-  return new Response(null, { status: 302, headers });
-}
-
-function plainRefusal(status: number, message: string, setCookie?: string) {
-  const headers = new Headers({
-    "content-type": "text/plain; charset=utf-8",
-    "cache-control": "no-store",
-  });
-  if (setCookie) headers.set("set-cookie", setCookie);
-  return new Response(`${message}\n`, { status, headers });
 }

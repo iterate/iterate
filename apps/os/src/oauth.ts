@@ -20,7 +20,6 @@ import { type Reach } from "./control-plane/edge.ts";
 import { emailAllowed } from "./allowed-emails.ts";
 import { appConfigOf, platformAddressesOf, type PlatformAddresses } from "./app-config.ts";
 import { providerStore } from "./oauth-store.ts";
-import { isDeployReset, isRetryableTransportError } from "./retryable-error.ts";
 import { watchSlowStep } from "./sign-in-watch.ts";
 import {
   isPersonalAccessToken,
@@ -39,10 +38,6 @@ export const GrantProps = z.object({
    *  organization name */
   picture: z.string().optional(),
   name: z.string().optional(),
-  /** An issuer session a preview's test link started (test-link.ts, issuer-session.ts
-   *  `testLinkResponse`): the sibling app previews' origins the link signed, and the test person's
-   *  project — consent.ts approves such a client for that project without the Allow page. */
-  testLink: z.object({ clients: z.array(z.string()), project: z.string() }).optional(),
   projects: z.array(z.string()).nullable(),
   /** Epoch ms: the grant is refused from here on, however recently it was used (`grantLifetime`). */
   deadline: z.number().int().positive(),
@@ -109,44 +104,26 @@ export async function parseAuthorization(env: Env, request: Request): Promise<Au
  *  a grant has ended (`endedGrants`, the revocation truth — grants.ts lands the end there and
  *  awaits it), when each was last used. One hop to the person's own Durable Object.
  *
- *  Read again ONCE, on a fresh stub, when the read was cut at the transport (retryable-error.ts):
- *  every admission and every code exchange reads here (`grantLifetime`), so a deploy's reset of
- *  the person's Durable Object would otherwise fail a sign-in's token request with a 500. The read
- *  is idempotent; a second failure throws. A deploy's reset is expected; any other cut is a
- *  platform failure the prd fault alarm counts.
+ *  A read is sent ONCE more when a deploy's reset or a lost connection cut it (session.ts
+ *  `ownerContext`): every admission and every code exchange reads here (`grantLifetime`), so a
+ *  deploy's reset of the person's Durable Object would otherwise fail a sign-in's token request.
  *
  *  A read still pending after five seconds logs `oauth.step-slow` naming the person while it waits
  *  (sign-in-watch.ts). A person's account is often brand new at their first sign-in's code
  *  exchange, and Cloudflare can hold a new Durable Object's answers until its first write is
  *  confirmed. */
 export async function accountStateOf(env: Env, userId: string): Promise<AccountState> {
-  // The stub's `invoke` is typed as workerd's RPC wrapper over the DO method; the facet is the
-  // platform's own AccountDurableObject and `snapshot()` the engine's `{ offset, state }`.
-  const read = async () =>
-    (
-      (await watchSlowStep(
-        { event: "oauth.step-slow", step: "account-state", userId },
-        ownerContext(env.ITERATE_CONTEXT, { account: userId }).invoke(
-          ["itx", "facets", ["get", "account"], ["snapshot"]],
-          [],
-          { principal: null },
-        ),
-      )) as { state: AccountState }
-    ).state;
-  try {
-    return await read();
-  } catch (error) {
-    if (!isRetryableTransportError(error)) throw error;
-    console.warn({
-      event: isDeployReset(error)
-        ? "oauth.deploy-reset-account-state-retry"
-        : "oauth.platform-failure-account-state-retry",
-      name: "account-state",
-      userId,
-      message: String(error),
-    });
-    return read();
-  }
+  // `invoke` answers `unknown` across the DO hop; the facet is the platform's own
+  // AccountDurableObject and `snapshot()` the engine's `{ offset, state }`.
+  const { state } = (await watchSlowStep(
+    { event: "oauth.step-slow", step: "account-state", userId },
+    ownerContext(env.ITERATE_CONTEXT, { account: userId }, "oauth").invoke(
+      ["itx", "facets", ["get", "account"], ["snapshot"]],
+      [],
+      { principal: null },
+    ),
+  )) as { state: AccountState };
+  return state;
 }
 
 /** Whether `email` is one of the deployment's platform admins (app-config.ts `admins`), as the
@@ -402,10 +379,10 @@ export const CLIENT_REGISTRATION_ENDPOINT = "/oauth2/register";
 /** THE AUTHORIZATION SERVER at `addresses` (the library's role-based API, its
  *  docs/resource-servers.md "Same Worker"): the issuer, for the platform's three resources, `/api`
  *  (Cap'n Web), `/mcp` and `/oauth2/userinfo` (who the bearer is, and nothing else — what another
- *  deployment asks to know an admin by, test-link.ts) — each hosted in this worker by api.ts. Every
- *  grant and access token is bound to exactly one of them (RFC 8707): a userinfo token is refused
- *  at `/api` and `/mcp` by the audience check itself. Built per request: where `urls.os` is unset the addresses
- *  are the request's own. */
+ *  deployment asks to know an admin by, admin-sign-in.ts) — each hosted in this worker by api.ts.
+ *  Every grant and access token is bound to exactly one of them (RFC 8707): a userinfo token is
+ *  refused at `/api` and `/mcp` by the audience check itself. Built per request: where `urls.os` is
+ *  unset the addresses are the request's own. */
 function authorizationServer(env: Env, { platformOrigin, api, mcp, userinfo }: PlatformAddresses) {
   return new OAuthAuthorizationServer<Env>({
     issuer: platformOrigin,

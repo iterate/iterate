@@ -19,7 +19,10 @@ import {
   disconnectIntegration,
   finishIntegrationConnect,
   type ConnectInput,
+  type FinishConnectAnswer,
+  type FinishConnectInput,
 } from "../integrations/verbs.ts";
+import type { ConnectionAttempt } from "../integrations/connections.ts";
 import { connectWaitrose } from "../integrations/waitrose-connection.ts";
 import type { AccountState } from "./contract.ts";
 import { AccountProcessor } from "./processor.ts";
@@ -37,7 +40,6 @@ export class AccountDurableObject extends StreamProcessorDurableObject<
     ...super.publicMethods,
     "connectIntegration",
     "disconnectIntegration",
-    "finishIntegrationConnect",
     "connectWaitrose",
   ];
 
@@ -63,11 +65,22 @@ export class AccountDurableObject extends StreamProcessorDurableObject<
     return connectIntegration(this.#integrationScope(), await this.#integrations(), input);
   }
 
-  async finishIntegrationConnect(input: {
-    provider: "google" | "cloudflare";
-    connection: string;
-  }): Promise<void> {
-    await finishIntegrationConnect(this.#integrationScope(), await this.#integrations(), input);
+  /** A person's connect a project asked for — the platform's alone, not published (context/built-ins.ts
+   *  `integrations.connectForProject`): once the consent finishes, the account is connected there. */
+  async connectIntegrationForProject(
+    input: ConnectInput & { connectToProject: NonNullable<ConnectionAttempt["connectToProject"]> },
+  ): Promise<{ authorizationUrl: string }> {
+    return connectIntegration(
+      this.#integrationScope(),
+      await this.#integrations(),
+      input,
+      input.connectToProject,
+    );
+  }
+
+  /** The OAuth callback's, not published (context/built-ins.ts `integrations.finishConnect`). */
+  async finishIntegrationConnect(input: FinishConnectInput): Promise<FinishConnectAnswer> {
+    return finishIntegrationConnect(this.#integrationScope(), await this.#integrations(), input);
   }
 
   /** WAITROSE (integrations/waitrose-connection.ts): the username and password are already in

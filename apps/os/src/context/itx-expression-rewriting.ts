@@ -72,9 +72,9 @@ export const BUILT_IN_ROOT_DESCRIPTIONS = {
   url: "this project's public URL over HTTP — the apex or a routing slug's host, at a path: `url({ routingSlug?, path? })`; only from a session that reached the platform on an origin",
   kv: "key-value strings, the project's own: `kv.get(k)` · `kv.put(k, v)` · `kv.list(prefix)` · `kv.delete(k)`",
   secrets:
-    "names only, never values: `secrets.list()`; `secrets.collectFromUser({ path, egress, description? })` returns an authenticated collection link; a `getSecret(\"/secrets/x\")` placeholder in an outbound request is substituted at egress; `secrets.verifyHmac(path, { payload, signature })` checks a webhook's HMAC-SHA256 hex signature without revealing the secret; on a person's own context `secrets.lend(path, { to, as })` lends one to a project (`revokeLend(path, lendId)` ends it)",
+    'names only, never values: `secrets.list()`; `secrets.collectFromUser({ path, egress, description? })` returns an authenticated collection link; a `getSecret("/secrets/x")` placeholder in an outbound request is substituted at egress; `secrets.verifyHmac(path, { payload, signature })` checks a webhook\'s HMAC-SHA256 hex signature without revealing the secret',
   integrations:
-    "connect a provider through this deployment's app: `integrations.connect(provider, { scopes? })` → { authorizationUrl, connection } (send the human there); `integrations.requestFromUser(provider, { scopes, lendTo? })` → a Dash link asking the signed-in person to connect",
+    "connect a provider through this deployment's app: `integrations.connect(provider, { scopes? })` → { authorizationUrl, connection } (send the human there); a person connects one of their own accounts to a project with `integrations.connect(provider, { account })` from their own session; `integrations.requestFromUser(provider, { scopes? })` → a Dash link asking a person to connect their account (or another) to this project, which then uses it as `/secrets/<provider>-<connection>`",
   fetchRoutes:
     "which itx expression a request on this project's hosts goes to: `fetchRoutes.set(name, { requestMatcher: { routingSlug?, url?, headers? }, target, authRequirement?, priority? } | null)` · `list()` · `match({ url, headers })`; the config worker forwards a match to `route.target`",
   ai: "Workers AI, verbatim: `ai.run(model, inputs)`",
@@ -497,8 +497,11 @@ export function rowsNamingRpcStub(args: {
 
 /** THE APP WALL, as one check over an expression loaded code hands in (the resolver's INPUT, or the
  *  TARGET of a row it appends): never the fixed point, never a `cd` above `base` (self and descendants
- *  only, resolved step by step). Codec-style — nothing here is policy: the rows a call rewrites
- *  through are the owner's and are never checked. */
+ *  only, resolved step by step). A spec's SOURCE EXPRESSION in a call's arguments (`workers.get`,
+ *  `facets.get`, `processors.enable`) is walled too, at the context the walk has reached, so the
+ *  call fails where it is made; the producer also runs there as loaded code when the code loads
+ *  (the DO's `invoke`). Codec-style — nothing here is policy: the rows a call rewrites through are
+ *  the owner's and are never checked. */
 function admitLoadedCodeExpression(expression: ItxExpression, base: string): void {
   let at = base;
   for (const step of expression) {
@@ -508,6 +511,12 @@ function admitLoadedCodeExpression(expression: ItxExpression, base: string): voi
         "FORBIDDEN",
         `"itx.builtins" is not a loaded worker's word — this context's rows say what its code may spell (${JSON.stringify(print(expression, { holes: true }))})`,
       );
+    if (Array.isArray(step))
+      for (const arg of step.slice(1)) {
+        const source = typeof arg === "object" && arg && "source" in arg ? arg.source : undefined;
+        if (typeof source === "string" || Array.isArray(source))
+          admitLoadedCodeExpression(normalizedItxExpression(source), at);
+      }
     if (Array.isArray(step) && step[0] === "cd" && typeof step[1] === "string") {
       const to = resolveContextPath(at, step[1]);
       if (to !== at && !to.startsWith(at === "/" ? "/" : `${at}/`))

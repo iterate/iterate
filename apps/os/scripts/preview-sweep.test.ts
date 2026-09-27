@@ -3,6 +3,7 @@ import { readWranglerBase } from "./generate-wrangler-config.ts";
 import {
   groupPreviewDeployments,
   newestPreviewDeployment,
+  planLegacyWorkerPreviewSweep,
   planPreviewSweep,
   planSupersededCleanup,
   previewMemberSuffixes,
@@ -186,6 +187,30 @@ test.each<{ rule: string; olderHoursAgo?: number; verdict: "stale" | "keep" }>(
     ]);
   },
 );
+
+// A Worker Preview from before per-commit deployments, on main on dev's workers or a former parent,
+// goes once idle a day, whatever its name or PR.
+test.for<{
+  name: string;
+  worker: string;
+  preview: string;
+  deployedHoursAgo?: number;
+  verdict: "stale" | "keep";
+}>(
+  // prettier-ignore
+  [
+    { name: "an open PR's, a day idle", worker: "os", preview: "pr7", deployedHoursAgo: 25, verdict: "stale" },
+    { name: "a CI workflow's name on a former parent, a day idle", worker: "os-preview", preview: "latency", deployedHoursAgo: 25, verdict: "stale" },
+    { name: "an app's former parent", worker: "dash-preview", preview: "pr3061-worker-bundler", deployedHoursAgo: 60, verdict: "stale" },
+    { name: "deployed 23 h ago, by a checkout from before per-commit deployments", worker: "os", preview: "pr7", deployedHoursAgo: 23, verdict: "keep" },
+    { name: "last deploy unknown", worker: "kit-preview", preview: "soak", verdict: "keep" },
+  ],
+)("a legacy Worker Preview: $name ⇒ $verdict", ({ worker, preview, deployedHoursAgo, verdict }) => {
+  const lastDeployedAt = deployedHoursAgo === undefined ? undefined : hoursAgo(deployedHoursAgo);
+  expect(
+    planLegacyWorkerPreviewSweep(NOW, [{ worker, name: preview, lastDeployedAt }]),
+  ).toMatchObject([{ worker, name: preview, verdict }]);
+});
 
 function hoursAgo(hours: number) {
   return new Date(NOW - hours * 3_600_000).toISOString();

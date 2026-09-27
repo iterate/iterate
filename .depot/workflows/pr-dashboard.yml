@@ -14,6 +14,9 @@ on:
 concurrency:
   group: pr-dashboard
   cancel-in-progress: false
+env:
+  # The image's baked store: dependencies.mjs fingerprints it (docs/depot-ci.md#custom-image)
+  PNPM_CONFIG_STORE_DIR: /home/runner/.pnpm-store
 jobs:
   update_dashboard:
     runs-on:
@@ -30,8 +33,8 @@ jobs:
         with:
           clean: false
           ref: ${{ github.sha }}
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile --prefer-offline
+      - name: Reconcile dependencies (baked)
+        run: node scripts/depot-ci/dependencies.mjs install
       - name: Notify PR update
         run: pnpm tsx scripts/ci/notify.ts pr-update
       - name: Update PR dashboard

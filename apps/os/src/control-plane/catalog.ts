@@ -10,7 +10,7 @@ import { codedError } from "iterate/lib";
 import { createD1Client, SqlfuError } from "sqlfu";
 import type { Caller as PrincipalCaller } from "../caller.ts";
 import type { OrganizationRole } from "../organization/contract.ts";
-import type { IdentityProvider } from "./contract.ts";
+import { IDENTITY_PROVIDER_NAMES, type IdentityProvider } from "./contract.ts";
 import { batch } from "./db/index.ts";
 import {
   claimHostname,
@@ -22,6 +22,9 @@ import {
 } from "./db/queries/.generated/hostnames.sql.ts";
 import {
   integrationRoute,
+  moveIntegrationRoute,
+  releaseIntegrationRoute,
+  restoreIntegrationRoute,
   releaseIntegrationRoutes,
   releaseOtherIntegrationRoutes,
   releaseRoutesOfDeletedProject,
@@ -33,6 +36,7 @@ import {
   insertInvitation,
   invitationById,
   invitationByToken,
+  openInvitations,
   revokeInvitation,
 } from "./db/queries/.generated/invitations.sql.ts";
 import {
@@ -45,7 +49,6 @@ import {
   listMembers,
   listOrganizations,
   memberOf,
-  organizationById,
   organizationRole,
   renameOrganization,
   upsertMembership,
@@ -63,6 +66,7 @@ import {
 } from "./db/queries/.generated/projects.sql.ts";
 import {
   identityUser,
+  insertAddedIdentity,
   insertIdentity,
   insertUserIfNew,
   insertUserUnlessLinked,
@@ -114,7 +118,14 @@ export type OrganizationRecord = {
   role?: OrganizationRole;
   projects: number;
 };
-export type MemberRecord = { userId: string; email: string; role: OrganizationRole };
+/** A member of an organization. `createdAt`: when they joined (epoch ms), null for a membership
+ *  older than the column (db/migrations/0004_created_at.sql). */
+export type MemberRecord = {
+  userId: string;
+  email: string;
+  role: OrganizationRole;
+  createdAt: number | null;
+};
 /** An invitation to an organization, as its owners see it: the link's own secret is never stored,
  *  only its SHA-256 (`token_hash`), so an invitation is shown once — at creation — and afterwards
  *  known by `id`. `emailHint` is who the owner meant it for: a note, not a check — the link admits
@@ -140,7 +151,8 @@ export type InvitationPreview = InvitationRecord & {
 /** Where the platform's own app routes a provider account's webhooks: the connection's log, `path`
  *  in `projectId`. */
 export type IntegrationRouteRecord = { projectId: string; path: string };
-/** What a person can access: their organizations and every project of those, with their role. */
+/** What a person can access: their organizations and every project of those, with their role,
+ *  each list oldest first. */
 export type AccessibleRecord = { organizations: OrganizationRecord[]; projects: ProjectRecord[] };
 
 export class ControlPlaneDatabase {
@@ -160,22 +172,25 @@ export class ControlPlaneDatabase {
     return listUsers(this.#client);
   }
   /** The user a provider's subject names. */
-  identity(provider: IdentityProvider, subject: string): Promise<UserRecord | null> {
-    return identityUser(this.#client, { provider, subject });
+  async identity(provider: IdentityProvider, subject: string): Promise<UserRecord | null> {
+    const user = await identityUser(this.#client, { provider, subject });
+    return user && { id: user.id, email: user.email };
   }
-  organization(organizationId: string): Promise<OrganizationRecord | null> {
-    return organizationById(this.#client, { id: organizationId });
-  }
+  /** Every organization, oldest first. */
   organizations(): Promise<OrganizationRecord[]> {
     return listOrganizations(this.#client);
   }
-  members(organizationId: string): Promise<MemberRecord[]> {
-    return listMembers(this.#client, { orgId: organizationId });
+  /** An organization's members, in the order they joined. */
+  async members(organizationId: string): Promise<MemberRecord[]> {
+    const members = await listMembers(this.#client, { orgId: organizationId });
+    // D1 answers null for a membership older than the column; sqlfu types it optional
+    return members.map((member) => ({ ...member, createdAt: member.createdAt ?? null }));
   }
   /** A project by id or by slug (a slug never holds the `_` every id does, so at most one row). */
   async project(ref: string): Promise<ProjectRecord | null> {
     return (await projectsByRef(this.#client, { id: ref, slug: ref }))[0] ?? null;
   }
+  /** Every project, oldest first. */
   projects(): Promise<ProjectRecord[]> {
     return listProjects(this.#client);
   }
@@ -198,9 +213,9 @@ export class ControlPlaneDatabase {
   ): Promise<IntegrationRouteRecord | null> {
     return integrationRoute(this.#client, { provider, externalId });
   }
-  /** What a person can access: the organizations they belong to — the first by name is where a
-   *  project goes when none is named — and every project of those, with their role. One batch, so
-   *  the two lists are one moment's. */
+  /** What a person can access: the organizations they belong to — the first, the oldest, is where
+   *  a project goes when none is named — and every project of those, with their role, each list
+   *  oldest first. One batch, so the two lists are one moment's. */
   async accessibleTo(userId: string): Promise<AccessibleRecord> {
     const results = await batch(this.#d1, [
       accessibleOrganizations.query({ userId }),
@@ -210,6 +225,19 @@ export class ControlPlaneDatabase {
       organizations: rowsOf<accessibleOrganizations.Result>(results, 0),
       projects: rowsOf<accessibleProjects.Result>(results, 1),
     };
+  }
+  /** An organization's invitation links still open — neither accepted nor revoked (an expired one
+   *  stays until revoked) — oldest first: its owners' read, and the operator's. */
+  async openInvitations(caller: Caller, organizationId: string): Promise<InvitationRecord[]> {
+    const verb = "list the invitations of";
+    const guard = this.#ownerGuard(caller, verb);
+    const results = await batch(this.#d1, [
+      openInvitations.query({ orgId: organizationId, ...guard }),
+      organizationRole.query({ orgId: organizationId, userId: guard.actorId }),
+    ]);
+    const refusal = ownerRefusal(rowsOf<organizationRole.Result>(results, 1)[0], guard, verb);
+    if (refusal) throw refusal;
+    return rowsOf<openInvitations.Result>(results, 0).map(invitationRecord);
   }
   /** What a link opens, for the person holding it — null for a token no invitation hashes to (an
    *  organization's deletion takes its invitations). `userId` is the reader, for `member`. */
@@ -243,7 +271,8 @@ export class ControlPlaneDatabase {
   }
 
   /** A verified sign-in: link once by verified email, then resolve by the provider's stable
-   *  subject. A linked subject's changed email follows it, unless another person holds that email;
+   *  subject. A linked subject's changed email follows it when it is the person's only sign-in and
+   *  was not added to their account (`addIdentity`), unless another person holds that email;
    *  a second subject of the same provider cannot adopt an already-linked person. Takes no caller —
    *  it is the sign-in system linking a verified identity, never a person's own command.
    *
@@ -267,21 +296,54 @@ export class ControlPlaneDatabase {
     if (!linked)
       throw codedError("IDENTITY_CONFLICT", "This email belongs to another linked account.");
     if (linked.email === email) return linked;
+    // The email follows a person's only sign-in, which `updateUserEmail`'s own `where` says (so a
+    // sign-in added meanwhile stops it too). With more than one (Google and GitHub, say), each
+    // provider may report its own address, and none of them rewrites the person's; nor does one the
+    // person added to their account, whose address was never theirs.
     try {
-      await updateUserEmail(this.#client, { email }, { id: linked.id });
+      const { rowsAffected } = await updateUserEmail(this.#client, { email }, { id: linked.id });
+      return { id: linked.id, email: rowsAffected ? email : linked.email };
     } catch (error) {
       if (error instanceof SqlfuError && error.kind === "unique_violation")
         throw codedError("IDENTITY_CONFLICT", "This email belongs to another account.");
       throw error;
     }
-    return { id: linked.id, email };
+  }
+
+  /** A sign-in a signed-in person adds to their own account (identity.ts's link mode): the
+   *  provider's subject becomes theirs — again, unchanged — and their email stays. Refused when the
+   *  subject signs in to another person, or when this person already has another subject of the
+   *  provider (`unique (provider, user_id)`). Takes no caller: the issuer proved the person (their
+   *  session) and the subject (the provider). One batch: the insert does nothing under either
+   *  constraint, and the read after it says whose the subject is. */
+  async addIdentity(input: {
+    userId: string;
+    provider: IdentityProvider;
+    subject: string;
+    now: number;
+  }): Promise<UserRecord> {
+    const { userId, provider, subject } = input;
+    const results = await batch(this.#d1, [
+      insertAddedIdentity.query({ provider, subject, userId, addedAt: input.now }),
+      identityUser.query({ provider, subject }),
+    ]);
+    const holder = rowsOf<identityUser.Result>(results, 1)[0];
+    if (holder?.id === userId) return { id: holder.id, email: holder.email };
+    const name = IDENTITY_PROVIDER_NAMES[provider];
+    throw codedError(
+      "IDENTITY_CONFLICT",
+      holder
+        ? `This ${name} account signs in to another iterate account.`
+        : `Your account already signs in with another ${name} account.`,
+    );
   }
 
   /** A new organization, the caller its owner. The operator may name another owner, or none (the
-   *  deployment's own). The organization and its owner land in one batch. */
+   *  deployment's own). The organization and its owner land in one batch, both created `now`. */
   async createOrganization(
     caller: Caller,
     input: { name: string; ownerId?: string },
+    now: number,
   ): Promise<OrganizationRecord> {
     if (input.ownerId) this.#requireOperator(caller, "name an organization's owner");
     // named by id or email; the membership holds the id (a user is never deleted)
@@ -293,7 +355,7 @@ export class ControlPlaneDatabase {
       (isOperator(caller) ? null : this.#requireUser(caller, "create an organization"));
     const organization = { id: newId("org"), name: input.name.trim() };
     await batch(this.#d1, [
-      insertOrganization.query(organization),
+      insertOrganization.query({ ...organization, createdAt: now }),
       ...(ownerId ? [insertOwner.query({ userId: ownerId, orgId: organization.id })] : []),
     ]);
     const record: OrganizationRecord = { ...organization, projects: 0 };
@@ -339,12 +401,14 @@ export class ControlPlaneDatabase {
     );
   }
 
-  /** Add a person, named by id or email, or change their role; answers the id the membership
-   *  holds. The last owner stays: the upsert's own `where` refuses to demote them. */
+  /** Add a person, named by id or email, joining `now`, or change their role, which keeps when
+   *  they joined; answers the id the membership holds. The last owner stays: the upsert's own
+   *  `where` refuses to demote them. */
   async addMember(
     caller: Caller,
     organizationId: string,
     input: { userId: string; role: OrganizationRole },
+    now: number,
   ): Promise<string> {
     const guard = this.#ownerGuard(caller, "add a member to");
     const person = {
@@ -353,7 +417,7 @@ export class ControlPlaneDatabase {
       email: emailAddress(input.userId),
     };
     const results = await batch(this.#d1, [
-      upsertMembership.query({ ...person, role: input.role, ...guard }),
+      upsertMembership.query({ ...person, role: input.role, createdAt: now, ...guard }),
       organizationRole.query({ orgId: organizationId, userId: guard.actorId }),
       memberOf.query(person),
     ]);
@@ -521,12 +585,13 @@ export class ControlPlaneDatabase {
     throw new Error(`acceptInvitation changed nothing for an open link (${found.id})`);
   }
 
-  /** A project named `project` (slugified into its hostname label): in the organization named (a
-   *  member's, or any for the operator) or the caller's own — their first by name, made on first use
-   *  and named after their email's local part (the deployment's own for the operator). A slug is ONE
-   *  project across every organization: the same organization's again is the same project, another's
-   *  is PROJECT_NAME_TAKEN, and nothing is made. The project's own creation (its config repo, its
-   *  seed) is its root's saga, opened by the caller (session.ts) after this returns.
+  /** A project named `project` (slugified into its hostname label), created `now`: in the
+   *  organization named (a member's, or any for the operator) or the caller's own — their oldest,
+   *  made on first use and named after their email's local part (the deployment's own for the
+   *  operator). A slug is ONE project across every organization: the same organization's again is
+   *  the same project, another's is PROJECT_NAME_TAKEN, and nothing is made. The project's own
+   *  creation (its config repo, its seed) is its root's saga, opened by the caller (session.ts)
+   *  after this returns.
    *
    *  Each case is one batch whose inserts do nothing on a taken slug or id (`on conflict do
    *  nothing`, or a `where` that finds it taken) and whose last reads say what holds the slug and
@@ -534,11 +599,12 @@ export class ControlPlaneDatabase {
    *  organization is the one case that takes two: the first finds none and reads their email, and
    *  the second mints their own, named after it (sqlfu 0.1.1 types no `substr`, so the name is cut
    *  here, not in SQL) — only while they still belong nowhere and the slug is free, so two first
-   *  creations at once make one. */
+   *  creations at once make one. The one that made it answers its name (`mintedOrganization`). */
   async createProject(
     caller: Caller,
     input: { project: string; organizationId?: string; restoreProjectId?: string },
-  ): Promise<ProjectRecord> {
+    now: number,
+  ): Promise<ProjectRecord & { mintedOrganization?: string }> {
     const restoring = input.restoreProjectId;
     // oxlint-disable-next-line iterate/simple-truthiness-check -- an empty restore id is refused, never read as "mint a new one"
     if (restoring !== undefined) {
@@ -556,8 +622,8 @@ export class ControlPlaneDatabase {
       const orgId = input.organizationId;
       const results = await batch(this.#d1, [
         userId
-          ? insertMemberProject.query({ ...project, orgId, userId })
-          : insertProject.query({ ...project, orgId }),
+          ? insertMemberProject.query({ ...project, orgId, userId, createdAt: now })
+          : insertProject.query({ ...project, orgId, createdAt: now }),
         organizationRole.query({ orgId, userId: caller.principal!.actor }),
         projectsByRef.query(project),
       ]);
@@ -568,14 +634,19 @@ export class ControlPlaneDatabase {
     }
     if (!userId) {
       const results = await batch(this.#d1, [
-        insertAdminOrganization.query({ orgId: ADMIN_ORG_ID, slug, projectId: project.id }),
-        insertProject.query({ ...project, orgId: ADMIN_ORG_ID }),
+        insertAdminOrganization.query({
+          orgId: ADMIN_ORG_ID,
+          slug,
+          projectId: project.id,
+          createdAt: now,
+        }),
+        insertProject.query({ ...project, orgId: ADMIN_ORG_ID, createdAt: now }),
         projectsByRef.query(project),
       ]);
       return created(rowsOf<projectsByRef.Result>(results, 2), project, ADMIN_ORG_ID, restoring);
     }
     const first = await batch(this.#d1, [
-      insertFirstOrganizationProject.query({ ...project, userId }),
+      insertFirstOrganizationProject.query({ ...project, userId, createdAt: now }),
       firstOrganizationOf.query({ userId }),
       projectsByRef.query(project),
       userByRef.query({ id: userId, email: userId }),
@@ -584,25 +655,22 @@ export class ControlPlaneDatabase {
     const held = rowsOf<projectsByRef.Result>(first, 2);
     const user = rowsOf<userByRef.Result>(first, 3)[0];
     if (target || held.length || !user) return created(held, project, target?.id, restoring);
-    const orgId = newId("org");
+    const organization = { id: newId("org"), name: user.email.split("@")[0]! };
     const minted = await batch(this.#d1, [
-      insertPersonalOrganization.query({
-        id: orgId,
-        name: user.email.split("@")[0]!,
-        userId,
-        slug,
-      }),
-      insertOwner.query({ userId, orgId }),
-      insertFirstOrganizationProject.query({ ...project, userId }),
+      insertPersonalOrganization.query({ ...organization, userId, slug, createdAt: now }),
+      insertOwner.query({ userId, orgId: organization.id }),
+      insertFirstOrganizationProject.query({ ...project, userId, createdAt: now }),
       firstOrganizationOf.query({ userId }),
       projectsByRef.query(project),
     ]);
-    return created(
+    const record = created(
       rowsOf<projectsByRef.Result>(minted, 4),
       project,
       rowsOf<firstOrganizationOf.Result>(minted, 3)[0]?.id,
       restoring,
     );
+    // this batch made the person's organization: the session lands its creation (session.ts)
+    return changed(minted[0]) ? { ...record, mintedOrganization: organization.name } : record;
   }
 
   /** The project `caller` may delete — the owner of its organization, or the operator — or a
@@ -698,6 +766,74 @@ export class ControlPlaneDatabase {
         ? `The ${provider} account '${externalId}' is already connected at ${holder.path}.`
         : `The ${provider} account '${externalId}' is connected to another project.`,
     );
+  }
+  /** MOVE a provider account's route from the connection that holds it (`from`) to another (`to`):
+   *  one batch — the route re-pointed ONLY while `from` still holds this account (a compare-and-swap
+   *  on the row), then `to`'s other routes released only once `to` holds it. So the account is never
+   *  routed to both or neither, and when `from` no longer holds it (it gave it up, or moved it
+   *  meanwhile) the batch changes nothing and the move is refused. */
+  async moveIntegrationRoute(
+    provider: string,
+    externalId: string,
+    from: { projectId: string; path: string },
+    to: { projectId: string; path: string },
+  ): Promise<void> {
+    const route = { provider, externalId, ...to };
+    const results = await batch(this.#d1, [
+      moveIntegrationRoute.query(
+        { toProjectId: to.projectId, toPath: to.path },
+        { provider, externalId, fromProjectId: from.projectId, fromPath: from.path },
+      ),
+      releaseOtherIntegrationRoutes.query(route),
+      integrationRoute.query({ provider, externalId }),
+    ]);
+    const holder = rowsOf<integrationRoute.Result>(results, 2)[0];
+    if (holder?.projectId === to.projectId && holder.path === to.path) return;
+    throw codedError(
+      "INVALID_INPUT",
+      `The ${provider} account '${externalId}' moved meanwhile — connect it again.`,
+    );
+  }
+  /** A FAILED MOVE'S UNDO: the route back from `from` to the connection it came from (`to`), only
+   *  while `from` still holds it and `to` holds no route at all — a connection that took another
+   *  account since keeps that one, and never gains a second. One statement; answers whether it went
+   *  back. */
+  async restoreIntegrationRoute(
+    provider: string,
+    externalId: string,
+    from: { projectId: string; path: string },
+    to: { projectId: string; path: string },
+  ): Promise<boolean> {
+    const restored = await restoreIntegrationRoute(
+      this.#client,
+      { toProjectId: to.projectId, toPath: to.path },
+      {
+        provider,
+        externalId,
+        fromProjectId: from.projectId,
+        fromPath: from.path,
+        toProjectId: to.projectId,
+        toPath: to.path,
+      },
+    );
+    return Boolean(restored.rowsAffected);
+  }
+  /** Release ONE account's route, only while the connection at `path` holds it: a connection that
+   *  took another account since keeps that one's. Answers whether it held it — one statement, so a
+   *  move of the route (`moveIntegrationRoute`) and this release never both win. */
+  async releaseIntegrationRoute(
+    provider: string,
+    externalId: string,
+    projectId: string,
+    path: string,
+  ): Promise<boolean> {
+    const released = await releaseIntegrationRoute(this.#client, {
+      provider,
+      externalId,
+      projectId,
+      path,
+    });
+    return Boolean(released.rowsAffected);
   }
   /** Release every route of the connection at `path` in a project; another's are left alone. */
   async releaseIntegrationRoutes(projectId: string, path: string): Promise<void> {

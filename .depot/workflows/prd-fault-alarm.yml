@@ -27,6 +27,10 @@ concurrency:
   group: prd-fault-alarm
   cancel-in-progress: false
 
+env:
+  # The image's baked store: dependencies.mjs fingerprints it (docs/depot-ci.md#custom-image)
+  PNPM_CONFIG_STORE_DIR: /home/runner/.pnpm-store
+
 jobs:
   alarm:
     name: Prd fault alarm
@@ -42,8 +46,8 @@ jobs:
         with:
           clean: false
           ref: ${{ github.event_name == 'schedule' && github.event.repository.default_branch || github.sha }}
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile --prefer-offline
+      - name: Reconcile dependencies (baked)
+        run: node scripts/depot-ci/dependencies.mjs install
       - name: Read the previous run's state
         run: |-
           export DEPOT_TOKEN

@@ -2,6 +2,8 @@
 -- membership, project, invitation, custom hostname and OAuth grant. sqlfu types the queries in
 -- queries/*.sql against this file; migrations/ is what a database runs (`pnpm db:check` holds the
 -- two equal). Times are epoch ms, except oauth_grants.expires_at, which is epoch s (KV's unit).
+-- created_at on an organization, a membership and a project: when the row was written; null for a
+-- row older than the column (migrations/0004_created_at.sql), which a list by it holds first.
 -- D1 enforces foreign keys (https://developers.cloudflare.com/d1/sql-api/foreign-keys/).
 
 -- email: trimmed and lower-cased (catalog.ts `emailAddress`). A user is never deleted.
@@ -11,23 +13,43 @@ create table users (
 );
 
 -- A provider's stable subject, linked to a person once: one subject per provider per person.
+-- added_at: when the person, signed in, added it to their account (catalog.ts `addIdentity`); null
+-- for one a sign-in linked by its email. The address an added one's provider reports is never theirs.
 create table identities (
   provider text not null,
   subject text not null,
   user_id text not null references users (id),
+  added_at integer,
   primary key (provider, subject),
   unique (provider, user_id)
 );
 
+-- A person with a sign-in they added keeps their email: the address an added sign-in's provider
+-- reports is never theirs (catalog.ts `linkIdentity` never writes it), and this refuses the write
+-- from anything else, such as a version of the platform older than `added_at`. An operator who
+-- must change such an email clears the identity's `added_at` first.
+-- BEGIN and END in capitals: D1's query API finds the end of a trigger only so, and answers a
+-- lowercase one "incomplete input".
+create trigger users_email_kept_by_added_sign_in
+before update of email on users
+when new.email <> old.email
+  and exists (select 1 from identities i where i.user_id = old.id and i.added_at is not null)
+BEGIN
+  select raise(abort, 'a person with an added sign-in keeps their email');
+END;
+
 create table organizations (
   id text primary key,
-  name text not null
+  name text not null,
+  created_at integer
 );
 
+-- created_at: when the person joined; a change of role keeps it.
 create table memberships (
   org_id text not null references organizations (id) on delete cascade,
   user_id text not null references users (id),
   role text not null check (role in ('owner', 'member')),
+  created_at integer,
   primary key (org_id, user_id)
 );
 create index memberships_user on memberships (user_id);
@@ -37,7 +59,8 @@ create index memberships_user on memberships (user_id);
 create table projects (
   id text primary key,
   slug text not null unique,
-  org_id text not null references organizations (id)
+  org_id text not null references organizations (id),
+  created_at integer
 );
 create index projects_org on projects (org_id);
 

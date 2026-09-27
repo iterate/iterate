@@ -18,9 +18,10 @@ import { SomeoneElseStep } from "./someone-else-step.tsx";
 
 /** The consent page for a request the platform accepted. Three steps: a first project for someone
  *  with none, then which projects the client may reach, then which of the permissions it asked for
- *  to grant — or, for a platform admin, "Sign in as someone else…" instead. Choices live here, so a
- *  refreshed description (after a project is created) and a trip between the steps never drop one.
- *  Authorize is a plain POST to this very authorization URL. */
+ *  to grant — or, for a platform admin, "Sign in as someone else…" instead, which a link naming
+ *  someone opens on. Choices live here, so a refreshed description (after a project is created)
+ *  and a trip between the steps never drop one. Authorize is a plain POST to this very
+ *  authorization URL. */
 export function ConsentCard({
   view,
   authorization,
@@ -34,7 +35,10 @@ export function ConsentCard({
   const createProject = useServerFn(createProjectForConsent);
   const hydrated = useHydrated();
   const [pending, startTransition] = useTransition();
-  const [step, setStep] = useState<"projects" | "permissions" | "someone-else">("projects");
+  // a link that named someone (`impersonation.suggested`) opens on signing in as them
+  const [step, setStep] = useState<"projects" | "permissions" | "someone-else">(
+    view.impersonation?.suggested ? "someone-else" : "projects",
+  );
   const [selection, setSelection] = useState<ProjectSelection>({
     all: !view.projectBound,
     excluded: new Set(),

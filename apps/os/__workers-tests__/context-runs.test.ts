@@ -9,7 +9,15 @@
 import { evictDurableObject, runInDurableObject } from "cloudflare:test";
 import { expect, test } from "vitest";
 import type { StreamEvent } from "iterate/stream/processor";
-import { adminCredentials, openSession, releasePins, stub, until } from "./support.ts";
+import {
+  adminCredentials,
+  openSession,
+  readLog,
+  releasePins,
+  snapshot,
+  stub,
+  until,
+} from "./support.ts";
 
 const PROJECT = "prj_context_runs";
 const ROOT = `${PROJECT}.iterate/`;
@@ -108,7 +116,7 @@ test("KILLED MID-RUN, NEVER RE-RUN: the context dies with a script in flight; th
     settlement: { status: "failed", failureKind: "interrupted" },
   });
   // the SAME batch as the wake record: right behind it
-  const log = await read(ROOT);
+  const log = await readLog(ROOT);
   expect(log.find((e) => e.offset === after[1]!.offset - 1)).toMatchObject({
     type: "events.iterate.com/itx/woken",
   });
@@ -177,19 +185,10 @@ test("a script's hop to a sibling context carries the platform origin: `itx.cd(p
   expect(urls.sibling).toMatch(/^https:\/\/site--[a-z0-9-]+\.projects\.test\/$/);
 });
 
-async function read(ctx: string): Promise<StreamEvent[]> {
-  return ((await stub(ctx).invoke(["itx", ["readEvents", 0, 500]])) as { events: StreamEvent[] })
-    .events;
-}
-
 async function runEvents(ctx: string) {
-  return (await read(ctx)).filter((e) => e.type.startsWith("events.iterate.com/itx/run-"));
+  return (await readLog(ctx)).filter((e) => e.type.startsWith("events.iterate.com/itx/run-"));
 }
 
 async function openScriptRuns(ctx: string) {
-  return (
-    (await stub(ctx).invoke("itx.facets.get('core').snapshot()")) as {
-      state: { scriptRuns: Record<string, unknown> };
-    }
-  ).state.scriptRuns;
+  return (await snapshot<{ scriptRuns: Record<string, unknown> }>(ctx, "core")).state.scriptRuns;
 }

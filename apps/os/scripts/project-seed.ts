@@ -8,6 +8,7 @@ import { newWebSocketRpcSession, type RpcStub } from "capnweb";
 import { WebSocket } from "undici";
 import { createCli } from "trpc-cli";
 import { z } from "zod";
+import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
 import type { IterateSessionApi, SessionCredentials } from "iterate/api";
 import type { ItxExpression } from "iterate/expression";
 import { OS_DOPPLER_PROJECT, osEnvs } from "../../../envs.ts";
@@ -90,7 +91,7 @@ export async function capture(options: {
     const project = (await api.projects.list()).find((project) => project.slug === options.project);
     if (!project) throw new Error(`Project ${options.project} does not exist.`);
     const root = await api.projects.get(project.id);
-    // the organization's record and its members, off the operator's index (src/control-plane/)
+    // the organization and its members, off the control plane (src/control-plane/)
     const organization = (await api.organizations.list()).find((org) => org.id === project.orgId);
     if (!organization) throw new Error(`Organization ${project.orgId} does not exist.`);
     const members = (await api.organizations.members(project.orgId)).map(({ email, role }) => ({
@@ -351,22 +352,12 @@ export async function apply(options: {
       // the owner's session adds each member (the owner again is a no-op on the record)
       await operator.organizations.addMember(org.id, { userId: user.actor, role: member.role });
     }
-    // Asked again for an existing project, create answers it and lands whatever its organization's
-    // record lacks (src/session.ts `landProjectOnOrganization`): the list the dash shows.
+    // Asked again for an existing project, create answers it (src/session.ts `projects.create`).
     await admin.projects.create({
       project: seed.project,
       orgId: org.id,
       restoreProjectId: seed.source.projectId,
     });
-    const record = z
-      .object({ state: z.object({ projects: z.record(z.string(), z.unknown()) }) })
-      .parse(
-        await admin.organizations
-          .get(org.id)
-          .invoke(["itx", "facets", ["get", "organization"], ["snapshot"]]),
-      );
-    if (!record.state.projects[seed.source.projectId])
-      throw new Error(`The organization's record does not list ${seed.project}.`);
     const root = await operator.projects.get(seed.source.projectId);
     const identity = z
       .object({ projectId: z.string(), projectSlug: z.string().optional() })
@@ -474,10 +465,9 @@ export async function apply(options: {
         throw new Error(`Membership readback failed for ${member.email}.`);
     }
     console.log(
-      `Restored ${seed.project} (${seed.source.projectId}) into ${organization}: exact Git tree ${seed.config.tree}, ${secrets.length} verified secrets, ${members.length} verified memberships, ${hostnames.length} hostnames, listed on the organization's record. Commit ${committed.commitOid}.`,
+      `Restored ${seed.project} (${seed.source.projectId}) into ${organization}: exact Git tree ${seed.config.tree}, ${secrets.length} verified secrets, ${members.length} verified memberships, ${hostnames.length} hostnames, in its organization. Commit ${committed.commitOid}.`,
     );
   });
 }
 
-if (process.argv[1]?.endsWith("project-seed.ts"))
-  void createCli({ ...import.meta, name: "project-seed" }).run();
+if (isMainModule(import.meta.url)) void createCli({ ...import.meta, name: "project-seed" }).run();

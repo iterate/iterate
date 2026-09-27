@@ -29,7 +29,7 @@ export namespace projectsByRef {
 }
 
 const listProjectsSql = `
-select id, slug, org_id as orgId from projects order by slug;
+select id, slug, org_id as orgId from projects order by created_at, slug;
 `.trim();
 const listProjectsQuery = { name: "listProjects", sql: listProjectsSql, args: [] };
 
@@ -49,14 +49,14 @@ export namespace listProjects {
 }
 
 const insertProjectSql = `
-insert into projects (id, slug, org_id)
-select ?, ?, o.id from organizations o where o.id = ?
+insert into projects (id, slug, org_id, created_at)
+select ?, ?, o.id, ? from organizations o where o.id = ?
 on conflict do nothing;
 `.trim();
 const insertProjectQuery = (params: insertProject.Params) => ({
 	name: "insertProject",
 	sql: insertProjectSql,
-	args: [params.id, params.slug, params.orgId],
+	args: [params.id, params.slug, params.createdAt, params.orgId],
 });
 
 export const insertProject = Object.assign(
@@ -70,19 +70,22 @@ export namespace insertProject {
 	export type Params = {
 		id: string;
 		slug: string;
+		createdAt: number | null;
 		orgId: string;
 	};
 }
 
 const insertMemberProjectSql = `
-insert into projects (id, slug, org_id)
-select ?, ?, m.org_id from memberships m where m.org_id = ? and m.user_id = ?
+insert into projects (id, slug, org_id, created_at)
+select ?, ?, m.org_id, ?
+from memberships m
+where m.org_id = ? and m.user_id = ?
 on conflict do nothing;
 `.trim();
 const insertMemberProjectQuery = (params: insertMemberProject.Params) => ({
 	name: "insertMemberProject",
 	sql: insertMemberProjectSql,
-	args: [params.id, params.slug, params.orgId, params.userId],
+	args: [params.id, params.slug, params.createdAt, params.orgId, params.userId],
 });
 
 export const insertMemberProject = Object.assign(
@@ -96,21 +99,22 @@ export namespace insertMemberProject {
 	export type Params = {
 		id: string;
 		slug: string;
+		createdAt: number | null;
 		orgId: string;
 		userId: string;
 	};
 }
 
 const insertAdminOrganizationSql = `
-insert into organizations (id, name)
-select ?, 'admin'
+insert into organizations (id, name, created_at)
+select ?, 'admin', ?
 where not exists (select 1 from projects p where p.slug = ? or p.id = ?)
 on conflict (id) do nothing;
 `.trim();
 const insertAdminOrganizationQuery = (params: insertAdminOrganization.Params) => ({
 	name: "insertAdminOrganization",
 	sql: insertAdminOrganizationSql,
-	args: [params.orgId, params.slug, params.projectId],
+	args: [params.orgId, params.createdAt, params.slug, params.projectId],
 });
 
 export const insertAdminOrganization = Object.assign(
@@ -123,14 +127,15 @@ export const insertAdminOrganization = Object.assign(
 export namespace insertAdminOrganization {
 	export type Params = {
 		orgId: string;
+		createdAt: number | null;
 		slug: string;
 		projectId: string;
 	};
 }
 
 const insertPersonalOrganizationSql = `
-insert into organizations (id, name)
-select ?, ?
+insert into organizations (id, name, created_at)
+select ?, ?, ?
 from users u
 where u.id = ?
   and not exists (select 1 from memberships m where m.user_id = u.id)
@@ -139,7 +144,7 @@ where u.id = ?
 const insertPersonalOrganizationQuery = (params: insertPersonalOrganization.Params) => ({
 	name: "insertPersonalOrganization",
 	sql: insertPersonalOrganizationSql,
-	args: [params.id, params.name, params.userId, params.slug],
+	args: [params.id, params.name, params.createdAt, params.userId, params.slug],
 });
 
 export const insertPersonalOrganization = Object.assign(
@@ -153,25 +158,26 @@ export namespace insertPersonalOrganization {
 	export type Params = {
 		id: string;
 		name: string;
+		createdAt: number | null;
 		userId: string;
 		slug: string;
 	};
 }
 
 const insertFirstOrganizationProjectSql = `
-insert into projects (id, slug, org_id)
-select ?, ?, m.org_id
+insert into projects (id, slug, org_id, created_at)
+select ?, ?, m.org_id, ?
 from memberships m
 join organizations o on o.id = m.org_id
 where m.user_id = ?
-order by o.name, o.id
+order by o.created_at, o.name, o.id
 limit 1
 on conflict do nothing;
 `.trim();
 const insertFirstOrganizationProjectQuery = (params: insertFirstOrganizationProject.Params) => ({
 	name: "insertFirstOrganizationProject",
 	sql: insertFirstOrganizationProjectSql,
-	args: [params.id, params.slug, params.userId],
+	args: [params.id, params.slug, params.createdAt, params.userId],
 });
 
 export const insertFirstOrganizationProject = Object.assign(
@@ -185,6 +191,7 @@ export namespace insertFirstOrganizationProject {
 	export type Params = {
 		id: string;
 		slug: string;
+		createdAt: number | null;
 		userId: string;
 	};
 }
@@ -194,7 +201,7 @@ select o.id
 from memberships m
 join organizations o on o.id = m.org_id
 where m.user_id = ?
-order by o.name, o.id
+order by o.created_at, o.name, o.id
 limit 1;
 `.trim();
 const firstOrganizationOfQuery = (params: firstOrganizationOf.Params) => ({

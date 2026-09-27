@@ -1,11 +1,11 @@
-// /projects — every project in the tree (components/organization-tree.tsx, live), a table (the
+// /projects — every project in the tree (components/organization-tree.tsx), a table (the
 // slug → its overview, the id, its organization → its settings, its site) in the organizations
 // page's layout, and the one way to make one: the "New project" sheet (`?new=1`, so the switcher
 // and a shared link open it too; `&template=` opens it with a template chosen, which is what a PR
 // preview's quick-launch links are) — "New organization…" inside it when the grant holds
 // `organizations:write`, a step-up link in its place otherwise. A created project's page is where
-// the sheet leads: `projects.create` returns once the control plane answered, the organization's
-// record lists the project the moment its fact lands, and that page renders the creation's progress live.
+// the sheet leads: `projects.create` returns once the control plane answered, the tree reads it
+// again, and that page renders the creation's progress live.
 import { useState, type FormEvent } from "react";
 import { createFileRoute, getRouteApi, Link, useNavigate } from "@tanstack/react-router";
 import { ArrowUpRight, Plus } from "lucide-react";
@@ -213,10 +213,10 @@ function NewProjectForm({
         const created = await api.organizations.create({ name: orgName.trim() });
         // the new organization stays chosen for the rest of the sheet's life: a refused project
         // name, retried, lands in it rather than minting a second one (names are not unique). The
-        // tree lists it as its membership lands, so the select has its option.
+        // tree reads it again, so the select has its option.
         chosenOrgId = created.id;
         setPicked(created.id);
-        reloadOrganizationTree();
+        void reloadOrganizationTree();
       }
       using created = await api.projects.create({
         project: name.trim(),
@@ -225,7 +225,7 @@ function NewProjectForm({
       });
       // the slug as the platform slugged it, off the root context handed back
       const { projectId, projectSlug } = await created.whoami();
-      reloadOrganizationTree();
+      await reloadOrganizationTree();
       await onCreated(projectSlug || projectId);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));

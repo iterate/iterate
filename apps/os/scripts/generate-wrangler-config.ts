@@ -1,36 +1,33 @@
 import { readFileSync } from "node:fs";
 import JSON5 from "json5";
 import { osEnvs, PREVIEW_AND_DEV_ACCOUNT_ID, osEnv, type OsEnv } from "../../../envs.ts";
-import { OBSERVABILITY, registrableDomainOf } from "../../../scripts/lib/wrangler-config.ts";
-import { TEST_LINK_EMAIL_DOMAIN } from "../src/test-link.ts";
+import {
+  COMPATIBILITY_DATE,
+  OBSERVABILITY,
+  registrableDomainOf,
+} from "../../../scripts/lib/wrangler-config.ts";
+import { TEST_EMAIL_DOMAIN } from "../src/test-email-domain.ts";
 import { PREVIEW_CLOUDFLARE_APP } from "./preview-cloudflare-app.ts";
 import { PREVIEW_GOOGLE_APP } from "./preview-google-app.ts";
 import { PREVIEW_SLACK_APP } from "./preview-slack-app.ts";
 
 /** The half of `APP_CONFIG` (src/app-config.ts) a deployment gets from envs.ts — its `urls`, the
- *  zones of its projects' custom hostnames (`customHostnames`), its `admins`, its PostHog key and a
- *  per-commit deployment's test links — as the override vars the parser merges on top of the
- *  Doppler blob: `APP_CONFIG_URLS__<KEY>`. An object travels as a JSON STRING — the parser reads
+ *  zones of its projects' custom hostnames (`customHostnames`), its `admins` and where they sign in,
+ *  its PostHog key and a per-commit deployment's test people and fakes — as the override vars the
+ *  parser merges on top of the Doppler blob: `APP_CONFIG_URLS__<KEY>`. An object travels as a JSON STRING — the parser reads
  *  string vars only. A blank var is unset. */
 function configVars(env: OsEnv) {
   const vars: Record<string, string> = { APP_CONFIG_URLS__OS: env.baseUrl };
   if (new URL(env.mcpBaseUrl).origin !== new URL(env.baseUrl).origin)
     vars.APP_CONFIG_URLS__MCP = new URL(env.mcpBaseUrl).origin;
   if (env.dashBaseUrl) vars.APP_CONFIG_URLS__DASH = env.dashBaseUrl;
-  // THE ONE-CLICK SIGN-IN (src/test-link.ts) the PR body links, and the one admin the admin app's
-  // specs sign in as (specs/admin). A deployment that signs anyone in by password or test link
-  // opens nothing more by making them an admin.
-  const admins = [...(env.admins || []), ...(env.testLinks ? [PREVIEW_ADMIN_EMAIL] : [])];
-  if (env.testLinks) {
-    vars.APP_CONFIG_LOGIN__TEST_LINK__EMAIL_DOMAIN = TEST_LINK_EMAIL_DOMAIN;
-    vars.APP_CONFIG_LOGIN__TEST_LINK__ADMINS__ISSUER = env.testLinks.admins.issuer;
-    vars.APP_CONFIG_LOGIN__TEST_LINK__ADMINS__EMAILS = env.testLinks.admins.emails.join(",");
-  }
-  if (admins.length) vars.APP_CONFIG_ADMINS = JSON.stringify(admins);
+  if (env.admins?.length) vars.APP_CONFIG_ADMINS = JSON.stringify(env.admins);
+  if (env.adminIssuer) vars.APP_CONFIG_LOGIN__ADMIN_ISSUER = env.adminIssuer;
+  if (env.testEmailDomain) vars.APP_CONFIG_LOGIN__TEST_EMAIL_DOMAIN = env.testEmailDomain;
   if (env.posthogProjectKey) vars.APP_CONFIG_POSTHOG_PROJECT_KEY = env.posthogProjectKey;
   // THE PET SHOP'S FAKES as iterate's Slack app and Google and Cloudflare clients, and sign-in with
   // Google, Cloudflare and GitHub through them, each keeping its token as the person's connection
-  // (a fake admits addresses under the test-link domain alone). The GitHub App carries a key, so
+  // (a fake admits addresses under `testEmailDomain` alone). The GitHub App carries a key, so
   // scripts/deploy.ts ships it as a secret.
   if (env.petshopIntegrations) {
     vars.APP_CONFIG_INTEGRATIONS__SLACK = JSON.stringify(PREVIEW_SLACK_APP);
@@ -87,12 +84,12 @@ export function routedHostnames(env: OsEnv) {
   ].filter(({ hostname }) => !hostname.endsWith(".workers.dev"));
 }
 
-/** A per-commit deployment's one admin (`APP_CONFIG_ADMINS`; specs/admin signs in as them). */
-const PREVIEW_ADMIN_EMAIL = `admin@${TEST_LINK_EMAIL_DOMAIN}`;
-
 /** wrangler.base.jsonc, the template every deployment's config derives from. */
 export function readWranglerBase() {
-  return JSON5.parse(readFileSync(new URL("../wrangler.base.jsonc", import.meta.url), "utf8"));
+  const base = JSON5.parse(
+    readFileSync(new URL("../wrangler.base.jsonc", import.meta.url), "utf8"),
+  );
+  return { ...base, compatibility_date: COMPATIBILITY_DATE };
 }
 
 /** Runtime bindings stay with the app; deployed names and IDs come from envs.ts. This is local dev
@@ -171,13 +168,19 @@ export function viteWranglerConfig(
           hostname: "localhost",
         }),
         ...(options.localDev && {
-          // one-click sign-in links (src/test-link.ts) — the specs' test-link.spec.ts mints one
-          APP_CONFIG_LOGIN__TEST_LINK__EMAIL_DOMAIN: TEST_LINK_EMAIL_DOMAIN,
           APP_CONFIG: JSON.stringify({
-            login: { password: "dev", emailCode: { from: "iterate <login@localhost>" } },
+            login: {
+              password: "dev",
+              emailCode: { from: "iterate <login@localhost>" },
+              // its test people's (getin's, the specs'), as a per-commit deployment's: a sign-in
+              // link naming one pre-fills an admin's "Sign in as someone else" (consent.ts), and it
+              // opens `pnpm getin`'s one-click `/.auth/local-sign-in` (src/local-sign-in.ts)
+              testEmailDomain: TEST_EMAIL_DOMAIN,
+            },
             // `pnpm getin`'s person, so the admin app and "view as" work locally, and the admin
-            // the specs sign in as (specs/admin, as on a per-commit deployment: PREVIEW_ADMIN_EMAIL)
-            admins: [`test@${TEST_LINK_EMAIL_DOMAIN}`, PREVIEW_ADMIN_EMAIL],
+            // the specs sign in as (specs/admin, as on a per-commit deployment: envs.ts
+            // `previewDeployment`)
+            admins: [`test@${TEST_EMAIL_DOMAIN}`, `admin@${TEST_EMAIL_DOMAIN}`],
             secrets: { adminBearer: "dev-admin-api-secret" },
           }),
           APP_CONFIG_SECRETS__KEY: "dev-secrets-key",

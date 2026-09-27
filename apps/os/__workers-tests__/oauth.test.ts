@@ -16,7 +16,6 @@ import {
   authorizationRequest,
   call,
   endGrantOnAccount,
-  fetchReachesThisWorker,
   grant,
   helpers,
   issuerApprover,
@@ -24,7 +23,14 @@ import {
   restoreMembership,
   rpc,
 } from "./oauth-support.ts";
-import { controlPlane, interceptCatalogReads, loginPassword, ORIGIN, until } from "./support.ts";
+import {
+  controlPlane,
+  fetchReachesThisWorker,
+  interceptCatalogReads,
+  loginPassword,
+  ORIGIN,
+  until,
+} from "./support.ts";
 const adminSecret = env.APP_CONFIG_SECRETS__ADMIN_BEARER!;
 
 test("discovery advertises CIMD AND DCR: the registration endpoint is published and registers a client", async () => {
@@ -83,9 +89,6 @@ test("the operator bearer is the administrator at /api and is refused at /mcp; t
   // /mcp: every caller is a person (an OAuth grant for /mcp, or a personal access token); the
   // deployment's machine credential is refused there, and the refusal says so
   const warns = vi.spyOn(console, "warn");
-  onTestFinished(() => {
-    warns.mockRestore();
-  });
   expect(
     await tool(adminSecret, "run", {
       project: "admin-probe",
@@ -146,9 +149,6 @@ test("a grant is bound to the one resource it asked for: its token opens that al
   // an /api token is no /mcp token, nor the reverse (RFC 8707: one audience per token), and the
   // refusal is logged with the check that failed
   const warns = vi.spyOn(console, "warn");
-  onTestFinished(() => {
-    warns.mockRestore();
-  });
   expect(await tool(token, "run", { script: "async () => 1" })).toMatchObject({ status: 401 });
   expect(warns).toHaveBeenCalledWith({
     event: "oauth.refusal",
@@ -484,12 +484,9 @@ test("the library writes no key but a grant twice: what the grant store leaves i
   fetchReachesThisWorker();
   const writes = new Map<string, number>();
   const put = env.OAUTH_KV.put.bind(env.OAUTH_KV);
-  const puts = vi.spyOn(env.OAUTH_KV, "put").mockImplementation(async (key, value, options) => {
+  vi.spyOn(env.OAUTH_KV, "put").mockImplementation(async (key, value, options) => {
     writes.set(key, (writes.get(key) ?? 0) + 1);
     await put(key, value, options);
-  });
-  onTestFinished(() => {
-    puts.mockRestore();
   });
   // every write the library makes: a registration, an issuer sign-in and a consent, a code
   // exchange, two refreshes and a revocation
@@ -635,9 +632,6 @@ test("console and project browsers use the same CIMD flow and independent grants
       return new Response("Unavailable", { status: 503 });
     return exports.default.fetch(request);
   });
-  onTestFinished(() => {
-    metadataFetch.mockRestore();
-  });
   const issuerLogin = await call("/login", {
     method: "POST",
     body: new URLSearchParams({
@@ -760,9 +754,6 @@ test("console and project browsers use the same CIMD flow and independent grants
     // a foreign grant ends nothing: no end lands on the account
     expect((await accountStateOf(env, user.id)).endedGrants["foreign-grant"]).toBeUndefined();
     const refusals = vi.spyOn(console, "warn");
-    onTestFinished(() => {
-      refusals.mockRestore();
-    });
     const consoleToken = await appSession(
       env.BROWSER_SESSION,
       new Request(ORIGIN, { headers: { cookie: consoleLogin.cookie } }),
@@ -795,17 +786,11 @@ test("console and project browsers use the same CIMD flow and independent grants
     const providerFailure = vi
       .spyOn(OAuthAuthorizationServer.prototype, "validateToken")
       .mockRejectedValueOnce(new Error("OAUTH_KV unavailable"));
-    onTestFinished(() => {
-      providerFailure.mockRestore();
-    });
     await expect(browserAuthorization(env, cookieRequest)).rejects.toThrow(/OAUTH_KV unavailable/);
     providerFailure.mockRestore();
     expect(await heldSession.bearer()).toBe(bearerBefore);
     logoutUnavailable = true;
     const log = vi.spyOn(console, "error").mockImplementation(() => {});
-    onTestFinished(() => {
-      log.mockRestore();
-    });
     const failedLogout = await call("/.auth/logout", {
       method: "POST",
       headers: { cookie: consoleLogin.cookie, Origin: ORIGIN },
@@ -948,20 +933,16 @@ function kvServesFirstWrites(): Map<string, string> {
   const firstWrites = new Map<string, string>();
   const put = kv.put.bind(kv);
   const get = kv.get.bind(kv) as (key: string, options?: unknown) => Promise<unknown>;
-  const puts = vi.spyOn(kv, "put").mockImplementation(async (key, value, options) => {
+  vi.spyOn(kv, "put").mockImplementation(async (key, value, options) => {
     if (typeof value === "string" && !firstWrites.has(key)) firstWrites.set(key, value);
     await put(key, value, options);
   });
-  const gets = vi.spyOn(kv, "get").mockImplementation((async (key: string, options?: unknown) => {
+  vi.spyOn(kv, "get").mockImplementation((async (key: string, options?: unknown) => {
     const first = firstWrites.get(key);
     if (!first) return get(key, options);
     const type = typeof options === "string" ? options : (options as { type?: string })?.type;
     return type === "json" ? JSON.parse(first) : first;
   }) as never);
-  onTestFinished(() => {
-    puts.mockRestore();
-    gets.mockRestore();
-  });
   return firstWrites;
 }
 

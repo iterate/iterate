@@ -9,134 +9,105 @@
 // — hence this custom rule.
 
 import { expect, test } from "vitest";
-import { createOxlintFixture } from "./oxlint-fixture.ts";
+import { lintOne } from "./oxlint-fixture.ts";
 
-test("flags an icon-size Button with no title", () => {
-  using fixture = createOxlintFixture({ rules: { "iterate/icon-button-has-hover-text": "error" } });
-  fixture.write(
-    "unlabeled.tsx",
-    [
-      "declare const Button: any, Trash: any;",
-      "export const remove = (",
-      '  <Button size="icon-sm" variant="outline">',
-      "    <Trash />",
-      "  </Button>",
-      ");",
-      "",
-    ].join("\n"),
+test.for([
+  {
+    name: "flags an icon-size Button with no title",
+    source: `
+      declare const Button: any, Trash: any;
+      export const remove = (
+        <Button size="icon-sm" variant="outline">
+          <Trash />
+        </Button>
+      );
+    `,
+    reports: ['<Button size="icon-sm">'],
+  },
+  {
+    name: "flags an aria-label without a title: the Button no longer turns it into hover text",
+    source: `
+      declare const Button: any, Trash: any;
+      export const remove = (
+        <Button size="icon-sm" aria-label="Delete row">
+          <Trash />
+        </Button>
+      );
+    `,
+    reports: ['<Button size="icon-sm">'],
+  },
+  {
+    name: "flags all icon sizes, including in render props",
+    source: `
+      declare const Button: any, DialogClose: any, X: any;
+      export const close = (
+        <DialogClose render={<Button size="icon-xs" />}>
+          <X />
+        </DialogClose>
+      );
+    `,
+    reports: ['<Button size="icon-xs">'],
+  },
+  {
+    name: "accepts a title, a title beside an aria-label, dynamic titles, spreads, and non-icon sizes",
+    source: `
+      declare const Button: any, Trash: any, Plus: any, props: any, label: string;
+      export const ok = (
+        <>
+          <Button size="icon" title="Delete row">
+            <Trash />
+          </Button>
+          <Button size="icon-sm" aria-label="Delete row" title="Delete row">
+            <Trash />
+          </Button>
+          <Button size="icon-lg" title={label}>
+            <Trash />
+          </Button>
+          <Button size="icon-sm" {...props}>
+            <Trash />
+          </Button>
+          <Button size="sm">
+            <Plus />
+            Connect
+          </Button>
+        </>
+      );
+    `,
+    reports: [],
+  },
+  {
+    name: "rejects an empty title",
+    source: `
+      declare const Button: any, Trash: any;
+      export const remove = (
+        <Button size="icon-sm" title=" ">
+          <Trash />
+        </Button>
+      );
+    `,
+    reports: ['<Button size="icon-sm">'],
+  },
+  {
+    name: "treats SidebarTrigger as the icon-size Button it renders",
+    source: `
+      declare const SidebarTrigger: any;
+      export const toggle = <SidebarTrigger className="md:hidden" />;
+    `,
+    reports: ['<SidebarTrigger size="icon-sm">'],
+  },
+  {
+    name: "accepts a SidebarTrigger with a title",
+    source: `
+      declare const SidebarTrigger: any;
+      export const toggle = <SidebarTrigger className="md:hidden" title="Toggle sidebar" />;
+    `,
+    reports: [],
+  },
+])("$name", ({ source, reports }) => {
+  const { messages } = lintOne("icon-button-has-hover-text", "input.tsx", source);
+  expect(messages).toEqual(
+    reports.map((element) =>
+      expect.stringContaining(`An icon-only ${element} has no visible text`),
+    ),
   );
-
-  const result = fixture.run(["unlabeled.tsx"], { expectFailure: true });
-  expect(result.stdout + result.stderr).toMatch(/Add title/);
-});
-
-test("flags an aria-label without a title: the Button no longer turns it into hover text", () => {
-  using fixture = createOxlintFixture({ rules: { "iterate/icon-button-has-hover-text": "error" } });
-  fixture.write(
-    "aria-label-only.tsx",
-    [
-      "declare const Button: any, Trash: any;",
-      "export const remove = (",
-      '  <Button size="icon-sm" aria-label="Delete row">',
-      "    <Trash />",
-      "  </Button>",
-      ");",
-      "",
-    ].join("\n"),
-  );
-
-  fixture.run(["aria-label-only.tsx"], { expectFailure: true });
-});
-
-test("flags all icon sizes, including in render props", () => {
-  using fixture = createOxlintFixture({ rules: { "iterate/icon-button-has-hover-text": "error" } });
-  fixture.write(
-    "render-prop.tsx",
-    [
-      "declare const Button: any, DialogClose: any, X: any;",
-      "export const close = (",
-      '  <DialogClose render={<Button size="icon-xs" />}>',
-      "    <X />",
-      "  </DialogClose>",
-      ");",
-      "",
-    ].join("\n"),
-  );
-
-  fixture.run(["render-prop.tsx"], { expectFailure: true });
-});
-
-test("accepts a title, a title beside an aria-label, dynamic titles, spreads, and non-icon sizes", () => {
-  using fixture = createOxlintFixture({ rules: { "iterate/icon-button-has-hover-text": "error" } });
-  fixture.write(
-    "labeled.tsx",
-    [
-      "declare const Button: any, Trash: any, Plus: any, props: any, label: string;",
-      "export const ok = (",
-      "  <>",
-      '    <Button size="icon" title="Delete row">',
-      "      <Trash />",
-      "    </Button>",
-      '    <Button size="icon-sm" aria-label="Delete row" title="Delete row">',
-      "      <Trash />",
-      "    </Button>",
-      '    <Button size="icon-lg" title={label}>',
-      "      <Trash />",
-      "    </Button>",
-      '    <Button size="icon-sm" {...props}>',
-      "      <Trash />",
-      "    </Button>",
-      '    <Button size="sm">',
-      "      <Plus />",
-      "      Connect",
-      "    </Button>",
-      "  </>",
-      ");",
-      "",
-    ].join("\n"),
-  );
-
-  fixture.run(["labeled.tsx"]);
-});
-
-test("rejects an empty title", () => {
-  using fixture = createOxlintFixture({ rules: { "iterate/icon-button-has-hover-text": "error" } });
-  fixture.write(
-    "empty-title.tsx",
-    [
-      "declare const Button: any, Trash: any;",
-      "export const remove = (",
-      '  <Button size="icon-sm" title=" ">',
-      "    <Trash />",
-      "  </Button>",
-      ");",
-      "",
-    ].join("\n"),
-  );
-
-  fixture.run(["empty-title.tsx"], { expectFailure: true });
-});
-
-test("treats SidebarTrigger as the icon-size Button it renders", () => {
-  using fixture = createOxlintFixture({ rules: { "iterate/icon-button-has-hover-text": "error" } });
-  fixture.write(
-    "sidebar-trigger.tsx",
-    [
-      "declare const SidebarTrigger: any;",
-      'export const toggle = <SidebarTrigger className="md:hidden" />;',
-      "",
-    ].join("\n"),
-  );
-  const result = fixture.run(["sidebar-trigger.tsx"], { expectFailure: true });
-  expect(result.stdout + result.stderr).toMatch(/<SidebarTrigger size="icon-sm">/);
-
-  fixture.write(
-    "sidebar-trigger.tsx",
-    [
-      "declare const SidebarTrigger: any;",
-      'export const toggle = <SidebarTrigger className="md:hidden" title="Toggle sidebar" />;',
-      "",
-    ].join("\n"),
-  );
-  fixture.run(["sidebar-trigger.tsx"]);
 });

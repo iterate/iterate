@@ -6,5 +6,10 @@ export default defineConfig({
     reporters: vitestReporters,
     environment: "node",
     include: ["src/**/*.test.ts"],
+    restoreMocks: true,
+    unstubGlobals: true,
+    unstubEnvs: true,
+    chaiConfig: { truncateThreshold: 0 },
+    silent: "passed-only",
   },
 });

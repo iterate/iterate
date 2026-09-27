@@ -1,9 +1,8 @@
 #include "iterate/kit/itx_mount.h"
 
+#include <assert.h>
 #include <stdbool.h>
 #include <stddef.h>
-#include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
 
 #include "iterate/kit/voice_device_profile.h"
@@ -15,21 +14,6 @@ enum {
   CAPTURE_CAPACITY = 24,
   MESSAGE_CAPACITY = 2048,
 };
-
-static void test_assert(
-    bool condition,
-    const char *expression,
-    const char *file,
-    int line) {
-  if (condition) {
-    return;
-  }
-  fprintf(stderr, "%s:%d: assertion failed: %s\n", file, line, expression);
-  abort();
-}
-
-#define assert(expression) \
-  test_assert((expression), #expression, __FILE__, __LINE__)
 
 struct fixture {
   struct capnweb_session session;
@@ -45,61 +29,7 @@ struct fixture {
   struct iterate_kit_itx_mount mount;
 };
 
-static enum capnweb_status capture_fragment(
-    void *context,
-    enum capnweb_text_fragment_kind kind,
-    const char *data,
-    size_t length) {
-  struct fixture *fixture = context;
-  size_t *captured_length;
-  if (kind == CAPNWEB_TEXT_BEGIN) {
-    if (fixture->message_open ||
-        fixture->captured_count >= CAPTURE_CAPACITY) {
-      return CAPNWEB_E_STATE;
-    }
-    fixture->message_open = true;
-    fixture->captured_lengths[fixture->captured_count] = 0U;
-    return CAPNWEB_OK;
-  }
-  if (kind == CAPNWEB_TEXT_DATA) {
-    if (!fixture->message_open || data == NULL || length == 0U) {
-      return CAPNWEB_E_STATE;
-    }
-    captured_length =
-        &fixture->captured_lengths[fixture->captured_count];
-    if (length >= MESSAGE_CAPACITY ||
-        *captured_length >= MESSAGE_CAPACITY - length) {
-      return CAPNWEB_E_LIMIT;
-    }
-    memcpy(
-        fixture->captured[fixture->captured_count] + *captured_length,
-        data,
-        length);
-    *captured_length += length;
-    return CAPNWEB_OK;
-  }
-  if (kind == CAPNWEB_TEXT_END) {
-    if (!fixture->message_open) {
-      return CAPNWEB_E_STATE;
-    }
-    captured_length =
-        &fixture->captured_lengths[fixture->captured_count];
-    fixture->captured[fixture->captured_count][*captured_length] = '\0';
-    ++fixture->captured_count;
-    fixture->message_open = false;
-    return CAPNWEB_OK;
-  }
-  return CAPNWEB_E_INVALID_ARGUMENT;
-}
-
-static enum capnweb_status inert_dispatch(
-    void *context,
-    const struct capnweb_call *call,
-    struct capnweb_reply *reply) {
-  (void)context;
-  (void)call;
-  return capnweb_reply_set_null(reply);
-}
+#include "capnweb_capture.h"
 
 static void fixture_init(struct fixture *fixture) {
   struct capnweb_session_options options;

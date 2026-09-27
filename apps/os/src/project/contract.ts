@@ -33,7 +33,7 @@ export const ProjectContract = defineProcessorContract({
   slug: "project",
   // A checkpoint reduced under an older version is reused as-is by the engine, so bumping the version
   // is what re-reduces every existing root log.
-  version: "13",
+  version: "14",
   description:
     "The project: where its own creation and deletion stand, its custom hostnames, its integration connections, every context under it (from the announcements each lands on /), and the catalog of every repo, workspace and secret born under it (from the certificates cross-posted to /).",
   /** THE REDUCED STATE — what the reduce keeps between events: where the project's OWN creation
@@ -73,6 +73,9 @@ export const ProjectContract = defineProcessorContract({
      *  `configRepoIngressTarget`). The publication the tip owes is done once this is the tip's
      *  commit. A target set by hand, or none, leaves it as it was. Null until the first. */
     publishedCommitOid: z.string().min(1).nullable().default(null),
+    /** The offset of the `itx/ingress-configured` that published it: a tip is published only by one
+     *  after its fact, since a pull can return main to a commit published before. */
+    publishedAt: z.number().int().nullable().default(null),
     /** THE CUSTOM HOSTNAMES (custom-hostnames.ts), by hostname: the request the processor owes (an
      *  add — which is also a re-check — or a remove, by the OFFSET of the request), Cloudflare's last
      *  observation (null until provisioned), and the last failure's words. */

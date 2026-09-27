@@ -13,37 +13,16 @@
  *                                    `offline_access`, an ID token for `openid`
  *   GET  /client/v4/user             `{ success, result: { id, email } }` for the access token
  *
- * Access tokens carry their client's revocation epoch, like the Google fake's.
+ * The OAuth steps are the fakes' one authorization server (authorization-server.ts).
  */
-import { accountPicker, discoveryDocument, jwks, signIdToken, tokenRequestClient } from "./oidc.ts";
-import { nowSeconds, pkceS256, seal, unseal } from "./seal.ts";
-import { accessTokenEpochFor, fakeUserIdOf, type IntegrationFakeDeps } from "./state.ts";
+import { fakeAuthorizationServer, redirectTo, tokenClient } from "./authorization-server.ts";
+import { accountPicker, discoveryDocument, jwks, signIdToken } from "./oidc.ts";
+import { fakeUserIdOf, type ShopDeps } from "./state.ts";
 
-interface CloudflareCodePayload {
-  t: "cloudflare-code";
-  jti: string;
-  clientId: string;
-  redirectUri: string;
+interface CloudflareGrant {
   email: string;
   scope: string;
-  codeChallenge: string;
-  nonce: string;
-  exp: number;
-}
-
-interface CloudflareAccessTokenPayload {
-  t: "cloudflare-access";
-  email: string;
-  clientId: string;
-  epoch: number;
-  exp: number;
-}
-
-interface CloudflareRefreshTokenPayload {
-  t: "cloudflare-refresh";
-  email: string;
-  clientId: string;
-  scope: string;
+  nonce?: string;
 }
 
 const oauthError = (error: string, status = 400) => Response.json({ error }, { status });
@@ -51,11 +30,12 @@ const oauthError = (error: string, status = 400) => Response.json({ error }, { s
 /** Cloudflare's paths on this origin, or null when the request is not one of them. */
 export async function handleCloudflareRequest(
   request: Request,
-  deps: IntegrationFakeDeps,
+  deps: ShopDeps,
 ): Promise<Response | null> {
   const url = new URL(request.url);
   const key = `${request.method} ${url.pathname}`;
   const issuer = `${url.origin}/cloudflare`;
+  const cloudflare = fakeAuthorizationServer<CloudflareGrant>(deps, "cloudflare");
   if (key === "GET /cloudflare/.well-known/openid-configuration")
     return Response.json(
       discoveryDocument(issuer, {
@@ -67,81 +47,58 @@ export async function handleCloudflareRequest(
   if (key === "GET /cloudflare/.well-known/jwks.json") return Response.json(await jwks(deps));
   if (key === "GET /cloudflare/oauth2/auth") {
     const query = Object.fromEntries(url.searchParams);
-    if (!(await deps.state.getState()).clients[query.client_id || ""])
-      return oauthError("invalid_client");
-    if (!URL.canParse(query.redirect_uri || "")) return oauthError("invalid_request");
+    const refusal = await cloudflare.authorizeRefusal(
+      query.client_id || "",
+      query.redirect_uri || "",
+    );
+    if (refusal) return refusal;
+    const email = query.email || query.login_hint;
     // Cloudflare's own login page, when the request names no account
-    if (!query.email && !query.login_hint) return accountPicker(url, ["email"]);
-    const code: CloudflareCodePayload = {
-      t: "cloudflare-code",
-      jti: crypto.randomUUID(),
+    if (!email) return accountPicker(url, ["email"]);
+    const code = await cloudflare.code({
       clientId: query.client_id!,
       redirectUri: query.redirect_uri!,
-      email:
-        query.email || query.login_hint || `user-${crypto.randomUUID().slice(0, 8)}@petshop.test`,
-      scope: query.scope || "openid user-details.read",
-      codeChallenge: query.code_challenge || "",
-      nonce: query.nonce || "",
-      exp: nowSeconds() + 120,
-    };
-    const target = new URL(code.redirectUri);
-    target.searchParams.set("code", await seal(code, deps.sealKey));
-    target.searchParams.set("state", query.state || "");
-    return Response.redirect(target.toString(), 302);
+      codeChallenge: query.code_challenge,
+      grant: {
+        email,
+        scope: query.scope || "openid user-details.read",
+        nonce: query.nonce,
+      },
+    });
+    return redirectTo(query.redirect_uri!, { code, state: query.state });
   }
   if (key === "POST /cloudflare/oauth2/token") {
     const form = Object.fromEntries(new URLSearchParams(await request.text()));
-    const { clientId, clientSecret } = tokenRequestClient(request, form);
-    const state = await deps.state.getState();
-    const client = state.clients[clientId];
-    if (!client || client.public || client.clientSecret !== clientSecret)
-      return oauthError("invalid_client", 401);
-    let grant: { email: string; scope: string; nonce?: string };
+    const client = await tokenClient(deps, request, form);
+    if (!client || client.client.public) return oauthError("invalid_client", 401);
+    let grant: CloudflareGrant;
     if (form.grant_type === "authorization_code") {
-      const code = await unseal<CloudflareCodePayload>(form.code || "", deps.sealKey);
-      if (code?.t !== "cloudflare-code" || code.clientId !== clientId || code.exp <= nowSeconds())
-        return oauthError("invalid_grant");
-      if (form.redirect_uri !== code.redirectUri) return oauthError("invalid_grant");
-      if (code.codeChallenge && (await pkceS256(form.code_verifier || "")) !== code.codeChallenge)
-        return oauthError("invalid_grant");
-      if (!(await deps.state.consumeAuthorizationCode(code.jti)))
-        return oauthError("invalid_grant");
-      grant = code;
+      const redeemed = await cloudflare.redeemCode(form.code || "", {
+        ...client,
+        redirectUri: form.redirect_uri,
+        codeVerifier: form.code_verifier,
+      });
+      if ("refused" in redeemed) return oauthError("invalid_grant");
+      grant = redeemed.grant;
     } else if (form.grant_type === "refresh_token") {
-      const refresh = await unseal<CloudflareRefreshTokenPayload>(
-        form.refresh_token || "",
-        deps.sealKey,
-      );
-      if (refresh?.t !== "cloudflare-refresh" || refresh.clientId !== clientId)
-        return oauthError("invalid_grant");
-      grant = refresh;
+      const refresh = await cloudflare.openRefreshToken(form.refresh_token || "", client.clientId);
+      if (!refresh) return oauthError("invalid_grant");
+      grant = { email: refresh.grant.email, scope: refresh.grant.scope };
     } else return oauthError("unsupported_grant_type");
     const scopes = grant.scope.split(" ");
-    const access: CloudflareAccessTokenPayload = {
-      t: "cloudflare-access",
-      email: grant.email,
-      clientId,
-      epoch: accessTokenEpochFor(state, clientId),
-      exp: nowSeconds() + client.accessTokenTtlSeconds,
-    };
-    const refresh: CloudflareRefreshTokenPayload = {
-      t: "cloudflare-refresh",
-      email: grant.email,
-      clientId,
-      scope: grant.scope,
-    };
+    const ttlSeconds = client.client.accessTokenTtlSeconds;
     return Response.json({
-      access_token: await seal(access, deps.sealKey),
-      expires_in: client.accessTokenTtlSeconds,
+      access_token: await cloudflare.accessToken(client.clientId, grant, ttlSeconds),
+      expires_in: ttlSeconds,
       scope: grant.scope,
       token_type: "bearer",
       ...(scopes.includes("offline_access") && {
-        refresh_token: await seal(refresh, deps.sealKey),
+        refresh_token: await cloudflare.refreshToken(client.clientId, grant),
       }),
       ...(scopes.includes("openid") && {
         id_token: await signIdToken(deps, {
           issuer,
-          clientId,
+          clientId: client.clientId,
           claims: {
             sub: String(fakeUserIdOf(grant.email)),
             email: grant.email,
@@ -154,20 +111,14 @@ export async function handleCloudflareRequest(
   }
   if (key === "GET /client/v4/user") {
     const bearer = /^Bearer\s+(\S+)$/i.exec(request.headers.get("authorization") ?? "")?.[1];
-    const token = await unseal<CloudflareAccessTokenPayload>(bearer || "", deps.sealKey);
-    if (
-      token?.t !== "cloudflare-access" ||
-      token.exp <= nowSeconds() ||
-      token.epoch !== accessTokenEpochFor(await deps.state.getState(), token.clientId)
-    )
+    const access = await cloudflare.openAccessToken(bearer || "");
+    if (!access)
       return Response.json(
         { success: false, errors: [{ code: 10000, message: "Authentication error" }] },
         { status: 401 },
       );
-    return Response.json({
-      success: true,
-      result: { id: String(fakeUserIdOf(token.email)), email: token.email },
-    });
+    const { email } = access.grant;
+    return Response.json({ success: true, result: { id: String(fakeUserIdOf(email)), email } });
   }
   return null;
 }

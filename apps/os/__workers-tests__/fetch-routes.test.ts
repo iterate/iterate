@@ -18,7 +18,8 @@
 import { exports } from "cloudflare:workers";
 import { RpcTarget } from "capnweb";
 import { expect, test, vi } from "vitest";
-import { adminCredentials, openSession, publishConfigWorker } from "./support.ts";
+import { publishConfigWorker } from "../e2e/support/config-worker.ts";
+import { adminCredentials, openSession } from "./support.ts";
 
 test("a config worker routes by `itx.fetchRoutes.match` to a lent stub: HTTP, a WebSocket that keeps its subprotocol, the private route's 401 challenge, a 404 once the lend is recalled", async () => {
   const project = "fetch-routes-tunnel";
@@ -167,8 +168,8 @@ test("a route whose target is a lent stub that is offline answers 502, logged at
     target: "itx.tunnels.ghost",
   });
   await publishConfigWorker(itx, ["itx", "workers", ["get", { source: SRC_FETCH_ROUTER }]]);
-  using info = vi.spyOn(console, "info");
-  using error = vi.spyOn(console, "error");
+  const info = vi.spyOn(console, "info");
+  const error = vi.spyOn(console, "error");
   const offline = await exports.default.fetch(`https://ghost--${project}.projects.test/`);
   expect({
     status: offline.status,

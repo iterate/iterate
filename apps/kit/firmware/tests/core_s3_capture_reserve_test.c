@@ -1,36 +1,8 @@
 #include "core_s3_capture_reserve.h"
 
+#include <assert.h>
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
-
-static const char *current_test = "test initialization";
-
-static void test_assert(
-    bool condition,
-    const char *expression,
-    const char *file,
-    int line) {
-  if (condition) {
-    return;
-  }
-  fprintf(
-      stderr,
-      "%s:%d: %s assertion failed: %s\n",
-      file,
-      line,
-      current_test,
-      expression);
-  abort();
-}
-
-#define TEST_ASSERT(expression) \
-  test_assert((expression), #expression, __FILE__, __LINE__)
-#define RUN_TEST(function) \
-  do { \
-    current_test = #function; \
-    function(); \
-  } while (false)
 
 static void fill_dma(
     int16_t *samples,
@@ -72,7 +44,7 @@ static enum iterate_kit_core_s3_capture_push_result push_capture(
  */
 static void accepted_dma_is_copied_and_delivered_in_order(void) {
   struct iterate_kit_core_s3_capture_reserve reserve;
-  TEST_ASSERT(
+  assert(
       iterate_kit_core_s3_capture_reserve_init(&reserve) ==
       ITERATE_KIT_OK);
 
@@ -80,11 +52,11 @@ static void accepted_dma_is_copied_and_delivered_in_order(void) {
   int16_t second[ITERATE_KIT_CORE_S3_DMA_INTERLEAVED_SAMPLES];
   fill_dma(first, 100);
   fill_dma(second, 2000);
-  TEST_ASSERT(
+  assert(
       push_capture(
           &reserve, 41U, 8000U, first, sizeof(first)) ==
       ITERATE_KIT_CORE_S3_CAPTURE_ACCEPTED);
-  TEST_ASSERT(
+  assert(
       push_capture(
           &reserve, 42U, 16000U, second, sizeof(second)) ==
       ITERATE_KIT_CORE_S3_CAPTURE_ACCEPTED);
@@ -92,24 +64,24 @@ static void accepted_dma_is_copied_and_delivered_in_order(void) {
   memset(second, 0, sizeof(second));
 
   struct iterate_kit_core_s3_capture_chunk chunk;
-  TEST_ASSERT(
+  assert(
       iterate_kit_core_s3_capture_reserve_take(
           &reserve, &chunk) ==
       ITERATE_KIT_CORE_S3_CAPTURE_TAKE_CHUNK);
-  TEST_ASSERT(chunk.sequence == 41U);
-  TEST_ASSERT(chunk.captured_through_at_us == 8000U);
-  TEST_ASSERT(chunk.interleaved[0] == 100);
-  TEST_ASSERT(
+  assert(chunk.sequence == 41U);
+  assert(chunk.captured_through_at_us == 8000U);
+  assert(chunk.interleaved[0] == 100);
+  assert(
       chunk.interleaved[
           ITERATE_KIT_CORE_S3_DMA_INTERLEAVED_SAMPLES - 1U] ==
       611);
-  TEST_ASSERT(
+  assert(
       iterate_kit_core_s3_capture_reserve_take(
           &reserve, &chunk) ==
       ITERATE_KIT_CORE_S3_CAPTURE_TAKE_CHUNK);
-  TEST_ASSERT(chunk.sequence == 42U);
-  TEST_ASSERT(chunk.interleaved[0] == 2000);
-  TEST_ASSERT(
+  assert(chunk.sequence == 42U);
+  assert(chunk.interleaved[0] == 2000);
+  assert(
       iterate_kit_core_s3_capture_reserve_take(
           &reserve, &chunk) ==
       ITERATE_KIT_CORE_S3_CAPTURE_TAKE_EMPTY);
@@ -117,10 +89,10 @@ static void accepted_dma_is_copied_and_delivered_in_order(void) {
   struct iterate_kit_core_s3_capture_reserve_metrics metrics;
   iterate_kit_core_s3_capture_reserve_metrics_snapshot(
       &reserve, &metrics);
-  TEST_ASSERT(metrics.chunks_accepted == 2U);
-  TEST_ASSERT(metrics.chunks_delivered == 2U);
-  TEST_ASSERT(metrics.maximum_depth == 2U);
-  TEST_ASSERT(metrics.current_depth == 0U);
+  assert(metrics.chunks_accepted == 2U);
+  assert(metrics.chunks_delivered == 2U);
+  assert(metrics.maximum_depth == 2U);
+  assert(metrics.current_depth == 0U);
 }
 
 /*
@@ -132,13 +104,13 @@ static void accepted_dma_is_copied_and_delivered_in_order(void) {
  */
 static void playback_activity_is_owned_by_the_capture_edge(void) {
   struct iterate_kit_core_s3_capture_reserve reserve;
-  TEST_ASSERT(
+  assert(
       iterate_kit_core_s3_capture_reserve_init(&reserve) ==
       ITERATE_KIT_OK);
   int16_t dma[ITERATE_KIT_CORE_S3_DMA_INTERLEAVED_SAMPLES];
   fill_dma(dma, 500);
 
-  TEST_ASSERT(
+  assert(
       iterate_kit_core_s3_capture_reserve_push_raw(
           &reserve,
           1U,
@@ -148,10 +120,10 @@ static void playback_activity_is_owned_by_the_capture_edge(void) {
           sizeof(dma)) == ITERATE_KIT_CORE_S3_CAPTURE_ACCEPTED);
 
   struct iterate_kit_core_s3_capture_chunk chunk;
-  TEST_ASSERT(
+  assert(
       iterate_kit_core_s3_capture_reserve_take(&reserve, &chunk) ==
       ITERATE_KIT_CORE_S3_CAPTURE_TAKE_CHUNK);
-  TEST_ASSERT(chunk.playback_content_active);
+  assert(chunk.playback_content_active);
 }
 
 /*
@@ -164,7 +136,7 @@ static void playback_activity_is_owned_by_the_capture_edge(void) {
  */
 static void overflow_discards_the_whole_stale_epoch(void) {
   struct iterate_kit_core_s3_capture_reserve reserve;
-  TEST_ASSERT(
+  assert(
       iterate_kit_core_s3_capture_reserve_init(&reserve) ==
       ITERATE_KIT_OK);
   int16_t dma[ITERATE_KIT_CORE_S3_DMA_INTERLEAVED_SAMPLES];
@@ -173,7 +145,7 @@ static void overflow_discards_the_whole_stale_epoch(void) {
        index < ITERATE_KIT_CORE_S3_CAPTURE_RESERVE_CHUNKS;
        ++index) {
     fill_dma(dma, (int16_t)(index * 100));
-    TEST_ASSERT(
+    assert(
         push_capture(
             &reserve,
             100U + index,
@@ -183,43 +155,43 @@ static void overflow_discards_the_whole_stale_epoch(void) {
         ITERATE_KIT_CORE_S3_CAPTURE_ACCEPTED);
   }
   fill_dma(dma, 9000);
-  TEST_ASSERT(
+  assert(
       push_capture(
           &reserve, 108U, 72000U, dma, sizeof(dma)) ==
       ITERATE_KIT_CORE_S3_CAPTURE_DROPPED_FULL);
 
   struct iterate_kit_core_s3_capture_chunk chunk;
   memset(&chunk, 0x5a, sizeof(chunk));
-  TEST_ASSERT(
+  assert(
       iterate_kit_core_s3_capture_reserve_take(
           &reserve, &chunk) ==
       ITERATE_KIT_CORE_S3_CAPTURE_TAKE_RESET_EPOCH);
-  TEST_ASSERT(
+  assert(
       iterate_kit_core_s3_capture_reserve_take(
           &reserve, &chunk) ==
       ITERATE_KIT_CORE_S3_CAPTURE_TAKE_EMPTY);
 
   fill_dma(dma, 12000);
-  TEST_ASSERT(
+  assert(
       push_capture(
           &reserve, 109U, 80000U, dma, sizeof(dma)) ==
       ITERATE_KIT_CORE_S3_CAPTURE_ACCEPTED);
-  TEST_ASSERT(
+  assert(
       iterate_kit_core_s3_capture_reserve_take(
           &reserve, &chunk) ==
       ITERATE_KIT_CORE_S3_CAPTURE_TAKE_CHUNK);
-  TEST_ASSERT(chunk.sequence == 109U);
-  TEST_ASSERT(chunk.interleaved[0] == 12000);
+  assert(chunk.sequence == 109U);
+  assert(chunk.interleaved[0] == 12000);
 
   struct iterate_kit_core_s3_capture_reserve_metrics metrics;
   iterate_kit_core_s3_capture_reserve_metrics_snapshot(
       &reserve, &metrics);
-  TEST_ASSERT(metrics.reserve_overflows == 1U);
-  TEST_ASSERT(metrics.epoch_resets == 1U);
-  TEST_ASSERT(
+  assert(metrics.reserve_overflows == 1U);
+  assert(metrics.epoch_resets == 1U);
+  assert(
       metrics.chunks_discarded ==
       ITERATE_KIT_CORE_S3_CAPTURE_RESERVE_CHUNKS + 1U);
-  TEST_ASSERT(metrics.chunks_delivered == 1U);
+  assert(metrics.chunks_delivered == 1U);
 }
 
 /*
@@ -231,44 +203,44 @@ static void overflow_discards_the_whole_stale_epoch(void) {
  */
 static void dma_sequence_gap_poison_is_fail_closed(void) {
   struct iterate_kit_core_s3_capture_reserve reserve;
-  TEST_ASSERT(
+  assert(
       iterate_kit_core_s3_capture_reserve_init(&reserve) ==
       ITERATE_KIT_OK);
   int16_t dma[ITERATE_KIT_CORE_S3_DMA_INTERLEAVED_SAMPLES];
   fill_dma(dma, 700);
-  TEST_ASSERT(
+  assert(
       push_capture(
           &reserve, 6U, 8000U, dma, sizeof(dma)) ==
       ITERATE_KIT_CORE_S3_CAPTURE_ACCEPTED);
-  TEST_ASSERT(
+  assert(
       push_capture(
           &reserve, 8U, 24000U, dma, sizeof(dma)) ==
       ITERATE_KIT_CORE_S3_CAPTURE_DROPPED_DISCONTINUITY);
 
   struct iterate_kit_core_s3_capture_chunk chunk;
-  TEST_ASSERT(
+  assert(
       iterate_kit_core_s3_capture_reserve_take(
           &reserve, &chunk) ==
       ITERATE_KIT_CORE_S3_CAPTURE_TAKE_RESET_EPOCH);
-  TEST_ASSERT(
+  assert(
       iterate_kit_core_s3_capture_reserve_take(
           &reserve, &chunk) ==
       ITERATE_KIT_CORE_S3_CAPTURE_TAKE_EMPTY);
-  TEST_ASSERT(
+  assert(
       push_capture(
           &reserve, 9U, 32000U, dma, sizeof(dma)) ==
       ITERATE_KIT_CORE_S3_CAPTURE_ACCEPTED);
-  TEST_ASSERT(
+  assert(
       iterate_kit_core_s3_capture_reserve_take(
           &reserve, &chunk) ==
       ITERATE_KIT_CORE_S3_CAPTURE_TAKE_CHUNK);
-  TEST_ASSERT(chunk.sequence == 9U);
+  assert(chunk.sequence == 9U);
 
   struct iterate_kit_core_s3_capture_reserve_metrics metrics;
   iterate_kit_core_s3_capture_reserve_metrics_snapshot(
       &reserve, &metrics);
-  TEST_ASSERT(metrics.sequence_discontinuities == 1U);
-  TEST_ASSERT(metrics.chunks_discarded == 2U);
+  assert(metrics.sequence_discontinuities == 1U);
+  assert(metrics.chunks_discarded == 2U);
 }
 
 /*
@@ -280,27 +252,27 @@ static void dma_sequence_gap_poison_is_fail_closed(void) {
  */
 static void external_discontinuity_destroys_queued_capture(void) {
   struct iterate_kit_core_s3_capture_reserve reserve;
-  TEST_ASSERT(
+  assert(
       iterate_kit_core_s3_capture_reserve_init(&reserve) ==
       ITERATE_KIT_OK);
   int16_t dma[ITERATE_KIT_CORE_S3_DMA_INTERLEAVED_SAMPLES];
   fill_dma(dma, 300);
-  TEST_ASSERT(
+  assert(
       push_capture(
           &reserve, UINT32_MAX, 8000U, dma, sizeof(dma)) ==
       ITERATE_KIT_CORE_S3_CAPTURE_ACCEPTED);
   iterate_kit_core_s3_capture_reserve_note_discontinuity(&reserve);
 
   struct iterate_kit_core_s3_capture_chunk chunk;
-  TEST_ASSERT(
+  assert(
       iterate_kit_core_s3_capture_reserve_take(
           &reserve, &chunk) ==
       ITERATE_KIT_CORE_S3_CAPTURE_TAKE_RESET_EPOCH);
-  TEST_ASSERT(
+  assert(
       push_capture(
           &reserve, 0U, 16000U, dma, sizeof(dma)) ==
       ITERATE_KIT_CORE_S3_CAPTURE_ACCEPTED);
-  TEST_ASSERT(
+  assert(
       iterate_kit_core_s3_capture_reserve_take(
           &reserve, &chunk) ==
       ITERATE_KIT_CORE_S3_CAPTURE_TAKE_CHUNK);
@@ -308,9 +280,9 @@ static void external_discontinuity_destroys_queued_capture(void) {
   struct iterate_kit_core_s3_capture_reserve_metrics metrics;
   iterate_kit_core_s3_capture_reserve_metrics_snapshot(
       &reserve, &metrics);
-  TEST_ASSERT(metrics.external_discontinuities == 1U);
-  TEST_ASSERT(metrics.epoch_resets == 1U);
-  TEST_ASSERT(metrics.chunks_discarded == 1U);
+  assert(metrics.external_discontinuities == 1U);
+  assert(metrics.epoch_resets == 1U);
+  assert(metrics.chunks_discarded == 1U);
 }
 
 /*
@@ -321,39 +293,39 @@ static void external_discontinuity_destroys_queued_capture(void) {
  */
 static void malformed_dma_poison_is_observable(void) {
   struct iterate_kit_core_s3_capture_reserve reserve;
-  TEST_ASSERT(
+  assert(
       iterate_kit_core_s3_capture_reserve_init(&reserve) ==
       ITERATE_KIT_OK);
   int16_t dma[ITERATE_KIT_CORE_S3_DMA_INTERLEAVED_SAMPLES];
   fill_dma(dma, 30);
-  TEST_ASSERT(
+  assert(
       push_capture(
           &reserve, 1U, 8000U, dma, sizeof(dma)) ==
       ITERATE_KIT_CORE_S3_CAPTURE_ACCEPTED);
-  TEST_ASSERT(
+  assert(
       push_capture(
           &reserve, 2U, 16000U, dma, sizeof(dma) - 2U) ==
       ITERATE_KIT_CORE_S3_CAPTURE_DROPPED_INVALID);
 
   struct iterate_kit_core_s3_capture_chunk chunk;
-  TEST_ASSERT(
+  assert(
       iterate_kit_core_s3_capture_reserve_take(
           &reserve, &chunk) ==
       ITERATE_KIT_CORE_S3_CAPTURE_TAKE_RESET_EPOCH);
   struct iterate_kit_core_s3_capture_reserve_metrics metrics;
   iterate_kit_core_s3_capture_reserve_metrics_snapshot(
       &reserve, &metrics);
-  TEST_ASSERT(metrics.shape_errors == 1U);
-  TEST_ASSERT(metrics.chunks_discarded == 2U);
+  assert(metrics.shape_errors == 1U);
+  assert(metrics.chunks_discarded == 2U);
 }
 
 int main(void) {
-  RUN_TEST(accepted_dma_is_copied_and_delivered_in_order);
-  RUN_TEST(playback_activity_is_owned_by_the_capture_edge);
-  RUN_TEST(overflow_discards_the_whole_stale_epoch);
-  RUN_TEST(dma_sequence_gap_poison_is_fail_closed);
-  RUN_TEST(external_discontinuity_destroys_queued_capture);
-  RUN_TEST(malformed_dma_poison_is_observable);
+  accepted_dma_is_copied_and_delivered_in_order();
+  playback_activity_is_owned_by_the_capture_edge();
+  overflow_discards_the_whole_stale_epoch();
+  dma_sequence_gap_poison_is_fail_closed();
+  external_discontinuity_destroys_queued_capture();
+  malformed_dma_poison_is_observable();
   puts("CoreS3 capture reserve tests passed");
   return 0;
 }

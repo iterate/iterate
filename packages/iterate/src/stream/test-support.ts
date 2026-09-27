@@ -4,6 +4,7 @@
 // (processor.test.ts, processor-rules.test.ts), and so does every processor author, first-party or
 // not, so the commit semantics the tests assume are ONE copy.
 //
+//   committedEvent  — one committed event, the shape a stream hands a reduce or an engine
 //   reduceProcessor — fold events through a processor's pure `reduce`, as the engine does
 //   memoryStream    — the Stream's commit semantics in memory (one offset sequence, idempotency on
 //                     append, the scanned-range proof) plus THE PUMP: a fire-and-forget
@@ -29,6 +30,17 @@ import {
   type SqlStorageHandle,
 } from "./processor.ts";
 
+/** A committed event at `offset` on the root path, stamped `offset` seconds past the epoch: what a
+ *  test hands a reduce, an engine or a fake log without a stream. A field it does not set (a
+ *  `source`, another `path`, `ephemeral`) is spread over it. */
+export function committedEvent(
+  offset: number,
+  type: string,
+  payload?: StreamEvent["payload"],
+): StreamEvent {
+  return { type, payload, offset, createdAt: new Date(offset * 1000).toISOString(), path: "/" };
+}
+
 /** THE PROCESSOR HARNESS: fold `inputs` through a processor's pure `reduce`, exactly as the engine
  *  does — start from the contract's initial state, validate each payload against the contract (a
  *  malformed KNOWN payload is SKIPPED, never reduced), reduce, thread the state — for a declarative
@@ -51,12 +63,9 @@ export function reduceProcessor<State>(
       ?.safeParse(input.payload ?? {});
     if (parsed && !parsed.success) return; // the engine skips a malformed known payload
     const event = {
-      type: input.type,
+      ...committedEvent(index + 1, input.type),
       payload: parsed?.success ? parsed.data : input.payload,
       source: input.source,
-      offset: index + 1,
-      createdAt: new Date((index + 1) * 1000).toISOString(),
-      path: "/",
     } as StreamEvent;
     state = processor.reduce({ event, state }) ?? state;
   });

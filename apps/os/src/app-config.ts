@@ -9,7 +9,7 @@
 //
 //   {
 //     urls: { os, mcp, dash, ingressRouting: { type, hostname }, projectWildcard: { hostname, project, excludedHostnames } },
-//     login: { allowedEmails, password, emailCode: { from }, google: { scopes }, cloudflare: { scopes }, github: {}, testLink: { emailDomain, admins: { issuer, emails } } },
+//     login: { allowedEmails, password, emailCode: { from }, google: { scopes }, cloudflare: { scopes }, github: {}, adminIssuer, testEmailDomain },
 //     admins,
 //     customHostnames: { zone, zoneId, dcvDelegationUuid, reservedZones }, cloudflareApiToken,
 //     posthogProjectKey,
@@ -44,8 +44,10 @@ import {
   type IngressRouting,
   type ProjectAddress,
 } from "iterate/project-ingress";
+import type { OAuthIntegrationProvider } from "iterate/api";
 import { sha256Hex } from "./caller.ts";
-import { TEST_LINK_EMAIL_DOMAIN } from "./test-link.ts";
+import { IdentityProvider } from "./control-plane/contract.ts";
+import { OAUTH_INTEGRATION_PROVIDERS } from "./integrations/contract.ts";
 
 /** A secret config value: `exposeSecret()` hands it over; printing, logging or serialising it shows
  *  only "REDACTED", so a config dump can never leak it. */
@@ -247,30 +249,28 @@ export const AppConfig = z.object({
         .object({ scopes: z.array(z.string().trim().min(1)).default(DEFAULT_CLOUDFLARE_SCOPES) })
         .optional(),
       github: z.object({}).optional(),
-      /** A PREVIEW'S ONE-CLICK SIGN-IN (test-link.ts): `GET /.auth/test-link?t=` signs a browser in
-       *  as the address a link signed with this deployment's key names, under `emailDomain`. Not a
-       *  sign-in mechanism a person chooses, and refused (`parseAppConfig`) unless `urls.os` is a
-       *  workers.dev or localhost origin. Set in code, never in Doppler: a per-commit deployment's
-       *  config (envs.ts `previewDeployment`'s `testLinks`) and local dev's, both
-       *  scripts/generate-wrangler-config.ts's, as `APP_CONFIG_LOGIN__TEST_LINK__EMAIL_DOMAIN`. */
-      testLink: z
-        .object({
-          emailDomain: dnsName.default(TEST_LINK_EMAIL_DOMAIN),
-          /** WHO MAY REDEEM A LINK (test-link.ts): before a link signs anyone in, the browser signs
-           *  in at `issuer` — another iterate deployment, prd for a per-commit deployment — through
-           *  an OAuth grant that can only read who they are (the issuer's `/oauth2/userinfo`
-           *  resource), and only an address `emails` names redeems it. Required wherever the origin
-           *  is not localhost (`parseAppConfig`): a link in a public PR body is then no credential. A
-           *  per-commit deployment's config sets both (envs.ts `previewDeployment`'s
-           *  `testLinks.admins`), as `APP_CONFIG_LOGIN__TEST_LINK__ADMINS__ISSUER` and `…__EMAILS`. */
-          admins: z
-            .object({
-              issuer: httpOrigin,
-              emails: emailPatterns("lists no pattern, so no link could ever be redeemed"),
-            })
-            .optional(),
-        })
-        .optional(),
+      /** AN ADMIN SIGNS IN THROUGH ANOTHER ISSUER (admin-sign-in.ts): the origin of an iterate
+       *  deployment — prd, for a preview — whose word this one takes on who a browser is, for the
+       *  addresses `admins` lists alone. The sign-in page offers "Continue with <its host>"; the
+       *  grant it asks that issuer for reads who the person is and nothing else. Refused
+       *  (`parseAppConfig`) unless `urls.os` is a preview's https workers.dev origin or a test's:
+       *  a deployment on its own domain trusts no other issuer. Set in code, never in Doppler: a
+       *  per-commit deployment's config (envs.ts `previewDeployment`'s `adminIssuer`, through
+       *  scripts/generate-wrangler-config.ts), as `APP_CONFIG_LOGIN__ADMIN_ISSUER`. Unset ⇒ off. */
+      adminIssuer: httpOrigin.optional(),
+      /** THE RESERVED DOMAIN OF THIS DEPLOYMENT'S TEST PEOPLE (test-email-domain.ts): a sign-in
+       *  provider pointed at a fake (a preview's pet shop, which mints any address) signs in
+       *  addresses under it alone (identity.ts), and a sign-in link's `login_hint` pre-fills an
+       *  admin's "Sign in as someone else" only under it (consent.ts). On a laptop's platform
+       *  (`urls.os` an http loopback origin) it also opens `/.auth/local-sign-in`
+       *  (local-sign-in.ts), which signs its test people in with no password. Refused
+       *  (`parseAppConfig`) unless `urls.os` is a preview's, a laptop's or a test's. Set in code,
+       *  never in Doppler: a per-commit deployment's config (envs.ts `previewDeployment`'s
+       *  `testEmailDomain`) and local dev's, both scripts/generate-wrangler-config.ts's, as
+       *  `APP_CONFIG_LOGIN__TEST_EMAIL_DOMAIN`.
+       *  Unset ⇒ no fake provider signs anyone in, no link pre-fills anyone, and no one-click local
+       *  sign-in exists. */
+      testEmailDomain: dnsName.optional(),
     })
     .prefault({}),
   /** THE PLATFORM ADMINS: exact email addresses, never a pattern — `["jonas@iterate.com"]`, or the
@@ -296,7 +296,7 @@ export const AppConfig = z.object({
     .object({
       /** iterate's Slack app (integrations/slack/): the OAuth client, the key Slack signs webhooks
        *  with, the bot scopes asked for, and where Slack answers — `slackOrigin`, another origin only
-       *  for a fake (a preview's, scripts/preview-config.ts). The keys are the legacy platform's, so
+       *  for a fake (a per-commit deployment's, scripts/generate-wrangler-config.ts). The keys are the legacy platform's, so
        *  its Doppler JSON is reused as it stands. */
       slack: z
         .object({
@@ -416,12 +416,12 @@ export function parseAppConfig(env: object, deployId = "unversioned"): AppConfig
       );
     ingressRouting = { type: "paths" };
   }
-  // A second guard behind "set in code": even a Doppler value cannot turn test links on at a
+  // A second guard behind "set in code": even a Doppler value cannot let fakes sign people in at a
   // deployment on its own domain (prd, os.iterate.com) — only on a preview's workers.dev origin or
   // a laptop's.
-  if (login.testLink && !isTestLinkOrigin(urls.os))
+  if (login.testEmailDomain && !isPreviewOrLocalOrigin(urls.os))
     throw new Error(
-      `${fieldNameOf(["login", "testLink"])}: only for a preview, local dev or a test — urls.os must be a workers.dev, localhost or .test origin, not ${JSON.stringify(urls.os)}`,
+      `${fieldNameOf(["login", "testEmailDomain"])}: only for a preview, local dev or a test — urls.os must be a workers.dev, localhost or .test origin, not ${JSON.stringify(urls.os)}`,
     );
   // An admin reaches every project and signs any client in as anyone, so admins go only where
   // nobody's real data lives beside what could act as one: the global password (anyone who knows it
@@ -432,23 +432,22 @@ export function parseAppConfig(env: object, deployId = "unversioned"): AppConfig
     : ingressRouting?.type === "paths"
       ? "paths ingress routing"
       : null;
-  if (parsed.admins.length && beside && !isTestLinkOrigin(urls.os))
+  if (parsed.admins.length && beside && !isPreviewOrLocalOrigin(urls.os))
     throw new Error(
       `${fieldNameOf(["admins"])}: not with ${beside} except for a preview, local dev or a test (urls.os a workers.dev, localhost or .test origin), not ${JSON.stringify(urls.os)}`,
     );
-  // Off a laptop (or a `.test` origin, never public), a link alone signs nobody in: its redeemer proves at another issuer that they
-  // are one of `admins.emails` (test-link.ts). A preview's origin is public, and so is its PR body.
-  if (login.testLink && !login.testLink.admins && !isLocalOrTestOrigin(urls.os))
+  // A deployment on its own domain takes no other issuer's word on who its admins are; a preview
+  // (or a test) does, on https alone, where that issuer reads this deployment's client metadata.
+  if (
+    login.adminIssuer &&
+    (!isPreviewOrLocalOrigin(urls.os) || new URL(urls.os).protocol !== "https:")
+  )
     throw new Error(
-      `${fieldNameOf(["login", "testLink", "admins"])}: required off localhost — a preview's links are public, so who redeems one must prove who they are at another issuer`,
-    );
-  if (login.testLink?.admins && new URL(urls.os).protocol !== "https:")
-    throw new Error(
-      `${fieldNameOf(["login", "testLink", "admins"])}: only on an https urls.os — the issuer reads this deployment's client metadata document there`,
+      `${fieldNameOf(["login", "adminIssuer"])}: only for a preview or a test on https — urls.os must be an https workers.dev or .test origin, not ${JSON.stringify(urls.os)}`,
     );
   // A provider's sign-in without its client is off, loudly: the rest of the deployment still runs.
   const signIn = { ...login };
-  for (const provider of ["google", "cloudflare", "github"] as const)
+  for (const provider of IdentityProvider.options)
     if (signIn[provider] && !parsed.integrations[provider]) {
       console.warn(
         `${fieldNameOf(["login", provider])}: off — it signs in with integrations.${provider}'s client, which is unset`,
@@ -473,23 +472,18 @@ export function parseAppConfig(env: object, deployId = "unversioned"): AppConfig
   };
 }
 
-/** An origin test links (`login.testLink`), and `admins` beside the global password, may be
- *  honoured on: an https workers.dev one (a per-PR
+/** An origin where nobody's real data lives, so `login.testEmailDomain`, `login.adminIssuer` and
+ *  `admins` beside the global password may be honoured there: an https workers.dev one (a per-PR
  *  preview's), localhost's, or one under `.test` (RFC 2606: never a public name — the workers
  *  suite's). A blank `urls.os` is none of them: it must be named. */
-function isTestLinkOrigin(origin: string) {
+function isPreviewOrLocalOrigin(origin: string) {
   if (!origin) return false;
   const { protocol, hostname } = new URL(origin);
   return (
-    (protocol === "https:" && hostname.endsWith(".workers.dev")) || isLocalOrTestOrigin(origin)
+    (protocol === "https:" && hostname.endsWith(".workers.dev")) ||
+    ["localhost", "127.0.0.1"].includes(hostname) ||
+    hostname.endsWith(".test")
   );
-}
-
-/** A laptop's origin (localhost's or 127.0.0.1's) or one under `.test` (RFC 2606: never a public
- *  name — the workers suite's). */
-function isLocalOrTestOrigin(origin: string) {
-  const { hostname } = new URL(origin);
-  return ["localhost", "127.0.0.1"].includes(hostname) || hostname.endsWith(".test");
 }
 
 const appConfigByEnv = new WeakMap<object, AppConfig>();
@@ -505,6 +499,19 @@ export function appConfigOf(env: AppConfigEnv): AppConfig {
     appConfigByEnv.set(env, appConfig);
   }
   return appConfig;
+}
+
+/** WHAT iterate's APP ASKS FOR, by provider: its configured scopes — what a project's connect
+ *  through it asks, and so what a person's account needs before a project uses it
+ *  (context/built-ins.ts `integrations.connect`). A GitHub App's permissions are the App's, and a
+ *  provider without iterate's app is absent. */
+export function iterateAppScopesOf(config: AppConfig) {
+  const scopes: Partial<Record<OAuthIntegrationProvider, string[]>> = {};
+  for (const provider of OAUTH_INTEGRATION_PROVIDERS) {
+    const app = config.integrations[provider];
+    if (app) scopes[provider] = [...app.scopes];
+  }
+  return scopes;
 }
 
 const sessionSigningSecretByConfig = new WeakMap<AppConfig, Promise<string>>();

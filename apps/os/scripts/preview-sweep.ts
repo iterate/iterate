@@ -24,6 +24,11 @@
 //      and its newest member is more than 24 h old.
 // Anything else is kept. A GitHub lookup that failed never makes a deployment stale: a PR state of
 // "unknown", or no open-branch list, leaves rule 1 alone.
+//
+// A LEGACY WORKER PREVIEW (`planLegacyWorkerPreviewSweep`), one of main on dev's workers or of a
+// former parent (preview-config.ts FORMER_PARENTS) from before per-commit deployments, is STALE
+// once its last deploy is more than 24 h old, whatever its name: the day is for a checkout that
+// still deploys one. One whose last deploy is unknown is kept.
 import { PREVIEW_DEPLOYMENT_APPS, previewDeployment } from "../../../envs.ts";
 import { previewPullRequestNumber, slugifyPreviewName } from "./preview-config.ts";
 
@@ -198,5 +203,27 @@ export function planPreviewSweep(input: PreviewSweepInput): PreviewSweepVerdict[
     if (openBranch) return keep(`open PR branch ${openBranch}, ${created}`);
     if (hours > 24) return stale(`no PR and no open branch of that name, ${created}`); // rule 4
     return keep(`no PR, ${created}`);
+  });
+}
+
+/** A Worker Preview from before per-commit deployments, named with the worker it hangs from. */
+export type LegacyWorkerPreview = { worker: string; name: string; lastDeployedAt?: string };
+
+export function planLegacyWorkerPreviewSweep(
+  now: number,
+  previews: LegacyWorkerPreview[],
+): (LegacyWorkerPreview & { verdict: "stale" | "keep"; reason: string })[] {
+  return previews.map((preview) => {
+    // NaN without a stamp, which compares false and keeps it
+    const hours = preview.lastDeployedAt
+      ? (now - Date.parse(preview.lastDeployedAt)) / 3_600_000
+      : NaN;
+    return {
+      ...preview,
+      verdict: hours > 24 ? "stale" : "keep",
+      reason: Number.isNaN(hours)
+        ? "last deploy unknown"
+        : `last deployed ${hours.toFixed(1)} h ago`,
+    };
   });
 }

@@ -1,10 +1,6 @@
 import { expect, test, vi } from "vitest";
 import { buildPack, concat, encodeCommit, hashObject, pktLine, treeObjectsOf } from "./git-wire.ts";
-import {
-  downloadPublicGithubTemplate,
-  pinPublicGithubTemplate,
-  RetryableRepoCreationError,
-} from "./github-template.ts";
+import { downloadPublicGithubTemplate, pinPublicGithubTemplate } from "./github-template.ts";
 
 const textEncoder = new TextEncoder();
 
@@ -172,34 +168,31 @@ test("rejects a file whose inflated body exceeds the hard byte limit", async () 
   ).rejects.toThrow("pack object exceeds 2097152 bytes");
 });
 
-test("classifies GitHub throttling as retryable", async () => {
-  const githubFetch = vi.fn().mockResolvedValue(new Response(null, { status: 429 }));
-
-  const error = await downloadPublicGithubTemplate(
-    { owner: "iterate", repo: "rate-limited" },
-    githubFetch,
-  ).catch((caught: unknown) => caught);
-
-  expect(error).toBeInstanceOf(RetryableRepoCreationError);
-});
-
-test("classifies an interrupted response body as retryable", async () => {
-  const githubFetch = vi.fn().mockResolvedValue(
-    new Response(
-      new ReadableStream({
-        pull(controller) {
-          controller.error(new TypeError("connection closed"));
-        },
-      }),
+test.for([
+  {
+    name: "GitHub's throttling",
+    answer: () => new Response(null, { status: 429 }),
+    error: "GitHub returned HTTP 429 while reading the config template.",
+  },
+  {
+    name: "an interrupted response body",
+    answer: () =>
+      new Response(
+        new ReadableStream({
+          pull(controller) {
+            controller.error(new TypeError("connection closed"));
+          },
+        }),
+      ),
+    error: "GitHub interrupted the config template response.",
+  },
+])("$name fails the download with its reason", async ({ answer, error }) => {
+  await expect(
+    downloadPublicGithubTemplate(
+      { owner: "iterate", repo: "failing" },
+      vi.fn(async () => answer()),
     ),
-  );
-
-  const error = await downloadPublicGithubTemplate(
-    { owner: "iterate", repo: "interrupted" },
-    githubFetch,
-  ).catch((caught: unknown) => caught);
-
-  expect(error).toBeInstanceOf(RetryableRepoCreationError);
+  ).rejects.toThrow(error);
 });
 
 async function createFixture(

@@ -39,6 +39,7 @@ function LoginPage() {
           <IterateLogo alt="" className="size-8" />
           <h1 className="text-xl font-semibold tracking-tight">{title}</h1>
         </header>
+        {state.error ? <ErrorMessage>{state.error}</ErrorMessage> : null}
         {state.signedInAs ? (
           <SignedIn
             email={state.signedInAs}
@@ -58,12 +59,13 @@ function LoginPage() {
  *  the OAuth providers. */
 function SignInOptions({ state }: { state: Awaited<ReturnType<typeof getLoginState>> }) {
   const formEnabled = state.password || state.emailSignIn;
-  const providersEnabled = Boolean(state.google || state.cloudflare || state.github);
+  const providersEnabled = Boolean(
+    state.google || state.cloudflare || state.github || state.adminIssuer,
+  );
   if (!formEnabled && !providersEnabled)
     return <p className="text-sm">Sign-in is not configured for this deployment.</p>;
   return (
     <>
-      {state.error ? <ErrorMessage>{state.error}</ErrorMessage> : null}
       {state.codeSentTo ? (
         <CodeSignInForm next={state.next} codeSentTo={state.codeSentTo} />
       ) : formEnabled ? (
@@ -85,6 +87,7 @@ function SignInOptions({ state }: { state: Awaited<ReturnType<typeof getLoginSta
           google={state.google}
           cloudflare={state.cloudflare}
           github={state.github}
+          adminIssuer={state.adminIssuer}
         />
       ) : null}
     </>

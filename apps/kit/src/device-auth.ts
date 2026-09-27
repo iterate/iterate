@@ -129,8 +129,9 @@ export async function deviceAuth(
       },
     });
   }
-  // Old bookmarks and expired sessions return to the public selector, never generic Kit consent. A
-  // connect link's platform goes with them, checked; the selector's login button names it.
+  // The generic login (where iterate/app-server sends an expired session) and the firmware page's
+  // connect links return to the public selector, never generic Kit consent. A connect link's
+  // platform goes with them, checked; the selector's login button names it.
   if (url.pathname === "/.auth/login" || url.pathname === "/.auth/connect") {
     const next = new URL(
       sameOriginPath(url.searchParams.get("next") || "/", url.origin),

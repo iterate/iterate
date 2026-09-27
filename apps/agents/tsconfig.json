@@ -1,4 +1,4 @@
 {
   "extends": "../../tsconfig.app.json",
-  "include": ["src", "runtime", "voice", "scripts", "vite.config.ts", "vitest.config.ts"]
+  "include": ["src", "scripts", "vite.config.ts", "vitest.config.ts"]
 }

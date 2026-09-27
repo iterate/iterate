@@ -31,8 +31,9 @@ export default {
       entry: ["configs/*/worker.ts", "configs/*/*/index.ts"],
       project: ["*.ts", "specs/**/*.ts", "configs/**/*.{ts,js}"],
       ignoreDependencies: [
-        // The .depot/workflows steps run this bin from the root.
+        // The .depot/workflows steps run these bins from the root (`pnpm tsx scripts/ci/…`).
         "trpc-cli",
+        "tsx",
         // The `iterate` bin: `pnpm exec iterate` from the root (docs/dev-environments.md).
         "@iterate-com/cli",
         // `cloudflare:workers` parses as the "cloudflare" package.
@@ -43,7 +44,8 @@ export default {
       // The programs .depot/workflows run (knip reads no Depot workflows); the modules beside them
       // get unused-export checks.
       entry: [
-        "ci/{create-release,do-duration-alert,do-duration-probe,loc-report,main-e2e-alert,merges-with-main,notify,os-latency-guard,pr-dashboard,pr-ttg-guard,prd-fault-alarm,prd-post-deploy-check,preview-paths,preview-tested-commit,shadcn-drift,sync-ci-telemetry,test-evidence,upload-test-telemetry}.ts",
+        "ci/{create-release,loc-report,merges-with-main,notify,pr-dashboard,prd-fault-alarm,prd-post-deploy-check,preview-paths,preview-tested-commit,shadcn-drift,sync-ci-telemetry,test-evidence,upload-test-telemetry}.ts",
+        "monitors/{health,do-duration-probe}.ts",
         "ci/flake-dashboard/update.ts",
         "ci/tracing/{cli,tracing}.ts",
         "depot-ci/dependencies.mjs",
@@ -54,10 +56,11 @@ export default {
       // setups); the rest are entries here. The browser specs are the root suite (specs/AGENTS.md).
       entry: [
         "src/worker.ts!",
-        "src/client/**/*.{ts,tsx}",
         // the e2e suite's test files are entries; e2e/support/** is project code, so an unused support
         // export is reported
         "e2e/**/*.e2e.test.ts",
+        // read as text and handed over as the presence facet's source (e2e/support/sources.ts)
+        "e2e/support/presence/durable-object.ts",
         "perf/**/*.perf.test.ts",
         "__workers-tests__/**/*.ts",
         "bench/**/*.ts",
@@ -125,6 +128,11 @@ export default {
       // public/index.html loads app.js, and its import map resolves @iterate-com/capnweb from a CDN.
       entry: ["public/app.js"],
       ignoreDependencies: ["@iterate-com/capnweb"],
+    },
+    "apps/browser-extension": {
+      // public/index.html loads panel.js; its ./capnweb.js is the one the build copies into dist/.
+      entry: ["public/panel.js"],
+      ignoreUnresolved: ["./capnweb.js"],
     },
     "packages/ui": {
       // The package.json export map is the public entry surface (many subpath

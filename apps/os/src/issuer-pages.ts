@@ -25,7 +25,7 @@ const publicFiles = new Set([
   "/google-logo.svg",
   "/cloudflare-logo.svg",
   "/github-logo.svg",
-  // the browser extension's OAuth client logo_uri (apps/browser-extension/panel.js)
+  // the browser extension's OAuth client logo_uri (apps/browser-extension/public/panel.js)
   "/client-logos/browser-extension.svg",
   // the stylesheet apps' own sign-in pages link from their issuer (iterate/app-server)
   "/issuer.css",

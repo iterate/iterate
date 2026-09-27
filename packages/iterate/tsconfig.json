@@ -9,5 +9,5 @@
     "jsx": "react-jsx"
   },
   "include": ["src"],
-  "exclude": ["src/node.ts", "src/stream/test-support.ts", "src/test-support", "src/**/*.test.*"]
+  "exclude": ["src/node.ts", "src/stream/test-support.ts", "src/**/*.test.*"]
 }

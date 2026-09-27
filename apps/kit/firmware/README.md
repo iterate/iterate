@@ -96,7 +96,7 @@ proof, `apps/agents/scripts/voice-board.ts`, takes the device name on
 
 `components/capabilities/screen` owns the shared image protocol. A board
 provides dimensions, supported/preferred wire formats, refresh timing, a
-staging buffer, and submit/status callbacks. `screen.info()` exposes these
+staging buffer, and submit/state callbacks. `screen.info()` exposes these
 facts; `screen.setImage()` accepts contiguous bounded base64 chunks and
 answers the chunk that completes the frame only once the hardware has shown it
 (an error if the refresh failed). Monochrome (`mono1`),

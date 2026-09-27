@@ -10,7 +10,6 @@ import {
   writeTestTelemetryFailureSentinel,
   type TestTelemetryArtifact,
   type TestTelemetryContext,
-  type ModuleTelemetryRecord,
   type TestTelemetryRecord,
 } from "../ci-telemetry.ts";
 import { E2E_ROW_BUDGET_MS, E2E_ROW_WARN_MS } from "./budgets.ts";
@@ -20,26 +19,13 @@ interface ReportedTestCase {
   fullName: string;
   name?: string;
   location?: { line: number; column: number };
-  options?: {
-    fails?: boolean;
-    mode?: "run" | "only" | "skip" | "todo";
-    timeout?: number;
-  };
+  options?: { fails?: boolean; mode?: "run" | "only" | "skip" | "todo" };
   tags?: readonly string[];
   project?: { name: string };
   diagnostic():
-    | {
-        retryCount: number;
-        flaky: boolean;
-        duration: number;
-        startTime?: number;
-        repeatCount?: number;
-        slow?: boolean;
-        heap?: number;
-      }
+    | { retryCount: number; flaky: boolean; duration: number; startTime?: number }
     | undefined;
   result(): { state: string; errors?: readonly unknown[] };
-  annotations?(): ReadonlyArray<{ type: string; message: string }>;
 }
 
 // Structural types keep this reporter compatible across workspace Vitest versions.
@@ -56,52 +42,27 @@ interface ReportedTestModule {
     allTests(): Iterable<ReportedTestCase>;
     allSuites?(): Iterable<{ errors(): unknown[] }>;
   };
-  diagnostic?(): {
-    environmentSetupDuration: number;
-    prepareDuration: number;
-    collectDuration: number;
-    setupDuration: number;
-    duration: number;
-    importDurations: Record<string, { selfTime: number; totalTime?: number }>;
-  };
 }
 
-type ReportedHookContext = {
-  name: "beforeEach" | "afterEach" | "beforeAll" | "afterAll";
-  entity: object;
-};
-
-type HookDurations = { beforeEach: number; afterEach: number };
-type ReporterDefaults = { testKind?: "unit" | "integration" | "e2e"; suite?: string };
-
 /**
- * Vitest's built-in JSON reporter omits retry counts and the timing split we
- * need to diagnose slow e2e. This reporter therefore records every test,
- * test hooks, and module startup/import time. A named file
- * lets preview render its retry summary immediately; CI's artifact directory
- * retains the same record for the always-running finalizer.
+ * Vitest's built-in JSON reporter omits retry counts, so this reporter records every test with its
+ * retries and first failure into CI's telemetry directory for the always-running finalizer
+ * (docs/ci-test-telemetry.md), a flake record for each plain test that failed, and, with
+ * CI_TRACE_ENABLED=1, each test's `@@ci-trace` lifecycle lines for the CI trace (docs/ci-traces.md).
  */
 export class RetryTelemetryReporter {
   private readonly runStartedAtMs = Date.now();
   private readonly artifactId: string;
   private readonly ci: TestTelemetryArtifact["ci"];
   private readonly context: TestTelemetryContext;
-  private readonly defaults: ReporterDefaults;
-  private readonly hookStarts = new WeakMap<object, Partial<Record<string, number>>>();
-  private readonly hookDurations = new WeakMap<object, HookDurations>();
-  private readonly moduleTimes = new WeakMap<
-    object,
-    { queuedAtMs?: number; collectedAtMs?: number; startedAtMs?: number; finishedAtMs?: number }
-  >();
   private readonly workspace: string;
 
-  constructor(defaults: ReporterDefaults = {}) {
-    this.defaults = defaults;
+  constructor(defaults: { testKind?: "unit" | "integration" | "e2e"; suite?: string } = {}) {
     this.workspace =
       process.env.TEST_TELEMETRY_WORKSPACE || process.env.npm_package_name || process.cwd();
     this.context = testTelemetryContextFromEnvironment("vitest", {
-      testKind: this.defaults.testKind ?? "unit",
-      suite: this.defaults.suite ?? "unit",
+      testKind: defaults.testKind || "unit",
+      suite: defaults.suite || "unit",
       workspace: this.workspace,
     });
     this.artifactId = testTelemetryArtifactId(
@@ -165,38 +126,6 @@ export class RetryTelemetryReporter {
     );
   }
 
-  onTestModuleQueued(testModule: ReportedTestModule): void {
-    this.moduleTimes.set(testModule, { queuedAtMs: Date.now() });
-  }
-
-  onTestModuleCollected(testModule: ReportedTestModule): void {
-    this.moduleTime(testModule).collectedAtMs = Date.now();
-  }
-
-  onTestModuleStart(testModule: ReportedTestModule): void {
-    this.moduleTime(testModule).startedAtMs = Date.now();
-  }
-
-  onTestModuleEnd(testModule: ReportedTestModule): void {
-    this.moduleTime(testModule).finishedAtMs = Date.now();
-  }
-
-  onHookStart(hook: ReportedHookContext): void {
-    if (hook.name !== "beforeEach" && hook.name !== "afterEach") return;
-    const starts = this.hookStarts.get(hook.entity) ?? {};
-    starts[hook.name] = performance.now();
-    this.hookStarts.set(hook.entity, starts);
-  }
-
-  onHookEnd(hook: ReportedHookContext): void {
-    if (hook.name !== "beforeEach" && hook.name !== "afterEach") return;
-    const startedAt = this.hookStarts.get(hook.entity)?.[hook.name];
-    if (startedAt === undefined) return;
-    const durations = this.hookDurations.get(hook.entity) ?? { beforeEach: 0, afterEach: 0 };
-    durations[hook.name] += performance.now() - startedAt;
-    this.hookDurations.set(hook.entity, durations);
-  }
-
   async onTestRunEnd(
     testModules: ReadonlyArray<ReportedTestModule>,
     unhandledErrors: readonly unknown[] = [],
@@ -204,61 +133,15 @@ export class RetryTelemetryReporter {
   ): Promise<void> {
     try {
       const tests: TestTelemetryRecord[] = [];
-      const modules: ModuleTelemetryRecord[] = [];
       const overBudget: { name: string; durationMs: number }[] = [];
       for (const testModule of testModules) {
-        const moduleDiagnostic = testModule.diagnostic?.();
-        const moduleTimes = this.moduleTimes.get(testModule);
-        if (moduleDiagnostic) {
-          modules.push({
-            moduleId: testModule.moduleId,
-            environmentSetupDurationMs: Math.round(moduleDiagnostic.environmentSetupDuration),
-            prepareDurationMs: Math.round(moduleDiagnostic.prepareDuration),
-            collectDurationMs: Math.round(moduleDiagnostic.collectDuration),
-            setupDurationMs: Math.round(moduleDiagnostic.setupDuration),
-            testAndHookDurationMs: Math.round(moduleDiagnostic.duration),
-            importDurationMs: Math.round(
-              Object.values(moduleDiagnostic.importDurations).reduce(
-                (total, duration) => total + duration.selfTime,
-                0,
-              ),
-            ),
-            imports: Object.entries(moduleDiagnostic.importDurations).map(
-              ([moduleId, duration]) => ({
-                moduleId,
-                selfDurationMs: Math.round(duration.selfTime),
-                ...(duration.totalTime === undefined
-                  ? {}
-                  : { totalDurationMs: Math.round(duration.totalTime) }),
-              }),
-            ),
-            ...optionalIsoTime("queuedAt", moduleTimes?.queuedAtMs),
-            ...optionalIsoTime("collectedAt", moduleTimes?.collectedAtMs),
-            ...optionalIsoTime("startedAt", moduleTimes?.startedAtMs),
-            ...optionalIsoTime("finishedAt", moduleTimes?.finishedAtMs),
-            ...(moduleTimes?.queuedAtMs === undefined || moduleTimes.startedAtMs === undefined
-              ? {}
-              : { queueDurationMs: Math.max(0, moduleTimes.startedAtMs - moduleTimes.queuedAtMs) }),
-            ...(moduleTimes?.startedAtMs === undefined || moduleTimes.finishedAtMs === undefined
-              ? {}
-              : {
-                  executionWallDurationMs: Math.max(
-                    0,
-                    moduleTimes.finishedAtMs - moduleTimes.startedAtMs,
-                  ),
-                }),
-          });
-        }
         for (const test of testModule.children.allTests()) {
           const diagnostic = test.diagnostic();
           const result = test.result();
-          const annotations = test.annotations?.() ?? [];
-          const hooks = this.hookDurations.get(test) ?? { beforeEach: 0, afterEach: 0 };
           const durationMs = Math.round(diagnostic?.duration ?? 0);
           const errors = (result.errors || []).map((error) =>
             normalizeTestTelemetryError(error, "Unknown test-attempt error"),
           );
-          const firstFailure = compactRetryFailure(errors[0]);
           if (
             test.project?.name === "e2e" &&
             durationMs > E2E_ROW_WARN_MS &&
@@ -269,11 +152,6 @@ export class RetryTelemetryReporter {
             fullName: test.fullName,
             leafName: test.name,
             moduleId: testModule.moduleId,
-            ...(test.location && {
-              testLine: test.location.line,
-              testColumn: test.location.column,
-            }),
-            runnerTestId: test.id || undefined,
             ...(test.options && {
               expectedState:
                 test.options.mode === "skip" || test.options.mode === "todo"
@@ -282,48 +160,16 @@ export class RetryTelemetryReporter {
                     ? "failed"
                     : "passed",
             }),
-            ...(test.options?.timeout === undefined
-              ? {}
-              : { configuredTimeoutMs: test.options.timeout }),
             tags: [...(test.tags || [])],
-            annotations: annotations.map(({ type, message }) => ({
-              type,
-              description: message || undefined,
-            })),
-            ...(diagnostic?.repeatCount === undefined
-              ? {}
-              : { repeatCount: diagnostic.repeatCount }),
-            ...(diagnostic?.slow === undefined ? {} : { slow: diagnostic.slow }),
-            ...(diagnostic?.heap === undefined ? {} : { heapBytes: diagnostic.heap }),
             retryCount: diagnostic?.retryCount ?? 0,
             passedAfterRetry: diagnostic?.flaky ?? false,
             state: result.state,
             durationMs,
-            attemptDetail: "aggregate-only",
-            ...(diagnostic?.startTime === undefined
-              ? {}
-              : {
-                  startedAt: new Date(diagnostic.startTime).toISOString(),
-                  startedAtSource: "runner",
-                }),
-            ...(diagnostic?.startTime === undefined || moduleTimes?.startedAtMs === undefined
-              ? {}
-              : {
-                  scheduleDelayMs: Math.max(
-                    0,
-                    Math.round(diagnostic.startTime - moduleTimes.startedAtMs),
-                  ),
-                }),
-            beforeEachDurationMs: Math.round(hooks.beforeEach),
-            afterEachDurationMs: Math.round(hooks.afterEach),
-            bodyDurationMs: Math.max(
-              0,
-              Math.round(durationMs - hooks.beforeEach - hooks.afterEach),
-            ),
-            attempts: [],
-            phases: [],
+            ...(diagnostic?.startTime !== undefined && {
+              startedAt: new Date(diagnostic.startTime).toISOString(),
+            }),
             errors,
-            firstFailure,
+            firstFailure: compactRetryFailure(errors[0]),
           });
         }
       }
@@ -370,19 +216,9 @@ export class RetryTelemetryReporter {
           finishedAt: new Date(finishedAtMs).toISOString(),
           durationMs: Math.max(0, finishedAtMs - this.runStartedAtMs),
           ...(runErrors[0] && { error: runErrors[0] }),
+          collectionErrors: runErrors.map((error) => error.message),
         },
-        runners: [
-          {
-            context: this.context,
-            status,
-            durationMs: Math.max(0, finishedAtMs - this.runStartedAtMs),
-            testCount: tests.length,
-            retryCount: tests.reduce((total, test) => total + test.retryCount, 0),
-            collectionErrors: runErrors.map((error) => error.message),
-          },
-        ],
         tests,
-        modules,
       });
       if (retried.length > 0) {
         const details = retried
@@ -405,32 +241,12 @@ export class RetryTelemetryReporter {
       console.error("[retry-telemetry] failed to record test telemetry:", error);
       // Artifact mode is an explicit CI observability contract. A green run
       // must not silently omit the file consumed by the finalizer.
-      if (process.env.TEST_TELEMETRY_ARTIFACT_DIR || process.env.TEST_TELEMETRY_ARTIFACT_FILE)
-        throw error;
+      if (process.env.TEST_TELEMETRY_ARTIFACT_DIR) throw error;
     }
-  }
-
-  private moduleTime(testModule: object) {
-    const existing = this.moduleTimes.get(testModule);
-    if (existing) return existing;
-    const created: {
-      queuedAtMs?: number;
-      collectedAtMs?: number;
-      startedAtMs?: number;
-      finishedAtMs?: number;
-    } = {};
-    this.moduleTimes.set(testModule, created);
-    return created;
   }
 }
 
 export default RetryTelemetryReporter;
-
-function optionalIsoTime<Key extends string>(key: Key, value: number | undefined) {
-  return value === undefined
-    ? {}
-    : ({ [key]: new Date(value).toISOString() } as Record<Key, string>);
-}
 
 /** Keep retry evidence useful in one-line logs, annotations, and PR tables. */
 export function compactRetryFailure(error: unknown): string | undefined {

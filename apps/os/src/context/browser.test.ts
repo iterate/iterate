@@ -1,5 +1,6 @@
-import { expect, test, vi } from "vitest";
+import { expect, test } from "vitest";
 import { cfBrowser, unwrapBrowserRunQuickAction } from "./browser.ts";
+import { settle } from "./test-support.ts";
 
 // The unwrap contract behind itx.browser.quickAction: callers get the
 // action's RESULT, never the binding's Response envelope. The binding is an
@@ -52,7 +53,7 @@ test("quickAction on inline HTML: one retry, a second later, logged as browser.p
     retries: [
       {
         event: "browser.platform-failure-retry",
-        action: "screenshot",
+        name: "screenshot",
         message: expect.stringContaining('"code":6002'),
       },
     ],
@@ -64,7 +65,10 @@ test("quickAction's timeout retry is bounded: a second timeout surfaces; a url p
   const twice = binding(timedOut, timedOut);
   expect(await settle(() => twice.browser.quickAction("screenshot", inline))).toMatchObject({
     error: { message: expect.stringContaining('"code":6002') },
-    retries: [{ event: "browser.platform-failure-retry" }],
+    retries: [
+      { event: "browser.platform-failure-retry" },
+      { event: "browser.platform-failure-gave-up", attempts: 2 },
+    ],
   });
   expect(twice.calls).toHaveLength(2);
 
@@ -87,24 +91,6 @@ test("quickAction's timeout retry is bounded: a second timeout surfaces; a url p
   });
   expect(other.calls).toHaveLength(1);
 });
-
-/** Run a quick action with the retry's wait elapsed at once: its answer or error, and the warns it
- *  logged. */
-async function settle<T>(run: () => Promise<T>) {
-  vi.useFakeTimers();
-  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-  try {
-    const outcome = run().then(
-      (value) => ({ value }),
-      (error: Error) => ({ error }),
-    );
-    await vi.runAllTimersAsync();
-    return { ...(await outcome), retries: warn.mock.calls.map(([entry]) => entry) };
-  } finally {
-    warn.mockRestore();
-    vi.useRealTimers();
-  }
-}
 
 /** A JSON Response, as the Browser Run binding answers. */
 const json = (body: unknown) =>

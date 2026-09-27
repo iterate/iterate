@@ -75,7 +75,7 @@ test("cancellation works while paused; idempotent retries do not resurrect a com
   expect(stream).toMatchObject({ coreReducedState: expect.objectContaining({ schedules: {} }) });
 });
 
-test.each([
+test.for([
   { key: "__proto__" },
   { when: { at: "tomorrow" } },
   { events: [] },
@@ -152,7 +152,7 @@ test("a non-string type passes the normalizer untouched — Stream.append refuse
   expect(normalizeControlEvent(event, "/")).toBe(event);
 });
 
-test.each([
+test.for([
   "paused",
   "resumed",
   "created",
@@ -279,7 +279,7 @@ test("interval completion coalesces missed ticks, retains cadence and ignores du
   expect(repeated).toEqual(expect.objectContaining({ schedules: state.schedules }));
 });
 
-test.each([
+test.for([
   { afterMs: -1 },
   { afterMs: 0.5 },
   { afterMs: Number.MAX_SAFE_INTEGER },

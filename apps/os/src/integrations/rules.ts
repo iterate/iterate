@@ -1,6 +1,7 @@
 // src/integrations/rules.ts — the pure rules the providers' webhooks, GitHub's connect, an
-// incremental consent, a sign-in that keeps its token (identity.ts) and a lend (secret/durable-object.ts)
-// apply, covered row by row in rules.test.ts.
+// incremental consent, a sign-in that keeps its token (identity.ts), a person's account connected to
+// a project (context/built-ins.ts `integrations.connect`) and the one-token pointer behind it
+// (secret/durable-object.ts) apply, covered row by row in rules.test.ts.
 //
 // THE WEBHOOK RESPONSE CODES. A Slack app or a GitHub App is one webhook URL for every workspace or
 // installation it is in, and Slack disables an app's deliveries to all of them once most of an
@@ -18,6 +19,8 @@
 // token lists every installation the user can merely read, while the connection's token acts with
 // the whole installation's permissions. So the human proves they administer the installation's
 // account: it is their own user account, or an organization they are an active admin of.
+import type { SignInProvider } from "iterate/api";
+import { z } from "zod";
 import { isRecord } from "../secrets.ts";
 
 /** How far a request's `x-slack-request-timestamp` may be from now: Slack's own advice, which stops
@@ -130,6 +133,18 @@ function tokenResponseAccountOf(data: unknown): string | null {
   }
 }
 
+/** The Slack workspace a token endpoint's answer installed the app into (`oauth.v2.access`'s
+ *  `team`), or null for an answer that names none. */
+export function slackTeamOfTokenResponse(data: unknown): { id: string; name: string } | null {
+  const parsed = SlackTokenResponseTeam.safeParse(data);
+  if (!parsed.success) return null;
+  const { id, name } = parsed.data.team;
+  return { id, name: name || id };
+}
+const SlackTokenResponseTeam = z.object({
+  team: z.object({ id: z.string().min(1), name: z.string().optional() }),
+});
+
 /** Why an incremental consent is refused — the provider answered for another account than the
  *  connection holds, or for one it does not name — or null when it is the same account. */
 export function consentAccountRefusal(expected: string, data: unknown): string | null {
@@ -139,10 +154,6 @@ export function consentAccountRefusal(expected: string, data: unknown): string |
     ? `the provider answered for another account (${actual}) than this connection's (${expected}) — connect it as a new connection instead`
     : `the provider's answer names no account, so it cannot be checked against this connection's (${expected})`;
 }
-
-/** The providers a person signs in with (identity.ts), each through the deployment's one client for
- *  it: Google and Cloudflare speak OpenID Connect, GitHub its App's user authorization. */
-export type SignInProvider = "google" | "cloudflare" | "github";
 
 /** A sign-in's authorize parameters. Google and GitHub show their account picker every time
  *  (`prompt=select_account`), so "switch account" never signs the browser's last account in
@@ -197,16 +208,16 @@ export function signInNeedsConsent(input: {
 }
 
 /** Why a sign-in through a FAKE provider (a preview's pet shop, which mints any address) is
- *  refused: only addresses under the test-link domain may sign in that way, and none where the
- *  deployment has no test links. Null when admitted. */
+ *  refused: only addresses under the deployment's test email domain (`login.testEmailDomain`) may
+ *  sign in that way, and none where it has none. Null when admitted. */
 export function fakeProviderEmailRefusal(
   email: string,
-  testLinkDomain: string | null,
+  testEmailDomain: string | undefined,
 ): string | null {
-  if (!testLinkDomain) return "this deployment signs in with no fake provider";
-  return email.toLowerCase().endsWith(`@${testLinkDomain}`)
+  if (!testEmailDomain) return "this deployment signs in with no fake provider";
+  return email.toLowerCase().endsWith(`@${testEmailDomain}`)
     ? null
-    : `a fake provider signs in addresses under ${testLinkDomain} alone`;
+    : `a fake provider signs in addresses under ${testEmailDomain} alone`;
 }
 
 /** A LEND (secret/durable-object.ts): the lender's secret answers a borrower's use only while the
@@ -232,4 +243,38 @@ export function lendVerdict(input: {
       revoke: "membership-ended",
     };
   return { as: input.lend.as };
+}
+
+/** Google's short names for its identity scopes, which a sign-in asks for and a token response may
+ *  answer in either spelling. */
+const GOOGLE_SCOPE_ALIASES: Record<string, string> = {
+  email: "https://www.googleapis.com/auth/userinfo.email",
+  profile: "https://www.googleapis.com/auth/userinfo.profile",
+};
+
+/** WHAT A PERSON'S ACCOUNT LACKS for a project (`itx.integrations.connect(provider, { account })`):
+ *  the scopes `asked` that `granted` does not hold, in the order asked — none means the account is
+ *  connected at once, any means an incremental consent on the person's own connection first. Google
+ *  spells `email` and `profile` two ways; every other scope is compared as written. */
+export function missingScopes(
+  provider: string,
+  granted: readonly string[],
+  asked: readonly string[],
+): string[] {
+  const spelled = (scope: string) =>
+    provider === "google" ? GOOGLE_SCOPE_ALIASES[scope] || scope : scope;
+  const held = new Set(granted.map(spelled));
+  return [...new Set(asked)].filter((scope) => !held.has(spelled(scope)));
+}
+
+/** WHAT A CONSENT GRANTED, off the token response (RFC 6749 §5.1): its `scope`, space-separated
+ *  (a comma-separated one, as some providers send, too); the `asked` scope when the response names
+ *  none, which the RFC allows only when the grant is exactly what was asked. A connection records
+ *  these, never what it asked for, so a scope the person unticked is not claimed. */
+export function grantedScopesOf(tokenResponse: unknown, asked: string): string[] {
+  const scope =
+    isRecord(tokenResponse) && typeof tokenResponse.scope === "string"
+      ? tokenResponse.scope
+      : asked;
+  return [...new Set(scope.split(/[\s,]+/).filter(Boolean))];
 }

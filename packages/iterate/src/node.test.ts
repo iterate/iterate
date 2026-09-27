@@ -7,10 +7,17 @@ import { expect, test } from "vitest";
 import { WebSocketServer } from "ws";
 import { connectIterate } from "./node.ts";
 
+// A connection that stays open gets a dead-after far above any event-loop stall a loaded CI runner
+// has; one that should close keeps 100 ms and is watched for longer than that.
 test.for([
-  { edge: "answers every ping", closes: false },
-  { edge: "answers none (the network vanished without a close)", closes: true },
-])("a connection whose edge $edge: closed = $closes", async ({ closes }) => {
+  { edge: "answers every ping", closes: false, deadAfterMs: 1_000, watchMs: 500 },
+  {
+    edge: "answers none (the network vanished without a close)",
+    closes: true,
+    deadAfterMs: 100,
+    watchMs: 2_000,
+  },
+])("a connection whose edge $edge: closed = $closes", async ({ closes, deadAfterMs, watchMs }) => {
   const server = new WebSocketServer({ port: 0, host: "127.0.0.1", autoPong: !closes });
   server.on("connection", (socket) => {
     newWebSocketRpcSession(socket as unknown as WebSocket, {
@@ -22,11 +29,11 @@ test.for([
     using connection = await connectIterate({
       baseUrl: `http://127.0.0.1:${(server.address() as AddressInfo).port}`,
       auth: { type: "bearer", token: "t" },
-      heartbeat: { intervalMs: 20, deadAfterMs: 100 },
+      heartbeat: { intervalMs: 20, deadAfterMs },
     });
     const outcome = await Promise.race([
       connection.closed,
-      new Promise((resolve) => setTimeout(() => resolve("open"), 500)),
+      new Promise((resolve) => setTimeout(() => resolve("open"), watchMs)),
     ]);
     expect(outcome).toEqual(
       closes ? { code: 1006, reason: "no answer to a WebSocket ping for 0.1 s" } : "open",

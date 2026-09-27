@@ -1,6 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { readFileSync } from "node:fs";
 import { expect, test } from "vitest";
 import {
   ciTelemetrySourceFromEnvironment,
@@ -10,6 +8,7 @@ import {
   writeTestTelemetryFailureSentinel,
   type TestTelemetryArtifact,
 } from "./ci-telemetry.ts";
+import { temporaryDirectory } from "./temporary-directory.ts";
 
 test("normalizes arbitrary runner errors into one JSON-safe model", () => {
   expect(normalizeTestTelemetryError(new TypeError("boom"))).toMatchObject({
@@ -23,80 +22,59 @@ test("normalizes arbitrary runner errors into one JSON-safe model", () => {
   expect(normalizeTestTelemetryError("process exited")).toEqual({ message: "process exited" });
 });
 
-test("writes an immediate file and a durable CI-directory copy from one artifact", () => {
-  const repositoryRoot = mkdtempSync(join(tmpdir(), "ci-telemetry-contract-"));
+test("writes the artifact into the CI directory, relative to the repository root", () => {
+  using repository = temporaryDirectory();
   const artifact: TestTelemetryArtifact = {
-    artifactSchemaVersion: 2,
+    artifactSchemaVersion: 3,
     artifactId: "vitest:@iterate/example:123:456",
     producer: "test",
     createdAt: "2026-07-21T12:00:01Z",
-    ci: {
-      repository: "iterate/iterate",
-      workflowRunId: "1",
-      workflowRunAttempt: "1",
-      runnerProvider: "local",
-      executionContext: "local",
-    },
+    ci: { repository: "iterate/iterate", workflowRunId: "1", workflowRunAttempt: "1" },
     context: { framework: "vitest", testKind: "unit", suite: "unit" },
     run: {
       status: "passed",
       startedAt: "2026-07-21T12:00:00Z",
       finishedAt: "2026-07-21T12:00:01Z",
       durationMs: 1000,
+      collectionErrors: [],
     },
-    runners: [],
     tests: [],
-    modules: [],
+  };
+  const environment = {
+    GITHUB_WORKSPACE: repository.path,
+    TEST_TELEMETRY_ARTIFACT_DIR: "test-results/ci-telemetry/raw",
   };
 
-  writeTestTelemetryArtifact(artifact, {
-    GITHUB_WORKSPACE: repositoryRoot,
-    TEST_TELEMETRY_ARTIFACT_FILE: "immediate.json",
-    TEST_TELEMETRY_ARTIFACT_DIR: "test-results/ci-telemetry/raw",
-  });
+  const written = writeTestTelemetryArtifact(artifact, environment);
 
-  const immediate = join(repositoryRoot, "immediate.json");
-  const durable = resolveTestTelemetryArtifactPath("vitest:@iterate/example:123:456", {
-    GITHUB_WORKSPACE: repositoryRoot,
-    TEST_TELEMETRY_ARTIFACT_DIR: "test-results/ci-telemetry/raw",
-  })!;
-  expect(existsSync(immediate)).toBe(true);
-  expect(existsSync(durable)).toBe(true);
-  expect(readFileSync(durable, "utf8")).toBe(readFileSync(immediate, "utf8"));
-  rmSync(repositoryRoot, { recursive: true });
+  expect(written).toBe(resolveTestTelemetryArtifactPath(artifact.artifactId, environment));
+  expect(written).toMatch(new RegExp(`^${repository.path}/test-results/ci-telemetry/raw/`, "u"));
+  expect(JSON.parse(readFileSync(written!, "utf8"))).toEqual(artifact);
+  expect(writeTestTelemetryArtifact(artifact, {})).toBeNull();
 });
 
 test("leaves an explicit failure artifact when a runner never reaches its end hook", () => {
-  const artifactDirectory = mkdtempSync(join(tmpdir(), "ci-telemetry-sentinel-"));
+  using artifactDirectory = temporaryDirectory();
   writeTestTelemetryFailureSentinel(
     {
       artifactId: "vitest:sentinel",
       producer: "vitest-test",
       startedAt: "2026-07-21T12:00:00Z",
-      ci: {
-        repository: "iterate/iterate",
-        workflowRunId: "1",
-        workflowRunAttempt: "1",
-        runnerProvider: "local",
-        executionContext: "local",
-      },
+      ci: { repository: "iterate/iterate", workflowRunId: "1", workflowRunAttempt: "1" },
       context: { framework: "vitest", testKind: "unit", suite: "unit" },
     },
-    { TEST_TELEMETRY_ARTIFACT_DIR: artifactDirectory },
+    { TEST_TELEMETRY_ARTIFACT_DIR: artifactDirectory.path },
   );
 
   const artifactPath = resolveTestTelemetryArtifactPath("vitest:sentinel", {
-    TEST_TELEMETRY_ARTIFACT_DIR: artifactDirectory,
+    TEST_TELEMETRY_ARTIFACT_DIR: artifactDirectory.path,
   })!;
   const written = JSON.parse(readFileSync(artifactPath, "utf8")) as TestTelemetryArtifact;
   expect(written.run).toMatchObject({
     status: "failed",
     error: { name: "TestTelemetryIncompleteError" },
+    collectionErrors: [expect.stringContaining("did not write its completed telemetry")],
   });
-  expect(written.runners[0]?.collectionErrors[0]).toContain(
-    "did not write its completed telemetry",
-  );
-  rmSync(artifactDirectory, { recursive: true });
 });
 
 test("uses explicit preview identity and collision-resistant artifact filenames", () => {

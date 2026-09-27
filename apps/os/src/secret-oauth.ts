@@ -20,7 +20,8 @@
 // Dash's, nowhere else (`nextUrlOf`).
 
 import * as oauth from "oauth4webapi";
-import type { ClientAuth, OAuthIntegrationProvider, SecretOAuthClient } from "iterate/api";
+import type { ClientAuth, SecretOAuthClient } from "iterate/api";
+import { OAUTH_INTEGRATION_PROVIDERS } from "./integrations/contract.ts";
 import { consentAccountRefusal } from "./integrations/rules.ts";
 import {
   clientAuthOf,
@@ -34,13 +35,6 @@ import {
 /** How long an OAuth attempt stays open: the signed `state`'s expiry and the pending attempt's. */
 export const SECRET_OAUTH_TTL_MS = 10 * 60_000;
 
-/** The providers an integration connects through OAuth, whose callback is
- *  `/api/integrations/<provider>/callback`. */
-export const OAUTH_INTEGRATION_PROVIDERS = [
-  "slack",
-  "google",
-  "cloudflare",
-] as const satisfies readonly OAuthIntegrationProvider[];
 /** The options validated and normalized — the shape the pending attempt and the exchange read. */
 export type NormalizedSecretOAuthOptions = {
   authorizationEndpoint: string;

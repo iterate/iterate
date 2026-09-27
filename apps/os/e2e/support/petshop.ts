@@ -26,11 +26,6 @@ export async function petshopLegacyBearer(email: string): Promise<string> {
   return ((await response.json()) as { accessToken: string }).accessToken;
 }
 
-const backdoorHeaders = (): Record<string, string> => {
-  const secret = process.env.PETSHOP_BACKDOOR_SECRET?.trim();
-  return secret ? { "x-petshop-backdoor": secret } : {};
-};
-
 async function petshopJson<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${petshopBaseUrl()}${path}`, init);
   if (!response.ok)
@@ -42,7 +37,7 @@ async function petshopJson<T>(path: string, init?: RequestInit): Promise<T> {
 export const petshopMintClient = (): Promise<{ clientId: string; clientSecret: string }> =>
   petshopJson("/__backdoor/clients", {
     method: "POST",
-    headers: { "content-type": "application/json", ...backdoorHeaders() },
+    headers: { "content-type": "application/json" },
     body: "{}",
   });
 
@@ -54,7 +49,7 @@ export const petshopExpireTokens = (
 ): Promise<{ clientId: string; accessTokenEpoch: number }> =>
   petshopJson("/__backdoor/expire-tokens", {
     method: "POST",
-    headers: { "content-type": "application/json", ...backdoorHeaders() },
+    headers: { "content-type": "application/json" },
     body: JSON.stringify({ clientId }),
   });
 
@@ -117,7 +112,7 @@ export const petshopFailTokenEndpoint = (
 ): Promise<{ clientId: string; tokenEndpointFailuresRemaining: number }> =>
   petshopJson("/__backdoor/fail-token-endpoint", {
     method: "POST",
-    headers: { "content-type": "application/json", ...backdoorHeaders() },
+    headers: { "content-type": "application/json" },
     body: JSON.stringify({ clientId, times }),
   });
 
@@ -130,7 +125,7 @@ export const petshopRegisterApp = (input: {
 }): Promise<unknown> =>
   petshopJson("/__backdoor/apps", {
     method: "POST",
-    headers: { "content-type": "application/json", ...backdoorHeaders() },
+    headers: { "content-type": "application/json" },
     body: JSON.stringify({ ...input, publicKeyPem: "unused by the webhook rows" }),
   });
 
@@ -145,7 +140,7 @@ export const petshopFireAppWebhook = (input: {
 }): Promise<{ status: number; error?: string }> =>
   petshopJson("/__backdoor/apps/fire-webhook", {
     method: "POST",
-    headers: { "content-type": "application/json", ...backdoorHeaders() },
+    headers: { "content-type": "application/json" },
     body: JSON.stringify(input),
   });
 
@@ -153,7 +148,7 @@ export const petshopFireAppWebhook = (input: {
 export const petshopRevokeRefreshToken = (refreshToken: string): Promise<unknown> =>
   petshopJson("/__backdoor/revoke-refresh-token", {
     method: "POST",
-    headers: { "content-type": "application/json", ...backdoorHeaders() },
+    headers: { "content-type": "application/json" },
     body: JSON.stringify({ refreshToken }),
   });
 
@@ -209,7 +204,7 @@ export const petshopSlackFireWebhook = (input: {
 }): Promise<{ status: number; body: unknown; error?: string }> =>
   petshopJson("/__backdoor/slack/fire-webhook", {
     method: "POST",
-    headers: { "content-type": "application/json", ...backdoorHeaders() },
+    headers: { "content-type": "application/json" },
     body: JSON.stringify(input),
   });
 
@@ -217,9 +212,7 @@ export const petshopSlackFireWebhook = (input: {
 export const petshopSlackMessages = (
   teamId: string,
 ): Promise<{ messages: { channel: string; text: string }[] }> =>
-  petshopJson(`/__backdoor/slack/messages?team=${encodeURIComponent(teamId)}`, {
-    headers: backdoorHeaders(),
-  });
+  petshopJson(`/__backdoor/slack/messages?team=${encodeURIComponent(teamId)}`);
 
 /** Register a GitHub App installation with the shop's GitHub fake (apps/dummy-petshop/src/github.ts):
  *  the App's PUBLIC key (installation tokens are minted from an App JWT it verifies), its webhook
@@ -237,7 +230,7 @@ export const petshopRegisterGithubInstallation = (input: {
 }): Promise<{ installationId: string; appId: string }> =>
   petshopJson("/__backdoor/apps", {
     method: "POST",
-    headers: { "content-type": "application/json", ...backdoorHeaders() },
+    headers: { "content-type": "application/json" },
     body: JSON.stringify({
       ...input,
       account: { login: input.accountLogin, type: "Organization" },
@@ -258,7 +251,7 @@ export const petshopGithubFireWebhook = (input: {
 }): Promise<{ status: number; body: unknown; error?: string }> =>
   petshopJson("/__backdoor/apps/fire-webhook", {
     method: "POST",
-    headers: { "content-type": "application/json", ...backdoorHeaders() },
+    headers: { "content-type": "application/json" },
     body: JSON.stringify(input),
   });
 
@@ -274,7 +267,7 @@ export const petshopGithubSeedPull = (input: {
 }): Promise<{ ok: true }> =>
   petshopJson("/__backdoor/github/pulls", {
     method: "POST",
-    headers: { "content-type": "application/json", ...backdoorHeaders() },
+    headers: { "content-type": "application/json" },
     body: JSON.stringify(input),
   });
 
@@ -290,6 +283,4 @@ export const petshopGithubCheckRuns = (
     output: { summary?: string } | null;
   }[];
 }> =>
-  petshopJson(`/__backdoor/github/check-runs?installation=${encodeURIComponent(installationId)}`, {
-    headers: backdoorHeaders(),
-  });
+  petshopJson(`/__backdoor/github/check-runs?installation=${encodeURIComponent(installationId)}`);

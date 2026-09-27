@@ -233,12 +233,11 @@ export async function captureHostnames(root: SeedRoot): Promise<string[]> {
  *  serve — absent (an erase), refused, or being removed — with the same `hostname-add-requested` the
  *  dash appends, then wait for the processor's answer to it (and to an add already in flight). A
  *  hostname the project serves is left alone, so a rerun asks for nothing. Answers each hostname's
- *  outcome; throws when one is refused, or when they are not all answered within `timeoutMs`
- *  (one limit for the whole list). */
+ *  outcome; throws when one is refused, or when they are not all answered within 60 s (one limit
+ *  for the whole list). */
 export async function restoreHostnames(
   root: SeedRoot,
   hostnames: string[],
-  { timeoutMs = 60_000 }: { timeoutMs?: number } = {},
 ): Promise<{ hostname: string; asked: boolean; status: string }[]> {
   if (!hostnames.length) return [];
   const before = await projectHostnames(root);
@@ -256,12 +255,12 @@ export async function restoreHostnames(
         })),
       ],
     ]);
-  const deadline = Date.now() + timeoutMs;
+  const deadline = Date.now() + 60_000;
   let now = await projectHostnames(root);
   while (hostnames.some((hostname) => !now[hostname] || now[hostname].requested)) {
     if (Date.now() > deadline)
       throw new Error(
-        `No answer within ${timeoutMs / 1000} s for hostnames ${hostnames.filter((hostname) => !now[hostname] || now[hostname].requested).join(", ")}; rerun apply to wait again.`,
+        `No answer within 60 s for hostnames ${hostnames.filter((hostname) => !now[hostname] || now[hostname].requested).join(", ")}; rerun apply to wait again.`,
       );
     await new Promise((resolve) => setTimeout(resolve, 500));
     now = await projectHostnames(root);

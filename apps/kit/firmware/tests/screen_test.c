@@ -65,8 +65,7 @@ int main(void) {
   assert(capnweb_session_init(&session,&options) == CAPNWEB_OK);
   call("info", ""); assert(strstr(sent,"\"formats\":[[\"mono1\",\"gray4\"]]") && strstr(sent,"\"width\":9"));
   call("setImage", "{\"uploadId\":1,\"offset\":0,\"format\":\"mono1\",\"data\":\"/w==\"}");
-  assert(screen.next_offset == 1 && submits == 0);
-  call("status", ""); assert(strstr(sent,"receiving"));
+  assert(screen.next_offset == 1 && submits == 0 && screen.uploading);
   call("setImage", "{\"uploadId\":1,\"offset\":2,\"format\":\"mono1\",\"data\":\"AAAA\"}");
   assert(strstr(sent,"RangeError") && screen.next_offset == 1);
   call("setImage", "{\"uploadId\":1,\"offset\":4294967297,\"format\":\"mono1\",\"data\":\"AAAA\"}");
@@ -80,14 +79,12 @@ int main(void) {
   assert(sent[0] == 0 && screen.shown_answer_owed);
   iterate_kit_peer_step(&peer); assert(sent[0] == 0);
   call("setImage", "null"); assert(strstr(sent,"BusyError") && screen.showing_image);
-  call("status", ""); assert(strstr(sent,"pending"));
   state = ITERATE_KIT_SCREEN_SHOWN;
   sent[0] = 0;
   iterate_kit_peer_step(&peer);
-  assert(strcmp(sent, "[\"resolve\",7,4]") == 0 && screen.uploads_completed == 1 && !screen.shown_answer_owed);
+  assert(strcmp(sent, "[\"resolve\",6,4]") == 0 && screen.uploads_completed == 1 && !screen.shown_answer_owed);
   sent[0] = 0;
-  iterate_kit_peer_step(&peer); assert(sent[0] == 0);
-  call("status", ""); assert(strstr(sent,"shown") && screen.uploads_completed == 1);
+  iterate_kit_peer_step(&peer); assert(sent[0] == 0 && screen.uploads_completed == 1);
   call("setImage", "null"); assert(!screen.showing_image);
   call("setImage", "{\"uploadId\":2,\"offset\":0,\"format\":\"rgb565\",\"data\":\"AAAA\"}");
   assert(strstr(sent,"RangeError"));
@@ -98,7 +95,7 @@ int main(void) {
   sent[0] = 0;
   iterate_kit_peer_step(&peer);
   assert(strstr(sent,"\"resolve\"") == NULL && strstr(sent,"screen refresh failed") && screen.uploads_completed == 1);
-  call("status", ""); assert(strstr(sent,"failed"));
+  assert(screen.upload_failures == 5);
   /* A session that ends owes its last chunk nothing; the refresh still holds new uploads off. */
   state = ITERATE_KIT_SCREEN_SHOWN;
   call("setImage", "null"); assert(!screen.showing_image);
@@ -117,7 +114,7 @@ int main(void) {
   assert(submits == 4 && !screen.shown_answer_owed && strstr(sent,",4]") && pixels[0] == 255);
   /* The peer serves plain Cap'n Web paths only: a flattened {path, args}
    * envelope is an unknown method, never a nested dispatch. */
-  call_path("\"invokeCapability\"", "{\"path\":[[\"screen\",\"status\"]],\"args\":[[]]}");
+  call_path("\"invokeCapability\"", "{\"path\":[[\"screen\",\"info\"]],\"args\":[[]]}");
   assert(strstr(sent,"TypeError") && strstr(sent,"unknown device capability") && !strstr(sent,"failed"));
   capnweb_session_close(&session);
   puts("screen capability test passed");

@@ -23,7 +23,7 @@ subpath in `package.json`'s `exports` is one public module; nothing else is impo
 - No private core package behind a thin `iterate`: apps/os would then import modules user code
   cannot, and the SDK's types would have to be bundled or published anyway.
 
-Follow-up: type the test harnesses against `iterate/api`. The decision's reasons, and how workerd, the Agents SDK, Convex,
+The decision's reasons, and how workerd, the Agents SDK, Convex,
 Supabase, tRPC, Hono and Wrangler draw the same line:
 [the decision record](https://github.com/iterate/iterate/blob/d52a4e8e0f791c96b683fe178b56570532123c05/docs/2026-09-24-sdk-platform-line.md)
 (#3018).
@@ -62,7 +62,7 @@ that outlives the call runs under a processor's `runInBackground` claim. Lint re
 ```ts
 import { reduceProcessor } from "iterate/stream/test-support";
 
-// apps/os/src/client/presence/processor.test.ts: durable ticks are reduced, ephemeral pokes are not
+// apps/os/e2e/support/presence/processor.test.ts: durable ticks are reduced, ephemeral pokes are not
 const state = reduceProcessor(new PresenceProcessor(), [{ type: "tick" }, { type: "poke" }]);
 // state.ticks === 1
 ```
@@ -170,14 +170,8 @@ that prefix belongs to whoever appends it and is opaque to the platform: tests u
 | `account`, `organization`, `project`, `repo`, `workspace`, `secret` | `apps/os/src/<name>/contract.ts` (repo and workspace also use `project/entity-lifecycle.ts`)                                                                                                                                                                                                               |
 | `agent`                                                             | `packages/agents/src/contract.ts`                                                                                                                                                                                                                                                                          |
 | `voice-agent`                                                       | `packages/voice/src/voice-agent.ts`, `packages/voice/src/events.ts`                                                                                                                                                                                                                                        |
-| `chrome`                                                            | `apps/browser-extension/panel.js`                                                                                                                                                                                                                                                                          |
+| `chrome`                                                            | `apps/browser-extension/public/panel.js`                                                                                                                                                                                                                                                                   |
 | `test`                                                              | tests only                                                                                                                                                                                                                                                                                                 |
-
-Two types break these rules until the Kit firmware migrates:
-
-- `voice-agent/spk-frame` will become `voice-agent/speaker-frame`.
-- `voice-agent/conversation-ended` will become `voice-agent/call-ended`. It pairs with `call-started`
-  and names the activation; the provider session is the `conversation`.
 
 `note/added` is only an example in the Agents composer; no contract defines `note`.
 `email/received` is only an integration's transcript in an agent UI test; no contract defines

@@ -14,9 +14,11 @@
 //       the installation here for iterate's App, mints once as proof, `github/connected` on `/`;
 //     - with an `installation_id` alone (the App's Setup URL, or an update): sends the human on to
 //       authorize the App, and comes back with a `code`;
-//     - with `setup_action=request`: an organization owner has yet to approve the install.
-//   disconnectGithub     → the route released, the secret deleted, `github/disconnected` (the App
-//                          stays installed; only its account can uninstall it)
+//     - with `setup_action=request`: an organization owner has yet to approve the install;
+//     - for an installation another project's connection holds: the offer to move it here
+//       (verbs.ts `confirmIntegrationMove`), once the human proved they administer it.
+//   a disconnect (verbs.ts `PROVIDERS`) revokes nothing: the route released and the secret deleted,
+//   the App stays installed (only its account can uninstall it)
 //   githubWebhookRoute   → `POST /api/integrations/github/webhook` (iterate's App, routed) and
 //                          `…/webhook/<projectId>/<connection>` (a project's own App)
 import { codedError } from "iterate/lib";
@@ -29,16 +31,21 @@ import { callbackAuthorization } from "../secret-oauth-callback.ts";
 import { nextUrlOf, SECRET_OAUTH_TTL_MS } from "../secret-oauth.ts";
 import { isRecord, verifySecretHmac } from "../secrets.ts";
 import {
+  appendConnected,
   appendPlatformFact,
   attemptKeyOf,
   connectionPathOf,
   connectionRowOf,
   ignoredWebhook,
+  moveOfferLanding,
+  MOVE_OFFER_TTL_MS,
   ownerEgress,
   routedWhile,
   tokenSecretPathOf,
   type ConnectionAttempt,
   type IntegrationScope,
+  type MovableAttempt,
+  type MoveOffered,
 } from "./connections.ts";
 import {
   githubInstallationIdOf,
@@ -56,9 +63,9 @@ export function githubApiOriginOf(githubOrigin: string): string {
 }
 
 /** A GitHub connect in flight: the attempt's current nonce, the App's public half, where the human
- *  lands at the end and, once GitHub named it, the (untrusted) installation. */
-type GithubAttempt = ConnectionAttempt & {
-  nonce: string;
+ *  lands at the end and, once GitHub named it, the (untrusted) installation. Once the human proved
+ *  they administer an installation another project's connection holds, its `move` too. */
+type GithubAttempt = MovableAttempt & {
   appSlug: string;
   clientId: string;
   next: string | null;
@@ -97,6 +104,11 @@ export async function connectGithub(
     /** A project's own App's public half (its URL slug and OAuth client id); iterate's is config. */
     appSlug?: string;
     clientId?: string;
+    /** An installation the App already has (the person's GitHub lists it): the human authorizes
+     *  the App as themself at once, never GitHub's configure page, and comes back to
+     *  `platformOrigin`'s callback with the code the admin proof needs. */
+    installationId?: string;
+    platformOrigin?: string;
   },
 ): Promise<{ authorizationUrl: string }> {
   const { connection, client } = input;
@@ -130,6 +142,29 @@ export async function connectGithub(
     // platform on (a self-host names no `urls.os`, and the project facet knows no request)
     next: input.next || null,
   };
+  if (input.installationId) {
+    if (!/^[a-zA-Z0-9_-]+$/.test(input.installationId))
+      throw codedError("INVALID_INPUT", "GitHub: an installation id is letters, digits, - and _.");
+    const origin = URL.canParse(input.platformOrigin || "")
+      ? new URL(input.platformOrigin!).origin
+      : null;
+    if (!origin || origin !== input.platformOrigin)
+      throw codedError(
+        "INVALID_INPUT",
+        "GitHub: an installation's connect names the platform origin its callback hangs under.",
+      );
+    const known: GithubAttempt = {
+      ...attempt,
+      installationId: input.installationId,
+      redirectUri: `${origin}${GITHUB_CALLBACK_PATH}`,
+    };
+    await scope.storage.put(attemptKeyOf("github", connection), known);
+    const authorize = new URL(`${app.origin}/login/oauth/authorize`);
+    authorize.searchParams.set("client_id", app.clientId);
+    authorize.searchParams.set("redirect_uri", known.redirectUri!);
+    authorize.searchParams.set("state", await signedState(scope, connection, known));
+    return { authorizationUrl: authorize.href };
+  }
   await scope.storage.put(attemptKeyOf("github", connection), attempt);
   const install = new URL(
     `${app.origin}/apps/${encodeURIComponent(app.appSlug)}/installations/new`,
@@ -150,7 +185,12 @@ export async function acceptGithubCallback(
     code?: string;
     setupAction?: string;
   },
-): Promise<{ redirect: string | null }> {
+): Promise<{
+  redirect: string | null;
+  /** Another project's connection holds the installation: the offer to move it here, for the
+   *  callback to sign (with the holder's name when the human can see it). */
+  move?: MoveOffered;
+}> {
   const { env, projectId } = scope;
   const { connection } = input;
   const key = attemptKeyOf("github", connection);
@@ -239,17 +279,73 @@ export async function acceptGithubCallback(
   });
   if (refusal) throw codedError("INVALID_INPUT", `GitHub: ${refusal}.`);
 
+  // Held by another project's connection (iterate's App routes each installation to one): nothing
+  // connects yet; the human is offered the move, bound to a fresh nonce of this attempt.
+  if (attempt.client === "iterate") {
+    const holder = await new ControlPlane(env).integrationRouteOf("github", installationId);
+    if (holder && holder.projectId !== projectId) {
+      const offered: GithubAttempt = {
+        ...attempt,
+        nonce: crypto.randomUUID(),
+        until: Date.now() + MOVE_OFFER_TTL_MS,
+        move: { externalId: installationId, account: login, holder },
+      };
+      await scope.storage.put(key, offered);
+      return {
+        redirect: landing,
+        move: {
+          provider: "github",
+          projectId,
+          connection,
+          nonce: offered.nonce,
+          externalId: installationId,
+          account: login,
+          holderProjectId: holder.projectId,
+          exp: offered.until,
+        },
+      };
+    }
+  }
+  await connectGithubInstallation(scope, connection, attempt, installationId, login, "route");
+  await scope.storage.delete(key);
+  return { redirect: landing };
+}
+
+/** THE INSTALLATION CONNECTED HERE, once the human proved they administer it: the connection's
+ *  secret mints its token (iterate's App's key, or the project's own), one mint as proof, then
+ *  `github/connected`. `routing` "route" routes it here for the landing (iterate's App: first owner
+ *  wins, and a failure puts the routes back); "held" means the route is this connection's already
+ *  (a move, verbs.ts `confirmIntegrationMove`). */
+export async function connectGithubInstallation(
+  scope: IntegrationScope,
+  connection: string,
+  attempt: ConnectionAttempt,
+  installationId: string,
+  login: string,
+  routing: "route" | "held",
+): Promise<void> {
+  const { env, projectId } = scope;
+  const apiOrigin = githubApiOriginOf(attempt.origin);
   // The user token was proof only; the connection acts as the installation from here on. A
   // project's own App's secret keeps its material (the App's key) and gains the strategy.
   const secretPath = tokenSecretPathOf("github", connection);
   const path = connectionPathOf("github", connection);
   const secrets = await scope.withItx((itx) => itx.secrets.list());
-  const urls = secrets.find((secret) => secret.path === secretPath)?.urls ?? [apiOrigin];
+  // The API, and GitHub itself for git over HTTP (a repo's origin: `repo.pull()` / `repo.push()`).
+  const urls = [
+    ...new Set([
+      ...(secrets.find((secret) => secret.path === secretPath)?.urls ?? []),
+      attempt.origin,
+      apiOrigin,
+    ]),
+  ];
+  // The material keeps a project App's key, but never the token of the installation it held
+  // before (a reconnect, a move): `accessToken: null` is a miss, so the first use mints for `id`.
   const mintFor = (id: string) =>
     scope.withItx((itx) =>
       itx.secrets.set(
         secretPath,
-        {},
+        { accessToken: null },
         {
           urls,
           refresh: {
@@ -258,7 +354,10 @@ export async function acceptGithubCallback(
             installationId: id,
             client: attempt.client === "iterate" ? { platform: "github" } : { project: "github" },
           },
-          merge: true,
+          // iterate's App: the material is only the minted token, so the record is replaced whole
+          // and an older connection's pin gains GitHub itself (a merge keeps the pin). A project's
+          // own App keeps its material (the App's key), pinned to both from the start.
+          merge: attempt.client !== "iterate",
         },
       ),
     );
@@ -294,25 +393,21 @@ export async function acceptGithubCallback(
         `Minting the installation's token failed (${proof.status}): ${(await proof.text()).slice(0, 300)}`,
       );
     await proof.body?.cancel();
-    await appendPlatformFact(env, projectId, "/", {
-      type: "events.iterate.com/github/connected",
-      payload: {
-        connection,
-        client: attempt.client,
-        account: login,
-        externalId: installationId,
-      },
+    await appendConnected(scope, {
+      provider: "github",
+      connection,
+      client: attempt.client,
+      account: login,
+      externalId: installationId,
     });
   };
-  if (attempt.client === "iterate")
+  if (attempt.client === "iterate" && routing === "route")
     await routedWhile(
       env,
       { provider: "github", externalId: installationId, projectId, path },
       land,
     );
   else await land();
-  await scope.storage.delete(key);
-  return { redirect: landing };
 }
 
 /** The human's user token for the code: iterate's App's client secret from APP_CONFIG, a project's
@@ -351,22 +446,6 @@ async function githubUserTokenOf(
       `GitHub refused the authorization code (${isRecord(data) ? String(data.error) : response.status}).`,
     );
   return data.access_token;
-}
-
-export async function disconnectGithub(scope: IntegrationScope, connection: string): Promise<void> {
-  const { env, projectId } = scope;
-  await new ControlPlane(env).releaseIntegrationRoutes(
-    projectId,
-    connectionPathOf("github", connection),
-  );
-  await scope
-    .withItx((itx) => itx.secrets.delete(tokenSecretPathOf("github", connection)))
-    .catch(() => {});
-  await scope.storage.delete(attemptKeyOf("github", connection));
-  await appendPlatformFact(env, projectId, scope.rootPath, {
-    type: "events.iterate.com/github/disconnected",
-    payload: { connection },
-  });
 }
 
 /** Where GitHub sends the human back, or null when the path is not the callback's. The signed
@@ -408,9 +487,10 @@ export async function githubCallbackRoute(
   const param = (name: string) => url.searchParams.get(name) || undefined;
   if (param("error")) return answer(400, `GitHub declined: ${param("error")}`);
   let redirect: string | null;
+  let move: Awaited<ReturnType<typeof acceptGithubCallback>>["move"];
   try {
     // The platform's own call on the project root; `invoke` is untyped across the DO hop.
-    ({ redirect } = (await env.ITERATE_CONTEXT.getByName(
+    ({ redirect, move } = (await env.ITERATE_CONTEXT.getByName(
       DurableObjectNameCodec.stringify({ projectId: claims.projectId, path: "/" }),
     ).invoke(
       [
@@ -432,13 +512,15 @@ export async function githubCallbackRoute(
       ],
       [],
       { principal: null },
-    )) as { redirect: string | null });
+    )) as Awaited<ReturnType<typeof acceptGithubCallback>>);
   } catch (error) {
     return answer(
       400,
       `Connecting GitHub failed: ${error instanceof Error ? error.message : String(error)}`,
     );
   }
+  // Held by another project: the human's landing offers the move.
+  if (move) return moveOfferLanding(env, authorization.reach, move, redirect);
   if (redirect)
     return new Response(null, {
       status: 303,

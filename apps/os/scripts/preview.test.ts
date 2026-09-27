@@ -1,12 +1,13 @@
-import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, utimesSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { expect, onTestFinished, test } from "vitest";
+import { temporaryDirectory } from "@iterate-com/shared/test-support/temporary-directory";
+import { expect, onTestFinished, test, vi } from "vitest";
 import { osEnvs, PREVIEW_DEPLOYMENT_APPS, previewDeployment } from "../../../envs.ts";
 import { parseAppConfig } from "../src/app-config.ts";
 import { viteWranglerConfig } from "./generate-wrangler-config.ts";
 import {
   APPS,
+  appSignInLink,
   assertFreshInstall,
   configTemplateNames,
   foldPreviousPreviewSection,
@@ -19,6 +20,7 @@ import {
   slugifyPreviewName,
   splicePullRequestBody,
   templateQuickLaunches,
+  writePullRequestBody,
 } from "./preview-config.ts";
 
 test.each([
@@ -65,7 +67,8 @@ test("a deployment is derived from its name alone: seven plain workers on the de
       dashBaseUrl: "https://pr3144-a1b2c3d-dash.iterate-dev-preview.workers.dev",
       dopplerConfig: "preview",
       ingressRouting: { type: "paths" },
-      testLinks: { admins: { issuer: "https://os.iterate.com", emails: ["*@nustom.com"] } },
+      adminIssuer: "https://os.iterate.com",
+      testEmailDomain: "preview.iterate.test",
       artifactsNamespace: "pr3144-a1b2c3d-os-repos",
       resourceNamePrefix: "pr3144-a1b2c3d-os",
     },
@@ -97,27 +100,26 @@ test("a deployment's prefix: a PR's number reads back out of it; any other prefi
   expect(previewPullRequestNumber("pr-foo")).toBeUndefined();
 });
 
-const OS = "https://pr123-ccccccc-os.iterate-dev-preview.workers.dev";
 const DASH = "https://pr123-ccccccc-dash.iterate-dev-preview.workers.dev";
 const section = renderPullRequestSection({
   deployment: "pr123-ccccccc",
   workers: [
     {
       name: "os",
-      url: OS,
-      signIn: `${OS}/.auth/test-link?t=os`,
+      url: "https://pr123-ccccccc-os.iterate-dev-preview.workers.dev",
+      signIn: `${DASH}/.auth/login?next=os`,
       dashboardUrl: "https://dash.cloudflare.com/a/os",
     },
     {
       name: "dash",
       url: DASH,
-      signIn: `${OS}/.auth/test-link?t=dash`,
+      signIn: `${DASH}/.auth/login?next=dash`,
       dashboardUrl: "https://dash.cloudflare.com/a/dash",
     },
   ],
   templates: [
-    { name: "default", link: `${OS}/.auth/test-link?t=default`, fromHead: "bbbbbbbbb0123456" },
-    { name: "with-agents", link: `${OS}/.auth/test-link?t=with-agents` },
+    { name: "default", link: `${DASH}/.auth/login?next=default`, fromHead: "bbbbbbbbb0123456" },
+    { name: "with-agents", link: `${DASH}/.auth/login?next=with-agents` },
   ],
   seed: { project: "pr123", seeded: true },
 });
@@ -128,14 +130,14 @@ test("the PR body's managed section: the deployment, then one row per worker wit
 
     | apps | | |
     | --- | --- | --- |
-    | [os](https://pr123-ccccccc-os.iterate-dev-preview.workers.dev) | [Sign in ↗](https://pr123-ccccccc-os.iterate-dev-preview.workers.dev/.auth/test-link?t=os) | [Cloudflare dashboard](https://dash.cloudflare.com/a/os) |
-    | [dash](https://pr123-ccccccc-dash.iterate-dev-preview.workers.dev) | [Sign in ↗](https://pr123-ccccccc-os.iterate-dev-preview.workers.dev/.auth/test-link?t=dash) | [Cloudflare dashboard](https://dash.cloudflare.com/a/dash) |
+    | [os](https://pr123-ccccccc-os.iterate-dev-preview.workers.dev) | [Sign in ↗](https://pr123-ccccccc-dash.iterate-dev-preview.workers.dev/.auth/login?next=os) | [Cloudflare dashboard](https://dash.cloudflare.com/a/os) |
+    | [dash](https://pr123-ccccccc-dash.iterate-dev-preview.workers.dev) | [Sign in ↗](https://pr123-ccccccc-dash.iterate-dev-preview.workers.dev/.auth/login?next=dash) | [Cloudflare dashboard](https://dash.cloudflare.com/a/dash) |
 
-    New project from template: [default at this PR's \`bbbbbbbbb\` ↗](https://pr123-ccccccc-os.iterate-dev-preview.workers.dev/.auth/test-link?t=default) · [with-agents ↗](https://pr123-ccccccc-os.iterate-dev-preview.workers.dev/.auth/test-link?t=with-agents)"
+    New project from template: [default at this PR's \`bbbbbbbbb\` ↗](https://pr123-ccccccc-dash.iterate-dev-preview.workers.dev/.auth/login?next=default) · [with-agents ↗](https://pr123-ccccccc-dash.iterate-dev-preview.workers.dev/.auth/login?next=with-agents)"
   `);
 });
 
-test("the PR body's managed section: says so when CI's seed of the test project failed, since the links then ask for consent", () => {
+test("the PR body's managed section: says so when CI's seed of the test project failed, since there is then nobody to sign in as", () => {
   expect(
     renderPullRequestSection({
       deployment: "pr123-ccccccc",
@@ -143,7 +145,9 @@ test("the PR body's managed section: says so when CI's seed of the test project 
       templates: [],
       seed: { project: "pr123", seeded: false },
     }),
-  ).toContain("Seeding `pr123` failed (the deploy log says why): the links ask for consent.");
+  ).toContain(
+    "Seeding `pr123` failed (the deploy log says why): there is nobody to sign in as yet.",
+  );
   expect(section).not.toContain("Seeding");
 });
 
@@ -181,10 +185,10 @@ test("a new deploy folds the previous commit's section, keeping the author's tex
 
     | apps | | |
     | --- | --- | --- |
-    | [os](https://pr123-ccccccc-os.iterate-dev-preview.workers.dev) | [Sign in ↗](https://pr123-ccccccc-os.iterate-dev-preview.workers.dev/.auth/test-link?t=os) | [Cloudflare dashboard](https://dash.cloudflare.com/a/os) |
-    | [dash](https://pr123-ccccccc-dash.iterate-dev-preview.workers.dev) | [Sign in ↗](https://pr123-ccccccc-os.iterate-dev-preview.workers.dev/.auth/test-link?t=dash) | [Cloudflare dashboard](https://dash.cloudflare.com/a/dash) |
+    | [os](https://pr123-ccccccc-os.iterate-dev-preview.workers.dev) | [Sign in ↗](https://pr123-ccccccc-dash.iterate-dev-preview.workers.dev/.auth/login?next=os) | [Cloudflare dashboard](https://dash.cloudflare.com/a/os) |
+    | [dash](https://pr123-ccccccc-dash.iterate-dev-preview.workers.dev) | [Sign in ↗](https://pr123-ccccccc-dash.iterate-dev-preview.workers.dev/.auth/login?next=dash) | [Cloudflare dashboard](https://dash.cloudflare.com/a/dash) |
 
-    New project from template: [default at this PR's \`bbbbbbbbb\` ↗](https://pr123-ccccccc-os.iterate-dev-preview.workers.dev/.auth/test-link?t=default) · [with-agents ↗](https://pr123-ccccccc-os.iterate-dev-preview.workers.dev/.auth/test-link?t=with-agents)
+    New project from template: [default at this PR's \`bbbbbbbbb\` ↗](https://pr123-ccccccc-dash.iterate-dev-preview.workers.dev/.auth/login?next=default) · [with-agents ↗](https://pr123-ccccccc-dash.iterate-dev-preview.workers.dev/.auth/login?next=with-agents)
 
     </details>
     <!-- os-preview:end -->
@@ -205,6 +209,67 @@ test("a new deploy folds a section written before per-commit deployments too, an
 });
 
 // ── template quick-launch links: the Dash's New project sheet, one click ──
+
+test("the PR body write: one read, one PATCH, one read back, and nothing waits", async () => {
+  const pr = fakePullRequest("Intro.");
+  await writePullRequestBody(pr, "the preview section", withSection);
+  expect(pr).toMatchObject({ events: ["read", "replace", "read"] });
+  expect(pr.body()).toBe(withSection("Intro."));
+  // a body that already carries it is not written again
+  await writePullRequestBody(pr, "the preview section", withSection);
+  expect(pr.events.slice(3)).toEqual(["read"]);
+});
+
+test("the PR body write: a person's edit saved over it is kept, and the section re-spliced onto it", async () => {
+  const pr = fakePullRequest("Intro.", { edits: ["Intro, edited."] });
+  await writePullRequestBody(pr, "the preview section", withSection);
+  expect(pr).toMatchObject({ events: ["read", "replace", "read", "read", "replace", "read"] });
+  expect(pr.body()).toBe(withSection("Intro, edited."));
+});
+
+test("the PR body write: a PATCH that failed is not sent again from the old read; the next round reads anew", async () => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  onTestFinished(() => void vi.useRealTimers());
+  const pr = fakePullRequest("Intro.", { failures: 1 });
+  const written = writePullRequestBody(pr, "the preview section", withSection);
+  // the next round waits 5 s before it reads
+  await vi.advanceTimersByTimeAsync(4_999);
+  expect(pr).toMatchObject({ events: ["read", "replace"] });
+  await vi.advanceTimersByTimeAsync(1);
+  await written;
+  expect(pr).toMatchObject({ events: ["read", "replace", "read", "replace", "read"] });
+  expect(pr.body()).toBe(withSection("Intro."));
+  // a failure whose write had landed: the next round finds it, and writes nothing
+  const landed = fakePullRequest("Intro.", { failures: 1, failuresLand: true });
+  const found = writePullRequestBody(landed, "the preview section", withSection);
+  await vi.advanceTimersByTimeAsync(5_000);
+  await found;
+  expect(landed).toMatchObject({ events: ["read", "replace", "read"] });
+  expect(landed.body()).toBe(withSection("Intro."));
+});
+
+test("the PR body write gives up after three rounds of other writes over it", async () => {
+  const pr = fakePullRequest("Intro.", { edits: ["Intro.", "Intro.", "Intro."] });
+  await expect(writePullRequestBody(pr, "the preview section", withSection)).rejects.toThrow(
+    "could not write the preview section into PR #123's body in three rounds",
+  );
+  expect(pr.events.filter((event) => event === "replace")).toHaveLength(3);
+});
+
+test("a `Sign in ↗` link is the app's own sign-in, landing where the link lands and naming whom the consent page pre-fills; the admin app's names nobody", () => {
+  const link = appSignInLink(
+    `${DASH}/projects?new=1&template=with-agents`,
+    "pr123@preview.iterate.test",
+  );
+  expect(link.startsWith(`${DASH}/.auth/login?`)).toBe(true);
+  expect(Object.fromEntries(new URL(link).searchParams)).toEqual({
+    next: "/projects?new=1&template=with-agents",
+    login_hint: "pr123@preview.iterate.test",
+  });
+  expect(appSignInLink("https://pr123-ccccccc-admin.iterate-dev-preview.workers.dev")).toBe(
+    "https://pr123-ccccccc-admin.iterate-dev-preview.workers.dev/.auth/login?next=%2F",
+  );
+});
 
 test("every configs/ directory is a config template", () => {
   expect(configTemplateNames(path.resolve(import.meta.dirname, "../../.."))).toEqual(
@@ -281,15 +346,19 @@ test("a deployment's apps/os config: its own worker, KV binding-only for wrangle
   ]);
 });
 
-test("a deployment's apps/os config: vars are its own origin, its dash, projects as paths, the one-click sign-in links on behind prd's *@nustom.com check, one test admin, and the pet shop's fakes as iterate's integrations, which people sign in with too", () => {
+test("a deployment's apps/os config: vars are its own origin, its dash, projects as paths, prd's admins signing in through prd beside one test admin, and the pet shop's fakes as iterate's integrations, which test people sign in with too", () => {
   expect(viteWranglerConfig("pr3144-a1b2c3d", { localDev: false, port: "0" })).toMatchObject({
     vars: {
       APP_CONFIG_URLS__OS: "https://pr3144-a1b2c3d-os.iterate-dev-preview.workers.dev",
       APP_CONFIG_URLS__DASH: "https://pr3144-a1b2c3d-dash.iterate-dev-preview.workers.dev",
       APP_CONFIG_URLS__INGRESS_ROUTING: JSON.stringify({ type: "paths" }),
-      APP_CONFIG_LOGIN__TEST_LINK__EMAIL_DOMAIN: "preview.iterate.test",
-      APP_CONFIG_LOGIN__TEST_LINK__ADMINS__ISSUER: "https://os.iterate.com",
-      APP_CONFIG_LOGIN__TEST_LINK__ADMINS__EMAILS: "*@nustom.com",
+      APP_CONFIG_ADMINS: JSON.stringify([
+        "jonas@nustom.com",
+        "misha@nustom.com",
+        "admin@preview.iterate.test",
+      ]),
+      APP_CONFIG_LOGIN__ADMIN_ISSUER: "https://os.iterate.com",
+      APP_CONFIG_LOGIN__TEST_EMAIL_DOMAIN: "preview.iterate.test",
       APP_CONFIG_INTEGRATIONS__SLACK: JSON.stringify({
         oauthClientId: "petshop-default",
         oauthClientSecret: "petshop-default-secret",
@@ -308,7 +377,6 @@ test("a deployment's apps/os config: vars are its own origin, its dash, projects
       }),
       APP_CONFIG_LOGIN__GOOGLE: "{}",
       APP_CONFIG_LOGIN__GITHUB: "{}",
-      APP_CONFIG_ADMINS: JSON.stringify(["admin@preview.iterate.test"]),
     },
   });
   // the GitHub App carries a key: scripts/deploy.ts ships it as a secret, never a var
@@ -327,13 +395,12 @@ test("a deployment's apps/os config parses as its worker parses it, with the two
     }),
   ).toMatchObject({
     urls: { os: "https://pr3144-a1b2c3d-os.iterate-dev-preview.workers.dev" },
-    login: {
-      testLink: { admins: { issuer: "https://os.iterate.com", emails: ["*@nustom.com"] } },
-    },
+    login: { adminIssuer: "https://os.iterate.com", testEmailDomain: "preview.iterate.test" },
+    admins: ["jonas@nustom.com", "misha@nustom.com", "admin@preview.iterate.test"],
   });
 });
 
-test("an envs.ts deployment's config still names its resources by id, and turns no test links or pet shop fakes on", () => {
+test("an envs.ts deployment's config still names its resources by id, and turns no other issuer, test people or pet shop fakes on", () => {
   const config = viteWranglerConfig("prd", { localDev: false, port: "0" });
   const ids = osEnvs.prd!.resources!;
   expect(config).toMatchObject({
@@ -343,7 +410,8 @@ test("an envs.ts deployment's config still names its resources by id, and turns 
     ],
     d1_databases: [{ database_name: "os-prd-db", database_id: ids.dbId }],
   });
-  expect(config.vars).not.toHaveProperty("APP_CONFIG_LOGIN__TEST_LINK__EMAIL_DOMAIN");
+  expect(config.vars).not.toHaveProperty("APP_CONFIG_LOGIN__ADMIN_ISSUER");
+  expect(config.vars).not.toHaveProperty("APP_CONFIG_LOGIN__TEST_EMAIL_DOMAIN");
   expect(config.vars).not.toHaveProperty("APP_CONFIG_INTEGRATIONS__SLACK");
   expect(() => viteWranglerConfig("pr3144", { localDev: false, port: "0" })).toThrow(
     'apps/os: unknown env "pr3144"',
@@ -383,8 +451,9 @@ const later = new Date("2026-09-24T00:42:00Z");
 /** A checkout: its lockfile, and node_modules as pnpm leaves it (`.modules.yaml`, and the
  *  lockfile it installed from as `.pnpm/lock.yaml`), each file with its mtime. */
 function freshInstallCheck(input: { lockfile: [string, Date]; installed?: [string, Date] }) {
-  const root = mkdtempSync(path.join(tmpdir(), "preview-fresh-install-"));
-  onTestFinished(() => rmSync(root, { recursive: true, force: true }));
+  const directory = temporaryDirectory();
+  onTestFinished(directory[Symbol.dispose]);
+  const root = directory.path;
   writeFileSync(path.join(root, "pnpm-lock.yaml"), input.lockfile[0]);
   utimesSync(path.join(root, "pnpm-lock.yaml"), input.lockfile[1], input.lockfile[1]);
   if (input.installed) {
@@ -395,4 +464,37 @@ function freshInstallCheck(input: { lockfile: [string, Date]; installed?: [strin
     }
   }
   return () => assertFreshInstall(root);
+}
+
+/** A PR body on a fake GitHub: `edits` are other writers' bodies, one landing after each of our
+ *  PATCHes (a person saving the description, read before ours), and the first `failures` PATCHes
+ *  fail, having written the body when `failuresLand` (GitHub failed its answer, not its write). */
+function fakePullRequest(
+  body: string,
+  options: { edits?: string[]; failures?: number; failuresLand?: boolean } = {},
+) {
+  const edits = [...(options.edits || [])];
+  let failures = options.failures || 0;
+  const events: string[] = [];
+  return {
+    events,
+    body: () => body,
+    number: "123",
+    read: async () => {
+      events.push("read");
+      return body;
+    },
+    replace: async (next: string) => {
+      events.push("replace");
+      if (failures-- > 0) {
+        if (options.failuresLand) body = next;
+        throw new Error("HttpError: 502");
+      }
+      body = edits.shift() || next;
+    },
+  };
+}
+
+function withSection(body: string) {
+  return splicePullRequestBody(body, section);
 }

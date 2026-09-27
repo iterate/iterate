@@ -61,7 +61,7 @@ const subdomainRows: { url: string; names: ProjectAddress | null; why: string }[
   },
   { url: "https://site..iterate.app/", names: null, why: "a present-but-empty project label" },
 ];
-test.each(subdomainRows)("$url → $why", ({ url, names }) => {
+test.for(subdomainRows)("$url → $why", ({ url, names }) => {
   expect(projectAddressOf(subdomains, new URL(url), PRD)).toEqual(names);
 });
 
@@ -98,7 +98,7 @@ const pathRows: { url: string; names: ProjectAddress | null; why: string }[] = [
   { url: `${PRD}/projects`, names: null, why: "the prefix alone" },
   { url: `${PRD}/projects/`, names: null, why: "the prefix alone, trailing slash" },
 ];
-test.each(pathRows)("$url → $why", ({ url, names }) => {
+test.for(pathRows)("$url → $why", ({ url, names }) => {
   expect(projectAddressOf(paths, new URL(url), PRD)).toEqual(names);
 });
 
@@ -226,7 +226,7 @@ const urlRows: {
     why: "nor out of its project",
   },
 ];
-test.each(urlRows)("$why", ({ routing, origin, target, url }) => {
+test.for(urlRows)("$why", ({ routing, origin, target, url }) => {
   expect(projectUrlOf(routing, origin, target)?.href ?? null).toBe(url);
 });
 
@@ -261,7 +261,7 @@ const wildcard = {
     "install.iterate.com",
   ],
 };
-test.each([
+test.for([
   { hostname: "iterate.com", project: "iterate" },
   { hostname: "Iterate.COM.", project: "iterate" },
   { hostname: "www.iterate.com", project: "iterate" },
@@ -279,7 +279,7 @@ test("no project wildcard names no project", () => {
 });
 
 // ── customHostnameCandidatesOf ── a project's own hostname is its apex; one label under it, a routing slug
-test.each([
+test.for([
   {
     host: "iterate.somedomain.com",
     candidates: [
@@ -318,7 +318,7 @@ test.each([
 });
 
 // ── primaryHostnameUrlOf ── a routing slug is one label under the primary hostname; the apex is the hostname
-test.each([
+test.for([
   { target: {}, url: "https://templestein.com/" },
   { target: { routingSlug: null, path: "/a?b=1" }, url: "https://templestein.com/a?b=1" },
   { target: { routingSlug: "here-public" }, url: "https://here-public.templestein.com/" },
@@ -349,7 +349,7 @@ test("a primary hostname URL parses back to its routing slug as a custom hostnam
 });
 
 // ── projectPublicUrlOf ── `itx.url` and `whoami().projectUrl`: the primary hostname when there is one, else the ingress
-test.each([
+test.for([
   {
     primaryHostname: null,
     routing: subdomains,

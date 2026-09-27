@@ -148,7 +148,9 @@ const safeLifecycle =
       return LIFECYCLE_HOOKS.every(
         (hook) =>
           !scripts[hook] ||
-          (file === "package.json" && hook === "prepare" && scripts[hook] === "is-ci || husky"),
+          (file === "package.json" &&
+            hook === "prepare" &&
+            scripts[hook] === "is-ci || (husky && node scripts/lockfile-stamp.ts)"),
       );
     });
 

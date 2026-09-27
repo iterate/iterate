@@ -10,6 +10,7 @@ The Iterate context platform runs at **https://os.iterate.com**. `apps/os` owns 
 | `apps/notes`             | Notes client                                                    |
 | `apps/voice`             | Voice client                                                    |
 | `apps/kit`               | Device installer and firmware using the platform                |
+| `apps/admin`             | Every project and person, and a raw context explorer            |
 | `apps/spa`               | Static SPA archetype; also hosts the browser extension download |
 | `apps/browser-extension` | Chrome side panel that lends a browser to a project             |
 | `apps/dummy-petshop`     | Deployed OAuth/API fixture that the OS e2e tests use            |
@@ -18,6 +19,7 @@ The Iterate context platform runs at **https://os.iterate.com**. `apps/os` owns 
 | `packages/cli`           | The `iterate` CLI and the macOS menu bar (`@iterate-com/cli`)   |
 | `packages/agents`        | The agents app a project installs (`@iterate-com/agents`)       |
 | `packages/voice`         | Voice on the agents app, installed too (`@iterate-com/voice`)   |
+| `packages/petshop-sdk`   | The dummy petshop's SDK, shaped like a vendor's                 |
 | `packages/ui`            | Components used by the apps                                     |
 | `packages/shared`        | Shared configuration, events, and test telemetry                |
 | `configs`                | Config repository templates copied into new projects            |
@@ -33,6 +35,6 @@ pnpm test
 pnpm spec
 ```
 
-`pnpm dev` starts the platform locally, attached to the terminal. `pnpm dev start --detach` runs it in the background instead (`pnpm dev status`, `attach`, `kill`, `restart`), on this worktree's last port, else 8788, else a free one. `pnpm getin` opens a browser signed in to it as `test@preview.iterate.test` in project `test`, starting the server and creating the project when missing; `pnpm -s getin --print` prints the link for Playwright and agents. With a local Dash up (`APP_CONFIG_URLS__OS` pointed at the platform, see [apps/dash](apps/dash/README.md)), it lands in the Dash's project page. `pnpm os <script>` runs an `apps/os` script, such as `pnpm os test:watch`. Run a client with `pnpm --dir apps/<name> dev`; its issuer configuration must point to the platform under test. See [platform configuration and development](apps/os/README.md), [self-hosting](apps/os/SELF-HOSTING.md), and [testing](docs/testing.md).
+`pnpm dev` starts the platform locally, attached to the terminal. `pnpm dev start --detach` runs it in the background instead (`pnpm dev status`, `attach`, `kill`, `restart`), on this worktree's last port, else 8788, else a free one. `pnpm getin` opens a browser signed in as `test@preview.iterate.test` on project `test`, starting the server and creating the person and project when missing: the local Dash's project page when a Dash wired to this server is up (`APP_CONFIG_URLS__OS` pointed at the platform, see [apps/dash](apps/dash/README.md)), else the platform's `/login`. `pnpm -s getin --print` prints that sign-in URL alone, for Playwright and agents. `pnpm os <script>` runs an `apps/os` script, such as `pnpm os test:watch`. Run a client with `pnpm --dir apps/<name> dev`; its issuer configuration must point to the platform under test. See [platform configuration and development](apps/os/README.md), [self-hosting](apps/os/SELF-HOSTING.md), and [testing](docs/testing.md).
 
 `envs.ts` owns deployment names, URLs, and resource IDs. Doppler supplies secrets; `doppler.yaml` maps directories to projects. Deploy and resource commands live in each app. The Preview OS workflow runs per-PR previews through `pnpm preview`.

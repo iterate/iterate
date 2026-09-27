@@ -3,10 +3,17 @@
 // `account` state on `/users/<id>` (account/contract.ts). Both depend on this catalog, so the row and
 // the facts are one type. Only the platform appends these (`source.platform`): a connect's callback,
 // a disconnect, and a sign-in that keeps its token (identity.ts).
+import { INTEGRATION_PROVIDERS } from "iterate/api";
 import { z } from "zod";
 
-export const IntegrationProvider = z.enum(["slack", "google", "cloudflare", "github", "waitrose"]);
+/** The published provider list (iterate/api `INTEGRATION_PROVIDERS`) and its kinds, parsed. */
+export const IntegrationProvider = z.enum(INTEGRATION_PROVIDERS);
 export type IntegrationProvider = z.infer<typeof IntegrationProvider>;
+/** iterate/api `IterateAppProvider`: Waitrose connects with a username and password, no app. */
+export const IterateAppProvider = IntegrationProvider.exclude(["waitrose"]);
+/** iterate/api `OAuthIntegrationProvider`, whose callback is
+ *  `/api/integrations/<provider>/callback`: GitHub's connect is its App's install. */
+export const OAUTH_INTEGRATION_PROVIDERS = IterateAppProvider.exclude(["github"]).options;
 
 /** One connection, as its owner's root records it, by the connection's log path
  *  (`/integrations/<provider>/<connection>`). */
@@ -16,7 +23,7 @@ export const IntegrationConnectionRow = z.object({
    *  log `/integrations/<provider>/<connection>`. A person's connection is named by the account's
    *  stable id at the provider, never its email. */
   connection: z.string().min(1),
-  /** Whose app: iterate's (the deployment's) or the project's own. */
+  /** Which OAuth app the token was issued to: iterate's (the deployment's) or the project's own. */
   client: z.enum(["iterate", "project"]),
   /** What the provider calls the account: a Slack workspace's name, a Google or Cloudflare address,
    *  a GitHub login, a Waitrose username. */
@@ -24,8 +31,15 @@ export const IntegrationConnectionRow = z.object({
   /** Its id there: the Slack team, the Google or Cloudflare user, the GitHub installation (a
    *  project's) or user (a person's). */
   externalId: z.string().min(1),
-  /** The scopes the provider says it granted, where it says (Google, Cloudflare). */
+  /** The scopes granted, where the provider has them (Google, Cloudflare): what the token response
+   *  of the sign-in or the connect says was granted (rules.ts `grantedScopesOf`), never what was
+   *  asked for unless the response names none. */
   scopes: z.array(z.string()).optional(),
+  /** WHOSE ACCOUNT, on a project: a member's own (their connection on `/users/<id>`, from signing in
+   *  or connecting it there), which the project uses while it stays connected and they stay a
+   *  member — absent for the project's own. Their address, as their sign-in verified it. */
+  ownerUserId: z.string().min(1).optional(),
+  ownerEmail: z.string().optional(),
 });
 export type IntegrationConnectionRow = z.infer<typeof IntegrationConnectionRow>;
 
@@ -35,8 +49,14 @@ const connected = (description: string) => ({
 });
 const disconnected = {
   description:
-    "The connection was disconnected: its token revoked where the provider allows, its route and secret gone.",
-  payloadSchema: z.object({ connection: z.string().min(1) }),
+    "The connection was disconnected: the project's own had its token revoked where the provider allows, its route and secret gone; a member's account stopped being used by the project, and stays theirs.",
+  payloadSchema: z.object({
+    connection: z.string().min(1),
+    /** Not the owner's own choice: the account (a Slack workspace, a GitHub installation) moved to
+     *  another project. It stays on the project's log; the list of connections drops the row all
+     *  the same. */
+    reason: z.enum(["moved"]).optional(),
+  }),
 };
 
 /** The facts, a catalog the owners' contracts depend on (`processorDeps`). */

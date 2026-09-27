@@ -19,7 +19,9 @@
   "dependencies": {
     "@base-ui/react": "^1.8.0",
     "@codemirror/autocomplete": "^6.20.3",
+    "@codemirror/lang-javascript": "^6.2.5",
     "@codemirror/lang-json": "catalog:",
+    "@codemirror/lang-markdown": "^6.5.2",
     "@codemirror/lang-yaml": "catalog:",
     "@codemirror/language": "catalog:",
     "@codemirror/search": "catalog:",

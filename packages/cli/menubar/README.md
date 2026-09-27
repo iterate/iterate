@@ -19,8 +19,7 @@ provision. A disconnected share must be enabled again explicitly.
 
 Approval source, signing helpers and UI are retained for a future platform
 implementation. They are dormant: no approval watcher or notification permission
-request starts, and the CLI exposes no `approve` command. The TypeScript approval
-modules still target legacy OS and are not included in the active CLI bundle.
+request starts, and the CLI exposes no `approve` command.
 
 Build manually with `./build-menubar-app.sh`; the icon is drawn from vector
 paths in `IterateIcon.swift`. The launcher normally configures everything, but

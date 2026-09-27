@@ -3,17 +3,16 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { promisify } from "node:util";
+import { z } from "zod";
 
-import {
-  PLATFORM_FAILURE_DELAYS_MS,
-  retryPlatformFailures,
-} from "@iterate-com/shared/platform-retry";
+import { CI_HTTP, fetchRetryingPlatformFailures } from "@iterate-com/shared/platform-retry";
 
 /** Iterate's Depot organization, which runs every workflow in .depot/workflows (docs/depot-ci.md). */
 export const DEPOT_ORG = "0p91s0lz49";
 
 /** `operation` over `inputs`, at most `concurrency` at a time, outputs in input order: how the
- *  telemetry sync fans out its per-run Depot calls, and the flake dashboard its R2 reads. */
+ *  telemetry sync and PR time to green fan out their per-run Depot calls, and the flake dashboard
+ *  its R2 reads. */
 export async function mapConcurrent<Input, Output>(
   inputs: Input[],
   concurrency: number,
@@ -38,23 +37,24 @@ export async function mapConcurrent<Input, Output>(
  * their fields are in https://github.com/depot/cli/blob/main/proto/depot/ci/v1/ci.proto (JSON uses
  * the camelCase field names). `token` is an organization API token (`DEPOT_CI_TELEMETRY_TOKEN`).
  *
- * A read (`Get…`, `List…`, the only methods CI calls) that Depot answers with a 5xx, or whose
- * connection fails, is asked again after each of `delaysMs`, with a `depot.platform-failure-retry`
- * warn per repeat (`retryPlatformFailures`). A 4xx is an answer about the request and fails at
- * once, as does any other method (Connect sends every call as a POST, so only the name says it
- * changes nothing). A single 500 on GetJobAttemptLogs is enough to fail a trace job without the
- * repeat.
+ * A read (`Get…`, `List…`, the only methods CI calls) that Depot answers with a 5xx or a 429, or
+ * whose connection fails, is asked again on CI_HTTP's schedule, with a
+ * `depot.platform-failure-retry` warn per repeat (`fetchRetryingPlatformFailures`). Any other 4xx
+ * is an answer about the request and fails at once, as does any other method (Connect sends every
+ * call as a POST, so only the name says it changes nothing). A single 500 on GetJobAttemptLogs is
+ * enough to fail a trace job without the repeat.
  */
 export async function depotCiApi(
   method: string,
   body: object,
   token: string,
-  options: { fetch?: typeof fetch; delaysMs?: readonly number[] } = {},
+  options: { fetch?: typeof fetch } = {},
 ): Promise<unknown> {
-  const { fetch: fetchImpl = fetch, delaysMs = PLATFORM_FAILURE_DELAYS_MS } = options;
-  return retryPlatformFailures(
-    async () => {
-      const response = await fetchImpl(`https://api.depot.dev/depot.ci.v1.CIService/${method}`, {
+  const { fetch: fetchImpl = fetch } = options;
+  const response = await fetchRetryingPlatformFailures(
+    `Depot ${method}`,
+    (signal) =>
+      fetchImpl(`https://api.depot.dev/depot.ci.v1.CIService/${method}`, {
         method: "POST",
         headers: {
           authorization: `Bearer ${token}`,
@@ -62,27 +62,98 @@ export async function depotCiApi(
           "x-depot-org": DEPOT_ORG,
         },
         body: JSON.stringify(body),
-        signal: AbortSignal.timeout(30_000),
-      });
-      if (response.ok) return await response.json();
-      await response.body?.cancel();
-      throw Object.assign(new Error(`Depot ${method} returned HTTP ${response.status}`), {
-        status: response.status,
-      });
-    },
+        signal,
+      }),
     {
-      event: "depot.platform-failure-retry",
-      delaysMs: /^(Get|List)[A-Z]/.test(method) ? delaysMs : [],
-      platformFailure: (error) => {
-        // fetch rejects with a TypeError when the connection fails; a timeout or an abort is not
-        // Depot's answer and is thrown as it is.
-        if (error instanceof TypeError)
-          return { method, status: "network", message: error.message };
-        const { status = 0, message } = error as { status?: number; message?: string };
-        return status >= 500 ? { method, status, message } : undefined;
-      },
+      area: "depot",
+      schedule: CI_HTTP,
+      idempotent: /^(Get|List)[A-Z]/.test(method),
     },
   );
+  if (response.ok) return response.json();
+  throw new Error(`Depot ${method} answered HTTP ${response.status}: ${await response.text()}`);
+}
+
+/** A workflow's page on Depot. */
+export function depotWorkflowUrl(workflowId: string) {
+  return `https://depot.dev/orgs/${DEPOT_ORG}/workflows/${workflowId}`;
+}
+
+/** One Depot CI API call with the organization token bound: `depotCiApi` as the monitors take it. */
+export type DepotApi = (method: string, body: object) => Promise<unknown>;
+
+// Connect's JSON encoding omits empty strings and lists, so an unset field is absent rather than "":
+// https://protobuf.dev/programming-guides/json/ ("default values are omitted").
+const ListedWorkflows = z.object({
+  workflows: z
+    .array(
+      z.object({
+        workflowId: z.string(),
+        runId: z.string(),
+        status: z.string(),
+        trigger: z.string().default(""),
+        sha: z.string().default(""),
+        createdAt: z.iso.datetime(),
+      }),
+    )
+    .default([]),
+});
+export type SettledWorkflow = z.infer<typeof ListedWorkflows>["workflows"][number];
+
+/**
+ * The workflows named `name` (its `name:`) that one of `triggers` started and that settled, finished
+ * or failed, created after `after`, oldest first. A cancelled one is left out: Depot cancels a
+ * queued push that a newer one replaced, and a person cancels by hand. It reads the newest 50 of the
+ * name, dispatches included: ListWorkflows has no paging
+ * (https://github.com/depot/cli/blob/main/proto/depot/ci/v1/ci.proto).
+ */
+export async function settledWorkflows(
+  depot: DepotApi,
+  input: { name: string; triggers: string[]; after?: string },
+) {
+  const { workflows } = ListedWorkflows.parse(
+    await depot("ListWorkflows", {
+      repo: "iterate/iterate",
+      name: input.name,
+      status: ["finished", "failed"],
+      pageSize: 50,
+    }),
+  );
+  return workflows
+    .filter(
+      (workflow) =>
+        input.triggers.includes(workflow.trigger) &&
+        (!input.after || workflow.createdAt > input.after),
+    )
+    .toSorted((a, b) => a.createdAt.localeCompare(b.createdAt));
+}
+
+const ArtifactPage = z.object({
+  artifacts: z
+    .array(z.object({ artifactId: z.string(), name: z.string(), createdAt: z.iso.datetime() }))
+    .default([]),
+});
+
+/** The files of the first artifact `workflow` uploaded whose name `name` matches, by path, or
+ *  undefined when it uploaded none. One page: a workflow uploads about eight per execution. */
+export async function workflowArtifact(
+  depot: DepotApi,
+  workflow: { runId: string; workflowId: string },
+  name: (artifactName: string) => boolean,
+) {
+  const { artifacts } = ArtifactPage.parse(
+    await depot("ListArtifacts", { ...workflow, pageSize: 500 }),
+  );
+  const artifact = artifacts
+    .filter((candidate) => name(candidate.name))
+    .toSorted((a, b) => a.createdAt.localeCompare(b.createdAt))[0];
+  if (!artifact) return undefined;
+  const { url } = z
+    .object({ url: z.url() })
+    .parse(await depot("GetArtifactDownloadURL", { artifactId: artifact.artifactId }));
+  const response = await fetch(url, { signal: AbortSignal.timeout(60_000) });
+  if (!response.ok) throw new Error(`${artifact.name} download returned HTTP ${response.status}`);
+  return unzip(new Uint8Array(await response.arrayBuffer()));
 }
 
 /** The Depot CLI (`depot <args> --org <iterate>`). CI passes the organization token as DEPOT_TOKEN
@@ -100,10 +171,12 @@ async function depotCliJson<T>(args: string[]): Promise<T> {
 }
 
 /**
- * `file` inside the newest `artifact` a finished or failed run of `workflow` (its `name:`) uploaded,
- * as text — how a scheduled job hands its state to its next run (the latency guard's baseline) —
- * or undefined when none of its last 20 runs kept one. A failed run
- * counts: a job that keeps its state before it fails still handed it on.
+ * `file` inside the newest `artifact` a running, finished or failed run of `workflow` (its `name:`)
+ * uploaded, as text — how a job hands its state to its next run (the health job's memory) — or
+ * undefined when none of its last 20 runs kept one. A failed run counts: a job that keeps its state
+ * before it fails still handed it on. A running one counts too: a state it kept is its first
+ * execution's, so a re-run's job reads that instead of the state of the run before it, and judges
+ * nothing twice (the workflows that keep state run one at a time).
  */
 async function newestArtifactFile(input: {
   repository: string;
@@ -119,6 +192,8 @@ async function newestArtifactFile(input: {
     input.repository,
     "--name",
     input.workflow,
+    "--status",
+    "running",
     "--status",
     "finished",
     "--status",
@@ -149,7 +224,7 @@ async function newestArtifactFile(input: {
   return undefined;
 }
 
-/** newestArtifactFile's text in this repository, written to `out`: a scheduled guard's
+/** newestArtifactFile's text in this repository, written to `out`: a scheduled job's
  *  `previous-state` step, which hands its last run's state to this one. Nothing is written when none
  *  of the last 20 runs kept one. What it did, for the log. */
 export async function saveNewestArtifactFile(input: {
@@ -176,7 +251,7 @@ export async function saveNewestArtifactFile(input: {
  * descriptors don't matter). No zip64 — impossible under the size cap — and
  * anything unexpected throws, which ingestion treats as a logged drop.
  */
-export async function unzip(bytes: Uint8Array): Promise<Record<string, Uint8Array>> {
+async function unzip(bytes: Uint8Array): Promise<Record<string, Uint8Array>> {
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   // The end-of-central-directory record sits at the tail, behind an optional
   // comment (max 64KB): scan backwards for its signature.

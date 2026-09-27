@@ -18,7 +18,11 @@ Publish [config-worker.ts](config-worker.ts) as the project's config worker
 (`itx/ingress-configured` with `["itx", "workers", ["get", { source }]]`): every host of the
 project reaches its `fetch`, and it serves only the `notes` routing slug (`x-iterate-routing-slug`),
 so `notes--<project>.iterate.app` reaches Notes (see
-[specs/notes/sessions.spec.ts](../../specs/notes/sessions.spec.ts)).
+[specs/notes/sessions.spec.ts](../../specs/notes/sessions.spec.ts)). Under paths ingress (every
+preview) it is `<platform>/projects/<project>/notes/`: the edge strips that base path and says it in
+`x-iterate-base-path`, and Notes puts it back on every path the browser addresses — links, assets,
+server functions — while the router drops it ([src/base-path.ts](src/base-path.ts)). The page's
+`/.auth/*` and `/api` stay root paths: they are its host's, the platform's own under paths.
 
 The project host stamps `x-itx-principal` only for a project member, so the guard is one check.
 Signed out, `auth.require` answers `401` with the platform's challenge, and the edge turns a page
@@ -36,6 +40,23 @@ if (!request.headers.get("x-itx-principal"))
 Local dev: `pnpm dev` (Vite, with the Cloudflare plugin's local workerd). It talks to
 `https://os.iterate.com` by default; to use a local OS (`pnpm --dir ../os dev -- --port 8788`)
 put `APP_CONFIG_URLS__OS=http://localhost:8788` in a gitignored `.dev.vars` here.
+
+Dev server behind a tunnel, hot module reloading included: under paths ingress (a preview) a
+tunnel's URL is `<platform>/projects/<project>/<name>/`, so the dev server starts under that base
+path, then the tunnel lends it to the project
+([packages/cli](../../packages/cli/README.md#tunnel)):
+
+```sh
+pnpm dev --port 5173 --base /projects/my-project/notes-dev/
+iterate tunnel 5173 --project my-project --name notes-dev
+```
+
+Vite puts its module URLs and its HMR socket under the base path, and Notes swaps the page's base
+path in for the build's ([src/base-path.ts](src/base-path.ts)). The page runs on the platform's
+sign-in, as the proxied Notes does. Under subdomains the tunnel's host is an origin of its own, and
+plain `pnpm dev` serves it. The local OS's `pnpm dev` does not forward the HMR socket: its
+Cloudflare Vite plugin drops every `vite-*` WebSocket it does not serve itself. A deployed or built
+OS does.
 
 Deploy: `pnpm --dir apps/notes run deploy --env prd` — after the platform it talks to
 (`os.iterate.com`, which follows `main`) carries `itx.repos` and

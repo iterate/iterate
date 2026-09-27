@@ -6,12 +6,12 @@
 // Deployed only: the shop fires the webhooks, and it cannot reach a local worker.
 import { createPublicKey } from "node:crypto";
 import { Octokit } from "@octokit/rest";
-import { RpcTarget } from "capnweb";
 import { WebClient } from "@slack/web-api";
 import { expect } from "vitest";
 import { PREVIEW_GITHUB_APP, previewGithubAppPrivateKey } from "../scripts/preview-github-app.ts";
 import { PREVIEW_SLACK_APP } from "../scripts/preview-slack-app.ts";
 import { readAll, until, workerUrl } from "./support/client.ts";
+import { FakeAi } from "./support/fake-ai.ts";
 import { SOURCES } from "./support/sources.ts";
 import {
   connectThroughProvider,
@@ -167,6 +167,64 @@ deployedOnly(
 );
 
 deployedOnly(
+  "GitHub: an installation another project holds is offered to the person who administers it, and one confirmation moves its webhooks here and disconnects the other project's connection",
+  async ({ skip }) => {
+    const { itx: holder, installation } = await githubConnected("github-holder");
+    if (!installation) return skip("this deployment's GitHub App is not the pet shop's fake");
+    const { itx: mover, memberBearer } = await projectWithMember("github-mover");
+    const { authorizationUrl } = await mover.facets.get("project").connectIntegration({
+      provider: "github",
+      connection: "acme",
+      client: "iterate",
+      next: workerUrl("/"),
+    });
+    // the same admin installs for the second project: the fake's page sends them straight back
+    const page = new URL(authorizationUrl);
+    page.searchParams.set("installation_id", installation.installationId);
+    page.searchParams.set("login", installation.adminLogin);
+    const github = await fetch(page, { redirect: "manual" });
+    expect(github, await github.clone().text()).toMatchObject({ status: 302 });
+    const back = await fetch(github.headers.get("location")!, {
+      redirect: "manual",
+      headers: { authorization: `Bearer ${memberBearer}` },
+    });
+    expect(back, await back.clone().text()).toMatchObject({ status: 303 });
+    const offer = new URL(back.headers.get("location")!).searchParams.get("move");
+    expect(offer).toEqual(expect.any(String));
+    expect(await integrationRows(holder)).toMatchObject({
+      "/integrations/github/acme": { externalId: installation.installationId },
+    });
+    await mover.facets.get("project").confirmIntegrationMove({ offer });
+    await until(
+      "the installation moved",
+      async () =>
+        Object.keys(await integrationRows(holder)).length === 0 &&
+        Object.keys(await integrationRows(mover)).length === 1,
+    );
+    expect(await integrationRows(mover)).toMatchObject({
+      "/integrations/github/acme": { externalId: installation.installationId },
+    });
+    const deliveryId = crypto.randomUUID();
+    expect(
+      await petshopGithubFireWebhook({
+        installationId: installation.installationId,
+        url: workerUrl("/api/integrations/github/webhook"),
+        event: {
+          ref: "refs/heads/main",
+          installation: { id: Number(installation.installationId) },
+        },
+        deliveryId,
+        eventName: "push",
+      }),
+    ).toMatchObject({ status: 200, body: { ok: true } });
+    expect(await webhooksOn(mover, "/integrations/github/acme", "github")).toMatchObject([
+      { idempotencyKey: `github-webhook:${deliveryId}` },
+    ]);
+    expect(await webhooksOn(holder, "/integrations/github/acme", "github")).toEqual([]);
+  },
+);
+
+deployedOnly(
   "the project's own AI linter, a processor on the GitHub connection's log: one Check Run per pull request commit, through the connection's token and a shadowed itx.ai, none for a pull request from before it was installed, none twice",
   async ({ skip }) => {
     const { itx, installation } = await githubConnected("github-linter");
@@ -210,7 +268,8 @@ deployedOnly(
       type: "events.iterate.com/itx/rewrite-rule-configured",
       payload: { match: "itx.fetch", target: "itx.builtins.cd('/').fetch" },
     });
-    const ai = new VerdictAi({ conclusion: "neutral", summary: "1 finding" });
+    // the model answers with the linter's verdict as its text
+    const ai = new FakeAi([JSON.stringify({ conclusion: "neutral", summary: "1 finding" })]);
     await connection.provide("itx.ai", ai);
     await connection.processors.enable("pr-linter", {
       source: SOURCES.prLinter,
@@ -276,21 +335,6 @@ async function githubConnected(prefix: string) {
     memberBearer,
   );
   return { itx, installation: connected ? installation : null };
-}
-
-/** `itx.ai` shadowed for the linter: Workers AI's answer shape, the verdict as its text; each call
- *  recorded. */
-class VerdictAi extends RpcTarget {
-  readonly calls: { model: string; input: unknown }[] = [];
-  readonly #verdict: object;
-  constructor(verdict: object) {
-    super();
-    this.#verdict = verdict;
-  }
-  run(model: string, input: unknown) {
-    this.calls.push({ model, input });
-    return { response: JSON.stringify(this.#verdict) };
-  }
 }
 
 /** The real Slack SDK, unmodified but for its transport: its token is the placeholder and its

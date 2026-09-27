@@ -62,9 +62,9 @@ export async function startCall(input: {
   const subscription = await call.subscribe({
     name: `web-${activation}`,
     consumes: [
-      "events.iterate.com/voice-agent/spk-frame",
+      "events.iterate.com/voice-agent/speaker-frame",
       "events.iterate.com/voice-agent/conversation-accepted",
-      "events.iterate.com/voice-agent/conversation-ended",
+      "events.iterate.com/voice-agent/call-ended",
       "events.iterate.com/voice-agent/provider-error-reported",
       "events.iterate.com/voice-agent/provider-disconnected",
     ],
@@ -73,7 +73,7 @@ export async function startCall(input: {
         // capnweb hands each row over as a plain JSON value; the shape is the relay's event contract
         const event = raw as { type: string; payload: Record<string, unknown> };
         const p = event.payload;
-        if (event.type === "events.iterate.com/voice-agent/spk-frame") {
+        if (event.type === "events.iterate.com/voice-agent/speaker-frame") {
           if (p.activation !== activation) continue;
           if (p.clearSpeakerBufferBeforeFrame) audio.speaker.clear();
           if (typeof p.pcm === "string" && p.pcm !== "") {
@@ -85,7 +85,7 @@ export async function startCall(input: {
         } else if (event.type === "events.iterate.com/voice-agent/conversation-accepted") {
           stats.handshakeMs = Number(p.handshakeTookMs);
           onFact({ id: factId++, text: `accepted (handshake ${String(p.handshakeTookMs)} ms)` });
-        } else if (event.type === "events.iterate.com/voice-agent/conversation-ended") {
+        } else if (event.type === "events.iterate.com/voice-agent/call-ended") {
           audio.onFrame = null;
           onFact({ id: factId++, text: `ended: ${String(p.reason)}` });
         } else {
@@ -130,7 +130,7 @@ export async function startCall(input: {
       audio.onFrame = null;
       await call
         .append({
-          type: "events.iterate.com/voice-agent/conversation-ended",
+          type: "events.iterate.com/voice-agent/call-ended",
           payload: { activation, reason: "hung up" },
         })
         .catch(() => undefined);

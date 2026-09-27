@@ -1,18 +1,8 @@
 #include "iterate/kit/platforms/esp_idf_websocket_connection.h"
 
+#include <assert.h>
 #include <stdint.h>
-#include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
-
-#define CHECK(condition)                                                     \
-  do {                                                                       \
-    if (!(condition)) {                                                      \
-      fprintf(stderr, "%s:%d: check failed: %s\n",                         \
-              __FILE__, __LINE__, #condition);                              \
-      abort();                                                               \
-    }                                                                        \
-  } while (0)
 
 struct raw_writer {
   uint8_t bytes[32];
@@ -25,7 +15,7 @@ static enum iterate_kit_websocket_tx_raw_write_result raw_write(
     size_t byte_count,
     size_t *bytes_written) {
   struct raw_writer *writer = context;
-  CHECK(byte_count <= sizeof(writer->bytes) - writer->count);
+  assert(byte_count <= sizeof(writer->bytes) - writer->count);
   memcpy(writer->bytes + writer->count, bytes, byte_count);
   writer->count += byte_count;
   *bytes_written = byte_count;
@@ -54,7 +44,7 @@ static void initialize(
     .random = random_bytes,
     .random_context = next_random,
   };
-  CHECK(iterate_kit_websocket_tx_init(tx, &options) == ITERATE_KIT_OK);
+  assert(iterate_kit_websocket_tx_init(tx, &options) == ITERATE_KIT_OK);
 }
 
 static void inbound_silence_queues_once_and_fresh_inbound_defers_it(void) {
@@ -69,23 +59,23 @@ static void inbound_silence_queues_once_and_fresh_inbound_defers_it(void) {
 
   /* Continuous microphone writes must not defer the PING. */
   connection.last_outbound_us = INTERVAL_US + 2;
-  CHECK(iterate_kit_esp_idf_websocket_queue_keepalive(
+  assert(iterate_kit_esp_idf_websocket_queue_keepalive(
       &connection, INTERVAL_US + 2, INTERVAL_US));
-  CHECK(connection.last_probe_us == INTERVAL_US + 2);
-  CHECK(!iterate_kit_esp_idf_websocket_queue_keepalive(
+  assert(connection.last_probe_us == INTERVAL_US + 2);
+  assert(!iterate_kit_esp_idf_websocket_queue_keepalive(
       &connection, INTERVAL_US + 3, INTERVAL_US));
-  CHECK(iterate_kit_websocket_tx_poll_control(&connection.tx) ==
+  assert(iterate_kit_websocket_tx_poll_control(&connection.tx) ==
       ITERATE_KIT_WEBSOCKET_TX_SENT);
-  CHECK(writer.count == 6U);
-  CHECK(writer.bytes[0] == 0x89U); /* masked RFC 6455 PING */
+  assert(writer.count == 6U);
+  assert(writer.bytes[0] == 0x89U); /* masked RFC 6455 PING */
 
   /* A peer frame resets the inbound lease, so the next PING waits again. */
   connection.last_inbound_us = 2 * INTERVAL_US - 1;
   connection.last_outbound_us = 2 * INTERVAL_US;
-  CHECK(!iterate_kit_esp_idf_websocket_queue_keepalive(
+  assert(!iterate_kit_esp_idf_websocket_queue_keepalive(
       &connection, 2 * INTERVAL_US, INTERVAL_US));
   connection.last_outbound_us = 3 * INTERVAL_US + 1;
-  CHECK(iterate_kit_esp_idf_websocket_queue_keepalive(
+  assert(iterate_kit_esp_idf_websocket_queue_keepalive(
       &connection, 3 * INTERVAL_US + 1, INTERVAL_US));
 }
 

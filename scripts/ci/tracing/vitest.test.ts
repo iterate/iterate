@@ -1,9 +1,9 @@
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
-import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { temporaryDirectory } from "@iterate-com/shared/test-support/temporary-directory";
 import { expect, test } from "vitest";
 import { assembleTrace } from "./tracing.ts";
 
@@ -87,7 +87,7 @@ test(
 );
 
 function vitestRun(enabled: string) {
-  const directory = mkdtempSync(join(tmpdir(), "vitest-ci-trace-"));
+  const directory = temporaryDirectory();
   const startedAt = new Date().toISOString();
   const reporter = fileURLToPath(
     new URL(
@@ -96,7 +96,7 @@ function vitestRun(enabled: string) {
     ),
   );
   writeFileSync(
-    join(directory, "cases.test.js"),
+    join(directory.path, "cases.test.js"),
     `
     test("ordinary pass", () => {});
     let attempts = 0;
@@ -109,7 +109,7 @@ function vitestRun(enabled: string) {
   `,
   );
   writeFileSync(
-    join(directory, "vitest.config.mjs"),
+    join(directory.path, "vitest.config.mjs"),
     `export default ${JSON.stringify({
       test: { globals: true, include: ["*.test.js"], reporters: [reporter] },
     })}`,
@@ -119,7 +119,7 @@ function vitestRun(enabled: string) {
     process.execPath,
     [join(dirname(require.resolve("vitest/package.json")), "vitest.mjs"), "run"],
     {
-      cwd: directory,
+      cwd: directory.path,
       encoding: "utf8",
       timeout: CHILD_VITEST_MS,
       env: {
@@ -133,8 +133,8 @@ function vitestRun(enabled: string) {
           ),
         ),
         CI_TRACE_ENABLED: enabled,
-        TEST_TELEMETRY_ARTIFACT_DIR: join(directory, "telemetry"),
-        FLAKE_RECORD_DIR: join(directory, "flakes"),
+        TEST_TELEMETRY_ARTIFACT_DIR: join(directory.path, "telemetry"),
+        FLAKE_RECORD_DIR: join(directory.path, "flakes"),
       },
     },
   );
@@ -186,9 +186,7 @@ function vitestRun(enabled: string) {
     workflow,
     lines,
     trace: assembleTrace(workflow, new Map([["attempt", lines]])),
-    [Symbol.dispose]() {
-      rmSync(directory, { recursive: true, force: true });
-    },
+    [Symbol.dispose]: directory[Symbol.dispose],
   };
 }
 

@@ -1,5 +1,6 @@
 /** Deployment configuration for OS and its first-party apps. Secrets live in Doppler. */
 
+import { TEST_EMAIL_DOMAIN } from "./apps/os/src/test-email-domain.ts";
 import type { IngressRouting } from "./packages/iterate/src/project-ingress.ts";
 
 /** Cloudflare account names, IDs, and shared credentials for account-wide tooling.
@@ -111,12 +112,15 @@ export interface OsEnv {
    *  is the zone's Delegated DCV id (`GET /zones/:id/dcv_delegation/uuid`), which the owner's
    *  `_acme-challenge` CNAME names. */
   cloudflareForSaas?: { zone: string; zoneId: string; dcvDelegationUuid: string };
-  /** The one-click sign-in links (apps/os src/test-link.ts, `APP_CONFIG_LOGIN__TEST_LINK__…`), and
-   *  the test domain's `admin@` as the one admin the admin app's specs sign in as. A per-commit
-   *  deployment's only: app-config.ts refuses the links off a workers.dev origin besides. The PR
-   *  body that carries them is public, so a link signs nobody in until its redeemer proves at
-   *  `admins.issuer` that they are an address `admins.emails` names (src/test-link-admins.ts). */
-  testLinks?: { admins: { issuer: string; emails: string[] } };
+  /** Another iterate deployment whose word on who a browser is this one takes, for its `admins`
+   *  alone (apps/os src/app-config.ts `login.adminIssuer`, src/admin-sign-in.ts): prd, for a
+   *  per-commit deployment, whose admins sign in through it and sign an app in as the PR's test
+   *  person from the consent page. app-config.ts refuses it off an https workers.dev origin. */
+  adminIssuer?: string;
+  /** The reserved domain of the deployment's test people (apps/os src/app-config.ts
+   *  `login.testEmailDomain`): the pet shop's fake sign-ins admit addresses under it alone, and a
+   *  PR body's sign-in link pre-fills one of them for an admin. A per-commit deployment's only. */
+  testEmailDomain?: string;
   /** iterate's own Slack app, Google and Cloudflare OAuth clients and GitHub App are the dummy pet
    *  shop's fakes (apps/os/scripts/preview-*-app.ts), and people sign in with Google, Cloudflare and
    *  GitHub through them. A per-commit deployment's only: prd's and main on dev's integrations are
@@ -342,7 +346,10 @@ export function previewDeployment(name: string) {
     // named whether or not the run deploys the dash (a soak deploys apps/os alone)
     dashBaseUrl: origin("dash"),
     ingressRouting: { type: "paths" },
-    testLinks: { admins: { issuer: osEnvs.prd!.baseUrl, emails: ["*@nustom.com"] } },
+    // prd's admins, and the test person the admin app's specs sign in as (specs/admin)
+    admins: [...osEnvs.prd!.admins!, `admin@${TEST_EMAIL_DOMAIN}`],
+    adminIssuer: osEnvs.prd!.baseUrl,
+    testEmailDomain: TEST_EMAIL_DOMAIN,
     petshopIntegrations: true,
     artifactsNamespace: `${osWorker}-repos`,
     resourceNamePrefix: osWorker,
@@ -422,8 +429,7 @@ export const ciReportsEnvs: Record<
 };
 
 /** The CI bucket, `iterate-ci` (docs/test-evidence.md#one-bucket): each CI job attempt's test
- *  evidence folder under `evidence/`, the per-test tables' copies under `tables/`, and later the
- *  alert guards' state under `state/`. CI tooling, so it lives on the dev/preview account; CI
+ *  evidence folder under `evidence/`, and later the alert guards' state under `state/`. CI tooling, so it lives on the dev/preview account; CI
  *  writes it with the Cloudflare API token it already holds (Doppler `_shared/preview`'s
  *  CLOUDFLARE_API_TOKEN, used as S3 keys by `scripts/ci/test-evidence.ts upload`). Created by hand
  *  with that token, with lifecycle rules on `evidence/` only: docs/test-evidence.md#setup. */

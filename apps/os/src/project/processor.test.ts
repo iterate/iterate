@@ -29,6 +29,7 @@ const empty: ProjectState = {
   secrets: {},
   configRepoTip: null,
   publishedCommitOid: null,
+  publishedAt: null,
   hostnames: {},
   integrations: {},
   primaryHostname: null,
@@ -78,7 +79,7 @@ const reduceRows: {
       ingressAt(["itx", "workers", ["get", { source: { "worker.js": "" }, cacheKey: "ccc" }]]),
       ingressAt(null),
     ],
-    state: { ...empty, publishedCommitOid: "bbb" },
+    state: { ...empty, publishedCommitOid: "bbb", publishedAt: 2 },
   },
   {
     name: "a repo's and a workspace's certificates each add one entry, by path, stamped with the event's time — the project's own creation untouched",
@@ -92,6 +93,7 @@ const reduceRows: {
       secrets: {},
       configRepoTip: null,
       publishedCommitOid: null,
+      publishedAt: null,
       hostnames: {},
       integrations: {},
       primaryHostname: null,
@@ -379,7 +381,7 @@ for (const { name, events, state } of reduceRows)
 // arguments faked (an `append` that records and can be held open; `runInBackground` runs the work at
 // once). Pinned: a tip that lands WHILE an append is in flight is published by the same attempt once
 // the append settles — no further delivery needed (an idempotent hit lands no fresh event to deliver).
-test("ProjectProcessor — the apex follows the config repo: each tip is published once, keyed by its commit; a tip that lands during an in-flight append is published when it settles", async () => {
+test("ProjectProcessor — the apex follows the config repo: each tip is published once, keyed by its commit's fact; a tip that lands during an in-flight append is published when it settles; a pull back to an earlier commit publishes it again", async () => {
   const processor = new ProjectProcessor(
     () => Promise.reject(new Error("unused")),
     () => Promise.reject(new Error("unused")),
@@ -388,11 +390,12 @@ test("ProjectProcessor — the apex follows the config repo: each tip is publish
   let release!: () => void;
   const held = new Promise<void>((resolve) => (release = resolve));
   let calls = 0;
+  let answer: { offset: number }[] = [];
   const append = async (...events: unknown[]) => {
     calls += 1;
     if (calls === 1) await held; // the first append stays in flight
     appended.push(...(events as typeof appended));
-    return [];
+    return answer;
   };
   deliver(processor, { ...empty, configRepoTip: tip("aaa", 5) }, append);
   // A second commit lands while the first publication is in flight: dropped by the guard, kept as the newest tip.
@@ -412,6 +415,18 @@ test("ProjectProcessor — the apex follows the config repo: each tip is publish
   deliver(processor, { ...empty, configRepoTip: tip("bbb", 7) }, append);
   await new Promise((r) => setTimeout(r, 0));
   expect(appended).toHaveLength(2);
+  // A forced pull back to the first commit is a new fact: the commit's key answers its first
+  // publication (an older event), so it is published again under the fact's own key.
+  answer = [{ offset: 6 }];
+  deliver(processor, { ...empty, configRepoTip: tip("aaa", 9) }, append);
+  await new Promise((r) => setTimeout(r, 0));
+  await new Promise((r) => setTimeout(r, 0));
+  expect(appended.map((e) => e.idempotencyKey)).toEqual([
+    "itx/ingress-configured:aaa",
+    "itx/ingress-configured:bbb",
+    "itx/ingress-configured:aaa",
+    "itx/ingress-configured:aaa@9",
+  ]);
 });
 
 // Every wake of the project's root pushes the facet its wake record, and a fresh incarnation of the
@@ -441,10 +456,50 @@ test("ProjectProcessor — a tip the state does not hold published is published;
     committed("/repos/config", "aaa"),
     normalizeControlEvent(appended[0]!, "/"),
   ]);
-  expect(state).toEqual({ ...empty, configRepoTip: tip("aaa", 1), publishedCommitOid: "aaa" });
+  expect(state).toEqual({
+    ...empty,
+    configRepoTip: tip("aaa", 1),
+    publishedCommitOid: "aaa",
+    publishedAt: 2,
+  });
   deliver(processorWithoutHostnames(), state, append, runInBackground);
   await settle();
   expect({ appends: appended.length, background }).toEqual({ appends: 1, background: 1 });
+});
+
+test("ProjectProcessor — a tip is published only by a publication after its fact: a pull back to a commit published before is published again, even when another commit's publication landed after that fact", async () => {
+  const appended: StreamEventInput[] = [];
+  const append = async (...events: unknown[]) => {
+    appended.push(...(events as StreamEventInput[]));
+    return [{ offset: 3 }]; // the commit's key answers its first publication, at 3
+  };
+  const runInBackground = (work: () => Promise<unknown>) => void work();
+  // aaa published at 3; bbb's fact at 7; back to aaa at 9; bbb's publication landed at 10
+  const state = {
+    ...empty,
+    configRepoTip: tip("aaa", 9),
+    publishedCommitOid: "bbb",
+    publishedAt: 10,
+  };
+  deliver(processorWithoutHostnames(), state, append, runInBackground);
+  await settle();
+  expect(appended.map((event) => event.idempotencyKey)).toEqual([
+    "itx/ingress-configured:aaa",
+    "itx/ingress-configured:aaa@9",
+  ]);
+  // the same commit, published before its fact: owed as well
+  appended.length = 0;
+  deliver(
+    processorWithoutHostnames(),
+    { ...empty, configRepoTip: tip("aaa", 9), publishedCommitOid: "aaa", publishedAt: 3 },
+    append,
+    runInBackground,
+  );
+  await settle();
+  expect(appended.map((event) => event.idempotencyKey)).toEqual([
+    "itx/ingress-configured:aaa",
+    "itx/ingress-configured:aaa@9",
+  ]);
 });
 
 test("ProjectProcessor — an event that changes the primary hostname holds the cursor until the control plane has it; one that changes nothing writes nothing", async () => {

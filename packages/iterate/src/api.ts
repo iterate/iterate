@@ -147,7 +147,7 @@ export type SecretRefresh =
       kind: "oauth-refresh-token";
       tokenEndpoint: string;
       clientAuth?: ClientAuth;
-      client?: { platform: "slack" | "google" | "cloudflare" | "github" };
+      client?: { platform: IterateAppProvider };
     }
   /** A GitHub App installation's token (`POST <apiOrigin>/app/installations/<id>/access_tokens`
    *  with an App JWT) → `accessToken`, minted on first use and on a 401. The App is the deployment's
@@ -184,8 +184,9 @@ export type SecretCatalogEntry = {
   /** For exchange code (`refresh.kind` "worker"): the SHA-256 of its source, hex — which code it is. */
   refreshSourceSha256?: string;
   createdAt: string;
-  /** A borrowed secret (`itx.secrets.lend`): whose — a person's, or the deployment's own (lent by
-   *  its operator) — under which lend, and the connection it is. */
+  /** A path that forwards every use to a secret elsewhere: a person's account connected to this
+   *  project (`integrations.connect(provider, { account })`), or the deployment's own secret its
+   *  operator lent (`itx.secrets.lend`) — whose, under which lend, and the connection it is. */
   borrowed?: {
     lendId: string;
     lender: { userId: string; email?: string } | { instance: true };
@@ -219,8 +220,28 @@ export type SecretHmacVerification = {
   field?: string;
 };
 
-/** The providers an integration connects through OAuth (`/api/integrations/<provider>/callback`). */
-export type OAuthIntegrationProvider = "slack" | "google" | "cloudflare";
+/** EVERY PROVIDER AN INTEGRATION CONNECTS, spelled once: a connection to one is the log
+ *  `/integrations/<provider>/<connection>` and the secret `/secrets/<provider>-<connection>`. The
+ *  kinds below are read off it. */
+export const INTEGRATION_PROVIDERS = [
+  "slack",
+  "google",
+  "cloudflare",
+  "github",
+  "waitrose",
+] as const;
+export type IntegrationProvider = (typeof INTEGRATION_PROVIDERS)[number];
+
+/** The providers a deployment holds an app of iterate's at (APP_CONFIG `integrations`): every one
+ *  but Waitrose, a username and a password. */
+export type IterateAppProvider = Exclude<IntegrationProvider, "waitrose">;
+
+/** The providers an integration connects through OAuth (`/api/integrations/<provider>/callback`):
+ *  GitHub's connect is its App's install instead. */
+export type OAuthIntegrationProvider = Exclude<IterateAppProvider, "github">;
+
+/** The providers a person signs in with, each through iterate's app there. */
+export type SignInProvider = Exclude<IterateAppProvider, "slack">;
 
 /** Whose OAuth app a secret's `beginOAuth` goes through: the deployment's (`platform`) or the
  *  project's own registered for that provider (`project`). */
@@ -476,6 +497,14 @@ export type RepoLogEntry = {
 /** What a commit reports: the new tip (null on an unborn repo that stayed empty) and the paths it
  *  changed (none when the tree was already as asked). */
 export type RepoCommitResult = { commitOid: string | null; changedPaths: string[] };
+/** How a `pull` or `push` ended: `main` moved from `previousOid` to `commitOid` (`updated`), or both
+ *  sides were already at `commitOid` (`up-to-date`). Pulling or pushing without `force` when neither
+ *  side contains the other throws `NOT_FAST_FORWARD`, with `{ ours, theirs }` as its data. */
+export type RepoSyncResult = {
+  status: "updated" | "up-to-date";
+  commitOid: string | null;
+  previousOid: string | null;
+};
 /** `itx.repos.get(path)`: the repo's verbs, branch `main` only (the repo facet in apps/os). A
  *  `commitOid` pins a read to that commit; without one, a read is of the tip. */
 export type RepoHandle = InvokeHandle & {
@@ -492,6 +521,20 @@ export type RepoHandle = InvokeHandle & {
   }): Promise<RepoCommitResult>;
   writeFile(path: string, content: string): Promise<RepoCommitResult>;
   log(options?: { limit?: number }): Promise<RepoLogEntry[]>;
+  /** The one remote the repo remembers, as git's `origin`: a git URL over HTTP(S) whose userinfo may
+   *  hold a secret placeholder (`https://x-access-token:getSecret("/secrets/github-acme", { field:
+   *  "accessToken" })@github.com/acme/config.git`, the placeholder percent-encoded or not), never a
+   *  token; null when none. */
+  origin(): Promise<string | null>;
+  /** Remember `url` as origin, or forget it (`null`): a `repo/origin-set` fact on the repo's log. */
+  setOrigin(url: string | null): Promise<{ origin: string | null }>;
+  /** Bring the remote's `main` into this repo, the same commits and oids, fast-forward only unless
+   *  `force` (which resets `main` to the remote's). A pull that moves `main` lands
+   *  `repo/commit-completed` like a commit, so `/repos/config` publishes. `remote` defaults to origin. */
+  pull(options?: { remote?: string; force?: boolean }): Promise<RepoSyncResult>;
+  /** Send this repo's `main` to the remote's `main`, fast-forward only unless `force` (which
+   *  overwrites the remote's). `remote` defaults to origin. */
+  push(options?: { remote?: string; force?: boolean }): Promise<RepoSyncResult>;
   /** Append the repo's own events on its context; its lifecycle facts are the collection's. */
   append(...events: StreamEventInput[]): Promise<StreamEvent[]>;
 };
@@ -660,8 +703,13 @@ export interface IterateContextApi {
     /** OAuth's first tokens: the provider's authorize URL to send a human to. The provider
      *  redirects them to the platform's callback (they must be signed in as someone who reaches the
      *  secret's owner), the secret's facet exchanges the code, `secret/set` lands, and the callback
-     *  redirects to `next`. Only from a session, which carries the platform's origin. */
-    beginOAuth(path: string, options: SecretOAuthOptions): Promise<{ authorizationUrl: string }>;
+     *  redirects to `next`. Only from a session, which carries the platform's origin. `nonce`
+     *  names this attempt (the callback's signed `state` carries it); a later `beginOAuth` on the
+     *  same path replaces it. */
+    beginOAuth(
+      path: string,
+      options: SecretOAuthOptions,
+    ): Promise<{ authorizationUrl: string; nonce: string }>;
     delete(path: string): Promise<{ path: string }>;
     list(): Promise<SecretCatalogEntry[]>;
     /** Build the authenticated Dash link where a person enters a value an agent must never see in
@@ -672,12 +720,12 @@ export interface IterateContextApi {
      *  constant-time, run in the secret's facet. A secret never set (or a material with no key at
      *  the field) answers false, never a description. */
     verifyHmac(path: string, input: SecretHmacVerification): Promise<boolean>;
-    /** On a person's own context (`session.user`): lend one of their secrets to a project they are a
-     *  member of, as the project's path `as`; the project's uses are forwarded to this secret, and
-     *  the material never leaves it. `revokeLend` ends it; so does the project deleting its path,
-     *  or the person leaving the project. On the global root (`session.global`), the operator
-     *  lends the deployment's own secret to a project, or `to: "every-project"`: every project,
-     *  one created later included, borrows it unless its path holds a secret of its own. */
+    /** The operator's, on the global root (`session.global`): lend the deployment's own secret to
+     *  a project, as the project's path `as`, or `to: "every-project"`: every project, one created
+     *  later included, borrows it unless its path holds a secret of its own. The project's uses are
+     *  forwarded to this secret, and the material never leaves it. `revokeLend` ends it; so does a
+     *  project deleting its path, for that project alone. (A person's account reaches a project
+     *  through `integrations.connect(provider, { account })` instead.) */
     lend(
       path: string,
       input: { to: string; as: string },
@@ -686,17 +734,23 @@ export interface IterateContextApi {
   };
   /** Connect this context's owner — a project (its root), or a person (`session.user`) — to a
    *  provider through the deployment's app: `connect` answers where to send the human (and the
-   *  connection's name; again for one that exists asks for more `scopes` on the same account);
-   *  `requestFromUser` answers a Dash link asking the signed-in person to connect it, and with
-   *  lend it to this project, as the path `lendTo` (`/secrets/<name>`) when given. */
+   *  connection's name; again for one that exists asks for more `scopes` on the same account). On a
+   *  project, `account` connects one of YOUR accounts instead — the address the provider gives it,
+   *  as `session.user`'s `state.integrations` lists it: with no `authorizationUrl` when it already
+   *  holds what the project asks for, else one that asks the provider to add it. The project then
+   *  uses it as `/secrets/<provider>-<connection>` while it stays connected and you stay a member;
+   *  disconnecting it there leaves it yours. `requestFromUser` answers a Dash link asking the
+   *  signed-in person to connect the provider to this project. */
   integrations: {
     connect(
-      provider: OAuthIntegrationProvider | "github",
-      options?: { scopes?: string[]; connection?: string; next?: string },
-    ): Promise<{ authorizationUrl: string; connection: string }>;
+      provider: IntegrationProvider,
+      options?:
+        | { scopes?: string[]; next?: string; connection?: string; account?: never }
+        | { scopes?: string[]; next?: string; account: string; connection?: never },
+    ): Promise<{ authorizationUrl?: string; connection: string }>;
     requestFromUser(
-      provider: "google" | "cloudflare",
-      options?: { scopes?: string[]; lendTo?: string },
+      provider: IterateAppProvider,
+      options?: { scopes?: string[] },
     ): Promise<{ url: string }>;
   };
   /** The project's fetch routes, on its root `/`: which itx expression, the route's `target`, a
@@ -925,7 +979,14 @@ export interface IterateSessionApi {
     mcpOrigin: string;
     /** the providers whose iterate app this deployment holds (APP_CONFIG `integrations`): a
      *  project connects through iterate's app only there, and brings its own app anywhere */
-    iterateAppProviders: ("slack" | "google" | "cloudflare" | "github")[];
+    iterateAppProviders: IterateAppProvider[];
+    /** what iterate's app asks for there, by provider — what a project needs of your account before
+     *  it uses it (`integrations.connect(provider, { account })`) */
+    iterateAppScopes: Partial<Record<OAuthIntegrationProvider, string[]>>;
+    /** the providers a person signs in with here: the ones a signed-in person can add to their
+     *  account (the issuer's `/.auth/identity/<provider>?link=<userId>`); absent from a platform
+     *  older than it, which offers none */
+    signInProviders?: SignInProvider[];
   };
   /** The grants this session may manage (a signed-in person's with the `account` scope): list and
    *  end its sessions and personal access tokens, and mint a personal access token — its bearer
@@ -960,6 +1021,7 @@ export interface IterateSessionApi {
     }): Promise<{ redirectTo: string } | { error: string }>;
   };
   projects: {
+    /** oldest first (a grant bound to projects with no user: in the grant's order) */
     list(): Promise<ProjectRecord[]>;
     /** the project's root context, by its slug or its id */
     get(project: string): Promise<IterateContextApi>;
@@ -982,13 +1044,17 @@ export interface IterateSessionApi {
     delete(project: string): Promise<void>;
   };
   /** The organizations this session reaches — the person's memberships (a grant narrowed to
-   *  projects sees only their organizations, unless it holds `organizations:write`): the rows, the
-   *  organization's context by membership, and the verbs (`organizations:write`; the person is the
-   *  owner of what they create, and only an owner renames, deletes or changes members). Each verb is
-   *  a request the control plane answers; a refusal is a coded error (FORBIDDEN, INVALID_INPUT). */
+   *  projects sees only their organizations, unless it holds `organizations:write`): the rows, its
+   *  members and open invitation links, the organization's context by membership, and the verbs
+   *  (`organizations:write`; the person is the owner of what they create, and only an owner
+   *  renames, deletes or changes members). The reads are the control plane's catalog, as it stands;
+   *  each verb is a request it answers, a refusal a coded error (FORBIDDEN, INVALID_INPUT), and
+   *  lands its facts on the organization's context (and a member's account) after. */
   organizations: {
+    /** oldest first */
     list(): Promise<OrgRecord[]>;
-    /** the organization's context — `session.user` for an organization — by membership */
+    /** the organization's context — `session.user` for an organization — by membership: its
+     *  activity, `events.iterate.com/organization/…` facts, and its own secrets */
     get(orgId: string): Promise<IterateContextApi>;
     create(input: { name: string }): Promise<OrgRecord>;
     rename(orgId: string, input: { name: string }): Promise<OrgRecord>;
@@ -996,8 +1062,16 @@ export interface IterateSessionApi {
     delete(orgId: string): Promise<void>;
     addMember(orgId: string, input: { userId: string; role?: "owner" | "member" }): Promise<void>;
     removeMember(orgId: string, input: { userId: string }): Promise<void>;
-    /** the members with their emails — the operator's alone (the project-seed CLI) */
-    members(orgId: string): Promise<{ userId: string; email: string; role: "owner" | "member" }[]>;
+    /** the members with their emails, by membership, in the order they joined: `createdAt` is
+     *  when (epoch ms), null for one who joined before the platform recorded it */
+    members(
+      orgId: string,
+    ): Promise<
+      { userId: string; email: string; role: "owner" | "member"; createdAt: number | null }[]
+    >;
+    /** the invitation links still open (an expired one stays until revoked), oldest first — an
+     *  owner's */
+    invitations(orgId: string): Promise<InvitationRecord[]>;
     /** an owner's invitation link: whoever accepts it first joins in `role` (default member),
      *  until it expires (`expiresInDays`, default 7, 1–30). `token` is the link's secret, answered
      *  this once — the dash's `/invitations/<token>`. */

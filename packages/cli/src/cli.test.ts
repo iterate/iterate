@@ -1,19 +1,11 @@
 import { execFile } from "node:child_process";
 import { createServer } from "node:http";
-import {
-  chmodSync,
-  copyFileSync,
-  mkdirSync,
-  mkdtempSync,
-  rmSync,
-  symlinkSync,
-  writeFileSync,
-} from "node:fs";
+import { chmodSync, copyFileSync, mkdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
+import { temporaryDirectory } from "@iterate-com/shared/test-support/temporary-directory";
 import { newWebSocketRpcSession, RpcTarget } from "capnweb";
 import { WebSocketServer } from "ws";
 import { expect, test, vi } from "vitest";
@@ -34,7 +26,7 @@ test("bare invocation and all command help work offline", { timeout: 20_000 }, a
     ["menubar", "--help"],
     ["repl", "--help"],
   ]) {
-    const { stdout } = await runCli(config.directory, args);
+    const { stdout } = await runCli(config.path, args);
     expect(stdout).toContain("iterate");
   }
 });
@@ -87,14 +79,14 @@ test(
     if (typeof address === "string" || !address) throw new Error("No port");
     using config = cliConfig(`http://127.0.0.1:${address.port}`);
     try {
-      expect((await runCli(config.directory, ["ping"])).stdout).toContain("user_test");
+      expect((await runCli(config.path, ["ping"])).stdout).toContain("user_test");
       const interactive = promisify(execFile)(
         process.execPath,
         [bin, "repl", "--project", "demo"],
         {
           env: {
             ...process.env,
-            XDG_CONFIG_HOME: config.directory,
+            XDG_CONFIG_HOME: config.path,
             APP_CONFIG_ADMIN_API_SECRET: "",
             ITERATE_BEARER_TOKEN: "",
           },
@@ -118,7 +110,7 @@ test(
       const sessionRepl = promisify(execFile)(process.execPath, [bin, "repl"], {
         env: {
           ...process.env,
-          XDG_CONFIG_HOME: config.directory,
+          XDG_CONFIG_HOME: config.path,
           APP_CONFIG_ADMIN_API_SECRET: "",
           ITERATE_BEARER_TOKEN: "",
         },
@@ -136,7 +128,7 @@ test(
       });
       expect((await sessionRepl).stdout).toContain("user_test");
       calls.length = 0;
-      const result = await runCli(config.directory, [
+      const result = await runCli(config.path, [
         "itx",
         "run",
         "--context",
@@ -151,11 +143,10 @@ test(
         { path: "/demo" },
         { script: "async (itx) => {\nreturn 42;\n}" },
       ]);
-      const file = join(config.directory, "script.js");
+      const file = join(config.path, "script.js");
       writeFileSync(file, "return 42;");
       expect(
-        (await runCli(config.directory, ["itx", "run", "--project", "demo", "--file", file]))
-          .stdout,
+        (await runCli(config.path, ["itx", "run", "--project", "demo", "--file", file])).stdout,
       ).toContain("42");
       const stdinResult = promisify(execFile)(
         process.execPath,
@@ -163,7 +154,7 @@ test(
         {
           env: {
             ...process.env,
-            XDG_CONFIG_HOME: config.directory,
+            XDG_CONFIG_HOME: config.path,
             APP_CONFIG_ADMIN_API_SECRET: "",
             ITERATE_BEARER_TOKEN: "",
           },
@@ -174,12 +165,12 @@ test(
       expect((await stdinResult).stdout).toContain("42");
       calls.length = 0;
       await expect(
-        runCli(config.directory, ["itx", "run", "--eval", "throw new Error('oops')"]),
+        runCli(config.path, ["itx", "run", "--eval", "throw new Error('oops')"]),
       ).rejects.toThrow();
       expect(calls.filter((call) => "script" in (call as object))).toHaveLength(1);
       calls.length = 0;
       await expect(
-        runCli(config.directory, ["itx", "run", "--eval", "return 1", "--file", file]),
+        runCli(config.path, ["itx", "run", "--eval", "return 1", "--file", file]),
       ).rejects.toThrow();
       expect(calls).toEqual([]);
     } finally {
@@ -227,11 +218,9 @@ test(
   async () => {
     using config = cliConfig("http://127.0.0.1:1");
     for (const command of ["get", "current"]) {
-      expect((await runCli(config.directory, ["config", command])).stdout).not.toContain(
-        "test-token",
-      );
+      expect((await runCli(config.path, ["config", command])).stdout).not.toContain("test-token");
     }
-    const result = await runCli(config.directory, [
+    const result = await runCli(config.path, [
       "config",
       "set",
       "--name",
@@ -242,50 +231,47 @@ test(
       "demo",
     ]);
     expect(result.stdout).not.toContain("test-token");
-    expect((await runCli(config.directory, ["config", "get"])).stdout).toContain("demo");
-    await expect(runCli(config.directory, ["ping"])).rejects.toThrow("Not logged in");
+    expect((await runCli(config.path, ["config", "get"])).stdout).toContain("demo");
+    await expect(runCli(config.path, ["ping"])).rejects.toThrow("Not logged in");
   },
 );
 
 test("a pnpm shim for this package does not redirect source development to stale dist", async () => {
-  const directory = mkdtempSync(join(tmpdir(), "iterate-bin-test-"));
-  try {
-    for (const path of ["bin", "src", "dist", "node_modules/.bin", "node_modules/@iterate-com"])
-      mkdirSync(join(directory, path), { recursive: true });
-    copyFileSync(bin, join(directory, "bin/iterate.js"));
-    writeFileSync(join(directory, "package.json"), '{"type":"module"}');
-    writeFileSync(
-      join(directory, "src/cli.ts"),
-      'export async function runCli() { console.log("source"); }',
-    );
-    writeFileSync(
-      join(directory, "dist/cli.mjs"),
-      'export async function runCli() { console.log("build"); }',
-    );
-    writeFileSync(join(directory, "node_modules/.bin/iterate"), "#!/bin/sh\n");
-    symlinkSync(directory, join(directory, "node_modules/@iterate-com/cli"));
-    for (const [force, expected] of [
-      ["0", "source"],
-      ["1", "build"],
-    ]) {
-      const result = await promisify(execFile)(
-        process.execPath,
-        [join(directory, "bin/iterate.js")],
-        {
-          cwd: directory,
-          env: {
-            ...process.env,
-            ITERATE_FORCE_BUILT_PACKAGE: force,
-            npm_command: "",
-            npm_lifecycle_event: "",
-          },
-          timeout: 5000,
+  using scratch = temporaryDirectory();
+  const directory = scratch.path;
+  for (const path of ["bin", "src", "dist", "node_modules/.bin", "node_modules/@iterate-com"])
+    mkdirSync(join(directory, path), { recursive: true });
+  copyFileSync(bin, join(directory, "bin/iterate.js"));
+  writeFileSync(join(directory, "package.json"), '{"type":"module"}');
+  writeFileSync(
+    join(directory, "src/cli.ts"),
+    'export async function runCli() { console.log("source"); }',
+  );
+  writeFileSync(
+    join(directory, "dist/cli.mjs"),
+    'export async function runCli() { console.log("build"); }',
+  );
+  writeFileSync(join(directory, "node_modules/.bin/iterate"), "#!/bin/sh\n");
+  symlinkSync(directory, join(directory, "node_modules/@iterate-com/cli"));
+  for (const [force, expected] of [
+    ["0", "source"],
+    ["1", "build"],
+  ]) {
+    const result = await promisify(execFile)(
+      process.execPath,
+      [join(directory, "bin/iterate.js")],
+      {
+        cwd: directory,
+        env: {
+          ...process.env,
+          ITERATE_FORCE_BUILT_PACKAGE: force,
+          npm_command: "",
+          npm_lifecycle_event: "",
         },
-      );
-      expect(result.stdout.trim()).toBe(expected);
-    }
-  } finally {
-    rmSync(directory, { recursive: true, force: true });
+        timeout: 5000,
+      },
+    );
+    expect(result.stdout.trim()).toBe(expected);
   }
 });
 
@@ -439,14 +425,14 @@ test("mcp claude: prints the command alone on stdout, or --exec runs claude with
   await using deployment = await mcpDeployment();
   using config = cliConfig(deployment.osBaseUrl);
   // a stand-in `claude` on PATH that reports the argv it was given
-  writeFileSync(join(config.directory, "claude"), `#!/bin/sh\nprintf '%s\\0' "$@"\nexit 3\n`);
-  chmodSync(join(config.directory, "claude"), 0o755);
+  writeFileSync(join(config.path, "claude"), `#!/bin/sh\nprintf '%s\\0' "$@"\nexit 3\n`);
+  chmodSync(join(config.path, "claude"), 0o755);
   const run = (args: string[]) =>
     promisify(execFile)(process.execPath, [bin, "mcp", "claude", ...args], {
       env: {
         ...process.env,
-        XDG_CONFIG_HOME: config.directory,
-        PATH: `${config.directory}:${process.env.PATH}`,
+        XDG_CONFIG_HOME: config.path,
+        PATH: `${config.path}:${process.env.PATH}`,
         APP_CONFIG_ADMIN_API_SECRET: "",
         ITERATE_BEARER_TOKEN: "it's-secret",
       },
@@ -465,16 +451,16 @@ test("mcp claude: prints the command alone on stdout, or --exec runs claude with
 });
 
 function cliConfig(baseUrl: string) {
-  const directory = mkdtempSync(join(tmpdir(), "iterate-next-cli-"));
-  mkdirSync(join(directory, "iterate"));
+  const config = temporaryDirectory();
+  mkdirSync(join(config.path, "iterate"));
   writeFileSync(
-    join(directory, "iterate/config.json"),
+    join(config.path, "iterate/config.json"),
     JSON.stringify({
       default: "test",
       configs: { test: { osBaseUrl: baseUrl, session: { token: "test-token" } } },
     }),
   );
-  return { directory, [Symbol.dispose]: () => rmSync(directory, { recursive: true, force: true }) };
+  return config;
 }
 
 function runCli(directory: string, args: string[]) {

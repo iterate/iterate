@@ -1,39 +1,9 @@
 import type {Client} from 'sqlfu';
 
-const organizationByIdSql = `
-select o.id, o.name, coalesce((select count(*) from projects p where p.org_id = o.id), 0) as projects
-from organizations o
-where o.id = ?;
-`.trim();
-const organizationByIdQuery = (params: organizationById.Params) => ({
-	name: "organizationById",
-	sql: organizationByIdSql,
-	args: [params.id],
-});
-
-export const organizationById = Object.assign(
-	async function organizationById(client: Client, params: organizationById.Params): Promise<organizationById.Result | null> {
-		const rows = await client.all<organizationById.Result>(organizationByIdQuery(params));
-		return rows.length > 0 ? rows[0] : null;
-	},
-	{ sql: organizationByIdSql, query: organizationByIdQuery },
-);
-
-export namespace organizationById {
-	export type Params = {
-		id: string;
-	};
-	export type Result = {
-		id: string;
-		name: string;
-		projects: number;
-	};
-}
-
 const listOrganizationsSql = `
 select o.id, o.name, coalesce((select count(*) from projects p where p.org_id = o.id), 0) as projects
 from organizations o
-order by o.name, o.id;
+order by o.created_at, o.name, o.id;
 `.trim();
 const listOrganizationsQuery = { name: "listOrganizations", sql: listOrganizationsSql, args: [] };
 
@@ -87,11 +57,11 @@ export namespace organizationRole {
 }
 
 const listMembersSql = `
-select m.user_id as userId, u.email, m.role
+select m.user_id as userId, u.email, m.role, m.created_at as createdAt
 from memberships m
 join users u on u.id = m.user_id
 where m.org_id = ?
-order by u.email;
+order by m.created_at, u.email;
 `.trim();
 const listMembersQuery = (params: listMembers.Params) => ({
 	name: "listMembers",
@@ -114,6 +84,7 @@ export namespace listMembers {
 		userId: string;
 		email: string;
 		role: ('owner' | 'member');
+		createdAt?: number;
 	};
 }
 
@@ -154,7 +125,7 @@ select o.id, o.name, m.role, coalesce((select count(*) from projects p where p.o
 from memberships m
 join organizations o on o.id = m.org_id
 where m.user_id = ?
-order by o.name, o.id;
+order by o.created_at, o.name, o.id;
 `.trim();
 const accessibleOrganizationsQuery = (params: accessibleOrganizations.Params) => ({
 	name: "accessibleOrganizations",
@@ -186,7 +157,7 @@ select p.id, p.slug, p.org_id as orgId, m.role
 from projects p
 join memberships m on m.org_id = p.org_id
 where m.user_id = ?
-order by p.slug;
+order by p.created_at, p.slug;
 `.trim();
 const accessibleProjectsQuery = (params: accessibleProjects.Params) => ({
 	name: "accessibleProjects",
@@ -214,12 +185,12 @@ export namespace accessibleProjects {
 }
 
 const insertOrganizationSql = `
-insert into organizations (id, name) values (?, ?);
+insert into organizations (id, name, created_at) values (?, ?, ?);
 `.trim();
 const insertOrganizationQuery = (params: insertOrganization.Params) => ({
 	name: "insertOrganization",
 	sql: insertOrganizationSql,
-	args: [params.id, params.name],
+	args: [params.id, params.name, params.createdAt],
 });
 
 export const insertOrganization = Object.assign(
@@ -233,12 +204,13 @@ export namespace insertOrganization {
 	export type Params = {
 		id: string;
 		name: string;
+		createdAt: number | null;
 	};
 }
 
 const insertOwnerSql = `
-insert into memberships (org_id, user_id, role)
-select o.id, ?, 'owner' from organizations o where o.id = ?;
+insert into memberships (org_id, user_id, role, created_at)
+select o.id, ?, 'owner', o.created_at from organizations o where o.id = ?;
 `.trim();
 const insertOwnerQuery = (params: insertOwner.Params) => ({
 	name: "insertOwner",
@@ -323,8 +295,8 @@ export namespace deleteOrganization {
 }
 
 const upsertMembershipSql = `
-insert into memberships (org_id, user_id, role)
-select o.id, u.id, ?
+insert into memberships (org_id, user_id, role, created_at)
+select o.id, u.id, ?, ?
 from organizations o, users u
 where o.id = ?
   and (u.id = ? or u.email = ?)
@@ -340,7 +312,7 @@ where memberships.role <> 'owner'
 const upsertMembershipQuery = (params: upsertMembership.Params) => ({
 	name: "upsertMembership",
 	sql: upsertMembershipSql,
-	args: [params.role, params.orgId, params.userId, params.email, params.asOperator, params.actorId],
+	args: [params.role, params.createdAt, params.orgId, params.userId, params.email, params.asOperator, params.actorId],
 });
 
 export const upsertMembership = Object.assign(
@@ -353,6 +325,7 @@ export const upsertMembership = Object.assign(
 export namespace upsertMembership {
 	export type Params = {
 		role: ('owner' | 'member');
+		createdAt: number | null;
 		orgId: string;
 		userId: string;
 		email: string;

@@ -10,7 +10,7 @@
 import { expect, test } from "vitest";
 import { parse, print, type ItxExpression, type ItxExpressionInput } from "iterate/expression";
 import type { StreamEvent } from "iterate/stream/processor";
-import { nodeSqliteDurableObjectStorage } from "iterate/stream/test-support";
+import { committedEvent as at, nodeSqliteDurableObjectStorage } from "iterate/stream/test-support";
 import {
   CoreContract,
   facetIsPushedByARow,
@@ -121,7 +121,7 @@ test("scriptRuns: the append boundary (normalizeControlEvent) parses both payloa
   ).toThrow(/durable/);
 });
 
-test.each([
+test.for([
   ["events.iterate.com/itx/created", { projectId: "prj_other", path: "/elsewhere" }],
   ["events.iterate.com/itx/woken", { incarnation: 99 }],
   [
@@ -129,9 +129,12 @@ test.each([
     { name: "someone-elses", afterOffset: 1, attempts: 1 },
   ],
   ["events.iterate.com/itx/alarm-trace", {}],
-])("%s is the platform's own record: the append boundary refuses it", (type, payload) => {
-  expect(() => normalizeControlEvent({ type, payload }, "/")).toThrow(/platform's own record/);
-});
+] as const)(
+  "%s is the platform's own record: the append boundary refuses it",
+  ([type, payload]) => {
+    expect(() => normalizeControlEvent({ type, payload }, "/")).toThrow(/platform's own record/);
+  },
+);
 
 test("an operator's pause, resume and delivery resume are parsed at the append boundary: the reduce's casts are true", () => {
   // stored as sent: a bare pause stays bare, so a keyed retry still matches the committed event
@@ -207,7 +210,7 @@ test("woken → incarnation; every wake overwrites (growth across idle is the hi
   expect(s).toMatchObject({ incarnation: 2, projectId: "prj_t" });
 });
 
-test.each([
+test.for([
   {
     log: "aborted, then woken (the reset itx.abort() asked for)",
     types: ["events.iterate.com/itx/aborted", "events.iterate.com/itx/woken"],
@@ -282,7 +285,7 @@ test("ingress target: stores and replaces the full expression without creating a
   ).toBeUndefined();
 });
 
-test.each([{}, { target: 123 }, { target: "other.workers" }, { target: ["itx", null] }])(
+test.for([{}, { target: 123 }, { target: "other.workers" }, { target: ["itx", null] }])(
   "ingress target: an invalid configuration is refused at the boundary, before append: %j",
   (payload) => {
     expect(() =>
@@ -1202,7 +1205,7 @@ test("configure: omits `consumes` from the payload when none was given", () => {
   });
 });
 
-test.each([
+test.for([
   {
     afterOffset: 0,
     becomes: "carried: { afterOffset: 0 } — the whole log",
@@ -1226,7 +1229,7 @@ test.each([
   });
 });
 
-test.each([-1, 1.5, Number.NaN, "0"])(
+test.for([-1, 1.5, Number.NaN, "0"])(
   "configure: an `afterOffset` that is not a non-negative integer (%s) is refused on append — a throw, nothing appended",
   (afterOffset) => {
     const { configure, events } = setup();
@@ -1370,11 +1373,6 @@ test("rule 8 at a child: behind a bare null the physical spelling of a context r
     description: "a jail",
   });
 });
-
-/** A committed DURABLE event at `offset`; createdAt derives from the offset so identity pins read. */
-function at(offset: number, type: string, payload?: Record<string, unknown>): StreamEvent {
-  return { type, payload, offset, createdAt: new Date(offset * 1000).toISOString(), path: "/" };
-}
 
 function reduceAll(events: StreamEvent[], initial = CoreContract.initialState()): CoreState {
   return events.reduce((s, e) => reduceCoreEvent({ event: e, state: s }) ?? s, initial);

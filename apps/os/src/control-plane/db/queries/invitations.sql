@@ -59,7 +59,24 @@ where token_hash = :tokenHash
   );
 
 /** @name insertAcceptedMembership */
-insert into memberships (org_id, user_id, role)
-select org_id, accepted_by, role
+insert into memberships (org_id, user_id, role, created_at)
+select org_id, accepted_by, role, accepted_at
 from invitations
 where token_hash = :tokenHash and acceptance_id = :acceptanceId;
+
+/** @name openInvitations */
+select
+  id,
+  org_id as orgId,
+  role,
+  email_hint as emailHint,
+  expires_at as expiresAt
+from invitations
+where org_id = :orgId
+  and accepted_by is null
+  and revoked_at is null
+  and (:asOperator = 1 or exists (
+    select 1 from memberships a
+    where a.org_id = invitations.org_id and a.user_id = :actorId and a.role = 'owner'
+  ))
+order by created_at, id;

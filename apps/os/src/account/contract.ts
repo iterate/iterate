@@ -2,12 +2,11 @@
 // namespace, where the FACTS about them land — an authentication (session.ts), a personal access
 // token minted, a grant ended or used (grants.ts, oauth.ts), a consent approved, a platform admin
 // signing a client in as the person or the admin doing so (consent.ts) — each
-// appended by the verb that did it, stamped with the caller; and the memberships the session lands
-// here after the control-plane database writes them (session.ts `foldPlatformFacts`; a minted
-// organization's first in the background, `landProjectOnOrganization`).
+// appended by the verb that did it, stamped with the caller; and, as activity, each membership of
+// theirs beginning or ending (session.ts `publishOrganizationFacts`: the control-plane database
+// holds the memberships, and the dash reads them there again when one lands here).
 // This file is the only place its own events and their payloads are spelled; processor.ts folds
-// them into the state a client reads through live state (the dash's tree: which organizations a
-// person belongs to is THIS fold, bounded per person); durable-object.ts hosts it as the
+// them into the state a client reads through live state; durable-object.ts hosts it as the
 // first-party facet `account` (first-party-facets.ts), the row enabled where the first fact is
 // published. A PURE FOLD: no effect lives here. No credential is here: an OAuth token is the
 // provider's (grants.ts), and a personal access token is kept as its SHA-256 alone
@@ -18,16 +17,16 @@
 //   ConsumedEvent<typeof AccountContract>                    what the reduce sees
 import { z } from "zod";
 import { defineProcessorContract, type ProcessorState } from "iterate/stream/processor";
-import { OrganizationContract, OrganizationRole } from "../organization/contract.ts";
 import { SecretCatalog, SecretContract } from "../secret/contract.ts";
 import { IntegrationConnectionRow, IntegrationEventCatalog } from "../integrations/contract.ts";
 
 // Each fact's payload is spelled once and used twice — by its event and by the state that keeps it.
 
-/** `events.iterate.com/account/authenticated` (idempotency key `authenticated/<operationId>`): NO
- *  credential material — only which KIND, when, and a stable op id (dedup on retry). A client can
- *  append this type to its own account, but only the platform's is stamped `source.platform`, and
- *  the account processor folds nothing else (processor.ts). */
+/** `events.iterate.com/account/authenticated` (idempotency key
+ *  `account/authenticated/<operationId>`): NO credential material — only which KIND, when, and a
+ *  stable op id (dedup on retry). A client can append this type to its own account, but only the
+ *  platform's is stamped `source.platform`, and the account processor folds nothing else
+ *  (processor.ts). */
 const AuthenticationFact = z.object({
   credential: z.enum(["from-server-cookie", "admin-secret"]),
   at: z.number(),
@@ -71,8 +70,8 @@ export const GrantUsed = z.object({ grantId: z.string().min(1), at: z.number() }
 export type GrantUsed = z.infer<typeof GrantUsed>;
 /** `events.iterate.com/account/consent-approved`: the person approved a client at consent
  *  (consent.ts): which client, the projects ticked (`null` = every project, current and future)
- *  and the scopes left ticked. The grant's id is not known at approval — the provider mints it
- *  on the code exchange — so the client and the moment are the record. */
+ *  and the scopes left ticked. Keyed by the grant the approval minted
+ *  (`account/consent-approved/<grantId>`), so a repeat of its append lands it once. */
 export const ConsentApproved = z.object({
   clientId: z.string().min(1),
   clientName: z.string(),
@@ -106,9 +105,9 @@ export const AccountContract = defineProcessorContract({
   slug: "account",
   // A checkpoint reduced under an older version is reused as-is by the engine, so bumping the version
   // is what re-reduces every existing root log.
-  version: "7",
+  version: "8",
   description:
-    "The user's account: authentications, personal access tokens, ended and used grants, consents, the organizations the person belongs to, the catalog of the user's own secrets and the lends of them, and the person's own connections.",
+    "The user's account: authentications, personal access tokens, ended and used grants, consents, the catalog of the user's own secrets and the lends of them, and the person's own connections.",
   /** THE REDUCED STATE — the record of the account, folded from the facts above: what a client
    *  reads through live state. The lists ARE the events they are folded from — no re-spelling. */
   stateSchema: z.object({
@@ -131,14 +130,6 @@ export const AccountContract = defineProcessorContract({
     grantUses: z.record(z.string(), z.object({ at: z.number() })).default({}),
     /** Every consent approved, in order: the client and what it was given. */
     consents: z.array(ConsentApproved.extend({ at: z.string() })).default([]),
-    /** The organizations the person belongs to, by organization id: the role, and since when.
-     *  Bounded per person — what the dash's tree hangs off, and what a reach check reads. */
-    memberships: z
-      .record(z.string(), z.object({ role: OrganizationRole, since: z.string() }))
-      .default({}),
-    /** Every organization whose membership ended, by organization id: when. A late `mint` never
-     *  revives one (processor.ts); re-joining clears it. */
-    endedMemberships: z.record(z.string(), z.object({ at: z.string() })).default({}),
     /** Every secret set under this owner (src/secret/contract.ts): what `itx.secrets.list()` reads here. */
     secrets: SecretCatalog.default({}),
     /** The person's own connections (src/integrations/contract.ts), by log path: a sign-in that kept
@@ -181,19 +172,15 @@ export const AccountContract = defineProcessorContract({
     },
   },
   // THE RELATIONSHIPS: the account consumes the user's own secrets' certificates without owning
-  // them (src/secret/contract.ts: cross-posted from `/users/<id>/secrets/<name>`), and the
-  // organization's membership facts (src/organization/contract.ts: landed here by the session
-  // beside the organization's own log, after the control-plane database writes the membership),
-  // and the person's own connections' facts (src/integrations/contract.ts, shared with projects).
-  processorDeps: [SecretContract, OrganizationContract, IntegrationEventCatalog],
+  // them (src/secret/contract.ts: cross-posted from `/users/<id>/secrets/<name>`), and the person's
+  // own connections' facts (src/integrations/contract.ts, shared with projects).
+  processorDeps: [SecretContract, IntegrationEventCatalog],
   consumes: [
     "events.iterate.com/account/authenticated",
     "events.iterate.com/account/personal-access-token-minted",
     "events.iterate.com/account/grant-ended",
     "events.iterate.com/account/grant-used",
     "events.iterate.com/account/consent-approved",
-    "events.iterate.com/organization/member-added",
-    "events.iterate.com/organization/member-removed",
     "events.iterate.com/secret/set",
     "events.iterate.com/secret/deleted",
     "events.iterate.com/secret/lent",

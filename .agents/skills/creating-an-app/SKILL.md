@@ -1,6 +1,6 @@
 ---
 name: creating-an-app
-description: Add a new first-party app under apps/, which is a TanStack Start app on its own Worker and an OAuth client of the platform, like dash, agents, notes, voice and kit. Covers the envs.ts entry, Doppler project, per-PR previews and the prd deploy workflow. Use when someone asks for a new app, client or Worker.
+description: Add a new first-party app under apps/, which is a TanStack Start app on its own Worker and an OAuth client of the platform, like the other clients in apps/. Covers the envs.ts entry, Doppler project, per-PR previews and the prd deploy workflow. Use when someone asks for a new app, client or Worker.
 ---
 
 # Creating an app
@@ -68,6 +68,8 @@ plus `pnpm --dir apps/<app> ensure-resources --env prd` once for the proxied DNS
 - Locally: `pnpm dev` for the platform, plus `APP_CONFIG_URLS__OS=http://localhost:8788` in the
   app's gitignored `.dev.vars`, then `pnpm --dir apps/<app> dev`.
 - On the PR: the Preview OS workflow deploys the app next to the platform. Open its `Sign in ↗`
-  link in an isolated browser session and check that it lands signed in inside project `pr<n>`.
+  link in an isolated browser session, sign in to the preview as `admin@preview.iterate.test`
+  with its password, confirm **Sign in as someone else**, and check that the app lands inside
+  project `pr<n>`.
 - Browser specs go under `specs/<app>/`, with a Playwright project in `playwright.config.ts`
   and a base URL that `runSuite` (`apps/os/scripts/preview.ts`) passes. Notes is the example.

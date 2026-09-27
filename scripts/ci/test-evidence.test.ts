@@ -1,10 +1,9 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { parquetReadObjects } from "hyparquet";
 import type { TestTelemetryArtifact } from "@iterate-com/shared/test-support/ci-telemetry";
+import { temporaryDirectory } from "@iterate-com/shared/test-support/temporary-directory";
 import {
   TestEvidenceManifest,
   testEvidencePaths,
@@ -15,7 +14,6 @@ import {
   reportStepFailure,
   testEvidencePrefix,
   testEvidenceSource,
-  testEvidenceTableKey,
   testEvidenceUploadedPrefix,
   uploadTestEvidence,
   uploadedSummaryLine,
@@ -63,7 +61,7 @@ const target = {
   checkedAt: "2026-09-24T07:22:58.000Z",
 };
 
-test("writes the tests table, then a manifest: the job attempt from the environment, the result from the test steps and the finalizer's check, the deployed target, and every file with its sha256", async () => {
+test("writes a manifest: the job attempt from the environment, the result from the test steps and the finalizer's check, the deployed target, and every file with its sha256", async () => {
   using folder = evidenceFolder({
     artifacts: [
       artifact("vitest:os:1", "2026-09-24T07:23:01.000Z", "2026-09-24T07:25:00.000Z"),
@@ -121,7 +119,6 @@ test("writes the tests table, then a manifest: the job attempt from the environm
     "flake-records/specs/flake-records-1.jsonl",
     "playwright-output/.last-run.json",
     "playwright-output/os-sign-in/trace.zip",
-    "tables/tests.parquet",
     "target.json",
   ]);
   expect(manifest.files).toContainEqual({
@@ -133,10 +130,6 @@ test("writes the tests table, then a manifest: the job attempt from the environm
     JSON.parse(readFileSync(join(folder.path, testEvidencePaths.manifest), "utf8")),
   );
   expect(written).toEqual(manifest);
-  expect(await testsTable(folder.path)).toMatchObject([
-    { test_run_id: "testrun_1nxc464grh", full_name: "stream › appends round-trip" },
-    { test_run_id: "testrun_1nxc464grh", full_name: "stream › appends round-trip" },
-  ]);
 });
 
 test("a job whose runners left nothing still gets a manifest, and it says incomplete and why", async () => {
@@ -156,8 +149,6 @@ test("a job whose runners left nothing still gets a manifest, and it says incomp
   });
   expect(manifest.timings).toBeUndefined();
   expect(manifest.completeness).toBeUndefined();
-  // an empty table, every column still there
-  expect(await testsTable(folder.path)).toEqual([]);
 });
 
 test.for([
@@ -198,7 +189,7 @@ test.for([
   expect(manifest).toMatchObject({ result });
 });
 
-test("what cannot be read or matched is a diagnostic; the table and the manifest are still written", async () => {
+test("another attempt's telemetry is a diagnostic, left out of the runners; the manifest is still written", async () => {
   const retried = artifact("vitest:os:0", "2026-09-24T07:20:01.000Z", "2026-09-24T07:21:00.000Z");
   retried.ci = { ...retried.ci, depotJobUrl: depotJobUrl.replace("1nxc464grh", "0earlier") };
   using folder = evidenceFolder({
@@ -207,26 +198,14 @@ test("what cannot be read or matched is a diagnostic; the table and the manifest
       retried,
     ],
     check: completeCheck,
-    flakeRecords: `${JSON.stringify({
-      name: "a test that was renamed",
-      kind: "failing",
-      outcome: "pinned-fail",
-      pattern: "boom",
-      durationMs: 1,
-      at: "2026-09-24T07:24:00.000Z",
-    })}\n`,
   });
 
   const manifest = await write(folder.path);
 
   expect(manifest).toMatchObject({
     runners: [{ artifactId: "vitest:os:1" }],
-    diagnostics: [
-      "test telemetry from another job attempt, left out of the rows: vitest:os:0",
-      'The failing record "a test that was renamed" names 0 expected-fail tests in this job attempt, not 1; it is on no row',
-    ],
+    diagnostics: ["test telemetry from another job attempt, left out of the runners: vitest:os:0"],
   });
-  expect(await testsTable(folder.path)).toHaveLength(1);
 });
 
 test("keys a run's folder by trust, the day its manifest was written and its Depot job, each a claim of the job's OIDC token", async () => {
@@ -235,9 +214,6 @@ test("keys a run's folder by trust, the day its manifest was written and its Dep
   const pullRequest = await write(folder.path, { createdAt: late });
   expect(testEvidencePrefix(pullRequest)).toBe(
     "evidence/ci/trust=pr/date=2026-09-24/job=jcc9z1d62z/testrun_1nxc464grh/",
-  );
-  expect(testEvidenceTableKey(pullRequest)).toBe(
-    "tables/tests/trust=pr/date=2026-09-24/job=jcc9z1d62z/testrun_1nxc464grh.parquet",
   );
 
   const onMain = {
@@ -288,6 +264,14 @@ test("a job with no Depot job attempt has no test run to file evidence under", a
   await expect(
     write(folder.path, { environment: { ...environment, DEPOT_JOB_URL: undefined } }),
   ).rejects.toThrow("depotJobUrl");
+  await expect(
+    write(folder.path, {
+      environment: {
+        ...environment,
+        DEPOT_JOB_URL: "https://depot.dev/orgs/0p91s0lz49/workflows/ntb262kdvq",
+      },
+    }),
+  ).rejects.toThrow("DEPOT_JOB_URL names no job and attempt");
   expect(existsSync(join(folder.path, testEvidencePaths.manifest))).toBe(false);
 });
 
@@ -296,7 +280,7 @@ const bucket = { accountId: "376ef7ed81b0573f93524de763666c15", bucketName: "ite
 const apiToken = "cf-api-token";
 const apiTokenId = "0123456789abcdef0123456789abcdef";
 
-test("PUTs every listed file write-once with its manifest sha256 as the signed payload hash, then the manifest, then the table's copy for the loader, with the API token as S3 keys", async () => {
+test("PUTs every listed file write-once with its manifest sha256 as the signed payload hash, then the manifest, with the API token as S3 keys", async () => {
   using folder = evidenceFolder({
     artifacts: [artifact("vitest:os:1", "2026-09-24T07:23:01.000Z", "2026-09-24T07:25:00.000Z")],
     check: completeCheck,
@@ -306,26 +290,23 @@ test("PUTs every listed file write-once with its manifest sha256 as the signed p
 
   const uploaded = await uploadTestEvidence({ repoRoot: folder.path, ...bucket, apiToken, ...api });
 
-  const { prefix, tableKey } = uploaded;
+  const { prefix } = uploaded;
   const requests = api.r2Requests();
   const urls = requests.map((request) => new URL(request.url));
   expect(new Set(urls.map((url) => url.host))).toEqual(
     new Set(["376ef7ed81b0573f93524de763666c15.r2.cloudflarestorage.com"]),
   );
   const keys = urls.map((url) => decodeURIComponent(url.pathname));
-  // the files in parallel, in any order; the table's copy for the loader; the manifest last, the
-  // commit point for both
-  expect(keys.slice(0, -2).sort()).toEqual(
+  // the files in parallel, in any order; the manifest last, the commit point
+  expect(keys.slice(0, -1).sort()).toEqual(
     manifest.files.map((file) => `/iterate-ci/${prefix}${file.path}`),
   );
-  expect(keys.slice(-2)).toEqual([`/iterate-ci/${tableKey}`, `/iterate-ci/${prefix}manifest.json`]);
+  expect(keys.at(-1)).toBe(`/iterate-ci/${prefix}manifest.json`);
   expect(prefix).toBe("evidence/ci/trust=pr/date=2026-09-24/job=jcc9z1d62z/testrun_1nxc464grh/");
-  const table = manifest.files.find((file) => file.path === "tables/tests.parquet")!;
   const manifestBytes = readFileSync(join(folder.path, testEvidencePaths.manifest)).byteLength;
   expect(uploaded).toMatchObject({
-    objects: manifest.files.length + 2,
-    bytes:
-      manifest.files.reduce((total, file) => total + file.bytes, 0) + table.bytes + manifestBytes,
+    objects: manifest.files.length + 1,
+    bytes: manifest.files.reduce((total, file) => total + file.bytes, 0) + manifestBytes,
     retries: 0,
   });
   // `=` is sent percent-encoded, as S3 clients sign it; R2 stores it decoded (measured 2026-09-24)
@@ -359,29 +340,13 @@ test("PUTs every listed file write-once with its manifest sha256 as the signed p
   expect(trace.headers.get("authorization")).toMatch(
     new RegExp(`^AWS4-HMAC-SHA256 Credential=${apiTokenId}/\\d{8}/auto/s3/aws4_request, `),
   );
-  expect(requests.at(-2)!.headers.get("content-type")).toBe("application/vnd.apache.parquet");
   expect(requests.at(-1)!.headers.get("content-type")).toBe("application/json");
-});
-
-test("a cancelled run's folder is uploaded without a copy of its tests table, whose rows stop part way", async () => {
-  using folder = evidenceFolder({
-    artifacts: [artifact("vitest:os:1", "2026-09-24T07:23:01.000Z", "2026-09-24T07:25:00.000Z")],
-    check: completeCheck,
-  });
-  const manifest = await write(folder.path, { cancelled: true });
-  const api = cloudflare();
-
-  const uploaded = await uploadTestEvidence({ repoRoot: folder.path, ...bucket, apiToken, ...api });
-
-  expect(manifest).toMatchObject({ result: "cancelled" });
-  expect(uploaded).toMatchObject({ tableKey: undefined, objects: manifest.files.length + 1 });
-  const keys = api.r2Requests().map((request) => decodeURIComponent(new URL(request.url).pathname));
-  expect(keys.filter((key) => key.includes("/tables/tests/"))).toEqual([]);
-  expect(keys.at(-1)).toBe(`/iterate-ci/${uploaded.prefix}manifest.json`);
 });
 
 test("a Cloudflare 5xx, 429 or dropped connection is retried, each retry a platform-failure warn, and the upload completes", async () => {
   using folder = evidenceFolder({ artifacts: [], check: completeCheck });
+  using _clock = fakeClock();
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
   await write(folder.path);
   const failures = [
     new Response("<Error><Code>InternalError</Code></Error>", { status: 503 }),
@@ -394,67 +359,83 @@ test("a Cloudflare 5xx, 429 or dropped connection is retried, each retry a platf
     if (failure instanceof Error) throw failure;
     return failure;
   });
-  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 
   const uploaded = await uploadTestEvidence({ repoRoot: folder.path, ...bucket, apiToken, ...api });
 
   expect(uploaded).toMatchObject({ retries: 3 });
   expect(api.r2Requests().filter((request) => request.url.endsWith("trace.zip"))).toHaveLength(4);
-  // 1 s, then the 429's Retry-After capped at 5 s, then 4 s
-  expect(api).toMatchObject({ waits: [1000, 5000, 4000] });
-  expect(warn.mock.calls.map(([entry]) => entry)).toEqual([
-    expect.objectContaining({
+  expect(warn.mock.calls.map(([entry]) => entry)).toMatchObject([
+    {
       event: "test-evidence.platform-failure-retry",
       request: expect.stringMatching(/^PUT evidence\/ci\/.*\/trace\.zip$/u),
       attempt: 1,
       status: 503,
-    }),
-    expect.objectContaining({ attempt: 2, status: 429, waitMs: 5000 }),
-    expect.objectContaining({ attempt: 3, answer: "fetch failed: ECONNRESET" }),
+    },
+    // the 429's Retry-After, up to CI_HTTP's longest wait
+    { attempt: 2, status: 429, retryInMs: 10_000 },
+    { attempt: 3, status: "network", message: expect.stringMatching(/fetch failed: ECONNRESET$/u) },
   ]);
-  warn.mockRestore();
 });
 
 test("the retries are bounded: a Cloudflare 5xx that persists fails the upload, and the manifest never lands", async () => {
   using folder = evidenceFolder({ artifacts: [], check: completeCheck });
+  using _clock = fakeClock();
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
   await write(folder.path);
   const api = cloudflare((request) =>
     request.url.endsWith("trace.zip") ? new Response("down", { status: 500 }) : ok(),
   );
-  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 
   await expect(
     uploadTestEvidence({ repoRoot: folder.path, ...bucket, apiToken, ...api }),
-  ).rejects.toThrow(/trace\.zip: 500 down \(after 3 retries\)$/u);
+  ).rejects.toThrow(/trace\.zip answered HTTP 500: down$/u);
   expect(api.r2Requests().filter((request) => request.url.endsWith("trace.zip"))).toHaveLength(4);
-  expect(warn).toHaveBeenCalledTimes(3);
+  expect(warn.mock.calls.map(([entry]) => entry.event)).toEqual([
+    "test-evidence.platform-failure-retry",
+    "test-evidence.platform-failure-retry",
+    "test-evidence.platform-failure-retry",
+    "test-evidence.platform-failure-gave-up",
+  ]);
   expect(
     api.requests.some((request) => request.url.endsWith("/testrun_1nxc464grh/manifest.json")),
   ).toBe(false);
-  warn.mockRestore();
 });
 
-test("no retry starts after the upload's deadline, and the manifest never lands", async () => {
+test("the upload's 90 s deadline aborts the request in flight, and no retry or manifest follows it", async () => {
   using folder = evidenceFolder({ artifacts: [], check: completeCheck });
   await write(folder.path);
-  const deadline = new AbortController();
+  using _clock = deadlineClock();
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  const tried = Promise.withResolvers<void>();
   const api = cloudflare((request) => {
     if (!request.url.endsWith("trace.zip")) return ok();
-    // the deadline passes while R2 answers the first try
-    deadline.abort(new DOMException("The operation timed out.", "TimeoutError"));
-    return new Response("down", { status: 503 });
+    tried.resolve();
+    // R2 never answers: the request waits for its signal, and fails as fetch fails when it aborts
+    return new Promise((_, reject) => {
+      const abort = () => reject(request.signal.reason);
+      if (request.signal.aborted) abort();
+      else request.signal.addEventListener("abort", abort);
+    });
   });
 
-  await expect(
-    uploadTestEvidence({
-      repoRoot: folder.path,
-      ...bucket,
-      apiToken,
-      ...api,
-      deadline: deadline.signal,
-    }),
-  ).rejects.toThrow(/trace\.zip: 503 down \(after 0 retries\)$/u);
-  expect(api).toMatchObject({ waits: [] });
+  const failed = expect(
+    uploadTestEvidence({ repoRoot: folder.path, ...bucket, apiToken, ...api }),
+  ).rejects.toMatchObject({ name: "TimeoutError" });
+  await tried.promise;
+  // The first try's 60 s ceiling, a retry 2 s later, then the upload's deadline at 90 s.
+  await vi.advanceTimersByTimeAsync(90_000);
+  await failed;
+
+  expect(api.r2Requests().filter((request) => request.url.endsWith("trace.zip"))).toHaveLength(2);
+  expect(warn.mock.calls.map(([entry]) => entry)).toMatchObject([
+    {
+      event: "test-evidence.platform-failure-retry",
+      kind: "overloaded",
+      message: expect.stringMatching(/trace\.zip: no answer within 60 s$/u),
+      attempt: 1,
+      retryInMs: 2_000,
+    },
+  ]);
   expect(
     api.requests.some((request) => request.url.endsWith("/testrun_1nxc464grh/manifest.json")),
   ).toBe(false);
@@ -494,7 +475,6 @@ test("a key that exists (412) is this upload's own when it holds the same bytes,
   expect(
     forbidden.r2Requests().filter((request) => request.url.endsWith("trace.zip")),
   ).toHaveLength(1);
-  expect(forbidden).toMatchObject({ waits: [] });
 });
 
 test("a token Cloudflare does not verify sends nothing to R2", async () => {
@@ -532,7 +512,7 @@ test("a file that changed after the manifest listed it is never sent, and the ma
 });
 
 test("a failed step says why in a warning annotation and a line of the job's summary, and leaves the marker the fallback report looks for", () => {
-  using runner = temporaryDirectory("test-evidence-runner-");
+  using runner = temporaryDirectory();
   const summary = join(runner.path, "summary.md");
   const log = vi.spyOn(console, "log").mockImplementation(() => {});
 
@@ -555,17 +535,16 @@ test("a failed step says why in a warning annotation and a line of the job's sum
   );
   expect(existsSync(join(runner.path, "test-evidence-upload.reported"))).toBe(true);
   expect(existsSync(join(runner.path, "test-evidence-write.reported"))).toBe(false);
-  log.mockRestore();
 });
 
 test("nothing the upload logs or reports carries the API token or the S3 secret derived from it", async () => {
   using folder = evidenceFolder({ artifacts: [], check: completeCheck });
-  using runner = temporaryDirectory("test-evidence-runner-");
+  using runner = temporaryDirectory();
+  using _clock = fakeClock();
   await write(folder.path);
   const output: unknown[] = [];
-  const spies = (["log", "warn", "error"] as const).map((level) =>
-    vi.spyOn(console, level).mockImplementation((...args) => output.push(...args)),
-  );
+  for (const level of ["log", "warn", "error"] as const)
+    vi.spyOn(console, level).mockImplementation((...args) => output.push(...args));
   const runnerEnvironment = {
     GITHUB_STEP_SUMMARY: join(runner.path, "summary.md"),
     RUNNER_TEMP: runner.path,
@@ -615,7 +594,6 @@ test("nothing the upload logs or reports carries the API token or the S3 secret 
   expect(printed).toContain("Test evidence not in R2");
   expect(printed).not.toContain(apiToken);
   expect(printed).not.toContain(secret);
-  for (const spy of spies) spy.mockRestore();
 });
 
 test("the summary line of an uploaded folder names its prefix, which the CI telemetry sync reads back from the job's summary", () => {
@@ -640,7 +618,7 @@ test("the summary line of an uploaded folder names its prefix, which the CI tele
 });
 
 test("the source's tree is the files on disk, changes and new files included, and the index is left alone", async () => {
-  using folder = temporaryDirectory("test-evidence-git-");
+  using folder = temporaryDirectory();
   const repo = folder.path;
   const git = (...args: string[]) =>
     execFileSync(
@@ -710,16 +688,7 @@ function cloudflare(r2: (request: Request) => Response | Promise<Response> = () 
       return new Response(null, { status: 401 });
     return r2(request);
   };
-  const waits: number[] = [];
-  return {
-    fetch,
-    wait: async (ms: number) => {
-      waits.push(ms);
-    },
-    waits,
-    requests,
-    r2Requests: () => requests.slice(1),
-  };
+  return { fetch, requests, r2Requests: () => requests.slice(1) };
 }
 const ok = () => new Response(null, { status: 200 });
 const md5 = (text: string) => createHash("md5").update(text).digest("hex");
@@ -742,9 +711,8 @@ function evidenceFolder(input: {
   artifacts: TestTelemetryArtifact[];
   check?: object;
   target?: object;
-  flakeRecords?: string;
 }) {
-  const folder = temporaryDirectory("test-evidence-");
+  const folder = temporaryDirectory();
   const put = (path: string, contents: string) => {
     mkdirSync(join(folder.path, path, ".."), { recursive: true });
     writeFileSync(join(folder.path, path), contents);
@@ -756,22 +724,10 @@ function evidenceFolder(input: {
     );
   if (input.check) put(testEvidencePaths.telemetryCheck, JSON.stringify(input.check));
   if (input.target) put(testEvidencePaths.target, JSON.stringify(input.target));
-  put(`${testEvidencePaths.flakeRecords}/specs/flake-records-1.jsonl`, input.flakeRecords || "");
+  put(`${testEvidencePaths.flakeRecords}/specs/flake-records-1.jsonl`, "");
   put(`${testEvidencePaths.playwrightOutput}/.last-run.json`, '{"status":"passed"}');
   put(`${testEvidencePaths.playwrightOutput}/os-sign-in/trace.zip`, "trace");
   return folder;
-}
-
-async function testsTable(repoRoot: string) {
-  return parquetReadObjects({
-    // a copy: a small file's Buffer is a slice of Node's shared pool, so its `.buffer` holds other bytes
-    file: new Uint8Array(readFileSync(join(repoRoot, testEvidencePaths.testsTable))).buffer,
-  });
-}
-
-function temporaryDirectory(prefix: string) {
-  const path = mkdtempSync(join(tmpdir(), prefix));
-  return { path, [Symbol.dispose]: () => rmSync(path, { recursive: true }) };
 }
 
 function artifact(
@@ -780,7 +736,7 @@ function artifact(
   finishedAt: string,
 ): TestTelemetryArtifact {
   return {
-    artifactSchemaVersion: 2,
+    artifactSchemaVersion: 3,
     artifactId,
     producer: "vitest-retry-telemetry-reporter",
     createdAt: finishedAt,
@@ -793,31 +749,59 @@ function artifact(
       workflowRunId: "151191957946117",
       workflowRunAttempt: "1",
       jobName: "e2e",
-      workspaceRoot: "/home/runner/work/iterate/iterate",
-      runnerProvider: "depot",
       depotJobUrl,
-      executionContext: "ci",
     },
     context: { framework: "vitest", testKind: "e2e", suite: "vitest", workspace: "os" },
-    run: { status: "passed", startedAt, finishedAt, durationMs: 1 },
-    runners: [],
+    run: { status: "passed", startedAt, finishedAt, durationMs: 1, collectionErrors: [] },
     tests: [
       {
         fullName: "stream › appends round-trip",
         leafName: "appends round-trip",
         moduleId: "/home/runner/work/iterate/iterate/apps/os/src/stream.test.ts",
         tags: [],
-        annotations: [],
         retryCount: 0,
         passedAfterRetry: false,
         state: "passed",
         durationMs: 12.5,
-        attemptDetail: "aggregate-only",
-        attempts: [],
-        phases: [],
         errors: [],
       },
     ],
-    modules: [],
+  };
+}
+
+/** The retries' waits on a fake clock that moves on whenever nothing else is left to run: CI_HTTP's
+ *  schedule kept, while the upload reads its files for real. */
+function fakeClock() {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  vi.setTimerTickMode("nextTimerAsync");
+  return {
+    [Symbol.dispose]() {
+      vi.useRealTimers();
+    },
+  };
+}
+
+/** A fake clock the test moves by hand, the upload's deadline and each request's ceiling on it
+ *  (the fake clock cannot move AbortSignal.timeout's own timer, so each is a fake setTimeout that
+ *  aborts as the real one does), and each wait at its longest (`Math.random` at 1). By hand, so no
+ *  deadline passes while the upload reads its files for real. */
+function deadlineClock() {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  vi.spyOn(Math, "random").mockReturnValue(1);
+  vi.spyOn(AbortSignal, "timeout").mockImplementation((ms) => {
+    const deadline = new AbortController();
+    setTimeout(
+      () =>
+        deadline.abort(
+          new DOMException("The operation was aborted due to timeout", "TimeoutError"),
+        ),
+      ms,
+    );
+    return deadline.signal;
+  });
+  return {
+    [Symbol.dispose]() {
+      vi.useRealTimers();
+    },
   };
 }

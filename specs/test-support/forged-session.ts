@@ -3,6 +3,7 @@ import { uniqueFixtureSlug } from "@iterate-com/shared/test-support/fixture-slug
 import type { VideoModePageExtension } from "middlewright";
 import type { OperatorSession } from "./operator.ts";
 import { readOsPlaywrightAuthConfig } from "./auth-config.ts";
+import { workerBaseUrl } from "./worker-base-url.ts";
 
 /**
  * A browser signed in as a fresh person who owns a fresh project, without driving the sign-in page
@@ -28,6 +29,8 @@ export async function createProjectFixture(
 
   return {
     project,
+    /** The fixture's person, for a second project of theirs (`operator.authenticate({ email })`). */
+    email,
     itx: input.operator.authenticate().projects.get(project.id),
     [Symbol.asyncDispose]() {
       // A fixture's project is left behind (a spec that deletes one does so itself): a preview's
@@ -83,12 +86,11 @@ export function createSessionFixture(slugPrefix: string, input: { page: Page }) 
  * context. The sign-in page itself is the subject of specs/os/issuer-pages.spec.ts.
  */
 async function mintIterateSession(input: { email: string; page: Page }) {
-  // the OS platform, whichever app host the spec's project targets
-  const { osBaseUrl, loginPassword } = readOsPlaywrightAuthConfig();
+  const { loginPassword } = readOsPlaywrightAuthConfig();
   return test.step("sign in with the deployment's test password", async () => {
-    const origin = new URL(osBaseUrl).origin;
-    const login = await input.page.request.post(`${origin}/login`, {
-      headers: { Origin: origin },
+    // the OS platform, whichever app host the spec's project targets
+    const login = await input.page.request.post(`${workerBaseUrl}/login`, {
+      headers: { Origin: workerBaseUrl },
       form: { email: input.email, password: loginPassword, next: "/" },
       maxRedirects: 0,
       // A page.request call inherits the tight actionTimeout, but this is fixture setup over HTTP

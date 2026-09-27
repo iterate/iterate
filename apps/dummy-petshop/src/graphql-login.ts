@@ -19,6 +19,7 @@
  * - Anything else on the GraphQL endpoint is a loud `errors` answer: it
  *   logs you in; the API it unlocks is `/api/*`.
  */
+import { LOGIN_PASSWORD } from "./oauth-provider.ts";
 import { nowSeconds, seal, unseal } from "./seal.ts";
 
 /** How long a GraphQL-minted session lives: the pets API's ordinary two
@@ -37,10 +38,6 @@ export const GRAPHQL_SESSION_CLIENT_ID = "graphql-session-login";
  * it bumps that account's epoch and no one else's. */
 export const graphqlSessionAccountClientId = (username: string) =>
   `${GRAPHQL_SESSION_CLIENT_ID}:${username}`;
-
-/** The fixture login password (any username works) — same convention as
- * petshop's legacy-login endpoint. */
-export const GRAPHQL_LOGIN_PASSWORD = "correct-horse";
 
 /** What the endpoint needs from the shop: the sealing key and a per-call read of
  * the revocation epochs a session of `username` is bound to — the endpoint's and
@@ -78,7 +75,7 @@ async function mintSession(
 ): Promise<Response> {
   const input = (variables.input ?? {}) as Record<string, unknown>;
   const username = typeof input.username === "string" ? input.username : "";
-  if (!username || input.password !== GRAPHQL_LOGIN_PASSWORD) {
+  if (!username || input.password !== LOGIN_PASSWORD) {
     // Vendors with this login style answer a bad login with a failures array
     // in a 200 — a client (and the OS strategy) must read the body, not just
     // the status.

@@ -2,6 +2,7 @@
 // directory) and the relay's one-registration rule. Node: the pager layer is never entered (no sockets).
 
 import type { ItxExpression } from "iterate/expression";
+import type { StreamEventInput } from "iterate/stream/processor";
 import { expect, onTestFinished, test, vi } from "vitest";
 import {
   type RpcStubFetchServer,
@@ -65,7 +66,7 @@ test("stampCallerHeaders strips every header the DO's fetch trusts as the platfo
 // return, while its pager could lend a live one. A client's own throw, or a coded refusal, is not a
 // broken transport and keeps the stub warm. Node: the pager layer is never entered (no sockets).
 
-test.each([
+test.for([
   {
     rejects: "a transport failure (workerd's `retryable: true` stamp)",
     error: Object.assign(new Error("Network connection lost."), { retryable: true }),
@@ -139,12 +140,7 @@ test("a page the relay never answers fails every call waiting on it after 10 s, 
     deserializeAttachment: () => ({ rpcStubKey: "fan-7" }),
     send: vi.fn(),
   };
-  const rpcStubDirectory = new RpcStubDirectory({
-    ctx: { acceptWebSocket: () => {}, getWebSockets: () => [pager as unknown as WebSocket] },
-    onPresence: () => {},
-    rpcStubFetch: { serve: async () => undefined } as unknown as RpcStubFetchServer,
-    appendEvents: () => {},
-  });
+  const rpcStubDirectory = directory([pager as unknown as WebSocket]);
   const waiting = [1, 2].map((round) =>
     rpcStubDirectory.invokeRpcStub("fan-7", [["", round]]).catch((error: unknown) => error),
   );
@@ -202,13 +198,7 @@ test("a relay registers onRpcBroken on the session's stub ONCE per session, not 
     lendRpcStub: async (_input: { rpcStubKey: string; stub: unknown }) => undefined,
   };
 
-  const relay = await lendRpcStubOverPager(
-    (() => context) as unknown as Parameters<typeof lendRpcStubOverPager>[0],
-    provider as unknown as Parameters<typeof lendRpcStubOverPager>[1],
-    "key-1",
-    [], // the events that name the key — none for a bare pager
-    () => {}, // waitUntil
-  );
+  const relay = await lend(context, provider, "key-1");
 
   // A long-lived, active device: five page/release cycles, each lending a fresh stub.
   const PAGES = 5;
@@ -223,18 +213,19 @@ test("a relay registers onRpcBroken on the session's stub ONCE per session, not 
 // ── rpc stub relay ── A PAGE'S LEND THE PLATFORM FAILED IS LENT AGAIN. A relay's connection to
 // the DO can drop under a burst of lends, and workerd fails every lend in flight with a retryable
 // "Network connection lost.". The relay lends again on a fresh stub (a re-lend replaces the key's
-// stub, so a repeat is harmless) after 0, 1 and 3 s, inside the DO's 10 s page timeout, each repeat
-// a `rpc-stubs.platform-failure-relend` warn. A lend that still fails, or fails with the DO's own
-// error, is one `rpc-stub-lend-failed` warn: the DO's page times out and a push waiting on it is lost.
+// stub, so a repeat is harmless) on the RELAY_BURST schedule, inside the DO's 10 s page timeout,
+// each repeat a `rpc-stubs.platform-failure-retry` warn. A lend that still fails, or fails with the
+// DO's own error, is one `rpc-stub-lend-failed` warn: the DO's page times out and a push waiting on
+// it is lost.
 
-test.each([
+test.for([
   {
     lendFails: "once with the transport cut",
     failures: 1,
     transportCut: true,
     outcome: "lent again at once",
     tries: 2,
-    events: ["rpc-stubs.platform-failure-relend"],
+    events: ["rpc-stubs.platform-failure-retry"],
   },
   {
     lendFails: "on every try with the transport cut",
@@ -243,9 +234,10 @@ test.each([
     outcome: "four tries in 4 s, then given up",
     tries: 4,
     events: [
-      "rpc-stubs.platform-failure-relend",
-      "rpc-stubs.platform-failure-relend",
-      "rpc-stubs.platform-failure-relend",
+      "rpc-stubs.platform-failure-retry",
+      "rpc-stubs.platform-failure-retry",
+      "rpc-stubs.platform-failure-retry",
+      "rpc-stubs.platform-failure-gave-up",
       "rpc-stub-lend-failed",
     ],
   },
@@ -263,7 +255,6 @@ test.each([
     vi.useFakeTimers();
     onTestFinished(() => void vi.useRealTimers());
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    warn.mockClear(); // an earlier test's spy on console.warn is this one: only this test's calls count
     const session = { dup: () => session, onRpcBroken() {}, [Symbol.dispose]() {} };
     const pager = new FakePagerWebSocket();
     let lendTries = 0;
@@ -279,9 +270,9 @@ test.each([
       },
     };
     const waitedUntil: Promise<unknown>[] = [];
-    const relay = await lendRpcStubOverPager(
-      (() => context) as unknown as Parameters<typeof lendRpcStubOverPager>[0],
-      session as unknown as Parameters<typeof lendRpcStubOverPager>[1],
+    const relay = await lend(
+      context,
+      session,
       "subscription:fan-104",
       [],
       (p) => void waitedUntil.push(p),
@@ -307,7 +298,7 @@ test("a lend recalled while its repeat waits is not lent again, and its failure 
   vi.useFakeTimers();
   onTestFinished(() => void vi.useRealTimers());
   const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-  warn.mockClear(); // an earlier test's spy on console.warn is this one: only this test's calls count
+  vi.spyOn(Math, "random").mockReturnValue(0.5); // the 1 s wait jittered to 750 ms
   const session = { dup: () => session, onRpcBroken() {}, [Symbol.dispose]() {} };
   const pager = new FakePagerWebSocket();
   let lendTries = 0;
@@ -319,22 +310,22 @@ test("a lend recalled while its repeat waits is not lent again, and its failure 
     },
   };
   const waitedUntil: Promise<unknown>[] = [];
-  const relay = await lendRpcStubOverPager(
-    (() => context) as unknown as Parameters<typeof lendRpcStubOverPager>[0],
-    session as unknown as Parameters<typeof lendRpcStubOverPager>[1],
+  const relay = await lend(
+    context,
+    session,
     "subscription:fan-104",
     [],
     (p) => void waitedUntil.push(p),
   );
   pager.page();
-  await vi.advanceTimersByTimeAsync(500); // the first try and its repeat at 0 ms failed; the next waits 1 s
+  await vi.advanceTimersByTimeAsync(500); // the first try and its repeat at 0 ms failed; the next waits 750 ms
   relay.dispose();
   await vi.advanceTimersByTimeAsync(4_000);
   await Promise.all(waitedUntil);
   expect(lendTries).toBe(2);
   expect(warn.mock.calls.map(([line]) => (line as { event: string }).event)).toEqual([
-    "rpc-stubs.platform-failure-relend",
-    "rpc-stubs.platform-failure-relend",
+    "rpc-stubs.platform-failure-retry",
+    "rpc-stubs.platform-failure-retry",
   ]);
 });
 
@@ -346,7 +337,7 @@ test("a lend recalled while its repeat waits is not lent again, and its failure 
 // 10 s more fails the call RPC_STUB_OFFLINE, logged. A client that answers the probe is only slow,
 // and its call waits on.
 
-test.each([
+test.for([
   {
     client: "answers nothing (its network is gone)",
     callAnswersAfterMs: null,
@@ -363,7 +354,6 @@ test.each([
   vi.useFakeTimers();
   onTestFinished(() => void vi.useRealTimers());
   const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-  warn.mockClear(); // an earlier test's spy on console.warn is this one: only this test's calls count
   let probes = 0;
   const never = () => new Promise(() => {});
   const client = {
@@ -387,13 +377,7 @@ test.each([
     fetch: async () => ({ status: 101, webSocket: pager }),
     lendRpcStub: async (input: { stub: BorrowedRpcStub }) => void lentStubs.push(input.stub),
   };
-  const relay = await lendRpcStubOverPager(
-    (() => context) as unknown as Parameters<typeof lendRpcStubOverPager>[0],
-    client as unknown as Parameters<typeof lendRpcStubOverPager>[1],
-    "itx.tunnels.laptop",
-    [],
-    () => {},
-  );
+  const relay = await lend(context, client, "itx.tunnels.laptop");
   onTestFinished(() => relay.dispose());
   pager.page();
   const call = lentStubs[0].invoke([["hello"]]).then(
@@ -431,10 +415,10 @@ test.each([
 // the /api isolate and the DO, never the client's own socket, so it drops while the session lives (a
 // fault on the hop between colos; a DO reset kills every hibernatable socket). What a close MEANS is
 // its code: 1000 is deliberate — this side's dispose, the DO replacing the pager with a newer one —
-// and ends the lend; anything else is a drop, and the relay dials the DO again (bounded: five
-// tries over ~30 s, all within 60 s of the drop) while the session's dup stays lent.
+// and ends the lend; anything else is a drop, and the relay dials the DO again (redial.ts: twelve
+// tries over ~56 s, all within 60 s of the drop) while the session's dup stays lent.
 
-test.each([
+test.for([
   {
     closes: "with 1006 (the leg dropped: the DO reset, the hop failed)",
     code: 1006,
@@ -452,7 +436,6 @@ test.each([
   async ({ code, redialed }) => {
     vi.useFakeTimers();
     onTestFinished(() => void vi.useRealTimers());
-    vi.spyOn(console, "warn").mockImplementation(() => {});
     const fake = await relayOverFakeDurableObject(() => new FakePagerWebSocket());
     expect(fake.pagers).toHaveLength(1);
 
@@ -476,7 +459,6 @@ test("a pager whose keepalives go unanswered (a reset whose close the relay neve
   vi.useFakeTimers();
   onTestFinished(() => void vi.useRealTimers());
   const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-  warn.mockClear();
   let closedBeforeRedial: number | undefined;
   const fake = await relayOverFakeDurableObject((dial) => {
     if (dial === 2) closedBeforeRedial = closed.mock.calls.length;
@@ -511,33 +493,77 @@ test("a pager whose keepalives go unanswered (a reset whose close the relay neve
   expect(fake).toMatchObject({ dials: 2 });
 });
 
-test("a pager that closes under a live session: a re-dial the DO never answers is given up after five tries over ~30 s, logged as an error: the dup is released, the lend ends", async () => {
-  vi.useFakeTimers();
-  onTestFinished(() => void vi.useRealTimers());
-  vi.spyOn(console, "warn").mockImplementation(() => {});
-  const error = vi.spyOn(console, "error").mockImplementation(() => {});
-  const fake = await relayOverFakeDurableObject((dial) =>
-    dial === 1 ? new FakePagerWebSocket() : new Error("Durable Object reset"),
-  );
+// A deploy's reset answers the pager's re-dials with a 5xx or a throw until the context's fresh
+// incarnation serves. The re-dials come at once, then 0.25, 0.5, 1, 2, 4 and 8 s apart, the last
+// at 55.75 s: an outage shorter than that keeps the lend; a longer one ends it with an error, which
+// pages. `dials` counts the first dial too.
+test.for([
+  {
+    outage: "503s for 30 s",
+    status: 503,
+    forMs: 30_000,
+    outcome: "back in service on the ninth re-dial",
+    expected: {
+      dials: 10,
+      disposed: 0,
+      logged: { event: "rpc-stub-pager-redialed", attempt: 9, downMs: 31_750 },
+    },
+  },
+  {
+    outage: "resets for 55 s",
+    status: null,
+    forMs: 55_000,
+    outcome: "back in service on the twelfth re-dial",
+    expected: {
+      dials: 13,
+      disposed: 0,
+      logged: { event: "rpc-stub-pager-redialed", attempt: 12, downMs: 55_750 },
+    },
+  },
+  {
+    outage: "resets past the twelfth re-dial",
+    status: null,
+    forMs: Infinity,
+    outcome: "the lend ends, logged as an error",
+    expected: {
+      dials: 13,
+      disposed: 1,
+      logged: {
+        event: "rpc-stub-pager-redial-failed",
+        rpcStubKey: "key-4",
+        lastFailure: "Durable Object reset",
+        downMs: 55_750,
+      },
+    },
+  },
+])(
+  "a pager that drops under a live session while its context answers $outage: $outcome",
+  async ({ status, forMs, expected }) => {
+    vi.useFakeTimers();
+    onTestFinished(() => void vi.useRealTimers());
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    let droppedAt = Infinity;
+    const fake = await relayOverFakeDurableObject((dial) => {
+      if (dial === 1 || Date.now() - droppedAt >= forMs) return new FakePagerWebSocket();
+      return status ? new Response(null, { status }) : new Error("Durable Object reset");
+    });
 
-  fake.pagers[0].close(1006);
-  const redial = fake.waitedUntil[0]!; // try 1 is immediate; then 2, 4, 8 and 16 s apart
-  await vi.advanceTimersByTimeAsync(30_000);
-  await redial;
-  expect(fake).toMatchObject({ dials: 6, disposed: 1 }); // the first dial and five re-dials
-  expect(error).toHaveBeenCalledWith(
-    expect.objectContaining({
-      event: "rpc-stub-pager-redial-failed",
-      rpcStubKey: "key-4",
-      lastFailure: "Durable Object reset",
-      downMs: 30_000,
-    }),
-  );
-});
+    droppedAt = Date.now();
+    fake.pagers[0].close(1006);
+    await vi.advanceTimersByTimeAsync(60_000);
+    await fake.waitedUntil[0];
+    expect({
+      dials: fake.dials,
+      disposed: fake.disposed,
+      logged: [...warn.mock.calls, ...error.mock.calls].map(([line]) => line),
+    }).toEqual({ ...expected, logged: [expect.objectContaining(expected.logged)] });
+  },
+);
 
 // 2026-09-24 14:06: a deploy's reset answered the voice boards' re-dials with 503, and the relay
 // read that as a refusal and gave up on the first answer. A 5xx is the DO not ready yet.
-test.each([
+test.for([
   { answers: "503 (the DO not ready yet)", status: 503, dials: 3, disposed: 0 },
   { answers: "409 (the DO's refusal)", status: 409, dials: 2, disposed: 1 },
 ])(
@@ -545,8 +571,6 @@ test.each([
   async ({ status, dials, disposed }) => {
     vi.useFakeTimers();
     onTestFinished(() => void vi.useRealTimers());
-    vi.spyOn(console, "warn").mockImplementation(() => {});
-    vi.spyOn(console, "error").mockImplementation(() => {});
     const fake = await relayOverFakeDurableObject((dial) =>
       dial === 2 ? new Response(null, { status }) : new FakePagerWebSocket(),
     );
@@ -561,7 +585,6 @@ test.each([
 test("a re-dial the DO never answers is given up 60 s after the drop, never dialed again beside it: the late pager is closed, never taken into service", async () => {
   vi.useFakeTimers();
   onTestFinished(() => void vi.useRealTimers());
-  vi.spyOn(console, "warn").mockImplementation(() => {});
   const error = vi.spyOn(console, "error").mockImplementation(() => {});
   let answerLate: (pager: FakePagerWebSocket) => void = () => {};
   const late = new FakePagerWebSocket();
@@ -573,7 +596,9 @@ test("a re-dial the DO never answers is given up 60 s after the drop, never dial
   );
 
   fake.pagers[0].close(1006);
-  await vi.advanceTimersByTimeAsync(60_000);
+  await vi.advanceTimersByTimeAsync(59_999);
+  expect(error).not.toHaveBeenCalled();
+  await vi.advanceTimersByTimeAsync(1);
   await fake.waitedUntil[0];
   expect(fake).toMatchObject({ dials: 2, disposed: 1 }); // one re-dial, never a second beside it
   expect(error).toHaveBeenCalledWith(
@@ -585,13 +610,13 @@ test("a re-dial the DO never answers is given up 60 s after the drop, never dial
   );
   answerLate(late);
   await vi.advanceTimersByTimeAsync(0);
-  expect(closed).toHaveBeenCalledWith(1000, "re-dial gave up");
+  expect(closed).toHaveBeenCalledWith(1000, "re-dial abandoned");
 });
 
 // A voice board that goes away takes its /api session with it, and its pager often drops a moment
 // before the session's own end reaches the lend. The drop is logged with its outcome, so a session
 // that ends while the re-dial is in flight logs nothing; a live one logs the drop once it is back.
-test.each([
+test.for([
   {
     session: "ends while the re-dial is in flight",
     endSession: true,
@@ -609,8 +634,6 @@ test.each([
     onTestFinished(() => void vi.useRealTimers());
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const error = vi.spyOn(console, "error").mockImplementation(() => {});
-    warn.mockClear();
-    error.mockClear();
     const redialed = new FakePagerWebSocket();
     const closed = vi.spyOn(redialed, "close");
     const fake = await relayOverFakeDurableObject(async (dial) => {
@@ -636,9 +659,7 @@ test.each([
 test("a lend recalled while a re-dial hangs ends quietly at the deadline: no error, the late pager closed", async () => {
   vi.useFakeTimers();
   onTestFinished(() => void vi.useRealTimers());
-  vi.spyOn(console, "warn").mockImplementation(() => {});
   const error = vi.spyOn(console, "error").mockImplementation(() => {});
-  error.mockClear(); // an earlier test's spy on console.error carries its calls
   let answerLate: (pager: FakePagerWebSocket) => void = () => {};
   const late = new FakePagerWebSocket();
   const closed = vi.spyOn(late, "close");
@@ -656,7 +677,7 @@ test("a lend recalled while a re-dial hangs ends quietly at the deadline: no err
   expect(error).not.toHaveBeenCalled();
   answerLate(late);
   await vi.advanceTimersByTimeAsync(0);
-  expect(closed).toHaveBeenCalledWith(1000, "re-dial gave up");
+  expect(closed).toHaveBeenCalledWith(1000, "re-dial abandoned");
 });
 
 // The pager upgrade carries the events that name the key, and the DO appends them as it accepts the
@@ -689,13 +710,9 @@ test("a refused pager upgrade (the DO would not append what names the key) lends
     },
   };
 
-  const refusal = await lendRpcStubOverPager(
-    (() => context) as unknown as Parameters<typeof lendRpcStubOverPager>[0],
-    provider as unknown as Parameters<typeof lendRpcStubOverPager>[1],
-    "key-2",
-    [{ type: "events.iterate.com/itx/rewrite-rule-configured", payload: {} }],
-    () => {},
-  ).then(
+  const refusal = await lend(context, provider, "key-2", [
+    { type: "events.iterate.com/itx/rewrite-rule-configured", payload: {} },
+  ]).then(
     () => undefined,
     (e: unknown) => e as Error & { code?: string },
   );
@@ -727,15 +744,7 @@ test("a DO fetch that REJECTS releases the session's dup before the error propag
       );
     },
   };
-  await expect(
-    lendRpcStubOverPager(
-      (() => context) as unknown as Parameters<typeof lendRpcStubOverPager>[0],
-      provider as unknown as Parameters<typeof lendRpcStubOverPager>[1],
-      "key-3",
-      [],
-      () => {},
-    ),
-  ).rejects.toThrow(/APP_CONFIG_SECRETS__KEY/);
+  await expect(lend(context, provider, "key-3")).rejects.toThrow(/APP_CONFIG_SECRETS__KEY/);
   expect(disposed).toBe(1);
 });
 
@@ -755,9 +764,11 @@ function fakeBorrowedRpcStub(answer: () => Promise<unknown>) {
   return stub as typeof stub & BorrowedRpcStub;
 }
 
-const directory = () =>
+/** A directory over a fake Durable Object whose open stub-pager sockets are `pagers`. The one cast:
+ *  no test here serves a terminal fetch, so the fetch server is a stand-in. */
+const directory = (pagers: WebSocket[] = []) =>
   new RpcStubDirectory({
-    ctx: { acceptWebSocket: () => {}, getWebSockets: () => [] },
+    ctx: { acceptWebSocket: () => {}, getWebSockets: () => pagers },
     onPresence: () => {},
     rpcStubFetch: { serve: async () => undefined } as unknown as RpcStubFetchServer,
     appendEvents: () => {},
@@ -829,12 +840,30 @@ async function relayOverFakeDurableObject(
       fake.lends += 1;
     },
   };
-  const relay = await lendRpcStubOverPager(
-    (() => context) as unknown as Parameters<typeof lendRpcStubOverPager>[0],
-    { dup: () => lent } as unknown as Parameters<typeof lendRpcStubOverPager>[1],
+  const relay = await lend(
+    context,
+    { dup: () => lent },
     "key-4",
     [],
     (p) => void fake.waitedUntil.push(p),
   );
   return Object.assign(fake, { relay });
+}
+
+/** `lendRpcStubOverPager` over fakes: `context` is the DO stub with only the calls a relay makes,
+ *  `clientRpcStub` the client's stub with only what the relay touches, so both are cast once here. */
+function lend(
+  context: object,
+  clientRpcStub: object,
+  rpcStubKey: string,
+  appendEvents: StreamEventInput[] = [],
+  waitUntil: (p: Promise<unknown>) => void = () => {},
+) {
+  return lendRpcStubOverPager(
+    (() => context) as unknown as Parameters<typeof lendRpcStubOverPager>[0],
+    clientRpcStub as unknown as Parameters<typeof lendRpcStubOverPager>[1],
+    rpcStubKey,
+    appendEvents,
+    waitUntil,
+  );
 }

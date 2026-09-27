@@ -103,10 +103,18 @@ export class FakeArtifacts extends RpcTarget {
   remoteFiles(path: string): Record<string, string> | null {
     return this.#server.files(repoArtifactName(path));
   }
-  /** A commit landing on the remote from OUTSIDE any facet — what a facet's next read must notice. */
+  /** A file's bytes at the remote's tip, or null. */
+  remoteBytes(path: string, file: string): Uint8Array | null {
+    return this.#server.bytes(repoArtifactName(path), file);
+  }
+  /** A commit landing on the remote from OUTSIDE any facet — what a facet's next read must notice. A
+   *  change may carry raw `bytes` (a picture) instead of text. */
   async pushFromOutside(
     path: string,
-    input: { message: string; changes: RepoFileChange[] },
+    input: {
+      message: string;
+      changes: (RepoFileChange | { path: string; bytes: Uint8Array })[];
+    },
   ): Promise<{ commitOid: string }> {
     return {
       commitOid: await this.#server.commit(repoArtifactName(path), input.message, input.changes),

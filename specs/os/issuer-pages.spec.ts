@@ -1,7 +1,7 @@
 // Browser acceptance for the issuer's pages around the consent flow (auth.spec.ts drives that one
 // end to end): the sign-in page's own states, the invalid-request page, and a consent page whose
 // session ends underneath it. Like auth.spec.ts these run against the local worker or, with
-// DEMO_BASE_URL, a deployment.
+// WORKER_BASE_URL, a deployment.
 import { uniqueFixtureSlug } from "@iterate-com/shared/test-support/fixture-slug";
 import { expect, type Page } from "@playwright/test";
 import { authorizationCodeRequest } from "iterate/oauth";

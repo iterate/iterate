@@ -46,6 +46,7 @@ const HostnamesLive = z.looseObject({
 
 export const Route = createFileRoute("/_auth/projects/$slug/hostnames")({
   validateSearch: z.object({ add: z.literal(1).optional().catch(undefined) }),
+  staticData: { page: "Hostnames" },
   head: ({ params }) => ({ meta: [{ title: `Hostnames · ${params.slug} · Dash` }] }),
   component: ProjectHostnames,
 });
@@ -68,7 +69,10 @@ function ProjectHostnames() {
     );
   const request = (verb: "add" | "remove", hostname: string) =>
     append({
-      type: `events.iterate.com/project/hostname-${verb}-requested`,
+      type:
+        verb === "add"
+          ? "events.iterate.com/project/hostname-add-requested"
+          : "events.iterate.com/project/hostname-remove-requested",
       payload: { hostname },
     });
   const configurePrimary = (hostname: string | null) =>

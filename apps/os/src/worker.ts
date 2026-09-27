@@ -1,6 +1,6 @@
 // worker.ts — the one worker's fetch entry: the request is sorted top to bottom — a project host
 // (the files host, else the project's config worker), the MCP origin, then the platform origin's
-// own paths (`/version`, a preview's one-click `/.auth/test-link`, the secret-OAuth callback, the
+// own paths (`/version`, a preview's admin sign-in through prd, local dev's one click, the secret-OAuth callback, the
 // integrations' callbacks and webhooks, Google identity, `/mcp`, the browser adapter's `/api` and `/.auth/*`) and, last, the OAuth provider with
 // the issuer's pages as its catch-all.
 // Cap’n Web terminates at `/api`; a project host's request rides into the context DO.
@@ -8,30 +8,34 @@
 import { proxyPosthogRequest } from "@iterate-com/shared/posthog";
 import { ITX_PRINCIPAL_HEADER, type Principal } from "iterate/principal";
 import { forwardIssues } from "iterate/lib";
-import { ITERATE_ROUTING_SLUG_HEADER, primaryHostnameUrlOf } from "iterate/project-ingress";
+import {
+  ITERATE_BASE_PATH_HEADER,
+  ITERATE_ROUTING_SLUG_HEADER,
+  primaryHostnameUrlOf,
+} from "iterate/project-ingress";
 import { primaryHostnameRedirectOf } from "./primary-hostname-redirect.ts";
 import { ITX_GRANT_HEADER } from "./caller.ts";
 import { IterateContextDurableObject } from "./iterate-context-durable-object.ts";
 import type { Env as WorkerEnv } from "./env.ts";
 import { identityResponse } from "./identity.ts";
-import {
-  OAUTH_INTEGRATION_PROVIDERS,
-  SECRET_OAUTH_CALLBACK_PATH,
-  secretOAuthCallbackPathOf,
-} from "./secret-oauth.ts";
+import { OAUTH_INTEGRATION_PROVIDERS } from "./integrations/contract.ts";
+import { SECRET_OAUTH_CALLBACK_PATH, secretOAuthCallbackPathOf } from "./secret-oauth.ts";
 import { secretOAuthCallback } from "./secret-oauth-callback.ts";
 import { slackWebhookRoute } from "./integrations/slack.ts";
 import { githubCallbackRoute, githubWebhookRoute } from "./integrations/github.ts";
-import { ControlPlane, ControlPlaneUnavailableError } from "./control-plane/edge.ts";
+import { ControlPlane } from "./control-plane/edge.ts";
+import { unavailableAnswer } from "./unavailable.ts";
 import { oauthResponse } from "./api.ts";
 import { issuerHandler } from "./issuer-pages.ts";
-import { testLinkCallbackResponse, testLinkResponse } from "./issuer-session.ts";
-import { TEST_LINK_PATH } from "./test-link.ts";
 import {
-  TEST_LINK_CALLBACK_PATH,
-  TEST_LINK_CLIENT_PATH,
-  testLinkClientMetadata,
-} from "./test-link-admins.ts";
+  ADMIN_SIGN_IN_CALLBACK_PATH,
+  ADMIN_SIGN_IN_CLIENT_PATH,
+  ADMIN_SIGN_IN_PATH,
+  adminSignInCallbackResponse,
+  adminSignInClientMetadata,
+  adminSignInResponse,
+} from "./admin-sign-in.ts";
+import { localSignInResponse } from "./local-sign-in.ts";
 import { appConfigOf, platformAddressesOf, sessionSigningSecretOf } from "./app-config.ts";
 import { captureIssueInPosthog } from "./posthog.ts";
 import { FILES_ROUTING_SLUG, serveProjectFileRequest } from "./context/file-urls.ts";
@@ -53,13 +57,6 @@ import { projectHostCallerOf, projectHostSignInAnswerOf } from "./project-host-s
  *  with fresh Requests is its own cost. */
 const PROJECT_HOST_HOPS_HEADER = "x-itx-expression-hops";
 
-/** THE BASE PATH a project host is served under (paths ingress: `/projects/<project>[/<routingSlug>]`),
- *  alongside `x-iterate-routing-slug`: the edge strips it from the URL the config worker sees and
- *  says it here, so the site's own links and its browser adapter can compose absolute paths. Set or
- *  deleted by the edge on every project request, so a visitor's spelling never reaches the project.
- *  Empty under subdomains (each routing slug owns its origin). */
-const ITERATE_BASE_PATH_HEADER = "x-iterate-base-path";
-
 /** The Request without its base path (paths ingress): the same method, body and upgrade, the URL
  *  starting at the app's root. */
 function withoutBasePath(request: Request, basePath: string): Request {
@@ -70,13 +67,15 @@ function withoutBasePath(request: Request, basePath: string): Request {
 }
 
 /** A project host's answer when a control-plane read it needed failed on the platform's side
- *  (ControlPlaneUnavailableError, which edge.ts logged): a 503 (scripts/ci/prd-fault-alarm.ts
- *  pages on the 5xx), not an exception. Any other error is rethrown. */
+ *  (UNAVAILABLE, which edge.ts logged): the edge's one answer to it (`unavailableAnswer`), a 503
+ *  with its Retry-After (scripts/ci/prd-fault-alarm.ts pages on the 5xx), not an exception. Any
+ *  other error is rethrown. */
 function controlPlaneUnavailable(error: unknown, hostname: string): Response {
-  if (!(error instanceof ControlPlaneUnavailableError)) throw error;
+  const answer = unavailableAnswer(error);
+  if (!answer) throw error;
   return new Response(
-    `503: the platform could not look up ${hostname} just now; try again in a minute\n`,
-    { status: 503, headers: { "cache-control": "no-store", "retry-after": "60" } },
+    `${answer.status}: the platform could not look up ${hostname} just now; try again shortly\n`,
+    answer,
   );
 }
 
@@ -364,19 +363,24 @@ export default {
     // `<deployId> <platformOrigin>`: Cloudflare's version id of this deploy — the stamp a smoke
     // waits for (`wrangler deploy` prints it) — and the origin this deployment answers on.
     if (url.pathname === "/version") return new Response(`${deployId} ${platformOrigin}\n`);
-    // A preview's one-click sign-in (test-link.ts): a 404 wherever `login.testLink` is off — prd,
-    // and every deployment on its own domain, which app-config.ts refuses it on.
-    if (url.pathname === TEST_LINK_PATH && request.method === "GET")
-      return testLinkResponse(request, env);
-    // …and where one is proven an admin's (test-link-admins.ts): the admins' issuer's answer, and
-    // this deployment's client metadata document, which that issuer fetches
-    if (appConfig.login.testLink?.admins && request.method === "GET") {
-      if (url.pathname === TEST_LINK_CALLBACK_PATH) return testLinkCallbackResponse(request, env);
-      if (url.pathname === TEST_LINK_CLIENT_PATH)
-        return Response.json(testLinkClientMetadata(platformOrigin), {
+    // An admin's sign-in through another issuer (admin-sign-in.ts), prd's for a preview: its start,
+    // that issuer's answer, and this deployment's client metadata document, which the issuer
+    // fetches. None of them exists where `login.adminIssuer` is unset — prd, and every deployment
+    // on its own domain, which app-config.ts refuses it on.
+    const adminIssuer = appConfig.login.adminIssuer;
+    if (adminIssuer && request.method === "GET") {
+      if (url.pathname === ADMIN_SIGN_IN_PATH)
+        return adminSignInResponse(request, env, adminIssuer);
+      if (url.pathname === ADMIN_SIGN_IN_CALLBACK_PATH)
+        return adminSignInCallbackResponse(request, env, adminIssuer);
+      if (url.pathname === ADMIN_SIGN_IN_CLIENT_PATH)
+        return Response.json(adminSignInClientMetadata(platformOrigin), {
           headers: { "cache-control": "public, max-age=300" },
         });
     }
+    // Local dev's one click (local-sign-in.ts, `pnpm getin`): on a laptop's platform alone.
+    const localSignIn = await localSignInResponse(request, env);
+    if (localSignIn) return localSignIn;
     // posthog-js's `api_host` on the issuer's own pages (routes/__root.tsx): PostHog EU through
     // this origin.
     if (url.pathname.startsWith("/e/")) return proxyPosthogRequest({ request, proxyPrefix: "/e" });

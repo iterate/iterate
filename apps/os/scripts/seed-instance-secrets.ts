@@ -1,7 +1,7 @@
 // scripts/seed-instance-secrets.ts — THE DEPLOYMENT'S OWN KEYS: set Exa, Parallel and OpenAI at
 // `global:/secrets/{exa,parallel,openai}` on a deployment, as its operator (the admin bearer's
 // `session.global`), and with `--lend-to-every-project` lend each to every project as the same path
-// (apps/os README "Instance lends"). The keys come from Doppler: Exa and Parallel from the legacy
+// (apps/os/docs/integrations.md "Instance lends"). The keys come from Doppler: Exa and Parallel from the legacy
 // platform's `os-legacy-2026-04` (APP_CONFIG_INTEGRATIONS__EXA, APP_CONFIG_INTEGRATIONS__PARALLEL),
 // OpenAI from `os` (OPENAI_API_KEY). No value is ever printed.
 //

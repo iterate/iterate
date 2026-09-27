@@ -6,15 +6,16 @@
 // scopes included, so asking for more on an existing connection keeps what it had.
 //   connectGoogle      → the consent URL (`itx.secrets.beginOAuth`)
 //   finishGoogleConnect → userinfo names the account, then `google/connected` on `/`
-//   disconnectGoogle   → the grant revoked, the secret deleted, `google/disconnected`
+//   revokeGoogle       → a disconnect's grant revoked (verbs.ts `PROVIDERS`)
 // Google sends no webhooks here, so nothing is routed.
 import { codedError } from "iterate/lib";
 import { appConfigOf, DEFAULT_GOOGLE_SCOPES } from "../app-config.ts";
 import { SECRET_OAUTH_TTL_MS } from "../secret-oauth.ts";
 import { isRecord } from "../secrets.ts";
+import type { IntegrationConnectionRow } from "./contract.ts";
 import {
-  appendPlatformFact,
-  attemptKeyOf,
+  appendConnected,
+  consentAttemptKeyOf,
   ownerEgress,
   tokenSecretPathOf,
   type ConnectionAttempt,
@@ -86,37 +87,41 @@ export async function connectGoogle(
     next?: string;
     /** More scopes than the client's default: an incremental consent keeps what was granted. */
     scopes?: readonly string[];
-    /** The account an existing connection holds: the consent must come back as it, and Google is
-     *  hinted to ask it. */
-    expectAccount?: { externalId: string; account: string };
+    /** The connection, when it exists: the consent must come back as its account, and Google is
+     *  hinted to ask it; what it was granted stays granted (`include_granted_scopes`). */
+    existing?: IntegrationConnectionRow;
+    /** A person's connect a project asked for (connections.ts `ConnectionAttempt`). */
+    connectToProject?: ConnectionAttempt["connectToProject"];
   },
 ): Promise<{ authorizationUrl: string }> {
-  const { connection, client, expectAccount } = input;
+  const { connection, client, existing } = input;
   const { origin, scopes } = await googleClientOf(scope, client, connection);
   const endpoints = googleEndpointsOf(origin);
-  const { authorizationUrl } = await scope.withItx((itx) =>
+  const asked = [...new Set([...scopes, ...(input.scopes || [])])];
+  const { authorizationUrl, nonce } = await scope.withItx((itx) =>
     itx.secrets.beginOAuth(tokenSecretPathOf("google", connection), {
       authorizationEndpoint: endpoints.authorizationEndpoint,
       tokenEndpoint: endpoints.tokenEndpoint,
       client: client === "iterate" ? { platform: "google" } : { project: "google" },
-      scope: [...new Set([...scopes, ...(input.scopes || [])])].join(" "),
+      scope: asked.join(" "),
       urls: endpoints.urls,
       extra: {
         access_type: "offline",
         prompt: "consent",
         include_granted_scopes: "true",
-        ...(expectAccount && { login_hint: expectAccount.account }),
+        ...(existing && { login_hint: existing.account }),
       },
       next: input.next,
-      expectAccount: expectAccount?.externalId,
+      expectAccount: existing?.externalId,
     }),
   );
   const attempt: ConnectionAttempt = {
     client,
     origin: origin || "",
     until: Date.now() + SECRET_OAUTH_TTL_MS,
+    connectToProject: input.connectToProject,
   };
-  await scope.storage.put(attemptKeyOf("google", connection), attempt);
+  await scope.storage.put(consentAttemptKeyOf("google", connection, nonce), attempt);
   return { authorizationUrl };
 }
 
@@ -142,43 +147,37 @@ export async function finishGoogleConnect(
   scope: IntegrationScope,
   connection: string,
   attempt: ConnectionAttempt,
-): Promise<void> {
+  /** What Google granted (the token response's `scope`, rules.ts `grantedScopesOf`). */
+  { grantedScopes }: { grantedScopes: string[] },
+) {
   const endpoints = googleEndpointsOf(attempt.origin);
   const response = await googleCall(scope, endpoints.userinfoEndpoint, connection, "accessToken");
   const userinfo: unknown = await response.json().catch(() => null);
   if (!response.ok || !isRecord(userinfo) || typeof userinfo.id !== "string")
     throw new Error(`Google's userinfo answered ${response.status}`);
-  await appendPlatformFact(scope.env, scope.projectId, scope.rootPath, {
-    type: "events.iterate.com/google/connected",
-    payload: {
+  return {
+    row: await appendConnected(scope, {
+      provider: "google",
       connection,
       client: attempt.client,
       account: typeof userinfo.email === "string" ? userinfo.email : userinfo.id,
       externalId: userinfo.id,
-    },
-  });
+      scopes: grantedScopes,
+    }),
+  };
 }
 
-export async function disconnectGoogle(
+/** Revoking the refresh token ends the whole grant; a grant already dead is the goal. */
+export async function revokeGoogle(
   scope: IntegrationScope,
   connection: string,
-  client: ConnectionAttempt["client"] | null,
-): Promise<void> {
-  // revoking the refresh token ends the whole grant; a grant already dead is the goal
-  if (client)
-    await googleClientOf(scope, client, connection)
+  row: IntegrationConnectionRow | undefined,
+) {
+  if (row)
+    await googleClientOf(scope, row.client, connection)
       .then(({ origin }) =>
         googleCall(scope, googleEndpointsOf(origin).revocationEndpoint, connection, "refreshToken"),
       )
       .then((response) => response.body?.cancel())
       .catch(() => {});
-  // a secret never set (consent never finished) throws, having dropped the attempt in flight
-  await scope
-    .withItx((itx) => itx.secrets.delete(tokenSecretPathOf("google", connection)))
-    .catch(() => {});
-  await scope.storage.delete(attemptKeyOf("google", connection));
-  await appendPlatformFact(scope.env, scope.projectId, scope.rootPath, {
-    type: "events.iterate.com/google/disconnected",
-    payload: { connection },
-  });
 }

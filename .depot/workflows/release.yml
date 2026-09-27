@@ -12,16 +12,9 @@ on:
       trigger_description:
         description: What triggered this release
         required: true
-  workflow_call:
-    inputs:
-      release_title:
-        description: Title for the release
-        required: true
-        type: string
-      trigger_description:
-        description: What triggered this release
-        required: true
-        type: string
+env:
+  # The image's baked store: dependencies.mjs fingerprints it (docs/depot-ci.md#custom-image)
+  PNPM_CONFIG_STORE_DIR: /home/runner/.pnpm-store
 jobs:
   release:
     runs-on:
@@ -100,9 +93,9 @@ jobs:
 
           echo "echoing changes for debugging:"
           cat changelog.md
-      - name: Install dependencies
+      - name: Reconcile dependencies (baked)
         if: steps.check_changes.outputs.commits != '0'
-        run: pnpm install --frozen-lockfile --prefer-offline
+        run: node scripts/depot-ci/dependencies.mjs install
       - name: Create release
         if: steps.check_changes.outputs.commits != '0'
         env:

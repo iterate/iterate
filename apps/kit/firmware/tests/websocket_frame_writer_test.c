@@ -1,19 +1,9 @@
 #include "iterate/kit/websocket_frame_writer.h"
 
+#include <assert.h>
 #include <stddef.h>
 #include <stdint.h>
-#include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
-
-#define CHECK(condition)                                                     \
-  do {                                                                       \
-    if (!(condition)) {                                                      \
-      fprintf(stderr, "%s:%d: check failed: %s\n",                         \
-          __FILE__, __LINE__, #condition);                                   \
-      abort();                                                               \
-    }                                                                        \
-  } while (0)
 
 /*
  * ESP-IDF and TLS are allowed to accept arbitrary byte prefixes. Rebuilding a
@@ -38,9 +28,9 @@ static void partial_writes_resume_one_rfc6455_frame(void) {
   size_t observed_size = 0U;
   size_t write_index;
 
-  CHECK(iterate_kit_websocket_frame_writer_init(
+  assert(iterate_kit_websocket_frame_writer_init(
       &writer, storage, sizeof(storage)) == ITERATE_KIT_OK);
-  CHECK(iterate_kit_websocket_frame_writer_begin(
+  assert(iterate_kit_websocket_frame_writer_begin(
       &writer,
       ITERATE_KIT_WEBSOCKET_TEXT,
       payload,
@@ -53,19 +43,19 @@ static void partial_writes_resume_one_rfc6455_frame(void) {
     const uint8_t *pending = NULL;
     size_t pending_size = 0U;
     const size_t write_size = write_sizes[write_index];
-    CHECK(iterate_kit_websocket_frame_writer_pending(
+    assert(iterate_kit_websocket_frame_writer_pending(
         &writer, &pending, &pending_size) == ITERATE_KIT_OK);
-    CHECK(pending_size == sizeof(expected) - observed_size);
-    CHECK(write_size <= pending_size);
+    assert(pending_size == sizeof(expected) - observed_size);
+    assert(write_size <= pending_size);
     memcpy(observed + observed_size, pending, write_size);
     observed_size += write_size;
-    CHECK(iterate_kit_websocket_frame_writer_advance(
+    assert(iterate_kit_websocket_frame_writer_advance(
         &writer, write_size) == ITERATE_KIT_OK);
   }
 
-  CHECK(observed_size == sizeof(expected));
-  CHECK(memcmp(observed, expected, sizeof(expected)) == 0);
-  CHECK(!iterate_kit_websocket_frame_writer_busy(&writer));
+  assert(observed_size == sizeof(expected));
+  assert(memcmp(observed, expected, sizeof(expected)) == 0);
+  assert(!iterate_kit_websocket_frame_writer_busy(&writer));
 }
 
 /*
@@ -90,40 +80,40 @@ static void control_frames_wait_for_the_current_frame_boundary(
   const uint8_t *pending = NULL;
   size_t pending_size = 0U;
 
-  CHECK(iterate_kit_websocket_frame_writer_init(
+  assert(iterate_kit_websocket_frame_writer_init(
       &writer, storage, sizeof(storage)) == ITERATE_KIT_OK);
-  CHECK(iterate_kit_websocket_frame_writer_begin(
+  assert(iterate_kit_websocket_frame_writer_begin(
       &writer,
       ITERATE_KIT_WEBSOCKET_BINARY,
       payload,
       sizeof(payload),
       data_mask) == ITERATE_KIT_OK);
-  CHECK(iterate_kit_websocket_frame_writer_pending(
+  assert(iterate_kit_websocket_frame_writer_pending(
       &writer, &pending, &pending_size) == ITERATE_KIT_OK);
-  CHECK(iterate_kit_websocket_frame_writer_advance(
+  assert(iterate_kit_websocket_frame_writer_advance(
       &writer, 1U) == ITERATE_KIT_OK);
 
-  CHECK(iterate_kit_websocket_frame_writer_begin(
+  assert(iterate_kit_websocket_frame_writer_begin(
       &writer,
       ITERATE_KIT_WEBSOCKET_PONG,
       payload,
       sizeof(payload),
       pong_mask) == ITERATE_KIT_BACKPRESSURE);
-  CHECK(iterate_kit_websocket_frame_writer_pending(
+  assert(iterate_kit_websocket_frame_writer_pending(
       &writer, &pending, &pending_size) == ITERATE_KIT_OK);
-  CHECK(pending[0] != 0x8aU);
-  CHECK(iterate_kit_websocket_frame_writer_advance(
+  assert(pending[0] != 0x8aU);
+  assert(iterate_kit_websocket_frame_writer_advance(
       &writer, pending_size) == ITERATE_KIT_OK);
 
-  CHECK(iterate_kit_websocket_frame_writer_begin(
+  assert(iterate_kit_websocket_frame_writer_begin(
       &writer,
       ITERATE_KIT_WEBSOCKET_PONG,
       payload,
       sizeof(payload),
       pong_mask) == ITERATE_KIT_OK);
-  CHECK(iterate_kit_websocket_frame_writer_pending(
+  assert(iterate_kit_websocket_frame_writer_pending(
       &writer, &pending, &pending_size) == ITERATE_KIT_OK);
-  CHECK(pending[0] == 0x8aU);
+  assert(pending[0] == 0x8aU);
 }
 
 /*
@@ -141,23 +131,23 @@ static void extended_data_uses_the_exact_bounded_storage(void) {
   size_t pending_size = 0U;
 
   memset(payload, 0x5a, sizeof(payload));
-  CHECK(sizeof(storage) == 648U);
-  CHECK(iterate_kit_websocket_frame_writer_init(
+  assert(sizeof(storage) == 648U);
+  assert(iterate_kit_websocket_frame_writer_init(
       &writer, storage, sizeof(storage)) == ITERATE_KIT_OK);
-  CHECK(iterate_kit_websocket_frame_writer_begin(
+  assert(iterate_kit_websocket_frame_writer_begin(
       &writer,
       ITERATE_KIT_WEBSOCKET_BINARY,
       payload,
       sizeof(payload),
       mask) == ITERATE_KIT_OK);
-  CHECK(iterate_kit_websocket_frame_writer_pending(
+  assert(iterate_kit_websocket_frame_writer_pending(
       &writer, &pending, &pending_size) == ITERATE_KIT_OK);
-  CHECK(pending_size == sizeof(storage));
-  CHECK(pending[0] == 0x82U);
-  CHECK(pending[1] == 0xfeU);
-  CHECK(pending[2] == 0x02U);
-  CHECK(pending[3] == 0x80U);
-  CHECK(memcmp(pending + 4U, mask, sizeof(mask)) == 0);
+  assert(pending_size == sizeof(storage));
+  assert(pending[0] == 0x82U);
+  assert(pending[1] == 0xfeU);
+  assert(pending[2] == 0x02U);
+  assert(pending[3] == 0x80U);
+  assert(memcmp(pending + 4U, mask, sizeof(mask)) == 0);
 }
 
 int main(void) {

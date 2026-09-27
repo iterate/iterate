@@ -21,7 +21,9 @@ import type {
   SecretRefresh,
 } from "iterate/api";
 import { secretsEqual, signClaims, verifyClaims } from "./caller.ts";
+import { IterateAppProvider } from "./integrations/contract.ts";
 import { exchange as exchangeWaitroseSession } from "./integrations/waitrose.ts";
+import { basicAuthorization } from "./repo/git-wire.ts";
 import { SecretRefreshKind } from "./secret/contract.ts";
 
 /** What the secret's facet stores: the material, the ORIGINS it may be sent to (never
@@ -30,6 +32,9 @@ export type SecretRecord = {
   material: SecretMaterial;
   urls: string[];
   refresh: SecretRefresh | null;
+  /** The workspace whose iterate's-Slack-app token this is (secret/durable-object.ts
+   *  `completeOAuth`): refused on use while another project's connection holds its route. */
+  routedAccount?: { provider: "slack"; externalId: string };
 };
 
 /** The most exchange code (`refresh: { kind: "worker", source }`) may be: it is sealed in the
@@ -39,7 +44,7 @@ export const EXCHANGE_SOURCE_MAX_CHARS = 64 * 1024;
 /** The deployment's apps an `oauth-refresh-token` strategy may name as its client (`{ platform }`):
  *  each refreshes with that app's credentials, attached in the secret's facet. GitHub's is the App's
  *  user-authorization client, which a GitHub sign-in's token refreshes with. */
-const OAUTH_REFRESH_PLATFORMS = ["slack", "google", "cloudflare", "github"] as const;
+const OAUTH_REFRESH_PLATFORMS = IterateAppProvider.options;
 
 /** A secret's name: `[a-zA-Z0-9._-]+`, but never `.` or `..` — the two segments
  *  `resolveContextPath` resolves away, so `/secrets/..` would name its owner's ROOT (and
@@ -159,6 +164,20 @@ export function normalizeSecretRecord(
         throw new Error(
           'secrets: refresh.client is { platform: "github" } or { project: "github" }',
         );
+      if (client.platform === "github") {
+        // iterate's App's token acts for whichever project holds the installation's route, and a
+        // project that loses it must not keep a copy: it goes only to GitHub, its API and git over
+        // HTTP (github.com beside api.github.com; one origin for an Enterprise Server or a fake)
+        const github = [
+          endpoint.origin,
+          endpoint.origin === "https://api.github.com" ? "https://github.com" : endpoint.origin,
+        ];
+        const stray = urls.find((url) => !github.includes(url));
+        if (stray)
+          throw new Error(
+            `secrets: iterate's GitHub App's installation token goes only to ${[...new Set(github)].join(" and ")}, not ${stray}`,
+          );
+      }
       refresh = {
         kind,
         apiOrigin: endpoint.origin,
@@ -176,8 +195,10 @@ export function normalizeSecretRecord(
 // parentheses; `/secrets/NAME` is the PATH `itx.secrets.set("/secrets/NAME", …)` stored. Matched as written in a
 // header, and as the URL parser percent-encodes it in a URL (`"` → %22, a space → %20, `{` → %7B, `}`
 // → %7D) — the path and the query alike; the value is spliced back into the URL as ONE component,
-// `:` kept (Telegram's `bot123:abc` path). There is no peeling of a `Basic
-// base64(user:getSecret(…))` credential, no JSON-body template — the body is never scanned.
+// `:` kept (Telegram's `bot123:abc` path). A `Basic base64(user:getSecret(…))` credential is peeled:
+// the placeholder is substituted inside the decoded `user:password` and the credential encoded
+// again — the Authorization a git remote's userinfo becomes (`https://x:getSecret(…)@host/repo.git`,
+// as git and curl send it). No JSON-body template — the body is never scanned.
 const QUOTE = '(?:"|%22)';
 const SPACE = "(?:\\s|%20)*";
 const SECRET_PLACEHOLDER = new RegExp(
@@ -185,6 +206,13 @@ const SECRET_PLACEHOLDER = new RegExp(
     `(?:,${SPACE}(?:\\{|%7B)${SPACE}field${SPACE}:${SPACE}${QUOTE}([^"%\\s]+)${QUOTE}${SPACE}(?:\\}|%7D))?${SPACE}\\)`,
   "g",
 );
+
+/** Whether `value` is exactly one placeholder (`getSecret("/secrets/x")`, or with a field) and
+ *  nothing else: what a git origin's password may be, so an origin never holds a token. */
+export function isSecretPlaceholder(value: string): boolean {
+  const [match] = [...value.matchAll(SECRET_PLACEHOLDER)];
+  return match?.index === 0 && match[0].length === value.length;
+}
 
 /** The placeholder as a caller wrote it, for a refusal that names it. */
 const placeholderOf = (path: string, field: string | undefined): string =>
@@ -234,8 +262,22 @@ export function secretPathsReferenced(request: Request): string[] {
     for (const [, path = ""] of value.matchAll(SECRET_PLACEHOLDER)) paths.add(path);
   };
   scan(request.url);
-  for (const [, value] of request.headers) scan(value);
+  for (const [, value] of request.headers) scan(basicCredentialOf(value) ?? value);
   return [...paths];
+}
+
+/** The decoded `user:password` of a `Basic` header value, or null when the value is no Basic
+ *  credential (or not base64 of UTF-8). */
+function basicCredentialOf(value: string): string | null {
+  const encoded = /^Basic\s+([A-Za-z0-9+/=]+)\s*$/i.exec(value)?.[1];
+  if (!encoded) return null;
+  try {
+    return new TextDecoder("utf-8", { fatal: true, ignoreBOM: false }).decode(
+      Uint8Array.from(atob(encoded), (character) => character.charCodeAt(0)),
+    );
+  } catch {
+    return null;
+  }
 }
 
 // ── a WebSocket's frames ── the Discord shape: the upgrade carries no credential, the first client
@@ -383,7 +425,13 @@ export async function substituteProjectSecrets(
   const headers = new Headers(base.headers);
   let changed = false;
   for (const [name, value] of base.headers) {
-    const substituted = await substitute(value, `header "${name}"`, false);
+    const credential = basicCredentialOf(value);
+    const inCredential = credential
+      ? await substitute(credential, `header "${name}"`, false)
+      : null;
+    const substituted = inCredential
+      ? basicAuthorization(inCredential)
+      : await substitute(value, `header "${name}"`, false);
     // oxlint-disable-next-line iterate/simple-truthiness-check -- substitute() returns null for "no placeholder here"; a substituted-to-empty header ("") is a real change and must be written, not skipped
     if (substituted !== null) {
       headers.set(name, substituted);

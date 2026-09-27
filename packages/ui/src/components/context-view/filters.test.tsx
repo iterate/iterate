@@ -52,7 +52,7 @@ test("no filter shows everything; types narrow to the set; the query searches ty
 });
 
 // ── the offset range ──
-test.each([
+test.for([
   { name: "from alone", range: { from: 3 }, shown: [3, 4] },
   { name: "to alone", range: { to: 2 }, shown: [1, 2] },
   { name: "both, inclusive", range: { from: 2, to: 3 }, shown: [2, 3] },
@@ -73,7 +73,7 @@ test("refilter follows a growing log under an offset range, and a new bound filt
   ]);
 });
 
-test.each([
+test.for([
   { text: "", bound: undefined },
   { text: "  ", bound: undefined },
   { text: "12", bound: 12 },
@@ -87,7 +87,7 @@ test.each([
 });
 
 // ── typeChips ──
-test.each([
+test.for([
   {
     name: "nothing ticked: the counts as they are",
     ticked: [],
@@ -134,22 +134,36 @@ test("typeCounts: most frequent first, ties by name", () => {
   ]);
 });
 
-test("rendererFor: an exact type wins over a prefix, the longest prefix wins over a shorter one, nothing else matches", () => {
-  const exact = () => null;
-  const account = () => null;
-  const all = () => null;
-  const renderers = {
-    "events.iterate.com/account/personal-access-token-minted": exact,
-    "events.iterate.com/account/*": account,
-    "events.iterate.com/*": all,
-  };
-  expect(rendererFor(renderers, "events.iterate.com/account/personal-access-token-minted")).toBe(
-    exact,
-  );
-  expect(rendererFor(renderers, "events.iterate.com/account/grant-ended")).toBe(account);
-  expect(rendererFor(renderers, "events.iterate.com/itx/created")).toBe(all);
-  expect(rendererFor(renderers, "custom/thing")).toBeUndefined();
-  expect(rendererFor(undefined, "x")).toBeUndefined();
+// Renderers by name: an exact type, a namespace's prefix and the platform's prefix.
+const renderers = {
+  "events.iterate.com/account/personal-access-token-minted": "exact",
+  "events.iterate.com/account/*": "account",
+  "events.iterate.com/*": "all",
+};
+
+test.for([
+  {
+    name: "an exact type wins over a prefix",
+    registry: renderers,
+    type: "events.iterate.com/account/personal-access-token-minted",
+    renderer: "exact",
+  },
+  {
+    name: "the longest prefix wins",
+    registry: renderers,
+    type: "events.iterate.com/account/grant-ended",
+    renderer: "account",
+  },
+  {
+    name: "a shorter prefix when no longer matches",
+    registry: renderers,
+    type: "events.iterate.com/itx/created",
+    renderer: "all",
+  },
+  { name: "nothing else matches", registry: renderers, type: "custom/thing", renderer: undefined },
+  { name: "no registry matches nothing", registry: undefined, type: "x", renderer: undefined },
+])("rendererFor: $name", ({ registry, type, renderer }) => {
+  expect(rendererFor(registry, type)).toBe(renderer);
 });
 
 test("the short forms: the prefix dropped, the payload on one line and cut", () => {

@@ -24,8 +24,8 @@
 import { codedError } from "iterate/lib";
 import { normalizedItxExpression, type ItxExpression } from "iterate/expression";
 import type { FacetSpec, WorkerSource } from "iterate/api";
+import { failureKind, ONCE_NOW, retryPlatformFailures } from "@iterate-com/shared/platform-retry";
 import PLATFORM_MODULES from "../generated/platform-modules.js";
-import { isDeployReset } from "../retryable-error.ts";
 import { readPackage, resolveModules } from "./module-resolution.ts";
 
 /** A worker's FILES as authored, path → code (module-resolution.ts `readPackage` finds the entry and
@@ -191,25 +191,21 @@ export async function prepareConfinedWorker(
         `${where}: a source EXPRESSION needs a cacheKey (a build id, a commit) — the producer runs only when no isolate is warm under it, so the key must change whenever the code does`,
       );
     sourceVersion = cacheKey;
-    // The producer is a read the cacheKey names, so running it twice is running it once: a DEPLOY
-    // that resets the context it reads (the project ingress's `itx.repos.get("/repos/config")`,
-    // read on the first request after every deploy, prd 2026-09-25) is read once more, from that
-    // context's fresh incarnation.
+    // The producer is a read the cacheKey names, so running it twice is running it once: a read a
+    // deploy's reset of the context it reads cut (the project ingress's
+    // `itx.repos.get("/repos/config")`, read on the first request after every deploy), or a lost
+    // connection, is read once more, from that context's fresh incarnation.
     getModules = async () => {
-      let produced: unknown;
-      try {
-        produced = await opts.invoke(normalizedItxExpression(source));
-      } catch (error) {
-        if (!isDeployReset(error)) throw error;
-        console.warn({
-          event: "workers.deploy-reset-source-retry",
-          namespace: "iterate-context",
-          name: opts.owner,
-          where,
-          message: String(error),
-        });
-        produced = await opts.invoke(normalizedItxExpression(source));
-      }
+      const produced = await retryPlatformFailures(
+        () => opts.invoke(normalizedItxExpression(source)),
+        {
+          area: "worker-loader",
+          schedule: ONCE_NOW,
+          idempotent: true,
+          kind: failureKind,
+          describe: () => ({ name: opts.owner, where }),
+        },
+      );
       return requireFiles(typeof produced === "string" ? { "worker.js": produced } : produced);
     };
   }

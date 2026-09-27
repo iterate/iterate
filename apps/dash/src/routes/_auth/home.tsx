@@ -14,9 +14,9 @@ export const Route = createFileRoute("/_auth/home")({
 function Home() {
   const tree = useOrganizationTree();
   const navigate = useNavigate();
-  // an organization whose live state failed lists no projects: never read its absence as "one"
-  const complete = tree.loaded && tree.organizations.every((org) => org.status === "live");
-  const only = complete && tree.projects.length === 1 ? tree.projects[0]!.slug : null;
+  // a read that failed lists no projects: never read its absence as "one"
+  const only =
+    tree.loaded && !tree.error && tree.projects.length === 1 ? tree.projects[0]!.slug : null;
   useEffect(() => {
     if (!tree.loaded) return;
     void navigate(

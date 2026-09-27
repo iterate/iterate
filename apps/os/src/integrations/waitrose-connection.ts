@@ -2,15 +2,14 @@
 // or a person: no consent and no app, a username and a password. The Dash (or any caller) sets
 // `/secrets/waitrose-<connection>` to `{ username, password }` with the `waitrose-session` strategy
 // (waitrose.ts logs in on first use and on a 401), then `connectWaitrose` records the connection:
-// a platform `waitrose/connected` on the owner's root naming the username. A person lends it to a
-// project like any connection of theirs.
-//   connectWaitrose    → the secret checked, then `waitrose/connected`
-//   disconnectWaitrose → the secret deleted, then `waitrose/disconnected`
-// Waitrose sends no webhooks, so nothing is routed.
+// a platform `waitrose/connected` on the owner's root naming the username. A project connects a
+// person's as it is, like any account of theirs (`itx.integrations.connect("waitrose", { account })`).
+//   connectWaitrose → the secret checked, then `waitrose/connected`
+// Waitrose sends no webhooks, so nothing is routed, and a disconnect revokes nothing.
 import { codedError } from "iterate/lib";
 import { z } from "zod";
 import {
-  appendPlatformFact,
+  appendConnected,
   assertConnectionName,
   tokenSecretPathOf,
   type IntegrationScope,
@@ -31,19 +30,11 @@ export async function connectWaitrose(
       "INVALID_INPUT",
       `Set ${secretPath} to { username, password } with refresh { kind: "waitrose-session" } first.`,
     );
-  await appendPlatformFact(scope.env, scope.projectId, scope.rootPath, {
-    type: "events.iterate.com/waitrose/connected",
-    payload: { connection, client: "project", account, externalId: account },
-  });
-}
-
-export async function disconnectWaitrose(scope: IntegrationScope, connection: string) {
-  // a secret already gone is the goal
-  await scope
-    .withItx((itx) => itx.secrets.delete(tokenSecretPathOf("waitrose", connection)))
-    .catch(() => {});
-  await appendPlatformFact(scope.env, scope.projectId, scope.rootPath, {
-    type: "events.iterate.com/waitrose/disconnected",
-    payload: { connection },
+  await appendConnected(scope, {
+    provider: "waitrose",
+    connection,
+    client: "project",
+    account,
+    externalId: account,
   });
 }

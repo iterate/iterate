@@ -1,8 +1,9 @@
 import { expect, test } from "vitest";
 import { installAgents } from "@iterate-com/agents/install";
 import { freshCtx, openItx, readAll, until } from "../../os/e2e/support/client.ts";
+import { FakeAi } from "../../os/e2e/support/fake-ai.ts";
 import { agentsWorkspaceSource } from "./agents-source.ts";
-import { ScriptedAi, assistantWords, configureModel } from "./fixtures.ts";
+import { assistantWords, configureModel } from "./fixtures.ts";
 
 test("install and reinstall preserve existing agents, sandbox grants and conversation history", async () => {
   const itx = openItx(freshCtx("agents-install"));
@@ -21,7 +22,7 @@ test("install and reinstall preserve existing agents, sandbox grants and convers
     type: "events.iterate.com/itx/rewrite-rule-configured",
     payload: { match: "itx.secrets", target: null },
   });
-  await context.provide("itx.ai", new ScriptedAi(["Before upgrade.", "After upgrade."]));
+  await context.provide("itx.ai", new FakeAi(["Before upgrade.", "After upgrade."]));
   await configureModel(context);
   await itx.agents.get("/agents/support").message("Remember this conversation.");
   await until("first reply", async () => assistantWords(await readAll(context)).length === 1);

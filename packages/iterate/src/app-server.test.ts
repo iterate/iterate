@@ -19,7 +19,7 @@ test("covers what the page asked for → straight to next", async () => {
   expect(response?.headers.get("location")).toBe("/projects/acme");
 });
 
-test.each([
+test.for([
   {
     lacks: "a project the page named",
     path: "/.auth/login?next=%2Fprojects%2Facme&scope=iterate&project=acme",
@@ -146,6 +146,28 @@ test("a login that names no scope asks for the app's own, so Switch account and 
   const login = await appAuth(new Request("https://admin.example/.auth/login?next=/"), config);
   expect(login?.status).toBe(302);
   expect(begun).toEqual([["iterate", "admin"]]);
+});
+
+test("a login hint rides on to the issuer's authorization URL, and a login without one adds none", async () => {
+  const sessions = {
+    getByName: () => ({
+      begin: async (host: { issuer: string }) => `${host.issuer}/oauth2/auth?state=x`,
+    }),
+  } as unknown as DurableObjectNamespace<BrowserSession>;
+  const config = {
+    sessions,
+    issuer: ISSUER,
+    resource: `${ISSUER}/api`,
+    api: () => new Response(""),
+  };
+  const location = async (path: string) =>
+    (await appAuth(new Request(`https://dash.example${path}`), config))?.headers.get("location");
+  expect(
+    await location(
+      `/.auth/login?${new URLSearchParams({ next: "/projects/pr1", login_hint: "pr1@preview.iterate.test" })}`,
+    ),
+  ).toBe(`${ISSUER}/oauth2/auth?state=x&login_hint=pr1%40preview.iterate.test`);
+  expect(await location("/.auth/login?next=%2F")).toBe(`${ISSUER}/oauth2/auth?state=x`);
 });
 
 test("client metadata publishes app branding relative to its own origin, independently of the issuer", async () => {

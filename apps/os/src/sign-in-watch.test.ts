@@ -4,10 +4,7 @@ import { watchSignInStep } from "./sign-in-watch.ts";
 test("a sign-in step still waiting after five seconds is named in a line while it waits; a quick one logs nothing", async () => {
   vi.useFakeTimers();
   const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-  onTestFinished(() => {
-    vi.useRealTimers();
-    warn.mockRestore();
-  });
+  onTestFinished(() => void vi.useRealTimers());
   let finish!: (value: string) => void;
   const stalled = watchSignInStep("code-exchange", new Promise<string>((r) => (finish = r)));
   await vi.advanceTimersByTimeAsync(4_999);

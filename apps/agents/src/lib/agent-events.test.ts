@@ -4,6 +4,7 @@
 // reducer links to the assistant's message — from the processor's `whileProcessing` stamp), so a
 // turn renders as one activity with its code step.
 import { expect, test } from "vitest";
+import { committedEvent } from "iterate/stream/test-support";
 import { adaptContextRuns, reduceAgentFeed, scriptTrace, toAgentEvent } from "./agent-events.ts";
 
 test("a request the agent appended while processing the assistant's item becomes script-run-requested with the id the reducer links to that item; its settlement takes the same id; a run nobody's processor asked for is its own offset", () => {
@@ -89,16 +90,9 @@ test("through the reducer: the person's message, then one activity whose code st
 const at = (
   offset: number,
   type: string,
-  payload: unknown,
+  payload: Record<string, unknown>,
   extra: { idempotencyKey?: string; source?: unknown } = {},
-) =>
-  toAgentEvent({
-    offset,
-    type,
-    createdAt: new Date(1_700_000_000_000 + offset * 1000).toISOString(),
-    payload,
-    ...extra,
-  })!;
+) => toAgentEvent({ ...committedEvent(offset, type, payload), ...extra })!;
 
 /** The engine's stamp on an event the agent processor appended while processing offset 6. */
 const byAgentWhile = (offset: number) => ({

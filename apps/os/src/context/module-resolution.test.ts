@@ -46,7 +46,7 @@ test("TypeScript is stripped, siblings resolve by any spelling, only what the en
   expectLinked(modules);
 });
 
-test.each([
+test.for([
   ["a missing sibling", { "worker.js": `import "./nope.js";` }, /no such file/],
   [
     "a computed dynamic import",
@@ -86,11 +86,11 @@ test.each([
     { "package.json": JSON.stringify({ main: "./src/app.ts" }), "worker.ts": "" },
     /main "\.\/src\/app\.ts" is not a file/,
   ],
-])("refuses %s", async (_, source, message) => {
+] as const)("refuses %s", async ([, source, message]) => {
   await expect(resolve(source)).rejects.toThrow(message);
 });
 
-test.each([
+test.for([
   [
     "package.json's main",
     { "package.json": '{ "main": "./src/app.ts" }', "src/app.ts": "", "worker.ts": "" },
@@ -98,7 +98,7 @@ test.each([
   ],
   ["worker.ts before index.ts", { "index.ts": "", "worker.ts": "" }, "worker.js"],
   ["index.ts when there is no worker file", { "index.ts": "", "lib.ts": "" }, "index.js"],
-])("the entry is %s", async (_, source, mainModule) => {
+] as const)("the entry is %s", async ([, source, mainModule]) => {
   const resolved = await resolveModules(source, {
     platform,
     store: memoryStore(),
@@ -155,14 +155,14 @@ test("the graph is crawled once, rewritten to relative names, and locked in the 
   expect(second).toEqual(modules);
 });
 
-test.each([
+test.for([
   [
     "a Node builtin",
     { "/needs-node@1": `import "node:fs";` },
     /needs the Node\.js builtin node:fs/,
   ],
   ["a missing package", {}, /answered 404/],
-])("refuses %s, naming it", async (_, files, message) => {
+] as const)("refuses %s, naming it", async ([, files, message]) => {
   const esm = fakeEsm(files);
   await expect(
     resolve(

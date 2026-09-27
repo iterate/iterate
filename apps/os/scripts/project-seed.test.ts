@@ -16,7 +16,7 @@ test("current encrypted cells open with the deployment key without plaintext in 
     apiKey: "sensitive-key",
   });
 });
-test.each(["key", "context", "path", "urls", "revision", "ciphertext"])(
+test.for(["key", "context", "path", "urls", "revision", "ciphertext"])(
   "wrong %s fails before restore",
   async (field) => {
     const seed = await archive();

@@ -1,12 +1,7 @@
-/** @name organizationById */
-select o.id, o.name, coalesce((select count(*) from projects p where p.org_id = o.id), 0) as projects
-from organizations o
-where o.id = :id;
-
 /** @name listOrganizations */
 select o.id, o.name, coalesce((select count(*) from projects p where p.org_id = o.id), 0) as projects
 from organizations o
-order by o.name, o.id;
+order by o.created_at, o.name, o.id;
 
 /** @name organizationRole */
 select
@@ -17,11 +12,11 @@ from organizations o
 where o.id = :orgId;
 
 /** @name listMembers */
-select m.user_id as userId, u.email, m.role
+select m.user_id as userId, u.email, m.role, m.created_at as createdAt
 from memberships m
 join users u on u.id = m.user_id
 where m.org_id = :orgId
-order by u.email;
+order by m.created_at, u.email;
 
 /** @name memberOf */
 select u.id, (select m.role from memberships m where m.org_id = :orgId and m.user_id = u.id) as role
@@ -34,21 +29,21 @@ select o.id, o.name, m.role, coalesce((select count(*) from projects p where p.o
 from memberships m
 join organizations o on o.id = m.org_id
 where m.user_id = :userId
-order by o.name, o.id;
+order by o.created_at, o.name, o.id;
 
 /** @name accessibleProjects */
 select p.id, p.slug, p.org_id as orgId, m.role
 from projects p
 join memberships m on m.org_id = p.org_id
 where m.user_id = :userId
-order by p.slug;
+order by p.created_at, p.slug;
 
 /** @name insertOrganization */
-insert into organizations (id, name) values (:id, :name);
+insert into organizations (id, name, created_at) values (:id, :name, :createdAt);
 
 /** @name insertOwner */
-insert into memberships (org_id, user_id, role)
-select o.id, :userId, 'owner' from organizations o where o.id = :orgId;
+insert into memberships (org_id, user_id, role, created_at)
+select o.id, :userId, 'owner', o.created_at from organizations o where o.id = :orgId;
 
 /** @name renameOrganization */
 update organizations set name = :name
@@ -68,8 +63,8 @@ where id = :id
   ));
 
 /** @name upsertMembership */
-insert into memberships (org_id, user_id, role)
-select o.id, u.id, :role
+insert into memberships (org_id, user_id, role, created_at)
+select o.id, u.id, :role, :createdAt
 from organizations o, users u
 where o.id = :orgId
   and (u.id = :userId or u.email = :email)

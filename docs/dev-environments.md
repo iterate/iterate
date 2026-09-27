@@ -53,8 +53,8 @@ pnpm dev start --detach   # the same, in the background; returns once /version a
 pnpm dev status           # pid, port, URL (exit 1: not running)
 pnpm dev attach           # follow its log, apps/os/.wrangler/dev.log
 pnpm dev kill             # or `restart`
-pnpm getin                # a browser signed in as test@preview.iterate.test, in project `test`
-pnpm -s getin --print     # the one-click sign-in URL alone, for Playwright and agents
+pnpm getin                # a browser signed in as test@preview.iterate.test, on project `test`
+pnpm -s getin --print     # that sign-in URL alone, for Playwright and agents
 ```
 
 OS local dev needs no Doppler. `doppler.yaml` still maps each app directory to
@@ -84,12 +84,14 @@ read secrets.
   `apps/os/.wrangler/dev-server.json` (`{pid, port, baseUrl, startedAt, detached}`), which
   is how `status`, `kill` and `pnpm getin` find it. Without `--port` the port is
   the worktree's last recorded one, else `8788`, else a free one. `pnpm getin`
-  (`scripts/getin.ts`) starts the server if need be, creates the project as the
-  person through the operator bearer (idempotent), and opens a one-click sign-in
-  link (below) signed with the local key. With a local Dash up at
-  `http://localhost:5173` whose `APP_CONFIG_URLS__OS` is this server, it lands on the
-  Dash's project page with no Allow page; else on `/login`. `-e`/`-p` pick
-  another `@preview.iterate.test` person and project; `--dash` another Dash.
+  (`apps/os/scripts/getin.ts`) starts the server if need be, creates the project as the
+  person through the operator bearer (idempotent), and opens local dev's
+  one-click sign-in (`apps/os/src/local-sign-in.ts`; previews and prd have no
+  such route). It signs the browser in as the person with no password and goes
+  on to the project's page in a local Dash up at `http://localhost:5173` whose
+  `APP_CONFIG_URLS__OS` is this server, else to `/login`. The Dash's consent
+  page asks once per Dash sign-in. `-e`/`-p` pick another
+  `@preview.iterate.test` person and project; `--dash` another Dash.
   `pnpm -s getin --token` prints a personal access token for that person and
   project instead (30 days): their bearer at `/api`, `/mcp` and the project's
   hosts.
@@ -151,39 +153,36 @@ read secrets.
   and the other RFC 2606/6761 names). No deployment ever mails them, because a
   bounce costs the sender's reputation; sign in as them with the deployment's
   password.
-- One-click sign-in: every hosted client (Dash, Agents, Notes, Admin, Voice,
+- PR sign-in links: every hosted client (Dash, Agents, Notes, Admin, Voice,
   Kit) is deployed next to the platform in each per-commit deployment and wired
   to it, and the PR body's section carries `Sign in ↗` links: one per worker
   (apps/os's into the Dash's project), and with the Dash one per `configs`
-  template ("New project from template"), which lands in the Dash's New project sheet with that
-  template chosen (`/projects?new=1&template=<name>`). A template the PR
-  changes is linked at the PR head instead
+  template ("New project from template"), which lands in the Dash's New project
+  sheet with that template chosen (`/projects?new=1&template=<name>`). A
+  template the PR changes is linked at the PR head instead
   (`template=github:iterate/iterate#<head>&path:configs/<name>`, the
   custom field prefilled), so the project is born from the unmerged template.
-  The PR body is public, so a link alone signs nobody in: a click first sends
-  the browser to prd (`os.iterate.com`) to confirm it's an `*@nustom.com`
-  person, through an OAuth grant that can only read who they are (prd's
-  `/oauth2/userinfo` resource; `apps/os/src/test-link-admins.ts`). Then it
-  signs the browser in as the PR's test person, `pr<N>@preview.iterate.test`,
-  and lands inside project `pr<N>`, with no password and no Allow page on the
-  preview. An agent without an admin's prd session signs in to a preview with
-  its password instead (Doppler `os/preview`, `APP_CONFIG` `login.password`).
-  CI seeds that person and project on every deploy
-  (`apps/os/scripts/preview.ts` `seedSignIn`). The link is
-  `/.auth/test-link?t=<token>` (`apps/os/src/test-link.ts`), signed with the
-  deployment's `secrets.key` and bound to its origin, so a link for one
-  deployment is refused on another even though every deployment ships the same
-  key. It is also bound to that one address, expires in 14 days (every push
-  mints a fresh one) and goes with its deployment. The route exists only where
-  `login.testLink` is set. A per-commit deployment's config (envs.ts
-  `previewDeployment`'s `testLinks`, with its admins) and local dev set it in code,
-  never in Doppler, and `parseAppConfig` refuses it unless `urls.os` is a
-  workers.dev or localhost origin, so prd answers 404, and off localhost
-  refuses it without `login.testLink.admins`, the issuer and email patterns
-  that gate it. Local dev redeems a link at once. Locally, mint one with
-  the dev key (`specs/os/test-link.spec.ts` shows how). Anyone can still sign
-  in with any email and the preview's password (Doppler
-  `os/preview`, `APP_CONFIG.login.password`).
+  Each link is the app's own sign-in naming the PR's test person,
+  `<app>/.auth/login?next=<page>&login_hint=pr<N>@preview.iterate.test`
+  (`appSignInLink` in `apps/os/scripts/preview-config.ts`). CI seeds that
+  person and their project `pr<N>` on every deploy (`apps/os/scripts/preview.ts`
+  `seedSignIn`). The PR body is public, so a link grants nothing. The app
+  passes `login_hint` on to the issuer, whose consent page opens an admin's
+  **Sign in as someone else…** with that person filled in, only for one of our
+  own apps. One confirm signs the app in as them for an hour (see
+  [Acting as users and admins](#acting-as-users-and-admins)). Anyone else gets
+  the ordinary consent page. A deployment's admins are prd's (`envs.ts`
+  `admins`) plus the specs' `admin@preview.iterate.test`, and they sign in to
+  the deployment as themselves with **Continue with os.iterate.com**: prd
+  confirms who they are through an OAuth grant that can only read that (prd's
+  `/oauth2/userinfo` resource; `apps/os/src/admin-sign-in.ts`). The
+  deployment's config sets `login.adminIssuer` in code (envs.ts
+  `previewDeployment`'s `adminIssuer`), never in Doppler, and `parseAppConfig`
+  refuses it off an https workers.dev or `.test` origin, so prd has no such
+  route. The admin app's link names nobody: an admin opens it as themselves.
+  An agent without an admin's prd session signs in to a deployment with its
+  password instead (Doppler `os/preview`, `APP_CONFIG` `login.password`), as
+  any email, `admin@preview.iterate.test` included.
 
 - Template-carrying projects: a project can be born from a config template
   still in flight on a PR. `projects.create({ project, configRepoTemplate })`
@@ -230,7 +229,10 @@ menu's **Switch account…**): the issuer's consent page offers an admin, and
 nobody else, **Sign in as someone else…** — their email, then a confirm that
 names who the client is (its verified host, where the code goes, the resource,
 the permissions) and warns about anything that is not one of our apps. It works
-for any client, third parties and `/mcp` included. The grant is the person's, for
+for any client, third parties and `/mcp` included. A link can name the person:
+an app's `/.auth/login?login_hint=<email>` opens that step with them filled in,
+for one of our own apps (the PR body's `Sign in ↗`); the admin still confirms.
+The grant is the person's, for
 an hour: every event names the admin in `source.principal.impersonatedBy`, their
 Sessions list it as started by the admin, their account records
 `account/impersonation-started` and the admin's `account/impersonation-performed`
@@ -286,7 +288,8 @@ operator session: `session().authenticate(adminCredentials({ email })).projects.
 as `apps/os/e2e/support/project-host.ts` does.
 
 For local dev: `pnpm dev`, then `http://localhost:8788/login` with any email and
-password `dev`.
+password `dev`, or `pnpm getin -e <someone>@preview.iterate.test` for a browser
+already signed in as them.
 
 A signed-in _human_ never gets stuck on the missing organization: the Dash
 and the consent page both create one on the way.
@@ -306,7 +309,7 @@ skipped locally unless `NOTES_BASE_URL` is set), `voice` (`specs/voice/`,
 skipped locally unless `VOICE_BASE_URL` is set) and `suite` (the flake sentinel
 and the harness's own specs). Select one with `pnpm spec --project=os-phone`.
 Playwright owns the server lifecycle: for a localhost target it runs
-`pnpm dev -- --port <DEMO_PORT, default 8788>`, reuses an already running
+`pnpm dev -- --port <WORKER_PORT, default 8788>`, reuses an already running
 server outside CI, and waits on `/version`.
 
 Specs sign in through the real `/login` password step and stamp their own
@@ -320,7 +323,7 @@ deployed runs:
 pnpm spec
 
 # deployed preview: the Doppler config supplies the preview's APP_CONFIG
-DEMO_BASE_URL=https://pr<n>-os.iterate-dev-preview.workers.dev \
+WORKER_BASE_URL=https://pr<n>-os.iterate-dev-preview.workers.dev \
   doppler run --project os --config preview -- pnpm spec
 
 # a single spec, headed, while working on it
@@ -331,7 +334,7 @@ Against a deployment, the specs validate one env contract. The config reads
 the deployment's credentials out of `APP_CONFIG` (the password for sign-in, the
 operator bearer for fixture setup), its project routing and MCP origin out of
 `envs.ts`: the entry the URL is, or the per-commit deployment it names
-(`apps/os/e2e/support/deployed-target.ts`). `DEMO_BASE_URL` is the
+(`apps/os/e2e/support/deployed-target.ts`). `WORKER_BASE_URL` is the
 only target override; when it is unset, Playwright boots the local dev server.
 It never infers credentials from redirects.
 
@@ -409,8 +412,11 @@ are paths on the one origin. Commands: `apps/os/README.md`.
   deployment whose PR closed without a delete, one an hour older than its
   PR's newest, one more than 7 days old, and a hand-named one idle for
   24 hours with no open PR branch of that name. The rules are a pure table in
-  `apps/os/scripts/preview-sweep.ts`. Kept short on purpose: every deployment
-  is 7 workers, and the account allows 500.
+  `apps/os/scripts/preview-sweep.ts`. Until none are left, it also deletes the
+  Worker Previews each PR used to get, on `os`, `<app>` and the former parents
+  (`os-preview`, `<app>-preview`), once idle a day. Kept short on purpose:
+  every deployment is 7 workers and about 15 Durable Object namespaces, and
+  the account allows 500 of each.
 - **Data does not survive a push.** Manual QA state lives as long as its
   deployment. The PR body's `Sign in ↗` link re-seeds the test person and
   project `pr<n>` on every deploy.
@@ -464,12 +470,13 @@ names the new version, GETs each production project host and pages
 #error-pulse on a 421, a 5xx or no answer that four tries 10 s apart do not
 clear (`scripts/ci/prd-post-deploy-check.ts`). In parallel, **Main OS e2e**
 (`main-os-e2e.yml`) deploys the pushed commit as `main-<sha7>`, runs the e2e
-suite and the browser specs against it, deletes the `main-…` deployments
-before it, and pages #error-pulse only when main goes red or green again. Its
-runs never cancel each other: the pushes that land during a run queue behind
-it, collapsed to the newest, so every run that starts reaches a verdict unless
-someone cancels it by hand. A job that hangs until its timeout counts as red.
-The full mutating proof is each PR's deployment.
+suite and the browser specs against it, and deletes the `main-…` deployments
+before it; the hourly **Health** job (`health.yml`) pages #error-pulse when a
+run turns main red or green again ([Depot CI](depot-ci.md#health)). Main OS
+e2e's runs never cancel each other: the pushes that land during a run queue
+behind it, collapsed to the newest, so every run that starts reaches a verdict
+unless someone cancels it by hand. A job that hangs until its timeout counts as
+red. The full mutating proof is each PR's deployment.
 
 **Main on dev** (`os`, `dash`, … at `*.iterate-dev-preview.workers.dev`,
 `osEnvs.preview` in `envs.ts`) is main on the dev/preview account, redeployed
@@ -480,7 +487,7 @@ branched off these workers.)
 
 What still exercises deployed code on a schedule: the nightly **OS crash hunt**
 drives isolate-ceiling rows against prd (`os-crash-hunt.yml`), the hourly
-**DO duration probe** watches Durable Object cost, the 15-minute **prd fault
+**Health** job runs the Durable Object cost alarm, the 15-minute **prd fault
 alarm** reads production's Workers Logs for 5xx and error bursts, and the
 dispatch-only **OS e2e soak** runs the suite N times against one deployed
 worker (next story).
@@ -493,7 +500,7 @@ preview-relevant paths (`previewPaths` in `scripts/ci/preview-paths.ts`; see
 the tested commit's apps/os and all six clients. It folds the PR body's
 managed section into a `<details>` first, so the links there read as the
 previous commit's, and writes the new deployment's section once it lands: a
-row per worker with its one-click `Sign in ↗` and Cloudflare dashboard links,
+row per worker with its `Sign in ↗` and Cloudflare dashboard links,
 and the template quick-launch links. A deploy that fails leaves the previous
 section folded. **E2E tests** (the Vitest e2e
 suite, `pnpm preview e2e`) and **Browser specs** (the Playwright specs,
@@ -545,7 +552,7 @@ WORKER_BASE_URL=$PREVIEW doppler run --project os --config preview -- \
 One spec, repeated, from the repo root (`pnpm spec` is the root's script):
 
 ```bash
-DEMO_BASE_URL=$PREVIEW doppler run --project os --config preview -- \
+WORKER_BASE_URL=$PREVIEW doppler run --project os --config preview -- \
   pnpm spec specs/os/auth.spec.ts --repeat-each 25
 ```
 
@@ -587,7 +594,7 @@ doppler run --project os --config preview -- pnpm preview deploy --name exp-<you
 
 # sign in there with any email and the preview password, drive it as operator,
 # or run the specs against it:
-DEMO_BASE_URL=https://exp-<you>-<sha7>-os.iterate-dev-preview.workers.dev \
+WORKER_BASE_URL=https://exp-<you>-<sha7>-os.iterate-dev-preview.workers.dev \
   doppler run --project os --config preview -- pnpm spec
 
 # delete it when done; otherwise the sweep takes it 24 h after it was made
@@ -624,7 +631,8 @@ than guessing. Every deletion is logged in the job that made it.
 
 A deployment's configuration comes from `envs.ts` like any other environment's:
 `previewDeployment(name)` derives apps/os's env (its origin, its Dash, projects
-as paths, the one-click sign-in links on, one test admin) and each app's, and
+as paths, prd's admins signing in through prd beside one test admin, the pet
+shop's fakes) and each app's, and
 the deploy ships Doppler `os/preview`'s two secrets (`APP_CONFIG`,
 `APP_CONFIG_SECRETS__KEY`) with apps/os. Clients need no registration: each
 identifies itself by its client-metadata URL. The deploy creates apps/os's D1

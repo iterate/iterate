@@ -10,10 +10,6 @@ import { getPropertyName } from "./rules/ast.ts";
 import { simpleTruthinessCheckRule } from "./rules/simple-truthiness-check.ts";
 import { mechanicalClassImplRule } from "./rules/mechanical-class-impl.ts";
 import { noRawItxGetRule } from "./rules/no-raw-itx-get.ts";
-import {
-  secretFieldNotRecordedRule,
-  secretShownNotRecordedRule,
-} from "./rules/secret-not-recorded.ts";
 import { tseslintRules } from "./rules/tseslint.ts";
 import type { StrictPlugin, StrictRule } from "./types.ts";
 
@@ -558,8 +554,6 @@ const plugin: StrictPlugin = {
         };
       },
     },
-    "secret-field-not-recorded": secretFieldNotRecordedRule,
-    "secret-shown-not-recorded": secretShownNotRecordedRule,
     "no-single-use-types": {
       meta: {
         type: "suggestion",

@@ -1,7 +1,7 @@
 // context/facet-public-methods.test.ts — the rules of facet-public-methods.ts as table rows over the
 // classes' own lists: a facet class, a walk a caller spells on it (relative to the facet), and
 // whether the walk reaches the facet or is refused FORBIDDEN. The same rules end to end, through a
-// person who signed in, are __workers-tests__/facet-public-methods.test.ts.
+// person who signed in, are __workers-tests__/facets.test.ts.
 import { expect, test } from "vitest";
 import { parse } from "iterate/expression";
 import { errorCode } from "iterate/lib";
@@ -68,7 +68,7 @@ test("the refusal names the facet, the step and the list", () => {
       ["processEventBatch"],
     ]),
   ).toThrow(
-    `facet "account": "processEventBatch" is not one of its public methods (fetch, snapshot, liveSnapshot, waitUntilProcessed, connectIntegration, disconnectIntegration, finishIntegrationConnect, connectWaitrose)`,
+    `facet "account": "processEventBatch" is not one of its public methods (fetch, snapshot, liveSnapshot, waitUntilProcessed, connectIntegration, disconnectIntegration, connectWaitrose)`,
   );
   expect(() => assertFacetMethodIsPublic("plain", [], [["hello"]])).toThrow(
     `facet "plain": "hello" is not one of its public methods (it lists none)`,

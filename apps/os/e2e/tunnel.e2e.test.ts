@@ -8,7 +8,7 @@
 //   • public: HTTP reaches the local server; a WebSocket asking for `vite-hmr` opens with it, echoes
 //   • a context reset (what every deploy does) leaves the WebSocket open, nothing lost
 //   • Ctrl-C deletes the route: the host is the template's own 404 again
-//   • a tunnel killed outright closes a visitor's WebSocket at once, 1001 "tunnel disconnected",
+//   • a tunnel killed outright closes a visitor's WebSocket at once, 1011 "tunnel disconnected",
 //     and its route goes with its lend: the host is the template's own 404 again
 //   • a restart sets its route again, and Ctrl-C deletes it
 //   • a visitor whose connection vanishes without a close frame (a tab closed, a laptop gone):
@@ -19,13 +19,14 @@
 
 import { execFile, type ChildProcess } from "node:child_process";
 import { createServer } from "node:http";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, realpath, writeFile } from "node:fs/promises";
 import { connect, type AddressInfo, type Socket } from "node:net";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { connect as tlsConnect } from "node:tls";
 import { fileURLToPath } from "node:url";
+import { temporaryDirectory } from "@iterate-com/shared/test-support/temporary-directory";
+import { createServer as createViteServer, type ViteDevServer } from "vite";
 import { WebSocketServer } from "ws";
 import { expect, test } from "vitest";
 import { adminCredentials, session, until, untilValue, workerUrl } from "./support/client.ts";
@@ -140,7 +141,7 @@ test(
     await publicTunnel.stop("SIGKILL");
     const visitorClosed = await visitor.closed;
     expect({ ...visitorClosed, afterMs: visitorClosed.at - killedAt }).toMatchObject({
-      code: 1001,
+      code: 1011,
       reason: "tunnel disconnected",
       afterMs: expect.toSatisfy((ms: number) => ms < 2_000),
     });
@@ -212,6 +213,131 @@ test(
     expect(await tunnel.stop("SIGINT")).toBe(0);
   },
 );
+
+// What the splice is for (context/fetch-upgrade-splice.ts): a Vite dev server behind a tunnel, whose
+// HMR socket would otherwise close at every deploy and reload the page, losing its state. A real
+// Vite serves the page's module and its HMR socket, and the page's side is Vite's client's
+// handshake: the page's base, the token the served client carries, `vite-hmr`. After the reset
+// (what every deploy does) an edit reaches the page as an HMR update, and the page's own messages
+// still reach Vite.
+test(
+  "iterate tunnel: a Vite dev server's HMR socket outlives a context reset and still delivers HMR updates",
+  { timeout: 60_000 },
+  async () => {
+    await using local = await localViteServer();
+    const slug = freshDnsSafeProjectSlug("tunnel-vite");
+    const projectId = await registerProject(slug);
+    const itx = session().authenticate(adminCredentials()).projects.get(projectId);
+    await itx.waitForEvent({
+      type: ["events.iterate.com/project/created", "events.iterate.com/project/create-failed"],
+      afterOffset: 0,
+      timeoutMs: 60_000,
+    });
+    await using cli = await cliConfig();
+    const tunnel = cli.tunnel([
+      String(local.port),
+      "--name",
+      "vite",
+      "--public",
+      "--project",
+      projectId,
+    ]);
+    const url = await tunnel.url;
+    const base = new URL(url.endsWith("/") ? url : `${url}/`);
+    const vite = await local.start(base.pathname);
+
+    // the page's `<script type="module" src="main.js">`: Vite's transform puts it in the module
+    // graph an edit updates
+    expect(await fetchProjectUrl(new URL("main.js", base))).toMatchObject({
+      status: 200,
+      text: expect.stringContaining("import.meta.hot"),
+    });
+    const hmr = await hmrSocket(new URL(`?token=${vite.config.webSocketToken}`, base));
+    await until("Vite's greeting", () => hmr.messages.length > 0, 15_000);
+
+    await itx.abort("a deploy's reset, on demand");
+    await writeFile(local.mainJs, "import.meta.hot.accept();\nexport const version = 2;\n");
+    // the watcher's word for the edit, said at once (the fs watcher is off: its timing is not the
+    // subject here)
+    vite.watcher.emit("change", local.mainJs);
+    await until("the edit's HMR update", () => hmr.messages.length > 1, 20_000);
+    hmr.send({ type: "custom", event: "e2e:ping", data: "after the reset" });
+    await until("Vite's answer to the page", () => hmr.messages.length > 2, 15_000);
+    expect(hmr).toMatchObject({
+      protocol: "vite-hmr",
+      messages: [
+        { type: "connected" },
+        {
+          type: "update",
+          updates: [{ type: "js-update", path: expect.stringMatching(/main\.js$/) }],
+        },
+        { type: "custom", event: "e2e:pong", data: "after the reset" },
+      ],
+      closeCode: null,
+    });
+    hmr.close();
+    expect(await tunnel.stop("SIGINT")).toBe(0);
+  },
+);
+
+/** Vite's client's HMR socket on `url` (`vite-hmr`): the subprotocol the 101 named, every message
+ *  Vite sent it (JSON), `send` as the client's `import.meta.hot.send` does, and its close code once
+ *  it closed. */
+async function hmrSocket(url: URL) {
+  const socket = projectUrlSocket(url, {}, ["vite-hmr"]);
+  const hmr = {
+    protocol: "",
+    messages: [] as unknown[],
+    closeCode: null as number | null,
+    send: (message: object) => socket.send(JSON.stringify(message)),
+    close: () => socket.close(1000, "done"),
+  };
+  socket.addEventListener("message", (event) => hmr.messages.push(JSON.parse(String(event.data))));
+  socket.addEventListener("close", (event) => (hmr.closeCode = event.code));
+  await new Promise<void>((resolve, reject) => {
+    socket.addEventListener("open", () => resolve());
+    socket.addEventListener("error", () => reject(new Error("the HMR socket did not open")));
+  });
+  hmr.protocol = socket.protocol;
+  return hmr;
+}
+
+/** A port for a Vite dev server, and `start(base)`: Vite on it, serving a self-accepting `main.js`
+ *  under `base` — the tunnel's path, known once the tunnel runs — with its HMR socket on the same
+ *  server, answering the page's `e2e:ping` with `e2e:pong`. */
+async function localViteServer() {
+  const directory = temporaryDirectory();
+  // Vite keys its module graph by the real path
+  const root = await realpath(directory.path);
+  const mainJs = join(root, "main.js");
+  await writeFile(mainJs, "import.meta.hot.accept();\nexport const version = 1;\n");
+  const server = createServer();
+  await new Promise<void>((resolve) => server.listen(0, "localhost", resolve));
+  let vite: ViteDevServer | undefined;
+  return {
+    port: (server.address() as AddressInfo).port,
+    mainJs,
+    async start(base: string) {
+      vite = await createViteServer({
+        root,
+        base,
+        configFile: false,
+        logLevel: "silent",
+        appType: "custom",
+        server: { middlewareMode: true, ws: { server }, watch: null },
+      });
+      server.on("request", vite.middlewares);
+      vite.ws.on("e2e:ping", (data, client) => client.send("e2e:pong", data));
+      return vite;
+    },
+    [Symbol.asyncDispose]: async () => {
+      await vite?.close();
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+      directory[Symbol.dispose]();
+    },
+  };
+}
 
 /** A visitor's WebSocket to `url` over a bare TCP (or TLS) connection — the handshake written by
  *  hand, so `destroy()` drops it the way a closed tab or a vanished network does: no close frame. */
@@ -330,10 +456,10 @@ async function localServer() {
 /** A CLI config pointing at the worker under test, the operator's credentials in the environment,
  *  and `tunnel(args)`: the bin running `iterate tunnel …`, the URL it prints on stdout awaited. */
 async function cliConfig() {
-  const directory = await mkdtemp(join(tmpdir(), "iterate-tunnel-e2e-"));
-  await mkdir(join(directory, "iterate"));
+  const directory = temporaryDirectory();
+  await mkdir(join(directory.path, "iterate"));
   await writeFile(
-    join(directory, "iterate/config.json"),
+    join(directory.path, "iterate/config.json"),
     JSON.stringify({ default: "e2e", configs: { e2e: { osBaseUrl: workerUrl("/") } } }),
   );
   const children: ChildProcess[] = [];
@@ -342,7 +468,7 @@ async function cliConfig() {
       const child = execFile(process.execPath, [bin, "tunnel", ...args], {
         env: {
           ...process.env,
-          XDG_CONFIG_HOME: directory,
+          XDG_CONFIG_HOME: directory.path,
           APP_CONFIG_ADMIN_API_SECRET: adminCredentials().secret,
           ITERATE_BEARER_TOKEN: "",
         },
@@ -367,7 +493,7 @@ async function cliConfig() {
     },
     [Symbol.asyncDispose]: async () => {
       for (const child of children) child.kill("SIGKILL");
-      await rm(directory, { recursive: true, force: true });
+      directory[Symbol.dispose]();
     },
   };
 }

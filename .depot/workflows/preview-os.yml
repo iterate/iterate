@@ -15,6 +15,7 @@
 #                       label or edits one of them (SLOW_ROW_PATHS) (docs/testing.md#slow-rows)
 #   Browser specs       beside E2E tests: the Playwright specs, the same way, and the Playwright
 #                       report. One job definition, E2E tests', differing only in the suite it names
+#                       and in its bigger runner, where its six browsers have the CPU they need
 #   Clean up superseded beside the suites, once the deployment is ready: deletes this PR's older
 #                       deployments (apps/os/scripts/preview-sweep.ts `planSupersededCleanup`). Never
 #                       a verdict: what it leaves, the next run's cleanup or the nightly sweep takes
@@ -185,8 +186,8 @@ jobs:
         run: doppler run -- pnpm preview deploy
 
   # THE TWO SUITES, E2E tests and Browser specs: one job each, side by side after the deploy, and ONE
-  # DEFINITION. Browser specs runs E2E tests' runner and steps (the `suite-runner` and `suite-steps`
-  # anchors); the two differ only in the suite their env names and in which dispatch skips them.
+  # DEFINITION. Browser specs runs E2E tests' steps (the `suite-steps` anchor); the two differ only
+  # in the suite their env names, in which dispatch skips them, and in their runners (below).
   # E2E tests is the full mutating proof (docs/testing.md): the vitest e2e suite, whose project-
   # creating rows this isolated preview owns (production runs only its deploy-script readiness
   # probes). Browser specs is the browser proof: the root Playwright specs (specs/AGENTS.md) against
@@ -196,9 +197,14 @@ jobs:
   # suite alone. `always()` starts it behind any deploy, and its first step fails it when there is no
   # deployed preview to test: a failed or cancelled deploy, or a test-only dispatch that names none.
   #
-  # 2x8 RUNNERS: both suites wait on a remote preview. On 4x16 they peaked at 2.1 vCPUs and 3.2 GB,
-  # and on 2x8 their p50 is within 6 s of 4x16's (measured 2026-09-24;
-  # docs/depot-ci.md#reliability-defaults).
+  # THE SUITE'S LINE in the PR body is the CI trace job's to write, after both suites: the suite's
+  # step hands it over as the job's `status` output (apps/os/scripts/preview.ts `handOverSuiteLine`),
+  # so the check turns green or red without waiting on GitHub.
+  #
+  # RUNNERS: E2E tests waits on a remote preview, which a 2x8 does about as fast as a 4x16. Browser
+  # specs runs six browsers (playwright.config.ts `workers`), whose specs run faster with a 4x16's
+  # CPU; more workers or shards would put more specs on the preview at once, which raises retries.
+  # The measurements: docs/depot-ci.md#reliability-defaults.
   e2e:
     name: E2E tests
     needs: deploy
@@ -206,7 +212,7 @@ jobs:
       always() &&
       ((github.event_name == 'pull_request' && needs.deploy.outputs.preview != 'false') ||
       (github.event_name == 'workflow_dispatch' && inputs.action != 'specs'))
-    runs-on: &suite-runner
+    runs-on:
       size: 2x8
       image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
     timeout-minutes: 30
@@ -289,10 +295,7 @@ jobs:
       - name: Check test telemetry and write the suite summary
         if: always() && steps.suite.outcome != 'skipped'
         run: pnpm tsx scripts/ci/upload-test-telemetry.ts --flake-suites "$FLAKE_SUITE" ${{ cancelled() && '--cancelled' || '' }}
-      # THE TEST EVIDENCE FOLDER (docs/test-evidence.md): test-results/ holds everything this job
-      # attempt's tests left, and target.json the deployment they ran against. This adds one row per
-      # test (tables/tests.parquet), then manifest.json: the run's result (from the suite's step and
-      # the finalizer's check), the tested commit and tree, the job attempt and every file's sha256.
+      # THE TEST EVIDENCE FOLDER (docs/test-evidence.md): this adds test-results/manifest.json.
       # Neither this nor the upload decides the job; the tests did.
       # After the suite started only: a job whose guard found no preview has no folder.
       - name: Write the test evidence manifest
@@ -308,8 +311,8 @@ jobs:
       - fail-fast: false
         parallel:
           # With the Cloudflare API token preview deploys use (Doppler _shared/preview), as S3 keys.
-          # A cancelled or timed-out job's folder too: its manifest says so, and it gets no tables/
-          # copy. A failure is a warning and a line of the job's summary, never the job's result.
+          # A cancelled or timed-out job's folder too: its manifest says so. A failure is a warning
+          # and a line of the job's summary, never the job's result.
           - name: Upload the test evidence to R2
             id: evidence-upload
             if: ${{ always() && hashFiles('test-results/manifest.json') != '' }}
@@ -326,14 +329,6 @@ jobs:
               name: flake-records-${{ env.FLAKE_SUITE }}-attempt-${{ steps.attempt.outputs.id }}
               path: test-results/flake-records/${{ env.FLAKE_SUITE }}
               if-no-files-found: ignore
-          - name: Upload test telemetry artifacts
-            if: always() && steps.suite.outcome != 'skipped'
-            uses: actions/upload-artifact@v4
-            with:
-              name: preview-test-telemetry-attempt-${{ steps.attempt.outputs.id }}
-              path: test-results/ci-telemetry
-              include-hidden-files: true
-              if-no-files-found: error
           # EVERYTHING THE RUN WROTE under test-results/, whatever the suite's outcome
           # (docs/depot-ci.md#browser-reports-from-artifacts): the telemetry, and for the specs each
           # failed spec's trace.zip, screenshot and error-context.md under playwright-output/ and
@@ -372,7 +367,9 @@ jobs:
       always() &&
       ((github.event_name == 'pull_request' && needs.deploy.outputs.preview != 'false') ||
       (github.event_name == 'workflow_dispatch' && inputs.action != 'e2e'))
-    runs-on: *suite-runner
+    runs-on:
+      size: 4x16
+      image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
     timeout-minutes: 30
     env:
       SUITE: specs

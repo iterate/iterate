@@ -1,7 +1,7 @@
 import { expect, test } from "vitest";
 import { classifyContexts, type SweptContext } from "./context-sweep.ts";
 
-test.each([
+test.for<[string, SweptContext[], object]>([
   ["a live project's context is left alone", [context("a", "prj_live")], { live: ["a"] }],
   ["a global context is never swept", [context("g", "global", "/users/u1")], { global: ["g"] }],
   [
@@ -19,7 +19,7 @@ test.each([
     [{ id: "u", error: "must be addressed by name" }],
     { unidentified: [{ id: "u", error: "must be addressed by name" }] },
   ],
-])("%s", (_name, contexts, expected) => {
+])("%s", ([, contexts, expected]) => {
   expect(classifyContexts(contexts, new Set(["prj_live"]))).toEqual({
     live: [],
     global: [],

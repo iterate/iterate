@@ -68,7 +68,12 @@ export namespace insertUserIfNew {
 	};
 }
 
-const updateUserEmailSql = `update users set email = ? where id = ?;`;
+const updateUserEmailSql = `
+update users set email = ?
+where id = ?
+  and (select count(*) from identities i where i.user_id = users.id) = 1
+  and not exists (select 1 from identities i where i.user_id = users.id and i.added_at is not null);
+`.trim();
 const updateUserEmailQuery = (data: updateUserEmail.Data, params: updateUserEmail.Params) => ({
 	name: "updateUserEmail",
 	sql: updateUserEmailSql,
@@ -174,5 +179,32 @@ export namespace insertIdentity {
 		provider: string;
 		subject: string;
 		email: string;
+	};
+}
+
+const insertAddedIdentitySql = `
+insert into identities (provider, subject, user_id, added_at)
+values (?, ?, ?, ?)
+on conflict do nothing;
+`.trim();
+const insertAddedIdentityQuery = (params: insertAddedIdentity.Params) => ({
+	name: "insertAddedIdentity",
+	sql: insertAddedIdentitySql,
+	args: [params.provider, params.subject, params.userId, params.addedAt],
+});
+
+export const insertAddedIdentity = Object.assign(
+	async function insertAddedIdentity(client: Client, params: insertAddedIdentity.Params) {
+		return client.run(insertAddedIdentityQuery(params));
+	},
+	{ sql: insertAddedIdentitySql, query: insertAddedIdentityQuery },
+);
+
+export namespace insertAddedIdentity {
+	export type Params = {
+		provider: string;
+		subject: string;
+		userId: string;
+		addedAt: number | null;
 	};
 }

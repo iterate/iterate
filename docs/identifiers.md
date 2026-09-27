@@ -1,7 +1,7 @@
 # Identifiers
 
 - slug: subdomain-safe
-- id: always with a type prefix (`user_<hex>`, `org_<hex>`, `prj_<hex>`)
+- id: stable identifier ([slugs and IDs](#slugs-and-ids))
 - key: arbitrary string that uniquely identifies a value
 - path: url-style path (with leading /)
 

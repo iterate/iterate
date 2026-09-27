@@ -21,7 +21,7 @@ import { useEffect, useEffectEvent, useMemo, useState } from "react";
 import { ChevronLeftIcon, ChevronRightIcon } from "lucide-react";
 import { Button } from "../button.tsx";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "../sheet.tsx";
-import { SerializedObjectCodeBlock } from "../serialized-object-code-block.tsx";
+import { SerializedObjectCodeBlock } from "../code-block.tsx";
 import { Spinner } from "../spinner.tsx";
 import {
   elapsedBetween,
@@ -204,7 +204,7 @@ export function EventInspector({
                     </dl>
                   ) : null}
                   <div className="min-w-0">
-                    <SerializedObjectCodeBlock data={raw} initialFormat="yaml" showToggle />
+                    <SerializedObjectCodeBlock data={raw} />
                   </div>
                 </>
               )}

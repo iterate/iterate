@@ -3,7 +3,7 @@ import { auth } from "./auth.ts";
 
 // An empty Origin is foreign, like any other that is not this one; only an absent Origin (a
 // non-browser client) is trusted (lib.ts isSameOriginBrowserRequest).
-test.each<{ headers: Record<string, string>; status: number }>([
+test.for<{ headers: Record<string, string>; status: number }>([
   { headers: { origin: "" }, status: 403 },
   { headers: { origin: "https://evil.example" }, status: 403 },
   { headers: { origin: "null" }, status: 403 },
@@ -29,7 +29,7 @@ test.for<{ method: string; headers: Record<string, string> }>([
 // A WebSocket handshake is a GET, but it is checked like a write: every `<routingSlug>--<project>.iterate.app`
 // host is same-site with every other, so a SameSite=Lax cookie rides a socket another project opens.
 const signedIn = { "x-itx-principal": JSON.stringify({ actor: "user:1" }) };
-test.each<{ name: string; headers: Record<string, string>; status: number | null }>([
+test.for<{ name: string; headers: Record<string, string>; status: number | null }>([
   { name: "cross-origin", headers: { origin: "https://evil.example", ...signedIn }, status: 403 },
   {
     name: "sibling-host",

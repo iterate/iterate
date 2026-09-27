@@ -40,6 +40,11 @@ import type { RewriteRuleListEntry, StreamPage, SubscriptionListEntry } from "it
 import { ITERATE_ROUTING_SLUG_HEADER } from "iterate/project-ingress";
 import { RunRequested, type RunSettlement } from "iterate/stream/run";
 import {
+  failureKind,
+  isPlatformFailureKind,
+  logPlatformFailure,
+} from "@iterate-com/shared/platform-retry";
+import {
   ITX_APP_HEADER,
   ITX_CALLER_PATH_HEADER,
   ITX_GRANT_HEADER,
@@ -78,8 +83,13 @@ import {
   secretPathsReferenced,
   verifyLendUse,
 } from "./secrets.ts";
-import { isDeployReset } from "./retryable-error.ts";
-import { appConfigOf, sessionSigningSecretOf, type AppConfigEnv } from "./app-config.ts";
+import { unavailableAnswer } from "./unavailable.ts";
+import {
+  appConfigOf,
+  iterateAppScopesOf,
+  sessionSigningSecretOf,
+  type AppConfigEnv,
+} from "./app-config.ts";
 import {
   ItxExpressionResolver,
   describeRewriteRules,
@@ -733,6 +743,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     ingressRouting: this.#appConfig.urls.ingressRouting,
     dashOrigin: this.#appConfig.urls.dash,
     platformAdmins: () => this.#appConfig.admins,
+    iterateAppScopes: () => iterateAppScopesOf(this.#appConfig),
     platformOrigin: () => this.#platformOrigin,
     signFileUrl: async (input) => {
       const platformOrigin = this.#platformOrigin;
@@ -754,7 +765,8 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         platformOrigin,
       });
     },
-    invoke: (call) => this.#invokeInProcess(call, [], { principal: null }),
+    // A producer is loaded code's word: walled on its input and on every row it appends.
+    invoke: (call) => this.#invokeInProcess(call, [], { principal: null, app: true }),
     // a sibling context by path; the own path is this DO itself — a ReachableContext structurally (stream.ts)
     context: (p) => (p === this.#durableObjectAddress.path ? this.#localContext : this.#sibling(p)),
     egress: (request) => this.#egress(request),
@@ -935,7 +947,8 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     path: this.#durableObjectAddress.path,
     platformOrigin: () => this.#platformOrigin,
     itxEntrypoint: () => this.#itxEntrypoint,
-    invoke: (call) => this.#invokeInProcess(call, [], { principal: null }),
+    // A producer is loaded code's word: walled on its input and on every row it appends.
+    invoke: (call) => this.#invokeInProcess(call, [], { principal: null, app: true }),
     resolveItxExpression: (expression) => this.#itxExpressionResolver.resolve(expression),
     stream: this.#stream,
     reconcileAlarm: () => this.#alarmCoordinator.reconcile(),
@@ -1352,18 +1365,17 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       } catch (error) {
         // A project host makes this path public: default-deny is a 404 (a visitor's "no such app" is
         // no issue), a WebSocket upgrade aimed at a facet-hosted app is the caller's 400 (context/facet-host.ts),
-        // anything else a 500 — the message alone every way, the stack REPORTED, never served.
+        // a lent stub offline or a platform failure the edge's one answer (`unavailableAnswer`: a 502,
+        // a 503 with its Retry-After), anything else a 500 — the message alone every way, the stack
+        // REPORTED, never served.
         const code = errorCode(error);
+        const unavailable = unavailableAnswer(error);
         const status =
           code === "NO_ITX_EXPRESSION_MATCH"
             ? 404
             : code === "FACET_NO_UPGRADE"
               ? 400
-              : code === "RPC_STUB_OFFLINE"
-                ? 502
-                : isDeployReset(error)
-                  ? 503
-                  : 500;
+              : (unavailable?.status ?? 500);
         if (status === 500)
           reportIssue("iterate-context.expression-fetch", error, {
             itxExpression: itxExpressionHeader,
@@ -1373,8 +1385,10 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         // expression to a client. A deploy that reset a context the fetch dialed, where the hop could
         // not send it again (a request with a body, an upgrade; built-ins.ts `cd`), is a 503 the
         // visitor retries in a second, logged at info and never reported. The prd fault alarm
-        // (scripts/ci/prd-fault-alarm.ts) drops the 502 and 503 summaries in these lines' rays.
-        if (status === 502 || status === 503)
+        // (scripts/ci/prd-fault-alarm.ts) drops the 502 and 503 summaries in these lines' rays. Any
+        // other platform failure is a 503 the alarm counts: a lost connection, an overload.
+        const kind = failureKind(error);
+        if (status === 502 || kind === "deploy-reset")
           console.info({
             event:
               status === 502
@@ -1382,12 +1396,18 @@ export class IterateContextDurableObject extends DurableObject<Env> {
                 : "expression-fetch.deploy-reset",
             itxExpression: itxExpressionHeader,
           });
+        else if (isPlatformFailureKind(kind))
+          logPlatformFailure("expression-fetch", "answered", kind, {
+            name: "expression-fetch",
+            itxExpression: itxExpressionHeader,
+            message: String(error),
+          });
         const message = error instanceof Error ? error.message : String(error);
         return new Response(`expression fetch error: ${message}\n`, {
           status,
           headers: {
+            ...unavailable?.headers,
             ...(status === 502 && { "x-iterate-rpc-stub-offline": itxExpressionHeader }),
-            ...(status === 503 && { "retry-after": "1", "cache-control": "no-store" }),
           },
         });
       }
@@ -1441,7 +1461,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
    *  outbound. The hop counter stays — the edge's re-entry guard reads it when an app fetches its
    *  own host. WS-safe: only the headers are rewritten, and every hop is a fetch channel — the
    *  other context's `fetch`, then `ctx.facets.get(name).fetch` — so a 101 flows straight back
-   *  either way (measured: __workers-tests__/secret-facet-proxies-a-socket.test.ts). */
+   *  either way (measured: __workers-tests__/facets.test.ts). */
   #egress(request: Request): Promise<Response> {
     const headers = new Headers(request.headers);
     stampCallerHeaders(headers, null);
@@ -1449,6 +1469,9 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     headers.delete(FETCH_UPGRADE_RESUMABLE_HEADER); // the edge's ask of a lent stub, never an origin's
     // A lend's headers are platform-to-platform (secrets.ts `LEND_USE_HEADER`): never a caller's.
     for (const name of [...headers.keys()]) if (name.startsWith("x-itx-lend")) headers.delete(name);
+    // A browser cannot set User-Agent on a Request it builds (Chromium drops it), and GitHub's API
+    // refuses a request without one: a caller that names none is sent as `iterate`.
+    if (!headers.has("user-agent")) headers.set("user-agent", "iterate");
     const outbound = new Request(request, { headers });
     const paths = secretPathsReferenced(outbound);
     if (paths.length === 0) return fetch(outbound);

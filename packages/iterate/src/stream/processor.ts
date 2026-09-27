@@ -46,7 +46,7 @@
 
 import type { SqlStorageValue } from "@cloudflare/workers-types";
 import { z } from "zod";
-import { reportIssue, jsonEqual, codedError, diff } from "../lib.ts";
+import { reportIssue, jsonEqual, codedError, diff, errorCode } from "../lib.ts";
 import type { Principal } from "../principal.ts";
 
 /** What a processor declares: its checkpoint slug and reducer version, what it consumes and emits,
@@ -204,7 +204,7 @@ export class ProcessorEngine<State> {
    *  every commit past it that the processor consumes reaches it as a push, so the read verbs trust it
    *  as a push's head. In memory only — a fresh incarnation catches up once before it trusts any. */
   #headReadFromLogOffset?: number;
-  /** A refusal that can only repeat — the checkpoint over its cell (stamped `retryable: false`):
+  /** A refusal that can only repeat — the checkpoint over its cell (REDUCE_CHECKPOINT_TOO_LARGE):
    *  LATCHED for this incarnation, so every later batch, catch-up and read verb rejects with it at
    *  once instead of re-reducing into the same wall on every push and wake. A fresh incarnation
    *  tries once more. */
@@ -678,7 +678,7 @@ export class ProcessorEngine<State> {
     return { state, processed: true };
   }
 
-  /** The checkpoint write, with the latch: a refusal stamped `retryable: false` can only repeat. */
+  /** The checkpoint write, with the latch: REDUCE_CHECKPOINT_TOO_LARGE can only repeat. */
   #writeCheckpointOrLatch(
     slug: string,
     cursor: { reducerVersion: string; reducedThroughOffset: number },
@@ -688,7 +688,7 @@ export class ProcessorEngine<State> {
     try {
       this.#storage.write(slug, cursor, state, stateChanged);
     } catch (error) {
-      if ((error as { retryable?: unknown } | null)?.retryable === false)
+      if (errorCode(error) === "REDUCE_CHECKPOINT_TOO_LARGE")
         this.#latchedRefusal = error instanceof Error ? error : new Error(String(error));
       throw error;
     }
@@ -855,16 +855,13 @@ export class ReduceCheckpointTable {
     stateChanged: boolean,
   ): void {
     const serializedState = stateChanged ? (JSON.stringify(state) ?? null) : null;
-    // Stamped `retryable: false` (the flag workerd itself uses): the same state serializes to the
-    // same size on every retry — a delivery loop halts on it instead of climbing its ladder.
+    // The same state serializes to the same size on every retry: a delivery loop halts on the code
+    // instead of climbing its ladder.
     if (serializedState && serializedState.length > REDUCE_CHECKPOINT_STATE_MAX_CHARS)
-      throw Object.assign(
-        codedError(
-          "REDUCE_CHECKPOINT_TOO_LARGE",
-          `checkpoint "${slug}": the reduced state serializes to ${serializedState.length} chars, over the ${REDUCE_CHECKPOINT_STATE_MAX_CHARS}-char ceiling of one storage cell (2 MB) — a reduce must keep a summary, not the events; nothing was written`,
-          { slug, chars: serializedState.length, maxChars: REDUCE_CHECKPOINT_STATE_MAX_CHARS },
-        ),
-        { retryable: false },
+      throw codedError(
+        "REDUCE_CHECKPOINT_TOO_LARGE",
+        `checkpoint "${slug}": the reduced state serializes to ${serializedState.length} chars, over the ${REDUCE_CHECKPOINT_STATE_MAX_CHARS}-char ceiling of one storage cell (2 MB) — a reduce must keep a summary, not the events; nothing was written`,
+        { slug, chars: serializedState.length, maxChars: REDUCE_CHECKPOINT_STATE_MAX_CHARS },
       );
     this.#sql.exec(
       `INSERT INTO reduce_checkpoints (slug, reducer_version, reduced_through_offset, state)

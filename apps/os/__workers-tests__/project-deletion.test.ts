@@ -6,7 +6,7 @@ import { expect, test } from "vitest";
 import { env } from "cloudflare:workers";
 import type { StreamEvent } from "iterate/stream/processor";
 import { CONTEXT_DESTROYED } from "../src/context/paths.ts";
-import { adminCredentials, controlPlane, openSession, refused, stub, until } from "./support.ts";
+import { adminCredentials, controlPlane, openSession, readLog, refused, until } from "./support.ts";
 
 test("deleting a project drops its row at once, then destroys every context it announced, its kv, and its root last", async () => {
   const admin = (await openSession()).authenticate(adminCredentials());
@@ -18,7 +18,7 @@ test("deleting a project drops its row at once, then destroys every context it a
     await itx.cd(path).append({ type: "test/marker", payload: { path } });
   await itx.kv.put("left-behind", "yes");
   await until("the root names every context below it", async () => {
-    const announced = (await eventsOf(projectId, "/"))
+    const announced = (await readLog(`${projectId}.iterate/`))
       .filter((event) => event.type === "events.iterate.com/itx/child-created")
       .map((event) => (event.payload as { childPath: string }).childPath);
     return paths.every((path) => announced.includes(path));
@@ -35,7 +35,7 @@ test("deleting a project drops its row at once, then destroys every context it a
     "the root is destroyed",
     async () =>
       !(
-        await eventsOf(projectId, "/").catch((error: unknown) => {
+        await readLog(`${projectId}.iterate/`).catch((error: unknown) => {
           if (!String(error).includes(CONTEXT_DESTROYED)) throw error;
           return [{ type: "events.iterate.com/project/create-requested" } as StreamEvent];
         })
@@ -44,14 +44,10 @@ test("deleting a project drops its row at once, then destroys every context it a
   );
   for (const path of ["/", ...paths])
     expect(
-      (await eventsOf(projectId, path)).filter((event) => event.type === "test/marker"),
+      (await readLog(`${projectId}.iterate${path}`)).filter(
+        (event) => event.type === "test/marker",
+      ),
       path,
     ).toEqual([]);
   expect(await env.ITX_KV.list({ prefix: `${projectId}:` })).toMatchObject({ keys: [] });
 });
-
-/** A context's durable log, read on its Durable Object (a destroyed one is born again, empty). */
-async function eventsOf(projectId: string, path: string): Promise<StreamEvent[]> {
-  const page = await stub(`${projectId}.iterate${path}`).read(0, 500);
-  return (page as unknown as { events: StreamEvent[] }).events;
-}

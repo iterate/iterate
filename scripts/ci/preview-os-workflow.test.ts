@@ -4,11 +4,13 @@ import { expect, test } from "vitest";
 import { parse as parseYaml } from "yaml";
 
 type PreviewStep = {
+  "continue-on-error"?: boolean;
   id?: string;
   if?: string;
   name?: string;
   parallel?: PreviewStep[];
   run?: string;
+  "timeout-minutes"?: number;
   uses?: string;
   with?: { ref?: string; name?: string };
   env?: Record<string, string>;
@@ -72,18 +74,15 @@ test("Preview OS names each job for the check it is: deploy, then the two suites
   expect(runs("deploy")).not.toContain(suiteRun);
 });
 
-// ONE DEFINITION: Browser specs is E2E tests' runner and steps (YAML aliases), and the two jobs
-// differ only in the suite their env names and in the dispatch that skips them.
+// Why the two suite jobs share one definition: .depot/workflows/preview-os.yml (THE TWO SUITES).
 test("Preview OS's two suite jobs are one definition, differing only in the suite they name", () => {
   const [e2e, specs] = [preview.jobs.e2e!, preview.jobs.specs!];
   expect(specs).toMatchObject({
     steps: e2e.steps,
-    "runs-on": e2e["runs-on"],
     "timeout-minutes": e2e["timeout-minutes"],
   });
   // written once: the second job aliases the first's
   expect(source.match(/^ {4}steps: \*suite-steps$/gmu)).toHaveLength(1);
-  expect(source.match(/^ {4}runs-on: \*suite-runner$/gmu)).toHaveLength(1);
   const suiteEnv = ["SUITE", "FLAKE_SUITE", "TEST_TELEMETRY_EXPECTED_WORKSPACES"];
   const shared = (env: Record<string, string> = {}) =>
     Object.fromEntries(Object.entries(env).filter(([name]) => !suiteEnv.includes(name)));
@@ -96,10 +95,10 @@ test("Preview OS's two suite jobs are one definition, differing only in the suit
   expect(specs.if?.replace("inputs.action != 'e2e'", "inputs.action != 'specs'")).toBe(e2e.if);
 });
 
-// Both suites wait on a remote preview: on 4x16 they peaked at 53 % of four vCPUs and 20 % of 16 GB
-// (measured 2026-09-24; docs/depot-ci.md#reliability-defaults).
-test("Preview OS's suites run on the smallest runner", () => {
+// Why each suite runs on its size: docs/depot-ci.md#reliability-defaults.
+test("Preview OS's E2E tests run on the smallest runner, and Browser specs on a 4x16", () => {
   expect(preview.jobs.e2e!["runs-on"]?.size).toBe("2x8");
+  expect(preview.jobs.specs!["runs-on"]?.size).toBe("4x16");
 });
 
 // A required check has to report on every pull request: GitHub leaves one "Pending" when a `paths`
@@ -152,6 +151,7 @@ test("Preview OS deploys the PR merged into main, and the test jobs use that ver
   ).toEqual({ HEAD_SHA: "${{ needs.deploy.outputs.head-sha }}" });
 });
 
+// Why: apps/os/scripts/preview.ts `handOverSuiteLine` and `writeSuiteLines`, and the step's comment.
 test("Preview OS: only the trace runs after the suites, so the next push's deploy waits for nothing else", () => {
   for (const suite of suites) {
     const after = Object.entries(preview.jobs).filter(([, job]) =>

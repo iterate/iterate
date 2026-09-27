@@ -1,9 +1,9 @@
 // perf/latency.ts — THE LATENCY GUARD'S LINES: every metric the perf suite records, what one sample of
 // it is, and the budget its median must stay on the right side of — with the measurements each
 // budget came from. The perf rows record through perf/record.ts and
-// hold themselves to these budgets (a local `pnpm perf`, the soak); the scheduled guard
-// (scripts/ci/os-latency-guard.ts, .depot/workflows/os-latency.yml) judges every run against the
-// same budgets AND against its own rolling baseline, and pages #error-pulse. Pure: no vitest, no I/O.
+// hold themselves to these budgets (a local `pnpm perf`, the soak); the health job's latency check
+// (scripts/monitors/latency.ts) judges every run of .depot/workflows/os-latency.yml against the same
+// budgets AND against its own rolling baseline, and pages #error-pulse. Pure: no vitest, no I/O.
 //
 // A run is judged by each metric's MEDIAN — of a row's rounds, or of the projects in a concurrent
 // round: one stall moves one sample, a regression moves them all. The p95 and max go to PostHog
@@ -12,8 +12,7 @@
 // normal variance never crosses it: a crossing is a regression, not weather. CALIBRATION,
 // 2026-09-24, the worker of main bd7f3f91b: `pnpm perf` against a fresh throwaway preview per run,
 // 5 runs from a laptop in London and 3 from Depot (the guard's own workflow, dispatched);
-// `calibration` is the judged median's range in ms (events/s for the rate) across each set. The
-// push and rule budgets are the e2e rows' own until #2977.
+// `calibration` is the judged median's range in ms (events/s for the rate) across each set.
 
 export const LATENCY_METRICS = {
   // ── concurrent project creation (perf/project-creation.perf.test.ts) ──
@@ -117,7 +116,7 @@ export const LATENCY_METRICS = {
     budget: 3_000,
     calibration: "laptop 389–935, Depot 403–569",
   },
-  // ── rule invocation (perf/rewrite-rules.perf.test.ts, rewrite-rules.e2e's budget until #2977) ──
+  // ── rule invocation (perf/rewrite-rules.perf.test.ts) ──
   "rules.300.newest": {
     file: "perf/rewrite-rules.perf.test.ts",
     sample: "invoking the newest of 300 rewrite rules",
@@ -132,7 +131,7 @@ export const LATENCY_METRICS = {
     budget: 150,
     calibration: "laptop 20.9–39.1, Depot 21.6–70.2",
   },
-  // ── stream fan-out (perf/push-delivery.perf.test.ts, push-delivery.e2e's budgets until #2977) ──
+  // ── stream fan-out (perf/push-delivery.perf.test.ts) ──
   "push.flood.p50": {
     file: "perf/push-delivery.perf.test.ts",
     sample: "a flood round's median append→callback latency (2000 ephemerals, one subscriber)",
@@ -186,7 +185,7 @@ export const LATENCY_METRICS = {
   string,
   {
     /** The perf file whose row records it (under apps/os/): a metric a broken row left unrecorded
-     *  is that row's breakage, not a second one (scripts/ci/os-latency-guard.ts). */
+     *  is that row's breakage, not a second one (scripts/monitors/latency.ts). */
     file: `perf/${string}.perf.test.ts`;
     /** What one sample is. */
     sample: string;
@@ -217,11 +216,4 @@ export function summarize(samples: number[]) {
  *  `events/s`. */
 export function crosses(metric: LatencyMetricName, value: number, line: number) {
   return LATENCY_METRICS[metric].unit === "events/s" ? value < line : value > line;
-}
-
-/** The budget, scaled toward breaching by `scale` < 1 (the dispatch's forced alert): a ceiling
- *  times `scale`, a floor divided by it. */
-export function budgetLine(metric: LatencyMetricName, scale: number) {
-  const { budget, unit } = LATENCY_METRICS[metric];
-  return unit === "events/s" ? budget / scale : budget * scale;
 }
