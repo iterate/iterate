@@ -121,7 +121,7 @@ export const ProjectContract = defineProcessorContract({
     },
     "events.iterate.com/project/delete-requested": {
       description:
-        "The project's owner deleted it (`session.projects.delete`): the control plane has already dropped its row, so nothing reaches it any more. The processor destroys every context in the project's registry (deepest first), its custom hostnames, its kv, files and Artifacts repos, lands `project/deleted`, and destroys `/` last. Honoured only as the platform's own fact (`source.platform`): a member can append it, and it does nothing.",
+        "The project's owner deleted it (`session.projects.delete`): the verb appends this just before the control plane drops the project's row, and the edge admits nothing to the project once the row is gone. The processor destroys every context in the project's registry (deepest first), its custom hostnames, its kv, files and Artifacts repos, lands `project/deleted`, and destroys `/` last, only once the row is gone. Honoured only as the platform's own fact (`source.platform`): a member can append it, and it does nothing.",
       payloadSchema: z.object({}),
     },
     "events.iterate.com/project/context-deleted": {

@@ -403,9 +403,10 @@ export class IterateContextDurableObject extends DurableObject<Env> {
    *  birth — a store with no durable row — asks the control plane first (catalog.ts
    *  `deletedProject`). A deleted project's root is not born: the tables the stream opened as this
    *  instance was built go, and every entry point answers `#unborn` first (`#unbornStill`), nothing
-   *  run and nothing written — a refusal like any other, where a reset would log an error for every request that
-   *  reaches it. A question that failed fails the birth, the store left as empty, and resets this
-   *  instance, so the next request asks again. Answers whether the birth was refused. */
+   *  run and nothing written — a refusal like any other, where a reset would log an error for
+   *  every request that reaches it. A question that failed fails the birth, the store left as
+   *  empty, and resets this instance, so the next request asks again. Answers whether the birth
+   *  was refused. */
   async #refuseBirthOfDeletedProjectRoot(): Promise<boolean> {
     const { projectId, path } = this.#durableObjectAddress;
     if (path !== "/" || projectId === GLOBAL_PROJECT_ID) return false;
