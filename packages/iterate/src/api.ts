@@ -889,10 +889,8 @@ export interface IterateContextApi {
     get(path: string): InvokeHandle & FileHandle;
     list(prefix?: string): Promise<FileRecord[]>;
   };
-  /** The project's email at `<slug>@<email domain>` (`<slug>@iterate.app`). Mail sent to it,
-   *  and every `send`, lands on `/integrations/email` as `email/received` and `email/sent`, which
-   *  the `email` facet there folds into threads; an attachment's bytes are a project file.
-   *  `send` answers the `email/sent` event. */
+  /** The project's email, `<slug>@iterate.app` (apps/os/src/email/contract.ts has its events and
+   *  threads). `send` answers the `email/sent` event. */
   email: {
     send(input: EmailSendInput): Promise<StreamEvent>;
   };

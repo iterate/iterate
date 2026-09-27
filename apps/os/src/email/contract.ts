@@ -16,7 +16,7 @@ export const EMAIL_PATH = "/integrations/email";
 /** The domain a project's mail is on: the hostname the project wildcard is on (`iterate.app` on
  *  prd). Null where projects are paths on the platform's origin (a preview, a self-host without a
  *  wildcard): no project has an address there. */
-export function emailDomainOf(ingressRouting: IngressRouting): string | null {
+export function emailDomainOf(ingressRouting: IngressRouting) {
   return ingressRouting?.type === "subdomains" ? ingressRouting.hostname : null;
 }
 

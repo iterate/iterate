@@ -30,7 +30,7 @@ import { EMAIL_PATH, EmailContract, emailDomainOf } from "../email/contract.ts";
 /** A body longer than this many characters is cut, so no message outgrows one event. */
 const BODY_MAX_CHARS = 100_000;
 
-export async function receiveEmail(message: ForwardableEmailMessage, env: Env): Promise<void> {
+export async function receiveEmail(message: ForwardableEmailMessage, env: Env) {
   const domain = emailDomainOf(appConfigOf(env).urls.ingressRouting);
   const recipient = /^([^@+]+)(?:\+[^@]*)?@(.+)$/.exec(message.to.trim().toLowerCase());
   const project =
@@ -109,7 +109,7 @@ export async function sendEmail(
     caller: Caller;
   },
   input: EmailSendInput,
-): Promise<StreamEvent> {
+) {
   const parsed = SendInput.safeParse(input);
   if (!parsed.success) throw codedError("INVALID_INPUT", `itx.email.send: ${parsed.error.message}`);
   const request = parsed.data;
@@ -183,7 +183,7 @@ async function recordEmail(
   emailContext: Pick<ReachableContext, "invoke">,
   caller: Caller,
   event: StreamEventInput,
-): Promise<StreamEvent> {
+) {
   const asPlatform: Caller = { ...caller, platform: true };
   await emailContext.invoke(["itx", "builtins", "processors", ["enable", "email"]], [], asPlatform);
   // `invoke` is untyped across the DO hop; the `append` built-in answers the committed events.
@@ -227,7 +227,7 @@ async function answeredMessageOf(emailContext: Pick<ReachableContext, "read">, o
 
 /** A References header under Email Service's 2,048-byte limit: the thread's first id and as many
  *  of its latest as fit (RFC 5322 3.6.4 keeps the first). */
-function referencesHeaderOf(references: string[]): string {
+function referencesHeaderOf(references: string[]) {
   const bracketed = references.map((id) => `<${id}>`);
   while (bracketed.length > 2 && bracketed.join(" ").length > 2000) bracketed.splice(1, 1);
   return bracketed.join(" ");
@@ -235,18 +235,18 @@ function referencesHeaderOf(references: string[]): string {
 
 /** Every message id in a Message-ID, In-Reply-To or References value, angle brackets off; a value
  *  with none bracketed is one bare id. */
-function bareMessageIdsOf(value: string | undefined): string[] {
+function bareMessageIdsOf(value: string | undefined) {
   const bracketed = [...(value || "").matchAll(/<([^<>\s]+)>/g)].map((match) => match[1]!);
   return bracketed.length > 0 || !value?.trim() ? bracketed : [value.trim()];
 }
 
 /** The addresses of parsed recipients, a group's members among them. */
-function addressesOf(list: Address[] | undefined): string[] {
+function addressesOf(list: Address[] | undefined) {
   return (list || []).flatMap((entry) =>
     (entry.group || [entry]).map((mailbox) => mailbox.address),
   );
 }
 
-function cutBody(body: string): string {
+function cutBody(body: string) {
   return body.length > BODY_MAX_CHARS ? `${body.slice(0, BODY_MAX_CHARS)}\n[truncated]` : body;
 }

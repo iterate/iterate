@@ -417,7 +417,7 @@ export default {
   },
 
   // Cloudflare Email Routing's catch-all on the project email domain (integrations/email.ts).
-  async email(message: ForwardableEmailMessage, env: WorkerEnv): Promise<void> {
+  async email(message: ForwardableEmailMessage, env: WorkerEnv) {
     await receiveEmail(message, env);
   },
 };
