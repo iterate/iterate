@@ -45,11 +45,8 @@ test("a file finds nothing an earlier one stored: an evicted context, a loaded o
   ).toBeNull();
 });
 
-// THE GAP THE POOL'S DELETE FILLS (empty-runtime.ts step 3): workerd's `deleteAllDurableObjects`, what
-// `reset()` calls, empties the storage of the objects it finds loaded
-// (`ActorNamespace::deleteAll` → `ActorContainer::resetStorage`, cloudflare/workerd
-// src/workerd/server/server.c++), and an evicted object is not. The day `reset()` alone empties it,
-// this row turns red, and the pool's delete (vitest.config.ts `TEST_STORAGE`) and
+// THE GAP THE POOL'S DELETE FILLS (empty-runtime.ts step 3). The day `reset()` alone empties an
+// evicted object, this row turns red, and the pool's delete (vitest.config.ts `TEST_STORAGE`) and
 // patches/@cloudflare__vitest-plugin@1.2.5.patch can go.
 createFailing(test, /an object evicted before reset\(\) should be empty after it/)(
   "reset() empties the storage of a context evicted before it",
