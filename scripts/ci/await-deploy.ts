@@ -54,10 +54,9 @@ export async function awaitDeploy(input: {
     if (!deploy) throw new Error(`Depot lists no job ${job} in workflow ${workflowId} to wait for`);
     const name = deploy.jobDisplayName || deploy.jobKey;
     const attempt = Math.max(0, ...deploy.attempts.map((candidate) => candidate.attempt));
-    const state = attempt ? `${deploy.status} (attempt ${attempt})` : deploy.status;
+    const state = `${name}${attempt ? ` (attempt ${attempt})` : ""} ${deploy.status}`;
     const waitedMs = Date.now() - started;
-    if (state !== reported)
-      log(`[await-deploy] ${(waitedMs / 1000).toFixed(1)} s: ${name} is ${state}`);
+    if (state !== reported) log(`[await-deploy] ${(waitedMs / 1000).toFixed(1)} s: ${state}`);
     reported = state;
     if (deploy.status === "finished") return;
     if (NO_PREVIEW.includes(deploy.status))
