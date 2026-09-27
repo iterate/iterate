@@ -267,7 +267,7 @@ async function judgeEachRun(
 
 /** Judge each push run of Main OS e2e that `memory` has not, the settled ones and then `current`
  *  (`judgeEachRun`): main e2e from its jobs, and its slow rows from its E2E tests job's suite
- *  summary, which a job its deploy's failure skipped never wrote. When Depot still lists a deploy or
+ *  summary, which a suite whose deploy did not finish never wrote. When Depot still lists a deploy or
  *  suite job of `current` as queued or running, that run has not settled, and judging it throws. An
  *  older run Depot lists as finished or failed with such a job (one Depot failed before its jobs
  *  started) has no verdict, and the state moves past it. */
@@ -293,15 +293,19 @@ export async function checkMainE2e(input: {
         throw new Error(
           `${run.workflowId} has not settled: Depot lists ${unsettled.jobKey} as ${unsettled.status}`,
         );
+      // A deploy that did not finish is the run's verdict alone: the suites start beside it and
+      // fail waiting for it (main-os-e2e.yml), with no preview to test, or were skipped behind it.
+      const deploy = mainJobs.find((job) => job.jobKey === "main-os-e2e.yml:deploy");
+      const judgedJobs = deploy && deploy.status !== "finished" ? [deploy] : mainJobs;
       const results = Object.fromEntries(
-        mainJobs.map((job) => [job.jobDisplayName || job.jobKey, job.status]),
+        judgedJobs.map((job) => [job.jobDisplayName || job.jobKey, job.status]),
       );
       // A workflow Depot failed before any job ran has no job to name.
       const verdict: Verdict | undefined = mainJobs.length === 0 ? "red" : mainE2eVerdict(results);
-      // A job that ran (an attempt) and left no summary proves nothing; one its deploy's failure
-      // skipped (no attempt) judges nothing.
+      // A job that ran (an attempt) and left no summary proves nothing; one that never had a preview
+      // judges nothing.
       const summary = async ({ jobKey, suite }: (typeof mainE2eRecords.jobs)[number]) => {
-        const newest = jobs
+        const newest = judgedJobs
           .find((job) => job.jobKey === jobKey)
           ?.attempts.toSorted((a, b) => a.attempt - b.attempt)
           .at(-1);

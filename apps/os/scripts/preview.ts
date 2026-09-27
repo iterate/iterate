@@ -43,6 +43,7 @@ import {
   writeStartAppPreviewConfig,
   type StartApp,
 } from "../../../scripts/lib/start-app.ts";
+import { awaitDeployOfThisRun } from "../../../scripts/ci/await-deploy.ts";
 import { createOctokit, getOctokit, getRepo } from "../../../scripts/ci/github.ts";
 import { getSlackClient, slackChannelIds } from "../../../scripts/ci/slack.ts";
 import { traceOperation } from "../../../scripts/ci/tracing/tracing.ts";
@@ -1004,7 +1005,14 @@ async function writeDeployedTarget(previewName: string, apps: TestEvidenceTarget
  *  under the PR body's status line (`handOverSuiteLine`). The e2e rows tagged `slow` run as asked,
  *  else as the PR's label and paths say (scripts/slow-rows.ts); `only` runs them alone and is no
  *  verdict on the PR, so it writes no line. Vitest gets the choice as E2E_SLOW_ROWS, which holds each
- *  row to its timeout ceiling (e2e/support/setup.ts). */
+ *  row to its timeout ceiling (e2e/support/setup.ts).
+ *
+ *  A CI job that deploys its preview in the same run starts beside the deploy, not after it
+ *  (PREVIEW_AWAIT_DEPLOY_JOB names the deploy job). It sets the suite up while the preview deploys,
+ *  with everything before the first test that needs no preview: the slow rows' choice, Chromium's
+ *  install and the warm-ups (`warmUp`). Then it waits for the deploy (scripts/ci/await-deploy.ts),
+ *  and only then reads the deployed target and starts the suite. A deploy that did not finish fails
+ *  the job with no suite line: the PR body's status line already says the deploy failed. */
 async function runSuite(
   suite: PreviewSuite,
   previewName: string,
@@ -1012,12 +1020,99 @@ async function runSuite(
   requestedSlowRows: SlowRows | undefined,
 ) {
   const url = previewUrl(previewName);
-  const env = { WORKER_BASE_URL: url };
   const appUrl = (name: string) =>
     appPreviewUrl(
       APPS.find((app) => app.name === name)!,
       previewName,
     );
+  const deployJob = process.env.PREVIEW_AWAIT_DEPLOY_JOB;
+  let statusPr = prNumber;
+  const failed = (error: unknown) => {
+    handOverSuiteLine(statusPr, { suite, state: "failed", error: describe(error) });
+    return new Error(`${PREVIEW_SUITES[suite]} failed against ${url}: ${describe(error)}`);
+  };
+  let tests: { args: string[]; cwd: string; env: Record<string, string> };
+  try {
+    tests = await traceOperation("Set up the suite", async () => {
+      if (suite === "e2e") {
+        const [{ slowRows, reason }] = await Promise.all([
+          chooseSlowRows({
+            requested: requestedSlowRows,
+            prNumber,
+            readPullRequest: async () => {
+              const [{ data: pull }, paths] = await Promise.all([
+                getOctokit().rest.pulls.get(pullRequest(prNumber!)),
+                changedPaths(prNumber),
+              ]);
+              return { labels: pull.labels.map((label) => label.name), paths };
+            },
+          }),
+          deployJob &&
+            warmUp(
+              "the e2e suite's modules",
+              "pnpm",
+              ["exec", "vitest", "list", "--configLoader", "runner", "--project", "e2e"],
+              { cwd: ROOT, env: { WORKER_BASE_URL: url } },
+            ),
+        ]);
+        console.log(`[slow-rows] ${slowRows}: ${reason}`);
+        if (slowRows === "only") statusPr = undefined;
+        // `e2e:run`, not `e2e`: the deployed target needs no local build.
+        return {
+          args: ["e2e:run", ...slowRowsTagsFilter(slowRows)],
+          cwd: ROOT,
+          env: {
+            WORKER_BASE_URL: url,
+            E2E_SLOW_ROWS: slowRows,
+            ...PREVIEW_SUITE_TELEMETRY["preview-e2e"],
+          },
+        };
+      }
+      const env = {
+        WORKER_BASE_URL: url,
+        NOTES_BASE_URL: appUrl("notes"),
+        VOICE_BASE_URL: appUrl("voice"),
+        DASH_BASE_URL: appUrl("dash"),
+        ADMIN_BASE_URL: appUrl("admin"),
+      };
+      if (process.env.CI)
+        await runAsync("pnpm", ["exec", "playwright", "install", "chromium"], { cwd: REPO_ROOT });
+      if (deployJob)
+        await Promise.all([
+          // one launch of the browser the specs launch, headless
+          warmUp(
+            "Chromium",
+            "node",
+            [
+              "--input-type=module",
+              "-e",
+              "import { chromium } from '@playwright/test'; await (await chromium.launch()).close();",
+            ],
+            { cwd: REPO_ROOT },
+          ),
+          // --list loads the config and every spec, and runs no global setup
+          warmUp(
+            "the specs' modules",
+            "pnpm",
+            [
+              "exec",
+              "playwright",
+              "test",
+              "--config",
+              "playwright.config.ts",
+              "--list",
+              "--reporter=null",
+            ],
+            { cwd: REPO_ROOT, env },
+          ),
+        ]);
+      return { args: ["spec"], cwd: REPO_ROOT, env: { ...env, ...PREVIEW_SUITE_TELEMETRY.specs } };
+    });
+  } catch (error) {
+    throw failed(error);
+  }
+  if (deployJob)
+    await traceOperation("Wait for Deploy preview", () => awaitDeployOfThisRun(deployJob));
   await writeDeployedTarget(
     previewName,
     // the client apps the specs run against; the vitest rows use none
@@ -1025,49 +1120,40 @@ async function runSuite(
       ? ["notes", "voice", "dash", "admin"].map((name) => ({ name, url: appUrl(name) }))
       : [],
   );
-  let statusPr = prNumber;
   try {
-    if (suite === "e2e") {
-      const { slowRows, reason } = await chooseSlowRows({
-        requested: requestedSlowRows,
-        prNumber,
-        readPullRequest: async () => {
-          const [{ data: pull }, paths] = await Promise.all([
-            getOctokit().rest.pulls.get(pullRequest(prNumber!)),
-            changedPaths(prNumber),
-          ]);
-          return { labels: pull.labels.map((label) => label.name), paths };
-        },
-      });
-      console.log(`[slow-rows] ${slowRows}: ${reason}`);
-      if (slowRows === "only") statusPr = undefined;
-      // `e2e:run`, not `e2e`: the deployed target needs no local build.
-      await runAsync("pnpm", ["e2e:run", ...slowRowsTagsFilter(slowRows)], {
-        cwd: ROOT,
-        env: { ...env, E2E_SLOW_ROWS: slowRows, ...PREVIEW_SUITE_TELEMETRY["preview-e2e"] },
-      });
-    } else {
-      if (process.env.CI)
-        await runAsync("pnpm", ["exec", "playwright", "install", "chromium"], {
-          cwd: REPO_ROOT,
-        });
-      await runAsync("pnpm", ["spec"], {
-        cwd: REPO_ROOT,
-        env: {
-          ...env,
-          NOTES_BASE_URL: appUrl("notes"),
-          VOICE_BASE_URL: appUrl("voice"),
-          DASH_BASE_URL: appUrl("dash"),
-          ADMIN_BASE_URL: appUrl("admin"),
-          ...PREVIEW_SUITE_TELEMETRY.specs,
-        },
-      });
-    }
+    await runAsync("pnpm", tests.args, { cwd: tests.cwd, env: tests.env });
   } catch (error) {
-    handOverSuiteLine(statusPr, { suite, state: "failed", error: describe(error) });
-    throw new Error(`${PREVIEW_SUITES[suite]} failed against ${url}: ${describe(error)}`);
+    throw failed(error);
   }
   handOverSuiteLine(statusPr, { suite, state: "passed" });
+}
+
+/** A command run only to read, while the preview deploys, what its suite reads before its first
+ *  test: the CI image loads lazily, so a cold runner's first read of node_modules, a test file or
+ *  Chromium's binary costs seconds (docs/depot-ci.md#custom-image), and Playwright keeps what it
+ *  compiles for the specs in its transform cache. Nothing it runs reaches the preview or writes test
+ *  evidence: the variables that make a runner write telemetry, flake records or trace markers are
+ *  left out. Its output stays out of the log, and its failure is a warning, since the suite that
+ *  follows reports what is wrong itself. */
+async function warmUp(
+  what: string,
+  command: string,
+  args: string[],
+  options: { cwd: string; env?: Record<string, string> },
+) {
+  const started = Date.now();
+  const env = Object.fromEntries(
+    Object.entries({ ...process.env, ...options.env }).filter(
+      ([name]) => !/^(TEST_TELEMETRY_|FLAKE_RECORD_DIR$|CI_TRACE_ENABLED$)/.test(name),
+    ),
+  );
+  const result = await run(command, args, { cwd: options.cwd, env });
+  const took = `${((Date.now() - started) / 1000).toFixed(1)} s`;
+  if (result.status === 0) console.log(`[warm-up] ${what}: ${took}`);
+  else
+    console.warn(
+      `[warm-up] ${what} exited ${result.status} after ${took}; the suite runs anyway:\n${lastLines(`${result.stdout}\n${result.stderr}`, 20)}`,
+    );
 }
 
 // ── sweep (cloudflare-os: GitHub has no `environment.auto_stop_in`) ────────────────────────────

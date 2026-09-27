@@ -2,8 +2,9 @@
 # it: a push to main (the paths a PR preview runs for) redeploys apps/os's Worker Preview `main` IN
 # PLACE, with the clients on top of the same name, and runs the e2e suite and the browser specs
 # against it, each in its own job, the jobs a PR's Preview OS has, by the same names: Deploy
-# preview, then E2E tests (every row, the ones tagged `slow` that most PRs skip too) and Browser
-# specs side by side, then CI trace. No run deletes it: a BRAND-NEW preview's Durable Objects answer
+# preview, and beside it from the start E2E tests (every row, the ones tagged `slow` that most PRs
+# skip too) and Browser specs, each set up while the preview deploys and started once it has, then
+# CI trace. No run deletes it: a BRAND-NEW preview's Durable Objects answer
 # Cloudflare's `internal error; reference = …` for seconds after it is created, which the deploy's
 # readiness gate (apps/os/scripts/preview-readiness.ts) has to wait out. A preview redeployed in place
 # still runs the previous version in places for a while, which the gate waits out too
@@ -118,18 +119,20 @@ jobs:
         run: doppler run -- pnpm preview deploy
 
   # THE TWO SUITES, as a PR's Preview OS runs them (preview-os.yml): E2E tests and Browser specs,
-  # side by side after the deploy, and ONE DEFINITION. Browser specs runs E2E tests' steps (the
-  # `suite-steps` anchor); the two differ only in the suite their env names and in their runners,
-  # each a PR preview's (Browser specs on a 4x16), so main's specs run as a PR's do. Their steps are
-  # a PR preview's, less the guard and the PR's checkouts (scripts/ci/depot-workflows.test.ts keeps
-  # them alike).
+  # side by side, and ONE DEFINITION. Browser specs runs E2E tests' steps (the `suite-steps`
+  # anchor); the two differ only in the suite their env names and in their runners, each a PR
+  # preview's (Browser specs on a 4x16), so main's specs run as a PR's do. Their steps are a PR
+  # preview's, less the guard and the PR's checkouts and path check (scripts/ci/depot-workflows.test.ts
+  # keeps them alike). Like a PR's, each starts with the run, sets its suite up while the preview
+  # deploys, then waits for Deploy preview (PREVIEW_AWAIT_DEPLOY_JOB, scripts/ci/await-deploy.ts): a
+  # deploy that did not finish fails it, with no evidence to keep. The timeout is the wait's bound,
+  # the deploy's own 40 minutes, and then the suite's 30.
   e2e:
     name: E2E tests
-    needs: deploy
     runs-on:
       size: 2x8
       image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
-    timeout-minutes: 30
+    timeout-minutes: 70
     env:
       # THE SUITE, as in preview-os.yml: `pnpm preview <suite>`, its flake records' suite, and the
       # workspace its telemetry names
@@ -166,22 +169,27 @@ jobs:
         run: doppler setup --config preview --project os
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+      # Set up, wait for this run's deploy, then the suite (apps/os/scripts/preview.ts `runSuite`).
+      # The trace's Test phase is this step (scripts/ci/tracing/tracing.ts).
       - name: Run the suite against the preview
-        # The trace's Test phase is this step (scripts/ci/tracing/tracing.ts).
         id: suite
         working-directory: apps/os
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           E2E_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+          # the job whose end starts the suite (scripts/ci/await-deploy.ts)
+          PREVIEW_AWAIT_DEPLOY_JOB: deploy
         run: doppler run -- pnpm preview "$SUITE"
+      # Once the suite read its deployed target only (test-results/target.json): a job whose deploy
+      # did not finish has nothing to keep.
       - name: Check test telemetry and write the suite summary
-        if: always()
+        if: ${{ always() && hashFiles('test-results/target.json') != '' }}
         run: pnpm tsx scripts/ci/upload-test-telemetry.ts --flake-suites "$FLAKE_SUITE" ${{ cancelled() && '--cancelled' || '' }}
       # THE TEST EVIDENCE FOLDER (docs/test-evidence.md): this adds test-results/manifest.json.
       # Neither this nor the upload decides the job; the tests did.
       - name: Write the test evidence manifest
         id: evidence-write
-        if: always()
+        if: ${{ always() && hashFiles('test-results/target.json') != '' }}
         continue-on-error: true
         timeout-minutes: 2
         env:
@@ -203,7 +211,7 @@ jobs:
               DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
             run: doppler run --project _shared --config preview -- pnpm tsx scripts/ci/test-evidence.ts upload
           - name: Upload flake records
-            if: always()
+            if: ${{ always() && hashFiles('test-results/target.json') != '' }}
             uses: actions/upload-artifact@v4
             with:
               name: flake-records-${{ env.FLAKE_SUITE }}-attempt-${{ steps.attempt.outputs.id }}
@@ -212,7 +220,7 @@ jobs:
           # EVERYTHING THE RUN WROTE and the specs' Playwright HTML report, as a PR preview's test
           # jobs keep them (docs/depot-ci.md#browser-reports-from-artifacts).
           - name: Upload results
-            if: always()
+            if: ${{ always() && hashFiles('test-results/target.json') != '' }}
             uses: actions/upload-artifact@v4
             with:
               name: main-os-test-artifacts-attempt-${{ steps.attempt.outputs.id }}
@@ -236,11 +244,10 @@ jobs:
 
   specs:
     name: Browser specs
-    needs: deploy
     runs-on:
       size: 4x16
       image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
-    timeout-minutes: 30
+    timeout-minutes: 70
     env:
       SUITE: specs
       FLAKE_SUITE: specs

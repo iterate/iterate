@@ -74,7 +74,7 @@ Anything else that needs GitHub-only triggers, such as `pull_request_target`, `i
 | `test.yml`                   | PR, main push, dispatch                             | **Test** (required): `pnpm test`, then the Kit firmware host tests                                      |
 | `loc-report.yml`             | PR, dispatch                                        | The LOC table in the PR body                                                                            |
 | `pr-dashboard.yml`           | PR opened, reopened, ready, drafted or closed       | The Slack PR update and the daily PR dashboard                                                          |
-| `preview-os.yml`             | Every PR, dispatch                                  | **Preview OS**: Deploy preview, then **E2E tests** and **Browser specs**, then CI trace                 |
+| `preview-os.yml`             | Every PR, dispatch                                  | **Preview OS**: Deploy preview, beside it **E2E tests** and **Browser specs**, then CI trace            |
 | `preview-delete.yml`         | Such a PR closing, dispatch                         | Deletes the PR's preview                                                                                |
 | `preview-sweep.yml`          | Nightly, dispatch                                   | Deletes stale previews, old preview Workers and orphaned preview resources                              |
 | `main-os-e2e.yml`            | Main push touching the preview paths, dispatch      | **Main OS e2e**: main redeployed in place to preview `main`, E2E tests, Browser specs, its page, trace  |
@@ -605,22 +605,24 @@ Preview OS runs four jobs, each a check named for what it proves:
 
 - **Deploy preview** deploys the PR merged into main, each step starting once what it needs is
   there ([the trace's spans](ci-traces.md#steps-and-phases)).
-- **E2E tests** (`pnpm preview e2e`) and **Browser specs** (`pnpm preview specs`) then run side by
-  side, each on its own runner ([reliability defaults](#reliability-defaults)). They are one job
-  definition (YAML anchors), each job's env naming its suite (`SUITE`, `FLAKE_SUITE`, the telemetry
-  workspace).
+- **E2E tests** (`pnpm preview e2e`) and **Browser specs** (`pnpm preview specs`) start with the
+  run, beside Deploy preview, each on its own runner ([reliability defaults](#reliability-defaults)).
+  Each sets its suite up while the preview deploys, then waits for the deploy
+  ([suites start with the run](#suites-start-with-the-run)). They are one job definition (YAML
+  anchors), each job's env naming its suite (`SUITE`, `FLAKE_SUITE`, the telemetry workspace).
 - **CI trace** runs after the three, whatever their outcome, and reports only: it writes the two
   suites' lines (their jobs' `status` output) into the PR body, then the trace
   ([Interactive trace reports](#interactive-trace-reports)).
 
-The two suites report on every PR, so a ruleset can require them. Each skips
-only when there is nothing for it to prove: a PR that changes no preview path,
-or a dispatch of the other suite alone. Where a preview was needed and Deploy
-preview did not succeed (failed, cancelled, or a dispatch that named no
-preview), each still starts (`always()`), and its first step, "Require a
-deployed preview", fails it: red, never a skip that GitHub would count as
-passing. `scripts/ci/preview-os-workflow.test.ts` evaluates the conditions
-over every case.
+The two suites report on every PR, so a ruleset can require them. Each is
+skipped only on a dispatch of the other suite alone. On a PR that changes no
+preview path, each decides so as Deploy preview does
+(`node scripts/ci/preview-paths.ts changes`, on the same commit) and passes,
+having tested nothing. Where a preview was needed and there is none, each fails:
+red, never a skip that GitHub would count as passing. Its wait fails it when
+Deploy preview failed or was cancelled, and its step "Require a preview to test"
+when a dispatch names no preview. `scripts/ci/preview-os-workflow.test.ts`
+evaluates the conditions over every case.
 
 Separate jobs cost each suite its own runner start and checkout, in parallel,
 and make each one runnable and retryable alone: a red suite runs again without
@@ -630,6 +632,37 @@ a redeploy, because the preview persists until the PR closes. Dispatch
 suite and the trace job after it, since Depot refuses to retry a job alone
 once a job that needs it has started. Main OS e2e has the same jobs by the
 same names.
+
+### Suites start with the run
+
+A suite job with `needs: deploy` would start only once the deploy ended, so
+Depot's hand-off (about 3 s), the sandbox's boot (about 2 s, 10 s on a cold one:
+the image loads lazily), the checkout and reconcile, `tsx` loading
+`apps/os/scripts/preview.ts` and the test runner's start would all come between
+the deploy's end and the first test. So the suites of Preview OS and Main OS e2e
+have no `needs:`. Each starts with the run and, while the preview deploys:
+
+1. checks out the commit Deploy preview deploys (on a push the run's own commit,
+   on a dispatch the PR merged into main by `scripts/ci/preview-tested-commit.ts`),
+   and on a push decides whether the PR changes a preview path;
+2. reconciles its dependencies, sets up Doppler and starts its suite step, whose
+   `runSuite` chooses the slow rows, installs Chromium and warms up what the
+   suite reads first, none of which reaches the preview: the e2e project's
+   `vitest list`, or the specs' `playwright test --list` and a Chromium launch;
+3. polls Depot's GetWorkflow once a second for its own run's `deploy` job
+   (`scripts/ci/await-deploy.ts`, which `PREVIEW_AWAIT_DEPLOY_JOB` turns on), and
+   starts the suite once that job has finished. One that failed, was cancelled or
+   skipped fails the suite: "Deploy preview failed, so there is no preview of
+   this commit to test." The wait reads the job's status, not an attempt's, so a
+   suite re-run alone after its run ended goes at once, and one re-run beside a
+   failed deploy waits for the deploy's next attempt. It logs each change of the
+   deploy's state and gives up after the deploy's own 40-minute timeout, which
+   is why the suite jobs' timeout is 70 minutes: that wait, then the suite's 30.
+
+A suite keeps its evidence once it read its deployed target
+(`test-results/target.json`, [test evidence](test-evidence.md)), so a job that
+never had a preview keeps none. Each suite's runner waits out the deploy, less
+its own set-up: about 45 s a push between the two, about $0.0135.
 
 ## Main OS e2e keeps one preview
 
