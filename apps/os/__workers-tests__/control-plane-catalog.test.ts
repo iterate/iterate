@@ -599,6 +599,21 @@ test("projects: an owner or the operator deletes a project's row, which frees it
   expect(await c.deleteProject(admin, again.id)).toEqual(again);
 });
 
+test("projects: a deleted project's id stays deleted, so its root is never born again; not for a refused delete, an id never held, or one a seed restored", async () => {
+  await emptyTables();
+  const ada = await person("ada@example.com");
+  const bob = await person("bob@example.com");
+  const org = await c.createOrganization(as(ada), { name: "Booper" }, NOW);
+  const dawg = await c.createProject(as(ada), { project: "dawg", organizationId: org.id }, NOW);
+  await expect(c.deleteProject(as(bob), dawg.id)).rejects.toMatchObject({ code: "FORBIDDEN" });
+  expect(await c.deletedProject(dawg.id)).toBe(false);
+  await c.deleteProject(as(ada), dawg.id);
+  expect(await c.deletedProject(dawg.id)).toBe(true);
+  expect(await c.deletedProject("prj_never_held")).toBe(false);
+  await c.createProject(admin, { project: "dawg", restoreProjectId: dawg.id }, NOW);
+  expect(await c.deletedProject(dawg.id)).toBe(false);
+});
+
 test("projects: with no organization named: the person's oldest, made on first use after their email, one when created at once; the operator's own organization, made on first use", async () => {
   await emptyTables();
   const ada = await person("ada.lovelace@example.com");
@@ -949,6 +964,7 @@ async function emptyTables() {
     [
       "project_primary_hostnames",
       "project_hostnames",
+      "deleted_projects",
       "integration_routes",
       "invitations",
       "projects",

@@ -74,6 +74,7 @@ import {
   DurableObjectNameCodec,
   GLOBAL_PROJECT_ID,
   pathUnderOwner,
+  PROJECT_DELETED,
   resourceScope,
 } from "./context/paths.ts";
 import {
@@ -202,6 +203,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   /** Native operator RPC only. Bypass every project rewrite so no project code can observe
    * the admin credential. The first-party secret facet independently verifies it. */
   async exportSecretForProjectSeed(adminSecret: string): Promise<unknown> {
+    if (this.#unborn) throw this.#unborn;
     return this.#facetHost.callFacetAsPlatform("secret", [["exportForProjectSeed", adminSecret]]);
   }
 
@@ -372,6 +374,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     // here: the first entry point to run names the wake (`appendWakeRecord` — `alarm()` says "alarm").
     // Not awaited: a constructor cannot, and the runtime holds every event until this settles.
     void this.ctx.blockConcurrencyWhile(async () => {
+      if (await this.#refuseBirthOfDeletedProjectRoot()) return;
       this.#alarmCoordinator.restore(await this.ctx.storage.getAlarm());
       // A deployment that names its origin (`urls.os`: prd, the previews — anything with more than one
       // hostname) knows it outright; one that does not (a self-host on workers.dev) learns it from the
@@ -393,6 +396,33 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       if (this.ctx.id.name) this.#alarmCoordinator.rearmIfOverdue(Date.now());
     });
   }
+
+  /** A DELETED PROJECT'S ROOT IS NEVER BORN AGAIN: a request that read the project's row before it
+   *  was deleted (an isolate's memo) still reaches the root by name, as the operator may with any
+   *  `prj_…` id, and a root born then would hold storage for a project that is gone. So a root's
+   *  birth — a store with no durable row — asks the control plane first (catalog.ts
+   *  `deletedProject`). A deleted project's root is not born: the tables the stream opened as this
+   *  instance was built go, and every entry point answers `#unborn` first, nothing run and nothing
+   *  written — a refusal like any other, where a reset would log an error for every request that
+   *  reaches it. A question that failed fails the birth, the store left as empty, and resets this
+   *  instance, so the next request asks again. Answers whether the birth was refused. */
+  async #refuseBirthOfDeletedProjectRoot(): Promise<boolean> {
+    const { projectId, path } = this.#durableObjectAddress;
+    if (path !== "/" || projectId === GLOBAL_PROJECT_ID) return false;
+    if (this.#stream.highestDurableOffset() !== 0) return false;
+    const answer = await this.#controlPlane.deletedProject(projectId).then(
+      (deleted) => ({ deleted }),
+      (error: unknown) => ({ error }),
+    );
+    if ("deleted" in answer && !answer.deleted) return false;
+    await this.ctx.storage.deleteAll();
+    await this.ctx.storage.sync();
+    if ("error" in answer) throw answer.error;
+    this.#unborn = codedError("FORBIDDEN", `project ${projectId} ${PROJECT_DELETED}`);
+    return true;
+  }
+  /** What every entry point answers first on a deleted project's root it refused to bear. */
+  #unborn: Error | null = null;
 
   /** THE STREAM (stream/stream.ts): the commit pipeline and the core reduce. Its one callback,
    *  `onCommit`, is the post-commit fan-out — the delivery loop, run as THE KERNEL: under
@@ -446,6 +476,10 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         if (!this.#destroyed) this.ctx.storage.kv.put("ancestors-announced", true);
       },
       (error: unknown) => {
+        // a context of a deleted project, born again by a request that reached it (a handle an open
+        // session kept): its root is not, so it stays unannounced, for the context sweep
+        if (String(error).includes(PROJECT_DELETED))
+          return console.log({ event: "context.announce-to-deleted-project", path });
         console.error({
           event: "context.announce-to-ancestors-failed",
           path,
@@ -472,7 +506,8 @@ export class IterateContextDurableObject extends DurableObject<Env> {
    *  instance whose storage is gone (it would read tables that are not there, or write them back).
    *  The reset rejects this call too, with `CONTEXT_DESTROYED`: the caller reads that rejection as
    *  done. A context with no storage stops existing once it shuts down. Called again on a destroyed
-   *  context, it is born empty (and announces itself) and destroyed again. */
+   *  context, it is born empty (and announces itself) and destroyed again; a deleted project's root
+   *  is not born (`#refuseBirthOfDeletedProjectRoot`). */
   async destroy(): Promise<void> {
     this.#destroyed = true;
     await this.ctx.blockConcurrencyWhile(async () => {
@@ -498,6 +533,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
    *  a socket event): an inbound call begun and ended (context/residency.ts), then the incarnation's
    *  `request` wake record. */
   #inboundRequestInOneTurn(): void {
+    if (this.#unborn) throw this.#unborn;
     this.#residency.inboundCallInOneTurn();
     this.#stream.appendWakeRecord("request");
   }
@@ -1210,6 +1246,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     args: unknown[] = [],
     caller: Caller = { principal: null },
   ): Promise<unknown> {
+    if (this.#unborn) throw this.#unborn;
     this.#residency.inboundCallStarted();
     this.#stream.appendWakeRecord("request");
     const result = await this.#invokeInProcess(call, args, caller).finally(() =>
@@ -1261,6 +1298,8 @@ export class IterateContextDurableObject extends DurableObject<Env> {
 
   /** Ends when the Response is handed back — a body still streaming after that is not counted. */
   async fetch(request: Request): Promise<Response> {
+    // a project host's answer for a project it does not serve, as the edge's admission gives it
+    if (this.#unborn) return new Response(`421: ${this.#unborn.message}\n`, { status: 421 });
     this.#residency.inboundCallStarted();
     return this.#serveFetch(request).finally(() =>
       this.#residency.inboundCallEnded(request.headers.get(ITX_APP_HEADER) !== null),
