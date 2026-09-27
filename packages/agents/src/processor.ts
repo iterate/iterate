@@ -65,10 +65,11 @@ function retryBackoffMs(state: Pick<AgentState, "consecutiveLlmFailures" | "conf
   return Math.min(2 ** (state.consecutiveLlmFailures - 1) * backoffBaseMs, backoffMaxMs);
 }
 
-/** The conversation as the model reads it. An item's images become image parts (a data: URL of the
- *  bytes in `images`, keyed by path — a vision model sees the pixels); any other attachment, or an
- *  image whose bytes are gone, is a line naming it and how a script reads it (a hint line).
- *  The developer's notes read as system instructions. */
+/** The conversation as the model reads it. An item another context appended opens with
+ *  `[from <context>]`. An item's images become image parts (a data: URL of the bytes in `images`,
+ *  keyed by path — a vision model sees the pixels); any other attachment, or an image whose bytes
+ *  are gone, is a line naming it and how a script reads it (a hint line). The developer's notes
+ *  read as system instructions. */
 export function buildChatMessages(
   items: AgentState["contextItems"],
   images: Map<string, { contentType: string; base64: string }>,
@@ -76,7 +77,8 @@ export function buildChatMessages(
 ): ChatMessage[] {
   const messages = items.map((item): ChatMessage => {
     const role = item.role === "developer" ? "system" : item.role;
-    if (!item.files?.length) return { role, content: item.content };
+    const content = item.from ? `[from ${item.from}] ${item.content}` : item.content;
+    if (!item.files?.length) return { role, content };
     const parts: Extract<ChatMessage["content"], unknown[]> = [];
     const hints: string[] = [];
     for (const file of item.files) {
@@ -88,7 +90,7 @@ export function buildChatMessages(
         });
       else hints.push(fileHintLine(file));
     }
-    const text = [item.content, ...hints].filter((line) => line !== "").join("\n");
+    const text = [content, ...hints].filter((line) => line !== "").join("\n");
     if (parts.length === 0) return { role, content: text };
     return { role, content: [{ type: "text", text }, ...parts] };
   });
@@ -427,6 +429,9 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
               actor,
               llmRequestOffset,
               files: event.payload.files,
+              // WHO SENT IT, when another context did: the platform's stamp, so a sender need
+              // not sign its words and cannot pass for another.
+              from: event.source?.origin !== event.path ? event.source?.origin : undefined,
             },
           ],
         };

@@ -10,7 +10,10 @@ export type ContextViewEvent = {
   payload?: unknown;
   metadata?: Record<string, unknown>;
   idempotencyKey?: string;
+  /** Where it came from, as the platform stamped it (apps/os/src/caller.ts `stampCaller`). */
   source?: {
+    /** The context whose code or session wrote it. */
+    origin?: string;
     principal?: { actor: string; email?: string };
     grant?: string;
     processor?: { slug: string; version: string };

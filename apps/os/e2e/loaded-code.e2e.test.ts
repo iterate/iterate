@@ -1,7 +1,8 @@
 // loaded-code.e2e.test.ts — WHAT LOADED CODE MAY SAY (the app wall, context/itx-expression-rewriting.ts
 // `admitLoadedCodeExpression`; iterate-context.ts `ItxEntrypoint`): a worker's, a facet's, a script's `env.ITX` runs every
 // call as `Caller.app`. On what it hands in, the fixed point `itx.builtins` is not a word and `cd`
-// goes down only — self and descendants; the rows a call rewrites through are the owner's and are never
+// goes down only — self and descendants — but for `cd(path).append(…)`, which reaches the whole
+// project, stamped with where it came from; the rows a call rewrites through are the owner's and are never
 // checked, so a parent link carries a script up exactly as far as its owner said. `provide` and
 // `subscribe` are a session's verbs (loaded code writes rows with `itx.append`). A raw `fetch()` is
 // `itx.fetch(request)` at the worker's context, through the table — no row below the owner root, no
@@ -25,6 +26,7 @@ export default class extends WorkerEntrypoint {
   writeRow(match, target) { return outcome(() => withItx(this.env.ITX, (itx) => itx.append({ type: "events.iterate.com/itx/rewrite-rule-configured", payload: { match, target } }))); }
   appendEvent(event) { return outcome(() => withItx(this.env.ITX, (itx) => itx.append(event))); }
   cdInvoke(path, call) { return outcome(() => withItx(this.env.ITX, (itx) => itx.cd(path).invoke(call))); }
+  cdAppend(path, event) { return outcome(() => withItx(this.env.ITX, (itx) => itx.cd(path).append(event))); }
 }`,
 };
 
@@ -84,6 +86,34 @@ test("loaded code may not spell itx.builtins, and its cd goes down only; the sam
   expect(await worker().cdInvoke("./y", "itx.whoami()")).toEqual({
     ok: { projectId: ctx, path: "/x/y" },
   });
+});
+
+test("anyone appends anywhere: loaded code's cd(path).append reaches the root and a sibling, stamped with its own context whatever it claims; a jail's bare null closes append both ways for code", async () => {
+  const ctx = freshCtx("open-append");
+  const root = openItx(ctx);
+  const worker = (at: string) => root.cd(at).workers.get({ source: PROBE });
+  const forged = { origin: "/", platform: true, principal: { actor: "user_owner" } };
+  for (const to of ["/", "/y"])
+    expect(
+      await worker("/x").cdAppend(to, { type: "note", payload: { to }, source: forged }),
+    ).toMatchObject({ ok: [{ path: to, type: "note", source: { origin: "/x" } }] });
+  const [landed] = (await readAll(root)).filter((event) => event.type === "note");
+  // the forged principal and platform are gone
+  expect(landed).toEqual(expect.objectContaining({ source: { origin: "/x" } }));
+  // A JAIL: a bare `itx ⇒ null`. Its code appends nowhere, and no code appends into it: the hop
+  // resolves `append` through the jail's own table. A member's session still writes the fixed point.
+  await root.cd("/jail").provide("itx", null);
+  const jailed = root.cd("/jail").builtins.workers.get({ source: PROBE });
+  for (const to of ["/", "/jail/down"])
+    expect(await jailed.cdAppend(to, { type: "note" })).toMatchObject({
+      error: expect.stringMatching(/is masked/),
+    });
+  expect(await worker("/").cdAppend("/jail", { type: "note" })).toMatchObject({
+    error: expect.stringMatching(/is masked/),
+  });
+  expect(await root.cd("/jail").builtins.append({ type: "note" })).toMatchObject([
+    { path: "/jail", source: { origin: "/jail" } },
+  ]);
 });
 
 test("a spec's source expression is walled like the call around it: loaded code plants no row above it through the code it loads", async () => {
@@ -255,23 +285,6 @@ test("a script beneath a mask cannot delete the config repo: `itx.repos.delete` 
     "/repos/config",
   ]);
   expect(artifacts).toMatchObject({ deleted: [] });
-});
-
-test("a script beneath a mask cannot delete the config repo by appending its request: the typed append refuses the repo's lifecycle facts", async (context) => {
-  const { root, jail } = await beneathAMask("repo-request-from-below");
-  await configRepo(root, context);
-  const appended = await jail.builtins.run(
-    "async (itx) => itx.repos.get('/repos/config').append({ type: 'events.iterate.com/repo/delete-requested', payload: {} }).then(() => 'appended', (e) => String(e.message))",
-  );
-  expect(appended).toMatch(/is written by the repo itself/);
-  expect(
-    (await readAll(root.cd("/repos/config"))).filter(
-      (e: { type: string }) => e.type === "events.iterate.com/repo/delete-requested",
-    ),
-  ).toEqual([]);
-  expect((await root.repos.list()).map((repo: { path: string }) => repo.path)).toEqual([
-    "/repos/config",
-  ]);
 });
 
 test("a script beneath a mask cannot plant a workspace outside itself: `itx.workspaces.create` reaches only beneath the caller", async () => {

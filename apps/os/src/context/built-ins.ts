@@ -543,8 +543,9 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
   const kvPrefix = `${owner.id}:`;
   const r2Prefix = `${owner.id}/`;
   const ownContext = () => deps.context(path);
-  /** THE append: every event appended through this scope carries WHO appended it — the DO's own
-   *  stamp, never a client's (src/caller.ts `stampCaller`): the session's verified principal, or none. */
+  /** THE append: every event appended through this scope carries WHO appended it and FROM WHERE —
+   *  the DO's own stamp, never a client's (src/caller.ts `stampCaller`): the context the call started
+   *  at, and the session's verified principal, or none. */
   const append = (...events: StreamEventInput[]) => {
     const caller = deps.caller();
     // Loaded code can delegate its scope to descendants through durable rows; child code
@@ -560,7 +561,7 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
             "FORBIDDEN",
             `idempotency key ${JSON.stringify(idempotencyKey)} is the platform's`,
           );
-    return ownContext().append(...events.map((event) => stampCaller(event, caller)));
+    return ownContext().append(...events.map((event) => stampCaller(event, caller, path)));
   };
   /** THE PLATFORM'S OWN HOP: the caller rides — principal and grant (the facts stay attributed),
    *  path and origin — but never its `app`: the app wall (itx-expression-rewriting.ts `#admit`) is
@@ -768,7 +769,7 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
     });
   };
   const secretFact = async (secret: ReachableContext, event: StreamEventInput): Promise<void> => {
-    await secret.append(stampCaller(event, deps.caller()));
+    await secret.append(stampCaller(event, deps.caller(), path));
     await crossPostSecretFact(event);
   };
   /** A person's account the project stops using — its path's lend ended: the project deleted the

@@ -55,6 +55,25 @@ reach takes a `WithItx` accessor (`(call) => withItx(this.env.ITX, call)`), neve
 that outlives the call runs under a processor's `runInBackground` claim. Lint refuses a raw
 `ITX.get()` in this repository (`iterate/no-raw-itx-get`).
 
+## Who wrote an event
+
+Anyone in a project can append any event to any context, and every event says where it came from.
+The platform stamps `source.origin`, the context whose code or session wrote it, beside
+`source.principal` (the member) and `source.platform`. A writer's own values are dropped. The one
+field a writer keeps is `source.processor`, the engine's label for which processor wrote it.
+
+```js
+// A script in /agents/a/sandbox:
+await itx.cd("/agents/b").append({
+  type: "events.iterate.com/agent/context-added",
+  payload: { role: "user", content: "hello" },
+});
+// Stamped { origin: "/agents/a/sandbox" }. Agent b's model reads "[from /agents/a/sandbox] hello".
+```
+
+The exception is a jail, a context with a bare `itx ⇒ null` row. Its code appends nowhere, and no
+code appends into it.
+
 ## Testing a processor
 
 `iterate/stream/test-support` (Node) is the harness the SDK's own engine tests use:

@@ -440,11 +440,9 @@ async function projectFacet(itx: LibraryItx, steps: ItxExpression): Promise<unkn
   return context.invoke(["facets", ["get", "project"], ...steps]);
 }
 
-/** What `entityHandle` reads off a contract: the payload schema of an event type it owns, or none,
- *  and the lifecycle facts its processor consumes. */
+/** What `entityHandle` reads off a contract: the payload schema of an event type it owns, or none. */
 type EntityContract = {
   payloadSchemaFor?: (type: string) => z.ZodType | undefined;
-  consumes: readonly string[];
 };
 
 // An InvokeHandle's dotted members are DYNAMIC (expression.ts: every unknown member reduces to one
@@ -456,8 +454,8 @@ type EntityContract = {
 /** The `name` facet on the context at `path`, and the typed write of `contract`'s events there: a
  *  first step `["append", ...events]` with nothing after it validates each event's payload against
  *  the contract (a type the contract does not own is refused, naming both) and appends the parsed
- *  events on the context — the caller's principal on every one; any other chain is one dispatch on
- *  the facet. */
+ *  events on the context, any of its types, lifecycle included (anyone may append anywhere) — the
+ *  caller's stamp on every one; any other chain is one dispatch on the facet. */
 function entityHandle(
   itx: LibraryItx,
   path: string,
@@ -489,15 +487,6 @@ function entityHandle(
         if (!schema)
           throw new Error(
             `${name}.append: ${JSON.stringify(input.type)} is not an event the ${name} contract owns`,
-          );
-        // The facts the entity's processor consumes are its lifecycle: a request starts a saga, a
-        // certificate ends one. Only the collection writes them, beneath the caller (`create`,
-        // `delete`); through here, which reaches any path, a request would delete a repo from
-        // anywhere and a forged certificate would leave one dead or half-born.
-        if (contract.consumes.includes(input.type))
-          throw codedError(
-            "FORBIDDEN",
-            `${name}.append: ${JSON.stringify(input.type)} is written by the ${name} itself — its lifecycle by itx.${name}s.create and itx.${name}s.delete, a repo's origin by setOrigin`,
           );
         return { ...input, payload: schema.parse(input.payload ?? {}) };
       });

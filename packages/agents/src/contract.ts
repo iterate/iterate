@@ -81,7 +81,7 @@ export type LlmUsage = z.infer<typeof LlmUsage>;
 
 export const AgentContract = defineProcessorContract({
   slug: "agent",
-  version: "6",
+  version: "7",
   description:
     "An agent: a conversation on its own context, driven by a model that acts by writing scripts against itx.",
   /** THE REDUCED STATE — what the reduce keeps between events: where creation stands (as the OFFSET
@@ -148,6 +148,9 @@ export const AgentContract = defineProcessorContract({
           actor: Actor.optional(),
           llmRequestOffset: z.number().int().positive().optional(),
           files: z.array(FileAttachment).optional(),
+          /** The context that appended it, when another one did: the platform's stamp
+           *  (`source.origin`), which the model reads as `[from <context>]`. */
+          from: z.string().optional(),
         }),
       )
       .default([]),

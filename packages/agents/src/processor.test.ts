@@ -305,6 +305,20 @@ test.for<{
   expect(reduceProcessor(processor(), events)).toMatchObject(state);
 });
 
+test("the reduce: words another context appended name it, from the platform's stamp; the agent's own do not", () => {
+  const { contextItems } = reduceProcessor(processor(), [
+    ...born,
+    { ...user("hi from a"), source: { origin: "/agents/a/sandbox" } },
+    { ...user("hi from here"), source: { origin: "/" } }, // the harness's context is `/`
+    user("hi, unstamped"),
+  ]);
+  expect(contextItems.map(({ content, from }) => ({ content, from }))).toEqual([
+    { content: "hi from a", from: "/agents/a/sandbox" },
+    { content: "hi from here", from: undefined },
+    { content: "hi, unstamped", from: undefined },
+  ]);
+});
+
 // ── the conversation as the model reads it (buildChatMessages) ──
 
 const png = {
@@ -326,6 +340,17 @@ test("buildChatMessages: text items stay text; the developer's notes read as sys
     { role: "system", content: "note" },
     { role: "user", content: "Look." },
   ]));
+test("buildChatMessages: an item another context appended opens with who it is from, attachments or not", () => {
+  const [said, attached] = buildChatMessages(
+    [
+      { offset: 1, role: "user", content: "hello", from: "/agents/a/sandbox" },
+      { offset: 2, role: "user", content: "see", from: "/agents/a", files: [pdf] },
+    ],
+    new Map(),
+  );
+  expect(said).toEqual({ role: "user", content: "[from /agents/a/sandbox] hello" });
+  expect(attached?.content).toMatch(/^\[from \/agents\/a\] see\n\[Attached file: spec\.pdf/);
+});
 test("buildChatMessages: an image whose bytes are known becomes an image part beside the text — a data: URL", () =>
   expect(
     buildChatMessages(

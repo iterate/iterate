@@ -257,11 +257,13 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     ctx: this.ctx,
     // The SET half of "the DO owns both ends of a lent stub's rule": the events a pager attach
     // carries are committed like any append, in the turn the pager is accepted (the
-    // un-set half is `#unsetWhatNamesRpcStub`). They are a client's events: `source.principal` is
-    // dropped — the DO owns that field, and a lent stub's rule is unattributed.
+    // un-set half is `#unsetWhatNamesRpcStub`). They are a client's events: their `source` is the
+    // DO's — this context's own, and a lent stub's rule is unattributed.
     appendEvents: (events) =>
       void this.#appendAndRunCommittedEffects(
-        events.map((event) => stampCaller(event, { principal: null })),
+        events.map((event) =>
+          stampCaller(event, { principal: null }, this.#durableObjectAddress.path),
+        ),
       ),
     // PRESENCE is physical (`itx.rpcStubs.list()`); its changes are EPHEMERAL facts, never durable
     // rows — the log must never claim a socket is open. A refusal (a paused stream) is nothing to
@@ -483,6 +485,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
           type: "events.iterate.com/itx/child-created",
           idempotencyKey: `itx/child-created:${path}`,
           payload: { childPath: path },
+          source: { origin: path },
         }),
       ),
     ).then(
@@ -1171,6 +1174,9 @@ export class IterateContextDurableObject extends DurableObject<Env> {
               ...row.events.map((event) => ({
                 ...event,
                 source: {
+                  // Where the definition came from: a schedule set here from another context
+                  // fires as that context's words, never as this one's.
+                  ...(row.source?.origin && { origin: row.source.origin }),
                   schedule: {
                     ...payload,
                     ...((row.source?.processor || row.source?.principal) && {

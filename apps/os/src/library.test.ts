@@ -1025,28 +1025,26 @@ test("entities: create and delete reach only strictly beneath the caller's origi
   ]);
 });
 
-test("entities: the typed append refuses the entity's lifecycle facts, which only the collection writes, and appends the entity's other events on its context", async () => {
+test("entities: the typed append validates by the contract and appends any of its events on the entity's context, lifecycle included: anyone may append anywhere", async () => {
   const { repos, workspaces, dispatched } = entities("/jail");
-  const config = repos.get("/repos/config");
-  for (const append of [
-    () => config.append({ type: "events.iterate.com/repo/create-requested", payload: {} }),
-    () => config.append({ type: "events.iterate.com/repo/created", payload: { path: "/x" } }),
-    () => config.append({ type: "events.iterate.com/repo/create-failed", payload: { error: "" } }),
-    () => config.append({ type: "events.iterate.com/repo/delete-requested", payload: {} }),
-    () => config.append({ type: "events.iterate.com/repo/deleted", payload: { path: "/x" } }),
-  ])
-    await expect(append()).rejects.toThrow(/is written by the repo itself/);
-  await expect(
-    workspaces
-      .get("/workspaces/w")
-      .append({ type: "events.iterate.com/workspace/delete-requested", payload: {} }),
-  ).rejects.toThrow(/is written by the workspace itself/);
+  const deleteRequested = {
+    type: "events.iterate.com/repo/delete-requested" as const,
+    payload: {},
+  };
   const commit = {
     type: "events.iterate.com/repo/commit-completed" as const,
     payload: { path: "/repos/config", commitOid: "abc", message: "m", changedPaths: ["worker.ts"] },
   };
-  await config.append(commit);
-  expect(dispatched).toEqual([{ at: "/repos/config", steps: [["append", commit]] }]);
+  await repos.get("/repos/config").append(deleteRequested);
+  await repos.get("/repos/config").append(commit);
+  await expect(
+    // @ts-expect-error — a type the contract does not own is refused when it runs, too
+    workspaces.get("/workspaces/w").append({ type: "note", payload: {} }),
+  ).rejects.toThrow(/is not an event the workspace contract owns/);
+  expect(dispatched).toEqual([
+    { at: "/repos/config", steps: [["append", deleteRequested]] },
+    { at: "/repos/config", steps: [["append", commit]] },
+  ]);
 });
 
 class RemotesApi extends RpcTarget {

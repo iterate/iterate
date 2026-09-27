@@ -4,6 +4,7 @@
 // `secretsEqual`. Only this worker sets or reads any of it; what user code sees of a caller is the
 // SDK's `Principal` and `ITX_PRINCIPAL_HEADER` (iterate/principal).
 import type { Principal } from "iterate/principal";
+import type { StreamEventInput } from "iterate/stream/processor";
 
 /** WHO is making a call: the acting principal (null = anonymous). The one thing carried through every
  *  dispatch and every sibling hop (`invoke(call, args, caller)`). Set ONLY by trusted code — the edge
@@ -54,26 +55,23 @@ export const ITX_APP_HEADER = "x-itx-app";
 /** Originating context of a native fetch forwarded by a trusted context. */
 export const ITX_CALLER_PATH_HEADER = "x-itx-caller-path";
 
-/** The event as the log stores it: `source.principal`, `source.grant` and `source.platform` are the
- *  platform's — set from the admitted caller, client-supplied ones dropped (an anonymous session's
- *  event carries none, the kernel's none). */
-export function stampCaller<E extends { source?: Record<string, unknown> }>(
+/** THE PROVENANCE STAMP: the event as the log stores it, its `source` the platform's. `origin` is
+ *  the context the call started at (`Caller.path`, set at the first hop, else `here`, where the call
+ *  runs); `principal`, `grant` and `platform` are the admitted caller's. A writer's own `source` is
+ *  dropped, so nothing forges where an event came from — all but `processor`, the SDK engine's label
+ *  for which processor wrote it: the writer's word, filed under the stamped `origin`, so only code
+ *  at that context can say it. */
+export function stampCaller<E extends { source?: StreamEventInput["source"] }>(
   event: E,
   caller: Caller,
-): E {
-  const {
-    principal: _clientPrincipal,
-    grant: _clientGrant,
-    platform: _clientPlatform,
-    ...source
-  } = event.source || {};
-  const stamped: Record<string, unknown> = { ...source };
-  if (caller.principal) stamped.principal = caller.principal;
-  if (caller.principal && caller.grant) stamped.grant = caller.grant;
-  if (caller.platform) stamped.platform = true;
-  return Object.keys(stamped).length > 0
-    ? { ...event, source: stamped }
-    : (({ source: _dropped, ...rest }) => rest as E)(event);
+  here: string,
+): E & { source: NonNullable<StreamEventInput["source"]> } {
+  const source: NonNullable<StreamEventInput["source"]> = { origin: caller.path || here };
+  if (event.source?.processor) source.processor = event.source.processor;
+  if (caller.principal) source.principal = caller.principal;
+  if (caller.principal && caller.grant) source.grant = caller.grant;
+  if (caller.platform) source.platform = true;
+  return { ...event, source };
 }
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();

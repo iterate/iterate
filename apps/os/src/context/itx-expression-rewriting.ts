@@ -499,14 +499,22 @@ export function rowsNamingRpcStub(args: {
 
 /** THE APP WALL, as one check over an expression loaded code hands in (the resolver's INPUT, or the
  *  TARGET of a row it appends): never the fixed point, never a `cd` above `base` (self and descendants
- *  only, resolved step by step). A spec's SOURCE EXPRESSION in a call's arguments (`workers.get`,
- *  `facets.get`, `processors.enable`) is walled too, at the context the walk has reached, so the
- *  call fails where it is made; the producer also runs there as loaded code when the code loads
- *  (the DO's `invoke`). Codec-style — nothing here is policy: the rows a call rewrites through are
- *  the owner's and are never checked. */
-function admitLoadedCodeExpression(expression: ItxExpression, base: string): void {
+ *  only, resolved step by step) — but for APPEND: on the input (`appendAnywhere`), `cd(path).append(…)`
+ *  with nothing after it reaches any context in the project, because anyone may append anywhere and
+ *  the stamp says who did (src/caller.ts `stampCaller`). The destination still resolves the append
+ *  through its own table, so a jail's bare null refuses it there, and a row it carries is walled
+ *  against where the call started (`admitLoadedCodeRow`). A spec's SOURCE EXPRESSION in a call's
+ *  arguments (`workers.get`, `facets.get`, `processors.enable`) is walled too, at the context the
+ *  walk has reached, so the call fails where it is made; the producer also runs there as loaded code
+ *  when the code loads (the DO's `invoke`). Codec-style — nothing here is policy: the rows a call
+ *  rewrites through are the owner's and are never checked. */
+function admitLoadedCodeExpression(
+  expression: ItxExpression,
+  base: string,
+  appendAnywhere = false,
+): void {
   let at = base;
-  for (const step of expression) {
+  for (const [index, step] of expression.entries()) {
     const name = typeof step === "string" ? step : step[0];
     if (name === "builtins")
       throw codedError(
@@ -521,10 +529,16 @@ function admitLoadedCodeExpression(expression: ItxExpression, base: string): voi
       }
     if (Array.isArray(step) && step[0] === "cd" && typeof step[1] === "string") {
       const to = resolveContextPath(at, step[1]);
-      if (to !== at && !to.startsWith(at === "/" ? "/" : `${at}/`))
+      const last = expression.at(-1);
+      const appendsOnly =
+        appendAnywhere &&
+        index === expression.length - 2 &&
+        Array.isArray(last) &&
+        last[0] === "append";
+      if (!appendsOnly && to !== at && !to.startsWith(at === "/" ? "/" : `${at}/`))
         throw codedError(
           "FORBIDDEN",
-          `cd goes down only for loaded code: ${JSON.stringify(step[1])} from ${JSON.stringify(at)} would leave it`,
+          `cd goes down only for loaded code, but for an append: ${JSON.stringify(step[1])} from ${JSON.stringify(at)} would leave it`,
         );
       at = to;
     }
@@ -771,7 +785,8 @@ export class ItxExpressionResolver {
   }
 
   /** THE APP WALL (`admitLoadedCodeExpression`): loaded code hands in short names and nothing else — never the fixed
-   *  point, never a `cd` above its own context (self and descendants only, resolved step by step). On
+   *  point, never a `cd` above its own context (self and descendants only, resolved step by step)
+   *  but for `cd(path).append(…)`, which reaches the whole project. On
    *  the INPUT only: the rows a call rewrites through are the owner's grants and are never checked, so
    *  a parent link `itx ⇒ itx.builtins.cd('/agents/x')` carries a script up exactly as far as its
    *  owner said. Codec-style, kin to the reserved names `parse` refuses — nothing here is policy. */
@@ -781,7 +796,7 @@ export class ItxExpressionResolver {
     // The remaining expression now includes the owner's rewrites (e.g. the agent's sandbox
     // redirect to builtins.run), not just loaded code's words. Keep app for row admission and
     // attribution, but don't reject the owner's grant again at its destination.
-    if (caller.app && !caller.path) admitLoadedCodeExpression(expression, this.#path);
+    if (caller.app && !caller.path) admitLoadedCodeExpression(expression, this.#path, true);
   }
 
   /** PURE: the chain of rewrites from `call` to the builtins-rooted call that would run

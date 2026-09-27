@@ -1173,6 +1173,23 @@ test("the app wall (`Caller.app`): on the INPUT expression only, `itx.builtins` 
     expect(() => resolver.resolve(`itx.cd('${to}').whoami()`)).toThrow(/goes down only/);
   expect(() => resolver.resolve("itx.cd('./b').cd('../..').whoami()")).toThrow(/goes down only/);
 });
+test.for<{ call: string; refused?: RegExp }>([
+  { call: "itx.cd('/').append({ type: 'note' })" },
+  { call: "itx.cd('/agents/b').append({ type: 'note' }, { type: 'note' })" },
+  { call: "itx.cd('..').append({ type: 'events.iterate.com/itx/run-requested' })" },
+  { call: "itx.cd('/').append", refused: /goes down only/ },
+  { call: "itx.cd('/').append({ type: 'note' }).offset", refused: /goes down only/ },
+  { call: "itx.cd('/').cd('./x').append({ type: 'note' })", refused: /goes down only/ },
+  { call: "itx.cd('/').builtins.append({ type: 'note' })", refused: /goes down only/ },
+  { call: "itx.cd('/').run('async () => 1')", refused: /goes down only/ },
+])(
+  "the app wall, but for an append: loaded code at a child reaches the whole project with `cd(path).append(…)` and nothing after it — $call",
+  ({ call, refused }) => {
+    const resolve = () => appResolverAt("/agents/a", CHILD).resolve(call);
+    if (refused) expect(resolve).toThrow(refused);
+    else expect(resolve).not.toThrow();
+  },
+);
 test("the app wall (`Caller.app`): on the INPUT expression only, `itx.builtins` is refused and `cd` goes down only — from the root too: a ROW loaded code appends is walled on its target: the fixed point and a cd above are refused, its own lend (`itx.builtins.rpcStubs.get`) and a plain expression pass, a mask says nothing", () => {
   const row = (type: string, target: unknown) => () =>
     admitLoadedCodeRow({ type, payload: { match: "itx.x", target } }, "/agents/a");
