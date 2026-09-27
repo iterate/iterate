@@ -206,8 +206,13 @@ CI setup, not individual test durations. Both suites run concurrently once
 ready; browser installation overlaps the Vitest run. Playwright's worker count
 and the case against sharding were measured, not guessed: #2659's study, run
 on an earlier 88-test suite, settled on 24 workers and found that six-way
-sharding lengthened the full preview run. Neither carried over to today's
-smaller suite, which runs 6 workers in CI; measure again before changing it.
+sharding lengthened the full preview run. Measured again on 2026-09-26 with 50
+specs (#3258): the specs keep 6 workers, on a 4x16, where a spec takes about a
+quarter less time than on a 2x8. 12 or 16 workers, or three shards, finished
+sooner but put more specs on the preview at once and retried two to four times
+as many of them; two shards of 6 were slower than the one 4x16 once the job
+that merges them ran ([reliability defaults](depot-ci.md#reliability-defaults)).
+Measure the retries as well as the time before changing either.
 
 Each runner derives the deployed target itself, once, from the deployment's
 own `APP_CONFIG` (parsed exactly as the worker parses it) and its `envs.ts`

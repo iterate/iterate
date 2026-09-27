@@ -14,7 +14,8 @@
 #                    and flake records. The rows tagged `slow` run only when the PR carries the
 #                    `slow-e2e` label or edits one of them (SLOW_ROW_PATHS) (docs/testing.md#slow-rows)
 #   Browser specs    beside E2E tests: the Playwright specs, the same way, and the Playwright report.
-#                    One job definition, E2E tests', differing only in the suite it names
+#                    One job definition, E2E tests', differing only in the suite it names and in its
+#                    bigger runner, where its six browsers have the CPU they need
 #   CI trace         after all three, whatever their outcome, reporting only: the two suites' lines
 #                    under the status line, in one write; the CI trace (docs/ci-traces.md), an
 #                    artifact plus the "CI trace" and "Playwright report" commit statuses, which
@@ -181,9 +182,9 @@ jobs:
         run: doppler run -- pnpm preview "$ACTION"
 
   # THE TWO SUITES, E2E tests and Browser specs: one job each, side by side after the deploy, and ONE
-  # DEFINITION. Browser specs runs E2E tests' runner, outputs and steps (the `suite-runner`,
-  # `suite-outputs` and `suite-steps` anchors); the two differ only in the suite their env names and
-  # in which dispatch skips them.
+  # DEFINITION. Browser specs runs E2E tests' outputs and steps (the `suite-outputs` and
+  # `suite-steps` anchors); the two differ only in the suite their env names, in which dispatch
+  # skips them, and in their runners (below).
   # E2E tests is the full mutating proof (docs/testing.md): the vitest e2e suite, whose project-
   # creating rows this isolated preview owns (production runs only its deploy-script readiness
   # probes). Browser specs is the browser proof: the root Playwright specs (specs/AGENTS.md) against
@@ -197,9 +198,10 @@ jobs:
   # step hands it over as the job's `status` output (apps/os/scripts/preview.ts `handOverSuiteLine`),
   # so the check turns green or red without waiting on GitHub.
   #
-  # 2x8 RUNNERS: both suites wait on a remote preview. On 4x16 they peaked at 2.1 vCPUs and 3.2 GB,
-  # and on 2x8 their p50 is within 6 s of 4x16's (measured 2026-09-24;
-  # docs/depot-ci.md#reliability-defaults).
+  # RUNNERS: E2E tests waits on a remote preview, which a 2x8 does about as fast as a 4x16. Browser
+  # specs runs six browsers (playwright.config.ts `workers`), whose specs run faster with a 4x16's
+  # CPU; more workers or shards would put more specs on the preview at once, which raises retries.
+  # The measurements: docs/depot-ci.md#reliability-defaults.
   e2e:
     name: E2E tests
     needs: deploy
@@ -207,7 +209,7 @@ jobs:
       always() &&
       ((github.event_name == 'pull_request' && needs.deploy.outputs.preview != 'false') ||
       (github.event_name == 'workflow_dispatch' && inputs.action != 'specs'))
-    runs-on: &suite-runner
+    runs-on:
       size: 2x8
       image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
     timeout-minutes: 30
@@ -362,7 +364,9 @@ jobs:
       always() &&
       ((github.event_name == 'pull_request' && needs.deploy.outputs.preview != 'false') ||
       (github.event_name == 'workflow_dispatch' && inputs.action != 'e2e'))
-    runs-on: *suite-runner
+    runs-on:
+      size: 4x16
+      image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
     timeout-minutes: 30
     env:
       SUITE: specs
