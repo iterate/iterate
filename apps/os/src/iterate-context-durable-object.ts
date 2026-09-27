@@ -402,8 +402,8 @@ export class IterateContextDurableObject extends DurableObject<Env> {
    *  `prj_…` id, and a root born then would hold storage for a project that is gone. So a root's
    *  birth — a store with no durable row — asks the control plane first (catalog.ts
    *  `deletedProject`). A deleted project's root is not born: the tables the stream opened as this
-   *  instance was built go, and every entry point answers `#unborn` first, nothing run and nothing
-   *  written — a refusal like any other, where a reset would log an error for every request that
+   *  instance was built go, and every entry point answers `#unborn` first (`#unbornStill`), nothing
+   *  run and nothing written — a refusal like any other, where a reset would log an error for every request that
    *  reaches it. A question that failed fails the birth, the store left as empty, and resets this
    *  instance, so the next request asks again. Answers whether the birth was refused. */
   async #refuseBirthOfDeletedProjectRoot(): Promise<boolean> {
@@ -423,6 +423,16 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   }
   /** What every entry point answers first on a deleted project's root it refused to bear. */
   #unborn: Error | null = null;
+  /** `unborn`, asked again (the async entry points `invoke` and `fetch`, which every session call
+   *  and project-host request arrives by): kept as long as it holds, while the project restored
+   *  under its id since (a seed's `restoreProjectId`) resets this instance, failing this one
+   *  request, so the next bears the root. A question that failed keeps the refusal. */
+  async #unbornStill(unborn: Error): Promise<Error> {
+    const { projectId } = this.#durableObjectAddress;
+    if (!(await this.#controlPlane.deletedProject(projectId).catch(() => true)))
+      this.ctx.abort(`project ${projectId} was restored: its root is born on the next request`);
+    return unborn;
+  }
 
   /** THE STREAM (stream/stream.ts): the commit pipeline and the core reduce. Its one callback,
    *  `onCommit`, is the post-commit fan-out — the delivery loop, run as THE KERNEL: under
@@ -1246,7 +1256,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     args: unknown[] = [],
     caller: Caller = { principal: null },
   ): Promise<unknown> {
-    if (this.#unborn) throw this.#unborn;
+    if (this.#unborn) throw await this.#unbornStill(this.#unborn);
     this.#residency.inboundCallStarted();
     this.#stream.appendWakeRecord("request");
     const result = await this.#invokeInProcess(call, args, caller).finally(() =>
@@ -1299,7 +1309,10 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   /** Ends when the Response is handed back — a body still streaming after that is not counted. */
   async fetch(request: Request): Promise<Response> {
     // a project host's answer for a project it does not serve, as the edge's admission gives it
-    if (this.#unborn) return new Response(`421: ${this.#unborn.message}\n`, { status: 421 });
+    if (this.#unborn) {
+      const { message } = await this.#unbornStill(this.#unborn);
+      return new Response(`421: ${message}\n`, { status: 421 });
+    }
     this.#residency.inboundCallStarted();
     return this.#serveFetch(request).finally(() =>
       this.#residency.inboundCallEnded(request.headers.get(ITX_APP_HEADER) !== null),

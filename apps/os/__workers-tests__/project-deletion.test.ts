@@ -53,8 +53,9 @@ test("deleting a project drops its row at once, then destroys every context it a
 });
 
 // A request that read the project's row just before the delete (an isolate's memo) still reaches the
-// root by name; so does the operator, who may address any `prj_…` id. Neither bears a new root.
-test("a deleted project's root is never born again: whatever reaches it is refused, and nothing is stored", async () => {
+// root by name; so does the operator, who may address any `prj_…` id. Neither bears a new root, until
+// a seed restores the project under its id.
+test("a deleted project's root is never born again: whatever reaches it is refused, and nothing is stored, until the project is restored", async () => {
   const admin = (await openSession()).authenticate(adminCredentials());
   const slug = `reborn-${crypto.randomUUID().slice(0, 8)}`;
   const itx = await admin.projects.create({ project: slug });
@@ -81,6 +82,17 @@ test("a deleted project's root is never born again: whatever reaches it is refus
     ),
     "the root should hold no storage",
   ).toEqual([]);
+
+  // a seed restores the project under its id: the refused root resets on the next call, which
+  // fails, and the call after it bears the root
+  await expect(
+    admin.projects.create({ project: slug, restoreProjectId: projectId }),
+  ).rejects.toThrow(/was restored: its root is born on the next request/);
+  const restored = await admin.projects.create({ project: slug, restoreProjectId: projectId });
+  expect(await restored.whoami()).toMatchObject({ projectId });
+  expect((await readLog(`${projectId}.iterate/`)).map((event) => event.type)).toContain(
+    "events.iterate.com/project/create-requested",
+  );
 });
 
 // The verb asks for the deletion before it drops the row, so the saga can reach the root while the
