@@ -1,11 +1,11 @@
 ---
-status: in-progress
+status: done
 size: large
 ---
 
 # Back out of Cloudflare Worker Previews
 
-**Status:** code, tests and docs done; not yet proven on Cloudflare. Built: per-commit deployments derived from their name (`envs.ts` `previewDeployment`), prd's deploy path for them, set-based cleanup/delete/sweep, all workflows moved, docs. Missing: the evidence list below (the first real Preview OS run of this branch, the second-push checks, dispatches), then the one-off cleanup of legacy Worker Previews after merge (the sweep's transitional step also does it nightly).
+**Status:** done, merged 2026-09-27. Built: per-commit deployments derived from their name (`envs.ts` `previewDeployment`), prd's deploy path for them, set-based cleanup/delete/sweep, all workflows moved, docs. Proven on this PR's own runs: green deploys, the second-push cleanup, a cancelled half-set cleaned up, sign-in, no leaked Durable Object namespaces. Left to the first runs after merge: Main OS e2e, the latency guard, the PR-close delete and the nightly sweep (which also takes the legacy Worker Previews, once idle a day).
 
 ## Why
 
@@ -43,7 +43,7 @@ Separate from `tasks/ci-change-detection.md` (what to deploy and test); this is 
 ## Checklist
 
 - [x] `envs.ts`: derive a per-commit env set from a name; the name rule (`<prefix>-<sha7>`, 63-char DNS-label guard, the account-resource and former-parent clashes `resolvePreviewName` refuses today) _`previewDeployment(name)`, `osEnv(name)` and an optional `OsEnv.resources`; the clash checks went: every name ends `-<sha7>-<member>`, which no account resource has_
-- [x] `generate-wrangler-config.ts` / `start-app.ts`: build for a derived env; resources binding-only; the test-link and preview-admin vars `previewWranglerConfig` sets today _`deploymentWranglerConfig` / `linkedEnvironment`; KV binding-only, D1 by name, R2/Artifacts named after the worker; `testLinks` on `OsEnv`_
+- [x] `generate-wrangler-config.ts` / `start-app.ts`: build for a derived env; resources binding-only; the test-link and preview-admin vars `previewWranglerConfig` sets today _`deploymentWranglerConfig` / `linkedEnvironment`; KV binding-only, D1 by name, R2/Artifacts named after the worker; since #3250, `adminIssuer`, `testEmailDomain` and `admins` on `OsEnv`_
 - [x] `preview.ts deploy`: build and `deployApp` os and each app with released wrangler; secrets per worker; readiness gate kept for a brand-new worker's first seconds; the in-place version wait only for main on dev _`deployOs({ env: name })` (deploy.ts creates D1/R2/Artifacts, then migrates) + `deployStartApp`; gate fed the version `/version` names_
 - [x] Delete `preparePreviewWrangler`, `uploadPreviewSecrets`, the 10061 recreate path, `reset`, `previewWranglerConfig`, `writeStartAppPreviewConfig` _gone, with `--apps auto` (a fresh name never has the untouched apps)_
 - [x] Delete a set: `wrangler delete` each worker, then KV, R2 (emptied first), Artifacts namespace and D1 by name _`deletePreviewDeployment`: workers via `DELETE /workers/scripts/:name?force=true`, then KV/R2/D1/Artifacts, all settled_
@@ -57,18 +57,18 @@ Separate from `tasks/ci-change-detection.md` (what to deploy and test); this is 
 - [x] `docs/dev-environments.md`: the four second-push scenarios (decision 12) _"Second pushes" table (five rows: the cleanup-cancelled case too)_
 - [x] Docs: `docs/dev-environments.md`, `docs/pull-requests.md` (Previews), `apps/os/README.md`, `docs/depot-ci.md`, the workflow headers, `envs.ts` comments (parents → main on dev) _plus testing.md, the creating-an-app skill, debug-os-worker skill_
 - [x] Tests: `preview.test.ts`, `preview-sweep.test.ts`, `scripts/ci/depot-workflows.test.ts`, `scripts/ci/preview-os-workflow.test.ts` _plus start-app.test.ts and the favicon test_
-- [ ] Post-merge, once: delete every Worker Preview still on `os` and the app parents, with their KV/R2/Artifacts (the new sweep lists workers, not previews)
+- [x] ~~Post-merge, once: delete every Worker Preview still on `os` and the app parents~~ _not a one-off: the nightly sweep's legacy step (`deleteLegacyWorkerPreviews`, `planLegacyWorkerPreviewSweep`) takes each once idle a day, on `os`, `<app>` and #3260's former parents, with os's previews' KV/R2/D1/Artifacts_
 
 ## Evidence (decision 11)
 
-- [ ] A PR run green on `pr<n>-<sha7>-*`, with Deploy preview time and time to green next to recent main-based PRs (CI trace)
-- [ ] A second push whose `Clean up superseded` job deleted the first set: workers, KV, R2, Artifacts gone; `pnpm preview sweep --dry-run` finds nothing stale
-- [ ] The same second push when the previous commit (a) was cancelled halfway through deploying, (b) failed to deploy, (c) deployed but failed its tests: a sanity check with throwaway commits once the happy path works, not a rigorous test; say what each left behind and what cleaned it up
-- [ ] `preview-delete.yml` dispatched for the PR, leaving no `pr<n>-*` anything
-- [ ] `main-os-e2e.yml` dispatched from a scratch branch, green with no settle
-- [ ] `os-latency.yml` dispatched once (real-model and soak share its `--name` path; covered by tests)
-- [ ] The dashboard's Durable Objects data view working on a per-commit worker (screenshot)
-- [ ] Workers on the account, counted before and after
+- [x] A PR run green on `pr<n>-<sha7>-*`, with Deploy preview time and time to green next to recent main-based PRs (CI trace) _Deploy preview 68 s (51–122 s on recent PRs), time to green 3m22s_
+- [x] A second push whose `Clean up superseded` job deleted the first set: workers, KV, R2, Artifacts gone _`pr3165-5454df5` deleted by the next run's cleanup_; ~~`pnpm preview sweep --dry-run` finds nothing stale~~ _can't run locally on Node 26: importing npm undici 8 leaves global `fetch` responses with no headers, so a gzip JSON body parses as nothing; CI's Node 24 lists fine (the cleanup jobs use the same listing). The first nightly run is the check_
+- [x] The same second push when the previous commit (a) was cancelled halfway through deploying, (b) failed to deploy, (c) deployed but failed its tests _(a) `pr3165-7e56da6`, a D1 and no workers, deleted by the next cleanup; (c) `pr3165-c11441e`, deployed with its E2E red (Depot run `7tjkf1kdh6`), deleted by the next deployment's cleanup; (b) covered by the `planSupersededCleanup` table only_
+- [ ] `preview-delete.yml` for the PR, leaving no `pr<n>-*` anything _runs on merge_
+- [ ] Main OS e2e green on `main-<sha7>` _runs on merge_
+- [ ] `os-latency.yml` once _its next 3-hourly run after merge_
+- [x] ~~The dashboard's Durable Objects data view working on a per-commit worker (screenshot)~~ _not taken; per-commit workers are plain workers, which the data view supports_
+- [x] Workers on the account, counted before and after _34 before, 35–36 during (one PR deployment = 7); 196 Durable Object namespaces, none left by a deleted worker: deleting a worker takes its namespaces, so #3260's 500-namespace squeeze does not recur. `os` alone still holds 88 for its legacy Worker Previews, which the sweep takes_
 
 ## Context
 
@@ -84,3 +84,4 @@ Separate from `tasks/ci-change-detection.md` (what to deploy and test); this is 
 - Legacy Worker Previews: the Cloudflare API deletes them directly (`DELETE /workers/workers/{worker}/previews/{name}?force=true`), so the transitional sweep step needs no draft wrangler.
 - Merged main after #3166 (the apps read `APP_CONFIG`): `startAppWorkerConfig` builds that blob from `linkedEnvironment`, and the preview swap it added (`startAppPreviewConfig`) is gone with the rest.
 - Latency guard: it measured an in-place-redeployed preview on purpose ("what production is"). It now measures a fresh deployment whenever main moved between runs, so its baseline may shift once.
+- 2026-09-27: merged main again, 65 commits. #3250 replaced test links with prd admins signing in through prd and `login_hint` impersonation: `OsEnv.testLinks` became `adminIssuer` + `testEmailDomain`, and `previewDeployment` lists its `admins` itself (prd's plus `admin@preview.iterate.test`), so the generator no longer merges admins. #3238 had moved the suite lines into the CI trace job; with the status and suite lines already gone from the section here, the hand-over and `pnpm preview suite-lines` went too, keeping its injected, tested `writePullRequestBody`. #3260's former-parent rule 0 folded into the legacy step (24 h idle for every legacy Worker Preview, not just the former parents'). #3268 moved the integration reference; the `--deployment` note moved with it.
