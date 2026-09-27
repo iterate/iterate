@@ -159,10 +159,12 @@ Agents babysitting a PR: the wait-loop rules are in
 Never open a pull request only to run CI, and never run CI on main's commit. Push a scratch branch
 (main plus an empty commit, or the commit to soak) under its own name and run against its head.
 `depot ci run` runs any workflow file, whatever its `on:` (Test has no `workflow_dispatch`);
-`depot ci dispatch` runs one that has `workflow_dispatch`, with inputs. Auth: `depot login`, or
-`DEPOT_TOKEN` from Doppler `_shared/preview`'s `DEPOT_CI_TELEMETRY_TOKEN`.
+`depot ci dispatch` runs one that has `workflow_dispatch`, with inputs. Auth: `depot login`, or the
+organization token from Doppler:
 
 ```bash
+export DEPOT_TOKEN="$(doppler secrets get DEPOT_CI_TELEMETRY_TOKEN --plain --project _shared --config preview)"
+
 git fetch origin main
 git worktree add -b ci-soak/<name> ../ci-soak-<name> origin/main
 cd ../ci-soak-<name>

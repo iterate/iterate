@@ -30,7 +30,8 @@ non-secret counts, hostnames and paths.
 2. Pause merges from the erase until `verify-structure` passes: every merge that touches the Worker
    redeploys prd, and a deploy resets Durable Objects under a running `apply`. The owner or you
    announce the pause where the team merges (nothing enforces it), and check that no Deploy OS run
-   is in flight (the command is in project-seeds.md).
+   is in flight (the command is in
+   [`apps/os/docs/project-seeds.md`](../../../apps/os/docs/project-seeds.md), "Pause merges").
 3. Inventory the erase with `pnpm --dir apps/os erase-data --env prd --yes-i-mean-prd --dry-run`.
    The erase and the deploy after it are separate operations, run only on the user's explicit
    request; no seed command performs either.

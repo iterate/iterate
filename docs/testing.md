@@ -201,8 +201,8 @@ doppler run --project os --config prd -- env WORKER_BASE_URL=https://os.iterate.
 
 Specs take the same shape with `pnpm spec`; without `WORKER_BASE_URL` Playwright starts `pnpm dev` on
 `WORKER_PORT` (8788), reusing a running server locally. To run a suite against a preview exactly as
-CI does: `pnpm preview e2e --pr <number> --name <branch>` or `pnpm preview specs` from `apps/os`
-under the same Doppler config (`--slow-rows`, [slow rows](#slow-rows)).
+CI does: `pnpm preview e2e --pr <number> --name <branch>`, or `pnpm preview specs` with the same
+flags, from `apps/os` under the same Doppler config (`--slow-rows`, [slow rows](#slow-rows)).
 
 ## Reaching the test runner from a deployed Worker
 
@@ -329,8 +329,9 @@ The shared constants live in **`packages/shared/src/test-support/e2e-policy/budg
 (`@iterate-com/shared/test-support/e2e-policy`): the root `playwright.config.ts` imports its spec
 budgets and CI retry count, `apps/os/vitest.config.ts` its CI retry count and the Vitest timeouts
 below. The evidence for these rules is a marathon of 50 consecutive green preview runs in July 2026
-(about 5,800 test executions, 0.5% needing their one retry, none a second), and today the retry
-telemetry and the [flake dashboard](https://github.com/iterate/iterate/issues/2580).
+(about 5,800 test executions, 0.5% needing their one retry, none a second;
+[the full log](https://github.com/iterate/iterate/blob/bf72f92bd76365e85533d4296fb3ddb239379f98/docs/preview-e2e-flake-hunt.md)),
+and today the retry telemetry and the [flake dashboard](https://github.com/iterate/iterate/issues/2580).
 
 1. **Retries live in exactly one layer: the individual test**, the smallest unit that owns its
    state. `E2E_CI_RETRIES = 1` in CI, zero locally.
@@ -418,11 +419,13 @@ its alarms, its claims or what its birth resets: the facet host, residency, RPC 
 (`apps/os/src/context/`), the context Durable Object, the alarm coordinator, the processors,
 `apps/os/wrangler.base.jsonc` or the compatibility date (`COMPATIBILITY_DATE` in
 `scripts/lib/wrangler-config.ts`). Add the label before the push (the e2e job reads it when it
-starts), or dispatch the run afterwards:
+starts):
 
 ```bash
 gh api -X POST repos/iterate/iterate/issues/<n>/labels -f 'labels[]=slow-e2e'
 ```
+
+or dispatch the run afterwards, as the Preview OS dispatch row above says.
 
 A PR that breaks a slow row without turning them on reaches production first, and its main push
 finds it. The suite summary records whether they ran (`slowRows`), and PR time to green splits on it
