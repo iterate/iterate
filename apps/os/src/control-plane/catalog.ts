@@ -118,7 +118,14 @@ export type OrganizationRecord = {
   role?: OrganizationRole;
   projects: number;
 };
-export type MemberRecord = { userId: string; email: string; role: OrganizationRole };
+/** A member of an organization. `createdAt`: when they joined (epoch ms), null for a membership
+ *  older than the column (db/migrations/0004_created_at.sql). */
+export type MemberRecord = {
+  userId: string;
+  email: string;
+  role: OrganizationRole;
+  createdAt: number | null;
+};
 /** An invitation to an organization, as its owners see it: the link's own secret is never stored,
  *  only its SHA-256 (`token_hash`), so an invitation is shown once — at creation — and afterwards
  *  known by `id`. `emailHint` is who the owner meant it for: a note, not a check — the link admits
@@ -144,7 +151,8 @@ export type InvitationPreview = InvitationRecord & {
 /** Where the platform's own app routes a provider account's webhooks: the connection's log, `path`
  *  in `projectId`. */
 export type IntegrationRouteRecord = { projectId: string; path: string };
-/** What a person can access: their organizations and every project of those, with their role. */
+/** What a person can access: their organizations and every project of those, with their role,
+ *  each list oldest first. */
 export type AccessibleRecord = { organizations: OrganizationRecord[]; projects: ProjectRecord[] };
 
 export class ControlPlaneDatabase {
@@ -168,16 +176,21 @@ export class ControlPlaneDatabase {
     const user = await identityUser(this.#client, { provider, subject });
     return user && { id: user.id, email: user.email };
   }
+  /** Every organization, oldest first. */
   organizations(): Promise<OrganizationRecord[]> {
     return listOrganizations(this.#client);
   }
-  members(organizationId: string): Promise<MemberRecord[]> {
-    return listMembers(this.#client, { orgId: organizationId });
+  /** An organization's members, in the order they joined. */
+  async members(organizationId: string): Promise<MemberRecord[]> {
+    const members = await listMembers(this.#client, { orgId: organizationId });
+    // D1 answers null for a membership older than the column; sqlfu types it optional
+    return members.map((member) => ({ ...member, createdAt: member.createdAt ?? null }));
   }
   /** A project by id or by slug (a slug never holds the `_` every id does, so at most one row). */
   async project(ref: string): Promise<ProjectRecord | null> {
     return (await projectsByRef(this.#client, { id: ref, slug: ref }))[0] ?? null;
   }
+  /** Every project, oldest first. */
   projects(): Promise<ProjectRecord[]> {
     return listProjects(this.#client);
   }
@@ -200,9 +213,9 @@ export class ControlPlaneDatabase {
   ): Promise<IntegrationRouteRecord | null> {
     return integrationRoute(this.#client, { provider, externalId });
   }
-  /** What a person can access: the organizations they belong to — the first by name is where a
-   *  project goes when none is named — and every project of those, with their role. One batch, so
-   *  the two lists are one moment's. */
+  /** What a person can access: the organizations they belong to — the first, the oldest, is where
+   *  a project goes when none is named — and every project of those, with their role, each list
+   *  oldest first. One batch, so the two lists are one moment's. */
   async accessibleTo(userId: string): Promise<AccessibleRecord> {
     const results = await batch(this.#d1, [
       accessibleOrganizations.query({ userId }),
@@ -326,10 +339,11 @@ export class ControlPlaneDatabase {
   }
 
   /** A new organization, the caller its owner. The operator may name another owner, or none (the
-   *  deployment's own). The organization and its owner land in one batch. */
+   *  deployment's own). The organization and its owner land in one batch, both created `now`. */
   async createOrganization(
     caller: Caller,
     input: { name: string; ownerId?: string },
+    now: number,
   ): Promise<OrganizationRecord> {
     if (input.ownerId) this.#requireOperator(caller, "name an organization's owner");
     // named by id or email; the membership holds the id (a user is never deleted)
@@ -341,7 +355,7 @@ export class ControlPlaneDatabase {
       (isOperator(caller) ? null : this.#requireUser(caller, "create an organization"));
     const organization = { id: newId("org"), name: input.name.trim() };
     await batch(this.#d1, [
-      insertOrganization.query(organization),
+      insertOrganization.query({ ...organization, createdAt: now }),
       ...(ownerId ? [insertOwner.query({ userId: ownerId, orgId: organization.id })] : []),
     ]);
     const record: OrganizationRecord = { ...organization, projects: 0 };
@@ -387,12 +401,14 @@ export class ControlPlaneDatabase {
     );
   }
 
-  /** Add a person, named by id or email, or change their role; answers the id the membership
-   *  holds. The last owner stays: the upsert's own `where` refuses to demote them. */
+  /** Add a person, named by id or email, joining `now`, or change their role, which keeps when
+   *  they joined; answers the id the membership holds. The last owner stays: the upsert's own
+   *  `where` refuses to demote them. */
   async addMember(
     caller: Caller,
     organizationId: string,
     input: { userId: string; role: OrganizationRole },
+    now: number,
   ): Promise<string> {
     const guard = this.#ownerGuard(caller, "add a member to");
     const person = {
@@ -401,7 +417,7 @@ export class ControlPlaneDatabase {
       email: emailAddress(input.userId),
     };
     const results = await batch(this.#d1, [
-      upsertMembership.query({ ...person, role: input.role, ...guard }),
+      upsertMembership.query({ ...person, role: input.role, createdAt: now, ...guard }),
       organizationRole.query({ orgId: organizationId, userId: guard.actorId }),
       memberOf.query(person),
     ]);
@@ -569,12 +585,13 @@ export class ControlPlaneDatabase {
     throw new Error(`acceptInvitation changed nothing for an open link (${found.id})`);
   }
 
-  /** A project named `project` (slugified into its hostname label): in the organization named (a
-   *  member's, or any for the operator) or the caller's own — their first by name, made on first use
-   *  and named after their email's local part (the deployment's own for the operator). A slug is ONE
-   *  project across every organization: the same organization's again is the same project, another's
-   *  is PROJECT_NAME_TAKEN, and nothing is made. The project's own creation (its config repo, its
-   *  seed) is its root's saga, opened by the caller (session.ts) after this returns.
+  /** A project named `project` (slugified into its hostname label), created `now`: in the
+   *  organization named (a member's, or any for the operator) or the caller's own — their oldest,
+   *  made on first use and named after their email's local part (the deployment's own for the
+   *  operator). A slug is ONE project across every organization: the same organization's again is
+   *  the same project, another's is PROJECT_NAME_TAKEN, and nothing is made. The project's own
+   *  creation (its config repo, its seed) is its root's saga, opened by the caller (session.ts)
+   *  after this returns.
    *
    *  Each case is one batch whose inserts do nothing on a taken slug or id (`on conflict do
    *  nothing`, or a `where` that finds it taken) and whose last reads say what holds the slug and
@@ -586,6 +603,7 @@ export class ControlPlaneDatabase {
   async createProject(
     caller: Caller,
     input: { project: string; organizationId?: string; restoreProjectId?: string },
+    now: number,
   ): Promise<ProjectRecord & { mintedOrganization?: string }> {
     const restoring = input.restoreProjectId;
     // oxlint-disable-next-line iterate/simple-truthiness-check -- an empty restore id is refused, never read as "mint a new one"
@@ -604,8 +622,8 @@ export class ControlPlaneDatabase {
       const orgId = input.organizationId;
       const results = await batch(this.#d1, [
         userId
-          ? insertMemberProject.query({ ...project, orgId, userId })
-          : insertProject.query({ ...project, orgId }),
+          ? insertMemberProject.query({ ...project, orgId, userId, createdAt: now })
+          : insertProject.query({ ...project, orgId, createdAt: now }),
         organizationRole.query({ orgId, userId: caller.principal!.actor }),
         projectsByRef.query(project),
       ]);
@@ -616,14 +634,19 @@ export class ControlPlaneDatabase {
     }
     if (!userId) {
       const results = await batch(this.#d1, [
-        insertAdminOrganization.query({ orgId: ADMIN_ORG_ID, slug, projectId: project.id }),
-        insertProject.query({ ...project, orgId: ADMIN_ORG_ID }),
+        insertAdminOrganization.query({
+          orgId: ADMIN_ORG_ID,
+          slug,
+          projectId: project.id,
+          createdAt: now,
+        }),
+        insertProject.query({ ...project, orgId: ADMIN_ORG_ID, createdAt: now }),
         projectsByRef.query(project),
       ]);
       return created(rowsOf<projectsByRef.Result>(results, 2), project, ADMIN_ORG_ID, restoring);
     }
     const first = await batch(this.#d1, [
-      insertFirstOrganizationProject.query({ ...project, userId }),
+      insertFirstOrganizationProject.query({ ...project, userId, createdAt: now }),
       firstOrganizationOf.query({ userId }),
       projectsByRef.query(project),
       userByRef.query({ id: userId, email: userId }),
@@ -634,9 +657,9 @@ export class ControlPlaneDatabase {
     if (target || held.length || !user) return created(held, project, target?.id, restoring);
     const organization = { id: newId("org"), name: user.email.split("@")[0]! };
     const minted = await batch(this.#d1, [
-      insertPersonalOrganization.query({ ...organization, userId, slug }),
+      insertPersonalOrganization.query({ ...organization, userId, slug, createdAt: now }),
       insertOwner.query({ userId, orgId: organization.id }),
-      insertFirstOrganizationProject.query({ ...project, userId }),
+      insertFirstOrganizationProject.query({ ...project, userId, createdAt: now }),
       firstOrganizationOf.query({ userId }),
       projectsByRef.query(project),
     ]);

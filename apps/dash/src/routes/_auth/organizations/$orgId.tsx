@@ -1,8 +1,8 @@
 // /organizations/<organization> — its settings: the name (renamed here, by an owner), the id, its
-// projects, its members (removed here, by an owner), its invitation links (an owner creates one to
-// copy and send, and revokes the ones still open — the person who opens it joins on
-// /invitations/<token>), billing (nothing to bill yet), and the danger zone — delete, once it holds
-// no project. The name, the person's role and the projects are the tree's
+// projects, its members and when each joined (removed here, by an owner), its invitation links (an
+// owner creates one to copy and send, and revokes the ones still open — the person who opens it
+// joins on /invitations/<token>), billing (nothing to bill yet), and the danger zone — delete, once
+// it holds no project. The name, the person's role and the projects are the tree's
 // (components/organization-tree.tsx); the members and the open links this page reads from /api,
 // again whenever the tree reads again — a rename, a membership, a project lands here without a
 // reload. An organization the tree does not hold is not found.
@@ -46,6 +46,7 @@ import {
 } from "@iterate-com/ui/components/table";
 import { Identifier } from "../../../components/identifier.tsx";
 import { AllowOrganizations } from "../../../components/allow-organizations.tsx";
+import { dateOf } from "../../../lib/dates.ts";
 import {
   readOrganizationTree,
   reloadOrganizationTree,
@@ -345,8 +346,8 @@ function OrganizationSettingsFor({
   );
 }
 
-/** Who belongs — and, for an owner, remove one (people join by an invitation link:
- *  `<Invitations>`). */
+/** Who belongs, in the order they joined, and since when — and, for an owner, remove one (people
+ *  join by an invitation link: `<Invitations>`). */
 function Members({
   org,
   members,
@@ -404,6 +405,7 @@ function Members({
                 <TableRow>
                   <TableHead>User</TableHead>
                   <TableHead>Role</TableHead>
+                  <TableHead>Since</TableHead>
                   {canManage ? <TableHead className="w-0" /> : null}
                 </TableRow>
               </TableHeader>
@@ -418,6 +420,15 @@ function Members({
                       </span>
                     </TableCell>
                     <TableCell className="text-muted-foreground">{member.role}</TableCell>
+                    <TableCell className="whitespace-nowrap text-muted-foreground tabular-nums">
+                      {member.createdAt ? (
+                        <time dateTime={new Date(member.createdAt).toISOString()}>
+                          {dateOf(member.createdAt)}
+                        </time>
+                      ) : (
+                        <span title="Joined before joining dates were recorded">—</span>
+                      )}
+                    </TableCell>
                     {canManage ? (
                       <TableCell className="text-right">
                         <Button
@@ -630,7 +641,7 @@ function Invitations({
                       {Date.parse(invitation.expiresAt) <= Date.now() ? (
                         <Badge variant="outline">expired</Badge>
                       ) : (
-                        new Date(invitation.expiresAt).toLocaleDateString()
+                        dateOf(Date.parse(invitation.expiresAt))
                       )}
                     </TableCell>
                     <TableCell className="text-right">

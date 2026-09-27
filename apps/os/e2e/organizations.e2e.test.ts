@@ -33,7 +33,7 @@ test("organizations.create({ name }) answers the owner's row, which every read h
   // the catalog, read through the person's memberships
   expect(await api.organizations.list()).toContainEqual(org);
   expect(await membersOf(api, org.id)).toEqual({
-    [userId]: { email: `${slug}@example.com`, role: "owner" },
+    [userId]: { email: `${slug}@example.com`, role: "owner", createdAt: expect.any(Number) },
   });
   expect(await api.organizations.invitations(org.id)).toEqual([]);
   // THE ACTIVITY: the context a member holds by identity, and the owner's account
@@ -160,8 +160,12 @@ test("organizations.addMember gives a second person the organization — their l
   );
   expect(await guest.projects.get(projectId).whoami()).toMatchObject({ projectId });
   // … and the members, which a member reads too
-  const ownerAlone = { [ownerId]: { email: `${slug}@example.com`, role: "owner" } };
-  const both = { ...ownerAlone, [guestId]: { email: `${slug}-guest@example.com`, role: "member" } };
+  const createdAt = expect.any(Number);
+  const ownerAlone = { [ownerId]: { email: `${slug}@example.com`, role: "owner", createdAt } };
+  const both = {
+    ...ownerAlone,
+    [guestId]: { email: `${slug}-guest@example.com`, role: "member", createdAt },
+  };
   expect(await membersOf(owner, org.id)).toEqual(both);
   expect(await membersOf(guest, org.id)).toEqual(both);
   // a member reaches; only an owner runs the organization
@@ -256,10 +260,15 @@ test("organizations.createInvitation hands an owner a single-use link: a second 
     (await guest.organizations.list()).find((row: { id: string }) => row.id === org.id),
   ).toEqual(joined);
   // the guest a member, the link no longer open — and a member lists no links, an owner's alone
+  const createdAt = expect.any(Number);
   expect(await membersOf(owner, org.id)).toEqual({
-    [ownerId]: { email: `${slug}@example.com`, role: "owner" },
-    [guestId]: { email: `${slug}-guest@example.com`, role: "member" },
+    [ownerId]: { email: `${slug}@example.com`, role: "owner", createdAt },
+    [guestId]: { email: `${slug}-guest@example.com`, role: "member", createdAt },
   });
+  // in the order they joined: by email, the guest's `<slug>-guest@` would sort first
+  expect(
+    (await owner.organizations.members(org.id)).map(({ userId }: { userId: string }) => userId),
+  ).toEqual([ownerId, guestId]);
   expect(await owner.organizations.invitations(org.id)).toEqual([]);
   expect(
     errorCode(await rejection(guest.organizations.invitations(org.id), "a member listing")),

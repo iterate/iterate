@@ -1001,6 +1001,7 @@ export interface IterateSessionApi {
     }): Promise<{ redirectTo: string } | { error: string }>;
   };
   projects: {
+    /** oldest first (a grant bound to projects with no user: in the grant's order) */
     list(): Promise<ProjectRecord[]>;
     /** the project's root context, by its slug or its id */
     get(project: string): Promise<IterateContextApi>;
@@ -1030,6 +1031,7 @@ export interface IterateSessionApi {
    *  each verb is a request it answers, a refusal a coded error (FORBIDDEN, INVALID_INPUT), and
    *  lands its facts on the organization's context (and a member's account) after. */
   organizations: {
+    /** oldest first */
     list(): Promise<OrgRecord[]>;
     /** the organization's context — `session.user` for an organization — by membership: its
      *  activity, `events.iterate.com/organization/…` facts, and its own secrets */
@@ -1040,8 +1042,13 @@ export interface IterateSessionApi {
     delete(orgId: string): Promise<void>;
     addMember(orgId: string, input: { userId: string; role?: "owner" | "member" }): Promise<void>;
     removeMember(orgId: string, input: { userId: string }): Promise<void>;
-    /** the members with their emails, by membership */
-    members(orgId: string): Promise<{ userId: string; email: string; role: "owner" | "member" }[]>;
+    /** the members with their emails, by membership, in the order they joined: `createdAt` is
+     *  when (epoch ms), null for one who joined before the platform recorded it */
+    members(
+      orgId: string,
+    ): Promise<
+      { userId: string; email: string; role: "owner" | "member"; createdAt: number | null }[]
+    >;
     /** the invitation links still open (an expired one stays until revoked), oldest first — an
      *  owner's */
     invitations(orgId: string): Promise<InvitationRecord[]>;

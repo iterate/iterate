@@ -96,7 +96,12 @@ test("organizations.create writes the catalog row, which every read answers at o
   // what the dash reads: the control-plane database, as it stands
   expect(await ada.organizations.list()).toEqual([org]);
   expect(await ada.organizations.members(org.id)).toEqual([
-    { userId: principal.actor, email: "orgs-owner@directory.test", role: "owner" },
+    {
+      userId: principal.actor,
+      email: "orgs-owner@directory.test",
+      role: "owner",
+      createdAt: expect.any(Number),
+    },
   ]);
   expect(await ada.organizations.invitations(org.id)).toEqual([]);
   // the activity on the organization's own log and the owner's account, stamped with who asked

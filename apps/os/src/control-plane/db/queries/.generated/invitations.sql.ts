@@ -201,8 +201,8 @@ export namespace acceptInvitation {
 }
 
 const insertAcceptedMembershipSql = `
-insert into memberships (org_id, user_id, role)
-select org_id, accepted_by, role
+insert into memberships (org_id, user_id, role, created_at)
+select org_id, accepted_by, role, accepted_at
 from invitations
 where token_hash = ? and acceptance_id = ?;
 `.trim();

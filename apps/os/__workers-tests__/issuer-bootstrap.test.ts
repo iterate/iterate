@@ -468,6 +468,7 @@ test("the consent page renders on the server, and Authorize posts the choice to 
   const project = await catalog().createProject(
     { principal: { actor: user.id, email: user.email } },
     { project: `consent-page-${crypto.randomUUID().slice(0, 8)}` },
+    Date.now(),
   );
   const login = await issuerSignIn(user, "/");
   const cookie = login.setCookie.split(";")[0]!;

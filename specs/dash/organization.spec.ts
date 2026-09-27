@@ -6,7 +6,7 @@
 import { openOperatorSession } from "../test-support/operator.ts";
 import { test } from "../test-support/test.ts";
 
-test("an organization's page shows its members and follows a change made elsewhere without a reload: a member added, a link created, a rename", async ({
+test("an organization's page shows its members and when each joined, and follows a change made elsewhere without a reload: a member added, a link created, a rename", async ({
   page,
   baseURL,
   helpers,
@@ -33,6 +33,14 @@ test("an organization's page shows its members and follows a change made elsewhe
     // timeout: a change made elsewhere, so the spinner-waiter has nothing to extend by
     timeout: 10_000,
   });
+  // … since the moment the catalog recorded them joining
+  const members = await owner.organizations.members(org!.id);
+  const { createdAt } = members.find((member) => member.email === guest)!;
+  await page
+    .getByTestId("organization-member")
+    .filter({ hasText: guest })
+    .locator(`time[datetime="${new Date(createdAt!).toISOString()}"]`)
+    .waitFor();
 
   await owner.organizations.createInvitation(org!.id, { emailHint: `invitee-${guest}` });
   await page

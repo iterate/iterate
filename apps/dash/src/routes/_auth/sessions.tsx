@@ -47,6 +47,7 @@ import { ConnectButton } from "@iterate-com/ui/components/connect-button";
 import { useContextStub, useFacetLiveState } from "iterate/react";
 import { Identifier } from "../../components/identifier.tsx";
 import { addGithubSignInHref } from "../../lib/origins.ts";
+import { dateOf } from "../../lib/dates.ts";
 import { AllowAccount } from "../../components/allow-account.tsx";
 
 const GRANT_KIND_LABELS: Record<GrantKind, string> = {
@@ -83,15 +84,6 @@ const TOKEN_LIFETIMES = [
   { value: "365", label: "1 year" },
   { value: "never", label: "No expiry" },
 ];
-
-/** A date as a person reads it, the same on the server and in the browser. */
-const dateOf = (at: number) =>
-  new Intl.DateTimeFormat("en-GB", {
-    day: "numeric",
-    month: "short",
-    ...(new Date(at).getUTCFullYear() !== new Date().getUTCFullYear() && { year: "numeric" }),
-    timeZone: "UTC",
-  }).format(at);
 
 /** A session row's details on two lines: what it is (its kind, host and projects), then when (since,
  *  last used, expiry). */
