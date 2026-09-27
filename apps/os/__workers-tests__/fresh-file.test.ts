@@ -29,6 +29,13 @@ test("a file finds nothing an earlier one stored: an evicted context, a loaded o
 
   await emptyRuntime();
 
+  expect(await env.DB.prepare("SELECT name FROM sqlite_master").all()).toMatchObject({
+    results: [],
+  });
+  expect(await env.ITX_KV.get("left-by")).toBeNull();
+  expect(await cache.match("https://left-by.test/")).toBeUndefined();
+  // a context's birth reads the catalog: migrated, as the next file's setup does
+  await applyD1Migrations(env.DB, env.TEST_MIGRATIONS);
   expect(await leftIn("prj_fresh_evicted")).toBeUndefined();
   expect(await leftIn("prj_fresh_loaded")).toBeUndefined();
   expect(
@@ -36,11 +43,6 @@ test("a file finds nothing an earlier one stored: an evicted context, a loaded o
       state.storage.getAlarm(),
     ),
   ).toBeNull();
-  expect(await env.DB.prepare("SELECT name FROM sqlite_master").all()).toMatchObject({
-    results: [],
-  });
-  expect(await env.ITX_KV.get("left-by")).toBeNull();
-  expect(await cache.match("https://left-by.test/")).toBeUndefined();
 });
 
 // THE GAP THE POOL'S DELETE FILLS (empty-runtime.ts step 3): workerd's `deleteAllDurableObjects`, what
@@ -58,6 +60,7 @@ createFailing(test, /an object evicted before reset\(\) should be empty after it
     );
     await evictDurableObject(stub("prj_reset_evicted"));
     await reset();
+    await applyD1Migrations(env.DB, env.TEST_MIGRATIONS);
     const left = await leftIn("prj_reset_evicted");
     await emptyRuntime();
     expect(left, "an object evicted before reset() should be empty after it").toBeUndefined();
