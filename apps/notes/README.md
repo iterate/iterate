@@ -41,6 +41,23 @@ Local dev: `pnpm dev` (Vite, with the Cloudflare plugin's local workerd). It tal
 `https://os.iterate.com` by default; to use a local OS (`pnpm --dir ../os dev -- --port 8788`)
 put `APP_CONFIG_URLS__OS=http://localhost:8788` in a gitignored `.dev.vars` here.
 
+Dev server behind a tunnel, hot module reloading included: under paths ingress (a preview) a
+tunnel's URL is `<platform>/projects/<project>/<name>/`, so the dev server starts under that base
+path, then the tunnel lends it to the project
+([packages/cli](../../packages/cli/README.md#tunnel)):
+
+```sh
+pnpm dev --port 5173 --base /projects/my-project/notes-dev/
+iterate tunnel 5173 --project my-project --name notes-dev
+```
+
+Vite puts its module URLs and its HMR socket under the base path, and Notes swaps the page's base
+path in for the build's ([src/base-path.ts](src/base-path.ts)). The page runs on the platform's
+sign-in, as the proxied Notes does. Under subdomains the tunnel's host is an origin of its own, and
+plain `pnpm dev` serves it. The local OS's `pnpm dev` does not forward the HMR socket: its
+Cloudflare Vite plugin drops every `vite-*` WebSocket it does not serve itself. A deployed or built
+OS does.
+
 Deploy: `pnpm --dir apps/notes run deploy --env prd` — after the platform it talks to
 (`os.iterate.com`, which follows `main`) carries `itx.repos` and
 `itx.workspaces`. Deployment configuration lives in `notesEnvs` in the root `envs.ts`; the

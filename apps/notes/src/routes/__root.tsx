@@ -3,6 +3,7 @@ import { createServerFn } from "@tanstack/react-start";
 import { AppProviders } from "@iterate-com/ui/apps/providers";
 import { EnvironmentHeadContent } from "@iterate-com/ui/components/environment-head-content";
 import { startAppConfigOf } from "@iterate-com/shared/start-app-config";
+import { underBasePath } from "../base-path.ts";
 import css from "../styles.css?url";
 /** The worker's PostHog project key (`APP_CONFIG posthogProjectKey`: envs.ts, prd only). */
 const posthogProjectKey = createServerFn().handler(async () => {
@@ -20,7 +21,7 @@ export const Route = createRootRouteWithContext<{ basePath: string }>()({
       { name: "viewport", content: "width=device-width, initial-scale=1" },
       { title: "Notes" },
     ],
-    links: [{ rel: "stylesheet", href: `${match.context.basePath}${css}` }],
+    links: [{ rel: "stylesheet", href: underBasePath(match.context.basePath, css) }],
   }),
   component: Root,
 });

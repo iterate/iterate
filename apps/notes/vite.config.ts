@@ -13,7 +13,15 @@ export default defineConfig({
       config: startAppWorkerConfig(notes, process.env.CLOUDFLARE_ENV),
     }),
     tanstackStart({
-      router: { addExtensions: true, semicolons: true, quoteStyle: "double" },
+      router: {
+        // The router's paths never carry Vite's `base`: Notes routes under the page's base path
+        // itself (src/base-path.ts), and a dev server's `--base` (README) moves only its module
+        // URLs and its HMR socket.
+        basepath: "",
+        addExtensions: true,
+        semicolons: true,
+        quoteStyle: "double",
+      },
       importProtection: { behavior: "error" },
     }),
     viteReact(),
