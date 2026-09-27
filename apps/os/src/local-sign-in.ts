@@ -27,7 +27,10 @@ export async function localSignInResponse(request: Request, env: Env): Promise<R
   if (url.pathname !== "/.auth/local-sign-in" || request.method !== "GET") return null;
   const { login } = appConfigOf(env);
   const { platformOrigin } = platformAddressesOf(env, request);
-  if (!login.testEmailDomain || !isLocalOrigin(platformOrigin)) return null;
+  // The request's own origin too, not only worker.ts's 421 before this route: moved above that
+  // check, the route would still answer on a loopback origin alone.
+  if (!login.testEmailDomain || !isLocalOrigin(platformOrigin) || !isLocalOrigin(url.origin))
+    return null;
   const site = request.headers.get("sec-fetch-site");
   if (site && site !== "none")
     return plainRefusal("Open this link yourself: a web page cannot sign you in here.");
@@ -46,8 +49,11 @@ export async function localSignInResponse(request: Request, env: Env): Promise<R
     return new Response(null, { status: 303, headers });
   }
   const asked = url.searchParams.get("next") || "/login";
-  const next = URL.canParse(asked, platformOrigin) && new URL(asked, platformOrigin).href;
-  headers.set("location", next && isLocalOrigin(next) ? next : `${platformOrigin}/login`);
+  const next = URL.canParse(asked, platformOrigin) ? new URL(asked, platformOrigin) : null;
+  headers.set(
+    "location",
+    next && isLocalOrigin(next.origin) ? next.href : `${platformOrigin}/login`,
+  );
   headers.set("set-cookie", session.setCookie);
   return new Response(null, { status: 302, headers });
 }
