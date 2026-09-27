@@ -1,10 +1,12 @@
-// scripts/monitors/e2e.ts — THE E2E CHECKS of the hourly health job (./health.ts): main's e2e run and
-// the suites that run beside it, each red or green, paged on a change of state.
+// scripts/monitors/e2e.ts — THE E2E CHECKS: main's e2e run and the suites that run beside it, each red
+// or green, paged on a change of state. Main OS e2e's own page job pages its two suites as soon as its
+// run has settled (./health.ts `mainE2e`); the hourly health job pages real-model e2e (./health.ts
+// `run`).
 //
-//   main e2e        each settled push run of Main OS e2e (.depot/workflows/main-os-e2e.yml): red
-//                   when a job failed or timed out (Depot cancels a timed-out job), green when Deploy
-//                   preview, E2E tests and Browser specs all passed. Its page names the failed jobs
-//                   and the failing rows.
+//   main e2e        each push run of Main OS e2e (.depot/workflows/main-os-e2e.yml): red when a job
+//                   failed or timed out (Depot cancels a timed-out job), green when Deploy preview,
+//                   E2E tests and Browser specs all passed. Its page names the failed jobs and the
+//                   failing rows.
 //   slow e2e rows   the rows tagged `slow` in that run's E2E tests job, which most PRs skip
 //                   (docs/testing.md#slow-rows): a suite of their own, so a slow row that breaks while
 //                   main is already red still pages.
@@ -16,8 +18,8 @@
 // the rows from what the jobs kept, the suite summary beside the e2e jobs' flake records
 // (`flake-records-<suite>-attempt-<id>`) and the real-model job's telemetry
 // (`os-real-model-telemetry`). A suite whose run proves nothing (no results, a runner that did not
-// finish, one of its rows not run) is a BROKEN PROBE: it pages nothing and fails the health run. A
-// run a person cancelled, or a push a newer one replaced in the queue, is left out.
+// finish, one of its rows not run) is a BROKEN PROBE: it pages nothing and fails the job that judged
+// it. A run a person cancelled, or a push a newer one replaced in the queue, is left out.
 import { z } from "zod";
 import { FlakeSuiteSummary } from "@iterate-com/shared/test-support/flake-suite-summary";
 import {
@@ -30,12 +32,15 @@ import {
 import { testTelemetryFailed } from "../ci/test-telemetry-completeness.ts";
 import { commitText, type Page } from "./page.ts";
 
-export const SUITES = ["main e2e", "slow e2e rows", "real-model e2e"] as const;
+/** Main OS e2e's suites, which its own page job pages; the health job pages real-model e2e. Both
+ *  tuples are `as const` so that z.enum and the pages' `suite` take their names as literals. */
+export const MAIN_SUITES = ["main e2e", "slow e2e rows"] as const;
+const SUITES = [...MAIN_SUITES, "real-model e2e"] as const;
 const Verdict = z.enum(["green", "red"]);
 type Verdict = z.infer<typeof Verdict>;
 
-/** What the checks remember between runs, in the health job's state: each suite's last verdict,
- *  and the newest run of each workflow judged. */
+/** What the checks remember between runs, in the state of the job that pages them (./health.ts):
+ *  each suite's last verdict, and the newest run of each workflow judged. */
 export const E2eMemory = z.object({
   suites: z.partialRecord(z.enum(SUITES), Verdict),
   judgedAt: z.partialRecord(z.enum(["Main OS e2e", "OS real model"]), z.iso.datetime()),
@@ -225,11 +230,13 @@ export const mainE2eRecords = {
   file: "suite-summary.json",
 } as const;
 
-/** Judge the settled runs of `workflow` oldest first, each against the suites' verdicts the one
- *  before it left, so a page names the run where its suite changed state: every run since the
- *  newest `memory` judged, or, on a first run (nothing judged yet) and a test run, only the newest. */
+/** Judge the settled runs of `workflow` oldest first, then `current`, the run whose jobs have just
+ *  ended, each against the suites' verdicts the one before it left, so a page names the run where
+ *  its suite changed state: every run since the newest `memory` judged, or, on a first run (nothing
+ *  judged yet) and a test run, only the newest. A `current` that is not newer than the newest judged
+ *  (a re-run keeps its creation time) is not judged again. */
 async function judgeEachRun(
-  input: { depot: DepotApi; memory: E2eMemory; testRun: boolean },
+  input: { depot: DepotApi; memory: E2eMemory; testRun: boolean; current?: SettledWorkflow },
   workflow: { name: keyof E2eMemory["judgedAt"]; triggers: string[] },
   judge: (
     run: SettledWorkflow,
@@ -237,11 +244,16 @@ async function judgeEachRun(
   ) => Promise<{ pages: Page[]; suites: E2eMemory["suites"]; failures: string[] }>,
 ) {
   const after = input.testRun ? undefined : input.memory.judgedAt[workflow.name];
+  const { current } = input;
   const settled = await settledWorkflows(input.depot, { ...workflow, after });
+  const runs = [
+    ...settled.filter((run) => run.workflowId !== current?.workflowId),
+    ...(current && (!after || current.createdAt > after) ? [current] : []),
+  ].toSorted((a, b) => a.createdAt.localeCompare(b.createdAt));
   let memory = input.memory;
   const pages: Page[] = [];
   const failures: string[] = [];
-  for (const run of after ? settled : settled.slice(-1)) {
+  for (const run of after ? runs : runs.slice(-1)) {
     const judged = await judge(run, memory.suites);
     memory = {
       suites: judged.suites,
@@ -253,14 +265,20 @@ async function judgeEachRun(
   return { pages, memory, failures };
 }
 
-/** Judge each settled push run of Main OS e2e that `memory` has not (`judgeEachRun`): main e2e from
- *  its jobs, and its slow rows from its E2E tests job's suite summary, which a job its deploy's
- *  failure skipped never wrote. */
+/** Judge each push run of Main OS e2e that `memory` has not, the settled ones and then `current`
+ *  (`judgeEachRun`): main e2e from its jobs, and its slow rows from its E2E tests job's suite
+ *  summary, which a job its deploy's failure skipped never wrote. When Depot still lists a deploy or
+ *  suite job of `current` as queued or running, that run has not settled, and judging it throws. An
+ *  older run Depot lists as finished or failed with such a job (one Depot failed before its jobs
+ *  started) has no verdict, and the state moves past it. */
 export async function checkMainE2e(input: {
   depot: DepotApi;
   memory: E2eMemory;
   testRun: boolean;
   subject: (sha: string) => Promise<string>;
+  /** The run whose page job this is (main-os-e2e.yml `alert`): its deploy and suite jobs have ended,
+   *  but Depot lists it as running until the page job ends. */
+  current?: SettledWorkflow;
 }) {
   return judgeEachRun(
     input,
@@ -270,6 +288,11 @@ export async function checkMainE2e(input: {
         await input.depot("GetWorkflow", { workflowId: run.workflowId }),
       );
       const mainJobs = jobs.filter((job) => MAIN_JOBS.includes(job.jobKey));
+      const unsettled = mainJobs.find((job) => ["queued", "running"].includes(job.status));
+      if (unsettled && run.workflowId === input.current?.workflowId)
+        throw new Error(
+          `${run.workflowId} has not settled: Depot lists ${unsettled.jobKey} as ${unsettled.status}`,
+        );
       const results = Object.fromEntries(
         mainJobs.map((job) => [job.jobDisplayName || job.jobKey, job.status]),
       );

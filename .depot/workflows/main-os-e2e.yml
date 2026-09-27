@@ -14,11 +14,11 @@
 # Runs never cancel each other: one at a time, since each redeploys the preview the run before it
 # tests, and a push that lands meanwhile queues, where Depot keeps only the newest (a burst of merges
 # tests its last commit). So every started run that is not cancelled by hand reaches a verdict, a
-# job that hits its timeout counting as red. The health job pages its changes of state from the
-# jobs' results and the suite summaries they upload with their flake records
-# (docs/depot-ci.md#health). Nothing is written to any PR. The `trace` job
-# posts the "CI trace" and "Playwright report" statuses on the pushed commit, as a PR preview's does
-# (docs/ci-traces.md).
+# job that hits its timeout counting as red. The `alert` job pages its changes of state to
+# #error-pulse as soon as the suites have ended, from the jobs' results and the suite summaries they
+# upload with their flake records (docs/depot-ci.md#health). Nothing is written to any PR. The
+# `trace` job posts the "CI trace" and "Playwright report" statuses on the pushed commit, as a PR
+# preview's does (docs/ci-traces.md).
 #
 # The script is apps/os/scripts/preview.ts (the same commands as a PR's preview, keyed by name).
 # The only Depot secret is DOPPLER_TOKEN; Doppler os/preview supplies the Cloudflare credentials.
@@ -137,7 +137,7 @@ jobs:
       FLAKE_SUITE: preview-e2e
       TEST_TELEMETRY_EXPECTED_WORKSPACES: os
       # every row, the ones tagged `slow` too: most PRs skip them (docs/testing.md#slow-rows). The
-      # health job pages them under their own name.
+      # `alert` job pages them under their own name.
       E2E_SLOW_ROWS: run
       # TEST TELEMETRY, as a PR preview's test jobs write it; main's flake records and suite
       # summaries feed the flake dashboard through the test evidence in R2.
@@ -249,6 +249,54 @@ jobs:
       TEST_TELEMETRY_BRANCH: main
       TEST_TELEMETRY_HEAD_SHA: ${{ github.sha }}
     steps: *suite-steps
+
+  # THE PAGE (scripts/monitors/health.ts `main-e2e`), once the deploy and both suites have ended:
+  # main e2e and slow e2e rows, each on its own change of state, in the health job's message
+  # (docs/depot-ci.md#health). Its memory is its own `main-e2e-state` artifact, which the next run
+  # reads back and the health job reads for its message's last line, with the Depot organization
+  # token (Doppler _shared/preview); runs never overlap, so the next run reads this one's. A push
+  # run only: a dispatch pages nothing and keeps nothing, and a run cancelled by hand is left out.
+  alert:
+    name: Page a change of state
+    needs: [deploy, e2e, specs]
+    if: ${{ !cancelled() && github.event_name == 'push' }}
+    runs-on:
+      size: 2x8
+      image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
+    timeout-minutes: 10
+    env:
+      DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+      # the subjects of the commits the pages name
+      GITHUB_TOKEN: ${{ github.token }}
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          clean: false
+          ref: ${{ github.sha }}
+      - name: Reconcile dependencies (baked)
+        run: node scripts/depot-ci/dependencies.mjs install
+      # The Depot token reads the runs and artifacts through the API and the previous state through
+      # the Depot CLI; the Slack bot token comes from Doppler _shared/prd (scripts/ci/slack.ts).
+      - name: Judge, page #error-pulse on a change of state
+        run: |-
+          set -euo pipefail
+          export DEPOT_TOKEN
+          DEPOT_TOKEN="$(doppler secrets get DEPOT_CI_TELEMETRY_TOKEN --plain --project _shared --config preview)"
+          pnpm tsx scripts/monitors/health.ts previous-state --of main-e2e --out test-results/main-e2e/previous.json
+          pnpm tsx scripts/monitors/health.ts main-e2e \
+            --ref "${{ github.ref }}" \
+            --state test-results/main-e2e/previous.json \
+            --state-out test-results/main-e2e/state.json
+      # The job writes the state only on a run on main, after its page.
+      - name: Keep the state for the next run
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: main-e2e-state
+          path: test-results/main-e2e/state.json
+          if-no-files-found: ignore
+          overwrite: true
 
   # THE CI TRACE, as a PR preview's trace job makes it (preview-os.yml): the deploy and two
   # test jobs' timings and markers, uploaded, then the "CI trace" and "Playwright report" statuses on

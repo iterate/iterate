@@ -7,7 +7,7 @@ import { temporaryDirectory } from "@iterate-com/shared/test-support/temporary-d
 import { testEvidencePaths } from "@iterate-com/shared/test-support/test-evidence";
 import { CI_WORKFLOW_PREVIEWS } from "../../apps/os/scripts/preview-sweep.ts";
 import { mainE2eRecords, realModelTelemetry } from "../monitors/e2e.ts";
-import { stateArtifact as healthState } from "../monitors/health.ts";
+import { stateArtifacts as healthStates } from "../monitors/health.ts";
 import { latencyReport } from "../monitors/latency.ts";
 import { CHECKS } from "../monitors/ttg.ts";
 import { stepFailureTitles, testEvidenceJobs } from "./test-evidence.ts";
@@ -38,6 +38,7 @@ type WorkflowStep = {
 
 type WorkflowJob = {
   env?: Record<string, string>;
+  if?: string;
   outputs?: Record<string, string>;
   name?: string;
   needs?: string | string[];
@@ -438,16 +439,17 @@ test("the iterate GitHub App's key is read only by the flake dashboard, which ne
   );
 });
 
-// Each scheduled job that pages on a change of state hands its state to its next run as an
-// artifact of its own workflow (scripts/ci/depot.ts newestArtifactFile): the workflow the script
-// names uploads the file it wrote, whatever the run's outcome, and the script reads back what its
-// previous-state step saved. The scripts decide which runs write one: only a real run on main
-// (their `--ref`).
+// Each job that pages on a change of state hands its state to its next run as an artifact of its
+// own workflow (scripts/ci/depot.ts newestArtifactFile): the workflow the script names uploads the
+// file it wrote, whatever the run's outcome, and the script reads back what its previous-state step
+// saved: its own state as --state, another job's (`--of <job>`) as --<job>-state. The scripts decide
+// which runs write one: only a real run on main (their `--ref`).
 const guards = [
-  { script: "scripts/monitors/health.ts", state: healthState },
-  { script: "scripts/ci/prd-fault-alarm.ts", state: prdFaultAlarmState },
+  { script: "scripts/monitors/health.ts", state: healthStates.health, of: undefined },
+  { script: "scripts/monitors/health.ts", state: healthStates["main-e2e"], of: "main-e2e" },
+  { script: "scripts/ci/prd-fault-alarm.ts", state: prdFaultAlarmState, of: undefined },
 ];
-test.each(guards)("$script keeps its state for its next run", ({ script, state }) => {
+test.each(guards)("$script keeps $state.artifact for its next run", ({ script, state, of }) => {
   const workflows = depotWorkflowFiles
     .map((file) => loadWorkflow(file))
     .filter((workflow) => workflow.name === state.workflow);
@@ -458,7 +460,9 @@ test.each(guards)("$script keeps its state for its next run", ({ script, state }
   const writer = steps.find(
     (step) => step.run?.includes(script) && step.run.includes(`--state-out ${path}`),
   );
-  const saved = steps.map((step) => /previous-state --out (\S+)/u.exec(step.run || "")?.[1]);
+  const saved = steps.flatMap((step) => [
+    ...(step.run || "").matchAll(/previous-state (?:--of (\S+) )?--out (\S+)/gu),
+  ]);
 
   expect(keep).toMatchObject({
     if: expect.stringMatching(/^always\(\)/u),
@@ -467,7 +471,9 @@ test.each(guards)("$script keeps its state for its next run", ({ script, state }
   expect(path.endsWith(`/${state.file}`), path).toBe(true);
   expect(writer, `${script} writes --state-out ${path}`).toBeDefined();
   expect(steps.indexOf(writer!)).toBeLessThan(steps.indexOf(keep!));
-  for (const out of saved.filter(Boolean)) expect(writer?.run).toContain(`--state ${out}`);
+  expect(saved.length).toBeGreaterThan(0);
+  for (const [, savedOf, out] of saved)
+    expect(writer?.run).toContain(`${savedOf === of ? "--state" : `--${savedOf}-state`} ${out}`);
 });
 
 test("every artifact kept as a run's state is a guard's", () => {
@@ -507,7 +513,7 @@ test.for([
 // The main e2e checks read the suite summary each Main OS e2e suite job's newest attempt keeps with
 // its flake records, by the job's key and its attempt's id.
 test.for(mainE2eRecords.jobs)(
-  "the health job reads $jobKey's $suite suite summary",
+  "the alert job reads $jobKey's $suite suite summary",
   ({ jobKey, suite }) => {
     const [file, jobId = ""] = jobKey.split(":");
     const path = `.depot/workflows/${file}`;
@@ -751,6 +757,21 @@ test("Main OS e2e names its checks as Preview OS does and traces them the same w
   );
 });
 
+// Why the page is a job of the run it judges: .depot/workflows/main-os-e2e.yml (THE PAGE).
+test("Main OS e2e pages from its own alert job once its deploy and both suites have ended, on a push only", () => {
+  const main = loadWorkflow(".depot/workflows/main-os-e2e.yml");
+  const alert = main.jobs.alert!;
+  expect(alert).toMatchObject({
+    needs: ["deploy", "e2e", "specs"],
+    // a run cancelled by hand is left out, a timed-out job is red, and a dispatch pages nothing
+    if: "${{ !cancelled() && github.event_name == 'push' }}",
+  });
+  const judge = alert.steps?.find((step) => step.run?.includes("health.ts main-e2e"));
+  expect(judge?.run).toContain('--ref "${{ github.ref }}"');
+  // the trace covers what it waits for, so it neither waits for the page nor times it
+  expect(main.jobs.trace?.needs).not.toContain("alert");
+});
+
 // Why the two suite jobs share one definition: .depot/workflows/main-os-e2e.yml.
 test("Main OS e2e's two suite jobs are one definition, a PR preview's suite steps on its runners", () => {
   const source = readFileSync(resolve(repoRoot, ".depot/workflows/main-os-e2e.yml"), "utf8");
@@ -769,7 +790,7 @@ test("Main OS e2e's two suite jobs are one definition, a PR preview's suite step
       "timeout-minutes": preview.jobs[job]?.["timeout-minutes"],
     });
   // each suite as a PR preview names it; E2E tests runs every row, the slow ones too, which the
-  // health job pages under their own name
+  // alert job pages under their own name
   for (const job of ["e2e", "specs"])
     for (const name of ["SUITE", "FLAKE_SUITE", "TEST_TELEMETRY_EXPECTED_WORKSPACES"])
       expect(main.jobs[job]?.env?.[name], `${job} ${name}`).toBe(preview.jobs[job]?.env?.[name]);

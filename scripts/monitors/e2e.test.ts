@@ -10,7 +10,7 @@ import {
   telemetryRows,
   type E2eMemory,
 } from "./e2e.ts";
-import { fakeDepot } from "./fake-depot.ts";
+import { fakeDepot, mainRun, summary, type SummaryTest } from "./fake-depot.ts";
 
 // Depot's job statuses: a job that hit its timeout is `cancelled` (a run cancelled by hand is left
 // out before this), a job its deploy's failure skipped is `skipped`.
@@ -312,6 +312,149 @@ test("each run since the last judged pages where its suite changed state: green,
   expect(judged.pages).toHaveLength(2);
 });
 
+test("the run whose page job this is is judged last, after each settled run the state has not: a run whose page was lost still pages where it turned", async () => {
+  const current = mainRun("current", "2026-09-26T20:00:00Z", { running: true });
+  const depot = fakeDepot({
+    "Main OS e2e": [
+      mainRun("judged", "2026-09-26T19:00:00Z", {}),
+      // its page job could not post, so it kept no state
+      mainRun("lost", "2026-09-26T19:30:00Z", {
+        e2e: "failed",
+        e2eTests: [
+          { name: "a slow row", tags: ["slow"] },
+          { name: "a plain row", failed: true },
+        ],
+      }),
+      current,
+    ],
+  });
+
+  const judged = await checkMainE2e({
+    depot,
+    memory: {
+      suites: { "main e2e": "green", "slow e2e rows": "green" },
+      judgedAt: { "Main OS e2e": "2026-09-26T19:00:00Z" },
+    },
+    testRun: false,
+    subject,
+    current: settled(current),
+  });
+
+  expect(judged).toEqual({
+    pages: [
+      {
+        tone: "red",
+        headline: "main e2e red at `lostaaaaa` (the subject of los)",
+        details: ["failed: E2E tests", "failing rows: a plain row"],
+        link: "https://depot.dev/orgs/0p91s0lz49/workflows/wf-lost",
+      },
+      {
+        tone: "green",
+        headline: "main e2e green again at `currentaa` (the subject of cur)",
+        details: [],
+        link: "https://depot.dev/orgs/0p91s0lz49/workflows/wf-current",
+      },
+    ],
+    memory: {
+      suites: { "main e2e": "green", "slow e2e rows": "green" },
+      judgedAt: { "Main OS e2e": "2026-09-26T20:00:00Z" },
+    },
+    failures: [],
+  });
+});
+
+test("a first run judges only the run whose page job this is", async () => {
+  const current = mainRun("current", "2026-09-26T20:00:00Z", {
+    specs: "failed",
+    specsTests: [{ name: "sends a message", failed: true }],
+    running: true,
+  });
+  const depot = fakeDepot({
+    "Main OS e2e": [mainRun("older", "2026-09-26T19:00:00Z", { e2e: "failed" }), current],
+  });
+  const judged = await checkMainE2e({
+    depot,
+    memory: empty,
+    testRun: false,
+    subject,
+    current: settled(current),
+  });
+  expect(judged).toMatchObject({
+    pages: [{ tone: "red", headline: "main e2e red at `currentaa` (the subject of cur)" }],
+    memory: {
+      suites: { "main e2e": "red", "slow e2e rows": "green" },
+      judgedAt: { "Main OS e2e": "2026-09-26T20:00:00Z" },
+    },
+  });
+  expect(judged.pages).toHaveLength(1);
+});
+
+test("a re-run, which keeps its creation time, is not judged again", async () => {
+  const rerun = mainRun("rerun", "2026-09-26T19:00:00Z", { running: true });
+  const depot = fakeDepot({
+    "Main OS e2e": [rerun, mainRun("newer", "2026-09-26T19:30:00Z", {})],
+  });
+  const memory: E2eMemory = {
+    suites: { "main e2e": "red", "slow e2e rows": "green" },
+    judgedAt: { "Main OS e2e": "2026-09-26T19:30:00Z" },
+  };
+  const judged = await checkMainE2e({
+    depot,
+    memory,
+    testRun: false,
+    subject,
+    current: settled(rerun),
+  });
+  expect(judged).toEqual({ pages: [], memory, failures: [] });
+});
+
+test("the run whose page job this is has not settled while Depot lists its suite as running: judging it throws", async () => {
+  const current = mainRun("current", "2026-09-26T20:00:00Z", { specs: "running", running: true });
+  const depot = fakeDepot({ "Main OS e2e": [current] });
+  await expect(
+    checkMainE2e({ depot, memory: empty, testRun: false, subject, current: settled(current) }),
+  ).rejects.toThrow("wf-current has not settled: Depot lists main-os-e2e.yml:specs as running");
+});
+
+test("an older run Depot failed before its jobs started has no verdict: the state moves past it, and the next page job judges its own run", async () => {
+  const stuck = {
+    ...mainRun("stuck", "2026-09-26T19:30:00Z", {
+      deploy: "queued",
+      e2e: "queued",
+      specs: "queued",
+    }),
+    status: "failed",
+    artifacts: {},
+  };
+  const current = mainRun("current", "2026-09-26T20:00:00Z", { running: true });
+  const depot = fakeDepot({ "Main OS e2e": [stuck, current] });
+  const judged = await checkMainE2e({
+    depot,
+    memory: {
+      suites: { "main e2e": "red", "slow e2e rows": "green" },
+      judgedAt: { "Main OS e2e": "2026-09-26T19:00:00Z" },
+    },
+    testRun: false,
+    subject,
+    current: settled(current),
+  });
+  expect(judged).toEqual({
+    pages: [
+      {
+        tone: "green",
+        headline: "main e2e green again at `currentaa` (the subject of cur)",
+        details: [],
+        link: "https://depot.dev/orgs/0p91s0lz49/workflows/wf-current",
+      },
+    ],
+    memory: {
+      suites: { "main e2e": "green", "slow e2e rows": "green" },
+      judgedAt: { "Main OS e2e": "2026-09-26T20:00:00Z" },
+    },
+    failures: [],
+  });
+});
+
 test("a main run whose deploy failed is red, and its skipped suites judge no slow rows", async () => {
   const depot = fakeDepot({
     "Main OS e2e": [
@@ -440,6 +583,11 @@ test("a first run judges only the newest real-model run", async () => {
 
 const empty: E2eMemory = { suites: {}, judgedAt: {} };
 
+/** A run as ListWorkflows lists it: what the page job passes as its own run. */
+function settled({ jobs: _jobs, artifacts: _artifacts, ...run }: ReturnType<typeof mainRun>) {
+  return run;
+}
+
 /** A settled run of OS real model: the raw telemetry of its `rows` in the artifact it keeps. */
 function realModelRun(id: string, createdAt: string, rows: TelemetryTest[], trigger = "schedule") {
   return {
@@ -462,38 +610,6 @@ async function subject(sha: string) {
   return `the subject of ${sha.slice(0, 3)}`;
 }
 
-type SummaryTest = {
-  name: string;
-  tags?: string[];
-  outcome?: "pass" | "fail" | "skip";
-  failed?: boolean;
-  error?: string;
-};
-
-/** A suite summary as the finalizer writes it (packages/shared/src/test-support/flake-suite-summary.ts). */
-function summary(tests: SummaryTest[], status: "complete" | "incomplete" = "complete") {
-  return {
-    headSha: "abc",
-    branch: "main",
-    status,
-    startedAt: "2026-09-26T20:00:00.000Z",
-    finishedAt: "2026-09-26T20:05:00.000Z",
-    testCount: tests.length,
-    tests: tests.map(({ name, tags, outcome, failed = false, error }) => ({
-      name,
-      outcome: outcome || (failed ? "fail" : "pass"),
-      durationMs: 1000,
-      tags,
-      failed,
-      error,
-    })),
-    unknownFlakeCount: 0,
-    failedCount: tests.filter((test) => test.failed).length,
-    diagnostics: status === "incomplete" ? ["CI run cancelled"] : [],
-    runUrl: "https://depot.dev/run",
-  };
-}
-
 type TelemetryTest = { name: string; state: string; tags?: string[]; firstFailure?: string };
 
 /** The parts of a runner's raw telemetry the real-model verdict reads. */
@@ -510,66 +626,5 @@ function telemetry(
       tags: row.tags || [],
       firstFailure: row.firstFailure,
     })),
-  };
-}
-
-/** A settled push run of Main OS e2e: its jobs' statuses (finished unless named) and the suite
- *  summary each suite job's newest attempt uploaded with its flake records. */
-function mainRun(
-  id: string,
-  createdAt: string,
-  input: {
-    deploy?: string;
-    e2e?: string;
-    specs?: string;
-    e2eTests?: SummaryTest[];
-    specsTests?: SummaryTest[];
-  },
-) {
-  const job = (key: string, displayName: string, status = "finished") => ({
-    jobKey: `main-os-e2e.yml:${key}`,
-    jobDisplayName: displayName,
-    status,
-    attempts:
-      status === "skipped"
-        ? []
-        : [
-            { attemptId: `${id}-${key}-1`, attempt: 1 },
-            { attemptId: `${id}-${key}-2`, attempt: 2 },
-          ],
-  });
-  const records = (suite: string, key: string, tests: SummaryTest[]) => ({
-    // the older attempt's records, which a retried job keeps beside the newest's
-    [`flake-records-${suite}-attempt-${id}-${key}-1`]: {
-      "suite-summary.json": JSON.stringify(summary([{ name: "an older attempt", failed: true }])),
-    },
-    [`flake-records-${suite}-attempt-${id}-${key}-2`]: {
-      "suite-summary.json": JSON.stringify(summary(tests)),
-    },
-  });
-  return {
-    workflowId: `wf-${id}`,
-    runId: `run-${id}`,
-    status: "finished",
-    trigger: "push",
-    sha: id.padEnd(40, "a"),
-    createdAt,
-    jobs: [
-      job("deploy", "Deploy preview", input.deploy),
-      job("e2e", "E2E tests", input.e2e),
-      job("specs", "Browser specs", input.specs),
-      job("trace", "CI trace"),
-    ],
-    artifacts:
-      input.deploy === "failed"
-        ? {}
-        : {
-            ...records(
-              "preview-e2e",
-              "e2e",
-              input.e2eTests || [{ name: "a slow row", tags: ["slow"] }],
-            ),
-            ...records("specs", "specs", input.specsTests || [{ name: "sends a message" }]),
-          },
   };
 }
