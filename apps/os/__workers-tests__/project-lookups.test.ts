@@ -5,6 +5,7 @@
 // its storage (src/iterate-context-durable-object.ts `#projectSlug`).
 import { runInDurableObject } from "cloudflare:test";
 import { exports } from "cloudflare:workers";
+import { createFailing } from "@iterate-com/shared/test-support/failing-test";
 import { expect, onTestFinished, test, vi } from "vitest";
 import { adminSession, catalog, interceptCatalogReads, stub, until } from "./support.ts";
 
@@ -85,6 +86,33 @@ test("a project created elsewhere right after its label was missed is served her
   expect(served, await served.clone().text()).toMatchObject({ status: 404 });
   expect(await served.text()).toMatch(/has no site yet/);
 });
+
+createFailing(
+  test,
+  /a project deleted on another isolate should be refused here once five seconds have passed/,
+)(
+  "a project deleted on another isolate is refused here once five seconds have passed",
+  async () => {
+    const label = freshLabel("deleted-elsewhere");
+    await catalog().createProject(
+      { principal: { actor: "admin" } },
+      { project: label },
+      Date.now(),
+    );
+    // served, so this isolate has read the row: its context answers (it has no site yet)
+    expect(await call(`https://${label}.projects.test/`)).toMatchObject({ status: 404 });
+
+    // straight on the catalog, as another isolate's edge would: this isolate still has the row
+    await catalog().deleteProject({ principal: { actor: "admin" } }, label);
+    vi.useFakeTimers({ toFake: ["Date"] });
+    onTestFinished(() => void vi.useRealTimers());
+    vi.setSystemTime(Date.now() + 6_000);
+    expect(
+      await call(`https://${label}.projects.test/`),
+      "a project deleted on another isolate should be refused here once five seconds have passed",
+    ).toMatchObject({ status: 421 });
+  },
+);
 
 test("a project's context reads its slug from the control plane once and keeps it: what its storage holds is what it answers", async () => {
   const slug = freshLabel("own-slug");
