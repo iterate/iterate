@@ -35,11 +35,16 @@ class AgentCatalogProcessor extends StreamProcessor<
   ConsumedEvent<typeof AgentCatalogContract>
 > {
   readonly contract = AgentCatalogContract;
+  /** A certificate counts only from the agent it names: each agent writes its own on `/`
+   *  (processor.ts), and the platform stamps where it came from (apps/os caller.ts `stampCaller`),
+   *  so one any other context appends is ignored — anyone may append anywhere, and a forged death
+   *  would refuse the agent's every message for good. One with no origin predates the stamp. */
   reduce({
     state,
     event,
   }: ReduceArgs<AgentCatalogState, ConsumedEvent<typeof AgentCatalogContract>>) {
     const path = event.payload.path;
+    if (event.source?.origin && event.source.origin !== path) return;
     if (event.type === "events.iterate.com/agent/created") {
       if (state.agents[path]) return;
       return { ...state, agents: { ...state.agents, [path]: { createdAt: event.createdAt } } };
@@ -54,27 +59,14 @@ class AgentCatalogProcessor extends StreamProcessor<
   }
 }
 
-const Certificate = z.discriminatedUnion("type", [
-  z.object({
-    type: z.literal("events.iterate.com/agent/created"),
-    payload: z.object({ path: z.string().startsWith("/").min(2) }),
-  }),
-  z.object({
-    type: z.literal("events.iterate.com/agent/deleted"),
-    payload: z.object({ path: z.string().startsWith("/").min(2) }),
-  }),
-]);
-
 /** The agents app's collection facet — what the `itx.agents` rule names (install.ts): the
- *  published `AgentsApi` (api.ts) at the project's root, plus `at(base)` and `announce`, the
- *  app's own plumbing between an agent's context and the root. */
+ *  published `AgentsApi` (api.ts) at the project's root, plus `at(base)`, the collection an agent's
+ *  own `itx.agents` rule reaches. */
 export class AgentCollectionDurableObject
   extends StreamProcessorDurableObject<AgentCatalogState>
   implements AgentsApi
 {
-  /** The processor's reads, and `itx.agents`: the collection's verbs, `at(base)` (the collection an
-   *  agent's own `itx.agents` rule reaches, collection.ts) and `announce` (a certificate from an
-   *  agent context). */
+  /** The processor's reads, and `itx.agents`: the collection's verbs and `at(base)` (collection.ts). */
   static override publicMethods = [
     ...super.publicMethods,
     "list",
@@ -83,7 +75,6 @@ export class AgentCollectionDurableObject
     "delete",
     "upgrade",
     "at",
-    "announce",
   ];
 
   processor = new AgentCatalogProcessor();
@@ -92,7 +83,7 @@ export class AgentCollectionDurableObject
       (call) => this.withItx(call),
       // THROUGH THE LOG'S HEAD, not the last pushed batch (`snapshot()` alone answers from what the
       // delivery loop has pushed so far): a death is on `/` before `delete()` returns — the saga
-      // announces it before its own certificate — so a verb on the dead agent right after must see
+      // posts it here before its own certificate — so a verb on the dead agent right after must see
       // it, or it would host the facet again (collection.ts).
       async () => {
         await this.catchUpFromLog();
@@ -127,11 +118,5 @@ export class AgentCollectionDurableObject
   }
   delete(path: string) {
     return this.#collection.delete(path);
-  }
-  async announce(input: unknown) {
-    const event = Certificate.parse(input);
-    await this.withItx((itx) =>
-      itx.append({ ...event, idempotencyKey: `${event.type}:${event.payload.path}` }),
-    );
   }
 }

@@ -91,41 +91,38 @@ test("a script cannot choose its new agent's parent link: the child links to the
 // PINNED, ONE CAUSE: the agents collection is a userspace facet on `/` that cannot see who called
 // it, and it acts with the root's authority. The root's `itx.agents` row is inherited by every context
 // linked to the root, and an agent's own row reaches the same facet through the public `at(base)`, so
-// a context beneath a mask can have that facet write for it. Closing these needs the platform to
-// hand a facet the caller's originating context (`Caller.path`, which the library already uses for
-// repos and workspaces: apps/os/src/library.ts `createEntity`).
-const linkedToTheRootBeneathAMask = async (name: string) => {
+// an agent any of them creates is linked to the root (or to whatever base it names), never to the
+// context that asked, as repos and workspaces are. Closing these needs the platform to hand a facet
+// the caller's originating context (`Caller.path`, which the library already uses for repos and
+// workspaces: apps/os/src/library.ts `entityRoot`).
+const linkedToTheRoot = async (name: string) => {
   const root = await openAgentItx(freshCtx(name));
-  await root.provide("itx.tool", () => "hello-from-root");
-  await root.workspaces.create("/jail");
-  const jail = root.cd("/jail");
-  await jail.provide("itx.tool", null);
-  return { root, jail };
+  await root.workspaces.create("/child");
+  return { root, child: root.cd("/child") };
 };
 
 createFailing(test, /parent link should be the context that created it/)(
-  "a context linked to the root cannot reach past its own mask through an agent it creates with the root's `itx.agents`",
+  "an agent a context linked to the root creates with the root's `itx.agents` links to that context",
   async () => {
-    const { jail } = await linkedToTheRootBeneathAMask("agent-root-linked");
-    const { links, tool } = (await jail.builtins.run(
-      "async (itx) => { await itx.agents.create('/jail/a'); const links = (await itx.cd('./a').rewriteRules.list()).filter((r) => r.match === 'itx' && r.context === '/jail/a').map((r) => r.target); const tool = await itx.cd('./a').tool().then((v) => v, (e) => String(e.message)); return { links, tool }; }",
-    )) as { links: string[]; tool: string };
+    const { child } = await linkedToTheRoot("agent-root-linked");
+    const links = (await child.builtins.run(
+      "async (itx) => { await itx.agents.create('/child/a'); return (await itx.cd('./a').rewriteRules.list()).filter((r) => r.match === 'itx' && r.context === '/child/a').map((r) => r.target); }",
+    )) as string[];
     expect(links, "the agent's parent link should be the context that created it").toEqual([
-      "itx.cd('/jail')",
+      "itx.cd('/child')",
     ]);
-    expect(tool).toMatch(/is masked/);
   },
 );
 
 createFailing(test, /should land beneath the context that asked/)(
   "a context linked to the root that creates `./a` with the root's `itx.agents` gets its own `./a`",
   async () => {
-    const { jail } = await linkedToTheRootBeneathAMask("agent-root-linked-relative");
-    const { path } = (await jail.builtins.run("async (itx) => itx.agents.create('./a')")) as {
+    const { child } = await linkedToTheRoot("agent-root-linked-relative");
+    const { path } = (await child.builtins.run("async (itx) => itx.agents.create('./a')")) as {
       path: string;
     };
     expect(path, "a relative agent path should land beneath the context that asked").toBe(
-      "/jail/a",
+      "/child/a",
     );
   },
 );
@@ -133,21 +130,20 @@ createFailing(test, /should land beneath the context that asked/)(
 createFailing(test, /voice agent's parent link should be the context that asked/, {
   timeoutMs: 60_000,
 })(
-  "a context linked to the root cannot reach past its own mask through a voice agent it sets up with the root's `itx.voice`",
+  "a voice agent a context linked to the root sets up with the root's `itx.voice` links to that context",
   async () => {
-    const { root, jail } = await linkedToTheRootBeneathAMask("voice-root-linked");
+    const { root, child } = await linkedToTheRoot("voice-root-linked");
     await root.secrets.set("/secrets/openai", "placeholder-openai-key", {
       urls: ["https://api.openai.com"],
     });
     await installVoice(root, await voiceWorkspaceSource());
     // The voice worker is loaded code at `/` whose `env.ITX` is its own, so it creates every agent
     // through the root's `itx.agents`, at whatever absolute `streamPath` the caller names.
-    const { links, tool } = (await jail.builtins.run(
-      "async (itx) => { await itx.voice.setupVoiceAgent({ streamPath: '/jail/v', activation: 'pin' }); const links = (await itx.cd('./v').rewriteRules.list()).filter((r) => r.match === 'itx' && r.context === '/jail/v').map((r) => r.target); const tool = await itx.cd('./v').tool().then((v) => v, (e) => String(e.message)); return { links, tool }; }",
-    )) as { links: string[]; tool: string };
+    const links = (await child.builtins.run(
+      "async (itx) => { await itx.voice.setupVoiceAgent({ streamPath: '/child/v', activation: 'pin' }); return (await itx.cd('./v').rewriteRules.list()).filter((r) => r.match === 'itx' && r.context === '/child/v').map((r) => r.target); }",
+    )) as string[];
     expect(links, "the voice agent's parent link should be the context that asked").toEqual([
-      "itx.cd('/jail')",
+      "itx.cd('/child')",
     ]);
-    expect(tool).toMatch(/is masked/);
   },
 );

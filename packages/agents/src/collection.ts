@@ -42,12 +42,6 @@ export class AgentCollectionRpcTarget extends RpcTarget implements AgentsApi {
     this.base = base;
   }
 
-  announce(input: unknown) {
-    return this.withItx((itx) =>
-      itx.invoke(["itx", "facets", ["get", "agents"], ["announce", input]]),
-    );
-  }
-
   /** Rebind existing normal agents when this app is installed or updated. Voice processors
    * keep their own code; grants, sandbox rules and conversation history are untouched. */
   async upgrade() {
@@ -264,12 +258,12 @@ class AgentReference extends RpcTarget implements AgentHandleApi {
    *  again); a live one's words go to the facet its context hosts, by NAME — never by spec, so no
    *  facet is hosted for an agent that has none. NO_FACET is then a context without an `agent` row
    *  or facet: never born, or a live agent whose processors replace it (a voice agent's), which is
-   *  hosted from the spec as it always was. Words from another context say who sent them: the base,
-   *  which the sender's own `itx.agents` row pins (`itx.cd('/').agents.at(<sender>)`, written by
-   *  `create`). The root's words are the people's, through the dash, and carry no sender. */
+   *  hosted from the spec as it always was. The facet appends them, so they are stamped with the
+   *  agent's own path; the sender rides beside them as the base, which the sender's own
+   *  `itx.agents` row pins (`itx.cd('/').agents.at(<sender>)`, written by `create`) — `/` for every
+   *  context that reaches the root's collection, which the fold reads as a person (processor.ts). */
   async message(input: Parameters<AgentHandleApi["message"]>[0]) {
     const path = this.path;
-    const from = this.base === "/" ? [] : [this.base];
     const dead = new Error(`agent ${path}: deleted`);
     // The catalog first: a dead agent's context is not even called.
     if ((await this.catalog()).deleted[path]) throw dead;
@@ -277,7 +271,7 @@ class AgentReference extends RpcTarget implements AgentHandleApi {
     // (durable-object.ts, `implements Pick<AgentHandleApi, "message">`) — ours, so asserted.
     try {
       return (await this.withItx((itx) =>
-        itx.cd(path).invoke(["itx", "facets", ["get", "agent"], ["message", input, ...from]]),
+        itx.cd(path).invoke(["itx", "facets", ["get", "agent"], ["message", input, this.base]]),
       )) as StreamEvent;
     } catch (error) {
       if (errorCode(error) !== "NO_FACET") throw error;
@@ -293,10 +287,7 @@ class AgentReference extends RpcTarget implements AgentHandleApi {
     const spec = await this.spec();
     // The same facet's answer as above: ours, so asserted.
     return (await this.withItx((itx) =>
-      itx.cd(path).invoke(["itx", "facets", ["get", "agent", spec], ["message", input, ...from]]),
+      itx.cd(path).invoke(["itx", "facets", ["get", "agent", spec], ["message", input, this.base]]),
     )) as StreamEvent;
-  }
-  append(...events: Parameters<AgentHandleApi["append"]>) {
-    return this.withItx((itx) => itx.cd(this.path).append(...events));
   }
 }

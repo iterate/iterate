@@ -19,9 +19,9 @@ export const configureModel = (
     payload: { config: { llm: { model } } },
   });
 
-/** The operator's instructions, their own keyed system item after the birth. */
-export const operatorPrompt = (agent: { append: (event: unknown) => Promise<unknown> }) =>
-  agent.append({
+/** The operator's instructions, their own keyed system item on the agent's context after the birth. */
+export const operatorPrompt = (support: { append: (event: unknown) => Promise<unknown> }) =>
+  support.append({
     type: "events.iterate.com/agent/context-added",
     payload: { role: "system", content: "Be terse." },
     idempotencyKey: "operator-prompt:v1",

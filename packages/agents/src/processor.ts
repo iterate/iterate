@@ -418,7 +418,13 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
 
       case "events.iterate.com/agent/context-added": {
         const { role, content, actor, llmRequestPolicy, llmRequestOffset } = event.payload;
+        // WHO SENT IT: another context's stamp (apps/os caller.ts `stampCaller`), else the sender
+        // the collection relayed through this agent's own facet (`message`; its base is the
+        // caller's to choose through the public `at(base)`, collection.ts). `/` is the people's
+        // (the dash, a member's session, the root's collection): a person's words carry no sender.
+        // The sender signs nothing, so the label is advisory.
         const origin = event.source?.origin;
+        const sender = origin && origin !== event.path ? origin : event.payload.from;
         const next: AgentState = {
           ...state,
           contextItems: [
@@ -430,10 +436,7 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
               actor,
               llmRequestOffset,
               files: event.payload.files,
-              // WHO SENT IT, when another context did: the platform's stamp, else the sender the
-              // collection relayed through this agent's own facet (`message`). The sender signs
-              // nothing, and the label is advisory (apps/os caller.ts `stampCaller` says why).
-              from: origin && origin !== event.path ? origin : event.payload.from,
+              from: sender === "/" ? undefined : sender,
             },
           ],
         };
@@ -663,9 +666,8 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
             payload: { path },
             idempotencyKey: `agent/created:${path}`,
           };
-          await this.deps.withItx((itx) =>
-            itx.invoke(["itx", "agents", ["announce", certificate]]),
-          ); // the project catalog first
+          // the project catalog first, stamped with this path (catalog.ts trusts nothing else)
+          await this.deps.withItx((itx) => itx.cd("/").append(certificate));
           await append(certificate, {
             // this path last: the certificate closes the obligation, the prompt rides with it
             type: "events.iterate.com/agent/context-added",
@@ -704,9 +706,7 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
             payload: { path },
             idempotencyKey: `agent/deleted:${path}`,
           };
-          await this.deps.withItx((itx) =>
-            itx.invoke(["itx", "agents", ["announce", certificate]]),
-          ); // the project catalog first
+          await this.deps.withItx((itx) => itx.cd("/").append(certificate)); // the project catalog first
           await append(certificate); // this path last: closes the obligation
         } finally {
           this.#deleting = false;

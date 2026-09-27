@@ -305,26 +305,38 @@ test.for<{
   expect(reduceProcessor(processor(), events)).toMatchObject(state);
 });
 
-test("the reduce: words another context appended name it, from the platform's stamp; words the agent's own facet relayed name the sender it was handed; the agent's own do not", () => {
-  const relayed = (content: string, from: string) => ({
-    ...user(content),
-    payload: { ...user(content).payload, from },
-  });
+test.for<{ name: string; source?: { origin: string }; from?: string; label?: string }>([
+  {
+    name: "another agent's append: its stamp",
+    source: { origin: "/agents/a/sandbox" },
+    label: "/agents/a/sandbox",
+  },
+  { name: "the agent's own words: no sender", source: { origin: "/agents/b" } },
+  { name: "the root's append (a member's session, the dash): a person's", source: { origin: "/" } },
+  { name: "unstamped (before the stamp): nothing", label: undefined },
+  {
+    name: "relayed by its own facet (`message`): the sender handed over",
+    source: { origin: "/agents/b" },
+    from: "/agents/a/sandbox",
+    label: "/agents/a/sandbox",
+  },
+  {
+    name: "relayed from the root's collection: a person's",
+    source: { origin: "/agents/b" },
+    from: "/",
+  },
+  {
+    name: "a foreign stamp beats a relayed sender",
+    source: { origin: "/agents/c" },
+    from: "/agents/a",
+    label: "/agents/c",
+  },
+])("the reduce names who sent words to /agents/b — $name", ({ source, from, label }) => {
   const { contextItems } = reduceProcessor(processor(), [
     ...born,
-    { ...user("hi from a"), source: { origin: "/agents/a/sandbox" } },
-    { ...user("hi from here"), source: { origin: "/" } }, // the harness's context is `/`
-    user("hi, unstamped"),
-    { ...relayed("relayed", "/agents/a/sandbox"), source: { origin: "/" } },
-    { ...relayed("the stamp first", "/agents/c"), source: { origin: "/agents/a/sandbox" } },
+    { ...user("hi"), payload: { ...user("hi").payload, from }, source, path: "/agents/b" },
   ]);
-  expect(contextItems.map(({ content, from }) => ({ content, from }))).toEqual([
-    { content: "hi from a", from: "/agents/a/sandbox" },
-    { content: "hi from here", from: undefined },
-    { content: "hi, unstamped", from: undefined },
-    { content: "relayed", from: "/agents/a/sandbox" },
-    { content: "the stamp first", from: "/agents/a/sandbox" },
-  ]);
+  expect(contextItems.at(-1)).toMatchObject({ content: "hi", from: label });
 });
 
 // ── the conversation as the model reads it (buildChatMessages) ──

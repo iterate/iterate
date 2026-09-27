@@ -95,9 +95,9 @@ export class AgentDurableObject
 
   /** A person's words: ONE `context-added`, the trigger of the next turn — with their attachments,
    *  each stored first under this agent's path (`itx.files`, `<path>/<8 of a uuid>-<name>`)
-   *  and named on the event; an image among them is what the model will see. `from` is the context
-   *  that sent them, as the collection relays it (collection.ts `AgentReference.message`). The event
-   *  is answered so a caller can wait for what follows it. */
+   *  and named on the event; an image among them is what the model will see. `from` is the
+   *  collection's base, which it relays as the sender (collection.ts `AgentReference.message`). The
+   *  event is answered so a caller can wait for what follows it. */
   // oxlint-disable-next-line iterate/mechanical-class-impl -- `from` is the collection's relay of the sender, beside the published input: `itx.agents.get(path).message` never takes it
   async message(input: Parameters<AgentHandleApi["message"]>[0], from?: string) {
     const path = await this.#created();

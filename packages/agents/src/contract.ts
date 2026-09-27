@@ -9,7 +9,7 @@
 // and a deleted agent runs no more turns. Every type is derived here, never hand-kept:
 //   AgentState                        = ProcessorState<typeof AgentContract>  the reduced state below
 //   ConsumedEvent<typeof AgentContract>                                        what reduce and processEvent see
-//   EventInput<typeof AgentContract>                                           what `itx.agents.get(path).append(…)` takes
+//   EventInput<typeof AgentContract>                                           what `itx.cd(path).append(…)` takes
 //
 // Its birth is the saga `itx.agents.create(path)` opens: `create-requested`, then `created` — the
 // certificate, cross-posted to `/` for the project catalog (apps/os/src/project/) — with the
@@ -81,7 +81,7 @@ export type LlmUsage = z.infer<typeof LlmUsage>;
 
 export const AgentContract = defineProcessorContract({
   slug: "agent",
-  version: "7",
+  version: "6",
   description:
     "An agent: a conversation on its own context, driven by a model that acts by writing scripts against itx.",
   /** THE REDUCED STATE — what the reduce keeps between events: where creation stands (as the OFFSET
@@ -148,9 +148,8 @@ export const AgentContract = defineProcessorContract({
           actor: Actor.optional(),
           llmRequestOffset: z.number().int().positive().optional(),
           files: z.array(FileAttachment).optional(),
-          /** The context it came from, when another one sent it: the event's `source.origin`, or the
-           *  sender the collection relayed (`from` on the payload). The model reads it as
-           *  `[from <context>]`. */
+          /** The context it came from, when another one sent it (processor.ts, the fold): the
+           *  model reads it as `[from <context>]`. */
           from: z.string().optional(),
         }),
       )
@@ -234,9 +233,9 @@ export const AgentContract = defineProcessorContract({
         actor: Actor.optional(),
         /** What rides with the words: files stored under this agent's path (`message()` stores them). */
         files: z.array(FileAttachment).optional(),
-        /** The context that sent the words through `itx.agents.get(path).message(…)`: the
-         *  collection's base, which the sender's own `itx.agents` row names (collection.ts). The
-         *  agent's own facet appends them, so their `source.origin` is the agent itself. */
+        /** The context that sent the words through `itx.agents.get(path).message(…)`, as the
+         *  collection relays it (collection.ts): the agent's own facet appends them, so their
+         *  `source.origin` is the agent itself. */
         from: z.string().optional(),
         /** The policies: `dont-trigger-request` (words that raise no turn), `after-current-request`
          *  (the default: the next turn), `interrupt-current-request` (cut the running answer short —
