@@ -1,9 +1,8 @@
 // /projects/<slug>/integrations — the project's connections (the `project` facet's live state on
 // `/`), each provider's Connect sheet and the forms it leads to. The flows themselves — a person's own
-// account, iterate's app or your own, Waitrose's login, moving an account another project holds — are apps/os
-// README "Integrations" and "Sign-in keeps tokens". The sheet is one URL: `?connect=<provider>`
-// (`&scopes=` from an agent's `requestFromUser`), `?own=<provider>&connection=<name>`, `?waitrose=1`,
-// `?move=<offer>`.
+// account, iterate's app or your own, Waitrose's login, moving an account another project holds — are in
+// apps/os/docs/integrations.md. The sheet is one URL: `?connect=<provider>` (`&scopes=` from an agent's
+// `requestFromUser`), `?own=<provider>&connection=<name>`, `?waitrose=1`, `?move=<offer>`.
 import { useEffect, useRef, useState, type FormEvent, type RefObject } from "react";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { Blocks, CheckIcon, CopyIcon, ShoppingBasket } from "lucide-react";
