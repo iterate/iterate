@@ -217,9 +217,7 @@ test("the loop: a person's words → the model → a script run against itx → 
   expect(await itx.agents.list()).toHaveLength(1);
 });
 
-/** WHO SENT IT: an agent's script says its words to another agent through `itx.agents` or a plain
- *  append, and signs neither. The other agent's model reads both as from the sender's sandbox,
- *  where its scripts run; a person's words through the root say nothing of a sender. */
+/** The sender's label: packages/agents collection.ts `AgentReference.message` and the fold (processor.ts). */
 test("an agent's words to another say who sent them, by message() or by a plain append: the other's model reads `[from /agents/a/sandbox]`, a person's words no sender", async () => {
   const itx = await openAgentItx(freshCtx("agent-to-agent"));
   const b = JSON.stringify("/agents/b");

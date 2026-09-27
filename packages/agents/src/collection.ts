@@ -291,6 +291,7 @@ class AgentReference extends RpcTarget implements AgentHandleApi {
         `agent ${path}: not created — itx.agents.create(${JSON.stringify(path)}) first`,
       );
     const spec = await this.spec();
+    // The same facet's answer as above: ours, so asserted.
     return (await this.withItx((itx) =>
       itx.cd(path).invoke(["itx", "facets", ["get", "agent", spec], ["message", input, ...from]]),
     )) as StreamEvent;
