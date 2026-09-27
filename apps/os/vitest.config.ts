@@ -24,7 +24,7 @@
 // modules for unit tests and fixtures. Browser E2E is the root Playwright suite (specs/AGENTS.md).
 
 import { generateKeyPairSync } from "node:crypto";
-import { mkdtempSync, readdirSync, rmSync, unlinkSync } from "node:fs";
+import { mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -90,7 +90,8 @@ const LONG_POLES = [
  *  with the unit project looping beside it (3 runs in 8 failed, measured 2026-09-27):
  *  `vitest run --project workers --maxWorkers=1 --sequence.seed=7
  *  -t "^(a key bound to projects|KILLED MID-CALL)" __workers-tests__/connect-your-account.test.ts
- *  ../agents/__workers-tests__/agent-revive.test.ts`. This entry goes once that passes every time. */
+ *  ../agents/__workers-tests__/agent-revive.test.ts`. The race is
+ *  https://github.com/iterate/iterate/issues/3291; this entry goes once that repro passes every time. */
 const FRESH_RUNTIME_FIRST = ["apps/agents/__workers-tests__/agent-revive.test.ts"];
 
 class LongPolesFirst extends BaseSequencer {
@@ -134,11 +135,12 @@ function runtimeStorage() {
     dir,
     /** Every object's file gone: the Durable Objects' SQLite and their facets' (`do/`), D1's, KV's
      *  and the Cache API's, with their blobs. Each namespace's `metadata.sqlite` stays: it is the
-     *  alarm schedule workerd holds open, which `reset()` has just emptied. */
+     *  alarm schedule workerd holds open, which `reset()` has just emptied. `force`: an aborted
+     *  object's SQLite, closing, can delete its own `-wal` or `-journal` after the listing. */
     empty() {
       for (const entry of readdirSync(dir, { recursive: true, withFileTypes: true })) {
         if (entry.isFile() && !/^metadata\.sqlite(-wal|-shm)?$/.test(entry.name))
-          unlinkSync(join(entry.parentPath, entry.name));
+          rmSync(join(entry.parentPath, entry.name), { force: true });
       }
       return new Response(null, { status: 204 });
     },
