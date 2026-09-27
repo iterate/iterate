@@ -5,7 +5,7 @@ import { proxyPosthogRequest } from "@iterate-com/shared/posthog";
 import { startAppConfigOf } from "@iterate-com/shared/start-app-config";
 import { appAuth, appSession } from "iterate/app-server";
 import type { BrowserSession } from "iterate/app-session";
-import { basePathOf } from "./base-path.ts";
+import { basePathOf, buildBasePath, underBasePath, withoutBuildBasePath } from "./base-path.ts";
 export { BrowserSession } from "iterate/app-session";
 
 declare global {
@@ -27,8 +27,8 @@ const pages = createStartHandler({
   handler: defaultStreamHandler,
   transformAssets: {
     createTransform: (context) => {
-      const basePath = context.warmup ? "" : basePathOf(context.request.headers);
-      return ({ url }) => `${basePath}${url}`;
+      const basePath = context.warmup ? buildBasePath : basePathOf(context.request.headers);
+      return ({ url }) => underBasePath(basePath, url);
     },
     cache: false,
   },
@@ -38,9 +38,10 @@ const pages = createStartHandler({
  *  the authenticated /api; it works through project ingress too, under the base path the edge
  *  says (base-path.ts). Everything else is TanStack Start's: the built assets, then its pages. */
 export default createServerEntry({
-  async fetch(request) {
+  async fetch(incoming) {
     // parsed on the first request, /healthz's included: a malformed config fails the deploy's smoke
     const config = startAppConfigOf(env);
+    const request = withoutBuildBasePath(incoming);
     const url = new URL(request.url);
     if (url.pathname === "/healthz") return new Response("ok");
     // posthog-js's `api_host` (packages/ui posthog.tsx): PostHog EU through our own origin
