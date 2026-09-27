@@ -2,7 +2,7 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { temporaryDirectory } from "@iterate-com/shared/test-support/temporary-directory";
 import type { WebClient } from "@slack/web-api";
-import { expect, test, vi } from "vitest";
+import { expect, onTestFinished, test, vi } from "vitest";
 import { z } from "zod";
 import {
   type AlarmState,
@@ -121,7 +121,7 @@ test.for([502, 200])(
       status,
       message: `Workers Logs query answered HTTP ${status} (text/html; charset=UTF-8): ${errorPage.slice(0, 200)}`,
       attempt: 1,
-      retryInMs: 0,
+      retryInMs: 2_000,
     });
   },
 );
@@ -137,7 +137,11 @@ test("a run that cannot read prd fails: Cloudflare keeps answering its HTML erro
   // Each of the 12 queries asked four times, the first and three repeats, then no more.
   await vi.waitFor(() => expect(cloudflare.fetch).toHaveBeenCalledTimes(48));
   expect(warn).toHaveBeenCalledWith(
-    expect.objectContaining({ event: "prd-fault-alarm.platform-failure-retry", attempt: 3 }),
+    expect.objectContaining({
+      event: "prd-fault-alarm.platform-failure-retry",
+      attempt: 3,
+      retryInMs: 10_000,
+    }),
   );
   expect(warn).not.toHaveBeenCalledWith(expect.objectContaining({ attempt: 4 }));
   expect(slack).toMatchObject({ posts: [] });
@@ -686,7 +690,7 @@ test.for(["capped", "failed"])(
         : []),
     ];
     queryableWorkersLogs(events, (query) => {
-      if (reason === "failed" && JSON.stringify(query.parameters.groupBys).includes("rayId"))
+      if (reason === "failed" && query.parameters.groupBys?.[0]?.value === "$metadata.rayId")
         throw new Error("network failed");
     });
     vi.spyOn(console, "warn").mockImplementation(() => {});
@@ -1040,11 +1044,18 @@ function page(reading: Partial<FaultReading>) {
   return triageIncidents({ ...quiet, ...reading }, window, null).page?.text ?? null;
 }
 
-/** What one run without state over the half hour to `now` posts (or would post). A query
- *  Cloudflare fails is asked again without a wait. */
+/** What one run without state over the half hour to `now` posts (or would post). */
 async function summary(slack: (() => WebClient) | null = null) {
-  return (await alarm({ window, state: null, cloudflare: credentials, slack, delaysMs: [0, 0, 0] }))
-    .summary;
+  return (await alarm({ window, state: null, cloudflare: credentials, slack })).summary;
+}
+
+/** The clock a query Cloudflare fails is asked again on: CI_HTTP's waits on a fake clock that moves
+ *  on whenever nothing else is left to run, each at its longest (`Math.random` at 1). */
+function cloudflareClock() {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  vi.setTimerTickMode("nextTimerAsync");
+  onTestFinished(() => void vi.useRealTimers());
+  vi.spyOn(Math, "random").mockReturnValue(1);
 }
 
 /** Cloudflare's HTML error page, longer than the 200 bytes a failure's message quotes. */
@@ -1058,6 +1069,7 @@ function cloudflareErrorPage(status: number) {
 
 /** A Workers Logs API that answers each query with `answer(the field it groups by)`. */
 function workersLogs(answer: (groupBy: string | undefined) => unknown) {
+  cloudflareClock();
   const fetch = vi.fn(async (_url: string, init: { body: string }) => {
     const query = JSON.parse(init.body) as {
       view: string;
@@ -1168,6 +1180,7 @@ function queryableWorkersLogs(
   events: Record<string, unknown>[],
   intercept?: (query: LogQuery) => Response | void,
 ) {
+  cloudflareClock();
   const fetch = vi.fn(async (_url: string, init: { body: string }) => {
     const query = JSON.parse(init.body) as LogQuery;
     const response = intercept?.(query);

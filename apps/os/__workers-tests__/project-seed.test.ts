@@ -144,7 +144,7 @@ test("a project's hostnames round-trip through a seed: capture records the ones 
   expect(cloudflare).toMatchObject({ hostnames: [] });
   expect(await captureHostnames(project)).toEqual([]);
   // apply: asked again, answered, served — the same capture again
-  expect(await restoreHostnames(project, archived, { timeoutMs: 10_000 })).toEqual([
+  expect(await restoreHostnames(project, archived)).toEqual([
     { hostname: "www.seeded.test", asked: true, status: "pending, certificate unknown" },
   ]);
   expect(cloudflare).toMatchObject({ hostnames: ["www.seeded.test"] });
@@ -154,14 +154,14 @@ test("a project's hostnames round-trip through a seed: capture records the ones 
   expect(await captureHostnames(project)).toEqual(archived);
   // a rerun asks nothing
   const requests = (await hostnameFacts("add-requested")).length;
-  expect(await restoreHostnames(project, archived, { timeoutMs: 10_000 })).toEqual([
+  expect(await restoreHostnames(project, archived)).toEqual([
     { hostname: "www.seeded.test", asked: false, status: "pending, certificate unknown" },
   ]);
   expect(await hostnameFacts("add-requested")).toHaveLength(requests);
   // a hostname the deployment refuses fails the restore, naming it
-  await expect(
-    restoreHostnames(project, ["x.projects.test"], { timeoutMs: 10_000 }),
-  ).rejects.toThrow(/refused: x\.projects\.test \(.+\)/);
+  await expect(restoreHostnames(project, ["x.projects.test"])).rejects.toThrow(
+    /refused: x\.projects\.test \(.+\)/,
+  );
 });
 
 test("apply never takes a hostname another project holds: the restore fails naming it, the holder keeps it, and Cloudflare is not asked", async () => {
@@ -181,9 +181,9 @@ test("apply never takes a hostname another project holds: the restore fails nami
   });
   const writes = [...cloudflare.writes];
   const restored = await admin.projects.create({ project: "seed-hostname-restored" });
-  await expect(
-    restoreHostnames(restored, ["www.held.test"], { timeoutMs: 10_000 }),
-  ).rejects.toThrow(/refused: www\.held\.test \(.*belongs to another project/);
+  await expect(restoreHostnames(restored, ["www.held.test"])).rejects.toThrow(
+    /refused: www\.held\.test \(.*belongs to another project/,
+  );
   expect(await catalog().projectByHostname(["www.held.test"])).toMatchObject({
     project: { id: holderId },
   });
@@ -199,7 +199,7 @@ test("after a real erase the zone still holds the custom hostname: apply's reque
   const project = await admin.projects.create({ project: "seed-hostname-erased" });
   const { projectId } = await project.whoami();
   expect(await captureHostnames(project)).toEqual([]);
-  expect(await restoreHostnames(project, ["kept.erased.test"], { timeoutMs: 10_000 })).toEqual([
+  expect(await restoreHostnames(project, ["kept.erased.test"])).toEqual([
     { hostname: "kept.erased.test", asked: true, status: "active, certificate active" },
   ]);
   expect(cloudflare).toMatchObject({ writes: [] });
@@ -265,7 +265,7 @@ test("a project's primary hostname round-trips through a seed: capture records i
   }
   expect(await capturePrimaryHostname(project)).toBeNull();
   // apply: the hostnames first, then the primary
-  await restoreHostnames(project, hostnames, { timeoutMs: 10_000 });
+  await restoreHostnames(project, hostnames);
   expect(await restorePrimaryHostname(project, primaryHostname!)).toEqual({
     hostname: "www.primary.test",
     asked: true,

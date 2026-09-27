@@ -401,30 +401,40 @@ test("the retries are bounded: a Cloudflare 5xx that persists fails the upload, 
   ).toBe(false);
 });
 
-test("no retry starts after the upload's deadline, and the manifest never lands", async () => {
+test("the upload's 90 s deadline aborts the request in flight, and no retry or manifest follows it", async () => {
   using folder = evidenceFolder({ artifacts: [], check: completeCheck });
-  using _clock = fakeClock();
-  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
   await write(folder.path);
-  const deadline = new AbortController();
+  using _clock = deadlineClock();
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  const tried = Promise.withResolvers<void>();
   const api = cloudflare((request) => {
     if (!request.url.endsWith("trace.zip")) return ok();
-    // the deadline passes while R2 answers the first try
-    deadline.abort(new DOMException("The operation timed out.", "TimeoutError"));
-    return new Response("down", { status: 503 });
+    tried.resolve();
+    // R2 never answers: the request waits for its signal, and fails as fetch fails when it aborts
+    return new Promise((_, reject) => {
+      const abort = () => reject(request.signal.reason);
+      if (request.signal.aborted) abort();
+      else request.signal.addEventListener("abort", abort);
+    });
   });
 
-  await expect(
-    uploadTestEvidence({
-      repoRoot: folder.path,
-      ...bucket,
-      apiToken,
-      ...api,
-      deadline: deadline.signal,
-    }),
-  ).rejects.toThrow(/trace\.zip answered HTTP 503: down$/u);
+  const failed = expect(
+    uploadTestEvidence({ repoRoot: folder.path, ...bucket, apiToken, ...api }),
+  ).rejects.toMatchObject({ name: "TimeoutError" });
+  await tried.promise;
+  // The first try's 60 s ceiling, a retry 2 s later, then the upload's deadline at 90 s.
+  await vi.advanceTimersByTimeAsync(90_000);
+  await failed;
+
+  expect(api.r2Requests().filter((request) => request.url.endsWith("trace.zip"))).toHaveLength(2);
   expect(warn.mock.calls.map(([entry]) => entry)).toMatchObject([
-    { event: "test-evidence.platform-failure-gave-up", attempts: 1 },
+    {
+      event: "test-evidence.platform-failure-retry",
+      kind: "overloaded",
+      message: expect.stringMatching(/trace\.zip: no answer within 60 s$/u),
+      attempt: 1,
+      retryInMs: 2_000,
+    },
   ]);
   expect(
     api.requests.some((request) => request.url.endsWith("/testrun_1nxc464grh/manifest.json")),
@@ -764,6 +774,31 @@ function artifact(
 function fakeClock() {
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   vi.setTimerTickMode("nextTimerAsync");
+  return {
+    [Symbol.dispose]() {
+      vi.useRealTimers();
+    },
+  };
+}
+
+/** A fake clock the test moves by hand, the upload's deadline and each request's ceiling on it
+ *  (the fake clock cannot move AbortSignal.timeout's own timer, so each is a fake setTimeout that
+ *  aborts as the real one does), and each wait at its longest (`Math.random` at 1). By hand, so no
+ *  deadline passes while the upload reads its files for real. */
+function deadlineClock() {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  vi.spyOn(Math, "random").mockReturnValue(1);
+  vi.spyOn(AbortSignal, "timeout").mockImplementation((ms) => {
+    const deadline = new AbortController();
+    setTimeout(
+      () =>
+        deadline.abort(
+          new DOMException("The operation was aborted due to timeout", "TimeoutError"),
+        ),
+      ms,
+    );
+    return deadline.signal;
+  });
   return {
     [Symbol.dispose]() {
       vi.useRealTimers();

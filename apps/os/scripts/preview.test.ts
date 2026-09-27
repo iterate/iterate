@@ -1,7 +1,7 @@
 import { mkdirSync, utimesSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { temporaryDirectory } from "@iterate-com/shared/test-support/temporary-directory";
-import { expect, onTestFinished, test } from "vitest";
+import { expect, onTestFinished, test, vi } from "vitest";
 import {
   APPS,
   appPreviewOrigins,
@@ -421,16 +421,25 @@ test("the PR body write: a person's edit saved over it is kept, and the lines re
 });
 
 test("the PR body write: a PATCH that failed is not sent again from the old read; the next round reads anew", async () => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  onTestFinished(() => void vi.useRealTimers());
   const pr = fakePullRequest(`Intro.\n\n${splicePullRequestBody("", deployedSection())}`, {
     failures: 1,
   });
   const before = pr.body();
-  await writePullRequestBody(pr, "the suites' lines", withBothLines, { retryDelayMs: 0 });
+  const written = writePullRequestBody(pr, "the suites' lines", withBothLines);
+  // the next round waits 5 s before it reads
+  await vi.advanceTimersByTimeAsync(4_999);
+  expect(pr).toMatchObject({ events: ["read", "replace"] });
+  await vi.advanceTimersByTimeAsync(1);
+  await written;
   expect(pr).toMatchObject({ events: ["read", "replace", "read", "replace", "read"] });
   expect(pr.body()).toBe(withBothLines(before));
   // a failure whose write had landed: the next round finds it, and writes nothing
   const landed = fakePullRequest(before, { failures: 1, failuresLand: true });
-  await writePullRequestBody(landed, "the suites' lines", withBothLines, { retryDelayMs: 0 });
+  const found = writePullRequestBody(landed, "the suites' lines", withBothLines);
+  await vi.advanceTimersByTimeAsync(5_000);
+  await found;
   expect(landed).toMatchObject({ events: ["read", "replace", "read"] });
   expect(landed.body()).toBe(withBothLines(before));
 });
