@@ -26,7 +26,10 @@ What survived that pass merged overnight as ten PRs ([Already landed](#already-l
 - **14, no.** The admin app stays separate.
 - **15, yes.** Use whatever PostHog recommends, and delete the custom masking.
 - **20, keep and simplify.** One re-dial and one close-code policy; Vite HMR behind tunnels must keep working.
-- **21, on hold** until it's clear how Misha's handwritten docs are treated.
+- **21, yes.** Keep Misha's handwritten docs, and trim the agent-written ones.
+- **25:** a draft PR. **27:** research first.
+- **29, yes.**
+- **Round-2 follow-ups:** `created_at` on memberships; one-click `getin` locally; main e2e pages at once; no test-only retry delays; Notes HMR under paths; Kit renames (you reinstall later). Replay masking stays in PostHog's settings.
 - **28, not now.** The oversized files stay unsplit.
 - **30, yes.** Impersonation only, provided PR bodies can deep-link to it.
 - **32, yes.** The Kit firmware leftovers go.
