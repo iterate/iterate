@@ -145,10 +145,8 @@ test("Preview OS deploys the PR merged into main, and the test jobs use that ver
   expect(
     preview.jobs.trace!.steps?.find((step) => step.uses === "actions/checkout@v4")?.with?.ref,
   ).toMatch(/^\$\{\{ needs\.deploy\.outputs\.tested-sha \|\| /);
-  // the suites, which start beside the deploy, resolve that commit by deploy's own two steps, on a
-  // push and on a dispatch for a PR: the PR's head, then the same script with the same env, so a
-  // push whose own commit is not a merge of its head resolves the merge GitHub rebuilt, as deploy
-  // does. A preview by name is tested from the dispatched ref.
+  // the suites resolve that commit by deploy's own two steps (preview-os.yml, THE COMMIT DEPLOY
+  // PREVIEW DEPLOYS)
   const checkout = suiteSteps.findIndex((step) => step.uses === "actions/checkout@v4");
   const deployCheckout = deploySteps.findIndex((step) => step.uses === "actions/checkout@v4");
   expect(deploySteps[deployCheckout]?.with?.ref).toBe(
