@@ -165,7 +165,7 @@ static const char *frames_b64(size_t frames, uint8_t fill) {
 }
 
 /** Deliver one `speaker-frame` event, with whatever extra payload keys it needs. */
-static void push_spk_to(
+static void push_speaker_frame_to(
     struct fixture *fixture,
     int callback_id,
     int release_id,
@@ -189,10 +189,10 @@ static void push_spk_to(
   }
 }
 
-static void push_spk(
+static void push_speaker_frame(
     struct fixture *fixture, int release_id, int64_t offset,
     const char *flags, const char *pcm_b64) {
-  push_spk_to(fixture, -1, release_id, offset, flags, pcm_b64);
+  push_speaker_frame_to(fixture, -1, release_id, offset, flags, pcm_b64);
 }
 
 /** How many whole 640-byte frames the module handed over. */
@@ -349,7 +349,7 @@ static void downlink_flow(void) {
    * still queued and the normal end of every answer is recorded as starvation.
    */
   order_length = 0U;
-  push_spk(&fixture, 2, 43, "\"lastFrameOfAnswer\":true,", frames_b64(1U, 0x49));
+  push_speaker_frame(&fixture, 2, 43, "\"lastFrameOfAnswer\":true,", frames_b64(1U, 0x49));
   assert(response_done_count == 1);
   assert(spoken_length == ITERATE_KIT_VOICE_FRAME_BYTES);
   assert(order_length == 2U);
@@ -372,7 +372,7 @@ static void downlink_flow(void) {
    */
   order_length = 0U;
   response_done_count = 0;
-  push_spk(&fixture, 3, 44, "\"lastFrameOfAnswer\":true,", "");
+  push_speaker_frame(&fixture, 3, 44, "\"lastFrameOfAnswer\":true,", "");
   assert(response_done_count == 1);
   /* And it is not counted as a broken chunk. */
   assert(fixture.voice_stream.spk_decode_failures == 0U);
@@ -396,7 +396,7 @@ static void downlink_flow(void) {
   spoken_frames = 0U;
   spoken_bytes = 0U;
   order_length = 0U;
-  push_spk(&fixture, 4, 45, "", frames_b64(4U, 0x51));
+  push_speaker_frame(&fixture, 4, 45, "", frames_b64(4U, 0x51));
   assert(spoken_frames == 1U);
   assert(spoken_bytes == 4U * (size_t)ITERATE_KIT_VOICE_FRAME_BYTES);
   assert(spoken_length == 4U * (size_t)ITERATE_KIT_VOICE_FRAME_BYTES);
@@ -416,7 +416,7 @@ static void downlink_flow(void) {
    * speaker below is a byte ring, so there was never anything to obey.
    */
   spoken_bytes = 0U;
-  push_spk(&fixture, 5, 46, "", pcm_b64(720U, 0x55)); /* 640 + 80 */
+  push_speaker_frame(&fixture, 5, 46, "", pcm_b64(720U, 0x55)); /* 640 + 80 */
   assert(fixture.voice_stream.spk_decode_failures == 0U);
   assert(spoken_frames == 2U);
   assert(spoken_bytes == 720U);
@@ -510,14 +510,14 @@ static void speaker_flags_ride_numbered_or_bare_frames(void) {
     receive(&fixture, message);
     receive(&fixture, "[\"release\",1,1]");
   }
-  push_spk(
+  push_speaker_frame(
       &fixture, 2, 101, "\"deviceSpeakerFrameSeq\":1,", frames_b64(1U, 0x41));
-  push_spk(
+  push_speaker_frame(
       &fixture, 3, 102, "\"deviceSpeakerFrameSeq\":2,", frames_b64(1U, 0x42));
   assert(spoken_frames == 3U);
 
   /* A frame with no number plays the same. */
-  push_spk(&fixture, 4, 103, "", frames_b64(1U, 0x46));
+  push_speaker_frame(&fixture, 4, 103, "", frames_b64(1U, 0x46));
 
   /*
    * AND THE END OF AN ANSWER, on its own empty frame.
@@ -530,7 +530,7 @@ static void speaker_flags_ride_numbered_or_bare_frames(void) {
   response_done_count = 0;
   spoken_frames = 0U;
   order_length = 0U;
-  push_spk(
+  push_speaker_frame(
       &fixture,
       5,
       104,
@@ -543,7 +543,7 @@ static void speaker_flags_ride_numbered_or_bare_frames(void) {
   /* And when it does ride audio, the edge follows the frame — 'f' then 'l' —
    * so the owner never marks an answer drained with audio still queued. */
   order_length = 0U;
-  push_spk(
+  push_speaker_frame(
       &fixture,
       6,
       105,
@@ -554,12 +554,12 @@ static void speaker_flags_ride_numbered_or_bare_frames(void) {
   assert(memcmp(order_log, "fl", 2U) == 0);
 
   /* An unnumbered empty last frame completes the answer too. */
-  push_spk(&fixture, 7, 106, "\"lastFrameOfAnswer\":true,", "");
+  push_speaker_frame(&fixture, 7, 106, "\"lastFrameOfAnswer\":true,", "");
   assert(response_done_count == 3);
 
   /* A chunk of any length is audio, and reaches the speaker whole. */
   spoken_bytes = 0U;
-  push_spk(
+  push_speaker_frame(
       &fixture,
       8,
       107,
@@ -570,7 +570,7 @@ static void speaker_flags_ride_numbered_or_bare_frames(void) {
 
   /* The clear raises the speech-started edge. */
   assert(speech_started_count == 0);
-  push_spk(
+  push_speaker_frame(
       &fixture,
       9,
       108,
@@ -588,7 +588,7 @@ static void speaker_flags_ride_numbered_or_bare_frames(void) {
    * for being an empty envelope.
    */
   spoken_frames = 0U;
-  push_spk(
+  push_speaker_frame(
       &fixture,
       10,
       109,
@@ -612,7 +612,7 @@ static void recycle_keeps_call_epoch_and_fences_closed_predecessor(void) {
   fixture_init(&fixture);
   start_and_mount(&fixture);
   accept_call(&fixture, -1, 1, 1);
-  push_spk_to(&fixture, -1, 2, 2, "", frames_b64(1U, 0x41));
+  push_speaker_frame_to(&fixture, -1, 2, 2, "", frames_b64(1U, 0x41));
   assert(fixture.voice_stream.batches_on_connection > 0U);
   fixture.clock_ms = 100U;
   assert(iterate_kit_voice_stream_recycle_subscription(
@@ -623,25 +623,25 @@ static void recycle_keeps_call_epoch_and_fences_closed_predecessor(void) {
   /* Make-before-break means A still plays while B is opening, but A cannot
    * certify B's delivery stream or retain its old batch count. */
   frames = spoken_frames;
-  push_spk_to(&fixture, -1, 3, 3, "", frames_b64(1U, 0x42));
+  push_speaker_frame_to(&fixture, -1, 3, 3, "", frames_b64(1U, 0x42));
   assert(spoken_frames == frames + 1U);
   assert(fixture.voice_stream.batches_on_connection == 0U);
   /* B's callback exists before its open reply. Its duplicate of A's offset is
    * deduped for audio, yet still proves the newly opening subscription lives. */
-  push_spk_to(&fixture, -2, 4, 3, "", frames_b64(1U, 0x43));
+  push_speaker_frame_to(&fixture, -2, 4, 3, "", frames_b64(1U, 0x43));
   assert(spoken_frames == frames + 1U);
   assert(fixture.voice_stream.batches_on_connection == 1U);
   receive(&fixture, "[\"resolve\",3,[\"export\",-14]]");
   iterate_kit_voice_stream_update(&fixture.voice_stream);
   assert(fixture.voice_stream.state == ITERATE_KIT_VOICE_STREAM_READY);
   assert(fixture.voice_stream.previous_subscription == NULL);
-  push_spk_to(&fixture, -2, 5, 4, "", frames_b64(1U, 0x44));
+  push_speaker_frame_to(&fixture, -2, 5, 4, "", frames_b64(1U, 0x44));
   assert(spoken_frames == frames + 2U);
   assert(fixture.voice_stream.batches_on_connection == 2U);
   batches = fixture.voice_stream.batches_on_connection;
   /* The predecessor was closed once -2 opened, so a late -1 delivery cannot
    * advance the call's watermark or invoke its audio/control callbacks. */
-  push_spk_to(&fixture, -1, 6, 5, "", frames_b64(1U, 0x45));
+  push_speaker_frame_to(&fixture, -1, 6, 5, "", frames_b64(1U, 0x45));
   assert(fixture.voice_stream.batches_on_connection == batches);
 }
 
@@ -651,7 +651,7 @@ static void failed_renewal_requires_a_fresh_incumbent_batch(void) {
   struct fixture fixture;
   fixture_init(&fixture);
   start_and_mount(&fixture);
-  push_spk_to(&fixture, -1, 1, 1, "", frames_b64(1U, 0x41));
+  push_speaker_frame_to(&fixture, -1, 1, 1, "", frames_b64(1U, 0x41));
   assert(fixture.voice_stream.batches_on_connection == 1U);
   fixture.replacement_subscription.epoch = UINT32_MAX;
   fixture.clock_ms = 100U;
@@ -662,7 +662,7 @@ static void failed_renewal_requires_a_fresh_incumbent_batch(void) {
   assert(fixture.voice_stream.state == ITERATE_KIT_VOICE_STREAM_READY);
   assert(fixture.voice_stream.batches_on_connection == 0U);
   assert(fixture.voice_stream.last_batch_ms == fixture.clock_ms);
-  push_spk_to(&fixture, -1, 2, 2, "", frames_b64(1U, 0x42));
+  push_speaker_frame_to(&fixture, -1, 2, 2, "", frames_b64(1U, 0x42));
   assert(fixture.voice_stream.batches_on_connection == 1U);
 }
 
@@ -671,7 +671,7 @@ static void repeated_silent_renewals_start_with_no_batches(void) {
   struct fixture fixture;
   fixture_init(&fixture);
   start_and_mount(&fixture);
-  push_spk_to(&fixture, -1, 1, 1, "", frames_b64(1U, 0x41));
+  push_speaker_frame_to(&fixture, -1, 1, 1, "", frames_b64(1U, 0x41));
   assert(fixture.voice_stream.batches_on_connection == 1U);
   assert(iterate_kit_voice_stream_recycle_subscription(
       &fixture.voice_stream, &fixture.replacement_subscription) == CAPNWEB_OK);
@@ -920,16 +920,16 @@ static void a_discontinuous_delivery_range_is_counted(void) {
   assert(fixture.voice_stream.delivery_gaps == 0U);
 
   /* after == the last through: nothing was missed. */
-  push_spk(&fixture, 2, 11, "", frames_b64(1U, 0x41));
+  push_speaker_frame(&fixture, 2, 11, "", frames_b64(1U, 0x41));
   assert(fixture.voice_stream.last_delivery_through == 11);
   assert(fixture.voice_stream.delivery_gaps == 0U);
 
-  /* A jump: push_spk stamps `after` as offset - 1, so offset 20 leaves 11. */
-  push_spk(&fixture, 3, 20, "", frames_b64(1U, 0x42));
+  /* A jump: push_speaker_frame stamps `after` as offset - 1, so offset 20 leaves 11. */
+  push_speaker_frame(&fixture, 3, 20, "", frames_b64(1U, 0x42));
   assert(fixture.voice_stream.delivery_gaps == 1U);
 
   /* And it keeps counting from the new position rather than latching. */
-  push_spk(&fixture, 4, 21, "", frames_b64(1U, 0x43));
+  push_speaker_frame(&fixture, 4, 21, "", frames_b64(1U, 0x43));
   assert(fixture.voice_stream.delivery_gaps == 1U);
   assert(iterate_kit_voice_stream_close(&fixture.voice_stream) == CAPNWEB_OK);
   release_server_callback(&fixture, latest_callback_id(&fixture));

@@ -665,7 +665,7 @@ static long latest_callback_export_id(void) {
  */
 static long next_event_offset = 200;
 
-static void deliver_spk_chunk(bool last) {
+static void deliver_speaker_frame(bool last) {
   static char message[768];
   struct iterate_kit_itx_connection *connection =
       iterate_kit_fake_platform_connection();
@@ -1246,8 +1246,8 @@ static void an_idle_accepted_call_is_not_recycled_for_silence(void) {
   /* The words went up (the first frame opens the call) and the call is live. */
   assert(sent_after_contains(after_accept, "mic-frame"));
   /* The answer came and finished: nothing more is owed. */
-  deliver_spk_chunk(false);
-  deliver_spk_chunk(true);
+  deliver_speaker_frame(false);
+  deliver_speaker_frame(true);
   run_ms(1000U);
   after_answer = iterate_kit_fake_platform_sent_count();
   run_ms(ITERATE_KIT_VOICE_DOWNLINK_SILENCE_MS * 3U);
@@ -1273,7 +1273,7 @@ static void a_stream_silent_mid_answer_is_recycled(void) {
   deliver_accepted_latest();
   run_ms(2000U);
   assert(sent_after_contains(after_accept, "mic-frame"));
-  deliver_spk_chunk(false);
+  deliver_speaker_frame(false);
   after_chunk = iterate_kit_fake_platform_sent_count();
   run_ms(ITERATE_KIT_VOICE_DOWNLINK_SILENCE_MS + 2000U);
   assert(sent_after_contains(after_chunk, "[\"subscribe\"]"));

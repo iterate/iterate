@@ -151,7 +151,7 @@ export default async function voiceCall(
         const p = event.payload ?? {};
         switch (event.type) {
           case "events.iterate.com/voice-agent/speaker-frame":
-            marks.firstSpkFrame ??= at();
+            marks.firstSpeakerFrame ??= at();
             if (p.pcm) speaker.push(Buffer.from(p.pcm, "base64"));
             if (p.lastFrameOfAnswer) marks[`answerDone#${speaker.length}`] = at();
             break;
