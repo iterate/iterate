@@ -29,9 +29,8 @@ import { depotCiApi, type DepotApi } from "./depot.ts";
  *  and how long Depot may fail every call before the wait gives up on it. */
 export const AWAIT_DEPLOY = { pollMs: 1_000, boundMs: 40 * 60_000, outageMs: 5 * 60_000 };
 
-/** How long a suite runs at most once the wait is over: the suite jobs' whole timeout before they
- *  waited for the deploy themselves (apps/os/scripts/preview.ts `runSuite`). The suite jobs'
- *  `timeout-minutes` is the wait's bound and then this (preview-os-workflow.test.ts). */
+/** How long a suite runs at most once the wait is over (apps/os/scripts/preview.ts `runSuite`). The
+ *  suite jobs' `timeout-minutes` is the wait's bound and then this (preview-os-workflow.test.ts). */
 export const SUITE_BOUND_MS = 30 * 60_000;
 
 /** A job's statuses that end the wait with no preview (Depot's terminal statuses but `finished`:

@@ -237,12 +237,8 @@ test("Preview OS's suite jobs outlast the deploy they wait for, and then their s
     );
 });
 
-// THE REQUIRED CHECKS' TRUTH TABLE (docs/depot-ci.md#preview-job-shape). GitHub counts a skipped
-// job as passing, so each suite's job skips only on a dispatch of the other suite alone, and on a PR
-// that changes no preview path it passes having tested nothing. Wherever a preview was needed and
-// none was deployed, it fails: its "Require a preview to test" step on a dispatch that names none,
-// its wait for this run's deploy (PREVIEW_AWAIT_DEPLOY_JOB, scripts/ci/await-deploy.ts) on a deploy
-// that did not finish.
+// THE REQUIRED CHECKS' TRUTH TABLE: when each suite job skips, passes having tested nothing, or
+// fails for want of a preview, as preview-os.yml's REQUIRED CHECKS comment says, over every case.
 type Run = {
   event: "pull_request" | "workflow_dispatch";
   action?: string;

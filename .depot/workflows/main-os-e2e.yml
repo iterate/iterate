@@ -121,12 +121,10 @@ jobs:
   # THE TWO SUITES, as a PR's Preview OS runs them (preview-os.yml): E2E tests and Browser specs,
   # side by side, and ONE DEFINITION. Browser specs runs E2E tests' steps (the `suite-steps`
   # anchor); the two differ only in the suite their env names and in their runners, each a PR
-  # preview's (Browser specs on a 4x16), so main's specs run as a PR's do. Their steps are a PR
-  # preview's, less the guard and the PR's checkouts and path check (scripts/ci/depot-workflows.test.ts
-  # keeps them alike). Like a PR's, each starts with the run, sets its suite up while the preview
-  # deploys, then waits for Deploy preview (PREVIEW_AWAIT_DEPLOY_JOB, scripts/ci/await-deploy.ts): a
-  # deploy that did not finish fails it, with no evidence to keep. The timeout is the wait's bound,
-  # the deploy's own 40 minutes, and then the suite's 30.
+  # preview's (Browser specs on a 4x16), so main's specs run as a PR's do. Their steps and timeout
+  # are a PR preview's, less the guard and the PR's checkouts and path check
+  # (scripts/ci/depot-workflows.test.ts keeps them alike), so each starts with the run and waits for
+  # Deploy preview as a PR's does (docs/depot-ci.md#suites-start-with-the-run).
   e2e:
     name: E2E tests
     runs-on:

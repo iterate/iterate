@@ -666,8 +666,7 @@ have no `needs:`. Each starts with the run and, while the preview deploys:
    again a second later, and only five minutes in which every call failed end
    it. A 401 or 403, a missing token or an answer it cannot read fail it at once.
    The suite then runs for at most 30 minutes (`runBounded` stops its process
-   group), so the suite jobs' timeout is 70 minutes: the wait, then the suite's
-   30, the whole job's timeout before the suites waited here.
+   group), so the suite jobs' timeout is 70 minutes: the wait, then the suite's 30.
 
 A suite keeps its evidence once it read its deployed target
 (`test-results/target.json`, [test evidence](test-evidence.md)), so a job that
