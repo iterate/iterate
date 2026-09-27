@@ -275,7 +275,7 @@ export type CoreState = {
    *  asked for is still to come. */
   contextAbortedOffset?: number;
   /** Set by the wake record: the `itx/aborted` whose reset began this incarnation — a recorded,
-   *  deliberate reset (the fetch-upgrade 101s name it, context/rpc-stubs.ts). */
+   *  deliberate reset (the fetch-upgrade 101s name it, context/fetch-upgrade.ts). */
   wokenAfterContextAbortedOffset?: number;
   paused: { reason: string } | null;
   /** THE REWRITE-RULE TABLE, by canonical match (a map — no stack, no identity beyond the match): a

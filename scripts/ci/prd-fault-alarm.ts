@@ -70,7 +70,7 @@ type CloudflareCredentials = { accountId: string; apiToken: string };
 
 /** One window's rows per signal: [label, count], biggest first. `pagers` is not a fault: the
  *  rpc-stub pagers' re-dial outcomes by event, the recovery a page shows beside a connection's
- *  close (apps/os context/rpc-stubs.ts); one that gives up logs an error, which is. `healEvents` is
+ *  close (apps/os context/rpc-stub-relay.ts); one that gives up logs an error, which is. `healEvents` is
  *  `heals` by event instead of by name, for PINNED_WORKAROUNDS. */
 export type FaultReading = Record<
   "serverErrors" | "heals" | "healEvents" | "errors" | "pagers",
@@ -320,7 +320,7 @@ export function triageIncidents(
   }
   const span = `${hhmm(window.from)}–${hhmm(window.to)} UTC`;
   const pagers = Object.fromEntries(reading.pagers);
-  // a pager's drop is logged with its outcome (apps/os context/rpc-stubs.ts `redialPager`)
+  // a pager's drop is logged with its outcome (apps/os context/rpc-stub-relay.ts `redialPager`)
   const pagersRedialed = pagers["rpc-stub-pager-redialed"] ?? 0;
   const pagersGaveUp = pagers["rpc-stub-pager-redial-failed"] ?? 0;
   const recovery =

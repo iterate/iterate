@@ -45,10 +45,12 @@ import {
   encodeFetchExpression,
   stampCallerHeaders,
   terminalFetchOf,
+} from "./context/rpc-stubs.ts";
+import {
   lendRpcStubOverPager,
   type ClientRpcStub,
   type IterateContextDurableObjectStub,
-} from "./context/rpc-stubs.ts";
+} from "./context/rpc-stub-relay.ts";
 import { normalizeRewriteRuleConfigured } from "./context/itx-expression-rewriting.ts";
 import { FetchRouteConfiguredPayload } from "./fetch-routes.ts";
 import type { BuiltInScope } from "./context/built-ins.ts";

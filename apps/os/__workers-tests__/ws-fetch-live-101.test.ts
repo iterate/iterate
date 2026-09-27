@@ -11,7 +11,7 @@
 //   x-itx-expression → the DO's itx-expression fetch resolves the project's ingress target
 //   `itx.wsdev` → the rewrite rule at `itx.wsdev` (pure data: target `itx.rpcStubs.get('itx.wsdev')`,
 //   the registry naming the lent provider)
-//   → context/rpc-stubs.ts: the DO asks the borrowed stub to dial (an RPC call that EXECUTES in the
+//   → context/fetch-upgrade.ts: the DO asks the borrowed stub to dial (an RPC call that EXECUTES in the
 //   relay's session context; its return is the honest ack), the relay dials the provider's fetch()
 //   over capnweb and opens ONE dedicated fetch-upgrade leg back into the DO, the DO mints the
 //   eyeball's WebSocketPair natively, and frames forward RAW between the two DO-side sockets. The
@@ -188,7 +188,7 @@ test("a lent-stub WebSocket whose provider's session dies: the visitor's socket 
 // The primary transport (capnweb) is client-first, so this bites only RAW-WS to a provider that
 // speaks first. The DO must accept the eyeball BEFORE the transport opens its upgrade leg, or the
 // greeting the provider sends the instant it upgrades routes to a not-yet-existent eyeball
-// (#peerOf → null) and is dropped. A regression pin for that accept-order (context/rpc-stubs.ts).
+// (#peerOf → null) and is dropped. A regression pin for that accept-order (context/fetch-upgrade.ts).
 test("a lent-stub WebSocket provider that GREETS on connect: the eyeball receives the server's first frame without sending one", async () => {
   const project = "ws101-greet";
   const itx = await createProject(project);

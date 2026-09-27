@@ -40,12 +40,8 @@ import { appConfigOf, platformAddressesOf, sessionSigningSecretOf } from "./app-
 import { captureIssueInPosthog } from "./posthog.ts";
 import { FILES_ROUTING_SLUG, serveProjectFileRequest } from "./context/file-urls.ts";
 import { appCookies, browserAuthorization, browserClient } from "./browser-client.ts";
-import {
-  FETCH_UPGRADE_RESUMABLE_HEADER,
-  ITX_EXPRESSION_FETCH_HEADER,
-  ITX_PLATFORM_ORIGIN_HEADER,
-  spliceEyeballAnswer,
-} from "./context/rpc-stubs.ts";
+import { ITX_EXPRESSION_FETCH_HEADER, ITX_PLATFORM_ORIGIN_HEADER } from "./context/rpc-stubs.ts";
+import { FETCH_UPGRADE_RESUMABLE_HEADER, spliceEyeballAnswer } from "./context/fetch-upgrade.ts";
 import { DurableObjectNameCodec, resourceScope } from "./context/paths.ts";
 import { authorizationForToken, recordGrantUse } from "./oauth.ts";
 import { leasedProjectHostAnswer } from "./project-host-lease.ts";

@@ -1,12 +1,11 @@
 // context/fetch-upgrade-splice.ts — A LENT STUB'S WEBSOCKET THAT OUTLIVES ITS CONTEXT'S SOCKETS.
 //
 // A visitor's WebSocket to a lent rpc stub (a tunnel: `iterate tunnel 5173` serving Vite's HMR
-// socket) rides two platform sockets that meet in the context Durable Object (rpc-stubs.ts, the
-// fetch section): the EYEBALL socket (the edge ⇄ the DO) and the UPGRADE LEG (the /api relay ⇄ the
-// DO). The DO forwards frames between them by upgradeId. Both are cut whenever the DO resets — every
-// deploy resets every Durable Object for its new code — or the platform drops one (measured on prd
-// 2026-09-24: a Vite HMR socket through a tunnel closed 1006 at every prd deploy, ~5 an hour, and
-// once without one; the visitor's page then reloaded and lost its state).
+// socket) rides two platform sockets that meet in the context Durable Object (fetch-upgrade.ts):
+// the EYEBALL socket (the edge ⇄ the DO) and the UPGRADE LEG (the /api relay ⇄ the DO). The DO
+// forwards frames between them by upgradeId. Both are cut whenever the DO resets — every deploy
+// resets every Durable Object for its new code — or the platform drops one. A cut the visitor saw
+// would close its socket 1006, and a Vite HMR client then reloads the page and loses its state.
 //
 // The two ends of those sockets are the platform's own stateless invocations — the edge holding the
 // visitor's socket, the relay holding the provider's — and they outlive a DO reset (a deploy leaves
