@@ -20,6 +20,9 @@ env:
   # pnpm's store, which Depot Cache restores (below). On the checkout's filesystem, so pnpm
   # hard-links node_modules from it. pnpm 10 reads `npm_config_*`, not `pnpm_config_*`.
   NPM_CONFIG_STORE_DIR: /home/runner/.pnpm-store
+  # No build outputs in the store: the install runs the few build scripts (esbuild, workerd…) in
+  # well under a second, and from a restored store that held them it took 5 s longer (2026-09-27).
+  NPM_CONFIG_SIDE_EFFECTS_CACHE: "false"
 
 jobs:
   test:

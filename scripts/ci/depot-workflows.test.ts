@@ -660,9 +660,12 @@ test("the Test job sets up its toolchain on Depot's stock image, with pnpm's sto
   });
   expect(step("Setup Doppler")?.run).toContain("sha256sum --check");
 
-  // pnpm reads its store from `npm_config_store_dir`; the cache steps name the same path
-  const store = workflow.env?.NPM_CONFIG_STORE_DIR;
-  expect(store).toBe("/home/runner/.pnpm-store");
+  // pnpm reads its store from `npm_config_store_dir`, which the cache steps name too, and keeps
+  // no build outputs in it
+  expect(workflow.env).toMatchObject({
+    NPM_CONFIG_STORE_DIR: "/home/runner/.pnpm-store",
+    NPM_CONFIG_SIDE_EFFECTS_CACHE: "false",
+  });
   const restore = step("Restore pnpm's store");
   expect(restore).toMatchObject({
     id: "pnpm-store",

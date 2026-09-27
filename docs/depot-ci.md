@@ -449,7 +449,9 @@ them. So `test.yml` runs on `depot-ubuntu-24.04-8`, and after the checkout sets 
 A main push that missed the exact key saves its store, beside the evidence uploads. Main restores
 nothing else, so that store holds only its lockfile's packages: `pnpm store prune` cannot cut an
 older one down, since it drops every file with one link, and pnpm copies the packages it builds.
-pnpm 10 reads `npm_config_*`, not `pnpm_config_*`, so the store is `NPM_CONFIG_STORE_DIR`.
+pnpm 10 reads `npm_config_*`, not `pnpm_config_*`, so the store is `NPM_CONFIG_STORE_DIR`, and
+`NPM_CONFIG_SIDE_EFFECTS_CACHE=false` keeps build outputs out of it: the install runs the few build
+scripts itself, since from a store that held their outputs it took 5 s longer.
 
 Depot Cache has no branch scope: any run can write any key, so a pull request could plant a store
 for main's runs by editing the workflow. Only Test reads the cache, never a deploy. Its job token
