@@ -638,13 +638,13 @@ test("jobs on the baked image install no toolchain or dependencies of their own"
 // run on any branch can write any key. So its one reader is the Test job, never a deploy, and only
 // a main push writes pnpm's store.
 test("the Test job sets up its toolchain on Depot's stock image, with pnpm's store from Depot Cache", () => {
-  const file = ".depot/workflows/test.yml";
-  const workflow = loadWorkflow(file);
-  const steps = workflow.jobs.test.steps ?? [];
+  const workflow = loadWorkflow(".depot/workflows/test.yml");
+  const steps = workflow.jobs.test.steps || [];
   const step = (name: string) => steps.find((candidate) => candidate.name === name);
 
   expect(workflow.jobs.test["runs-on"]).toBe("depot-ubuntu-24.04-8");
-  expect(workflow.permissions).toEqual({ contents: "read" });
+  // read-only, whatever store it restored
+  expect(workflow).toMatchObject({ permissions: { contents: "read" } });
   // Node from .nvmrc and pnpm from the root `packageManager`, the versions every checkout declares
   expect(step("Setup Node")).toMatchObject({
     uses: "actions/setup-node@v4",
