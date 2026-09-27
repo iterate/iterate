@@ -207,7 +207,7 @@ ready; browser installation overlaps the Vitest run. Playwright's worker count
 and the case against sharding were measured, not guessed: #2659's study, run
 on an earlier 88-test suite, settled on 24 workers and found that six-way
 sharding lengthened the full preview run. Measured again on 2026-09-26 with 50
-specs (#3257): the specs keep 6 workers, on a 4x16, where a spec takes about a
+specs (#3258): the specs keep 6 workers, on a 4x16, where a spec takes about a
 quarter less time than on a 2x8. 12 or 16 workers, or three shards, finished
 sooner but put more specs on the preview at once and retried two to four times
 as many of them; two shards of 6 were slower than the one 4x16 once the job
