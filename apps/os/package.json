@@ -20,7 +20,6 @@
     "preview": "tsx scripts/preview.ts",
     "ensure-resources": "tsx scripts/ensure-resources.ts",
     "erase-data": "tsx scripts/erase-data.ts",
-    "backfill-created-at": "tsx scripts/backfill-created-at.ts",
     "control-plane-load": "tsx scripts/control-plane-load.ts",
     "project-seed": "tsx scripts/project-seed.ts",
     "seed-instance-secrets": "tsx scripts/seed-instance-secrets.ts",
