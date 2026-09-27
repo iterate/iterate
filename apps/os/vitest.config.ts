@@ -59,9 +59,7 @@ const onUnhandledError = (error: unknown): boolean | void => {
  *  `pnpm test` (unit + workers, 7 slots in CI), 2026-09-24: the facet-push watchdog 60 s (the
  *  run's floor; the run ends at 67 s, its workers files starting 4 s in), oauth's four 30 s
  *  re-checks 31–36 s each, a file apiece (oauth-support.ts), personal access tokens' 30 s re-check
- *  35 s (one row, measured at 3 slots), the CPU-bound memory children 20 s beside those idle waits;
- *  alarm-and-pins (42 s, fixed sub-second waits) starts in the first free slot, at 23 s, and ends a
- *  second before the watchdog.
+ *  35 s (one row, measured at 3 slots), the CPU-bound memory children 20 s beside those idle waits.
  *  `pnpm e2e`, with rows concurrent (deployed): session's 30 s grant re-check 34 s, the dormant
  *  deadline 24 s, the 144 MiB file's sequential rows, the slow client's upload 10–15 s. A file that
  *  stops being long drops off this list. */
@@ -69,6 +67,9 @@ const LONG_POLES = [
   "__workers-tests__/facet-push-timeout-heals.test.ts",
   // The same 60 s watchdog, its restart cutting off a sibling push: ~62 s (measured 2026-09-25).
   "__workers-tests__/facet-timeout-restart-heals-sibling-push.test.ts",
+  // Fixed sub-second waits that add up: 41 s in CI (measured 2026-09-27), longer than every file
+  // but the two watchdogs'.
+  "__workers-tests__/alarm-and-pins.test.ts",
   "__workers-tests__/oauth-recheck-platform-failure.test.ts",
   "__workers-tests__/personal-access-tokens.test.ts",
   "__workers-tests__/oauth-recheck-no-project.test.ts",
