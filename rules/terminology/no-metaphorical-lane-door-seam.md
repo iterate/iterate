@@ -11,8 +11,32 @@ files:
     "!**/pnpm-lock.yaml",
     "!packages/ui/src/components/{alert-dialog,avatar,badge,breadcrumb,button,card,checkbox,command,dialog,dropdown-menu,empty,field,input,input-group,label,native-select,select,separator,sheet,sidebar,skeleton,sonner,spinner,table,tabs,textarea,tooltip}.tsx",
     "!packages/ui/src/hooks/use-mobile.ts",
+    "!**/*.gen.ts",
   ]
 suggestions: forbidden
+engine: jev
+select:
+  {
+    line: "(^|[^A-Za-z])([Ll]anes?|[Dd]oors?|[Ss]eams?|LANES?|DOORS?|SEAMS?)(?![a-z])|[a-z](Lanes?|Doors?|Seams?)(?![a-z])|[Bb]ackdoor",
+  }
+window: [2, 2] # lines before, after the unit
+question:
+  instructions: |
+    Terminology rule for source code, comments, docs, test titles, log and error text: the words lane, door and seam must not be used as metaphors. A word or identifier that contains one of them as a part (a camelCase or snake_case part, a plural, a compound word) counts too.
+    Judge the word(s) "{match}" on the line marked ">".
+
+    It violates the rule when the word stands for something in the team's own software, tests, CI, routes or docs that has a plain name: a test suite, CI job, delivery mode, stream, code path, entry point, endpoint, route, method, call, interface, boundary or hook. Route names, environment variables, test titles and log messages count.
+
+    It does NOT violate the rule when:
+    - the code literally models a road or traffic lane, a physical door, or a sewn or joined seam;
+    - the matched letters are only part of a longer word with an unrelated meaning;
+    - it quotes something the team does not control: a third-party API field, an upstream error message, or recorded output kept as a test fixture;
+    - the line immediately above is an iterate-lint-disable-next-line directive for this rule that gives a specific reason the name must stay (a persisted event type, a stored key, a deployed route).
+  "true": "The word is a metaphor for one of the team's own software concepts."
+  "false": "The word is literal, part of an unrelated longer word, quoted from a third party, or kept under a specific lint directive."
+flag: 0.6 # p >= flag: a diagnostic with `message`
+pass: 0.3 # p < pass: nothing; between: the LLM judges the unit with this file's prose
+message: "`{match}` is used as a metaphor. Name the thing by what it is."
 ---
 
 # Ban lane, door, and seam as code metaphors
