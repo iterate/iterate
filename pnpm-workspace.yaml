@@ -103,4 +103,5 @@ overrides:
   wrangler: "catalog:"
   ws: "catalog:"
 patchedDependencies:
+  "@cloudflare/vitest-plugin@1.2.5": patches/@cloudflare__vitest-plugin@1.2.5.patch
   zod@4.6.5: patches/zod@4.6.5.patch

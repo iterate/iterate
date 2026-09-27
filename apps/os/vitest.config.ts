@@ -24,6 +24,9 @@
 // modules for unit tests and fixtures. Browser E2E is the root Playwright suite (specs/AGENTS.md).
 
 import { generateKeyPairSync } from "node:crypto";
+import { mkdtempSync, readdirSync, rmSync, unlinkSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { cloudflareTest, readD1Migrations } from "@cloudflare/vitest-plugin";
 import {
@@ -51,8 +54,9 @@ const onUnhandledError = (error: unknown): boolean | void => {
 /** THE LONG POLES FIRST. vitest orders files by their cached durations, and CI has no cache — so the
  *  row that waits a real deadline started after ninety seconds of short files and the run ended at
  *  170 s instead of its floor (measured 2026-09-21). These files start first, the longest first;
- *  everything else follows vitest's own order, which runs every unit file before the first workers
- *  file. `pnpm test` (unit + workers, 7 slots in CI), 2026-09-24: the facet-push watchdog 60 s (the
+ *  then the other workers files, back to back, so a runner that ends one keeps its runtime for the
+ *  next (the workers project's `isolate: false`); then the unit files, in vitest's own order.
+ *  `pnpm test` (unit + workers, 7 slots in CI), 2026-09-24: the facet-push watchdog 60 s (the
  *  run's floor; the run ends at 67 s, its workers files starting 4 s in), oauth's four 30 s
  *  re-checks 31–36 s each, a file apiece (oauth-support.ts), personal access tokens' 30 s re-check
  *  35 s (one row, measured at 3 slots), the CPU-bound memory children 20 s beside those idle waits;
@@ -80,12 +84,68 @@ const LONG_POLES = [
 ];
 class LongPolesFirst extends BaseSequencer {
   override async sort(files: TestSpecification[]): Promise<TestSpecification[]> {
+    // `--sequence.seed=<n>` puts every file in an order drawn from n instead: the check that no file
+    // depends on what the files before it in its runtime did (`pnpm test -- --sequence.seed=7`).
+    // vitest sets no seed of its own unless `--sequence.shuffle` shuffles the tests too.
+    const { seed } = this.ctx.config.sequence;
+    if (seed !== undefined) return seededOrder(files, seed);
     const ordered = await super.sort(files);
     const rank = (spec: TestSpecification) =>
       LONG_POLES.findIndex((pole) => spec.moduleId.endsWith(pole));
     const poles = ordered.filter((spec) => rank(spec) >= 0).sort((a, b) => rank(a) - rank(b));
-    return [...poles, ...ordered.filter((spec) => rank(spec) < 0)];
+    const rest = ordered.filter((spec) => rank(spec) < 0);
+    const sharingRuntimes = rest.filter((spec) => spec.project.config.isolate === false);
+    return [
+      ...poles,
+      ...sharingRuntimes,
+      ...rest.filter((spec) => !sharingRuntimes.includes(spec)),
+    ];
   }
+}
+
+/** EACH WORKERS RUNTIME'S STORAGE: a directory per Miniflare (its `resourcePersistencePath`, which
+ *  patches/@cloudflare__vitest-plugin@1.2.5.patch lets through), so the pool knows where the files
+ *  are and can empty them between two files (`TEST_STORAGE`, __workers-tests__/empty-runtime.ts). A
+ *  runtime left alone keeps its storage in a temporary directory of Miniflare's own, where nothing
+ *  outside workerd can reach it. Removed when vitest exits. */
+const runtimeStorageDirs: string[] = [];
+process.on("exit", () => {
+  for (const dir of runtimeStorageDirs) rmSync(dir, { recursive: true, force: true });
+});
+function runtimeStorage() {
+  const dir = mkdtempSync(join(tmpdir(), "os-workers-storage-"));
+  runtimeStorageDirs.push(dir);
+  return {
+    dir,
+    /** Every object's file gone: the Durable Objects' SQLite and their facets' (`do/`), D1's, KV's
+     *  and the Cache API's, with their blobs. Each namespace's `metadata.sqlite` stays: it is the
+     *  alarm schedule workerd holds open, which `reset()` has just emptied. */
+    empty() {
+      for (const entry of readdirSync(dir, { recursive: true, withFileTypes: true })) {
+        if (entry.isFile() && !/^metadata\.sqlite(-wal|-shm)?$/.test(entry.name))
+          unlinkSync(join(entry.parentPath, entry.name));
+      }
+      return new Response(null, { status: 204 });
+    },
+  };
+}
+
+/** `files` by module id, then shuffled (Fisher–Yates) with mulberry32 seeded by `seed`: one seed, one
+ *  order, on any machine. */
+function seededOrder(files: TestSpecification[], seed: number): TestSpecification[] {
+  let state = seed >>> 0;
+  const random = () => {
+    state = (state + 0x6d2b79f5) >>> 0;
+    let t = Math.imul(state ^ (state >>> 15), state | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4_294_967_296;
+  };
+  const order = [...files].sort((a, b) => a.moduleId.localeCompare(b.moduleId));
+  for (let i = order.length - 1; i > 0; i--) {
+    const j = Math.floor(random() * (i + 1));
+    [order[i], order[j]] = [order[j]!, order[i]!];
+  }
+  return order;
 }
 
 /** THE WORKERS SUITE'S GITHUB APP — iterate's App at a fake GitHub (github.test,
@@ -156,36 +216,52 @@ export default defineConfig({
       },
       {
         plugins: [
-          // The control plane's D1 starts empty in every test file (each file its own storage):
+          // The control plane's D1 starts empty in every test file (empty-runtime.ts empties it):
           // the migrations, read here in node, are applied by the setup file below, as wrangler
           // applies them to a deployment's (https://developers.cloudflare.com/workers/testing/vitest-integration/test-apis/#d1).
-          cloudflareTest(async () => ({
-            main: "./dist/server/index.js",
-            wrangler: { configPath: "./wrangler.test.jsonc" },
-            miniflare: {
-              compatibilityDate: COMPATIBILITY_DATE,
-              bindings: {
-                TEST_MIGRATIONS: await readD1Migrations(
-                  fileURLToPath(new URL("./src/control-plane/db/migrations", import.meta.url)),
-                ),
-                APP_CONFIG_INTEGRATIONS__GITHUB: JSON.stringify({
-                  appId: "github-test-app",
-                  appSlug: "iterate-test",
-                  oauthClientId: "petshop-default",
-                  oauthClientSecret: "petshop-default-secret",
-                  privateKey: WORKERS_GITHUB_APP_KEY.privateKey,
-                  webhookSecret: "github-test-webhook-secret",
-                  githubOrigin: "https://github.test",
-                }),
-                TEST_GITHUB_APP_PUBLIC_KEY: WORKERS_GITHUB_APP_KEY.publicKey,
+          // Called once per runtime: each gets its own storage directory.
+          cloudflareTest(async () => {
+            const storage = runtimeStorage();
+            return {
+              main: "./dist/server/index.js",
+              wrangler: { configPath: "./wrangler.test.jsonc" },
+              miniflare: {
+                resourcePersistencePath: storage.dir,
+                serviceBindings: { TEST_STORAGE: () => storage.empty() },
+                compatibilityDate: COMPATIBILITY_DATE,
+                bindings: {
+                  TEST_MIGRATIONS: await readD1Migrations(
+                    fileURLToPath(new URL("./src/control-plane/db/migrations", import.meta.url)),
+                  ),
+                  APP_CONFIG_INTEGRATIONS__GITHUB: JSON.stringify({
+                    appId: "github-test-app",
+                    appSlug: "iterate-test",
+                    oauthClientId: "petshop-default",
+                    oauthClientSecret: "petshop-default-secret",
+                    privateKey: WORKERS_GITHUB_APP_KEY.privateKey,
+                    webhookSecret: "github-test-webhook-secret",
+                    githubOrigin: "https://github.test",
+                  }),
+                  TEST_GITHUB_APP_PUBLIC_KEY: WORKERS_GITHUB_APP_KEY.publicKey,
+                },
               },
-            },
-          })),
+            };
+          }),
         ],
         test: {
           name: "workers",
           include: ["__workers-tests__/**/*.test.ts", "../agents/__workers-tests__/**/*.test.ts"],
-          setupFiles: ["./__workers-tests__/apply-migrations.ts"],
+          // ONE RUNTIME FOR CONSECUTIVE FILES. Isolated, every file started its own Miniflare and
+          // fetched and compiled the worker's bundle into it: 2.8 s a file before its first test,
+          // 0.9 s shared (twelve files one after another, measured locally 2026-09-27). A runner that
+          // ends a file keeps its runtime while the next queued file is a workers one (vitest's pool).
+          // fresh-file.ts, first, starts each file as a runtime of its own would: storage empty,
+          // modules unevaluated, a new deploy.
+          isolate: false,
+          setupFiles: [
+            "./__workers-tests__/fresh-file.ts",
+            "./__workers-tests__/apply-migrations.ts",
+          ],
           restoreMocks: true,
           unstubGlobals: true,
           unstubEnvs: true,
