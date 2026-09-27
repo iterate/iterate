@@ -266,10 +266,11 @@ export default defineConfig({
         test: {
           name: "workers",
           include: ["__workers-tests__/**/*.test.ts", "../agents/__workers-tests__/**/*.test.ts"],
-          // ONE RUNTIME FOR CONSECUTIVE FILES. Isolated, every file started its own Miniflare and
-          // fetched and compiled the worker's bundle into it: 2.8 s a file before its first test,
-          // 0.9 s shared (twelve files one after another, measured locally 2026-09-27). A runner that
-          // ends a file keeps its runtime while the next queued file is a workers one (vitest's pool).
+          // ONE RUNTIME FOR CONSECUTIVE FILES. Isolated, each file starts its own Miniflare and
+          // fetches and compiles the worker's bundle into it: 2.8 s a file before its first test,
+          // against 0.9 s shared (twelve files one after another, measured locally 2026-09-27). A
+          // runner that ends a file keeps its runtime while the next queued file is a workers one
+          // (vitest's pool).
           // fresh-file.ts, first, starts each file as a runtime of its own would: storage empty,
           // modules unevaluated, a new deploy.
           isolate: false,
