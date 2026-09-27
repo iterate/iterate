@@ -153,9 +153,9 @@ function verdictOf(check: {
 }
 
 /** Whether the push's Preview OS tested a preview: it ran, and neither its CI trace nor its E2E
- *  tests job was skipped. A push that changes no preview path skips the trace (preview-os.yml); its
- *  suites, which start beside the deploy, pass having tested nothing, and skipped before they did.
- *  Pure. */
+ *  tests job was skipped. A push that changes no preview path skips the trace (preview-os.yml), and
+ *  its suites, which start beside the deploy, pass having tested nothing; a skipped E2E tests job
+ *  tested nothing either. Pure. */
 function previewTested(workflows: RunMetrics["workflows"]) {
   const preview = workflows.find(({ workflow }) => workflow.name === "Preview OS");
   return (

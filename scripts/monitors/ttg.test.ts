@@ -228,7 +228,7 @@ test("a push without Preview OS waits for Lint and Typecheck and Test alone", ()
 
 // Since Preview OS runs on every push, a push that changes no preview path runs its jobs only to
 // decide so, and skips its CI trace: its suites, which start beside the deploy, pass having tested
-// nothing. Before they did, they were skipped behind it.
+// nothing. Skipped suites tested nothing either.
 test.for([
   { name: "passed deciding so", suites: "finished" },
   { name: "were skipped", suites: "skipped" },

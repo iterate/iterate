@@ -455,8 +455,8 @@ test("an older run Depot failed before its jobs started has no verdict: the stat
   });
 });
 
-// Since the suites start beside the deploy, a failed deploy fails them too, as they wait for it; a
-// run from before that skipped them.
+// A deploy that failed is the run's verdict alone, whether its suites failed waiting for it or were
+// skipped.
 test.for([
   { name: "suites that failed waiting for it", suites: "failed" },
   { name: "skipped suites", suites: "skipped" },

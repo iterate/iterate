@@ -1123,7 +1123,7 @@ async function runSuite(
       throw error;
     }
     // A warm-up still running exits beside the suite's start, not before it: a Chromium launch
-    // stopped mid-launch took the whole 3 s grace (`warmUp`).
+    // stopped mid-launch can take the whole 3 s grace (`warmUp`).
     for (const warm of warmUps) void warm.stop();
   }
   await writeDeployedTarget(
