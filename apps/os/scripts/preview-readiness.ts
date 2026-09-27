@@ -29,8 +29,12 @@ import { request } from "node:https";
 import { newWebSocketRpcSession } from "capnweb";
 import { WebSocket } from "undici";
 
+/** How long the gate asks before it fails the deploy: well past the slowest in-place redeploy
+ *  measured, 58 s. */
+const DEADLINE_MS = 150_000;
+
 /** Wait until the preview at `url` answers `consecutive` full rounds in a row on `version` (the
- *  deployment's id), each `width` probes at once; throws, naming the misses, when `deadlineMs` passes
+ *  deployment's id), each `width` probes at once; throws, naming the misses, when DEADLINE_MS passes
  *  first. */
 export function awaitPreviewReady(
   url: string,
@@ -39,24 +43,21 @@ export function awaitPreviewReady(
     version: string;
     width: number;
     consecutive: number;
-    deadlineMs: number;
   },
 ) {
   return awaitFullRounds(() => probeRound(url, options), {
     label: url,
     consecutive: options.consecutive,
-    deadlineMs: options.deadlineMs,
-    pauseMs: 1_000,
   });
 }
 
 /** The gate's loop over any round of probes (preview-readiness.test.ts drives it with fakes): a
  *  round with a miss resets the streak, logs one `preview.platform-failure-readiness` warn per miss
- *  and pauses `pauseMs`; the deadline is checked before each round, so a round (every probe at most
- *  20 s) is the most it can overrun by. */
+ *  and pauses 1 s; DEADLINE_MS is checked before each round, so a round (every probe at most 20 s)
+ *  is the most it can overrun by. */
 export async function awaitFullRounds(
   round: () => Promise<ProbeOutcome[]>,
-  options: { label: string; consecutive: number; deadlineMs: number; pauseMs: number },
+  options: { label: string; consecutive: number },
 ) {
   const started = Date.now();
   const misses: (ProbeMiss & { atMs: number })[] = [];
@@ -64,9 +65,9 @@ export async function awaitFullRounds(
   let streak = 0;
   let rounds = 0;
   while (streak < options.consecutive) {
-    if (Date.now() - started > options.deadlineMs)
+    if (Date.now() - started > DEADLINE_MS)
       throw new Error(
-        `preview ${options.label} was not ready within ${options.deadlineMs / 1000} s: ${misses.length} of ${probes} probes missed, the last ${streak} round(s) answered in full\n${misses
+        `preview ${options.label} was not ready within ${DEADLINE_MS / 1000} s: ${misses.length} of ${probes} probes missed, the last ${streak} round(s) answered in full\n${misses
           .slice(-10)
           .map((miss) => `  +${miss.atMs} ms ${miss.stage}: ${miss.detail}`)
           .join("\n")}`,
@@ -91,7 +92,7 @@ export async function awaitFullRounds(
       );
     }
     streak = missed.length === 0 ? streak + 1 : 0;
-    if (missed.length > 0) await new Promise((resolve) => setTimeout(resolve, options.pauseMs));
+    if (missed.length > 0) await new Promise((resolve) => setTimeout(resolve, 1_000));
   }
   const ms = Date.now() - started;
   console.log(

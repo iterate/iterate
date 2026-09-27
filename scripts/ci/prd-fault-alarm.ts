@@ -165,11 +165,9 @@ export async function alarm(input: {
   state: AlarmState | null;
   cloudflare: CloudflareCredentials;
   slack: (() => WebClient) | null;
-  /** The waits before each repeat of a Workers Logs query Cloudflare failed (readWindow). */
-  delaysMs?: readonly number[];
 }) {
-  const { window, delaysMs = CI_HTTP.delaysMs } = input;
-  const reading = await readWindow(window, input.cloudflare, delaysMs);
+  const { window } = input;
+  const reading = await readWindow(window, input.cloudflare);
   console.log(JSON.stringify({ window, reading }));
   const triage = triageIncidents(reading, window, input.state);
   const pinned = pinnedWorkarounds(reading.healEvents, window, input.state);
@@ -596,7 +594,6 @@ export const DEPLOY_RESET_SUMMARIES = {
 async function readWindow(
   window: LogWindow,
   { accountId, apiToken }: CloudflareCredentials,
-  delaysMs: readonly number[],
 ): Promise<FaultReading> {
   // One grouped count per signal: one query, or with exclusions several over disjoint rows
   // (exclusionQueries). Its rows sum to a lower bound (events without the grouped field, or past
@@ -604,7 +601,7 @@ async function readWindow(
   //
   // A query only reads, so one that Cloudflare itself failed (a 5xx, a 429, an answer that is not
   // JSON — its HTML error page, whatever the status — or a dropped connection) is asked again after
-  // each of `delaysMs`, with a `prd-fault-alarm.platform-failure-retry` warn per repeat; the last
+  // each of CI_HTTP's waits, with a `prd-fault-alarm.platform-failure-retry` warn per repeat; the last
   // failure fails the run. Any other JSON answer is Cloudflare's answer about the query: a broken
   // token (success: false) or a renamed field fails the run at once, never reads as a quiet prd.
   const query = (view: "calculations" | "events", filters: LogFilter[], parameters: object) =>
@@ -655,7 +652,7 @@ async function readWindow(
       },
       {
         area: "prd-fault-alarm",
-        schedule: { ...CI_HTTP, delaysMs },
+        schedule: CI_HTTP,
         idempotent: true,
         // Every HttpAnswerError thrown above is Cloudflare's own failure, the HTML page included.
         kind: (error) =>

@@ -1,5 +1,5 @@
 import { Octokit } from "@octokit/rest";
-import { expect, test, vi } from "vitest";
+import { expect, onTestFinished, test, vi } from "vitest";
 
 import { retryGithubPlatformFailures } from "./github.ts";
 
@@ -21,7 +21,7 @@ test("asks a GET again after GitHub's 500 and returns the answer (the PR #2899 L
     requestId: "BC32:2F0597:157166:45E4D9:6AB4315E",
     message: "Unexpected error\n",
     attempt: 1,
-    retryInMs: 0,
+    retryInMs: 2_000,
   });
 });
 
@@ -39,7 +39,7 @@ test("asks a PATCH again after the connection drops", async () => {
   );
 });
 
-test("throws GitHub's last failure once every delay is spent", async () => {
+test("throws GitHub's last failure once every wait is spent", async () => {
   const fixture = githubAnswering(
     json(502, { message: "Bad gateway" }),
     json(503, { message: "Unavailable" }),
@@ -54,8 +54,13 @@ test("throws GitHub's last failure once every delay is spent", async () => {
     },
   );
   expect(fixture.fetch).toHaveBeenCalledTimes(4);
-  // three repeats, then the one give-up
-  expect(fixture.warn.mock.calls.map(([entry]) => entry.status)).toEqual([502, 503, 500, 504]);
+  // three repeats on CI_HTTP's waits, then the one give-up
+  expect(fixture.warn.mock.calls.map(([entry]) => entry)).toMatchObject([
+    { event: "github.platform-failure-retry", status: 502, retryInMs: 2_000 },
+    { event: "github.platform-failure-retry", status: 503, retryInMs: 5_000 },
+    { event: "github.platform-failure-retry", status: 500, retryInMs: 10_000 },
+    { event: "github.platform-failure-gave-up", status: 504, attempts: 4 },
+  ]);
 });
 
 test("never asks a POST again: a 5xx may have landed, and a repeat would create a second one", async () => {
@@ -128,20 +133,22 @@ test("never asks again after an abort: the caller chose to stop", async () => {
 });
 
 /**
- * An Octokit whose `fetch` answers from `responses` in order, with no wait between attempts,
- * and the `console.warn` spy it logs to.
+ * An Octokit whose `fetch` answers from `responses` in order, and the `console.warn` spy it logs
+ * to. CI_HTTP's waits run on a fake clock that moves on whenever nothing else is left to run, each
+ * at its longest (`Math.random` at 1).
  */
 function githubAnswering(...responses: Array<Response | Error>) {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  vi.setTimerTickMode("nextTimerAsync");
+  onTestFinished(() => void vi.useRealTimers());
+  vi.spyOn(Math, "random").mockReturnValue(1);
   const fetch = vi.fn(async () => {
     const next = responses.shift();
     if (!next) throw new Error("the test ran out of responses");
     if (next instanceof Error) throw next;
     return next;
   });
-  const github = retryGithubPlatformFailures(
-    new Octokit({ auth: "token", request: { fetch } }),
-    [0, 0, 0],
-  );
+  const github = retryGithubPlatformFailures(new Octokit({ auth: "token", request: { fetch } }));
   const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
   return { github, fetch, warn };
 }

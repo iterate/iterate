@@ -628,7 +628,7 @@ async function deployOsPreview(
   // apps/os's smoke is the readiness gate (preview-readiness.ts), asked as soon as `wrangler
   // preview` returns. Nothing is handed on — the PR body's links, the sign-in seed, the e2e job —
   // until three rounds of eight in a row answer in full on this deployment. A preview that does not
-  // within 150 s fails the deploy: the slowest of 17 in-place soak redeploys took 58 s (2026-09-25).
+  // by the gate's deadline fails the deploy.
   await traceOperation("Readiness gate", () =>
     awaitPreviewReady(url, {
       adminSecret: parseAppConfig(
@@ -637,7 +637,6 @@ async function deployOsPreview(
       version: deploymentId,
       width: 8,
       consecutive: 3,
-      deadlineMs: 150_000,
     }),
   );
   return { url, deploymentId, slug: data.preview?.slug || previewName };

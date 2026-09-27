@@ -322,10 +322,9 @@ export async function uploadTestEvidence(input: {
   /** Doppler `_shared/preview`'s CLOUDFLARE_API_TOKEN. */
   apiToken: string;
   fetch: typeof fetch;
-  /** Aborts the upload: the request in flight, and any retry after it. UPLOAD_DEADLINE_MS by default. */
-  deadline?: AbortSignal;
 }) {
-  const deadline = input.deadline || AbortSignal.timeout(UPLOAD_DEADLINE_MS);
+  /** Aborts the upload: the request in flight, and any retry after it. */
+  const deadline = AbortSignal.timeout(UPLOAD_DEADLINE_MS);
   /** Platform-failure retries so far, for the step summary. */
   let retries = 0;
   /** One request to Cloudflare, sent again when the failure is Cloudflare's: every one here is

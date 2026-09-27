@@ -442,13 +442,12 @@ export type PullRequestBody = {
  *  its status line, or the suites' lines. Our own writes never overlap: the deploy's run in order
  *  in its job, and the suites' lines go out from the CI trace job once both suites finished. Every
  *  PATCH goes out once, straight after its read: a failed one is not sent again with a body read
- *  seconds earlier; the next round reads anew after `retryDelayMs`, and finds the body written
- *  when the failure was GitHub's answer, not its write. */
+ *  seconds earlier; the next round reads anew 5 s later, and finds the body written when the
+ *  failure was GitHub's answer, not its write. */
 export async function writePullRequestBody(
   pullRequest: PullRequestBody,
   what: string,
   splice: (body: string) => string,
-  { retryDelayMs = 5000 } = {},
 ) {
   for (let attempt = 1; attempt <= 3; attempt++) {
     const before = await pullRequest.read();
@@ -463,7 +462,7 @@ export async function writePullRequestBody(
       },
     );
     if (!replaced) {
-      await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
+      await new Promise((resolve) => setTimeout(resolve, 5_000));
       continue;
     }
     const after = await pullRequest.read();

@@ -190,10 +190,10 @@ test.for([
   {
     name: "a CI script waits an overload out",
     failures: ["overloaded"],
-    schedule: { ...CI_HTTP, delaysMs: [0] },
+    schedule: CI_HTTP,
     idempotent: true,
     outcome: { value: "answered" },
-    lines: [["warn", retryLine("overloaded", { attempt: 1, retryInMs: 0 })]],
+    lines: [["warn", retryLine("overloaded", { attempt: 1, retryInMs: 2_000 })]],
   },
   {
     name: "a call that is not idempotent is made once, and its failure is the caller's",
@@ -219,11 +219,15 @@ test.for([
   outcome: { value: string } | { error: string };
   lines: [string, object][];
 }[])("retryPlatformFailures: $name", async ({ failures, schedule, idempotent, outcome, lines }) => {
+  // Each schedule's own waits, on a fake clock, each at its longest.
+  vi.useFakeTimers();
+  onTestFinished(() => void vi.useRealTimers());
+  vi.spyOn(Math, "random").mockReturnValue(1);
   const logged: [string, unknown][] = [];
   vi.spyOn(console, "info").mockImplementation((line) => void logged.push(["info", line]));
   vi.spyOn(console, "warn").mockImplementation((line) => void logged.push(["warn", line]));
   const left = [...failures];
-  const settled = await retryPlatformFailures(
+  const settled = retryPlatformFailures(
     async () => {
       const failure = left.shift();
       if (failure) throw new Error(failure);
@@ -240,7 +244,8 @@ test.for([
     (value) => ({ value }),
     (error: Error) => ({ error: error.message }),
   );
-  expect(settled).toEqual(outcome);
+  await vi.runAllTimersAsync();
+  expect(await settled).toEqual(outcome);
   // Exact: the lines are the prd fault alarm's input.
   expect(logged).toEqual(lines);
 });

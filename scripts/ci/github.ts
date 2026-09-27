@@ -18,14 +18,14 @@ export function getOctokit() {
 
 /** Every CI script's Octokit: one that asks again when GitHub itself fails an idempotent call. */
 export function createOctokit(auth: string | undefined) {
-  return retryGithubPlatformFailures(new Octokit({ auth }), CI_HTTP.delaysMs);
+  return retryGithubPlatformFailures(new Octokit({ auth }));
 }
 
 /**
  * GitHub answers a small share of API calls with a 5xx, or the connection drops before it
  * answers at all. One such 500 on `GET /pulls/2899` failed a LOC report whose same-sha rerun
  * passed a quarter of an hour later. A call that GitHub failed is asked again after each of
- * `delaysMs` (`retryPlatformFailures`), with a `github.platform-failure-retry` warn per repeat.
+ * CI_HTTP's waits (`retryPlatformFailures`), with a `github.platform-failure-retry` warn per repeat.
  *
  * Only GET, HEAD, PUT, PATCH and DELETE are asked again: each names its whole end state, so a
  * repeat after a write that did land is harmless. A POST creates (a release, a comment), and a
@@ -35,7 +35,7 @@ export function createOctokit(auth: string | undefined) {
  * A 4xx is an answer about the request and is never asked again. A caller whose write must go out
  * once (a PR body PATCHed from a read seconds earlier) passes `request: { askOnce: true }`.
  */
-export function retryGithubPlatformFailures(octokit: Octokit, delaysMs: readonly number[]) {
+export function retryGithubPlatformFailures(octokit: Octokit) {
   octokit.hook.wrap("request", (request, options) => {
     const route = `${options.method} ${options.url}`;
     const repeatable =
@@ -43,7 +43,7 @@ export function retryGithubPlatformFailures(octokit: Octokit, delaysMs: readonly
       options.request?.askOnce !== true;
     return retryPlatformFailures(async () => request(options), {
       area: "github",
-      schedule: { ...CI_HTTP, delaysMs },
+      schedule: CI_HTTP,
       idempotent: repeatable,
       kind: githubFailureKind,
       describe: (error) => ({ route, ...githubFailureFields(error) }),
