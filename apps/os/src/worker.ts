@@ -254,27 +254,22 @@ export default {
         if (browserResponse) return browserResponse;
       }
       // THE PRIMARY HOSTNAME (primary-hostname-redirect.ts): a navigation on the ingress base goes
-      // to the project's own hostname, after the browser adapter so a sign-in under way finishes
-      // where it started.
+      // to the project's own hostname, which the admission's row carries (edge.ts `getProject`),
+      // after the browser adapter so a sign-in under way finishes where it started.
       const redirect = primaryHostnameRedirectOf(request, { routing, platformOrigin });
-      if (redirect) {
-        const primaryHostname = await controlPlane
-          .primaryHostnameOf(projectId)
-          .catch((error: unknown) => controlPlaneUnavailable(error, url.hostname));
-        if (primaryHostname instanceof Response) return primaryHostname;
-        const location =
-          primaryHostname &&
-          primaryHostnameUrlOf(primaryHostname, {
-            routingSlug: redirect.routingSlug,
-            path: `${url.pathname}${url.search}`,
-          });
-        // no-store: a browser keeps a 308 it may cache, and the primary can change
-        if (location)
-          return new Response(null, {
-            status: 308,
-            headers: { location: location.href, "cache-control": "no-store" },
-          });
-      }
+      const location =
+        redirect &&
+        project.primaryHostname &&
+        primaryHostnameUrlOf(project.primaryHostname, {
+          routingSlug: redirect.routingSlug,
+          path: `${url.pathname}${url.search}`,
+        });
+      // no-store: a browser keeps a 308 it may cache, and the primary can change
+      if (location)
+        return new Response(null, {
+          status: 308,
+          headers: { location: location.href, "cache-control": "no-store" },
+        });
       const bearer = /^Bearer\s+(\S+)$/i.exec(request.headers.get("authorization") ?? "")?.[1];
       const authorization = bearer
         ? await authorizationForToken(env, bearer, addresses, "project-host")

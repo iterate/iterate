@@ -16,7 +16,6 @@ import { batch } from "./db/index.ts";
 import {
   claimHostname,
   clearPrimaryHostname,
-  primaryHostnameOf,
   projectsByHostnames,
   releaseHostname,
   setPrimaryHostname,
@@ -112,6 +111,11 @@ export type ProjectRecord = {
   orgId: string;
   role?: OrganizationRole;
 };
+/** A project as one read of its row answers it (`project`, `projectByHostname`): the record and
+ *  its primary hostname (project/contract.ts `primaryHostname`) while the project still holds its
+ *  claim, else null — so the edge's redirect and `itx.url` read it with the row (edge.ts
+ *  `getProject`). */
+export type ProjectRow = ProjectRecord & { primaryHostname: string | null };
 /** An organization, with how many projects it holds and, read through a membership, the role. */
 export type OrganizationRecord = {
   id: string;
@@ -188,8 +192,9 @@ export class ControlPlaneDatabase {
     return members.map((member) => ({ ...member, createdAt: member.createdAt ?? null }));
   }
   /** A project by id or by slug (a slug never holds the `_` every id does, so at most one row). */
-  async project(ref: string): Promise<ProjectRecord | null> {
-    return (await projectsByRef(this.#client, { id: ref, slug: ref }))[0] ?? null;
+  async project(ref: string): Promise<ProjectRow | null> {
+    const [row] = await projectsByRef(this.#client, { id: ref, slug: ref });
+    return row ? projectRow(row) : null;
   }
   /** Every project, oldest first. */
   projects(): Promise<ProjectRecord[]> {
@@ -199,11 +204,11 @@ export class ControlPlaneDatabase {
    *  static rule names, over iterate/project-ingress `customHostnameCandidatesOf` in its order. */
   async projectByHostname(
     hostnames: readonly string[],
-  ): Promise<{ hostname: string; project: ProjectRecord } | null> {
+  ): Promise<{ hostname: string; project: ProjectRow } | null> {
     const held = await projectsByHostnames(this.#client, { hostnames: [...hostnames] });
     for (const hostname of hostnames) {
       const row = held.find((candidate) => candidate.hostname === hostname);
-      if (row) return { hostname, project: { id: row.id, slug: row.slug, orgId: row.orgId } };
+      if (row) return { hostname, project: projectRow(row) };
     }
     return null;
   }
@@ -605,7 +610,7 @@ export class ControlPlaneDatabase {
     caller: Caller,
     input: { project: string; organizationId?: string; restoreProjectId?: string },
     now: number,
-  ): Promise<ProjectRecord & { mintedOrganization?: string }> {
+  ): Promise<ProjectRow & { mintedOrganization?: string }> {
     const restoring = input.restoreProjectId;
     // oxlint-disable-next-line iterate/simple-truthiness-check -- an empty restore id is refused, never read as "mint a new one"
     if (restoring !== undefined) {
@@ -841,15 +846,12 @@ export class ControlPlaneDatabase {
     await releaseIntegrationRoutes(this.#client, { projectId, path });
   }
 
-  /** Set a project's primary hostname, or clear it with null. */
+  /** Set a project's primary hostname, or clear it with null: the project's row reads it back
+   *  (`ProjectRow`). */
   async setPrimaryHostname(projectId: string, hostname: string | null): Promise<void> {
     await (hostname
       ? setPrimaryHostname(this.#client, { projectId, hostname })
       : clearPrimaryHostname(this.#client, { projectId }));
-  }
-  /** A project's primary hostname, while the project still holds its claim; null for none. */
-  async primaryHostnameOf(projectId: string): Promise<string | null> {
-    return (await primaryHostnameOf(this.#client, { projectId }))?.hostname ?? null;
   }
 
   #requireOperator(caller: Caller, what: string): void {
@@ -875,6 +877,15 @@ export class ControlPlaneDatabase {
  *  SQL's own column aliases, which the queries spell as that `Result`'s keys (db/index.ts). */
 const rowsOf = <T>(results: D1Result[], index: number) => results[index]!.results as T[];
 
+/** A row of `projectsByRef` or `projectsByHostnames` as its `ProjectRow`: D1 answers null for a
+ *  project with no primary hostname, which sqlfu types optional. */
+const projectRow = (row: projectsByRef.Result): ProjectRow => ({
+  id: row.id,
+  slug: row.slug,
+  orgId: row.orgId,
+  primaryHostname: row.primaryHostname || null,
+});
+
 /** Whether a write of a batch changed a row: its guard let it through. */
 const changed = (result: D1Result | undefined) => Boolean(result?.meta.changes);
 
@@ -897,11 +908,11 @@ function ownerRefusal(
  *  now or before (a restore of the same archive again converges); in any other organization the
  *  name is taken; a restored id held under another slug is a conflict. */
 function created(
-  held: ProjectRecord[],
+  held: projectsByRef.Result[],
   wanted: { id: string; slug: string },
   target: string | undefined,
   restoring: string | undefined,
-): ProjectRecord {
+): ProjectRow {
   const bySlug = held.find((row) => row.slug === wanted.slug);
   if (bySlug && bySlug.orgId !== target)
     throw codedError("PROJECT_NAME_TAKEN", `The project name '${wanted.slug}' is already taken.`);
@@ -910,7 +921,7 @@ function created(
       "IDENTITY_CONFLICT",
       `The project '${wanted.slug}' exists with id ${bySlug.id}, not the restored id ${restoring}.`,
     );
-  if (bySlug) return bySlug;
+  if (bySlug) return projectRow(bySlug);
   const byId = held.find((row) => row.id === wanted.id);
   if (byId)
     throw codedError(

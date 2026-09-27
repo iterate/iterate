@@ -1,7 +1,18 @@
 import type {Client} from 'sqlfu';
 
 const projectsByRefSql = `
-select id, slug, org_id as orgId from projects where id = ? or slug = ?;
+select
+  p.id,
+  p.slug,
+  p.org_id as orgId,
+  (
+    select h.hostname
+    from project_primary_hostnames pp
+    join project_hostnames h on h.hostname = pp.hostname and h.project_id = pp.project_id
+    where pp.project_id = p.id
+  ) as primaryHostname
+from projects p
+where p.id = ? or p.slug = ?;
 `.trim();
 const projectsByRefQuery = (params: projectsByRef.Params) => ({
 	name: "projectsByRef",
@@ -25,6 +36,7 @@ export namespace projectsByRef {
 		id: string;
 		slug: string;
 		orgId: string;
+		primaryHostname?: string;
 	};
 }
 

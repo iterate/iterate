@@ -1,14 +1,14 @@
 // src/control-plane/edge.ts — THE CONTROL PLANE AS THE EDGE HOLDS IT: every question the stateless
 // worker asks — which project is this slug, may this session reach it, who is this email — and every
 // command it relays, each ONE call on the deployment's D1 (catalog.ts, one statement or one batch).
-// WHAT AN ISOLATE KEEPS (`Kept`): a catalog answer five seconds — a project's row, a host's address,
-// a person's access — and a project miss never. A refusal is read again at once (a project not in a
-// kept access set is re-read before it is refused), since nothing routes two requests to one isolate
+// WHAT AN ISOLATE KEEPS (`Kept`): a catalog answer five seconds — a project's row (its primary
+// hostname with it), a host's address, a person's access — and a project miss never. A refusal is
+// read again at once (a project not in a kept access set is re-read before it is refused), since
+// nothing routes two requests to one isolate
 // (https://developers.cloudflare.com/workers/reference/how-workers-works/): a creation is reachable
-// at once, and the isolate that made a change keeps its result at once. The primary hostname keeps
-// its own thirty seconds (`primaryHostnameOf`). Kept are answers, never a read in flight: a request
-// awaiting another's read hangs when that request ends first, its I/O cancelled with it
-// (https://developers.cloudflare.com/workers/observability/errors/).
+// at once, and the isolate that made a change keeps its result at once. Kept are answers, never a
+// read in flight: a request awaiting another's read hangs when that request ends first, its I/O
+// cancelled with it (https://developers.cloudflare.com/workers/observability/errors/).
 // A call that fails on the platform's side throws UNAVAILABLE (unavailable.ts), which a project host
 // answers 503 (worker.ts).
 import { customHostnameCandidatesOf, type ProjectAddress } from "iterate/project-ingress";
@@ -31,6 +31,7 @@ import {
   type IntegrationRouteRecord,
   type OrganizationRecord,
   type ProjectRecord,
+  type ProjectRow,
   type UserRecord,
 } from "./catalog.ts";
 import type { IdentityProvider } from "./contract.ts";
@@ -81,9 +82,9 @@ class Kept<V> {
   }
 }
 
-/** Projects' rows, each under its id and its slug (`keep`). */
-const projects = new Kept<ProjectRecord>();
-const keep = (project: ProjectRecord) => {
+/** Projects' rows, each under its id and its slug (`keep`), their primary hostnames with them. */
+const projects = new Kept<ProjectRow>();
+const keep = (project: ProjectRow) => {
   for (const ref of [project.id, project.slug]) projects.set(ref, project);
 };
 /** Hosts' addresses under projects' own hostnames, hit or miss. A kept miss seldom hides a new
@@ -95,8 +96,6 @@ const keep = (project: ProjectRecord) => {
 const hosts = new Kept<{ address: ProjectAddress | null }>();
 /** People's access, by user id: dropped at once here for the person a command was made by or for. */
 const access = new Kept<AccessibleRecord>();
-/** A project's primary hostname by project id, hit or miss, kept thirty seconds (`primaryHostnameOf`). */
-const primaryHostnameMemo = new Map<string, { at: number; hostname: string | null }>();
 
 /** Who asked, as the control plane records it: the caller's principal and its connection. */
 const callerOf = (caller: Caller) => ({ principal: caller.principal, grant: caller.grant });
@@ -185,8 +184,10 @@ export class ControlPlane {
   /** A project by id or by slug — THE lookup: a URL's `/projects/<slug>`, a hostname's label, an
    *  API call's `project`, a grant's id all resolve here. A row is kept `KEPT_MS`, a miss never: a
    *  scanner's label no project holds is one D1 read per request, and a project created anywhere is
-   *  served at once. `fresh` reads past what this isolate keeps (the orphan sweep, session.ts). */
-  async getProject(ref: string, fresh = false): Promise<ProjectRecord | null> {
+   *  served at once. The row carries the project's primary hostname (catalog.ts `ProjectRow`), which
+   *  the edge's redirect (worker.ts) and `itx.url` read: a change reaches them within `KEPT_MS`.
+   *  `fresh` reads past what this isolate keeps (the orphan sweep, session.ts). */
+  async getProject(ref: string, fresh = false): Promise<ProjectRow | null> {
     const kept = !fresh && projects.get(ref);
     if (kept) return kept;
     const project = await this.#read("project", () => this.#db.project(ref));
@@ -239,19 +240,6 @@ export class ControlPlane {
    *  kept: a route released and taken by another project routes there on the next delivery. */
   integrationRouteOf(provider: string, externalId: string): Promise<IntegrationRouteRecord | null> {
     return this.#read("integrationRoute", () => this.#db.integrationRoute(provider, externalId));
-  }
-
-  /** A project's primary hostname (project/contract.ts `primaryHostname`), or null — memoized
-   *  thirty seconds per isolate, hit or miss, so a change reaches the edge's redirect and
-   *  `itx.url` within that. */
-  async primaryHostnameOf(projectId: string): Promise<string | null> {
-    const memoized = primaryHostnameMemo.get(projectId);
-    if (memoized && Date.now() - memoized.at < 30_000) return memoized.hostname;
-    const hostname = await this.#read("primaryHostnameOf", () =>
-      this.#db.primaryHostnameOf(projectId),
-    );
-    primaryHostnameMemo.set(projectId, { at: Date.now(), hostname });
-    return hostname;
   }
 
   /** The id a ref names: an id is self-evident (`prj_…` — a slug never holds an underscore), a
@@ -340,7 +328,8 @@ export class ControlPlane {
         : record.projects;
     }
     const rows = await Promise.all(reach.projectIds.map((projectId) => this.getProject(projectId)));
-    return rows.filter((row): row is ProjectRecord => !!row);
+    // records, as every reach lists them (iterate/api `ProjectRecord`)
+    return rows.flatMap((row) => (row ? [{ id: row.id, slug: row.slug, orgId: row.orgId }] : []));
   }
 
   /** Whether `reach` may hold `organizationId`'s context: the admin every one; a user the ones they
@@ -489,7 +478,7 @@ export class ControlPlane {
   async createProject(
     caller: Caller,
     input: { project: string; organizationId?: string; restoreProjectId?: string },
-  ): Promise<ProjectRecord & { mintedOrganization?: string }> {
+  ): Promise<ProjectRow & { mintedOrganization?: string }> {
     const { mintedOrganization, ...project } = await this.#call("createProject", () =>
       this.#db.createProject(callerOf(caller), input, Date.now()),
     );
@@ -578,9 +567,13 @@ export class ControlPlane {
     );
   }
   /** Set a project's primary hostname (project/processor.ts publishes it), or clear it with null:
-   *  the edge's redirect and `itx.url` read it within `primaryHostnameOf`'s thirty seconds. */
-  setPrimaryHostname(projectId: string, hostname: string | null): Promise<void> {
-    return this.#call("setPrimaryHostname", () => this.#db.setPrimaryHostname(projectId, hostname));
+   *  the project's kept row, which carries it, is dropped here at once and read again on every
+   *  other isolate within `KEPT_MS`. */
+  async setPrimaryHostname(projectId: string, hostname: string | null): Promise<void> {
+    await this.#call("setPrimaryHostname", () => this.#db.setPrimaryHostname(projectId, hostname));
+    const kept = projects.get(projectId);
+    projects.delete(projectId);
+    if (kept) projects.delete(kept.slug);
   }
 
   // ── the OAuth provider's grants (oauth-grants.ts), for its store (oauth-store.ts) ──

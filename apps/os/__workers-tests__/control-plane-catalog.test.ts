@@ -545,10 +545,13 @@ test("projects: a slug is one project across every organization: the same organi
     id: expect.stringMatching(/^prj_[0-9a-f]{32}$/),
     slug: "dawg",
     orgId: org.id,
+    primaryHostname: null,
   });
   expect(await c.project("dawg")).toEqual(dawg);
   expect(await c.project(dawg.id)).toEqual(dawg);
-  expect(await c.accessibleTo(ada.id)).toMatchObject({ projects: [{ ...dawg, role: "owner" }] });
+  expect(await c.accessibleTo(ada.id)).toMatchObject({
+    projects: [{ id: dawg.id, slug: "dawg", orgId: org.id, role: "owner" }],
+  });
   expect(await c.createProject(as(ada), { project: "dawg" }, NOW)).toEqual(dawg);
   // Bob has no organization yet, and the operator's own does not exist: neither refusal makes one
   await expect(c.createProject(as(bob), { project: "dawg" }, NOW)).rejects.toMatchObject({
@@ -645,6 +648,7 @@ test("projects: the operator alone restores a project under its archived id: the
     id: "prj_garple",
     slug: "garple",
     orgId: ADMIN_ORG_ID,
+    primaryHostname: null,
   });
   expect(await restore("garple", "prj_garple")).toMatchObject({ id: "prj_garple" });
   await expect(restore("garple", "prj_other")).rejects.toMatchObject({
@@ -723,21 +727,36 @@ test("hostnames: a claim routes the hostname and the names under it to its proje
   ).toHaveLength(below.status === "fulfilled" ? 2 : 1);
 });
 
-test("hostnames: a project's primary hostname reads back only while the project holds its claim; null clears it", async () => {
+test("hostnames: a project's primary hostname rides its row, by id, by slug and by hostname, only while the project holds its claim; null clears it", async () => {
   await emptyTables();
   const shop = await c.createProject(admin, { project: "shop" }, NOW);
+  expect(shop).toMatchObject({ primaryHostname: null });
+  const primaryOf = async () => {
+    const byId = await c.project(shop.id);
+    expect(await c.project(shop.slug)).toEqual(byId);
+    return byId!.primaryHostname;
+  };
   await c.claimHostname(shop.id, "www.shop.test");
   await c.setPrimaryHostname(shop.id, "www.shop.test");
-  expect(await c.primaryHostnameOf(shop.id)).toBe("www.shop.test");
+  expect(await primaryOf()).toBe("www.shop.test");
+  expect(await c.projectByHostname(["www.shop.test"])).toEqual({
+    hostname: "www.shop.test",
+    project: { id: shop.id, slug: "shop", orgId: shop.orgId, primaryHostname: "www.shop.test" },
+  });
   await c.setPrimaryHostname(shop.id, "shop.test"); // not claimed: no primary
-  expect(await c.primaryHostnameOf(shop.id)).toBeNull();
+  expect(await primaryOf()).toBeNull();
   await c.setPrimaryHostname(shop.id, "www.shop.test");
   await c.releaseHostname(shop.id, "www.shop.test");
-  expect(await c.primaryHostnameOf(shop.id)).toBeNull();
+  expect(await primaryOf()).toBeNull();
   await c.claimHostname(shop.id, "www.shop.test");
-  expect(await c.primaryHostnameOf(shop.id)).toBe("www.shop.test");
+  expect(await primaryOf()).toBe("www.shop.test");
+  // the same creation again answers the row as it stands
+  expect(await c.createProject(admin, { project: "shop" }, NOW)).toMatchObject({
+    id: shop.id,
+    primaryHostname: "www.shop.test",
+  });
   await c.setPrimaryHostname(shop.id, null);
-  expect(await c.primaryHostnameOf(shop.id)).toBeNull();
+  expect(await primaryOf()).toBeNull();
 });
 
 // THE INTEGRATION ROUTES — catalog.ts `routeIntegration`, one row each: who holds the account, who
