@@ -30,7 +30,6 @@ import {
   GRAPHQL_SESSION_CLIENT_ID,
   GRAPHQL_SESSION_TTL_SECONDS,
   type GraphqlLoginDeps,
-  graphqlSessionAccountClientId,
   graphqlSessionFromBearer,
   handleGraphqlLogin,
 } from "./graphql-login.ts";
@@ -42,6 +41,7 @@ import { nowSeconds } from "./seal.ts";
 import { handleSlackRequest, handleSlackTestControls } from "./slack.ts";
 import {
   accessTokenEpochFor,
+  accountRevocationKey,
   DEFAULT_ACCESS_TTL_SECONDS,
   DEFAULT_APP_ID,
   DEFAULT_CLIENT_ID,
@@ -63,6 +63,7 @@ export interface Env {
 
 // The index doubles as endpoint documentation, so anyone poking a deployed
 // instance sees the whole surface without opening the repo.
+// iterate-lint-disable terminology/no-metaphorical-lane-door-seam -- the index lists the deployed /__backdoor/* routes by their paths
 const INDEX = dedent`
   🐾 dummy-petshop — a fake third party for integrations & secrets e2e
 
@@ -100,8 +101,10 @@ const INDEX = dedent`
                             ${INSTALLATION_TOKEN_TTL_SECONDS}s installation token, a bearer on /api/* too
 
   POST /__backdoor/clients                 → mint {clientId, clientSecret}
-  POST /__backdoor/expire-tokens           {clientId} → that client's outstanding access tokens answer 401
-                                           ("graphql-session-login:<username>": one account's GraphQL sessions)
+  POST /__backdoor/expire-tokens           {clientId, account} → the outstanding access tokens that account holds
+                                           from that client answer 401, no other account's (an email, login, name,
+                                           GraphQL username or GitHub installation id); with no account, every
+                                           token of the client
   POST /__backdoor/revoke-refresh-token    {refreshToken} → that refresh token stops working
   POST /__backdoor/fail-token-endpoint     {clientId, times} → that client's next N token calls answer 500
   POST /__backdoor/apps                    {publicKeyPem, installationId?, appId?, webhookSecret?, appSlug?, callbackUrl?, account?, users?, oauthClientId?}
@@ -115,6 +118,7 @@ const INDEX = dedent`
   Seeded client: ${DEFAULT_CLIENT_ID} / ${DEFAULT_CLIENT_SECRET} · access tokens live ${DEFAULT_ACCESS_TTL_SECONDS}s ·
   seeded GitHub App ${DEFAULT_APP_ID}, installation ${DEFAULT_INSTALLATION_ID} (no key until POST /__backdoor/apps)
 `;
+// iterate-lint-enable terminology/no-metaphorical-lane-door-seam
 
 /** The GraphQL login's view of the shop: the sealing key, and the two revocation epochs a session
  *  of `username` is bound to — the endpoint's (`graphql-session-login`) and the account's. */
@@ -123,7 +127,10 @@ const graphqlLoginDeps = (deps: ShopDeps): GraphqlLoginDeps => ({
   getAccessTokenEpochs: (username) =>
     deps.state.getState().then((state) => ({
       epoch: accessTokenEpochFor(state, GRAPHQL_SESSION_CLIENT_ID),
-      accountEpoch: accessTokenEpochFor(state, graphqlSessionAccountClientId(username)),
+      accountEpoch: accessTokenEpochFor(
+        state,
+        accountRevocationKey(GRAPHQL_SESSION_CLIENT_ID, username),
+      ),
     })),
 });
 
@@ -155,7 +162,10 @@ async function accessGrant(
   return null;
 }
 
-const ExpireTokens = z.object({ clientId: z.string().min(1) });
+const ExpireTokens = z.object({
+  clientId: z.string().min(1),
+  account: z.string().min(1).optional(),
+});
 const RevokeRefreshToken = z.object({ refreshToken: z.string() });
 const FailTokenEndpoint = z.object({ clientId: z.string().min(1), times: z.int().nonnegative() });
 
@@ -170,10 +180,11 @@ async function backdoor(key: string, request: Request, deps: ShopDeps): Promise<
     const input = ExpireTokens.safeParse(await body());
     if (!input.success)
       return invalid("clientId is required so expiry cannot affect unrelated tests");
-    const { clientId } = input.data;
+    const { clientId, account } = input.data;
     return Response.json({
       clientId,
-      accessTokenEpoch: await deps.state.expireAccessTokens(clientId),
+      account,
+      accessTokenEpoch: await deps.state.expireAccessTokens(clientId, account),
     });
   }
   if (key === "POST /__backdoor/revoke-refresh-token") {

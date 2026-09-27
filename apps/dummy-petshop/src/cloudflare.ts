@@ -35,7 +35,11 @@ export async function handleCloudflareRequest(
   const url = new URL(request.url);
   const key = `${request.method} ${url.pathname}`;
   const issuer = `${url.origin}/cloudflare`;
-  const cloudflare = fakeAuthorizationServer<CloudflareGrant>(deps, "cloudflare");
+  const cloudflare = fakeAuthorizationServer<CloudflareGrant>(
+    deps,
+    "cloudflare",
+    (grant) => grant.email,
+  );
   if (key === "GET /cloudflare/.well-known/openid-configuration")
     return Response.json(
       discoveryDocument(issuer, {

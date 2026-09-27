@@ -44,7 +44,7 @@ export async function handleGoogleRequest(
 ): Promise<Response | null> {
   const url = new URL(request.url);
   const key = `${request.method} ${url.pathname}`;
-  const google = fakeAuthorizationServer<GoogleGrant>(deps, "google");
+  const google = fakeAuthorizationServer<GoogleGrant>(deps, "google", (grant) => grant.email);
   if (key === "GET /.well-known/openid-configuration")
     return Response.json(
       discoveryDocument(url.origin, {
