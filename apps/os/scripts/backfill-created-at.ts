@@ -11,8 +11,8 @@
  * Every write is `where created_at is null`: a date already there is never replaced, so a rerun is
  * a no-op. A row its organization's log holds no fact for stays null and is listed. That is every
  * row of the deployment's own organization, which gets no facts (session.ts
- * `publishProjectAdded`), and an owner the operator named when creating the organization, whose
- * membership gets no `member-added`.
+ * `publishProjectAdded`), so its log is not read, and an owner the operator named when creating the
+ * organization, whose membership gets no `member-added`.
  */
 import { createCli } from "trpc-cli";
 import { createD1HttpClient } from "sqlfu/cloudflare";
@@ -23,6 +23,7 @@ import { connectIterate } from "iterate/node";
 import { OS_DOPPLER_PROJECT, osEnvs } from "../../../envs.ts";
 import { resolveEnvContext } from "../../../scripts/lib/env-context.ts";
 import { parseAppConfig } from "../src/app-config.ts";
+import { ADMIN_ORG_ID } from "../src/control-plane/catalog.ts";
 import {
   dateMembership,
   dateOrganization,
@@ -92,11 +93,13 @@ export default async function backfillCreatedAt(options: {
     baseUrl,
     auth: { type: "admin-secret", secret: adminSecret },
   });
+  // The deployment's own organization gets no facts: reading its log would only wake its context.
   const orgIds = new Set([
     ...rows.organizations.map((row) => row.id),
     ...rows.memberships.map((row) => row.orgId),
     ...rows.projects.map((row) => row.orgId),
   ]);
+  orgIds.delete(ADMIN_ORG_ID);
   const logs = new Map<string, ReturnType<typeof activityDates>>();
   for (const orgId of [...orgIds].sort()) {
     using organization = await connection.session.organizations.get(orgId);
@@ -172,7 +175,9 @@ export default async function backfillCreatedAt(options: {
  *  `project-removed` ends that the same way. Neither is dated before the organization: facts
  *  published close together on a cold context can land out of order (session.ts
  *  `publishPlatformFacts` appends each in the background), and a member added just after the
- *  organization was made can land before its `created`. */
+ *  organization was made can land before its `created`. Such a row is dated 1 ms after the
+ *  organization, so it sorts after the creating owner, whose `member-added` shares the `created`'s
+ *  append and so its date. */
 function activityDates(events: unknown[]) {
   let organization: number | undefined;
   const memberships = new Map<string, number>();
@@ -204,7 +209,7 @@ function activityDates(events: unknown[]) {
   }
   const notBefore = organization ?? 0;
   for (const dates of [memberships, projects])
-    for (const [id, at] of dates) dates.set(id, Math.max(at, notBefore));
+    for (const [id, at] of dates) if (at < notBefore) dates.set(id, notBefore + 1);
   return { organization, memberships, projects };
 }
 // A list, not an `export function`: trpc-cli makes every exported declaration a command.

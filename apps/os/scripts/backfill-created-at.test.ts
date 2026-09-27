@@ -53,7 +53,7 @@ test.for([
   },
   {
     // two facts published close together on a cold context can land out of order
-    name: "a member or project whose fact landed before the organization's is dated with it",
+    name: "a member or project whose fact landed before the organization's is dated just after it",
     events: [
       fact("events.iterate.com/organization/member-added", "12:00", member("usr_b", "member")),
       fact("events.iterate.com/organization/project-added", "12:00", project("prj_1")),
@@ -62,8 +62,8 @@ test.for([
     ],
     expected: {
       organization: "12:01",
-      memberships: { usr_a: "12:01", usr_b: "12:01" },
-      projects: { prj_1: "12:01" },
+      memberships: { usr_a: "12:01", usr_b: "12:01 +1ms" },
+      projects: { prj_1: "12:01 +1ms" },
     },
   },
   {
@@ -91,7 +91,8 @@ test.for([
   },
 ])("$name", ({ events, expected }) => {
   const { organization, memberships, projects } = activityDates(events);
-  const clock = (at: number) => new Date(at).toISOString().slice(11, 16);
+  const clock = (at: number) =>
+    new Date(at).toISOString().slice(11, 16) + (at % 60_000 ? ` +${at % 60_000}ms` : "");
   // exact (toEqual passes over an undefined `organization`): a row dated that should stay null is
   // what this guards against
   expect({
