@@ -444,11 +444,12 @@ runs on `depot-ubuntu-24.04-8`, and after the checkout sets up, side by side:
   (`pnpm/action-setup`);
 - the Doppler CLI, a pinned release checked against its SHA-256, then `doppler setup`;
 - pnpm's store from Depot Cache (`actions/cache/restore`): the one keyed by the lockfile,
-  `pnpm-workspace.yaml` and `patches/`, else the newest one saved, whose missing packages
-  `pnpm install --frozen-lockfile --prefer-offline` then fetches from the npm registry.
+  `pnpm-workspace.yaml` and `patches/`, else, off main, the newest one saved.
+  `pnpm install --frozen-lockfile --prefer-offline` fetches what it lacks from the npm registry.
 
-A main push that missed the exact key prunes the store to what it linked and saves it, beside the
-evidence uploads. Depot Cache has no branch scope: any run can write any key, so a pull request can
+A main push that missed the exact key saves its store, beside the evidence uploads. Main restores
+nothing else, so that store holds only its lockfile's packages: `pnpm store prune` cannot cut an
+older one down, since it drops every file with one link, and pnpm copies the packages it builds. Depot Cache has no branch scope: any run can write any key, so a pull request can
 plant a store for main's runs by editing the workflow. Only Test reads the cache, never a deploy;
 its job token is read-only (`permissions: contents: read`), and its Doppler token is the one every
 pull request's run gets. pnpm checks each file it links against the store's index

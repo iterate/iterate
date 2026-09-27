@@ -671,20 +671,19 @@ test("the Test job sets up its toolchain on Depot's stock image, with pnpm's sto
     with: {
       path: "${{ env.NPM_CONFIG_STORE_DIR }}",
       key: "pnpm-store-${{ hashFiles('pnpm-lock.yaml', 'pnpm-workspace.yaml', 'patches/**') }}",
-      "restore-keys": "pnpm-store-",
+      // off main only: main saves what it installed, not an older store and its additions
+      "restore-keys": "${{ github.ref != 'refs/heads/main' && 'pnpm-store-' || '' }}",
     },
   });
   const install = steps.findIndex((candidate) => candidate.name === "Install dependencies");
-  expect(steps[install]?.run).toBe("pnpm install --frozen-lockfile --prefer-offline");
-  expect(steps.indexOf(restore!)).toBeLessThan(install);
-  // saved from a main push that missed the exact key, pruned to what that install linked
-  expect(step("Prune pnpm's store")).toMatchObject({
-    id: "prune-store",
-    if: "${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.pnpm-store.outputs.cache-hit != 'true' }}",
-    run: "pnpm store prune",
+  expect(steps[install]).toMatchObject({
+    id: "install",
+    run: "pnpm install --frozen-lockfile --prefer-offline",
   });
+  expect(steps.indexOf(restore!)).toBeLessThan(install);
+  // saved from a main push that missed the exact key
   expect(step("Save pnpm's store")).toMatchObject({
-    if: "${{ !cancelled() && steps.prune-store.outcome == 'success' }}",
+    if: "${{ !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.install.outcome == 'success' && steps.pnpm-store.outputs.cache-hit != 'true' }}",
     uses: "actions/cache/save@v4",
     "continue-on-error": true,
     with: { path: restore?.with?.path, key: "${{ steps.pnpm-store.outputs.cache-primary-key }}" },

@@ -77,8 +77,11 @@ jobs:
               tar -xzf "$dir/doppler.tar.gz" -C "$dir" doppler
               echo "$dir" >> "$GITHUB_PATH"
               "$dir/doppler" setup --config dev --project test
-          # PNPM'S STORE FROM DEPOT CACHE: the one saved for these install inputs, else the newest
-          # one saved, whose missing packages the install fetches from the npm registry.
+          # PNPM'S STORE FROM DEPOT CACHE: the one saved for these install inputs, else, off main,
+          # the newest one saved; the install fetches what it lacks from the npm registry. Main
+          # takes the exact key or nothing, so the store it saves (below) holds this lockfile's
+          # packages alone. (`pnpm store prune` cannot cut an older store down: it drops every file
+          # without a second link, and pnpm copies, not links, the packages it builds.)
           - name: Restore pnpm's store
             id: pnpm-store
             uses: actions/cache/restore@v4
@@ -87,15 +90,10 @@ jobs:
             with:
               path: ${{ env.NPM_CONFIG_STORE_DIR }}
               key: pnpm-store-${{ hashFiles('pnpm-lock.yaml', 'pnpm-workspace.yaml', 'patches/**') }}
-              restore-keys: pnpm-store-
+              restore-keys: ${{ github.ref != 'refs/heads/main' && 'pnpm-store-' || '' }}
       - name: Install dependencies
+        id: install
         run: pnpm install --frozen-lockfile --prefer-offline
-      # A main push whose install inputs no run saved yet saves the store (below), cut to the
-      # packages this install linked: the restore may have been an older store.
-      - name: Prune pnpm's store
-        id: prune-store
-        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.pnpm-store.outputs.cache-hit != 'true' }}
-        run: pnpm store prune
       - name: Run Tests
         id: tests
         env:
@@ -176,11 +174,11 @@ jobs:
               path: test-results
               include-hidden-files: true
               if-no-files-found: error
-          # PNPM'S STORE FOR THE NEXT RUNS, the one pruned above. Depot Cache has no branch scope,
-          # so no job but this one reads it, never a deploy
+          # PNPM'S STORE FOR THE NEXT RUNS, from a main push whose install inputs no run saved yet.
+          # Depot Cache has no branch scope, so no job but this one reads it, never a deploy
           # (docs/depot-ci.md#the-test-job-runs-on-depots-stock-image).
           - name: Save pnpm's store
-            if: ${{ !cancelled() && steps.prune-store.outcome == 'success' }}
+            if: ${{ !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.install.outcome == 'success' && steps.pnpm-store.outputs.cache-hit != 'true' }}
             uses: actions/cache/save@v4
             continue-on-error: true
             timeout-minutes: 3
