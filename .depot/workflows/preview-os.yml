@@ -193,13 +193,10 @@ jobs:
   # probes). Browser specs is the browser proof: the root Playwright specs (specs/AGENTS.md) against
   # the preview and its apps on top, and the Playwright report.
   #
-  # STARTED WITH THE RUN, NOT AFTER THE DEPLOY: no `needs:`, so each checks out, installs, and sets
-  # its suite up (apps/os/scripts/preview.ts `runSuite`: the slow rows' choice, Chromium, and
-  # warm-ups that read what the suite reads, since the image loads lazily) while Deploy preview
-  # deploys. Then its suite step waits for that job (PREVIEW_AWAIT_DEPLOY_JOB,
-  # scripts/ci/await-deploy.ts), polling Depot for it once a second, and starts the suite once it has
-  # finished. Each works out itself, by Deploy preview's own rules, whether the PR changes a preview
-  # path and which commit to test.
+  # STARTED WITH THE RUN, NOT AFTER THE DEPLOY: no `needs:`. Each sets its suite up while Deploy
+  # preview deploys, then waits for that job (PREVIEW_AWAIT_DEPLOY_JOB), as
+  # docs/depot-ci.md#suites-start-with-the-run explains. Each works out itself, by Deploy preview's
+  # own rules, whether the PR changes a preview path and which commit to test.
   #
   # REQUIRED CHECKS: each is skipped only on a dispatch of the other suite alone. On a PR that changes
   # no preview path it passes once it has decided so. It fails red when there is no preview to test:
