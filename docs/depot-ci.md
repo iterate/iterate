@@ -663,7 +663,10 @@ have no `needs:`. Each starts with the run and, while the preview deploys:
 A suite keeps its evidence once it read its deployed target
 (`test-results/target.json`, [test evidence](test-evidence.md)), so a job that
 never had a preview keeps none. Each suite's runner waits out the deploy, less
-its own set-up: about 45 s a push between the two, about $0.0135.
+its own set-up: about 43 s each, so a push bills about 86 s more between the
+two, about $0.013 (20 runs each way). In return the first test follows
+the deploy's end by 3.8 s (E2E tests) and 2.1 s (Browser specs) at the median,
+against 16 and 13 s with `needs: deploy`.
 
 ## Main OS e2e keeps one preview
 

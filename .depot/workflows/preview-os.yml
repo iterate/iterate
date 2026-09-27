@@ -37,9 +37,9 @@
 #     --workflow preview-os.yml --ref <branch> \
 #     --input pull-request-number=<pr> --input action=deploy
 # action = deploy | reset | test | e2e | specs. deploy and reset (which deletes the preview first)
-# run Deploy preview and then both suites, as a push does. test runs both suites against the preview
-# as it is deployed, e2e the E2E tests alone, specs the Browser specs alone. A test-only action names
-# its preview by pull-request-number or, without one, by preview-name (`exp-jonas`,
+# run Deploy preview and, beside it, both suites, as a push does. test runs both suites against the
+# preview as it is deployed, e2e the E2E tests alone, specs the Browser specs alone. A test-only
+# action names its preview by pull-request-number or, without one, by preview-name (`exp-jonas`,
 # or CI's own `main`), and runs the suite from the dispatched ref. A dispatch posts its checks on the
 # ref's head commit, replacing that commit's checks of the same name, and a job it skips counts as
 # passing there: dispatch e2e or specs alone from a scratch branch cut from main, never on a PR's
