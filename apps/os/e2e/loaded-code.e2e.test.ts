@@ -4,7 +4,7 @@
 // that are a session's alone (`provide`, `subscribe`), and a raw `fetch()`, which is `itx.fetch` at
 // its context, through the table.
 import { expect, test, type TestContext } from "vitest";
-import { freshCtx, openItx, readAll } from "./support/client.ts";
+import { freshCtx, openItx, readAll, until } from "./support/client.ts";
 import { FakeArtifacts } from "./support/fake-artifacts.ts";
 
 /** A loaded worker that hands its `env.ITX` whatever the test asks it to say, and reports the refusal. */
@@ -112,7 +112,7 @@ test("anyone appends anywhere: loaded code's cd(path).append reaches the root an
   ]);
 });
 
-test("open append keeps the platform's own: loaded code forges no run's settlement, takes none of the platform's keys, sets no ingress from below; a jail granted `itx.append` cannot lift its null, and every context can append into it", async () => {
+test("open append keeps the platform's own: loaded code forges no run's settlement, takes none of the platform's keys, sets no ingress from below; a jail granted `itx.append` is lifted by neither its code nor a schedule, and every context can append into it", async () => {
   const root = openItx(freshCtx("open-append-refusals"));
   const worker = root.cd("/x").workers.get({ source: PROBE });
   for (const [event, refused] of [
@@ -148,8 +148,22 @@ test("open append keeps the platform's own: loaded code forges no run's settleme
   expect(await jailed.appendEvent({ type: "note" })).toMatchObject({ ok: [{ path: "/jail" }] });
   // its code lifts no null: neither a row over it nor a lend's row, which its last pager removes
   expect(await jailed.writeRow("itx", "itx.cd('./open')")).toMatchObject({
-    error: expect.stringMatching(/only as a mask/),
+    error: expect.stringMatching(/only a member's session re-points or removes it/),
   });
+  // …nor does a schedule, whoever set it and when: its occurrence is the kernel's write
+  await jail.builtins.schedules.set({
+    key: "lift",
+    when: { afterMs: 0 },
+    events: [rule("itx", "itx.cd('./open')")],
+  });
+  expect(
+    await until("the schedule's lift is refused as it fires", async () =>
+      // the log through the fixed point: the jail's own table masks `readEvents`
+      (await jail.builtins.readEvents(0, 500)).events.find(
+        (e: { type: string }) => e.type === "events.iterate.com/itx/schedule-failed",
+      ),
+    ),
+  ).toMatchObject({ payload: { error: expect.stringMatching(/only a member's session/) } });
   expect(await jailed.cdAppend("/", { type: "note" })).toMatchObject({
     error: expect.stringMatching(/is masked/),
   });

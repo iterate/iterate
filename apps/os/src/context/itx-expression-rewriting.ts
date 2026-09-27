@@ -55,6 +55,7 @@ import {
   type ItxExpressionInput,
   type ItxExpressionPrefix,
 } from "iterate/expression";
+import type { StreamEventInput } from "iterate/stream/processor";
 import type { Caller } from "../caller.ts";
 import { ScheduledAppendInput } from "../stream/scheduled-appends.ts";
 import { callOn, walkSteps, awaitAnswerReleasedIfRejected } from "./dispatch.ts";
@@ -544,25 +545,21 @@ function admitLoadedCodeExpression(expression: ItxExpression, base: string, from
  *    • a REMOVAL (`ifTarget`, the reduce's compare-and-set delete) is refused: it hands the name back
  *      to what lies beneath it, a jail's bare null or a parent link. Loaded code never needs one:
  *      `provide` lends it live stubs only, whose rows the DO removes when the last pager closes;
- *    • a BARE `itx` row on the code's OWN context (`landsAt` is `base`) is only ever a mask: any other
- *      target replaces the jail's null (or the parent link) and brings the context roots back, `cd`
- *      among them — and a lend's row is removed with its last pager, taking the null with it.
- *      `create` writes a new context's link from its creator, on another context;
- *    • a SCHEDULED batch (`schedule-set`) is walled event by event as it is scheduled, each as the
- *      context's own: the alarm appends it later as the kernel, when the context may be a jail;
+ *    • a SCHEDULED batch (`schedule-set`) is walled event by event as it is scheduled: the alarm
+ *      appends it later as the kernel;
  *    • a FETCH ROUTE and the project's INGRESS are set only from the project's root: the config
  *      worker serves them at `/`, so one set from below would publish the root's reach on the
  *      project's hosts. `match` and `list` only read, and answer from below.
- *  Any other event passes untouched. */
+ *  A jail's own null is the append boundary's (`refuseLiftingAJail`). Any other event passes
+ *  untouched. */
 export function admitLoadedCodeRow(
   event: { type: string; payload?: unknown },
   base: string,
   landsAt: string,
-  scheduled = false,
 ): void {
   if (event.type === "events.iterate.com/itx/schedule-set") {
     for (const occurrence of ScheduledAppendInput.parse(event.payload).events)
-      admitLoadedCodeRow(occurrence, base, landsAt, true);
+      admitLoadedCodeRow(occurrence, base, landsAt);
     return;
   }
   if (
@@ -582,7 +579,7 @@ export function admitLoadedCodeRow(
   )
     return;
   // Wire-fed: each field is `unknown` here and checked where it is read; the codec parses the rest.
-  const payload = event.payload as { match?: unknown; target?: unknown } | undefined;
+  const payload = event.payload as { target?: unknown } | undefined;
   if (
     event.type === "events.iterate.com/itx/rewrite-rule-configured" &&
     payload &&
@@ -602,17 +599,33 @@ export function admitLoadedCodeRow(
       root === "builtins" && registry === "rpcStubs" && Array.isArray(lend) && lend[0] === "get";
     if (!ownLend) admitLoadedCodeExpression(expression, base, landsAt);
   }
-  const match = payload?.match;
-  if (
-    (scheduled || landsAt === base) &&
-    event.type === "events.iterate.com/itx/rewrite-rule-configured" &&
-    isItxExpressionInput(match) &&
-    normalizedItxExpression(match).length === 1
-  )
-    throw codedError(
-      "FORBIDDEN",
-      "loaded code writes a bare `itx` row on its own context only as a mask (`target: null`): any other would lift a jail's null or re-point the context's parent link",
-    );
+}
+
+/** A JAIL IS LIFTED ONLY BY A PERSON. While a context's table holds its bare `itx ⇒ null`, a row that
+ *  re-points or removes it lands only from a member's session (a principal). Never from loaded code,
+ *  however it got there: its own `itx.append` granted beside the null, a lend's row (which goes with
+ *  its last pager, and the null with it), a sibling appending into a jail open inward. Never from the
+ *  kernel's own writes either: a schedule's occurrence or a subscription whose target appends a row,
+ *  whenever it was set up. Either would bring the context roots back, `cd` among them, and with it
+ *  the whole project. Runs at the append boundary on the normalized batch (iterate-context-durable-
+ *  object.ts `#appendAndRunCommittedEffects`). */
+export function refuseLiftingAJail(
+  events: readonly StreamEventInput[],
+  rules: Readonly<Record<string, ItxExpressionRewriteRule>>,
+  caller: Caller,
+): void {
+  if (caller.principal || rules.itx?.target !== null) return;
+  for (const event of events) {
+    if (event.type !== "events.iterate.com/itx/rewrite-rule-configured") continue;
+    // Normalized at the append boundary (`normalizeRewriteRuleConfigured`): the match is the parsed
+    // prefix, the target the parsed expression or null.
+    const payload = event.payload as { match: ItxExpressionPrefix; target: ItxExpression | null };
+    if (payload.match.length === 1 && (payload.target || Object.hasOwn(payload, "ifTarget")))
+      throw codedError(
+        "FORBIDDEN",
+        "this context is a jail (a bare `itx ⇒ null`): only a member's session re-points or removes it, never code",
+      );
+  }
 }
 
 /** An expression as loaded code spells one, a dotted string or its steps: `normalizedItxExpression`

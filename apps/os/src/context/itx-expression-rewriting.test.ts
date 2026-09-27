@@ -17,6 +17,7 @@ import {
   InvokeHandle,
 } from "iterate/expression";
 import type { RewriteRuleListEntry } from "iterate/api";
+import type { Caller } from "../caller.ts";
 import { normalizeControlEvent } from "../stream/core-processor.ts";
 import { nodeSqliteStream } from "../stream/test-support.ts";
 import {
@@ -29,6 +30,7 @@ import {
   BUILT_IN_ROOT_DESCRIPTIONS,
   CONTEXT_ROOTS,
   admitLoadedCodeRow,
+  refuseLiftingAJail,
   describeRewriteRules,
 } from "./itx-expression-rewriting.ts";
 
@@ -1330,53 +1332,6 @@ test("the app wall (`Caller.app`): on the INPUT expression only, `itx.builtins` 
   expect(append(ingress)).toThrow(/set only from the project's root/);
   expect(append(ingress, "/")).not.toThrow();
 });
-test.for<{ name: string; match: unknown; target: unknown; landsAt: string; refused?: true }>([
-  {
-    name: "a descendant, on its own context",
-    match: "itx",
-    target: "itx.cd('./open')",
-    landsAt: "/agents/a",
-    refused: true,
-  },
-  {
-    name: "its own lend (`provide('itx', stub)`), on its own context",
-    match: "itx",
-    target: "itx.builtins.rpcStubs.get('itx')",
-    landsAt: "/agents/a",
-    refused: true,
-  },
-  {
-    name: "the steps of a descendant, on its own context",
-    match: ["itx"],
-    target: ["itx", ["cd", "./open"]],
-    landsAt: "/agents/a",
-    refused: true,
-  },
-  { name: "a mask, on its own context", match: "itx", target: null, landsAt: "/agents/a" },
-  {
-    name: "a new agent's parent link, on another context",
-    match: "itx",
-    target: "itx.cd('/agents/a')",
-    landsAt: "/agents/a/b",
-  },
-  {
-    name: "a named row, on its own context",
-    match: "itx.tool",
-    target: "itx.cd('./tool')",
-    landsAt: "/agents/a",
-  },
-])(
-  "a bare `itx` row from loaded code is only a mask on its own context — a jail granted `itx.append` cannot lift its null: $name",
-  ({ match, target, landsAt, refused }) => {
-    const row = {
-      type: "events.iterate.com/itx/rewrite-rule-configured",
-      payload: { match, target },
-    };
-    const admit = () => admitLoadedCodeRow(row, "/agents/a", landsAt);
-    if (refused) expect(admit).toThrow(/only as a mask/);
-    else expect(admit).not.toThrow();
-  },
-);
 test.for<{ target: string; landsAt: string; refused?: true }>([
   { target: "itx.cd('./x').tool", landsAt: "/", refused: true }, // at `/`, `./x` is `/x`
   { target: "itx.cd('/agents/a/x').tool", landsAt: "/" },
@@ -1395,21 +1350,64 @@ test.for<{ target: string; landsAt: string; refused?: true }>([
     else expect(admit).not.toThrow();
   },
 );
-test("a scheduled bare `itx` row is walled as the context's own wherever it lands: it fires later, when the context may be a jail", () => {
-  const scheduled = {
-    type: "events.iterate.com/itx/schedule-set",
-    payload: {
-      key: "k",
-      when: { afterMs: 0 },
-      events: [
-        {
-          type: "events.iterate.com/itx/rewrite-rule-configured",
-          payload: { match: "itx", target: "itx.cd('./open')" },
-        },
-      ],
-    },
-  };
-  expect(() => admitLoadedCodeRow(scheduled, "/agents/a", "/agents/a/b")).toThrow(/only as a mask/);
+const reparent = { match: ["itx"], target: ["itx", ["cd", "./open"]] };
+test.for<{
+  name: string;
+  payload: Record<string, unknown>;
+  caller: Caller;
+  jailed?: false;
+  refused?: true;
+}>([
+  {
+    name: "loaded code re-points it",
+    payload: reparent,
+    caller: { principal: null, app: true },
+    refused: true,
+  },
+  {
+    name: "the kernel (a schedule's occurrence, a delivery) re-points it",
+    payload: reparent,
+    caller: { principal: null },
+    refused: true,
+  },
+  {
+    name: "loaded code removes it",
+    payload: { match: ["itx"], target: null, ifTarget: null },
+    caller: { principal: null, app: true },
+    refused: true,
+  },
+  {
+    name: "loaded code masks it again",
+    payload: { match: ["itx"], target: null },
+    caller: { principal: null, app: true },
+  },
+  {
+    name: "loaded code writes a row beside it",
+    payload: { match: ["itx", "tool"], target: ["itx", ["cd", "./tool"]] },
+    caller: { principal: null, app: true },
+  },
+  {
+    name: "a member's session lifts it",
+    payload: reparent,
+    caller: { principal: { actor: "user_1" }, grant: "g" },
+  },
+  {
+    name: "no jail: loaded code re-points its own parent link",
+    payload: reparent,
+    caller: { principal: null, app: true },
+    jailed: false,
+  },
+])("a jail is lifted only by a person — $name", ({ payload, caller, jailed, refused }) => {
+  const rules: Record<string, ItxExpressionRewriteRule> =
+    jailed === false ? {} : { itx: { match: ["itx"], target: null } };
+  const refuse = () =>
+    refuseLiftingAJail(
+      [{ type: "events.iterate.com/itx/rewrite-rule-configured", payload }],
+      rules,
+      caller,
+    );
+  if (refused) expect(refuse).toThrow(/only a member's session re-points or removes it/);
+  else expect(refuse).not.toThrow();
 });
 
 test("cd forwards a factory and terminal fetch together, without exporting an intermediate handle over RPC", async () => {

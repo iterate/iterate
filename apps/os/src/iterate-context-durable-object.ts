@@ -94,6 +94,7 @@ import {
   ItxExpressionResolver,
   describeRewriteRules,
   rowsNamingRpcStub,
+  refuseLiftingAJail,
   rpcStubKeysNamed,
   implicitRootsAt,
   type ItxExpressionRewriteRule,
@@ -565,9 +566,15 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     // THE APPEND BOUNDARY: every event is validated + normalized here (core-processor's
     // `normalizeControlEvent`), so a control command's itx-expression fields are checked and stored
     // in parsed form — call sites append LITERAL `{ type, payload }`, never an event-builder helper.
-    const committedEvents = this.#stream.append(
-      ...events.map((event) => normalizeControlEvent(event, this.#durableObjectAddress.path)),
+    const normalized = events.map((event) =>
+      normalizeControlEvent(event, this.#durableObjectAddress.path),
     );
+    refuseLiftingAJail(
+      normalized,
+      this.#stream.coreReducedState.itxExpressionRewriteRules,
+      this.#caller,
+    );
+    const committedEvents = this.#stream.append(...normalized);
     // Effects run on FRESH commits only. An idempotency retry ECHOES the historical event (its offset
     // is <= the pre-append head), and re-running an effect on an echo could revert state a later event
     // already moved on — configure A, replace with B, retry A would restore A's facet startup memo.
