@@ -173,14 +173,6 @@ that prefix belongs to whoever appends it and is opaque to the platform: tests u
 | `chrome`                                                            | `apps/browser-extension/public/panel.js`                                                                                                                                                                                                                                                                   |
 | `test`                                                              | tests only                                                                                                                                                                                                                                                                                                 |
 
-Two types break these rules until one change migrates the Kit firmware and each project's pinned
-`@iterate-com/voice` together: a device's firmware, voice.iterate.com and the project's pinned
-voice must all use the same names.
-
-- `voice-agent/spk-frame` will become `voice-agent/speaker-frame`.
-- `voice-agent/conversation-ended` will become `voice-agent/call-ended`. It pairs with `call-started`
-  and names the activation; the provider session is the `conversation`.
-
 `note/added` is only an example in the Agents composer; no contract defines `note`.
 `email/received` is only an integration's transcript in an agent UI test; no contract defines
 `email`.

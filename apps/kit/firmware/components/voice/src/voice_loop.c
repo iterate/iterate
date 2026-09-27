@@ -3051,7 +3051,7 @@ void iterate_kit_voice_loop_step(void) {
       }
       /*
        * THERE IS DELIBERATELY NO BRIDGE-SILENCE WATCHDOG. The bridge can stop
-       * without appending the conversation-ended that would say so, but no
+       * without appending the call-ended that would say so, but no
        * bridge-sourced event arrives while nobody is speaking, so twenty
        * seconds of a person thinking is indistinguishable from a dead bridge —
        * such a watchdog would drop a live call on every thoughtful pause.

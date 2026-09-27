@@ -134,7 +134,7 @@ iterate_kit_add_test(
 # more scenarios in the file above, because the loop is a PROGRAM: its state is
 # one file-static and it brings itself up once, so a board that takes turns
 # differently is a different process. `on_control` is reachable only by
-# delivering a spk-frame batch, which is why the bug in it was in no host build.
+# delivering a speaker-frame batch, which is why the bug in it was in no host build.
 iterate_kit_add_test(
   iterate-kit-voice-loop-answer-clock-test voice_loop_answer_clock_test.c
   STD 11 LINK iterate-kit-voice iterate-kit-esp-idf-fakes)

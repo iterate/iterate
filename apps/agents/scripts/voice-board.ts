@@ -101,18 +101,18 @@ export default async function voiceBoard(
   await call.subscribe({
     name: `voice-board-${askedAt}`,
     consumes: [
-      "events.iterate.com/voice-agent/spk-frame",
+      "events.iterate.com/voice-agent/speaker-frame",
       "events.iterate.com/voice-agent/utterance-transcribed",
       "events.iterate.com/voice-agent/answer-transcribed",
       "events.iterate.com/voice-agent/provider-error-reported",
       "events.iterate.com/voice-agent/provider-disconnected",
-      "events.iterate.com/voice-agent/conversation-ended",
+      "events.iterate.com/voice-agent/call-ended",
     ],
     target: (events: any[]) => {
       for (const raw of events) {
         const event = JSON.parse(JSON.stringify(raw));
         const p = event.payload ?? {};
-        if (event.type === "events.iterate.com/voice-agent/spk-frame" && p.lastFrameOfAnswer)
+        if (event.type === "events.iterate.com/voice-agent/speaker-frame" && p.lastFrameOfAnswer)
           answers += 1;
         else if (event.type === "events.iterate.com/voice-agent/utterance-transcribed")
           heardUs += ` ${p.text}`;
@@ -123,7 +123,7 @@ export default async function voiceBoard(
           event.type === "events.iterate.com/voice-agent/provider-disconnected"
         )
           errors.push(`${event.type}: ${JSON.stringify(p).slice(0, 200)}`);
-        else if (event.type === "events.iterate.com/voice-agent/conversation-ended" && !ending)
+        else if (event.type === "events.iterate.com/voice-agent/call-ended" && !ending)
           errors.push(`ended: ${String(p.reason)}`);
       }
     },

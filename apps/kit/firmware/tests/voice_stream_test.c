@@ -164,7 +164,7 @@ static const char *frames_b64(size_t frames, uint8_t fill) {
   return pcm_b64(frames * (size_t)ITERATE_KIT_VOICE_FRAME_BYTES, fill);
 }
 
-/** Deliver one `spk-frame` event, with whatever extra payload keys it needs. */
+/** Deliver one `speaker-frame` event, with whatever extra payload keys it needs. */
 static void push_spk_to(
     struct fixture *fixture,
     int callback_id,
@@ -176,7 +176,7 @@ static void push_spk_to(
   (void)snprintf(
       message, sizeof(message),
       "[\"push\",[\"pipeline\",%d,[],[[["
-      "{\"type\":\"events.iterate.com/voice-agent/spk-frame\",\"offset\":%lld,"
+      "{\"type\":\"events.iterate.com/voice-agent/speaker-frame\",\"offset\":%lld,"
       "\"payload\":{\"activation\":\"" TEST_ACTIVATION "\",%s\"pcm\":\"%s\"}}"
       "]],{\"after\":%lld,\"through\":%lld}]]]",
       callback_id, (long long)offset, flags, pcm_b64,
@@ -241,7 +241,7 @@ static void record_control(
 /*
  * Full downlink shape: the module exports a callback capability, opens the
  * live connection with the constrained-consumer caps, decodes inbound
- * spk-frames, forwards barge-in control, dedupes across an overlapping
+ * speaker-frames, forwards barge-in control, dedupes across an overlapping
  * recycle, and recycles make-before-break.
  */
 static void downlink_flow(void) {
@@ -265,11 +265,11 @@ static void downlink_flow(void) {
      * must fail here and not on a bench.
      *
      * NAMED ONE BY ONE, AND THAT IS NOT STYLE. `consumes` accepts "*", and a
-     * wildcard never sweeps an EPHEMERAL — which is what `spk-frame` is, and
+     * wildcard never sweeps an EPHEMERAL — which is what `speaker-frame` is, and
      * what every syllable of every answer rides on.
      *
      * FOUR, down from six. `pong` went with the ping that earned it;
-     * `grok-event` carried two facts that now ride `spk-frame` as `drop` and
+     * `grok-event` carried two facts that now ride `speaker-frame` as `drop` and
      * `last`; `viseme` is deleted from the contract because nothing on the
      * platform produces mouth shapes — the face animates from the PCM the
      * speaker actually played.
@@ -278,8 +278,8 @@ static void downlink_flow(void) {
         strstr(
             open_message,
             "\"consumes\":[["
-            "\"events.iterate.com/voice-agent/spk-frame\","
-            "\"events.iterate.com/voice-agent/conversation-ended\","
+            "\"events.iterate.com/voice-agent/speaker-frame\","
+            "\"events.iterate.com/voice-agent/call-ended\","
             "\"events.iterate.com/voice-agent/conversation-accepted\","
             "\"events.iterate.com/voice-agent/call-started\"]]") !=
         NULL);
@@ -301,7 +301,7 @@ static void downlink_flow(void) {
     static char message[16384];
     /*
      * The acceptance leads the audio, as it does on the wire: the delivery
-     * stream refuses `spk-frame`s for a call the device is not on — that
+     * stream refuses `speaker-frame`s for a call the device is not on — that
      * refusal is what keeps an ended call's in-flight tail from playing
      * after the end chime — so an answer with no accepted call in front of
      * it is silence by design, here as on the desk.
@@ -311,9 +311,9 @@ static void downlink_flow(void) {
         "[\"push\",[\"pipeline\",-1,[],[[["
         "{\"type\":\"events.iterate.com/voice-agent/conversation-accepted\","
         "\"offset\":39,\"payload\":{\"activation\":\"" TEST_ACTIVATION "\",\"conversationId\":\"wsdev\"}},"
-        "{\"type\":\"events.iterate.com/voice-agent/spk-frame\",\"offset\":40,"
+        "{\"type\":\"events.iterate.com/voice-agent/speaker-frame\",\"offset\":40,"
         "\"payload\":{\"activation\":\"" TEST_ACTIVATION "\",\"pcm\":\"%s\"}},"
-        "{\"type\":\"events.iterate.com/voice-agent/spk-frame\",\"offset\":41,"
+        "{\"type\":\"events.iterate.com/voice-agent/speaker-frame\",\"offset\":41,"
         "\"payload\":{\"activation\":\"" TEST_ACTIVATION "\",\"clearSpeakerBufferBeforeFrame\":true,\"pcm\":\"%s\"}}"
         "]],{\"after\":38,\"through\":41}]]]",
         frames_b64(1U, 0x41), frames_b64(1U, 0x45));
@@ -449,16 +449,16 @@ static void downlink_flow(void) {
     (void)snprintf(
         message, sizeof(message),
         "[\"push\",[\"pipeline\",-1,[],[[["
-        "{\"type\":\"events.iterate.com/voice-agent/spk-frame\",\"offset\":40,"
+        "{\"type\":\"events.iterate.com/voice-agent/speaker-frame\",\"offset\":40,"
         "\"payload\":{\"activation\":\"" TEST_ACTIVATION "\",\"pcm\":\"%s\"}},"
-        "{\"type\":\"events.iterate.com/voice-agent/spk-frame\",\"offset\":43,"
+        "{\"type\":\"events.iterate.com/voice-agent/speaker-frame\",\"offset\":43,"
         "\"payload\":{\"activation\":\"" TEST_ACTIVATION "\",\"lastFrameOfAnswer\":true,\"pcm\":\"%s\"}}"
         "]],{\"after\":42,\"through\":43}]]]",
         frames_b64(1U, 0x41), frames_b64(1U, 0x49));
     receive(&fixture, message);
   }
   receive(&fixture, "[\"release\",7,1]");
-  /* One per spk-frame event that carried audio, which is what the name says.
+  /* One per speaker-frame event that carried audio, which is what the name says.
    * It read 8 when a single event could increment it once per 640 bytes. */
   assert(fixture.voice_stream.spk_frames_received == 5U);
   assert(response_done_count == 1);
@@ -503,7 +503,7 @@ static void speaker_flags_ride_numbered_or_bare_frames(void) {
         "[\"push\",[\"pipeline\",-1,[],[[["
         "{\"type\":\"events.iterate.com/voice-agent/conversation-accepted\","
         "\"offset\":99,\"payload\":{\"activation\":\"" TEST_ACTIVATION "\",\"conversationId\":\"wsdev\"}},"
-        "{\"type\":\"events.iterate.com/voice-agent/spk-frame\",\"offset\":100,"
+        "{\"type\":\"events.iterate.com/voice-agent/speaker-frame\",\"offset\":100,"
         "\"payload\":{\"activation\":\"" TEST_ACTIVATION "\",\"deviceSpeakerFrameSeq\":0,\"pcm\":\"%s\"}}"
         "]],{\"after\":99,\"through\":100}]]]",
         frames_b64(1U, 0x40));
@@ -757,7 +757,7 @@ static void fenced_voice_stream_ignores_late_callback(void) {
       "{\"type\":\"events.iterate.com/voice-agent/conversation-accepted\","
       "\"offset\":1,\"payload\":{\"activation\":\"" TEST_ACTIVATION "\","
       "\"conversationId\":\"late\"}},"
-      "{\"type\":\"events.iterate.com/voice-agent/spk-frame\","
+      "{\"type\":\"events.iterate.com/voice-agent/speaker-frame\","
       "\"offset\":2,\"payload\":{\"activation\":\"" TEST_ACTIVATION "\","
       "\"pcm\":\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\"}}"
       "]],{\"after\":1,\"through\":2}]]]");
@@ -810,10 +810,10 @@ static void terminal_fence_stops_later_events_in_its_batch(void) {
   fence_on_call_ended = &fixture.voice_stream;
   receive(&fixture,
       "[\"push\",[\"pipeline\",-1,[],[[["
-      "{\"type\":\"events.iterate.com/voice-agent/conversation-ended\","
+      "{\"type\":\"events.iterate.com/voice-agent/call-ended\","
       "\"offset\":2,\"payload\":{\"activation\":\"" TEST_ACTIVATION "\","
       "\"reason\":\"button\"}},"
-      "{\"type\":\"events.iterate.com/voice-agent/spk-frame\","
+      "{\"type\":\"events.iterate.com/voice-agent/speaker-frame\","
       "\"offset\":3,\"payload\":{\"activation\":\"" TEST_ACTIVATION "\","
       "\"pcm\":\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\"}}"
       "]],{\"after\":2,\"through\":3}]]]");
@@ -901,7 +901,7 @@ static void terminal_rejects_unsafe_reason_without_an_ephemeral_append(void) {
   assert(iterate_kit_voice_stream_end_activation(
       &fixture.stream, TEST_ACTIVATION, "hangup") == CAPNWEB_OK);
   assert(fixture.captured_count == before + 2U);
-  assert(strstr(fixture.captured[before], "conversation-ended") != NULL);
+  assert(strstr(fixture.captured[before], "call-ended") != NULL);
   assert(strstr(fixture.captured[before], "\"ephemeral\"") == NULL);
   assert(iterate_kit_voice_stream_close(&fixture.voice_stream) == CAPNWEB_OK);
 }
