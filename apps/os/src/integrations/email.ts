@@ -200,15 +200,16 @@ async function recordEmail(
  *  subject, and the threading ids. */
 async function answeredMessageOf(emailContext: Pick<ReachableContext, "read">, offset: number) {
   const [event] = (await emailContext.read(offset - 1, 1)).events;
+  const found = event?.offset === offset ? event : undefined;
   const { events } = EmailContract;
-  const at = (type: string) => event?.offset === offset && event.type === type;
-  const received = at("events.iterate.com/email/received")
-    ? events["events.iterate.com/email/received"].payloadSchema.safeParse(event!.payload).data
-    : undefined;
+  const received =
+    found?.type === "events.iterate.com/email/received"
+      ? events["events.iterate.com/email/received"].payloadSchema.safeParse(found.payload).data
+      : undefined;
   const message =
     received ||
-    (at("events.iterate.com/email/sent")
-      ? events["events.iterate.com/email/sent"].payloadSchema.safeParse(event!.payload).data
+    (found?.type === "events.iterate.com/email/sent"
+      ? events["events.iterate.com/email/sent"].payloadSchema.safeParse(found.payload).data
       : undefined);
   if (!message)
     throw codedError(
