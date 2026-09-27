@@ -49,11 +49,10 @@ export async function localSignInResponse(request: Request, env: Env): Promise<R
     return new Response(null, { status: 303, headers });
   }
   const asked = url.searchParams.get("next") || "/login";
-  const next = URL.canParse(asked, platformOrigin) ? new URL(asked, platformOrigin) : null;
-  headers.set(
-    "location",
-    next && isLocalOrigin(next.origin) ? next.href : `${platformOrigin}/login`,
-  );
+  // the whole URL, not its origin: an opaque one's (`javascript:`) is "null", and a `blob:` URL's
+  // is the page that made it
+  const next = URL.canParse(asked, platformOrigin) ? new URL(asked, platformOrigin).href : null;
+  headers.set("location", next && isLocalOrigin(next) ? next : `${platformOrigin}/login`);
   headers.set("set-cookie", session.setCookie);
   return new Response(null, { status: 302, headers });
 }

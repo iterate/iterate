@@ -55,6 +55,12 @@ test.for<{ name: string; query: Record<string, string>; headers: HeadersInit; la
     headers: TYPED,
     lands: `${LAPTOP}/login`,
   },
+  {
+    name: "a blob: URL made on the laptop: /login",
+    query: { email: "ada@signin.test", next: `blob:${LAPTOP}/0f3c` },
+    headers: TYPED,
+    lands: `${LAPTOP}/login`,
+  },
 ])("signs the test person in, no password, and lands on $name", async (row) => {
   fetchReachesTheLaptop();
   const landed = await localSignIn(row.query, row.headers);
