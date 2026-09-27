@@ -1,8 +1,5 @@
-// __workers-tests__/email.test.ts — a project's mail on the worker: the `email()` door
-// (src/integrations/email.ts `receiveEmail`) records a message and its attachment on
-// `/integrations/email` once however often it is delivered, bounces mail for no project, and
-// `itx.email.send` answers a message in its thread, which the `email` facet folds. Projects' mail
-// is at `<slug>@projects.test` here (wrangler.test.jsonc's ingress hostname).
+// __workers-tests__/email.test.ts — a project's mail on the worker (src/integrations/email.ts), at
+// `<slug>@projects.test` here (wrangler.test.jsonc's ingress hostname).
 import { env } from "cloudflare:workers";
 import { expect, test, vi } from "vitest";
 import type { StreamEvent } from "iterate/stream/processor";
@@ -115,11 +112,11 @@ test("mail for no project, or on another domain, bounces", async () => {
   });
 });
 
-/** One delivery by Cloudflare Email Routing to `to`, and what the door rejected it with. */
+/** One delivery by Cloudflare Email Routing to `to`, and what `receiveEmail` rejected it with. */
 async function deliver(to: string, mime: string) {
   const rejected: string[] = [];
   const raw = new TextEncoder().encode(mime);
-  // the fields of a ForwardableEmailMessage the door reads
+  // the fields of a ForwardableEmailMessage that `receiveEmail` reads
   const message = {
     from: "ann@example.com",
     to,

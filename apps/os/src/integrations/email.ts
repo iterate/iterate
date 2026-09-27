@@ -112,10 +112,9 @@ export async function sendEmail(
   const parsed = SendInput.safeParse(input);
   if (!parsed.success) throw codedError("INVALID_INPUT", `itx.email.send: ${parsed.error.message}`);
   const request = parsed.data;
-  const answered =
-    request.inReplyToOffset === undefined
-      ? null
-      : await answeredMessageOf(scope.emailContext, request.inReplyToOffset);
+  const answered = request.inReplyToOffset
+    ? await answeredMessageOf(scope.emailContext, request.inReplyToOffset)
+    : null;
   const to = request.to ? [request.to].flat() : answered?.to || [];
   const cc = request.cc ? [request.cc].flat() : answered?.cc || [];
   const subject = request.subject || answered?.subject || "";
@@ -186,6 +185,7 @@ async function recordEmail(
 ): Promise<StreamEvent> {
   const asPlatform: Caller = { ...caller, platform: true };
   await emailContext.invoke(["itx", "builtins", "processors", ["enable", "email"]], [], asPlatform);
+  // `invoke` is untyped across the DO hop; the `append` built-in answers the committed events.
   const [recorded] = (await emailContext.invoke(
     ["itx", "builtins", ["append", event]],
     [],
