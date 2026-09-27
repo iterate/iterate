@@ -226,9 +226,7 @@ test("a push without Preview OS waits for Lint and Typecheck and Test alone", ()
   ).toMatchObject({ outcome: "green", e2e: "no-preview", seconds: 191.7 });
 });
 
-// Since Preview OS runs on every push, a push that changes no preview path runs its jobs only to
-// decide so, and skips its CI trace: its suites, which start beside the deploy, pass having tested
-// nothing. Skipped suites tested nothing either.
+// Which pushes tested no preview: scripts/monitors/ttg.ts `previewTested`.
 test.for([
   { name: "passed deciding so", suites: "finished" },
   { name: "were skipped", suites: "skipped" },
