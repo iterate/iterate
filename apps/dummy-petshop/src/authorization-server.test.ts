@@ -1,7 +1,7 @@
 /**
  * Token expiry at the fakes' one authorization server (authorization-server.ts), through the
- * Google, Cloudflare and GitHub fakes a preview signs people in with: every one of those sign-ins
- * holds tokens of the seeded client, so a test forcing a 401 expires one account's tokens of it.
+ * Google, Cloudflare and GitHub fakes: one account's tokens of a client, or all of the client's.
+ * Why a test expires an account: state.ts `PetshopState.accessTokenEpochs`.
  */
 import { expect, test } from "vitest";
 import { memoryPetshop } from "./memory-state.ts";

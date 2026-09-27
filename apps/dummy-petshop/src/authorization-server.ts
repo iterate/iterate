@@ -4,9 +4,9 @@
  * their provider's shapes. Consent is at once: authorize redirects with a sealed single-use code.
  * The exchange checks the code's client, expiry, redirect URI (RFC 6749 §4.1.3) and PKCE (RFC 7636,
  * required of a public client), then spends it. Access tokens expire and carry the revocation
- * epochs of their client and of their account at it, so `/__backdoor/expire-tokens { clientId,
- * account }` forces a 401 for that account's tokens alone; refresh tokens never expire and are
- * revoked one by one. Every code and token is a sealed blob (seal.ts) whose `t` names its provider
+ * epochs of their client and of their account at it, so the shop's expire-tokens route (worker.ts)
+ * forces a 401 for one account's tokens of a client, or for all of the client's; refresh tokens
+ * never expire and are revoked one by one. Every code and token is a sealed blob (seal.ts) whose `t` names its provider
  * and kind, and whose `grant` is what the provider knows of it (an account, its scopes).
  */
 import { nowSeconds, pkceS256, seal, unseal } from "./seal.ts";

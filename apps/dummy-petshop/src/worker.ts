@@ -63,6 +63,7 @@ export interface Env {
 
 // The index doubles as endpoint documentation, so anyone poking a deployed
 // instance sees the whole surface without opening the repo.
+// iterate-lint-disable terminology/no-metaphorical-lane-door-seam -- the index lists the deployed /__backdoor/* routes by their paths
 const INDEX = dedent`
   🐾 dummy-petshop — a fake third party for integrations & secrets e2e
 
@@ -117,6 +118,7 @@ const INDEX = dedent`
   Seeded client: ${DEFAULT_CLIENT_ID} / ${DEFAULT_CLIENT_SECRET} · access tokens live ${DEFAULT_ACCESS_TTL_SECONDS}s ·
   seeded GitHub App ${DEFAULT_APP_ID}, installation ${DEFAULT_INSTALLATION_ID} (no key until POST /__backdoor/apps)
 `;
+// iterate-lint-enable terminology/no-metaphorical-lane-door-seam
 
 /** The GraphQL login's view of the shop: the sealing key, and the two revocation epochs a session
  *  of `username` is bound to — the endpoint's (`graphql-session-login`) and the account's. */
