@@ -598,9 +598,10 @@ have no `needs:`. Each starts with the run and, while the preview deploys:
    on a dispatch the PR merged into main by `scripts/ci/preview-tested-commit.ts`),
    and on a push decides whether the PR changes a preview path;
 2. reconciles its dependencies, sets up Doppler and starts its suite step, whose
-   `runSuite` chooses the slow rows, installs Chromium and warms up what the
-   suite reads first, none of which reaches the preview: the e2e project's
-   `vitest list`, or the specs' `playwright test --list` and a Chromium launch;
+   `runSuite` chooses the slow rows and installs Chromium, and beside them warms
+   up what the suite reads first, none of which reaches the preview: the e2e
+   project's `vitest list`, or the specs' `playwright test --list` and a
+   Chromium launch. A warm-up still running when the deploy ends is stopped;
 3. polls Depot's GetWorkflow once a second for its own run's `deploy` job
    (`scripts/ci/await-deploy.ts`, which `PREVIEW_AWAIT_DEPLOY_JOB` turns on), and
    starts the suite once that job has finished. One that failed, was cancelled or
