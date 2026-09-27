@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { dirname, join, matchesGlob, relative, resolve } from "node:path";
 import { expect, test } from "vitest";
 import { parse as parseYaml } from "yaml";
@@ -18,9 +18,15 @@ import { unitTestWorkspaces } from "./test-telemetry-completeness.ts";
 const repoRoot = resolve(import.meta.dirname, "../..");
 /** What a test job's evidence artifacts end with: the job attempt's id (docs/depot-ci.md#artifacts-per-job-attempt). */
 const attemptSuffix = "-attempt-${{ steps.attempt.outputs.id }}";
-/** When the preview and main suite jobs keep their evidence: once their suite read the deployed
- *  target (apps/os/scripts/preview.ts `writeDeployedTarget`), whatever its outcome. */
-const afterTheDeployedTarget = `\${{ always() && hashFiles('${testEvidencePaths.target}') != '' }}`;
+/** When the preview and main suite jobs run their finalizer: whenever their suite step ran, whatever
+ *  its outcome. It keeps evidence once the suite read the deployed target
+ *  (apps/os/scripts/preview.ts `writeDeployedTarget`; test-evidence.ts `finalize --only-with-target`). */
+const afterTheSuite = "${{ always() && steps.suite.outcome != 'skipped' }}";
+/** The suite jobs' evidence steps after the finalizer's: once it kept the folder (its `evidence`
+ *  output), never a `hashFiles()` of their own. */
+const afterTheFinalizer = "${{ always() && steps.evidence-write.outputs.evidence == 'kept' }}";
+/** Where each test job's Doppler step saves _shared/preview's secrets for the evidence upload. */
+const dopplerFallback = "$RUNNER_TEMP/doppler-shared-preview";
 
 type WorkflowStep = {
   "continue-on-error"?: boolean;
@@ -539,13 +545,13 @@ test.for(mainE2eRecords.jobs)(
     );
     // whatever the suite's outcome, once it had a preview to test (preview-os-workflow.test.ts)
     expect(records).toMatchObject({
-      if: afterTheDeployedTarget,
+      if: afterTheFinalizer,
       uses: "actions/upload-artifact@v4",
       with: { path: `test-results/flake-records/${suite}` },
     });
     // the finalizer that writes this suite's summary into that folder (scripts/ci/flake-suite-summary.ts)
     const finalizer = stepsAsRun(path, jobId).find((step) =>
-      step.run?.includes("scripts/ci/upload-test-telemetry.ts"),
+      step.run?.includes("scripts/ci/test-evidence.ts finalize"),
     );
     expect(finalizer?.run).toContain(`--flake-suites ${suite}`);
   },
@@ -1076,7 +1082,7 @@ test("every unit-test workspace writes the canonical telemetry artifact", () => 
 
   // The finalizer reads the list from the checkout, by the same rule this test applies.
   const finalizer = loadWorkflow(".depot/workflows/test.yml").jobs.test?.steps?.find((step) =>
-    step.run?.includes("scripts/ci/upload-test-telemetry.ts"),
+    step.run?.includes("scripts/ci/test-evidence.ts finalize"),
   );
   expect(finalizer?.run).toContain("--expect-unit-workspaces");
   expect(finalizer?.env?.TEST_TELEMETRY_EXPECTED_WORKSPACES).toBeUndefined();
@@ -1091,7 +1097,9 @@ test.each([
   { file: ".depot/workflows/main-os-e2e.yml", jobId: "specs", suite: "specs" },
 ])("$file $jobId always finalizes and retains $suite test telemetry", ({ file, jobId, suite }) => {
   const steps = stepsAsRun(file, jobId);
-  const finalizer = steps.find((step) => step.run?.includes("scripts/ci/upload-test-telemetry.ts"));
+  const finalizer = steps.find((step) =>
+    step.run?.includes("scripts/ci/test-evidence.ts finalize"),
+  );
   // Flake records have their own upload; the raw telemetry and its manifest travel in the whole
   // test evidence folder's.
   const upload = steps.find(
@@ -1101,7 +1109,10 @@ test.each([
   // whatever the suite's outcome; a preview test job's once its suite read its deployed target,
   // since a job that never had a preview has nothing to keep (preview-os-workflow.test.ts)
   const always = expect.toSatisfy(
-    (condition: string) => condition === "always()" || condition === afterTheDeployedTarget,
+    (condition: string) => condition === "always()" || condition === afterTheSuite,
+  );
+  const afterIt = expect.toSatisfy(
+    (condition: string) => condition === "always()" || condition === afterTheFinalizer,
   );
 
   expect(finalizer, `${file} must normalize telemetry`).toMatchObject({ if: always });
@@ -1112,7 +1123,7 @@ test.each([
     `--flake-suites ${suite}`,
   );
   expect(upload, `${file} must retain the raw telemetry and its manifest`).toMatchObject({
-    if: always,
+    if: afterIt,
     with: expect.objectContaining({ "include-hidden-files": true, "if-no-files-found": "error" }),
   });
   expect(steps.indexOf(finalizer!)).toBeLessThan(steps.indexOf(upload!));
@@ -1122,7 +1133,7 @@ test.each([
     (step) => step.with?.name === `flake-records-${suite}${attemptSuffix}`,
   );
   expect(records, `${file} must upload flake-records-${suite}`).toMatchObject({
-    if: always,
+    if: afterIt,
     uses: "actions/upload-artifact@v4",
   });
   expect(steps.indexOf(finalizer!)).toBeLessThan(steps.indexOf(records!));
@@ -1169,28 +1180,36 @@ test.each([
   { file: ".depot/workflows/main-os-e2e.yml", jobId: "e2e", testSteps: ["suite"], as: ["e2e"] },
   { file: ".depot/workflows/main-os-e2e.yml", jobId: "specs", testSteps: ["suite"], as: ["specs"] },
 ])(
-  "the $jobId job of $file writes its test evidence manifest after the finalizer, and puts the folder in R2, deciding nothing and never failing unseen",
+  "the $jobId job of $file finalizes its telemetry and writes its test evidence manifest in one step, then puts the folder in R2, the evidence deciding nothing and never failing unseen",
   ({ file, jobId, testSteps, as }) => {
     const workflow = loadWorkflow(file);
     const job = workflow.jobs[jobId]!;
     const steps = stepsAsRun(file, jobId);
     const index = (command: string) => steps.findIndex((step) => !!step.run?.includes(command));
-    const write = steps[index("scripts/ci/test-evidence.ts write")];
+    const write = steps[index("scripts/ci/test-evidence.ts finalize")];
     const upload = steps[index("scripts/ci/test-evidence.ts upload")];
     const report = steps[index("scripts/ci/test-evidence-unreported.sh")];
 
-    // always, a cancelled job's folder saying so; bounded, so a hang cannot reach the job's timeout.
-    // A preview test job's once its suite read its deployed target: one that never had a preview
-    // has no folder.
+    // ONE STEP, ONE NODE PROCESS after the tests (test-evidence.ts `finalize`): the telemetry
+    // finalizer, which fails the job on incomplete telemetry, so the step is not continue-on-error,
+    // then the manifest, which decides nothing and reports its own failure. Always, a cancelled
+    // job's folder saying so; bounded, so a hang cannot reach the job's timeout. A preview test
+    // job's once its suite read its deployed target: one that never had a preview has no folder.
     expect(write).toMatchObject({
       id: "evidence-write",
       if: expect.toSatisfy(
-        (condition: string) => condition === "always()" || condition === afterTheDeployedTarget,
+        (condition: string) => condition === "always()" || condition === afterTheSuite,
       ),
-      "continue-on-error": true,
       "timeout-minutes": expect.any(Number),
-      run: expect.stringContaining("cancelled() && '--cancelled'"),
+      run: expect.stringMatching(
+        /^node scripts\/ci\/test-evidence\.ts finalize (--only-with-target )?--flake-suites /u,
+      ),
     });
+    expect(write?.run).toContain("cancelled() && '--cancelled'");
+    // a suite job keeps a folder only once its suite read the deployed target; the Test job always
+    expect(write?.run?.includes("--only-with-target")).toBe(file !== ".depot/workflows/test.yml");
+    expect(write?.["continue-on-error"]).toBeUndefined();
+    expect(steps.filter((step) => step.run?.includes("upload-test-telemetry.ts"))).toEqual([]);
     // the outcome of every step that runs tests, each one before the write, so a failure the
     // telemetry does not see (Kit's CTest, a runner that never started) is not a pass
     expect(write?.env?.TEST_EVIDENCE_STEPS).toBe(
@@ -1201,18 +1220,45 @@ test.each([
       expect(step, id).toBeGreaterThan(-1);
       expect(step).toBeLessThan(steps.indexOf(write!));
     }
-    // a cancelled or timed-out job's folder too, bounded the same way
+    // a cancelled or timed-out job's folder too, bounded the same way; Node's own type stripping
     expect(upload).toMatchObject({
       id: "evidence-upload",
       if: expect.stringContaining("always()"),
       "continue-on-error": true,
       "timeout-minutes": expect.any(Number),
+      run: expect.stringContaining(
+        `doppler run --project _shared --config preview --fallback "${dopplerFallback}" "\${offline[@]}" -- node scripts/ci/test-evidence.ts upload`,
+      ),
     });
+    // ONE DOPPLER FETCH, off the job's critical path: a step before the finalizer saves
+    // _shared/preview's secrets into the fallback file the upload then reads offline (and fetches
+    // them itself without it), beside the Test job's tests, and before a suite job's suite, which
+    // waits for its deploy; a failed fetch is a warning, never the job's result
+    expect(upload?.run).toContain(
+      `if [ -s "${dopplerFallback}" ]; then offline=(--fallback-only); fi`,
+    );
+    const prefetch = steps.find((step) => step.name === "Fetch the evidence upload's secrets");
+    expect(prefetch, `${file} must save _shared/preview before its tests end`).toMatchObject({
+      "continue-on-error": true,
+      "timeout-minutes": expect.any(Number),
+      env: { DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}" },
+      run: expect.stringContaining(
+        `doppler run --project _shared --config preview --fallback "${dopplerFallback}" -- true ||`,
+      ),
+    });
+    expect(steps.indexOf(prefetch!)).toBeLessThan(steps.indexOf(write!));
+    const testsBlock = readWorkflow(file).jobs[jobId]?.steps?.find((step) =>
+      step.parallel?.some((inner) => testSteps.includes(inner.id || "")),
+    );
+    if (file === ".depot/workflows/test.yml") {
+      expect(testsBlock?.parallel).toContainEqual(prefetch);
+    } else {
+      expect(steps.indexOf(prefetch!)).toBeLessThan(steps.findIndex((step) => step.id === "suite"));
+    }
     // a step that failed before it could say why is reported by the next one, whatever happened
     expect(report?.if).toContain("always()");
-    // after every runner and the finalizer; then the R2 upload beside every artifact that keeps
-    // the folder, each only reading it (docs/depot-ci.md#parallel-steps); then the report
-    expect(index("scripts/ci/upload-test-telemetry.ts")).toBeLessThan(steps.indexOf(write!));
+    // after every runner, the finalizer and the manifest, the R2 upload beside every artifact that
+    // keeps the folder, each only reading it (docs/depot-ci.md#parallel-steps); then the report
     const artifacts = steps.filter((step) => step.uses === "actions/upload-artifact@v4");
     // and the saves to Depot Cache (Test's store, main's specs' browser), which read no evidence
     const uploads = [
@@ -1328,6 +1374,8 @@ test("the Test job's summary says which pnpm store its install started from and 
 
 test("the fallback report names a failed evidence step that did not report itself, once, and never fails", () => {
   using runner = temporaryDirectory();
+  // the job's workspace, where the manifest is test-results/manifest.json
+  using workspace = temporaryDirectory();
   const summary = join(runner.path, "summary.md");
   const report = (write: string, upload: string) => {
     writeFileSync(summary, "");
@@ -1335,6 +1383,7 @@ test("the fallback report names a failed evidence step that did not report itsel
       "bash",
       [resolve(repoRoot, "scripts/ci/test-evidence-unreported.sh"), write, upload],
       {
+        cwd: workspace.path,
         env: { PATH: process.env.PATH, GITHUB_STEP_SUMMARY: summary, RUNNER_TEMP: runner.path },
         encoding: "utf8",
       },
@@ -1345,11 +1394,16 @@ test("the fallback report names a failed evidence step that did not report itsel
   const unreported = report("success", "failure");
   expect(unreported).toEqual({
     status: 0,
-    stdout: `::warning title=${stepFailureTitles.upload}::the upload step failed before it could say why (Doppler, pnpm or the step's timeout); its log has the rest\n`,
-    summary: `**${stepFailureTitles.upload}**: the upload step failed before it could say why (Doppler, pnpm or the step's timeout); its log has the rest. The tests' result is unaffected.\n`,
+    stdout: `::warning title=${stepFailureTitles.upload}::the upload step failed before it could say why (Node, Doppler or the step's timeout); its log has the rest\n`,
+    summary: `**${stepFailureTitles.upload}**: the upload step failed before it could say why (Node, Doppler or the step's timeout); its log has the rest. The tests' result is unaffected.\n`,
   });
+  // the step died before the manifest (Node, its timeout)
   const write = report("failure", "skipped");
   expect(write.stdout).toContain(`::warning title=${stepFailureTitles.write}::the write step`);
+  // the finalizer failed the step on incomplete telemetry, after the manifest was written
+  mkdirSync(join(workspace.path, dirname(testEvidencePaths.manifest)), { recursive: true });
+  writeFileSync(join(workspace.path, testEvidencePaths.manifest), "{}\n");
+  expect(report("failure", "skipped")).toEqual({ status: 0, stdout: "", summary: "" });
 
   // the script reported the upload itself (reportStepFailure's marker): nothing more to say
   writeFileSync(join(runner.path, "test-evidence-upload.reported"), "R2 PUT …: 500\n");
@@ -1364,6 +1418,26 @@ test("Kit's host tests write CTest's JUnit XML into the test evidence folder", (
     `pnpm --dir apps/kit firmware:test:host --output-junit "$PWD/${testEvidencePaths.ctestJunit}"`,
   );
   expect(kit?.run).toContain(`mkdir -p ${dirname(testEvidencePaths.ctestJunit)}`);
+});
+
+// Kit's host tests need none of `pnpm test`'s outputs and build in their own directory, so they run
+// beside it instead of after it, at the lowest priority so the vitest rows keep the CPU; neither
+// cancels the other, and a failed setup hides no firmware result.
+test("the Test job runs Kit's host tests beside pnpm test, neither cancelling the other", () => {
+  const steps = readWorkflow(".depot/workflows/test.yml").jobs.test?.steps ?? [];
+  const block = steps.find((step) => step.parallel?.some((inner) => inner.id === "tests"));
+  expect(block?.["fail-fast"]).toBe(false);
+  // and the evidence upload's Doppler fetch, which needs nothing of either
+  expect(block?.parallel?.map((step) => step.id || step.name)).toEqual([
+    "tests",
+    "kit-host-tests",
+    "Fetch the evidence upload's secrets",
+  ]);
+  expect(block?.parallel?.[1]).toMatchObject({
+    if: "${{ !cancelled() }}",
+    run: expect.stringContaining("nice -n 19 pnpm --dir apps/kit firmware:test:host"),
+  });
+  expect(steps.indexOf(block!)).toBe(steps.findIndex((step) => step.id === "setup") + 1);
 });
 
 test("the test jobs' flake records go into the test evidence folder", () => {
@@ -1416,12 +1490,13 @@ test.for([
 
     // the root config writes per-test output and the HTML report into the test evidence folder
     expect(results).toMatchObject({
-      if: afterTheDeployedTarget,
+      if: afterTheFinalizer,
       uses: "actions/upload-artifact@v4",
       with: expect.objectContaining({ path: testEvidencePaths.root }),
     });
+    // once the finalizer found the HTML report in the folder (its `playwright-report` output)
     expect(report).toMatchObject({
-      if: expect.stringContaining("always()"),
+      if: "${{ always() && steps.evidence-write.outputs.playwright-report == 'written' }}",
       uses: "actions/upload-artifact@v4",
       with: expect.objectContaining({ path: testEvidencePaths.playwrightReport }),
     });

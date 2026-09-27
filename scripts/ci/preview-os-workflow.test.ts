@@ -373,30 +373,40 @@ test("a test job names its preview by the PR's number, or by preview-name withou
   expect(preview.on.workflow_dispatch?.inputs).toHaveProperty("preview-name");
 });
 
-// Without a preview there is nothing to keep: the evidence steps follow the deployed target the suite
-// reads once its preview is there (apps/os/scripts/preview.ts `writeDeployedTarget`), not the guard,
-// the path check or the wait. The R2 upload and its fallback report follow the manifest's write, and
-// the Playwright report exists only once the specs ran.
+// Without a preview there is nothing to keep: the finalizer keeps the folder once the suite read the
+// deployed target it writes when its preview is there (apps/os/scripts/preview.ts
+// `writeDeployedTarget`, scripts/ci/test-evidence.ts `finalize --only-with-target`), not after the
+// guard, the path check or the wait. Every evidence step after it follows its outputs, which say what
+// the folder holds, never a `hashFiles()` of its own: each costs the runner about 0.2 s, one at a
+// time even inside a parallel block.
 test("a test job keeps its evidence whenever its suite read its deployed target, and only then", () => {
   for (const suite of suites) {
     const steps = preview.jobs[suite.job]!.steps || [];
     const evidence = steps.slice(steps.findIndex((step) => step.id === "suite") + 1);
-    const followers = evidence.filter(
-      (step) =>
-        step.id === "evidence-upload" ||
-        step.name === "Report a test evidence step that could not" ||
-        step.with?.name === "public-playwright-report",
-    );
-    expect(evidence.length - followers.length).toBeGreaterThan(0);
-    for (const step of evidence.filter((step) => !followers.includes(step)))
-      expect(step, step.name).toMatchObject({
-        if: "${{ always() && hashFiles('test-results/target.json') != '' }}",
-      });
-    // the Playwright report only the specs write
-    expect(followers.map((step) => step.if)).toEqual([
-      "${{ always() && hashFiles('test-results/manifest.json') != '' }}",
-      "${{ always() && hashFiles('test-results/playwright-html/index.html') != '' }}",
-      "${{ always() && (steps.evidence-write.outcome == 'failure' || steps.evidence-upload.outcome == 'failure') }}",
+    expect(evidence[0]).toMatchObject({
+      id: "evidence-write",
+      if: "${{ always() && steps.suite.outcome != 'skipped' }}",
+      run: expect.stringContaining("finalize --only-with-target"),
+    });
+    expect(evidence.slice(1).map((step) => [step.name, step.if])).toEqual([
+      [
+        "Upload the test evidence to R2",
+        "${{ always() && steps.evidence-write.outputs.manifest == 'written' }}",
+      ],
+      [
+        "Upload flake records",
+        "${{ always() && steps.evidence-write.outputs.evidence == 'kept' }}",
+      ],
+      ["Upload results", "${{ always() && steps.evidence-write.outputs.evidence == 'kept' }}"],
+      // the Playwright report only the specs write
+      [
+        "Upload public Playwright HTML report",
+        "${{ always() && steps.evidence-write.outputs.playwright-report == 'written' }}",
+      ],
+      [
+        "Report a test evidence step that could not",
+        "${{ always() && (steps.evidence-write.outcome == 'failure' || steps.evidence-upload.outcome == 'failure') }}",
+      ],
     ]);
   }
 });

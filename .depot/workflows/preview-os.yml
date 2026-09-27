@@ -291,6 +291,19 @@ jobs:
               path: ~/.cache/ms-playwright
               key: ms-playwright-${{ hashFiles('pnpm-lock.yaml') }}
               restore-keys: ${{ github.ref != 'refs/heads/main' && 'ms-playwright-' || '' }}
+      # _SHARED/PREVIEW'S SECRETS FOR THE EVIDENCE UPLOAD, fetched before the suite, while the deploy
+      # it waits for runs, into Doppler's encrypted fallback file: the upload after the suite reads
+      # them without a request (docs/test-evidence.md#what-ci-does). A failed fetch is a warning; the
+      # upload then fetches them itself.
+      - name: Fetch the evidence upload's secrets
+        if: steps.changes.outputs.preview != 'false'
+        continue-on-error: true
+        timeout-minutes: 1
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: |
+          doppler run --project _shared --config preview --fallback "$RUNNER_TEMP/doppler-shared-preview" -- true ||
+            echo "::warning title=Doppler prefetch::_shared/preview not saved; the evidence upload fetches it"
       # Set up, wait for this run's deploy when it has one, then the suite
       # (apps/os/scripts/preview.ts `runSuite`). The trace's Test phase is this step
       # (scripts/ci/tracing/tracing.ts).
@@ -311,25 +324,25 @@ jobs:
           # the job whose end starts the suite, when this run deploys (scripts/ci/await-deploy.ts)
           PREVIEW_AWAIT_DEPLOY_JOB: ${{ (github.event_name == 'pull_request' || inputs.action == 'deploy' || inputs.action == 'reset') && 'deploy' || '' }}
         run: doppler run --project os --config preview -- pnpm preview "$SUITE"
-      # Fails when the runner left no complete artifact, and writes the suite summary next to its
-      # flake lines. A cancelled run keeps its partial evidence without reporting it as failures.
-      # Once the suite read its deployed target only: without a preview there is nothing to keep.
-      - name: Check test telemetry and write the suite summary
-        if: ${{ always() && hashFiles('test-results/target.json') != '' }}
-        run: pnpm tsx scripts/ci/upload-test-telemetry.ts --flake-suites "$FLAKE_SUITE" ${{ cancelled() && '--cancelled' || '' }}
-      # THE TEST EVIDENCE FOLDER (docs/test-evidence.md): this adds test-results/manifest.json.
-      # Neither this nor the upload decides the job; the tests did.
-      # Once the suite read its deployed target only: a job with no preview has no folder.
-      - name: Write the test evidence manifest
+      # THE STEP AFTER THE SUITE, one Node process (scripts/ci/test-evidence.ts `finalize`, which says
+      # what fails it): the telemetry finalizer, which fails the job when the runner left no complete
+      # artifact and writes the suite summary next to its flake lines, then the test evidence
+      # manifest, test-results/manifest.json (docs/test-evidence.md). A cancelled run keeps its
+      # partial evidence without reporting it as failures. Once the suite read its deployed target
+      # only (--only-with-target, test-results/target.json): without a preview there is nothing to
+      # keep, and the steps after it follow its outputs.
+      - name: Check test telemetry, write the suite summary and the test evidence manifest
         id: evidence-write
-        if: ${{ always() && hashFiles('test-results/target.json') != '' }}
-        continue-on-error: true
+        if: ${{ always() && steps.suite.outcome != 'skipped' }}
         timeout-minutes: 2
         env:
           TEST_EVIDENCE_STEPS: ${{ env.SUITE }}=${{ steps.suite.outcome }}
-        run: pnpm tsx scripts/ci/test-evidence.ts write ${{ cancelled() && '--cancelled' || '' }}
+          # Node's compile cache, which the upload's Node then starts from
+          NODE_COMPILE_CACHE: ${{ runner.temp }}/node-compile-cache
+        run: node scripts/ci/test-evidence.ts finalize --only-with-target --flake-suites "$FLAKE_SUITE" ${{ cancelled() && '--cancelled' || '' }}
       # THE UPLOADS, side by side: each only reads test-results/, and `fail-fast: false` lets every
-      # one finish whatever another does (docs/depot-ci.md#parallel-steps).
+      # one finish whatever another does (docs/depot-ci.md#parallel-steps). Each follows the step
+      # above by its outcome or its outputs, never `hashFiles()` (test-evidence.ts `finalize`).
       - fail-fast: false
         parallel:
           # With the Cloudflare API token preview deploys use (Doppler _shared/preview), as S3 keys.
@@ -337,15 +350,20 @@ jobs:
           # and a line of the job's summary, never the job's result.
           - name: Upload the test evidence to R2
             id: evidence-upload
-            if: ${{ always() && hashFiles('test-results/manifest.json') != '' }}
+            if: ${{ always() && steps.evidence-write.outputs.manifest == 'written' }}
             continue-on-error: true
             timeout-minutes: 3
             env:
               DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-            run: doppler run --project _shared --config preview -- pnpm tsx scripts/ci/test-evidence.ts upload
+              NODE_COMPILE_CACHE: ${{ runner.temp }}/node-compile-cache
+            # offline from the file the fetch before the suite saved; a fetch without it
+            run: |
+              offline=()
+              if [ -s "$RUNNER_TEMP/doppler-shared-preview" ]; then offline=(--fallback-only); fi
+              doppler run --project _shared --config preview --fallback "$RUNNER_TEMP/doppler-shared-preview" "${offline[@]}" -- node scripts/ci/test-evidence.ts upload
           # One artifact per suite and job attempt; PR time to green reads its suite summary.
           - name: Upload flake records
-            if: ${{ always() && hashFiles('test-results/target.json') != '' }}
+            if: ${{ always() && steps.evidence-write.outputs.evidence == 'kept' }}
             uses: actions/upload-artifact@v4
             with:
               name: flake-records-${{ env.FLAKE_SUITE }}-attempt-${{ steps.attempt.outputs.id }}
@@ -356,7 +374,7 @@ jobs:
           # failed spec's trace.zip, screenshot and error-context.md under playwright-output/ and
           # playwright-results.json.
           - name: Upload results
-            if: ${{ always() && hashFiles('test-results/target.json') != '' }}
+            if: ${{ always() && steps.evidence-write.outputs.evidence == 'kept' }}
             uses: actions/upload-artifact@v4
             with:
               name: preview-os-test-artifacts-attempt-${{ steps.attempt.outputs.id }}
@@ -368,7 +386,7 @@ jobs:
           # serve it). Named for the PR, not the attempt, and overwritten: it is the latest attempt's
           # report, and each attempt's own copy is in its test-results artifact.
           - name: Upload public Playwright HTML report
-            if: ${{ always() && hashFiles('test-results/playwright-html/index.html') != '' }}
+            if: ${{ always() && steps.evidence-write.outputs.playwright-report == 'written' }}
             uses: actions/upload-artifact@v4
             with:
               name: public-playwright-report
@@ -376,7 +394,7 @@ jobs:
               if-no-files-found: error
               retention-days: 30
               overwrite: true
-      # Either step that failed before it could say why (Doppler, pnpm, its timeout) gets its
+      # Either step that failed before it could say why (Node, Doppler, its timeout) gets its
       # warning and summary line here; one that reported itself is left alone.
       - name: Report a test evidence step that could not
         if: ${{ always() && (steps.evidence-write.outcome == 'failure' || steps.evidence-upload.outcome == 'failure') }}

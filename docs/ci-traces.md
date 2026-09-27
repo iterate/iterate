@@ -70,8 +70,8 @@ runner logs. Each test job's suite step, `suite` in E2E tests and Browser specs
 deploy, that phase begins with **Set up the suite** and **Wait for Deploy
 preview**, spans of their own (`runSuite` in `apps/os/scripts/preview.ts`), and
 its first test comes after them. The shell hook preserves
-exit codes and ignores nested shells. It requires only the Node already
-installed in the runner image, so it measures `pnpm install` too.
+exit codes and ignores nested shells. It is plain bash that starts no process,
+so it measures `pnpm install` too and adds about a millisecond to a step.
 
 Expand the `pnpm preview deploy` step to see where its time went. Each span
 starts once what it needs is there. **Write the deploying status**,
