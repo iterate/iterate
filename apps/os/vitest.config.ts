@@ -88,7 +88,7 @@ const LONG_POLES = [
  *  claim's alarm (20 s) or `evictDurableObject`'s own 30 s bound in about half the runs (6 of 12 in
  *  CI, 2026-09-27), with fresh-file.ts doing nothing at all as much as with it: what the earlier
  *  file left is not involved. First in a fresh runtime, as every file was when each had its own,
- *  it passed 22 of 22. */
+ *  it passed 46 of 46 (34 isolated, 12 shared). */
 const FRESH_RUNTIME_FIRST = ["apps/agents/__workers-tests__/agent-revive.test.ts"];
 
 class LongPolesFirst extends BaseSequencer {
