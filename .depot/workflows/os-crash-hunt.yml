@@ -22,27 +22,17 @@ on:
 concurrency:
   group: os-crash-hunt
   cancel-in-progress: false
-env:
-  # The image's baked store: dependencies.mjs fingerprints it (docs/depot-ci.md#custom-image)
-  PNPM_CONFIG_STORE_DIR: /home/runner/.pnpm-store
 jobs:
   crash-hunt:
-    runs-on:
-      size: 4x16
-      image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
+    runs-on: depot-ubuntu-24.04-4
     timeout-minutes: 30
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          clean: false
           ref: ${{ github.event_name == 'schedule' && github.event.repository.default_branch || github.sha }}
-      - name: Reconcile dependencies (baked)
-        run: node scripts/depot-ci/dependencies.mjs install
-      - name: Setup Doppler (baked CLI)
-        run: doppler setup --config prd --project os
-        env:
-          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+      - name: Setup
+        uses: ./.depot/actions/setup
       - name: Hunt isolate crashes on os.iterate.com
         working-directory: apps/os
         env:
@@ -51,24 +41,20 @@ jobs:
           RUN_ISOLATE_CRASH_HUNT: "1"
         # The credentials come out of the deployment's APP_CONFIG in the environment
         # (apps/os/e2e/support/global-setup.ts).
-        run: doppler run -- pnpm e2e isolate-ceilings --no-file-parallelism
+        run: doppler run --project os --config prd -- pnpm e2e isolate-ceilings --no-file-parallelism
   notify:
     needs:
       - crash-hunt
     if: always() && needs.crash-hunt.result == 'failure'
-    runs-on:
-      size: 2x8
-      image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
+    runs-on: depot-ubuntu-24.04
     timeout-minutes: 10
     env:
       DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-        with:
-          clean: false
-      - name: Reconcile dependencies (baked)
-        run: node scripts/depot-ci/dependencies.mjs install
+      - name: Setup
+        uses: ./.depot/actions/setup
       - name: Notify Slack
         env:
           NEEDS: ${{ toJSON(needs) }}

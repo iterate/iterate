@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # THE TEST JOB'S PNPM STORE LINE of its summary, and a warning for a restore or save that failed
-# (docs/depot-ci.md#the-test-job-runs-on-depots-stock-image). Plain shell.
+# (docs/depot-ci.md#depot-cache). Plain shell.
 #
 #   bash scripts/ci/pnpm-store-report.sh <restore outcome> <primary key> <matched key> <save outcome>
 set -u

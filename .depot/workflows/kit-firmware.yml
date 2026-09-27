@@ -13,14 +13,14 @@ on:
       - main
     paths:
       - .depot/workflows/kit-firmware.yml
-      - scripts/depot-ci/esp-idf.sh
+      - scripts/ci/esp-idf.sh
       - apps/kit/firmware/**
       - apps/kit/scripts/firmware-release.ts
       - apps/kit/src/firmware/catalog.ts
   pull_request:
     paths:
       - .depot/workflows/kit-firmware.yml
-      - scripts/depot-ci/esp-idf.sh
+      - scripts/ci/esp-idf.sh
       - apps/kit/firmware/**
       - apps/kit/scripts/firmware-release.ts
       - apps/kit/src/firmware/catalog.ts
@@ -46,9 +46,7 @@ concurrency:
 jobs:
   plan-firmware:
     name: Plan
-    runs-on:
-      size: 2x8
-      image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
+    runs-on: depot-ubuntu-24.04
     timeout-minutes: 10
     outputs:
       version: ${{ steps.plan.outputs.version }}
@@ -61,13 +59,12 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          clean: false
           # The version counts main's first-parent commits; diffs reach each device's last release.
           fetch-depth: 0
           persist-credentials: false
           ref: ${{ github.sha }}
-      - name: Show the publish job's tools
-        run: gh --version && jq --version
+      - name: Setup Node
+        run: bash scripts/ci/toolchain.sh node
       - id: plan
         name: Plan device builds
         env:
@@ -83,10 +80,9 @@ jobs:
     strategy:
       fail-fast: false # one broken board never blocks the others' releases
       matrix: ${{ fromJSON(needs.plan-firmware.outputs.matrix) }}
-    # Node 24 and ESP-IDF, nothing else (build-esp-idf-image.yml)
-    runs-on:
-      size: 2x8
-      image: 0p91s0lz49.registry.depot.dev/iterate-esp-idf-ci:node24
+    # Node and ESP-IDF, nothing else. On a 4x16, a leg restores ESP-IDF's 1.06 GB in 7 s and builds
+    # a board in 30 s; a 2x8 took 12-27 s and 48-52 s, for about the same cost (2026-09-27).
+    runs-on: depot-ubuntu-24.04-4
     timeout-minutes: 30
     steps:
       - name: Checkout code
@@ -94,10 +90,37 @@ jobs:
         with:
           persist-credentials: false
           ref: ${{ github.sha }}
-      # The image carries ESP-IDF (scripts/depot-ci/esp-idf.sh, the pin); a leg downloads it only
-      # while that file differs from the image's, and then says so in a warning.
-      - name: ESP-IDF (baked)
-        run: scripts/depot-ci/esp-idf.sh ensure
+      - name: Setup Node
+        run: bash scripts/ci/toolchain.sh node
+      # ESP-IDF FROM DEPOT CACHE, keyed by its pin, scripts/ci/esp-idf.sh: that pin's alone, since
+      # an older one's is of no use to it (docs/depot-ci.md#depot-cache). Without it, `ensure`
+      # installs from the network and says so in a warning.
+      - name: Restore ESP-IDF
+        id: esp-idf
+        uses: actions/cache/restore@v4
+        continue-on-error: true
+        timeout-minutes: 3
+        with:
+          path: |
+            /home/runner/esp-idf
+            /home/runner/.espressif
+          key: esp-idf-${{ hashFiles('scripts/ci/esp-idf.sh') }}
+      - name: ESP-IDF
+        id: ensure
+        run: scripts/ci/esp-idf.sh ensure
+      # ESP-IDF FOR THE NEXT LEGS, from a main run whose pin no run saved yet, as installed and
+      # before the build writes anything into it. Legs side by side race to save it: the first
+      # wins, and the others' saves fail as a warning.
+      - name: Save ESP-IDF
+        if: ${{ github.ref == 'refs/heads/main' && steps.ensure.outcome == 'success' && steps.esp-idf.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@v4
+        continue-on-error: true
+        timeout-minutes: 5
+        with:
+          path: |
+            /home/runner/esp-idf
+            /home/runner/.espressif
+          key: ${{ steps.esp-idf.outputs.cache-primary-key }}
       - name: Build
         env:
           DEVICE: ${{ matrix.device }}
@@ -123,9 +146,7 @@ jobs:
     if: always() && needs.plan-firmware.result == 'success' && needs.plan-firmware.outputs.count != '0' && needs.build-firmware.result != 'cancelled'
     permissions:
       contents: write # the workflow's only writer: it checks out nothing and runs only gh and jq on the built files
-    runs-on:
-      size: 2x8
-      image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
+    runs-on: depot-ubuntu-24.04
     timeout-minutes: 15
     steps:
       - name: Download release files
@@ -179,22 +200,17 @@ jobs:
       - build-firmware
       - publish-firmware
     if: always() && github.ref == 'refs/heads/main' && (needs.plan-firmware.result == 'failure' || needs.build-firmware.result == 'failure' || needs.publish-firmware.result == 'failure')
-    runs-on:
-      size: 2x8
-      image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
+    runs-on: depot-ubuntu-24.04
     timeout-minutes: 10
     env:
       DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-      # The image's baked store: dependencies.mjs fingerprints it (docs/depot-ci.md#custom-image)
-      PNPM_CONFIG_STORE_DIR: /home/runner/.pnpm-store
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          clean: false
           persist-credentials: false
-      - name: Reconcile dependencies (baked)
-        run: node scripts/depot-ci/dependencies.mjs install
+      - name: Setup
+        uses: ./.depot/actions/setup
       - name: Notify Slack
         env:
           NEEDS: ${{ toJSON(needs) }}

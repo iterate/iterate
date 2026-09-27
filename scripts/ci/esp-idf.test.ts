@@ -6,7 +6,7 @@ import { expect, test } from "vitest";
 
 const script = resolve(import.meta.dirname, "esp-idf.sh");
 
-test("a leg whose image receipt matches the script uses the image's ESP-IDF and downloads nothing", () => {
+test("a leg that restored this script's ESP-IDF from Depot Cache uses it and downloads nothing", () => {
   using leg = fixture();
   leg.writeReceipt(leg.scriptHash());
 
@@ -14,7 +14,7 @@ test("a leg whose image receipt matches the script uses the image's ESP-IDF and 
 
   expect(result).toMatchObject({
     status: 0,
-    stdout: expect.stringContaining("Using the CI image's ESP-IDF v5.4.2"),
+    stdout: expect.stringContaining("Using ESP-IDF v5.4.2 from Depot Cache"),
   });
   expect(result.stdout).not.toContain("::warning::");
   expect(readFileSync(leg.githubEnv, "utf8")).toBe(
@@ -23,8 +23,8 @@ test("a leg whose image receipt matches the script uses the image's ESP-IDF and 
 });
 
 test.for([
-  ["an image without ESP-IDF", undefined],
-  ["an image baked from another esp-idf.sh", "0000000000000000000000000000000000000000"],
+  ["a leg that restored no ESP-IDF", undefined],
+  ["a leg that restored another esp-idf.sh's ESP-IDF", "0000000000000000000000000000000000000000"],
 ] as const)("%s makes the leg warn, then install from the network", ([, receipt]) => {
   using leg = fixture();
   if (receipt) leg.writeReceipt(receipt);
@@ -33,7 +33,7 @@ test.for([
 
   expect(result).toMatchObject({
     stdout: expect.stringContaining(
-      `::warning::The CI image's ESP-IDF receipt (${receipt || "none"}) is not scripts/depot-ci/esp-idf.sh (${leg.scriptHash()})`,
+      `::warning::No ESP-IDF from Depot Cache for scripts/ci/esp-idf.sh (${leg.scriptHash()}; the receipt restored: ${receipt || "none"})`,
     ),
     // The fixture routes the clone to a missing repository, so the install fails at its first
     // download, as a broken download fails a real leg.

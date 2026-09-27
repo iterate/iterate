@@ -1065,7 +1065,8 @@ async function runSuite(
         ],
         { cwd: REPO_ROOT, env },
       ),
-      // one launch of the browser the specs launch, headless, which the image already holds
+      // one launch of the browser the specs launch, headless, which CI usually restored from Depot
+      // Cache beside its setup (docs/depot-ci.md#depot-cache)
       warmUp(
         "Chromium",
         "node",
@@ -1086,8 +1087,10 @@ async function runSuite(
   try {
     tests = await traceOperation("Set up the suite", async () => {
       if (suite === "specs") {
+        // The headless shell alone, which headless Chromium with no `channel`
+        // (playwright.config.ts) launches: a no-op when CI restored it.
         if (process.env.CI)
-          await runAsync("pnpm", ["exec", "playwright", "install", "chromium"], {
+          await runAsync("pnpm", ["exec", "playwright", "install", "--only-shell", "chromium"], {
             cwd: REPO_ROOT,
           });
         return { args: ["spec"], env: { ...env, ...PREVIEW_SUITE_TELEMETRY.specs } };

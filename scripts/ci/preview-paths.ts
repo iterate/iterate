@@ -61,7 +61,9 @@ export const previewPaths = [
   "pnpm-workspace.yaml",
   "envs.ts",
   "scripts/lib/**",
-  "scripts/depot-ci/**",
+  // the setup every preview job runs (docs/depot-ci.md#setup-on-depots-stock-image)
+  ".depot/actions/**",
+  "scripts/ci/toolchain.sh",
 ];
 
 /** GitHub's `paths` filter over `previewPaths`: true when any file would have triggered it. */

@@ -14,14 +14,9 @@ on:
 concurrency:
   group: pr-dashboard
   cancel-in-progress: false
-env:
-  # The image's baked store: dependencies.mjs fingerprints it (docs/depot-ci.md#custom-image)
-  PNPM_CONFIG_STORE_DIR: /home/runner/.pnpm-store
 jobs:
   update_dashboard:
-    runs-on:
-      size: 2x8
-      image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
+    runs-on: depot-ubuntu-24.04
     env:
       DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
       GITHUB_TOKEN: ${{ github.token }}
@@ -31,10 +26,9 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          clean: false
           ref: ${{ github.sha }}
-      - name: Reconcile dependencies (baked)
-        run: node scripts/depot-ci/dependencies.mjs install
+      - name: Setup
+        uses: ./.depot/actions/setup
       - name: Notify PR update
         run: pnpm tsx scripts/ci/notify.ts pr-update
       - name: Update PR dashboard
