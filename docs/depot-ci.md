@@ -500,10 +500,10 @@ that needs code landing with it (#2999: main's `test.yml` named a workspace the 
   check out `github.sha`. LOC report still diffs the PR's head against its base, from the event.
 - Preview OS's deploy passes `github.sha` to `scripts/ci/preview-tested-commit.ts`, which deploys
   it when it is a merge of the head and otherwise resolves `refs/pull/<n>/merge`. The suites start
-  beside the deploy, so they find its commit themselves: on a push they check out `github.sha`,
-  which is what the deploy tests, and on a dispatch they resolve it with the same
-  `preview-tested-commit.ts`. The trace checks out the commit deploy tested. The trace's statuses,
-  the test telemetry's `headSha` and the preview's name use the PR head.
+  beside the deploy, so they find its commit themselves, by the deploy's own two steps: the PR's
+  head, then the same `preview-tested-commit.ts` with the same `github.sha`. The trace checks out
+  the commit deploy tested. The trace's statuses, the test telemetry's `headSha` and the preview's
+  name use the PR head.
 - Preview delete checks out `github.sha` on a close: a merged PR's squash commit on main, an
   unmerged PR's head. An unmerged head older than a main change runs the old teardown (#2982's
   close named a renamed Doppler project); the nightly sweep deletes what it leaves.
@@ -557,9 +557,11 @@ check "Pending" forever when a `paths` filter skips its workflow. Deploy preview
 `previewPaths` (`apps/os`, `configs`, the hosted clients but Kit's firmware, `specs` and
 `playwright.config.ts`, `packages/cli`, `packages/iterate`, `packages/shared`, `packages/ui`, the
 root manifests and lockfile, `envs.ts`, `scripts/lib`, the setup (`.depot/actions`,
-`scripts/ci/toolchain.sh`), and its own and the production deploy workflows). A PR that touches none of them gets a green Deploy preview that
-deployed nothing and both suites skipped, which GitHub counts as passing. When the step cannot tell,
-the PR gets a preview. `preview-delete.yml` runs on the same list;
+`scripts/ci/toolchain.sh`), and its own and the production deploy workflows). A PR that touches
+none of them gets a green Deploy preview that deployed nothing, and two green suites that tested
+nothing: each runs the same step on the same commit and passes once it says so
+([preview job shape](#preview-job-shape)). When the step cannot tell, the PR gets a preview.
+`preview-delete.yml` runs on the same list;
 `scripts/ci/depot-workflows.test.ts` keeps it equal to `previewPaths`.
 
 ## Which main pushes deploy
@@ -624,9 +626,11 @@ setup (about 7 s), `tsx` loading
 the deploy's end and the first test. So the suites of Preview OS and Main OS e2e
 have no `needs:`. Each starts with the run and, while the preview deploys:
 
-1. checks out the commit Deploy preview deploys (on a push the run's own commit,
-   on a dispatch the PR merged into main by `scripts/ci/preview-tested-commit.ts`),
-   and on a push decides whether the PR changes a preview path;
+1. checks out the commit Deploy preview deploys, by the deploy's own two steps:
+   the PR's head, then the PR merged into main by
+   `scripts/ci/preview-tested-commit.ts` (on a push the run's own commit when it
+   merges this head, else the merge GitHub rebuilt), and on a push decides
+   whether the PR changes a preview path;
 2. runs the setup ([Setup on Depot's stock image](#setup-on-depots-stock-image)),
    beside it for the specs Playwright's headless shell from Depot Cache, and starts
    its suite step, whose `runSuite` chooses the slow rows and installs Chromium's
@@ -652,11 +656,12 @@ have no `needs:`. Each starts with the run and, while the preview deploys:
 
 A suite keeps its evidence once it read its deployed target
 (`test-results/target.json`, [test evidence](test-evidence.md)), so a job that
-never had a preview keeps none. Each suite's runner waits out the deploy, less
-its own set-up: about 45 s each, so a push bills about 90 s more between the
-two, about $0.013 (25 runs each way). In return the first test follows
-the deploy's end by 3.9 s (E2E tests) and 2.1 s (Browser specs) at the median,
-against 16 and 13 s with `needs: deploy`.
+never had a preview keeps none. A target it cannot write fails the job before
+the suite, so no suite passes with its evidence unchecked. Each suite's runner
+waits out the deploy, less its own set-up: about 45 s each, so a push bills
+about 90 s more between the two, about $0.013 (25 runs each way). In return
+the first test follows the deploy's end by 3.9 s (E2E tests) and 2.1 s
+(Browser specs) at the median, against 16 and 13 s with `needs: deploy`.
 
 ## Main OS e2e keeps one preview
 

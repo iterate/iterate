@@ -4,7 +4,8 @@
 // `paths` filter skips its workflow, and counts a job skipped by its `if` as passing
 // (https://docs.github.com/en/pull-requests/how-tos/merge-and-close-pull-requests/troubleshooting-required-status-checks#handling-skipped-but-required-checks).
 // So the Deploy preview job's first step decides instead of a `paths` filter: a pull request that
-// changes none of `previewPaths` deploys nothing, and both test jobs skip, which passes.
+// changes none of `previewPaths` deploys nothing. Both test jobs, which start beside it, run the
+// same step on the same commit, and pass once it says so, having tested nothing.
 //
 //   node scripts/ci/preview-paths.ts changes
 //

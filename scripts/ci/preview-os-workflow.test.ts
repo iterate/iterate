@@ -145,16 +145,22 @@ test("Preview OS deploys the PR merged into main, and the test jobs use that ver
   expect(
     preview.jobs.trace!.steps?.find((step) => step.uses === "actions/checkout@v4")?.with?.ref,
   ).toMatch(/^\$\{\{ needs\.deploy\.outputs\.tested-sha \|\| /);
-  // the suites, which start beside the deploy, resolve that commit by the same rules: on a push the
-  // run's own commit, which deploy tests (PREVIEW_RUN_SHA above); on a dispatch the same script,
-  // after checking out the PR's head as deploy does
-  const checkout = suiteSteps.find((step) => step.uses === "actions/checkout@v4");
-  expect(checkout?.with?.ref).toBe(
-    "${{ github.event_name == 'pull_request' && github.sha || (inputs.pull-request-number != '' && format('refs/pull/{0}/head', inputs.pull-request-number)) || github.sha }}",
+  // the suites, which start beside the deploy, resolve that commit by deploy's own two steps, on a
+  // push and on a dispatch for a PR: the PR's head, then the same script with the same env, so a
+  // push whose own commit is not a merge of its head resolves the merge GitHub rebuilt, as deploy
+  // does. A preview by name is tested from the dispatched ref.
+  const checkout = suiteSteps.findIndex((step) => step.uses === "actions/checkout@v4");
+  const deployCheckout = deploySteps.findIndex((step) => step.uses === "actions/checkout@v4");
+  expect(deploySteps[deployCheckout]?.with?.ref).toBe(
+    "${{ github.event.pull_request.head.sha || format('refs/pull/{0}/head', inputs.pull-request-number) }}",
   );
-  expect(suiteSteps.find((step) => step.id === "tested")).toMatchObject({
-    if: "github.event_name == 'workflow_dispatch' && inputs.pull-request-number != ''",
-    run: deploySteps[resolve]?.run,
+  expect(suiteSteps[checkout]?.with?.ref).toBe(
+    "${{ github.event.pull_request.head.sha || (inputs.pull-request-number != '' && format('refs/pull/{0}/head', inputs.pull-request-number)) || github.sha }}",
+  );
+  expect(resolve).toBe(deployCheckout + 1);
+  expect(suiteSteps[checkout + 1]).toEqual({
+    ...deploySteps[resolve],
+    if: "github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && inputs.pull-request-number != '')",
   });
   // the trace's statuses still go on the PR head
   expect(
@@ -213,17 +219,17 @@ test("Preview OS's suites decide as Deploy preview does whether there is a previ
   const steps = preview.jobs.e2e!.steps || [];
   const changes = steps.findIndex((step) => step.id === "changes");
   expect(steps[changes]).toEqual(deploySteps.find((step) => step.id === "changes"));
-  expect(changes).toBe(steps.findIndex((step) => step.uses === "actions/checkout@v4") + 1);
+  // on the commit deploy tests, resolved right after the checkout, as in deploy
+  expect(changes).toBe(steps.findIndex((step) => step.id === "tested") + 1);
+  expect(changes).toBe(steps.findIndex((step) => step.uses === "actions/checkout@v4") + 2);
   const after = steps.slice(changes + 1, steps.findIndex((step) => step.id === "suite") + 1);
   // the specs' browser restore also skips in E2E tests
-  expect(after.filter((step) => step.id !== "tested").map((step) => step.if)).toEqual(
-    after
-      .filter((step) => step.id !== "tested")
-      .map((step) =>
-        step.id === "playwright"
-          ? "steps.changes.outputs.preview != 'false' && env.SUITE == 'specs'"
-          : "steps.changes.outputs.preview != 'false'",
-      ),
+  expect(after.map((step) => step.if)).toEqual(
+    after.map((step) =>
+      step.id === "playwright"
+        ? "steps.changes.outputs.preview != 'false' && env.SUITE == 'specs'"
+        : "steps.changes.outputs.preview != 'false'",
+    ),
   );
   expect(steps.findIndex((step) => step.name === "Setup")).toBeGreaterThan(changes);
 });
