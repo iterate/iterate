@@ -33,7 +33,7 @@ async function petshopJson<T>(path: string, init?: RequestInit): Promise<T> {
   return (await response.json()) as T;
 }
 
-/** A fresh OAuth client of its own, so forcing ITS tokens to expire touches no other test. */
+/** A fresh OAuth client of its own, whose token endpoint a test can fail without touching another. */
 export const petshopMintClient = (): Promise<{ clientId: string; clientSecret: string }> =>
   petshopJson("/__backdoor/clients", {
     method: "POST",
@@ -41,33 +41,30 @@ export const petshopMintClient = (): Promise<{ clientId: string; clientSecret: s
     body: "{}",
   });
 
-/** Bump one client's epoch — every outstanding access token of it answers 401 from now on: the
- *  deterministic way to force a real 401 → refresh. The GraphQL login endpoint is the client
- *  `graphql-session-login`. */
+/** Every outstanding access token `account` holds from `clientId` answers 401 from now on: the
+ *  deterministic way to force a real 401 → refresh. Only that account's: the one shop serves every
+ *  concurrent CI run, whose tokens share its clients (a preview's Google, GitHub and Cloudflare
+ *  sign-ins all hold `petshop-default`'s), so a row expires the account it signed in as and no
+ *  other. `account` is what the shop knows the grant as: the email (Google, Cloudflare, Tesco), the
+ *  login (GitHub), the user (the shop's own authorize), the username (the GraphQL login). */
 export const petshopExpireTokens = (
   clientId: string,
-): Promise<{ clientId: string; accessTokenEpoch: number }> =>
+  account: string,
+): Promise<{ clientId: string; account: string; accessTokenEpoch: number }> =>
   petshopJson("/__backdoor/expire-tokens", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ clientId }),
+    body: JSON.stringify({ clientId, account }),
   });
 
-/** Revoke ONE account's GraphQL-login sessions — the shop's per-account epoch
- *  (apps/dummy-petshop/src/graphql-login.ts `graphqlSessionAccountClientId`). The shop serves every
- *  concurrent CI run, so a test forcing a 401 revokes its own account's sessions, never the endpoint's:
- *  an endpoint-wide bump from one run killed the session another run had just minted. */
-export const petshopExpireGraphqlSessions = (
-  username: string,
-): Promise<{ clientId: string; accessTokenEpoch: number }> =>
-  petshopExpireTokens(`graphql-session-login:${username}`);
+/** Revoke `username`'s GraphQL-login sessions: the endpoint is the client `graphql-session-login`. */
+export const petshopExpireGraphqlSessions = (username: string) =>
+  petshopExpireTokens("graphql-session-login", username);
 
-/** Revoke ONE account's Tesco-login tokens (apps/dummy-petshop/src/tesco-login.ts
- *  `tescoLoginClientId`): its tokens answer 401 from now on, no other run's. */
-export const petshopExpireTescoTokens = (
-  email: string,
-): Promise<{ clientId: string; accessTokenEpoch: number }> =>
-  petshopExpireTokens(`tesco-login:${email}`);
+/** Revoke `email`'s Tesco-login tokens: each account signs in as a client of its own,
+ *  `tesco-login:<email>` (apps/dummy-petshop/src/tesco-login.ts). */
+export const petshopExpireTescoTokens = (email: string) =>
+  petshopExpireTokens(`tesco-login:${email}`, email);
 
 /** The Tesco-shaped two-step login at the shop as a secret's exchange code (`refresh: { kind:
  *  "worker", source }`): the form's CSRF token and the cookie that binds it, then the form, with the
@@ -159,18 +156,20 @@ export const petshopAuthorizationServer = (): Promise<{
   authorization_endpoint: string;
 }> => petshopJson("/.well-known/oauth-authorization-server");
 
-/** The connect half a trusted party runs ONCE: the consent-free authorize (`approve=1`, the test
- *  shortcut) → the code → the token exchange with HTTP Basic client auth. What lands in the secret. */
-export async function petshopConnect(client: {
-  clientId: string;
-  clientSecret: string;
-}): Promise<{ accessToken: string; refreshToken: string }> {
+/** The connect half a trusted party runs ONCE: `user`'s consent-free authorize (`approve=1`, the
+ *  test shortcut) → the code → the token exchange with HTTP Basic client auth. What lands in the
+ *  secret. */
+export async function petshopConnect(
+  client: { clientId: string; clientSecret: string },
+  user: string,
+): Promise<{ accessToken: string; refreshToken: string }> {
   const redirectUri = "https://project.example/callback";
   const authorize = new URL(`${petshopBaseUrl()}/oauth/authorize`);
   authorize.searchParams.set("client_id", client.clientId);
   authorize.searchParams.set("redirect_uri", redirectUri);
   authorize.searchParams.set("state", "e2e");
   authorize.searchParams.set("approve", "1");
+  authorize.searchParams.set("user", user);
   const redirected = await fetch(authorize, { redirect: "manual" });
   const location = redirected.headers.get("location");
   if (!location) throw new Error(`petshop authorize did not redirect (${redirected.status})`);

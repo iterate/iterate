@@ -303,7 +303,7 @@ test("Google: a first sign-in with no refresh token goes back once for the conse
     },
   });
   // the person's own egress uses it; a forced expiry refreshes through iterate's client
-  await petshop.state.expireAccessTokens("petshop-default");
+  await petshop.state.expireAccessTokens("petshop-default", email);
   const profile = await person.fetch(
     new Request("https://google.test/gmail/v1/users/me/profile", {
       headers: {
@@ -316,7 +316,7 @@ test("Google: a first sign-in with no refresh token goes back once for the conse
   const again = await signInThroughFake(petshop, "google", { email });
   expect(again.response).toMatchObject({ status: 303 });
   expect(again.authorizations).toHaveLength(1);
-  await petshop.state.expireAccessTokens("petshop-default");
+  await petshop.state.expireAccessTokens("petshop-default", email);
   const refreshed = await person.fetch(
     new Request("https://google.test/oauth2/v2/userinfo", {
       headers: {
@@ -355,7 +355,7 @@ test("Cloudflare and GitHub: the sign-in's token is the person's connection, ref
     expect(state.secrets[`/secrets/${provider}-${subject}`]).toMatchObject({
       refresh: "oauth-refresh-token",
     });
-    await petshop.state.expireAccessTokens("petshop-default");
+    await petshop.state.expireAccessTokens("petshop-default", account);
     const used = await person.fetch(
       new Request(api, {
         headers: {
