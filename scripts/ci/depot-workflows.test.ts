@@ -1188,9 +1188,12 @@ test("the Test job's summary says which pnpm store its install started from and 
     summary: "**pnpm's store**: restored this lockfile's, `pnpm-store-0123`.\n",
   });
   // off main, the newest saved
-  expect(report("success", key, "pnpm-store-4567", "skipped").summary).toBe(
-    "**pnpm's store**: none saved for this lockfile (`pnpm-store-0123`), so it restored the newest, `pnpm-store-4567`, and the install fetched the rest.\n",
-  );
+  expect(report("success", key, "pnpm-store-4567", "skipped")).toEqual({
+    status: 0,
+    stdout: "",
+    summary:
+      "**pnpm's store**: none saved for this lockfile (`pnpm-store-0123`), so it restored the newest, `pnpm-store-4567`, and the install fetched the rest.\n",
+  });
   // nothing to restore, which is also how actions/cache reports a Depot Cache it could not read
   expect(report("success", key, "", "skipped")).toEqual({
     status: 0,
@@ -1198,9 +1201,11 @@ test("the Test job's summary says which pnpm store its install started from and 
     summary: `${miss}\n`,
   });
   // a main push saving its store
-  expect(report("success", key, "", "success").summary).toBe(
-    `${miss.slice(0, -1)}. Main saved this lockfile's store for the next runs (a store Depot Cache refused is a warning in the save's log).\n`,
-  );
+  expect(report("success", key, "", "success")).toEqual({
+    status: 0,
+    stdout: "",
+    summary: `${miss.slice(0, -1)}. Main saved this lockfile's store for the next runs (a store Depot Cache refused is a warning in the save's log).\n`,
+  });
   // the restore's timeout
   expect(report("failure", key, "", "skipped")).toEqual({
     status: 0,
@@ -1210,12 +1215,12 @@ test("the Test job's summary says which pnpm store its install started from and 
       "**pnpm's store**: the restore failed (its timeout, or its log says why), and the install fetched what it lacked from the npm registry.\n",
   });
   // the save's timeout
-  const unsaved = report("success", key, "", "failure");
-  expect(unsaved.status).toBe(0);
-  expect(unsaved.stdout).toBe(
-    "::warning title=pnpm's store not saved::the save to Depot Cache failed (its timeout, or its log says why); runs of this lockfile restore an older store, or none on main, until a main push saves one\n",
-  );
-  expect(unsaved.summary).toContain(". The save failed (its timeout, or its log says why)");
+  expect(report("success", key, "", "failure")).toEqual({
+    status: 0,
+    stdout:
+      "::warning title=pnpm's store not saved::the save to Depot Cache failed (its timeout, or its log says why); runs of this lockfile restore an older store, or none on main, until a main push saves one\n",
+    summary: `${miss.slice(0, -1)}. The save failed (its timeout, or its log says why), so runs of this lockfile restore an older store, or none on main, until a main push saves one.\n`,
+  });
   // a job cancelled before the restore ran
   expect(report("", "", "", "")).toEqual({
     status: 0,

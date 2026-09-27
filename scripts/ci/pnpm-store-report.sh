@@ -1,10 +1,6 @@
 #!/usr/bin/env bash
-# THE TEST JOB'S PNPM STORE LINE (docs/depot-ci.md#the-test-job-runs-on-depots-stock-image). The
-# restore from Depot Cache and main's save are `continue-on-error`, so neither decides the job. This
-# writes a line of the job's summary: which store the install started from, and main's save. A
-# restore or save whose outcome is `failure` (its timeout) is also a warning. actions/cache reports
-# most other trouble as a warning in its own log and succeeds: a restore that could not read Depot
-# Cache looks like a miss, and a store Depot Cache refused looks like a save. Plain shell.
+# THE TEST JOB'S PNPM STORE LINE of its summary, and a warning for a restore or save that failed
+# (docs/depot-ci.md#the-test-job-runs-on-depots-stock-image). Plain shell.
 #
 #   bash scripts/ci/pnpm-store-report.sh <restore outcome> <primary key> <matched key> <save outcome>
 set -u
