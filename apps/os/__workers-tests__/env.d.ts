@@ -12,6 +12,10 @@ declare global {
       TEST_MIGRATIONS: D1Migration[];
       /** The public half of the suite's throwaway GitHub App key (vitest.config.ts). */
       TEST_GITHUB_APP_PUBLIC_KEY?: string;
+      /** wrangler.test.jsonc binds it; fresh-file.ts gives each file a new id. */
+      CF_VERSION_METADATA: { id: string };
+      /** The pool's verb that deletes this runtime's stored files (vitest.config.ts, empty-runtime.ts). */
+      TEST_STORAGE: Fetcher;
     }
     interface GlobalProps {
       mainModule: typeof import("../src/worker.ts");
