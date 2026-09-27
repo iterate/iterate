@@ -1011,9 +1011,10 @@ async function writeDeployedTarget(previewName: string, apps: TestEvidenceTarget
  *  (PREVIEW_AWAIT_DEPLOY_JOB names the deploy job). It sets the suite up while the preview deploys,
  *  with everything before the first test that needs no preview: the slow rows' choice and
  *  Chromium's install, and beside them the warm-ups (`warmUp`). Then it waits for the deploy
- *  (scripts/ci/await-deploy.ts), stops any warm-up still running, and only then reads the deployed
- *  target and starts the suite. A deploy that did not finish fails the job with no suite line: the
- *  PR body's status line already says the deploy failed. */
+ *  (scripts/ci/await-deploy.ts), stops any warm-up still running without waiting for it to exit,
+ *  and only then reads the deployed target and starts the suite. A deploy that did not finish fails
+ *  the job with no suite line, once its warm-ups have exited: the PR body's status line already
+ *  says the deploy failed. */
 async function runSuite(
   suite: PreviewSuite,
   previewName: string,
@@ -1114,12 +1115,17 @@ async function runSuite(
     await Promise.all(warmUps.map((warm) => warm.stop()));
     throw failed(error);
   }
-  if (deployJob)
+  if (deployJob) {
     try {
       await traceOperation("Wait for Deploy preview", () => awaitDeployOfThisRun(deployJob));
-    } finally {
+    } catch (error) {
       await Promise.all(warmUps.map((warm) => warm.stop()));
+      throw error;
     }
+    // A warm-up still running exits beside the suite's start, not before it: a Chromium launch
+    // stopped mid-launch took the whole 3 s grace (`warmUp`).
+    for (const warm of warmUps) void warm.stop();
+  }
   await writeDeployedTarget(
     previewName,
     // the client apps the specs run against; the vitest rows use none
@@ -1148,7 +1154,8 @@ async function runSuite(
  *
  *  `stop()` ends it, and every process it started (its own process group), once the deploy has
  *  ended: whatever it has not read yet, the suite reads anyway, so it would only take the suite's
- *  CPU. SIGTERM first, which lets Playwright close the browser it launched, then SIGKILL. */
+ *  CPU. SIGTERM first, which lets Playwright close the browser it launched, then SIGKILL 3 s later;
+ *  it resolves once the group has exited. */
 function warmUp(
   what: string,
   command: string,

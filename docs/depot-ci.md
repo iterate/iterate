@@ -649,7 +649,8 @@ have no `needs:`. Each starts with the run and, while the preview deploys:
    `runSuite` chooses the slow rows and installs Chromium, and beside them warms
    up what the suite reads first, none of which reaches the preview: the e2e
    project's `vitest list`, or the specs' `playwright test --list` and a
-   Chromium launch. A warm-up still running when the deploy ends is stopped;
+   Chromium launch. A warm-up still running when the deploy ends is stopped,
+   and exits beside the suite's start rather than before it;
 3. polls Depot's GetWorkflow once a second for its own run's `deploy` job
    (`scripts/ci/await-deploy.ts`, which `PREVIEW_AWAIT_DEPLOY_JOB` turns on), and
    starts the suite once that job has finished. One that failed, was cancelled or
