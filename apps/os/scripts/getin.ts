@@ -1,8 +1,8 @@
-// `pnpm getin` — one command to this worktree's local platform, with a person and a project that
-// exist, and the browser on that project:
+// `pnpm getin` — one command to a browser signed in to this worktree's local platform, on a project
+// that exists:
 //
-//   pnpm getin                    # project `test`, owned by test@preview.iterate.test
-//   pnpm -s getin --print         # only the URL, on stdout — for Playwright and agents
+//   pnpm getin                    # signed in as test@preview.iterate.test, on project `test`
+//   pnpm -s getin --print         # only the sign-in URL, on stdout — for Playwright and agents
 //   pnpm -s getin --token         # only a personal access token for that person and project, on
 //                                 # stdout: their bearer at /api, /mcp and the project's hosts
 //   pnpm getin -e ada@preview.iterate.test -p demo
@@ -12,13 +12,14 @@
 // 2. the person and their project: `projects.create` as them through the local operator bearer —
 //    the same idempotent call as preview.ts `seedSignIn` and e2e's `registerProject`, so a second
 //    run reuses both;
-// 3. the local Dash's project page when a Dash wired to this server is up, else the issuer's
-//    `/login`, opened or printed; a browser not signed in yet signs in there with local dev's
-//    password, `dev`. Or, for `--token`, sign the person in with that password and mint them a
-//    personal access token for the project (src/grants.ts `mint`), 30 days.
+// 3. the local one-click sign-in (src/local-sign-in.ts), which signs the browser in as the person
+//    and goes on to the local Dash's project page when a Dash wired to this server is up (its
+//    consent page asks once per Dash sign-in), else to the issuer's `/login`; opened or printed.
+//    Or, for `--token`, sign the person in with local dev's password and mint them a personal
+//    access token for the project (src/grants.ts `mint`), 30 days.
 //
 // Local dev only: the credentials are local dev's (scripts/generate-wrangler-config.ts
-// `viteWranglerConfig`).
+// `viteWranglerConfig`), and a preview or prd has no one-click sign-in.
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import process from "node:process";
@@ -27,10 +28,10 @@ import { createCli } from "trpc-cli";
 import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
 import { TEST_EMAIL_DOMAIN } from "../src/test-email-domain.ts";
 
-/** Open a browser on a project of local OS — starting the dev server and creating the project when missing */
+/** Open a browser signed in to local OS, on a project — starting the dev server and creating the project when missing */
 export default async function getin(
   options: {
-    /** whose project it is — an address under preview.iterate.test
+    /** who to sign in as — an address under preview.iterate.test
      * @alias e
      */
     email?: string;
@@ -38,7 +39,7 @@ export default async function getin(
      * @alias p
      */
     project?: string;
-    /** print the URL on stdout instead of opening a browser */
+    /** print the sign-in URL on stdout instead of opening a browser */
     print?: boolean;
     /** print a personal access token for the person and project on stdout instead: their bearer at /api, /mcp and the project's hosts, for 30 days */
     token?: boolean;
@@ -69,17 +70,14 @@ export default async function getin(
   if (options.token) return console.log(await mintToken(server.baseUrl, { email, projectId }));
 
   const dash = await localDash(options.dash || "http://localhost:5173", server.baseUrl);
-  const url = dash
-    ? `${dash}/projects/${project}`
-    : `${server.baseUrl}/login?${new URLSearchParams({ email })}`;
+  const next = dash ? `${dash}/projects/${project}` : `${server.baseUrl}/login`;
+  const url = `${server.baseUrl}/.auth/local-sign-in?${new URLSearchParams({ email, next })}`;
   if (!dash)
     console.error(
       `no local Dash on this server — landing on ${server.baseUrl}/login. For the Dash: APP_CONFIG_URLS__OS=${server.baseUrl} in apps/dash/.dev.vars, then \`pnpm --dir apps/dash dev\``,
     );
-  // local dev's `login.password` (generate-wrangler-config.ts `viteWranglerConfig`)
-  console.error(`not signed in yet? sign in as ${email} with the password dev`);
   if (options.print) return console.log(url);
-  console.error(`opening ${url}`);
+  console.error(`opening ${next} as ${email}`);
   spawnSync(process.platform === "darwin" ? "open" : "xdg-open", [url], { stdio: "inherit" });
 }
 

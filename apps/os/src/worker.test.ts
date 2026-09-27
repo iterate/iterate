@@ -1,6 +1,6 @@
 // worker.test.ts — the edge's pure halves as tables: the app config (what the one object becomes,
 // what is refused by name, the per-env memo, the derived keys), the platform's own endpoints (the public
-// protocol origins, `/version`, a preview's admin sign-in through prd, and under path routing the platform's
+// protocol origins, `/version`, a preview's admin sign-in through prd, local dev's one click, and under path routing the platform's
 // own paths never a project).
 // The ingress convention itself (subdomains, paths, custom hostnames) is the SDK's project-ingress
 // module and its own table.
@@ -592,6 +592,39 @@ test("public protocol origins: a preview's admin sign-in (admin-sign-in.ts) asks
     cookies: ["__Host-iterate-admin-sign-in"],
   });
 });
+
+// Local dev's one click (local-sign-in.ts) exists on a laptop's platform alone: a loopback `urls.os`
+// with a test email domain. Where it signs in is __workers-tests__/local-sign-in.test.ts's.
+test.for<{ name: string; origin: string; vars: Record<string, unknown> }>([
+  { name: "prd", origin: PRD, vars: origins },
+  {
+    name: "a preview, test email domain and all",
+    origin: PR123,
+    vars: {
+      ...MINIMAL,
+      APP_CONFIG_URLS__OS: PR123,
+      APP_CONFIG_LOGIN__TEST_EMAIL_DOMAIN: "preview.iterate.test",
+    },
+  },
+  {
+    name: "a laptop's platform with no test email domain",
+    origin: "http://localhost:8788",
+    vars: { ...MINIMAL, APP_CONFIG_URLS__OS: "http://localhost:8788" },
+  },
+  {
+    name: "a self-host on a laptop (a blank urls.os)",
+    origin: "http://localhost:8787",
+    vars: MINIMAL,
+  },
+])(
+  "public protocol origins: local dev's one click is no route on $name",
+  async ({ origin, vars }) => {
+    const search = new URLSearchParams({ email: "test@preview.iterate.test", next: "/login" });
+    expect(await request(`${origin}/.auth/local-sign-in?${search}`, vars)).toMatchObject({
+      status: 404,
+    });
+  },
+);
 
 // The issuer's pages admit only their own methods, HTML requests and same-origin posts; beside them
 // are the public files, and nothing else.

@@ -53,8 +53,8 @@ pnpm dev start --detach   # the same, in the background; returns once /version a
 pnpm dev status           # pid, port, URL (exit 1: not running)
 pnpm dev attach           # follow its log, apps/os/.wrangler/dev.log
 pnpm dev kill             # or `restart`
-pnpm getin                # a browser on project `test` of test@preview.iterate.test (password `dev`)
-pnpm -s getin --print     # that URL alone, for Playwright and agents
+pnpm getin                # a browser signed in as test@preview.iterate.test, on project `test`
+pnpm -s getin --print     # that sign-in URL alone, for Playwright and agents
 ```
 
 OS local dev needs no Doppler. `doppler.yaml` still maps each app directory to
@@ -85,11 +85,13 @@ read secrets.
   is how `status`, `kill` and `pnpm getin` find it. Without `--port` the port is
   the worktree's last recorded one, else `8788`, else a free one. `pnpm getin`
   (`apps/os/scripts/getin.ts`) starts the server if need be, creates the project as the
-  person through the operator bearer (idempotent), and opens the project's page
-  in a local Dash up at `http://localhost:5173` whose `APP_CONFIG_URLS__OS` is
-  this server, else `/login`. A browser not signed in yet signs in there as the
-  person with the password `dev`. `-e`/`-p` pick another `@preview.iterate.test`
-  person and project; `--dash` another Dash.
+  person through the operator bearer (idempotent), and opens local dev's
+  one-click sign-in (`apps/os/src/local-sign-in.ts`; previews and prd have no
+  such route). It signs the browser in as the person with no password and goes
+  on to the project's page in a local Dash up at `http://localhost:5173` whose
+  `APP_CONFIG_URLS__OS` is this server, else to `/login`. The Dash's consent
+  page asks once per Dash sign-in. `-e`/`-p` pick another
+  `@preview.iterate.test` person and project; `--dash` another Dash.
   `pnpm -s getin --token` prints a personal access token for that person and
   project instead (30 days): their bearer at `/api`, `/mcp` and the project's
   hosts.
@@ -286,7 +288,8 @@ operator session: `session().authenticate(adminCredentials({ email })).projects.
 as `apps/os/e2e/support/project-host.ts` does.
 
 For local dev: `pnpm dev`, then `http://localhost:8788/login` with any email and
-password `dev`.
+password `dev`, or `pnpm getin -e <someone>@preview.iterate.test` for a browser
+already signed in as them.
 
 A signed-in _human_ never gets stuck on the missing organization: the Dash
 and the consent page both create one on the way.
