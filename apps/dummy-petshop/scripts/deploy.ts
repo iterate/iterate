@@ -3,8 +3,10 @@ import { createBuiltInPrompts, createCli, isAgent, yamlTableConsoleLogger } from
 import { dummyPetshopEnvs } from "../../../envs.ts";
 import { deployApp } from "../../../scripts/lib/deploy-app.ts";
 
-/** vite build → wrangler deploy → the shop's index answers (scripts/lib/deploy-app.ts). No secrets
- *  ship: PETSHOP_SEAL_KEY is already a worker secret, and a deploy keeps it. */
+/** vite build → wrangler deploy → the shop's index and its state answer (scripts/lib/deploy-app.ts).
+ *  The JWKS reads the OIDC key from the state object, so a state object that cannot start fails the
+ *  deploy rather than the next suite that calls the shop. No secrets ship: PETSHOP_SEAL_KEY is
+ *  already a worker secret, and a deploy keeps it. */
 export default async function deploy(options: { env?: string } = {}) {
   await deployApp({
     appRoot: fileURLToPath(new URL("..", import.meta.url)),
@@ -16,6 +18,11 @@ export default async function deploy(options: { env?: string } = {}) {
     servingUrl: (env) => env.baseUrl,
     smokes: (env) => [
       { url: `${env.baseUrl}/`, ok: (status) => status === 200, label: "shop index" },
+      {
+        url: `${env.baseUrl}/cloudflare/.well-known/jwks.json`,
+        ok: (status) => status === 200,
+        label: "shop state",
+      },
     ],
   });
 }

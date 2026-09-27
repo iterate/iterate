@@ -10,9 +10,9 @@ import type { Env } from "./worker.ts";
  */
 export const PETSHOP_STATE_NAME = "global-enam";
 
-/** The object that held the state before, in LHR. An empty object starts from its state, so the
- *  clients, installations and revocations minted there keep working. Only an empty object copies,
- *  so the copy runs once, on the new object's first call. */
+/** The object an empty one copies its state from (in LHR), so the clients, installations and
+ *  revocations minted there keep working. Only an empty object copies, so the copy runs once, on
+ *  the object's first call. */
 const PREVIOUS_STATE_NAME = "global";
 
 /**
