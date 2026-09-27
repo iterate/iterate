@@ -306,7 +306,7 @@ skipped locally unless `NOTES_BASE_URL` is set), `voice` (`specs/voice/`,
 skipped locally unless `VOICE_BASE_URL` is set) and `suite` (the flake sentinel
 and the harness's own specs). Select one with `pnpm spec --project=os-phone`.
 Playwright owns the server lifecycle: for a localhost target it runs
-`pnpm dev -- --port <DEMO_PORT, default 8788>`, reuses an already running
+`pnpm dev -- --port <WORKER_PORT, default 8788>`, reuses an already running
 server outside CI, and waits on `/version`.
 
 Specs sign in through the real `/login` password step and stamp their own
