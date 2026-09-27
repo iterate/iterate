@@ -188,9 +188,7 @@ test("a second failure that proves nothing goes red; a pass or the pinned failur
   await vi.runAllTimersAsync();
   await expect(wentRed).resolves.toBeUndefined(); // success = the native machinery goes red
   expect(twice.calls()).toBe(2);
-  // No pause past the deadline: with 4 s left of the default 30 s deadline and
-  // the 5 s pause, the runner's timeout would fire mid-pause and count as the
-  // pin holding — so the first attempt's failure goes red at once instead.
+  // With 4 s left, the 5 s retry pause must be skipped (see createFailing in ./failing-test.ts).
   const registered: ((...args: unknown[]) => Promise<unknown>)[] = [];
   const fake = Object.assign(vi.fn(), {
     fails: (...args: unknown[]) => registered.push(args.at(-1) as any),
