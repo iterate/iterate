@@ -163,9 +163,7 @@ pnpm --dir apps/os erase-data --env prd --yes-i-mean-prd --dry-run
 
 **Pause merges to `main` from the erase until the last `apply` and `verify-structure`
 have passed.** Every merge that touches the Worker runs Deploy OS, which redeploys prd
-in the middle of the restore. On 2026-09-24 two merges redeployed prd during a
-recreate: #3032's deploy reset the Durable Objects under an `apply` ("Durable Object
-reset because its code was updated"), and #3033's landed during verification.
+in the middle of the restore (#3032's deploy reset the Durable Objects under an `apply`).
 Nothing enforces the pause. The owner,
 or the agent running the recreate, announces it where the team merges, before the
 erase, and lifts it after verification. Before the erase, check that no Deploy OS run

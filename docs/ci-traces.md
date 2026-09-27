@@ -1,28 +1,19 @@
 # Interactive CI traces
 
-The Preview OS workflow (`.depot/workflows/preview-os.yml`) and Main OS e2e
-(`.depot/workflows/main-os-e2e.yml`) each end in a CI trace job (`trace`),
-reporting only. It runs once the jobs it `needs` have settled, whatever their
-outcome: Deploy preview, E2E tests and Browser specs (`deploy`, `e2e`, `specs`)
-in both workflows. A PR that changes no preview path deploys nothing and gets no
-trace. A PR's trace job first writes the two suites' lines into the PR body
-(`pnpm preview suite-lines`, from the lines the suites hand over as their jobs'
-outputs).
-`scripts/ci/tracing/cli.ts current` reads
-the run from Depot and writes `trace.html` and `trace.json` for exactly those
-jobs; the job uploads them as the `public-ci-trace-<workflow>-<execution>`
-artifact (it asks for 30 days; Depot keeps artifacts about a week, see
-[test evidence](test-evidence.md)). Then `cli.ts publish` finds that artifact
-and the Browser specs job's `public-playwright-report` in Depot and posts two commit statuses
-(`statuses: write`), each linking the report in the viewer below:
+Preview OS and Main OS e2e each end in a CI trace job (`trace`) that reports only: once
+`deploy`, `e2e` and `specs` have settled, whatever their outcome, it writes the two suites' lines
+into a PR's body (`pnpm preview suite-lines`), then `scripts/ci/tracing/cli.ts current` reads the
+run from Depot and writes `trace.html` and `trace.json`, uploaded as the
+`public-ci-trace-<workflow>-<execution>` artifact (kept about a week,
+[test evidence](test-evidence.md)). `cli.ts publish` then posts two commit statuses
+(`statuses: write`), each linking a report in the viewer below:
 
 - **CI trace**: success with the time to green, failure with the time to red,
   or error when the run has no verdict (cancelled).
 - **Playwright report**: success whenever the Browser specs job uploaded one.
 
-A status means the report exists; the run's own checks carry the verdict. The
-trace job is never a gate: nothing waits for it but the PR's next Preview OS
-run, which waits for the previous run to finish.
+A status means the report exists; the run's own checks carry the verdict. The trace job is never a
+gate. A PR that changes no preview path gets no trace.
 
 ## The viewer
 
@@ -34,12 +25,10 @@ artifact of `iterate/iterate`: `trace.html` for a CI trace, the root
 generated listing. `/<artifact-id>/<file>` serves that ZIP entry; append
 `?download` to download it instead. Only artifacts named `public-…` are served.
 
-It reads the artifact through Depot's API with the organization token CI
-telemetry uses (Doppler `_shared/preview`, shipped as the Worker's
-`DEPOT_CI_TELEMETRY_TOKEN` secret), and fetches only the ZIP directory and the
-requested entry with range reads, so opening one page of a large report does
-not download its traces. Each response's CSP confines the page to its own
-artifact's path. Links expire with the artifact, about a week after the run.
+It reads the artifact through Depot's API with the organization token CI telemetry uses (the
+Worker's `DEPOT_CI_TELEMETRY_TOKEN` secret, from Doppler `_shared/preview`), with range reads of the
+ZIP directory and the requested entry only. Each response's CSP confines the page to its own
+artifact's path.
 
 ## What the trace shows
 
