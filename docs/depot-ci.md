@@ -367,8 +367,9 @@ inputs changed since their newest `kit-firmware/<device>/<version>` release, eac
 `4x16` leg, and Publish, the only job with `contents: write`, creates releases on main from the
 legs' artifacts and checks every new file's bytes through `k.iterate.com`. Deploy Kit builds no
 firmware. The ESP-IDF pin is in `scripts/ci/esp-idf.sh` and each target's `dependencies.lock`. A
-leg restores that pin's ESP-IDF from [Depot Cache](#depot-cache), and `esp-idf.sh ensure` installs
-from the network, with a warning, only when there was none, after which a main leg saves it. On a
+leg restores that pin's ESP-IDF, for the image's python3, from [Depot Cache](#depot-cache), and
+`esp-idf.sh ensure` installs from the network, with a warning, only when there was none, after which
+a main leg saves it. On a
 4x16 a leg restores its 1.06 GB in 7 s and builds a board in 30 s, against 12–27 s and 48–52 s on a
 2x8, for about the same cost. [Kit firmware releases](../apps/kit/README.md#firmware-releases) has
 the rest.
@@ -412,10 +413,10 @@ their outputs it took 5 s longer. No job runs `doppler setup`: every `doppler ru
 | ----------------------------------- | -------------------------------------------------------------------------------- | ------------------------------------------------------------------ | -------------------------------------------------- |
 | pnpm's store, 247 MB                | `pnpm-store-` and the hash of the lockfile, `pnpm-workspace.yaml` and `patches/` | the setup, in every job but the production deploys and the release | Test, on a main push that missed its key           |
 | Playwright's headless shell, 103 MB | `ms-playwright-` and the lockfile's hash                                         | Browser specs, beside its setup                                    | Main OS e2e's Browser specs, on a push that missed |
-| ESP-IDF and its tools, 1.06 GB      | `esp-idf-` and the hash of `scripts/ci/esp-idf.sh`, the pin                      | Kit Firmware's legs                                                | a main leg that missed, right after installing it  |
+| ESP-IDF and its tools, 1.06 GB      | `esp-idf-`, the hash of `scripts/ci/esp-idf.sh` (the pin) and python3's version  | Kit Firmware's legs                                                | a main leg that missed, right after installing it  |
 
 Off main a restore falls back to the newest entry of its kind (`restore-keys`), except ESP-IDF's:
-an older pin's is of no use. Main restores the exact key alone, so what main saves holds only its
+an older pin's is of no use, nor is one whose Python environment was built for another python3. Main restores the exact key alone, so what main saves holds only its
 own lockfile's packages: `pnpm store prune` cannot cut an older store down, since it drops every
 file with one link, and pnpm copies the packages it builds. A restore that fails or times out is a
 warning, and the job fetches what it lacks: from the npm registry, from Playwright's CDN (the
@@ -620,11 +621,11 @@ have no `needs:`. Each starts with the run and, while the preview deploys:
 2. runs the setup ([Setup on Depot's stock image](#setup-on-depots-stock-image)),
    beside it for the specs Playwright's headless shell from Depot Cache, and starts
    its suite step, whose `runSuite` chooses the slow rows and installs Chromium's
-   headless shell when the restore did not, and beside them warms
-   up what the suite reads first, none of which reaches the preview: the e2e
-   project's `vitest list`, or the specs' `playwright test --list` and a
-   Chromium launch. A warm-up still running when the deploy ends is stopped,
-   and exits beside the suite's start rather than before it;
+   headless shell when the restore did not. Beside them the specs run
+   `playwright test --list`, which reaches no preview and fills Playwright's
+   transform cache with every spec compiled. If it is still running when the
+   deploy ends, it is stopped, and exits beside the suite's start rather than
+   before it;
 3. polls Depot's GetWorkflow once a second for its own run's `deploy` job
    (`scripts/ci/await-deploy.ts`, which `PREVIEW_AWAIT_DEPLOY_JOB` turns on), and
    starts the suite once that job has finished. One that failed, was cancelled or

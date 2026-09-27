@@ -14,6 +14,7 @@ on:
     paths:
       - .depot/workflows/kit-firmware.yml
       - scripts/ci/esp-idf.sh
+      - scripts/ci/toolchain.sh
       - apps/kit/firmware/**
       - apps/kit/scripts/firmware-release.ts
       - apps/kit/src/firmware/catalog.ts
@@ -21,6 +22,7 @@ on:
     paths:
       - .depot/workflows/kit-firmware.yml
       - scripts/ci/esp-idf.sh
+      - scripts/ci/toolchain.sh
       - apps/kit/firmware/**
       - apps/kit/scripts/firmware-release.ts
       - apps/kit/src/firmware/catalog.ts
@@ -91,9 +93,13 @@ jobs:
           ref: ${{ github.sha }}
       - name: Setup Node
         run: bash scripts/ci/toolchain.sh node
-      # ESP-IDF FROM DEPOT CACHE, keyed by its pin, scripts/ci/esp-idf.sh: that pin's alone, since
-      # an older one's is of no use to it (docs/depot-ci.md#depot-cache). Without it, `ensure`
-      # installs from the network and says so in a warning.
+      # ESP-IDF FROM DEPOT CACHE, keyed by its pin, scripts/ci/esp-idf.sh, and the image's python3,
+      # which its Python environment runs on: that key's alone, since an older one's is of no use to
+      # it (docs/depot-ci.md#depot-cache). Without it, `ensure` installs from the network and says
+      # so in a warning.
+      - name: ESP-IDF's key
+        id: esp-idf-key
+        run: scripts/ci/esp-idf.sh key >>"$GITHUB_OUTPUT"
       - name: Restore ESP-IDF
         id: esp-idf
         uses: actions/cache/restore@v4
@@ -103,7 +109,7 @@ jobs:
           path: |
             /home/runner/esp-idf
             /home/runner/.espressif
-          key: esp-idf-${{ hashFiles('scripts/ci/esp-idf.sh') }}
+          key: ${{ steps.esp-idf-key.outputs.key }}
       - name: ESP-IDF
         id: ensure
         run: scripts/ci/esp-idf.sh ensure

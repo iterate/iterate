@@ -70,8 +70,9 @@ case "${1:-}" in
     printf '#!/bin/sh\nCOREPACK_ENABLE_DOWNLOAD_PROMPT=0 exec "%s/corepack" "pnpm@%s" "$@"\n' \
       "$bin" "$pnpm_version" >"$tools/pnpm"
     chmod +x "$tools/pnpm"
-    # Detached, so this step ends now; `wait` reads the fetch's exit status.
-    nohup bash -c 'bash "$0" fetch; echo $? >"$1/fetch.exit"' "${BASH_SOURCE[0]}" "$tools" \
+    # Detached, so this step ends now; `wait` reads the fetch's exit status, which appears whole.
+    nohup bash -c 'bash "$0" fetch; echo $? >"$1/fetch.exit.tmp"; mv "$1/fetch.exit.tmp" "$1/fetch.exit"' \
+      "${BASH_SOURCE[0]}" "$tools" \
       >"$tools/fetch.log" 2>&1 </dev/null &
     ;;
   # start's background half: pnpm, then the Doppler CLI, into $tools

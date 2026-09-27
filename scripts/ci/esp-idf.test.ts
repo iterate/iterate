@@ -6,11 +6,18 @@ import { expect, test } from "vitest";
 
 const script = resolve(import.meta.dirname, "esp-idf.sh");
 
-test("a leg that restored this script's ESP-IDF from Depot Cache uses it and downloads nothing", () => {
+test("the key is this script's hash and python3's version, which the Python environment is built for", () => {
   using leg = fixture();
-  leg.writeReceipt(leg.scriptHash());
 
-  const result = leg.ensure();
+  expect(leg.run("key")).toMatchObject({ status: 0, stdout: `key=${leg.key()}\n` });
+  expect(leg.key()).toMatch(/^esp-idf-[0-9a-f]{40}-python3\.\d+$/);
+});
+
+test("a leg that restored this key's ESP-IDF from Depot Cache uses it and downloads nothing", () => {
+  using leg = fixture();
+  leg.writeReceipt(leg.key());
+
+  const result = leg.run("ensure");
 
   expect(result).toMatchObject({
     status: 0,
@@ -23,17 +30,25 @@ test("a leg that restored this script's ESP-IDF from Depot Cache uses it and dow
 });
 
 test.for([
-  ["a leg that restored no ESP-IDF", undefined],
-  ["a leg that restored another esp-idf.sh's ESP-IDF", "0000000000000000000000000000000000000000"],
-] as const)("%s makes the leg warn, then install from the network", ([, receipt]) => {
+  ["a leg that restored no ESP-IDF", () => undefined],
+  [
+    "a leg that restored another esp-idf.sh's ESP-IDF",
+    (key: string) => key.replace(/-[0-9a-f]{40}-/, `-${"0".repeat(40)}-`),
+  ],
+  [
+    "a leg that restored an ESP-IDF built for another python3",
+    (key: string) => key.replace(/-python3\.\d+$/, "-python3.0"),
+  ],
+] as const)("%s makes the leg warn, then install from the network", ([, restored]) => {
   using leg = fixture();
+  const receipt = restored(leg.key());
   if (receipt) leg.writeReceipt(receipt);
 
-  const result = leg.ensure();
+  const result = leg.run("ensure");
 
   expect(result).toMatchObject({
     stdout: expect.stringContaining(
-      `::warning::No ESP-IDF from Depot Cache for scripts/ci/esp-idf.sh (${leg.scriptHash()}; the receipt restored: ${receipt || "none"})`,
+      `::warning::No ESP-IDF from Depot Cache for ${leg.key()} (the receipt restored: ${receipt || "none"})`,
     ),
     // The fixture routes the clone to a missing repository, so the install fails at its first
     // download, as a broken download fails a real leg.
@@ -62,12 +77,18 @@ function fixture() {
     idfPath,
     toolsPath,
     githubEnv,
-    scriptHash: () => spawnSync("git", ["hash-object", script], { encoding: "utf8" }).stdout.trim(),
+    key: () =>
+      `esp-idf-${command("git", "hash-object", script)}-python${command("python3", "-c", "import sys; print('%d.%d' % sys.version_info[:2])")}`,
     writeReceipt(contents: string) {
       mkdirSync(toolsPath, { recursive: true });
       writeFileSync(join(toolsPath, "iterate-esp-idf.receipt"), `${contents}\n`);
     },
-    ensure: () => spawnSync(script, ["ensure"], { env, encoding: "utf8" }),
+    run: (subcommand: "key" | "ensure") =>
+      spawnSync(script, [subcommand], { env, encoding: "utf8" }),
     [Symbol.dispose]: root[Symbol.dispose],
   };
+}
+
+function command(...args: [string, ...string[]]) {
+  return spawnSync(args[0], args.slice(1), { encoding: "utf8" }).stdout.trim();
 }

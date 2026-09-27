@@ -1009,12 +1009,12 @@ async function writeDeployedTarget(previewName: string, apps: TestEvidenceTarget
  *
  *  A CI job that deploys its preview in the same run starts beside the deploy, not after it
  *  (PREVIEW_AWAIT_DEPLOY_JOB names the deploy job). It sets the suite up while the preview deploys,
- *  with everything before the first test that needs no preview: the slow rows' choice and
- *  Chromium's install, and beside them the warm-ups (`warmUp`). Then it waits for the deploy
- *  (scripts/ci/await-deploy.ts), stops any warm-up still running without waiting for it to exit,
- *  and only then reads the deployed target and starts the suite, which it stops after its 30 minutes
- *  (`runBounded`). A deploy that did not finish fails the job with no suite line, once its warm-ups
- *  have exited: the PR body's status line already says the deploy failed. */
+ *  with everything before the first test that needs no preview: the slow rows' choice, Chromium's
+ *  install, and beside them the specs' warm-up (`warmUp`). Then it waits for the deploy
+ *  (scripts/ci/await-deploy.ts), stops the warm-up if it is still running, without waiting for it
+ *  to exit, and only then reads the deployed target and starts the suite, which it stops after its
+ *  30 minutes (`runBounded`). A deploy that did not finish fails the job with no suite line, once
+ *  the warm-up has exited: the PR body's status line already says the deploy failed. */
 async function runSuite(
   suite: PreviewSuite,
   previewName: string,
@@ -1038,46 +1038,24 @@ async function runSuite(
         }
       : { WORKER_BASE_URL: url };
   const deployJob = process.env.PREVIEW_AWAIT_DEPLOY_JOB;
-  const warmUps: ReturnType<typeof warmUp>[] = [];
-  if (deployJob && suite === "e2e")
-    warmUps.push(
-      warmUp(
-        "the e2e suite's modules",
-        "pnpm",
-        ["exec", "vitest", "list", "--configLoader", "runner", "--project", "e2e"],
-        { cwd: ROOT, env },
-      ),
-    );
-  if (deployJob && suite === "specs")
-    warmUps.push(
-      // --list loads the config and every spec, and runs no global setup
-      warmUp(
-        "the specs' modules",
-        "pnpm",
-        [
-          "exec",
-          "playwright",
-          "test",
-          "--config",
-          "playwright.config.ts",
-          "--list",
-          "--reporter=null",
-        ],
-        { cwd: REPO_ROOT, env },
-      ),
-      // one launch of the browser the specs launch, headless, which CI usually restored from Depot
-      // Cache beside its setup (docs/depot-ci.md#depot-cache)
-      warmUp(
-        "Chromium",
-        "node",
-        [
-          "--input-type=module",
-          "-e",
-          "import { chromium } from '@playwright/test'; await (await chromium.launch()).close();",
-        ],
-        { cwd: REPO_ROOT },
-      ),
-    );
+  const warm =
+    deployJob && suite === "specs"
+      ? // --list loads the config and every spec, and runs no global setup
+        warmUp(
+          "the specs' transforms",
+          "pnpm",
+          [
+            "exec",
+            "playwright",
+            "test",
+            "--config",
+            "playwright.config.ts",
+            "--list",
+            "--reporter=null",
+          ],
+          { cwd: REPO_ROOT, env },
+        )
+      : undefined;
   let statusPr = prNumber;
   const failed = (error: unknown) => {
     handOverSuiteLine(statusPr, { suite, state: "failed", error: describe(error) });
@@ -1115,19 +1093,18 @@ async function runSuite(
       };
     });
   } catch (error) {
-    await Promise.all(warmUps.map((warm) => warm.stop()));
+    await warm?.stop();
     throw failed(error);
   }
   if (deployJob) {
     try {
       await traceOperation("Wait for Deploy preview", () => awaitDeployOfThisRun(deployJob));
     } catch (error) {
-      await Promise.all(warmUps.map((warm) => warm.stop()));
+      await warm?.stop();
       throw error;
     }
-    // A warm-up still running exits beside the suite's start, not before it: a Chromium launch
-    // stopped mid-launch can take the whole 3 s grace (`warmUp`).
-    for (const warm of warmUps) void warm.stop();
+    // A warm-up still running exits beside the suite's start, not before it.
+    void warm?.stop();
   }
   await writeDeployedTarget(
     previewName,
@@ -1207,18 +1184,16 @@ function runBounded(
   });
 }
 
-/** A command run only to read, while the preview deploys, what its suite reads before its first
- *  test: the CI image loads lazily, so a cold runner's first read of node_modules, a test file or
- *  Chromium's binary costs seconds (docs/depot-ci.md#custom-image), and Playwright keeps what it
- *  compiles for the specs in its transform cache (each entry checked against its hash when read).
- *  Nothing it runs reaches the preview or writes test evidence: the variables that make a runner
- *  write telemetry, flake records or trace markers are left out. Its output stays out of the log,
- *  and its failure is a warning, since the suite that follows reports what is wrong itself.
+/** A command run only to prepare, while the preview deploys, what its suite reads before its first
+ *  test: Playwright keeps what it compiles for the specs in its transform cache, in the runner's
+ *  tmpdir, and checks each entry against its source's hash when the suite reads it. Nothing it runs
+ *  reaches the preview or writes test evidence: the variables that make a runner write telemetry,
+ *  flake records or trace markers are left out. Its output stays out of the log, and its failure is
+ *  a warning, since the suite that follows reports what is wrong itself.
  *
  *  `stop()` ends it, and every process it started (its own process group), once the deploy has
- *  ended: whatever it has not read yet, the suite reads anyway, so it would only take the suite's
- *  CPU. SIGTERM first, which lets Playwright close the browser it launched, then SIGKILL 3 s later;
- *  it resolves once the group has exited. */
+ *  ended: whatever it has not compiled yet, the suite compiles anyway, so it would only take the
+ *  suite's CPU. SIGTERM first, then SIGKILL 3 s later; it resolves once the group has exited. */
 function warmUp(
   what: string,
   command: string,

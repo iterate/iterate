@@ -385,10 +385,15 @@ test("Kit Firmware legs take ESP-IDF from Depot Cache, keyed by its pin", () => 
   const paths = "/home/runner/esp-idf\n/home/runner/.espressif\n";
 
   expect(leg["runs-on"]).toBe("depot-ubuntu-24.04-4");
+  // the pin's hash and python3's version (scripts/ci/esp-idf.test.ts)
+  expect(steps[index("ESP-IDF's key")]).toMatchObject({
+    id: "esp-idf-key",
+    run: 'scripts/ci/esp-idf.sh key >>"$GITHUB_OUTPUT"',
+  });
   expect(steps[index("Restore ESP-IDF")]).toMatchObject({
     id: "esp-idf",
     uses: "actions/cache/restore@v4",
-    with: { path: paths, key: "esp-idf-${{ hashFiles('scripts/ci/esp-idf.sh') }}" },
+    with: { path: paths, key: "${{ steps.esp-idf-key.outputs.key }}" },
   });
   // an older pin's ESP-IDF is of no use to this one
   expect(steps[index("Restore ESP-IDF")]?.with?.["restore-keys"]).toBeUndefined();
@@ -401,14 +406,17 @@ test("Kit Firmware legs take ESP-IDF from Depot Cache, keyed by its pin", () => 
     uses: "actions/cache/save@v4",
     with: { path: paths },
   });
+  expect(index("ESP-IDF's key")).toBe(index("Restore ESP-IDF") - 1);
   expect(index("Restore ESP-IDF")).toBeLessThan(index("ESP-IDF"));
   expect(index("Save ESP-IDF")).toBe(index("ESP-IDF") + 1);
   expect(index("Save ESP-IDF")).toBeLessThan(index("Build"));
   expect(
     steps.map((step) => step.run || "").filter((run) => /git clone|install\.sh/.test(run)),
   ).toEqual([]);
-  expect(workflow.on?.pull_request?.paths).toContain("scripts/ci/esp-idf.sh");
-  expect(workflow.on?.push?.paths).toContain("scripts/ci/esp-idf.sh");
+  // the push's paths equal these (the publish test above)
+  expect(workflow.on?.pull_request?.paths).toEqual(
+    expect.arrayContaining(["scripts/ci/esp-idf.sh", "scripts/ci/toolchain.sh"]),
+  );
 });
 
 test("release.yml never takes a kit-firmware tag for the last release", () => {
