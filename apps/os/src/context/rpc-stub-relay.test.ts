@@ -465,9 +465,8 @@ test("a re-dial the DO never answers is given up 60 s after the drop, never dial
   expect(closed).toHaveBeenCalledWith(1000, "re-dial abandoned");
 });
 
-// A voice board that goes away takes its /api session with it, and its pager often drops a moment
-// before the session's own end reaches the lend. The drop is logged with its outcome, so a session
-// that ends while the re-dial is in flight logs nothing; a live one logs the drop once it is back.
+// A drop is logged with the re-dial's outcome, so a session that ends mid-dial logs nothing (why:
+// rpc-stub-relay.ts `redialPager`).
 test.for([
   {
     session: "ends while the re-dial is in flight",
@@ -532,10 +531,8 @@ test("a lend recalled while a re-dial hangs ends quietly at the deadline: no err
   expect(closed).toHaveBeenCalledWith(1000, "re-dial abandoned");
 });
 
-// The pager upgrade carries the events that name the key, and the DO appends them as it accepts the
-// pager: a REFUSED append (a paused stream) is the upgrade's answer — a non-101 whose JSON body carries
-// the code. The relay must then lend NOTHING: release the session's dup, register no listener, and
-// re-throw the same CODED error the append would have (lib.ts: classify by code).
+// A refused attach lends nothing and re-throws the DO's code (the refusal's wire: rpc-stubs.ts
+// `acceptRpcStubPagerWebSocket`; its handling: rpc-stub-relay.ts `lendRpcStubOverPager`).
 test("a refused pager upgrade (the DO would not append what names the key) lends nothing and re-throws the refusal's code", async () => {
   vi.useFakeTimers();
   onTestFinished(() => void vi.useRealTimers());
