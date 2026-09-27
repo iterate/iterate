@@ -99,7 +99,8 @@ export async function openAccessToken<Grant>(
   // the longest-lived, GitHub's user token, lives 8 h
   if (!access.account) return access;
   const accountKey = accountRevocationKey(access.clientId, access.account);
-  return access.accountEpoch === accessTokenEpochFor(state, accountKey) ? access : null;
+  if (access.accountEpoch !== accessTokenEpochFor(state, accountKey)) return null;
+  return access;
 }
 
 /** The client a token request authenticates as: HTTP Basic (RFC 6749 §2.3.1), or `client_id` and
