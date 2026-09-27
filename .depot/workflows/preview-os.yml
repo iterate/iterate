@@ -198,11 +198,10 @@ jobs:
   # step hands it over as the job's `status` output (apps/os/scripts/preview.ts `handOverSuiteLine`),
   # so the check turns green or red without waiting on GitHub.
   #
-  # RUNNERS: E2E tests waits on a remote preview from a 2x8: on 4x16 it peaked at 1.7 vCPUs and
-  # 2.9 GB, and on 2x8 its p50 is within 6 s of 4x16's (measured 2026-09-24). Browser specs' six
-  # browsers (playwright.config.ts `workers`) peaked at 1.7 of a 2x8's two vCPUs, and each spec took
-  # about 35 % longer there than on a 4x16 (measured 2026-09-26); more workers or shards put more
-  # specs on the preview at once and raised retries (docs/depot-ci.md#reliability-defaults).
+  # RUNNERS: E2E tests waits on a remote preview, which a 2x8 does about as fast as a 4x16. Browser
+  # specs runs six browsers (playwright.config.ts `workers`), whose specs run faster with a 4x16's
+  # CPU; more workers or shards would put more specs on the preview at once, which raises retries.
+  # The measurements: docs/depot-ci.md#reliability-defaults.
   e2e:
     name: E2E tests
     needs: deploy
