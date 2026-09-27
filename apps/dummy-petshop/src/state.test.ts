@@ -102,9 +102,12 @@ test("an empty store starts from another store's state, and a store with state k
   expect(copied?.clients).toHaveProperty(minted.clientId);
   expect(again).toBeNull();
   const state = await store.getState();
-  expect(state.clients).toHaveProperty(minted.clientId);
-  expect(state.accessTokenEpochs).toEqual({ [minted.clientId]: 1 });
-  expect(Object.keys(state.clients)).toHaveLength(3);
+  expect(state).toMatchObject({ accessTokenEpochs: { [minted.clientId]: 1 } });
+  expect(Object.keys(state.clients)).toEqual([
+    DEFAULT_CLIENT_ID,
+    minted.clientId,
+    expect.stringMatching(/^petshop-client-/),
+  ]);
 });
 
 /** The store over a map, cloning values in and out as a Durable Object's storage does. */
