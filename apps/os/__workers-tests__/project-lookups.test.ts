@@ -35,7 +35,9 @@ test("a project deleted on another isolate is refused here once five seconds hav
   expect(await call(`https://${label}.projects.test/`)).toMatchObject({ status: 404 });
 
   // straight on the catalog, as another isolate's edge would: within the five seconds this
-  // isolate keeps the row it still admits the host, the window a deletion elsewhere goes unseen
+  // isolate keeps the row it still admits the host, the window a deletion elsewhere goes unseen.
+  // This 404 is the deleted project's root storage born again empty; once a deleted project's
+  // storage is never recreated (item 27 PR C), this admitted request answers something else.
   await catalog().deleteProject({ principal: { actor: "admin" } }, label);
   expect(await call(`https://${label}.projects.test/`)).toMatchObject({ status: 404 });
   clock.pass(6_000);

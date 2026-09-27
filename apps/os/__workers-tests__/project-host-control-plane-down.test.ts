@@ -64,7 +64,7 @@ test("a slow read is waited for: the control plane's late answer serves the host
   expect(served).toMatchObject({ status: 404 });
   expect(await served.text()).toMatch(/has no site yet/);
   expect(controlPlaneWarns(warn)).toEqual([]);
-  // the hostname's read brought the row: the admission's second read was a memo hit
+  // the hostname's read brought the row: the admission's second read was of the kept row
   const hostname = new URL(host).hostname;
   expect(
     outage.reads.projectByHostname.mock.calls.filter(([asked]) => asked === hostname),
@@ -137,7 +137,7 @@ test("/api while the control plane's reads hang: projects.get answers UNAVAILABL
     },
   ]);
 
-  // the read ran on: its answer lands in the memo the next call reads
+  // the read ran on: its answer is kept for the next call to read
   outage.end();
   using project = await session.projects.get(slug);
   expect(await project.invoke(["itx", ["whoami"]])).toMatchObject({ projectId });
