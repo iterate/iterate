@@ -68,7 +68,7 @@ shared closure state and lifecycle hooks grow. Put the group in the title
 Module mocking replaces an import for the whole file, so the test proves the
 code against a module that does not exist. Pass the dependency in instead: a
 `fetch`, a clock, a downloader or a `waitUntil` as a parameter or constructor
-argument (`apps/os/src/context/rpc-stubs.test.ts` injects its `waitUntil`).
+argument (`apps/os/src/context/rpc-stub-relay.test.ts` injects its `waitUntil`).
 `vi.fn()`, `vi.spyOn(...)` and `vi.stubGlobal(...)` are not module mocks.
 
 For `cloudflare:workers`: the os unit project and packages/iterate alias it to

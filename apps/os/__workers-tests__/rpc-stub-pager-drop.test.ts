@@ -2,7 +2,7 @@
 // workerd (the Workers suite — the only suite that can close the DO's end of a pager and read its
 // socket census, `rpcStubTransportState`).
 //
-// Target surface: the rpc-stub relay (src/context/rpc-stubs.ts `lendRpcStubOverPager`). A lent
+// Target surface: the rpc-stub relay (src/context/rpc-stub-relay.ts `lendRpcStubOverPager`). A lent
 // stub's pager is a WebSocket between the stateless /api isolate and the context DO — a
 // Cloudflare-internal connection, never the client's own socket — so it closes while the client's
 // session is alive and answering: a fault on the hop between colos, or a DO reset (a

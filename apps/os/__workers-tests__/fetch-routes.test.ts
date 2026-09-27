@@ -5,8 +5,8 @@
 //
 //   eyeball `blog--<project>.projects.test` → the edge → the context DO → the config worker (loaded)
 //   → `fetchRoutes.match` (the root's core state) → `env.ITX.fetch` → the DO's expression fetch of
-//   the route's target `itx.tunnels.blog` → the lent stub (context/rpc-stubs.ts, the fetch-upgrade
-//   leg for a socket).
+//   the route's target `itx.tunnels.blog` → the lent stub (context/rpc-stubs.ts; the upgrade leg
+//   for a socket, context/fetch-upgrade.ts).
 //
 // The WebSocket half carries a SUBPROTOCOL: a browser that asked for one (Vite's HMR client asks
 // for `vite-hmr`) drops a 101 that names none, so the provider's choice must survive the upgrade

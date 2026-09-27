@@ -1,38 +1,78 @@
-// context/rpc-stubs.ts — THE RPC STUBS: `itx.rpcStubs`, a lent live object and the plumbing that keeps
-// it lendable while nothing stays pinned. Three concepts, one file:
-//   rpc stub directory — DO side: the borrowed table and the pagers (`RpcStubDirectory`)
-//   rpc stub relay     — edge side: the don't-pin pager relay (`lendRpcStubOverPager`)
-//   rpc stub fetch     — the fetch-shaped transport under both (`dialRpcStubFetch`, `RpcStubFetchServer`)
+// context/rpc-stubs.ts — THE RPC STUBS: `itx.rpcStubs`, a client's live object lent to a context
+// Durable Object without pinning it awake. Three modules:
+//   rpc-stubs.ts       — the DO side: the borrowed table and the pagers (`RpcStubDirectory`), and
+//                        how a fetch-shaped call is spelled and stamped (the fetch section below)
+//   rpc-stub-relay.ts  — the edge side: the pager, its re-dial, and the page's answer
+//                        (`lendRpcStubOverPager`)
+//   fetch-upgrade.ts   — WORKAROUND: the transport under a lent stub's fetch that upgrades
+//
+// THE LEND'S STATE MACHINE. A lent stub's state lives in three places, one per hop, and each
+// recovery ([A]–[F], below the diagrams) answers the one failure its own hop can see.
+//
+// 1. THE LEND, in the relay (`lendRpcStubOverPager`): one per provide or subscribe of a live stub,
+//    for the life of the client's session.
+//
+//      dial ──refused or thrown──▶ nothing lent (the caller gets the refusal's code)
+//        │ 101
+//        ▼
+//      SERVING ──page──▶ lendRpcStub, lent again if the platform cut it [A] ──▶ SERVING
+//        │  │  │
+//        │  │  └─ close ≠ 1000, or 3 keepalives unanswered [B] ──▶ REDIALING ──101──▶ SERVING
+//        │  │                                                          │ refused, or 60 s
+//        │  └─ close 1000 (the DO replaced the pager), dispose,        ▼
+//        └──── the client's session broke ─────────────────────────▶ ENDED ──▶ lendEnded() [E]
+//
+// 2. THE KEY, in the context DO (`RpcStubDirectory`), in memory:
+//
+//      ABSENT ──pager attach (appends what names the key)──▶ OFFERED ──call──▶ PAGING
+//      PAGING ──the relay lends──▶ BORROWED        PAGING ──10 s──▶ OFFERED (its calls fail)
+//      PAGING ──the pager replaced──▶ PAGING (the page sent again down the new pager)
+//      BORROWED ──a call the transport broke; the pins' release; the pager replaced──▶ OFFERED
+//      OFFERED ──the DO hibernates and wakes──▶ OFFERED (a pager's attachment rides the eviction)
+//      any ──the key's last pager closes──▶ ABSENT (`detached`: what named the key is un-set)
+//      any ──the DO resets (no close handler runs)──▶ ABSENT, what named the key still set [D]
+//
+// 3. A LENT CALL, in the relay (`whileClientAnswers`): unanswered for 10 s ──▶ a liveness probe
+//    [C]; the probe unanswered 10 s more ──▶ RPC_STUB_OFFLINE, and the lend stays.
+//
+// THE RECOVERIES. Each is the only answer to its failure; none covers another's.
+//   [A] relend      A page's `lendRpcStub` cut in flight: a burst of lends drops the relay's RPC
+//                   connection to the DO while the pager stays up, so no re-dial runs. Lent again
+//                   on RELAY_BURST, inside the DO's 10 s page timeout (rpc-stub-relay.ts
+//                   `answerPage`).
+//   [B] re-dial     The pager dropped (a DO reset, every deploy; a fault on the hop) or went
+//                   silent with its close held back (the keepalive). Re-dialed for 60 s
+//                   (redial.ts); the attach re-appends what names the key, so the lend outlives
+//                   the drop.
+//   [C] probe       The client's network vanished without a close: its calls fail in ~20 s, not
+//                   when the edge's TCP gives up.
+//   [D] census      A DO reset took the key's last pager with no close handler run, or a pause
+//                   refused the un-set: the `woken` or `resumed` commit un-sets what names a key no
+//                   pager or borrowed stub holds (iterate-context-durable-object.ts); a live
+//                   lender's re-dial [B] sets it again.
+//   [E] lend again  The lend ended under a live session (the re-dial gave up; the DO closed the
+//                   pager): `lendEnded()` says why, and `iterate tunnel` provides again
+//                   (packages/cli/src/tunnel.ts).
+//   [F] splice      A WebSocket upgrade through a lent stub's fetch outlives the DO's sockets
+//                   (fetch-upgrade-splice.ts).
 
-import { RpcTarget as WorkersRpcTarget } from "cloudflare:workers";
-import {
-  failureKind,
-  RELAY_BURST,
-  retryPlatformFailures,
-} from "@iterate-com/shared/platform-retry";
-import { z } from "zod";
+import { failureKind } from "@iterate-com/shared/platform-retry";
 import { codedError, errorCode } from "iterate/lib";
 import { ITX_PRINCIPAL_HEADER } from "iterate/principal";
 import type { StreamEventInput } from "iterate/stream/processor";
-import { type ItxExpression, walkStepsOnRpcStub } from "iterate/expression";
+import type { ItxExpression } from "iterate/expression";
 import {
   ITX_APP_HEADER,
   ITX_CALLER_PATH_HEADER,
   ITX_GRANT_HEADER,
   type Caller,
 } from "../caller.ts";
-import type { IterateContextDurableObject } from "../iterate-context-durable-object.ts";
 import {
-  contextAbortedOffsetOf,
-  FETCH_UPGRADE_CONTEXT_ABORTED_OFFSET_HEADER,
-  FETCH_UPGRADE_DEPLOY_ID_HEADER,
-  FetchUpgradeSpliceEnd,
-  reportFetchUpgradeSpliceEvent,
-  type SpliceSocket,
-  visitorEndOfSplice,
-} from "./fetch-upgrade-splice.ts";
-import { redial } from "./redial.ts";
-import { relayedCloseCode, truncateCloseReason } from "./websocket-close.ts";
+  FETCH_UPGRADE_EYEBALL_HEADER,
+  FETCH_UPGRADE_SOCKET_HEADER,
+  type RpcStubFetchServer,
+  type RpcStubFetchTransport,
+} from "./fetch-upgrade.ts";
 
 // ── rpc stub directory ── THE RPC STUBS, DO side: the `itx.rpcStubs` built-in's backing
 // table — physical, never event-sourced. Two layers:
@@ -44,7 +84,7 @@ import { relayedCloseCode, truncateCloseReason } from "./websocket-close.ts";
 //   pager (below) is one-shot: after the return the key is offline until someone lends again.
 //
 //   LAYER 2 — THE RPC-STUB PAGERS. A hibernatable WebSocket per key, opened by the stateless edge
-//   relay (the relay section below), carrying `{ rpcStubKey }` in its attachment and nothing
+//   relay (rpc-stub-relay.ts), carrying `{ rpcStubKey }` in its attachment and nothing
 //   else. It is a standing offer: "I can lend this key back on demand". When a call finds
 //   the key not borrowed, the DO sends `{type:"page"}` down the pager, the edge answers with
 //   `lendRpcStub`, and layer 1 takes over. Between pages the DO holds only hibernatable sockets.
@@ -60,7 +100,7 @@ import { relayedCloseCode, truncateCloseReason } from "./websocket-close.ts";
 // paused stream) un-accepts: the socket closes silently, nothing was named, and the refusal — its
 // CODE — is the upgrade's answer. So a `provide(stub)` costs the edge ONE round trip to this DO.
 
-// ── the wire: what the relay (below) speaks to this side ──
+// ── the wire: what the relay (rpc-stub-relay.ts) speaks to this side ──
 
 export const RPC_STUB_PAGER_WEBSOCKET_HEADER = "x-itx-rpc-stub-pager";
 /** What the pager upgrade's header carries: the key, and the events that NAME it — appended by the DO
@@ -86,18 +126,13 @@ export const RPC_STUB_PAGER_KEEPALIVE_REQUEST = "itx-pager-keepalive";
 export const RPC_STUB_PAGER_KEEPALIVE_RESPONSE = "itx-pager-keepalive-ack";
 /** How long a paged relay has to lend before this side calls it dead. The relay answers a page
  *  immediately, so 10 s is a dead relay, not a slow one. The relay's repeats of a lend the platform
- *  failed (`answerPage`, below: `RELAY_BURST`) land well inside it. */
+ *  failed ([A], rpc-stub-relay.ts `answerPage`: `RELAY_BURST`) land well inside it. */
 const RPC_STUB_PAGE_TIMEOUT_MS = 10_000;
-/** How long a dropped pager is re-dialed (redial.ts) before its lend ends, which pages: twelve tries
- *  over ~56 s, a dial with no answer given up at 60 s. All 555 pager re-dials on prd 2026-09-24–25
- *  were answered by the third try, 6 s after the drop; the tenfold headroom keeps a slower deploy's
- *  reset from paging. */
-const RPC_STUB_PAGER_REDIAL_DEADLINE_MS = 60_000;
 
 /** WHAT THIS SIDE BORROWS: the Workers-RPC stub a lender hands over — TWO methods: `invoke(steps)`
  *  walks the itx-expression steps on the client's rpc stub (a DIRECT dotted dispatch — never
  *  `.apply`), and `fetch(upgradeId, steps, request)` is the rpc-stub fetch dial
- *  (the fetch section below — dies with its WORKAROUND fence). */
+ *  (fetch-upgrade.ts — dies with that WORKAROUND). */
 export type BorrowedRpcStub = RpcStubFetchTransport & {
   invoke(itxExpressionSteps: ItxExpression): Promise<unknown>;
   dup?(): BorrowedRpcStub;
@@ -109,7 +144,7 @@ type RpcStubPagerRecord = { rpcStubKey: string };
 
 /** THE one disposer for any RPC-ish stub (borrowed Workers-RPC legs here, the session's own capnweb
  *  stubs in the relay): a no-op for anything that is not disposable. */
-function disposeRpcStub(x: unknown): void {
+export function disposeRpcStub(x: unknown): void {
   (x as Partial<Disposable> | null)?.[Symbol.dispose]?.();
 }
 
@@ -120,7 +155,7 @@ export class RpcStubDirectory {
    *  presence move; the log never claims a socket is open. A REPLACED pager (same key, new socket)
    *  is neither: the key never lost presence. */
   readonly #onPresence: (kind: "attached" | "detached", rpcStubKey: string) => void;
-  /** The DO's rpc-stub fetch subsystem (the fetch section below) — `invokeRpcStub` routes a
+  /** The DO's rpc-stub fetch subsystem (fetch-upgrade.ts) — `invokeRpcStub` routes a
    *  terminal-fetch call into its serve(). */
   readonly #rpcStubFetch: RpcStubFetchServer;
 
@@ -187,9 +222,9 @@ export class RpcStubDirectory {
     if (!borrowed)
       throw codedError("RPC_STUB_OFFLINE", `rpc stub ${JSON.stringify(rpcStubKey)} is offline`);
     try {
-      // The terminal-fetch branch dies with the fetch section's WORKAROUND fence. Either way a
-      // lender that dies mid-call is re-coded to RPC_STUB_OFFLINE at the relay, where the break is
-      // LOCAL (the relay section).
+      // The terminal-fetch branch dies with fetch-upgrade.ts. Either way a lender that dies
+      // mid-call is re-coded to RPC_STUB_OFFLINE at the relay, where the break is LOCAL
+      // (rpc-stub-relay.ts).
       const terminalFetch = terminalFetchOf(itxExpressionSteps, []);
       if (terminalFetch)
         return await this.#rpcStubFetch.serve(borrowed, terminalFetch.steps, terminalFetch.request);
@@ -224,10 +259,7 @@ export class RpcStubDirectory {
    *  borrowed stub back so the DO can hibernate. Losing them costs exactly one page on the next
    *  call — that is the deal. */
   returnBorrowedRpcStubs(): void {
-    for (const [rpcStubKey, borrowed] of this.#borrowedRpcStubs) {
-      this.#borrowedRpcStubs.delete(rpcStubKey);
-      disposeRpcStub(borrowed);
-    }
+    for (const rpcStubKey of this.#borrowedRpcStubs.keys()) this.#returnBorrowedRpcStub(rpcStubKey);
   }
 
   // ── LAYER 2: the pager upgrade (attach + the events that name the key) → pages → close ──
@@ -277,17 +309,12 @@ export class RpcStubDirectory {
     }
     // ONE pager per key, enforced when a pager becomes VISIBLE (a CONCURRENT provide at the same key
     // may still be opening its own, invisible to any earlier scan): drop every OTHER same-key socket
-    // now — the newest wins. "replaced" is a swap, not a real close: a page in flight SURVIVES it —
-    // parked out of the drop's reach, then re-sent down this pager (its timeout stays the backstop).
-    const pageInFlight = this.#rpcStubPagesInFlight.get(rpcStubKey);
-    if (pageInFlight) this.#rpcStubPagesInFlight.delete(rpcStubKey);
+    // now — the newest wins. "replaced" is a swap, not a real close: a page in flight is the KEY's,
+    // so it survives and is sent again down this pager (its timeout stays the backstop).
     for (const ws of this.#rpcStubPagerSockets())
       if (ws !== pair[1] && this.#rpcStubPagerRecord(ws).rpcStubKey === rpcStubKey)
-        this.#dropRpcStubPager(ws, "replaced");
-    if (pageInFlight) {
-      this.#rpcStubPagesInFlight.set(rpcStubKey, pageInFlight);
-      pair[1].send(JSON.stringify({ type: "page" }));
-    }
+        this.#dropReplacedRpcStubPager(ws);
+    if (this.#rpcStubPagesInFlight.has(rpcStubKey)) pair[1].send(JSON.stringify({ type: "page" }));
     if (!hadPager) this.#onPresence("attached", rpcStubKey);
     return new Response(null, { status: 101, webSocket: pair[0] });
   }
@@ -304,15 +331,15 @@ export class RpcStubDirectory {
     this.#onPresence("detached", rpcStubKey);
   }
 
-  /** Close a pager WebSocket (the replaced one of a reconnect swap) and forget it. */
-  #dropRpcStubPager(ws: WebSocket, reason: string): void {
+  /** Close the replaced pager of a reconnect swap and give back the stub its relay lent. */
+  #dropReplacedRpcStubPager(ws: WebSocket): void {
     this.#closedRpcStubPagerSockets.add(ws); // its late close event must not touch the key again
     try {
-      ws.close(1000, reason);
+      ws.close(1000, "replaced");
     } catch {
       /* already closing */
     }
-    this.#returnRpcStubAndFailItsPage(this.#rpcStubPagerRecord(ws).rpcStubKey);
+    this.#returnBorrowedRpcStub(this.#rpcStubPagerRecord(ws).rpcStubKey);
   }
 
   // ── the views ──
@@ -413,13 +440,18 @@ export class RpcStubDirectory {
     return borrowed;
   }
 
-  /** A key's pager is gone: return the stub it lent (its session died with it) and fail its page. */
-  #returnRpcStubAndFailItsPage(rpcStubKey: string): void {
+  /** Give back the stub borrowed under `rpcStubKey`, if one is. */
+  #returnBorrowedRpcStub(rpcStubKey: string): void {
     const borrowed = this.#borrowedRpcStubs.get(rpcStubKey);
-    if (borrowed) {
-      this.#borrowedRpcStubs.delete(rpcStubKey);
-      disposeRpcStub(borrowed);
-    }
+    if (!borrowed) return;
+    this.#borrowedRpcStubs.delete(rpcStubKey);
+    disposeRpcStub(borrowed);
+  }
+
+  /** A key's last pager is gone: return the stub it lent (its session died with it) and fail its
+   *  page. */
+  #returnRpcStubAndFailItsPage(rpcStubKey: string): void {
+    this.#returnBorrowedRpcStub(rpcStubKey);
     const page = this.#rpcStubPagesInFlight.get(rpcStubKey);
     if (page) {
       clearTimeout(page.timer);
@@ -431,405 +463,10 @@ export class RpcStubDirectory {
   }
 }
 
-// ── rpc stub relay ── THE DON'T-PIN PLUMBING behind a lent rpc stub, EDGE side. When a client
-// hands the project a capnweb value (`itx.provide(match, stub)`), the client's stub must live in the
-// STATELESS relay worker (this side of `/api`), NEVER in the Durable Object — else the DO can't
-// hibernate while any client is connected. So the edge opens an RPC-STUB PAGER WebSocket to the DO
-// (a standing offer to lend the key back on demand); when the DO wants the client — a delivery, a
-// request/response call — it PAGES this worker, and this worker LENDS a fresh Workers-RPC leg
-// wrapping the client's capnweb stub (`lendRpcStub`). The edge OWNS the stub for the session; the DO
-// only borrows it. The DO half — the pager upgrade, the pages, the borrowed table — is
-// the directory section above.
+// ── rpc stub fetch ── how a FETCH-SHAPED capability is called, and the headers the context DO's
+// `fetch` trusts.
 //
-// The whole dance is behind ONE function, `lendRpcStubOverPager` (open the pager, hand back a
-// disposable the caller registers with its `SessionTeardown`).
-
-/** The context DO's Workers-RPC stub — what the edge proxies to and this relay pages against. */
-export type IterateContextDurableObjectStub = DurableObjectStub<IterateContextDurableObject>;
-
-/** The client's live capnweb stub, as the session holds it (`.dup()` keeps it past the call that
- *  handed it over; every other key is one of its remote members). ON THE WIRE it is a callable stub
- *  Proxy (`typeof === "function"`), so nothing structural can inspect it — typed at the use sites. */
-export type ClientRpcStub = { dup(): ClientRpcStub; [k: string]: unknown };
-
-/** WHAT THE EDGE LENDS (and the DO borrows as `BorrowedRpcStub`): a per-page Workers-RPC leg
- *  wrapping the session's capnweb stub, walking itx-expression steps on it (a DIRECT dotted dispatch
- *  — never `.apply`), so a call from the stream reaches the client's actual function over the capnweb
- *  WebSocket. Minted fresh per page and returned at the pins' release (context/residency.ts). */
-class LentRpcStub extends WorkersRpcTarget {
-  #clientRpcStub: ClientRpcStub;
-  #rpcStubKey: string;
-  /** THE ONE "the lend ended" reason, SHARED across every page of one pager (a `{ reason }` holder)
-   *  and set ONCE by whatever ends the lend first — the single `onRpcBroken` registration in
-   *  `lendRpcStubOverPager` or the pager's close — always BEFORE the session's dup is disposed, so a
-   *  call already walking the dup re-codes below. Shared because capnweb has no `offRpcBroken`:
-   *  registering per lent stub would accumulate a listener per page for the session's life. capnweb
-   *  fires onRpcBroken BEFORE it rejects the in-flight import, so a caught call sees the reason set. */
-  #lendEnded: { reason: string | null };
-  /** Minted per dial: the upgrade leg re-dials after a reset (fetch-upgrade-splice.ts), and a stub
-   *  that saw the reset replays it. */
-  #durableObjectStub: () => IterateContextDurableObjectStub;
-  constructor(
-    clientRpcStub: ClientRpcStub,
-    rpcStubKey: string,
-    lendEnded: { reason: string | null },
-    durableObjectStub: () => IterateContextDurableObjectStub,
-  ) {
-    super();
-    this.#clientRpcStub = clientRpcStub;
-    this.#rpcStubKey = rpcStubKey;
-    this.#lendEnded = lendEnded;
-    this.#durableObjectStub = durableObjectStub;
-  }
-
-  /** The lend ended mid-call — the client died, or the lender recalled the stub while the DO still
-   *  held the rule naming it (its un-set lands one append AFTER the pager's close, and a call in that
-   *  window walks the disposed dup): capnweb throws a raw, UNCODED error either way, so re-code
-   *  LOCALLY to RPC_STUB_OFFLINE — the CODE crosses the Workers-RPC hop (lib.ts). A genuine
-   *  app error propagates untouched. */
-  #recodeIfLendEnded(e: unknown, what: string): never {
-    if (this.#lendEnded.reason)
-      throw codedError("RPC_STUB_OFFLINE", `the lent rpc stub ${this.#lendEnded.reason} ${what}`);
-    throw e;
-  }
-
-  /** The rpc-stub fetch dial, TRANSPORT side — the whole mechanism (why it exists, the upgrade leg,
-   *  the marker) lives in the fetch section below. */
-  async fetch(
-    upgradeId: string,
-    itxExpressionSteps: ItxExpression,
-    request: Request,
-  ): Promise<unknown> {
-    try {
-      return await whileClientAnswers(this.#clientRpcStub, this.#rpcStubKey, async () => {
-        const receiver = (await walkStepsOnRpcStub(this.#clientRpcStub, itxExpressionSteps)) as {
-          fetch(r: Request): Promise<unknown>;
-        };
-        return await dialRpcStubFetch(
-          (r) => receiver.fetch(r),
-          request,
-          upgradeId,
-          this.#durableObjectStub,
-        );
-      });
-    } catch (e) {
-      this.#recodeIfLendEnded(e, "mid-fetch");
-    }
-  }
-
-  async invoke(itxExpressionSteps: ItxExpression): Promise<unknown> {
-    try {
-      return await whileClientAnswers(this.#clientRpcStub, this.#rpcStubKey, () =>
-        walkStepsOnRpcStub(this.#clientRpcStub, itxExpressionSteps),
-      );
-    } catch (e) {
-      this.#recodeIfLendEnded(e, "mid-invoke");
-    }
-  }
-}
-
-/** A LENT CALL THE CLIENT HAS NOT ANSWERED for 10 s is followed by a question: a call on a member no
- *  client has (`itxLivenessProbe`), which a live client answers at once, with an error (capnweb's
- *  "is not a function", the kit firmware's "unknown device capability"). Any answer proves the
- *  client is there, and the call waits on (a slow local server is the client's business), asked
- *  again every 10 s. No answer within 10 s more means the client's network went away without a
- *  close — a laptop asleep, a NAT mapping expired — and its socket would stay open at the edge until
- *  the edge's TCP retransmits give up: on prd 2026-09-25 a tunnel's visitors waited 12 to 16 minutes
- *  for that, and then got a 500. The call fails RPC_STUB_OFFLINE now instead (a 502 on a fetch,
- *  `expression-fetch.rpc-stub-offline`). The lend stays: a client that was only slow answers the
- *  next call, and a dead one's session close ends it. */
-async function whileClientAnswers(
-  clientRpcStub: ClientRpcStub,
-  rpcStubKey: string,
-  makeCall: () => unknown,
-): Promise<unknown> {
-  const call = Promise.resolve().then(makeCall);
-  const settled = call.then(
-    () => "settled" as const,
-    () => "settled" as const,
-  );
-  const within = <A>(answer: Promise<A>, ms: number): Promise<A | "silent"> => {
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    return Promise.race([
-      answer,
-      new Promise<"silent">((resolve) => (timer = setTimeout(() => resolve("silent"), ms))),
-    ]).finally(() => clearTimeout(timer));
-  };
-  const startedAt = Date.now();
-  while ((await within(settled, 10_000)) === "silent") {
-    const probe = Promise.resolve()
-      .then(() => (clientRpcStub.itxLivenessProbe as () => Promise<unknown>)())
-      .then(disposeRpcStub, () => undefined)
-      .then(() => "answered" as const);
-    if ((await within(Promise.race([settled, probe]), 10_000)) !== "silent") continue;
-    console.warn({
-      event: "rpc-stub-client-unanswered",
-      namespace: "rpc-stubs",
-      message:
-        "a lent stub's client answered neither a call nor a liveness probe; the call fails RPC_STUB_OFFLINE",
-      rpcStubKey,
-      waitedMs: Date.now() - startedAt,
-    });
-    throw codedError(
-      "RPC_STUB_OFFLINE",
-      `rpc stub ${JSON.stringify(rpcStubKey)}: its client stopped answering`,
-    );
-  }
-  return await call;
-}
-
-/** Offer the DO a lend of `clientRpcStub` under `rpcStubKey`: dup the client's stub for the session,
- *  open the pager WebSocket — its header carries the key AND `appendEvents`, the rows naming the key,
- *  which the DO appends as it accepts the pager (the directory section above; a refusal comes back
- *  as the upgrade's answer with its code, and this function throws it with nothing lent) — and answer
- *  every page with a fresh `LentRpcStub`. The pager lives until disposed (explicitly, or at session
- *  end); its close makes the DO return the stub. THE LEND IS THE SESSION'S, NOT THE SOCKET'S: the
- *  pager is a connection between this isolate and the DO, never the client's own socket, and it
- *  drops while the session lives — a fault on the hop between colos, a DO reset (which kills every
- *  hibernatable socket with no close handler run). A pager that closes with neither side having
- *  ended the lend is RE-DIALED (redial.ts): the DO's attach re-appends `appendEvents`, and the
- *  directory treats a second pager at the key as a reconnect, never a detach. */
-export async function lendRpcStubOverPager(
-  /** Minted per use, never held: a DurableObjectStub that saw a reset replays it on every later call
-   *  (Cloudflare's error-handling guide), and a re-dial after a reset must reach the fresh incarnation. */
-  durableObjectStub: () => IterateContextDurableObjectStub,
-  clientRpcStub: ClientRpcStub,
-  rpcStubKey: string,
-  appendEvents: StreamEventInput[],
-  waitUntil: (p: Promise<unknown>) => void,
-): Promise<{ dispose(): void; lendEnded: Promise<string> }> {
-  const sessionRpcStub = clientRpcStub.dup(); // dup FIRST: a value that is not a stub fails here, before any socket
-  // the one shared "the lend ended" reason (LentRpcStub#lendEnded says why it is shared)
-  const lendEnded: { reason: string | null } = { reason: null };
-  // THE PAGER WEBSOCKET, opened through the DO's `fetch`: the header is the attach request — the
-  // first dial here, every re-dial below.
-  const dialPager = () =>
-    durableObjectStub().fetch("https://rpc-stub-pager.internal/", {
-      headers: {
-        Upgrade: "websocket",
-        [RPC_STUB_PAGER_WEBSOCKET_HEADER]: encodeRpcStubPagerAttachRequest({
-          rpcStubKey,
-          appendEvents,
-        }),
-      },
-    });
-  let response: Response;
-  try {
-    response = await dialPager();
-  } catch (error) {
-    // the DO never answered: nothing is lent, and the session's dup must not outlive the attempt
-    disposeRpcStub(sessionRpcStub);
-    throw error;
-  }
-  if (response.status !== 101 || !response.webSocket) {
-    // The DO refused (a paused stream, a row the reduce rejects): nothing is lent, and the refusal's
-    // CODE crosses to the caller as the same coded error the append would have thrown.
-    disposeRpcStub(sessionRpcStub);
-    const refusal = (await response.json().catch(() => null)) as {
-      code?: string | null;
-      message?: string;
-    } | null;
-    throw Object.assign(
-      new Error(
-        refusal?.message ??
-          `rpc stub pager upgrade returned ${response.status} without a WebSocket`,
-      ),
-      refusal?.code ? { code: refusal.code } : {},
-    );
-  }
-  // THE ONE PLACE the session's dup is disposed, the reason set FIRST (the first reason wins) so a
-  // call already walking the dup re-codes (LentRpcStub#recodeIfLendEnded) — and the lender's
-  // `lendEnded()` answers with it.
-  let resolveLendEnded = (_reason: string) => {};
-  const lendEndedPromise = new Promise<string>((resolve) => (resolveLendEnded = resolve));
-  const disposeSessionRpcStub = (reason: string) => {
-    lendEnded.reason ||= reason;
-    disposeRpcStub(sessionRpcStub);
-    resolveLendEnded(lendEnded.reason);
-  };
-  /** THE PAGE ANSWER: a fresh Workers-RPC leg around the session's capnweb stub, lent to the DO. A
-   *  lend the platform failed (a relay's connection to the DO can drop under a burst of lends,
-   *  failing every lend in flight with "Network connection lost."; a deploy's reset) is lent again
-   *  on a fresh stub on the `RELAY_BURST` schedule, logged `rpc-stubs.platform-failure-retry`;
-   *  re-lending a key replaces its stub, so a repeat is harmless. An overloaded DO is not lent to
-   *  again at once. A lend that still fails is logged, the DO's page times out, and a push waiting on
-   *  it is lost. */
-  const answerPage = async (): Promise<void> => {
-    try {
-      await retryPlatformFailures(
-        async () => {
-          if (lendEnded.reason) return; // recalled while a repeat waited: there is nothing to lend
-          await durableObjectStub().lendRpcStub({
-            rpcStubKey,
-            stub: new LentRpcStub(sessionRpcStub, rpcStubKey, lendEnded, durableObjectStub),
-          });
-        },
-        {
-          area: "rpc-stubs",
-          schedule: RELAY_BURST,
-          idempotent: true,
-          // A lend recalled meanwhile has nothing left to lend: its failure is no platform failure.
-          kind: (error) => (lendEnded.reason ? "failed" : failureKind(error)),
-          describe: () => ({ name: "lendRpcStub", rpcStubKey }),
-        },
-      );
-    } catch (error) {
-      if (lendEnded.reason) return; // recalled meanwhile: there is nothing left to lend
-      console.warn({
-        event: "rpc-stub-lend-failed",
-        namespace: "rpc-stubs",
-        message: "a page's lend failed: the DO's page times out, and a push waiting on it is lost",
-        rpcStubKey,
-        error: String(error),
-      });
-    }
-  };
-  /** The pager in service — a re-dial replaces it. */
-  let pagerWebSocket = response.webSocket;
-  /** Take one accepted pager into service: the keepalive, the page answer, and what its close means. */
-  const attachPager = (ws: WebSocket): void => {
-    pagerWebSocket = ws;
-    /** When the DO last answered on this pager (a keepalive ack or a page), and how many keepalives
-     *  it has left unanswered since. */
-    let answeredAt = Date.now();
-    let unanswered = 0;
-    /** Set once this pager is out of service; its late close event means nothing. */
-    let retired = false;
-    // THE PAGER'S LIVENESS: a keepalive the DO auto-answers via setWebSocketAutoResponse WITHOUT
-    // waking it, every 500 ms; a pager that leaves three in a row unanswered is dropped and
-    // re-dialed. A deploy resets the DO and its end of every pager with it, but this end may hear no
-    // close for a minute: on prd 2026-09-25 a busy context reset at 13:16:33, its pagers' relay ends
-    // closed at 13:17:35 (all within 14 ms), and every stub lent in it was offline in between
-    // (visitors got 502s). Counted in keepalives SENT, never wall time, so an isolate that stalls
-    // does not read its own stall as the DO's silence. The keepalive also keeps the /api isolate warm.
-    const keepalive = setInterval(() => {
-      if (unanswered >= 3) {
-        retired = true;
-        clearInterval(keepalive);
-        // Re-dial BEFORE closing: a DO that was only slow sees the new pager replace this one (a
-        // swap, never a detach that would un-set what names the key).
-        waitUntil(
-          redialPager({
-            code: 4000,
-            reason: `${unanswered} keepalives unanswered`,
-            answeredAt,
-          }).finally(() => {
-            try {
-              ws.close(4000, "keepalive unanswered");
-            } catch {
-              /* already closing */
-            }
-          }),
-        );
-        return;
-      }
-      unanswered += 1; // a send that throws is a keepalive the DO never answers
-      try {
-        ws.send(RPC_STUB_PAGER_KEEPALIVE_REQUEST);
-      } catch {
-        /* closing: its close event, or three unanswered keepalives, takes it out of service */
-      }
-    }, 500);
-    // The keepalive ack rides this same socket, so anything that is not a page is ignored.
-    ws.addEventListener("message", (event: MessageEvent) => {
-      if (typeof event.data !== "string") return;
-      answeredAt = Date.now();
-      unanswered = 0;
-      let page: unknown;
-      try {
-        page = JSON.parse(event.data);
-      } catch {
-        return;
-      }
-      if ((page as { type?: string } | null)?.type !== "page") return;
-      waitUntil(answerPage());
-    });
-    ws.addEventListener("close", (event: CloseEvent) => {
-      clearInterval(keepalive);
-      if (retired) return;
-      retired = true;
-      // The lender ended it (dispose, the session broke), or the DO closed it cleanly (a newer pager
-      // at this key replaced it): the lend is over and the dup goes back with the pager.
-      if (lendEnded.reason || event.code === 1000) {
-        disposeSessionRpcStub("was returned (its pager closed)");
-        return;
-      }
-      waitUntil(redialPager({ code: event.code, reason: event.reason, answeredAt }));
-    });
-  };
-  /** The leg dropped under a live lend: re-dial it (redial.ts) and take the new pager into service.
-   *  A lend recalled meanwhile ends the re-dial quietly: a session that is ending (a voice board
-   *  gone, its /api socket closing) often loses its pager a moment before its own end reaches this
-   *  lend, so the drop is logged with its outcome, only once the session proved live — back in
-   *  service (a warn) or not (an ERROR: the client is still connected but unreachable through its
-   *  key, and the prd fault alarm pages on errors). `downMs` counts from the pager's last answer,
-   *  the last moment the key was known reachable: a close heard late is downtime too. */
-  const redialPager = async (dropped: {
-    code: number;
-    reason: string;
-    answeredAt: number;
-  }): Promise<void> => {
-    const redialed = await redial(
-      dialPager,
-      () => Boolean(lendEnded.reason),
-      RPC_STUB_PAGER_REDIAL_DEADLINE_MS,
-    );
-    if (!redialed) return;
-    const drop = {
-      namespace: "rpc-stubs",
-      rpcStubKey,
-      code: dropped.code,
-      reason: dropped.reason,
-      downMs: Date.now() - dropped.answeredAt,
-    };
-    if ("socket" in redialed) {
-      attachPager(redialed.socket);
-      console.warn({
-        event: "rpc-stub-pager-redialed",
-        message:
-          "a lent stub's pager dropped under a live session and is back in service; the DO re-appended what names the key",
-        ...drop,
-        attempt: redialed.dials,
-      });
-      return;
-    }
-    console.error({
-      event: "rpc-stub-pager-redial-failed",
-      message:
-        "a lent stub's pager dropped under a live session and could not be re-dialed; the lend ends, and the DO un-sets what named it on the pager's close or, when the DO reset took the pager with no close run, on its next wake",
-      ...drop,
-      lastFailure: redialed.gaveUp,
-    });
-    disposeSessionRpcStub("went offline (its pager dropped and could not be re-dialed)");
-  };
-  pagerWebSocket.accept();
-  attachPager(pagerWebSocket);
-  // capnweb's own death signal, registered ONCE: set the shared reason AND close the pager NOW so the
-  // DO returns the stub immediately — without this the presence list lies until a page times out.
-  (sessionRpcStub as { onRpcBroken?: (cb: () => void) => void }).onRpcBroken?.(() => {
-    lendEnded.reason = "went offline (its client session broke)";
-    try {
-      pagerWebSocket.close(1000, "client session broke");
-    } catch {
-      /* already closing */
-    }
-  });
-  return {
-    dispose: () => {
-      disposeSessionRpcStub("was recalled by its lender");
-      try {
-        pagerWebSocket.close(1000, "pager disposed");
-      } catch {
-        /* already closing */
-      }
-    },
-    lendEnded: lendEndedPromise,
-  };
-}
-
-// ── rpc stub fetch ── EVERYTHING about serving FETCH-SHAPED capabilities, in one place.
-//
-// THE DOCTRINE (read this and you can skip the rest of the file):
+// THE DOCTRINE:
 //
 //   1. Some capabilities are FETCH-SHAPED: `(request: Request) => Promise<Response>`. They are
 //      ALWAYS called through a terminal `fetch` — `itx.site.fetch(request)`, never a method of
@@ -847,19 +484,10 @@ export async function lendRpcStubOverPager(
 //      recognized by the terminal-fetch branch of `RpcStubDirectory.invokeRpcStub` and routed into
 //      `RpcStubFetchServer.serve`.
 //
-//   4. Two platform facts force everything unusual in this file, and BOTH are workarounds we
-//      expect to delete one day:
-//        • workerd's Workers RPC cannot serialize a webSocket-bearing Response (DataCloneError) —
-//          only the FETCH CHANNEL (WorkerEntrypoint.fetch / DurableObject.fetch / service-binding
-//          fetch) tunnels sockets. So anything that might carry a socket MUST travel a real
-//          `.fetch()` hop, end to end.
-//        • capnweb likewise could not carry sockets across a session, so we FORKED it
-//          (@iterate-com/capnweb: webSocket-in-Response rides the session as a stream pair).
-//      THE DAY workerd + capnweb serialize WebSockets over plain RPC methods, everything fenced
-//      "WORKAROUND" below is DELETED — plus its (pure-deletion) call sites, enumerated at the
-//      fence — and a lent rpc stub's terminal fetch simply rides the plain invoke() walk like
-//      every other call, its Response flowing back over the RPC legs.
-//
+//   4. A lent rpc stub's fetch that answers a WebSocket upgrade cannot cross Workers RPC or a
+//      capnweb session as a Response, so it travels a real `.fetch()` hop end to end:
+//      fetch-upgrade.ts, a WORKAROUND whose delete-day checklist is its header. That day a lent
+//      rpc stub's terminal fetch rides the plain invoke() walk like every other call.
 
 // ── THE ITX-EXPRESSION FETCH (the `x-itx-expression` header) ──
 // A fetch-shaped capability is reached over HTTP by naming an itx expression in this header — the
@@ -954,388 +582,3 @@ export function terminalFetchOf(
     ? { steps: terminal.steps, request }
     : null;
 }
-
-// ═══════════════════════════════════ WORKAROUND ══════════════════════════════════════
-// Everything below exists ONLY because of doctrine point 4 (workerd RPC cannot carry sockets;
-// see the header). It serves fetch calls on LENT RPC STUBS — capabilities backed by a running
-// client reached over an RPC leg (a capnweb client via the /api relay, or a dynamic worker via
-// env.ITX) rather than by loadable code. The mechanism:
-//
-//   DO side (RpcStubFetchServer.serve): mint an upgradeId, call the borrowed stub's
-//   `fetch(upgradeId, itxExpressionSteps, request)` — that call EXECUTES in the lender's own
-//   request context, the one place the provider's answer is legally touchable.
-//
-//   Transport side (dialRpcStubFetch): dial the provider's real fetch. A socketless
-//   Response returns over the RPC leg as-is (it serializes fine). A socket-bearing one CANNOT —
-//   so the socket is accepted right there, ONE dedicated "upgrade leg" WebSocket is opened back
-//   into the DO (a fetch upgrade carrying `x-itx-fetch-upgrade` → acceptFetchUpgradeLeg, correlated
-//   with the eyeball by the upgradeId tag alone — an unguessable UUID; nothing else gates it),
-//   frames are wired provider⇄leg, and a plain marker returns instead.
-//
-//   DO side again: on the marker, mint the eyeball's WebSocketPair natively (the DO ↔ eyeball
-//   hop is a real fetch — socket-legal) and forward frames eyeball⇄leg by tag. Both DO-side
-//   sockets are hibernatable, so an open upgrade survives eviction and costs nothing idle.
-//
-//   A PROJECT HOST'S upgrade is RESUMABLE: the edge holds the visitor's socket and the relay the
-//   provider's, and the two DO-side sockets carry the splice's wire (fetch-upgrade-splice.ts), so
-//   a DO reset — every deploy — or a dropped socket is re-dialed and resumed, never seen by the
-//   visitor (`spliceEyeballAnswer` on the edge, `dialRpcStubFetch` on the relay, a re-dialed side
-//   replacing the older socket in `acceptFetchUpgradeLeg`).
-//
-// DELETE-DAY CHECKLIST (all deletions, nothing rewritten): remove this whole fenced section,
-// then delete its call sites —
-//   • the terminal-fetch branch in RpcStubDirectory.invokeRpcStub, the directory's `rpcStubFetch`
-//     dep + `#rpcStubFetch` field, and the `RpcStubFetchTransport &` half of BorrowedRpcStub
-//     (the directory section);
-//   • LentRpcStub's `fetch` method (the relay section);
-//   • the context DO's `#rpcStubFetch` field, its acceptFetchUpgradeLeg handler, and the
-//     handleWebSocketMessage/Close forwarding (iterate-context-durable-object.ts);
-//   • the edge's `spliceEyeballAnswer` and its resumable ask (worker.ts) — unless a socket over RPC
-//     still dies with the DO's reset, in which case the splice moves onto whatever replaces this.
-// Terminal-fetch calls then ride the plain invoke() walk like any other call, their Responses —
-// sockets included — crossing the RPC legs.
-// ═════════════════════════════════════════════════════════════════════════════════════
-
-/** The transport's upgrade-leg dial: its value is the upgradeId. */
-const FETCH_UPGRADE_SOCKET_HEADER = "x-itx-fetch-upgrade";
-/** The edge's re-dial of a resumable upgrade's EYEBALL side after a drop (fetch-upgrade-splice.ts):
- *  its value is the upgradeId. */
-const FETCH_UPGRADE_EYEBALL_HEADER = "x-itx-fetch-upgrade-eyeball";
-/** THE EDGE ASKS FOR A RESUMABLE UPGRADE (a project host's upgrade, worker.ts): the edge holds the
- *  visitor's socket and speaks the splice's wire on the eyeball side (fetch-upgrade-splice.ts). Rides
- *  the Request through the config worker to the serving context; the transport strips it before the
- *  provider sees the Request. */
-export const FETCH_UPGRADE_RESUMABLE_HEADER = "x-itx-fetch-upgrade-resumable";
-/** THE ANSWER THAT IT IS: on the eyeball's 101, JSON `FetchUpgradeResume` — what the edge re-dials
- *  (the upgradeId, the context that serves it) and the deploy that answered. */
-const FETCH_UPGRADE_RESUME_HEADER = "x-itx-fetch-upgrade-resume";
-const FetchUpgradeResume = z.object({
-  upgradeId: z.string().min(1),
-  path: z.string().startsWith("/"),
-  deployId: z.string(),
-});
-type FetchUpgradeResume = z.infer<typeof FetchUpgradeResume>;
-
-/** One upgrade socket's attachment (survives hibernation — so the upgrade does too): which
- *  upgrade it belongs to and which SIDE it is (`eyeball` = the caller's pair half, `leg` = the
- *  transport's dedicated socket). The peer is the same upgradeId on the other side. `replaced`: a
- *  re-dial of the same side took over, so this socket is neither a peer nor closes one. */
-type FetchUpgradeAttachment = {
-  fetchUpgrade: { upgradeId: string; side: "eyeball" | "leg"; replaced?: true };
-};
-const upgradeTag = (side: "eyeball" | "leg", upgradeId: string) =>
-  `itx-fetch-upgrade-${side}:${upgradeId}`;
-
-/** The transport's answer when the provider upgraded: the socket already rides the dedicated
- *  leg, so only this marker crosses the RPC hop — with the provider's 101 headers the eyeball's 101
- *  must repeat (`FETCH_UPGRADE_RESPONSE_HEADERS`). */
-type FetchUpgradeMarker = {
-  webSocketUpgrade: true;
-  headers: [name: string, value: string][];
-};
-
-/** The provider's 101 response headers the eyeball's 101 carries: the subprotocol it chose. A browser
- *  that asked for one (Vite's HMR client asks for `vite-hmr`) fails the handshake on a 101 that names
- *  none. Not `Sec-WebSocket-Extensions`: the eyeball socket is the runtime's own, which negotiates its
- *  extensions itself; nor `Sec-WebSocket-Accept`, the runtime's too. */
-const FETCH_UPGRADE_RESPONSE_HEADERS = ["sec-websocket-protocol"];
-
-/** What `serve` needs from the borrowed rpc stub: the fetch dial. */
-type RpcStubFetchTransport = {
-  fetch(upgradeId: string, itxExpressionSteps: ItxExpression, request: Request): Promise<unknown>;
-};
-
-/** The WebSocket a client's fetch answered with (capnweb's TunneledWebSocket satisfies it). */
-type ClientWebSocket = {
-  accept?(): void;
-  send(data: string | ArrayBuffer): void;
-  close(code?: number, reason?: string): void;
-  addEventListener(
-    type: string,
-    cb: (ev: { data?: unknown; code?: number; reason?: string }) => void,
-  ): void;
-};
-
-/** TRANSPORT SIDE of an rpc-stub fetch (runs where the client's stub is legally touchable —
- *  today that is the capnweb session's request context; a NATIVE provider's socket answer still
- *  dies on its own RPC leg, pinned in fetch.e2e.test.ts — a future dial-back fix must
- *  deliver the upgradeId to the provider WITHOUT riding the Request headers verbatim, because a
- *  provider that forwards its received Request would smuggle the header back into our own
- *  upgrade-leg handler). Dials the provider's real fetch and branches ONLY on the answer:
- *    • socketless Response → returned as-is (crosses the RPC leg fine);
- *    • socket-bearing Response → accept the socket HERE, open the dedicated upgrade leg into the
- *      DO, wire the frames, and return the marker instead. A Request that asked for a resumable
- *      upgrade (`FETCH_UPGRADE_RESUMABLE_HEADER`, the edge's) gets the leg side of the splice
- *      (fetch-upgrade-splice.ts): the leg re-dials after a drop, and nothing the provider sent is
- *      lost. */
-async function dialRpcStubFetch(
-  providerFetch: (request: Request) => Promise<unknown>,
-  request: Request,
-  upgradeId: string,
-  durableObjectStub: () => { fetch(url: string, init?: RequestInit): Promise<Response> },
-): Promise<Response | FetchUpgradeMarker> {
-  const resumable = request.headers.has(FETCH_UPGRADE_RESUMABLE_HEADER);
-  if (resumable) {
-    // the platform's own protocol: never the provider's to see
-    const headers = new Headers(request.headers);
-    headers.delete(FETCH_UPGRADE_RESUMABLE_HEADER);
-    request = new Request(request, { headers });
-  }
-  const response = (await providerFetch(request)) as {
-    status?: number;
-    headers?: Headers;
-    webSocket?: ClientWebSocket | null;
-  };
-  const providerSocket = response?.webSocket;
-  if (!providerSocket) return response as unknown as Response;
-  // Leg first, listeners second, accept LAST — accepting before the awaited leg round-trip would
-  // drop any frame the provider sends immediately after upgrading (a server hello). The leg is a
-  // plain fetch upgrade into the DO, opened mid-dial: the DO is awaiting the dial RPC and serves
-  // this upgrade concurrently (no deadlock, probed); frames ride it RAW, or on the splice's wire.
-  const dialLeg = () =>
-    durableObjectStub().fetch("https://fetch-upgrade.internal/", {
-      headers: { Upgrade: "websocket", [FETCH_UPGRADE_SOCKET_HEADER]: upgradeId },
-    });
-  const legResponse = await dialLeg();
-  const leg = legResponse.webSocket;
-  if (!leg) throw new Error(`fetch-upgrade leg returned ${legResponse.status} without a WebSocket`);
-  leg.accept();
-  if (resumable) {
-    new FetchUpgradeSpliceEnd({
-      side: "leg",
-      upgradeId,
-      // capnweb's TunneledWebSocket dispatches the runtime's own events (MessageEvent, CloseEvent)
-      local: providerSocket as unknown as SpliceSocket,
-      // the provider's socket closes without a status when the tunnel's session ends
-      localGoneReason: "tunnel disconnected",
-      socket: leg,
-      deployId: legResponse.headers.get(FETCH_UPGRADE_DEPLOY_ID_HEADER),
-      contextAbortedOffset: contextAbortedOffsetOf(legResponse),
-      dial: dialLeg,
-      report: reportFetchUpgradeSpliceEvent,
-    });
-  } else {
-    const wire = (from: ClientWebSocket, to: ClientWebSocket) => {
-      from.addEventListener("message", (ev) => {
-        try {
-          to.send(ev.data as string | ArrayBuffer);
-        } catch {
-          /* peer closing — its close event tears the pair down */
-        }
-      });
-      from.addEventListener("close", (ev) => {
-        try {
-          to.close(relayedCloseCode(ev.code), truncateCloseReason(ev.reason || ""));
-        } catch {
-          /* already closing */
-        }
-      });
-    };
-    wire(providerSocket, leg as unknown as ClientWebSocket);
-    wire(leg as unknown as ClientWebSocket, providerSocket);
-  }
-  providerSocket.accept?.();
-  const headers: [string, string][] = [];
-  for (const name of FETCH_UPGRADE_RESPONSE_HEADERS) {
-    const value = response.headers?.get(name);
-    if (value) headers.push([name, value]);
-  }
-  return { webSocketUpgrade: true, headers };
-}
-
-/** EDGE SIDE of a resumable upgrade: a project host's 101 that says it is resumable
- *  (`FETCH_UPGRADE_RESUME_HEADER`) is answered with the edge's own pair, and the DO's socket becomes
- *  the eyeball side of the splice (fetch-upgrade-splice.ts), which re-dials the serving context —
- *  `contextOf(path)`, a context of the project the edge admitted — after a drop. Any other answer
- *  is returned as it is. The splice's headers never reach the visitor. */
-export function spliceEyeballAnswer(
-  answer: Response,
-  contextOf: (path: string) => { fetch(url: string, init?: RequestInit): Promise<Response> },
-): Response {
-  const header = answer.headers.get(FETCH_UPGRADE_RESUME_HEADER);
-  const eyeball = answer.webSocket;
-  if (answer.status !== 101 || !eyeball || !header) return answer;
-  // checked: it crossed the project's config worker on its way here
-  const resume = FetchUpgradeResume.parse(JSON.parse(header));
-  const headers = new Headers(answer.headers);
-  headers.delete(FETCH_UPGRADE_RESUME_HEADER);
-  headers.delete(FETCH_UPGRADE_CONTEXT_ABORTED_OFFSET_HEADER);
-  const visitor = visitorEndOfSplice((local) => {
-    eyeball.accept();
-    new FetchUpgradeSpliceEnd({
-      side: "eyeball",
-      upgradeId: resume.upgradeId,
-      local,
-      localGoneReason: "visitor disconnected",
-      socket: eyeball,
-      deployId: resume.deployId,
-      contextAbortedOffset: contextAbortedOffsetOf(answer),
-      dial: () =>
-        contextOf(resume.path).fetch("https://fetch-upgrade.internal/", {
-          headers: { Upgrade: "websocket", [FETCH_UPGRADE_EYEBALL_HEADER]: resume.upgradeId },
-        }),
-      report: reportFetchUpgradeSpliceEvent,
-    });
-  });
-  return new Response(null, { status: 101, webSocket: visitor, headers });
-}
-
-/** DO SIDE of an rpc-stub fetch: the upgrade leg, the eyeball pair, and the frame/close forwarding
- *  between them. One instance per DO, wired into its fetch / webSocketMessage / webSocketClose
- *  alongside the other handlers. */
-export class RpcStubFetchServer {
-  readonly #ctx: Pick<DurableObjectState, "acceptWebSocket" | "getWebSockets">;
-  /** This DO's deploy and path: what a resumable upgrade's 101 says (`FetchUpgradeResume`). */
-  readonly #deployId: string;
-  readonly #path: string;
-  /** The `itx/aborted` whose reset began this incarnation, or null: what every 101 names
-   *  (`FETCH_UPGRADE_CONTEXT_ABORTED_OFFSET_HEADER`). Read per answer: the wake record lands after
-   *  construction. */
-  readonly #contextAbortedOffset: () => number | null;
-
-  constructor(
-    ctx: Pick<DurableObjectState, "acceptWebSocket" | "getWebSockets">,
-    context: { deployId: string; path: string; contextAbortedOffset: () => number | null },
-  ) {
-    this.#ctx = ctx;
-    this.#deployId = context.deployId;
-    this.#path = context.path;
-    this.#contextAbortedOffset = context.contextAbortedOffset;
-  }
-
-  /** Serve one fetch-shaped call on a lent rpc stub: dial through the transport; pass a plain
-   *  Response straight through; on the upgrade marker, mint the eyeball's pair (the leg arrived
-   *  during the dial — the dial awaits its 101) — a real 101 only after the provider actually
-   *  upgraded, saying it is resumable when the Request asked (the leg then speaks the splice's
-   *  wire). Provider failures throw through with their own words (the itx-expression fetch answers
-   *  non-101). */
-  async serve(
-    transport: RpcStubFetchTransport,
-    itxExpressionSteps: ItxExpression,
-    request: Request,
-  ): Promise<unknown> {
-    const upgradeId = crypto.randomUUID();
-    const result = await transport.fetch(upgradeId, itxExpressionSteps, request);
-    const marker = result as Partial<FetchUpgradeMarker> | null;
-    if (marker?.webSocketUpgrade !== true) return result;
-    const headers = [...(marker.headers || [])];
-    if (request.headers.has(FETCH_UPGRADE_RESUMABLE_HEADER))
-      headers.push([
-        FETCH_UPGRADE_RESUME_HEADER,
-        JSON.stringify({
-          upgradeId,
-          path: this.#path,
-          deployId: this.#deployId,
-        } satisfies FetchUpgradeResume),
-      ]);
-    return this.#acceptUpgradeSocket("eyeball", upgradeId, headers);
-  }
-
-  /** Mint + hibernatably accept ONE side of an upgrade (tagged and attached for peer routing),
-   *  answering a real 101 carrying the other half of the pair and `headers` (the eyeball's: the
-   *  provider's subprotocol; a dialed side's: this DO's deploy). */
-  #acceptUpgradeSocket(
-    side: "eyeball" | "leg",
-    upgradeId: string,
-    headers: [string, string][],
-  ): Response {
-    const pair = new WebSocketPair();
-    this.#ctx.acceptWebSocket(pair[1], [upgradeTag(side, upgradeId)]);
-    pair[1].serializeAttachment({
-      fetchUpgrade: { upgradeId, side },
-    } satisfies FetchUpgradeAttachment);
-    const contextAbortedOffset = this.#contextAbortedOffset();
-    const answerHeaders: [string, string][] =
-      contextAbortedOffset === null
-        ? headers
-        : [...headers, [FETCH_UPGRADE_CONTEXT_ABORTED_OFFSET_HEADER, String(contextAbortedOffset)]];
-    return new Response(null, { status: 101, webSocket: pair[0], headers: answerHeaders });
-  }
-
-  /** PARTIAL FETCH: accept the transport's dedicated upgrade leg (opened mid-dial, carrying the
-   *  dial's upgradeId — the tag is the correlation), or a resumable upgrade's side dialed again
-   *  after a drop (the leg by the transport, the eyeball by the edge). The newest socket of a side
-   *  wins: an older one still open is replaced, closed without closing its peer. */
-  acceptFetchUpgradeLeg(request: Request): Response | null {
-    const legUpgradeId = request.headers.get(FETCH_UPGRADE_SOCKET_HEADER);
-    const eyeballUpgradeId = request.headers.get(FETCH_UPGRADE_EYEBALL_HEADER);
-    if (!legUpgradeId && !eyeballUpgradeId) return null;
-    const [side, upgradeId] = legUpgradeId
-      ? ["leg" as const, legUpgradeId]
-      : ["eyeball" as const, eyeballUpgradeId!];
-    for (const older of this.#ctx.getWebSockets(upgradeTag(side, upgradeId))) {
-      const attachment = older.deserializeAttachment() as FetchUpgradeAttachment;
-      older.serializeAttachment({
-        fetchUpgrade: { ...attachment.fetchUpgrade, replaced: true },
-      } satisfies FetchUpgradeAttachment);
-      try {
-        older.close(1000, "replaced");
-      } catch {
-        /* already closing */
-      }
-    }
-    return this.#acceptUpgradeSocket(side, upgradeId, [
-      [FETCH_UPGRADE_DEPLOY_ID_HEADER, this.#deployId],
-    ]);
-  }
-
-  /** Route one WebSocket message: TRUE = an upgrade frame, forwarded RAW to its peer socket
-   *  (eyeball ⇄ leg by upgradeId tag). FALSE = not this subsystem's socket. */
-  handleWebSocketMessage(ws: WebSocket, data: string | ArrayBuffer): boolean {
-    const peer = this.#peerOf(ws);
-    // oxlint-disable-next-line iterate/simple-truthiness-check -- #peerOf returns a real three-way: undefined = not ours, null = ours-but-peer-gone, WebSocket = live
-    if (peer === undefined) return false;
-    // oxlint-disable-next-line iterate/simple-truthiness-check -- three-way distinction: null = peer already gone (drop the frame, distinct from undefined above)
-    if (peer === null) return true; // peer already gone — drop the frame; close handles teardown
-    try {
-      peer.send(data);
-    } catch {
-      /* peer closing — its close event tears the pair down */
-    }
-    return true;
-  }
-
-  /** Route one WebSocket close: TRUE = an upgrade socket — its peer is closed with it (each
-   *  upgrade dies with its own socket pair; a dying transport closes its legs, which closes the
-   *  eyeballs here, automatically, per socket; a resumable upgrade's ends take the close as a drop
-   *  and re-dial). FALSE = not ours. A replaced socket closes alone. */
-  handleWebSocketClose(ws: WebSocket, code = 1000, reason = ""): boolean {
-    const peer = this.#peerOf(ws);
-    // oxlint-disable-next-line iterate/simple-truthiness-check -- #peerOf three-way: undefined = not ours (bail); null = ours-but-peer-gone (fall through to still close ws below)
-    if (peer === undefined) return false;
-    try {
-      peer?.close(relayedCloseCode(code), truncateCloseReason(reason));
-    } catch {
-      /* already closing */
-    }
-    // Also complete the handshake on the socket that closed: workerd's hibernatable API does NOT
-    // auto-echo a peer-initiated close, so without this the initiator (an eyeball, or the relay's
-    // leg) never sees its own close confirmed and hangs until its timeout.
-    try {
-      ws.close(relayedCloseCode(code), truncateCloseReason(reason));
-    } catch {
-      /* already closing */
-    }
-    return true;
-  }
-
-  /** The OTHER side of an upgrade socket, or undefined (not ours) / null (peer gone, or this socket
-   *  was replaced: it has no peer). */
-  #peerOf(ws: WebSocket): WebSocket | null | undefined {
-    const upgrade = (ws.deserializeAttachment() as Partial<FetchUpgradeAttachment> | null)
-      ?.fetchUpgrade;
-    if (!upgrade) return undefined;
-    if (upgrade.replaced) return null;
-    const peerSide = upgrade.side === "eyeball" ? "leg" : "eyeball";
-    return (
-      this.#ctx
-        .getWebSockets(upgradeTag(peerSide, upgrade.upgradeId))
-        .find(
-          (socket) =>
-            !(socket.deserializeAttachment() as FetchUpgradeAttachment).fetchUpgrade.replaced,
-        ) ?? null
-    );
-  }
-}
-
-// ════════════════════════════════ END WORKAROUND ═════════════════════════════════════

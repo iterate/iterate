@@ -55,16 +55,15 @@ import { RpcStubHandle, itxAnswerDetachedFromSession } from "./context/dispatch.
 import { normalizeControlEvent } from "./stream/core-processor.ts";
 import {
   ITX_EXPRESSION_FETCH_HEADER,
-  FETCH_UPGRADE_RESUMABLE_HEADER,
   ITX_PLATFORM_ORIGIN_HEADER,
   itxExpressionEndingInFetch,
-  RpcStubFetchServer,
   RpcStubDirectory,
   RPC_STUB_PAGER_KEEPALIVE_REQUEST,
   RPC_STUB_PAGER_KEEPALIVE_RESPONSE,
   stampCallerHeaders,
   type BorrowedRpcStub,
 } from "./context/rpc-stubs.ts";
+import { FETCH_UPGRADE_RESUMABLE_HEADER, RpcStubFetchServer } from "./context/fetch-upgrade.ts";
 import { buildLibrary, executeScript, runSettlementOf, type LibraryItx } from "./library.ts";
 import { Stream, type ReachableContext } from "./stream/stream.ts";
 import { ALARM_MAX_REARMS, AlarmCoordinator } from "./alarm-coordinator.ts";
@@ -240,7 +239,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   }
   /** This deployment's configuration (worker.ts `appConfigOf`) — a malformed var throws here, naming it. */
   readonly #appConfig = appConfigOf(this.env);
-  /** context/rpc-stubs.ts — wired to `fetch` and the two WebSocket handlers below. */
+  /** context/fetch-upgrade.ts — wired to `fetch` and the two WebSocket handlers below. */
   readonly #rpcStubFetch = new RpcStubFetchServer(this.ctx, {
     deployId: this.#appConfig.deployId,
     path: this.#durableObjectAddress.path,

@@ -1,6 +1,6 @@
 // The two ends of a resumable upgrade over a fake context: a socket pair per dial, the context
 // forwarding frames between the two sides by upgradeId and closing a side's peer when it closes
-// (rpc-stubs.ts `RpcStubFetchServer`), and a `reset()` that cuts every socket it holds the way a
+// (fetch-upgrade.ts `RpcStubFetchServer`), and a `reset()` that cuts every socket it holds the way a
 // deploy does (1006, no close frame). The visitor's and the provider's sockets are what a person
 // and a local server see.
 
@@ -440,7 +440,7 @@ function socketPair(): [FakeSocket, FakeSocket] {
   return [a, b];
 }
 
-/** The context, as rpc-stubs.ts `RpcStubFetchServer` behaves: the sockets it holds per side,
+/** The context, as fetch-upgrade.ts `RpcStubFetchServer` behaves: the sockets it holds per side,
  *  frames forwarded to the other side's current socket, a new dial of a side REPLACING the older
  *  one (closed without touching its peer), and a side's close — delivered when the context gets to
  *  it — closing the other side's current socket. A cut socket stays listed until its close is
