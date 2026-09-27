@@ -58,9 +58,12 @@ jobs:
           export DEPOT_TOKEN
           DEPOT_TOKEN="$(doppler secrets get DEPOT_CI_TELEMETRY_TOKEN --plain --project _shared --config preview)"
           pnpm tsx scripts/monitors/health.ts previous-state --out test-results/health/previous.json
+          # Main OS e2e pages main e2e itself; its state is the message's last line here.
+          pnpm tsx scripts/monitors/health.ts previous-state --of main-e2e --out test-results/health/main-e2e.json
           pnpm tsx scripts/monitors/health.ts run \
             --ref "${{ github.ref }}" \
             --state test-results/health/previous.json \
+            --main-e2e-state test-results/health/main-e2e.json \
             --state-out test-results/health/state.json \
             ${{ inputs.test-page == 'true' && '--test-page' || '' }}
       # The job writes the state only on a real run on main: after its page, before PostHog.

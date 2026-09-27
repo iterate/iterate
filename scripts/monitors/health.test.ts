@@ -1,5 +1,6 @@
 import { expect, test } from "vitest";
-import { readState, renderMessage } from "./health.ts";
+import { fakeDepot, mainRun } from "./fake-depot.ts";
+import { judgeMainE2eRun, readMainE2eState, readState, renderMessage } from "./health.ts";
 
 const now = [
   { name: "main e2e", tone: "red" as const },
@@ -90,4 +91,63 @@ test("a state of this version reads back as written, and one that does not parse
   // exact: the state reads back untouched
   expect(readState(JSON.parse(JSON.stringify(state)))).toEqual(state);
   expect(() => readState({ ...state, latency: { runs: "none" } })).toThrow();
+});
+
+test("Main OS e2e's page job posts its own run's change of state in the health job's message, and keeps the state its next run reads", async () => {
+  const red = mainRun("red", "2026-09-27T01:00:00Z", {
+    e2e: "failed",
+    e2eTests: [
+      { name: "a slow row", tags: ["slow"] },
+      { name: "a plain row", failed: true },
+    ],
+    running: true,
+  });
+  const judge = (state: unknown, workflowId: string) =>
+    judgeMainE2eRun({
+      depot: fakeDepot({
+        "Main OS e2e": [mainRun("green", "2026-09-27T00:30:00Z", {}), red],
+      }),
+      state: readMainE2eState(state),
+      workflowId,
+      testRun: false,
+      subject: async (sha) => `the subject of ${sha.slice(0, 3)}`,
+    });
+  const previous = {
+    schemaVersion: 1,
+    e2e: {
+      suites: { "main e2e": "green", "slow e2e rows": "green" },
+      judgedAt: { "Main OS e2e": "2026-09-27T00:30:00Z" },
+    },
+  };
+
+  const judged = await judge(previous, "wf-red");
+
+  expect(judged).toEqual({
+    text: [
+      "🔴 main e2e red at `redaaaaaa` (the subject of red) <@U067G4QRFK2>",
+      "• failed: E2E tests",
+      "• failing rows: a plain row",
+      "<https://depot.dev/orgs/0p91s0lz49/workflows/wf-red|the run>",
+      "now: 🔴 main e2e · 🟢 slow e2e rows",
+    ].join("\n"),
+    next: {
+      schemaVersion: 1,
+      e2e: {
+        suites: { "main e2e": "red", "slow e2e rows": "green" },
+        judgedAt: { "Main OS e2e": "2026-09-27T01:00:00Z" },
+      },
+    },
+    failures: [],
+  });
+  // the state as kept and read back: the same run pages nothing again
+  expect(await judge(JSON.parse(JSON.stringify(judged.next)), "wf-red")).toMatchObject({
+    text: false,
+    next: judged.next,
+  });
+});
+
+test("Main OS e2e's state starts empty with none, or one of another schemaVersion", () => {
+  const empty = { schemaVersion: 1, e2e: { suites: {}, judgedAt: {} } };
+  expect(readMainE2eState(undefined)).toEqual(empty);
+  expect(readMainE2eState({ schemaVersion: 2 })).toEqual(empty);
 });

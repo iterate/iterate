@@ -42,8 +42,18 @@ export function fakeDepot(workflows: Record<string, FakeWorkflow[]>) {
           .map(({ jobs: _jobs, artifacts: _artifacts, ...listed }) => listed),
       };
     }
-    if (method === "GetWorkflow")
-      return { jobs: byId(OfWorkflow.parse(request).workflowId).jobs || [] };
+    if (method === "GetWorkflow") {
+      const workflow = byId(OfWorkflow.parse(request).workflowId);
+      return {
+        workflowId: workflow.workflowId,
+        runId: workflow.runId,
+        workflowStatus: workflow.status,
+        trigger: workflow.trigger,
+        sha: workflow.sha,
+        workflowCreatedAt: workflow.createdAt,
+        jobs: workflow.jobs || [],
+      };
+    }
     if (method === "ListArtifacts") {
       const workflow = byId(OfWorkflow.parse(request).workflowId);
       return {
@@ -91,4 +101,102 @@ function storedZip(files: Record<string, string>) {
   const end = [...u32(0x06054b50), ...u16(0), ...u16(0), ...u16(count), ...u16(count)];
   end.push(...u32(central.length), ...u32(local.length), ...u16(0));
   return Buffer.from([...local, ...central, ...end]);
+}
+
+/** A row of a suite summary, passed unless it says otherwise. */
+export type SummaryTest = {
+  name: string;
+  tags?: string[];
+  outcome?: "pass" | "fail" | "skip";
+  failed?: boolean;
+  error?: string;
+};
+
+/** A suite summary as the finalizer writes it (packages/shared/src/test-support/flake-suite-summary.ts). */
+export function summary(tests: SummaryTest[], status: "complete" | "incomplete" = "complete") {
+  return {
+    headSha: "abc",
+    branch: "main",
+    status,
+    startedAt: "2026-09-26T20:00:00.000Z",
+    finishedAt: "2026-09-26T20:05:00.000Z",
+    testCount: tests.length,
+    tests: tests.map(({ name, tags, outcome, failed = false, error }) => ({
+      name,
+      outcome: outcome || (failed ? "fail" : "pass"),
+      durationMs: 1000,
+      tags,
+      failed,
+      error,
+    })),
+    unknownFlakeCount: 0,
+    failedCount: tests.filter((test) => test.failed).length,
+    diagnostics: status === "incomplete" ? ["CI run cancelled"] : [],
+    runUrl: "https://depot.dev/run",
+  };
+}
+
+/** A push run of Main OS e2e: its jobs' statuses (finished unless named) and the suite summary each
+ *  suite job's newest attempt uploaded with its flake records. A `running` one is the run whose page
+ *  job judges it: its deploy and suites have ended, its trace and page jobs have not. */
+export function mainRun(
+  id: string,
+  createdAt: string,
+  input: {
+    deploy?: string;
+    e2e?: string;
+    specs?: string;
+    e2eTests?: SummaryTest[];
+    specsTests?: SummaryTest[];
+    running?: boolean;
+  },
+) {
+  const last = input.running ? "running" : "finished";
+  const job = (key: string, displayName: string, status = "finished") => ({
+    jobKey: `main-os-e2e.yml:${key}`,
+    jobDisplayName: displayName,
+    status,
+    attempts:
+      status === "skipped"
+        ? []
+        : [
+            { attemptId: `${id}-${key}-1`, attempt: 1 },
+            { attemptId: `${id}-${key}-2`, attempt: 2 },
+          ],
+  });
+  const records = (suite: string, key: string, tests: SummaryTest[]) => ({
+    // the older attempt's records, which a retried job keeps beside the newest's
+    [`flake-records-${suite}-attempt-${id}-${key}-1`]: {
+      "suite-summary.json": JSON.stringify(summary([{ name: "an older attempt", failed: true }])),
+    },
+    [`flake-records-${suite}-attempt-${id}-${key}-2`]: {
+      "suite-summary.json": JSON.stringify(summary(tests)),
+    },
+  });
+  return {
+    workflowId: `wf-${id}`,
+    runId: `run-${id}`,
+    status: last,
+    trigger: "push",
+    sha: id.padEnd(40, "a"),
+    createdAt,
+    jobs: [
+      job("deploy", "Deploy preview", input.deploy),
+      job("e2e", "E2E tests", input.e2e),
+      job("specs", "Browser specs", input.specs),
+      job("trace", "CI trace", last),
+      job("alert", "Page a change of state", last),
+    ],
+    artifacts:
+      input.deploy === "failed"
+        ? {}
+        : {
+            ...records(
+              "preview-e2e",
+              "e2e",
+              input.e2eTests || [{ name: "a slow row", tags: ["slow"] }],
+            ),
+            ...records("specs", "specs", input.specsTests || [{ name: "sends a message" }]),
+          },
+  };
 }

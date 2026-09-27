@@ -82,7 +82,7 @@ Anything else that needs GitHub-only triggers, such as `pull_request_target`, `i
 | `preview-os.yml`             | Every PR, dispatch                                  | **Preview OS**: Deploy preview, then **E2E tests** and **Browser specs**, then CI trace                 |
 | `preview-delete.yml`         | Such a PR closing, dispatch                         | Deletes the PR's preview                                                                                |
 | `preview-sweep.yml`          | Nightly, dispatch                                   | Deletes stale previews and orphaned preview resources                                                   |
-| `main-os-e2e.yml`            | Main push touching the preview paths, dispatch      | **Main OS e2e**: main redeployed in place to preview `main`, E2E tests, Browser specs, trace            |
+| `main-os-e2e.yml`            | Main push touching the preview paths, dispatch      | **Main OS e2e**: main redeployed in place to preview `main`, E2E tests, Browser specs, its page, trace  |
 | `deploy-os.yml`              | Main push touching what OS ships, dispatch          | **Deploy OS**: production, then the project-host check                                                  |
 | `deploy-<app>.yml`           | Main push touching what the app ships, dispatch     | Deploy of Dash, Agents, Notes, Voice, Kit, SPA, dummy-petshop or ci-reports                             |
 | `kit-firmware.yml`           | Firmware PR and main push, daily, dispatch          | Builds the changed boards; main publishes their releases                                                |
@@ -527,7 +527,8 @@ freshness:
   `Sandbox terminated before worker reported completion` (#1952, #2030, July
   2026; a retry passed), so watch main's Test job for that. Deploy OS uses `4x16`; the client
   deploys (Dash, Agents, Notes, Voice, Kit, SPA, dummy-petshop, ci-reports),
-  the trace jobs, and the jobs that only call APIs (LOC report, PR dashboard, Release, Health)
+  the trace jobs, and the jobs that only call APIs (LOC report, PR dashboard, Release, Health,
+  Main OS e2e's page)
   use `2x8`. So does the E2E tests job of Preview OS and Main OS e2e, which
   waits on a remote preview: on `4x16`, 151 attempts on 2026-09-24 peaked at 1.7 vCPUs and
   2.9 GB, and on `2x8` ten runs against one preview took 68 s at the p50, against 62 s for nine
@@ -928,31 +929,37 @@ and OTLP JSON export.
 
 ## Health
 
-`health.yml` runs `scripts/monitors/health.ts` every hour: one scheduled job
-that judges what the measuring workflows left and pages #error-pulse on a change
-of state, all its pages in one message, each a red or green block with its
-details and a link to the run, then every signal's state now:
+Two jobs page #error-pulse on a change of state, with `scripts/monitors/health.ts`,
+each run's pages in one message, each a red or green block with its details and a
+link to the run, then the state now of every signal the job pages:
 
-- **main e2e** and **slow e2e rows**: each push run of Main OS e2e, from its
-  jobs' results and the suite summaries its E2E tests and Browser specs jobs
-  upload with their flake records.
-- **real-model e2e**: the `REAL:` rows of each scheduled or push run of OS real
-  model, from its telemetry.
-- **latency**: each new scheduled OS latency report, against the budgets and a
-  rolling baseline, red once two runs in a row cross a line.
-- **PR time to green** ([below](#pr-time-to-green)).
-- **DO cost**: the Durable Object cost alarm, in its own daily thread and pages.
+- **main e2e** and **slow e2e rows**: Main OS e2e's own `alert` job, as soon as
+  the run's deploy and both suites have ended, from their results and the suite
+  summaries E2E tests and Browser specs upload with their flake records. A push
+  run only.
+- `health.yml`, every hour, judges what the measuring workflows left:
+  - **real-model e2e**: the `REAL:` rows of each scheduled or push run of OS
+    real model, from its telemetry.
+  - **latency**: each new scheduled OS latency report, against the budgets and a
+    rolling baseline, red once two runs in a row cross a line.
+  - **PR time to green** ([below](#pr-time-to-green)).
+  - **DO cost**: the Durable Object cost alarm, in its own daily thread and pages.
 
-A red page mentions Jonas once. A page leaves the run green; a check that could
+  Its message's last line names main e2e's and slow e2e rows' state too, from
+  Main OS e2e's state.
+
+A red page mentions Jonas once. A page leaves the job green; a check that could
 not read Depot, or found its probe broken (a report with no rows, a suite that
-did not run), fails the run once the others have paged. A red main e2e run
-pages at the next hourly run, not at its own end, and each run since the last
-is judged, oldest first, so a page names the run where its suite changed state.
-Its memory is its own `health-state` artifact; a state of another
-`schemaVersion` is not read, and the run starts over. Dispatch it with
-`--input test-page=true` to post every check's verdict as a 🧪 test page that
-mentions nobody, keeps no state and sends PostHog nothing; a run off main
-without it posts nothing.
+did not run), fails the job once the others have paged. Each run since the last
+judged is judged, oldest first, so a page names the run where its suite changed
+state: Main OS e2e's page job judges its own run after any settled one whose
+page was lost. A re-run keeps its creation time and is not judged again, so the
+next push's run pages it. Each job's memory is its own artifact, `health-state`
+and `main-e2e-state`; a state of another `schemaVersion` is not read, and the job
+starts over. Dispatch `health.yml` with `--input test-page=true` to post every
+one of its checks' verdicts as a 🧪 test page that mentions nobody, keeps no
+state and sends PostHog nothing; a run off main without it posts nothing. A
+dispatch of Main OS e2e pages nothing.
 
 ### PR time to green
 
