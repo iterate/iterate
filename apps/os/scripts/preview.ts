@@ -627,8 +627,8 @@ async function deployOsPreview(
   }
   // apps/os's smoke is the readiness gate (preview-readiness.ts), asked as soon as `wrangler
   // preview` returns. Nothing is handed on — the PR body's links, the sign-in seed, the e2e job —
-  // until three rounds of eight in a row answer in full on this deployment. A preview that does not
-  // by the gate's deadline fails the deploy.
+  // until three rounds of eight in a row answer in full on this deployment. A preview that misses
+  // the gate's deadline fails the deploy.
   await traceOperation("Readiness gate", () =>
     awaitPreviewReady(url, {
       adminSecret: parseAppConfig(
