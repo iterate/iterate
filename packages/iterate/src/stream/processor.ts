@@ -718,8 +718,9 @@ export type StreamEventInput = {
    *  writer's own `source` is dropped but for `processor`, the engine's label. */
   source?: {
     /** WHERE IT CAME FROM: the context whose code or session wrote it — the context a call started
-     *  at, whichever context it was appended to. Absent only on the platform's own records of a
-     *  context (its birth, a wake, a run's settlement). */
+     *  at, whichever context it was appended to. On every event committed since the stamp: the
+     *  platform's own records of a context (its birth, a wake, a run's settlement) carry the
+     *  context's own path. */
     origin?: string;
     /** The durable schedule definition responsible for this occurrence. */
     schedule?: {

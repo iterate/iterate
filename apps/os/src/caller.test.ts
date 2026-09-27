@@ -6,6 +6,7 @@ import {
   secretsEqual,
   sha256Hex,
   signClaims,
+  refusePlatformIdempotencyKeys,
   stampCaller,
   verifyAdminSecret,
   verifyClaims,
@@ -141,3 +142,36 @@ test.for<{ name: string; source?: object; caller: Caller; stamped: object }>([
     source: stamped,
   });
 });
+
+// ── the platform's idempotency keys — no other writer takes one first ──
+const writers = {
+  "loaded code": { principal: null, app: true },
+  "a person": { principal: { actor: "user_1" }, grant: "g" },
+  "the platform for a person": { principal: { actor: "user_1" }, grant: "g", platform: true },
+  "a first-party processor": { principal: null },
+} satisfies Record<string, Caller>;
+test.for<{ key: string; who: keyof typeof writers; on: "a project" | "a global"; refused?: true }>([
+  { key: "itx/run-settled:9", who: "loaded code", on: "a project", refused: true },
+  { key: "itx/child-created:/x", who: "loaded code", on: "a project", refused: true },
+  { key: "itx@/", who: "loaded code", on: "a project", refused: true },
+  { key: "project/delete-requested", who: "loaded code", on: "a project", refused: true },
+  { key: "repo/created:/repos/x", who: "loaded code", on: "a project", refused: true },
+  { key: "workspace/deleted:/w", who: "loaded code", on: "a project", refused: true },
+  { key: "secret/lent:l1", who: "loaded code", on: "a project", refused: true },
+  { key: "agent/created:/agents/a", who: "loaded code", on: "a project" },
+  { key: "itxx/mine", who: "loaded code", on: "a project" },
+  { key: "itx/ingress-configured:abc", who: "a first-party processor", on: "a project" },
+  { key: "project/delete-requested", who: "a person", on: "a project" },
+  { key: "account/grant-ended/g", who: "a person", on: "a global", refused: true },
+  { key: "organization/created", who: "loaded code", on: "a global", refused: true },
+  { key: "account/grant-ended/g", who: "the platform for a person", on: "a global" },
+  { key: "itx/run-settled:9", who: "loaded code", on: "a global" },
+])(
+  "the platform's idempotency keys: $key from $who on $on context",
+  ({ key, who, on, refused }) => {
+    const refuse = () =>
+      refusePlatformIdempotencyKeys([{ idempotencyKey: key }], writers[who], on === "a global");
+    if (refused) expect(refuse).toThrow(/is the platform's/);
+    else expect(refuse).not.toThrow();
+  },
+);

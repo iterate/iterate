@@ -72,11 +72,14 @@ await itx.cd("/agents/b").append({
 // and the same from `itx.agents.get("/agents/b").message("hello")`.
 ```
 
-`origin` is the context whose code ran, not who asked it to run. A `run-requested` runs where it
-lands, so the label is advisory.
+Words from `/` (a member's session, the dash) read as a person's, with no sender. `origin` is the
+context whose code ran, not who asked it to run (apps/os `caller.ts` `stampCaller` says why that
+makes it advisory). Batch writes: `append(...events)` is one commit, however many events it carries.
 
-The exception is a jail, a context with a bare `itx ⇒ null` row. Its code appends nowhere, and no
-code appends into it.
+The exception is a jail, a context with a bare `itx ⇒ null` row plus the grants beside it. A bare
+jail is closed both ways: its code appends nowhere, and no code appends into it. Grant it
+`itx.append` and every context can append into it too; its own code still cannot lift the null. A
+jail confines the code that runs in it, not the contexts it creates through a grant: jail those too.
 
 ## Testing a processor
 

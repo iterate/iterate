@@ -989,32 +989,37 @@ test("connectToOpenApi: not an OpenAPI document → refused at connect", async (
 });
 
 // ── the entities ── `create` and `delete` reach only strictly beneath the caller's origin (the
-// context the platform stamped, `Caller.path`), and the typed `append` refuses the lifecycle facts,
-// which only the collection writes (`entities`, below: every hop recorded).
+// context the platform stamped, `Caller.path`); the typed `append` goes through the table
+// (`entities`, below: every hop recorded, and which way it went).
 test("entities: create and delete reach only strictly beneath the caller's origin — the origin itself, an ancestor, a sibling and anywhere else are FORBIDDEN before anything is dispatched; the root reaches every path but itself", async () => {
-  const jail = entities("/jail");
-  await jail.workspaces.create("./x");
-  await jail.repos.delete("/jail/x/y");
-  for (const path of [".", "/jail", "..", "/", "/jailbreak", "/other/x", "/repos/config"]) {
-    await expect(jail.workspaces.create(path)).rejects.toThrow(
+  const child = entities("/child");
+  await child.workspaces.create("./x");
+  await child.repos.delete("/child/x/y");
+  for (const path of [".", "/child", "..", "/", "/children", "/other/x", "/repos/config"]) {
+    await expect(child.workspaces.create(path)).rejects.toThrow(
       /creates and deletes only beneath itself/,
     );
-    await expect(jail.repos.delete(path)).rejects.toThrow(
+    await expect(child.repos.delete(path)).rejects.toThrow(
       /creates and deletes only beneath itself/,
     );
   }
-  expect(jail).toMatchObject({
+  expect(child).toMatchObject({
     dispatched: [
       {
         at: "/",
+        via: "builtins.cd",
         steps: [
           "facets",
           ["get", "project"],
           ["workspaces"],
-          ["create", "/jail/x", { creator: "/jail" }],
+          ["create", "/child/x", { creator: "/child" }],
         ],
       },
-      { at: "/", steps: ["facets", ["get", "project"], ["repos"], ["delete", "/jail/x/y"]] },
+      {
+        at: "/",
+        via: "builtins.cd",
+        steps: ["facets", ["get", "project"], ["repos"], ["delete", "/child/x/y"]],
+      },
     ],
   });
   const root = entities();
@@ -1025,8 +1030,8 @@ test("entities: create and delete reach only strictly beneath the caller's origi
   ]);
 });
 
-test("entities: the typed append validates by the contract and appends any of its events on the entity's context, lifecycle included: anyone may append anywhere", async () => {
-  const { repos, workspaces, dispatched } = entities("/jail");
+test("entities: the typed append validates by the contract and appends any of its events on the entity's context THROUGH THE TABLE, as the caller's own `itx.cd(path).append` would go — so a jail's bare null refuses it; every other verb hops at the fixed point", async () => {
+  const { repos, workspaces, dispatched } = entities("/child");
   const deleteRequested = {
     type: "events.iterate.com/repo/delete-requested" as const,
     payload: {},
@@ -1036,14 +1041,26 @@ test("entities: the typed append validates by the contract and appends any of it
     payload: { path: "/repos/config", commitOid: "abc", message: "m", changedPaths: ["worker.ts"] },
   };
   await repos.get("/repos/config").append(deleteRequested);
-  await repos.get("/repos/config").append(commit);
+  await repos.get("./r").append(commit);
   await expect(
     // @ts-expect-error — a type the contract does not own is refused when it runs, too
     workspaces.get("/workspaces/w").append({ type: "note", payload: {} }),
   ).rejects.toThrow(/is not an event the workspace contract owns/);
+  await repos.get("/repos/config").readFile("worker.ts");
+  // loaded code takes none of the platform's keys through it either: the hop is the library's
+  await expect(
+    entities("/child", true)
+      .repos.get("./r")
+      .append({ ...commit, idempotencyKey: "repo/created:/child/r" }),
+  ).rejects.toThrow(/is the platform's/);
   expect(dispatched).toEqual([
-    { at: "/repos/config", steps: [["append", deleteRequested]] },
-    { at: "/repos/config", steps: [["append", commit]] },
+    { at: "/repos/config", via: "cd", steps: [["append", deleteRequested]] },
+    { at: "/child/r", via: "cd", steps: [["append", commit]] },
+    {
+      at: "/repos/config",
+      via: "builtins.cd",
+      steps: ["facets", ["get", "repo"], ["readFile", "worker.ts"]],
+    },
   ]);
 });
 
@@ -1367,29 +1384,30 @@ function openApiItx(answer: (request: Request) => Response = () => json({ ok: tr
 
 /** A library whose caller came from `origin` (none: a caller at the root), over a fake `itx` that
  *  records every dispatch. */
-function entities(origin?: string) {
-  const dispatched: { at: string; steps: unknown[] }[] = [];
-  const itx = fakeItx({
-    builtins: {
-      cd: async (at: string) => ({
-        invoke: async (steps: unknown[]) => {
-          dispatched.push({ at, steps });
-          return { path: at };
-        },
-      }),
+function entities(origin?: string, app?: true) {
+  const dispatched: { at: string; via: "cd" | "builtins.cd"; steps: unknown[] }[] = [];
+  const cd = (via: "cd" | "builtins.cd") => async (at: string) => ({
+    invoke: async (steps: unknown[]) => {
+      dispatched.push({ at, via, steps });
+      return { path: at };
     },
   });
+  const itx = fakeItx({ cd: cd("cd"), builtins: { cd: cd("builtins.cd") } });
   return {
     dispatched,
     ...buildLibrary(itx, {
-      caller: () => (origin ? { principal: null, path: origin } : { principal: null }),
+      caller: () => ({ principal: null, path: origin, app }),
       path: "/",
     }).roots,
   };
 }
 
 /** A fake `itx` with only what a test drives (`fetch` for the remotes, `builtins` for the runner and
- *  the entities), cast once here to the whole `LibraryItx`. */
-function fakeItx(fake: { fetch?: (request: Request) => Promise<unknown>; builtins?: object }) {
+ *  the entities, `cd` for the typed append), cast once here to the whole `LibraryItx`. */
+function fakeItx(fake: {
+  fetch?: (request: Request) => Promise<unknown>;
+  builtins?: object;
+  cd?: object;
+}) {
   return fake as LibraryItx;
 }

@@ -203,9 +203,8 @@ export class IterateContextRpcTarget extends RpcTarget {
         );
     }
     // LOADED CODE's `cd` is an expression through THIS context's table (`itx.cd ⇒ null` is a wall,
-    // and the resolver's app wall keeps it to self and descendants, but for a final `append`) — the
-    // dotted surface of the handle it gets back accumulates onto one `invoke`, exactly as the
-    // built-in `cd` root answers.
+    // and the resolver's app wall says where it may go) — the dotted surface of the handle it gets
+    // back accumulates onto one `invoke`, exactly as the built-in `cd` root answers.
     if (this.#caller.app)
       return new InvokeHandle(
         (steps) =>
@@ -533,8 +532,7 @@ export class ItxEntrypoint extends cloudflareWorkers.WorkerEntrypoint<
   /** THE handoff: the genuine itx scope — the same `IterateContextRpcTarget` class a capnweb client
    *  gets from `projects.get(id)` (capnweb's RpcTarget IS the native `cloudflare:workers` RpcTarget
    *  on workerd), under `Caller.app` unless minted `platform: true`, so loaded code writes plain
-   *  dotted access and mid-chain handles pipeline natively while the fixed point and a `cd` above
-   *  its context are refused, but for `cd(path).append(…)`, which reaches the whole project. A fresh
+   *  dotted access and mid-chain handles pipeline natively inside the app wall. A fresh
    *  SessionTeardown per call: this hop lends nothing session-long (a loaded worker's callbacks ride
    *  as Workers-RPC stubs through the call args, never the pager). Re-resolved per call — never a
    *  stub held across calls (the back-channel rule). */
@@ -544,16 +542,19 @@ export class ItxEntrypoint extends cloudflareWorkers.WorkerEntrypoint<
     // `ctx.exports` are its own module's, so the prop cannot be forged from inside one. Either speaks
     // for the project (no principal) at the origin the context was minted with (platform-origin
     // persisted on the DO): every hop from here — this context, a `cd` to a sibling — carries it, so
-    // a sibling never reached from the edge still composes URLs.
+    // a sibling never reached from the edge still composes URLs. The platform's handle `cd`s as an
+    // edge context does, so it carries its own context as `Caller.path`: what it appends elsewhere
+    // (an entity's certificate on `/`) is stamped with where it came from, not where it landed.
+    const address = DurableObjectNameCodec.parse(this.ctx.props.iterateContextName);
     return new IterateContextRpcTarget(
       this.env.ITERATE_CONTEXT,
-      DurableObjectNameCodec.parse(this.ctx.props.iterateContextName),
+      address,
       new SessionTeardown(),
       (p) => this.ctx.waitUntil(p),
       {
         principal: null,
         platformOrigin: this.ctx.props.platformOrigin,
-        ...(!this.ctx.props.platform && { app: true as const }),
+        ...(this.ctx.props.platform ? { path: address.path } : { app: true as const }),
       },
     );
   }

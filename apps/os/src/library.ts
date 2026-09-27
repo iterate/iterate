@@ -30,9 +30,10 @@ import { connectToOpenApi } from "./library/openapi.ts";
 
 /** What a library module is handed: the itx handle (the record's own dotted surface), narrowed to
  *  what the library uses — `fetch`, the connectors' HTTP; `r2`, the files' storage; `builtins`, the
- *  fixed point `run` and the entity roots spell their own hops at. Widen it here when a module
- *  needs more of itx — never by importing something else. */
-export type LibraryItx = Pick<BuiltInScope, "fetch" | "r2" | "builtins">;
+ *  fixed point `run` and the entity roots spell their own hops at; `cd`, the typed append's hop
+ *  through the table. Widen it here when a module needs more of itx — never by importing something
+ *  else. */
+export type LibraryItx = Pick<BuiltInScope, "fetch" | "r2" | "builtins" | "cd">;
 
 /** The library's roots, exactly as the built-ins record spreads them in: each verb closed over ONE
  *  `itx`. `BuiltInScope` (context/built-ins.ts) extends this, so the typed surface has them once. */
@@ -387,10 +388,10 @@ function entityRoot<Handle>(
 ): EntityRoot<Handle> {
   const collection = `${name}s` as const;
   // CREATING AND DELETING REACH ONLY STRICTLY BENEATH THE CALLER'S ORIGIN (`Caller.path`, stamped by
-  // the platform, never an argument). Every context linked to the root inherits `itx.repos` and
-  // `itx.workspaces`; reaching further, it could delete what is not its own (`/repos/config`, for
-  // good) or plant a context anywhere, linked to itself. `get` and `list` stay project-wide: agents
-  // edit `/repos/config`, and a workspace mounts every repo.
+  // the platform, never an argument). Its hops are the platform's (below), so this is what bounds a
+  // jail granted the collection (`itx.repos ⇒ itx.builtins.repos`): reaching further, it could delete
+  // what is not its own (`/repos/config`, for good) or plant a context anywhere, linked to itself.
+  // `get` and `list` stay project-wide: agents edit `/repos/config`, and a workspace mounts every repo.
   const beneathTheOrigin = (verb: "create" | "delete", path: string) => {
     const origin = originOf(deps.caller(), deps.path);
     const absolute = resolveContextPath(origin, path);
@@ -430,7 +431,9 @@ function entityRoot<Handle>(
 // at a jailed context (`itx.repos ⇒ itx.builtins.repos` beside the bare `null`) runs these verbs
 // THERE, where `itx.cd` is masked — the verbs must still reach the entity's context and the catalog
 // at `/`. What a context may reach OF the library its table says; how the library gets there is not
-// the table's business (the same rule as the runner's own log traffic, below).
+// the table's business (the same rule as the runner's own log traffic, below). The one exception is
+// the typed `append` (`entityHandle`): it is the caller's own write, so it goes as the caller's
+// `itx.cd(path).append` would, through the table where the library runs.
 
 /** ONE dispatch on the `project` facet at `/` — the catalog host, where the collections live. */
 async function projectFacet(itx: LibraryItx, steps: ItxExpression): Promise<unknown> {
@@ -454,8 +457,9 @@ type EntityContract = {
 /** The `name` facet on the context at `path`, and the typed write of `contract`'s events there: a
  *  first step `["append", ...events]` with nothing after it validates each event's payload against
  *  the contract (a type the contract does not own is refused, naming both) and appends the parsed
- *  events on the context, any of its types, lifecycle included (anyone may append anywhere) — the
- *  caller's stamp on every one; any other chain is one dispatch on the facet. */
+ *  events on the context through the table (a jail's bare null refuses it, as it would the caller's
+ *  own `itx.cd(path).append`) — the caller's stamp on every one; any other chain is one dispatch on
+ *  the facet. */
 function entityHandle(
   itx: LibraryItx,
   path: string,
@@ -467,7 +471,7 @@ function entityHandle(
   return new InvokeHandle(async (itxExpressionSteps) => {
     // TWO dotted calls, never one chain (the `run` section says why): the sibling's handle first —
     // in-process a VALUE — then the chain relative to it. The path means the CALLER's `./x`.
-    const context = await itx.builtins.cd(resolveContextPath(originOf(caller, ownPath), path));
+    const entityPath = resolveContextPath(originOf(caller, ownPath), path);
     const [first, ...rest] = itxExpressionSteps;
     if (Array.isArray(first) && first[0] === "append" && rest.length === 0) {
       const [, ...events] = first;
@@ -490,8 +494,19 @@ function entityHandle(
           );
         return { ...input, payload: schema.parse(input.payload ?? {}) };
       });
-      return context.invoke([["append", ...parsed]]);
+      // The hop is the library's, so the entity's context never learns that loaded code wrote: the
+      // platform's keys are refused here, as the built-in append refuses them (caller.ts
+      // `refusePlatformIdempotencyKeys` says why; the library imports none of the platform's code).
+      if (caller.app)
+        for (const { idempotencyKey } of parsed)
+          if (idempotencyKey && /^(?:itx|project|repo|workspace|secret)[/@]/.test(idempotencyKey))
+            throw codedError(
+              "FORBIDDEN",
+              `idempotency key ${JSON.stringify(idempotencyKey)} is the platform's`,
+            );
+      return (await itx.cd(entityPath)).invoke([["append", ...parsed]]);
     }
+    const context = await itx.builtins.cd(entityPath);
     // A repo's pull or push reaches its remote through the CALLER's egress, never the repo's (whose
     // parent link leads to its creator's): the caller's own `itx.fetch`, through its own rules, so a
     // caller that may not fetch reaches no remote, and no project secret, through a repo.

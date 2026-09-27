@@ -3,6 +3,7 @@
 // stored with), and the token crypto, WebCrypto only: the signed-claims codec, `sha256Hex` and
 // `secretsEqual`. Only this worker sets or reads any of it; what user code sees of a caller is the
 // SDK's `Principal` and `ITX_PRINCIPAL_HEADER` (iterate/principal).
+import { codedError } from "iterate/lib";
 import type { Principal } from "iterate/principal";
 import type { StreamEventInput } from "iterate/stream/processor";
 
@@ -25,9 +26,9 @@ export type Caller = {
    *  rewrites as loaded code's input. Fresh env.ITX calls never inherit this stamp. */
   path?: string;
   /** Set when the caller is LOADED CODE — a worker, a facet, a script — holding a context through
-   *  `env.ITX`. Under it the resolver refuses the fixed point (`itx.builtins…`) and any `cd` above
-   *  the caller's own context on the INPUT expression, but for a final `cd(path).append(…)`, which
-   *  reaches the whole project; rewrites the owner wrote are never subject. */
+   *  `env.ITX`. Under it the resolver walls the INPUT expression (itx-expression-rewriting.ts
+   *  `#admit`: no fixed point, `cd` down only but for `itx.cd(path).append(…)`); rewrites the owner
+   *  wrote are never subject. */
   app?: true;
   /** THE PLATFORM ORIGIN the caller reached the platform on — what a public URL is composed from
    *  (`itx.url`, a signed file URL). Absent for a caller with none (a loaded worker's `env.ITX`, the
@@ -74,6 +75,30 @@ export function stampCaller<E extends { source?: StreamEventInput["source"] }>(
   if (caller.principal && caller.grant) source.grant = caller.grant;
   if (caller.platform) source.platform = true;
   return { ...event, source };
+}
+
+/** THE PLATFORM'S IDEMPOTENCY KEYS, which no other writer takes first: a key taken first answers the
+ *  platform's fact with the taker's event (a deletion that never starts, a grant that never ends) or
+ *  refuses it (a run that never settles, a repo never born). On a global context `account/…` and
+ *  `organization/…` are the platform's facts (grants.ts, session.ts), whoever else writes; on a
+ *  project's, `itx/…` (a run's settlement, a child's announcement, the apex), `project/…`, an
+ *  entity's lifecycle and a secret's lends are, and loaded code — anyone's, since anyone appends
+ *  anywhere — writes none of them. */
+export function refusePlatformIdempotencyKeys(
+  events: readonly { idempotencyKey?: string }[],
+  caller: Caller,
+  onGlobalContext: boolean,
+): void {
+  const platformKey = onGlobalContext
+    ? !caller.platform && /^(?:account|organization)\//
+    : caller.app && /^(?:itx|project|repo|workspace|secret)[/@]/;
+  if (!platformKey) return;
+  for (const { idempotencyKey } of events)
+    if (idempotencyKey && platformKey.test(idempotencyKey))
+      throw codedError(
+        "FORBIDDEN",
+        `idempotency key ${JSON.stringify(idempotencyKey)} is the platform's`,
+      );
 }
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();

@@ -693,14 +693,14 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   }
 
   async #executeRun(requestOffset: number, code: string): Promise<void> {
+    // The platform's own record (core-processor.ts `PLATFORM_ONLY_EVENT_TYPES`), straight onto the
+    // stream as the wake record's `interrupted` settlements are: no writer can append one.
     const settle = (settlement: RunSettlement) =>
-      this.#appendAndRunCommittedEffects([
-        {
-          type: "events.iterate.com/itx/run-settled",
-          idempotencyKey: `itx/run-settled:${requestOffset}`,
-          payload: { requestOffset, settlement },
-        },
-      ]);
+      this.#stream.append({
+        type: "events.iterate.com/itx/run-settled",
+        idempotencyKey: `itx/run-settled:${requestOffset}`,
+        payload: { requestOffset, settlement },
+      });
     try {
       // Settled within RUN_DEADLINE_MS, its value released (library.ts `runSettlementOf`).
       const settlement = await runSettlementOf(this.#scriptExecution(code));
