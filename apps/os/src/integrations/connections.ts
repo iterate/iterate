@@ -1,4 +1,4 @@
-// src/integrations/connections.ts — what the three providers (slack.ts, google.ts, github.ts) share.
+// src/integrations/connections.ts — what the providers (slack.ts, google.ts, …) share.
 // A CONNECTION is a name a project picks: its credential is the secret `/secrets/<provider>-<name>`,
 // its inbound events land on the plain context log `/integrations/<provider>/<name>`, and its record
 // is two platform facts on the project root, `events.iterate.com/<provider>/connected` and
@@ -17,8 +17,6 @@ import type { Env } from "../env.ts";
 import type { ItxEntrypointScope } from "../iterate-context.ts";
 import type { ProjectState } from "../project/contract.ts";
 import type { IntegrationConnectionRow, IntegrationProvider } from "./contract.ts";
-
-export type { IntegrationProvider };
 
 /** The bindings a provider acts through. */
 export type IntegrationEnv = Pick<Env, "DB" | "ITERATE_CONTEXT"> & AppConfigEnv;
@@ -211,6 +209,20 @@ export async function appendPlatformFact(
     [],
     { principal: null, platform: true },
   );
+}
+
+/** A connect's `<provider>/connected` on the owner's root: the row, less the provider its type
+ *  names. Every provider's connect lands through this one mechanism, so it builds the type from the
+ *  provider (the generic-mechanism exception, docs/coding-style.md "Event types"); the literal
+ *  types are contract.ts `IntegrationEventCatalog`'s, and verbs.ts `disconnectIntegration` builds
+ *  `<provider>/disconnected` the same way. */
+export async function appendConnected(scope: IntegrationScope, row: IntegrationConnectionRow) {
+  const { provider, ...payload } = row;
+  await appendPlatformFact(scope.env, scope.projectId, scope.rootPath, {
+    type: `events.iterate.com/${provider}/connected`,
+    payload,
+  });
+  return row;
 }
 
 /** A request through the owner root's egress, so a `getSecret(…)` placeholder is substituted in

@@ -1,5 +1,6 @@
 import { env, exports } from "cloudflare:workers";
 import { expect, test, vi } from "vitest";
+import type { SignInProvider } from "iterate/api";
 import { appSession } from "iterate/app-server";
 import {
   appConfigOf,
@@ -459,7 +460,7 @@ test("GitHub: a person who never approved iterate's Email addresses permission l
   expect(await controlPlane().identity("github", String(fakeUserIdOf("gh-noemail")))).toBeNull();
 });
 
-test.for<[string, "google" | "cloudflare" | "github"]>([
+test.for<[string, SignInProvider]>([
   ["Google", "google"],
   ["Cloudflare", "cloudflare"],
   ["GitHub", "github"],
@@ -581,7 +582,7 @@ test("a defect of ours after the provider answered is reported, and the person s
 // `next` — a refusal with `error` on it.
 const DASH_SESSIONS = "https://dash.test/sessions";
 
-test.for<[string, "google" | "cloudflare" | "github", Record<string, string>, string]>([
+test.for<[string, SignInProvider, Record<string, string>, string]>([
   ["Google", "google", { email: "g-add@signin.test" }, "g-add@signin.test"],
   ["Cloudflare", "cloudflare", { email: "cf-add@signin.test" }, "cf-add@signin.test"],
   ["GitHub", "github", { login: "gh-add", email: "gh-add@signin.test" }, "gh-add"],
@@ -855,7 +856,7 @@ test("adding a sign-in starts only from a browser signed in as the person the li
  *  `cancel` declines at the provider. */
 async function signInThroughFake(
   petshop: ReturnType<typeof petshopFakes>,
-  provider: "google" | "cloudflare" | "github",
+  provider: SignInProvider,
   choices: Record<string, string> | Record<string, string>[],
   link?: { session: string; person: string; next: string; sessionAtCallback?: string | string[] },
 ) {
@@ -921,7 +922,7 @@ function nextPageOf(response: Response) {
 }
 
 /** The person a provider's subject names: their own context, and their account's state. */
-async function personOf(provider: "google" | "cloudflare" | "github", subject: string) {
+async function personOf(provider: SignInProvider, subject: string) {
   const user = (await controlPlane().identity(provider, subject))!;
   const person = stub(
     DurableObjectNameCodec.stringify({ projectId: GLOBAL_PROJECT_ID, path: `/users/${user.id}` }),

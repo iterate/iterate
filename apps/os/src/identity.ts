@@ -211,7 +211,7 @@ async function providerFetch(step: string, input: string, init?: RequestInit) {
 
 export async function identityResponse(request: Request, env: Env) {
   const url = new URL(request.url);
-  const provider = (["cloudflare", "github", "google"] as const).find((name) =>
+  const provider = IdentityProvider.options.find((name) =>
     [PATHS[name], `${PATHS[name]}/callback`].includes(url.pathname),
   );
   if (!provider) return null;

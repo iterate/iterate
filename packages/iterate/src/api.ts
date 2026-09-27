@@ -147,7 +147,7 @@ export type SecretRefresh =
       kind: "oauth-refresh-token";
       tokenEndpoint: string;
       clientAuth?: ClientAuth;
-      client?: { platform: "slack" | "google" | "cloudflare" | "github" };
+      client?: { platform: IterateAppProvider };
     }
   /** A GitHub App installation's token (`POST <apiOrigin>/app/installations/<id>/access_tokens`
    *  with an App JWT) → `accessToken`, minted on first use and on a 401. The App is the deployment's
@@ -220,8 +220,28 @@ export type SecretHmacVerification = {
   field?: string;
 };
 
-/** The providers an integration connects through OAuth (`/api/integrations/<provider>/callback`). */
-export type OAuthIntegrationProvider = "slack" | "google" | "cloudflare";
+/** EVERY PROVIDER AN INTEGRATION CONNECTS, spelled once: a connection to one is the log
+ *  `/integrations/<provider>/<connection>` and the secret `/secrets/<provider>-<connection>`. The
+ *  kinds below are read off it. */
+export const INTEGRATION_PROVIDERS = [
+  "slack",
+  "google",
+  "cloudflare",
+  "github",
+  "waitrose",
+] as const;
+export type IntegrationProvider = (typeof INTEGRATION_PROVIDERS)[number];
+
+/** The providers a deployment holds an app of iterate's at (APP_CONFIG `integrations`): every one
+ *  but Waitrose, a username and a password. */
+export type IterateAppProvider = Exclude<IntegrationProvider, "waitrose">;
+
+/** The providers an integration connects through OAuth (`/api/integrations/<provider>/callback`):
+ *  GitHub's connect is its App's install instead. */
+export type OAuthIntegrationProvider = Exclude<IterateAppProvider, "github">;
+
+/** The providers a person signs in with, each through iterate's app there. */
+export type SignInProvider = Exclude<IterateAppProvider, "slack">;
 
 /** Whose OAuth app a secret's `beginOAuth` goes through: the deployment's (`platform`) or the
  *  project's own registered for that provider (`project`). */
@@ -723,13 +743,13 @@ export interface IterateContextApi {
    *  signed-in person to connect the provider to this project. */
   integrations: {
     connect(
-      provider: OAuthIntegrationProvider | "github" | "waitrose",
+      provider: IntegrationProvider,
       options?:
         | { scopes?: string[]; next?: string; connection?: string; account?: never }
         | { scopes?: string[]; next?: string; account: string; connection?: never },
     ): Promise<{ authorizationUrl?: string; connection: string }>;
     requestFromUser(
-      provider: OAuthIntegrationProvider | "github",
+      provider: IterateAppProvider,
       options?: { scopes?: string[] },
     ): Promise<{ url: string }>;
   };
@@ -959,14 +979,14 @@ export interface IterateSessionApi {
     mcpOrigin: string;
     /** the providers whose iterate app this deployment holds (APP_CONFIG `integrations`): a
      *  project connects through iterate's app only there, and brings its own app anywhere */
-    iterateAppProviders: ("slack" | "google" | "cloudflare" | "github")[];
+    iterateAppProviders: IterateAppProvider[];
     /** what iterate's app asks for there, by provider — what a project needs of your account before
      *  it uses it (`integrations.connect(provider, { account })`) */
-    iterateAppScopes: Partial<Record<"slack" | "google" | "cloudflare", string[]>>;
+    iterateAppScopes: Partial<Record<OAuthIntegrationProvider, string[]>>;
     /** the providers a person signs in with here: the ones a signed-in person can add to their
      *  account (the issuer's `/.auth/identity/<provider>?link=<userId>`); absent from a platform
      *  older than it, which offers none */
-    signInProviders?: ("google" | "cloudflare" | "github")[];
+    signInProviders?: SignInProvider[];
   };
   /** The grants this session may manage (a signed-in person's with the `account` scope): list and
    *  end its sessions and personal access tokens, and mint a personal access token — its bearer

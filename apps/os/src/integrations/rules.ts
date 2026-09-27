@@ -19,6 +19,7 @@
 // token lists every installation the user can merely read, while the connection's token acts with
 // the whole installation's permissions. So the human proves they administer the installation's
 // account: it is their own user account, or an organization they are an active admin of.
+import type { SignInProvider } from "iterate/api";
 import { z } from "zod";
 import { isRecord } from "../secrets.ts";
 
@@ -153,10 +154,6 @@ export function consentAccountRefusal(expected: string, data: unknown): string |
     ? `the provider answered for another account (${actual}) than this connection's (${expected}) — connect it as a new connection instead`
     : `the provider's answer names no account, so it cannot be checked against this connection's (${expected})`;
 }
-
-/** The providers a person signs in with (identity.ts), each through the deployment's one client for
- *  it: Google and Cloudflare speak OpenID Connect, GitHub its App's user authorization. */
-export type SignInProvider = "google" | "cloudflare" | "github";
 
 /** A sign-in's authorize parameters. Google and GitHub show their account picker every time
  *  (`prompt=select_account`), so "switch account" never signs the browser's last account in

@@ -18,11 +18,8 @@ import { ITX_GRANT_HEADER } from "./caller.ts";
 import { IterateContextDurableObject } from "./iterate-context-durable-object.ts";
 import type { Env as WorkerEnv } from "./env.ts";
 import { identityResponse } from "./identity.ts";
-import {
-  OAUTH_INTEGRATION_PROVIDERS,
-  SECRET_OAUTH_CALLBACK_PATH,
-  secretOAuthCallbackPathOf,
-} from "./secret-oauth.ts";
+import { OAUTH_INTEGRATION_PROVIDERS } from "./integrations/contract.ts";
+import { SECRET_OAUTH_CALLBACK_PATH, secretOAuthCallbackPathOf } from "./secret-oauth.ts";
 import { secretOAuthCallback } from "./secret-oauth-callback.ts";
 import { slackWebhookRoute } from "./integrations/slack.ts";
 import { githubCallbackRoute, githubWebhookRoute } from "./integrations/github.ts";

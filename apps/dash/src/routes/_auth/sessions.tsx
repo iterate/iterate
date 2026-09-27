@@ -15,7 +15,7 @@ import { useEffect, useRef, useState, type FormEvent } from "react";
 import { CheckIcon, CopyIcon } from "lucide-react";
 import { z } from "zod";
 import { cn } from "cn";
-import type { GrantKind, GrantRecord } from "iterate/api";
+import type { GrantKind, GrantRecord, IntegrationProvider } from "iterate/api";
 import { Avatar, AvatarFallback, AvatarImage } from "@iterate-com/ui/components/avatar";
 import { Button, buttonVariants } from "@iterate-com/ui/components/button";
 import { Checkbox } from "@iterate-com/ui/components/checkbox";
@@ -474,7 +474,7 @@ const PROVIDER_TITLES: Record<string, string> = {
   cloudflare: "Cloudflare",
   github: "GitHub",
   waitrose: "Waitrose",
-};
+} satisfies Record<IntegrationProvider, string>;
 
 const AccountConnections = z.looseObject({
   integrations: z
@@ -546,7 +546,9 @@ function ConnectedAccounts({ projects }: { projects: { id: string; slug: string 
               onError={(caught) =>
                 setError(caught instanceof Error ? caught.message : String(caught))
               }
-            />
+            >
+              Connect {PROVIDER_TITLES[provider]}
+            </ConnectButton>
           ))}
           {addGithub && (
             <a href={addGithub} className={cn(buttonVariants({ variant: "outline", size: "sm" }))}>

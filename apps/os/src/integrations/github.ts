@@ -17,8 +17,8 @@
 //     - with `setup_action=request`: an organization owner has yet to approve the install;
 //     - for an installation another project's connection holds: the offer to move it here
 //       (verbs.ts `confirmIntegrationMove`), once the human proved they administer it.
-//   disconnectGithub     → the route released, the secret deleted, `github/disconnected` (the App
-//                          stays installed; only its account can uninstall it)
+//   a disconnect (verbs.ts `PROVIDERS`) revokes nothing: the route released and the secret deleted,
+//   the App stays installed (only its account can uninstall it)
 //   githubWebhookRoute   → `POST /api/integrations/github/webhook` (iterate's App, routed) and
 //                          `…/webhook/<projectId>/<connection>` (a project's own App)
 import { codedError } from "iterate/lib";
@@ -31,10 +31,9 @@ import { callbackAuthorization } from "../secret-oauth-callback.ts";
 import { nextUrlOf, SECRET_OAUTH_TTL_MS } from "../secret-oauth.ts";
 import { isRecord, verifySecretHmac } from "../secrets.ts";
 import {
+  appendConnected,
   appendPlatformFact,
-  deleteTokenSecret,
   attemptKeyOf,
-  dropAttemptsOf,
   connectionPathOf,
   connectionRowOf,
   ignoredWebhook,
@@ -394,14 +393,12 @@ export async function connectGithubInstallation(
         `Minting the installation's token failed (${proof.status}): ${(await proof.text()).slice(0, 300)}`,
       );
     await proof.body?.cancel();
-    await appendPlatformFact(env, projectId, "/", {
-      type: "events.iterate.com/github/connected",
-      payload: {
-        connection,
-        client: attempt.client,
-        account: login,
-        externalId: installationId,
-      },
+    await appendConnected(scope, {
+      provider: "github",
+      connection,
+      client: attempt.client,
+      account: login,
+      externalId: installationId,
     });
   };
   if (attempt.client === "iterate" && routing === "route")
@@ -449,30 +446,6 @@ async function githubUserTokenOf(
       `GitHub refused the authorization code (${isRecord(data) ? String(data.error) : response.status}).`,
     );
   return data.access_token;
-}
-
-export async function disconnectGithub(
-  scope: IntegrationScope,
-  connection: string,
-  /** Not the owner's own choice: this installation of theirs moved to another project, and only
-   *  its route goes (one the connection took since stays). */
-  moved?: { externalId: string },
-): Promise<void> {
-  const { env, projectId } = scope;
-  const path = connectionPathOf("github", connection);
-  const controlPlane = new ControlPlane(env);
-  if (moved)
-    await controlPlane.releaseIntegrationRoute("github", moved.externalId, projectId, path);
-  else await controlPlane.releaseIntegrationRoutes(projectId, path);
-  await deleteTokenSecret(scope, "github", connection);
-  await dropAttemptsOf(scope.storage, "github", connection);
-  await appendPlatformFact(env, projectId, scope.rootPath, {
-    type: "events.iterate.com/github/disconnected",
-    payload: { connection, reason: moved ? "moved" : undefined },
-  });
-  // Again, once the row is gone: a failed move's undo that read the row before it went, and put
-  // the route back here meanwhile, finds it released (verbs.ts `confirmIntegrationMove`).
-  if (!moved) await controlPlane.releaseIntegrationRoutes(projectId, path);
 }
 
 /** Where GitHub sends the human back, or null when the path is not the callback's. The signed
