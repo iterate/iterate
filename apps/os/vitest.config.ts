@@ -83,6 +83,14 @@ const LONG_POLES = [
   "e2e/isolate-ceilings-deployed.e2e.test.ts",
   "e2e/isolate-ceilings-slow-client.e2e.test.ts",
 ];
+/** FIRST OF ALL, IN A RUNTIME NOTHING RAN IN YET. agent-revive evicts a context whose facet it has
+ *  just aborted mid model call. In a runtime an earlier file warmed, that eviction waits out the
+ *  claim's alarm (20 s) or `evictDurableObject`'s own 30 s bound in about half the runs (6 of 12 in
+ *  CI, 2026-09-27), with fresh-file.ts doing nothing at all as much as with it: what the earlier
+ *  file left is not involved. First in a fresh runtime, as every file was when each had its own,
+ *  it passed 22 of 22. */
+const FRESH_RUNTIME_FIRST = ["apps/agents/__workers-tests__/agent-revive.test.ts"];
+
 class LongPolesFirst extends BaseSequencer {
   override async sort(files: TestSpecification[]): Promise<TestSpecification[]> {
     // `--sequence.seed=<n>` puts every file in an order drawn from n instead: the check that no file
@@ -93,10 +101,14 @@ class LongPolesFirst extends BaseSequencer {
     const ordered = await super.sort(files);
     const rank = (spec: TestSpecification) =>
       LONG_POLES.findIndex((pole) => spec.moduleId.endsWith(pole));
+    const fresh = ordered.filter((spec) =>
+      FRESH_RUNTIME_FIRST.some((file) => spec.moduleId.endsWith(file)),
+    );
     const poles = ordered.filter((spec) => rank(spec) >= 0).sort((a, b) => rank(a) - rank(b));
-    const rest = ordered.filter((spec) => rank(spec) < 0);
+    const rest = ordered.filter((spec) => rank(spec) < 0 && !fresh.includes(spec));
     const sharingRuntimes = rest.filter((spec) => spec.project.config.isolate === false);
     return [
+      ...fresh,
       ...poles,
       ...sharingRuntimes,
       ...rest.filter((spec) => !sharingRuntimes.includes(spec)),
