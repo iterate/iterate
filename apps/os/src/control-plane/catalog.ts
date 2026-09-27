@@ -201,7 +201,7 @@ export class ControlPlaneDatabase {
   /** Whether `projectId` names a project that was deleted and is not held again (a seed restores
    *  one under its id): a root context is never born for it (iterate-context-durable-object.ts). */
   async deletedProject(projectId: string): Promise<boolean> {
-    return (await deletedProject(this.#client, { id: projectId })) !== null;
+    return Boolean(await deletedProject(this.#client, { id: projectId }));
   }
   /** Every project, oldest first. */
   projects(): Promise<ProjectRecord[]> {
