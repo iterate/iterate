@@ -262,6 +262,15 @@ export class PetshopStore {
     return await this.#load();
   }
 
+  /** An empty store takes `initial()`'s state in place of the seed, and answers it; a store that
+   *  has state keeps it, and answers null. */
+  async startFrom(initial: () => Promise<PetshopState>): Promise<PetshopState | null> {
+    if (await this.#storage.get<PetshopState>("state")) return null;
+    const state = await initial();
+    await this.#storage.put("state", state);
+    return state;
+  }
+
   async createClient(input: {
     redirectUris?: string[];
     public?: boolean;
