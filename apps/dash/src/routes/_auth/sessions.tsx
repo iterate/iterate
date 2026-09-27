@@ -15,7 +15,12 @@ import { useEffect, useRef, useState, type FormEvent } from "react";
 import { CheckIcon, CopyIcon } from "lucide-react";
 import { z } from "zod";
 import { cn } from "cn";
-import type { GrantKind, GrantRecord, IntegrationProvider } from "iterate/api";
+import {
+  INTEGRATION_PROVIDER_NAMES,
+  INTEGRATION_PROVIDERS,
+  type GrantKind,
+  type GrantRecord,
+} from "iterate/api";
 import { Avatar, AvatarFallback, AvatarImage } from "@iterate-com/ui/components/avatar";
 import { Button, buttonVariants } from "@iterate-com/ui/components/button";
 import { Checkbox } from "@iterate-com/ui/components/checkbox";
@@ -467,20 +472,15 @@ function SessionsPage() {
 /** The providers a person connects on their own account here (GitHub comes from signing in). */
 const PERSONAL_CONNECT_PROVIDERS: ("google" | "cloudflare")[] = ["google", "cloudflare"];
 
-/** The provider names a person's connection shows. */
-const PROVIDER_TITLES: Record<string, string> = {
-  slack: "Slack",
-  google: "Google",
-  cloudflare: "Cloudflare",
-  github: "GitHub",
-  waitrose: "Waitrose",
-} satisfies Record<IntegrationProvider, string>;
-
 const AccountConnections = z.looseObject({
   integrations: z
     .record(
       z.string(),
-      z.object({ provider: z.string(), connection: z.string(), account: z.string() }),
+      z.object({
+        provider: z.enum(INTEGRATION_PROVIDERS),
+        connection: z.string(),
+        account: z.string(),
+      }),
     )
     .default({}),
   /** The account's secrets, with the projects each one's connection is connected to (its lends). */
@@ -547,7 +547,7 @@ function ConnectedAccounts({ projects }: { projects: { id: string; slug: string 
                 setError(caught instanceof Error ? caught.message : String(caught))
               }
             >
-              Connect {PROVIDER_TITLES[provider]}
+              Connect {INTEGRATION_PROVIDER_NAMES[provider]}
             </ConnectButton>
           ))}
           {addGithub && (
@@ -591,7 +591,7 @@ function ConnectedAccounts({ projects }: { projects: { id: string; slug: string 
                 <div className="min-w-0 flex-1">
                   <p className="font-medium [overflow-wrap:anywhere]">{row.account}</p>
                   <p className="text-xs text-muted-foreground [overflow-wrap:anywhere]">
-                    {PROVIDER_TITLES[row.provider] || row.provider}
+                    {INTEGRATION_PROVIDER_NAMES[row.provider]}
                     {projectsUsing.length > 0 && ` · Used by ${projectsUsing.join(", ")}`}
                   </p>
                 </div>

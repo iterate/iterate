@@ -6,7 +6,7 @@
 // The project facet (project/durable-object.ts) runs connect and disconnect, and finishes a connect
 // when the provider's callback comes back; the webhooks are plain fetch functions in worker.ts.
 import { errorCode } from "iterate/lib";
-import type { StreamPage } from "iterate/api";
+import { INTEGRATION_PROVIDER_NAMES, type StreamPage } from "iterate/api";
 import type { StreamEventInput } from "iterate/stream/processor";
 import { z } from "zod";
 import { appConfigOf, sessionSigningSecretOf, type AppConfigEnv } from "../app-config.ts";
@@ -108,11 +108,6 @@ export type HeldToken = { externalId: string; account: string; until: number };
 /** How long a move offer stands: the human reads one sentence and presses one button. */
 export const MOVE_OFFER_TTL_MS = 10 * 60_000;
 
-const PROVIDER_TITLES = { slack: "Slack", github: "GitHub" } satisfies Record<
-  RoutedProvider,
-  string
->;
-
 /** The provider and connection a move offer names, read before its signature is checked — for
  *  serializing its confirmation on that connection only; `confirmIntegrationMove` verifies it. */
 export function moveOfferConnectionOf(offer: unknown): { provider: string; connection: string } {
@@ -144,7 +139,7 @@ export async function moveOfferLanding(
     : null;
   if (!landing)
     return new Response(
-      `The ${PROVIDER_TITLES[move.provider]} account ${move.account} is connected to ${holderSlug || "another project"}. Connect it from the Dash's Integrations page to move it here.\n`,
+      `The ${INTEGRATION_PROVIDER_NAMES[move.provider]} account ${move.account} is connected to ${holderSlug || "another project"}. Connect it from the Dash's Integrations page to move it here.\n`,
       {
         status: 409,
         headers: { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store" },
