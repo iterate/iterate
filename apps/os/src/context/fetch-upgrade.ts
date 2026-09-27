@@ -397,6 +397,7 @@ export class RpcStubFetchServer {
     if (!upgrade) return undefined;
     if (upgrade.replaced) return null;
     const peerSide = upgrade.side === "eyeball" ? "leg" : "eyeball";
+    // the peer's sockets are found by their upgrade tag, so each carries FetchUpgradeAttachment
     return (
       this.#ctx
         .getWebSockets(upgradeTag(peerSide, upgrade.upgradeId))
