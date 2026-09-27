@@ -141,6 +141,42 @@ test("a plain test that failed every attempt leaves an unexpected-error flake re
   ]);
 });
 
+// A test that skips itself (its context's `skip()`) keeps its declared mode `run` and no timing:
+// only its result says it skipped.
+test.for([
+  { mode: "skip", state: "skipped", reason: "passed", expectedState: "skip" },
+  { mode: "run", state: "skipped", reason: "passed", expectedState: "skip" },
+  { mode: "run", state: "skipped", reason: "failed", expectedState: "skip" },
+  { mode: "run", state: "passed", reason: "passed", expectedState: "passed" },
+  // a cancelled run cut its tests short: they did not choose to skip
+  { mode: "run", state: "skipped", reason: "interrupted", expectedState: "passed" },
+] as const)(
+  "a test declared $mode that ended $state in a run $reason is recorded as expected to $expectedState",
+  async ({ mode, state, reason, expectedState }) => {
+    using directory = temporaryDirectory();
+    vi.stubEnv("TEST_TELEMETRY_ARTIFACT_DIR", directory.path);
+    const testCase = {
+      fullName: "sign-in > keeps a connection",
+      name: "keeps a connection",
+      options: { mode },
+      diagnostic: () => undefined,
+      result: () => ({ state }),
+    };
+    const testModule = {
+      moduleId: "/repo/sign-in.e2e.test.ts",
+      children: { allTests: () => [testCase] },
+    };
+
+    await new RetryTelemetryReporter({ testKind: "e2e", suite: "vitest" }).onTestRunEnd(
+      [testModule],
+      [],
+      reason,
+    );
+
+    expect(onlyArtifact(directory.path).tests).toMatchObject([{ state, expectedState }]);
+  },
+);
+
 test("writes unit tests without performing network I/O", async () => {
   using directory = temporaryDirectory();
   vi.stubEnv("TEST_TELEMETRY_ARTIFACT_DIR", directory.path);

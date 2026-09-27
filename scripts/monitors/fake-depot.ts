@@ -108,12 +108,18 @@ export type SummaryTest = {
   name: string;
   tags?: string[];
   outcome?: "pass" | "fail" | "skip";
+  retries?: number;
   failed?: boolean;
   error?: string;
 };
 
-/** A suite summary as the finalizer writes it (packages/shared/src/test-support/flake-suite-summary.ts). */
-export function summary(tests: SummaryTest[], status: "complete" | "incomplete" = "complete") {
+/** A suite summary as the finalizer writes it (scripts/ci/flake-suite-summary.ts): an incomplete
+ *  one says why in `diagnostics`, a cancelled job's unless given. */
+export function summary(
+  tests: SummaryTest[],
+  status: "complete" | "incomplete" = "complete",
+  diagnostics = status === "incomplete" ? ["CI run cancelled"] : [],
+) {
   return {
     headSha: "abc",
     branch: "main",
@@ -121,17 +127,18 @@ export function summary(tests: SummaryTest[], status: "complete" | "incomplete" 
     startedAt: "2026-09-26T20:00:00.000Z",
     finishedAt: "2026-09-26T20:05:00.000Z",
     testCount: tests.length,
-    tests: tests.map(({ name, tags, outcome, failed = false, error }) => ({
+    tests: tests.map(({ name, tags, outcome, retries, failed = false, error }) => ({
       name,
-      outcome: outcome || (failed ? "fail" : "pass"),
+      outcome: outcome || (failed || retries ? "fail" : "pass"),
       durationMs: 1000,
       tags,
+      retries,
       failed,
       error,
     })),
-    unknownFlakeCount: 0,
+    unknownFlakeCount: tests.filter((test) => test.retries || test.failed).length,
     failedCount: tests.filter((test) => test.failed).length,
-    diagnostics: status === "incomplete" ? ["CI run cancelled"] : [],
+    diagnostics,
     runUrl: "https://depot.dev/run",
   };
 }
@@ -147,6 +154,8 @@ export function mainRun(
     e2e?: string;
     specs?: string;
     e2eTests?: SummaryTest[];
+    /** The E2E tests summary's status and diagnostics, complete unless given. */
+    e2eSummary?: { status: "incomplete"; diagnostics: string[] };
     specsTests?: SummaryTest[];
     running?: boolean;
   },
@@ -165,13 +174,18 @@ export function mainRun(
             { attemptId: `${id}-${key}-2`, attempt: 2 },
           ],
   });
-  const records = (suite: string, key: string, tests: SummaryTest[]) => ({
+  const records = (
+    suite: string,
+    key: string,
+    tests: SummaryTest[],
+    status?: { status: "incomplete"; diagnostics: string[] },
+  ) => ({
     // the older attempt's records, which a retried job keeps beside the newest's
     [`flake-records-${suite}-attempt-${id}-${key}-1`]: {
       "suite-summary.json": JSON.stringify(summary([{ name: "an older attempt", failed: true }])),
     },
     [`flake-records-${suite}-attempt-${id}-${key}-2`]: {
-      "suite-summary.json": JSON.stringify(summary(tests)),
+      "suite-summary.json": JSON.stringify(summary(tests, status?.status, status?.diagnostics)),
     },
   });
   return {
@@ -196,6 +210,7 @@ export function mainRun(
               "preview-e2e",
               "e2e",
               input.e2eTests || [{ name: "a slow row", tags: ["slow"] }],
+              input.e2eSummary,
             ),
             ...records("specs", "specs", input.specsTests || [{ name: "sends a message" }]),
           },
