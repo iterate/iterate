@@ -4,9 +4,7 @@
  * Why a test expires an account: state.ts `PetshopState.accessTokenEpochs`.
  */
 import { expect, test } from "vitest";
-import { fakeAuthorizationServer } from "./authorization-server.ts";
 import { memoryPetshop } from "./memory-state.ts";
-import { nowSeconds, seal } from "./seal.ts";
 import { DEFAULT_CLIENT_ID, DEFAULT_CLIENT_SECRET } from "./state.ts";
 
 const SIGN_IN_FAKES = [
@@ -80,40 +78,6 @@ test.for(SIGN_IN_FAKES)(
     });
   },
 );
-
-test("a token sealed before tokens named their account answers to its client's epoch alone", async () => {
-  const petshop = memoryPetshop();
-  const google = fakeAuthorizationServer<{ email: string }>(
-    petshop,
-    "google",
-    (grant) => grant.email,
-  );
-  const sealedBefore = await seal(
-    {
-      t: "google-access",
-      clientId: DEFAULT_CLIENT_ID,
-      epoch: 0,
-      exp: nowSeconds() + 120,
-      grant: { email: "ada@petshop.test" },
-    },
-    petshop.sealKey,
-  );
-
-  const opened = await google.openAccessToken(sealedBefore);
-  await petshop.state.expireAccessTokens(DEFAULT_CLIENT_ID, "ada@petshop.test");
-  const afterAccountExpiry = await google.openAccessToken(sealedBefore);
-  await petshop.state.expireAccessTokens(DEFAULT_CLIENT_ID);
-
-  expect({
-    opened,
-    afterAccountExpiry,
-    afterClientExpiry: await google.openAccessToken(sealedBefore),
-  }).toMatchObject({
-    opened: { grant: { email: "ada@petshop.test" } },
-    afterAccountExpiry: { grant: { email: "ada@petshop.test" } },
-    afterClientExpiry: null,
-  });
-});
 
 type Fake = (typeof SIGN_IN_FAKES)[number];
 type Petshop = ReturnType<typeof memoryPetshop>;

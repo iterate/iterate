@@ -182,10 +182,9 @@ test("oauth-refresh-token, end to end against the petshop: discovery, consent, t
   const { token_endpoint: tokenEndpoint } = await petshopAuthorizationServer();
   expect(tokenEndpoint).toBe(`${petshop}/oauth/token`);
 
-  // 2. consent + code exchange, as the trusted party — a client of its own, so forcing ITS tokens to
-  //    expire touches no other test
+  // 2. consent + code exchange, as the trusted party, for ada at a client of the row's own
   const client = await petshopMintClient();
-  const first = await petshopConnect(client);
+  const first = await petshopConnect(client, "ada");
 
   // 3. the secret
   await itx.secrets.set(
@@ -205,13 +204,13 @@ test("oauth-refresh-token, end to end against the petshop: discovery, consent, t
   // 4. a call — the token is there, so no strategy runs
   expect(await bearerCall(itx, "/secrets/petshop", "/api/me")).toMatchObject({
     status: 200,
-    body: { clientId: client.clientId },
+    body: { sub: "ada", clientId: client.clientId },
   });
   const secret = itx.cd("/secrets/petshop");
   expect(await refreshedFacts(secret)).toEqual([]);
 
   // 5. expiry → refresh inside the DO → the retried call succeeds; the run is a fact on the path
-  await petshopExpireTokens(client.clientId);
+  await petshopExpireTokens(client.clientId, "ada");
   expect(await bearerCall(itx, "/secrets/petshop", "/api/me")).toMatchObject({
     status: 200,
     body: { clientId: client.clientId },
@@ -221,7 +220,7 @@ test("oauth-refresh-token, end to end against the petshop: discovery, consent, t
   // 6. rotation: the refresh in step 5 handed the DO a NEW refresh token, and it kept that one — so
   //    revoking the original changes nothing for the next expiry
   await petshopRevokeRefreshToken(first.refreshToken);
-  await petshopExpireTokens(client.clientId);
+  await petshopExpireTokens(client.clientId, "ada");
   expect(await bearerCall(itx, "/secrets/petshop", "/api/pets")).toMatchObject({ status: 200 });
 
   // 7. revocation of the CURRENT refresh token: the next refresh grant is invalid_grant, and the
@@ -270,12 +269,12 @@ test("oauth-refresh-token through a token-endpoint outage: one failed refresh, t
   const client = await petshopMintClient();
   await itx.secrets.set(
     "/secrets/petshop",
-    { ...client, ...(await petshopConnect(client)) },
+    { ...client, ...(await petshopConnect(client, "ada")) },
     { urls: [petshop], refresh: { kind: "oauth-refresh-token", tokenEndpoint } },
   );
   const secret = itx.cd("/secrets/petshop");
 
-  await petshopExpireTokens(client.clientId);
+  await petshopExpireTokens(client.clientId, "ada");
   await petshopFailTokenEndpoint(client.clientId, 1);
   // One scheduled 500: had the object retried the refresh, the second grant would have won and
   // this call would be a 200.
@@ -340,6 +339,7 @@ test("beginOAuth, confidential client, in a catalogued project: authorize URL ou
   expect(authorize.searchParams.get("code_challenge_method")).toBe("S256");
   expect(authorizationUrl).not.toContain(client.clientSecret);
   authorize.searchParams.set("approve", "1");
+  authorize.searchParams.set("user", "ada");
   const consent = await fetch(authorize, { redirect: "manual" });
   expect(consent).toMatchObject({ status: 302 });
   const back = new URL(consent.headers.get("location")!);
@@ -396,9 +396,9 @@ test("beginOAuth, confidential client, in a catalogued project: authorize URL ou
   // now an ordinary oauth-refresh-token secret: a call, expiry, transparent refresh
   expect(await bearerCall(itx, "/secrets/petshop", "/api/me")).toMatchObject({
     status: 200,
-    body: { clientId: client.clientId },
+    body: { sub: "ada", clientId: client.clientId },
   });
-  await petshopExpireTokens(client.clientId);
+  await petshopExpireTokens(client.clientId, "ada");
   expect(await bearerCall(itx, "/secrets/petshop", "/api/me")).toMatchObject({
     status: 200,
     body: { clientId: client.clientId },
@@ -435,6 +435,7 @@ test("beginOAuth, public client (RFC 7591 registration, PKCE alone, client_id in
   expect(authorize.searchParams.get("client_id")).toBe(clientId);
   expect(authorize.searchParams.get("redirect_uri")).toBe(callback);
   authorize.searchParams.set("approve", "1");
+  authorize.searchParams.set("user", "ada");
   const consent = await fetch(authorize, { redirect: "manual" });
   expect(consent).toMatchObject({ status: 302 });
   const back = new URL(consent.headers.get("location")!);
@@ -454,10 +455,10 @@ test("beginOAuth, public client (RFC 7591 registration, PKCE alone, client_id in
   ]);
   expect(await bearerCall(itx, "/secrets/petshop-public", "/api/me")).toMatchObject({
     status: 200,
-    body: { clientId },
+    body: { sub: "ada", clientId },
   });
   // expiry → the refresh grant with client_id in the body (no Basic header to send) → 200
-  await petshopExpireTokens(clientId);
+  await petshopExpireTokens(clientId, "ada");
   expect(await bearerCall(itx, "/secrets/petshop-public", "/api/me")).toMatchObject({
     status: 200,
     body: { clientId },

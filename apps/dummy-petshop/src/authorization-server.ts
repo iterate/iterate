@@ -95,9 +95,6 @@ export async function openAccessToken<Grant>(
   if (access?.t !== t || access.exp <= nowSeconds()) return null;
   const state = await deps.state.getState();
   if (access.epoch !== accessTokenEpochFor(state, access.clientId)) return null;
-  // a token with no `account` answers to its client's epoch alone, so outstanding tokens stay live;
-  // the longest-lived, GitHub's user token, lives 8 h
-  if (!access.account) return access;
   const accountKey = accountRevocationKey(access.clientId, access.account);
   if (access.accountEpoch !== accessTokenEpochFor(state, accountKey)) return null;
   return access;

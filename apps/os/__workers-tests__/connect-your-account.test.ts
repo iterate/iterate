@@ -54,7 +54,7 @@ test("a project connects your Google account in one click: its uses run through 
     body: { emailAddress: "ada@example.test" },
   });
   // an expired token is refreshed at the person's connection, through iterate's client
-  await petshop.state.expireAccessTokens("petshop-default");
+  await petshop.state.expireAccessTokens("petshop-default", "ada@example.test");
   expect(await gmailProfile(member.itx, path)).toMatchObject({ status: 200 });
   const uses = (await personalLog(member, path)).filter(
     (event) => event.type === "events.iterate.com/secret/used",

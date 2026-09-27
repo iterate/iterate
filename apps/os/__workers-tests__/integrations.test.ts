@@ -906,7 +906,7 @@ test("Google, iterate's client: the callback records the account on /", async ()
 test("Google, iterate's client: Gmail through egress, and an expired token refreshed through iterate's client", async () => {
   const { member, petshop } = await googleConnected("google-refresh");
   expect(await gmailProfile(member.itx)).toMatchObject({ emailAddress: "jonas@example.test" });
-  await petshop.state.expireAccessTokens("petshop-default");
+  await petshop.state.expireAccessTokens("petshop-default", "jonas@example.test");
   expect(await gmailProfile(member.itx)).toMatchObject({ emailAddress: "jonas@example.test" });
   expect(tokenGrantsOf(petshop)).toEqual([
     { grant: "authorization_code", client: "petshop-default:petshop-default-secret" },
@@ -943,7 +943,7 @@ test("Google, the project's own client: the refresh uses the client in the secre
   const app = await petshop.state.createClient({});
   await member.itx.secrets.set("/secrets/google-acme", app, { urls: ["https://google.test"] });
   await connected(petshop, member, "google", "email=jonas@example.test", { client: "project" });
-  await petshop.state.expireAccessTokens(app.clientId);
+  await petshop.state.expireAccessTokens(app.clientId, "jonas@example.test");
   expect(await gmailProfile(member.itx)).toMatchObject({ emailAddress: "jonas@example.test" });
   expect(tokenGrantsOf(petshop)).toEqual([
     { grant: "authorization_code", client: `${app.clientId}:${app.clientSecret}` },

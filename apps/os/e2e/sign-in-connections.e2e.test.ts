@@ -39,8 +39,9 @@ deployedOnly(
       status: 200,
       body: { emailAddress: email },
     });
-    // every outstanding token of the fake's client answers 401 now: the person's secret refreshes
-    await petshopExpireTokens("petshop-default");
+    // every outstanding token the person holds from the fake's client answers 401 now, and no one
+    // else's (the GitHub and Cloudflare rows sign in through the same client): their secret refreshes
+    await petshopExpireTokens("petshop-default", email);
     expect(await gmailProfile(itx, path)).toMatchObject({
       status: 200,
       body: { emailAddress: email },
