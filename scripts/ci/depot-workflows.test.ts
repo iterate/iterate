@@ -43,10 +43,13 @@ type WorkflowJob = {
   name?: string;
   needs?: string | string[];
   permissions?: Record<string, string>;
-  "runs-on": {
-    image?: string;
-    size?: string;
-  };
+  /** A Depot size and image, or a stock image's label (`depot-ubuntu-24.04-8`). */
+  "runs-on":
+    | string
+    | {
+        image?: string;
+        size?: string;
+      };
   "timeout-minutes"?: number;
   steps?: WorkflowStep[];
 };
@@ -615,20 +618,89 @@ test("a step named for the baked reconcile runs it", () => {
   expect(misnamed).toEqual([]);
 });
 
-// The Test job installs on purpose: its install pages the lazily loaded image in (test.yml).
-test("jobs on the baked image install no toolchain or dependencies of their own, but Test", () => {
+// The Test job, which installs its own, runs on Depot's stock image (the next test).
+test("jobs on the baked image install no toolchain or dependencies of their own", () => {
   const install = /pnpm install|setup-node|action-setup|cli\.doppler\.com/;
   const ownInstalls = depotWorkflowFiles.flatMap((file) =>
     Object.entries(loadWorkflow(file).jobs).flatMap(([jobId, job]) =>
-      job["runs-on"].image === bakedImage
+      typeof job["runs-on"] === "object" && job["runs-on"].image === bakedImage
         ? (job.steps || [])
             .filter((step) => install.test(`${step.run} ${step.uses}`))
             .map((step) => `${file} ${jobId}: ${step.name}`)
         : [],
     ),
   );
-  expect(ownInstalls).toEqual([
-    ".depot/workflows/test.yml test: Install dependencies (pages the baked tree in)",
+  expect(ownInstalls).toEqual([]);
+});
+
+// Depot's stock image starts warm on any host, and the Test job writes the files its tests read
+// (docs/depot-ci.md#the-test-job-runs-on-depots-stock-image). Depot Cache has no branch scope: a
+// run on any branch can write any key. So its one reader is the Test job, never a deploy, and only
+// a main push writes pnpm's store.
+test("the Test job sets up its toolchain on Depot's stock image, with pnpm's store from Depot Cache", () => {
+  const file = ".depot/workflows/test.yml";
+  const workflow = loadWorkflow(file);
+  const steps = workflow.jobs.test.steps ?? [];
+  const step = (name: string) => steps.find((candidate) => candidate.name === name);
+
+  expect(workflow.jobs.test["runs-on"]).toBe("depot-ubuntu-24.04-8");
+  // Node from .nvmrc and pnpm from the root `packageManager`, the versions every checkout declares
+  expect(step("Setup Node")).toMatchObject({
+    uses: "actions/setup-node@v4",
+    with: { "node-version-file": ".nvmrc" },
+  });
+  expect(step("Setup pnpm")).toMatchObject({ uses: "pnpm/action-setup@v4" });
+  expect(step("Setup pnpm")?.with).toBeUndefined();
+  expect(readPackageJson(".").packageManager).toMatch(/^pnpm@\d+\.\d+\.\d+$/u);
+  // Doppler's CLI at one release, checked against its SHA-256
+  expect(step("Setup Doppler")?.env).toMatchObject({
+    DOPPLER_CLI_VERSION: expect.stringMatching(/^\d+\.\d+\.\d+$/u),
+    DOPPLER_CLI_SHA256: expect.stringMatching(/^[0-9a-f]{64}$/u),
+  });
+  expect(step("Setup Doppler")?.run).toContain("sha256sum --check");
+
+  // pnpm reads its store from `npm_config_store_dir`; the cache steps name the same path
+  const store = workflow.env?.NPM_CONFIG_STORE_DIR;
+  expect(store).toBe("/home/runner/.pnpm-store");
+  const restore = step("Restore pnpm's store");
+  expect(restore).toMatchObject({
+    id: "pnpm-store",
+    uses: "actions/cache/restore@v4",
+    "continue-on-error": true,
+    with: {
+      path: "${{ env.NPM_CONFIG_STORE_DIR }}",
+      key: "pnpm-store-${{ hashFiles('pnpm-lock.yaml', 'pnpm-workspace.yaml', 'patches/**') }}",
+      "restore-keys": "pnpm-store-",
+    },
+  });
+  const install = steps.findIndex((candidate) => candidate.name === "Install dependencies");
+  expect(steps[install]?.run).toBe("pnpm install --frozen-lockfile --prefer-offline");
+  expect(steps.indexOf(restore!)).toBeLessThan(install);
+  // saved from a main push that missed the exact key, pruned to what that install linked
+  expect(step("Prune pnpm's store")).toMatchObject({
+    id: "prune-store",
+    if: "${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.pnpm-store.outputs.cache-hit != 'true' }}",
+    run: "pnpm store prune",
+  });
+  expect(step("Save pnpm's store")).toMatchObject({
+    if: "${{ !cancelled() && steps.prune-store.outcome == 'success' }}",
+    uses: "actions/cache/save@v4",
+    "continue-on-error": true,
+    with: { path: restore?.with?.path, key: "${{ steps.pnpm-store.outputs.cache-primary-key }}" },
+  });
+  // pnpm checks what it links from the store against the store's index
+  expect(JSON.stringify(workflow)).not.toMatch(/verify[-_]store[-_]integrity/iu);
+
+  const cacheSteps = depotWorkflowFiles.flatMap((path) =>
+    Object.entries(loadWorkflow(path).jobs).flatMap(([jobId, job]) =>
+      (job.steps || [])
+        .filter((candidate) => candidate.uses?.startsWith("actions/cache"))
+        .map((candidate) => `${path} ${jobId}: ${candidate.name}`),
+    ),
+  );
+  expect(cacheSteps).toEqual([
+    ".depot/workflows/test.yml test: Restore pnpm's store",
+    ".depot/workflows/test.yml test: Save pnpm's store",
   ]);
 });
 
@@ -1024,13 +1096,19 @@ test.each([
     // the folder, each only reading it (docs/depot-ci.md#parallel-steps); then the report
     expect(index("scripts/ci/upload-test-telemetry.ts")).toBeLessThan(steps.indexOf(write!));
     const artifacts = steps.filter((step) => step.uses === "actions/upload-artifact@v4");
-    const block = readWorkflow(file).jobs[jobId]?.steps?.find((step) => step.parallel);
-    expect(block?.["fail-fast"]).toBe(false);
-    expect(block?.parallel?.map((step) => step.name)).toEqual(
-      [upload, ...artifacts].map((step) => step?.name),
+    // and, in the Test job, the saves to Depot Cache, which read no evidence
+    const uploads = [
+      upload,
+      ...artifacts,
+      ...steps.filter((step) => step.uses === "actions/cache/save@v4"),
+    ];
+    const block = readWorkflow(file).jobs[jobId]?.steps?.find((step) =>
+      step.parallel?.some((inner) => inner.id === "evidence-upload"),
     );
+    expect(block?.["fail-fast"]).toBe(false);
+    expect(block?.parallel?.map((step) => step.name)).toEqual(uploads.map((step) => step?.name));
     expect(steps.indexOf(write!)).toBeLessThan(steps.indexOf(upload!));
-    expect(steps.indexOf(report!)).toBe(steps.indexOf(artifacts.at(-1)!) + 1);
+    expect(steps.indexOf(report!)).toBe(steps.indexOf(uploads.at(-1)!) + 1);
     // the runners write into the folder
     const telemetryDirectories = [
       job.env?.TEST_TELEMETRY_ARTIFACT_DIR,
@@ -1264,6 +1342,7 @@ function readVitestConfig(directory: string) {
 function readPackageJson(directory: string) {
   return JSON.parse(readFileSync(resolve(repoRoot, directory, "package.json"), "utf8")) as {
     name: string;
+    packageManager?: string;
     scripts?: Record<string, string>;
     dependencies?: Record<string, string>;
     devDependencies?: Record<string, string>;

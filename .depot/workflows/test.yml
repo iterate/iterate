@@ -13,9 +13,9 @@ concurrency:
   group: test-${{ github.head_ref || github.ref_name || github.run_id }}
   cancel-in-progress: true
 env:
-  # The pnpm store Depot Cache restores (below), on the checkout's filesystem so pnpm hard-links
-  # node_modules from it.
-  PNPM_CONFIG_STORE_DIR: /home/runner/.pnpm-store
+  # pnpm's store, which Depot Cache restores (below). On the checkout's filesystem, so pnpm
+  # hard-links node_modules from it. pnpm 10 reads `npm_config_*`, not `pnpm_config_*`.
+  NPM_CONFIG_STORE_DIR: /home/runner/.pnpm-store
 
 jobs:
   test:
@@ -74,20 +74,24 @@ jobs:
               echo "$dir" >> "$GITHUB_PATH"
               "$dir/doppler" setup --config dev --project test
           # PNPM'S STORE FROM DEPOT CACHE: the one saved for these install inputs, else the newest
-          # one saved, whose missing packages the install fetches from the npm registry. Saved
-          # below, from main only.
+          # one saved, whose missing packages the install fetches from the npm registry.
           - name: Restore pnpm's store
             id: pnpm-store
             uses: actions/cache/restore@v4
             continue-on-error: true
             timeout-minutes: 2
             with:
-              path: ${{ env.PNPM_CONFIG_STORE_DIR }}
+              path: ${{ env.NPM_CONFIG_STORE_DIR }}
               key: pnpm-store-${{ hashFiles('pnpm-lock.yaml', 'pnpm-workspace.yaml', 'patches/**') }}
               restore-keys: pnpm-store-
       - name: Install dependencies
-        id: install
         run: pnpm install --frozen-lockfile --prefer-offline
+      # A main push whose install inputs no run saved yet saves the store (below), cut to the
+      # packages this install linked: the restore may have been an older store.
+      - name: Prune pnpm's store
+        id: prune-store
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.pnpm-store.outputs.cache-hit != 'true' }}
+        run: pnpm store prune
       - name: Run Tests
         id: tests
         env:
@@ -168,18 +172,18 @@ jobs:
               path: test-results
               include-hidden-files: true
               if-no-files-found: error
-          # PNPM'S STORE FOR THE NEXT RUNS, from a main push whose install inputs no run saved yet.
-          # Depot Cache has no branch scope: any run can write any key, a pull request's too, by
-          # editing this file. So only main's runs save, pnpm checks each file it links against the
-          # store's index (`verify-store-integrity`, on by default), and nothing but this job reads
-          # the cache (scripts/ci/depot-workflows.test.ts): never a deploy.
+          # PNPM'S STORE FOR THE NEXT RUNS, the one pruned above. Depot Cache has no branch scope:
+          # any run can write any key, a pull request's too, by editing this file. So only main's
+          # runs save, pnpm checks each file it links against the store's index
+          # (`verify-store-integrity`, on by default), and nothing but this job reads the cache
+          # (scripts/ci/depot-workflows.test.ts): never a deploy.
           - name: Save pnpm's store
-            if: ${{ !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.install.outcome == 'success' && steps.pnpm-store.outputs.cache-hit != 'true' }}
+            if: ${{ !cancelled() && steps.prune-store.outcome == 'success' }}
             uses: actions/cache/save@v4
             continue-on-error: true
             timeout-minutes: 3
             with:
-              path: ${{ env.PNPM_CONFIG_STORE_DIR }}
+              path: ${{ env.NPM_CONFIG_STORE_DIR }}
               key: ${{ steps.pnpm-store.outputs.cache-primary-key }}
       # Either step that failed before it could say why (Doppler, pnpm, its timeout) gets its
       # warning and summary line here; one that reported itself is left alone.
