@@ -161,8 +161,8 @@ Never open a pull request only to run CI, and never run CI on main's commit. Pus
 (main plus an empty commit, or the commit to soak) under its own name and run against its head.
 `depot ci run` runs any workflow file, whatever its `on:`; `depot ci dispatch` runs one that has
 `workflow_dispatch`, with inputs. Only a dispatch reaches Depot Cache, so soak Test by dispatch:
-under `ci run` its restore of pnpm's store misses, and it installs from the npm registry. Auth: `depot login`, or the
-organization token from Doppler:
+under `ci run` its restore of pnpm's store misses, and it installs from the npm registry. Auth:
+`depot login`, or the organization token from Doppler:
 
 ```bash
 export DEPOT_TOKEN="$(doppler secrets get DEPOT_CI_TELEMETRY_TOKEN --plain --project _shared --config preview)"
@@ -226,8 +226,8 @@ scratch run's test evidence goes to R2 under `trust=pr`. `status` and `artifacts
 
 Lint and Typecheck: N `depot ci run`s side by side. Test: dispatches, one at a time per branch
 (each cancels the one before), or side by side from branches at the same commit. The e2e suite:
-`os-e2e-soak.yml`'s `runs` input, not N dispatches. Preview OS dispatches that name no PR share one concurrency group,
-`preview-os-none`, where a newer pending run replaces an older one.
+`os-e2e-soak.yml`'s `runs` input, not N dispatches. Preview OS dispatches that name no PR share
+one concurrency group, `preview-os-none`, where a newer pending run replaces an older one.
 
 ```bash
 for i in $(seq 10); do
@@ -381,9 +381,8 @@ dispatch always bake, one at a time per tag. Jobs on the image take their depend
 `node scripts/depot-ci/dependencies.mjs install`: an exact
 baked fingerprint reuses the installed tree without starting pnpm. A mismatch
 or missing receipt runs `pnpm install --frozen-lockfile --prefer-offline`.
-Jobs that consume the
-image must keep the image and checkout behavior, and set the store the image was
-baked with (`PNPM_CONFIG_STORE_DIR: /home/runner/.pnpm-store`), because every
+Jobs that consume the image must keep the image and checkout behavior, and set the store the
+image was baked with (`PNPM_CONFIG_STORE_DIR: /home/runner/.pnpm-store`), because every
 `pnpm_config_*` variable is part of the fingerprint:
 
 ```yaml
@@ -436,9 +435,9 @@ The custom image loads lazily: its blocks come from Depot's storage on first rea
 has not run it since its last bake boots it cold (about 7 s more; 28–35 % of jobs, 61–64 % in the
 15 minutes after a bake, measured 2026-09-26). With the baked `node_modules` reused, Test's first
 packages ran 1.5–2× slower and 5 s rows timed out, so on the image Test paid a real `pnpm install`
-to page the tree in (12/22 s p50/p90). Depot's stock image, which every Depot job shares, boots warm,
-and the files Test installs itself are in the page cache when its tests read them. So `test.yml`
-runs on `depot-ubuntu-24.04-8`, and after the checkout sets up, side by side:
+to page the tree in (10/23 s p50/p90 on 2026-09-27). Depot's stock image, which every Depot job
+shares, boots warm, and the files Test installs itself are in the page cache when its tests read
+them. So `test.yml` runs on `depot-ubuntu-24.04-8`, and after the checkout sets up, side by side:
 
 - Node from `.nvmrc` (`actions/setup-node`) and pnpm from the root `packageManager`
   (`pnpm/action-setup`);
@@ -449,15 +448,19 @@ runs on `depot-ubuntu-24.04-8`, and after the checkout sets up, side by side:
 
 A main push that missed the exact key saves its store, beside the evidence uploads. Main restores
 nothing else, so that store holds only its lockfile's packages: `pnpm store prune` cannot cut an
-older one down, since it drops every file with one link, and pnpm copies the packages it builds. Depot Cache has no branch scope: any run can write any key, so a pull request can
-plant a store for main's runs by editing the workflow. Only Test reads the cache, never a deploy;
-its job token is read-only (`permissions: contents: read`), and its Doppler token is the one every
-pull request's run gets. pnpm checks each file it links against the store's index
-(`verify-store-integrity`, on by default), which catches a damaged store, not a planted one. pnpm 10 reads `npm_config_*`, so the
-store is `NPM_CONFIG_STORE_DIR`. `scripts/ci/depot-workflows.test.ts` pins all of this.
+older one down, since it drops every file with one link, and pnpm copies the packages it builds.
+pnpm 10 reads `npm_config_*`, not `pnpm_config_*`, so the store is `NPM_CONFIG_STORE_DIR`.
 
-Test so depends on GitHub's releases (Node, Doppler), the npm registry (pnpm itself, and packages on
-a miss) and Depot Cache. A failed restore is a warning, and the install fetches everything.
+Depot Cache has no branch scope: any run can write any key, so a pull request could plant a store
+for main's runs by editing the workflow. Only Test reads the cache, never a deploy. Its job token
+is read-only (`permissions: contents: read`), and its Doppler token is the one every pull
+request's run gets. pnpm checks each file it links against the store's index
+(`verify-store-integrity`, on by default), which catches a damaged store, not a planted one.
+`scripts/ci/depot-workflows.test.ts` pins all of this.
+
+So Test depends on GitHub's releases (Node, Doppler), the npm registry (pnpm itself, and packages
+on a miss) and Depot Cache. A failed restore is a warning, and the install then fetches
+everything.
 
 ## Trigger Gotchas
 
