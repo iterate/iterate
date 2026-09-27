@@ -61,7 +61,7 @@ const FIRMWARE_DIRECTORY = "apps/kit/firmware";
 const FIRMWARE_BUILDER = [
   "apps/kit/scripts/firmware-release.ts",
   ".depot/workflows/kit-firmware.yml",
-  "scripts/depot-ci/esp-idf.sh",
+  "scripts/ci/esp-idf.sh",
 ];
 
 /** A published release of one device, as `git ls-remote` lists it. */

@@ -56,7 +56,8 @@ on:
       - pnpm-workspace.yaml
       - envs.ts
       - scripts/lib/**
-      - scripts/depot-ci/**
+      - .depot/actions/**
+      - scripts/ci/toolchain.sh
   workflow_dispatch:
     inputs:
       pull-request-number:
@@ -69,8 +70,6 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  # The image's baked store: dependencies.mjs fingerprints it (docs/depot-ci.md#custom-image)
-  PNPM_CONFIG_STORE_DIR: /home/runner/.pnpm-store
   PR_NUMBER: ${{ github.event.pull_request.number || inputs.pull-request-number }}
 
 defaults:
@@ -80,9 +79,7 @@ defaults:
 jobs:
   delete:
     name: delete
-    runs-on:
-      size: 2x8
-      image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
+    runs-on: depot-ubuntu-24.04
     timeout-minutes: 15
     steps:
       # The teardown reads the config that created the preview (cloudflare-os does the same), and
@@ -93,18 +90,13 @@ jobs:
       - name: Checkout the PR's tree
         uses: actions/checkout@v4
         with:
-          clean: false
           ref: ${{ github.event_name == 'pull_request' && github.sha || format('refs/pull/{0}/head', inputs.pull-request-number) }}
-      - name: Reconcile dependencies (baked)
-        run: node scripts/depot-ci/dependencies.mjs install
-      - name: Setup Doppler (baked CLI)
-        run: doppler setup --config preview --project os
-        env:
-          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+      - name: Setup
+        uses: ./.depot/actions/setup
       - name: Delete the preview
         working-directory: apps/os
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           # names the preview: `pr<n>`
           PREVIEW_PR_NUMBER: ${{ env.PR_NUMBER }}
-        run: doppler run -- pnpm preview delete
+        run: doppler run --project os --config preview -- pnpm preview delete

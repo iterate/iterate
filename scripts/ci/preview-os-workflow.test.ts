@@ -28,7 +28,8 @@ type PreviewWorkflow = {
       if?: string;
       name?: string;
       needs?: string | string[];
-      "runs-on"?: { size: string; image: string };
+      /** A Depot stock image's label (`depot-ubuntu-24.04-4`) */
+      "runs-on"?: string;
       "timeout-minutes"?: number;
       env?: Record<string, string>;
       outputs?: Record<string, string>;
@@ -50,7 +51,7 @@ const suites = [
   { job: "e2e", name: "E2E tests", suite: "e2e" },
   { job: "specs", name: "Browser specs", suite: "specs" },
 ] as const;
-const suiteRun = 'doppler run -- pnpm preview "$SUITE"';
+const suiteRun = 'doppler run --project os --config preview -- pnpm preview "$SUITE"';
 
 test("Preview OS names each job for the check it is: deploy and the two suites side by side, then the trace", () => {
   expect(
@@ -62,7 +63,9 @@ test("Preview OS names each job for the check it is: deploy and the two suites s
     trace: "CI trace",
   });
   const runs = (job: string) => (preview.jobs[job]?.steps || []).map((step) => step.run);
-  expect(runs("deploy")).toContain('doppler run -- pnpm preview "$ACTION"');
+  expect(runs("deploy")).toContain(
+    'doppler run --project os --config preview -- pnpm preview "$ACTION"',
+  );
   for (const suite of suites) {
     // started with the run, beside the deploy: the suite step waits for it (below)
     expect(preview.jobs[suite.job]!.needs).toBeUndefined();
@@ -98,8 +101,8 @@ test("Preview OS's two suite jobs are one definition, differing only in the suit
 
 // Why each suite runs on its size: docs/depot-ci.md#reliability-defaults.
 test("Preview OS's E2E tests run on the smallest runner, and Browser specs on a 4x16", () => {
-  expect(preview.jobs.e2e!["runs-on"]?.size).toBe("2x8");
-  expect(preview.jobs.specs!["runs-on"]?.size).toBe("4x16");
+  expect(preview.jobs.e2e!["runs-on"]).toBe("depot-ubuntu-24.04");
+  expect(preview.jobs.specs!["runs-on"]).toBe("depot-ubuntu-24.04-4");
 });
 
 // A required check has to report on every pull request: GitHub leaves one "Pending" when a `paths`
@@ -132,9 +135,7 @@ test("Preview OS deploys the PR merged into main, and the test jobs use that ver
     "${{ github.event_name == 'pull_request' && github.sha || '' }}",
   );
   // resolved before anything is installed or deployed from the checkout
-  expect(resolve).toBeLessThan(
-    deploySteps.findIndex((step) => step.name === "Reconcile dependencies (baked)"),
-  );
+  expect(resolve).toBeLessThan(deploySteps.findIndex((step) => step.name === "Setup"));
   expect(resolve).toBeLessThan(deploy);
   expect(deploySteps[deploy]?.env?.PREVIEW_TESTED_COMMIT).toBe(
     "${{ steps.tested.outputs.description }}",
@@ -180,7 +181,7 @@ test("Preview OS: the suites hand their lines to the trace job, which writes bot
         .join("\n"),
     },
   });
-  expect(write).toBe(steps.findIndex((step) => step.name === "Reconcile dependencies (baked)") + 1);
+  expect(write).toBe(steps.findIndex((step) => step.name === "Setup") + 1);
   expect(write).toBeLessThan(steps.findIndex((step) => step.id === "trace"));
 });
 
@@ -214,14 +215,17 @@ test("Preview OS's suites decide as Deploy preview does whether there is a previ
   expect(steps[changes]).toEqual(deploySteps.find((step) => step.id === "changes"));
   expect(changes).toBe(steps.findIndex((step) => step.uses === "actions/checkout@v4") + 1);
   const after = steps.slice(changes + 1, steps.findIndex((step) => step.id === "suite") + 1);
+  // the specs' browser restore also skips in E2E tests
   expect(after.filter((step) => step.id !== "tested").map((step) => step.if)).toEqual(
     after
       .filter((step) => step.id !== "tested")
-      .map(() => "steps.changes.outputs.preview != 'false'"),
+      .map((step) =>
+        step.id === "playwright"
+          ? "steps.changes.outputs.preview != 'false' && env.SUITE == 'specs'"
+          : "steps.changes.outputs.preview != 'false'",
+      ),
   );
-  expect(steps.findIndex((step) => step.name === "Reconcile dependencies (baked)")).toBeGreaterThan(
-    changes,
-  );
+  expect(steps.findIndex((step) => step.name === "Setup")).toBeGreaterThan(changes);
 });
 
 // The wait is bounded by the deploy's own timeout, and the suite by its 30 minutes after it

@@ -98,7 +98,9 @@ test("every prd deploy checks the project hosts at once, in the deploy job, befo
   const steps = workflow.jobs.deploy?.steps || [];
   const deploy = steps.findIndex((step) => step.id === "deploy");
   const previous = steps.findIndex((step) => step.id === "previous");
-  expect(steps[deploy]?.run).toBe("doppler run -- pnpm run-script deploy --env prd");
+  expect(steps[deploy]?.run).toBe(
+    "doppler run --project os --config prd -- pnpm run-script deploy --env prd",
+  );
   // the version live before the deploy is read first, so the check waits for the new one
   expect(previous).toBeGreaterThanOrEqual(0);
   expect(previous).toBeLessThan(deploy);

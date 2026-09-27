@@ -770,12 +770,11 @@ export function writePreviewWranglerConfig(input: {
 
 /** A deploy bundles whatever node_modules holds, so an install older than pnpm-lock.yaml would ship
  *  stale dependencies. pnpm keeps the lockfile it installed from as node_modules/.pnpm/lock.yaml:
- *  the same bytes prove the install current, whatever the mtimes say. They say the wrong thing in
- *  CI: checking out the PR head, then the PR merged into main, rewrites pnpm-lock.yaml with
- *  main's content and a new mtime, and scripts/depot-ci/dependencies.mjs rightly reuses the
- *  image's node_modules baked from that same lockfile (2026-09-24, four Preview OS deploys failed
- *  on identical content). Only when the content differs does the laptop rule decide: a lockfile
- *  newer than node_modules/.modules.yaml means `pnpm install` has not run since it changed. */
+ *  the same bytes prove the install current, whatever the mtimes say. They say the wrong thing
+ *  when a checkout after the install rewrites pnpm-lock.yaml with the same content, as checking out
+ *  a PR's head and then the PR merged into main does. Only when the content differs does the laptop
+ *  rule decide: a lockfile newer than node_modules/.modules.yaml means `pnpm install` has not run
+ *  since it changed. */
 export function assertFreshInstall(root: string) {
   const lockfile = readFileSync(path.join(root, "pnpm-lock.yaml"));
   const installedLockfile = readOptional(path.join(root, "node_modules", ".pnpm", "lock.yaml"));

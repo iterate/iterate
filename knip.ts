@@ -48,7 +48,6 @@ export default {
         "monitors/{health,do-duration-probe}.ts",
         "ci/flake-dashboard/update.ts",
         "ci/tracing/{cli,tracing}.ts",
-        "depot-ci/dependencies.mjs",
       ],
     },
     "apps/os": {

@@ -1,0 +1,54 @@
+# THE SETUP OF A JOB ON DEPOT'S STOCK IMAGE (docs/depot-ci.md#setup-on-depots-stock-image), after its
+# checkout: `uses: ./.depot/actions/setup`. Depot runs a composite action's steps one after another
+# (a `parallel:` block inside one never runs), so the toolchain's downloads run in the background
+# while pnpm's store restores.
+name: Setup
+description: Node, pnpm and the Doppler CLI, pnpm's store from Depot Cache, and the workspace's install
+inputs:
+  pnpm-store:
+    description: >-
+      depot-cache: restore pnpm's store from Depot Cache, then install. none: install from the npm
+      registry alone, for a job that ships to production, which never reads Depot Cache.
+    default: depot-cache
+outputs:
+  pnpm-store-outcome:
+    description: The restore's outcome (success, failure, skipped)
+    value: ${{ steps.pnpm-store.outcome }}
+  pnpm-store-hit:
+    description: true when the restore found this lockfile's store
+    value: ${{ steps.pnpm-store.outputs.cache-hit }}
+  pnpm-store-primary-key:
+    description: This lockfile's store's key
+    value: ${{ steps.pnpm-store.outputs.cache-primary-key }}
+  pnpm-store-matched-key:
+    description: The key of the store restored, if any
+    value: ${{ steps.pnpm-store.outputs.cache-matched-key }}
+runs:
+  using: composite
+  steps:
+    # pnpm's store, on the checkout's filesystem, so the install hard-links node_modules from it.
+    # pnpm 10 reads `npm_config_*`, not `pnpm_config_*`. No build outputs in it: the install runs the
+    # few build scripts (esbuild, workerd…) in well under a second, and from a restored store that
+    # held them it took 5 s longer (2026-09-27).
+    - name: Start the toolchain
+      shell: bash
+      run: |
+        printf 'NPM_CONFIG_STORE_DIR=/home/runner/.pnpm-store\nNPM_CONFIG_SIDE_EFFECTS_CACHE=false\n' >>"$GITHUB_ENV"
+        bash scripts/ci/toolchain.sh start
+    # The store keyed by the lockfile, `pnpm-workspace.yaml` and `patches/`, else, off main, the
+    # newest one saved. A failed restore is a warning, and the install fetches what it lacks.
+    - name: Restore pnpm's store
+      id: pnpm-store
+      if: inputs.pnpm-store == 'depot-cache'
+      uses: actions/cache/restore@v4
+      continue-on-error: true
+      timeout-minutes: 2
+      with:
+        path: ${{ env.NPM_CONFIG_STORE_DIR }}
+        key: pnpm-store-${{ hashFiles('pnpm-lock.yaml', 'pnpm-workspace.yaml', 'patches/**') }}
+        restore-keys: ${{ github.ref != 'refs/heads/main' && 'pnpm-store-' || '' }}
+    - name: Install dependencies
+      shell: bash
+      run: |
+        bash scripts/ci/toolchain.sh wait
+        pnpm install --frozen-lockfile --prefer-offline

@@ -106,8 +106,6 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
-  # The image's baked store: dependencies.mjs fingerprints it (docs/depot-ci.md#custom-image)
-  PNPM_CONFIG_STORE_DIR: /home/runner/.pnpm-store
   PR_NUMBER: ${{ github.event.pull_request.number || inputs.pull-request-number }}
   ACTION: ${{ inputs.action || 'deploy' }}
   # CI TRACE MARKERS (docs/ci-traces.md): every run step's start and exit, and the test reporters'
@@ -125,9 +123,8 @@ jobs:
     if: >-
       github.event_name == 'pull_request' ||
       (github.event_name == 'workflow_dispatch' && inputs.pull-request-number != '' && (inputs.action == 'deploy' || inputs.action == 'reset'))
-    runs-on:
-      size: 4x16
-      image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
+    # Its size: docs/depot-ci.md#reliability-defaults.
+    runs-on: depot-ubuntu-24.04-8
     timeout-minutes: 40
     # THE COMMIT THIS RUN TESTS, for the trace job: the PR merged into main
     # (scripts/ci/preview-tested-commit.ts), so it traces with the scripts of the commit deployed
@@ -141,7 +138,6 @@ jobs:
       - name: Checkout the PR head
         uses: actions/checkout@v4
         with:
-          clean: false
           ref: ${{ github.event.pull_request.head.sha || format('refs/pull/{0}/head', inputs.pull-request-number) }}
       # The preview proves what main will be after the merge: on a push, this run's own commit (the
       # merge commit this workflow file was read from, so the code and the workflow are one tree);
@@ -154,19 +150,15 @@ jobs:
           PREVIEW_RUN_SHA: ${{ github.event_name == 'pull_request' && github.sha || '' }}
         run: node scripts/ci/preview-tested-commit.ts
       # A push that changes no preview path deploys nothing, and the steps after this skip; a
-      # dispatch deploys whatever it changes.
+      # dispatch deploys whatever it changes. This and the step before run on the stock image's own
+      # Node, before the setup: the PR head they start from may predate it.
       - name: Decide whether the PR changes a preview path
         id: changes
         if: github.event_name == 'pull_request'
         run: node scripts/ci/preview-paths.ts changes
-      - name: Reconcile dependencies (baked)
+      - name: Setup
         if: steps.changes.outputs.preview != 'false'
-        run: node scripts/depot-ci/dependencies.mjs install
-      - name: Setup Doppler (baked CLI)
-        if: steps.changes.outputs.preview != 'false'
-        run: doppler setup --config preview --project os
-        env:
-          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        uses: ./.depot/actions/setup
       # `deploy` redeploys in place; `reset` deletes the preview first. Either way the
       # script ends by writing the URL and the operations into the PR body (GITHUB_TOKEN).
       - name: Deploy (or reset) the preview
@@ -182,7 +174,7 @@ jobs:
           PREVIEW_TESTED_COMMIT: ${{ steps.tested.outputs.description }}
           # the PR head, which a template-changing PR's quick-launch links read the template at
           PREVIEW_HEAD_SHA: ${{ steps.tested.outputs.head-sha }}
-        run: doppler run -- pnpm preview "$ACTION"
+        run: doppler run --project os --config preview -- pnpm preview "$ACTION"
 
   # THE TWO SUITES, E2E tests and Browser specs: one job each, side by side, and ONE DEFINITION.
   # Browser specs runs E2E tests' outputs and steps (the `suite-outputs` and `suite-steps` anchors);
@@ -218,9 +210,7 @@ jobs:
     if: >-
       github.event_name == 'pull_request' ||
       (github.event_name == 'workflow_dispatch' && inputs.action != 'specs')
-    runs-on:
-      size: 2x8
-      image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
+    runs-on: depot-ubuntu-24.04
     timeout-minutes: 70
     env:
       # THE SUITE: `pnpm preview <suite>`, its flake records' suite, and the workspace its telemetry
@@ -263,7 +253,6 @@ jobs:
       - name: Checkout the tested commit
         uses: actions/checkout@v4
         with:
-          clean: false
           ref: ${{ github.event_name == 'pull_request' && github.sha || (inputs.pull-request-number != '' && format('refs/pull/{0}/head', inputs.pull-request-number)) || github.sha }}
       # Deploy preview's own step, on the same commit: a push that changes no preview path deploys
       # nothing, and this job passes here, testing nothing.
@@ -271,6 +260,7 @@ jobs:
         id: changes
         if: github.event_name == 'pull_request'
         run: node scripts/ci/preview-paths.ts changes
+      # On the stock image's own Node, before the setup, which the PR head may predate.
       - name: Check out the PR merged into main
         id: tested
         if: github.event_name == 'workflow_dispatch' && inputs.pull-request-number != ''
@@ -283,14 +273,24 @@ jobs:
         env:
           HEAD_SHA: ${{ github.event.pull_request.head.sha || steps.tested.outputs.head-sha }}
         run: echo "TEST_TELEMETRY_HEAD_SHA=${HEAD_SHA:-$(git rev-parse HEAD)}" >> "$GITHUB_ENV"
-      - name: Reconcile dependencies (baked)
-        if: steps.changes.outputs.preview != 'false'
-        run: node scripts/depot-ci/dependencies.mjs install
-      - name: Setup Doppler (baked CLI)
-        if: steps.changes.outputs.preview != 'false'
-        run: doppler setup --config preview --project os
-        env:
-          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+      # THE SETUP, and beside it the specs' browser, Playwright's headless shell, from Depot Cache
+      # (docs/depot-ci.md#depot-cache). The suite's `playwright install --only-shell` fetches it when
+      # the restore did not.
+      - fail-fast: false
+        parallel:
+          - name: Setup
+            if: steps.changes.outputs.preview != 'false'
+            uses: ./.depot/actions/setup
+          - name: Restore Playwright's browser
+            id: playwright
+            if: steps.changes.outputs.preview != 'false' && env.SUITE == 'specs'
+            uses: actions/cache/restore@v4
+            continue-on-error: true
+            timeout-minutes: 2
+            with:
+              path: ~/.cache/ms-playwright
+              key: ms-playwright-${{ hashFiles('pnpm-lock.yaml') }}
+              restore-keys: ${{ github.ref != 'refs/heads/main' && 'ms-playwright-' || '' }}
       # Set up, wait for this run's deploy when it has one, then the suite
       # (apps/os/scripts/preview.ts `runSuite`). The trace's Test phase is this step
       # (scripts/ci/tracing/tracing.ts).
@@ -310,7 +310,7 @@ jobs:
           E2E_SLOW_ROWS: ${{ inputs.slow-rows }}
           # the job whose end starts the suite, when this run deploys (scripts/ci/await-deploy.ts)
           PREVIEW_AWAIT_DEPLOY_JOB: ${{ (github.event_name == 'pull_request' || inputs.action == 'deploy' || inputs.action == 'reset') && 'deploy' || '' }}
-        run: doppler run -- pnpm preview "$SUITE"
+        run: doppler run --project os --config preview -- pnpm preview "$SUITE"
       # Fails when the runner left no complete artifact, and writes the suite summary next to its
       # flake lines. A cancelled run keeps its partial evidence without reporting it as failures.
       # Once the suite read its deployed target only: without a preview there is nothing to keep.
@@ -387,9 +387,7 @@ jobs:
     if: >-
       github.event_name == 'pull_request' ||
       (github.event_name == 'workflow_dispatch' && inputs.action != 'e2e')
-    runs-on:
-      size: 4x16
-      image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
+    runs-on: depot-ubuntu-24.04-4
     timeout-minutes: 70
     env:
       SUITE: specs
@@ -415,9 +413,7 @@ jobs:
     if: >-
       always() && needs.deploy.outputs.preview != 'false' &&
       (needs.deploy.result != 'skipped' || needs.e2e.result != 'skipped' || needs.specs.result != 'skipped')
-    runs-on:
-      size: 2x8
-      image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
+    runs-on: depot-ubuntu-24.04
     timeout-minutes: 10
     steps:
       # The tree deploy tested, which on a push is the one this file was read from, so the tracing
@@ -425,14 +421,13 @@ jobs:
       - name: Checkout the tested commit
         uses: actions/checkout@v4
         with:
-          clean: false
           ref: ${{ needs.deploy.outputs.tested-sha || github.event.pull_request.head.sha || (inputs.pull-request-number != '' && format('refs/pull/{0}/head', inputs.pull-request-number)) || github.sha }}
       - name: Record the traced commit
         env:
           HEAD_SHA: ${{ needs.deploy.outputs.head-sha }}
         run: echo "CI_TRACE_STATUS_SHA=${HEAD_SHA:-$(git rev-parse HEAD)}" >> "$GITHUB_ENV"
-      - name: Reconcile dependencies (baked)
-        run: node scripts/depot-ci/dependencies.mjs install
+      - name: Setup
+        uses: ./.depot/actions/setup
       # THE SUITES' LINES under the PR body's status line, both in one write, from the lines their
       # jobs handed over (one a line; a suite that handed over none keeps its line). First, so a
       # trace that cannot be collected costs no line. Whatever fails here (GitHub's answers, an
