@@ -95,9 +95,7 @@ test("Preview OS's two suite jobs are one definition, differing only in the suit
   expect(specs.if?.replace("inputs.action != 'e2e'", "inputs.action != 'specs'")).toBe(e2e.if);
 });
 
-// E2E tests waits on a remote preview: on 4x16 it peaked at 43 % of four vCPUs and 18 % of 16 GB
-// (measured 2026-09-24). Browser specs' six browsers used all of a 2x8's two vCPUs, and each spec
-// took about 35 % longer there than on a 4x16 (docs/depot-ci.md#reliability-defaults).
+// Why each suite runs on its size: docs/depot-ci.md#reliability-defaults.
 test("Preview OS's E2E tests run on the smallest runner, and Browser specs on a 4x16", () => {
   expect(preview.jobs.e2e!["runs-on"]?.size).toBe("2x8");
   expect(preview.jobs.specs!["runs-on"]?.size).toBe("4x16");

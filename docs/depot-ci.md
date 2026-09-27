@@ -532,10 +532,10 @@ freshness:
   waits on a remote preview: on `4x16`, 151 attempts on 2026-09-24 peaked at 1.7 vCPUs and
   2.9 GB, and on `2x8` ten runs against one preview took 68 s at the p50, against 62 s for nine
   on `4x16`, for half the price. Browser specs runs on a `4x16`. Its six Playwright workers are
-  six browsers, and by 2026-09-26 (50 specs) they used all of a `2x8`: 1.7 of its 2 vCPUs at the
-  peak, 1.3 on average, and each spec took about 35 % longer than on a `4x16`, where they peak at
-  2.7 vCPUs. Against one preview, beside the e2e suite, alternating (#3258): the job took 96 s at
-  the p50 and 123 s at the p90 on the `2x8` (27 runs), 79 s and 104 s on the `4x16` (11 runs), with
+  six browsers, and on 2026-09-26 (50 specs) they peaked at 1.7 of a `2x8`'s 2 vCPUs, and each
+  spec took about 35 % longer than on a `4x16`, where they peak at 2.7 vCPUs. Against one
+  preview, beside the e2e suite, alternating (#3258): the job took 96 s at the p50 and 123 s at
+  the p90 on the `2x8` (27 runs), 79 s and 104 s on the `4x16` (11 runs), with
   0.26 and 0.27 retried specs a run and no red run. Two `2x8` shards of 6 took 84 s and 97 s with
   the job that merges them (6 runs). More specs at once against the preview were faster and less
   reliable: 12 workers on a `4x16` took 63 s and 95 s but retried 0.55 specs a run (22 runs); 16 on
