@@ -83,8 +83,7 @@ jobs:
           # PNPM'S STORE FROM DEPOT CACHE: the one saved for these install inputs, else, off main,
           # the newest one saved; the install fetches what it lacks from the npm registry. Main
           # takes the exact key or nothing, so the store it saves (below) holds this lockfile's
-          # packages alone. (`pnpm store prune` cannot cut an older store down: it drops every file
-          # without a second link, and pnpm copies, not links, the packages it builds.)
+          # packages alone (docs/depot-ci.md#the-test-job-runs-on-depots-stock-image).
           - name: Restore pnpm's store
             id: pnpm-store
             uses: actions/cache/restore@v4
