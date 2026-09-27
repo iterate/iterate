@@ -93,10 +93,8 @@ jobs:
           ref: ${{ github.sha }}
       - name: Setup Node
         run: bash scripts/ci/toolchain.sh node
-      # ESP-IDF FROM DEPOT CACHE, keyed by its pin, scripts/ci/esp-idf.sh, and the image's python3,
-      # which its Python environment runs on: that key's alone, since an older one's is of no use to
-      # it (docs/depot-ci.md#depot-cache). Without it, `ensure` installs from the network and says
-      # so in a warning.
+      # ESP-IDF FROM DEPOT CACHE, at its exact key alone: scripts/ci/esp-idf.sh says what the key
+      # holds and what `ensure` does without it (docs/depot-ci.md#depot-cache).
       - name: ESP-IDF's key
         id: esp-idf-key
         run: scripts/ci/esp-idf.sh key >>"$GITHUB_OUTPUT"
