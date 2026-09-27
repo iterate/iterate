@@ -95,6 +95,8 @@ class LentRpcStub extends WorkersRpcTarget {
   ): Promise<unknown> {
     try {
       return await whileClientAnswers(this.#clientRpcStub, this.#rpcStubKey, async () => {
+        // The steps stop short of the terminal `fetch` the call named (terminalFetchOf split it
+        // off), so the receiver is what the client serves `fetch` on; a client without one rejects.
         const receiver = (await walkStepsOnRpcStub(this.#clientRpcStub, itxExpressionSteps)) as {
           fetch(r: Request): Promise<unknown>;
         };
@@ -127,11 +129,10 @@ class LentRpcStub extends WorkersRpcTarget {
  *  device capability"). Any answer proves the client is there, and the call waits on (a slow local
  *  server is the client's business), asked again every 10 s. No answer within 10 s more means the
  *  client's network went away without a close — a laptop asleep, a NAT mapping expired — and its
- *  socket would stay open at the edge until the edge's TCP retransmits give up: on prd 2026-09-25 a
- *  tunnel's visitors waited 12 to 16 minutes for that, and then got a 500. The call fails
- *  RPC_STUB_OFFLINE now instead (a 502 on a fetch, `expression-fetch.rpc-stub-offline`). The lend
- *  stays: a client that was only slow answers the next call, and a dead one's session close ends
- *  it. */
+ *  socket would stay open at the edge until the edge's TCP retransmits give up (12 to 16 minutes,
+ *  measured on prd 2026-09-25). The call fails RPC_STUB_OFFLINE instead (a 502 on a fetch,
+ *  `expression-fetch.rpc-stub-offline`). The lend stays: a client that was only slow answers the
+ *  next call, and a dead one's session close ends it. */
 async function whileClientAnswers(
   clientRpcStub: ClientRpcStub,
   rpcStubKey: string,
@@ -151,6 +152,8 @@ async function whileClientAnswers(
   };
   const startedAt = Date.now();
   while ((await within(settled, 10_000)) === "silent") {
+    // A capnweb stub answers every member name as a remote callable, so this call goes to the
+    // client, which has no such member: its rejection is the answer.
     const probe = Promise.resolve()
       .then(() => (clientRpcStub.itxLivenessProbe as () => Promise<unknown>)())
       .then(disposeRpcStub, () => undefined)
@@ -220,6 +223,9 @@ export async function lendRpcStubOverPager(
     // The DO refused (a paused stream, a row the reduce rejects): nothing is lent, and the refusal's
     // CODE crosses to the caller as the same coded error the append would have thrown.
     disposeRpcStub(sessionRpcStub);
+    // The body is the DO's own refusal, `{ code, message }` (rpc-stubs.ts
+    // `acceptRpcStubPagerWebSocket`); each field is read as optional, and a body that is not JSON
+    // reads as null.
     const refusal = (await response.json().catch(() => null)) as {
       code?: string | null;
       message?: string;
@@ -293,9 +299,8 @@ export async function lendRpcStubOverPager(
     // THE PAGER'S LIVENESS (the lend's recovery [B]): a keepalive the DO auto-answers via
     // setWebSocketAutoResponse WITHOUT waking it, every 500 ms; a pager that leaves three in a row
     // unanswered is dropped and re-dialed. A deploy resets the DO and its end of every pager with
-    // it, but this end may hear no close for a minute: on prd 2026-09-25 a busy context reset at
-    // 13:16:33, its pagers' relay ends closed at 13:17:35 (all within 14 ms), and every stub lent in
-    // it was offline in between (visitors got 502s). Counted in keepalives SENT, never wall time, so
+    // it, but this end may hear no close for a minute (measured on prd 2026-09-25), and every stub
+    // lent over the pager is offline until it does. Counted in keepalives SENT, never wall time, so
     // an isolate that stalls does not read its own stall as the DO's silence. The keepalive also
     // keeps the /api isolate warm.
     const keepalive = setInterval(() => {
@@ -337,6 +342,7 @@ export async function lendRpcStubOverPager(
       } catch {
         return;
       }
+      // The DO sends one message down a pager, `{type:"page"}`; any other shape reads as not a page.
       if ((page as { type?: string } | null)?.type !== "page") return;
       waitUntil(answerPage());
     });
@@ -402,6 +408,8 @@ export async function lendRpcStubOverPager(
   attachPager(pagerWebSocket);
   // capnweb's own death signal, registered ONCE: set the shared reason AND close the pager NOW so the
   // DO returns the stub immediately — without this the presence list lies until a page times out.
+  // `ClientRpcStub` types only `dup`; a capnweb stub also has `onRpcBroken`, and a stub without it
+  // (a test's fake) skips the registration.
   (sessionRpcStub as { onRpcBroken?: (cb: () => void) => void }).onRpcBroken?.(() => {
     lendEnded.reason = "went offline (its client session broke)";
     try {

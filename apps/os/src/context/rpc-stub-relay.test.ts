@@ -13,13 +13,8 @@ import {
   RPC_STUB_PAGER_KEEPALIVE_RESPONSE,
 } from "./rpc-stubs.ts";
 
-// ── rpc stub relay ── a regression pin on the relay: it registers `onRpcBroken` on
-// the session's provider stub ONCE per session, never once per page. The DO borrows the stub on
-// every burst of traffic and returns it at each pins' release, so a long-lived device pages many
-// times, and each page lends a fresh `LentRpcStub` over the SAME session stub. capnweb has no
-// `offRpcBroken`, so a registration per lend would accumulate a listener per page for the session's
-// life — worst on the longest-lived, most active devices. The ONE registration lives in
-// `lendRpcStubOverPager`; the lent stubs share its `{ reason }` lend-ended holder.
+// ── rpc stub relay ── ONE `onRpcBroken` registration per session, never one per page (why:
+// rpc-stub-relay.ts, LentRpcStub's `#lendEnded`).
 
 test("a relay registers onRpcBroken on the session's stub ONCE per session, not once per page", async () => {
   // Fake timers neutralize the pager's 30s keepalive interval (no real timer leaks).
@@ -57,15 +52,8 @@ test("a relay registers onRpcBroken on the session's stub ONCE per session, not 
   relay.dispose();
 });
 
-// ── rpc stub relay ── A PAGE'S LEND THE PLATFORM FAILED IS LENT AGAIN (the lend's recovery [A]). A
-// relay's connection to the DO can drop under a burst of lends, and workerd fails every lend in
-// flight with a retryable "Network connection lost.". The relay lends again on a fresh stub (a
-// re-lend replaces the key's stub, so a repeat is harmless) on the RELAY_BURST schedule, inside the
-// DO's 10 s page timeout, each repeat a `rpc-stubs.platform-failure-retry` warn; a deploy's reset
-// is repeated the same way, logged at info; an overloaded DO is never lent to again at once
-// (docs/engineering-invariants.md#failures-and-retries). A lend that still fails, or fails with the
-// DO's own error, is one `rpc-stub-lend-failed` warn: the DO's page times out and a push waiting on
-// it is lost.
+// ── rpc stub relay ── A PAGE'S LEND THE PLATFORM FAILED IS LENT AGAIN (the lend's recovery [A];
+// the schedule and what each outcome logs: rpc-stub-relay.ts `answerPage`).
 
 test.for([
   {
@@ -198,13 +186,8 @@ test("a lend recalled while its repeat waits is not lent again, and its failure 
   ]);
 });
 
-// ── rpc stub relay ── A LENT CALL IS BOUNDED BY THE CLIENT'S ANSWERS. A client whose network went
-// away without a close (a laptop asleep, a NAT mapping expired) answers nothing and its socket stays
-// open at the edge until the edge's TCP gives up: on prd 2026-09-25 a tunnel's visitors waited 12 to
-// 16 minutes, then got a 500. A call unanswered for 10 s is followed by a liveness probe (a call on a
-// member no client has, which a live one answers at once with an error); a probe unanswered for
-// 10 s more fails the call RPC_STUB_OFFLINE, logged. A client that answers the probe is only slow,
-// and its call waits on.
+// ── rpc stub relay ── A LENT CALL IS BOUNDED BY THE CLIENT'S ANSWERS (the lend's recovery [C]:
+// rpc-stub-relay.ts `whileClientAnswers`).
 
 test.for([
   {
@@ -280,12 +263,9 @@ test.for([
   }
 });
 
-// ── rpc stub relay ── THE LEND IS THE SESSION'S, NOT THE SOCKET'S. The pager is a connection between
-// the /api isolate and the DO, never the client's own socket, so it drops while the session lives (a
-// fault on the hop between colos; a DO reset kills every hibernatable socket). What a close MEANS is
-// its code: 1000 is deliberate — this side's dispose, the DO replacing the pager with a newer one —
-// and ends the lend; anything else is a drop, and the relay dials the DO again (redial.ts: twelve
-// tries over ~56 s, all within 60 s of the drop) while the session's dup stays lent.
+// ── rpc stub relay ── THE LEND IS THE SESSION'S, NOT THE SOCKET'S: a pager closed 1000 ends the
+// lend, and any other close is re-dialed (the lend's recovery [B]: rpc-stub-relay.ts, the pager's
+// close handler in `lendRpcStubOverPager`).
 
 test.for([
   {
@@ -320,10 +300,8 @@ test.for([
   },
 );
 
-// prd 2026-09-25: a deploy reset the templestein context at 13:16:33 and its fresh incarnation
-// served from 13:16:37, but its pagers' relay ends heard their close only at 13:17:35 — every stub
-// lent in it offline for a minute, its visitors answered 502. The relay no longer waits for the
-// close: the DO's auto-response stops answering the keepalive with the reset.
+// A reset whose close this end never hears is caught by the keepalive the DO stops answering (the
+// lend's recovery [B]: rpc-stub-relay.ts, THE PAGER'S LIVENESS).
 test("a pager whose keepalives go unanswered (a reset whose close the relay never hears) is re-dialed within 2 s, before it is closed, its downtime counted from its last answer", async () => {
   vi.useFakeTimers();
   onTestFinished(() => void vi.useRealTimers());
@@ -435,8 +413,8 @@ test.for([
   },
 );
 
-// 2026-09-24 14:06: a deploy's reset answered the voice boards' re-dials with 503, and the relay
-// read that as a refusal and gave up on the first answer. A 5xx is the DO not ready yet.
+// A 5xx answer to a re-dial is the DO not ready yet (a deploy's reset), so the re-dial goes on; a
+// 4xx is the DO's refusal, and the lend ends.
 test.for([
   { answers: "503 (the DO not ready yet)", status: 503, dials: 3, disposed: 0 },
   { answers: "409 (the DO's refusal)", status: 409, dials: 2, disposed: 1 },

@@ -144,13 +144,15 @@ export async function dialRpcStubFetch(
     headers.delete(FETCH_UPGRADE_RESUMABLE_HEADER);
     request = new Request(request, { headers });
   }
+  // The provider's fetch answers over capnweb or Workers RPC, typed unknown: only a Response's
+  // status, headers and webSocket are read here, each as optional.
   const response = (await providerFetch(request)) as {
     status?: number;
     headers?: Headers;
     webSocket?: ClientWebSocket | null;
   };
   const providerSocket = response?.webSocket;
-  if (!providerSocket) return response as unknown as Response;
+  if (!providerSocket) return response as unknown as Response; // the provider's own answer, untouched
   // Leg first, listeners second, accept LAST — accepting before the awaited leg round-trip would
   // drop any frame the provider sends immediately after upgrading (a server hello). The leg is a
   // plain fetch upgrade into the DO, opened mid-dial: the DO is awaiting the dial RPC and serves
@@ -181,7 +183,7 @@ export async function dialRpcStubFetch(
     const wire = (from: ClientWebSocket, to: ClientWebSocket) => {
       from.addEventListener("message", (ev) => {
         try {
-          to.send(ev.data as string | ArrayBuffer);
+          to.send(ev.data as string | ArrayBuffer); // a WebSocket message is text or binary
         } catch {
           /* peer closing — its close event tears the pair down */
         }
@@ -194,6 +196,7 @@ export async function dialRpcStubFetch(
         }
       });
     };
+    // The leg is workerd's own WebSocket, which has every member ClientWebSocket names.
     wire(providerSocket, leg as unknown as ClientWebSocket);
     wire(leg as unknown as ClientWebSocket, providerSocket);
   }
@@ -279,6 +282,8 @@ export class RpcStubFetchServer {
   ): Promise<unknown> {
     const upgradeId = crypto.randomUUID();
     const result = await transport.fetch(upgradeId, itxExpressionSteps, request);
+    // The transport answers the provider's own value or dialRpcStubFetch's marker; only
+    // `webSocketUpgrade: true` makes it the marker.
     const marker = result as Partial<FetchUpgradeMarker> | null;
     if (marker?.webSocketUpgrade !== true) return result;
     const headers = [...(marker.headers || [])];
@@ -327,6 +332,7 @@ export class RpcStubFetchServer {
       ? ["leg" as const, legUpgradeId]
       : ["eyeball" as const, eyeballUpgradeId!];
     for (const older of this.#ctx.getWebSockets(upgradeTag(side, upgradeId))) {
+      // every socket under an upgrade tag was stamped with this attachment as it was accepted
       const attachment = older.deserializeAttachment() as FetchUpgradeAttachment;
       older.serializeAttachment({
         fetchUpgrade: { ...attachment.fetchUpgrade, replaced: true },
@@ -385,6 +391,8 @@ export class RpcStubFetchServer {
   /** The OTHER side of an upgrade socket, or undefined (not ours) / null (peer gone, or this socket
    *  was replaced: it has no peer). */
   #peerOf(ws: WebSocket): WebSocket | null | undefined {
+    // Any of the DO's sockets comes here, so the attachment may be another subsystem's, or none; a
+    // socket under an upgrade tag was stamped with FetchUpgradeAttachment as it was accepted.
     const upgrade = (ws.deserializeAttachment() as Partial<FetchUpgradeAttachment> | null)
       ?.fetchUpgrade;
     if (!upgrade) return undefined;
