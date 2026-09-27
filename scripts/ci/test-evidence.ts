@@ -311,11 +311,11 @@ const UPLOAD_BYTES_IN_FLIGHT = 128 * 1024 * 1024;
  * CLOUDFLARE_API_TOKEN, the one preview deploys use): an API token with R2 permissions is also an
  * S3 key pair, its id the access key id and the SHA-256 of its value the secret
  * (https://developers.cloudflare.com/r2/api/tokens/#get-s3-api-credentials-from-an-api-token). S3,
- * not the Cloudflare API's own object endpoint (the one `wrangler r2 object put` uses): on
- * 2026-09-24 that endpoint replaced an existing object despite `If-None-Match: *` and stored a body
- * whose `Content-MD5` was wrong, and each of its requests counts against the token owner's 1,200
- * per five minutes, which preview deploys share. R2's S3 API refused both (412, and
- * XAmzContentSHA256Mismatch).
+ * not the Cloudflare API's own object endpoint (the one `wrangler r2 object put` uses): that
+ * endpoint can replace an existing object despite `If-None-Match: *` and store a body whose
+ * `Content-MD5` is wrong, where R2's S3 API refuses both (412, and XAmzContentSHA256Mismatch), and
+ * each of its requests counts against the token owner's 1,200 per five minutes, which preview
+ * deploys share.
  *
  * Each PUT is write-once (`If-None-Match: *`). A 412 means the key exists: when it holds these very
  * bytes (a single PUT's ETag is the body's MD5), it is this upload's own earlier try, landed after
