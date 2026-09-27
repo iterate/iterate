@@ -171,10 +171,9 @@ that prefix belongs to whoever appends it and is opaque to the platform: tests u
 | `agent`                                                             | `packages/agents/src/contract.ts`                                                                                                                                                                                                                                                                          |
 | `voice-agent`                                                       | `packages/voice/src/voice-agent.ts`, `packages/voice/src/events.ts`                                                                                                                                                                                                                                        |
 | `chrome`                                                            | `apps/browser-extension/public/panel.js`                                                                                                                                                                                                                                                                   |
+| `email`                                                             | `apps/os/src/email/contract.ts`                                                                                                                                                                                                                                                                            |
 | `test`                                                              | tests only                                                                                                                                                                                                                                                                                                 |
 
 `note/added` is only an example in the Agents composer; no contract defines `note`.
-`email/received` is only an integration's transcript in an agent UI test; no contract defines
-`email`.
 `capability-host/script-run-*` is never written to a log: the agent UI's adapter builds it in
 memory.

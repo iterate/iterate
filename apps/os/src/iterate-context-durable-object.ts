@@ -177,9 +177,9 @@ export type AlarmTrace = {
 };
 
 /** The bindings THE DO reads (Vite's built Wrangler config): the DO namespace, the Worker Loader, the kv namespaces,
- *  Workers AI, Browser Run, Artifacts — and, from `AppConfigEnv`, the version-metadata binding and the `APP_CONFIG_*`
+ *  Workers AI, Browser Run, Artifacts, Email Sending — and, from `AppConfigEnv`, the version-metadata binding and the `APP_CONFIG_*`
  *  vars worker.ts's `parseAppConfig` parses. env.ts's `Env` extends this with the issuer's own
- *  (OAuth KV, the browser sessions, the page files, the mailbox): the one worker's env. */
+ *  (OAuth KV, the browser sessions, the page files): the one worker's env. */
 export interface Env extends AppConfigEnv {
   ITERATE_CONTEXT: DurableObjectNamespace<IterateContextDurableObject>;
   /** THE CONTROL PLANE'S D1: the deployment's users, identities, organizations, memberships,
@@ -197,6 +197,10 @@ export interface Env extends AppConfigEnv {
   FILES: R2Bucket;
   /** Cloudflare Artifacts (beta) — the ONE bound namespace behind `itx.cfArtifacts`, project-scoped. */
   ARTIFACTS: ArtifactsNamespace;
+  /** Email Sending (wrangler `send_email`) — the sign-in code (password-and-code-sign-in.ts) and
+   *  `itx.email` (context/built-ins.ts). Simulated by wrangler dev and the test configs; absent where
+   *  a deployment has no mailbox. */
+  EMAIL?: SendEmail;
 }
 
 export class IterateContextDurableObject extends DurableObject<Env> {

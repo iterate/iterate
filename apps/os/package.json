@@ -43,6 +43,7 @@
     "json5": "catalog:",
     "oauth4webapi": "catalog:",
     "pako": "catalog:",
+    "postal-mime": "4.0.0",
     "posthog-node": "^5.53.0",
     "react": "catalog:",
     "react-dom": "catalog:",

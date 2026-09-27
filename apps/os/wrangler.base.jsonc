@@ -85,6 +85,7 @@
     // `ctx.exports` (iterate-context-durable-object.ts FIRST_PARTY_FACET_CLASSES) — declared like any
     // DO class (wrangler requires the storage line); their state lives in the facet's own SQLite.
     "AccountDurableObject": { "type": "durable-object", "storage": "sqlite" },
+    "EmailDurableObject": { "type": "durable-object", "storage": "sqlite" },
     "InstanceDurableObject": { "type": "durable-object", "storage": "sqlite" },
     "OrganizationDurableObject": { "type": "durable-object", "storage": "sqlite" },
     "ProjectDurableObject": { "type": "durable-object", "storage": "sqlite" },

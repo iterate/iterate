@@ -40,6 +40,7 @@ import type { ReachableContext } from "../stream/stream.ts";
 import type { LibraryRoots } from "../library.ts";
 import { assertSecretPath, normalizeSecretRecord, originsOf, sha256Hex } from "../secrets.ts";
 import type { LendRevokedReason, SecretCatalog, SecretState } from "../secret/contract.ts";
+import { EMAIL_PATH, emailDomainOf } from "../email/contract.ts";
 import {
   IntegrationConnectionRow,
   IntegrationProvider,
@@ -51,6 +52,7 @@ import {
   type ConnectionAttempt,
   type HeldToken,
 } from "../integrations/connections.ts";
+import { sendEmail } from "../integrations/email.ts";
 import type {
   ConnectInput,
   FinishConnectAnswer,
@@ -274,6 +276,12 @@ export interface BuiltInScope extends LibraryRoots {
    *  domain object `itx.repos.get(path)` — THE way a project touches its repos): it mints its token and
    *  learns its remote here, then speaks git-over-HTTPS from inside its own worker. */
   cfArtifacts: IterateContextApi["cfArtifacts"];
+  /** THE PROJECT'S MAIL (src/email/): `send` mails from the project's own address,
+   *  `<slug>@<email domain>` (email/contract.ts `emailDomainOf`), through the `EMAIL` binding, then
+   *  records `email/sent` on `/integrations/email` (integrations/email.ts `sendEmail`), where the worker's
+   *  `email()` handler records what arrives. Only a project has an address, and only on a
+   *  deployment whose projects are subdomains. */
+  email: IterateContextApi["email"];
   /** Append to this context's append-only event log (the facets that REDUCE it are
    *  `itx.facets.get(name)`). A top-level root, so the expression surface mirrors the edge
    *  RpcTarget exactly: `itx.append({...})` is one spelling on every hop. */
@@ -448,6 +456,8 @@ interface BuildBuiltInsDeps {
     BROWSER: BrowserRun;
     ARTIFACTS: ArtifactsNamespace;
     DB: D1Database;
+    /** Email Sending — `itx.email`; absent where a deployment has no mailbox. */
+    EMAIL?: SendEmail;
   };
   /** The deploy identity every loader cacheKey folds in (worker.ts `AppConfig`). */
   deployId: string;
@@ -1788,6 +1798,28 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
     ai: env.AI, // the binding object itself — dispatch walks its methods
     browser: cfBrowser(env.BROWSER),
     cfArtifacts: projectScopedArtifacts({ namespace: env.ARTIFACTS, projectId: owner.id }),
+    email: {
+      send: async (input) => {
+        const domain = emailDomainOf(deps.ingressRouting);
+        const slug = owner.kind === "project" ? (await deps.projectInfo()).projectSlug : undefined;
+        if (!domain || !slug || !env.EMAIL)
+          throw codedError(
+            "INVALID_CONTEXT",
+            "itx.email: only a project has an address, on a deployment whose projects are subdomains and that can send mail",
+          );
+        return sendEmail(
+          {
+            EMAIL: env.EMAIL,
+            FILES: env.FILES,
+            filesPrefix: r2Prefix,
+            from: { email: `${slug}@${domain}`, name: slug },
+            emailContext: deps.context(EMAIL_PATH),
+            caller: hopCaller(),
+          },
+          input,
+        );
+      },
+    },
     append,
     abort: async (reasonInput) => {
       const reason = abortReasonOf(reasonInput, "itx.abort");

@@ -448,6 +448,20 @@ export type FileHandle = {
   }): Promise<{ url: string; expiresAt: string }>;
 };
 
+/** `itx.email.send`: one message from the project's own address. `inReplyToOffset` names a
+ *  message on the project's `/integrations/email` and answers it in its thread: its recipients,
+ *  `Re:` subject and threading headers are the defaults. Each attachment is a project file
+ *  (`itx.files`). */
+export type EmailSendInput = {
+  to?: string | string[];
+  cc?: string | string[];
+  subject?: string;
+  text?: string;
+  html?: string;
+  inReplyToOffset?: number;
+  attachments?: { path: string; filename?: string }[];
+};
+
 /** WHICH requests a fetch route takes — every field given must hold. A fetch route matches an HTTP
  *  request: `url` is a standard `URLPattern` over the real URL (hostname and path; its init's
  *  fields, each a pattern string), `headers` exact values. `routingSlug` is a convenience, the one
@@ -874,6 +888,13 @@ export interface IterateContextApi {
   files: {
     get(path: string): InvokeHandle & FileHandle;
     list(prefix?: string): Promise<FileRecord[]>;
+  };
+  /** The project's email at `<slug>@<email domain>` (`<slug>@iterate.app`). Mail sent to it,
+   *  and every `send`, lands on `/integrations/email` as `email/received` and `email/sent`, which
+   *  the `email` facet there folds into threads; an attachment's bytes are a project file.
+   *  `send` answers the `email/sent` event. */
+  email: {
+    send(input: EmailSendInput): Promise<StreamEvent>;
   };
   /** An MCP server over Streamable HTTP, through this context's egress. */
   connectToMcp(url: string, options?: McpConnectOptions): Promise<McpConnectionApi>;
