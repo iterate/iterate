@@ -3,7 +3,8 @@
 -- queries/*.sql against this file; migrations/ is what a database runs (`pnpm db:check` holds the
 -- two equal). Times are epoch ms, except oauth_grants.expires_at, which is epoch s (KV's unit).
 -- created_at on an organization, a membership and a project: when the row was written; null for a
--- row older than the column (migrations/0004_created_at.sql), which a list by it holds first.
+-- row older than the column (migrations/0004_created_at.sql), which a list by it holds first, until
+-- scripts/backfill-created-at.ts dates it from its organization's activity log.
 -- D1 enforces foreign keys (https://developers.cloudflare.com/d1/sql-api/foreign-keys/).
 
 -- email: trimmed and lower-cased (catalog.ts `emailAddress`). A user is never deleted.
