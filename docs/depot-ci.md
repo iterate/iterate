@@ -45,7 +45,8 @@ Workflow-run and job-attempt history goes to PostHog from an hourly sync
 - Custom image:
   `0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree`;
   Kit Firmware's build legs run on their own,
-  `0p91s0lz49.registry.depot.dev/iterate-esp-idf-ci:node24`
+  `0p91s0lz49.registry.depot.dev/iterate-esp-idf-ci:node24`, and Test on Depot's stock
+  `depot-ubuntu-24.04-8` ([below](#the-test-job-runs-on-depots-stock-image))
 - `DOPPLER_TOKEN` is the only Depot CI secret. Application and service
   credentials live in Doppler; GitHub supplies a short-lived job token.
 - Non-secret variables are managed with `depot ci vars`.
@@ -70,7 +71,7 @@ Anything else that needs GitHub-only triggers, such as `pull_request_target`, `i
 | File                         | Runs on                                             | What it does                                                                                            |
 | ---------------------------- | --------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
 | `lint-typecheck.yml`         | PR, main push, dispatch                             | **Lint and Typecheck** (required): lint, typecheck, format check, knip                                  |
-| `test.yml`                   | PR, main push                                       | **Test** (required): `pnpm test`, then the Kit firmware host tests                                      |
+| `test.yml`                   | PR, main push, dispatch                             | **Test** (required): `pnpm test`, then the Kit firmware host tests                                      |
 | `loc-report.yml`             | PR, dispatch                                        | The LOC table in the PR body                                                                            |
 | `pr-dashboard.yml`           | PR opened, reopened, ready, drafted or closed       | The Slack PR update and the daily PR dashboard                                                          |
 | `preview-os.yml`             | Every PR, dispatch                                  | **Preview OS**: Deploy preview, then **E2E tests** and **Browser specs**, then CI trace                 |
@@ -158,9 +159,10 @@ Agents babysitting a PR: the wait-loop rules are in
 
 Never open a pull request only to run CI, and never run CI on main's commit. Push a scratch branch
 (main plus an empty commit, or the commit to soak) under its own name and run against its head.
-`depot ci run` runs any workflow file, whatever its `on:` (Test has no `workflow_dispatch`);
-`depot ci dispatch` runs one that has `workflow_dispatch`, with inputs. Auth: `depot login`, or the
-organization token from Doppler:
+`depot ci run` runs any workflow file, whatever its `on:`; `depot ci dispatch` runs one that has
+`workflow_dispatch`, with inputs. Only a dispatch reaches Depot Cache, so soak Test by dispatch:
+under `ci run` its restore of pnpm's store misses, and it installs from the npm registry. Auth:
+`depot login`, or the organization token from Doppler:
 
 ```bash
 export DEPOT_TOKEN="$(doppler secrets get DEPOT_CI_TELEMETRY_TOKEN --plain --project _shared --config preview)"
@@ -171,7 +173,7 @@ cd ../ci-soak-<name>
 git commit --allow-empty -m "ci soak <name>"
 git push -u origin HEAD        # also creates the local origin/ci-soak/<name>
 
-depot ci run --org 0p91s0lz49 --workflow .depot/workflows/test.yml
+depot ci dispatch --org 0p91s0lz49 --repo iterate/iterate --workflow test.yml --ref ci-soak/<name>
 depot ci run --org 0p91s0lz49 --workflow .depot/workflows/lint-typecheck.yml
 depot ci dispatch --org 0p91s0lz49 --repo iterate/iterate --workflow os-e2e-soak.yml \
   --ref ci-soak/<name> --input runs=20 --input preview=soak-<name>
@@ -222,17 +224,21 @@ scratch run's test evidence goes to R2 under `trust=pr`. `status` and `artifacts
 
 ### Soak: N runs, then read them
 
-Test or Lint and Typecheck: N `depot ci run`s side by side. The e2e suite: `os-e2e-soak.yml`'s
-`runs` input, not N dispatches. Preview OS dispatches that name no PR share one concurrency group,
-`preview-os-none`, where a newer pending run replaces an older one.
+Lint and Typecheck: N `depot ci run`s side by side. Test: dispatches, one run per branch at a time,
+since each cancels the one before it; for runs side by side, push several soak branches. The e2e
+suite: `os-e2e-soak.yml`'s `runs` input, not N dispatches. Preview OS dispatches that name no PR
+share one concurrency group, `preview-os-none`, where a newer pending run replaces an older one.
 
 ```bash
 for i in $(seq 10); do
-  depot ci run --org 0p91s0lz49 --workflow .depot/workflows/test.yml | awk '/^Run:/ {print $2}'
+  depot ci run --org 0p91s0lz49 --workflow .depot/workflows/lint-typecheck.yml | awk '/^Run:/ {print $2}'
 done | tee soak-runs.txt
 
-# the tally; --name takes the workflow's name: ("Lint and Typecheck"). Rerun until none is queued or running.
-depot ci workflow list --org 0p91s0lz49 --repo iterate/iterate --name Test \
+# Test: one at a time. Dispatch the next once `depot ci status` says the last one finished.
+depot ci dispatch --org 0p91s0lz49 --repo iterate/iterate --workflow test.yml --ref ci-soak/<name>
+
+# the tally; --name takes the workflow's name: ("Test"). Rerun until none is queued or running.
+depot ci workflow list --org 0p91s0lz49 --repo iterate/iterate --name "Lint and Typecheck" \
   --sha "$(git rev-parse HEAD)" -n 200 --output json \
   --status queued --status running --status finished --status failed --status cancelled |
   jq -r 'group_by(.status)[] | "\(.[0].status) \(length)"'
@@ -350,7 +356,7 @@ before changing a size, and the retries too before adding Playwright workers or 
 
 | Size   | Jobs                                                                                                                                                | Evidence                                                                                                                                 |
 | ------ | --------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| `8x32` | Lint and Typecheck (four checks in parallel), Test                                                                                                  | Test's step 80 s p50 against 87 s on a `4x16`. Watch main's Test for a no-log `Sandbox terminated before worker reported completion`     |
+| `8x32` | Lint and Typecheck (four checks in parallel), Test (stock `depot-ubuntu-24.04-8`)                                                                   | Test's step 80 s p50 against 87 s on a `4x16`. Watch main's Test for a no-log `Sandbox terminated before worker reported completion`     |
 | `4x16` | Deploy OS, Deploy preview, Browser specs (six Playwright workers)                                                                                   | #3258: specs 79/104 s p50/p90 against 96/123 s on a `2x8`; 12+ workers or shards were faster but retried two to four times as many specs |
 | `2x8`  | E2E tests (it waits on a remote preview), client deploys, trace jobs, API-only jobs (LOC report, PR dashboard, Release, Health, Main OS e2e's page) | E2E tests peaked at 1.7 vCPUs on a `4x16`, and took 68 s against 62 s there, for half the price                                          |
 
@@ -378,11 +384,8 @@ dispatch always bake, one at a time per tag. Jobs on the image take their depend
 `node scripts/depot-ci/dependencies.mjs install`: an exact
 baked fingerprint reuses the installed tree without starting pnpm. A mismatch
 or missing receipt runs `pnpm install --frozen-lockfile --prefer-offline`.
-Only the Test job always runs that pnpm command, deliberately: the image loads
-lazily, and the install is what pages the tree in before the first tests (with
-reuse, 5 s test rows timed out in three of three runs). Jobs that consume the
-image must keep the image and checkout behavior, and set the store the image was
-baked with (`PNPM_CONFIG_STORE_DIR: /home/runner/.pnpm-store`), because every
+Jobs that consume the image must keep the image and checkout behavior, and set the store the
+image was baked with (`PNPM_CONFIG_STORE_DIR: /home/runner/.pnpm-store`), because every
 `pnpm_config_*` variable is part of the fingerprint:
 
 ```yaml
@@ -428,6 +431,51 @@ Normal CI still uses the rolling image tag so selecting it adds no preliminary
 job. The fingerprint tag makes the exact snapshot addressable and inspectable;
 consumers validate its receipt rather than trusting the tag's spelling. No
 package-manager migration is needed to bypass installation on a match.
+
+## The Test job runs on Depot's stock image
+
+The custom image loads lazily: its blocks come from Depot's storage on first read, and a host that
+has not run it since its last bake boots it cold (about 7 s more; 28–35 % of jobs, 61–64 % in the
+15 minutes after a bake, measured 2026-09-26). With the baked `node_modules` reused, Test's first
+packages ran 1.5–2× slower and 5 s rows timed out, so on the image Test paid a real `pnpm install`
+to page the tree in (10/23 s p50/p90 on 2026-09-27). Depot's stock image, which every Depot job
+shares, boots warm, and the files Test installs itself are in the page cache when its tests read
+them. So `test.yml` runs on `depot-ubuntu-24.04-8`, and after the checkout sets up, side by side:
+
+- Node from `.nvmrc` (`actions/setup-node`) and pnpm from the root `packageManager`
+  (`pnpm/action-setup`);
+- the Doppler CLI, a pinned release checked against its SHA-256, then `doppler setup`;
+- pnpm's store from Depot Cache (`actions/cache/restore`): the one keyed by the lockfile,
+  `pnpm-workspace.yaml` and `patches/`, else, off main, the newest one saved.
+  `pnpm install --frozen-lockfile --prefer-offline` fetches what it lacks from the npm registry.
+
+A main push that missed the exact key saves its store, beside the evidence uploads. Main restores
+nothing else, so that store holds only its lockfile's packages: `pnpm store prune` cannot cut an
+older one down, since it drops every file with one link, and pnpm copies the packages it builds.
+pnpm 10 reads `npm_config_*`, not `pnpm_config_*`, so the store is `NPM_CONFIG_STORE_DIR`, and
+`NPM_CONFIG_SIDE_EFFECTS_CACHE=false` keeps build outputs out of it: the install runs the few build
+scripts itself, since from a store that held their outputs it took 5 s longer.
+
+Depot Cache has no branch scope: any run can write any key, so a pull request could plant a store
+for main's runs by editing the workflow, and main's exact key follows from an open pull request's
+lockfile. Only Test reads the cache, never a deploy. Its job token is read-only
+(`permissions: contents: read`). Its `DOPPLER_TOKEN` also reads `_shared/preview`, which holds the
+Depot organization token and the preview Cloudflare API token. Today a planted store reaches nothing
+its author's own run does not already have, because Depot CI runs no pull request from a fork, so
+every run is from someone who can push here. iterate/iterate is public, and Depot plans fork support
+([compatibility](https://depot.dev/docs/ci/compatibility)). Before fork pull requests run on Depot,
+scope or drop the cache and the pull request's `restore-keys: pnpm-store-` fallback. Otherwise a
+fork's pull request, which gets no secrets, could plant a store that main's Test or another pull
+request's then runs with that token. pnpm checks each file it links against the store's index
+(`verify-store-integrity`, on by default), which catches a damaged store, not a planted one.
+`scripts/ci/depot-workflows.test.ts` pins all of this.
+
+So Test depends on GitHub's releases (Node, Doppler), the npm registry (pnpm itself, and packages
+on a miss) and Depot Cache. A failed restore is a warning, and the install then fetches
+everything. The job's summary says which store the install started from (this lockfile's, the
+newest, or none) and whether main saved one, and a restore or save that failed or timed out is a
+warning too (`scripts/ci/pnpm-store-report.sh`). actions/cache reports most other trouble only in
+its own log: a restore that could not read Depot Cache reads as none restored.
 
 ## Trigger Gotchas
 

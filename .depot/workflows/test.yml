@@ -1,28 +1,39 @@
 name: Test
+# Read-only: the job token of a run that restored a store from Depot Cache, which any branch can
+# write (docs/depot-ci.md#the-test-job-runs-on-depots-stock-image), can push nothing.
+permissions:
+  contents: read
 on:
   push:
     branches:
       - main
   pull_request: {}
+  # A soak runs it by dispatch: under `depot ci run` the job has no Depot Cache
+  # (docs/depot-ci.md#run-ci-without-a-pr).
+  workflow_dispatch: {}
 # Rapid pushes to a branch supersede each other. On PRs, head_ref identifies
 # the source branch; on main, ref_name keeps only the newest validation run.
 concurrency:
   group: test-${{ github.head_ref || github.ref_name || github.run_id }}
   cancel-in-progress: true
 env:
-  # The image's baked store: dependencies.mjs fingerprints it (docs/depot-ci.md#custom-image)
-  PNPM_CONFIG_STORE_DIR: /home/runner/.pnpm-store
+  # pnpm's store, which Depot Cache restores (below). On the checkout's filesystem, so pnpm
+  # hard-links node_modules from it. pnpm 10 reads `npm_config_*`, not `pnpm_config_*`.
+  NPM_CONFIG_STORE_DIR: /home/runner/.pnpm-store
+  # No build outputs in the store: the install runs the few build scripts (esbuild, workerd…) in
+  # well under a second, and from a restored store that held them it took 5 s longer (2026-09-27).
+  NPM_CONFIG_SIDE_EFFECTS_CACHE: "false"
 
 jobs:
   test:
+    # Depot's stock image, not the baked one
+    # (docs/depot-ci.md#the-test-job-runs-on-depots-stock-image).
     # 8x32 for apps/os's seven vitest slots (apps/os/vitest.config.ts `maxWorkers`): 22 runs each on
     # 2026-09-24, the test step took 80 s at the p50 here and 87 s on 4x16 (151 s at three slots),
     # peaking at 14 % memory and 79 % CPU. Lint is the other 8x32 job on a main push: two large
     # sandboxes have ended this job with a no-log "Sandbox terminated before worker reported
     # completion" (#1952, #2030, July 2026; a retry passed).
-    runs-on:
-      size: 8x32
-      image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
+    runs-on: depot-ubuntu-24.04-8
     timeout-minutes: 20
     steps:
       # EVIDENCE PER JOB ATTEMPT (docs/depot-ci.md#artifacts-per-job-attempt): the artifacts this job
@@ -42,20 +53,47 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          clean: false
           ref: ${{ github.sha }}
-      # THIS JOB INSTALLS. Reusing the baked node_modules (scripts/depot-ci/dependencies.mjs) skips a
-      # ~55 s no-op install, but the image is loaded lazily and that install was what paged the tree
-      # in: with the reuse, the first packages' tests ran 1.5–2× slower and 5 s rows timed out in
-      # three of three runs (2026-09-22: historical test and script failures);
-      # a parallel stat walk after the reuse did not help (metadata, not contents). The other
-      # workflows import little and keep the reuse; the test job pays the install.
-      - name: Install dependencies (pages the baked tree in)
+      # THE TOOLCHAIN AND PNPM'S STORE, side by side (docs/depot-ci.md#parallel-steps). A failed
+      # restore is a warning, and `fail-fast: false` keeps it from cancelling a setup step.
+      - fail-fast: false
+        parallel:
+          - name: Setup Node
+            uses: actions/setup-node@v4
+            with:
+              node-version-file: .nvmrc
+          # the root package.json's `packageManager`
+          - name: Setup pnpm
+            uses: pnpm/action-setup@v4
+          # A pinned release, checked against its published SHA-256, then `doppler setup`.
+          - name: Setup Doppler
+            env:
+              DOPPLER_CLI_VERSION: 3.76.6
+              DOPPLER_CLI_SHA256: 67e4e020761adf3ffe5a030712d61721b4e2752182670bf90de5a2a88e4961e3
+              DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+            run: |
+              dir="$RUNNER_TEMP/doppler-cli"
+              mkdir -p "$dir"
+              curl -fsSL --retry 3 -o "$dir/doppler.tar.gz" \
+                "https://github.com/DopplerHQ/cli/releases/download/${DOPPLER_CLI_VERSION}/doppler_${DOPPLER_CLI_VERSION}_linux_amd64.tar.gz"
+              echo "${DOPPLER_CLI_SHA256}  $dir/doppler.tar.gz" | sha256sum --check --quiet
+              tar -xzf "$dir/doppler.tar.gz" -C "$dir" doppler
+              echo "$dir" >> "$GITHUB_PATH"
+              "$dir/doppler" setup --config dev --project test
+          # PNPM'S STORE FROM DEPOT CACHE
+          # (docs/depot-ci.md#the-test-job-runs-on-depots-stock-image).
+          - name: Restore pnpm's store
+            id: pnpm-store
+            uses: actions/cache/restore@v4
+            continue-on-error: true
+            timeout-minutes: 2
+            with:
+              path: ${{ env.NPM_CONFIG_STORE_DIR }}
+              key: pnpm-store-${{ hashFiles('pnpm-lock.yaml', 'pnpm-workspace.yaml', 'patches/**') }}
+              restore-keys: ${{ github.ref != 'refs/heads/main' && 'pnpm-store-' || '' }}
+      - name: Install dependencies
+        id: install
         run: pnpm install --frozen-lockfile --prefer-offline
-      - name: Setup Doppler (baked CLI)
-        run: doppler setup --config dev --project test
-        env:
-          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
       - name: Run Tests
         id: tests
         env:
@@ -69,7 +107,8 @@ jobs:
           TEST_TELEMETRY_PULL_REQUEST_NUMBER: ${{ github.event.pull_request.number }}
         run: doppler run -- pnpm test
       # Kit's firmware compiled for the host (ASan/UBSan) and run under CTest. Its own step, not
-      # part of Kit's `test`, so `pnpm test` runs where cmake is missing; the image has cmake.
+      # part of Kit's `test`, so `pnpm test` runs where cmake is missing; the stock image has cmake
+      # and GCC's sanitizers.
       # `!cancelled()`, so a unit-test failure does not hide the firmware result. CTest's JUnit XML
       # goes into the test evidence folder (docs/test-evidence.md).
       - name: Run Kit firmware host tests
@@ -135,8 +174,32 @@ jobs:
               path: test-results
               include-hidden-files: true
               if-no-files-found: error
+          # PNPM'S STORE FOR THE NEXT RUNS, from a main push whose install inputs no run saved yet.
+          # Depot Cache has no branch scope, so no job but this one reads it, never a deploy
+          # (docs/depot-ci.md#the-test-job-runs-on-depots-stock-image).
+          - name: Save pnpm's store
+            id: pnpm-store-save
+            if: ${{ !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.install.outcome == 'success' && steps.pnpm-store.outputs.cache-hit != 'true' }}
+            uses: actions/cache/save@v4
+            continue-on-error: true
+            timeout-minutes: 3
+            with:
+              path: ${{ env.NPM_CONFIG_STORE_DIR }}
+              key: ${{ steps.pnpm-store.outputs.cache-primary-key }}
       # Either step that failed before it could say why (Doppler, pnpm, its timeout) gets its
       # warning and summary line here; one that reported itself is left alone.
       - name: Report a test evidence step that could not
         if: ${{ always() && (steps.evidence-write.outcome == 'failure' || steps.evidence-upload.outcome == 'failure') }}
         run: bash scripts/ci/test-evidence-unreported.sh "${{ steps.evidence-write.outcome }}" "${{ steps.evidence-upload.outcome }}"
+      # The store's line of the job's summary
+      # (docs/depot-ci.md#the-test-job-runs-on-depots-stock-image). The keys come in as environment
+      # variables, never spliced into the script: off main the matched key can be any key a run
+      # wrote.
+      - name: Report pnpm's store
+        if: always()
+        env:
+          RESTORE_OUTCOME: ${{ steps.pnpm-store.outcome }}
+          PRIMARY_KEY: ${{ steps.pnpm-store.outputs.cache-primary-key }}
+          MATCHED_KEY: ${{ steps.pnpm-store.outputs.cache-matched-key }}
+          SAVE_OUTCOME: ${{ steps.pnpm-store-save.outcome }}
+        run: bash scripts/ci/pnpm-store-report.sh "$RESTORE_OUTCOME" "$PRIMARY_KEY" "$MATCHED_KEY" "$SAVE_OUTCOME"
