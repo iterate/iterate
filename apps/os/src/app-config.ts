@@ -258,11 +258,14 @@ export const AppConfig = z.object({
       /** THE RESERVED DOMAIN OF THIS DEPLOYMENT'S TEST PEOPLE (test-email-domain.ts): a sign-in
        *  provider pointed at a fake (a preview's pet shop, which mints any address) signs in
        *  addresses under it alone (identity.ts), and a sign-in link's `login_hint` pre-fills an
-       *  admin's "Sign in as someone else" only under it (consent.ts). Refused (`parseAppConfig`)
-       *  unless `urls.os` is a preview's, a laptop's or a test's. Set in code, never in Doppler: the
-       *  per-PR preview's config (scripts/preview-config.ts), as `APP_CONFIG_LOGIN__TEST_EMAIL_DOMAIN`,
-       *  and local dev's (scripts/generate-wrangler-config.ts). Unset ⇒ no fake provider signs
-       *  anyone in, and no link pre-fills anyone. */
+       *  admin's "Sign in as someone else" only under it (consent.ts). On a laptop's platform
+       *  (`urls.os` an http loopback origin) it also opens `/.auth/local-sign-in`
+       *  (local-sign-in.ts), which signs its test people in with no password. Refused
+       *  (`parseAppConfig`) unless `urls.os` is a preview's, a laptop's or a test's. Set in code,
+       *  never in Doppler: the per-PR preview's config (scripts/preview-config.ts), as
+       *  `APP_CONFIG_LOGIN__TEST_EMAIL_DOMAIN`, and local dev's (scripts/generate-wrangler-config.ts).
+       *  Unset ⇒ no fake provider signs anyone in, no link pre-fills anyone, and no one-click local
+       *  sign-in exists. */
       testEmailDomain: dnsName.optional(),
     })
     .prefault({}),

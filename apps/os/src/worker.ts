@@ -1,6 +1,6 @@
 // worker.ts — the one worker's fetch entry: the request is sorted top to bottom — a project host
 // (the files host, else the project's config worker), the MCP origin, then the platform origin's
-// own paths (`/version`, a preview's admin sign-in through prd, the secret-OAuth callback, the
+// own paths (`/version`, a preview's admin sign-in through prd, local dev's one click, the secret-OAuth callback, the
 // integrations' callbacks and webhooks, Google identity, `/mcp`, the browser adapter's `/api` and `/.auth/*`) and, last, the OAuth provider with
 // the issuer's pages as its catch-all.
 // Cap’n Web terminates at `/api`; a project host's request rides into the context DO.
@@ -38,6 +38,7 @@ import {
   adminSignInClientMetadata,
   adminSignInResponse,
 } from "./admin-sign-in.ts";
+import { localSignInResponse } from "./local-sign-in.ts";
 import { appConfigOf, platformAddressesOf, sessionSigningSecretOf } from "./app-config.ts";
 import { captureIssueInPosthog } from "./posthog.ts";
 import { FILES_ROUTING_SLUG, serveProjectFileRequest } from "./context/file-urls.ts";
@@ -380,6 +381,9 @@ export default {
           headers: { "cache-control": "public, max-age=300" },
         });
     }
+    // Local dev's one click (local-sign-in.ts, `pnpm getin`): on a laptop's platform alone.
+    const localSignIn = await localSignInResponse(request, env);
+    if (localSignIn) return localSignIn;
     // posthog-js's `api_host` on the issuer's own pages (routes/__root.tsx): PostHog EU through
     // this origin.
     if (url.pathname.startsWith("/e/")) return proxyPosthogRequest({ request, proxyPrefix: "/e" });
