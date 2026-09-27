@@ -267,8 +267,10 @@ async function judgeEachRun(
 
 /** Judge each push run of Main OS e2e that `memory` has not, the settled ones and then `current`
  *  (`judgeEachRun`): main e2e from its jobs, and its slow rows from its E2E tests job's suite
- *  summary, which a job its deploy's failure skipped never wrote. A run whose deploy or suite job
- *  Depot still lists as queued or running has not settled: judging it throws. */
+ *  summary, which a job its deploy's failure skipped never wrote. When Depot still lists a deploy or
+ *  suite job of `current` as queued or running, that run has not settled, and judging it throws. An
+ *  older run Depot lists as finished or failed with such a job (one Depot failed before its jobs
+ *  started) has no verdict, and the state moves past it. */
 export async function checkMainE2e(input: {
   depot: DepotApi;
   memory: E2eMemory;
@@ -287,7 +289,7 @@ export async function checkMainE2e(input: {
       );
       const mainJobs = jobs.filter((job) => MAIN_JOBS.includes(job.jobKey));
       const unsettled = mainJobs.find((job) => ["queued", "running"].includes(job.status));
-      if (unsettled)
+      if (unsettled && run.workflowId === input.current?.workflowId)
         throw new Error(
           `${run.workflowId} has not settled: Depot lists ${unsettled.jobKey} as ${unsettled.status}`,
         );

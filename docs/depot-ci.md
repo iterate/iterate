@@ -946,14 +946,15 @@ link to the run, then the state now of every signal the job pages:
   - **DO cost**: the Durable Object cost alarm, in its own daily thread and pages.
 
   Its message's last line names main e2e's and slow e2e rows' state too, from
-  Main OS e2e's state.
+  Main OS e2e's state, or none when it cannot read that state.
 
 A red page mentions Jonas once. A page leaves the job green; a check that could
 not read Depot, or found its probe broken (a report with no rows, a suite that
 did not run), fails the job once the others have paged. Each run since the last
 judged is judged, oldest first, so a page names the run where its suite changed
 state: Main OS e2e's page job judges its own run after any settled one whose
-page was lost. A re-run keeps its creation time and is not judged again, so the
+page was lost. A settled run that Depot ended before its jobs started has no
+verdict. A re-run keeps its creation time and is not judged again, so the
 next push's run pages it. Each job's memory is its own artifact, `health-state`
 and `main-e2e-state`; a state of another `schemaVersion` is not read, and the job
 starts over. Dispatch `health.yml` with `--input test-page=true` to post every

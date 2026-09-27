@@ -408,12 +408,51 @@ test("a re-run, which keeps its creation time, is not judged again", async () =>
   expect(judged).toEqual({ pages: [], memory, failures: [] });
 });
 
-test("a run whose suite Depot still lists as running has not settled: judging it throws", async () => {
+test("the run whose page job this is has not settled while Depot lists its suite as running: judging it throws", async () => {
   const current = mainRun("current", "2026-09-26T20:00:00Z", { specs: "running", running: true });
   const depot = fakeDepot({ "Main OS e2e": [current] });
   await expect(
     checkMainE2e({ depot, memory: empty, testRun: false, subject, current: settled(current) }),
   ).rejects.toThrow("wf-current has not settled: Depot lists main-os-e2e.yml:specs as running");
+});
+
+test("an older run Depot failed before its jobs started has no verdict: the state moves past it, and the next page job judges its own run", async () => {
+  const stuck = {
+    ...mainRun("stuck", "2026-09-26T19:30:00Z", {
+      deploy: "queued",
+      e2e: "queued",
+      specs: "queued",
+    }),
+    status: "failed",
+    artifacts: {},
+  };
+  const current = mainRun("current", "2026-09-26T20:00:00Z", { running: true });
+  const depot = fakeDepot({ "Main OS e2e": [stuck, current] });
+  const judged = await checkMainE2e({
+    depot,
+    memory: {
+      suites: { "main e2e": "red", "slow e2e rows": "green" },
+      judgedAt: { "Main OS e2e": "2026-09-26T19:00:00Z" },
+    },
+    testRun: false,
+    subject,
+    current: settled(current),
+  });
+  expect(judged).toEqual({
+    pages: [
+      {
+        tone: "green",
+        headline: "main e2e green again at `currentaa` (the subject of cur)",
+        details: [],
+        link: "https://depot.dev/orgs/0p91s0lz49/workflows/wf-current",
+      },
+    ],
+    memory: {
+      suites: { "main e2e": "green", "slow e2e rows": "green" },
+      judgedAt: { "Main OS e2e": "2026-09-26T20:00:00Z" },
+    },
+    failures: [],
+  });
 });
 
 test("a main run whose deploy failed is red, and its skipped suites judge no slow rows", async () => {

@@ -156,8 +156,9 @@ export function mainRun(
     jobKey: `main-os-e2e.yml:${key}`,
     jobDisplayName: displayName,
     status,
+    // a job its deploy's failure skipped, or one Depot never started, has no attempt
     attempts:
-      status === "skipped"
+      status === "skipped" || status === "queued"
         ? []
         : [
             { attemptId: `${id}-${key}-1`, attempt: 1 },
