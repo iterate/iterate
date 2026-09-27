@@ -519,9 +519,11 @@ that needs code landing with it (#2999: main's `test.yml` named a workspace the 
 - Lint and Typecheck, Test, LOC report, the PR dashboard and Kit Firmware's Plan and build legs
   check out `github.sha`. LOC report still diffs the PR's head against its base, from the event.
 - Preview OS's deploy passes `github.sha` to `scripts/ci/preview-tested-commit.ts`, which deploys
-  it when it is a merge of the head and otherwise resolves `refs/pull/<n>/merge`; e2e and trace
-  check out the commit deploy tested. The trace's statuses, the test telemetry's `headSha` and the
-  preview's name use the PR head.
+  it when it is a merge of the head and otherwise resolves `refs/pull/<n>/merge`. The suites start
+  beside the deploy, so they find its commit themselves: on a push they check out `github.sha`,
+  which is what the deploy tests, and on a dispatch they resolve it with the same
+  `preview-tested-commit.ts`. The trace checks out the commit deploy tested. The trace's statuses,
+  the test telemetry's `headSha` and the preview's name use the PR head.
 - Preview delete checks out `github.sha` on a close: a merged PR's squash commit on main, an
   unmerged PR's head. An unmerged head older than a main change runs the old teardown (#2982's
   close named a renamed Doppler project); the nightly sweep deletes what it leaves.
@@ -658,8 +660,14 @@ have no `needs:`. Each starts with the run and, while the preview deploys:
    this commit to test." The wait reads the job's status, not an attempt's, so a
    suite re-run alone after its run ended goes at once, and one re-run beside a
    failed deploy waits for the deploy's next attempt. It logs each change of the
-   deploy's state and gives up after the deploy's own 40-minute timeout, which
-   is why the suite jobs' timeout is 70 minutes: that wait, then the suite's 30.
+   deploy's state and gives up after the deploy's own 40-minute timeout. Depot
+   failing on its own side (a 5xx, a 429, a lost connection) fails no suite: each
+   call is asked again on `CI_HTTP`'s schedule, then the wait warns and asks
+   again a second later, and only five minutes in which every call failed end
+   it. A 401 or 403, a missing token or an answer it cannot read fail it at once.
+   The suite then runs for at most 30 minutes (`runBounded` stops its process
+   group), so the suite jobs' timeout is 70 minutes: the wait, then the suite's
+   30, the whole job's timeout before the suites waited here.
 
 A suite keeps its evidence once it read its deployed target
 (`test-results/target.json`, [test evidence](test-evidence.md)), so a job that
