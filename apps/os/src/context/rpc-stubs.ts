@@ -88,6 +88,11 @@ export const RPC_STUB_PAGER_KEEPALIVE_RESPONSE = "itx-pager-keepalive-ack";
  *  immediately, so 10 s is a dead relay, not a slow one. The relay's repeats of a lend the platform
  *  failed (`answerPage`, below: `RELAY_BURST`) land well inside it. */
 const RPC_STUB_PAGE_TIMEOUT_MS = 10_000;
+/** How long a dropped pager is re-dialed (redial.ts) before its lend ends, which pages: twelve tries
+ *  over ~56 s, a dial with no answer given up at 60 s. All 555 pager re-dials on prd 2026-09-24–25
+ *  were answered by the third try, 6 s after the drop; the tenfold headroom keeps a slower deploy's
+ *  reset from paging. */
+const RPC_STUB_PAGER_REDIAL_DEADLINE_MS = 60_000;
 
 /** WHAT THIS SIDE BORROWS: the Workers-RPC stub a lender hands over — TWO methods: `invoke(steps)`
  *  walks the itx-expression steps on the client's rpc stub (a DIRECT dotted dispatch — never
@@ -764,7 +769,11 @@ export async function lendRpcStubOverPager(
     reason: string;
     answeredAt: number;
   }): Promise<void> => {
-    const redialed = await redial(dialPager, () => Boolean(lendEnded.reason));
+    const redialed = await redial(
+      dialPager,
+      () => Boolean(lendEnded.reason),
+      RPC_STUB_PAGER_REDIAL_DEADLINE_MS,
+    );
     if (!redialed) return;
     const drop = {
       namespace: "rpc-stubs",

@@ -4,30 +4,30 @@
 // invocation holding the other end outlives the reset, and dials again.
 //
 // One try at a time: at once, then after 250 ms, the wait doubling to 8 s, while the next starts
-// within `DEADLINE_MS` of the drop (eight tries over ~24 s). A throw or a 5xx is the context not ready
-// yet (a deploy's reset answers again within seconds) and is tried again; any other answer without a
-// socket is its refusal (a paused stream). A dial still pending at the deadline is given up and never
-// dialed again beside, since a socket it brings late would replace one a later try brought back.
-
-const DEADLINE_MS = 30_000;
+// within the caller's `deadlineMs` of the drop (30 s: eight tries over ~24 s; 60 s: twelve over
+// ~56 s). A throw or a 5xx is the context not ready yet (a deploy's reset answers again within
+// seconds) and is tried again; any other answer without a socket is its refusal (a paused stream).
+// A dial still pending at the deadline is given up and never dialed again beside, since a socket
+// it brings late would replace one a later try brought back.
 
 /** A context's answer to a socket dial: as much of its Response as a re-dial reads. */
 type DialAnswer = { status: number; webSocket?: WebSocket | null; body?: ReadableStream | null };
 
-/** Dial until the context answers a socket: the answer and its socket, accepted; why it gave up; or
- *  null once `unwanted()` (the lend recalled, the upgrade ended), a socket it brings then closed.
- *  `dials` counts the tries. */
+/** Dial until the context answers a socket, for at most `deadlineMs` from now (the drop): the answer
+ *  and its socket, accepted; why it gave up; or null once `unwanted()` (the lend recalled, the
+ *  upgrade ended), a socket it brings then closed. `dials` counts the tries. */
 export async function redial<Answer extends DialAnswer>(
   dial: () => Promise<Answer>,
   unwanted: () => boolean,
+  deadlineMs: number,
 ): Promise<
   { socket: WebSocket; answer: Answer; dials: number } | { gaveUp: string; dials: number } | null
 > {
-  const deadline = Date.now() + DEADLINE_MS;
+  const deadline = Date.now() + deadlineMs;
   let wait = 250;
   for (let dials = 1; ; dials += 1) {
     if (unwanted()) return null;
-    const tried = await dialOnce(dial, deadline);
+    const tried = await dialOnce(dial, deadline, deadlineMs);
     if ("socket" in tried) {
       if (!unwanted()) return { ...tried, dials };
       closeAbandoned(tried.socket);
@@ -45,6 +45,7 @@ export async function redial<Answer extends DialAnswer>(
 async function dialOnce<Answer extends DialAnswer>(
   dial: () => Promise<Answer>,
   deadline: number,
+  deadlineMs: number,
 ): Promise<{ socket: WebSocket; answer: Answer } | { failure: string; final: boolean }> {
   // a dial that throws before its promise is a failed try too, not a rejection of the re-dial
   const dialing = Promise.resolve().then(dial);
@@ -67,7 +68,7 @@ async function dialOnce<Answer extends DialAnswer>(
       (late) => late.webSocket && closeAbandoned(late.webSocket, true),
       () => {},
     );
-    return { failure: `no answer within ${DEADLINE_MS / 1000} s of the drop`, final: true };
+    return { failure: `no answer within ${deadlineMs / 1000} s of the drop`, final: true };
   }
   if (answer.status === 101 && answer.webSocket) {
     answer.webSocket.accept();

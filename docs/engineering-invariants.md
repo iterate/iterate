@@ -61,7 +61,8 @@ rides on as own properties, which Workers RPC and capnweb keep.
   `RELAY_BURST`, `CI_HTTP`, `CLOUDFLARE_API`, the durable ladder (1 s·2ⁿ,
   capped at 30 minutes), and the socket re-dial
   ([redial.ts](../apps/os/src/context/redial.ts): at once, then 250 ms doubling
-  to 8 s, within 30 s of the drop). Each schedule is bounded, each wait but the
+  to 8 s, within the caller's deadline of the drop: 60 s for a lent stub's pager,
+  30 s for a resumable upgrade). Each schedule is bounded, each wait but the
   re-dial's is jittered, and giving up on an idempotent call is logged once. A
   `Retry-After` longer than a wait replaces it, up to the schedule's longest
   wait. A script's HTTP call goes through `fetchRetryingPlatformFailures`, whose
