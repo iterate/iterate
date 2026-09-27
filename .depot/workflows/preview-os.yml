@@ -123,8 +123,7 @@ jobs:
     if: >-
       github.event_name == 'pull_request' ||
       (github.event_name == 'workflow_dispatch' && inputs.pull-request-number != '' && (inputs.action == 'deploy' || inputs.action == 'reset'))
-    # An 8x32: its seven client builds run side by side, CPU-bound, in 5–7 s each instead of 9–12 s
-    # on a 4x16, which more than pays for the setup (docs/depot-ci.md#reliability-defaults).
+    # Its size: docs/depot-ci.md#reliability-defaults.
     runs-on: depot-ubuntu-24.04-8
     timeout-minutes: 40
     # THE COMMIT THIS RUN TESTS, for the trace job: the PR merged into main

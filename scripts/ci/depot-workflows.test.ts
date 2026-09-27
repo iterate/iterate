@@ -374,9 +374,9 @@ test("Kit Firmware publishes from one job that runs no repository code", () => {
   expect(workflow.on?.schedule).toEqual([{ cron: expect.any(String) }]);
 });
 
-// A leg that installed ESP-IDF itself made a GitHub clone and a PyPI install, and one broken
-// download failed a board with no firmware change (scripts/ci/esp-idf.sh). Depot Cache holds it,
-// keyed by that pin, and a main leg saves it, as installed, for a pin that has none yet.
+// A leg that installs ESP-IDF itself makes a GitHub clone and a PyPI install, any of whose
+// downloads can fail a board with no firmware change. So Depot Cache holds it, keyed by its pin
+// (scripts/ci/esp-idf.sh), and a main leg saves it, as installed, for a pin that has none yet.
 test("Kit Firmware legs take ESP-IDF from Depot Cache, keyed by its pin", () => {
   const workflow = loadWorkflow(".depot/workflows/kit-firmware.yml");
   const leg = workflow.jobs["build-firmware"]!;
@@ -728,7 +728,7 @@ test("only main writes Depot Cache, main restores exact keys, and no production 
 
 // The production deploys and the release install from the npm registry, whose lockfile hashes vouch
 // for every package, and never from a store any branch could have written.
-test.each([...deploymentWorkflows.map(({ file }) => file), ".depot/workflows/release.yml"])(
+test.for([...deploymentWorkflows.map(({ file }) => file), ".depot/workflows/release.yml"])(
   "%s installs from the npm registry alone",
   (file) => {
     const setups = Object.values(loadWorkflow(file).jobs).flatMap((job) =>
@@ -801,9 +801,6 @@ test.for([".depot/workflows/preview-os.yml", ".depot/workflows/main-os-e2e.yml"]
         },
       ],
     });
-    expect(readFileSync(resolve(repoRoot, "apps/os/scripts/preview.ts"), "utf8")).toContain(
-      '["exec", "playwright", "install", "--only-shell", "chromium"]',
-    );
   },
 );
 

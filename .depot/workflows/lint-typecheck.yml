@@ -1,5 +1,5 @@
 name: Lint and Typecheck
-# Read-only: its install comes from Depot Cache, which any branch can write (docs/depot-ci.md#depot-cache).
+# Read-only, as every reader of Depot Cache (docs/depot-ci.md#depot-cache).
 permissions:
   contents: read
 on:
