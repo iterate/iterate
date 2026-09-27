@@ -28,7 +28,7 @@ export interface PetshopGrant {
 }
 
 export const petshopOauth = (deps: ShopDeps) =>
-  fakeAuthorizationServer<PetshopGrant>(deps, "petshop");
+  fakeAuthorizationServer<PetshopGrant>(deps, "petshop", (grant) => grant.sub);
 
 const oauthError = (error: string, error_description?: string, status = 400) =>
   Response.json({ error, error_description }, { status });

@@ -13,7 +13,7 @@
  *   200 with a GraphQL-style `failures` array (type `AUTHENTICATION_FAILED`).
  * - Revocation is per endpoint AND per account: `POST /__backdoor/expire-tokens`
  *   with `{ clientId: "graphql-session-login" }` kills every session, with
- *   `{ clientId: graphqlSessionAccountClientId(username) }` only that
+ *   `{ clientId: "graphql-session-login", account: username }` only that
  *   account's — what a test that forces a 401 wants, since this ONE shop
  *   serves every concurrent CI run.
  * - Anything else on the GraphQL endpoint is a loud `errors` answer: it
@@ -33,11 +33,6 @@ export const GRAPHQL_SESSION_TTL_SECONDS = 120;
 /** The client every GraphQL-minted session belongs to (`/api/me`'s `clientId`)
  * — its revocation epoch is the whole endpoint's. */
 export const GRAPHQL_SESSION_CLIENT_ID = "graphql-session-login";
-
-/** The revocation key of ONE account's GraphQL sessions: expire-tokens with
- * it bumps that account's epoch and no one else's. */
-export const graphqlSessionAccountClientId = (username: string) =>
-  `${GRAPHQL_SESSION_CLIENT_ID}:${username}`;
 
 /** What the endpoint needs from the shop: the sealing key and a per-call read of
  * the revocation epochs a session of `username` is bound to — the endpoint's and

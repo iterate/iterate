@@ -30,7 +30,6 @@ import {
   GRAPHQL_SESSION_CLIENT_ID,
   GRAPHQL_SESSION_TTL_SECONDS,
   type GraphqlLoginDeps,
-  graphqlSessionAccountClientId,
   graphqlSessionFromBearer,
   handleGraphqlLogin,
 } from "./graphql-login.ts";
@@ -42,6 +41,7 @@ import { nowSeconds } from "./seal.ts";
 import { handleSlackRequest, handleSlackTestControls } from "./slack.ts";
 import {
   accessTokenEpochFor,
+  accountRevocationKey,
   DEFAULT_ACCESS_TTL_SECONDS,
   DEFAULT_APP_ID,
   DEFAULT_CLIENT_ID,
@@ -100,8 +100,10 @@ const INDEX = dedent`
                             ${INSTALLATION_TOKEN_TTL_SECONDS}s installation token, a bearer on /api/* too
 
   POST /__backdoor/clients                 → mint {clientId, clientSecret}
-  POST /__backdoor/expire-tokens           {clientId} → that client's outstanding access tokens answer 401
-                                           ("graphql-session-login:<username>": one account's GraphQL sessions)
+  POST /__backdoor/expire-tokens           {clientId, account} → the outstanding access tokens that account holds
+                                           from that client answer 401, no other account's (an email, login, name,
+                                           GraphQL username or GitHub installation id); with no account, every
+                                           token of the client
   POST /__backdoor/revoke-refresh-token    {refreshToken} → that refresh token stops working
   POST /__backdoor/fail-token-endpoint     {clientId, times} → that client's next N token calls answer 500
   POST /__backdoor/apps                    {publicKeyPem, installationId?, appId?, webhookSecret?, appSlug?, callbackUrl?, account?, users?, oauthClientId?}
@@ -123,7 +125,10 @@ const graphqlLoginDeps = (deps: ShopDeps): GraphqlLoginDeps => ({
   getAccessTokenEpochs: (username) =>
     deps.state.getState().then((state) => ({
       epoch: accessTokenEpochFor(state, GRAPHQL_SESSION_CLIENT_ID),
-      accountEpoch: accessTokenEpochFor(state, graphqlSessionAccountClientId(username)),
+      accountEpoch: accessTokenEpochFor(
+        state,
+        accountRevocationKey(GRAPHQL_SESSION_CLIENT_ID, username),
+      ),
     })),
 });
 
@@ -155,7 +160,10 @@ async function accessGrant(
   return null;
 }
 
-const ExpireTokens = z.object({ clientId: z.string().min(1) });
+const ExpireTokens = z.object({
+  clientId: z.string().min(1),
+  account: z.string().min(1).optional(),
+});
 const RevokeRefreshToken = z.object({ refreshToken: z.string() });
 const FailTokenEndpoint = z.object({ clientId: z.string().min(1), times: z.int().nonnegative() });
 
@@ -170,10 +178,11 @@ async function backdoor(key: string, request: Request, deps: ShopDeps): Promise<
     const input = ExpireTokens.safeParse(await body());
     if (!input.success)
       return invalid("clientId is required so expiry cannot affect unrelated tests");
-    const { clientId } = input.data;
+    const { clientId, account } = input.data;
     return Response.json({
       clientId,
-      accessTokenEpoch: await deps.state.expireAccessTokens(clientId),
+      account,
+      accessTokenEpoch: await deps.state.expireAccessTokens(clientId, account),
     });
   }
   if (key === "POST /__backdoor/revoke-refresh-token") {

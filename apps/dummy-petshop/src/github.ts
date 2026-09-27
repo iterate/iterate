@@ -55,7 +55,7 @@ import { DEFAULT_INSTALLATION_ID, fakeUserIdOf, type ShopDeps } from "./state.ts
 export const INSTALLATION_TOKEN_TTL_SECONDS = 60;
 
 /** The `t` of an installation token: a bearer on the installation API and on the pet shop's own
- *  API (worker.ts), bound to the App's revocation epoch. */
+ *  API (worker.ts), bound to the revocation epochs of the App and of its installation. */
 export const INSTALLATION_TOKEN = "github-installation";
 
 /** What an installation token names. */
@@ -84,7 +84,7 @@ export async function handleGithubRequest(
   const query = Object.fromEntries(url.searchParams);
   const bearer =
     /^(?:Bearer|token)\s+(\S+)$/i.exec(request.headers.get("authorization") || "")?.[1] || "";
-  const github = fakeAuthorizationServer<GithubUserGrant>(deps, "github");
+  const github = fakeAuthorizationServer<GithubUserGrant>(deps, "github", (grant) => grant.login);
 
   const install = /^\/apps\/([^/]+)\/installations\/new$/.exec(url.pathname);
   if (request.method === "GET" && install) {
@@ -180,7 +180,7 @@ export async function handleGithubRequest(
     const token = await sealAccessToken<InstallationGrant>(
       deps,
       INSTALLATION_TOKEN,
-      app.appId,
+      { clientId: app.appId, account: installationId },
       { installationId, appId: app.appId },
       INSTALLATION_TOKEN_TTL_SECONDS,
     );
