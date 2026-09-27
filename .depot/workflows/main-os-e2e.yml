@@ -67,7 +67,8 @@ on:
       - pnpm-workspace.yaml
       - envs.ts
       - scripts/lib/**
-      - scripts/depot-ci/**
+      - .depot/actions/**
+      - scripts/ci/toolchain.sh
   workflow_dispatch:
 
 concurrency:

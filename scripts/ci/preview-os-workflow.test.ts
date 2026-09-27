@@ -215,14 +215,17 @@ test("Preview OS's suites decide as Deploy preview does whether there is a previ
   expect(steps[changes]).toEqual(deploySteps.find((step) => step.id === "changes"));
   expect(changes).toBe(steps.findIndex((step) => step.uses === "actions/checkout@v4") + 1);
   const after = steps.slice(changes + 1, steps.findIndex((step) => step.id === "suite") + 1);
+  // the specs' browser restore also skips in E2E tests
   expect(after.filter((step) => step.id !== "tested").map((step) => step.if)).toEqual(
     after
       .filter((step) => step.id !== "tested")
-      .map(() => "steps.changes.outputs.preview != 'false'"),
+      .map((step) =>
+        step.id === "playwright"
+          ? "steps.changes.outputs.preview != 'false' && env.SUITE == 'specs'"
+          : "steps.changes.outputs.preview != 'false'",
+      ),
   );
-  expect(steps.findIndex((step) => step.name === "Reconcile dependencies (baked)")).toBeGreaterThan(
-    changes,
-  );
+  expect(steps.findIndex((step) => step.name === "Setup")).toBeGreaterThan(changes);
 });
 
 // The wait is bounded by the deploy's own timeout, and the suite by its 30 minutes after it

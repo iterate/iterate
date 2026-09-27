@@ -789,7 +789,10 @@ test.for([".depot/workflows/preview-os.yml", ".depot/workflows/main-os-e2e.yml"]
         {
           name: "Restore Playwright's browser",
           id: "playwright",
-          if: "env.SUITE == 'specs'",
+          // Preview OS's also skips for a PR that changes no preview path, as its setup does
+          if: expect.stringMatching(
+            /^(steps\.changes\.outputs\.preview != 'false' && )?env\.SUITE == 'specs'$/u,
+          ),
           uses: "actions/cache/restore@v4",
           with: {
             path: "~/.cache/ms-playwright",
