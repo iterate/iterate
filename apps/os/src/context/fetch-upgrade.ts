@@ -354,8 +354,7 @@ export class RpcStubFetchServer {
     const peer = this.#peerOf(ws);
     // oxlint-disable-next-line iterate/simple-truthiness-check -- #peerOf returns a real three-way: undefined = not ours, null = ours-but-peer-gone, WebSocket = live
     if (peer === undefined) return false;
-    // oxlint-disable-next-line iterate/simple-truthiness-check -- three-way distinction: null = peer already gone (drop the frame, distinct from undefined above)
-    if (peer === null) return true; // peer already gone — drop the frame; close handles teardown
+    if (!peer) return true; // peer already gone — drop the frame; close handles teardown
     try {
       peer.send(data);
     } catch {
