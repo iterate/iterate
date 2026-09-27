@@ -369,10 +369,9 @@ legs' artifacts and checks every new file's bytes through `k.iterate.com`. Deplo
 firmware. The ESP-IDF pin is in `scripts/ci/esp-idf.sh` and each target's `dependencies.lock`. A
 leg restores that pin's ESP-IDF, for the image's python3, from [Depot Cache](#depot-cache), and
 `esp-idf.sh ensure` installs from the network, with a warning, only when there was none, after which
-a main leg saves it. On a
-4x16 a leg restores its 1.06 GB in 7 s and builds a board in 30 s, against 12–27 s and 48–52 s on a
-2x8, for about the same cost. [Kit firmware releases](../apps/kit/README.md#firmware-releases) has
-the rest.
+a main leg saves it. On a 4x16 a leg restores its 1.06 GB in 7 s and builds a board in 30 s, against
+12–27 s and 48–52 s on a 2x8, for about the same cost.
+[Kit firmware releases](../apps/kit/README.md#firmware-releases) has the rest.
 
 ## Setup on Depot's stock image
 
@@ -416,9 +415,10 @@ their outputs it took 5 s longer. No job runs `doppler setup`: every `doppler ru
 | ESP-IDF and its tools, 1.06 GB      | `esp-idf-`, the hash of `scripts/ci/esp-idf.sh` (the pin) and python3's version  | Kit Firmware's legs                                                | a main leg that missed, right after installing it  |
 
 Off main a restore falls back to the newest entry of its kind (`restore-keys`), except ESP-IDF's:
-an older pin's is of no use, nor is one whose Python environment was built for another python3. Main restores the exact key alone, so what main saves holds only its
-own lockfile's packages: `pnpm store prune` cannot cut an older store down, since it drops every
-file with one link, and pnpm copies the packages it builds. A restore that fails or times out is a
+an older pin's is of no use, nor is one whose Python environment was built for another python3.
+Main restores the exact key alone, so what main saves holds only its own lockfile's packages:
+`pnpm store prune` cannot cut an older store down, since it drops every file with one link, and
+pnpm copies the packages it builds. A restore that fails or times out is a
 warning, and the job fetches what it lacks: from the npm registry, from Playwright's CDN (the
 suite's `playwright install --only-shell`), or from GitHub, dl.espressif.com and PyPI
 (`esp-idf.sh ensure`, with its own warning). Test's summary says which store its install started
