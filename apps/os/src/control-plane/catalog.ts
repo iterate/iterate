@@ -103,9 +103,9 @@ const newId = (prefix: "user" | "org" | "prj" | "inv" | "acc") =>
 export type UserRecord = { id: string; email: string };
 /** A project, addressed by `id` everywhere (the context's name, a grant's list, the API); `slug` is
  *  the DNS label of its hostnames; `role` is the reader's, when read through their memberships. A
- *  row is inserted once and never updated, and its copies rely on that: the edge's memo (edge.ts)
- *  and a context's own `project-slug` (iterate-context-durable-object.ts `#projectSlug`) — a slug
- *  that could change must reach them. */
+ *  row is only ever inserted or deleted: a context's own `project-slug` relies on that
+ *  (iterate-context-durable-object.ts `#projectSlug`; a deletion destroys that storage too), and
+ *  the edge keeps a row `KEPT_MS` (edge.ts). */
 export type ProjectRecord = {
   id: string;
   slug: string;

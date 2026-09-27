@@ -1,13 +1,14 @@
 // src/control-plane/edge.ts — THE CONTROL PLANE AS THE EDGE HOLDS IT: every question the stateless
 // worker asks — which project is this slug, may this session reach it, who is this email — and every
 // command it relays, each ONE call on the deployment's D1 (catalog.ts, one statement or one batch).
-// Memos per isolate: a project's id, slug and organization never change, so a hit is kept for the
-// isolate's life, and a miss only by a project host's admission, five seconds
-// (`getProjectKeepingMisses`); a person's access is kept five seconds — dropped at once here for the
-// person a command was made by or for — and a refusal is never memoized: a project not in a memoized
-// access set is re-read once before it is refused, so a creation is reachable at once. A memo keeps
-// answers, never a read in flight: a request awaiting another's read hangs when that request ends
-// first, its I/O cancelled with it (https://developers.cloudflare.com/workers/observability/errors/).
+// WHAT AN ISOLATE KEEPS (`Kept`): a catalog answer five seconds — a project's row, a host's address,
+// a person's access — and a project miss never. A refusal is read again at once (a project not in a
+// kept access set is re-read before it is refused), since nothing routes two requests to one isolate
+// (https://developers.cloudflare.com/workers/reference/how-workers-works/): a creation is reachable
+// at once, and the isolate that made a change keeps its result at once. The primary hostname keeps
+// its own thirty seconds (`primaryHostnameOf`). Kept are answers, never a read in flight: a request
+// awaiting another's read hangs when that request ends first, its I/O cancelled with it
+// (https://developers.cloudflare.com/workers/observability/errors/).
 // A call that fails on the platform's side throws UNAVAILABLE (unavailable.ts), which a project host
 // answers 503 (worker.ts).
 import { customHostnameCandidatesOf, type ProjectAddress } from "iterate/project-ingress";
@@ -47,25 +48,53 @@ export const describeReach = (reach: Reach): string =>
       ? `the projects of the orgs ${reach.userId} belongs to`
       : `bound to ${reach.projectIds.map((projectId) => JSON.stringify(projectId)).join(", ") || "no project"}`;
 
-const projectMemo = new Map<string, ProjectRecord>();
-/** The refs a project host's admission found no project for, and when (`getProjectKeepingMisses`),
- *  oldest first: each is deleted before it is set again, so a sweep from the front stops at the
- *  first one still kept, and the map holds only what came in the last `MISS_KEPT_MS` — however many
- *  labels a scanner makes up. */
-const missMemo = new Map<string, number>();
-const MISS_KEPT_MS = 5_000;
-/** A project's row, kept under its id and its slug; a miss kept under either is forgotten. */
-const memoize = (project: ProjectRecord) => {
-  for (const ref of [project.id, project.slug]) {
-    projectMemo.set(ref, project);
-    missMemo.delete(ref);
+/** How long an isolate keeps a catalog answer, and so how long a change made through another
+ *  isolate (a deletion, a removed member, a moved hostname) can go unseen here. Keeping nothing
+ *  would put a round trip to D1's primary (WEUR) before every project host's context is dialled:
+ *  9–30 ms from Europe, 80–310 ms from the US, Asia and Oceania (measured 2026-09-27). */
+const KEPT_MS = 5_000;
+
+/** Answers an isolate keeps `KEPT_MS`, oldest first: a key is deleted before it is set again, so a
+ *  sweep from the front stops at the first answer still kept, and the table holds only what came in
+ *  the last `KEPT_MS` — however many hostnames a scanner makes up. */
+class Kept<V> {
+  readonly #answers = new Map<string, { at: number; value: V }>();
+  /** The answer set under `key` within the last `KEPT_MS`, else undefined. */
+  get(key: string) {
+    const now = Date.now();
+    for (const [oldest, { at }] of this.#answers) {
+      if (now - at < KEPT_MS) break;
+      this.#answers.delete(oldest);
+    }
+    const kept = this.#answers.get(key);
+    return kept && now - kept.at < KEPT_MS ? kept.value : undefined;
   }
+  set(key: string, value: V) {
+    this.#answers.delete(key);
+    this.#answers.set(key, { at: Date.now(), value });
+  }
+  delete(key: string) {
+    this.#answers.delete(key);
+  }
+  clear() {
+    this.#answers.clear();
+  }
+}
+
+/** Projects' rows, each under its id and its slug (`keep`). */
+const projects = new Kept<ProjectRecord>();
+const keep = (project: ProjectRecord) => {
+  for (const ref of [project.id, project.slug]) projects.set(ref, project);
 };
-/** A host's address under projects' own hostnames, hit or miss, kept thirty seconds: a removed
- *  hostname stops routing within that (Cloudflare stops sending it sooner, the custom hostname
- *  deleted first). */
-const hostnameMemo = new Map<string, { at: number; address: ProjectAddress | null }>();
-const accessMemo = new Map<string, { at: number; record: AccessibleRecord }>();
+/** Hosts' addresses under projects' own hostnames, hit or miss. A kept miss seldom hides a new
+ *  claim: the processor claims a hostname before it asks Cloudflare to route it (project/processor.ts
+ *  `#addHostname`), so visitors reach it once it is claimed — unless Cloudflare still routes it from
+ *  before (an erase leaves custom hostnames in place), and then for `KEPT_MS` at most. A removed
+ *  hostname stops routing within `KEPT_MS`, and Cloudflare stops sending it sooner (`#removeHostname`
+ *  deletes the custom hostname first). */
+const hosts = new Kept<{ address: ProjectAddress | null }>();
+/** People's access, by user id: dropped at once here for the person a command was made by or for. */
+const access = new Kept<AccessibleRecord>();
 /** A project's primary hostname by project id, hit or miss, kept thirty seconds (`primaryHostnameOf`). */
 const primaryHostnameMemo = new Map<string, { at: number; hostname: string | null }>();
 
@@ -98,7 +127,7 @@ export class ControlPlane {
   /** `read`, or UNAVAILABLE (overloaded: capnp's word for "the operation timed out") once this
    *  holder's `readDeadlineMs` has passed without its answer, logged as
    *  `control-plane.platform-failure-read-deadline` (scripts/ci/prd-fault-alarm.ts pages on a
-   *  burst). The read itself runs on, and a memo it feeds (`accessibleTo`) still gets its answer. */
+   *  burst). The read itself runs on, and a table it feeds (`accessibleTo`) still keeps its answer. */
   async #withinDeadline<T>(method: string, read: Promise<T>): Promise<T> {
     const deadlineMs = this.#readDeadlineMs;
     if (!deadlineMs) return read;
@@ -154,43 +183,22 @@ export class ControlPlane {
   }
 
   /** A project by id or by slug — THE lookup: a URL's `/projects/<slug>`, a hostname's label, an
-   *  API call's `project`, a grant's id all resolve here. */
-  async getProject(ref: string): Promise<ProjectRecord | null> {
-    const memoized = projectMemo.get(ref);
-    if (memoized) return memoized;
+   *  API call's `project`, a grant's id all resolve here. A row is kept `KEPT_MS`, a miss never: a
+   *  scanner's label no project holds is one D1 read per request, and a project created anywhere is
+   *  served at once. `fresh` reads past what this isolate keeps (the orphan sweep, session.ts). */
+  async getProject(ref: string, fresh = false): Promise<ProjectRecord | null> {
+    const kept = !fresh && projects.get(ref);
+    if (kept) return kept;
     const project = await this.#read("project", () => this.#db.project(ref));
-    if (project) memoize(project);
-    return project;
-  }
-
-  /** `getProject` for a project host's admission (worker.ts), whose ref is any label under the
-   *  wildcard, anyone's to ask for: a scanner sends a few hundred paths to one unknown label within
-   *  seconds. So here a MISS is kept too, five seconds per isolate: a burst reads once, plus the
-   *  reads already in flight when the first answers. A project created meanwhile is served on the
-   *  isolate that created it at once (`createProject` memoizes its row, even while a read that
-   *  missed it is in flight) and on any other within those five seconds. Every other caller reads a
-   *  miss again: its answer is a refusal, which a creation must lift at once. */
-  async getProjectKeepingMisses(ref: string): Promise<ProjectRecord | null> {
-    const now = Date.now();
-    for (const [missed, at] of missMemo) {
-      if (now - at < MISS_KEPT_MS) break;
-      missMemo.delete(missed);
-    }
-    const missedAt = missMemo.get(ref);
-    if (missedAt && now - missedAt < MISS_KEPT_MS) return null;
-    const project = await this.getProject(ref);
-    if (!project && !projectMemo.has(ref)) {
-      missMemo.delete(ref);
-      missMemo.set(ref, Date.now());
-    }
+    if (project) keep(project);
     return project;
   }
 
   /** The project `url` is a host of — THE INGRESS ROUTING TABLE: the static rules first (app-config.ts
    *  `projectHostOf`: the ingress routing and the project wildcard), then a hostname a project added
    *  itself (project/custom-hostnames.ts): its apex, or one label under it a routing slug
-   *  (iterate/project-ingress `customHostnameCandidatesOf`), in ONE catalog read, memoized thirty
-   *  seconds per isolate, hit or miss. A deployment that serves no custom hostnames, the platform's
+   *  (iterate/project-ingress `customHostnameCandidatesOf`), in ONE catalog read, kept `KEPT_MS`,
+   *  hit or miss. A deployment that serves no custom hostnames, the platform's
    *  own origins and anything under its reserved zones never reach the table. A project host's
    *  admission (worker.ts) and consent.ts, which binds a project's CIMD client to it, read it. */
   async projectHostOf(
@@ -209,26 +217,26 @@ export class ControlPlane {
       )
     )
       return null;
-    const memoized = hostnameMemo.get(hostname);
-    if (memoized && Date.now() - memoized.at < 30_000) return memoized.address;
+    const kept = hosts.get(hostname);
+    if (kept) return kept.address;
     const candidates = customHostnameCandidatesOf(hostname);
     const found = await this.#read("projectByHostname", () =>
       this.#db.projectByHostname(candidates.map((candidate) => candidate.hostname)),
     );
-    // the row came with it: the admission's next read (getProject) is a memo hit
-    if (found) memoize(found.project);
+    // the row came with it: the admission's next read (getProject) finds it kept
+    if (found) keep(found.project);
     const custom = found && {
       routingSlug: candidates.find((candidate) => candidate.hostname === found.hostname)!
         .routingSlug,
       project: found.project.id,
       basePath: "",
     };
-    hostnameMemo.set(hostname, { at: Date.now(), address: custom });
+    hosts.set(hostname, { address: custom });
     return custom;
   }
 
   /** The connection a provider account's webhooks go to (catalog.ts `routeIntegration`). Never
-   *  memoized: a route released and taken by another project routes there on the next delivery. */
+   *  kept: a route released and taken by another project routes there on the next delivery. */
   integrationRouteOf(provider: string, externalId: string): Promise<IntegrationRouteRecord | null> {
     return this.#read("integrationRoute", () => this.#db.integrationRoute(provider, externalId));
   }
@@ -256,15 +264,16 @@ export class ControlPlane {
     return (await this.getProject(ref))?.id ?? null;
   }
 
-  /** What a person can access — memoized; `fresh` bypasses the memo (the re-read before a refusal). */
+  /** What a person can access — kept `KEPT_MS`; `fresh` reads past it (the re-read before a
+   *  refusal). */
   async accessibleTo(userId: string, fresh = false): Promise<AccessibleRecord> {
-    const memoized = accessMemo.get(userId);
-    if (!fresh && memoized && Date.now() - memoized.at < 5_000) return memoized.record;
+    const kept = !fresh && access.get(userId);
+    if (kept) return kept;
     const read = this.#call("accessibleTo", () => this.#db.accessibleTo(userId));
     return this.#withinDeadline(
       "accessibleTo",
       read.then((record) => {
-        accessMemo.set(userId, { at: Date.now(), record });
+        access.set(userId, record);
         return record;
       }),
     );
@@ -311,9 +320,9 @@ export class ControlPlane {
   /** The projects `reach` reaches: every one for the admin secret; the user's, with their role;
    *  the named ones (a name the catalog never heard of is no record). `expected` names the ids the
    *  caller refuses without (consent's ticked projects, a socket's held ones): one of them, or of
-   *  the reach's own selection, missing from the memoized access set is re-read once first — the
-   *  project may have been created on another isolate within the memo's five seconds. `fresh`
-   *  reads past the memo (a list a person reads again because something changed: session.ts). */
+   *  the reach's own selection, missing from the kept access set is re-read once first — the
+   *  project may have been created on another isolate within `KEPT_MS`. `fresh` reads past what is
+   *  kept (a list a person reads again because something changed: session.ts). */
   async reachableProjects(
     reach: Reach,
     expected: readonly string[] = [],
@@ -409,7 +418,7 @@ export class ControlPlane {
       this.#db.createOrganization(callerOf(caller), input, Date.now()),
     );
     this.#forget(caller.principal?.actor);
-    if (input.ownerId) accessMemo.clear(); // the operator's: named by id or email
+    if (input.ownerId) access.clear(); // the operator's: named by id or email
     return organization;
   }
   async renameOrganization(
@@ -420,14 +429,14 @@ export class ControlPlane {
     const organization = await this.#call("renameOrganization", () =>
       this.#db.renameOrganization(callerOf(caller), organizationId, name),
     );
-    accessMemo.clear(); // the name rides every member's access record, not just the caller's
+    access.clear(); // the name rides every member's access record, not just the caller's
     return organization;
   }
   async deleteOrganization(caller: Caller, organizationId: string): Promise<void> {
     await this.#call("deleteOrganization", () =>
       this.#db.deleteOrganization(callerOf(caller), organizationId),
     );
-    accessMemo.clear(); // every member's access changed
+    access.clear(); // every member's access changed
   }
   /** Answers the id the membership holds (the caller may have named the person by email). */
   async addMember(
@@ -484,7 +493,7 @@ export class ControlPlane {
     const { mintedOrganization, ...project } = await this.#call("createProject", () =>
       this.#db.createProject(callerOf(caller), input, Date.now()),
     );
-    memoize(project);
+    keep(project);
     this.#forget(caller.principal?.actor);
     return mintedOrganization ? { ...project, mintedOrganization } : project;
   }
@@ -493,15 +502,15 @@ export class ControlPlane {
   projectToDelete(caller: Caller, ref: string): Promise<ProjectRecord> {
     return this.#call("projectToDelete", () => this.#db.projectToDelete(callerOf(caller), ref));
   }
-  /** A project's row goes (catalog.ts `deleteProject`): forgotten here at once, and on every other
-   *  isolate when it next reads the catalog — a row it memoized stays until that isolate goes. */
+  /** A project's row goes (catalog.ts `deleteProject`): dropped here at once, and on every other
+   *  isolate within `KEPT_MS`. */
   async deleteProject(caller: Caller, ref: string): Promise<ProjectRecord> {
     const project = await this.#call("deleteProject", () =>
       this.#db.deleteProject(callerOf(caller), ref),
     );
-    projectMemo.delete(project.id);
-    projectMemo.delete(project.slug);
-    accessMemo.clear(); // every member's reach just changed
+    projects.delete(project.id);
+    projects.delete(project.slug);
+    access.clear(); // every member's reach just changed
     return project;
   }
 
@@ -593,7 +602,7 @@ export class ControlPlane {
   }
 
   #forget(...userIds: (string | undefined)[]): void {
-    for (const userId of userIds) if (userId) accessMemo.delete(userId);
+    for (const userId of userIds) if (userId) access.delete(userId);
   }
 }
 

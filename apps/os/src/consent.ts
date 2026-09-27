@@ -98,7 +98,7 @@ export type ConsentView =
 /** A platform-served project CIMD client can receive only that project's authority — its
  *  client.json on a project host (control-plane/edge.ts `projectHostOf`, as the edge admits one).
  *  `expected` are the ids the caller refuses without — approve's ticked projects, re-read past
- *  the isolate's access memo before one is left out (edge.ts `reachableProjects`). */
+ *  what the isolate keeps of their access before one is left out (edge.ts `reachableProjects`). */
 export async function projectsForClient(
   env: Env,
   platformOrigin: string,
@@ -236,9 +236,9 @@ export class ConsentRpcTarget extends RpcTarget {
           email: this.#grant.email,
           denyLocation: denied.href,
         };
-      // The page lists what the person holds NOW, read past this isolate's access memo: a project
-      // just made (the page's New project form, served by whichever isolate) is listed at once.
-      // The project list below reads the answer this read just memoized.
+      // The page lists what the person holds NOW, read past what this isolate keeps of their
+      // access: a project just made (the page's New project form, served by whichever isolate) is
+      // listed at once. The project list below reads the answer this read just kept.
       const controlPlane = new ControlPlane(env);
       const { organizations } = await controlPlane.accessibleTo(this.#grant.userId, true);
       const bound = await projectsForClient(

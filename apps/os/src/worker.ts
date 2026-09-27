@@ -209,17 +209,16 @@ export default {
     // touch, so a hostname whose project the control plane does not know must never reach one —
     // else any label under the wildcard would mint durable storage from the public internet. The
     // host's address (a static rule, else a hostname a project added: one catalog read), then one
-    // catalog read (memoized per isolate: a slug's project never changes; an unknown label five
-    // seconds, edge.ts `getProjectKeepingMisses`) — the row resolves the host's label (a slug, an id
-    // would do too) to the project's id; an unknown label is 421. A slow read is waited for; one
-    // that fails on the platform's side is a 503.
+    // catalog read (a row kept five seconds per isolate, an unknown label never: edge.ts) — the row
+    // resolves the host's label (a slug, an id would do too) to the project's id; an unknown label
+    // is 421. A slow read is waited for; one that fails on the platform's side is a 503.
     const projectHost = await controlPlane
       .projectHostOf(appConfig, url, platformOrigin)
       .catch((error: unknown) => controlPlaneUnavailable(error, url.hostname));
     if (projectHost instanceof Response) return projectHost;
     if (projectHost) {
       const project = await controlPlane
-        .getProjectKeepingMisses(projectHost.project)
+        .getProject(projectHost.project)
         .catch((error: unknown) => controlPlaneUnavailable(error, url.hostname));
       if (project instanceof Response) return project;
       if (!project)
