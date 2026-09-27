@@ -107,14 +107,14 @@ export const LATENCY_METRICS = {
     sample: "loaded code's durable append on its own warm context, timed inside its isolate",
     unit: "ms",
     budget: 60,
-    calibration: "laptop 11–14 (2026-09-27, #3281's preview; Depot not yet run)",
+    calibration: "laptop 11–14 (2026-09-27)",
   },
   "context.append.cross": {
     file: "perf/contexts.perf.test.ts",
     sample: "loaded code's cd(path).append to a warm sibling or the root, timed inside its isolate",
     unit: "ms",
     budget: 100,
-    calibration: "laptop 19–24 (2026-09-27, #3281's preview; Depot not yet run)",
+    calibration: "laptop 19–24 (2026-09-27)",
   },
   "context.append.cross.x10": {
     file: "perf/contexts.perf.test.ts",
@@ -122,7 +122,7 @@ export const LATENCY_METRICS = {
       "events per second, 10 writers in one loaded worker each appending 10 to a sibling through cd",
     unit: "events/s",
     budget: 50,
-    calibration: "laptop 351–575 (2026-09-27, #3281's preview; Depot not yet run)",
+    calibration: "laptop 351–575 (2026-09-27)",
   },
   "context.wake": {
     file: "perf/contexts.perf.test.ts",

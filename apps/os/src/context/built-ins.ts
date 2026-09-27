@@ -550,8 +550,8 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
     const caller = deps.caller();
     // Loaded code can delegate its scope to descendants through durable rows; child code
     // keeps its own ceiling. The append boundary validates the rest of each control event.
-    const origin = caller.path || path;
-    if (caller.app) for (const event of events) admitLoadedCodeRow(event, origin, origin === path);
+    if (caller.app)
+      for (const event of events) admitLoadedCodeRow(event, caller.path || path, path);
     refusePlatformIdempotencyKeys(events, caller, projectId === GLOBAL_PROJECT_ID);
     return ownContext().append(...events.map((event) => stampCaller(event, caller, path)));
   };

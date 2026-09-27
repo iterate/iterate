@@ -499,13 +499,15 @@ export function rowsNamingRpcStub(args: {
 
 /** THE APP WALL, as one check over an expression loaded code hands in (the resolver's INPUT, or the
  *  TARGET of a row it appends): never the fixed point, never a `cd` above `base` (self and descendants
- *  only, resolved step by step). A spec's SOURCE EXPRESSION in a call's arguments (`workers.get`,
- *  `facets.get`, `processors.enable`) is walled too, at the context the walk has reached, so the
- *  call fails where it is made; the producer also runs there as loaded code when the code loads
- *  (the DO's `invoke`). Codec-style — nothing here is policy: the rows a call rewrites through are
- *  the owner's and are never checked. */
-function admitLoadedCodeExpression(expression: ItxExpression, base: string): void {
-  let at = base;
+ *  only, resolved step by step). A row's target resolves where the row lands (`from`), so its first
+ *  relative `cd` is resolved there and must still stay beneath `base`. A spec's SOURCE EXPRESSION in a
+ *  call's arguments (`workers.get`, `facets.get`, `processors.enable`) is walled too, at the context
+ *  the walk has reached, so the call fails where it is made; the producer also runs there as loaded
+ *  code when the code loads (the DO's `invoke`). Codec-style — nothing here is policy: the rows a
+ *  call rewrites through are the owner's and are never checked. */
+function admitLoadedCodeExpression(expression: ItxExpression, base: string, from = base): void {
+  let ceiling = base; // what no `cd` may leave
+  let at = from; // what the next relative `cd` resolves against
   for (const step of expression) {
     const name = typeof step === "string" ? step : step[0];
     if (name === "builtins")
@@ -517,31 +519,32 @@ function admitLoadedCodeExpression(expression: ItxExpression, base: string): voi
       for (const arg of step.slice(1)) {
         const source = typeof arg === "object" && arg && "source" in arg ? arg.source : undefined;
         if (typeof source === "string" || Array.isArray(source))
-          admitLoadedCodeExpression(normalizedItxExpression(source), at);
+          admitLoadedCodeExpression(normalizedItxExpression(source), ceiling, at);
       }
     if (Array.isArray(step) && step[0] === "cd" && typeof step[1] === "string") {
       const to = resolveContextPath(at, step[1]);
-      if (to !== at && !to.startsWith(at === "/" ? "/" : `${at}/`))
+      if (to !== ceiling && !to.startsWith(ceiling === "/" ? "/" : `${ceiling}/`))
         throw codedError(
           "FORBIDDEN",
-          `cd goes down only for loaded code: ${JSON.stringify(step[1])} from ${JSON.stringify(at)} would leave it`,
+          `cd goes down only for loaded code: ${JSON.stringify(step[1])} from ${JSON.stringify(at)} would leave ${JSON.stringify(ceiling)}`,
         );
-      at = to;
+      at = ceiling = to;
     }
   }
 }
 
 /** THE APP WALL ON A ROW: a rewrite rule or a subscription loaded code appends is walled on its
- *  TARGET like a call is on its input, against the context the call started at (`base`) — else a
- *  jail granted `itx.append` would write itself `itx.x ⇒ itx.builtins.cd('/').x`, and a subscription
- *  target runs as the kernel. The one fixed-point target it may write is its OWN lend,
+ *  TARGET like a call is on its input, against the context the call started at (`base`) and as it
+ *  will resolve where it lands (`landsAt`) — else a jail granted `itx.append` would write itself
+ *  `itx.x ⇒ itx.builtins.cd('/').x`, a row's `./x` would mean another context's `./x`, and a
+ *  subscription target runs as the kernel. The one fixed-point target it may write is its OWN lend,
  *  `itx.builtins.rpcStubs.get(<key>)`: the registry is this context's, so the row grants nothing the
  *  code does not already hold. A `null` (a mask, an un-set) says nothing and passes. Nothing gets
  *  round the wall:
  *    • a REMOVAL (`ifTarget`, the reduce's compare-and-set delete) is refused: it hands the name back
  *      to what lies beneath it, a jail's bare null or a parent link. Loaded code never needs one:
  *      `provide` lends it live stubs only, whose rows the DO removes when the last pager closes;
- *    • a BARE `itx` row on the code's OWN context (`ownContext`) is only ever a mask: any other
+ *    • a BARE `itx` row on the code's OWN context (`landsAt` is `base`) is only ever a mask: any other
  *      target replaces the jail's null (or the parent link) and brings the context roots back, `cd`
  *      among them — and a lend's row is removed with its last pager, taking the null with it.
  *      `create` writes a new context's link from its creator, on another context;
@@ -554,11 +557,12 @@ function admitLoadedCodeExpression(expression: ItxExpression, base: string): voi
 export function admitLoadedCodeRow(
   event: { type: string; payload?: unknown },
   base: string,
-  ownContext: boolean,
+  landsAt: string,
+  scheduled = false,
 ): void {
   if (event.type === "events.iterate.com/itx/schedule-set") {
-    for (const scheduled of ScheduledAppendInput.parse(event.payload).events)
-      admitLoadedCodeRow(scheduled, base, true);
+    for (const occurrence of ScheduledAppendInput.parse(event.payload).events)
+      admitLoadedCodeRow(occurrence, base, landsAt, true);
     return;
   }
   if (
@@ -577,6 +581,7 @@ export function admitLoadedCodeRow(
     event.type !== "events.iterate.com/itx/subscription-configured"
   )
     return;
+  // Wire-fed: each field is `unknown` here and checked where it is read; the codec parses the rest.
   const payload = event.payload as { match?: unknown; target?: unknown } | undefined;
   if (
     event.type === "events.iterate.com/itx/rewrite-rule-configured" &&
@@ -590,25 +595,30 @@ export function admitLoadedCodeRow(
   const target = payload?.target;
   if (!target) return; // a mask, an un-set (an empty string is the reduce's refusal, not this wall's)
   // A live object is the lend's own business; an expression is walled but for the code's own lend.
-  if (typeof target === "string" || Array.isArray(target)) {
-    const expression = normalizedItxExpression(target as ItxExpressionInput, { holes: true });
+  if (isItxExpressionInput(target)) {
+    const expression = normalizedItxExpression(target, { holes: true });
     const [, root, registry, lend] = expression;
     const ownLend =
       root === "builtins" && registry === "rpcStubs" && Array.isArray(lend) && lend[0] === "get";
-    if (!ownLend) admitLoadedCodeExpression(expression, base);
+    if (!ownLend) admitLoadedCodeExpression(expression, base, landsAt);
   }
   const match = payload?.match;
   if (
-    ownContext &&
+    (scheduled || landsAt === base) &&
     event.type === "events.iterate.com/itx/rewrite-rule-configured" &&
-    (typeof match === "string" || Array.isArray(match)) &&
-    // a string or steps, as checked; the codec refuses any other shape of either
-    normalizedItxExpression(match as ItxExpressionInput).length === 1
+    isItxExpressionInput(match) &&
+    normalizedItxExpression(match).length === 1
   )
     throw codedError(
       "FORBIDDEN",
       "loaded code writes a bare `itx` row on its own context only as a mask (`target: null`): any other would lift a jail's null or re-point the context's parent link",
     );
+}
+
+/** An expression as loaded code spells one, a dotted string or its steps: `normalizedItxExpression`
+ *  refuses any other shape of either. */
+function isItxExpressionInput(value: unknown): value is ItxExpressionInput {
+  return typeof value === "string" || Array.isArray(value);
 }
 
 /** A bare `itx` row whose target is `cd` of THIS context is a loop no depth budget can see — every
