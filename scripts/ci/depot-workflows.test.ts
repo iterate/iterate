@@ -690,10 +690,24 @@ test("the Test job sets up its toolchain on Depot's stock image, with pnpm's sto
   expect(toolchain?.["fail-fast"]).toBe(false);
   // saved from a main push that missed the exact key
   expect(step("Save pnpm's store")).toMatchObject({
+    id: "pnpm-store-save",
     if: "${{ !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.install.outcome == 'success' && steps.pnpm-store.outputs.cache-hit != 'true' }}",
     uses: "actions/cache/save@v4",
     "continue-on-error": true,
     with: { path: restore?.with?.path, key: "${{ steps.pnpm-store.outputs.cache-primary-key }}" },
+  });
+  // which store the install started from, and main's save, in the job's summary whatever
+  // happened; the keys as environment variables, since off main the matched one is any a run wrote
+  expect(steps.at(-1)).toMatchObject({
+    name: "Report pnpm's store",
+    if: "always()",
+    env: {
+      RESTORE_OUTCOME: "${{ steps.pnpm-store.outcome }}",
+      PRIMARY_KEY: "${{ steps.pnpm-store.outputs.cache-primary-key }}",
+      MATCHED_KEY: "${{ steps.pnpm-store.outputs.cache-matched-key }}",
+      SAVE_OUTCOME: "${{ steps.pnpm-store-save.outcome }}",
+    },
+    run: 'bash scripts/ci/pnpm-store-report.sh "$RESTORE_OUTCOME" "$PRIMARY_KEY" "$MATCHED_KEY" "$SAVE_OUTCOME"',
   });
   // pnpm checks what it links from the store against the store's index
   expect(JSON.stringify(workflow)).not.toMatch(/verify[-_]store[-_]integrity/iu);
@@ -1149,6 +1163,65 @@ test("the CI telemetry sync's test evidence jobs are the jobs that upload a fold
     ),
   );
   expect(uploading.toSorted()).toEqual(testEvidenceJobs.toSorted());
+});
+
+test("the Test job's summary says which pnpm store its install started from and what main saved, warns on a failed restore or save, and never fails", () => {
+  using runner = temporaryDirectory();
+  const summary = join(runner.path, "summary.md");
+  const report = (restore: string, primary: string, matched: string, save: string) => {
+    writeFileSync(summary, "");
+    const result = spawnSync(
+      "bash",
+      [resolve(repoRoot, "scripts/ci/pnpm-store-report.sh"), restore, primary, matched, save],
+      { env: { PATH: process.env.PATH, GITHUB_STEP_SUMMARY: summary }, encoding: "utf8" },
+    );
+    return { status: result.status, stdout: result.stdout, summary: readFileSync(summary, "utf8") };
+  };
+  const key = "pnpm-store-0123";
+  const miss =
+    "**pnpm's store**: none restored (none saved yet, or the restore could not read Depot Cache: its log says which), and the install fetched every package from the npm registry.";
+
+  // this lockfile's store
+  expect(report("success", key, key, "skipped")).toEqual({
+    status: 0,
+    stdout: "",
+    summary: "**pnpm's store**: restored this lockfile's, `pnpm-store-0123`.\n",
+  });
+  // off main, the newest saved
+  expect(report("success", key, "pnpm-store-4567", "skipped").summary).toBe(
+    "**pnpm's store**: none saved for this lockfile (`pnpm-store-0123`), so it restored the newest, `pnpm-store-4567`, and the install fetched the rest.\n",
+  );
+  // nothing to restore, which is also how actions/cache reports a Depot Cache it could not read
+  expect(report("success", key, "", "skipped")).toEqual({
+    status: 0,
+    stdout: "",
+    summary: `${miss}\n`,
+  });
+  // a main push saving its store
+  expect(report("success", key, "", "success").summary).toBe(
+    `${miss.slice(0, -1)}. Main saved this lockfile's store for the next runs (a store Depot Cache refused is a warning in the save's log).\n`,
+  );
+  // the restore's timeout
+  expect(report("failure", key, "", "skipped")).toEqual({
+    status: 0,
+    stdout:
+      "::warning title=pnpm's store not restored::the restore from Depot Cache failed (its timeout, or its log says why); the install fetched what it lacked from the npm registry\n",
+    summary:
+      "**pnpm's store**: the restore failed (its timeout, or its log says why), and the install fetched what it lacked from the npm registry.\n",
+  });
+  // the save's timeout
+  const unsaved = report("success", key, "", "failure");
+  expect(unsaved.status).toBe(0);
+  expect(unsaved.stdout).toBe(
+    "::warning title=pnpm's store not saved::the save to Depot Cache failed (its timeout, or its log says why); runs of this lockfile restore an older store, or none on main, until a main push saves one\n",
+  );
+  expect(unsaved.summary).toContain(". The save failed (its timeout, or its log says why)");
+  // a job cancelled before the restore ran
+  expect(report("", "", "", "")).toEqual({
+    status: 0,
+    stdout: "",
+    summary: "**pnpm's store**: none restored (the restore's outcome: none).\n",
+  });
 });
 
 test("the fallback report names a failed evidence step that did not report itself, once, and never fails", () => {

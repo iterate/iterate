@@ -180,6 +180,7 @@ jobs:
           # Depot Cache has no branch scope, so no job but this one reads it, never a deploy
           # (docs/depot-ci.md#the-test-job-runs-on-depots-stock-image).
           - name: Save pnpm's store
+            id: pnpm-store-save
             if: ${{ !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.install.outcome == 'success' && steps.pnpm-store.outputs.cache-hit != 'true' }}
             uses: actions/cache/save@v4
             continue-on-error: true
@@ -192,3 +193,15 @@ jobs:
       - name: Report a test evidence step that could not
         if: ${{ always() && (steps.evidence-write.outcome == 'failure' || steps.evidence-upload.outcome == 'failure') }}
         run: bash scripts/ci/test-evidence-unreported.sh "${{ steps.evidence-write.outcome }}" "${{ steps.evidence-upload.outcome }}"
+      # Which store the install started from, and main's save, as a line of the job's summary; a
+      # restore or save that failed is a warning too. It decides nothing. The keys come in as
+      # environment variables, never spliced into the script: off main the matched key can be any
+      # key a run wrote.
+      - name: Report pnpm's store
+        if: always()
+        env:
+          RESTORE_OUTCOME: ${{ steps.pnpm-store.outcome }}
+          PRIMARY_KEY: ${{ steps.pnpm-store.outputs.cache-primary-key }}
+          MATCHED_KEY: ${{ steps.pnpm-store.outputs.cache-matched-key }}
+          SAVE_OUTCOME: ${{ steps.pnpm-store-save.outcome }}
+        run: bash scripts/ci/pnpm-store-report.sh "$RESTORE_OUTCOME" "$PRIMARY_KEY" "$MATCHED_KEY" "$SAVE_OUTCOME"

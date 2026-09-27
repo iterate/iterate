@@ -173,7 +173,7 @@ cd ../ci-soak-<name>
 git commit --allow-empty -m "ci soak <name>"
 git push -u origin HEAD        # also creates the local origin/ci-soak/<name>
 
-depot ci run --org 0p91s0lz49 --workflow .depot/workflows/test.yml
+depot ci dispatch --org 0p91s0lz49 --repo iterate/iterate --workflow test.yml --ref ci-soak/<name>
 depot ci run --org 0p91s0lz49 --workflow .depot/workflows/lint-typecheck.yml
 depot ci dispatch --org 0p91s0lz49 --repo iterate/iterate --workflow os-e2e-soak.yml \
   --ref ci-soak/<name> --input runs=20 --input preview=soak-<name>
@@ -224,18 +224,21 @@ scratch run's test evidence goes to R2 under `trust=pr`. `status` and `artifacts
 
 ### Soak: N runs, then read them
 
-Lint and Typecheck: N `depot ci run`s side by side. Test: dispatches, one at a time per branch
-(each cancels the one before), or side by side from branches at the same commit. The e2e suite:
-`os-e2e-soak.yml`'s `runs` input, not N dispatches. Preview OS dispatches that name no PR share
-one concurrency group, `preview-os-none`, where a newer pending run replaces an older one.
+Lint and Typecheck: N `depot ci run`s side by side. Test: dispatches, one run per branch at a time,
+since each cancels the one before it; for runs side by side, push several soak branches. The e2e
+suite: `os-e2e-soak.yml`'s `runs` input, not N dispatches. Preview OS dispatches that name no PR
+share one concurrency group, `preview-os-none`, where a newer pending run replaces an older one.
 
 ```bash
 for i in $(seq 10); do
-  depot ci run --org 0p91s0lz49 --workflow .depot/workflows/test.yml | awk '/^Run:/ {print $2}'
+  depot ci run --org 0p91s0lz49 --workflow .depot/workflows/lint-typecheck.yml | awk '/^Run:/ {print $2}'
 done | tee soak-runs.txt
 
-# the tally; --name takes the workflow's name: ("Lint and Typecheck"). Rerun until none is queued or running.
-depot ci workflow list --org 0p91s0lz49 --repo iterate/iterate --name Test \
+# Test: one at a time. Dispatch the next once `depot ci status` says the last one finished.
+depot ci dispatch --org 0p91s0lz49 --repo iterate/iterate --workflow test.yml --ref ci-soak/<name>
+
+# the tally; --name takes the workflow's name: ("Test"). Rerun until none is queued or running.
+depot ci workflow list --org 0p91s0lz49 --repo iterate/iterate --name "Lint and Typecheck" \
   --sha "$(git rev-parse HEAD)" -n 200 --output json \
   --status queued --status running --status finished --status failed --status cancelled |
   jq -r 'group_by(.status)[] | "\(.[0].status) \(length)"'
@@ -454,15 +457,25 @@ pnpm 10 reads `npm_config_*`, not `pnpm_config_*`, so the store is `NPM_CONFIG_S
 scripts itself, since from a store that held their outputs it took 5 s longer.
 
 Depot Cache has no branch scope: any run can write any key, so a pull request could plant a store
-for main's runs by editing the workflow. Only Test reads the cache, never a deploy. Its job token
-is read-only (`permissions: contents: read`), and its Doppler token is the one every pull
-request's run gets. pnpm checks each file it links against the store's index
+for main's runs by editing the workflow, and main's exact key follows from an open pull request's
+lockfile. Only Test reads the cache, never a deploy. Its job token is read-only
+(`permissions: contents: read`). Its `DOPPLER_TOKEN` also reads `_shared/preview`, which holds the
+Depot organization token and the preview Cloudflare API token. Today a planted store reaches nothing
+its author's own run does not already have, because Depot CI runs no pull request from a fork, so
+every run is from someone who can push here. iterate/iterate is public, and Depot plans fork support
+([compatibility](https://depot.dev/docs/ci/compatibility)). Before fork pull requests run on Depot,
+scope or drop the cache and the pull request's `restore-keys: pnpm-store-` fallback. Otherwise a
+fork's pull request, which gets no secrets, could plant a store that main's Test or another pull
+request's then runs with that token. pnpm checks each file it links against the store's index
 (`verify-store-integrity`, on by default), which catches a damaged store, not a planted one.
 `scripts/ci/depot-workflows.test.ts` pins all of this.
 
 So Test depends on GitHub's releases (Node, Doppler), the npm registry (pnpm itself, and packages
 on a miss) and Depot Cache. A failed restore is a warning, and the install then fetches
-everything.
+everything. The job's summary says which store the install started from (this lockfile's, the
+newest, or none) and whether main saved one, and a restore or save that failed or timed out is a
+warning too (`scripts/ci/pnpm-store-report.sh`). actions/cache reports most other trouble only in
+its own log: a restore that could not read Depot Cache reads as none restored.
 
 ## Trigger Gotchas
 
