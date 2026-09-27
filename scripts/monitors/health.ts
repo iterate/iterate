@@ -10,7 +10,7 @@
 //   PR time to green          the health job: how long pull request pushes waited for their checks
 //                             (./ttg.ts)
 //   DO cost                   the health job: Durable Object hours on both accounts (./do-cost.ts), in
-//                             its own daily thread and pages, as before the fold
+//                             its own daily thread and pages
 //
 // A page is one block, `🔴 <what> at <commit>` or `🟢 …`, its details as bullets and a link to the
 // run that measured it; a red one mentions Jonas once. The message ends with the state now of every
@@ -51,7 +51,7 @@ import { checkTtg, TtgMemory } from "./ttg.ts";
 export const stateArtifacts = {
   health: { workflow: "Health", artifact: "health-state", file: "state.json" },
   "main-e2e": { workflow: mainE2eRecords.workflow, artifact: "main-e2e-state", file: "state.json" },
-} as const;
+};
 
 /** The health job's state. Its e2e memory is real-model e2e's: main e2e's is in MainE2eState. */
 export const HealthState = z.object({
@@ -88,13 +88,12 @@ export function readMainE2eState(previous: unknown): MainE2eState {
 
 const EMOJI = { red: "🔴", green: "🟢", none: "⚪" };
 
+/** A signal as a message's last line names it, with its state now. */
+type Signal = { name: string; tone: Page["tone"] };
+
 /** The run's one message: each page as a block, the first red one mentioning Jonas (a test run
  *  mentions nobody), then every signal's state now. Pure. */
-export function renderMessage(input: {
-  pages: Page[];
-  now: { name: string; tone: Page["tone"] }[];
-  testRun: boolean;
-}) {
+export function renderMessage(input: { pages: Page[]; now: Signal[]; testRun: boolean }) {
   const mentioned = input.testRun ? undefined : input.pages.find((page) => page.tone === "red");
   const blocks = input.pages.flatMap((page) => [
     `${EMOJI[page.tone]} ${page.headline}${page === mentioned ? ` ${onCallMention}` : ""}`,
@@ -172,19 +171,19 @@ export async function run(options: {
     renderMessage({
       pages,
       now: [
-        ...MAIN_SUITES.map((suite) => ({
+        ...MAIN_SUITES.map((suite): Signal => ({
           name: suite,
-          tone: mainState.e2e.suites[suite] ?? ("none" as const),
+          tone: mainState.e2e.suites[suite] ?? "none",
         })),
         {
           name: "real-model e2e",
-          tone: next.e2e.suites["real-model e2e"] ?? ("none" as const),
+          tone: next.e2e.suites["real-model e2e"] ?? "none",
         },
         {
           name: "latency",
-          tone: next.latency.red.length > 0 ? ("red" as const) : ("green" as const),
+          tone: next.latency.red.length > 0 ? "red" : "green",
         },
-        { name: "PR time to green", tone: ttg?.status ?? ("none" as const) },
+        { name: "PR time to green", tone: ttg?.status ?? "none" },
       ],
       testRun,
     });
@@ -275,9 +274,9 @@ export async function judgeMainE2eRun(input: {
     judged.pages.length > 0 &&
     renderMessage({
       pages: judged.pages,
-      now: MAIN_SUITES.map((suite) => ({
+      now: MAIN_SUITES.map((suite): Signal => ({
         name: suite,
-        tone: next.e2e.suites[suite] ?? ("none" as const),
+        tone: next.e2e.suites[suite] ?? "none",
       })),
       testRun: input.testRun,
     });

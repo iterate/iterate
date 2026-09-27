@@ -32,7 +32,8 @@ import {
 import { testTelemetryFailed } from "../ci/test-telemetry-completeness.ts";
 import { commitText, type Page } from "./page.ts";
 
-/** Main OS e2e's suites, which its own page job pages; the health job pages real-model e2e. */
+/** Main OS e2e's suites, which its own page job pages; the health job pages real-model e2e. Both
+ *  tuples are `as const` so that z.enum and the pages' `suite` take their names as literals. */
 export const MAIN_SUITES = ["main e2e", "slow e2e rows"] as const;
 const SUITES = [...MAIN_SUITES, "real-model e2e"] as const;
 const Verdict = z.enum(["green", "red"]);
