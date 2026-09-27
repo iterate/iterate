@@ -171,10 +171,12 @@ async function depotCliJson<T>(args: string[]): Promise<T> {
 }
 
 /**
- * `file` inside the newest `artifact` a finished or failed run of `workflow` (its `name:`) uploaded,
- * as text — how a scheduled job hands its state to its next run (the health job's memory) —
- * or undefined when none of its last 20 runs kept one. A failed run
- * counts: a job that keeps its state before it fails still handed it on.
+ * `file` inside the newest `artifact` a running, finished or failed run of `workflow` (its `name:`)
+ * uploaded, as text — how a job hands its state to its next run (the health job's memory) — or
+ * undefined when none of its last 20 runs kept one. A failed run counts: a job that keeps its state
+ * before it fails still handed it on. A running one counts too: a state it kept is its first
+ * execution's, so a re-run's job reads that instead of the state of the run before it, and judges
+ * nothing twice (the workflows that keep state run one at a time).
  */
 async function newestArtifactFile(input: {
   repository: string;
@@ -190,6 +192,8 @@ async function newestArtifactFile(input: {
     input.repository,
     "--name",
     input.workflow,
+    "--status",
+    "running",
     "--status",
     "finished",
     "--status",
