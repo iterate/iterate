@@ -40,7 +40,11 @@ import type { ReachableContext } from "../stream/stream.ts";
 import type { LibraryRoots } from "../library.ts";
 import { assertSecretPath, normalizeSecretRecord, originsOf, sha256Hex } from "../secrets.ts";
 import type { LendRevokedReason, SecretCatalog, SecretState } from "../secret/contract.ts";
-import { IntegrationConnectionRow, IntegrationProvider } from "../integrations/contract.ts";
+import {
+  IntegrationConnectionRow,
+  IntegrationProvider,
+  IterateAppProvider,
+} from "../integrations/contract.ts";
 import {
   connectionPathOf,
   tokenSecretPathOf,
@@ -1692,7 +1696,7 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
           `/projects/${encodeURIComponent(project.projectSlug)}/integrations`,
           deps.dashOrigin,
         );
-        url.searchParams.set("connect", IntegrationProvider.exclude(["waitrose"]).parse(provider));
+        url.searchParams.set("connect", IterateAppProvider.parse(provider));
         if (scopes.length > 0) url.searchParams.set("scopes", scopes.join(" "));
         return { url: url.href };
       },

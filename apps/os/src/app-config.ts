@@ -44,7 +44,10 @@ import {
   type IngressRouting,
   type ProjectAddress,
 } from "iterate/project-ingress";
+import type { OAuthIntegrationProvider } from "iterate/api";
 import { sha256Hex } from "./caller.ts";
+import { IdentityProvider } from "./control-plane/contract.ts";
+import { OAUTH_INTEGRATION_PROVIDERS } from "./integrations/contract.ts";
 
 /** A secret config value: `exposeSecret()` hands it over; printing, logging or serialising it shows
  *  only "REDACTED", so a config dump can never leak it. */
@@ -443,7 +446,7 @@ export function parseAppConfig(env: object, deployId = "unversioned"): AppConfig
     );
   // A provider's sign-in without its client is off, loudly: the rest of the deployment still runs.
   const signIn = { ...login };
-  for (const provider of ["google", "cloudflare", "github"] as const)
+  for (const provider of IdentityProvider.options)
     if (signIn[provider] && !parsed.integrations[provider]) {
       console.warn(
         `${fieldNameOf(["login", provider])}: off — it signs in with integrations.${provider}'s client, which is unset`,
@@ -501,12 +504,9 @@ export function appConfigOf(env: AppConfigEnv): AppConfig {
  *  through it asks, and so what a person's account needs before a project uses it
  *  (context/built-ins.ts `integrations.connect`). A GitHub App's permissions are the App's, and a
  *  provider without iterate's app is absent. */
-export function iterateAppScopesOf(
-  config: AppConfig,
-): Partial<Record<"slack" | "google" | "cloudflare", string[]>> {
-  const scopes: Partial<Record<"slack" | "google" | "cloudflare", string[]>> = {};
-  const providers: ("slack" | "google" | "cloudflare")[] = ["slack", "google", "cloudflare"];
-  for (const provider of providers) {
+export function iterateAppScopesOf(config: AppConfig) {
+  const scopes: Partial<Record<OAuthIntegrationProvider, string[]>> = {};
+  for (const provider of OAUTH_INTEGRATION_PROVIDERS) {
     const app = config.integrations[provider];
     if (app) scopes[provider] = [...app.scopes];
   }

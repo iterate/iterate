@@ -21,6 +21,7 @@ import type {
   SecretRefresh,
 } from "iterate/api";
 import { secretsEqual, signClaims, verifyClaims } from "./caller.ts";
+import { IterateAppProvider } from "./integrations/contract.ts";
 import { exchange as exchangeWaitroseSession } from "./integrations/waitrose.ts";
 import { basicAuthorization } from "./repo/git-wire.ts";
 import { SecretRefreshKind } from "./secret/contract.ts";
@@ -43,7 +44,7 @@ export const EXCHANGE_SOURCE_MAX_CHARS = 64 * 1024;
 /** The deployment's apps an `oauth-refresh-token` strategy may name as its client (`{ platform }`):
  *  each refreshes with that app's credentials, attached in the secret's facet. GitHub's is the App's
  *  user-authorization client, which a GitHub sign-in's token refreshes with. */
-const OAUTH_REFRESH_PLATFORMS = ["slack", "google", "cloudflare", "github"] as const;
+const OAUTH_REFRESH_PLATFORMS = IterateAppProvider.options;
 
 /** A secret's name: `[a-zA-Z0-9._-]+`, but never `.` or `..` — the two segments
  *  `resolveContextPath` resolves away, so `/secrets/..` would name its owner's ROOT (and

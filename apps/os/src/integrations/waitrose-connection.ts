@@ -4,14 +4,12 @@
 // (waitrose.ts logs in on first use and on a 401), then `connectWaitrose` records the connection:
 // a platform `waitrose/connected` on the owner's root naming the username. A project connects a
 // person's as it is, like any account of theirs (`itx.integrations.connect("waitrose", { account })`).
-//   connectWaitrose    → the secret checked, then `waitrose/connected`
-//   disconnectWaitrose → the secret deleted, then `waitrose/disconnected`
-// Waitrose sends no webhooks, so nothing is routed.
+//   connectWaitrose → the secret checked, then `waitrose/connected`
+// Waitrose sends no webhooks, so nothing is routed, and a disconnect revokes nothing.
 import { codedError } from "iterate/lib";
 import { z } from "zod";
 import {
-  appendPlatformFact,
-  deleteTokenSecret,
+  appendConnected,
   assertConnectionName,
   tokenSecretPathOf,
   type IntegrationScope,
@@ -32,16 +30,11 @@ export async function connectWaitrose(
       "INVALID_INPUT",
       `Set ${secretPath} to { username, password } with refresh { kind: "waitrose-session" } first.`,
     );
-  await appendPlatformFact(scope.env, scope.projectId, scope.rootPath, {
-    type: "events.iterate.com/waitrose/connected",
-    payload: { connection, client: "project", account, externalId: account },
-  });
-}
-
-export async function disconnectWaitrose(scope: IntegrationScope, connection: string) {
-  await deleteTokenSecret(scope, "waitrose", connection);
-  await appendPlatformFact(scope.env, scope.projectId, scope.rootPath, {
-    type: "events.iterate.com/waitrose/disconnected",
-    payload: { connection },
+  await appendConnected(scope, {
+    provider: "waitrose",
+    connection,
+    client: "project",
+    account,
+    externalId: account,
   });
 }

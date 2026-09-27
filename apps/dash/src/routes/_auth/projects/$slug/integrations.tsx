@@ -33,17 +33,15 @@ import {
 } from "@iterate-com/ui/components/sheet";
 import { Spinner } from "@iterate-com/ui/components/spinner";
 import { Textarea } from "@iterate-com/ui/components/textarea";
+import { INTEGRATION_PROVIDERS, type IterateAppProvider } from "iterate/api";
 import { errorCode } from "iterate/lib";
 import { useContextStub, useFacetLiveState } from "iterate/react";
 import { httpOriginOf } from "../../../../lib/origins.ts";
 import { stepUpUrl } from "../../../../lib/scopes.ts";
 import { addGithubSignInHref } from "../../../../lib/origins.ts";
 
-const Provider = z.enum(["slack", "google", "cloudflare", "github", "waitrose"]);
+const Provider = z.enum(INTEGRATION_PROVIDERS);
 type Provider = z.infer<typeof Provider>;
-/** The providers connected through a consent (every one but Waitrose). */
-const ConsentProvider = Provider.exclude(["waitrose"]);
-type ConsentProvider = z.infer<typeof ConsentProvider>;
 /** The providers with a project-app mode ("Your own app"). */
 const OwnAppProvider = z.enum(["slack", "google", "github"]);
 type OwnAppProvider = z.infer<typeof OwnAppProvider>;
@@ -174,7 +172,7 @@ function ProjectIntegrations() {
   const here = `${window.location.origin}/projects/${project.slug}/integrations`;
   const askedScopes = search.scopes?.split(" ").filter(Boolean);
   /** `itx.integrations.connect` on the project: another account through iterate's app. */
-  const connectAnother = async (input: { provider: ConsentProvider; scopes?: string[] }) =>
+  const connectAnother = async (input: { provider: IterateAppProvider; scopes?: string[] }) =>
     z
       .object({ authorizationUrl: z.string().url() })
       .parse(

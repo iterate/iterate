@@ -546,7 +546,9 @@ function ConnectedAccounts({ projects }: { projects: { id: string; slug: string 
               onError={(caught) =>
                 setError(caught instanceof Error ? caught.message : String(caught))
               }
-            />
+            >
+              Connect {PROVIDER_TITLES[provider]}
+            </ConnectButton>
           ))}
           {addGithub && (
             <a href={addGithub} className={cn(buttonVariants({ variant: "outline", size: "sm" }))}>

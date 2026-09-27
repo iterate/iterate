@@ -3,10 +3,17 @@
 // `account` state on `/users/<id>` (account/contract.ts). Both depend on this catalog, so the row and
 // the facts are one type. Only the platform appends these (`source.platform`): a connect's callback,
 // a disconnect, and a sign-in that keeps its token (identity.ts).
+import { INTEGRATION_PROVIDERS } from "iterate/api";
 import { z } from "zod";
 
-export const IntegrationProvider = z.enum(["slack", "google", "cloudflare", "github", "waitrose"]);
+/** The published provider list (iterate/api `INTEGRATION_PROVIDERS`) and its kinds, parsed. */
+export const IntegrationProvider = z.enum(INTEGRATION_PROVIDERS);
 export type IntegrationProvider = z.infer<typeof IntegrationProvider>;
+/** iterate/api `IterateAppProvider`: Waitrose connects with a username and password, no app. */
+export const IterateAppProvider = IntegrationProvider.exclude(["waitrose"]);
+/** iterate/api `OAuthIntegrationProvider`, whose callback is
+ *  `/api/integrations/<provider>/callback`: GitHub's connect is its App's install. */
+export const OAUTH_INTEGRATION_PROVIDERS = IterateAppProvider.exclude(["github"]).options;
 
 /** One connection, as its owner's root records it, by the connection's log path
  *  (`/integrations/<provider>/<connection>`). */

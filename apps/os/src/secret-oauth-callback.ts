@@ -20,7 +20,8 @@ import type { Env } from "./env.ts";
 import { authorizationForToken } from "./oauth.ts";
 import { moveOfferLanding } from "./integrations/connections.ts";
 import type { FinishConnectAnswer, FinishConnectInput } from "./integrations/verbs.ts";
-import { isSecretOAuthState, OAUTH_INTEGRATION_PROVIDERS } from "./secret-oauth.ts";
+import { OAUTH_INTEGRATION_PROVIDERS } from "./integrations/contract.ts";
+import { isSecretOAuthState } from "./secret-oauth.ts";
 
 /** The human at a callback: their platform session — a browser cookie, or a bearer — or null. */
 export async function callbackAuthorization(

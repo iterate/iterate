@@ -9,13 +9,14 @@
 // project leaves the person's own connection standing. `finishIntegrationConnect` and a connect with
 // `connectToProject` are the platform's alone: the facets do not publish them. An account another
 // project holds (Slack, GitHub) is offered to move here, and `confirmIntegrationMove` moves it.
+import type { OAuthIntegrationProvider } from "iterate/api";
 import { codedError, errorCode, reportIssue, withTimeout } from "iterate/lib";
 import { z } from "zod";
 import { appConfigOf, sessionSigningSecretOf } from "../app-config.ts";
 import { verifyClaims } from "../caller.ts";
 import { DurableObjectNameCodec } from "../context/paths.ts";
 import { ControlPlane } from "../control-plane/edge.ts";
-import type { IntegrationConnectionRow, IntegrationProvider } from "./contract.ts";
+import { IntegrationProvider, type IntegrationConnectionRow } from "./contract.ts";
 import {
   appendPlatformFact,
   assertConnectionName,
@@ -24,6 +25,8 @@ import {
   connectionRowOf,
   connectionRowThroughHeadOf,
   consentAttemptKeyOf,
+  deleteTokenSecret,
+  dropAttemptsOf,
   ROUTED_PROVIDERS,
   tokenSecretPathOf,
   type ConnectionAttempt,
@@ -32,18 +35,17 @@ import {
   type MovableAttempt,
   type MoveOffered,
 } from "./connections.ts";
-import { connectCloudflare, disconnectCloudflare, finishCloudflareConnect } from "./cloudflare.ts";
-import { connectGithub, connectGithubInstallation, disconnectGithub } from "./github.ts";
-import { connectGoogle, disconnectGoogle, finishGoogleConnect } from "./google.ts";
+import { connectCloudflare, finishCloudflareConnect } from "./cloudflare.ts";
+import { connectGithub, connectGithubInstallation } from "./github.ts";
+import { connectGoogle, finishGoogleConnect, revokeGoogle } from "./google.ts";
 import {
   connectMovedSlackTeam,
   connectSlack,
-  disconnectSlack,
   dropHeldSlackToken,
   finishSlackConnect,
+  revokeSlack,
   slackMoveOfferedAgain,
 } from "./slack.ts";
-import { disconnectWaitrose } from "./waitrose-connection.ts";
 import { missingScopes } from "./rules.ts";
 
 export type ConnectInput = {
@@ -65,6 +67,49 @@ export type ConnectInput = {
 /** The providers a person connects on their own context. */
 const PERSONAL_PROVIDERS: readonly IntegrationProvider[] = ["google", "cloudflare"];
 
+/** EACH PROVIDER'S PART of connect, finish and disconnect; the rest is these verbs', the same for
+ *  every provider. `connect` answers where to send the human to consent, given the connection when
+ *  it exists (asked for more) and the project a person's connect is for. `finish` is a consent's
+ *  the platform's OAuth callback completed: the connection it recorded, or the offer to move an
+ *  account another project holds. `revoke` is a disconnect's first step, where the provider can
+ *  end the grant. */
+const PROVIDERS: Record<
+  IntegrationProvider,
+  {
+    connect(
+      scope: IntegrationScope,
+      request: ConnectInput & {
+        existing?: IntegrationConnectionRow;
+        connectToProject?: ConnectionAttempt["connectToProject"];
+      },
+    ): Promise<{ authorizationUrl: string }>;
+    finish?(
+      scope: IntegrationScope,
+      connection: string,
+      attempt: ConnectionAttempt,
+      consent: { grantedScopes: string[]; held?: HeldToken & { nonce: string } },
+    ): Promise<{ row: IntegrationConnectionRow } | { move: MoveOffered }>;
+    revoke?(
+      scope: IntegrationScope,
+      connection: string,
+      row: IntegrationConnectionRow | undefined,
+    ): Promise<void>;
+  }
+> = {
+  slack: { connect: connectSlack, finish: finishSlackConnect, revoke: revokeSlack },
+  google: { connect: connectGoogle, finish: finishGoogleConnect, revoke: revokeGoogle },
+  cloudflare: { connect: connectCloudflare, finish: finishCloudflareConnect },
+  github: { connect: connectGithub },
+  waitrose: {
+    connect: async () => {
+      throw codedError(
+        "INVALID_INPUT",
+        "integrations: Waitrose has no consent to send a human to — set /secrets/waitrose-<connection> to { username, password } and call connectWaitrose",
+      );
+    },
+  },
+};
+
 /** CONNECT: where to send a human to consent. Again for a connection that exists asks for more on
  *  the same account: the union of scopes, and the provider must answer for the account the
  *  connection holds (a GitHub App's permissions are the App's: its install page adds repositories). */
@@ -79,7 +124,11 @@ export async function connectIntegration(
   const { connectToProject: _neverTheCallers, ...fields } = input as ConnectInput & {
     connectToProject?: unknown;
   };
-  const request = { ...fields, connection: assertConnectionName(input?.connection) };
+  const request = {
+    ...fields,
+    provider: IntegrationProvider.parse(input?.provider),
+    connection: assertConnectionName(input?.connection),
+  };
   if (connectToProject && scope.rootPath === "/")
     throw codedError(
       "INVALID_INPUT",
@@ -94,33 +143,14 @@ export async function connectIntegration(
       `integrations: a person connects ${PERSONAL_PROVIDERS.join(" or ")} (GitHub by signing in with it); a project connects ${request.provider}`,
     );
   const existing = integrations[connectionPathOf(request.provider, request.connection)];
-  if (request.provider === "slack")
-    return connectSlack(scope, { ...request, expectAccount: existing?.externalId });
-  if (request.provider === "google")
-    return connectGoogle(scope, { ...request, expectAccount: existing, connectToProject });
-  if (request.provider === "cloudflare")
-    return connectCloudflare(scope, {
-      ...request,
-      expectAccount: existing?.externalId,
-      connectToProject,
-    });
-  if (request.provider === "github") return connectGithub(scope, request);
-  if (request.provider === "waitrose")
-    throw codedError(
-      "INVALID_INPUT",
-      "integrations: Waitrose has no consent to send a human to — set /secrets/waitrose-<connection> to { username, password } and call connectWaitrose",
-    );
-  throw codedError(
-    "INVALID_INPUT",
-    `integrations: no provider ${JSON.stringify(request.provider)}`,
-  );
+  return PROVIDERS[request.provider].connect(scope, { ...request, existing, connectToProject });
 }
 
 /** How the platform's callback finishes a connect: the OAuth attempt it completed (its nonce), what
  *  the provider granted, and — for a person's connect a project asked for — whether the human who
  *  consented is that person with the `account` scope, and their address (secret-oauth-callback.ts). */
 export type FinishConnectInput = {
-  provider: "slack" | "google" | "cloudflare";
+  provider: OAuthIntegrationProvider;
   connection: string;
   nonce: string;
   grantedScopes: string[];
@@ -157,6 +187,8 @@ export async function finishIntegrationConnect(
   const nonce = z.string().min(1).parse(input.nonce);
   const grantedScopes = z.array(z.string()).parse(input.grantedScopes);
   const held = HeldTokenInput.parse(input.held);
+  const { finish } = PROVIDERS[input.provider];
+  if (!finish) throw codedError("INVALID_INPUT", `integrations: ${input.provider} has no consent`);
   const key = consentAttemptKeyOf(input.provider, connection, nonce);
   const attempt = await scope.storage.get<ConnectionAttempt>(key);
   if (!attempt || attempt.until < Date.now()) {
@@ -174,27 +206,18 @@ export async function finishIntegrationConnect(
     return {};
   }
   await scope.storage.put<ConnectionAttempt>(key, { ...attempt, finishing: true });
-  if (input.provider === "slack") {
-    const move = await finishSlackConnect(
-      scope,
-      connection,
-      attempt,
-      held && { ...held, nonce },
-    ).catch(async (error: unknown) => {
-      await scope.storage.put<ConnectionAttempt>(key, attempt); // nothing connected: a refresh retries
-      throw error;
-    });
-    await scope.storage.delete(key);
-    return { move };
-  }
-  const row = await (
-    input.provider === "google"
-      ? finishGoogleConnect(scope, connection, attempt, grantedScopes)
-      : finishCloudflareConnect(scope, connection, attempt, grantedScopes)
-  ).catch(async (error: unknown) => {
+  const finished = await finish(scope, connection, attempt, {
+    grantedScopes,
+    held: held && { ...held, nonce },
+  }).catch(async (error: unknown) => {
     await scope.storage.put<ConnectionAttempt>(key, attempt); // nothing connected: a refresh retries
     throw error;
   });
+  if ("move" in finished) {
+    await scope.storage.delete(key);
+    return { move: finished.move };
+  }
+  const { row } = finished;
   const target = attempt.connectToProject;
   if (target) {
     try {
@@ -307,37 +330,44 @@ export async function disconnectIntegration(
     movedExternalId?: string;
   },
 ): Promise<void> {
+  const provider = IntegrationProvider.parse(input?.provider);
   const connection = assertConnectionName(input?.connection);
   const movedExternalId = z.string().min(1).optional().parse(input.movedExternalId);
+  const routed = ROUTED_PROVIDERS.some((name) => name === provider);
+  if (movedExternalId && !routed)
+    throw codedError("INVALID_INPUT", `integrations: a ${provider} account never moves`);
   const moved = movedExternalId ? { externalId: movedExternalId } : undefined;
-  const row = integrations[connectionPathOf(input.provider, connection)];
+  const path = connectionPathOf(provider, connection);
+  const row = integrations[path];
+  const controlPlane = new ControlPlane(scope.env);
   // the connection since took another account, or the same one through its own app (or none):
   // nothing of the moved one is left here
   if (moved && (row?.externalId !== moved.externalId || row.client !== "iterate")) return;
   // …or it holds the account's route again (a move back): the move away is undone, not its cleanup
   if (moved) {
-    const route = await new ControlPlane(scope.env).integrationRouteOf(
-      input.provider,
-      moved.externalId,
-    );
-    if (
-      route?.projectId === scope.projectId &&
-      route.path === connectionPathOf(input.provider, connection)
-    )
-      return;
+    const route = await controlPlane.integrationRouteOf(provider, moved.externalId);
+    if (route?.projectId === scope.projectId && route.path === path) return;
   }
   if (row?.ownerUserId) return disconnectPersonalAccount(scope, row);
-  if (input.provider === "slack") await disconnectSlack(scope, connection, row || null, moved);
-  else if (input.provider === "google")
-    await disconnectGoogle(scope, connection, row?.client ?? null);
-  else if (input.provider === "cloudflare") await disconnectCloudflare(scope, connection);
-  else if (input.provider === "github") await disconnectGithub(scope, connection, moved);
-  else if (input.provider === "waitrose") await disconnectWaitrose(scope, connection);
-  else
-    throw codedError(
-      "INVALID_INPUT",
-      `integrations: no provider ${JSON.stringify(input.provider)}`,
-    );
+  // A moved account's route alone goes (one the connection took since stays), and its token is the
+  // one now connected where it went; otherwise the provider ends the grant where it can, then
+  // every route of the connection goes.
+  if (moved)
+    await controlPlane.releaseIntegrationRoute(provider, moved.externalId, scope.projectId, path);
+  else {
+    await PROVIDERS[provider].revoke?.(scope, connection, row);
+    if (routed) await controlPlane.releaseIntegrationRoutes(scope.projectId, path);
+  }
+  await deleteTokenSecret(scope, provider, connection);
+  await dropAttemptsOf(scope.storage, provider, connection);
+  // one tail for every provider, so the type is built from it (connections.ts `appendConnected`)
+  await appendPlatformFact(scope.env, scope.projectId, scope.rootPath, {
+    type: `events.iterate.com/${provider}/disconnected`,
+    payload: { connection, reason: moved ? "moved" : undefined },
+  });
+  // Again, once the row is gone: a failed move's undo that read the row before it went, and put
+  // the route back here meanwhile, finds it released (`confirmIntegrationMove`).
+  if (routed && !moved) await controlPlane.releaseIntegrationRoutes(scope.projectId, path);
 }
 
 /** How long a move waits on the holder connection's queue for its cleanup: a holder busy past it (a

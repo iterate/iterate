@@ -6,17 +6,17 @@
 // `getSecret("/secrets/cloudflare-<c>", { field: "accessToken" })` to api.cloudflare.com.
 //   connectCloudflare      → the consent URL (`itx.secrets.beginOAuth`)
 //   finishCloudflareConnect → `GET /client/v4/user` names the account, then `cloudflare/connected`
-//   disconnectCloudflare   → the secret deleted, `cloudflare/disconnected`
+// A disconnect revokes nothing (verbs.ts `PROVIDERS`): Cloudflare's revocation takes the token in
+// the body, which egress never fills in, so deleting the secret is the disconnect (the person
+// revokes the grant at dash.cloudflare.com).
 import { codedError } from "iterate/lib";
 import { appConfigOf } from "../app-config.ts";
 import { SECRET_OAUTH_TTL_MS } from "../secret-oauth.ts";
 import { isRecord } from "../secrets.ts";
 import type { IntegrationConnectionRow } from "./contract.ts";
 import {
-  appendPlatformFact,
-  deleteTokenSecret,
+  appendConnected,
   consentAttemptKeyOf,
-  dropAttemptsOf,
   ownerEgress,
   tokenSecretPathOf,
   type ConnectionAttempt,
@@ -48,7 +48,8 @@ export async function connectCloudflare(
     client: ConnectionAttempt["client"];
     next?: string;
     scopes?: readonly string[];
-    expectAccount?: string;
+    /** The connection, when it exists: the consent must come back as its account. */
+    existing?: IntegrationConnectionRow;
     /** A person's connect a project asked for (connections.ts `ConnectionAttempt`). */
     connectToProject?: ConnectionAttempt["connectToProject"];
   },
@@ -70,7 +71,7 @@ export async function connectCloudflare(
       scope: asked.join(" "),
       urls: endpoints.urls,
       next: input.next,
-      expectAccount: input.expectAccount,
+      expectAccount: input.existing?.externalId,
     }),
   );
   const attempt: ConnectionAttempt = {
@@ -88,8 +89,8 @@ export async function finishCloudflareConnect(
   connection: string,
   attempt: ConnectionAttempt,
   /** What Cloudflare granted (the token response's `scope`, rules.ts `grantedScopesOf`). */
-  grantedScopes: string[],
-): Promise<IntegrationConnectionRow> {
+  { grantedScopes }: { grantedScopes: string[] },
+) {
   const endpoints = cloudflareEndpointsOf(attempt.origin);
   const response = await ownerEgress(
     scope.env,
@@ -104,32 +105,14 @@ export async function finishCloudflareConnect(
   const user = isRecord(body) && isRecord(body.result) ? body.result : null;
   if (!response.ok || typeof user?.id !== "string")
     throw new Error(`Cloudflare's /user answered ${response.status}`);
-  const row: IntegrationConnectionRow = {
-    provider: "cloudflare",
-    connection,
-    client: "iterate",
-    account: typeof user.email === "string" ? user.email : user.id,
-    externalId: user.id,
-    scopes: grantedScopes,
+  return {
+    row: await appendConnected(scope, {
+      provider: "cloudflare",
+      connection,
+      client: "iterate",
+      account: typeof user.email === "string" ? user.email : user.id,
+      externalId: user.id,
+      scopes: grantedScopes,
+    }),
   };
-  const { provider: _provider, ...payload } = row;
-  await appendPlatformFact(scope.env, scope.projectId, scope.rootPath, {
-    type: "events.iterate.com/cloudflare/connected",
-    payload,
-  });
-  return row;
-}
-
-export async function disconnectCloudflare(
-  scope: IntegrationScope,
-  connection: string,
-): Promise<void> {
-  // Cloudflare's revocation takes the token in the body, which egress never fills in: deleting the
-  // secret is the disconnect (the person revokes the grant at dash.cloudflare.com).
-  await deleteTokenSecret(scope, "cloudflare", connection);
-  await dropAttemptsOf(scope.storage, "cloudflare", connection);
-  await appendPlatformFact(scope.env, scope.projectId, scope.rootPath, {
-    type: "events.iterate.com/cloudflare/disconnected",
-    payload: { connection },
-  });
 }
