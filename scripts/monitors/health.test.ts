@@ -146,9 +146,6 @@ test("Main OS e2e's page job posts its own run's change of state in the health j
   });
 });
 
-// A green run whose E2E tests summary proves nothing about the slow rows (Main OS e2e run
-// nzjj9rxlmc, 2026-09-27: a row that skipped itself read as unfinished, and the page job failed on
-// a green main): the page job pages it ⚪ and fails nothing.
 test("Main OS e2e's page job pages a broken slow-rows probe of a green run, and has no failure", async () => {
   const current = mainRun("current", "2026-09-27T01:00:00Z", {
     e2eTests: [{ name: "the careless facet", tags: ["slow"] }],

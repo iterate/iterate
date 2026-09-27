@@ -491,9 +491,7 @@ test.for([
   },
 );
 
-// The rows of a green main run's E2E tests job, and what its page job makes of its slow rows: a
-// verdict, or a broken probe paged ⚪ and kept as `broken`, which never fails the job. Main e2e is
-// green whatever the summary says: its verdict is the jobs'.
+// The slow rows of a green main run, by what its E2E tests job's summary says (./e2e.ts).
 test.for<{
   label: string;
   tests: SummaryTest[];
@@ -507,7 +505,7 @@ test.for<{
     slow: "green",
   },
   {
-    label: "a plain row that skipped itself (the reporter records `ctx.skip()` as a skip)",
+    label: "a plain row that skipped itself (the reporter records it as a skip)",
     tests: [
       { name: "the careless facet", tags: ["slow"] },
       { name: "signs in through the pet shop", outcome: "skip" },

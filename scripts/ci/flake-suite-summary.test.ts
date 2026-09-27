@@ -38,7 +38,7 @@ test("per-test evidence uses the retry record's identity and never counts retrie
     { ...base, leafName: "failure", state: "failed", outcome: "unexpected" },
     { ...base, leafName: "skip", state: "skipped", expectedState: "skipped" },
     { ...base, leafName: "expected failure", expectedState: "failed" },
-    // a vitest row that skipped itself (`ctx.skip()`): it finished, as a skip
+    // a vitest row that skipped itself (its context's `skip()`): it finished, as a skip
     { ...base, leafName: "skipped itself", state: "skipped", expectedState: "skip" },
   ];
   await writeFlakeSuiteSummary({

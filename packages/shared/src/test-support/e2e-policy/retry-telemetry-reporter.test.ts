@@ -141,10 +141,8 @@ test("a plain test that failed every attempt leaves an unexpected-error flake re
   ]);
 });
 
-// Vitest keeps a test's declared mode `run` when it skips itself (`ctx.skip()`), and hands it no
-// timing (apps/os/e2e/sign-in-connections.e2e.test.ts, Main OS e2e run nzjj9rxlmc, 2026-09-27).
-// Recorded as expected to pass, it read as a test the runner never finished, and the suite summary
-// as incomplete (scripts/ci/flake-suite-summary.ts).
+// A test that skips itself (its context's `skip()`) keeps its declared mode `run` and no timing:
+// only its result says it skipped.
 test.for([
   { mode: "skip", state: "skipped", reason: "passed", expectedState: "skip" },
   { mode: "run", state: "skipped", reason: "passed", expectedState: "skip" },

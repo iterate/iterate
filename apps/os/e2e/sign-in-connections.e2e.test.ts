@@ -119,8 +119,7 @@ deployedOnly(
 /** A browser signing in at `path` through a pet-shop fake — `choices` are the person's picks at its
  *  page — following the platform's redirects back for consent: the session cookie, or null when the
  *  provider is not the pet shop. A sign-in the platform refused or failed lands on `/login?error`
- *  signed out, and fails the row: read as "not the pet shop's fake", it skipped the row (Main OS e2e
- *  run nzjj9rxlmc, 2026-09-27, a GitHub token another row's `petshopExpireTokens` killed). */
+ *  signed out, and fails the row: it is not a deployment without the fake. */
 async function signInThroughFake(
   path: string,
   choices: Record<string, string>,
