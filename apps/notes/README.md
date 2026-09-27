@@ -55,8 +55,9 @@ Vite puts its module URLs and its HMR socket under the base path, and Notes swap
 path in for the build's ([src/base-path.ts](src/base-path.ts)). The page runs on the platform's
 sign-in, as the proxied Notes does. Under subdomains the tunnel's host is an origin of its own, and
 plain `pnpm dev` serves it. The local OS's `pnpm dev` does not forward the HMR socket: its
-Cloudflare Vite plugin drops every `vite-*` WebSocket it does not serve itself. A deployed or built
-OS does.
+Cloudflare Vite plugin drops every `vite-*` WebSocket it does not serve itself
+([pinned](../os/scripts/dev-tunnelled-hmr.test.ts) until upstream fixes it). A deployed or built OS
+does.
 
 Deploy: `pnpm --dir apps/notes run deploy --env prd` — after the platform it talks to
 (`os.iterate.com`, which follows `main`) carries `itx.repos` and

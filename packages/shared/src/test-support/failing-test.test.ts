@@ -1,6 +1,7 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { expect, test, vi } from "vitest";
+import { expect, onTestFinished, test, vi } from "vitest";
+import { E2E_CI_RETRY_DELAY_MS } from "./e2e-policy/budgets.ts";
 import { expectFailure, createFailing } from "./failing-test.ts";
 import { temporaryDirectory } from "./temporary-directory.ts";
 
@@ -145,9 +146,12 @@ test("a hung body reports as not-the-pinned-failure at the wrapper's own deadlin
 });
 
 // A failure that proves nothing is retried by the wrapper, because vitest's
-// own `retry` never reaches that outcome (see failing-test.ts).
-test("a failure that proves nothing re-runs the body once, and the pin holds on the retry", async () => {
+// own `retry` never reaches that outcome (see failing-test.ts). The retry rows
+// run the production pause on a fake clock.
+test("a failure that proves nothing re-runs the body once, after the e2e retry pause, and the pin holds on the retry", async () => {
   using records = scopedFlakeRecordDir();
+  vi.useFakeTimers();
+  onTestFinished(() => void vi.useRealTimers());
   const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
   const pin = pinWithRetry([
     async () => {
@@ -157,37 +161,47 @@ test("a failure that proves nothing re-runs the body once, and the pin holds on 
       throw new Error("pinned: woke 3 times after dispose");
     },
   ]);
-  await expect(pin.run()).rejects.toThrow(/pinned/);
+  const held = expect(pin.run()).rejects.toThrow(/pinned/);
+  await vi.advanceTimersByTimeAsync(E2E_CI_RETRY_DELAY_MS - 1);
+  expect(pin.calls()).toBe(1);
+  await vi.advanceTimersByTimeAsync(1);
+  await held;
   expect(pin.calls()).toBe(2);
   // Never silent: one record per attempt.
   expect(records.records().map((r) => r.outcome)).toEqual(["unexpected-error", "pinned-fail"]);
   expect(consoleError).toHaveBeenCalledWith(
-    expect.stringMatching(/proves nothing about the pinned bug; retry 1 of 1/),
+    expect.stringMatching(/proves nothing about the pinned bug; retry 1 of 1 in 5000ms/),
     expect.objectContaining({ message: expect.stringContaining("internal error") }),
   );
 });
 
 test("a second failure that proves nothing goes red; a pass or the pinned failure never retries", async () => {
   using records = scopedFlakeRecordDir();
+  vi.useFakeTimers();
+  onTestFinished(() => void vi.useRealTimers());
   vi.spyOn(console, "error").mockImplementation(() => {});
   const blip = async () => {
     throw new Error("Network connection lost.");
   };
   const twice = pinWithRetry([blip, blip]);
-  await expect(twice.run()).resolves.toBeUndefined(); // success = the native machinery goes red
+  const wentRed = twice.run();
+  await vi.runAllTimersAsync();
+  await expect(wentRed).resolves.toBeUndefined(); // success = the native machinery goes red
   expect(twice.calls()).toBe(2);
-  // No pause past the deadline: with 20ms left of a 100ms budget and a 50ms
-  // pause, the runner's timeout would fire mid-pause and count as the pin
-  // holding — so the first attempt's failure goes red at once instead.
+  // No pause past the deadline: with 4 s left of the default 30 s deadline and
+  // the 5 s pause, the runner's timeout would fire mid-pause and count as the
+  // pin holding — so the first attempt's failure goes red at once instead.
   const registered: ((...args: unknown[]) => Promise<unknown>)[] = [];
   const fake = Object.assign(vi.fn(), {
     fails: (...args: unknown[]) => registered.push(args.at(-1) as any),
   });
   const late = vi.fn(
-    () => new Promise((_, reject) => setTimeout(() => reject(new Error("blip")), 80)),
+    () => new Promise((_, reject) => setTimeout(() => reject(new Error("blip")), 26_000)),
   );
-  createFailing(fake, /pinned/, { timeoutMs: 100, retries: 1, retryDelayMs: 50 })("name", late);
-  await expect(registered[0]!()).resolves.toBeUndefined();
+  createFailing(fake, /pinned/, { retries: 1 })("name", late);
+  const lateRun = registered[0]!();
+  await vi.runAllTimersAsync();
+  await expect(lateRun).resolves.toBeUndefined();
   expect(late).toHaveBeenCalledTimes(1);
   const passed = pinWithRetry([async () => undefined]);
   await expect(passed.run()).resolves.toBeUndefined();
@@ -259,7 +273,7 @@ function pinWithRetry(bodies: Array<() => Promise<unknown>>) {
     fails: (...args: unknown[]) => registered.push(args.at(-1) as any),
   });
   let calls = 0;
-  createFailing(fake, /pinned/, { retries: 1, retryDelayMs: 0 })("name", async () => {
+  createFailing(fake, /pinned/, { retries: 1 })("name", async () => {
     calls += 1;
     return bodies[calls - 1]!();
   });
