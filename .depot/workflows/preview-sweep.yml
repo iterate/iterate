@@ -1,17 +1,10 @@
-# THE NIGHTLY PREVIEW SWEEP (`pnpm preview sweep`, apps/os/scripts/preview.ts), on the dev/preview
-# account only: deletes the previews of `os` and of the apps on top whose PR closed without a
-# delete, that went stale, or that were hand-named and left idle, every preview still on a former
-# parent (`os-preview`, `<app>-preview`) once idle a day, then each former parent's worker once no
-# preview is left on it, every per-commit deployment (`pr<n>-<sha7>-*`) but an open PR's newest,
-# and any per-preview resource that outlived its preview. A deleted worker's Durable Object
-# namespaces go with it; the workers envs.ts does not name are listed, never deleted. A CI
-# workflow's own preview (`main`, `latency`, `real-model`) goes only once that workflow has not
-# deployed it for a week. The rules are apps/os/scripts/preview-sweep.ts. What stops a force-closed
-# PR, or a failed cleanup, from leaking a preview or its namespaces.
+# THE NIGHTLY PREVIEW SWEEP (`pnpm preview sweep`, apps/os/scripts/preview.ts), dev/preview account
+# only; what it deletes is apps/os/scripts/preview-sweep.ts's rules.
 #
 # A scheduled run reports on main's head commit, where red reads as "this commit broke", so the run
-# goes red only when the sweep could not act. An Artifacts namespace Cloudflare will not delete is a
-# page to #error-pulse instead (preview.ts: StuckArtifactsNamespace), tried again the next night.
+# goes red only when the sweep could not act. An Artifacts namespace Cloudflare will not delete, or a
+# Durable Object namespace that outlived its worker, is a page to #error-pulse instead, checked again
+# the next night.
 #
 # Beside it, the reset of the `os` parent's own data (`pnpm preview reset-parent`): what people and
 # agents left on https://os.iterate-dev-preview.workers.dev and the app parents signed in against

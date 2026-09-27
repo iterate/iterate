@@ -60,10 +60,17 @@
 //      (`<parent>-itx`, `-oauth`, `-files`, `-db`, `-repos`) and its previews'
 //      (`<parent>-<preview>-<suffix>`), but never a legacy slot's (`os-preview-<n>-repos`, a number
 //      where the preview's name would be; the legacy platform's, thousands of repos each). One still
-//      holding a preview waits for rule 0. Rule 4 never reads a name under a former parent's prefix.
+//      holding a preview waits for rule 0, and one envs.ts deploys again is rule 10's, as is a
+//      resource the account has for something else (rule 4's list). Rule 4 never reads a name under
+//      a former parent's prefix.
 //  10. every other worker stays: envs.ts's deployments on this account (the parents `os` and each
 //      app's among them) and any worker envs.ts does not name, which the plan lists for a person to
 //      judge. The sweep runs on the dev/preview account alone (PREVIEW_PARENT's; prd is another).
+//  11. a DURABLE OBJECT NAMESPACE whose worker the account no longer has is Cloudflare's: a
+//      worker's delete takes its namespaces, and the API deletes no namespace alone. The sweep
+//      pages it to #error-pulse each night it is still listed at the end of the run
+//      (renderWorkerlessNamespacesPage), since each counts toward the account's 500.
+import { onCallMention } from "../../../scripts/ci/slack.ts";
 import {
   APPS,
   FORMER_PARENTS,
@@ -103,6 +110,9 @@ export type SweptResource = {
 
 /** One worker script on the account, `createdAt` its `created_on`. */
 export type SweptWorker = { name: string; createdAt?: string };
+
+/** One Durable Object namespace on the account, `script` the worker whose class it holds. */
+export type SweptNamespace = { id: string; name: string; script?: string };
 
 /** A per-commit deployment (rule 8): whichever of its workers and resources the account has. */
 export type SweptDeployment = {
@@ -356,9 +366,12 @@ export function planPreviewSweep(input: PreviewSweepInput): PreviewSweepPlan {
   });
 
   const formerParents: PreviewSweepPlan["formerParents"] = FORMER_PARENTS.flatMap((parent) => {
+    if (input.deployedWorkerNames.has(parent)) return [];
     const worker = input.workers.some(({ name }) => name === parent);
-    const resources = input.resources.filter((resource) =>
-      isFormerParentResource(parent, resource, input.resourceSuffixes),
+    const resources = input.resources.filter(
+      (resource) =>
+        !input.accountResourceNames.has(resource.name) &&
+        isFormerParentResource(parent, resource, input.resourceSuffixes),
     );
     if (!worker && resources.length === 0) return [];
     const left = input.formerParentPreviews.filter((preview) => preview.parent === parent).length;
@@ -387,4 +400,25 @@ export function planPreviewSweep(input: PreviewSweepInput): PreviewSweepPlan {
         !deploymentWorkers.has(name),
     );
   return { previews, formerParentPreviews, orphans, deployments, formerParents, unmappedWorkers };
+}
+
+/** Rule 11: the Durable Object namespaces whose worker the account no longer has. */
+export function workerlessNamespaces(namespaces: SweptNamespace[], workers: SweptWorker[]) {
+  const workerNames = new Set(workers.map(({ name }) => name));
+  return namespaces.filter(({ script }) => !workerNames.has(script || ""));
+}
+
+/** The sweep's page for rule 11's namespaces: what to escalate, and to whom. */
+export function renderWorkerlessNamespacesPage(
+  namespaces: SweptNamespace[],
+  jobUrl: string | undefined,
+) {
+  return [
+    `🚨 preview sweep: ${namespaces.length} Durable Object namespace(s) outlived their worker ${onCallMention}`,
+    ...namespaces.map(({ id, name, script }) => `• ${name} (${id}), worker ${script || "unnamed"}`),
+    "A Cloudflare fault, not a commit's: a worker's delete takes its namespaces, and the API deletes no namespace alone. Each counts toward the account's 500: escalate them to Cloudflare with these ids. The sweep checks again each night.",
+    jobUrl && `<${jobUrl}|sweep run>`,
+  ]
+    .filter(Boolean)
+    .join("\n");
 }

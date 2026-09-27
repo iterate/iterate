@@ -421,7 +421,8 @@ invariants:
   envs.ts does not name are listed for a person, never deleted. The rules are a
   pure table in `apps/os/scripts/preview-sweep.ts`. Every preview's Durable
   Object classes count toward the account's 500 namespaces (about 15 per PR,
-  apps included); a deleted worker's go with it.
+  apps included); a deleted worker's go with it, and one that outlives its
+  worker is a page to #error-pulse.
   Kept short on purpose, because a live preview costs Cloudflare resources and
   its Durable Objects can keep waking.
 - **In-test cleanup is never the guarantee.** Every e2e run provisions its own

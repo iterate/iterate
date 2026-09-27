@@ -102,7 +102,10 @@ import {
   groupPreviewDeployments,
   planPreviewSweep,
   previewNameOfSweptResource,
+  renderWorkerlessNamespacesPage,
+  workerlessNamespaces,
   type PullRequestState,
+  type SweptNamespace,
   type SweptResource,
 } from "./preview-sweep.ts";
 import { chooseSlowRows, SlowRows, slowRowsTagsFilter } from "./slow-rows.ts";
@@ -1154,8 +1157,6 @@ const RESOURCE_KIND_LABELS: Record<SweptResource["kind"], string> = {
   artifacts: "Artifacts namespace",
 };
 
-type DurableObjectNamespaceRow = { id: string; name: string; script?: string };
-
 /** The stale previews (deletePreview, and the apps on top of the same name), the resources that
  *  outlived their preview, the stale per-commit deployments and the former parents with no preview
  *  left, by the rules in scripts/preview-sweep.ts. */
@@ -1190,10 +1191,8 @@ async function sweep(cf: Cf, options: { dryRun: boolean; jobUrl: string | undefi
   const workers = (await cf<{ id: string; created_on?: string }[]>("/workers/scripts")).map(
     (script) => ({ name: script.id, createdAt: script.created_on }),
   );
-  const namespaces = await listAll<DurableObjectNamespaceRow>(
-    cf,
-    "/workers/durable_objects/namespaces",
-  );
+  const listNamespaces = () => listAll<SweptNamespace>(cf, "/workers/durable_objects/namespaces");
+  const namespaces = await listNamespaces();
   const deployedWorkerNames = accountWorkerNames();
   const resourceSuffixes = previewResourceSuffixes();
   const accountResources = accountResourceNames();
@@ -1300,15 +1299,14 @@ async function sweep(cf: Cf, options: { dryRun: boolean; jobUrl: string | undefi
       )
       .map(({ id }) => id),
   );
-  const workerNames = new Set(workers.map(({ name }) => name));
-  const workerless = namespaces.filter((namespace) => !workerNames.has(namespace.script || ""));
+  const workerless = workerlessNamespaces(namespaces, workers);
   if (plan.unmappedWorkers.length > 0)
     console.log(
       `  keep   ${plan.unmappedWorkers.length} worker(s) envs.ts does not name, for a person to judge: ${plan.unmappedWorkers.join(", ")}`,
     );
   if (workerless.length > 0)
     console.log(
-      `  ${workerless.length} Durable Object namespace(s) whose worker is gone, for a person to judge: ${workerless.map(({ name }) => name).join(", ")}`,
+      `  ${workerless.length} Durable Object namespace(s) whose worker is gone, paged if still listed once the run is done (rule 11): ${workerless.map(({ name }) => name).join(", ")}`,
     );
   const orphanCounts = Object.entries(RESOURCE_KIND_LABELS).map(
     ([kind, label]) => `${plan.orphans.filter((orphan) => orphan.kind === kind).length} ${label}`,
@@ -1334,106 +1332,123 @@ async function sweep(cf: Cf, options: { dryRun: boolean; jobUrl: string | undefi
     staleFormerParentPreviews.length === 0 &&
     staleDeployments.length === 0 &&
     staleFormerParents.length === 0;
-  if (dryRun || nothingToDelete) return;
-  const wrangler = preparePreviewWrangler();
-  try {
-    await wrangler.ready;
-    const failures: string[] = [];
-    // Cloudflare's, not the sweep's: paged, and tried again the next night (StuckArtifactsNamespace).
-    const stuckNamespaces: StuckArtifactsNamespace[] = [];
-    const noteStuck = (stuck: StuckArtifactsNamespace | undefined) => {
-      if (stuck) stuckNamespaces.push(stuck);
-    };
-    const deleteResource = async (resource: SweptResource) => {
-      const remove = {
-        kv: () => deleteKvNamespace(cf, { id: resource.id, title: resource.name }),
-        r2: () => deleteR2Bucket(cf, resource.name),
-        d1: async () => {
-          await cf(`/d1/database/${resource.id}`, { method: "DELETE" });
-          console.log(`deleted D1 ${resource.name}`);
-        },
-        artifacts: async () => noteStuck(await deleteArtifactsNamespace(cf, resource.name)),
-      }[resource.kind];
-      await remove().catch((error) => failures.push(`${resource.name}: ${describe(error)}`));
-    };
-    for (const { name } of stale) {
-      await deletePreview(cf, name, wrangler.command).then(noteStuck, (error) =>
-        failures.push(`${name}: ${describe(error)}`),
-      );
-    }
-    // Each orphan's preview looked up once more, right before its resources go: a preview deployed
-    // under that name since the listing (a reset, a redeploy that reuses leftovers by name) keeps them.
-    for (const previewName of new Set(plan.orphans.map((orphan) => orphan.previewName))) {
-      const previewGone = await cf(
-        `/workers/workers/${PREVIEW_PARENT.workerName}/previews/${previewName}`,
-      ).then(
-        () => {
-          console.warn(`preview ${previewName} exists again; its resources stay.`);
-          return false;
-        },
-        (error) => {
-          if (isCloudflareError(error, 404, 10025)) return true;
-          failures.push(`preview ${previewName}: ${describe(error)}`);
-          return false;
-        },
-      );
-      if (!previewGone) continue;
-      for (const orphan of plan.orphans.filter((row) => row.previewName === previewName))
-        await deleteResource(orphan);
-    }
-    for (const { app, name } of staleAppPreviews) {
-      await deleteWorkerPreview(app.envs.preview!, name, wrangler.command).catch((error) =>
-        failures.push(`apps/${app.name} ${name}: ${describe(error)}`),
-      );
-    }
-    for (const { parent, name } of staleFormerParentPreviews) {
-      const worker = {
-        workerName: parent,
-        cloudflareAccountId: PREVIEW_PARENT.cloudflareAccountId,
+  if (dryRun) return;
+  const failures: string[] = [];
+  // Cloudflare's, not the sweep's: paged, and tried again the next night (StuckArtifactsNamespace).
+  const stuckNamespaces: StuckArtifactsNamespace[] = [];
+  const noteStuck = (stuck: StuckArtifactsNamespace | undefined) => {
+    if (stuck) stuckNamespaces.push(stuck);
+  };
+  if (!nothingToDelete) {
+    const wrangler = preparePreviewWrangler();
+    try {
+      await wrangler.ready;
+      const deleteResource = async (resource: SweptResource) => {
+        const remove = {
+          kv: () => deleteKvNamespace(cf, { id: resource.id, title: resource.name }),
+          r2: () => deleteR2Bucket(cf, resource.name),
+          d1: async () => {
+            await cf(`/d1/database/${resource.id}`, { method: "DELETE" });
+            console.log(`deleted D1 ${resource.name}`);
+          },
+          artifacts: async () => noteStuck(await deleteArtifactsNamespace(cf, resource.name)),
+        }[resource.kind];
+        await remove().catch((error) => failures.push(`${resource.name}: ${describe(error)}`));
       };
-      await deleteWorkerPreview(worker, name, wrangler.command).catch((error) =>
-        failures.push(`${parent} ${name}: ${describe(error)}`),
-      );
-    }
-    // A deployment's or a former parent's workers first, so nothing writes to what goes next. A
-    // resource that does not go is still under the same name tomorrow, when the next run tries again.
-    for (const { workers, resources } of [...staleDeployments, ...formerParentGroups]) {
-      await Promise.all(
-        workers.map((worker) =>
-          deleteWorker(cf, worker.name).catch((error) =>
-            failures.push(`worker ${worker.name}: ${describe(error)}`),
+      for (const { name } of stale) {
+        await deletePreview(cf, name, wrangler.command).then(noteStuck, (error) =>
+          failures.push(`${name}: ${describe(error)}`),
+        );
+      }
+      // Each orphan's preview looked up once more, right before its resources go: a preview deployed
+      // under that name since the listing (a reset, a redeploy that reuses leftovers by name) keeps them.
+      for (const previewName of new Set(plan.orphans.map((orphan) => orphan.previewName))) {
+        const previewGone = await cf(
+          `/workers/workers/${PREVIEW_PARENT.workerName}/previews/${previewName}`,
+        ).then(
+          () => {
+            console.warn(`preview ${previewName} exists again; its resources stay.`);
+            return false;
+          },
+          (error) => {
+            if (isCloudflareError(error, 404, 10025)) return true;
+            failures.push(`preview ${previewName}: ${describe(error)}`);
+            return false;
+          },
+        );
+        if (!previewGone) continue;
+        for (const orphan of plan.orphans.filter((row) => row.previewName === previewName))
+          await deleteResource(orphan);
+      }
+      for (const { app, name } of staleAppPreviews) {
+        await deleteWorkerPreview(app.envs.preview!, name, wrangler.command).catch((error) =>
+          failures.push(`apps/${app.name} ${name}: ${describe(error)}`),
+        );
+      }
+      for (const { parent, name } of staleFormerParentPreviews) {
+        const worker = {
+          workerName: parent,
+          cloudflareAccountId: PREVIEW_PARENT.cloudflareAccountId,
+        };
+        await deleteWorkerPreview(worker, name, wrangler.command).catch((error) =>
+          failures.push(`${parent} ${name}: ${describe(error)}`),
+        );
+      }
+      // A group's workers first, so nothing writes to its resources as they go. A worker that would
+      // not go keeps its group's resources: the next run tries both again, by name.
+      for (const { workers, resources } of [...staleDeployments, ...formerParentGroups]) {
+        const deleted = await Promise.all(
+          workers.map((worker) =>
+            deleteWorker(cf, worker.name).then(
+              () => true,
+              (error) => {
+                failures.push(`worker ${worker.name}: ${describe(error)}`);
+                return false;
+              },
+            ),
           ),
-        ),
-      );
-      for (const resource of resources) await deleteResource(resource);
+        );
+        if (deleted.every(Boolean))
+          for (const resource of resources) await deleteResource(resource);
+      }
+    } finally {
+      wrangler.cleanup();
     }
-    // Each namespace this run's deletes took is gone from the listing, else it is named.
-    const left = (
-      await listAll<DurableObjectNamespaceRow>(cf, "/workers/durable_objects/namespaces")
-    ).filter(({ id }) => freedNamespaceIds.has(id));
-    if (left.length > 0)
-      console.warn({
-        event: "preview.durable-object-namespaces-outlived-delete",
-        namespaces: left.map(({ name }) => name),
-      });
-    else
-      console.log(`${freedNamespaceIds.size} Durable Object namespace(s) went with their worker`);
-    // The run is red only when the sweep could not act. A scheduled run reports on main's head
-    // commit, where red reads as "this commit broke", so Cloudflare's refusal is a page instead
-    // (the rule scripts/ci/prd-fault-alarm.ts follows); a page that could not be posted is a failure.
-    if (stuckNamespaces.length > 0) {
-      const text = renderStuckArtifactsNamespacesPage(stuckNamespaces, options.jobUrl);
-      console.log(text);
-      await (async () =>
-        getSlackClient().chat.postMessage({
-          channel: slackChannelIds["#error-pulse"],
-          text,
-        }))().catch((error) => failures.push(`paging #error-pulse: ${describe(error)}`));
-    }
-    if (failures.length > 0) throw new Error(`sweep failures:\n  ${failures.join("\n  ")}`);
-  } finally {
-    wrangler.cleanup();
   }
+  // Once the deletes are done, each namespace they took should be gone from the listing. One still
+  // listed after deletes that all succeeded is Cloudflare's: a warn now, and rule 11's page from the
+  // next run, which finds it workerless (so a namespace Cloudflare drops a moment late pages no one).
+  const listedAfter = await listNamespaces();
+  const outlived = listedAfter.filter(({ id }) => freedNamespaceIds.has(id));
+  if (failures.length === 0 && outlived.length > 0)
+    console.warn({
+      event: "preview.platform-failure-durable-object-namespace-delete",
+      namespaces: outlived.map(({ name }) => name),
+    });
+  else if (freedNamespaceIds.size > 0)
+    console.log(
+      `${freedNamespaceIds.size - outlived.length} of ${freedNamespaceIds.size} Durable Object namespace(s) went with their worker`,
+    );
+  // Rule 11: workerless when the run began, and still listed once it is done.
+  const listedIds = new Set(listedAfter.map(({ id }) => id));
+  const stillWorkerless = workerless.filter(({ id }) => listedIds.has(id));
+  // The run is red only when the sweep could not act. A scheduled run reports on main's head
+  // commit, where red reads as "this commit broke", so Cloudflare's refusal is a page instead
+  // (the rule scripts/ci/prd-fault-alarm.ts follows); a page that could not be posted is a failure.
+  const pages = [
+    stuckNamespaces.length > 0 &&
+      renderStuckArtifactsNamespacesPage(stuckNamespaces, options.jobUrl),
+    stillWorkerless.length > 0 && renderWorkerlessNamespacesPage(stillWorkerless, options.jobUrl),
+  ].filter((text) => typeof text === "string");
+  for (const text of pages) {
+    console.log(text);
+    await (async () =>
+      getSlackClient().chat.postMessage({
+        channel: slackChannelIds["#error-pulse"],
+        text,
+      }))().catch((error) => failures.push(`paging #error-pulse: ${describe(error)}`));
+  }
+  if (failures.length > 0) throw new Error(`sweep failures:\n  ${failures.join("\n  ")}`);
 }
 
 // ── main ───────────────────────────────────────────────────────────────────────────────────────

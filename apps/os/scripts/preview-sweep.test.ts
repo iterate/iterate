@@ -9,6 +9,8 @@ import {
 } from "./preview-config.ts";
 import {
   planPreviewSweep,
+  renderWorkerlessNamespacesPage,
+  workerlessNamespaces,
   type PreviewSweepInput,
   type PullRequestState,
   type SweptResource,
@@ -462,6 +464,27 @@ test.for<{
   });
 });
 
+test("9: a former parent envs.ts deploys again, and a resource the account has for something else, are never rule 9's", () => {
+  const plan = planPreviewSweep(
+    input({
+      workers: [
+        { name: "os", createdAt: hoursAgo(1000) },
+        { name: "os-preview" },
+        { name: "dash-preview" },
+      ],
+      deployedWorkerNames: new Set([...accountWorkerNames(), "dash-preview"]),
+      accountResourceNames: new Set([...accountResourceNames(), "os-preview-files"]),
+      resources: OS_PREVIEW_RESOURCES,
+    }),
+  );
+  expect(plan.formerParents).toEqual([
+    expect.objectContaining({
+      name: "os-preview",
+      resources: OS_PREVIEW_RESOURCES.filter(({ name }) => name !== "os-preview-files"),
+    }),
+  ]);
+});
+
 test("10: only a preview's worker is ever deleted; the ones envs.ts does not name are listed", () => {
   const plan = planPreviewSweep(
     input({
@@ -499,6 +522,26 @@ test("the sweep deletes on the dev/preview account, and envs.ts's workers there 
     "notes",
     "os",
     "voice",
+  ]);
+});
+
+test("11: a Durable Object namespace whose worker is gone is paged with its id, what to escalate, and the run", () => {
+  const namespaces = [
+    { id: "n1", name: "os_ProjectDurableObject", script: "os" },
+    { id: "n2", name: "os-preview_ProjectDurableObject", script: "os-preview" },
+    { id: "n3", name: "os_pr7_ProjectDurableObject", script: "os" },
+    { id: "n4", name: "LegacyDurableObject" },
+  ];
+  const workerless = workerlessNamespaces(namespaces, [{ name: "os" }, { name: "dash" }]);
+  expect(workerless.map(({ id }) => id)).toEqual(["n2", "n4"]);
+  expect(
+    renderWorkerlessNamespacesPage(workerless, "https://depot.dev/orgs/x/workflows/y").split("\n"),
+  ).toEqual([
+    "🚨 preview sweep: 2 Durable Object namespace(s) outlived their worker <@U067G4QRFK2>",
+    "• os-preview_ProjectDurableObject (n2), worker os-preview",
+    "• LegacyDurableObject (n4), worker unnamed",
+    "A Cloudflare fault, not a commit's: a worker's delete takes its namespaces, and the API deletes no namespace alone. Each counts toward the account's 500: escalate them to Cloudflare with these ids. The sweep checks again each night.",
+    "<https://depot.dev/orgs/x/workflows/y|sweep run>",
   ]);
 });
 
