@@ -71,8 +71,7 @@ test("Preview OS names each job for the check it is: deploy, then the two suites
   expect(runs("deploy")).not.toContain(suiteRun);
 });
 
-// ONE DEFINITION: Browser specs is E2E tests' outputs and steps (YAML aliases), and the two jobs
-// differ only in the suite their env names, in the dispatch that skips them and in their runners.
+// Why the two suite jobs share one definition: .depot/workflows/preview-os.yml (THE TWO SUITES).
 test("Preview OS's two suite jobs are one definition, differing only in the suite they name", () => {
   const [e2e, specs] = [preview.jobs.e2e!, preview.jobs.specs!];
   expect(specs).toMatchObject({
