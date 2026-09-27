@@ -1,7 +1,7 @@
 /**
  * The store's bounds (state.ts `MINTED_RECORDS_KEPT`): every change keeps the newest 500 minted
  * clients, revoked accounts and spent codes, so the one stored value stays small however many e2e
- * runs have used the shop.
+ * runs have used the shop. And where an empty store starts (`startFrom`, durable-object.ts).
  */
 import { expect, test } from "vitest";
 import { DEFAULT_CLIENT_ID, PetshopStore, type PetshopState } from "./state.ts";
@@ -87,6 +87,27 @@ test("a state stored with more than the bounds keeps only the newest of each at 
   expect(bounded).toMatchObject({
     usedAuthorizationCodeIds: range(700, 1_200).map((index) => `code-${index}`),
   });
+});
+
+test("an empty store starts from another store's state, and a store with state keeps its own", async () => {
+  const previous = memoryStore().store;
+  const minted = await previous.createClient({});
+  await previous.expireAccessTokens(minted.clientId);
+  const { store } = memoryStore();
+
+  const copied = await store.startFrom(() => previous.getState());
+  await store.createClient({});
+  const again = await store.startFrom(() => previous.getState());
+
+  expect(copied?.clients).toHaveProperty(minted.clientId);
+  expect(again).toBeNull();
+  const state = await store.getState();
+  expect(state).toMatchObject({ accessTokenEpochs: { [minted.clientId]: 1 } });
+  expect(Object.keys(state.clients)).toEqual([
+    DEFAULT_CLIENT_ID,
+    minted.clientId,
+    expect.stringMatching(/^petshop-client-/),
+  ]);
 });
 
 /** The store over a map, cloning values in and out as a Durable Object's storage does. */

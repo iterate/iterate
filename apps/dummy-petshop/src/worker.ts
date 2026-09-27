@@ -49,7 +49,7 @@ import {
   DEFAULT_INSTALLATION_ID,
   type ShopDeps,
 } from "./state.ts";
-import { PetshopStateDurableObject } from "./durable-object.ts";
+import { PETSHOP_STATE_NAME, PetshopStateDurableObject } from "./durable-object.ts";
 import { handleTescoLogin, TESCO_ACCESS_TTL_SECONDS } from "./tesco-login.ts";
 
 export { PetshopStateDurableObject };
@@ -267,7 +267,9 @@ export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     try {
       return await handlePetshopRequest(request, {
-        state: env.PETSHOP_STATE.get(env.PETSHOP_STATE.idFromName("global")),
+        state: env.PETSHOP_STATE.get(env.PETSHOP_STATE.idFromName(PETSHOP_STATE_NAME), {
+          locationHint: "enam",
+        }),
         sealKey: env.PETSHOP_SEAL_KEY,
         pets: petCatalogue,
       });
