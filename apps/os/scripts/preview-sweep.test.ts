@@ -477,12 +477,14 @@ test("9: a former parent envs.ts deploys again, and a resource the account has f
       resources: OS_PREVIEW_RESOURCES,
     }),
   );
-  expect(plan.formerParents).toEqual([
-    expect.objectContaining({
-      name: "os-preview",
-      resources: OS_PREVIEW_RESOURCES.filter(({ name }) => name !== "os-preview-files"),
-    }),
-  ]);
+  expect(plan).toMatchObject({
+    formerParents: [
+      {
+        name: "os-preview",
+        resources: OS_PREVIEW_RESOURCES.filter(({ name }) => name !== "os-preview-files"),
+      },
+    ],
+  });
 });
 
 test("10: only a preview's worker is ever deleted; the ones envs.ts does not name are listed", () => {
