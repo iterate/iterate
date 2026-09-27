@@ -394,15 +394,15 @@ After its checkout, a job runs `uses: ./.depot/actions/setup`, whose steps run o
 3. **Install dependencies**: waits for the toolchain, then
    `pnpm install --frozen-lockfile --prefer-offline`.
 
-A job's workspace is installed 7–8 s after it starts on a 4x16, 9 s on a 2x8. Kit Firmware's jobs
-install nothing and run `scripts/ci/toolchain.sh node`. Preview OS's two scripts that choose the
-tested commit (`preview-tested-commit.ts`, `preview-paths.ts`) run before the setup on the stock
-image's own Node 22, with nothing but Node's builtins, since the PR head they start from may predate
-the setup. The store is
-`NPM_CONFIG_STORE_DIR=/home/runner/.pnpm-store` (pnpm 10 reads `npm_config_*`, not
-`pnpm_config_*`), and `NPM_CONFIG_SIDE_EFFECTS_CACHE=false` keeps build outputs out of it: the
-install runs the few build scripts itself, since from a store that held their outputs it took 5 s
-longer. No job runs `doppler setup`: every `doppler run` names its `--project` and `--config`.
+A job's workspace is installed 7–8 s after it starts on a 4x16 or an 8x32, 9 s on a 2x8. Kit
+Firmware's jobs install nothing and run `scripts/ci/toolchain.sh node`. Preview OS's two scripts
+that choose the tested commit (`preview-tested-commit.ts`, `preview-paths.ts`) run before the setup
+on the stock image's own Node 22, with nothing but Node's builtins, since the PR head they start
+from may predate the setup. The store is `NPM_CONFIG_STORE_DIR=/home/runner/.pnpm-store` (pnpm 10
+reads `npm_config_*`, not `pnpm_config_*`), and `NPM_CONFIG_SIDE_EFFECTS_CACHE=false` keeps build
+outputs out of it: the install runs the few build scripts itself, since from a store that held
+their outputs it took 5 s longer. No job runs `doppler setup`: every `doppler run` names its
+`--project` and `--config`.
 
 ### Depot Cache
 

@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { temporaryDirectory } from "@iterate-com/shared/test-support/temporary-directory";
 import { expect, test } from "vitest";
@@ -48,6 +48,26 @@ test("a download that does not match its SHASUMS256.txt fails the job, and puts 
   expect(readFileSync(job.githubPath, "utf8")).toBe("");
 });
 
+test("start puts Node and a pnpm pinned to packageManager on the PATH; wait fails, with the fetch's log, when the fetch did", () => {
+  using job = fixture();
+  job.imageNode("24.21.0", { real: true });
+  // offline: the Doppler CLI's download fails as a broken download fails a real job
+  job.fakeCommand("curl", 'echo "curl: (22) The requested URL returned error: 404" >&2; exit 22');
+
+  expect(job.run("start")).toMatchObject({ status: 0 });
+  expect(readFileSync(job.githubPath, "utf8")).toBe(`${job.cache}/24.21.0/x64/bin\n${job.tools}\n`);
+  // the same pnpm in any directory, the repo's or a tmpdir's
+  expect(spawnSync(join(job.tools, "pnpm"), ["--version"], { encoding: "utf8" })).toMatchObject({
+    stdout: "corepack pnpm@10.24.0 --version\n",
+  });
+  expect(job.run("wait")).toMatchObject({
+    status: 1,
+    stdout: expect.stringMatching(
+      /corepack install\n[^]*curl: \(22\)[^]*::error title=Toolchain::/u,
+    ),
+  });
+});
+
 function fixture() {
   const root = temporaryDirectory();
   const cache = join(root.path, "hostedtoolcache", "node");
@@ -58,17 +78,32 @@ function fixture() {
   mkdirSync(runnerTemp);
   writeFileSync(githubPath, "");
   writeFileSync(join(root.path, ".nvmrc"), "24\n");
+  writeFileSync(join(root.path, "package.json"), '{ "packageManager": "pnpm@10.24.0" }\n');
+  const fakeBin = join(root.path, "fake-bin");
+  mkdirSync(fakeBin);
   const fakeNode = (version: string) => `#!/bin/sh\necho v${version}\n`;
   return {
     cache,
     githubPath,
     tools: join(runnerTemp, "toolchain"),
-    /** A Node in the image's tool cache, as /opt/hostedtoolcache/node lays it out. */
-    imageNode(version: string) {
+    /** A Node in the image's tool cache, as /opt/hostedtoolcache/node lays it out: a fake that
+     *  prints its version, or this test's own Node beside a corepack that prints its arguments. */
+    imageNode(version: string, options: { real?: boolean } = {}) {
       const bin = join(cache, version, "x64", "bin");
       mkdirSync(bin, { recursive: true });
-      writeFileSync(join(bin, "node"), fakeNode(version));
-      chmodSync(join(bin, "node"), 0o755);
+      if (options.real) {
+        symlinkSync(process.execPath, join(bin, "node"));
+        writeFileSync(join(bin, "corepack"), '#!/bin/sh\necho "corepack $*"\n');
+        chmodSync(join(bin, "corepack"), 0o755);
+      } else {
+        writeFileSync(join(bin, "node"), fakeNode(version));
+        chmodSync(join(bin, "node"), 0o755);
+      }
+    },
+    /** A command on the PATH ahead of the machine's own. */
+    fakeCommand(name: string, script: string) {
+      writeFileSync(join(fakeBin, name), `#!/bin/sh\n${script}\n`);
+      chmodSync(join(fakeBin, name), 0o755);
     },
     /** nodejs.org's latest-v<major>.x release of `version`: its linux-x64 tarball and SHASUMS256.txt. */
     release(version: string, options: { corrupt?: boolean } = {}) {
@@ -96,6 +131,7 @@ function fixture() {
         encoding: "utf8",
         env: {
           ...process.env,
+          PATH: `${fakeBin}:${process.env.PATH}`,
           RUNNER_TEMP: runnerTemp,
           GITHUB_PATH: githubPath,
           TOOLCHAIN_NODE_CACHE: cache,

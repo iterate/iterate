@@ -11,8 +11,9 @@
 # - Node: .nvmrc's version, from the stock image's tool cache (/opt/hostedtoolcache/node, which
 #   setup-node never reads: Depot points it at an empty one). An image without it gets a warning,
 #   and Node from nodejs.org, checked against the release's SHASUMS256.txt.
-# - pnpm: the root package.json's `packageManager`, by Node's corepack, which checks the npm
-#   registry's signature.
+# - pnpm: the root package.json's `packageManager`, fetched by Node's corepack, which checks the npm
+#   registry's signature. `pnpm` runs that version in every directory: corepack's own shim would run
+#   its latest pnpm outside the repo (the preview deploy's wrangler install in a tmpdir).
 # - The Doppler CLI: DOPPLER_CLI_VERSION's release, checked against DOPPLER_CLI_SHA256.
 set -euo pipefail
 # and inside $(…), which bash otherwise runs without -e
@@ -65,7 +66,10 @@ case "${1:-}" in
     printf '%s\n%s\n' "$bin" "$tools" >>"$GITHUB_PATH"
     export PATH="$tools:$bin:$PATH"
     echo "Node $(node --version) from $bin"
-    corepack enable --install-directory "$tools" pnpm
+    pnpm_version="$(node -p 'require("./package.json").packageManager.replace(/^pnpm@/, "")')"
+    printf '#!/bin/sh\nCOREPACK_ENABLE_DOWNLOAD_PROMPT=0 exec "%s/corepack" "pnpm@%s" "$@"\n' \
+      "$bin" "$pnpm_version" >"$tools/pnpm"
+    chmod +x "$tools/pnpm"
     # Detached, so this step ends now; `wait` reads the fetch's exit status.
     nohup bash -c 'bash "$0" fetch; echo $? >"$1/fetch.exit"' "${BASH_SOURCE[0]}" "$tools" \
       >"$tools/fetch.log" 2>&1 </dev/null &
