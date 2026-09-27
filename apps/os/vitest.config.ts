@@ -51,9 +51,9 @@ const onUnhandledError = (error: unknown): boolean | void => {
   if (/EnvironmentTeardownError|Closing rpc while/.test(message)) return false;
 };
 
-/** THE LONG POLES FIRST. vitest orders files by their cached durations, and CI has no cache — so the
- *  row that waits a real deadline started after ninety seconds of short files and the run ended at
- *  170 s instead of its floor (measured 2026-09-21). These files start first, the longest first;
+/** THE LONG POLES FIRST. vitest orders files by their cached durations, and CI has no cache, so a
+ *  row that waits a real deadline would start behind the short files and end the run long after its
+ *  floor (at 170 s, measured 2026-09-21). These files start first, the longest first;
  *  then the other workers files, back to back, so a runner that ends one keeps its runtime for the
  *  next (the workers project's `isolate: false`); then the unit files, in vitest's own order.
  *  `pnpm test` (unit + workers, 7 slots in CI), 2026-09-24: the facet-push watchdog 60 s (the
@@ -84,10 +84,13 @@ const LONG_POLES = [
   "e2e/isolate-ceilings-slow-client.e2e.test.ts",
 ];
 /** FIRST OF ALL, IN A RUNTIME NOTHING RAN IN YET. agent-revive evicts a context whose facet it has
- *  just aborted mid model call, and in a runtime an earlier file warmed, that eviction can wait out
- *  the claim's 20 s alarm or `evictDurableObject`'s 30 s bound. It is a race in the eviction, not
- *  state an earlier file left: it happens with fresh-file.ts doing nothing. Queued like any other
- *  file it was red in 6 of 12 CI runs, first in a fresh runtime green in 46 of 46 (2026-09-27). */
+ *  just aborted mid model call. In a runtime an earlier file warmed, that eviction can wait out the
+ *  claim's 20 s alarm or `evictDurableObject`'s 30 s bound: a race in the eviction, not state an
+ *  earlier file left, since it fails as often with fresh-file.ts doing nothing. Repro, in apps/os
+ *  with the unit project looping beside it (3 runs in 8 failed, measured 2026-09-27):
+ *  `vitest run --project workers --maxWorkers=1 --sequence.seed=7
+ *  -t "^(a key bound to projects|KILLED MID-CALL)" __workers-tests__/connect-your-account.test.ts
+ *  ../agents/__workers-tests__/agent-revive.test.ts`. This entry goes once that passes every time. */
 const FRESH_RUNTIME_FIRST = ["apps/agents/__workers-tests__/agent-revive.test.ts"];
 
 class LongPolesFirst extends BaseSequencer {
@@ -144,7 +147,7 @@ function runtimeStorage() {
 
 /** `files` by module id, then shuffled (Fisher–Yates) with mulberry32 seeded by `seed`: one seed, one
  *  order, on any machine. */
-function seededOrder(files: TestSpecification[], seed: number): TestSpecification[] {
+function seededOrder(files: TestSpecification[], seed: number) {
   let state = seed >>> 0;
   const random = () => {
     state = (state + 0x6d2b79f5) >>> 0;
