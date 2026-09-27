@@ -33,7 +33,7 @@ import {
 } from "@iterate-com/ui/components/sheet";
 import { Spinner } from "@iterate-com/ui/components/spinner";
 import { Textarea } from "@iterate-com/ui/components/textarea";
-import { INTEGRATION_PROVIDERS, type IterateAppProvider } from "iterate/api";
+import { INTEGRATION_PROVIDERS, type IterateAppProvider, type SignInProvider } from "iterate/api";
 import { errorCode } from "iterate/lib";
 import { useContextStub, useFacetLiveState } from "iterate/react";
 import { httpOriginOf } from "../../../../lib/origins.ts";
@@ -76,16 +76,22 @@ const IntegrationsLive = z.looseObject({
     .default({}),
 });
 
-const PROVIDERS = [
-  { provider: "slack", title: "Slack", noun: "workspace" },
-  { provider: "google", title: "Google", noun: "account" },
-  { provider: "cloudflare", title: "Cloudflare", noun: "account" },
-  { provider: "github", title: "GitHub", noun: "account" },
-  { provider: "waitrose", title: "Waitrose", noun: "account" },
-] as const;
+/** Each provider's name, and what one of its connections is: one entry per published provider. */
+const PROVIDER_COPY = {
+  slack: { title: "Slack", noun: "workspace" },
+  google: { title: "Google", noun: "account" },
+  cloudflare: { title: "Cloudflare", noun: "account" },
+  github: { title: "GitHub", noun: "account" },
+  waitrose: { title: "Waitrose", noun: "account" },
+} satisfies Record<Provider, { title: string; noun: string }>;
+
+const PROVIDERS = INTEGRATION_PROVIDERS.map((provider) => ({
+  provider,
+  ...PROVIDER_COPY[provider],
+}));
 
 /** The providers a person has an account of their own with by signing in (apps/os identity.ts). */
-const SIGN_IN_PROVIDERS: readonly Provider[] = ["google", "cloudflare", "github"];
+const SIGN_IN_PROVIDERS: readonly SignInProvider[] = ["google", "cloudflare", "github"];
 
 /** Where Waitrose logs in (apps/os/src/integrations/waitrose.ts): the connection's secret's pin. */
 const WAITROSE_GRAPHQL_URL = "https://www.waitrose.com/api/graphql";
@@ -735,7 +741,7 @@ function YourAccounts({
   const title = PROVIDERS.find((known) => known.provider === provider)!.title;
   if (status === "no-access")
     // only a sign-in provider has accounts of yours worth stepping up for
-    return SIGN_IN_PROVIDERS.includes(provider) ? (
+    return SIGN_IN_PROVIDERS.some((name) => name === provider) ? (
       <p className="text-sm text-muted-foreground">
         <a href={stepUpUrl(stepUpNext)} className="underline underline-offset-4">
           Show your {title} accounts

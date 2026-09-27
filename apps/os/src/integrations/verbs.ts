@@ -16,7 +16,11 @@ import { appConfigOf, sessionSigningSecretOf } from "../app-config.ts";
 import { verifyClaims } from "../caller.ts";
 import { DurableObjectNameCodec } from "../context/paths.ts";
 import { ControlPlane } from "../control-plane/edge.ts";
-import { IntegrationProvider, type IntegrationConnectionRow } from "./contract.ts";
+import {
+  IntegrationProvider,
+  OAUTH_INTEGRATION_PROVIDERS,
+  type IntegrationConnectionRow,
+} from "./contract.ts";
 import {
   appendPlatformFact,
   assertConnectionName,
@@ -69,9 +73,9 @@ const PERSONAL_PROVIDERS: readonly IntegrationProvider[] = ["google", "cloudflar
 
 /** EACH PROVIDER'S PART of connect, finish and disconnect; the rest is these verbs', the same for
  *  every provider. `connect` answers where to send the human to consent, given the connection when
- *  it exists (asked for more) and the project a person's connect is for. `finish` is a consent's
- *  the platform's OAuth callback completed: the connection it recorded, or the offer to move an
- *  account another project holds. `revoke` is a disconnect's first step, where the provider can
+ *  it exists (asked for more) and the project a person's connect is for. `finish` completes a
+ *  consent the platform's OAuth callback received: the connection it recorded, or the offer to move
+ *  an account another project holds. `revoke` is a disconnect's first step, where the provider can
  *  end the grant. */
 const PROVIDERS: Record<
   IntegrationProvider,
@@ -187,22 +191,23 @@ export async function finishIntegrationConnect(
   const nonce = z.string().min(1).parse(input.nonce);
   const grantedScopes = z.array(z.string()).parse(input.grantedScopes);
   const held = HeldTokenInput.parse(input.held);
-  const { finish } = PROVIDERS[input.provider];
-  if (!finish) throw codedError("INVALID_INPUT", `integrations: ${input.provider} has no consent`);
-  const key = consentAttemptKeyOf(input.provider, connection, nonce);
+  const provider = z.enum(OAUTH_INTEGRATION_PROVIDERS).parse(input.provider);
+  const { finish } = PROVIDERS[provider];
+  if (!finish) throw codedError("INVALID_INPUT", `integrations: ${provider} has no consent`);
+  const key = consentAttemptKeyOf(provider, connection, nonce);
   const attempt = await scope.storage.get<ConnectionAttempt>(key);
   if (!attempt || attempt.until < Date.now()) {
     // the same callback again, after its finish offered the move: that offer again
     const move =
-      input.provider === "slack" && held
+      provider === "slack" && held
         ? await slackMoveOfferedAgain(scope, connection, nonce)
         : undefined;
     if (move) return { move };
-    if (integrations[connectionPathOf(input.provider, connection)]) return {};
+    if (integrations[connectionPathOf(provider, connection)]) return {};
     throw new Error("no connect of this connection is in flight — connect again");
   }
   if (attempt.finishing) {
-    await answerAgain(scope, integrations, { provider: input.provider, connection }, attempt);
+    await answerAgain(scope, integrations, { provider, connection }, attempt);
     return {};
   }
   await scope.storage.put<ConnectionAttempt>(key, { ...attempt, finishing: true });
