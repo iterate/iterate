@@ -66,7 +66,7 @@ test.for(["waveshare_rlcd_4_2", "zectrix_note4", "home_assistant_voice_preview_e
     await worker.setupVoiceAgent({
       streamPath,
       activation: "test",
-      ...(screen ? { screen: device } : {}),
+      ...(screen && { screen: device }),
     });
     expect(create).toHaveBeenCalledExactlyOnceWith(streamPath);
     expect(create.mock.invocationCallOrder[0]).toBeLessThan(append.mock.invocationCallOrder[0]!);
