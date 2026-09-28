@@ -291,7 +291,11 @@
             The page is served as committed. Nothing is built or stored; GitHub serves the public
             repository's files.
           </li>
-          <li>A page that isn't at that branch or commit is a 404 that names what was missing.</li>
+          <li>
+            A page that isn't at that branch or commit is a 404 that names what was missing. Off
+            <code>main</code>, it links main's copy: a merged pull request's branch is usually
+            deleted.
+          </li>
           <li>
             A branch or commit with anything but letters, digits, <code>.</code>, <code>_</code>,
             <code>-</code> and <code>/</code> is refused before GitHub is asked.

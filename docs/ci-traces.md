@@ -32,7 +32,7 @@ artifact's path.
 `/explainers/<ref>/<name>` opens `explainers/<name>.html` of `iterate/iterate` at a branch, tag or
 commit, read from GitHub (the repository is public), so a pull request can link the explainer on its
 own branch: `/explainers/<branch>/<name>`. An explainer is a standalone HTML page, served as
-committed.
+committed. Once the branch is deleted (its pull request merged), the 404 links the page on `main`.
 
 ## What the trace shows
 

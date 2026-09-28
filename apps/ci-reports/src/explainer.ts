@@ -20,8 +20,16 @@ export async function serveExplainer(
   const page = await fetchFromGitHub(
     `https://raw.githubusercontent.com/iterate/iterate/${ref}/explainers/${name}.html`,
   );
-  if (page.status === 404)
-    return new Response(`No explainers/${name}.html at ${ref}`, { status: 404 });
+  if (page.status === 404) {
+    const missing = `No explainers/${name}.html at ${ref}`;
+    if (ref === "main") return new Response(missing, { status: 404 });
+    // Most likely a merged pull request's branch, deleted since: its explainer is on main now. The
+    // ref and name hold only the characters the checks above allow, so they need no escaping.
+    return new Response(
+      `<!doctype html><meta charset="utf-8" /><title>${missing}</title><p>${missing}. If its pull request has merged, it's on main: <a href="/explainers/main/${name}">explainers/${name}.html on main</a>.</p>\n`,
+      { status: 404, headers: { "content-type": "text/html; charset=utf-8" } },
+    );
+  }
   if (!page.ok) return new Response(`GitHub answered ${page.status}`, { status: 502 });
   return new Response(page.body, {
     headers: { "content-type": "text/html; charset=utf-8", "cache-control": "public, max-age=60" },

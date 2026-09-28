@@ -39,13 +39,24 @@ test("a branch with slashes, or a commit, is the ref; `.html` on the name is opt
   ]);
 });
 
-test("a page the ref doesn't have is a 404 that names it; a ref with an encoded character is refused unasked", async () => {
+test("a page the ref doesn't have is a 404 that names it and, off main, links main's copy; a ref with an encoded character is refused unasked", async () => {
   const missing = await serveExplainer(
     new Request("https://ci-reports.iterate-dev-preview.workers.dev/explainers/main/nope"),
     { fetch: async () => new Response("404: Not Found", { status: 404 }) },
   );
   expect(missing).toMatchObject({ status: 404 });
   expect(await missing.text()).toBe("No explainers/nope.html at main");
+
+  // most likely a merged pull request's deleted branch: main's copy is a click away
+  const merged = await serveExplainer(
+    new Request(
+      "https://ci-reports.iterate-dev-preview.workers.dev/explainers/ci-change-detection/ci-inherit-and-reuse",
+    ),
+    { fetch: async () => new Response("404: Not Found", { status: 404 }) },
+  );
+  expect(merged).toMatchObject({ status: 404 });
+  expect(merged.headers.get("content-type")).toBe("text/html; charset=utf-8");
+  expect(await merged.text()).toContain('<a href="/explainers/main/ci-inherit-and-reuse">');
 
   const traversal = await serveExplainer(
     new Request(
