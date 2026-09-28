@@ -19,6 +19,7 @@
 // the mention, marked 🧪 TEST RUN.
 import { execFileSync } from "node:child_process";
 import type { WebClient } from "@slack/web-api";
+import { cloudflareAccounts } from "../../envs.ts";
 import { getSlackClient, onCallMention, slackChannelIds } from "../ci/slack.ts";
 import type { ProbeSummary } from "./do-duration-probe.ts";
 
@@ -35,8 +36,8 @@ const PAGE_REPEAT_HOURS = 3;
 
 export const ACCOUNTS = [
   {
-    dopplerConfig: "dev",
     label: "dev/preview",
+    cloudflare: cloudflareAccounts["dev/preview"],
     // Healthy is 0–100 DO-hours/hour, measured once previews stopped outliving
     // their run (#2585); one preview relit by a finished run is 2,000–4,000.
     // The incident ran 20,000–57,000. ≈ $2.80/hour.
@@ -48,8 +49,8 @@ export const ACCOUNTS = [
     pageUsdPerHour: 10,
   },
   {
-    dopplerConfig: "prd",
     label: "prd",
+    cloudflare: cloudflareAccounts.prd,
     // The account's hourly total, 2026-08-25..09-26: p50 1.0, p95 1.1, busiest
     // hour 1.7 DO-hours. Most of it is tunnels-prd's one CaptunServerShard
     // (another repo's Worker), awake while a tunnel is open; os-prd runs
@@ -90,7 +91,7 @@ export async function checkDoCost(options: { testRun: boolean; dryRun: boolean; 
       // Slack hookup test exercises the page too.
       pageUsdPerHour:
         override === undefined ? account.pageUsdPerHour : override * 10 * USD_PER_DO_HOUR,
-      ...probe(account.dopplerConfig, ceilingDoHours),
+      ...probe(account.cloudflare, ceilingDoHours),
     });
   }
 
@@ -172,7 +173,8 @@ export async function postDailyThread(input: {
   return { breached: true, pagesPosted };
 }
 
-function probe(dopplerConfig: string, ceilingDoHours: number) {
+/** The probe under the account's own Doppler config (envs.ts `cloudflareAccounts`). */
+function probe(account: { dopplerProject: string; dopplerConfig: string }, ceilingDoHours: number) {
   let stdout = "";
   let stderr = "";
   try {
@@ -180,7 +182,7 @@ function probe(dopplerConfig: string, ceilingDoHours: number) {
       "doppler",
       // prettier-ignore
       [
-        "run", "--project", "os", "--config", dopplerConfig, "--",
+        "run", "--project", account.dopplerProject, "--config", account.dopplerConfig, "--",
         "pnpm", "tsx", "scripts/monitors/do-duration-probe.ts",
         "--hours", String(LOOKBACK_HOURS), "--max-account-do-hours", String(ceilingDoHours), "--json",
       ],

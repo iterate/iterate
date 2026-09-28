@@ -45,7 +45,8 @@ jobs:
         uses: ./.depot/actions/setup
       # The Depot token reads the runs and artifacts through the API and the previous state through
       # the Depot CLI; the Slack bot token comes from Doppler _shared/prd (scripts/ci/slack.ts), and
-      # the DO probe's Cloudflare credentials from os/dev and os/prd.
+      # the DO probe's Cloudflare credentials from _shared/preview and _shared/prd (envs.ts
+      # `cloudflareAccounts`).
       - name: Judge, page #error-pulse on a change of state
         run: |-
           set -euo pipefail

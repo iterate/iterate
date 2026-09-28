@@ -12,11 +12,11 @@
 //    per-invocation P99, but the account burned >20,000 DO-hours per hour
 //    (~$3k+/day) until the slots were erased.
 //
-// Run it under a Doppler config that carries CLOUDFLARE_API_TOKEN +
-// CLOUDFLARE_ACCOUNT_ID (the same creds the deploy uses):
+// Run it under the account's Doppler config (envs.ts `cloudflareAccounts`), which carries
+// CLOUDFLARE_API_TOKEN + CLOUDFLARE_ACCOUNT_ID:
 //
-//   doppler run --config prd        -- pnpm tsx scripts/monitors/do-duration-probe.ts
-//   doppler run --config preview_3  -- pnpm tsx scripts/monitors/do-duration-probe.ts --hours 6
+//   doppler run --project _shared --config prd     -- pnpm tsx scripts/monitors/do-duration-probe.ts
+//   doppler run --project _shared --config preview -- pnpm tsx scripts/monitors/do-duration-probe.ts --hours 6
 //
 // Flags:
 //   --hours N                 lookback window in hours (default 24)
