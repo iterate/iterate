@@ -64,6 +64,12 @@ type Hostname = z.infer<typeof HostnamesLive>["hostnames"][string];
 const isLive = (entry: Hostname) =>
   entry.cloudflare?.status === "active" && entry.cloudflare.sslStatus === "active";
 
+/** Whether the owner came back from their DNS provider having approved the records in the last
+ *  ten minutes: long enough for them to be seen, and a crafted or failed return can't hide the
+ *  setup for longer. */
+const recentlyConnected = (entry: Hostname) =>
+  Boolean(entry.connectedAt && Date.now() - Date.parse(entry.connectedAt) < 10 * 60_000);
+
 /** Where a hostname stands, in the one word and the one dot its row shows: a pulsing dot while
  *  something is on its way, a still one while it waits on the owner. */
 function standingOf(entry: Hostname) {
@@ -73,7 +79,7 @@ function standingOf(entry: Hostname) {
   if (entry.error && !entry.cloudflare) return { label: "Failed", dot: "bg-destructive" };
   if (isLive(entry)) return { label: "Live", dot: "bg-emerald-500" };
   if (entry.cloudflare?.status === "active") return { label: "Issuing certificate", dot: waiting };
-  if (entry.connectedAt) return { label: "Waiting for DNS", dot: waiting };
+  if (recentlyConnected(entry)) return { label: "Waiting for DNS", dot: waiting };
   return { label: "Connect your DNS", dot: "bg-amber-500" };
 }
 
@@ -82,6 +88,9 @@ export const Route = createFileRoute("/_auth/projects/$slug/hostnames")({
     add: z.literal(1).optional().catch(undefined),
     /** the hostname a Domain Connect provider just wrote the records for */
     connected: z.string().optional().catch(undefined),
+    /** what the provider said when it wrote nothing (Domain Connect's redirect: a cancel, a failure) */
+    error: z.string().optional().catch(undefined),
+    error_description: z.string().optional().catch(undefined),
   }),
   staticData: { page: "Hostnames" },
   head: ({ params }) => ({ meta: [{ title: `Hostnames · ${params.slug} · Dash` }] }),
@@ -127,10 +136,15 @@ function ProjectHostnames() {
     const hostname = search.connected;
     if (!context || !hostname || !connectedIsOurs || checkingConnected.current === hostname) return;
     checkingConnected.current = hostname;
+    // a cancel or a failure at the provider comes back with `error`: nothing was written
+    if (search.error)
+      setError(
+        `Your DNS provider added no records for ${hostname}: ${search.error_description || search.error}.`,
+      );
     context
       .append({
         type: "events.iterate.com/project/hostname-add-requested",
-        payload: { hostname, connected: true },
+        payload: { hostname, connected: !search.error },
       })
       .then(
         () => navigate({ search: {}, replace: true }),
@@ -139,7 +153,14 @@ function ProjectHostnames() {
           setError(caught instanceof Error ? caught.message : String(caught));
         },
       );
-  }, [context, search.connected, connectedIsOurs, navigate]);
+  }, [
+    context,
+    search.connected,
+    search.error,
+    search.error_description,
+    connectedIsOurs,
+    navigate,
+  ]);
   // on its way to live: check again every CHECK_EVERY_MS while the page is visible — each check is
   // the same `hostname-add-requested` "Check again" appends, answered in the live state
   const waiting = hostnames
@@ -345,9 +366,9 @@ function HostnameRow({
               }
               detail="Usually two to five minutes. Nothing for you to do."
             />
-          ) : entry.connectedAt ? (
+          ) : recentlyConnected(entry) ? (
             <Waiting
-              lead={`${cloudflare.connect?.provider || "Your DNS provider"} added the records at ${new Date(entry.connectedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}.`}
+              lead={`${cloudflare.connect?.provider || "Your DNS provider"} added the records at ${new Date(entry.connectedAt!).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}.`}
               detail={
                 <>
                   Waiting for them to be seen, usually under a minute.{" "}
@@ -371,8 +392,9 @@ function HostnameRow({
           ) : cloudflare.connect ? (
             <div className="flex flex-col gap-3">
               <p className="text-[15px]">
-                {zone || hostname}'s DNS is on {cloudflare.connect.provider}. Approve the records
-                there and you're done.
+                {entry.connectedAt
+                  ? `${cloudflare.connect.provider} hasn't shown the records yet. If you didn't approve them, connect again.`
+                  : `${zone || hostname}'s DNS is on ${cloudflare.connect.provider}. Approve the records there and you're done.`}
               </p>
               <a
                 href={cloudflare.connect.url}
