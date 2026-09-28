@@ -44,11 +44,11 @@ export type ResolveOptions = {
   where: string;
 };
 
-/** Where an entry is looked for when package.json names no `main`, in order. Every source the
- *  platform, its templates and its installers write names `main`; this stays only while sources
- *  written before them do (config repos seeded from the old templates, and the build
- *  `@iterate-com/agents@main` is locked to, whose AI transport source has no package.json). Once
- *  none does, it goes and a source without `main` is refused, naming the fix. */
+/** Where an entry is looked for when package.json names no `main`, in order. The platform, its
+ *  templates and its installers always write `main`; a source that names none still loads through
+ *  this list: a config repo seeded without `main`, and packages/agents' AI transport source.
+ *  Remove it once no such source remains; the module-resolution.test.ts rows that pin it then
+ *  become refusals. */
 const ENTRY_FILES = ["worker.ts", "worker.js", "index.ts", "index.js"];
 const ESM_ORIGIN = "https://esm.sh";
 /** The runtime's own modules, external to esm.sh like the platform packages: its bundler cannot
