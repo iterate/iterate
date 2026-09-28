@@ -735,8 +735,12 @@ link to the run, then the state now of every signal the job pages:
   - **latency**: each new scheduled OS latency report, against the budgets and a
     rolling baseline, red once two runs in a row cross a line.
   - **PR time to green** ([below](#pr-time-to-green)).
-  - **DO cost**: the Durable Object cost alarm, in its own daily thread in #ci and its own
-    pages.
+  - **DO cost**: the Durable Object cost alarm (`scripts/monitors/do-cost.ts`). Its daily
+    thread in #ci is a headline, the $/day at the latest hour's rate and today so far, and one
+    reply with a line per account, both edited every hour; an account with a complete hour over
+    its ceiling today is a 🔴 line. An account at its page tier is one page in #error-pulse,
+    edited every hour while it lasts. The first hour at 2× and at 5× the page tier is a broadcast
+    reply in its thread, and two complete hours under the ceiling resolve it.
 
   Its message's last line names main e2e's and slow e2e rows' state too, from
   Main OS e2e's state, or none when it cannot read that state.
