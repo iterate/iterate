@@ -6,10 +6,11 @@
 // platform does not ship is refused;
 // npm imports are crawled from esm.sh ONCE per dependency set and locked in the store (a second
 // resolution fetches nothing), with esm.sh's own quirks (builtins as paths, cycles, the platform
-// packages left external) handled; and what cannot work in a loaded worker is refused by name. Like
-// tsc, stripping elides an import whose bindings are never used as values.
+// packages left external) handled; a pkg.pr.new dependency loads only at a full commit, and a branch
+// or PR ref is refused naming the pin; and what cannot work in a loaded worker is refused by name.
+// Like tsc, stripping elides an import whose bindings are never used as values.
 import { parse } from "es-module-lexer/js";
-import { expect, test } from "vitest";
+import { expect, test, vi } from "vitest";
 import { resolveModules, type PlatformModules } from "./module-resolution.ts";
 
 const platform: PlatformModules = {
@@ -214,34 +215,63 @@ test("esm.sh's own /node/ polyfills (capnweb's Buffer) load as ordinary modules"
   expectLinked(modules);
 });
 
-test("a pkg.pr.new version resolves through esm.sh's /pr/ route, a PR ref pinned to the commit pkg.pr.new serves, its own subpath imports at that commit; a URL naming another package is refused", async () => {
+const sdkCommit = "9f8e7d6c5b4a39281706f5e4d3c2b1a098765432";
+
+test("a pkg.pr.new commit resolves through esm.sh's /pr/ route, its own subpath imports at that commit, and pkg.pr.new is never asked; a URL naming another package is refused", async () => {
   const esm = fakeEsm({
-    "/acme/shop/@acme/sdk@1234": { commit: "acme:shop:9f8e7d6c5b4a" },
-    "/pr/acme/shop/@acme/sdk@9f8e7d6c5b4a": `export * from "/pr/acme/shop/@acme/sdk@9f8e7d6c5b4a/es2022/sdk.mjs";`,
+    [`/pr/acme/shop/@acme/sdk@${sdkCommit}`]: `export * from "/pr/acme/shop/@acme/sdk@${sdkCommit}/es2022/sdk.mjs";`,
     // esm.sh's /pr/ route spells the package's import of its own exported subpath bare
-    "/pr/acme/shop/@acme/sdk@9f8e7d6c5b4a/es2022/sdk.mjs": `import { name } from "acme/shop/@acme/sdk/contract"; export const connect = () => name;`,
-    "/pr/acme/shop/@acme/sdk@9f8e7d6c5b4a/contract": `export * from "/pr/acme/shop/@acme/sdk@9f8e7d6c5b4a/es2022/contract.mjs";`,
-    "/pr/acme/shop/@acme/sdk@9f8e7d6c5b4a/es2022/contract.mjs": `export const name = "shop";`,
+    [`/pr/acme/shop/@acme/sdk@${sdkCommit}/es2022/sdk.mjs`]: `import { name } from "acme/shop/@acme/sdk/contract"; export const connect = () => name;`,
+    [`/pr/acme/shop/@acme/sdk@${sdkCommit}/contract`]: `export * from "/pr/acme/shop/@acme/sdk@${sdkCommit}/es2022/contract.mjs";`,
+    [`/pr/acme/shop/@acme/sdk@${sdkCommit}/es2022/contract.mjs`]: `export const name = "shop";`,
   });
-  const source = (url: string) => ({
-    "worker.ts": `import { connect } from "@acme/sdk"; export default { fetch: () => new Response(connect()) };`,
-    "package.json": JSON.stringify({ main: "worker.ts", dependencies: { "@acme/sdk": url } }),
+  const store = memoryStore();
+  const modules = await resolve(sdkSource(`https://pkg.pr.new/acme/shop/@acme/sdk@${sdkCommit}`), {
+    fetch: esm.fetch,
+    store,
   });
-  const modules = await resolve(source("https://pkg.pr.new/acme/shop/@acme/sdk@1234"), esm);
-  expect(esm.fetched.slice(0, 2)).toEqual([
-    "/acme/shop/@acme/sdk@1234",
-    "/pr/acme/shop/@acme/sdk@9f8e7d6c5b4a?target=es2022&external=cloudflare%3Aemail%2Ccloudflare%3Asockets%2Ccloudflare%3Aworkers%2Citerate%2Czod",
-  ]);
+  expect(esm.fetched[0]).toBe(
+    `/pr/acme/shop/@acme/sdk@${sdkCommit}?target=es2022&external=cloudflare%3Aemail%2Ccloudflare%3Asockets%2Ccloudflare%3Aworkers%2Citerate%2Czod`,
+  );
+  expect(esm.fetched.every((path) => path.startsWith("/pr/"))).toBe(true);
   expect(modules["worker.js"]).toContain(`from "./node_modules/@acme/sdk.js"`);
   expectLinked(modules);
-  await expect(resolve(source("https://pkg.pr.new/acme/shop/other-sdk@1234"), esm)).rejects.toThrow(
-    /lists @acme\/sdk as https:\/\/pkg\.pr\.new\/acme\/shop\/other-sdk@1234/,
+  // every later cold start: the lock, and no network at all
+  expect(
+    await resolve(sdkSource(`https://pkg.pr.new/acme/shop/@acme/sdk@${sdkCommit}`), { store }),
+  ).toEqual(modules);
+  await expect(
+    resolve(sdkSource(`https://pkg.pr.new/acme/shop/other-sdk@${sdkCommit}`), esm),
+  ).rejects.toThrow(
+    /test: package\.json lists @acme\/sdk as https:\/\/pkg\.pr\.new\/acme\/shop\/other-sdk@9f8e7d6c5b4a\w+; pin it as https:\/\/pkg\.pr\.new\/<owner>\/<repo>\/@acme\/sdk@<40-hex sha>/,
   );
 });
 
-/** A fake esm.sh (path+query → module text) and pkg.pr.new (path → `{ commit }`, answered as its
- *  `x-commit-key` header). Records what was fetched. */
-function fakeEsm(files: Record<string, string | { commit: string }>) {
+test.for([
+  ["a branch", "main"],
+  ["a PR number", "1234"],
+  ["a short sha", "9f8e7d6"],
+])(
+  "a pkg.pr.new ref that is %s is refused, naming the pin, before any lock stored for it is read",
+  async ([, ref]) => {
+    // A store that answers every key with a lock: the refusal comes before any read of it.
+    const store = {
+      values: new Map<string, string>(),
+      get: vi.fn(async () => JSON.stringify({ modules: {}, platformModules: [] })),
+      put: vi.fn(async () => undefined),
+    };
+    await expect(
+      resolve(sdkSource(`https://pkg.pr.new/acme/shop/@acme/sdk@${ref}`), { store }),
+    ).rejects.toThrow(
+      `test: package.json lists @acme/sdk at "${ref}", which is not a commit, so it could name another build tomorrow; pin the commit: https://pkg.pr.new/<owner>/<repo>/@acme/sdk@<40-hex sha> (a HEAD of the URL names it in x-commit-key)`,
+    );
+    expect(store.get).not.toHaveBeenCalled();
+    expect(store.put).not.toHaveBeenCalled();
+  },
+);
+
+/** A fake esm.sh (path+query → module text). Records what was fetched. */
+function fakeEsm(files: Record<string, string>) {
   const fetched: string[] = [];
   const fetch = (async (input: RequestInfo | URL) => {
     const url = new URL(String(input));
@@ -250,8 +280,6 @@ function fakeEsm(files: Record<string, string | { commit: string }>) {
     fetched.push(pathname + url.search);
     const body = files[pathname + url.search] || files[pathname];
     if (!body) return new Response("not found", { status: 404 });
-    if (typeof body !== "string")
-      return new Response(null, { headers: { "x-commit-key": body.commit } });
     return new Response(body, { headers: { "content-type": "application/javascript" } });
   }) as typeof globalThis.fetch;
   return { fetch, fetched };
@@ -296,4 +324,12 @@ function expectLinked(modules: Record<string, string>) {
       expect(Object.keys(modules), `${name} imports ${imp.n}`).toContain(dir.join("/"));
     }
   }
+}
+
+/** A worker that imports @acme/sdk, listed in package.json at `url`. */
+function sdkSource(url: string) {
+  return {
+    "worker.ts": `import { connect } from "@acme/sdk"; export default { fetch: () => new Response(connect()) };`,
+    "package.json": JSON.stringify({ main: "worker.ts", dependencies: { "@acme/sdk": url } }),
+  };
 }

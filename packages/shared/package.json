@@ -27,7 +27,8 @@
       "default": "./src/posthog/posthog.ts"
     },
     "./config-repo-template/reference": "./src/config-repo-template/reference.ts",
-    "./platform-retry": "./src/platform-retry.ts"
+    "./platform-retry": "./src/platform-retry.ts",
+    "./pkg-pr-new": "./src/pkg-pr-new.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",

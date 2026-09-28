@@ -9,12 +9,19 @@
 // - `iterate/*` and `zod` — THIS deployment's own build of the SDK (platform-modules.js,
 //   apps/os/scripts/build.ts): first-party code and user code link the same modules; on a preview,
 //   the PR's SDK. A subpath of either that the platform does not ship is refused by name.
-// - anything else — esm.sh, from package.json's `dependencies`: an npm range, or a pkg.pr.new URL
-//   (`https://pkg.pr.new/<owner>/<repo>/<package>@<sha|pr|branch>`, a vendor's build). The graph is
-//   crawled once per dependency set and LOCKED in the module store: every later load of that set, in
-//   any project, gets the first resolution — a range, a branch or a PR ref included — and never
-//   touches the network. esm.sh keeps the platform packages external, so a library's zod is the SDK's.
+// - anything else — esm.sh, from package.json's `dependencies`: an npm version, or a pkg.pr.new URL
+//   at a commit (`https://pkg.pr.new/<owner>/<repo>/<package>@<40-hex sha>`, a vendor's build). The
+//   graph is crawled once per dependency set, as written, and LOCKED in the module store: every
+//   later load of that set, in any project, gets the same modules and never touches the network. An
+//   exact version or a commit is one build. A range or a dist-tag (`latest`) keeps its first
+//   resolution, as a lockfile keeps it until someone updates it, here by writing another version. A
+//   pkg.pr.new ref that is not a full commit (a branch, a PR number, a short sha) is refused: a
+//   moving ref asks to follow it, which a lock cannot do without asking pkg.pr.new on every cold
+//   start, and a project's builds would then differ by when each host started. Whatever writes a
+//   dependency pins it as it writes (@iterate-com/shared/pkg-pr-new `pinPkgPrNewVersion`). esm.sh
+//   keeps the platform packages external, so a library's zod is the SDK's.
 
+import { isPkgPrNewCommit, pkgPrNewVersionOf } from "@iterate-com/shared/pkg-pr-new";
 import { parse } from "es-module-lexer/js";
 import { transform } from "sucrase";
 import { z } from "zod";
@@ -304,14 +311,19 @@ async function sha256(text: string): Promise<string> {
   return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
-/** The dependency graph for these specifiers under these ranges — from the store when this exact
- *  set was resolved before (by any project), otherwise resolved from esm.sh and stored. */
+/** The dependency graph for these specifiers under these versions — from the store when this exact
+ *  set was resolved before (by any project), otherwise resolved from esm.sh and stored. A version
+ *  that cannot be locked (`esmPackageBase`) is refused before the store is read, so no lock stored
+ *  under a branch's key can load. */
 async function lockedDependencyGraph(
   specifiers: string[],
   dependencies: Record<string, string>,
   opts: ResolveOptions,
 ): Promise<DependencyGraph> {
   const packages = [...new Set(specifiers.map(packageName))].sort();
+  const bases = Object.fromEntries(
+    packages.map((name) => [name, esmPackageBase(name, dependencies[name]!, opts.where)]),
+  );
   const lockInput = {
     specifiers,
     ranges: Object.fromEntries(packages.map((name) => [name, dependencies[name]!])),
@@ -321,7 +333,7 @@ async function lockedDependencyGraph(
   const key = `module-lock-1/${await sha256(JSON.stringify(lockInput))}`;
   const stored = await opts.store.get(key);
   if (stored) return JSON.parse(stored) as DependencyGraph;
-  const graph = await resolveFromEsm(lockInput, opts);
+  const graph = await resolveFromEsm(lockInput, bases, opts);
   await opts.store.put(key, JSON.stringify(graph));
   return graph;
 }
@@ -335,27 +347,21 @@ function esmModuleName(url: URL): string {
   return `node_modules/.esm${path}${query}.js`.replace(/\/+/g, "/");
 }
 
-/** esm.sh's URL for a package at a version: `/<name>@<range>` for an npm range, and for a pkg.pr.new
- *  URL (whose package must be the one it is listed under) `/pr/<owner>/<repo>/<name>@<commit>`. A ref
- *  that is not a commit (a PR number, a branch) is pinned to the commit pkg.pr.new serves for it now
- *  (its `x-commit-key` header): esm.sh cannot resolve such a ref for a scoped package. */
-async function esmPackageBase(name: string, range: string, opts: ResolveOptions): Promise<string> {
-  if (!range.startsWith("https://pkg.pr.new/")) return `${ESM_ORIGIN}/${name}@${range}`;
-  const [owner, repo, ...rest] = new URL(range).pathname.slice(1).split("/");
-  const listed = rest.join("/");
-  if (!owner || !repo || !listed.startsWith(`${name}@`))
+/** esm.sh's URL for a package at a version: `/<name>@<version>` for an npm version, and
+ *  `/pr/<owner>/<repo>/<name>@<commit>` for a pkg.pr.new URL of the package it is listed under at a
+ *  full commit. Any other pkg.pr.new URL is refused, naming the fix: a branch or a PR number moves
+ *  (this file's header), and esm.sh cannot resolve one for a scoped package anyway. */
+function esmPackageBase(name: string, version: string, where: string): string {
+  if (!version.startsWith("https://pkg.pr.new/")) return `${ESM_ORIGIN}/${name}@${version}`;
+  const pkgPrNew = pkgPrNewVersionOf(name, version);
+  const pinned = `https://pkg.pr.new/<owner>/<repo>/${name}@<40-hex sha>`;
+  if (!pkgPrNew)
+    throw new Error(`${where}: package.json lists ${name} as ${version}; pin it as ${pinned}`);
+  if (!isPkgPrNewCommit(pkgPrNew.ref))
     throw new Error(
-      `${opts.where}: package.json lists ${name} as ${range}; a pkg.pr.new version is https://pkg.pr.new/<owner>/<repo>/${name}@<sha|pr|branch>`,
+      `${where}: package.json lists ${name} at ${JSON.stringify(pkgPrNew.ref)}, which is not a commit, so it could name another build tomorrow; pin the commit: ${pinned} (a HEAD of the URL names it in x-commit-key)`,
     );
-  let ref = listed.slice(name.length + 1);
-  if (!/^[0-9a-f]{7,40}$/.test(ref)) {
-    const head = await opts.fetch(range, { method: "HEAD" });
-    const commit = head.headers.get("x-commit-key")?.split(":").at(-1);
-    if (!head.ok || !commit)
-      throw new Error(`${range} answered ${head.status} without the commit it serves`);
-    ref = commit;
-  }
-  return `${ESM_ORIGIN}/pr/${owner}/${repo}/${name}@${ref}`;
+  return `${ESM_ORIGIN}/pr/${pkgPrNew.owner}/${pkgPrNew.repo}/${name}@${pkgPrNew.ref}`;
 }
 
 /** An esm.sh module's text, read whole; anything but a JavaScript 200 is refused. */
@@ -380,7 +386,9 @@ function prSelfImportOf(specifier: string, importer: URL): string | undefined {
  *  fetched the moment it arrives (module names follow from URLs alone), so wall time is the graph's
  *  depth in round trips, not its size. */
 async function resolveFromEsm(
-  lock: { specifiers: string[]; ranges: Record<string, string>; externals: string[] },
+  lock: { specifiers: string[]; externals: string[] },
+  /** Each package's esm.sh URL (`esmPackageBase`). */
+  bases: Record<string, string>,
   opts: ResolveOptions,
 ): Promise<DependencyGraph> {
   const { where, platform } = opts;
@@ -441,7 +449,7 @@ async function resolveFromEsm(
 
   for (const specifier of lock.specifiers) {
     const name = packageName(specifier);
-    const base = await esmPackageBase(name, lock.ranges[name]!, opts);
+    const base = bases[name]!;
     load(`${base}${specifier.slice(name.length)}?${query}`, moduleOfSpecifier(specifier));
   }
   while (inFlight.size) await Promise.all(inFlight);

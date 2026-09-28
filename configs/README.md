@@ -17,6 +17,11 @@ platform subscribes the config worker's `processEventBatch(events, range)` befor
 `project/created`, and `ConfigWorker` hands each event to `processEvent({ event, itx })`.
 Templates without that manifest have no lifecycle subscription.
 
+A template may list a pkg.pr.new dependency at a branch (`@iterate-com/agents@main` in
+`with-agents/`): the seed writes it at the commit pkg.pr.new names for it then, because the loader
+loads a pkg.pr.new package only at a full commit (`pinPkgPrNewDependencies` in
+`packages/shared/src/pkg-pr-new.ts`). `devDependencies` are copied as written.
+
 Templates are type-checkable as they stand: `package.json` lists the SDK's types from
 `https://pkg.pr.new/iterate/iterate/iterate@main`, `@cloudflare/workers-types` and `typescript` as
 devDependencies, and the packages the worker imports as dependencies, so `npm install && npx tsc`

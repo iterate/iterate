@@ -1,4 +1,5 @@
 import { createFileRoute, useRouter, useRouterState } from "@tanstack/react-router";
+import { createServerFn } from "@tanstack/react-start";
 import { useActionState, useRef, useState } from "react";
 import { CircleIcon } from "lucide-react";
 import { z } from "zod";
@@ -8,7 +9,7 @@ import { Field, FieldDescription, FieldLabel } from "@iterate-com/ui/components/
 import { Input } from "@iterate-com/ui/components/input";
 import { ProjectAppShell } from "@iterate-com/ui/components/project-app-shell";
 import { cn } from "cn";
-import { publishedVersion } from "@iterate-com/agents/install";
+import { pkgPrNewVersion, publishedCommit } from "@iterate-com/shared/pkg-pr-new";
 import { ensureVoiceAgent } from "@iterate-com/voice/install";
 import { openAudio, type AudioSession } from "../../audio.ts";
 import { startCall, type Call, type CallFact } from "../../call.ts";
@@ -22,6 +23,16 @@ const VoiceLiveView = z.object({
   lastEnd: z.object({ activation: z.string(), reason: z.string() }).nullable(),
 });
 type VoiceLiveView = z.infer<typeof VoiceLiveView>;
+
+/** The agents and voice builds an install commits, at one commit (@iterate-com/shared/pkg-pr-new
+ *  `publishedCommit`, which says why the app's Worker resolves it). */
+const publishedApps = createServerFn().handler(async () => {
+  const commit = await publishedCommit("@iterate-com/voice", import.meta.env.VITE_SOURCE_COMMIT);
+  return {
+    agents: pkgPrNewVersion("@iterate-com/agents", commit),
+    voice: pkgPrNewVersion("@iterate-com/voice", commit),
+  };
+});
 
 export const Route = createFileRoute("/_auth/projects/$slug")({
   loader: async ({ context, params }) => {
@@ -79,12 +90,7 @@ function InstallVoice({ project, needsOpenaiKey }: { project: string; needsOpena
       try {
         using itx = await api.projects.get(project);
         const openaiKey = String(form.get("openai-key") || "");
-        const commit = import.meta.env.VITE_SOURCE_COMMIT;
-        const [agents, voice] = await Promise.all([
-          publishedVersion("@iterate-com/agents", commit),
-          publishedVersion("@iterate-com/voice", commit),
-        ]);
-        await ensureVoiceAgent(itx, { agents, voice }, openaiKey);
+        await ensureVoiceAgent(itx, await publishedApps(), openaiKey);
         // "needs-openai-key" too: the key was deleted since the page loaded, and the reload asks.
         // `sync`: the reload is awaited, so "Installing…" stays up until the page shows what the
         // install made. Without it the router reloads a route it already has data for in the
