@@ -4,9 +4,8 @@
 //
 // The published package ships only the Swift SOURCE (packages/cli/menubar);
 // this compiles it with swiftc on the user's Mac, cached by source hash next to
-// the config, and launches the .app — the same compile-on-first-use pattern as
-// the enclave signer. It also writes ~/.config/iterate/menubar.json so the app
-// knows which CLI to spawn (this exact one) for which project.
+// the config, and launches the .app. It also writes ~/.config/iterate/menubar.json
+// so the app knows which CLI to spawn (this exact one) for which project.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { createHash } from "node:crypto";
@@ -19,12 +18,7 @@ import { run } from "./run-command.ts";
 
 const BUILD_DIR = join(CONFIG_DIR, "menubar-build");
 const APP_PATH = join(BUILD_DIR, "Iterate.app");
-const SOURCES = [
-  "Iterate.swift",
-  "IterateIcon.swift",
-  "build-menubar-app.sh",
-  "Iterate.entitlements",
-];
+const SOURCES = ["Iterate.swift", "IterateIcon.swift", "build-menubar-app.sh"];
 
 /** Compile-if-needed and launch the menu-bar app for one project/config. */
 export async function launchMenubarApp(input: {

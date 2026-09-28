@@ -1,11 +1,9 @@
 // ─────────────────────────────────────────────────────────────────────────────
-// Iterate — a small macOS menu-bar app. Today it's the human-in-the-loop
-// companion for sign-in and computer sharing on Iterate.
-// The legacy approval watcher and UI remain dormant.
+// Iterate — a small macOS menu-bar app: sign in to Iterate, and lend this Mac
+// to a project's agents (Use my computer).
 //
 // A thin shell over `iterate ping`, `iterate login`, and
 // `iterate use-my-computer --json`. The CLI owns authentication and transport.
-// Legacy approval models are retained below but are not started.
 //
 // Single file, compiled with swiftc and wrapped in a minimal .app bundle by
 // build-menubar-app.sh — no Xcode project, no asset catalog: the 𝑖 icon is
@@ -16,11 +14,10 @@ import AppKit
 import Combine
 import Foundation
 import SwiftUI
-import UserNotifications
 
 // MARK: - Config
 
-/// Where to find the CLI and which project to watch. Read from
+/// Where to find the CLI and which project to share this Mac with. Read from
 /// ~/.config/iterate/menubar.json so the app needs no launch arguments.
 struct MenuBarConfig: Codable {
   var command: String  // e.g. "iterate", or "bun"
@@ -51,47 +48,21 @@ struct MenuBarConfig: Codable {
   }
 }
 
-// MARK: - Model
+// MARK: - Session
 
-/// One held approval BATCH (a lone request is a batch of one), keyed by its
-/// requested event's offset. `summary` comes from the CLI ("POST api.stripe.com"
-/// or "12 requests (12x gmail.googleapis.com)"); one decision answers it all.
-struct HeldRequest: Identifiable, Equatable {
-  let offset: Int
-  let summary: String
-  let count: Int
-  let secretPaths: [String]
-  let ruleKey: String
-  let body: String?
-  var submitting = false
-  var id: Int { offset }
-}
+/// Whether the CLI has a valid session. `iterate ping` answers it, bounded to
+/// 30 s; **Sign in** runs `iterate login` and then checks again.
+final class SessionController: ObservableObject {
+  static let shared = SessionController()
 
-final class ApprovalController: ObservableObject {
-  static let shared = ApprovalController()
-
-  @Published var loggedIn = false  // is there a valid session (from the status line)?
-  @Published var connected = false  // is a watcher live and serving right now?
-  @Published var principal: String?
+  @Published var loggedIn = false
   @Published var project: String?
-  @Published var keyLabel: String?  // "secure-enclave 9f2c…" or nil (unsigned)
-  @Published var requests: [HeldRequest] = []
   @Published var lastError: String?
-
-  /// True once UserNotifications authorization succeeded — gates the rich,
-  /// actionable banners; otherwise notify() falls back to osascript.
-  var notificationsAuthorized = false
 
   private var config = MenuBarConfig.load()
   private var process: Process?
   private var loginProcess: Process?
-  private var stdinHandle: FileHandle?
-  private var stdoutHandle: FileHandle?
-  private var buffer = Data()
-  private var sawStatus = false  // did THIS watcher session emit a status line?
-  private var sessionStart = Date()
-  private var reconnectAttempts = 0
-  private var generation = 0  // bumped on every stop(); voids stale queued reconnects
+  private var generation = 0  // bumped on every stop(); voids a stale check's result
 
   func configure(_ next: MenuBarConfig) {
     stop()
@@ -99,15 +70,12 @@ final class ApprovalController: ObservableObject {
     loginProcess?.terminate()
     loginProcess = nil
     loggedIn = false
-    principal = nil
     project = nil
     lastError = nil
     config = next
     start()
   }
 
-  // The platform has no approval transport. Keep the legacy watcher below dormant;
-  // use a bounded CLI authentication check for the menu bar's sign-in state.
   func start() {
     stop()
     let process = Process()
@@ -126,8 +94,6 @@ final class ApprovalController: ObservableObject {
         guard let self, self.generation == session else { return }
         self.process = nil
         self.loggedIn = child.terminationStatus == 0
-        self.connected = self.loggedIn
-        self.principal = self.loggedIn ? "Signed in" : nil
         self.project = self.config.project
         self.lastError = self.loggedIn ? nil : "Sign in or check your connection."
       }
@@ -145,113 +111,18 @@ final class ApprovalController: ObservableObject {
     }
   }
 
-  private func startLegacyApprovalWatcher() {
-    stop()
-    sawStatus = false
-    sessionStart = Date()
-    let process = Process()
-    process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-    process.arguments = [config.command] + config.argv(for: ["approve", "--json"])
-    if let cwd = config.cwd { process.currentDirectoryURL = URL(fileURLWithPath: cwd) }
-    if let home = config.xdgConfigHome {
-      var environment = ProcessInfo.processInfo.environment
-      environment["XDG_CONFIG_HOME"] = home
-      process.environment = environment
-    }
-
-    let stdout = Pipe()
-    let stdin = Pipe()
-    process.standardOutput = stdout
-    process.standardInput = stdin
-    self.stdinHandle = stdin.fileHandleForWriting
-    self.stdoutHandle = stdout.fileHandleForReading
-
-    // This session's identity: a chunk that lands after the session ends
-    // (generation moved on) is stale and must not touch state.
-    let session = generation
-    stdout.fileHandleForReading.readabilityHandler = { [weak self] handle in
-      let chunk = handle.availableData
-      // Empty data means EOF: clear the handler so it stops firing (otherwise
-      // it busy-loops on the closed pipe).
-      if chunk.isEmpty {
-        handle.readabilityHandler = nil
-        return
-      }
-      DispatchQueue.main.async {
-        guard let self, self.generation == session else { return }  // stale chunk
-        self.ingest(chunk)
-      }
-    }
-    process.terminationHandler = { [weak self] _ in
-      DispatchQueue.main.async {
-        // Guard on the session: a late callback from a process we already
-        // replaced must not tear down the new one.
-        guard let self, self.generation == session else { return }
-        self.watcherExited()
-      }
-    }
-    do {
-      try process.run()
-      self.process = process
-    } catch {
-      // Launch failed — that's a broken CLI path, NOT a lost session. stop()
-      // already cleared `connected`/`requests`; leave `loggedIn` alone so a
-      // valid session shows Disconnected + Reconnect rather than routing to a
-      // needless browser login.
-      self.lastError = "Could not launch iterate: \(error.localizedDescription)"
-    }
-  }
-
-  /// The watcher process exited. Drop stale rows; don't touch `loggedIn` (the
-  /// status line is authoritative). Reconnect only if this session actually
-  /// connected (emitted a status) and still believes it's signed in — bounded,
-  /// so a watcher that never connects or keeps dying fast won't hot-loop.
-  private func watcherExited() {
-    generation += 1  // end this session so any late stdout chunk is ignored
-    detachIO()  // drop the dead pipes/handle so a click can't write to a corpse
-    requests = []
-    connected = false  // no live watcher until one reconnects and emits status
-    if Date().timeIntervalSince(sessionStart) > 10 { reconnectAttempts = 0 }  // it was stable
-    guard loggedIn, sawStatus else { return }  // never connected → no reconnect
-    if reconnectAttempts < 5 {
-      reconnectAttempts += 1
-      // Void this reconnect if the user meanwhile signs in / quits (which
-      // bumps the generation) so it can't overlap a login or a fresh watcher.
-      let scheduled = generation
-      DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
-        guard let self, self.generation == scheduled else { return }
-        self.start()
-      }
-    } else {
-      lastError = "Approver keeps exiting — click Sign in to retry."
-    }
-  }
-
   func stop() {
-    generation += 1  // any in-flight reconnect scheduled before now is void
-    connected = false
+    generation += 1
     process?.terminationHandler = nil
     process?.terminate()
     process = nil
-    detachIO()
-    requests = []
   }
 
-  /// Drop the current session's pipes/handles and any half-read line, so no
-  /// late chunk or stray write can touch the next session.
-  private func detachIO() {
-    stdoutHandle?.readabilityHandler = nil
-    stdoutHandle = nil
-    stdinHandle = nil
-    buffer = Data()
-  }
-
-  /// Kick off `iterate login` (browser OAuth), then restart the watcher. Stop
-  /// the current watcher first so login never overlaps a running approve.
+  /// Run `iterate login` (browser OAuth), then check the session again. A
+  /// running check is stopped first so its result can't land mid-login.
   func login() {
     guard loginProcess == nil else { return }  // one browser login at a time
     stop()
-    reconnectAttempts = 0  // an explicit retry clears the give-up counter
     let process = Process()
     process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
     process.arguments = [config.command] + config.argv(for: ["login"], includeProject: false)
@@ -271,151 +142,9 @@ final class ApprovalController: ObservableObject {
       try process.run()
       loginProcess = process
     } catch {
-      // Login couldn't even launch — don't leave the app with no watcher.
       lastError = "Could not start login: \(error.localizedDescription)"
       start()
     }
-  }
-
-  /// Relay a verdict for one held request — from the dropdown OR a notification
-  /// action. The CLI does the signing (Touch ID pops there); the row shows a
-  /// spinner until the settle/error comes back.
-  func decide(offset: Int, _ decision: String) {
-    setSubmitting(offset, true)
-    let line = #"{"offset":\#(offset),"decision":"\#(decision)"}"# + "\n"
-    stdinHandle?.write(Data(line.utf8))
-  }
-
-  // MARK: NDJSON ingestion
-
-  private func ingest(_ chunk: Data) {
-    buffer.append(chunk)
-    while let newline = buffer.firstIndex(of: 0x0A) {
-      let lineData = buffer.subdata(in: buffer.startIndex..<newline)
-      buffer.removeSubrange(buffer.startIndex...newline)
-      guard let object = try? JSONSerialization.jsonObject(with: lineData) as? [String: Any] else {
-        continue
-      }
-      handle(object)
-    }
-  }
-
-  private func handle(_ event: [String: Any]) {
-    switch event["type"] as? String {
-    case "status":
-      sawStatus = true  // this watcher connected and spoke
-      loggedIn = event["loggedIn"] as? Bool ?? false
-      connected = loggedIn  // a live, authed watcher is serving
-      lastError = nil
-      principal = event["principal"] as? String
-      project = event["projectId"] as? String
-      if let key = event["key"] as? [String: Any] {
-        keyLabel = "\(key["kind"] as? String ?? "key") \((key["keyId"] as? String ?? "").prefix(8))"
-      } else {
-        keyLabel = nil
-      }
-    case "requested":
-      guard let offset = event["offset"] as? Int else { return }
-      let held = event["requests"] as? [[String: Any]] ?? []
-      // A body preview only makes sense for a batch of one.
-      var bodyContent: String?
-      if held.count == 1, let body = held[0]["body"] as? [String: Any] {
-        bodyContent = body["content"] as? String
-        if body["encoding"] as? String == "base64", let content = bodyContent {
-          bodyContent = "[base64] \(content)"
-        }
-      }
-      var request = HeldRequest(
-        offset: offset,
-        summary: event["summary"] as? String ?? "held egress request",
-        count: event["count"] as? Int ?? held.count,
-        secretPaths: event["secretPaths"] as? [String] ?? [],
-        ruleKey: event["ruleKey"] as? String ?? "",
-        body: bodyContent
-      )
-      // A backlog batch that already has a decision is shown awaiting the platform
-      // (spinner), not as a fresh Approve prompt.
-      request.submitting = event["submitted"] as? Bool ?? false
-      if !requests.contains(where: { $0.offset == offset }) {
-        requests.append(request)
-        if !request.submitting { notify(request) }
-      }
-    case "submitted":
-      // A decision landed (this app's or another approver's): show the row
-      // awaiting the platform rather than a fresh prompt, and pull any delivered
-      // banner — the platform only honors the first decision anyway.
-      if let offset = event["offset"] as? Int {
-        setSubmitting(offset, true)
-        ApprovalNotifications.withdraw(offset)
-      }
-    case "settled":
-      if let offset = event["offset"] as? Int {
-        requests.removeAll { $0.offset == offset }
-        ApprovalNotifications.withdraw(offset)
-      }
-    case "unsettled":
-      // The platform ignored the decision (key not enrolled / revoked) and the hold is
-      // still open — clear the spinner so Approve/Reject return, and say why.
-      if let offset = event["offset"] as? Int {
-        setSubmitting(offset, false)
-      }
-      lastError = "A decision wasn’t accepted — is this Mac’s approval key enrolled? (iterate approve --keys)"
-    case "error":
-      lastError = event["message"] as? String
-      // A signing/append failure (e.g. cancelled Touch ID) leaves the request
-      // pending — clear its spinner so Approve/Reject come back for a retry.
-      setSubmitting(event["offset"] as? Int, false)
-    default:
-      break
-    }
-  }
-
-  /// Set a row's spinner, reassigning the element so the @Published array
-  /// reliably republishes.
-  private func setSubmitting(_ offset: Int?, _ value: Bool) {
-    guard let offset, let index = requests.firstIndex(where: { $0.offset == offset }) else { return }
-    var updated = requests[index]
-    updated.submitting = value
-    requests[index] = updated
-  }
-
-  /// Ping the human when a request lands, even with the dropdown closed. When
-  /// UserNotifications authorization succeeded (needs a signed bundle — see
-  /// build-menubar-app.sh SIGN_IDENTITY), post a rich banner with the 𝑖 logo
-  /// and Approve/Reject actions that come back through `decide`. Otherwise fall
-  /// back to a plain osascript notification — zero setup, works everywhere.
-  private func notify(_ request: HeldRequest) {
-    let title = request.count == 1 ? "Approval needed" : "Approvals needed"
-    let secrets =
-      request.secretPaths.isEmpty ? "" : " · spends \(request.secretPaths.joined(separator: ", "))"
-    let body = "\(request.summary)\(secrets)"
-
-    if notificationsAuthorized {
-      let content = UNMutableNotificationContent()
-      content.title = title
-      content.body = body
-      content.categoryIdentifier = ApprovalNotifications.categoryId
-      content.userInfo = ["offset": request.offset]
-      if let url = IterateIcon.logoPNGURL,
-        let attachment = try? UNNotificationAttachment(identifier: "logo", url: url)
-      {
-        content.attachments = [attachment]
-      }
-      let notification = UNNotificationRequest(
-        identifier: ApprovalNotifications.identifier(request.offset), content: content, trigger: nil)
-      UNUserNotificationCenter.current().add(notification)
-      return
-    }
-
-    let script = "display notification \(quote(body)) with title \(quote(title))"
-    let process = Process()
-    process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-    process.arguments = ["-e", script]
-    try? process.run()
-  }
-
-  private func quote(_ text: String) -> String {
-    "\"" + text.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"") + "\""
   }
 }
 
@@ -434,9 +163,9 @@ struct ComputerCall: Identifiable, Equatable {
 /// Drives `iterate use-my-computer --json`: lends this Mac to the project's
 /// agents and surfaces each call they make, so the menu bar can show it in use.
 ///
-/// Deliberately simpler than ApprovalController: sharing is opt-in (a conscious
-/// act), so if the watcher exits we just stop sharing and let the human
-/// re-enable — no silent auto-reconnect that would re-lend the machine.
+/// Sharing is opt-in (a conscious act), so if the watcher exits we just stop
+/// sharing and let the human re-enable — no silent auto-reconnect that would
+/// re-lend the machine.
 final class ComputerController: ObservableObject {
   static let shared = ComputerController()
 
@@ -465,7 +194,7 @@ final class ComputerController: ObservableObject {
     // If the app loses its session, stop sharing immediately — the mount is
     // dead anyway, and otherwise the computer could stay lent while the toggle
     // greys out with no way to revoke but quitting.
-    ApprovalController.shared.$loggedIn
+    SessionController.shared.$loggedIn
       .dropFirst()
       .sink { [weak self] loggedIn in
         if !loggedIn { self?.stop() }
@@ -609,7 +338,7 @@ final class ComputerController: ObservableObject {
         sharing = true
         computerName = event["name"] as? String
       } else {
-        // No session — login is the approver's job; just stop and say so.
+        // No session: stop, and let the header's Sign in handle it.
         stop()
         lastError = "Sign in first, then share your computer."
       }
@@ -631,7 +360,7 @@ final class ComputerController: ObservableObject {
       if activeCalls > 0 { activeCalls -= 1 }
       guard let index = recentCalls.firstIndex(where: { $0.id == id }) else { return }
       // Reassign the whole element (not a nested mutation) so the @Published
-      // array reliably republishes. Same idiom as ApprovalController.setSubmitting.
+      // array reliably republishes.
       var call = recentCalls[index]
       call.running = false
       call.ok = event["ok"] as? Bool ?? true  // a failed local call is shown as failed, not done
@@ -645,28 +374,17 @@ final class ComputerController: ObservableObject {
 // MARK: - Views
 
 struct DropdownView: View {
-  @EnvironmentObject var controller: ApprovalController
+  @EnvironmentObject var session: SessionController
   @EnvironmentObject var computer: ComputerController
 
   var body: some View {
     VStack(alignment: .leading, spacing: 10) {
       header
       Divider()
-      if controller.requests.isEmpty {
-        Text("Approvals are not available yet.")
-          .foregroundStyle(.secondary)
-          .font(.callout)
-          .padding(.vertical, 4)
-      } else {
-        ForEach(controller.requests) { request in
-          RequestRow(request: request)
-        }
-      }
-      Divider()
       computerSection
       Divider()
       HStack {
-        if let error = controller.lastError ?? computer.lastError {
+        if let error = session.lastError ?? computer.lastError {
           Text(error).font(.caption).foregroundStyle(.red).lineLimit(2)
         }
         Spacer()
@@ -692,7 +410,7 @@ struct DropdownView: View {
           .toggleStyle(.switch)
           // Need a session to START sharing, but never trap an ACTIVE share
           // behind a greyed-out switch — always allow turning it off.
-          .disabled(!controller.loggedIn && !computer.enabled)
+          .disabled(!session.loggedIn && !computer.enabled)
       }
       if computer.sharing {
         if computer.recentCalls.isEmpty {
@@ -719,7 +437,7 @@ struct DropdownView: View {
   }
 
   private var computerStatusLine: String {
-    if !controller.loggedIn { return "Sign in to lend this Mac to agents." }
+    if !session.loggedIn { return "Sign in to lend this Mac to agents." }
     if computer.sharing {
       let name = computer.computerName.map { "itx.\($0)" } ?? "your computer"
       if computer.reconnecting { return "Reconnecting \(name)…" }
@@ -730,104 +448,28 @@ struct DropdownView: View {
   }
 
   @ViewBuilder private var header: some View {
-    if !controller.loggedIn {
-      HStack {
-        Text("Not signed in").font(.headline)
-        Spacer()
-        Button("Sign in") { controller.login() }.buttonStyle(.borderedProminent)
-      }
-    } else if !controller.connected {
-      // Valid session, but no watcher is live (it died and is retrying or gave
-      // up) — say so honestly and offer a manual reconnect.
-      HStack {
-        VStack(alignment: .leading, spacing: 2) {
-          Text(controller.principal ?? "signed in").font(.headline)
-          Text("Disconnected").font(.caption).foregroundStyle(.orange)
-        }
-        Spacer()
-        Button("Reconnect") { controller.start() }.buttonStyle(.bordered)
-      }
-    } else {
+    if session.loggedIn {
       VStack(alignment: .leading, spacing: 2) {
-        Text(controller.principal ?? "signed in").font(.headline)
-        if let project = controller.project {
+        Text("Signed in").font(.headline)
+        if let project = session.project {
           Text(project).font(.caption).foregroundStyle(.secondary)
         }
         Text("Iterate")
           .font(.caption2).foregroundStyle(.secondary)
       }
-    }
-  }
-}
-
-struct RequestRow: View {
-  @EnvironmentObject var controller: ApprovalController
-  let request: HeldRequest
-
-  var body: some View {
-    VStack(alignment: .leading, spacing: 6) {
-      Text(request.summary).font(.system(.body, design: .monospaced)).bold()
-      if !request.secretPaths.isEmpty {
-        Text("spends \(request.secretPaths.joined(separator: ", "))")
-          .font(.caption).foregroundStyle(.orange)
-      }
-      if let body = request.body, !body.isEmpty {
-        Text(body).font(.caption).foregroundStyle(.secondary).lineLimit(2)
-      }
+    } else {
       HStack {
-        Text("rule: \(request.ruleKey)").font(.caption2).foregroundStyle(.secondary)
+        Text("Not signed in").font(.headline)
         Spacer()
-        if request.submitting {
-          ProgressView().controlSize(.small)
-        } else {
-          Button(request.count == 1 ? "Reject" : "Reject all") {
-            controller.decide(offset: request.offset, "reject")
-          }
-          .buttonStyle(.bordered)
-          Button(request.count == 1 ? "Approve" : "Approve all \(request.count)") {
-            controller.decide(offset: request.offset, "approve")
-          }
-          .buttonStyle(.borderedProminent)
-        }
+        Button("Sign in") { session.login() }.buttonStyle(.borderedProminent)
       }
     }
-    .padding(10)
-    .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 8))
-  }
-}
-
-// MARK: - Notifications
-
-/// The one actionable-notification category: Approve / Reject, mapped back to
-/// `decide` by the delegate. Delivery needs a signed bundle, so it's an
-/// opt-in upgrade over the osascript fallback (see notify()).
-enum ApprovalNotifications {
-  static let categoryId = "APPROVAL"
-
-  static func identifier(_ offset: Int) -> String { "approval-\(offset)" }
-
-  static func register(_ center: UNUserNotificationCenter) {
-    let approve = UNNotificationAction(identifier: "APPROVE", title: "Approve", options: [.foreground])
-    let reject = UNNotificationAction(
-      identifier: "REJECT", title: "Reject", options: [.destructive])
-    center.setNotificationCategories([
-      UNNotificationCategory(
-        identifier: categoryId, actions: [approve, reject], intentIdentifiers: [], options: [])
-    ])
-  }
-
-  /// Pull a delivered banner once its request is no longer answerable here — a
-  /// decision landed or it settled — so a stale Reject tap can't send a
-  /// dead-weight contradiction (the platform only honors the first decision).
-  static func withdraw(_ offset: Int) {
-    UNUserNotificationCenter.current().removeDeliveredNotifications(
-      withIdentifiers: [identifier(offset)])
   }
 }
 
 // MARK: - App
 
-final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate {
   private var receivedConfiguration = false
 
   // `open -a Iterate.app menubar.json` delivers this even to a running app.
@@ -840,11 +482,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
       let data = try Data(contentsOf: URL(fileURLWithPath: path))
       let config = try JSONDecoder().decode(MenuBarConfig.self, from: data)
       ComputerController.shared.configure(config)
-      ApprovalController.shared.configure(config)
+      SessionController.shared.configure(config)
       receivedConfiguration = true
       sender.reply(toOpenOrPrint: .success)
     } catch {
-      ApprovalController.shared.lastError = "Could not load configuration: \(error.localizedDescription)"
+      SessionController.shared.lastError = "Could not load configuration: \(error.localizedDescription)"
       sender.reply(toOpenOrPrint: .failure)
     }
   }
@@ -852,59 +494,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
   func applicationDidFinishLaunching(_ notification: Notification) {
     NSApp.setActivationPolicy(.accessory)  // menu-bar only, no dock icon
 
-    // Approval notifications stay dormant until the platform supports approvals.
-    if !receivedConfiguration { ApprovalController.shared.start() }
+    if !receivedConfiguration { SessionController.shared.start() }
     // Computer sharing is opt-in — it stays idle until the human flips it on.
   }
 
-  /// Tear down both watchers on quit so we never leave the computer shared (or an
-  /// approver running) behind a closed menu bar.
+  /// Stop sharing and any session check on quit, so the computer is never left
+  /// shared behind a closed menu bar.
   func applicationWillTerminate(_ notification: Notification) {
     ComputerController.shared.stop()
-    ApprovalController.shared.stop()
-  }
-
-  /// Show the banner even when the app is frontmost.
-  func userNotificationCenter(
-    _ center: UNUserNotificationCenter, willPresent notification: UNNotification,
-    withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
-  ) {
-    completionHandler([.banner, .sound])
-  }
-
-  /// An Approve/Reject tap on a banner routes straight to `decide` (signing —
-  /// and Touch ID — happen in the CLI, exactly as from the dropdown).
-  func userNotificationCenter(
-    _ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse,
-    withCompletionHandler completionHandler: @escaping () -> Void
-  ) {
-    if let offset = response.notification.request.content.userInfo["offset"] as? Int {
-      switch response.actionIdentifier {
-      case "APPROVE": ApprovalController.shared.decide(offset: offset, "approve")
-      case "REJECT": ApprovalController.shared.decide(offset: offset, "reject")
-      default: break
-      }
-    }
-    completionHandler()
+    SessionController.shared.stop()
   }
 }
 
 @main
 struct IterateApp: App {
   @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
-  @StateObject private var controller = ApprovalController.shared
+  @StateObject private var session = SessionController.shared
   @StateObject private var computer = ComputerController.shared
 
   var body: some Scene {
     MenuBarExtra {
-      DropdownView().environmentObject(controller).environmentObject(computer)
+      DropdownView().environmentObject(session).environmentObject(computer)
     } label: {
-      // The 𝑖 template mark, a count when requests are waiting, and a green dot
-      // while an agent is actively using this computer.
+      // The 𝑖 template mark, and a green dot while an agent is actively using
+      // this computer.
       Image(nsImage: IterateIcon.mark)
-      if controller.requests.count > 0 {
-        Text("\(controller.requests.count)")
-      }
       if computer.inUse {
         Image(systemName: "circle.fill").foregroundStyle(.green)
       }
