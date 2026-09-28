@@ -385,12 +385,7 @@ test("no step runs TypeScript through tsx or the trpc-cli bin", () => {
 // A package script runs TypeScript as CI does, with `node <file>.ts`, so `pnpm run deploy` on a
 // laptop and the deploy step run the same thing.
 test("no package script runs TypeScript through tsx or the trpc-cli bin", () => {
-  const { packages } = parseYaml(
-    readFileSync(resolve(repoRoot, "pnpm-workspace.yaml"), "utf8"),
-  ) as {
-    packages: string[];
-  };
-  const runners = [".", ...packages].flatMap((directory) =>
+  const runners = [".", ...workspaceDirectories].flatMap((directory) =>
     Object.entries(readPackageJson(directory).scripts ?? {}).flatMap(([name, script]) =>
       [...script.matchAll(tsxOrTrpcCli)].map(([, command]) => `${directory} ${name}: ${command}`),
     ),
