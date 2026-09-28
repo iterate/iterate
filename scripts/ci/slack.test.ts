@@ -1,5 +1,5 @@
 // The page primitives over a fake Slack. The token lookup and the WebClient itself are out of scope.
-import { expect, test } from "vitest";
+import { expect, test, vi } from "vitest";
 import { fakeSlack } from "./fake-slack.ts";
 import {
   cutText,
@@ -9,6 +9,7 @@ import {
   markResolved,
   pageChannel,
   pageStep,
+  PAGE_GONE_ERRORS,
   pageText,
   resolvedText,
   resolvePage,
@@ -189,11 +190,14 @@ test.for([
 });
 
 test.for([
-  { name: "the page is edited first, then the thread gets the reply", failUpdates: false },
-  { name: "a failed edit posts no reply, so the next run resolves it once", failUpdates: true },
-])("resolvePage: $name", async ({ failUpdates }) => {
-  const slack = fakeSlack({ now, failUpdates });
-  const page = slack.seed("#error-pulse", `:rotating_light: page ${MENTIONS}`);
+  { name: "the page is edited first, then the thread gets the reply", updateError: undefined },
+  {
+    name: "a failed edit posts no reply, so the next run resolves it once",
+    updateError: "fatal_error",
+  },
+])("resolvePage: $name", async ({ updateError }) => {
+  const slack = fakeSlack({ now });
+  const page = slack.seed("#error-pulse", `:rotating_light: page ${MENTIONS}`, { updateError });
   const edit = {
     method: "chat.update",
     channel: errorPulse,
@@ -216,8 +220,142 @@ test.for([
       () => "resolved",
       (error: Error) => error.message,
     ),
-  ).resolves.toBe(failUpdates ? "an_error" : "resolved");
-  expect(writes(slack)).toEqual(failUpdates ? [edit] : [edit, reply]);
+  ).resolves.toBe(updateError ? "An API error occurred: fatal_error" : "resolved");
+  expect(writes(slack)).toEqual(updateError ? [edit] : [edit, reply]);
+});
+
+// A page Slack can no longer edit (PAGE_GONE_ERRORS): deleted, or past the workspace's edit window.
+const goneRows = [...PAGE_GONE_ERRORS].map((error) => ({ error }));
+
+test.for(goneRows)(
+  "resolvePage: a page Slack answers $error to gets its resolution top-level",
+  async ({ error }) => {
+    const slack = fakeSlack({ now });
+    const page = slack.seed("#error-pulse", `:rotating_light: page ${MENTIONS}`, {
+      updateError: error,
+    });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    await resolvePage(slack.client, {
+      channel: errorPulse,
+      ts: page.ts,
+      text: page.text,
+      why: "back under 2",
+    });
+    expect(writes(slack).at(-1)).toEqual({
+      method: "chat.postMessage",
+      channel: errorPulse,
+      text: `✅ resolved: back under 2 ${MENTIONS}`,
+    });
+    expect(warn).toHaveBeenCalledWith(
+      JSON.stringify({ event: "slack.page-gone", channel: errorPulse, ts: page.ts, reason: error }),
+    );
+  },
+);
+
+test("resolvePage: a deleted page gets its resolution top-level", async () => {
+  const slack = fakeSlack({ now });
+  const page = slack.seed("#error-pulse", `:rotating_light: page ${MENTIONS}`);
+  await slack.client.chat.delete({ channel: errorPulse, ts: page.ts });
+  vi.spyOn(console, "warn").mockImplementation(() => {});
+  await resolvePage(slack.client, {
+    channel: errorPulse,
+    ts: page.ts,
+    text: page.text,
+    why: "back under 2",
+  });
+  expect(slack.channel("#error-pulse").map((message) => message.text)).toEqual([
+    `✅ resolved: back under 2 ${MENTIONS}`,
+  ]);
+});
+
+test.for(goneRows)(
+  "keepPage: an open page Slack answers $error to is posted again",
+  async ({ error }) => {
+    const slack = fakeSlack({ now });
+    const page = slack.seed("#error-pulse", `:rotating_light: sweep: stuck n=1 ${MENTIONS}`, {
+      updateError: error,
+    });
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    await expect(
+      keepPage(slack.client, {
+        marker: "sweep: stuck",
+        sinceHours: 720,
+        now: new Date(now),
+        render: async () => `🚨 sweep: stuck n=2 ${MENTIONS}`,
+        why: "gone",
+      }),
+    ).resolves.toBe("edit");
+    expect(writes(slack)).toEqual([
+      {
+        method: "chat.update",
+        channel: errorPulse,
+        ts: page.ts,
+        text: `🚨 sweep: stuck n=2 ${MENTIONS}`,
+      },
+      { method: "chat.postMessage", channel: errorPulse, text: `🚨 sweep: stuck n=2 ${MENTIONS}` },
+    ]);
+  },
+);
+
+test.for(goneRows)(
+  "keepPage: an older page Slack answers $error to is passed over, and the newest is kept",
+  async ({ error }) => {
+    const slack = fakeSlack({ now });
+    const older = slack.seed("#error-pulse", `:rotating_light: sweep: stuck n=1 ${MENTIONS}`, {
+      ageHours: 2,
+      updateError: error,
+    });
+    const newer = slack.seed("#error-pulse", `:rotating_light: sweep: stuck n=2 ${MENTIONS}`, {
+      ageHours: 1,
+    });
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    await expect(
+      keepPage(slack.client, {
+        marker: "sweep: stuck",
+        sinceHours: 720,
+        now: new Date(now),
+        render: async () => undefined,
+        why: "the sweep succeeded",
+      }),
+    ).resolves.toBe("resolve");
+    expect(writes(slack)).toEqual([
+      {
+        method: "chat.update",
+        channel: errorPulse,
+        ts: older.ts,
+        text: `✅ resolved: sweep: stuck n=1 ${MENTIONS}`,
+      },
+      {
+        method: "chat.update",
+        channel: errorPulse,
+        ts: newer.ts,
+        text: `✅ resolved: sweep: stuck n=2 ${MENTIONS}`,
+      },
+      {
+        method: "chat.postMessage",
+        channel: errorPulse,
+        thread_ts: newer.ts,
+        text: `✅ resolved: the sweep succeeded ${MENTIONS}`,
+      },
+    ]);
+  },
+);
+
+test("keepPage: any other error from Slack's edit throws", async () => {
+  const slack = fakeSlack({ now });
+  slack.seed("#error-pulse", `:rotating_light: sweep: stuck n=1 ${MENTIONS}`, {
+    updateError: "fatal_error",
+  });
+  await expect(
+    keepPage(slack.client, {
+      marker: "sweep: stuck",
+      sinceHours: 720,
+      now: new Date(now),
+      render: async () => `🚨 sweep: stuck n=2 ${MENTIONS}`,
+      why: "gone",
+    }),
+  ).rejects.toThrow("An API error occurred: fatal_error");
+  expect(writes(slack).map((call) => call.method)).toEqual(["chat.update"]);
 });
 
 test.for([

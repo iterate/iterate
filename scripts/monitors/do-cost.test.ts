@@ -1,7 +1,7 @@
 // The DO cost alarm's decisions and wording, over a fake Slack. The probe itself (a Cloudflare
 // GraphQL call) is out of scope: readings are built by `reading` below.
-import type { WebClient } from "@slack/web-api";
-import { expect, test } from "vitest";
+import { expect, test, vi } from "vitest";
+import { fakeSlack } from "../ci/fake-slack.ts";
 import {
   ACCOUNTS,
   type AccountReading,
@@ -314,14 +314,14 @@ const INCIDENT = {
 };
 
 test("the 09-21/22 incident: three pages, edited hourly, two escalations, each resolved once", async () => {
-  const slack = fakeSlack();
+  const slack = fakeSlack({ now: 0 });
   const runs = Array.from(
     { length: 24 },
     (_, index) => new Date(Date.parse("2026-09-21T19:41:00Z") + index * 3600_000),
   );
   const actions: string[] = [];
   for (const at of runs) {
-    slack.clock.now = at;
+    slack.clock.now = at.getTime();
     const { pages } = await postDailyThread({
       slack: slack.client,
       now: at,
@@ -366,7 +366,7 @@ test("the 09-21/22 incident: three pages, edited hourly, two escalations, each r
 
   // #error-pulse: 3 pages, 2 broadcast escalations and 3 resolutions, every one with both mentions;
   // each page's first line now starts "✅ resolved:".
-  const pulse = slack.messages.filter((message) => message.channel === PULSE);
+  const pulse = slack.timeline("#error-pulse");
   expect(pulse.map((message) => message.text.split("\n")[0])).toEqual([
     `✅ resolved: DO cost page for dev/preview: ~$0.22/h (≈ $5.40/day), 0.1× the ceiling ${MENTIONS}`,
     `🚨 DO cost for dev/preview passed 2× its page tier: ~$37/h (≈ $882/day) ${MENTIONS}`,
@@ -401,7 +401,7 @@ test("the 09-21/22 incident: three pages, edited hourly, two escalations, each r
   ]);
 
   // #ci: each UTC day's headline and its one reply, rewritten in place, and nothing else.
-  const ci = slack.messages.filter((message) => message.channel === CI);
+  const ci = slack.timeline("#ci");
   expect(ci.map((message) => [!message.thread_ts, message.text.split("\n")[1]])).toEqual([
     [true, undefined],
     [
@@ -417,9 +417,8 @@ test("the 09-21/22 incident: three pages, edited hourly, two escalations, each r
 });
 
 test("a test run posts its thread and its page to #ci, 🧪 and with no mention, and reads no page", async () => {
-  const slack = fakeSlack();
   const at = new Date("2026-09-28T11:53:00Z");
-  slack.clock.now = at;
+  const slack = fakeSlack({ now: at.getTime() });
   const test = (label: "dev/preview" | "prd") => ({
     ...reading(label, [{ hour: "2026-09-28T10:00:00Z", doHours: 31 }]),
     ceilingDoHours: 1,
@@ -432,30 +431,31 @@ test("a test run posts its thread and its page to #ci, 🧪 and with no mention,
     runUrl,
     testRun: true,
   });
-  expect(slack.messages).toMatchObject([
-    {
-      channel: CI,
-      text: expect.stringMatching(/^🧪 TEST RUN — 🚨 DO cost page for dev\/preview: ~\$0.17\/h/),
-    },
-    { channel: CI, text: expect.stringMatching(/^🧪 TEST RUN — 🚨 DO cost page for prd:/) },
-    { channel: CI, text: expect.stringMatching(/^🧪 TEST RUN — We're spending/) },
-    { channel: CI, text: expect.stringContaining("DO cost by account") },
+  expect(slack.timeline("#ci")).toMatchObject([
+    { text: expect.stringMatching(/^🧪 TEST RUN — 🚨 DO cost page for dev\/preview: ~\$0.17\/h/) },
+    { text: expect.stringMatching(/^🧪 TEST RUN — 🚨 DO cost page for prd:/) },
+    { text: expect.stringMatching(/^🧪 TEST RUN — We're spending/) },
+    { text: expect.stringContaining("DO cost by account") },
   ]);
-  expect(slack.messages.map((message) => message.text).join("\n")).not.toContain("<@");
-  expect(slack.reads).not.toContain(PULSE);
+  expect(slack.timeline("#error-pulse")).toEqual([]);
+  expect(
+    slack
+      .timeline("#ci")
+      .map((message) => message.text)
+      .join("\n"),
+  ).not.toContain("<@");
+  expect(reads(slack)).not.toContain(PULSE);
 });
 
 test("an old 🧪 page in #error-pulse is no incident: the real run posts its own page", async () => {
-  const slack = fakeSlack([
-    {
-      channel: PULSE,
-      ts: String(Date.parse("2026-09-28T10:46:07Z") / 1000),
-      bot_id: "B1",
-      text: ":test_tube: TEST RUN — :rotating_light: DO cost page for dev/preview: ~$0.35/h …",
-    },
-  ]);
   const at = new Date("2026-09-28T12:41:00Z");
-  slack.clock.now = at;
+  const slack = fakeSlack({ now: at.getTime() });
+  slack.seed(
+    "#error-pulse",
+    "🧪 TEST RUN — 🚨 DO cost page for dev/preview: ~$0.35/h …",
+    // posted at 10:46:07
+    { ageHours: (at.getTime() - Date.parse("2026-09-28T10:46:07Z")) / 3600_000 },
+  );
   const { pages } = await postDailyThread({
     slack: slack.client,
     now: at,
@@ -466,51 +466,73 @@ test("an old 🧪 page in #error-pulse is no incident: the real run posts its ow
   expect(pages).toEqual([{ label: "dev/preview", action: "post" }]);
 });
 
+// A page is open for OPEN_PAGE_HOURS (48): past that, an incident is paged again, and the new page
+// resolves the older one by an edit alone. One Slack can no longer edit is left as it is.
 test.for([
-  {
-    name: "the reply posted earlier is rewritten in place",
-    thread: [
-      { ts: "100.0", bot_id: "B1", text: "We're spending $142/day on durable objects …" },
-      { ts: "101.0", bot_id: "B1", text: "DO cost by account, 2026-09-04 UTC\n…" },
-    ],
-    expected: [["chat.update", { channel: CI, ts: "101.0", text: "new lines" }]],
+  { name: "is resolved by an edit alone", updateError: undefined },
+  { name: "that Slack can no longer edit is passed over", updateError: "edit_window_closed" },
+])(
+  "an incident past 48 hours is paged again, and its older page $name",
+  async ({ updateError }) => {
+    const at = new Date("2026-09-28T12:41:00Z");
+    const slack = fakeSlack({ now: at.getTime() });
+    const older = slack.seed("#error-pulse", openPage("2,124").text, { ageHours: 49, updateError });
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { pages } = await postDailyThread({
+      slack: slack.client,
+      now: at,
+      readings: [reading("dev/preview", [{ hour: "2026-09-28T11:00:00Z", doHours: 2000 }])],
+      runUrl,
+      testRun: false,
+    });
+    expect(pages).toEqual([{ label: "dev/preview", action: "post" }]);
+    expect(writes(slack).filter((call) => call.channel === PULSE)).toEqual([
+      {
+        method: "chat.update",
+        channel: PULSE,
+        ts: older.ts,
+        text: expect.stringMatching(/^✅ resolved: DO cost page for dev\/preview: ~\$12\/h/),
+      },
+      {
+        method: "chat.postMessage",
+        channel: PULSE,
+        text: expect.stringMatching(/^🚨 DO cost page for dev\/preview: ~\$11\/h/),
+      },
+    ]);
   },
-  {
-    name: "the day's first run posts the reply",
-    thread: [{ ts: "100.0", bot_id: "B1", text: "We're spending $142/day on durable objects …" }],
-    expected: [["chat.postMessage", { channel: CI, thread_ts: "100.0", text: "new lines" }]],
-  },
-])("details reply: $name", async ({ thread, expected }) => {
-  const slack = fakeSlack(
-    thread.map((message) => ({ ...message, channel: CI, thread_ts: "100.0" })),
-  );
+);
+
+test.for([
+  { name: "the reply posted earlier is rewritten in place", replied: true },
+  { name: "the day's first run posts the reply", replied: false },
+])("details reply: $name", async ({ replied }) => {
+  const slack = fakeSlack({ now: now.getTime() });
+  const headline = slack.seed("#ci", "We're spending $142/day on durable objects …");
+  const reply =
+    replied && slack.seed("#ci", "DO cost by account, 2026-09-04 UTC\n…", { thread: headline });
   await upsertDetailsReply({
     slack: slack.client,
     channel: CI,
-    headlineTs: "100.0",
+    headlineTs: headline.ts,
     details: "new lines",
   });
-  // oxlint-disable-next-line iterate/prefer-object-property-match -- exact: an extra Slack write or field must fail
-  expect(slack.writes).toEqual(expected);
+  expect(writes(slack)).toEqual([
+    reply
+      ? { method: "chat.update", channel: CI, ts: reply.ts, text: "new lines" }
+      : { method: "chat.postMessage", channel: CI, thread_ts: headline.ts, text: "new lines" },
+  ]);
 });
 
 test("the day's headline is found behind a busy #ci's first page, and rewritten, not posted again", async () => {
-  const at = Date.parse("2026-09-21T21:41:00Z") / 1000;
-  const slack = fakeSlack([
-    {
-      channel: CI,
-      ts: String(at - 7200),
-      bot_id: "B1",
-      text: "We're spending $1/day on durable objects …",
-    },
-    ...Array.from({ length: 250 }, (_, index) => ({
-      channel: CI,
-      ts: String(at - 3600 + index),
-      bot_id: "B1",
-      text: ":large_green_circle: PR opened: …",
-    })),
-  ]);
-  slack.clock.now = new Date(at * 1000);
+  const at = new Date("2026-09-21T21:41:00Z");
+  const slack = fakeSlack({ now: at.getTime() });
+  // Slack pages a day's history from its oldest end: 250 messages at 01:41–01:45 fill the first
+  // page, and the headline is on the second.
+  for (let index = 0; index < 250; index++)
+    slack.seed("#ci", ":large_green_circle: PR opened: …", { ageHours: 20 - index / 3600 });
+  const headline = slack.seed("#ci", "We're spending $1/day on durable objects …", {
+    ageHours: 2,
+  });
   await postDailyThread({
     slack: slack.client,
     now: new Date("2026-09-21T21:41:00Z"),
@@ -518,18 +540,19 @@ test("the day's headline is found behind a busy #ci's first page, and rewritten,
     runUrl,
     testRun: false,
   });
-  expect(slack.writes).toMatchObject([
-    ["chat.postMessage", { channel: CI, thread_ts: String(at - 7200) }],
-    [
-      "chat.update",
-      { channel: CI, ts: String(at - 7200), text: expect.stringContaining("We're spending") },
-    ],
+  expect(writes(slack)).toMatchObject([
+    { method: "chat.postMessage", channel: CI, thread_ts: headline.ts },
+    {
+      method: "chat.update",
+      channel: CI,
+      ts: headline.ts,
+      text: expect.stringContaining("We're spending"),
+    },
   ]);
 });
 
 test("a probe that could not run fails the run once the thread says so", async () => {
-  const slack = fakeSlack();
-  slack.clock.now = now;
+  const slack = fakeSlack({ now: now.getTime() });
   await expect(
     postDailyThread({
       slack: slack.client,
@@ -549,12 +572,9 @@ test("a probe that could not run fails the run once the thread says so", async (
   ).rejects.toThrow(
     "DO duration probe could not run: prd: Cloudflare GraphQL errors: authentication error",
   );
-  expect(slack.messages).toMatchObject([
-    { channel: CI, text: expect.stringContaining("prd: probe failed") },
-    {
-      channel: CI,
-      text: expect.stringContaining("⚠️ prd: probe failed: Cloudflare GraphQL errors"),
-    },
+  expect(slack.timeline("#ci")).toMatchObject([
+    { text: expect.stringContaining("prd: probe failed") },
+    { text: expect.stringContaining("⚠️ prd: probe failed: Cloudflare GraphQL errors") },
   ]);
 });
 
@@ -598,86 +618,16 @@ function incidentReading(label: "dev/preview" | "prd", at: Date) {
   return reading(label, hours);
 }
 
-type FakeMessage = {
-  channel: string;
-  ts: string;
-  bot_id: string;
-  text: string;
-  thread_ts?: string;
-  reply_broadcast?: boolean;
-};
+/** The Slack writes a run made: every call but the reads. */
+function writes(slack: ReturnType<typeof fakeSlack>) {
+  return slack.calls.filter((call) => call.method.startsWith("chat."));
+}
 
-/** A WebClient stand-in holding each channel's messages: history serves a channel's top-level
- * messages newest first (honouring `oldest`, `limit` and `cursor`, and spelling emoji as Slack's
- * history does), replies serve a thread, and every write is recorded and applied. */
-function fakeSlack(seed: FakeMessage[] = []) {
-  const messages = [...seed];
-  const writes: Array<[string, unknown]> = [];
-  const reads: string[] = [];
-  const clock = { now: new Date(0) };
-  let sequence = 0;
-  const asHistory = (message: FakeMessage) => ({
-    ...message,
-    text: message.text
-      .replaceAll("🚨", ":rotating_light:")
-      .replaceAll("✅", ":white_check_mark:")
-      .replaceAll("🧪", ":test_tube:")
-      .replaceAll("🔴", ":red_circle:"),
-  });
-  const client = {
-    auth: { test: async () => ({ ok: true, bot_id: "B1" }) },
-    conversations: {
-      history: async (args: {
-        channel: string;
-        oldest?: string;
-        limit: number;
-        cursor?: string;
-      }) => {
-        reads.push(args.channel);
-        const since = messages
-          .filter(
-            (message) =>
-              message.channel === args.channel &&
-              (!message.thread_ts || message.reply_broadcast) &&
-              Number(message.ts) >= Number(args.oldest || 0),
-          )
-          .sort((a, b) => Number(b.ts) - Number(a.ts));
-        const start = Number(args.cursor || 0);
-        const end = start + args.limit;
-        return {
-          messages: since.slice(start, end).map(asHistory),
-          response_metadata: { next_cursor: end < since.length ? String(end) : "" },
-        };
-      },
-      replies: async (args: { channel: string; ts: string }) => {
-        reads.push(args.channel);
-        return {
-          messages: messages
-            .filter(
-              (message) =>
-                message.channel === args.channel &&
-                (message.ts === args.ts || message.thread_ts === args.ts),
-            )
-            .map(asHistory),
-        };
-      },
-    },
-    chat: {
-      postMessage: async (args: Omit<FakeMessage, "ts" | "bot_id">) => {
-        writes.push(["chat.postMessage", args]);
-        const ts = `${Math.floor(clock.now.getTime() / 1000)}.${String(sequence++).padStart(6, "0")}`;
-        messages.push({ ...args, ts, bot_id: "B1" });
-        return { ok: true, ts };
-      },
-      update: async (args: { channel: string; ts: string; text: string }) => {
-        writes.push(["chat.update", args]);
-        const message = messages.find((candidate) => candidate.ts === args.ts);
-        if (message) message.text = args.text;
-        return { ok: true };
-      },
-    },
-  } as unknown as WebClient; // only the calls do-cost.ts and slack.ts make
-  return { client, writes, reads, messages, clock };
+/** The channels a run read. */
+function reads(slack: ReturnType<typeof fakeSlack>) {
+  return slack.calls
+    .filter((call) => call.method.startsWith("conversations."))
+    .map((call) => call.channel);
 }
 
 /** dev/preview's page as Slack's history returns it, showing `peak` DO-hours an hour. */

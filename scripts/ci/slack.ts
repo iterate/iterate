@@ -1,6 +1,7 @@
 // the default import is the package's CommonJS exports: Node's ESM named-export detection cannot see
 // `retryPolicies`, which the index re-exports through a getter
-import slackWebApi, { WebClient } from "@slack/web-api";
+import slackWebApi, { WebAPIPlatformError, WebClient } from "@slack/web-api";
+import { z } from "zod";
 import { dopplerSecret } from "../lib/env-context.ts";
 
 export const slackChannelIds = {
@@ -149,22 +150,78 @@ export async function findOpenPages(
   return open;
 }
 
+/** Slack's answers to an edit of a page it can no longer edit: someone deleted it, or it is past
+ *  the workspace's edit window. The page is gone: what would have edited it goes top-level. */
+export const PAGE_GONE_ERRORS = new Set([
+  "message_not_found",
+  "edit_window_closed",
+  "cant_update_message",
+]);
+
+/** Edits the message at `ts` to `text`: "edited", or "gone" when Slack can no longer edit it
+ *  (PAGE_GONE_ERRORS), which is logged. Any other error throws. */
+export async function updatePage(
+  slack: WebClient,
+  page: { channel: string; ts: string; text: string },
+): Promise<"edited" | "gone"> {
+  try {
+    await slack.chat.update(page);
+    return "edited";
+  } catch (error) {
+    if (!(error instanceof WebAPIPlatformError && PAGE_GONE_ERRORS.has(error.data.error)))
+      throw error;
+    console.warn(
+      JSON.stringify({
+        event: "slack.page-gone",
+        channel: page.channel,
+        ts: page.ts,
+        reason: error.data.error,
+      }),
+    );
+    return "gone";
+  }
+}
+
+/** Edits the page at `ts` to `text`, resolving to the page's ts: a new top-level page's when the
+ *  page is gone (updatePage), so its thread moves there. */
+export async function editPage(
+  slack: WebClient,
+  page: { channel: string; ts: string; text: string },
+) {
+  if ((await updatePage(slack, page)) === "edited") return page.ts;
+  const posted = await slack.chat.postMessage({ channel: page.channel, text: page.text });
+  return z.string().parse(posted.ts);
+}
+
 /**
  * Closes an incident: its page's first line is edited to `✅ resolved:`, then the thread gets the
  * reply that says why, with both mentions. The edit comes first, so a failed edit leaves the page
- * open for the next run to resolve and never repeats the reply.
+ * open for the next run to resolve and never repeats the reply. A page that is gone (updatePage)
+ * gets its reply top-level instead.
  */
 export async function resolvePage(
   slack: WebClient,
   input: { channel: string; ts: string; text: string; why: string },
 ) {
-  await slack.chat.update({ channel: input.channel, ts: input.ts, text: markResolved(input.text) });
+  const { channel } = input;
+  const edited = await updatePage(slack, { channel, ts: input.ts, text: markResolved(input.text) });
   await slack.chat.postMessage({
-    channel: input.channel,
-    thread_ts: input.ts,
+    channel,
+    thread_ts: edited === "edited" ? input.ts : undefined,
     // a 🧪 test page is never open (findOpenPages), so this resolves a real one
     text: resolvedText(input.why, false),
   });
+}
+
+/** Resolves `pages` by an edit alone, which notifies nobody: the older open pages of an incident
+ *  that has a newer page. One that is gone (updatePage) is already closed. */
+export async function resolveOlderPages(
+  slack: WebClient,
+  channel: string,
+  pages: Array<{ ts: string; text: string }>,
+) {
+  for (const page of pages)
+    await updatePage(slack, { channel, ts: page.ts, text: markResolved(page.text) });
 }
 
 /** What a run does with one incident's page, given its open page (if any) and this run's page text
@@ -187,8 +244,9 @@ export function pageStep(
  * run finds the incident gone (pageStep). `render` is this run's page text, given the open page's
  * (a poster that cannot see the whole incident in one run carries forward what the page names), or
  * undefined when the incident is gone. Older open pages of the same incident (a page per night from
- * before one was kept) are resolved by an edit alone, which notifies nobody. Returns the step
- * taken. A 🧪 test run posts its page to #ci itself and never calls this.
+ * before one was kept) are resolved by an edit alone (resolveOlderPages). A gone page's edit posts
+ * the page again and its resolution goes top-level (updatePage). Returns the step taken. A 🧪 test
+ * run posts its page to #ci itself and never calls this.
  */
 export async function keepPage(
   slack: WebClient,
@@ -203,11 +261,10 @@ export async function keepPage(
   const channel = pageChannel(false);
   const { marker, sinceHours, now } = input;
   const [open, ...older] = await findOpenPages(slack, { channel, marker, sinceHours, now });
-  for (const page of older)
-    await slack.chat.update({ channel, ts: page.ts, text: markResolved(page.text) });
+  await resolveOlderPages(slack, channel, older);
   const step = pageStep(open, await input.render(open?.text));
   if (step.step === "post") await slack.chat.postMessage({ channel, text: step.text });
-  if (step.step === "edit") await slack.chat.update({ channel, ts: step.ts, text: step.text });
+  if (step.step === "edit") await editPage(slack, { channel, ts: step.ts, text: step.text });
   if (step.step === "resolve")
     await resolvePage(slack, { channel, ts: step.ts, text: step.text, why: input.why });
   return step.step;

@@ -32,6 +32,7 @@ import { depotWorkflowUrl } from "./depot.ts";
 import { getOctokit, getRepo, readEventPayload, type GithubEventPayload } from "./github.ts";
 import {
   cutText,
+  editPage,
   escalationText,
   findOpenPages,
   getSlackClient,
@@ -327,7 +328,7 @@ export async function pageDeployFailure(
       })
     ).reverse();
   const fold = (page: { ts: string; text: string }) =>
-    slack.chat.update({
+    editPage(slack, {
       channel,
       ts: page.ts,
       text: deployPageText(withFailure(readDeployPage(page.text), failure), false),
@@ -404,7 +405,7 @@ async function resolveDeployPage(
       text,
       why: `every app is live again: ${next.live.map((entry) => `${entry.app} at ${entry.sha}`).join(", ")}`,
     });
-  else await slack.chat.update({ channel, ts: found.ts, text });
+  else await editPage(slack, { channel, ts: found.ts, text });
 }
 
 /** The prd deploy its job's step reports: APP_DISPLAY_NAME at GITHUB_SHA, linking the job. */
@@ -560,11 +561,11 @@ export async function pageWorkflowFailure(
   }
   const page = readWorkflowPage(input.workflow, found.text);
   const next = { ...page, jobs: input.jobs, runs: page.runs + 1, runUrl: input.runUrl };
-  await slack.chat.update({ channel, ts: found.ts, text: workflowPageText(next, false) });
+  const ts = await editPage(slack, { channel, ts: found.ts, text: workflowPageText(next, false) });
   if ([...page.jobs].sort().join() !== [...input.jobs].sort().join())
     await slack.chat.postMessage({
       channel,
-      thread_ts: found.ts,
+      thread_ts: ts,
       text: escalationText(`${input.workflow} now fails in ${input.jobs.join(", ")}`, false),
     });
 }
