@@ -20,6 +20,7 @@ import { DocContract } from "./contract.ts";
 import {
   COMMIT_NOTICED,
   DOCS_REPO,
+  docPathOf,
   EDIT_FRAME,
   EditFrame,
   fromBase64,
@@ -30,10 +31,9 @@ import { mergeText, textEdits } from "./merge.ts";
 
 type DocDeps = {
   sql: SqlStorage;
-  /** The doc's context: `itx.repos` there is the root's (install.ts lends it by rule). */
+  /** The doc's context, `/docs/<path in /repos/docs>` (its `whoami()` names the doc): `itx.repos`
+   *  there is the root's (install.ts lends it by rule). */
   withItx: WithItx;
-  /** The doc's path in /repos/docs. */
-  path: string;
   /** Re-project the live state after a change outside a batch (the host's `publishLiveState`). */
   publishLiveState: () => void;
   /** When to save: `idleMs` after the last edit, and at most `maxMs` after the first unsaved one. */
@@ -44,6 +44,8 @@ export class DocProcessor extends StreamProcessor<Record<string, never>> {
   contract = DocContract;
   readonly #deps: DocDeps;
   #doc: Y.Doc | null = null;
+  /** The doc's path in /repos/docs, from the context's own path as the doc loads. */
+  #path = "";
   #loading: Promise<Y.Doc> | null = null;
   /** The commit the text last matched, and its copy of the doc. */
   #base = { oid: "", text: "" };
@@ -142,6 +144,7 @@ export class DocProcessor extends StreamProcessor<Record<string, never>> {
 
   async #loadOnce() {
     const { sql } = this.#deps;
+    this.#path = docPathOf((await this.#deps.withItx((itx) => itx.whoami())).path);
     const doc = new Y.Doc();
     const updates = sql
       .exec<{ data: ArrayBuffer }>("SELECT data FROM doc_updates ORDER BY seq")
@@ -165,7 +168,7 @@ export class DocProcessor extends StreamProcessor<Record<string, never>> {
       const { tip, text } = await this.#deps.withItx(async (itx) => {
         const repo = itx.repos.get(DOCS_REPO);
         const tip = await repo.tip();
-        return { tip, text: tip ? await repo.readFile(this.#deps.path, { commitOid: tip }) : null };
+        return { tip, text: tip ? await repo.readFile(this.#path, { commitOid: tip }) : null };
       });
       this.#base = { oid: tip || "", text: text || "" };
       doc.getText("file").insert(0, this.#base.text);
@@ -226,7 +229,7 @@ export class DocProcessor extends StreamProcessor<Record<string, never>> {
     const text = this.#text();
     if (text === this.#base.text) return;
     const editors = [...this.#editors];
-    const { path } = this.#deps;
+    const path = this.#path;
     try {
       const result = await this.#deps.withItx((itx) =>
         itx.repos.get(DOCS_REPO).commitFiles({
@@ -263,7 +266,7 @@ export class DocProcessor extends StreamProcessor<Record<string, never>> {
    *  copy) merged over base, applied as small edits and sent to the open browsers. False when the
    *  tip is `base`. */
   async #catchUp(): Promise<boolean> {
-    const { path } = this.#deps;
+    const path = this.#path;
     const { tip, theirs } = await this.#deps.withItx(async (itx) => {
       const repo = itx.repos.get(DOCS_REPO);
       const tip = await repo.tip();

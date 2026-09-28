@@ -194,6 +194,12 @@ set of CodeMirror extensions, so switching later is cheap.
   IIFE whose only export is `default`. node-diff3 is now bundled into the package (tsdown
   `alwaysBundle`, a devDependency); yjs and diff come from esm.sh fine. The package's unit tests run
   under node, which picks `import`, so they couldn't catch it.
+- Then "not a doc's context: prj_….iterate/docs/abc.md": the host read the doc's path from the
+  facet's `iterateContextName`, which is the project-qualified name, not the path. The processor now
+  asks `itx.whoami()` for its path as the doc loads (as the agents processor does), and the unit
+  tests' fake itx answers `whoami` the same way. Checked the other platform assumptions against the
+  installed packages that already work: the `itx.repos ⇒ itx.builtins.cd('/').repos` rule and the
+  root's `repo/commit-completed` are github-sync's exact spellings.
 - Package test "two people's edits land in one autosave commit" was order-flaky: two tabs inserting
   at the same spot at once get a random order in Yjs (by client id), which is correct. The test now
   has Jonas type after he sees Misha's line.

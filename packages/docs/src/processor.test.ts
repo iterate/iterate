@@ -141,8 +141,13 @@ function openDoc(
     const processor = new DocProcessor({
       sql: storage.sql as unknown as SqlStorage,
       withItx: (call) =>
-        Promise.resolve(call({ repos: { get: () => repo }, append: log.stream.append } as any)),
-      path: "plan.md",
+        Promise.resolve(
+          call({
+            whoami: () => ({ path: "/docs/plan.md" }),
+            repos: { get: () => repo },
+            append: log.stream.append,
+          } as any),
+        ),
       publishLiveState: () => {},
       autosave,
     });
