@@ -44,8 +44,8 @@ export async function createProjectFixture(
  * The fixture's person signed in to a client app and on its page for `project`: the app's own
  * sign-in route (`/.auth/login`), which the issuer answers with consent because the person is signed
  * in there already, then Authorize. A demo video (VIDEO_MODE=1) starts on the app's page, not on
- * consent. Signing in to an app is itself the subject of specs/notes/sessions.spec.ts, and consent
- * of specs/os/auth.spec.ts.
+ * consent. Signing in to an app, and ending its session, is itself the subject of
+ * specs/notes/sessions.spec.ts, and consent of specs/os/auth.spec.ts.
  */
 async function signInToApp(input: { page: Page; app: string; project: { slug: string } }) {
   const { page, project } = input;

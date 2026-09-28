@@ -7,7 +7,7 @@ const version = "002574-2026-09-23-b2a4558";
 test("leaves every path outside /firmware/ to the rest of the Worker", async () => {
   const fetchGitHub = github(() => new Response("unexpected"));
 
-  for (const path of ["/", "/firmware", "/devices/x/firmware/latest", "/healthz"]) {
+  for (const path of ["/", "/firmware", "/devices/x", "/healthz"]) {
     await expect(
       proxyFirmwareFile(new Request(`https://k.iterate.com${path}`), fetchGitHub),
     ).resolves.toBeNull();

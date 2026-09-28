@@ -252,6 +252,7 @@ test("the built-in cd carries the OAuth principal to a sibling context", async (
  *  bearer it was presented with reached it (it must not: the platform's credential is stripped);
  *  on a WebSocket upgrade, it echoes each message. */
 const SRC_ECHO_APP = {
+  "package.json": '{"main":"worker.js"}',
   "worker.js": `import { WorkerEntrypoint } from "cloudflare:workers";
 export default class Echo extends WorkerEntrypoint {
   fetch(request) {
@@ -509,6 +510,7 @@ test("one-shot HTTP batch whoami at /api, an inline-source worker, and a dotted 
 
   // 2. THE SOURCE IS THE MODULES, handed over INLINE: hand the code over, run it
   const SRC_MINE = {
+    "package.json": '{"main":"worker.js"}',
     "worker.js": `import { WorkerEntrypoint } from "cloudflare:workers";
 import { withItx } from "iterate/sdk";
 export default class Mine extends WorkerEntrypoint {

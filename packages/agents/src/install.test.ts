@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { rootManifestListing } from "./install.ts";
+import { agentsFolder, rootManifestListing } from "./install.ts";
 
 const name = "@iterate-com/agents";
 const version = "https://pkg.pr.new/iterate/iterate/@iterate-com/agents@abc1234";
@@ -35,6 +35,15 @@ test.for([
   ],
 ] as const)("%s", ([, before, after]) => {
   expect(rootManifestListing(before, name, version)).toBe(after);
+});
+
+test("the agents folder names its main module in package.json", () => {
+  const folder = agentsFolder(version);
+  expect(JSON.parse(folder["package.json"]!)).toEqual({
+    main: "index.ts",
+    dependencies: { [name]: version },
+  });
+  expect(folder["index.ts"]).toContain("AgentDurableObject");
 });
 
 /** A package.json as a repo holds it. */

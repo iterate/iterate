@@ -1,5 +1,4 @@
 export const DEFAULT_DEVICE_ID = "home-assistant-voice-preview-edition";
-export const DEFAULT_FIRMWARE_VERSION = "latest";
 
 /**
  * Firmware ships as GitHub releases of this repository, one per device build, tagged by

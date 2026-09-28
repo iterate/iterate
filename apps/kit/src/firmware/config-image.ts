@@ -1,7 +1,7 @@
 /**
- * Kit writes this image for every published firmware release, old ones included. A change to what
- * the firmware decoder requires (tags, capacities, validation) must bump the magic and add
- * `configurationFormat` to release manifests; see apps/kit/firmware/AGENTS.md.
+ * Kit writes this image only to a board's newest firmware release, so it matches the decoder on
+ * main and nothing older once that board's release catches up (a few minutes after Kit deploys);
+ * see apps/kit/firmware/AGENTS.md.
  */
 const CONFIG_MAGIC = "ITERKIT1";
 const CONFIG_HEADER_BYTES = 16;

@@ -1,7 +1,7 @@
 // context/module-resolution.test.ts — authored source → loader modules, with no build step. The rows
 // pin: TypeScript is stripped and every module name ends in `.js`; relative imports resolve with or
 // without extensions and only what the entry reaches is loaded — the entry being package.json's
-// `main`, else worker.ts, worker.js, index.ts or index.js; `iterate/*` and zod link the
+// `main` (else, while ENTRY_FILES lasts, worker.ts, worker.js, index.ts or index.js); `iterate/*` and zod link the
 // deployment's own SDK modules (and only the chunks they reach), and a subpath of either the
 // platform does not ship is refused;
 // npm imports are crawled from esm.sh ONCE per dependency set and locked in the store (a second
@@ -31,6 +31,7 @@ const platform: PlatformModules = {
 
 test("TypeScript is stripped, siblings resolve by any spelling, only what the entry reaches loads", async () => {
   const modules = await resolve({
+    "package.json": '{"main":"worker.ts"}',
     "worker.ts": `import { a } from "./lib/a"; import b from "./lib/b.ts"; import { c } from "./lib/c.js";
         const n: number = a + b + c; export default { fetch: () => new Response(String(n)) };`,
     "lib/a.ts": `export const a: number = 1;`,
@@ -47,23 +48,31 @@ test("TypeScript is stripped, siblings resolve by any spelling, only what the en
 });
 
 test.for([
-  ["a missing sibling", { "worker.js": `import "./nope.js";` }, /no such file/],
+  [
+    "a missing sibling",
+    { "package.json": '{"main":"worker.js"}', "worker.js": `import "./nope.js";` },
+    /no such file/,
+  ],
   [
     "a computed dynamic import",
-    { "worker.js": "const m = 'x'; await import(m);" },
+    { "package.json": '{"main":"worker.js"}', "worker.js": "const m = 'x'; await import(m);" },
     /computed specifier/,
   ],
-  ["a URL import", { "worker.js": `import "https://esm.sh/zod";` }, /import packages by name/],
+  [
+    "a URL import",
+    { "package.json": '{"main":"worker.js"}', "worker.js": `import "https://esm.sh/zod";` },
+    /import packages by name/,
+  ],
   [
     "an iterate subpath the platform does not ship",
-    { "worker.js": `import "iterate/node";` },
+    { "package.json": '{"main":"worker.js"}', "worker.js": `import "iterate/node";` },
     /iterate\/node is not a module loaded workers have \(the platform ships .*iterate\/sdk.*\)/,
   ],
   [
     "a zod subpath the platform does not ship (a second zod)",
     {
       "worker.js": `import "zod/v4";`,
-      "package.json": JSON.stringify({ dependencies: { zod: "4" } }),
+      "package.json": JSON.stringify({ main: "worker.js", dependencies: { zod: "4" } }),
     },
     /zod\/v4 is not a module loaded workers have/,
   ],
@@ -72,13 +81,16 @@ test.for([
     "a package not in package.json dependencies (never `latest`, never locked for everyone)",
     {
       "worker.js": `import "hono";`,
-      "package.json": JSON.stringify({ devDependencies: { hono: "4" } }),
+      "package.json": JSON.stringify({ main: "worker.js", devDependencies: { hono: "4" } }),
     },
     /imports hono; list hono in package\.json "dependencies"/,
   ],
   [
     "a Node.js builtin in the author's own module",
-    { "worker.js": `import { Buffer } from "node:buffer"; export default Buffer;` },
+    {
+      "package.json": '{"main":"worker.js"}',
+      "worker.js": `import { Buffer } from "node:buffer"; export default Buffer;`,
+    },
     /imports the Node\.js builtin node:buffer/,
   ],
   [
@@ -96,8 +108,18 @@ test.for([
     { "package.json": '{ "main": "./src/app.ts" }', "src/app.ts": "", "worker.ts": "" },
     "src/app.js",
   ],
-  ["worker.ts before index.ts", { "index.ts": "", "worker.ts": "" }, "worker.js"],
-  ["index.ts when there is no worker file", { "index.ts": "", "lib.ts": "" }, "index.js"],
+  // The temporary ENTRY_FILES fallback, pinned only while sources written without "main" remain.
+  // The follow-up that deletes ENTRY_FILES turns these two rows into refusals.
+  [
+    "worker.ts before index.ts, by the temporary ENTRY_FILES fallback",
+    { "index.ts": "", "worker.ts": "" },
+    "worker.js",
+  ],
+  [
+    "index.ts when there is no worker file, by the temporary ENTRY_FILES fallback",
+    { "index.ts": "", "lib.ts": "" },
+    "index.js",
+  ],
 ] as const)("the entry is %s", async ([, source, mainModule]) => {
   const resolved = await resolveModules(source, {
     platform,
@@ -111,6 +133,7 @@ test.for([
 
 test("iterate/* and zod link this deployment's modules, and only the chunks they reach", async () => {
   const modules = await resolve({
+    "package.json": '{"main":"worker.js"}',
     "worker.js": `import { sdk } from "iterate/sdk"; import { z } from "zod"; import "./nested/x.ts"; export default [sdk, z];`,
     "nested/x.ts": `import { lib } from "iterate/lib"; export default lib;`,
   });
@@ -135,7 +158,7 @@ test("the graph is crawled once, rewritten to relative names, and locked in the 
   const first = fakeEsm(esmFiles);
   const source = {
     "worker.js": `import { a } from "lib-a"; export default { fetch: () => new Response(String(a)) };`,
-    "package.json": JSON.stringify({ dependencies: { "lib-a": "^1.0.0" } }),
+    "package.json": JSON.stringify({ main: "worker.js", dependencies: { "lib-a": "^1.0.0" } }),
   };
   const modules = await resolve(source, { fetch: first.fetch, store });
   expect(first.fetched).toHaveLength(4);
@@ -168,7 +191,7 @@ test.for([
     resolve(
       {
         "worker.js": `import "needs-node";`,
-        "package.json": JSON.stringify({ dependencies: { "needs-node": "1" } }),
+        "package.json": JSON.stringify({ main: "worker.js", dependencies: { "needs-node": "1" } }),
       },
       esm,
     ),
@@ -183,7 +206,7 @@ test("esm.sh's own /node/ polyfills (capnweb's Buffer) load as ordinary modules"
   const modules = await resolve(
     {
       "worker.js": `import { b } from "uses-buffer"; export default b;`,
-      "package.json": JSON.stringify({ dependencies: { "uses-buffer": "1" } }),
+      "package.json": JSON.stringify({ main: "worker.js", dependencies: { "uses-buffer": "1" } }),
     },
     esm,
   );
@@ -202,7 +225,7 @@ test("a pkg.pr.new version resolves through esm.sh's /pr/ route, a PR ref pinned
   });
   const source = (url: string) => ({
     "worker.ts": `import { connect } from "@acme/sdk"; export default { fetch: () => new Response(connect()) };`,
-    "package.json": JSON.stringify({ dependencies: { "@acme/sdk": url } }),
+    "package.json": JSON.stringify({ main: "worker.ts", dependencies: { "@acme/sdk": url } }),
   });
   const modules = await resolve(source("https://pkg.pr.new/acme/shop/@acme/sdk@1234"), esm);
   expect(esm.fetched.slice(0, 2)).toEqual([

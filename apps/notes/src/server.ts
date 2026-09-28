@@ -2,6 +2,8 @@ import { createServerEntry } from "@tanstack/react-start/server-entry";
 import { createStartHandler, defaultStreamHandler } from "@tanstack/react-start/server";
 import { appServerEntry } from "@iterate-com/ui/apps/server";
 import { basePathOf, buildBasePath, underBasePath, withoutBuildBasePath } from "./base-path.ts";
+// Every app's Worker config binds the class (scripts/lib/start-app.ts startAppWorkerConfig); Notes
+// signs no one in, so it holds no session.
 export { BrowserSession } from "iterate/app-session";
 
 /** TanStack Start's pages, their scripts and stylesheets under the request's base path
@@ -30,14 +32,11 @@ const notes = appServerEntry(
       return start(new Request(addressed, request));
     },
   },
-  {
-    clientName: "iterate Notes",
-    // routes/_auth/projects.index.tsx: the first project's page
-    home: "/projects",
-  },
+  { proxied: true },
 );
 
-/** Notes works through project ingress under the base path the edge says (base-path.ts). */
+/** Notes is served through a project's config worker (config-worker.ts), under the base path the
+ *  edge says (base-path.ts). */
 export default createServerEntry({
   fetch: (incoming) => notes.fetch(withoutBuildBasePath(incoming)),
 });

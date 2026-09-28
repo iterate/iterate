@@ -13,9 +13,9 @@ const videoMode = process.env.VIDEO_MODE === "1";
 // leave ffmpeg workers alive after a retry and keep the job open.
 const videoArtifactsEnabled = videoMode || !process.env.CI;
 
-/** The Notes app deployed against the OS under test: the notes project's baseURL. Its session
- *  specs also sign in to the Dash (DASH_BASE_URL). Locally, unset skips them; in CI, unset fails
- *  them. */
+/** The Notes Worker deployed against the OS under test, which the notes project's config worker
+ *  fetches through to: the notes project's baseURL. Its session spec also signs in to the Dash
+ *  (DASH_BASE_URL). Locally, unset skips it; in CI, unset fails it. */
 const notesBaseUrl = process.env.NOTES_BASE_URL?.replace(/\/+$/, "");
 /** The Voice app deployed against that OS: the voice project's baseURL. Locally, unset skips its
  *  specs; in CI, unset fails them. */

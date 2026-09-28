@@ -2,7 +2,7 @@ import { appSession, issuerOriginOf, sessionCookieName, startAppSession } from "
 import type { BrowserSession } from "iterate/app-session";
 import { isLocalOrigin, sameOriginPath } from "iterate/lib";
 import { kitEnvs } from "../../../envs.ts";
-import { DEFAULT_FIRMWARE_VERSION, findFirmwareDevice } from "./firmware/catalog.ts";
+import { findFirmwareDevice } from "./firmware/catalog.ts";
 
 /** Kit chooses a fresh client BEFORE consent. The stored identity then follows setup to the board.
  *  The platform it signs in to is `defaultIssuer` (`APP_CONFIG urls.os`), or another iterate platform
@@ -74,7 +74,7 @@ export async function deviceAuth(
           scopes: ["iterate", "account"],
           client,
         },
-        `/devices/${device.id}/firmware/${DEFAULT_FIRMWARE_VERSION}`,
+        `/devices/${device.id}`,
       );
       return new Response(null, {
         status: 303,
@@ -127,7 +127,7 @@ export async function deviceAuth(
       },
     });
   }
-  // The generic login (where iterate/app-server sends an expired session) and the firmware page's
+  // The generic login (where iterate/app-server sends an expired session) and the device page's
   // connect links return to the public selector, never generic Kit consent. A connect link's
   // platform goes with them, checked; the selector's login button names it.
   if (url.pathname === "/.auth/login" || url.pathname === "/.auth/connect") {
@@ -135,7 +135,7 @@ export async function deviceAuth(
       sameOriginPath(url.searchParams.get("next") || "/", url.origin),
       url.origin,
     );
-    const model = /^\/devices\/([^/]+)\//.exec(next.pathname)?.[1];
+    const model = /^\/devices\/([^/]+)/.exec(next.pathname)?.[1];
     const selection = new URLSearchParams();
     if (model && findFirmwareDevice(model)) selection.set("device", model);
     const candidate = url.searchParams.get("issuer");

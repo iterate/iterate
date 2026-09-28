@@ -93,7 +93,10 @@ test(
           [
             "get",
             name,
-            { source: { "worker.js": SLOW_COUNTER_SRC }, className: "SlowCounterDurableObject" },
+            {
+              source: { "package.json": '{"main":"worker.js"}', "worker.js": SLOW_COUNTER_SRC },
+              className: "SlowCounterDurableObject",
+            },
           ],
           "processEventBatch",
         ],

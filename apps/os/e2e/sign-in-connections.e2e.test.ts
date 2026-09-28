@@ -46,9 +46,7 @@ deployedOnly(
       status: 200,
       body: { emailAddress: email },
     });
-    await itx.facets
-      .get("project")
-      .disconnectIntegration({ provider: "google", connection: account!.connection });
+    await itx.integrations.disconnect("google", account!.connection);
     expect(await gmailProfile(itx, path)).toMatchObject({ status: 502 });
     expect(await yours()).toContainEqual(expect.objectContaining({ account: email }));
     expect(await gmailProfile(api.user, path)).toMatchObject({ status: 200 });

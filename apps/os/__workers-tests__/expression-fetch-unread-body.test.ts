@@ -12,6 +12,7 @@ import { adminCredentials, openSession } from "./support.ts";
 
 /** A config worker whose `body` routing slug streams the body back, and every other host ignores it. */
 const SRC_BODY_ROUTER = {
+  "package.json": '{"main":"worker.js"}',
   "worker.js": `import { WorkerEntrypoint } from "cloudflare:workers";
 export default class BodyRouter extends WorkerEntrypoint {
   fetch(request) {

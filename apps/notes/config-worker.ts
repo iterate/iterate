@@ -12,8 +12,8 @@ export default class extends ConfigWorker {
     const denied = this.auth.require(request);
     if (denied) return denied;
     const routingSlug = request.headers.get("x-iterate-routing-slug");
-    // The `notes` routing slug fetches through to the independently-deployed Notes worker (its own
-    // origin), so the project serves the same app as notes.iterate.com.
+    // The `notes` routing slug fetches through to the Notes Worker (envs.ts `notesEnvs`), which
+    // serves the app's pages and files and signs no one in: this host's sign-in is the platform's.
     if (routingSlug === "notes") {
       const url = new URL(request.url);
       url.protocol = "https:";

@@ -1,6 +1,7 @@
 /** Executable userspace example: ordinary facet RPC configures timers; its processor reduces the
  *  resulting durable events. No alarm handler, platform binding, or polling timer is needed. */
 export const scheduledAppendFacetSource = {
+  "package.json": '{"main":"worker.js"}',
   "worker.js": `import { StreamProcessor, StreamProcessorDurableObject } from "iterate/sdk";
 class Deadlines extends StreamProcessor {
   constructor(owner) { super(); this.owner = owner; }
@@ -36,6 +37,7 @@ export class DeadlinesDurableObject extends StreamProcessorDurableObject {
 
 /** A pure processor emits scheduling intent with the same durable append API as business facts. */
 export const scheduledAppendProcessorSource = {
+  "package.json": '{"main":"worker.js"}',
   "worker.js": `import { StreamProcessor, StreamProcessorDurableObject } from "iterate/sdk";
 class Reminders extends StreamProcessor {
   contract = {

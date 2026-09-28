@@ -191,7 +191,7 @@ test("buildLibrary memoizes live connections per context: the memo is keyed by t
 // values in), the same text ⇒ the same module (the loader's content hash reuses the isolate), a
 // blank script refused.
 
-test("run: the module: the script spliced in verbatim, a default WorkerEntrypoint whose run() hands it one withItx round trip from iterate/with-itx alone", () => {
+test("run: the source: package.json naming worker.js its main, the script spliced in verbatim, a default WorkerEntrypoint whose run() hands it one withItx round trip from iterate/with-itx alone", () => {
   const module = runScriptModule("async (itx) => (await itx.whoami()).path");
   expect(module["worker.js"]).toContain('import { WorkerEntrypoint } from "cloudflare:workers"');
   expect(module["worker.js"]).toContain('import { withItx } from "iterate/with-itx";');
@@ -203,7 +203,8 @@ test("run: the module: the script spliced in verbatim, a default WorkerEntrypoin
   expect(module["worker.js"]).toContain("return await withItx(this.env.ITX, async (itx) => {");
   expect(module["worker.js"]).toContain("script(itx),");
   expect(module["worker.js"]).not.toContain("ITX.get()");
-  expect(Object.keys(module)).toEqual(["worker.js"]);
+  expect(module["package.json"]).toBe('{"main":"worker.js"}');
+  expect(Object.keys(module)).toEqual(["package.json", "worker.js"]);
 });
 
 test("run: the module's run() races the script against RUN_DEADLINE_MS in its own isolate: a script that never settles is given up on at the deadline — the call ends, the itx is disposed, no timer is left", async () => {
@@ -676,12 +677,16 @@ test("connectToMcp: a connection closed by a holder re-runs its handshake on the
   expect(requests.filter((r) => r.body?.method === "initialize")).toHaveLength(2);
 });
 
-test("connectToMcp: a tool named `then` never makes the connection THENABLE (an await would adopt it and call the tool, never settling): connect settles, no tools/call, and the tool stays reachable through callTool", async () => {
-  const { itx, requests } = mcpItx(plainServer([{ name: "then" }, { name: "echo" }]));
+test("connectToMcp: tools named `then` and `toJSON` grow no method (an await would adopt a THENABLE connection and call the tool, never settling; JSON.stringify would call `toJSON`): connect settles, no tools/call, and callTool reaches both", async () => {
+  const { itx, requests } = mcpItx(
+    plainServer([{ name: "then" }, { name: "toJSON" }, { name: "echo" }]),
+  );
   const conn = await connectToMcp(itx, "https://mcp.example/rpc");
   expect(requests.map((r) => r.body?.method)).not.toContain("tools/call");
   expect((conn as { then?: unknown }).then).toBeUndefined();
+  expect((conn as { toJSON?: unknown }).toJSON).toBeUndefined();
   expect(await conn.callTool("then")).toBe("answered");
+  expect(await conn.callTool("toJSON")).toBe("answered");
 });
 
 test("connectToMcp: an SSE answer the server leaves OPEN still connects — read as it arrives and left at the matching id, never awaited to EOF", async () => {

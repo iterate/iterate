@@ -1,5 +1,5 @@
 // e2e/support/integrations.ts — connecting a project to one of the pet shop's fake providers the way
-// a person does: the project facet's connect, the provider's page, and the platform's callback, which
+// a person does: `itx.integrations.connect`, the provider's page, and the platform's callback, which
 // only a signed-in project member completes.
 import { expect } from "vitest";
 import { adminCredentials, openItx, workerUrl } from "./client.ts";
@@ -32,9 +32,11 @@ export async function connectThroughProvider(
 ): Promise<boolean> {
   let authorizationUrl: string;
   try {
-    ({ authorizationUrl } = await itx.facets
-      .get("project")
-      .connectIntegration({ ...input, next: workerUrl("/") }));
+    ({ authorizationUrl } = await itx.integrations.connect(input.provider, {
+      connection: input.connection,
+      client: input.client,
+      next: workerUrl("/"),
+    }));
   } catch (error) {
     if (String(error).includes("This deployment has no")) return false;
     throw error;

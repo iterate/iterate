@@ -1,7 +1,7 @@
 // module-resolution.ts — a SOURCE as authored (TypeScript or JavaScript files, relative imports with
-// or without extensions, bare package imports, an optional package.json) → the module map the Worker
-// Loader takes (every name ends in `.js`, every import relative or a workerd builtin) and its main
-// module (`readPackage`). No bundler, no build step: each file is type-stripped (sucrase) and its
+// or without extensions, bare package imports, a package.json whose `main` names the entry) → the
+// module map the Worker Loader takes (every name ends in `.js`, every import relative or a workerd
+// builtin) and its main module (`readPackage`). No bundler, no build step: each file is type-stripped (sucrase) and its
 // import specifiers are rewritten in place (es-module-lexer), so the code that runs is the code that
 // was written, line for line.
 //
@@ -44,7 +44,11 @@ export type ResolveOptions = {
   where: string;
 };
 
-/** Where an entry is looked for when package.json names no `main`, in order. */
+/** Where an entry is looked for when package.json names no `main`, in order. The platform, its
+ *  templates and its installers always write `main`; a source that names none still loads through
+ *  this list: a config repo seeded without `main`, and packages/agents' AI transport source.
+ *  Remove it once no such source remains; the module-resolution.test.ts rows that pin it then
+ *  become refusals. */
 const ENTRY_FILES = ["worker.ts", "worker.js", "index.ts", "index.js"];
 const ESM_ORIGIN = "https://esm.sh";
 /** The runtime's own modules, external to esm.sh like the platform packages: its bundler cannot
@@ -137,8 +141,8 @@ const PackageManifest = z.object({
   dependencies: z.record(z.string(), z.string()).optional(),
 });
 
-/** A source's package: its entry — package.json's `main`, else the first of `worker.ts`, `worker.js`,
- *  `index.ts`, `index.js`, as npm and wrangler find it — and its `dependencies`. The loader asks for
+/** A source's package: its entry — package.json's `main` (else `ENTRY_FILES`) — and its
+ *  `dependencies`. The loader asks for
  *  it where a literal source is handed in, so a source with no entry is refused there. */
 export function readPackage(
   source: ModuleMap,
@@ -163,7 +167,7 @@ export function readPackage(
   const entry = main ? joinPath("", main) : ENTRY_FILES.find((file) => Object.hasOwn(source, file));
   if (!entry || !Object.hasOwn(source, entry))
     throw new Error(
-      `${where}: no entry — ${main ? `package.json's main ${JSON.stringify(main)} is not a file` : `name it in package.json "main", or add one of ${ENTRY_FILES.join(", ")}`}`,
+      `${where}: no entry — ${main ? `package.json's main ${JSON.stringify(main)} is not a file` : `name the entry module in package.json "main"`}`,
     );
   return { entry, dependencies: manifest.dependencies || {} };
 }

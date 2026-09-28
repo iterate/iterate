@@ -33,7 +33,7 @@ test("choosing a device starts its branded client before consent, with a new ide
         ? "FutureProofHomes Satellite1"
         : "Home Assistant Voice Preview Edition",
     );
-    expect(next).toBe(`/devices/${model}/firmware/latest`);
+    expect(next).toBe(`/devices/${model}`);
     ids.push(host.client?.id);
   }
   expect(new Set(ids)).toMatchObject({ size: 3 });
@@ -90,7 +90,7 @@ test("setup reads the stored consent identity; query parameters cannot change it
 test("the generic login returns to device selection without starting generic consent", async () => {
   const f = fixture();
   const response = await deviceAuth(
-    new Request(`${origin}/.auth/login?next=/devices/satellite1/firmware/latest`),
+    new Request(`${origin}/.auth/login?next=/devices/satellite1`),
     f.kit,
     f.deps,
   );
@@ -127,7 +127,7 @@ test("a connect link to another iterate platform carries it to device selection,
   const f = fixture();
   const connect = await deviceAuth(
     new Request(
-      `${origin}/.auth/connect?issuer=${encodeURIComponent(`${selfHost}/some/path`)}&next=/devices/satellite1/firmware/latest`,
+      `${origin}/.auth/connect?issuer=${encodeURIComponent(`${selfHost}/some/path`)}&next=/devices/satellite1`,
     ),
     f.kit,
     f.deps,

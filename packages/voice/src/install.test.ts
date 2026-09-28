@@ -6,6 +6,15 @@ const versions = {
   voice: "https://pkg.pr.new/iterate/iterate/@iterate-com/voice@abc1234",
 };
 
+test("the voice folder names its main module in package.json", () => {
+  const folder = voiceFolder(versions.voice);
+  expect(JSON.parse(folder["package.json"]!)).toEqual({
+    main: "worker.ts",
+    dependencies: { "@iterate-com/voice": versions.voice },
+  });
+  expect(folder["worker.ts"]).toContain("VoiceAgentDurableObject");
+});
+
 test("a project without voice gets the agents and voice folders in one commit, installed from it", async () => {
   const root = project();
   expect(await ensureVoiceAgent(root, versions)).toBe("ready");

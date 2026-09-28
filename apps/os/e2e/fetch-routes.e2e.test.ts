@@ -112,6 +112,7 @@ test("itx.fetchRoutes.set refuses a malformed route (INVALID_INPUT) before it ap
 
 /** The template's router (configs/default/worker.ts) with a 404 of its own. */
 const SRC_FETCH_ROUTER = {
+  "package.json": '{"main":"worker.js"}',
   "worker.js": `import { ConfigWorker } from "iterate/sdk";
 export default class Router extends ConfigWorker {
   async fetch(request) {

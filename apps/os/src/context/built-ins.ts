@@ -165,14 +165,21 @@ type PlatformSecretsVerbs = {
 };
 
 /** THE PLATFORM'S OWN `itx.integrations` VERBS — not published, the platform's hops alone
- *  (`assertPlatformCaller`): a person's connect a project asked for, on the person's own root, and
- *  the OAuth callback's finish, on the owner's root. Each reaches its first-party facet's method that
- *  the facet does not publish (integrations/verbs.ts). */
+ *  (`assertPlatformCaller`): a person's connect a project asked for, on the person's own root, the
+ *  OAuth callback's finish, on the owner's root, and `disconnect`'s platform-only option (a published
+ *  `disconnect(provider, connection)` is this one with it absent). */
 type PlatformIntegrationsVerbs = {
   connectForProject(
     input: ConnectInput & { connectToProject: NonNullable<ConnectionAttempt["connectToProject"]> },
   ): Promise<{ authorizationUrl: string }>;
   finishConnect(input: FinishConnectInput): Promise<FinishConnectAnswer>;
+  disconnect(
+    provider: IntegrationProvider,
+    connection: string,
+    /** The platform's alone: a move's cleanup of the connection that held the account
+     *  (integrations/verbs.ts `confirmIntegrationMove`), done only while it still names it. */
+    options?: { movedExternalId?: string },
+  ): Promise<void>;
 };
 
 /** THE built-in scope, as one interface — the platform's kernel surface; the library's verbs
@@ -246,16 +253,17 @@ export interface BuiltInScope extends LibraryRoots {
    *  (secret-oauth.ts); `verifyHmac` checks a webhook's signature in the secret's facet, one bit
    *  back; `lend` / `revokeLend` lend the deployment's own secret (the operator's) to projects. */
   secrets: Omit<IterateContextApi["secrets"], "revokeLend"> & PlatformSecretsVerbs;
-  /** THE INTEGRATIONS (src/integrations/): connect this context's owner — a project's root, or a
-   *  person's own context (`session.user`) — to a provider, through this deployment's app.
-   *  `connect(provider, { scopes?, connection?, next? })` answers where to send the human and the
-   *  connection's name; again for a connection that exists asks for more on the same account. On a
-   *  project, `connect(provider, { account })` connects one of the CALLER's own accounts instead (the
-   *  address `session.user`'s `state.integrations` names): at once when it holds the scopes the
-   *  project asks for, else after a consent on the caller's own connection that adds them.
-   *  `requestFromUser(provider, { scopes })` answers a Dash link that asks the signed-in person to
-   *  connect the provider to this project, for an agent or the CLI. */
-  integrations: IterateContextApi["integrations"] & PlatformIntegrationsVerbs;
+  /** THE INTEGRATIONS (src/integrations/), the one way a caller connects and disconnects this
+   *  context's owner — a project's root, or a person's own context (`session.user`). `connect` and
+   *  `disconnect` run on the owner's root, whose facet (`project` or `account`) holds the
+   *  connections: there they call the facet's own methods, which it does not publish; on any other
+   *  context they are the same call on the root. On a project, `connect(provider, { account })`
+   *  connects one of the CALLER's own accounts instead (the address `session.user`'s
+   *  `state.integrations` names): at once when it holds the scopes the project asks for, else after
+   *  a consent on the caller's own connection that adds them. `requestFromUser(provider, { scopes })`
+   *  answers a Dash link that asks the signed-in person to connect the provider to this project, for
+   *  an agent or the CLI. */
+  integrations: Omit<IterateContextApi["integrations"], "disconnect"> & PlatformIntegrationsVerbs;
   /** THE FETCH ROUTES (src/fetch-routes.ts): named rules on the project's root `/` mapping a
    *  request on the project's hosts to an itx expression, the route's `target` — `iterate tunnel`'s
    *  lent stub, a facet, a loaded worker. `set(name, route)` validates the route and appends
@@ -375,8 +383,8 @@ export interface BuiltInScope extends LibraryRoots {
   processors: IterateContextApi["processors"];
   /** The stateless host: `get({ source, cacheKey?, className?, props? })` → a `WorkerEntrypoint` in
    *  its own confined isolate (no DO, no storage) — ANY method it exports, reached by name (`run`,
-   *  `fetch`, `processEventBatch`, …). `source` is the worker's FILES, literally (`{ "worker.js": code,
-   *  … }`, its entry as module-resolution.ts `readPackage` finds it), OR an itx EXPRESSION that produces them — then `cacheKey` is REQUIRED and the producer runs
+   *  `fetch`, `processEventBatch`, …). `source` is the worker's FILES, literally (`{ "package.json":
+   *  '{"main":"worker.js"}', "worker.js": code, … }`, its entry as module-resolution.ts `readPackage` finds it), OR an itx EXPRESSION that produces them — then `cacheKey` is REQUIRED and the producer runs
    *  only when no isolate is warm under it (worker-loader.ts: Cloudflare's `get(id, getCode)`
    *  contract; the caller owns "same key ⇒ same code"). `className` names the exported class (default:
    *  the default export); `props` is Cloudflare's own WorkerStubEntrypointOptions.props, read back as
@@ -407,6 +415,33 @@ type RootsArePublished = [BuiltInRoot] extends [Exclude<keyof IterateContextApi,
   : never;
 const _rootsArePublished: RootsArePublished = true;
 void _rootsArePublished;
+
+/** `integrations.connect`'s options (iterate/api `IterateContextApi["integrations"]`): one of the
+ *  caller's own accounts, or a connection of the owner's through iterate's app or its own. */
+const IntegrationConnectOptions = z
+  .object({
+    scopes: z.array(z.string().min(1)).optional(),
+    next: z.string().optional(),
+    connection: z.string().optional(),
+    account: z.string().min(1).optional(),
+    client: z.enum(["iterate", "project"]).default("iterate"),
+    appSlug: z.string().optional(),
+    clientId: z.string().optional(),
+    installationId: z.string().optional(),
+  })
+  .refine(
+    (picked) =>
+      !picked.account ||
+      (!picked.connection &&
+        picked.client === "iterate" &&
+        !picked.appSlug &&
+        !picked.clientId &&
+        !picked.installationId),
+    { message: "account (one of yours) takes only scopes and next" },
+  )
+  .refine((picked) => picked.client === "iterate" || picked.connection, {
+    message: 'client "project" connects the app in /secrets/<provider>-<connection>: name it',
+  });
 
 /** An `R2Object` as data, the owner prefix off its key. */
 function r2ObjectRecord(object: R2Object, prefix: string): R2ObjectRecord {
@@ -465,6 +500,9 @@ interface BuildBuiltInsDeps {
   deployId: string;
   /** How projects are reached over HTTP (app-config.ts `urls.ingressRouting`) — `itx.url`. */
   ingressRouting: IngressRouting;
+  /** The domain one project owns outright (app-config.ts `urls.projectWildcard`: iterate.com, the
+   *  `iterate` project's): that project may send from any address on it (`itx.email.send`). */
+  projectWildcard: { hostname: string; project: string } | undefined;
   /** The Dash that this platform instance names for human administration. */
   dashOrigin: string;
   /** The deployment's platform admins (app-config.ts `admins`): with the admin bearer, the
@@ -630,6 +668,22 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
       "INVALID_CONTEXT",
       `itx.integrations.${verb}: a project's context or a person's own (session.user) holds connections`,
     );
+  };
+  /** A caller's `integrations.connect` and `disconnect` run `here` on the owner's root, over the
+   *  owner's facet, which publishes neither method; on any other context each is the same call on
+   *  the root, the caller carried (`hopCaller()`). */
+  const onIntegrationsRoot = <T>(
+    verb: "connect" | "disconnect",
+    args: unknown[],
+    here: (facet: "project" | "account") => Promise<T>,
+  ): Promise<T> => {
+    const facet = integrationsFacet(verb);
+    if (path === owner.rootPath) return here(facet);
+    // The root runs the same verb `here` would run, so its answer has `here`'s type; `invoke` is
+    // untyped across the DO hop.
+    return deps
+      .context(owner.rootPath)
+      .invoke(["itx", "builtins", "integrations", [verb, ...args]], [], hopCaller()) as Promise<T>;
   };
   /** Another project's root, for the other side of a lend. */
   const projectRoot = (id: string) =>
@@ -1642,58 +1696,73 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
     },
     integrations: {
       connect: async (provider, options = {}) => {
-        const facet = integrationsFacet("connect");
-        const input = z
-          .object({
-            scopes: z.array(z.string().min(1)).optional(),
-            connection: z.string().optional(),
-            next: z.string().optional(),
-            account: z.string().min(1).optional(),
-          })
-          .refine((picked) => !(picked.account && picked.connection), {
-            message: "account (one of yours) or connection (a new one's name), not both",
-          })
-          .parse(options);
+        const parsed = IntegrationConnectOptions.safeParse(options);
+        if (!parsed.success)
+          throw codedError(
+            "INVALID_INPUT",
+            `itx.integrations.connect: ${z.prettifyError(parsed.error)}`,
+          );
+        const input = parsed.data;
         if (input.account)
           return connectCallersAccount(IntegrationProvider.parse(provider), {
             ...input,
             account: input.account,
           });
-        const root = deps.context(owner.rootPath);
-        // The owner facet's own snapshot and verb: its contract's state, and the connect's answer.
-        const { state } = (await root.invoke(
-          ["itx", "facets", ["get", facet], ["snapshot"]],
-          [],
-          hopCaller(),
-        )) as { state: { integrations: AccountState["integrations"] } };
-        const held = Object.values(state.integrations).filter((row) => row.provider === provider);
-        // a person's one connection to a provider is the one asked for more; a project names its own
-        const connection =
-          input.connection ||
-          (facet === "account" && held.length === 1
-            ? held[0]!.connection
-            : crypto.randomUUID().slice(0, 8));
-        const { authorizationUrl } = (await root.invoke(
-          [
-            "itx",
-            "facets",
-            ["get", facet],
+        return onIntegrationsRoot("connect", [provider, input], async (facet) => {
+          // the owner facet's snapshot is its contract's state
+          const { state } = (await deps.callFacetAsPlatform(facet, [["snapshot"]])) as {
+            state: { integrations: AccountState["integrations"] };
+          };
+          const held = Object.values(state.integrations).filter((row) => row.provider === provider);
+          // a person's one connection to a provider is the one asked for more; a project names its own
+          const connection =
+            input.connection ||
+            (facet === "account" && held.length === 1
+              ? held[0]!.connection
+              : crypto.randomUUID().slice(0, 8));
+          // GitHub sends an installation's human back under the platform origin this call reached
+          const platformOrigin = deps.platformOrigin() || undefined;
+          if (input.installationId && !platformOrigin)
+            throw codedError(
+              "INVALID_CONTEXT",
+              "itx.integrations.connect: an installation's connect comes back to the platform origin a session reached — call it from a session",
+            );
+          // the facet's `connectIntegration` answers where to send the human (integrations/verbs.ts)
+          const { authorizationUrl } = (await deps.callFacetAsPlatform(facet, [
             [
               "connectIntegration",
               {
                 provider: IntegrationProvider.parse(provider),
                 connection,
-                client: "iterate",
+                client: input.client,
                 scopes: input.scopes,
                 next: input.next,
-              },
+                appSlug: input.appSlug,
+                clientId: input.clientId,
+                installationId: input.installationId,
+                platformOrigin,
+              } satisfies ConnectInput,
             ],
-          ],
-          [],
-          hopCaller(),
-        )) as { authorizationUrl: string };
-        return { authorizationUrl, connection };
+          ])) as { authorizationUrl: string };
+          return { authorizationUrl, connection };
+        });
       },
+      disconnect: (provider, connection, options = {}) =>
+        onIntegrationsRoot("disconnect", [provider, connection, options], async (facet) => {
+          const parsed = z
+            .object({ movedExternalId: z.string().min(1).optional() })
+            .safeParse(options);
+          if (!parsed.success)
+            throw codedError(
+              "INVALID_INPUT",
+              `itx.integrations.disconnect: ${z.prettifyError(parsed.error)}`,
+            );
+          const { movedExternalId } = parsed.data;
+          if (movedExternalId) assertPlatformCaller("integrations.disconnect's movedExternalId");
+          await deps.callFacetAsPlatform(facet, [
+            ["disconnectIntegration", { provider, connection, movedExternalId }],
+          ]);
+        }),
       requestFromUser: async (provider, options = {}) => {
         const { scopes } = z
           .object({ scopes: z.array(z.string().min(1)).default([]) })
@@ -1722,9 +1791,10 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
             "INVALID_CONTEXT",
             "itx.integrations.connectForProject: a person's own root",
           );
-        // The account facet's own answer, from its unpublished method.
+        const { connectToProject, ...connect } = input;
+        // the account facet's `connectIntegration` answers where to send the human (integrations/verbs.ts)
         return deps.callFacetAsPlatform("account", [
-          ["connectIntegrationForProject", input],
+          ["connectIntegration", connect, connectToProject],
         ]) as Promise<{ authorizationUrl: string }>;
       },
       finishConnect: async (input) => {
@@ -1811,12 +1881,16 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
             "INVALID_CONTEXT",
             "itx.email: only a project has an address, on a deployment whose projects are subdomains and that can send mail",
           );
+        const wildcard = deps.projectWildcard;
         return sendEmail(
           {
             EMAIL: env.EMAIL,
             FILES: env.FILES,
             filesPrefix: r2Prefix,
-            from: { email: `${slug}@${domain}`, name: slug },
+            address: `${slug}@${domain}`,
+            name: slug,
+            ownDomain:
+              wildcard && [slug, projectId].includes(wildcard.project) ? wildcard.hostname : null,
             emailContext: deps.context(EMAIL_PATH),
             caller: hopCaller(),
           },

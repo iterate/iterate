@@ -7,6 +7,7 @@ import { createHmac } from "node:crypto";
 import { evictDurableObject, runDurableObjectAlarm } from "cloudflare:test";
 import { env, exports } from "cloudflare:workers";
 import { expect, onTestFinished, test, vi } from "vitest";
+import type { IntegrationProvider, IterateContextApi } from "iterate/api";
 import type { StreamEvent } from "iterate/stream/processor";
 import { fakeUserIdOf } from "../../dummy-petshop/src/state.ts";
 import { DurableObjectNameCodec } from "../src/context/paths.ts";
@@ -38,10 +39,8 @@ const ITERATE_GITHUB_WEBHOOK_SECRET = "github-test-webhook-secret";
 test("Slack, iterate's app: the callback stores the token, records the workspace on / and routes it", async () => {
   const member = await projectWithMember("slack-iterate");
   const petshop = petshopFakes();
-  const { authorizationUrl } = await projectFacet(member.itx).connectIntegration({
-    provider: "slack",
+  const { authorizationUrl } = await member.itx.integrations.connect("slack", {
     connection: "acme",
-    client: "iterate",
     next: NEXT,
   });
   const authorize = new URL(authorizationUrl);
@@ -181,15 +180,45 @@ test.for([
 test("Slack: a disconnect before the human comes back fails the callback, storing no token", async () => {
   const member = await projectWithMember("slack-abandoned");
   const petshop = petshopFakes();
-  const project = projectFacet(member.itx);
-  const slack = { provider: "slack", connection: "acme" } as const;
-  const { authorizationUrl } = await project.connectIntegration({ ...slack, client: "iterate" });
-  await project.disconnectIntegration(slack);
+  const { authorizationUrl } = await member.itx.integrations.connect("slack", {
+    connection: "acme",
+  });
+  await member.itx.integrations.disconnect("slack", "acme");
   const back = await followConsent(petshop, `${authorizationUrl}&team=T4GONE`, member.cookie);
   expect(back).toMatchObject({ status: 400 });
   expect(await secretPathsOf(member.itx)).not.toContain("/secrets/slack-acme");
   expect(await integrationsOf(member.itx)).toEqual({});
   expect(await catalog().integrationRoute("slack", "T4GONE")).toBeNull();
+});
+
+test("Slack: the built-in on any context of the project connects and disconnects the project's connections, a project's own app needs its connection named, and a move's cleanup is the platform's alone", async () => {
+  const member = await projectWithMember("slack-anywhere");
+  const petshop = petshopFakes();
+  // `integrations` is implicit at the root alone; below it, the physical scope runs it on the root
+  const below = member.itx.cd("/agents/anywhere").builtins;
+  await expect(below.integrations.connect("slack", { client: "project" })).rejects.toThrow(
+    /name it/,
+  );
+  const { authorizationUrl } = await below.integrations.connect("slack", {
+    connection: "acme",
+    next: NEXT,
+  });
+  const back = await followConsent(petshop, `${authorizationUrl}&team=T4ANY`, member.cookie);
+  expect(back, await back.clone().text()).toMatchObject({ status: 303 });
+  await vi.waitFor(async () =>
+    expect(await integrationsOf(member.itx)).toMatchObject({
+      "/integrations/slack/acme": { externalId: "T4ANY" },
+    }),
+  );
+  await expect(
+    below.integrations.disconnect("slack", "acme", { movedExternalId: "T4ANY" }),
+  ).rejects.toThrow(/the platform's own/);
+  await expect(
+    below.integrations.disconnect("slack", "acme", { movedExternalId: "" }),
+  ).rejects.toMatchObject({ code: "INVALID_INPUT" });
+  await below.integrations.disconnect("slack", "acme");
+  await vi.waitFor(async () => expect(await integrationsOf(member.itx)).toEqual({}));
+  expect(await catalog().integrationRoute("slack", "T4ANY")).toBeNull();
 });
 
 test("Slack: a team released by one project and connected by another routes its next webhook to the new connection", async () => {
@@ -203,7 +232,7 @@ test("Slack: a team released by one project and connected by another routes its 
     );
   await connected(petshop, first, "slack", "team=T5MOVE");
   await delivery("Ev5-first");
-  await projectFacet(first.itx).disconnectIntegration({ provider: "slack", connection: "acme" });
+  await first.itx.integrations.disconnect("slack", "acme");
   const second = await otherProject(first, "slack-reclaim");
   await connected(petshop, second, "slack", "team=T5MOVE");
   expect(await (await delivery("Ev5-second")).json()).toEqual({ ok: true });
@@ -280,10 +309,8 @@ test("Slack: the same callback again, a refreshed tab, lands on the same offer",
   const petshop = petshopFakes();
   await connected(petshop, holder, "slack", "team=T11AGAIN");
   const mover = await otherProject(holder, "slack-replay-mover");
-  const { authorizationUrl } = await projectFacet(mover.itx).connectIntegration({
-    provider: "slack",
+  const { authorizationUrl } = await mover.itx.integrations.connect("slack", {
     connection: "acme",
-    client: "iterate",
     next: NEXT,
   });
   const consent = (await petshop.handle(
@@ -311,7 +338,7 @@ test("Slack: an offer for a team its holder has since given up moves nothing, an
   const mover = await otherProject(holder, "slack-stale-mover");
   const offer = moveOfferOf(await consented(petshop, mover, "slack", "team=T7STALE"));
   // the holder gives the team up and connects another one under the same name
-  await projectFacet(holder.itx).disconnectIntegration({ provider: "slack", connection: "acme" });
+  await holder.itx.integrations.disconnect("slack", "acme");
   await connected(petshop, holder, "slack", "team=T7NEW");
   await expect(projectFacet(mover.itx).confirmIntegrationMove({ offer })).rejects.toThrow(
     /moved meanwhile/,
@@ -389,10 +416,8 @@ test("Slack: the token a move offer held is deleted when the offer runs out, on 
   const petshop = petshopFakes();
   await connected(petshop, holder, "slack", "team=T10GONE");
   const mover = await otherProject(holder, "slack-expiry-mover");
-  const { authorizationUrl } = await projectFacet(mover.itx).connectIntegration({
-    provider: "slack",
+  const { authorizationUrl } = await mover.itx.integrations.connect("slack", {
     connection: "acme",
-    client: "iterate",
     next: NEXT,
   });
   // the consent's nonce, which the platform's own admit names (the callback's signed state)
@@ -442,7 +467,7 @@ test("Slack: a holder that disconnects while its cleanup is pending revokes noth
     /press Move again/,
   );
   // the holder's own disconnect: the route is the mover's, so the workspace's token is not revoked
-  await projectFacet(holder.itx).disconnectIntegration({ provider: "slack", connection: "acme" });
+  await holder.itx.integrations.disconnect("slack", "acme");
   expect(await petshop.state.getState()).toMatchObject({ revokedRefreshTokenIds: [] });
   expect(await (await slackAuthTest(mover.itx)).json()).toMatchObject({ team_id: "T13LATE" });
   // …and it connects the same workspace again through an app of its own
@@ -452,7 +477,10 @@ test("Slack: a holder that disconnects while its cleanup is pending revokes noth
     { ...app, signingSecret: "own-signing-secret" },
     { urls: ["https://slack.test"] },
   );
-  await connected(petshop, holder, "slack", "team=T13LATE", { client: "project" });
+  await connected(petshop, holder, "slack", "team=T13LATE", {
+    client: "project",
+    connection: "acme",
+  });
   await projectFacet(mover.itx).confirmIntegrationMove({ offer });
   await vi.waitFor(async () =>
     expect(await integrationsOf(holder.itx)).toMatchObject({
@@ -487,7 +515,7 @@ test("Slack: a move whose connect fails after the holder took another workspace 
   armed = true;
   const moved = projectFacet(mover.itx).confirmIntegrationMove({ offer });
   await vi.waitFor(() => expect(proofReached).toBe(true));
-  await projectFacet(holder.itx).disconnectIntegration({ provider: "slack", connection: "acme" });
+  await holder.itx.integrations.disconnect("slack", "acme");
   await connected(petshop, holder, "slack", "team=T16Y");
   holderReplaced = true;
   await expect(moved).rejects.toThrow(/auth\.test/);
@@ -558,7 +586,7 @@ test("Slack: a disconnect revokes nothing once another project routed the worksp
     };
     return statement;
   });
-  await projectFacet(holder.itx).disconnectIntegration({ provider: "slack", connection: "acme" });
+  await holder.itx.integrations.disconnect("slack", "acme");
   expect(await petshop.state.getState()).toMatchObject({ revokedRefreshTokenIds: [] });
   expect(await catalog().integrationRoute("slack", "T18SNATCH")).toMatchObject({
     projectId: other.projectId,
@@ -591,7 +619,10 @@ test("Slack: a holder that connects its own app to the same workspace while its 
     { ...app, signingSecret: "own-signing-secret" },
     { urls: ["https://slack.test"] },
   );
-  await connected(petshop, holder, "slack", "team=T19OWN", { client: "project" });
+  await connected(petshop, holder, "slack", "team=T19OWN", {
+    client: "project",
+    connection: "acme",
+  });
   vi.useRealTimers();
   await projectFacet(mover.itx).confirmIntegrationMove({ offer });
   await vi.waitFor(async () =>
@@ -641,7 +672,7 @@ test("Slack: a move whose connect fails does not route the workspace back to a h
   });
   const moved = projectFacet(mover.itx).confirmIntegrationMove({ offer });
   await vi.waitFor(() => expect(restoreReached).toBe(true));
-  await projectFacet(holder.itx).disconnectIntegration({ provider: "slack", connection: "acme" });
+  await holder.itx.integrations.disconnect("slack", "acme");
   holderDisconnected = true;
   await expect(moved).rejects.toThrow(/auth\.test/);
   expect(await catalog().integrationRoute("slack", "T20RACE")).toBeNull();
@@ -783,10 +814,7 @@ test("Slack: a move whose connect fails while the holder is part-way through dis
   armed = true;
   const moved = projectFacet(mover.itx).confirmIntegrationMove({ offer });
   await vi.waitFor(() => expect(proofReached).toBe(true));
-  const disconnecting = projectFacet(holder.itx).disconnectIntegration({
-    provider: "slack",
-    connection: "acme",
-  });
+  const disconnecting = holder.itx.integrations.disconnect("slack", "acme");
   await expect(moved).rejects.toThrow(/auth\.test/);
   undoDone = true;
   await disconnecting;
@@ -926,7 +954,7 @@ test("Google: disconnect revokes the grant and drops the row and the secret", as
   await vi.waitFor(async () =>
     expect(await integrationsOf(member.itx)).toHaveProperty(["/integrations/google/acme"]),
   );
-  await projectFacet(member.itx).disconnectIntegration({ provider: "google", connection: "acme" });
+  await member.itx.integrations.disconnect("google", "acme");
   expect((await petshop.state.getState()).revokedRefreshTokenIds).toHaveLength(1);
   expect(await secretPathsOf(member.itx)).not.toContain("/secrets/google-acme");
   await vi.waitFor(async () => expect(await integrationsOf(member.itx)).toEqual({}));
@@ -937,7 +965,10 @@ test("Google, the project's own client: the refresh uses the client in the secre
   const petshop = petshopFakes();
   const app = await petshop.state.createClient({});
   await member.itx.secrets.set("/secrets/google-acme", app, { urls: ["https://google.test"] });
-  await connected(petshop, member, "google", "email=jonas@example.test", { client: "project" });
+  await connected(petshop, member, "google", "email=jonas@example.test", {
+    client: "project",
+    connection: "acme",
+  });
   await petshop.state.expireAccessTokens(app.clientId, "jonas@example.test");
   expect(await gmailProfile(member.itx)).toMatchObject({ emailAddress: "jonas@example.test" });
   expect(tokenGrantsOf(petshop)).toEqual([
@@ -1058,10 +1089,8 @@ test("GitHub: a callback with an installation but no code sends the human on to 
     installationId: "9201",
     users: [{ login: "petshop-user", role: "admin" }],
   });
-  const { authorizationUrl } = await projectFacet(member.itx).connectIntegration({
-    provider: "github",
+  const { authorizationUrl } = await member.itx.integrations.connect("github", {
     connection: "acme",
-    client: "iterate",
     next: NEXT,
   });
   const state = new URL(authorizationUrl).searchParams.get("state")!;
@@ -1093,13 +1122,10 @@ test("GitHub: an installation iterate's App already has connects without its con
   const member = await projectWithMember("github-installed");
   const petshop = petshopFakes();
   await registerIterateInstallation(petshop, { installationId: "9601" });
-  const { authorizationUrl } = await projectFacet(member.itx).connectIntegration({
-    provider: "github",
+  const { authorizationUrl } = await member.itx.integrations.connect("github", {
     connection: "acme",
-    client: "iterate",
     next: NEXT,
     installationId: "9601",
-    platformOrigin: ORIGIN,
   });
   const authorize = new URL(authorizationUrl);
   expect({
@@ -1473,7 +1499,6 @@ test("GitHub on a deployment with no urls.os: connect, and the callback authoriz
 
 type Member = Awaited<ReturnType<typeof projectWithMember>>;
 type Petshop = ReturnType<typeof petshopFakes>;
-type ConnectInput = Parameters<ProjectDurableObject["connectIntegration"]>[0];
 type InstallationInput = Omit<Parameters<Petshop["state"]["registerApp"]>[0], "publicKeyPem"> & {
   installationId: string;
 };
@@ -1483,8 +1508,10 @@ function projectFacet(itx: Member["itx"]) {
   // `facets.get` answers the SDK's facet shell over the wire; the class it hosts is ours.
   return itx.cd("/").facets.get("project") as Pick<
     ProjectDurableObject,
-    "connectIntegration" | "disconnectIntegration" | "confirmIntegrationMove"
-  > & { snapshot(): Promise<{ state: ProjectState }> };
+    "confirmIntegrationMove"
+  > & {
+    snapshot(): Promise<{ state: ProjectState }>;
+  };
 }
 
 async function integrationsOf(itx: Member["itx"]) {
@@ -1501,22 +1528,20 @@ async function otherProject(member: Member, slug: string): Promise<Member> {
   return { ...member, itx, projectId: (await itx.whoami()).projectId };
 }
 
-/** Connect `acme` (iterate's app unless `input` says otherwise), then the human's consent through
+/** Connect `acme` (iterate's app unless `options` says otherwise), then the human's consent through
  *  the platform's callback; `query` picks the account at the fake (`team=`, `email=`,
  *  `installation_id=`). Answers the callback's last response. */
 async function consented(
   petshop: Petshop,
   member: Member,
-  provider: ConnectInput["provider"],
+  provider: IntegrationProvider,
   query: string,
-  input: Partial<ConnectInput> = {},
+  options: NonNullable<Parameters<IterateContextApi["integrations"]["connect"]>[1]> = {},
 ) {
-  const { authorizationUrl } = await projectFacet(member.itx).connectIntegration({
-    provider,
+  const { authorizationUrl } = await member.itx.integrations.connect(provider, {
     connection: "acme",
-    client: "iterate",
     next: NEXT,
-    ...input,
+    ...options,
   });
   return followConsent(petshop, `${authorizationUrl}&${query}`, member.cookie);
 }
@@ -1533,7 +1558,10 @@ async function slackOwnApp(slug: string) {
   const app = await petshop.state.createClient({});
   const material = { ...app, signingSecret: "own-signing-secret" };
   await member.itx.secrets.set("/secrets/slack-acme", material, { urls: ["https://slack.test"] });
-  await connected(petshop, member, "slack", "team=T3OWN", { client: "project" });
+  await connected(petshop, member, "slack", "team=T3OWN", {
+    client: "project",
+    connection: "acme",
+  });
   return { member, petshop, app };
 }
 
@@ -1639,7 +1667,12 @@ async function githubOwnApp(slug: string) {
     account: { login: "own-org" },
     users: [{ login: "own-admin", role: "admin" }],
   });
-  const own = { client: "project", appSlug: "own-bot", clientId: client.clientId } as const;
+  const own = {
+    client: "project",
+    connection: "acme",
+    appSlug: "own-bot",
+    clientId: client.clientId,
+  } as const;
   await connected(petshop, member, "github", "installation_id=9401", own);
   return { member, petshop, app };
 }

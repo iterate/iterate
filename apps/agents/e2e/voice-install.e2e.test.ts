@@ -38,9 +38,11 @@ deployedOnly(
     expect(await installed.voice.health()).toMatchObject({ ok: true, projectId });
     const config = project.repos.get("/repos/config");
     expect(JSON.parse((await config.readFile("agents/package.json"))!)).toEqual({
+      main: "index.ts",
       dependencies: { "@iterate-com/agents": versions.agents },
     });
     expect(JSON.parse((await config.readFile("voice/package.json"))!)).toEqual({
+      main: "worker.ts",
       dependencies: { "@iterate-com/voice": versions.voice },
     });
     // the root lists both packages too, so `tsc` over the repo resolves the folders' imports

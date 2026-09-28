@@ -1,6 +1,6 @@
 import { expect, test, vi } from "vitest";
 import { findFirmwareDevice } from "./catalog.ts";
-import { listFirmwareVersions, selectFirmware } from "./releases.ts";
+import { newestFirmware, newestFirmwareVersion } from "./releases.ts";
 
 const device = findFirmwareDevice("waveshare")!;
 const refsUrl =
@@ -8,105 +8,76 @@ const refsUrl =
 const older = "002570-2026-09-20-0a1b2c3";
 const newer = "002574-2026-09-23-b2a4558";
 
-test("listFirmwareVersions: the device's release tags from GitHub, newest first", async () => {
+test("newestFirmwareVersion: the newest of the device's release tags on GitHub", async () => {
   const fetchImpl = github(tags(older, newer, "002572-2026-09-21-ffffff0"));
 
-  await expect(listFirmwareVersions(device.id, fetchImpl)).resolves.toEqual([
-    newer,
-    "002572-2026-09-21-ffffff0",
-    older,
-  ]);
+  await expect(newestFirmwareVersion(device.id, fetchImpl)).resolves.toBe(newer);
   expect(fetchImpl).toHaveBeenCalledExactlyOnceWith(refsUrl, {
     headers: { accept: "application/vnd.github+json" },
   });
 });
 
-test("listFirmwareVersions: skips, with a warning, a tag that is not a release version", async () => {
+test("newestFirmwareVersion: skips, with a warning, a tag that is not a release version", async () => {
   const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
   const refs = [
-    ...tags(newer, "latest", `${newer}/extra`, "2574-2026-09-23-b2a4558"),
+    ...tags(older, "latest", `${newer}/extra`, "2574-2026-09-23-b2a4558"),
     { ref: "refs/tags/v2026-09-23" },
   ];
 
-  await expect(listFirmwareVersions(device.id, github(refs))).resolves.toEqual([newer]);
+  await expect(newestFirmwareVersion(device.id, github(refs))).resolves.toBe(older);
   expect(warn).toHaveBeenCalledTimes(4);
   expect(warn).toHaveBeenCalledWith(
     "Ignoring refs/tags/kit-firmware/waveshare/latest: not kit-firmware/waveshare/<version>.",
   );
 });
 
-test("selectFirmware: latest is the newest release, with its checked manifest", async () => {
+test("newestFirmware: the newest release's checked manifest", async () => {
   stubKitPage();
+  const fetchImpl = github(tags(older, newer));
 
-  await expect(selectFirmware(device, "latest", github(tags(older, newer)))).resolves.toMatchObject(
-    {
-      versions: [newer, older],
+  await expect(newestFirmware(device, fetchImpl)).resolves.toMatchObject({
+    manifest: {
+      name: device.name,
       version: newer,
-      manifest: {
-        version: newer,
-        builds: [
-          { parts: [{ path: `https://k.iterate.com/firmware/waveshare/${newer}/bootloader.bin` }] },
-        ],
-      },
+      builds: [
+        { parts: [{ path: `https://k.iterate.com/firmware/waveshare/${newer}/bootloader.bin` }] },
+      ],
     },
-  );
-});
-
-test("selectFirmware: an older release can be chosen", async () => {
-  stubKitPage();
-
-  await expect(selectFirmware(device, older, github(tags(older, newer)))).resolves.toMatchObject({
-    versions: [newer, older],
-    version: older,
-    manifest: { version: older },
   });
+  // the tag listing and the newest release's manifest: no other release is fetched
+  expect(fetchImpl).toHaveBeenCalledTimes(2);
 });
 
 test.for([
   {
     name: "a device with no release",
-    requested: "latest",
     fetchImpl: () => github([]),
-    versions: [],
     problem: "No firmware has been released for Waveshare ESP32-S3 Touch AMOLED yet.",
   },
   {
-    name: "a version that is not released",
-    requested: "000001-2000-01-01-0000000",
-    fetchImpl: () => github(tags(newer)),
-    versions: [newer],
-    problem:
-      "Release 000001-2000-01-01-0000000 is not published for Waveshare ESP32-S3 Touch AMOLED.",
-  },
-  {
     name: "a GitHub error",
-    requested: "latest",
     fetchImpl: () => github({ message: "Server Error" }, { status: 500 }),
-    versions: [],
     problem: "Could not list firmware releases: GitHub returned HTTP 500.",
   },
   {
     name: "a manifest Kit could not serve",
-    requested: "latest",
     fetchImpl: () =>
       vi.fn<typeof fetch>(async (input) =>
         String(input) === refsUrl
           ? Response.json(tags(newer))
           : new Response("GitHub did not serve this firmware file.", { status: 502 }),
       ),
-    versions: [newer],
     problem: "Firmware manifest returned HTTP 502.",
   },
-])("selectFirmware: $name is the picker's problem", async (row) => {
+])("newestFirmware: $name is the page's problem", async (row) => {
   stubKitPage();
 
-  await expect(selectFirmware(device, row.requested, row.fetchImpl())).resolves.toEqual({
-    versions: row.versions,
+  await expect(newestFirmware(device, row.fetchImpl())).resolves.toEqual({
     problem: row.problem,
   });
 });
 
-test("selectFirmware: an exhausted GitHub rate limit says when to try again", async () => {
+test("newestFirmware: an exhausted GitHub rate limit says when to try again", async () => {
   const reset = new Date("2026-09-24T03:00:00Z");
   const fetchImpl = github(
     { message: "API rate limit exceeded" },
@@ -119,8 +90,7 @@ test("selectFirmware: an exhausted GitHub rate limit says when to try again", as
     },
   );
 
-  await expect(selectFirmware(device, "latest", fetchImpl)).resolves.toEqual({
-    versions: [],
+  await expect(newestFirmware(device, fetchImpl)).resolves.toEqual({
     problem: `GitHub's hourly limit for this network is used up. Try again after ${reset.toLocaleTimeString()}.`,
   });
 });
@@ -128,7 +98,7 @@ test("selectFirmware: an exhausted GitHub rate limit says when to try again", as
 /** The page the loader runs on; the Kit vitest config unstubs it after each test. */
 function stubKitPage() {
   vi.stubGlobal("window", {
-    location: { href: "https://k.iterate.com/devices/waveshare/firmware/latest" },
+    location: { href: "https://k.iterate.com/devices/waveshare" },
     addEventListener: vi.fn(),
   });
 }
@@ -146,6 +116,7 @@ function github(refs: unknown, init?: ResponseInit) {
       /^https:\/\/k\.iterate\.com\/firmware\/waveshare\/([^/]+)\/manifest\.json$/.exec(url)?.[1];
     if (!version) throw new Error(`unexpected fetch ${url}`);
     return Response.json({
+      name: device.name,
       version,
       builds: [{ chipFamily: "ESP32-S3", parts: [{ path: "./bootloader.bin", offset: 0 }] }],
       configurationPartition: { offset: 0x410000, size: 0x1000 },

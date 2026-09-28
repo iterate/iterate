@@ -46,7 +46,7 @@ export async function flashDevice(input: {
 }) {
   const port = await choosePort();
   const { flash } = await import("esp-web-tools/dist/flash.js");
-  using install = prepareInstall(input.manifest, input.device, input.configuration);
+  using install = prepareInstall(input.manifest, input.configuration);
   let failure: Error | undefined;
   try {
     await flash(

@@ -38,6 +38,7 @@ export class CounterDurableObject extends StreamProcessorDurableObject {
  *  from two sources: two loaded identities. */
 export const hangingCounter = (hangs: boolean): FacetSpec => ({
   source: {
+    "package.json": '{"main":"worker.js"}',
     "worker.js": counter(/* js */ `
 const HANG = ${hangs};
 export class HangingCounterDurableObject extends StreamProcessorDurableObject {
@@ -109,6 +110,7 @@ export const CLONE_VERSION_TEXT =
  *  SQLite, which survives the abort and the new isolate. */
 export const flakyCounter = (message: string): FacetSpec => ({
   source: {
+    "package.json": '{"main":"worker.js"}',
     "worker.js": counter(/* js */ `
 export class FlakyDurableObject extends StreamProcessorDurableObject {
   static publicMethods = [...super.publicMethods, "tries"];
@@ -137,6 +139,7 @@ export class FlakyDurableObject extends StreamProcessorDurableObject {
  *  the site after 300 ms on every later one (a cold repo fetch); `runs()` counts them. */
 export const PRODUCER: FacetSpec = {
   source: {
+    "package.json": '{"main":"worker.js"}',
     "worker.js": counter(/* js */ `
 export class ProducerDurableObject extends StreamProcessorDurableObject {
   static publicMethods = [...super.publicMethods, "modules", "runs"];
@@ -150,7 +153,7 @@ export class ProducerDurableObject extends StreamProcessorDurableObject {
     if (runs === 1) return null; // no modules: the load fails inside the loader
     await new Promise((resolve) => setTimeout(resolve, 300));
     return {
-      "worker.js": "import { WorkerEntrypoint } from 'cloudflare:workers'; export default class Site extends WorkerEntrypoint { hello() { return 'hi'; } }",
+      "package.json": '{"main":"worker.js"}', "worker.js": "import { WorkerEntrypoint } from 'cloudflare:workers'; export default class Site extends WorkerEntrypoint { hello() { return 'hi'; } }",
     };
   }
 }
@@ -162,6 +165,7 @@ export class ProducerDurableObject extends StreamProcessorDurableObject {
 /** A person's own processor, the counter with a method of its own (`hello`). */
 export const HELLO_PROCESSOR: FacetSpec = {
   source: {
+    "package.json": '{"main":"worker.js"}',
     "worker.js": counter(/* js */ `
 export class TallyDurableObject extends StreamProcessorDurableObject {
   static publicMethods = [...super.publicMethods, "hello"];
@@ -178,6 +182,7 @@ export class TallyDurableObject extends StreamProcessorDurableObject {
  *  every round trip it makes is a catch-up's read of the log. */
 export const COUNTING_TALLY: FacetSpec = {
   source: {
+    "package.json": '{"main":"worker.js"}',
     "worker.js": /* js */ `
 import { StreamProcessor, StreamProcessorDurableObject, defineProcessorContract, z } from "iterate/sdk";
 const contract = defineProcessorContract({
@@ -213,6 +218,7 @@ export class CountingTallyDurableObject extends StreamProcessorDurableObject {
  *  against its in-flight budget (subscription-delivery.ts `DELIVERY_IN_FLIGHT_BUDGET_CHARS`). */
 export const HOLD: FacetSpec = {
   source: {
+    "package.json": '{"main":"worker.js"}',
     "worker.js": counter(/* js */ `
 export class HoldDurableObject extends StreamProcessorDurableObject {
   static publicMethods = [...super.publicMethods, "holding", "release"];
@@ -234,6 +240,7 @@ export class HoldDurableObject extends StreamProcessorDurableObject {
 /** A person's own processor that counts the `events.iterate.com/test/ticked` events on its log. */
 export const TICK_TALLY: FacetSpec = {
   source: {
+    "package.json": '{"main":"worker.js"}',
     "worker.js": /* js */ `
 import { StreamProcessor, StreamProcessorDurableObject, defineProcessorContract, z } from "iterate/sdk";
 const contract = defineProcessorContract({
@@ -262,6 +269,7 @@ export class TallyDurableObject extends StreamProcessorDurableObject {
  *  does its page. A fresh instance shows as `calls` back to 1 and a new `instance`. */
 export const HELLO: FacetSpec = {
   source: {
+    "package.json": '{"main":"worker.js"}',
     "worker.js": /* js */ `
 import { FacetDurableObject } from "iterate/sdk";
 export class Hello extends FacetDurableObject {
@@ -281,6 +289,7 @@ export class Hello extends FacetDurableObject {
  *  batch — in memory, read back through `stats()`. */
 export const PUSH_TALLY: FacetSpec = {
   source: {
+    "package.json": '{"main":"worker.js"}',
     "worker.js": /* js */ `
 import { FacetDurableObject } from "iterate/sdk";
 export class Tally extends FacetDurableObject {
@@ -300,6 +309,7 @@ export class Tally extends FacetDurableObject {
 /** A facet whose constructor throws until the time `failStartsFor(ms)` set in its own storage. */
 export const FRAGILE: FacetSpec = {
   source: {
+    "package.json": '{"main":"worker.js"}',
     "worker.js": /* js */ `
 import { FacetDurableObject } from "iterate/sdk";
 export class FragileDurableObject extends FacetDurableObject {
@@ -320,6 +330,7 @@ export class FragileDurableObject extends FacetDurableObject {
  *  upgrade is the platform's refusal, not the class's. `hits()` counts what reached it. */
 export const APP_FACET: FacetSpec = {
   source: {
+    "package.json": '{"main":"worker.js"}',
     "worker.js": /* js */ `
 import { FacetDurableObject } from "iterate/sdk";
 export class AppFacetDurableObject extends FacetDurableObject {
@@ -344,6 +355,7 @@ export class AppFacetDurableObject extends FacetDurableObject {
 /** A loaded class that extends neither SDK facet shell, so it lists no public method. */
 export const PLAIN_DURABLE_OBJECT: FacetSpec = {
   source: {
+    "package.json": '{"main":"worker.js"}',
     "worker.js": /* js */ `
 import { DurableObject } from "cloudflare:workers";
 export class Plain extends DurableObject {
@@ -371,6 +383,7 @@ export class ProbeDurableObject extends DurableObject {
 
 /** A stateless worker with one method. */
 export const HELLO_WORKER: WorkerSource = {
+  "package.json": '{"main":"worker.js"}',
   "worker.js": /* js */ `
 import { WorkerEntrypoint } from "cloudflare:workers";
 export default class extends WorkerEntrypoint { hello() { return "hello from loaded code"; } }
@@ -381,6 +394,7 @@ export default class extends WorkerEntrypoint { hello() { return "hello from loa
  *  context's kv and throws the clone-version text on every request it serves; any other isolate
  *  answers. */
 export const CLONE_VERSION_WORKER: WorkerSource = {
+  "package.json": '{"main":"worker.js"}',
   "worker.js": /* js */ `
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { withItx } from "iterate/sdk";

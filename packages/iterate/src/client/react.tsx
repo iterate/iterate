@@ -185,8 +185,8 @@ export function useContextStub<S extends Disposable>(
 
 // ── the iterate context ── the data half of a general-purpose context view (packages/ui
 // `components/context-view`, the rendering half): every committed event of a context, live; the rows
-// of its processors table; who is here; named facets' live state. ONE hook here, pure components
-// there, so the UI kit stays free of the SDK and any app — the dash, the agents app — composes the two.
+// of its processors table; who is here; named facets' live state. ONE hook here, SDK-free components
+// there that take its output as props, and any app — the dash, the agents app — composes the two.
 
 /** One presence: who acted on the context and when last, from the log's stamps. */
 export type IterateContextPresence = EventLogPresence;

@@ -191,7 +191,7 @@ read secrets.
   New project sheet has a custom GitHub template field for the same thing.
   The ref resolves to a commit before the request is recorded, so recovery
   always uses the same source (`apps/os/docs/project-creation.md`). A template
-  that cannot be fetched, or has no `worker.ts`, fails the creation visibly
+  that cannot be fetched, or has no main module, fails the creation visibly
   (`project/create-failed`) instead of silently going stock.
 
 The issuer is part of the platform: there is no separate auth deployment to

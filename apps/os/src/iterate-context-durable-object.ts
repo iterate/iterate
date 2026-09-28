@@ -802,6 +802,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     env: this.env,
     deployId: this.#appConfig.deployId,
     ingressRouting: this.#appConfig.urls.ingressRouting,
+    projectWildcard: this.#appConfig.urls.projectWildcard,
     dashOrigin: this.#appConfig.urls.dash,
     platformAdmins: () => this.#appConfig.admins,
     iterateAppScopes: () => iterateAppScopesOf(this.#appConfig),

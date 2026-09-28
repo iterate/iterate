@@ -30,6 +30,7 @@ const FLOW_COOKIE = "__Host-itx-admin-sign-in";
 /** A site that answers with the cookies it was handed, and tries to set the flow's cookie beside
  *  one of its own. */
 const SRC_PLANTING_APP = {
+  "package.json": '{"main":"worker.js"}',
   "worker.js": `import { WorkerEntrypoint } from "cloudflare:workers";
 export default class Planting extends WorkerEntrypoint {
   fetch(request) {

@@ -9,7 +9,7 @@ Userspace: a project installs this package; the platform ships none of it.
 A project installs the app from a folder of its config repo:
 
 ```text
-agents/package.json   { "dependencies": { "@iterate-com/agents": "https://pkg.pr.new/iterate/iterate/@iterate-com/agents@<sha>" } }
+agents/package.json   { "main": "index.ts", "dependencies": { "@iterate-com/agents": "https://pkg.pr.new/iterate/iterate/@iterate-com/agents@<sha>" } }
 agents/index.ts       export { AgentCollectionDurableObject, AgentDurableObject } from "@iterate-com/agents";
 ```
 

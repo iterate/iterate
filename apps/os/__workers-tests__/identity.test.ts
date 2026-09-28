@@ -378,16 +378,9 @@ test("a person disconnects the connection a Cloudflare or GitHub sign-in kept, a
       status: 303,
     });
     const { user, person } = await personOf(provider, subject);
-    await person.invoke(
-      [
-        "itx",
-        "facets",
-        ["get", "account"],
-        ["disconnectIntegration", { provider, connection: subject }],
-      ],
-      [],
-      { principal: { actor: user.id, email: user.email } },
-    );
+    await person.invoke(["itx", "integrations", ["disconnect", provider, subject]], [], {
+      principal: { actor: user.id, email: user.email },
+    });
     expect(Object.keys((await personOf(provider, subject)).account.integrations), provider).toEqual(
       [],
     );
@@ -681,16 +674,9 @@ test("adding a sign-in the person already has keeps its token again, and they st
   const subject = String(fakeUserIdOf("gh-again"));
   const { user, person } = await personOf("github", subject);
   // the token gone, the identity still theirs (as when an operator moved it onto them)
-  await person.invoke(
-    [
-      "itx",
-      "facets",
-      ["get", "account"],
-      ["disconnectIntegration", { provider: "github", connection: subject }],
-    ],
-    [],
-    { principal: { actor: user.id, email: user.email } },
-  );
+  await person.invoke(["itx", "integrations", ["disconnect", "github", subject]], [], {
+    principal: { actor: user.id, email: user.email },
+  });
   expect(Object.keys((await personOf("github", subject)).account.integrations)).toEqual([]);
   const { response } = await signInThroughFake(petshop, "github", choices, {
     session,

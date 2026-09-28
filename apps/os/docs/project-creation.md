@@ -6,8 +6,8 @@ reaches `project/created` or `project/create-failed`.
 
 The project processor creates `/repos/config`, then seeds it only when `main` is unborn. A template
 may be a public GitHub repository or subdirectory. Its ref is resolved to a commit before the
-request is recorded, so recovery always uses the same source. Templates must contain `worker.ts`;
-the built-in minimal template is used when none is supplied. Built-in choices come from
+request is recorded, so recovery always uses the same source. A template's `package.json` names
+its main module in `"main"`; the built-in minimal template is used when none is supplied. Built-in choices come from
 [configs](../../../configs/README.md).
 
 If the seed includes `iterate.json`, its `events` list configures the initial userspace
@@ -21,8 +21,8 @@ A failure emits `project/create-failed`, and a later create call can start anoth
 ## Publishing
 
 A commit to `/repos/config` emits `repo/commit-completed`, and the project processor publishes the
-resulting pinned revision. `worker.ts` is the main module. Files may be TypeScript (types are
-stripped, not checked) and import each other by relative path. `iterate/*` and `zod` come from the
+resulting pinned revision; `package.json`'s `"main"` names the main module. Files may be TypeScript
+(types are stripped, not checked) and import each other by relative path. `iterate/*` and `zod` come from the
 platform; any other package is listed in `package.json` and fetched from npm through esm.sh, locked
 per dependency set (`src/context/module-resolution.ts`). Probe a candidate with
 `itx.workers.get({ source }).fetch(...)` before committing it.

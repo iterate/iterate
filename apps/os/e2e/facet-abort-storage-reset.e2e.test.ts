@@ -42,6 +42,7 @@ createFailing(deployedOnly, /Internal error in Durable Object storage caused obj
 /** A loaded facet with a child facet of ITS OWN (`ctx.facets` inside the facet): `childWrite(n)`
  *  writes n rows of 2 KB there, one commit each — a table of many pages; `childAbort()` aborts it. */
 const WRITER_SOURCE = {
+  "package.json": '{"main":"worker.js"}',
   "worker.js": `import { DurableObject } from "cloudflare:workers";
 import { FacetDurableObject } from "iterate/sdk";
 const put = (storage, key, i) => storage.kv.put(key, "x".repeat(2048) + i);

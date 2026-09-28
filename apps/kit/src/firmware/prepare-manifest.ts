@@ -1,7 +1,7 @@
 import { z } from "zod";
 import type { DeviceConfiguration } from "./config-image.ts";
 import { encodeDeviceConfiguration } from "./config-image.ts";
-import { firmwareManifestPath, type FirmwareDevice } from "./catalog.ts";
+import { firmwareManifestPath } from "./catalog.ts";
 
 /**
  * Loads a firmware release's `manifest.json` through Kit's own origin (firmware-proxy.ts) and checks
@@ -45,6 +45,7 @@ export async function loadFirmwareManifest(
     }),
   }));
   return {
+    name: manifest.name,
     version: manifest.version,
     builds,
     configurationPartition: manifest.configurationPartition,
@@ -56,15 +57,11 @@ export type FirmwareManifest = Awaited<ReturnType<typeof loadFirmwareManifest>>;
 
 /**
  * What esp-web-tools' `flash` writes (flash-device.ts): the release's parts plus this install's
- * `ITERKIT1` configuration image at `configurationPartition`, under the device's current name. The
+ * `ITERKIT1` configuration image at `configurationPartition`. The
  * image is a blob URL, which `flash` downloads like any other part; disposing revokes it, once
  * flashing has finished with it.
  */
-export function prepareInstall(
-  manifest: FirmwareManifest,
-  device: FirmwareDevice,
-  configuration: DeviceConfiguration,
-) {
+export function prepareInstall(manifest: FirmwareManifest, configuration: DeviceConfiguration) {
   const configurationImage = URL.createObjectURL(
     new Blob([encodeDeviceConfiguration(configuration, manifest.configurationPartition.size)], {
       type: "application/octet-stream",
@@ -72,7 +69,7 @@ export function prepareInstall(
   );
   return {
     manifest: {
-      name: device.name,
+      name: manifest.name,
       version: manifest.version,
       builds: manifest.builds.map((build) => ({
         ...build,
@@ -87,6 +84,7 @@ export function prepareInstall(
 }
 
 const ReleaseManifest = z.object({
+  name: z.string().min(1),
   version: z.string().min(1),
   builds: z
     .array(

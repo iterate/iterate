@@ -19,35 +19,39 @@ name the project picks (`src/integrations/`):
   `source.platform`.
 
 ```ts
-const project = itx.facets.get("project");
-const { authorizationUrl } = await project.connectIntegration({
-  provider: "slack", // or "google", "github"
-  connection: "acme",
-  client: "iterate", // or "project": the app in /secrets/slack-acme
+const { authorizationUrl, connection } = await itx.integrations.connect("slack", {
+  // or "google", "cloudflare", "github"
+  connection: "acme", // optional: a fresh name when absent
+  client: "iterate", // the default; or "project": the app in /secrets/slack-acme
   next: "https://dash.iterate.com/…",
 });
 // the human consents; the provider's callback stores the credential, names the account,
 // routes it (iterate's app), appends slack/connected on / and redirects to `next`
-await project.disconnectIntegration({ provider: "slack", connection: "acme" });
+await itx.integrations.disconnect("slack", "acme");
 ```
 
-The callback finishes the connection, so an agent or the CLI that starts a connect needs no second
-call. Slack and Google come back to `/api/integrations/<provider>/callback`, the URL
-iterate's apps are registered with. The secret facet exchanges the code, then the project facet
-names the account: Slack's `auth.test` or Google's userinfo. GitHub comes back to
-`/api/integrations/github/callback`, the App's Callback URL. With "Request user authorization
-(OAuth) during installation", GitHub sends the `code` beside the `installation_id` in one redirect.
-Without it, the callback sends the human on to authorize the App. The user token then has to show
-that the human administers the installation's account: it is their own user, or an organization
-they are an active admin of. After that it is discarded, and the secret's
-`github-app-installation` strategy mints installation tokens instead. With iterate's key it mints
-only for an installation the control plane routes to this project.
+`itx.integrations.connect` and `disconnect` are the one way to connect and disconnect (Waitrose,
+which has no consent, connects through the facets' `connectWaitrose`, below): they run on the
+owner's root (a project's `/`, a person's `/users/<id>`), and the `project` and `account` facets
+publish neither method they call (`src/context/built-ins.ts`). The callback finishes the connection,
+so an agent or the CLI that starts a connect needs no second call. Slack and Google come back to
+`/api/integrations/<provider>/callback`, the URL iterate's apps are registered with. The secret
+facet exchanges the code, then the project facet names the account: Slack's `auth.test` or Google's
+userinfo. GitHub comes back to `/api/integrations/github/callback`, the App's Callback URL. With
+"Request user authorization (OAuth) during installation", GitHub sends the `code` beside the
+`installation_id` in one redirect. Without it, the callback sends the human on to authorize the App.
+The user token then has to show that the human administers the installation's account: it is their
+own user, or an organization they are an active admin of. After that it is discarded, and the
+secret's `github-app-installation` strategy mints installation tokens instead. With iterate's key it
+mints only for an installation the control plane routes to this project.
 
 A GitHub installation iterate's App already has connects without GitHub's configure page (which
-asks for sudo and carries no state of ours back): `connectIntegration({ provider: "github",
-installationId, platformOrigin, … })` sends the human straight to authorize the App, and the code
-proves they administer it as above. The Dash lists those installations from the person's GitHub
-sign-in (`GET /user/installations` with its token, through their own egress).
+asks for sudo and carries no state of ours back): `itx.integrations.connect("github",
+{ installationId, … })` sends the human straight to authorize the App, back to the platform origin
+the call reached, and the code proves they administer it as above. A project's own GitHub App also
+passes its public half, `{ client: "project", connection, appSlug, clientId }`. The Dash lists
+those installations from the person's GitHub sign-in (`GET /user/installations` with its token,
+through their own egress).
 
 An account another project holds is not refused, for either provider with webhook routes. A GitHub
 installation is offered once the human proved they administer it. A Slack workspace is offered once
@@ -133,7 +137,7 @@ await fetch("https://gmail.googleapis.com/gmail/v1/users/me/profile", {
     authorization: `Bearer getSecret("/secrets/google-${connection}", { field: "accessToken" })`,
   },
 });
-await project.facets.get("project").disconnectIntegration({ provider: "google", connection });
+await project.integrations.disconnect("google", connection);
 // the project stops using it; it stays yours
 ```
 
@@ -167,15 +171,16 @@ and `secret/lend-revoked` on both sides), and `itx.secrets.lend` is the operator
 `itx.integrations.connect(provider, { scopes?, connection?, next? })` otherwise connects the
 context's owner (a project's root, or `session.user`) through iterate's app and answers
 `{ authorizationUrl, connection }`; again for a connection that exists asks for more on the same
-account and refuses another account's tokens. `itx.integrations.requestFromUser(provider,
-{ scopes? })` answers a Dash link (`?connect=<provider>`) that asks a person to connect their account,
-or another, to the project. On the Dash's Integrations page each provider's one action is Connect:
-a sheet that offers the person's own accounts first ("Use ada@example.com", or what the provider
-will ask to add), then another account through iterate's app (`ConnectButton`, `packages/ui`), then
-"Use your own app". It offers iterate's app only for the providers in
-`session.info().iterateAppProviders` (APP_CONFIG `integrations`); a deployment without them, such as
-a self-host, connects through "Use your own app". GitHub's callback URL is the origin the callback
-request reached, so it needs no `urls.os`.
+account and refuses another account's tokens. `itx.integrations.disconnect(provider, connection)`
+on `session.user` disconnects the person's own connection, and every project's use of it ends.
+`itx.integrations.requestFromUser(provider, { scopes? })` answers a Dash link
+(`?connect=<provider>`) that asks a person to connect their account, or another, to the project. On
+the Dash's Integrations page each provider's one action is Connect: a sheet that offers the person's
+own accounts first ("Use ada@example.com", or what the provider will ask to add), then another
+account through iterate's app (`ConnectButton`, `packages/ui`), then "Use your own app". It offers
+iterate's app only for the providers in `session.info().iterateAppProviders` (APP_CONFIG
+`integrations`); a deployment without them, such as a self-host, connects through "Use your own
+app". GitHub's callback URL is the origin the callback request reached, so it needs no `urls.os`.
 
 ## Instance lends
 

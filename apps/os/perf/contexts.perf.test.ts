@@ -40,6 +40,7 @@ test("a context's first append, then durable appends on a warm context", async (
 /** Loaded code that times its own appends inside its isolate: `Date.now` advances on I/O and each
  *  append is one, so a sample is the platform's hop and not the client's round trip. */
 const APPENDER = {
+  "package.json": '{"main":"worker.js"}',
   "worker.js": `import { WorkerEntrypoint } from "cloudflare:workers";
 import { withItx } from "iterate/sdk";
 export default class extends WorkerEntrypoint {

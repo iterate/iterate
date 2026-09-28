@@ -598,7 +598,11 @@ function hostingTarget(name: string, source: string, className: string): ItxExpr
   return [
     "itx",
     "facets",
-    ["get", name, { source: { "worker.js": source }, className }],
+    [
+      "get",
+      name,
+      { source: { "package.json": '{"main":"worker.js"}', "worker.js": source }, className },
+    ],
     "processEventBatch",
   ];
 }
@@ -652,7 +656,15 @@ function bigWorkerRuleTarget(tag: string, chars: number): ItxExpression {
   return [
     "itx",
     "workers",
-    ["get", { source: { "worker.js": `// ${tag}\n` + "x".repeat(chars) } }],
+    [
+      "get",
+      {
+        source: {
+          "package.json": '{"main":"worker.js"}',
+          "worker.js": `// ${tag}\n` + "x".repeat(chars),
+        },
+      },
+    ],
     "hello",
   ];
 }
@@ -694,7 +706,10 @@ async function retryingCursorRow(ctx: string): Promise<SubscriptionRow> {
       target: [
         "itx",
         "workers",
-        ["get", { source: { "worker.js": RETRYING_WORKER_SRC } }],
+        [
+          "get",
+          { source: { "package.json": '{"main":"worker.js"}', "worker.js": RETRYING_WORKER_SRC } },
+        ],
         "processEventBatch",
       ],
       consumes: ["mark"],
