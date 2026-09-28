@@ -35,13 +35,18 @@ export async function installGithubSync(
   const owner = repository.split("/")[0]!;
   const connection = options.connection || (await githubConnectionTo(itx, owner));
   const log = itx.cd(`/integrations/github/${connection}`);
-  // The connection's log reaches only itself: this row lends it the root's repos, where `repo` is.
-  const target = "itx.builtins.cd('/').repos";
-  if ((await log.rewriteRules.get("itx.repos"))?.target !== target)
-    await log.append({
-      type: "events.iterate.com/itx/rewrite-rule-configured",
-      payload: { match: "itx.repos", target },
-    });
+  // The connection's log reaches only itself: these rows lend it the root's repos, where `repo` is,
+  // and the root's egress, which a pull's git exchange goes through (the connection's token is a
+  // root secret).
+  for (const root of ["repos", "fetch"]) {
+    const match = `itx.${root}`;
+    const target = `itx.builtins.cd('/').${root}`;
+    if ((await log.rewriteRules.get(match))?.target !== target)
+      await log.append({
+        type: "events.iterate.com/itx/rewrite-rule-configured",
+        payload: { match, target },
+      });
+  }
   const spec = { source, className: "GithubSyncDurableObject" };
   await log.processors.enable("github-sync", {
     ...spec,

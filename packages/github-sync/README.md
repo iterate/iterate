@@ -19,8 +19,9 @@ github-sync/package.json   { "main": "index.ts", "dependencies": { "@iterate-com
 github-sync/index.ts       export { GithubSyncDurableObject } from "@iterate-com/github-sync";
 ```
 
-and a session mounts that folder. It writes a row that lends the connection's log the root's repos,
-which only a person's or the operator's session may write, never a config worker or an `itx run`.
+and a session mounts that folder. It writes rows that lend the connection's log the root's repos and
+egress (a pull's git exchange), which only a person's or the operator's session may write, never a
+config worker or an `itx run`.
 From a clone of the config repo whose root `package.json` lists the package (so `npm install` gets
 it):
 

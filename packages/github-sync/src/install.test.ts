@@ -28,6 +28,10 @@ test("the sync mounts on the connection to the origin's owner and on the root, e
         type: "events.iterate.com/itx/rewrite-rule-configured",
         payload: { match: "itx.repos", target: "itx.builtins.cd('/').repos" },
       },
+      {
+        type: "events.iterate.com/itx/rewrite-rule-configured",
+        payload: { match: "itx.fetch", target: "itx.builtins.cd('/').fetch" },
+      },
       { type: "github-sync/installed", payload: { repo: "/repos/config" } },
     ],
   });

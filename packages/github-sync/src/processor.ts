@@ -1,6 +1,6 @@
 // github-sync/processor.ts — when to pull and when to push (contract.ts says why). The calls go
-// through `withItx`: `itx.repos` on `/`, and on the connection's log by the row install.ts writes
-// (`itx.repos ⇒ itx.builtins.cd('/').repos`).
+// through `withItx`: `itx.repos` on `/`, and on the connection's log by the rows install.ts writes
+// (`itx.repos ⇒ itx.builtins.cd('/').repos`, and `itx.fetch` the same, for a pull's git exchange).
 import { z } from "zod";
 import {
   StreamProcessor,
