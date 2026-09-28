@@ -265,9 +265,11 @@ export function renderPage(input: {
   const medians = green ? `p50 ${seconds(green.p50)}, p90 ${seconds(green.p90)}` : "none green";
   if (input.kind === "resolve")
     return { signal, kind: "resolve", why: `${signal} back under its lines: ${medians}` };
-  const best =
+  // the lowest median since the page, this hour's included: an escalation's is the one before it
+  const bestP50 =
     input.lastPage?.judgement === "over" &&
-    `; ${seconds(input.lastPage.bestP50)} at best since the page`;
+    Math.min(input.lastPage.bestP50, green?.p50 ?? Infinity);
+  const best = bestP50 !== false && `; ${seconds(bestP50)} at best since the page`;
   const page = {
     what: input.tooFew
       ? `${signal} not judged below ${LINES.minPushes} pushes`

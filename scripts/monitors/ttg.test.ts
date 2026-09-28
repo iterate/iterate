@@ -632,6 +632,18 @@ test.for([
     },
   },
   {
+    name: "an edit whose median is the lowest since the page gives it as the best",
+    kind: "edit",
+    summary: twentyPushes,
+    lastPage: { judgement: "over", bestP50: 190 },
+    expected: {
+      page: {
+        impact:
+          "pushes that skipped the slow rows, last 24 h: p50 180 s (line 165 s; 180 s at best since the page), p90 187 s (line 200 s), n=20; their critical path ends with preview-os.yml:specs on 20 of the 20",
+      },
+    },
+  },
+  {
     name: "a test page before any push skipped the slow rows says it judged nothing",
     kind: "post",
     tooFew: true,
