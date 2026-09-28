@@ -32,7 +32,11 @@ test("the sidebar shows the docs as a tree, follows a doc an agent adds, and ⌘
   await editor.and(page.locator('[contenteditable="true"]')).waitFor();
   await editor.filter({ hasText: "Lisbon offsite" }).waitFor();
   const sidebar = page.locator('[data-slot="sidebar"]');
-  await sidebar.getByText("offsites", { exact: true }).waitFor();
+  // a folder is a <details>: its row is the <summary>
+  await sidebar
+    .locator("summary")
+    .filter({ hasText: /^offsites$/ })
+    .waitFor();
   await sidebar
     .getByRole("link", { name: "lisbon-offsite", exact: true })
     .and(page.locator("[data-active]"))
@@ -41,7 +45,10 @@ test("the sidebar shows the docs as a tree, follows a doc an agent adds, and ⌘
   // an agent commits a doc in another folder: it is in the sidebar without a reload, its folder shut
   await fixture.itx.repos.get("/repos/docs").writeFile("plans/q4-roadmap.md", "# Q4 roadmap\n");
   // timeout: a commit made elsewhere, so the spinner-waiter has nothing to extend by
-  await sidebar.getByText("plans", { exact: true }).waitFor({ timeout: 10_000 });
+  await sidebar
+    .locator("summary")
+    .filter({ hasText: /^plans$/ })
+    .waitFor({ timeout: 10_000 });
 
   // ⌘K finds it by name, though its folder is shut, and opens it
   await sidebar.getByRole("button", { name: "Search" }).click();
