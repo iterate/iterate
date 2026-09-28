@@ -1,7 +1,7 @@
 // scripts/ci/ci-bucket.ts — THE CI BUCKET (envs.ts `ciBucketEnvs.ci`, docs/test-evidence.md)
 // through R2's S3 API (https://developers.cloudflare.com/r2/api/s3/api/): the test evidence upload
-// (scripts/ci/test-evidence.ts) writes to it, and the flake dashboard (scripts/ci/flake-dashboard)
-// reads it.
+// (scripts/ci/test-evidence.ts) and the context sweep's backups (scripts/ci/context-sweep.ts) write
+// to it, and the flake dashboard (scripts/ci/flake-dashboard) reads it.
 //
 // The credentials are the Cloudflare API token CI already holds (Doppler `_shared/preview`'s
 // CLOUDFLARE_API_TOKEN, the one preview deploys use): an API token with R2 permissions is also an
@@ -60,20 +60,37 @@ export async function ciBucket(input: {
     throw new Error(`R2 ${what}: ${response.status} ${await response.text()}`);
   };
   return {
-    /** A write-once PUT (`If-None-Match: *`) whose payload hash R2 checks: its answer, a 412 for a
-     *  key that already exists included. */
-    put: (key: string, body: Uint8Array, headers: { contentType: string; sha256: string }) =>
-      signed(`PUT ${key}`, objectUrl(key), {
+    /**
+     * A WRITE-ONCE PUT (`If-None-Match: *`) whose payload hash R2 checks: the body's sha256 is
+     * signed as `x-amz-content-sha256`, so R2 refuses a body that changed on the way
+     * (https://docs.aws.amazon.com/AmazonS3/latest/API/sig-v4-header-based-auth.html). Resolves
+     * once R2 holds these bytes at `key`: a fresh PUT, or a 412 for a key that already holds them
+     * (a single PUT's ETag is the body's MD5), which is an earlier try of this write that landed
+     * after all. Anything else throws.
+     */
+    async put(key: string, body: Uint8Array, contentType: string) {
+      const response = await signed(`PUT ${key}`, objectUrl(key), {
         method: "PUT",
         body,
         headers: {
-          "content-type": headers.contentType,
+          "content-type": contentType,
           "if-none-match": "*",
-          "x-amz-content-sha256": headers.sha256,
+          "x-amz-content-sha256": createHash("sha256").update(body).digest("hex"),
         },
-      }),
-    /** The object's headers, as R2 answers them. */
-    head: (key: string) => signed(`HEAD ${key}`, objectUrl(key), { method: "HEAD" }),
+      });
+      if (response.ok) return;
+      const answer = `${response.status} ${await response.text()}`;
+      if (response.status === 412) {
+        const held = await signed(`HEAD ${key}`, objectUrl(key), { method: "HEAD" });
+        // Cloudflare's edge compresses a JSON answer and so marks its ETag weak: `W/"<md5>"`.
+        const etag = held.headers.get("etag")?.match(/^(?:W\/)?"([0-9a-f]{32})"$/u)?.[1];
+        if (held.ok && etag === createHash("md5").update(body).digest("hex")) {
+          console.log(`[${input.area}] ${key} already held these bytes`);
+          return;
+        }
+      }
+      throw new Error(`R2 PUT ${input.bucketName}/${key}: ${answer}`);
+    },
     /** The object's text. */
     get: (key: string) => text(`GET ${key}`, objectUrl(key)),
     /** Every object under `prefix`: ListObjectsV2, a page of up to 1,000 keys at a time. */

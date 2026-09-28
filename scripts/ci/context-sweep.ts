@@ -13,7 +13,12 @@
 // as `session.contexts.readEvents` pages it (without a wake) up to the head. The destruction
 // (`session.contexts.destroy`, refused for a global context and for any project that still exists)
 // waits for the bucket to hold the backup: an orphan whose backup did not land is left for the next
-// run. A backup holds the log alone: a context's kv and its facets' storage go with it.
+// run, and so is one whose newest event is under an hour old (a running test's context, whose project
+// was made up: the nightly crash hunt's). A backup holds the log alone: a context's kv and its
+// facets' storage go with it. Each orphan's read and destruction is asked again when the platform
+// failed it (`retryPlatformFailures`, CI_HTTP): a prd deploy mid-sweep resets every context and may
+// drop the session's socket, which is connected again. Each orphan logs one
+// `context-sweep.orphan` line as soon as it is done, so a run cut short still says what it destroyed.
 //
 //   pnpm tsx scripts/ci/context-sweep.ts --env prd [--destroy]
 //
@@ -24,13 +29,18 @@
 // object could not say who it is or an orphan was not destroyed; orphans alone are the report, not
 // a failure. The report is the step's `report` output too (GITHUB_OUTPUT), which `post` sends to
 // Slack.
-import { createHash } from "node:crypto";
 import { appendFileSync } from "node:fs";
 import type { IterateSessionApi } from "iterate/api";
-import { connectIterate } from "iterate/node";
+import { connectIterate, type IterateConnection } from "iterate/node";
 import { createCli } from "trpc-cli";
 import { z } from "zod";
 import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
+import {
+  CI_HTTP,
+  failureKind,
+  retryPlatformFailures,
+  type FailureKind,
+} from "@iterate-com/shared/platform-retry";
 import { OS_DOPPLER_PROJECT, ciBucketEnvs, osEnvs } from "../../envs.ts";
 import { parseAppConfig } from "../../apps/os/src/app-config.ts";
 import { getWorkerDoNamespaces } from "../lib/do-reset.ts";
@@ -106,11 +116,13 @@ export default async function contextSweep(options: {
     APP_CONFIG: ctx.secrets.APP_CONFIG,
     APP_CONFIG_SECRETS__KEY: ctx.secrets.APP_CONFIG_SECRETS__KEY,
   });
-  using connection = await connectIterate({
-    baseUrl: target.baseUrl,
-    auth: { type: "admin-secret", secret: config.secrets.adminBearer.exposeSecret() },
-  });
-  const { session } = connection;
+  using connection = await reconnecting(() =>
+    connectIterate({
+      baseUrl: target.baseUrl,
+      auth: { type: "admin-secret", secret: config.secrets.adminBearer.exposeSecret() },
+    }),
+  );
+  const session = await connection.session();
   const contexts: SweptContext[] = [];
   for (let start = 0; start < stored.length; start += 50)
     contexts.push(...(await session.contexts.identify(stored.slice(start, start + 50))));
@@ -121,11 +133,15 @@ export default async function contextSweep(options: {
   const swept = putBackup
     ? await backUpAndDestroy({
         orphans: classified.orphans,
-        contexts: session.contexts,
+        contexts: {
+          readEvents: async (id, afterOffset) =>
+            (await connection.session()).contexts.readEvents(id, afterOffset),
+          destroy: async (id) => (await connection.session()).contexts.destroy(id),
+        },
         putBackup,
         prefix: backupPrefix,
       })
-    : { destroyed: [], failed: [] };
+    : { destroyed: [], recent: [], failed: [] };
 
   const report: ContextSweepReport = {
     env: options.env,
@@ -136,6 +152,7 @@ export default async function contextSweep(options: {
     emptied: classified.emptied.length,
     unidentified: classified.unidentified.length,
     destroyed: swept.destroyed.length,
+    recent: swept.recent.length,
     destroyFailed: swept.failed.length,
     backups: putBackup ? `r2://${ciBucketEnvs.ci.bucketName}/${backupPrefix}` : undefined,
   };
@@ -144,7 +161,6 @@ export default async function contextSweep(options: {
     console.log(`orphan ${orphan.projectId}${orphan.path} (${orphan.id})`);
   for (const context of classified.unidentified)
     console.log(`unidentified ${context.id}: ${context.error}`);
-  for (const failure of swept.failed) console.log(`not destroyed ${failure.id}: ${failure.error}`);
   if (process.env.GITHUB_OUTPUT)
     appendFileSync(process.env.GITHUB_OUTPUT, `report=${JSON.stringify(report)}\n`);
   if (report.unidentified || report.destroyFailed)
@@ -154,7 +170,7 @@ export default async function contextSweep(options: {
 }
 
 /** Posts a sweep job's result (context-sweep.yml's notify job): to #ci always, and to #error-pulse
- *  when it destroyed anything or failed. REPORT is the sweep job's `report` output (empty when it
+ *  when it failed. REPORT is the sweep job's `report` output (empty when it
  *  failed before its report), RESULT its result; the link is the notify job's own Depot page. */
 export async function post() {
   const slack = getSlackClient();
@@ -170,7 +186,8 @@ export async function post() {
 }
 
 /** What one sweep found and did: counts of the objects Cloudflare lists as holding data, by what
- *  each is, and of the orphans destroyed (each backed up first, under `backups`) and not. */
+ *  each is, and of the orphans destroyed (each backed up first, under `backups`), left for the next
+ *  run as recent, and not destroyed. */
 const ContextSweepReport = z.object({
   env: z.string(),
   stored: z.number(),
@@ -180,44 +197,119 @@ const ContextSweepReport = z.object({
   emptied: z.number(),
   unidentified: z.number(),
   destroyed: z.number(),
+  recent: z.number(),
   destroyFailed: z.number(),
   backups: z.string().optional(),
 });
 type ContextSweepReport = z.infer<typeof ContextSweepReport>;
 
-/** Each orphan in turn: its backup, `<prefix><id>.jsonl` (the header says what it holds), then its
- *  destruction once `putBackup` resolves. An orphan whose backup or destruction failed is named in
- *  `failed`, and the sweep goes on to the next. */
+/** How recent an orphan's newest event may be for the sweep to destroy it: a context written in the
+ *  last hour may belong to a test still running against a made-up project (the crash hunt's). */
+const RECENT_MS = 60 * 60_000;
+
+/** Each orphan in turn: its whole log, then — unless its newest event is recent — its backup,
+ *  `<prefix><id>.jsonl` (the header says what it holds), and its destruction once `putBackup`
+ *  resolves. Each read and destruction is asked again when the platform failed it; a destruction
+ *  answered by an empty object (an earlier try that landed) is done. An orphan whose backup or
+ *  destruction failed is named in `failed`, and the sweep goes on to the next. Each orphan logs
+ *  one `context-sweep.orphan` line when it is done. */
 export async function backUpAndDestroy(input: {
   orphans: { id: string; projectId: string; path: string }[];
   contexts: Pick<IterateSessionApi["contexts"], "readEvents" | "destroy">;
   /** Resolves once the CI bucket holds `body` at `key`. */
   putBackup: (key: string, body: Uint8Array) => Promise<void>;
   prefix: string;
+  now?: () => number;
 }) {
+  const now = input.now || Date.now;
   const destroyed: string[] = [];
+  const recent: string[] = [];
   const failed: { id: string; error: string }[] = [];
-  for (const { id, projectId, path } of input.orphans)
+  for (const { id, projectId, path } of input.orphans) {
+    const key = `${input.prefix}${id}.jsonl`;
+    const line = { event: "context-sweep.orphan", id, projectId, path };
     try {
       // a page's lines at a time: one string of a whole log could pass V8's string limit (~512 MiB)
       const chunks = [Buffer.from(`${JSON.stringify({ id, projectId, path })}\n`)];
+      let events = 0;
+      let newest = "";
       for (let afterOffset = 0; ;) {
-        const page = await input.contexts.readEvents(id, afterOffset);
+        const page = await retryingPlatformFailures(`readEvents ${id}`, () =>
+          input.contexts.readEvents(id, afterOffset),
+        );
         chunks.push(Buffer.from(page.events.map((event) => `${JSON.stringify(event)}\n`).join("")));
+        events += page.events.length;
+        newest = page.events.at(-1)?.createdAt || newest;
         if (page.atHead) break;
         afterOffset = page.scannedThroughOffset;
       }
-      await input.putBackup(`${input.prefix}${id}.jsonl`, Buffer.concat(chunks));
-      await input.contexts.destroy(id);
+      if (newest && now() - Date.parse(newest) < RECENT_MS) {
+        recent.push(id);
+        console.log(JSON.stringify({ ...line, outcome: "recent", events, newest }));
+        continue;
+      }
+      const body = Buffer.concat(chunks);
+      await input.putBackup(key, body);
+      await retryingPlatformFailures(`destroy ${id}`, () =>
+        input.contexts.destroy(id).catch((error: unknown) => {
+          if (!String(error).includes(EMPTIED)) throw error;
+        }),
+      );
       destroyed.push(id);
+      console.log(
+        JSON.stringify({ ...line, outcome: "destroyed", backup: key, bytes: body.length, events }),
+      );
     } catch (error) {
       failed.push({ id, error: String(error).slice(0, 300) });
+      console.log(JSON.stringify({ ...line, outcome: "not-destroyed", error: String(error) }));
     }
-  return { destroyed, failed };
+  }
+  return { destroyed, recent, failed };
+}
+
+/** `call`, asked again on CI_HTTP's waits while the platform fails it: a deploy's reset of the
+ *  context, or a session whose socket closed (capnweb's "Peer closed WebSocket", which
+ *  `reconnecting` answers with a new connection). Both calls are safe to repeat: a read, and a
+ *  destruction whose landed try answers EMPTIED. */
+const retryingPlatformFailures = <T>(name: string, call: () => Promise<T>) =>
+  retryPlatformFailures(call, {
+    area: "context-sweep",
+    schedule: CI_HTTP,
+    idempotent: true,
+    kind: sweepFailureKind,
+    describe: () => ({ name }),
+  });
+
+const sweepFailureKind = (error: unknown): FailureKind =>
+  /Peer closed WebSocket/.test(String(error)) ? "disconnected" : failureKind(error);
+
+/** The deployment's session, connected again once its socket closed: a prd deploy mid-sweep may
+ *  close it. */
+async function reconnecting(connect: () => Promise<IterateConnection>) {
+  let connection = await connect();
+  let closed = false;
+  const watch = (current: IterateConnection) =>
+    void current.closed.then(() => {
+      if (current === connection) closed = true;
+    });
+  watch(connection);
+  return {
+    async session() {
+      if (closed) {
+        connection[Symbol.dispose]();
+        connection = await connect();
+        closed = false;
+        watch(connection);
+      }
+      return connection.session;
+    },
+    [Symbol.dispose]: () => connection[Symbol.dispose](),
+  };
 }
 
 /** A sweep's Slack posts: its result to #ci, and the same to #error-pulse, mentioning Jonas and
- *  Misha, when it destroyed anything or did not succeed. Pure. */
+ *  Misha, when it did not succeed. Destroying orphans is routine: the nightly crash hunt leaves
+ *  about 14 a night. Pure. */
 export function sweepMessages(input: {
   report: ContextSweepReport | undefined;
   /** The sweep job's result: `success`, `failure`, `cancelled`. */
@@ -234,6 +326,7 @@ export function sweepMessages(input: {
         report.unidentified && `${report.unidentified} could not say who they are`,
         report.destroyed &&
           `${report.destroyed} orphans destroyed, each backed up first to ${report.backups}`,
+        report.recent && `${report.recent} orphans active in the last hour, left for the next run`,
         report.destroyFailed && `${report.destroyFailed} orphans not destroyed`,
       ]
         .filter(Boolean)
@@ -243,16 +336,14 @@ export function sweepMessages(input: {
   const link = `<${input.runUrl}|View the Depot job>`;
   return [
     { channel: slackChannelIds["#ci"], text: `${text}\n${link}` },
-    ...(failed || report?.destroyed
+    ...(failed
       ? [{ channel: slackChannelIds["#error-pulse"], text: `${text} ${onCallMention}\n${link}` }]
       : []),
   ];
 }
 
 /** Writes a backup into the CI bucket (scripts/ci/ci-bucket.ts, with the environment's
- *  CLOUDFLARE_API_TOKEN): a write-once PUT whose sha256 R2 checks. The run's keys are new, so a 412
- *  is this PUT's own earlier try, landed, when the key holds these very bytes (a single PUT's ETag
- *  is their MD5); anything else fails the backup. */
+ *  CLOUDFLARE_API_TOKEN): resolves once R2 holds it (ci-bucket.ts `put`). */
 async function backupWriter() {
   const bucket = await ciBucket({
     accountId: ciBucketEnvs.ci.cloudflareAccountId,
@@ -262,22 +353,7 @@ async function backupWriter() {
     // a large context's backup is a few hundred megabytes: minutes on a slow link
     timeoutMs: 600_000,
   });
-  return async (key: string, body: Uint8Array) => {
-    const response = await bucket.put(key, body, {
-      contentType: "application/x-ndjson",
-      sha256: createHash("sha256").update(body).digest("hex"),
-    });
-    if (response.ok) return;
-    const answer = `${response.status} ${await response.text()}`;
-    if (response.status === 412) {
-      // Cloudflare's edge may mark the ETag weak: `W/"<md5>"`.
-      const etag = (await bucket.head(key)).headers
-        .get("etag")
-        ?.match(/^(?:W\/)?"([0-9a-f]{32})"$/u)?.[1];
-      if (etag === createHash("md5").update(body).digest("hex")) return;
-    }
-    throw new Error(`R2 PUT ${ciBucketEnvs.ci.bucketName}/${key}: ${answer}`);
-  };
+  return (key: string, body: Uint8Array) => bucket.put(key, body, "application/x-ndjson");
 }
 
 function required(name: string): string {

@@ -1,6 +1,6 @@
 // The context sweep's decisions (scripts/ci/context-sweep.ts): what each stored object is, that an
-// orphan is destroyed only once its whole log is in the CI bucket, and where each run's result is
-// posted. Cloudflare's listing, the session and R2 are the script's IO, left out.
+// orphan is destroyed only once its whole log is in the CI bucket, that a deploy's reset mid-sweep
+// is asked again rather than failing the run, and where each run's result is posted. Cloudflare's listing, the session and R2 are the script's IO, left out.
 import { expect, test } from "vitest";
 import type { StreamPage } from "iterate/api";
 import {
@@ -47,13 +47,45 @@ test.for<{ name: string; contexts: SweptContext[]; expected: object }>([
   });
 });
 
-test.for<{ name: string; failing?: "put" | "destroy"; expected: object }>([
+test.for<{
+  name: string;
+  failing?: "put" | "destroy" | "deploy-reset" | "landed-destroy";
+  newestAt?: string;
+  expected: object;
+}>([
   {
     name: "an orphan's identity and whole log, read a page at a time, land in the bucket before it is destroyed",
     expected: {
       calls: ["read o 0", "read o 2", "put backups/run/o.jsonl", "destroy o"],
       backups: { "backups/run/o.jsonl": [identity("o"), event(1), event(2), event(5)] },
-      result: { destroyed: ["o"], failed: [] },
+      result: { destroyed: ["o"], recent: [], failed: [] },
+    },
+  },
+  {
+    name: "a read that a deploy's reset failed is asked again, and the orphan is still swept",
+    failing: "deploy-reset",
+    expected: {
+      calls: ["read o 0", "read o 0", "read o 2", "put backups/run/o.jsonl", "destroy o"],
+      backups: { "backups/run/o.jsonl": [identity("o"), event(1), event(2), event(5)] },
+      result: { destroyed: ["o"], recent: [], failed: [] },
+    },
+  },
+  {
+    name: "a destruction asked again after its first try landed answers EMPTIED: destroyed",
+    failing: "landed-destroy",
+    expected: {
+      calls: ["read o 0", "read o 2", "put backups/run/o.jsonl", "destroy o", "destroy o"],
+      backups: { "backups/run/o.jsonl": [identity("o"), event(1), event(2), event(5)] },
+      result: { destroyed: ["o"], recent: [], failed: [] },
+    },
+  },
+  {
+    name: "an orphan written in the last hour (a running test's) is neither backed up nor destroyed",
+    newestAt: "2026-09-28T02:30:00.000Z",
+    expected: {
+      calls: ["read o 0", "read o 2"],
+      backups: {},
+      result: { destroyed: [], recent: ["o"], failed: [] },
     },
   },
   {
@@ -65,7 +97,7 @@ test.for<{ name: string; failing?: "put" | "destroy"; expected: object }>([
         ...["read p 0", "read p 2", "put backups/run/p.jsonl", "destroy p"],
       ],
       backups: { "backups/run/p.jsonl": [identity("p"), event(1), event(2), event(5)] },
-      result: { destroyed: ["p"], failed: [{ id: "o", error: "Error: R2 PUT 500" }] },
+      result: { destroyed: ["p"], recent: [], failed: [{ id: "o", error: "Error: R2 PUT 500" }] },
     },
   },
   {
@@ -74,22 +106,33 @@ test.for<{ name: string; failing?: "put" | "destroy"; expected: object }>([
     expected: {
       calls: ["read o 0", "read o 2", "put backups/run/o.jsonl", "destroy o"],
       backups: { "backups/run/o.jsonl": [identity("o"), event(1), event(2), event(5)] },
-      result: { destroyed: [], failed: [{ id: "o", error: "Error: FORBIDDEN" }] },
+      result: { destroyed: [], recent: [], failed: [{ id: "o", error: "Error: FORBIDDEN" }] },
     },
   },
-])("$name", async ({ failing, expected }) => {
+])("$name", async ({ failing, newestAt, expected }) => {
   const calls: string[] = [];
   const backups: Record<string, unknown[]> = {};
+  let reset = failing === "deploy-reset";
+  let destroys = 0;
   const result = await backUpAndDestroy({
     orphans: [identity("o"), ...(failing === "put" ? [identity("p")] : [])],
     contexts: {
       readEvents: async (id, afterOffset) => {
         calls.push(`read ${id} ${afterOffset}`);
-        return page(afterOffset);
+        if (reset) {
+          reset = false;
+          throw new Error("Durable Object reset because its code was updated.");
+        }
+        return page(afterOffset, newestAt);
       },
       destroy: async (id) => {
         calls.push(`destroy ${id}`);
         if (failing === "destroy") throw new Error("FORBIDDEN");
+        // the first try landed, its answer lost to a dropped socket
+        if (failing === "landed-destroy" && destroys++ === 0)
+          throw new Error("Peer closed WebSocket: 1006 ");
+        if (failing === "landed-destroy")
+          throw new Error("Error: … by id, only a context that was born answers.");
         return { projectId: "prj_gone", path: "/" };
       },
     },
@@ -103,6 +146,7 @@ test.for<{ name: string; failing?: "put" | "destroy"; expected: object }>([
         .map((line) => JSON.parse(line));
     },
     prefix: "backups/run/",
+    now: () => Date.parse("2026-09-28T03:00:00.000Z"),
   });
   expect({ calls, backups, result }).toEqual(expected);
 });
@@ -116,6 +160,7 @@ const report = {
   emptied: 0,
   unidentified: 0,
   destroyed: 0,
+  recent: 0,
   destroyFailed: 0,
 };
 const run = { refName: "main", runUrl: "https://depot.dev/run" };
@@ -132,20 +177,21 @@ test.for([
     ],
   },
   {
-    name: "a run that destroyed orphans posts to #ci and pages #error-pulse, naming the backups",
+    name: "a run that destroyed orphans is routine too (the crash hunt leaves some every night): #ci alone, naming the backups",
     messages: sweepMessages({
       ...run,
       result: "success",
-      report: { ...report, destroyed: 43, backups: "r2://iterate-ci/backups/context-sweep/prd/r/" },
+      report: {
+        ...report,
+        destroyed: 41,
+        recent: 2,
+        backups: "r2://iterate-ci/backups/context-sweep/prd/r/",
+      },
     }),
     expected: [
       {
         channel: "C0B3QJSU32A",
-        text: "🧹 Context sweep of prd on main: 172 stored, 111 live, 18 global, 43 orphans; 43 orphans destroyed, each backed up first to r2://iterate-ci/backups/context-sweep/prd/r/\n<https://depot.dev/run|View the Depot job>",
-      },
-      {
-        channel: "C09K1CTN4M7",
-        text: "🧹 Context sweep of prd on main: 172 stored, 111 live, 18 global, 43 orphans; 43 orphans destroyed, each backed up first to r2://iterate-ci/backups/context-sweep/prd/r/ <@U067G4QRFK2> <@U099JH9TAF2>\n<https://depot.dev/run|View the Depot job>",
+        text: "🧹 Context sweep of prd on main: 172 stored, 111 live, 18 global, 43 orphans; 41 orphans destroyed, each backed up first to r2://iterate-ci/backups/context-sweep/prd/r/; 2 orphans active in the last hour, left for the next run\n<https://depot.dev/run|View the Depot job>",
       },
     ],
   },
@@ -194,19 +240,14 @@ function identity(id: string) {
   return { id, projectId: "prj_gone", path: "/" };
 }
 
-/** The log offsets 1, 2 and 5 (3 and 4 were ephemerals), in two pages: the first cut after 2. */
-function page(afterOffset: number): StreamPage {
+/** The log offsets 1, 2 and 5 (3 and 4 were ephemerals), in two pages: the first cut after 2. The
+ *  newest, 5, written at `newestAt`. */
+function page(afterOffset: number, newestAt?: string): StreamPage {
   return afterOffset === 0
     ? { events: [event(1), event(2)], scannedThroughOffset: 2, atHead: false }
-    : { events: [event(5)], scannedThroughOffset: 5, atHead: true };
+    : { events: [event(5, newestAt)], scannedThroughOffset: 5, atHead: true };
 }
 
-function event(offset: number) {
-  return {
-    type: "events.iterate.com/test/marker",
-    payload: {},
-    offset,
-    path: "/",
-    createdAt: "2026-09-28T00:00:00.000Z",
-  };
+function event(offset: number, createdAt = "2026-09-28T00:00:00.000Z") {
+  return { type: "events.iterate.com/test/marker", payload: {}, offset, path: "/", createdAt };
 }
