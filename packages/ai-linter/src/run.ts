@@ -399,11 +399,11 @@ async function lint(job: Job, config: LintConfig, io: LintIo, github: GithubApi)
     });
   const llmResult = llm && "value" in llm ? llm.value : null;
   const jevResult = jev && "value" in jev ? jev.value : null;
-  const findings = [...(llmResult?.findings ?? []), ...(jevResult?.findings ?? [])];
+  const findings = [...(llmResult?.findings || []), ...(jevResult?.findings || [])];
   const dropped = (llmResult?.dropped ?? 0) + (jevResult?.dropped ?? 0);
-  const jevStats = jevResult?.stats ?? null;
+  const jevStats = jevResult?.stats || null;
   const covered = reviewed.length > 0 || excerpted.length > 0 || judged.length > 0;
-  const summary = llmResult?.summary ?? (covered ? "" : "No changed file is covered by a rule.");
+  const summary = llmResult?.summary || (covered ? "" : "No changed file is covered by a rule.");
   for (const [path, read] of reads) {
     const error = await read.then(
       () => null,

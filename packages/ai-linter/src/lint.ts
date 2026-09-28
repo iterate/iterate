@@ -511,7 +511,7 @@ export function modelText(answer: unknown): string {
   if (!parsed.success) throw new Error("the model answered nothing");
   const { output_text, output, response } = parsed.data;
   const outputText = output
-    .flatMap((item) => item?.content ?? [])
+    .flatMap((item) => item?.content || [])
     .find((part) => part?.type === "output_text")?.text;
   const text = output_text || outputText || response;
   if (!text) throw new Error(`the model answered no text: ${JSON.stringify(answer).slice(0, 300)}`);
