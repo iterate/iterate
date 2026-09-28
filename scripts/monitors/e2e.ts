@@ -329,9 +329,9 @@ export async function checkMainE2e(input: {
           .at(-1);
         if (!newest) return { ran: false as const };
         const artifact = mainE2eRecords.artifact(suite, newest.attemptId);
-        const bytes = (await workflowArtifact(input.depot, run, (name) => name === artifact))?.[
-          mainE2eRecords.file
-        ];
+        const bytes = (
+          await workflowArtifact(input.depot, run, (name) => name === artifact, "first")
+        )?.[mainE2eRecords.file];
         return {
           ran: true as const,
           summary: bytes && FlakeSuiteSummary.parse(JSON.parse(new TextDecoder().decode(bytes))),
@@ -405,6 +405,7 @@ export async function checkRealModel(input: {
           input.depot,
           run,
           (name) => name === realModelTelemetry.artifact,
+          "first",
         )) ?? {};
       const artifacts = Object.entries(files)
         .filter(([path]) => /^raw\/.+\.json$/u.test(path))

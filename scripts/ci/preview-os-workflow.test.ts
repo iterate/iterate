@@ -172,6 +172,24 @@ test("Preview OS deploys the PR merged into main, and the test jobs use that ver
   ).toEqual({ HEAD_SHA: "${{ needs.deploy.outputs.head-sha }}" });
 });
 
+// What a PR run reuses (apps/os/scripts/preview-reuse.ts) only its deploy knows: the suites read its
+// plan from the run's artifact once their wait is over (preview.ts `planOfThisRun`), and the cleanup
+// keeps the deployment the plan reuses.
+test("Deploy preview hands its plan to the suites, and the cleanup keeps what it reuses", () => {
+  const deploySteps = preview.jobs.deploy!.steps || [];
+  const deploy = deploySteps.findIndex((step) => step.id === "deploy");
+  expect(deploySteps[deploy + 1]).toMatchObject({
+    uses: "actions/upload-artifact@v4",
+    with: { name: "preview-plan", path: "apps/os/output/preview.json" },
+  });
+  expect(preview.jobs.deploy!.outputs).toMatchObject({
+    reuses: "${{ steps.deploy.outputs.reuses }}",
+  });
+  expect(
+    preview.jobs.cleanup!.steps?.find((step) => step.run?.includes("cleanup-superseded"))?.env,
+  ).toMatchObject({ PREVIEW_REUSES: "${{ needs.deploy.outputs.reuses }}" });
+});
+
 test("Preview OS: only the trace runs after the suites, so the next push's deploy waits for nothing else", () => {
   for (const suite of suites) {
     const after = Object.entries(preview.jobs).filter(([, job]) =>

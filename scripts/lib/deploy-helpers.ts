@@ -50,12 +50,18 @@ export function runAsync(
  * plugin snapshots that environment's Worker config (CLOUDFLARE_ENV) into dist/, and that snapshot
  * is what deploys and what a per-PR preview starts from. Its output streams as it runs; a failure's
  * error carries the last 40 lines, so a report of it (the PR preview's `deploy failed`) says why.
+ * `env` is the build's own besides the environment's name: a partial per-commit deployment's
+ * PREVIEW_REUSE (start-app.ts buildStartApp).
  */
-export async function viteBuild(appRoot: string, cloudflareEnv: string) {
+export async function viteBuild(
+  appRoot: string,
+  cloudflareEnv: string,
+  env: Record<string, string>,
+) {
   rmSync(join(appRoot, "dist"), { recursive: true, force: true });
   const result = await runStreamingCaptured("pnpm", ["exec", "vite", "build"], {
     cwd: appRoot,
-    env: { CLOUDFLARE_ENV: cloudflareEnv },
+    env: { ...env, CLOUDFLARE_ENV: cloudflareEnv },
   });
   if (result.code === 0) return;
   throw new Error(

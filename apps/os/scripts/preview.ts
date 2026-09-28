@@ -6,11 +6,15 @@
 //   config              build apps/os for this commit's deployment and name the config it wrote
 //   deploy              this commit's deployment: apps/os (its D1, R2 bucket and Artifacts namespace
 //                       created, the D1 migrated), every app on top, the readiness gate, the sign-in
-//                       seed, the PR body's section (the previous one folded first)
+//                       seed, the PR body's section (the previous one folded first). A PR's run
+//                       deploys only what its commit changed since an earlier full deployment, and
+//                       reuses that one for the rest (preview-reuse.ts)
 //   e2e, specs          the vitest e2e suite (`--slow-rows`, scripts/slow-rows.ts) or the Playwright
 //                       specs against a deployment: beside its run's deploy, this commit's, once that
-//                       deploy is done (PREVIEW_AWAIT_DEPLOY_JOB); else the prefix's newest
-//   cleanup-superseded  delete the prefix's deployments PREVIEW_DEPLOYMENT supersedes
+//                       deploy is done (PREVIEW_AWAIT_DEPLOY_JOB; a PR run's, the plan its deploy
+//                       uploaded); else the prefix's newest full one
+//   cleanup-superseded  delete the prefix's deployments PREVIEW_DEPLOYMENT supersedes, never the one
+//                       its plan reuses (PREVIEW_REUSES)
 //   delete              every deployment of a prefix: a closed PR's (preview-delete.yml)
 //   sweep               the stale deployments, the legacy Worker Previews and the former parents
 //                       (preview-sweep.ts), nightly (preview-sweep.yml)
@@ -29,7 +33,14 @@ import {
   TestEvidenceTarget,
   testEvidencePaths,
 } from "@iterate-com/shared/test-support/test-evidence";
-import { OS_DOPPLER_PROJECT, osEnv, osEnvs, type OsEnv } from "../../../envs.ts";
+import {
+  OS_DOPPLER_PROJECT,
+  osEnvs,
+  previewDeployment,
+  previewPlanMembers,
+  type OsEnv,
+  type PreviewPlan,
+} from "../../../envs.ts";
 import {
   collectSecrets,
   deployWithSecrets,
@@ -43,9 +54,14 @@ import {
   type EnvContext,
 } from "../../../scripts/lib/env-context.ts";
 import { buildStartApp, type StartApp } from "../../../scripts/lib/start-app.ts";
-import { awaitDeployOfThisRun, SUITE_BOUND_MS } from "../../../scripts/ci/await-deploy.ts";
+import {
+  artifactOfThisRun,
+  awaitDeployOfThisRun,
+  SUITE_BOUND_MS,
+} from "../../../scripts/ci/await-deploy.ts";
 import { createOctokit, getOctokit, getRepo } from "../../../scripts/ci/github.ts";
 import { replaceMarkedSection } from "../../../scripts/ci/markdown-annotator.ts";
+import { changedUnits } from "../../../scripts/ci/preview-units.ts";
 import { getSlackClient, slackChannelIds } from "../../../scripts/ci/slack.ts";
 import { traceOperation } from "../../../scripts/ci/tracing/tracing.ts";
 import { parseAppConfig, type AppConfig } from "../src/app-config.ts";
@@ -75,7 +91,7 @@ import {
   FORMER_PARENTS,
   MAIN_ON_DEV,
   previewDeploymentName,
-  previewDeploymentUrls,
+  previewPlanUrls,
   previewPullRequestNumber,
   renderPullRequestSection,
   PREVIEW_SECTION,
@@ -84,6 +100,7 @@ import {
   writePullRequestBody,
   type PullRequestBody,
 } from "./preview-config.ts";
+import { planReuse, reuseCandidates, type ReuseCandidate } from "./preview-reuse.ts";
 import {
   groupPreviewDeployments,
   newestPreviewDeployment,
@@ -351,10 +368,19 @@ async function deletePreviewDeployments(cf: Cf, deployments: PreviewDeploymentLi
 }
 
 /** THE PREFIX'S DEPLOYMENTS THIS ONE SUPERSEDES (preview-sweep.ts `planSupersededCleanup`): each
- *  run's `Clean up superseded` job, once its own deployment is ready. Never the run's verdict: the
- *  job does not gate the checks, and what it leaves the next run's cleanup or the sweep takes. */
-async function cleanupSuperseded(cf: Cf, name: string, options: { dryRun: boolean }) {
-  const superseded = planSupersededCleanup(await listPreviewDeployments(cf), name);
+ *  run's `Clean up superseded` job, once its own deployment is ready, keeping the one its plan
+ *  reuses. Never the run's verdict: the job does not gate the checks, and what it leaves the next
+ *  run's cleanup or the sweep takes. */
+async function cleanupSuperseded(
+  cf: Cf,
+  name: string,
+  reuses: string | undefined,
+  options: { dryRun: boolean },
+) {
+  const superseded = planSupersededCleanup(await listPreviewDeployments(cf), name, {
+    now: Date.now(),
+    keep: reuses,
+  });
   for (const deployment of superseded)
     console.log(
       `  ${options.dryRun ? "would delete" : "delete"} ${deployment.name}: superseded by ${name}`,
@@ -389,7 +415,8 @@ async function deletePrefix(cf: Cf, prefix: string, options: { dryRun: boolean }
 }
 
 /** The deployment a suite tests away from its run's deploy (a test-only dispatch, a laptop): the
- *  prefix's newest. */
+ *  prefix's newest full one. A partial deployment's plan is its run's alone (preview-reuse.ts), so a
+ *  PR whose newest push deployed only an app is tested on its newest full deployment. */
 async function deploymentToTest(prefix: string) {
   const newest = newestPreviewDeployment(
     await listPreviewDeployments((await accountContext()).cf),
@@ -403,17 +430,18 @@ async function deploymentToTest(prefix: string) {
 // ── the apps on top, and main on dev ───────────────────────────────────────────────────────────
 
 /** One app on top, from its own build for `envName` (start-app.ts `startAppWorkerConfig`: a
- *  per-commit deployment's signs in against that deployment's apps/os and links to its apps), and
- *  the smoke that it answers at `url`. An app is an OAuth client and nothing else: no secrets, no
- *  data of its own, one Durable Object class for the browser session. */
+ *  per-commit deployment's signs in against its `plan`'s apps/os and links to its apps), and the
+ *  smoke that it answers at `url`. An app is an OAuth client and nothing else: no secrets, no data
+ *  of its own, one Durable Object class for the browser session. */
 async function deployStartApp(
   app: StartApp,
   envName: string,
   url: string,
   credentials: Record<string, string>,
+  plan: PreviewPlan | undefined,
 ) {
   const root = path.resolve(import.meta.dirname, "../..", app.name);
-  await buildStartApp(app, envName);
+  await buildStartApp(app, envName, plan);
   await deployWithSecrets({
     cwd: root,
     builtConfig: findBuiltWranglerConfig(root),
@@ -439,7 +467,8 @@ async function deployParents(ctx: EnvContext<OsEnv>) {
     { name: "apps/os", deploy: () => deployOs({ env: "preview" }) },
     ...APPS.map((app) => ({
       name: `apps/${app.name}`,
-      deploy: () => deployStartApp(app, "preview", app.envs.preview!.baseUrl, credentials),
+      deploy: () =>
+        deployStartApp(app, "preview", app.envs.preview!.baseUrl, credentials, undefined),
     })),
   ];
   const results = await Promise.allSettled(steps.map((step) => step.deploy()));
@@ -472,7 +501,7 @@ async function resetParent(options: { dryRun: boolean }) {
  *  never the deploy's failure. */
 async function deployPreview(
   ctx: EnvContext<OsEnv>,
-  name: string,
+  plan: PreviewPlan,
   prNumber: string | undefined,
   apps: StartApp[],
 ) {
@@ -488,7 +517,43 @@ async function deployPreview(
           console.warn(`could not fold the previous section: ${describe(error)}`),
         )
       : Promise.resolve();
-  await deployPreviewSteps(ctx, name, prNumber, apps, folded);
+  await deployPreviewSteps(ctx, plan, prNumber, apps, folded);
+}
+
+/** A PR RUN'S PLAN (preview-reuse.ts): the full deployments it may reuse, each diffed against this
+ *  checkout's commit, and the first whose apps/os that commit has not changed. A candidate whose
+ *  diff could not be had is passed over, with the reason in the log. */
+async function planDeployment(cf: Cf, name: string, apps: string[]) {
+  const candidates = reuseCandidates(await listPreviewDeployments(cf), name, apps);
+  const diffed = await Promise.all(
+    candidates.map(async ({ name: candidate }): Promise<ReuseCandidate> => {
+      try {
+        const files = await filesChangedSince(previewDeployment(candidate)!.sha);
+        return { name: candidate, changed: changedUnits(files) };
+      } catch (error) {
+        return { name: candidate, changed: undefined, unknown: describe(error) };
+      }
+    }),
+  );
+  const { plan, reasons } = planReuse({ deployment: name, apps, candidates: diffed });
+  for (const reason of reasons) console.log(`[reuse] ${reason}`);
+  return plan;
+}
+
+/** The files this checkout's commit changes since the commit `sha7` names (a deployment's tested
+ *  commit): its full SHA from GitHub, that commit fetched at depth 1 (GitHub serves a PR's earlier
+ *  test merge commits by SHA), then the diff, with a rename's old path and its new one. */
+async function filesChangedSince(sha7: string) {
+  const { data } = await getOctokit().rest.repos.getCommit({ ...getRepo(), ref: sha7 });
+  git("fetch", "--quiet", "--depth=1", "origin", data.sha);
+  return git("diff", "--name-only", "--no-renames", data.sha, "HEAD").split("\n").filter(Boolean);
+}
+
+/** `git <args>` in this checkout, its output trimmed; a failure throws with git's stderr. */
+function git(...args: string[]) {
+  const result = spawnSync("git", args, { cwd: ROOT, encoding: "utf8" });
+  if (result.status !== 0) throw new Error(`git ${args.join(" ")}: ${result.stderr.trim()}`);
+  return result.stdout.trim();
 }
 
 /** The version this deploy made current, as Cloudflare records it: the worker's latest deployment
@@ -508,19 +573,23 @@ async function deployedVersion(ctx: EnvContext<OsEnv>, workerName: string) {
 }
 
 /** apps/os (scripts/deploy.ts: its resources created, its D1 migrated, its secrets, its smokes) and
- *  each app on top, side by side, each a span in the CI trace (docs/ci-traces.md); every URL is
- *  known before anything deploys (envs.ts `previewDeployment`). Every step settles before a failed
- *  one fails the deploy, named. Then the readiness gate on apps/os, and once it passes the sign-in
- *  seed and the PR body's section side by side. */
+ *  each app on top, side by side, each a span in the CI trace (docs/ci-traces.md): the ones the
+ *  plan deploys (all of them, or a partial deployment's changed apps, preview-reuse.ts). Every URL
+ *  is known before anything deploys (envs.ts `previewPlanMembers`). Every step settles before a
+ *  failed one fails the deploy, named. Then the readiness gate on the plan's apps/os, its own or the
+ *  one it reuses, and once it passes the sign-in seed and the PR body's section side by side. */
 async function deployPreviewSteps(
   ctx: EnvContext<OsEnv>,
-  name: string,
+  plan: PreviewPlan,
   prNumber: string | undefined,
   apps: StartApp[],
   folded: Promise<void>,
 ) {
   assertFreshInstall(REPO_ROOT);
-  const urls = previewDeploymentUrls(name);
+  const name = plan.deployment;
+  const members = previewPlanMembers(plan);
+  const urls = previewPlanUrls(plan);
+  const deploys = (member: string) => plan.deploys.includes(member);
   // the paths this PR changes, for the Dash's template links (signInLinks), read beside the builds
   const changed =
     prNumber && apps.some((app) => app.name === "dash")
@@ -536,13 +605,17 @@ async function deployPreviewSteps(
     CLOUDFLARE_ACCOUNT_ID: MAIN_ON_DEV.cloudflareAccountId,
   };
   const steps = [
-    { step: "apps/os", done: traceOperation("Deploy OS", () => deployOs({ env: name })) },
-    ...apps.map((app) => ({
-      step: `apps/${app.name}`,
-      done: traceOperation(`Deploy ${app.name}`, () =>
-        deployStartApp(app, name, urls.apps[app.name]!, credentials),
-      ),
-    })),
+    ...(deploys("os")
+      ? [{ step: "apps/os", done: traceOperation("Deploy OS", () => deployOs({ env: name })) }]
+      : []),
+    ...apps
+      .filter((app) => deploys(app.name))
+      .map((app) => ({
+        step: `apps/${app.name}`,
+        done: traceOperation(`Deploy ${app.name}`, () =>
+          deployStartApp(app, name, urls.apps[app.name]!, credentials, plan),
+        ),
+      })),
   ];
   const failures = (await Promise.allSettled(steps.map(({ done }) => done))).flatMap(
     (result, index) =>
@@ -558,7 +631,7 @@ async function deployPreviewSteps(
     );
   const deployedApps = apps.map((app) => ({ name: app.name, url: urls.apps[app.name]! }));
   const url = urls.os;
-  const versionId = await deployedVersion(ctx, osEnv(name)!.workerName);
+  const versionId = await deployedVersion(ctx, members.os.workerName);
   const config = parseAppConfig(collectSecrets(ctx, ["APP_CONFIG", "APP_CONFIG_SECRETS__KEY"]));
   // The gate (preview-readiness.ts says why): nothing is handed on — the PR body's links, the
   // sign-in seed, the suites — until three rounds of eight in a row answer in full on this version.
@@ -570,7 +643,9 @@ async function deployPreviewSteps(
       consecutive: 3,
     }),
   );
-  console.log(`\ndeployment ${name}: ${url}`);
+  console.log(
+    `\ndeployment ${name}: ${url}${plan.reuses ? `, apps/os and ${apps.length - plan.deploys.length} app(s) reused from ${plan.reuses}` : ""}`,
+  );
   const signIn = prNumber
     ? signInLinks({ url, prNumber, apps: deployedApps, changedPaths: await changed })
     : undefined;
@@ -578,20 +653,28 @@ async function deployPreviewSteps(
     mkdirSync(OUTPUT_DIR, { recursive: true });
     writeFileSync(
       path.join(OUTPUT_DIR, "preview.json"),
-      `${JSON.stringify({ deployment: name, url, versionId, apps: deployedApps }, null, 2)}\n`,
+      `${JSON.stringify({ ...plan, url, versionId, apps: deployedApps }, null, 2)}\n`,
     );
     if (!prNumber || !signIn || !process.env.GITHUB_TOKEN) return;
     await folded;
     const dashboardUrl = (worker: string) =>
       `https://dash.cloudflare.com/${MAIN_ON_DEV.cloudflareAccountId}/workers/services/view/${worker}/production`;
+    const reusedFrom = (member: string) => (deploys(member) ? undefined : plan.reuses);
     const section = renderPullRequestSection({
       deployment: name,
       workers: [
-        { name: "os", url, signIn: signIn.heading, dashboardUrl: dashboardUrl(`${name}-os`) },
+        {
+          name: "os",
+          url,
+          signIn: signIn.heading,
+          dashboardUrl: dashboardUrl(members.os.workerName),
+          reusedFrom: reusedFrom("os"),
+        },
         ...deployedApps.map((app) => ({
           ...app,
           signIn: signIn.apps[app.name]!,
-          dashboardUrl: dashboardUrl(`${name}-${app.name}`),
+          dashboardUrl: dashboardUrl(members.apps[app.name]!.workerName),
+          reusedFrom: reusedFrom(app.name),
         })),
       ],
       templates: signIn.templates,
@@ -623,11 +706,6 @@ async function changedPaths(prNumber: string | undefined) {
     });
     return files.map((file) => file.filename);
   }
-  const git = (...args: string[]) => {
-    const result = spawnSync("git", args, { cwd: ROOT, encoding: "utf8" });
-    if (result.status !== 0) throw new Error(`git ${args.join(" ")}: ${result.stderr.trim()}`);
-    return result.stdout.trim();
-  };
   git("fetch", "--quiet", "origin", "main");
   return git("diff", "--name-only", git("merge-base", "origin/main", "HEAD"), "HEAD")
     .split("\n")
@@ -735,9 +813,8 @@ const PREVIEW_SUITE_TELEMETRY: Record<"specs" | "preview-e2e", Record<string, st
  *  that cannot be written fails the job before the suite: the workflows run the job's evidence
  *  steps, its telemetry completeness check among them, only once this file exists, so a suite run
  *  without it would pass with its evidence unchecked. */
-async function writeDeployedTarget(name: string, apps: TestEvidenceTarget["apps"]) {
+async function writeDeployedTarget(name: string, url: string, apps: TestEvidenceTarget["apps"]) {
   if (!process.env.TEST_TELEMETRY_ARTIFACT_DIR) return;
-  const url = previewDeploymentUrls(name).os;
   // `<deployId> <platformOrigin>` (src/worker.ts)
   const deploymentId = await fetch(`${url}/version`, { signal: AbortSignal.timeout(10_000) })
     .then(async (response) => (response.ok ? (await response.text()).split(" ")[0] : undefined))
@@ -779,23 +856,23 @@ async function runSuite(
   prNumber: string | undefined,
   requestedSlowRows: SlowRows | undefined,
 ) {
-  const urls = previewDeploymentUrls(name);
-  const url = urls.os;
-  const appUrl = (app: string) => urls.apps[app]!;
-  const env: Record<string, string> =
+  // the origins the suite tests, as its runner reads them
+  const origins = (urls: { os: string; apps: Record<string, string> }): Record<string, string> =>
     suite === "specs"
       ? {
-          WORKER_BASE_URL: url,
-          NOTES_BASE_URL: appUrl("notes"),
-          VOICE_BASE_URL: appUrl("voice"),
-          DASH_BASE_URL: appUrl("dash"),
-          ADMIN_BASE_URL: appUrl("admin"),
+          WORKER_BASE_URL: urls.os,
+          NOTES_BASE_URL: urls.apps.notes!,
+          VOICE_BASE_URL: urls.apps.voice!,
+          DASH_BASE_URL: urls.apps.dash!,
+          ADMIN_BASE_URL: urls.apps.admin!,
         }
-      : { WORKER_BASE_URL: url };
+      : { WORKER_BASE_URL: urls.os };
+  const fullPlan: PreviewPlan = { deployment: name, reuses: undefined, deploys: [] };
   const deployJob = process.env.PREVIEW_AWAIT_DEPLOY_JOB;
   const warm =
     deployJob && suite === "specs"
-      ? // --list loads the config and every spec, and runs no global setup
+      ? // --list loads the config and every spec, and runs no global setup; the full deployment's
+        // origins stand in for the plan's, which only the deploy's end says
         warmUp(
           "the specs' transforms",
           "pnpm",
@@ -808,11 +885,11 @@ async function runSuite(
             "--list",
             "--reporter=null",
           ],
-          { cwd: REPO_ROOT, env },
+          { cwd: REPO_ROOT, env: origins(previewPlanUrls(fullPlan)) },
         )
       : undefined;
   const failed = (error: unknown) =>
-    new Error(`the ${suite} suite failed against ${url}: ${describe(error)}`);
+    new Error(`the ${suite} suite failed against ${name}: ${describe(error)}`);
   let tests: { args: string[]; env: Record<string, string> };
   try {
     tests = await traceOperation("Set up the suite", async () => {
@@ -823,7 +900,7 @@ async function runSuite(
           await runAsync("pnpm", ["exec", "playwright", "install", "--only-shell", "chromium"], {
             cwd: REPO_ROOT,
           });
-        return { args: ["spec"], env: { ...env, ...PREVIEW_SUITE_TELEMETRY.specs } };
+        return { args: ["spec"], env: PREVIEW_SUITE_TELEMETRY.specs };
       }
       const { slowRows, reason } = await chooseSlowRows({
         requested: requestedSlowRows,
@@ -841,7 +918,6 @@ async function runSuite(
       return {
         args: ["e2e:run", ...slowRowsTagsFilter(slowRows)],
         env: {
-          ...env,
           // empty without a PR, which the rows read as none
           PREVIEW_PR_NUMBER: prNumber || "",
           E2E_SLOW_ROWS: slowRows,
@@ -863,18 +939,27 @@ async function runSuite(
     // A warm-up still running exits beside the suite's start, not before it.
     void warm?.stop();
   }
+  let urls: ReturnType<typeof previewPlanUrls>;
   try {
+    // a PR run's deploy may have reused an earlier deployment for some of it (preview-reuse.ts)
+    const plan = deployJob && prNumber ? await planOfThisRun(name) : fullPlan;
+    urls = previewPlanUrls(plan);
     await writeDeployedTarget(
       name,
+      urls.os,
       // the client apps the specs run against; the vitest rows use none
       suite === "specs"
-        ? ["notes", "voice", "dash", "admin"].map((app) => ({ name: app, url: appUrl(app) }))
+        ? ["notes", "voice", "dash", "admin"].map((app) => ({ name: app, url: urls.apps[app]! }))
         : [],
     );
   } catch (error) {
     throw failed(error);
   }
-  const run = { cwd: suite === "specs" ? REPO_ROOT : ROOT, env: tests.env };
+  const run = {
+    cwd: suite === "specs" ? REPO_ROOT : ROOT,
+    env: { ...origins(urls), ...tests.env },
+  };
+  console.log(`testing ${urls.os}`);
   try {
     // A job that waited for its deploy has the wait's bound in its timeout, and bounds the suite
     // itself to what is left of it.
@@ -883,6 +968,32 @@ async function runSuite(
   } catch (error) {
     throw failed(error);
   }
+}
+
+/** The artifact Deploy preview uploads its plan in, as `preview.json` (its output/preview.json). */
+const PREVIEW_PLAN_ARTIFACT = "preview-plan";
+
+const DeployedPlan = z.object({
+  deployment: z.string(),
+  reuses: z.string().optional(),
+  deploys: z.array(z.string()),
+});
+
+/** THE PLAN THIS RUN'S DEPLOY MADE (preview-reuse.ts), read from its `preview-plan` artifact once
+ *  the wait is over: what the suite tests. It must be for `name`, the deployment of the commit the
+ *  suite checked out, or the suite would test another commit's. */
+async function planOfThisRun(name: string): Promise<PreviewPlan> {
+  const { deployment, reuses, deploys } = DeployedPlan.parse(
+    JSON.parse(await artifactOfThisRun(PREVIEW_PLAN_ARTIFACT, "preview.json")),
+  );
+  if (deployment !== name)
+    throw new Error(`this run's deploy planned ${deployment}, not ${name}, which this job tests`);
+  console.log(
+    reuses
+      ? `the deploy reused ${reuses} and deployed ${deploys.join(", ") || "nothing"} as ${name}`
+      : `the deploy deployed ${name} in full`,
+  );
+  return { deployment, reuses, deploys };
 }
 
 /** `command` run as deploy-helpers' `runAsync` runs it, its output inherited, but in a process
@@ -1290,7 +1401,9 @@ async function main(command: Command, options: PreviewOptions) {
     const current = process.env.PREVIEW_DEPLOYMENT;
     if (!current)
       throw new Error("cleanup-superseded needs PREVIEW_DEPLOYMENT, the deployment the run made");
-    return cleanupSuperseded((await accountContext()).cf, current, { dryRun });
+    // the full deployment the run's plan reuses, empty for one that reused none
+    const reuses = process.env.PREVIEW_REUSES || undefined;
+    return cleanupSuperseded((await accountContext()).cf, current, reuses, { dryRun });
   }
   const prefix = resolvePreviewPrefix({ name: options.name, prNumber: pr });
   if (command === "delete") return deletePrefix((await accountContext()).cf, prefix, { dryRun });
@@ -1306,7 +1419,7 @@ async function main(command: Command, options: PreviewOptions) {
       options.slowRows,
     );
   const name = previewDeploymentName(prefix, checkedOutCommit());
-  const urls = previewDeploymentUrls(name);
+  const urls = previewPlanUrls({ deployment: name, reuses: undefined, deploys: [] });
   console.log(`deployment ${name} → ${urls.os}`);
   if (command === "config") {
     await buildOs(name);
@@ -1318,9 +1431,18 @@ async function main(command: Command, options: PreviewOptions) {
     for (const app of apps) console.log(`  apps/${app.name} → ${urls.apps[app.name]}`);
     return;
   }
-  // the name the suites and the cleanup job test and keep (preview-os.yml, main-os-e2e.yml)
-  if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, `deployment=${name}\n`);
-  return deployPreview(await accountContext(), name, pr, apps);
+  const ctx = await accountContext();
+  const appNames = apps.map((app) => app.name);
+  // Only a PR's run reuses (preview-reuse.ts): main, the latency guard, the real-model suite and a
+  // soak each measure a deployment of their own.
+  const plan: PreviewPlan = pr
+    ? await traceOperation("Plan the deployment", () => planDeployment(ctx.cf, name, appNames))
+    : { deployment: name, reuses: undefined, deploys: ["os", ...appNames] };
+  // the name the suites and the cleanup job test and keep (preview-os.yml, main-os-e2e.yml), and the
+  // earlier deployment the plan reuses, which the cleanup keeps
+  if (process.env.GITHUB_OUTPUT)
+    appendFileSync(process.env.GITHUB_OUTPUT, `deployment=${name}\nreuses=${plan.reuses || ""}\n`);
+  return deployPreview(ctx, plan, pr, apps);
 }
 
 if (isMainModule(import.meta.url))

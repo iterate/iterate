@@ -29,7 +29,7 @@ export function startAppVitePlugins<Cloudflare, Start, React, Tailwind>(
   return [
     plugins.cloudflare({
       viteEnvironment: { name: "ssr" },
-      config: startAppWorkerConfig(app, process.env.CLOUDFLARE_ENV),
+      config: startAppWorkerConfig(app, process.env.CLOUDFLARE_ENV, process.env.PREVIEW_REUSE),
     }),
     plugins.tanstackStart({
       router: { ...router, ...routeTreeStyle },

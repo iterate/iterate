@@ -441,8 +441,11 @@ async function readRun(depot: DepotApi, runId: string) {
 /** The suite summary of the Preview OS e2e job's first attempt (preview-os.yml uploads it as
  *  `flake-records-preview-e2e-attempt-<id>`), or undefined when it uploaded none. */
 async function readE2eSummary(depot: DepotApi, runId: string, workflowId: string) {
-  const files = await workflowArtifact(depot, { runId, workflowId }, (name) =>
-    name.startsWith("flake-records-preview-e2e"),
+  const files = await workflowArtifact(
+    depot,
+    { runId, workflowId },
+    (name) => name.startsWith("flake-records-preview-e2e"),
+    "first",
   );
   // A cancelled e2e job uploads its records without a summary.
   const bytes = files?.["suite-summary.json"];

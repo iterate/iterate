@@ -12,13 +12,18 @@
 //
 // SUPERSEDED (`planSupersededCleanup`, each run's cleanup job once its own deployment is ready):
 // every other deployment of the same prefix whose members were all created before the current
-// deployment's first one. A deployment created after that — a later push's, in flight — stays.
+// deployment's first one. A deployment created after that — a later push's, in flight — stays; so
+// does the full deployment the current run's plan reuses (preview-reuse.ts), and a `main-…` one for
+// MAIN_REUSE_GRACE_MS after a newer one was created, since a PR run may be testing against it.
 //
 // STALE (`planPreviewSweep`, nightly) when
 //   1. its newest member is more than 7 days old, whatever its prefix;
 //   2. its prefix is `pr<n>` and pull request #n is closed or does not exist;
-//   3. it is not its prefix's newest deployment with an apps/os worker (`newestPreviewDeployment`),
-//      and its newest member is more than an hour old or it has no stamped member left;
+//   3. it is neither its prefix's newest deployment with an apps/os worker
+//      (`newestPreviewDeployment`) nor its newest PARTIAL one (a PR run's own apps on a reused
+//      apps/os, preview-reuse.ts: app workers and nothing of apps/os), and its newest member is
+//      more than an hour old or it has no stamped member left — a `main-…` one counting the hour
+//      from when a newer one was created;
 //   4. its prefix names no pull request (a hand-picked name like `exp-…` or `soak`), it is no CI
 //      workflow's own (CI_WORKFLOW_PREVIEWS), and its newest member is more than 24 h old.
 // Anything else is kept. A GitHub lookup that failed never makes a deployment stale: rule 2 takes
@@ -149,22 +154,60 @@ export function newestPreviewDeployment(deployments: PreviewDeploymentListing[],
     .toSorted((a, b) => Date.parse(b.newestCreatedAt!) - Date.parse(a.newestCreatedAt!))[0];
 }
 
+/** How long a `main-…` deployment stays once a newer one was created: a PR run that planned to
+ *  reuse it (preview-reuse.ts) tests against it for up to its deploy's readiness gate and the
+ *  suites' 30-minute bound (scripts/ci/await-deploy.ts SUITE_BOUND_MS) after that. */
+const MAIN_REUSE_GRACE_MS = 45 * 60_000;
+
+/** When `deployment` stopped being its prefix's newest: the first creation stamp of the earliest
+ *  deployment of the prefix begun after it, or undefined while none has. */
+function supersededAt(
+  deployments: PreviewDeploymentListing[],
+  deployment: PreviewDeploymentListing,
+) {
+  const since = Date.parse(deployment.firstCreatedAt || "");
+  const successors = deployments
+    .filter(
+      (candidate) =>
+        candidate.prefix === deployment.prefix &&
+        candidate.firstCreatedAt &&
+        !(Date.parse(candidate.firstCreatedAt) <= since),
+    )
+    .map((candidate) => Date.parse(candidate.firstCreatedAt!));
+  return successors.length > 0 ? Math.min(...successors) : undefined;
+}
+
+/** A PR run's partial deployment (preview-reuse.ts): app workers of its own, nothing of apps/os. */
+function isPartialDeployment(deployment: PreviewDeploymentListing) {
+  return deployment.members.every(
+    (member) => member.kind === "worker" && !member.name.endsWith(`${deployment.name}-os`),
+  );
+}
+
 /** The deployments `current` supersedes: the same prefix, every stamped member created before
- *  `current`'s first one, or no stamped member left (a half-deleted one). Undefined `current`
- *  stamps (its members not listed yet) supersede nothing. */
+ *  `current`'s first one, or no stamped member left (a half-deleted one), but never `keep` (the full
+ *  deployment the current run's plan reuses) nor a `main-…` one within MAIN_REUSE_GRACE_MS of a
+ *  newer one's creation. Undefined `current` stamps (its members not listed yet, or a plan that
+ *  deployed nothing) supersede nothing. */
 export function planSupersededCleanup(
   deployments: PreviewDeploymentListing[],
   currentName: string,
+  input: { now: number; keep: string | undefined },
 ) {
   const current = deployments.find((deployment) => deployment.name === currentName);
   if (!current?.firstCreatedAt) return [];
   const since = Date.parse(current.firstCreatedAt);
-  return deployments.filter(
-    (deployment) =>
-      deployment.prefix === current.prefix &&
-      deployment.name !== current.name &&
-      (!deployment.newestCreatedAt || Date.parse(deployment.newestCreatedAt) < since),
-  );
+  return deployments.filter((deployment) => {
+    if (deployment.prefix !== current.prefix || deployment.name === current.name) return false;
+    if (deployment.name === input.keep) return false;
+    if (deployment.newestCreatedAt && Date.parse(deployment.newestCreatedAt) >= since) return false;
+    const stoppedBeingNewest = supersededAt(deployments, deployment);
+    return !(
+      deployment.prefix === "main" &&
+      stoppedBeingNewest !== undefined &&
+      input.now - stoppedBeingNewest < MAIN_REUSE_GRACE_MS
+    );
+  });
 }
 
 export type PreviewSweepInput = {
@@ -182,9 +225,19 @@ type PreviewSweepVerdict = {
 
 export function planPreviewSweep(input: PreviewSweepInput): PreviewSweepVerdict[] {
   const newestOfPrefix = new Map<string, string>();
+  const newestPartialOfPrefix = new Map<string, string>();
   for (const prefix of new Set(input.deployments.map((deployment) => deployment.prefix))) {
     const newest = newestPreviewDeployment(input.deployments, prefix);
     if (newest) newestOfPrefix.set(prefix, newest.name);
+    const partial = input.deployments
+      .filter(
+        (deployment) =>
+          deployment.prefix === prefix &&
+          deployment.newestCreatedAt &&
+          isPartialDeployment(deployment),
+      )
+      .toSorted((a, b) => Date.parse(b.newestCreatedAt!) - Date.parse(a.newestCreatedAt!))[0];
+    if (partial) newestPartialOfPrefix.set(prefix, partial.name);
   }
   return input.deployments.map((deployment) => {
     const { name, prefix } = deployment;
@@ -205,8 +258,14 @@ export function planPreviewSweep(input: PreviewSweepInput): PreviewSweepVerdict[
     const number = previewPullRequestNumber(prefix);
     const state = number ? input.pullRequestStates.get(number) || "unknown" : undefined;
     if (state === "closed" || state === "missing") return stale(`PR #${number} is ${state}`); // rule 2
-    const newest = newestOfPrefix.get(prefix) === name;
-    if (!newest && !(hours <= 1)) return stale(`not ${prefix}'s newest deployment, ${created}`); // rule 3
+    const newest =
+      newestOfPrefix.get(prefix) === name || newestPartialOfPrefix.get(prefix) === name;
+    // a `main-…` deployment a PR run may reuse is idle from when a newer one was created
+    const stoppedBeingNewest =
+      prefix === "main" ? supersededAt(input.deployments, deployment) : undefined;
+    const idleHours =
+      stoppedBeingNewest === undefined ? hours : (input.now - stoppedBeingNewest) / 3_600_000;
+    if (!newest && !(idleHours <= 1)) return stale(`not ${prefix}'s newest deployment, ${created}`); // rule 3
     if (state) return keep(`PR #${number} is ${state}, ${created}`);
     if (CI_WORKFLOW_PREVIEWS.has(prefix)) return keep(`a CI workflow's own, ${created}`);
     if (hours > 24) return stale(`no PR, ${created}`); // rule 4

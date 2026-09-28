@@ -99,13 +99,55 @@ test.for<{ name: string; previous: PreviewMember[]; deleted: boolean }>(
       worker("pr7-2222222-dash", 0.4),
       ...previous,
     ]);
-    const superseded = planSupersededCleanup(deployments, "pr7-2222222").map(({ name }) => name);
+    const superseded = planSupersededCleanup(deployments, "pr7-2222222", {
+      now: NOW,
+      keep: undefined,
+    }).map(({ name }) => name);
     expect(superseded).toEqual(deleted ? ["pr7-1111111"] : []);
   },
 );
 
 test("a deployment the listing does not show yet supersedes nothing", () => {
-  expect(planSupersededCleanup(group([worker("pr7-1111111-os", 2)]), "pr7-2222222")).toEqual([]);
+  expect(
+    planSupersededCleanup(group([worker("pr7-1111111-os", 2)]), "pr7-2222222", {
+      now: NOW,
+      keep: undefined,
+    }),
+  ).toEqual([]);
+});
+
+test("a run's cleanup keeps the full deployment its plan reuses, and deletes the rest before it", () => {
+  const deployments = group([
+    worker("pr7-1111111-os", 5),
+    worker("pr7-2222222-os", 3),
+    // this run's partial deployment: notes on pr7-2222222's apps/os
+    worker("pr7-3333333-notes", 0.2),
+  ]);
+  expect(
+    planSupersededCleanup(deployments, "pr7-3333333", { now: NOW, keep: "pr7-2222222" }).map(
+      ({ name }) => name,
+    ),
+  ).toEqual(["pr7-1111111"]);
+});
+
+test.for([
+  {
+    name: "a newer one created 20 minutes ago: a PR run may be testing against it",
+    newerHoursAgo: 0.33,
+    deleted: false,
+  },
+  { name: "a newer one created an hour ago", newerHoursAgo: 1, deleted: true },
+])("an older main deployment, $name ⇒ deleted: $deleted", ({ newerHoursAgo, deleted }) => {
+  const deployments = group([
+    worker("main-1111111-os", 5),
+    worker("main-2222222-os", newerHoursAgo),
+    worker("main-3333333-os", 0.1),
+  ]);
+  const superseded = planSupersededCleanup(deployments, "main-3333333", {
+    now: NOW,
+    keep: undefined,
+  });
+  expect(superseded.map(({ name }) => name)).toEqual(deleted ? ["main-1111111"] : []);
 });
 
 test.for<{
@@ -158,6 +200,39 @@ test("the sweep keeps the last deployment that deployed while a newer push's dep
   expect(plan).toMatchObject([
     { deployment: { name: "pr7-1111111" }, verdict: "keep" },
     { deployment: { name: "pr7-2222222" }, verdict: "stale" },
+  ]);
+});
+
+test("the sweep keeps a PR's newest partial deployment beside its newest full one, and takes an older partial one", () => {
+  const plan = planPreviewSweep({
+    now: NOW,
+    deployments: group([
+      worker("pr7-1111111-os", 5),
+      worker("pr7-2222222-notes", 4),
+      worker("pr7-3333333-notes", 2),
+      worker("pr7-3333333-voice", 2),
+    ]),
+    pullRequestStates: new Map([[7, "open"]]),
+  });
+  expect(plan).toMatchObject([
+    { deployment: { name: "pr7-1111111" }, verdict: "keep" },
+    { deployment: { name: "pr7-2222222" }, verdict: "stale" },
+    { deployment: { name: "pr7-3333333" }, verdict: "keep" },
+  ]);
+});
+
+test.for([
+  { name: "a newer one created half an hour ago", newerHoursAgo: 0.5, verdict: "keep" },
+  { name: "a newer one created 2 h ago", newerHoursAgo: 2, verdict: "stale" },
+])("an older main deployment, created 5 h ago, $name ⇒ $verdict", ({ newerHoursAgo, verdict }) => {
+  const plan = planPreviewSweep({
+    now: NOW,
+    deployments: group([worker("main-1111111-os", 5), worker("main-2222222-os", newerHoursAgo)]),
+    pullRequestStates: new Map(),
+  });
+  expect(plan).toMatchObject([
+    { deployment: { name: "main-1111111" }, verdict },
+    { verdict: "keep" },
   ]);
 });
 

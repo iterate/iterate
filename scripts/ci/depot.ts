@@ -135,18 +135,21 @@ const ArtifactPage = z.object({
 });
 
 /** The files of the first artifact `workflow` uploaded whose name `name` matches, by path, or
- *  undefined when it uploaded none. One page: a workflow uploads about eight per execution. */
+ *  undefined when it uploaded none — or of the newest, `which: "newest"`: a job re-run uploads
+ *  again under the same name. One page: a workflow uploads about eight per execution. */
 export async function workflowArtifact(
   depot: DepotApi,
   workflow: { runId: string; workflowId: string },
   name: (artifactName: string) => boolean,
+  which: "first" | "newest",
 ) {
   const { artifacts } = ArtifactPage.parse(
     await depot("ListArtifacts", { ...workflow, pageSize: 500 }),
   );
-  const artifact = artifacts
+  const matching = artifacts
     .filter((candidate) => name(candidate.name))
-    .toSorted((a, b) => a.createdAt.localeCompare(b.createdAt))[0];
+    .toSorted((a, b) => a.createdAt.localeCompare(b.createdAt));
+  const artifact = which === "first" ? matching[0] : matching.at(-1);
   if (!artifact) return undefined;
   const { url } = z
     .object({ url: z.url() })

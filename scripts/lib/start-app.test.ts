@@ -7,6 +7,7 @@ test("a per-commit deployment's app is a worker of its own, signs in against tha
   const config = startAppWorkerConfig(
     { name: "notes", root: new URL("file:///apps/notes/"), envs: notesEnvs },
     "pr3144-a1b2c3d",
+    undefined,
   );
   expect(config).toMatchObject({
     name: "pr3144-a1b2c3d-notes",
@@ -20,6 +21,23 @@ test("a per-commit deployment's app is a worker of its own, signs in against tha
       os: "https://pr3144-a1b2c3d-os.iterate-dev-preview.workers.dev",
       dash: "https://pr3144-a1b2c3d-dash.iterate-dev-preview.workers.dev",
       notes: "https://pr3144-a1b2c3d-notes.iterate-dev-preview.workers.dev",
+    },
+  });
+});
+
+test("a partial per-commit deployment's app signs in against the full deployment it reuses, and links to its apps but the ones it deploys itself", () => {
+  const config = startAppWorkerConfig(
+    { name: "notes", root: new URL("file:///apps/notes/"), envs: notesEnvs },
+    "pr3144-a1b2c3d",
+    JSON.stringify({ reuses: "main-0f0f0f0", deploys: ["notes", "voice"] }),
+  );
+  expect(config).toMatchObject({ name: "pr3144-a1b2c3d-notes" });
+  expect(startAppConfigOf({ ...config.vars })).toMatchObject({
+    urls: {
+      os: "https://main-0f0f0f0-os.iterate-dev-preview.workers.dev",
+      dash: "https://main-0f0f0f0-dash.iterate-dev-preview.workers.dev",
+      notes: "https://pr3144-a1b2c3d-notes.iterate-dev-preview.workers.dev",
+      voice: "https://pr3144-a1b2c3d-voice.iterate-dev-preview.workers.dev",
     },
   });
 });
@@ -44,6 +62,7 @@ test("a deployed app links to the other apps at their prd origins from envs.ts, 
   const { vars } = startAppWorkerConfig(
     { name: "dash", root: new URL("file:///apps/dash/"), envs: dashEnvs },
     "prd",
+    undefined,
   );
   expect(JSON.parse(vars.APP_CONFIG)).toMatchObject({
     urls: {
@@ -62,6 +81,7 @@ test("main on dev (the app's `preview` build) signs in against main on dev's app
   const { vars } = startAppWorkerConfig(
     { name: "dash", root: new URL("file:///apps/dash/"), envs: dashEnvs },
     "preview",
+    undefined,
   );
   expect(JSON.parse(vars.APP_CONFIG)).toMatchObject({
     urls: {
@@ -80,6 +100,7 @@ test("the app reads the config it is deployed with as written, and a laptop's .d
   const { vars } = startAppWorkerConfig(
     { name: "kit", root: new URL("file:///apps/kit/"), envs: kitEnvs },
     "prd",
+    undefined,
   );
   expect(startAppConfigOf({ ...vars })).toMatchObject({
     urls: { os: "https://os.iterate.com", dash: "https://dash.iterate.com" },
@@ -89,6 +110,7 @@ test("the app reads the config it is deployed with as written, and a laptop's .d
   // local dev starts from prd's config (no env) and overrides one key, keeping the rest
   const local = startAppWorkerConfig(
     { name: "dash", root: new URL("file:///apps/dash/"), envs: dashEnvs },
+    undefined,
     undefined,
   ).vars;
   expect(
@@ -112,6 +134,7 @@ test("every request starts the app's Worker but its static files: vite's /assets
   const dash = startAppWorkerConfig(
     { name: "dash", root: new URL("../../apps/dash/", import.meta.url), envs: dashEnvs },
     "prd",
+    undefined,
   );
   expect(dash.assets).toMatchObject({
     run_worker_first: ["/*", "!/assets/*", "!/client-logo.svg", "!/logos/*"],
@@ -120,6 +143,7 @@ test("every request starts the app's Worker but its static files: vite's /assets
   const kit = startAppWorkerConfig(
     { name: "kit", root: new URL("../../apps/kit/", import.meta.url), envs: kitEnvs },
     "prd",
+    undefined,
   );
   expect(kit.assets).toMatchObject({
     run_worker_first: expect.arrayContaining(["/*", "!/assets/*", "!/favicon.svg", "!/vendors/*"]),

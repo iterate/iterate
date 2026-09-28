@@ -5,12 +5,16 @@
 #   Deploy preview      every push: first whether the PR changes a preview path
 #                       (scripts/ci/preview-paths.ts `previewPaths`); a PR that changes none deploys
 #                       nothing and passes, and so does a push after which both suites inherit an
-#                       earlier head's green (scripts/ci/preview-inherit.ts). Otherwise it deploys the PR merged into main (the run's own
-#                       commit, the merge commit Depot read this file from; the head alone on a
-#                       dispatch whose PR conflicts, scripts/ci/preview-tested-commit.ts) as
-#                       `pr<n>-<sha7>`: it folds the PR body's section into a previous commit's
-#                       first, and writes its own section (the workers and their sign-in links) once
-#                       it has landed. Its output `deployment` is the name the cleanup deletes around
+#                       earlier head's green (scripts/ci/preview-inherit.ts). Otherwise it deploys
+#                       the PR merged into main (the run's own commit, the merge commit Depot read
+#                       this file from; the head alone on a dispatch whose PR conflicts,
+#                       scripts/ci/preview-tested-commit.ts) as `pr<n>-<sha7>`: only what that
+#                       commit changed since the PR's or main's newest full deployment, which it
+#                       reuses for the rest (apps/os/scripts/preview-reuse.ts), and it hands its plan
+#                       to the suites as an artifact. It folds the PR body's section into a previous
+#                       commit's first, and writes its own section (the workers and their sign-in
+#                       links) once it has landed. Its outputs `deployment` and `reuses` are what
+#                       the cleanup deletes around
 #   E2E tests           beside Deploy preview from the start, set up while it deploys, then waiting
 #                       for it (scripts/ci/await-deploy.ts): the vitest e2e suite against the
 #                       deployment of the commit it checked out, then its test telemetry and flake
@@ -143,6 +147,7 @@ jobs:
       head-sha: ${{ steps.tested.outputs.head-sha }}
       preview: ${{ steps.changes.outputs.preview }}
       deployment: ${{ steps.deploy.outputs.deployment }}
+      reuses: ${{ steps.deploy.outputs.reuses }}
     steps:
       - name: Checkout the PR head
         uses: actions/checkout@v4
@@ -190,6 +195,17 @@ jobs:
           # the PR head, which a template-changing PR's quick-launch links read the template at
           PREVIEW_HEAD_SHA: ${{ steps.tested.outputs.head-sha }}
         run: doppler run --project os --config preview -- pnpm preview deploy --pr "$PR_NUMBER" --apps "$APPS"
+      # THE PLAN THE SUITES TEST (apps/os/scripts/preview.ts `planOfThisRun`): which deployment serves
+      # apps/os and each app, this run's own or the earlier one it reuses (preview-reuse.ts). They
+      # start beside this job and read it once it has finished. A re-run uploads it again.
+      - name: Hand the plan to the suites
+        if: steps.changes.outputs.preview != 'false'
+        uses: actions/upload-artifact@v4
+        with:
+          name: preview-plan
+          path: apps/os/output/preview.json
+          if-no-files-found: error
+          overwrite: true
 
   # THE TWO SUITES, E2E tests and Browser specs: one job each, side by side, and ONE DEFINITION.
   # Browser specs runs E2E tests' steps (the `suite-steps` anchor); the two differ only in the suite
@@ -451,6 +467,8 @@ jobs:
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           PREVIEW_DEPLOYMENT: ${{ needs.deploy.outputs.deployment }}
+          # the earlier deployment the run's plan reuses, which the cleanup keeps
+          PREVIEW_REUSES: ${{ needs.deploy.outputs.reuses }}
         run: doppler run --project os --config preview -- pnpm preview cleanup-superseded
 
   # THE CI TRACE (docs/ci-traces.md), reporting only: the Depot timings and `@@ci-trace` markers of

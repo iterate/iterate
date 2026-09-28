@@ -110,12 +110,14 @@ const section = renderPullRequestSection({
       url: "https://pr123-ccccccc-os.iterate-dev-preview.workers.dev",
       signIn: `${DASH}/.auth/login?next=os`,
       dashboardUrl: "https://dash.cloudflare.com/a/os",
+      reusedFrom: undefined,
     },
     {
       name: "dash",
       url: DASH,
       signIn: `${DASH}/.auth/login?next=dash`,
       dashboardUrl: "https://dash.cloudflare.com/a/dash",
+      reusedFrom: undefined,
     },
   ],
   templates: [
@@ -136,6 +138,36 @@ test("the PR body's managed section: the deployment, then one row per worker wit
 
     New project from template: [default at this PR's \`bbbbbbbbb\` ↗](https://pr123-ccccccc-dash.iterate-dev-preview.workers.dev/.auth/login?next=default) · [with-agents ↗](https://pr123-ccccccc-dash.iterate-dev-preview.workers.dev/.auth/login?next=with-agents)"
   `);
+});
+
+test("the PR body's managed section: a worker a partial deployment reuses names the deployment it comes from", () => {
+  const reused = renderPullRequestSection({
+    deployment: "pr123-ddddddd",
+    workers: [
+      {
+        name: "os",
+        url: "https://main-aaaaaaa-os.iterate-dev-preview.workers.dev",
+        signIn: `${DASH}/.auth/login?next=os`,
+        dashboardUrl: "https://dash.cloudflare.com/a/os",
+        reusedFrom: "main-aaaaaaa",
+      },
+      {
+        name: "notes",
+        url: "https://pr123-ddddddd-notes.iterate-dev-preview.workers.dev",
+        signIn: `${DASH}/.auth/login?next=notes`,
+        dashboardUrl: "https://dash.cloudflare.com/a/notes",
+        reusedFrom: undefined,
+      },
+    ],
+    templates: [],
+    seed: { project: "pr123", seeded: true },
+  });
+  expect(reused).toContain(
+    "| [os](https://main-aaaaaaa-os.iterate-dev-preview.workers.dev) from `main-aaaaaaa` |",
+  );
+  expect(reused).toContain(
+    "| [notes](https://pr123-ddddddd-notes.iterate-dev-preview.workers.dev) | [Sign in ↗]",
+  );
 });
 
 test("the PR body's managed section: says so when CI's seed of the test project failed, since there is then nobody to sign in as", () => {

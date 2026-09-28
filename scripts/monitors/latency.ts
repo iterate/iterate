@@ -602,6 +602,7 @@ export async function checkLatency(input: {
       input.depot,
       workflow,
       (name) => name === latencyReport.artifact,
+      "first",
     );
     const bytes = files?.[latencyReport.file];
     const judged = judgeReport({

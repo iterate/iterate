@@ -457,13 +457,39 @@ What the push before leaves behind, and what deletes it. A deployment is
 whatever of its members exist, so a half-made one is deleted like a whole one
 (`apps/os/scripts/preview-sweep.test.ts` pins each row).
 
-| The push before                                  | What it left                                                | What deletes it                                                                                                                                       |
-| ------------------------------------------------ | ----------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
-| deployed; its tests passed or failed             | a whole deployment                                          | this push's Clean up superseded, once this push's deployment is ready                                                                                 |
-| was cancelled halfway through deploying          | some of its D1, R2 bucket, Artifacts namespace, KV, workers | the same                                                                                                                                              |
-| failed to deploy                                 | the same; the PR body says `deploy failed`                  | the same. Until then the push before it, the last to deploy, stays: the sweep never counts a deployment without its apps/os worker as the PR's newest |
-| is still deploying when this push's cleanup runs | members created after this push's                           | nothing yet: the cleanup deletes only deployments made entirely before its own                                                                        |
-| had its own cleanup cancelled or failing         | the deployment before it                                    | this push's cleanup, else the nightly sweep an hour later                                                                                             |
+| The push before                                  | What it left                                                | What deletes it                                                                                                                                           |
+| ------------------------------------------------ | ----------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| deployed; its tests passed or failed             | a whole deployment                                          | this push's Clean up superseded, once this push's deployment is ready                                                                                     |
+| was cancelled halfway through deploying          | some of its D1, R2 bucket, Artifacts namespace, KV, workers | the same                                                                                                                                                  |
+| failed to deploy                                 | the same; the PR body says `deploy failed`                  | the same. Until then the push before it, the last to deploy, stays: the sweep never counts a deployment without its apps/os worker as the PR's newest     |
+| is still deploying when this push's cleanup runs | members created after this push's                           | nothing yet: the cleanup deletes only deployments made entirely before its own                                                                            |
+| had its own cleanup cancelled or failing         | the deployment before it                                    | this push's cleanup, else the nightly sweep an hour later                                                                                                 |
+| reused an earlier full deployment                | the apps it changed (a partial deployment), or nothing      | this push's cleanup. The full one it reused stays: the cleanup never deletes the one its plan reuses, and keeps `main-…` ones 45 minutes past main's next |
+
+### Inherited verdicts and reused deployments
+
+An experiment: two ways a PR run skips what its commit did not change.
+`scripts/ci/preview-units.ts` says what each part depends on.
+
+- **Inherit.** A suite (E2E tests, Browser specs) whose inputs the push did not
+  change since an earlier head's green passes at once, and its job summary
+  links that run (`scripts/ci/preview-inherit.ts`). When both inherit, nothing
+  deploys. A red is never inherited, and E2E tests never inherits under the
+  `slow-e2e` label.
+- **Reuse.** Deploy preview diffs its commit against the PR's newest full
+  deployment, then main's newest `main-<sha7>`. The first whose apps/os the
+  commit has not changed is reused: the run deploys only the apps it changed,
+  as a partial deployment `pr<n>-<sha7>` whose apps sign in against the reused
+  apps/os (`apps/os/scripts/preview-reuse.ts`). A tests-only PR deploys
+  nothing. The PR body marks each reused row with the deployment it comes
+  from, and the suites test the plan Deploy preview uploads as its
+  `preview-plan` artifact.
+
+A reused deployment stays while a run may use it: the run's cleanup never
+deletes its plan's `reuses`, a `main-…` deployment stays 45 minutes after a
+newer one was created, and the sweep keeps a PR's newest partial deployment
+beside its newest full one. A test-only dispatch tests a PR's newest full
+deployment.
 
 ### Main runs
 

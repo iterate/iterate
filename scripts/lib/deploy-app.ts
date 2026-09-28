@@ -101,7 +101,7 @@ export async function deployApp<E extends DeployableEnv>(input: {
   };
   const secretValues = collectSecrets(ctx, input.requiredSecrets || []);
   await input.prepare?.(ctx, secretValues, credentials);
-  await viteBuild(input.appRoot, ctx.name);
+  await viteBuild(input.appRoot, ctx.name, {});
   const builtConfig = findBuiltWranglerConfig(input.appRoot);
   if (input.withoutRoutes) {
     const config = JSON.parse(readFileSync(builtConfig, "utf8"));
