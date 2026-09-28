@@ -409,9 +409,7 @@ test("beginOAuth, confidential client, in a catalogued project: authorize URL ou
   expect(log).not.toContain("access_token");
 });
 
-// THE AGENT'S WAY: the client secret never passes through the caller. It is collected into a secret
-// of its own, pinned to the token endpoint's origin, and `beginOAuth` names it by placeholder; the
-// platform reads it from there at the exchange and at every refresh.
+// THE AGENT'S WAY: the client secret as a placeholder (../src/secret-oauth.ts), against the pet shop.
 test("beginOAuth, confidential client whose secret another secret holds (a getSecret placeholder, client_secret_post): the exchange and the refresh send the held value", async () => {
   const slug = freshDnsSafeProjectSlug("secrets-connect-held");
   const projectMember = { email: `${slug}@example.com` };

@@ -220,7 +220,7 @@ function secretPlaceholderOf(value: string): { path: string; field?: string } | 
 /** Whether `value` is exactly one placeholder and nothing else: what a git origin's password may
  *  be, so an origin never holds a token. */
 export function isSecretPlaceholder(value: string): boolean {
-  return secretPlaceholderOf(value) !== null;
+  return Boolean(secretPlaceholderOf(value));
 }
 
 /** AN OAUTH CLIENT'S SECRET HELD BY ANOTHER SECRET: a `clientSecret` that is exactly one placeholder

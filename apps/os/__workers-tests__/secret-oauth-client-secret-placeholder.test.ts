@@ -1,11 +1,8 @@
-// __workers-tests__/secret-oauth-client-secret-placeholder.test.ts — A CONFIDENTIAL CLIENT WHOSE
-// SECRET ANOTHER SECRET HOLDS: `itx.secrets.beginOAuth(path, { clientSecret:
-// 'getSecret("/secrets/<name>")' })`, the way an agent that never handles a secret spells it. The
-// platform resolves the placeholder only where the token endpoint is called, the code exchange and
-// every refresh, from the named secret's facet and only for an origin that secret is pinned to. The
-// pending attempt and the stored record keep the placeholder, so a rotation takes effect at the next
-// refresh. A reference that cannot resolve is refused at `beginOAuth`, before a human is sent to
-// consent, and no caller but the platform reads a client secret out.
+// __workers-tests__/secret-oauth-client-secret-placeholder.test.ts — `beginOAuth` with a client
+// secret another secret holds (`clientSecret: 'getSecret("/secrets/<name>")'`, the placeholder
+// lifecycle is ../src/secret-oauth.ts's header): the exchange and refresh via Basic and the form,
+// rotation, the refusals at `beginOAuth`, and `clientSecretFor` refused to every caller but the
+// platform.
 //
 // THE PROVIDER IS IN-PROCESS: the secret facet's terminal `fetch` is the isolate's global fetch,
 // answered below at https://provider.test: a token endpoint that authenticates the client by HTTP
