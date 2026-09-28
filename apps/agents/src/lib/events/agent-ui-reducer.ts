@@ -443,16 +443,15 @@ function reduceAgentUiEvent(
 
     case "events.iterate.com/agent/llm-request-requested": {
       // The agent builds a request's prompt from the log, so this request
-      // answers every queued input, and that input moves into the transcript.
-      // The activity it waited behind closes first, unless a step there still
-      // runs (a script outlives the request that wrote it): only that step's
-      // settlement ends it, so this request joins the activity and the
-      // script's replies stay deferred until it settles.
-      const base =
-        state.queuedUserMessages.length === 0 ? state : settleLive(state, timestampMs, items);
-      const ready = base.live
-        ? flushQueuedUserMessages(base, items)
-        : flushDeferredMessages(base, items);
+      // answers every queued input: the activity it waited behind closes, and
+      // every held message moves into the transcript in log order. A step
+      // that still runs (a script outlives the request that wrote it) keeps
+      // its activity live, since only its settlement ends it; this request
+      // joins that activity, and the script's later replies wait for it.
+      const ready =
+        state.queuedUserMessages.length === 0 && state.live
+          ? state
+          : flushDeferredMessages(settleLive(state, timestampMs, items), items);
       const live = ensureLive(ready, event.offset, timestampMs);
       const model = readString(event, "model");
       const step: AgentUiLlmStep = {
@@ -700,11 +699,6 @@ function settleLive(state: AgentUiState, endedAtMs: number, items: AgentUiItem[]
   if (!state.live || isAgentUiActivityWorking(state.live)) return state;
   if (state.live.steps.length > 0) items.push({ ...state.live, status: "done", endedAtMs });
   return { ...state, live: null };
-}
-
-function flushQueuedUserMessages(state: AgentUiState, items: AgentUiItem[]): AgentUiState {
-  items.push(...state.queuedUserMessages);
-  return { ...state, queuedUserMessages: [] };
 }
 
 /**

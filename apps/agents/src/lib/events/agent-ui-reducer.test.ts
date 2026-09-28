@@ -1057,6 +1057,35 @@ test("a request that input starts while a script still runs moves the input into
   ]);
 });
 
+test("a request that input starts while a script still runs moves the script's earlier reply into the transcript before that input", () => {
+  const state = reduceAll([
+    runRequested(1, "async () => longWork()"),
+    { type: "events.iterate.com/agent/web-message-sent", payload: { message: "still on X" } },
+    {
+      type: "events.iterate.com/agent/context-added",
+      payload: { role: "user", actor: { type: "user", origin: "web" }, content: "and then?" },
+    },
+    { type: "events.iterate.com/agent/llm-request-requested", offset: 4, payload: { model: "m" } },
+    requestSettled(4),
+    runSettled(1),
+  ]);
+
+  expect(state).toMatchObject({
+    items: [
+      { kind: "assistant", text: "still on X" },
+      { kind: "user", text: "and then?" },
+    ],
+    deferredAssistantMessages: [],
+    queuedUserMessages: [],
+    live: {
+      steps: [
+        { kind: "code", status: "done" },
+        { kind: "llm", llmRequestOffset: 4, status: "done" },
+      ],
+    },
+  });
+});
+
 test("a settling script flushes its held reply and the input that queued behind it in log order", () => {
   const state = reduceAll([
     runRequested(1, "async () => longWork()"),
