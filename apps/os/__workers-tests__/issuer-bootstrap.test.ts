@@ -131,13 +131,33 @@ test("first consent creates organization and project through the ordinary sessio
   expect(selectedBody).toContain(projectId);
   const unselectedBody = await (await runTool(excludedId)).text();
   expect(unselectedBody).toContain("outside this token");
+  // each grant lists the branding its approval stored (grants.ts `DisplayMetadata`): the issuer's
+  // own sign-in, and the client's, in no particular order
   const grants = (await api.grants.list()).items;
   expect(grants).toHaveLength(2);
-  expect(grants.find((grant) => grant.clientId === client.clientId)).toMatchObject({
-    name: "Claude fixture",
-    logoUri: "https://images.example/studio.svg",
-    clientDomain: "studio.example",
-  });
+  expect(
+    grants.map(({ clientId, name, logoUri, clientDomain }) => ({
+      clientId,
+      name,
+      logoUri,
+      clientDomain,
+    })),
+  ).toEqual(
+    expect.arrayContaining([
+      {
+        clientId: `${ORIGIN}/.auth/client.json`,
+        name: "iterate",
+        logoUri: `${ORIGIN}/iterate-logo.svg`,
+        clientDomain: new URL(ORIGIN).host,
+      },
+      {
+        clientId: client.clientId,
+        name: "Claude fixture",
+        logoUri: "https://images.example/studio.svg",
+        clientDomain: "studio.example",
+      },
+    ]),
+  );
   await api.logout();
   // These calls land before the 30s live lease refresh: issuance reads the account's ended grants
   // on every admission (oauth.ts `authorizationOf`), so the logout denies at once.

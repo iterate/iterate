@@ -93,9 +93,9 @@ export type SecretOAuthState = {
 /** The platform's one redirect URI for every project secret's OAuth — registered once per provider. */
 export const SECRET_OAUTH_CALLBACK_PATH = "/.secrets/oauth/callback";
 
-/** The redirect URI path of an attempt: an integration's is its provider's callback — the legacy
- *  platform's URL, which iterate's Slack app and Google client are registered with — and every other
- *  attempt's `SECRET_OAUTH_CALLBACK_PATH`. worker.ts serves all of them with the same callback. */
+/** The redirect URI path of an attempt: an integration's is its provider's callback, the URL
+ *  iterate's Slack app and Google client are registered with, and every other attempt's
+ *  `SECRET_OAUTH_CALLBACK_PATH`. worker.ts serves all of them with the same callback. */
 export function secretOAuthCallbackPathOf(client: SecretOAuthClient | null): string {
   if (!client) return SECRET_OAUTH_CALLBACK_PATH;
   return `/api/integrations/${"platform" in client ? client.platform : client.project}/callback`;
