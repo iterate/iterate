@@ -440,8 +440,7 @@ export function incidentsOf(reading: FaultReading) {
   const pagers = Object.fromEntries(reading.pagers);
   // a pager's drop is logged with its outcome (apps/os context/rpc-stub-relay.ts `redialPager`)
   const recovered =
-    (pagers["rpc-stub-pager-redialed"] ?? 0) > 0 &&
-    (pagers["rpc-stub-pager-redial-failed"] ?? 0) === 0;
+    (pagers["rpc-stub-pager-redialed"] ?? 0) > 0 && (pagers[PAGER_GAVE_UP] ?? 0) === 0;
   // An error is keyed by what it says, not by the ids and places in it. A failed invocation's
   // summary is its request line: one incident per method and host, not per path — a scanner's
   // paths (2026-09-24: ~4,300 across 17 project hosts) would otherwise each open an incident. An
@@ -586,7 +585,7 @@ function describe(incident: Pick<Incident, "what" | "label" | "count" | "hosts">
   const label = slackEscape(incident.label);
   const hosts = Object.entries(incident.hosts).sort(([, a], [, b]) => b - a);
   if (!hosts.length) return `${incident.what}: ${label} ${incident.count}`;
-  const named = hosts.slice(0, 5).map(([host, n]) => `${host} ${n}`);
+  const named = hosts.slice(0, 5).map(([host, n]) => `${slackEscape(host)} ${n}`);
   const more = hosts.length > 5 ? ` +${hosts.length - 5}` : "";
   return `${incident.what} (${label}): ${incident.count} visitor 5xx on ${named.join(", ")}${more}`;
 }
@@ -860,9 +859,14 @@ const RAY_OUTCOMES: RayOutcome[] = [
  * was updated, and the version skew of a message cloned between the old and new version. Every row
  * in their rays is the cause's: the errors are its expected outcome and never page, and the visitor
  * 5xx page as the deploy's (CauseReading), never as their hosts'. A ray with no visitor 5xx pages
- * nothing.
+ * nothing. The one error that still pages there is PAGER_GAVE_UP: the recovery a deploy's reset is
+ * meant to go through failed.
  */
 const CAUSE_NAMES = ["deploy reset", "version skew"] as const;
+/** An rpc-stub pager that could not re-dial within its bound (apps/os context/rpc-stub-relay.ts
+ *  `redialPager`): the /api session's pager, in the ray of the deploy that reset its Durable
+ *  Object. The bound exists so that a deploy's reset does not page; past it, the give-up does. */
+const PAGER_GAVE_UP = "rpc-stub-pager-redial-failed";
 type Cause = (typeof CAUSE_NAMES)[number];
 const CAUSES: Record<Cause, string> = {
   "deploy reset": "Durable Object reset because its code was updated",
@@ -1142,7 +1146,7 @@ async function readWindow(
       name: "deploy-causes",
       key: "$metadata.rayId",
       values: deploys.flatMap((deploy) => deploy.rays),
-      keep: null,
+      keep: rowsOf === "lines" ? [leaf("event", "eq", PAGER_GAVE_UP)] : null,
     },
     ...(rowsOf === "summaries"
       ? [

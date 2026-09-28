@@ -794,6 +794,24 @@ test.for([
     page: null,
   },
   {
+    name: "a pager that gave up in a deploy reset's ray pages its error",
+    events: () => [
+      ...deployResetRay("r1", "https://os.iterate.com/api?session=1").filter(
+        (event) => !JSON.stringify(event).includes('"status":500'),
+      ),
+      {
+        ...line({
+          message: "a lent stub's pager dropped and could not be re-dialed",
+          rayId: "r1",
+          requestId: "r1-visitor",
+          url: "https://os.iterate.com/api?session=1",
+        }),
+        event: "rpc-stub-pager-redial-failed",
+      },
+    ],
+    page: ["• errors: a lent stub's pager dropped and could not be re-dialed 1 · last 07:30 UTC"],
+  },
+  {
     name: "a version skew's visitor 5xx are one incident of that deploy",
     events: () =>
       deployResetRay("r1", "https://garple.com/").map((event) =>
