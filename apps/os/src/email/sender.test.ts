@@ -100,9 +100,25 @@ test.for([
     automated: true,
   },
   {
-    row: "a bounce",
+    row: "a bounce from the mailer daemon's envelope",
     headers: [],
     envelopeFrom: "MAILER-DAEMON@example.com",
+    automated: true,
+  },
+  { row: "a bounce with the null envelope sender", headers: [], envelopeFrom: "", automated: true },
+  { row: "a bounce with <> as its sender", headers: [], envelopeFrom: "<>", automated: true },
+  {
+    row: "a bounce whose From header is the mailer daemon",
+    headers: [{ key: "from", value: "Mail Delivery Subsystem <mailer-daemon@googlemail.com>" }],
+    envelopeFrom: "bounces@example.com",
+    automated: true,
+  },
+  {
+    row: "a delivery report",
+    headers: [
+      { key: "content-type", value: 'multipart/report; report-type=delivery-status; boundary="x"' },
+    ],
+    envelopeFrom: "bounces@example.com",
     automated: true,
   },
 ])("automated mail — $row", ({ headers, envelopeFrom, automated }) =>

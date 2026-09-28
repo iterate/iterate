@@ -8,16 +8,11 @@
 /** One header as postal-mime parses it: its lowercased name and its unfolded value. */
 type Header = { key: string; value: string };
 
-/** Cloudflare's SPF, DKIM and DMARC verdicts (`pass`, `fail`, `none`, …), null where it gave none. */
-export type EmailAuthentication = { spf: string | null; dkim: string | null; dmarc: string | null };
-
-/** The verdicts of the topmost Cloudflare record (an MTA prepends its own), and whether every
- *  Cloudflare record proves `from`: an aligned DMARC pass, an aligned DKIM signature, or an SPF pass
- *  for an aligned envelope domain — DMARC's alignment, parent and child domains aligning. */
-export function authenticationOf(
-  headers: Header[],
-  from: string,
-): { authentication: EmailAuthentication; verified: boolean } {
+/** Cloudflare's SPF, DKIM and DMARC verdicts (`pass`, `fail`, `none`, …, null where it gave none)
+ *  from its topmost record (an MTA prepends its own), and whether every Cloudflare record proves
+ *  `from`: an aligned DMARC pass, an aligned DKIM signature, or an SPF pass for an aligned envelope
+ *  domain — DMARC's alignment, parent and child domains aligning. */
+export function authenticationOf(headers: Header[], from: string) {
   const fromDomain = from.slice(from.lastIndexOf("@") + 1).toLowerCase();
   const records = headers
     .filter((header) => header.key === "authentication-results")
@@ -59,9 +54,10 @@ export function authenticationOf(
 }
 
 /** An auto-reply, a bulk or list message, or a bounce — Auto-Submitted other than `no` (RFC 3834),
- *  Precedence `bulk`/`list`/`junk`, or a mailer-daemon/postmaster envelope sender: nothing should
- *  answer it automatically. */
-export function isAutomated(headers: Header[], envelopeFrom: string): boolean {
+ *  Precedence `bulk`/`list`/`junk`, a delivery report (`multipart/report`), the null envelope sender
+ *  bounces carry (`<>`), or mailer-daemon/postmaster in the envelope or the From header: nothing
+ *  should answer it automatically. */
+export function isAutomated(headers: Header[], envelopeFrom: string) {
   const valueOf = (key: string) =>
     headers
       .find((header) => header.key === key)
@@ -71,6 +67,10 @@ export function isAutomated(headers: Header[], envelopeFrom: string): boolean {
   return (
     (!!autoSubmitted && autoSubmitted !== "no") ||
     ["bulk", "list", "junk"].includes(valueOf("precedence") ?? "") ||
-    /^(mailer-daemon|postmaster)@/i.test(envelopeFrom.trim())
+    !!valueOf("content-type")?.startsWith("multipart/report") ||
+    ["", "<>"].includes(envelopeFrom.trim()) ||
+    [envelopeFrom, valueOf("from") ?? ""].some((address) =>
+      /\b(mailer-daemon|postmaster)@/i.test(address),
+    )
   );
 }
