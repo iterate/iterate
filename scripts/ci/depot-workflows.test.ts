@@ -14,6 +14,7 @@ import { stepFailureTitles, testEvidenceJobs } from "./test-evidence.ts";
 import { stateArtifact as prdFaultAlarmState } from "./prd-fault-alarm.ts";
 import { previewPaths } from "./preview-paths.ts";
 import { unitTestWorkspaces } from "./test-telemetry-completeness.ts";
+import { renderWorkflowString } from "./workflow-expression.ts";
 
 const repoRoot = resolve(import.meta.dirname, "../..");
 /** What a test job's evidence artifacts end with: the job attempt's id (docs/depot-ci.md#artifacts-per-job-attempt). */
@@ -118,6 +119,51 @@ test.each(deploymentWorkflows)(
         expect.any(Number),
       );
     }
+  },
+);
+
+test.for([{ file: ".depot/workflows/test.yml" }, { file: ".depot/workflows/lint-typecheck.yml" }])(
+  "$file gives every main commit its own run and supersedes a PR branch's older run",
+  ({ file }) => {
+    const { concurrency } = loadWorkflow(file);
+    const group = (context: Record<string, string>) =>
+      renderWorkflowString(concurrency!.group, {
+        "github.head_ref": "",
+        "github.ref_name": "",
+        "github.run_id": "",
+        "github.sha": "",
+        ...context,
+      });
+    const mainPush = (sha: string, runId: string) =>
+      group({
+        "github.event_name": "push",
+        "github.ref_name": "main",
+        "github.sha": sha,
+        "github.run_id": runId,
+      });
+    const prPush = (sha: string, runId: string) =>
+      group({
+        "github.event_name": "pull_request",
+        "github.head_ref": "some-branch",
+        "github.ref_name": "3400/merge",
+        "github.sha": sha,
+        "github.run_id": runId,
+      });
+
+    // one group for all of main cancels the run in progress, or replaces the pending run, when the
+    // next merge lands: that merge commit then has no Test or Lint verdict at all
+    expect(mainPush("a1", "r1")).not.toBe(mainPush("b2", "r2"));
+    expect(concurrency!["cancel-in-progress"]).toBe(true);
+    expect(prPush("a1", "r1")).toBe(prPush("b2", "r2"));
+    // a soak's dispatches on one branch still supersede each other (docs/depot-ci.md#soak-n-runs-then-read-them)
+    const dispatch = (runId: string) =>
+      group({
+        "github.event_name": "workflow_dispatch",
+        "github.ref_name": "ci-soak/x",
+        "github.sha": "a1",
+        "github.run_id": runId,
+      });
+    expect(dispatch("r1")).toBe(dispatch("r2"));
   },
 );
 

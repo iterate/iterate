@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 import { expect, test } from "vitest";
 import { parse as parseYaml } from "yaml";
 import { AWAIT_DEPLOY, SUITE_BOUND_MS } from "./await-deploy.ts";
+import { evaluateWorkflowExpression as evaluate } from "./workflow-expression.ts";
 
 type PreviewStep = {
   "continue-on-error"?: boolean;
@@ -423,20 +424,3 @@ test("a test job keeps its evidence whenever its suite read its deployed target,
     ]);
   }
 });
-
-/**
- * Enough of the expression language for these conditions: the jobs' `always()`, then quoted strings,
- * ==, !=, !, &&, || and parentheses are JavaScript once each context path is replaced by its value.
- * A step's condition without a status function is `success() && (...)`, true here: the steps before
- * the ones it evaluates passed.
- */
-function evaluate(condition: string | undefined, context: Record<string, string>): unknown {
-  const javascript = (condition || "true")
-    .replaceAll("always()", "true")
-    .replace(/[a-z_]+(?:\.[A-Za-z0-9_-]+)+/g, (path) => {
-      expect(context, `${path} is not in the test's context`).toHaveProperty([path]);
-      return JSON.stringify(context[path]);
-    });
-  // oxlint-disable-next-line no-new-func -- evaluating the workflow's own condition IS the test
-  return new Function(`return (${javascript});`)();
-}

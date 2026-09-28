@@ -8,10 +8,10 @@ on:
       - main
   pull_request: {}
   workflow_dispatch: {}
-# Cancel a branch's in-flight run when a newer commit supersedes it. PRs use
-# head_ref; main and manual runs use ref_name.
+# A newer push to a PR's branch cancels its older run; each push to main keeps its own run, grouped
+# by its sha (docs/depot-ci.md#reliability-defaults).
 concurrency:
-  group: lint-typecheck-${{ github.head_ref || github.ref_name || github.run_id }}
+  group: lint-typecheck-${{ github.event_name == 'push' && github.sha || github.head_ref || github.ref_name || github.run_id }}
   cancel-in-progress: true
 
 jobs:

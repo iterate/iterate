@@ -11,10 +11,10 @@ on:
   # A soak runs it by dispatch: under `depot ci run` the job has no Depot Cache
   # (docs/depot-ci.md#run-ci-without-a-pr).
   workflow_dispatch: {}
-# Rapid pushes to a branch supersede each other. On PRs, head_ref identifies
-# the source branch; on main, ref_name keeps only the newest validation run.
+# A newer push to a PR's branch cancels its older run; each push to main keeps its own run, grouped
+# by its sha (docs/depot-ci.md#reliability-defaults).
 concurrency:
-  group: test-${{ github.head_ref || github.ref_name || github.run_id }}
+  group: test-${{ github.event_name == 'push' && github.sha || github.head_ref || github.ref_name || github.run_id }}
   cancel-in-progress: true
 
 jobs:
