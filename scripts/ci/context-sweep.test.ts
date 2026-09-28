@@ -3,9 +3,11 @@
 // is asked again rather than failing the run, and where each run's result is posted. Cloudflare's listing, the session and R2 are the script's IO, left out.
 import { expect, test } from "vitest";
 import type { StreamPage } from "iterate/api";
+import type { IterateConnection } from "iterate/node";
 import {
   backUpAndDestroy,
   classifyContexts,
+  reconnecting,
   sweepMessages,
   type SweptContext,
 } from "./context-sweep.ts";
@@ -149,6 +151,60 @@ test.for<{
     now: () => Date.parse("2026-09-28T03:00:00.000Z"),
   });
   expect({ calls, backups, result }).toEqual(expected);
+});
+
+test("a session whose socket closed and whose first reconnect failed is connected again, and the orphan is still swept", async () => {
+  const calls: string[] = [];
+  let connects = 0;
+  let closeFirst = () => {};
+  const session = await reconnecting(async () => {
+    const n = ++connects;
+    calls.push(`connect ${n}`);
+    if (n === 2) throw new Error("Unexpected server response: 503");
+    const closed = new Promise<{ code: number; reason: string }>((resolve) => {
+      if (n === 1) closeFirst = () => resolve({ code: 1006, reason: "" });
+    });
+    const contexts = {
+      readEvents: async (id: string, afterOffset: number) => {
+        calls.push(`read ${id} ${afterOffset} on ${n}`);
+        return page(afterOffset);
+      },
+      destroy: async (id: string) => {
+        calls.push(`destroy ${id} on ${n}`);
+        return { projectId: "prj_gone", path: "/" };
+      },
+    };
+    return {
+      session: { contexts },
+      closed,
+      [Symbol.dispose]: () => calls.push(`dispose ${n}`),
+    } as unknown as IterateConnection;
+  });
+  closeFirst();
+  await Promise.resolve();
+  const result = await backUpAndDestroy({
+    orphans: [identity("o")],
+    contexts: {
+      readEvents: async (id, afterOffset) =>
+        (await session.session()).contexts.readEvents(id, afterOffset),
+      destroy: async (id) => (await session.session()).contexts.destroy(id),
+    },
+    putBackup: async () => {},
+    prefix: "backups/run/",
+    now: () => Date.parse("2026-09-28T03:00:00.000Z"),
+  });
+  expect({ calls, result }).toEqual({
+    calls: [
+      "connect 1",
+      "dispose 1",
+      "connect 2",
+      "connect 3",
+      "read o 0 on 3",
+      "read o 2 on 3",
+      "destroy o on 3",
+    ],
+    result: { destroyed: ["o"], recent: [], failed: [] },
+  });
 });
 
 const report = {

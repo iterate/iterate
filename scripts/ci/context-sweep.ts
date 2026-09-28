@@ -269,7 +269,7 @@ export async function backUpAndDestroy(input: {
 
 /** `call`, asked again on CI_HTTP's waits while the platform fails it: a deploy's reset of the
  *  context, or a session whose socket closed (capnweb's "Peer closed WebSocket", which
- *  `reconnecting` answers with a new connection). Both calls are safe to repeat: a read, and a
+ *  `reconnecting` answers with a new connection) or could not be connected again. Both calls are safe to repeat: a read, and a
  *  destruction whose landed try answers EMPTIED. */
 const retryingPlatformFailures = <T>(name: string, call: () => Promise<T>) =>
   retryPlatformFailures(call, {
@@ -277,33 +277,39 @@ const retryingPlatformFailures = <T>(name: string, call: () => Promise<T>) =>
     schedule: CI_HTTP,
     idempotent: true,
     kind: (error): FailureKind =>
-      /Peer closed WebSocket/.test(String(error)) ? "disconnected" : failureKind(error),
+      /Peer closed WebSocket/.test(String(error)) || String(error).includes(RECONNECT_FAILED)
+        ? "disconnected"
+        : failureKind(error),
     describe: () => ({ name }),
   });
 
 /** The deployment's session, connected again once its socket closed: a prd deploy mid-sweep may
- *  close it. */
-async function reconnecting(connect: () => Promise<IterateConnection>) {
-  let connection = await connect();
-  let closed = false;
+ *  close it. A connection that could not be made again (the deployment still restarting) fails as
+ *  RECONNECT_FAILED, a platform failure the next repeat asks again. */
+export async function reconnecting(connect: () => Promise<IterateConnection>) {
+  let connection: IterateConnection | undefined = await connect();
   const watch = (current: IterateConnection) =>
     void current.closed.then(() => {
-      if (current === connection) closed = true;
+      if (current !== connection) return;
+      connection = undefined;
+      current[Symbol.dispose]();
     });
   watch(connection);
   return {
     async session() {
-      if (closed) {
-        connection[Symbol.dispose]();
-        connection = await connect();
-        closed = false;
+      if (!connection) {
+        connection = await connect().catch((error: unknown) => {
+          throw new Error(`${RECONNECT_FAILED}: ${String(error)}`, { cause: error });
+        });
         watch(connection);
       }
       return connection.session;
     },
-    [Symbol.dispose]: () => connection[Symbol.dispose](),
+    [Symbol.dispose]: () => connection?.[Symbol.dispose](),
   };
 }
+
+const RECONNECT_FAILED = "the session's socket closed and connecting again failed";
 
 /** A sweep's Slack posts: its result to #ci, and the same to #error-pulse, mentioning Jonas and
  *  Misha, when it did not succeed. Destroying orphans is routine: the nightly crash hunt leaves
