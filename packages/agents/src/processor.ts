@@ -6,10 +6,9 @@
 // class, lean). The model call LIVES HERE (`#stream`): a `@cf/…` model through `itx.ai` (the
 // Workers AI binding under THIS context's rules, so a test lends a fake there), anything else
 // through the account's AI Gateway as a Workers AI partner model, streamed from the Responses API.
-// The host (durable-object.ts) hands in `withItx` and `runModel`, the byte bridge that runs the
-// model call in a loaded transport worker, so a unit test constructs the processor with `new` and
-// reduces rows (processor.test.ts, in node); the saga and the loop are proven on the worker
-// (apps/agents/e2e/agents.e2e.test.ts, a fake `itx.ai` lent by rule).
+// The host (durable-object.ts) hands in `withItx`, so a unit test constructs the processor with
+// `new` and reduces rows (processor.test.ts, in node); the saga and the loop are proven on the
+// worker (apps/agents/e2e/agents.e2e.test.ts, a fake `itx.ai` lent by rule).
 //
 // A request is debounced by the at-head scheduling below: one window after its trigger,
 // the failure backoff folded in, the delayed append being the intent.
@@ -138,9 +137,8 @@ const CHUNK_WINDOW_MS = 150;
 /** A window that grew past this lands early rather than as one oversized append. */
 const CHUNK_WINDOW_MAX_CHARS = 64_000;
 /** The idle watchdog: a stream that carries nothing for this long fails the attempt, so a stalled
- *  provider never wedges a turn until its expiry. The host's byte transport times out on the same
- *  budget. */
-export const STREAM_IDLE_BUDGET_MS = 45_000;
+ *  provider never wedges a turn until its expiry. */
+const STREAM_IDLE_BUDGET_MS = 45_000;
 
 /** The context windows of the models this loop names; a conservative floor for the rest. OpenAI's
  *  figures are the operating window (where pricing doubles), not the documented one. */
@@ -265,14 +263,24 @@ async function drainSse(
   } finally {
     signal.removeEventListener("abort", cancel);
     // A parser error (for example, a `response.failed` event) stops this consumer before the
-    // producer has necessarily finished.  Cancel the local body in that case: otherwise the
-    // byte bridge can be left waiting forever on its next backpressured write.
-    // Do not await this cancellation. The producer may be awaiting the write whose chunk this
-    // reader just rejected, and awaiting both sides would turn the error path into a deadlock.
+    // provider has finished: cancel the body so the provider's stream stops too. Not awaited, so a
+    // stalled provider cannot hold the error path.
     if (!completed) void reader.cancel().catch(() => undefined);
     reader.releaseLock();
   }
   if (signal.aborted) throw signal.reason instanceof Error ? signal.reason : new Error("aborted");
+}
+
+/** Race an un-abortable dial against the caller's signal: the caller regains control the moment it
+ *  aborts (an interruption, the expiry, the idle watchdog) while the orphaned dial finishes into the
+ *  void; a stream already open is cancelled by `drainSse` itself. */
+function raceAbort<T>(signal: AbortSignal, work: Promise<T>): Promise<T> {
+  if (signal.aborted) return Promise.reject(signal.reason || new Error("aborted"));
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(signal.reason || new Error("aborted"));
+    signal.addEventListener("abort", onAbort, { once: true });
+    work.then(resolve, reject).finally(() => signal.removeEventListener("abort", onAbort));
+  });
 }
 
 /** The conversation as the Responses API takes it: `input` items with text and image parts. */
@@ -308,14 +316,6 @@ type AgentProcessorDeps = {
   /** The host's scope accessor: `itx.ai`, `itx.files`, `itx.whoami()` — the effects this loop
    *  reaches through the context, under its rules (a test lends a fake `itx.ai` there). */
   withItx: WithItx<ItxEntrypointScope>;
-  /** The host bridges raw provider bodies through awaited byte RPC. */
-  runModel(
-    path: string,
-    model: string,
-    input: unknown,
-    options: unknown,
-    signal: AbortSignal,
-  ): Promise<unknown>;
   /** The clock and the wait, injected only so a unit test can make the debounce instant. */
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
@@ -939,10 +939,6 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
       } catch (error) {
         // The interrupt path's story — it settled the request itself.
         if (controller.signal.reason instanceof InterruptedError) return;
-        // `#stream` can reject after it has handed the byte transport a local Response (for
-        // example, on an in-band provider failure). Stop that producer before recording the
-        // settlement, rather than leaving its next backpressured write alive in waitUntil.
-        controller.abort(error);
         await settle({
           status: "failed",
           errorMessage: String(error instanceof Error ? error.message : error).slice(0, 4_000),
@@ -987,9 +983,9 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
    *  event); the call answers the whole text once the stream ends, with the usage the provider
    *  reported. Aborting `signal` stops the stream; the call then rejects.
    *
-   *  Two routes by the model's name. The host invokes Workers AI under this context's rules and
-   *  relays any raw body through an app-owned byte transport. A `@cf/…` answer may be streamed or
-   *  whole JSON.
+   *  Two routes by the model's name, both `itx.ai` under THIS context's rules (a test lends a fake
+   *  there), each drained inside its one `withItx`: the call stays open until its body is read. A
+   *  `@cf/…` answer may be streamed or whole JSON.
    *  Anything else is OpenAI's Responses API as a Workers AI partner model on Cloudflare's billing
    *  — no key, ours or a project's — the FAST reading of a reasoning model: low effort, with its
    *  summary streamed. */
@@ -1004,40 +1000,37 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
     signal: AbortSignal;
     onChunk(chunk: unknown, textDelta: string): void;
   }): Promise<{ text: string; usage?: LlmUsage }> {
-    if (model.startsWith("@cf/")) {
-      // The model is configuration, so the transport result is validated below rather than trusted.
-      const { path } = await this.#identity();
-      const raw: unknown = await this.deps.runModel(
-        path,
-        model,
-        { messages, stream: true },
-        undefined,
-        signal,
-      );
-      if (raw instanceof ReadableStream) {
-        let text = "";
-        let usage: LlmUsage | undefined;
-        await drainSse(raw, signal, (event) => {
-          const chunk = z.looseObject({ response: z.string().optional() }).safeParse(event);
-          const delta = chunk.success ? chunk.data.response || "" : "";
-          text += delta;
-          onChunk(event, delta);
-          const reported = z.looseObject({ usage: z.unknown() }).safeParse(event);
-          if (reported.success && reported.data.usage !== undefined)
-            usage = normalizeUsage(reported.data.usage) ?? usage;
-        });
-        if (text.trim() === "") throw new Error("the model answered with no text");
-        return { text: text.trim(), usage };
-      }
-      // A binding (or a lent fake) that answered whole: the one chunk there is.
-      const answer = ChatAnswer.parse(raw);
-      const text = (
-        "response" in answer ? answer.response : answer.choices[0]!.message.content
-      ).trim();
-      if (text === "") throw new Error("the model answered with no text");
-      onChunk(raw, text);
-      return { text };
-    }
+    if (model.startsWith("@cf/"))
+      return this.deps.withItx(async (itx) => {
+        // workers-types keys `run`'s inputs and outputs by model-name literal; the model is
+        // configuration here (any name the account can reach), so the call is made through the
+        // binding's runtime shape and the answer is validated below rather than trusted from a type.
+        const ai = itx.ai as unknown as { run(model: string, inputs: unknown): Promise<unknown> };
+        const raw: unknown = await raceAbort(signal, ai.run(model, { messages, stream: true }));
+        if (raw instanceof ReadableStream) {
+          let text = "";
+          let usage: LlmUsage | undefined;
+          await drainSse(raw, signal, (event) => {
+            const chunk = z.looseObject({ response: z.string().optional() }).safeParse(event);
+            const delta = chunk.success ? chunk.data.response || "" : "";
+            text += delta;
+            onChunk(event, delta);
+            const reported = z.looseObject({ usage: z.unknown() }).safeParse(event);
+            if (reported.success && reported.data.usage !== undefined)
+              usage = normalizeUsage(reported.data.usage) ?? usage;
+          });
+          if (text.trim() === "") throw new Error("the model answered with no text");
+          return { text: text.trim(), usage };
+        }
+        // A binding (or a lent fake) that answered whole: the one chunk there is.
+        const answer = ChatAnswer.parse(raw);
+        const text = (
+          "response" in answer ? answer.response : answer.choices[0]!.message.content
+        ).trim();
+        if (text === "") throw new Error("the model answered with no text");
+        onChunk(raw, text);
+        return { text };
+      });
     // No key of ours rides this request: an `openai/…` model is a Workers AI PARTNER model, billed
     // by Cloudflare through the binding — the Responses API shape, streamed, the raw Response asked
     // for so the SSE body is ours to read. The gateway option routes it through the account's AI
@@ -1045,63 +1038,70 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
     // partition on, so a runaway agent hits ITS ceiling. Nothing is trusted from the answer: it is a
     // Response checked for status and parsed event by event below.
     const { projectId, path } = await this.#identity();
-    const raw: unknown = await this.deps.runModel(
-      path,
-      `openai/${model}`,
-      {
-        input: responsesInput(messages),
-        stream: true,
-        store: false,
-        reasoning: { effort: "low", summary: "auto" },
-      },
-      {
-        returnRawResponse: true,
-        gateway: {
-          id: AI_GATEWAY_ID,
-          skipCache: true,
-          metadata: { projectId, streamPath: path, context: "agent-turn" },
-        },
-      },
-      signal,
-    );
-    if (!(raw instanceof Response))
-      throw new Error(`model ${model}: Workers AI did not answer with the raw response`);
-    const response = raw;
-    if (!response.ok || !response.body)
-      throw new Error(
-        `openai/${model} ${String(response.status)}: ${(await response.text()).slice(0, 400)}`,
+    return this.deps.withItx(async (itx) => {
+      const raw: unknown = await raceAbort(
+        signal,
+        itx.ai.run(
+          // Two casts, both because workers-types spells Workers AI's OWN catalog as literals: a
+          // partner model's name (`openai/…`) is not among them though the binding takes any model
+          // the account can reach, and a partner model takes the PROVIDER's request body (here the
+          // Responses API's), which no catalog input type names.
+          `openai/${model}` as Parameters<Ai["run"]>[0],
+          {
+            input: responsesInput(messages),
+            stream: true,
+            store: false,
+            reasoning: { effort: "low", summary: "auto" },
+          } as never,
+          {
+            returnRawResponse: true,
+            gateway: {
+              id: AI_GATEWAY_ID,
+              skipCache: true,
+              metadata: { projectId, streamPath: path, context: "agent-turn" },
+            },
+          },
+        ),
       );
-    let text = "";
-    let usage: LlmUsage | undefined;
-    await drainSse(response.body, signal, (raw) => {
-      const event = ResponsesEvent.safeParse(raw);
-      if (!event.success) return;
-      const { type } = event.data;
-      if (type === "response.output_text.delta") {
-        const delta = typeof event.data.delta === "string" ? event.data.delta : "";
-        text += delta;
-        onChunk(raw, delta);
-      } else if (type === "response.reasoning_summary_text.delta") onChunk(raw, "");
-      else if (type === "response.completed" || type === "response.incomplete") {
-        const done = z
-          .looseObject({ response: z.looseObject({ usage: z.unknown() }) })
-          .safeParse(raw);
-        if (done.success) usage = normalizeUsage(done.data.response.usage) ?? usage;
-      } else if (type === "response.failed" || type === "error") {
-        const failure = z
-          .looseObject({
-            error: z.looseObject({ message: z.string() }).optional(),
-            response: z
-              .looseObject({ error: z.looseObject({ message: z.string() }).optional() })
-              .optional(),
-          })
-          .safeParse(raw);
+      if (!(raw instanceof Response))
+        throw new Error(`model ${model}: Workers AI did not answer with the raw response`);
+      const response = raw;
+      if (!response.ok || !response.body)
         throw new Error(
-          `openai: ${failure.success ? failure.data.error?.message || failure.data.response?.error?.message || type : type}`,
+          `openai/${model} ${String(response.status)}: ${(await response.text()).slice(0, 400)}`,
         );
-      }
+      let text = "";
+      let usage: LlmUsage | undefined;
+      await drainSse(response.body, signal, (raw) => {
+        const event = ResponsesEvent.safeParse(raw);
+        if (!event.success) return;
+        const { type } = event.data;
+        if (type === "response.output_text.delta") {
+          const delta = typeof event.data.delta === "string" ? event.data.delta : "";
+          text += delta;
+          onChunk(raw, delta);
+        } else if (type === "response.reasoning_summary_text.delta") onChunk(raw, "");
+        else if (type === "response.completed" || type === "response.incomplete") {
+          const done = z
+            .looseObject({ response: z.looseObject({ usage: z.unknown() }) })
+            .safeParse(raw);
+          if (done.success) usage = normalizeUsage(done.data.response.usage) ?? usage;
+        } else if (type === "response.failed" || type === "error") {
+          const failure = z
+            .looseObject({
+              error: z.looseObject({ message: z.string() }).optional(),
+              response: z
+                .looseObject({ error: z.looseObject({ message: z.string() }).optional() })
+                .optional(),
+            })
+            .safeParse(raw);
+          throw new Error(
+            `openai: ${failure.success ? failure.data.error?.message || failure.data.response?.error?.message || type : type}`,
+          );
+        }
+      });
+      if (text.trim() === "") throw new Error("the model answered with no text");
+      return { text: text.trim(), usage };
     });
-    if (text.trim() === "") throw new Error("the model answered with no text");
-    return { text: text.trim(), usage };
   }
 }

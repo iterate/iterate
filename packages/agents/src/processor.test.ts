@@ -516,7 +516,6 @@ test("buildChatMessages: the tree rides as ONE system message after the journale
 const processor = () =>
   new AgentProcessor({
     withItx: () => Promise.reject(new Error("the reduce reaches no itx")),
-    runModel: () => Promise.reject(new Error("the reduce reaches no model transport")),
     now: () => 0,
     sleep: () => Promise.resolve(),
   });

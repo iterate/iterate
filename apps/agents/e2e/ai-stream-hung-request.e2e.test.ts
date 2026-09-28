@@ -1,18 +1,17 @@
-// e2e/ai-stream-hung-request.e2e.test.ts — THE PIN of the Cloudflare fault the agents' AI byte relay
-// works around (packages/agents/src/ai-transport.md).
+// e2e/ai-stream-hung-request.e2e.test.ts — THE ROW that pins where an `itx.ai` stream is made.
 //
 // A Durable Object that reads Workers AI's raw streamed Response, returned over RPC from a second
-// Durable Object, gets the whole body, yet the runtime ends the service invocation in between with
-// "The Workers runtime canceled this request because it detected that your Worker's code had hung
-// and would never generate a response". Here: a loaded facet calls `itx.ai.run` through `env.ITX`
-// (ItxEntrypoint.get), the context Durable Object calls `env.AI.run`, and the facet drains the body
-// itself, with no agents code. No caller sees a failure, so the verdict is the outcome of each
-// ItxEntrypoint invocation that ran `ai.run`, read from Workers Logs (CLOUDFLARE_ACCOUNT_ID and
-// CLOUDFLARE_API_TOKEN, Doppler os/preview). It pays for model calls, so only the real-model suite
-// runs it (os-real-model.yml).
-//
-// When it goes red because it passed, Cloudflare fixed the fault: delete the relay (ai-transport.md
-// names its pieces) and keep this body as a plain row.
+// Durable Object through a stateless hop, gets the whole body, yet Cloudflare ends the stateless
+// invocation in between with "The Workers runtime canceled this request because it detected that
+// your Worker's code had hung and would never generate a response" (a standalone Worker with no
+// Iterate code reproduces it; a Durable Object calling a stateless target that calls AI does not).
+// So no context Durable Object holds the binding: the edge that took the call makes it
+// (apps/os/src/context/dispatch.ts `ItxAiCall`). Here: a loaded facet calls `itx.ai.run` through
+// `env.ITX` (ItxEntrypoint.get), its context resolves the call, ItxEntrypoint calls `env.AI.run`,
+// and the facet drains the body itself, with no agents code. No caller sees the exception, so the
+// verdict is the outcome of each ItxEntrypoint invocation that ran `ai.run`, read from Workers Logs
+// (CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN, Doppler os/preview). It pays for model calls, so
+// only the real-model suite runs it (os-real-model.yml).
 import { expect } from "vitest";
 import { z } from "zod";
 import { E2E_CI_RETRIES } from "@iterate-com/shared/test-support/e2e-policy";

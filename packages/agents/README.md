@@ -36,4 +36,3 @@ Importing the package registers `itx.agents` on iterate/api's `InstalledAppRoots
 - `src/contract.ts` — an agent's events and state; `src/processor.ts` — the reduce and the loop;
   `src/processor.test.ts` — the processor's spec.
 - `src/catalog.ts`, `src/collection.ts` — `itx.agents`; `src/durable-object.ts` — one agent.
-- `src/ai-transport*.ts` — the loaded worker that streams a model call ([why](src/ai-transport.md)).

@@ -139,7 +139,6 @@ function stateAfter(events: { type: string; payload?: unknown }[]) {
   return reduceProcessor(
     new AgentProcessor({
       withItx: () => Promise.reject(new Error("the reduce reaches no itx")),
-      runModel: () => Promise.reject(new Error("the reduce reaches no model transport")),
     }),
     events,
   );

@@ -10,7 +10,6 @@ export default defineConfig({
     processor: "src/processor.ts",
     "codemode-format": "src/codemode-format.ts",
     "system-prompt": "src/system-prompt.ts",
-    "ai-transport-source": "src/ai-transport-source.ts",
   },
   format: "esm",
   fixedExtension: true,

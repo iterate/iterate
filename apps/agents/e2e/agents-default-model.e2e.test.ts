@@ -2,7 +2,7 @@
 //
 // INTERCEPTED, in every run (PR previews, Main OS e2e, local, the soak): the agent's `itx.ai` is
 // shadowed by a fake that plays the provider. The whole deployed runtime runs above it: the turn
-// loop, the attachment turned into a vision input, the byte transport, the chunk windows, the
+// loop, the attachment turned into a vision input, the model call across the edge, the chunk windows, the
 // settlement and the context report. The fake asserts what the runtime ASKED for (the model, the
 // Responses API request, the image part, the AI Gateway options), and it costs nothing.
 //

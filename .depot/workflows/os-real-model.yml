@@ -31,11 +31,12 @@ on:
     - cron: "47 5 * * *"
   push:
     branches: [main]
-    # How an agent calls its model: the default model, the request, the byte transport, the pin of
-    # the fault the transport works around, and this suite.
+    # How an agent calls its model: the default model, the request, the edge that makes every
+    # `itx.ai` call, the pin of the fault that edge avoids, and this suite.
     paths:
       - .depot/workflows/os-real-model.yml
       - packages/agents/**
+      - apps/os/src/iterate-context.ts
       - apps/agents/e2e/agents-default-model.e2e.test.ts
       - apps/agents/e2e/ai-stream-hung-request.e2e.test.ts
   workflow_dispatch:

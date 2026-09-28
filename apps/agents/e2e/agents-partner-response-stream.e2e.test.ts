@@ -1,30 +1,14 @@
-// Exercise streamed model responses through the installed agent runtime and its app-owned byte
-// transport. Whole-JSON fixtures cannot cover incremental delivery or Response metadata.
-import { RpcTarget } from "capnweb";
+// Exercise streamed model responses through the installed agent runtime: the agent's `itx.ai`
+// answers a Response or a stream across the edge. Whole-JSON fixtures cannot cover incremental
+// delivery or Response metadata.
 import { expect } from "vitest";
-import { AI_TRANSPORT_SOURCE } from "@iterate-com/agents/ai-transport-source";
 import { installAgents } from "@iterate-com/agents/install";
-import {
-  collector,
-  freshCtx,
-  readAll,
-  rejection,
-  sleep,
-  until,
-} from "../../os/e2e/support/client.ts";
+import { collector, freshCtx, readAll, sleep, until } from "../../os/e2e/support/client.ts";
 import { FakeAi, sseResponse, sseStream } from "../../os/e2e/support/fake-ai.ts";
 import { startOwnWorker } from "../../os/e2e/support/own-worker.ts";
 import { localOnly } from "../../os/e2e/support/project-host.ts";
 import { agentsWorkspaceSource } from "./agents-source.ts";
 import { assistantWords, configureModel, settledLog } from "./fixtures.ts";
-
-class NeverWritingSink extends RpcTarget {
-  start() {}
-  write() {
-    return new Promise<void>(() => {});
-  }
-  error() {}
-}
 
 localOnly(
   "the installed agent settles delayed model streams through env.ITX",
@@ -104,20 +88,6 @@ localOnly(
           .payload,
       ).toMatchObject({ result: { status: "succeeded", text: "A native streamed answer." } });
 
-      const masked = itx.cd("/agents/masked-ai");
-      const maskedAi = new FakeAi([new Error("a masked itx.ai must never be asked")]);
-      await masked.provide("itx.ai", maskedAi);
-      await itx.agents.create("/agents/masked-ai");
-      await configureModel(masked, "gpt-5.6-terra");
-      await masked.provide("itx.ai", null);
-      await itx.agents.get("/agents/masked-ai").message("This must not reach the provider.");
-      const maskedEvents = await settledLog(masked, "the masked model failure");
-      expect(maskedAi).toMatchObject({ calls: [] });
-      expect(
-        maskedEvents.find((event) => event.type === "events.iterate.com/agent/llm-request-settled")!
-          .payload,
-      ).toMatchObject({ result: { status: "failed" } });
-
       const failed = itx.cd("/agents/failed-partner");
       const failedAi = new FakeAi([() => new Response("provider unavailable", { status: 503 })]);
       await failed.provide("itx.ai", failedAi);
@@ -136,8 +106,8 @@ localOnly(
         },
       });
 
-      // A null provider body must stay null through the byte bridge. A closed-but-present stream
-      // would instead reach the empty-SSE path and report "the model answered with no text".
+      // A null provider body must stay null across the edge. A closed-but-present stream would
+      // instead reach the empty-SSE path and report "the model answered with no text".
       const nullBody = itx.cd("/agents/null-body-partner");
       const nullBodyAi = new FakeAi([() => new Response(null, { status: 204 })]);
       await nullBody.provide("itx.ai", nullBodyAi);
@@ -184,42 +154,4 @@ localOnly(
     }
   },
   120_000,
-);
-
-localOnly(
-  "the byte transport bounds a stalled sink write",
-  async () => {
-    const worker = await startOwnWorker();
-    try {
-      const itx = worker.itx(freshCtx("agent-transport-write-timeout"));
-      const modelPath = "/agents/transport-write-timeout";
-      const stalledAi = new FakeAi([
-        () =>
-          sseResponse([
-            { type: "response.output_text.delta", delta: "stalled" },
-            new Promise(() => {}),
-          ]),
-      ]);
-      await itx.cd(modelPath).provide("itx.ai", stalledAi);
-      const error = await rejection(
-        itx.workers
-          .get({ source: AI_TRANSPORT_SOURCE })
-          .run(
-            modelPath,
-            "gpt-5.6-terra",
-            {},
-            { returnRawResponse: true },
-            new NeverWritingSink(),
-            1_000,
-          ),
-        "the transport's stalled sink write",
-        5_000,
-      );
-      expect(error.message).toContain("model transport sink timeout");
-      expect(worker.logs()).not.toMatch(/hung and would never generate a response/i);
-    } finally {
-      await worker.stop();
-    }
-  },
-  30_000,
 );
