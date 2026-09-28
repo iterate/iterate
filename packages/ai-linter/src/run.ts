@@ -425,15 +425,17 @@ async function lint(job: Job, config: LintConfig, io: LintIo, github: GithubApi)
   // A pull request that cannot be read now is published on anyway: its verdict is for this head.
   if (!(await current().catch(() => true)))
     return { status: "skipped", reason: "the pull request moved on" };
-  // The review is marked with the head and its findings: a lint that died between the review and the
-  // Check Run finds its review again and posts none, and a head linted again after an incomplete
-  // verdict posts its own review when it found other things.
-  const findingsDigest = await sha256(
-    JSON.stringify(
+  // The review is marked with the head and what it says, its findings and what did not run: a lint that
+  // died between the review and the Check Run finds its review again and posts none, and a head
+  // linted again after an incomplete verdict posts its own review, since what it says differs.
+  const reviewProblems = problemLines(problems, jevStats);
+  const reviewDigest = await sha256(
+    JSON.stringify([
       findings.map((finding) => [finding.rule, finding.path, finding.startLine, finding.message]),
-    ),
+      reviewProblems,
+    ]),
   );
-  const marker = `<!-- ${job.key} ${findingsDigest.slice(0, 16)} -->`;
+  const marker = `<!-- ${job.key} ${reviewDigest.slice(0, 16)} -->`;
   // The review first, the Check Run last: a head with its complete Check Run is done, so a lint that
   // died between the two posts the review again, and the marker makes that a no-op.
   let reviewUrl: string | null = null;
@@ -445,7 +447,7 @@ async function lint(job: Job, config: LintConfig, io: LintIo, github: GithubApi)
         diagnostics: findings,
         rules: used,
         notReviewed,
-        problems: problemLines(problems, jevStats),
+        problems: reviewProblems,
       }),
     );
     if ("error" in review) problems.push({ stage: "review", error: review.error });

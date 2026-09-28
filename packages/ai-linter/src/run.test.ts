@@ -204,6 +204,32 @@ test("a head linted again after an incomplete verdict posts its own review for w
   expect(reviews.map((review) => review.body.comments.length)).toEqual([1, 3]);
 });
 
+test("a complete lint after an incomplete one with the same findings posts its own review, which does not say incomplete", async () => {
+  let unreadable = true;
+  const github = fakeGithub({
+    extraRules: {
+      "rules/other.md": "---\nid: t/other\nseverity: warning\nfiles: ['**/*.none']\n---\nNone.\n",
+    },
+    fail: (_method, path) =>
+      unreadable && path === `${REPO}/contents/rules/other.md`
+        ? { status: 502, body: "bad gateway" }
+        : undefined,
+  });
+  await lintHead(job, config, io({ github }).lintIo);
+  unreadable = false;
+  await lintHead(job, config, io({ github }).lintIo);
+  const reviews = github.posted.filter((post) => post.path === `${REPO}/pulls/7/reviews`);
+  expect(
+    reviews.map((review) => [
+      review.body.comments.length,
+      review.body.body.includes("**Incomplete.**"),
+    ]),
+  ).toEqual([
+    [3, true],
+    [3, false],
+  ]);
+});
+
 test("a lint run again after a restart reads the LLM's answers it already had, and pays for none twice", async () => {
   const remembered = new Map<string, unknown>();
   const first = io({ github: fakeGithub({}), remembered });
