@@ -134,8 +134,8 @@ export function encodeDeviceConfiguration(
         name: "project id",
         value: configuration.iterate.projectId,
         maxBytes: projectIdMaxBytes,
-        /* A SLUG, WITH NO PREFIX TO INSIST ON: on the platform a project's id IS
-         * its DNS-safe slug, and `projects.get` validates exactly this set. */
+        /* The project's minted id (`prj_<hex>`), held to the charset every projectId is
+         * (apps/os/src/context/paths.ts `PROJECT_ID`), as `configuration.c` holds it. */
         validate: (value) => /^[A-Za-z0-9_-]+$/.test(value),
       },
       {

@@ -28,7 +28,7 @@ iterate's own zones, and its discovery document names it), then the selector's b
 platform's address. **Set up another device** keeps the platform.
 
 Preparing installs voice when missing. The form asks for an OpenAI API key as soon as the
-picked project turns out to have none. It verifies voice health before minting a ten-year token scoped to the
+picked project turns out to have none. It verifies voice health before minting a token with no expiry, scoped to the
 chosen project, under the same OAuth client that was authorized. Existing voice
 services, secrets and project websites are preserved. Voice is the npm package
 `@iterate-com/voice`, on the agents app `@iterate-com/agents`: the project's config repo
@@ -41,7 +41,6 @@ Client metadata lives at `k.iterate.com/devices/<model>/clients/<uuid>.json`. Th
 flashed token appears as `Kit <board> <date>` with kind **Device** in your sessions
 list and can be revoked individually. **Log out** ends only the browser's setup
 session and returns to device selection; already flashed tokens keep working.
-Previously provisioned tokens retain their existing identity until prepared again.
 Local HTTP development uses the issuer's dynamic client registration with the same
 branding; hosted previews exercise the actual metadata client and consent path.
 

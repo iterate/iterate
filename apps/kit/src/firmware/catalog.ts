@@ -31,6 +31,9 @@ export interface FirmwareDevice {
   target: string;
   name: string;
   description: string;
+  /** Its maker: consent's client link and icon, the selector's icon. The artwork is one of
+   *  Kit's own `public/vendors` files, so a device's identity does not depend on a vendor CDN. */
+  vendor: { name: string; icon: string; url: string };
   /** How a person starts a call once the board is set up (from its `firmware/devices/<target>`
    *  board table and README): Kit's done screen says it. */
   startCall: string;
@@ -47,6 +50,7 @@ export const firmwareCatalog: readonly FirmwareDevice[] = [
     target: "zectrix_note4",
     name: "ZECTRIX NOTE4",
     description: "E-paper voice companion with monochrome and 16-level grayscale images",
+    vendor: { name: "ZECTRIX", icon: "zectrix.png", url: "https://zectrix.com/" },
     startCall: "Press OK.",
   },
   {
@@ -54,6 +58,7 @@ export const firmwareCatalog: readonly FirmwareDevice[] = [
     target: "waveshare_s3_rlcd",
     name: "Waveshare ESP32-S3 RLCD 4.2",
     description: "Reflective display and KEY-button voice companion (experimental audio)",
+    vendor: { name: "Waveshare", icon: "waveshare.ico", url: "https://www.waveshare.com/" },
     startCall: "Press KEY.",
   },
   {
@@ -61,6 +66,11 @@ export const firmwareCatalog: readonly FirmwareDevice[] = [
     target: "havpe",
     name: "Home Assistant Voice Preview Edition",
     description: "ESP32-S3 voice satellite",
+    vendor: {
+      name: "Home Assistant",
+      icon: "home-assistant.png",
+      url: "https://www.home-assistant.io/voice-pe/",
+    },
     startCall: 'Press the button on top, or say "Jarvis".',
   },
   {
@@ -68,6 +78,11 @@ export const firmwareCatalog: readonly FirmwareDevice[] = [
     target: "satellite1",
     name: "FutureProofHomes Satellite1",
     description: "ESP32-S3 XMOS voice satellite",
+    vendor: {
+      name: "FutureProofHomes",
+      icon: "futureproofhomes.png",
+      url: "https://futureproofhomes.net/",
+    },
     startCall: 'Press its button, or say "Jarvis".',
   },
   {
@@ -75,6 +90,7 @@ export const firmwareCatalog: readonly FirmwareDevice[] = [
     target: "m5sticks3",
     name: "M5StickS3",
     description: "ESP32-S3 pocket voice companion",
+    vendor: { name: "M5Stack", icon: "m5stack.ico", url: "https://m5stack.com/" },
     startCall: "Press either button on the front or side.",
   },
   {
@@ -82,6 +98,7 @@ export const firmwareCatalog: readonly FirmwareDevice[] = [
     target: "stackchan",
     name: "StackChan",
     description: "M5Stack CoreS3 desktop companion",
+    vendor: { name: "M5Stack", icon: "m5stack.ico", url: "https://m5stack.com/" },
     startCall: "Tap its face or its side button.",
   },
   {
@@ -89,6 +106,7 @@ export const firmwareCatalog: readonly FirmwareDevice[] = [
     target: "waveshare_s3_amoled",
     name: "Waveshare ESP32-S3 Touch AMOLED",
     description: "ESP32-S3 screen voice companion",
+    vendor: { name: "Waveshare", icon: "waveshare.ico", url: "https://www.waveshare.com/" },
     startCall: "Press the upper (BOOT) button.",
   },
 ];

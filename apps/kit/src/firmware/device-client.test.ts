@@ -1,6 +1,6 @@
 import { expect, test } from "vitest";
 import { firmwareCatalog } from "./catalog.ts";
-import { deviceClientMetadata, deviceVendors } from "./device-client.ts";
+import { deviceClientMetadata } from "./device-client.ts";
 
 test.for(firmwareCatalog)(
   "$name has a distinct client per unit and its vendor artwork",
@@ -15,7 +15,7 @@ test.for(firmwareCatalog)(
         expect(metadata).toMatchObject({
           client_id: url.href,
           client_name: device.name,
-          logo_uri: `https://k.iterate.com/vendors/${deviceVendors[device.id]!.icon}`,
+          logo_uri: `https://k.iterate.com/vendors/${device.vendor.icon}`,
           redirect_uris: ["https://k.iterate.com/.auth/callback"],
           token_endpoint_auth_method: "none",
         });
