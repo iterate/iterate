@@ -39,6 +39,8 @@ test("stops writers first and verifies all data stores empty, including later KV
   // migrates from nothing; SQLite's and D1's own tables are never touched
   expect(fixture).toMatchObject({ d1: { _cf_KV: 3, sqlite_sequence: 1 }, triggers: [] });
   expect(Object.keys(fixture.d1)).toEqual(["_cf_KV", "sqlite_sequence"]);
+  // a table drops before the tables it references: D1 refuses a drop whose parent is gone
+  expect(fixture).toMatchObject({ dropped: ["projects", "d1_migrations", "users"] });
 });
 test("a schema object no table drop takes fails the erase", async () => {
   using fixture = eraseFixture();
@@ -116,6 +118,10 @@ function eraseFixture() {
       string,
       number
     >,
+    /** Each D1 table's foreign keys' parent tables. */
+    foreignKeys: { projects: ["users"] } as Record<string, string[]>,
+    /** The D1 tables dropped, in order. */
+    dropped: [] as string[],
     /** The D1's triggers, each on its table. */
     triggers: [{ name: "users_email_kept", table: "users" }],
     /** The D1's views, which no table drop takes. */
@@ -211,8 +217,14 @@ function eraseFixture() {
         fixture.operations.push("clear-db");
         return [{ results: [] }];
       }
+      const keys = /^pragma foreign_key_list\("(\w+)"\)$/.exec(statement);
+      if (keys)
+        return [{ results: (fixture.foreignKeys[keys[1]!] ?? []).map((table) => ({ table })) }];
       const dropped = /^drop table "(\w+)"$/.exec(statement);
       if (!dropped) throw new Error(`unexpected D1 statement: ${statement}`);
+      if (fixture.foreignKeys[dropped[1]!]?.some((parent) => !(parent in fixture.d1)))
+        throw new Error(`no such table: main.${fixture.foreignKeys[dropped[1]!]}`);
+      fixture.dropped.push(dropped[1]!);
       delete fixture.d1[dropped[1]!];
       fixture.triggers = fixture.triggers.filter(({ table }) => table !== dropped[1]);
       return [{ results: [] }];

@@ -319,14 +319,40 @@ async function d1Tables(d1: D1Query) {
 
 /** Drops every table of the D1 but SQLite's and D1's, `d1_migrations` included, so the next deploy
  *  migrates it from nothing; each table's indexes and triggers go with it. One request is one
- *  transaction, and D1 enforces foreign keys: deferred to its end, the tables drop in any order
- *  (https://developers.cloudflare.com/d1/sql-api/foreign-keys/). Throws unless only SQLite's and
- *  D1's own schema remains. */
+ *  transaction, with foreign keys deferred to its end
+ *  (https://developers.cloudflare.com/d1/sql-api/foreign-keys/). A table drops before the tables it
+ *  references: D1 refuses to drop one whose parent is already gone ("no such table: main.users",
+ *  measured 2026-09-28). Throws unless only SQLite's and D1's own schema remains. */
 async function dropD1Schema(d1: D1Query) {
   const tables = await d1Tables(d1);
-  if (tables.length)
+  // `pragma foreign_key_list` as a statement: D1 refuses the `pragma_…` table-valued function
+  // (SQLITE_AUTH, measured 2026-09-28)
+  const references = tables.length
+    ? await d1(tables.map((table) => `pragma foreign_key_list("${table}")`).join("; "))
+    : [];
+  const parents = references
+    .flatMap((keys, index) =>
+      z
+        .array(z.looseObject({ table: z.string() }))
+        .parse(keys)
+        .map((key) => ({ child: tables[index]!, parent: key.table })),
+    )
+    .filter(({ child, parent }) => child !== parent);
+  // children first: a table drops once no table still standing references it
+  const order: string[] = [];
+  const standing = new Set(tables);
+  while (standing.size) {
+    const unreferenced = [...standing].filter(
+      (table) => !parents.some(({ child, parent }) => parent === table && standing.has(child)),
+    );
+    if (!unreferenced.length)
+      throw new Error(`D1 tables reference each other in a cycle: ${[...standing].join(", ")}`);
+    for (const table of unreferenced) standing.delete(table);
+    order.push(...unreferenced);
+  }
+  if (order.length)
     await d1(
-      ["pragma defer_foreign_keys = on", ...tables.map((table) => `drop table "${table}"`)].join(
+      ["pragma defer_foreign_keys = on", ...order.map((table) => `drop table "${table}"`)].join(
         "; ",
       ),
     );
