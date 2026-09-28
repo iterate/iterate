@@ -18,21 +18,17 @@ on:
       - scripts/lib/**
       - pnpm-lock.yaml
   workflow_dispatch:
-env:
-  # The image's baked store: dependencies.mjs fingerprints it (docs/depot-ci.md#custom-image)
-  PNPM_CONFIG_STORE_DIR: /home/runner/.pnpm-store
 jobs:
   deploy:
-    runs-on:
-      size: 2x8
-      image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
+    runs-on: depot-ubuntu-24.04
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+      - name: Setup
+        uses: ./.depot/actions/setup
         with:
-          clean: false
-      - name: Reconcile dependencies (baked)
-        run: node scripts/depot-ci/dependencies.mjs install
+          # a production deploy never reads Depot Cache (docs/depot-ci.md#depot-cache)
+          pnpm-store: none
       # The deploy script ends by smoking the viewer's index.
       - name: Deploy apps/ci-reports
         env:

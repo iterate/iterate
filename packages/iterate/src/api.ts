@@ -232,6 +232,15 @@ export const INTEGRATION_PROVIDERS = [
 ] as const;
 export type IntegrationProvider = (typeof INTEGRATION_PROVIDERS)[number];
 
+/** Each provider's name as a person reads it, wherever a page or a message names one. */
+export const INTEGRATION_PROVIDER_NAMES = {
+  slack: "Slack",
+  google: "Google",
+  cloudflare: "Cloudflare",
+  github: "GitHub",
+  waitrose: "Waitrose",
+} as const satisfies Record<IntegrationProvider, string>;
+
 /** The providers a deployment holds an app of iterate's at (APP_CONFIG `integrations`): every one
  *  but Waitrose, a username and a password. */
 export type IterateAppProvider = Exclude<IntegrationProvider, "waitrose">;
@@ -437,6 +446,20 @@ export type FileHandle = {
     method?: "GET" | "PUT";
     expiresInSeconds?: number;
   }): Promise<{ url: string; expiresAt: string }>;
+};
+
+/** `itx.email.send`: one message from the project's own address. `inReplyToOffset` names a
+ *  message on the project's `/integrations/email` and answers it in its thread: its recipients,
+ *  `Re:` subject and threading headers are the defaults. Each attachment is a project file
+ *  (`itx.files`). */
+export type EmailSendInput = {
+  to?: string | string[];
+  cc?: string | string[];
+  subject?: string;
+  text?: string;
+  html?: string;
+  inReplyToOffset?: number;
+  attachments?: { path: string; filename?: string }[];
 };
 
 /** WHICH requests a fetch route takes — every field given must hold. A fetch route matches an HTTP
@@ -865,6 +888,11 @@ export interface IterateContextApi {
   files: {
     get(path: string): InvokeHandle & FileHandle;
     list(prefix?: string): Promise<FileRecord[]>;
+  };
+  /** The project's email, `<slug>@iterate.app` (apps/os/src/email/contract.ts has its events and
+   *  threads). `send` answers the `email/sent` event. */
+  email: {
+    send(input: EmailSendInput): Promise<StreamEvent>;
   };
   /** An MCP server over Streamable HTTP, through this context's egress. */
   connectToMcp(url: string, options?: McpConnectOptions): Promise<McpConnectionApi>;

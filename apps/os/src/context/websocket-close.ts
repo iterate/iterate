@@ -1,6 +1,6 @@
 // context/websocket-close.ts — THE ONE CLOSE-CODE POLICY for a close relayed from one WebSocket to
-// another (rpc-stubs.ts, fetch-upgrade-splice.ts, project-host-lease.ts; the CLI's tunnel keeps a
-// copy, packages/cli src/tunnel.ts, since it is published on its own).
+// another (fetch-upgrade.ts, fetch-upgrade-splice.ts, project-host-lease.ts; the CLI's tunnel keeps
+// a copy, packages/cli src/tunnel.ts, since it is published on its own).
 
 /** What a socket that dropped is closed with: the drop was not an orderly end, and a client told
  *  1000 may take the end as meant and not reconnect. */

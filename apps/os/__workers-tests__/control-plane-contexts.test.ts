@@ -196,13 +196,11 @@ test("a client cannot forge a platform fact in its own user context: its account
     ],
   ])) as { source?: { platform?: true; principal?: { actor: string } } }[];
   const { actor } = await a.whoami();
-  expect
-    .soft(forged.map((event) => event.source))
-    .toEqual([
-      { principal: expect.objectContaining({ actor }) },
-      { principal: expect.objectContaining({ actor }) },
-      { principal: expect.objectContaining({ actor }) },
-    ]);
+  expect.soft(forged.map((event) => event.source)).toEqual([
+    { origin: `/users/${actor}`, principal: expect.objectContaining({ actor }) },
+    { origin: `/users/${actor}`, principal: expect.objectContaining({ actor }) },
+    { origin: `/users/${actor}`, principal: expect.objectContaining({ actor }) },
+  ]);
   const { state } = await account();
   expect.soft(state.authentications.map((fact) => fact.operationId)).not.toContain("forged");
   expect.soft(state.personalAccessTokens).not.toHaveProperty("pat_forged");

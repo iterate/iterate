@@ -8,20 +8,24 @@
 //                       created, the D1 migrated), every app on top, the readiness gate, the sign-in
 //                       seed, the PR body's section (the previous one folded first)
 //   e2e, specs          the vitest e2e suite (`--slow-rows`, scripts/slow-rows.ts) or the Playwright
-//                       specs against a deployment: PREVIEW_DEPLOYMENT, else the prefix's newest
+//                       specs against a deployment: beside its run's deploy, this commit's, once that
+//                       deploy is done (PREVIEW_AWAIT_DEPLOY_JOB); else PREVIEW_DEPLOYMENT, else the
+//                       prefix's newest
 //   cleanup-superseded  delete the prefix's deployments PREVIEW_DEPLOYMENT supersedes
 //   delete              every deployment of a prefix: a closed PR's (preview-delete.yml)
-//   sweep               the stale deployments (preview-sweep.ts), nightly (preview-sweep.yml)
+//   sweep               the stale deployments, the legacy Worker Previews and the former parents
+//                       (preview-sweep.ts), nightly (preview-sweep.yml)
 //   deploy-parents      main on the dev/preview account, redeployed in place (preview-parents.yml)
 //   reset-parent        main on dev's data erased, then deployed again (preview-sweep.yml)
 // `--dry-run` prints the plan.
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { newWebSocketRpcSession } from "capnweb";
 import { WebSocket } from "undici";
 import { createCli } from "trpc-cli";
+import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
 import { z } from "zod";
 import {
   TestEvidenceTarget,
@@ -41,6 +45,7 @@ import {
   type EnvContext,
 } from "../../../scripts/lib/env-context.ts";
 import { buildStartApp, type StartApp } from "../../../scripts/lib/start-app.ts";
+import { awaitDeployOfThisRun, SUITE_BOUND_MS } from "../../../scripts/ci/await-deploy.ts";
 import { createOctokit, getOctokit, getRepo } from "../../../scripts/ci/github.ts";
 import { getSlackClient, slackChannelIds } from "../../../scripts/ci/slack.ts";
 import { traceOperation } from "../../../scripts/ci/tracing/tracing.ts";
@@ -61,6 +66,8 @@ import {
   type StuckArtifactsNamespace,
 } from "./preview-artifacts.ts";
 import {
+  accountResourceNames,
+  accountWorkerNames,
   APPS,
   appSignInLink,
   assertFreshInstall,
@@ -81,13 +88,18 @@ import {
 import {
   groupPreviewDeployments,
   newestPreviewDeployment,
+  planFormerParents,
   planLegacyWorkerPreviewSweep,
   planPreviewSweep,
   planSupersededCleanup,
   previewMemberSuffixes,
+  renderWorkerlessNamespacesPage,
+  unmappedWorkers,
+  workerlessNamespaces,
   type PreviewDeploymentListing,
   type PreviewMember,
   type PullRequestState,
+  type SweptNamespace,
 } from "./preview-sweep.ts";
 import { chooseSlowRows, SlowRows, slowRowsTagsFilter } from "./slow-rows.ts";
 
@@ -223,19 +235,24 @@ async function deleteD1(cf: Cf, row: { uuid: string; name: string }) {
   console.log(`deleted D1 ${row.name}`);
 }
 
-/** Every worker, KV namespace, R2 bucket, D1 and Artifacts namespace on the account that belongs to
- *  a per-commit deployment, grouped by deployment (preview-sweep.ts `groupPreviewDeployments`). */
-async function listPreviewDeployments(cf: Cf) {
-  const suffixes = previewMemberSuffixes(
+/** A deployment's members' suffixes (preview-sweep.ts `previewMemberSuffixes`), wrangler naming
+ *  its KV after the template's bindings. */
+const memberSuffixes = () =>
+  previewMemberSuffixes(
     readWranglerBase().kv_namespaces.map(({ binding }: { binding: string }) => binding),
   );
+
+/** Every worker, KV namespace, R2 bucket (of a deployment's or a former parent's shape), D1 and
+ *  Artifacts namespace on the account. */
+async function listAccountMembers(cf: Cf) {
   // R2 pages by cursor, which the API client does not hand back: one page of the API's ceiling,
-  // narrowed to a deployment's bucket suffix, and a full one refused.
+  // narrowed to the `…-files` buckets a deployment and a former parent's previews have, and a full
+  // one refused.
   const [scripts, kv, { buckets }, d1, artifacts] = await Promise.all([
     cf<{ id: string; created_on?: string }[]>("/workers/scripts"),
     listAll<KvNamespaceRow>(cf, "/storage/kv/namespaces"),
     cf<{ buckets: { name: string; creation_date?: string }[] }>(
-      `/r2/buckets?name_contains=-${suffixes.r2[0]}&per_page=1000`,
+      "/r2/buckets?name_contains=-files&per_page=1000",
     ),
     listAll<D1Row>(cf, "/d1/database"),
     listAll<ArtifactsNamespaceRow>(cf, "/artifacts/namespaces"),
@@ -269,7 +286,13 @@ async function listPreviewDeployments(cf: Cf) {
       createdAt: row.created_at,
     })),
   ];
-  return groupPreviewDeployments(members, suffixes);
+  return members;
+}
+
+/** Every per-commit deployment on the account, grouped by name (preview-sweep.ts
+ *  `groupPreviewDeployments`). */
+async function listPreviewDeployments(cf: Cf) {
+  return groupPreviewDeployments(await listAccountMembers(cf), memberSuffixes());
 }
 
 /** A deployment's workers first, so nothing writes to what goes next, then its KV, R2 bucket, D1
@@ -279,7 +302,7 @@ async function listPreviewDeployments(cf: Cf) {
  *  pages it. */
 async function deletePreviewDeployment(cf: Cf, deployment: PreviewDeploymentListing) {
   const failures: string[] = [];
-  let stuck: StuckArtifactsNamespace | undefined;
+  const stuck: StuckArtifactsNamespace[] = [];
   const settle = async (
     members: PreviewMember[],
     remove: (member: PreviewMember) => Promise<void>,
@@ -304,7 +327,8 @@ async function deletePreviewDeployment(cf: Cf, deployment: PreviewDeploymentList
       if (member.kind === "kv") return deleteKvNamespace(cf, { id: member.id, title: member.name });
       if (member.kind === "r2") return deleteR2Bucket(cf, member.name);
       if (member.kind === "d1") return deleteD1(cf, { uuid: member.id, name: member.name });
-      stuck = await deleteArtifactsNamespace(cf, member.name);
+      const refused = await deleteArtifactsNamespace(cf, member.name);
+      if (refused) stuck.push(refused);
     },
   );
   if (failures.length > 0)
@@ -323,9 +347,7 @@ async function deletePreviewDeployments(cf: Cf, deployments: PreviewDeploymentLi
   const stuckNamespaces: StuckArtifactsNamespace[] = [];
   for (const deployment of deployments) {
     await deletePreviewDeployment(cf, deployment).then(
-      (stuck) => {
-        if (stuck) stuckNamespaces.push(stuck);
-      },
+      (stuck) => stuckNamespaces.push(...stuck),
       (error) => failures.push(describe(error)),
     );
   }
@@ -535,11 +557,8 @@ async function deployPreviewSteps(
   const url = urls.os;
   const versionId = await deployedVersion(url);
   const config = parseAppConfig(collectSecrets(ctx, ["APP_CONFIG", "APP_CONFIG_SECRETS__KEY"]));
-  // `/version` answering is not the deployment answering: a brand-new worker's Durable Objects
-  // answer `internal error; reference = …` for seconds after it (19 of 20 brand-new Worker Previews
-  // on 2026-09-24, for 6–27 s; preview-readiness.ts). Nothing is handed on — the PR body's links,
-  // the sign-in seed, the e2e job — until three rounds of eight in a row answer in full on this
-  // version. One that misses the gate's deadline fails the deploy, naming what it answered.
+  // The gate (preview-readiness.ts says why): nothing is handed on — the PR body's links, the
+  // sign-in seed, the suites — until three rounds of eight in a row answer in full on this version.
   await traceOperation("Readiness gate", () =>
     awaitPreviewReady(url, {
       adminSecret: config.secrets.adminBearer.exposeSecret(),
@@ -721,8 +740,11 @@ const PREVIEW_SUITE_TELEMETRY: Record<"specs" | "preview-e2e", Record<string, st
  *  records evidence (TEST_TELEMETRY_ARTIFACT_DIR): the deployment (as `previewName`) and the
  *  version its `/version` answers with. A run against a deployment made earlier (a dispatch of
  *  `test`, `e2e` or `specs`) tests what that deploy left, not the commit this job checked out
- *  (docs/test-evidence.md#when-deploy-e2e-and-specs-are-separate-jobs). It never fails the run: a
- *  deployment that does not answer fails the suites, and the file then has no deploymentId. */
+ *  (docs/test-evidence.md#when-deploy-e2e-and-specs-are-separate-jobs). A deployment that does not
+ *  answer fails no run here (the suites fail on it), and the file then has no deploymentId. A file
+ *  that cannot be written fails the job before the suite: the workflows run the job's evidence
+ *  steps, its telemetry completeness check among them, only once this file exists, so a suite run
+ *  without it would pass with its evidence unchecked. */
 async function writeDeployedTarget(name: string, apps: TestEvidenceTarget["apps"]) {
   if (!process.env.TEST_TELEMETRY_ARTIFACT_DIR) return;
   const url = previewDeploymentUrls(name).os;
@@ -742,7 +764,10 @@ async function writeDeployedTarget(name: string, apps: TestEvidenceTarget["apps"
     mkdirSync(path.dirname(file), { recursive: true });
     writeFileSync(file, `${JSON.stringify(target, null, 2)}\n`);
   } catch (error) {
-    console.warn(`the deployed target was not recorded: ${describe(error)}`);
+    throw new Error(
+      `the deployed target could not be recorded (${testEvidencePaths.target}), and without it the job keeps and checks no evidence: ${describe(error)}`,
+      { cause: error },
+    );
   }
 }
 
@@ -765,17 +790,50 @@ async function runSuite(
 ) {
   const urls = previewDeploymentUrls(name);
   const url = urls.os;
-  const env = { WORKER_BASE_URL: url };
   const appUrl = (app: string) => urls.apps[app]!;
-  await writeDeployedTarget(
-    name,
-    // the client apps the specs run against; the vitest rows use none
+  const env: Record<string, string> =
     suite === "specs"
-      ? ["notes", "voice", "dash", "admin"].map((name) => ({ name, url: appUrl(name) }))
-      : [],
-  );
+      ? {
+          WORKER_BASE_URL: url,
+          NOTES_BASE_URL: appUrl("notes"),
+          VOICE_BASE_URL: appUrl("voice"),
+          DASH_BASE_URL: appUrl("dash"),
+          ADMIN_BASE_URL: appUrl("admin"),
+        }
+      : { WORKER_BASE_URL: url };
+  const deployJob = process.env.PREVIEW_AWAIT_DEPLOY_JOB;
+  const warm =
+    deployJob && suite === "specs"
+      ? // --list loads the config and every spec, and runs no global setup
+        warmUp(
+          "the specs' transforms",
+          "pnpm",
+          [
+            "exec",
+            "playwright",
+            "test",
+            "--config",
+            "playwright.config.ts",
+            "--list",
+            "--reporter=null",
+          ],
+          { cwd: REPO_ROOT, env },
+        )
+      : undefined;
+  const failed = (error: unknown) =>
+    new Error(`the ${suite} suite failed against ${url}: ${describe(error)}`);
+  let tests: { args: string[]; env: Record<string, string> };
   try {
-    if (suite === "e2e") {
+    tests = await traceOperation("Set up the suite", async () => {
+      if (suite === "specs") {
+        // The headless shell alone, which headless Chromium with no `channel`
+        // (playwright.config.ts) launches: a no-op when CI restored it.
+        if (process.env.CI)
+          await runAsync("pnpm", ["exec", "playwright", "install", "--only-shell", "chromium"], {
+            cwd: REPO_ROOT,
+          });
+        return { args: ["spec"], env: { ...env, ...PREVIEW_SUITE_TELEMETRY.specs } };
+      }
       const { slowRows, reason } = await chooseSlowRows({
         requested: requestedSlowRows,
         prNumber,
@@ -789,29 +847,183 @@ async function runSuite(
       });
       console.log(`[slow-rows] ${slowRows}: ${reason}`);
       // `e2e:run`, not `e2e`: the deployed target needs no local build.
-      await runAsync("pnpm", ["e2e:run", ...slowRowsTagsFilter(slowRows)], {
-        cwd: ROOT,
+      return {
+        args: ["e2e:run", ...slowRowsTagsFilter(slowRows)],
         env: { ...env, E2E_SLOW_ROWS: slowRows, ...PREVIEW_SUITE_TELEMETRY["preview-e2e"] },
-      });
-    } else {
-      if (process.env.CI)
-        await runAsync("pnpm", ["exec", "playwright", "install", "chromium"], {
-          cwd: REPO_ROOT,
-        });
-      await runAsync("pnpm", ["spec"], {
-        cwd: REPO_ROOT,
-        env: {
-          ...env,
-          NOTES_BASE_URL: appUrl("notes"),
-          VOICE_BASE_URL: appUrl("voice"),
-          DASH_BASE_URL: appUrl("dash"),
-          ADMIN_BASE_URL: appUrl("admin"),
-          ...PREVIEW_SUITE_TELEMETRY.specs,
-        },
-      });
-    }
+      };
+    });
   } catch (error) {
-    throw new Error(`the ${suite} suite failed against ${url}: ${describe(error)}`);
+    await warm?.stop();
+    throw failed(error);
+  }
+  if (deployJob) {
+    try {
+      await traceOperation("Wait for Deploy preview", () => awaitDeployOfThisRun(deployJob));
+    } catch (error) {
+      await warm?.stop();
+      throw error;
+    }
+    // A warm-up still running exits beside the suite's start, not before it.
+    void warm?.stop();
+  }
+  try {
+    await writeDeployedTarget(
+      name,
+      // the client apps the specs run against; the vitest rows use none
+      suite === "specs"
+        ? ["notes", "voice", "dash", "admin"].map((app) => ({ name: app, url: appUrl(app) }))
+        : [],
+    );
+  } catch (error) {
+    throw failed(error);
+  }
+  const run = { cwd: suite === "specs" ? REPO_ROOT : ROOT, env: tests.env };
+  try {
+    // A job that waited for its deploy has the wait's bound in its timeout, and bounds the suite
+    // itself to what is left of it.
+    if (deployJob) await runBounded("pnpm", tests.args, { ...run, boundMs: SUITE_BOUND_MS });
+    else await runAsync("pnpm", tests.args, run);
+  } catch (error) {
+    throw failed(error);
+  }
+}
+
+/** `command` run as deploy-helpers' `runAsync` runs it, its output inherited, but in a process
+ *  group of its own, which is stopped once `boundMs` has passed: SIGTERM, which lets vitest and
+ *  Playwright report what they ran and close their browsers, then SIGKILL 10 s later, and once the
+ *  command has exited, SIGKILL for anything it left running. It fails either way. A SIGINT or
+ *  SIGTERM this process gets while the command runs is passed on to its group, as it would reach a
+ *  child in this process's own. */
+function runBounded(
+  command: string,
+  args: string[],
+  options: { cwd: string; env: Record<string, string>; boundMs: number },
+) {
+  const commandLine = `${command} ${args.join(" ")}`;
+  console.log(`$ ${commandLine}`);
+  return new Promise<void>((resolve, reject) => {
+    const child = spawn(command, args, {
+      cwd: options.cwd,
+      stdio: "inherit",
+      env: { ...process.env, ...options.env },
+      detached: true,
+    });
+    const signal = (name: NodeJS.Signals) => signalGroup(child, name);
+    let stopped = false;
+    let killer: NodeJS.Timeout | undefined;
+    const bound = setTimeout(() => {
+      stopped = true;
+      console.error(
+        `[suite] ${commandLine} is still running after ${options.boundMs / 60_000} minutes, the suite's bound: stopping it`,
+      );
+      signal("SIGTERM");
+      killer = setTimeout(() => signal("SIGKILL"), 10_000);
+    }, options.boundMs);
+    process.on("SIGINT", signal);
+    process.on("SIGTERM", signal);
+    const done = () => {
+      clearTimeout(bound);
+      clearTimeout(killer);
+      process.off("SIGINT", signal);
+      process.off("SIGTERM", signal);
+    };
+    child.once("error", (error) => {
+      done();
+      reject(error);
+    });
+    child.once("exit", (code, exitSignal) => {
+      done();
+      if (stopped) {
+        signal("SIGKILL");
+        reject(
+          new Error(`${commandLine} ran past the suite's ${options.boundMs / 60_000} minutes`),
+        );
+      } else if (code === 0) resolve();
+      else
+        reject(
+          new Error(`${commandLine} exited with ${code ?? `signal ${exitSignal || "unknown"}`}`),
+        );
+    });
+  });
+}
+
+/** A command run only to prepare, while the preview deploys, what its suite reads before its first
+ *  test: Playwright keeps what it compiles for the specs in its transform cache, in the runner's
+ *  tmpdir, and checks each entry against its source's hash when the suite reads it. Nothing it runs
+ *  reaches the preview or writes test evidence: the variables that make a runner write telemetry,
+ *  flake records or trace markers are left out. Its output stays out of the log, and its failure is
+ *  a warning, since the suite that follows reports what is wrong itself.
+ *
+ *  `stop()` ends it, and every process it started (its own process group), once the deploy has
+ *  ended: whatever it has not compiled yet, the suite compiles anyway, so it would only take the
+ *  suite's CPU. SIGTERM first, then SIGKILL 3 s later; it resolves once the group has exited. */
+function warmUp(
+  what: string,
+  command: string,
+  args: string[],
+  options: { cwd: string; env?: Record<string, string> },
+) {
+  const started = Date.now();
+  const took = () => `${((Date.now() - started) / 1000).toFixed(1)} s`;
+  const env = Object.fromEntries(
+    Object.entries({ ...process.env, ...options.env }).filter(
+      ([name]) => !/^(TEST_TELEMETRY_|FLAKE_RECORD_DIR$|CI_TRACE_ENABLED$)/.test(name),
+    ),
+  );
+  console.log(`[warm-up] ${what}: ${command} ${args.join(" ")}`);
+  const child = spawn(command, args, {
+    cwd: options.cwd,
+    env,
+    stdio: ["ignore", "pipe", "pipe"],
+    detached: true,
+  });
+  let output = "";
+  // the last 20 lines, shown if it fails
+  const keep = (data: string) => (output = (output + data).split("\n").slice(-20).join("\n"));
+  child.stdout.setEncoding("utf8").on("data", keep);
+  child.stderr.setEncoding("utf8").on("data", keep);
+  let stopping = false;
+  let closed = false;
+  const exited = traceOperation(
+    `Warm up ${what}`,
+    () =>
+      new Promise<void>((resolve) => {
+        child.once("error", (error) => {
+          console.warn(`[warm-up] ${what} did not start: ${error.message}`);
+          resolve();
+        });
+        child.once("close", (code) => {
+          closed = true;
+          if (stopping) console.log(`[warm-up] ${what}: stopped after ${took()}`);
+          else if (code === 0) console.log(`[warm-up] ${what}: done in ${took()}`);
+          else
+            console.warn(
+              `[warm-up] ${what} exited ${code} after ${took()}; the suite runs anyway:\n${output}`,
+            );
+          resolve();
+        });
+      }),
+  );
+  return {
+    async stop() {
+      if (closed || !child.pid) return exited;
+      stopping = true;
+      signalGroup(child, "SIGTERM");
+      const killer = setTimeout(() => signalGroup(child, "SIGKILL"), 3_000);
+      await exited;
+      clearTimeout(killer);
+    },
+  };
+}
+
+/** `name` to every process of the group `child` leads (spawned `detached`), and to none once the
+ *  group has exited. */
+function signalGroup(child: ChildProcess, name: NodeJS.Signals) {
+  try {
+    if (child.pid) process.kill(-child.pid, name);
+  } catch (error) {
+    // ESRCH: the group has already exited
+    if (!(error instanceof Error && "code" in error && error.code === "ESRCH")) throw error;
   }
 }
 
@@ -885,14 +1097,14 @@ async function deleteLegacyWorkerPreviews(cf: Cf, options: { dryRun: boolean }) 
   ).flat();
   if (listed.length === 0) {
     console.log("no Worker Previews left");
-    return [];
+    return { listed, failures: [] };
   }
   const plan = planLegacyWorkerPreviewSweep(Date.now(), listed);
   for (const { worker, name, verdict, reason } of plan)
     console.log(
       `  ${verdict === "stale" ? "delete" : "keep  "} legacy Worker Preview ${name} of ${worker}: ${reason}`,
     );
-  if (options.dryRun) return [];
+  if (options.dryRun) return { listed, failures: [] };
   const failures: string[] = [];
   const stale = plan.filter(({ verdict }) => verdict === "stale");
   for (const { worker, name } of stale)
@@ -916,14 +1128,23 @@ async function deleteLegacyWorkerPreviews(cf: Cf, options: { dryRun: boolean }) 
     for (const remove of removals)
       await remove().catch((error) => failures.push(`${worker} ${name}: ${describe(error)}`));
   }
-  return failures;
+  return { listed, failures };
 }
 
-/** The stale deployments (scripts/preview-sweep.ts), then the legacy Worker Previews. */
+/** The stale deployments, the legacy Worker Previews and the former parents (scripts/preview-sweep.ts),
+ *  then the Durable Object namespaces no worker holds. */
 async function sweep(cf: Cf, options: { dryRun: boolean; jobUrl: string | undefined }) {
   const { dryRun } = options;
-  const deployments = await listPreviewDeployments(cf);
-  console.log(`${deployments.length} deployment(s) on the account`);
+  const [members, namespaces] = await Promise.all([
+    listAccountMembers(cf),
+    listAll<SweptNamespace>(cf, "/workers/durable_objects/namespaces"),
+  ]);
+  const suffixes = memberSuffixes();
+  const deployments = groupPreviewDeployments(members, suffixes);
+  const workers = members.filter(({ kind }) => kind === "worker").map(({ name }) => name);
+  console.log(
+    `${deployments.length} deployment(s), ${workers.length} worker(s) and ${namespaces.length} Durable Object namespace(s) on the account`,
+  );
   const pullRequestStates = new Map<number, PullRequestState>();
   for (const number of new Set(
     deployments
@@ -942,16 +1163,81 @@ async function sweep(cf: Cf, options: { dryRun: boolean; jobUrl: string | undefi
   const stale = plan
     .filter(({ verdict }) => verdict === "stale")
     .map(({ deployment }) => deployment);
-  console.log(`plan: ${stale.length} stale deployment(s) of ${plan.length}`);
-  const legacyFailures = await deleteLegacyWorkerPreviews(cf, { dryRun });
+  const legacy = await deleteLegacyWorkerPreviews(cf, { dryRun });
+  const previewsLeft = new Map<string, number>();
+  for (const { worker } of legacy.listed)
+    previewsLeft.set(worker, (previewsLeft.get(worker) || 0) + 1);
+  const formerParents = planFormerParents({
+    workers,
+    deployedWorkerNames: accountWorkerNames(),
+    accountResourceNames: accountResourceNames(),
+    resources: members.filter(({ kind }) => kind !== "worker"),
+    suffixes,
+    previewsLeft,
+  });
+  for (const { name, worker, resources, verdict, reason } of formerParents)
+    console.log(
+      `  ${verdict === "stale" ? "delete" : "keep  "} former parent ${name} (${worker ? "its worker" : "no worker"}, ${resources.length} resources: ${resources.map((resource) => resource.name).join(", ") || "none"}): ${reason}`,
+    );
+  // a former parent is deleted like a deployment: its worker, if any is left, then its resources
+  const staleFormerParents = formerParents
+    .filter(({ verdict }) => verdict === "stale")
+    .map(({ name, worker, resources }) => ({
+      name,
+      prefix: name,
+      members: [...(worker ? [{ kind: "worker" as const, name, id: name }] : []), ...resources],
+    }));
+  const unmapped = unmappedWorkers(workers, accountWorkerNames(), deployments);
+  if (unmapped.length > 0)
+    console.log(
+      `  keep   ${unmapped.length} worker(s) envs.ts does not name, for a person to judge: ${unmapped.join(", ")}`,
+    );
+  // What the account's Durable Object namespace count (Cloudflare's limit is per account) loses.
+  const deletedWorkers = new Set(
+    [...stale, ...staleFormerParents].flatMap((group) =>
+      group.members.filter(({ kind }) => kind === "worker").map(({ name }) => name),
+    ),
+  );
+  const freedNamespaceIds = new Set(
+    namespaces
+      .filter((namespace) => deletedWorkers.has(namespace.script || ""))
+      .map(({ id }) => id),
+  );
+  const workerless = workerlessNamespaces(namespaces, workers);
+  if (workerless.length > 0)
+    console.log(
+      `  ${workerless.length} Durable Object namespace(s) whose worker is gone, paged if still listed once the run is done: ${workerless.map(({ name }) => name).join(", ")}`,
+    );
+  console.log(
+    `plan: ${stale.length} stale deployment(s) of ${plan.length}; ${staleFormerParents.length} former parent(s); ${freedNamespaceIds.size} of the account's ${namespaces.length} Durable Object namespaces go with them; ${unmapped.length} unmapped worker(s) kept`,
+  );
   if (dryRun) return;
-  const { failures, stuckNamespaces } = await deletePreviewDeployments(cf, stale);
-  failures.push(...legacyFailures);
+  const { failures, stuckNamespaces } = await deletePreviewDeployments(cf, [
+    ...stale,
+    ...staleFormerParents,
+  ]);
+  failures.push(...legacy.failures);
+  // Once the deletes are done, each namespace they took should be gone from the listing. One still
+  // listed after deletes that all succeeded is Cloudflare's: a warn now, and the next run's page,
+  // which finds it workerless (so a namespace Cloudflare drops a moment late pages no one).
+  const listedAfter = await listAll<SweptNamespace>(cf, "/workers/durable_objects/namespaces");
+  const outlived = listedAfter.filter(({ id }) => freedNamespaceIds.has(id));
+  if (failures.length === 0 && outlived.length > 0)
+    console.warn({
+      event: "preview.platform-failure-durable-object-namespace-delete",
+      namespaces: outlived.map(({ name }) => name),
+    });
+  const listedIds = new Set(listedAfter.map(({ id }) => id));
+  const stillWorkerless = workerless.filter(({ id }) => listedIds.has(id));
   // The run is red only when the sweep could not act. A scheduled run reports on main's head
   // commit, where red reads as "this commit broke", so Cloudflare's refusal is a page instead
   // (the rule scripts/ci/prd-fault-alarm.ts follows); a page that could not be posted is a failure.
-  if (stuckNamespaces.length > 0) {
-    const text = renderStuckArtifactsNamespacesPage(stuckNamespaces, options.jobUrl);
+  const pages = [
+    stuckNamespaces.length > 0 &&
+      renderStuckArtifactsNamespacesPage(stuckNamespaces, options.jobUrl),
+    stillWorkerless.length > 0 && renderWorkerlessNamespacesPage(stillWorkerless, options.jobUrl),
+  ].filter((text) => typeof text === "string");
+  for (const text of pages) {
     console.log(text);
     await (async () =>
       getSlackClient().chat.postMessage({
@@ -1038,7 +1324,11 @@ async function main(command: Command, options: PreviewOptions) {
   if (command === "e2e" || command === "specs")
     return runSuite(
       command,
-      await deploymentToTest(prefix),
+      // beside its run's deploy, the deployment of the commit both checked out
+      // (preview-tested-commit.ts): known before it exists
+      process.env.PREVIEW_AWAIT_DEPLOY_JOB
+        ? previewDeploymentName(prefix, checkedOutCommit())
+        : await deploymentToTest(prefix),
       pr,
       options.slowRows || SlowRows.optional().parse(process.env.E2E_SLOW_ROWS || undefined),
     );
@@ -1061,5 +1351,5 @@ async function main(command: Command, options: PreviewOptions) {
   return deployPreview(await accountContext(), name, pr, apps);
 }
 
-if (process.argv[1]?.endsWith("preview.ts"))
+if (isMainModule(import.meta.url))
   void createCli({ ...import.meta, name: "preview" }).run({ formatError: describe });

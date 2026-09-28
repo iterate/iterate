@@ -1,5 +1,16 @@
 /** @name projectsByRef */
-select id, slug, org_id as orgId from projects where id = :id or slug = :slug;
+select
+  p.id,
+  p.slug,
+  p.org_id as orgId,
+  (
+    select h.hostname
+    from project_primary_hostnames pp
+    join project_hostnames h on h.hostname = pp.hostname and h.project_id = pp.project_id
+    where pp.project_id = p.id
+  ) as primaryHostname
+from projects p
+where p.id = :id or p.slug = :slug;
 
 /** @name listProjects */
 select id, slug, org_id as orgId from projects order by created_at, slug;
@@ -55,3 +66,14 @@ where id = :id
     select 1 from memberships a
     where a.org_id = projects.org_id and a.user_id = :actorId and a.role = 'owner'
   ));
+
+/** @name insertDeletedProject */
+insert into deleted_projects (id)
+select d.id from (select :id as id) d
+where not exists (select 1 from projects p where p.id = d.id)
+on conflict (id) do nothing;
+
+/** @name deletedProject */
+select d.id
+from deleted_projects d
+where d.id = :id and not exists (select 1 from projects p where p.id = d.id);

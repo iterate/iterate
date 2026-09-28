@@ -275,7 +275,7 @@ export type CoreState = {
    *  asked for is still to come. */
   contextAbortedOffset?: number;
   /** Set by the wake record: the `itx/aborted` whose reset began this incarnation — a recorded,
-   *  deliberate reset (the fetch-upgrade 101s name it, context/rpc-stubs.ts). */
+   *  deliberate reset (the fetch-upgrade 101s name it, context/fetch-upgrade.ts). */
   wokenAfterContextAbortedOffset?: number;
   paused: { reason: string } | null;
   /** THE REWRITE-RULE TABLE, by canonical match (a map — no stack, no identity beyond the match): a
@@ -650,14 +650,17 @@ function normalizeIngressConfigured(input: unknown): { target: ItxExpression | n
 }
 
 /** THE PLATFORM'S OWN RECORDS: appended by the Stream (the birth and wake records), the delivery
- *  loop (the halted fact) and the DO's alarm (the trace) straight through `Stream.append`.
- *  `normalizeControlEvent` refuses them, so no caller rewrites who a context is (`created` feeds
- *  `implicitRootsAt`), which incarnation runs, or halts a subscription row it does not own. */
+ *  loop (the halted fact), the DO's alarm (the trace) and its runner (a run's settlement) straight
+ *  through `Stream.append`. `normalizeControlEvent` refuses them, so no caller rewrites who a context
+ *  is (`created` feeds `implicitRootsAt`), which incarnation runs, halts a subscription row it does
+ *  not own, or settles a run it did not run (`itx.run` would answer the forgery, and an agent read it
+ *  as its own script's result). */
 export const PLATFORM_ONLY_EVENT_TYPES = new Set<string>([
   "events.iterate.com/itx/created",
   "events.iterate.com/itx/woken",
   "events.iterate.com/itx/subscription-delivery-halted",
   "events.iterate.com/itx/alarm-trace",
+  "events.iterate.com/itx/run-settled",
 ]);
 
 /** THE APPEND BOUNDARY for core CONTROL events: validate + normalize a LITERAL control event so call
@@ -668,9 +671,9 @@ export const PLATFORM_ONLY_EVENT_TYPES = new Set<string>([
  *  other event passes through untouched. The DO runs this on every append
  *  (iterate-context-durable-object.ts). */
 export function normalizeControlEvent(event: StreamEventInput, ownPath: string): StreamEventInput {
-  // A fixed type list is a stopgap: it isolates the platform's own records, but it cannot say who
-  // may append what to a given stream. That needs provenance on the event itself — e.g. events
-  // signed by their appender, and processors that ignore an event whose signature does not check.
+  // A fixed type list isolates the platform's own records. Who may append anything else is not this
+  // boundary's question: every event carries the platform's stamp of where it came from
+  // (caller.ts `stampCaller`), and a processor that cares decides whom it trusts from that.
   if (PLATFORM_ONLY_EVENT_TYPES.has(event.type))
     throw new Error(`${event.type} is the platform's own record: it cannot be appended`);
   // The operator's control events: checked, never rewritten — strict, so an unknown key throws
@@ -726,13 +729,6 @@ export function normalizeControlEvent(event: StreamEventInput, ownPath: string):
     if (event.ephemeral)
       throw new Error("a run's request is durable: the scriptRuns table is rebuilt from the log");
     return { ...event, payload: RunRequested.parse(event.payload) };
-  }
-  if (event.type === "events.iterate.com/itx/run-settled") {
-    if (event.ephemeral)
-      throw new Error(
-        "a run's settlement is durable: the scriptRuns table is rebuilt from the log",
-      );
-    return { ...event, payload: RunSettled.parse(event.payload) };
   }
   if (event.type === "events.iterate.com/itx/subscription-configured")
     return {

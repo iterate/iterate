@@ -142,8 +142,8 @@ export type ProcessorScope = {
   /** Another context of the project by its dotted surface (`.append`), which the platform's handle
    *  and a loaded worker's alike answer — how an entity's processor cross-posts its certificate to
    *  `/` (`withItx((itx) => itx.cd("/").append(certificate))`). Through the table like every other
-   *  word here: a loaded processor's `cd` goes down only (the app wall), the platform's own go
-   *  anywhere within the project. */
+   *  word here: anyone's `cd(path).append` reaches any context of the project, stamped with where
+   *  it came from; a jail's bare null refuses it. */
   cd(path: string): { append(...events: StreamEventInput[]): Promise<unknown> };
 };
 

@@ -38,6 +38,8 @@ test("per-test evidence uses the retry record's identity and never counts retrie
     { ...base, leafName: "failure", state: "failed", outcome: "unexpected" },
     { ...base, leafName: "skip", state: "skipped", expectedState: "skipped" },
     { ...base, leafName: "expected failure", expectedState: "failed" },
+    // a vitest row that skipped itself (its context's `skip()`): it finished, as a skip
+    { ...base, leafName: "skipped itself", state: "skipped", expectedState: "skip" },
   ];
   await writeFlakeSuiteSummary({
     directory: output.path,
@@ -50,7 +52,7 @@ test("per-test evidence uses the retry record's identity and never counts retrie
   const summary = JSON.parse(readFileSync(join(output.path, "specs/suite-summary.json"), "utf8"));
   expect(summary).toMatchObject({
     status: "complete",
-    testCount: 5,
+    testCount: 6,
     // The retried pass and the hard failure: both leave a kind "unknown" record.
     unknownFlakeCount: 2,
     tests: [
@@ -59,6 +61,7 @@ test("per-test evidence uses the retry record's identity and never counts retrie
       { name: "failure", outcome: "fail" },
       { name: "skip", outcome: "skip" },
       { name: "expected failure", outcome: "fail" },
+      { name: "skipped itself", outcome: "skip" },
     ],
   });
 });

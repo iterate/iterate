@@ -21,6 +21,7 @@ import { identityResponse } from "./identity.ts";
 import { OAUTH_INTEGRATION_PROVIDERS } from "./integrations/contract.ts";
 import { SECRET_OAUTH_CALLBACK_PATH, secretOAuthCallbackPathOf } from "./secret-oauth.ts";
 import { secretOAuthCallback } from "./secret-oauth-callback.ts";
+import { receiveEmail } from "./integrations/email.ts";
 import { slackWebhookRoute } from "./integrations/slack.ts";
 import { githubCallbackRoute, githubWebhookRoute } from "./integrations/github.ts";
 import { ControlPlane } from "./control-plane/edge.ts";
@@ -40,12 +41,8 @@ import { appConfigOf, platformAddressesOf, sessionSigningSecretOf } from "./app-
 import { captureIssueInPosthog } from "./posthog.ts";
 import { FILES_ROUTING_SLUG, serveProjectFileRequest } from "./context/file-urls.ts";
 import { appCookies, browserAuthorization, browserClient } from "./browser-client.ts";
-import {
-  FETCH_UPGRADE_RESUMABLE_HEADER,
-  ITX_EXPRESSION_FETCH_HEADER,
-  ITX_PLATFORM_ORIGIN_HEADER,
-  spliceEyeballAnswer,
-} from "./context/rpc-stubs.ts";
+import { ITX_EXPRESSION_FETCH_HEADER, ITX_PLATFORM_ORIGIN_HEADER } from "./context/rpc-stubs.ts";
+import { FETCH_UPGRADE_RESUMABLE_HEADER, spliceEyeballAnswer } from "./context/fetch-upgrade.ts";
 import { DurableObjectNameCodec, resourceScope } from "./context/paths.ts";
 import { authorizationForToken, recordGrantUse } from "./oauth.ts";
 import { leasedProjectHostAnswer } from "./project-host-lease.ts";
@@ -156,6 +153,7 @@ export { BrowserSession } from "iterate/app-session";
 // `ctx.exports` (first-party-facets.ts FIRST_PARTY_FACET_CLASSES) — ordinary bundled
 // worker code with the worker's real env, never a loaded source.
 export { AccountDurableObject } from "./account/durable-object.ts";
+export { EmailDurableObject } from "./email/durable-object.ts";
 export { InstanceDurableObject } from "./instance/durable-object.ts";
 export { OrganizationDurableObject } from "./organization/durable-object.ts";
 export { ProjectDurableObject } from "./project/durable-object.ts";
@@ -213,17 +211,16 @@ export default {
     // touch, so a hostname whose project the control plane does not know must never reach one —
     // else any label under the wildcard would mint durable storage from the public internet. The
     // host's address (a static rule, else a hostname a project added: one catalog read), then one
-    // catalog read (memoized per isolate: a slug's project never changes; an unknown label five
-    // seconds, edge.ts `getProjectKeepingMisses`) — the row resolves the host's label (a slug, an id
-    // would do too) to the project's id; an unknown label is 421. A slow read is waited for; one
-    // that fails on the platform's side is a 503.
+    // catalog read (a row kept five seconds per isolate, an unknown label never: edge.ts) — the row
+    // resolves the host's label (a slug, an id would do too) to the project's id; an unknown label
+    // is 421. A slow read is waited for; one that fails on the platform's side is a 503.
     const projectHost = await controlPlane
       .projectHostOf(appConfig, url, platformOrigin)
       .catch((error: unknown) => controlPlaneUnavailable(error, url.hostname));
     if (projectHost instanceof Response) return projectHost;
     if (projectHost) {
       const project = await controlPlane
-        .getProjectKeepingMisses(projectHost.project)
+        .getProject(projectHost.project)
         .catch((error: unknown) => controlPlaneUnavailable(error, url.hostname));
       if (project instanceof Response) return project;
       if (!project)
@@ -259,27 +256,22 @@ export default {
         if (browserResponse) return browserResponse;
       }
       // THE PRIMARY HOSTNAME (primary-hostname-redirect.ts): a navigation on the ingress base goes
-      // to the project's own hostname, after the browser adapter so a sign-in under way finishes
-      // where it started.
+      // to the project's own hostname, which the admission's row carries (edge.ts `getProject`),
+      // after the browser adapter so a sign-in under way finishes where it started.
       const redirect = primaryHostnameRedirectOf(request, { routing, platformOrigin });
-      if (redirect) {
-        const primaryHostname = await controlPlane
-          .primaryHostnameOf(projectId)
-          .catch((error: unknown) => controlPlaneUnavailable(error, url.hostname));
-        if (primaryHostname instanceof Response) return primaryHostname;
-        const location =
-          primaryHostname &&
-          primaryHostnameUrlOf(primaryHostname, {
-            routingSlug: redirect.routingSlug,
-            path: `${url.pathname}${url.search}`,
-          });
-        // no-store: a browser keeps a 308 it may cache, and the primary can change
-        if (location)
-          return new Response(null, {
-            status: 308,
-            headers: { location: location.href, "cache-control": "no-store" },
-          });
-      }
+      const location =
+        redirect &&
+        project.primaryHostname &&
+        primaryHostnameUrlOf(project.primaryHostname, {
+          routingSlug: redirect.routingSlug,
+          path: `${url.pathname}${url.search}`,
+        });
+      // no-store: a browser keeps a 308 it may cache, and the primary can change
+      if (location)
+        return new Response(null, {
+          status: 308,
+          headers: { location: location.href, "cache-control": "no-store" },
+        });
       const bearer = /^Bearer\s+(\S+)$/i.exec(request.headers.get("authorization") ?? "")?.[1];
       const authorization = bearer
         ? await authorizationForToken(env, bearer, addresses, "project-host")
@@ -422,5 +414,10 @@ export default {
     // issuer's pages — the authorize endpoint's consent page among them — as its catch-all
     // (issuer-pages.ts): every one an open path, or a 404.
     return oauthResponse(request, env, ctx, issuerHandler);
+  },
+
+  // Cloudflare Email Routing's catch-all on the project email domain (integrations/email.ts).
+  async email(message: ForwardableEmailMessage, env: WorkerEnv) {
+    await receiveEmail(message, env);
   },
 };

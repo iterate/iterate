@@ -65,9 +65,12 @@ and then its normalized run command; hover the label or bar to see all three.
 Commands have the Doppler wrapper stripped and come from the workflow YAML at
 the run's triggering SHA (the merge revision on PR runs), never from expanded
 runner logs. Each test job's suite step, `suite` in E2E tests and Browser specs
-(one definition), opens its **Test** phase. The shell hook preserves
-exit codes and ignores nested shells. It requires only the Node already
-installed in the runner image, so it measures `pnpm install` too.
+(one definition), opens its **Test** phase. Since the suites start beside the
+deploy, that phase begins with **Set up the suite** and **Wait for Deploy
+preview**, spans of their own (`runSuite` in `apps/os/scripts/preview.ts`), and
+its first test comes after them. The shell hook preserves
+exit codes and ignores nested shells. It is plain bash that starts no process,
+so it measures `pnpm install` too and adds about a millisecond to a step.
 
 Expand the `pnpm preview deploy` step to see where its time went. Each span
 starts once what it needs is there. **Write the deploying status**,

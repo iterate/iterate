@@ -322,7 +322,8 @@ async function harness(image = png(3, 0), infoOverride = {}) {
   });
   const screen = { setImage, info: vi.fn(async () => info) };
   const append = vi.fn(async (...events: any[]) => {
-    for (const event of events) admitLoadedCodeRow(event, "/agents/voice/test");
+    for (const event of events)
+      admitLoadedCodeRow(event, "/agents/voice/test", "/agents/voice/test");
     return [];
   });
   const disable = vi.fn(async () => undefined);

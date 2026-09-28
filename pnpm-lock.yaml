@@ -136,6 +136,9 @@ overrides:
   ws: 8.21.3
 
 patchedDependencies:
+  '@cloudflare/vitest-plugin@1.2.5':
+    hash: a9edcf46af9d860a7093c3d7d86d2c9493dd7a3ede6bdfcf4eef243e9b1dcf2a
+    path: patches/@cloudflare__vitest-plugin@1.2.5.patch
   zod@4.6.5:
     hash: 5a57d5a4f788c6fe9e15d60e59511c1f901b7fc1d638126eb2b02cafc9e79a86
     path: patches/zod@4.6.5.patch
@@ -558,6 +561,33 @@ importers:
         specifier: 4.140.0
         version: 4.140.0(@cloudflare/workers-types@5.20260925.1)(@types/node@26.1.1)
 
+  apps/iterate-com-inbound-email:
+    devDependencies:
+      '@cloudflare/vite-plugin':
+        specifier: 'catalog:'
+        version: 1.60.1(@types/node@26.1.1)(vite@8.3.0(@types/node@26.1.1)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.46.0)(tsx@4.23.15)(yaml@2.9.1))(wrangler@4.140.0(@cloudflare/workers-types@5.20260925.1)(@types/node@26.1.1))
+      '@cloudflare/workers-types':
+        specifier: 'catalog:'
+        version: 5.20260925.1
+      trpc-cli:
+        specifier: 'catalog:'
+        version: 0.16.0(@orpc/server@1.15.4(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.22))(ws@8.21.3))(@trpc/server@11.12.0(typescript@7.0.2))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@7.0.2)))(effect@3.19.19)(valibot@1.2.0(typescript@7.0.2))(zod@4.6.5(patch_hash=5a57d5a4f788c6fe9e15d60e59511c1f901b7fc1d638126eb2b02cafc9e79a86))
+      tsx:
+        specifier: 'catalog:'
+        version: 4.23.15
+      typescript:
+        specifier: 'catalog:'
+        version: 7.0.2
+      vite:
+        specifier: 'catalog:'
+        version: 8.3.0(@types/node@26.1.1)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.46.0)(tsx@4.23.15)(yaml@2.9.1)
+      vitest:
+        specifier: 'catalog:'
+        version: 4.1.11(@opentelemetry/api@1.9.0)(@types/node@26.1.1)(jsdom@30.1.1(@noble/hashes@2.2.0))(msw@2.13.3(@types/node@26.1.1)(typescript@7.0.2))(vite@8.3.0(@types/node@26.1.1)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.46.0)(tsx@4.23.15)(yaml@2.9.1))
+      wrangler:
+        specifier: 4.140.0
+        version: 4.140.0(@cloudflare/workers-types@5.20260925.1)(@types/node@26.1.1)
+
   apps/kit:
     dependencies:
       '@iterate-com/agents':
@@ -751,6 +781,9 @@ importers:
       pako:
         specifier: 'catalog:'
         version: 3.0.2
+      postal-mime:
+        specifier: 4.0.0
+        version: 4.0.0
       posthog-node:
         specifier: ^5.53.0
         version: 5.53.0
@@ -778,7 +811,7 @@ importers:
         version: 1.60.1(@types/node@26.1.1)(vite@8.3.0(@types/node@26.1.1)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.46.0)(tsx@4.23.15)(yaml@2.9.1))(wrangler@4.140.0(@cloudflare/workers-types@5.20260925.1)(@types/node@26.1.1))
       '@cloudflare/vitest-plugin':
         specifier: ^1.2.4
-        version: 1.2.5(@cloudflare/workers-types@5.20260925.1)(@types/node@26.1.1)(@vitest/runner@4.1.11)(@vitest/snapshot@4.1.11)(vitest@4.1.11(@opentelemetry/api@1.9.0)(@types/node@26.1.1)(jsdom@30.1.1(@noble/hashes@2.2.0))(msw@2.13.3(@types/node@26.1.1)(typescript@7.0.2))(vite@8.3.0(@types/node@26.1.1)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.46.0)(tsx@4.23.15)(yaml@2.9.1)))
+        version: 1.2.5(patch_hash=a9edcf46af9d860a7093c3d7d86d2c9493dd7a3ede6bdfcf4eef243e9b1dcf2a)(@cloudflare/workers-types@5.20260925.1)(@types/node@26.1.1)(@vitest/runner@4.1.11)(@vitest/snapshot@4.1.11)(vitest@4.1.11(@opentelemetry/api@1.9.0)(@types/node@26.1.1)(jsdom@30.1.1(@noble/hashes@2.2.0))(msw@2.13.3(@types/node@26.1.1)(typescript@7.0.2))(vite@8.3.0(@types/node@26.1.1)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.46.0)(tsx@4.23.15)(yaml@2.9.1)))
       '@cloudflare/workers-types':
         specifier: 'catalog:'
         version: 5.20260925.1
@@ -6932,6 +6965,10 @@ packages:
     resolution: {integrity: sha512-/+5VFTchJDoVj3bhoqi6UeymcD00DAwb1nJwamzPvHEszJ4FpF6SNNbUbOS8yI56qHzdV8eK0qEfOSiodkTdxg==}
     engines: {node: '>= 0.4'}
 
+  postal-mime@4.0.0:
+    resolution: {integrity: sha512-pmAD50GSuJ6Njf7oa4bleSsYrPy8UYxTRmxVFFwysOm2p8t4C3DFEmP+j7tkvQzPdFUT0X1PuzJvrnb2Sx40BA==}
+    engines: {node: '>=20'}
+
   postcss-selector-parser@7.1.6:
     resolution: {integrity: sha512-7qASPzhKF2l2KLboRZux8CCTRMdGiV08vWmyKzPz22qZ7ZjQBOeY7rNzNoCLSUiftJ7HUq0GERHmxw/t0dCdMw==}
     engines: {node: '>=4'}
@@ -8673,7 +8710,7 @@ snapshots:
       - bufferutil
       - utf-8-validate
 
-  '@cloudflare/vitest-plugin@1.2.5(@cloudflare/workers-types@5.20260925.1)(@types/node@26.1.1)(@vitest/runner@4.1.11)(@vitest/snapshot@4.1.11)(vitest@4.1.11(@opentelemetry/api@1.9.0)(@types/node@26.1.1)(jsdom@30.1.1(@noble/hashes@2.2.0))(msw@2.13.3(@types/node@26.1.1)(typescript@7.0.2))(vite@8.3.0(@types/node@26.1.1)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.46.0)(tsx@4.23.15)(yaml@2.9.1)))':
+  '@cloudflare/vitest-plugin@1.2.5(patch_hash=a9edcf46af9d860a7093c3d7d86d2c9493dd7a3ede6bdfcf4eef243e9b1dcf2a)(@cloudflare/workers-types@5.20260925.1)(@types/node@26.1.1)(@vitest/runner@4.1.11)(@vitest/snapshot@4.1.11)(vitest@4.1.11(@opentelemetry/api@1.9.0)(@types/node@26.1.1)(jsdom@30.1.1(@noble/hashes@2.2.0))(msw@2.13.3(@types/node@26.1.1)(typescript@7.0.2))(vite@8.3.0(@types/node@26.1.1)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.46.0)(tsx@4.23.15)(yaml@2.9.1)))':
     dependencies:
       '@vitest/runner': 4.1.11
       '@vitest/snapshot': 4.1.11
@@ -14183,6 +14220,8 @@ snapshots:
   pluralize@8.0.0: {}
 
   possible-typed-array-names@1.1.0: {}
+
+  postal-mime@4.0.0: {}
 
   postcss-selector-parser@7.1.6:
     dependencies:

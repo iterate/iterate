@@ -1,5 +1,5 @@
 // context/redial.ts — THE ONE RE-DIAL of a socket a stateless invocation holds to a context Durable
-// Object: a lent stub's pager (rpc-stubs.ts) and either end of a resumable upgrade
+// Object: a lent stub's pager (rpc-stub-relay.ts) and either end of a resumable upgrade
 // (fetch-upgrade-splice.ts). Every deploy resets every Durable Object and cuts those sockets; the
 // invocation holding the other end outlives the reset, and dials again.
 //

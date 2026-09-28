@@ -48,7 +48,6 @@ export default {
         "monitors/{health,do-duration-probe}.ts",
         "ci/flake-dashboard/update.ts",
         "ci/tracing/{cli,tracing}.ts",
-        "depot-ci/dependencies.mjs",
       ],
     },
     "apps/os": {
@@ -121,6 +120,10 @@ export default {
       ignoreDependencies: ["cloudflare"],
     },
     "apps/ci-reports": {
+      // vite.config.ts names the Worker's main inline.
+      entry: ["src/worker.ts!"],
+    },
+    "apps/iterate-com-inbound-email": {
       // vite.config.ts names the Worker's main inline.
       entry: ["src/worker.ts!"],
     },

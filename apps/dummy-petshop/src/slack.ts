@@ -41,7 +41,7 @@ export async function handleSlackRequest(
 ): Promise<Response | null> {
   const url = new URL(request.url);
   const key = `${request.method} ${url.pathname}`;
-  const slack = fakeAuthorizationServer<SlackGrant>(deps, "slack");
+  const slack = fakeAuthorizationServer<SlackGrant>(deps, "slack", (grant) => grant.team.id);
   if (key === "GET /oauth/v2/authorize") {
     const query = Object.fromEntries(url.searchParams);
     const refusal = await slack.authorizeRefusal(query.client_id || "", query.redirect_uri || "");

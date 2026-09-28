@@ -1147,10 +1147,12 @@ class ProjectCollectionRpcTarget extends RpcTarget {
   /** DELETE the project — the owner of its organization, or the operator. Every step is keyed, so
    *  a delete that failed part way is simply asked again: the control plane says who may (catalog.ts
    *  `projectToDelete`); the root is asked to delete it, as the platform's own fact; and the
-   *  control plane drops its row, from which moment nothing reaches it, and then
-   *  `organization/project-removed` lands on its organization's activity. The deletion saga on the
-   *  root (project/processor.ts) destroys every context, its hostnames, kv, files and repos, and the
-   *  root last; the answer does not wait for it. */
+   *  control plane drops its row, from which moment the edge admits no request to it (a root that
+   *  is reached anyway refuses its birth: `#refuseBirthOfDeletedProjectRoot` in
+   *  iterate-context-durable-object.ts), and then `organization/project-removed` lands on its
+   *  organization's activity. The deletion saga on the root (project/processor.ts) destroys every
+   *  context, its hostnames, kv, files and repos, and the root last, once the row is gone; the
+   *  answer does not wait for it. */
   async delete(project: string): Promise<void> {
     const { input: sessionInput, caller } = this.#session;
     const address = DurableObjectNameCodec.parse(project);
@@ -1258,8 +1260,9 @@ class ContextSweepRpcTarget extends RpcTarget {
     if (projectId === GLOBAL_PROJECT_ID)
       throw codedError("FORBIDDEN", `${path} is a global context: the sweep leaves it alone.`);
     // by id alone: the lookup also answers a slug, and a stray born under a live project's SLUG
-    // (an operator addressing `templestein` as an id) is no part of that project
-    if ((await this.#session.input.controlPlane.getProject(projectId))?.id === projectId)
+    // (an operator addressing `templestein` as an id) is no part of that project. Fresh: a row this
+    // isolate keeps may be of a project deleted through another one
+    if ((await this.#session.input.controlPlane.getProject(projectId, true))?.id === projectId)
       throw codedError("FORBIDDEN", `${projectId} still exists: ${path} is no orphan.`);
     await stub.destroy().catch((error: unknown) => {
       if (!String(error).includes(CONTEXT_DESTROYED)) throw error;

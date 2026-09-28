@@ -6,15 +6,17 @@
 import { expect, test } from "vitest";
 import { DEFAULT_CLIENT_ID, PetshopStore, type PetshopState } from "./state.ts";
 
-test("a minted client past the newest 500 goes with its revocation epoch and scheduled token failures; the seeded client and the endpoint-wide epochs stay", async () => {
+test("a minted client past the newest 500 goes with its revocation epochs and scheduled token failures; the seeded client and the endpoint-wide epochs stay", async () => {
   const { store } = memoryStore();
   const first = await store.createClient({});
   await store.expireAccessTokens(first.clientId);
+  await store.expireAccessTokens(first.clientId, "ada@example.com");
   await store.setTokenEndpointFailures(first.clientId, 2);
   await store.expireAccessTokens(DEFAULT_CLIENT_ID);
   await store.expireAccessTokens("graphql-session-login");
   const second = await store.createClient({});
   await store.expireAccessTokens(second.clientId);
+  await store.expireAccessTokens(second.clientId, "bo@example.com");
   for (let index = 0; index < 499; index += 1) await store.createClient({});
 
   const state = await store.getState();
@@ -23,28 +25,35 @@ test("a minted client past the newest 500 goes with its revocation epoch and sch
   expect(state.clients).toHaveProperty(DEFAULT_CLIENT_ID);
   expect(state.clients).toHaveProperty(second.clientId);
   expect(state).toMatchObject({
-    accessTokenEpochs: { [DEFAULT_CLIENT_ID]: 1, "graphql-session-login": 1, [second.clientId]: 1 },
+    accessTokenEpochs: {
+      [DEFAULT_CLIENT_ID]: 1,
+      "graphql-session-login": 1,
+      [second.clientId]: 1,
+      [`${second.clientId}:bo@example.com`]: 1,
+    },
   });
-  expect(Object.keys(state.accessTokenEpochs)).toHaveLength(3);
+  // the dropped client's epochs, its account's among them, are all gone
+  expect(Object.keys(state.accessTokenEpochs)).toHaveLength(4);
   expect(Object.keys(state.tokenEndpointFailuresRemainingByClient)).toEqual([]);
 });
 
 test("an account's revocation epoch past the newest 500 goes, the least recently revoked first", async () => {
   const { store } = memoryStore();
   await store.expireAccessTokens("tesco-login:a@example.com");
-  await store.expireAccessTokens("tesco-login:b@example.com");
+  await store.expireAccessTokens(DEFAULT_CLIENT_ID, "b@example.com");
   for (let index = 0; index < 498; index += 1)
-    await store.expireAccessTokens(`graphql-session-login:user-${index}`);
+    await store.expireAccessTokens("graphql-session-login", `user-${index}`);
   expect(await store.expireAccessTokens("tesco-login:a@example.com")).toBe(2);
-  await store.expireAccessTokens("tesco-login:c@example.com");
+  await store.expireAccessTokens(DEFAULT_CLIENT_ID, "c@example.com");
 
   const { accessTokenEpochs } = await store.getState();
   expect(Object.keys(accessTokenEpochs)).toHaveLength(500);
   expect(accessTokenEpochs).toMatchObject({
     "tesco-login:a@example.com": 2,
-    "tesco-login:c@example.com": 1,
+    [`${DEFAULT_CLIENT_ID}:c@example.com`]: 1,
+    "graphql-session-login:user-0": 1,
   });
-  expect(accessTokenEpochs).not.toHaveProperty("tesco-login:b@example.com");
+  expect(accessTokenEpochs).not.toHaveProperty(`${DEFAULT_CLIENT_ID}:b@example.com`);
 });
 
 test("the newest 500 spent authorization codes are remembered, so a replay among them is refused", async () => {

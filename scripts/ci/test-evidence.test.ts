@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -17,6 +17,7 @@ import {
   testEvidenceUploadedPrefix,
   uploadTestEvidence,
   uploadedSummaryLine,
+  writeManifest,
   writeTestEvidence,
 } from "./test-evidence.ts";
 
@@ -343,6 +344,50 @@ test("PUTs every listed file write-once with its manifest sha256 as the signed p
   expect(requests.at(-1)!.headers.get("content-type")).toBe("application/json");
 });
 
+test("PUTs up to 32 files at once, the largest first, and the manifest only once every one is in", async () => {
+  using folder = evidenceFolder({ artifacts: [], check: completeCheck });
+  // a failed specs job's folder: 40 traces of 1 to 40 bytes beside the usual files
+  for (let size = 1; size <= 40; size++) {
+    mkdirSync(join(folder.path, testEvidencePaths.playwrightOutput, `spec-${size}`), {
+      recursive: true,
+    });
+    writeFileSync(
+      join(folder.path, testEvidencePaths.playwrightOutput, `spec-${size}`, "trace.zip"),
+      "t".repeat(size),
+    );
+  }
+  const manifest = await write(folder.path);
+  // every PUT held until 32 are in flight, and a moment more for a 33rd to arrive: a pool that
+  // never reaches 32 times out, and one that goes past it counts the 33rd
+  let inFlight = 0;
+  let most = 0;
+  const { promise: full, resolve: fill } = Promise.withResolvers<void>();
+  const api = cloudflare(async () => {
+    most = Math.max(most, ++inFlight);
+    if (inFlight === 32) setTimeout(fill, 100);
+    await full;
+    inFlight--;
+    return ok();
+  });
+
+  await uploadTestEvidence({ repoRoot: folder.path, ...bucket, apiToken, ...api });
+
+  expect(most).toBe(32);
+  const paths = api.r2Requests().map((request) => new URL(request.url).pathname);
+  const largest = manifest.files
+    .toSorted((a, b) => b.bytes - a.bytes)
+    .slice(0, 32)
+    .map((file) => file.path);
+  expect(
+    paths
+      .slice(0, 32)
+      .map((path) => decodeURIComponent(path).split("/testrun_1nxc464grh/")[1])
+      .sort(),
+  ).toEqual(largest.sort());
+  expect(paths).toHaveLength(manifest.files.length + 1);
+  expect(paths.at(-1)).toMatch(/\/manifest\.json$/u);
+});
+
 test("a Cloudflare 5xx, 429 or dropped connection is retried, each retry a platform-failure warn, and the upload completes", async () => {
   using folder = evidenceFolder({ artifacts: [], check: completeCheck });
   using _clock = fakeClock();
@@ -617,6 +662,127 @@ test("the summary line of an uploaded folder names its prefix, which the CI tele
   ).toBeUndefined();
 });
 
+// THE STEP AFTER THE TESTS as CI runs it: `node scripts/ci/test-evidence.ts finalize` in the job's
+// workspace, Node's own type stripping and no tsx.
+test.for([
+  {
+    case: "complete telemetry: the finalizer passes and the manifest is written",
+    expected: "os",
+    lockfile: true,
+    status: 0,
+    result: "passed",
+    outputs: "evidence=kept\nmanifest=written\n",
+  },
+  {
+    case: "a suite job that read its deployed target keeps its folder as the Test job does",
+    args: ["--only-with-target"],
+    target: true,
+    expected: "os",
+    lockfile: true,
+    status: 0,
+    result: "passed",
+    outputs: "evidence=kept\nmanifest=written\n",
+  },
+  {
+    case: "a folder with Playwright's HTML report says so to the steps after it",
+    expected: "os",
+    lockfile: true,
+    report: true,
+    status: 0,
+    result: "passed",
+    outputs: "evidence=kept\nmanifest=written\nplaywright-report=written\n",
+  },
+  {
+    case: "a missing workspace fails the step, once the manifest says incomplete",
+    expected: "os,iterate-root",
+    lockfile: true,
+    status: 1,
+    result: "incomplete",
+    stderr: "Missing expected test telemetry workspaces: iterate-root",
+    outputs: "evidence=kept\nmanifest=written\n",
+  },
+  {
+    case: "a manifest that cannot be written is reported and decides nothing",
+    expected: "os",
+    lockfile: false,
+    status: 0,
+    stdout: "::warning title=No test evidence manifest::",
+    outputs: "evidence=kept\n",
+  },
+])("finalize: $case", (row) => {
+  using job = finalizeInJob(row);
+  const { finalize, repo } = job;
+
+  expect(finalize).toMatchObject({
+    status: row.status,
+    stdout: expect.stringContaining("[test-telemetry] checked 1 artifact(s)"),
+    stderr: expect.not.stringContaining("ExperimentalWarning"),
+  });
+  if (row.stderr) expect(finalize.stderr).toContain(row.stderr);
+  if (row.stdout) expect(finalize.stdout).toContain(row.stdout);
+  // what the steps after it read instead of hashFiles()
+  expect(job.outputs()).toBe(row.outputs);
+  // the finalizer wrote its check and the suite's summary whatever the manifest did
+  expect(existsSync(join(repo, testEvidencePaths.telemetryCheck))).toBe(true);
+  expect(
+    existsSync(join(repo, testEvidencePaths.flakeRecords, "preview-e2e", "suite-summary.json")),
+  ).toBe(true);
+  const manifest = join(repo, testEvidencePaths.manifest);
+  if (row.result)
+    expect(JSON.parse(readFileSync(manifest, "utf8"))).toMatchObject({ result: row.result });
+  else {
+    expect(existsSync(manifest)).toBe(false);
+    expect(existsSync(join(job.runner, "test-evidence-write.reported"))).toBe(true);
+  }
+});
+
+test("finalize: a suite job whose suite never read a deployed target keeps nothing, and says so", () => {
+  using job = finalizeInJob({ args: ["--only-with-target"], expected: "os", lockfile: true });
+
+  expect(job.finalize).toMatchObject({
+    status: 0,
+    stdout: expect.stringContaining("no test-results/target.json"),
+  });
+  // no outputs: every step after it skips
+  expect(job.outputs()).toBe("");
+  expect(existsSync(join(job.repo, testEvidencePaths.telemetryCheck))).toBe(false);
+  expect(existsSync(join(job.repo, testEvidencePaths.manifest))).toBe(false);
+});
+
+test("a manifest not written within a minute is a failed write: reported, and the step goes on to its result", async () => {
+  using folder = evidenceFolder({ artifacts: [], check: completeCheck });
+  using runner = temporaryDirectory();
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  using _clock = { [Symbol.dispose]: () => vi.useRealTimers() };
+  vi.spyOn(console, "log").mockImplementation(() => {});
+  vi.spyOn(console, "error").mockImplementation(() => {});
+
+  let settled = false;
+  const written = writeManifest({
+    repoRoot: folder.path,
+    environment: {
+      ...environment,
+      GITHUB_STEP_SUMMARY: join(runner.path, "summary.md"),
+      RUNNER_TEMP: runner.path,
+    },
+    cancelled: false,
+    // a source that never arrives
+    source: () => new Promise(() => {}),
+  }).finally(() => {
+    settled = true;
+  });
+  await vi.advanceTimersByTimeAsync(59_999);
+  expect(settled).toBe(false);
+  await vi.advanceTimersByTimeAsync(1);
+
+  expect(await written).toBeUndefined();
+  expect(readFileSync(join(runner.path, "summary.md"), "utf8")).toBe(
+    "**No test evidence manifest**: not written within 60 s. The tests' result is unaffected.\n",
+  );
+  expect(existsSync(join(runner.path, "test-evidence-write.reported"))).toBe(true);
+  expect(existsSync(join(folder.path, testEvidencePaths.manifest))).toBe(false);
+});
+
 test("the source's tree is the files on disk, changes and new files included, and the index is left alone", async () => {
   using folder = temporaryDirectory();
   const repo = folder.path;
@@ -669,6 +835,72 @@ test("the source's tree is the files on disk, changes and new files included, an
   expect(git("diff", "--cached", "--name-only")).toBe("");
   expect(git("ls-files", "--others", "--exclude-standard")).toBe("b.ts");
 });
+
+/** `node scripts/ci/test-evidence.ts finalize --flake-suites preview-e2e [args]` in a job's
+ *  workspace: a git checkout whose test-results/ holds one runner's telemetry, with a Depot job's
+ *  environment and its own GITHUB_OUTPUT. */
+function finalizeInJob(input: {
+  args?: string[];
+  expected: string;
+  lockfile: boolean;
+  report?: boolean;
+  target?: boolean;
+}) {
+  const folder = evidenceFolder({
+    artifacts: [artifact("vitest:os:1", "2026-09-24T07:23:01.000Z", "2026-09-24T07:25:00.000Z")],
+    target: input.target ? target : undefined,
+  });
+  const runner = temporaryDirectory();
+  const repo = folder.path;
+  const git = (...args: string[]) =>
+    execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@example.com", ...args], {
+      cwd: repo,
+    });
+  git("init", "--quiet");
+  writeFileSync(join(repo, ".gitignore"), "test-results/\n");
+  if (input.lockfile) writeFileSync(join(repo, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\n");
+  if (input.report) {
+    mkdirSync(join(repo, testEvidencePaths.playwrightReport), { recursive: true });
+    writeFileSync(join(repo, testEvidencePaths.playwrightReport, "index.html"), "<html></html>");
+  }
+  const output = join(runner.path, "output");
+  writeFileSync(output, "");
+  git("add", "--all");
+  git("-c", "commit.gpgsign=false", "commit", "--quiet", "--allow-empty", "-m", "one");
+
+  const finalize = spawnSync(
+    process.execPath,
+    [
+      join(import.meta.dirname, "test-evidence.ts"),
+      "finalize",
+      "--flake-suites",
+      "preview-e2e",
+      ...(input.args || []),
+    ],
+    {
+      cwd: repo,
+      env: {
+        PATH: process.env.PATH,
+        ...environment,
+        TEST_TELEMETRY_EXPECTED_WORKSPACES: input.expected,
+        RUNNER_TEMP: runner.path,
+        GITHUB_STEP_SUMMARY: join(runner.path, "summary.md"),
+        GITHUB_OUTPUT: output,
+      },
+      encoding: "utf8",
+    },
+  );
+  return {
+    finalize,
+    repo,
+    runner: runner.path,
+    outputs: () => readFileSync(output, "utf8"),
+    [Symbol.dispose]() {
+      folder[Symbol.dispose]();
+      runner[Symbol.dispose]();
+    },
+  };
+}
 
 /**
  * Cloudflare as the upload meets it: the API's token check, then R2's S3 endpoint, whose answers

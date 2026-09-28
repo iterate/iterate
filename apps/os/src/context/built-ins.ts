@@ -33,13 +33,14 @@ import type {
 } from "iterate/api";
 import { projectPublicUrlOf, type IngressRouting } from "iterate/project-ingress";
 import { failureKind, ONCE_NOW, retryPlatformFailures } from "@iterate-com/shared/platform-retry";
-import { stampCaller, type Caller } from "../caller.ts";
+import { refusePlatformIdempotencyKeys, stampCaller, type Caller } from "../caller.ts";
 import { FIRST_PARTY_FACET_CLASSES, firstPartyFacetClassOf } from "../first-party-facets.ts";
 import { ScheduleKey, ScheduleReceipt, type ScheduledAppend } from "../stream/scheduled-appends.ts";
 import type { ReachableContext } from "../stream/stream.ts";
 import type { LibraryRoots } from "../library.ts";
 import { assertSecretPath, normalizeSecretRecord, originsOf, sha256Hex } from "../secrets.ts";
 import type { LendRevokedReason, SecretCatalog, SecretState } from "../secret/contract.ts";
+import { EMAIL_PATH, emailDomainOf } from "../email/contract.ts";
 import {
   IntegrationConnectionRow,
   IntegrationProvider,
@@ -51,6 +52,7 @@ import {
   type ConnectionAttempt,
   type HeldToken,
 } from "../integrations/connections.ts";
+import { sendEmail } from "../integrations/email.ts";
 import type {
   ConnectInput,
   FinishConnectAnswer,
@@ -79,7 +81,9 @@ import { admitLoadedCodeRow } from "./itx-expression-rewriting.ts";
 import { DurableObjectNameCodec, GLOBAL_PROJECT_ID, resourceScope } from "./paths.ts";
 import {
   assertFacetSourceWithinCeiling,
+  contentHashOfWorkerModules,
   facetSpecOf,
+  isWorkerModules,
   prepareConfinedWorker,
 } from "./worker-loader.ts";
 import type { BuiltInRoot } from "./itx-expression-rewriting.ts";
@@ -195,9 +199,10 @@ export interface BuiltInScope extends LibraryRoots {
   /** THE PUBLIC URL of this project over HTTP — the apex or a `routingSlug`'s host (both reach the
    *  config worker's `fetch`, which reads the slug from `x-iterate-routing-slug`), at `path`
    *  (default "/") — on the project's primary hostname when it has one (`<routingSlug>.<primary>/…`,
-   *  the control plane's copy, up to thirty seconds old), else composed from the deployment's
-   *  ingress routing (iterate/project-ingress: `<routingSlug>--<slug>.<hostname>/…` under
-   *  subdomains, `<origin>/projects/<slug>/<routingSlug>/…` under paths). Refused on a deployment with no project ingress, and on a call carrying no
+   *  the project row the control plane keeps, up to five seconds old: control-plane/edge.ts
+   *  `KEPT_MS`), else composed from the deployment's ingress routing (iterate/project-ingress:
+   *  `<routingSlug>--<slug>.<hostname>/…` under subdomains, `<origin>/projects/<slug>/<routingSlug>/…`
+   *  under paths). Refused on a deployment with no project ingress, and on a call carrying no
    *  platform origin (a processor's own turn, a loaded worker: hold the URL a session handed you
    *  instead). Only a project's context has one. */
   url: IterateContextApi["url"];
@@ -273,6 +278,8 @@ export interface BuiltInScope extends LibraryRoots {
    *  domain object `itx.repos.get(path)` — THE way a project touches its repos): it mints its token and
    *  learns its remote here, then speaks git-over-HTTPS from inside its own worker. */
   cfArtifacts: IterateContextApi["cfArtifacts"];
+  /** The project's mail: email/contract.ts for its address, integrations/email.ts for sending. */
+  email: IterateContextApi["email"];
   /** Append to this context's append-only event log (the facets that REDUCE it are
    *  `itx.facets.get(name)`). A top-level root, so the expression surface mirrors the edge
    *  RpcTarget exactly: `itx.append({...})` is one spelling on every hop. */
@@ -447,6 +454,8 @@ interface BuildBuiltInsDeps {
     BROWSER: BrowserRun;
     ARTIFACTS: ArtifactsNamespace;
     DB: D1Database;
+    /** Email Sending — `itx.email`; absent where a deployment has no mailbox. */
+    EMAIL?: SendEmail;
   };
   /** The deploy identity every loader cacheKey folds in (worker.ts `AppConfig`). */
   deployId: string;
@@ -536,24 +545,17 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
   const kvPrefix = `${owner.id}:`;
   const r2Prefix = `${owner.id}/`;
   const ownContext = () => deps.context(path);
-  /** THE append: every event appended through this scope carries WHO appended it — the DO's own
-   *  stamp, never a client's (src/caller.ts `stampCaller`): the session's verified principal, or none. */
+  /** THE append: every event appended through this scope carries WHO appended it and FROM WHERE —
+   *  the DO's own stamp, never a client's (src/caller.ts `stampCaller`): the context the call started
+   *  at, and the session's verified principal, or none. */
   const append = (...events: StreamEventInput[]) => {
     const caller = deps.caller();
     // Loaded code can delegate its scope to descendants through durable rows; child code
     // keeps its own ceiling. The append boundary validates the rest of each control event.
-    if (caller.app) for (const event of events) admitLoadedCodeRow(event, caller.path || path);
-    // `account/…` and `organization/…` keys are the platform's facts on a global context (grants.ts,
-    // session.ts): a key a person took first would answer the platform's fact with theirs, which the
-    // owner's fold ignores (a grant that never ends).
-    if (projectId === GLOBAL_PROJECT_ID && !caller.platform)
-      for (const { idempotencyKey } of events)
-        if (/^(?:account|organization)\//.test(String(idempotencyKey)))
-          throw codedError(
-            "FORBIDDEN",
-            `idempotency key ${JSON.stringify(idempotencyKey)} is the platform's`,
-          );
-    return ownContext().append(...events.map((event) => stampCaller(event, caller)));
+    if (caller.app)
+      for (const event of events) admitLoadedCodeRow(event, caller.path || path, path);
+    refusePlatformIdempotencyKeys(events, caller, projectId === GLOBAL_PROJECT_ID);
+    return ownContext().append(...events.map((event) => stampCaller(event, caller, path)));
   };
   /** THE PLATFORM'S OWN HOP: the caller rides — principal and grant (the facts stay attributed),
    *  path and origin — but never its `app`: the app wall (itx-expression-rewriting.ts `#admit`) is
@@ -761,7 +763,7 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
     });
   };
   const secretFact = async (secret: ReachableContext, event: StreamEventInput): Promise<void> => {
-    await secret.append(stampCaller(event, deps.caller()));
+    await secret.append(stampCaller(event, deps.caller(), path));
     await crossPostSecretFact(event);
   };
   /** A person's account the project stops using — its path's lend ended: the project deleted the
@@ -1787,6 +1789,28 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
     ai: env.AI, // the binding object itself — dispatch walks its methods
     browser: cfBrowser(env.BROWSER),
     cfArtifacts: projectScopedArtifacts({ namespace: env.ARTIFACTS, projectId: owner.id }),
+    email: {
+      send: async (input) => {
+        const domain = emailDomainOf(deps.ingressRouting);
+        const slug = owner.kind === "project" ? (await deps.projectInfo()).projectSlug : undefined;
+        if (!domain || !slug || !env.EMAIL)
+          throw codedError(
+            "INVALID_CONTEXT",
+            "itx.email: only a project has an address, on a deployment whose projects are subdomains and that can send mail",
+          );
+        return sendEmail(
+          {
+            EMAIL: env.EMAIL,
+            FILES: env.FILES,
+            filesPrefix: r2Prefix,
+            from: { email: `${slug}@${domain}`, name: slug },
+            emailContext: deps.context(EMAIL_PATH),
+            caller: hopCaller(),
+          },
+          input,
+        );
+      },
+    },
     append,
     abort: async (reasonInput) => {
       const reason = abortReasonOf(reasonInput, "itx.abort");
@@ -1914,7 +1938,17 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
         // only where first-party-facet-placement.ts places it — the facet host refuses it anyway;
         // refused here too, so a row that could never deliver is never appended.
         const firstPartyClassName = firstPartyFacetClassOf(name);
-        const loaded = spec as (FacetSpec & { consumes?: string[] }) | undefined;
+        // The declared spec is a union: `{ consumes }` for a first-party name, or a loaded spec. Both
+        // are read through the loaded shape, and checked below: a first-party name refuses a source
+        // or a class, and any other name must name its class.
+        const given = spec as (FacetSpec & { consumes?: string[] }) | undefined;
+        // A literal source with no cacheKey is keyed by its content, the key the loader gives it
+        // anyway (worker-loader.ts `prepareConfinedWorker`): so changed code is a changed spec that
+        // this enable configures, and the same code again is the same spec, which appends nothing.
+        const loaded =
+          given && !given.cacheKey && isWorkerModules(given.source)
+            ? { ...given, cacheKey: contentHashOfWorkerModules(given.source) }
+            : given;
         if (firstPartyClassName) {
           if (loaded && ("source" in loaded || "className" in loaded))
             throw new Error(

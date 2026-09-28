@@ -113,7 +113,7 @@ test("Main OS e2e's page job posts its own run's change of state in the health j
       subject: async (sha) => `the subject of ${sha.slice(0, 3)}`,
     });
   const previous = {
-    schemaVersion: 1,
+    schemaVersion: 2,
     e2e: {
       suites: { "main e2e": "green", "slow e2e rows": "green" },
       judgedAt: { "Main OS e2e": "2026-09-27T00:30:00Z" },
@@ -131,7 +131,7 @@ test("Main OS e2e's page job posts its own run's change of state in the health j
       "now: 🔴 main e2e · 🟢 slow e2e rows",
     ].join("\n"),
     next: {
-      schemaVersion: 1,
+      schemaVersion: 2,
       e2e: {
         suites: { "main e2e": "red", "slow e2e rows": "green" },
         judgedAt: { "Main OS e2e": "2026-09-27T01:00:00Z" },
@@ -146,8 +146,52 @@ test("Main OS e2e's page job posts its own run's change of state in the health j
   });
 });
 
+test("Main OS e2e's page job pages a broken slow-rows probe of a green run, and has no failure", async () => {
+  const current = mainRun("current", "2026-09-27T01:00:00Z", {
+    e2eTests: [{ name: "the careless facet", tags: ["slow"] }],
+    e2eSummary: {
+      status: "incomplete",
+      diagnostics: ["Test did not finish: Sign in with Cloudflare and with GitHub"],
+    },
+    running: true,
+  });
+  const judged = await judgeMainE2eRun({
+    depot: fakeDepot({ "Main OS e2e": [current] }),
+    state: readMainE2eState({
+      schemaVersion: 2,
+      e2e: {
+        suites: { "main e2e": "green", "slow e2e rows": "green" },
+        judgedAt: { "Main OS e2e": "2026-09-27T00:30:00Z" },
+      },
+    }),
+    workflowId: "wf-current",
+    testRun: false,
+    subject: async (sha) => `the subject of ${sha.slice(0, 3)}`,
+  });
+  expect(judged).toEqual({
+    text: [
+      "⚪ slow e2e rows unjudged at `currentaa` (the subject of cur)",
+      "• broken probe: an incomplete run: Test did not finish: Sign in with Cloudflare and with GitHub",
+      "<https://depot.dev/orgs/0p91s0lz49/workflows/wf-current|the run>",
+      "now: 🟢 main e2e · ⚪ slow e2e rows",
+    ].join("\n"),
+    next: {
+      schemaVersion: 2,
+      e2e: {
+        suites: { "main e2e": "green", "slow e2e rows": "broken" },
+        judgedAt: { "Main OS e2e": "2026-09-27T01:00:00Z" },
+      },
+    },
+    failures: [],
+  });
+});
+
 test("Main OS e2e's state starts empty with none, or one of another schemaVersion", () => {
-  const empty = { schemaVersion: 1, e2e: { suites: {}, judgedAt: {} } };
+  const empty = { schemaVersion: 2, e2e: { suites: {}, judgedAt: {} } };
   expect(readMainE2eState(undefined)).toEqual(empty);
-  expect(readMainE2eState({ schemaVersion: 2 })).toEqual(empty);
+  // version 1, which could not hold a broken probe
+  expect(
+    readMainE2eState({ schemaVersion: 1, e2e: { suites: { "main e2e": "red" }, judgedAt: {} } }),
+  ).toEqual(empty);
+  expect(readMainE2eState({ schemaVersion: 3 })).toEqual(empty);
 });

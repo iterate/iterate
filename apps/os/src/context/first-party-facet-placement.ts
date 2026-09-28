@@ -36,8 +36,11 @@
 //      secret too — in a jail with no env and the pin as its only egress (secret/exchange-jail.ts).
 //   7. `instance` — the global root `global:/`, and nowhere else: the deployment's own secrets
 //      catalog (built-ins.ts `ownerRootFacet`), which only the operator reaches.
+//   8. `email` — a project's `/integrations/email`, and nowhere else: where the platform records
+//      the project's mail (integrations/email.ts).
 import { codedError } from "iterate/lib";
 import type { FIRST_PARTY_FACET_CLASSES } from "../first-party-facets.ts";
+import { EMAIL_PATH } from "../email/contract.ts";
 import { SECRET_PATH } from "../secrets.ts";
 import { GLOBAL_PROJECT_ID, pathUnderOwner, resourceScope } from "./paths.ts";
 
@@ -90,13 +93,18 @@ const FIRST_PARTY_FACET_PLACEMENT_RULES = {
     where: "the global root, global:/",
     mayBeHostedOn: ({ projectId, path }) => projectId === GLOBAL_PROJECT_ID && path === "/",
   },
+  // 8.
+  email: {
+    where: `a project's ${EMAIL_PATH}`,
+    mayBeHostedOn: ({ projectId, path }) => projectId !== GLOBAL_PROJECT_ID && path === EMAIL_PATH,
+  },
 } satisfies Record<
   keyof typeof FIRST_PARTY_FACET_CLASSES,
   { where: string; mayBeHostedOn: (context: IterateContextAddress) => boolean }
 >;
 
 /** Refuses — FORBIDDEN, which a hosting row's delivery halts on at once — hosting the facet `name`
- *  on `context` where the rules above do not place it: a first-party name by its own rule (1–5, 7), any
+ *  on `context` where the rules above do not place it: a first-party name by its own rule (1–5, 7, 8), any
  *  other name as loaded code (6). */
 export function assertFacetPlacement(name: string, context: IterateContextAddress): void {
   if (!Object.hasOwn(FIRST_PARTY_FACET_PLACEMENT_RULES, name))

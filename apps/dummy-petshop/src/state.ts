@@ -80,12 +80,12 @@ export interface GithubInstallationUser {
  * token-endpoint failures.
  */
 export interface PetshopState {
-  /** Per-client revocation epochs. A token seals the epoch for its `clientId`,
-   * so concurrent integration tests can expire their own credentials without
-   * invalidating an unrelated client's freshly refreshed token. An id with a colon is one
-   * account's (`graphqlSessionAccountClientId`, `tesco-login:<email>`), and the
-   * `MINTED_RECORDS_KEPT` most recently revoked accounts are kept; a minted client's epoch goes
-   * with the client. */
+  /** Revocation epochs, by client and by one account of a client (`accountRevocationKey`). A
+   * token seals both of its own, so a test expires the tokens of the account it signed in as
+   * and no other: the one shop serves every concurrent CI run, and a preview's Google, GitHub and
+   * Cloudflare sign-ins all hold tokens of `petshop-default`. A key with a colon is an account's
+   * (`tesco-login:<email>` is a client of one account), and the `MINTED_RECORDS_KEPT` most
+   * recently revoked are kept; a minted client's keys go with the client. */
   accessTokenEpochs: Record<string, number>;
   /** The seeded client and the newest `MINTED_RECORDS_KEPT` minted ones, oldest first. */
   clients: Record<string, OauthClient>;
@@ -169,9 +169,9 @@ const MINTED_RECORDS_KEPT = 500;
 
 const MINTED_CLIENT_ID_PREFIX = "petshop-client-";
 
-/** Drops what `MINTED_RECORDS_KEPT` does not keep. A minted client's revocation epoch and its
- *  scheduled token-endpoint failures go with it; the seeded client and the endpoint-wide epochs
- *  (`graphql-session-login`, a GitHub App's) stay. */
+/** Drops what `MINTED_RECORDS_KEPT` does not keep. A minted client's revocation epochs (its own
+ *  and its accounts') and its scheduled token-endpoint failures go with it; the seeded client and
+ *  the endpoint-wide epochs (`graphql-session-login`, a GitHub App's) stay. */
 function dropOldestMintedRecords(state: PetshopState): void {
   const mintedClientIds = Object.keys(state.clients).filter((id) =>
     id.startsWith(MINTED_CLIENT_ID_PREFIX),
@@ -179,9 +179,12 @@ function dropOldestMintedRecords(state: PetshopState): void {
   for (const clientId of mintedClientIds.slice(0, -MINTED_RECORDS_KEPT))
     delete state.clients[clientId];
   for (const byClient of [state.accessTokenEpochs, state.tokenEndpointFailuresRemainingByClient])
-    for (const clientId of Object.keys(byClient))
+    for (const key of Object.keys(byClient)) {
+      // a minted client's id has no colon, so it is the whole key or an account key's first part
+      const clientId = key.split(":")[0]!;
       if (clientId.startsWith(MINTED_CLIENT_ID_PREFIX) && !state.clients[clientId])
-        delete byClient[clientId];
+        delete byClient[key];
+    }
   const accountEpochIds = Object.keys(state.accessTokenEpochs).filter((id) => id.includes(":"));
   for (const accountId of accountEpochIds.slice(0, -MINTED_RECORDS_KEPT))
     delete state.accessTokenEpochs[accountId];
@@ -195,10 +198,14 @@ export function fakeUserIdOf(login: string): number {
   return hash >>> 0;
 }
 
-/** A client whose tokens were never expired through the backdoor is at epoch 0. */
-export function accessTokenEpochFor(state: PetshopState, clientId: string): number {
-  return state.accessTokenEpochs[clientId] ?? 0;
+/** A client or account whose tokens were never expired is at epoch 0. */
+export function accessTokenEpochFor(state: PetshopState, key: string): number {
+  return state.accessTokenEpochs[key] ?? 0;
 }
+
+/** The revocation key of the tokens ONE account holds from `clientId`: expiring it ends them, and
+ *  no other account's tokens of the client. */
+export const accountRevocationKey = (clientId: string, account: string) => `${clientId}:${account}`;
 
 /** The seeded default GitHub App installation — well-known ids, no verifying
  * key yet (see {@link GithubApp}); its webhook secret is random per environment,
@@ -289,12 +296,15 @@ export class PetshopStore {
     return { clientId, clientSecret };
   }
 
-  async expireAccessTokens(clientId: string): Promise<number> {
+  /** Every outstanding access token `account` holds from `clientId` answers 401 from now on; with
+   *  no `account`, every token of the client. Answers the new epoch. */
+  async expireAccessTokens(clientId: string, account?: string): Promise<number> {
     const state = await this.#load();
-    const next = accessTokenEpochFor(state, clientId) + 1;
+    const key = account ? accountRevocationKey(clientId, account) : clientId;
+    const next = accessTokenEpochFor(state, key) + 1;
     // re-inserted, so the order of the epochs is the order they were last revoked in
-    delete state.accessTokenEpochs[clientId];
-    state.accessTokenEpochs[clientId] = next;
+    delete state.accessTokenEpochs[key];
+    state.accessTokenEpochs[key] = next;
     await this.#save(state);
     return next;
   }

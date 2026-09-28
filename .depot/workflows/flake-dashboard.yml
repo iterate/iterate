@@ -3,10 +3,9 @@
 # rewrites the issue when its body changed. Nothing is kept between runs. A dispatch with
 # dry-run=true prints the body in the log and writes nothing.
 #
-# #2580 is written as the iterate GitHub App (iterate[bot]): the writer mints an installation token
-# narrowed to writing issues in this repository. The Depot app's job token has no Issues permission
-# (403 on PATCH issues/2580). The app's key is read here only, in a workflow that never runs on
-# pull_request or push.
+# #2580 is written as the iterate GitHub App (iterate[bot]; the writer says how). The App's id and
+# key have one home, the platform's configuration (Doppler os/prd's APP_CONFIG), which this
+# workflow reads on a schedule or a dispatch only, never on pull_request or push.
 name: Flake dashboard
 permissions:
   contents: read
@@ -24,14 +23,9 @@ on:
 concurrency:
   group: flake-dashboard
   cancel-in-progress: false
-env:
-  # The image's baked store: dependencies.mjs fingerprints it (docs/depot-ci.md#custom-image)
-  PNPM_CONFIG_STORE_DIR: /home/runner/.pnpm-store
 jobs:
   update:
-    runs-on:
-      size: 2x8
-      image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
+    runs-on: depot-ubuntu-24.04
     timeout-minutes: 15
     env:
       DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
@@ -39,18 +33,15 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-        with:
-          clean: false
-      - name: Reconcile dependencies (baked)
-        run: node scripts/depot-ci/dependencies.mjs install
+      - name: Setup
+        uses: ./.depot/actions/setup
       # The Cloudflare API token CI uploads the test evidence with (Doppler _shared/preview) reads
-      # it back. The iterate GitHub App's id and key (Doppler os-legacy-backup/prd) mint the token
-      # that writes the issue.
+      # it back. parseAppConfig requires APP_CONFIG_SECRETS__KEY beside APP_CONFIG.
       - name: Recompute the dashboard issue
         run: |-
           set -euo pipefail
-          export CLOUDFLARE_API_TOKEN GITHUB_APP_ID GITHUB_APP_PRIVATE_KEY
+          export CLOUDFLARE_API_TOKEN APP_CONFIG APP_CONFIG_SECRETS__KEY
           CLOUDFLARE_API_TOKEN="$(doppler secrets get CLOUDFLARE_API_TOKEN --plain --project _shared --config preview)"
-          GITHUB_APP_ID="$(doppler secrets get GITHUB_APP_ID --plain --project os-legacy-backup --config prd)"
-          GITHUB_APP_PRIVATE_KEY="$(doppler secrets get GITHUB_APP_PRIVATE_KEY --plain --project os-legacy-backup --config prd)"
+          APP_CONFIG="$(doppler secrets get APP_CONFIG --plain --project os --config prd)"
+          APP_CONFIG_SECRETS__KEY="$(doppler secrets get APP_CONFIG_SECRETS__KEY --plain --project os --config prd)"
           pnpm tsx scripts/ci/flake-dashboard/update.ts ${{ inputs.dry-run == 'true' && '--dry-run' || '' }}

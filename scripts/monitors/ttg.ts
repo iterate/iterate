@@ -21,7 +21,7 @@
 //   slow rows skipped   the e2e rows tagged `slow` were left out, as they are for most PRs
 //   every row           they ran: the PR turned them on or edited one, or the suite has none
 //   no summary          e2e wrote none (its deploy failed, say), so which rows would have run is unknown
-//   no Preview OS       no preview: the push changed no preview path, so E2E tests skipped, or it
+//   no Preview OS       no preview: the push changed no preview path, so its CI trace skipped, or it
 //                       ran no Preview OS at all
 //
 // THE PAGE: when the time to green of the pushes that skipped the slow rows, over the last 24 hours
@@ -152,14 +152,18 @@ function verdictOf(check: {
   };
 }
 
-/** Whether the push's Preview OS tested a preview: it ran, and its E2E tests job was not skipped,
- *  as it is for a push that changes no preview path (preview-os.yml). Pure. */
+/** Whether the push's Preview OS tested a preview: it ran, and neither its CI trace nor its E2E
+ *  tests job was skipped. A push that changes no preview path skips the trace (preview-os.yml), and
+ *  its suites, which start beside the deploy, pass having tested nothing; a skipped E2E tests job
+ *  tested nothing either. Pure. */
 function previewTested(workflows: RunMetrics["workflows"]) {
   const preview = workflows.find(({ workflow }) => workflow.name === "Preview OS");
   return (
     !!preview &&
     !preview.jobs.some(
-      ({ job }) => job?.jobKey === "preview-os.yml:e2e" && job.status === "skipped",
+      ({ job }) =>
+        (job?.jobKey === "preview-os.yml:e2e" || job?.jobKey === TRACE_JOB) &&
+        job.status === "skipped",
     )
   );
 }

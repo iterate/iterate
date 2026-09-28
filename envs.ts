@@ -428,6 +428,17 @@ export const ciReportsEnvs: Record<
   },
 };
 
+/** apps/iterate-com-inbound-email — iterate.com's inbound mail: the Worker the Email Routing catch-all
+ *  on the iterate.com zone delivers to (the zone's rule, set by hand, names it). No routes, no DNS of
+ *  its own; _shared/prd supplies its Cloudflare credentials. */
+export const iterateComInboundEmailEnvs = {
+  prd: {
+    cloudflareAccountId: PRD_ACCOUNT_ID,
+    dopplerConfig: "prd",
+    workerName: "iterate-com-inbound-email",
+  },
+};
+
 /** The CI bucket, `iterate-ci` (docs/test-evidence.md#one-bucket): each CI job attempt's test
  *  evidence folder under `evidence/`, and later the alert guards' state under `state/`. CI tooling, so it lives on the dev/preview account; CI
  *  writes it with the Cloudflare API token it already holds (Doppler `_shared/preview`'s

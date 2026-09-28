@@ -16,7 +16,7 @@
 // and keeps delivering; a match at itx.builtins (the one row the removal spelling
 // could never express) is refused AT APPEND, so no such row can ever sit beside the real ones. And
 // a pager REPLACED at its key (a reconnect) is a reconnect, not a close: a page in flight survives
-// the swap and the new pager's lend answers it.
+// the swap and the new pager's lend answers it, and the stub the old pager's relay lent goes back.
 
 import { evictDurableObject, runInDurableObject } from "cloudflare:test";
 import { exports, RpcTarget } from "cloudflare:workers";
@@ -435,6 +435,39 @@ test("a pager RECONNECT while a page is in flight is a reconnect, not a close: t
   }
 });
 
+// The swap gives back the stub the replaced pager's relay lent: that relay may be on its way out, and
+// the key's calls belong to the newest pager's lend.
+test("a pager replaced while its stub is borrowed gives the stub back: the next call pages the new pager", async () => {
+  const ctx = "prj_pager_replace_borrowed";
+  const s = stub(ctx);
+  const rpcStubKey = "itx.swapped";
+  const call = (arg: string) =>
+    s.invoke(["itx", "rpcStubs", ["get", rpcStubKey], ["echo", arg]]) as Promise<string>;
+
+  const first = await openPager(ctx, rpcStubKey);
+  first.webSocket!.accept();
+  first.webSocket!.addEventListener("message", (event: MessageEvent) => {
+    if (typeof event.data === "string" && event.data.includes('"page"'))
+      void s.lendRpcStub({ rpcStubKey, stub: new LentAnswer("first") as never });
+  });
+  expect(await call("before")).toContain("first");
+  expect(await transportState(ctx)).toMatchObject({ rpcStubPagers: 1, borrowedRpcStubs: 1 });
+
+  const second = await openPager(ctx, rpcStubKey);
+  second.webSocket!.accept();
+  second.webSocket!.addEventListener("message", (event: MessageEvent) => {
+    if (typeof event.data === "string" && event.data.includes('"page"'))
+      void s.lendRpcStub({ rpcStubKey, stub: new LentAnswer("second") as never });
+  });
+  try {
+    expect(await transportState(ctx)).toMatchObject({ rpcStubPagers: 1, borrowedRpcStubs: 0 });
+    expect(await call("after")).toContain("second");
+  } finally {
+    first.webSocket!.close(1000, "test done");
+    second.webSocket!.close(1000, "test done");
+  }
+});
+
 /** Open a pager upgrade straight at the DO's `fetch` (what lendRpcStubOverPager does relay-side):
  *  the header IS the attach request — the key and the events that name it. */
 function openPager(ctx: string, rpcStubKey: string, appendEvents: StreamEventInput[] = []) {
@@ -495,6 +528,7 @@ async function subscriptionNames(ctx: string) {
 async function transportState(ctx: string) {
   return (await stub(ctx).rpcStubTransportState()) as unknown as {
     rpcStubPagers: number;
+    borrowedRpcStubs: number;
     rpcStubPagesInFlight: number;
   };
 }

@@ -305,6 +305,40 @@ test.for<{
   expect(reduceProcessor(processor(), events)).toMatchObject(state);
 });
 
+test.for<{ name: string; source?: { origin: string }; from?: string; label?: string }>([
+  {
+    name: "another agent's append: its stamp",
+    source: { origin: "/agents/a/sandbox" },
+    label: "/agents/a/sandbox",
+  },
+  { name: "the agent's own words: no sender", source: { origin: "/agents/b" } },
+  { name: "the root's append (a member's session, the dash): a person's", source: { origin: "/" } },
+  { name: "unstamped (before the stamp): nothing", label: undefined },
+  {
+    name: "relayed by its own facet (`message`): the sender handed over",
+    source: { origin: "/agents/b" },
+    from: "/agents/a/sandbox",
+    label: "/agents/a/sandbox",
+  },
+  {
+    name: "relayed from the root's collection: a person's",
+    source: { origin: "/agents/b" },
+    from: "/",
+  },
+  {
+    name: "a foreign stamp beats a relayed sender",
+    source: { origin: "/agents/c" },
+    from: "/agents/a",
+    label: "/agents/c",
+  },
+])("the reduce names who sent words to /agents/b — $name", ({ source, from, label }) => {
+  const { contextItems } = reduceProcessor(processor(), [
+    ...born,
+    { ...user("hi"), payload: { ...user("hi").payload, from }, source, path: "/agents/b" },
+  ]);
+  expect(contextItems.at(-1)).toMatchObject({ content: "hi", from: label });
+});
+
 // ── the conversation as the model reads it (buildChatMessages) ──
 
 const png = {
@@ -326,6 +360,17 @@ test("buildChatMessages: text items stay text; the developer's notes read as sys
     { role: "system", content: "note" },
     { role: "user", content: "Look." },
   ]));
+test("buildChatMessages: an item another context appended opens with who it is from, attachments or not", () => {
+  const [said, attached] = buildChatMessages(
+    [
+      { offset: 1, role: "user", content: "hello", from: "/agents/a/sandbox" },
+      { offset: 2, role: "user", content: "see", from: "/agents/a", files: [pdf] },
+    ],
+    new Map(),
+  );
+  expect(said).toEqual({ role: "user", content: "[from /agents/a/sandbox] hello" });
+  expect(attached?.content).toMatch(/^\[from \/agents\/a\] see\n\[Attached file: spec\.pdf/);
+});
 test("buildChatMessages: an image whose bytes are known becomes an image part beside the text — a data: URL", () =>
   expect(
     buildChatMessages(

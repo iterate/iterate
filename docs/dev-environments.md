@@ -414,9 +414,13 @@ are paths on the one origin. Commands: `apps/os/README.md`.
   24 hours with no open PR branch of that name. The rules are a pure table in
   `apps/os/scripts/preview-sweep.ts`. Until none are left, it also deletes the
   Worker Previews each PR used to get, on `os`, `<app>` and the former parents
-  (`os-preview`, `<app>-preview`), once idle a day. Kept short on purpose:
-  every deployment is 7 workers and about 15 Durable Object namespaces, and
-  the account allows 500 of each.
+  (`os-preview`, `<app>-preview`), once idle a day, and each former parent's
+  worker, with everything under its name, once no preview is left on it.
+  Workers envs.ts does not name are listed for a person, never deleted. Kept
+  short on purpose: every deployment is 7 workers and about 15 Durable Object
+  namespaces, and the account allows 500 of each. A deleted worker's
+  namespaces go with it, and one that outlives its worker is a page to
+  #error-pulse.
 - **Data does not survive a push.** Manual QA state lives as long as its
   deployment. The PR body's `Sign in ↗` link re-seeds the test person and
   project `pr<n>` on every deploy.

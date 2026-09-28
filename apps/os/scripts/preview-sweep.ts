@@ -29,8 +29,25 @@
 // former parent (preview-config.ts FORMER_PARENTS) from before per-commit deployments, is STALE
 // once its last deploy is more than 24 h old, whatever its name: the day is for a checkout that
 // still deploys one. One whose last deploy is unknown is kept.
+//
+// A FORMER PARENT (`planFormerParents`) with no Worker Preview left on it goes: the worker, its
+// Durable Object namespaces with it, and every KV, R2, D1 and Artifacts namespace under its name —
+// its own (`<parent>-itx`, `-oauth`, `-files`, `-db`, `-repos`) and its previews'
+// (`<parent>-<preview>-<suffix>`), but never a legacy slot's (`os-preview-<n>-repos`, a number where
+// the preview's name would be; the legacy platform's, thousands of repos each), nor one the account
+// has for something else (preview-config.ts accountResourceNames). One still holding a preview
+// waits for the legacy rule to take it.
+//
+// EVERY OTHER WORKER stays: envs.ts's on this account (preview-config.ts accountWorkerNames) and any
+// worker envs.ts does not name (`unmappedWorkers`), which the plan lists for a person to judge.
+//
+// A DURABLE OBJECT NAMESPACE whose worker the account no longer has (`workerlessNamespaces`) is
+// Cloudflare's: a worker's delete takes its namespaces, and the API deletes no namespace alone. The
+// sweep pages it to #error-pulse each night it is still listed at the end of the run
+// (renderWorkerlessNamespacesPage), since each counts toward the account's 500.
 import { PREVIEW_DEPLOYMENT_APPS, previewDeployment } from "../../../envs.ts";
-import { previewPullRequestNumber, slugifyPreviewName } from "./preview-config.ts";
+import { onCallMention } from "../../../scripts/ci/slack.ts";
+import { FORMER_PARENTS, previewPullRequestNumber, slugifyPreviewName } from "./preview-config.ts";
 
 /** What GitHub said about a pull request: "unknown" when the lookup failed. */
 export type PullRequestState = "open" | "closed" | "missing" | "unknown";
@@ -226,4 +243,102 @@ export function planLegacyWorkerPreviewSweep(
         : `last deployed ${hours.toFixed(1)} h ago`,
     };
   });
+}
+
+/** The deployments' resources of `parent`'s name alone: its own (`<parent>-files`, …) and its
+ *  previews' (`<parent>-<preview>-<suffix>`, a suffix of apps/os's `suffixes` less its `os-`), a
+ *  legacy slot's (`<parent>-<n>-…`) never. */
+function isFormerParentResource(
+  parent: string,
+  resource: Pick<PreviewMember, "kind" | "name">,
+  suffixes: Record<PreviewMemberKind, string[]>,
+) {
+  if (!resource.name.startsWith(`${parent}-`)) return false;
+  const rest = resource.name.slice(parent.length + 1);
+  if (["oauth", "itx", "files", "db", "repos"].includes(rest)) return true;
+  return suffixes[resource.kind].some((memberSuffix) => {
+    const suffix = memberSuffix.replace(/^os-/, "");
+    const previewName = rest.endsWith(`-${suffix}`) ? rest.slice(0, -suffix.length - 1) : "";
+    return /^[a-z0-9]+(-[a-z0-9]+)*$/.test(previewName) && !/^\d+$/.test(previewName);
+  });
+}
+
+/** Every former parent the account still has a worker or a resource of, and whether it goes. */
+export function planFormerParents(input: {
+  workers: string[];
+  /** envs.ts's workers on this account: a former parent envs.ts deploys again is not one */
+  deployedWorkerNames: ReadonlySet<string>;
+  accountResourceNames: ReadonlySet<string>;
+  resources: PreviewMember[];
+  suffixes: Record<PreviewMemberKind, string[]>;
+  /** by former parent, how many Worker Previews it still holds */
+  previewsLeft: ReadonlyMap<string, number>;
+}): {
+  name: string;
+  worker: boolean;
+  resources: PreviewMember[];
+  verdict: "stale" | "keep";
+  reason: string;
+}[] {
+  return FORMER_PARENTS.flatMap((parent) => {
+    if (input.deployedWorkerNames.has(parent)) return [];
+    const worker = input.workers.includes(parent);
+    const resources = input.resources.filter(
+      (resource) =>
+        !input.accountResourceNames.has(resource.name) &&
+        isFormerParentResource(parent, resource, input.suffixes),
+    );
+    if (!worker && resources.length === 0) return [];
+    const left = input.previewsLeft.get(parent) || 0;
+    return [
+      {
+        name: parent,
+        worker,
+        resources,
+        verdict: left > 0 ? "keep" : "stale",
+        reason: left > 0 ? `${left} Worker Preview(s) left on it` : "no Worker Preview left on it",
+      },
+    ];
+  });
+}
+
+/** The workers that are neither envs.ts's, a former parent nor a deployment's member: kept, and
+ *  listed for a person to judge. */
+export function unmappedWorkers(
+  workers: string[],
+  deployedWorkerNames: ReadonlySet<string>,
+  deployments: PreviewDeploymentListing[],
+) {
+  const members = new Set(
+    deployments.flatMap((deployment) =>
+      deployment.members.filter(({ kind }) => kind === "worker").map(({ name }) => name),
+    ),
+  );
+  return workers.filter(
+    (name) =>
+      !deployedWorkerNames.has(name) && !FORMER_PARENTS.includes(name) && !members.has(name),
+  );
+}
+
+/** One Durable Object namespace on the account, `script` the worker whose class it holds. */
+export type SweptNamespace = { id: string; name: string; script?: string };
+
+/** The Durable Object namespaces whose worker the account no longer has. */
+export function workerlessNamespaces(namespaces: SweptNamespace[], workers: string[]) {
+  return namespaces.filter(({ script }) => !workers.includes(script || ""));
+}
+
+/** The sweep's page for the workerless namespaces: what to escalate, and to whom. */
+export function renderWorkerlessNamespacesPage(
+  namespaces: SweptNamespace[],
+  jobUrl: string | undefined,
+) {
+  return [
+    `🚨 preview sweep: ${namespaces.length} Durable Object namespace(s) outlived their worker ${onCallMention}`,
+    ...namespaces.map(({ id, name, script }) => `• ${name} (${id}), worker ${script || "unnamed"}`),
+    "A Cloudflare fault, not a commit's: a worker's delete takes its namespaces, and the API deletes no namespace alone. Each counts toward the account's 500: escalate them to Cloudflare with these ids. The sweep checks again each night.",
+    jobUrl && `<${jobUrl}|sweep run>`,
+  ]
+    .filter(Boolean)
+    .join("\n");
 }

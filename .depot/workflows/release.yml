@@ -12,19 +12,13 @@ on:
       trigger_description:
         description: What triggered this release
         required: true
-env:
-  # The image's baked store: dependencies.mjs fingerprints it (docs/depot-ci.md#custom-image)
-  PNPM_CONFIG_STORE_DIR: /home/runner/.pnpm-store
 jobs:
   release:
-    runs-on:
-      size: 2x8
-      image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
+    runs-on: depot-ubuntu-24.04
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          clean: false
           fetch-depth: 0
       - name: Set trigger context
         id: context
@@ -93,9 +87,12 @@ jobs:
 
           echo "echoing changes for debugging:"
           cat changelog.md
-      - name: Reconcile dependencies (baked)
+      - name: Setup
         if: steps.check_changes.outputs.commits != '0'
-        run: node scripts/depot-ci/dependencies.mjs install
+        uses: ./.depot/actions/setup
+        with:
+          # a job whose token can write the repository never reads Depot Cache (docs/depot-ci.md#depot-cache)
+          pnpm-store: none
       - name: Create release
         if: steps.check_changes.outputs.commits != '0'
         env:

@@ -39,8 +39,9 @@ deployedOnly(
       status: 200,
       body: { emailAddress: email },
     });
-    // every outstanding token of the fake's client answers 401 now: the person's secret refreshes
-    await petshopExpireTokens("petshop-default");
+    // every outstanding token the person holds from the fake's client answers 401 now, and no one
+    // else's (the GitHub and Cloudflare rows sign in through the same client): their secret refreshes
+    await petshopExpireTokens("petshop-default", email);
     expect(await gmailProfile(itx, path)).toMatchObject({
       status: 200,
       body: { emailAddress: email },
@@ -118,7 +119,8 @@ deployedOnly(
 
 /** A browser signing in at `path` through a pet-shop fake — `choices` are the person's picks at its
  *  page — following the platform's redirects back for consent: the session cookie, or null when the
- *  provider is not the pet shop. */
+ *  provider is not the pet shop. A sign-in the platform refused or failed lands on `/login?error`
+ *  signed out, and fails the row: it is not a deployment without the fake. */
 async function signInThroughFake(
   path: string,
   choices: Record<string, string>,
@@ -126,14 +128,17 @@ async function signInThroughFake(
   const response = await callbackThroughFake(path, choices);
   if (!response) return null;
   expect(response, await response.clone().text()).toMatchObject({ status: 303 });
-  return response.headers
+  const session = response.headers
     .getSetCookie()
     .map((value) => value.split(";")[0]!)
-    .find((value) => value.startsWith("__Host-itx-session="))!;
+    .find((value) => value.startsWith("__Host-itx-session="));
+  expect(session, `signed in, not sent to ${response.headers.get("location")}`).toBeDefined();
+  return session!;
 }
 
 /** The platform's last answer to a browser signing in at `path` through a pet-shop fake, or null
- *  when the provider is not the pet shop. */
+ *  when the provider is not the pet shop: its first redirect says whose client it is, and a later
+ *  one (Google's consent) goes back to the same provider. */
 async function callbackThroughFake(
   path: string,
   choices: Record<string, string>,
@@ -142,7 +147,8 @@ async function callbackThroughFake(
   for (let hop = 0; hop < 3 && response.status === 302; hop++) {
     const cookie = response.headers.getSetCookie()[0]!.split(";")[0]!;
     const authorization = new URL(response.headers.get("location")!);
-    if (authorization.origin !== petshopBaseUrl()) return null;
+    if (hop === 0 && authorization.origin !== petshopBaseUrl()) return null;
+    expect(authorization).toMatchObject({ origin: petshopBaseUrl() });
     for (const [key, value] of Object.entries(choices)) authorization.searchParams.set(key, value);
     const consent = await fetch(authorization, { redirect: "manual" });
     expect(consent, await consent.clone().text()).toMatchObject({ status: 302 });

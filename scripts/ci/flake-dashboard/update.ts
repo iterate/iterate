@@ -6,14 +6,16 @@
 //   doppler run --project _shared --config preview -- pnpm tsx scripts/ci/flake-dashboard/update.ts --dry-run
 //
 // --dry-run prints the body instead of writing the issue; locally it finds the issue with `gh`'s
-// token (GH_TOKEN). The issue is written as the iterate GitHub App: with GITHUB_APP_ID and
-// GITHUB_APP_PRIVATE_KEY set, the writer mints an installation token that can only write issues in
+// token (GH_TOKEN). The issue is written as the iterate GitHub App, the platform's own: with
+// APP_CONFIG set (Doppler os/prd, beside APP_CONFIG_SECRETS__KEY), the writer takes the App's id and
+// key from its `integrations.github` and mints an installation token that can only write issues in
 // this repository. The Depot app's job token has no Issues permission.
 import { createSign } from "node:crypto";
 import type { Octokit } from "@octokit/rest";
 import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
 import { createCli } from "trpc-cli";
 import { z } from "zod";
+import { parseAppConfig } from "../../../apps/os/src/app-config.ts";
 import { ciBucketEnvs } from "../../../envs.ts";
 import { createOctokit } from "../github.ts";
 import { DASHBOARD_MARKER, renderDashboard } from "./dashboard.ts";
@@ -34,21 +36,28 @@ export default async function update(
   const apiToken = process.env.CLOUDFLARE_API_TOKEN;
   if (!apiToken)
     throw new Error("CLOUDFLARE_API_TOKEN (Doppler _shared/preview) reads the CI bucket");
-  const app =
-    process.env.GITHUB_APP_ID && process.env.GITHUB_APP_PRIVATE_KEY
-      ? await iterateAppIssuesToken({
-          appId: process.env.GITHUB_APP_ID,
-          privateKey: process.env.GITHUB_APP_PRIVATE_KEY,
-          owner,
-          repo,
-        })
-      : undefined;
+  const iterateApp = process.env.APP_CONFIG
+    ? parseAppConfig({
+        APP_CONFIG: process.env.APP_CONFIG,
+        APP_CONFIG_SECRETS__KEY: process.env.APP_CONFIG_SECRETS__KEY,
+      }).integrations.github
+    : undefined;
+  const app = iterateApp
+    ? await iterateAppIssuesToken({
+        appId: iterateApp.appId,
+        privateKey: iterateApp.privateKey.exposeSecret(),
+        owner,
+        repo,
+      })
+    : undefined;
   if (app)
     console.log(
       `[flake-dashboard] iterate app token for ${app.repositories.join(", ")}: ${JSON.stringify(app.permissions)}`,
     );
   else if (!dryRun)
-    throw new Error("GITHUB_APP_ID and GITHUB_APP_PRIVATE_KEY are required to write the dashboard");
+    throw new Error(
+      "APP_CONFIG with integrations.github (Doppler os/prd) is required to write the dashboard",
+    );
   const github = createOctokit(app?.token || process.env.GH_TOKEN || process.env.GITHUB_TOKEN);
 
   const runs = await readSuiteRuns({
@@ -106,9 +115,7 @@ export async function iterateAppIssuesToken(input: {
     exp: now + 540,
     iss: input.appId,
   })}`;
-  const signature = createSign("RSA-SHA256")
-    .update(unsigned)
-    .sign(input.privateKey.replaceAll("\\n", "\n"), "base64url");
+  const signature = createSign("RSA-SHA256").update(unsigned).sign(input.privateKey, "base64url");
   const github = async (path: string, body?: object) => {
     const response = await fetch(`https://api.github.com${path}`, {
       method: body ? "POST" : "GET",

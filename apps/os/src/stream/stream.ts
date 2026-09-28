@@ -62,7 +62,8 @@ const READ_PAGE_MAX_EVENTS = 1000;
 export const RECENT_EPHEMERALS_BUDGET_CHARS = 1024 * 1024;
 
 /** What a PAUSED stream still accepts: the platform's own records (a paused stream still records
- *  its wake, its delivery ladder still ends, its alarm passes stay observable) and the pause/resume
+ *  its wake, its delivery ladder still ends, its alarm passes stay observable, a script it started
+ *  still closes) and the pause/resume
  *  pair itself (it must always accept its own resume). */
 const PAUSE_EXEMPT_EVENT_TYPES = new Set([
   ...PLATFORM_ONLY_EVENT_TYPES,
@@ -72,8 +73,6 @@ const PAUSE_EXEMPT_EVENT_TYPES = new Set([
   "events.iterate.com/itx/aborted",
   "events.iterate.com/itx/facet-aborted",
   "events.iterate.com/itx/schedule-cancelled",
-  // the runner's own record of a run's end — a paused stream must still close a script it started
-  "events.iterate.com/itx/run-settled",
   // a child's announcement — a paused ancestor must still learn which contexts exist below it
   "events.iterate.com/itx/child-created",
 ]);
@@ -350,7 +349,12 @@ export class Stream {
     const freshEphemerals: { event: StreamEvent; chars: number }[] = []; // for the ring, once the batch lands
     let throughOffset = afterOffset;
     for (const event of events) {
-      const { offset: expectedOffset, ...eventInput } = event;
+      const { offset: expectedOffset, ...input } = event;
+      // WHERE IT CAME FROM, on every event: a writer's is the platform's stamp (caller.ts
+      // `stampCaller`), and one without — the platform's own records — came from this context.
+      const eventInput = input.source?.origin
+        ? input
+        : { ...input, source: { ...input.source, origin: this.#path } };
       // IDEMPOTENCY: a key already in the log (or earlier in this batch) answers with THAT event and
       // consumes no offset; a different body under the same key refuses the whole batch.
       let existingEvent = eventInput.idempotencyKey

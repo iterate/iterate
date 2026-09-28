@@ -18,8 +18,12 @@
 // the rows from what the jobs kept, the suite summary beside the e2e jobs' flake records
 // (`flake-records-<suite>-attempt-<id>`) and the real-model job's telemetry
 // (`os-real-model-telemetry`). A suite whose run proves nothing (no results, a runner that did not
-// finish, one of its rows not run) is a BROKEN PROBE: it pages nothing and fails the job that judged
-// it. A run a person cancelled, or a push a newer one replaced in the queue, is left out.
+// finish, one of its rows not run) is a BROKEN PROBE. Real-model e2e's pages nothing and fails the
+// health job. Slow e2e rows' is a state of its own, `broken`, paged ⚪ on its change of state like a
+// verdict, and fails nothing: Main OS e2e's page job reports on the commit its run tested, where red
+// reads as "this commit broke main e2e", and main e2e's verdict comes from the jobs whatever the slow
+// rows' summary says. A run a person cancelled, or a push a newer one replaced in the queue, is left
+// out.
 import { z } from "zod";
 import { FlakeSuiteSummary } from "@iterate-com/shared/test-support/flake-suite-summary";
 import {
@@ -38,11 +42,15 @@ export const MAIN_SUITES = ["main e2e", "slow e2e rows"] as const;
 const SUITES = [...MAIN_SUITES, "real-model e2e"] as const;
 const Verdict = z.enum(["green", "red"]);
 type Verdict = z.infer<typeof Verdict>;
+/** A suite's state as the channel was last told it: its verdict, or `broken` for a run that proved
+ *  nothing about it (slow e2e rows only). */
+const SuiteState = z.enum(["green", "red", "broken"]);
+export type SuiteState = z.infer<typeof SuiteState>;
 
 /** What the checks remember between runs, in the state of the job that pages them (./health.ts):
- *  each suite's last verdict, and the newest run of each workflow judged. */
+ *  each suite's last state, and the newest run of each workflow judged. */
 export const E2eMemory = z.object({
-  suites: z.partialRecord(z.enum(SUITES), Verdict),
+  suites: z.partialRecord(z.enum(SUITES), SuiteState),
   judgedAt: z.partialRecord(z.enum(["Main OS e2e", "OS real model"]), z.iso.datetime()),
 });
 export type E2eMemory = z.infer<typeof E2eMemory>;
@@ -165,21 +173,30 @@ export function telemetryRows(
   );
 }
 
-/** The page for a change of state, or null; on a test page, the suite's verdict whatever it was.
- *  Pure. */
+/** The page for a change of state, or null; on a test page, the suite's state whatever it was: ⚪
+ *  `broken` naming why its run proved nothing, which mentions nobody. Pure. */
 export function suitePage(input: {
   suite: (typeof SUITES)[number];
-  previous: Verdict | undefined;
-  verdict: Verdict | undefined;
+  previous: SuiteState | undefined;
+  verdict: SuiteState | undefined;
   commit: { sha: string; subject: string };
   failedJobs: string[];
   failingRows: string[];
+  /** Why the run proved nothing, for a `broken` verdict. */
+  broken?: string;
   runUrl?: string;
   testRun: boolean;
 }): Page | null {
   if (!input.verdict) return null;
   if (!input.testRun && input.verdict === (input.previous || "green")) return null;
   const commit = commitText(input.commit);
+  if (input.verdict === "broken")
+    return {
+      tone: "none",
+      headline: `${input.suite} unjudged at ${commit}`,
+      details: [`broken probe: ${input.broken}`],
+      link: input.runUrl,
+    };
   if (input.verdict === "green")
     return {
       tone: "green",
@@ -267,7 +284,8 @@ async function judgeEachRun(
 
 /** Judge each push run of Main OS e2e that `memory` has not, the settled ones and then `current`
  *  (`judgeEachRun`): main e2e from its jobs, and its slow rows from its E2E tests job's suite
- *  summary, which a job its deploy's failure skipped never wrote. When Depot still lists a deploy or
+ *  summary, which a suite whose deploy did not finish never wrote (and `broken` when the E2E tests
+ *  job ran but its summary proves nothing about them). When Depot still lists a deploy or
  *  suite job of `current` as queued or running, that run has not settled, and judging it throws. An
  *  older run Depot lists as finished or failed with such a job (one Depot failed before its jobs
  *  started) has no verdict, and the state moves past it. */
@@ -293,15 +311,19 @@ export async function checkMainE2e(input: {
         throw new Error(
           `${run.workflowId} has not settled: Depot lists ${unsettled.jobKey} as ${unsettled.status}`,
         );
+      // A deploy that did not finish is the run's verdict alone: the suites start beside it and
+      // fail waiting for it (main-os-e2e.yml), with no preview to test, or were skipped behind it.
+      const deploy = mainJobs.find((job) => job.jobKey === "main-os-e2e.yml:deploy");
+      const judgedJobs = deploy && deploy.status !== "finished" ? [deploy] : mainJobs;
       const results = Object.fromEntries(
-        mainJobs.map((job) => [job.jobDisplayName || job.jobKey, job.status]),
+        judgedJobs.map((job) => [job.jobDisplayName || job.jobKey, job.status]),
       );
       // A workflow Depot failed before any job ran has no job to name.
       const verdict: Verdict | undefined = mainJobs.length === 0 ? "red" : mainE2eVerdict(results);
-      // A job that ran (an attempt) and left no summary proves nothing; one its deploy's failure
-      // skipped (no attempt) judges nothing.
+      // A job that ran (an attempt) and left no summary proves nothing; one that never had a preview
+      // judges nothing.
       const summary = async ({ jobKey, suite }: (typeof mainE2eRecords.jobs)[number]) => {
-        const newest = jobs
+        const newest = judgedJobs
           .find((job) => job.jobKey === jobKey)
           ?.attempts.toSorted((a, b) => a.attempt - b.attempt)
           .at(-1);
@@ -325,6 +347,7 @@ export async function checkMainE2e(input: {
           : [],
       );
       const slow = e2e.ran ? suiteVerdict(summaryRows(e2e.summary), { tag: "slow" }) : undefined;
+      const slowState = slow && ("broken" in slow ? "broken" : slow.verdict);
       console.log(JSON.stringify({ run: run.workflowId, results, verdict, failingRows, slow }));
       const commit = { sha: run.sha, subject: await input.subject(run.sha) };
       const pages = [
@@ -339,14 +362,14 @@ export async function checkMainE2e(input: {
           testRun: input.testRun,
         }),
         slow &&
-          !("broken" in slow) &&
           suitePage({
             suite: "slow e2e rows",
             previous: suites["slow e2e rows"],
-            verdict: slow.verdict,
+            verdict: slowState,
             commit,
             failedJobs: [],
-            failingRows: slow.failingRows,
+            failingRows: "broken" in slow ? [] : slow.failingRows,
+            broken: "broken" in slow ? slow.broken : undefined,
             runUrl: depotWorkflowUrl(run.workflowId),
             testRun: input.testRun,
           }),
@@ -357,9 +380,9 @@ export async function checkMainE2e(input: {
         suites: {
           ...suites,
           "main e2e": verdict || suites["main e2e"],
-          "slow e2e rows": slow && !("broken" in slow) ? slow.verdict : suites["slow e2e rows"],
+          "slow e2e rows": slowState || suites["slow e2e rows"],
         },
-        failures: slow && "broken" in slow ? [`slow e2e rows: broken probe: ${slow.broken}`] : [],
+        failures: [],
       };
     },
   );

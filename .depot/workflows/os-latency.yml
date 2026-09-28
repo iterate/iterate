@@ -46,28 +46,19 @@ env:
   # THE PREFIX of the guard's deployments, `latency-<sha7>` (apps/os/scripts/preview.ts reads it;
   # preview-sweep.ts CI_WORKFLOW_PREVIEWS knows it).
   PREVIEW_NAME: latency
-  # The image's baked store: dependencies.mjs fingerprints it (docs/depot-ci.md#custom-image)
-  PNPM_CONFIG_STORE_DIR: /home/runner/.pnpm-store
 
 jobs:
   measure:
     name: measure
-    runs-on:
-      size: 4x16
-      image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
+    runs-on: depot-ubuntu-24.04-4
     timeout-minutes: 45
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          clean: false
           ref: ${{ github.sha }}
-      - name: Reconcile dependencies (baked)
-        run: node scripts/depot-ci/dependencies.mjs install
-      - name: Setup Doppler (baked CLI)
-        run: doppler setup --config preview --project os
-        env:
-          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+      - name: Setup
+        uses: ./.depot/actions/setup
       # `<prefix>-<sha7>` of main's commit: a fresh deployment when main moved since the last run,
       # the same one deployed again in place when it has not (apps/os/scripts/preview.ts)
       - name: Deploy main's commit
@@ -76,7 +67,7 @@ jobs:
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           PREVIEW_APPS: none
-        run: doppler run -- pnpm preview deploy
+        run: doppler run --project os --config preview -- pnpm preview deploy
       # The workflow's deployments before this one, deleted now this one is ready
       # (apps/os/scripts/preview.ts `cleanup-superseded`); never this run's verdict.
       - name: Delete the superseded deployments
@@ -85,7 +76,7 @@ jobs:
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           PREVIEW_DEPLOYMENT: ${{ steps.deploy.outputs.deployment }}
-        run: doppler run -- pnpm preview cleanup-superseded
+        run: doppler run --project os --config preview -- pnpm preview cleanup-superseded
       # The perf suite alone on the deployment; its verdict is the health job's, so a missed budget
       # does not stop the job here. Its credentials are Doppler os/preview's APP_CONFIG
       # (e2e/support/global-setup.ts).
@@ -95,7 +86,7 @@ jobs:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         run: |-
           export WORKER_BASE_URL="$(node -p 'require("./output/preview.json").url')"
-          doppler run -- pnpm perf:run --reporter=default --reporter=json --outputFile.json=output/perf-report.json \
+          doppler run --project os --config preview -- pnpm perf:run --reporter=default --reporter=json --outputFile.json=output/perf-report.json \
             || echo "the perf suite exited $?: the health job judges its report"
       - name: Keep the perf report
         if: always()

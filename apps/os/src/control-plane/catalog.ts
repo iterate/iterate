@@ -6,16 +6,16 @@
 // moment ago, a link someone else just used). Why a write was refused is read back later in the same
 // batch, never decided by a read before it. The clock comes in as `now` (epoch ms), and an
 // invitation's token already hashed (session.ts mints and hashes it).
+import { INTEGRATION_PROVIDER_NAMES } from "iterate/api";
 import { codedError } from "iterate/lib";
 import { createD1Client, SqlfuError } from "sqlfu";
 import type { Caller as PrincipalCaller } from "../caller.ts";
 import type { OrganizationRole } from "../organization/contract.ts";
-import { IDENTITY_PROVIDER_NAMES, type IdentityProvider } from "./contract.ts";
+import type { IdentityProvider } from "./contract.ts";
 import { batch } from "./db/index.ts";
 import {
   claimHostname,
   clearPrimaryHostname,
-  primaryHostnameOf,
   projectsByHostnames,
   releaseHostname,
   setPrimaryHostname,
@@ -54,9 +54,11 @@ import {
   upsertMembership,
 } from "./db/queries/.generated/organizations.sql.ts";
 import {
+  deletedProject,
   deleteProject,
   firstOrganizationOf,
   insertAdminOrganization,
+  insertDeletedProject,
   insertFirstOrganizationProject,
   insertMemberProject,
   insertPersonalOrganization,
@@ -102,15 +104,20 @@ const newId = (prefix: "user" | "org" | "prj" | "inv" | "acc") =>
 export type UserRecord = { id: string; email: string };
 /** A project, addressed by `id` everywhere (the context's name, a grant's list, the API); `slug` is
  *  the DNS label of its hostnames; `role` is the reader's, when read through their memberships. A
- *  row is inserted once and never updated, and its copies rely on that: the edge's memo (edge.ts)
- *  and a context's own `project-slug` (iterate-context-durable-object.ts `#projectSlug`) — a slug
- *  that could change must reach them. */
+ *  row is only ever inserted or deleted: a context's own `project-slug` relies on that
+ *  (iterate-context-durable-object.ts `#projectSlug`; a deletion destroys that storage too), and
+ *  the edge keeps a row `KEPT_MS` (edge.ts). */
 export type ProjectRecord = {
   id: string;
   slug: string;
   orgId: string;
   role?: OrganizationRole;
 };
+/** A project as one read of its row answers it (`project`, `projectByHostname`): the record and
+ *  its primary hostname (project/contract.ts `primaryHostname`) while the project still holds its
+ *  claim, else null — so the edge's redirect and `itx.url` read it with the row (edge.ts
+ *  `getProject`). */
+export type ProjectRow = ProjectRecord & { primaryHostname: string | null };
 /** An organization, with how many projects it holds and, read through a membership, the role. */
 export type OrganizationRecord = {
   id: string;
@@ -187,8 +194,14 @@ export class ControlPlaneDatabase {
     return members.map((member) => ({ ...member, createdAt: member.createdAt ?? null }));
   }
   /** A project by id or by slug (a slug never holds the `_` every id does, so at most one row). */
-  async project(ref: string): Promise<ProjectRecord | null> {
-    return (await projectsByRef(this.#client, { id: ref, slug: ref }))[0] ?? null;
+  async project(ref: string): Promise<ProjectRow | null> {
+    const [row] = await projectsByRef(this.#client, { id: ref, slug: ref });
+    return row ? projectRow(row) : null;
+  }
+  /** Whether `projectId` names a project that was deleted and is not held again (a seed restores
+   *  one under its id): a root context is never born for it (iterate-context-durable-object.ts). */
+  async deletedProject(projectId: string): Promise<boolean> {
+    return Boolean(await deletedProject(this.#client, { id: projectId }));
   }
   /** Every project, oldest first. */
   projects(): Promise<ProjectRecord[]> {
@@ -198,11 +211,11 @@ export class ControlPlaneDatabase {
    *  static rule names, over iterate/project-ingress `customHostnameCandidatesOf` in its order. */
   async projectByHostname(
     hostnames: readonly string[],
-  ): Promise<{ hostname: string; project: ProjectRecord } | null> {
+  ): Promise<{ hostname: string; project: ProjectRow } | null> {
     const held = await projectsByHostnames(this.#client, { hostnames: [...hostnames] });
     for (const hostname of hostnames) {
       const row = held.find((candidate) => candidate.hostname === hostname);
-      if (row) return { hostname, project: { id: row.id, slug: row.slug, orgId: row.orgId } };
+      if (row) return { hostname, project: projectRow(row) };
     }
     return null;
   }
@@ -329,7 +342,7 @@ export class ControlPlaneDatabase {
     ]);
     const holder = rowsOf<identityUser.Result>(results, 1)[0];
     if (holder?.id === userId) return { id: holder.id, email: holder.email };
-    const name = IDENTITY_PROVIDER_NAMES[provider];
+    const name = INTEGRATION_PROVIDER_NAMES[provider];
     throw codedError(
       "IDENTITY_CONFLICT",
       holder
@@ -604,7 +617,7 @@ export class ControlPlaneDatabase {
     caller: Caller,
     input: { project: string; organizationId?: string; restoreProjectId?: string },
     now: number,
-  ): Promise<ProjectRecord & { mintedOrganization?: string }> {
+  ): Promise<ProjectRow & { mintedOrganization?: string }> {
     const restoring = input.restoreProjectId;
     // oxlint-disable-next-line iterate/simple-truthiness-check -- an empty restore id is refused, never read as "mint a new one"
     if (restoring !== undefined) {
@@ -704,6 +717,8 @@ export class ControlPlaneDatabase {
       // its connections' webhook routes go with it, or an account it held could never be routed
       // to another project (`routeIntegration`: first owner wins)
       releaseRoutesOfDeletedProject.query({ projectId: project.id }),
+      // its id stays behind once the row is gone, so its root is never born again (`deletedProject`)
+      insertDeletedProject.query({ id: project.id }),
     ]);
     if (changed(results[0])) return project;
     throw (
@@ -840,15 +855,12 @@ export class ControlPlaneDatabase {
     await releaseIntegrationRoutes(this.#client, { projectId, path });
   }
 
-  /** Set a project's primary hostname, or clear it with null. */
+  /** Set a project's primary hostname, or clear it with null: the project's row reads it back
+   *  (`ProjectRow`). */
   async setPrimaryHostname(projectId: string, hostname: string | null): Promise<void> {
     await (hostname
       ? setPrimaryHostname(this.#client, { projectId, hostname })
       : clearPrimaryHostname(this.#client, { projectId }));
-  }
-  /** A project's primary hostname, while the project still holds its claim; null for none. */
-  async primaryHostnameOf(projectId: string): Promise<string | null> {
-    return (await primaryHostnameOf(this.#client, { projectId }))?.hostname ?? null;
   }
 
   #requireOperator(caller: Caller, what: string): void {
@@ -874,6 +886,15 @@ export class ControlPlaneDatabase {
  *  SQL's own column aliases, which the queries spell as that `Result`'s keys (db/index.ts). */
 const rowsOf = <T>(results: D1Result[], index: number) => results[index]!.results as T[];
 
+/** A row of `projectsByRef` or `projectsByHostnames` as its `ProjectRow`: D1 answers null for a
+ *  project with no primary hostname, which sqlfu types optional. */
+const projectRow = (row: projectsByRef.Result): ProjectRow => ({
+  id: row.id,
+  slug: row.slug,
+  orgId: row.orgId,
+  primaryHostname: row.primaryHostname || null,
+});
+
 /** Whether a write of a batch changed a row: its guard let it through. */
 const changed = (result: D1Result | undefined) => Boolean(result?.meta.changes);
 
@@ -896,11 +917,11 @@ function ownerRefusal(
  *  now or before (a restore of the same archive again converges); in any other organization the
  *  name is taken; a restored id held under another slug is a conflict. */
 function created(
-  held: ProjectRecord[],
+  held: projectsByRef.Result[],
   wanted: { id: string; slug: string },
   target: string | undefined,
   restoring: string | undefined,
-): ProjectRecord {
+): ProjectRow {
   const bySlug = held.find((row) => row.slug === wanted.slug);
   if (bySlug && bySlug.orgId !== target)
     throw codedError("PROJECT_NAME_TAKEN", `The project name '${wanted.slug}' is already taken.`);
@@ -909,7 +930,7 @@ function created(
       "IDENTITY_CONFLICT",
       `The project '${wanted.slug}' exists with id ${bySlug.id}, not the restored id ${restoring}.`,
     );
-  if (bySlug) return bySlug;
+  if (bySlug) return projectRow(bySlug);
   const byId = held.find((row) => row.id === wanted.id);
   if (byId)
     throw codedError(

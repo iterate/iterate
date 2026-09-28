@@ -42,10 +42,9 @@ Workflow-run and job-attempt history goes to PostHog from an hourly sync
 - GitHub repo: `iterate/iterate`
 - Workflow files: `.depot/workflows/*.yml`
 - CI scripts: `scripts/ci/*.ts`
-- Custom image:
-  `0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree`;
-  Kit Firmware's build legs run on their own,
-  `0p91s0lz49.registry.depot.dev/iterate-esp-idf-ci:node24`
+- Runners: Depot's stock image, by label, and no image of our own; each job's setup is
+  `.depot/actions/setup` and its caches are in Depot Cache
+  ([Setup on Depot's stock image](#setup-on-depots-stock-image))
 - `DOPPLER_TOKEN` is the only Depot CI secret. Application and service
   credentials live in Doppler; GitHub supplies a short-lived job token.
 - Non-secret variables are managed with `depot ci vars`.
@@ -67,31 +66,29 @@ Anything else that needs GitHub-only triggers, such as `pull_request_target`, `i
 
 ## Workflows
 
-| File                         | Runs on                                             | What it does                                                                                                     |
-| ---------------------------- | --------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
-| `lint-typecheck.yml`         | PR, main push, dispatch                             | **Lint and Typecheck** (required): lint, typecheck, format check, knip                                           |
-| `test.yml`                   | PR, main push                                       | **Test** (required): `pnpm test`, then the Kit firmware host tests                                               |
-| `loc-report.yml`             | PR, dispatch                                        | The LOC table in the PR body                                                                                     |
-| `pr-dashboard.yml`           | PR opened, reopened, ready, drafted or closed       | The Slack PR update and the daily PR dashboard                                                                   |
-| `preview-os.yml`             | Every PR, dispatch                                  | **Preview OS**: Deploy preview, then **E2E tests** and **Browser specs**, then CI trace                          |
-| `preview-delete.yml`         | Such a PR closing, dispatch                         | Deletes the PR's deployments                                                                                     |
-| `preview-sweep.yml`          | Nightly, dispatch                                   | Deletes superseded, stale and half-made deployments                                                              |
-| `main-os-e2e.yml`            | Main push touching the preview paths, dispatch      | **Main OS e2e**: the pushed commit deployed as `main-<sha7>`, E2E tests, Browser specs, cleanup, its page, trace |
-| `deploy-os.yml`              | Main push touching what OS ships, dispatch          | **Deploy OS**: production, then the project-host check                                                           |
-| `deploy-<app>.yml`           | Main push touching what the app ships, dispatch     | Deploy of Dash, Agents, Notes, Voice, Kit, SPA, dummy-petshop or ci-reports                                      |
-| `kit-firmware.yml`           | Firmware PR and main push, daily, dispatch          | Builds the changed boards; main publishes their releases                                                         |
-| `build-preview-ci-image.yml` | Main push touching install inputs, weekly, dispatch | Bakes the CI image ([Custom Image](#custom-image)) when the live image's stamp is stale                          |
-| `build-esp-idf-image.yml`    | Main push touching `esp-idf.sh`, weekly, dispatch   | Bakes Kit Firmware's legs' image: Node 24 and ESP-IDF ([Kit firmware releases](#kit-firmware-releases))          |
-| `prd-fault-alarm.yml`        | Every 15 minutes, dispatch                          | Reads production's Workers Logs and pages #error-pulse on faults                                                 |
-| `health.yml`                 | Hourly, dispatch                                    | **Health**: judges the runs below and PR time to green; one #error-pulse message per change of state             |
-| `os-crash-hunt.yml`          | Nightly, dispatch                                   | The opt-in isolate-ceiling rows against production                                                               |
-| `os-e2e-soak.yml`            | Dispatch                                            | The e2e suite N times against one deployed worker, each run then the perf budgets                                |
-| `os-latency.yml`             | Every 3 hours, dispatch                             | **OS latency**: the perf suite against main's commit deployed as `latency-<sha7>`, its report for the health job |
-| `os-real-model.yml`          | Daily, main push to the agents runtime, dispatch    | **OS real model**: the `REAL:` rows against main's commit deployed as `real-model-<sha7>`, for the health job    |
-| `flake-dashboard.yml`        | Hourly, dispatch                                    | Recomputes [#2580](https://github.com/iterate/iterate/issues/2580) from the flake records in R2                  |
-| `ci-telemetry.yml`           | Hourly, dispatch                                    | One PostHog event per Depot workflow run and job attempt                                                         |
-| `release.yml`                | Daily, dispatch                                     | A dated `v…` release with a changelog when main moved                                                            |
-| `shadcn-drift.yml`           | PR touching the vendored shadcn files, dispatch     | **shadcn drift**: fails when a vendored file differs from `shadcn add` (packages/ui/AGENTS.md)                   |
+| File                  | Runs on                                          | What it does                                                                                                     |
+| --------------------- | ------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------- |
+| `lint-typecheck.yml`  | PR, main push, dispatch                          | **Lint and Typecheck** (required): lint, typecheck, format check, knip                                           |
+| `test.yml`            | PR, main push, dispatch                          | **Test** (required): `pnpm test`, and beside it the Kit firmware host tests                                      |
+| `loc-report.yml`      | PR, dispatch                                     | The LOC table in the PR body                                                                                     |
+| `pr-dashboard.yml`    | PR opened, reopened, ready, drafted or closed    | The Slack PR update and the daily PR dashboard                                                                   |
+| `preview-os.yml`      | Every PR, dispatch                               | **Preview OS**: Deploy preview, beside it **E2E tests** and **Browser specs**, then CI trace                     |
+| `preview-delete.yml`  | Such a PR closing, dispatch                      | Deletes the PR's deployments                                                                                     |
+| `preview-sweep.yml`   | Nightly, dispatch                                | Deletes superseded, stale and half-made deployments, the legacy Worker Previews and the former parents           |
+| `main-os-e2e.yml`     | Main push touching the preview paths, dispatch   | **Main OS e2e**: the pushed commit deployed as `main-<sha7>`, E2E tests, Browser specs, cleanup, its page, trace |
+| `deploy-os.yml`       | Main push touching what OS ships, dispatch       | **Deploy OS**: production, then the project-host check                                                           |
+| `deploy-<app>.yml`    | Main push touching what the app ships, dispatch  | Deploy of Dash, Agents, Notes, Voice, Kit, SPA, dummy-petshop, ci-reports or iterate-com-inbound-email           |
+| `kit-firmware.yml`    | Firmware PR and main push, daily, dispatch       | Builds the changed boards; main publishes their releases                                                         |
+| `prd-fault-alarm.yml` | Every 15 minutes, dispatch                       | Reads production's Workers Logs and pages #error-pulse on faults                                                 |
+| `health.yml`          | Hourly, dispatch                                 | **Health**: judges the runs below and PR time to green; one #error-pulse message per change of state             |
+| `os-crash-hunt.yml`   | Nightly, dispatch                                | The opt-in isolate-ceiling rows against production                                                               |
+| `os-e2e-soak.yml`     | Dispatch                                         | The e2e suite N times against one deployed worker, each run then the perf budgets                                |
+| `os-latency.yml`      | Every 3 hours, dispatch                          | **OS latency**: the perf suite against main's commit deployed as `latency-<sha7>`, its report for the health job |
+| `os-real-model.yml`   | Daily, main push to the agents runtime, dispatch | **OS real model**: the `REAL:` rows against main's commit deployed as `real-model-<sha7>`, for the health job    |
+| `flake-dashboard.yml` | Hourly, dispatch                                 | Recomputes [#2580](https://github.com/iterate/iterate/issues/2580) from the flake records in R2                  |
+| `ci-telemetry.yml`    | Hourly, dispatch                                 | One PostHog event per Depot workflow run and job attempt                                                         |
+| `release.yml`         | Daily, dispatch                                  | A dated `v…` release with a changelog when main moved                                                            |
+| `shadcn-drift.yml`    | PR touching the vendored shadcn files, dispatch  | **shadcn drift**: fails when a vendored file differs from `shadcn add` (packages/ui/AGENTS.md)                   |
 
 Each file's header comment and `on:` block are the details.
 
@@ -158,9 +155,10 @@ Agents babysitting a PR: the wait-loop rules are in
 
 Never open a pull request only to run CI, and never run CI on main's commit. Push a scratch branch
 (main plus an empty commit, or the commit to soak) under its own name and run against its head.
-`depot ci run` runs any workflow file, whatever its `on:` (Test has no `workflow_dispatch`);
-`depot ci dispatch` runs one that has `workflow_dispatch`, with inputs. Auth: `depot login`, or the
-organization token from Doppler:
+`depot ci run` runs any workflow file, whatever its `on:`; `depot ci dispatch` runs one that has
+`workflow_dispatch`, with inputs. Only a dispatch reaches Depot Cache, so soak by dispatch: under
+`ci run` every restore misses, and a job installs from the npm registry. Auth:
+`depot login`, or the organization token from Doppler:
 
 ```bash
 export DEPOT_TOKEN="$(doppler secrets get DEPOT_CI_TELEMETRY_TOKEN --plain --project _shared --config preview)"
@@ -171,7 +169,7 @@ cd ../ci-soak-<name>
 git commit --allow-empty -m "ci soak <name>"
 git push -u origin HEAD        # also creates the local origin/ci-soak/<name>
 
-depot ci run --org 0p91s0lz49 --workflow .depot/workflows/test.yml
+depot ci dispatch --org 0p91s0lz49 --repo iterate/iterate --workflow test.yml --ref ci-soak/<name>
 depot ci run --org 0p91s0lz49 --workflow .depot/workflows/lint-typecheck.yml
 depot ci dispatch --org 0p91s0lz49 --repo iterate/iterate --workflow os-e2e-soak.yml \
   --ref ci-soak/<name> --input runs=20 --input preview=soak-<name>
@@ -222,17 +220,21 @@ scratch run's test evidence goes to R2 under `trust=pr`. `status` and `artifacts
 
 ### Soak: N runs, then read them
 
-Test or Lint and Typecheck: N `depot ci run`s side by side. The e2e suite: `os-e2e-soak.yml`'s
-`runs` input, not N dispatches. Preview OS dispatches that name no PR share one concurrency group,
-`preview-os-none`, where a newer pending run replaces an older one.
+Lint and Typecheck: N `depot ci run`s side by side. Test: dispatches, one run per branch at a time,
+since each cancels the one before it; for runs side by side, push several soak branches. The e2e
+suite: `os-e2e-soak.yml`'s `runs` input, not N dispatches. Preview OS dispatches that name no PR
+share one concurrency group, `preview-os-none`, where a newer pending run replaces an older one.
 
 ```bash
 for i in $(seq 10); do
-  depot ci run --org 0p91s0lz49 --workflow .depot/workflows/test.yml | awk '/^Run:/ {print $2}'
+  depot ci run --org 0p91s0lz49 --workflow .depot/workflows/lint-typecheck.yml | awk '/^Run:/ {print $2}'
 done | tee soak-runs.txt
 
-# the tally; --name takes the workflow's name: ("Lint and Typecheck"). Rerun until none is queued or running.
-depot ci workflow list --org 0p91s0lz49 --repo iterate/iterate --name Test \
+# Test: one at a time. Dispatch the next once `depot ci status` says the last one finished.
+depot ci dispatch --org 0p91s0lz49 --repo iterate/iterate --workflow test.yml --ref ci-soak/<name>
+
+# the tally; --name takes the workflow's name: ("Test"). Rerun until none is queued or running.
+depot ci workflow list --org 0p91s0lz49 --repo iterate/iterate --name "Lint and Typecheck" \
   --sha "$(git rev-parse HEAD)" -n 200 --output json \
   --status queued --status running --status finished --status failed --status cancelled |
   jq -r 'group_by(.status)[] | "\(.[0].status) \(length)"'
@@ -303,6 +305,9 @@ depot ci dispatch --org 0p91s0lz49 --repo iterate/iterate \
 The job runs the deployed ref's own scripts, so a ref from before 2026-09-24 (most rollbacks)
 deploys prd and then fails `Check the project hosts`, whose script lacked `--previous-version`.
 Check the hosts from `main` by hand: `pnpm tsx scripts/ci/prd-post-deploy-check.ts check --dry-run`.
+It also runs the ref's own setup, which a ref from before 2026-09-27 lacks, so the job fails before
+it deploys. Dispatch such a ref with its own workflow instead: `--ref` a branch at that commit and no
+`ref` input, which runs it on the custom image it was written for, still in Depot's registry.
 
 ## Editing Workflows
 
@@ -310,8 +315,8 @@ Edit `.depot/workflows/<name>.yml`, put any real logic in a script under `script
 one-line `pnpm tsx scripts/ci/<script>.ts …`), and validate with `depot ci run` from a scratch
 branch ([Run CI without a PR](#run-ci-without-a-pr)).
 
-- Custom-image jobs declare both `runs-on.size` and `runs-on.image`, and check out with
-  `clean: false`.
+- Every job runs on a stock label and, after its checkout, `uses: ./.depot/actions/setup`
+  ([Setup on Depot's stock image](#setup-on-depots-stock-image)).
 - Jobs that differ only in a value share one definition through YAML anchors (`&suite-steps`, then
   `*suite-steps`), as the suite jobs of Preview OS and Main OS e2e do, each job's `env` holding
   what differs. Merge keys (`<<:`) are not GitHub Actions syntax, so each job still spells out its
@@ -325,8 +330,17 @@ A step inside a `parallel:` block behaves as it would in the list: its `id`,
 `uses` and `with` all hold. Later steps read its `steps.<id>.outcome` and
 outputs, its `$GITHUB_STEP_SUMMARY` lines reach the job's summary, and it shares
 `$RUNNER_TEMP` and the workspace. After a failed step, only the block's steps
-with `always()` run. The test jobs run their evidence uploads in one such block,
-and the report step after the block reads the R2 upload's outcome.
+with `always()` run. The Test job runs Kit's firmware host tests and the evidence
+upload's Doppler fetch beside `pnpm test` in one such block, and the test jobs run their evidence uploads in another; the
+report step after that block reads the R2 upload's outcome.
+
+A condition that calls `hashFiles()` costs the runner about 0.2 s, the job's first
+one about 0.6 s, and a block's conditions are evaluated one at a time before its
+steps start: on a `2x8`, a block of three steps each with `hashFiles()`
+started its first command 0.63 s after the step before, against 0.1 s with plain
+conditions (probe runs `l0k2xd618v`, `prqd1q8n48`, `8d2zn6gshd`, 2026-09-27). The
+test jobs' evidence steps read the finalizer step's outputs instead
+([test evidence](test-evidence.md#what-ci-does)).
 
 ### Reliability defaults
 
@@ -348,86 +362,100 @@ and the report step after the block reads the R2 upload's outcome.
 Runner size follows measured peak CPU and memory. Re-check with `depot ci metrics --run <run-id>`
 before changing a size, and the retries too before adding Playwright workers or shards:
 
-| Size   | Jobs                                                                                                                                                | Evidence                                                                                                                                 |
-| ------ | --------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| `8x32` | Lint and Typecheck (four checks in parallel), Test                                                                                                  | Test's step 80 s p50 against 87 s on a `4x16`. Watch main's Test for a no-log `Sandbox terminated before worker reported completion`     |
-| `4x16` | Deploy OS, Deploy preview, Browser specs (six Playwright workers)                                                                                   | #3258: specs 79/104 s p50/p90 against 96/123 s on a `2x8`; 12+ workers or shards were faster but retried two to four times as many specs |
-| `2x8`  | E2E tests (it waits on a remote preview), client deploys, trace jobs, API-only jobs (LOC report, PR dashboard, Release, Health, Main OS e2e's page) | E2E tests peaked at 1.7 vCPUs on a `4x16`, and took 68 s against 62 s there, for half the price                                          |
+| Size (label)                    | Jobs                                                                                                                                                | Evidence                                                                                                                                                                                                                                                                                                              |
+| ------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `8x32` (`depot-ubuntu-24.04-8`) | Lint and Typecheck (four checks in parallel), Test, Deploy preview (seven client builds side by side)                                               | Test's step 80 s p50 against 87 s on a `4x16`. Watch main's Test for a no-log `Sandbox terminated before worker reported completion`. Deploy preview's builds take 5–7 s against 9–12 s on a `4x16`, and it reaches the readiness gate 21.6/24.6 s p50/p90 after it starts against 25.3/28.4 s (n=5 each, 2026-09-27) |
+| `4x16` (`depot-ubuntu-24.04-4`) | Deploy OS, Browser specs (six Playwright workers), Kit Firmware's legs                                                                              | #3258: specs 79/104 s p50/p90 against 96/123 s on a `2x8`; 12+ workers or shards were faster but retried two to four times as many specs                                                                                                                                                                              |
+| `2x8` (`depot-ubuntu-24.04`)    | E2E tests (it waits on a remote preview), client deploys, trace jobs, API-only jobs (LOC report, PR dashboard, Release, Health, Main OS e2e's page) | E2E tests peaked at 1.7 vCPUs on a `4x16`, and took 68 s against 62 s there, for half the price                                                                                                                                                                                                                       |
 
 ## Kit firmware releases
 
 Kit Firmware (`kit-firmware.yml`) runs on firmware pull requests and main pushes, daily, and on
 dispatch (`devices=all` rebuilds every board after a builder change). Plan picks the boards whose
 inputs changed since their newest `kit-firmware/<device>/<version>` release, each builds in its own
-`2x8` leg, and Publish, the only job with `contents: write`, creates releases on main from the
+`4x16` leg, and Publish, the only job with `contents: write`, creates releases on main from the
 legs' artifacts and checks every new file's bytes through `k.iterate.com`. Deploy Kit builds no
-firmware. The ESP-IDF pin is in `scripts/depot-ci/esp-idf.sh` and each target's
-`dependencies.lock`; the legs run on their own image, `iterate-esp-idf-ci:node24`
-(`build-esp-idf-image.yml` bakes it when the script changes on main, and weekly), and
-`esp-idf.sh ensure` installs from the network, with a warning, only while the image's receipt and
-the script differ. [Kit firmware releases](../apps/kit/README.md#firmware-releases) has the rest.
+firmware. The ESP-IDF pin is in `scripts/ci/esp-idf.sh` and each target's `dependencies.lock`. A
+leg restores that pin's ESP-IDF, for the image's python3, from [Depot Cache](#depot-cache), and
+`esp-idf.sh ensure` installs from the network, with a warning, only when there was none, after which
+a main leg saves it. On a 4x16 a leg restores its 1.06 GB in 7 s and builds a board in 30 s, against
+12–27 s and 48–52 s on a 2x8, for about the same cost.
+[Kit firmware releases](../apps/kit/README.md#firmware-releases) has the rest.
 
-## Custom Image
+## Setup on Depot's stock image
 
-`.depot/workflows/build-preview-ci-image.yml` bakes the shared image with
-`scripts/depot-ci/bake-preview-ci-image.sh`: Node, pnpm, workspace dependencies, Doppler CLI and the
-preview browser, on any sandbox size. It rebuilds when dependency manifests or its bake inputs land
-on `main`, and weekly. A push's run bakes nothing when the commit's fingerprint (below) equals the
-live image's stamp, since every bake makes the next jobs page in a new image; the schedule and a
-dispatch always bake, one at a time per tag. Jobs on the image take their dependencies with
-`node scripts/depot-ci/dependencies.mjs install`: an exact
-baked fingerprint reuses the installed tree without starting pnpm. A mismatch
-or missing receipt runs `pnpm install --frozen-lockfile --prefer-offline`.
-Only the Test job always runs that pnpm command, deliberately: the image loads
-lazily, and the install is what pages the tree in before the first tests (with
-reuse, 5 s test rows timed out in three of three runs). Jobs that consume the
-image must keep the image and checkout behavior, and set the store the image was
-baked with (`PNPM_CONFIG_STORE_DIR: /home/runner/.pnpm-store`), because every
-`pnpm_config_*` variable is part of the fingerprint:
+Every job runs on Depot's stock image, by its label (`depot-ubuntu-24.04`, `-4`, `-8`), and we
+build no image of our own. Every Depot customer runs the stock image, so it boots warm on any host,
+and the files a job installs itself are in the page cache when it reads them. Our own image, gone
+since 2026-09-27, loaded lazily from Depot's storage: 22–42 % of jobs booted it cold, and the work
+then paged the baked tree in, so the suites took 9–11 s from job start to their first test at the
+p50 and 31–44 s at the p90.
 
-```yaml
-runs-on:
-  size: 2x8 # workload-specific
-  image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
-steps:
-  - uses: actions/checkout@v4
-    with:
-      clean: false
-```
+After its checkout, a job runs `uses: ./.depot/actions/setup`, whose steps run one after another
+(Depot never runs a `parallel:` block inside a composite action):
 
-`clean: false` matters because the image contains a preinstalled workspace. A
-clean checkout would delete the baked `node_modules` before `pnpm install` can
-reuse it.
+1. **Start the toolchain** (`scripts/ci/toolchain.sh start`): Node at `.nvmrc`'s version from the
+   stock image's tool cache, `/opt/hostedtoolcache/node` (setup-node never reads it: Depot points
+   it at an empty one), else from nodejs.org with a warning. Then, in the background while the store
+   restores, pnpm from the root `packageManager` by corepack, and the Doppler CLI release the script
+   pins, checked against its SHA-256.
+2. **Restore pnpm's store** from [Depot Cache](#depot-cache).
+3. **Install dependencies**: waits for the toolchain, then
+   `pnpm install --frozen-lockfile --prefer-offline`.
 
-### Preview dependency fingerprints
+A job's workspace is installed 7–8 s after it starts on a 4x16 or an 8x32, 9 s on a 2x8. Kit
+Firmware's jobs install nothing and run `scripts/ci/toolchain.sh node`. Preview OS's two scripts
+that choose the tested commit (`preview-tested-commit.ts`, `preview-paths.ts`) run before the setup
+on the stock image's own Node 22, with nothing but Node's builtins, since the PR head they start
+from may predate the setup. The store is `NPM_CONFIG_STORE_DIR=/home/runner/.pnpm-store` (pnpm 10
+reads `npm_config_*`, not `pnpm_config_*`), and `NPM_CONFIG_SIDE_EFFECTS_CACHE=false` keeps build
+outputs out of it: the install runs the few build scripts itself, since from a store that held
+their outputs it took 5 s longer. No job runs `doppler setup`: every `doppler run` names its
+`--project` and `--config`.
 
-The image bake uses a frozen install and takes pnpm's version from the root
-`packageManager`. After setup succeeds it seals `node_modules` with a receipt.
-Snapshots publish both the normal image tag and `deps-<fingerprint>`; the
-receipt inside the image is authoritative, so moving a tag cannot create a
-false hit. The `image-tag` dispatch input allows isolated experiment images.
+### Depot Cache
 
-The fingerprint includes the lockfile, manifests (including new/deleted ones;
-only their install fields, so editing a package's `test` script does not force a
-reinstall), workspace config, pnpm hook, npm config, patches, local file dependency sources,
-bake script and workflow, verifier, checkout path, Node version, OS/architecture and install
-configuration environment. Reuse also checks pnpm's installed metadata and the
-workspace module directory listings. New workspace lifecycle scripts disable
-reuse; the current root `is-ci || (husky && node scripts/lockfile-stamp.ts)` prepare is a no-op in CI.
+`actions/cache` is Depot Cache on Depot CI, whose entries expire after 14 days:
 
-This receipt is for a pristine Depot filesystem snapshot, consumed immediately
-after `checkout` with `clean: false`. It is not a general cache-integrity checker:
-verifying every installed file would recreate the filesystem cost being removed.
-Do not mutate dependencies before the verification step. Missing or changed
-inputs run the normal frozen install, and invalidate the old receipt before
-installing. An image without a matching fingerprint is a cache miss even if the
-previous PR commit had the same lockfile. Only successful image bakes publish
-reusable state; misses are deliberately not optimized here.
+| Entry                               | Key                                                                              | Restored by                                                        | Saved by                                           |
+| ----------------------------------- | -------------------------------------------------------------------------------- | ------------------------------------------------------------------ | -------------------------------------------------- |
+| pnpm's store, 247 MB                | `pnpm-store-` and the hash of the lockfile, `pnpm-workspace.yaml` and `patches/` | the setup, in every job but the production deploys and the release | Test, on a main push that missed its key           |
+| Playwright's headless shell, 103 MB | `ms-playwright-` and the lockfile's hash                                         | Browser specs, beside its setup                                    | Main OS e2e's Browser specs, on a push that missed |
+| ESP-IDF and its tools, 1.06 GB      | `esp-idf-`, the hash of `scripts/ci/esp-idf.sh` (the pin) and python3's version  | Kit Firmware's legs                                                | a main leg that missed, right after installing it  |
 
-Normal CI still uses the rolling image tag so selecting it adds no preliminary
-job. The fingerprint tag makes the exact snapshot addressable and inspectable;
-consumers validate its receipt rather than trusting the tag's spelling. No
-package-manager migration is needed to bypass installation on a match.
+Off main a restore falls back to the newest entry of its kind (`restore-keys`), except ESP-IDF's:
+an older pin's is of no use, nor is one whose Python environment was built for another python3.
+Main restores the exact key alone, so what main saves holds only its own lockfile's packages:
+`pnpm store prune` cannot cut an older store down, since it drops every file with one link, and
+pnpm copies the packages it builds. A restore that fails or times out is a
+warning, and the job fetches what it lacks: from the npm registry, from Playwright's CDN (the
+suite's `playwright install --only-shell`), or from GitHub, dl.espressif.com and PyPI
+(`esp-idf.sh ensure`, with its own warning). Test's summary says which store its install started
+from and whether main saved one, and warns on a failed restore or save
+(`scripts/ci/pnpm-store-report.sh`). actions/cache reports most other trouble only in its own log:
+a restore that could not read Depot Cache reads as none restored.
+
+Depot Cache has no branch scope: any run can write any key, and main's next key follows from an
+open pull request's lockfile, so a pull request could plant a store for main's runs by editing a
+workflow. So only main writes it, and no job that ships to production reads it: the `deploy-*.yml`
+workflows and `release.yml` install from the npm registry (`pnpm-store: none`), whose lockfile
+hashes vouch for every package, about 5 s more on a 2x8 and 3 s on a 4x16. Every workflow that
+reads it holds a read-only `contents` token. Kit Firmware's legs on main, which build the release
+firmware, read the exact ESP-IDF key: the same exposure as the image they booted before, whose tag
+a pull request's workflow could as well have pushed. Today a planted entry reaches nothing its
+author's own run does not already have, because Depot CI runs no pull request from a fork, so every
+run is from someone who can push here, with the one `DOPPLER_TOKEN`, which also reads
+`_shared/preview` (the Depot organization token, the preview Cloudflare API token).
+iterate/iterate is public, and Depot plans fork support
+([compatibility](https://depot.dev/docs/ci/compatibility)). Before fork pull requests run on
+Depot, scope or drop the cache and the pull requests' `restore-keys` fallbacks. Otherwise a fork's
+pull request, which gets no secrets, could plant an entry that main or another pull request then
+runs with that token. pnpm checks each file it links against the store's index
+(`verify-store-integrity`, on by default), which catches a damaged store, not a planted one.
+`scripts/ci/depot-workflows.test.ts` pins all of this.
+
+So every job depends on GitHub (the checkout, the Doppler CLI), the npm registry (pnpm by corepack,
+and packages on a miss) and Depot Cache.
 
 ## Trigger Gotchas
 
@@ -471,9 +499,11 @@ that needs code landing with it (#2999: main's `test.yml` named a workspace the 
 - Lint and Typecheck, Test, LOC report, the PR dashboard and Kit Firmware's Plan and build legs
   check out `github.sha`. LOC report still diffs the PR's head against its base, from the event.
 - Preview OS's deploy passes `github.sha` to `scripts/ci/preview-tested-commit.ts`, which deploys
-  it when it is a merge of the head and otherwise resolves `refs/pull/<n>/merge`; e2e and trace
-  check out the commit deploy tested. The trace's statuses, the test telemetry's `headSha` and the
-  preview's name use the PR head.
+  it when it is a merge of the head and otherwise resolves `refs/pull/<n>/merge`. The suites start
+  beside the deploy, so they find its commit themselves, by the deploy's own two steps: the PR's
+  head, then the same `preview-tested-commit.ts` with the same `github.sha`. The trace checks out
+  the commit deploy tested. The trace's statuses, the test telemetry's `headSha` and the preview's
+  name use the PR head.
 - Preview delete checks out `github.sha` on a close: a merged PR's squash commit on main, an
   unmerged PR's head. An unmerged head older than a main change runs the old teardown (#2982's
   close named a renamed Doppler project); the nightly sweep deletes what it leaves.
@@ -526,10 +556,12 @@ check "Pending" forever when a `paths` filter skips its workflow. Deploy preview
 `node scripts/ci/preview-paths.ts changes` diffs the tested merge commit against main and matches
 `previewPaths` (`apps/os`, `configs`, the hosted clients but Kit's firmware, `specs` and
 `playwright.config.ts`, `packages/cli`, `packages/iterate`, `packages/shared`, `packages/ui`, the
-root manifests and lockfile, `envs.ts`, `scripts/lib`, `scripts/depot-ci`, and its own and the
-production deploy workflows). A PR that touches none of them gets a green Deploy preview that
-deployed nothing and both suites skipped, which GitHub counts as passing. When the step cannot tell,
-the PR gets a preview. `preview-delete.yml` runs on the same list;
+root manifests and lockfile, `envs.ts`, `scripts/lib`, the setup (`.depot/actions`,
+`scripts/ci/toolchain.sh`), and its own and the production deploy workflows). A PR that touches
+none of them gets a green Deploy preview that deployed nothing, and two green suites that tested
+nothing: each runs the same step on the same commit and passes once it says so
+([preview job shape](#preview-job-shape)). When the step cannot tell, the PR gets a preview.
+`preview-delete.yml` runs on the same list;
 `scripts/ci/depot-workflows.test.ts` keeps it equal to `previewPaths`.
 
 ## Which main pushes deploy
@@ -543,13 +575,13 @@ pins the exceptions:
 - Deploy Kit and Deploy Voice run for `packages/agents` and `packages/voice`: their pages run the
   installer (`@iterate-com/voice/install`).
 - Deploy OS skips what never reaches the Worker: the markdown at the app root, `apps/os/docs`,
-  `apps/os/e2e`, `apps/os/__workers-tests__`, `*.test.ts`, `apps/os/bench`, the preview and soak
-  scripts, and `scripts/depot-ci`. Markdown that ships still deploys: `apps/os/public/setup-prompt.md`
+  `apps/os/e2e`, `apps/os/__workers-tests__`, `*.test.ts`, `apps/os/bench`, and the preview and
+  soak scripts. Markdown that ships still deploys: `apps/os/public/setup-prompt.md`
   and everything in `configs`. Preview OS and Main OS e2e still run for all of it.
 - Deploy SPA ignores the root manifests and lockfile: it has no npm dependency inside.
 
-Each deploy is one job, and every app but SPA, dummy-petshop and ci-reports posts its result to
-#ci from its last step.
+Each deploy is one job, and every app but SPA, dummy-petshop, ci-reports and
+iterate-com-inbound-email posts its result to #ci from its last step.
 
 ## Preview job shape
 
@@ -557,22 +589,24 @@ Preview OS runs four jobs, each a check named for what it proves:
 
 - **Deploy preview** deploys the PR merged into main, each step starting once what it needs is
   there ([the trace's spans](ci-traces.md#steps-and-phases)).
-- **E2E tests** (`pnpm preview e2e`) and **Browser specs** (`pnpm preview specs`) then run side by
-  side, each on its own runner ([reliability defaults](#reliability-defaults)). They are one job
-  definition (YAML anchors), each job's env naming its suite (`SUITE`, `FLAKE_SUITE`, the telemetry
-  workspace).
+- **E2E tests** (`pnpm preview e2e`) and **Browser specs** (`pnpm preview specs`) start with the
+  run, beside Deploy preview, each on its own runner ([reliability defaults](#reliability-defaults)).
+  Each sets its suite up while the preview deploys, then waits for the deploy
+  ([suites start with the run](#suites-start-with-the-run)). They are one job definition (YAML
+  anchors), each job's env naming its suite (`SUITE`, `FLAKE_SUITE`, the telemetry workspace).
 - **CI trace** runs after the three, whatever their outcome, and reports only: it writes the two
   suites' lines (their jobs' `status` output) into the PR body, then the trace
   ([Interactive trace reports](#interactive-trace-reports)).
 
-The two suites report on every PR, so a ruleset can require them. Each skips
-only when there is nothing for it to prove: a PR that changes no preview path,
-or a dispatch of the other suite alone. Where a preview was needed and Deploy
-preview did not succeed (failed, cancelled, or a dispatch that named no
-preview), each still starts (`always()`), and its first step, "Require a
-deployed preview", fails it: red, never a skip that GitHub would count as
-passing. `scripts/ci/preview-os-workflow.test.ts` evaluates the conditions
-over every case.
+The two suites report on every PR, so a ruleset can require them. Each is
+skipped only on a dispatch of the other suite alone. On a PR that changes no
+preview path, each decides so as Deploy preview does
+(`node scripts/ci/preview-paths.ts changes`, on the same commit) and passes,
+having tested nothing. Where a preview was needed and there is none, each fails:
+red, never a skip that GitHub would count as passing. Its wait fails it when
+Deploy preview failed or was cancelled, and its step "Require a preview to test"
+when a dispatch names no preview. `scripts/ci/preview-os-workflow.test.ts`
+evaluates the conditions over every case.
 
 Separate jobs cost each suite its own runner start and checkout, in parallel,
 and make each one runnable and retryable alone: a red suite runs again without
@@ -582,6 +616,53 @@ a redeploy, because the preview persists until the PR closes. Dispatch
 suite and the trace job after it, since Depot refuses to retry a job alone
 once a job that needs it has started. Main OS e2e has the same jobs by the
 same names.
+
+### Suites start with the run
+
+A suite job with `needs: deploy` would start only once the deploy ended, so
+Depot's hand-off (about 3 s), the sandbox's boot (about 2 s), the checkout and
+setup (about 7 s), `tsx` loading
+`apps/os/scripts/preview.ts` and the test runner's start would all come between
+the deploy's end and the first test. So the suites of Preview OS and Main OS e2e
+have no `needs:`. Each starts with the run and, while the preview deploys:
+
+1. checks out the commit Deploy preview deploys, by the deploy's own two steps:
+   the PR's head, then the PR merged into main by
+   `scripts/ci/preview-tested-commit.ts` (on a push the run's own commit when it
+   merges this head, else the merge GitHub rebuilt), and on a push decides
+   whether the PR changes a preview path. The deployment it tests is
+   `<prefix>-<sha7>` of that commit, the name Deploy preview gives it;
+2. runs the setup ([Setup on Depot's stock image](#setup-on-depots-stock-image)),
+   beside it for the specs Playwright's headless shell from Depot Cache, and starts
+   its suite step, whose `runSuite` chooses the slow rows and installs Chromium's
+   headless shell when the restore did not. Beside them the specs run
+   `playwright test --list`, which reaches no preview and fills Playwright's
+   transform cache with every spec compiled. If it is still running when the
+   deploy ends, it is stopped, and exits beside the suite's start rather than
+   before it;
+3. polls Depot's GetWorkflow once a second for its own run's `deploy` job
+   (`scripts/ci/await-deploy.ts`, which `PREVIEW_AWAIT_DEPLOY_JOB` turns on), and
+   starts the suite once that job has finished. One that failed, was cancelled or
+   skipped fails the suite: "Deploy preview failed, so there is no preview of
+   this commit to test." The wait reads the job's status, not an attempt's, so a
+   suite re-run alone after its run ended goes at once, and one re-run beside a
+   failed deploy waits for the deploy's next attempt. It logs each change of the
+   deploy's state and gives up after the deploy's own 40-minute timeout. Depot
+   failing on its own side (a 5xx, a 429, a lost connection) fails no suite: each
+   call is asked again on `CI_HTTP`'s schedule, then the wait warns and asks
+   again a second later, and only five minutes in which every call failed end
+   it. A 401 or 403, a missing token or an answer it cannot read fail it at once.
+   The suite then runs for at most 30 minutes (`runBounded` stops its process
+   group), so the suite jobs' timeout is 70 minutes: the wait, then the suite's 30.
+
+A suite keeps its evidence once it read its deployed target
+(`test-results/target.json`, [test evidence](test-evidence.md)), so a job that
+never had a preview keeps none. A target it cannot write fails the job before
+the suite, so no suite passes with its evidence unchecked. Each suite's runner
+waits out the deploy, less its own set-up: about 45 s each, so a push bills
+about 90 s more between the two, about $0.013 (25 runs each way). In return
+the first test follows the deploy's end by 3.9 s (E2E tests) and 2.1 s
+(Browser specs) at the median, against 16 and 13 s with `needs: deploy`.
 
 ## Main OS e2e deploys each commit fresh
 
@@ -654,7 +735,11 @@ link to the run, then the state now of every signal the job pages:
 
 A red page mentions Jonas once. A page leaves the job green; a check that could
 not read Depot, or found its probe broken (a report with no rows, a suite that
-did not run), fails the job once the others have paged. Each run since the last
+did not run), fails the job once the others have paged. Main OS e2e's page job
+reports on the commit its run tested, where red reads as "main e2e broke": a
+broken probe of its slow rows (a slow row not run, an incomplete or missing suite
+summary) is a ⚪ "unjudged" page on its change of state instead, and the job
+fails only when it cannot judge its run or post. Each run since the last
 judged is judged, oldest first, so a page names the run where its suite changed
 state: Main OS e2e's page job judges its own run after any settled one whose
 page was lost. A settled run that Depot ended before its jobs started has no

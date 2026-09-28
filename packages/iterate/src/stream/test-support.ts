@@ -54,7 +54,13 @@ export function reduceProcessor<State>(
     // contract's union is accepted — the harness only ever hands it events its contract consumes.
     reduce(args: { event: StreamEvent; state: State }): State | null | undefined;
   },
-  inputs: readonly { type: string; payload?: unknown; source?: StreamEvent["source"] }[],
+  inputs: readonly {
+    type: string;
+    payload?: unknown;
+    source?: StreamEvent["source"];
+    /** The context it is on; `/` by default. */
+    path?: string;
+  }[],
 ): State {
   let state = processor.contract.initialState();
   inputs.forEach((input, index) => {
@@ -66,6 +72,7 @@ export function reduceProcessor<State>(
       ...committedEvent(index + 1, input.type),
       payload: parsed?.success ? parsed.data : input.payload,
       source: input.source,
+      path: input.path || "/",
     } as StreamEvent;
     state = processor.reduce({ event, state }) ?? state;
   });

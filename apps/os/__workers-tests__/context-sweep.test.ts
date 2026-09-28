@@ -6,7 +6,7 @@ import { evictDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import { expect, test } from "vitest";
 import { DurableObjectNameCodec } from "../src/context/paths.ts";
-import { adminCredentials, openSession, readLog, refused, stub } from "./support.ts";
+import { adminCredentials, catalog, openSession, readLog, refused, stub } from "./support.ts";
 
 test("the sweep identifies a context by id without waking its ancestors, refuses an id nothing was born at, and destroys only an orphan", async () => {
   const admin = (await openSession()).authenticate(adminCredentials());
@@ -63,6 +63,22 @@ test("the sweep identifies a context by id without waking its ancestors, refuses
   expect(
     (await readLog(`${orphanProject}.iterate/x`)).filter((event) => event.type === "test/marker"),
   ).toEqual([]);
+});
+
+test("the sweep destroys a context of a project deleted on another isolate, on an isolate that keeps its row", async () => {
+  const admin = (await openSession()).authenticate(adminCredentials());
+  const { id: projectId } = await catalog().createProject(
+    { principal: { actor: "admin" } },
+    { project: `swept-late-${crypto.randomUUID().slice(0, 8)}` },
+    Date.now(),
+  );
+  await stub(`${projectId}.iterate/y`).append({ type: "test/marker", payload: {} });
+  // refused while the project stands: this isolate has read its row, and keeps it
+  await refused(() => admin.contexts.destroy(idOf(projectId, "/y")), "FORBIDDEN", /still exists/);
+
+  // straight on the catalog, as another isolate's edge would: this isolate still keeps the row
+  await catalog().deleteProject({ principal: { actor: "admin" } }, projectId);
+  expect(await admin.contexts.destroy(idOf(projectId, "/y"))).toEqual({ projectId, path: "/y" });
 });
 
 const idOf = (projectId: string, path: string) =>
