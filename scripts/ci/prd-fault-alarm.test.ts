@@ -221,6 +221,25 @@ test("an incident grown tenfold since the channel last heard is broadcast in its
   });
 });
 
+test("a deploy's incident grown tenfold is broadcast with the hosts this window added", () => {
+  const reset = (hosts: [string, number][]): FaultReading => ({
+    ...quiet,
+    causes: [{ cause: "deploy reset", deploy: "os-prd@502616fb", serverErrors: hosts }],
+  });
+  const first = triageAt("07:30", reset([["https://a.com/", 1]]), null);
+  const grown = triageAt(
+    "07:45",
+    reset([
+      ["https://a.com/", 4],
+      ["https://b.com/", 5],
+    ]),
+    first.next,
+  );
+  expect(grown.triage.updates.map((update) => update.reply?.text.split("\n")[1])).toEqual([
+    "• grew tenfold: deploy reset (os-prd@502616fb): 10 visitor 5xx on a.com 5, b.com 5",
+  ]);
+});
+
 test("an incident back in a burst after an hour's quiet is broadcast; a lone return, or a burst within six hours, only edits", () => {
   const quietHour = (state: AlarmState, from: number) =>
     [0, 15, 30, 45, 60].reduce(
@@ -642,9 +661,7 @@ test("every first-party prd Worker is read, not os-prd alone", async () => {
   );
 });
 
-// What a visitor saw counts, once: the 5xx or error on the visitor's own invocation. Its hops (a
-// Durable Object's, an ItxEntrypoint's) and every third party's answer relayed through a project's
-// globalOutbound are the same request, or not ours.
+// What counts as the visitor's own invocation: VISITOR and ERROR_ROWS in ./prd-fault-alarm.ts.
 test.for([
   {
     name: "a third party's 502 relayed through the egress hops (docs.parallel.ai, 2026-09-28 11:50) pages nothing",
@@ -756,8 +773,7 @@ test.for([
   expect(page ? bullets(result) : result).toEqual(page || "prd is quiet");
 });
 
-// A deploy under traffic: the Durable Object resets because its code was updated, or a message
-// cloned between versions cannot be read. The rays are shaped as prd logged them (os-prd 502616fb).
+// The deploy causes: CAUSES in ./prd-fault-alarm.ts.
 test.for([
   {
     name: "a deploy reset's visitor 5xx are one incident of that deploy, and its errors page nothing",

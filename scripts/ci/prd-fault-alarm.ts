@@ -51,6 +51,7 @@ import {
 } from "../../envs.ts";
 import { saveNewestArtifactFile } from "./depot.ts";
 import {
+  escalationText,
   getSlackClient,
   onCallMention,
   pageChannel,
@@ -509,29 +510,27 @@ export function triageIncidents(
       continue;
     }
     const incident = page.incidents[key]!;
-    const count = incident.count + sighting.count;
-    const quiet = window.from.getTime() - Date.parse(incident.lastSeen) >= QUIET_AFTER_MS;
+    const quietSince = incident.lastSeen;
+    const quiet = window.from.getTime() - Date.parse(quietSince) >= QUIET_AFTER_MS;
+    Object.assign(incident, {
+      count: incident.count + sighting.count,
+      lastSeen: window.to.toISOString(),
+      hosts: mergeCounts(incident.hosts, sighting.hosts),
+    });
     const lines = replies.get(page.ts) ?? [];
-    if (count >= 10 * incident.told) {
-      lines.push(`• grew tenfold: ${describe({ ...incident, count })}`);
-      incident.told = count;
+    if (incident.count >= 10 * incident.told) {
+      lines.push(`• grew tenfold: ${describe(incident)}`);
+      incident.told = incident.count;
     } else if (
       quiet &&
       sighting.count >= BURST &&
       (!incident.back || now - Date.parse(incident.back) >= BACK_EVERY_MS)
     ) {
-      lines.push(
-        `• back after quiet since ${stamp(incident.lastSeen, now)}: ${describe({ ...incident, ...sighting })}`,
-      );
-      incident.told = count;
+      lines.push(`• back after quiet since ${stamp(quietSince, now)}: ${describe(sighting)}`);
+      incident.told = incident.count;
       incident.back = window.to.toISOString();
     }
     if (lines.length) replies.set(page.ts, lines);
-    Object.assign(incident, {
-      count,
-      lastSeen: window.to.toISOString(),
-      hosts: mergeCounts(incident.hosts, sighting.hosts),
-    });
   }
   const updates: PageUpdate[] = [];
   const resolved: { ts: string; text: string; why: string }[] = [];
@@ -558,7 +557,10 @@ export function triageIncidents(
       reply: lines
         ? {
             text: [
-              `🚨 prd fault escalated, ${window.from.toISOString().slice(11, 16)}–${window.to.toISOString().slice(11, 16)} UTC ${onCallMention}`,
+              escalationText(
+                `prd fault escalated, ${window.from.toISOString().slice(11, 16)}–${window.to.toISOString().slice(11, 16)} UTC`,
+                testRun,
+              ),
               ...lines,
             ].join("\n"),
             broadcast: true,
