@@ -96,8 +96,8 @@ function ProjectOverview() {
   // Until the facet's first value lands the page cannot tell a project still being created from
   // one that is done: `projects.create` answers before its saga does. A refused context, or a live
   // state that failed, leaves the plain overview.
-  const creationKnown =
-    live.value !== undefined || live.status === "error" || Boolean(opened.error);
+  const creationKnown = live.status !== "connecting" || Boolean(opened.error);
+  const creating = creation?.status === "requested" || creation?.status === "failed";
   const configRepoSeeded = Boolean(parsed?.repos["/repos/config"]);
   const githubConnections = Object.values(parsed?.integrations ?? {}).filter(
     (row) => row.provider === "github",
@@ -140,10 +140,8 @@ function ProjectOverview() {
         </dd>
       </dl>
       {/* a project still being created, or whose creation failed, may have no config repo yet */}
-      {creationKnown ? (
-        creation?.status === "requested" || creation?.status === "failed" ? null : (
-          <ConfigRepo key={project.id} project={project} githubConnections={githubConnections} />
-        )
+      {creating ? null : creationKnown ? (
+        <ConfigRepo key={project.id} project={project} githubConnections={githubConnections} />
       ) : (
         <p className="text-sm text-muted-foreground">Loading…</p>
       )}
@@ -187,8 +185,8 @@ function ConfigRepo({
     () => api.projects.get(project.id).repos.get("/repos/config"),
     [api, project.id],
   );
-  /** Counts origin reads and writes: a read answers for the page only while nothing newer started,
-   *  so one that answers late never overwrites a later link or unlink. */
+  /** Counts origin reads and actions: a read answers for the page only while no later read or
+   *  action started, so one that answers late never overwrites what a later action did. */
   const originRequests = useRef(0);
   const readOrigin = useCallback(() => {
     const request = ++originRequests.current;
@@ -204,11 +202,6 @@ function ConfigRepo({
       );
   }, [configRepo]);
   useEffect(() => void readOrigin(), [readOrigin]);
-  /** Link the remote at `url`, or unlink with null: the page shows the origin the write answers. */
-  const writeOrigin = async (url: string | null) => {
-    originRequests.current += 1;
-    setRead(await configRepo().setOrigin(url));
-  };
 
   const remote = read?.origin ? describeOrigin(read.origin) : null;
   const linking = !choice && search.configRepo === "link";
@@ -236,6 +229,7 @@ function ConfigRepo({
   /** One action, busy while its own calls run. The origin read after it runs with the buttons
    *  enabled: the action's button, and its spinner, may be gone with the sheet by then. */
   const run = async (action: ConfigRepoAction, work: () => Promise<unknown>) => {
+    originRequests.current += 1;
     setBusy(action);
     setError(null);
     setOutcome(null);
@@ -245,7 +239,7 @@ function ConfigRepo({
   };
   const link = (url: string) =>
     run("link", async () => {
-      await writeOrigin(url);
+      setRead(await configRepo().setOrigin(url));
       await sync("pull", url);
     });
   /** A button that runs one action: disabled while any runs, its spinner while it does. */
@@ -307,7 +301,9 @@ function ConfigRepo({
               >
                 Replace with {remote.name}&apos;s
               </Button>
-              {actionButton("unlink", "Unlink", () => writeOrigin(null))}
+              {actionButton("unlink", "Unlink", async () =>
+                setRead(await configRepo().setOrigin(null)),
+              )}
             </>
           ) : read ? (
             <Button onClick={() => void navigate({ search: { configRepo: "link" } })}>Link</Button>
