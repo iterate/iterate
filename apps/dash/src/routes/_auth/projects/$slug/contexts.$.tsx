@@ -3,25 +3,22 @@
 // /activity and an organization's activity page use), over `project.cd(path)`. The path is the
 // URL's own tail — `/projects/<slug>/contexts` is the root `/`, `…/contexts/repos/config` is
 // `/repos/config` — and the view's filter, inspected event and open sheet are its search, so every
-// state is a link. Full width, two panes: on the left the context tree (packages/ui
-// `context-tree.tsx`) over the project's context registry (the `project` facet's `contexts` on `/`,
-// apps/os/src/project/contract.ts), live; on the right the context, its path once on the view's
-// strip. A phone has the tree in a sheet, opened from the path. The shell's breadcrumb ends in
-// "Contexts".
-import { useMemo } from "react";
-import { createFileRoute, getRouteApi, useRouter } from "@tanstack/react-router";
-import { z } from "zod";
-import { resolveContextPath } from "iterate/lib";
-import {
-  ContextPath,
-  type ContextPathLinks,
-} from "@iterate-com/ui/components/context-view/context-path";
+// state is a link. Full width, two panes: on the left the context tree over the project's context
+// registry, live; on the right the context, its path once on the view's strip (the wiring is
+// packages/ui `use-context-explorer.ts`). A phone has the tree in a sheet, opened from the path.
+// The shell's breadcrumb ends in "Contexts".
+import { createFileRoute, getRouteApi } from "@tanstack/react-router";
+import { ContextPath } from "@iterate-com/ui/components/context-view/context-path";
 import {
   ContextTree,
   ContextTreeSheet,
 } from "@iterate-com/ui/components/context-view/context-tree";
 import { ContextViewState } from "@iterate-com/ui/components/context-view/context-view-search";
-import { useContextStub, useFacetLiveState } from "iterate/react";
+import {
+  contextPathOf,
+  useContextExplorer,
+  useRegistryPaths,
+} from "@iterate-com/ui/hooks/use-context-explorer";
 import { ContextActivity } from "../../../../components/context-activity.tsx";
 
 const shell = getRouteApi("/_auth");
@@ -43,35 +40,14 @@ function ProjectContexts() {
   const { _splat } = Route.useParams();
   const search = Route.useSearch();
   const navigate = Route.useNavigate();
-  const router = useRouter();
-  const path = contextPathOf(_splat);
-  // the project's root, held for the page's life: the registry is its live state, and every path
-  // is a `cd` from it; the context shown is released and re-opened when the path changes
-  const root = useContextStub(() => api.projects.get(project.id), [api, project.id]);
-  const rootStub = root.stub;
-  const context = useContextStub(rootStub ? () => rootStub.cd(path) : null, [rootStub, path]);
-  const error = root.error || context.error;
-  const registry = Registry.safeParse(useFacetLiveState(rootStub, "project").value).data;
-  const contexts = registry?.contexts;
-  const paths = useMemo(() => Object.keys(contexts || {}), [contexts]);
-  const links = useMemo(
-    (): ContextPathLinks => ({
-      hrefOf: (to) =>
-        `/projects/${encodeURIComponent(project.slug)}/contexts${to === "/" ? "" : to.split("/").map(encodeURIComponent).join("/")}`,
-      // a path opens afresh: the view's search (filter, inspected event) was the last path's
-      onNavigate: (href, event) => {
-        event.preventDefault();
-        void router.navigate({ href });
-      },
-    }),
-    [project.slug, router],
-  );
-  const tree = {
-    paths,
-    current: path,
-    links,
-    resolvePath: (typed: string) => resolveContextPath(path, typed),
-  };
+  const explorer = useContextExplorer({
+    base: `/projects/${encodeURIComponent(project.slug)}/contexts`,
+    splat: _splat,
+    openRoot: () => api.projects.get(project.id),
+    deps: [api, project.id],
+  });
+  const { path, links, error } = explorer;
+  const tree = { paths: useRegistryPaths(explorer.rootStub), ...explorer.tree };
   return (
     <div className="flex min-h-0 flex-1">
       <ContextTree {...tree} className="hidden w-60 shrink-0 border-r px-2 pt-1.5 pb-2 lg:flex" />
@@ -97,7 +73,7 @@ function ProjectContexts() {
             onStateChange={(patch) =>
               void navigate({ search: (previous) => ({ ...previous, ...patch }), replace: true })
             }
-            itx={context.stub}
+            itx={explorer.stub}
             pathLinks={links}
             title={
               <>
@@ -110,14 +86,4 @@ function ProjectContexts() {
       </div>
     </div>
   );
-}
-
-/** The one field of the `project` facet's state this page reads: the context registry's paths, as
- *  keys (apps/os/src/project/contract.ts `contexts`). */
-const Registry = z.looseObject({ contexts: z.record(z.string(), z.unknown()).optional() });
-
-/** The URL's tail as a context path, canonical as `cd` reads it (`resolveContextPath`, the SDK's
- *  one resolver): `` → `/`, `repos/config/` → `/repos/config`. */
-function contextPathOf(splat: string | undefined) {
-  return resolveContextPath("/", splat || "");
 }
