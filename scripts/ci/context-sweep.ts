@@ -276,12 +276,10 @@ const retryingPlatformFailures = <T>(name: string, call: () => Promise<T>) =>
     area: "context-sweep",
     schedule: CI_HTTP,
     idempotent: true,
-    kind: sweepFailureKind,
+    kind: (error): FailureKind =>
+      /Peer closed WebSocket/.test(String(error)) ? "disconnected" : failureKind(error),
     describe: () => ({ name }),
   });
-
-const sweepFailureKind = (error: unknown): FailureKind =>
-  /Peer closed WebSocket/.test(String(error)) ? "disconnected" : failureKind(error);
 
 /** The deployment's session, connected again once its socket closed: a prd deploy mid-sweep may
  *  close it. */
