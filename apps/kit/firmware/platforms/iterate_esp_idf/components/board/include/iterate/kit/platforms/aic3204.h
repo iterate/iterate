@@ -16,9 +16,8 @@ extern "C" {
  */
 extern const struct iterate_kit_register_script iterate_kit_aic3204_scripts[2];
 
-/** The measured XMOS uplink policy, default NS. The compiler-visible
- * ITERATE_KIT_VOICE_PE_XMOS_UPLINK_STAGE override and its evidence essay live
- * with these hardware tables, so diagnostic builds cannot silently drift.
+/** The measured XMOS uplink tap, NS, and its evidence. `aec.setStage`
+ * (havpe_device.c) is the one way to move it for an experiment.
  */
 enum iterate_kit_xmos_stage iterate_kit_xmos_uplink_stage(void);
 

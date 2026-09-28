@@ -22,9 +22,9 @@ add_test(
 # Every host test is one executable behind the same warning wall, registered
 # with CTest under its own name. A declaration lists the test's sources and
 # states only what differs: STD <n> (C standard, default 99), INCLUDES,
-# DEFINES, extra warning OPTIONS, and the libraries to LINK.
+# extra warning OPTIONS, and the libraries to LINK.
 function(iterate_kit_add_test NAME)
-  cmake_parse_arguments(T "" "STD" "INCLUDES;DEFINES;OPTIONS;LINK" ${ARGN})
+  cmake_parse_arguments(T "" "STD" "INCLUDES;OPTIONS;LINK" ${ARGN})
   if(NOT T_STD)
     set(T_STD 99)
   endif()
@@ -39,9 +39,6 @@ function(iterate_kit_add_test NAME)
     ${T_OPTIONS})
   if(T_INCLUDES)
     target_include_directories(${NAME} PRIVATE ${T_INCLUDES})
-  endif()
-  if(T_DEFINES)
-    target_compile_definitions(${NAME} PRIVATE ${T_DEFINES})
   endif()
   if(T_LINK)
     target_link_libraries(${NAME} PRIVATE ${T_LINK})
@@ -225,9 +222,8 @@ if(APPLE)
 endif()
 
 # HAVPE's adopted pure hardware policy: byte-exact register/wire vectors and
-# the deliberately compiler-visible XMOS uplink-stage selector. These build
-# the pure hardware table directly, including the diagnostic override; no
-# I2C transport or ESP-IDF runtime is required by these literal table tests.
+# the XMOS uplink stage. These build the pure hardware table directly; no I2C
+# transport or ESP-IDF runtime is required by these literal table tests.
 function(iterate_kit_add_havpe_pure_test NAME)
   iterate_kit_add_test(${NAME} ${ARGN}
     INCLUDES ../devices/havpe ../components/core/include)
@@ -238,13 +234,6 @@ iterate_kit_add_test(iterate-kit-havpe-hardware-config-test
   ../platforms/iterate_esp_idf/components/board/board.c
   INCLUDES fakes/board ../platforms/iterate_esp_idf/components/board/include
   LINK iterate-kit-voice iterate-kit-audio iterate-kit-core)
-
-iterate_kit_add_test(iterate-kit-havpe-hardware-config-aec-override-test
-  havpe_hardware_config_aec_override_test.c
-  ../platforms/iterate_esp_idf/components/board/codecs/aic3204.c
-  INCLUDES ../platforms/iterate_esp_idf/components/board/include
-  DEFINES ITERATE_KIT_VOICE_PE_XMOS_UPLINK_STAGE=1
-  LINK iterate-kit-core)
 
 iterate_kit_add_test(iterate-kit-pcm-format-test pcm_format_test.c
   LINK iterate-kit-audio)

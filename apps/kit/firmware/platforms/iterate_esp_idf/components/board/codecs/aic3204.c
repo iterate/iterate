@@ -1,36 +1,6 @@
 #include "iterate/kit/platforms/aic3204.h"
 
 /*
- * NS remains the unqualified production default. A release experiment may
- * select another cumulative XMOS tap in a separate build directory, but the
- * choice must be a compiler-visible build input: editing this source between
- * flashes made retained evidence impossible to attribute and made accidental
- * production drift too easy. The numeric values are the XMOS wire contract
- * mirrored by the public enum below, so reject an out-of-range cache value at
- * compile time rather than sending an invented command to hardware.
- */
-/*
- * NS (3), AND THE DRIFT TO 1 IS A CAUTIONARY TALE. The long comment below
- * argues honestly for the AEC tap from bench windows — and a real
- * conversation falsified it TWICE: first the production run it records
- * ("the first short reply leaked through the AEC tap nearly unchanged"),
- * and then again live on 2026-08-19, when a stage-1 build reached a
- * physical board mid-conversation and the board's own oracle read
- * echoRawPeak 8509 against echoCleanPeak 8514 — the "cancelled" uplink as
- * loud as the raw microphone, and the listener heard nothing but double
- * talk. The hardware-config test pins THIS number; the day it goes red
- * against this file, the test is the side that is right.
- */
-#ifndef ITERATE_KIT_VOICE_PE_XMOS_UPLINK_STAGE
-#define ITERATE_KIT_VOICE_PE_XMOS_UPLINK_STAGE 3
-#endif
-
-#if ITERATE_KIT_VOICE_PE_XMOS_UPLINK_STAGE < 0 || \
-    ITERATE_KIT_VOICE_PE_XMOS_UPLINK_STAGE >= 5
-#error "ITERATE_KIT_VOICE_PE_XMOS_UPLINK_STAGE must be an XMOS pipeline stage 0..4"
-#endif
-
-/*
  * Do not "simplify" this table from the data sheet in isolation. It mirrors
  * ESPHome's proven AIC3204 setup, including page switches, 32-bit I2S, MFP3
  * routing, 0.75 V common mode, analogue driver routing, and pop-suppression
@@ -89,12 +59,14 @@ iterate_kit_xmos_uplink_stage(void) {
   /* XMOS exposes cumulative AEC -> IC -> NS -> AGC taps. The HAVPE bench
    * selects NS (tap 3) with the fixed capture gain in its board table: long
    * answers measured about 25 dB raw/clean separation on 2026-09-09. Tap 1
-   * leaked at answer onset; tap 4 expanded residual echo and retriggered VAD.
-   * Keep the TX reference running between answers and measure model turns
-   * plus echoRawPeak/echoCleanPeak when changing this choice. aec.setStage
-   * selects a tap live. Speaker-time gain changes or uplink gating would
-   * invalidate that comparison and can erase a person's interruption.
+   * leaked at answer onset (a live call on 2026-08-19 read echoRawPeak 8509
+   * against echoCleanPeak 8514); tap 4 expanded residual echo and retriggered
+   * VAD. Keep the TX reference running between answers and measure model
+   * turns plus echoRawPeak/echoCleanPeak when changing this choice.
+   * aec.setStage (havpe_device.c) moves a tap live for an experiment; the
+   * hardware-config test pins this one. Speaker-time gain changes or uplink
+   * gating would invalidate that comparison and can erase a person's
+   * interruption.
    */
-  return (enum iterate_kit_xmos_stage)
-      ITERATE_KIT_VOICE_PE_XMOS_UPLINK_STAGE;
+  return ITERATE_KIT_XMOS_STAGE_NS;
 }
