@@ -10,9 +10,10 @@ export type PostHogEvent = {
 
 /**
  * Delivers CI events to the iterate PostHog project through the batch capture endpoint
- * (https://posthog.com/docs/api/capture#batch-events). Only the CI telemetry sync calls this, with
- * one event per Depot workflow run and job attempt: #2494 cut delivery to zero because per-test
- * events were over 70% of the project's ingestion, and test data stays in the Depot artifacts.
+ * (https://posthog.com/docs/api/capture#batch-events): the CI telemetry sync's, one per Depot
+ * workflow run and job attempt, and the health job's PR time to green and latency measurements
+ * (scripts/monitors/health.ts). Never one per test, which would be most of the project's
+ * ingestion: per-test data lives in the test evidence in R2 (docs/test-evidence.md).
  *
  * A batch PostHog failed is sent again (fetchRetryingPlatformFailures): PostHog deduplicates a
  * re-sent event by its UUID (systemEvent), so a batch that landed after all counts once.

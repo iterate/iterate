@@ -46,8 +46,7 @@ import { saveNewestArtifactFile } from "./depot.ts";
 import { getSlackClient, onCallMention, slackChannelIds } from "./slack.ts";
 
 /** Every first-party Worker in production: the platform and its clients. A 5xx or an error in any
- *  of them pages; before 2026-09-24 only os-prd's did, and voice.iterate.com answered robots.txt
- *  with a 500 unseen. */
+ *  of them pages, a client's as much as the platform's. */
 const PRD_WORKERS = [
   osEnvs.prd!,
   dashEnvs.prd,

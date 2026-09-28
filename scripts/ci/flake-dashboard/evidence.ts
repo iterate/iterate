@@ -6,11 +6,9 @@
 // `suite-summary.json`: the Test job's `unit`, the e2e jobs' `preview-e2e` and `specs`. A folder
 // counts once its `manifest.json` is listed: the upload writes the manifest last, so a folder
 // without one is still uploading or failed part way.
-import { createHash } from "node:crypto";
-import { AwsClient } from "aws4fetch";
 import { z } from "zod";
-import { fetchRetryingPlatformFailures } from "@iterate-com/shared/platform-retry";
 import { FlakeSuiteSummary } from "@iterate-com/shared/test-support/flake-suite-summary";
+import { ciBucket } from "../ci-bucket.ts";
 import { mapConcurrent } from "../depot.ts";
 
 /**
@@ -183,11 +181,8 @@ export function suiteRun(
   };
 }
 
-/**
- * The suite runs `planReads` picks from the CI bucket's last `recentRuns.mainDays` days, through
- * R2's S3 API (https://developers.cloudflare.com/r2/api/s3/api/) with the credentials
- * `uploadTestEvidence` (scripts/ci/test-evidence.ts) derives from the same Cloudflare API token.
- */
+/** The suite runs `planReads` picks from the CI bucket's last `recentRuns.mainDays` days
+ *  (scripts/ci/ci-bucket.ts). */
 export async function readSuiteRuns(input: {
   accountId: string;
   bucketName: string;
@@ -195,7 +190,7 @@ export async function readSuiteRuns(input: {
   apiToken: string;
   now: Date;
 }) {
-  const bucket = await ciBucket(input);
+  const bucket = await ciBucket({ ...input, area: "flake-dashboard" });
   const dates = Array.from({ length: recentRuns.mainDays + 1 }, (_, days) =>
     new Date(input.now.getTime() - days * 24 * 60 * 60 * 1000).toISOString().slice(0, 10),
   );
@@ -212,74 +207,4 @@ export async function readSuiteRuns(input: {
     }),
   );
   return runs.flatMap((run) => (run ? [run] : []));
-}
-
-/** Listing and reading the CI bucket, each request asked again when R2 itself fails it. */
-async function ciBucket(input: { accountId: string; bucketName: string; apiToken: string }) {
-  const client = new AwsClient({
-    accessKeyId: await apiTokenId(input),
-    secretAccessKey: createHash("sha256").update(input.apiToken).digest("hex"),
-    service: "s3",
-    region: "auto",
-  });
-  const origin = `https://${input.accountId}.r2.cloudflarestorage.com/${input.bucketName}`;
-  const request = async (url: string, what: string) => {
-    const response = await fetchRetryingPlatformFailures(
-      `R2 ${what}`,
-      async (signal) => fetch(await client.sign(url), { signal }),
-      { area: "flake-dashboard", idempotent: true },
-    );
-    if (response.ok) return response.text();
-    throw new Error(`R2 ${what} answered HTTP ${response.status}: ${await response.text()}`);
-  };
-  return {
-    /** Every object under `prefix`: ListObjectsV2, a page of up to 1,000 keys at a time. */
-    async list(prefix: string) {
-      const objects: { key: string; lastModified: string }[] = [];
-      let continuation: string | undefined;
-      do {
-        const url = new URL(origin);
-        url.searchParams.set("list-type", "2");
-        url.searchParams.set("prefix", prefix);
-        if (continuation) url.searchParams.set("continuation-token", continuation);
-        const page = await request(url.toString(), `list ${prefix}`);
-        for (const [, contents] of page.matchAll(/<Contents>(.*?)<\/Contents>/gsu)) {
-          const key = /<Key>(.*?)<\/Key>/su.exec(contents!)?.[1];
-          const lastModified = /<LastModified>(.*?)<\/LastModified>/su.exec(contents!)?.[1];
-          if (key && lastModified) objects.push({ key: unescapeXml(key), lastModified });
-        }
-        const next = /<NextContinuationToken>(.*?)<\/NextContinuationToken>/su.exec(page)?.[1];
-        continuation = next && unescapeXml(next);
-      } while (continuation);
-      return objects;
-    },
-    get: (key: string) =>
-      request(`${origin}/${key.split("/").map(encodeURIComponent).join("/")}`, `get ${key}`),
-  };
-}
-
-/**
- * The API token's id, which is its S3 access key id: a user token answers `/user/tokens/verify`, an
- * account-owned one its account's (https://developers.cloudflare.com/api/resources/user/subresources/tokens/methods/verify/).
- */
-async function apiTokenId(input: { accountId: string; apiToken: string }) {
-  for (const path of ["/user/tokens/verify", `/accounts/${input.accountId}/tokens/verify`]) {
-    const response = await fetch(`https://api.cloudflare.com/client/v4${path}`, {
-      headers: { authorization: `Bearer ${input.apiToken}` },
-    });
-    if (response.ok)
-      return z.object({ result: z.object({ id: z.string().min(1) }) }).parse(await response.json())
-        .result.id;
-    await response.body?.cancel();
-  }
-  throw new Error("CLOUDFLARE_API_TOKEN did not verify");
-}
-
-function unescapeXml(text: string) {
-  return text
-    .replaceAll("&lt;", "<")
-    .replaceAll("&gt;", ">")
-    .replaceAll("&quot;", '"')
-    .replaceAll("&apos;", "'")
-    .replaceAll("&amp;", "&");
 }

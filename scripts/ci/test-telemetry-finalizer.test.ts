@@ -8,7 +8,7 @@ import { UNIT_ROW_WARN_EXEMPTIONS } from "@iterate-com/shared/test-support/e2e-p
 import { temporaryDirectory } from "@iterate-com/shared/test-support/temporary-directory";
 import { expect, test } from "vitest";
 import { unitTestWorkspaces } from "./test-telemetry-completeness.ts";
-import { finalizeTestTelemetry, unitRowBudget } from "./upload-test-telemetry.ts";
+import finalizeTestTelemetry, { unitRowBudget } from "./test-telemetry-finalizer.ts";
 
 const artifact: TestTelemetryArtifact = {
   artifactSchemaVersion: 3,

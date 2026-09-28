@@ -18,7 +18,7 @@ export const testEvidencePaths = {
   manifest: "test-results/manifest.json",
   /** Each runner's raw telemetry (./ci-telemetry.ts). */
   telemetry: "test-results/ci-telemetry/raw",
-  /** The telemetry finalizer's completeness check (scripts/ci/upload-test-telemetry.ts). */
+  /** The telemetry finalizer's completeness check (scripts/ci/test-telemetry-finalizer.ts). */
   telemetryCheck: "test-results/ci-telemetry/manifest.json",
   /** createFlake/createFailing/retry record lines (./flake-record.ts), a directory per suite in the e2e jobs. */
   flakeRecords: "test-results/flake-records",
