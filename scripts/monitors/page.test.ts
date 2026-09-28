@@ -158,9 +158,9 @@ test.for([
   expect(advance(previous, verdict)).toEqual(expected);
 });
 
-// Main OS e2e's push runs from 2026-09-23 20:55 to 2026-09-28 12:01 UTC, as Depot recorded their
-// jobs' results (fixtures/main-e2e-runs-2026-09-23.json): 286 settled runs, and each red that the
-// channel heard as 18 messages is one page, its edits and its resolution.
+// Main OS e2e's settled push runs as Depot recorded their jobs' results
+// (fixtures/main-e2e-runs-2026-09-23.json): each red streak is one page, its edits and its
+// resolution.
 test("main e2e over Depot's runs of 2026-09-23..28 is 9 pages, 4 edits and 9 resolutions", () => {
   let memory: E2eMemory["suites"]["main e2e"];
   const kinds: Record<string, number> = {};

@@ -147,6 +147,17 @@ test("a test run posts its page and its resolution top-level, marked and mention
   });
 });
 
+test("a real run's resolution with no open page sends nothing: its state started over", async () => {
+  const poster = fakePoster();
+  const next = await sendUpdates(poster, {
+    updates: [{ signal: "latency", kind: "resolve", why: "latency under its lines at `abc`" }],
+    pages: {},
+    testRun: false,
+  });
+  // exact: no Slack call and no page
+  expect({ calls: poster.calls, next }).toEqual({ calls: [], next: {} });
+});
+
 test("an edit that fails sends nothing after it: the state is kept only once every update is sent", async () => {
   const poster = fakePoster({ update: "fails" });
   await expect(

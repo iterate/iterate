@@ -121,9 +121,10 @@ const PAGE_GONE = new Set(["message_not_found", "edit_window_closed", "cant_upda
 
 /** Send the checks' updates in order, each to its signal's page in `pages`, and return the pages
  *  open after them. A resolution edits the page before it replies, so a failed edit sends no reply
- *  and the next run owes both again. An update whose signal has no open page (a test run's), or
- *  whose page is gone, posts top-level: an edit or escalation a new page, with the escalation's
- *  reply in its thread; a resolution its reply. */
+ *  and the next run owes both again. An update whose signal has no open page, or whose page is
+ *  gone, posts top-level: an edit or escalation a new page, with the escalation's reply in its
+ *  thread; a resolution its reply, when the page is gone or the run is a test run's. A real run's
+ *  resolution with no open page sends nothing: no page of this job is open to resolve. */
 export async function sendUpdates(
   poster: PagePoster,
   input: { updates: PageUpdate[]; pages: OpenPages; testRun: boolean },
@@ -135,15 +136,17 @@ export async function sendUpdates(
     pages[signal] = { ts, text };
     return ts;
   };
-  const textOf = (page: PageContent) => pageText({ ...page, link: page.link ?? null, testRun });
+  const textOf = (page: PageContent) => pageText({ ...page, link: page.link || null, testRun });
   for (const update of input.updates) {
     const page = pages[update.signal];
     if (update.kind === "resolve" || update.kind === "replace") {
-      const edited = page && (await poster.update(page.ts, markResolved(page.text))) === "edited";
-      await poster.post(
-        resolvedText(update.why, testRun),
-        edited ? { ts: page.ts, broadcast: false } : undefined,
-      );
+      if (page) {
+        const edited = (await poster.update(page.ts, markResolved(page.text))) === "edited";
+        await poster.post(
+          resolvedText(update.why, testRun),
+          edited ? { ts: page.ts, broadcast: false } : undefined,
+        );
+      } else if (testRun) await poster.post(resolvedText(update.why, testRun));
       delete pages[update.signal];
       if (update.kind === "replace") await open(update.signal, textOf(update.page));
       continue;
