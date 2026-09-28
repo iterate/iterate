@@ -107,7 +107,8 @@ static void a_failed_connect_keeps_its_cause_and_frees_the_connection(void) {
 
 /*
  * ZERO-TIMEOUT READS. The pass that finds nothing is the ordinary one, so no
- * flavour of it may count as a failure, however often it repeats.
+ * flavour of it may count as a failure, however often it repeats: mbedTLS's
+ * WANT_READ, WANT_WRITE and TIMEOUT over TLS, EAGAIN over plain TCP.
  */
 static void a_read_that_finds_nothing_is_an_empty_pass(void) {
   struct fixture fixture;
@@ -118,11 +119,9 @@ static void a_read_that_finds_nothing_is_an_empty_pass(void) {
   assert(ops->connect(&fixture.stream) == ITERATE_KIT_BYTE_STREAM_PROGRESS);
   script_read(ESP_TLS_ERR_SSL_WANT_READ, 0, ESP_OK, NULL);
   script_read(ESP_TLS_ERR_SSL_WANT_WRITE, 0, ESP_OK, NULL);
-  script_read(ESP_TLS_ERR_SSL_TIMEOUT, 0, ESP_OK, NULL);
-  script_read(-1, EAGAIN, ESP_OK, NULL);
-  script_read(-1, EWOULDBLOCK, ESP_OK, NULL);
+  script_read(ESP_TLS_ERR_SSL_TIMEOUT, EAGAIN, ESP_OK, NULL);
   script_read(3, 0, ESP_OK, "abc");
-  for (pass = 0U; pass < 5U; ++pass) {
+  for (pass = 0U; pass < 3U; ++pass) {
     assert(ops->read(&fixture.stream, bytes, sizeof(bytes), &count) ==
         ITERATE_KIT_BYTE_STREAM_WOULD_BLOCK);
     assert(count == 0U);
@@ -132,6 +131,17 @@ static void a_read_that_finds_nothing_is_an_empty_pass(void) {
       ITERATE_KIT_BYTE_STREAM_PROGRESS);
   assert(count == 3U && memcmp(bytes, "abc", 3U) == 0);
   assert(fake_esp_tls.read_capacity == sizeof(bytes));
+  ops->close(&fixture.stream);
+
+  prepare(&fixture, "ws://localhost:8080/api");
+  assert(ops->connect(&fixture.stream) == ITERATE_KIT_BYTE_STREAM_PROGRESS);
+  script_read(-1, EAGAIN, ESP_OK, NULL);
+  script_read(-1, EWOULDBLOCK, ESP_OK, NULL);
+  assert(ops->read(&fixture.stream, bytes, sizeof(bytes), &count) ==
+      ITERATE_KIT_BYTE_STREAM_WOULD_BLOCK);
+  assert(ops->read(&fixture.stream, bytes, sizeof(bytes), &count) ==
+      ITERATE_KIT_BYTE_STREAM_WOULD_BLOCK);
+  assert(fixture.stream.last_error == 0);
   ops->close(&fixture.stream);
 }
 
@@ -159,6 +169,12 @@ static void a_closed_or_broken_read_fails_with_its_cause(void) {
   assert(ops->read(&fixture.stream, bytes, sizeof(bytes), &count) ==
       ITERATE_KIT_BYTE_STREAM_FAILED);
   assert(fixture.stream.last_error == ENOTCONN);
+
+  /* Over TLS a stale EAGAIN beside a real error is still the error. */
+  script_read(-0x7280, EAGAIN, ESP_ERR_MBEDTLS_SSL_READ_FAILED, NULL);
+  assert(ops->read(&fixture.stream, bytes, sizeof(bytes), &count) ==
+      ITERATE_KIT_BYTE_STREAM_FAILED);
+  assert(fixture.stream.last_error == ESP_ERR_MBEDTLS_SSL_READ_FAILED);
   ops->close(&fixture.stream);
   assert(ops->read(&fixture.stream, bytes, sizeof(bytes), &count) ==
       ITERATE_KIT_BYTE_STREAM_FAILED);
@@ -174,14 +190,11 @@ static void a_write_takes_what_the_socket_takes(void) {
   script_write(ESP_TLS_ERR_SSL_WANT_WRITE, 0, ESP_OK);
   script_write(ESP_TLS_ERR_SSL_WANT_READ, 0, ESP_OK);
   script_write(0, 0, ESP_OK);
-  script_write(-1, EAGAIN, ESP_OK);
   script_write(20, 0, ESP_OK);
   script_write(-0x7780, 0, ESP_ERR_MBEDTLS_SSL_WRITE_FAILED);
   assert(ops->write(&fixture.stream, frame, sizeof(frame), &count) ==
       ITERATE_KIT_BYTE_STREAM_WOULD_BLOCK);
   assert(count == 0U);
-  assert(ops->write(&fixture.stream, frame, sizeof(frame), &count) ==
-      ITERATE_KIT_BYTE_STREAM_WOULD_BLOCK);
   assert(ops->write(&fixture.stream, frame, sizeof(frame), &count) ==
       ITERATE_KIT_BYTE_STREAM_WOULD_BLOCK);
   assert(ops->write(&fixture.stream, frame, sizeof(frame), &count) ==
@@ -194,6 +207,18 @@ static void a_write_takes_what_the_socket_takes(void) {
       ITERATE_KIT_BYTE_STREAM_FAILED);
   assert(count == 0U);
   assert(fixture.stream.last_error == ESP_ERR_MBEDTLS_SSL_WRITE_FAILED);
+  ops->close(&fixture.stream);
+
+  /* A plain socket's full send buffer is EAGAIN; a reset is a failure. */
+  prepare(&fixture, "ws://localhost:8080/api");
+  assert(ops->connect(&fixture.stream) == ITERATE_KIT_BYTE_STREAM_PROGRESS);
+  script_write(-1, EAGAIN, ESP_OK);
+  script_write(-1, ECONNRESET, ESP_OK);
+  assert(ops->write(&fixture.stream, frame, sizeof(frame), &count) ==
+      ITERATE_KIT_BYTE_STREAM_WOULD_BLOCK);
+  assert(ops->write(&fixture.stream, frame, sizeof(frame), &count) ==
+      ITERATE_KIT_BYTE_STREAM_FAILED);
+  assert(fixture.stream.last_error == ECONNRESET);
   ops->close(&fixture.stream);
 }
 

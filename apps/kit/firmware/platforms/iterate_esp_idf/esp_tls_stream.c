@@ -130,17 +130,23 @@ static enum iterate_kit_byte_stream_result stream_connect(void *context) {
 }
 
 /*
- * No progress, as opposed to no connection: mbedTLS's WANT_READ and
- * WANT_WRITE (it may need the other direction to advance), its TIMEOUT, and
- * a plain socket's EAGAIN. None of them is logged or remembered.
+ * No progress, as opposed to no connection. Over TLS that is mbedTLS's
+ * WANT_READ and WANT_WRITE (it may need the other direction to advance) and
+ * its TIMEOUT, whatever errno says; over plain TCP, the socket's EAGAIN. None
+ * of them is logged or remembered.
  */
-static bool no_progress(ssize_t result, int socket_errno) {
-  return result == ESP_TLS_ERR_SSL_WANT_READ ||
-      result == ESP_TLS_ERR_SSL_WANT_WRITE ||
-      result == ESP_TLS_ERR_SSL_TIMEOUT ||
-      (result < 0 &&
-       (socket_errno == EAGAIN || socket_errno == EWOULDBLOCK ||
-        socket_errno == EINPROGRESS || socket_errno == EINTR));
+static bool no_progress(
+    const struct iterate_kit_esp_tls_stream *stream,
+    ssize_t result,
+    int socket_errno) {
+  if (stream->endpoint->secure) {
+    return result == ESP_TLS_ERR_SSL_WANT_READ ||
+        result == ESP_TLS_ERR_SSL_WANT_WRITE ||
+        result == ESP_TLS_ERR_SSL_TIMEOUT;
+  }
+  return result < 0 &&
+      (socket_errno == EAGAIN || socket_errno == EWOULDBLOCK ||
+       socket_errno == EINPROGRESS || socket_errno == EINTR);
 }
 
 static enum iterate_kit_byte_stream_result stream_read(
@@ -157,7 +163,7 @@ static enum iterate_kit_byte_stream_result stream_read(
     *bytes_read = (size_t)result;
     return ITERATE_KIT_BYTE_STREAM_PROGRESS;
   }
-  if (result < 0 && no_progress(result, errno)) {
+  if (no_progress(stream, result, errno)) {
     return ITERATE_KIT_BYTE_STREAM_WOULD_BLOCK;
   }
   /* Zero is the peer's end of the stream, a FIN or TLS close_notify. */
@@ -183,7 +189,7 @@ static enum iterate_kit_byte_stream_result stream_write(
     return ITERATE_KIT_BYTE_STREAM_PROGRESS;
   }
   /* mbedTLS answers 0 when a full record buffer took nothing. */
-  if (result == 0 || no_progress(result, errno)) {
+  if (result == 0 || no_progress(stream, result, errno)) {
     return ITERATE_KIT_BYTE_STREAM_WOULD_BLOCK;
   }
   remember_failure(stream, (int)result, errno);
