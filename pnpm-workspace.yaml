@@ -11,7 +11,9 @@ packages:
   - apps/dummy-petshop
   - apps/ci-reports
   - packages/agents
+  - packages/ai-linter
   - packages/cli
+  - packages/github-sync
   - packages/iterate
   - packages/petshop-sdk
   - packages/voice

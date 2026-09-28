@@ -52,11 +52,12 @@ Workflow-run and job-attempt history goes to PostHog from an hourly sync
 Two GitHub Actions workflows are left, both for what Depot cannot do:
 
 - `.github/workflows/pkg-pr-new.yml` is not CI; it publishes the `iterate` SDK, the
-  `@iterate-com/cli`, `@iterate-com/petshop-sdk`, `@iterate-com/agents` and `@iterate-com/voice`
-  packages to [pkg.pr.new](https://pkg.pr.new) for every `main` push, and for a PR that changes
-  their inputs (their `packages/*` folders, `packages/shared`, the root manifests and lockfile, or
-  the workflow itself): the **publish** and **Continuous Releases** checks. Projects install
-  agents and voice from these builds, and the e2e rows that prove it pin the PR head's.
+  `@iterate-com/cli`, `@iterate-com/petshop-sdk`, `@iterate-com/agents`, `@iterate-com/voice`,
+  `@iterate-com/github-sync` and `@iterate-com/ai-linter` packages to
+  [pkg.pr.new](https://pkg.pr.new) for every `main` push, and for a PR that changes their inputs
+  (their `packages/*` folders, `packages/shared`, the root manifests and lockfile, or the workflow
+  itself): the **publish** and **Continuous Releases** checks. Projects install agents, voice, the
+  GitHub sync and the AI linter from these builds, and the e2e rows that prove it pin the PR head's.
 - `.github/workflows/merges-with-main.yml` is the **Merges with main** check, on
   `pull_request_target`: a PR that conflicts with main gets a red check instead of none
   ([Pull requests that conflict with main](#pull-requests-that-conflict-with-main)).
