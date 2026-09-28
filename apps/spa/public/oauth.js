@@ -1,12 +1,11 @@
 // oauth.js — THE OAUTH CLIENT of a page with no server of its own, one file for the static SPA
 // (which serves it as written) and the Chrome extension (whose build copies it into its dist/):
-// discovery, a one-time public-client registration per issuer (RFC 7591), PKCE (S256), the
-// callback, and refresh through the rotating refresh token, for the scope `iterate` and the
-// resource `<issuer>/api`. Its host says where things are kept and how the browser gets to the
-// issuer and back:
-//   - `clients` keeps each issuer's registered client id for good; `sessions` keeps the sign-in in
-//     flight and the tokens (the SPA: localStorage, then this tab's sessionStorage; the extension:
-//     chrome.storage.local for both, until sign-out);
+// discovery, a public-client registration at each sign-in (RFC 7591), PKCE (S256), the callback,
+// and refresh through the rotating refresh token, for the scope `iterate` and the resource
+// `<issuer>/api`. The client id lives in the sign-in in flight and then in the session, nowhere
+// else. Its host says where things are kept and how the browser gets to the issuer and back:
+//   - `sessions` keeps the sign-in in flight and the session (the SPA: this tab's sessionStorage;
+//     the extension: chrome.storage.local, until sign-out);
 //   - `redirectUri` is where the issuer sends the browser back, and `launch(url)` opens the
 //     issuer's authorization URL and resolves with the URL it came back to (Chrome's identity
 //     window). A page that navigates to the issuer never resolves: it is loaded again at
@@ -50,12 +49,9 @@ async function tokenRequest(endpoint, params) {
 
 /** The client: `registration` is what the issuer's consent page shows of it (`client_name`,
  *  `client_uri`, `logo_uri`). */
-export function oauthClient({ clients, sessions, redirectUri, launch, registration }) {
-  /** A public client (no secret), registered once per issuer. */
-  async function clientIdFor(issuer, metadata) {
-    const key = `oauth:client:${issuer}`;
-    const cached = await clients.get(key);
-    if (cached) return cached;
+export function oauthClient({ sessions, redirectUri, launch, registration }) {
+  /** A public client (no secret), registered for this sign-in. */
+  async function register(metadata) {
     const response = await fetch(metadata.registration_endpoint, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -69,7 +65,6 @@ export function oauthClient({ clients, sessions, redirectUri, launch, registrati
     });
     if (!response.ok) throw new Error(`Client registration failed (${response.status})`);
     const { client_id } = await response.json();
-    await clients.set(key, client_id);
     return client_id;
   }
 
@@ -115,7 +110,7 @@ export function oauthClient({ clients, sessions, redirectUri, launch, registrati
      *  stored session once `launch` does. */
     async signIn(issuer) {
       const metadata = await discover(issuer);
-      const clientId = await clientIdFor(issuer, metadata);
+      const clientId = await register(metadata);
       const verifier = random();
       const state = random();
       await sessions.set(PENDING, { issuer, clientId, verifier, state });
