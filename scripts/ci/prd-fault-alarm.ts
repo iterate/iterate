@@ -177,18 +177,13 @@ export type AlarmState = z.infer<typeof AlarmState>;
  *  shape): the run then starts over, which may repeat a page once and never misses one. */
 export function readState(path: string | undefined): AlarmState | null {
   if (!path || !existsSync(path)) return null;
-  const parsed = z
-    .string()
-    .transform((text, context) => {
-      try {
-        return JSON.parse(text) as unknown;
-      } catch {
-        context.addIssue({ code: "custom", message: "not JSON" });
-        return z.NEVER;
-      }
-    })
-    .pipe(AlarmState)
-    .safeParse(readFileSync(path, "utf8"));
+  let previous: unknown;
+  try {
+    previous = JSON.parse(readFileSync(path, "utf8"));
+  } catch {
+    // A truncated or corrupt file is a state this alarm cannot read, like one of another shape.
+  }
+  const parsed = AlarmState.safeParse(previous);
   if (parsed.success) return parsed.data;
   console.log(`[prd-fault-alarm] ${path} is not a state this alarm reads: starting over`);
   return null;
@@ -435,7 +430,7 @@ export function incidentsOf(reading: FaultReading) {
   for (const { cause, deploy, serverErrors } of reading.causes)
     for (const [url, count] of serverErrors)
       add({ what: cause, label: deploy, count, hosts: { [host(url)]: count } });
-  // prd answers no 5xx on purpose since #2844
+  // prd answers no 5xx on purpose
   for (const [url, count] of reading.serverErrors)
     add({ what: "visitor 5xx", label: host(url), count, hosts: {} });
   if (reading.heals.reduce((sum, [, n]) => sum + n, 0) >= BURST)
@@ -603,7 +598,7 @@ function renderFaultPage(incidents: Record<string, Incident>, now: number, testR
   const all = Object.values(incidents).sort((a, b) => b.count - a.count);
   const total = (whats: string[]) =>
     all.filter((incident) => whats.includes(incident.what)).reduce((sum, i) => sum + i.count, 0);
-  const causes = all.filter((incident) => CAUSE_NAMES.includes(incident.what as Cause));
+  const causes = all.filter((incident) => incident.what in CAUSES);
   const totals = [
     [total(["visitor 5xx", ...CAUSE_NAMES]), "visitor 5xx"],
     [total(["errors"]), "errors"],
@@ -865,25 +860,25 @@ const RAY_OUTCOMES: RayOutcome[] = [
  * 5xx page as the deploy's (CauseReading), never as their hosts'. A ray with no visitor 5xx pages
  * nothing.
  */
-const CAUSES = {
+const CAUSE_NAMES = ["deploy reset", "version skew"] as const;
+type Cause = (typeof CAUSE_NAMES)[number];
+const CAUSES: Record<Cause, string> = {
   "deploy reset": "Durable Object reset because its code was updated",
   "version skew": "Unable to deserialize cloned data due to invalid or unsupported version",
-} as const;
-type Cause = keyof typeof CAUSES;
-const CAUSE_NAMES = Object.keys(CAUSES) as Cause[];
+};
 
 /** Error messages that are expected outcomes wherever they are logged. */
 const EXPECTED_ERRORS = [
   "itx.abort() reset the context", // explicitly requested, recorded in the durable log
-  "Durable Object reset because its code was updated", // a deploy's cancellation: CAUSES
+  ...Object.values(CAUSES), // a deploy's own outcomes: its visitor 5xx page as the deploy's
   "destroyed: its project was deleted", // apps/os context/paths.ts CONTEXT_DESTROYED
 ];
 
 // workerd#918: a Durable Object that answers before a request body is read can log
 // "Can't read from request stream after response has been sent." though the client got its
 // response. Scanners POSTing to project hosts raise it on ~3 % of chunked bodies even with the
-// itx-expression fetch's pipe (#2871; the #2880 follow-up measured no effect). It pages only on `/api`
-// itself — the capnweb endpoint, a platform call, not a site visit (`/api/…` is a site's path).
+// itx-expression fetch's pipe. It pages only on `/api` itself — the capnweb endpoint, a platform
+// call, not a site visit (`/api/…` is a site's path).
 const UNREAD_BODY = "Can't read from request stream after response has been sent";
 
 /** Whether an error row with `message` is an expected outcome (EXPECTED_ERRORS, or an unread body
@@ -1047,7 +1042,12 @@ async function readWindow(
       CAUSE_NAMES.map((cause) =>
         evidence(cause, () =>
           rows(
-            [leaf("$metadata.message", "includes", CAUSES[cause])],
+            [
+              anyOf(
+                leaf("$metadata.message", "includes", CAUSES[cause]),
+                leaf("$metadata.error", "includes", CAUSES[cause]),
+              ),
+            ],
             [
               "$metadata.rayId",
               "$workers.executionModel",
@@ -1066,18 +1066,24 @@ async function readWindow(
   ]);
   // The summary of an invocation that also logged its exception (a `*.jsrpc` call's, an alarm's) is
   // that exception's sighting, counted (or expected) once, as the exception.
-  const summarizedExceptions = await evidence("summarized-exceptions", () =>
-    summaryRequests.length && summaryRequests.length <= 500
-      ? rows(
-          [
-            errorLevel,
-            ...ERROR_ROWS.lines,
-            leaf("$metadata.requestId", "in", summaryRequests.join(",")),
-          ],
+  // The summaries count's filters leave room for one `not_in` of request IDs: past 500 folded
+  // summaries, the rest page beside their exceptions, and the log says how many.
+  const summarizedExceptions = await evidence("summarized-exceptions", async () => {
+    const found = await Promise.all(
+      chunks(summaryRequests).map((chunk) =>
+        rows(
+          [errorLevel, ...ERROR_ROWS.lines, leaf("$metadata.requestId", "in", chunk.join(","))],
           ["$metadata.requestId"],
-        ).then((found) => found.map(([[requestId]]) => requestId!))
-      : Promise.resolve([]),
-  );
+        ),
+      ),
+    );
+    const requestIds = found.flat().map(([[requestId]]) => requestId!);
+    if (requestIds.length > 500)
+      console.warn(
+        JSON.stringify({ event: "prd-fault-alarm.fold-capped", unfolded: requestIds.length - 500 }),
+      );
+    return requestIds.slice(0, 500);
+  });
   // The rays of every outcome and cause, together, stay under 2,000: the most a count's four `not_in`
   // of rays can hold beside its own filters. Evidence past that excludes nothing.
   let excludedRays = 0;
@@ -1103,6 +1109,7 @@ async function readWindow(
   const answered = new Set(
     outcomes.filter((outcome) => outcome.keep.serverErrors).flatMap((outcome) => outcome.rays),
   );
+  const caused = new Set<string>();
   const deploys = CAUSE_NAMES.flatMap((cause, index) => {
     // A ray whose cause both a Durable Object and its caller logged is the Durable Object's deploy.
     const found = causeRays[index]!.toSorted(
@@ -1110,8 +1117,10 @@ async function readWindow(
     );
     const byRay = new Map<string, string>();
     for (const [[rayId, , service, version]] of found)
-      if (rayId && !answered.has(rayId) && !byRay.has(rayId))
+      if (rayId && !answered.has(rayId) && !caused.has(rayId) && !byRay.has(rayId))
         byRay.set(rayId, `${service}@${version!.slice(0, 8)}`);
+    // A ray is one cause's, the first that names it: its 5xx page once.
+    for (const rayId of byRay.keys()) caused.add(rayId);
     const rays = new Set(kept(cause, [...byRay.keys()]));
     const byDeploy = new Map<string, string[]>();
     for (const [rayId, deploy] of byRay)

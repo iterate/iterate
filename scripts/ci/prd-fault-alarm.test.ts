@@ -757,7 +757,7 @@ test.for([
 });
 
 // A deploy under traffic: the Durable Object resets because its code was updated, or a message
-// cloned between versions cannot be read. Rays from 2026-09-28 09:35Z (os-prd 502616fb).
+// cloned between versions cannot be read. The rays are shaped as prd logged them (os-prd 502616fb).
 test.for([
   {
     name: "a deploy reset's visitor 5xx are one incident of that deploy, and its errors page nothing",
@@ -819,6 +819,7 @@ test.for([
     "itx.abort() reset the context",
     "Can't read from request stream after response has been sent.",
     "destroyed: its project was deleted",
+    "Unable to deserialize cloned data due to invalid or unsupported version.",
   ];
   queryableWorkersLogs(
     messages.map((message) => ({
@@ -859,6 +860,23 @@ test.for([
     { timestamp: 42, $metadata: { type: "cf-worker", message, error: "boom" }, $workers: {} },
   ]);
   expect(bullets(await summary())).toEqual(["• errors: boom 1 · last 07:30 UTC"]);
+});
+
+test("past 500 folded summaries, the rest page beside their exception and the log says so", async () => {
+  queryableWorkersLogs(
+    rays("call-", 600).flatMap((requestId) => [
+      invocation({ hop: "RepoDurableObject", eventType: "jsrpc", outcome: "exception", requestId }),
+      line({ hop: "RepoDurableObject", requestId, message: "boom" }),
+    ]),
+  );
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  expect(bullets(await summary())).toEqual([
+    "• errors: boom 600 · last 07:30 UTC",
+    "• errors: RepoDurableObject.jsrpc 100 · last 07:30 UTC",
+  ]);
+  expect(warn).toHaveBeenCalledWith(
+    JSON.stringify({ event: "prd-fault-alarm.fold-capped", unfolded: 100 }),
+  );
 });
 
 // A killed `iterate tunnel` leaves its fetch route's target, a lent stub, offline until its rule is
@@ -1614,8 +1632,8 @@ function deployResetRay(rayId: string, url: string, version = "502616fb-0000") {
   ];
 }
 
-/** A project's fetch of a third party through its globalOutbound, as prd logged docs.parallel.ai's
- *  502 on 2026-09-28 11:44Z: the SecretDurableObject's and the context DO's summaries, no ray. */
+/** A project's fetch of a third party through its globalOutbound, shaped as prd logs it: the
+ *  SecretDurableObject's and the context DO's summaries, with no ray. */
 function thirdPartyRequest(url: string, status: number) {
   return [
     invocation({ hop: "SecretDurableObject", status, url, requestId: "egress" }),

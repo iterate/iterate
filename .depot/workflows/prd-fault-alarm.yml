@@ -1,19 +1,11 @@
-# Prd fault alarm: every 15 minutes, reads every first-party prd Worker's logs since the last run (os-prd
-# and its clients, scripts/ci/prd-fault-alarm.ts PRD_WORKERS) and pages Slack #error-pulse on a 5xx a
-# visitor was answered, a burst of platform-failure heals, or an error. Each cause is an incident:
-# new ones share a page, later runs edit it, and its thread hears only of growth, a return after
-# quiet and the resolution, each mentioning Jonas and Misha. The page is the alarm: the run goes red
-# only when it could not read the logs or post to Slack, because a scheduled run reports on main's
-# head commit, where red reads as "this commit broke". Why and thresholds:
-# scripts/ci/prd-fault-alarm.ts. Depot registers the schedule once this file is on the default
-# branch.
+# Prd fault alarm: every 15 minutes, scripts/ci/prd-fault-alarm.ts reads the first-party prd Workers'
+# logs since the last run and pages Slack #error-pulse; what it pages, when and why is in that file.
+# Depot registers the schedule once this file is on the default branch.
 #
-# Its memory (where the next read starts, the open pages) is its own `prd-fault-alarm-state`
-# artifact, read back by the next run with the Depot organization token from Doppler
-# _shared/preview. Only a run on main posts and keeps it (the script checks `--ref`); a run on a
-# branch prints what it would post. A run that cannot read it reads the last half hour and pages
-# everything as new: a repeat, never a miss. Test a branch, and the Slack hookup, with a 🧪 TEST RUN
-# of the half hour to `at` (or to now), posted to #ci and keeping no state:
+# Its state is its own `prd-fault-alarm-state` artifact, read back by the next run with the Depot
+# organization token from Doppler _shared/preview; the script writes it only on main (`--ref`).
+# Test a branch, and the Slack hookup, with a 🧪 TEST RUN of the half hour to `at` (or to now),
+# posted to #ci:
 #
 #   depot ci dispatch --org 0p91s0lz49 --repo iterate/iterate --workflow prd-fault-alarm.yml \
 #     --ref <branch> --input test-run=true --input at=2026-09-28T09:35:00Z
@@ -74,8 +66,6 @@ jobs:
           --state-out test-results/prd-fault-alarm/state.json
           ${{ inputs.test-run == 'true' && '--test-run' || '' }}
           ${{ inputs.test-run == 'true' && inputs.at != '' && '--at "$AT"' || '' }}
-      # The alarm writes the state only on main, after its posts, so a run that failed to post keeps
-      # none and the next one reads its window again. A test run writes none.
       - name: Keep the state for the next run
         if: always()
         uses: actions/upload-artifact@v4
