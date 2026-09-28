@@ -79,6 +79,52 @@ test.for(["client_secret_basic", "client_secret_post"] as const)(
   },
 );
 
+test("an OAuth app collected with fields is one JSON secret: clientSecret names its field, the exchange and a refresh send it; a clientId placeholder is refused, since the id comes back in the authorize URL", async () => {
+  const member = await projectWithMember("oauth-placeholder-app");
+  const provider = fakeProvider("client-secret-1");
+  await member.itx.secrets.set(
+    "/secrets/provider-app",
+    { clientId: CLIENT_ID, clientSecret: "client-secret-1" },
+    { urls: [PROVIDER] },
+  );
+  const app = {
+    ...OPTIONS,
+    clientSecret: 'getSecret("/secrets/provider-app", { field: "clientSecret" })',
+    clientAuth: "client_secret_post" as const,
+  };
+
+  const { authorizationUrl } = await member.itx.secrets.beginOAuth("/secrets/provider", app);
+  const back = await callback(member.cookie, authorizationUrl);
+  expect({ status: back.status, text: await back.text() }).toEqual({
+    status: 200,
+    text: expect.stringContaining("Done: the secret /secrets/provider"),
+  });
+  expect(await me(member.itx)).toBe(200);
+  provider.accessToken = "revoked";
+  expect(await me(member.itx)).toBe(200);
+  expect(provider).toMatchObject({
+    tokenRequests: [
+      { grant: "authorization_code", via: "form", clientSecret: "client-secret-1" },
+      { grant: "refresh_token", via: "form", clientSecret: "client-secret-1" },
+    ],
+  });
+
+  // read out of a secret, a client ID would come back in the URL: any secret's value would
+  const refused = await member.itx.secrets
+    .beginOAuth("/secrets/provider", {
+      ...app,
+      clientId: 'getSecret("/secrets/provider-app", { field: "clientSecret" })',
+    })
+    .then(
+      () => "begun",
+      (error: unknown) =>
+        `${errorCode(error)}: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  expect(refused).toContain(
+    "INVALID_INPUT: secrets.beginOAuth: clientId is the client ID itself, never a getSecret placeholder",
+  );
+});
+
 test("a client secret placeholder that cannot resolve is refused INVALID_INPUT at beginOAuth, before anyone is sent to consent; a field of a JSON secret pinned to the token endpoint is one that can", async () => {
   const member = await projectWithMember("oauth-placeholder-refused");
   const provider = fakeProvider("client-secret-1");

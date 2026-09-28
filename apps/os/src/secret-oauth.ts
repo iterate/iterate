@@ -27,6 +27,7 @@
 
 import * as oauth from "oauth4webapi";
 import type { ClientAuth, SecretOAuthClient } from "iterate/api";
+import { codedError } from "iterate/lib";
 import { OAUTH_INTEGRATION_PROVIDERS } from "./integrations/contract.ts";
 import { consentAccountRefusal } from "./integrations/rules.ts";
 import {
@@ -143,6 +144,13 @@ export function normalizeSecretOAuth(
     for (const [key, value] of Object.entries(options.extra)) extra[key] = String(value);
   const clientSecret = typeof options.clientSecret === "string" ? options.clientSecret : "";
   clientSecretReferenceOf(clientSecret); // a placeholder among other text is refused here
+  // A client ID is not secret and goes into the authorize URL its caller gets back, so it is never
+  // read out of a secret: resolving a placeholder there would hand any secret's value to the caller.
+  if (!client && String(options.clientId).includes("getSecret("))
+    throw codedError(
+      "INVALID_INPUT",
+      "secrets.beginOAuth: clientId is the client ID itself, never a getSecret placeholder: it is no secret, and it goes into the authorize URL",
+    );
   return {
     authorizationEndpoint: authorizationEndpoint.href,
     tokenEndpoint: tokenEndpoint.href,

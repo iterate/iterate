@@ -1,11 +1,20 @@
 // /collect-secret/<slug> — the collection-link page; see `collectFromUser` in packages/iterate/src/api.ts.
 // One card outside the Dash's shell, framed like the issuer's sign-in and consent pages.
 // A visitor without a session signs in and returns here; one whose sign-in lacks the project
-// is offered another.
+// is offered another. The requester's description is markdown the page renders without HTML or
+// images, its links opening in a new tab with their host beside them.
 
 // registers `itx.agents` on InstalledAppRoots
 import type {} from "@iterate-com/agents";
-import { useState, type FormEvent } from "react";
+import {
+  lazy,
+  Suspense,
+  useState,
+  type ComponentProps,
+  type ComponentType,
+  type FormEvent,
+} from "react";
+import type { ExtraProps, StreamdownProps } from "streamdown";
 import { createFileRoute } from "@tanstack/react-router";
 import { z } from "zod";
 import type { AuthenticatedApp } from "iterate/app";
@@ -13,6 +22,7 @@ import type { IterateContextApiWith } from "iterate/api";
 import { Button } from "@iterate-com/ui/components/button";
 import { Card } from "@iterate-com/ui/components/card";
 import { Field, FieldLabel } from "@iterate-com/ui/components/field";
+import { Input } from "@iterate-com/ui/components/input";
 import { IterateLogo } from "@iterate-com/ui/components/iterate-logo";
 import { Spinner } from "@iterate-com/ui/components/spinner";
 import { ErrorMessage, StandalonePage } from "@iterate-com/ui/components/standalone-page";
@@ -29,6 +39,7 @@ export const Route = createFileRoute("/collect-secret/$slug")({
     path: z.string().optional().catch(undefined),
     urls: z.array(z.string()).optional().catch(undefined),
     description: z.string().optional().catch(undefined),
+    fields: z.array(z.unknown()).optional().catch(undefined),
     agent: z.string().optional().catch(undefined),
   }),
   // the session dials a WebSocket, which never runs on the server
@@ -74,6 +85,18 @@ const CollectionLink = z.object({
     .min(1)
     .transform((urls) => [...new Set(urls.map((value) => new URL(value).origin))]),
   description: z.string().optional(),
+  // the parts of a secret of several, as `collectFromUser` checked them
+  fields: z
+    .array(
+      z.object({
+        name: z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/),
+        label: z.string().trim().min(1).max(80),
+        multiline: z.boolean().optional(),
+      }),
+    )
+    .min(1)
+    .max(10)
+    .optional(),
   agent: z.string().startsWith("/agents/").optional(),
 });
 
@@ -100,7 +123,7 @@ function CollectSecret() {
         </header>
         {saved ? (
           <p role="status" className="text-sm">
-            Saved. You can close this tab and tell your agent you’re done.
+            Saved. You can close this tab.
           </p>
         ) : (
           <>
@@ -132,8 +155,8 @@ function CollectSecret() {
   );
 }
 
-/** What the link asks for, then the value: one `secrets.set` with the link's pin, and a message to
- *  the requesting agent, if the link names one. */
+/** What the link asks for, then the value, or one value per field (`fields`): one `secrets.set`
+ *  with the link's pin, and a message to the requesting agent, if the link names one. */
 function CollectSecretForm({
   api,
   projectId,
@@ -148,9 +171,12 @@ function CollectSecretForm({
   existing: boolean;
   onSaved: () => void;
 }) {
-  const [value, setValue] = useState("");
+  // one Value, a pasted JSON object's fields becoming the secret's; or the link's own fields
+  const inputs = link.fields || [{ name: "", label: "Value", multiline: true }];
+  const [values, setValues] = useState<Record<string, string>>({});
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const complete = inputs.every((input) => values[input.name]?.trim());
 
   const save = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -162,8 +188,17 @@ function CollectSecretForm({
         setError("This link is for a different project or iterate instance.");
         return;
       }
+      const material = link.fields
+        ? // a single-line field keeps what was typed, minus the spaces a paste carries at its ends
+          Object.fromEntries(
+            link.fields.map((field) => {
+              const value = values[field.name] ?? "";
+              return [field.name, field.multiline ? value : value.trim()];
+            }),
+          )
+        : secretMaterialOf(values[""] ?? "");
       const project = api.projects.get(projectId);
-      await project.secrets.set(link.path, secretMaterialOf(value), { urls: link.urls });
+      await project.secrets.set(link.path, material, { urls: link.urls });
       if (link.agent) {
         // A link that names an agent: the agents app is installed, so the project's root has
         // `itx.agents` (the assertion iterate/api's `IterateContextApiWith` documents).
@@ -174,7 +209,7 @@ function CollectSecretForm({
             .get(link.agent)
             .message(`The user submitted the secret at ${link.path}. Its value was not included.`);
         } catch {
-          // the saved line asks the person to tell their agent, which covers a message that failed
+          // the secret is saved either way; an agent waiting on it sees its `secret/set`
         }
       }
       onSaved();
@@ -187,18 +222,7 @@ function CollectSecretForm({
 
   return (
     <form onSubmit={save} className="flex flex-col gap-5">
-      {link.description ? (
-        <figure className="flex flex-col gap-1.5 border-l-2 pl-3">
-          <blockquote className="text-sm whitespace-pre-line italic wrap-anywhere">
-            {link.description}
-          </blockquote>
-          {link.agent ? (
-            <figcaption className="text-xs text-muted-foreground wrap-anywhere">
-              — <span className="font-mono">{link.agent}</span>
-            </figcaption>
-          ) : null}
-        </figure>
-      ) : null}
+      {link.description ? <RequesterDescription markdown={link.description} /> : null}
       <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-1.5 text-sm">
         <dt className="text-muted-foreground">Path</dt>
         <dd className="font-mono wrap-anywhere">{link.path}</dd>
@@ -212,27 +236,99 @@ function CollectSecretForm({
             ))}
           </ul>
         </dd>
+        {link.agent ? (
+          <>
+            <dt className="text-muted-foreground">Asked by</dt>
+            <dd className="font-mono wrap-anywhere">{link.agent}</dd>
+          </>
+        ) : null}
       </dl>
-      <Field>
-        <FieldLabel htmlFor="secret-value">Value</FieldLabel>
-        <Textarea
-          id="secret-value"
-          value={value}
-          onChange={(event) => setValue(event.target.value)}
-          autoComplete="off"
-          autoCapitalize="off"
-          autoCorrect="off"
-          spellCheck={false}
-          required
-          rows={3}
-          className="min-h-20 font-mono"
-        />
-      </Field>
+      {inputs.map((input, index) => {
+        const id = `secret-${input.name || "value"}`;
+        const props = {
+          id,
+          value: values[input.name] ?? "",
+          onChange: (event: { target: { value: string } }) =>
+            setValues((current) => ({ ...current, [input.name]: event.target.value })),
+          // the first input takes the caret, so a paste lands without a click
+          autoFocus: index === 0,
+          autoComplete: "off",
+          autoCapitalize: "off",
+          autoCorrect: "off",
+          spellCheck: false,
+          required: true,
+        };
+        return (
+          <Field key={id}>
+            <FieldLabel htmlFor={id}>{input.label}</FieldLabel>
+            {input.multiline ? (
+              <Textarea {...props} rows={3} className="min-h-20 font-mono" />
+            ) : (
+              <Input {...props} className="h-11 font-mono" />
+            )}
+          </Field>
+        );
+      })}
       {error ? <ErrorMessage>{error}</ErrorMessage> : null}
-      <Button type="submit" size="lg" className="h-11" disabled={pending || !value}>
+      <Button type="submit" size="lg" className="h-11" disabled={pending || !complete}>
         {pending ? <Spinner data-icon="inline-start" /> : null}
         {existing ? "Update" : "Save"}
       </Button>
     </form>
+  );
+}
+
+/** The requester's words, which an agent wrote: markdown rendered with no raw HTML and no images,
+ *  only http(s) links, each opening in a new tab with its host beside it, so the person sees where
+ *  a link goes before following it. The plain text shows while the renderer loads. */
+function RequesterDescription({ markdown }: { markdown: string }) {
+  return (
+    <Suspense fallback={<p className="text-sm whitespace-pre-line wrap-anywhere">{markdown}</p>}>
+      <RequesterMarkdown className="flex flex-col gap-2 text-sm wrap-anywhere [&_ol]:list-decimal [&_ol]:pl-5 [&_p]:my-0 [&_ul]:list-disc [&_ul]:pl-5">
+        {markdown}
+      </RequesterMarkdown>
+    </Suspense>
+  );
+}
+
+const RequesterMarkdown: ComponentType<StreamdownProps> = lazy(async () => {
+  const { Streamdown } = await import("streamdown");
+  function Markdown(props: StreamdownProps) {
+    return (
+      <Streamdown
+        mode="static"
+        controls={false}
+        linkSafety={{ enabled: false }}
+        // no raw HTML: it is neither parsed (no rehype-raw) nor shown
+        rehypePlugins={[]}
+        skipHtml
+        disallowedElements={["img"]}
+        urlTransform={(url) => (/^https?:\/\//i.test(url) ? url : "")}
+        components={{ a: RequesterLink }}
+        {...props}
+      />
+    );
+  }
+  return { default: Markdown };
+});
+
+/** A link in the requester's words: a new tab, no referrer, its host beside it unless the words
+ *  are the URL itself. One whose URL the page refused stays text. */
+function RequesterLink({ href, children }: ComponentProps<"a"> & ExtraProps) {
+  const host = href ? URL.parse(href)?.host : undefined;
+  if (!href || !host) return <span>{children}</span>;
+  const wordsAreTheUrl = typeof children === "string" && children.includes(host);
+  return (
+    <>
+      <a
+        href={href}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="font-medium underline underline-offset-2"
+      >
+        {children}
+      </a>
+      {wordsAreTheUrl ? null : <span className="text-muted-foreground"> ({host})</span>}
+    </>
   );
 }

@@ -1,3 +1,6 @@
 @import "@iterate-com/ui/globals.css";
 
 @source "../src/**/*.{ts,tsx}";
+/* Streamdown's built-in markdown components carry Tailwind classes of their own; scan its dist
+   so they exist in the output (https://streamdown.ai). */
+@source "../node_modules/streamdown/dist/*.js";
