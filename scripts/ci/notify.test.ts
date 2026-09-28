@@ -278,6 +278,40 @@ test("a re-run of an older commit resolves nothing", async () => {
   expect(slack.channel("#error-pulse")[0]?.text).toBe(before);
 });
 
+test.for(["edit_window_closed", "cant_update_message"])(
+  "a deploy page Slack answers %s to moves once and is resolved once, however often it is read",
+  async (updateError) => {
+    const slack = fakeSlack({ now });
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    await pageDeployFailure(slack.client, failure("OS"));
+    const [stuck] = slack.channel("#error-pulse");
+    stuck!.updateError = updateError;
+    await pageDeployFailure(slack.client, failure("Agents"));
+    for (const app of ["OS", "OS", "Agents", "Agents", "Agents"])
+      await resolveDeployPages(slack.client, {
+        app,
+        sha: fix,
+        now: new Date(now),
+        descends: async () => true,
+      });
+
+    const pages = slack.channel("#error-pulse");
+    expect({
+      pages: pages.map((message) => message.text.split(" (")[0]),
+      closed: stuck!.replies.map((reply) => [reply.text, reply.reply_broadcast]),
+      resolved: pages[1]!.replies.map((reply) => reply.text),
+    }).toEqual({
+      pages: ["🚨 prd deploy failed at 0123456", "✅ resolved: prd deploy failed at 0123456"],
+      closed: [
+        ["✅ resolved: this page moved to a new message, which Slack lets this bot edit", true],
+      ],
+      resolved: [
+        `✅ resolved: every app is live again: OS at 89abcde, Agents at 89abcde ${mention}`,
+      ],
+    });
+  },
+);
+
 test("a page that cannot be read leaves the others to resolve, then fails the step", async () => {
   const slack = fakeSlack({ now });
   await pageDeployFailure(slack.client, failure("OS"));

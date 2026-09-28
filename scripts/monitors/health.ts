@@ -32,7 +32,6 @@
 //     [--state <state.json>] [--state-out <next.json>] [--test-page] [--dry-run]
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
-import { WebAPIPlatformError } from "@slack/web-api";
 import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
 import { createCli } from "trpc-cli";
 import { z } from "zod";
@@ -47,6 +46,7 @@ import {
   pageChannel,
   pageText,
   resolvedText,
+  updatePage,
 } from "../ci/slack.ts";
 import { checkDoCost } from "./do-cost.ts";
 import { checkMainE2e, checkRealModel, E2eMemory, mainE2eRecords } from "./e2e.ts";
@@ -106,15 +106,11 @@ export function readMainE2eState(previous: unknown): MainE2eState {
 
 /** What `sendUpdates` needs of Slack, in the pages' channel: post a message, or a reply in a
  *  page's thread (sent to the channel too when `broadcast`), answering its ts; edit one, answering
- *  "gone" when Slack can no longer edit it (`PAGE_GONE`). */
+ *  "gone" when Slack can no longer edit it (../ci/slack.ts `updatePage`). */
 export type PagePoster = {
   post(text: string, thread?: { ts: string; broadcast: boolean }): Promise<string>;
   update(ts: string, text: string): Promise<"edited" | "gone">;
 };
-
-/** Slack's answers to an edit of a page it can no longer edit: someone deleted it, or it is past
- *  the edit window. The page is gone, and its signal's next update goes top-level. */
-const PAGE_GONE = new Set(["message_not_found", "edit_window_closed", "cant_update_message"]);
 
 /** Send the checks' updates in order, each to its signal's page in `pages`, and return the pages
  *  open after them. A resolution edits the page before it replies, so a failed edit sends no reply
@@ -372,13 +368,8 @@ function slackPoster(testRun: boolean): PagePoster {
       return z.string().parse(posted.ts);
     },
     async update(ts, text) {
-      try {
-        await slack.chat.update({ channel, ts, text });
-      } catch (error) {
-        if (!(error instanceof WebAPIPlatformError && PAGE_GONE.has(error.data.error))) throw error;
-        console.log(`[health] ${ts} is gone (${error.data.error}): its update goes top-level`);
-        return "gone";
-      }
+      // this job keeps its pages in its own state, so a deleted page and a frozen one are alike
+      if ((await updatePage(slack, { channel, ts, text })) !== "edited") return "gone";
       console.log(`[health] edited ${ts}:\n${text}`);
       return "edited";
     },

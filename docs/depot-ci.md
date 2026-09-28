@@ -752,8 +752,12 @@ Every page keeps one message per incident (`scripts/ci/slack.ts`): `🚨 <what> 
 `Impact:`, `Do:`, the ids to act on and one link. A later run that finds the incident still there
 edits the page, which notifies nobody; the first run that finds it gone edits its first line to
 start `✅ resolved:` and replies once in its thread, mentioning both. Older open pages of the same
-incident are marked resolved by an edit alone. The page's first line is its state, so the channel's
-history is the only state a poster keeps; a run that sees only part of an incident (the preview
+incident are marked resolved naming no one. A page Slack can no longer edit is posted again by its
+next edit. One still in the channel (past the workspace's edit window) is closed by a reply in its
+thread sent to the channel too, starting `✅ resolved:`, which later runs read as closed: the
+resolution itself when the incident ended, else a line naming no one. A deleted page's resolution
+goes top-level. The page's first line, or that reply, is its state, so the channel's history is the
+only state a poster keeps; a run that sees only part of an incident (the preview
 sweep's stuck namespaces, the apps that failed on a commit) carries forward what the open page names.
 Only a run on main pages; a 🧪 test run (each workflow's `test-run` input, each `notify.ts` command's
 `--test-run`) posts to #ci, mentions nobody and never reads #error-pulse. `notify.ts deploy-success
@@ -792,7 +796,9 @@ Two jobs keep one page in #error-pulse per red signal, with `scripts/monitors/he
     reply with a line per account, both edited every hour; an account with a complete hour over
     its ceiling today is a 🔴 line. An account at its page tier is one page in #error-pulse,
     edited every hour while it lasts. The first hour at 2× and at 5× the page tier is a broadcast
-    reply in its thread, and two complete hours under the ceiling resolve it.
+    reply in its thread, and two complete hours under the ceiling resolve it. A page is open for
+    48 hours: an incident that lasts longer is paged again, and the new page resolves the older
+    one naming no one.
 
 What each verdict owes its signal's page (`scripts/monitors/page.ts`):
 

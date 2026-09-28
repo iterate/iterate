@@ -52,6 +52,7 @@ import {
 import { dopplerSecret } from "../lib/env-context.ts";
 import { depotApi, saveNewestArtifactFile } from "./depot.ts";
 import {
+  editPage,
   escalationText,
   getSlackClient,
   onCallMention,
@@ -289,8 +290,7 @@ export async function alarm(input: {
         reply_broadcast: update.reply.broadcast,
       });
   }
-  for (const page of triage.resolved)
-    if (slack) await resolveFaultPage(slack, { channel, ...page });
+  for (const page of triage.resolved) if (slack) await resolvePage(slack, { channel, ...page });
   if (triage.page && slack) {
     const posted = await slack.chat.postMessage({ channel, text: triage.page.text });
     // The client throws on an error, and every posted message has its ts.
@@ -316,56 +316,6 @@ export async function alarm(input: {
       pins: pinned.pins,
     } satisfies AlarmState,
   };
-}
-
-/** Why Slack refuses to edit a message that is still an open page: it was deleted, or the
- *  workspace's edit window closed on it. The page is posted again, and its thread moves there. */
-const EditRefusal = z.object({
-  data: z.object({
-    error: z.enum(["message_not_found", "edit_window_closed", "cant_update_message"]),
-  }),
-});
-
-/** Edits the page at `ts` to `text`, resolving to its ts: a new one when Slack refused the edit
- *  (EditRefusal) and the page was posted again. */
-async function editPage(slack: WebClient, page: { channel: string; ts: string; text: string }) {
-  try {
-    await slack.chat.update(page);
-    return page.ts;
-  } catch (error) {
-    const refusal = EditRefusal.safeParse(error);
-    if (!refusal.success) throw error;
-    console.warn(
-      JSON.stringify({
-        event: "prd-fault-alarm.page-reposted",
-        ts: page.ts,
-        reason: refusal.data.data.error,
-      }),
-    );
-    const posted = await slack.chat.postMessage({ channel: page.channel, text: page.text });
-    return posted.ts!;
-  }
-}
-
-/** Resolves a page (slack.ts resolvePage). One Slack refuses to edit (EditRefusal) stays as it
- *  was and leaves the state all the same: its incidents are closed. */
-async function resolveFaultPage(
-  slack: WebClient,
-  page: { channel: string; ts: string; text: string; why: string },
-) {
-  try {
-    await resolvePage(slack, page);
-  } catch (error) {
-    const refusal = EditRefusal.safeParse(error);
-    if (!refusal.success) throw error;
-    console.warn(
-      JSON.stringify({
-        event: "prd-fault-alarm.resolve-refused",
-        ts: page.ts,
-        reason: refusal.data.data.error,
-      }),
-    );
-  }
 }
 
 /** What PINNED_WORKAROUNDS owe after `window`: each pin's next state, and the posts of those whose

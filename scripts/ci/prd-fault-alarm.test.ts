@@ -26,6 +26,7 @@ import {
   runMode,
   triageIncidents,
 } from "./prd-fault-alarm.ts";
+import { fakeSlack } from "./fake-slack.ts";
 import { slackChannelIds } from "./slack.ts";
 
 const quiet: FaultReading = {
@@ -515,46 +516,75 @@ test("a quiet run never builds a Slack client, so a broken token cannot turn it 
 });
 
 test("a new incident's page is posted to #error-pulse; its repeat is a chat.update, never a new message", async () => {
-  const slack = fakeSlack();
+  const slack = fakeSlack({ now: now.getTime() });
   const run1 = await runAt("07:30", null, slack, serverErrorsOnly(1));
   await runAt("07:45", run1.next, slack, serverErrorsOnly(2));
-  expect(slack).toMatchObject({
+  const [page] = slack.channel("#error-pulse");
+  expect({ posts: posts(slack), updates: updates(slack) }).toMatchObject({
     posts: [{ channel, text: expect.stringMatching(/^🚨 prd: 1 visitor 5xx /u) }],
-    updates: [{ channel, ts: "1.0", text: expect.stringMatching(/^🚨 prd: 3 visitor 5xx /u) }],
+    updates: [{ channel, ts: page!.ts, text: expect.stringMatching(/^🚨 prd: 3 visitor 5xx /u) }],
   });
-  expect(slack.posts).toHaveLength(1);
+  expect(posts(slack)).toHaveLength(1);
 });
 
 test("a resolved page's first line is edited to ✅ resolved:, then its thread says why", async () => {
-  const slack = fakeSlack();
+  const slack = fakeSlack({ now: now.getTime() });
   const run1 = await runAt("07:30", null, slack, serverErrorsOnly(1));
   await runAt("07:30", run1.next, slack, serverErrorsOnly(0), "2026-09-24");
+  const [page] = slack.channel("#error-pulse");
   expect({
-    updates: slack.updates.map((update) => [update.ts, String(update.text).split("\n")[0]]),
-    replies: slack.posts.slice(1).map((post) => [post.thread_ts, post.text]),
+    updates: updates(slack).map((update) => [update.ts, String(update.text).split("\n")[0]]),
+    replies: posts(slack)
+      .slice(1)
+      .map((post) => [post.thread_ts, post.text]),
   }).toEqual({
-    updates: [["1.0", `✅ resolved: prd: 1 visitor 5xx ${mentions}`]],
+    updates: [[page!.ts, `✅ resolved: prd: 1 visitor 5xx ${mentions}`]],
     replies: [
-      ["1.0", `✅ resolved: no sighting for a day, quiet since 09-23 07:28 UTC ${mentions}`],
+      [page!.ts, `✅ resolved: no sighting for a day, quiet since 09-23 07:28 UTC ${mentions}`],
     ],
   });
 });
 
 test("a page Slack refuses to edit is posted again, and its thread and state move there", async () => {
-  const slack = fakeSlack({ refuseUpdate: "edit_window_closed" });
+  const slack = fakeSlack({ now: now.getTime() });
   const run1 = await runAt("07:30", null, slack, serverErrorsOnly(1));
+  const [page] = slack.channel("#error-pulse");
+  page!.updateError = "edit_window_closed";
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
   const run2 = await runAt("07:45", run1.next, slack, serverErrorsOnly(9));
-  vi.spyOn(console, "warn").mockImplementation(() => {});
+  const [, reposted] = slack.channel("#error-pulse");
   expect({
-    posts: slack.posts.map((post) => [post.thread_ts, String(post.text).split("\n")[0]]),
-    pages: run2.next.pages.map((page) => page.ts),
+    posts: posts(slack).map((post) => [post.thread_ts, String(post.text).split("\n")[0]]),
+    pages: run2.next.pages.map((open) => open.ts),
   }).toEqual({
     posts: [
       [undefined, `🚨 prd: 1 visitor 5xx ${mentions}`],
       [undefined, `🚨 prd: 10 visitor 5xx ${mentions}`],
-      ["2.0", `🚨 prd fault escalated, 07:28–07:43 UTC ${mentions}`],
+      [page!.ts, "✅ resolved: this page moved to a new message, which Slack lets this bot edit"],
+      [reposted!.ts, `🚨 prd fault escalated, 07:28–07:43 UTC ${mentions}`],
     ],
-    pages: ["2.0"],
+    pages: [reposted!.ts],
+  });
+  expect(warn).toHaveBeenCalledWith(expect.stringContaining('"event":"slack.page-gone"'));
+});
+
+test("a resolved page Slack refuses to edit gets its resolution top-level, and leaves the state", async () => {
+  const slack = fakeSlack({ now: now.getTime() });
+  const run1 = await runAt("07:30", null, slack, serverErrorsOnly(1));
+  const [page] = slack.channel("#error-pulse");
+  page!.updateError = "message_not_found";
+  vi.spyOn(console, "warn").mockImplementation(() => {});
+  const run2 = await runAt("07:30", run1.next, slack, serverErrorsOnly(0), "2026-09-24");
+  expect({
+    replies: posts(slack)
+      .slice(1)
+      .map((post) => [post.thread_ts, post.text]),
+    pages: run2.next.pages,
+  }).toEqual({
+    replies: [
+      [undefined, `✅ resolved: no sighting for a day, quiet since 09-23 07:28 UTC ${mentions}`],
+    ],
+    pages: [],
   });
 });
 
@@ -576,13 +606,13 @@ test("a run that cannot read prd fails: a failed Workers Logs query", async () =
     success: false,
     errors: [{ code: 10000, message: "Authentication error" }],
   }));
-  const slack = fakeSlack();
+  const slack = fakeSlack({ now: now.getTime() });
   vi.spyOn(console, "warn").mockImplementation(() => {});
   await expect(summary(() => slack.client)).rejects.toThrow(
     'Workers Logs query failed: [{"code":10000,"message":"Authentication error"}]',
   );
   expect(cloudflare.fetch).toHaveBeenCalledTimes(QUIET_RUN_QUERIES);
-  expect(slack).toMatchObject({ posts: [] });
+  expect(posts(slack)).toEqual([]);
 });
 
 test("a run that cannot read prd fails: Doppler gives no Cloudflare API token", async () => {
@@ -623,7 +653,7 @@ test("a run that cannot read prd fails: Cloudflare keeps answering its HTML erro
   const cloudflare = workersLogs(serverErrorsOnly(0));
   cloudflare.fetch.mockImplementation(async () => cloudflareErrorPage(502));
   const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-  const slack = fakeSlack();
+  const slack = fakeSlack({ now: now.getTime() });
   await expect(summary(() => slack.client)).rejects.toMatchObject({
     message: `Workers Logs query answered HTTP 502 (text/html; charset=UTF-8): ${errorPage.slice(0, 200)}`,
   });
@@ -637,7 +667,7 @@ test("a run that cannot read prd fails: Cloudflare keeps answering its HTML erro
     }),
   );
   expect(warn).not.toHaveBeenCalledWith(expect.objectContaining({ attempt: 4 }));
-  expect(slack).toMatchObject({ posts: [] });
+  expect(posts(slack)).toEqual([]);
 });
 
 test("every first-party prd Worker is read, not os-prd alone", async () => {
@@ -1299,7 +1329,7 @@ test("a run without a pin's state starts its count: a late post, never a false o
 });
 
 test("the held-alarm pin reads prd's heals by event and posts its one message to #error-pulse; the next run posts nothing", async () => {
-  const slack = fakeSlack();
+  const slack = fakeSlack({ now: now.getTime() });
   // Another workaround's heal, by event: not the pinned one's.
   const anotherHeal = (groupBy: string | undefined, filters: LogFilter[]) =>
     groupBy === "event"
@@ -1309,7 +1339,7 @@ test("the held-alarm pin reads prd's heals by event and posts its one message to
   const run1 = await runAt("07:30", pinState(lastSeen), slack, anotherHeal);
   const run2 = await runAt("07:45", run1.next, slack, anotherHeal);
   expect({
-    posts: slack.posts.map((post) => [
+    posts: posts(slack).map((post) => [
       post.channel,
       post.thread_ts,
       String(post.text).slice(0, 32),
@@ -1437,28 +1467,14 @@ function serverErrorsOnly(count: number, unlogged = 0) {
     );
 }
 
-/** A WebClient stand-in recording every post and edit; the Nth post's ts is "N.0". It refuses every
- *  edit with `refuseUpdate`, as Slack answers an error. */
-function fakeSlack(options: { refuseUpdate?: string } = {}) {
-  const posts: Record<string, unknown>[] = [];
-  const updates: Record<string, unknown>[] = [];
-  const client = {
-    chat: {
-      postMessage: async (args: Record<string, unknown>) => {
-        posts.push(args);
-        return { ok: true, ts: `${posts.length}.0` };
-      },
-      update: async (args: Record<string, unknown>) => {
-        if (options.refuseUpdate)
-          throw Object.assign(new Error("An API error occurred"), {
-            data: { ok: false, error: options.refuseUpdate },
-          });
-        updates.push(args);
-        return { ok: true, ts: args.ts };
-      },
-    },
-  } as unknown as WebClient; // the two methods the alarm calls
-  return { client, posts, updates };
+/** The alarm's posts to Slack, in order. */
+function posts(slack: ReturnType<typeof fakeSlack>) {
+  return slack.calls.filter((call) => call.method === "chat.postMessage");
+}
+
+/** The alarm's edits of its pages, in order. */
+function updates(slack: ReturnType<typeof fakeSlack>) {
+  return slack.calls.filter((call) => call.method === "chat.update");
 }
 
 /** One run at `hhmm` on `day` after `state`, Workers Logs answering with `answer`. */
