@@ -425,9 +425,17 @@ async function lint(job: Job, config: LintConfig, io: LintIo, github: GithubApi)
   // A pull request that cannot be read now is published on anyway: its verdict is for this head.
   if (!(await current().catch(() => true)))
     return { status: "skipped", reason: "the pull request moved on" };
-  const marker = `<!-- ${job.key} -->`;
-  // The review first, the Check Run last: a head with its Check Run is done, so a lint that died
-  // between the two posts the review again, and the marker makes that a no-op.
+  // The review is marked with the head and its findings: a lint that died between the review and the
+  // Check Run finds its review again and posts none, and a head linted again after an incomplete
+  // verdict posts its own review when it found other things.
+  const findingsDigest = await sha256(
+    JSON.stringify(
+      findings.map((finding) => [finding.rule, finding.path, finding.startLine, finding.message]),
+    ),
+  );
+  const marker = `<!-- ${job.key} ${findingsDigest.slice(0, 16)} -->`;
+  // The review first, the Check Run last: a head with its complete Check Run is done, so a lint that
+  // died between the two posts the review again, and the marker makes that a no-op.
   let reviewUrl: string | null = null;
   if (findings.length > 0) {
     const review = await settle(() =>

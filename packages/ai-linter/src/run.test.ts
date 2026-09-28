@@ -188,6 +188,22 @@ test("an LLM rule that selects comments reads only the comments' excerpts, and a
   });
 });
 
+test("a head linted again after an incomplete verdict posts its own review for what it found, and the same findings post none", async () => {
+  const github = fakeGithub({});
+  const failing = io({
+    github,
+    llm: () => {
+      throw new Error("5007: No such model");
+    },
+  });
+  await lintHead(job, config, failing.lintIo);
+  await lintHead(job, config, io({ github }).lintIo);
+  await lintHead(job, config, io({ github }).lintIo);
+  const reviews = github.posted.filter((post) => post.path === `${REPO}/pulls/7/reviews`);
+  // the incomplete verdict's review (Jev's one finding), then the complete one's (all three), once
+  expect(reviews.map((review) => review.body.comments.length)).toEqual([1, 3]);
+});
+
 test("a lint run again after a restart reads the LLM's answers it already had, and pays for none twice", async () => {
   const remembered = new Map<string, unknown>();
   const first = io({ github: fakeGithub({}), remembered });
@@ -288,7 +304,7 @@ test("the lint fails before it has anything to publish: a Check Run says so, key
 /** What a fake GitHub answers: a status and a body (a string as it is, anything else as JSON). */
 type Route = { status: number; body: unknown };
 /** A POST the lint made: its path and JSON body. */
-type Posted = { path: string; body: Record<string, any> };
+type Posted = { path: string; body: Record<string, any>; url: string };
 
 /** An LLM rule with no `select`: the LLM reads the whole diff for it. */
 const WHOLE_DIFF_RULE =
@@ -335,7 +351,17 @@ function fakeGithub(options: {
       const patch = `@@ -0,0 +1,${lines.length} @@\n${lines.map((line) => `+${line}`).join("\n")}`;
       return { status: 200, body: [{ filename: "src/read.ts", status: "added", patch }] };
     }
-    if (path === `${REPO}/pulls/7/reviews`) return { status: 200, body: [] };
+    if (path === `${REPO}/pulls/7/reviews`)
+      return {
+        status: 200,
+        body: posted
+          .filter((post) => post.path === path)
+          .map((post) => ({
+            html_url: post.url,
+            body: post.body.body,
+            user: { login: "iterate[bot]" },
+          })),
+      };
     if (path === `${REPO}/contents/src/read.ts` && ref === "head1")
       return { status: 200, body: source };
     const contents = `${REPO}/contents/`;
@@ -350,15 +376,13 @@ function fakeGithub(options: {
     if (request.method === "GET") return answer(get(url.pathname, url.searchParams.get("ref")));
     // the lint posts JSON objects only: a review or a Check Run
     const body = (await request.json()) as Record<string, any>;
-    posted.push({ path: url.pathname, body });
+    const reviews = posted.filter((post) => post.path === `${REPO}/pulls/7/reviews`).length;
+    const reviewUrl = `https://github.com/iterate/iterate/pull/7#pullrequestreview-${reviews + 1}`;
+    posted.push({ path: url.pathname, body, url: reviewUrl });
     if (url.pathname === `${REPO}/pulls/7/reviews`)
       return answer({
         status: 200,
-        body: {
-          html_url: "https://github.com/iterate/iterate/pull/7#pullrequestreview-1",
-          body: body.body,
-          user: { login: "iterate[bot]" },
-        },
+        body: { html_url: reviewUrl, body: body.body, user: { login: "iterate[bot]" } },
       });
     return answer({ status: 201, body: { html_url: "https://github.com/iterate/iterate/runs/1" } });
   };
