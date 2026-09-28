@@ -8,8 +8,8 @@
 // `fetch`, with the routing slug in `x-iterate-routing-slug` (absent on the apex), and the config
 // worker routes on it in plain code.
 //
-//   subdomains  `<routingSlug>--<project>.<hostname>`, `<routingSlug>.<project>.<hostname>`, the apex
-//               `<project>.<hostname>` — every routing slug its own origin, under one wildcard on `hostname`.
+//   subdomains  `<routingSlug>--<project>.<hostname>`, the apex `<project>.<hostname>` — every routing
+//               slug its own origin, one label under one wildcard on `hostname`.
 //   paths       `<platformOrigin>/projects/<project>/<routingSlug>/…`, the apex `<platformOrigin>/projects/<project>/`
 //               — one origin (workers.dev has no wildcard), every project under `/projects/` so the
 //               platform's own paths (`/api`, `/mcp`, `/login`, …) need no reserved list; every
@@ -47,13 +47,15 @@ const DNS_LABEL = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
  *  hostnames directly. */
 export const ROUTING_SLUG = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/;
 
-/** The labels `host` has under `hostname` — `site--p.iterate.app` ⇒ `["site--p"]` — lowercased, a
+/** The ONE label `host` has under `hostname` — `site--p.iterate.app` ⇒ `site--p` — lowercased, a
  *  trailing dot (a fully-qualified Host, `site--p.base.`) dropped; null when `host` is not under
- *  `hostname` at all. */
-function labelsUnder(host: string, hostname: string): string[] | null {
+ *  `hostname`, or is more than one label under it: a project host is one label, the one level a
+ *  wildcard certificate covers. */
+function labelUnder(host: string, hostname: string): string | null {
   const name = host.toLowerCase().replace(/\.$/, "");
   const suffix = `.${hostname.toLowerCase()}`;
-  return name.endsWith(suffix) ? name.slice(0, -suffix.length).split(".") : null;
+  const label = name.endsWith(suffix) ? name.slice(0, -suffix.length) : null;
+  return label?.includes(".") ? null : label;
 }
 
 /** The project + routing slug `url` names under `routing`, or null when it names none. Pure. */
@@ -64,17 +66,13 @@ export function projectAddressOf(
 ): ProjectAddress | null {
   if (!routing) return null;
   if (routing.type === "subdomains") {
-    const labels = labelsUnder(url.hostname, routing.hostname);
-    if (!labels || labels.length > 2) return null; // deeper than `<routingSlug>.<project>` is not a project host
-    const [first, second] = labels as [string, string?];
-    const separator = first.startsWith("xn--") ? -1 : first.indexOf("--"); // `xn--…` is an IDN label (punycode), never `<routingSlug>--<project>`
+    const label = labelUnder(url.hostname, routing.hostname);
+    if (!label) return null;
+    const separator = label.startsWith("xn--") ? -1 : label.indexOf("--"); // `xn--…` is an IDN label (punycode), never `<routingSlug>--<project>`
     const [routingSlug, project] =
-      // oxlint-disable-next-line iterate/simple-truthiness-check -- a PRESENT-but-empty second label (`<routingSlug>..<base>`) is the `<routingSlug>.<project>` shape (rejected below by DNS_LABEL), not the single-label `<project>` shape a truthiness check would route it to
-      second !== undefined
-        ? [first, second] // `<routingSlug>.<project>`
-        : separator === -1
-          ? [null, first] // the apex, `<project>`
-          : [first.slice(0, separator), first.slice(separator + 2)]; // `<routingSlug>--<project>`
+      separator === -1
+        ? [null, label] // the apex, `<project>`
+        : [label.slice(0, separator), label.slice(separator + 2)]; // `<routingSlug>--<project>`
     // oxlint-disable-next-line iterate/simple-truthiness-check -- an empty routing slug (`--<project>.<base>`) must still be rejected by ROUTING_SLUG; truthiness would skip the check and admit it
     if (!DNS_LABEL.test(project) || (routingSlug !== null && !ROUTING_SLUG.test(routingSlug)))
       return null;

@@ -25,11 +25,7 @@ const subdomainRows: { url: string; names: ProjectAddress | null; why: string }[
     names: { routingSlug: "site", project: "p", basePath: "" },
     why: "<routingSlug>--<project>",
   },
-  {
-    url: "https://site.p.iterate.app/",
-    names: { routingSlug: "site", project: "p", basePath: "" },
-    why: "<routingSlug>.<project>",
-  },
+  { url: "https://site.p.iterate.app/", names: null, why: "two labels under the hostname" },
   {
     url: "https://p.iterate.app/",
     names: { routingSlug: null, project: "p", basePath: "" },
@@ -42,7 +38,7 @@ const subdomainRows: { url: string; names: ProjectAddress | null; why: string }[
   },
   { url: "https://os.iterate.com/site--p", names: null, why: "not under the hostname" },
   { url: "https://iterate.app/", names: null, why: "the hostname itself has no labels" },
-  { url: "https://a.b.c.iterate.app/", names: null, why: "deeper than <routingSlug>.<project>" },
+  { url: "https://a.b.c.iterate.app/", names: null, why: "three labels under the hostname" },
   {
     url: "https://xn--bcher-kva.iterate.app/",
     names: null,
@@ -59,7 +55,7 @@ const subdomainRows: { url: string; names: ProjectAddress | null; why: string }[
     names: null,
     why: "a trailing hyphen is not a DNS label",
   },
-  { url: "https://site..iterate.app/", names: null, why: "a present-but-empty project label" },
+  { url: "https://site..iterate.app/", names: null, why: "two labels, one of them empty" },
 ];
 test.for(subdomainRows)("$url → $why", ({ url, names }) => {
   expect(projectAddressOf(subdomains, new URL(url), PRD)).toEqual(names);
