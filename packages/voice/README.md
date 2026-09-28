@@ -17,8 +17,9 @@ voice/worker.ts      export { default, VoiceAgentDurableObject, VoiceDelegateDur
 `installVoice(itx, await itx.repos.get("/repos/config").modules({ dir: "voice" }))`
 (`@iterate-com/voice/install`) mounts that source at `itx.voice`, keeps it in project KV
 (`voice/runtime`) for the press's facets, and stores the screen font. `ensureVoiceAgent`, which Kit's
-Prepare and voice.iterate.com run, also stores the OpenAI key and commits both folders when the
-project has none. To upgrade, pin a newer build and install again.
+Prepare and voice.iterate.com run, also stores the OpenAI key and commits both folders, in one
+commit (`commitAppFolders` in `@iterate-com/agents/install`), when the project has none, then loads
+both apps at once. To upgrade, pin a newer build and install again.
 
 The backend inherits the same system prompt and codemode parser as a normal agent
 (`@iterate-com/agents/system-prompt` and `@iterate-com/agents/codemode-format`), with additional

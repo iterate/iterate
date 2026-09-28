@@ -6,7 +6,13 @@
 // without loading it.
 import type {} from "./api.ts";
 // registers `itx.voice` on InstalledAppRoots
-import { ensureAgents, rootManifestListing } from "@iterate-com/agents/install";
+import {
+  agentsApp,
+  commitAppFolders,
+  configRepoSettled,
+  publishAgents,
+  upgradeAgents,
+} from "@iterate-com/agents/install";
 import type { IterateContextApi, IterateContextApiWith, RepoHandle } from "iterate/api";
 import { z } from "zod";
 import { SCREEN_FONT_CSS } from "./screen-font.ts";
@@ -34,10 +40,9 @@ export async function installVoice(
   },
   source: Record<string, string>,
 ) {
-  const { path } = await itx.whoami();
+  const [{ path }, agents] = await Promise.all([itx.whoami(), itx.rewriteRules.get("itx.agents")]);
   if (path !== "/") throw new Error("Install voice at the project root");
-  if (!(await itx.rewriteRules.get("itx.agents"))?.target)
-    throw new Error("Voice needs the agents app: install it first");
+  if (!agents?.target) throw new Error("Voice needs the agents app: install it first");
   const serialized = JSON.stringify(
     Object.fromEntries(
       Object.keys(source)
@@ -49,10 +54,12 @@ export async function installVoice(
   const cacheKey = Array.from(new Uint8Array(digest), (byte) =>
     byte.toString(16).padStart(2, "0"),
   ).join("");
-  // Written before the rule: the worker reads its facets' source from here (worker.ts).
-  await itx.kv.put("voice/runtime", JSON.stringify({ cacheKey, source }));
-  // A screen script embeds this in its HTML (screen-context.md).
-  await itx.kv.put("voice/screen-font.css", SCREEN_FONT_CSS);
+  await Promise.all([
+    // Written before the rule: the worker reads its facets' source from here (worker.ts).
+    itx.kv.put("voice/runtime", JSON.stringify({ cacheKey, source })),
+    // A screen script embeds this in its HTML (screen-context.md).
+    itx.kv.put("voice/screen-font.css", SCREEN_FONT_CSS),
+  ]);
   await itx.append({
     type: "events.iterate.com/itx/rewrite-rule-configured",
     payload: {
@@ -65,53 +72,69 @@ export async function installVoice(
 }
 
 /** What Kit's Prepare and the voice app run for a project: store the OpenAI key when the project
- *  has none (`needs-openai-key` without one), then — for a project without `itx.voice` — the agents
- *  app (`ensureAgents`), the config repo's `voice/` folder as it is or `voiceFolder(voiceVersion)`
- *  committed there first, installed. A project that has `itx.voice` keeps its own service: a broken
- *  one is an error, not permission to replace it. Either way the service must answer `health()`. */
+ *  has none (`needs-openai-key` without one), then — for a project without `itx.voice` — the config
+ *  repo's `agents/` (unless the project has `itx.agents`) and `voice/` folders as they are, or
+ *  `agentsFolder(versions.agents)` and `voiceFolder(versions.voice)` committed there first, in one
+ *  commit (`commitAppFolders`), and both installed from it. A project that has `itx.voice` keeps its
+ *  own service: a broken one is an error, not permission to replace it. Either way the service must
+ *  answer `health()`. Every step waits only on what it needs: the project's reads go at once, and
+ *  the agents app's first load (`upgradeAgents`) runs beside voice's (`health()`), so a dependency
+ *  set esm.sh has not built before is built for both packages at the same time. */
 export async function ensureVoiceAgent(
-  project: Parameters<typeof ensureAgents>[0] &
+  project: Parameters<typeof publishAgents>[0] &
     Parameters<typeof installVoice>[0] & {
       secrets: Pick<IterateContextApi["secrets"], "list" | "set">;
-      repos: { get(path: string): Pick<RepoHandle, "readFile" | "commitFiles" | "modules"> };
+      repos: {
+        get(path: string): Pick<RepoHandle, "listFiles" | "readFile" | "commitFiles" | "modules">;
+      };
+      waitForEvent: IterateContextApi["waitForEvent"];
     },
   versions: { agents: string; voice: string },
   openaiKey?: string,
 ): Promise<"ready" | "needs-openai-key"> {
-  const secrets = await project.secrets.list();
+  const [secrets, voiceRule, agentsRule] = await Promise.all([
+    project.secrets.list(),
+    project.rewriteRules.get("itx.voice"),
+    project.rewriteRules.get("itx.agents"),
+  ]);
   if (!secrets.some((secret) => secret.path === "/secrets/openai")) {
     if (!openaiKey?.trim()) return "needs-openai-key";
     await project.secrets.set("/secrets/openai", openaiKey.trim(), {
       urls: ["https://api.openai.com"],
     });
   }
-  if (!(await project.rewriteRules.get("itx.voice"))) {
-    await ensureAgents(project, versions.agents);
-    const repo = project.repos.get("/repos/config");
-    const root = rootManifestListing(
-      await repo.readFile("package.json"),
-      "@iterate-com/voice",
-      versions.voice,
-    );
-    const commit = (await repo.readFile("voice/package.json"))
-      ? undefined
-      : await repo.commitFiles({
-          message: "Install voice",
-          changes: [
-            ...Object.entries(voiceFolder(versions.voice)).map(([name, content]) => ({
-              path: `voice/${name}`,
-              content,
-            })),
-            ...(root ? [{ path: "package.json", content: root }] : []),
-          ],
-        });
-    // No commitOid (nothing committed, or a commit that changed nothing) reads the tip.
-    const commitOid = commit?.commitOid ?? undefined;
-    await installVoice(project, await repo.modules({ dir: "voice", commitOid }));
-  }
-  // The project's `itx.voice` rule exists now (published above, or its own), so its handle answers
-  // `voice`; a project-owned service is still parsed, since only ours is typed by VoiceApi.
+  // The project's `itx.voice` rule exists once installed (published below, or its own), so its
+  // handle answers `voice`; a project-owned service is still parsed, since only ours is typed by
+  // VoiceApi.
   const installed = project as typeof project & Pick<IterateContextApiWith<"voice">, "voice">;
-  VoiceHealth.parse(await installed.voice.health());
+  if (voiceRule) {
+    VoiceHealth.parse(await installed.voice.health());
+    return "ready";
+  }
+  const withAgents = !agentsRule?.target;
+  // A project installing the agents app too may have been created a moment ago (configRepoSettled).
+  if (withAgents) await configRepoSettled(project);
+  const voice = {
+    dir: "voice",
+    folder: voiceFolder(versions.voice),
+    packageName: "@iterate-com/voice",
+    version: versions.voice,
+  };
+  const repo = project.repos.get("/repos/config");
+  const commitOid = await commitAppFolders(
+    repo,
+    withAgents ? [agentsApp(versions.agents), voice] : [voice],
+  );
+  const [agentsSource, voiceSource] = await Promise.all([
+    withAgents ? repo.modules({ dir: "agents", commitOid }) : undefined,
+    repo.modules({ dir: "voice", commitOid }),
+  ]);
+  if (agentsSource) await publishAgents(project, agentsSource);
+  await installVoice(project, voiceSource);
+  const [, health] = await Promise.all([
+    withAgents && upgradeAgents(project),
+    installed.voice.health(),
+  ]);
+  VoiceHealth.parse(health);
   return "ready";
 }

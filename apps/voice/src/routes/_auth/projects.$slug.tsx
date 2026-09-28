@@ -99,11 +99,11 @@ function InstallVoice({ project, needsOpenaiKey }: { project: string; needsOpena
         using itx = await api.projects.get(project);
         const openaiKey = String(form.get("openai-key") || "");
         const commit = import.meta.env.VITE_SOURCE_COMMIT;
-        const versions = {
-          agents: await publishedVersion("@iterate-com/agents", commit),
-          voice: await publishedVersion("@iterate-com/voice", commit),
-        };
-        await ensureVoiceAgent(itx, versions, openaiKey);
+        const [agents, voice] = await Promise.all([
+          publishedVersion("@iterate-com/agents", commit),
+          publishedVersion("@iterate-com/voice", commit),
+        ]);
+        await ensureVoiceAgent(itx, { agents, voice }, openaiKey);
         // "needs-openai-key" too: the key was deleted since the page loaded, and the reload asks.
         // `sync`: the reload is awaited, so "Installing…" stays up until the page shows what the
         // install made. Without it the router reloads a route it already has data for in the
