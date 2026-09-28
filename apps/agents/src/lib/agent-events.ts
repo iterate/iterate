@@ -1,12 +1,10 @@
-// The agent's log as the agent-UI reducer (events/agent-ui-reducer.ts) reads it. The agent speaks
-// the reducer's event vocabulary for the loop, so `reduceAgentUi` folds every committed event
-// into messages and activities (an LLM step that wrote a script, the code step that ran it, grouped
-// into rounds). One difference is adapted here: a SCRIPT is the CONTEXT's on apps/os —
-// `itx/run-requested` / `itx/run-settled`, identified by the request's offset
-// (apps/os/src/stream/core-processor.ts) — where the reducer reads
-// `capability-host/script-run-*` with an `executionId`. `adaptContextRuns` renames the one into the
-// other and fills in the fields a failed settlement lacks under the reducer's strict schema.
+// The agent's log as the agent-UI reducer (events/agent-ui-reducer.ts) reads it: `reduceAgentUi`
+// folds every committed event, the agent's and the context's script runs (`itx/run-requested` /
+// `itx/run-settled`, identified by the request's offset) alike, into messages and activities (an
+// LLM step that wrote a script, the code step that ran it, grouped into rounds).
 import { z } from "zod";
+import { AgentContract } from "@iterate-com/agents/contract";
+import { RunRequested, RunSettled, type RunSettlement } from "iterate/stream/run";
 import { sliceText, type StreamText } from "./chunked-text.ts";
 import {
   initialAgentUiState,
@@ -35,58 +33,9 @@ export function toAgentEvent(raw: unknown): StreamEvent | null {
   return parsed.success ? parsed.data : null;
 }
 
-/** apps/os's script events as the reducer reads them. An `itx/run-requested` the agent
- *  appended while processing an assistant item (`source.processor.whileProcessing`, the engine's
- *  stamp) is the reducer's `script-run-requested` with the id it keys on,
- *  `agent-output:<that offset>`, and one any other caller asked for (`itx.run` on the agent's path)
- *  is `run:<its offset>`; its `itx/run-settled` names the request by offset, so the settlement
- *  takes the same id. `expiresAt` is the run's deadline — apps/os's runner settles a script
- *  still running ten minutes after it started as failed (`deadline`, apps/os/src/library.ts
- *  RUN_DEADLINE_MS) — which the reducer's inferred close needs; the request's offset rides along as
- *  `requestOffset`, what a settlement's developer item names (`actor`). */
-export function adaptContextRuns(events: readonly StreamEvent[]): StreamEvent[] {
-  const executionIdByRequestOffset = new Map<number, string>();
-  return events.map((event) => {
-    if (event.type === "events.iterate.com/itx/run-requested") {
-      const payload = isRecord(event.payload) ? event.payload : {};
-      const askedWhile = event.source?.processor?.whileProcessing?.offset;
-      const executionId =
-        askedWhile === undefined
-          ? `run:${String(event.offset)}`
-          : `agent-output:${String(askedWhile)}`;
-      executionIdByRequestOffset.set(event.offset, executionId);
-      return {
-        ...event,
-        type: "events.iterate.com/capability-host/script-run-requested",
-        payload: {
-          code: typeof payload.code === "string" ? payload.code : "",
-          executionId,
-          expiresAt: Date.parse(event.createdAt) + 10 * 60_000,
-          requestOffset: event.offset,
-        },
-      };
-    }
-    if (event.type === "events.iterate.com/itx/run-settled") {
-      const payload = isRecord(event.payload) ? event.payload : {};
-      const requestOffset = typeof payload.requestOffset === "number" ? payload.requestOffset : NaN;
-      return {
-        ...event,
-        type: "events.iterate.com/capability-host/script-run-settled",
-        payload: {
-          executionId:
-            executionIdByRequestOffset.get(requestOffset) ?? `run:${String(requestOffset)}`,
-          requestOffset,
-          settlement: payload.settlement,
-        },
-      };
-    }
-    return event;
-  });
-}
-
-/** The whole feed from the log: every event in offset order through the reducer, then —
- *  when the agent facet reports itself idle and no step is still running — the turn boundary,
- *  dated at the last fact. */
+/** The whole feed from the log: every event in offset order through the reducer, then — when the
+ *  agent facet reports itself idle — the turn boundary, dated at the last fact, which flushes what
+ *  waits behind an activity whose every step has settled. */
 export function reduceAgentFeed(
   events: readonly StreamEvent[],
   idle: boolean,
@@ -99,7 +48,7 @@ export function reduceAgentFeed(
     items.push(...reduced.items);
   }
   const last = events.at(-1);
-  if (idle && last && state.live && !state.live.steps.some((step) => step.status === "running")) {
+  if (idle && last) {
     const reduced = settleAgentUiAtIdleBoundary(state, last.createdAt);
     state = reduced.endState;
     items.push(...reduced.items);
@@ -164,7 +113,7 @@ export function traceOffsetByMessage(events: readonly StreamEvent[]): Map<string
   return map;
 }
 
-export function isRecord(value: unknown): value is Record<string, unknown> {
+function isRecord(value: unknown): value is Record<string, unknown> {
   return Object.prototype.toString.call(value) === "[object Object]";
 }
 
@@ -181,8 +130,9 @@ export type LlmTrace = {
     | { status: "succeeded"; text: string; durationMs?: number }
     | { status: "failed"; errorMessage: string; durationMs?: number }
     | { status: "cancelled"; reason?: string };
-  /** What the loop derived from the answer: the prose it sent, the script it ran. */
-  derived: { prose?: string; scriptExecutionId?: string };
+  /** What the loop derived from the answer: the prose it sent, the run of the script it wrote (its
+   *  `itx/run-requested` offset). */
+  derived: { prose?: string; scriptRequestOffset?: number };
 };
 
 export function llmTrace(
@@ -230,17 +180,15 @@ export function llmTrace(
     const p = isRecord(event.payload) ? event.payload : {};
     return p.llmRequestOffset === llmRequestOffset;
   });
-  // The script a response produced: its codemode action, keyed off the assistant event's offset.
-  const actionId = assistant ? `agent-output:${String(assistant.offset)}` : undefined;
-  const scriptExecutionId =
-    actionId &&
-    events.some((event) => {
-      if (event.type !== "events.iterate.com/capability-host/script-run-requested") return false;
-      const p = isRecord(event.payload) ? event.payload : {};
-      return p.executionId === actionId;
-    })
-      ? actionId
-      : undefined;
+  // The run of the script the response wrote: the one the agent asked for while processing the
+  // assistant item (the engine's `whileProcessing` stamp).
+  const scriptRequest = assistant
+    ? events.find(
+        (event) =>
+          event.type === "events.iterate.com/itx/run-requested" &&
+          event.source?.processor?.whileProcessing?.offset === assistant.offset,
+      )
+    : undefined;
   return {
     llmRequestOffset,
     model: typeof payload.model === "string" ? payload.model : "?",
@@ -252,59 +200,55 @@ export function llmTrace(
         prose && isRecord(prose.payload) && typeof prose.payload.message === "string"
           ? prose.payload.message
           : undefined,
-      scriptExecutionId,
+      scriptRequestOffset: scriptRequest?.offset,
     },
   };
 }
 
+const ContextAdded = AgentContract.events["events.iterate.com/agent/context-added"].payloadSchema;
+
 type ScriptTrace = {
-  executionId: string;
+  requestOffset: number;
   code: string;
   requestedAtMs: number;
-  expiresAtMs: number;
-  settlement?: { atMs: number; value: unknown };
+  settlement?: { atMs: number; value: RunSettlement };
   /** What the agent was told about the outcome — the developer item the settlement rendered to. */
   rendered?: string;
 };
 
+/** One script run by its `itx/run-requested` offset: the code, its `itx/run-settled` and the
+ *  developer item that told the agent (its script actor names the request's offset). */
 export function scriptTrace(
   events: readonly StreamEvent[],
-  executionId: string,
+  requestOffset: number,
 ): ScriptTrace | null {
-  const requested = events.find((event) => {
-    if (event.type !== "events.iterate.com/capability-host/script-run-requested") return false;
-    const p = isRecord(event.payload) ? event.payload : {};
-    return p.executionId === executionId;
+  const requested = events.find(
+    (event) =>
+      event.offset === requestOffset && event.type === "events.iterate.com/itx/run-requested",
+  );
+  const request = RunRequested.safeParse(requested?.payload);
+  if (!requested || !request.success) return null;
+  const [settlement] = events.flatMap((event) => {
+    if (event.type !== "events.iterate.com/itx/run-settled") return [];
+    const settled = RunSettled.safeParse(event.payload);
+    return settled.success && settled.data.requestOffset === requestOffset
+      ? [{ atMs: Date.parse(event.createdAt), value: settled.data.settlement }]
+      : [];
   });
-  if (!requested) return null;
-  const payload = isRecord(requested.payload) ? requested.payload : {};
-  const settled = events.find((event) => {
-    if (event.type !== "events.iterate.com/capability-host/script-run-settled") return false;
-    const p = isRecord(event.payload) ? event.payload : {};
-    return p.executionId === executionId;
-  });
-  // The developer item names the run by its request offset (apps/os's actor), the adapted request
-  // carries that offset beside its executionId.
-  const rendered = events.find((event) => {
-    if (event.type !== "events.iterate.com/agent/context-added") return false;
-    const p = isRecord(event.payload) ? event.payload : {};
-    const actor = isRecord(p.actor) ? p.actor : {};
-    return actor.type === "script" && actor.requestOffset === payload.requestOffset;
+  const [rendered] = events.flatMap((event) => {
+    if (event.type !== "events.iterate.com/agent/context-added") return [];
+    const item = ContextAdded.safeParse(event.payload);
+    return item.success &&
+      item.data.actor?.type === "script" &&
+      item.data.actor.requestOffset === requestOffset
+      ? [item.data.content]
+      : [];
   });
   return {
-    executionId,
-    code: typeof payload.code === "string" ? payload.code : "",
+    requestOffset,
+    code: request.data.code,
     requestedAtMs: Date.parse(requested.createdAt),
-    expiresAtMs: typeof payload.expiresAt === "number" ? payload.expiresAt : 0,
-    settlement: settled
-      ? {
-          atMs: Date.parse(settled.createdAt),
-          value: isRecord(settled.payload) ? settled.payload.settlement : undefined,
-        }
-      : undefined,
-    rendered:
-      rendered && isRecord(rendered.payload) && typeof rendered.payload.content === "string"
-        ? rendered.payload.content
-        : undefined,
+    settlement,
+    rendered,
   };
 }

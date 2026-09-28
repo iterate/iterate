@@ -24,7 +24,6 @@ const NAMESPACES = new Set([
   "cloudflare",
   "waitrose",
   "email",
-  "capability-host",
   "note",
   "test",
 ]);

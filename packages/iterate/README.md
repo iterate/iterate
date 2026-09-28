@@ -201,5 +201,3 @@ that prefix belongs to whoever appends it and is opaque to the platform: tests u
 | `test`                                                              | tests only                                                                                                                                                                                                                                                                                                 |
 
 `note/added` is only an example in the Agents composer; no contract defines `note`.
-`capability-host/script-run-*` is never written to a log: the agent UI's adapter builds it in
-memory.
