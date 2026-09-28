@@ -77,7 +77,7 @@ export type AppFolder = {
 export async function commitAppFolders(
   repo: Pick<RepoHandle, "listFiles" | "readFile" | "commitFiles">,
   apps: AppFolder[],
-): Promise<string | undefined> {
+) {
   const { commitOid: tip, paths } = await repo.listFiles();
   const missing = apps.filter((app) => !paths.includes(`${app.dir}/package.json`));
   if (!missing.length) return tip || undefined;
@@ -104,7 +104,7 @@ export async function commitAppFolders(
 }
 
 /** The agents app as `commitAppFolders` commits it, pinning `version`. */
-export const agentsApp = (version: string): AppFolder => ({
+export const agentsApp = (version: string) => ({
   dir: "agents",
   folder: agentsFolder(version),
   packageName: "@iterate-com/agents",
