@@ -305,7 +305,12 @@ export async function reconnecting(connect: () => Promise<IterateConnection>) {
       }
       return connection.session;
     },
-    [Symbol.dispose]: () => connection?.[Symbol.dispose](),
+    // cleared first: the close this dispose causes then finds no connection for its watcher to dispose
+    [Symbol.dispose]() {
+      const current = connection;
+      connection = undefined;
+      current?.[Symbol.dispose]();
+    },
   };
 }
 

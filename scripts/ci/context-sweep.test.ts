@@ -153,16 +153,16 @@ test.for<{
   expect({ calls, backups, result }).toEqual(expected);
 });
 
-test("a session whose socket closed and whose first reconnect failed is connected again, and the orphan is still swept", async () => {
+test("a session whose socket closed and whose first reconnect failed is connected again, the orphan is still swept, and the last connection is disposed once", async () => {
   const calls: string[] = [];
   let connects = 0;
-  let closeFirst = () => {};
+  const close: Record<number, () => void> = {};
   const session = await reconnecting(async () => {
     const n = ++connects;
     calls.push(`connect ${n}`);
     if (n === 2) throw new Error("Unexpected server response: 503");
     const closed = new Promise<{ code: number; reason: string }>((resolve) => {
-      if (n === 1) closeFirst = () => resolve({ code: 1006, reason: "" });
+      close[n] = () => resolve({ code: 1006, reason: "" });
     });
     const contexts = {
       readEvents: async (id: string, afterOffset: number) => {
@@ -180,7 +180,7 @@ test("a session whose socket closed and whose first reconnect failed is connecte
       [Symbol.dispose]: () => calls.push(`dispose ${n}`),
     } as unknown as IterateConnection;
   });
-  closeFirst();
+  close[1]!();
   await Promise.resolve();
   const result = await backUpAndDestroy({
     orphans: [identity("o")],
@@ -193,6 +193,10 @@ test("a session whose socket closed and whose first reconnect failed is connecte
     prefix: "backups/run/",
     now: () => Date.parse("2026-09-28T03:00:00.000Z"),
   });
+  // the sweep's end: its dispose closes the socket, whose close must not dispose it again
+  session[Symbol.dispose]();
+  close[3]!();
+  await Promise.resolve();
   expect({ calls, result }).toEqual({
     calls: [
       "connect 1",
@@ -202,6 +206,7 @@ test("a session whose socket closed and whose first reconnect failed is connecte
       "read o 0 on 3",
       "read o 2 on 3",
       "destroy o on 3",
+      "dispose 3",
     ],
     result: { destroyed: ["o"], recent: [], failed: [] },
   });
