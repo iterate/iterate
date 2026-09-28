@@ -8,7 +8,7 @@ import {
   platformAddressesOf,
   sessionSigningSecretOf,
 } from "../src/app-config.ts";
-import { verifyClaims } from "../src/caller.ts";
+import { signClaims, verifyClaims } from "../src/caller.ts";
 import type { Env } from "../src/env.ts";
 import { identityResponse } from "../src/identity.ts";
 import { authorizationForToken } from "../src/oauth.ts";
@@ -267,6 +267,58 @@ test.for(["provider mismatch", "declined consent"])(
     ).toBe(false);
   },
 );
+
+// The flow cookie is signed with the session-signing secret, as every platform claim set is: the
+// callback reads its own kind alone, and a sign-in's claims only as a sign-in's. The control row,
+// the sign-in's own claims signed again, gets past the flow to the provider's state check.
+test.for<[string, (flow: Record<string, unknown>) => Record<string, unknown>, string]>([
+  ["its own claims", (flow) => flow, "Sign-in was refused or expired. Please start again."],
+  [
+    "an admin sign-in's flow",
+    (flow) => ({
+      kind: "admin-sign-in",
+      next: flow.next,
+      state: flow.state,
+      verifier: flow.verifier,
+      exp: flow.expiresAt,
+    }),
+    "Sign-in expired. Please start again.",
+  ],
+  [
+    "its own claims under the admin sign-in's kind",
+    (flow) => ({ ...flow, kind: "admin-sign-in" }),
+    "Sign-in expired. Please start again.",
+  ],
+  [
+    "an added sign-in's kind with no person",
+    (flow) => ({ ...flow, kind: "identity-link" }),
+    "Sign-in expired. Please start again.",
+  ],
+  [
+    "its own claims without bounced",
+    ({ bounced: _bounced, ...flow }) => flow,
+    "Sign-in expired. Please start again.",
+  ],
+])("a sign-in's callback reads only a sign-in's claims: handed %s", async ([, claimsOf, error]) => {
+  const begin = await exports.default.fetch(`${ORIGIN}/.auth/identity/github?next=%2F`, {
+    redirect: "manual",
+  });
+  const [name, signed] = begin.headers.get("set-cookie")!.split(";")[0]!.split("=") as [
+    string,
+    string,
+  ];
+  const secret = await sessionSigningSecretOf(appConfigOf(env));
+  const flow = (await verifyClaims(signed, secret)) as Record<string, unknown>;
+  expect(flow).toMatchObject({ kind: "identity-login", bounced: false });
+  const response = await exports.default.fetch(
+    `${ORIGIN}/.auth/identity/github/callback?${new URLSearchParams({ code: "bogus", state: "another" })}`,
+    {
+      headers: { cookie: `${name}=${await signClaims(claimsOf(flow), secret)}` },
+      redirect: "manual",
+    },
+  );
+  expect(signInPageOf(response)).toEqual({ next: "/", error });
+});
 
 // A SIGN-IN KEEPS ITS TOKEN (identity.ts): through the pet shop's fakes, iterate's one client per
 // provider signs the person in and their token becomes their own connection — the secret on
@@ -823,7 +875,7 @@ test("adding a sign-in starts only from a browser signed in as the person the li
     expect(new URL(response.headers.get("location")!), next).toMatchObject({
       origin: "https://github.test",
     });
-    // a flow of its own kind, which a sign-in's callback (an older version's too) refuses
+    // a flow of its own kind, which the callback never reads as a sign-in's
     const flow = response.headers.getSetCookie()[0]!.split(";")[0]!.split("=")[1]!;
     expect(
       await verifyClaims(flow, await sessionSigningSecretOf(appConfigOf(env))),

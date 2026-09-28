@@ -30,7 +30,7 @@
 // (`link-person-mismatch`): the Dash's session and the issuer's are two, and the link says which
 // person it was made for — a comparison, never a grant. `next` is an absolute URL on the
 // platform's origin or the Dash's (`nextUrlOf`), else refused. The signed flow cookie (kind
-// `identity-link`, which a sign-in's callback refuses) carries `linkTo`, the person, and the
+// `identity-link`, never read as a sign-in's) carries `linkTo`, the person, and the
 // callback goes on only while the issuer session is still theirs (else `link-session-changed`):
 // that binding, the state and PKCE in the flow cookie are what keep another browser's callback,
 // or another person's, from adding an account to them. The control plane links the subject to them
@@ -81,10 +81,7 @@ const PATHS = {
   github: "/.auth/identity/github",
 } satisfies Record<IdentityProvider, string>;
 const cookieAttributes = "HttpOnly; Secure; SameSite=Lax; Path=/";
-const Flow = z.object({
-  /** `identity-link` for an added sign-in (`linkTo`): a kind of its own, so a handler that knows
-   *  only sign-ins (an older version's) refuses it instead of signing someone in. */
-  kind: z.enum(["identity-login", "identity-link"]),
+const FlowFields = {
   provider: IdentityProvider,
   clientId: z.string(),
   redirectUri: z.string(),
@@ -94,11 +91,22 @@ const Flow = z.object({
   next: z.string(),
   expiresAt: z.number(),
   /** Google went back for the consent screen once already (`signInNeedsConsent`). */
-  bounced: z.boolean().default(false),
-  /** ADD A SIGN-IN: the person (a user id) the provider's account is added to, instead of signing
-   *  anyone in; `next` is then an absolute URL. */
-  linkTo: z.string().optional(),
-});
+  bounced: z.boolean(),
+};
+/** The signed flow cookie's claims. `kind` tells them apart from every other claim set
+ *  `sessionSigningSecretOf` signs (secret-OAuth state, GitHub state, the integration move offer,
+ *  signed file URLs, lend-use tokens), and a sign-in from an added one: a callback reads only its
+ *  own kind. */
+const Flow = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("identity-login"), ...FlowFields }),
+  z.object({
+    kind: z.literal("identity-link"),
+    ...FlowFields,
+    /** ADD A SIGN-IN: the person (a user id) the provider's account is added to, instead of
+     *  signing anyone in; `next` is then an absolute URL. */
+    linkTo: z.string(),
+  }),
+]);
 type Flow = z.infer<typeof Flow>;
 const VerifiedIdentity = z.object({
   sub: z.string().min(1),
@@ -265,30 +273,37 @@ export async function identityResponse(request: Request, env: Env) {
     headers.set("Location", authorization.href);
     return new Response(null, { status: 302, headers });
   };
-  const newFlow = (next: string, bounced: boolean, linkTo?: string): Flow => ({
-    kind: linkTo ? "identity-link" : "identity-login",
-    provider,
-    clientId: client.clientId,
-    redirectUri,
+  /** One trip to the provider's one-time values: each authorize redirect, a consent bounce's too,
+   *  gets fresh ones. */
+  const trip = () => ({
     state: oauth.generateRandomState(),
     nonce: oauth.generateRandomNonce(),
     verifier: oauth.generateRandomCodeVerifier(),
-    next,
     expiresAt: Date.now() + 600_000,
-    bounced,
-    linkTo,
+  });
+  const newFlow = (
+    purpose: { kind: "identity-login" } | { kind: "identity-link"; linkTo: string },
+    next: string,
+  ): Flow => ({
+    ...purpose,
+    provider,
+    clientId: client.clientId,
+    redirectUri,
+    next,
+    bounced: false,
+    ...trip(),
   });
   /** Where the person reads what went wrong: back where an added sign-in began, `error` on it; else
-   *  the sign-in page. */
-  const failed = (flow: Pick<Flow, "next" | "linkTo">, error: string) => {
-    if (flow.linkTo) {
+   *  (a sign-in, or a link refused before its flow began) the sign-in page. */
+  const failed = (flow: Flow | { next: string }, error: string) => {
+    if ("kind" in flow && flow.kind === "identity-link") {
       const back = new URL(flow.next);
       back.searchParams.set("error", error);
       headers.set("Location", back.href);
     } else headers.set("Location", `/login?${new URLSearchParams({ next: flow.next, error })}`);
     return new Response(null, { status: 303, headers });
   };
-  const refused = (flow: Pick<Flow, "next" | "linkTo">, refusal: SignInRefused) => {
+  const refused = (flow: Flow | { next: string }, refusal: SignInRefused) => {
     console.info({
       ...refusal.details,
       event: "identity.sign-in-refused",
@@ -332,12 +347,15 @@ export async function identityResponse(request: Request, env: Env) {
           "link-person-mismatch",
         ),
       );
-    return authorize(await discover(), newFlow(next, false, person.id));
+    return authorize(await discover(), newFlow({ kind: "identity-link", linkTo: person.id }, next));
   }
   if (url.pathname === PATHS[provider])
     return authorize(
       await discover(),
-      newFlow(sameOriginPath(url.searchParams.get("next") || "/", platformOrigin), false),
+      newFlow(
+        { kind: "identity-login" },
+        sameOriginPath(url.searchParams.get("next") || "/", platformOrigin),
+      ),
     );
   headers.append("Set-Cookie", `${cookie}=; ${cookieAttributes}; Max-Age=0`);
   const signed = cookieValueOf(request.headers.get("cookie"), cookie);
@@ -369,7 +387,7 @@ export async function identityResponse(request: Request, env: Env) {
         );
     }
     let user: UserRecord;
-    if (flow.linkTo) {
+    if (flow.kind === "identity-link") {
       // only while this browser is still signed in as the person the flow began for
       const person = await issuerSessionPersonOf(env, request);
       if (!person || person.id !== flow.linkTo)
@@ -394,17 +412,17 @@ export async function identityResponse(request: Request, env: Env) {
         bounced: flow.bounced,
       })
     )
-      return authorize(as, newFlow(flow.next, true, flow.linkTo), identity.email);
+      return authorize(as, { ...flow, ...trip(), bounced: true }, identity.email);
     // An added sign-in joins the person only now that nothing is left to ask: a consent screen
     // they cancel adds nothing, and one they answer as another account adds that one.
-    if (flow.linkTo)
+    if (flow.kind === "identity-link")
       user = await new ControlPlane(env).addIdentity(flow.linkTo, provider, identity.sub);
     // The person is signed in whatever becomes of the token: a failure to keep it is reported, and
     // the next sign-in (or a connect) keeps one.
     await keepSignInToken(env, client, provider, user, signedIn, connection).catch(
       (error: unknown) => reportIssue("identity.keep-token-failed", error, { provider }),
     );
-    if (flow.linkTo) {
+    if (flow.kind === "identity-link") {
       console.info({ event: "identity.sign-in-added", provider, userId: user.id });
       headers.set("Location", flow.next);
       return new Response(null, { status: 303, headers });

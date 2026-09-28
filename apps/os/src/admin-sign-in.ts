@@ -12,16 +12,22 @@
 // This deployment is the issuer's CIMD client, its metadata document served here
 // (`adminSignInClientMetadata`), so no preview is registered anywhere by hand. The token is read
 // once and revoked at once; the issuer's grant ends in ten minutes besides (consent.ts). The flow's
-// state lives in one cookie signed with this deployment's key: where the browser goes next, the
-// OAuth `state` and the PKCE verifier, for ten minutes. Nothing is stored server-side.
+// state lives in one cookie signed like every platform claim set (app-config.ts
+// `sessionSigningSecretOf`, kind `admin-sign-in`): where the browser goes next, the OAuth `state`
+// and the PKCE verifier, for ten minutes. Nothing is stored server-side.
 
 import * as oauth from "oauth4webapi";
 import { z } from "zod";
 import { cookieValueOf, sameOriginPath } from "iterate/lib";
 import { authorizationCodeRequest, authorizationServer } from "iterate/oauth";
 import { emailAllowed, EMAIL_NOT_ALLOWED_MESSAGE } from "./allowed-emails.ts";
-import { appConfigOf, platformAddressesOf, USERINFO_PATH } from "./app-config.ts";
-import { sha256Hex, signClaims, verifyClaims } from "./caller.ts";
+import {
+  appConfigOf,
+  platformAddressesOf,
+  sessionSigningSecretOf,
+  USERINFO_PATH,
+} from "./app-config.ts";
+import { signClaims, verifyClaims } from "./caller.ts";
 import { ControlPlane } from "./control-plane/edge.ts";
 import type { Env } from "./env.ts";
 import { startIssuerSession } from "./issuer-session.ts";
@@ -42,8 +48,10 @@ const FLOW_COOKIE = "__Host-itx-admin-sign-in";
 const FLOW_MS = 10 * 60_000;
 const clearFlowCookie = `${FLOW_COOKIE}=; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=0`;
 
+/** The flow cookie's claims; `kind` tells them apart from every other claim set the session-signing
+ *  secret signs. */
 const Flow = z.object({
-  v: z.literal(1),
+  kind: z.literal("admin-sign-in"),
   /** where the browser goes once signed in: a path on this origin */
   next: z.string(),
   state: z.string(),
@@ -82,8 +90,14 @@ export async function adminSignInResponse(request: Request, env: Env, issuer: st
     resources: [`${issuer}${USERINFO_PATH}`],
   });
   const flow = await signClaims(
-    { v: 1, next, state, verifier, exp: Date.now() + FLOW_MS } satisfies z.infer<typeof Flow>,
-    await flowSecretOf(config.secrets.key.exposeSecret()),
+    {
+      kind: "admin-sign-in",
+      next,
+      state,
+      verifier,
+      exp: Date.now() + FLOW_MS,
+    } satisfies z.infer<typeof Flow>,
+    await sessionSigningSecretOf(config),
   );
   return new Response(null, {
     status: 302,
@@ -113,7 +127,7 @@ export async function adminSignInCallbackResponse(request: Request, env: Env, is
   const checked = await whoSignedIn({
     issuer,
     platformOrigin: platformAddressesOf(env, request).platformOrigin,
-    key: config.secrets.key.exposeSecret(),
+    signingSecret: await sessionSigningSecretOf(config),
     request,
   }).catch((error: unknown) => {
     console.warn({ event: "admin-sign-in.check-failed", message: String(error) });
@@ -149,11 +163,11 @@ export async function adminSignInCallbackResponse(request: Request, env: Env, is
 async function whoSignedIn(input: {
   issuer: string;
   platformOrigin: string;
-  key: string;
+  signingSecret: string;
   request: Request;
 }): Promise<{ email: string; next: string } | { error: string }> {
   const cookie = cookieValueOf(input.request.headers.get("cookie"), FLOW_COOKIE);
-  const flow = Flow.safeParse(await verifyClaims(cookie || "", await flowSecretOf(input.key)));
+  const flow = Flow.safeParse(await verifyClaims(cookie || "", input.signingSecret));
   if (!flow.success || flow.data.exp <= Date.now())
     return { error: "This sign-in expired or began in another browser. Start it again." };
   // the library serves revocation at its token endpoint (RFC 7009)
@@ -211,8 +225,3 @@ async function whoSignedIn(input: {
       );
   }
 }
-
-/** The flow cookie's signing secret: `secrets.key` under its own label, SHA-256, hex — as
- *  app-config.ts `sessionSigningSecretOf` derives the session's under another, so the raw key is
- *  never reused. */
-const flowSecretOf = (key: string) => sha256Hex(`iterate-admin-sign-in:${key}`);

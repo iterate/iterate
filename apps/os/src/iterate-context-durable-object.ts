@@ -125,13 +125,17 @@ function iterateContextAddressOf(ctx: DurableObjectState) {
   const born = body
     ? (JSON.parse(body) as { type?: string; payload?: { projectId?: string; path?: string } })
     : undefined;
-  if (born?.type !== "events.iterate.com/itx/created" || !born.payload?.projectId)
+  if (
+    born?.type !== "events.iterate.com/itx/created" ||
+    !born.payload?.projectId ||
+    !born.payload.path
+  )
     throw new Error(
       "IterateContextDurableObject must be addressed by name (reach it via getByName); by id, only a context that was born answers.",
     );
   return DurableObjectNameCodec.address({
     projectId: born.payload.projectId,
-    path: born.payload.path || "/",
+    path: born.payload.path,
   });
 }
 
