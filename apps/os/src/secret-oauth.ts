@@ -11,11 +11,9 @@
 //
 // A CLIENT IN THE CLEAR passes `clientId` and, for a confidential client, `clientSecret`: the secret
 // itself, or one placeholder naming the secret that holds it, as egress spells it
-// (`getSecret("/secrets/<name>")`, or with `{ field }`). An agent that never handles a secret
-// collects the client secret into its own secret and passes the placeholder. The pending attempt
-// and the record keep the placeholder, never the value; the facet resolves it at the code exchange
-// and at every refresh (secrets.ts `clientSecretReferenceOf`), so a rotation there takes effect at
-// the next one.
+// (`getSecret("/secrets/<name>")`, or with `{ field }`), so an agent that never handles a secret can
+// pass one. The pending attempt and the record keep the placeholder; how the facet resolves it is
+// secret/durable-object.ts `#clientSecretOf`.
 //
 // AN INTEGRATION'S CONNECT (src/integrations/) names whose app instead of passing a client in the
 // clear: `client: { platform: "slack" }` is the deployment's own (APP_CONFIG `integrations.<provider>`,

@@ -224,10 +224,9 @@ export function isSecretPlaceholder(value: string): boolean {
 }
 
 /** AN OAUTH CLIENT'S SECRET HELD BY ANOTHER SECRET: a `clientSecret` that is exactly one placeholder
- *  names the secret that holds it, and the secret's facet reads it from there at each request to the
- *  token endpoint (secret/durable-object.ts `#clientSecretOf`) while every record keeps the
- *  placeholder. Null for a client secret given in the clear, or none. A placeholder with anything
- *  around it is refused: it is neither a value nor a reference. */
+ *  names the secret that holds it (resolved by secret/durable-object.ts `#clientSecretOf`). Null for
+ *  a client secret given in the clear, or none. A placeholder with anything around it is refused:
+ *  it is neither a value nor a reference. */
 export function clientSecretReferenceOf(
   clientSecret: string,
 ): { path: string; field?: string } | null {
