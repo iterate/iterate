@@ -293,21 +293,16 @@ workflow (Main OS e2e for `main`). From a laptop, `pnpm preview e2e` and `pnpm p
 ([apps/os/README.md](../apps/os/README.md)). `preview-delete.yml`
 (`--input pull-request-number=<pr-number>`) deletes a preview now, `preview-sweep.yml` sweeps now.
 
-Deploy a branch manually:
+Deploy a branch manually, or roll back by pushing a branch at the old commit first:
 
 ```bash
+git push origin <commit>:refs/heads/rollback/<name>   # a rollback only
 depot ci dispatch --org 0p91s0lz49 --repo iterate/iterate \
-  --workflow deploy-os.yml \
-  --ref <branch> \
-  --input ref=<branch>
+  --workflow deploy-os.yml --ref <branch>
 ```
 
-The job runs the deployed ref's own scripts, so a ref from before 2026-09-24 (most rollbacks)
-deploys prd and then fails `Check the project hosts`, whose script lacked `--previous-version`.
-Check the hosts from `main` by hand: `pnpm tsx scripts/ci/prd-post-deploy-check.ts check --dry-run`.
-It also runs the ref's own setup, which a ref from before 2026-09-27 lacks, so the job fails before
-it deploys. Dispatch such a ref with its own workflow instead: `--ref` a branch at that commit and no
-`ref` input, which runs it on the custom image it was written for, still in Depot's registry.
+The deploy checks out the commit it was dispatched at, and runs that commit's own workflow, setup
+and scripts.
 
 ## Editing Workflows
 

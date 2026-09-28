@@ -9,9 +9,9 @@
 # Nothing waits for this, and nothing depends on it: each PR, and Main OS e2e, deploys a set of
 # workers of its own (envs.ts `previewDeployment`).
 #
-# Deploy main on dev from any ref by hand:
+# Deploy main on dev from a branch by hand, with that branch's own workflow and scripts:
 #   depot ci dispatch --org 0p91s0lz49 --repo iterate/iterate \
-#     --workflow preview-parents.yml --ref main --input ref=<ref>
+#     --workflow preview-parents.yml --ref <branch>
 # The only Depot secret is DOPPLER_TOKEN; Doppler os/preview supplies the Cloudflare credentials and
 # `os`'s two secrets (APP_CONFIG, APP_CONFIG_SECRETS__KEY).
 
@@ -60,12 +60,6 @@ on:
       - scripts/ci/toolchain.sh
       - .depot/workflows/preview-parents.yml
   workflow_dispatch:
-    inputs:
-      ref:
-        description: Git ref to deploy. Leave empty for the current branch or commit.
-        required: false
-        type: string
-        default: ""
 
 concurrency:
   # One deploy of the parents at a time, never interrupted midway. The nightly reset of the `os`
@@ -82,7 +76,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.ref || github.sha }}
+          ref: ${{ github.sha }}
       - name: Setup
         uses: ./.depot/actions/setup
       - name: Deploy the parents

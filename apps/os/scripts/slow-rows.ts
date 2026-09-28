@@ -7,8 +7,8 @@
 import { SLOW_ROW_PATHS } from "@iterate-com/shared/test-support/e2e-policy";
 import { z } from "zod";
 
-/** run: every row. skip: every row but those tagged `slow`. only: those alone. `--slow-rows` and
- *  E2E_SLOW_ROWS ask for one; unset, `chooseSlowRows` decides. */
+/** run: every row. skip: every row but those tagged `slow`. only: those alone. `--slow-rows` asks
+ *  for one; unset, `chooseSlowRows` decides. */
 export const SlowRows = z.enum(["run", "skip", "only"]);
 export type SlowRows = z.infer<typeof SlowRows>;
 

@@ -89,7 +89,7 @@ Use this to prove that a PR's deployed preview works through the real browser,
 the issuer's sign-in, routing and the app UI. The automated smoke is the Preview
 OS workflow's Browser specs job (the browser specs against the PR's preview,
 beside its E2E tests job). Re-run it from `apps/os` with
-`doppler run --project os --config preview -- pnpm preview specs --pr <number> --name <branch>`,
+`doppler run --project os --config preview -- pnpm preview specs --pr <number>`,
 or from CI without redeploying (see its [README](../apps/os/README.md)).
 
 For a hands-on smoke, take the preview URL from the PR body and sign in as in

@@ -11,7 +11,7 @@ Telemetry: [CI and test telemetry](ci-test-telemetry.md). Run commands from the 
 | `pnpm format:check`                      | Formatting                                                                       |
 | `pnpm knip`                              | Unused files, exports and dependencies in every workspace                        |
 | `pnpm test`                              | Workspace unit tests, including OS unit and Workers projects                     |
-| `pnpm os e2e`                            | OS integration suite; local Worker unless a deployed target is configured        |
+| `pnpm --dir apps/os e2e`                 | OS integration suite; local Worker unless a deployed target is configured        |
 | `pnpm spec`                              | Root browser specs: one project per app host, plus the issuer at phone width     |
 | `pnpm --dir apps/kit firmware:test:host` | Kit firmware host tests (needs cmake; not part of `pnpm test`)                   |
 
@@ -190,20 +190,22 @@ credential overrides.
 
 ```bash
 # local: no target — the suite boots the real worker in local workerd
-pnpm os e2e
+pnpm --dir apps/os e2e
 
 # a PR preview (its URL is in the PR body)
 doppler run --project os --config preview -- \
-  env WORKER_BASE_URL=https://pr<n>-os.iterate-dev-preview.workers.dev pnpm os e2e
+  env WORKER_BASE_URL=https://pr<n>-<sha7>-os.iterate-dev-preview.workers.dev pnpm --dir apps/os e2e
 
 # production
-doppler run --project os --config prd -- env WORKER_BASE_URL=https://os.iterate.com pnpm os e2e
+doppler run --project os --config prd -- \
+  env WORKER_BASE_URL=https://os.iterate.com pnpm --dir apps/os e2e
 ```
 
 Specs take the same shape with `pnpm spec`; without `WORKER_BASE_URL` Playwright starts `pnpm dev` on
 `WORKER_PORT` (8788), reusing a running server locally. To run a suite against a preview exactly as
-CI does: `pnpm preview e2e --pr <number> --name <branch>`, or `pnpm preview specs` with the same
-flags, from `apps/os` under the same Doppler config (`--slow-rows`, [slow rows](#slow-rows)).
+CI does: `pnpm preview e2e --pr <number>`, or `pnpm preview specs --pr <number>`, from `apps/os` under
+the same Doppler config (`--slow-rows`, [slow rows](#slow-rows)); `--name <name>` in place of
+`--pr` for a deployment with no PR.
 
 ## Reaching the test runner from a deployed Worker
 
@@ -223,7 +225,7 @@ for it. The Playwright config additionally honors the Playwright-conventional
 
 | Variable                                | Set by                                                      | Controls                                                                                                                                          | Default                                     |
 | --------------------------------------- | ----------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------- |
-| `WORKER_BASE_URL`                       | You, the preview script, the soak and crash hunt            | THE deployed OS for `pnpm os e2e`, `pnpm spec` (and the issuer for the `notes` project), the soak and bench                                       | Local workerd (`pnpm dev` for specs)        |
+| `WORKER_BASE_URL`                       | You, the preview script, the soak and crash hunt            | THE deployed OS for `pnpm --dir apps/os e2e`, `pnpm spec` (and the issuer for the `notes` project), the soak and bench                            | Local workerd (`pnpm dev` for specs)        |
 | `WORKER_PORT`                           | You                                                         | Port for the local server Playwright starts                                                                                                       | `8788`                                      |
 | `APP_CONFIG`, `APP_CONFIG_SECRETS__KEY` | Doppler (`os`, `preview` / `prd`)                           | The deployed target's credentials and login (`deployed-target.ts`)                                                                                | None — deployed runs throw without them     |
 | `E2E_RUN_ID`                            | Preview CI (`<run id>-<attempt>`), or you                   | The run's id, folded into every identifier a test mints                                                                                           | Minted once per run                         |
@@ -235,7 +237,7 @@ for it. The Playwright config additionally honors the Playwright-conventional
 | `RUN_ISOLATE_CRASH_HUNT`                | The crash-hunt workflow                                     | `"1"` opts in to the load-dependent isolate-ceiling rows                                                                                          | Unset → those rows skip                     |
 | `E2E_REAL_MODELS`                       | The real-model suite (`os-real-model.yml`)                  | `"1"` opts in to the `realModelOnly` rows, which pay for a real inference; the soak strips it                                                     | Unset → those rows skip                     |
 | `RUN_RESIDENCY_TIMING`                  | The soak's `residency-timing` input, or you                 | `"1"` opts in to the residency timing rows (`apps/os/perf/context-residency.perf.test.ts`)                                                        | Unset → those rows skip                     |
-| `E2E_SLOW_ROWS`                         | Main OS e2e (`run`), a Preview OS dispatch, you             | Which rows tagged `slow` `pnpm preview e2e` runs: `run`, `skip`, `only` (alone); vitest then holds each row to its timeout ceiling                | Unset → the PR's paths and label            |
+| `E2E_SLOW_ROWS`                         | `pnpm preview e2e`: its `--slow-rows`, else its choice      | The slow rows' choice the suite runs under: `run`, `skip`, `only` (alone); set, vitest holds each row to its timeout ceiling                      | Unset → no ceiling (not `pnpm preview e2e`) |
 | `BENCH_OUT`                             | You                                                         | Writes the bench's raw samples as JSON                                                                                                            | Unset → no file                             |
 | `FLAKE_RECORD_DIR`                      | CI (the Test workflow; the preview script, per suite)       | Where flake wrappers and retried plain tests append one JSON line per outcome                                                                     | Unset → nothing recorded                    |
 | `TEST_TELEMETRY_ARTIFACT_DIR`           | CI (Test workflow: `test-results/ci-telemetry/raw`), or you | Durable canonical JSON directory consumed by the always-running finalizer                                                                         | Unset → reporter does not write             |
@@ -408,12 +410,12 @@ claimed-work row in `context-residency.e2e.test.ts` is not `slow`: it waits 30 s
 `pnpm preview e2e` chooses whether they run (`apps/os/scripts/slow-rows.ts`) and prints
 `[slow-rows] <run|skip|only>: <reason>`:
 
-| Run                          | The slow rows                                                                                                                                                                                     |
-| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| A PR push (Preview OS)       | Skipped, unless the PR carries the `slow-e2e` label or edits a slow row's file (`SLOW_ROW_PATHS`). When GitHub does not answer, every row runs.                                                   |
-| A Preview OS dispatch        | As its `slow-rows` input says (`run` or `skip`); empty, as a push. `--input action=e2e --input slow-rows=run` runs them against the live preview.                                                 |
-| Main OS e2e, every main push | Run, with every other row (`E2E_SLOW_ROWS: run`); Main OS e2e's page job pages #error-pulse on their own change of state as soon as the run ends, as "slow e2e rows" (`scripts/monitors/e2e.ts`). |
-| You                          | `--slow-rows run`, `skip` or `only` (alone): `pnpm preview e2e --pr <n> --name <branch> --slow-rows only` from `apps/os` under Doppler `os/preview`.                                              |
+| Run                          | The slow rows                                                                                                                                                                                  |
+| ---------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| A PR push (Preview OS)       | Skipped, unless the PR carries the `slow-e2e` label or edits a slow row's file (`SLOW_ROW_PATHS`). When GitHub does not answer, every row runs.                                                |
+| A Preview OS dispatch        | As its `slow-rows` input says (`run` or `skip`); empty, as a push. `--input action=e2e --input slow-rows=run` runs them against the live preview.                                              |
+| Main OS e2e, every main push | Run, with every other row (`--slow-rows run`); Main OS e2e's page job pages #error-pulse on their own change of state as soon as the run ends, as "slow e2e rows" (`scripts/monitors/e2e.ts`). |
+| You                          | `--slow-rows run`, `skip` or `only` (alone): `pnpm preview e2e --pr <n> --slow-rows only` from `apps/os` under Doppler `os/preview`.                                                           |
 
 **Turn them on** for a PR that can change how long a context or facet stays running, what wakes it,
 its alarms, its claims or what its birth resets: the facet host, residency, RPC stubs and built-ins
