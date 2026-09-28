@@ -206,7 +206,7 @@ export function reduceSecretCatalog(
           urls,
           refresh,
           refreshSourceSha256,
-          createdAt: known?.createdAt ?? event.createdAt,
+          createdAt: known?.createdAt || event.createdAt,
           ...(known?.lends && { lends: known.lends }),
         },
       };

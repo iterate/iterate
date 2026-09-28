@@ -252,14 +252,14 @@ function Phone({ project }: { project: string }) {
               )}
             />
             <span>
-              {live.status === "live" ? (view?.phase ?? "live") : live.status}
+              {live.status === "live" ? view?.phase || "live" : live.status}
               {view?.answering ? " · speaking" : ""}
               {view?.lastEnd ? ` · ${view.lastEnd.reason}` : ""}
               {live.error ? ` · ${live.error}` : ""}
             </span>
           </p>
           <ol className="flex flex-col gap-2">
-            {(view?.transcript ?? []).map((turn, index) => (
+            {(view?.transcript || []).map((turn, index) => (
               <li
                 key={index}
                 className={cn(

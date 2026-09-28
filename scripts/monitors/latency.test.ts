@@ -19,7 +19,6 @@ import {
   type BrokenProbe,
   type LatencyMemory,
   type PlatformFailure,
-  type Reading,
 } from "./latency.ts";
 
 test("a report's metrics come off each row's meta; a row that missed only budgets is not broken, anything else is", () => {
@@ -661,7 +660,7 @@ test("a rate's page line says it fell under its budget, and its lowest round", (
 });
 
 test("PostHog gets one event per measured metric and percentile, deduplicated per run attempt", () => {
-  const readings: Reading[] = judgeRun({
+  const readings = judgeRun({
     samples: { "rules.300.newest": [10, 20, 30, 40, 50] },
     history: [],
   });

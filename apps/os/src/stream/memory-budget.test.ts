@@ -362,7 +362,7 @@ function runScenario(
     { encoding: "utf8", timeout: timeoutMs, maxBuffer: 64 * MiB },
   );
   // A child killed at its timeout ends its tail with `spawnSync … ETIMEDOUT`.
-  const output = `${child.stdout}\n${child.stderr}\n${child.error?.message ?? ""}`;
+  const output = `${child.stdout}\n${child.stderr}\n${child.error?.message || ""}`;
   const report = /^\{.*\}$/m.exec(child.stdout)?.[0];
   const kind = report ? "survived" : OOM_SIGNATURE.test(output) ? "oom" : "other";
   return {

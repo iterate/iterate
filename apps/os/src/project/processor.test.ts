@@ -772,7 +772,7 @@ test("ProjectProcessor — the deletion: a context announced while a pass runs (
   const calls: string[] = [];
   const registered = reduceProcessor(processorWithoutHostnames(), ["/a", "/b"].map(childCreated));
   const state: ProjectState = { ...registered, deletion: { offset: 9 } };
-  const processor: ProjectProcessor = new ProjectProcessor(
+  const processor = new ProjectProcessor(
     () => Promise.reject(new Error("unused")),
     () => Promise.reject(new Error("unused")),
     () => null,

@@ -157,7 +157,7 @@ export function planFirmwareReleases(input: {
       .filter((release) => release.deviceId === device.id)
       .toSorted((left, right) => (left.version < right.version ? -1 : 1))
       .at(-1);
-    const previous = newest?.version ?? "";
+    const previous = newest?.version || "";
     const decide = (build: boolean, reason: string) => ({
       device: device.id,
       previous,

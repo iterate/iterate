@@ -787,7 +787,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   }
 
   /** `itx.builtins` — the physical scope this context resolves against (context/built-ins.ts). */
-  readonly #builtIns: Record<string, unknown> = buildBuiltIns({
+  readonly #builtIns = buildBuiltIns({
     projectInfo: async () => {
       const slug = await this.#projectSlug();
       return slug ? { projectSlug: slug } : {};
@@ -1026,7 +1026,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
 
   // Annotated because TypeScript cannot infer it: its `facetHost` holds `#stream`, whose
   // `wakeRecordDetail` reads this field back (TS7022).
-  readonly #residency: Residency = new Residency({
+  readonly #residency = new Residency({
     name: this.#durableObjectAddress.name,
     facetHost: this.#facetHost,
     rpcStubs: this.#rpcStubs,

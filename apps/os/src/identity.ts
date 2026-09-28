@@ -615,7 +615,7 @@ async function personConnectionOf(
   const row = Object.values(state.integrations).find(
     (known) => known.provider === provider && known.externalId === subject,
   );
-  return row?.connection ?? null;
+  return row?.connection || null;
 }
 
 /** The sign-in's token as the person's own connection — the one they hold to this account already,

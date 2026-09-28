@@ -1819,6 +1819,7 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
         try {
           // the string half parsed once, here; anything else is the schema's to refuse
           target =
+            // oxlint-disable-next-line iterate/simple-truthiness-check -- a caller's RPC input, typed but unchecked until FetchRouteConfiguredPayload parses it below
             typeof route?.target === "string" || Array.isArray(route?.target)
               ? normalizedItxExpression(route.target)
               : route?.target;
@@ -2060,7 +2061,7 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
           (firstPartyClassName
             ? existing.className === firstPartyClassName
             : existing.className === loaded!.className && existing.cacheKey === loaded!.cacheKey) &&
-          jsonEqual(deps.subscriptions.get(name)?.consumes ?? null, spec?.consumes ?? null)
+          jsonEqual(deps.subscriptions.get(name)?.consumes ?? null, spec?.consumes || null)
         )
           return { name };
         await append({
@@ -2155,7 +2156,7 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
             if (!isCloneVersionFailure(error)) throw error;
             const request = method === "fetch" && args[0] instanceof Request ? args[0] : undefined;
             const replayable =
-              request?.body === null && (request.method === "GET" || request.method === "HEAD");
+              request && !request.body && (request.method === "GET" || request.method === "HEAD");
             console.warn({
               event: replayable
                 ? "workers.platform-failure-retry"

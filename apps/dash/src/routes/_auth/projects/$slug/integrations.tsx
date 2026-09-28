@@ -130,8 +130,8 @@ function ProjectIntegrations() {
   const projectRead = live.value ? IntegrationsLive.safeParse(live.value) : undefined;
   const projectState = projectRead?.data;
   const loadError = live.error || (projectRead?.error && z.prettifyError(projectRead.error));
-  const rows = Object.values(projectState?.integrations ?? {});
-  const fromDeployment = Object.entries(projectState?.secrets ?? {}).flatMap(([path, row]) =>
+  const rows = Object.values(projectState?.integrations || {});
+  const fromDeployment = Object.entries(projectState?.secrets || {}).flatMap(([path, row]) =>
     row.borrowed?.lender.instance ? [path] : [],
   );
   // the person's own accounts: a session without `account` (a device's key) offers none
@@ -141,7 +141,7 @@ function ProjectIntegrations() {
   );
   const personLive = useFacetLiveState(personStub.stub, "account");
   const personRead = personLive.value ? IntegrationsLive.safeParse(personLive.value) : undefined;
-  const yourAccounts = Object.values(personRead?.data?.integrations ?? {});
+  const yourAccounts = Object.values(personRead?.data?.integrations || {});
   const yourAccountsStatus = !info.scopes.includes("account")
     ? "no-access"
     : personStub.error || personLive.error || personRead?.error
@@ -1093,7 +1093,7 @@ function GithubInstallations({
   onConnect: (installationId: string) => void;
 }) {
   const state = PersonGithub.safeParse(personState).data;
-  const signIn = Object.values(state?.integrations ?? {}).find((row) => row.provider === "github");
+  const signIn = Object.values(state?.integrations || {}).find((row) => row.provider === "github");
   const secretPath = signIn ? `/secrets/github-${signIn.connection}` : null;
   // the sign-in's secret is pinned to GitHub and its API: the API is the last origin
   const apiOrigin = secretPath ? state?.secrets[secretPath]?.urls.at(-1) : undefined;

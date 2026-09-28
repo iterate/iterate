@@ -109,7 +109,7 @@ export async function applyD1Migrations(
     const applied = new Set(
       z
         .array(z.object({ name: z.string() }))
-        .parse(history?.results ?? [])
+        .parse(history?.results || [])
         .map((row) => row.name),
     );
     const pending = readdirSync(MIGRATIONS_DIR).filter(

@@ -248,7 +248,7 @@ export function applyPatch<T>(doc: T, ops: PatchOp[]): T {
     for (const s of segs)
       if (s === "__proto__") throw new Error(`applyPatch: refusing __proto__ in path ${op.path}`);
     const last = segs.pop()!;
-    let parent: unknown = root;
+    let parent = root;
     for (const s of segs) {
       parent = Array.isArray(parent)
         ? parent[Number(s)]

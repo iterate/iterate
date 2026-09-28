@@ -117,7 +117,7 @@ export async function resolveEnvContext<E extends DeployableEnv>(options: {
  */
 export function cloudflareApi(apiToken: string) {
   return async <T>(path: string, init?: RequestInit): Promise<T> => {
-    const method = init?.method ?? "GET";
+    const method = init?.method || "GET";
     const response = await fetchRetryingPlatformFailures(
       `${method} ${path}`,
       (signal) =>
@@ -136,7 +136,7 @@ export function cloudflareApi(apiToken: string) {
         schedule: CLOUDFLARE_API,
         idempotent: ["GET", "HEAD", "PUT", "PATCH", "DELETE"].includes(method),
         timeoutMs: 60_000,
-        signal: init?.signal ?? undefined,
+        signal: init?.signal || undefined,
       },
     );
     const body: any = await response.json().catch(() => null);

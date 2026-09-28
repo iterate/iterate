@@ -220,7 +220,7 @@ function AgentActivityRounds({
     <>
       {rounds.map((round, index) => (
         <RoundRow
-          key={round.code?.id ?? round.llm?.id ?? index}
+          key={round.code?.id || round.llm?.id || index}
           round={round}
           index={index}
           inspect={inspect}
@@ -593,7 +593,7 @@ export function AgentLiveActivity({
               ) : null
             ) : (
               <RoundRow
-                key={round.code?.id ?? round.llm?.id ?? index}
+                key={round.code?.id || round.llm?.id || index}
                 round={round}
                 index={index}
                 inspect={inspect}

@@ -306,7 +306,7 @@ const scenarios: Record<string, (args: Record<string, number>) => Promise<void>>
       }
     }
     let engine!: ProcessorEngine<Hoard>;
-    let pushInFlight: Promise<void> = Promise.resolve();
+    let pushInFlight = Promise.resolve();
     const pushErrors: string[] = [];
     const pushErrorCodes: string[] = [];
     let readCalls = 0;
@@ -390,7 +390,7 @@ const scenarios: Record<string, (args: Record<string, number>) => Promise<void>>
     const storage = nodeSqliteDurableObjectStorage();
     let delivery!: SubscriptionDelivery;
     let engine!: ProcessorEngine<{ count: number }>;
-    let pushInFlight: Promise<void> = Promise.resolve();
+    let pushInFlight = Promise.resolve();
     let deltasCommitted = 0;
     let deltasRefused = 0;
     const stream = bareStream(storage, (fresh, after, through) => {

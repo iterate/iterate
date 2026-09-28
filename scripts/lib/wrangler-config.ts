@@ -32,7 +32,7 @@ export function plainWorkerConfig(
       `apps/${worker.name}: unknown env ${JSON.stringify(envName)}; known envs: ${Object.keys(worker.envs).join(", ")}`,
     );
   return {
-    name: env?.workerName ?? worker.name,
+    name: env?.workerName || worker.name,
     main: "src/worker.ts",
     compatibility_date: COMPATIBILITY_DATE,
     observability: OBSERVABILITY,

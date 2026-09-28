@@ -47,8 +47,10 @@ class PetshopCapnwebApi extends RpcTarget {
 
   /** Add a pet to the authenticated account. */
   createPet(input: { name: string; species: string }): Pet {
+    /* oxlint-disable iterate/simple-truthiness-check -- capnweb hands over whatever the client sent, so these typeofs check what the type only promises */
     const name = typeof input?.name === "string" ? input.name.trim() : "";
     const species = typeof input?.species === "string" ? input.species.trim() : "";
+    /* oxlint-enable iterate/simple-truthiness-check */
     if (!name || !species) throw new Error("createPet needs a non-empty name and species");
     const pet: Pet = { id: `pet-${this.#pets.length + 1}`, name, species };
     this.#pets.push(pet);

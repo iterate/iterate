@@ -306,7 +306,7 @@ export default {
           hops,
           appCookies: appCookies(request.headers.get("cookie")) || null,
           identity: {
-            principal: stamped?.principal ?? null,
+            principal: stamped?.principal || null,
             grant: stamped?.grant?.grantId,
             platformBearer: Boolean(bearer && authorization),
           },
