@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { temporaryDirectory } from "@iterate-com/shared/test-support/temporary-directory";
 import { expect, test, vi } from "vitest";
-import { runCloudflareCommandWith429Retry, runAsync, smokeResponse } from "./deploy-helpers.ts";
+import { runCloudflareCommandWith429Retry, runAsync, smoke } from "./deploy-helpers.ts";
 
 // ── runAsync ──
 test("resolves only after the child exits successfully", async () => {
@@ -85,13 +85,13 @@ test("the last 429 fails once the schedule is spent", async () => {
   ]);
 });
 
-// ── smokeResponse ──
+// ── smoke ──
 test("can require an exact response body rather than trusting the status alone", async () => {
   const fetchMock = vi.fn(async () => Response.json({ error: "not found" }, { status: 404 }));
   vi.stubGlobal("fetch", fetchMock);
 
   await expect(
-    smokeResponse(
+    smoke(
       "https://auth-rpc-smoke.example.test/",
       async (response) => {
         const body = (await response.json()) as { error?: unknown };

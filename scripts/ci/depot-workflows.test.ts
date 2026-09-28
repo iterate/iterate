@@ -285,16 +285,30 @@ test("uses DOPPLER_TOKEN as the only stored Depot secret", () => {
 });
 
 // A secret in a step's shell is one `set -x` or stray echo from the job's log: each script reads its
-// own out of Doppler (scripts/lib/env-context.ts), and no step does (docs/depot-ci.md#secrets).
-test("no step reads a Doppler secret into its shell", () => {
-  const reads = depotWorkflowFiles.flatMap((file) =>
-    Object.entries(loadWorkflow(file).jobs).flatMap(([jobId, job]) =>
-      (job.steps || []).flatMap((step) =>
-        /\bdoppler\s+secrets\b/u.test(step.run || "") ? [`${file} ${jobId}: ${step.name}`] : [],
-      ),
+// own out of Doppler (scripts/lib/env-context.ts), and no step does. The one other form
+// (docs/depot-ci.md#secrets): the preview tooling and the suites against a deployment run under
+// `doppler run`, as a developer's terminal runs them. No step calls Doppler any other way.
+test("no step reads Doppler but to wrap the preview tooling or a suite against a deployment", () => {
+  const wrapper =
+    /^doppler run --project os --config [a-z0-9_-]+ -- pnpm (?:preview|e2e|e2e:run|e2e:soak|perf:run)(?=\s|$)/u;
+  const others = everyStepRun().flatMap(({ where, run }) =>
+    [...run.matchAll(/\bdoppler\b.*/gu)]
+      .filter(([command]) => !wrapper.test(command))
+      .map(([command]) => `${where}: ${command}`),
+  );
+  expect(others).toEqual([]);
+});
+
+// A step runs TypeScript with `node <file>.ts` (docs/depot-ci.md#editing-workflows). The root has no
+// tsx or trpc-cli bin, so a step that calls one fails only when it runs: for a scheduled or
+// dispatched workflow, no pull request would see it.
+test("no step runs TypeScript through tsx or the trpc-cli bin", () => {
+  const runners = everyStepRun().flatMap(({ where, run }) =>
+    [...run.matchAll(/(?:^|[\s;&|(])((?:pnpm\s+(?:exec\s+)?|npx\s+)?(?:tsx|trpc-cli)\b.*)/gmu)].map(
+      ([, command]) => `${where}: ${command}`,
     ),
   );
-  expect(reads).toEqual([]);
+  expect(runners).toEqual([]);
 });
 
 test("uses only GitHub's job-scoped token for GitHub API calls", () => {
@@ -1541,6 +1555,17 @@ test("labels unit artifacts with the pull-request head, whose merge commit the j
     TEST_TELEMETRY_PULL_REQUEST_NUMBER: "${{ github.event.pull_request.number }}",
   });
 });
+
+/** Every step's `run` in every workflow, named by its file, job and step. */
+function everyStepRun() {
+  return depotWorkflowFiles.flatMap((file) =>
+    Object.entries(loadWorkflow(file).jobs).flatMap(([jobId, job]) =>
+      (job.steps || []).flatMap((step) =>
+        step.run ? [{ where: `${file} ${jobId}: ${step.name}`, run: step.run }] : [],
+      ),
+    ),
+  );
+}
 
 /** A workflow as its jobs run it: each `parallel:` block's steps stand where the block does. */
 function loadWorkflow(file: string): Workflow {

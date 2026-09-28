@@ -11,7 +11,7 @@ const assets = new URL("../dist/assets/", import.meta.url);
 /** scripts/build.ts (static files + the packaged extension), an assets-only Worker's config beside
  *  them, deployed (scripts/lib/deploy-app.ts); then the deployed oauth.js, client logo and extension
  *  bundle match this checkout. */
-export default async function deploy(options: { env?: string } = {}) {
+export default async function deploy(options: { env: string }) {
   await deployApp({
     appRoot: fileURLToPath(new URL("..", import.meta.url)),
     appLabel: "apps/spa",

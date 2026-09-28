@@ -147,11 +147,12 @@ needs itself, through `scripts/lib/env-context.ts`: `resolveEnvContext` for an e
 (the deploys, the context sweep, erase and seed), `dopplerSecret(project, config, name)` for one
 secret (the Depot organization token, `scripts/ci/depot.ts` `depotApi`; the Slack bot token,
 `scripts/ci/slack.ts`; an account's Cloudflare API token, envs.ts `cloudflareAccounts`). No step
-reads a secret into its shell (`depot-workflows.test.ts`). The one other form is for commands that
-act on an OS deployment with its configuration in their environment, as a developer's terminal
-runs them: the preview tooling (`pnpm preview …`) and the suites against a deployment (`pnpm e2e`,
-`pnpm e2e:run`, `pnpm e2e:soak`, `pnpm perf:run`) run under
-`doppler run --project os --config <the deployment's config> --`. The test evidence upload's token
+reads a secret into its shell. The one other form is for commands that act on an OS deployment
+with its configuration in their environment, as a developer's terminal runs them: the preview
+tooling (`pnpm preview …`) and the suites against a deployment (`pnpm e2e`, `pnpm e2e:run`,
+`pnpm e2e:soak`, `pnpm perf:run`) run under
+`doppler run --project os --config <the deployment's config> --`. `depot-workflows.test.ts` fails a
+step that calls Doppler any other way. The test evidence upload's token
 is fetched beside the tests into a Doppler fallback file and read offline after them
 ([test evidence](test-evidence.md#what-ci-does)).
 
@@ -330,6 +331,8 @@ branch ([Run CI without a PR](#run-ci-without-a-pr)).
   `tsconfig.base.json` allows only erasable syntax). A trpc-cli script ends with its
   `isMainModule` footer ([scripts are trpc-cli programs](typescript-conventions.md#scripts-are-trpc-cli-programs)),
   so `node` runs its commands. Steps that run before `pnpm install` use the same form.
+  `depot-workflows.test.ts` fails a step that calls `tsx` or the trpc-cli bin, which the root does
+  not install.
 - Every job runs on a stock label and, after its checkout, `uses: ./.depot/actions/setup`
   ([Setup on Depot's stock image](#setup-on-depots-stock-image)).
 - Jobs that differ only in a value share one definition through YAML anchors (`&suite-steps`, then

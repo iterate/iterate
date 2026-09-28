@@ -423,7 +423,7 @@ async function deployStartApp(
     secretValues: {},
     credentials,
   });
-  await smoke(`${url}/healthz`, (status) => status === 200, `apps/${app.name} health`);
+  await smoke(`${url}/healthz`, (response) => response.status === 200, `apps/${app.name} health`);
   return { name: app.name, url };
 }
 

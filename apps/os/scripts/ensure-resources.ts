@@ -6,12 +6,11 @@ import { routedHostnames } from "./generate-wrangler-config.ts";
 import { ensureD1 } from "./d1.ts";
 import { ensureArtifactsNamespace } from "./preview-artifacts.ts";
 
-export default async function ensureResources(options: { env?: string } = {}) {
+export default async function ensureResources(options: { env: string }) {
   const ctx = await resolveEnvContext({
     envs: osEnvs,
     dopplerProject: OS_DOPPLER_PROJECT,
     env: options.env,
-    allowDopplerConfigFallback: true,
   });
   const namespaces = await ctx.cf<{ id: string; title: string }[]>(
     "/storage/kv/namespaces?per_page=1000",

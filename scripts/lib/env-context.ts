@@ -37,8 +37,7 @@ export class CloudflareApiError extends Error {
 /**
  * A resolved `--env <name>` invocation: the app's envs.ts entry plus that
  * env's Doppler secrets. Every deployed-environment script starts here, so
- * the environment is selected by name (a deploy's or ensure-resources'
- * DOPPLER_CONFIG fallback aside; see resolveEnvContext).
+ * the environment is always selected by name.
  */
 export interface EnvContext<E extends DeployableEnv> {
   name: string;
@@ -53,34 +52,17 @@ export interface EnvContext<E extends DeployableEnv> {
 
 /**
  * Resolve an environment name into a full context. `env` is the explicit
- * name from the caller's CLI flag — this function never reads argv itself.
- *
- * `allowDopplerConfigFallback` (default false) permits the CI bridge: when
- * `env` is absent, fall back to DOPPLER_CONFIG — so CI's existing
- * `doppler run -- pnpm run-script deploy` (no flags)
- * selects the matching env without extra plumbing (env names and Doppler
- * config names coincide; the account-id assertion below still catches any
- * mismatch). Deploys pass `allowDopplerConfigFallback: true`; erase-data
- * does NOT (destructive = explicit flag only — trpc-cli enforces the
- * required `--env` option); ensure-resources passes true (harmless,
- * create-only).
+ * name from the caller's `--env` flag, the only way to choose one — this
+ * function never reads argv or the environment for it.
  */
 export async function resolveEnvContext<E extends DeployableEnv>(options: {
   envs: Record<string, E>;
   /** Doppler project the env's config lives in (e.g. "os", "dash"). */
   dopplerProject: string;
-  /** Explicit environment name (the caller's --env flag). */
-  env?: string;
-  /** When `env` is absent, allow the CI-bridge DOPPLER_CONFIG fallback. Default false. */
-  allowDopplerConfigFallback?: boolean;
+  /** The environment name (the caller's --env flag). */
+  env: string;
 }): Promise<EnvContext<E>> {
-  const name =
-    options.env || (options.allowDopplerConfigFallback ? process.env.DOPPLER_CONFIG : undefined);
-  if (!name) {
-    throw new Error(
-      `Pass --env <name>. Known: ${Object.keys(options.envs).join(", ")} (see envs.ts).`,
-    );
-  }
+  const name = options.env;
   const env = options.envs[name];
   if (!env) {
     throw new Error(

@@ -209,7 +209,7 @@ function workerFirstRoutes(app: StartApp) {
   return ["/*", "!/assets/*", ...publicFiles];
 }
 
-async function deploy(app: StartApp, options: { env?: string }) {
+async function deploy(app: StartApp, options: { env: string }) {
   await deployApp({
     appRoot: fileURLToPath(app.root),
     appLabel: `apps/${app.name}`,
@@ -224,12 +224,11 @@ async function deploy(app: StartApp, options: { env?: string }) {
   });
 }
 
-async function ensureResources(app: StartApp, options: { env?: string }) {
+async function ensureResources(app: StartApp, options: { env: string }) {
   const ctx = await resolveEnvContext({
     envs: app.envs,
     dopplerProject: app.name,
     env: options.env,
-    allowDopplerConfigFallback: true,
   });
   const zones = await ctx.cfV4<{ id: string; name: string }[]>(
     `/zones?account.id=${ctx.env.cloudflareAccountId}&per_page=500`,
@@ -328,19 +327,16 @@ export function buildStartApp(app: StartApp, env: string) {
 
 /**
  * The app's command line: `tsx scripts/app.ts <command> [--env <name>]` behind its package scripts.
- * `--env` names the envs.ts entry; deploy and ensure-resources fall back to CI's DOPPLER_CONFIG
- * (env-context.ts).
+ * `--env` names the envs.ts entry, and deploy and ensure-resources require it.
  */
 export function startAppCli(app: StartApp) {
   const env = z.string().describe("Target environment name from envs.ts");
   return createCli({
     name: app.name,
     router: t.router({
-      deploy: t.procedure
-        .input(z.object({ env: env.optional() }))
-        .handler(({ input }) => deploy(app, input)),
+      deploy: t.procedure.input(z.object({ env })).handler(({ input }) => deploy(app, input)),
       ensureResources: t.procedure
-        .input(z.object({ env: env.optional() }))
+        .input(z.object({ env }))
         .handler(({ input }) => ensureResources(app, input)),
       generateRouteTree: t.procedure
         .input(

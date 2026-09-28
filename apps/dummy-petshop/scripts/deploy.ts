@@ -7,7 +7,7 @@ import { deployApp } from "../../../scripts/lib/deploy-app.ts";
  *  The JWKS reads the OIDC key from the state object, so a state object that cannot start fails the
  *  deploy rather than the next suite that calls the shop. No secrets ship: PETSHOP_SEAL_KEY is
  *  already a worker secret, and a deploy keeps it. */
-export default async function deploy(options: { env?: string } = {}) {
+export default async function deploy(options: { env: string }) {
   await deployApp({
     appRoot: fileURLToPath(new URL("..", import.meta.url)),
     appLabel: "apps/dummy-petshop",
