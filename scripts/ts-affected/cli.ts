@@ -2,8 +2,10 @@
 // changing a file reach, per TypeScript? engine.ts has the machinery.
 //
 //   node scripts/ts-affected/cli.ts programs
-//   node scripts/ts-affected/cli.ts file packages/shared/src/slugify.ts --strategy delete
+//   node scripts/ts-affected/cli.ts file packages/shared/src/slugify.ts
+//   node scripts/ts-affected/cli.ts symbol packages/shared/src/slugify.ts slugify
 //   node scripts/ts-affected/cli.ts experiment        # the task file's file-level table
+import { execFileSync } from "node:child_process";
 import { writeFileSync } from "node:fs";
 import path from "node:path";
 
@@ -18,10 +20,12 @@ import {
   type FileNerf,
   type Repo,
 } from "./engine.ts";
+import { touchesPreview } from "../ci/preview-paths.ts";
+import { itemKey, seedForExport, seedsFromDiff, symbolClosure } from "./symbols.ts";
 
 /** The tsc programs `pnpm typecheck` runs, how many repo files each reads, and the baseline errors. */
 export async function programs() {
-  const repo = await loadRepo();
+  const repo = await loadRepo(process.cwd());
   for (const program of repo.programs) {
     const files = [...repo.programsByFile].filter(([, programs]) => programs.includes(program));
     console.log(`${program.padEnd(45)} ${String(files.length).padStart(5)} files`);
@@ -36,17 +40,82 @@ export async function programs() {
  * it), and prints who breaks beside who imports it per `tsc --explainFiles`.
  */
 export async function file(file: string) {
-  const repo = await loadRepo();
+  const repo = await loadRepo(process.cwd());
   console.log(JSON.stringify(await measure(repo, file), null, 2));
+}
+
+/**
+ * Nerfs one export by renaming it, then everything that breaks, round by round, and prints the
+ * declarations, imports and tests it reached.
+ */
+export async function symbol(file: string, name: string) {
+  const repo = await loadRepo(process.cwd());
+  const { affected, via, rounds } = await symbolClosure(repo, [seedForExport(repo, file, name)]);
+  for (const item of affected)
+    console.log(`${itemKey(item)}  ← ${via.get(itemKey(item)) || "(seed)"}`);
+  console.log(
+    `\n${affected.length} items in ${new Set(affected.map((i) => i.file)).size} files; rounds: ${JSON.stringify(rounds)}`,
+  );
+}
+
+/**
+ * What a commit reaches, two ways: the import-graph closure of every changed file, and the symbol
+ * closure of the top-level statements its changed lines touch. Beside them, what
+ * scripts/ci/preview-paths.ts's globs decide. Prints one JSON line.
+ */
+export async function diff(options: {
+  /** The commit to compare against, e.g. `HEAD^`. */
+  base: string;
+  /** The checkout to measure (a lab checkout of an older commit); default the current directory. */
+  root?: string;
+}) {
+  const repo = await loadRepo(path.resolve(options.root || process.cwd()));
+  const { seeds, invisible, files } = seedsFromDiff(repo, options.base);
+  const tsFiles = files.filter((f) => repo.programsByFile.has(f));
+  const fileLevel = [...new Set(tsFiles.flatMap((f) => graphClosure(repo, f).flat()))];
+  const { affected, rounds } = await symbolClosure(repo, seeds);
+  const symbolFiles = [...new Set(affected.map((item) => item.file))];
+  const tests = affected.filter((item) => item.kind === "statement" && isTest(item.file));
+  const title = execFileSync("git", ["log", "-1", "--format=%h %s", "HEAD"], {
+    cwd: repo.root,
+    encoding: "utf8",
+  }).trim();
+  console.log(
+    JSON.stringify({
+      title,
+      changed: files.length,
+      invisible,
+      preview: touchesPreview(files),
+      fileLevel: {
+        files: fileLevel.length,
+        testFiles: fileLevel.filter(isTest).length,
+        workspaces: workspaces(fileLevel.filter((f) => !isTest(f))),
+      },
+      symbolLevel: {
+        seeds: seeds.length,
+        files: symbolFiles.length,
+        testFiles: symbolFiles.filter(isTest).length,
+        tests: tests.length,
+        workspaces: workspaces(symbolFiles.filter((f) => !isTest(f))),
+        rounds: rounds.length,
+        ms: Math.round(rounds.reduce((sum, round) => sum + round.ms, 0)),
+      },
+      msToLoad: Math.round(repo.msToLoad),
+    }),
+  );
 }
 
 /** Measures every sample file with both strategies; writes results.ignoreme.json and prints the table. */
 export async function experiment() {
-  const repo = await loadRepo();
+  const repo = await loadRepo(process.cwd());
   const rows = [];
   for (const sample of samples) {
     console.error(`measuring ${sample.file}`);
-    rows.push({ ...sample, ...(await measure(repo, sample.file)) });
+    rows.push({
+      ...sample,
+      ...(await measure(repo, sample.file)),
+      symbolResult: await measureSymbol(repo, sample.file, sample.symbol),
+    });
     writeFileSync(
       path.join(import.meta.dirname, "results.ignoreme.json"),
       JSON.stringify(rows, null, 2),
@@ -66,19 +135,35 @@ export async function table() {
 }
 
 const samples = [
-  { kind: "leaf util", file: "packages/shared/src/slugify.ts" },
-  { kind: "shared runtime util", file: "packages/shared/src/platform-retry.ts" },
-  { kind: "cross-app config", file: "packages/shared/src/app-config.ts" },
-  { kind: "SDK core", file: "packages/iterate/src/lib.ts" },
-  { kind: "app-internal hub", file: "apps/os/src/caller.ts" },
-  { kind: "oRPC contract", file: "apps/os/src/secret/contract.ts" },
-  { kind: "shared React component", file: "packages/ui/src/components/button.tsx" },
-  { kind: "app React component", file: "apps/dash/src/components/identifier.tsx" },
-  { kind: "e2e test helper", file: "apps/os/e2e/support/client.ts" },
-  { kind: "browser-spec helper", file: "specs/test-support/auth-config.ts" },
-  { kind: "deploy/CI lib", file: "scripts/lib/env-context.ts" },
-  { kind: "ambient globals (.d.ts)", file: "apps/os/src/dom.d.ts" },
-  { kind: "ambient module (.d.ts)", file: "packages/voice/src/markdown.d.ts" },
+  { kind: "leaf util", file: "packages/shared/src/slugify.ts", symbol: "slugify" },
+  {
+    kind: "shared runtime util",
+    file: "packages/shared/src/platform-retry.ts",
+    symbol: "CLOUDFLARE_API",
+  },
+  { kind: "cross-app config", file: "packages/shared/src/app-config.ts", symbol: "dnsName" },
+  { kind: "SDK core", file: "packages/iterate/src/lib.ts", symbol: "cookieValueOf" },
+  { kind: "app-internal hub", file: "apps/os/src/caller.ts", symbol: "bytesFromBase64url" },
+  { kind: "oRPC contract", file: "apps/os/src/secret/contract.ts", symbol: "LendRevokedReason" },
+  {
+    kind: "shared React component",
+    file: "packages/ui/src/components/button.tsx",
+    symbol: "buttonVariants",
+  },
+  {
+    kind: "app React component",
+    file: "apps/dash/src/components/identifier.tsx",
+    symbol: "Identifier",
+  },
+  { kind: "e2e test helper", file: "apps/os/e2e/support/client.ts", symbol: "mcpCall" },
+  {
+    kind: "browser-spec helper",
+    file: "specs/test-support/auth-config.ts",
+    symbol: "readOsPlaywrightAuthConfig",
+  },
+  { kind: "deploy/CI lib", file: "scripts/lib/env-context.ts", symbol: "cloudflareApi" },
+  { kind: "ambient globals (.d.ts)", file: "apps/os/src/dom.d.ts", symbol: "" },
+  { kind: "ambient module (.d.ts)", file: "packages/voice/src/markdown.d.ts", symbol: "" },
 ];
 
 async function measure(repo: Repo, file: string) {
@@ -107,7 +192,22 @@ async function measureNerf(repo: Repo, file: string, strategy: FileNerf) {
   };
 }
 
-type Row = Awaited<ReturnType<typeof measure>> & (typeof samples)[number];
+/** One export's reach, when the sample names one (an ambient `.d.ts` has none to rename). */
+async function measureSymbol(repo: Repo, file: string, name: string) {
+  if (!name) return null;
+  const { affected, via, rounds } = await symbolClosure(repo, [seedForExport(repo, file, name)]);
+  const files = [...new Set(affected.map((item) => item.file))].filter((f) => f !== file);
+  return {
+    items: affected.map((item) => ({ key: itemKey(item), via: via.get(itemKey(item)) || null })),
+    files,
+    tests: affected.filter((item) => item.kind === "statement" && isTest(item.file)).map(itemKey),
+    ms: Math.round(rounds.reduce((sum, round) => sum + round.ms, 0)),
+    rounds: rounds.length,
+  };
+}
+
+type Row = Awaited<ReturnType<typeof measure>> &
+  (typeof samples)[number] & { symbolResult: Awaited<ReturnType<typeof measureSymbol>> };
 
 function renderTable(rows: Row[]) {
   const header = [
