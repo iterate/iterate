@@ -69,14 +69,18 @@ export const previewPaths = [
 
 /** GitHub's `paths` filter over `previewPaths`: true when any file would have triggered it. */
 export function touchesPreview(files: string[]) {
-  return files.some((file) => {
-    let included = false;
-    for (const pattern of previewPaths) {
-      const negated = pattern.startsWith("!");
-      if (matchesGlob(file, negated ? pattern.slice(1) : pattern)) included = !negated;
-    }
-    return included;
-  });
+  return files.some((file) => matchesPaths(previewPaths, file));
+}
+
+/** Whether GitHub's `paths` filter `patterns` takes `file`: the last pattern it matches decides, and
+ *  a `!` pattern excludes. */
+export function matchesPaths(patterns: string[], file: string) {
+  let included = false;
+  for (const pattern of patterns) {
+    const negated = pattern.startsWith("!");
+    if (matchesGlob(file, negated ? pattern.slice(1) : pattern)) included = !negated;
+  }
+  return included;
 }
 
 /** Whether the checked-out commit, a merge into main, changes a preview path, or why it cannot
