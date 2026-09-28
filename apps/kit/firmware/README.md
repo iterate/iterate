@@ -258,6 +258,48 @@ the ordinary Agent and voice processor on that stream. Opening PCM stays in
 the device's bounded FIFO until setup and the direct stream subscription are
 ready. Microphone and speaker events travel directly through that stream.
 
+## Over-the-air updates
+
+Every board lends `system.update({url, sha256})`. Nothing calls it on its own,
+and Kit has no update button: an update is a call made by whoever holds the
+board's project, such as an agent in that project, or a script that connects the
+way `apps/agents/scripts/voice-board.ts` does:
+
+```ts
+await root.clients[device].system.update({
+  url: `https://k.iterate.com/firmware/${deviceId}/${version}/iterate-kit-${target}.bin`,
+  sha256: "…", // 64 lowercase hex digits
+});
+```
+
+`url` is the board's own release app image, served by Kit's firmware proxy.
+`sha256` is that file's digest. GitHub lists it for each release asset:
+
+```sh
+gh api "repos/iterate/iterate/releases/tags/kit-firmware/<device id>/<version>" \
+  --jq '.assets[] | select(.name == "iterate-kit-<target>.bin") | .digest'
+```
+
+Drop the `sha256:` prefix. The call answers `true` once the download is
+scheduled. It rejects a malformed request (a `TypeError`: the url must be https),
+a second update while one is in flight, and the Mac, which has no OTA slot.
+`components/capabilities/src/system_update.c` validates the call, and
+`platforms/iterate_esp_idf/system_update.c` does the rest:
+
+1. `esp_https_ota` streams the image into the inactive slot, `ota_0` or `ota_1`
+   in `targets/common/partitions-*.csv`. It runs on a low-priority task on
+   core 0, so a call in progress keeps its audio.
+2. The slot is read back, and its SHA-256 must equal `sha256`.
+3. `esp_https_ota_finish` validates the image and selects the slot. The board
+   restarts, and its health then reports `restartNote: "system-update"`.
+4. `CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE` boots the new image pending
+   verification. The transport marks it valid when it first reaches READY. A
+   reset before then boots the previous image. That includes the voice loop's
+   own restart after 7 minutes without READY.
+
+A failed update leaves the running image in place, and the serial log says why.
+To the caller, it is an update after which the board did not restart.
+
 ## Release and proof
 
 A merge to main releases every board whose inputs changed, as the GitHub release

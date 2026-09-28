@@ -218,10 +218,10 @@ const char *iterate_kit_platform_last_restart_note(void) {
  * update DOES is the device's integration proof, not this harness's.
  */
 enum iterate_kit_status iterate_kit_platform_system_update_begin(
-    void *context, const char *url, const char *sha256_hex) {
+    void *context, const char *url, const uint8_t sha256[32]) {
   (void)context;
   (void)url;
-  (void)sha256_hex;
+  (void)sha256;
   return ITERATE_KIT_OK;
 }
 

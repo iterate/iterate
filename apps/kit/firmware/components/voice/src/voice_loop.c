@@ -1799,9 +1799,8 @@ static bool initialise_connection(void) {
     }
   }
   /*
-   * OTA as a capability: the server names a url and a digest, the device
-   * fetches, verifies, and reboots into it. Until this, every deploy meant a
-   * serial cable on somebody's desk.
+   * OTA as a capability: the caller names an image and its digest, the board
+   * fetches, verifies and reboots into it (README, Over-the-air updates).
    */
   {
     const struct iterate_kit_system_update_driver driver = {

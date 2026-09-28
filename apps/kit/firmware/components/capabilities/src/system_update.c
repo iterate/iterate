@@ -6,19 +6,27 @@
 
 static const char *const update_path[] = {"system", "update"};
 
+static int hex_digit(char c) {
+  if (c >= '0' && c <= '9') return c - '0';
+  if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+  return -1;
+}
+
 /*
- * The digest is required, not optional: an update the server cannot name
- * byte-for-byte is an update the device must not boot. Scheme and length are
- * checked here so the driver only ever sees a request worth starting.
+ * The digest is required: an image the caller cannot name byte for byte is one
+ * the board must not boot. Exactly 64 lowercase hex digits, as `sha256sum`
+ * prints it and GitHub lists a release asset's `digest` after `sha256:`.
  */
-static bool valid_sha256_hex(const char *digest) {
+static bool decode_sha256(const char *hex, size_t length, uint8_t sha256[32]) {
   size_t index;
-  for (index = 0U; index < 64U; ++index) {
-    const char c = digest[index];
-    const bool hex = (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f');
-    if (!hex) return false;
+  if (length != 64U) return false;
+  for (index = 0U; index < 32U; ++index) {
+    const int high = hex_digit(hex[index * 2U]);
+    const int low = hex_digit(hex[index * 2U + 1U]);
+    if (high < 0 || low < 0) return false;
+    sha256[index] = (uint8_t)((high << 4) | low);
   }
-  return digest[64] == '\0';
+  return true;
 }
 
 static enum capnweb_status update(
@@ -27,43 +35,35 @@ static enum capnweb_status update(
     struct capnweb_reply *reply) {
   struct iterate_kit_system_update *state = context;
   struct capnweb_value object = {0};
-  struct capnweb_value url_value = {0};
-  struct capnweb_value digest_value = {0};
-  char url[512];
-  char digest[65];
+  char url[ITERATE_KIT_SYSTEM_UPDATE_URL_CAPACITY];
+  char hex[65];
+  uint8_t sha256[32];
   size_t url_length = 0U;
-  size_t digest_length = 0U;
+  size_t hex_length = 0U;
+  enum iterate_kit_status status;
   if (!iterate_kit_read_object_argument(call, &object) ||
-      !capnweb_value_object_get(&object, "url", &url_value) ||
-      capnweb_value_copy_string(&url_value, url, sizeof(url), &url_length) !=
-          CAPNWEB_OK ||
-      !capnweb_value_object_get(&object, "sha256", &digest_value) ||
-      capnweb_value_copy_string(
-          &digest_value, digest, sizeof(digest), &digest_length) !=
-          CAPNWEB_OK) {
-    return capnweb_reply_set_error(
-        reply, "TypeError", "system.update needs {url, sha256}");
-  }
-  if ((strncmp(url, "http://", 7U) != 0 &&
-       strncmp(url, "https://", 8U) != 0) ||
-      digest_length != 64U || !valid_sha256_hex(digest)) {
+      !iterate_kit_read_string_field(
+          &object, "url", url, sizeof(url), &url_length) ||
+      strncmp(url, "https://", 8U) != 0 ||
+      !iterate_kit_read_string_field(
+          &object, "sha256", hex, sizeof(hex), &hex_length) ||
+      !decode_sha256(hex, hex_length, sha256)) {
     return capnweb_reply_set_error(
         reply,
         "TypeError",
-        "system.update needs an http(s) url and a 64-char lowercase "
-        "sha256 hex digest");
+        "system.update needs {url, sha256}: an https url and the image's "
+        "sha256 as 64 lowercase hex digits");
   }
-  switch (state->driver.begin(state->driver.context, url, digest)) {
-    case ITERATE_KIT_OK:
-      /* Scheduled. The device reboots into the new image on success. */
-      return capnweb_reply_set_boolean(reply, true);
-    case ITERATE_KIT_BACKPRESSURE:
-      return capnweb_reply_set_error(
-          reply, "Error", "busy — an update is already in flight");
-    default:
-      return capnweb_reply_set_error(
-          reply, "Error", "the update could not be started");
+  status = state->driver.begin(state->driver.context, url, sha256);
+  if (status == ITERATE_KIT_OK) {
+    /* Scheduled; the board restarts into the image once it is verified. */
+    return capnweb_reply_set_boolean(reply, true);
   }
+  if (status == ITERATE_KIT_BACKPRESSURE) {
+    return capnweb_reply_set_error(
+        reply, "Error", "an update is already in flight");
+  }
+  return iterate_kit_reply_status(reply, status);
 }
 
 enum iterate_kit_status iterate_kit_system_update_init(

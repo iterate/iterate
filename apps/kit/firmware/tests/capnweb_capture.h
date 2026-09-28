@@ -62,7 +62,7 @@ static enum capnweb_status capture_fragment(
   return CAPNWEB_E_INVALID_ARGUMENT;
 }
 
-static enum capnweb_status inert_dispatch(
+static inline enum capnweb_status inert_dispatch(
     void *context,
     const struct capnweb_call *call,
     struct capnweb_reply *reply) {
