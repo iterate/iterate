@@ -8,8 +8,8 @@ size: large
 **Status:** an experiment, not a commitment: built to see what inherit and reuse cost in code and save in CI before deciding whether to keep them. Decided 2026-09-28: inherit and reuse, as #2712 had them; no suite selection for now. It replaces the 2026-09-25 draft (never committed; `stash@{0}`), which predates #3165.
 
 - **Built:** units (`scripts/ci/preview-units.ts`), inherit (`scripts/ci/preview-inherit.ts`, the `changes` step), selection (a suite that runs after a green runs only the changed rows or the changed apps' specs), reuse (`apps/os/scripts/preview-reuse.ts`: whole or not at all), the plan artifact, cleanup and sweep rules, docs, an explainer. A PR run tests its head, and inherit and reuse walk its history.
-- **Proven live** before decisions 8 and 9: docs-only pushes inherit both suites in about 8 s; a push after a red reran E2E on a reused deployment; old merge-commit deployments are passed over as "not an ancestor".
-- **Left:** live checks of selection (an e2e-row push, a Notes push) and of the simpler reuse; a decision on whether to keep it.
+- **Proven live** (after decisions 8 and 9): an e2e-row-only push ran one test file on a reused deployment and was green in 64 s (was about 2:15); a Notes-only push ran one spec (26 s) with E2E tests inherited in 6 s, but deployed all seven Workers, and a brand-new deployment's readiness gate took 16–96 s today, so it was green in 2:39; docs-only pushes inherit both suites in about 8 s.
+- **Left:** a decision on whether to keep it, and whether app-only pushes should reuse a warm apps/os after all (decision 9's trade-off, below).
 
 ## Why now
 
@@ -125,7 +125,7 @@ What else changes:
 - [x] `suiteSelection` in preview-units.ts, table-tested _16 rows: e2e files, spec files, app projects, the Dash's fan-out, everything for os/kit/shared code_
 - [x] planInherit carries the selection; the step writes `selection`; runSuite passes it on and drops deleted test files
 - [x] Reuse whole or not at all: partial deployments, `PREVIEW_REUSE` app linking and the partial cleanup/sweep rules removed
-- [ ] Live check: an e2e-row push runs one file on a reused deployment; a Notes push deploys all seven and runs the Notes project
+- [x] Live check: an e2e-row push runs one file on a reused deployment; a Notes push deploys all seven and runs the Notes project _`00bfa5e`: 1 file, nothing deployed, green in 64 s; `00e96d5` and `6a7af4e`: the notes project alone (1 spec, 26 s), E2E tests inherited in 6 s, Deploy preview 127–182 s_
 
 ## Later, not now
 
@@ -148,3 +148,4 @@ What else changes:
 - Misha on `60772a1`: it should have needed no deployment; deployments are per commit, so walk parents like #2712 did. Decision 7: a PR run tests its head. `preview-tested-commit.ts` and the `preview-paths.ts changes` gate are deleted; inherit and reuse both place ancestors through GitHub's compare API.
 - After decision 7: `91866ad` (merge of main) walked into main's history and ran both suites (the PR changes machinery); its E2E tests and one spec went red on Cloudflare Artifacts errors. `eb6db04` (docs) inherited nothing from that red, reused `pr3340-91866ad` and passed. `068e2e5` (notes) and `665c364` (its revert) behaved as the plan says. Old merge-commit deployments (`pr3340-c08836c`) were correctly passed over as "not an ancestor".
 - Decisions 8 and 9 (Misha, after asking whether it was worth it): as built it saved about 9% of Preview OS machine time and time only on docs pushes, with partial deployments the costliest part. Selecting the changed rows and app projects puts the time savings on test-only and app-only pushes, and makes partial deployments not worth their complexity.
+- Live checks after decisions 8 and 9: the first e2e-row push (`4773a5e`) failed with "No test files found": vitest matches a filter against the path from its root, apps/os, so selected rows now go as absolute paths (`4bee6ae`). Then `00bfa5e` ran one file on a reused deployment, green in 64 s; `00e96d5` and `6a7af4e` ran only the notes project. Their full deploys took 127–182 s, most of it the readiness gate on a brand-new apps/os (16, 31, 62 and 96 s across today's full deploys; 1–2 s on a reused, warm one). That is decision 9's trade-off: a partial deployment reusing a warm apps/os would have skipped both the os deploy and that wait.
