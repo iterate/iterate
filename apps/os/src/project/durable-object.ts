@@ -37,6 +37,7 @@ import { connectWaitrose } from "../integrations/waitrose-connection.ts";
 import { EntityCollectionRpcTarget } from "./collection.ts";
 import type { ProjectState } from "./contract.ts";
 import { cloudflareCustomHostnameProvider } from "./custom-hostnames.ts";
+import { domainConnectLinkOf } from "./domain-connect.ts";
 import { ProjectProcessor, type ProjectDeletion, type ProjectHostnames } from "./processor.ts";
 
 export class ProjectDurableObject extends StreamProcessorDurableObject<
@@ -128,6 +129,14 @@ export class ProjectDurableObject extends StreamProcessorDurableObject<
       release: (hostname) => controlPlane.releaseHostname(projectId, hostname),
       setPrimaryHostname: (hostname) => controlPlane.setPrimaryHostname(projectId, hostname),
       provider: cloudflareCustomHostnameProvider(config),
+      // back to the project's Hostnames page in the dash, which re-checks the hostname it names
+      connect: async (hostname) =>
+        config.domainConnect && config.urls.dash
+          ? domainConnectLinkOf(hostname, {
+              privateKey: config.domainConnect.privateKey.exposeSecret(),
+              redirectUri: `${config.urls.dash}/projects/${projectId}/hostnames?connected=${encodeURIComponent(hostname)}`,
+            })
+          : null,
     };
   }
 

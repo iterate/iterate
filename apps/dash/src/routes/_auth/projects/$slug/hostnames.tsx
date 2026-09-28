@@ -3,13 +3,16 @@
 // (apps/os/src/project/contract.ts `hostnames`): what the processor still owes, Cloudflare's status
 // and the CNAMEs the owner adds, and which live hostname is primary. Adding (`?add=1`, a sheet),
 // checking again, removing and making primary each append ONE event to the root; the processor's
-// answer lands in the live state.
-import { useState, type FormEvent } from "react";
+// answer lands in the live state. Where the owner's DNS provider speaks Domain Connect and has our
+// template, the answer carries a signed link (apps/os src/project/domain-connect.ts): "Connect with
+// <provider>" writes the records there on one click, and the provider sends the browser back here
+// with `?connected=<hostname>`, which checks that hostname again.
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { createFileRoute, getRouteApi, useNavigate } from "@tanstack/react-router";
 import { Plus } from "lucide-react";
 import { z } from "zod";
 import { Badge } from "@iterate-com/ui/components/badge";
-import { Button } from "@iterate-com/ui/components/button";
+import { Button, buttonVariants } from "@iterate-com/ui/components/button";
 import { Field, FieldLabel } from "@iterate-com/ui/components/field";
 import { Input } from "@iterate-com/ui/components/input";
 import {
@@ -35,6 +38,7 @@ const HostnamesLive = z.looseObject({
           status: z.string(),
           sslStatus: z.string(),
           records: z.array(z.object({ name: z.string(), value: z.string() })),
+          connect: z.object({ provider: z.string(), url: z.string() }).nullish(),
         })
         .nullable(),
       error: z.string().nullable(),
@@ -43,7 +47,11 @@ const HostnamesLive = z.looseObject({
 });
 
 export const Route = createFileRoute("/_auth/projects/$slug/hostnames")({
-  validateSearch: z.object({ add: z.literal(1).optional().catch(undefined) }),
+  validateSearch: z.object({
+    add: z.literal(1).optional().catch(undefined),
+    /** the hostname a Domain Connect provider just wrote the records for */
+    connected: z.string().optional().catch(undefined),
+  }),
   staticData: { page: "Hostnames" },
   head: ({ params }) => ({ meta: [{ title: `Hostnames · ${params.slug} · Dash` }] }),
   component: ProjectHostnames,
@@ -79,6 +87,21 @@ function ProjectHostnames() {
       type: "events.iterate.com/project/primary-hostname-configured",
       payload: { hostname },
     });
+  // back from the DNS provider: check the hostname it wrote the records for, once
+  const checkedConnected = useRef<string | null>(null);
+  useEffect(() => {
+    if (!context || !search.connected || checkedConnected.current === search.connected) return;
+    checkedConnected.current = search.connected;
+    context
+      .append({
+        type: "events.iterate.com/project/hostname-add-requested",
+        payload: { hostname: search.connected },
+      })
+      .catch((caught: unknown) =>
+        setError(caught instanceof Error ? caught.message : String(caught)),
+      );
+    void navigate({ search: {}, replace: true });
+  }, [context, search.connected, navigate]);
   const add = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const hostname = String(new FormData(event.currentTarget).get("hostname"));
@@ -176,8 +199,17 @@ function ProjectHostnames() {
                 {entry.error && <p className="text-sm text-destructive">{entry.error}</p>}
                 {entry.cloudflare && !live && (
                   <div className="flex flex-col gap-1 text-sm">
+                    {entry.cloudflare.connect && (
+                      <a
+                        href={entry.cloudflare.connect.url}
+                        className={buttonVariants({ className: "mb-2 self-start" })}
+                      >
+                        Connect with {entry.cloudflare.connect.provider}
+                      </a>
+                    )}
                     <p className="text-muted-foreground">
-                      Add these CNAME records at your DNS provider (on Cloudflare, DNS only):
+                      {entry.cloudflare.connect ? "Or add" : "Add"} these CNAME records at your DNS
+                      provider (on Cloudflare, DNS only):
                     </p>
                     {entry.cloudflare.records.map((record) => (
                       <code key={record.name} className="break-all">

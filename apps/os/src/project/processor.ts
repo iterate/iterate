@@ -38,6 +38,7 @@ import { reduceSecretCatalog } from "../secret/contract.ts";
 import { reduceIntegrations } from "../integrations/contract.ts";
 import { ProjectContract, type ProjectState } from "./contract.ts";
 import { customHostnameProblem, type CustomHostnameProvider } from "./custom-hostnames.ts";
+import type { DomainConnectLink } from "./domain-connect.ts";
 
 /** Where the apex points for the config repo at `commitOid`: the repo's whole tree at that exact
  *  commit as the worker's modules (package.json's `main` the main module, every `.js` file under
@@ -88,6 +89,9 @@ export type ProjectHostnames = {
   release(hostname: string): Promise<void>;
   setPrimaryHostname(hostname: string | null): Promise<void>;
   provider: CustomHostnameProvider | null;
+  /** The signed Domain Connect link that writes `hostname`'s records at its DNS provider, or null
+   *  (domain-connect.ts `domainConnectLinkOf`). */
+  connect(hostname: string): Promise<DomainConnectLink | null>;
 };
 
 /** Whether a hostname serves: Cloudflare says its hostname and its certificate are both active —
@@ -593,7 +597,17 @@ export class ProjectProcessor extends StreamProcessor<
       if (problem) throw new Error(problem);
       await hostnames.claim(hostname);
       claimed = true;
-      cloudflare = await hostnames.provider.provision(hostname);
+      const observed = await hostnames.provider.provision(hostname);
+      // one click at the owner's DNS provider, while there is something to add: best effort — a
+      // provider that cannot be asked leaves the records to add by hand
+      const live = observed.status === "active" && observed.sslStatus === "active";
+      const connect = live
+        ? null
+        : await hostnames.connect(hostname).catch((caught: unknown) => {
+            console.warn(`domain connect for ${hostname}: ${String(caught)}`);
+            return null;
+          });
+      cloudflare = { ...observed, connect };
     } catch (caught) {
       error = caught instanceof Error ? caught.message : String(caught);
       if (claimed && !provisioned) await hostnames!.release(hostname);

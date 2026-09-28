@@ -26,6 +26,10 @@ export const CustomHostnameObservation = z.object({
   sslStatus: z.string(),
   /** The CNAMEs the owner adds (custom-hostnames.ts `customHostnameRecords`). */
   records: z.array(z.object({ name: z.string(), value: z.string() })),
+  /** ONE-CLICK DNS (domain-connect.ts): the owner's DNS provider and the signed link that writes
+   *  `records` there, when that provider has onboarded our Domain Connect template and the
+   *  hostname is not live yet. Null otherwise: the owner adds the records by hand. */
+  connect: z.object({ provider: z.string(), url: z.string() }).nullable().default(null),
 });
 export type CustomHostnameObservation = z.infer<typeof CustomHostnameObservation>;
 
