@@ -31,9 +31,6 @@ export default {
       entry: ["configs/*/worker.ts", "configs/*/*/index.ts"],
       project: ["*.ts", "specs/**/*.ts", "configs/**/*.{ts,js}"],
       ignoreDependencies: [
-        // The .depot/workflows steps run these bins from the root (`pnpm tsx scripts/ci/…`).
-        "trpc-cli",
-        "tsx",
         // The `iterate` bin: `pnpm exec iterate` from the root (docs/dev-environments.md).
         "@iterate-com/cli",
         // `cloudflare:workers` parses as the "cloudflare" package.
@@ -125,8 +122,9 @@ export default {
     },
     "apps/spa": {
       // public/index.html loads app.js, and its import map resolves @iterate-com/capnweb from a CDN.
+      // The deploy (scripts/lib/deploy-app.ts) runs `pnpm exec wrangler` in the app's directory.
       entry: ["public/app.js"],
-      ignoreDependencies: ["@iterate-com/capnweb"],
+      ignoreDependencies: ["@iterate-com/capnweb", "wrangler"],
     },
     "apps/browser-extension": {
       // public/index.html loads panel.js; its ./capnweb.js and ./oauth.js are the ones the build

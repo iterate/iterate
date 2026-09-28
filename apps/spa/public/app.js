@@ -15,7 +15,6 @@ localStorage.setItem("iterate-spa:issuer", issuer);
 /** Where the issuer sends the browser back: this page, exactly. */
 const redirectUri = new URL(location.pathname, location.origin).href;
 const oauth = oauthClient({
-  clients: webStore(localStorage),
   // this tab, until it closes
   sessions: webStore(sessionStorage),
   redirectUri,

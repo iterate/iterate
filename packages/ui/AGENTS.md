@@ -36,8 +36,8 @@ dependency) and `src/hooks/use-mobile.ts` (sidebar's).
 ### Refresh
 
 ```sh
-pnpm tsx scripts/ci/shadcn-drift.ts refresh  # shadcn add <every item> -o -y
-git diff                                     # review what upstream changed
+node scripts/ci/shadcn-drift.ts refresh  # shadcn add <every item> -o -y
+git diff                                 # review what upstream changed
 ```
 
 Review the diff instead of re-applying patches: there are none. Keep a dependency the CLI adds to

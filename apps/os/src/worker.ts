@@ -379,7 +379,7 @@ export default {
 
     // A project secret's OAuth callback (secret-oauth.ts): the provider sends the human back here
     // with the code. Its own reserved path, `/.secrets/`, beside `/version` — and an integration's,
-    // the legacy URL iterate's Slack app and Google client are registered with.
+    // the URL iterate's Slack app and Google client are registered with.
     if (
       url.pathname === SECRET_OAUTH_CALLBACK_PATH ||
       OAUTH_INTEGRATION_PROVIDERS.some(

@@ -15,14 +15,17 @@ import {
   testEvidencePaths,
 } from "@iterate-com/shared/test-support/test-evidence";
 import { ciBucketEnvs } from "../../envs.ts";
+import { dopplerSecret } from "../lib/env-context.ts";
 import { ciBucket } from "./ci-bucket.ts";
 import finalizeTestTelemetry from "./test-telemetry-finalizer.ts";
 import { loadTestTelemetryArtifacts, unitTestWorkspaces } from "./test-telemetry-completeness.ts";
 
 /**
- * THE TEST EVIDENCE FOLDER'S MANIFEST, AND ITS UPLOAD TO R2 (docs/test-evidence.md). Two commands,
- * each a step after a CI job's tests, run from the repository root with Node's own type stripping:
+ * THE TEST EVIDENCE FOLDER'S MANIFEST, AND ITS UPLOAD TO R2 (docs/test-evidence.md). Three
+ * commands, run from the repository root with Node's own type stripping, the first beside a CI job's
+ * tests and the others after them:
  *
+ *   node scripts/ci/test-evidence.ts fetch-upload-secrets   # the upload's token, for later
  *   node scripts/ci/test-evidence.ts finalize --flake-suites <suite> [--cancelled]
  *     # the telemetry finalizer, then manifest.json
  *   node scripts/ci/test-evidence.ts upload   # into R2, the manifest last
@@ -641,19 +644,45 @@ export async function writeManifest(input: {
   }
 }
 
-/** The test evidence folder into R2, the manifest last (CLOUDFLARE_API_TOKEN, Doppler _shared/preview). */
+/** The upload's Cloudflare API token into the job's Doppler fallback file, fetched while the tests
+ *  run, so the upload after them reads it without a request. One that cannot is a warning: the
+ *  upload then fetches the token itself. */
+export function fetchUploadSecrets() {
+  try {
+    uploadToken();
+  } catch (error) {
+    console.error(error);
+    const { dopplerProject, dopplerConfig } = ciBucketEnvs.ci;
+    console.log(
+      `::warning title=Doppler prefetch::${dopplerProject}/${dopplerConfig} not saved; the evidence upload fetches it`,
+    );
+  }
+}
+
+/** The CI bucket's account's Cloudflare API token (envs.ts `ciBucketEnvs`), kept in the job's
+ *  temporary directory between fetchUploadSecrets and upload. */
+function uploadToken() {
+  const { dopplerProject, dopplerConfig } = ciBucketEnvs.ci;
+  const runnerTemp = z
+    .string({ error: "RUNNER_TEMP is unset: the evidence upload runs in a CI job" })
+    .min(1)
+    .parse(process.env.RUNNER_TEMP);
+  return dopplerSecret(dopplerProject, dopplerConfig, "CLOUDFLARE_API_TOKEN", {
+    fallback: join(runnerTemp, `doppler-${dopplerProject}-${dopplerConfig}`),
+  });
+}
+
+/** The test evidence folder into R2, the manifest last. */
 export async function upload() {
   const bucket = ciBucketEnvs.ci;
-  const started = performance.now();
   try {
-    const { CLOUDFLARE_API_TOKEN } = process.env;
-    if (!CLOUDFLARE_API_TOKEN)
-      throw new Error("upload needs CLOUDFLARE_API_TOKEN (Doppler _shared/preview)");
+    const apiToken = uploadToken();
+    const started = performance.now();
     const uploaded = await uploadTestEvidence({
       repoRoot: process.cwd(),
       accountId: bucket.cloudflareAccountId,
       bucketName: bucket.bucketName,
-      apiToken: CLOUDFLARE_API_TOKEN,
+      apiToken,
       fetch,
     });
     // the upload's own time, and the process's: the difference is Node's start-up

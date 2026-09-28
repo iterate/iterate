@@ -4,7 +4,7 @@ import { ciReportsEnvs } from "../../../envs.ts";
 import { deployApp } from "../../../scripts/lib/deploy-app.ts";
 
 /** vite build → wrangler deploy with Depot's token → the viewer answers (scripts/lib/deploy-app.ts). */
-export default async function deploy(options: { env?: string } = {}) {
+export default async function deploy(options: { env: string }) {
   await deployApp({
     appRoot: fileURLToPath(new URL("..", import.meta.url)),
     appLabel: "apps/ci-reports",
@@ -15,7 +15,7 @@ export default async function deploy(options: { env?: string } = {}) {
     servingUrl: (env) => env.baseUrl,
     requiredSecrets: ["DEPOT_CI_TELEMETRY_TOKEN"],
     smokes: (env) => [
-      { url: `${env.baseUrl}/`, ok: (status) => status === 200, label: "viewer index" },
+      { url: `${env.baseUrl}/`, ok: (response) => response.status === 200, label: "viewer index" },
     ],
   });
 }

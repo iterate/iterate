@@ -30,6 +30,6 @@ jobs:
       - name: Setup
         uses: ./.depot/actions/setup
       - name: Notify PR update
-        run: pnpm tsx scripts/ci/notify.ts pr-update
+        run: node scripts/ci/notify.ts pr-update
       - name: Update PR dashboard
-        run: pnpm tsx scripts/ci/pr-dashboard.ts
+        run: node scripts/ci/pr-dashboard.ts

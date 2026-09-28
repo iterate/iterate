@@ -84,7 +84,7 @@ export namespace listMembers {
 		userId: string;
 		email: string;
 		role: ('owner' | 'member');
-		createdAt?: number;
+		createdAt: number;
 	};
 }
 
@@ -204,7 +204,7 @@ export namespace insertOrganization {
 	export type Params = {
 		id: string;
 		name: string;
-		createdAt: number | null;
+		createdAt: number;
 	};
 }
 
@@ -325,7 +325,7 @@ export const upsertMembership = Object.assign(
 export namespace upsertMembership {
 	export type Params = {
 		role: ('owner' | 'member');
-		createdAt: number | null;
+		createdAt: number;
 		orgId: string;
 		userId: string;
 		email: string;

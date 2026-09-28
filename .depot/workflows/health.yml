@@ -40,17 +40,15 @@ jobs:
         uses: actions/checkout@v4
       - name: Setup
         uses: ./.depot/actions/setup
-      # The Depot organization token reads the runs, the artifacts and the previous state through
-      # Depot's API; the Slack bot token comes from Doppler _shared/prd (scripts/ci/slack.ts), and
-      # the DO probe's Cloudflare credentials from _shared/preview and _shared/prd (envs.ts
-      # `cloudflareAccounts`).
+      # The script reads its secrets from Doppler itself: the Depot organization token, which reads
+      # the runs, the artifacts and the previous state (scripts/ci/depot.ts `depotApi`), the Slack
+      # bot token (scripts/ci/slack.ts), and each account's Cloudflare API token for the DO probe
+      # (envs.ts `cloudflareAccounts`).
       - name: Judge, page #error-pulse on a change of state
         run: |-
           set -euo pipefail
-          export DEPOT_CI_TELEMETRY_TOKEN
-          DEPOT_CI_TELEMETRY_TOKEN="$(doppler secrets get DEPOT_CI_TELEMETRY_TOKEN --plain --project _shared --config preview)"
-          pnpm tsx scripts/monitors/health.ts previous-state --out test-results/health/previous.json
-          pnpm tsx scripts/monitors/health.ts run \
+          node scripts/monitors/health.ts previous-state --out test-results/health/previous.json
+          node scripts/monitors/health.ts run \
             --ref "${{ github.ref }}" \
             --state test-results/health/previous.json \
             --state-out test-results/health/state.json \

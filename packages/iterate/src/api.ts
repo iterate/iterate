@@ -1067,9 +1067,8 @@ export interface IterateSessionApi {
      *  it uses it (`integrations.connect(provider, { account })`) */
     iterateAppScopes: Partial<Record<OAuthIntegrationProvider, string[]>>;
     /** the providers a person signs in with here: the ones a signed-in person can add to their
-     *  account (the issuer's `/.auth/identity/<provider>?link=<userId>`); absent from a platform
-     *  older than it, which offers none */
-    signInProviders?: SignInProvider[];
+     *  account (the issuer's `/.auth/identity/<provider>?link=<userId>`) */
+    signInProviders: SignInProvider[];
   };
   /** The grants this session may manage (a signed-in person's with the `account` scope): list and
    *  end its sessions and personal access tokens, and mint a personal access token — its bearer
@@ -1147,12 +1146,10 @@ export interface IterateSessionApi {
     addMember(orgId: string, input: { userId: string; role?: "owner" | "member" }): Promise<void>;
     removeMember(orgId: string, input: { userId: string }): Promise<void>;
     /** the members with their emails, by membership, in the order they joined: `createdAt` is
-     *  when (epoch ms), null for one who joined before the platform recorded it */
+     *  when they joined (epoch ms) */
     members(
       orgId: string,
-    ): Promise<
-      { userId: string; email: string; role: "owner" | "member"; createdAt: number | null }[]
-    >;
+    ): Promise<{ userId: string; email: string; role: "owner" | "member"; createdAt: number }[]>;
     /** the invitation links still open (an expired one stays until revoked), oldest first — an
      *  owner's */
     invitations(orgId: string): Promise<InvitationRecord[]>;

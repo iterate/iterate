@@ -102,11 +102,11 @@ main's keeps.
 
 ## Replay
 
-Local rendering requires `DEPOT_CI_TELEMETRY_TOKEN`. CI obtains it from Doppler
-`_shared/preview`. Use the Depot workflow ID, not its run ID.
+The script reads the Depot organization token from Doppler `_shared/preview`, as in CI. Use the
+Depot workflow ID, not its run ID.
 
 ```sh
-pnpm exec trpc-cli scripts/ci/tracing/cli.ts render <workflow-id> /tmp/ci-trace
+node scripts/ci/tracing/cli.ts render <workflow-id> /tmp/ci-trace
 ```
 
 ## Timing limits

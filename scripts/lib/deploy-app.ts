@@ -17,8 +17,9 @@ import {
  * THE deploy pipeline — the same top-to-bottom program every app runs:
  *
  *   resolve --env → assert resources provisioned → collect secrets →
- *   app-specific prepare (config preflight, synced assets) → vite build → deploy
- *   code+secrets in one version → smoke-probe → afterDeploy → ✅
+ *   app-specific prepare (config preflight, synced assets) → build (vite's, or
+ *   the app's own) → deploy code+secrets in one version → smoke-probe →
+ *   afterDeploy → ✅
  *
  * Durable Object classes are declared in each app's wrangler config
  * `exports` map and reconciled by the server on every deploy — no migration
@@ -38,12 +39,8 @@ export async function deployApp<E extends DeployableEnv>(input: {
   /** The app's env map from the root envs.ts. */
   envs: Record<string, E>;
   dopplerProject: string;
-  /**
-   * Target environment name from envs.ts (the deploy script's --env flag).
-   * When absent, resolveEnvContext falls back to DOPPLER_CONFIG — CI's
-   * `doppler run -- pnpm run-script deploy` carries no flags.
-   */
-  env?: string;
+  /** Target environment name from envs.ts (the deploy script's --env flag). */
+  env: string;
   workerName: (env: E) => string;
   /** Public origin for the final success line. */
   servingUrl: (env: E) => string;
@@ -62,12 +59,17 @@ export async function deployApp<E extends DeployableEnv>(input: {
     secretValues: Record<string, string>,
     credentials: Record<string, string>,
   ) => Promise<void> | void;
+  /** Writes dist/, whose one `wrangler.json` is what deploys: `vite build` for the env
+   *  (deploy-helpers.ts `viteBuild`) unless the app builds itself, as the SPA's static files do. */
+  build?: (ctx: EnvContext<E>) => Promise<void>;
   /** Runs after a healthy deploy. */
   afterDeploy?: (ctx: EnvContext<E>, secretValues: Record<string, string>) => Promise<void> | void;
+  /** Read after the deploy, so a probe can name what the build wrote. */
   smokes: (env: E) => {
     url: string;
-    /** Which HTTP statuses count as healthy for this probe. */
-    ok: (status: number) => boolean;
+    /** Whether the answer is the healthy one: its status, or its body where a fallback could
+     *  answer the same status. */
+    ok: (response: Response) => boolean | Promise<boolean>;
     label: string;
   }[];
   /**
@@ -87,7 +89,6 @@ export async function deployApp<E extends DeployableEnv>(input: {
     envs: input.envs,
     dopplerProject: input.dopplerProject,
     env: input.env,
-    allowDopplerConfigFallback: true,
   });
   if (input.resources) assertProvisioned(ctx.name, input.resources(ctx.env));
   const workerName = input.workerName(ctx.env);
@@ -101,7 +102,7 @@ export async function deployApp<E extends DeployableEnv>(input: {
   };
   const secretValues = collectSecrets(ctx, input.requiredSecrets || []);
   await input.prepare?.(ctx, secretValues, credentials);
-  await viteBuild(input.appRoot, ctx.name);
+  await (input.build ? input.build(ctx) : viteBuild(input.appRoot, ctx.name));
   const builtConfig = findBuiltWranglerConfig(input.appRoot);
   if (input.withoutRoutes) {
     const config = JSON.parse(readFileSync(builtConfig, "utf8"));

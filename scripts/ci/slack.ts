@@ -1,6 +1,5 @@
-import { execSync } from "node:child_process";
-
 import { WebClient } from "@slack/web-api";
+import { dopplerSecret } from "../lib/env-context.ts";
 
 export const slackChannelIds = {
   "#error-pulse": "C09K1CTN4M7",
@@ -30,20 +29,6 @@ export const slackUsers = [
   },
 ];
 
-function getSlackBotToken() {
-  if (process.env.SLACK_CI_BOT_TOKEN) {
-    return process.env.SLACK_CI_BOT_TOKEN;
-  }
-  if (process.env.DOPPLER_TOKEN) {
-    return execSync("doppler secrets --project _shared --config prd get --plain SLACK_CI_BOT_TOKEN")
-      .toString()
-      .trim();
-  }
-  throw new Error(
-    "Can't get Slack bot token: neither SLACK_CI_BOT_TOKEN nor DOPPLER_TOKEN is available",
-  );
-}
-
 /** What every message to #error-pulse mentions: Jonas and Misha, on call for prd and main, by Slack
  *  user id. Routine posts (deploys that succeeded, pull request events, the dashboards) go to #ci and
  *  mention nobody. */
@@ -51,8 +36,9 @@ export const onCallMention = ["jonas", "misha"]
   .map((handle) => `<@${slackUsers.find((user) => user.handle === handle)!.id}>`)
   .join(" ");
 
+/** Slack as the CI bot, whose token is Doppler _shared/prd's. */
 export function getSlackClient() {
-  return new WebClient(getSlackBotToken());
+  return new WebClient(dopplerSecret("_shared", "prd", "SLACK_CI_BOT_TOKEN"));
 }
 
 /** Escapes the three characters Slack's mrkdwn treats as control characters. */
@@ -66,11 +52,13 @@ export function pageChannel(testRun: boolean) {
 }
 
 /** One incident's top-level message: what broke with both mentions, who or what it affects, the
- *  first thing to do, and the one link. A test run's is marked 🧪 and mentions nobody. */
+ *  first thing to do, any lines that action needs (the ids to escalate), and the one link. A test
+ *  run's is marked 🧪 and mentions nobody. */
 export function pageText(input: {
   what: string;
   impact: string;
   action: string;
+  details?: string[];
   link: string | null;
   testRun: boolean;
 }) {
@@ -78,6 +66,7 @@ export function pageText(input: {
     input.testRun ? `🧪 TEST RUN — 🚨 ${input.what}` : `🚨 ${input.what} ${onCallMention}`,
     `Impact: ${input.impact}`,
     `Do: ${input.action}`,
+    ...(input.details || []),
     input.link && `<${input.link}|run>`,
   ]
     .filter(Boolean)
@@ -110,15 +99,16 @@ function isResolved(text: string) {
 }
 
 /**
- * The newest page this bot posted in the last `sinceHours` whose text has `marker` and whose first
- * line is not resolved, read page by page through the channel's history. A 🧪 test page is never an
- * incident.
+ * The pages this bot posted in the last `sinceHours` whose text has `marker` and whose first line
+ * is not resolved, newest first, read page by page through the channel's history. A 🧪 test page is
+ * never an incident.
  */
-export async function findOpenPage(
+export async function findOpenPages(
   slack: WebClient,
   input: { channel: string; marker: string; sinceHours: number; now: Date },
-): Promise<{ ts: string; text: string } | undefined> {
+): Promise<Array<{ ts: string; text: string }>> {
   const { bot_id: botId } = await slack.auth.test();
+  const open: Array<{ ts: string; text: string }> = [];
   let cursor: string | undefined;
   do {
     const history = await slack.conversations.history({
@@ -136,11 +126,11 @@ export async function findOpenPage(
         !text.includes("TEST RUN") &&
         !isResolved(text)
       )
-        return { ts: message.ts, text };
+        open.push({ ts: message.ts, text });
     }
     cursor = history.response_metadata?.next_cursor || undefined;
   } while (cursor);
-  return undefined;
+  return open;
 }
 
 /**
@@ -156,7 +146,53 @@ export async function resolvePage(
   await slack.chat.postMessage({
     channel: input.channel,
     thread_ts: input.ts,
-    // a 🧪 test page is never open (findOpenPage), so this resolves a real one
+    // a 🧪 test page is never open (findOpenPages), so this resolves a real one
     text: resolvedText(input.why, false),
   });
+}
+
+/** What a run does with one incident's page, given its open page (if any) and this run's page text
+ *  (none when the incident is gone): post, edit, resolve, or nothing. Pure. */
+export function pageStep(
+  open: { ts: string; text: string } | undefined,
+  text: string | undefined,
+):
+  | { step: "post"; text: string }
+  | { step: "edit"; ts: string; text: string }
+  | { step: "resolve"; ts: string; text: string }
+  | { step: "none" } {
+  if (!text) return open ? { step: "resolve", ...open } : { step: "none" };
+  return open ? { step: "edit", ts: open.ts, text } : { step: "post", text };
+}
+
+/**
+ * Keeps one incident's #error-pulse page for a poster with no state but the channel: posts it,
+ * edits it while the incident lasts (an edit notifies nobody), or resolves it with `why` once this
+ * run finds the incident gone (pageStep). `render` is this run's page text, given the open page's
+ * (a poster that cannot see the whole incident in one run carries forward what the page names), or
+ * undefined when the incident is gone. Older open pages of the same incident (a page per night from
+ * before one was kept) are resolved by an edit alone, which notifies nobody. Returns the step
+ * taken. A 🧪 test run posts its page to #ci itself and never calls this.
+ */
+export async function keepPage(
+  slack: WebClient,
+  input: {
+    marker: string;
+    sinceHours: number;
+    now: Date;
+    render: (openText: string | undefined) => Promise<string | undefined>;
+    why: string;
+  },
+) {
+  const channel = pageChannel(false);
+  const { marker, sinceHours, now } = input;
+  const [open, ...older] = await findOpenPages(slack, { channel, marker, sinceHours, now });
+  for (const page of older)
+    await slack.chat.update({ channel, ts: page.ts, text: markResolved(page.text) });
+  const step = pageStep(open, await input.render(open?.text));
+  if (step.step === "post") await slack.chat.postMessage({ channel, text: step.text });
+  if (step.step === "edit") await slack.chat.update({ channel, ts: step.ts, text: step.text });
+  if (step.step === "resolve")
+    await resolvePage(slack, { channel, ts: step.ts, text: step.text, why: input.why });
+  return step.step;
 }

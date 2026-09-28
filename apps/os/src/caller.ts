@@ -172,7 +172,7 @@ const sha256 = async (text: string): Promise<Uint8Array> =>
 
 /** The SHA-256 of `text`, hex: what the platform keeps of a random token (an invitation link, a
  *  personal access token, a mailed code), and a secret derived from `secrets.key` under a label
- *  (app-config.ts `sessionSigningSecretOf`, admin-sign-in.ts). */
+ *  (app-config.ts `sessionSigningSecretOf`). */
 export const sha256Hex = async (text: string): Promise<string> =>
   Array.from(await sha256(text), (byte) => byte.toString(16).padStart(2, "0")).join("");
 

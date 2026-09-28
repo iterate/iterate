@@ -15,7 +15,15 @@ on:
       - apps/browser-extension/**
       - envs.ts
       - scripts/lib/**
+  # `env=preview` deploys the dispatched ref to envs.ts spaEnvs.preview, to prove a branch; a push
+  # deploys prd.
   workflow_dispatch:
+    inputs:
+      env:
+        description: prd | preview (envs.ts spaEnvs)
+        required: false
+        type: string
+        default: prd
 jobs:
   deploy:
     runs-on: depot-ubuntu-24.04
@@ -30,4 +38,5 @@ jobs:
       - name: Deploy static assets and versioned extension bundle
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-        run: pnpm --dir apps/spa run-script deploy --env prd
+          SPA_ENV: ${{ inputs.env || 'prd' }}
+        run: pnpm --dir apps/spa run-script deploy --env "$SPA_ENV"

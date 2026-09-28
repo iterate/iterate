@@ -213,12 +213,6 @@ importers:
       playwright:
         specifier: 1.63.0
         version: 1.63.0
-      trpc-cli:
-        specifier: 'catalog:'
-        version: 0.16.0(@orpc/server@1.15.4(@opentelemetry/api@1.9.0)(crossws@0.4.4)(ws@8.21.3))(@trpc/server@11.12.0(typescript@7.0.2))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@7.0.2)))(effect@3.19.19)(valibot@1.2.0(typescript@7.0.2))(zod@4.6.5(patch_hash=5a57d5a4f788c6fe9e15d60e59511c1f901b7fc1d638126eb2b02cafc9e79a86))
-      tsx:
-        specifier: 'catalog:'
-        version: 4.23.15
       typescript:
         specifier: 'catalog:'
         version: 7.0.2
@@ -874,7 +868,7 @@ importers:
         version: 19.3.0(react@19.3.0)
       sqlfu:
         specifier: 0.1.1
-        version: 0.1.1(@opentelemetry/api@1.9.0)(@trpc/server@11.12.0(typescript@7.0.2))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@7.0.2)))(crossws@0.4.4)(effect@3.19.19)(valibot@1.2.0(typescript@7.0.2))(ws@8.21.3)
+        version: 0.1.1(@opentelemetry/api@1.9.0)(@trpc/server@11.12.0(typescript@7.0.2))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@7.0.2)))(crossws@0.4.4)(valibot@1.2.0(typescript@7.0.2))(ws@8.21.3)
       sucrase:
         specifier: ^3.35.1
         version: 3.35.1
@@ -6846,6 +6840,11 @@ packages:
 
   mz@2.7.0:
     resolution: {integrity: sha512-z81GNO7nnYMEhrGh9LeymoE4+Yr0Wn5McHIZMK5cfQCl+NDX08sCZgUc9/6MHni9IWuFLm1Z3HTCXu2z9fN62Q==}
+
+  nanoid@3.3.15:
+    resolution: {integrity: sha512-y7Wygv/7mEOvxTuEQDB8StXdMRBWf1kR/tlhAzBRUFkB2jfcLOAxO/SHmOO2zgz1pVgK29/kyupn059/bCHdjA==}
+    engines: {node: ^10 || ^12 || ^13.7 || ^14 || >=15.0.1}
+    hasBin: true
 
   nanoid@3.3.19:
     resolution: {integrity: sha512-Y2tUNy4ouw6tq5oDSKeQYGOyhkUBhNOcGV/02KC+6kd9eDGqdZd++mjMiIDilrBYvjEnCYvVtsuHCuP+okSfug==}
@@ -14040,6 +14039,8 @@ snapshots:
       object-assign: 4.1.1
       thenify-all: 1.6.0
 
+  nanoid@3.3.15: {}
+
   nanoid@3.3.19: {}
 
   natural-compare@1.4.0: {}
@@ -14438,7 +14439,7 @@ snapshots:
 
   postcss@8.5.16:
     dependencies:
-      nanoid: 3.3.19
+      nanoid: 3.3.15
       picocolors: 1.1.1
       source-map-js: 1.2.1
 
@@ -15026,14 +15027,12 @@ snapshots:
 
   space-separated-tokens@2.0.2: {}
 
-  sqlfu@0.1.1(@opentelemetry/api@1.9.0)(@trpc/server@11.12.0(typescript@7.0.2))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@7.0.2)))(crossws@0.4.4)(effect@3.19.19)(valibot@1.2.0(typescript@7.0.2))(ws@8.21.3):
+  sqlfu@0.1.1(@opentelemetry/api@1.9.0)(@trpc/server@11.12.0(typescript@7.0.2))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@7.0.2)))(crossws@0.4.4)(valibot@1.2.0(typescript@7.0.2))(ws@8.21.3):
     dependencies:
       '@clack/prompts': 1.8.1
       '@orpc/server': 1.15.4(@opentelemetry/api@1.9.0)(crossws@0.4.4)(ws@8.21.3)
-      trpc-cli: 0.14.1(@orpc/server@1.15.4(@opentelemetry/api@1.9.0)(crossws@0.4.4)(ws@8.21.3))(@trpc/server@11.12.0(typescript@7.0.2))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@7.0.2)))(effect@3.19.19)(valibot@1.2.0(typescript@7.0.2))(zod@4.6.5(patch_hash=5a57d5a4f788c6fe9e15d60e59511c1f901b7fc1d638126eb2b02cafc9e79a86))
+      trpc-cli: 0.14.1(@orpc/server@1.15.4(@opentelemetry/api@1.9.0)(crossws@0.4.4)(ws@8.21.3))(@trpc/server@11.12.0(typescript@7.0.2))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@7.0.2)))(valibot@1.2.0(typescript@7.0.2))(zod@4.6.5(patch_hash=5a57d5a4f788c6fe9e15d60e59511c1f901b7fc1d638126eb2b02cafc9e79a86))
       zod: 4.6.5(patch_hash=5a57d5a4f788c6fe9e15d60e59511c1f901b7fc1d638126eb2b02cafc9e79a86)
-    optionalDependencies:
-      effect: 3.19.19
     transitivePeerDependencies:
       - '@opentelemetry/api'
       - '@trpc/server'
@@ -15249,14 +15248,13 @@ snapshots:
 
   trough@2.2.0: {}
 
-  trpc-cli@0.14.1(@orpc/server@1.15.4(@opentelemetry/api@1.9.0)(crossws@0.4.4)(ws@8.21.3))(@trpc/server@11.12.0(typescript@7.0.2))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@7.0.2)))(effect@3.19.19)(valibot@1.2.0(typescript@7.0.2))(zod@4.6.5(patch_hash=5a57d5a4f788c6fe9e15d60e59511c1f901b7fc1d638126eb2b02cafc9e79a86)):
+  trpc-cli@0.14.1(@orpc/server@1.15.4(@opentelemetry/api@1.9.0)(crossws@0.4.4)(ws@8.21.3))(@trpc/server@11.12.0(typescript@7.0.2))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@7.0.2)))(valibot@1.2.0(typescript@7.0.2))(zod@4.6.5(patch_hash=5a57d5a4f788c6fe9e15d60e59511c1f901b7fc1d638126eb2b02cafc9e79a86)):
     dependencies:
       commander: 14.0.3
     optionalDependencies:
       '@orpc/server': 1.15.4(@opentelemetry/api@1.9.0)(crossws@0.4.4)(ws@8.21.3)
       '@trpc/server': 11.12.0(typescript@7.0.2)
       '@valibot/to-json-schema': 1.5.0(valibot@1.2.0(typescript@7.0.2))
-      effect: 3.19.19
       valibot: 1.2.0(typescript@7.0.2)
       zod: 4.6.5(patch_hash=5a57d5a4f788c6fe9e15d60e59511c1f901b7fc1d638126eb2b02cafc9e79a86)
 

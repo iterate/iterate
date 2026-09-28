@@ -10,8 +10,6 @@ the Cloudflare credentials and the CI Slack token, which it inherits from `_shar
   more. Add `preview` (its own `preview` environment) inheriting `_shared/preview` for a hand
   deploy of main on dev's `<app>` (`pnpm --dir apps/<app> run deploy --env preview`). Per-commit
   PR deployments run under `os/preview` and never read the app's project.
-- Do not copy older apps' `dev_<person>` or `preview_<n>` configs. They are leftovers of the
-  leased-preview era.
 - Add `project: <app>` with `path: apps/<app>/` to `doppler.yaml`, without pinning a config.
 - Confirm by name only, never by value:
   `doppler secrets --project <app> --config prd --only-names` should list

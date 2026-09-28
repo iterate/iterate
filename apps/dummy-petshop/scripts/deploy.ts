@@ -7,7 +7,7 @@ import { deployApp } from "../../../scripts/lib/deploy-app.ts";
  *  The JWKS reads the OIDC key from the state object, so a state object that cannot start fails the
  *  deploy rather than the next suite that calls the shop. No secrets ship: PETSHOP_SEAL_KEY is
  *  already a worker secret, and a deploy keeps it. */
-export default async function deploy(options: { env?: string } = {}) {
+export default async function deploy(options: { env: string }) {
   await deployApp({
     appRoot: fileURLToPath(new URL("..", import.meta.url)),
     appLabel: "apps/dummy-petshop",
@@ -17,10 +17,10 @@ export default async function deploy(options: { env?: string } = {}) {
     workerName: (env) => env.workerName,
     servingUrl: (env) => env.baseUrl,
     smokes: (env) => [
-      { url: `${env.baseUrl}/`, ok: (status) => status === 200, label: "shop index" },
+      { url: `${env.baseUrl}/`, ok: (response) => response.status === 200, label: "shop index" },
       {
         url: `${env.baseUrl}/cloudflare/.well-known/jwks.json`,
-        ok: (status) => status === 200,
+        ok: (response) => response.status === 200,
         label: "shop state",
       },
     ],

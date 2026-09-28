@@ -4,7 +4,7 @@
 # the tsconfig.json it resolves aliases with, the globals.css it merges an item's CSS into) or this
 # check asks the CLI's dry run for the exact content `add` would write, from shadcn's live registry,
 # and fails on any file whose bytes differ, printing each file's diff. The fix is a refresh
-# (`pnpm tsx scripts/ci/shadcn-drift.ts refresh`), never a hand edit.
+# (`node scripts/ci/shadcn-drift.ts refresh`), never a hand edit.
 #
 # Why its own workflow: it calls shadcn's registry over the network, so it stays off the required
 # checks and off every other pull request's time to green. The path filter runs it only where the
@@ -69,4 +69,4 @@ jobs:
       - name: Setup
         uses: ./.depot/actions/setup
       - name: Compare the vendored files with shadcn add
-        run: pnpm tsx scripts/ci/shadcn-drift.ts check
+        run: node scripts/ci/shadcn-drift.ts check

@@ -46,7 +46,7 @@ import { buildStartApp, type StartApp } from "../../../scripts/lib/start-app.ts"
 import { awaitDeployOfThisRun, SUITE_BOUND_MS } from "../../../scripts/ci/await-deploy.ts";
 import { createOctokit, getOctokit, getRepo } from "../../../scripts/ci/github.ts";
 import { replaceMarkedSection } from "../../../scripts/ci/markdown-annotator.ts";
-import { getSlackClient, slackChannelIds } from "../../../scripts/ci/slack.ts";
+import { getSlackClient, keepPage, slackChannelIds } from "../../../scripts/ci/slack.ts";
 import { traceOperation } from "../../../scripts/ci/tracing/tracing.ts";
 import { parseAppConfig, type AppConfig } from "../src/app-config.ts";
 import { TEST_EMAIL_DOMAIN } from "../src/test-email-domain.ts";
@@ -60,6 +60,8 @@ import {
   deleteArtifactsNamespace,
   isCloudflareError,
   renderStuckArtifactsNamespacesPage,
+  STUCK_ARTIFACTS_PAGE_MARKER,
+  stuckNamespacesStillThere,
   type ArtifactsNamespaceRow,
   type Cf,
   type StuckArtifactsNamespace,
@@ -95,6 +97,7 @@ import {
   renderWorkerlessNamespacesPage,
   unmappedWorkers,
   workerlessNamespaces,
+  WORKERLESS_PAGE_MARKER,
   type PreviewDeploymentListing,
   type PreviewMember,
   type PullRequestState,
@@ -420,7 +423,7 @@ async function deployStartApp(
     secretValues: {},
     credentials,
   });
-  await smoke(`${url}/healthz`, (status) => status === 200, `apps/${app.name} health`);
+  await smoke(`${url}/healthz`, (response) => response.status === 200, `apps/${app.name} health`);
   return { name: app.name, url };
 }
 
@@ -1115,10 +1118,19 @@ async function deleteLegacyWorkerPreviews(cf: Cf, options: { dryRun: boolean }) 
   return { listed, failures };
 }
 
+/** How far back the sweep looks for its own open page: a page stays open, edited each night, until
+ *  Cloudflare deletes what it names, and a Cloudflare escalation takes weeks. */
+const PAGE_LOOKBACK_HOURS = 30 * 24;
+
 /** The stale deployments, the legacy Worker Previews and the former parents (scripts/preview-sweep.ts),
- *  then the Durable Object namespaces no worker holds. */
-async function sweep(cf: Cf, options: { dryRun: boolean; jobUrl: string | undefined }) {
-  const { dryRun } = options;
+ *  then the Durable Object namespaces no worker holds. A run on main keeps one #error-pulse page per
+ *  kind of resource Cloudflare left (keepPage); a run on any other ref prints its pages. A 🧪 test run
+ *  deletes nothing and posts what it would page to #ci. */
+async function sweep(
+  cf: Cf,
+  options: { dryRun: boolean; testRun: boolean; onMain: boolean; jobUrl: string | undefined },
+) {
+  const { dryRun, testRun, jobUrl } = options;
   const [members, namespaces] = await Promise.all([
     listAccountMembers(cf),
     listAll<SweptNamespace>(cf, "/workers/durable_objects/namespaces"),
@@ -1190,6 +1202,17 @@ async function sweep(cf: Cf, options: { dryRun: boolean; jobUrl: string | undefi
   console.log(
     `plan: ${stale.length} stale deployment(s) of ${plan.length}; ${staleFormerParents.length} former parent(s); ${freedNamespaceIds.size} of the account's ${namespaces.length} Durable Object namespaces go with them; ${unmapped.length} unmapped worker(s) kept`,
   );
+  if (testRun) {
+    // Only the workerless kind can be judged without deleting: a stuck namespace is one a delete
+    // was refused.
+    const text =
+      workerless.length > 0
+        ? renderWorkerlessNamespacesPage(workerless, { jobUrl, testRun })
+        : `🧪 TEST RUN — preview sweep: nothing to page; ${stale.length} stale deployment(s) and ${staleFormerParents.length} former parent(s) to delete${jobUrl ? ` · <${jobUrl}|run>` : ""}`;
+    console.log(text);
+    await getSlackClient().chat.postMessage({ channel: slackChannelIds["#ci"], text });
+    return;
+  }
   if (dryRun) return;
   const { failures, stuckNamespaces } = await deletePreviewDeployments(cf, [
     ...stale,
@@ -1209,20 +1232,57 @@ async function sweep(cf: Cf, options: { dryRun: boolean; jobUrl: string | undefi
   const listedIds = new Set(listedAfter.map(({ id }) => id));
   const stillWorkerless = workerless.filter(({ id }) => listedIds.has(id));
   // The run is red only when the sweep could not act. A scheduled run reports on main's head
-  // commit, where red reads as "this commit broke", so Cloudflare's refusal is a page instead
-  // (the rule scripts/ci/prd-fault-alarm.ts follows); a page that could not be posted is a failure.
-  const pages = [
-    stuckNamespaces.length > 0 &&
-      renderStuckArtifactsNamespacesPage(stuckNamespaces, options.jobUrl),
-    stillWorkerless.length > 0 && renderWorkerlessNamespacesPage(stillWorkerless, options.jobUrl),
-  ].filter((text) => typeof text === "string");
-  for (const text of pages) {
-    console.log(text);
-    await (async () =>
-      getSlackClient().chat.postMessage({
-        channel: slackChannelIds["#error-pulse"],
-        text,
-      }))().catch((error) => failures.push(`paging #error-pulse: ${describe(error)}`));
+  // commit, where red reads as "this commit broke", so what Cloudflare left is a page instead (the
+  // rule scripts/ci/prd-fault-alarm.ts follows); a page that could not be kept is a failure. A night
+  // may not reach a stuck namespace, so its page keeps each one it named until reads confirm it
+  // gone; the account's listing after the deletes judges the workerless ones.
+  const incidents = [
+    {
+      marker: STUCK_ARTIFACTS_PAGE_MARKER,
+      render: async (openText: string | undefined) => {
+        const stuck = [
+          ...stuckNamespaces,
+          ...(openText
+            ? await stuckNamespacesStillThere(
+                cf,
+                openText,
+                stuckNamespaces.map(({ namespace }) => namespace),
+              )
+            : []),
+        ];
+        return stuck.length > 0
+          ? renderStuckArtifactsNamespacesPage(stuck, { jobUrl, testRun })
+          : undefined;
+      },
+    },
+    {
+      marker: WORKERLESS_PAGE_MARKER,
+      render: async () =>
+        stillWorkerless.length > 0
+          ? renderWorkerlessNamespacesPage(stillWorkerless, { jobUrl, testRun })
+          : undefined,
+    },
+  ];
+  const slack = options.onMain ? getSlackClient() : undefined;
+  for (const { marker, render } of incidents) {
+    if (!slack) {
+      const text = await render(undefined);
+      if (text) console.log(text);
+      continue;
+    }
+    await keepPage(slack, {
+      marker,
+      sinceHours: PAGE_LOOKBACK_HOURS,
+      now: new Date(),
+      render: async (openText) => {
+        const text = await render(openText);
+        if (text) console.log(text);
+        return text;
+      },
+      why: "Cloudflare deleted them",
+    })
+      .then((step) => console.log(`#error-pulse page "${marker}": ${step}`))
+      .catch((error) => failures.push(`keeping the #error-pulse page: ${describe(error)}`));
   }
   if (failures.length > 0) throw new Error(`sweep failures:\n  ${failures.join("\n  ")}`);
 }
@@ -1241,6 +1301,8 @@ type PreviewOptions = {
   slowRows?: "run" | "skip" | "only";
   /** print the plan instead of acting */
   dryRun?: boolean;
+  /** sweep: post what it would page to #ci as a 🧪 TEST RUN, and delete nothing */
+  testRun?: boolean;
 };
 
 /** A fresh set of plain workers per tested commit: `pnpm preview <command> [flags]`. */
@@ -1287,7 +1349,12 @@ async function main(command: Command, options: PreviewOptions) {
   const dryRun = options.dryRun || false;
   const pr = options.pr;
   if (command === "sweep")
-    return sweep((await accountContext()).cf, { dryRun, jobUrl: process.env.DEPOT_JOB_URL });
+    return sweep((await accountContext()).cf, {
+      dryRun: dryRun || Boolean(options.testRun),
+      testRun: Boolean(options.testRun),
+      onMain: process.env.GITHUB_REF === "refs/heads/main",
+      jobUrl: process.env.DEPOT_JOB_URL,
+    });
   if (command === "deploy-parents") return deployParents(await accountContext());
   if (command === "reset-parent") return resetParent({ dryRun });
   if (command === "cleanup-superseded") {

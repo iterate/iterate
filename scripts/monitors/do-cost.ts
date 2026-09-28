@@ -1,5 +1,5 @@
 // Hourly Durable Objects cost alarm, one check of the health job (./health.ts). Runs the
-// duration probe (scripts/monitors/do-duration-probe.ts --json) against both
+// duration probe (scripts/monitors/do-duration-probe.ts `probeAccount`) against both
 // Cloudflare accounts and keeps ONE Slack thread per UTC day in #ci, a routine post.
 // The headline is one sentence, rewritten every hour: "We're spending $X/day on
 // durable objects at 13:00's rate · today so far $Y". The thread's one reply is a
@@ -15,11 +15,10 @@
 // hour while every request stays green, and the bill shows it only days later.
 // A health test page runs it with a ceiling of 1 DO-hour, which forces a page: the
 // thread and the page both go to #ci, marked 🧪 TEST RUN, and keep no state.
-import { execFileSync } from "node:child_process";
 import type { WebClient } from "@slack/web-api";
 import { cloudflareAccounts } from "../../envs.ts";
 import {
-  findOpenPage,
+  findOpenPages,
   getSlackClient,
   onCallMention,
   pageChannel,
@@ -27,7 +26,7 @@ import {
   resolvePage,
   slackChannelIds,
 } from "../ci/slack.ts";
-import type { ProbeSummary } from "./do-duration-probe.ts";
+import { probeAccount, type ProbeSummary } from "./do-duration-probe.ts";
 
 /** $12.50 per million GB-seconds at 128 MB: one DO-hour is 450 GB-s. */
 const USD_PER_DO_HOUR = 0.005625;
@@ -74,7 +73,7 @@ export type AccountReading = {
   /** Current usage at or above this pages. */
   pageUsdPerHour: number;
   summary: ProbeSummary | null;
-  /** Why the probe printed no summary (bad creds, GraphQL outage). */
+  /** Why the probe could not run (bad credentials, a GraphQL outage). */
   failure: string | null;
 };
 
@@ -96,7 +95,18 @@ export async function checkDoCost(options: { testRun: boolean; dryRun: boolean; 
       // Slack hookup test exercises the page too.
       pageUsdPerHour:
         override === undefined ? account.pageUsdPerHour : override * 10 * USD_PER_DO_HOUR,
-      ...probe(account.cloudflare, ceilingDoHours),
+      // A probe that cannot run is a reading too: said so, never taken for a quiet account.
+      ...(await probeAccount({
+        account: account.cloudflare,
+        hours: LOOKBACK_HOURS,
+        maxAccountDoHours: ceilingDoHours,
+      }).then(
+        (summary) => ({ summary, failure: null }),
+        (error: unknown) => ({
+          summary: null,
+          failure: String(error instanceof Error ? error.message : error).slice(0, 200),
+        }),
+      )),
     });
   }
 
@@ -166,42 +176,6 @@ export async function postDailyThread(input: {
     throw new Error(`DO duration probe could not run: ${unmeasured.join("; ")}`);
   console.log(`DO cost pages: ${pages.map((page) => `${page.label} ${page.action}`).join(", ")}`);
   return { pages };
-}
-
-/** The probe under the account's own Doppler config (envs.ts `cloudflareAccounts`). */
-function probe(account: { dopplerProject: string; dopplerConfig: string }, ceilingDoHours: number) {
-  let stdout = "";
-  let stderr = "";
-  try {
-    stdout = execFileSync(
-      "doppler",
-      // prettier-ignore
-      [
-        "run", "--project", account.dopplerProject, "--config", account.dopplerConfig, "--",
-        "pnpm", "tsx", "scripts/monitors/do-duration-probe.ts",
-        "--hours", String(LOOKBACK_HOURS), "--max-account-do-hours", String(ceilingDoHours), "--json",
-      ],
-      { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
-    );
-  } catch (error: any) {
-    // The probe exits non-zero on a breach AND on a crash; the summary line
-    // below tells them apart.
-    stdout = error.stdout || "";
-    stderr = error.stderr || "";
-  }
-  if (stderr) console.error(stderr);
-  const lastLine = stdout.trim().split("\n").at(-1) || "";
-  try {
-    // The probe's --json contract: its LAST stdout line is one ProbeSummary
-    // (scripts/monitors/do-duration-probe.ts prints it after the human report
-    // moves to stderr). Anything else — a crash before the summary, a stray
-    // line — fails JSON.parse and is reported as a probe failure, so a wrong
-    // shape cannot masquerade as a clean account.
-    return { summary: JSON.parse(lastLine) as ProbeSummary, failure: null };
-  } catch {
-    const reason = stderr.trim().split("\n").filter(Boolean).at(-1) || "printed no summary";
-    return { summary: null, failure: reason.slice(0, 200) };
-  }
 }
 
 /** One measured account as this run judged it. */
@@ -405,7 +379,7 @@ function renderPage(input: {
     .slice(0, 3)
     .map((row) => `${row.namespace} ~${money(usd(row.doHours))}/h`);
   return pageText({
-    // "DO cost page for <label>:" is how findOpenPage finds it.
+    // "DO cost page for <label>:" is how findOpenPages finds it.
     what: `DO cost page for ${account.label}: ~${money(usd(rate))}/h (≈ ${money(usdPerDay(rate))}/day), ${(rate / account.ceilingDoHours).toFixed(1)}× the ceiling`,
     impact: [
       `peak ${peak.toLocaleString("en-US")} DO-hours/h (~${money(usd(peak))}/h)`,
@@ -439,7 +413,7 @@ async function upkeepPage(input: {
     await slack.chat.postMessage({ channel, text });
     return "post";
   }
-  const open = await findOpenPage(slack, {
+  const [open] = await findOpenPages(slack, {
     channel,
     marker: `DO cost page for ${account.label}:`,
     sinceHours: OPEN_PAGE_HOURS,

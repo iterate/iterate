@@ -3,9 +3,11 @@ import type { WebClient } from "@slack/web-api";
 import { expect, test } from "vitest";
 import {
   escalationText,
-  findOpenPage,
+  findOpenPages,
+  keepPage,
   markResolved,
   pageChannel,
+  pageStep,
   pageText,
   resolvedText,
   resolvePage,
@@ -28,17 +30,25 @@ test.for([
     expected: `🧪 TEST RUN — 🚨 prd deploy failed\nImpact: prd serves the previous OS\nDo: open the run\n<https://depot.dev/run|run>`,
   },
   {
+    name: "the ids an action needs go between what to do and the link",
+    testRun: false,
+    link: "https://depot.dev/run",
+    details: ["• os-pr3159-repos", "• os-pr3271-repos"],
+    expected: `🚨 prd deploy failed ${MENTIONS}\nImpact: prd serves the previous OS\nDo: open the run\n• os-pr3159-repos\n• os-pr3271-repos\n<https://depot.dev/run|run>`,
+  },
+  {
     name: "a run with no link has no link line",
     testRun: false,
     link: null,
     expected: `🚨 prd deploy failed ${MENTIONS}\nImpact: prd serves the previous OS\nDo: open the run`,
   },
-])("pageText: $name", ({ testRun, link, expected }) => {
+])("pageText: $name", ({ testRun, link, details, expected }) => {
   expect(
     pageText({
       what: "prd deploy failed",
       impact: "prd serves the previous OS",
       action: "open the run",
+      details,
       link,
       testRun,
     }),
@@ -92,12 +102,15 @@ test("a test run's page goes to #ci, a real one to #error-pulse", () => {
 const at = Date.parse("2026-09-22T12:00:00Z") / 1000;
 test.for([
   {
-    name: "the newest open page wins",
+    name: "every open page, newest first",
     history: [
       { ts: at - 60, bot_id: "B1", text: ":rotating_light: DO cost page for prd: new" },
       { ts: at - 120, bot_id: "B1", text: ":rotating_light: DO cost page for prd: old" },
     ],
-    expected: { ts: String(at - 60), text: ":rotating_light: DO cost page for prd: new" },
+    expected: [
+      { ts: String(at - 60), text: ":rotating_light: DO cost page for prd: new" },
+      { ts: String(at - 120), text: ":rotating_light: DO cost page for prd: old" },
+    ],
   },
   {
     name: "a resolved page, another bot's and a 🧪 page are skipped",
@@ -111,7 +124,7 @@ test.for([
       },
       { ts: at - 40, bot_id: "B1", text: ":rotating_light: DO cost page for prd: d" },
     ],
-    expected: { ts: String(at - 40), text: ":rotating_light: DO cost page for prd: d" },
+    expected: [{ ts: String(at - 40), text: ":rotating_light: DO cost page for prd: d" }],
   },
   {
     name: "a later line that says resolved: does not close a page",
@@ -122,10 +135,12 @@ test.for([
         text: ":rotating_light: DO cost page for prd: a\nImpact: resolved: x",
       },
     ],
-    expected: {
-      ts: String(at - 10),
-      text: ":rotating_light: DO cost page for prd: a\nImpact: resolved: x",
-    },
+    expected: [
+      {
+        ts: String(at - 10),
+        text: ":rotating_light: DO cost page for prd: a\nImpact: resolved: x",
+      },
+    ],
   },
   {
     name: "a page behind 250 newer messages is found on the next history page",
@@ -137,19 +152,19 @@ test.for([
       })),
       { ts: at - 3600, bot_id: "B1", text: ":rotating_light: DO cost page for prd: e" },
     ],
-    expected: { ts: String(at - 3600), text: ":rotating_light: DO cost page for prd: e" },
+    expected: [{ ts: String(at - 3600), text: ":rotating_light: DO cost page for prd: e" }],
   },
   {
     name: "a page older than the window is not open",
     history: [
       { ts: at - 49 * 3600, bot_id: "B1", text: ":rotating_light: DO cost page for prd: f" },
     ],
-    expected: undefined,
+    expected: [],
   },
-])("findOpenPage: $name", async ({ history, expected }) => {
+])("findOpenPages: $name", async ({ history, expected }) => {
   const slack = fakeSlack(history.map((message) => ({ ...message, ts: String(message.ts) })));
   await expect(
-    findOpenPage(slack.client, {
+    findOpenPages(slack.client, {
       channel: "C1",
       marker: "DO cost page for prd:",
       sinceHours: 48,
@@ -194,8 +209,128 @@ test.for([
   expect(slack.writes).toEqual(writes);
 });
 
+test.for([
+  { name: "none open, the incident there: post", open: false, text: "🚨 n=1", step: "post" },
+  { name: "open, the incident still there: edit", open: true, text: "🚨 n=2", step: "edit" },
+  { name: "open, the incident gone: resolve", open: true, text: undefined, step: "resolve" },
+  { name: "none open, nothing there: nothing", open: false, text: undefined, step: "none" },
+])("pageStep: $name", ({ open, text, step }) => {
+  const page = open ? { ts: "1.0", text: ":rotating_light: n=1" } : undefined;
+  expect(pageStep(page, text)).toMatchObject({ step });
+});
+
+test("keepPage: one incident over five nights is posted, edited twice, resolved once, then left alone", async () => {
+  const slack = fakeSlack([]);
+  const night = (ids: string[]) =>
+    keepPage(slack.client, {
+      marker: "preview sweep: Cloudflare will not delete",
+      sinceHours: 720,
+      now: new Date(at * 1000),
+      render: async () =>
+        ids.length
+          ? pageText({
+              what: `preview sweep: Cloudflare will not delete ${ids.length} Artifacts namespace(s)`,
+              impact: "each counts toward the account's limit",
+              action: "escalate to Cloudflare with these ids",
+              details: ids,
+              link: null,
+              testRun: false,
+            })
+          : undefined,
+      why: "Cloudflare deleted them",
+    });
+  const steps = [];
+  for (const ids of [["• a"], ["• a"], ["• a", "• b"], [], []]) steps.push(await night(ids));
+  expect({ steps, writes: slack.writes.map(([call]) => call) }).toEqual({
+    steps: ["post", "edit", "edit", "resolve", "none"],
+    writes: ["chat.postMessage", "chat.update", "chat.update", "chat.update", "chat.postMessage"],
+  });
+  expect(slack.writes.slice(-2)).toEqual([
+    [
+      "chat.update",
+      {
+        channel: "C09K1CTN4M7",
+        ts: String(at),
+        text: `✅ resolved: preview sweep: Cloudflare will not delete 2 Artifacts namespace(s) ${MENTIONS}\nImpact: each counts toward the account's limit\nDo: escalate to Cloudflare with these ids\n• a\n• b`,
+      },
+    ],
+    [
+      "chat.postMessage",
+      {
+        channel: "C09K1CTN4M7",
+        thread_ts: String(at),
+        text: `✅ resolved: Cloudflare deleted them ${MENTIONS}`,
+      },
+    ],
+  ]);
+});
+
+test("keepPage: older open pages of the incident are resolved by an edit alone, and the newest is kept", async () => {
+  const slack = fakeSlack([
+    { ts: String(at - 60), bot_id: "B1", text: `:rotating_light: sweep: stuck n=2 ${MENTIONS}` },
+    { ts: String(at - 120), bot_id: "B1", text: `:rotating_light: sweep: stuck n=1 ${MENTIONS}` },
+  ]);
+  await expect(
+    keepPage(slack.client, {
+      marker: "sweep: stuck",
+      sinceHours: 720,
+      now: new Date(at * 1000),
+      render: async () => `🚨 sweep: stuck n=3 ${MENTIONS}`,
+      why: "gone",
+    }),
+  ).resolves.toBe("edit");
+  // oxlint-disable-next-line iterate/prefer-object-property-match -- exact: a thread reply would ping both owners
+  expect(slack.writes).toEqual([
+    [
+      "chat.update",
+      {
+        channel: "C09K1CTN4M7",
+        ts: String(at - 120),
+        text: `✅ resolved: sweep: stuck n=1 ${MENTIONS}`,
+      },
+    ],
+    [
+      "chat.update",
+      { channel: "C09K1CTN4M7", ts: String(at - 60), text: `🚨 sweep: stuck n=3 ${MENTIONS}` },
+    ],
+  ]);
+});
+
+test("keepPage renders from the open page's text: what it named and this run did not see is carried, not dropped", async () => {
+  const slack = fakeSlack([
+    { ts: String(at - 60), bot_id: "B1", text: `:rotating_light: sweep: stuck\n• a ${MENTIONS}` },
+  ]);
+  const seen: Array<string | undefined> = [];
+  await expect(
+    keepPage(slack.client, {
+      marker: "sweep: stuck",
+      sinceHours: 720,
+      now: new Date(at * 1000),
+      render: async (openText) => {
+        seen.push(openText);
+        return `🚨 sweep: stuck\n• a\n• b ${MENTIONS}`;
+      },
+      why: "gone",
+    }),
+  ).resolves.toBe("edit");
+  expect({ seen, writes: slack.writes }).toEqual({
+    seen: [`:rotating_light: sweep: stuck\n• a ${MENTIONS}`],
+    writes: [
+      [
+        "chat.update",
+        {
+          channel: "C09K1CTN4M7",
+          ts: String(at - 60),
+          text: `🚨 sweep: stuck\n• a\n• b ${MENTIONS}`,
+        },
+      ],
+    ],
+  });
+});
+
 /** A WebClient stand-in: `messages` is the channel's history, served newest first a page of
- * `limit` at a time from `oldest`; every write is recorded. */
+ * `limit` at a time from `oldest`; every write is recorded, and a top-level post or an edit lands
+ * in the history. */
 function fakeSlack(
   messages: Array<{ ts: string; bot_id: string; text: string }>,
   updateFails = false,
@@ -217,13 +352,17 @@ function fakeSlack(
       },
     },
     chat: {
-      postMessage: async (args: unknown) => {
+      postMessage: async (args: { text: string; thread_ts?: string }) => {
         writes.push(["chat.postMessage", args]);
-        return { ok: true, ts: "2.0" };
+        const ts = String(at + messages.length);
+        if (!args.thread_ts) messages.push({ ts, bot_id: "B1", text: args.text });
+        return { ok: true, ts };
       },
-      update: async (args: unknown) => {
+      update: async (args: { ts: string; text: string }) => {
         writes.push(["chat.update", args]);
         if (updateFails) throw new Error("an_error");
+        const message = messages.find(({ ts }) => ts === args.ts);
+        if (message) message.text = args.text;
         return { ok: true };
       },
     },

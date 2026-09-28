@@ -27,8 +27,6 @@ const afterTheSuite = "${{ always() && steps.suite.outcome != 'skipped' }}";
 const afterTheFinalizer =
   "${{ always() && (steps.evidence-write.outputs.evidence == 'kept' || steps.evidence-write.outcome == 'failure') }}";
 /** Where each test job's Doppler step saves _shared/preview's secrets for the evidence upload. */
-const dopplerFallback = "$RUNNER_TEMP/doppler-shared-preview";
-
 type WorkflowStep = {
   "continue-on-error"?: boolean;
   env?: Record<string, string>;
@@ -228,7 +226,7 @@ test.each(
       APP_DISPLAY_NAME: expect.any(String),
       PUBLIC_URL: expect.stringMatching(/^https:\/\//),
     }),
-    run: "pnpm tsx scripts/ci/notify.ts deploy-${{ steps.deploy.outcome == 'success' && 'success' || 'failure' }}",
+    run: "node scripts/ci/notify.ts deploy-${{ steps.deploy.outcome == 'success' && 'success' || 'failure' }}",
   });
 });
 
@@ -284,6 +282,33 @@ test("uses DOPPLER_TOKEN as the only stored Depot secret", () => {
   });
 
   expect([...new Set(secretReferences)]).toEqual(["DOPPLER_TOKEN"]);
+});
+
+// A secret in a step's shell is one `set -x` or stray echo from the job's log: each script reads its
+// own out of Doppler (scripts/lib/env-context.ts), and no step does. The one other form
+// (docs/depot-ci.md#secrets): the preview tooling and the suites against a deployment run under
+// `doppler run`, as a developer's terminal runs them. No step calls Doppler any other way.
+test("no step reads Doppler but to wrap the preview tooling or a suite against a deployment", () => {
+  const wrapper =
+    /^doppler run --project os --config [a-z0-9_-]+ -- pnpm (?:preview|e2e|e2e:run|e2e:soak|perf:run)(?=\s|$)/u;
+  const others = everyStepRun().flatMap(({ where, run }) =>
+    [...run.matchAll(/\bdoppler\b.*/gu)]
+      .filter(([command]) => !wrapper.test(command))
+      .map(([command]) => `${where}: ${command}`),
+  );
+  expect(others).toEqual([]);
+});
+
+// A step runs TypeScript with `node <file>.ts` (docs/depot-ci.md#editing-workflows). The root has no
+// tsx or trpc-cli bin, so a step that calls one fails only when it runs: for a scheduled or
+// dispatched workflow, no pull request would see it.
+test("no step runs TypeScript through tsx or the trpc-cli bin", () => {
+  const runners = everyStepRun().flatMap(({ where, run }) =>
+    [...run.matchAll(/(?:^|[\s;&|(])((?:pnpm\s+(?:exec\s+)?|npx\s+)?(?:tsx|trpc-cli)\b.*)/gmu)].map(
+      ([, command]) => `${where}: ${command}`,
+    ),
+  );
+  expect(runners).toEqual([]);
 });
 
 test("uses only GitHub's job-scoped token for GitHub API calls", () => {
@@ -451,15 +476,15 @@ test("every job that records flakes uploads its test evidence to R2, where the f
     ).toBe(true);
 });
 
-test("the flake dashboard takes the iterate GitHub App from os/prd's APP_CONFIG, its one home, and never runs on a pull request or push", () => {
+// The dashboard's writer reads the App's key out of os/prd's APP_CONFIG, its one home
+// (scripts/ci/flake-dashboard/update.ts).
+test("the flake dashboard, which holds the iterate GitHub App's key, never runs on a pull request or push", () => {
   const dashboard = loadWorkflow(".depot/workflows/flake-dashboard.yml");
   const recompute = Object.values(dashboard.jobs)
     .flatMap((job) => job.steps || [])
     .find((step) => step.run?.includes("scripts/ci/flake-dashboard/update.ts"));
 
-  expect(recompute?.run).toContain(
-    'APP_CONFIG="$(doppler secrets get APP_CONFIG --plain --project os --config prd)"',
-  );
+  expect(recompute).toBeDefined();
   expect(
     depotWorkflowFiles.filter((file) =>
       /\bGITHUB_APP_(ID|PRIVATE_KEY)\b/.test(readFileSync(resolve(repoRoot, file), "utf8")),
@@ -1225,22 +1250,15 @@ test.each([
       if: expect.stringContaining("always()"),
       "continue-on-error": true,
       "timeout-minutes": expect.any(Number),
-      run: expect.stringContaining(
-        `doppler run --project _shared --config preview --fallback "${dopplerFallback}" "\${offline[@]}" -- node scripts/ci/test-evidence.ts upload`,
-      ),
+      run: "node scripts/ci/test-evidence.ts upload",
     });
-    // the prefetch's placement and the upload's offline read (docs/test-evidence.md#what-ci-does)
-    expect(upload?.run).toContain(
-      `if [ -s "${dopplerFallback}" ]; then offline=(--fallback-only); fi`,
-    );
+    // the prefetch's placement, whose file the upload reads offline (docs/test-evidence.md#what-ci-does)
     const prefetch = steps.find((step) => step.name === "Fetch the evidence upload's secrets");
     expect(prefetch, `${file} must save _shared/preview before its tests end`).toMatchObject({
       "continue-on-error": true,
       "timeout-minutes": expect.any(Number),
       env: { DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}" },
-      run: expect.stringContaining(
-        `doppler run --project _shared --config preview --fallback "${dopplerFallback}" -- true ||`,
-      ),
+      run: "node scripts/ci/test-evidence.ts fetch-upload-secrets",
     });
     expect(steps.indexOf(prefetch!)).toBeLessThan(steps.indexOf(write!));
     const testsBlock = readWorkflow(file).jobs[jobId]?.steps?.find((step) =>
@@ -1537,6 +1555,17 @@ test("labels unit artifacts with the pull-request head, whose merge commit the j
     TEST_TELEMETRY_PULL_REQUEST_NUMBER: "${{ github.event.pull_request.number }}",
   });
 });
+
+/** Every step's `run` in every workflow, named by its file, job and step. */
+function everyStepRun() {
+  return depotWorkflowFiles.flatMap((file) =>
+    Object.entries(loadWorkflow(file).jobs).flatMap(([jobId, job]) =>
+      (job.steps || []).flatMap((step) =>
+        step.run ? [{ where: `${file} ${jobId}: ${step.name}`, run: step.run }] : [],
+      ),
+    ),
+  );
+}
 
 /** A workflow as its jobs run it: each `parallel:` block's steps stand where the block does. */
 function loadWorkflow(file: string): Workflow {

@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { temporaryDirectory } from "@iterate-com/shared/test-support/temporary-directory";
 import { expect, test, vi } from "vitest";
 import { stringify } from "yaml";
+import { fakeDoppler } from "../../lib/fake-doppler.ts";
 import CiTrace, { duration } from "./cli.ts";
 
 test.for([
@@ -181,7 +182,7 @@ async function collectedTrace(
   vi.stubGlobal("fetch", fetch);
   vi.stubEnv("CI_TRACE_STATUS_SHA", "a".repeat(40));
   vi.stubEnv("GITHUB_TOKEN", "token");
-  vi.stubEnv("DEPOT_CI_TELEMETRY_TOKEN", "token");
+  const doppler = fakeDoppler({ secrets: { DEPOT_CI_TELEMETRY_TOKEN: "token" } });
   vi.stubEnv("DEPOT_JOB_URL", "https://depot.dev/orgs/0p91s0lz49/workflows/w?job=j&attempt=a");
   return {
     directory: directory.path,
@@ -193,7 +194,10 @@ async function collectedTrace(
             url === `https://api.github.com/repos/iterate/iterate/statuses/${"a".repeat(40)}`,
         )
         .map(([, init]) => JSON.parse(init?.body || "")),
-    [Symbol.dispose]: directory[Symbol.dispose],
+    [Symbol.dispose]() {
+      doppler[Symbol.dispose]();
+      directory[Symbol.dispose]();
+    },
   };
 }
 
@@ -277,7 +281,7 @@ async function tracedWorkflow(workflow: {
     return new Response(JSON.stringify(body));
   });
   vi.stubGlobal("fetch", fetch);
-  vi.stubEnv("DEPOT_CI_TELEMETRY_TOKEN", "token");
+  const doppler = fakeDoppler({ secrets: { DEPOT_CI_TELEMETRY_TOKEN: "token" } });
   vi.stubEnv("GITHUB_OUTPUT", "");
   vi.stubEnv(
     "DEPOT_JOB_URL",
@@ -285,6 +289,9 @@ async function tracedWorkflow(workflow: {
   );
   return {
     directory: directory.path,
-    [Symbol.dispose]: directory[Symbol.dispose],
+    [Symbol.dispose]() {
+      doppler[Symbol.dispose]();
+      directory[Symbol.dispose]();
+    },
   };
 }

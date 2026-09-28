@@ -93,14 +93,12 @@ export interface OsEnv {
    *  generator adds on `hostname`'s zone (ensure-resources creates the wildcard DNS record); `paths`
    *  serves `<baseUrl>/projects/<project>/<routingSlug>/…` from the one origin. Unset ⇒ no ingress. */
   ingressRouting?: NonNullable<IngressRouting>;
-  /** The Artifacts namespace the `ARTIFACTS` binding names, `<workerName>-…`; ensure-resources
-   *  creates it. A namespace cannot be renamed, and no other Worker may bind it: erase-data refuses a
-   *  shared store, and another Worker would read every project's repos. */
-  artifactsNamespace: string;
   /** The prefix of the deployment's named Cloudflare resources (KV `<prefix>-oauth|-itx`, R2
-   *  `<prefix>-files`, the control plane's D1 `<prefix>-db`). It is its own field, not the worker
-   *  name, so a worker can be renamed without renaming the data it binds. `ensure-resources`,
-   *  erase-data and the wrangler generator derive the names from this, never from the worker name. */
+   *  `<prefix>-files`, the control plane's D1 `<prefix>-db`, the Artifacts namespace
+   *  `<prefix>-repos`; `osResourceNames`). It is its own field, not the worker name, so a worker can
+   *  be renamed without renaming the data it binds. `ensure-resources`, erase-data and the wrangler
+   *  generator derive the names from this, never from the worker name. No other Worker may bind
+   *  them: erase-data refuses a shared store, and another Worker would read every project's repos. */
   resourceNamePrefix: string;
   /** An owned zone served as the named project's config-worker apex: the zone's apex and every
    *  first-level name under it, each with a route and a proxied DNS record (ensure-resources). More
@@ -141,6 +139,12 @@ export interface OsEnv {
   resources?: { oauthKvId: string; itxKvId: string; dbId: string };
 }
 
+/** The named resources an apps/os deployment binds, from its `resourceNamePrefix`: the Artifacts
+ *  namespace, the R2 bucket and the control plane's D1. The self-host config's prefix is `iterate`. */
+export function osResourceNames(prefix: string) {
+  return { repos: `${prefix}-repos`, files: `${prefix}-files`, db: `${prefix}-db` };
+}
+
 export const osEnvs: Record<string, OsEnv> = {
   // MAIN ON THE DEV/PREVIEW ACCOUNT: preview-parents.yml redeploys it in place from every push to
   // main, beside the apps' main-on-dev workers, which sign in against it; its data is erased
@@ -157,7 +161,6 @@ export const osEnvs: Record<string, OsEnv> = {
     // wildcard subdomains.
     ingressRouting: { type: "paths" },
     // Not the worker's name: local dev's R2 bucket is `os-files` (wrangler.base.jsonc).
-    artifactsNamespace: "os-parent-repos",
     resourceNamePrefix: "os-parent",
     resources: {
       oauthKvId: "cc1ea2c05a104790aa2716a87f304b3a",
@@ -196,7 +199,6 @@ export const osEnvs: Record<string, OsEnv> = {
         "admin.iterate.com",
         "k.iterate.com",
         "voice.iterate.com",
-        "install.iterate.com",
       ],
     },
     cloudflareForSaas: {
@@ -204,8 +206,6 @@ export const osEnvs: Record<string, OsEnv> = {
       zoneId: "4dcf5f055005471a00eb7f7befb29e54",
       dcvDelegationUuid: "248299803bb79c97",
     },
-    // Not `os-prd-repos`: a legacy namespace holds that name.
-    artifactsNamespace: "os-prd-project-repos",
     resourceNamePrefix: "os-prd",
     resources: {
       oauthKvId: "5d23b869bff94a32a8f8049edc7de122",
@@ -386,7 +386,6 @@ export function previewDeployment(name: string) {
     adminIssuer: osEnvs.prd!.baseUrl,
     testEmailDomain: TEST_EMAIL_DOMAIN,
     petshopIntegrations: true,
-    artifactsNamespace: `${osWorker}-repos`,
     resourceNamePrefix: osWorker,
   };
   const apps = Object.fromEntries(
@@ -465,12 +464,12 @@ export const ciReportsEnvs: Record<
 
 /** The CI bucket, `iterate-ci` (docs/test-evidence.md#one-bucket): each CI job attempt's test
  *  evidence folder under `evidence/`, and later the alert guards' state under `state/`. CI tooling, so it lives on the dev/preview account; CI
- *  writes it with the Cloudflare API token it already holds (Doppler `_shared/preview`'s
+ *  writes it with that account's Cloudflare API token (Doppler `_shared/preview`'s
  *  CLOUDFLARE_API_TOKEN, used as S3 keys by `scripts/ci/test-evidence.ts upload`). Created by hand
  *  with that token, with lifecycle rules on `evidence/` only: docs/test-evidence.md#setup. */
 export const ciBucketEnvs = {
   ci: {
-    cloudflareAccountId: PREVIEW_AND_DEV_ACCOUNT_ID,
+    ...cloudflareAccounts["dev/preview"],
     bucketName: "iterate-ci",
   },
 };

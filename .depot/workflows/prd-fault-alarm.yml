@@ -1,17 +1,17 @@
-# Prd fault alarm: every 15 minutes, reads every first-party prd Worker's logs since the last run (os-prd
-# and its clients, scripts/ci/prd-fault-alarm.ts PRD_WORKERS) and pages Slack
-# #error-pulse on any 5xx, a burst of platform-failure heals, or any error. Each fault is an
-# incident: a new one pages at the top level, its repeats reply in that page's thread, each
-# mentioning Jonas and Misha. The page is the alarm: the run goes red only when it could not read the logs or post to
-# Slack, because a scheduled run reports on main's head commit, where red reads as "this commit
-# broke". Why and thresholds: scripts/ci/prd-fault-alarm.ts. Depot registers the schedule once this
-# file is on the default branch.
+# Prd fault alarm: every 15 minutes, scripts/ci/prd-fault-alarm.ts reads the first-party prd Workers'
+# logs since the last run and pages Slack #error-pulse; what it pages, when and why is in that file.
+# Depot registers the schedule once this file is on the default branch.
 #
-# Its memory (where the next read starts, the open incidents' threads) is its own
-# `prd-fault-alarm-state` artifact, read back by the next run with the Depot organization token from
-# Doppler _shared/preview. Only a run on main keeps it (the script checks `--ref`). A run that
-# cannot read it reads the last half hour and pages everything as new: a repeat, never a miss.
-# Secrets (depot ci secrets --org 0p91s0lz49): DOPPLER_TOKEN.
+# Its state is its own `prd-fault-alarm-state` artifact, read back by the next run with the Depot
+# organization token from Doppler _shared/preview; the script writes it only on main (`--ref`).
+# Test a branch, and the Slack hookup, with a 🧪 TEST RUN of the half hour to `at` (or to now),
+# posted to #ci:
+#
+#   depot ci dispatch --org 0p91s0lz49 --repo iterate/iterate --workflow prd-fault-alarm.yml \
+#     --ref <branch> --input test-run=true --input at=2026-09-28T09:35:00Z
+#
+# Secrets (depot ci secrets --org 0p91s0lz49): DOPPLER_TOKEN, with which the script reads its own out
+# of Doppler (docs/depot-ci.md#secrets).
 
 name: Prd fault alarm (Depot CI)
 
@@ -22,6 +22,17 @@ on:
   schedule:
     - cron: "7,22,37,52 * * * *"
   workflow_dispatch:
+    inputs:
+      test-run:
+        description: true = post the window's page to #ci as a 🧪 TEST RUN; no state kept
+        required: false
+        type: string
+        default: "false"
+      at:
+        description: with test-run, the end of the half hour to read (ISO 8601); empty = now
+        required: false
+        type: string
+        default: ""
 
 concurrency:
   group: prd-fault-alarm
@@ -41,19 +52,18 @@ jobs:
         uses: ./.depot/actions/setup
       - name: Read the previous run's state
         run: |-
-          export DEPOT_CI_TELEMETRY_TOKEN
-          DEPOT_CI_TELEMETRY_TOKEN="$(doppler secrets get DEPOT_CI_TELEMETRY_TOKEN --plain --project _shared --config preview)" &&
-            pnpm tsx scripts/ci/prd-fault-alarm.ts previous-state --out test-results/prd-fault-alarm/previous.json ||
+          node scripts/ci/prd-fault-alarm.ts previous-state --out test-results/prd-fault-alarm/previous.json ||
             echo "::warning::no previous state: this run pages every fault as new"
       - name: Read the prd Workers' logs, page on a fault
+        env:
+          AT: ${{ inputs.at }}
         run: >-
-          doppler run --project os --config prd --
-          pnpm tsx scripts/ci/prd-fault-alarm.ts run
+          node scripts/ci/prd-fault-alarm.ts run
           --ref "${{ github.ref }}"
           --state test-results/prd-fault-alarm/previous.json
           --state-out test-results/prd-fault-alarm/state.json
-      # The alarm writes the state only on main, after its posts, so a run that failed to post keeps
-      # none and the next one reads its window again.
+          ${{ inputs.test-run == 'true' && '--test-run' || '' }}
+          ${{ inputs.test-run == 'true' && inputs.at != '' && '--at "$AT"' || '' }}
       - name: Keep the state for the next run
         if: always()
         uses: actions/upload-artifact@v4

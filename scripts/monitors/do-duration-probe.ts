@@ -1,7 +1,7 @@
 // Defense-in-depth probe for the Durable Objects billable-duration leak class of
 // bug (see https://github.com/iterate/iterate/tree/6a9a48e2a/apps/os/tasks/do-duration-leak).
-// Two independent checks against Cloudflare's GraphQL analytics, either of which
-// prints a report and exits non-zero so a cron / CI step / monitoring job can alert:
+// Two independent checks against Cloudflare's GraphQL analytics, each of which
+// reports what it found:
 //
 // 1. The pinned-DO signature — a single DO invocation running for HOURS of
 //    wall-clock at ~0 CPU — which is how a leaked cross-isolate RPC session
@@ -10,11 +10,12 @@
 //    above a ceiling. Thousands of DOs each waking every ~10 s never trip a
 //    per-invocation P99, yet add up to thousands of DO-hours per hour.
 //
-// Run it under the account's Doppler config (envs.ts `cloudflareAccounts`), which carries
-// CLOUDFLARE_API_TOKEN + CLOUDFLARE_ACCOUNT_ID:
+// The health job's DO cost check (./do-cost.ts) runs it on both accounts in process
+// (`probeAccount`). By hand, on one account of envs.ts `cloudflareAccounts`, with that account's
+// Cloudflare API token from Doppler:
 //
-//   doppler run --project _shared --config prd     -- pnpm tsx scripts/monitors/do-duration-probe.ts
-//   doppler run --project _shared --config preview -- pnpm tsx scripts/monitors/do-duration-probe.ts --hours 6
+//   node scripts/monitors/do-duration-probe.ts --account prd
+//   node scripts/monitors/do-duration-probe.ts --account dev/preview --hours 6
 //
 // Flags:
 //   --hours N                 lookback window in hours (default 24)
@@ -23,18 +24,12 @@
 //   --max-account-do-hours N  account-wide active-time ceiling per hour, in
 //                             DO-hours (default 500; a 128MB DO active for one
 //                             hour = 1 DO-hour ≈ $0.006 duration)
-//   --json                    human report moves to stderr; stdout carries one
-//                             ProbeSummary JSON line (for the CI alert wrapper)
 
 import { createCli } from "trpc-cli";
 import { z } from "zod";
 import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
-
-function requireEnv(name: string): string {
-  const value = process.env[name];
-  if (!value) throw new Error(`Missing required env var ${name}`);
-  return value;
-}
+import { cloudflareAccounts } from "../../envs.ts";
+import { dopplerSecret } from "../lib/env-context.ts";
 
 interface CfGraphqlResponse<T> {
   data?: T;
@@ -72,8 +67,8 @@ type PinnedInvocationRow = {
   wallTimeP99Hours: number;
   requests: number;
 };
-/** The machine-readable result printed as one JSON line under `--json`,
- * consumed by scripts/monitors/do-cost.ts to build the Slack message. */
+/** What both checks found on one account: what scripts/monitors/do-cost.ts builds its Slack
+ * message from. */
 export type ProbeSummary = {
   activeTime: {
     ceilingDoHours: number;
@@ -225,48 +220,48 @@ async function proveCredentials(input: { accountTag: string; apiToken: string })
   }
 }
 
-/** Both checks against Cloudflare's GraphQL analytics (CLOUDFLARE_API_TOKEN + CLOUDFLARE_ACCOUNT_ID);
- *  exits 1 when either finds its signature, or when the probe itself fails. */
-export default async function doDurationProbe(
-  options: {
-    /** Lookback window in hours. */
-    hours?: number;
-    /** wallTimeP99 ceiling per invocation, in hours. */
-    thresholdHours?: number;
-    /** Only scripts whose name starts with this. */
-    prefix?: string;
-    /** Account-wide active-time ceiling per hour, in DO-hours. */
-    maxAccountDoHours?: number;
-    /** The human report moves to stderr; stdout carries one ProbeSummary JSON line. */
-    json?: boolean;
-  } = {},
-): Promise<void> {
-  try {
-    await probe(options);
-  } catch (error) {
-    console.error(error instanceof Error ? error.message : error);
-    process.exit(1);
-  }
-  if (process.exitCode === 1) process.exit(1);
+/** Both checks against one account's Cloudflare GraphQL analytics (envs.ts `cloudflareAccounts`);
+ *  fails when either finds its signature, or when the probe itself cannot run. */
+export default async function doDurationProbe(options: {
+  /** The account, by its envs.ts `cloudflareAccounts` name. */
+  account: "prd" | "dev/preview";
+  /** Lookback window in hours. */
+  hours?: number;
+  /** wallTimeP99 ceiling per invocation, in hours. */
+  thresholdHours?: number;
+  /** Only scripts whose name starts with this. */
+  prefix?: string;
+  /** Account-wide active-time ceiling per hour, in DO-hours. */
+  maxAccountDoHours?: number;
+}): Promise<void> {
+  const { activeTime, pinnedInvocations } = await probeAccount({
+    ...options,
+    account: cloudflareAccounts[options.account],
+  });
+  if (activeTime.breachedHours.length > 0 || pinnedInvocations.rows.length > 0)
+    throw new Error(`the DO probe found a signature on ${options.account} (the report above)`);
 }
 
-async function probe(options: {
+/** Both checks on one account, its report printed as they run, with the account's Cloudflare API
+ *  token from Doppler. A signature found is in the summary; a probe that cannot run throws. */
+export async function probeAccount(options: {
+  account: { cloudflareAccountId: string; dopplerProject: string; dopplerConfig: string };
   hours?: number;
   thresholdHours?: number;
   prefix?: string;
   maxAccountDoHours?: number;
-  json?: boolean;
-}): Promise<void> {
-  const accountTag = requireEnv("CLOUDFLARE_ACCOUNT_ID");
-  const apiToken = requireEnv("CLOUDFLARE_API_TOKEN");
+}): Promise<ProbeSummary> {
+  const { account } = options;
+  const accountTag = account.cloudflareAccountId;
+  const apiToken = dopplerSecret(
+    account.dopplerProject,
+    account.dopplerConfig,
+    "CLOUDFLARE_API_TOKEN",
+  );
   const lookbackHours = options.hours ?? 24;
   const thresholdHours = options.thresholdHours ?? 1;
   const maxAccountDoHours = options.maxAccountDoHours ?? 500;
   const prefix = options.prefix || "os-";
-  // --json: the human report moves to stderr and stdout carries exactly one
-  // ProbeSummary JSON line, for the CI alert wrapper.
-  const json = options.json ?? false;
-  const report = json ? console.error : console.log;
   const thresholdMicros = thresholdHours * 3.6e9; // hours → microseconds
 
   const { hours, breachedHours } = await checkAccountActiveTime({
@@ -276,27 +271,26 @@ async function probe(options: {
     maxAccountDoHours,
   });
   if (breachedHours.length === 0) {
-    report(
+    console.log(
       `✅ DO active-time probe clean: no hour in the last ${lookbackHours}h exceeded ` +
         `${maxAccountDoHours} account-wide DO-hours (${hours.length} hour(s) with any activity).`,
     );
   } else {
-    process.exitCode = 1;
-    report(
+    console.log(
       `🚨 DO active-time probe: ${breachedHours.length} hour(s) in the last ${lookbackHours}h ` +
         `exceeded ${maxAccountDoHours} account-wide DO-hours — the runaway-fleet signature ` +
         `(alarm/wake loops keeping whole DO populations resident; see the 2026-09-01 preview ` +
         `incident, https://github.com/iterate/iterate/tree/6a9a48e2a/apps/os/tasks/do-duration-leak). At $12.50/M GB-s, 1000 DO-hours ≈ $5.60.`,
     );
     for (const row of breachedHours) {
-      report(
+      console.log(
         `  - ${row.hour}  ${row.doHours} DO-hours (~$${(row.doHours * 0.005625).toFixed(0)}/h if sustained)`,
       );
     }
   }
   const topNamespaces = await topNamespacesInTrailingHour({ accountTag, apiToken });
-  report("Top DO namespaces, trailing hour (DO-hours):");
-  for (const row of topNamespaces) report(`  - ${row.namespace}  ${row.doHours}`);
+  console.log("Top DO namespaces, trailing hour (DO-hours):");
+  for (const row of topNamespaces) console.log(`  - ${row.namespace}  ${row.doHours}`);
 
   // Cloudflare keeps adaptive analytics for the trailing window; query by day so
   // the schema accepts the filter, then keep only scripts over the ceiling.
@@ -345,31 +339,27 @@ async function probe(options: {
     .sort((a, b) => b.wallTimeP99Hours - a.wallTimeP99Hours);
 
   if (flagged.length === 0) {
-    report(
+    console.log(
       `✅ DO duration probe clean: no ${prefix}* script in the last ${lookbackHours}h had a ` +
         `single invocation over ${thresholdHours}h wall-clock (the pinned-DO signature).`,
     );
   } else {
-    process.exitCode = 1;
-    report(
+    console.log(
       `🚨 DO duration probe: ${flagged.length} ${prefix}* script-day(s) show a DO invocation running ` +
         `longer than ${thresholdHours}h of wall-clock — the signature of a leaked cross-isolate RPC ` +
         `session pinning a Durable Object resident (see https://github.com/iterate/iterate/tree/6a9a48e2a/apps/os/tasks/do-duration-leak).`,
     );
     for (const row of flagged) {
-      report(
+      console.log(
         `  - ${row.date}  ${row.script}  wallTimeP99=${row.wallTimeP99Hours}h  reqs=${row.requests}`,
       );
     }
   }
 
-  if (json) {
-    const summary: ProbeSummary = {
-      activeTime: { ceilingDoHours: maxAccountDoHours, hours, breachedHours, topNamespaces },
-      pinnedInvocations: { thresholdHours, rows: flagged },
-    };
-    console.log(JSON.stringify(summary));
-  }
+  return {
+    activeTime: { ceilingDoHours: maxAccountDoHours, hours, breachedHours, topNamespaces },
+    pinnedInvocations: { thresholdHours, rows: flagged },
+  };
 }
 
 if (isMainModule(import.meta.url))

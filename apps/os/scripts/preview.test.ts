@@ -70,7 +70,6 @@ test("a deployment is derived from its name alone: eight plain workers on the de
       ingressRouting: { type: "paths" },
       adminIssuer: "https://os.iterate.com",
       testEmailDomain: "preview.iterate.test",
-      artifactsNamespace: "pr3144-a1b2c3d-os-repos",
       resourceNamePrefix: "pr3144-a1b2c3d-os",
     },
   });

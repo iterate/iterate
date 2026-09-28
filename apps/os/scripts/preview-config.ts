@@ -7,7 +7,13 @@
 import { createHash } from "node:crypto";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
-import { ciReportsEnvs, osEnvs, previewDeployment, spaEnvs } from "../../../envs.ts";
+import {
+  ciReportsEnvs,
+  osEnvs,
+  osResourceNames,
+  previewDeployment,
+  spaEnvs,
+} from "../../../envs.ts";
 import { agents } from "../../agents/scripts/app.ts";
 import { dash } from "../../dash/scripts/app.ts";
 import { docs } from "../../docs/scripts/app.ts";
@@ -109,9 +115,7 @@ export function accountResourceNames(template = readWranglerBase()) {
     ...Object.values(osEnvs).flatMap((env) => [
       `${env.resourceNamePrefix}-oauth`,
       `${env.resourceNamePrefix}-itx`,
-      `${env.resourceNamePrefix}-files`,
-      `${env.resourceNamePrefix}-db`,
-      env.artifactsNamespace,
+      ...Object.values(osResourceNames(env.resourceNamePrefix)),
     ]),
     ...template.r2_buckets.map((bucket: { bucket_name: string }) => bucket.bucket_name),
     ...template.d1_databases.map((database: { database_name: string }) => database.database_name),

@@ -466,10 +466,11 @@ export class ConsentRpcTarget extends RpcTarget {
     lifetimeMs = (scope.includes("admin") ? 12 : 30 * 24) * 3600_000,
   ) {
     const env = this.#env;
+    const display = clientDisplay(client, request.clientId);
     const approved = await oauthHelpers(env, this.#addresses).completeAuthorization({
       request,
       userId: this.#grant.userId,
-      metadata: clientDisplay(client, request.clientId),
+      metadata: display,
       scope,
       revokeExistingGrants: false,
       props: {
@@ -491,7 +492,7 @@ export class ConsentRpcTarget extends RpcTarget {
         idempotencyKey: `account/consent-approved/${grantIdOf(approved)}`,
         payload: {
           clientId: request.clientId,
-          clientName: client?.clientName || request.clientId,
+          clientName: display.clientName,
           projects,
           scopes: scope,
         } satisfies ConsentApproved,

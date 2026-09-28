@@ -142,6 +142,20 @@ workflow `permissions`, never a stored bot token. The PR dashboard finds its Sla
 Slack history: do not reintroduce `SLACK_PR_DASHBOARD_STATE` or a token for it (GitHub's variable
 API needs a permission `GITHUB_TOKEN` cannot request).
 
+A step hands its script `DOPPLER_TOKEN` and nothing else from Doppler, and the script reads what it
+needs itself, through `scripts/lib/env-context.ts`: `resolveEnvContext` for an envs.ts deployment
+(the deploys, the context sweep, erase and seed), `dopplerSecret(project, config, name)` for one
+secret (the Depot organization token, `scripts/ci/depot.ts` `depotApi`; the Slack bot token,
+`scripts/ci/slack.ts`; an account's Cloudflare API token, envs.ts `cloudflareAccounts`). No step
+reads a secret into its shell. The one other form is for commands that act on an OS deployment
+with its configuration in their environment, as a developer's terminal runs them: the preview
+tooling (`pnpm preview …`) and the suites against a deployment (`pnpm e2e`, `pnpm e2e:run`,
+`pnpm e2e:soak`, `pnpm perf:run`) run under
+`doppler run --project os --config <the deployment's config> --`. `depot-workflows.test.ts` fails a
+step that calls Doppler any other way. The test evidence upload's token
+is fetched beside the tests into a Doppler fallback file and read offline after them
+([test evidence](test-evidence.md#what-ci-does)).
+
 ## Wait For CI
 
 Depot has no blocking `wait`; poll:
@@ -310,9 +324,15 @@ and scripts.
 ## Editing Workflows
 
 Edit `.depot/workflows/<name>.yml`, put any real logic in a script under `scripts/ci` (a step is a
-one-line `pnpm tsx scripts/ci/<script>.ts …`), and validate with `depot ci run` from a scratch
+one-line `node scripts/ci/<script>.ts …`), and validate with `depot ci run` from a scratch
 branch ([Run CI without a PR](#run-ci-without-a-pr)).
 
+- A step runs TypeScript one way: `node <file>.ts`, with Node's own type stripping (the root
+  `tsconfig.base.json` allows only erasable syntax). A trpc-cli script ends with its
+  `isMainModule` footer ([scripts are trpc-cli programs](typescript-conventions.md#scripts-are-trpc-cli-programs)),
+  so `node` runs its commands. Steps that run before `pnpm install` use the same form.
+  `depot-workflows.test.ts` fails a step that calls `tsx` or the trpc-cli bin, which the root does
+  not install.
 - Every job runs on a stock label and, after its checkout, `uses: ./.depot/actions/setup`
   ([Setup on Depot's stock image](#setup-on-depots-stock-image)).
 - Jobs that differ only in a value share one definition through YAML anchors (`&suite-steps`, then
@@ -329,7 +349,7 @@ A step inside a `parallel:` block behaves as it would in the list: its `id`,
 outputs, its `$GITHUB_STEP_SUMMARY` lines reach the job's summary, and it shares
 `$RUNNER_TEMP` and the workspace. After a failed step, only the block's steps
 with `always()` run. The Test job runs Kit's firmware host tests and the evidence
-upload's Doppler fetch beside `pnpm test` in one such block, and the test jobs run their evidence uploads in another; the
+upload's token fetch beside `pnpm test` in one such block, and the test jobs run their evidence uploads in another; the
 report step after that block reads the R2 upload's outcome.
 
 A condition that calls `hashFiles()` costs the runner about 0.2 s, the job's first
@@ -408,8 +428,8 @@ on the stock image's own Node 22, with nothing but Node's builtins, since the PR
 from may predate the setup. The store is `NPM_CONFIG_STORE_DIR=/home/runner/.pnpm-store` (pnpm 10
 reads `npm_config_*`, not `pnpm_config_*`), and `NPM_CONFIG_SIDE_EFFECTS_CACHE=false` keeps build
 outputs out of it: the install runs the few build scripts itself, since from a store that held
-their outputs it took 5 s longer. No job runs `doppler setup`: every `doppler run` names its
-`--project` and `--config`.
+their outputs it took 5 s longer. No job runs `doppler setup`: every Doppler read names its
+project and config.
 
 ### Depot Cache
 
@@ -721,6 +741,16 @@ sweep's pages (`apps/os/scripts/preview.ts sweep`), a failed context sweep
 succeeded, each pull request event, the PR dashboard, the Durable Object cost alarm's daily thread,
 each context sweep's result, the orphans it destroyed included (the crash hunt leaves some every
 night), and the 🧪 test pages.
+
+The preview sweep and the context sweep keep one page per incident (`keepPage` in
+`scripts/ci/slack.ts`): `🚨 <what> <mentions>`, then `Impact:`, `Do:`, the ids to act on and one
+link. A later run that finds the incident still there edits the page, which notifies nobody; the
+first run that finds it gone edits its first line to start `✅ resolved:` and replies once in its
+thread, mentioning both. Older open pages of the same incident are marked resolved by an edit
+alone. The page's first line is its state, so the channel's history is the only state a poster
+keeps; a run that sees only part of an incident (the preview sweep's stuck namespaces) carries
+forward what the open page names until reads confirm it gone. Only a run on main pages; a 🧪 test run (each workflow's `test-run` input)
+posts to #ci, mentions nobody and never reads #error-pulse.
 
 ## Health
 

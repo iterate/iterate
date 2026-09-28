@@ -7,7 +7,7 @@
 // the new version are the prd fault alarm's (scripts/ci/prd-fault-alarm.ts, every 15 minutes).
 // READ-ONLY: `/version` and page GETs — it never creates a project, a user or an account.
 //
-//   pnpm tsx scripts/ci/prd-post-deploy-check.ts check [--previous-version <id>] [--dry-run]
+//   node scripts/ci/prd-post-deploy-check.ts check [--previous-version <id>] [--dry-run]
 import { setTimeout as sleep } from "node:timers/promises";
 import { createCli } from "trpc-cli";
 import { isMainModule } from "@iterate-com/shared/dev/is-main-module";

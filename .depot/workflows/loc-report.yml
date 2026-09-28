@@ -26,4 +26,4 @@ jobs:
       - name: Setup
         uses: ./.depot/actions/setup
       - name: Post LOC report
-        run: pnpm tsx scripts/ci/loc-report.ts
+        run: node scripts/ci/loc-report.ts
