@@ -1,0 +1,34 @@
+# iterate.com's inbound mail (apps/iterate-com-inbound-email): the Worker the Email Routing catch-all
+# on the iterate.com zone delivers to. On the prd account; Doppler _shared/prd supplies its
+# Cloudflare credentials.
+name: Deploy iterate-com-inbound-email
+permissions:
+  contents: read
+concurrency:
+  group: deploy-iterate-com-inbound-email-production
+  cancel-in-progress: false
+on:
+  push:
+    branches: [main]
+    paths:
+      - .depot/workflows/deploy-iterate-com-inbound-email.yml
+      - apps/iterate-com-inbound-email/**
+      - envs.ts
+      - scripts/lib/**
+      - pnpm-lock.yaml
+  workflow_dispatch:
+jobs:
+  deploy:
+    runs-on: depot-ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup
+        uses: ./.depot/actions/setup
+        with:
+          # a production deploy never reads Depot Cache (docs/depot-ci.md#depot-cache)
+          pnpm-store: none
+      - name: Deploy apps/iterate-com-inbound-email
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: doppler run --project _shared --config prd -- pnpm --dir apps/iterate-com-inbound-email run-script deploy --env prd
