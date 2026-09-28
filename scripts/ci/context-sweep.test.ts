@@ -305,5 +305,12 @@ function page(afterOffset: number, newestAt?: string): StreamPage {
 }
 
 function event(offset: number, createdAt = "2026-09-28T00:00:00.000Z") {
-  return { type: "events.iterate.com/test/marker", payload: {}, offset, path: "/", createdAt };
+  return {
+    type: "events.iterate.com/test/marker",
+    payload: {},
+    offset,
+    path: "/",
+    createdAt,
+    source: { origin: "/" },
+  };
 }
