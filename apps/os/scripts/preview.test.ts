@@ -20,7 +20,10 @@ import {
   renderPullRequestSection,
   resolvePreviewPrefix,
   slugifyPreviewName,
+  proxiedAppRoute,
+  proxiedAppSignInLink,
   templateQuickLaunches,
+  testPersonSignInLink,
   writePullRequestBody,
 } from "./preview-config.ts";
 
@@ -116,6 +119,13 @@ const section = renderPullRequestSection({
       signIn: `${DASH}/.auth/login?next=dash`,
       dashboardUrl: "https://dash.cloudflare.com/a/dash",
     },
+    {
+      name: "notes",
+      url: "https://pr123-ccccccc-notes.iterate-dev-preview.workers.dev",
+      signIn:
+        "https://pr123-ccccccc-os.iterate-dev-preview.workers.dev/login?next=%2Fprojects%2Fpr123%2Fnotes%2F&login_hint=pr123%40preview.iterate.test",
+      dashboardUrl: "https://dash.cloudflare.com/a/notes",
+    },
   ],
   templates: [
     { name: "default", link: `${DASH}/.auth/login?next=default`, fromHead: "bbbbbbbbb0123456" },
@@ -132,6 +142,7 @@ test("the PR body's managed section: the deployment, then one row per worker wit
     | --- | --- | --- |
     | [os](https://pr123-ccccccc-os.iterate-dev-preview.workers.dev) | [Sign in ↗](https://pr123-ccccccc-dash.iterate-dev-preview.workers.dev/.auth/login?next=os) | [Cloudflare dashboard](https://dash.cloudflare.com/a/os) |
     | [dash](https://pr123-ccccccc-dash.iterate-dev-preview.workers.dev) | [Sign in ↗](https://pr123-ccccccc-dash.iterate-dev-preview.workers.dev/.auth/login?next=dash) | [Cloudflare dashboard](https://dash.cloudflare.com/a/dash) |
+    | [notes](https://pr123-ccccccc-notes.iterate-dev-preview.workers.dev) | [Sign in ↗](https://pr123-ccccccc-os.iterate-dev-preview.workers.dev/login?next=%2Fprojects%2Fpr123%2Fnotes%2F&login_hint=pr123%40preview.iterate.test) | [Cloudflare dashboard](https://dash.cloudflare.com/a/notes) |
 
     New project from template: [default at this PR's \`bbbbbbbbb\` ↗](https://pr123-ccccccc-dash.iterate-dev-preview.workers.dev/.auth/login?next=default) · [with-agents ↗](https://pr123-ccccccc-dash.iterate-dev-preview.workers.dev/.auth/login?next=with-agents)"
   `);
@@ -166,6 +177,7 @@ test("a new deploy folds the previous commit's section, keeping the author's tex
     | --- | --- | --- |
     | [os](https://pr123-ccccccc-os.iterate-dev-preview.workers.dev) | [Sign in ↗](https://pr123-ccccccc-dash.iterate-dev-preview.workers.dev/.auth/login?next=os) | [Cloudflare dashboard](https://dash.cloudflare.com/a/os) |
     | [dash](https://pr123-ccccccc-dash.iterate-dev-preview.workers.dev) | [Sign in ↗](https://pr123-ccccccc-dash.iterate-dev-preview.workers.dev/.auth/login?next=dash) | [Cloudflare dashboard](https://dash.cloudflare.com/a/dash) |
+    | [notes](https://pr123-ccccccc-notes.iterate-dev-preview.workers.dev) | [Sign in ↗](https://pr123-ccccccc-os.iterate-dev-preview.workers.dev/login?next=%2Fprojects%2Fpr123%2Fnotes%2F&login_hint=pr123%40preview.iterate.test) | [Cloudflare dashboard](https://dash.cloudflare.com/a/notes) |
 
     New project from template: [default at this PR's \`bbbbbbbbb\` ↗](https://pr123-ccccccc-dash.iterate-dev-preview.workers.dev/.auth/login?next=default) · [with-agents ↗](https://pr123-ccccccc-dash.iterate-dev-preview.workers.dev/.auth/login?next=with-agents)
 
@@ -244,6 +256,73 @@ test("a `Sign in ↗` link is the app's own sign-in, landing where the link land
   expect(appSignInLink("https://pr123-ccccccc-admin.iterate-dev-preview.workers.dev")).toBe(
     "https://pr123-ccccccc-admin.iterate-dev-preview.workers.dev/.auth/login?next=%2F",
   );
+});
+
+test("each app's `Sign in ↗` as the PR's test person: the Dash's into their project, a proxied app's through the platform's own sign-in page into the app in their project, the admin app's naming nobody", () => {
+  const deployment = previewDeployment("pr123-ccccccc")!;
+  const link = (app: string) =>
+    testPersonSignInLink({
+      app: { name: app, url: `https://pr123-ccccccc-${app}.iterate-dev-preview.workers.dev` },
+      platform: deployment.os.baseUrl,
+      ingressRouting: deployment.os.ingressRouting!,
+      project: "pr123",
+      email: "pr123@preview.iterate.test",
+    });
+  expect(
+    Object.fromEntries(
+      ["dash", "agents", "notes", "docs", "admin"].map((app) => {
+        const url = new URL(link(app));
+        return [
+          app,
+          `${url.origin}${url.pathname} ${JSON.stringify(Object.fromEntries(url.searchParams))}`,
+        ];
+      }),
+    ),
+  ).toEqual({
+    dash: 'https://pr123-ccccccc-dash.iterate-dev-preview.workers.dev/.auth/login {"next":"/projects/pr123","login_hint":"pr123@preview.iterate.test"}',
+    agents:
+      'https://pr123-ccccccc-agents.iterate-dev-preview.workers.dev/.auth/login {"next":"/","login_hint":"pr123@preview.iterate.test"}',
+    notes:
+      'https://pr123-ccccccc-os.iterate-dev-preview.workers.dev/login {"next":"/projects/pr123/notes/","login_hint":"pr123@preview.iterate.test"}',
+    docs: 'https://pr123-ccccccc-os.iterate-dev-preview.workers.dev/login {"next":"/projects/pr123/docs/","login_hint":"pr123@preview.iterate.test"}',
+    admin: 'https://pr123-ccccccc-admin.iterate-dev-preview.workers.dev/.auth/login {"next":"/"}',
+  });
+});
+
+test("a proxied app's sign-in link needs paths ingress: under subdomains the app is not a path on the platform, so the platform's sign-in page cannot land on it", () => {
+  expect(() =>
+    proxiedAppSignInLink({
+      platform: "https://os.iterate.com",
+      ingressRouting: { type: "subdomains", hostname: "iterate.app" },
+      project: "pr123",
+      app: "notes",
+      loginHint: "pr123@preview.iterate.test",
+    }),
+  ).toThrow(/needs paths ingress/);
+});
+
+test("the seed's route for a proxied app: the routing slug of its name, members only, to a loaded worker that fetches through to the deployment's own app Worker", () => {
+  const route = proxiedAppRoute(
+    "notes",
+    "https://pr123-ccccccc-notes.iterate-dev-preview.workers.dev",
+  );
+  expect(route).toMatchObject({
+    requestMatcher: { routingSlug: "notes" },
+    authRequirement: { visitors: "project-members" },
+    target: ["itx", "workers", ["get", { source: { "package.json": '{"main":"worker.js"}' } }]],
+  });
+  const [, , [, { source }]] = route.target as any;
+  expect(source["worker.js"]).toMatchInlineSnapshot(`
+    "export default {
+      fetch(request) {
+        const url = new URL(request.url);
+        url.protocol = "https:";
+        url.host = "pr123-ccccccc-notes.iterate-dev-preview.workers.dev";
+        return fetch(new Request(url, new Request(request, { redirect: "manual" })));
+      },
+    };
+    "
+  `);
 });
 
 test("every configs/ directory is a config template", () => {

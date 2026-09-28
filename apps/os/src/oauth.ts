@@ -48,6 +48,10 @@ export const GrantProps = z.object({
 });
 export type GrantProps = z.infer<typeof GrantProps>;
 
+/** How long a grant an admin signed in as someone lives (`impersonatedBy`): an hour, never
+ *  refreshed past it. */
+export const IMPERSONATION_MS = 3600_000;
+
 /** What the provider stores with each access token (`grantLifetime` returns it): the grant's props
  *  and its id, which the provider's validation does not report. */
 const TokenProps = GrantProps.extend({
@@ -340,6 +344,15 @@ export async function recordGrantUse(env: Env, grant: AccessGrant): Promise<void
  *  up and create clients, list and revoke a person's grants. */
 export function oauthHelpers(env: Env, addresses: PlatformAddresses) {
   return authorizationServer(env, addresses).getOAuthApi(providerEnv(env));
+}
+
+/** The grant an approval minted: `completeAuthorization` stores it before it answers, and its code
+ *  is `<userId>:<grantId>:<secret>` (@cloudflare/workers-oauth-provider; this issuer offers no
+ *  implicit flow, so the code always rides the redirect's query). */
+export function grantIdOf(approved: { redirectTo: string }) {
+  const grantId = new URL(approved.redirectTo).searchParams.get("code")?.split(":")[1];
+  if (!grantId) throw new Error("The authorization code names no grant.");
+  return grantId;
 }
 
 /** A request to the authorization server's own endpoints (api.ts routes them here): its metadata,

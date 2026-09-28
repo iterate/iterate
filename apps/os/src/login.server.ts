@@ -4,6 +4,7 @@
 import { errorCode, sameOriginPath } from "iterate/lib";
 import { ADMIN_SIGN_IN_PATH } from "./admin-sign-in.ts";
 import { startIssuerSession } from "./issuer-session.ts";
+import { signInAsTestPerson, testPersonHint, testPersonOffer } from "./sign-in-as-test-person.ts";
 import {
   clearLoginCookie,
   finishLoginCode,
@@ -30,9 +31,19 @@ export async function loginState(
     platformAddressesOf(env, request).platformOrigin,
   );
   const session = await browserAuthorization(env, request);
+  // A link naming a test person comes back here once its admin is signed in, for the offer below;
+  // every way to sign in on this page returns to `afterSignIn`.
+  const hint = testPersonHint(env, search.login_hint);
+  const afterSignIn = hint ? `/login?${new URLSearchParams({ next, login_hint: hint })}` : next;
+  const offer = await testPersonOffer(env, session, search.login_hint);
   return {
     next,
+    afterSignIn,
     signedInAs: session ? session.principal.email || session.principal.actor : null,
+    // an admin signed in as someone else, from here or from consent
+    impersonatedBy: session?.principal.impersonatedBy?.email || null,
+    // "Sign in as <person> for an hour" (sign-in-as-test-person.ts), for a platform admin only
+    signInAs: offer?.person.email || null,
     switchAccount: switchAccountHref(next),
     codeSentTo: session ? null : await loginCodePending(env, request),
     error: search.error || null,
@@ -42,16 +53,18 @@ export async function loginState(
     passwordSelected: search.method === "password",
     // The code form needs both its configuration and the mailbox binding.
     emailSignIn: Boolean(env.EMAIL && config.login.emailCode),
-    google: config.login.google ? `/.auth/identity?next=${encodeURIComponent(next)}` : null,
+    google: config.login.google ? `/.auth/identity?next=${encodeURIComponent(afterSignIn)}` : null,
     cloudflare: config.login.cloudflare
-      ? `/.auth/identity/cloudflare?next=${encodeURIComponent(next)}`
+      ? `/.auth/identity/cloudflare?next=${encodeURIComponent(afterSignIn)}`
       : null,
-    github: config.login.github ? `/.auth/identity/github?next=${encodeURIComponent(next)}` : null,
+    github: config.login.github
+      ? `/.auth/identity/github?next=${encodeURIComponent(afterSignIn)}`
+      : null,
     // an admin through another issuer (admin-sign-in.ts): prd, on a preview
     adminIssuer: config.login.adminIssuer
       ? {
           host: new URL(config.login.adminIssuer).host,
-          href: `${ADMIN_SIGN_IN_PATH}?${new URLSearchParams({ next })}`,
+          href: `${ADMIN_SIGN_IN_PATH}?${new URLSearchParams({ next: afterSignIn })}`,
         }
       : null,
     // where a signed-in person with nowhere else to go is sent (the landing page's pointer)
@@ -62,8 +75,9 @@ export async function loginState(
 /** The sign-in page's POSTs — plain forms, no script in the loop. `method` switches between the
  *  code and the password form, keeping the email typed; an `email` with a `password` signs in at
  *  once; an `email` alone starts the code sign-in; a `code` finishes it; `restart` drops a pending
- *  code for another email. What goes wrong comes back to the page as `?error=` (303), so the person
- *  reads it where they typed. */
+ *  code for another email; `sign_in_as` is a signed-in admin's "Sign in as <person> for an hour"
+ *  (sign-in-as-test-person.ts). What goes wrong comes back to the page as `?error=` (303), so the
+ *  person reads it where they typed. */
 export async function loginFormResponse(request: Request, env: Env): Promise<Response> {
   const form = await request.formData().catch(() => null);
   if (!form) return new Response("Expected a form", { status: 400 });
@@ -93,6 +107,14 @@ export async function loginFormResponse(request: Request, env: Env): Promise<Res
   try {
     if (method) return back();
     if (form.has("restart")) return back(undefined, clearLoginCookie);
+    if (form.has("sign_in_as")) {
+      const session = await signInAsTestPerson(env, request, String(form.get("sign_in_as")), next);
+      if ("error" in session) return back(session.error);
+      return new Response(null, {
+        status: 302,
+        headers: { location: session.location, "set-cookie": session.setCookie },
+      });
+    }
     if (form.has("code")) {
       const finished = await finishLoginCode(env, request, String(form.get("code") ?? ""));
       if ("error" in finished)

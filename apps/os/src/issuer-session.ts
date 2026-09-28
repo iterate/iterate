@@ -10,14 +10,21 @@ import { clientDisplay } from "./client-display.ts";
 import { platformAddressesOf } from "./app-config.ts";
 import type { Env } from "./env.ts";
 import type { UserRecord } from "./control-plane/catalog.ts";
-import { oauthHelpers, parseAuthorization, type GrantProps } from "./oauth.ts";
+import {
+  grantIdOf,
+  IMPERSONATION_MS,
+  oauthHelpers,
+  parseAuthorization,
+  type GrantProps,
+} from "./oauth.ts";
 import { watchSignInStep } from "./sign-in-watch.ts";
 
 /** What the person reads when the platform failed their sign-in, on the sign-in page. */
 const PLATFORM_FAILURE_MESSAGE = "Sign-in failed on our side. Try again.";
 
-/** Every sign-in ends in this tail: the password and code forms, a provider (identity.ts) and an
- * admin through another issuer (admin-sign-in.ts). Its grant is the issuer's sole browser identity: ordinary storage, public token
+/** Every sign-in ends in this tail: the password and code forms, a provider (identity.ts), an
+ * admin through another issuer (admin-sign-in.ts) and an admin as a test person
+ * (sign-in-as-test-person.ts). Its grant is the issuer's sole browser identity: ordinary storage, public token
  * exchange, admission, expiry and revocation. No separate identity cookie. `picture` is the
  * identity provider's picture of the person, when it gave one (Google does).
  *
@@ -42,9 +49,18 @@ export async function startIssuerSession(
   user: UserRecord,
   next: string,
   /** what the identity provider said about the person (Google's profile; an email sign-in has
-   *  none), which the grant carries beside them */
-  extras: Pick<GrantProps, "picture" | "name"> = {},
-): Promise<{ setCookie: string; location: string } | { error: string }> {
+   *  none), which the grant carries beside them; or the platform admin signing in as them
+   *  (sign-in-as-test-person.ts), whose session lives an hour */
+  extras: Pick<GrantProps, "picture" | "name" | "impersonatedBy"> = {},
+): Promise<
+  | {
+      setCookie: string;
+      location: string;
+      /** the issuer grant the session holds: what an impersonation's records name */
+      grant: { grantId: string; clientId: string; scope: string[]; deadline: number };
+    }
+  | { error: string }
+> {
   const addresses = platformAddressesOf(env, request);
   const { platformOrigin, api } = addresses;
   // The issuer's own session holds every scope but `admin`: it is the person at the issuer, and the
@@ -66,6 +82,7 @@ export async function startIssuerSession(
     ),
   );
   const helpers = oauthHelpers(env, addresses);
+  const deadline = Date.now() + (extras.impersonatedBy ? IMPERSONATION_MS : 30 * 24 * 3600_000);
   const authorization = await watchSignInStep(
     "parse-authorization",
     parseAuthorization(env, new Request(flow.location)),
@@ -76,10 +93,14 @@ export async function startIssuerSession(
       request: authorization,
       userId: user.id,
       scope: authorization.scope,
-      metadata: clientDisplay(
-        { clientName: "iterate", logoUri: `${platformOrigin}/iterate-logo.svg` },
-        authorization.clientId,
-      ),
+      metadata: {
+        ...clientDisplay(
+          { clientName: "iterate", logoUri: `${platformOrigin}/iterate-logo.svg` },
+          authorization.clientId,
+        ),
+        // the person's Sessions list shows who started it (grants.ts)
+        impersonatedBy: extras.impersonatedBy?.email,
+      },
       revokeExistingGrants: false,
       props: {
         kind: "issuer",
@@ -88,7 +109,8 @@ export async function startIssuerSession(
         picture: extras.picture,
         name: extras.name,
         projects: null,
-        deadline: Date.now() + 30 * 24 * 3600_000,
+        deadline,
+        impersonatedBy: extras.impersonatedBy,
       } satisfies GrantProps,
     }),
   );
@@ -116,7 +138,16 @@ export async function startIssuerSession(
   });
   if (!result) return { error: PLATFORM_FAILURE_MESSAGE };
   if (result.error) throw new Error(result.error);
-  return { setCookie: flow.setCookie, location: result.next! };
+  return {
+    setCookie: flow.setCookie,
+    location: result.next!,
+    grant: {
+      grantId: grantIdOf(approved),
+      clientId: authorization.clientId,
+      scope: authorization.scope,
+      deadline,
+    },
+  };
 }
 
 /** Why a code exchange failed on the platform's side, or null when it did not (a defect of ours).

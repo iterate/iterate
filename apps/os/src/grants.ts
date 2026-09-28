@@ -213,10 +213,16 @@ export class GrantsRpcTarget extends RpcTarget {
    * The bearer acts as the person, with the `iterate` scope, at `/api`, at `/mcp` and on a covered
    * project's hosts (oauth.ts `validateToken`). The key's index entry and its record land before
    * the bearer is answered, so it works at once; the record names the session that minted it
-   * (`mintedBy`), which the list shows. */
+   * (`mintedBy`), which the list shows. A session an admin signed in as the person mints none: the
+   * key would outlive the impersonation's hour and act without naming the admin. */
   async mint(input: unknown) {
     const env = this.#env;
     const session = this.#account();
+    if (this.#auth.principal.impersonatedBy)
+      throw codedError(
+        "FORBIDDEN",
+        "Signed in as someone else, you cannot mint a personal access token for them.",
+      );
     if (!(await grantIsLive(env, session.grant)))
       throw codedError("UNAUTHENTICATED", "This session has ended. Sign in again.");
     const data = MintInput.parse(input);

@@ -4,6 +4,8 @@
 import { env, exports } from "cloudflare:workers";
 import { expect, test, vi } from "vitest";
 import { platformAddressesOf } from "../src/app-config.ts";
+import { browserAuthorization } from "../src/browser-client.ts";
+import { loginState } from "../src/login.server.ts";
 import { authorizationForToken } from "../src/oauth.ts";
 import {
   actingAs,
@@ -271,6 +273,120 @@ test("a sign-in link naming a test person (`login_hint`, a PR body's `Sign in �
   ).toBeUndefined();
 });
 
+test("the sign-in page's link naming a test person (a proxied app's `Sign in ↗`): offered to an admin signed in as themselves, one confirm makes this browser's issuer session the person's for an hour beside the admin, and nothing it approves or mints outlives that", async () => {
+  fetchReachesThisWorker();
+  // under the test email domain (wrangler.test.jsonc `login.testEmailDomain`), as a PR's pr<N>@…
+  const person = await controlPlane().ensureUser("proxied-link@signin.test");
+  const outside = await controlPlane().ensureUser("proxied-link-outside@example.com");
+  const admin = await signIn(ADMIN);
+  const member = await signIn("proxied-link-member@signin.test");
+  // where a Notes link lands: the app in the person's project, under paths ingress
+  const next = "/projects/proxied-link/notes/";
+  const page = (cookie: string | null, hint: string) =>
+    loginState(new Request(`${ORIGIN}/login`, { headers: cookie ? { cookie } : {} }), env, {
+      next,
+      login_hint: hint,
+    });
+
+  // signed out, every way to sign in comes back to the page with the hint; one outside the test
+  // email domain changes nothing
+  expect(await page(null, person.email)).toMatchObject({
+    signInAs: null,
+    afterSignIn: `/login?${new URLSearchParams({ next, login_hint: person.email })}`,
+  });
+  expect(await page(null, outside.email)).toMatchObject({ afterSignIn: next });
+  // signed in, the admin is offered the person the link names, and nobody else anything
+  expect({
+    admin: (await page(admin.cookie, "Proxied-Link@Signin.test")).signInAs,
+    nonAdmin: (await page(member.cookie, person.email)).signInAs,
+    outsideTheTestDomain: (await page(admin.cookie, outside.email)).signInAs,
+    nobodyYet: (await page(admin.cookie, "proxied-link-nobody@signin.test")).signInAs,
+  }).toEqual({
+    admin: person.email,
+    nonAdmin: null,
+    outsideTheTestDomain: null,
+    nobodyYet: null,
+  });
+
+  // posted by hand anyway, the page's form is refused to anyone else, and for anyone else
+  const errorOf = (response: Response) =>
+    new URL(response.headers.get("location")!, ORIGIN).searchParams.get("error");
+  expect(errorOf(await confirm(member.cookie, person.email, next))).toMatch(
+    /Only a platform admin/,
+  );
+  expect(errorOf(await confirm(admin.cookie, outside.email, next))).toMatch(
+    /Only a platform admin/,
+  );
+
+  const confirmed = await confirm(admin.cookie, person.email, next);
+  expect({ status: confirmed.status, location: confirmed.headers.get("location") }).toEqual({
+    status: 302,
+    location: next,
+  });
+  const cookie = confirmed.headers.get("set-cookie")!.split(";")[0]!;
+  const session = await browserAuthorization(env, new Request(ORIGIN, { headers: { cookie } }));
+  expect(session).toMatchObject({
+    principal: {
+      actor: person.id,
+      email: person.email,
+      impersonatedBy: { actor: admin.user.id, email: ADMIN },
+    },
+    reach: { userId: person.id },
+    grant: { kind: "issuer" },
+  });
+  const minutes = (session!.grant!.deadline - Date.now()) / 60_000;
+  expect(minutes).toBeGreaterThan(59);
+  expect(minutes).toBeLessThanOrEqual(60);
+  // the admin's own session, whose cookie this one replaced, is ended rather than left behind
+  expect(
+    await browserAuthorization(env, new Request(ORIGIN, { headers: { cookie: admin.cookie } })),
+  ).toBeNull();
+  // both accounts record it, with the grant's id, the admin the principal of each record
+  const record = {
+    payload: {
+      grantId: session!.grant!.grantId,
+      target: { userId: person.id, email: person.email },
+      impersonatedBy: { actor: admin.user.id, email: ADMIN },
+      clientName: "iterate",
+      resource: "api",
+      projects: null,
+    },
+    source: { principal: { actor: admin.user.id, email: ADMIN }, platform: true },
+  };
+  const recordOf = async (userId: string, type: string) =>
+    (await readLog(`global.iterate/users/${userId}`)).find(
+      (event) =>
+        event.type === type &&
+        (event.payload as { grantId: string }).grantId === session!.grant!.grantId,
+    );
+  expect(
+    await recordOf(person.id, "events.iterate.com/account/impersonation-started"),
+  ).toMatchObject(record);
+  expect(
+    await recordOf(admin.user.id, "events.iterate.com/account/impersonation-performed"),
+  ).toMatchObject(record);
+  // the page says who is signed in, and offers nothing more
+  expect(await page(cookie, person.email)).toMatchObject({
+    signedInAs: person.email,
+    impersonatedBy: ADMIN,
+    signInAs: null,
+  });
+
+  // an app approved from that session is the same impersonation: the admin beside the person,
+  // never past the hour
+  const app = await authorize(await issuerApprover(cookie), { scope: "iterate account" });
+  const appAuthorization = await authorizationForToken(env, app.token!, addresses, "api");
+  expect(appAuthorization).toMatchObject({
+    principal: { actor: person.id, impersonatedBy: { actor: admin.user.id, email: ADMIN } },
+  });
+  expect(appAuthorization!.grant!.deadline).toBeLessThanOrEqual(session!.grant!.deadline);
+  // nor does it mint a personal access token, which would outlive the hour
+  const { root } = await rpc(app.token!);
+  await expect(root.grants.mint({ projects: ["proxied-link"] })).rejects.toThrow(
+    /Signed in as someone else/,
+  );
+});
+
 test("an impersonation's access token never outlives its hour: a code exchanged late gets a token that ends with it", async () => {
   fetchReachesThisWorker();
   const target = await approverFor("impersonated-late@example.com");
@@ -312,6 +428,27 @@ test("a client on a project's host signed in as someone is bound to that project
   );
   expect(started).toMatchObject({ payload: { projects: [projectId] } });
 });
+
+/** `email` signed in to the issuer with the password: the browser's cookie, and who they are. */
+async function signIn(email: string) {
+  const login = await call("/login", {
+    method: "POST",
+    body: new URLSearchParams({ email, password: loginPassword(), next: "/" }),
+  });
+  return {
+    cookie: login.headers.get("set-cookie")!.split(";")[0]!,
+    user: await controlPlane().ensureUser(email),
+  };
+}
+
+/** The sign-in page's "Sign in as <email> for an hour", posted from the browser holding `cookie`. */
+function confirm(cookie: string, email: string, next: string) {
+  return call("/login", {
+    method: "POST",
+    headers: { cookie },
+    body: new URLSearchParams({ sign_in_as: email, next }),
+  });
+}
 
 /** The consent capability of `email`'s issuer session, signed in with the password. */
 async function approverFor(email: string) {

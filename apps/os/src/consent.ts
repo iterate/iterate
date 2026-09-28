@@ -21,7 +21,9 @@ import type { OrganizationRecord, ProjectRecord, UserRecord } from "./control-pl
 import { ControlPlane } from "./control-plane/edge.ts";
 import { appConfigOf, type PlatformAddresses } from "./app-config.ts";
 import {
+  grantIdOf,
   grantIsLive,
+  IMPERSONATION_MS,
   isAdmin,
   oauthHelpers,
   parseAuthorization,
@@ -144,15 +146,6 @@ function isOwnApp(request: AuthRequest, platformOrigin: string, projectBound: bo
   if (url?.protocol !== "https:" || url.pathname !== "/.auth/client.json") return false;
   const parentOf = (hostname: string) => hostname.slice(hostname.indexOf(".") + 1);
   return parentOf(url.hostname) === parentOf(new URL(platformOrigin).hostname);
-}
-
-/** The grant an approval minted: `completeAuthorization` stores it before it answers, and its code
- *  is `<userId>:<grantId>:<secret>` (@cloudflare/workers-oauth-provider; this issuer offers no
- *  implicit flow, so the code always rides the redirect's query). */
-function grantIdOf(approved: { redirectTo: string }) {
-  const grantId = new URL(approved.redirectTo).searchParams.get("code")?.split(":")[1];
-  if (!grantId) throw new Error("The authorization code names no grant.");
-  return grantId;
 }
 
 /** Expected OAuth refusals retain the validated client redirect when one exists. */
@@ -405,7 +398,7 @@ export class ConsentRpcTarget extends RpcTarget {
     );
     if (projectBound && !projects.length)
       return { error: `${target.email} cannot reach this project.` };
-    const deadline = Date.now() + 3600_000;
+    const deadline = Date.now() + IMPERSONATION_MS;
     const display = clientDisplay(client, request.clientId);
     const approved = await oauthHelpers(env, this.#addresses).completeAuthorization({
       request,
@@ -456,7 +449,9 @@ export class ConsentRpcTarget extends RpcTarget {
 
   /** Grant `client` the `projects` (null = every current and future one) and `scope`, and record
    *  the fact of the approval on the person's account context, stamped with them and the issuer
-   *  grant they approved through. */
+   *  grant they approved through. Approved through an issuer session an admin signed in as the
+   *  person (sign-in-as-test-person.ts), the client's grant is that impersonation's too: the admin
+   *  beside the person on every call, and never past the session's own hour. */
   async #complete(
     request: AuthRequest,
     client: ClientInfo | null,
@@ -467,10 +462,11 @@ export class ConsentRpcTarget extends RpcTarget {
   ) {
     const env = this.#env;
     const display = clientDisplay(client, request.clientId);
+    const { impersonatedBy } = this.#grant;
     const approved = await oauthHelpers(env, this.#addresses).completeAuthorization({
       request,
       userId: this.#grant.userId,
-      metadata: display,
+      metadata: { ...display, impersonatedBy: impersonatedBy?.email },
       scope,
       revokeExistingGrants: false,
       props: {
@@ -478,7 +474,10 @@ export class ConsentRpcTarget extends RpcTarget {
         userId: this.#grant.userId,
         email: this.#grant.email,
         projects,
-        deadline: Date.now() + lifetimeMs,
+        deadline: impersonatedBy
+          ? Math.min(this.#grant.deadline, Date.now() + lifetimeMs)
+          : Date.now() + lifetimeMs,
+        impersonatedBy,
       } satisfies GrantProps,
     });
     publishPlatformFacts(
@@ -498,7 +497,10 @@ export class ConsentRpcTarget extends RpcTarget {
         } satisfies ConsentApproved,
       },
       {
-        principal: { actor: this.#grant.userId, email: this.#grant.email },
+        // a principal crosses to callers with its keys: only an impersonation carries this one
+        principal: impersonatedBy
+          ? { actor: this.#grant.userId, email: this.#grant.email, impersonatedBy }
+          : { actor: this.#grant.userId, email: this.#grant.email },
         grant: this.#grant.grantId,
       },
     );

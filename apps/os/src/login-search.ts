@@ -10,6 +10,9 @@ const LoginSearch = z
     error: optionalString,
     email: optionalString,
     method: optionalString,
+    /** whom a link was for (OpenID Connect's `login_hint`): a test person an admin may sign in as
+     *  (sign-in-as-test-person.ts) */
+    login_hint: optionalString,
   })
   .catch({});
 

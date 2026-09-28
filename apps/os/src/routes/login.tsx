@@ -46,6 +46,8 @@ function LoginPage() {
         {state.signedInAs ? (
           <SignedIn
             email={state.signedInAs}
+            impersonatedBy={state.impersonatedBy}
+            signInAs={state.signInAs}
             next={state.next}
             dash={state.dash}
             switchAccount={state.switchAccount}
@@ -70,10 +72,10 @@ function SignInOptions({ state }: { state: Awaited<ReturnType<typeof getLoginSta
   return (
     <>
       {state.codeSentTo ? (
-        <CodeSignInForm next={state.next} codeSentTo={state.codeSentTo} />
+        <CodeSignInForm next={state.afterSignIn} codeSentTo={state.codeSentTo} />
       ) : formEnabled ? (
         <EmailSignInForm
-          next={state.next}
+          next={state.afterSignIn}
           email={state.email}
           passwordEnabled={state.password}
           codeEnabled={state.emailSignIn}
