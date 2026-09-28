@@ -16,8 +16,9 @@ const SHORTCODES: Record<string, string> = {
 
 /**
  * Slack's Web API as the CI posters call it, answering from memory: auth.test, chat.postMessage (a
- * thread reply with `thread_ts`), chat.update, chat.delete, conversations.history (newest first,
- * `limit` a page, with next_cursor) and conversations.replies. History spells the posters' emoji as
+ * thread reply with `thread_ts`), chat.update, chat.delete, conversations.history (each page newest
+ * first, `limit` a page, with next_cursor; given `oldest`, the first page is the window's oldest,
+ * as Slack's is) and conversations.replies. History spells the posters' emoji as
  * Slack's does. Every call is recorded in `calls`. A message's ts is `now` in seconds plus a
  * counter, so messages keep their order. With `failUpdates`, every chat.update is refused after it
  * is recorded, as Slack answers an error.
@@ -96,15 +97,18 @@ export function fakeSlack(options: { now: number; failUpdates?: boolean }) {
         cursor?: string;
       }) => {
         calls.push({ method: "conversations.history", channel: args.channel });
-        const newestFirst = messages(args.channel)
+        // given `oldest` (and no `latest`), Slack pages from the window's oldest end
+        const fromOldest = Boolean(args.oldest);
+        const ordered = messages(args.channel)
           .filter((message) => Number(message.ts) >= Number(args.oldest || 0))
-          .sort((a, b) => Number(b.ts) - Number(a.ts));
+          .sort((a, b) => (fromOldest ? Number(a.ts) - Number(b.ts) : Number(b.ts) - Number(a.ts)));
         const start = Number(args.cursor || 0);
         const end = start + (args.limit || 100);
+        const page = ordered.slice(start, end);
         return {
           ok: true,
-          messages: newestFirst.slice(start, end).map(asHistory),
-          response_metadata: { next_cursor: end < newestFirst.length ? String(end) : "" },
+          messages: (fromOldest ? page.reverse() : page).map(asHistory),
+          response_metadata: { next_cursor: end < ordered.length ? String(end) : "" },
         };
       },
       replies: async (args: { channel: string; ts: string }) => {

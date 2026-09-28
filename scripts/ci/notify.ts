@@ -15,8 +15,9 @@
 //   workflow-resolved  the same job on a green run: resolves that page.
 //
 // A page's first line and impact are its state: a run reads them back from the open page and
-// renders the page again. `--test-run` posts what the command would post, marked 🧪, top-level in
-// #ci, and reads and edits nothing.
+// renders the page again. `--test-run` posts what the command would post, marked 🧪, to #ci, and
+// reads and edits no page. deploy-success's reads #ci once and replies in the thread of GITHUB_SHA's
+// merge line when it finds one, so a merged commit's sha proves the thread reply without a deploy.
 //
 // Two apps failing on one commit can post two pages in the same second. Each re-reads after it
 // posts, and the younger page deletes itself and is edited into the older. Two younger pages folding
@@ -155,16 +156,19 @@ export function deployLiveText(input: {
  *  before it; four reads keep seven deploys after a burst of merges within Slack's history limit. */
 export const MERGE_POST_READS_S = [0, 30, 90, 180];
 
-/** The merge's line for `sha` in #ci (`✅ PR merged: … (<sha7>)`), read at MERGE_POST_READS_S;
+/** The merge's line for `sha` in #ci (`✅ PR merged: … (<sha7>)`), read at `reads` seconds;
  *  undefined when none appeared. */
-async function findMergePost(slack: WebClient, input: { sha: string; clock: Clock }) {
+async function findMergePost(
+  slack: WebClient,
+  input: { sha: string; clock: Clock; reads: number[] },
+) {
   const { bot_id: botId } = await slack.auth.test();
   const start = input.clock.now();
-  for (const at of MERGE_POST_READS_S) {
+  for (const at of input.reads) {
     await input.clock.sleep(Math.max(0, start + at * 1000 - input.clock.now()));
+    // #ci's newest 200 lines, newest first (no `oldest`, as in findOpenPages)
     const history = await slack.conversations.history({
       channel: slackChannelIds["#ci"],
-      oldest: String((input.clock.now() - 6 * 3_600_000) / 1000),
       limit: 200,
     });
     const merge = (history.messages || []).find(
@@ -181,28 +185,41 @@ async function findMergePost(slack: WebClient, input: { sha: string; clock: Cloc
 
 /** Posts `🚀 <App> live` in the thread of the merge's line in #ci, `(re-run)` when the thread has
  *  this app's line already; top-level with the sha when no merge's line appeared (with a log line),
- *  or at once for a dispatched redeploy, which has none. */
+ *  or at once for a dispatched redeploy, which has none. A 🧪 test run reads #ci once and posts
+ *  where that read puts it, marked; a real run's re-run check skips 🧪 lines. */
 export async function announceDeploy(
   slack: WebClient,
-  input: { app: string; sha: string; runUrl: string; pushed: boolean; clock: Clock },
+  input: {
+    app: string;
+    sha: string;
+    runUrl: string;
+    pushed: boolean;
+    clock: Clock;
+    testRun?: boolean;
+  },
 ) {
   const channel = slackChannelIds["#ci"];
-  const parent = input.pushed ? await findMergePost(slack, input) : undefined;
+  const mark = (text: string) => (input.testRun ? `🧪 TEST RUN — ${text}` : text);
+  const reads = input.testRun ? [0] : MERGE_POST_READS_S;
+  const parent = input.pushed ? await findMergePost(slack, { ...input, reads }) : undefined;
   if (!parent) {
-    if (input.pushed)
+    if (input.pushed && !input.testRun)
       console.log(JSON.stringify({ event: "deploy-notify.no-merge-post", sha: input.sha }));
-    await slack.chat.postMessage({ channel, text: deployLiveText({ ...input, rerun: false }) });
+    await slack.chat.postMessage({
+      channel,
+      text: mark(deployLiveText({ ...input, rerun: false })),
+    });
     return;
   }
   const thread = await slack.conversations.replies({ channel, ts: parent });
   const line = new RegExp(`(^|\\s)${input.app} live\\b`);
   const rerun = (thread.messages || []).some(
-    (message) => message.ts !== parent && line.test(message.text || ""),
+    ({ ts, text = "" }) => ts !== parent && line.test(text) && !text.includes("TEST RUN"),
   );
   await slack.chat.postMessage({
     channel,
     thread_ts: parent,
-    text: deployLiveText({ app: input.app, runUrl: input.runUrl, rerun }),
+    text: mark(deployLiveText({ app: input.app, runUrl: input.runUrl, rerun })),
   });
 }
 
@@ -419,10 +436,7 @@ export async function deploySuccess(options: { testRun?: boolean } = {}) {
   const input = deployInput();
   const slack = getSlackClient();
   if (options.testRun) {
-    await slack.chat.postMessage({
-      channel: slackChannelIds["#ci"],
-      text: `🧪 TEST RUN — ${deployLiveText({ ...input, rerun: false })}`,
-    });
+    await announceDeploy(slack, { ...input, pushed: true, clock: realClock, testRun: true });
     return;
   }
   // a failed #ci post still resolves the pages this deploy ends, and both failures fail the step

@@ -629,7 +629,7 @@ function fakeSlack(seed: FakeMessage[] = []) {
     conversations: {
       history: async (args: {
         channel: string;
-        oldest: string;
+        oldest?: string;
         limit: number;
         cursor?: string;
       }) => {
@@ -639,7 +639,7 @@ function fakeSlack(seed: FakeMessage[] = []) {
             (message) =>
               message.channel === args.channel &&
               (!message.thread_ts || message.reply_broadcast) &&
-              Number(message.ts) >= Number(args.oldest),
+              Number(message.ts) >= Number(args.oldest || 0),
           )
           .sort((a, b) => Number(b.ts) - Number(a.ts));
         const start = Number(args.cursor || 0);
