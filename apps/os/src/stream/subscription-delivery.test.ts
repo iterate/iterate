@@ -6,6 +6,8 @@
 //     moves up to the last dropped offset — the gap a facet's own repair reads from the log. The
 //     memory half (200 × 1 MiB behind a stuck facet survives a 128 MiB budget) is
 //     memory-budget.test.ts's row; this file is the semantics.
+//   • A READ of a pushed facet waits for the deliveries already queued for it (`deliveriesQueuedFor`,
+//     what the facet host awaits before a processor's `snapshot` or `liveSnapshot`).
 //   • A RESUME wakes a halted facet row NOW, on the incarnation that halted it or a fresh one: the
 //     resume classifies the row by evaluating its target, never by what this incarnation remembers.
 //   • CURSOR DELIVERY across an eviction and a replace: the alarm's ROW-driven pass recovers a first
@@ -74,6 +76,26 @@ test("pending-push bound: over the budget, the OLDEST events are dropped and the
   expect(rig.pushes[0]).toMatchObject({
     range: { after: offsets[delivered[0] - 1], through: offsets[11] },
   });
+});
+
+// ── a read of a pushed facet waits for the deliveries already queued for it ──
+
+test("deliveriesQueuedFor: a read settles after the row's parked materialization AND the push queued behind it have reached the facet — at once for a facet no row pushes", async () => {
+  const rig = stuckFacetRig();
+  await nextMacrotask(); // the materialization (catchUpFromLog) parks — the chain's head
+  rig.commitBlobs(1); // its push queues behind it
+  void rig.delivery.deliveriesQueuedFor("slow").then(() => rig.facetMethods.push("read"));
+  void rig.delivery.deliveriesQueuedFor("unpushed").then(() => rig.facetMethods.push("unpushed"));
+  await drainDeliveries();
+  expect(rig).toMatchObject({ facetMethods: ["catchUpFromLog", "unpushed"] });
+  await rig.release();
+  expect(rig).toMatchObject({
+    facetMethods: ["catchUpFromLog", "unpushed", "processEventBatch", "read"],
+  });
+  // Nothing queued any more: the next read goes straight through.
+  void rig.delivery.deliveriesQueuedFor("slow").then(() => rig.facetMethods.push("next read"));
+  await nextMacrotask();
+  expect(rig.facetMethods.at(-1)).toBe("next read");
 });
 
 // ── an operator's resume wakes a halted FACET row now — the facet catches up from the log itself ──

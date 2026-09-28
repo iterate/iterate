@@ -17,17 +17,18 @@ import { z } from "zod";
 import { codedError, errorCode, releaseRpcSessions, reportIssue, withTimeout } from "iterate/lib";
 import { REVIVE_AFTER_MAX_MS, REVIVE_AFTER_MS, type StreamEvent } from "iterate/stream/processor";
 import {
+  itxExpressionStepName,
   normalizedItxExpression,
   print,
   type ItxExpression,
   type ItxExpressionInput,
 } from "iterate/expression";
-import type { FacetProps } from "iterate/sdk";
+import type { FacetProps, StreamProcessorDurableObject } from "iterate/sdk";
 import type { FacetSpec } from "iterate/api";
 import {
   CoreContract,
-  facetIsPushedByARow,
   facetSpecFromHostingTarget,
+  rowsPushingFacet,
   type CoreState,
 } from "../stream/core-processor.ts";
 import { AccountDurableObject } from "../account/durable-object.ts";
@@ -151,7 +152,17 @@ type FacetHostDeps = {
   reconcileAlarm: () => void;
   /** A LOADED facet was materialized: the context arms its sweep (context/residency.ts). */
   loadedFacetMaterialized: () => void;
+  /** Settles once the deliveries already queued for the facet `name` have: what a processor's read
+   *  waits for first (SubscriptionDelivery `deliveriesQueuedFor`). */
+  deliveriesQueuedFor: (name: string) => Promise<unknown>;
 };
+
+/** A processor's reads (iterate/sdk `StreamProcessorDurableObject`): answered from its reduce, after
+ *  the deliveries its context owes it. */
+const PROCESSOR_READS: ReadonlySet<string> = new Set([
+  "snapshot",
+  "liveSnapshot",
+] satisfies (keyof StreamProcessorDurableObject)[]);
 
 /** What `#materialize` hands `#call`: the container, the retirement of the loaded identity it was
  *  minted under (a loaded facet's; a first-party one has none) and whether the startup callback
@@ -696,6 +707,10 @@ export class FacetHost {
             FIRST_PARTY_FACET_PUBLIC_METHODS[name as keyof typeof FIRST_PARTY_FACET_PUBLIC_METHODS],
         itxExpressionSteps,
       );
+    // A processor's read holds every commit acknowledged before it: it waits out the pushes this
+    // context already owes the facet (SubscriptionDelivery `deliveriesQueuedFor` says why).
+    if (PROCESSOR_READS.has(itxExpressionStepName(itxExpressionSteps[0]) ?? ""))
+      await this.#deps.deliveriesQueuedFor(name);
     this.#markRan(name);
     this.#facetWorkInFlight++;
     try {
@@ -870,7 +885,7 @@ export class FacetHost {
       ({
         iterateContextName: this.#deps.iterateContextName,
         name,
-        ...(facetIsPushedByARow(this.#deps.stream.coreReducedState, name) && {
+        ...(rowsPushingFacet(this.#deps.stream.coreReducedState, name).length > 0 && {
           fedByPushes: true,
         }),
       }) satisfies FacetProps;

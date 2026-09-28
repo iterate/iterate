@@ -220,10 +220,13 @@ export function ownerContext(
  *  stamp). A grant's end (grants.ts, the revocation truth) and a grant's use (oauth.ts) await it;
  *  the rest goes through `publishPlatformFacts`.
  *
- *  `folded` then waits on the owner's processor's read-your-writes barrier (`waitUntilProcessed`,
- *  which catches up from the log itself and rejects after its ten seconds) through the last fact's
- *  offset: the processor's push is asynchronous, so an append alone does not mean a read of the fold
- *  sees it. */
+ *  A `snapshot` or `liveSnapshot` read of the owner's processor already holds the facts once this
+ *  returns: the facet host holds such a read until the pushes it owes the facet have landed
+ *  (context/facet-host.ts `#callFacet`). `folded` is for a verb that reads the fold INSIDE the facet
+ *  (`this.snapshot()`, such as AccountDurableObject `connectIntegration`; identity.ts
+ *  `keepSignInToken` passes it for the connect that follows a sign-in): it waits on the processor's
+ *  read-your-writes barrier (`waitUntilProcessed`, which catches up from the log itself and rejects
+ *  after its ten seconds) through the last fact's offset. */
 export async function appendPlatformFacts(
   contextNamespace: IterateContextNamespace,
   owner: FactOwner,

@@ -248,10 +248,14 @@ export async function connectionRowOf(
   return Object.hasOwn(state.integrations, path) ? state.integrations[path]! : null;
 }
 
-/** The connection a project root records at `path`, caught up through its log as it stands now: a
- *  fact committed there but not yet pushed to the facet counts (a disconnect that just finished,
- *  which `connectionRowOf`'s snapshot may not have folded yet). The platform's own reads: the log's
- *  durable head (a page read past it answers the head), then the facet's own barrier. */
+/** The connection a project root records at `path`, caught up through its log as it stands now.
+ *  `connectionRowOf` already holds every fact whose push the context owes the facet
+ *  (context/facet-host.ts `#callFacet`); this also holds one that no push brings: a fact committed
+ *  while the project row is halted, or whose push was lost before it reached the facet, where the
+ *  facet's engine keeps trusting the head it was last shown. What a move's undo reads before it
+ *  gives an account's route back (verbs.ts). The platform's own reads: the log's durable head (a
+ *  page read past it answers the head), then the facet's own barrier, which catches up from the
+ *  log. */
 export async function connectionRowThroughHeadOf(
   env: IntegrationEnv,
   projectId: string,

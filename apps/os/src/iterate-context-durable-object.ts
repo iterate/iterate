@@ -1018,6 +1018,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     stream: this.#stream,
     reconcileAlarm: () => this.#alarmCoordinator.reconcile(),
     loadedFacetMaterialized: () => this.#residency.armUnclaimedFacetSweep(),
+    deliveriesQueuedFor: (name) => this.#subscriptionDelivery.deliveriesQueuedFor(name),
   });
 
   // ── RESIDENCY (context/residency.ts): the pins' release, the sweep, the birth reset ──

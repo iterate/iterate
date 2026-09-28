@@ -39,7 +39,7 @@ import { durableLadderDelayMs } from "@iterate-com/shared/platform-retry";
 import type { StreamPage } from "iterate/api";
 import { type StreamEvent, consumesEvent, type ScannedRange } from "iterate/stream/processor";
 import { callOn, walkSteps, FacetHandle, RpcStubHandle } from "../context/dispatch.ts";
-import { type Subscription, targetOwnsProgress } from "./core-processor.ts";
+import { rowsPushingFacet, type Subscription, targetOwnsProgress } from "./core-processor.ts";
 import { RECENT_EPHEMERALS_BUDGET_CHARS, type Stream, type SubscriptionCursor } from "./stream.ts";
 
 /** A cursor delivery's awaited call is bounded by this; it is also how far ahead a row behind the
@@ -474,6 +474,23 @@ export class SubscriptionDelivery {
             reportIssue("subscription-delivery.cursor", error, { name }),
           ),
         ),
+    );
+  }
+
+  /** READ-YOUR-WRITES for a facet's reads: settles once every delivery already queued on the rows
+   *  that push this context's facet `facetName` (core-processor.ts `rowsPushingFacet`) has settled.
+   *  A processor's read verbs answer without reading the log once they have reduced through the
+   *  head a push or a catch-up last showed them (iterate/stream/processor.ts), yet a commit's push
+   *  can still wait here — behind the row's in-flight delivery, or for room in the in-flight budget
+   *  — when a read that follows the commit reaches the facet. So the facet host holds a read back
+   *  until this settles (FacetHost `#callFacet`): the read then holds every commit acknowledged
+   *  before it, with no read of the log. The chains never reject: each delivery catches its own
+   *  failure. */
+  deliveriesQueuedFor(facetName: string): Promise<unknown> {
+    return Promise.all(
+      rowsPushingFacet(this.#stream.coreReducedState, facetName).map(
+        (name) => this.#deliveryRecordByName.get(name)?.deliveryChain,
+      ),
     );
   }
 
