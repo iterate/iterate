@@ -180,8 +180,7 @@ export async function smokeResponse(
  * always cleaned up — code + secrets land atomically in one worker version.
  * Durable Object classes ride the same upload: the config's declarative
  * `exports` map is reconciled server-side per deploy, so a brand-new env's
- * first upload and a steady-state redeploy are the same single command, with
- * no classless bootstrap deploy before it (verified live 2026-07-08).
+ * first upload and a steady-state redeploy are the same single command.
  */
 export async function deployWithSecrets(input: {
   /** App root the wrangler commands run in. */
