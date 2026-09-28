@@ -119,7 +119,7 @@ async function grantSummary(resource: string, bearer: string) {
       signal: AbortSignal.timeout(5_000),
     }),
   );
-  using session = api.authenticate({ type: "bearer" });
+  using session = api.authenticate({ type: "bearer", token: bearer });
   const info = session.info();
   const projects = session.projects.list();
   const [{ principal }, list] = await Promise.all([info, projects]);

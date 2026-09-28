@@ -10,7 +10,7 @@ import { platformAddressesOf } from "../src/app-config.ts";
 import { accountStateOf, authorizationForToken } from "../src/oauth.ts";
 import { sha256Hex } from "../src/caller.ts";
 import { indexPersonalAccessToken, newPersonalAccessToken } from "../src/personal-access-token.ts";
-import type { IterateRpcTarget } from "../src/session.ts";
+import type { IterateRpcTarget, SessionCredentials } from "../src/session.ts";
 import { publishConfigWorker } from "../e2e/support/config-worker.ts";
 import { adminSession, controlPlane, loginPassword, ORIGIN, stub } from "./support.ts";
 
@@ -300,7 +300,8 @@ test("a device's key is listed as the device; an expiring key is refused past it
     clientDomain: "kit.test",
     expiresAt: null,
   });
-  const { root: deviceApi } = await rpc(device.token, "bearer"); // Kit firmware's form (itx_mount.c)
+  // Kit firmware's form (itx_mount.c): the key on the upgrade AND in-band
+  const { root: deviceApi } = await rpc(device.token, { type: "bearer", token: device.token });
   expect((await deviceApi.projects.list()).map((row) => row.id)).toEqual([project.id]);
   // login.allowedEmails: a key whose person's email the list stops naming is refused, like a grant
   const addresses = platformAddressesOf(env, new Request(`${ORIGIN}/api`));
@@ -328,6 +329,9 @@ test("a device's key is listed as the device; an expiring key is refused past it
   const expiring = await account.grants.mint({ name: "Month", projects: [project.id], expiresAt });
   expect(expiring).toMatchObject({ expiresAt });
   expect(await call("/api", expiring.token)).not.toMatchObject({ status: 401 });
+  // the key presented in-band names the upgrade's grant: another key on that socket is refused
+  const { root: mixed } = await rpc(device.token, { type: "bearer", token: expiring.token });
+  await expect(mixed.whoami()).rejects.toThrow(/already carries a session/);
   await expect(
     account.grants.mint({ name: "Stale", projects: [project.id], expiresAt: Date.now() + 1000 }),
   ).rejects.toThrow(/at least a minute/);
@@ -520,12 +524,10 @@ async function hostStream(slug: string, bearer: string) {
   return { first, ended, openedAt };
 }
 
-/** `/api` upgraded with `token` on the header, as a script or a device opens it: the root, the
- *  server's close as the client sees it, and when the guard's 30 s re-check was armed. */
-async function rpc(
-  token: string,
-  credential: "from-server-cookie" | "bearer" = "from-server-cookie",
-) {
+/** `/api` upgraded with `token` on the header, as a script or a device opens it, then
+ *  authenticated with `credential`: the root, the server's close as the client sees it, and when the
+ *  guard's 30 s re-check was armed. */
+async function rpc(token: string, credential: SessionCredentials = { type: "from-server-cookie" }) {
   const response = await exports.default.fetch(`${ORIGIN}/api`, {
     headers: { Upgrade: "websocket", Authorization: `Bearer ${token}`, Origin: ORIGIN },
   });
@@ -543,7 +545,7 @@ async function rpc(
     transport[Symbol.dispose]();
   });
   const boundAt = Date.now();
-  return { root: transport.authenticate({ type: credential }), closed, boundAt };
+  return { root: transport.authenticate(credential), closed, boundAt };
 }
 
 /** `/api` opened BARE, as a browser page on another origin opens it: it authenticates in-band. */

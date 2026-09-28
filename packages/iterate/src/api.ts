@@ -19,12 +19,11 @@ import type { IngressRouting } from "./project-ingress.ts";
 import type { StreamEvent, StreamEventInput } from "./stream/processor.ts";
 
 /** What `authenticate` accepts: the browser (its login cookie rode the upgrade), a device or script
- *  (its bearer token did — or, on a socket opened bare, presented here as `token`: a static page on
- *  another origin cannot put a header on a WebSocket), or the operator (the deployment's admin
- *  secret, verified in-band). */
+ *  (its bearer `token`, always presented here: a static page on another origin cannot put a header
+ *  on a WebSocket), or the operator (the deployment's admin secret, verified in-band). */
 export type SessionCredentials =
   | { type: "from-server-cookie" }
-  | { type: "bearer"; token?: string }
+  | { type: "bearer"; token: string }
   | { type: "admin-secret"; secret: string; as?: { email: string } };
 
 /** One page of a context's durable log (`readEvents`). */

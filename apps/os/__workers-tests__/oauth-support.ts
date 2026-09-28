@@ -75,10 +75,7 @@ export function call(path: string, init?: RequestInit) {
   );
 }
 
-export async function rpc(
-  token: string,
-  credential: "from-server-cookie" | "bearer" = "from-server-cookie",
-) {
+export async function rpc(token: string) {
   const response = await call("/api", {
     headers: { Upgrade: "websocket", Authorization: `Bearer ${token}`, Origin: ORIGIN },
   });
@@ -101,7 +98,7 @@ export async function rpc(
   // The guard's 30 s timer is armed when the socket binds its grant — here, for an upgrade's bearer
   // — so a row that measures the interval measures from this instant, not from its own later revoke.
   const boundAt = Date.now();
-  const root = transport.authenticate({ type: credential });
+  const root = transport.authenticate({ type: "from-server-cookie" });
   return { root, closed, boundAt };
 }
 

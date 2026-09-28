@@ -57,8 +57,8 @@ struct iterate_kit_itx_mount_options {
   /**
    * The blob's key field: a personal access token the Kit page minted for the
    * person who set this device up, scoped to this project. The transport
-   * presents it as `Authorization: Bearer` on the upgrade; it is revoked from
-   * that person's sessions list.
+   * presents it as `Authorization: Bearer` on the upgrade and `authenticate`
+   * presents it again in-band; it is revoked from that person's sessions list.
    */
   const char *project_api_key;
   /**
@@ -83,7 +83,7 @@ struct iterate_kit_itx_mount_options {
  *
  * THREE CALLS:
  *
- *   authenticate({type: "bearer"})                 -> the session the upgrade resolved
+ *   authenticate({type: "bearer", token: <key>})   -> the session of that key
  *   projects.get("<project id>")                   -> the project's ROOT itx
  *   provide("<capability match>", <this device>)   -> a rewrite rule handle
  *
