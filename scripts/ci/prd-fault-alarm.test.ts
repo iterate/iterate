@@ -40,8 +40,8 @@ const window = { from: new Date("2026-09-23T07:00:00Z"), to: now };
 const credentials = { accountId: "account", apiToken: "token" };
 const channel = slackChannelIds["#error-pulse"];
 const mentions = "<@U067G4QRFK2> <@U099JH9TAF2>";
-const workersLogsLink =
-  "<https://dash.cloudflare.com/04b3b57291ef2626c6a8daa9d47065a7/workers-and-pages/observability|Workers Logs>";
+const doLine =
+  "Do: open <https://dash.cloudflare.com/04b3b57291ef2626c6a8daa9d47065a7/workers-and-pages/observability|Workers Logs> for these rays; /debug-os-worker";
 
 // ── what a window owes Slack ──
 
@@ -82,8 +82,7 @@ test("a window's page names its causes and totals, and lists each incident with 
         "• visitor 5xx: garple.com 7 · last 07:30 UTC",
         "• visitor 5xx: lispwoso.com 6 · last 07:30 UTC",
         "• errors: internal error; reference = … 2 · last 07:30 UTC",
-        "Do: open Workers Logs for these rays; /debug-os-worker",
-        workersLogsLink,
+        doLine,
       ].join("\n"),
     },
     updates: [],
@@ -174,8 +173,7 @@ test("a repeat edits the page with its running count and posts nothing", () => {
             `🚨 prd: 3 visitor 5xx ${mentions}`,
             "Impact: since 07:28 UTC",
             "• visitor 5xx: lispwoso.com 3 · last 07:43 UTC",
-            "Do: open Workers Logs for these rays; /debug-os-worker",
-            workersLogsLink,
+            doLine,
           ].join("\n"),
           reply: null,
         },
@@ -266,8 +264,7 @@ test("a page whose incidents went a day unseen is resolved: its first line and a
             `✅ resolved: prd: 1 visitor 5xx ${mentions}`,
             "Impact: since 09-23 07:28 UTC",
             "• ✅ visitor 5xx: lispwoso.com 1 · quiet since 09-23 07:28 UTC",
-            "Do: open Workers Logs for these rays; /debug-os-worker",
-            workersLogsLink,
+            doLine,
           ].join("\n"),
           reply: {
             text: `✅ resolved: no sighting for a day, quiet since 09-23 07:28 UTC ${mentions}`,
@@ -343,8 +340,7 @@ test("a deploy's cause is one incident listing its visitor 5xx by host, at most 
     `🚨 prd: deploy reset (os-prd@502616fb), 21 visitor 5xx ${mentions}`,
     "Impact: since 07:30 UTC",
     "• deploy reset (os-prd@502616fb): 21 visitor 5xx on a.com 6, b.com 5, c.com 4, d.com 3, e.com 2 +1 · last 07:30 UTC",
-    "Do: open Workers Logs for these rays; /debug-os-worker",
-    workersLogsLink,
+    doLine,
   ]);
 });
 

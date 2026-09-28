@@ -51,6 +51,7 @@ import {
 } from "../../envs.ts";
 import { saveNewestArtifactFile } from "./depot.ts";
 import {
+  escalationText,
   getSlackClient,
   markResolved,
   onCallMention,
@@ -526,7 +527,10 @@ export function triageIncidents(
       reply: lines
         ? {
             text: [
-              `🚨 prd fault escalated, ${window.from.toISOString().slice(11, 16)}–${window.to.toISOString().slice(11, 16)} UTC ${onCallMention}`,
+              escalationText(
+                `prd fault escalated, ${window.from.toISOString().slice(11, 16)}–${window.to.toISOString().slice(11, 16)} UTC`,
+                testRun,
+              ),
               ...lines,
             ].join("\n"),
             broadcast: true,
@@ -587,8 +591,7 @@ function renderFaultPage(incidents: Record<string, Incident>, now: number, testR
   return pageText({
     what: `prd: ${what}`,
     impact: [`since ${stamp(firstSeen, now)}`, ...bullets, ...more].join("\n"),
-    action: "open Workers Logs for these rays; /debug-os-worker",
-    link: `<https://dash.cloudflare.com/${PRD_ACCOUNT_ID}/workers-and-pages/observability|Workers Logs>`,
+    action: `open <https://dash.cloudflare.com/${PRD_ACCOUNT_ID}/workers-and-pages/observability|Workers Logs> for these rays; /debug-os-worker`,
     testRun,
   });
 }
