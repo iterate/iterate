@@ -1327,6 +1327,30 @@ test("a signed-in person reaches `itx.facets.get(name)` on every context they ho
   );
 });
 
+test("`processors.enable` with changed code configures the new code, and with the same code again appends nothing", async () => {
+  const ctx = "prj_enable_upgrades_source";
+  const enable = (spec: FacetSpec) =>
+    stub(ctx).invoke(["itx", "processors", ["enable", "tally", spec]]);
+  const configured = async () =>
+    (await readLog(ctx)).filter(
+      (event) =>
+        event.type === "events.iterate.com/itx/subscription-configured" &&
+        (event.payload as { name?: string }).name === "tally",
+    ).length;
+  await enable(HELLO_PROCESSOR);
+  await enable(HELLO_PROCESSOR);
+  expect(await configured()).toBe(1);
+  const source = HELLO_PROCESSOR.source as Record<string, string>;
+  const changed: FacetSpec = {
+    ...HELLO_PROCESSOR,
+    source: { "worker.js": `${source["worker.js"]}\n// the next version` },
+  };
+  await enable(changed);
+  expect(await configured()).toBe(2);
+  await enable(changed);
+  expect(await configured()).toBe(2);
+});
+
 test("`processors.enable` of a first-party name off its placement is refused before anything is appended: no row, no facet", async () => {
   const session = await signedInSession("placement-enable@example.com");
   expect(
