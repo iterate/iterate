@@ -968,8 +968,11 @@ const PREVIEW_SUITE_TELEMETRY: Record<"specs" | "preview-e2e", Record<string, st
  *  records evidence (TEST_TELEMETRY_ARTIFACT_DIR): the preview and the deployment its `/version`
  *  answers with. A run against a preview deployed earlier (a dispatch of `test`, `e2e` or `specs`)
  *  tests what that deploy left, not the commit this job checked out
- *  (docs/test-evidence.md#when-deploy-e2e-and-specs-are-separate-jobs). It never fails the run: a
- *  preview that does not answer fails the suites, and the file then has no deploymentId. */
+ *  (docs/test-evidence.md#when-deploy-e2e-and-specs-are-separate-jobs). A preview that does not
+ *  answer fails no run here (the suites fail on it), and the file then has no deploymentId. A file
+ *  that cannot be written fails the job before the suite: the workflows run the job's evidence
+ *  steps, its telemetry completeness check among them, only once this file exists, so a suite run
+ *  without it would pass with its evidence unchecked. */
 async function writeDeployedTarget(previewName: string, apps: TestEvidenceTarget["apps"]) {
   if (!process.env.TEST_TELEMETRY_ARTIFACT_DIR) return;
   const url = previewUrl(previewName);
@@ -989,7 +992,10 @@ async function writeDeployedTarget(previewName: string, apps: TestEvidenceTarget
     mkdirSync(path.dirname(file), { recursive: true });
     writeFileSync(file, `${JSON.stringify(target, null, 2)}\n`);
   } catch (error) {
-    console.warn(`the deployed target was not recorded: ${describe(error)}`);
+    throw new Error(
+      `the deployed target could not be recorded (${testEvidencePaths.target}), and without it the job keeps and checks no evidence: ${describe(error)}`,
+      { cause: error },
+    );
   }
 }
 
@@ -1106,13 +1112,17 @@ async function runSuite(
     // A warm-up still running exits beside the suite's start, not before it.
     void warm?.stop();
   }
-  await writeDeployedTarget(
-    previewName,
-    // the client apps the specs run against; the vitest rows use none
-    suite === "specs"
-      ? ["notes", "voice", "dash", "admin"].map((name) => ({ name, url: appUrl(name) }))
-      : [],
-  );
+  try {
+    await writeDeployedTarget(
+      previewName,
+      // the client apps the specs run against; the vitest rows use none
+      suite === "specs"
+        ? ["notes", "voice", "dash", "admin"].map((name) => ({ name, url: appUrl(name) }))
+        : [],
+    );
+  } catch (error) {
+    throw failed(error);
+  }
   const run = { cwd: suite === "specs" ? REPO_ROOT : ROOT, env: tests.env };
   try {
     // A job that waited for its deploy has the wait's bound in its timeout, and bounds the suite

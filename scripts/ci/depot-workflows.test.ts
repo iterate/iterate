@@ -1003,7 +1003,7 @@ test("Main OS e2e's two suite jobs are one definition, a PR preview's suite step
   const expected = previewSteps
     .map((step) => step.name!)
     .filter((name) => !prOnly.includes(name))
-    .map((name) => (name === "Checkout the tested commit" ? "Checkout main" : name));
+    .map((name) => (name === "Checkout the PR head" ? "Checkout main" : name));
   expect(mainSteps.map((step) => step.name).filter((name) => !mainOnly.includes(name!))).toEqual(
     expected,
   );
