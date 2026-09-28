@@ -42,7 +42,7 @@ export async function handleGatewayRequest(
   socket.accept();
   socket.send(JSON.stringify({ op: "hello", heartbeatIntervalMs: 30_000 }));
   let identified = false;
-  /** `ready` for a token live at its client's current epoch; else `invalid` and the close. */
+  /** `ready` for a live token of the shop's own; else `invalid` and the close. */
   const identify = async (token: unknown) => {
     const access =
       typeof token === "string" ? await petshopOauth(deps).openAccessToken(token) : null;

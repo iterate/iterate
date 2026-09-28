@@ -35,8 +35,8 @@
  *   POST /repos/<o>/<r>/check-runs        a check run, kept (installation token)
  *   GET  /repos/<o>/<r>/commits/<sha>/check-runs[?check_name]   the check runs on a commit
  *
- * An installation is registered with `POST /__backdoor/apps` (state.ts `registerApp`). The OAuth
- * steps are the fakes' one authorization server (authorization-server.ts).
+ * An installation is registered with `POST /__test-controls/apps` (state.ts `registerApp`). The
+ * OAuth steps are the fakes' one authorization server (authorization-server.ts).
  */
 import { z } from "zod";
 import {
@@ -55,7 +55,8 @@ import { DEFAULT_INSTALLATION_ID, fakeUserIdOf, type ShopDeps } from "./state.ts
 export const INSTALLATION_TOKEN_TTL_SECONDS = 60;
 
 /** The `t` of an installation token: a bearer on the installation API and on the pet shop's own
- *  API (worker.ts), bound to the revocation epochs of the App and of its installation. */
+ *  API (worker.ts), bound to its installation's revocation epoch at the App (expire-tokens
+ *  `{ clientId: appId, account: installationId }`). */
 export const INSTALLATION_TOKEN = "github-installation";
 
 /** What an installation token names. */
@@ -94,8 +95,9 @@ export async function handleGithubRequest(
     if (query.request === "1")
       return redirectTo(app.callbackUrl, { setup_action: "request", state: query.state });
     const code = await github.code({
-      clientId: app.oauthClientId || "",
-      grant: { login: query.login || app.users?.[0]?.login || "petshop-user" },
+      clientId: app.oauthClientId,
+      // every installation has a user: its registration names one (AppRegistration) or defaults it
+      grant: { login: query.login || app.users[0]!.login },
     });
     return redirectTo(app.callbackUrl, {
       code,
@@ -199,9 +201,9 @@ export async function handleGithubRequest(
     const state = await deps.state.getState();
     const app = token && state.apps[token.grant.installationId];
     // a repository's routes answer only an installation on its owner
-    if (!token || !app || (repository && repository[1] !== app.account?.login))
+    if (!token || !app || (repository && repository[1] !== app.account.login))
       return badCredentials();
-    const owner = app.account?.login || "petshop-org";
+    const owner = app.account.login;
     const { installationId } = token.grant;
     if (!repository)
       return Response.json({
@@ -212,7 +214,7 @@ export async function handleGithubRequest(
       });
     const [, , repo, route, number, ref] = repository;
     if (request.method === "GET" && number) {
-      const pull = (state.githubPulls?.[installationId] || []).find(
+      const pull = (state.githubPulls[installationId] || []).find(
         (known) => known.owner === owner && known.repo === repo && known.number === Number(number),
       );
       return pull
@@ -235,7 +237,7 @@ export async function handleGithubRequest(
     }
     if (request.method === "GET" && ref) {
       const name = query.check_name;
-      const runs = (state.githubCheckRuns?.[installationId] || []).filter(
+      const runs = (state.githubCheckRuns[installationId] || []).filter(
         (run) =>
           run.owner === owner &&
           run.repo === repo &&
@@ -282,8 +284,8 @@ export async function handleGithubRequest(
   if (membership) {
     const org = decodeURIComponent(membership[1]!);
     const member = apps
-      .filter((app) => app.account?.type === "Organization" && app.account.login === org)
-      .flatMap((app) => app.users || [])
+      .filter((app) => app.account.type === "Organization" && app.account.login === org)
+      .flatMap((app) => app.users)
       .find((candidate) => candidate.login === user.login);
     if (!member) return Response.json({ message: "Not Found" }, { status: 404 });
     return Response.json({ state: "active", role: member.role, organization: { login: org } });
@@ -291,7 +293,7 @@ export async function handleGithubRequest(
   const reachable = apps.filter(
     (app) =>
       app.oauthClientId === token.clientId &&
-      app.users?.some((candidate) => candidate.login === user.login),
+      app.users.some((candidate) => candidate.login === user.login),
   );
   return Response.json({
     total_count: reachable.length,
@@ -308,16 +310,17 @@ export async function handleGithubRequest(
 
 /**
  * The GitHub fake's test controls, or null:
- *   POST /__backdoor/apps                 `registerApp`'s input → register or replace an
- *                                         installation (its App's PUBLIC key; the private key
- *                                         stays with the caller)
- *   POST /__backdoor/apps/fire-webhook    { installationId?, url, event?, badSignature?,
- *                                         deliveryId?, eventName? } → POST `event` to `url` as
- *                                         GitHub delivers a webhook: signed x-hub-signature-256
- *                                         with the installation's webhook secret, named by
- *                                         x-github-delivery and x-github-event
- *   POST /__backdoor/github/pulls         seed a pull request an installation reaches
- *   GET  /__backdoor/github/check-runs?installation=   the check runs it was sent
+ *   POST /__test-controls/apps                `registerApp`'s input → register or replace an
+ *                                             installation (its App's PUBLIC key; the private
+ *                                             key stays with the caller)
+ *   POST /__test-controls/apps/fire-webhook   { installationId?, url, event?, badSignature?,
+ *                                             deliveryId?, eventName? } → POST `event` to `url`
+ *                                             as GitHub delivers a webhook: signed
+ *                                             x-hub-signature-256 with the installation's webhook
+ *                                             secret, named by x-github-delivery and
+ *                                             x-github-event
+ *   POST /__test-controls/github/pulls        seed a pull request an installation reaches
+ *   GET  /__test-controls/github/check-runs?installation=   the check runs it was sent
  */
 export async function handleGithubTestControls(
   request: Request,
@@ -328,12 +331,12 @@ export async function handleGithubTestControls(
   const body = () => request.json().catch(() => null);
   const invalid = (error_description: string) =>
     Response.json({ error: "invalid_request", error_description }, { status: 400 });
-  if (key === "POST /__backdoor/apps") {
+  if (key === "POST /__test-controls/apps") {
     const input = RegisterApp.safeParse(await body());
     if (!input.success) return invalid(`registerApp's input: ${input.error.message}`);
     return Response.json(await deps.state.registerApp(input.data), { status: 201 });
   }
-  if (key === "POST /__backdoor/apps/fire-webhook") {
+  if (key === "POST /__test-controls/apps/fire-webhook") {
     const parsed = FireWebhook.safeParse(await body());
     const installationId = parsed.data?.installationId || DEFAULT_INSTALLATION_ID;
     const app = (await deps.state.getState()).apps[installationId];
@@ -381,19 +384,21 @@ export async function handleGithubTestControls(
       ...delivered,
     });
   }
-  if (key === "GET /__backdoor/github/check-runs") {
+  if (key === "GET /__test-controls/github/check-runs") {
     const installation = url.searchParams.get("installation") || "";
     return Response.json({
-      check_runs: (await deps.state.getState()).githubCheckRuns?.[installation] || [],
+      check_runs: (await deps.state.getState()).githubCheckRuns[installation] || [],
     });
   }
-  if (key !== "POST /__backdoor/github/pulls") return null;
+  if (key !== "POST /__test-controls/github/pulls") return null;
   const input = SeedPull.safeParse(await body());
   if (!input.success) return invalid(`a pull request: ${input.error.message}`);
   const { installationId, ...pull } = input.data;
   await deps.state.recordGithubPull(installationId, pull);
   return Response.json({ ok: true });
 }
+
+const InstallationUser = z.object({ login: z.string(), role: z.enum(["admin", "member"]) });
 
 const RegisterApp = z.object({
   publicKeyPem: z.string().min(1),
@@ -409,7 +414,7 @@ const RegisterApp = z.object({
       type: z.enum(["Organization", "User"]).optional(),
     })
     .optional(),
-  users: z.array(z.object({ login: z.string(), role: z.enum(["admin", "member"]) })).optional(),
+  users: z.tuple([InstallationUser], InstallationUser).optional(),
   oauthClientId: z.string().optional(),
 });
 

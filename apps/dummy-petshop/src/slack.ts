@@ -120,9 +120,9 @@ export async function handleSlackRequest(
 }
 
 /**
- * The Slack fake's test controls, or null: `GET /__backdoor/slack/messages?team=<id>` lists what
- * was posted; `POST /__backdoor/slack/fire-webhook { url, signingSecret, event, badSignature? }`
- * POSTs `event` to `url` signed the way Slack signs
+ * The Slack fake's test controls, or null: `GET /__test-controls/slack/messages?team=<id>` lists
+ * what was posted; `POST /__test-controls/slack/fire-webhook` with
+ * `{ url, signingSecret, event, badSignature? }` POSTs `event` to `url` signed the way Slack signs
  * (`x-slack-signature: v0=<hex HMAC of "v0:<ts>:<body>">`) and answers the receiver's status and
  * body.
  */
@@ -132,11 +132,11 @@ export async function handleSlackTestControls(
 ): Promise<Response | null> {
   const url = new URL(request.url);
   const key = `${request.method} ${url.pathname}`;
-  if (key === "GET /__backdoor/slack/messages") {
+  if (key === "GET /__test-controls/slack/messages") {
     const team = url.searchParams.get("team") || "";
-    return Response.json({ messages: (await deps.state.getState()).slackMessages?.[team] || [] });
+    return Response.json({ messages: (await deps.state.getState()).slackMessages[team] || [] });
   }
-  if (key !== "POST /__backdoor/slack/fire-webhook") return null;
+  if (key !== "POST /__test-controls/slack/fire-webhook") return null;
   const parsed = FireWebhook.safeParse(await request.json().catch(() => null));
   if (!parsed.success)
     return Response.json(

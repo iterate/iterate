@@ -1,7 +1,7 @@
 /**
  * Token expiry at the fakes' one authorization server (authorization-server.ts), through the
- * Google, Cloudflare and GitHub fakes: one account's tokens of a client, or all of the client's.
- * Why a test expires an account: state.ts `PetshopState.accessTokenEpochs`.
+ * Google, Cloudflare and GitHub fakes: one account's tokens of one client. Why a test expires an
+ * account: state.ts `PetshopState.accessTokenEpochs`.
  */
 import { expect, test } from "vitest";
 import { memoryPetshop } from "./memory-state.ts";
@@ -53,27 +53,6 @@ test.for(SIGN_IN_FAKES)(
     expect(await statusesOf(petshop, fake, tokens)).toEqual({
       ada: 401,
       bo: 200,
-      adaAtAnotherClient: 200,
-    });
-  },
-);
-
-test.for(SIGN_IN_FAKES)(
-  "$name: expiring a client ends every account's tokens of it, and no other client's",
-  async (fake) => {
-    const petshop = memoryPetshop();
-    const minted = await petshop.state.createClient({});
-    const tokens = {
-      ada: await accessTokenOf(petshop, fake, SEEDED, fake.ada),
-      bo: await accessTokenOf(petshop, fake, SEEDED, fake.bo),
-      adaAtAnotherClient: await accessTokenOf(petshop, fake, minted, fake.ada),
-    };
-
-    await petshop.state.expireAccessTokens(DEFAULT_CLIENT_ID);
-
-    expect(await statusesOf(petshop, fake, tokens)).toEqual({
-      ada: 401,
-      bo: 401,
       adaAtAnotherClient: 200,
     });
   },

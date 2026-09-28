@@ -61,10 +61,10 @@ export const petshopExpireTokens = (
 export const petshopExpireGraphqlSessions = (username: string) =>
   petshopExpireTokens("graphql-session-login", username);
 
-/** Revoke `email`'s Tesco-login tokens: each account signs in as a client of its own,
- *  `tesco-login:<email>` (apps/dummy-petshop/src/tesco-login.ts). */
+/** Revoke `email`'s Tesco-login tokens: they belong to the client `tesco-login`, the email their
+ *  account (apps/dummy-petshop/src/tesco-login.ts). */
 export const petshopExpireTescoTokens = (email: string) =>
-  petshopExpireTokens(`tesco-login:${email}`, email);
+  petshopExpireTokens("tesco-login", email);
 
 /** The Tesco-shaped two-step login at the shop as a secret's exchange code (`refresh: { kind:
  *  "worker", source }`): the form's CSRF token and the cookie that binds it, then the form, with the

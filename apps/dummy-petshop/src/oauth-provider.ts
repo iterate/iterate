@@ -8,11 +8,13 @@
  *   GET  /oauth/authorize    ?client_id&redirect_uri&state[&code_challenge][&user=<name>]: consent at
  *                            once, a code for `user` (default "Demo User")
  *   POST /oauth/token        authorization_code | refresh_token; each refresh answers a new refresh
- *                            token. Scheduled failures (`/__backdoor/fail-token-endpoint`) answer 500
+ *                            token. Scheduled failures (`/__test-controls/fail-token-endpoint`)
+ *                            answer 500
  *   POST /api/legacy-login   {email, password: "correct-horse"} → {accessToken, expiresInSeconds}:
  *                            no refresh token, logging in again is the refresh
  *
- * Its access tokens (and the Tesco-shaped login's, tesco-login.ts) are the pets API's bearer.
+ * Its access tokens (and the Tesco-shaped and GraphQL logins', tesco-login.ts and graphql-login.ts)
+ * are the pets API's bearer.
  */
 import { z } from "zod";
 import { fakeAuthorizationServer, redirectTo, tokenClient } from "./authorization-server.ts";
@@ -107,7 +109,7 @@ export async function handleOauthProviderRequest(
     if (await deps.state.consumeTokenEndpointFailure(client.clientId))
       return oauthError(
         "temporarily_unavailable",
-        "scheduled by POST /__backdoor/fail-token-endpoint",
+        "scheduled by POST /__test-controls/fail-token-endpoint",
         500,
       );
     let grant: PetshopGrant;

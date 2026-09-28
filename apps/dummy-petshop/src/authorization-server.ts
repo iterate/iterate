@@ -4,18 +4,13 @@
  * their provider's shapes. Consent is at once: authorize redirects with a sealed single-use code.
  * The exchange checks the code's client, expiry, redirect URI (RFC 6749 §4.1.3) and PKCE (RFC 7636,
  * required of a public client), then spends it. Access tokens expire and carry the revocation
- * epochs of their client and of their account at it, so the shop's expire-tokens route (worker.ts)
- * forces a 401 for one account's tokens of a client, or for all of the client's; refresh tokens
- * never expire and are revoked one by one. Every code and token is a sealed blob (seal.ts) whose `t` names its provider
- * and kind, and whose `grant` is what the provider knows of it (an account, its scopes).
+ * epoch of their account at their client, so the shop's expire-tokens control (test-controls.ts)
+ * forces a 401 for one account's tokens of a client; refresh tokens never expire and are revoked
+ * one by one. Every code and token is a sealed blob (seal.ts) whose `t` names its provider and
+ * kind, and whose `grant` is what the provider knows of it (an account, its scopes).
  */
 import { nowSeconds, pkceS256, seal, unseal } from "./seal.ts";
-import {
-  accessTokenEpochFor,
-  accountRevocationKey,
-  type OauthClient,
-  type ShopDeps,
-} from "./state.ts";
+import { accessTokenEpochFor, type OauthClient, type ShopDeps } from "./state.ts";
 
 /** How long a code lives: GitHub's ten minutes, for every provider. */
 const CODE_TTL_SECONDS = 600;
@@ -47,9 +42,7 @@ export interface AccessToken<Grant> {
   clientId: string;
   /** Whose token it is at the provider: its email, login or name. */
   account: string;
-  /** The client's revocation epoch at mint. */
-  epoch: number;
-  /** The account's revocation epoch at `clientId` at mint (`accountRevocationKey`). */
+  /** The account's revocation epoch at `clientId` at mint (state.ts `accessTokenEpochs`). */
   accountEpoch: number;
   exp: number;
   grant: Grant;
@@ -62,9 +55,9 @@ export interface RefreshToken<Grant> {
   grant: Grant;
 }
 
-/** A sealed access token of type `t`: `grant` for `account` at `clientId`, at the client's and
- *  the account's revocation epochs now, for `ttlSeconds`. The servers' access tokens and the GitHub
- *  fake's installation tokens. */
+/** A sealed access token of type `t`: `grant` for `account` at `clientId`, at the account's
+ *  revocation epoch now, for `ttlSeconds`. The servers' access tokens and the GitHub fake's
+ *  installation tokens. */
 export async function sealAccessToken<Grant>(
   deps: ShopDeps,
   t: string,
@@ -76,16 +69,15 @@ export async function sealAccessToken<Grant>(
   const token: AccessToken<Grant> = {
     t,
     ...holder,
-    epoch: accessTokenEpochFor(state, holder.clientId),
-    accountEpoch: accessTokenEpochFor(state, accountRevocationKey(holder.clientId, holder.account)),
+    accountEpoch: accessTokenEpochFor(state, holder),
     exp: nowSeconds() + ttlSeconds,
     grant,
   };
   return seal(token, deps.sealKey);
 }
 
-/** A live access token of type `t`: unexpired, at its client's and its account's current epochs.
- *  Null for anything else. */
+/** A live access token of type `t`: unexpired, at its account's current epoch. Null for anything
+ *  else. */
 export async function openAccessToken<Grant>(
   deps: ShopDeps,
   t: string,
@@ -94,10 +86,7 @@ export async function openAccessToken<Grant>(
   const access = await unseal<AccessToken<Grant>>(token, deps.sealKey);
   if (access?.t !== t || access.exp <= nowSeconds()) return null;
   const state = await deps.state.getState();
-  if (access.epoch !== accessTokenEpochFor(state, access.clientId)) return null;
-  const accountKey = accountRevocationKey(access.clientId, access.account);
-  if (access.accountEpoch !== accessTokenEpochFor(state, accountKey)) return null;
-  return access;
+  return access.accountEpoch === accessTokenEpochFor(state, access) ? access : null;
 }
 
 /** The client a token request authenticates as: HTTP Basic (RFC 6749 §2.3.1), or `client_id` and
@@ -159,7 +148,7 @@ export function fakeAuthorizationServer<Grant>(
     async authorizeRefusal(clientId: string, redirectUri: string): Promise<Response | null> {
       const client = (await deps.state.getState()).clients[clientId];
       const refusal = !client
-        ? `unknown client_id ${JSON.stringify(clientId)} — mint one via POST /__backdoor/clients`
+        ? `unknown client_id ${JSON.stringify(clientId)} — mint one via POST /__test-controls/clients`
         : !URL.canParse(redirectUri)
           ? "redirect_uri must be an absolute URL"
           : client.redirectUris?.length && !client.redirectUris.includes(redirectUri)

@@ -1054,8 +1054,10 @@ test.for<{ name: string; installation: InstallationInput; refusal: string }>([
 test("GitHub: a callback with an installation but no code sends the human on to authorize, and that authorization connects", async () => {
   const member = await projectWithMember("github-setup-url");
   const petshop = petshopFakes();
-  const users = [{ login: "petshop-user", role: "admin" as const }];
-  await registerIterateInstallation(petshop, { installationId: "9201", users });
+  await registerIterateInstallation(petshop, {
+    installationId: "9201",
+    users: [{ login: "petshop-user", role: "admin" }],
+  });
   const { authorizationUrl } = await projectFacet(member.itx).connectIntegration({
     provider: "github",
     connection: "acme",
