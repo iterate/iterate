@@ -221,33 +221,34 @@ test("an incident grown tenfold since the channel last heard is broadcast in its
   });
 });
 
-test("an incident back after an hour's quiet is broadcast once; back again within six hours it only edits", () => {
-  const first = triageAt("07:30", reading5xx(1), null);
+test("an incident back in a burst after an hour's quiet is broadcast; a lone return, or a burst within six hours, only edits", () => {
+  const quietHour = (state: AlarmState, from: number) =>
+    [0, 15, 30, 45, 60].reduce(
+      (quieter, minutes) => triageAt(clock(from + minutes), quiet, quieter).next,
+      state,
+    );
+  const first = triageAt("07:30", reading5xx(5), null);
   // Four quiet windows: the page says so, by an edit.
-  const quietHour = ["07:45", "08:00", "08:15", "08:30"].reduce(
-    (state, hhmm) => triageAt(hhmm, quiet, state).next,
-    first.next,
+  const quietOnce = quietHour(first.next, 7 * 60 + 45);
+  expect(quietOnce.pages[0]!.text).toContain(
+    "• visitor 5xx: lispwoso.com 5 · quiet since 07:28 UTC",
   );
-  expect(quietHour.pages[0]!.text).toContain(
-    "• visitor 5xx: lispwoso.com 1 · quiet since 07:28 UTC",
-  );
-  const back = triageAt("08:45", reading5xx(1), quietHour);
-  const quietAgain = ["09:00", "09:15", "09:30", "09:45", "10:00"].reduce(
-    (state, hhmm) => triageAt(hhmm, quiet, state).next,
-    back.next,
-  );
-  const backAgain = triageAt("10:15", reading5xx(1), quietAgain);
+  const lone = triageAt("09:00", reading5xx(1), quietOnce);
+  const burst = triageAt("10:30", reading5xx(10), quietHour(lone.next, 9 * 60 + 15));
+  const burstAgain = triageAt("12:00", reading5xx(10), quietHour(burst.next, 10 * 60 + 45));
   expect({
-    back: back.triage.updates.map((update) => update.reply),
-    backAgain: backAgain.triage.updates.map((update) => update.reply),
+    lone: lone.triage.updates.map((update) => update.reply),
+    burst: burst.triage.updates.map((update) => update.reply),
+    burstAgain: burstAgain.triage.updates.map((update) => update.reply),
   }).toEqual({
-    back: [
+    lone: [null],
+    burst: [
       {
-        text: `🚨 prd fault escalated, 08:28–08:43 UTC ${mentions}\n• back after quiet since 07:28 UTC: visitor 5xx: lispwoso.com 1`,
+        text: `🚨 prd fault escalated, 10:13–10:28 UTC ${mentions}\n• back after quiet since 08:58 UTC: visitor 5xx: lispwoso.com 10`,
         broadcast: true,
       },
     ],
-    backAgain: [null],
+    burstAgain: [null],
   });
 });
 
@@ -341,6 +342,39 @@ test("a deploy's cause is one incident listing its visitor 5xx by host, at most 
     "Impact: since 07:30 UTC",
     "• deploy reset (os-prd@502616fb): 21 visitor 5xx on a.com 6, b.com 5, c.com 4, d.com 3, e.com 2 +1 · last 07:30 UTC",
     doLine,
+  ]);
+});
+
+test.for([
+  {
+    name: "a scanner's paths on one host",
+    message: "GET https://est-01k4yj6assfqfshsahjshe9pdp.iterate.com/.env?x=1",
+    label: "GET https://est-01k4yj6assfqfshsahjshe9pdp.iterate.com/…",
+  },
+  {
+    name: "a workerd reference",
+    message: "internal error; reference = m6mc1rpui1cli5qkt7sqpp87",
+    label: "internal error; reference = …",
+  },
+  {
+    name: "an event id",
+    message: 'idempotency key "slack-webhook:Ev0C495GFWQ0" already names a different event',
+    label: 'idempotency key "slack-webhook:…" already names a different event',
+  },
+  {
+    name: "a stack's frames",
+    message: "stream processor registry alarm arming failed     at index.js:18313:27",
+    label: "stream processor registry alarm arming failed",
+  },
+  {
+    name: "an alarm's scheduled time",
+    message: "Mon Sep 21 2026 17:05:08 GMT+0000 (Coordinated Universal Time)",
+    label: "a Durable Object alarm failed",
+  },
+  { name: "a message with neither", message: "call timed out", label: "call timed out" },
+])("an error is keyed by what it says, not its ids and places: $name", ({ message, label }) => {
+  expect([...incidentsOf({ ...quiet, errors: [[message, 1]] }).values()]).toEqual([
+    { what: "errors", label, count: 1, hosts: {} },
   ]);
 });
 
@@ -1259,6 +1293,11 @@ function triageAt(
     pins: {},
   };
   return { triage, next };
+}
+
+/** `minutes` after midnight as HH:MM. */
+function clock(minutes: number) {
+  return `${String(Math.floor(minutes / 60)).padStart(2, "0")}:${String(minutes % 60).padStart(2, "0")}`;
 }
 
 /** The bullets of a summary's page: its incidents. */

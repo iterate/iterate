@@ -7,8 +7,8 @@
 // host, a healed facet's name or an error message. The incidents a run opens share one page
 // (slack.ts pageText), which later runs edit in place with each incident's running count and when
 // it was last seen. The page's thread hears only of a change of state, each reply mentioning Jonas
-// and Misha: an incident grown tenfold or back after an hour's quiet (both broadcast to the
-// channel), and the page's resolution once its last incident has gone a day unseen. An incident
+// and Misha: an incident grown tenfold or back in a burst after an hour's quiet (both broadcast to
+// the channel), and the page's resolution once its last incident has gone a day unseen. An incident
 // seen after it closed opens a new page.
 //
 // The memory is the run's `prd-fault-alarm-state` artifact: where the next read starts, and the
@@ -133,10 +133,14 @@ export type LogWindow = { from: Date; to: Date };
 const HOUR_MS = 3_600_000;
 /** An incident unseen this long closes; a page whose incidents have all closed is resolved. */
 const CLOSE_AFTER_MS = 24 * HOUR_MS;
-/** An incident unseen this long (four windows) is quiet: the page says so, and its next sighting
- *  is a change of state the channel hears, at most once per BACK_EVERY_MS. */
+/** An incident unseen this long (four windows) is quiet: the page says so. Its return in a burst
+ *  is a change of state the channel hears, at most once per BACK_EVERY_MS; a sporadic error's next
+ *  lone sighting only edits the page. */
 const QUIET_AFTER_MS = HOUR_MS;
 const BACK_EVERY_MS = 6 * HOUR_MS;
+/** A burst: this many sightings in one window. A lone blip heals a call or three (2026-09-23 ran
+ *  ~1,800 heals); a sporadic error recurs one at a time. */
+const BURST = 10;
 
 /** One open or closed incident on a page. `told` is the count the channel last heard; `back` when
  *  the channel last heard it was back after a quiet hour. `hosts` are a cause's visitor 5xx by host. */
@@ -408,8 +412,7 @@ export function incidentsOf(reading: FaultReading) {
   // prd answers no 5xx on purpose since #2844
   for (const [url, count] of reading.serverErrors)
     add({ what: "visitor 5xx", label: host(url), count, hosts: {} });
-  // a lone blip heals a call or three; 2026-09-23 ran ~1,800
-  if (reading.heals.reduce((sum, [, n]) => sum + n, 0) >= 10)
+  if (reading.heals.reduce((sum, [, n]) => sum + n, 0) >= BURST)
     for (const [name, count] of reading.heals)
       add({ what: "platform-failure heals", label: name, count, hosts: {} });
   const pagers = Object.fromEntries(reading.pagers);
@@ -417,16 +420,21 @@ export function incidentsOf(reading: FaultReading) {
   const recovered =
     (pagers["rpc-stub-pager-redialed"] ?? 0) > 0 &&
     (pagers["rpc-stub-pager-redial-failed"] ?? 0) === 0;
-  // A failed invocation's summary is its request line: one incident per method and host, not per
-  // path — a scanner's paths (2026-09-24: ~4,300 across 17 project hosts) would otherwise each
-  // open an incident. An alarm's summary is the time it was scheduled for: one incident for all.
+  // An error is keyed by what it says, not by the ids and places in it. A failed invocation's
+  // summary is its request line: one incident per method and host, not per path — a scanner's
+  // paths (2026-09-24: ~4,300 across 17 project hosts) would otherwise each open an incident. An
+  // alarm's summary is the time it was scheduled for: one incident for all. A stack's frames move
+  // with every deploy, and an id (a reference, an event, a project) is new with every error.
   for (const [message, count] of reading.errors) {
     if (recovered && RECOVERED_BY_REDIAL.some((pattern) => pattern.test(message))) continue;
-    const label = message
-      .replace(ALARM_SUMMARY, "a Durable Object alarm failed")
-      .replace(/^([A-Z]+ https?:\/\/[^/?#\s]+)\S*$/u, "$1/…")
-      .replace(/reference = \w+/gu, "reference = …")
-      .slice(0, 80);
+    const requestLine = /^([A-Z]+ https?:\/\/[^/?#\s]+)\S*$/u.exec(message);
+    const label = requestLine
+      ? `${requestLine[1]}/…`
+      : message
+          .replace(ALARM_SUMMARY, "a Durable Object alarm failed")
+          .replace(/(?<=\S)\s{2,}at\s.*$/su, "")
+          .replace(/[\w-]*\d[\w-]*/gu, (token) => (token.length >= 8 ? "…" : token))
+          .slice(0, 80);
     add({ what: "errors", label, count, hosts: {} });
   }
   return incidents;
@@ -448,8 +456,8 @@ type PageUpdate = {
 /**
  * What a window owes Slack. Each incident it sees that is open on a page counts there: the page is
  * edited with the running count, and its thread hears of a change of state — grown tenfold since
- * the channel last heard, or back after an hour's quiet (at most every six hours) — broadcast to the
- * channel. An incident unseen for a day closes; a page whose incidents all closed is marked
+ * the channel last heard, or back in a burst after an hour's quiet (at most every six hours) —
+ * broadcast to the channel. An incident unseen for a day closes; a page whose incidents all closed is marked
  * resolved and its thread says so. The incidents with no open page open one new page. `pages` is
  * the next state's open pages, the new one to be added once posted. Pure.
  */
@@ -486,7 +494,11 @@ export function triageIncidents(
     if (count >= 10 * incident.told) {
       lines.push(`• grew tenfold: ${describe({ ...incident, count })}`);
       incident.told = count;
-    } else if (quiet && (!incident.back || now - Date.parse(incident.back) >= BACK_EVERY_MS)) {
+    } else if (
+      quiet &&
+      sighting.count >= BURST &&
+      (!incident.back || now - Date.parse(incident.back) >= BACK_EVERY_MS)
+    ) {
       lines.push(
         `• back after quiet since ${stamp(incident.lastSeen, now)}: ${describe({ ...incident, ...sighting })}`,
       );
