@@ -590,7 +590,7 @@ test("public protocol origins: a preview's admin sign-in (admin-sign-in.ts) asks
     at: `${PRD}/oauth2/auth`,
     clientId: `${PR123}/.auth/admin-sign-in/client.json`,
     resource: [`${PRD}/oauth2/userinfo`],
-    cookies: ["__Host-iterate-admin-sign-in"],
+    cookies: ["__Host-itx-admin-sign-in"],
   });
 });
 
