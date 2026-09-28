@@ -2,22 +2,19 @@
 # account, apps/os and each app on top, `pr<n>-<sha7>-<app>` (envs.ts `previewDeployment`), deployed
 # by the same build and `wrangler deploy` as prd. The script is apps/os/scripts/preview.ts. Five
 # jobs, each a check named for what it proves:
-#   Deploy preview      every push: first whether the PR changes a preview path
-#                       (scripts/ci/preview-paths.ts `previewPaths`); a PR that changes none deploys
-#                       nothing and passes, and so does a push after which both suites inherit an
-#                       earlier head's green (scripts/ci/preview-inherit.ts). Otherwise it deploys
-#                       the PR merged into main (the run's own commit, the merge commit Depot read
-#                       this file from; the head alone on a dispatch whose PR conflicts,
-#                       scripts/ci/preview-tested-commit.ts) as `pr<n>-<sha7>`: only what that
-#                       commit changed since the PR's or main's newest full deployment, which it
-#                       reuses for the rest (apps/os/scripts/preview-reuse.ts), and it hands its plan
-#                       to the suites as an artifact. It folds the PR body's section into a previous
-#                       commit's first, and writes its own section (the workers and their sign-in
-#                       links) once it has landed. Its outputs `deployment` and `reuses` are what
-#                       the cleanup deletes around
+#   Deploy preview      every push: first whether both suites inherit an ancestor's green, the push
+#                       having changed nothing either depends on (scripts/ci/preview-inherit.ts);
+#                       then it deploys nothing and passes. Otherwise it deploys the PR's head as
+#                       `pr<n>-<sha7>`: only what the head changed since its nearest ancestor with a
+#                       full deployment, the PR's own or main's, which it reuses for the rest
+#                       (apps/os/scripts/preview-reuse.ts), and it hands its plan to the suites as an
+#                       artifact. It folds the PR body's section into a previous commit's first, and
+#                       writes its own section (the workers and their sign-in links) once it has
+#                       landed. Its outputs `deployment` and `reuses` are what the cleanup deletes
+#                       around
 #   E2E tests           beside Deploy preview from the start, set up while it deploys, then waiting
-#                       for it (scripts/ci/await-deploy.ts): the vitest e2e suite against the
-#                       deployment of the commit it checked out, then its test telemetry and flake
+#                       for it (scripts/ci/await-deploy.ts): the vitest e2e suite against the plan
+#                       that deploy uploaded, then its test telemetry and flake
 #                       records. The rows tagged `slow` run only when the PR carries the `slow-e2e`
 #                       label or edits one of them (SLOW_ROW_PATHS) (docs/testing.md#slow-rows)
 #   Browser specs       beside E2E tests: the Playwright specs, the same way, and the Playwright
@@ -32,10 +29,10 @@
 #
 # E2E TESTS AND BROWSER SPECS ARE REQUIRED CHECKS (docs/pull-requests.md), so each reports on every
 # pull request, and the workflow has no `paths` filter: GitHub leaves a required check "Pending" when
-# a filter skips its workflow. A PR that changes no preview path passes both as soon as each has
-# decided so, from the same commit and rule as Deploy preview. One that does, whose Deploy preview did
-# not finish, gets both red, never skipped: each fails when its wait sees the deploy fail, be
-# cancelled or skipped.
+# a filter skips its workflow. A suite whose push changed nothing it depends on since an ancestor's
+# green passes as soon as it has decided so, by the same rule as Deploy preview. One that runs,
+# whose Deploy preview did not finish, is red, never skipped: it fails when its wait sees the deploy
+# fail, be cancelled or skipped.
 # Closing the PR deletes every deployment it has (preview-delete.yml); the nightly sweep of those
 # whose PR closed without a delete, or that went stale, is preview-sweep.yml. What each push leaves
 # behind, and what deletes it, whether the push before it deployed, failed or was cancelled:
@@ -137,14 +134,12 @@ jobs:
     # Its size: docs/depot-ci.md#reliability-defaults.
     runs-on: depot-ubuntu-24.04-8
     timeout-minutes: 40
-    # THE COMMIT THIS RUN TESTS, for the trace job: the PR merged into main
-    # (scripts/ci/preview-tested-commit.ts), so it traces with the scripts of the commit deployed
-    # here, and the deployment's name, `pr<n>-<sha7>` of it, for the cleanup. `preview` is false for
-    # a PR that changes no preview path. The suites, which start beside this job, work all three out
-    # themselves, by the same rules.
+    # THE COMMIT THIS RUN TESTS, for the trace job and the cleanup: the PR's head, as pushed, and
+    # the deployment's name, `pr<n>-<sha7>` of it. `preview` is false when both suites inherit an
+    # ancestor's green. The suites, which start beside this job, work both out themselves, by the
+    # same rules.
     outputs:
       tested-sha: ${{ steps.tested.outputs.sha }}
-      head-sha: ${{ steps.tested.outputs.head-sha }}
       preview: ${{ steps.changes.outputs.preview }}
       deployment: ${{ steps.deploy.outputs.deployment }}
       reuses: ${{ steps.deploy.outputs.reuses }}
@@ -153,30 +148,21 @@ jobs:
         uses: actions/checkout@v4
         with:
           ref: ${{ github.event.pull_request.head.sha || format('refs/pull/{0}/head', inputs.pull-request-number) }}
-      # The preview proves what main will be after the merge: on a push, this run's own commit (the
-      # merge commit this workflow file was read from, so the code and the workflow are one tree);
-      # on a dispatch, GitHub's current test merge commit, or the head alone when there is none (a
-      # conflict), which the PR body then says.
-      - name: Check out the PR merged into main
+      - name: Record the commit this run tests
         id: tested
-        env:
-          PREVIEW_PR_NUMBER: ${{ env.PR_NUMBER }}
-          PREVIEW_RUN_SHA: ${{ github.event_name == 'pull_request' && github.sha || '' }}
-        run: node scripts/ci/preview-tested-commit.ts
-      # A push that changes no preview path deploys nothing, and the steps after this skip; so does
-      # one after which both suites inherit an earlier head's green, having changed nothing either
-      # depends on (scripts/ci/preview-inherit.ts). A dispatch deploys whatever it changes. This and
-      # the step before run on the stock image's own Node, before the setup: the PR head they start
-      # from may predate it.
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      # A push after which both suites inherit an ancestor's green, having changed nothing either
+      # depends on (scripts/ci/preview-inherit.ts), deploys nothing, and the steps after this skip. A
+      # dispatch deploys. It runs on the stock image's own Node, before the setup: the head may
+      # predate it.
       - name: Decide whether this push needs the preview
         id: changes
         if: github.event_name == 'pull_request'
         env:
           GITHUB_TOKEN: ${{ github.token }}
           PREVIEW_PR_NUMBER: ${{ env.PR_NUMBER }}
-          PREVIEW_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           PREVIEW_SUITES: e2e specs
-        run: node scripts/ci/preview-paths.ts changes
+        run: node scripts/ci/preview-inherit.ts
       - name: Setup
         if: steps.changes.outputs.preview != 'false'
         uses: ./.depot/actions/setup
@@ -193,7 +179,7 @@ jobs:
           GITHUB_REPOSITORY: ${{ github.repository }}
           APPS: ${{ inputs.apps || 'all' }}
           # the PR head, which a template-changing PR's quick-launch links read the template at
-          PREVIEW_HEAD_SHA: ${{ steps.tested.outputs.head-sha }}
+          PREVIEW_HEAD_SHA: ${{ steps.tested.outputs.sha }}
         run: doppler run --project os --config preview -- pnpm preview deploy --pr "$PR_NUMBER" --apps "$APPS"
       # THE PLAN THE SUITES TEST (apps/os/scripts/preview.ts `planOfThisRun`): which deployment serves
       # apps/os and each app, this run's own or the earlier one it reuses (preview-reuse.ts). They
@@ -218,11 +204,11 @@ jobs:
   # STARTED WITH THE RUN, NOT AFTER THE DEPLOY: no `needs:`. Each sets its suite up while Deploy
   # preview deploys, then waits for that job (PREVIEW_AWAIT_DEPLOY_JOB), as
   # docs/depot-ci.md#suites-start-with-the-run explains. Each works out itself, by Deploy preview's
-  # own rules, whether the PR changes a preview path and which commit to test, and so which
-  # deployment: `pr<n>-<sha7>` of that commit (apps/os/scripts/preview.ts `main`).
+  # own rule, whether it inherits; one that runs tests the plan that deploy uploaded
+  # (apps/os/scripts/preview.ts `planOfThisRun`).
   #
-  # REQUIRED CHECKS: each is skipped only on a dispatch of the other suite alone. On a PR that changes
-  # no preview path it passes once it has decided so. It fails red when there is no preview to test:
+  # REQUIRED CHECKS: each is skipped only on a dispatch of the other suite alone. On a push it
+  # inherits for, it passes once it has decided so. It fails red when there is no preview to test:
   # a deploy that failed or was cancelled (its wait), or a dispatch that names none (its first step).
   # Its evidence steps run once its suite read the deployed target (test-results/target.json), so a
   # job that never had a preview keeps none.
@@ -272,42 +258,27 @@ jobs:
           echo "This dispatch names no preview to test, so there is none: pass pull-request-number,"
           echo "or preview-name with action test, e2e or specs."
           exit 1
-      # THE COMMIT DEPLOY PREVIEW DEPLOYS, by Deploy preview's own two steps: the PR's head, then the
-      # PR merged into main (scripts/ci/preview-tested-commit.ts). On a push that is the run's own
-      # commit whenever it merges this head, and otherwise the merge GitHub has rebuilt since, which
-      # the deploy resolves the same way. A preview by name is tested from the dispatched ref.
+      # THE COMMIT DEPLOY PREVIEW DEPLOYS: the PR's head. A preview by name is tested from the
+      # dispatched ref.
       - name: Checkout the PR head
         uses: actions/checkout@v4
         with:
           ref: ${{ github.event.pull_request.head.sha || (inputs.pull-request-number != '' && format('refs/pull/{0}/head', inputs.pull-request-number)) || github.sha }}
-      # On the stock image's own Node, before the setup, which the PR head may predate.
-      - name: Check out the PR merged into main
-        id: tested
-        if: >-
-          github.event_name == 'pull_request' ||
-          (github.event_name == 'workflow_dispatch' && inputs.pull-request-number != '')
-        env:
-          PREVIEW_PR_NUMBER: ${{ env.PR_NUMBER }}
-          PREVIEW_RUN_SHA: ${{ github.event_name == 'pull_request' && github.sha || '' }}
-        run: node scripts/ci/preview-tested-commit.ts
       # Deploy preview's own step, on the same commit, for this job's suite alone: a push that
-      # changes no preview path, or nothing this suite depends on since a green head, passes here,
-      # testing nothing.
+      # changes nothing this suite depends on since an ancestor's green passes here, testing
+      # nothing. On the stock image's own Node, before the setup, which the head may predate.
       - name: Decide whether this push needs the preview
         id: changes
         if: github.event_name == 'pull_request'
         env:
           GITHUB_TOKEN: ${{ github.token }}
           PREVIEW_PR_NUMBER: ${{ env.PR_NUMBER }}
-          PREVIEW_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           PREVIEW_SUITES: ${{ env.SUITE }}
-        run: node scripts/ci/preview-paths.ts changes
-      # Telemetry is labelled with the PR head, whatever merge commit was tested.
+        run: node scripts/ci/preview-inherit.ts
+      # Telemetry is labelled with the PR head, the commit tested.
       - name: Record the PR head for test telemetry
         if: steps.changes.outputs.preview != 'false'
-        env:
-          HEAD_SHA: ${{ github.event.pull_request.head.sha || steps.tested.outputs.head-sha }}
-        run: echo "TEST_TELEMETRY_HEAD_SHA=${HEAD_SHA:-$(git rev-parse HEAD)}" >> "$GITHUB_ENV"
+        run: echo "TEST_TELEMETRY_HEAD_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
       # THE SETUP, and beside it the specs' browser, Playwright's headless shell, from Depot Cache
       # (docs/depot-ci.md#depot-cache). The suite's `playwright install --only-shell` fetches it when
       # the restore did not.
@@ -476,7 +447,7 @@ jobs:
   # opening the ci-reports viewer (apps/ci-reports): "CI trace", whose description is the time to
   # green (the last test job's success) or to red (the first failed job), and "Playwright report",
   # the Browser specs job's HTML report. After the three settle, whatever their outcome; never when
-  # none ran, nor for a PR that changes no preview path. Main OS e2e has the same job
+  # none ran, nor for a push after which both suites inherited. Main OS e2e has the same job
   # (scripts/ci/depot-workflows.test.ts keeps them alike).
   trace:
     name: CI trace
@@ -487,15 +458,14 @@ jobs:
     runs-on: depot-ubuntu-24.04
     timeout-minutes: 10
     steps:
-      # The tree deploy tested, which on a push is the one this file was read from, so the tracing
-      # scripts are this workflow's own; the statuses still go on the PR head.
+      # The commit deploy tested, the PR's head; the statuses go on it.
       - name: Checkout the tested commit
         uses: actions/checkout@v4
         with:
           ref: ${{ needs.deploy.outputs.tested-sha || github.event.pull_request.head.sha || (inputs.pull-request-number != '' && format('refs/pull/{0}/head', inputs.pull-request-number)) || github.sha }}
       - name: Record the traced commit
         env:
-          HEAD_SHA: ${{ needs.deploy.outputs.head-sha }}
+          HEAD_SHA: ${{ needs.deploy.outputs.tested-sha }}
         run: echo "CI_TRACE_STATUS_SHA=${HEAD_SHA:-$(git rev-parse HEAD)}" >> "$GITHUB_ENV"
       - name: Setup
         uses: ./.depot/actions/setup

@@ -1,5 +1,5 @@
 {
-  // Node runs some of these files with its own type stripping (preview-tested-commit.ts before
+  // Node runs some of these files with its own type stripping (preview-inherit.ts before
   // install, env-context.ts under preview's trpc-cli): the base's erasableSyntaxOnly rejects syntax
   // it cannot strip.
   "extends": "../tsconfig.base.json",

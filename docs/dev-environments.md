@@ -393,7 +393,7 @@ leased or redeployed in place.
 
 A deployment is a complete, isolated set of plain Workers on the dev/preview
 Cloudflare account, named `<prefix>-<sha7>`: `pr<n>` and the first 7 digits of
-the commit CI tests (the PR merged into main). apps/os is
+the commit CI tests (the PR's head). apps/os is
 `https://pr<n>-<sha7>-os.iterate-dev-preview.workers.dev`, with Durable
 Objects, a D1, KV, R2 and an Artifacts namespace of its own. The six hosted
 clients (Dash, Agents, Notes, Admin, Voice, Kit) are `pr<n>-<sha7>-<app>`: each
@@ -468,28 +468,30 @@ whatever of its members exist, so a half-made one is deleted like a whole one
 
 ### Inherited verdicts and reused deployments
 
-An experiment: two ways a PR run skips what its commit did not change.
-`scripts/ci/preview-units.ts` says what each part depends on.
+An experiment: a PR run tests its head, and skips what the head did not change
+since an ancestor, walking back through the PR's commits and then main's.
+`scripts/ci/preview-units.ts` says what each part depends on. A commit that
+merges main in is a commit like any other, usually one that changes a lot.
 
-- **Inherit.** A suite (E2E tests, Browser specs) whose inputs the push did not
-  change since an earlier head's green passes at once, and its job summary
-  links that run (`scripts/ci/preview-inherit.ts`). When both inherit, nothing
-  deploys. A red is never inherited, and E2E tests never inherits under the
-  `slow-e2e` label.
-- **Reuse.** Deploy preview diffs its commit against the PR's newest full
-  deployment, then main's newest `main-<sha7>`. The first whose apps/os the
-  commit has not changed is reused: the run deploys only the apps it changed,
-  as a partial deployment `pr<n>-<sha7>` whose apps sign in against the reused
-  apps/os (`apps/os/scripts/preview-reuse.ts`). A tests-only PR deploys
-  nothing. The PR body marks each reused row with the deployment it comes
-  from, and the suites test the plan Deploy preview uploads as its
-  `preview-plan` artifact.
+- **Inherit.** A suite (E2E tests, Browser specs) whose inputs did not change
+  since the nearest ancestor with a verdict, green, passes at once, and its job
+  summary links that run (`scripts/ci/preview-inherit.ts`). When both inherit,
+  nothing deploys. A red is never inherited, and E2E tests never inherits
+  under the `slow-e2e` label.
+- **Reuse.** Deploy preview finds the nearest ancestor with a full deployment,
+  the PR's own or main's `main-<sha7>`. When the head did not change apps/os
+  since, it deploys only the apps it changed, as a partial deployment
+  `pr<n>-<sha7>` whose apps sign in against that one's apps/os
+  (`apps/os/scripts/preview-reuse.ts`); a tests-only push deploys nothing. The
+  PR body marks each reused row with the deployment it comes from, and the
+  suites test the plan Deploy preview uploads as its `preview-plan` artifact.
 
 A reused deployment stays while a run may use it: the run's cleanup never
 deletes its plan's `reuses`, a `main-…` deployment stays 45 minutes after a
 newer one was created, and the sweep keeps a PR's newest partial deployment
-beside its newest full one. A test-only dispatch tests a PR's newest full
-deployment.
+beside its newest full one. So a PR branched from a main commit whose
+deployment is gone deploys in full on its first push. A test-only dispatch
+tests a PR's newest full deployment.
 
 ### Main runs
 
@@ -524,10 +526,10 @@ worker (next story).
 
 ### Story 1: CI previews my PR
 
-Every push to a PR runs the **Preview OS** workflow. When the PR touches
-preview-relevant paths (`previewPaths` in `scripts/ci/preview-paths.ts`; see
-[Depot CI](depot-ci.md#which-prs-get-a-preview)), **Deploy preview** deploys
-the tested commit's apps/os and all six clients. It folds the PR body's
+Every push to a PR runs the **Preview OS** workflow. Unless both suites inherit
+an ancestor's green ([Depot CI](depot-ci.md#which-pushes-need-a-preview)),
+**Deploy preview** deploys the PR's head: apps/os and all six clients, or only
+the apps the head changed since its nearest ancestor with a full deployment. It folds the PR body's
 managed section into a `<details>` first, so the links there read as the
 previous commit's, and writes the new deployment's section once it lands: a
 row per worker with its `Sign in ↗` and Cloudflare dashboard links,

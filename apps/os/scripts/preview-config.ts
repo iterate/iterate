@@ -77,9 +77,9 @@ export function resolvePreviewPrefix({ name, prNumber }: { name?: string; prNumb
   return slugifyPreviewName(name);
 }
 
-/** THE DEPLOYMENT a run deploys or tests: `<prefix>-<sha7>` of the commit it tests (the PR merged
- *  into main in CI, scripts/ci/preview-tested-commit.ts), so a push that tests a new commit gets a
- *  new set of workers, and a retry of the same commit redeploys the same set. */
+/** THE DEPLOYMENT a run deploys or tests: `<prefix>-<sha7>` of the commit it tests (a PR's head in
+ *  CI), so a push that tests a new commit gets a new set of workers, and a retry of the same commit
+ *  redeploys the same set. */
 export function previewDeploymentName(prefix: string, commit: string) {
   const name = `${prefix}-${commit.slice(0, 7)}`;
   const deployment = previewDeployment(name);

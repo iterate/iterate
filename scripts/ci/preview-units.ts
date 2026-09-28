@@ -1,9 +1,9 @@
 // scripts/ci/preview-units.ts — WHAT A PREVIEW'S PARTS DEPEND ON, pure. A per-commit deployment
 // (envs.ts `previewDeployment`) has seven units, apps/os and the six apps on top, and two suites
 // test it. Preview OS uses this to skip work a push did not change:
-//   - a suite whose inputs the PR head has not changed since a green head inherits that verdict
+//   - a suite whose inputs the head has not changed since an ancestor's green inherits that verdict
 //     (scripts/ci/preview-inherit.ts)
-//   - a unit the tested commit has not changed since an earlier full deployment's is reused from it
+//   - a unit the head has not changed since an ancestor's full deployment is reused from it
 //     (apps/os/scripts/preview-reuse.ts)
 //
 // A unit's product is exactly what deploys it to prd: its `deploy-<unit>.yml` push `paths:`
@@ -164,13 +164,13 @@ export function changedUnits(files: string[]): PreviewUnit[] {
   );
 }
 
-/** Whether `files` touches anything `suite` depends on: its units' product (the machinery
- *  included) or its own tests. */
-export function touchesSuite(suite: PreviewSuite, files: string[]) {
+/** The files of `files` that `suite` depends on: its units' product (the machinery included) and
+ *  its own tests. */
+export function suiteInputFiles(suite: PreviewSuite, files: string[]) {
   const { units, tests } = previewSuites[suite];
-  return (
-    changedUnits(files).some((unit) => units.includes(unit)) ||
-    files.some((file) => matchesPaths(tests, file))
+  return files.filter(
+    (file) =>
+      changedUnits([file]).some((unit) => units.includes(unit)) || matchesPaths(tests, file),
   );
 }
 

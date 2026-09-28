@@ -591,9 +591,9 @@ test("every Depot job runs on Depot's stock image, and nothing builds an image",
 
 // A step that runs pnpm or the Doppler CLI needs the setup before it; one that runs only Node needs
 // the toolchain's Node (scripts/ci/toolchain.sh node, or start) or the setup: the stock image's own
-// /usr/local/bin/node is Node 22, not .nvmrc's. Preview OS's two scripts that choose the tested
-// commit run on it anyway, before the setup, since the PR head they start from may predate it; they
-// use nothing but Node's builtins.
+// /usr/local/bin/node is Node 22, not .nvmrc's. Preview OS's script that decides whether a push
+// needs its preview (preview-inherit.ts) runs on it anyway, before the setup, since the PR head may
+// predate it; it uses nothing but Node's builtins.
 test("every job sets up the toolchain its steps run before they run it", () => {
   const uses = (tool: string) => new RegExp(`(^|[\\s;&|($])${tool}\\s`, "mu");
   const missing = depotJobs.flatMap(({ file, jobId, job }) => {
@@ -603,9 +603,7 @@ test("every job sets up the toolchain its steps run before they run it", () => {
       const run = step.run || "";
       const problem =
         ((uses("pnpm").test(run) || uses("doppler").test(run)) && !full) ||
-        (uses("node").test(run) &&
-          !node &&
-          !/^node scripts\/ci\/preview-(tested-commit|paths)\.ts( changes)?$/u.test(run));
+        (uses("node").test(run) && !node && run !== "node scripts/ci/preview-inherit.ts");
       if (step.uses === setupAction) node = full = true;
       if (/^bash scripts\/ci\/toolchain\.sh (node|start)$/u.test(run)) node = true;
       return problem ? [`${file} ${jobId}: ${step.name || run}`] : [];
@@ -1016,7 +1014,6 @@ test("Main OS e2e's two suite jobs are one definition, a PR preview's suite step
     "Require a preview to test",
     "Decide whether this push needs the preview",
     "Record the PR head for test telemetry",
-    "Check out the PR merged into main",
   ];
   // main saves the specs' browser for the next runs, PRs' included (docs/depot-ci.md#depot-cache)
   const mainOnly = ["Save Playwright's browser"];

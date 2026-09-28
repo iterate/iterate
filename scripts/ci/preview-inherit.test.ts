@@ -26,7 +26,10 @@ test.for<{
     { name: "a push after one that pushed two commits", suite: "e2e", commits: [green("c2", ["docs/x.md"]), { sha: "c1" }, green("c0", ["docs/x.md"])], expected: { inherit: true, from: "c2" } },
     { name: "a run still going on the commit before", suite: "e2e", commits: [{ sha: "c2", check: { status: "in_progress", conclusion: null } }, green("c1", ["docs/x.md"])], expected: { inherit: true, from: "c1" } },
     { name: "a dispatch of the other suite skipped this one", suite: "specs", commits: [{ sha: "c2", check: { conclusion: "skipped" } }, red("c1")], expected: { inherit: false } },
-    { name: "the first push", suite: "e2e", commits: [], expected: { inherit: false } },
+    { name: "the first push of a PR with no product change: main's green where it branched", suite: "e2e", commits: [{ sha: "c1" }, green("m1", ["docs/x.md", "tasks/y.md"])], expected: { inherit: true, from: "m1" } },
+    { name: "the first push of a PR that changes apps/os", suite: "e2e", commits: [{ sha: "c1" }, green("m1", ["apps/os/src/worker.ts"])], expected: { inherit: false } },
+    { name: "a push after merging main in, which changed apps/os", suite: "e2e", commits: [{ sha: "merge" }, green("c1", ["apps/os/src/worker.ts", "docs/x.md"])], expected: { inherit: false } },
+    { name: "no ancestor with a verdict", suite: "e2e", commits: [], expected: { inherit: false } },
     { name: "GitHub cannot list every changed file", suite: "e2e", commits: [green("c1", undefined)], expected: { inherit: false } },
     { name: "the slow-e2e label, E2E tests", suite: "e2e", labels: ["slow-e2e"], commits: [green("c1", ["docs/x.md"])], expected: { inherit: false } },
     { name: "the slow-e2e label, Browser specs", suite: "specs", labels: ["slow-e2e"], commits: [green("c1", ["docs/x.md"])], expected: { inherit: true, from: "c1" } },
@@ -42,6 +45,7 @@ test.for<{
       const check = bySha.get(sha)?.check;
       return (
         check && {
+          name: "Preview OS / E2E tests",
           status: "completed",
           conclusion: "success",
           url: `https://github.com/run/${sha}`,

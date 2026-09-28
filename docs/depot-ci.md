@@ -399,10 +399,10 @@ After its checkout, a job runs `uses: ./.depot/actions/setup`, whose steps run o
    `pnpm install --frozen-lockfile --prefer-offline`.
 
 A job's workspace is installed 7–8 s after it starts on a 4x16 or an 8x32, 9 s on a 2x8. Kit
-Firmware's jobs install nothing and run `scripts/ci/toolchain.sh node`. Preview OS's two scripts
-that choose the tested commit (`preview-tested-commit.ts`, `preview-paths.ts`) run before the setup
-on the stock image's own Node 22, with nothing but Node's builtins, since the PR head they start
-from may predate the setup. The store is `NPM_CONFIG_STORE_DIR=/home/runner/.pnpm-store` (pnpm 10
+Firmware's jobs install nothing and run `scripts/ci/toolchain.sh node`. Preview OS's script that
+decides whether a push needs its preview (`preview-inherit.ts`) runs before the setup on the stock
+image's own Node 22, with nothing but Node's builtins, since the PR head it starts from may predate
+the setup. The store is `NPM_CONFIG_STORE_DIR=/home/runner/.pnpm-store` (pnpm 10
 reads `npm_config_*`, not `pnpm_config_*`), and `NPM_CONFIG_SIDE_EFFECTS_CACHE=false` keeps build
 outputs out of it: the install runs the few build scripts itself, since from a store that held
 their outputs it took 5 s longer. No job runs `doppler setup`: every `doppler run` names its
@@ -493,17 +493,17 @@ that needs code landing with it (#2999: main's `test.yml` named a workspace the 
 
 - Lint and Typecheck, Test, LOC report, the PR dashboard and Kit Firmware's Plan and build legs
   check out `github.sha`. LOC report still diffs the PR's head against its base, from the event.
-- Preview OS's deploy passes `github.sha` to `scripts/ci/preview-tested-commit.ts`, which deploys
-  it when it is a merge of the head and otherwise resolves `refs/pull/<n>/merge`. The suites start
-  beside the deploy, so they find its commit themselves, by the deploy's own two steps: the PR's
-  head, then the same `preview-tested-commit.ts` with the same `github.sha`. The trace checks out
-  the commit deploy tested. The trace's statuses, the test telemetry's `headSha` and the preview's
-  name use the PR head.
+- Preview OS is the exception (an experiment, #3340): its deploy, suites and trace check out the
+  PR's head, `head.sha`, so a deployment is per commit and a push can inherit an ancestor's verdict
+  or reuse its deployment (`scripts/ci/preview-inherit.ts`, `apps/os/scripts/preview-reuse.ts`).
+  Its workflow file still comes from the merge commit, so a PR whose head predates a workflow change
+  that needs code landing with it fails Preview OS until it merges main in.
 - Preview delete checks out `github.sha` on a close: a merged PR's squash commit on main, an
   unmerged PR's head. An unmerged head older than a main change runs the old teardown (#2982's
   close named a renamed Doppler project); the nightly sweep deletes what it leaves.
 
-So a PR's checks cover the PR merged into main at the push: a semantic conflict is a real red. A
+So a PR's checks but Preview OS's cover the PR merged into main at the push: a semantic conflict
+is a real red there. A
 retry reruns the same merge commit; push or rebase to test against a newer main. A
 `workflow_dispatch` reads its file from the dispatched ref: a Preview OS dispatch from main runs
 main's file against the PR merged into main now, and a Preview delete dispatch takes
@@ -544,19 +544,19 @@ set: then run `node scripts/lockfile-stamp.ts`), commit both files and push; CI 
 result. Lint and Typecheck's **Check the lockfile stamp** fails a
 commit whose stamp is not its lockfile's hash. The reasons are in `scripts/lockfile-stamp.ts`.
 
-## Which PRs get a preview
+## Which pushes need a preview
 
 Preview OS runs on every pull request with no `paths` filter, because GitHub leaves a required
-check "Pending" forever when a `paths` filter skips its workflow. Deploy preview decides instead:
-`node scripts/ci/preview-paths.ts changes` diffs the tested merge commit against main and matches
-`previewPaths` (`apps/os`, `configs`, the hosted clients but Kit's firmware, `specs` and
-`playwright.config.ts`, `packages/cli`, `packages/iterate`, `packages/shared`, `packages/ui`, the
-root manifests and lockfile, `envs.ts`, `scripts/lib`, the setup (`.depot/actions`,
-`scripts/ci/toolchain.sh`), and its own and the production deploy workflows). A PR that touches
-none of them gets a green Deploy preview that deployed nothing, and two green suites that tested
-nothing: each runs the same step on the same commit and passes once it says so
-([preview job shape](#preview-job-shape)). When the step cannot tell, the PR gets a preview.
-`preview-delete.yml` runs on the same list;
+check "Pending" forever when a `paths` filter skips its workflow. Each job decides instead, first:
+`node scripts/ci/preview-inherit.ts` walks the head's history back, the PR's commits then main's,
+to the nearest commit with a verdict of each suite it is for (a PR run's or Main OS e2e's). A green
+one whose diff to the head touches nothing the suite depends on (`scripts/ci/preview-units.ts`:
+the units it tests, as their `deploy-<unit>.yml` paths list them, the preview machinery, its own
+tests) is inherited: the suite passes, and its summary links the run. When both inherit, Deploy
+preview deploys nothing and passes. A docs-only push, or a PR that changes nothing a preview
+depends on, inherits main's green where it branched. A red is never inherited, and E2E tests never
+inherits under the `slow-e2e` label. When the step cannot tell, the suite runs.
+`preview-delete.yml` runs on `previewPaths`;
 `scripts/ci/depot-workflows.test.ts` keeps it equal to `previewPaths`.
 
 ## Which main pushes deploy
@@ -594,10 +594,9 @@ Preview OS runs four jobs, each a check named for what it proves:
   ([Interactive trace reports](#interactive-trace-reports)).
 
 The two suites report on every PR, so a ruleset can require them. Each is
-skipped only on a dispatch of the other suite alone. On a PR that changes no
-preview path, each decides so as Deploy preview does
-(`node scripts/ci/preview-paths.ts changes`, on the same commit) and passes,
-having tested nothing. Where a preview was needed and there is none, each fails:
+skipped only on a dispatch of the other suite alone. On a push it inherits for,
+each decides so as Deploy preview does (`node scripts/ci/preview-inherit.ts`,
+on the same commit) and passes, having tested nothing. Where a preview was needed and there is none, each fails:
 red, never a skip that GitHub would count as passing. Its wait fails it when
 Deploy preview failed or was cancelled, and its step "Require a preview to test"
 when a dispatch names no preview. `scripts/ci/preview-os-workflow.test.ts`
@@ -621,12 +620,10 @@ setup (about 7 s), `tsx` loading
 the deploy's end and the first test. So the suites of Preview OS and Main OS e2e
 have no `needs:`. Each starts with the run and, while the preview deploys:
 
-1. checks out the commit Deploy preview deploys, by the deploy's own two steps:
-   the PR's head, then the PR merged into main by
-   `scripts/ci/preview-tested-commit.ts` (on a push the run's own commit when it
-   merges this head, else the merge GitHub rebuilt), and on a push decides
-   whether the PR changes a preview path. The deployment it tests is
-   `<prefix>-<sha7>` of that commit, the name Deploy preview gives it;
+1. checks out the commit Deploy preview deploys, the PR's head, and on a push
+   decides whether it inherits. What it tests is the plan Deploy preview
+   uploads (`preview-plan`): `<prefix>-<sha7>` of that commit, or the ancestor's
+   deployment it reuses for some of it;
 2. runs the setup ([Setup on Depot's stock image](#setup-on-depots-stock-image)),
    beside it for the specs Playwright's headless shell from Depot Cache, and starts
    its suite step, whose `runSuite` chooses the slow rows and installs Chromium's

@@ -11,7 +11,7 @@ import {
   PREVIEW_UNITS,
   previewMachineryPaths,
   previewSuites,
-  touchesSuite,
+  suiteInputFiles,
   unitProductPaths,
 } from "./preview-units.ts";
 
@@ -48,8 +48,8 @@ test.for([
   ({ files, units, e2e, specs }) => {
     expect({
       units: changedUnits(files),
-      e2e: touchesSuite("e2e", files),
-      specs: touchesSuite("specs", files),
+      e2e: suiteInputFiles("e2e", files).length > 0,
+      specs: suiteInputFiles("specs", files).length > 0,
     }).toEqual({ units, e2e, specs });
   },
 );
@@ -88,8 +88,8 @@ test("every file a preview runs for is an input of a unit or a suite, or one no 
   expect(files.length).toBeGreaterThan(500);
   const escaped = files.filter(
     (file) =>
-      !touchesSuite("e2e", [file]) &&
-      !touchesSuite("specs", [file]) &&
+      suiteInputFiles("e2e", [file]).length === 0 &&
+      suiteInputFiles("specs", [file]).length === 0 &&
       !matchesPaths(noSuiteDependsOn, file),
   );
   expect(escaped).toEqual([]);

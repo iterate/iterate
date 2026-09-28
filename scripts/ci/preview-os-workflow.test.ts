@@ -118,7 +118,7 @@ test("Preview OS runs on every pull request, and Deploy preview decides whether 
   const changes = steps.findIndex((step) => step.id === "changes");
   expect(steps[changes]).toMatchObject({
     if: "github.event_name == 'pull_request'",
-    run: "node scripts/ci/preview-paths.ts changes",
+    run: "node scripts/ci/preview-inherit.ts",
   });
   // decided on the tested commit, before anything is installed
   expect(changes).toBe(steps.findIndex((step) => step.id === "tested") + 1);
@@ -128,48 +128,41 @@ test("Preview OS runs on every pull request, and Deploy preview decides whether 
   expect(preview.jobs.deploy!.outputs?.preview).toBe("${{ steps.changes.outputs.preview }}");
 });
 
-test("Preview OS deploys the PR merged into main, and the test jobs use that very commit", () => {
+test("Preview OS deploys the PR's head, and the test jobs test that very commit", () => {
   const suiteSteps = preview.jobs.e2e!.steps || [];
   const deploySteps = preview.jobs.deploy!.steps || [];
-  const resolve = deploySteps.findIndex((step) => step.id === "tested");
+  const deployCheckout = deploySteps.findIndex((step) => step.uses === "actions/checkout@v4");
+  const tested = deploySteps.findIndex((step) => step.id === "tested");
   const deploy = deploySteps.findIndex((step) => step.run?.includes("pnpm preview deploy"));
-  expect(deploySteps[resolve]?.run).toBe("node scripts/ci/preview-tested-commit.ts");
-  // on a push, the run's own commit: the merge commit this workflow file was read from
-  expect(deploySteps[resolve]?.env?.PREVIEW_RUN_SHA).toBe(
-    "${{ github.event_name == 'pull_request' && github.sha || '' }}",
+  expect(deploySteps[deployCheckout]?.with?.ref).toBe(
+    "${{ github.event.pull_request.head.sha || format('refs/pull/{0}/head', inputs.pull-request-number) }}",
   );
-  // resolved before anything is installed or deployed from the checkout
-  expect(resolve).toBeLessThan(deploySteps.findIndex((step) => step.name === "Setup"));
-  expect(resolve).toBeLessThan(deploy);
+  // the head as checked out, recorded before anything is installed or deployed
+  expect(tested).toBe(deployCheckout + 1);
+  expect(deploySteps[tested]?.run).toBe('echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"');
+  expect(tested).toBeLessThan(deploy);
   expect(preview.jobs.deploy!.outputs).toMatchObject({
     "tested-sha": "${{ steps.tested.outputs.sha }}",
     // the name preview.ts gives the deployment, `pr<n>-<sha7>` of the tested commit, for the cleanup
     deployment: "${{ steps.deploy.outputs.deployment }}",
   });
   expect(deploySteps[deploy]?.id).toBe("deploy");
-  // the trace runs the scripts of the tree deploy tested, not of the PR head alone
+  // the suites check out the same head, and nothing moves them off it
+  const suiteCheckouts = suiteSteps.filter((step) => step.uses === "actions/checkout@v4");
+  expect(suiteCheckouts).toMatchObject([
+    {
+      with: {
+        ref: "${{ github.event.pull_request.head.sha || (inputs.pull-request-number != '' && format('refs/pull/{0}/head', inputs.pull-request-number)) || github.sha }}",
+      },
+    },
+  ]);
+  // the trace checks out that commit and posts its statuses on it
   expect(
     preview.jobs.trace!.steps?.find((step) => step.uses === "actions/checkout@v4")?.with?.ref,
   ).toMatch(/^\$\{\{ needs\.deploy\.outputs\.tested-sha \|\| /);
-  // the suites resolve that commit by deploy's own two steps (preview-os.yml, THE COMMIT DEPLOY
-  // PREVIEW DEPLOYS)
-  const checkout = suiteSteps.findIndex((step) => step.uses === "actions/checkout@v4");
-  const deployCheckout = deploySteps.findIndex((step) => step.uses === "actions/checkout@v4");
-  expect(deploySteps[deployCheckout]?.with?.ref).toBe(
-    "${{ github.event.pull_request.head.sha || format('refs/pull/{0}/head', inputs.pull-request-number) }}",
-  );
-  expect(suiteSteps[checkout]?.with?.ref).toBe(
-    "${{ github.event.pull_request.head.sha || (inputs.pull-request-number != '' && format('refs/pull/{0}/head', inputs.pull-request-number)) || github.sha }}",
-  );
-  expect(resolve).toBe(deployCheckout + 1);
-  expect(suiteSteps[checkout + 1]).toEqual({
-    ...deploySteps[resolve],
-    if: "github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && inputs.pull-request-number != '')",
-  });
-  // the trace's statuses still go on the PR head
   expect(
     preview.jobs.trace!.steps?.find((step) => step.name === "Record the traced commit")?.env,
-  ).toEqual({ HEAD_SHA: "${{ needs.deploy.outputs.head-sha }}" });
+  ).toEqual({ HEAD_SHA: "${{ needs.deploy.outputs.tested-sha }}" });
 });
 
 // What a PR run reuses (apps/os/scripts/preview-reuse.ts) only its deploy knows: the suites read its
@@ -211,8 +204,8 @@ test("Preview OS: a PR's next push cancels its run in progress; a dispatch cance
 });
 
 // Why the suites start with the run: .depot/workflows/preview-os.yml (STARTED WITH THE RUN). Each
-// decides whether the PR changes a preview path as Deploy preview does, before it installs anything,
-// and the steps after that pass on a PR that changes none.
+// decides whether it inherits as Deploy preview does, before it installs anything, and the steps
+// after that pass on a push it inherits for.
 test("Preview OS's suites decide as Deploy preview does whether there is a preview, then wait for it", () => {
   const deploySteps = preview.jobs.deploy!.steps || [];
   const steps = preview.jobs.e2e!.steps || [];
@@ -225,9 +218,8 @@ test("Preview OS's suites decide as Deploy preview does whether there is a previ
       PREVIEW_SUITES: "${{ env.SUITE }}",
     },
   });
-  // on the commit deploy tests, resolved right after the checkout, as in deploy
-  expect(changes).toBe(steps.findIndex((step) => step.id === "tested") + 1);
-  expect(changes).toBe(steps.findIndex((step) => step.uses === "actions/checkout@v4") + 2);
+  // on the commit deploy tests, right after the checkout
+  expect(changes).toBe(steps.findIndex((step) => step.uses === "actions/checkout@v4") + 1);
   const after = steps.slice(changes + 1, steps.findIndex((step) => step.id === "suite") + 1);
   // the specs' browser restore also skips in E2E tests
   expect(after.map((step) => step.if)).toEqual(

@@ -7,8 +7,8 @@
 //   deploy              this commit's deployment: apps/os (its D1, R2 bucket and Artifacts namespace
 //                       created, the D1 migrated), every app on top, the readiness gate, the sign-in
 //                       seed, the PR body's section (the previous one folded first). A PR's run
-//                       deploys only what its commit changed since an earlier full deployment, and
-//                       reuses that one for the rest (preview-reuse.ts)
+//                       deploys only what its head changed since its nearest ancestor with a full
+//                       deployment, and reuses that one for the rest (preview-reuse.ts)
 //   e2e, specs          the vitest e2e suite (`--slow-rows`, scripts/slow-rows.ts) or the Playwright
 //                       specs against a deployment: beside its run's deploy, this commit's, once that
 //                       deploy is done (PREVIEW_AWAIT_DEPLOY_JOB; a PR run's, the plan its deploy
@@ -181,7 +181,7 @@ function pullRequestBody(prNumber: string): PullRequestBody {
   };
 }
 
-/** The commit this checkout is: the one the job deployed or tested (the PR merged into main in CI). */
+/** The commit this checkout is: the one the job deployed or tested (a PR's head in CI). */
 function checkedOutCommit() {
   const result = spawnSync("git", ["rev-parse", "HEAD"], { cwd: ROOT, encoding: "utf8" });
   if (result.status !== 0) throw new Error(`git rev-parse HEAD: ${result.stderr.trim()}`);
@@ -520,33 +520,49 @@ async function deployPreview(
   await deployPreviewSteps(ctx, plan, prNumber, apps, folded);
 }
 
-/** A PR RUN'S PLAN (preview-reuse.ts): the full deployments it may reuse, each diffed against this
- *  checkout's commit, and the first whose apps/os that commit has not changed. A candidate whose
- *  diff could not be had is passed over, with the reason in the log. */
-async function planDeployment(cf: Cf, name: string, apps: string[]) {
-  const candidates = reuseCandidates(await listPreviewDeployments(cf), name, apps);
-  const diffed = await Promise.all(
-    candidates.map(async ({ name: candidate }): Promise<ReuseCandidate> => {
-      try {
-        const files = await filesChangedSince(previewDeployment(candidate)!.sha);
-        return { name: candidate, changed: changedUnits(files) };
-      } catch (error) {
-        return { name: candidate, changed: undefined, unknown: describe(error) };
-      }
-    }),
+/** A PR RUN'S PLAN (preview-reuse.ts): the full deployments it may reuse, each placed in the head's
+ *  history by GitHub, and the nearest one's apps/os unchanged since, or none. A candidate GitHub
+ *  cannot place is passed over, with the reason in the log. */
+async function planDeployment(cf: Cf, name: string, prefix: string, apps: string[]) {
+  const head = checkedOutCommit();
+  const candidates = reuseCandidates(await listPreviewDeployments(cf), name, prefix, apps);
+  const placed = await Promise.all(
+    candidates.map(({ name: candidate }) =>
+      placeInHistory(candidate, head).catch((error): ReuseCandidate => ({
+        name: candidate,
+        commitsBack: undefined,
+        unplaced: describe(error),
+      })),
+    ),
   );
-  const { plan, reasons } = planReuse({ deployment: name, apps, candidates: diffed });
+  const { plan, reasons } = planReuse({ deployment: name, apps, candidates: placed });
   for (const reason of reasons) console.log(`[reuse] ${reason}`);
   return plan;
 }
 
-/** The files this checkout's commit changes since the commit `sha7` names (a deployment's tested
- *  commit): its full SHA from GitHub, that commit fetched at depth 1 (GitHub serves a PR's earlier
- *  test merge commits by SHA), then the diff, with a rename's old path and its new one. */
-async function filesChangedSince(sha7: string) {
-  const { data } = await getOctokit().rest.repos.getCommit({ ...getRepo(), ref: sha7 });
-  git("fetch", "--quiet", "--depth=1", "origin", data.sha);
-  return git("diff", "--name-only", "--no-renames", data.sha, "HEAD").split("\n").filter(Boolean);
+/** Where the deployment `name`'s commit (the sha7 its name ends in) sits in `head`'s history, from
+ *  GitHub's comparison of the two: how many commits back, and the units the head changed since, a
+ *  rename's old path and its new one both counted. */
+async function placeInHistory(name: string, head: string): Promise<ReuseCandidate> {
+  const { data } = await getOctokit().rest.repos.compareCommitsWithBasehead({
+    ...getRepo(),
+    basehead: `${previewDeployment(name)!.sha}...${head}`,
+  });
+  if (!["ahead", "identical"].includes(data.status))
+    return { name, commitsBack: undefined, unplaced: `not an ancestor of ${head.slice(0, 7)}` };
+  const files = data.files || [];
+  // GitHub's comparison lists at most 300 files
+  if (files.length >= 300)
+    return { name, commitsBack: undefined, unplaced: "too many changed files to list" };
+  return {
+    name,
+    commitsBack: data.ahead_by,
+    changed: changedUnits(
+      files.flatMap((file) =>
+        file.previous_filename ? [file.filename, file.previous_filename] : [file.filename],
+      ),
+    ),
+  };
 }
 
 /** `git <args>` in this checkout, its output trimmed; a failure throws with git's stderr. */
@@ -1410,8 +1426,8 @@ async function main(command: Command, options: PreviewOptions) {
   if (command === "e2e" || command === "specs")
     return runSuite(
       command,
-      // beside its run's deploy, the deployment of the commit both checked out
-      // (preview-tested-commit.ts): known before it exists
+      // beside its run's deploy, the deployment of the commit both checked out, the PR's head:
+      // known before it exists
       process.env.PREVIEW_AWAIT_DEPLOY_JOB
         ? previewDeploymentName(prefix, checkedOutCommit())
         : await deploymentToTest(prefix),
@@ -1436,7 +1452,9 @@ async function main(command: Command, options: PreviewOptions) {
   // Only a PR's run reuses (preview-reuse.ts): main, the latency guard, the real-model suite and a
   // soak each measure a deployment of their own.
   const plan: PreviewPlan = pr
-    ? await traceOperation("Plan the deployment", () => planDeployment(ctx.cf, name, appNames))
+    ? await traceOperation("Plan the deployment", () =>
+        planDeployment(ctx.cf, name, prefix, appNames),
+      )
     : { deployment: name, reuses: undefined, deploys: ["os", ...appNames] };
   // the name the suites and the cleanup job test and keep (preview-os.yml, main-os-e2e.yml), and the
   // earlier deployment the plan reuses, which the cleanup keeps
