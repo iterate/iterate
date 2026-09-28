@@ -288,7 +288,7 @@ export interface BuiltInScope extends LibraryRoots {
    *  is discarded and the next call builds a fresh incarnation from durable storage (a new
    *  `itx/woken`). The FACT comes first — `itx/aborted { reason?, callerPath?, app? }`,
    *  attributed like any append (`source.principal`) and durable before anything resets — then the
-   *  answer (that event), then the reset, one zero-delay turn after the answer left
+   *  answer (that event), then the reset, once the answer left, whatever else is writing here
    *  (iterate-context-durable-object.ts `#abortAfterTheAnswer`). SURVIVES: the log and everything
    *  reduced from it (rewrite rules, subscriptions, schedules), the facets' own storage, kv, an
    *  armed alarm. GOES: in-memory state, every facet instance and its in-flight work, every socket
@@ -520,8 +520,8 @@ interface BuildBuiltInsDeps {
    *  `secret` facet. */
   callFacetAsPlatform: (name: string, itxExpressionSteps: ItxExpression) => Promise<unknown>;
   /** THE CONTEXT'S RESET, once the call that asked for it has its answer (the DO's
-   *  `#abortAfterTheAnswer`): resolves when every write so far is durable; the reset follows. */
-  abortAfterTheAnswer: (message: string) => Promise<void>;
+   *  `#abortAfterTheAnswer`): asked for here, run after the answer left. */
+  abortAfterTheAnswer: (message: string) => void;
   /** The DO's claim table for hosted processors (`processors.claim`). */
   claimFacetAlarm: (name: string, at: number | null) => void;
   /** The `ItxEntrypoint` stub a loaded worker gets as `env.ITX` and `globalOutbound` — the loopback
@@ -1817,15 +1817,16 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
       // WHO ASKED, beyond what the append stamps (`source.principal`): the context the call started
       // at when it hopped here, and whether loaded code asked — loaded code carries no principal.
       const { path: callerPath, app } = deps.caller();
-      // THE FACT FIRST, through `append` (attributed, pause-exempt — stream.ts), then durable, then
-      // the answer; the reset is the DO's, after it.
+      // THE FACT FIRST, through `append` (attributed, pause-exempt — stream.ts); the reset is the
+      // DO's, after the answer. A Workers-RPC caller's answer leaves once the fact is durable (the
+      // output gate); an in-process caller has it at once, and only what it sends out waits there.
       const [aborted] = await append({
         type: "events.iterate.com/itx/aborted",
         payload: { reason, callerPath, app },
       });
       // The runtime logs this message as an error line (uncatchable); the prd fault alarm
       // (scripts/ci/prd-fault-alarm.ts) excludes its prefix as the expected outcome it is.
-      await deps.abortAfterTheAnswer(
+      deps.abortAfterTheAnswer(
         `itx.abort() reset the context ${path}${reason ? `: ${reason}` : ""}`,
       );
       return aborted;
