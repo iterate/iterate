@@ -135,7 +135,10 @@ test("a first-party facet name refuses a spec — no source ever names a class o
           return String(error);
         }
       };
-      const spec = { source: { "worker.js": "export class X {}" }, className: "X" };
+      const spec = {
+        source: { "package.json": '{"main":"worker.js"}', "worker.js": "export class X {}" },
+        className: "X",
+      };
       return {
         facet: await refusal(["itx", "facets", ["get", "repo", spec], ["tip"]]),
         processor: await refusal(["itx", "processors", ["enable", "repo", spec]]),
@@ -760,6 +763,7 @@ test("a platform start that rejects with the platform's clone-version text resta
   // The platform's own start (facet-host.ts `#start`, after every abort it makes and at a birth)
   // makes one call, `listPublicMethods`: here it rejects once, after `itx.facets.abort`.
   const source = {
+    "package.json": '{"main":"worker.js"}',
     "worker.js": `
 import { FacetDurableObject } from "iterate/sdk";
 export class StartsFlaky extends FacetDurableObject {
@@ -791,6 +795,7 @@ export class StartsFlaky extends FacetDurableObject {
 
 test("concurrent stale start failures do not retire the replacement generation twice", async () => {
   const source = {
+    "package.json": '{"main":"worker.js"}',
     "worker.js": `
 import { FacetDurableObject } from "iterate/sdk";
 export class Racing extends FacetDurableObject {
@@ -828,6 +833,7 @@ test("on a runtime whose facet starts answer one call each, concurrent calls on 
   // both fail on it; one restarts it, and the other's retry must not become the fresh start's
   // SECOND call. The facet plays that runtime: its instance answers once, then throws the text.
   const source = {
+    "package.json": '{"main":"worker.js"}',
     "worker.js": `
 import { FacetDurableObject } from "iterate/sdk";
 export class OneCallPerStart extends FacetDurableObject {
@@ -871,6 +877,7 @@ test("on a runtime whose facet starts answer one call each, a call killed by a p
   // A call in flight on the start it opened is killed by a peer's restart, retries on the
   // replacement — whose one call the peer's retry spent — and then on a restart of its own.
   const source = {
+    "package.json": '{"main":"worker.js"}',
     "worker.js": `
 import { FacetDurableObject } from "iterate/sdk";
 export class OneCallPerStart extends FacetDurableObject {
@@ -914,6 +921,7 @@ export class OneCallPerStart extends FacetDurableObject {
 test("one platform failure while other calls are in flight restarts the facet once; every call answers", async () => {
   // The calls its restart kills retry on the replacement without restarting it again.
   const source = {
+    "package.json": '{"main":"worker.js"}',
     "worker.js": `
 import { FacetDurableObject } from "iterate/sdk";
 export class Steady extends FacetDurableObject {
@@ -1371,7 +1379,10 @@ test("`processors.enable` with changed code configures the new code, and with th
   const source = HELLO_PROCESSOR.source as Record<string, string>;
   const changed: FacetSpec = {
     ...HELLO_PROCESSOR,
-    source: { "worker.js": `${source["worker.js"]}\n// the next version` },
+    source: {
+      "package.json": '{"main":"worker.js"}',
+      "worker.js": `${source["worker.js"]}\n// the next version`,
+    },
   };
   await enable(changed);
   expect(await configured()).toBe(2);

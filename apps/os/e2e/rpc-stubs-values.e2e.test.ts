@@ -56,6 +56,7 @@ test("callLater(cb) fires back in the caller — capnweb client AND dynamic work
 
   // ── caller 2: a DYNAMIC WORKER via withItx(env.ITX, …) — the callback appends to the stream (observable) ──
   const SRC_CONSUMER = {
+    "package.json": '{"main":"worker.js"}',
     "worker.js": `
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { withItx } from "iterate/sdk";

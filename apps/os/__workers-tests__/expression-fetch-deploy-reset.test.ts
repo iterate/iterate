@@ -35,7 +35,7 @@ test.for([
     "itx",
     ["cd", "/site"],
     "workers",
-    ["get", { source: { "worker.js": slowSite } }],
+    ["get", { source: { "package.json": '{"main":"worker.js"}', "worker.js": slowSite } }],
   ])(init);
   await resetMidCall(`${project}.iterate/site`);
   expect(await served).toEqual(answer);
@@ -55,7 +55,10 @@ test("a cold loader's producer read that meets the deploy is read again, and the
           "itx",
           ["cd", "/repos/config"],
           "workers",
-          ["get", { source: { "worker.js": slowProducer } }],
+          [
+            "get",
+            { source: { "package.json": '{"main":"worker.js"}', "worker.js": slowProducer } },
+          ],
           ["modules"],
         ],
         cacheKey: "site@1",
@@ -122,7 +125,7 @@ export default class Producer extends WorkerEntrypoint {
   async modules() {
     await new Promise((resolve) => setTimeout(resolve, 1000));
     return {
-      "worker.js": "import { WorkerEntrypoint } from 'cloudflare:workers'; export default class Site extends WorkerEntrypoint { fetch(request) { return new Response(request.method + ' served'); } }",
+      "package.json": '{"main":"worker.js"}', "worker.js": "import { WorkerEntrypoint } from 'cloudflare:workers'; export default class Site extends WorkerEntrypoint { fetch(request) { return new Response(request.method + ' served'); } }",
     };
   }
 }`;

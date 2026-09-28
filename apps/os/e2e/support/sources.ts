@@ -12,6 +12,7 @@ import type { WorkerSource } from "iterate/api";
 const presenceFile = (name: string) =>
   readFileSync(fileURLToPath(new URL(`./presence/${name}`, import.meta.url).href), "utf8");
 const PRESENCE_SOURCE: WorkerSource = {
+  "package.json": '{"main":"worker.ts"}',
   "worker.ts": presenceFile("durable-object.ts"),
   "processor.ts": presenceFile("processor.ts"),
   "contract.ts": presenceFile("contract.ts"),
@@ -21,6 +22,7 @@ const PRESENCE_SOURCE: WorkerSource = {
  *  literally at every load site (`itx.workers.get({ source: SOURCES.probe })`, `facets.get(name, { source: … })`). */
 export const SOURCES: Record<string, WorkerSource> = {
   chatroom: {
+    "package.json": '{"main":"worker.js"}',
     "worker.js": `import { FacetDurableObject, LiveState, withItx } from "iterate/sdk";
 export class ChatroomDurableObject extends FacetDurableObject {
   static publicMethods = [...super.publicMethods, "post", "state"];
@@ -33,6 +35,7 @@ export class ChatroomDurableObject extends FacetDurableObject {
 }`,
   },
   probe: {
+    "package.json": '{"main":"worker.js"}',
     "worker.js": `import { WorkerEntrypoint } from "cloudflare:workers";
 export default class Probe extends WorkerEntrypoint {
   async run(v, cb) {
@@ -44,6 +47,7 @@ export default class Probe extends WorkerEntrypoint {
 }`,
   },
   keeper: {
+    "package.json": '{"main":"worker.js"}',
     "worker.js": `import { FacetDurableObject } from "iterate/sdk";
 export class KeeperDurableObject extends FacetDurableObject {
   static publicMethods = [...super.publicMethods, "stash", "useStashed", "started"];
@@ -64,6 +68,7 @@ export class KeeperDurableObject extends FacetDurableObject {
   // stream calls at-least-once from a cursor it keeps (resolving IS the ack; throwing ⇒ retry;
   // code PERMANENT_FAILURE ⇒ halt now).
   digest: {
+    "package.json": '{"main":"worker.js"}',
     "worker.js": `import { WorkerEntrypoint } from "cloudflare:workers";
 import { withItx } from "iterate/sdk";
 export default class Digest extends WorkerEntrypoint {
@@ -82,6 +87,7 @@ export default class Digest extends WorkerEntrypoint {
 }`,
   },
   chunky: {
+    "package.json": '{"main":"worker.js"}',
     "worker.js": `import { StreamProcessor, StreamProcessorDurableObject, defineProcessorContract, z } from "iterate/sdk";
 const contract = defineProcessorContract({
   slug: "chunky",
@@ -106,6 +112,7 @@ export class ChunkyDurableObject extends StreamProcessorDurableObject {
   // The presence processor (reduced ⊕ runtime), its TypeScript files in support/presence.
   presence: PRESENCE_SOURCE,
   "user-tally": {
+    "package.json": '{"main":"worker.js"}',
     "worker.js": `import { StreamProcessor, StreamProcessorDurableObject, defineProcessorContract, z } from "iterate/sdk";
 const contract = defineProcessorContract({
   slug: "user-tally",
@@ -128,6 +135,7 @@ export class UserTallyDurableObject extends StreamProcessorDurableObject {
   // The facet-spine demo processor: counts every durable event
   // by type. A userspace class like any other — there are no built-in processors.
   tally: {
+    "package.json": '{"main":"worker.js"}',
     "worker.js": `import { StreamProcessor, StreamProcessorDurableObject, defineProcessorContract, z } from "iterate/sdk";
 const contract = defineProcessorContract({
   slug: "tally",
@@ -153,6 +161,7 @@ export class TallyDurableObject extends StreamProcessorDurableObject {
   // trips the stream by appending itx/paused with the breaker's reason, keyed so a replay can never
   // double-pause. Core knows nothing about it — the pause check reads the reduced `paused` slice.
   breaker: {
+    "package.json": '{"main":"worker.js"}',
     "worker.js": `import { StreamProcessor, StreamProcessorDurableObject, defineProcessorContract, z } from "iterate/sdk";
 const CAPACITY = 5; // tokens the bucket holds
 const REFILL_PER_SECOND = 1; // tokens restored per second of EVENT time
@@ -204,6 +213,7 @@ export class BreakerDurableObject extends StreamProcessorDurableObject {
   // none of it: whoever installs it appends `pr-linter-installed` beside the enable, and it lints
   // only the webhooks after that event (enabling replays the whole log).
   prLinter: {
+    "package.json": '{"main":"worker.js"}',
     "worker.js": `import { StreamProcessor, StreamProcessorDurableObject, defineProcessorContract, z } from "iterate/sdk";
 const WEBHOOK = "events.iterate.com/github/webhook-received";
 const INSTALLED = "pr-linter-installed";
@@ -282,6 +292,7 @@ export class PrLinterDurableObject extends StreamProcessorDurableObject {
   // `newWorkersRpcResponse` export (library-connectors.e2e) and, through `path()`,
   // that the host's `/<path>` reaches the service verbatim.
   capnwebServer: {
+    "package.json": '{"main":"worker.js"}',
     "worker.js": `import { WorkerEntrypoint, RpcTarget } from "cloudflare:workers";
 import { newWorkersRpcResponse } from "iterate/sdk";
 class Api extends RpcTarget {
@@ -297,6 +308,7 @@ export default class CapnwebServer extends WorkerEntrypoint {
 }`,
   },
   site: {
+    "package.json": '{"main":"worker.js"}',
     "worker.js": `import { WorkerEntrypoint } from "cloudflare:workers";
 export default class Site extends WorkerEntrypoint {
   async fetch(request) {

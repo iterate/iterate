@@ -37,11 +37,6 @@ test.for([
   expect(rootManifestListing(before, name, version)).toBe(after);
 });
 
-/** A package.json as a repo holds it. */
-function manifest(json: object) {
-  return `${JSON.stringify(json, null, 2)}\n`;
-}
-
 test("the agents folder names its main module in package.json", () => {
   const folder = agentsFolder(version);
   expect(JSON.parse(folder["package.json"]!)).toEqual({
@@ -50,3 +45,8 @@ test("the agents folder names its main module in package.json", () => {
   });
   expect(folder["index.ts"]).toContain("AgentDurableObject");
 });
+
+/** A package.json as a repo holds it. */
+function manifest(json: object) {
+  return `${JSON.stringify(json, null, 2)}\n`;
+}

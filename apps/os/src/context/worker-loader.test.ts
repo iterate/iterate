@@ -24,15 +24,22 @@ import {
 test("two literal sources whose djb2 hashes collide never share one Worker Loader cacheKey", async () => {
   // djb2("Aa") === djb2("B@") — one 32-bit hash, two sources.
   const { env, keys } = fakeLoaderEnv();
-  await loadConfined(env, { source: { "worker.js": "Aa" } });
-  await loadConfined(env, { source: { "worker.js": "B@" } });
+  await loadConfined(env, {
+    source: { "package.json": '{"main":"worker.js"}', "worker.js": "Aa" },
+  });
+  await loadConfined(env, {
+    source: { "package.json": '{"main":"worker.js"}', "worker.js": "B@" },
+  });
   expect(new Set(keys)).toMatchObject({ size: 2 });
 });
 
 test("an owner and a caller's cacheKey that concatenate alike never share one Worker Loader cacheKey", async () => {
   // owner "…/x" + key "y:z" vs owner "…/x:y" + key "z": joined with ":" they would spell ONE id.
   const { env, keys } = fakeLoaderEnv();
-  const source = { "worker.js": "export default class W {}" };
+  const source = {
+    "package.json": '{"main":"worker.js"}',
+    "worker.js": "export default class W {}",
+  };
   await loadConfined(env, { owner: "prj_u.iterate/x", cacheKey: "y:z", source });
   await loadConfined(env, { owner: "prj_u.iterate/x:y", cacheKey: "z", source });
   expect(new Set(keys)).toMatchObject({ size: 2 });
@@ -44,7 +51,10 @@ test("two DIFFERENT facet identities never share one Worker Loader cacheKey", as
   // first's isolate, a silent cross-context authority transfer. Same shared source (identical
   // contentHash), as in prod.
   const { env, keys } = fakeLoaderEnv();
-  const modules = { "worker.js": "export default class Tally {}" };
+  const modules = {
+    "package.json": '{"main":"worker.js"}',
+    "worker.js": "export default class Tally {}",
+  };
   const load = (iterateContextName: string, className: string) =>
     loadConfined(env, {
       kind: "facet",
@@ -65,7 +75,7 @@ test("a producer source runs INSIDE getCode — once per cold isolate, never on 
   let produced = 0;
   const invoke = async () => {
     produced++;
-    return { "worker.js": "export default class Built {}" };
+    return { "package.json": '{"main":"worker.js"}', "worker.js": "export default class Built {}" };
   };
   const load = (cacheKey?: string) =>
     loadConfined(env, { source: "itx.build('todo')", cacheKey, invoke });
@@ -92,11 +102,15 @@ test("a producer source runs INSIDE getCode — once per cold isolate, never on 
 
 test("literal modules: the key is their content hash unless the caller names a cacheKey", async () => {
   const { env, keys } = fakeLoaderEnv();
-  const a = await loadConfined(env, { source: { "worker.js": "export default 1" } });
-  const b = await loadConfined(env, { source: { "worker.js": "export default 2" } });
+  const a = await loadConfined(env, {
+    source: { "package.json": '{"main":"worker.js"}', "worker.js": "export default 1" },
+  });
+  const b = await loadConfined(env, {
+    source: { "package.json": '{"main":"worker.js"}', "worker.js": "export default 2" },
+  });
   expect(a).not.toMatchObject({ loaderId: b.loaderId }); // content decides
   const named = await loadConfined(env, {
-    source: { "worker.js": "export default 1" },
+    source: { "package.json": '{"main":"worker.js"}', "worker.js": "export default 1" },
     cacheKey: "v7",
   });
   expect(named).toMatchObject({
@@ -115,7 +129,7 @@ test("WORKAROUND: a producer that threw marks its id dead; the next attempt prod
   const invoke = async () => {
     produced++;
     if (!artifactLanded) throw new Error("build artifact not landed yet");
-    return { "worker.js": "export default class Built {}" };
+    return { "package.json": '{"main":"worker.js"}', "worker.js": "export default class Built {}" };
   };
   const load = () =>
     loadConfined(env, { source: "itx.build('todo')", cacheKey: "todo@dead", invoke });
@@ -150,7 +164,10 @@ test("WORKAROUND: a producer that threw marks its id dead; the next attempt prod
 
 test("a source that keeps failing to resolve mints one loader id, not one per retry: the recovery resolves outside the loader", async () => {
   const { env, keys } = fakeLoaderEnv();
-  const retry = () => loadConfined(env, { source: { "worker.js": `import "./missing.js";` } });
+  const retry = () =>
+    loadConfined(env, {
+      source: { "package.json": '{"main":"worker.js"}', "worker.js": `import "./missing.js";` },
+    });
   await retry(); // the cold load resolves inside getCode, fails, and marks the id dead
   await settled();
   for (let attempt = 0; attempt < 3; attempt++)
@@ -174,7 +191,7 @@ test("WORKAROUND, under load: every caller that finds the id dead while its reco
       throw new Error("Network connection lost.");
     }
     await slow; // a cold repo fetch: 1–2 s on prd, 40–60 s under the herd
-    return { "worker.js": "export default class Site {}" };
+    return { "package.json": '{"main":"worker.js"}', "worker.js": "export default class Site {}" };
   };
   const load = (itxEntrypoint = host) =>
     loadConfined(env, {
@@ -205,7 +222,7 @@ test("a producer that loses its connection once inside getCode is read once more
   const invoke = async () => {
     produced++;
     if (produced === 1) throw new Error("Network connection lost.");
-    return { "worker.js": "export default class Site {}" };
+    return { "package.json": '{"main":"worker.js"}', "worker.js": "export default class Site {}" };
   };
   const load = () =>
     loadConfined(env, {
@@ -233,7 +250,7 @@ test("WORKAROUND, under load: a recovery that fails fails every caller waiting o
     produced++;
     if (outcome === "fail") throw new Error("Durable Object is overloaded.");
     if (outcome === "hang") return new Promise<never>(() => {}); // its incarnation died mid-call
-    return { "worker.js": "export default class Site {}" };
+    return { "package.json": '{"main":"worker.js"}', "worker.js": "export default class Site {}" };
   };
   const load = (itxEntrypoint: Fetcher) =>
     loadConfined(env, {
@@ -268,7 +285,7 @@ test("retire(): a burst of calls that failed on one identity retires it once, an
   const { env } = fakeLoaderEnv();
   const opts = workerOptions(env, {
     owner: "prj_retire.iterate/",
-    source: { "worker.js": "export default {}" },
+    source: { "package.json": '{"main":"worker.js"}', "worker.js": "export default {}" },
   });
   // two calls on generation 0 meet the clone-version failure together: one retirement
   const [a, b] = await Promise.all([prepareConfinedWorker(opts), prepareConfinedWorker(opts)]);
@@ -288,7 +305,10 @@ test("prepare resolves the identity without asking the loader; load() is the one
     workerOptions(env, {
       kind: "facet",
       owner: ["prj_u.iterate/", "Counter"],
-      source: { "worker.js": "export default class Counter {}" },
+      source: {
+        "package.json": '{"main":"worker.js"}',
+        "worker.js": "export default class Counter {}",
+      },
       where: 'facet "counter"',
     }),
   );
@@ -309,12 +329,18 @@ test("prepare resolves the identity without asking the loader; load() is the one
 });
 
 test("a facet's literal source over the ceiling is refused, coded; a producer expression is never measured", () => {
-  const big = { "worker.js": "x".repeat(FACET_SOURCE_MAX_CHARS + 1) };
+  const big = {
+    "package.json": '{"main":"worker.js"}',
+    "worker.js": "x".repeat(FACET_SOURCE_MAX_CHARS + 1),
+  };
   expect(() =>
     assertFacetSourceWithinCeiling({ source: big, className: "W" }, 'facet "w"'),
   ).toThrowError(/FACET_SOURCE_TOO_LARGE|over the/);
   expect(() =>
-    assertFacetSourceWithinCeiling({ source: { "worker.js": "ok" }, className: "W" }, 'facet "w"'),
+    assertFacetSourceWithinCeiling(
+      { source: { "package.json": '{"main":"worker.js"}', "worker.js": "ok" }, className: "W" },
+      'facet "w"',
+    ),
   ).not.toThrow();
   expect(() =>
     assertFacetSourceWithinCeiling(
@@ -326,7 +352,9 @@ test("a facet's literal source over the ceiling is refused, coded; a producer ex
 
 test("the platform origin the ITX stub was minted with is part of the loader id: an isolate minted before a self-host learned its origin is never reused after", async () => {
   const { env } = fakeLoaderEnv();
-  const opts = workerOptions(env, { source: { "worker.js": "export default class A {}" } });
+  const opts = workerOptions(env, {
+    source: { "package.json": '{"main":"worker.js"}', "worker.js": "export default class A {}" },
+  });
   const before = await prepareConfinedWorker({ ...opts, platformOrigin: null });
   const after = await prepareConfinedWorker({ ...opts, platformOrigin: "https://os.example" });
   const again = await prepareConfinedWorker({ ...opts, platformOrigin: "https://os.example" });

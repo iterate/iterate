@@ -18,6 +18,7 @@ import { adminSession, controlPlane, loginPassword, ORIGIN, stub } from "./suppo
  *  a WebSocket's messages, and at `/stream` sends a server-sent event every second until the
  *  connection ends: the connections a key can hold open on a project host. */
 const SRC_LIVE_APP = {
+  "package.json": '{"main":"worker.js"}',
   "worker.js": `import { WorkerEntrypoint } from "cloudflare:workers";
 export default class Live extends WorkerEntrypoint {
   fetch(request) {

@@ -214,7 +214,7 @@ export function buildLibrary(
  *  ~1.5 KB module: a script's isolate never loads the whole SDK) and raced against the deadline. Its value becomes JSON inside the round trip: the log carries
  *  JSON, and a live value (a handle, a function) is released with the round trip. Exported for the
  *  unit pin. */
-export function runScriptModule(script: string): { "package.json": string; "worker.js": string } {
+export function runScriptModule(script: string) {
   return {
     "package.json": '{"main":"worker.js"}',
     "worker.js": [

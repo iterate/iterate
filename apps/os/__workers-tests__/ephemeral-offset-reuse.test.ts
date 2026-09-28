@@ -14,6 +14,7 @@ import { COUNTER_SOURCE } from "./sources.ts";
 import { releasePins, snapshot, stub, until } from "./support.ts";
 
 const DIGEST_MODULES = {
+  "package.json": '{"main":"worker.js"}',
   "worker.js": /* js */ `
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { withItx } from "iterate/sdk";
@@ -89,7 +90,11 @@ test("enable with a consumes filter: itx.facets.get(name) answers before the fir
     payload: {
       name: "c2",
       target: [
-        ...hostedFacet({ "worker.js": COUNTER_SOURCE }, "CounterDurableObject", "c2"),
+        ...hostedFacet(
+          { "package.json": '{"main":"worker.js"}', "worker.js": COUNTER_SOURCE },
+          "CounterDurableObject",
+          "c2",
+        ),
         "processEventBatch",
       ],
       consumes: ["tick"],
@@ -110,7 +115,11 @@ test("processor: a read-driven catch-up (snapshot after the release) with epheme
       payload: {
         name: "counter",
         target: [
-          ...hostedFacet({ "worker.js": COUNTER_SOURCE }, "CounterDurableObject", "counter"),
+          ...hostedFacet(
+            { "package.json": '{"main":"worker.js"}', "worker.js": COUNTER_SOURCE },
+            "CounterDurableObject",
+            "counter",
+          ),
           "processEventBatch",
         ],
         consumes: ["tick", "events.iterate.com/itx/subscription-configured"],

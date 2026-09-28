@@ -49,6 +49,7 @@ type Range = { after: number; through: number };
  *  delivery from outside without a live callback in the loop. `ctx.props.firstCall` scripts delivery #1:
  *  "throw" (a plain Error — the ladder) or "hold" (2s in flight — a resume races it). */
 const SRC_LEDGER = {
+  "package.json": '{"main":"worker.js"}',
   "worker.js": `import { WorkerEntrypoint } from "cloudflare:workers";
 import { withItx } from "iterate/sdk";
 export class Ledger extends WorkerEntrypoint {
@@ -597,6 +598,7 @@ const haltFactsFor = async (itx: any, name: string): Promise<any[]> =>
  *  (offsets, ranges, attempts) and a hook that throws makes the awaited delivery FAIL — a plain
  *  throw, the ladder's case (the halt-now case is the `digest` fixture's poison). */
 const HOOKED_SOURCE = (hook: string) => ({
+  "package.json": '{"main":"worker.js"}',
   "worker.js": `import { WorkerEntrypoint } from "cloudflare:workers";
 import { withItx } from "iterate/sdk";
 export default class Hooked extends WorkerEntrypoint {

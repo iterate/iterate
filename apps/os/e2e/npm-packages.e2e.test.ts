@@ -24,6 +24,7 @@ test("a loaded worker imports npm packages by name: hono routes, @iterate-com/ca
     slug: "npm-hono",
     files: {
       "package.json": JSON.stringify({
+        main: "worker.ts",
         dependencies: { hono: "^4", "@iterate-com/capnweb": "^0.12.2" },
       }),
       "worker.ts": `
@@ -59,6 +60,7 @@ test("a vendor's SDK from pkg.pr.new: @iterate-com/petshop-sdk, typed, lists the
     slug: "npm-vendor",
     files: {
       "package.json": JSON.stringify({
+        main: "worker.ts",
         dependencies: {
           "@iterate-com/petshop-sdk": version,
         },

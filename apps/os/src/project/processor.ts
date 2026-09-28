@@ -511,7 +511,7 @@ export class ProjectProcessor extends StreamProcessor<
           const changes = reference
             ? await this.downloadTemplate(parseConfigRepoTemplateReference(reference))
             : defaultFiles;
-          // The loader's own rule for the entry, so a template the seed accepts is one that loads.
+          // The seed checks the template's entry with the loader's own rule (`readPackage`).
           readPackage(
             Object.fromEntries(changes.map((file) => [file.path, file.content])),
             "The config template",

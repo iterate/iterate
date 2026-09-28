@@ -92,6 +92,7 @@ const runsStartedByAlarmPasses = (events: StreamEvent[]) =>
  *  consequences, as the agent's script requests are. */
 const LOOPER_SPEC = {
   source: {
+    "package.json": '{"main":"worker.js"}',
     "worker.js": /* js */ `
 import { StreamProcessor, StreamProcessorDurableObject, defineProcessorContract, z } from "iterate/sdk";
 const contract = defineProcessorContract({

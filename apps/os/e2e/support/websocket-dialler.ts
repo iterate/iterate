@@ -22,6 +22,7 @@ export function dialWebSocket(
 
 /** The dialler `dialWebSocket` loads, as a stateless worker of the context. */
 const SRC_DIALLER = {
+  "package.json": '{"main":"worker.js"}',
   "worker.js": `import { WorkerEntrypoint } from "cloudflare:workers";
 export default class Dialler extends WorkerEntrypoint {
   async run(url, headers, identify) {

@@ -167,6 +167,7 @@ export async function fanProbes(itx: any, count: number) {
  *  `FanProbeDurableObject extends StreamProcessorDurableObject` (both from the SDK, `iterate/sdk`),
  *  counting every durable event. */
 const FAN_PROBE = {
+  "package.json": '{"main":"worker.js"}',
   "worker.js": /* js */ `
 import { StreamProcessor, StreamProcessorDurableObject } from "iterate/sdk";
 class FanProbeProcessor extends StreamProcessor {

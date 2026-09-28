@@ -16,6 +16,7 @@ export const facetStartedAt = async (facet: any): Promise<number> =>
  *  beats, the last, the instance's start, and the error a beat threw (a beat that throws stops the
  *  timer, which must not read as a stop from outside). */
 export const HEARTBEAT_SOURCE = {
+  "package.json": '{"main":"worker.js"}',
   // oxlint-disable-next-line iterate/no-raw-itx-get -- the careless keep IS the subject: the sweep must stop a facet that keeps its env.ITX answer
   "worker.js": `import { FacetDurableObject } from "iterate/sdk";
 export class HeartbeatDurableObject extends FacetDurableObject {
@@ -53,6 +54,7 @@ export class HeartbeatDurableObject extends FacetDurableObject {
 /** A careless facet that calls its own context every 5 s (an append of `chatter`) and keeps every
  *  answer: it keeps that context resident, so no birth resets it. */
 export const CHATTY_SOURCE = {
+  "package.json": '{"main":"worker.js"}',
   // oxlint-disable-next-line iterate/no-raw-itx-get -- the careless keep IS the subject: a facet that keeps every scope and answer from its own calls
   "worker.js": `import { FacetDurableObject } from "iterate/sdk";
 export class ChattyDurableObject extends FacetDurableObject {
@@ -74,6 +76,7 @@ export class ChattyDurableObject extends FacetDurableObject {
  *  neither it nor the append's answer. Its live state's revision (`rev`, the start time × 4096) names
  *  the instance. The careful one is support/sources.ts `chatroom`. */
 export const CARELESS_CHATROOM_SOURCE = {
+  "package.json": '{"main":"worker.js"}',
   // oxlint-disable-next-line iterate/no-raw-itx-get -- the careless sink IS the subject: neither the context nor the facet may stay running on it
   "worker.js": `import { FacetDurableObject, LiveState } from "iterate/sdk";
 export class ChatroomDurableObject extends FacetDurableObject {
@@ -89,6 +92,7 @@ export class ChatroomDurableObject extends FacetDurableObject {
 
 /** A plain facet serving HTTP; its instance id is the page. */
 export const SITE_SOURCE = {
+  "package.json": '{"main":"worker.js"}',
   "worker.js": `import { FacetDurableObject } from "iterate/sdk";
 export class SiteDurableObject extends FacetDurableObject {
   id = crypto.randomUUID();
@@ -101,6 +105,7 @@ export class SiteDurableObject extends FacetDurableObject {
  *  `start` answers the facet's clock at the start, `beats()` the last beat and when the release
  *  landed. */
 export const RELEASER_SOURCE = {
+  "package.json": '{"main":"worker.js"}',
   // oxlint-disable-next-line iterate/no-raw-itx-get -- the careless keep IS the subject: a claimed facet that keeps its env.ITX answer
   "worker.js": `import { FacetDurableObject, withItx } from "iterate/sdk";
 export class ReleaserDurableObject extends FacetDurableObject {
@@ -131,6 +136,7 @@ export class ReleaserDurableObject extends FacetDurableObject {
  *  sleep an instance that died still owed — the work finishes whichever instance runs it, and
  *  `slept.payload.startedAt` says which one did. */
 export const SLEEPER_SOURCE = {
+  "package.json": '{"main":"worker.js"}',
   "worker.js": `import { StreamProcessor, StreamProcessorDurableObject, defineProcessorContract, z } from "iterate/sdk";
 const contract = defineProcessorContract({
   slug: "sleeper",
