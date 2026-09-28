@@ -125,13 +125,12 @@ export type OrganizationRecord = {
   role?: OrganizationRole;
   projects: number;
 };
-/** A member of an organization. `createdAt`: when they joined (epoch ms), null for a membership
- *  older than the column (db/migrations/0004_created_at.sql). */
+/** A member of an organization. `createdAt`: when they joined (epoch ms). */
 export type MemberRecord = {
   userId: string;
   email: string;
   role: OrganizationRole;
-  createdAt: number | null;
+  createdAt: number;
 };
 /** An invitation to an organization, as its owners see it: the link's own secret is never stored,
  *  only its SHA-256 (`token_hash`), so an invitation is shown once — at creation — and afterwards
@@ -188,10 +187,8 @@ export class ControlPlaneDatabase {
     return listOrganizations(this.#client);
   }
   /** An organization's members, in the order they joined. */
-  async members(organizationId: string): Promise<MemberRecord[]> {
-    const members = await listMembers(this.#client, { orgId: organizationId });
-    // D1 answers null for a membership older than the column; sqlfu types it optional
-    return members.map((member) => ({ ...member, createdAt: member.createdAt ?? null }));
+  members(organizationId: string): Promise<MemberRecord[]> {
+    return listMembers(this.#client, { orgId: organizationId });
   }
   /** A project by id or by slug (a slug never holds the `_` every id does, so at most one row). */
   async project(ref: string): Promise<ProjectRow | null> {

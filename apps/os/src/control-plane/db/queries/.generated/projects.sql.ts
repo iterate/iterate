@@ -82,7 +82,7 @@ export namespace insertProject {
 	export type Params = {
 		id: string;
 		slug: string;
-		createdAt: number | null;
+		createdAt: number;
 		orgId: string;
 	};
 }
@@ -111,7 +111,7 @@ export namespace insertMemberProject {
 	export type Params = {
 		id: string;
 		slug: string;
-		createdAt: number | null;
+		createdAt: number;
 		orgId: string;
 		userId: string;
 	};
@@ -139,7 +139,7 @@ export const insertAdminOrganization = Object.assign(
 export namespace insertAdminOrganization {
 	export type Params = {
 		orgId: string;
-		createdAt: number | null;
+		createdAt: number;
 		slug: string;
 		projectId: string;
 	};
@@ -170,7 +170,7 @@ export namespace insertPersonalOrganization {
 	export type Params = {
 		id: string;
 		name: string;
-		createdAt: number | null;
+		createdAt: number;
 		userId: string;
 		slug: string;
 	};
@@ -203,7 +203,7 @@ export namespace insertFirstOrganizationProject {
 	export type Params = {
 		id: string;
 		slug: string;
-		createdAt: number | null;
+		createdAt: number;
 		userId: string;
 	};
 }
