@@ -75,7 +75,7 @@ Hosted MCP server:  https://mcp.exa.ai/mcp, key in header x-api-key
 OpenAPI document:   none
 REST API origin:    https://api.exa.ai, key in header x-api-key
 A read-only call:   the MCP tool web_search_exa, or POST https://api.exa.ai/search
-OAuth:              no
+OAuth:              no (if yes: does it register clients itself? step 4D, D0, says how to check)
 ```
 
 Only a JSON OpenAPI 3 document counts: iterate doesn't read YAML or Swagger 2. An origin is scheme
@@ -85,6 +85,7 @@ Now answer these in order. The first "yes" is your path:
 
 | Question                                                                                      | Yes → path                  |
 | --------------------------------------------------------------------------------------------- | --------------------------- |
+| Runs a hosted MCP server that signs in with OAuth and registers clients itself?               | **D**: OAuth, step 4D       |
 | Has no API keys at all, or the person asked for it to act as their own account through OAuth? | **D**: OAuth, step 4D       |
 | Runs a hosted MCP server that takes the API key?                                              | **A**: key + MCP, step 4A   |
 | Publishes a JSON OpenAPI 3 document?                                                          | **B**: key + OpenAPI, 4B    |
@@ -237,40 +238,73 @@ Status 200 with real data: go to step 6. Anything else: see "When something goes
 
 ## Step 4D. OAuth
 
-The person registers an OAuth app with the service, and the platform runs the OAuth flow. Its
-callback is on the platform, and you never see the client secret or the tokens. The person acts
-twice: once to register the app and save its client secret, once to approve access.
+The platform runs the OAuth flow. Its callback is on the platform, and you never see a client
+secret or the tokens. You need an OAuth client first, and there are two ways to get one:
+
+- **The service registers clients itself** (its metadata lists a `registration_endpoint`; most
+  hosted MCP servers do): you register one in D1a. The person only approves access.
+- **Otherwise** the person registers an OAuth app with the service (D1b), and saves its client
+  secret through a link. Then they approve access.
 
 **D0. Find the endpoints.** You need the authorization endpoint, the token endpoint, the scopes,
-and how the token endpoint wants the client secret: in the form body (`client_secret_post`) or in
-a Basic header (`client_secret_basic`). Many services publish them:
+whether there is a `registration_endpoint`, and how the token endpoint wants the client secret: in
+the form body (`client_secret_post`) or in a Basic header (`client_secret_basic`). Many services
+publish them. Set `origin` to the MCP server's origin, or the service's auth origin:
 
 ```js
 async (itx) => {
-  const origin = "https://example.com"; // the service's auth origin
-  for (const path of [
-    "/.well-known/oauth-authorization-server",
-    "/.well-known/openid-configuration",
-  ]) {
-    const response = await itx.fetch(new Request(origin + path));
-    if (response.ok) {
-      const metadata = await response.json();
-      return {
-        authorizationEndpoint: metadata.authorization_endpoint,
-        tokenEndpoint: metadata.token_endpoint,
-        clientAuth: metadata.token_endpoint_auth_methods_supported,
-        scopes: metadata.scopes_supported,
-      };
-    }
-  }
-  return "no metadata: read the service's OAuth documentation";
+  const origin = "https://mcp.linear.app";
+  const read = async (url) => {
+    const response = await itx.fetch(new Request(url));
+    return response.ok ? response.json() : null;
+  };
+  // an MCP server may name its authorization server here
+  const resource = await read(`${origin}/.well-known/oauth-protected-resource`);
+  const issuer = resource?.authorization_servers?.[0] ?? origin;
+  const metadata =
+    (await read(`${issuer}/.well-known/oauth-authorization-server`)) ??
+    (await read(`${issuer}/.well-known/openid-configuration`));
+  if (!metadata) return "no metadata: read the service's OAuth documentation";
+  return {
+    authorizationEndpoint: metadata.authorization_endpoint,
+    tokenEndpoint: metadata.token_endpoint,
+    registrationEndpoint:
+      metadata.registration_endpoint ?? "none: the person registers an app (D1b)",
+    clientAuth: metadata.token_endpoint_auth_methods_supported,
+    scopes: metadata.scopes_supported,
+  };
 };
 ```
 
 GitHub publishes none. Its values are in the D2 sample below.
 
-**D1. The app, and a link for its client secret.** First make the link, pinned to the origin of
-the token endpoint:
+**D1a. The service registers clients itself: register one.** No app and no client secret. Send
+exactly this, with the `registration_endpoint` from D0:
+
+```js
+async (itx) => {
+  const response = await itx.fetch(
+    new Request("https://mcp.linear.app/register", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        client_name: "iterate",
+        redirect_uris: ["https://os.iterate.com/.secrets/oauth/callback"],
+        grant_types: ["authorization_code", "refresh_token"],
+        response_types: ["code"],
+        token_endpoint_auth_method: "none",
+      }),
+    }),
+  );
+  return { status: response.status, clientId: (await response.json()).client_id };
+};
+```
+
+Keep the `clientId` it returns, and go straight to D2: leave `clientSecret` out and pass
+`clientAuth: "none"`. Nothing for the person to do yet.
+
+**D1b. Otherwise: the person's app, and a link for its client secret.** First make the link,
+pinned to the origin of the token endpoint:
 
 ```js
 async (itx) =>
@@ -299,8 +333,9 @@ Then tell the person exactly what to do, with the service's real settings page. 
 On a self-hosted iterate, the callback is `/.secrets/oauth/callback` on the origin this guide is
 served from. End your turn.
 
-**D2. The consent.** When the person replies with the client ID, check that the client secret is
-saved (step 3d, with `/secrets/github-client-secret`). Then start the flow:
+**D2. The consent.** After D1b, when the person replies with the client ID, first check that the
+client secret is saved (step 3d, with `/secrets/github-client-secret`). Then start the flow. With
+the person's GitHub app:
 
 ```js
 async (itx) =>
@@ -316,6 +351,20 @@ async (itx) =>
   });
 ```
 
+With a client you registered in D1a, there is no client secret. For Linear's MCP server:
+
+```js
+async (itx) =>
+  itx.secrets.beginOAuth("/secrets/linear", {
+    authorizationEndpoint: "https://mcp.linear.app/authorize",
+    tokenEndpoint: "https://mcp.linear.app/token",
+    clientId: "…", // what D1a returned
+    clientAuth: "none",
+    scope: "read",
+    urls: ["https://mcp.linear.app"],
+  });
+```
+
 It returns `{ authorizationUrl }`. Say:
 
 > Open this link and approve access: `<authorizationUrl>`
@@ -325,8 +374,8 @@ It returns `{ authorizationUrl }`. Say:
 
 End your turn.
 
-- **The service has no client secret** (a public client, PKCE only): skip the collection link in D1,
-  and leave `clientSecret` out.
+- **The person's app has no client secret** (a public client, PKCE only): skip the collection
+  link in D1b, leave `clientSecret` out, and pass `clientAuth: "none"`.
 - **Extra authorize parameters** go in `extra`. Google wants `{ access_type: "offline", prompt:
 "consent" }` before it issues a refresh token.
 
@@ -347,6 +396,21 @@ async (itx) => {
   return { status: response.status, login: (await response.json()).login };
 };
 ```
+
+For an MCP server, the proof is step 4A with the token in the header:
+
+```js
+async (itx) => {
+  const mcp = await itx.connectToMcp("https://mcp.linear.app/mcp", {
+    headers: { authorization: 'Bearer getSecret("/secrets/linear", { field: "accessToken" })' },
+  });
+  const tools = (await mcp.listTools()).map((tool) => tool.name);
+  await mcp.close();
+  return { tools };
+};
+```
+
+Then call one read-only tool from `tools`, as in 4A.
 
 A token that expires is refreshed by the platform when the service answers 401, as long as the
 service issued a refresh token. Go to step 6.
@@ -400,6 +464,13 @@ With OAuth (GitHub, as the person's own account):
 3. Person: "done, client ID Ov23li…, read my profile". You check the secret, run D2 and send the
    consent link. **Your turn ends.**
 4. Person: "done". You run D3: status 200 and their login. Step 6. Done.
+
+With an MCP server that registers clients itself (Linear):
+
+1. Step 1, then step 2: Linear's MCP server signs in with OAuth, and D0 shows a
+   `registration_endpoint`. Path D.
+2. D1a registers a client. D2 starts the flow, and you send the consent link. **Your turn ends.**
+3. Person: "done". D3 lists the tools and calls one that reads. Step 6. Done.
 
 ## When something goes wrong
 
