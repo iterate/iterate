@@ -1,6 +1,12 @@
 import { readFileSync } from "node:fs";
 import JSON5 from "json5";
-import { osEnvs, PREVIEW_AND_DEV_ACCOUNT_ID, osEnv, type OsEnv } from "../../../envs.ts";
+import {
+  osEnvs,
+  PREVIEW_AND_DEV_ACCOUNT_ID,
+  osEnv,
+  osResourceNames,
+  type OsEnv,
+} from "../../../envs.ts";
 import {
   COMPATIBILITY_DATE,
   OBSERVABILITY,
@@ -117,6 +123,7 @@ function deploymentWranglerConfig(env: OsEnv) {
   const {
     d1_databases: [localDatabase],
   } = readWranglerBase();
+  const names = osResourceNames(env.resourceNamePrefix);
   return {
     name: env.workerName,
     account_id: env.cloudflareAccountId,
@@ -129,13 +136,13 @@ function deploymentWranglerConfig(env: OsEnv) {
       })),
       ...(env.cloudflareForSaas ? [{ pattern: "*/*", zone_name: env.cloudflareForSaas.zone }] : []),
     ],
-    artifacts: [{ binding: "ARTIFACTS", namespace: env.artifactsNamespace }],
-    r2_buckets: [{ binding: "FILES", bucket_name: `${env.resourceNamePrefix}-files` }],
+    artifacts: [{ binding: "ARTIFACTS", namespace: names.repos }],
+    r2_buckets: [{ binding: "FILES", bucket_name: names.files }],
     d1_databases: [
       {
         binding: localDatabase.binding,
         migrations_dir: localDatabase.migrations_dir,
-        database_name: `${env.resourceNamePrefix}-db`,
+        database_name: names.db,
         ...(env.resources && { database_id: env.resources.dbId }),
       },
     ],
@@ -205,20 +212,21 @@ function selfHostWranglerConfig() {
     d1_databases: [localDatabase],
     ...rest
   } = readWranglerBase();
+  const names = osResourceNames("iterate");
   return {
     ...rest,
     name: "iterate",
     workers_dev: true,
-    artifacts: [{ binding: "ARTIFACTS", namespace: "iterate-repos" }],
+    artifacts: [{ binding: "ARTIFACTS", namespace: names.repos }],
     r2_buckets: r2_buckets.map(({ binding }: { binding: string }) => ({
       binding,
-      bucket_name: "iterate-files",
+      bucket_name: names.files,
     })),
     kv_namespaces: kv_namespaces.map(({ binding }: { binding: string }) => ({ binding })),
     d1_databases: [
       {
         binding: localDatabase.binding,
-        database_name: "iterate-db",
+        database_name: names.db,
         migrations_dir: localDatabase.migrations_dir,
       },
     ],

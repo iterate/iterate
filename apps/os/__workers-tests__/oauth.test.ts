@@ -898,7 +898,6 @@ test("a first-level wildcard CIMD client is bound to its project at consent", as
         "dash.iterate.com",
         "k.iterate.com",
         "voice.iterate.com",
-        "install.iterate.com",
       ],
     }),
   } as Env;

@@ -1,18 +1,22 @@
 /** Erase all apps/os data while retaining the worker, routes and resource identities.
  * Run `pnpm erase-data --env prd --yes-i-mean-prd --dry-run` before the real erase.
  * The worker is parked and its Durable Objects retired first, stopping writers and alarms.
- * The control plane's D1 rows (users, organizations, projects, grants), both KV namespaces, R2
- * files and Artifacts repositories are then emptied and verified. The D1 keeps its schema and
- * migration history, so the next deploy's migrate is a no-op.
+ * The control plane's D1 tables (users, organizations, projects, grants), both KV namespaces, R2
+ * files and Artifacts repositories are then emptied and verified. The D1's schema and migration
+ * history are dropped, so the next deploy migrates it from nothing; its id is unchanged.
  * A failed or incomplete erase throws; rerunning is safe. Deploy again to restore service.
  */
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import { createCli } from "trpc-cli";
 import { CLOUDFLARE_API, fetchRetryingPlatformFailures } from "@iterate-com/shared/platform-retry";
-import { OS_DOPPLER_PROJECT, osEnvs } from "../../../envs.ts";
+import { OS_DOPPLER_PROJECT, osEnvs, osResourceNames, type OsEnv } from "../../../envs.ts";
 import { getWorkerDoNamespaces, resetWorkerDurableObjects } from "../../../scripts/lib/do-reset.ts";
-import { CloudflareApiError, resolveEnvContext } from "../../../scripts/lib/env-context.ts";
+import {
+  CloudflareApiError,
+  resolveEnvContext,
+  type EnvContext,
+} from "../../../scripts/lib/env-context.ts";
 import { readWranglerBase } from "./generate-wrangler-config.ts";
 
 const Listing = z.object({
@@ -71,6 +75,7 @@ async function eraseDataWith(
   const { env, cf } = context;
   if (!env.resources)
     throw new Error(`${context.name} records no resource ids in envs.ts: nothing to erase them by`);
+  const resourceNames = osResourceNames(env.resourceNamePrefix);
   console.log(
     `${options.dryRun ? "Inventory" : "Erase"}: ${context.name}, worker ${env.workerName}`,
   );
@@ -96,14 +101,14 @@ async function eraseDataWith(
     },
     {
       label: "R2 files",
-      route: `/r2/buckets/${env.resourceNamePrefix}-files/objects?per_page=1000`,
+      route: `/r2/buckets/${resourceNames.files}/objects?per_page=1000`,
       field: "key",
-      bulk: `/r2/buckets/${env.resourceNamePrefix}-files/objects`,
+      bulk: `/r2/buckets/${resourceNames.files}/objects`,
       method: "DELETE",
     },
     {
       label: "Artifacts repositories",
-      route: `/artifacts/namespaces/${encodeURIComponent(env.artifactsNamespace)}/repos?limit=200`,
+      route: `/artifacts/namespaces/${encodeURIComponent(resourceNames.repos)}/repos?limit=200`,
       field: "name",
       bulk: "",
       method: "DELETE",
@@ -146,42 +151,21 @@ async function eraseDataWith(
     } while (cursor);
     return names;
   };
-  /** One `/query` of the D1, a statement's results per `;`-separated statement. */
-  const d1 = async (sql: string) =>
-    z
-      .array(z.object({ results: z.array(z.looseObject({})) }))
-      .parse(
-        await cf(`/d1/database/${env.resources!.dbId}/query`, {
-          method: "POST",
-          body: JSON.stringify({ sql }),
-        }),
+  const d1 = d1Query(cf, env.resources.dbId);
+  const tables = await d1Tables(d1);
+  const rowCounts = tables.length
+    ? (await d1(tables.map((table) => `select count(*) as rows from "${table}"`).join("; "))).map(
+        (rows) => z.object({ rows: z.number() }).parse(rows[0]).rows,
       )
-      .map((result) => result.results);
-  /** The D1's tables, but SQLite's own (`sqlite_…`, `sqlite_sequence` among them), D1's (`_cf_…`)
-   *  and wrangler's migration history (`d1_migrations`), which stays with the schema. Filtered here,
-   *  not with LIKE, whose `_` matches any character. */
-  const [schema = []] = await d1("select name from sqlite_master where type = 'table'");
-  const tables = z
-    .array(z.object({ name: z.string() }))
-    .parse(schema)
-    .map((table) => table.name)
-    .filter(
-      (name) => !name.startsWith("sqlite_") && !name.startsWith("_cf_") && name !== "d1_migrations",
-    );
-  const countRows = async () =>
-    tables.length
-      ? (await d1(tables.map((table) => `select count(*) as rows from "${table}"`).join("; "))).map(
-          (rows) => z.object({ rows: z.number() }).parse(rows[0]).rows,
-        )
-      : [];
-  for (const [index, rows] of (await countRows()).entries())
-    console.log(`D1 before: ${tables[index]} — ${rows} rows`);
+    : [];
+  for (const [index, rows] of rowCounts.entries())
+    console.log(`D1 table to drop: ${tables[index]} — ${rows} rows`);
   for (const store of stores)
     console.log(`${store.label} before: ${(await listNames(store)).length}`);
   const resourceIds = new Set([
     ...Object.values(env.resources),
-    `${env.resourceNamePrefix}-files`,
-    env.artifactsNamespace,
+    resourceNames.files,
+    resourceNames.repos,
   ]);
   const workers = z.array(z.object({ id: z.string() })).parse(await cf("/workers/scripts"));
   const others = workers.filter((worker) => worker.id !== env.workerName);
@@ -244,17 +228,8 @@ async function eraseDataWith(
       "Worker still has data bindings; refusing to erase data while requests may still write.",
     );
 
-  // D1 enforces foreign keys; deferred to the end of this one request's transaction, the tables
-  // empty in any order (https://developers.cloudflare.com/d1/sql-api/foreign-keys/).
-  if (tables.length)
-    await d1(
-      ["pragma defer_foreign_keys = on", ...tables.map((table) => `delete from "${table}"`)].join(
-        "; ",
-      ),
-    );
-  if ((await countRows()).some((rows) => rows !== 0))
-    throw new Error("D1 still holds rows after the erase; rerun to finish.");
-  console.log("D1 after: every table is empty");
+  await dropD1Schema(d1);
+  console.log("D1 after: no schema and no migration history");
 
   for (const store of stores) {
     const deadline = Date.now() + 30 * 60_000;
@@ -281,7 +256,7 @@ async function eraseDataWith(
           await Promise.all(
             batch.map((name) =>
               cf(
-                `/artifacts/namespaces/${encodeURIComponent(env.artifactsNamespace)}/repos/${encodeURIComponent(name)}`,
+                `/artifacts/namespaces/${encodeURIComponent(resourceNames.repos)}/repos/${encodeURIComponent(name)}`,
                 {
                   method: "DELETE",
                   signal: AbortSignal.timeout(60_000),
@@ -303,10 +278,63 @@ async function eraseDataWith(
     console.log(`${store.label} after: empty`);
   }
   console.log(
-    `✅ ${context.name}: all Durable Objects retired; D1, both KV namespaces, R2 and Artifacts verified empty. Deploy to restore service.`,
+    `✅ ${context.name}: all Durable Objects retired; the D1's schema and migration history dropped; both KV namespaces, R2 and Artifacts verified empty. Deploy to migrate the D1 from nothing and restore service.`,
   );
 }
-export { eraseDataWith };
+
+/** A D1's `/query`: a statement's results per `;`-separated statement. */
+type D1Query = (sql: string) => Promise<Record<string, unknown>[][]>;
+function d1Query(cf: EnvContext<OsEnv>["cf"], databaseId: string): D1Query {
+  return async (sql) =>
+    z
+      .array(z.object({ results: z.array(z.looseObject({})) }))
+      .parse(
+        await cf(`/d1/database/${databaseId}/query`, {
+          method: "POST",
+          body: JSON.stringify({ sql }),
+        }),
+      )
+      .map((result) => result.results);
+}
+
+/** A name of SQLite's own (`sqlite_…`, `sqlite_sequence` among them) or D1's (`_cf_…`), which the
+ *  erase never touches. Tested here, not with LIKE, whose `_` matches any character. */
+const isSystemName = (name: string) => name.startsWith("sqlite_") || name.startsWith("_cf_");
+
+/** The D1's own tables, wrangler's migration history (`d1_migrations`) among them. */
+async function d1Tables(d1: D1Query) {
+  const [schema = []] = await d1("select name from sqlite_master where type = 'table'");
+  return z
+    .array(z.object({ name: z.string() }))
+    .parse(schema)
+    .map((table) => table.name)
+    .filter((name) => !isSystemName(name));
+}
+
+/** Drops every table of the D1 but SQLite's and D1's, `d1_migrations` included, so the next deploy
+ *  migrates it from nothing; each table's indexes and triggers go with it. One request is one
+ *  transaction, and D1 enforces foreign keys: deferred to its end, the tables drop in any order
+ *  (https://developers.cloudflare.com/d1/sql-api/foreign-keys/). Throws unless only SQLite's and
+ *  D1's own schema remains. */
+async function dropD1Schema(d1: D1Query) {
+  const tables = await d1Tables(d1);
+  if (tables.length)
+    await d1(
+      ["pragma defer_foreign_keys = on", ...tables.map((table) => `drop table "${table}"`)].join(
+        "; ",
+      ),
+    );
+  const [schema = []] = await d1("select type, name, tbl_name from sqlite_master");
+  const remaining = z
+    .array(z.object({ type: z.string(), name: z.string(), tbl_name: z.string() }))
+    .parse(schema)
+    .filter((entry) => !isSystemName(entry.tbl_name))
+    .map((entry) => `${entry.type} ${entry.name}`);
+  if (remaining.length)
+    throw new Error(`D1 still holds ${remaining.join(", ")} after the drop; rerun to finish.`);
+}
+
+export { eraseDataWith, d1Query, dropD1Schema };
 
 if (process.argv[1]?.endsWith("erase-data.ts"))
   void createCli({ ...import.meta, name: "erase-data" }).run();

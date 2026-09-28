@@ -11,8 +11,10 @@ test("dry run inventories every resource without parking or changing data", asyn
   await eraseDataWith({ env: "preview", dryRun: true }, fixture.services);
   expect(fixture).toMatchObject({ operations: [] });
   expect(fixture.stores.get("oauth")).toHaveLength(2);
-  expect(console.log).toHaveBeenCalledWith("D1 before: users — 2 rows");
-  expect(console.log).toHaveBeenCalledWith("D1 before: projects — 1 rows");
+  expect(console.log).toHaveBeenCalledWith("D1 table to drop: users — 2 rows");
+  expect(console.log).toHaveBeenCalledWith("D1 table to drop: projects — 1 rows");
+  expect(console.log).toHaveBeenCalledWith("D1 table to drop: d1_migrations — 1 rows");
+  expect(fixture.d1).toHaveProperty("d1_migrations");
   expect(console.log).toHaveBeenCalledWith("OAuth KV before: 2");
   expect(console.log).toHaveBeenCalledWith("R2 files before: 1");
   expect(console.log).toHaveBeenCalledWith("Artifacts repositories before: 1");
@@ -26,10 +28,19 @@ test("stops writers first and verifies all data stores empty, including later KV
     operations: ["retire", "clear-db", "clear-oauth", "clear-itx", "clear-files", "clear-repos"],
   });
   expect([...fixture.stores.values()].flat()).toEqual([]);
-  // SQLite's, D1's and wrangler's own tables are never touched; the history keeps the schema's
-  expect(fixture).toMatchObject({
-    d1: { users: 0, projects: 0, d1_migrations: 1, _cf_KV: 3, sqlite_sequence: 1 },
-  });
+  // the schema and its migration history go, triggers with their tables, so the next deploy
+  // migrates from nothing; SQLite's and D1's own tables are never touched
+  expect(fixture).toMatchObject({ d1: { _cf_KV: 3, sqlite_sequence: 1 }, triggers: [] });
+  expect(Object.keys(fixture.d1)).toEqual(["_cf_KV", "sqlite_sequence"]);
+});
+test("a schema object no table drop takes fails the erase", async () => {
+  using fixture = eraseFixture();
+  fixture.views = ["active_users"];
+  const erased = eraseDataWith({ env: "preview" }, fixture.services);
+  const failed = expect(erased).rejects.toThrow("D1 still holds view active_users");
+  await vi.runAllTimersAsync();
+  await failed;
+  expect(fixture).toMatchObject({ operations: ["retire", "clear-db"] });
 });
 test.for([
   {
@@ -91,12 +102,16 @@ function eraseFixture() {
     retainBindings: false,
     sharedConsumer: false,
     operations: [] as string[],
-    /** The D1's tables and their row counts: two of the control plane's, and SQLite's, D1's and
-     *  wrangler's own. */
+    /** The D1's tables and their row counts: two of the control plane's, wrangler's migration
+     *  history, and SQLite's and D1's own. */
     d1: { users: 2, projects: 1, d1_migrations: 1, _cf_KV: 3, sqlite_sequence: 1 } as Record<
       string,
       number
     >,
+    /** The D1's triggers, each on its table. */
+    triggers: [{ name: "users_email_kept", table: "users" }],
+    /** The D1's views, which no table drop takes. */
+    views: [] as string[],
     stores: new Map([
       ["oauth", ["old-grant", "old-client"]],
       ["itx", ["old-value"]],
@@ -133,7 +148,6 @@ function eraseFixture() {
           workerName: "os-example",
           cloudflareAccountId: "test-account",
           resourceNamePrefix: "os-example",
-          artifactsNamespace: "os-example-repos",
           resources: { oauthKvId: "oauth", itxKvId: "itx", dbId: "db" },
         },
       })),
@@ -160,6 +174,20 @@ function eraseFixture() {
     sql.split("; ").flatMap((statement): { results: unknown[] }[] => {
       if (statement === "select name from sqlite_master where type = 'table'")
         return [{ results: Object.keys(fixture.d1).map((name) => ({ name })) }];
+      if (statement === "select type, name, tbl_name from sqlite_master")
+        return [
+          {
+            results: [
+              ...Object.keys(fixture.d1).map((name) => ({ type: "table", name, tbl_name: name })),
+              ...fixture.triggers.map(({ name, table }) => ({
+                type: "trigger",
+                name,
+                tbl_name: table,
+              })),
+              ...fixture.views.map((name) => ({ type: "view", name, tbl_name: name })),
+            ],
+          },
+        ];
       const count = /^select count\(\*\) as rows from "(\w+)"$/.exec(statement);
       if (count) return [{ results: [{ rows: fixture.d1[count[1]!] }] }];
       if (statement === "pragma defer_foreign_keys = on") {
@@ -167,9 +195,10 @@ function eraseFixture() {
         fixture.operations.push("clear-db");
         return [{ results: [] }];
       }
-      const cleared = /^delete from "(\w+)"$/.exec(statement);
-      if (!cleared) throw new Error(`unexpected D1 statement: ${statement}`);
-      fixture.d1[cleared[1]!] = 0;
+      const dropped = /^drop table "(\w+)"$/.exec(statement);
+      if (!dropped) throw new Error(`unexpected D1 statement: ${statement}`);
+      delete fixture.d1[dropped[1]!];
+      fixture.triggers = fixture.triggers.filter(({ table }) => table !== dropped[1]);
       return [{ results: [] }];
     });
   vi.stubGlobal(

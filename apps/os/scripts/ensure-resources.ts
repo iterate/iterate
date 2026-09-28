@@ -1,5 +1,5 @@
 import { createCli } from "trpc-cli";
-import { OS_DOPPLER_PROJECT, osEnvs } from "../../../envs.ts";
+import { OS_DOPPLER_PROJECT, osEnvs, osResourceNames } from "../../../envs.ts";
 import { resolveEnvContext } from "../../../scripts/lib/env-context.ts";
 import { ensureProxiedDnsRecord } from "../../../scripts/lib/deploy-helpers.ts";
 import { routedHostnames } from "./generate-wrangler-config.ts";
@@ -30,11 +30,12 @@ export default async function ensureResources(options: { env?: string } = {}) {
       }));
     resources[key] = namespace.id;
   }
-  // The control plane's D1 (the wrangler generator binds `<resourceNamePrefix>-db` as DB); the deploy
-  // migrates it (scripts/d1.ts).
-  resources.dbId = (await ensureD1(ctx.cf, `${ctx.env.resourceNamePrefix}-db`, "weur")).uuid;
-  // The one R2 bucket behind `itx.r2` (the wrangler generator names it `<resourceNamePrefix>-files`).
-  const bucketName = `${ctx.env.resourceNamePrefix}-files`;
+  const names = osResourceNames(ctx.env.resourceNamePrefix);
+  // The control plane's D1 (the wrangler generator binds it as DB); the deploy migrates it
+  // (scripts/d1.ts).
+  resources.dbId = (await ensureD1(ctx.cf, names.db, "weur")).uuid;
+  // The one R2 bucket behind `itx.r2`.
+  const bucketName = names.files;
   const buckets = await ctx.cf<{ buckets: { name: string }[] }>("/r2/buckets?per_page=1000");
   if (buckets.buckets.some((bucket) => bucket.name === bucketName)) {
     console.log(`R2 bucket ${bucketName} exists`);
@@ -44,7 +45,7 @@ export default async function ensureResources(options: { env?: string } = {}) {
   }
   // The Artifacts namespace behind `itx.cfArtifacts`: the worker's repo create does not provision
   // one ("Namespace is not active"), so a fresh deployment's must exist before its first project.
-  await ensureArtifactsNamespace(ctx.cf, ctx.env.artifactsNamespace);
+  await ensureArtifactsNamespace(ctx.cf, names.repos);
   const zones = await ctx.cfV4<{ id: string; name: string }[]>(
     `/zones?account.id=${ctx.env.cloudflareAccountId}&per_page=500`,
   );

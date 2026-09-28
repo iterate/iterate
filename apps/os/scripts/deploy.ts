@@ -1,6 +1,6 @@
 import { fileURLToPath } from "node:url";
 import { createCli } from "trpc-cli";
-import { OS_DOPPLER_PROJECT, osEnv, osEnvs, type OsEnv } from "../../../envs.ts";
+import { OS_DOPPLER_PROJECT, osEnv, osEnvs, osResourceNames, type OsEnv } from "../../../envs.ts";
 import { deployApp } from "../../../scripts/lib/deploy-app.ts";
 import type { EnvContext } from "../../../scripts/lib/env-context.ts";
 import { parseAppConfig } from "../src/app-config.ts";
@@ -60,7 +60,7 @@ export default async function deploy(options: {
         ctx.env.resources?.dbId || createResources(ctx),
       ]);
       await applyD1Migrations(ctx.cf, {
-        databaseName: `${ctx.env.resourceNamePrefix}-db`,
+        databaseName: osResourceNames(ctx.env.resourceNamePrefix).db,
         databaseId,
         credentials: {
           CLOUDFLARE_API_TOKEN: credentials.CLOUDFLARE_API_TOKEN!,
@@ -90,14 +90,14 @@ export default async function deploy(options: {
  *  `D1Location`), which in CI is where the deployment's suites call it from. Resolves to the D1's id. The delete that takes them is
  *  scripts/preview.ts `deletePreviewDeployment`. */
 async function createResources(ctx: EnvContext<OsEnv>) {
-  const bucketName = `${ctx.env.resourceNamePrefix}-files`;
+  const names = osResourceNames(ctx.env.resourceNamePrefix);
   const [database] = await Promise.all([
-    ensureD1(ctx.cf, `${ctx.env.resourceNamePrefix}-db`, "automatic"),
-    ensureArtifactsNamespace(ctx.cf, ctx.env.artifactsNamespace),
-    ctx.cf(`/r2/buckets/${bucketName}`).catch(async (error) => {
+    ensureD1(ctx.cf, names.db, "automatic"),
+    ensureArtifactsNamespace(ctx.cf, names.repos),
+    ctx.cf(`/r2/buckets/${names.files}`).catch(async (error) => {
       if (!isCloudflareError(error, 404, 10006)) throw error;
-      await ctx.cf("/r2/buckets", { method: "POST", body: JSON.stringify({ name: bucketName }) });
-      console.log(`created R2 bucket ${bucketName}`);
+      await ctx.cf("/r2/buckets", { method: "POST", body: JSON.stringify({ name: names.files }) });
+      console.log(`created R2 bucket ${names.files}`);
     }),
   ]);
   return database.uuid;
