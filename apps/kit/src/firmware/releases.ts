@@ -1,6 +1,5 @@
 import { z } from "zod";
 import {
-  DEFAULT_FIRMWARE_VERSION,
   FIRMWARE_REPOSITORY,
   FIRMWARE_VERSION_PATTERN,
   firmwareReleaseTag,
@@ -9,38 +8,26 @@ import {
 import { loadFirmwareManifest } from "./prepare-manifest.ts";
 
 /**
- * What the firmware picker shows for `requested` (a version, or `latest` for the newest): the
- * device's released versions, newest first, and either the selected version's checked manifest or
- * the `problem` that stops it from being flashed. A device with no release, a version that is not
- * released, a failed listing and a bad manifest are all page state the picker shows, so they come
- * back as `problem` instead of failing the route.
+ * The firmware Kit flashes on `device`: its newest release's checked manifest, or the `problem` that
+ * stops it from being flashed. Kit flashes no other release. A device with no release, a failed
+ * listing and a bad manifest are all page state the device page shows, so they come back as
+ * `problem` instead of failing the route.
  */
-export async function selectFirmware(
-  device: FirmwareDevice,
-  requested: string,
-  fetchImpl: typeof fetch,
-) {
-  let versions: string[] = [];
+export async function newestFirmware(device: FirmwareDevice, fetchImpl: typeof fetch) {
   try {
-    versions = await listFirmwareVersions(device.id, fetchImpl);
-    if (versions.length === 0) {
-      return { versions, problem: `No firmware has been released for ${device.name} yet.` };
-    }
-    const version = requested === DEFAULT_FIRMWARE_VERSION ? versions[0]! : requested;
-    if (!versions.includes(version)) {
-      return { versions, problem: `Release ${version} is not published for ${device.name}.` };
-    }
-    const manifest = await loadFirmwareManifest({ deviceId: device.id, version }, fetchImpl);
-    return { versions, version, manifest };
+    const version = await newestFirmwareVersion(device.id, fetchImpl);
+    if (!version) return { problem: `No firmware has been released for ${device.name} yet.` };
+    return { manifest: await loadFirmwareManifest({ deviceId: device.id, version }, fetchImpl) };
   } catch (error) {
-    return { versions, problem: error instanceof Error ? error.message : String(error) };
+    return { problem: error instanceof Error ? error.message : String(error) };
   }
 }
 
 /**
- * A device's released firmware versions, newest first, from the tags `firmwareReleaseTag` names.
+ * A device's newest released firmware version, from the tags `firmwareReleaseTag` names, or
+ * `undefined` when it has none.
  *
- * The browser lists them itself, from GitHub's public REST API: `git/matching-refs` answers with
+ * The browser lists the device's release tags itself, from GitHub's public REST API: `git/matching-refs` answers with
  * `access-control-allow-origin: *` and returns every match unpaginated, and an anonymous request
  * counts against the viewer's own IP (60 an hour, and GitHub marks the answer cacheable for 60 s),
  * so Kit's Worker holds no GitHub token and spends no shared budget.
@@ -48,9 +35,9 @@ export async function selectFirmware(
  * https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api
  *
  * A tag under the device's prefix that is not a release version is skipped with a warning, so a
- * stray tag can never become the default.
+ * stray tag is never flashed.
  */
-export async function listFirmwareVersions(deviceId: string, fetchImpl: typeof fetch) {
+export async function newestFirmwareVersion(deviceId: string, fetchImpl: typeof fetch) {
   // `kit-firmware/<id>/`: the trailing slash keeps `waveshare` from matching `waveshare-rlcd-4-2`
   const tagPrefix = firmwareReleaseTag(deviceId, "");
   const response = await fetchImpl(
@@ -77,5 +64,5 @@ export async function listFirmwareVersions(deviceId: string, fetchImpl: typeof f
     else console.warn(`Ignoring ${ref}: not ${firmwareReleaseTag(deviceId, "<version>")}.`);
   }
   // versions sort as strings (FIRMWARE_VERSION_PATTERN)
-  return versions.sort().reverse();
+  return versions.sort().at(-1);
 }

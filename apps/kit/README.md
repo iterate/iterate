@@ -88,11 +88,10 @@ the same builds and lists what it would publish.
 --out /tmp/kit-<id>` (`pnpm firmware:build` in `apps/kit`) with ESP-IDF active; see the
   [firmware guide](./firmware/README.md#release-and-proof).
 
-Kit flashes only these releases: `kit-firmware/` releases of iterate/iterate, which
-the Kit Firmware workflow creates. The page lists a board's versions from GitHub's
-public API in the browser (`src/firmware/releases.ts`), so the Worker holds no
-GitHub token; the picker defaults to the newest, and any older release can be
-chosen. The Worker streams each release file from
+Kit flashes only each board's newest `kit-firmware/` release of iterate/iterate,
+which the Kit Firmware workflow creates; no older release can be chosen. The page
+finds it from GitHub's public API in the browser (`src/firmware/releases.ts`), so
+the Worker holds no GitHub token. The Worker streams each release file from
 `/firmware/<device id>/<version>/<file>` (`src/firmware/firmware-proxy.ts`),
 because GitHub's download URLs send no CORS headers; the page checks the manifest
 (`src/firmware/prepare-manifest.ts`) and adds the install's configuration image

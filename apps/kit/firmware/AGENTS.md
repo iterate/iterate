@@ -10,4 +10,4 @@ Board code owns hardware facts; reuse the shared voice loop and protocol. The Ma
 
 Merged firmware changes become per-device GitHub releases ([Kit firmware releases](../README.md#firmware-releases)). A board's own directories are `devices/<target>` and `targets/<target>`; a board must not read another board's directory, and the release build enforces it.
 
-A change to what the configuration decoder requires (tags, capacities, validation) must bump the ITERKIT magic and add a manifest `configurationFormat` that Kit checks: Kit writes the current image for every release, old ones included.
+Kit flashes only each board's newest release, so a change to what the configuration decoder requires (tags, capacities, validation) changes Kit's encoder (`src/firmware/config-image.ts`) in the same PR, with no support for older images.

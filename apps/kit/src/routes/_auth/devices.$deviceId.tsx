@@ -31,14 +31,13 @@ import { ensureVoiceAgent } from "@iterate-com/voice/install";
 import { SetupWizard, type SetupInput } from "../../components/setup-wizard.tsx";
 import { isStatusVoice, statusVoices } from "../../firmware/config-image.ts";
 import {
-  DEFAULT_FIRMWARE_VERSION,
   FIRMWARE_REPOSITORY,
   findFirmwareDevice,
   firmwareReleaseTag,
 } from "../../firmware/catalog.ts";
-import { selectFirmware } from "../../firmware/releases.ts";
+import { newestFirmware } from "../../firmware/releases.ts";
 
-export const Route = createFileRoute("/_auth/devices/$deviceId/firmware/$firmwareVersion")({
+export const Route = createFileRoute("/_auth/devices/$deviceId")({
   // the project's slug, so the OpenAI key check below follows the picker (and a link keeps it)
   validateSearch: z.object({ project: z.string().optional().catch(undefined) }),
   // `_auth` has already sent every other model to `/`, and device-session.json names only a
@@ -48,16 +47,16 @@ export const Route = createFileRoute("/_auth/devices/$deviceId/firmware/$firmwar
     if (!device) throw new Error(`Kit has no device ${context.deviceSession.deviceId}.`);
     return { device };
   },
-  // In the browser (`_auth` is `ssr: false`), which lists the releases itself (releases.ts). A
-  // version that is not released stays in the URL and shows as the picker's problem, not a redirect.
-  loader: async ({ context, params }) => {
+  // In the browser (`_auth` is `ssr: false`), which finds the device's newest release itself
+  // (releases.ts).
+  loader: async ({ context }) => {
     const [projects, firmware] = await Promise.all([
       context.api.projects.list(),
-      selectFirmware(context.device, params.firmwareVersion, fetch),
+      newestFirmware(context.device, fetch),
     ]);
     return { projects, firmware };
   },
-  // Picking a project changes only the search: keep the projects and releases as loaded instead of
+  // Picking a project changes only the search: keep the projects and release as loaded instead of
   // listing them again (GitHub rate-limits the release list per address). A reload refreshes them.
   staleTime: Infinity,
   component: KitPage,
@@ -73,7 +72,6 @@ const horizontalFieldClassName =
 // - a board whose platform has gone away just fails its calls; nothing tells the person
 // - Log out is blocked by a platform that's gone, like device login was (the shared app-server sign-out)
 function KitPage() {
-  const params = Route.useParams();
   const search = Route.useSearch();
   const navigate = Route.useNavigate();
   const { api, info, deviceSession, device } = Route.useRouteContext();
@@ -81,21 +79,6 @@ function KitPage() {
   const { dashOrigin } = root.useLoaderData();
   const queryClient = useQueryClient();
   const project = projects.find((candidate) => candidate.slug === search.project) || projects[0];
-  const newest = firmware.versions[0];
-  const versionItems = [
-    { label: newest ? `Latest (${newest})` : "Latest", value: DEFAULT_FIRMWARE_VERSION },
-    ...firmware.versions.map((version) => ({ label: version, value: version })),
-    // the Select shows only listed values, so an unreleased version in the URL is listed as such
-    ...(params.firmwareVersion === DEFAULT_FIRMWARE_VERSION ||
-    firmware.versions.includes(params.firmwareVersion)
-      ? []
-      : [
-          {
-            label: `${params.firmwareVersion} (not published)`,
-            value: params.firmwareVersion,
-          },
-        ]),
-  ];
   const projectItems = projects.map((item) => ({ label: item.slug, value: item.slug }));
   // asked as soon as a project is picked, so its key goes in with the Wi-Fi instead of after a
   // failed first try
@@ -228,7 +211,7 @@ function KitPage() {
                 {/* through Kit's connect route (device-auth.ts): back to device selection, keeping
                     this session's platform when it isn't the default one */}
                 <a
-                  href={`/.auth/connect?${new URLSearchParams({ issuer: info.platformOrigin, next: `/devices/${device.id}/firmware/${DEFAULT_FIRMWARE_VERSION}` })}`}
+                  href={`/.auth/connect?${new URLSearchParams({ issuer: info.platformOrigin, next: `/devices/${device.id}` })}`}
                   className="text-xs underline underline-offset-4"
                 >
                   Set up another device
@@ -246,52 +229,29 @@ function KitPage() {
           </Field>
 
           <Field className={horizontalFieldClassName}>
-            <FieldLabel htmlFor="firmware-version" className="sm:pt-2">
+            <FieldLabel htmlFor="firmware" className="sm:pt-2">
               Firmware
             </FieldLabel>
             <FieldContent>
-              <Select
-                items={versionItems}
-                value={params.firmwareVersion}
-                onValueChange={(value) => {
-                  if (!value) return;
-                  void navigate({
-                    to: "/devices/$deviceId/firmware/$firmwareVersion",
-                    params: { deviceId: device.id, firmwareVersion: value },
-                    // keep the picked project: without it the picker falls back to the first one
-                    search: (previous) => previous,
-                  });
-                }}
-              >
-                <SelectTrigger id="firmware-version" className="w-full">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectGroup>
-                    {versionItems.map((item) => (
-                      <SelectItem key={item.value} value={item.value}>
-                        {item.label}
-                      </SelectItem>
-                    ))}
-                  </SelectGroup>
-                </SelectContent>
-              </Select>
               {firmware.manifest ? (
-                <FieldDescription>
-                  {firmware.version !== newest && (
-                    <>Older releases may not work with the current platform. </>
-                  )}
-                  {/* a new tab keeps what is typed on this page */}
-                  <a
-                    href={`https://github.com/${FIRMWARE_REPOSITORY}/releases/tag/${firmwareReleaseTag(device.id, firmware.version)}`}
-                    target="_blank"
-                    rel="noreferrer"
-                  >
-                    Release notes
-                  </a>
-                </FieldDescription>
+                <>
+                  <span id="firmware" className="sm:pt-2">
+                    {firmware.manifest.version}
+                  </span>
+                  <FieldDescription>
+                    The newest release for this device.{" "}
+                    {/* a new tab keeps what is typed on this page */}
+                    <a
+                      href={`https://github.com/${FIRMWARE_REPOSITORY}/releases/tag/${firmwareReleaseTag(device.id, firmware.manifest.version)}`}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      Release notes
+                    </a>
+                  </FieldDescription>
+                </>
               ) : (
-                <p role="alert" data-type="error" className="text-sm text-destructive">
+                <p role="alert" data-type="error" className="text-sm text-destructive sm:pt-2">
                   {firmware.problem}
                 </p>
               )}
@@ -454,7 +414,7 @@ function KitPage() {
                 </p>
               )}
               <p className="text-xs text-muted-foreground">
-                The link saves device, firmware and project. Wi-Fi and the token stay private.
+                The link saves device and project. Wi-Fi and the token stay private.
               </p>
             </div>
           </div>
