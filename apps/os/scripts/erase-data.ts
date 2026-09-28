@@ -18,6 +18,7 @@ import {
   type EnvContext,
 } from "../../../scripts/lib/env-context.ts";
 import { readWranglerBase } from "./generate-wrangler-config.ts";
+import { isCloudflareError } from "./preview-artifacts.ts";
 
 const Listing = z.object({
   success: z.boolean(),
@@ -77,7 +78,7 @@ async function eraseDataWith(
     throw new Error(`${context.name} records no resource ids in envs.ts: nothing to erase them by`);
   const resourceNames = osResourceNames(env.resourceNamePrefix);
   console.log(
-    `${options.dryRun ? "Inventory" : "Erase"}: ${context.name}, worker ${env.workerName}`,
+    `${options.dryRun ? "Inventory" : "Erase"}: ${context.name}, worker ${env.workerName}, D1 ${resourceNames.db}, R2 ${resourceNames.files}, Artifacts ${resourceNames.repos}`,
   );
   const namespaces = await services.getWorkerDoNamespaces(context, env.workerName);
   console.log(
@@ -173,9 +174,14 @@ async function eraseDataWith(
   for (let offset = 0; offset < others.length; offset += 10)
     await Promise.all(
       others.slice(offset, offset + 10).map(async (worker) => {
-        const settings = WorkerSettings.parse(
-          await cf(`/workers/scripts/${encodeURIComponent(worker.id)}/settings`),
-        );
+        // A Worker deleted since the listing (the dev account's per-commit deployments come and
+        // go) binds nothing.
+        const settings = await cf(`/workers/scripts/${encodeURIComponent(worker.id)}/settings`)
+          .then((body) => WorkerSettings.parse(body))
+          .catch((error: unknown) => {
+            if (!isCloudflareError(error, 404, 10007)) throw error;
+            return { bindings: [] };
+          });
         if (
           settings.bindings.some(
             (binding) =>

@@ -1,4 +1,5 @@
 import { expect, test, vi } from "vitest";
+import { CloudflareApiError } from "../../../scripts/lib/env-context.ts";
 import { eraseDataWith } from "./erase-data.ts";
 
 test("production requires explicit confirmation before contacting any service", async () => {
@@ -18,6 +19,12 @@ test("dry run inventories every resource without parking or changing data", asyn
   expect(console.log).toHaveBeenCalledWith("OAuth KV before: 2");
   expect(console.log).toHaveBeenCalledWith("R2 files before: 1");
   expect(console.log).toHaveBeenCalledWith("Artifacts repositories before: 1");
+});
+test("a Worker deleted between the listing and its settings read shares nothing", async () => {
+  using fixture = eraseFixture();
+  fixture.deletedWorker = true;
+  await eraseDataWith({ env: "preview", dryRun: true }, fixture.services);
+  expect(console.log).toHaveBeenCalledWith("Other workers sharing data: none");
 });
 test("stops writers first and verifies all data stores empty, including later KV pages", async () => {
   using fixture = eraseFixture();
@@ -101,6 +108,7 @@ function eraseFixture() {
     branchNamespaces: false,
     retainBindings: false,
     sharedConsumer: false,
+    deletedWorker: false,
     operations: [] as string[],
     /** The D1's tables and their row counts: two of the control plane's, wrangler's migration
      *  history, and SQLite's and D1's own. */
@@ -120,7 +128,15 @@ function eraseFixture() {
     ]),
     cf: vi.fn(async (route: string, init?: RequestInit): Promise<unknown> => {
       if (route === "/workers/scripts")
-        return [{ id: "os-example" }, ...(fixture.sharedConsumer ? [{ id: "old-worker" }] : [])];
+        return [
+          { id: "os-example" },
+          ...(fixture.sharedConsumer ? [{ id: "old-worker" }] : []),
+          ...(fixture.deletedWorker ? [{ id: "deleted-worker" }] : []),
+        ];
+      if (route === "/workers/scripts/deleted-worker/settings")
+        throw new CloudflareApiError("GET", route, 404, [
+          { code: 10007, message: "This Worker does not exist on your account." },
+        ]);
       if (route === "/workers/scripts/old-worker/settings")
         return { bindings: [{ name: "OAUTH_KV", type: "kv_namespace", namespace_id: "oauth" }] };
       if (route.endsWith("/settings"))
