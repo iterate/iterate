@@ -6,3 +6,4 @@ export function readPayload(raw: string) {
 }
 
 export const proofHead = 2;
+export const proofHead3 = 3;
