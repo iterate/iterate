@@ -621,14 +621,7 @@ function ConnectedAccounts({ projects }: { projects: { id: string; slug: string 
                           setError(null);
                           setDisconnecting(row.connection);
                           try {
-                            await api.user.facets
-                              .get("account")
-                              .invoke([
-                                [
-                                  "disconnectIntegration",
-                                  { provider: row.provider, connection: row.connection },
-                                ],
-                              ]);
+                            await api.user.integrations.disconnect(row.provider, row.connection);
                           } catch (caught) {
                             setError(caught instanceof Error ? caught.message : String(caught));
                           } finally {

@@ -761,22 +761,46 @@ export interface IterateContextApi {
     ): Promise<{ lendId: string; everyProject?: EveryProjectBorrows }>;
     revokeLend(path: string, lendId: string): Promise<{ lendId: string }>;
   };
-  /** Connect this context's owner — a project (its root), or a person (`session.user`) — to a
-   *  provider through the deployment's app: `connect` answers where to send the human (and the
-   *  connection's name; again for one that exists asks for more `scopes` on the same account). On a
-   *  project, `account` connects one of YOUR accounts instead — the address the provider gives it,
-   *  as `session.user`'s `state.integrations` lists it: with no `authorizationUrl` when it already
-   *  holds what the project asks for, else one that asks the provider to add it. The project then
-   *  uses it as `/secrets/<provider>-<connection>` while it stays connected and you stay a member;
-   *  disconnecting it there leaves it yours. `requestFromUser` answers a Dash link asking the
-   *  signed-in person to connect the provider to this project. */
+  /** Connect and disconnect this context's owner — a project (its root), or a person
+   *  (`session.user`) — and a provider. `connect` answers where to send the human (and the
+   *  connection's name; again for one that exists asks for more `scopes` on the same account):
+   *  through the deployment's app, or with `client: "project"` through the project's own, whose
+   *  credentials `/secrets/<provider>-<connection>` already holds (a GitHub App's also needs its
+   *  `appSlug` and `clientId`). GitHub's `installationId` connects an installation the App already
+   *  has, without GitHub's configure page. On a project, `account` connects one of YOUR accounts
+   *  instead — the address the provider gives it, as `session.user`'s `state.integrations` lists
+   *  it: with no `authorizationUrl` when it already holds what the project asks for, else one that
+   *  asks the provider to add it. The project then uses it as `/secrets/<provider>-<connection>`
+   *  while it stays connected and you stay a member. `disconnect` revokes the token where the
+   *  provider allows and removes the connection, its secret and its webhook route; an account of
+   *  yours disconnected from a project stays yours. `requestFromUser` answers a Dash link asking
+   *  the signed-in person to connect the provider to this project. */
   integrations: {
     connect(
       provider: IntegrationProvider,
       options?:
-        | { scopes?: string[]; next?: string; connection?: string; account?: never }
-        | { scopes?: string[]; next?: string; account: string; connection?: never },
+        | {
+            scopes?: string[];
+            next?: string;
+            connection?: string;
+            client?: "iterate" | "project";
+            appSlug?: string;
+            clientId?: string;
+            installationId?: string;
+            account?: never;
+          }
+        | {
+            scopes?: string[];
+            next?: string;
+            account: string;
+            connection?: never;
+            client?: never;
+            appSlug?: never;
+            clientId?: never;
+            installationId?: never;
+          },
     ): Promise<{ authorizationUrl?: string; connection: string }>;
+    disconnect(provider: IntegrationProvider, connection: string): Promise<void>;
     requestFromUser(
       provider: IterateAppProvider,
       options?: { scopes?: string[] },
