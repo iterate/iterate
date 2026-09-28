@@ -133,7 +133,10 @@ static enum iterate_kit_byte_stream_result stream_connect(void *context) {
  * No progress, as opposed to no connection. Over TLS that is mbedTLS's
  * WANT_READ and WANT_WRITE (it may need the other direction to advance) and
  * its TIMEOUT, whatever errno says; over plain TCP, the socket's EAGAIN. None
- * of them is logged or remembered.
+ * of them is logged or remembered. Every other negative result is fatal:
+ * ESP-TLS itself reads on past a TLS 1.3 NewSessionTicket, and this build
+ * enables neither asynchronous nor restartable crypto, mbedTLS's other
+ * "call again" answers.
  */
 static bool no_progress(
     const struct iterate_kit_esp_tls_stream *stream,
