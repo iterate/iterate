@@ -7,6 +7,7 @@
     "./app-config": "./src/app-config.ts",
     "./base64": "./src/base64.ts",
     "./dev/is-main-module": "./src/dev/is-main-module.ts",
+    "./integration-scopes": "./src/integration-scopes.ts",
     "./test-support/e2e-policy": "./src/test-support/e2e-policy/budgets.ts",
     "./test-support/failing-test": "./src/test-support/failing-test.ts",
     "./test-support/flake-test": "./src/test-support/flake-test.ts",

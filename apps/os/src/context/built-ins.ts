@@ -32,6 +32,7 @@ import type {
   WorkerSource,
 } from "iterate/api";
 import { projectPublicUrlOf, type IngressRouting } from "iterate/project-ingress";
+import { missingScopes } from "@iterate-com/shared/integration-scopes";
 import { failureKind, ONCE_NOW, retryPlatformFailures } from "@iterate-com/shared/platform-retry";
 import { refusePlatformIdempotencyKeys, stampCaller, type Caller } from "../caller.ts";
 import { FIRST_PARTY_FACET_CLASSES, firstPartyFacetClassOf } from "../first-party-facets.ts";
@@ -58,7 +59,6 @@ import type {
   FinishConnectAnswer,
   FinishConnectInput,
 } from "../integrations/verbs.ts";
-import { missingScopes } from "../integrations/rules.ts";
 import type { ProjectState } from "../project/contract.ts";
 import type { AccountState } from "../account/contract.ts";
 import type { InstanceState } from "../instance/contract.ts";

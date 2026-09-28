@@ -12,12 +12,15 @@
 // in apps/os/src/context/built-ins.ts) opens the same sheet only when its project and platform are
 // this page's, with the path and origins locked; once the secret is set, the requesting agent is
 // messaged. The list is the route's loader; a set or a delete invalidates the router, which reloads it.
+
+// registers `itx.agents` on InstalledAppRoots
+import type {} from "@iterate-com/agents";
 import { useRef, useState, type FormEvent, type RefObject } from "react";
 import { createFileRoute, useNavigate, useRouter } from "@tanstack/react-router";
 import { Plus } from "lucide-react";
 import { z } from "zod";
 import type { AuthenticatedApp } from "iterate/app";
-import type { SecretCatalogEntry, SecretMaterial } from "iterate/api";
+import type { IterateContextApiWith, SecretCatalogEntry, SecretMaterial } from "iterate/api";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -400,14 +403,14 @@ function SecretForm({
       let notification = "";
       if (requestingAgent) {
         try {
-          await api.projects
-            .get(projectId)
-            .invoke([
-              "itx",
-              "agents",
-              ["get", requestingAgent],
-              ["message", `The user submitted the secret at ${path}. Its value was not included.`],
-            ]);
+          const project = api.projects.get(projectId);
+          // An agent's collection link: the agents app is installed, so the project's root has
+          // `itx.agents` (the assertion iterate/api's `IterateContextApiWith` documents).
+          const withAgents = project as typeof project &
+            Pick<IterateContextApiWith<"agents">, "agents">;
+          await withAgents.agents
+            .get(requestingAgent)
+            .message(`The user submitted the secret at ${path}. Its value was not included.`);
         } catch {
           notification = " The secret was saved, but the requesting agent could not be notified.";
         }

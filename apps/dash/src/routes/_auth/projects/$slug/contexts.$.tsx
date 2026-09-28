@@ -7,8 +7,7 @@
 // `context-tree.tsx`) over the project's context registry (the `project` facet's `contexts` on `/`,
 // apps/os/src/project/contract.ts), live; on the right the context, its path once on the view's
 // strip. A phone has the tree in a sheet, opened from the path. The shell's breadcrumb ends in
-// "Contexts". Replaces the old platform's `/projects/<slug>/streams/$` explorer (removed with it
-// in #2837).
+// "Contexts".
 import { useMemo } from "react";
 import { createFileRoute, getRouteApi, useRouter } from "@tanstack/react-router";
 import { z } from "zod";

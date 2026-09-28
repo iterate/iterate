@@ -306,10 +306,10 @@ test("a device's key is listed as the device; an expiring key is refused past it
   const listing = (patterns: string) =>
     ({ ...env, APP_CONFIG_LOGIN__ALLOWED_EMAILS: patterns }) as typeof env;
   expect(
-    await authorizationForToken(listing("*@example.com"), device.token, addresses, "api"),
+    await authorizationForToken(listing('["*@example.com"]'), device.token, addresses, "api"),
   ).toMatchObject({ principal: { actor: user.id, email } });
   expect(
-    await authorizationForToken(listing("*@iterate.com"), device.token, addresses, "api"),
+    await authorizationForToken(listing('["*@iterate.com"]'), device.token, addresses, "api"),
   ).toBeNull();
   await expect(
     account.grants.mint({

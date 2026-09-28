@@ -25,23 +25,21 @@ const shell = getRouteApi("/_auth");
 
 /** The project facet's live state, the fields this page reads. */
 const HostnamesLive = z.looseObject({
-  primaryHostname: z.string().nullable().default(null),
-  hostnames: z
-    .record(
-      z.string(),
-      z.object({
-        requested: z.object({ verb: z.enum(["add", "remove"]) }).nullable(),
-        cloudflare: z
-          .object({
-            status: z.string(),
-            sslStatus: z.string(),
-            records: z.array(z.object({ name: z.string(), value: z.string() })),
-          })
-          .nullable(),
-        error: z.string().nullable(),
-      }),
-    )
-    .default({}),
+  primaryHostname: z.string().nullable(),
+  hostnames: z.record(
+    z.string(),
+    z.object({
+      requested: z.object({ verb: z.enum(["add", "remove"]) }).nullable(),
+      cloudflare: z
+        .object({
+          status: z.string(),
+          sslStatus: z.string(),
+          records: z.array(z.object({ name: z.string(), value: z.string() })),
+        })
+        .nullable(),
+      error: z.string().nullable(),
+    }),
+  ),
 });
 
 export const Route = createFileRoute("/_auth/projects/$slug/hostnames")({
@@ -58,9 +56,10 @@ function ProjectHostnames() {
   const navigate = useNavigate({ from: Route.fullPath });
   const context = useContextStub(() => api.projects.get(project.id), [api, project.id]).stub;
   const live = useFacetLiveState(context, "project");
-  const parsed = HostnamesLive.safeParse(live.value).data;
-  const hostnames = Object.entries(parsed?.hostnames ?? {});
-  const primaryHostname = parsed?.primaryHostname ?? null;
+  const read = live.value ? HostnamesLive.safeParse(live.value) : undefined;
+  const hostnames = Object.entries(read?.data?.hostnames ?? {});
+  const primaryHostname = read?.data?.primaryHostname ?? null;
+  const loadError = live.error || (read?.error && z.prettifyError(read.error));
   const [error, setError] = useState<string | null>(null);
   const append = (event: { type: string; payload: { hostname: string | null } }) =>
     context!.append(event).then(
@@ -108,7 +107,11 @@ function ProjectHostnames() {
           {error}
         </p>
       )}
-      {hostnames.length === 0 ? (
+      {loadError ? (
+        <p role="alert" className="text-sm text-destructive">
+          Couldn't load this project's hostnames: {loadError}
+        </p>
+      ) : hostnames.length === 0 ? (
         <p className="text-sm text-muted-foreground">No hostnames yet.</p>
       ) : (
         <ul className="flex flex-col divide-y rounded-lg border" data-testid="hostnames">

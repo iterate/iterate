@@ -742,7 +742,7 @@ test("login.allowedEmails asks nothing of an added account's own address, and a 
   const email = "listed-adder@example.test";
   const { cookie } = await signedInMember(email);
   const person = (await controlPlane().getUser(email))!;
-  const listed = { ...env, APP_CONFIG_LOGIN__ALLOWED_EMAILS: email } as Env;
+  const listed = { ...env, APP_CONFIG_LOGIN__ALLOWED_EMAILS: JSON.stringify([email]) } as Env;
   const petshop = petshopFakes();
   const choices = { login: "gh-unlisted", email: "gh-unlisted@signin.test" };
   /** The browser from the issuer to GitHub's fake and back, on the listed deployment. */

@@ -33,6 +33,7 @@ import {
 } from "@iterate-com/ui/components/sheet";
 import { Spinner } from "@iterate-com/ui/components/spinner";
 import { Textarea } from "@iterate-com/ui/components/textarea";
+import { missingScopes } from "@iterate-com/shared/integration-scopes";
 import {
   INTEGRATION_PROVIDER_NAMES,
   INTEGRATION_PROVIDERS,
@@ -41,9 +42,10 @@ import {
 } from "iterate/api";
 import { errorCode } from "iterate/lib";
 import { useContextStub, useFacetLiveState } from "iterate/react";
-import { httpOriginOf } from "../../../../lib/origins.ts";
+import { WaitroseForm } from "../../../../components/waitrose.tsx";
+import { connectWaitrose, freshConnectionName } from "../../../../lib/connections.ts";
+import { addGithubSignInHref, httpOriginOf } from "../../../../lib/origins.ts";
 import { stepUpUrl } from "../../../../lib/scopes.ts";
-import { addGithubSignInHref } from "../../../../lib/origins.ts";
 
 const Provider = z.enum(INTEGRATION_PROVIDERS);
 type Provider = z.infer<typeof Provider>;
@@ -68,17 +70,15 @@ type Connection = z.infer<typeof Connection>;
 /** The project's connections and the deployment's keys shared with it; a person's own connections
  *  (the account's state has the same `integrations`). */
 const IntegrationsLive = z.looseObject({
-  integrations: z.record(z.string(), Connection).default({}),
-  secrets: z
-    .record(
-      z.string(),
-      z.looseObject({
-        borrowed: z
-          .object({ lender: z.object({ instance: z.literal(true).optional() }).loose() })
-          .optional(),
-      }),
-    )
-    .default({}),
+  integrations: z.record(z.string(), Connection),
+  secrets: z.record(
+    z.string(),
+    z.looseObject({
+      borrowed: z
+        .object({ lender: z.object({ instance: z.literal(true).optional() }).loose() })
+        .optional(),
+    }),
+  ),
 });
 
 /** Each published provider, its name, and what one of its connections is. */
@@ -90,9 +90,6 @@ const PROVIDERS = INTEGRATION_PROVIDERS.map((provider) => ({
 
 /** The providers a person has an account of their own with by signing in (apps/os identity.ts). */
 const SIGN_IN_PROVIDERS: readonly SignInProvider[] = ["google", "cloudflare", "github"];
-
-/** Where Waitrose logs in (apps/os/src/integrations/waitrose.ts): the connection's secret's pin. */
-const WAITROSE_GRAPHQL_URL = "https://www.waitrose.com/api/graphql";
 
 export const Route = createFileRoute("/_auth/projects/$slug/integrations")({
   validateSearch: z.object({
@@ -130,7 +127,9 @@ function ProjectIntegrations() {
   const navigate = useNavigate({ from: Route.fullPath });
   const context = useContextStub(() => api.projects.get(project.id), [api, project.id]).stub;
   const live = useFacetLiveState(context, "project");
-  const projectState = IntegrationsLive.safeParse(live.value).data;
+  const projectRead = live.value ? IntegrationsLive.safeParse(live.value) : undefined;
+  const projectState = projectRead?.data;
+  const loadError = live.error || (projectRead?.error && z.prettifyError(projectRead.error));
   const rows = Object.values(projectState?.integrations ?? {});
   const fromDeployment = Object.entries(projectState?.secrets ?? {}).flatMap(([path, row]) =>
     row.borrowed?.lender.instance ? [path] : [],
@@ -141,12 +140,11 @@ function ProjectIntegrations() {
     [api, info.scopes],
   );
   const personLive = useFacetLiveState(personStub.stub, "account");
-  const yourAccounts = Object.values(
-    IntegrationsLive.safeParse(personLive.value).data?.integrations ?? {},
-  );
+  const personRead = personLive.value ? IntegrationsLive.safeParse(personLive.value) : undefined;
+  const yourAccounts = Object.values(personRead?.data?.integrations ?? {});
   const yourAccountsStatus = !info.scopes.includes("account")
     ? "no-access"
-    : personStub.error || personLive.error
+    : personStub.error || personLive.error || personRead?.error
       ? "failed"
       : personLive.value
         ? "loaded"
@@ -259,9 +257,9 @@ function ProjectIntegrations() {
           {error}
         </p>
       )}
-      {live.error ? (
+      {loadError ? (
         <p role="alert" data-type="error" className="text-sm text-destructive">
-          Couldn't load this project's connections: {live.error}
+          Couldn't load this project's connections: {loadError}
         </p>
       ) : !live.value ? (
         <p role="status" className="text-sm text-muted-foreground">
@@ -278,7 +276,7 @@ function ProjectIntegrations() {
                 <h2 id={`${provider}-heading`} className="flex-1 font-medium">
                   {title}
                 </h2>
-                {Boolean(live.value) && connections.length === 0 && (
+                {projectState && connections.length === 0 && (
                   <span className="text-xs text-muted-foreground">Not connected</span>
                 )}
                 <Button
@@ -550,37 +548,17 @@ function ProjectIntegrations() {
           )}
           {search.waitrose && (
             <WaitroseForm
+              firstField={firstField}
               onBack={
                 yourAccounts.some((row) => row.provider === "waitrose")
                   ? () => void navigate({ search: { connect: "waitrose" }, replace: true })
                   : undefined
               }
-              firstField={firstField}
-              pending={busy === "waitrose"}
-              error={error}
-              onSubmit={({ username, password }) =>
-                run("waitrose", async () => {
-                  const owner = api.projects.get(project.id);
-                  const connection = freshConnectionName();
-                  const secretPath = `/secrets/waitrose-${connection}`;
-                  await owner.secrets.set(
-                    secretPath,
-                    { username, password },
-                    {
-                      urls: [new URL(WAITROSE_GRAPHQL_URL).origin],
-                      refresh: { kind: "waitrose-session", graphqlUrl: WAITROSE_GRAPHQL_URL },
-                    },
-                  );
-                  await owner.facets
-                    .get("project")
-                    .invoke([["connectWaitrose", { connection, account: username }]])
-                    .catch(async (caught: unknown) => {
-                      await owner.secrets.delete(secretPath).catch(() => {});
-                      throw caught;
-                    });
-                  await closeSheet();
-                })
-              }
+              onPendingChange={(pending) => setBusy(pending ? "waitrose" : null)}
+              onConnect={async (credentials) => {
+                await connectWaitrose(api.projects.get(project.id), "project", credentials);
+                await closeSheet();
+              }}
             />
           )}
           {own && (
@@ -652,13 +630,6 @@ function ProjectIntegrations() {
   );
 }
 
-/** Google's two spellings of its identity scopes, so a sign-in's `email` counts as the app's
- *  `userinfo.email` (apps/os/src/integrations/rules.ts `missingScopes` decides; this only words it). */
-const GOOGLE_SCOPE_ALIASES: Record<string, string> = {
-  email: "https://www.googleapis.com/auth/userinfo.email",
-  profile: "https://www.googleapis.com/auth/userinfo.profile",
-};
-
 /** What a person recognises a scope as — Gmail, Calendar, Docs, Drive — or null for one they
  *  would not (the identity, a Cloudflare permission's name). */
 function scopeLabelOf(scope: string) {
@@ -692,14 +663,11 @@ function accessLabelOf(scopes: string[]) {
   ].join(", ");
 }
 
-/** What `granted` lacks of `asked`, as a person reads it ("Gmail access", "contacts.readonly
- *  access"), "more access" for identity scopes alone, or null (Google's identity aliases counted
- *  once). */
+/** What `granted` lacks of `asked` (`missingScopes`, the platform's own rule), as a
+ *  person reads it ("Gmail access", "contacts.readonly access"), "more access" for identity scopes
+ *  alone, or null. */
 function missingAccessOf(provider: Provider, granted: string[], asked: string[]) {
-  const spelled = (scope: string) =>
-    provider === "google" ? GOOGLE_SCOPE_ALIASES[scope] || scope : scope;
-  const held = new Set(granted.map(spelled));
-  const missing = asked.filter((scope) => !held.has(spelled(scope)));
+  const missing = missingScopes(provider, granted, asked);
   if (missing.length === 0) return null;
   const label = accessLabelOf(missing);
   return label ? `${label} access` : "more access";
@@ -870,12 +838,6 @@ function ConnectionItem({
   );
 }
 
-/** A new connection's name: short and random. It names the connection's secret
- *  (`/secrets/<provider>-<name>`) and a project app's webhook URL for life. */
-function freshConnectionName() {
-  return crypto.randomUUID().slice(0, 8);
-}
-
 /** What connecting with your own app takes, per provider: the URLs to paste into its console, the
  *  credentials the connection's secret holds, and the origins that secret is pinned to. */
 function ownAppOf(
@@ -1044,82 +1006,6 @@ function OwnAppForm({
         <Button type="submit" disabled={pending}>
           {pending ? <Spinner data-icon="inline-start" /> : null}
           Continue to {ownApp.title}
-        </Button>
-      </SheetFooter>
-    </form>
-  );
-}
-
-/** Waitrose's username and password, for the connection's secret. They go to the secret alone:
- *  the platform logs in with them on first use and whenever Waitrose answers 401. */
-function WaitroseForm({
-  onBack,
-  firstField,
-  pending,
-  error,
-  onSubmit,
-}: {
-  /** Back to the Connect sheet, when there is one to go back to. */
-  onBack?: () => void;
-  firstField: RefObject<HTMLInputElement | null>;
-  pending: boolean;
-  error: string | null;
-  onSubmit: (credentials: { username: string; password: string }) => Promise<void>;
-}) {
-  const [username, setUsername] = useState("");
-  const [password, setPassword] = useState("");
-  const submit = (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    void onSubmit({ username, password });
-  };
-  return (
-    <form onSubmit={submit} className="flex h-full flex-col">
-      <SheetHeader>
-        <SheetTitle className="flex items-center gap-2">
-          <ProviderLogo provider="waitrose" />
-          Connect Waitrose
-        </SheetTitle>
-        <SheetDescription>The password is only ever sent to waitrose.com.</SheetDescription>
-      </SheetHeader>
-      <FieldGroup className="flex-1 px-4 pb-4">
-        <Field>
-          <FieldLabel htmlFor="waitrose-username">Email</FieldLabel>
-          <Input
-            id="waitrose-username"
-            ref={firstField}
-            type="email"
-            autoComplete="off"
-            required
-            value={username}
-            onChange={(event) => setUsername(event.target.value.trim())}
-          />
-        </Field>
-        <Field>
-          <FieldLabel htmlFor="waitrose-password">Password</FieldLabel>
-          <Input
-            id="waitrose-password"
-            type="password"
-            autoComplete="off"
-            required
-            value={password}
-            onChange={(event) => setPassword(event.target.value)}
-          />
-        </Field>
-        {error && (
-          <p role="alert" data-type="error" className="text-sm text-destructive">
-            {error}
-          </p>
-        )}
-      </FieldGroup>
-      <SheetFooter className="border-t sm:flex-row sm:justify-end">
-        {onBack && (
-          <Button type="button" variant="ghost" disabled={pending} onClick={onBack}>
-            Back
-          </Button>
-        )}
-        <Button type="submit" disabled={pending}>
-          {pending ? <Spinner data-icon="inline-start" /> : null}
-          Connect
         </Button>
       </SheetFooter>
     </form>

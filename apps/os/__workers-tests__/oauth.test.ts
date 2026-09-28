@@ -251,11 +251,13 @@ test("login.allowedEmails: a live grant whose email the list stops naming is ref
   const listing = (patterns: string) =>
     ({ ...env, APP_CONFIG_LOGIN__ALLOWED_EMAILS: patterns }) as typeof env;
   expect(
-    await authorizationForToken(listing("*@example.com"), token, addresses, "api"),
+    await authorizationForToken(listing('["*@example.com"]'), token, addresses, "api"),
   ).toMatchObject({
     principal: { actor: flow.user.id },
   });
-  expect(await authorizationForToken(listing("*@iterate.com"), token, addresses, "api")).toBeNull();
+  expect(
+    await authorizationForToken(listing('["*@iterate.com"]'), token, addresses, "api"),
+  ).toBeNull();
 });
 
 test("a use the account recorded within the hour is not recorded again by another isolate, and the grant is refused at its very next request once it ends", async () => {
