@@ -14,8 +14,8 @@
 // `refresh` overwrites every vendored file with upstream's, and lets the CLI add any dependency a
 // new version needs; review the diff before committing it.
 //
-//   pnpm tsx scripts/ci/shadcn-drift.ts check
-//   pnpm tsx scripts/ci/shadcn-drift.ts refresh
+//   node scripts/ci/shadcn-drift.ts check
+//   node scripts/ci/shadcn-drift.ts refresh
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -169,7 +169,7 @@ export async function check() {
   }
   throw new Error(
     `${found.length} vendored shadcn file(s) differ from upstream. Refresh with ` +
-      "`pnpm tsx scripts/ci/shadcn-drift.ts refresh` and review the diff; never edit one by hand " +
+      "`node scripts/ci/shadcn-drift.ts refresh` and review the diff; never edit one by hand " +
       "(packages/ui/AGENTS.md).",
   );
 }

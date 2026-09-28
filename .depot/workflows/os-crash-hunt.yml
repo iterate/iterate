@@ -56,4 +56,4 @@ jobs:
       - name: Notify Slack
         env:
           NEEDS: ${{ toJSON(needs) }}
-        run: pnpm tsx scripts/ci/notify.ts workflow-failure
+        run: node scripts/ci/notify.ts workflow-failure

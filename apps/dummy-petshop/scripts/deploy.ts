@@ -17,10 +17,10 @@ export default async function deploy(options: { env?: string } = {}) {
     workerName: (env) => env.workerName,
     servingUrl: (env) => env.baseUrl,
     smokes: (env) => [
-      { url: `${env.baseUrl}/`, ok: (status) => status === 200, label: "shop index" },
+      { url: `${env.baseUrl}/`, ok: (response) => response.status === 200, label: "shop index" },
       {
         url: `${env.baseUrl}/cloudflare/.well-known/jwks.json`,
-        ok: (status) => status === 200,
+        ok: (response) => response.status === 200,
         label: "shop state",
       },
     ],

@@ -3,12 +3,12 @@
 // rewrites the issue when the body changed. `.depot/workflows/flake-dashboard.yml` runs it every
 // hour. Nothing is kept between runs.
 //
-//   doppler run --project _shared --config preview -- pnpm tsx scripts/ci/flake-dashboard/update.ts --dry-run
+//   node scripts/ci/flake-dashboard/update.ts --dry-run
 //
-// --dry-run prints the body instead of writing the issue; locally it finds the issue with `gh`'s
-// token (GH_TOKEN). The issue is written as the iterate GitHub App, the platform's own: with
-// APP_CONFIG set (Doppler os/prd, beside APP_CONFIG_SECRETS__KEY), the writer takes the App's id and
-// key from its `integrations.github` and mints an installation token that can only write issues in
+// --dry-run prints the body instead of writing the issue. The bucket is read with its account's
+// Cloudflare API token (envs.ts `ciBucketEnvs`). The issue is written as the iterate GitHub App, the
+// platform's own: the writer takes the App's id and key from prd's configuration (Doppler os/prd's
+// APP_CONFIG `integrations.github`) and mints an installation token that can only write issues in
 // this repository. The Depot app's job token has no Issues permission.
 import { createSign } from "node:crypto";
 import type { Octokit } from "@octokit/rest";
@@ -16,7 +16,8 @@ import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
 import { createCli } from "trpc-cli";
 import { z } from "zod";
 import { parseAppConfig } from "../../../apps/os/src/app-config.ts";
-import { ciBucketEnvs } from "../../../envs.ts";
+import { ciBucketEnvs, OS_DOPPLER_PROJECT, osEnvs } from "../../../envs.ts";
+import { dopplerSecret, resolveEnvContext } from "../../lib/env-context.ts";
 import { createOctokit } from "../github.ts";
 import { DASHBOARD_MARKER, renderDashboard } from "./dashboard.ts";
 import { readSuiteRuns } from "./evidence.ts";
@@ -33,37 +34,35 @@ export default async function update(
   const repository = process.env.GITHUB_REPOSITORY || "iterate/iterate";
   const [owner, repo] = repository.split("/");
   if (!owner || !repo) throw new Error(`GITHUB_REPOSITORY is not owner/repo: ${repository}`);
-  const apiToken = process.env.CLOUDFLARE_API_TOKEN;
-  if (!apiToken)
-    throw new Error("CLOUDFLARE_API_TOKEN (Doppler _shared/preview) reads the CI bucket");
-  const iterateApp = process.env.APP_CONFIG
-    ? parseAppConfig({
-        APP_CONFIG: process.env.APP_CONFIG,
-        APP_CONFIG_SECRETS__KEY: process.env.APP_CONFIG_SECRETS__KEY,
-      }).integrations.github
-    : undefined;
-  const app = iterateApp
-    ? await iterateAppIssuesToken({
-        appId: iterateApp.appId,
-        privateKey: iterateApp.privateKey.exposeSecret(),
-        owner,
-        repo,
-      })
-    : undefined;
-  if (app)
-    console.log(
-      `[flake-dashboard] iterate app token for ${app.repositories.join(", ")}: ${JSON.stringify(app.permissions)}`,
-    );
-  else if (!dryRun)
+  const bucket = ciBucketEnvs.ci;
+  const prd = await resolveEnvContext({
+    envs: osEnvs,
+    dopplerProject: OS_DOPPLER_PROJECT,
+    env: "prd",
+  });
+  const iterateApp = parseAppConfig({
+    APP_CONFIG: prd.secrets.APP_CONFIG,
+    APP_CONFIG_SECRETS__KEY: prd.secrets.APP_CONFIG_SECRETS__KEY,
+  }).integrations.github;
+  if (!iterateApp)
     throw new Error(
-      "APP_CONFIG with integrations.github (Doppler os/prd) is required to write the dashboard",
+      "prd's APP_CONFIG has no integrations.github: the dashboard is the App's to write",
     );
-  const github = createOctokit(app?.token || process.env.GH_TOKEN || process.env.GITHUB_TOKEN);
+  const app = await iterateAppIssuesToken({
+    appId: iterateApp.appId,
+    privateKey: iterateApp.privateKey.exposeSecret(),
+    owner,
+    repo,
+  });
+  console.log(
+    `[flake-dashboard] iterate app token for ${app.repositories.join(", ")}: ${JSON.stringify(app.permissions)}`,
+  );
+  const github = createOctokit(app.token);
 
   const runs = await readSuiteRuns({
-    accountId: ciBucketEnvs.ci.cloudflareAccountId,
-    bucketName: ciBucketEnvs.ci.bucketName,
-    apiToken,
+    accountId: bucket.cloudflareAccountId,
+    bucketName: bucket.bucketName,
+    apiToken: dopplerSecret(bucket.dopplerProject, bucket.dopplerConfig, "CLOUDFLARE_API_TOKEN"),
     now: new Date(),
   });
   const suites = [...new Set(runs.map((run) => run.suite))].sort();

@@ -44,7 +44,7 @@ jobs:
         working-directory: apps/dash
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-        run: doppler run --project dash --config prd -- pnpm run-script deploy
+        run: pnpm run-script deploy --env prd
       # The deploy's own result: a success to #ci; a failed, cancelled or timed-out deploy pages
       # #error-pulse (deploy-os.yml says why `always()`).
       - name: Notify Slack
@@ -53,4 +53,4 @@ jobs:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           APP_DISPLAY_NAME: Dash
           PUBLIC_URL: https://dash.iterate.com
-        run: pnpm tsx scripts/ci/notify.ts deploy-${{ steps.deploy.outcome == 'success' && 'success' || 'failure' }}
+        run: node scripts/ci/notify.ts deploy-${{ steps.deploy.outcome == 'success' && 'success' || 'failure' }}

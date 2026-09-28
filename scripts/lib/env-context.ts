@@ -1,4 +1,6 @@
 import { spawnSync } from "node:child_process";
+import { statSync } from "node:fs";
+import { z } from "zod";
 import { CLOUDFLARE_API, fetchRetryingPlatformFailures } from "@iterate-com/shared/platform-retry";
 import { UNPROVISIONED } from "../../envs.ts";
 
@@ -179,8 +181,35 @@ export function assertProvisioned(name: string, resources: Record<string, string
   }
 }
 
-/** Download a Doppler config's secrets as a plain object. */
-function loadDopplerSecrets(project: string, config: string): Record<string, string> {
+/**
+ * `name` out of Doppler `project`/`config`: how a script reads a secret that belongs to no envs.ts
+ * deployment (the Slack bot token, the Depot organization token, an account's Cloudflare API token).
+ * A workflow step hands its script DOPPLER_TOKEN and nothing else (docs/depot-ci.md#secrets).
+ *
+ * `fallback` names a file that keeps the config, encrypted, for a later step of the same job: a read
+ * that finds no file there fetches the config and writes it, and one that finds it reads it without
+ * a request. The test evidence upload's token is fetched beside the tests this way.
+ */
+export function dopplerSecret(
+  project: string,
+  config: string,
+  name: string,
+  options: { fallback?: string } = {},
+): string {
+  const value = loadDopplerSecrets(project, config, options.fallback)[name];
+  if (!value) throw new Error(`Doppler ${project}/${config} has no ${name}`);
+  return value;
+}
+
+/** THE DOPPLER READ, resolveEnvContext's and dopplerSecret's: a config's secrets as a plain object,
+ *  downloaded by the Doppler CLI (DOPPLER_TOKEN in CI, its login on a laptop). */
+function loadDopplerSecrets(
+  project: string,
+  config: string,
+  fallback?: string,
+): Record<string, string> {
+  // What the file holds is a whole config: an empty one is a write that failed.
+  const offline = fallback ? (statSync(fallback, { throwIfNoEntry: false })?.size ?? 0) > 0 : false;
   const result = spawnSync(
     "doppler",
     [
@@ -193,13 +222,15 @@ function loadDopplerSecrets(project: string, config: string): Record<string, str
       project,
       "--config",
       config,
+      ...(fallback ? ["--fallback", fallback] : []),
+      ...(offline ? ["--fallback-only"] : []),
     ],
     { encoding: "utf8", maxBuffer: 10 * 1024 * 1024 },
   );
   if (result.status !== 0) {
     throw new Error(
-      `doppler secrets download --project ${project} --config ${config} failed: ${result.stderr?.trim()}`,
+      `doppler secrets download --project ${project} --config ${config}${offline ? " --fallback-only" : ""} failed: ${result.error?.message || result.stderr.trim()}`,
     );
   }
-  return JSON.parse(result.stdout);
+  return z.record(z.string(), z.string()).parse(JSON.parse(result.stdout));
 }

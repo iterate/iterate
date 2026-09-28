@@ -173,9 +173,8 @@ jobs:
         timeout-minutes: 1
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-        run: |
-          doppler run --project _shared --config preview --fallback "$RUNNER_TEMP/doppler-shared-preview" -- true ||
-            echo "::warning title=Doppler prefetch::_shared/preview not saved; the evidence upload fetches it"
+          NODE_COMPILE_CACHE: ${{ runner.temp }}/node-compile-cache
+        run: node scripts/ci/test-evidence.ts fetch-upload-secrets
       # Set up, wait for this run's deploy, then the suite (apps/os/scripts/preview.ts `runSuite`).
       # The trace's Test phase is this step (scripts/ci/tracing/tracing.ts).
       - name: Run the suite against the preview
@@ -219,11 +218,8 @@ jobs:
             env:
               DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
               NODE_COMPILE_CACHE: ${{ runner.temp }}/node-compile-cache
-            # offline from the file the fetch before the suite saved; a fetch without it
-            run: |
-              offline=()
-              if [ -s "$RUNNER_TEMP/doppler-shared-preview" ]; then offline=(--fallback-only); fi
-              doppler run --project _shared --config preview --fallback "$RUNNER_TEMP/doppler-shared-preview" "${offline[@]}" -- node scripts/ci/test-evidence.ts upload
+            # its token from the file the fetch before the suite saved, else fetched now
+            run: node scripts/ci/test-evidence.ts upload
           # EVERYTHING THE RUN WROTE and the specs' Playwright HTML report, as a PR preview's test
           # jobs keep them (docs/depot-ci.md#browser-reports-from-artifacts): the suite summary in
           # them is what the `alert` job pages on.
@@ -317,15 +313,14 @@ jobs:
           ref: ${{ github.sha }}
       - name: Setup
         uses: ./.depot/actions/setup
-      # The Depot organization token reads the runs, the artifacts and the previous state through
-      # Depot's API; the Slack bot token comes from Doppler _shared/prd (scripts/ci/slack.ts).
+      # The script reads the Depot organization token, which reads the runs, the artifacts and the
+      # previous state (scripts/ci/depot.ts `depotApi`), and the Slack bot token
+      # (scripts/ci/slack.ts) from Doppler itself.
       - name: Judge, page #error-pulse on a change of state
         run: |-
           set -euo pipefail
-          export DEPOT_CI_TELEMETRY_TOKEN
-          DEPOT_CI_TELEMETRY_TOKEN="$(doppler secrets get DEPOT_CI_TELEMETRY_TOKEN --plain --project _shared --config preview)"
-          pnpm tsx scripts/monitors/health.ts previous-state --of main-e2e --out test-results/main-e2e/previous.json
-          pnpm tsx scripts/monitors/health.ts main-e2e \
+          node scripts/monitors/health.ts previous-state --of main-e2e --out test-results/main-e2e/previous.json
+          node scripts/monitors/health.ts main-e2e \
             --ref "${{ github.ref }}" \
             --state test-results/main-e2e/previous.json \
             --state-out test-results/main-e2e/state.json
@@ -364,9 +359,7 @@ jobs:
         timeout-minutes: 5
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-        run: >-
-          doppler run --project _shared --config preview --
-          pnpm exec trpc-cli scripts/ci/tracing/cli.ts current ci-trace.ignoreme
+        run: node scripts/ci/tracing/cli.ts current ci-trace.ignoreme
       # A re-run of this job alone keeps the execution, so the name, of the run it traces; without
       # overwrite the upload fails and the report statuses are never posted.
       - name: Upload the CI trace
@@ -382,6 +375,4 @@ jobs:
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           GITHUB_TOKEN: ${{ github.token }}
-        run: >-
-          doppler run --project _shared --config preview --
-          pnpm exec trpc-cli scripts/ci/tracing/cli.ts publish ci-trace.ignoreme
+        run: node scripts/ci/tracing/cli.ts publish ci-trace.ignoreme

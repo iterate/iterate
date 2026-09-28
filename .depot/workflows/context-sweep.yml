@@ -42,17 +42,13 @@ jobs:
       - name: Setup
         uses: ./.depot/actions/setup
       # prd's Cloudflare credentials and operator bearer from Doppler os/prd, which the script
-      # downloads itself and checks against envs.ts's account (scripts/lib/env-context.ts); the
-      # CI bucket's token, CLOUDFLARE_API_TOKEN, from Doppler _shared/preview.
+      # downloads itself and checks against envs.ts's account (scripts/lib/env-context.ts), and the
+      # CI bucket's token, which it reads from Doppler itself too (envs.ts `ciBucketEnvs`).
       - name: Sweep prd's contexts
         id: sweep
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-        run: |-
-          set -euo pipefail
-          export CLOUDFLARE_API_TOKEN
-          CLOUDFLARE_API_TOKEN="$(doppler secrets get CLOUDFLARE_API_TOKEN --plain --project _shared --config preview)"
-          pnpm tsx scripts/ci/context-sweep.ts --env prd ${{ github.ref == 'refs/heads/main' && inputs.test-run != 'true' && '--destroy' || '' }}
+        run: node scripts/ci/context-sweep.ts --env prd ${{ github.ref == 'refs/heads/main' && inputs.test-run != 'true' && '--destroy' || '' }}
   notify:
     needs:
       - sweep
@@ -70,4 +66,4 @@ jobs:
         env:
           REPORT: ${{ needs.sweep.outputs.report }}
           RESULT: ${{ needs.sweep.result }}
-        run: pnpm tsx scripts/ci/context-sweep.ts post ${{ inputs.test-run == 'true' && '--test-run' || '' }}
+        run: node scripts/ci/context-sweep.ts post ${{ inputs.test-run == 'true' && '--test-run' || '' }}

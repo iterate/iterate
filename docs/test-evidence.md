@@ -71,8 +71,7 @@ side, a suite job's suite):
    (`node scripts/ci/test-evidence.ts finalize --flake-suites <suite>`, `--cancelled` when the job
    was, two minutes at most). The Test job runs it `if: always()`; a suite job whenever its suite
    step ran, with `--only-with-target`, so it keeps a folder only once the suite read the deployed
-   target. One step and one Node process, with Node's own type stripping rather than `tsx`, and
-   Node's compile cache (`NODE_COMPILE_CACHE` in the runner's temporary directory), which the
+   target. One step and one Node process, with Node's compile cache (`NODE_COMPILE_CACHE` in the runner's temporary directory), which the
    upload's Node starts from. First the telemetry finalizer
    ([CI telemetry](ci-test-telemetry.md#test-telemetry-artifacts)), then the manifest: the
    workflow passes the outcome of every step that runs tests in `TEST_EVIDENCE_STEPS`
@@ -85,12 +84,13 @@ side, a suite job's suite):
    still keeps a failed suite's traces and flake lines.
 2. **Upload the test evidence to R2** (`node scripts/ci/test-evidence.ts upload`, `if: always()`
    once the manifest is written, `continue-on-error`, three minutes at most), in one `parallel:`
-   block beside the Depot artifact uploads. Its Doppler secrets (`_shared/preview`) come without
-   a request: an earlier step, "Fetch the evidence upload's secrets", saved them into Doppler's
-   encrypted fallback file in the runner's temporary directory, and `doppler run --fallback-only`
-   reads them. In the Test job that step runs beside the tests, in a suite job before the suite,
-   while the deploy it waits for runs. Without that file (a failed fetch is a warning there) the
-   upload fetches them itself. Up to 32 files at once, the largest first, holding at most 128 MiB of them, then the manifest; a job's folder of 10 to 53
+   block beside the Depot artifact uploads. Its token (Doppler `_shared/preview`'s
+   `CLOUDFLARE_API_TOKEN`) comes without a request: an earlier step, "Fetch the evidence upload's
+   secrets" (`node scripts/ci/test-evidence.ts fetch-upload-secrets`), saved the config into
+   Doppler's encrypted fallback file in the runner's temporary directory, and the upload reads it
+   from there (scripts/lib/env-context.ts `dopplerSecret`'s `fallback`). In the Test job that step
+   runs beside the tests, in a suite job before the suite, while the deploy it waits for runs.
+   Without that file (a failed fetch is a warning there) the upload fetches the token itself. Up to 32 files at once, the largest first, holding at most 128 MiB of them, then the manifest; a job's folder of 10 to 53
    files is one or two waves of about half a second each and the manifest's. A cancelled job's
    folder goes too, its manifest saying `cancelled`. The step prints the run's prefix, the object
    count and how long the upload and the process took

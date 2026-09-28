@@ -77,9 +77,8 @@ rotate it at Depot if exposed, since deleting the Doppler secret does not revoke
 replay one (without `--dry-run`, a `--since` run delivers):
 
 ```bash
-DEPOT_CI_TELEMETRY_TOKEN="$(doppler secrets get DEPOT_CI_TELEMETRY_TOKEN --plain --project _shared --config preview)" \
 GITHUB_TOKEN="$(gh auth token)" \
-  pnpm tsx scripts/ci/sync-ci-telemetry.ts --dry-run --since 2026-09-24T00:00:00Z [--until …]
+  node scripts/ci/sync-ci-telemetry.ts --dry-run --since 2026-09-24T00:00:00Z [--until …]
 ```
 
 ## Test telemetry artifacts
@@ -147,7 +146,7 @@ artifact_id="$(depot ci artifacts list "$depot_run_id" --org 0p91s0lz49 --output
 depot ci artifacts download "$artifact_id" --org 0p91s0lz49 --output-file /tmp/unit.zip
 unzip -q /tmp/unit.zip -d /tmp/unit
 jq '.tests[] | {moduleId, fullName, durationMs, retryCount, firstFailure}' /tmp/unit/ci-telemetry/raw/*.json
-pnpm tsx scripts/ci/test-telemetry-finalizer.ts --artifact-root /tmp/unit/ci-telemetry
+node scripts/ci/test-telemetry-finalizer.ts --artifact-root /tmp/unit/ci-telemetry
 ```
 
 ### Adding or changing a reporter

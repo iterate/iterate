@@ -21,7 +21,7 @@
 // is all it takes to be alarmed. One whose defect is too rare to pin with a failing test is pinned
 // here instead (PINNED_WORKAROUNDS): the alarm posts once when its heal has been absent for weeks.
 //
-//   doppler run --project os --config prd -- pnpm tsx scripts/ci/prd-fault-alarm.ts run
+//   node scripts/ci/prd-fault-alarm.ts run   # prd's Cloudflare API token from Doppler _shared/prd
 //   … run --ref <git ref> --state <previous.json> --state-out <next.json>   # posts and keeps state on main only
 //   … run --at 2026-09-23T07:30:00Z --dry-run    # replay the half hour to then, post nothing
 //   … run --at 2026-09-23T07:30:00Z --test-run   # post that half hour's page to #ci as 🧪, keep nothing
@@ -30,7 +30,6 @@ import { dirname } from "node:path";
 import type { WebClient } from "@slack/web-api";
 import { createCli } from "trpc-cli";
 import { z } from "zod";
-import { depotCiApi } from "@iterate-com/shared/depot-api";
 import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
 import {
   CI_HTTP,
@@ -41,6 +40,7 @@ import {
 } from "@iterate-com/shared/platform-retry";
 import {
   agentsEnvs,
+  cloudflareAccounts,
   dashEnvs,
   kitEnvs,
   notesEnvs,
@@ -49,7 +49,8 @@ import {
   spaEnvs,
   voiceEnvs,
 } from "../../envs.ts";
-import { saveNewestArtifactFile } from "./depot.ts";
+import { dopplerSecret } from "../lib/env-context.ts";
+import { depotApi, saveNewestArtifactFile } from "./depot.ts";
 import {
   escalationText,
   getSlackClient,
@@ -204,8 +205,11 @@ export async function run(
     stateOut?: string;
   } = {},
 ) {
-  const { CLOUDFLARE_ACCOUNT_ID: accountId, CLOUDFLARE_API_TOKEN: apiToken } = process.env;
-  if (!accountId || !apiToken) throw new Error("run under doppler --project os --config prd");
+  const account = cloudflareAccounts.prd;
+  const cloudflare = {
+    accountId: account.cloudflareAccountId,
+    apiToken: dopplerSecret(account.dopplerProject, account.dopplerConfig, "CLOUDFLARE_API_TOKEN"),
+  };
   const mode = runMode(options);
   const state = mode.readsState ? readState(options.state) : null;
   const outcome = await alarm({
@@ -213,7 +217,7 @@ export async function run(
       ? { from: new Date(Date.parse(options.at) - 30 * 60_000), to: new Date(options.at) }
       : logWindow(new Date(), state),
     state,
-    cloudflare: { accountId, apiToken },
+    cloudflare,
     slack: mode.posts ? getSlackClient : null,
     testRun: mode.testRun,
   });
@@ -1260,14 +1264,9 @@ async function readWindow(
   };
 }
 
-/** The newest main run's state, written to `out`; nothing when no run of the last 20 kept one.
- *  Depot is read with DEPOT_CI_TELEMETRY_TOKEN (Doppler _shared/preview). */
+/** The newest main run's state, written to `out`; nothing when no run of the last 20 kept one. */
 export async function previousState(options: { out: string }) {
-  const token = z
-    .string({ error: "DEPOT_CI_TELEMETRY_TOKEN is required (Doppler _shared/preview)" })
-    .min(1)
-    .parse(process.env.DEPOT_CI_TELEMETRY_TOKEN);
-  return saveNewestArtifactFile((method, body) => depotCiApi(method, body, token), {
+  return saveNewestArtifactFile(depotApi(), {
     ...stateArtifact,
     out: options.out,
   });

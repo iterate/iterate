@@ -10,7 +10,8 @@
 #   depot ci dispatch --org 0p91s0lz49 --repo iterate/iterate --workflow prd-fault-alarm.yml \
 #     --ref <branch> --input test-run=true --input at=2026-09-28T09:35:00Z
 #
-# Secrets (depot ci secrets --org 0p91s0lz49): DOPPLER_TOKEN.
+# Secrets (depot ci secrets --org 0p91s0lz49): DOPPLER_TOKEN, with which the script reads its own out
+# of Doppler: the Depot organization token, prd's Cloudflare API token and the Slack bot token.
 
 name: Prd fault alarm (Depot CI)
 
@@ -51,16 +52,13 @@ jobs:
         uses: ./.depot/actions/setup
       - name: Read the previous run's state
         run: |-
-          export DEPOT_CI_TELEMETRY_TOKEN
-          DEPOT_CI_TELEMETRY_TOKEN="$(doppler secrets get DEPOT_CI_TELEMETRY_TOKEN --plain --project _shared --config preview)" &&
-            pnpm tsx scripts/ci/prd-fault-alarm.ts previous-state --out test-results/prd-fault-alarm/previous.json ||
+          node scripts/ci/prd-fault-alarm.ts previous-state --out test-results/prd-fault-alarm/previous.json ||
             echo "::warning::no previous state: this run pages every fault as new"
       - name: Read the prd Workers' logs, page on a fault
         env:
           AT: ${{ inputs.at }}
         run: >-
-          doppler run --project os --config prd --
-          pnpm tsx scripts/ci/prd-fault-alarm.ts run
+          node scripts/ci/prd-fault-alarm.ts run
           --ref "${{ github.ref }}"
           --state test-results/prd-fault-alarm/previous.json
           --state-out test-results/prd-fault-alarm/state.json

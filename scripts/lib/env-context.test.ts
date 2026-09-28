@@ -1,6 +1,10 @@
 import { execFileSync } from "node:child_process";
+import { existsSync } from "node:fs";
+import { join } from "node:path";
+import { temporaryDirectory } from "@iterate-com/shared/test-support/temporary-directory";
 import { expect, onTestFinished, test, vi } from "vitest";
-import { cloudflareApi } from "./env-context.ts";
+import { cloudflareApi, dopplerSecret } from "./env-context.ts";
+import { fakeDoppler } from "./fake-doppler.ts";
 
 test("native Node scripts can import and inspect Cloudflare API errors", () => {
   // Vitest transforms TypeScript; a native subprocess catches syntax that
@@ -22,6 +26,70 @@ test("native Node scripts can import and inspect Cloudflare API errors", () => {
     status: 404,
     details: { code: 10007 },
   });
+});
+
+test.for<{
+  name: string;
+  answer: Parameters<typeof fakeDoppler>[0];
+  outcome: { value: string } | { error: string };
+}>([
+  {
+    name: "a secret is its config's, downloaded",
+    answer: { secrets: { SLACK_CI_BOT_TOKEN: "xoxb" } },
+    outcome: { value: "xoxb" },
+  },
+  {
+    name: "a config without the secret is an error naming both",
+    answer: { secrets: { OTHER: "value" } },
+    outcome: { error: "Doppler _shared/prd has no SLACK_CI_BOT_TOKEN" },
+  },
+  {
+    name: "a download Doppler refuses is an error with its reason",
+    answer: { refusal: "Doppler Error: Invalid Auth token" },
+    outcome: {
+      error:
+        "doppler secrets download --project _shared --config prd failed: Doppler Error: Invalid Auth token",
+    },
+  },
+])("dopplerSecret: $name", ({ answer, outcome }) => {
+  using doppler = fakeDoppler(answer);
+  const read = () => {
+    try {
+      return { value: dopplerSecret("_shared", "prd", "SLACK_CI_BOT_TOKEN") };
+    } catch (error) {
+      return { error: error instanceof Error ? error.message : String(error) };
+    }
+  };
+  expect(read()).toEqual(outcome);
+  expect(doppler.calls()).toEqual([
+    [
+      "secrets",
+      "download",
+      "--no-file",
+      "--format",
+      "json",
+      "--project",
+      "_shared",
+      "--config",
+      "prd",
+    ],
+  ]);
+});
+
+// The test evidence upload's: fetched beside the tests into the job's file, read after them from it.
+test("dopplerSecret with a fallback fetches the config into the file, then reads it offline", () => {
+  using doppler = fakeDoppler({ secrets: { CLOUDFLARE_API_TOKEN: "token" } });
+  using directory = temporaryDirectory();
+  const fallback = join(directory.path, "doppler-shared-preview");
+  const read = () => dopplerSecret("_shared", "preview", "CLOUDFLARE_API_TOKEN", { fallback });
+
+  expect([read(), existsSync(fallback), read()]).toEqual(["token", true, "token"]);
+  const download = ["secrets", "download", "--no-file", "--format", "json"];
+  const of = ["--project", "_shared", "--config", "preview", "--fallback", fallback];
+  expect(doppler.calls()).toEqual([
+    [...download, ...of],
+    [...download, ...of, "--fallback-only"],
+  ]);
 });
 
 // Cloudflare's answers: the Artifacts API's 500/10400, its rate limit's 429, and a refusal.

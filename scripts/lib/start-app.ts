@@ -219,7 +219,7 @@ async function deploy(app: StartApp, options: { env?: string }) {
     workerName: (env) => env.workerName,
     servingUrl: (env) => env.baseUrl,
     smokes: (env) => [
-      { url: `${env.baseUrl}/healthz`, ok: (status) => status === 200, label: "health" },
+      { url: `${env.baseUrl}/healthz`, ok: (response) => response.status === 200, label: "health" },
     ],
   });
 }

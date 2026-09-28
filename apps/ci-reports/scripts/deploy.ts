@@ -15,7 +15,7 @@ export default async function deploy(options: { env?: string } = {}) {
     servingUrl: (env) => env.baseUrl,
     requiredSecrets: ["DEPOT_CI_TELEMETRY_TOKEN"],
     smokes: (env) => [
-      { url: `${env.baseUrl}/`, ok: (status) => status === 200, label: "viewer index" },
+      { url: `${env.baseUrl}/`, ok: (response) => response.status === 200, label: "viewer index" },
     ],
   });
 }

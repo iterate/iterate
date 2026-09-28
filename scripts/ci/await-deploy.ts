@@ -23,8 +23,7 @@ import {
   httpFailureKind,
   isPlatformFailureKind,
 } from "@iterate-com/shared/platform-retry";
-import { depotCiApi } from "@iterate-com/shared/depot-api";
-import type { DepotApi } from "./depot.ts";
+import { depotApi, type DepotApi } from "./depot.ts";
 
 /** How often the wait asks Depot; how long it waits at most, the deploy jobs' own `timeout-minutes`;
  *  and how long Depot may fail every call before the wait gives up on it. */
@@ -112,20 +111,15 @@ export async function awaitDeploy(input: {
 }
 
 /** The wait as a suite job runs it: its own workflow run from DEPOT_JOB_URL
- *  (`…/workflows/<workflowId>?job=…&attempt=…`), and the Depot organization token CI telemetry and
- *  the trace job use, DEPOT_CI_TELEMETRY_TOKEN, which `doppler run` gives the suite's step from
- *  Doppler os/preview (it inherits _shared/preview). */
+ *  (`…/workflows/<workflowId>?job=…&attempt=…`), read with the Depot organization token
+ *  (depot.ts `depotApi`). */
 export async function awaitDeployOfThisRun(job: string) {
-  const token = z
-    .string({ error: "DEPOT_CI_TELEMETRY_TOKEN is required to wait for the deploy (Doppler)" })
-    .min(1)
-    .parse(process.env.DEPOT_CI_TELEMETRY_TOKEN);
   const workflowId = z
     .string()
     .regex(/^[a-z0-9]+$/)
     .parse(new URL(z.url().parse(process.env.DEPOT_JOB_URL)).pathname.split("/").at(-1));
   await awaitDeploy({
-    depot: (method, body) => depotCiApi(method, body, token),
+    depot: depotApi(),
     workflowId,
     job,
   });

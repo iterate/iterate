@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { temporaryDirectory } from "@iterate-com/shared/test-support/temporary-directory";
 import type { WebClient } from "@slack/web-api";
 import { expect, onTestFinished, test, vi } from "vitest";
+import { fakeDoppler } from "../lib/fake-doppler.ts";
 import {
   type AlarmState,
   alarm,
@@ -488,8 +489,7 @@ test.for([
 
 test("a run on main keeps its state after posting; a dispatch on a branch keeps none", async () => {
   workersLogs(serverErrorsOnly(0));
-  vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", credentials.accountId);
-  vi.stubEnv("CLOUDFLARE_API_TOKEN", credentials.apiToken);
+  using _doppler = fakeDoppler({ secrets: { CLOUDFLARE_API_TOKEN: credentials.apiToken } });
   using directory = temporaryDirectory();
   const kept = await Promise.all(
     ["refs/heads/main", "refs/heads/a-branch"].map(async (ref) => {
@@ -585,12 +585,11 @@ test("a run that cannot read prd fails: a failed Workers Logs query", async () =
   expect(slack).toMatchObject({ posts: [] });
 });
 
-test("a run that cannot read prd fails: no Cloudflare credentials", async () => {
+test("a run that cannot read prd fails: Doppler gives no Cloudflare API token", async () => {
   const cloudflare = workersLogs(() => ({ success: true }));
-  vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "");
-  vi.stubEnv("CLOUDFLARE_API_TOKEN", "");
+  using _doppler = fakeDoppler({ refusal: "Doppler Error: Invalid Auth token" });
   await expect(run({ dryRun: true })).rejects.toThrow(
-    "run under doppler --project os --config prd",
+    "doppler secrets download --project _shared --config prd failed: Doppler Error: Invalid Auth token",
   );
   expect(cloudflare.fetch).not.toHaveBeenCalled();
 });
