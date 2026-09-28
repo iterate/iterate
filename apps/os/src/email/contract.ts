@@ -71,6 +71,24 @@ export const EmailContract = defineProcessorContract({
         /** The SMTP envelope: the sending server's MAIL FROM, and the address it was delivered to
          *  (`<slug>@…`, or `<slug>+<tag>@…`). */
         envelope: z.object({ from: z.string(), to: z.string() }),
+        /** Who sent it, as far as the platform can tell (email/sender.ts). */
+        sender: z.object({
+          /** The From address is proven by Cloudflare's checks as it received the message: an
+           *  aligned DMARC pass, DKIM signature or SPF pass. A forged From is false. */
+          verified: z.boolean(),
+          /** The From address is verified and belongs to a member of this project. */
+          member: z.boolean(),
+        }),
+        /** An auto-reply, a bulk or list message, or a bounce: nothing should answer it
+         *  automatically. */
+        automated: z.boolean(),
+        /** Cloudflare's SPF, DKIM and DMARC verdicts as it received the message (`pass`, `fail`,
+         *  `none`, …), null where it gave none. */
+        authentication: z.object({
+          spf: z.string().nullable(),
+          dkim: z.string().nullable(),
+          dmarc: z.string().nullable(),
+        }),
       }),
     },
     "events.iterate.com/email/sent": {

@@ -16,6 +16,7 @@ test("a message lands once per project address on /integrations/email with its a
     path: "/integrations/email",
   });
   const invoice = [
+    "Authentication-Results: mx.cloudflare.net; dkim=pass header.d=example.com; dmarc=pass header.from=example.com; spf=pass smtp.mailfrom=ann@example.com",
     "From: Ann <ann@example.com>",
     "To: mailbox@projects.test",
     "Subject: Invoice",
@@ -54,6 +55,9 @@ test("a message lands once per project address on /integrations/email with its a
       references: [],
       attachments: [{ filename: "note.txt", contentType: "text/plain", size: 5 }],
       envelope: { from: "ann@example.com", to: "mailbox@projects.test" },
+      sender: { verified: true, member: false },
+      automated: false,
+      authentication: { spf: "pass", dkim: "pass", dmarc: "pass" },
     },
   });
   const [attachment] = (received!.payload as { attachments: { path: string }[] }).attachments;
@@ -101,6 +105,47 @@ test("a message lands once per project address on /integrations/email with its a
       },
     }),
   );
+});
+
+test("a member's verified message says so, and a forged one claiming to be theirs is unverified", async () => {
+  const member = await projectWithMember("members-mail");
+  const inbox = DurableObjectNameCodec.stringify({
+    projectId: member.projectId,
+    path: "/integrations/email",
+  });
+  const fromTheMember = (results: string[], messageId: string) =>
+    [
+      ...results.map((record) => `Authentication-Results: ${record}`),
+      "From: members-mail@example.test",
+      "To: members-mail@projects.test",
+      "Subject: Hi",
+      `Message-ID: <${messageId}@example.test>`,
+      "",
+      "Hello",
+    ].join("\r\n");
+  await deliver(
+    "members-mail@projects.test",
+    fromTheMember(["mx.cloudflare.net; dkim=pass header.d=example.test; dmarc=none"], "real"),
+  );
+  // Cloudflare's real verdict on top, the sender's forged pass below it
+  await deliver(
+    "members-mail@projects.test",
+    fromTheMember(
+      [
+        "mx.cloudflare.net; dkim=none; dmarc=none; spf=softfail smtp.mailfrom=members-mail@example.test",
+        "mx.cloudflare.net; dkim=pass header.d=example.test; dmarc=pass header.from=example.test",
+      ],
+      "forged",
+    ),
+  );
+  expect(mailOf(await readLog(inbox)).map((event) => event.payload)).toMatchObject([
+    { messageId: "real@example.test", sender: { verified: true, member: true } },
+    {
+      messageId: "forged@example.test",
+      sender: { verified: false, member: false },
+      authentication: { spf: "softfail", dkim: "none", dmarc: "none" },
+    },
+  ]);
 });
 
 test("mail for no project, or on another domain, bounces", async () => {

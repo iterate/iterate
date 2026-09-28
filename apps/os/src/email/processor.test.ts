@@ -67,7 +67,13 @@ test.for([
 function received(message: MessageInput) {
   return {
     type: "events.iterate.com/email/received",
-    payload: { ...messageOf(message), envelope: { from: "ann@x", to: "acme@iterate.app" } },
+    payload: {
+      ...messageOf(message),
+      envelope: { from: "ann@x", to: "acme@iterate.app" },
+      sender: { verified: true, member: false },
+      automated: false,
+      authentication: { spf: "pass", dkim: "pass", dmarc: "pass" },
+    },
     source: { platform: true as const },
   };
 }
