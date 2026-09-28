@@ -14,10 +14,8 @@
 //
 // Each check returns what its verdict owes its signal's page (./page.ts `PageAction`), which
 // `sendUpdates` sends. A check that could not read what it judges, or found its probe broken, fails
-// the job after the others have paged: a scheduled run reports on main's head, where red reads as
-// "this commit broke", so a page never turns a job red. Main OS e2e's page job reports on the commit its
-// run tested, so a broken probe of the slow rows is an unjudged page there (./e2e.ts), and the job
-// fails only when it cannot judge its run or post.
+// the health job after the others have paged, so a page never turns a job red. Main OS e2e's page
+// job has its own broken-probe rule (./e2e.ts) and fails only when it cannot judge its run or post.
 //
 // Each job's memory between runs is its own state artifact (`stateArtifacts`, depot.ts
 // `saveNewestArtifactFile`), which only a real run on main writes, after its posts: its checks'
