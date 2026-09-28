@@ -12,6 +12,7 @@ import {
   reduceAgentUi,
   settleAgentUiAtIdleBoundary,
   summarizeAgentUiActivity,
+  type AgentUiActivity,
   type AgentUiItem,
 } from "./agent-ui-reducer.ts";
 
@@ -1047,14 +1048,176 @@ test("a request that input starts while a script still runs moves the input into
     { kind: "llm", llmRequestOffset: 6, status: "running" },
   ]);
 
+  // Its answer lands at once, above the activity the script still runs: no
+  // settled activity row yet, the script still running, nothing held.
+  const replied = reduceAll(events.slice(0, 8));
+  expect(replied).toMatchObject({
+    deferredAssistantMessages: [],
+    items: [
+      { kind: "user", text: "do X" },
+      { kind: "user", text: "and then?" },
+      { kind: "assistant", text: "still working on X" },
+    ],
+  });
+  expect(replied.live?.steps).toMatchObject([
+    { kind: "llm", llmRequestOffset: 2, status: "done" },
+    { kind: "code", requestOffset: 4, status: "running" },
+    { kind: "llm", llmRequestOffset: 6, status: "done", outcome: "completed" },
+  ]);
+
+  // The script returned nothing, so its settlement ends the turn: journal
+  // facts alone close the one activity, whole and clean.
   const settled = reduceAll(events);
   expect(settled.live).toBeNull();
   expect(settled.items).toMatchObject([
     { kind: "user", text: "do X" },
     { kind: "user", text: "and then?" },
-    { kind: "activity", id: "activity-2", status: "done" },
     { kind: "assistant", text: "still working on X" },
+    {
+      kind: "activity",
+      id: "activity-2",
+      status: "done",
+      steps: [
+        { kind: "llm", llmRequestOffset: 2 },
+        { kind: "code", requestOffset: 4, success: true },
+        { kind: "llm", llmRequestOffset: 6 },
+      ],
+    },
   ]);
+  expect(settled.items.filter((item) => item.kind === "activity")).toHaveLength(1);
+  expect(summarizeAgentUiActivity(settled.items[3] as AgentUiActivity)).toMatchObject({
+    outcome: "clean",
+  });
+});
+
+test("a reply that lands at once leaves the activity open when the script returns a value: the follow-up request joins it", () => {
+  const events = [
+    runRequested(1, "async () => longWork()"),
+    {
+      type: "events.iterate.com/agent/context-added",
+      payload: { role: "user", actor: { type: "user", origin: "web" }, content: "and then?" },
+    },
+    { type: "events.iterate.com/agent/llm-request-requested", offset: 3, payload: { model: "m" } },
+    requestSettled(3),
+    {
+      type: "events.iterate.com/agent/web-message-sent",
+      payload: { message: "X is still running.", llmRequestOffset: 3 },
+    },
+    runSettled(1, { status: "succeeded", result: { done: true } }),
+    { type: "events.iterate.com/agent/llm-request-requested", offset: 7, payload: { model: "m" } },
+    requestSettled(7),
+  ];
+
+  const returned = reduceAll(events.slice(0, 6));
+  expect(returned.items).toMatchObject([
+    { kind: "user", text: "and then?" },
+    { kind: "assistant", text: "X is still running." },
+  ]);
+  expect(returned.live?.steps).toMatchObject([
+    { kind: "code", requestOffset: 1, status: "done", success: true },
+    { kind: "llm", llmRequestOffset: 3, status: "done" },
+  ]);
+
+  const followedUp = reduceAll(events);
+  expect(followedUp.items.filter((item) => item.kind === "activity")).toHaveLength(0);
+  expect(followedUp.live?.steps).toMatchObject([
+    { kind: "code", requestOffset: 1 },
+    { kind: "llm", llmRequestOffset: 3 },
+    { kind: "llm", llmRequestOffset: 7, status: "done" },
+  ]);
+});
+
+test("a reply whose request wrote a script that still runs waits for that script, even beside an older running script", () => {
+  const events = [
+    runRequested(1, "async () => longWork()"),
+    {
+      type: "events.iterate.com/agent/context-added",
+      payload: { role: "user", actor: { type: "user", origin: "web" }, content: "and then?" },
+    },
+    { type: "events.iterate.com/agent/llm-request-requested", offset: 3, payload: { model: "m" } },
+    requestSettled(3),
+    // The answer's own script (asked for while processing its assistant
+    // item), then its prose: the prose belongs after the script it announced.
+    runRequested(5, "async () => more()"),
+    {
+      type: "events.iterate.com/agent/web-message-sent",
+      payload: { message: "Starting Y too.", llmRequestOffset: 3 },
+    },
+    runSettled(1),
+    runSettled(5),
+  ];
+
+  const olderSettled = reduceAll(events.slice(0, 7));
+  expect(olderSettled).toMatchObject({
+    items: [{ kind: "user", text: "and then?" }],
+    deferredAssistantMessages: [{ text: "Starting Y too." }],
+  });
+  expect(olderSettled.live?.steps).toMatchObject([
+    { kind: "code", requestOffset: 1, status: "done" },
+    { kind: "llm", llmRequestOffset: 3, status: "done" },
+    { kind: "code", requestOffset: 5, status: "running" },
+  ]);
+
+  expect(reduceAll(events)).toMatchObject({
+    live: null,
+    deferredAssistantMessages: [],
+    items: [
+      { kind: "user", text: "and then?" },
+      { kind: "activity", steps: [{ kind: "code" }, { kind: "llm" }, { kind: "code" }] },
+      { kind: "assistant", text: "Starting Y too." },
+    ],
+  });
+});
+
+test("a reply that lands at once follows the replies held before it in log order, and leaves later input queued", () => {
+  const state = reduceAll([
+    runRequested(1, "async () => longWork()"),
+    {
+      type: "events.iterate.com/agent/context-added",
+      payload: { role: "user", actor: { type: "user", origin: "web" }, content: "and then?" },
+    },
+    { type: "events.iterate.com/agent/llm-request-requested", offset: 3, payload: { model: "m" } },
+    // A transport echo while the request runs is held behind the running work.
+    { type: "events.iterate.com/agent/web-message-sent", payload: { message: "echo" } },
+    {
+      type: "events.iterate.com/agent/context-added",
+      payload: { role: "user", actor: { type: "user", origin: "web" }, content: "one more" },
+    },
+    requestSettled(3),
+    {
+      type: "events.iterate.com/agent/web-message-sent",
+      payload: { message: "X is still running.", llmRequestOffset: 3 },
+    },
+  ]);
+
+  expect(state).toMatchObject({
+    items: [
+      { kind: "user", text: "and then?" },
+      { kind: "assistant", text: "echo" },
+      { kind: "assistant", text: "X is still running." },
+    ],
+    deferredAssistantMessages: [],
+    // No request has taken it up yet: it stays in the composer's queue.
+    queuedUserMessages: [{ text: "one more" }],
+  });
+  expect(state.live?.steps).toMatchObject([
+    { kind: "code", requestOffset: 1, status: "running" },
+    { kind: "llm", llmRequestOffset: 3, status: "done" },
+  ]);
+});
+
+test("a message that names no request still waits for the running script", () => {
+  const state = reduceAll([
+    runRequested(1, "async () => longWork()"),
+    { type: "events.iterate.com/agent/llm-request-requested", offset: 2, payload: { model: "m" } },
+    requestSettled(2),
+    { type: "events.iterate.com/agent/web-message-sent", payload: { message: "from a script" } },
+  ]);
+
+  expect(state).toMatchObject({
+    items: [],
+    deferredAssistantMessages: [{ text: "from a script" }],
+  });
 });
 
 test("a request that input starts while a script still runs moves the script's earlier reply into the transcript before that input", () => {
