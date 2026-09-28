@@ -10,6 +10,19 @@ HTTP 200 and a complete reply did not establish a healthy request. Verification 
 provider's SSE text and terminal completion event **and** a Worker tail with no such exceptions.
 The ordinary `canceled` RPC outcome after explicit scope disposal is a separate category.
 
+## The pin
+
+[`apps/agents/e2e/ai-stream-hung-request.e2e.test.ts`](../../../apps/agents/e2e/ai-stream-hung-request.e2e.test.ts)
+reproduces the fault on the deployed platform with no agents code: a loaded facet calls
+`itx.ai.run` through `env.ITX`, drains the raw SSE Response itself, and reads the outcome of each
+ItxEntrypoint invocation that ran `ai.run` from Workers Logs. It is a `createFailing` `REAL:` row,
+so only the real-model suite (`os-real-model.yml`) runs it. On a preview on 2026-09-28, 55 of 57
+raw streams faulted, while three real agent turns through this relay logged no error (their
+ItxEntrypoint invocations ended `canceled`, the disposal outcome above). When the pin goes red
+because it passed, Cloudflare has fixed the fault: delete this relay (`ai-transport-source.ts`,
+`ai-transport.ts`, this file and the agent Durable Object's `#runModel`) and let the processor
+call `itx.ai` itself.
+
 ## Minimal deployed reproduction
 
 A standalone Cloudflare Worker, without Iterate code or dynamic Worker loading, reproduced it:
@@ -95,7 +108,5 @@ Real-AI verification on the restored Garple preview additionally checks the depl
 defect: a complete public-shaped chat and a tail observed for at least 70 seconds after reply
 completion. Fake providers alone cannot prove this transport avoids the Cloudflare exception.
 
-The change is app-owned. Existing projects need the Agents app's normal runtime installation
-before their installed processor uses it; changing the platform Worker alone does not upgrade
-those projects. The installed agent runtime now uses the project's `workers` capability to load
-the fixed transport source, as well as the agent path's `ai` capability.
+The agent runtime uses the project's `workers` capability to load the fixed transport source, as
+well as the agent path's `ai` capability.
