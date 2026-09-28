@@ -26,8 +26,8 @@
 // `APP_CONFIG_LOGIN__PASSWORD`, `APP_CONFIG_SECRETS__KEY` — the parser merges it on top of the object
 // (that is how a deployment's `urls` come from envs.ts while its secrets come from the one blob, and
 // how `secrets.key` stands alone as its own Worker secret so it can rotate with `previousKey` beside
-// it). A blank var is unset. A key the schema does not name is warned about loudly at boot and
-// dropped, never silently kept. The mechanism is shared with the apps on top
+// it). A blank var is unset. A key the schema does not name is refused at first use, naming itself,
+// as a malformed field is. The mechanism is shared with the apps on top
 // (@iterate-com/shared/app-config); this module is the platform's schema and cross-field rules.
 
 import { z } from "zod";
@@ -100,8 +100,8 @@ const emailPatterns = (empty: string) =>
       .min(1, empty),
   );
 
-/** The bot scopes a Slack connection asks for unless told otherwise — the legacy platform's list, so
- *  iterate's Slack app keeps asking for what its console was set up with. */
+/** The bot scopes a Slack connection asks for unless told otherwise: the scopes iterate's Slack app
+ *  is registered with. */
 export const DEFAULT_SLACK_BOT_SCOPES = [
   "channels:history",
   "channels:join",
@@ -127,8 +127,8 @@ export const DEFAULT_SLACK_BOT_SCOPES = [
   "conversations.connect:write",
 ] as const;
 
-/** The scopes a Google connection asks for unless told otherwise — the legacy platform's list, so
- *  iterate's Google client keeps asking for what its consent screen was verified for. */
+/** The scopes a Google connection asks for unless told otherwise: the scopes iterate's Google
+ *  client's consent screen is verified for. */
 export const DEFAULT_GOOGLE_SCOPES = [
   "openid",
   "https://www.googleapis.com/auth/userinfo.email",
@@ -160,8 +160,8 @@ export const DEFAULT_CLOUDFLARE_SCOPES = ["openid", "user-details.read"];
 
 /** THE `APP_CONFIG` SCHEMA — PER-FIELD validation only; the cross-field rules (a distinct MCP origin,
  *  the ingress routing's hostname, at least one sign-in mechanism) live in `parseAppConfig`, because
- *  `warnUnknownKeys` needs plain object schemas to check keys against. Every object `prefault`s to
- *  `{}` so a deployment that names none of a block's keys still gets the block. */
+ *  the parser refuses a key by walking plain object schemas (`parseAppConfigVars`). Every object
+ *  `prefault`s to `{}` so a deployment that names none of a block's keys still gets the block. */
 export const AppConfig = z.object({
   /** Where this deployment answers. Every one optional. */
   urls: z
@@ -296,8 +296,7 @@ export const AppConfig = z.object({
     .object({
       /** iterate's Slack app (integrations/slack/): the OAuth client, the key Slack signs webhooks
        *  with, the bot scopes asked for, and where Slack answers — `slackOrigin`, another origin only
-       *  for a fake (a per-commit deployment's, scripts/generate-wrangler-config.ts). The keys are the legacy platform's, so
-       *  its Doppler JSON is reused as it stands. */
+       *  for a fake (a per-commit deployment's, scripts/generate-wrangler-config.ts). */
       slack: z
         .object({
           oauthClientId: z.string({ error: REQUIRED }).trim().min(1, REQUIRED),
@@ -309,7 +308,7 @@ export const AppConfig = z.object({
         .optional(),
       /** iterate's Google OAuth client (integrations/google/): the client and the scopes asked for.
        *  `googleOrigin` is unset for Google itself; set, ONE origin serves every Google path — a
-       *  fake's (a preview's, scripts/preview-google-app.ts). The legacy platform's keys. */
+       *  fake's (a preview's, scripts/preview-google-app.ts). */
       google: z
         .object({
           oauthClientId: z.string({ error: REQUIRED }).trim().min(1, REQUIRED),
@@ -334,7 +333,7 @@ export const AppConfig = z.object({
        *  that proves a human can see an installation, the private key (PEM, PKCS#8 or GitHub's
        *  PKCS#1) that signs App JWTs and the key GitHub signs webhooks with. `githubOrigin` is
        *  `https://github.com` (its API `https://api.github.com`); another origin serves both — a
-       *  fake's. The legacy platform's keys. */
+       *  fake's. */
       github: z
         .object({
           appId: z.string({ error: REQUIRED }).trim().min(1, REQUIRED),
@@ -391,7 +390,7 @@ export type AppConfigEnv = { CF_VERSION_METADATA?: { id: string }; APP_CONFIG?: 
 
 /** Parse the configuration out of `env` (a worker env, or any record — only `APP_CONFIG` and the
  *  `APP_CONFIG_*` keys are read; a blank one is unset). Pure; every test parses through it. A
- *  malformed field throws naming itself. */
+ *  malformed field, or a key the schema does not name, throws naming itself. */
 export function parseAppConfig(env: object, deployId = "unversioned"): AppConfig {
   const parsed = parseAppConfigVars(env, AppConfig);
   const { urls, login } = parsed;

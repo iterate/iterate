@@ -7,7 +7,7 @@
 // `new Octokit({ auth: 'getSecret("/secrets/github-acme", { field: "accessToken" })' })`.
 //   connectGithub        → the App's install page, with a platform-signed `state`
 //   githubCallbackRoute  → `GET /api/integrations/github/callback`, the App's Callback URL (and the
-//                          legacy Setup URL): the project facet's `acceptGithubCallback`, which
+//                          App's Setup URL): the project facet's `acceptGithubCallback`, which
 //     - with a `code` (GitHub's "Request user authorization (OAuth) during installation" sends it
 //       beside `installation_id` in one redirect): trades it for a user token, keeps the
 //       installation only if the human administers its account (rules.ts), sets the secret, routes

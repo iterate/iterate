@@ -3,8 +3,10 @@ import { createCli } from "trpc-cli";
 import { OS_DOPPLER_PROJECT, osEnv, osEnvs, type OsEnv } from "../../../envs.ts";
 import { deployApp } from "../../../scripts/lib/deploy-app.ts";
 import type { EnvContext } from "../../../scripts/lib/env-context.ts";
+import { parseAppConfig } from "../src/app-config.ts";
 import { build } from "./build.ts";
 import { applyD1Migrations, ensureD1 } from "./d1.ts";
+import { viteWranglerConfig } from "./generate-wrangler-config.ts";
 import { ensureArtifactsNamespace, isCloudflareError } from "./preview-artifacts.ts";
 import { PREVIEW_GITHUB_APP, previewGithubAppPrivateKey } from "./preview-github-app.ts";
 
@@ -34,7 +36,10 @@ export default async function deploy(options: {
     resources: (env) => env.resources || {},
     // The private login settings and at-rest key come from Doppler. Public URLs come from envs.ts.
     requiredSecrets: ["APP_CONFIG", "APP_CONFIG_SECRETS__KEY"],
-    // The control plane's D1 is migrated before the code that reads it uploads, so a migration that
+    // The configuration is checked first, as the Worker will read it: the generated vars and these
+    // secrets (it holds no others; `--secrets-file` would keep any). A key the schema does not name,
+    // or a malformed field, fails the deploy here while the running version keeps serving. The
+    // control plane's D1 is migrated before the code that reads it uploads, so a migration that
     // fails leaves the running version serving; a migration must keep that version working for the
     // minute until the upload (scripts/d1.ts).
     async prepare(ctx, secretValues, credentials) {
@@ -45,6 +50,10 @@ export default async function deploy(options: {
           ...PREVIEW_GITHUB_APP,
           privateKey: previewGithubAppPrivateKey(),
         });
+      parseAppConfig({
+        ...viteWranglerConfig(ctx.name, { localDev: false, port: "" }).vars,
+        ...secretValues,
+      });
       const [, databaseId] = await Promise.all([
         build(),
         ctx.env.resources?.dbId || createResources(ctx),

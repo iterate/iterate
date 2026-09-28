@@ -38,8 +38,8 @@ export function e2eWorkerConfig(
       `local e2e needs a local Vite build (found ${rawConfig.name}); run pnpm e2e to rebuild first`,
     );
   // Configuration (src/app-config.ts): the `APP_CONFIG_<PATH>__<KEY>` spellings of the one object —
-  // the local block's vars replaced wholesale (a blank var is unset; a stale one would be warned
-  // about), the secrets plain test values.
+  // the local block's vars replaced wholesale (a blank var is unset; a stale one is refused), the
+  // secrets plain test values.
   const vars = Object.fromEntries(
     Object.entries(rawConfig.vars ?? {}).filter(([name]) => !name.startsWith("APP_CONFIG")),
   );

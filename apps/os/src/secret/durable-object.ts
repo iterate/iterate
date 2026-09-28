@@ -50,12 +50,7 @@ import { DROPPED_CLOSE_CODE, relayedCloseCode } from "../context/websocket-close
 import type { ItxEntrypointScope } from "../iterate-context.ts";
 import { ControlPlane } from "../control-plane/edge.ts";
 import type { IterateContextDurableObject } from "../iterate-context-durable-object.ts";
-import {
-  connectionPathOf,
-  connectionRowOf,
-  MOVE_OFFER_TTL_MS,
-  type HeldToken,
-} from "../integrations/connections.ts";
+import { MOVE_OFFER_TTL_MS, type HeldToken } from "../integrations/connections.ts";
 import { grantedScopesOf, lendVerdict, slackTeamOfTokenResponse } from "../integrations/rules.ts";
 import { googleEndpointsOf } from "../integrations/google.ts";
 import { githubApiOriginOf } from "../integrations/github.ts";
@@ -114,19 +109,6 @@ type OAuthPlatform = NonNullable<
 type Stored = {
   record: Omit<SecretRecord, "material"> & { material: EncryptedMaterial };
   revision: number;
-  /** Issued here — an OAuth completion or a held token's admit — since records name the workspace
-   *  their token is routed by: `routedAccount` names it, or the record has none. A record written
-   *  otherwise (before that, or by `itx.secrets.set`) has no mark, and a Slack connection's row names
-   *  its workspace (`#routedAccountOf`); a merge keeps the mark it found, as it keeps the token. */
-  routedAccountKnown?: true;
-};
-
-/** The workspace a record without a mark was found to be for (storage `routed-account`,
- *  `#routedAccountOf`), by the revision it was read at: any write since moves the revision on, and
- *  the next use reads the connection's row again. */
-type RoutedAccountNoted = {
-  revision: number;
-  routedAccount: NonNullable<SecretRecord["routedAccount"]>;
 };
 
 /** A CONSENT'S EXCHANGE HELD ASIDE (storage `held`): iterate's Slack app's token for a workspace
@@ -206,10 +188,6 @@ export class SecretDurableObject extends StreamProcessorDurableObject<
   readonly #installationRouteReadAt = new Map<string, number>();
   /** When each iterate-Slack-app workspace's route was last read for a use (`#assertWorkspaceNotMoved`). */
   readonly #workspaceRouteReadAt = new Map<string, number>();
-  /** The stored revisions without a mark whose connection's row named no account of iterate's app
-   *  when read (`#routedAccountOf`): one read per record and incarnation. A workspace found is noted
-   *  in storage instead. */
-  readonly #revisionsWithNoIterateRow = new Set<number>();
 
   /** This facet's identity, from its context's name (`ctx.props`, sdk/index.ts): the context, and
    *  the PATH THE PLACEHOLDER SPELLS — the context's path relative to the resource owner's root
@@ -228,7 +206,7 @@ export class SecretDurableObject extends StreamProcessorDurableObject<
    *  minted under one strategy — an installation's, which its route guards — never outlives it
    *  under another, or under none. The caller (`itx.secrets.set`) has appended the fact already;
    *  this is the value. */
-  async write(record: SecretRecord, merge = false, issued = false): Promise<void> {
+  async write(record: SecretRecord, merge = false): Promise<void> {
     const stored = merge ? await this.ctx.storage.get<Stored>("stored") : undefined;
     if (stored) {
       // the pin travels with the material it guards: a merge never moves stored material elsewhere
@@ -246,10 +224,7 @@ export class SecretDurableObject extends StreamProcessorDurableObject<
       };
     }
     const revision = await this.#bump();
-    await this.ctx.storage.put<Stored>("stored", {
-      ...(await this.#sealed(record, revision)),
-      routedAccountKnown: merge ? stored?.routedAccountKnown : issued || undefined,
-    });
+    await this.ctx.storage.put<Stored>("stored", await this.#sealed(record, revision));
     // A write supersedes any OAuth attempt in flight, a held one included: its callback must not
     // overwrite this material; and material of its own replaces a borrowed record.
     await this.ctx.storage.delete(["pending", "held", "borrowed"]);
@@ -337,15 +312,7 @@ export class SecretDurableObject extends StreamProcessorDurableObject<
     }
     const borrowed = (await this.ctx.storage.get<Borrowed>("borrowed")) ?? null;
     await this.ctx.storage.put<EndingLends>("ending", ending);
-    await this.ctx.storage.delete([
-      "stored",
-      "pending",
-      "held",
-      "completed",
-      "routed-account",
-      "lends",
-      "borrowed",
-    ]);
+    await this.ctx.storage.delete(["stored", "pending", "held", "completed", "lends", "borrowed"]);
     // what the clear ended, for the built-in to end on the other side (context/built-ins.ts `delete`)
     return { lends, borrowed };
   }
@@ -723,7 +690,7 @@ export class SecretDurableObject extends StreamProcessorDurableObject<
         held: { externalId: slackTeam.id, account: slackTeam.name, until },
       };
     }
-    await this.write(record, false, true);
+    await this.write(record);
     const revision = await this.ctx.storage.get<number>("revision");
     await this.ctx.storage.put("completed", { nonce: input.nonce, revision, scopes });
     return { urls: record.urls, refresh: record.refresh?.kind, exchanged: true, scopes };
@@ -788,7 +755,7 @@ export class SecretDurableObject extends StreamProcessorDurableObject<
       { context: this.#address().context, urls: held.record.urls, revision: held.revision },
       this.#keys(),
     );
-    await this.write({ ...held.record, material }, false, true);
+    await this.write({ ...held.record, material });
     await this.ctx.storage.put("completed", {
       nonce: input.nonce,
       revision: await this.ctx.storage.get<number>("revision"),
@@ -875,11 +842,7 @@ export class SecretDurableObject extends StreamProcessorDurableObject<
       if (!stored) return null;
       if (!originPinned(request.url, stored.record.urls))
         throw pinRefusal(path, request.url, stored.record.urls);
-      return {
-        revision: stored.revision,
-        record: await this.#opened(stored),
-        routedAccountKnown: stored.routedAccountKnown,
-      };
+      return { revision: stored.revision, record: await this.#opened(stored) };
     };
     const used = (response: Response): Response => {
       this.ctx.waitUntil(
@@ -914,7 +877,7 @@ export class SecretDurableObject extends StreamProcessorDurableObject<
         );
       let stored = await read();
       if (stored) await this.#assertInstallationRouted(stored.record.refresh);
-      if (stored) await this.#assertWorkspaceNotMoved(await this.#routedAccountOf(stored));
+      if (stored) await this.#assertWorkspaceNotMoved(stored.record.routedAccount);
       // This facet answers for ONE secret: a placeholder naming another is refused here, not only
       // at the egress that routed the request (the facet is the boundary that holds the bytes).
       const resolve = (named: string) => {
@@ -991,36 +954,6 @@ export class SecretDurableObject extends StreamProcessorDurableObject<
       );
     }
     this.#installationRouteReadAt.set(installationId, Date.now());
-  }
-
-  /** THE WORKSPACE A STORED SLACK TOKEN IS FOR, when its record predates `routedAccount` (it has no
-   *  `routedAccountKnown` mark): the token at
-   *  a project's `/secrets/slack-<connection>` whose row says iterate's app is for the workspace that
-   *  row names — the row, a platform fact, never the material a caller may merge into. Read once per
-   *  record and incarnation; a workspace found is noted beside the record, for its revision
-   *  (`RoutedAccountNoted`), never written into it, so no write or refresh of the record races it. */
-  async #routedAccountOf(stored: {
-    revision: number;
-    record: SecretRecord;
-    routedAccountKnown?: true;
-  }): Promise<SecretRecord["routedAccount"]> {
-    const { record, revision } = stored;
-    if (record.routedAccount || stored.routedAccountKnown) return record.routedAccount;
-    const { context, path } = this.#address();
-    const { projectId, path: contextPath } = DurableObjectNameCodec.parse(context);
-    const connection = /^\/secrets\/slack-(.+)$/.exec(path)?.[1];
-    if (!connection || resourceScope(projectId, contextPath).kind !== "project") return undefined;
-    const noted = await this.ctx.storage.get<RoutedAccountNoted>("routed-account");
-    if (noted?.revision === revision) return noted.routedAccount;
-    if (this.#revisionsWithNoIterateRow.has(revision)) return undefined;
-    const row = await connectionRowOf(this.env, projectId, connectionPathOf("slack", connection));
-    if (row?.client !== "iterate") {
-      this.#revisionsWithNoIterateRow.add(revision);
-      return undefined;
-    }
-    const routedAccount = { provider: "slack" as const, externalId: row.externalId };
-    await this.ctx.storage.put<RoutedAccountNoted>("routed-account", { revision, routedAccount });
-    return routedAccount;
   }
 
   /** A WORKSPACE'S TOKEN IS REFUSED ONCE IT MOVED: iterate's Slack app's token for a workspace

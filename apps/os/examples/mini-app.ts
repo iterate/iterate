@@ -9,7 +9,7 @@
 //
 // and it is reachable at  https://notes--<project>.<base>/  (subdomains),
 //   <platform>/projects/<project>/notes/  (paths, a preview) or
-//   http://notes.<project>.localhost:<port>/  (dev). No bundler, no framework build, no deploy step.
+//   http://notes--<project>.localhost:<port>/  (dev). No bundler, no framework build, no deploy step.
 //
 // It serves ONE no-build HTML page at "/" — Preact + htm + capnweb from an esm.sh importmap, the exact
 // shape of the platform's own preact mini-app — and its own tiny capnweb API at "/rpc" that the page

@@ -1,7 +1,7 @@
 // ingress-project-host.e2e.test.ts — PROJECT-HOST INGRESS (src/worker.ts), the one HTTP way into a
-// project: EVERY host of a project — `<routingSlug>--<project>.<base>`, `<routingSlug>.<project>.<base>`
-// and the apex `<project>.<base>` — reaches the project's config worker `fetch` with the URL verbatim,
-// so a relative asset loads from the same host; inbound `x-itx-*` never reach it and
+// project: EVERY host of a project — `<routingSlug>--<project>.<base>` and the apex `<project>.<base>`
+// — reaches the project's config worker `fetch` with the URL verbatim, so a relative asset loads
+// from the same host; inbound `x-itx-*` never reach it and
 // `x-iterate-routing-slug` is the slug the host names (absent on the apex), whatever a visitor sent;
 // a routing slug the config worker does not serve reaches it too, and its 404 is the config worker's;
 // and — deployed — an upgrade rides through the host to the config worker. The log never names a
@@ -24,7 +24,6 @@ import {
   freshDnsSafeProjectSlug,
   ingressRouting,
   navigateProjectUrl,
-  projectHostsAreLocal,
   projectUrl,
   registerProject,
 } from "./support/project-host.ts";
@@ -70,7 +69,7 @@ export default class Site extends WorkerEntrypoint {
 }`,
 };
 
-test("every host of a project reaches its config worker — URL verbatim, relative asset intact, x-itx-* stripped, x-iterate-routing-slug the host's (absent on the apex) whatever a visitor sent; both shapes; an unknown routing slug reaches the config worker too", async () => {
+test("every host of a project reaches its config worker — URL verbatim, relative asset intact, x-itx-* stripped, x-iterate-routing-slug the host's (absent on the apex) whatever a visitor sent; an unknown routing slug reaches the config worker too", async () => {
   const slug = freshDnsSafeProjectSlug("ingress");
   const projectId = await registerProject(slug);
   const itx = openItx(projectId);
@@ -108,17 +107,6 @@ test("every host of a project reaches its config worker — URL verbatim, relati
   expect(seen.itxHeaders).not.toContain("x-itx-expression");
   expect(seen.itxHeaders).not.toContain("x-itx-visitor");
   expect(seen).toMatchObject({ routingSlug: "site" });
-  // the second shape, `<routingSlug>.<project>.<base>`: the same config worker. LOCAL ONLY: a wildcard
-  // certificate covers ONE label under the base (`*.iterate.app`), and a wildcard
-  // never matches two, so on the deployed worker this shape fails the TLS handshake until a
-  // certificate per project subdomain exists — a deploy-side fact, not the edge's (the Workers suite
-  // pins the parse; this pins the whole edge, where it can be reached).
-  const routing = ingressRouting();
-  if (projectHostsAreLocal() && routing?.type === "subdomains") {
-    const dotted = await fetchProjectHost(`site.${slug}.${routing.hostname}`, "/w");
-    expect(dotted, dotted.text).toMatchObject({ status: 200 });
-    expect(dotted.text).toContain(`<p>site.${slug}.${routing.hostname}/w</p>`);
-  }
   // the apex is the same config worker, with no routing slug — a visitor's is deleted by the edge
   const apexRoot = projectUrl({ project: slug, path: "/" });
   const apex = await fetchProjectUrl(apexRoot, { "x-iterate-routing-slug": "site" });
@@ -126,6 +114,7 @@ test("every host of a project reaches its config worker — URL verbatim, relati
   expect(apex.text).toContain("<title>site</title>");
   // a path ON the apex reaches the config worker too — under subdomains: under paths the segment after
   // `/projects/<slug>/` is a ROUTING SLUG, so the apex has its root alone (the paths design's one gap)
+  const routing = ingressRouting();
   if (routing?.type === "subdomains") {
     const echoed = await fetchProjectHost(`${slug}.${routing.hostname}`, "/echo", {
       "x-iterate-routing-slug": "site",

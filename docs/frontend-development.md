@@ -156,7 +156,9 @@ socket): the proxy hands every call to the live connection.
 mini-app — seeds from its `{ rev, state }` read (`readSeed`), then applies every delta the server
 pushes. It never suspends: `value` is `undefined` until the first seed, `status`
 is `"connecting" | "live" | "error"`, and the last value stays visible while a
-gap heals from a fresh seed.
+gap heals from a fresh seed. Until the seed the page does not know the state, so what it renders
+from the value shows as loading, not as the state an empty value would mean: the Dash's project
+overview says "Loading…" until the `project` facet says whether the project is still being created.
 
 ```tsx
 const live = useFacetLiveState(context, "project"); // useLiveState seeded by the facet's liveSnapshot()
