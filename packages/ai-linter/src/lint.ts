@@ -518,8 +518,8 @@ export function modelText(answer: unknown): string {
   return text;
 }
 
-/** What Jev did on one head, for the Check Run: the units its rules selected, and those it judged,
- *  one request each. */
+/** Jev's counts on one head, for the Check Run: the units its rules select, and those it judges, one
+ *  request each. */
 export type JevStats = {
   units: number;
   judged: number;

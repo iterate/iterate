@@ -1,4 +1,5 @@
 ---
+# iterate-lint-disable terminology/no-metaphorical-lane-door-seam -- the rule's own words, as measured
 id: terminology/no-metaphorical-lane-door-seam
 severity: error
 files:

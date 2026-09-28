@@ -1,3 +1,4 @@
+// iterate-lint-disable terminology/no-metaphorical-lane-door-seam -- the rule's own cases, the words it matches
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { expect, test } from "vitest";

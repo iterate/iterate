@@ -152,7 +152,8 @@ function commentUnits(file: SourceFile): Unit[] {
 
 const WORD = /[A-Za-z_]/;
 
-/** Added lines the pattern matches, with every whole word a match falls in (`fastLane`, not `tLane`). */
+/** Added lines the pattern matches, with every whole word a match falls in: a match inside a
+ *  camelCase identifier is the whole identifier. */
 function lineUnits(file: SourceFile, pattern: string): Unit[] {
   const units: Unit[] = [];
   for (const line of [...file.added].sort((a, b) => a - b)) {

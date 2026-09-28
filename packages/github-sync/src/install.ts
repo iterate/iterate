@@ -1,12 +1,7 @@
-// github-sync/install.ts — how a project installs the sync. Like the agents app, it is a SOURCE the
-// project owns: a folder of its config repo (`github-sync/` by convention) holding a package.json
-// that pins this package and names its `main`, index.ts, which re-exports the processor's class
-// (`githubSyncFolder`). `installGithubSync` mounts that source on the two logs whose events trigger
-// it. Nothing here is the runtime, so a session imports `@iterate-com/github-sync/install` without
-// loading it.
-//
-// It writes a row that lends the connection's log the root's repos, which only a session may write
-// (a person's `iterate repl`, the operator's), never loaded code (a config worker, an `itx run`).
+// github-sync/install.ts — how a project installs the sync: from a folder of its config repo that
+// pins this package (`githubSyncFolder`), as the agents app installs (@iterate-com/agents/install).
+// `installGithubSync` mounts it on the two logs whose events trigger it, which only a session may do
+// (README.md). Nothing here is the runtime.
 import type { IterateContextApi } from "iterate/api";
 import { githubRepositoryOf } from "./github-repository.ts";
 

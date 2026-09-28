@@ -1,12 +1,7 @@
-// ai-linter/install.ts — how a project installs the linter. Like the agents app, it is a SOURCE the
-// project owns: a folder of its config repo (`ai-linter/` by convention) holding a package.json that
-// pins this package and names its `main`, index.ts, which re-exports the processor's class
-// (`aiLinterFolder`). `installAiLinter` mounts that source on the log of the GitHub connection whose
-// installation reaches the repository. Nothing here is the runtime, so a session imports
-// `@iterate-com/ai-linter/install` without loading it.
-//
-// It writes rows that lend the connection's log the root's egress and model, which only a session may
-// write (a person's `iterate repl`, the operator's), never loaded code (a config worker, an `itx run`).
+// ai-linter/install.ts — how a project installs the linter: from a folder of its config repo that pins
+// this package (`aiLinterFolder`), as the agents app installs (@iterate-com/agents/install).
+// `installAiLinter` mounts it on the log of the GitHub connection that reaches the repository, which
+// only a session may do (README.md). Nothing here is the runtime.
 import type { IterateContextApi } from "iterate/api";
 
 /** The source a project installs the linter from, by file: `version` is what package.json pins (a
