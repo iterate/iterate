@@ -156,9 +156,8 @@ export const petshopAuthorizationServer = (): Promise<{
   authorization_endpoint: string;
 }> => petshopJson("/.well-known/oauth-authorization-server");
 
-/** The connect half a trusted party runs ONCE: `user`'s consent-free authorize (`approve=1`, the
- *  test shortcut) → the code → the token exchange with HTTP Basic client auth. What lands in the
- *  secret. */
+/** The connect half a trusted party runs ONCE: `user`'s authorize (the shop consents at once) → the
+ *  code → the token exchange with HTTP Basic client auth. What lands in the secret. */
 export async function petshopConnect(
   client: { clientId: string; clientSecret: string },
   user: string,
@@ -168,7 +167,6 @@ export async function petshopConnect(
   authorize.searchParams.set("client_id", client.clientId);
   authorize.searchParams.set("redirect_uri", redirectUri);
   authorize.searchParams.set("state", "e2e");
-  authorize.searchParams.set("approve", "1");
   authorize.searchParams.set("user", user);
   const redirected = await fetch(authorize, { redirect: "manual" });
   const location = redirected.headers.get("location");

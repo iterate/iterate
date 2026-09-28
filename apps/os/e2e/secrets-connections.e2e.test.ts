@@ -302,10 +302,10 @@ test("oauth-refresh-token through a token-endpoint outage: one failed refresh, t
 });
 
 // THE FIRST TOKENS, obtained by the platform: `itx.secrets.beginOAuth` hands back the provider's
-// authorize URL; the human consents there (the petshop's test-only `approve=1` shortcut stands in for
-// the page); the provider redirects the human to the platform's one callback with the code; the
-// callback admits only a signed-in member of the project (here the member's OAuth bearer; never the
-// operator's, which is `/api`'s alone), and the secret's Durable Object exchanges the code. From then on it is the ordinary
+// authorize URL; the human consents there (the pet shop consents at once); the provider redirects
+// the human to the platform's one callback with the code; the callback admits only a signed-in
+// member of the project (here the member's OAuth bearer; never the operator's, which is `/api`'s
+// alone), and the secret's Durable Object exchanges the code. From then on it is the ordinary
 // `oauth-refresh-token` secret the story above proves. No code outside that object ever held a token
 // — not even the test.
 test("beginOAuth, confidential client, in a catalogued project: authorize URL out, the code back at the platform's callback (a project member only), the exchange inside the secret's Durable Object; then a call, expiry and refresh", async () => {
@@ -338,7 +338,6 @@ test("beginOAuth, confidential client, in a catalogued project: authorize URL ou
   expect(authorize.searchParams.get("redirect_uri")).toBe(callback);
   expect(authorize.searchParams.get("code_challenge_method")).toBe("S256");
   expect(authorizationUrl).not.toContain(client.clientSecret);
-  authorize.searchParams.set("approve", "1");
   authorize.searchParams.set("user", "ada");
   const consent = await fetch(authorize, { redirect: "manual" });
   expect(consent).toMatchObject({ status: 302 });
@@ -434,7 +433,6 @@ test("beginOAuth, public client (RFC 7591 registration, PKCE alone, client_id in
   const authorize = new URL(authorizationUrl);
   expect(authorize.searchParams.get("client_id")).toBe(clientId);
   expect(authorize.searchParams.get("redirect_uri")).toBe(callback);
-  authorize.searchParams.set("approve", "1");
   authorize.searchParams.set("user", "ada");
   const consent = await fetch(authorize, { redirect: "manual" });
   expect(consent).toMatchObject({ status: 302 });

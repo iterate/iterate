@@ -815,49 +815,6 @@ test("Slack: a move whose held token is gone leaves what the destination's secre
   expect(await secretPathsOf(mover.itx)).toContain("/secrets/slack-acme");
 });
 
-test("Slack: a token stored before its record named its workspace is refused too, once its workspace moved, whatever was merged into it", async () => {
-  const holder = await projectWithMember("slack-legacy");
-  const petshop = petshopFakes();
-  await connected(petshop, holder, "slack", "team=T15OLD");
-  // the holder's secret as a record from before `routedAccount`: iterate's app's token alone
-  await holder.itx.secrets.set(
-    "/secrets/slack-acme",
-    { accessToken: await slackBotToken(petshop, "T15OLD") },
-    { urls: ["https://slack.test"] },
-  );
-  // an app's field merged in does not make it the project's own app's token
-  await holder.itx.secrets.set(
-    "/secrets/slack-acme",
-    { clientId: "not-an-app" },
-    { urls: ["https://slack.test"], merge: true },
-  );
-  const mover = await otherProject(holder, "slack-legacy-mover");
-  const offer = moveOfferOf(await consented(petshop, mover, "slack", "team=T15OLD"));
-  const prepare = env.DB.prepare.bind(env.DB);
-  const prepares = vi.spyOn(env.DB, "prepare").mockImplementation((sql: string) => {
-    if (!sql.startsWith("delete from integration_routes\nwhere provider")) return prepare(sql);
-    prepares.mockRestore();
-    throw new Error("D1 is unavailable");
-  });
-  await expect(projectFacet(mover.itx).confirmIntegrationMove({ offer })).rejects.toThrow(
-    /press Move again/,
-  );
-  // past the re-check of the route the holder's own connect read
-  vi.useFakeTimers({ toFake: ["Date"] });
-  onTestFinished(() => void vi.useRealTimers());
-  vi.setSystemTime(Date.now() + 31_000);
-  // refused on every use, not only the first
-  for (const use of [1, 2]) {
-    const refused = await slackAuthTest(holder.itx);
-    expect({ use, status: refused.status, text: await refused.text() }).toMatchObject({
-      use,
-      status: 502,
-      text: expect.stringContaining("Slack workspace T15OLD is connected to another project"),
-    });
-  }
-  vi.useRealTimers();
-});
-
 test("Slack: a move that fails to connect puts the team's route back and keeps no token here", async () => {
   const holder = await projectWithMember("slack-restore");
   const petshop = petshopFakes();
@@ -1563,32 +1520,6 @@ function installationRepositories(itx: Member["itx"], secretPath: string): Promi
       headers: { authorization: bearerOf(secretPath) },
     }),
   );
-}
-
-/** A bot token of iterate's app (the fake's default client) for `team`, minted at the fake directly. */
-async function slackBotToken(petshop: Petshop, team: string): Promise<string> {
-  const redirectUri = `${ORIGIN}/api/integrations/slack/callback`;
-  const authorize = new URL("https://slack.test/oauth/v2/authorize");
-  for (const [key, value] of Object.entries({
-    client_id: "petshop-default",
-    redirect_uri: redirectUri,
-    team,
-  }))
-    authorize.searchParams.set(key, value);
-  const consent = (await petshop.handle(new Request(authorize, { redirect: "manual" })))!;
-  const code = new URL(consent.headers.get("location")!).searchParams.get("code")!;
-  const exchange = (await petshop.handle(
-    new Request("https://slack.test/api/oauth.v2.access", {
-      method: "POST",
-      body: new URLSearchParams({
-        client_id: "petshop-default",
-        client_secret: "petshop-default-secret",
-        code,
-        redirect_uri: redirectUri,
-      }),
-    }),
-  ))!;
-  return ((await exchange.json()) as { access_token: string }).access_token;
 }
 
 /** Slack's auth.test with the connection's token, through egress. */

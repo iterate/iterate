@@ -2,8 +2,8 @@
 
 Paths are relative to `apps/os`.
 
-A project connects a provider account through iterate's own app (APP_CONFIG
-`integrations.{slack,google,github}`, the legacy platform's keys) or its own app. A connection is a
+A project connects a provider account through iterate's own app (its keys are APP_CONFIG
+`integrations.{slack,google,github}`) or its own app. A connection is a
 name the project picks (`src/integrations/`):
 
 - its credential is the secret `/secrets/<provider>-<connection>`. Outbound calls use the real SDK
@@ -32,7 +32,7 @@ await project.disconnectIntegration({ provider: "slack", connection: "acme" });
 ```
 
 The callback finishes the connection, so an agent or the CLI that starts a connect needs no second
-call. Slack and Google come back to `/api/integrations/<provider>/callback`, the legacy URL
+call. Slack and Google come back to `/api/integrations/<provider>/callback`, the URL
 iterate's apps are registered with. The secret facet exchanges the code, then the project facet
 names the account: Slack's `auth.test` or Google's userinfo. GitHub comes back to
 `/api/integrations/github/callback`, the App's Callback URL. With "Request user authorization
@@ -74,9 +74,8 @@ never disconnects a connection that holds the account's route again. A failed mo
 from the mover's side and releases again if the holder disconnected meanwhile. Either way
 the holder stops using the account: a secret facet re-reads the route of an iterate-App
 installation, or of iterate's Slack app's workspace, at most every 30 s of use and refuses a token
-for one routed to another project (`#assertInstallationRouted`, `#assertWorkspaceNotMoved`; a Slack
-token stored before its record named its workspace learns it once from its connection's row). The
-human need not be a member of the holder.
+for one routed to another project (`#assertInstallationRouted`, `#assertWorkspaceNotMoved`, which
+reads the workspace its record names). The human need not be a member of the holder.
 
 iterate's apps each receive every account's webhooks on one URL
 (`POST /api/integrations/slack/webhook` and `/interactivity-webhook`, and
@@ -209,9 +208,8 @@ projects use one key. The Dash's Integrations page lists them under "From this d
 
 `scripts/seed-instance-secrets.ts --env <name> [--pr <n>] [--lend-to-every-project]` sets
 `/secrets/exa`, `/secrets/parallel` and `/secrets/openai` from the target's Doppler `os` config:
-`EXA_API_KEY`, `PARALLEL_API_KEY` and `OPENAI_API_KEY`. `os/preview` has no `OPENAI_API_KEY`, so
-`--env preview` also takes `--openai-config dev`. `--env` has no default, and `--env prd` also
-needs `--confirm-prd`.
+`EXA_API_KEY`, `PARALLEL_API_KEY` and `OPENAI_API_KEY`. `--env` has no default, and `--env prd`
+also needs `--confirm-prd`.
 
 ## WebSockets through a secret
 
