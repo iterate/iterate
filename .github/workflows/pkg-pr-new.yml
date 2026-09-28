@@ -3,19 +3,23 @@ on:
   # Every main commit publishes, so any main sha is installable
   # (pkg.pr.new/iterate/iterate/iterate@<sha>, pkg.pr.new/iterate/iterate/@iterate-com/cli@<sha>,
   # pkg.pr.new/iterate/iterate/@iterate-com/petshop-sdk@<sha>, and the userspace apps a project
-  # installs: pkg.pr.new/iterate/iterate/@iterate-com/agents@<sha>, …/@iterate-com/voice@<sha>).
+  # installs: pkg.pr.new/iterate/iterate/@iterate-com/agents@<sha>, …/@iterate-com/voice@<sha>,
+  # …/@iterate-com/github-sync@<sha>, …/@iterate-com/ai-linter@<sha>).
   push:
     branches:
       - main
   # A PR publishes only when a published package's inputs change: packages/iterate imports nothing
-  # outside itself, packages/cli only the SDK, packages/petshop-sdk only capnweb, packages/agents only
-  # the SDK, packages/voice the SDK, the agents and packages/shared (inlined at build), and the root
-  # manifests and lockfile decide the install. The e2e rows that install agents and voice as packages
+  # outside itself, packages/cli only the SDK, packages/petshop-sdk only capnweb, packages/agents,
+  # packages/github-sync and packages/ai-linter only the SDK (and npm), packages/voice the SDK, the
+  # agents and packages/shared (inlined at build), and the root manifests and lockfile decide the
+  # install. The e2e rows that install agents and voice as packages
   # pin such a PR's head build (apps/agents/e2e/support.ts `publishedPackage`).
   pull_request:
     paths:
       - packages/agents/**
+      - packages/ai-linter/**
       - packages/cli/**
+      - packages/github-sync/**
       - packages/iterate/**
       - packages/petshop-sdk/**
       - packages/shared/**
@@ -37,13 +41,15 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc
-      - run: pnpm install --frozen-lockfile --filter iterate-root --filter @iterate-com/cli... --filter @iterate-com/petshop-sdk --filter @iterate-com/voice...
+      - run: pnpm install --frozen-lockfile --filter iterate-root --filter @iterate-com/cli... --filter @iterate-com/petshop-sdk --filter @iterate-com/voice... --filter @iterate-com/github-sync... --filter @iterate-com/ai-linter...
       - run: pnpm --dir packages/iterate build
       - run: pnpm --dir packages/cli build
       - run: pnpm --dir packages/petshop-sdk build
       - run: pnpm --dir packages/agents build
       - run: pnpm --dir packages/voice build
+      - run: pnpm --dir packages/github-sync build
+      - run: pnpm --dir packages/ai-linter build
       # --pnpm: pack with `pnpm pack` so publishConfig.exports (dist remap)
       # is applied — `npm pack` would ship the dev exports pointing at src/.
       # pkg.pr.new requires every monorepo package in one invocation.
-      - run: pnpm exec pkg-pr-new publish --pnpm ./packages/iterate ./packages/cli ./packages/petshop-sdk ./packages/agents ./packages/voice
+      - run: pnpm exec pkg-pr-new publish --pnpm ./packages/iterate ./packages/cli ./packages/petshop-sdk ./packages/agents ./packages/voice ./packages/github-sync ./packages/ai-linter

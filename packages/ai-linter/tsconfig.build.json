@@ -1,0 +1,6 @@
+{
+  // The published entries' declarations (tsdown.config.ts): tsconfig.json without the tests and the
+  // configs, which import packages/shared source that would be emitted beside it.
+  "extends": "./tsconfig.json",
+  "include": ["src/index.ts", "src/install.ts"]
+}

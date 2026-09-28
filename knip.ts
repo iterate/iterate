@@ -151,6 +151,14 @@ export default {
       entry: ["src/**/*.test.ts"],
       project: ["src/**/*.ts", "tsdown*.ts"],
     },
+    "packages/github-sync": {
+      entry: ["src/**/*.test.ts"],
+      project: ["src/**/*.ts", "tsdown*.ts"],
+    },
+    "packages/ai-linter": {
+      entry: ["src/**/*.test.ts"],
+      project: ["src/**/*.ts", "tsdown*.ts"],
+    },
     "packages/cli": {
       // The `iterate` bin (package.json `bin`).
       entry: ["src/**/*.test.ts"],
