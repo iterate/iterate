@@ -255,9 +255,6 @@ importers:
       tailwindcss:
         specifier: 'catalog:'
         version: 4.3.3
-      zod:
-        specifier: 'catalog:'
-        version: 4.6.5(patch_hash=5a57d5a4f788c6fe9e15d60e59511c1f901b7fc1d638126eb2b02cafc9e79a86)
     devDependencies:
       '@cloudflare/vite-plugin':
         specifier: 'catalog:'
