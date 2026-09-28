@@ -357,7 +357,7 @@ function blobFor(n: number): string {
  *  client as UNAVAILABLE. A seed that still fails is not kept: the row's retry seeds the SAME context
  *  again, and every event that already landed answers with itself, so the log stays 24 events. */
 function seededLog(): Promise<{ ctx: string; offsets: number[] }> {
-  seed ??= seedLog().catch((error: unknown) => {
+  seed ||= seedLog().catch((error: unknown) => {
     seed = undefined;
     throw error;
   });
@@ -365,7 +365,7 @@ function seededLog(): Promise<{ ctx: string; offsets: number[] }> {
 }
 
 async function seedLog(): Promise<{ ctx: string; offsets: number[] }> {
-  seedCtx ??= freshCtx("membudget");
+  seedCtx ||= freshCtx("membudget");
   const itx = openItx(seedCtx);
   const offsets: number[] = [];
   for (let n = 0; n < EVENT_COUNT; n++) {
