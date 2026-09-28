@@ -117,56 +117,51 @@ size_t iterate_kit_base64_encode(
   return out;
 }
 
-/* --- base64 decode (accepts padded and unpadded input) -------------------- */
+/* --- base64 decode (RFC 4648, padded: every sender pads) ------------------ */
 
 static int base64_value(char character) {
-  if (character >= 'A' && character <= 'Z') {
-    return character - 'A';
-  }
-  if (character >= 'a' && character <= 'z') {
-    return character - 'a' + 26;
-  }
-  if (character >= '0' && character <= '9') {
-    return character - '0' + 52;
-  }
-  if (character == '+') {
-    return 62;
-  }
-  if (character == '/') {
-    return 63;
-  }
-  return -1;
+  const char *const found =
+      character == '\0' ? NULL : strchr(base64_alphabet, character);
+  return found == NULL ? -1 : (int)(found - base64_alphabet);
 }
 
-static bool base64_decode(
+bool iterate_kit_base64_decode(
     const char *text,
     size_t text_length,
     uint8_t *destination,
     size_t destination_capacity,
     size_t *decoded_length) {
-  uint32_t accumulator = 0U;
-  int bits = 0;
+  size_t padding = 0U;
+  size_t length;
   size_t out = 0U;
-  size_t index;
-  while (text_length > 0U && text[text_length - 1U] == '=') {
-    --text_length;
+  if (text_length % 4U != 0U) {
+    return false;
   }
-  for (index = 0U; index < text_length; ++index) {
-    const int value = base64_value(text[index]);
-    if (value < 0) {
+  if (text_length > 0U && text[text_length - 1U] == '=') {
+    padding = text[text_length - 2U] == '=' ? 2U : 1U;
+  }
+  length = text_length / 4U * 3U - padding;
+  if (length > destination_capacity) {
+    return false;
+  }
+  /* The whole text first, so a refused one leaves `destination` untouched. */
+  for (size_t index = 0U; index < text_length - padding; ++index) {
+    if (base64_value(text[index]) < 0) {
       return false;
     }
-    accumulator = (accumulator << 6) | (uint32_t)value;
-    bits += 6;
-    if (bits >= 8) {
-      bits -= 8;
-      if (out >= destination_capacity) {
-        return false;
-      }
-      destination[out++] = (uint8_t)((accumulator >> bits) & 0xffU);
+  }
+  for (size_t index = 0U; index < text_length; index += 4U) {
+    uint32_t quad = 0U;
+    for (size_t digit = 0U; digit < 4U; ++digit) {
+      const char character = text[index + digit];
+      quad = (quad << 6) |
+          (character == '=' ? 0U : (uint32_t)base64_value(character));
+    }
+    for (size_t byte = 0U; byte < 3U && out < length; ++byte) {
+      destination[out++] = (uint8_t)(quad >> (16U - byte * 8U));
     }
   }
-  *decoded_length = out;
+  *decoded_length = length;
   return true;
 }
 
@@ -261,7 +256,7 @@ static void handle_speaker_frame(
             voice_stream->b64_buffer,
             sizeof(voice_stream->b64_buffer),
             &b64_length) != CAPNWEB_OK ||
-        !base64_decode(
+        !iterate_kit_base64_decode(
             voice_stream->b64_buffer,
             b64_length,
             voice_stream->chunk_buffer,

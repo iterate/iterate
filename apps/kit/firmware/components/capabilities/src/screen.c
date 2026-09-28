@@ -1,5 +1,6 @@
 #include "iterate/kit/capabilities/screen.h"
 #include "iterate/kit/capabilities/arguments.h"
+#include "iterate/kit/voice_stream.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -57,30 +58,6 @@ static enum capnweb_status info(void *context, const struct capnweb_call *call,
   return capnweb_reply_set_borrowed_expression(reply, json, (size_t)length, NULL, NULL);
 }
 
-/* Strict padded RFC4648, capped at one transport chunk. Validate the entire
- * chunk before writing so a rejected chunk cannot corrupt staged pixels. */
-static bool decode(const char *text, size_t length, uint8_t *out, size_t capacity, size_t *written) {
-  static const char alphabet[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-  if (!length || length % 4) return false;
-  size_t padding = text[length - 1] == '=' ? 1 : 0;
-  if (padding && text[length - 2] == '=') ++padding;
-  *written = length / 4 * 3 - padding;
-  if (*written > 4096 || *written > capacity) return false;
-  for (size_t i = 0; i < length; ++i) {
-    if (i >= length - padding) { if (text[i] != '=') return false; }
-    else if (!text[i] || strchr(alphabet, text[i]) == NULL) return false;
-  }
-  size_t n = 0;
-  for (size_t i = 0; i < length; i += 4) {
-    uint32_t value = 0;
-    for (unsigned j = 0; j < 4; ++j)
-      value = (value << 6) | (text[i + j] == '=' ? 0U : (uint32_t)(strchr(alphabet, text[i + j]) - alphabet));
-    for (unsigned j = 0; j < 3 && n < *written; ++j)
-      out[n++] = (uint8_t)(value >> (16 - j * 8));
-  }
-  return true;
-}
-
 static enum capnweb_status set_image(void *context, const struct capnweb_call *call,
                                     struct capnweb_reply *reply) {
   struct iterate_kit_screen *screen = context;
@@ -115,9 +92,11 @@ static enum capnweb_status set_image(void *context, const struct capnweb_call *c
     ++screen->uploads_started;
   }
   if (!screen->uploading || screen->upload_id != (uint32_t)upload_id || selected != screen->format ||
-      (uint64_t)offset != screen->next_offset ||
-      !decode(screen->encoded, encoded_length, screen->bitmap + screen->next_offset,
-              screen->expected_bytes - screen->next_offset, &decoded) || decoded == 0) goto invalid;
+      (uint64_t)offset != screen->next_offset) goto invalid;
+  /* One transport chunk (info's maxChunkBytes) at most, and never past the frame. */
+  const size_t remaining = screen->expected_bytes - screen->next_offset;
+  if (!iterate_kit_base64_decode(screen->encoded, encoded_length, screen->bitmap + screen->next_offset,
+                                 remaining < 4096 ? remaining : 4096, &decoded) || decoded == 0) goto invalid;
   screen->next_offset += decoded;
   screen->bytes_received += (uint32_t)decoded;
   if (screen->next_offset == screen->expected_bytes) {

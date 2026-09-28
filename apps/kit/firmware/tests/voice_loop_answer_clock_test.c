@@ -321,7 +321,8 @@ static const char *frames_b64(size_t frames) {
         (left == 2U ? ((uint32_t)fill << 8) : 0U);
     encoded[out++] = alphabet[(triple >> 18) & 0x3FU];
     encoded[out++] = alphabet[(triple >> 12) & 0x3FU];
-    if (left == 2U) encoded[out++] = alphabet[(triple >> 6) & 0x3FU];
+    encoded[out++] = left == 2U ? alphabet[(triple >> 6) & 0x3FU] : '=';
+    encoded[out++] = '=';
   }
   encoded[out] = '\0';
   return encoded;
