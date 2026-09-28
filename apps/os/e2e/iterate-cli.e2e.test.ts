@@ -38,7 +38,7 @@ test(
       ITERATE_FORCE_BUILT_PACKAGE: "1",
       ITERATE_SKIP_BROWSER_OPEN: "1",
       ITERATE_BEARER_TOKEN: "",
-      APP_CONFIG_ADMIN_API_SECRET: "",
+      APP_CONFIG_SECRETS__ADMIN_BEARER: "",
     };
     const run = (args: string[], extra: Record<string, string> = {}) =>
       promisify(execFile)(process.execPath, [bin, ...args], {

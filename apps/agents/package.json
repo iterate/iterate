@@ -46,7 +46,6 @@
     "trpc-cli": "catalog:",
     "tsx": "catalog:",
     "typescript": "catalog:",
-    "undici": "catalog:",
     "vite": "catalog:",
     "vitest": "catalog:",
     "wrangler": "catalog:"

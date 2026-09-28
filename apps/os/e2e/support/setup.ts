@@ -8,7 +8,7 @@ import { afterAll, afterEach, beforeEach, inject } from "vitest";
 import { disposeFileSessions, disposeSessions, enterTestTransports } from "./client.ts";
 
 process.env.WORKER_BASE_URL = inject("workerBaseUrl");
-process.env.ADMIN_API_SECRET = inject("adminApiSecret");
+process.env.APP_CONFIG_SECRETS__ADMIN_BEARER = inject("adminBearer");
 process.env.LOGIN_PASSWORD = inject("loginPassword");
 process.env.PROJECT_INGRESS_ROUTING = inject("ingressRouting");
 process.env.MCP_BASE_URL = inject("mcpBaseUrl");

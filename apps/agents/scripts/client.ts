@@ -1,39 +1,18 @@
-import { newWebSocketRpcSession } from "capnweb";
-import { WebSocket } from "undici";
-import type { SessionCredentials } from "iterate/api";
+import { connectIterate } from "iterate/node";
 
-const connections: { socket: WebSocket; rpc: Disposable }[] = [];
-
-/** The person's personal access token for the project (apps/os/docs/credentials.md), presented
- *  in-band on the bare socket `session()` opens; or, for a project no token at hand covers,
- *  APP_CONFIG_ADMIN_API_SECRET, the deployment's operator secret. */
-export function credentials(): SessionCredentials {
-  const operator = process.env.APP_CONFIG_ADMIN_API_SECRET?.trim();
-  if (operator) return { type: "admin-secret", secret: operator };
-  const token = process.env.ITERATE_BEARER_TOKEN;
+/** One connection to WORKER_BASE_URL, authenticated as the CLI authenticates (packages/cli): with
+ *  APP_CONFIG_SECRETS__ADMIN_BEARER, the deployment's operator bearer, for a project no token at
+ *  hand covers, else with ITERATE_BEARER_TOKEN, the person's personal access token for the project
+ *  (apps/os/docs/credentials.md). Dispose it to close its socket. */
+export async function connect() {
+  const baseUrl = process.env.WORKER_BASE_URL;
+  if (!baseUrl) throw new Error("WORKER_BASE_URL is required");
+  const secret = process.env.APP_CONFIG_SECRETS__ADMIN_BEARER?.trim();
+  if (secret) return await connectIterate({ baseUrl, auth: { type: "admin-secret", secret } });
+  const token = process.env.ITERATE_BEARER_TOKEN?.trim();
   if (!token)
     throw new Error(
       "ITERATE_BEARER_TOKEN is required: a personal access token for the project (`pnpm exec iterate tokens create`, or the Dash's Sessions page)",
     );
-  return { type: "bearer", token };
-}
-
-/** App scripts call installed capabilities such as voice, which are outside the platform's types. */
-export function session(): any {
-  const origin = process.env.WORKER_BASE_URL;
-  if (!origin) throw new Error("WORKER_BASE_URL is required");
-  const url = new URL("/api", origin);
-  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
-  const socket = new WebSocket(url);
-  // Undici implements the WebSocket transport capnweb expects; Workers adds unrelated members.
-  const rpc = newWebSocketRpcSession(socket as unknown as globalThis.WebSocket);
-  connections.push({ socket, rpc });
-  return rpc;
-}
-
-export function disposeSessions(): void {
-  for (const { socket, rpc } of connections.splice(0)) {
-    rpc[Symbol.dispose]();
-    socket.close();
-  }
+  return await connectIterate({ baseUrl, auth: { type: "bearer", token } });
 }

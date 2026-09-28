@@ -3,7 +3,7 @@ import { z } from "zod";
 
 export const OsPlaywrightAuthEnv = z.object({
   /** OS admin bearer (`secrets.adminBearer`) used to create fixture projects through /api. */
-  ADMIN_API_SECRET: z.string().min(1),
+  APP_CONFIG_SECRETS__ADMIN_BEARER: z.string().min(1),
   /** The sign-in page's password step (`login.password`), how fixtures sign a person in. */
   LOGIN_PASSWORD: z.string().min(1),
   /** How the deployment addresses a project: `<project>.<hostname>`, a path, or not at all. */
@@ -24,7 +24,7 @@ export const OsPlaywrightAuthEnv = z.object({
 export function readOsPlaywrightAuthConfig() {
   const env = OsPlaywrightAuthEnv.parse(process.env);
   return {
-    adminApiSecret: env.ADMIN_API_SECRET,
+    adminBearer: env.APP_CONFIG_SECRETS__ADMIN_BEARER,
     loginPassword: env.LOGIN_PASSWORD,
     // the deployment's own `urls.ingressRouting`, as setup.ts read it (deployed-target.ts)
     ingressRouting: JSON.parse(env.PROJECT_INGRESS_ROUTING) as IngressRouting,

@@ -7,7 +7,7 @@
 // answer. It prints the plan and changes nothing without --apply. Old voice bundles in project KV
 // (`voice/<sha256>/…`) are left where they are: a past call's facets name them.
 //
-//   WORKER_BASE_URL=https://os.iterate.com APP_CONFIG_ADMIN_API_SECRET=… \
+//   WORKER_BASE_URL=https://os.iterate.com APP_CONFIG_SECRETS__ADMIN_BEARER=… \
 //   pnpm exec tsx scripts/install-packages.ts --project prj_… \
 //     --agents https://pkg.pr.new/iterate/iterate/@iterate-com/agents@<sha> \
 //     [--voice https://pkg.pr.new/iterate/iterate/@iterate-com/voice@<sha>] [--apply]
@@ -17,8 +17,9 @@
 import { parseArgs } from "node:util";
 import { agentsFolder, installAgents, rootManifestListing } from "@iterate-com/agents/install";
 import { installVoice, voiceFolder } from "@iterate-com/voice/install";
-import type { RepoFileChange, RepoHandle } from "iterate/api";
-import { credentials, disposeSessions, session } from "./client.ts";
+import type { RpcPromise } from "capnweb";
+import type { IterateContextApiWith, RepoFileChange } from "iterate/api";
+import { connect } from "./client.ts";
 
 const { values } = parseArgs({
   options: {
@@ -32,8 +33,13 @@ const { project, agents, voice, apply } = values;
 if (!project || !agents)
   throw new Error("--project <id> and --agents <version> are required (--voice optional)");
 
-const root = session().authenticate(credentials()).projects.get(project);
-const repo: RepoHandle = root.repos.get("/repos/config");
+using connection = await connect();
+// `agents` and `voice` are called only once installed below: the assertion iterate/api's
+// `IterateContextApiWith` documents for a root that knows its apps are there.
+const root = connection.session.projects.get(project) as RpcPromise<
+  IterateContextApiWith<"agents" | "voice">
+>;
+const repo = root.repos.get("/repos/config");
 const { paths } = await repo.listFiles();
 const changes: RepoFileChange[] = [];
 
@@ -99,5 +105,5 @@ if (!apply) {
     console.log("voice installed:", await root.voice.health());
   }
 }
-disposeSessions();
+connection[Symbol.dispose]();
 process.exit(0);

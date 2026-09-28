@@ -123,9 +123,9 @@ export function interceptCatalogReads(fail?: {
 }
 
 /** This suite's admin bearer (wrangler.test.jsonc `APP_CONFIG_SECRETS__ADMIN_BEARER`). */
-const adminApiSecret = (): string => env.APP_CONFIG_SECRETS__ADMIN_BEARER!;
+const adminBearer = (): string => env.APP_CONFIG_SECRETS__ADMIN_BEARER!;
 /** THE suite's credentials (src/session.ts): the admin bearer — every project, `{ actor: "admin" }`. */
-export const adminCredentials = () => ({ type: "admin-secret" as const, secret: adminApiSecret() });
+export const adminCredentials = () => ({ type: "admin-secret" as const, secret: adminBearer() });
 /** This suite's sign-in password (wrangler.test.jsonc `APP_CONFIG_LOGIN__PASSWORD`) — what a browser
  *  session is minted with through `POST /login` (email + password). */
 export const loginPassword = (): string => env.APP_CONFIG_LOGIN__PASSWORD!;

@@ -27,6 +27,7 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import { request } from "node:https";
 import { newWebSocketRpcSession } from "capnweb";
+import type { IterateApi } from "iterate/api";
 import { WebSocket } from "undici";
 
 /** How long the gate asks before it fails the deploy: well past the slowest in-place redeploy
@@ -149,22 +150,8 @@ async function probe(url: string, adminSecret: string, version: string): Promise
     socket.addEventListener("close", (event) => {
       socketFailure += ` (close ${event.code}${event.reason ? ` ${event.reason}` : ""})`;
     });
-    // The call shapes this probe makes, typed here: `iterate/api`'s types need the worker's
-    // lib, which tsconfig.scripts.json does not load (the same reason previewSignIn types its own).
-    using rpc = newWebSocketRpcSession<{
-      authenticate(credentials: { type: "admin-secret"; secret: string }): {
-        projects: {
-          get(project: string): {
-            whoami(): Promise<unknown>;
-            run(script: string): Promise<unknown>;
-            secrets: {
-              set(path: string, value: string, options: { urls: string[] }): Promise<unknown>;
-            };
-          };
-        };
-        versions(projectIds: string[]): Promise<{ edge: string; contexts: string[] }>;
-      };
-    }>(socket as unknown as globalThis.WebSocket);
+    // Undici implements the WebSocket transport capnweb consumes.
+    using rpc = newWebSocketRpcSession<IterateApi>(socket as unknown as globalThis.WebSocket);
     const session = rpc.authenticate({ type: "admin-secret", secret: adminSecret });
     const [project, ...more] = Array.from(
       { length: CONTEXTS_PER_PROBE },

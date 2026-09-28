@@ -47,7 +47,7 @@ test(
       {
         env: {
           ...process.env,
-          APP_CONFIG_ADMIN_API_SECRET: adminCredentials().secret,
+          APP_CONFIG_SECRETS__ADMIN_BEARER: adminCredentials().secret,
           ITERATE_BEARER_TOKEN: "",
         },
       },

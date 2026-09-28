@@ -97,9 +97,9 @@ export interface OsEnv {
    *  shared store, and another Worker would read every project's repos. */
   artifactsNamespace: string;
   /** The prefix of the deployment's named Cloudflare resources (KV `<prefix>-oauth|-itx`, R2
-   *  `<prefix>-files`, the control plane's D1 `<prefix>-db`). Today it is the worker name; it is its own field so a worker can be renamed
-   *  without renaming the data it binds. `ensure-resources`, erase-data and the wrangler generator
-   *  derive the names from this, never from the worker name. */
+   *  `<prefix>-files`, the control plane's D1 `<prefix>-db`). It is its own field, not the worker
+   *  name, so a worker can be renamed without renaming the data it binds. `ensure-resources`,
+   *  erase-data and the wrangler generator derive the names from this, never from the worker name. */
   resourceNamePrefix: string;
   /** An owned zone served as the named project's config-worker apex: the zone's apex and every
    *  first-level name under it, each with a route and a proxied DNS record (ensure-resources). More
@@ -177,8 +177,7 @@ export const osEnvs: Record<string, OsEnv> = {
       zoneId: "4dcf5f055005471a00eb7f7befb29e54",
       dcvDelegationUuid: "248299803bb79c97",
     },
-    // Not `os-prd-repos`: the legacy platform's namespace of that name (2026-05-18) is still bound
-    // by its artifact viewer, cf-artifact-viewer-prd (artifacts.iterate.com).
+    // Not `os-prd-repos`: a legacy namespace holds that name.
     artifactsNamespace: "os-prd-project-repos",
     resourceNamePrefix: "os-prd",
     resources: {

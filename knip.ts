@@ -67,7 +67,7 @@ export default {
         // the node programs (build/dev/deploy/preview and the operator CLIs) and their tests, so the
         // library modules beside them (preview-config, preview-sweep, generate-wrangler-config) get
         // unused-export checks
-        "scripts/{build,dev,deploy,preview,ensure-resources,erase-data,control-plane-load,project-seed,e2e-soak,inspect-context}.ts",
+        "scripts/{build,dev,deploy,preview,ensure-resources,erase-data,control-plane-load,project-seed,e2e-soak}.ts",
         // read by the sqlfu CLI (`pnpm db:*`)
         "sqlfu.config.ts",
         "scripts/*.test.ts",

@@ -105,7 +105,7 @@ function eraseFixture() {
     ]),
     cf: vi.fn(async (route: string, init?: RequestInit): Promise<unknown> => {
       if (route === "/workers/scripts")
-        return [{ id: "os-preview" }, ...(fixture.sharedConsumer ? [{ id: "old-worker" }] : [])];
+        return [{ id: "os-example" }, ...(fixture.sharedConsumer ? [{ id: "old-worker" }] : [])];
       if (route === "/workers/scripts/old-worker/settings")
         return { bindings: [{ name: "OAUTH_KV", type: "kv_namespace", namespace_id: "oauth" }] };
       if (route.endsWith("/settings"))
@@ -130,10 +130,10 @@ function eraseFixture() {
         secrets: { CLOUDFLARE_API_TOKEN: "test-token" },
         cf: fixture.cf,
         env: {
-          workerName: "os-preview",
+          workerName: "os-example",
           cloudflareAccountId: "test-account",
-          resourceNamePrefix: "os-preview",
-          artifactsNamespace: "os-preview-repos",
+          resourceNamePrefix: "os-example",
+          artifactsNamespace: "os-example-repos",
           resources: { oauthKvId: "oauth", itxKvId: "itx", dbId: "db" },
         },
       })),

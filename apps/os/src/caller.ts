@@ -187,9 +187,9 @@ export async function secretsEqual(a: string, b: string): Promise<boolean> {
 }
 
 /** The principal the admin secret grants — `{ actor: "admin" }`, every project — when `candidate`
- *  IS `secret` (`APP_CONFIG_ADMIN_API_SECRET`: at `authenticate({ type: "admin-secret" })`, and as
- *  a bearer on `/api` — oauth.ts refuses it at `/mcp`), else null, by `secretsEqual`. A blank
- *  secret matches nothing. */
+ *  IS `secret` (`secrets.adminBearer`: at `authenticate({ type: "admin-secret" })`, and as a bearer
+ *  on `/api` — oauth.ts refuses it at `/mcp`), else null, by `secretsEqual`. A blank secret matches
+ *  nothing. */
 export async function verifyAdminSecret(
   candidate: string,
   secret: string,

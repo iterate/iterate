@@ -13,14 +13,13 @@
 // deployment's APP_CONFIG (its operator bearer). Exits non-zero when an object could not say who it
 // is or an orphan could not be destroyed; orphans alone are the report, not a failure.
 import { parseArgs } from "node:util";
+import type { IterateSessionApi } from "iterate/api";
 import { connectIterate } from "iterate/node";
 import { osEnvs } from "../../envs.ts";
 import { parseAppConfig } from "../../apps/os/src/app-config.ts";
 
 /** One stored object as the sweep sees it. */
-export type SweptContext =
-  | { id: string; projectId: string; path: string }
-  | { id: string; error: string };
+export type SweptContext = Awaited<ReturnType<IterateSessionApi["contexts"]["identify"]>>[number];
 
 /** What an object with no birth record answers (apps/os iterate-context-durable-object.ts
  *  `iterateContextAddressOf`): it is empty — destroyed moments ago, and Cloudflare's list still
@@ -111,13 +110,7 @@ async function main() {
     baseUrl: target.baseUrl,
     auth: { type: "admin-secret", secret: config.secrets.adminBearer.exposeSecret() },
   });
-  const session = connection.session as unknown as {
-    projects: { list(): Promise<{ id: string }[]> };
-    contexts: {
-      identify(ids: string[]): Promise<SweptContext[]>;
-      destroy(id: string): Promise<{ projectId: string; path: string }>;
-    };
-  };
+  const { session } = connection;
   const contexts: SweptContext[] = [];
   for (let start = 0; start < stored.length; start += 50)
     contexts.push(...(await session.contexts.identify(stored.slice(start, start + 50))));
