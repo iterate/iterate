@@ -1,9 +1,8 @@
 # Interactive CI traces
 
 Preview OS and Main OS e2e each end in a CI trace job (`trace`) that reports only: once
-`deploy`, `e2e` and `specs` have settled, whatever their outcome, it writes the two suites' lines
-into a PR's body (`pnpm preview suite-lines`), then `scripts/ci/tracing/cli.ts current` reads the
-run from Depot and writes `trace.html` and `trace.json`, uploaded as the
+`deploy`, `e2e` and `specs` have settled, whatever their outcome, `scripts/ci/tracing/cli.ts
+current` reads the run from Depot and writes `trace.html` and `trace.json`, uploaded as the
 `public-ci-trace-<workflow>-<execution>` artifact (kept about a week,
 [test evidence](test-evidence.md)). `cli.ts publish` then posts two commit statuses
 (`statuses: write`), each linking a report in the viewer below:

@@ -7,8 +7,8 @@ import { expect, type Page } from "@playwright/test";
 import { signInWithPassword } from "../test-support/issuer.ts";
 import { test } from "../test-support/test.ts";
 
-// the admin a per-PR preview and local dev both list (apps/os/scripts/preview-config.ts
-// `PREVIEW_ADMIN_EMAIL`, generate-wrangler-config.ts)
+// the admin a per-commit deployment and local dev both list (apps/os/scripts/generate-wrangler-config.ts
+// `PREVIEW_ADMIN_EMAIL`)
 const ADMIN_EMAIL = "admin@preview.iterate.test";
 
 test("an admin opens any project's contexts and the global namespace, and signs the Dash in as another person", async ({

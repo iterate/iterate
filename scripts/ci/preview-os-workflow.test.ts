@@ -53,18 +53,23 @@ const suites = [
 ] as const;
 const suiteRun = 'doppler run --project os --config preview -- pnpm preview "$SUITE"';
 
-test("Preview OS names each job for the check it is: deploy and the two suites side by side, then the trace", () => {
+test("Preview OS names each job for the check it is: deploy and the two suites side by side, the cleanup after the deploy, then the trace", () => {
   expect(
     Object.fromEntries(Object.entries(preview.jobs).map(([id, job]) => [id, job.name])),
   ).toEqual({
     deploy: "Deploy preview",
     e2e: "E2E tests",
     specs: "Browser specs",
+    cleanup: "Clean up superseded",
     trace: "CI trace",
   });
   const runs = (job: string) => (preview.jobs[job]?.steps || []).map((step) => step.run);
   expect(runs("deploy")).toContain(
-    'doppler run --project os --config preview -- pnpm preview "$ACTION"',
+    "doppler run --project os --config preview -- pnpm preview deploy",
+  );
+  expect([preview.jobs.cleanup!.needs].flat()).toEqual(["deploy"]);
+  expect(runs("cleanup")).toContain(
+    "doppler run --project os --config preview -- pnpm preview cleanup-superseded",
   );
   for (const suite of suites) {
     // started with the run, beside the deploy: the suite step waits for it (below)
@@ -81,12 +86,10 @@ test("Preview OS's two suite jobs are one definition, differing only in the suit
   const [e2e, specs] = [preview.jobs.e2e!, preview.jobs.specs!];
   expect(specs).toMatchObject({
     steps: e2e.steps,
-    outputs: e2e.outputs,
     "timeout-minutes": e2e["timeout-minutes"],
   });
   // written once: the second job aliases the first's
   expect(source.match(/^ {4}steps: \*suite-steps$/gmu)).toHaveLength(1);
-  expect(source.match(/^ {4}outputs: \*suite-outputs$/gmu)).toHaveLength(1);
   const suiteEnv = ["SUITE", "FLAKE_SUITE", "TEST_TELEMETRY_EXPECTED_WORKSPACES"];
   const shared = (env: Record<string, string> = {}) =>
     Object.fromEntries(Object.entries(env).filter(([name]) => !suiteEnv.includes(name)));
@@ -128,7 +131,7 @@ test("Preview OS deploys the PR merged into main, and the test jobs use that ver
   const suiteSteps = preview.jobs.e2e!.steps || [];
   const deploySteps = preview.jobs.deploy!.steps || [];
   const resolve = deploySteps.findIndex((step) => step.id === "tested");
-  const deploy = deploySteps.findIndex((step) => step.run?.includes('pnpm preview "$ACTION"'));
+  const deploy = deploySteps.findIndex((step) => step.run?.includes("pnpm preview deploy"));
   expect(deploySteps[resolve]?.run).toBe("node scripts/ci/preview-tested-commit.ts");
   // on a push, the run's own commit: the merge commit this workflow file was read from
   expect(deploySteps[resolve]?.env?.PREVIEW_RUN_SHA).toBe(
@@ -137,10 +140,12 @@ test("Preview OS deploys the PR merged into main, and the test jobs use that ver
   // resolved before anything is installed or deployed from the checkout
   expect(resolve).toBeLessThan(deploySteps.findIndex((step) => step.name === "Setup"));
   expect(resolve).toBeLessThan(deploy);
-  expect(deploySteps[deploy]?.env?.PREVIEW_TESTED_COMMIT).toBe(
-    "${{ steps.tested.outputs.description }}",
-  );
-  expect(preview.jobs.deploy!.outputs?.["tested-sha"]).toBe("${{ steps.tested.outputs.sha }}");
+  expect(preview.jobs.deploy!.outputs).toMatchObject({
+    "tested-sha": "${{ steps.tested.outputs.sha }}",
+    // the name preview.ts gives the deployment, `pr<n>-<sha7>` of the tested commit, for the cleanup
+    deployment: "${{ steps.deploy.outputs.deployment }}",
+  });
+  expect(deploySteps[deploy]?.id).toBe("deploy");
   // the trace runs the scripts of the tree deploy tested, not of the PR head alone
   expect(
     preview.jobs.trace!.steps?.find((step) => step.uses === "actions/checkout@v4")?.with?.ref,
@@ -164,29 +169,6 @@ test("Preview OS deploys the PR merged into main, and the test jobs use that ver
   expect(
     preview.jobs.trace!.steps?.find((step) => step.name === "Record the traced commit")?.env,
   ).toEqual({ HEAD_SHA: "${{ needs.deploy.outputs.head-sha }}" });
-});
-
-// Why: apps/os/scripts/preview.ts `handOverSuiteLine` and `writeSuiteLines`, and the step's comment.
-test("Preview OS: the suites hand their lines to the trace job, which writes both into the PR body at once", () => {
-  for (const suite of suites)
-    expect(preview.jobs[suite.job]!).toMatchObject({
-      outputs: { status: "${{ steps.suite.outputs.status }}" },
-    });
-  const steps = preview.jobs.trace!.steps || [];
-  const write = steps.findIndex((step) => step.name === "Write the suites' lines into the PR body");
-  expect(steps[write]).toMatchObject({
-    run: "pnpm preview suite-lines",
-    "continue-on-error": true,
-    "timeout-minutes": 2,
-    env: {
-      PREVIEW_PR_NUMBER: "${{ env.PR_NUMBER }}",
-      PREVIEW_SUITE_LINES: suites
-        .map((suite) => `\${{ needs.${suite.job}.outputs.status }}`)
-        .join("\n"),
-    },
-  });
-  expect(write).toBe(steps.findIndex((step) => step.name === "Setup") + 1);
-  expect(write).toBeLessThan(steps.findIndex((step) => step.id === "trace"));
 });
 
 test("Preview OS: only the trace runs after the suites, so the next push's deploy waits for nothing else", () => {
@@ -287,8 +269,8 @@ test.each<[string, Run, { e2e: string; specs: string; trace: boolean }]>([
     { e2e: "tests", specs: "tests", trace: true },
   ],
   [
-    "a reset dispatch whose deploy failed",
-    { event: "workflow_dispatch", action: "reset", pr: "123", deploy: "failure" },
+    "a deploy dispatch whose deploy failed",
+    { event: "workflow_dispatch", action: "deploy", pr: "123", deploy: "failure" },
     { e2e: "fails", specs: "fails", trace: true },
   ],
   [
@@ -363,6 +345,25 @@ test.each<[string, Run, { e2e: string; specs: string; trace: boolean }]>([
     "needs.specs.result": specs === "fails" ? "failure" : result(specs),
   });
   expect({ e2e, specs, trace }).toEqual(expected);
+});
+
+// The cleanup deletes only once this run's deployment is ready, and only this run's prefix's older
+// ones (apps/os/scripts/preview-sweep.ts planSupersededCleanup).
+test.for([
+  { name: "a deploy that deployed", deploy: "success", deployment: "pr123-a1b2c3d", runs: true },
+  { name: "a PR that changes no preview path", deploy: "success", deployment: "", runs: false },
+  { name: "a deploy that failed", deploy: "failure", deployment: "pr123-a1b2c3d", runs: false },
+  { name: "a deploy that was cancelled", deploy: "cancelled", deployment: "", runs: false },
+])("Clean up superseded after $name ⇒ runs: $runs", ({ deploy, deployment, runs }) => {
+  expect(
+    evaluate(preview.jobs.cleanup!.if, {
+      "needs.deploy.result": deploy,
+      "needs.deploy.outputs.deployment": deployment,
+    }),
+  ).toBe(runs);
+  expect(preview.jobs.cleanup!.steps?.at(-1)?.env).toMatchObject({
+    PREVIEW_DEPLOYMENT: "${{ needs.deploy.outputs.deployment }}",
+  });
 });
 
 // A PR's preview is `pr<n>` whatever its branch (apps/os/scripts/preview-config.ts resolvePreviewName).

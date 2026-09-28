@@ -1,5 +1,5 @@
 // scripts/preview-slack-app.ts — the Slack app every per-PR preview names as iterate's own
-// (preview-config.ts sets it as APP_CONFIG `integrations.slack`), in a module of its own so the e2e
+// (generate-wrangler-config.ts sets it as APP_CONFIG `integrations.slack`), in a module of its own so the e2e
 // that signs webhooks with it imports no deploy tooling.
 import { dummyPetshopEnvs } from "../../../envs.ts";
 

@@ -55,9 +55,9 @@ export default async function ensureResources(options: { env?: string } = {}) {
   // IDs live in git, so bring-up always ends in a reviewed commit: on a mismatch with envs.ts, print
   // the entry to paste and fail.
   if (
-    resources.oauthKvId !== ctx.env.resources.oauthKvId ||
-    resources.itxKvId !== ctx.env.resources.itxKvId ||
-    resources.dbId !== ctx.env.resources.dbId
+    resources.oauthKvId !== ctx.env.resources?.oauthKvId ||
+    resources.itxKvId !== ctx.env.resources?.itxKvId ||
+    resources.dbId !== ctx.env.resources?.dbId
   ) {
     console.log(`\nenvs.ts is out of date for ${ctx.name} — update its resources entry to:\n`);
     console.log(`  resources: ${JSON.stringify(resources, null, 2).replaceAll("\n", "\n  ")},\n`);

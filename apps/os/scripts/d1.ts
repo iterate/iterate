@@ -3,7 +3,7 @@
 // file with its `d1_migrations` history row as ONE request, so a file lands whole or not at all
 // (https://developers.cloudflare.com/d1/reference/migrations/; workers-sdk
 // packages/wrangler/src/d1/migrations/helpers.ts). sqlfu never migrates a D1 (sqlfu.config.ts). The
-// deploys (scripts/deploy.ts: prd and the preview parent) and each PR's preview (scripts/preview.ts)
+// deploys (scripts/deploy.ts: prd, main on dev and each per-commit deployment, scripts/preview.ts)
 // migrate before their code uploads. Its own module, not in deploy.ts: trpc-cli turns deploy.ts's
 // exports into commands.
 import { mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
@@ -21,7 +21,7 @@ export type D1Row = { uuid: string; name: string; created_at?: string };
 
 /** The D1 named `name`, or undefined. The list API's `name` filter matches by prefix (measured), so
  *  the exact match is made here, over every page. */
-export async function findD1(cf: Cf, name: string) {
+async function findD1(cf: Cf, name: string) {
   for (let page = 1; ; page++) {
     const rows = await cf<D1Row[]>(`/d1/database?per_page=100&page=${page}`);
     const found = rows.find((row) => row.name === name);

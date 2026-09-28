@@ -1,26 +1,26 @@
-# THE LATENCY MEASUREMENT for apps/os: every 3 hours, redeploy main IN PLACE to the Worker Preview
-# `latency`, which nothing else touches (Main OS e2e has its own; a latency measured beside another
-# suite measures that suite), run the perf suite against it (apps/os/perf: concurrent project
+# THE LATENCY MEASUREMENT for apps/os: every 3 hours, deploy main's commit as `latency-<sha7>` (a
+# deployment of its own, which nothing else touches: Main OS e2e has its own, and a latency measured
+# beside another suite measures that suite; the same deployment again, in place, when main has not
+# moved since the last run), run the perf suite against it (apps/os/perf: concurrent project
 # creation at 1, 10 and 25 people, sign-in, MCP, a context's first append, wake and processor cold
 # start, rule invocation, stream fan-out — every metric and its budget in apps/os/perf/latency.ts),
-# and keep Vitest's JSON report as the `os-latency-report` artifact. No run deletes the preview: a
-# brand-new one answers Cloudflare's `internal error` for seconds after it is created
-# (main-os-e2e.yml), and a preview redeployed in place is what production is. Every perf row mints
-# its own people and projects, so nothing it measures reads what earlier runs left. The preview's D1
-# is created near whoever creates it (apps/os/scripts/d1.ts), and every uncached control-plane read
-# the suite times is a round trip to it: to start the preview over, delete it (`pnpm --dir apps/os
-# preview delete --name latency`) and let this workflow's deploy create it again, never a laptop's
-# `preview reset`, which places the D1 near the laptop.
+# and keep Vitest's JSON report as the `os-latency-report` artifact. The deploy's readiness gate
+# waits out a brand-new worker's first seconds (main-os-e2e.yml); the run then deletes the
+# workflow's deployments before it. Every perf row mints its own people and projects, so nothing it
+# measures reads what earlier runs left. The deployment's D1 is created near whoever creates it
+# (apps/os/scripts/d1.ts), and every uncached control-plane read the suite times is a round trip to
+# it: this workflow's own deploy creates each one, never a laptop's `pnpm preview deploy --name
+# latency`, which would place the D1 near the laptop.
 #
 # The health job judges each scheduled run's report (scripts/monitors/latency.ts), so a run whose perf
 # suite failed stays green here. Every 3 hours rather than on main pushes, so the baseline (the last
 # 10 runs) spans about 30 hours whatever the merge rate. A dispatch measures a branch, which the
-# health job never judges, and redeploys the preview with the branch; the next run of main puts main
-# back.
+# health job never judges, deploying the branch's commit under the workflow's prefix; the next run of
+# main deploys main's again.
 #
-# Nothing waits on it: its own concurrency group. One run at a time, since each redeploys the preview
-# the run before measures: a run that lands meanwhile queues, and a running measurement is never cut
-# short.
+# Nothing waits on it: its own concurrency group. One run at a time, since each run's cleanup deletes
+# the deployment the run before measured: a run that lands meanwhile queues, and a running
+# measurement is never cut short.
 #
 #   depot ci dispatch --org 0p91s0lz49 --repo iterate/iterate --workflow os-latency.yml --ref <branch>
 #
@@ -43,7 +43,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  # THE GUARD'S ONE PREVIEW, redeployed in place by every run (apps/os/scripts/preview.ts reads it;
+  # THE PREFIX of the guard's deployments, `latency-<sha7>` (apps/os/scripts/preview.ts reads it;
   # preview-sweep.ts CI_WORKFLOW_PREVIEWS knows it).
   PREVIEW_NAME: latency
 
@@ -59,14 +59,26 @@ jobs:
           ref: ${{ github.sha }}
       - name: Setup
         uses: ./.depot/actions/setup
-      - name: Redeploy the preview in place
+      # `<prefix>-<sha7>` of main's commit: a fresh deployment when main moved since the last run,
+      # the same one deployed again in place when it has not (apps/os/scripts/preview.ts)
+      - name: Deploy main's commit
+        id: deploy
         working-directory: apps/os
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           PREVIEW_APPS: none
         run: doppler run --project os --config preview -- pnpm preview deploy
-      # The perf suite alone on the preview; its verdict is the health job's, so a missed budget
-      # does not stop the job here. Its credentials are the preview's parent's APP_CONFIG
+      # The workflow's deployments before this one, deleted now this one is ready
+      # (apps/os/scripts/preview.ts `cleanup-superseded`); never this run's verdict.
+      - name: Delete the superseded deployments
+        continue-on-error: true
+        working-directory: apps/os
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          PREVIEW_DEPLOYMENT: ${{ steps.deploy.outputs.deployment }}
+        run: doppler run --project os --config preview -- pnpm preview cleanup-superseded
+      # The perf suite alone on the deployment; its verdict is the health job's, so a missed budget
+      # does not stop the job here. Its credentials are Doppler os/preview's APP_CONFIG
       # (e2e/support/global-setup.ts).
       - name: Measure (the perf suite)
         working-directory: apps/os

@@ -254,9 +254,9 @@ export const AppConfig = z.object({
        *  addresses `admins` lists alone. The sign-in page offers "Continue with <its host>"; the
        *  grant it asks that issuer for reads who the person is and nothing else. Refused
        *  (`parseAppConfig`) unless `urls.os` is a preview's https workers.dev origin or a test's:
-       *  a deployment on its own domain trusts no other issuer. Set in code, never in Doppler: the
-       *  per-PR preview's config (scripts/preview-config.ts `previewWranglerConfig`), as
-       *  `APP_CONFIG_LOGIN__ADMIN_ISSUER`. Unset ⇒ off. */
+       *  a deployment on its own domain trusts no other issuer. Set in code, never in Doppler: a
+       *  per-commit deployment's config (envs.ts `previewDeployment`'s `adminIssuer`, through
+       *  scripts/generate-wrangler-config.ts), as `APP_CONFIG_LOGIN__ADMIN_ISSUER`. Unset ⇒ off. */
       adminIssuer: httpOrigin.optional(),
       /** THE RESERVED DOMAIN OF THIS DEPLOYMENT'S TEST PEOPLE (test-email-domain.ts): a sign-in
        *  provider pointed at a fake (a preview's pet shop, which mints any address) signs in
@@ -265,8 +265,9 @@ export const AppConfig = z.object({
        *  (`urls.os` an http loopback origin) it also opens `/.auth/local-sign-in`
        *  (local-sign-in.ts), which signs its test people in with no password. Refused
        *  (`parseAppConfig`) unless `urls.os` is a preview's, a laptop's or a test's. Set in code,
-       *  never in Doppler: the per-PR preview's config (scripts/preview-config.ts), as
-       *  `APP_CONFIG_LOGIN__TEST_EMAIL_DOMAIN`, and local dev's (scripts/generate-wrangler-config.ts).
+       *  never in Doppler: a per-commit deployment's config (envs.ts `previewDeployment`'s
+       *  `testEmailDomain`) and local dev's, both scripts/generate-wrangler-config.ts's, as
+       *  `APP_CONFIG_LOGIN__TEST_EMAIL_DOMAIN`.
        *  Unset ⇒ no fake provider signs anyone in, no link pre-fills anyone, and no one-click local
        *  sign-in exists. */
       testEmailDomain: dnsName.optional(),
@@ -295,7 +296,7 @@ export const AppConfig = z.object({
     .object({
       /** iterate's Slack app (integrations/slack/): the OAuth client, the key Slack signs webhooks
        *  with, the bot scopes asked for, and where Slack answers — `slackOrigin`, another origin only
-       *  for a fake (a preview's, scripts/preview-config.ts). */
+       *  for a fake (a per-commit deployment's, scripts/generate-wrangler-config.ts). */
       slack: z
         .object({
           oauthClientId: z.string({ error: REQUIRED }).trim().min(1, REQUIRED),

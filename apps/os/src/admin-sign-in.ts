@@ -1,13 +1,13 @@
 // admin-sign-in.ts — A DEPLOYMENT'S ADMINS SIGN IN THROUGH ANOTHER ISSUER: `login.adminIssuer` names
-// an iterate deployment (prd, for every per-PR preview) whose word this one takes on who a browser
-// is, for its `admins` alone. The sign-in page's "Continue with <issuer host>" starts an ordinary
-// OAuth code flow at that issuer whose one resource is its `/oauth2/userinfo`: the grant can read
-// who the person is and nothing else (api.ts `userinfoResponse`; `/api` and `/mcp` refuse its token
-// by audience, RFC 8707). An address this deployment's `admins` lists is signed in here as
-// themselves; anyone else is refused. A preview's admins are prd's (scripts/preview-config.ts), so a
-// PR's reviewer signs in with the prd session they already have, then signs an app in as the PR's
-// test person from the consent page ("Sign in as someone else…", consent.ts): what the PR body's
-// `Sign in ↗` links open (scripts/preview.ts).
+// an iterate deployment (prd, for every per-commit deployment) whose word this one takes on who a
+// browser is, for its `admins` alone. The sign-in page's "Continue with <issuer host>" starts an
+// ordinary OAuth code flow at that issuer whose one resource is its `/oauth2/userinfo`: the grant can
+// read who the person is and nothing else (api.ts `userinfoResponse`; `/api` and `/mcp` refuse its
+// token by audience, RFC 8707). An address this deployment's `admins` lists is signed in here as
+// themselves; anyone else is refused. A PR deployment's admins are prd's (envs.ts
+// `previewDeployment`), so a PR's reviewer signs in with the prd session they already have, then
+// signs an app in as the PR's test person from the consent page ("Sign in as someone else…",
+// consent.ts): what the PR body's `Sign in ↗` links open (scripts/preview.ts).
 //
 // This deployment is the issuer's CIMD client, its metadata document served here
 // (`adminSignInClientMetadata`), so no preview is registered anywhere by hand. The token is read

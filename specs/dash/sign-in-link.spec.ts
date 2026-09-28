@@ -12,8 +12,8 @@ import { signInWithPassword } from "../test-support/issuer.ts";
 import { openOperatorSession } from "../test-support/operator.ts";
 import { test } from "../test-support/test.ts";
 
-// the admin a per-PR preview and local dev both list (apps/os/scripts/preview-config.ts
-// `PREVIEW_ADMIN_EMAIL`, generate-wrangler-config.ts)
+// the admin a per-commit deployment and local dev both list (envs.ts `previewDeployment`,
+// apps/os/scripts/generate-wrangler-config.ts)
 const ADMIN_EMAIL = `admin@${TEST_EMAIL_DOMAIN}`;
 
 test("the PR body's Sign in link: an admin confirms once, and the Dash is the test person's, inside their project", async ({
@@ -76,5 +76,5 @@ test("on a preview, the sign-in page sends prd's admins to prd, asking only who 
   });
 });
 
-/** Where every preview's admins sign in (apps/os/scripts/preview-config.ts). */
+/** Where every per-commit deployment's admins sign in (envs.ts `previewDeployment`'s `adminIssuer`). */
 const PRD_ISSUER = "https://os.iterate.com";

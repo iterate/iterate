@@ -1,5 +1,5 @@
-// scripts/preview-readiness.ts — IS A WORKER PREVIEW READY FOR TRAFFIC? The deploy's smoke of
-// apps/os, asked as soon as `wrangler preview` returns. Every e2e row needs a WebSocket upgrade on
+// scripts/preview-readiness.ts — IS A DEPLOYMENT READY FOR TRAFFIC? The deploy's smoke of apps/os,
+// asked as soon as its worker is uploaded. Every e2e row needs a WebSocket upgrade on
 // `/api`, and a Durable Object — a fresh context and a facet it hosts — answering over it on the
 // deploy's version. On a brand-new preview they do not, for seconds after its edge serves the new
 // version (`/version` naming it): the preview's freshly provisioned Durable Object namespace

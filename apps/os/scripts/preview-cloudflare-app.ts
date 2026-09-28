@@ -1,5 +1,5 @@
 // scripts/preview-cloudflare-app.ts — the Cloudflare client every per-PR preview names as iterate's
-// own (preview-config.ts sets it as APP_CONFIG `integrations.cloudflare`), in a module of its own so
+// own (generate-wrangler-config.ts sets it as APP_CONFIG `integrations.cloudflare`), in a module of its own so
 // the e2e that signs in through it imports no deploy tooling.
 import { dummyPetshopEnvs } from "../../../envs.ts";
 

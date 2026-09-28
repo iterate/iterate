@@ -15,8 +15,8 @@ Workflow-run and job-attempt history goes to PostHog from an hourly sync
 
 - A merge to main just deploys: each app's deploy workflow finishes in about two minutes, and
   runs only when the merge touches what that app ships ([Which main pushes deploy](#which-main-pushes-deploy)).
-- Main OS e2e (its preview redeployed in place, then e2e) may run in parallel, but nothing waits
-  on it ([Main OS e2e keeps one preview](#main-os-e2e-keeps-one-preview)).
+- Main OS e2e (a fresh deployment of the pushed commit, then e2e) may run in parallel, but nothing
+  waits on it ([Main OS e2e deploys each commit fresh](#main-os-e2e-deploys-each-commit-fresh)).
 - No job sleeps or waits minutes for analytics or logs to settle. Put slow-arriving signals
   (Durable Object cost, prd faults) in a scheduled alarm (`health.yml`,
   `prd-fault-alarm.yml`), not in a gate on the merge path.
@@ -66,29 +66,29 @@ Anything else that needs GitHub-only triggers, such as `pull_request_target`, `i
 
 ## Workflows
 
-| File                  | Runs on                                          | What it does                                                                                           |
-| --------------------- | ------------------------------------------------ | ------------------------------------------------------------------------------------------------------ |
-| `lint-typecheck.yml`  | PR, main push, dispatch                          | **Lint and Typecheck** (required): lint, typecheck, format check, knip                                 |
-| `test.yml`            | PR, main push, dispatch                          | **Test** (required): `pnpm test`, and beside it the Kit firmware host tests                            |
-| `loc-report.yml`      | PR, dispatch                                     | The LOC table in the PR body                                                                           |
-| `pr-dashboard.yml`    | PR opened, reopened, ready, drafted or closed    | The Slack PR update and the daily PR dashboard                                                         |
-| `preview-os.yml`      | Every PR, dispatch                               | **Preview OS**: Deploy preview, beside it **E2E tests** and **Browser specs**, then CI trace           |
-| `preview-delete.yml`  | Such a PR closing, dispatch                      | Deletes the PR's preview                                                                               |
-| `preview-sweep.yml`   | Nightly, dispatch                                | Deletes stale previews, old preview Workers and orphaned preview resources                             |
-| `main-os-e2e.yml`     | Main push touching the preview paths, dispatch   | **Main OS e2e**: main redeployed in place to preview `main`, E2E tests, Browser specs, its page, trace |
-| `deploy-os.yml`       | Main push touching what OS ships, dispatch       | **Deploy OS**: production, then the project-host check                                                 |
-| `deploy-<app>.yml`    | Main push touching what the app ships, dispatch  | Deploy of Dash, Agents, Notes, Voice, Kit, SPA, dummy-petshop, ci-reports or iterate-com-inbound-email |
-| `kit-firmware.yml`    | Firmware PR and main push, daily, dispatch       | Builds the changed boards; main publishes their releases                                               |
-| `prd-fault-alarm.yml` | Every 15 minutes, dispatch                       | Reads production's Workers Logs and pages #error-pulse on faults                                       |
-| `health.yml`          | Hourly, dispatch                                 | **Health**: judges the runs below and PR time to green; one #error-pulse message per change of state   |
-| `os-crash-hunt.yml`   | Nightly, dispatch                                | The opt-in isolate-ceiling rows against production                                                     |
-| `os-e2e-soak.yml`     | Dispatch                                         | The e2e suite N times against one deployed worker, each run then the perf budgets                      |
-| `os-latency.yml`      | Every 3 hours, dispatch                          | **OS latency**: the perf suite against main's preview `latency`, its report for the health job         |
-| `os-real-model.yml`   | Daily, main push to the agents runtime, dispatch | **OS real model**: the `REAL:` rows against main's preview `real-model`, for the health job            |
-| `flake-dashboard.yml` | Hourly, dispatch                                 | Recomputes [#2580](https://github.com/iterate/iterate/issues/2580) from the flake records in R2        |
-| `ci-telemetry.yml`    | Hourly, dispatch                                 | One PostHog event per Depot workflow run and job attempt                                               |
-| `release.yml`         | Daily, dispatch                                  | A dated `v…` release with a changelog when main moved                                                  |
-| `shadcn-drift.yml`    | PR touching the vendored shadcn files, dispatch  | **shadcn drift**: fails when a vendored file differs from `shadcn add` (packages/ui/AGENTS.md)         |
+| File                  | Runs on                                          | What it does                                                                                                     |
+| --------------------- | ------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------- |
+| `lint-typecheck.yml`  | PR, main push, dispatch                          | **Lint and Typecheck** (required): lint, typecheck, format check, knip                                           |
+| `test.yml`            | PR, main push, dispatch                          | **Test** (required): `pnpm test`, and beside it the Kit firmware host tests                                      |
+| `loc-report.yml`      | PR, dispatch                                     | The LOC table in the PR body                                                                                     |
+| `pr-dashboard.yml`    | PR opened, reopened, ready, drafted or closed    | The Slack PR update and the daily PR dashboard                                                                   |
+| `preview-os.yml`      | Every PR, dispatch                               | **Preview OS**: Deploy preview, beside it **E2E tests** and **Browser specs**, then CI trace                     |
+| `preview-delete.yml`  | Such a PR closing, dispatch                      | Deletes the PR's deployments                                                                                     |
+| `preview-sweep.yml`   | Nightly, dispatch                                | Deletes superseded, stale and half-made deployments, the legacy Worker Previews and the former parents           |
+| `main-os-e2e.yml`     | Main push touching the preview paths, dispatch   | **Main OS e2e**: the pushed commit deployed as `main-<sha7>`, E2E tests, Browser specs, cleanup, its page, trace |
+| `deploy-os.yml`       | Main push touching what OS ships, dispatch       | **Deploy OS**: production, then the project-host check                                                           |
+| `deploy-<app>.yml`    | Main push touching what the app ships, dispatch  | Deploy of Dash, Agents, Notes, Voice, Kit, SPA, dummy-petshop, ci-reports or iterate-com-inbound-email           |
+| `kit-firmware.yml`    | Firmware PR and main push, daily, dispatch       | Builds the changed boards; main publishes their releases                                                         |
+| `prd-fault-alarm.yml` | Every 15 minutes, dispatch                       | Reads production's Workers Logs and pages #error-pulse on faults                                                 |
+| `health.yml`          | Hourly, dispatch                                 | **Health**: judges the runs below and PR time to green; one #error-pulse message per change of state             |
+| `os-crash-hunt.yml`   | Nightly, dispatch                                | The opt-in isolate-ceiling rows against production                                                               |
+| `os-e2e-soak.yml`     | Dispatch                                         | The e2e suite N times against one deployed worker, each run then the perf budgets                                |
+| `os-latency.yml`      | Every 3 hours, dispatch                          | **OS latency**: the perf suite against main's commit deployed as `latency-<sha7>`, its report for the health job |
+| `os-real-model.yml`   | Daily, main push to the agents runtime, dispatch | **OS real model**: the `REAL:` rows against main's commit deployed as `real-model-<sha7>`, for the health job    |
+| `flake-dashboard.yml` | Hourly, dispatch                                 | Recomputes [#2580](https://github.com/iterate/iterate/issues/2580) from the flake records in R2                  |
+| `ci-telemetry.yml`    | Hourly, dispatch                                 | One PostHog event per Depot workflow run and job attempt                                                         |
+| `release.yml`         | Daily, dispatch                                  | A dated `v…` release with a changelog when main moved                                                            |
+| `shadcn-drift.yml`    | PR touching the vendored shadcn files, dispatch  | **shadcn drift**: fails when a vendored file differs from `shadcn add` (packages/ui/AGENTS.md)                   |
 
 Each file's header comment and `on:` block are the details.
 
@@ -474,7 +474,7 @@ run and the Preview delete run for the same PR share `preview-os-<pr>`. Only a
 push cancels the run in progress (`cancel-in-progress` is true for
 `pull_request` alone), whether a push's or a dispatch's run: its verdict would
 be out of date, Depot starts none of the cancelled run's `always()` jobs, and
-the next run redeploys the whole preview, which repairs a deploy cut short. A
+the next run deploys a deployment of its own, whatever the cancelled one left. A
 dispatch or a delete cancels nothing, but a newer pending run replaces an older
 pending one, so a dispatch queued behind a push can silently disappear. When
 validating previews, use one path at a time.
@@ -630,7 +630,8 @@ have no `needs:`. Each starts with the run and, while the preview deploys:
    the PR's head, then the PR merged into main by
    `scripts/ci/preview-tested-commit.ts` (on a push the run's own commit when it
    merges this head, else the merge GitHub rebuilt), and on a push decides
-   whether the PR changes a preview path;
+   whether the PR changes a preview path. The deployment it tests is
+   `<prefix>-<sha7>` of that commit, the name Deploy preview gives it;
 2. runs the setup ([Setup on Depot's stock image](#setup-on-depots-stock-image)),
    beside it for the specs Playwright's headless shell from Depot Cache, and starts
    its suite step, whose `runSuite` chooses the slow rows and installs Chromium's
@@ -663,47 +664,42 @@ about 90 s more between the two, about $0.013 (25 runs each way). In return
 the first test follows the deploy's end by 3.9 s (E2E tests) and 2.1 s
 (Browser specs) at the median, against 16 and 13 s with `needs: deploy`.
 
-## Main OS e2e keeps one preview
+## Main OS e2e deploys each commit fresh
 
-Main OS e2e tests one Worker Preview, `main`, which every run redeploys in place and no run
-deletes. The latency guard does the same with `latency`, and the real-model suite with `real-model`
-(`CI_WORKFLOW_PREVIEWS` in `apps/os/scripts/preview-sweep.ts`).
+Main OS e2e deploys each pushed commit as a deployment of its own, `main-<sha7>` (apps/os and every
+app on top, envs.ts `previewDeployment`), tests it, and deletes the `main-…` deployments before it
+(Clean up superseded). The latency guard does the same under `latency`, and the real-model suite
+under `real-model` (`CI_WORKFLOW_PREVIEWS` in `apps/os/scripts/preview-sweep.ts`); when main has not
+moved since their last run, they deploy the same deployment again, in place.
 
-A brand-new preview's Durable Objects answer Cloudflare's `internal error; reference = …` for
-10–40 s after it is created, and the deploy's readiness gate (`apps/os/scripts/preview-readiness.ts`)
-waits that out. A preview redeployed in place has no such window, but it has another: Cloudflare
-releases the new version eventually consistently, so for a while an edge can still serve the
-previous version and a brand-new Durable Object can still start on it, and an object on it later
-resets with "Durable Object reset because its code was updated.", failing every call in flight. So
-each of the gate's probes also asks which version its edge and two brand-new contexts run (the
-operator's `session.versions`), and the gate passes once three rounds in a row run the deployment
-everywhere. The gate starts as soon as `wrangler preview` returns, with no `/version` smoke before
-it: the edge's version it asks for is the id `/version` answers with. It fails the deploy after
-150 s. A PR's preview, redeployed in place on every push, goes through the same gate.
+A brand-new worker's Durable Objects can answer Cloudflare's `internal error; reference = …` for
+seconds after it is created (10–40 s on brand-new Worker Previews, 2026-09), and the deploy's
+readiness gate (`apps/os/scripts/preview-readiness.ts`) waits that out. A worker redeployed in place
+has another window: Cloudflare releases the new version eventually consistently, so for a while an
+edge can still serve the previous version and a brand-new Durable Object can still start on it, and
+an object on it later resets with "Durable Object reset because its code was updated.", failing
+every call in flight. So each of the gate's probes also asks which version its edge and two
+brand-new contexts run (the operator's `session.versions`), and the gate passes once three rounds in
+a row run the deployment everywhere. It fails the deploy after 150 s. Every deployment goes through
+the same gate; only a same-commit redeploy and main on dev meet the in-place window now.
 
 Soaks of the e2e suite at `--retry=0` (`os-e2e-soak.yml`), every run redeployed in place. With e2e
 as soon as a gate without the version check passed, 7 of 48 runs had a row fail on a platform
-signature, 30 of their 39 rows "code was updated" (2026-09-24). With the gate held 150 s instead,
-the deploy's start to the first test took 173 s at the median (p90 182 s). With the version check
-(2026-09-25, 17 runs, before and after the control plane moved to D1) it took 42 s (p90 72 s): stale
-rounds held 12 of the 17 gates, for up to 42 s, and every "code was updated" reset landed on a probe
-inside a gate. One row failed on a platform signature, a socket dropped 2 s after the gate with no
-trace on the Worker's side. With three rounds of two contexts and no `/version` smoke before them
-(2026-09-26, 21 in-place and 18 brand-new runs, beside 21 and 19 runs of five rounds of four after
-the smoke), `wrangler preview`'s return to the first test took 16.5 s at the median in place (p90
-25 s, against 22.8 s and 34 s) and 14.7 s brand-new (p90 21 s, against 19.8 s and 39 s), and no row
-failed on a deploy signature (two rows in one brand-new run of the five-round gate). A storage reset
-or a dropped socket can still fail a row in any shape, and CI's one retry absorbs it.
+signature, 30 of their 39 rows "code was updated" (2026-09-24). With the version check (2026-09-25,
+17 runs) the deploy's start to the first test took 42 s at the median (p90 72 s), and every "code
+was updated" reset landed on a probe inside a gate. With three rounds of two contexts and no
+`/version` smoke before them (2026-09-26, 21 in-place and 18 brand-new runs, beside 21 and 19 runs
+of five rounds of four after the smoke), `wrangler preview`'s return to the first test took 16.5 s
+at the median in place (p90 25 s, against 22.8 s and 34 s) and 14.7 s brand-new (p90 21 s, against
+19.8 s and 39 s), and no row failed on a deploy signature. A storage reset or a dropped socket can
+still fail a row in any shape, and CI's one retry absorbs it.
 
-- Each workflow's runs are serialized (`cancel-in-progress: false`), so no deploy lands under another
-  run's tests.
-- Nothing resets the preview before a run. `pnpm preview reset` deletes the preview and creates it
-  again, which makes it brand-new. Every row mints its own people and projects, so nothing reads what
-  earlier runs left. What they leave accumulates: per e2e run about 40 Artifacts repos, 10 R2
-  objects and 100 KV keys, plus the gate's probe contexts.
-- The nightly sweep keeps such a preview through quiet days and takes it only once its workflow has
-  not deployed it for 7 days (rules 1 and 3 in `preview-sweep.ts`). Deleting one by hand
-  (`pnpm preview delete --name main`) makes the workflow's next run brand-new, behind the gate.
+- Each workflow's runs are serialized (`cancel-in-progress: false`), so a run's cleanup deletes only
+  the deployments of runs before it.
+- Every row mints its own people and projects, so nothing reads what earlier runs left, and a fresh
+  deployment starts with none of it.
+- The nightly sweep keeps a workflow's newest deployment through quiet days and takes it only once
+  the workflow has not deployed for 7 days (rules 1 and 4 in `preview-sweep.ts`).
 
 ## Interactive trace reports
 
