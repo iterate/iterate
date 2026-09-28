@@ -1,9 +1,9 @@
-/** The stateless byte-pushing transport loaded by each agent durable object. A Durable Object that
- *  receives a provider Response or stream from a second Durable Object makes the Workers runtime
- *  report a hung request (./ai-transport.md), so this Worker consumes provider I/O itself and pushes
- *  each byte chunk into the caller's AgentAiSink under an idle bound; no Response, stream or reader
- *  crosses back to the Durable Object. It imports `withItx` alone (`iterate/with-itx`, ~1.5 KB) and never
- *  `iterate/sdk`, so no model call loads the whole SDK. */
+/** The stateless byte-pushing transport loaded by each agent durable object: a WORKAROUND for the
+ *  Cloudflare fault apps/agents/e2e/ai-stream-hung-request.e2e.test.ts pins (./ai-transport.md says
+ *  why, and when it goes). This Worker consumes provider I/O itself and pushes each byte chunk into
+ *  the caller's AgentAiSink under an idle bound; no Response, stream or reader crosses back to the
+ *  Durable Object. It imports `withItx` alone (`iterate/with-itx`, ~1.5 KB) and never `iterate/sdk`,
+ *  so no model call loads the whole SDK. */
 export const AI_TRANSPORT_SOURCE = {
   "worker.js": `import { WorkerEntrypoint } from "cloudflare:workers";
 import { withItx } from "iterate/with-itx";

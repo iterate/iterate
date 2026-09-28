@@ -166,8 +166,9 @@ options), and nothing is spent.
   daily spend cap (`iterate-gateway-daily`) answers HTTP 429, code 2045, once spent. On 2026-09-24
   a day of soaks spent it, and every PR's e2e timed out on the default-model rows.
 - **What runs where.** The `REAL:` rows (`realModelOnly`) of
-  `apps/agents/e2e/agents-default-model.e2e.test.ts` and
-  `apps/os/e2e/ai-root-shadow-and-fable.e2e.test.ts` run only with `E2E_REAL_MODELS=1`, which only
+  `apps/agents/e2e/agents-default-model.e2e.test.ts`,
+  `apps/os/e2e/ai-root-shadow-and-fable.e2e.test.ts` and the pin of a Cloudflare streaming fault,
+  `apps/agents/e2e/ai-stream-hung-request.e2e.test.ts`, run only with `E2E_REAL_MODELS=1`, which only
   `os-real-model.yml` sets, once a day and on main pushes to `packages/agents/**`. The soak strips
   it. A run costs about $0.06.
 - **When the cap is spent anyway.** A real-model row fails at once, naming the cap and the
