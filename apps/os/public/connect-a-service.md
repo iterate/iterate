@@ -398,7 +398,7 @@ It returns `{ authorizationUrl }`. Say, with the link on a line of its own:
 > It comes back to iterate, and the page says whether it worked. Reply "done" when it says
 > **Done**, or send me what it says instead.
 
-End your turn. The link works for 10 minutes. If the person comes back later, or the page says it
+End your turn. The link works for an hour. If the person comes back later, or the page says it
 expired, run D2 again and send the new link.
 
 - **The person's app has no client secret** (a public client, PKCE only): skip the collection
@@ -518,5 +518,5 @@ With an MCP server that registers clients itself (Linear):
 | `beginOAuth` refuses the client secret                                                | The client-secret secret must exist and be pinned to the token endpoint's origin (D1b).                                                        |
 | `The operation timed out.`                                                            | Run the same script once more.                                                                                                                 |
 | `The RPC receiver does not implement the method "…"`                                  | That name isn't there: check it against `listTools()` or `operations()`, and that you awaited the connection.                                  |
-| The callback page says `This link is not one the platform issued, or it has expired.` | The consent link works for 10 minutes. Run D2 again and send the new link.                                                                     |
+| The callback page says `This link is not one the platform issued, or it has expired.` | The consent link works for an hour. Run D2 again and send the new link.                                                                        |
 | The person pasted a key into the chat                                                 | Tell them to revoke it and make a new one, then send the collection link.                                                                      |
