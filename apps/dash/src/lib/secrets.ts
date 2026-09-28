@@ -1,3 +1,4 @@
+import { z } from "zod";
 import type { SecretMaterial } from "iterate/api";
 
 /** Where every secret's path starts: `/secrets/<name>`, what `getSecret("/secrets/<name>")` spells. */
@@ -21,7 +22,9 @@ export function secretMaterialOf(value: string): SecretMaterial {
     return value;
   }
   // JSON.parse answers any JSON value; only an object (not null, an array, a number) has fields.
-  return parsed instanceof Object && !Array.isArray(parsed)
-    ? (parsed as Record<string, unknown>)
-    : value;
+  const object = JsonObject.safeParse(parsed);
+  return object.success ? object.data : value;
 }
+
+/** A JSON object: the one JSON value whose fields `{ field }` can pick. */
+const JsonObject = z.record(z.string(), z.unknown());

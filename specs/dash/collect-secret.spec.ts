@@ -1,10 +1,5 @@
-// An agent's collection link (`itx.secrets.collectFromUser`) opens a page of its own on the Dash,
-// outside its shell, framed like the issuer's sign-in and consent pages: the requester's words,
-// quoted, the secret's path, the origins its value may be sent to, the value and Save. Once saved,
-// the form gives way to one line. A person without a Dash session signs in first and comes back to
-// the link. A link that names the project's Secrets page (`?collect=1`) opens the same page, and one
-// whose path holds a secret already says Update. The `dash-phone` project runs these at a phone's
-// width, with touch.
+// The collection link's page (apps/dash/src/routes/collect-secret.$slug.tsx), end to end. The
+// `dash-phone` project runs it again at a phone's width, with touch.
 import { expect } from "@playwright/test";
 import { test } from "../test-support/test.ts";
 
