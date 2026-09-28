@@ -15,8 +15,10 @@ extern "C" {
  * `start_call` / `end_call` edges the session grammar gives a physical press
  * (iterate/kit/session_grammar.h), so a remote and a physical control are one
  * path. Dispatch and the loop both run on the app task, so the latches need no
- * atomics. A `true` answer means the edge was latched, not that a call exists:
- * call state is the loop's, and `health()` reports it.
+ * atomics. The latches keep no order: an end and a start that land in the same
+ * pass are a restart, whichever came first, so a caller that means "end" awaits
+ * its start() before it ends. A `true` answer means the edge was latched, not
+ * that a call exists: call state is the loop's, and `health()` reports it.
  */
 struct iterate_kit_conversation_control {
   bool start_call;

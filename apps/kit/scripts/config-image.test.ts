@@ -17,3 +17,9 @@ test.for([
     expect(offset(name)).toBe(expected);
   },
 );
+
+test("offset: a name that is no board target is refused with the boards' names", () => {
+  expect(() => offset("mac")).toThrow(
+    "mac is no board target; the boards are havpe, m5sticks3, satellite1, stackchan, waveshare_s3_amoled, waveshare_s3_rlcd, zectrix_note4.",
+  );
+});

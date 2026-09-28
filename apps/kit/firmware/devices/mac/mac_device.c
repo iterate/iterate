@@ -232,7 +232,7 @@ int main(int argc, char **argv) {
   if (mac_keyboard_open()) {
     (void)fputs("mac: space presses the button, q leaves\n", stderr);
   } else {
-    (void)fputs("mac: no terminal; the button is remote-only\n", stderr);
+    (void)fputs("mac: no terminal; conversation.start() starts a call\n", stderr);
   }
 
   const struct iterate_kit_board_facts facts = {

@@ -6,7 +6,7 @@
 //     --wifi-password <password> --os-base-url https://os.iterate.com --project-id prj-voice \
 //     --project-api-key "$KIT_TOKEN" [--status-voice greensleeves] --out /tmp/cfg.bin
 //   pnpm --dir apps/kit exec tsx scripts/config-image.ts offset <target>
-import { readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
@@ -55,6 +55,12 @@ export function image(options: {
 /** Prints the target's iterate_kit offset (its sdkconfig.defaults' partition table): esptool's address. */
 export function offset(target: string) {
   const directory = join(TARGETS, target);
+  if (!existsSync(join(directory, "sdkconfig.defaults"))) {
+    const boards = readdirSync(TARGETS)
+      .filter((name) => name !== "common" && existsSync(join(TARGETS, name, "sdkconfig.defaults")))
+      .sort();
+    throw new Error(`${target} is no board target; the boards are ${boards.join(", ")}.`);
+  }
   const table = /^CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="([^"]+)"$/m.exec(
     readFileSync(join(directory, "sdkconfig.defaults"), "utf8"),
   )?.[1];
