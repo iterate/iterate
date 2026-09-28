@@ -31,6 +31,7 @@ import type {
   SecretRefresh,
   WorkerSource,
 } from "iterate/api";
+import { missingScopes } from "iterate/api";
 import { projectPublicUrlOf, type IngressRouting } from "iterate/project-ingress";
 import { failureKind, ONCE_NOW, retryPlatformFailures } from "@iterate-com/shared/platform-retry";
 import { refusePlatformIdempotencyKeys, stampCaller, type Caller } from "../caller.ts";
@@ -58,7 +59,6 @@ import type {
   FinishConnectAnswer,
   FinishConnectInput,
 } from "../integrations/verbs.ts";
-import { missingScopes } from "../integrations/rules.ts";
 import type { ProjectState } from "../project/contract.ts";
 import type { AccountState } from "../account/contract.ts";
 import type { InstanceState } from "../instance/contract.ts";

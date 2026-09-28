@@ -62,12 +62,10 @@ const ProjectLive = z.looseObject({
   /** the catalog's repos, by path: the seeded config repo is the saga's first visible step */
   repos: z.record(z.string(), z.unknown()),
   /** the project's connections: its GitHub ones list the repositories the config repo can link to */
-  integrations: z
-    .record(
-      z.string(),
-      z.looseObject({ provider: z.string(), connection: z.string(), account: z.string() }),
-    )
-    .default({}),
+  integrations: z.record(
+    z.string(),
+    z.looseObject({ provider: z.string(), connection: z.string(), account: z.string() }),
+  ),
 });
 
 export const Route = createFileRoute("/_auth/projects/$slug/")({
@@ -95,7 +93,7 @@ function ProjectOverview() {
   const creation = parsed?.creation ?? null;
   // Until the facet's first value lands the page cannot tell a project still being created from
   // one that is done: `projects.create` answers before its saga does. A refused context, or a live
-  // state that failed, leaves the plain overview.
+  // state that failed or does not parse, leaves the plain overview.
   const creationKnown = live.status !== "connecting" || Boolean(opened.error);
   const creating = creation?.status === "requested" || creation?.status === "failed";
   const configRepoSeeded = Boolean(parsed?.repos["/repos/config"]);

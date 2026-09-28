@@ -9,7 +9,7 @@
 // project leaves the person's own connection standing. `finishIntegrationConnect` and a connect with
 // `connectToProject` are the platform's alone: the facets do not publish them. An account another
 // project holds (Slack, GitHub) is offered to move here, and `confirmIntegrationMove` moves it.
-import type { OAuthIntegrationProvider } from "iterate/api";
+import { missingScopes, type OAuthIntegrationProvider } from "iterate/api";
 import { codedError, errorCode, reportIssue, withTimeout } from "iterate/lib";
 import { z } from "zod";
 import { appConfigOf, sessionSigningSecretOf } from "../app-config.ts";
@@ -50,7 +50,6 @@ import {
   revokeSlack,
   slackMoveOfferedAgain,
 } from "./slack.ts";
-import { missingScopes } from "./rules.ts";
 
 export type ConnectInput = {
   provider: IntegrationProvider;

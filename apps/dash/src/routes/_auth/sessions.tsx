@@ -54,6 +54,7 @@ import { Identifier } from "../../components/identifier.tsx";
 import { addGithubSignInHref } from "../../lib/origins.ts";
 import { dateOf } from "../../lib/dates.ts";
 import { AllowAccount } from "../../components/allow-account.tsx";
+import { connectWaitrose, WaitroseForm } from "../../components/waitrose.tsx";
 
 const GRANT_KIND_LABELS: Record<GrantKind, string> = {
   pending: "Pending sign-in",
@@ -473,23 +474,19 @@ function SessionsPage() {
 const PERSONAL_CONNECT_PROVIDERS: ("google" | "cloudflare")[] = ["google", "cloudflare"];
 
 const AccountConnections = z.looseObject({
-  integrations: z
-    .record(
-      z.string(),
-      z.object({
-        provider: z.enum(INTEGRATION_PROVIDERS),
-        connection: z.string(),
-        account: z.string(),
-      }),
-    )
-    .default({}),
+  integrations: z.record(
+    z.string(),
+    z.object({
+      provider: z.enum(INTEGRATION_PROVIDERS),
+      connection: z.string(),
+      account: z.string(),
+    }),
+  ),
   /** The account's secrets, with the projects each one's connection is connected to (its lends). */
-  secrets: z
-    .record(
-      z.string(),
-      z.looseObject({ lends: z.record(z.string(), z.object({ to: z.string() })).optional() }),
-    )
-    .default({}),
+  secrets: z.record(
+    z.string(),
+    z.looseObject({ lends: z.record(z.string(), z.object({ to: z.string() })).optional() }),
+  ),
 });
 
 /** THE PERSON'S CONNECTED ACCOUNTS: listed live with the projects using each, disconnected (every
@@ -499,7 +496,8 @@ function ConnectedAccounts({ projects }: { projects: { id: string; slug: string 
   const { api, info } = Route.useRouteContext();
   const person = useContextStub(() => Promise.resolve(api.user), [api]);
   const live = useFacetLiveState(person.stub, "account");
-  const state = AccountConnections.safeParse(live.value).data;
+  const read = live.value ? AccountConnections.safeParse(live.value) : undefined;
+  const state = read?.data;
   const accounts = Object.values(state?.integrations ?? {});
   const slugOf = new Map(projects.map((project) => [project.id, project.slug]));
   /** The projects a connection is connected to, by slug. */
@@ -510,10 +508,10 @@ function ConnectedAccounts({ projects }: { projects: { id: string; slug: string 
   const [error, setError] = useState<string | null>(null);
   const [disconnecting, setDisconnecting] = useState<string | null>(null);
   const next = `${window.location.origin}/sessions`;
-  const loadError = person.error || live.error;
+  const loadError = person.error || live.error || (read?.error && z.prettifyError(read.error));
   const { waitrose, error: addError } = Route.useSearch();
   const addGithub =
-    live.value &&
+    state &&
     info.signInProviders?.includes("github") &&
     !accounts.some((row) => row.provider === "github")
       ? addGithubSignInHref(info, next)
@@ -523,6 +521,7 @@ function ConnectedAccounts({ projects }: { projects: { id: string; slug: string 
     void navigate({ search: (prev) => ({ ...prev, waitrose: undefined }), replace: true });
   /** A Waitrose connect in flight: its sheet stays open until it answers. */
   const [waitrosePending, setWaitrosePending] = useState(false);
+  const waitroseField = useRef<HTMLInputElement>(null);
   return (
     <section className="flex flex-col gap-2" aria-labelledby="connected-accounts-heading">
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -653,30 +652,16 @@ function ConnectedAccounts({ projects }: { projects: { id: string; slug: string 
         <SheetContent
           side="right"
           showCloseButton={!waitrosePending}
+          initialFocus={waitroseField}
           className="overflow-y-auto data-[side=right]:w-full data-[side=right]:sm:max-w-md"
         >
           {waitrose && (
             <WaitroseForm
+              firstField={waitroseField}
               onPendingChange={setWaitrosePending}
-              onConnect={async ({ username, password }) => {
+              onConnect={async (credentials) => {
                 // your own: the secret and its connection on your account, like a sign-in's
-                const connection = crypto.randomUUID().slice(0, 8);
-                const secretPath = `/secrets/waitrose-${connection}`;
-                await api.user.secrets.set(
-                  secretPath,
-                  { username, password },
-                  {
-                    urls: [new URL(WAITROSE_GRAPHQL_URL).origin],
-                    refresh: { kind: "waitrose-session", graphqlUrl: WAITROSE_GRAPHQL_URL },
-                  },
-                );
-                await api.user.facets
-                  .get("account")
-                  .invoke([["connectWaitrose", { connection, account: username }]])
-                  .catch(async (caught: unknown) => {
-                    await api.user.secrets.delete(secretPath).catch(() => {});
-                    throw caught;
-                  });
+                await connectWaitrose(api.user, "account", credentials);
                 closeWaitrose();
               }}
             />
@@ -684,79 +669,5 @@ function ConnectedAccounts({ projects }: { projects: { id: string; slug: string 
         </SheetContent>
       </Sheet>
     </section>
-  );
-}
-
-/** Where Waitrose logs in (apps/os/src/integrations/waitrose.ts): the connection's secret's pin. */
-const WAITROSE_GRAPHQL_URL = "https://www.waitrose.com/api/graphql";
-
-/** Your Waitrose username and password, for your own connection's secret. They go to the secret
- *  alone: the platform logs in with them on first use and whenever Waitrose answers 401. */
-function WaitroseForm({
-  onConnect,
-  onPendingChange,
-}: {
-  onConnect: (credentials: { username: string; password: string }) => Promise<void>;
-  /** Whether a connect is in flight, for the sheet around it (it stays open until the answer). */
-  onPendingChange: (pending: boolean) => void;
-}) {
-  const [username, setUsername] = useState("");
-  const [password, setPassword] = useState("");
-  const [pending, setPending] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const submit = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    setError(null);
-    setPending(true);
-    onPendingChange(true);
-    try {
-      await onConnect({ username, password });
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : String(caught));
-      setPending(false);
-    } finally {
-      onPendingChange(false);
-    }
-  };
-  return (
-    <form onSubmit={(event) => void submit(event)} className="flex h-full flex-col">
-      <SheetHeader>
-        <SheetTitle>Connect Waitrose</SheetTitle>
-        <SheetDescription>The password is only ever sent to waitrose.com.</SheetDescription>
-      </SheetHeader>
-      <div className="flex flex-1 flex-col gap-4 px-4 pb-4">
-        <Label className="flex flex-col items-start gap-2">
-          Email
-          <Input
-            type="email"
-            autoComplete="off"
-            required
-            value={username}
-            onChange={(event) => setUsername(event.target.value.trim())}
-          />
-        </Label>
-        <Label className="flex flex-col items-start gap-2">
-          Password
-          <Input
-            type="password"
-            autoComplete="off"
-            required
-            value={password}
-            onChange={(event) => setPassword(event.target.value)}
-          />
-        </Label>
-        {error && (
-          <p role="alert" data-type="error" className="text-sm text-destructive">
-            {error}
-          </p>
-        )}
-      </div>
-      <SheetFooter className="border-t sm:flex-row sm:justify-end">
-        <Button type="submit" disabled={pending}>
-          {pending ? <Spinner data-icon="inline-start" /> : null}
-          Connect
-        </Button>
-      </SheetFooter>
-    </form>
   );
 }
