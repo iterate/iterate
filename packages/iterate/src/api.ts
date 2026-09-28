@@ -256,7 +256,7 @@ export function missingScopes(
   provider: IntegrationProvider,
   granted: readonly string[],
   asked: readonly string[],
-): string[] {
+) {
   const spelled = (scope: string) =>
     provider === "google" ? GOOGLE_SCOPE_ALIASES[scope] || scope : scope;
   const held = new Set(granted.map(spelled));
