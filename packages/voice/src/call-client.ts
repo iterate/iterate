@@ -151,7 +151,7 @@ export async function startVoiceCall<
           const frame = SpeakerFrame.safeParse(event);
           if (frame.success) {
             if (frame.data.payload.activation !== activation) continue;
-            if (frame.data.payload.pcm !== "") {
+            if (frame.data.payload.pcm) {
               stats.spkChunksReceived += 1;
               // base64 carries 3 bytes in every 4 characters; PCM16 at 16 kHz is 32 bytes a millisecond
               const bytes = Math.floor((frame.data.payload.pcm.replace(/=+$/, "").length * 3) / 4);

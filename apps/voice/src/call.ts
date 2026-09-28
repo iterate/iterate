@@ -45,7 +45,7 @@ export async function startCall(input: {
     client: "web",
     onSpeakerFrame: (frame) => {
       if (frame.clearSpeakerBufferBeforeFrame) audio.speaker.clear();
-      if (frame.pcm !== "") audio.speaker.push(base64ToInt16(frame.pcm));
+      if (frame.pcm) audio.speaker.push(base64ToInt16(frame.pcm));
     },
     // The list shows the call's milestones and the provider's troubles; the transcript and the
     // delegations are the live view's (the page's `voice-agent` state).
