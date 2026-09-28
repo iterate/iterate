@@ -114,9 +114,11 @@ PROJECT=prj-voice pnpm exec tsx scripts/voice-call.ts --utterance ask.wav --out 
 PROJECT=prj-voice pnpm exec tsx scripts/voice-board.ts --device home_assistant_voice_preview_edition --expect banana
 ```
 
-Measured 2026-09-16 on the deployed worker, fresh context per press: setup 0.26–0.38 s with
-`call-started` inside it, `conversation-accepted` 1.4–1.65 s from the press, the delegated "Two
-plus two is four" spoken from ~9 s. The HAVPE proof: press to active call 1.95–2.06 s, "Banana."
-and "The result is 132." spoken back. `--expect` is a case-insensitive regular expression tested
+Measured 2026-09-28 on a PR preview with real GPT-Live and the agent's default model, fresh
+context per press: `conversation-accepted` 1.5–1.6 s after `call-started`, the hand-over 0.1–0.2 s
+after the question's transcript, a question the agent answers without a script ("What is 17 times
+3?") spoken 5.4 s after its transcript, and one that needs a script (the time in London) 11–15 s.
+The HAVPE proof, measured 2026-09-16: press to active call 1.95–2.06 s, "Banana." and "The result
+is 132." spoken back. `--expect` is a case-insensitive regular expression tested
 against the spoken transcript; models say numbers as digits or as words, so ask for either:
 `--expect "132|thirty-two"`.
