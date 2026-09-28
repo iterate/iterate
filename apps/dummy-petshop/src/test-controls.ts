@@ -49,8 +49,8 @@ export async function handleTestControls(request: Request, deps: ShopDeps): Prom
     });
   }
   return (
-    (await handleSlackTestControls(request, deps)) ??
-    (await handleGithubTestControls(request, deps)) ??
+    (await handleSlackTestControls(request, deps)) ||
+    (await handleGithubTestControls(request, deps)) ||
     Response.json({ error: "not_found" }, { status: 404 })
   );
 }
