@@ -12,7 +12,7 @@ import {
   parseConfigRepoTemplateReference,
   formatConfigRepoTemplateReference,
 } from "@iterate-com/shared/config-repo-template/reference";
-import type { IterateApi } from "iterate/api";
+import type { IterateApi, StreamPage } from "iterate/api";
 import { codedError, reportIssue } from "iterate/lib";
 import { OAuthScope } from "iterate/oauth-scopes";
 import type { Principal } from "iterate/principal";
@@ -1212,8 +1212,8 @@ class ProjectCollectionRpcTarget extends RpcTarget {
 
 /** THE CONTEXT SWEEP (scripts/ci/context-sweep.ts): the contexts Cloudflare lists, by id — each
  *  says who it is from its own birth record (iterate-context-durable-object.ts `identity`), without
- *  recording a wake — and an orphan's destruction: a context of a project the control plane no longer
- *  holds, which its project's deletion missed. */
+ *  recording a wake — and an orphan's backup and destruction: a context of a project the control
+ *  plane no longer holds, which its project's deletion missed. */
 class ContextSweepRpcTarget extends RpcTarget {
   readonly #session: SessionOf;
   constructor(session: SessionOf) {
@@ -1225,14 +1225,13 @@ class ContextSweepRpcTarget extends RpcTarget {
   async identify(
     ids: string[],
   ): Promise<({ id: string; projectId: string; path: string } | { id: string; error: string })[]> {
-    const namespace = this.#session.input.contextNamespace;
     return Promise.all(
       z
-        .array(z.string().regex(/^[0-9a-f]{64}$/))
+        .array(ContextObjectId)
         .parse(ids)
         .map(async (id) => {
           try {
-            return { id, ...(await namespace.get(namespace.idFromString(id)).identity()) };
+            return { id, ...(await this.#byId(id).identity()) };
           } catch (error) {
             return { id, error: String(error).slice(0, 300) };
           }
@@ -1240,18 +1239,16 @@ class ContextSweepRpcTarget extends RpcTarget {
     );
   }
 
+  /** One page of the context `id`'s durable log, as `readEvents` pages it, read without a wake: the
+   *  sweep backs an orphan up with it before destroying it. */
+  async readEvents(id: string, afterOffset: number): Promise<StreamPage> {
+    return this.#byId(id).readForSweep(z.number().int().nonnegative().parse(afterOffset));
+  }
+
   /** Destroy the context `id`, an orphan: refused for a global context, and for one whose project
    *  the control plane still holds (its registry is the project deletion's to use). */
   async destroy(id: string): Promise<{ projectId: string; path: string }> {
-    const namespace = this.#session.input.contextNamespace;
-    const stub = namespace.get(
-      namespace.idFromString(
-        z
-          .string()
-          .regex(/^[0-9a-f]{64}$/)
-          .parse(id),
-      ),
-    );
+    const stub = this.#byId(id);
     const { projectId, path } = await stub.identity();
     if (projectId === GLOBAL_PROJECT_ID)
       throw codedError("FORBIDDEN", `${path} is a global context: the sweep leaves it alone.`);
@@ -1265,7 +1262,16 @@ class ContextSweepRpcTarget extends RpcTarget {
     });
     return { projectId, path };
   }
+
+  /** The context object Cloudflare lists as `id`, reached by that id alone. */
+  #byId(id: string) {
+    const namespace = this.#session.input.contextNamespace;
+    return namespace.get(namespace.idFromString(ContextObjectId.parse(id)));
+  }
 }
+
+/** A context object's id as Cloudflare lists it: 64 hex digits. */
+const ContextObjectId = z.string().regex(/^[0-9a-f]{64}$/);
 
 /** The people — the operator's catalog (`session.users` refuses everyone else): `list()`,
  *  `get(ref)` by id or email, `create({ email })` (find-or-create). */

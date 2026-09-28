@@ -1198,12 +1198,15 @@ export interface IterateSessionApi {
     create(input: { email: string }): Promise<{ id: string; email: string }>;
   };
   /** Every context Cloudflare lists, by id — the operator's alone (scripts/ci/context-sweep.ts):
-   *  who each is, from its own birth record, and an orphan's destruction (refused for a global
-   *  context and for any project that still exists). */
+   *  who each is, from its own birth record; its durable log a page at a time, as `readEvents`
+   *  pages it, which the sweep backs an orphan up with; and an orphan's destruction (refused for a
+   *  global context and for any project that still exists). Neither `identify` nor `readEvents`
+   *  records a wake. */
   contexts: {
     identify(
       ids: string[],
     ): Promise<({ id: string; projectId: string; path: string } | { id: string; error: string })[]>;
+    readEvents(id: string, afterOffset: number): Promise<StreamPage>;
     destroy(id: string): Promise<{ projectId: string; path: string }>;
   };
   /** One project secret's encrypted cell, as a project seed archives it — the operator's alone

@@ -311,11 +311,8 @@ const UPLOAD_BYTES_IN_FLIGHT = 128 * 1024 * 1024;
  * refuses both (412, and XAmzContentSHA256Mismatch), and each of its requests counts against the
  * token owner's 1,200 per five minutes, which preview deploys share.
  *
- * Each PUT is write-once. A 412 means the key exists: when it holds these very bytes (a single PUT's
- * ETag is the body's MD5), it is this upload's own earlier try, landed after all; anything else is
- * refused. Each file is hashed again as it is read and refused if it no longer matches the
- * manifest, and that sha256 is signed as the payload hash, so R2 refuses a body that changed on the
- * way too (https://docs.aws.amazon.com/AmazonS3/latest/API/sig-v4-header-based-auth.html).
+ * Each PUT is write-once, its payload hash checked by R2 (ci-bucket.ts `put`). Each file is hashed
+ * again as it is read and refused if it no longer matches the manifest.
  */
 export async function uploadTestEvidence(input: {
   repoRoot: string;
@@ -342,22 +339,7 @@ export async function uploadTestEvidence(input: {
   const put = async (key: string, path: string, body: Uint8Array, payloadSha256: string) => {
     if (sha256(body) !== payloadSha256)
       throw new Error(`${path} changed after the manifest listed it; nothing more is uploaded`);
-    const response = await bucket.put(key, body, {
-      contentType: contentTypes[extname(path)] || "application/octet-stream",
-      sha256: payloadSha256,
-    });
-    if (response.ok) return;
-    const answer = `${response.status} ${await response.text()}`;
-    if (response.status === 412) {
-      const held = await bucket.head(key);
-      // Cloudflare's edge compresses a JSON answer and so marks its ETag weak: `W/"<md5>"`.
-      const etag = held.headers.get("etag")?.match(/^(?:W\/)?"([0-9a-f]{32})"$/u)?.[1];
-      if (held.ok && etag === createHash("md5").update(body).digest("hex")) {
-        console.log(`[test-evidence] ${key} already held these bytes`);
-        return;
-      }
-    }
-    throw new Error(`R2 PUT ${input.bucketName}/${key}: ${answer}`);
+    await bucket.put(key, body, contentTypes[extname(path)] || "application/octet-stream");
   };
   await inPool(manifest.files, async (file) =>
     put(`${prefix}${file.path}`, file.path, await readFile(join(root, file.path)), file.sha256),

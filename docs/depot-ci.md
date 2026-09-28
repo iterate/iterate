@@ -83,6 +83,7 @@ Anything else that needs GitHub-only triggers, such as `pull_request_target`, `i
 | `prd-fault-alarm.yml` | Every 15 minutes, dispatch                       | Reads production's Workers Logs and pages #error-pulse on faults                                                 |
 | `health.yml`          | Hourly, dispatch                                 | **Health**: judges the runs below and PR time to green; one #error-pulse message per change of state             |
 | `os-crash-hunt.yml`   | Nightly, dispatch                                | The opt-in isolate-ceiling rows against production                                                               |
+| `context-sweep.yml`   | Nightly, dispatch                                | Backs up and destroys production's orphan contexts (`scripts/ci/context-sweep.ts`)                               |
 | `os-e2e-soak.yml`     | Dispatch                                         | The e2e suite N times against one deployed worker, each run then the perf budgets                                |
 | `os-latency.yml`      | Every 3 hours, dispatch                          | **OS latency**: the perf suite against main's commit deployed as `latency-<sha7>`, its report for the health job |
 | `os-real-model.yml`   | Daily, main push to the agents runtime, dispatch | **OS real model**: the `REAL:` rows against main's commit deployed as `real-model-<sha7>`, for the health job    |
@@ -714,10 +715,12 @@ and OTLP JSON export.
 #error-pulse is for what someone must act on, and every message there mentions Jonas and Misha
 (`onCallMention` in `scripts/ci/slack.ts`), thread replies and 🧪 test pages included: the pages
 below, the prd fault alarm, the prd post-deploy check (`scripts/ci/prd-post-deploy-check.ts`), the
-preview sweep's pages (`apps/os/scripts/preview.ts sweep`), a failed prd deploy and a failed
-scheduled workflow (`scripts/ci/notify.ts`). Routine posts go to #ci and mention nobody: each prd deploy that
-succeeded, each pull request event, the PR dashboard and the Durable Object cost alarm's daily
-thread.
+preview sweep's pages (`apps/os/scripts/preview.ts sweep`), a failed context sweep
+(`scripts/ci/context-sweep.ts post`), a failed prd deploy and any other failed scheduled workflow
+(`scripts/ci/notify.ts`). Routine posts go to #ci and mention nobody: each prd deploy that
+succeeded, each pull request event, the PR dashboard, the Durable Object cost alarm's daily thread
+and each context sweep's result, the orphans it destroyed included (the crash hunt leaves some
+every night).
 
 ## Health
 

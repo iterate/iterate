@@ -397,9 +397,9 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       // THE OVERDUE WATCH at birth (alarm-coordinator.ts): a stored alarm well past its time that a
       // source still wants is one the runtime held — an idle actor has no timer watching it; one no
       // source wants (the last incarnation's sweep) is superseded instead.
-      // Not for a context reached by id alone (the context sweep's `identity`): an orphan's held
-      // alarm brought forward would wake it, and a wake announces it to the ancestors its deleted
-      // project lost. An alarm the runtime delivers on its own still runs.
+      // Not for a context reached by id alone (the context sweep's `identity`, `readForSweep`): an
+      // orphan's held alarm brought forward would wake it, and a wake announces it to the ancestors
+      // its deleted project lost. An alarm the runtime delivers on its own still runs.
       if (this.ctx.id.name) this.#alarmCoordinator.rearmIfOverdue(Date.now());
     });
   }
@@ -517,6 +517,12 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   identity(): { projectId: string; path: string } {
     const { projectId, path } = this.#durableObjectAddress;
     return { projectId, path };
+  }
+
+  /** ONE PAGE OF THIS CONTEXT'S LOG, for the context sweep, which reaches it by id and backs an
+   *  orphan up before destroying it: `read`'s page, and like `identity` it records no wake. */
+  readForSweep(afterOffset: number): StreamPage {
+    return this.#stream.read(afterOffset);
   }
 
   /** DESTROY THIS CONTEXT (the project deletion saga, project/processor.ts): every byte it holds

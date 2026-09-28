@@ -1,14 +1,15 @@
 // The context sweep's reach (session.ts `session.contexts`, scripts/ci/context-sweep.ts): a context
-// reached by the id Cloudflare lists says who it is from its own birth record, without recording a
-// wake; an id nothing was born at is refused and stays empty; and only an orphan — a context whose
-// project the control plane does not hold — is destroyed.
+// reached by the id Cloudflare lists says who it is from its own birth record, and hands over its
+// durable log (the sweep's backup), without recording a wake; an id nothing was born at is refused
+// and stays empty; and only an orphan — a context whose project the control plane does not hold —
+// is destroyed.
 import { evictDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import { expect, test } from "vitest";
 import { DurableObjectNameCodec } from "../src/context/paths.ts";
 import { adminCredentials, catalog, openSession, readLog, refused, stub } from "./support.ts";
 
-test("the sweep identifies a context by id without waking its ancestors, refuses an id nothing was born at, and destroys only an orphan", async () => {
+test("the sweep identifies a context by id and reads its log without waking it, refuses an id nothing was born at, and destroys only an orphan", async () => {
   const admin = (await openSession()).authenticate(adminCredentials());
   const orphanProject = `prj_orphan${crypto.randomUUID().replaceAll("-", "").slice(0, 12)}`;
   await stub(`${orphanProject}.iterate/x`).append({ type: "test/marker", payload: {} });
@@ -23,7 +24,7 @@ test("the sweep identifies a context by id without waking its ancestors, refuses
 
   // by id: who each is, and nothing recorded on the orphan (no wake, so no announcement)
   await evictDurableObject(stub(`${orphanProject}.iterate/x`));
-  const before = (await readLog(`${orphanProject}.iterate/x`)).length;
+  const log = await readLog(`${orphanProject}.iterate/x`);
   await evictDurableObject(stub(`${orphanProject}.iterate/x`));
   const identified = await admin.contexts.identify([
     orphan,
@@ -40,10 +41,17 @@ test("the sweep identifies a context by id without waking its ancestors, refuses
     id: never,
     error: expect.stringMatching(/addressed by name/),
   });
-  // evicted again, so this read is a fresh incarnation recording one wake; had `identify` recorded
-  // one in its own incarnation, the log would hold two more
+  // the backup's read: the whole log, as it stood
+  expect(await admin.contexts.readEvents(orphan, 0)).toEqual({
+    events: log,
+    scannedThroughOffset: log.at(-1)!.offset,
+    atHead: true,
+  });
+  await expect(admin.contexts.readEvents(never, 0)).rejects.toThrow(/addressed by name/);
+  // evicted again, so this read is a fresh incarnation recording one wake; had `identify` or
+  // `readEvents` recorded one in their incarnation, the log would hold two more
   await evictDurableObject(stub(`${orphanProject}.iterate/x`));
-  expect(await readLog(`${orphanProject}.iterate/x`)).toHaveLength(before + 1);
+  expect(await readLog(`${orphanProject}.iterate/x`)).toHaveLength(log.length + 1);
 
   // only the orphan is destroyed
   await refused(() => admin.contexts.destroy(idOf(liveProject, "/y")), "FORBIDDEN", /still exists/);
