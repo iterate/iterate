@@ -239,7 +239,7 @@ export function deriveAgentUiLiveStatus(state: AgentUiState): AgentUiLiveStatus 
     // pause folded mid-request must not leave a permanent claim after that
     // request's outcome lands.
     if (!state.paused && last?.kind === "code") {
-      if (last.status === "done" && last.success === true && last.result !== undefined) {
+      if (last.status === "done" && last.success && last.result !== undefined) {
         return "processing";
       }
     }
