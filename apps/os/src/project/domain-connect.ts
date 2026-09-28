@@ -14,7 +14,7 @@
 //                APP_CONFIG `domainConnect.privateKey`)
 // A zone whose provider does not answer for it, or has not onboarded our template, answers no link
 // and the next zone up is tried; with none, the owner adds the records by hand. Every request is
-// bounded (REQUEST_TIMEOUT_MS) and follows no redirect, every answer is parsed, and every URL a DNS
+// bounded (REQUEST_TIMEOUT_MS) and follows no redirect (a 3xx answers nothing), every answer is parsed, and every URL a DNS
 // record or a provider hands us must be https: what DNS says is data, never trusted as a target.
 // A failure (a DNS error, a provider's 5xx, a timeout) throws — the caller logs it and settles
 // without a link.
@@ -110,7 +110,8 @@ export async function domainConnectLinkOf(
   const request = async (url: string, headers?: Record<string, string>) => {
     const response = await fetcher(url, {
       headers,
-      redirect: "error",
+      // never followed: a redirect is not `ok`, so it answers nothing (Workers has no "error")
+      redirect: "manual",
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     });
     if (response.status >= 500) throw new Error(`${new URL(url).host} answered ${response.status}`);

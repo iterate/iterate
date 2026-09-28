@@ -133,6 +133,24 @@ test("a DNS error or a provider's 5xx throws (the caller logs it); an http URL f
   ).toBeNull();
 });
 
+test("every provider request follows no redirect the Workers way (`manual`; the runtime refuses `error`), and a redirect answers nothing", async () => {
+  const { privateKey } = await keyPair();
+  const redirects: RequestInit["redirect"][] = [];
+  const fake = provider([], { zone: "example.com", template: 200 });
+  const link = await domainConnectLinkOf("iterate.example.com", {
+    redirectUri: "https://dash.iterate.com/back",
+    privateKey,
+    fetcher: (async (input: string, init?: RequestInit) => {
+      redirects.push(init?.redirect);
+      // the settings answer a redirect: never followed, so no link
+      if (input.endsWith("/settings")) return new Response(null, { status: 301 });
+      return fake(input, init);
+    }) as typeof fetch,
+  });
+  expect(link).toBeNull();
+  expect(new Set(redirects)).toEqual(new Set(["manual"]));
+});
+
 test("no link when no zone above the hostname speaks Domain Connect, or its provider has not onboarded our template", async () => {
   const { privateKey } = await keyPair();
   const options = { redirectUri: "https://dash.iterate.com/back", privateKey };
