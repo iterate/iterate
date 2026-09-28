@@ -2,10 +2,10 @@
 // and for `iterate-kit-mac --config`, written by the encoder Kit's browser flashing uses
 // (src/firmware/config-image.ts), so a bench board holds the bytes a Kit install would write.
 //
-//   pnpm --dir apps/kit exec tsx scripts/config-image.ts image --wifi-ssid <ssid> \
+//   node apps/kit/scripts/config-image.ts image --wifi-ssid <ssid> \
 //     --wifi-password <password> --os-base-url https://os.iterate.com --project-id prj-voice \
 //     --project-api-key "$KIT_TOKEN" [--status-voice greensleeves] --out /tmp/cfg.bin
-//   pnpm --dir apps/kit exec tsx scripts/config-image.ts offset <target>
+//   node apps/kit/scripts/config-image.ts offset <target>
 import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";

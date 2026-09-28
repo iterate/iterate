@@ -19,7 +19,7 @@ test("a device's client id is used at authorization, code exchange and refresh, 
         scopes: ["iterate", "account"],
         client,
       },
-      "/devices/satellite1/firmware/latest",
+      "/devices/satellite1",
     ),
   );
   expect(authorize.searchParams.get("client_id")).toBe(client.id);
@@ -44,7 +44,7 @@ test("a device's client id is used at authorization, code exchange and refresh, 
     iss: "https://issuer.example",
   });
   expect(await session.complete(callback.toString())).toEqual({
-    next: "/devices/satellite1/firmware/latest",
+    next: "/devices/satellite1",
   });
   expect(await session.client()).toEqual(client);
   expect(await session.bearer()).toBe("access");

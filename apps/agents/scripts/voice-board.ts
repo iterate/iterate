@@ -9,7 +9,7 @@
 // reached its speaker, and the provider transcribed the words and the board answered them.
 //
 //   WORKER_BASE_URL=https://os.iterate.com ITERATE_BEARER_TOKEN=itk_… PROJECT=prj-voice \
-//   pnpm exec tsx scripts/voice-board.ts --device home_assistant_voice_preview_edition \
+//   node scripts/voice-board.ts --device home_assistant_voice_preview_edition \
 //     --prompt "Hello there. Please reply with the single word banana." --expect banana
 //
 // `--expect` is a case-insensitive regular expression tested against what the board said back;

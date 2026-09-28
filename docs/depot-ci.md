@@ -639,7 +639,7 @@ same names.
 
 A suite job with `needs: deploy` would start only once the deploy ended, so
 Depot's hand-off (about 3 s), the sandbox's boot (about 2 s), the checkout and
-setup (about 7 s), `tsx` loading
+setup (about 7 s), Node loading
 `apps/os/scripts/preview.ts` and the test runner's start would all come between
 the deploy's end and the first test. So the suites of Preview OS and Main OS e2e
 have no `needs:`. Each starts with the run and, while the preview deploys:

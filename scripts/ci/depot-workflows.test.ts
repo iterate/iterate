@@ -369,13 +369,25 @@ test("no step reads Doppler but to wrap the preview tooling or a suite against a
   expect(others).toEqual([]);
 });
 
+/** A command that runs TypeScript through tsx or the trpc-cli bin: bare, `pnpm`, `pnpm exec` or `npx`. */
+const tsxOrTrpcCli = /(?:^|[\s;&|(])((?:pnpm\s+(?:exec\s+)?|npx\s+)?(?:tsx|trpc-cli)\b.*)/gmu;
+
 // A step runs TypeScript with `node <file>.ts` (docs/depot-ci.md#editing-workflows). The root has no
 // tsx or trpc-cli bin, so a step that calls one fails only when it runs: for a scheduled or
 // dispatched workflow, no pull request would see it.
 test("no step runs TypeScript through tsx or the trpc-cli bin", () => {
   const runners = everyStepRun().flatMap(({ where, run }) =>
-    [...run.matchAll(/(?:^|[\s;&|(])((?:pnpm\s+(?:exec\s+)?|npx\s+)?(?:tsx|trpc-cli)\b.*)/gmu)].map(
-      ([, command]) => `${where}: ${command}`,
+    [...run.matchAll(tsxOrTrpcCli)].map(([, command]) => `${where}: ${command}`),
+  );
+  expect(runners).toEqual([]);
+});
+
+// A package script runs TypeScript as CI does, with `node <file>.ts`, so `pnpm run deploy` on a
+// laptop and the deploy step run the same thing.
+test("no package script runs TypeScript through tsx or the trpc-cli bin", () => {
+  const runners = [".", ...workspaceDirectories].flatMap((directory) =>
+    Object.entries(readPackageJson(directory).scripts ?? {}).flatMap(([name, script]) =>
+      [...script.matchAll(tsxOrTrpcCli)].map(([, command]) => `${directory} ${name}: ${command}`),
     ),
   );
   expect(runners).toEqual([]);
