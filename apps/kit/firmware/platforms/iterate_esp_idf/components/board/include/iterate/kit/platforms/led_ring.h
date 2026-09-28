@@ -2,7 +2,6 @@
 #define ITERATE_KIT_PLATFORMS_LED_RING_H
 
 #include "iterate/kit/platforms/led_ring_pixels.h"
-#include "led_strip.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -14,7 +13,6 @@ extern "C" {
 struct iterate_kit_led_ring {
   int8_t gpio;
   uint8_t pixels;
-  led_pixel_format_t order;
   int8_t power_gpio;
 };
 

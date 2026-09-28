@@ -26,5 +26,4 @@ target_compile_features(${ITERATE_KIT_CAPABILITIES_TARGET} PUBLIC c_std_99)
 target_compile_options(${ITERATE_KIT_CAPABILITIES_TARGET} PRIVATE
   -Wall
   -Wextra
-  -Werror
-  -Wpedantic)
+  -Werror)

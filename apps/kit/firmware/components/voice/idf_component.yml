@@ -2,5 +2,5 @@ dependencies:
   capnweb:
     git: https://github.com/iterate/capnweb.git
     path: c
-    version: aee32b391063c4f5baf0aec852f38851eeeed1d9
-  idf: ">=5.4"
+    version: a9e3703f62eb09d21d8b3af3abf666180f4609a7
+  idf: ">=6.1"

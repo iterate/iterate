@@ -134,7 +134,7 @@ static const struct iterate_kit_i2s_codec_facts audio = {
   .playback_port = I2S_NUM_0, .capture_port = I2S_NUM_0, .role = I2S_ROLE_MASTER,
   .playback = {
     .clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(16000),
-    /* IDF 5.4's S3 default mask is BOTH even in MONO: RX then returns
+    /* ESP-IDF's S3 default mask is BOTH even in MONO: RX then returns
      * both slots (32k samples/s). The ES8311's PCM is the left slot. */
     .slot_cfg = {.data_bit_width = I2S_DATA_BIT_WIDTH_16BIT,
       .slot_bit_width = I2S_SLOT_BIT_WIDTH_AUTO, .slot_mode = I2S_SLOT_MODE_MONO,
@@ -143,7 +143,7 @@ static const struct iterate_kit_i2s_codec_facts audio = {
   },
   .capture = {
     .clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(16000),
-    /* IDF 5.4's S3 default mask is BOTH even in MONO: RX then returns
+    /* ESP-IDF's S3 default mask is BOTH even in MONO: RX then returns
      * both slots (32k samples/s). The ES8311's PCM is the left slot. */
     .slot_cfg = {.data_bit_width = I2S_DATA_BIT_WIDTH_16BIT,
       .slot_bit_width = I2S_SLOT_BIT_WIDTH_AUTO, .slot_mode = I2S_SLOT_MODE_MONO,

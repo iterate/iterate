@@ -11,7 +11,7 @@
 #include "esp_ota_ops.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-#include "mbedtls/sha256.h"
+#include "psa/crypto.h"
 
 static const char tag[] = "system-update";
 
@@ -55,12 +55,11 @@ static void update_task(void *context) {
   const esp_partition_t *slot = esp_ota_get_next_update_partition(NULL);
   esp_ota_handle_t ota = 0;
   esp_http_client_handle_t client = NULL;
-  mbedtls_sha256_context sha;
+  psa_hash_operation_t sha = PSA_HASH_OPERATION_INIT;
   uint8_t *chunk = NULL;
   size_t total = 0U;
   bool ota_open = false;
   (void)context;
-  mbedtls_sha256_init(&sha);
 
   do {
     const esp_http_client_config_t config = {
@@ -96,7 +95,7 @@ static void update_task(void *context) {
       break;
     }
     ota_open = true;
-    if (mbedtls_sha256_starts(&sha, 0) != 0) break;
+    if (psa_hash_setup(&sha, PSA_ALG_SHA_256) != PSA_SUCCESS) break;
     for (;;) {
       const int got =
           esp_http_client_read(client, (char *)chunk, UPDATE_READ_BYTES);
@@ -105,7 +104,7 @@ static void update_task(void *context) {
         goto failed;
       }
       if (got == 0) break;
-      if (mbedtls_sha256_update(&sha, chunk, (size_t)got) != 0 ||
+      if (psa_hash_update(&sha, chunk, (size_t)got) != PSA_SUCCESS ||
           esp_ota_write(ota, chunk, (size_t)got) != ESP_OK) {
         ESP_LOGE(tag, "flash write failed at %u bytes", (unsigned)total);
         goto failed;
@@ -114,7 +113,10 @@ static void update_task(void *context) {
     }
     {
       uint8_t digest[32];
-      if (total == 0U || mbedtls_sha256_finish(&sha, digest) != 0 ||
+      size_t digest_length = 0U;
+      if (total == 0U ||
+          psa_hash_finish(&sha, digest, sizeof(digest), &digest_length) !=
+              PSA_SUCCESS ||
           !digest_matches(digest, update.sha256_hex)) {
         break;
       }
@@ -133,7 +135,7 @@ static void update_task(void *context) {
         slot->label);
     esp_http_client_cleanup(client);
     free(chunk);
-    mbedtls_sha256_free(&sha);
+    (void)psa_hash_abort(&sha);
     /*
      * The rollback config keeps the old image one reset away: the new one
      * boots PENDING_VERIFY and is marked valid only when the transport
@@ -148,7 +150,7 @@ failed:
   if (ota_open) (void)esp_ota_abort(ota);
   if (client != NULL) esp_http_client_cleanup(client);
   free(chunk);
-  mbedtls_sha256_free(&sha);
+  (void)psa_hash_abort(&sha);
   update.in_flight = false;
   vTaskDelete(NULL);
 }

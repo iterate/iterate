@@ -1,6 +1,6 @@
 dependencies:
   capnweb:
-    component_hash: dbff099730db7a0e270611f2cb222b10659d2a1e78e9e8f4803f6de7786a6659
+    component_hash: e25e2ac663f3d2d08b5592fd20dea8e9a321b0b39b6eb56795e448da8a1ade66
     dependencies:
     - name: idf
       version: '>=5.4'
@@ -8,44 +8,44 @@ dependencies:
       git: https://github.com/iterate/capnweb.git
       path: c
       type: git
-    version: aee32b391063c4f5baf0aec852f38851eeeed1d9
+    version: a9e3703f62eb09d21d8b3af3abf666180f4609a7
   espressif/led_strip:
-    component_hash: 28c6509a727ef74925b372ed404772aeedf11cce10b78c3f69b3c66799095e2d
+    component_hash: 28621486f77229aaf81c71f5e15d6fbf36c2949cf11094e07090593e659e7639
     dependencies:
     - name: idf
       require: private
-      version: '>=4.4'
+      version: '>=5.0'
     source:
       registry_url: https://components.espressif.com/
       type: service
-    version: 2.5.5
+    version: 3.0.3
   idf:
     source:
       type: idf
-    version: 5.4.2
+    version: 6.1.0
   m5stack/m5gfx:
-    component_hash: c61634865a4e4a04fc122c658d1b484892d5b25871e95fcfb39960a9d6652a15
+    component_hash: d5a582ee9cdcec465b6bbe4b4073c0e5210cc3a6bfddc18b3bc8474e13d57d59
     dependencies: []
     source:
       registry_url: https://components.espressif.com
       type: service
-    version: 0.2.26
+    version: 0.2.30
   m5stack/m5unified:
-    component_hash: 85ab29e360fde0623ce30c8b8323d9f2c00acfffade19b104d6b7741b592e9ef
+    component_hash: 1c23d1e240ff5e571d563a2f124e1022bb8da1c099d495c37834cc02e19240ae
     dependencies:
     - name: m5stack/m5gfx
       registry_url: https://components.espressif.com
       require: private
-      version: '>=0.2.26'
+      version: '>=0.2.30'
     source:
       registry_url: https://components.espressif.com/
       type: service
-    version: 0.2.19
+    version: 0.2.23
 direct_dependencies:
 - capnweb
 - espressif/led_strip
 - idf
 - m5stack/m5unified
-manifest_hash: e232bff6fb8d0f3d2274873a719c6bb659fa970a95dae23f4bf21336f4716e5c
+manifest_hash: d0de3c1efde9e30d2221d18842ca4108c9898a4f67d61c05efae7c32da6232ea
 target: esp32s3
-version: 2.0.0
+version: 3.0.0

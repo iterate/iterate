@@ -21,8 +21,8 @@
 // It runs under plain `node` (Node 24 strips the types) before anything is installed, so it imports
 // only node:*, the catalog and envs.ts (for Kit's production URL).
 //
-// - PROJECT_VER: https://docs.espressif.com/projects/esp-idf/en/v5.4.2/esp32s3/api-reference/system/misc_system_api.html#app-version
-// - The binary partition table: https://docs.espressif.com/projects/esp-idf/en/v5.4.2/esp32s3/api-guides/partition-tables.html
+// - PROJECT_VER: https://docs.espressif.com/projects/esp-idf/en/v6.1/esp32s3/api-reference/system/misc_system_api.html#app-version
+// - The binary partition table: https://docs.espressif.com/projects/esp-idf/en/v6.1/esp32s3/api-guides/partition-tables.html
 //   (written by components/partition_table/gen_esp32part.py, `STRUCT_FORMAT = b'<2sBBLL16sL'`)
 // - The esp-web-tools manifest: https://esphome.github.io/esp-web-tools/
 // - ninja's `-t inputs`, `-t query` and `-t deps`: https://ninja-build.org/manual.html#_extra_tools

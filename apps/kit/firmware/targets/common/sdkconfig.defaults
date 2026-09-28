@@ -18,9 +18,10 @@ CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
 CONFIG_FREERTOS_HZ=1000
 
 # The I2S ISRs must not be deferred by a flash/cache stall — doubly so on
-# slave buses whose master (the XMOS) keeps clocking regardless.
+# slave buses whose master (the XMOS) keeps clocking regardless. Their DMA
+# channels follow: ESP-IDF 6 makes each channel's cache-off behaviour its
+# driver's, so there is no separate GDMA switch.
 CONFIG_I2S_ISR_IRAM_SAFE=y
-CONFIG_GDMA_ISR_IRAM_SAFE=y
 # Pin lwIP to the network core; the audio tasks own core 1.
 CONFIG_LWIP_TCPIP_TASK_AFFINITY_CPU0=y
 

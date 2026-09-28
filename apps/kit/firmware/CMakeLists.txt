@@ -24,7 +24,7 @@ set(CAPNWEB_SANITIZE ${ITERATE_KIT_SANITIZE} CACHE BOOL "" FORCE)
 FetchContent_Declare(
   capnweb_c
   GIT_REPOSITORY https://github.com/iterate/capnweb.git
-  GIT_TAG aee32b391063c4f5baf0aec852f38851eeeed1d9
+  GIT_TAG a9e3703f62eb09d21d8b3af3abf666180f4609a7
   GIT_SHALLOW FALSE
   SOURCE_SUBDIR c)
 FetchContent_MakeAvailable(capnweb_c)
@@ -34,6 +34,17 @@ add_subdirectory(components/audio)
 add_subdirectory(components/capabilities)
 add_subdirectory(components/avatar)
 add_subdirectory(components/tinyvoice)
+# The host build holds the portable components to the standard. A board build
+# cannot: ESP-IDF's libc headers use #include_next, a GCC extension -Wpedantic
+# refuses.
+foreach(component IN ITEMS
+    iterate-kit-core
+    iterate-kit-audio
+    iterate-kit-capabilities
+    iterate-kit-avatar
+    iterate-kit-tinyvoice)
+  target_compile_options(${component} PRIVATE -Wpedantic)
+endforeach()
 # The host ESP-IDF, then the shared voice loop built against it. Every ESP
 # board under targets/ runs that loop; on a laptop the tests drive it with a
 # pinned clock and targets/mac runs it as a device.

@@ -12,7 +12,7 @@ remote client: `itx.clients.zectrix_note4`.
   Release inherited factory GPIO holds before configuration; hold GPIO17 only
   after driving it high. A held-low amp can accept PCM without producing sound.
 - I2C: SDA47/SCL48. I2S: MCLK14/BCLK15/WS38/DOUT45/DIN16, 16 kHz mono 16-bit.
-  Select the **left slot explicitly for RX and TX**: IDF 5.4's S3 Philips macro
+  Select the **left slot explicitly for RX and TX**: ESP-IDF's S3 Philips macro
   defaults to BOTH even in MONO, producing alternating real/zero samples.
 - Vendor mic gain is 30 dB; speaker volume is capped. Side buttons, NFC, RTC and
   battery management are not exposed. Capture has no local AEC/noise suppression.
@@ -21,7 +21,7 @@ remote client: `itx.clients.zectrix_note4`.
 
 ## Build and recovery
 
-Activate ESP-IDF 5.4.2, then run:
+Activate the ESP-IDF release that `scripts/ci/esp-idf.sh` pins, then run:
 
 ```sh
 idf.py -C apps/kit/firmware/targets/zectrix_note4 \

@@ -20,5 +20,4 @@ target_compile_features(${ITERATE_KIT_TINYVOICE_TARGET} PUBLIC c_std_11)
 target_compile_options(${ITERATE_KIT_TINYVOICE_TARGET} PRIVATE
   -Wall
   -Wextra
-  -Werror
-  -Wpedantic)
+  -Werror)

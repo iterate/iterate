@@ -8,7 +8,6 @@
  * pure and tested here: which answers are refusals, and how long one waits.
  */
 
-#include "iterate/kit/platforms/esp_idf_websocket_connection.h"
 #include "iterate/kit/platforms/itx_transport.h"
 #include "iterate/kit/retry_gate.h"
 
@@ -27,12 +26,11 @@ static void only_a_401_or_403_refuses_the_key(void) {
   };
   size_t index;
   for (index = 0U; index < sizeof(refused) / sizeof(refused[0]); ++index) {
-    assert(iterate_kit_esp_idf_websocket_refused_credential(refused[index]));
+    assert(iterate_kit_itx_refused_credential(refused[index]));
   }
   for (index = 0U; index < sizeof(not_refused) / sizeof(not_refused[0]);
        ++index) {
-    assert(!iterate_kit_esp_idf_websocket_refused_credential(
-        not_refused[index]));
+    assert(!iterate_kit_itx_refused_credential(not_refused[index]));
   }
 }
 

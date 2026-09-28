@@ -1,23 +1,10 @@
 CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="../common/partitions-16mb-4mb-app.csv"
 CONFIG_COMPILER_OPTIMIZATION_SIZE=y
 CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
-CONFIG_ESP_CONSOLE_UART_DEFAULT=n
 CONFIG_SPIRAM_MODE_OCT=y
 CONFIG_SPIRAM_BOOT_INIT=y
 CONFIG_LOG_DEFAULT_LEVEL=3
 
-# LVGL: fonts the Iterate UI uses, plus RGB565 to match the panel.
-CONFIG_LV_FONT_MONTSERRAT_14=y
-CONFIG_LV_FONT_MONTSERRAT_16=y
-CONFIG_LV_FONT_MONTSERRAT_20=y
-CONFIG_LV_FONT_MONTSERRAT_22=y
-CONFIG_LV_FONT_MONTSERRAT_28=y
-CONFIG_LV_COLOR_DEPTH_16=y
-CONFIG_LV_USE_PERF_MONITOR=n
-
-# LVGL's own pool is internal RAM the Wi-Fi driver needs; this UI is a handful
-# of labels and one button, so 24 KiB is ample.
-CONFIG_LV_MEM_SIZE_KILOBYTES=24
 CONFIG_ESP32S3_INSTRUCTION_CACHE_32KB=y
 # PSRAM stays at the board's original 40MHz and flash at DIO. Pushing PSRAM to
 # 80MHz "to match the reference" produced consistent TLS signature-verification

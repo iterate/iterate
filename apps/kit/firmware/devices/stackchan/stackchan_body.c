@@ -365,7 +365,7 @@ esp_err_t iterate_kit_stackchan_body_start(
   };
   BODY_RETURN_ON_ERROR(
       /*
-       * ESP-IDF 5.4 requires an RX ring strictly larger than the hardware FIFO
+       * ESP-IDF requires an RX ring strictly larger than the hardware FIFO
        * even when the application only issues broadcast writes.  Allocate the
        * minimum legal ring rather than importing the first-party driver's two
        * larger generic buffers.  The servos do not reply to sync-write, so no

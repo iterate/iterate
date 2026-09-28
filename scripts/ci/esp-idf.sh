@@ -13,15 +13,15 @@
 #                       ($GITHUB_ENV).
 set -euo pipefail
 
-version=v5.4.2
-commit=f5c3654a1c2d2a01f7f67def7a0dc48e691f63c0
+version=v6.1
+commit=fff9895c82d744c7237be8847347bdd1b07c6643
 target=esp32s3
 # Where the legs restore and save them (kit-firmware.yml); tests point them elsewhere.
 export IDF_PATH="${IDF_PATH:-/home/runner/esp-idf}"
 export IDF_TOOLS_PATH="${IDF_TOOLS_PATH:-/home/runner/.espressif}"
 receipt="$IDF_TOOLS_PATH/iterate-esp-idf.receipt"
 # Any edit here (the pin, the target, the install) makes an older install stale, and so does another
-# python3: the install's Python environment (python_env/idf5.4_py3.X_env) runs on the one it was
+# python3: the install's Python environment (python_env/idf6.1_py3.X_env) runs on the one it was
 # built with.
 key="esp-idf-$(git hash-object "${BASH_SOURCE[0]}")-python$(python3 -c 'import sys; print("%d.%d" % sys.version_info[:2])')"
 

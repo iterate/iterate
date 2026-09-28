@@ -1,4 +1,4 @@
-#include "fake_posix_websocket.h"
+#include "fake_websocket_client.h"
 #include "iterate/kit/peer.h"
 #include "iterate/kit/platforms/itx_transport.h"
 #include "iterate/kit/voice_device_profile.h"
@@ -130,8 +130,8 @@ static void stalled_open_times_out_and_recovers(void) {
   struct fixture fixture;
   struct iterate_kit_itx_transport_metrics metrics;
   fixture_init(&fixture);
-  iterate_kit_fake_posix_websocket_set_open_result(
-      ITERATE_KIT_POSIX_WEBSOCKET_OPEN_WOULD_BLOCK);
+  iterate_kit_fake_websocket_client_set_open_result(
+      ITERATE_KIT_WEBSOCKET_OPEN_WOULD_BLOCK);
 
   assert(iterate_kit_itx_transport_poll(
              &fixture.transport, SLOT_COUNT) == ITERATE_KIT_OK);
@@ -146,8 +146,8 @@ static void stalled_open_times_out_and_recovers(void) {
   assert(metrics.websocket_open_timeouts == 1U);
   assert(metrics.websocket_errors == 0U);
 
-  iterate_kit_fake_posix_websocket_set_open_result(
-      ITERATE_KIT_POSIX_WEBSOCKET_OPEN_READY);
+  iterate_kit_fake_websocket_client_set_open_result(
+      ITERATE_KIT_WEBSOCKET_OPEN_READY);
   fixture.transport.websocket_retry.ready_at_us = fixture.now_us;
   assert(iterate_kit_itx_transport_poll(
              &fixture.transport, SLOT_COUNT) == ITERATE_KIT_OK);
@@ -170,8 +170,8 @@ static void ready_step_that_crosses_deadline_times_out(void) {
   fixture.advance_on_clock_read = 3U;
   fixture.advanced_now_us =
       (int64_t)ITERATE_KIT_VOICE_CONNECTION_OPEN_TIMEOUT_MS * 1000;
-  iterate_kit_fake_posix_websocket_set_open_result(
-      ITERATE_KIT_POSIX_WEBSOCKET_OPEN_READY);
+  iterate_kit_fake_websocket_client_set_open_result(
+      ITERATE_KIT_WEBSOCKET_OPEN_READY);
 
   assert(iterate_kit_itx_transport_poll(
              &fixture.transport, SLOT_COUNT) == ITERATE_KIT_OK);
@@ -199,7 +199,7 @@ static void peer_close_reconnects_with_new_generation(void) {
   assert(iterate_kit_itx_transport_poll(
              &fixture.transport, SLOT_COUNT) == ITERATE_KIT_OK);
   assert(fixture.transport.socket_generation == 1U);
-  iterate_kit_fake_posix_websocket_queue_peer_close();
+  iterate_kit_fake_websocket_client_queue_peer_close();
   assert(iterate_kit_itx_transport_poll(
              &fixture.transport, SLOT_COUNT) == ITERATE_KIT_OK);
   assert(!fixture.transport.socket_connected);

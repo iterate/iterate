@@ -270,7 +270,7 @@ static const struct iterate_kit_board board = {
  */
   .volume = {.i2c_address = 0x18, .page_register = 0, .page = 0,
     .registers = {0x41, 0x42}, .register_count = 2, .full_code = 0, .floor_code = -126},
-  .ring = {.gpio = 21, .pixels = 12, .order = LED_PIXEL_FORMAT_GRB, .power_gpio = 45},
+  .ring = {.gpio = 21, .pixels = 12, .power_gpio = 45},
   .status_led_gpio = -1,
   .button = {.gpio = 0, .active_low = true},
   .wake_word = "jarvis",

@@ -19,7 +19,7 @@ The panel needs ambient light; it has no backlight and is not e-paper.
 
 ## Build and recovery
 
-Activate ESP-IDF **5.4.2**, then run:
+Activate the ESP-IDF release that `scripts/ci/esp-idf.sh` pins, then run:
 
 ```sh
 idf.py -C apps/kit/firmware/targets/waveshare_s3_rlcd \
@@ -27,8 +27,7 @@ idf.py -C apps/kit/firmware/targets/waveshare_s3_rlcd \
   -D SDKCONFIG=/tmp/iterate-rlcd-voice.sdkconfig build
 ```
 
-The driver needs no vendor-example 5.5 APIs; Kit's TCP transport patch is
-incompatible with 5.5.3. The voice target reserves configuration at `0x410000`.
+The voice target reserves configuration at `0x410000`.
 
 Identify MAC `94:A9:90:CD:51:B8` using `tools/port-for-mac.sh`; USB paths change.
 Factory boot: `03_Fac`, IDF 5.5.2. Private 16 MiB factory-backup SHA-256:
