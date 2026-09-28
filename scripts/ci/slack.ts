@@ -121,18 +121,18 @@ export async function findOpenPages(
   input: { channel: string; marker: string; sinceHours: number; now: Date },
 ): Promise<Array<{ ts: string; text: string }>> {
   const { bot_id: botId } = await slack.auth.test();
+  const since = input.now.getTime() / 1000 - input.sinceHours * 3600;
   const open: Array<{ ts: string; text: string }> = [];
   let cursor: string | undefined;
   do {
+    // no `oldest`: with it and no `latest`, Slack pages from the window's oldest end
     const history = await slack.conversations.history({
       channel: input.channel,
-      oldest: String(input.now.getTime() / 1000 - input.sinceHours * 3600),
-      // without `latest`, Slack's first page is the window's oldest
-      latest: String(input.now.getTime() / 1000),
       limit: 200,
       cursor,
     });
-    for (const message of history.messages || []) {
+    const messages = (history.messages || []).filter((message) => Number(message.ts) >= since);
+    for (const message of messages) {
       const text = message.text || "";
       if (
         message.ts &&
@@ -143,7 +143,8 @@ export async function findOpenPages(
       )
         open.push({ ts: message.ts, text });
     }
-    cursor = history.response_metadata?.next_cursor || undefined;
+    const pastWindow = messages.length < (history.messages || []).length;
+    cursor = pastWindow ? undefined : history.response_metadata?.next_cursor || undefined;
   } while (cursor);
   return open;
 }

@@ -166,11 +166,9 @@ async function findMergePost(
   const start = input.clock.now();
   for (const at of input.reads) {
     await input.clock.sleep(Math.max(0, start + at * 1000 - input.clock.now()));
-    // the newest 200 of the last 6 h (`latest`, as in findOpenPages, makes the page the newest)
+    // #ci's newest 200 lines, newest first (no `oldest`, as in findOpenPages)
     const history = await slack.conversations.history({
       channel: slackChannelIds["#ci"],
-      oldest: String((input.clock.now() - 6 * 3_600_000) / 1000),
-      latest: String(input.clock.now() / 1000),
       limit: 200,
     });
     const merge = (history.messages || []).find(
