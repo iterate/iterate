@@ -17,7 +17,8 @@
 //   • rules composition: `provide('itx.tools', "itx.connectToMcp(…)")`, then `itx.tools.listTools()` and
 //     `itx.tools.get_pet(…)` run through the table and `resolve` ends at the builtins-rooted connector
 //   • connectToOpenApi: the 3.1 document (bearer-protected, fetched over egress); operationIds become
-//     methods; path and body parameters ride to /api/v2; without the bearer the document itself is a 401
+//     methods; path and body parameters ride to /api/v2; `call(operationId, input)` from a session's
+//     handle and a script's (`itx.run`); without the bearer the document itself is a 401
 //   • connectToCapnweb: a WebSocket session THROUGH EGRESS (deployed — the bearer rides the upgrade, a
 //     chain pipelines, held, disposed on close; refused 401 without it) and the batch transport (one
 //     POST per chain, the bearer on the POST, the shop's 401 as the batch's failure)
@@ -148,6 +149,26 @@ test("connectToOpenApi: the shop's OpenAPI 3.1 document (bearer-protected, fetch
     `itx.connectToOpenApi(${JSON.stringify(`${PETSHOP}/openapi.json`)}, ${withHeaders(headers)})`,
   );
   expect(await itx.pets.getPet({ id: "pet-2" })).toMatchObject({ id: "pet-2", name: "Goldie" });
+});
+
+test("connectToOpenApi: call(operationId, input) reaches the connection from a session's handle and from a script's (`itx.run`, as MCP's `run`)", async () => {
+  await petshopAnswers();
+  const headers = await bearerFor(shopper("openapi-call"));
+  const itx = openItx(freshCtx("lib-openapi-call"));
+  const pets = await itx.connectToOpenApi(`${PETSHOP}/openapi.json`, { headers });
+  expect(await pets.call("getPet", { id: "pet-1" })).toMatchObject({ name: "Biscuit" });
+  expect(
+    await itx.run(`async (itx) => {
+      const pets = await itx.connectToOpenApi(${JSON.stringify(`${PETSHOP}/openapi.json`)}, ${withHeaders(headers)});
+      return {
+        pet: await pets.call("getPet", { id: "pet-2" }),
+        unknown: await pets.call("nope", {}).catch((error) => error.message),
+      };
+    }`),
+  ).toMatchObject({
+    pet: { id: "pet-2", name: "Goldie" },
+    unknown: 'connectToOpenApi: no operation "nope"',
+  });
 });
 
 test("connectToOpenApi: without the bearer the document itself is a 401", async () => {
