@@ -12,10 +12,12 @@
 // verdict is the outcome of each ItxEntrypoint invocation that ran `ai.run`, read from Workers Logs
 // (CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN, Doppler os/preview). It pays for model calls, so
 // only the real-model suite runs it (os-real-model.yml).
+//
+// A test's lent fake is the one `itx.ai` that still answers from inside a context: its streamed
+// Response crosses Durable Object → stateless → Durable Object, and on a deployment Cloudflare can
+// log the same false exception for it. No row reads a fake's invocation from Workers Logs.
 import { expect } from "vitest";
 import { z } from "zod";
-import { E2E_CI_RETRIES } from "@iterate-com/shared/test-support/e2e-policy";
-import { createFailing } from "@iterate-com/shared/test-support/failing-test";
 import { freshCtx, openItx, sleep } from "../../os/e2e/support/client.ts";
 import { realModelOnly } from "../../os/e2e/support/project-host.ts";
 
@@ -25,11 +27,8 @@ const STREAMS = 3;
 /** How long Workers Logs may take to show an invocation after it ended (under a minute, 2026-09-28). */
 const LOGS_ARRIVE_MS = 120_000;
 
-createFailing(realModelOnly, /hung and would never generate a response/, {
-  timeoutMs: 240_000,
-  retries: process.env.CI ? E2E_CI_RETRIES : 0,
-})(
-  "REAL: a loaded facet that drains itx.ai's raw streamed Response should leave the ItxEntrypoint invocation that answered it unfaulted",
+realModelOnly(
+  "REAL: a loaded facet that drains itx.ai's raw streamed Response leaves the ItxEntrypoint invocation that answered it unfaulted",
   async () => {
     if (!process.env.CLOUDFLARE_ACCOUNT_ID || !process.env.CLOUDFLARE_API_TOKEN)
       throw new Error(
@@ -57,6 +56,7 @@ createFailing(realModelOnly, /hung and would never generate a response/, {
         `${faulted.length} of ${STREAMS} ItxEntrypoint.get invocations faulted: ${faulted.map((invocation) => `${invocation.outcome} (${invocation.errors.join("; ")})`).join(", ")}`,
       );
   },
+  240_000,
 );
 
 /** A facet that asks the default model for one word, streamed, the raw Response asked for as the
