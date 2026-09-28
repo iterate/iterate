@@ -123,10 +123,6 @@ export default {
       // vite.config.ts names the Worker's main inline.
       entry: ["src/worker.ts!"],
     },
-    "apps/iterate-com-inbound-email": {
-      // vite.config.ts names the Worker's main inline.
-      entry: ["src/worker.ts!"],
-    },
     "apps/spa": {
       // public/index.html loads app.js, and its import map resolves @iterate-com/capnweb from a CDN.
       entry: ["public/app.js"],

@@ -1,6 +1,5 @@
 {
-  // The apps on Workers (apps/os, dash, agents, notes, voice, kit, dummy-petshop, ci-reports and
-  // iterate-com-inbound-email):
+  // The apps on Workers (apps/os, dash, agents, notes, voice, kit, dummy-petshop and ci-reports):
   // Worker and browser code in one program, built by Vite.
   "extends": "./tsconfig.base.json",
   "compilerOptions": {
