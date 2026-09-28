@@ -380,32 +380,6 @@ export function previewDeployment(name: string) {
   return { name, prefix: match.groups.prefix!, sha: match.groups.sha!, os, apps };
 }
 
-/** WHAT A PR RUN TESTS, and which deployment serves each part of it (apps/os/scripts/preview-reuse.ts).
- *  A FULL plan deploys apps/os and every app as `deployment`'s own workers (`reuses` undefined, `deploys`
- *  every member). A PARTIAL one deploys only the apps in `deploys` under `deployment`, each signed in
- *  against `reuses`'s apps/os and linked to `reuses`'s other apps, and serves apps/os and every other
- *  app from `reuses`, an earlier full deployment the run's commit has not changed them since. */
-export type PreviewPlan = { deployment: string; reuses: string | undefined; deploys: string[] };
-
-/** The apps/os and apps a plan serves, each `previewDeployment`'s env from the deployment that
- *  holds it. */
-export function previewPlanMembers(plan: PreviewPlan) {
-  const own = previewDeployment(plan.deployment);
-  const reused = plan.reuses ? previewDeployment(plan.reuses) : undefined;
-  if (!own || (plan.reuses && !reused))
-    throw new Error(`not a plan of per-commit deployments: ${JSON.stringify(plan)}`);
-  if (!reused) return { os: own.os, apps: own.apps };
-  return {
-    os: reused.os,
-    apps: Object.fromEntries(
-      Object.entries(own.apps).map(([app, env]) => [
-        app,
-        plan.deploys.includes(app) ? env : reused.apps[app]!,
-      ]),
-    ),
-  };
-}
-
 /** THE apps/os DEPLOYMENT A NAME NAMES: an `osEnvs` entry (`prd`, `preview`), or a per-commit
  *  deployment derived from its name (`pr3144-a1b2c3d`, `previewDeployment`); undefined for any
  *  other name. What building and deploying apps/os by name look up (vite.config.ts through

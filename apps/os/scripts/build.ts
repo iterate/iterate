@@ -124,7 +124,7 @@ export async function build() {
 /** Build an environment-specific Worker and its TanStack client into dist/. */
 export async function buildOs(env: string) {
   await build();
-  await viteBuild(root, env, {});
+  await viteBuild(root, env);
 }
 
 if (isMainModule(import.meta.url)) await build();

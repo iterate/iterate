@@ -7,14 +7,7 @@
 import { createHash } from "node:crypto";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
-import {
-  ciReportsEnvs,
-  osEnvs,
-  previewDeployment,
-  previewPlanMembers,
-  spaEnvs,
-  type PreviewPlan,
-} from "../../../envs.ts";
+import { ciReportsEnvs, osEnvs, previewDeployment, spaEnvs } from "../../../envs.ts";
 import { agents } from "../../agents/scripts/app.ts";
 import { dash } from "../../dash/scripts/app.ts";
 import { kit } from "../../kit/scripts/app.ts";
@@ -95,16 +88,13 @@ export function previewPullRequestNumber(prefix: string) {
 /** A deployment's apps/os origin, and its apps' by name: envs.ts `previewDeployment`, for a name
  *  this module made. */
 export function previewDeploymentUrls(name: string) {
-  return previewPlanUrls({ deployment: name, reuses: undefined, deploys: [] });
-}
-
-/** The origins a run's plan serves (envs.ts `previewPlanMembers`): apps/os, and each app by name,
- *  from whichever deployment holds it. */
-export function previewPlanUrls(plan: PreviewPlan) {
-  const members = previewPlanMembers(plan);
+  const deployment = previewDeployment(name);
+  if (!deployment) throw new Error(`${name} is not a deployment name`);
   return {
-    os: members.os.baseUrl,
-    apps: Object.fromEntries(Object.entries(members.apps).map(([app, env]) => [app, env.baseUrl])),
+    os: deployment.os.baseUrl,
+    apps: Object.fromEntries(
+      Object.entries(deployment.apps).map(([app, env]) => [app, env.baseUrl]),
+    ),
   };
 }
 
@@ -275,8 +265,8 @@ export function templateQuickLaunches(input: {
 export function renderPullRequestSection(input: {
   /** the deployment's name, `pr<n>-<sha7>` */
   deployment: string;
-  /** each worker the run tests; `reusedFrom` names the earlier deployment one comes from
-   *  (preview-reuse.ts) */
+  /** each worker the run tests; `reusedFrom` names the earlier deployment it comes from when the
+   *  run deployed nothing (preview-reuse.ts) */
   workers: {
     name: string;
     url: string;

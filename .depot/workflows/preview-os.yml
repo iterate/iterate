@@ -5,19 +5,21 @@
 #   Deploy preview      every push: first whether both suites inherit an ancestor's green, the push
 #                       having changed nothing either depends on (scripts/ci/preview-inherit.ts);
 #                       then it deploys nothing and passes. Otherwise it deploys the PR's head as
-#                       `pr<n>-<sha7>`: only what the head changed since its nearest ancestor with a
-#                       full deployment, the PR's own or main's, which it reuses for the rest
-#                       (apps/os/scripts/preview-reuse.ts), and it hands its plan to the suites as an
-#                       artifact. It folds the PR body's section into a previous commit's first, and
-#                       writes its own section (the workers and their sign-in links) once it has
-#                       landed. Its outputs `deployment` and `reuses` are what the cleanup deletes
-#                       around
+#                       `pr<n>-<sha7>`, unless the head changed nothing that deploys since its nearest
+#                       ancestor with a deployment, the PR's own or main's: then it deploys nothing
+#                       and the suites test that one (apps/os/scripts/preview-reuse.ts). It hands its
+#                       plan to the suites as an artifact. It folds the PR body's section into a
+#                       previous commit's first, and writes its own section (the workers and their
+#                       sign-in links) once it has landed. Its output `deployment` is what the cleanup
+#                       deletes around
 #   E2E tests           beside Deploy preview from the start, set up while it deploys, then waiting
 #                       for it (scripts/ci/await-deploy.ts): the vitest e2e suite against the plan
-#                       that deploy uploaded, then its test telemetry and flake
-#                       records. The rows tagged `slow` run only when the PR carries the `slow-e2e`
+#                       that deploy uploaded, only the rows the push changed when that is all it
+#                       changed (scripts/ci/preview-units.ts `suiteSelection`), then its test
+#                       telemetry and flake records. The rows tagged `slow` run only when the PR carries the `slow-e2e`
 #                       label or edits one of them (SLOW_ROW_PATHS) (docs/testing.md#slow-rows)
-#   Browser specs       beside E2E tests: the Playwright specs, the same way, and the Playwright
+#   Browser specs       beside E2E tests: the Playwright specs, the same way (only the changed specs
+#                       and the changed apps' projects, when that is all), and the Playwright
 #                       report. One job definition, E2E tests', differing only in the suite it names
 #                       and in its bigger runner, where its six browsers have the CPU they need
 #   Clean up superseded after Deploy preview, beside the suites: deletes this PR's older
@@ -142,7 +144,6 @@ jobs:
       tested-sha: ${{ steps.tested.outputs.sha }}
       preview: ${{ steps.changes.outputs.preview }}
       deployment: ${{ steps.deploy.outputs.deployment }}
-      reuses: ${{ steps.deploy.outputs.reuses }}
     steps:
       - name: Checkout the PR head
         uses: actions/checkout@v4
@@ -323,6 +324,8 @@ jobs:
           E2E_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
           # `--slow-rows`: the e2e suite's rows tagged `slow`; the specs have none
           SLOW_ROWS: ${{ inputs.slow-rows }}
+          # the part of the suite this push needs, as the step before chose it; empty on a dispatch
+          PREVIEW_SELECTION: ${{ steps.changes.outputs.selection }}
           # the job whose end starts the suite, when this run deploys (scripts/ci/await-deploy.ts)
           PREVIEW_AWAIT_DEPLOY_JOB: ${{ (github.event_name == 'pull_request' || inputs.action == 'deploy') && 'deploy' || '' }}
         run: >-
@@ -431,8 +434,6 @@ jobs:
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           PREVIEW_DEPLOYMENT: ${{ needs.deploy.outputs.deployment }}
-          # the earlier deployment the run's plan reuses, which the cleanup keeps
-          PREVIEW_REUSES: ${{ needs.deploy.outputs.reuses }}
         run: doppler run --project os --config preview -- pnpm preview cleanup-superseded
 
   # THE CI TRACE (docs/ci-traces.md), reporting only: the Depot timings and `@@ci-trace` markers of

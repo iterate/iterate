@@ -33,19 +33,19 @@ test("a run's candidates are the PR's and main's full deployments; never a parti
   ]);
 });
 
-test.for<{ name: string; candidates: ReuseCandidate[]; reuses?: string; deploys: string[] }>(
+test.for<{ name: string; candidates: ReuseCandidate[]; reuses?: string }>(
   // prettier-ignore
   [
-    { name: "a tests-only push: the previous push's deployment serves everything", candidates: [placed("pr7-2222222", 1, []), placed("main-aaaaaaa", 4, [])], reuses: "pr7-2222222", deploys: [] },
-    { name: "a notes-only PR's first push: main's deployment where it branched serves all but notes", candidates: [placed("main-aaaaaaa", 1, ["notes"])], reuses: "main-aaaaaaa", deploys: ["notes"] },
-    { name: "the nearest changed apps/os since: never a farther one", candidates: [placed("pr7-2222222", 1, ["os"]), placed("main-aaaaaaa", 3, [])], deploys: ["os", ...APPS] },
-    { name: "a package every app depends on", candidates: [placed("pr7-2222222", 1, ["dash", "agents", "voice", "kit"])], reuses: "pr7-2222222", deploys: ["dash", "agents", "voice", "kit"] },
-    { name: "main's newest, not an ancestor of the head, and main's deployment where it branched", candidates: [{ name: "main-bbbbbbb", commitsBack: undefined, unplaced: "not an ancestor of this commit" }, placed("main-aaaaaaa", 2, [])], reuses: "main-aaaaaaa", deploys: [] },
-    { name: "no candidate", candidates: [], deploys: ["os", ...APPS] },
+    { name: "a tests-only push: the previous push's deployment serves everything", candidates: [placed("pr7-2222222", 1, []), placed("main-aaaaaaa", 4, [])], reuses: "pr7-2222222" },
+    { name: "a docs-only PR's first push: main's deployment where it branched", candidates: [placed("main-aaaaaaa", 1, [])], reuses: "main-aaaaaaa" },
+    { name: "an app changed: everything deploys", candidates: [placed("main-aaaaaaa", 1, ["notes"])] },
+    { name: "the nearest changed a unit since: never a farther one", candidates: [placed("pr7-2222222", 1, ["os"]), placed("main-aaaaaaa", 3, [])] },
+    { name: "main's newest, not an ancestor of the head, and main's deployment where it branched", candidates: [{ name: "main-bbbbbbb", commitsBack: undefined, unplaced: "not an ancestor of this commit" }, placed("main-aaaaaaa", 2, [])], reuses: "main-aaaaaaa" },
+    { name: "no candidate", candidates: [] },
   ],
-)("$name ⇒ reuses $reuses, deploys $deploys", ({ candidates, reuses, deploys }) => {
-  const { plan, reasons } = planReuse({ deployment: "pr7-6666666", apps: APPS, candidates });
-  expect(plan).toEqual({ deployment: "pr7-6666666", reuses, deploys });
+)("$name ⇒ reuses $reuses", ({ candidates, reuses }) => {
+  const { plan, reasons } = planReuse({ deployment: "pr7-6666666", candidates });
+  expect(plan).toEqual({ deployment: "pr7-6666666", reuses });
   expect(reasons.at(-1)).toMatch(reuses ? `${reuses}, ` : "deploys everything");
 });
 

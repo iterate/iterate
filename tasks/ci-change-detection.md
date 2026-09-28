@@ -7,9 +7,9 @@ size: large
 
 **Status:** an experiment, not a commitment: built to see what inherit and reuse cost in code and save in CI before deciding whether to keep them. Decided 2026-09-28: inherit and reuse, as #2712 had them; no suite selection for now. It replaces the 2026-09-25 draft (never committed; `stash@{0}`), which predates #3165.
 
-- **Built:** units (`scripts/ci/preview-units.ts`), inherit (`scripts/ci/preview-inherit.ts`, the `changes` step), reuse (`apps/os/scripts/preview-reuse.ts`, partial deployments, the plan artifact, cleanup and sweep rules), docs. Since decision 7, a PR run tests its head, and both walk its history.
-- **Proven live** (testing the head): a notes-only push inherited E2E tests (5 s), reused `pr3340-91866ad` and deployed one worker, specs green against it; its revert reused the same deployment 3 commits back and deployed nothing; a push after a red run inherited nothing and reran both suites on the reused deployment, green (the red was a Cloudflare Artifacts flake). A docs-only push inherits both suites in about 8 s.
-- **Left:** a decision on whether to keep it. Main's deployments live 45 minutes past their successor, so a PR branched from an older main still deploys in full on its first push.
+- **Built:** units (`scripts/ci/preview-units.ts`), inherit (`scripts/ci/preview-inherit.ts`, the `changes` step), selection (a suite that runs after a green runs only the changed rows or the changed apps' specs), reuse (`apps/os/scripts/preview-reuse.ts`: whole or not at all), the plan artifact, cleanup and sweep rules, docs, an explainer. A PR run tests its head, and inherit and reuse walk its history.
+- **Proven live** before decisions 8 and 9: docs-only pushes inherit both suites in about 8 s; a push after a red reran E2E on a reused deployment; old merge-commit deployments are passed over as "not an ancestor".
+- **Left:** live checks of selection (an e2e-row push, a Notes push) and of the simpler reuse; a decision on whether to keep it.
 
 ## Why now
 
@@ -26,13 +26,15 @@ On the 2026-09-25 Tuple call (`57360661`), Misha asked for this: if a PR changes
 
 ## Decisions
 
-1. **Inherit and reuse only.** Suite selection (running only the changed units' suites) is out for now: every run that tests still runs E2E and all Browser specs.
+1. **Inherit and reuse first.** Suite selection was out at first; decision 8 brings a narrow form of it back.
 2. **Inherit keys on the PR head.** A suite whose inputs haven't changed since an earlier green head passes without running: a docs-only push is the same as not pushing. It never carries a red.
 3. ~~**Reuse keys on the tested tree.**~~ _Replaced by decision 7: keyed on the tested merge with main, reuse missed whenever main changed apps/os between pushes, about every half hour (live check C)._
-4. **Reuse takes the nearest ancestor with a full deployment,** the PR's own or main's `main-<sha7>`. An app-only PR deploys only its app, linked to that deployment's os and other apps. If apps/os changed since, it deploys its own, as today.
-5. **An os change still runs every spec** (it always does, with no selection). Revisit with the R2 parquet evidence: how often did an app spec catch an os regression?
+4. **Reuse takes the nearest ancestor with a full deployment,** the PR's own or main's `main-<sha7>`. ~~An app-only PR deploys only its app, linked to that deployment's os and other apps.~~ _Replaced by decision 9._
+5. **An os change still runs every spec** (decision 8 selects only for app, spec and e2e-row changes). Revisit with the R2 parquet evidence: how often did an app spec catch an os regression?
 6. **Main OS e2e is unchanged:** everything on every push. It's the canary, and it's where reused main deployments come from.
 7. **A PR run tests its head, not the head merged into main** (2026-09-28, after live check C). Deployments are per commit, so inherit and reuse both walk the head's history parent by parent, into main's past where the PR branched. A commit that merges main in is a commit like any other, usually one with many changes. The PR-wide "does this PR touch a preview path" gate goes: a PR that changes nothing a suite depends on inherits main's green. The cost: Depot still reads the workflow file from the merge commit, so a head that predates a workflow change needing code landing with it fails Preview OS until it merges main in (#2999's failure mode), and Preview OS no longer catches a semantic conflict with newer main before the merge.
+8. **A suite that runs after a green runs only what the changed files select** (2026-09-28). A push that changes only e2e row files runs those files; one that changes only spec files and single apps runs those specs and those apps' Playwright projects (the Dash reruns every app's projects, since each signs in through it). A change to apps/os, agents, kit, shared test code or the config runs the whole suite. Sound because the rest passed at the green and depends on nothing that changed since.
+9. **Reuse is whole or not at all** (2026-09-28). With decision 8, an app-only push's time goes on its specs, so deploying one Worker instead of seven saved about 10 s for the most complexity in the change (apps linked to another deployment's os, partial cleanup and sweep rules). Now: if the head changed nothing that deploys since the nearest ancestor with a deployment, the run deploys nothing and tests that one; otherwise it deploys all seven.
 
 ## Design
 
@@ -70,23 +72,28 @@ A test walks `git ls-files`: every file `previewPaths` matches is some unit's or
 
 Deploy preview inherits when both suites do: no deploy, no trace. The PR body keeps pointing at the last deployment. This replaces the PR-wide `preview-paths.ts changes` gate: a PR that changes nothing a suite depends on inherits main's green where it branched.
 
+### Selection
+
+`preview-units.ts` `suiteSelection(suite, inputs)`, where `inputs` are the files the suite depends on that changed since its nearest green, returns the runner's arguments or nothing (the whole suite):
+
+- E2E tests: when every input is an e2e row's file (`apps/os/e2e/**/*.e2e.test.ts`, `apps/agents/e2e/**/*.e2e.test.ts`), those files.
+- Browser specs: a changed spec file adds itself and its projects (`specs/os/` runs in `os` and `os-phone`); a changed app adds its projects' directories (`notes` → `specs/notes/`; `dash` → dash, notes, voice and admin). Anything else, os, agents, kit, `specs/setup.ts`, the shared helpers, `playwright.config.ts`, means everything.
+
+The suite job's `changes` step writes it as `selection` (JSON); `runSuite` appends it to `pnpm e2e:run` or `pnpm spec`, and drops test files the push deleted (nothing left: the suite passes).
+
 ### Reuse
 
 On a PR's pushes only (never main, latency, real-model or a soak), Deploy preview plans before it builds:
 
 1. Candidates: every live **full** deployment (all seven workers) of the PR's and of main's, never this run's own name.
 2. GitHub's comparison of each one's commit (the sha7 in its name) with the head: an ancestor's distance and the units changed since. The nearest ancestor is the one a walk back would reach first.
-3. If its apps/os is unchanged, the run deploys the changed apps under its own name, each linked to that deployment's os and other apps (`PREVIEW_REUSE`, read by start-app.ts `linkedEnvironment`), and reuses the rest. A tests-only push deploys nothing. Otherwise, or with no ancestor deployed: a full deployment, as today.
-
-So a deployment is either **full** (its own os and every app) or **partial** (some apps, no os and no os resources). Only full ones are ever reused, so reuse never chains.
+3. If the head changed no unit since, the run deploys nothing and the suites test that deployment. Otherwise, or with no ancestor deployed, it deploys all seven, as before.
 
 What else changes:
 
-- **The plan reaches the suites** as Deploy preview's `preview-plan` artifact (the `output/preview.json` it already writes, plus `reuses` and `deploys`). A PR run's suites read it from their own workflow run after the wait (scripts/ci/depot.ts, as the trace job reads artifacts), and test the plan's os and apps.
-- **The readiness gate, the sign-in seed and the PR body** use the plan's os. The PR body section marks reused rows with the deployment they come from.
-- **Cleanup keeps what a plan reuses.** `cleanup-superseded` never deletes the plan's `reuses`. A `main-…` deployment stays until 45 minutes after its successor was created, so a PR testing against it keeps it (the suite bound is 30). The sweep keeps each prefix's newest partial deployment beside its newest full one.
-- **A test-only dispatch** still tests the prefix's newest full deployment: it can't see a partial one's plan.
-- **Main's deployments are short-lived** (the cleanup keeps one 45 minutes past its successor), so a PR branched from an older main deploys in full on its first push, and reuses its own deployment after.
+- **The plan reaches the suites** as Deploy preview's `preview-plan` artifact (the `output/preview.json` it already writes, plus `reuses`). A PR run's suites read it from their own workflow run after the wait (scripts/ci/depot.ts, as the trace job reads artifacts).
+- **The readiness gate, the sign-in seed and the PR body** use the tested deployment's os. The PR body marks reused rows with the deployment they come from.
+- **Main's deployments stay 45 minutes** past their successor's creation, so a PR run testing one keeps it. A PR branched from an older main deploys in full on its first push, and reuses its own deployment after.
 
 ## Phases
 
@@ -105,20 +112,26 @@ What else changes:
 ### 3. Reuse
 
 - [x] `planReuse` as a pure function over (candidates with their touched units, requested apps) → `{ reuses, deploys }`, table-tested _preview-reuse.test.ts_
-- [x] `PREVIEW_REUSE` in start-app.ts `linkedEnvironment`: an app of a partial deployment links to the reused os and apps _envs.ts `PreviewPlan`/`previewPlanMembers`; viteBuild takes the build's env_
-- [x] preview.ts `deploy`: candidates, the plan, deploy only `deploys`, the gate/seed/section on the plan's os, `preview.json` + `preview-plan` artifact _`planDeployment`, `filesChangedSince` (GitHub resolves the sha7, git fetches it at depth 1)_
+- [x] ~~`PREVIEW_REUSE` in start-app.ts `linkedEnvironment`: an app of a partial deployment links to the reused os and apps~~ _built, then removed by decision 9_
+- [x] preview.ts `deploy`: candidates, the plan, the gate/seed/section on the tested os, `preview.json` + `preview-plan` artifact _`planDeployment`, `placeInHistory` (GitHub's compare API)_
 - [x] Suites: read the plan after the wait, test its urls _`planOfThisRun` via await-deploy.ts `artifactOfThisRun`; PR runs only_
-- [x] `planSupersededCleanup`: never the plan's `reuses`; 45 min grace for `main`; sweep keeps a prefix's newest partial deployment _and the sweep counts main's idle hour from its successor's creation_
+- [x] `planSupersededCleanup`: 45 min grace for `main` _and the sweep counts main's idle hour from its successor's creation; the partial-deployment rules went with decision 9_
 - [x] PR body section: reused rows name their deployment
 - [x] Docs: `docs/dev-environments.md` (second pushes, partial deployments), the preview-os.yml header _a row in Second pushes, and an "Inherited verdicts and reused deployments" section_
-- [x] Live check: a notes-only push on this PR (deploys one worker), a tests-only push (deploys none) _`068e2e5` (notes: one worker on `pr3340-91866ad`), `665c364` (revert: nothing deployed), `eb6db04` (docs after red: nothing deployed, both suites rerun)_
+- [x] Live check: a notes-only push on this PR (deploys one worker), a tests-only push (deploys none) _`068e2e5` (notes: one worker on `pr3340-91866ad`, before decision 9), `665c364` (revert: nothing deployed), `eb6db04` (docs after red: nothing deployed, both suites rerun)_
+
+### 4. Selection and whole reuse (decisions 8 and 9)
+
+- [x] `suiteSelection` in preview-units.ts, table-tested _16 rows: e2e files, spec files, app projects, the Dash's fan-out, everything for os/kit/shared code_
+- [x] planInherit carries the selection; the step writes `selection`; runSuite passes it on and drops deleted test files
+- [x] Reuse whole or not at all: partial deployments, `PREVIEW_REUSE` app linking and the partial cleanup/sweep rules removed
+- [ ] Live check: an e2e-row push runs one file on a reused deployment; a Notes push deploys all seven and runs the Notes project
 
 ## Later, not now
 
-- **Select:** run only the changed units' suites. With reuse alone, an app-only PR still runs E2E against main's os, which proves nothing new; this is where select would save next. Jonas's view (os changes run E2E, not the app specs) is its policy question.
+- **Select for os changes:** Jonas's view (an os change runs E2E, not the app specs) is the remaining policy question; os changes run everything today.
 - **`packages/iterate` forces every unit** (59 of 200 PRs). If that keeps defeating reuse, compare a unit's built bundle instead of its input paths. That's exact, but it needs a build before the plan.
 - A result store keyed by the tested tree's contents, so an identical tree inherits across PRs (and main after a squash merge with no main movement).
-- Reusing a partial deployment's own apps (a second push to a notes-only PR redeploys notes even when notes didn't change).
 - One manifest for the path lists copied into `previewPaths` and the workflows' `paths:`.
 
 ## References
@@ -134,3 +147,4 @@ What else changes:
 - 2026-09-28: live checks under the first form of decision 3 (reuse keyed on the tested merge with main): `e7fbf83` (docs) inherited both suites in 8 s; `60772a1` (a spec comment) inherited E2E tests but deployed in full, because main had landed an apps/os change (#3346) since the PR's last deployment; `8f0e8dc` (notes) reused `pr3340-c08836c` and deployed one worker, specs green against it; `5c96717` (reverts) reused it and deployed nothing, Deploy preview 28 s.
 - Misha on `60772a1`: it should have needed no deployment; deployments are per commit, so walk parents like #2712 did. Decision 7: a PR run tests its head. `preview-tested-commit.ts` and the `preview-paths.ts changes` gate are deleted; inherit and reuse both place ancestors through GitHub's compare API.
 - After decision 7: `91866ad` (merge of main) walked into main's history and ran both suites (the PR changes machinery); its E2E tests and one spec went red on Cloudflare Artifacts errors. `eb6db04` (docs) inherited nothing from that red, reused `pr3340-91866ad` and passed. `068e2e5` (notes) and `665c364` (its revert) behaved as the plan says. Old merge-commit deployments (`pr3340-c08836c`) were correctly passed over as "not an ancestor".
+- Decisions 8 and 9 (Misha, after asking whether it was worth it): as built it saved about 9% of Preview OS machine time and time only on docs pushes, with partial deployments the costliest part. Selecting the changed rows and app projects puts the time savings on test-only and app-only pushes, and makes partial deployments not worth their complexity.

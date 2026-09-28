@@ -557,7 +557,10 @@ the units it tests, as their `deploy-<unit>.yml` paths list them, the preview ma
 tests) is inherited: the suite passes, and its summary links the run. When both inherit, Deploy
 preview deploys nothing and passes. A docs-only push, or a PR that changes nothing a preview
 depends on, inherits main's green where it branched. A red is never inherited, and E2E tests never
-inherits under the `slow-e2e` label. When the step cannot tell, the suite runs.
+inherits under the `slow-e2e` label. When the step cannot tell, the suite runs. A suite that runs
+after a green runs only the part the changed files select (`preview-units.ts` `suiteSelection`):
+the changed e2e rows' files, or the changed spec files and the changed apps' Playwright projects;
+a change to `apps/os`, shared test code or the config runs all of it.
 `preview-delete.yml` runs on `previewPaths`;
 `scripts/ci/depot-workflows.test.ts` keeps it equal to `previewPaths`.
 
@@ -623,9 +626,9 @@ the deploy's end and the first test. So the suites of Preview OS and Main OS e2e
 have no `needs:`. Each starts with the run and, while the preview deploys:
 
 1. checks out the commit Deploy preview deploys, the PR's head, and on a push
-   decides whether it inherits. What it tests is the plan Deploy preview
-   uploads (`preview-plan`): `<prefix>-<sha7>` of that commit, or the ancestor's
-   deployment it reuses for some of it;
+   decides whether it inherits, and if not, which part of itself to run. What it
+   tests is the plan Deploy preview uploads (`preview-plan`): `<prefix>-<sha7>`
+   of that commit, or the ancestor's deployment it reused;
 2. runs the setup ([Setup on Depot's stock image](#setup-on-depots-stock-image)),
    beside it for the specs Playwright's headless shell from Depot Cache, and starts
    its suite step, whose `runSuite` chooses the slow rows and installs Chromium's

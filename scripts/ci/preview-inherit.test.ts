@@ -11,14 +11,16 @@ test.for<{
   suite: "e2e" | "specs";
   labels?: string[];
   commits: Commit[];
-  expected: { inherit: boolean; from?: string };
+  expected: { inherit: boolean; from?: string; runs?: string[] };
 }>(
   // prettier-ignore
   [
     { name: "a docs-only push", suite: "e2e", commits: [green("c1", ["docs/depot-ci.md", "tasks/x.md"])], expected: { inherit: true, from: "c1" } },
     { name: "a unit-test push", suite: "specs", commits: [green("c1", ["apps/os/src/worker.test.ts"])], expected: { inherit: true, from: "c1" } },
     { name: "a specs-only push, E2E tests", suite: "e2e", commits: [green("c1", ["specs/notes/notes.spec.ts"])], expected: { inherit: true, from: "c1" } },
-    { name: "a specs-only push, Browser specs", suite: "specs", commits: [green("c1", ["specs/notes/notes.spec.ts"])], expected: { inherit: false } },
+    { name: "a specs-only push, Browser specs", suite: "specs", commits: [green("c1", ["specs/notes/notes.spec.ts"])], expected: { inherit: false, runs: ["specs/notes/notes.spec.ts", "--project", "notes"] } },
+    { name: "a notes push, Browser specs: the Notes project", suite: "specs", commits: [green("c1", ["apps/notes/src/app.tsx", "docs/x.md"])], expected: { inherit: false, runs: ["specs/notes/", "--project", "notes"] } },
+    { name: "a new e2e row", suite: "e2e", commits: [green("c1", ["apps/os/e2e/alarms.e2e.test.ts"])], expected: { inherit: false, runs: ["apps/os/e2e/alarms.e2e.test.ts"] } },
     { name: "a notes push, E2E tests: it tests apps/os alone", suite: "e2e", commits: [green("c1", ["apps/notes/src/app.tsx"])], expected: { inherit: true, from: "c1" } },
     { name: "an os push", suite: "e2e", commits: [green("c1", ["apps/os/src/worker.ts"])], expected: { inherit: false } },
     { name: "a push after a red run", suite: "e2e", commits: [red("c1")], expected: { inherit: false } },
@@ -61,7 +63,7 @@ test.for<{
           inherit: true,
           from: { sha: expected.from, url: `https://github.com/run/${expected.from}` },
         }
-      : { inherit: false },
+      : { inherit: false, selection: expected.runs && { args: expected.runs } },
   );
 });
 

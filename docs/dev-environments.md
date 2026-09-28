@@ -457,16 +457,16 @@ What the push before leaves behind, and what deletes it. A deployment is
 whatever of its members exist, so a half-made one is deleted like a whole one
 (`apps/os/scripts/preview-sweep.test.ts` pins each row).
 
-| The push before                                  | What it left                                                | What deletes it                                                                                                                                           |
-| ------------------------------------------------ | ----------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| deployed; its tests passed or failed             | a whole deployment                                          | this push's Clean up superseded, once this push's deployment is ready                                                                                     |
-| was cancelled halfway through deploying          | some of its D1, R2 bucket, Artifacts namespace, KV, workers | the same                                                                                                                                                  |
-| failed to deploy                                 | the same; the PR body says `deploy failed`                  | the same. Until then the push before it, the last to deploy, stays: the sweep never counts a deployment without its apps/os worker as the PR's newest     |
-| is still deploying when this push's cleanup runs | members created after this push's                           | nothing yet: the cleanup deletes only deployments made entirely before its own                                                                            |
-| had its own cleanup cancelled or failing         | the deployment before it                                    | this push's cleanup, else the nightly sweep an hour later                                                                                                 |
-| reused an earlier full deployment                | the apps it changed (a partial deployment), or nothing      | this push's cleanup. The full one it reused stays: the cleanup never deletes the one its plan reuses, and keeps `main-…` ones 45 minutes past main's next |
+| The push before                                       | What it left                                                | What deletes it                                                                                                                                       |
+| ----------------------------------------------------- | ----------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| deployed; its tests passed or failed                  | a whole deployment                                          | this push's Clean up superseded, once this push's deployment is ready                                                                                 |
+| was cancelled halfway through deploying               | some of its D1, R2 bucket, Artifacts namespace, KV, workers | the same                                                                                                                                              |
+| failed to deploy                                      | the same; the PR body says `deploy failed`                  | the same. Until then the push before it, the last to deploy, stays: the sweep never counts a deployment without its apps/os worker as the PR's newest |
+| is still deploying when this push's cleanup runs      | members created after this push's                           | nothing yet: the cleanup deletes only deployments made entirely before its own                                                                        |
+| had its own cleanup cancelled or failing              | the deployment before it                                    | this push's cleanup, else the nightly sweep an hour later                                                                                             |
+| changed nothing that deploys, and reused a deployment | nothing                                                     | nothing to delete: a `main-…` deployment it tested stays 45 minutes past main's next                                                                  |
 
-### Inherited verdicts and reused deployments
+### Inherited verdicts, reused deployments, and running part of a suite
 
 An experiment: a PR run tests its head, and skips what the head did not change
 since an ancestor, walking back through the PR's commits and then main's.
@@ -478,20 +478,20 @@ merges main in is a commit like any other, usually one that changes a lot.
   summary links that run (`scripts/ci/preview-inherit.ts`). When both inherit,
   nothing deploys. A red is never inherited, and E2E tests never inherits
   under the `slow-e2e` label.
-- **Reuse.** Deploy preview finds the nearest ancestor with a full deployment,
-  the PR's own or main's `main-<sha7>`. When the head did not change apps/os
-  since, it deploys only the apps it changed, as a partial deployment
-  `pr<n>-<sha7>` whose apps sign in against that one's apps/os
-  (`apps/os/scripts/preview-reuse.ts`); a tests-only push deploys nothing. The
-  PR body marks each reused row with the deployment it comes from, and the
-  suites test the plan Deploy preview uploads as its `preview-plan` artifact.
+- **Run part of a suite.** A suite that has to run after a green runs only
+  what the changed files select (`suiteSelection`): the changed e2e rows' files,
+  when that is all that changed; the changed spec files and the Playwright
+  projects of the apps that changed. A change to `apps/os`, to shared test code
+  or to the config runs the whole suite.
+- **Reuse.** When the head changed nothing that deploys since the nearest
+  ancestor with a deployment, the PR's own or main's `main-<sha7>`, Deploy
+  preview deploys nothing and the suites test that one
+  (`apps/os/scripts/preview-reuse.ts`). Otherwise it deploys all seven Workers.
+  The PR body marks each reused row with the deployment it comes from.
 
-A reused deployment stays while a run may use it: the run's cleanup never
-deletes its plan's `reuses`, a `main-…` deployment stays 45 minutes after a
-newer one was created, and the sweep keeps a PR's newest partial deployment
-beside its newest full one. So a PR branched from a main commit whose
-deployment is gone deploys in full on its first push. A test-only dispatch
-tests a PR's newest full deployment.
+A `main-…` deployment stays 45 minutes after a newer one was created, so a PR
+run can test against it. A PR branched from an older main deploys on its first
+push, then reuses its own deployment after that.
 
 ### Main runs
 
@@ -528,19 +528,19 @@ worker (next story).
 
 Every push to a PR runs the **Preview OS** workflow. Unless both suites inherit
 an ancestor's green ([Depot CI](depot-ci.md#which-pushes-need-a-preview)),
-**Deploy preview** deploys the PR's head: apps/os and all six clients, or only
-the apps the head changed since its nearest ancestor with a full deployment. It folds the PR body's
-managed section into a `<details>` first, so the links there read as the
-previous commit's, and writes the new deployment's section once it lands: a
-row per worker with its `Sign in ↗` and Cloudflare dashboard links,
-and the template quick-launch links. A deploy that fails leaves the previous
-section folded. **E2E tests** (the Vitest e2e
-suite, `pnpm preview e2e`) and **Browser specs** (the Playwright specs,
-`pnpm preview specs`) then run side by side against that deployment, each its
-own job and required check; **Clean up superseded** deletes the PR's older
-deployments beside them. A deploy that did not succeed turns both suites red
-rather than letting them report green. The verdicts live in those checks; the
-section holds links only.
+**Deploy preview** deploys the PR's head, apps/os and all six clients, or
+reuses its nearest ancestor's deployment when the head changed nothing that
+deploys since. It folds the PR body's managed section into a `<details>` first,
+so the links there read as the previous commit's, and writes the new
+deployment's section once it lands: a row per worker with its `Sign in ↗` and
+Cloudflare dashboard links, and the template quick-launch links. A deploy that
+fails leaves the previous section folded. **E2E tests** (the Vitest e2e suite,
+`pnpm preview e2e`) and **Browser specs** (the Playwright specs, `pnpm preview
+specs`) then run side by side against that deployment, each its own job and
+required check; **Clean up superseded** deletes the PR's older deployments
+beside them. A deploy that did not succeed turns both suites red rather than
+letting them report green. The verdicts live in those checks; the section holds
+links only.
 
 Closing or merging the PR runs `pnpm preview delete`, which deletes every
 deployment of the PR: its workers, D1, Artifacts namespace, KV namespaces and

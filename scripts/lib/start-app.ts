@@ -25,9 +25,7 @@ import {
   notesEnvs,
   osEnvs,
   previewDeployment,
-  previewPlanMembers,
   voiceEnvs,
-  type PreviewPlan,
 } from "../../envs.ts";
 import { deployApp } from "./deploy-app.ts";
 import { ensureProxiedDnsRecord, viteBuild } from "./deploy-helpers.ts";
@@ -114,12 +112,8 @@ export function ownZones(): string[] {
  *  vite.config.ts hands the Cloudflare Vite plugin (`cloudflare({ config })`); there is no wrangler
  *  file. `vite build` snapshots it into dist/server/wrangler.json, what a deploy ships. The
  *  environment is CLOUDFLARE_ENV, as deployApp and buildStartApp set it. */
-export function startAppWorkerConfig(
-  app: StartApp,
-  envName: string | undefined,
-  previewReuse: string | undefined,
-) {
-  const { env, platform, appOrigins } = linkedEnvironment(app, envName, previewReuse);
+export function startAppWorkerConfig(app: StartApp, envName: string | undefined) {
+  const { env, platform, appOrigins } = linkedEnvironment(app, envName);
   // THE APP'S CONFIGURATION, all of it from envs.ts; its schema documents each key
   // (@iterate-com/shared/start-app-config)
   const appConfig = {
@@ -163,35 +157,22 @@ export function startAppWorkerConfig(
   };
 }
 
-/** PREVIEW_REUSE, which buildStartApp sets for an app of a partial per-commit deployment (envs.ts
- *  `PreviewPlan`): the full deployment it reuses and the apps it deploys itself, as JSON. */
-const PreviewReuse = z.object({ reuses: z.string(), deploys: z.array(z.string()) });
-
 /** The app's own env and THE ENVIRONMENT ITS LINKS POINT INTO: a deployed app's own — prd's apps
  *  sign in against prd's platform, main on the dev/preview account's (`preview`) against its
- *  platform, and a per-commit deployment's against its plan's apps/os (envs.ts `previewPlanMembers`:
- *  its own, or the one it reuses), linking to its plan's apps — and prd's for local dev, which names a
- *  local issuer in a gitignored .dev.vars (`APP_CONFIG_URLS__OS=http://localhost:8788`, merged on
- *  top). */
+ *  platform, and a per-commit deployment's against that deployment's apps/os, linking to its apps
+ *  — and prd's for local dev, which names a local issuer in a gitignored .dev.vars
+ *  (`APP_CONFIG_URLS__OS=http://localhost:8788`, merged on top). */
 function linkedEnvironment(
   app: StartApp,
   envName: string | undefined,
-  previewReuse: string | undefined,
 ): { env: StartAppEnv | undefined; platform: { baseUrl: string }; appOrigins: string[][] } {
   const preview = envName ? previewDeployment(envName) : undefined;
-  if (preview) {
-    const reuse = previewReuse ? PreviewReuse.parse(JSON.parse(previewReuse)) : undefined;
-    const members = previewPlanMembers({
-      deployment: preview.name,
-      reuses: reuse?.reuses,
-      deploys: reuse?.deploys || [],
-    });
+  if (preview)
     return {
       env: preview.apps[app.name],
-      platform: members.os,
-      appOrigins: Object.entries(members.apps).map(([name, env]) => [name, env.baseUrl]),
+      platform: preview.os,
+      appOrigins: Object.entries(preview.apps).map(([name, env]) => [name, env.baseUrl]),
     };
-  }
   const env = envName ? app.envs[envName] : undefined;
   if (envName && !env)
     throw new Error(
@@ -340,17 +321,9 @@ async function generateRouteTree(app: StartApp, options: { check?: boolean }) {
 }
 
 /** `vite build` for one env: the cloudflare plugin snapshots that env's Worker config
- *  (startAppWorkerConfig) into dist/server/wrangler.json, which the deploy then ships. A per-commit
- *  deployment's app is built for its run's `plan`, which says what a partial deployment's app links
- *  to (PREVIEW_REUSE). */
-export function buildStartApp(app: StartApp, env: string, plan: PreviewPlan | undefined) {
-  return viteBuild(
-    fileURLToPath(app.root),
-    env,
-    plan?.reuses
-      ? { PREVIEW_REUSE: JSON.stringify({ reuses: plan.reuses, deploys: plan.deploys }) }
-      : {},
-  );
+ *  (startAppWorkerConfig) into dist/server/wrangler.json, which the deploy then ships. */
+export function buildStartApp(app: StartApp, env: string) {
+  return viteBuild(fileURLToPath(app.root), env);
 }
 
 /**

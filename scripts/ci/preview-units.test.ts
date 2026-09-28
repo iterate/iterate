@@ -12,6 +12,7 @@ import {
   previewMachineryPaths,
   previewSuites,
   suiteInputFiles,
+  suiteSelection,
   unitProductPaths,
 } from "./preview-units.ts";
 
@@ -53,6 +54,32 @@ test.for([
     }).toEqual({ units, e2e, specs });
   },
 );
+
+// The part of a suite a run needs when these are the files it depends on that changed since its last
+// green: the runner's arguments, or undefined for the whole suite.
+test.for<{ suite: "e2e" | "specs"; inputs: string[]; args?: string[] }>(
+  // prettier-ignore
+  [
+    { suite: "e2e", inputs: ["apps/os/e2e/fetch.e2e.test.ts"], args: ["apps/os/e2e/fetch.e2e.test.ts"] },
+    { suite: "e2e", inputs: ["apps/os/e2e/fetch.e2e.test.ts", "apps/agents/e2e/agents.e2e.test.ts"], args: ["apps/os/e2e/fetch.e2e.test.ts", "apps/agents/e2e/agents.e2e.test.ts"] },
+    { suite: "e2e", inputs: ["apps/os/e2e/support/client.ts"] },
+    { suite: "e2e", inputs: ["apps/os/e2e/fetch.e2e.test.ts", "packages/cli/src/index.ts"] },
+    { suite: "e2e", inputs: ["apps/os/src/worker.ts"] },
+    { suite: "specs", inputs: ["specs/dash/projects.spec.ts"], args: ["specs/dash/projects.spec.ts", "--project", "dash"] },
+    { suite: "specs", inputs: ["specs/os/auth.spec.ts"], args: ["specs/os/auth.spec.ts", "--project", "os", "--project", "os-phone"] },
+    { suite: "specs", inputs: ["specs/test-support/screenshot.spec.ts"], args: ["specs/test-support/screenshot.spec.ts", "--project", "suite"] },
+    { suite: "specs", inputs: ["apps/notes/src/editor.tsx"], args: ["specs/notes/", "--project", "notes"] },
+    { suite: "specs", inputs: ["apps/voice/src/a.tsx", "specs/dash/x.spec.ts"], args: ["specs/voice/", "specs/dash/x.spec.ts", "--project", "voice", "--project", "dash"] },
+    { suite: "specs", inputs: ["apps/dash/src/sidebar.tsx"], args: ["specs/dash/", "specs/notes/", "specs/voice/", "specs/admin/", "--project", "dash", "--project", "notes", "--project", "voice", "--project", "admin"] },
+    { suite: "specs", inputs: ["apps/os/src/worker.ts"] },
+    { suite: "specs", inputs: ["apps/kit/src/server.ts"] },
+    { suite: "specs", inputs: ["packages/ui/src/button.tsx"] },
+    { suite: "specs", inputs: ["specs/test-support/operator.ts"] },
+    { suite: "specs", inputs: ["playwright.config.ts"] },
+  ],
+)("$suite, changed $inputs ⇒ runs $args", ({ suite, inputs, args }) => {
+  expect(suiteSelection(suite, inputs)?.args).toEqual(args);
+});
 
 test("a unit's product is what deploys it to prd: its deploy workflow's push paths", () => {
   for (const unit of PREVIEW_UNITS) {

@@ -165,22 +165,20 @@ test("Preview OS deploys the PR's head, and the test jobs test that very commit"
   ).toEqual({ HEAD_SHA: "${{ needs.deploy.outputs.tested-sha }}" });
 });
 
-// What a PR run reuses (apps/os/scripts/preview-reuse.ts) only its deploy knows: the suites read its
-// plan from the run's artifact once their wait is over (preview.ts `planOfThisRun`), and the cleanup
-// keeps the deployment the plan reuses.
-test("Deploy preview hands its plan to the suites, and the cleanup keeps what it reuses", () => {
+// Whether a PR run reuses a deployment (apps/os/scripts/preview-reuse.ts) only its deploy knows: the
+// suites read its plan from the run's artifact once their wait is over (preview.ts `planOfThisRun`).
+// Which part of its suite to run, each suite job's own first step chose (preview-inherit.ts).
+test("Deploy preview hands its plan to the suites, and each suite runs the part its first step chose", () => {
   const deploySteps = preview.jobs.deploy!.steps || [];
   const deploy = deploySteps.findIndex((step) => step.id === "deploy");
   expect(deploySteps[deploy + 1]).toMatchObject({
     uses: "actions/upload-artifact@v4",
     with: { name: "preview-plan", path: "apps/os/output/preview.json" },
   });
-  expect(preview.jobs.deploy!.outputs).toMatchObject({
-    reuses: "${{ steps.deploy.outputs.reuses }}",
+  const suite = (preview.jobs.e2e!.steps || []).find((step) => step.id === "suite");
+  expect(suite?.env).toMatchObject({
+    PREVIEW_SELECTION: "${{ steps.changes.outputs.selection }}",
   });
-  expect(
-    preview.jobs.cleanup!.steps?.find((step) => step.run?.includes("cleanup-superseded"))?.env,
-  ).toMatchObject({ PREVIEW_REUSES: "${{ needs.deploy.outputs.reuses }}" });
 });
 
 test("Preview OS: only the trace runs after the suites, so the next push's deploy waits for nothing else", () => {

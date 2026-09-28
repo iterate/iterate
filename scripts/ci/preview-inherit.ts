@@ -14,7 +14,10 @@
 //      running, cancelled, skipped or neutral is no verdict: keep walking. Red is: run. None at all:
 //      run.
 //   3. Green, run or itself inherited: inherit it when the diff from that commit to the head touches
-//      nothing the suite depends on, else run. A diff GitHub cannot list in full is a run.
+//      nothing the suite depends on. Else run, and only the part of the suite those files select
+//      (preview-units.ts `suiteSelection`): the rest passed at the green and depends on nothing that
+//      changed since. After a red, with no verdict, or with a diff GitHub cannot list in full, the
+//      whole suite runs.
 //
 //   node scripts/ci/preview-inherit.ts
 //
@@ -22,12 +25,13 @@
 // own (PREVIEW_SUITES), on a pull request's push. It runs by node's own type stripping before
 // anything is installed, reads GitHub with the job's token (`checks: read`), and writes
 // `preview=false` to GITHUB_OUTPUT when every suite it is for inherits, which skips every later step,
-// else `preview=true`. A failure to decide is a warning and a run: a run that was not needed costs a
+// else `preview=true`. In a suite's job it also writes `selection`, the runner's arguments for the
+// part to run as JSON (`[]` for all of it), which apps/os/scripts/preview.ts `runSuite` passes on. A failure to decide is a warning and a run: a run that was not needed costs a
 // few minutes.
 import { spawnSync } from "node:child_process";
 import { appendFileSync } from "node:fs";
 import process from "node:process";
-import { suiteInputFiles, type PreviewSuite } from "./preview-units.ts";
+import { suiteInputFiles, suiteSelection, type PreviewSuite } from "./preview-units.ts";
 
 /** Each suite's checks, as Depot names them: a PR run's (preview-os.yml) and main's
  *  (main-os-e2e.yml, every row, the slow ones too). */
@@ -43,9 +47,13 @@ export const MAX_WALK = 20;
 /** The latest check run of a suite on one commit, as GitHub lists it. */
 export type SuiteCheck = { name: string; status: string; conclusion: string | null; url: string };
 
+/** The runner's arguments for part of a suite (preview-units.ts `suiteSelection`), or undefined
+ *  for all of it. */
+type Selection = { args: string[]; summary: string } | undefined;
+
 export type InheritDecision =
   | { inherit: true; from: { sha: string; url: string }; reason: string }
-  | { inherit: false; reason: string };
+  | { inherit: false; reason: string; selection: Selection };
 
 /** The rules above. `commits` is the head's history before the head, newest first; `checkOn`
  *  reads a commit's latest check of the suite; `changedSince` lists the files changed from a commit
@@ -58,37 +66,37 @@ export async function planInherit(input: {
   changedSince: (sha: string) => Promise<string[] | undefined>;
 }): Promise<InheritDecision> {
   const short = (sha: string) => `\`${sha.slice(0, 7)}\``;
+  const all = (reason: string): InheritDecision => ({
+    inherit: false,
+    reason,
+    selection: undefined,
+  });
   if (input.suite === "e2e" && input.labels.includes("slow-e2e"))
-    return { inherit: false, reason: "the PR has the slow-e2e label" };
+    return all("the PR has the slow-e2e label");
   for (const [index, sha] of input.commits.slice(0, MAX_WALK).entries()) {
     const found = await input.checkOn(sha);
     if (!found || found.status !== "completed") continue;
     if (["cancelled", "skipped", "neutral"].includes(found.conclusion || "")) continue;
     const where = `${found.name} on ${short(sha)}, ${index + 1} commit(s) back`;
-    if (found.conclusion !== "success")
-      return { inherit: false, reason: `${where} was ${found.conclusion}` };
+    if (found.conclusion !== "success") return all(`${where} was ${found.conclusion}`);
     const files = await input.changedSince(sha);
-    if (!files)
-      return {
-        inherit: false,
-        reason: `GitHub cannot list every file changed since ${short(sha)}`,
-      };
+    if (!files) return all(`GitHub cannot list every file changed since ${short(sha)}`);
     const inputs = suiteInputFiles(input.suite, files);
-    if (inputs.length > 0)
+    if (inputs.length > 0) {
+      const selection = suiteSelection(input.suite, inputs);
       return {
         inherit: false,
-        reason: `${files.length} file(s) changed since ${where} passed, and it depends on ${inputs.length}: ${inputs.slice(0, 3).join(", ")}${inputs.length > 3 ? ", …" : ""}`,
+        reason: `${files.length} file(s) changed since ${where} passed, and it depends on ${inputs.length}: ${inputs.slice(0, 3).join(", ")}${inputs.length > 3 ? ", …" : ""}; it runs ${selection ? selection.summary : "everything"}`,
+        selection,
       };
+    }
     return {
       inherit: true,
       from: { sha, url: found.url },
       reason: `${where} passed, and none of the ${files.length} file(s) changed since is one it depends on`,
     };
   }
-  return {
-    inherit: false,
-    reason: `none of the head's last ${MAX_WALK} ancestors has a verdict of this suite`,
-  };
+  return all(`none of the head's last ${MAX_WALK} ancestors has a verdict of this suite`);
 }
 
 /** GitHub's REST answer at `path`, with the job's token. */
@@ -195,6 +203,7 @@ async function main() {
     });
   const head = spawnSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).stdout.trim();
   let inherited = false;
+  let selection: Selection;
   try {
     const decisions = await inheritFromGitHub({ number, headSha: head, suites });
     for (const decision of decisions)
@@ -202,6 +211,8 @@ async function main() {
         `${decision.suite === "e2e" ? "E2E tests" : "Browser specs"} ${decision.inherit ? "inherits" : "runs"}: ${decision.reason}`,
       );
     inherited = decisions.every((decision) => decision.inherit);
+    const [only] = decisions;
+    if (decisions.length === 1 && only && !only.inherit) selection = only.selection;
     if (inherited) {
       const lines = decisions.flatMap((decision) =>
         decision.inherit
@@ -221,7 +232,10 @@ async function main() {
   }
   console.log(inherited ? "no preview to deploy or test" : "the preview is needed");
   if (process.env.GITHUB_OUTPUT)
-    appendFileSync(process.env.GITHUB_OUTPUT, `preview=${!inherited}\n`);
+    appendFileSync(
+      process.env.GITHUB_OUTPUT,
+      `preview=${!inherited}\nselection=${JSON.stringify(selection?.args || [])}\n`,
+    );
 }
 
 if (process.argv[1]?.endsWith("preview-inherit.ts")) {
