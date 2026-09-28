@@ -136,6 +136,8 @@ What else changes:
 
 ## References
 
+- Explainer for newcomers: `explainers/ci-inherit-and-reuse.html`, at https://ci-reports.iterate-dev-preview.workers.dev/explainers/ci-change-detection/ci-inherit-and-reuse once ci-reports serves explainers (#3395)
+
 - Old draft: `git show 'stash@{0}^2:tasks/ci-change-detection.md'` (the stash's index commit, `de2457c92`)
 - Old planner: `git show 97ffd6fd65:scripts/preview/change-plan.ts` (#2712); history via the API: `origin/codex/lazy-preview-history` (#2744); both deleted by #2837
 - Per-commit deployments: #3165, `envs.ts` `previewDeployment`, `apps/os/scripts/preview.ts`, `preview-sweep.ts` `planSupersededCleanup`
