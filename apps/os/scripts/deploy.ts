@@ -28,8 +28,9 @@ export default async function deploy(
     // The private login settings and at-rest key come from Doppler. Public URLs come from envs.ts.
     requiredSecrets: ["APP_CONFIG", "APP_CONFIG_SECRETS__KEY"],
     // The configuration is checked first, as the Worker will read it: the generated vars and these
-    // secrets (it holds no others; `--secrets-file` would keep any). A key the schema does not name,
-    // or a malformed field, fails the deploy here while the running version keeps serving. The
+    // secrets (it holds no others; `--secrets-file` would keep any). A malformed field fails the
+    // deploy here while the running version keeps serving; a key the schema does not name is only
+    // warned about, as the Worker does, since another branch may have added it. The
     // control plane's D1 is migrated before the code that reads it uploads, so a migration that
     // fails leaves the running version serving; a migration must keep that version working for the
     // minute until the upload (scripts/d1.ts).
