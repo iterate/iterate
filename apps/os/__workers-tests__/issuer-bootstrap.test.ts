@@ -224,6 +224,17 @@ test("the setup prompt an agent follows is served beside the pages, and the land
   expect(page).toContain('href="/setup-prompt.md"');
 });
 
+test("the recipe an agent follows to connect a service is served beside the pages", async () => {
+  fetchReachesThisWorker();
+  const recipe = await exports.default.fetch(`${ORIGIN}/connect-a-service.md`);
+  expect(recipe).toMatchObject({ status: 200 });
+  expect(recipe.headers.get("content-type")).toMatch(/^text\/(markdown|plain)/);
+  const text = await recipe.text();
+  expect(text).toContain("itx.secrets.collectFromUser");
+  expect(text).toContain("itx.secrets.beginOAuth");
+  expect(text).toContain("/.secrets/oauth/callback");
+});
+
 test("a client on a project's custom apex is bound to that project at consent, like one under the hostname base", async () => {
   fetchReachesThisWorker();
   const user = await person("custom-apex@example.com");

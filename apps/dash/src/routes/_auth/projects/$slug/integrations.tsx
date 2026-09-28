@@ -1348,23 +1348,17 @@ function mcpServerOf(info: { mcpOrigin: string; platformOrigin: string }) {
  *  `service` with the platform's own verbs, keys never in the chat. */
 function agentPromptOf(service: string, projectSlug: string, platformOrigin: string | null) {
   const name = service.trim() || "<service>";
-  const slug =
-    name
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, "-")
-      .replace(/^-|-$/g, "") || "service";
+  const guide = platformOrigin ? `${platformOrigin}/connect-a-service.md` : "connect-a-service.md";
   return [
     `Connect ${name} to my iterate project "${projectSlug}", using iterate's MCP server.`,
-    `- API key: ask me for it with itx.secrets.collectFromUser({ path: "/secrets/${slug}", egress: { urls: [<${name}'s API origin>] } }) and send me the link, never in the chat.`,
-    `- OAuth: tell me how to register an OAuth app${platformOrigin ? ` (redirect URL ${platformOrigin}/.secrets/oauth/callback)` : ""}, collect its client secret the same way, then send me the link from itx.secrets.beginOAuth("/secrets/${slug}", …).`,
-    `- Put getSecret("/secrets/${slug}") wherever the key goes; the platform swaps the real key in on the way out.`,
-    `- If ${name} has an MCP server or an OpenAPI document, use itx.connectToMcp(url, { headers }) or itx.connectToOpenApi(url, { headers }); else its npm SDK in the config repo.`,
+    `Read ${guide} first and follow it step by step.`,
+    "Never ask me for a key in the chat: send me a link whenever I have to do something, and wait for me to say done.",
     `Finish with one read-only call to ${name} that shows it works.`,
   ].join("\n");
 }
 
 /** ANOTHER SERVICE: the easiest way is the person's own coding agent, connected to this project over
- *  MCP and asked to connect it; the ways it would use are listed below for doing it by hand. */
+ *  MCP and asked to connect it by the platform's recipe (apps/os/public/connect-a-service.md). */
 function OtherService({
   projectSlug,
   mcpServer,
@@ -1451,44 +1445,19 @@ function OtherService({
           </div>
           <pre className="rounded-md bg-muted px-3 py-2 text-xs whitespace-pre-wrap">{prompt}</pre>
         </Field>
-        <div className="flex flex-col gap-2 text-sm">
-          <p className="font-medium">By hand</p>
-          <ul className="flex flex-col gap-1.5 text-muted-foreground">
-            <li>
-              <span className="text-foreground">An API key:</span> add it on the{" "}
-              <Link
-                to="/projects/$slug/secrets"
-                params={{ slug: projectSlug }}
-                className="underline underline-offset-4"
-              >
-                Secrets page
-              </Link>
-              , then send <code>getSecret("/secrets/name")</code> where the key goes.
-            </li>
-            <li>
-              <span className="text-foreground">OAuth:</span> <code>itx.secrets.beginOAuth</code>
-              {platformOrigin ? (
-                <>
-                  , redirect URL{" "}
-                  <code className="break-all">{platformOrigin}/.secrets/oauth/callback</code>
-                </>
-              ) : null}
-              .
-            </li>
-            <li>
-              <span className="text-foreground">An MCP server:</span>{" "}
-              <code>itx.connectToMcp(url, {"{ headers }"})</code>.
-            </li>
-            <li>
-              <span className="text-foreground">An OpenAPI document:</span>{" "}
-              <code>itx.connectToOpenApi(url, {"{ headers }"})</code>.
-            </li>
-            <li>
-              <span className="text-foreground">An npm SDK:</span> a dependency in the config repo,
-              with the placeholder as its token.
-            </li>
-          </ul>
-        </div>
+        {platformOrigin && (
+          <p className="text-sm text-muted-foreground">
+            The recipe your agent follows, for doing it by hand too:{" "}
+            <a
+              href={`${platformOrigin}/connect-a-service.md`}
+              target="_blank"
+              rel="noreferrer"
+              className="underline underline-offset-4"
+            >
+              connect-a-service.md
+            </a>
+          </p>
+        )}
       </FieldGroup>
     </div>
   );

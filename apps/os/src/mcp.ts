@@ -51,27 +51,33 @@ async function projectOfToolCall(
 }
 
 // Shared by initialize and tools/list so clients receive the same usage guidance from either.
-const runInstructions = [
-  "One tool, `run({ project?, script })`: evaluate a JavaScript function, `async (itx) => { ... }`, with the selected project's root `itx` handle at `/`. Pass a project slug or id when your token reaches several projects.",
-  'Start by inspecting identity and capabilities:\n```json\n{"script":"async (itx) => ({ identity: await itx.whoami(), capabilities: await itx.rewriteRules.list() })"}\n```',
-  'Use `itx.cd("/path")` to address another context in this project. Each call runs the complete script in a worker, for at most ten minutes; await operations and return JSON-serializable results. Carry state between calls in returned results or stored data. Requests and settlements are logged at `/`, attributed to your principal and grant; project rewrite rules apply.',
-  'The config repo is `itx.repos.get("/repos/config")`. Use `listFiles()` and `readFile(path)` to inspect existing files, including `AGENTS.md` when present. Commit edits with `commitFiles({ message, changes: [{ path, content }] })`; file paths are repo-relative. A config-repo commit publishes the project worker.',
-  `Read the current worker:
+const runInstructionsOf = (platformOrigin: string) =>
+  [
+    "One tool, `run({ project?, script })`: evaluate a JavaScript function, `async (itx) => { ... }`, with the selected project's root `itx` handle at `/`. Pass a project slug or id when your token reaches several projects.",
+    'Start by inspecting identity and capabilities:\n```json\n{"script":"async (itx) => ({ identity: await itx.whoami(), capabilities: await itx.rewriteRules.list() })"}\n```',
+    'Use `itx.cd("/path")` to address another context in this project. Each call runs the complete script in a worker, for at most ten minutes; await operations and return JSON-serializable results. Carry state between calls in returned results or stored data. Requests and settlements are logged at `/`, attributed to your principal and grant; project rewrite rules apply.',
+    'The config repo is `itx.repos.get("/repos/config")`. Use `listFiles()` and `readFile(path)` to inspect existing files, including `AGENTS.md` when present. Commit edits with `commitFiles({ message, changes: [{ path, content }] })`; file paths are repo-relative. A config-repo commit publishes the project worker.',
+    `Read the current worker:
 \`\`\`json
 {"script":"async (itx) => itx.repos.get('/repos/config').readFile('worker.ts')"}
 \`\`\``,
-  `Commit a file (this writes to the repo; replace the example path and content with your intended edit):
+    `Commit a file (this writes to the repo; replace the example path and content with your intended edit):
 \`\`\`json
 {"script":"async (itx) => itx.repos.get('/repos/config').commitFiles({ message: 'Add a note', changes: [{ path: 'notes.txt', content: 'Hello from MCP' }] })"}
 \`\`\``,
-  'Website source may be TypeScript (types are stripped, not checked) or JavaScript; files import each other by relative path. Import packages by name: `iterate/*` and `zod` come from the platform, any other package is listed in `package.json` `dependencies` and fetched from npm through esm.sh (packages that need Node.js builtins are refused). Preview a candidate with `itx.workers.get({ source: { "worker.ts": candidateSource } }).fetch(new Request(projectUrl))`; sibling files and `package.json` go in `source` beside `worker.ts` under their repo paths. After committing, fetch the `projectUrl` returned by `itx.whoami()` and verify the expected response before reporting publication success.',
-  "Working examples: https://raw.githubusercontent.com/iterate/iterate/main/apps/os/e2e/mcp-project-root.e2e.test.ts — use the `async (itx) => ...` scripts and repo commit examples. The surrounding OAuth setup, project creation and assertions are the integration-test harness; your MCP connection supplies authentication and the project handle. Discover the live capabilities with `itx.rewriteRules.list()`.",
-].join("\n\n");
+    'Website source may be TypeScript (types are stripped, not checked) or JavaScript; files import each other by relative path. Import packages by name: `iterate/*` and `zod` come from the platform, any other package is listed in `package.json` `dependencies` and fetched from npm through esm.sh (packages that need Node.js builtins are refused). Preview a candidate with `itx.workers.get({ source: { "worker.ts": candidateSource } }).fetch(new Request(projectUrl))`; sibling files and `package.json` go in `source` beside `worker.ts` under their repo paths. After committing, fetch the `projectUrl` returned by `itx.whoami()` and verify the expected response before reporting publication success.',
+    "Working examples: https://raw.githubusercontent.com/iterate/iterate/main/apps/os/e2e/mcp-project-root.e2e.test.ts — use the `async (itx) => ...` scripts and repo commit examples. The surrounding OAuth setup, project creation and assertions are the integration-test harness; your MCP connection supplies authentication and the project handle. Discover the live capabilities with `itx.rewriteRules.list()`.",
+    `To connect a service to the project (an API key, an OAuth app, a hosted MCP server, an OpenAPI API), read ${platformOrigin}/connect-a-service.md first and follow it step by step.`,
+  ].join("\n\n");
 
 /** Initialization includes usage guidance and the projects this token reaches, so the client can
  *  select one before running a script. Read from the control plane, like the tool's project check,
  *  and only for a request whose answer carries them (`answersWithInstructions`). */
-async function serverInstructions(controlPlane: ControlPlane, reach: Reach): Promise<string> {
+async function serverInstructions(
+  controlPlane: ControlPlane,
+  reach: Reach,
+  platformOrigin: string,
+): Promise<string> {
   const projects = await controlPlane.reachableProjects(reach);
   const reachable =
     projects.length === 0
@@ -79,7 +85,7 @@ async function serverInstructions(controlPlane: ControlPlane, reach: Reach): Pro
       : projects.length === 1
         ? `This token reaches one project, ${projects[0]!.slug} (${projects[0]!.id}) — \`project\` may be omitted.`
         : `This token reaches ${String(projects.length)} projects — pass \`project\` (slug or id): ${projects.map((project) => `${project.slug} (${project.id})`).join(", ")}.`;
-  return [runInstructions, reachable].join("\n");
+  return [runInstructionsOf(platformOrigin), reachable].join("\n");
 }
 
 const validator = new CfWorkerJsonSchemaValidator();
@@ -98,14 +104,16 @@ async function buildServer(
   const caller = { principal, grant: grant?.grantId, platformOrigin };
   const mcpServer = new McpServer(
     { name: "control-plane", version: "0.1.0" },
-    instructed ? { instructions: await serverInstructions(controlPlane, reach) } : {},
+    instructed
+      ? { instructions: await serverInstructions(controlPlane, reach, platformOrigin) }
+      : {},
   );
 
   mcpServer.registerTool(
     "run",
     {
       title: "Run a script",
-      description: runInstructions,
+      description: runInstructionsOf(platformOrigin),
       inputSchema: fromJsonSchema(
         {
           type: "object",
