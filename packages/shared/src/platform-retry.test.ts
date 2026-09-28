@@ -8,6 +8,7 @@ import {
   type FailureKind,
   HttpAnswerError,
   httpFailureKind,
+  isNotRoutedYet,
   isOpaqueInternalError,
   ONCE_NOW,
   retryPlatformFailures,
@@ -149,6 +150,42 @@ test.for([
   { name: "any other error", answer: new Error("boom"), kind: "failed" },
 ])("httpFailureKind: $name", ({ answer, kind }) => {
   expect(httpFailureKind(answer)).toBe(kind);
+});
+
+// Cloudflare's own answers, as a brand-new -os hostname got them from servers in LHR and in the
+// colos Depot's runners reach (2026-09-28), beside the Worker's own answers shaped like them.
+test.for([
+  {
+    name: "the There is nothing here yet page, by its header alone",
+    answer: { status: 404, headers: { "x-preview-user-error": "true" } },
+    notRouted: true,
+  },
+  { name: "error code: 1042, a 404", answer: plain(404, "error code: 1042"), notRouted: true },
+  { name: "error code: 1104, a 500", answer: plain(500, "error code: 1104\n"), notRouted: true },
+  {
+    name: "the Worker's own Page not found page",
+    answer: {
+      status: 404,
+      headers: { "content-type": "text/html" },
+      body: "<title>Page not found</title>",
+    },
+    notRouted: false,
+  },
+  { name: "the Worker's JSON 404", answer: plain(404, '{"error":"not found"}'), notRouted: false },
+  {
+    name: "the page's header on a 200",
+    answer: { status: 200, headers: { "x-preview-user-error": "true" } },
+    notRouted: false,
+  },
+  { name: "1104's code on a 404", answer: plain(404, "error code: 1104"), notRouted: false },
+  { name: "1042's code on a 500", answer: plain(500, "error code: 1042"), notRouted: false },
+  {
+    name: "a plain 404 whose body was not read",
+    answer: { status: 404, headers: { "content-type": "text/plain" } },
+    notRouted: false,
+  },
+])("isNotRoutedYet: $name", ({ answer, notRouted }) => {
+  expect(isNotRoutedYet(answer)).toBe(notRouted);
 });
 
 test.for([
@@ -496,6 +533,11 @@ function stamped(message: string, stamps: object): Error {
 /** A D1 failure as its binding throws it. */
 function d1(message: string): Error {
   return new Error(`D1_ERROR: ${message}`);
+}
+
+/** A plain-text answer, read. */
+function plain(status: number, body: string) {
+  return { status, headers: { "content-type": "text/plain; charset=UTF-8" }, body };
 }
 
 /** A failed HTTP answer, as a script's call throws it. */
