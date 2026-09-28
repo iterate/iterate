@@ -123,6 +123,13 @@ void iterate_kit_host_esp_log(
 
 /* --- heap and system ------------------------------------------------------ */
 
+void *heap_caps_malloc(size_t size, uint32_t capabilities) {
+  (void)capabilities;
+  return malloc(size);
+}
+
+void heap_caps_free(void *pointer) { free(pointer); }
+
 size_t heap_caps_get_free_size(uint32_t capabilities) {
   (void)capabilities;
   return 4U * 1024U * 1024U;

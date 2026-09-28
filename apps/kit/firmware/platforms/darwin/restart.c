@@ -9,6 +9,8 @@
 
 const char *iterate_kit_platform_reset_reason_name(void) { return "started"; }
 
+bool iterate_kit_platform_reset_by_person(void) { return true; }
+
 void iterate_kit_platform_restart_with_note(const char *why) {
   iterate_kit_host_esp_idf_set_restart_note(why);
   esp_restart();

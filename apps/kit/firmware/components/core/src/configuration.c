@@ -22,7 +22,29 @@ enum {
   CONFIGURATION_FIELD_OS_BASE_URL = 3,
   CONFIGURATION_FIELD_PROJECT_ID = 4,
   CONFIGURATION_FIELD_PROJECT_API_KEY = 5,
+  CONFIGURATION_FIELD_STATUS_VOICE = 6,
 };
+
+/* Indexed by enum iterate_kit_status_voice; tools/make-config-image.py and src/firmware/config-image.ts write these. */
+static const char *const status_voice_names[] = {
+  "greensleeves", "daisy-bell", "auld-lang-syne", "lass-of-aughrim", "spoken", "off",
+};
+
+const char *iterate_kit_status_voice_name(enum iterate_kit_status_voice voice) {
+  return (size_t)voice < sizeof(status_voice_names) / sizeof(status_voice_names[0])
+             ? status_voice_names[voice]
+             : "unknown";
+}
+
+/* A name this firmware does not know is the default, not an error (see the enum). */
+static uint8_t decode_status_voice(const uint8_t *value, size_t length) {
+  for (size_t i = 0; i < sizeof(status_voice_names) / sizeof(status_voice_names[0]); i++) {
+    if (strlen(status_voice_names[i]) == length && memcmp(status_voice_names[i], value, length) == 0) {
+      return (uint8_t)i;
+    }
+  }
+  return ITERATE_KIT_STATUS_VOICE_GREENSLEEVES;
+}
 
 static const uint8_t configuration_magic_prefix[] = {
   'I', 'T', 'E', 'R', 'K', 'I', 'T',
@@ -349,6 +371,8 @@ enum iterate_kit_configuration_error iterate_kit_configuration_decode(
         destination = configuration->project_api_key;
         capacity = sizeof(configuration->project_api_key);
         break;
+      case CONFIGURATION_FIELD_STATUS_VOICE:
+        break;
       default:
         /*
          * Unknown tags are length-delimited and integrity-protected, so older
@@ -365,6 +389,10 @@ enum iterate_kit_configuration_error iterate_kit_configuration_decode(
           ITERATE_KIT_CONFIGURATION_DUPLICATE_FIELD);
     }
     seen_fields |= UINT32_C(1) << field;
+    if (field == CONFIGURATION_FIELD_STATUS_VOICE) {
+      configuration->status_voice = decode_status_voice(value, field_size);
+      continue;
+    }
     copy_error = copy_field(
         destination, capacity, value, field_size, allow_empty);
     if (copy_error != ITERATE_KIT_CONFIGURATION_OK) {

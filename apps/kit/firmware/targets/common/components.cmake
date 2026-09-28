@@ -12,5 +12,6 @@ list(APPEND EXTRA_COMPONENT_DIRS
   "${ITERATE_KIT_FIRMWARE_ROOT}/components/core"
   "${ITERATE_KIT_FIRMWARE_ROOT}/components/audio"
   "${ITERATE_KIT_FIRMWARE_ROOT}/components/capabilities"
+  "${ITERATE_KIT_FIRMWARE_ROOT}/components/tinyvoice"
   "${ITERATE_KIT_FIRMWARE_ROOT}/components/voice"
   "${ITERATE_KIT_FIRMWARE_ROOT}/platforms/iterate_esp_idf")

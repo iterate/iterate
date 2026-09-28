@@ -20,7 +20,7 @@ import {
 import { Spinner } from "@iterate-com/ui/components/spinner";
 import { UsbIcon } from "lucide-react";
 import type { FirmwareDevice } from "../firmware/catalog.ts";
-import type { DeviceConfiguration } from "../firmware/config-image.ts";
+import type { DeviceConfiguration, StatusVoice } from "../firmware/config-image.ts";
 import { flashDevice, openDeviceLogs, type FlashProgress } from "../firmware/flash-device.ts";
 import type { FirmwareManifest } from "../firmware/prepare-manifest.ts";
 import { DeviceLogs } from "./device-logs.tsx";
@@ -30,6 +30,7 @@ export interface SetupInput {
   project: { id: string; slug: string };
   openaiKey: string;
   wifi: { ssid: string; password: string };
+  statusVoice: StatusVoice;
 }
 
 /**

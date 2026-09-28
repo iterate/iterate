@@ -29,6 +29,7 @@ import { EyeIcon, EyeOffIcon, LogOutIcon, UsbIcon } from "lucide-react";
 import { publishedVersion } from "@iterate-com/agents/install";
 import { ensureVoiceAgent } from "@iterate-com/voice/install";
 import { SetupWizard, type SetupInput } from "../../components/setup-wizard.tsx";
+import { isStatusVoice, statusVoices } from "../../firmware/config-image.ts";
 import {
   DEFAULT_DEVICE_ID,
   DEFAULT_FIRMWARE_VERSION,
@@ -147,6 +148,7 @@ function KitPage() {
             projectId: input.project.id,
             projectApiKey: token,
           },
+          statusVoice: input.statusVoice,
         };
       } catch (error) {
         // capnweb says `Peer closed WebSocket: 1006`; `api` opens a fresh socket on its next call
@@ -214,10 +216,13 @@ function KitPage() {
               navigator.credentials
                 .store(new PasswordCredential({ id: wifi.ssid, password: wifi.password }))
                 .catch((error: unknown) => console.warn("kit.wifi_not_saved", error));
+            const statusVoice = String(form.get("status-voice"));
+            if (!isStatusVoice(statusVoice)) throw new Error(`Unknown status voice ${statusVoice}`);
             preparing.mutate({
               project,
               openaiKey: String(form.get("openai-key") || ""),
               wifi,
+              statusVoice,
             });
           }}
         >
@@ -411,6 +416,32 @@ function KitPage() {
                 autoComplete="current-password"
               />
               <FieldDescription>Leave empty for an open network.</FieldDescription>
+            </FieldContent>
+          </Field>
+
+          <Field className={horizontalFieldClassName}>
+            <FieldLabel htmlFor="status-voice" className="sm:pt-2">
+              Status voice
+            </FieldLabel>
+            <FieldContent>
+              <Select name="status-voice" items={statusVoices} defaultValue="greensleeves">
+                <SelectTrigger id="status-voice" className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectGroup>
+                    {statusVoices.map((voice) => (
+                      <SelectItem key={voice.value} value={voice.value}>
+                        {voice.label}
+                      </SelectItem>
+                    ))}
+                  </SelectGroup>
+                </SelectContent>
+              </Select>
+              <FieldDescription>
+                How the board says “Connecting to Wi-Fi”, “Ready” and “Call ended”. A board with a
+                wake word also answers it with “Hello”.
+              </FieldDescription>
             </FieldContent>
           </Field>
 

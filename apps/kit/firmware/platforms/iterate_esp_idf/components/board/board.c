@@ -342,6 +342,12 @@ static void play_sound(const uint8_t *pcm, uint32_t bytes) {
   }
 }
 
+/* The loop's spoken status: PCM16 through the same player as the chimes. */
+static void play_clip(void *context, const int16_t *pcm, size_t samples) {
+  (void)context;
+  play_sound((const uint8_t *)pcm, (uint32_t)(samples * sizeof(int16_t)));
+}
+
 static void poll(void *context, struct iterate_kit_voice_intent *out) {
   (void)context;
   const uint64_t now_ms = (uint64_t)(esp_timer_get_time() / 1000);
@@ -349,11 +355,15 @@ static void poll(void *context, struct iterate_kit_voice_intent *out) {
   *out = (struct iterate_kit_voice_intent){0};
   if (board->extra != NULL && board->extra->poll != NULL) board->extra->poll(NULL, out);
   microphone_muted = out->microphone_muted;
+  bool heard_wake_word = false;
 #ifdef CONFIG_ITERATE_KIT_WAKE_WORD
   /* Worker detections reach the same synthetic-tap queue as capabilities. */
   if (!microphone_muted && board->wake_word != NULL &&
       !view.call_active && !view.wants_call &&
-      iterate_kit_wake_word_take_detection()) iterate_kit_board_inject_press();
+      iterate_kit_wake_word_take_detection()) {
+    heard_wake_word = true;
+    iterate_kit_board_inject_press();
+  }
 #endif
   if (board->button.gpio >= 0) {
     const bool pressed = (gpio_get_level(board->button.gpio) == 0) == board->button.active_low;
@@ -368,10 +378,12 @@ static void poll(void *context, struct iterate_kit_voice_intent *out) {
     .start_call = !microphone_muted && actions.start_call,
     .end_call = microphone_muted ? (view.call_active || view.wants_call) : actions.end_call,
     .microphone_muted = microphone_muted,
+    .wake_word = heard_wake_word,
   };
-  /* End before wake: replacement playback leaves the newer intent audible. */
-  if (!microphone_muted && actions.end_chime) play_sound(board->sounds.ended, board->sounds.ended_bytes);
-  if (!microphone_muted && actions.wake_chime) play_sound(board->sounds.wake, board->sounds.wake_bytes);
+  /* A start the loop answers out loud ("Hello!", or why it cannot talk) gets no chime as well. */
+  const bool answered = heard_wake_word ? view.voice_answers_wake_word : view.voice_answers_press;
+  /* A session's end is the loop's to say ("Call ended.", iterate/kit/announcer.h). */
+  if (!microphone_muted && actions.wake_chime && !answered) play_sound(board->sounds.wake, board->sounds.wake_bytes);
 }
 
 static void phase(void *context, enum iterate_kit_voice_phase value) {
@@ -430,6 +442,7 @@ void iterate_kit_board_run(const struct iterate_kit_board *value) {
   facts.speaker.set_volume = set_volume;
   facts.speaker.volume = volume;
   facts.speaker.context = NULL;
+  facts.clip_peak = board->sounds.speech_peak;
   struct iterate_kit_board_ops ops = board->extra != NULL ? *board->extra : (struct iterate_kit_board_ops){0};
   ops.start = start;
   ops.present = present;
@@ -437,6 +450,7 @@ void iterate_kit_board_run(const struct iterate_kit_board *value) {
   ops.phase = phase;
   ops.health = health;
   ops.modules = iterate_kit_board_modules;
+  ops.play_clip = play_clip;
   iterate_kit_voice_loop_run(&ops, &facts, NULL);
 }
 #endif

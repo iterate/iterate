@@ -14,6 +14,7 @@ if(COMMAND idf_component_register)
       capabilities
       core
       iterate_esp_idf
+      tinyvoice
       esp_timer
       esp_netif
       esp_wifi
@@ -50,7 +51,8 @@ else()
       iterate-kit-audio
       iterate-kit-capabilities
       iterate-kit-core
-      iterate-kit-host-esp-idf)
+      iterate-kit-host-esp-idf
+      iterate-kit-tinyvoice)
     target_compile_features(${NAME} PUBLIC c_std_11)
     target_compile_options(${NAME} PRIVATE -Wall -Wextra -Werror)
   endfunction()

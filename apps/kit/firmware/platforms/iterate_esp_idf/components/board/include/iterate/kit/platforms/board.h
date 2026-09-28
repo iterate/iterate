@@ -39,7 +39,12 @@ struct iterate_kit_board_gestures {
 };
 
 /** Flash-resident 16 kHz PCM16LE chimes; NULL = silent. */
-struct iterate_kit_board_sounds { const uint8_t *wake; uint32_t wake_bytes; const uint8_t *ended; uint32_t ended_bytes; };
+struct iterate_kit_board_sounds {
+  const uint8_t *wake;
+  uint32_t wake_bytes;
+  /** The loudest sample of the loop's spoken status here: ITERATE_KIT_SPEECH_PEAK from the bake. */
+  uint16_t speech_peak;
+};
 
 /**
  * THE BOARD, AS DATA. Three things are code because no table can say them:

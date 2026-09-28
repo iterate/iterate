@@ -26,6 +26,7 @@ const configuration: DeviceConfiguration = {
     projectId: "prj_voice_lab",
     projectApiKey: "itxk_test",
   },
+  statusVoice: "greensleeves",
 };
 
 test("loadFirmwareManifest: fetches from Kit's origin and makes the part paths absolute", async () => {

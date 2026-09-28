@@ -13,6 +13,7 @@ const configuration: DeviceConfiguration = {
     projectId: "prj_voice_lab",
     projectApiKey: "itxk_secret",
   },
+  statusVoice: "greensleeves",
 };
 
 test("normalizeOsBaseUrl: defaults a bare host to HTTPS", () => {
@@ -36,8 +37,9 @@ test("encodeDeviceConfiguration: writes fields the firmware's own decoder accept
   expect(fields.get(3)).toBe("https://os.iterate.com");
   expect(fields.get(4)).toBe("prj_voice_lab");
   expect(fields.get(5)).toBe("itxk_secret");
-  // Every field the firmware requires, and nothing it would reject.
-  expect([...fields.keys()].sort()).toEqual([1, 2, 3, 4, 5]);
+  expect(fields.get(6)).toBe("greensleeves");
+  // Every field the firmware requires, the status voice, and nothing it would reject.
+  expect([...fields.keys()].sort()).toEqual([1, 2, 3, 4, 5, 6]);
 });
 
 test("encodeDeviceConfiguration: writes an empty password tag for an open network", () => {
@@ -48,7 +50,7 @@ test("encodeDeviceConfiguration: writes an empty password tag for an open networ
     encodeDeviceConfiguration({ ...configuration, wifi: { ssid: "open-cafe", password: "" } }, 512),
   );
   expect(fields.get(2)).toBe("");
-  expect([...fields.keys()].sort()).toEqual([1, 2, 3, 4, 5]);
+  expect([...fields.keys()].sort()).toEqual([1, 2, 3, 4, 5, 6]);
 });
 
 test("encodeDeviceConfiguration: refuses an empty required field instead of shipping a partition the device will reject", () => {
@@ -117,6 +119,20 @@ test("encodeDeviceConfiguration: rejects Wi-Fi and project identities that boot 
       512,
     ),
   ).toThrow("invalid project id");
+});
+
+test("encodeDeviceConfiguration: writes the status voice by the name configuration.c decodes", () => {
+  const fields = decodeLikeFirmware(
+    encodeDeviceConfiguration({ ...configuration, statusVoice: "lass-of-aughrim" }, 512),
+  );
+  expect(fields.get(6)).toBe("lass-of-aughrim");
+  expect(() =>
+    encodeDeviceConfiguration(
+      // @ts-expect-error a name the firmware does not know, as a stale page could send
+      { ...configuration, statusVoice: "sea-shanty" },
+      512,
+    ),
+  ).toThrow("invalid status voice");
 });
 
 /* A project's id on the platform IS its DNS-safe slug: no `prj_` to insist on,

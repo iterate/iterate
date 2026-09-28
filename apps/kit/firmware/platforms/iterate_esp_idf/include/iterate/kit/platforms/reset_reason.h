@@ -1,6 +1,8 @@
 #ifndef ITERATE_KIT_PLATFORMS_RESET_REASON_H
 #define ITERATE_KIT_PLATFORMS_RESET_REASON_H
 
+#include <stdbool.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -22,6 +24,14 @@ extern "C" {
  * Never NULL; an unrecognised code answers "unknown".
  */
 const char *iterate_kit_platform_reset_reason_name(void);
+
+/**
+ * Whether a person probably caused this boot: power applied, the reset button,
+ * or a USB host (flashing, opening a console). The board narrates its
+ * connection out loud only after these (iterate/kit/announcer.h); an update,
+ * a crash or a watchdog restarts it with nobody there to hear.
+ */
+bool iterate_kit_platform_reset_by_person(void);
 
 #ifdef __cplusplus
 }

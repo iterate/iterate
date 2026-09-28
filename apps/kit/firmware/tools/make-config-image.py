@@ -45,16 +45,22 @@ FIELDS = {
     "os-base-url": 3,
     "project-id": 4,
     "project-api-key": 5,
+    "status-voice": 6,
 }
+# The status voice's names, as configuration.c spells them. Optional: a board
+# given none sings Greensleeves.
+STATUS_VOICES = ["greensleeves", "daisy-bell", "auld-lang-syne", "lass-of-aughrim", "spoken", "off"]
 # The longest value each field holds, spelled as in config-image.ts and one less
 # than the C array size in configuration.h. Four were one short here, which
-# refused a 128-byte operator secret outright.
+# refused a 128-byte operator secret outright. The status voice is decoded to a
+# byte, not stored; 32 just bounds the name.
 CAPACITY = {
     "wifi-ssid": 32,
     "wifi-password": 64,
     "os-base-url": 128,
     "project-id": 64,
     "project-api-key": 128,
+    "status-voice": 32,
 }
 
 
@@ -103,7 +109,11 @@ def main() -> int:
         help="Print the iterate_kit flash offset for this target and exit.",
     )
     for name in FIELDS:
-        parser.add_argument(f"--{name}")
+        if name == "status-voice":
+            parser.add_argument("--status-voice", choices=STATUS_VOICES,
+                                help="How the board says its connection status (default: greensleeves).")
+        else:
+            parser.add_argument(f"--{name}")
     parser.add_argument("--out")
     args = parser.parse_args()
 

@@ -44,6 +44,19 @@ static bool no_aec;
 static bool press_pending;
 static bool hang_up_sent;
 static volatile sig_atomic_t quit_requested;
+/*
+ * The clip the loop last asked for (its spoken status), fed into the speaker
+ * ring after the loop's own playback step, on this thread, so the ring keeps
+ * its one writer. A copy: this ring can fall behind the loop's idea of when
+ * the clip ended, and the loop frees its PCM by that idea.
+ */
+static struct {
+  int16_t *pcm;
+  size_t samples;
+  size_t next;
+  /* Silence after the clip, so the output's pull has enough queued to play its end. */
+  unsigned int silence_frames;
+} clip;
 
 static void on_signal(int signal_number) {
   (void)signal_number;
@@ -121,6 +134,49 @@ static void poll(void *context, struct iterate_kit_voice_intent *out) {
     press_pending = false;
     if (busy) out->end_call = true;
     else out->start_call = true;
+  }
+}
+
+static void play_clip(void *context, const int16_t *pcm, size_t samples) {
+  (void)context;
+  free(clip.pcm);
+  clip.pcm = malloc(samples * sizeof(*pcm));
+  if (clip.pcm == NULL) return;
+  memcpy(clip.pcm, pcm, samples * sizeof(*pcm));
+  clip.samples = samples;
+  clip.next = 0U;
+  clip.silence_frames = 4U;
+}
+
+static void feed_clip(void) {
+  /* A call's answer gets the speaker: interleaved in one ring, clip and answer would garble each other. */
+  if (view.call_active && clip.pcm != NULL) {
+    free(clip.pcm);
+    clip.pcm = NULL;
+  }
+  while (clip.pcm != NULL &&
+         iterate_kit_darwin_audio_output_queued_bytes(&codec.output) <
+             iterate_kit_darwin_audio_output_lead_bytes(&codec.output)) {
+    int16_t frame[ITERATE_KIT_VOICE_FRAME_SAMPLES] = {0};
+    if (clip.next < clip.samples) {
+      const size_t count = clip.samples - clip.next < ITERATE_KIT_VOICE_FRAME_SAMPLES
+                               ? clip.samples - clip.next
+                               : ITERATE_KIT_VOICE_FRAME_SAMPLES;
+      memcpy(frame, clip.pcm + clip.next, count * sizeof(frame[0]));
+      clip.next += count;
+    } else if (clip.silence_frames > 0U) {
+      clip.silence_frames--;
+    } else {
+      free(clip.pcm);
+      clip.pcm = NULL;
+      /* Trailing silence is the end of a clip, not a starved answer. */
+      iterate_kit_darwin_audio_output_set_expected(&codec.output, false);
+      break;
+    }
+    if (iterate_kit_darwin_audio_output_write(&codec.output, (const uint8_t *)frame, sizeof(frame)) !=
+        ITERATE_KIT_DARWIN_AUDIO_OUTPUT_OK) {
+      break;
+    }
   }
 }
 
@@ -208,6 +264,7 @@ int main(int argc, char **argv) {
     .poll = poll,
     .modules = modules,
     .health = health,
+    .play_clip = play_clip,
   };
   if (!iterate_kit_voice_loop_init(&ops, &facts, NULL)) {
     (void)fputs("mac: the voice loop refused this board (see the log)\n", stderr);
@@ -231,6 +288,7 @@ int main(int argc, char **argv) {
     iterate_kit_voice_loop_capture_step();
     iterate_kit_voice_loop_capture_step();
     iterate_kit_voice_loop_playback_step();
+    feed_clip();
     if (quit_requested && !view.call_active && !view.wants_call) break;
     const struct timespec tick = {.tv_sec = 0, .tv_nsec = TICK_MS * 1000000L};
     (void)nanosleep(&tick, NULL);

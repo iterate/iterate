@@ -161,7 +161,7 @@ static const struct iterate_kit_board board = {
   .status_led_gpio = -1, .button = {.gpio = 0, .active_low = true},
   .ring = {.gpio = -1, .power_gpio = -1},
   .sounds = {.wake = sound_chime_press, .wake_bytes = sizeof(sound_chime_press),
-    .ended = sound_chime_ended, .ended_bytes = sizeof(sound_chime_ended)},
+    .speech_peak = ITERATE_KIT_SPEECH_PEAK},
   .open_codec = open_codec, .set_volume = set_volume, .extra = &extra,
 };
 void app_main(void) { iterate_kit_board_run(&board); }

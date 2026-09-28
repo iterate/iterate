@@ -38,3 +38,15 @@ const char *iterate_kit_platform_reset_reason_name(void) {
       return "unknown";
   }
 }
+
+bool iterate_kit_platform_reset_by_person(void) {
+  switch (esp_reset_reason()) {
+    case ESP_RST_POWERON:
+    case ESP_RST_EXT:
+    case ESP_RST_USB:
+    case ESP_RST_JTAG:
+      return true;
+    default:
+      return false;
+  }
+}

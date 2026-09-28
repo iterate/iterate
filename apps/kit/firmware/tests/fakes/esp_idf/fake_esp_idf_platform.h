@@ -55,6 +55,12 @@ void iterate_kit_fake_platform_set_state(
 /** What the loop reads as the OS having refused the device's key. */
 void iterate_kit_fake_platform_set_credential_refused(bool refused);
 
+/** What the loop reads as the Wi-Fi's state (joined, the zero value, by default). */
+void iterate_kit_fake_platform_set_wifi_status(enum iterate_kit_wifi_status status);
+
+/** Whether the loop treats this boot as one a person caused (false by default). */
+void iterate_kit_fake_platform_set_reset_by_person(bool by_person);
+
 /**
  * Everything the loop sent, in order, as whole Cap'n Web messages.
  *
