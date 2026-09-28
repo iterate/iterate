@@ -1,17 +1,20 @@
-// scripts/ts-affected/cli.ts — EXPERIMENT (tasks/typescript-change-detection.md): what does
+// scripts/ts-affected/cli.ts — EXPERIMENT (tasks/complete/2026-09-28-typescript-change-detection.md): what does
 // changing a file reach, per TypeScript? engine.ts has the machinery.
 //
 //   node scripts/ts-affected/cli.ts programs
 //   node scripts/ts-affected/cli.ts file packages/shared/src/slugify.ts
-//   node scripts/ts-affected/cli.ts symbol packages/shared/src/slugify.ts slugify
-//   node scripts/ts-affected/cli.ts experiment        # the task file's file-level table
+//   node scripts/ts-affected/cli.ts symbol packages/shared/src/slugify.ts slugify --granularity member
+//   node scripts/ts-affected/cli.ts diff --base HEAD^ --granularity member
+//   node scripts/ts-affected/cli.ts replay c3f4601d7 4d2e7a976 --lab ../lab --granularity member
+//   node scripts/ts-affected/cli.ts experiment && node scripts/ts-affected/cli.ts table
 import { execFileSync } from "node:child_process";
-import { writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
 import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
 import { createCli } from "trpc-cli";
 
+import { touchesPreview } from "../ci/preview-paths.ts";
 import {
   fileClosure,
   graphClosure,
@@ -20,8 +23,13 @@ import {
   type FileNerf,
   type Repo,
 } from "./engine.ts";
-import { touchesPreview } from "../ci/preview-paths.ts";
-import { itemKey, seedForExport, seedsFromDiff, symbolClosure } from "./symbols.ts";
+import {
+  itemKey,
+  seedForExport,
+  seedsFromDiff,
+  symbolClosure,
+  type Granularity,
+} from "./symbols.ts";
 
 /** The tsc programs `pnpm typecheck` runs, how many repo files each reads, and the baseline errors. */
 export async function programs() {
@@ -46,11 +54,12 @@ export async function file(file: string) {
 
 /**
  * Nerfs one export by renaming it, then everything that breaks, round by round, and prints the
- * declarations, imports and tests it reached.
+ * declarations, members, imports and tests it reached, each with the item whose error found it.
  */
-export async function symbol(file: string, name: string) {
+export async function symbol(file: string, name: string, options: { granularity: Granularity }) {
   const repo = await loadRepo(process.cwd());
-  const { affected, via, rounds } = await symbolClosure(repo, [seedForExport(repo, file, name)]);
+  const seeds = [seedForExport(repo, file, name)];
+  const { affected, via, rounds } = await symbolClosure(repo, seeds, options.granularity);
   for (const item of affected)
     console.log(`${itemKey(item)}  ← ${via.get(itemKey(item)) || "(seed)"}`);
   console.log(
@@ -60,7 +69,7 @@ export async function symbol(file: string, name: string) {
 
 /**
  * What a commit reaches, two ways: the import-graph closure of every changed file, and the symbol
- * closure of the top-level statements its changed lines touch. Beside them, what
+ * closure of the statements (or members) its changed lines touch. Beside them, what
  * scripts/ci/preview-paths.ts's globs decide. Prints one JSON line.
  */
 export async function diff(options: {
@@ -68,12 +77,13 @@ export async function diff(options: {
   base: string;
   /** The checkout to measure (a lab checkout of an older commit); default the current directory. */
   root?: string;
+  granularity: Granularity;
 }) {
   const repo = await loadRepo(path.resolve(options.root || process.cwd()));
-  const { seeds, invisible, files } = seedsFromDiff(repo, options.base);
+  const { seeds, invisible, files } = seedsFromDiff(repo, options.base, options.granularity);
   const tsFiles = files.filter((f) => repo.programsByFile.has(f));
   const fileLevel = [...new Set(tsFiles.flatMap((f) => graphClosure(repo, f).flat()))];
-  const { affected, rounds } = await symbolClosure(repo, seeds);
+  const { affected, rounds } = await symbolClosure(repo, seeds, options.granularity);
   const symbolFiles = [...new Set(affected.map((item) => item.file))];
   const tests = affected.filter((item) => item.kind === "statement" && isTest(item.file));
   const title = execFileSync("git", ["log", "-1", "--format=%h %s", "HEAD"], {
@@ -83,6 +93,7 @@ export async function diff(options: {
   console.log(
     JSON.stringify({
       title,
+      granularity: options.granularity,
       changed: files.length,
       invisible,
       preview: touchesPreview(files),
@@ -105,33 +116,64 @@ export async function diff(options: {
   );
 }
 
-/** Measures every sample file with both strategies; writes results.ignoreme.json and prints the table. */
+/**
+ * Replays merged commits: checks each out in `lab` (a spare worktree whose files this may change),
+ * installs, and prints `diff`'s JSON line for it. The task file's commit table came from this.
+ */
+export async function replay(
+  commits: string[],
+  options: { lab: string; granularity: Granularity },
+) {
+  for (const commit of commits) {
+    execFileSync("git", ["checkout", "-q", "--detach", commit], { cwd: options.lab });
+    execFileSync("pnpm", ["install", "--frozen-lockfile", "--prefer-offline"], {
+      cwd: options.lab,
+      stdio: "ignore",
+    });
+    await diff({ base: `${commit}^`, root: options.lab, granularity: options.granularity });
+  }
+}
+
+/**
+ * Nerfs every sample file, level by level, both ways; writes results-files.ignoreme.json beside
+ * this file.
+ */
 export async function experiment() {
   const repo = await loadRepo(process.cwd());
   const rows = [];
   for (const sample of samples) {
     console.error(`measuring ${sample.file}`);
-    rows.push({
-      ...sample,
-      ...(await measure(repo, sample.file)),
-      symbolResult: await measureSymbol(repo, sample.file, sample.symbol),
-    });
-    writeFileSync(
-      path.join(import.meta.dirname, "results.ignoreme.json"),
-      JSON.stringify(rows, null, 2),
-    );
+    rows.push({ ...sample, ...(await measure(repo, sample.file)) });
+    writeFileSync(resultsPath("files"), JSON.stringify(rows, null, 2));
   }
-  console.log(renderTable(rows));
 }
 
-/** Renders results.ignoreme.json as the task file's table, without re-measuring. */
+/** Nerfs every sample's one export; writes results-symbols-<granularity>.ignoreme.json. */
+export async function symbolSamples(options: { granularity: Granularity }) {
+  const repo = await loadRepo(process.cwd());
+  const rows = [];
+  for (const sample of samples.filter((s) => s.symbol)) {
+    console.error(`measuring ${sample.file} ${sample.symbol}`);
+    rows.push({
+      file: sample.file,
+      ...(await measureSymbol(repo, sample.file, sample.symbol, options.granularity)),
+    });
+    writeFileSync(resultsPath(`symbols-${options.granularity}`), JSON.stringify(rows, null, 2));
+  }
+}
+
+/** Renders the results files as the task file's two tables, without re-measuring. */
 export async function table() {
-  const { readFileSync } = await import("node:fs");
-  console.log(
-    renderTable(
-      JSON.parse(readFileSync(path.join(import.meta.dirname, "results.ignoreme.json"), "utf8")),
-    ),
-  );
+  const files: FileRow[] = JSON.parse(readFileSync(resultsPath("files"), "utf8"));
+  const bySymbol = (granularity: Granularity): SymbolRow[] =>
+    JSON.parse(readFileSync(resultsPath(`symbols-${granularity}`), "utf8"));
+  console.log(renderFileTable(files));
+  console.log();
+  console.log(renderSymbolTable(files, bySymbol("declaration"), bySymbol("member")));
+}
+
+function resultsPath(name: string) {
+  return path.join(import.meta.dirname, `results-${name}.ignoreme.json`);
 }
 
 const samples = [
@@ -192,45 +234,80 @@ async function measureNerf(repo: Repo, file: string, strategy: FileNerf) {
   };
 }
 
-/** One export's reach, when the sample names one (an ambient `.d.ts` has none to rename). */
-async function measureSymbol(repo: Repo, file: string, name: string) {
-  if (!name) return null;
-  const { affected, via, rounds } = await symbolClosure(repo, [seedForExport(repo, file, name)]);
-  const files = [...new Set(affected.map((item) => item.file))].filter((f) => f !== file);
+/** One export's reach. */
+async function measureSymbol(repo: Repo, file: string, name: string, granularity: Granularity) {
+  const { affected, via, rounds } = await symbolClosure(
+    repo,
+    [seedForExport(repo, file, name)],
+    granularity,
+  );
   return {
+    symbol: name,
     items: affected.map((item) => ({ key: itemKey(item), via: via.get(itemKey(item)) || null })),
-    files,
+    files: [...new Set(affected.map((item) => item.file))].filter((f) => f !== file),
     tests: affected.filter((item) => item.kind === "statement" && isTest(item.file)).map(itemKey),
     ms: Math.round(rounds.reduce((sum, round) => sum + round.ms, 0)),
     rounds: rounds.length,
   };
 }
 
-type Row = Awaited<ReturnType<typeof measure>> &
-  (typeof samples)[number] & { symbolResult: Awaited<ReturnType<typeof measureSymbol>> };
+type FileRow = Awaited<ReturnType<typeof measure>> & (typeof samples)[number];
+type SymbolRow = Awaited<ReturnType<typeof measureSymbol>> & { file: string };
 
-function renderTable(rows: Row[]) {
+function renderFileTable(rows: FileRow[]) {
   const header = [
     "sample",
     "kind",
-    "direct: graph / empty / delete",
-    "closure: graph / empty / delete",
-    "closure only by nerf (delete)",
-    "closure only by graph (delete)",
-    "workspaces reached",
-    "test files reached",
-    "time direct / closure (delete)",
+    "direct: graph / `export {}` / delete",
+    "closure: graph / `export {}` / delete",
+    "only nerf / only graph",
+    "test files",
+    "reaches",
+    "time (delete): direct / closure",
   ];
   const lines = [`| ${header.join(" | ")} |`, `|${header.map(() => "---").join("|")}|`];
   for (const row of rows) {
     const onlyNerf = row.delete.closure.filter((f) => !row.graph.closure.includes(f));
     const onlyGraph = row.graph.closure.filter((f) => !row.delete.closure.includes(f));
-    const union = [...new Set([...row.delete.closure, ...row.empty.closure])];
+    const reached = [...new Set([...row.delete.closure, ...row.graph.closure])];
     lines.push(
-      `| \`${row.file}\` | ${row.kind} | ${row.graph.direct.length} / ${row.empty.direct.length} / ${row.delete.direct.length} | ${row.graph.closure.length} / ${row.empty.closure.length} / ${row.delete.closure.length} | ${onlyNerf.length} | ${onlyGraph.length} | ${workspaces(union).join(", ") || "none"} | ${union.filter(isTest).length} | ${(row.delete.directMs / 1000).toFixed(1)}s / ${(row.delete.closureMs / 1000).toFixed(0)}s (${row.delete.levelSizes.length} rounds) |`,
+      `| \`${row.file}\` | ${row.kind} | ${row.graph.direct.length} / ${row.empty.direct.length} / ${row.delete.direct.length} | ${row.graph.closure.length} / ${row.empty.closure.length} / ${row.delete.closure.length} | ${onlyNerf.length} / ${onlyGraph.length} | ${row.delete.closure.filter(isTest).length} | ${shortWorkspaces(reached)} | ${(row.delete.directMs / 1000).toFixed(1)}s / ${(row.delete.closureMs / 1000).toFixed(0)}s (${row.delete.levelSizes.length} rounds) |`,
     );
   }
   return lines.join("\n");
+}
+
+function renderSymbolTable(files: FileRow[], declaration: SymbolRow[], member: SymbolRow[]) {
+  const header = [
+    "export",
+    "whole file (graph): files / test files",
+    "declaration-level: files / test files / tests / time",
+    "member-level: files / test files / tests / time",
+    "member-level reaches",
+  ];
+  const lines = [`| ${header.join(" | ")} |`, `|${header.map(() => "---").join("|")}|`];
+  const cell = (row: SymbolRow) =>
+    `${row.files.length} / ${row.files.filter(isTest).length} / ${row.tests.length} / ${(row.ms / 1000).toFixed(0)}s`;
+  for (const d of declaration) {
+    const file = files.find((f) => f.file === d.file)!;
+    const m = member.find((row) => row.file === d.file)!;
+    lines.push(
+      `| \`${d.symbol}\` (${file.kind}) | ${file.graph.closure.length} / ${file.graph.closure.filter(isTest).length} | ${cell(d)} | ${cell(m)} | ${shortWorkspaces(m.files)} |`,
+    );
+  }
+  return lines.join("\n");
+}
+
+/** `os, dash · pkg shared` for the apps and packages whose non-test files are in `files`. */
+function shortWorkspaces(files: string[]) {
+  const all = workspaces(files.filter((f) => !isTest(f)));
+  const apps = all.filter((w) => w.startsWith("apps/")).map((w) => w.slice(5));
+  const packages = all.filter((w) => w.startsWith("packages/")).map((w) => w.slice(9));
+  return (
+    [apps.join(", "), packages.length ? `pkg ${packages.join(", ")}` : ""]
+      .filter(Boolean)
+      .join(" · ") || "—"
+  );
 }
 
 function workspaces(files: string[]) {

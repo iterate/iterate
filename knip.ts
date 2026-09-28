@@ -43,6 +43,8 @@ export default {
       entry: [
         "ci/{context-sweep,create-release,loc-report,merges-with-main,notify,pr-dashboard,prd-fault-alarm,prd-post-deploy-check,preview-paths,preview-tested-commit,shadcn-drift,sync-ci-telemetry,test-evidence,test-telemetry-finalizer}.ts",
         "monitors/{health,do-duration-probe}.ts",
+        // run by hand (tasks/complete/2026-09-28-typescript-change-detection.md)
+        "ts-affected/cli.ts",
         "ci/flake-dashboard/update.ts",
         "ci/tracing/{cli,tracing}.ts",
       ],

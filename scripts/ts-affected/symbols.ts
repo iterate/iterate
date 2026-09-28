@@ -1,8 +1,10 @@
-// scripts/ts-affected/symbols.ts — EXPERIMENT (tasks/typescript-change-detection.md): the same
+// scripts/ts-affected/symbols.ts — EXPERIMENT (tasks/complete/2026-09-28-typescript-change-detection.md): the same
 // nerf-and-read-errors trick as engine.ts, one top-level declaration at a time instead of a whole
 // file. Renaming a declaration breaks exactly the code that references it; each error is mapped
-// to the top-level statement around it (a declaration, an import, a `test(...)` call), and the next
-// round renames those. A change to one function reaches its callers, not every importer of its file.
+// to the top-level statement around it (a declaration, an import, a `test(...)` call), or to the
+// member around it when the statement is a class, interface or object literal, and the next round
+// renames those. A change to one function reaches its callers, not every importer of its file; a
+// change to one method reaches that method's callers, not every user of its class.
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
@@ -21,6 +23,12 @@ export type Item =
   | { kind: "export"; file: string; name: string }
   | { kind: "default"; file: string }
   /**
+   * A method or property of a top-level class, interface, object type or object literal (`owner`
+   * is the declaration's name, or `default`). Renamed to nerf it, so a one-line change to a
+   * Durable Object's method reaches that method's callers instead of every user of the class.
+   */
+  | { kind: "member"; file: string; owner: string; member: string }
+  /**
    * Anything else: a `test(...)` call, a route registration, other top-level code. Nothing refers
    * to a statement, so it ends its chain. `label` names the innermost test around the error.
    */
@@ -29,16 +37,24 @@ export type Item =
 export function itemKey(item: Item) {
   if (item.kind === "statement") return `${item.file}#L${item.line}:${item.label}`;
   if (item.kind === "default") return `${item.file}#default`;
+  if (item.kind === "member") return `${item.file}#member:${item.owner}.${item.member}`;
   return `${item.file}#${item.kind}:${item.name}`;
 }
 
 type TextEdit = { start: number; end: number; text: string };
 
 /**
+ * `declaration`: an error anywhere in a class, interface or object literal takes the whole
+ * declaration. `member`: only the method or property around it — more precise, but blind to
+ * members reached by a computed key (a registry object indexed by name at runtime).
+ */
+export type Granularity = "declaration" | "member";
+
+/**
  * Renames the seeds, collects the errors, turns each into the item around it, and repeats with
  * everything found so far until a round finds nothing that can itself be renamed.
  */
-export async function symbolClosure(repo: Repo, seeds: Item[]) {
+export async function symbolClosure(repo: Repo, seeds: Item[], granularity: Granularity) {
   const affected = new Map(seeds.map((item) => [itemKey(item), item]));
   /** Found item → the nerfed item its error names: the "because" for each step. */
   const via = new Map<string, string>();
@@ -68,6 +84,8 @@ export async function symbolClosure(repo: Repo, seeds: Item[]) {
       programsReading(repo, changed),
     );
     const found: Item[] = [];
+    // Only what this round renamed can have caused its errors.
+    const nerfed = [...affected.values()];
     for (const d of diagnostics) {
       if (!d.file || !repo.programsByFile.has(d.file)) continue;
       const edited = contents.get(d.file) || parse(repo, d.file).source;
@@ -75,13 +93,13 @@ export async function symbolClosure(repo: Repo, seeds: Item[]) {
         dedupe(editsByFile.get(d.file) || []),
         offsetOf(edited, d.line, d.column),
       );
-      for (const item of itemsAt(repo, d.file, offset)) {
+      for (const item of itemsAt(repo, d.file, offset, granularity)) {
         if (affected.has(itemKey(item))) continue;
         affected.set(itemKey(item), item);
         found.push(item);
         // No quoted name matches when the error arrived through an inferred type instead: a
         // nerfed binding's `any` flowed on and tripped noImplicitAny somewhere downstream.
-        const cause = causeOf(d, [...affected.values()]);
+        const cause = causeOf(d, nerfed);
         via.set(itemKey(item), cause ? itemKey(cause) : `(type flow: ${d.code})`);
       }
     }
@@ -97,12 +115,16 @@ export async function symbolClosure(repo: Repo, seeds: Item[]) {
  */
 function causeOf(d: Diagnostic, affected: Item[]) {
   const quoted = [...d.message.matchAll(/'([^']+)'/g)].map((m) => m[1]);
-  const named = affected.filter(
-    (item) =>
-      item.kind !== "statement" && quoted.includes(item.kind === "default" ? "default" : item.name),
-  );
+  const named = affected.filter((item) => quoted.includes(nameOf(item)));
   const sameFile = d.code === "TS2304" || d.code === "TS2552";
   return named.find((item) => (item.file === d.file) === sameFile) || named[0];
+}
+
+function nameOf(item: Item) {
+  if (item.kind === "statement") return "";
+  if (item.kind === "default") return "default";
+  if (item.kind === "member") return item.member;
+  return item.name;
 }
 
 /** The declaration (or re-export) a file exports as `name`. */
@@ -119,7 +141,7 @@ export function seedForExport(repo: Repo, file: string, name: string): Item {
  * changed line of a TypeScript file. Files TypeScript cannot see (JSON, Markdown, YAML, CSS…) come
  * back separately.
  */
-export function seedsFromDiff(repo: Repo, base: string) {
+export function seedsFromDiff(repo: Repo, base: string, granularity: Granularity) {
   const diff = execFileSync("git", ["diff", "--unified=0", "--no-renames", base, "HEAD"], {
     cwd: repo.root,
     encoding: "utf8",
@@ -152,11 +174,12 @@ export function seedsFromDiff(repo: Repo, base: string) {
     const { program, source } = parse(repo, file);
     const lineStarts = [0, ...[...source.matchAll(/\n/g)].map((m) => m.index + 1)];
     for (const line of lines) {
-      const offset = lineStarts[Math.min(line, lineStarts.length) - 1];
+      const lineStart = lineStarts[Math.min(line, lineStarts.length) - 1];
+      // The line's first non-blank character, so a line inside a method lands in that method.
+      const offset = lineStart + (source.slice(lineStart).match(/^[ \t]*/)?.[0].length || 0);
       const statement = program.body.find((s: any) => s.start <= offset && offset <= s.end);
       if (!statement || statement.type === "ImportDeclaration") continue;
-      // An edited line touches every name its statement declares.
-      for (const item of itemsAt(repo, file, statement.start)) {
+      for (const item of itemsAt(repo, file, offset, granularity)) {
         if (!seeds.some((seed) => itemKey(seed) === itemKey(item))) seeds.push(item);
       }
     }
@@ -165,7 +188,7 @@ export function seedsFromDiff(repo: Repo, base: string) {
 }
 
 /** What a diagnostic at `offset` in `file` belongs to. */
-function itemsAt(repo: Repo, file: string, offset: number): Item[] {
+function itemsAt(repo: Repo, file: string, offset: number, granularity: Granularity): Item[] {
   const { program, source } = parse(repo, file);
   const statement = program.body.find((s: any) => s.start <= offset && offset <= s.end);
   if (!statement) return [];
@@ -180,7 +203,8 @@ function itemsAt(repo: Repo, file: string, offset: number): Item[] {
       }));
     }
     case "ExportNamedDeclaration": {
-      if (statement.declaration) return declarationItems(file, statement.declaration, offset);
+      if (statement.declaration)
+        return declarationItems(file, statement.declaration, offset, granularity);
       const specifiers = statement.specifiers.filter(within);
       return (specifiers.length ? specifiers : statement.specifiers).map((s: any) => ({
         kind: "export",
@@ -188,10 +212,14 @@ function itemsAt(repo: Repo, file: string, offset: number): Item[] {
         name: s.exported.name,
       }));
     }
-    case "ExportDefaultDeclaration":
-      return [{ kind: "default", file }];
+    case "ExportDefaultDeclaration": {
+      const member = memberAt(statement.declaration, offset, granularity);
+      return [
+        member ? { kind: "member", file, owner: "default", member } : { kind: "default", file },
+      ];
+    }
     default: {
-      const items = declarationItems(file, statement, offset);
+      const items = declarationItems(file, statement, offset, granularity);
       if (items.length) return items;
       const test = testAt(statement, offset);
       const line = source.slice(0, test?.start ?? statement.start).split("\n").length;
@@ -200,19 +228,89 @@ function itemsAt(repo: Repo, file: string, offset: number): Item[] {
   }
 }
 
-function declarationItems(file: string, declaration: any, offset: number): Item[] {
+function declarationItems(
+  file: string,
+  declaration: any,
+  offset: number,
+  granularity: Granularity,
+): Item[] {
   if (declaration.type === "VariableDeclaration") {
     const declarators = declaration.declarations.filter(
       (d: any) => d.start <= offset && offset <= d.end,
     );
+    const member =
+      declarators.length === 1 &&
+      declarators[0].id.type === "Identifier" &&
+      memberAt(declarators[0], offset, granularity);
+    if (member) return [{ kind: "member", file, owner: declarators[0].id.name, member }];
     return (declarators.length ? declarators : declaration.declarations)
       .flatMap((d: any) => patternBindings(d.id))
       .map((id: any) => ({ kind: "binding", file, name: id.name }));
   }
   if (declaration.type === "TSModuleDeclaration" && declaration.kind === "global") return [];
-  if (declaration.id?.type === "Identifier")
-    return [{ kind: "binding", file, name: declaration.id.name }];
-  return [];
+  if (declaration.id?.type !== "Identifier") return [];
+  const member = memberAt(declaration, offset, granularity);
+  if (member) return [{ kind: "member", file, owner: declaration.id.name, member }];
+  return [{ kind: "binding", file, name: declaration.id.name }];
+}
+
+/** The members of a class, interface, object type or object literal (through `satisfies`/`as`). */
+function membersOf(node: any): any[] {
+  switch (node?.type) {
+    case "VariableDeclarator":
+      return membersOf(node.init);
+    case "TSSatisfiesExpression":
+    case "TSAsExpression":
+    case "ParenthesizedExpression":
+      return membersOf(node.expression);
+    case "TSTypeAliasDeclaration":
+      return membersOf(node.typeAnnotation);
+    case "ClassDeclaration":
+    case "ClassExpression":
+    case "TSInterfaceDeclaration":
+      return node.body.body;
+    case "TSTypeLiteral":
+      return node.members;
+    case "ObjectExpression":
+      return node.properties;
+    default:
+      return [];
+  }
+}
+
+/**
+ * A member's name, when renaming it is enough to nerf it. A constructor, a computed or quoted key,
+ * a spread or a static block has none, and an error there takes the whole declaration.
+ */
+function memberName(member: any): string | undefined {
+  if (member.computed || !member.key || member.kind === "constructor") return undefined;
+  if (member.key.type === "Identifier") return member.key.name;
+  if (member.key.type === "PrivateIdentifier") return `#${member.key.name}`;
+  return undefined;
+}
+
+function memberAt(owner: any, offset: number, granularity: Granularity) {
+  if (granularity === "declaration") return undefined;
+  const member = membersOf(owner).find((m: any) => m.start <= offset && offset <= m.end);
+  return member && memberName(member);
+}
+
+/** The top-level declarations named `name` (`default` for the default export), for their members. */
+function ownersNamed(program: any, name: string): any[] {
+  return program.body.flatMap((statement: any) => {
+    if (statement.type === "ExportDefaultDeclaration")
+      return name === "default" ? [statement.declaration] : [];
+    const declaration =
+      statement.type === "ExportNamedDeclaration" ? statement.declaration : statement;
+    if (!declaration) return [];
+    if (declaration.type === "VariableDeclaration")
+      return declaration.declarations.filter(
+        (d: any) => d.id.type === "Identifier" && d.id.name === name,
+      );
+    return declaration.id?.type === "Identifier" && declaration.id.name === name
+      ? [declaration]
+      : [];
+  });
 }
 
 /**
@@ -230,6 +328,17 @@ function editsFor(repo: Repo, item: Item): TextEdit[] {
         end: binding.end,
         // `const { a } = x` has to stay a destructure of `a`.
         text: binding.shorthand ? `${item.name}: ${item.name}__nerfed` : `${item.name}__nerfed`,
+      }));
+  }
+  if (item.kind === "member") {
+    return ownersNamed(program, item.owner)
+      .flatMap(membersOf)
+      .filter((m: any) => memberName(m) === item.member)
+      .map((m: any) => ({
+        start: m.key.start,
+        end: m.key.end,
+        // `{ fetch }` has to stay a property holding `fetch`.
+        text: m.shorthand ? `${item.member}__nerfed: ${item.member}` : `${item.member}__nerfed`,
       }));
   }
   if (item.kind === "import") {

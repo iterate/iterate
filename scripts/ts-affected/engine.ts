@@ -1,4 +1,4 @@
-// scripts/ts-affected/engine.ts — EXPERIMENT (tasks/typescript-change-detection.md): ask
+// scripts/ts-affected/engine.ts — EXPERIMENT (tasks/complete/2026-09-28-typescript-change-detection.md): ask
 // TypeScript what a change reaches. Nerf a file (or one declaration), re-run the tsc programs
 // `pnpm typecheck` runs, and every file with a new error depends on what was nerfed. cli.ts holds
 // the commands; this module holds the machinery.
@@ -34,7 +34,7 @@ export type Repo = {
  * The tsconfigs `pnpm typecheck` checks: every `tsc` call in each workspace's `typecheck` script,
  * and the root's `typecheck:specs` and `typecheck:configs`.
  */
-export function listPrograms(root: string) {
+function listPrograms(root: string) {
   const workspace = parseYaml(readFileSync(path.join(root, "pnpm-workspace.yaml"), "utf8")) as {
     packages: string[];
   };
@@ -108,10 +108,10 @@ function isOwnSource(file: string) {
   return /\.(c|m)?tsx?$/.test(file) && !file.includes("node_modules/") && !path.isAbsolute(file);
 }
 
-export type Edit = { file: string; content: string | null };
+export type Edit = { file: string; content: string } | { file: string; deleted: true };
 
 /**
- * Applies the edits (`content: null` deletes the file), re-checks `programs`, restores the files,
+ * Applies the edits (writing or deleting each file), re-checks `programs`, restores the files,
  * and returns the errors the baseline did not have. A round that adds edits to earlier ones only
  * needs the programs that read the newly edited files: every other program's errors are the
  * earlier rounds'.
@@ -125,7 +125,7 @@ export async function checkWithEdits(repo: Repo, edits: Edit[], programs: string
   pendingRestores.push(...originals);
   try {
     for (const edit of edits) {
-      if (edit.content === null) rmSync(path.join(repo.root, edit.file));
+      if ("deleted" in edit) rmSync(path.join(repo.root, edit.file));
       else writeFileSync(path.join(repo.root, edit.file), edit.content);
     }
     const runs = await pool(
@@ -157,10 +157,6 @@ process.on("SIGINT", () => process.exit(130));
 
 export type FileNerf = "empty" | "delete";
 
-export function nerfFile(file: string, strategy: FileNerf): Edit {
-  return { file, content: strategy === "delete" ? null : "export {};\n" };
-}
-
 export function programsReading(repo: Repo, files: string[]) {
   return [...new Set(files.flatMap((file) => repo.programsByFile.get(file) || []))];
 }
@@ -169,15 +165,12 @@ export function programsReading(repo: Repo, files: string[]) {
  * The files with a new error once `files` are nerfed, checked in the programs that read `latest`:
  * the dependents of `latest`.
  */
-export async function fileDependents(
-  repo: Repo,
-  files: string[],
-  latest: string[],
-  strategy: FileNerf,
-) {
+async function fileDependents(repo: Repo, files: string[], latest: string[], strategy: FileNerf) {
   const result = await checkWithEdits(
     repo,
-    files.map((file) => nerfFile(file, strategy)),
+    files.map((file): Edit =>
+      strategy === "delete" ? { file, deleted: true } : { file, content: "export {};\n" },
+    ),
     programsReading(repo, latest),
   );
   // A file-less error (TS18003: a program lost every input) is no dependent.
@@ -224,7 +217,7 @@ export function graphClosure(repo: Repo, file: string) {
   }
 }
 
-export function diagnosticKey(d: Diagnostic) {
+function diagnosticKey(d: Diagnostic) {
   return `${d.file}:${d.line}:${d.column}:${d.code}`;
 }
 
