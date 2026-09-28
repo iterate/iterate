@@ -511,11 +511,11 @@ export function iterateAppScopesOf(config: AppConfig) {
 
 const sessionSigningSecretByConfig = new WeakMap<AppConfig, Promise<string>>();
 
-/** THE SESSION-SIGNING SECRET (caller.ts `signClaims`/`verifyClaims`: the login flow's cookie, a
- *  signed file URL): `secrets.key` under its own label, SHA-256, hex — so the one key a deployment
- *  holds serves two algorithms without being reused raw (secret-at-rest.ts hashes the key under the
- *  other). Rotating the key signs every session out; a mid-rotation `previousKey` opens no session.
- *  Async (WebCrypto), computed once per config object. */
+/** THE SESSION-SIGNING SECRET (caller.ts `signClaims`/`verifyClaims`; identity.ts `Flow` lists
+ *  every claim set it signs): `secrets.key` under its own label, SHA-256, hex — so the one key a
+ *  deployment holds serves two algorithms without being reused raw (secret-at-rest.ts hashes the
+ *  key under the other). Rotating the key signs every session out; a mid-rotation `previousKey`
+ *  opens no session. Async (WebCrypto), computed once per config object. */
 export function sessionSigningSecretOf(config: AppConfig): Promise<string> {
   let secret = sessionSigningSecretByConfig.get(config);
   if (!secret) {

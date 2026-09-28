@@ -94,9 +94,9 @@ const FlowFields = {
   bounced: z.boolean(),
 };
 /** The signed flow cookie's claims. `kind` tells them apart from every other claim set
- *  `sessionSigningSecretOf` signs (secret-OAuth state, GitHub state, the integration move offer,
- *  signed file URLs, lend-use tokens), and a sign-in from an added one: a callback reads only its
- *  own kind. */
+ *  `sessionSigningSecretOf` signs (the admin sign-in flow, secret-OAuth state, GitHub state, the
+ *  integration move offer, signed file URLs, lend-use tokens), and a sign-in from an added one: a
+ *  callback reads only its own kind. */
 const Flow = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("identity-login"), ...FlowFields }),
   z.object({
