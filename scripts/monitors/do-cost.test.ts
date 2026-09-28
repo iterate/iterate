@@ -340,7 +340,7 @@ test("a page names the rate, the multiple, Jonas and Misha and the top spenders;
           "• os-next-preview_pr2828-control-plane-cleanup_IterateContextDurableObject  ~$31/h",
           "• os-next-preview_pr2847-investigate-li-e10d90_IterateContextDurableObject  ~$13/h",
           "• os-preview-7_SandboxLiteDurableObject  ~$0.09/h",
-          `Pages again in 3h while it lasts; hourly readings are in today's "We're spending" thread.`,
+          `Pages again in 3h while it lasts; hourly readings are in today's "We're spending" thread in #ci.`,
           links,
         ].join("\n"),
       },
@@ -489,6 +489,33 @@ test.for([
   },
 );
 
+test("the day's headline is found behind a busy #ci's first page, and rewritten, not posted again", async () => {
+  const at = Date.parse("2026-09-21T21:41:00Z") / 1000;
+  const slack = fakeSlack([
+    { ts: String(at - 7200), bot_id: "B1", text: "We're spending $1/day on durable objects …" },
+    ...Array.from({ length: 250 }, (_, index) => ({
+      ts: String(at - 3600 + index),
+      bot_id: "B1",
+      text: ":large_green_circle: PR opened: …",
+    })),
+  ]);
+  await postDailyThread({
+    slack: slack.client,
+    channels: { thread: "CI", pages: "PULSE" },
+    now: new Date("2026-09-21T21:41:00Z"),
+    readings: [reading("dev/preview", [{ hour: "2026-09-21T20:00:00Z", doHours: 20 }])],
+    runUrl,
+    testRun: false,
+  });
+  expect(slack.writes).toMatchObject([
+    ["chat.postMessage", { channel: "CI", thread_ts: String(at - 7200) }],
+    [
+      "chat.update",
+      { channel: "CI", ts: String(at - 7200), text: expect.stringContaining("We're spending") },
+    ],
+  ]);
+});
+
 test("a probe that could not run fails the run once its reply is posted", async () => {
   const slack = fakeSlack([]);
   await expect(
@@ -545,15 +572,23 @@ function reading(
   };
 }
 
-/** A WebClient stand-in: serves `messages` as the channel history (honouring `oldest`, as Slack
- * does) and as the thread's replies, and records every write. */
+/** A WebClient stand-in: serves `messages` as the channel history (honouring `oldest`, newest first
+ * and `limit` to a page, as Slack does) and as the thread's replies, and records every write. */
 function fakeSlack(messages: Array<{ ts: string; bot_id: string; text: string }>) {
   const writes: Array<[string, unknown]> = [];
   const client = {
     conversations: {
-      history: async (args: { oldest: string }) => ({
-        messages: messages.filter((message) => Number(message.ts) >= Number(args.oldest)),
-      }),
+      history: async (args: { oldest: string; limit: number; cursor?: string }) => {
+        const since = messages
+          .filter((message) => Number(message.ts) >= Number(args.oldest))
+          .sort((a, b) => Number(b.ts) - Number(a.ts));
+        const start = Number(args.cursor || 0);
+        const end = start + args.limit;
+        return {
+          messages: since.slice(start, end),
+          response_metadata: { next_cursor: end < since.length ? String(end) : "" },
+        };
+      },
       replies: async () => ({ messages }),
     },
     chat: {

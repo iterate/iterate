@@ -305,7 +305,7 @@ export function renderDailyThread(input: {
           `${testPrefix}🚨 DO cost page for ${reading.label}: ~${money(accountUsdPerHour)}/h (≈ ${money(accountUsdPerDay)}/day), ${ceilingMultiple} the ceiling. ${onCallMention}`,
           "Top spenders, trailing hour:",
           ...activeTime.topNamespaces.map((row) => `• ${row.namespace}  ~${usd(row.doHours)}/h`),
-          `Pages again in ${PAGE_REPEAT_HOURS}h while it lasts; hourly readings are in today's "We're spending" thread.`,
+          `Pages again in ${PAGE_REPEAT_HOURS}h while it lasts; hourly readings are in today's "We're spending" thread in #ci.`,
           links(input.runUrl),
         ].join("\n"),
       });
@@ -371,8 +371,10 @@ function links(runUrl: string | null) {
  * Today's headline message, created on the day's first run. Found by text:
  * the bot's own messages since 00:00 UTC that read "We're spending …"
  * (Slack rewrites emoji as :shortcodes: in history, so the test-run prefix
- * is matched by its words). A forced-threshold test run keeps its own thread:
- * it must never rewrite the real day's headline with test text.
+ * is matched by its words), read page by page: #ci takes every pull request
+ * event and deploy, far more than one page a day. A forced-threshold test run
+ * keeps its own thread: it must never rewrite the real day's headline with
+ * test text.
  */
 async function findOrCreateHeadline(input: {
   slack: WebClient;
@@ -383,20 +385,25 @@ async function findOrCreateHeadline(input: {
 }): Promise<string> {
   const date = input.now.toISOString().slice(0, 10);
   const dayStart = Date.parse(`${date}T00:00:00Z`) / 1000;
-  const history = await input.slack.conversations.history({
-    channel: input.channel,
-    oldest: String(dayStart),
-    limit: 200,
-  });
-  const existing = (history.messages || []).find(
-    (message) =>
-      message.bot_id &&
-      message.ts &&
-      message.text?.includes("spending") &&
-      message.text.includes("/day on durable objects") &&
-      message.text.includes("TEST RUN") === input.testRun,
-  );
-  if (existing?.ts) return existing.ts;
+  let cursor: string | undefined;
+  do {
+    const history = await input.slack.conversations.history({
+      channel: input.channel,
+      oldest: String(dayStart),
+      limit: 200,
+      cursor,
+    });
+    const existing = (history.messages || []).find(
+      (message) =>
+        message.bot_id &&
+        message.ts &&
+        message.text?.includes("spending") &&
+        message.text.includes("/day on durable objects") &&
+        message.text.includes("TEST RUN") === input.testRun,
+    );
+    if (existing?.ts) return existing.ts;
+    cursor = history.response_metadata?.next_cursor || undefined;
+  } while (cursor);
   const posted = await input.slack.chat.postMessage({
     channel: input.channel,
     text: input.headline,
