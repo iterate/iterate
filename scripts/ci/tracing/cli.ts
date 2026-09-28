@@ -90,7 +90,7 @@ export default class CiTrace {
           job.attempts.some((item) => item.attemptId === attempt.attemptId),
         );
         if (!job) throw new Error("Collected attempt has no job");
-        const jobKey = jobKeyInWorkflow(job.jobKey).split(":")[0];
+        const jobKey = jobKeyInWorkflow(job.jobKey);
         return [
           attempt.attemptId,
           lines.map((line) => ({

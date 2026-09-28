@@ -217,7 +217,8 @@ export function assembleTrace(
   }
   for (const job of workflow.jobs) {
     const key = jobKeyInWorkflow(job.jobKey);
-    const name = jobLabels.get(key) || key;
+    // a matrix leg by its own name, `Browser specs 3/10`
+    const name = jobLabels.get(key) || job.jobDisplayName || key;
     const attempts = job.attempts.filter(
       (attempt) =>
         attempt.startedAt &&
@@ -466,9 +467,10 @@ export function assembleTrace(
   };
 }
 
-/** A job's key inside its workflow file: `preview-os.yml:e2e` → `e2e`. */
+/** A job's key inside its workflow file: `preview-os.yml:e2e` → `e2e`, and a matrix leg's its job's:
+ *  `preview-os.yml:specs-shard:matrix-3` → `specs-shard`. */
 export function jobKeyInWorkflow(jobKey: string) {
-  return jobKey.replace(/^.*?\.yml:/, "");
+  return jobKey.replace(/^.*?\.yml:/, "").replace(/:matrix-\d+$/, "");
 }
 
 /** Use source YAML, never expanded runner commands that could contain credentials. */
@@ -551,6 +553,7 @@ export const Workflow = z.object({
     z.object({
       jobId: z.string(),
       jobKey: z.string(),
+      jobDisplayName: z.string().default(""),
       status: z.string(),
       finishedAt: z.string().default(""),
       attempts: z

@@ -938,6 +938,37 @@ test("the preview trace covers the deploy and both test jobs: green at the last 
   ]);
 });
 
+test("a specs shard's job is in the trace by its own name, with its Test phase", () => {
+  const workflow = osPreviewWorkflow();
+  const specs = workflow.jobs[2]!;
+  const shard = {
+    ...specs,
+    jobId: "specs-shard-2",
+    jobKey: "preview-os.yml:specs-shard:matrix-0",
+    jobDisplayName: "Browser specs 2/10",
+    attempts: [{ ...specs.attempts[0]!, attemptId: "shard-2-attempt" }],
+  };
+
+  const trace = assembleTrace(
+    { ...workflow, jobs: [...workflow.jobs, shard] },
+    new Map([
+      [
+        "shard-2-attempt",
+        [
+          line("suite", { kind: "shell-start", id: "suite", step: "suite", time: ms(50) }),
+          line("suite", { kind: "shell-end", id: "suite", time: ms(100), exitCode: 0 }),
+        ],
+      ],
+    ]),
+  );
+
+  const spans = trace.resourceSpans[0].scopeSpans[0].spans;
+  const shardSpan = spans.find((span) => span.name === "Browser specs 2/10");
+  expect(
+    spans.filter((span) => span.parentSpanId === shardSpan?.spanId).map((span) => span.name),
+  ).toEqual(["Setup", "Test", "Finish"]);
+});
+
 test("a failed deploy is red at its completion and neither suite ran", () => {
   const workflow = osPreviewWorkflow();
   workflow.jobs[0]!.status = "failed";
@@ -960,6 +991,7 @@ test.for([
   ["preview-os.yml:e2e", "e2e"],
   ["preview-os.yml:specs", "specs"],
   ["preview-os.yml:deploy", "deploy"],
+  ["preview-os.yml:specs-shard:matrix-3", "specs-shard"],
 ])("%s is job %s of its workflow", ([jobKey, key]) => {
   expect(jobKeyInWorkflow(jobKey)).toBe(key);
 });

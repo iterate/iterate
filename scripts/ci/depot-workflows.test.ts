@@ -57,6 +57,7 @@ type WorkflowJob = {
   /** A Depot stock image's label (`depot-ubuntu-24.04-8`); anything else fails a test. */
   "runs-on": string | Record<string, unknown>;
   "timeout-minutes"?: number;
+  strategy?: { "fail-fast"?: boolean; matrix?: unknown };
   steps?: WorkflowStep[];
 };
 
@@ -875,8 +876,9 @@ test("only main writes Depot Cache, main restores exact keys, and no production 
   }
   expect(saves.map(({ name }) => name).toSorted()).toEqual([
     ".depot/workflows/kit-firmware.yml build-firmware: Save ESP-IDF",
-    // one definition, which saves in the specs job alone (`env.SUITE == 'specs'`)
+    // one definition, which saves in the first specs shard alone (`env.SPECS_SHARD == '1'`)
     ".depot/workflows/main-os-e2e.yml e2e: Save Playwright's browser",
+    ".depot/workflows/main-os-e2e.yml specs-shard: Save Playwright's browser",
     ".depot/workflows/main-os-e2e.yml specs: Save Playwright's browser",
     ".depot/workflows/test.yml test: Save pnpm's store",
   ]);
@@ -1104,7 +1106,7 @@ test("Main OS e2e names its checks as Preview OS does and traces them the same w
     ),
   });
 
-  for (const job of ["deploy", "e2e", "specs", "trace"])
+  for (const job of ["deploy", "e2e", "specs", "specs-shard", "trace"])
     expect(main.jobs[job]?.name, job).toBe(preview.jobs[job]?.name);
   expect(trace(main)).toEqual(trace(preview));
   // it only reports: nothing that follows the suites waits for it
@@ -1114,11 +1116,11 @@ test("Main OS e2e names its checks as Preview OS does and traces them the same w
 });
 
 // Why the page is a job of the run it judges: .depot/workflows/main-os-e2e.yml (THE PAGE).
-test("Main OS e2e pages from its own alert job once its deploy and both suites have ended, on a push only", () => {
+test("Main OS e2e pages from its own alert job once its deploy and every suite job have ended, on a push only", () => {
   const main = loadWorkflow(".depot/workflows/main-os-e2e.yml");
   const alert = main.jobs.alert!;
   expect(alert).toMatchObject({
-    needs: ["deploy", "e2e", "specs"],
+    needs: ["deploy", "e2e", "specs", "specs-shard"],
     // a run cancelled by hand is left out, a timed-out job is red, and a dispatch pages nothing
     if: "${{ !cancelled() && github.event_name == 'push' }}",
   });
@@ -1129,30 +1131,35 @@ test("Main OS e2e pages from its own alert job once its deploy and both suites h
 });
 
 // Why the two suite jobs share one definition: .depot/workflows/main-os-e2e.yml.
-test("Main OS e2e's two suite jobs are one definition, a PR preview's suite steps on its runners", () => {
+test("Main OS e2e's suite jobs are one definition, a PR preview's suite steps on its runners", () => {
   const source = readFileSync(resolve(repoRoot, ".depot/workflows/main-os-e2e.yml"), "utf8");
   const main = loadWorkflow(".depot/workflows/main-os-e2e.yml");
   const preview = loadWorkflow(".depot/workflows/preview-os.yml");
-  const [e2e, specs] = [main.jobs.e2e!, main.jobs.specs!];
-  expect(specs).toMatchObject({
-    steps: e2e.steps,
-    "timeout-minutes": e2e["timeout-minutes"],
-  });
-  expect(source.match(/^ {4}steps: \*suite-steps$/gmu)).toHaveLength(1);
-  // each on a PR preview's runner for its suite, so main's specs run as a PR's do
-  for (const job of ["e2e", "specs"])
+  const [e2e, specs, shard] = [main.jobs.e2e!, main.jobs.specs!, main.jobs["specs-shard"]!];
+  expect(specs).toMatchObject({ steps: e2e.steps });
+  expect(shard).toMatchObject({ steps: e2e.steps });
+  expect(source.match(/^ {4}steps: \*suite-steps$/gmu)).toHaveLength(2);
+  // each on a PR preview's runner for its suite, so main's specs run as a PR's do, in its shards
+  for (const job of ["e2e", "specs", "specs-shard"])
     expect(main.jobs[job], job).toMatchObject({
       "runs-on": preview.jobs[job]?.["runs-on"],
       "timeout-minutes": preview.jobs[job]?.["timeout-minutes"],
     });
-  // each suite as a PR preview names it; E2E tests runs every row, the slow ones too, which the
-  // alert job pages under their own name
-  for (const job of ["e2e", "specs"])
-    for (const name of ["SUITE", "FLAKE_SUITE", "TEST_TELEMETRY_EXPECTED_WORKSPACES"])
+  expect(shard).toMatchObject({ strategy: preview.jobs["specs-shard"]?.strategy });
+  // each suite and shard as a PR preview names it; E2E tests runs every row, the slow ones too,
+  // which the alert job pages under their own name
+  for (const job of ["e2e", "specs", "specs-shard"])
+    for (const name of [
+      "SUITE",
+      "FLAKE_SUITE",
+      "TEST_TELEMETRY_EXPECTED_WORKSPACES",
+      "SPECS_SHARD",
+      "SPECS_SHARDS",
+    ])
       expect(main.jobs[job]?.env?.[name], `${job} ${name}`).toBe(preview.jobs[job]?.env?.[name]);
   expect(e2e.env).toMatchObject({ SLOW_ROWS: "run" });
   // started with the run, each waits in its suite step for the deploy every main run makes
-  for (const job of [e2e, specs]) expect(job.needs).toBeUndefined();
+  for (const job of [e2e, specs, shard]) expect(job.needs).toBeUndefined();
   expect(e2e.steps?.find((step) => step.id === "suite")?.env).toMatchObject({
     PREVIEW_AWAIT_DEPLOY_JOB: "deploy",
   });

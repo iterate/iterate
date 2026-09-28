@@ -1,7 +1,7 @@
 # ONE DEPLOYMENT PER TESTED COMMIT of a pull request: a fresh set of plain Workers on the dev/preview
 # account, apps/os and each app on top, `pr<n>-<sha7>-<app>` (envs.ts `previewDeployment`), deployed
-# by the same build and `wrangler deploy` as prd. The script is apps/os/scripts/preview.ts. Five
-# jobs, each a check named for what it proves:
+# by the same build and `wrangler deploy` as prd. The script is apps/os/scripts/preview.ts. Its
+# jobs are each a check named for what it proves:
 #   Deploy preview      every push: first whether the PR changes a preview path
 #                       (scripts/ci/preview-paths.ts `previewPaths`); a PR that changes none deploys
 #                       nothing and passes. Otherwise it deploys the PR merged into main (the run's own
@@ -15,9 +15,13 @@
 #                       deployment of the commit it checked out, then its test telemetry and flake
 #                       records. The rows tagged `slow` run only when the PR carries the `slow-e2e`
 #                       label or edits one of them (SLOW_ROW_PATHS) (docs/testing.md#slow-rows)
-#   Browser specs       beside E2E tests: the Playwright specs, the same way, and the Playwright
-#                       report. One job definition, E2E tests', differing only in the suite it names
-#                       and in its bigger runner, where its six browsers have the CPU they need
+#   Browser specs       beside E2E tests: the Playwright specs, the same way, in shards, and the
+#                       Playwright report. One job definition, E2E tests', differing only in the
+#                       suite it names and in its bigger runner, where its six browsers have the CPU
+#                       they need. It is the first shard: once its own share has run it collects the
+#                       others' reports, and fails when one did not pass
+#   Browser specs 2/10  beside it, the other shards (`specs-shard`), each running its share
+#     … 10/10
 #   Clean up superseded after Deploy preview, beside the suites: deletes this PR's older
 #                       deployments (apps/os/scripts/preview-sweep.ts `planSupersededCleanup`). Never
 #                       a verdict: what it leaves, the next run's cleanup or the nightly sweep takes
@@ -180,9 +184,10 @@ jobs:
           PREVIEW_HEAD_SHA: ${{ steps.tested.outputs.head-sha }}
         run: doppler run --project os --config preview -- pnpm preview deploy --pr "$PR_NUMBER" --apps "$APPS"
 
-  # THE TWO SUITES, E2E tests and Browser specs: one job each, side by side, and ONE DEFINITION.
-  # Browser specs runs E2E tests' steps (the `suite-steps` anchor); the two differ only in the suite
-  # their env names, in which dispatch skips them, and in their runners (below).
+  # THE TWO SUITES, E2E tests and Browser specs: side by side, and ONE DEFINITION. Browser specs
+  # runs E2E tests' steps (the `suite-steps` anchor); the two differ only in the suite their env
+  # names, in which dispatch skips them, and in their runners (below). Browser specs runs in SHARDS,
+  # SPECS_SHARDS jobs of the same steps (below).
   # E2E tests is the full mutating proof (docs/testing.md): the vitest e2e suite, whose project-
   # creating rows this isolated preview owns (production runs only its deploy-script readiness
   # probes). Browser specs is the browser proof: the root Playwright specs (specs/AGENTS.md) against
@@ -200,11 +205,10 @@ jobs:
   # Its evidence steps run once its suite read the deployed target (test-results/target.json), so a
   # job that never had a preview keeps none.
   #
-  # RUNNERS: E2E tests waits on a remote preview, which a 2x8 does about as fast as a 4x16. Browser
-  # specs runs six browsers (playwright.config.ts `workers`), whose specs run faster with a 4x16's
-  # CPU; more workers or shards would put more specs on the preview at once, which raises retries.
-  # The measurements: docs/depot-ci.md#reliability-defaults. The timeout is the wait's bound, the
-  # deploy's own 40 minutes, and then the suite's 30.
+  # RUNNERS: E2E tests waits on a remote preview, which a 2x8 does about as fast as a 4x16. Each
+  # Browser specs shard runs six browsers (playwright.config.ts `workers`), whose specs run faster
+  # with a 4x16's CPU. The measurements: docs/depot-ci.md#reliability-defaults. The timeout is the
+  # wait's bound, the deploy's own 40 minutes, and then the suite's 30.
   e2e:
     name: E2E tests
     if: >-
@@ -324,6 +328,17 @@ jobs:
           doppler run --project os --config preview -- pnpm preview "$SUITE"
           ${PR_NUMBER:+--pr "$PR_NUMBER"} ${DEPLOYMENT_PREFIX:+--name "$DEPLOYMENT_PREFIX"}
           ${SLOW_ROWS:+--slow-rows "$SLOW_ROWS"}
+      # THE OTHER SHARDS, in the first: once its own share has run, Browser specs waits for the
+      # `specs-shard` legs, merges their blob reports with its own into the Playwright report its
+      # evidence keeps, and fails when one did not pass (scripts/ci/specs-shards.ts). The step's
+      # timeout is its wait's bound and then the download and merge.
+      - name: Collect the other shards' results
+        id: collect
+        if: ${{ !cancelled() && steps.suite.outcome != 'skipped' && env.SPECS_SHARD == '1' }}
+        timeout-minutes: 40
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: node scripts/ci/specs-shards.ts collect
       # THE STEP AFTER THE SUITE: the telemetry finalizer, then the test evidence manifest, once the
       # suite read its deployed target (scripts/ci/test-evidence.ts `finalize --only-with-target`).
       - name: Check test telemetry, write the suite summary and the test evidence manifest
@@ -385,13 +400,19 @@ jobs:
         if: ${{ always() && (steps.evidence-write.outcome == 'failure' || steps.evidence-upload.outcome == 'failure') }}
         run: bash scripts/ci/test-evidence-unreported.sh "${{ steps.evidence-write.outcome }}" "${{ steps.evidence-upload.outcome }}"
 
+  # SHARDS: the specs run as SPECS_SHARDS jobs, each SPECS_SHARD of them running its share
+  # (playwright.config.ts `shard`), enough of them that every spec has a worker from the start and
+  # the suite takes about as long as its longest spec (scripts/ci/specs-shards.test.ts has the maths).
+  # Browser specs, the required check, is shard 1, and `specs-shard`'s legs are the others. Each
+  # keeps its own evidence; the first merges their reports and gives the verdict for all of them
+  # (the collect step above), so its timeout is theirs and then that step's.
   specs:
     name: Browser specs
     if: >-
       github.event_name == 'pull_request' ||
       (github.event_name == 'workflow_dispatch' && inputs.action != 'e2e')
     runs-on: depot-ubuntu-24.04-4
-    timeout-minutes: 70
+    timeout-minutes: 110
     env:
       SUITE: specs
       FLAKE_SUITE: specs
@@ -399,6 +420,30 @@ jobs:
       TEST_TELEMETRY_ARTIFACT_DIR: test-results/ci-telemetry/raw
       TEST_TELEMETRY_BRANCH: ${{ github.head_ref || github.ref_name }}
       TEST_TELEMETRY_PULL_REQUEST_NUMBER: ${{ env.PR_NUMBER }}
+      SPECS_SHARD: "1"
+      SPECS_SHARDS: "10"
+    steps: *suite-steps
+
+  specs-shard:
+    name: Browser specs ${{ matrix.shard }}/10
+    if: >-
+      github.event_name == 'pull_request' ||
+      (github.event_name == 'workflow_dispatch' && inputs.action != 'e2e')
+    runs-on: depot-ubuntu-24.04-4
+    timeout-minutes: 70
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [2, 3, 4, 5, 6, 7, 8, 9, 10]
+    env:
+      SUITE: specs
+      FLAKE_SUITE: specs
+      TEST_TELEMETRY_EXPECTED_WORKSPACES: iterate-root
+      TEST_TELEMETRY_ARTIFACT_DIR: test-results/ci-telemetry/raw
+      TEST_TELEMETRY_BRANCH: ${{ github.head_ref || github.ref_name }}
+      TEST_TELEMETRY_PULL_REQUEST_NUMBER: ${{ env.PR_NUMBER }}
+      SPECS_SHARD: ${{ matrix.shard }}
+      SPECS_SHARDS: "10"
     steps: *suite-steps
 
   # THE PR'S OLDER DEPLOYMENTS, deleted once this run's is ready (apps/os/scripts/preview.ts
@@ -429,12 +474,12 @@ jobs:
   # the jobs it needs as trace.html and trace.json, this job's artifact, then two commit statuses
   # opening the ci-reports viewer (apps/ci-reports): "CI trace", whose description is the time to
   # green (the last test job's success) or to red (the first failed job), and "Playwright report",
-  # the Browser specs job's HTML report. After the three settle, whatever their outcome; never when
-  # none ran, nor for a PR that changes no preview path. Main OS e2e has the same job
-  # (scripts/ci/depot-workflows.test.ts keeps them alike).
+  # the Browser specs job's merged HTML report. After the deploy and every suite job settle,
+  # whatever their outcome; never when none ran, nor for a PR that changes no preview path. Main OS
+  # e2e has the same job (scripts/ci/depot-workflows.test.ts keeps them alike).
   trace:
     name: CI trace
-    needs: [deploy, e2e, specs]
+    needs: [deploy, e2e, specs, specs-shard]
     if: >-
       always() && needs.deploy.outputs.preview != 'false' &&
       (needs.deploy.result != 'skipped' || needs.e2e.result != 'skipped' || needs.specs.result != 'skipped')

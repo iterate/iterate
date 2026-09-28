@@ -73,7 +73,7 @@ Anything else that needs GitHub-only triggers, such as `pull_request_target`, `i
 | `test.yml`            | PR, main push, dispatch                          | **Test** (required): `pnpm test`, and beside it the Kit firmware host tests                                      |
 | `loc-report.yml`      | PR, dispatch                                     | The LOC table in the PR body                                                                                     |
 | `pr-dashboard.yml`    | PR opened, reopened, ready, drafted or closed    | The event's line in #ci and the daily PR dashboard                                                               |
-| `preview-os.yml`      | Every PR, dispatch                               | **Preview OS**: Deploy preview, beside it **E2E tests** and **Browser specs**, then CI trace                     |
+| `preview-os.yml`      | Every PR, dispatch                               | **Preview OS**: Deploy preview, beside it **E2E tests** and **Browser specs** in shards, then CI trace           |
 | `preview-delete.yml`  | Such a PR closing, dispatch                      | Deletes the PR's deployments                                                                                     |
 | `preview-sweep.yml`   | Nightly, dispatch                                | Deletes superseded, stale and half-made deployments, the legacy Worker Previews and the former parents           |
 | `main-os-e2e.yml`     | Main push touching the preview paths, dispatch   | **Main OS e2e**: the pushed commit deployed as `main-<sha7>`, E2E tests, Browser specs, cleanup, its page, trace |
@@ -386,7 +386,7 @@ before changing a size, and the retries too before adding Playwright workers or 
 | Size (label)                    | Jobs                                                                                                                                                | Evidence                                                                                                                                                                                                                                                                                                              |
 | ------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `8x32` (`depot-ubuntu-24.04-8`) | Lint and Typecheck (four checks in parallel), Test, Deploy preview (seven client builds side by side)                                               | Test's step 80 s p50 against 87 s on a `4x16`. Watch main's Test for a no-log `Sandbox terminated before worker reported completion`. Deploy preview's builds take 5–7 s against 9–12 s on a `4x16`, and it reaches the readiness gate 21.6/24.6 s p50/p90 after it starts against 25.3/28.4 s (n=5 each, 2026-09-27) |
-| `4x16` (`depot-ubuntu-24.04-4`) | Deploy OS, Browser specs (six Playwright workers), Kit Firmware's legs                                                                              | #3258: specs 79/104 s p50/p90 against 96/123 s on a `2x8`; 12+ workers or shards were faster but retried two to four times as many specs                                                                                                                                                                              |
+| `4x16` (`depot-ubuntu-24.04-4`) | Deploy OS, each Browser specs shard (six Playwright workers), Kit Firmware's legs                                                                   | #3258: specs 79/104 s p50/p90 against 96/123 s on a `2x8`; 12+ workers or shards were faster but retried two to four times as many specs                                                                                                                                                                              |
 | `2x8` (`depot-ubuntu-24.04`)    | E2E tests (it waits on a remote preview), client deploys, trace jobs, API-only jobs (LOC report, PR dashboard, Release, Health, Main OS e2e's page) | E2E tests peaked at 1.7 vCPUs on a `4x16`, and took 68 s against 62 s there, for half the price                                                                                                                                                                                                                       |
 
 ## Kit firmware releases
@@ -606,7 +606,7 @@ Each deploy is one job, and every app but SPA, dummy-petshop and ci-reports post
 
 ## Preview job shape
 
-Preview OS runs four jobs, each a check named for what it proves:
+Preview OS runs these jobs, each a check named for what it proves:
 
 - **Deploy preview** deploys the PR merged into main, each step starting once what it needs is
   there ([the trace's spans](ci-traces.md#steps-and-phases)).
@@ -615,9 +615,11 @@ Preview OS runs four jobs, each a check named for what it proves:
   Each sets its suite up while the preview deploys, then waits for the deploy
   ([suites start with the run](#suites-start-with-the-run)). They are one job definition (YAML
   anchors), each job's env naming its suite (`SUITE`, `FLAKE_SUITE`, the telemetry workspace).
-- **CI trace** runs after the three, whatever their outcome, and reports only: it writes the two
-  suites' lines (their jobs' `status` output) into the PR body, then the trace
-  ([Interactive trace reports](#interactive-trace-reports)).
+  Browser specs runs [in shards](#browser-specs-in-shards): it is the first, and **Browser specs
+  2/10** to **10/10** run beside it.
+- **CI trace** runs after the deploy and the suites' jobs, whatever their outcome, and reports
+  only: it writes the two suites' lines (their jobs' `status` output) into the PR body, then the
+  trace ([Interactive trace reports](#interactive-trace-reports)).
 
 The two suites report on every PR, so a ruleset can require them. Each is
 skipped only on a dispatch of the other suite alone. On a PR that changes no
@@ -637,6 +639,30 @@ a redeploy, because the preview persists until the PR closes. Dispatch
 suite and the trace job after it, since Depot refuses to retry a job alone
 once a job that needs it has started. Main OS e2e has the same jobs by the
 same names.
+
+### Browser specs in shards
+
+With Playwright's full parallelism a spec starts as soon as a worker is free, so when
+`shards × workers ≥ specs` every spec starts at once and the suite takes about as long as its
+longest spec. Each shard is a `4x16` with six workers (the density #3258 measured), so there are
+`ceil(specs / 6)` shards: 10 for 56 specs. `scripts/ci/specs-shards.test.ts` lists the specs and
+fails when the count no longer matches, naming what to change: `SPECS_SHARDS` and the
+`specs-shard` matrix, in both workflows. Playwright 1.63 deals the specs out by count, so the
+fullest shard holds `ceil(specs / shards)`.
+
+- **Browser specs** (the required check) is shard 1. The legs of the matrix job `specs-shard` are
+  the others, each named for its shard.
+- Every shard sets up and waits for the deploy like any suite job, then runs its share
+  (`SPECS_SHARD` of `SPECS_SHARDS`, playwright.config.ts `shard`). Each keeps its own evidence,
+  with a Playwright blob report in place of the HTML one.
+- Once its own share has run, the first shard waits for every leg to settle, downloads each leg's
+  blob report from its newest attempt's test results, merges them with its own into the one HTML
+  report behind the **Playwright report** status, and fails when a leg did not pass
+  (`scripts/ci/specs-shards.ts`). So Browser specs is green only when every spec passed, and
+  there is no separate merge job to start and set up after the specs.
+- Cost: every shard waits out the deploy on its own runner, about nine more `4x16`s a push than
+  one job. More workers against one preview have raised retries before (#3258), so compare the
+  retried specs per run before and after changing the count.
 
 ### Suites start with the run
 
@@ -860,14 +886,16 @@ week ([test evidence](test-evidence.md) keeps them in R2). Anyone can open an ar
 starts with `public-` at `https://ci-reports.iterate-dev-preview.workers.dev/<artifact-id>/`
 ([CI traces](./ci-traces.md#the-viewer)), so upload only files intended to be public.
 
-The Browser specs jobs print Playwright's report into the job log, and upload two artifacts even
-when the suite fails:
+Each Browser specs shard prints Playwright's report of its share into its job log, and uploads its
+artifacts even when the suite fails:
 
-- `public-playwright-report`: the HTML report (`test-results/playwright-html`), which the
-  **Playwright report** status opens; a failed spec's trace opens in its trace viewer.
+- `public-playwright-report`, from the first shard only: the HTML report of every shard
+  (`test-results/playwright-html`), which the **Playwright report** status opens; a failed spec's
+  trace opens in its trace viewer.
 - `preview-os-test-artifacts-attempt-<id>` (main: `main-os-test-artifacts-attempt-<id>`): all of
   `test-results/`, one per job attempt ([above](#artifacts-per-job-attempt)). Each failed spec's
-  `trace.zip`, screenshot and `error-context.md` are under `playwright-output/<test>/`.
+  `trace.zip`, screenshot and `error-context.md` are under `playwright-output/<test>/`, and the
+  shard's blob report under `playwright-blob/`.
 
 Fetch either with `depot ci artifacts`, unzip, and open it with
 `pnpm exec playwright show-report <dir>` or `pnpm exec playwright show-trace <trace.zip>`.

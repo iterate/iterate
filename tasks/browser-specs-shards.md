@@ -5,7 +5,7 @@ size: medium
 
 # Browser specs in shards again: every spec at once
 
-**Status:** spec written, implementation not started. Assumptions below were made without Misha; each says why.
+**Status:** implemented and green locally; waiting on the PR's own CI runs to measure time, retries and cost. Done: shard config, collector, both workflows, trace, main's page, docs, the shard-count guard. Missing: live measurements, and whether `depot ci retry --failed` re-collects a retried leg. Assumptions below were made without Misha; each says why.
 
 Browser specs had six 16-worker shards on the legacy platform (#2659, 2026-09-16). The os-next roll-forward (#2837, 2026-09-23) replaced that workflow with Preview OS's single Browser specs job, so sharding went with it. Bring it back on Preview OS and Main OS e2e, simpler than last time.
 
@@ -42,17 +42,27 @@ What to expect: today the Playwright wall is about 102 s (sum of spec time about
 
 ## Checklist
 
-- [ ] `playwright.config.ts`: read the shard from the environment (`PLAYWRIGHT_SHARD=3/10`); a shard writes a blob report and no HTML report
-- [ ] Guard test: `ceil(listed tests / shards) ≤ workers`, failing with what to change (the shard count in both workflows)
-- [ ] `preview-os.yml`: `specs` is shard 1/10 and collects; `specs-shard` matrix for 2..10; the trace job needs both
-- [ ] `main-os-e2e.yml`: same shape
-- [ ] Collector: wait for the legs, download their blobs, merge the HTML report, fail on any red leg (a script under `scripts/ci/`, tested through a fake Depot)
-- [ ] Trace: label shard legs; time to green still ends at the last suite job
-- [ ] Workflow tests (`preview-os-workflow.test.ts`, `depot-workflows.test.ts`) pin the new shape
-- [ ] Docs: `docs/depot-ci.md` (preview job shape, reliability defaults), `docs/testing.md`
+- [x] `playwright.config.ts`: read the shard from the environment (`PLAYWRIGHT_SHARD=3/10`); a shard writes a blob report and no HTML report _`SPECS_SHARD`/`SPECS_SHARDS` env; blob to `test-results/playwright-blob`_
+- [x] Guard test: `ceil(listed tests / shards) ≤ workers`, failing with what to change (the shard count in both workflows) _`scripts/ci/specs-shards.test.ts`; asserts the fewest shards, `shards = ceil(tests / workers)`, so it also fails when specs are removed_
+- [x] `preview-os.yml`: `specs` is shard 1/10 and collects; `specs-shard` matrix for 2..10; the trace job needs both _collect step in the shared `suite-steps`, gated on `SPECS_SHARD == '1'`; `specs` timeout 70 → 110 for the collection_
+- [x] `main-os-e2e.yml`: same shape _plus the alert job needs the legs; only shard 1 saves Playwright's browser cache_
+- [x] Collector: wait for the legs, download their blobs, merge the HTML report, fail on any red leg (a script under `scripts/ci/`, tested through a fake Depot) _`scripts/ci/specs-shards.ts`, reusing the deploy wait's poll loop (`pollWorkflow` in await-deploy.ts)_
+- [x] Trace: label shard legs; time to green still ends at the last suite job _`jobKeyInWorkflow` drops `:matrix-<n>`; legs use their display name_
+- [x] Workflow tests (`preview-os-workflow.test.ts`, `depot-workflows.test.ts`) pin the new shape
+- [x] Docs: `docs/depot-ci.md` (preview job shape, reliability defaults), `docs/testing.md` _new section "Browser specs in shards"_
+- [x] Main's alert page and the CI telemetry sync read every shard _`scripts/monitors/e2e.ts` names failing rows from any leg; `testEvidenceJobs` lists `specs-shard`_
 - [ ] Measure on the PR: Playwright wall, job and verdict time, retries per run, over several runs; compare with #3258's numbers
+- [ ] Check `depot ci retry <run> --failed` on a red leg re-runs the leg and shard 1, and shard 1 collects the new attempt
 
 ## Follow-ups (not in this PR)
 
 - The flake dashboard's Cost and incident sections treat each evidence folder as a run of its suite, so they now see one shard as a specs run. Group a workflow run's shards into one run.
 - Pack shards by spec duration instead of count: 500 s of specs could fit 4 shards that each end near the longest spec, at 40% of the cost.
+
+## Implementation log
+
+- Baseline (main, `vbs7x5989z`, 2026-09-28): job start 20:50:22, setup done +10 s, deploy wait 40 s, Playwright 102 s for 56 tests (sum of spec time ~500 s incl. one retry), longest spec 26.3 s (notes sessions).
+- Why shard-1-collects was dropped before isn't in git or the task files; the old design needed a prepare job (deploy + slot lease) and a finish job (erase the slot). Neither exists now.
+- Local proof of the Playwright side: two shards of the local-only `suite` project wrote `report-suite-1.zip` / `report-suite-2.zip`; `merge-reports --reporter html` merged them (6 tests).
+- Main's page: a Browser specs run red only because of a leg now reads "failed: Browser specs, Browser specs 2/2; failing rows: …" (`scripts/monitors/e2e.test.ts`).
+- 7 tests in `scripts/ci/toolchain.test.ts` and `tracing.test.ts` fail locally on main too (macOS bash 3.2 has no `inherit_errexit`); CI's bash is fine.

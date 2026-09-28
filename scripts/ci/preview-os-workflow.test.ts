@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 import { expect, test } from "vitest";
 import { parse as parseYaml } from "yaml";
 import { AWAIT_DEPLOY, SUITE_BOUND_MS } from "./await-deploy.ts";
+import { COLLECT_BOUND_MS, SHARD_JOB } from "./specs-shards.ts";
 import { evaluateWorkflowExpression as evaluate } from "./workflow-expression.ts";
 
 type PreviewStep = {
@@ -32,6 +33,7 @@ type PreviewWorkflow = {
       /** A Depot stock image's label (`depot-ubuntu-24.04-4`) */
       "runs-on"?: string;
       "timeout-minutes"?: number;
+      strategy?: { "fail-fast"?: boolean; matrix?: { shard?: number[] } };
       env?: Record<string, string>;
       outputs?: Record<string, string>;
       steps?: PreviewStep[];
@@ -47,10 +49,12 @@ const preview = parseYaml(source) as PreviewWorkflow;
 // As the jobs run: each `parallel:` block's steps stand where the block does.
 for (const job of Object.values(preview.jobs))
   job.steps = job.steps?.flatMap((step) => step.parallel || [step]);
-// Both suite jobs run one step list; the job's SUITE picks what it runs.
+// Every suite job runs one step list; the job's SUITE picks what it runs, and the specs run in
+// shards: Browser specs is the first, `specs-shard`'s legs the others.
 const suites = [
   { job: "e2e", name: "E2E tests", suite: "e2e" },
   { job: "specs", name: "Browser specs", suite: "specs" },
+  { job: SHARD_JOB, name: "Browser specs ${{ matrix.shard }}/10", suite: "specs" },
 ] as const;
 const suiteRun =
   'doppler run --project os --config preview -- pnpm preview "$SUITE" ${PR_NUMBER:+--pr "$PR_NUMBER"} ${DEPLOYMENT_PREFIX:+--name "$DEPLOYMENT_PREFIX"} ${SLOW_ROWS:+--slow-rows "$SLOW_ROWS"}';
@@ -62,6 +66,7 @@ test("Preview OS names each job for the check it is: deploy and the two suites s
     deploy: "Deploy preview",
     e2e: "E2E tests",
     specs: "Browser specs",
+    [SHARD_JOB]: "Browser specs ${{ matrix.shard }}/10",
     cleanup: "Clean up superseded",
     trace: "CI trace",
   });
@@ -83,31 +88,39 @@ test("Preview OS names each job for the check it is: deploy and the two suites s
   expect(runs("deploy")).not.toContain(suiteRun);
 });
 
-// Why the two suite jobs share one definition: .depot/workflows/preview-os.yml (THE TWO SUITES).
-test("Preview OS's two suite jobs are one definition, differing only in the suite they name", () => {
-  const [e2e, specs] = [preview.jobs.e2e!, preview.jobs.specs!];
-  expect(specs).toMatchObject({
-    steps: e2e.steps,
-    "timeout-minutes": e2e["timeout-minutes"],
-  });
-  // written once: the second job aliases the first's
-  expect(source.match(/^ {4}steps: \*suite-steps$/gmu)).toHaveLength(1);
+// Why the suite jobs share one definition: .depot/workflows/preview-os.yml (THE TWO SUITES).
+test("Preview OS's suite jobs are one definition, differing only in the suite and the shard they name", () => {
+  const [e2e, specs, shard] = [preview.jobs.e2e!, preview.jobs.specs!, preview.jobs[SHARD_JOB]!];
+  expect(specs).toMatchObject({ steps: e2e.steps });
+  expect(shard).toMatchObject({ steps: e2e.steps, "timeout-minutes": e2e["timeout-minutes"] });
+  // written once: the other jobs alias the first's
+  expect(source.match(/^ {4}steps: \*suite-steps$/gmu)).toHaveLength(2);
   const suiteEnv = ["SUITE", "FLAKE_SUITE", "TEST_TELEMETRY_EXPECTED_WORKSPACES"];
+  const shardEnv = ["SPECS_SHARD", "SPECS_SHARDS"];
   const shared = (env: Record<string, string> = {}) =>
-    Object.fromEntries(Object.entries(env).filter(([name]) => !suiteEnv.includes(name)));
+    Object.fromEntries(
+      Object.entries(env).filter(([name]) => ![...suiteEnv, ...shardEnv].includes(name)),
+    );
   expect(shared(specs.env)).toEqual(shared(e2e.env));
-  expect([e2e.env, specs.env]).toMatchObject([
+  expect(shared(shard.env)).toEqual(shared(e2e.env));
+  expect([e2e.env, specs.env, shard.env]).toMatchObject([
     { SUITE: "e2e", FLAKE_SUITE: "preview-e2e", TEST_TELEMETRY_EXPECTED_WORKSPACES: "os" },
     { SUITE: "specs", FLAKE_SUITE: "specs", TEST_TELEMETRY_EXPECTED_WORKSPACES: "iterate-root" },
+    { SUITE: "specs", FLAKE_SUITE: "specs", TEST_TELEMETRY_EXPECTED_WORKSPACES: "iterate-root" },
   ]);
+  // how many shards: ./specs-shards.test.ts
+  expect(e2e.env).not.toHaveProperty("SPECS_SHARD");
   // each skips on a dispatch of the other suite alone, and that is the only difference
   expect(specs.if?.replace("inputs.action != 'e2e'", "inputs.action != 'specs'")).toBe(e2e.if);
+  // and a red shard leaves the others running: the first collects them all
+  expect(shard).toMatchObject({ if: specs.if, strategy: { "fail-fast": false } });
 });
 
 // Why each suite runs on its size: docs/depot-ci.md#reliability-defaults.
-test("Preview OS's E2E tests run on the smallest runner, and Browser specs on a 4x16", () => {
+test("Preview OS's E2E tests run on the smallest runner, and each Browser specs shard on a 4x16", () => {
   expect(preview.jobs.e2e!["runs-on"]).toBe("depot-ubuntu-24.04");
   expect(preview.jobs.specs!["runs-on"]).toBe("depot-ubuntu-24.04-4");
+  expect(preview.jobs[SHARD_JOB]!["runs-on"]).toBe("depot-ubuntu-24.04-4");
 });
 
 // A required check has to report on every pull request: GitHub leaves one "Pending" when a `paths`
@@ -217,16 +230,25 @@ test("Preview OS's suites decide as Deploy preview does whether there is a previ
 });
 
 // The wait is bounded by the deploy's own timeout, and the suite by its 30 minutes after it
-// (apps/os/scripts/preview.ts `runBounded`), so the job's timeout is never what stops a suite.
-test("Preview OS's suite jobs outlast the deploy they wait for, and then their suite's 30 minutes", () => {
+// (apps/os/scripts/preview.ts `runBounded`), so the job's timeout is never what stops a suite. The
+// first specs shard then collects the others, for as long as its step's timeout, which outlasts the
+// collection's own bound (scripts/ci/specs-shards.ts).
+test("Preview OS's suite jobs outlast the deploy they wait for, their suite's 30 minutes, and the first shard's collection", () => {
   expect({ ...AWAIT_DEPLOY, suiteMs: SUITE_BOUND_MS }).toMatchObject({
     boundMs: preview.jobs.deploy!["timeout-minutes"]! * 60_000,
     suiteMs: 30 * 60_000,
   });
-  for (const suite of suites)
-    expect(preview.jobs[suite.job]!["timeout-minutes"]! * 60_000).toBe(
-      AWAIT_DEPLOY.boundMs + SUITE_BOUND_MS,
-    );
+  const collect = preview.jobs.specs!.steps!.find((step) => step.id === "collect")!;
+  expect(collect["timeout-minutes"]! * 60_000).toBeGreaterThan(COLLECT_BOUND_MS);
+  expect({
+    e2e: preview.jobs.e2e!["timeout-minutes"]! * 60_000,
+    specs: preview.jobs.specs!["timeout-minutes"]! * 60_000,
+    shard: preview.jobs[SHARD_JOB]!["timeout-minutes"]! * 60_000,
+  }).toEqual({
+    e2e: AWAIT_DEPLOY.boundMs + SUITE_BOUND_MS,
+    specs: AWAIT_DEPLOY.boundMs + SUITE_BOUND_MS + collect["timeout-minutes"]! * 60_000,
+    shard: AWAIT_DEPLOY.boundMs + SUITE_BOUND_MS,
+  });
 });
 
 // THE REQUIRED CHECKS' TRUTH TABLE: when each suite job skips, passes having tested nothing, or
@@ -347,6 +369,8 @@ test.each<[string, Run, { e2e: string; specs: string; trace: boolean }]>([
     "needs.specs.result": specs === "fails" ? "failure" : result(specs),
   });
   expect({ e2e, specs, trace }).toEqual(expected);
+  // the other specs shards run, pass or fail as the first does
+  expect(outcome(SHARD_JOB)).toBe(specs);
 });
 
 // The cleanup deletes only once this run's deployment is ready, and only this run's prefix's older
@@ -391,12 +415,43 @@ test("a test job names its preview by the PR's number, or by preview-name withou
   });
 });
 
+// The first specs shard collects the others once its own share has run, whatever its outcome, before
+// its evidence steps, so its evidence keeps the merged Playwright report (scripts/ci/specs-shards.ts).
+test("only the first specs shard collects the others, once its suite has run", () => {
+  const collects = Object.fromEntries(
+    suites.map((suite) => {
+      const job = preview.jobs[suite.job]!;
+      const steps = job.steps || [];
+      const collect = steps[steps.findIndex((step) => step.id === "suite") + 1]!;
+      expect(collect).toMatchObject({
+        id: "collect",
+        run: "node scripts/ci/specs-shards.ts collect",
+      });
+      const shard = (job.env?.SPECS_SHARD || "").replace("${{ matrix.shard }}", "2");
+      const runs = (outcome: string) =>
+        evaluate(collect.if!.replace(/^\$\{\{ (.*) \}\}$/u, "$1"), {
+          "steps.suite.outcome": outcome,
+          "env.SPECS_SHARD": shard,
+        });
+      return [
+        suite.job,
+        { passed: runs("success"), failed: runs("failure"), skipped: runs("skipped") },
+      ];
+    }),
+  );
+  expect(collects).toEqual({
+    e2e: { passed: false, failed: false, skipped: false },
+    specs: { passed: true, failed: true, skipped: false },
+    [SHARD_JOB]: { passed: false, failed: false, skipped: false },
+  });
+});
+
 // The evidence is kept once the suite read its deployed target, and the steps after the finalizer
 // follow its outputs (scripts/ci/test-evidence.ts `finalize`).
 test("a test job keeps its evidence whenever its suite read its deployed target, and only then", () => {
   for (const suite of suites) {
     const steps = preview.jobs[suite.job]!.steps || [];
-    const evidence = steps.slice(steps.findIndex((step) => step.id === "suite") + 1);
+    const evidence = steps.slice(steps.findIndex((step) => step.id === "collect") + 1);
     expect(evidence[0]).toMatchObject({
       id: "evidence-write",
       if: "${{ always() && steps.suite.outcome != 'skipped' }}",
@@ -412,7 +467,7 @@ test("a test job keeps its evidence whenever its suite read its deployed target,
         "Upload results",
         "${{ always() && (steps.evidence-write.outputs.evidence == 'kept' || steps.evidence-write.outcome == 'failure') }}",
       ],
-      // the Playwright report only the specs write
+      // the Playwright report only the first specs shard writes: the merged one
       [
         "Upload public Playwright HTML report",
         "${{ always() && steps.evidence-write.outputs.playwright-report == 'written' }}",
