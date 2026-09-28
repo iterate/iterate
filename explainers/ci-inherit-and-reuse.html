@@ -1,0 +1,711 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>CI Inherit and Reuse</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&family=Martian+Mono:wght@700&display=swap"
+    />
+    <style>
+      :root {
+        --bg: #f2f5f6;
+        --panel: #ffffff;
+        --ink: #122029;
+        --muted: #56666f;
+        --faint: #9aa7ae;
+        --line: #d6dee2;
+        --teal: #0c7a84;
+        --teal-soft: #d6ecee;
+        --amber: #b06a0a;
+        --amber-soft: #f5e5cb;
+        --grey-bar: #cfd8dc;
+        --display: "Martian Mono", ui-monospace, Menlo, monospace;
+        --body: "IBM Plex Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+        --mono: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root:not([data-theme="light"]) {
+          color-scheme: dark;
+          --bg: #0c161b;
+          --panel: #122028;
+          --ink: #dce6ea;
+          --muted: #97a8b1;
+          --faint: #5f717a;
+          --line: #243841;
+          --teal: #43c3cd;
+          --teal-soft: #0f393f;
+          --amber: #e8a53f;
+          --amber-soft: #3a2a12;
+          --grey-bar: #2b3f48;
+        }
+      }
+      :root[data-theme="dark"] {
+        color-scheme: dark;
+        --bg: #0c161b;
+        --panel: #122028;
+        --ink: #dce6ea;
+        --muted: #97a8b1;
+        --faint: #5f717a;
+        --line: #243841;
+        --teal: #43c3cd;
+        --teal-soft: #0f393f;
+        --amber: #e8a53f;
+        --amber-soft: #3a2a12;
+        --grey-bar: #2b3f48;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--ink);
+        font: 16px/1.6 var(--body);
+      }
+      .page {
+        max-width: 880px;
+        margin: 0 auto;
+        padding-inline: clamp(16px, 5vw, 40px);
+        padding-block: 44px 80px;
+        display: grid;
+        gap: 28px;
+      }
+      h1 {
+        margin: 0;
+        font: 700 clamp(28px, 5vw, 42px)/1.1 var(--display);
+        letter-spacing: -0.03em;
+        text-wrap: balance;
+      }
+      p {
+        margin: 0;
+        max-width: 64ch;
+      }
+      .intro {
+        display: grid;
+        gap: 12px;
+      }
+      code {
+        font: 0.88em var(--mono);
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 4px;
+        padding: 0 0.3em;
+      }
+      button {
+        font: inherit;
+        color: inherit;
+      }
+      :focus-visible {
+        outline: 2px solid var(--teal);
+        outline-offset: 2px;
+      }
+
+      .picker {
+        display: grid;
+        gap: 8px;
+      }
+      .picker .label {
+        font: 600 12px/1.3 var(--mono);
+        text-transform: uppercase;
+        letter-spacing: 0.09em;
+        color: var(--muted);
+      }
+      .choices {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+        gap: 8px;
+      }
+      .choice {
+        text-align: left;
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 9px;
+        padding: 10px 12px;
+        cursor: pointer;
+        font-weight: 500;
+      }
+      .choice:hover {
+        border-color: var(--teal);
+      }
+      .choice[aria-pressed="true"] {
+        border-color: var(--teal);
+        box-shadow: inset 0 0 0 1px var(--teal);
+      }
+
+      .stage {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        padding: 20px;
+        display: grid;
+        gap: 20px;
+      }
+      .story {
+        display: flex;
+        gap: 12px;
+        align-items: baseline;
+        justify-content: space-between;
+        flex-wrap: wrap;
+      }
+      .story p {
+        color: var(--muted);
+      }
+      .replay {
+        background: none;
+        border: 1px solid var(--line);
+        border-radius: 7px;
+        padding: 5px 10px;
+        cursor: pointer;
+        font: 500 13px/1 var(--body);
+      }
+      .replay:hover {
+        border-color: var(--teal);
+      }
+
+      .split {
+        display: grid;
+        grid-template-columns: minmax(0, 0.85fr) minmax(0, 1.15fr);
+        gap: 24px;
+        align-items: center;
+      }
+      @media (max-width: 700px) {
+        .split {
+          grid-template-columns: 1fr;
+        }
+      }
+
+      svg.commits {
+        width: 100%;
+        height: auto;
+        display: block;
+        overflow: visible;
+      }
+      svg .line {
+        stroke: var(--line);
+        stroke-width: 3;
+      }
+      svg .old {
+        fill: var(--panel);
+        stroke: var(--ink);
+        stroke-width: 2.5;
+      }
+      svg .new {
+        fill: var(--ink);
+        transform-box: fill-box;
+        transform-origin: center;
+      }
+      svg .cap {
+        font: 500 12px var(--mono);
+        fill: var(--muted);
+      }
+      svg .capb {
+        font: 600 12px var(--mono);
+        fill: var(--ink);
+      }
+      svg .ok {
+        font: 600 11px var(--mono);
+        fill: var(--teal);
+      }
+      svg .arrow {
+        fill: none;
+        stroke: var(--teal);
+        stroke-width: 2.5;
+        stroke-linecap: round;
+      }
+      svg .arrowhead {
+        fill: var(--teal);
+      }
+      svg .arrowlabel {
+        font: 600 11px var(--mono);
+        fill: var(--teal);
+      }
+      .file {
+        justify-self: start;
+        display: inline-flex;
+        gap: 8px;
+        align-items: center;
+        flex-wrap: wrap;
+        font: 13px/1.4 var(--mono);
+      }
+      .file .path {
+        background: var(--bg);
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        padding: 3px 8px;
+      }
+      .file .touch {
+        font-weight: 600;
+        font-size: 12px;
+      }
+      .file .touch.none {
+        color: var(--teal);
+      }
+      .file .touch.some {
+        color: var(--amber);
+      }
+      .left {
+        display: grid;
+        gap: 12px;
+      }
+
+      .jobs {
+        display: grid;
+        gap: 14px;
+      }
+      .job {
+        display: grid;
+        gap: 6px;
+      }
+      .job .top {
+        display: flex;
+        justify-content: space-between;
+        gap: 10px;
+        align-items: baseline;
+        flex-wrap: wrap;
+      }
+      .job .name {
+        font-weight: 600;
+      }
+      .job .st {
+        font: 600 12.5px/1.3 var(--mono);
+        color: var(--faint);
+        transition: color 0.3s ease;
+      }
+      .job .st.skip {
+        color: var(--teal);
+      }
+      .job .st.run {
+        color: var(--amber);
+      }
+      .bar {
+        height: 8px;
+        border-radius: 99px;
+        background: var(--bg);
+        border: 1px solid var(--line);
+        overflow: hidden;
+      }
+      .bar i {
+        display: block;
+        height: 100%;
+        width: 0;
+        border-radius: 99px;
+        background: var(--amber);
+      }
+      .bar.skip i {
+        background: var(--teal);
+      }
+      .workers {
+        display: grid;
+        grid-template-columns: repeat(7, minmax(0, 1fr));
+        gap: 5px;
+      }
+      .w {
+        border: 1px dashed var(--line);
+        border-radius: 6px;
+        padding: 6px 2px;
+        text-align: center;
+        font: 500 11px/1.2 var(--mono);
+        color: var(--faint);
+        transition:
+          background 0.35s ease,
+          border-color 0.35s ease,
+          color 0.35s ease,
+          transform 0.35s ease;
+      }
+      .w.reused {
+        border-style: solid;
+        border-color: var(--teal);
+        background: var(--teal-soft);
+        color: var(--teal);
+      }
+      .w.deployed {
+        border-style: solid;
+        border-color: var(--amber);
+        background: var(--amber-soft);
+        color: var(--amber);
+      }
+      .w.pop {
+        transform: translateY(-3px);
+      }
+
+      .times {
+        display: grid;
+        gap: 8px;
+        border-top: 1px solid var(--line);
+        padding-top: 16px;
+      }
+      .trow {
+        display: grid;
+        grid-template-columns: 6.5em minmax(0, 1fr) 5.2em;
+        gap: 10px;
+        align-items: center;
+        font-size: 14px;
+      }
+      .trow .v {
+        font: 600 14px var(--mono);
+        text-align: right;
+        font-variant-numeric: tabular-nums;
+      }
+      .trow .tb {
+        height: 12px;
+        border-radius: 99px;
+        background: var(--bg);
+        overflow: hidden;
+      }
+      .trow .tb i {
+        display: block;
+        height: 100%;
+        border-radius: 99px;
+        background: var(--grey-bar);
+      }
+      .trow.now .tb i {
+        background: var(--teal);
+        width: 0;
+      }
+      .trow.now.work .tb i {
+        background: var(--amber);
+      }
+
+      ul.rules {
+        margin: 0;
+        padding-left: 1.2em;
+        display: grid;
+        gap: 8px;
+        max-width: 66ch;
+      }
+      h2 {
+        margin: 0 0 10px;
+        font: 600 19px/1.3 var(--body);
+      }
+      .catch {
+        color: var(--muted);
+        font-size: 15px;
+      }
+      @media (prefers-reduced-motion: reduce) {
+        *,
+        *::before,
+        *::after {
+          transition: none !important;
+          animation: none !important;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="page">
+      <div class="intro">
+        <h1>CI Inherit and Reuse</h1>
+        <p>
+          Every push to a pull request used to deploy the whole product (seven Cloudflare Workers)
+          and run both test suites. That took about 2¼ minutes, even for a typo fix.
+        </p>
+        <p>
+          Now CI looks back at the pull request's last push that already did the work. Whatever the
+          new push didn't affect, it skips: a test suite passes straight away or runs only the tests
+          that changed, and the deployment is reused when nothing that deploys changed.
+        </p>
+      </div>
+
+      <div class="picker">
+        <span class="label">What does the new push change?</span>
+        <div class="choices" id="choices"></div>
+      </div>
+
+      <div class="stage">
+        <div class="story">
+          <p id="story"></p>
+          <button type="button" class="replay" id="replay">↻ Replay</button>
+        </div>
+        <div class="split">
+          <div class="left">
+            <svg
+              class="commits"
+              viewBox="0 0 300 120"
+              role="img"
+              aria-label="The last push and the new push"
+            >
+              <line class="line" x1="60" y1="46" x2="236" y2="46" />
+              <circle class="old" cx="60" cy="46" r="13" />
+              <text class="capb" x="60" y="82" text-anchor="middle">last push</text>
+              <text class="ok" x="60" y="100" text-anchor="middle">tests ✓ · deployed</text>
+              <circle class="new" id="new" cx="236" cy="46" r="13" />
+              <text class="capb" x="236" y="82" text-anchor="middle">new push</text>
+              <path class="arrow" id="arrow" d="M222,30 C180,4 116,4 76,28" />
+              <path class="arrowhead" id="arrowhead" d="M72,22 L84,30 L71,35 Z" />
+              <text class="arrowlabel" id="arrowlabel" x="148" y="10" text-anchor="middle">
+                what changed since?
+              </text>
+            </svg>
+            <div class="file" id="file">
+              <span class="path" id="path"></span><span class="touch" id="touch"></span>
+            </div>
+          </div>
+          <div class="jobs">
+            <div class="job">
+              <div class="top">
+                <span class="name">Deploy</span><span class="st" id="st-deploy"></span>
+              </div>
+              <div class="workers" id="workers"></div>
+            </div>
+            <div class="job">
+              <div class="top">
+                <span class="name">E2E tests</span><span class="st" id="st-e2e"></span>
+              </div>
+              <div class="bar" id="bar-e2e"><i></i></div>
+            </div>
+            <div class="job">
+              <div class="top">
+                <span class="name">Browser specs</span><span class="st" id="st-specs"></span>
+              </div>
+              <div class="bar" id="bar-specs"><i></i></div>
+            </div>
+          </div>
+        </div>
+        <div class="times">
+          <div class="trow">
+            <span>Before</span><span class="tb"><i style="width: 90%"></i></span
+            ><span class="v">2:15</span>
+          </div>
+          <div class="trow now" id="now-row">
+            <span>Now</span><span class="tb"><i id="now-bar"></i></span
+            ><span class="v" id="now-v">0:00</span>
+          </div>
+        </div>
+      </div>
+
+      <section>
+        <h2>How it decides</h2>
+        <ul class="rules">
+          <li>
+            <b>Each test suite</b> looks back to the last push it passed on. If nothing it depends
+            on changed since, it passes without running. E2E tests only test the platform
+            (<code>apps/os</code>); Browser specs use every app.
+          </li>
+          <li>
+            <b>A suite that has to run runs only what changed</b> when it can: just the edited test
+            files, or just the specs for the app that changed. A platform change runs everything.
+          </li>
+          <li>
+            <b>The deploy</b> looks back to the last push that deployed. If nothing that deploys
+            changed since, it reuses that deployment. Otherwise it deploys everything.
+          </li>
+          <li><b>A failed result is never reused.</b> After a red run, the suite runs again.</li>
+        </ul>
+      </section>
+
+      <p class="catch">
+        The catch: CI now tests the pushed commit itself, not the commit merged with the latest
+        main. A branch that's fallen far behind main should merge main in. This is an experiment in
+        pull request #3340.
+      </p>
+    </div>
+
+    <script>
+      (() => {
+        const APPS = ["os", "dash", "agents", "notes", "admin", "voice", "kit"];
+        const MAX = 150; // seconds at the full width of a time bar
+        const SCENARIOS = [
+          {
+            label: "A typo in the docs",
+            story:
+              "Priya's last push passed. A reviewer asks for a clearer sentence, so she pushes a one-line docs fix.",
+            path: "docs/frontend-guide.md",
+            touches: "affects nothing that's tested",
+            deploy: [],
+            reuse: false,
+            e2e: "skip",
+            specs: "skip",
+            seconds: 9,
+          },
+          {
+            label: "A new end-to-end test",
+            story: "Ana's last push fixed a scheduler bug. Now she adds a test that proves it.",
+            path: "apps/os/e2e/alarms.e2e.test.ts",
+            touches: "affects E2E tests only",
+            deploy: [],
+            reuse: true,
+            e2e: "run",
+            e2eRun: "runs just that test file",
+            specs: "skip",
+            seconds: 64,
+          },
+          {
+            label: "The Notes app",
+            story:
+              "Tomás changes how the Notes editor saves drafts. The platform itself doesn't change. Most of the wait is the deploy.",
+            path: "apps/notes/src/editor.tsx",
+            touches: "affects notes",
+            deploy: APPS,
+            reuse: false,
+            e2e: "skip",
+            specs: "run",
+            specsRun: "runs only the Notes spec",
+            seconds: 110,
+          },
+          {
+            label: "The platform",
+            story:
+              "Sam changes how the platform retries a database read. Everything is built on the platform, so everything runs.",
+            path: "apps/os/src/control-plane/d1.ts",
+            touches: "affects everything",
+            deploy: APPS,
+            reuse: false,
+            e2e: "run",
+            specs: "run",
+            seconds: 135,
+          },
+        ];
+
+        const $ = (id) => document.getElementById(id);
+        const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+        let timers = [];
+        let current = 0;
+
+        $("workers").innerHTML = APPS.map(
+          (a) => `<span class="w" data-app="${a}">${a}</span>`,
+        ).join("");
+        $("choices").innerHTML = SCENARIOS.map(
+          (s, i) =>
+            `<button type="button" class="choice" data-i="${i}" aria-pressed="false">${s.label}</button>`,
+        ).join("");
+
+        const clock = (sec) =>
+          `${Math.floor(sec / 60)}:${String(Math.round(sec % 60)).padStart(2, "0")}`;
+        const later = (ms, fn) => timers.push(setTimeout(fn, reduce ? 0 : ms));
+        const tween = (ms, fn) => {
+          if (reduce) {
+            fn(1);
+            return;
+          }
+          const start = performance.now();
+          const step = (now) => {
+            const k = Math.min((now - start) / ms, 1);
+            fn(1 - Math.pow(1 - k, 3));
+            if (k < 1) timers.push(requestAnimationFrame(step));
+          };
+          timers.push(requestAnimationFrame(step));
+        };
+        function stop() {
+          for (const t of timers) {
+            clearTimeout(t);
+            cancelAnimationFrame(t);
+          }
+          timers = [];
+        }
+
+        function setArrow(k) {
+          const arrow = $("arrow");
+          const len = arrow.getTotalLength();
+          arrow.style.strokeDasharray = `${len}`;
+          arrow.style.strokeDashoffset = `${len * (1 - k)}`;
+          $("arrowhead").style.opacity = k >= 1 ? "1" : "0";
+          $("arrowlabel").style.opacity = String(k);
+        }
+        function setJob(key, mode, fill, runLabel) {
+          const st = $("st-" + key);
+          const bar = $("bar-" + key);
+          st.className = "st" + (mode ? " " + mode : "");
+          st.textContent =
+            mode === "skip"
+              ? "passes straight away"
+              : mode === "run"
+                ? runLabel || "runs everything"
+                : "waiting";
+          bar.className = "bar" + (mode === "skip" ? " skip" : "");
+          bar.firstElementChild.style.width = `${fill * 100}%`;
+        }
+
+        function play(i, animate) {
+          stop();
+          current = i;
+          const s = SCENARIOS[i];
+          for (const b of document.querySelectorAll(".choice"))
+            b.setAttribute("aria-pressed", String(Number(b.dataset.i) === i));
+          $("story").textContent = s.story;
+          $("path").textContent = s.path;
+          $("touch").textContent = "";
+          $("touch").className = "touch";
+          const still = !animate || reduce;
+
+          // reset the stage, then play the push out
+          $("new").style.transition = "none";
+          $("file").style.transition = "none";
+          $("new").style.transform = still ? "scale(1)" : "scale(0)";
+          $("file").style.opacity = still ? "1" : "0";
+          setArrow(still ? 1 : 0);
+          setJob("e2e", null, 0);
+          setJob("specs", null, 0);
+          $("st-deploy").className = "st";
+          $("st-deploy").textContent = "waiting";
+          for (const w of document.querySelectorAll(".w")) w.className = "w";
+          $("now-bar").style.width = "0%";
+          $("now-v").textContent = "0:00";
+          $("now-row").className = "trow now" + (s.seconds > 60 ? " work" : "");
+
+          const t = still ? () => 0 : (ms) => ms;
+          later(t(150), () => {
+            $("new").style.transition = "transform 0.35s cubic-bezier(.3,1.6,.5,1)";
+            $("new").style.transform = "scale(1)";
+          });
+          later(t(500), () => {
+            $("file").style.transition = "opacity 0.4s ease";
+            $("file").style.opacity = "1";
+          });
+          later(t(900), () => tween(still ? 0 : 700, setArrow));
+          later(t(1700), () => {
+            $("touch").textContent = "→ " + s.touches;
+            $("touch").className = "touch " + (s.touches.includes("nothing") ? "none" : "some");
+          });
+          later(t(2200), () => {
+            const deployed = s.deploy.length;
+            $("st-deploy").className = "st " + (deployed ? "run" : "skip");
+            $("st-deploy").textContent =
+              deployed === 7
+                ? "deploys all 7"
+                : deployed
+                  ? `deploys ${s.deploy.join(", ")}, reuses the rest`
+                  : s.reuse
+                    ? "reuses the last deployment"
+                    : "nothing to deploy";
+            APPS.forEach((app, n) =>
+              later(t(n * 90), () => {
+                const w = document.querySelector(`.w[data-app="${app}"]`);
+                w.className =
+                  "w " +
+                  (s.deploy.includes(app) ? "deployed" : s.reuse ? "reused" : "") +
+                  (still ? "" : " pop");
+                later(t(220), () => w.classList.remove("pop"));
+              }),
+            );
+          });
+          later(t(3000), () => {
+            setJob("e2e", s.e2e, s.e2e === "skip" ? 1 : 0, s.e2eRun);
+            if (s.e2e === "run") tween(still ? 0 : 1400, (k) => setJob("e2e", "run", k, s.e2eRun));
+          });
+          later(t(3300), () => {
+            setJob("specs", s.specs, s.specs === "skip" ? 1 : 0, s.specsRun);
+            if (s.specs === "run")
+              tween(still ? 0 : 1600, (k) => setJob("specs", "run", k, s.specsRun));
+          });
+          later(t(3600), () =>
+            tween(still ? 0 : 1500, (k) => {
+              $("now-bar").style.width = `${(s.seconds / MAX) * 100 * k}%`;
+              $("now-v").textContent = clock(s.seconds * k);
+            }),
+          );
+        }
+
+        $("choices").addEventListener("click", (e) => {
+          const b = e.target.closest(".choice");
+          if (b) play(Number(b.dataset.i), true);
+        });
+        $("replay").addEventListener("click", () => play(current, true));
+        play(0, false);
+      })();
+    </script>
+  </body>
+</html>
