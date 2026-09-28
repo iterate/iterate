@@ -11,8 +11,8 @@
  *
  *   iterate-kit-mac --config cfg.bin [--name mac] [--no-aec]
  *
- * `cfg.bin` is the ITERKIT1 image tools/make-config-image.py writes for a
- * board. Space or return presses the button; q leaves. Over the wire the
+ * `cfg.bin` is the ITERKIT1 image apps/kit/scripts/config-image.ts writes for
+ * a board. Space or return presses the button; q leaves. Over the wire the
  * device is `itx.clients.<name>` like every board — scripts/voice-board.ts
  * starts its conversation and speaks to it. VoiceProcessingIO cancels what
  * this Mac plays through its own speaker, so a scripted proof that speaks
@@ -25,13 +25,12 @@
 #include <string.h>
 #include <time.h>
 
-#include "capnweb/capnweb.h"
 #include "esp_timer.h"
 #include "iterate/kit/audio_processor.h"
 #include "iterate/kit/capabilities/health.h"
-#include "iterate/kit/peer.h"
 #include "iterate/kit/platforms/darwin_audio_codec.h"
 #include "iterate/kit/platforms/provisioning.h"
+#include "iterate/kit/session_grammar.h"
 #include "iterate/kit/voice/loop.h"
 #include "iterate/kit/voice_device_profile.h"
 #include "keyboard.h"
@@ -40,8 +39,8 @@ enum { TICK_MS = 5 };
 
 static struct iterate_kit_darwin_audio_codec codec;
 static struct iterate_kit_voice_view view;
+static struct iterate_kit_session session;
 static bool no_aec;
-static bool press_pending;
 static bool hang_up_sent;
 static volatile sig_atomic_t quit_requested;
 /*
@@ -113,28 +112,31 @@ static void present(void *context, const struct iterate_kit_voice_view *value) {
           : "");
 }
 
+/* The key is the button, through the session grammar every board's press goes through. */
 static void poll(void *context, struct iterate_kit_voice_intent *out) {
   (void)context;
-  const bool busy = view.call_active || view.wants_call;
-  *out = (struct iterate_kit_voice_intent){0};
+  bool pressed = false;
   switch (mac_keyboard_poll()) {
-    case MAC_KEYBOARD_PRESS: press_pending = true; break;
+    case MAC_KEYBOARD_PRESS: pressed = true; break;
     case MAC_KEYBOARD_QUIT: quit_requested = 1; break;
     case MAC_KEYBOARD_NONE: break;
   }
   if (quit_requested) {
     /* Leave the way a press ends a call, once; the main loop exits when it did. */
-    if (busy && !hang_up_sent) {
-      out->end_call = true;
-      hang_up_sent = true;
-    }
-    return;
+    pressed = !hang_up_sent && (view.call_active || view.wants_call);
+    hang_up_sent = hang_up_sent || pressed;
   }
-  if (press_pending) {
-    press_pending = false;
-    if (busy) out->end_call = true;
-    else out->start_call = true;
-  }
+  const struct iterate_kit_session_poll gestures = {
+    .press = pressed,
+    .wants_call = view.wants_call,
+    .call_active = view.call_active,
+  };
+  struct iterate_kit_session_actions actions;
+  iterate_kit_session_step(&session, &gestures, &actions);
+  *out = (struct iterate_kit_voice_intent){
+    .start_call = actions.start_call,
+    .end_call = actions.end_call,
+  };
 }
 
 static void play_clip(void *context, const int16_t *pcm, size_t samples) {
@@ -180,25 +182,6 @@ static void feed_clip(void) {
   }
 }
 
-/** The button, over the wire — the same `button.press` every board lends. */
-static enum capnweb_status button_press(
-    void *context, const struct capnweb_call *call, struct capnweb_reply *reply) {
-  (void)context;
-  (void)call;
-  press_pending = true;
-  return capnweb_reply_set_boolean(reply, true);
-}
-
-static size_t modules(
-    void *context, struct iterate_kit_module *out, size_t capacity) {
-  (void)context;
-  static const char *const path[] = {"button", "press"};
-  static const struct iterate_kit_method methods[] = {{path, 2U, button_press}};
-  if (capacity == 0U) return 0U;
-  out[0] = (struct iterate_kit_module){.methods = methods, .method_count = 1U};
-  return 1U;
-}
-
 static size_t health(void *context, char *out, size_t capacity) {
   (void)context;
   struct iterate_kit_darwin_audio_codec_metrics metrics;
@@ -220,8 +203,8 @@ static int usage(FILE *to) {
       "Usage: iterate-kit-mac --config <image> [--name <device name>] [--no-aec]\n"
       "\n"
       "Runs the Kit voice loop on this Mac as a device. <image> is the ITERKIT1\n"
-      "provisioning image tools/make-config-image.py writes. Space or return\n"
-      "presses the button; q leaves.\n",
+      "provisioning image apps/kit/scripts/config-image.ts writes. Space or\n"
+      "return presses the button; q leaves.\n",
       to);
   return to == stdout ? 0 : 2;
 }
@@ -249,7 +232,7 @@ int main(int argc, char **argv) {
   if (mac_keyboard_open()) {
     (void)fputs("mac: space presses the button, q leaves\n", stderr);
   } else {
-    (void)fputs("mac: no terminal; the button is remote-only\n", stderr);
+    (void)fputs("mac: no terminal; conversation.start() starts a call\n", stderr);
   }
 
   const struct iterate_kit_board_facts facts = {
@@ -262,7 +245,6 @@ int main(int argc, char **argv) {
     .start = start,
     .present = present,
     .poll = poll,
-    .modules = modules,
     .health = health,
     .play_clip = play_clip,
   };

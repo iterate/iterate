@@ -29,7 +29,7 @@ idf.py -C apps/kit/firmware/targets/zectrix_note4 \
   -D SDKCONFIG=/tmp/iterate-note4-voice.sdkconfig build
 ```
 
-Configuration is at `0x410000`; credentials never belong in source/releases.
+Credentials never belong in source or releases.
 Identify the bench unit by MAC `80:45:6B:38:60:84` using `tools/port-for-mac.sh`.
 Factory boot: `zectrix-s3-epaper-4.2`, xiaozhi 3.6.2, ESP-IDF 5.5.2.
 Private full-flash backup (16 MiB, restore at offset zero):

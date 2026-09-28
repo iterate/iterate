@@ -1,5 +1,8 @@
 #include "iterate/kit/platforms/board.h"
 
+#include <ctype.h>
+#include <string.h>
+
 #include "nvs.h"
 
 /* The level a person last chose, one byte in NVS for every board. Without it a
@@ -128,6 +131,26 @@ void iterate_kit_board_apply_gestures(
     .call_active = view->call_active,
   };
   iterate_kit_session_step(session, &poll, actions);
+}
+
+bool iterate_kit_board_status_text(
+    struct iterate_kit_board_status_text *text,
+    const struct iterate_kit_voice_view *view, const char *hint) {
+  const char *const title = view->fault ? "FAULT" :
+    view->screen == ITERATE_KIT_VOICE_SCREEN_IDLE ? "READY" :
+    view->screen == ITERATE_KIT_VOICE_SCREEN_LISTENING ? "LISTENING" :
+    view->screen == ITERATE_KIT_VOICE_SCREEN_SPEAKING ? "SPEAKING" : "CONNECTING";
+  const char *const message = view->status != NULL && view->status[0] != '\0' ? view->status : hint;
+  char status[sizeof(text->status)] = {0};
+  for (size_t i = 0; message[i] != '\0' && i < sizeof(status) - 1U; ++i) {
+    status[i] = (char)toupper((unsigned char)message[i]);
+  }
+  const bool unchanged = text->shown && strcmp(text->title, title) == 0 &&
+      strcmp(text->status, status) == 0;
+  text->title = title;
+  memcpy(text->status, status, sizeof(status));
+  if (!unchanged) text->shown = false;
+  return !unchanged;
 }
 
 /** Fill omitted audio facts before voice_loop validates processor/capture cadence. */
@@ -389,7 +412,7 @@ static void poll(void *context, struct iterate_kit_voice_intent *out) {
   microphone_muted = out->microphone_muted;
   bool heard_wake_word = false;
 #ifdef CONFIG_ITERATE_KIT_WAKE_WORD
-  /* Worker detections reach the same synthetic-tap queue as capabilities. */
+  /* A detection is a press of the table button, through its classifier. */
   if (!microphone_muted && board->wake_word != NULL &&
       !view.call_active && !view.wants_call &&
       iterate_kit_wake_word_take_detection()) {
@@ -439,33 +462,6 @@ static size_t health(void *context, char *out, size_t capacity) {
   return added == 0U ? 0U : used + added;
 }
 
-/** Queue exactly the tap the table GPIO classifier would consume. */
-static enum capnweb_status iterate_kit_board_button_press(
-    void *context, const struct capnweb_call *call, struct capnweb_reply *reply) {
-  (void)context;
-  (void)call;
-  iterate_kit_board_inject_press();
-  return capnweb_reply_set_boolean(reply, true);
-}
-
-/** Mount the table button first, then append extra's board-only capabilities. */
-static size_t iterate_kit_board_modules(
-    void *context, struct iterate_kit_module *out, size_t capacity) {
-  (void)context;
-  static const char *const path[] = {"button", "press"};
-  static const struct iterate_kit_method methods[] = {
-    {path, 2U, iterate_kit_board_button_press},
-  };
-  size_t count = 0U;
-  if (board->button.gpio >= 0 && capacity != 0U) {
-    out[count++] = (struct iterate_kit_module){.methods = methods, .method_count = 1U};
-  }
-  if (board->extra != NULL && board->extra->modules != NULL && count < capacity) {
-    count += board->extra->modules(NULL, out + count, capacity - count);
-  }
-  return count;
-}
-
 /** Install shared startup, presentation, controls, health and modules, then run. */
 void iterate_kit_board_run(const struct iterate_kit_board *value) {
   board = value;
@@ -491,7 +487,6 @@ void iterate_kit_board_run(const struct iterate_kit_board *value) {
   ops.poll = poll;
   ops.phase = phase;
   ops.health = health;
-  ops.modules = iterate_kit_board_modules;
   ops.play_clip = play_clip;
   iterate_kit_voice_loop_run(&ops, &facts, NULL);
 }

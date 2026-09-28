@@ -1,15 +1,10 @@
-CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="../common/partitions-16mb-model.csv"
-CONFIG_COMPILER_OPTIMIZATION_SIZE=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="../common/partitions-16mb.csv"
 CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
 CONFIG_SPIRAM_MODE_OCT=y
-CONFIG_SPIRAM_BOOT_INIT=y
 # 80 MHz octal PSRAM is the donor-proven configuration for THIS board
 # (unlike the Waveshare, where 80 MHz broke TLS signature verification).
 CONFIG_SPIRAM_SPEED_80M=y
-CONFIG_LOG_DEFAULT_LEVEL=3
 
-# Required by the atomics the telemetry uses once .bss rides PSRAM.
-CONFIG_STDATOMIC_S32C1I_SPIRAM_WORKAROUND=y
 CONFIG_ESP32S3_INSTRUCTION_CACHE_32KB=y
 
 # Keep internal DMA memory available for Wi-Fi and the I2S drivers.

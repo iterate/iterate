@@ -1,5 +1,4 @@
 #include "note4_display.h"
-#include "status_font.h"
 #include "zectrix_epd.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
@@ -20,24 +19,10 @@ struct status_view {
 static QueueHandle_t views;
 static zectrix_epd_handle_t panel;
 static uint8_t frame[ZECTRIX_EPD_1BPP_FRAME_BYTES];
+_Static_assert(sizeof(frame) == ITERATE_KIT_SCREEN_STATUS_BYTES,
+               "the shared status text is drawn at this panel's size");
 static atomic_uint updates, failures;
 static atomic_int image_state = ITERATE_KIT_SCREEN_IDLE;
-
-static void text_line(const char *text, unsigned y, unsigned scale) {
-  const size_t length = strlen(text);
-  if (length * 6 * scale > 400 || y + 7 * scale > 300) return;
-  unsigned x = (400 - length * 6 * scale) / 2;
-  for (; *text; ++text, x += 6 * scale) {
-    if (*text < 'A' || *text > 'Z') continue;
-    for (unsigned col = 0; col < 5; ++col) for (unsigned row = 0; row < 7; ++row) {
-      if (!(letters[*text - 'A'][col] & (1 << row))) continue;
-      for (unsigned dy = 0; dy < scale; ++dy) for (unsigned dx = 0; dx < scale; ++dx) {
-        const unsigned px = x + col * scale + dx, py = y + row * scale + dy;
-        frame[py * 50 + px / 8] &= ~(0x80U >> (px % 8));
-      }
-    }
-  }
-}
 
 static void display_task(void *unused) {
   (void)unused;
@@ -49,14 +34,13 @@ static void display_task(void *unused) {
       result = zectrix_epd_refresh_full_4bpp(panel, view.image, view.length);
       grayscale = true;
     } else {
-      if (view.image) {
-        for (size_t i = 0; i < sizeof(frame); ++i) frame[i] = ~view.image[i];
-      } else {
-        memset(frame, 0xff, sizeof(frame));
-        text_line("ITERATE", 32, 3);
-        text_line(view.title, 100, 4);
-        text_line(view.status, 190, 2);
+      /* MONO1 is 1 for black; this panel's 1bpp frame is 1 for white. */
+      const uint8_t *mono1 = view.image;
+      if (!mono1) {
+        iterate_kit_screen_draw_status(frame, view.title, view.status);
+        mono1 = frame;
       }
+      for (size_t i = 0; i < sizeof(frame); ++i) frame[i] = (uint8_t)~mono1[i];
       if (grayscale || atomic_load(&updates) % 20 == 0) {
         result = zectrix_epd_refresh_full_1bpp(panel, frame, sizeof(frame));
       } else {

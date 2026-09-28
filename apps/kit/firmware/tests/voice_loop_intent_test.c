@@ -1,14 +1,14 @@
 /*
  * WHAT A PRESS MEANS, TESTED ON A BOARD THAT HAS NO BUTTONS.
  *
- * `components/voice/src/voice_loop.c` is the one program every board runs, and
- * its intent mapping is where a remote press once latched and was never read.
- * This fixture drives conversation control through the mounted capability,
- * exercising the same route a real caller uses.
+ * `components/voice/src/voice_loop.c` is the one program every board runs.
+ * `conversation.start()` and `conversation.end()` latch the same start_call
+ * and end_call edges a board's press gives it, and this fixture drives them
+ * through the mounted capability, the route a real caller uses.
  *
- * The board here has no `poll` op at all, so there is no
- * physical button in the program: every intent has to come from the capability
- * the loop mounts, over the same Cap'n Web session a real caller uses, through
+ * The board's `poll` reports only its mute level, so there is no physical
+ * button in the program: every intent has to come from the capability the
+ * loop mounts, over the same Cap'n Web session a real caller uses, through
  * the same transport interface a real socket delivers on.
  */
 

@@ -6,7 +6,6 @@
 #include "esp_timer.h"
 #include "iterate/kit/avatar/face_animator.h"
 #include "iterate/kit/avatar/face_avatar_registry.h"
-#include "iterate/kit/avatar/face_doze.h"
 #include "iterate/kit/avatar/face_keyframe.h"
 
 static const char tag[] = "waveshare-face";
@@ -327,36 +326,10 @@ bool waveshare_avatar_render(
   }
   /* Motion runs on wall time; see motion_clock_samples. */
   face.pose.playout_samples = motion_clock_samples();
-  face_render_key_from_pose(&face.pose, &render_key);
-  /*
-   * ASLEEP UNTIL SOMEBODY CALLS.
-   *
-   * Rewriting the key rather than picking a different sprite: the shared doze
-   * module holds the lids shut and selects each character's own authored
-   * `sleepy` bank, so the device dozes in the face it is wearing instead of in
-   * a generic one. The blink flag it sets is load-bearing — two zero eye
-   * controls read as an uninitialised key, and the registry defensively opens
-   * the eyes, which is exactly how "sleeping" came out awake on the other
-   * boards.
-   */
-  if (!awake) face_doze_prepare_render_key(&render_key);
-  if (!face_avatar_registry_render(
-          &face.registry,
-          &render_key,
-          face.pose.playout_samples,
-          rgb565,
-          pixel_capacity)) {
-    face.render_failures++;
-    return false;
-  }
-  /*
-   * The Z goes on after the face, and a failure here fails the whole frame.
-   * Half a doze — shut eyes with no mark — is a face that could equally be
-   * mid-blink, and showing that instead of the last coherent frame would be
-   * inventing a state the device is not in.
-   */
-  if (!awake && !face_doze_apply_overlay(
-                    rgb565, pixel_capacity, face.pose.playout_samples)) {
+  /* Asleep until somebody calls. */
+  if (!face_avatar_registry_render_pose(
+          &face.registry, &face.pose, !awake, face.pose.playout_samples,
+          &render_key, rgb565, pixel_capacity)) {
     face.render_failures++;
     return false;
   }

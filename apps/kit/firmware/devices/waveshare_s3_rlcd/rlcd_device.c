@@ -11,15 +11,12 @@
 #include "iterate/kit/platforms/board.h"
 #include "iterate/kit/capabilities/health.h"
 #include <sounds_generated.inc>
-#include <ctype.h>
-#include <string.h>
 
 static i2c_master_bus_handle_t bus;
 static const audio_codec_if_t *dac, *adc;
 static uint32_t display_failures;
 static bool display_ready;
-static int last_screen = -1;
-static char last_status[32];
+static struct iterate_kit_board_status_text text;
 static struct iterate_kit_screen screen;
 static uint8_t image_buffer[15000];
 static bool submit_image(void *context, enum iterate_kit_screen_format format,
@@ -93,29 +90,19 @@ static bool open_codec(void) {
 static void present(void *context, const struct iterate_kit_voice_view *view) {
   (void)context;
   if (!display_ready || display_failures) return;
+  /* setImage(null) must redraw the status even when the view did not change
+   * while the image was shown. */
   if (screen.showing_image) {
-    /* clear() must make the normal state redraw even when the voice view has
-     * not changed while the image was latched. */
-    last_screen = -3;
+    text.shown = false;
     return;
   }
-  const char *title = view->fault ? "FAULT" :
-    view->screen == ITERATE_KIT_VOICE_SCREEN_IDLE ? "READY" :
-    view->screen == ITERATE_KIT_VOICE_SCREEN_LISTENING ? "LISTENING" :
-    view->screen == ITERATE_KIT_VOICE_SCREEN_SPEAKING ? "SPEAKING" : "CONNECTING";
-  char status[32] = {0};
-  const char *message = view->status && *view->status ? view->status : "PRESS KEY";
-  for (size_t i = 0; message[i] && i < sizeof(status) - 1; ++i)
-    status[i] = (char)toupper((unsigned char)message[i]);
-  const int screen = view->fault ? -2 : (int)view->screen;
-  if (screen == last_screen && strcmp(status, last_status) == 0) return;
-  if (!rlcd_display_show(title, status)) {
+  if (!iterate_kit_board_status_text(&text, view, "PRESS KEY")) return;
+  if (!rlcd_display_show(text.title, text.status)) {
     ++display_failures;
     ESP_LOGE("rlcd", "Display transfer failed; further updates stopped");
     return;
   }
-  last_screen = screen;
-  memcpy(last_status, status, sizeof(status));
+  text.shown = true;
 }
 
 static size_t health(void *context, char *out, size_t capacity) {

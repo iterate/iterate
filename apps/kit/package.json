@@ -43,6 +43,7 @@
     "@vitejs/plugin-react": "catalog:",
     "esbuild": "catalog:",
     "tailwindcss": "catalog:",
+    "trpc-cli": "catalog:",
     "tsx": "catalog:",
     "typescript": "catalog:",
     "vite": "catalog:",

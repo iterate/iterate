@@ -4,8 +4,9 @@
 #include <string.h>
 
 /*
- * The flashing page and CLI write the same small versioned TLV image. Firmware
- * treats flash as untrusted: interrupted writes, stale tools, and accidental
+ * Kit's one encoder (src/firmware/config-image.ts) writes this small versioned
+ * TLV image, from the flashing page and from its CLI. Firmware treats flash as
+ * untrusted: interrupted writes, stale tools, and accidental
  * corruption must yield one classified boot error, never a partially usable
  * mixture of credentials. Decoding is allocation-free and transactional from
  * the caller's perspective: every failure clears the entire destination.
@@ -25,7 +26,7 @@ enum {
   CONFIGURATION_FIELD_STATUS_VOICE = 6,
 };
 
-/* Indexed by enum iterate_kit_status_voice; tools/make-config-image.py and src/firmware/config-image.ts write these. */
+/* Indexed by enum iterate_kit_status_voice; Kit's encoder (src/firmware/config-image.ts) writes these. */
 static const char *const status_voice_names[] = {
   "greensleeves", "daisy-bell", "auld-lang-syne", "lass-of-aughrim", "spoken", "off",
 };

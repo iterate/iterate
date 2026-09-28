@@ -34,7 +34,6 @@
 #include "esp_log.h"
 #include "esp_timer.h"
 
-#include "iterate/kit/capabilities/arguments.h"
 #include "iterate/kit/avatar/face_avatar_registry.h"
 #include "iterate/kit/capabilities/camera.h"
 #include "iterate/kit/capabilities/face.h"
@@ -299,9 +298,8 @@ static void present(
 
 /** Either physical call control supplies the same session tap. */
 static void read_gestures(struct iterate_kit_board_gestures *out) {
-  bool ignored_left_half;
   out->pressed |= iterate_kit_stackchan_avatar_take_side_button_tap();
-  out->pressed |= iterate_kit_stackchan_avatar_take_face_tap(&ignored_left_half);
+  out->pressed |= iterate_kit_stackchan_avatar_take_face_tap();
 }
 
 /** Poll StackChan-only presentation controls after the shared call grammar. */
@@ -358,36 +356,6 @@ static bool wear_face(void *context, size_t index) {
  * itinerary over the wire, so the itinerary lives here and the tool just
  * names it. A gesture already in flight is replaced, newest intent wins.
  */
-/*
- * `button.press()` / `touch.tap({x})` — the physical controls, injectable.
- * They set the same pending latches the finger does, so the device-side
- * handler path is ONE path and the loop's button audit records both.
- */
-static const char *const button_press_path[] = {"button", "press"};
-static const char *const touch_tap_path[] = {"touch", "tap"};
-
-static enum capnweb_status button_press(
-    void *context, const struct capnweb_call *call, struct capnweb_reply *reply) {
-  (void)context;
-  (void)call;
-  iterate_kit_stackchan_avatar_inject_side_button();
-  return capnweb_reply_set_boolean(reply, true);
-}
-
-static enum capnweb_status touch_tap(
-    void *context, const struct capnweb_call *call, struct capnweb_reply *reply) {
-  struct capnweb_value object = {0};
-  int64_t x = 0;
-  (void)context;
-  if (!iterate_kit_read_object_argument(call, &object) ||
-      !iterate_kit_read_int_field(&object, "x", &x) || x < 0 || x > 4096) {
-    return capnweb_reply_set_error(
-        reply, "TypeError", "touch.tap needs {x} as a panel column 0..319");
-  }
-  iterate_kit_stackchan_avatar_inject_face_tap((uint16_t)x);
-  return capnweb_reply_set_boolean(reply, true);
-}
-
 static const char *const head_nod_path[] = {"head", "nod"};
 static const char *const head_shake_path[] = {"head", "shake"};
 
@@ -431,8 +399,6 @@ static enum capnweb_status head_shake(
 static size_t modules(
     void *context, struct iterate_kit_module *out, size_t capacity) {
   static const struct iterate_kit_method board_methods[] = {
-    {button_press_path, 2U, button_press},
-    {touch_tap_path, 2U, touch_tap},
     {head_nod_path, 2U, head_nod},
     {head_shake_path, 2U, head_shake},
   };

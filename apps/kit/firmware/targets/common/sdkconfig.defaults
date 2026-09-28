@@ -1,3 +1,8 @@
+# Every board is an ESP32-S3, so a plain `idf.py build` in its target needs no
+# -D IDF_TARGET.
+CONFIG_IDF_TARGET="esp32s3"
+# Built for size; StackChan builds for speed (targets/stackchan says why).
+CONFIG_COMPILER_OPTIMIZATION_SIZE=y
 CONFIG_PARTITION_TABLE_CUSTOM=y
 CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
 CONFIG_ESP_MAIN_TASK_AFFINITY_CPU0=y
