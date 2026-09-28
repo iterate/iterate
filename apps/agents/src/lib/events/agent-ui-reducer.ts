@@ -476,7 +476,7 @@ function reduceAgentUiEvent(
       const frame = LlmResponseFrame.safeParse(event.payload);
       if (!frame.success) return state;
       const { llmRequestOffset, responseDelta, thinkingDelta } = frame.data;
-      if (responseDelta === "" && thinkingDelta === "") return state;
+      if (!responseDelta && !thinkingDelta) return state;
       return updateLlmStep(state, llmRequestOffset, (step) => ({
         ...step,
         responseText:

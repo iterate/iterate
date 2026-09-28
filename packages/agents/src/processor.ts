@@ -871,7 +871,7 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
       let windows: Promise<void> = Promise.resolve();
       const closeWindow = () => {
         windowOpen = false;
-        if (responseDelta === "" && thinkingDelta === "") return;
+        if (!responseDelta && !thinkingDelta) return;
         const payload = { llmRequestOffset, responseDelta, thinkingDelta, sequence: sequence++ };
         responseDelta = "";
         thinkingDelta = "";
@@ -924,7 +924,7 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
               () => controller.abort(new Error("the model stream stalled")),
               STREAM_IDLE_BUDGET_MS,
             );
-            if (text === "" && thinking === "") return; // a bookkeeping event: alive, nothing to show
+            if (!text && !thinking) return; // a bookkeeping event: alive, nothing to show
             // The partial accrues BEFORE buffering: an interrupt keeps the whole streamed text even
             // when its last window never landed.
             inFlight.partialText += text;

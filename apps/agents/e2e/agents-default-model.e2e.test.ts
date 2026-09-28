@@ -134,8 +134,8 @@ async function pongTurn(ctx: string, ai?: FakeAi) {
 }
 
 /** What a streamed default-model turn leaves, whoever answered it: the answer; at least one window
- *  of its text, in order, for the request that answered (an earlier attempt the model
- *  refused streamed nothing, and the agent asked again); the usage on the settlement and as the
+ *  of its text, in order, for the request that answered (an attempt the model refuses streams
+ *  nothing, and the agent asks again); the usage on the settlement and as the
  *  context report a feed shows the context's fullness by. */
 function expectStreamedTurn(log: any[], chunkEvents: any[]) {
   expect(assistantWords(log).join("\n")).toMatch(/pong/i);

@@ -3,6 +3,7 @@ import { createRequire } from "node:module";
 import { matchesGlob } from "node:path";
 import { installAgents, pkgPrNewVersion } from "@iterate-com/agents/install";
 import { build } from "esbuild";
+import { z } from "zod";
 import { openItx, sleep } from "../../os/e2e/support/client.ts";
 import { agentsWorkspaceSource } from "./agents-source.ts";
 
@@ -40,23 +41,25 @@ function publishPaths(): string[] {
   return [...block.matchAll(/^\s+- (\S+)$/gm)].map((match) => match[1]!);
 }
 
-/** GitHub's REST API for this repository, with the run's token when it has one. */
-async function github<T>(path: string): Promise<T> {
+/** GitHub's REST API for this repository, with the run's token when it has one, its answer parsed
+ *  by `schema`. */
+async function github<T>(path: string, schema: z.ZodType<T>): Promise<T> {
   const repository = process.env.GITHUB_REPOSITORY?.trim() || "iterate/iterate";
   const token = process.env.GITHUB_TOKEN?.trim();
   const response = await fetch(`https://api.github.com/repos/${repository}/${path}`, {
     headers: token ? { authorization: `Bearer ${token}` } : {},
   });
   if (!response.ok) throw new Error(`GitHub answered ${path} with ${response.status}`);
-  return (await response.json()) as T;
+  return schema.parse(await response.json());
 }
 
 /** Whether PR `pr` changes a path the pkg.pr.new workflow publishes on (GitHub's list of its files). */
 async function prPublishesPackages(pr: string): Promise<boolean> {
   const globs = publishPaths();
   for (let page = 1; ; page++) {
-    const files = await github<{ filename: string }[]>(
+    const files = await github(
       `pulls/${pr}/files?per_page=100&page=${page}`,
+      z.array(z.object({ filename: z.string() })),
     );
     if (files.some(({ filename }) => globs.some((glob) => matchesGlob(filename, glob))))
       return true;
@@ -86,8 +89,9 @@ export async function publishedPackage(name: string): Promise<string> {
       if (Date.now() > deadline) throw new Error(`pkg.pr.new has not published ${at(head)}`);
     return at(head);
   }
-  const commits = await github<{ sha: string }[]>(
+  const commits = await github(
     `commits?sha=${head}&per_page=${PUBLISHED_ANCESTOR_DEPTH}`,
+    z.array(z.object({ sha: z.string() })),
   );
   for (const { sha } of commits) if (await published(sha)) return at(sha);
   throw new Error(
