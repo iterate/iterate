@@ -138,7 +138,9 @@ copy is in its `preview-os-test-artifacts-attempt-<id>`.
 
 `depot ci secrets list --org 0p91s0lz49` must show only `DOPPLER_TOKEN`. Every other credential
 lives in Doppler, reached through that token; GitHub operations use `${{ github.token }}` and
-workflow `permissions`, never a stored bot token.
+workflow `permissions`, never a stored bot token. The PR dashboard finds its Slack messages through
+Slack history: do not reintroduce `SLACK_PR_DASHBOARD_STATE` or a token for it (GitHub's variable
+API needs a permission `GITHUB_TOKEN` cannot request).
 
 A step hands its script `DOPPLER_TOKEN` and nothing else from Doppler, and the script reads what it
 needs itself, through `scripts/lib/env-context.ts`: `resolveEnvContext` for an envs.ts deployment
@@ -151,9 +153,7 @@ runs them: the preview tooling (`pnpm preview …`) and the suites against a dep
 `pnpm e2e:run`, `pnpm e2e:soak`, `pnpm perf:run`) run under
 `doppler run --project os --config <the deployment's config> --`. The test evidence upload's token
 is fetched beside the tests into a Doppler fallback file and read offline after them
-([test evidence](test-evidence.md#what-ci-does)). The PR dashboard finds its Slack messages through
-Slack history: do not reintroduce `SLACK_PR_DASHBOARD_STATE` or a token for it (GitHub's variable
-API needs a permission `GITHUB_TOKEN` cannot request).
+([test evidence](test-evidence.md#what-ci-does)).
 
 ## Wait For CI
 
@@ -330,7 +330,6 @@ branch ([Run CI without a PR](#run-ci-without-a-pr)).
   `tsconfig.base.json` allows only erasable syntax). A trpc-cli script ends with its
   `isMainModule` footer ([scripts are trpc-cli programs](typescript-conventions.md#scripts-are-trpc-cli-programs)),
   so `node` runs its commands. Steps that run before `pnpm install` use the same form.
-
 - Every job runs on a stock label and, after its checkout, `uses: ./.depot/actions/setup`
   ([Setup on Depot's stock image](#setup-on-depots-stock-image)).
 - Jobs that differ only in a value share one definition through YAML anchors (`&suite-steps`, then
