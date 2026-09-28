@@ -1,5 +1,5 @@
 // src/email/contract.ts — EMAIL: a project's mail, at `<slug>@<email domain>` (`<slug>@iterate.app`
-// on prd). Every message in or out lands on ONE context of the project, `/integrations/email`:
+// on prd), and for the project wildcard's project at its domain too (`hello@iterate.com`). Every message in or out lands on ONE context of the project, `/integrations/email`:
 // inbound mail from Cloudflare Email Routing through the worker's `email()` handler as
 // `email/received`, and each `itx.email.send` as `email/sent`, both appended by the platform
 // (integrations/email.ts). processor.ts folds them into threads by Message-ID, In-Reply-To and
