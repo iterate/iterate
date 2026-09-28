@@ -438,7 +438,7 @@ function reduceAgentUiEvent(
         ...(files.length === 0 ? {} : { files }),
         timestampMs,
       };
-      return emitAssistantMessageItem(marked, items, item);
+      return emitAssistantMessageItem(marked, items, item, extractedFromRequest);
     }
 
     case "events.iterate.com/agent/llm-request-requested": {
@@ -736,23 +736,48 @@ function emitUserMessageItem(
 /**
  * Assistant output belongs after the activity that produced it. Transport
  * adapters all use this path so a Slack/Telegram echo cannot split a running
- * script group while web output remains deferred.
+ * script group while web output remains deferred. The one exception is the
+ * answer of a finished request while only OLDER work still runs (input sent
+ * during a long script): nothing that request started is running, so the
+ * reply lands at once, above the still-live activity, after the held replies
+ * before it in log order. The activity stays live and whole until its own
+ * settlements close it.
  */
 function emitAssistantMessageItem(
   state: AgentUiState,
   items: AgentUiItem[],
   item: AgentUiMessageItem,
+  llmRequestOffset: number | null,
 ): AgentUiState {
+  // A live activity that survives settleLive is working.
   const settled = settleLive(state, item.timestampMs, items);
-  if (isAgentUiActivityWorking(settled.live)) {
-    return {
-      ...settled,
-      deferredAssistantMessages: [...settled.deferredAssistantMessages, item],
-    };
+  if (!settled.live) {
+    const flushed = flushDeferredMessages(settled, items);
+    items.push(item);
+    return flushed;
   }
-  const flushed = settled.live ? settled : flushDeferredMessages(settled, items);
-  items.push(item);
-  return flushed;
+  if (llmRequestOffset !== null && onlyOlderWorkRuns(settled.live, llmRequestOffset)) {
+    items.push(...settled.deferredAssistantMessages, item);
+    return { ...settled, deferredAssistantMessages: [] };
+  }
+  return {
+    ...settled,
+    deferredAssistantMessages: [...settled.deferredAssistantMessages, item],
+  };
+}
+
+/** Whether the request at `llmRequestOffset` finished in `live` and every step still running there
+ *  began before it: work the request did not start, so its answer does not wait for that work. */
+function onlyOlderWorkRuns(live: AgentUiActivity, llmRequestOffset: number): boolean {
+  const request = live.steps.find(
+    (step) => step.kind === "llm" && step.llmRequestOffset === llmRequestOffset,
+  );
+  if (request?.status !== "done") return false;
+  return live.steps.every(
+    (step) =>
+      step.status === "done" ||
+      (step.kind === "code" ? step.requestOffset : step.llmRequestOffset) < llmRequestOffset,
+  );
 }
 
 /** Mark the llm step whose committed assistant event is `assistantEventOffset`
