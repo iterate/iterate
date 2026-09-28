@@ -1,14 +1,13 @@
-// /projects/<slug> — the project layout: the project resolved by its slug (its id works too) from
-// the tree (components/organization-tree.tsx) when the shell has it open — a navigation within
-// the shell — else from the session's catalog: a fresh page load, before the tree has loaded. One
-// this sign-in lacks sends the browser to sign in again. Handed to every section below.
+// /projects/<slug> — the project layout: the project resolved by its slug from the tree
+// (components/organization-tree.tsx) when the shell has it open — a navigation within the shell —
+// else from the session's catalog: a fresh page load, before the tree has loaded. One this sign-in
+// lacks sends the browser to sign in again. Handed to every section below.
 import { createFileRoute, Outlet } from "@tanstack/react-router";
 import { readOrganizationTree } from "../../../../components/organization-tree.tsx";
 
 export const Route = createFileRoute("/_auth/projects/$slug")({
   beforeLoad: async ({ context, params }) => {
-    const named = (candidate: { id: string; slug: string }) =>
-      candidate.slug === params.slug || candidate.id === params.slug;
+    const named = (candidate: { slug: string }) => candidate.slug === params.slug;
     const project =
       readOrganizationTree().projects.find(named) ??
       (await context.api.projects.list()).find(named);
