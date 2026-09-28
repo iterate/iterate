@@ -1,4 +1,3 @@
-// ci-change-detection live check: a specs-only push (reverted by a later live check)
 import { z } from "zod";
 import { deployedTarget } from "../apps/os/e2e/support/deployed-target.ts";
 import { OsPlaywrightAuthEnv } from "./test-support/auth-config.ts";
