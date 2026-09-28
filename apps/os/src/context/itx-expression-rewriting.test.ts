@@ -896,11 +896,10 @@ test("built-in resolution + default-deny: `invoke(call, ...args)` folds the live
   rewrite("itx.fable", "itx.ai.run('@cf/x', @)");
   rewrite("itx.ai.run('gpt-5')", "itx.builtins.rpcStubs.get('itx.s')");
   rewrite("itx.kv.get('secret')", null);
-  // the template fills from the live args, exactly as the dotted call would
+  // the template fills from the live args, exactly as the dotted call would (the platform's
+  // Workers AI call comes back as the call for the edge to make: dispatch.ts `ItxAiCall`)
   expect(await invoke("itx.fable", { prompt: "hi" })).toEqual({
-    model: "@cf/x",
-    inputs: { prompt: "hi" },
-    options: undefined,
+    $itxAiCall: ["ai", ["run", "@cf/x", { prompt: "hi" }]],
   });
   // a pinned row matches the live args; the unpinned tail is the call on the target
   expect(await invoke("itx.ai.run", "gpt-5", { q: 1 })).toEqual(["stubbed", [{ q: 1 }]]);
@@ -1055,10 +1054,11 @@ test("the rule table — a MAP by match: set replaces, null masks or deletes, th
 });
 
 test("the rule table — a MAP by match: set replaces, null masks or deletes, the platform-equivalent target restores: args at the match: a call at the match itself applies the rewritten target", async () => {
-  const { rewrite, invoke, builtIns } = setup();
+  const { rewrite, invoke } = setup();
   rewrite("itx.grok", "itx.ai.chat");
-  expect(await invoke("itx.grok({ model: 'grok-4' })")).toBe("chat:grok-4");
-  expect(builtIns.aiCalls[0]).toEqual({ model: "grok-4" });
+  expect(await invoke("itx.grok({ model: 'grok-4' })")).toEqual({
+    $itxAiCall: ["ai", ["chat", { model: "grok-4" }]],
+  });
 });
 
 test("the rule table — a MAP by match: set replaces, null masks or deletes, the platform-equivalent target restores: THE DREAM, through the reduce: `itx.fable ⇒ itx.ai.run('@cf/…', @)` is one row at rest; the caller's inputs fill `@`; `...@` pins a gateway model", async () => {
@@ -1070,13 +1070,15 @@ test("the rule table — a MAP by match: set replaces, null masks or deletes, th
       target: ["itx", "ai", ["run", "@cf/meta/llama-3.2-1b-instruct", { "@": true }]], // `@` at rest is the reserved literal
     },
   });
+  // the platform's Workers AI call comes back as the call for the edge to make (dispatch.ts `ItxAiCall`)
   expect(await invoke("itx.fable({ prompt: 'hi' })")).toEqual({
-    model: "@cf/meta/llama-3.2-1b-instruct",
-    inputs: { prompt: "hi" },
-    options: undefined,
+    $itxAiCall: ["ai", ["run", "@cf/meta/llama-3.2-1b-instruct", { prompt: "hi" }]],
   });
-  expect(await invoke("itx.fable({ prompt: 'hi' }, { gateway: { id: 'g' } })")).toMatchObject({
-    options: { gateway: { id: "g" } },
+  expect(await invoke("itx.fable({ prompt: 'hi' }, { gateway: { id: 'g' } })")).toEqual({
+    $itxAiCall: [
+      "ai",
+      ["run", "@cf/meta/llama-3.2-1b-instruct", { prompt: "hi" }, { gateway: { id: "g" } }],
+    ],
   });
   expect(resolve("itx.fable({ prompt: 'hi' })")).toEqual([
     "itx.fable({prompt:'hi'})",
@@ -1088,12 +1090,18 @@ test("the rule table — a MAP by match: set replaces, null masks or deletes, th
     "itx.ai.gateway('g').run({ provider: 'anthropic', endpoint: 'v1/messages', query: { model: 'claude-x', ...@ } })",
   );
   expect(await invoke("itx.claude({ messages: ['hi'], model: 'evil' })")).toEqual({
-    gateway: "g",
-    request: {
-      provider: "anthropic",
-      endpoint: "v1/messages",
-      query: { messages: ["hi"], model: "claude-x" }, // the template's model wins
-    },
+    $itxAiCall: [
+      "ai",
+      ["gateway", "g"],
+      [
+        "run",
+        {
+          provider: "anthropic",
+          endpoint: "v1/messages",
+          query: { messages: ["hi"], model: "claude-x" }, // the template's model wins
+        },
+      ],
+    ],
   });
 });
 
@@ -1156,8 +1164,7 @@ test("targets round-trip the codec: rewrite → print → reduce → parse: a ta
 test("targets round-trip the codec: rewrite → print → reduce → parse: a target with a non-identifier object key rewrites (print QUOTES the key; the parser re-reads it)", async () => {
   const { rewrite, invoke } = setup();
   rewrite("itx.chat", ["itx", "ai", ["chat", { "a b": "grok-4" }]]);
-  // ai.chat reads o.model (absent here) → "chat:undefined"; the point is it REWRITES at all.
-  expect(await invoke("itx.chat")).toBe("chat:undefined");
+  expect(await invoke("itx.chat")).toEqual({ $itxAiCall: ["ai", ["chat", { "a b": "grok-4" }]] });
 });
 
 test("the app wall (`Caller.app`): on the INPUT expression only, `itx.builtins` is refused and `cd` goes down only — from the root too: at the root, every project path is a descendant: `cd('/x')` and `cd('./x')` pass, `cd('.')` is self; `itx.builtins` is refused", () => {
@@ -1503,7 +1510,6 @@ const listed = (
 /** A tiny fake built-ins record — enough physical layer to rewrite into. */
 const fakeBuiltIns = () => {
   const kv = new Map<string, string>();
-  const aiCalls: unknown[] = [];
   return {
     kv: {
       get: (k: string) => kv.get(k) ?? null,
@@ -1513,18 +1519,7 @@ const fakeBuiltIns = () => {
       },
     },
     whoami: () => ({ projectId: "prj_t", path: "/" }),
-    // the Workers AI binding's shape, verbatim: run(model, inputs, options?) and gateway(id).run(req)
-    // — plus a `chat` the rows alias to (a REAL root name: the resolver's platform rows come from the
-    // leaf list, context/itx-expression-rewriting.ts)
-    ai: {
-      run: (model: string, inputs?: unknown, options?: unknown) => ({ model, inputs, options }),
-      gateway: (id: string) => ({ run: (request: unknown) => ({ gateway: id, request }) }),
-      chat: (o: { model: string }) => {
-        aiCalls.push(o);
-        return `chat:${o.model}`;
-      },
-    },
-    aiCalls,
+    // no `ai`: the resolver answers a Workers AI call as data for the edge (dispatch.ts `ItxAiCall`)
   };
 };
 

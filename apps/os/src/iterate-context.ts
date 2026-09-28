@@ -9,7 +9,8 @@
 //
 // The DO owns every contract. This class declares only what the edge must do itself: `cd` (pure
 // addressing), `invoke` (where the prototype hop at the bottom lands, plus the one terminal-fetch
-// fork), `provide` and `subscribe` (declared here because their target may be a client's rpc stub,
+// fork), the Workers AI call a context answers with (`#invokeOnDurableObject`: no DO holds the
+// binding), `provide` and `subscribe` (declared here because their target may be a client's rpc stub,
 // which must live in this stateless worker and never in the DO — the DON'T-PIN rule,
 // context/rpc-stubs.ts) and the two processor verbs. Each verb builds ONE event and appends it;
 // every built-in root rides the hop with ZERO code here. `provide` and `subscribe` hand back a
@@ -34,12 +35,16 @@ import {
 import type { FetchRouteInput, IterateContextApi } from "iterate/api";
 import type { StreamEvent, StreamEventInput } from "iterate/stream/processor";
 import {
+  ITX_AI_CALL_KEY,
+  isItxAiCall,
   materializeItxHandleReference,
   registerPipelinedRpcBrand,
   registerRpcSessionBrand,
+  walkSteps,
 } from "./context/dispatch.ts";
 import type { Caller } from "./caller.ts";
-import type { IterateContextDurableObject, Env } from "./iterate-context-durable-object.ts";
+import type { Env } from "./env.ts";
+import type { IterateContextDurableObject } from "./iterate-context-durable-object.ts";
 import {
   ITX_EXPRESSION_FETCH_HEADER,
   encodeFetchExpression,
@@ -122,6 +127,9 @@ export interface IterateContextRpcTarget extends Omit<BuiltInScope, "cd" | "face
 /** The iterate context (`itx`) at one `{ projectId, path }`, as a client holds it. */
 export class IterateContextRpcTarget extends RpcTarget {
   readonly #contextNamespace: IterateContextNamespace;
+  /** THIS worker's Workers AI binding: the one a call the context resolves to `itx.builtins.ai…`
+   *  runs on (`#invokeOnDurableObject`), never one a caller hands in. */
+  readonly #ai: Ai;
   readonly #durableObjectAddress: DurableObjectAddress;
   readonly #sessionTeardown: SessionTeardown;
   readonly #waitUntil: WaitUntil;
@@ -137,6 +145,7 @@ export class IterateContextRpcTarget extends RpcTarget {
 
   constructor(
     contextNamespace: IterateContextNamespace,
+    ai: Ai,
     durableObjectAddress: DurableObjectAddress,
     sessionTeardown: SessionTeardown,
     waitUntil: WaitUntil,
@@ -146,6 +155,7 @@ export class IterateContextRpcTarget extends RpcTarget {
     super();
     this.#globalPaths = globalPaths;
     this.#contextNamespace = contextNamespace;
+    this.#ai = ai;
     this.#durableObjectAddress = durableObjectAddress;
     this.#sessionTeardown = sessionTeardown;
     this.#waitUntil = waitUntil;
@@ -165,7 +175,12 @@ export class IterateContextRpcTarget extends RpcTarget {
    *  it is one whole expression back through `invoke`, so what the client holds is an object of this
    *  stateless worker, and no session onto the actor outlives a call.
    *
-   *  The call rides `contextStub` (context-stub.ts), which owns its retry and failure policy. */
+   *  The call rides `contextStub` (context-stub.ts), which owns its retry and failure policy.
+   *
+   *  A call the context resolved to the platform's Workers AI comes back as the call to make
+   *  (context/dispatch.ts `ItxAiCall`) and is made HERE, on this worker's own binding, so its
+   *  Response or stream is born in this stateless invocation and goes straight to the caller. Only
+   *  the top-level answer is one: the resolver refuses a walked value of that shape. */
   async #invokeOnDurableObject(
     itxExpression: ItxExpression,
     args: unknown[] = [],
@@ -175,6 +190,10 @@ export class IterateContextRpcTarget extends RpcTarget {
       this.#durableObjectAddress,
       "itx",
     ).invoke(itxExpression, args, this.#caller);
+    if (isItxAiCall(result))
+      return (
+        await walkSteps({ value: { ai: this.#ai }, receiver: undefined }, result[ITX_AI_CALL_KEY])
+      ).value;
     return materializeItxHandleReference(result, (expression) => this.invoke(expression));
   }
 
@@ -225,6 +244,7 @@ export class IterateContextRpcTarget extends RpcTarget {
     });
     return new IterateContextRpcTarget(
       this.#contextNamespace,
+      this.#ai,
       durableObjectAddress,
       this.#sessionTeardown,
       this.#waitUntil,
@@ -548,6 +568,7 @@ export class ItxEntrypoint extends cloudflareWorkers.WorkerEntrypoint<
     const address = DurableObjectNameCodec.parse(this.ctx.props.iterateContextName);
     return new IterateContextRpcTarget(
       this.env.ITERATE_CONTEXT,
+      this.env.AI,
       address,
       new SessionTeardown(),
       (p) => this.ctx.waitUntil(p),

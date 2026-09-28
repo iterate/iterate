@@ -58,7 +58,14 @@ import {
 import type { StreamEventInput } from "iterate/stream/processor";
 import type { Caller } from "../caller.ts";
 import { ScheduledAppendInput } from "../stream/scheduled-appends.ts";
-import { callOn, walkSteps, awaitAnswerReleasedIfRejected } from "./dispatch.ts";
+import {
+  callOn,
+  walkSteps,
+  awaitAnswerReleasedIfRejected,
+  isItxAiCall,
+  ITX_AI_CALL_KEY,
+  type ItxAiCall,
+} from "./dispatch.ts";
 import { GLOBAL_PROJECT_ID } from "./paths.ts";
 
 // ── built-in roots ── THE RESERVED ROOT'S KEYS, each with the one line `rewriteRules.list()` says
@@ -873,6 +880,18 @@ export class ItxExpressionResolver {
       throw new Error(
         `"itx.builtins" names the reserved root — name a built-in under it (${roots()})`,
       );
+    // THE PLATFORM'S WORKERS AI: this context holds no binding. It answers the steps from `ai` on,
+    // and the stateless edge that took the call runs them on its own (dispatch.ts `ItxAiCall`).
+    // Workers AI takes data and answers data or a stream, so a call that ends on a name (the binding
+    // or a method, handed out) or carries live args is refused.
+    if (rootName === "ai") {
+      if (extraArgs.length > 0 || typeof rewritten.at(-1) === "string")
+        throw codedError(
+          "INVALID_INPUT",
+          `${JSON.stringify(print(rewritten))}: Workers AI is called with data, never handed out — end the call with a method call such as run(model, inputs)`,
+        );
+      return { [ITX_AI_CALL_KEY]: rewritten.slice(2) } satisfies ItxAiCall;
+    }
     if (!Object.hasOwn(this.#builtIns, rootName))
       throw codedError(
         "NO_ITX_EXPRESSION_MATCH",
@@ -904,9 +923,21 @@ export class ItxExpressionResolver {
         rewritten.slice(2),
         rpcSessionsSteppedPast,
       );
-      return extraArgs.length > 0
-        ? await callOn(value, receiver, extraArgs)
-        : await awaitAnswerReleasedIfRejected(value);
+      const answer =
+        extraArgs.length > 0
+          ? await callOn(value, receiver, extraArgs)
+          : await awaitAnswerReleasedIfRejected(value);
+      // Every value a walk reaches — a stored one, a facet's, a loaded worker's, a lent stub's, an
+      // external server's through the library — answers here: one shaped like the `ai` branch's
+      // answer would spend the binding at the edge for a table that grants no AI.
+      if (isItxAiCall(answer)) {
+        rpcSessionsSteppedPast.push(answer);
+        throw codedError(
+          "FORBIDDEN",
+          `${JSON.stringify(print(rewritten))} answered a value shaped like a Workers AI call (${ITX_AI_CALL_KEY}); only itx.builtins.ai makes one`,
+        );
+      }
+      return answer;
     } finally {
       releaseRpcSessions(rpcSessionsSteppedPast);
     }

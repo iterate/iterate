@@ -1,12 +1,15 @@
 // env.ts — the one worker's bindings: the context DO's (iterate-context-durable-object.ts `Env`,
-// the control plane's D1 among them) plus the issuer's own — the OAuth provider's KV, the browser
-// sessions and the issuer's page files.
+// the control plane's D1 among them) plus the edge's own — Workers AI, the OAuth provider's KV, the
+// browser sessions and the issuer's page files.
 
 import type { BrowserSession } from "iterate/app-session";
 import type { Env as DurableObjectEnv } from "./iterate-context-durable-object.ts";
 
 /** Platform bindings for the issuer, public APIs and project ingress. */
 export interface Env extends DurableObjectEnv {
+  /** Workers AI, which only the edge calls: a context answers `itx.ai` as the call to make and the
+   *  edge makes it (context/dispatch.ts `ItxAiCall`), so no Durable Object reads this binding. */
+  AI: Ai;
   BROWSER_SESSION: DurableObjectNamespace<BrowserSession>;
   /** The OAuth provider's tokens and DCR clients, the sign-in challenges and the personal access
    *  tokens' index. The provider's grants live in the control plane's D1 instead: it reads this

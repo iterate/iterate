@@ -65,6 +65,7 @@ export async function createConsentProject(
   const session = new SessionRpcTarget(
     {
       contextNamespace: env.ITERATE_CONTEXT,
+      ai: env.AI,
       waitUntil: (promise) => ctx.waitUntil(promise),
       controlPlane: new ControlPlane(env),
       appConfig: appConfigOf(env),

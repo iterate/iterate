@@ -178,9 +178,9 @@ export type AlarmTrace = {
 };
 
 /** The bindings THE DO reads (Vite's built Wrangler config): the DO namespace, the Worker Loader, the kv namespaces,
- *  Workers AI, Browser Run, Artifacts, Email Sending — and, from `AppConfigEnv`, the version-metadata binding and the `APP_CONFIG_*`
- *  vars worker.ts's `parseAppConfig` parses. env.ts's `Env` extends this with the issuer's own
- *  (OAuth KV, the browser sessions, the page files): the one worker's env. */
+ *  Browser Run, Artifacts, Email Sending — and, from `AppConfigEnv`, the version-metadata binding and the `APP_CONFIG_*`
+ *  vars worker.ts's `parseAppConfig` parses. env.ts's `Env` extends this with the edge's own
+ *  (Workers AI, OAuth KV, the browser sessions, the page files): the one worker's env. */
 export interface Env extends AppConfigEnv {
   ITERATE_CONTEXT: DurableObjectNamespace<IterateContextDurableObject>;
   /** THE CONTROL PLANE'S D1: the deployment's users, identities, organizations, memberships,
@@ -190,8 +190,6 @@ export interface Env extends AppConfigEnv {
   DB: D1Database;
   LOADER: WorkerLoader;
   ITX_KV: KVNamespace;
-  /** Workers AI — the built-in root `itx.ai`, the binding verbatim (context/built-ins.ts). */
-  AI: Ai;
   /** Browser Run — the built-in root `itx.browser` (context/built-ins.ts). */
   BROWSER: BrowserRun;
   /** The one R2 bucket — the built-in root `itx.r2`, every owner under its own prefix (context/built-ins.ts). */

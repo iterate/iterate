@@ -178,6 +178,7 @@ test.for([
     const context = new IterateContextRpcTarget(
       // The fake namespace answers the one method the edge calls on it.
       { getByName } as unknown as IterateContextNamespace,
+      {} as Ai, // no row here answers a Workers AI call
       DurableObjectNameCodec.address({ projectId: "prj_edge", path: "/" }),
       new SessionTeardown(),
       () => {},
@@ -195,6 +196,52 @@ test.for([
     expect(logged).toEqual(lines);
   },
 );
+
+test("a Workers AI call the context answers is made on the edge's own binding, and only the top-level answer is one", async () => {
+  const answers: unknown[] = [
+    { $itxAiCall: ["ai", ["run", "@cf/m", { prompt: "hi" }]] },
+    { $itxAiCall: ["ai", ["gateway", "g"], ["run", { provider: "p" }]] },
+    { nested: { $itxAiCall: ["ai", ["run", "@cf/m", {}]] } },
+  ];
+  const invoke = vi.fn(async () => answers.shift());
+  const ran: unknown[] = [];
+  const ai = {
+    run: (...args: unknown[]) => {
+      ran.push(["run", ...args]);
+      return "the edge ran it";
+    },
+    gateway: (id: string) => ({
+      run: (request: unknown) => {
+        ran.push(["gateway", id, request]);
+        return "the gateway ran it";
+      },
+    }),
+  };
+  const context = new IterateContextRpcTarget(
+    // The fake namespace answers the one method the edge calls on it; the fake binding the two the
+    // rows call.
+    { getByName: () => ({ invoke }) } as unknown as IterateContextNamespace,
+    ai as unknown as Ai,
+    DurableObjectNameCodec.address({ projectId: "prj_edge", path: "/agents/a" }),
+    new SessionTeardown(),
+    () => {},
+    { principal: null, app: true },
+  );
+  expect(await context.invoke(["itx", "ai", ["run", "@cf/m", { prompt: "hi" }]])).toBe(
+    "the edge ran it",
+  );
+  expect(await context.invoke("itx.ai.gateway('g').run({ provider: 'p' })")).toBe(
+    "the gateway ran it",
+  );
+  // A value that only CONTAINS the shape is data, handed back as it is.
+  expect(await context.invoke("itx.kv.get('k')")).toEqual({
+    nested: { $itxAiCall: ["ai", ["run", "@cf/m", {}]] },
+  });
+  expect(ran).toEqual([
+    ["run", "@cf/m", { prompt: "hi" }],
+    ["gateway", "g", { provider: "p" }],
+  ]);
+});
 
 type Failure =
   | "storage timeout"

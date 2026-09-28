@@ -69,6 +69,8 @@ export type SessionCredentials = z.infer<typeof SessionCredentials>;
 /** What every session is built from: the edge's bindings, the configuration and THIS request. */
 export interface SessionInput {
   contextNamespace: IterateContextNamespace;
+  /** Workers AI: a context's `itx.ai` call runs on it here (iterate-context.ts). */
+  ai: Ai;
   waitUntil: WaitUntil;
   /** The control plane as the edge holds it: the catalog's reads and its commands. */
   controlPlane: ControlPlane;
@@ -662,6 +664,7 @@ export class SessionRpcTarget extends RpcTarget {
   #globalContext(path: string, globalPaths = false): IterateContextRpcTarget {
     return new IterateContextRpcTarget(
       this.#input.contextNamespace,
+      this.#input.ai,
       DurableObjectNameCodec.address({ projectId: GLOBAL_PROJECT_ID, path }),
       this.#sessionTeardown,
       this.#input.waitUntil,
@@ -1209,6 +1212,7 @@ class ProjectCollectionRpcTarget extends RpcTarget {
     this.#session.input.onProjectAccess?.(projectId);
     return new IterateContextRpcTarget(
       this.#session.input.contextNamespace,
+      this.#session.input.ai,
       DurableObjectNameCodec.parse(projectId),
       this.#sessionTeardown,
       this.#session.input.waitUntil,

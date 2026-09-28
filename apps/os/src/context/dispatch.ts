@@ -219,6 +219,25 @@ export function itxAnswerDetachedFromSession(
   return copy;
 }
 
+/** A CALL ON WORKERS AI IS MADE BY THE EDGE THAT TOOK IT. A context decides what `itx.ai` means (its
+ *  table: a parent link, a grant, a test's lent fake, a jail's null) but holds no AI binding: when a
+ *  call lands on the platform's own `itx.builtins.ai`, the context answers the steps after `ai` as
+ *  THIS data, and the stateless edge that dialed the context (iterate-context.ts
+ *  `#invokeOnDurableObject`) runs them on its own `env.AI`. So a Workers AI Response is only ever
+ *  made in a stateless invocation and crosses one hop to its caller, never Durable Object → stateless
+ *  → Durable Object: the topology in which Cloudflare records a false "hung" exception
+ *  (apps/agents/e2e/ai-stream-hung-request.e2e.test.ts). Only the resolver mints one; it refuses any
+ *  other answer of this shape (itx-expression-rewriting.ts), so no stored value, facet, loaded worker
+ *  or lent stub can spend the binding for a context whose table grants no AI. */
+export const ITX_AI_CALL_KEY = "$itxAiCall";
+export type ItxAiCall = { [ITX_AI_CALL_KEY]: ItxExpression };
+
+export const isItxAiCall = (value: unknown): value is ItxAiCall =>
+  typeof value === "object" &&
+  !!value &&
+  ITX_AI_CALL_KEY in value &&
+  Array.isArray(value[ITX_AI_CALL_KEY]);
+
 /** The holder's side: a reference becomes a handle of the HOLDER's own whose every dotted call is one
  *  whole expression through `invoke` — the reference's expression plus the steps. Anything else passes
  *  through untouched. The proxy hands relative steps; a caller's own `.invoke("itx.whoami()")` is a

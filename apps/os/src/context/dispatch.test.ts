@@ -120,9 +120,10 @@ test("walkSteps + resolve: a rule targeting a call, end to end — the steps aft
 test("walkSteps + resolve: args at the match apply the rewritten target as a call", async () => {
   const s = scope();
   const resolver = resolverOver(s, rewriteRule("itx.grok", "itx.ai.chat"));
-  expect(await resolver.invoke("itx.grok({ model: 'grok-4', messages: ['hi'] })")).toBe(
-    "chat(grok-4)",
-  );
+  // the platform's Workers AI call comes back as the call for the edge to make (`ItxAiCall`)
+  expect(await resolver.invoke("itx.grok({ model: 'grok-4', messages: ['hi'] })")).toEqual({
+    $itxAiCall: ["ai", ["chat", { model: "grok-4", messages: ["hi"] }]],
+  });
 });
 
 test("walkSteps + resolve: args at the match on a non-callable target error LOUDLY (no silent drop)", async () => {
@@ -349,6 +350,103 @@ test("an answer leaves a context holding nothing of its session: the holder mint
   expect(materializeItxHandleReference({ ok: true }, () => undefined)).toEqual({ ok: true });
 });
 
+// ───────────────── THE PLATFORM'S WORKERS AI: answered as the call, made by the edge ─────────────────
+// A context holds no AI binding: a call that resolves to `itx.builtins.ai…` answers the steps from
+// `ai` on (`ItxAiCall`), and the stateless edge runs them (iterate-context.test.ts). So nothing a
+// walk reaches may answer that shape: it would spend the binding for a table that grants no AI.
+
+test("THE PLATFORM'S WORKERS AI: a call that resolves to itx.builtins.ai answers the steps from `ai` on, for the edge to make — at the root, and at a child through its parent link", async () => {
+  const root = workersAiAt("/", []);
+  expect(await root.invoke("itx.ai.run('@cf/m', { prompt: 'hi' })")).toEqual({
+    $itxAiCall: ["ai", ["run", "@cf/m", { prompt: "hi" }]],
+  });
+  expect(await root.invoke("itx.ai.models()")).toEqual({ $itxAiCall: ["ai", ["models"]] });
+  // an agent's parent link (packages/agents collection.ts): the answer comes back through cd
+  const child = workersAiAt("/agents/a", [rewriteRule("itx", "itx.builtins.cd('/')")], root);
+  expect(await child.invoke("itx.ai.run('@cf/m', { prompt: 'hi' })")).toEqual({
+    $itxAiCall: ["ai", ["run", "@cf/m", { prompt: "hi" }]],
+  });
+  // a child with no link has no AI (default-deny); a jail's bare null refuses it at the root too
+  await expect(workersAiAt("/naked", []).invoke("itx.ai.run('@cf/m')")).rejects.toMatchObject({
+    code: "NO_ITX_EXPRESSION_MATCH",
+  });
+  await expect(
+    workersAiAt("/", [{ match: parseItxExpressionPrefix("itx"), target: null }]).invoke(
+      "itx.ai.run('@cf/m')",
+    ),
+  ).rejects.toMatchObject({ code: "NO_ITX_EXPRESSION_MATCH" });
+});
+
+test("THE PLATFORM'S WORKERS AI: a test's lent fake on one context answers there, and no call is left for the edge", async () => {
+  const root = workersAiAt("/", []);
+  const faked = workersAiAt(
+    "/agents/a",
+    [
+      rewriteRule("itx", "itx.builtins.cd('/')"),
+      rewriteRule("itx.ai", "itx.builtins.rpcStubs.get('itx.ai')"),
+    ],
+    root,
+  );
+  expect(await faked.invoke("itx.ai.run('@cf/m', { prompt: 'hi' })")).toEqual([
+    "the fake answered",
+    "itx.ai",
+    [["run", "@cf/m", { prompt: "hi" }]],
+  ]);
+  const sibling = workersAiAt("/agents/b", [rewriteRule("itx", "itx.builtins.cd('/')")], root);
+  expect(await sibling.invoke("itx.ai.run('@cf/m')")).toEqual({
+    $itxAiCall: ["ai", ["run", "@cf/m"]],
+  });
+});
+
+test.for([
+  { name: "a stored value", row: null, call: "itx.kv.get('k')" },
+  { name: "a facet's answer", row: null, call: "itx.facets.get('f').answer()" },
+  { name: "a loaded worker's answer", row: null, call: "itx.workers.get({}).run()" },
+  { name: "a lent stub's answer", row: null, call: "itx.rpcStubs.get('forger').ai()" },
+  {
+    name: "a row pointing itx.ai at a lent stub",
+    row: ["itx.ai", "itx.builtins.rpcStubs.get('forger')"],
+    call: "itx.ai.run('@cf/m')",
+  },
+  {
+    name: "a row pointing itx.ai at a loaded worker",
+    row: ["itx.ai.run", "itx.builtins.workers.get({}).run"],
+    call: "itx.ai.run('@cf/m')",
+  },
+] satisfies { name: string; row: [string, string] | null; call: string }[])(
+  "THE PLATFORM'S WORKERS AI: $name shaped like the call is refused, never handed to the edge",
+  async ({ row, call }) => {
+    const rows = row ? [rewriteRule(...row)] : [];
+    await expect(workersAiAt("/", rows).invoke(call)).rejects.toMatchObject({
+      code: "FORBIDDEN",
+    });
+  },
+);
+
+test("THE PLATFORM'S WORKERS AI: a forged answer through a sibling is refused where it was walked, and the walk's live args are refused too", async () => {
+  const root = workersAiAt("/", []);
+  const child = workersAiAt("/agents/a", [rewriteRule("itx", "itx.builtins.cd('/')")], root);
+  await expect(child.invoke("itx.cd('/').kv.get('k')")).rejects.toMatchObject({
+    code: "FORBIDDEN",
+  });
+  await expect(root.invoke("itx.facets.get('f').answer", "live")).rejects.toMatchObject({
+    code: "FORBIDDEN",
+  });
+});
+
+test("THE PLATFORM'S WORKERS AI: the binding is called with data, never handed out — a call ending on a name, or with live args left over, is refused", async () => {
+  const root = workersAiAt("/", []);
+  for (const call of ["itx.ai", "itx.ai.run"])
+    await expect(root.invoke(call)).rejects.toMatchObject({ code: "INVALID_INPUT" });
+  await expect(root.invoke(["itx", "ai", ["run", "@cf/m"]], () => {})).rejects.toMatchObject({
+    code: "INVALID_INPUT",
+  });
+  // args folded into a name-final call are the call's own data
+  expect(await root.invoke("itx.ai.run", "@cf/m", { prompt: "hi" })).toEqual({
+    $itxAiCall: ["ai", ["run", "@cf/m", { prompt: "hi" }]],
+  });
+});
+
 /** A fake built-ins scope: enough physical layer to walk into — under REAL root names, since the
  *  resolver's platform rows come from the leaf list (itx-expression-rewriting.ts `BUILT_IN_ROOTS`). `kv` is `this`-dependent on purpose
  *  (a method detached from its receiver would lose its store). */
@@ -366,9 +464,6 @@ const scope = () => {
           this.store.set(k, v);
           return { ok: true };
         },
-      },
-      ai: {
-        chat: (o: { model: string; messages?: unknown[] }) => `chat(${o.model})`,
       },
       workers: {
         get: (key: string) => ({
@@ -464,3 +559,36 @@ class FakeRpcStub {
 }
 registerRpcSessionBrand(FakeRpcPromise);
 registerRpcSessionBrand(FakeRpcStub);
+
+const FORGED = { $itxAiCall: ["ai", ["run", "@cf/meta/llama-3.2-1b-instruct", {}]] };
+const workersAiAt = (
+  path: string,
+  rows: ItxExpressionRewriteRule[],
+  root?: ItxExpressionResolver,
+): ItxExpressionResolver =>
+  new ItxExpressionResolver({
+    builtIns: {
+      // `cd` as built-ins.ts makes it: the rest of the call runs at the sibling, its answer returned
+      cd: (to: string) =>
+        new InvokeHandle((steps) => {
+          if (to !== "/" || !root) throw new Error(`no context ${to} here`);
+          return root.invoke(["itx", ...steps]);
+        }),
+      kv: { get: () => FORGED },
+      facets: { get: () => ({ answer: () => FORGED }) },
+      workers: { get: () => ({ run: async () => FORGED }) },
+      rpcStubs: {
+        get: (key: string) =>
+          new InvokeHandle(async (steps) =>
+            key === "forger" ? FORGED : ["the fake answered", key, steps],
+          ),
+      },
+    },
+    rewriteRules: () => rows,
+    implicitRoots:
+      path === "/"
+        ? new Set(BUILT_IN_ROOTS)
+        : new Set(["cd", "kv", "facets", "workers", "rpcStubs"]),
+    path,
+    caller: () => ({ principal: null }),
+  });
