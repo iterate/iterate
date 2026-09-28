@@ -5,11 +5,11 @@ size: large
 
 # CI change detection: inherit results and reuse deployments
 
-**Status:** an experiment, not a commitment: built to see what inherit and reuse cost in code and save in CI before deciding whether to keep them. Decided 2026-09-28: inherit and reuse, as #2712 had them; no suite selection for now. It replaces the 2026-09-25 draft (never committed; `stash@{0}`), which predates #3165.
+**Status:** an experiment, not a commitment: built to see what inherit and reuse cost in code and save in CI before deciding whether to keep them. Decided 2026-09-28: inherit, run only the tests a push changed, and reuse whole deployments, walking the head's history as #2712 did. It replaces the 2026-09-25 draft (never committed; `stash@{0}`), which predates #3165.
 
 - **Built:** units (`scripts/ci/preview-units.ts`), inherit (`scripts/ci/preview-inherit.ts`, the `changes` step), selection (a suite that runs after a green runs only the changed rows or the changed apps' specs), reuse (`apps/os/scripts/preview-reuse.ts`: whole or not at all), the plan artifact, cleanup and sweep rules, docs, an explainer. A PR run tests its head, and inherit and reuse walk its history.
 - **Proven live** (after decisions 8 and 9): an e2e-row-only push ran one test file on a reused deployment and was green in 64 s (was about 2:15); a Notes-only push ran one spec (26 s) with E2E tests inherited in 6 s, but deployed all seven Workers, and a brand-new deployment's readiness gate took 16–96 s today, so it was green in 2:39; docs-only pushes inherit both suites in about 8 s.
-- **Left:** a decision on whether to keep it, and whether app-only pushes should reuse a warm apps/os after all (decision 9's trade-off, below).
+- **Left:** a decision on whether to keep it. Partial deploys (an app-only push reusing a warm apps/os) are deferred: see Later.
 
 ## Why now
 
@@ -128,6 +128,8 @@ What else changes:
 - [x] Live check: an e2e-row push runs one file on a reused deployment; a Notes push deploys all seven and runs the Notes project _`00bfa5e`: 1 file, nothing deployed, green in 64 s; `00e96d5` and `6a7af4e`: the notes project alone (1 spec, 26 s), E2E tests inherited in 6 s, Deploy preview 127–182 s_
 
 ## Later, not now
+
+- **Partial deploys again** (deferred 2026-09-28): an app-only push deploying only its app against a reused, warm apps/os would skip the os deploy and a brand-new deployment's readiness gate (16–96 s on 2026-09-28). The first version of this PR had it; decision 9 removed it for its complexity.
 
 - **Select for os changes:** Jonas's view (an os change runs E2E, not the app specs) is the remaining policy question; os changes run everything today.
 - **`packages/iterate` forces every unit** (59 of 200 PRs). If that keeps defeating reuse, compare a unit's built bundle instead of its input paths. That's exact, but it needs a build before the plan.
