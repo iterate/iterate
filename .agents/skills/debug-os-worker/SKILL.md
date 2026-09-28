@@ -55,7 +55,7 @@ drill-down excludes the same expected noise.
 
 A control-plane call that D1 failed on the platform's side logs `control-plane.platform-failure-d1`
 (`name` is the catalog method); a project host answers it 503. An `/api` read still unanswered after
-3 s logs `control-plane.platform-failure-read-deadline`.
+5 s logs `control-plane.platform-failure-read-deadline`.
 
 ## Drill down
 

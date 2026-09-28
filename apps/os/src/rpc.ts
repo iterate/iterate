@@ -51,9 +51,11 @@ export async function rpcResponse(
   const input: SessionInput = {
     contextNamespace: env.ITERATE_CONTEXT,
     waitUntil: (promise) => ctx.waitUntil(promise),
-    // A read unanswered in 3 s is UNAVAILABLE (overloaded), not a call held until D1's own 30 s
-    // bound.
-    controlPlane: new ControlPlane(env, { readDeadlineMs: 3_000 }),
+    // A read unanswered in 5 s is UNAVAILABLE (overloaded), not a call held until D1's own 30 s
+    // bound. 5 s, not less: about 1 in 2,000 Worker→D1 and Worker→DO calls take a fixed extra
+    // ~3.0 s, so on a bench preview a 3 s deadline failed 8 of 16,000 fresh-socket reads, and 5 s
+    // failed 0 of 16,000.
+    controlPlane: new ControlPlane(env, { readDeadlineMs: 5_000 }),
     appConfig: appConfigOf(env),
     platformOrigin,
     onProjectAccess: (projectId) => projects.add(projectId),
