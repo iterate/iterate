@@ -133,14 +133,6 @@ export async function deleteArtifactsNamespace(
   wait = (ms: number) => sleep(ms),
 ): Promise<StuckArtifactsNamespace | undefined> {
   const route = `/artifacts/namespaces/${encodeURIComponent(artifactsNamespaceName)}`;
-  /** Gone when three reads 2 s apart all answer 404: one 404 can be another delete in flight. */
-  const confirmedGone = async () => {
-    for (let read = 0; read < 3; read++) {
-      if (read > 0) await wait(2000);
-      if (await readArtifactsNamespace(cf, route)) return false;
-    }
-    return true;
-  };
   // One read, not three: a 404 here while another run's delete is in flight leaves the namespace to
   // that run, and to the sweep if it fails.
   if (!(await readArtifactsNamespace(cf, route))) {
@@ -157,7 +149,7 @@ export async function deleteArtifactsNamespace(
     const outcome = await deleteArtifactsRound(cf, route);
     deletedRepos += outcome.deletedRepos;
     if (outcome.deletedRepos > 0) refusedRounds = 0;
-    if (outcome.next === "accepted" && (await confirmedGone())) break;
+    if (outcome.next === "accepted" && (await confirmedGone(cf, route, wait))) break;
     if (outcome.next === "accepted" || outcome.next === "not-empty") refusedRounds++;
     if (refusedRounds >= STUCK_AFTER_REFUSED_ROUNDS) {
       const row = await readArtifactsNamespace(cf, route);
@@ -204,6 +196,31 @@ export function renderStuckArtifactsNamespacesPage(
     link: input.jobUrl || null,
     testRun: input.testRun,
   });
+}
+
+/** Whether every namespace named on an open stuck page (renderStuckArtifactsNamespacesPage's
+ *  `• <namespace>:` lines) is gone, each confirmed by reads. A night that did not reach a namespace
+ *  (a delete failed first, or its preview was kept) says nothing about it, so the sweep resolves the
+ *  page only on this. */
+export async function stuckNamespacesGone(
+  cf: Cf,
+  openPageText: string,
+  wait = (ms: number) => sleep(ms),
+) {
+  for (const [, namespace] of openPageText.matchAll(/^• ([^:\s]+):/gmu)) {
+    const route = `/artifacts/namespaces/${encodeURIComponent(namespace!)}`;
+    if (!(await confirmedGone(cf, route, wait))) return false;
+  }
+  return true;
+}
+
+/** Gone when three reads 2 s apart all answer 404: one 404 can be another delete in flight. */
+async function confirmedGone(cf: Cf, route: string, wait: (ms: number) => Promise<unknown>) {
+  for (let read = 0; read < 3; read++) {
+    if (read > 0) await wait(2000);
+    if (await readArtifactsNamespace(cf, route)) return false;
+  }
+  return true;
 }
 
 /** The namespace's row, or undefined for its 404/10200. The namespace itself is what answers "does

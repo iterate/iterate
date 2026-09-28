@@ -19,7 +19,7 @@ import { execFileSync } from "node:child_process";
 import type { WebClient } from "@slack/web-api";
 import { cloudflareAccounts } from "../../envs.ts";
 import {
-  findOpenPage,
+  findOpenPages,
   getSlackClient,
   onCallMention,
   pageChannel,
@@ -405,7 +405,7 @@ function renderPage(input: {
     .slice(0, 3)
     .map((row) => `${row.namespace} ~${money(usd(row.doHours))}/h`);
   return pageText({
-    // "DO cost page for <label>:" is how findOpenPage finds it.
+    // "DO cost page for <label>:" is how findOpenPages finds it.
     what: `DO cost page for ${account.label}: ~${money(usd(rate))}/h (≈ ${money(usdPerDay(rate))}/day), ${(rate / account.ceilingDoHours).toFixed(1)}× the ceiling`,
     impact: [
       `peak ${peak.toLocaleString("en-US")} DO-hours/h (~${money(usd(peak))}/h)`,
@@ -439,7 +439,7 @@ async function upkeepPage(input: {
     await slack.chat.postMessage({ channel, text });
     return "post";
   }
-  const open = await findOpenPage(slack, {
+  const [open] = await findOpenPages(slack, {
     channel,
     marker: `DO cost page for ${account.label}:`,
     sinceHours: OPEN_PAGE_HOURS,

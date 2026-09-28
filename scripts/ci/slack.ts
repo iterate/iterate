@@ -113,15 +113,16 @@ function isResolved(text: string) {
 }
 
 /**
- * The newest page this bot posted in the last `sinceHours` whose text has `marker` and whose first
- * line is not resolved, read page by page through the channel's history. A 🧪 test page is never an
- * incident.
+ * The pages this bot posted in the last `sinceHours` whose text has `marker` and whose first line
+ * is not resolved, newest first, read page by page through the channel's history. A 🧪 test page is
+ * never an incident.
  */
-export async function findOpenPage(
+export async function findOpenPages(
   slack: WebClient,
   input: { channel: string; marker: string; sinceHours: number; now: Date },
-): Promise<{ ts: string; text: string } | undefined> {
+): Promise<Array<{ ts: string; text: string }>> {
   const { bot_id: botId } = await slack.auth.test();
+  const open: Array<{ ts: string; text: string }> = [];
   let cursor: string | undefined;
   do {
     const history = await slack.conversations.history({
@@ -139,11 +140,11 @@ export async function findOpenPage(
         !text.includes("TEST RUN") &&
         !isResolved(text)
       )
-        return { ts: message.ts, text };
+        open.push({ ts: message.ts, text });
     }
     cursor = history.response_metadata?.next_cursor || undefined;
   } while (cursor);
-  return undefined;
+  return open;
 }
 
 /**
@@ -159,7 +160,7 @@ export async function resolvePage(
   await slack.chat.postMessage({
     channel: input.channel,
     thread_ts: input.ts,
-    // a 🧪 test page is never open (findOpenPage), so this resolves a real one
+    // a 🧪 test page is never open (findOpenPages), so this resolves a real one
     text: resolvedText(input.why, false),
   });
 }
@@ -181,17 +182,29 @@ export function pageStep(
 /**
  * Keeps one incident's #error-pulse page for a poster with no state but the channel: posts it,
  * edits it while the incident lasts (an edit notifies nobody), or resolves it with `why` once this
- * run finds the incident gone (pageStep). Returns the step taken. A 🧪 test run posts its page to
- * #ci itself and never calls this.
+ * run finds the incident gone (pageStep) and `gone`, when given, confirms it from the open page's
+ * text. Older open pages of the same incident (a page per night from before one was kept) are
+ * resolved by an edit alone, which notifies nobody. Returns the step taken. A 🧪 test run posts its
+ * page to #ci itself and never calls this.
  */
 export async function keepPage(
   slack: WebClient,
-  input: { marker: string; sinceHours: number; now: Date; text: string | undefined; why: string },
+  input: {
+    marker: string;
+    sinceHours: number;
+    now: Date;
+    text: string | undefined;
+    why: string;
+    gone?: (openText: string) => Promise<boolean>;
+  },
 ) {
   const channel = pageChannel(false);
   const { marker, sinceHours, now } = input;
-  const open = await findOpenPage(slack, { channel, marker, sinceHours, now });
+  const [open, ...older] = await findOpenPages(slack, { channel, marker, sinceHours, now });
+  for (const page of older)
+    await slack.chat.update({ channel, ts: page.ts, text: markResolved(page.text) });
   const step = pageStep(open, input.text);
+  if (step.step === "resolve" && input.gone && !(await input.gone(step.text))) return "none";
   if (step.step === "post") await slack.chat.postMessage({ channel, text: step.text });
   if (step.step === "edit") await slack.chat.update({ channel, ts: step.ts, text: step.text });
   if (step.step === "resolve")

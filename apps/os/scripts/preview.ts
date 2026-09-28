@@ -61,6 +61,7 @@ import {
   isCloudflareError,
   renderStuckArtifactsNamespacesPage,
   STUCK_ARTIFACTS_PAGE_MARKER,
+  stuckNamespacesGone,
   type ArtifactsNamespaceRow,
   type Cf,
   type StuckArtifactsNamespace,
@@ -1228,8 +1229,9 @@ async function sweep(
   const stillWorkerless = workerless.filter(({ id }) => listedIds.has(id));
   // The run is red only when the sweep could not act. A scheduled run reports on main's head
   // commit, where red reads as "this commit broke", so what Cloudflare left is a page instead (the
-  // rule scripts/ci/prd-fault-alarm.ts follows); a page that could not be kept is a failure. A run
-  // whose deletes failed may not have reached a stuck namespace, so it resolves no stuck page.
+  // rule scripts/ci/prd-fault-alarm.ts follows); a page that could not be kept is a failure. A night
+  // may not reach a stuck namespace, so its page is resolved only once each one it names reads 404;
+  // the account's listing after the deletes judges the workerless ones.
   const incidents = [
     {
       marker: STUCK_ARTIFACTS_PAGE_MARKER,
@@ -1238,7 +1240,7 @@ async function sweep(
           ? renderStuckArtifactsNamespacesPage(stuckNamespaces, { jobUrl, testRun })
           : undefined,
       why: "Cloudflare deleted them",
-      judged: failures.length === 0 || stuckNamespaces.length > 0,
+      gone: (openText: string) => stuckNamespacesGone(cf, openText),
     },
     {
       marker: WORKERLESS_PAGE_MARKER,
@@ -1247,14 +1249,21 @@ async function sweep(
           ? renderWorkerlessNamespacesPage(stillWorkerless, { jobUrl, testRun })
           : undefined,
       why: "Cloudflare deleted them",
-      judged: true,
+      gone: undefined,
     },
   ];
   const slack = options.onMain ? getSlackClient() : undefined;
-  for (const { marker, text, why, judged } of incidents) {
+  for (const { marker, text, why, gone } of incidents) {
     if (text) console.log(text);
-    if (!slack || !judged) continue;
-    await keepPage(slack, { marker, sinceHours: PAGE_LOOKBACK_HOURS, now: new Date(), text, why })
+    if (!slack) continue;
+    await keepPage(slack, {
+      marker,
+      sinceHours: PAGE_LOOKBACK_HOURS,
+      now: new Date(),
+      text,
+      why,
+      gone,
+    })
       .then((step) => console.log(`#error-pulse page "${marker}": ${step}`))
       .catch((error) => failures.push(`keeping the #error-pulse page: ${describe(error)}`));
   }

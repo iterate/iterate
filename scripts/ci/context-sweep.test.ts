@@ -281,6 +281,14 @@ test.for([
     },
   },
   {
+    name: "a job that succeeded without writing its report pages all the same",
+    posts: sweepPosts({ ...run, result: "success", report: undefined }),
+    expected: {
+      result: "🚨 context sweep failed before its report (success) · <https://depot.dev/run|run>",
+      page: failedPage("context sweep failed before its report (success)"),
+    },
+  },
+  {
     name: "a test run is 🧪 and its page mentions nobody",
     posts: sweepPosts({ ...run, testRun: true, result: "failure", report: undefined }),
     expected: {

@@ -343,7 +343,7 @@ const RECONNECT_FAILED = "the session's socket closed and connecting again faile
 const SWEEP_PAGE_MARKER = "context sweep failed";
 
 /** A sweep's Slack posts: its one-line result for #ci, and its page for #error-pulse when it did
- *  not succeed. Destroying orphans is routine (the nightly crash hunt leaves about 14 a night), so
+ *  not succeed or wrote no report. Destroying orphans is routine (the nightly crash hunt leaves about 14 a night), so
  *  a run that destroyed some pages no one. Pure. */
 export function sweepPosts(input: {
   report: ContextSweepReport | undefined;
@@ -356,12 +356,10 @@ export function sweepPosts(input: {
   const failed = result !== "success";
   const test = testRun ? "🧪 TEST RUN — " : "";
   const run = `<${input.runUrl}|run>`;
+  // No report is a failure whatever the job's result says: the sweep writes one on every run.
   if (!report) {
     const what = `${SWEEP_PAGE_MARKER} before its report (${result})`;
-    return {
-      result: `${test}🚨 ${what} · ${run}`,
-      page: failed ? sweepPage(what, input) : undefined,
-    };
+    return { result: `${test}🚨 ${what} · ${run}`, page: sweepPage(what, input) };
   }
   const orphanOutcomes = [
     `${report.destroyed} destroyed`,
