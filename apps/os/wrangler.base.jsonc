@@ -46,7 +46,8 @@
   // remote binding in local wrangler; the Workers test suite omits this the same way it omits `ai`.
   "browser": { "binding": "BROWSER" },
   // Email Sending: the sign-in code's way out (src/password-and-code-sign-in.ts). wrangler dev simulates it (the
-  // message lands in a local file); a deployment sends from APP_CONFIG_LOGIN_EMAIL_FROM (envs.ts).
+  // message lands in a local file); a deployment sends from `login.emailCode.from` in its Doppler
+  // APP_CONFIG (src/app-config.ts).
   "send_email": [{ "name": "EMAIL" }],
   // R2, the built-in root `itx.r2` (`itx.files` on top). Local wrangler keeps it in .wrangler/state;
   // a deployment's bucket is `<resourceNamePrefix>-files` (envs.ts, ensure-resources).
