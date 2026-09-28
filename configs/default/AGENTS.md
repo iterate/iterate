@@ -11,7 +11,8 @@ Files may be TypeScript or JavaScript and import each other by relative path.
 Import packages by name: `iterate/*` and `zod` come from the platform; list any
 other package in `package.json` and it loads from npm through esm.sh (packages
 that need Node.js builtins are refused). The worker extends `ConfigWorker` from
-`iterate/sdk`. It reaches the project's `itx` through
+`iterate/sdk`, which holds the hosts; a processor imports `StreamProcessor` and
+`defineProcessorContract` from `iterate/stream/processor`. It reaches the project's `itx` through
 `this.withItx((itx) => …)`: one round trip, after which everything the call
 reached is released. Never keep a value from `this.env.ITX.get()`, and answer
 data, not handles, from `withItx`: a kept value keeps the project's context, and

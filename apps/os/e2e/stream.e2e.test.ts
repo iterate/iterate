@@ -461,7 +461,7 @@ test("waitForEvent through a LOADED worker's env.ITX — the scope's dotted meth
   const SRC_WAITER = {
     "package.json": '{"main":"worker.js"}',
     "worker.js": `import { WorkerEntrypoint } from "cloudflare:workers";
-import { withItx } from "iterate/sdk";
+import { withItx } from "iterate/with-itx";
 export default class Waiter extends WorkerEntrypoint {
   run(afterOffset) {
     return withItx(this.env.ITX, (itx) => itx.waitForEvent({ type: "ping", afterOffset, timeoutMs: 20000 }));

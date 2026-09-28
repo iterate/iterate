@@ -106,7 +106,9 @@ function probe(ctx: string) {
  *  batch carrying a `pin/hang` event; each is recorded in the facet's own SQLite first. `probe()`
  *  reads those and the checkpoint without touching the engine. */
 const SOURCE = /* js */ `
-import { StreamProcessor, StreamProcessorDurableObject, defineProcessorContract, z } from "iterate/sdk";
+import { StreamProcessorDurableObject } from "iterate/sdk";
+import { StreamProcessor, defineProcessorContract } from "iterate/stream/processor";
+import { z } from "zod";
 const contract = defineProcessorContract({
   slug: "${name}",
   version: "1.0.0",

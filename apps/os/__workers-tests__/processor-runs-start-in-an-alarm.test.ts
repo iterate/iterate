@@ -94,7 +94,9 @@ const LOOPER_SPEC = {
   source: {
     "package.json": '{"main":"worker.js"}',
     "worker.js": /* js */ `
-import { StreamProcessor, StreamProcessorDurableObject, defineProcessorContract, z } from "iterate/sdk";
+import { StreamProcessorDurableObject } from "iterate/sdk";
+import { StreamProcessor, defineProcessorContract } from "iterate/stream/processor";
+import { z } from "zod";
 const contract = defineProcessorContract({
   slug: "looper",
   version: "1.0.0",

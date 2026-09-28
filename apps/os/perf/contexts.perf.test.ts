@@ -42,7 +42,7 @@ test("a context's first append, then durable appends on a warm context", async (
 const APPENDER = {
   "package.json": '{"main":"worker.js"}',
   "worker.js": `import { WorkerEntrypoint } from "cloudflare:workers";
-import { withItx } from "iterate/sdk";
+import { withItx } from "iterate/with-itx";
 export default class extends WorkerEntrypoint {
   timed(path, writers, each) {
     return withItx(this.env.ITX, async (itx) => {

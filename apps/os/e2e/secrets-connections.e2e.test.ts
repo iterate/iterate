@@ -516,7 +516,7 @@ test("beginOAuth, public client (RFC 7591 registration, PKCE alone, client_id in
 const WEBHOOK_RECEIVER = {
   "package.json": '{"main":"worker.js"}',
   "worker.js": `import { WorkerEntrypoint } from "cloudflare:workers";
-import { withItx } from "iterate/sdk";
+import { withItx } from "iterate/with-itx";
 export default class WebhookReceiver extends WorkerEntrypoint {
   async fetch(request) {
     const payload = await request.text();

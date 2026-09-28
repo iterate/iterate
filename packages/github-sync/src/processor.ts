@@ -8,7 +8,7 @@ import {
   type ProcessorState,
   type ReduceArgs,
 } from "iterate/stream/processor";
-import type { ItxScope, WithItx } from "iterate/sdk";
+import type { WithItx } from "iterate/sdk";
 import { GithubSyncContract } from "./contract.ts";
 import { githubRepositoryOf } from "./github-repository.ts";
 
@@ -26,8 +26,8 @@ const GithubSyncInstalled = z.object({ repo: z.string().startsWith("/repos/") })
 
 export class GithubSyncProcessor extends StreamProcessor<GithubSyncState> {
   contract = GithubSyncContract;
-  readonly #withItx: WithItx<ItxScope>;
-  constructor(withItx: WithItx<ItxScope>) {
+  readonly #withItx: WithItx;
+  constructor(withItx: WithItx) {
     super();
     this.#withItx = withItx;
   }

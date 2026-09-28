@@ -1,13 +1,14 @@
 // stream/processor.ts — THE PROCESSOR: `StreamProcessor`, the PURE class an author writes (a
 // contract and three hooks, no constructor arguments, no storage, no stream — a unit test constructs
 // it with `new`), and `ProcessorEngine`, which drives ONE such instance against a stream and a
-// storage; the SDK's `StreamProcessorDurableObject` builds one per hosted facet. The author surface
-// is Node-testable and re-exported by `iterate/sdk`, which loaded isolates link to the platform's own
-// build, so nothing here imports cloudflare:workers. Four concepts ride with it:
+// storage; the SDK's `StreamProcessorDurableObject` builds one per hosted facet. This module is the
+// processor author's one import path, `iterate/stream/processor`: loaded isolates link it to the
+// platform's own build and Node runs it as it is (the agents package, unit tests), so nothing here
+// imports cloudflare:workers. Four concepts ride with it:
 //   events             — `StreamEventInput` / `StreamEvent`, the envelope, and the idempotency rules
 //   reduce checkpoint  — `ReduceCheckpointTable`, THE ONE spelling of a persisted reduce checkpoint
 //   live state         — `LiveState`, one value, its revision chain and the diff→emit delta
-//   processor contract — `defineProcessorContract`, the zod contract helper (zod rides the SDK build)
+//   processor contract — `defineProcessorContract`, the zod contract helper (zod is a platform module)
 //
 // THE CONCURRENCY CONTRACT:
 //   1. ONE SERIAL CHAIN per processor — batches never interleave.
@@ -53,7 +54,7 @@ import { reportIssue, jsonEqual, codedError, diff, errorCode } from "../lib.ts";
 import type { Principal } from "../principal.ts";
 
 /** What a processor declares: its checkpoint slug and reducer version, what it consumes and emits,
- *  and its initial state (`defineProcessorContract` below builds one from zod schemas). */
+ *  and its initial state. `defineProcessorContract` below is the one way to build one. */
 export type ProcessorContract<State = unknown> = {
   slug: string;
   /** Bumping this re-reduces state from offset 0 (reduce only — side effects never re-run). */
@@ -69,9 +70,8 @@ export type ProcessorContract<State = unknown> = {
   /** The zod payload schema for a consumed event type (owned or a dep's), or undefined if the type
    *  is unknown or the contract declares no `events` catalog. The engine validates a consumed event's
    *  payload against it before reducing (a malformed payload for a KNOWN event is skipped, never
-   *  folded). Present on `defineProcessorContract` contracts; a hand-built core contract omits it and
-   *  reduces unvalidated. */
-  payloadSchemaFor?: (type: string) => z.ZodType | undefined;
+   *  folded). */
+  payloadSchemaFor: (type: string) => z.ZodType | undefined;
 };
 
 /** The stream a processor reduces. `read` answers durable rows plus the proof: `scannedThroughOffset`
@@ -159,7 +159,7 @@ export abstract class StreamProcessor<State, Event extends StreamEvent = StreamE
   /** Side-effect hook. Synchronous by design: register async work via the two helpers on args.
    *  `append` takes what THIS class's `contract` emits (`EmittedEventInput<this["contract"]>`:
    *  a subclass whose `contract` is a defined one gets each emitted type's payload as its catalog
-   *  spells it; the base, and a hand-built contract, take any input). */
+   *  spells it; the base `ProcessorContract` takes any input). */
   processEvent(
     _args: ProcessEventArgs<State, Event, EmittedEventInput<this["contract"]>>,
   ): undefined {}
@@ -600,7 +600,7 @@ export class ProcessorEngine<State> {
     state: State,
   ): { state: State; event: StreamEvent; valid: boolean } {
     // oxlint-disable-next-line iterate/simple-truthiness-check -- only a null/undefined payload defaults to {}; a falsy NON-object payload off the wire (0, false, "") must fail schema validation and be reported, not be folded as an empty object
-    const parsed = this.#contract.payloadSchemaFor?.(event.type)?.safeParse(event.payload ?? {});
+    const parsed = this.#contract.payloadSchemaFor(event.type)?.safeParse(event.payload ?? {});
     if (parsed && !parsed.success) {
       reportIssue("processor.reduce.payload", parsed.error, {
         slug: this.#contract.slug,
@@ -722,8 +722,8 @@ export type StreamEventInput = {
    *  writer's own `source` is dropped but for `processor`, the engine's label. */
   source?: {
     /** WHERE IT CAME FROM: the context whose code or session wrote it — the context a call started
-     *  at, whichever context it was appended to. On every event committed since the stamp: the
-     *  platform's own records of a context (its birth, a wake, a run's settlement) carry the
+     *  at, whichever context it was appended to. Every committed event carries it (`StreamEvent`):
+     *  the platform's own records of a context (its birth, a wake, a run's settlement) carry the
      *  context's own path. */
     origin?: string;
     /** The durable schedule definition responsible for this occurrence. */
@@ -762,14 +762,17 @@ export type StreamEventInput = {
   ephemeral?: true;
 };
 
-/** A committed event: the input plus the identity the stream assigned at its commit point. */
-export type StreamEvent = Omit<StreamEventInput, "offset"> & {
+/** A committed event: the input plus the identity the stream assigned at its commit point, and the
+ *  platform's `source`, whose `origin` every commit carries (apps/os stream.ts). */
+export type StreamEvent = Omit<StreamEventInput, "offset" | "source"> & {
   offset: number;
   createdAt: string;
   path: string;
+  source: NonNullable<StreamEventInput["source"]> & { origin: string };
 };
 
-// ── idempotency (message text stays greppable across RPC hops) ──
+// ── idempotency ── the one conflict message, which apps/os stream.ts and test-support's
+// `memoryStream` both throw under code IDEMPOTENCY_CONFLICT; a caller checks the code, never the text.
 
 export function idempotencyConflictMessage(idempotencyKey: string, existingOffset: number): string {
   return `idempotency key "${idempotencyKey}" already names a different event at offset ${existingOffset}`;
@@ -912,8 +915,9 @@ const LIVE_STATE_PATCH_MAX_CHARS = 1024 * 1024;
 
 /** The only thing a LiveState needs from its host: somewhere to append the delta. A
  *  `ProcessorStream` satisfies it; a facet that is no processor passes one round trip per delta,
- *  `{ append: (e) => withItx(this.env.ITX, (itx) => itx.append(e)) }` (sdk/index.ts), never a scope it
- *  holds. */
+ *  `{ append: (e) => withItx(this.env.ITX, (itx) => itx.append(e)) }` (`iterate/with-itx`), never a
+ *  scope it holds. A field initializer cannot await, so a facet builds its LiveState that way and
+ *  serves `snapshot()` as the client's seed read. */
 export type LiveStateSink = {
   append(event: { type: string; ephemeral?: true; payload?: Record<string, unknown> }): unknown;
 };

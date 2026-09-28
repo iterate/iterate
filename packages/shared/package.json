@@ -5,7 +5,6 @@
   "type": "module",
   "exports": {
     "./app-config": "./src/app-config.ts",
-    "./base64": "./src/base64.ts",
     "./depot-api": "./src/depot-api.ts",
     "./dev/is-main-module": "./src/dev/is-main-module.ts",
     "./integration-scopes": "./src/integration-scopes.ts",

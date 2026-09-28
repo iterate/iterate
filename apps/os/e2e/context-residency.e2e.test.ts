@@ -347,7 +347,9 @@ test("a website project's facets do not outlive their contexts after a page load
  *  (the collection's `const context = itx.cd(path)`). */
 const REACHER_SOURCE = {
   "package.json": '{"main":"worker.js"}',
-  "worker.js": `import { StreamProcessor, StreamProcessorDurableObject, defineProcessorContract, z } from "iterate/sdk";
+  "worker.js": `import { StreamProcessorDurableObject } from "iterate/sdk";
+import { StreamProcessor, defineProcessorContract } from "iterate/stream/processor";
+import { z } from "zod";
 const contract = defineProcessorContract({
   slug: "reacher",
   version: "1.0.0",

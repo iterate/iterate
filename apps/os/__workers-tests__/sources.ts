@@ -9,7 +9,9 @@ import type { FacetSpec, WorkerSource } from "iterate/api";
 /** A module whose `CounterProcessor` counts every durable event (`{ n }`), with `host` — the
  *  Durable Object class that runs it — below. */
 const counter = (host: string) => /* js */ `
-import { StreamProcessor, StreamProcessorDurableObject, defineProcessorContract, z } from "iterate/sdk";
+import { StreamProcessorDurableObject } from "iterate/sdk";
+import { StreamProcessor, defineProcessorContract } from "iterate/stream/processor";
+import { z } from "zod";
 const contract = defineProcessorContract({
   slug: "counter",
   version: "1.0.0",
@@ -184,7 +186,9 @@ export const COUNTING_TALLY: FacetSpec = {
   source: {
     "package.json": '{"main":"worker.js"}',
     "worker.js": /* js */ `
-import { StreamProcessor, StreamProcessorDurableObject, defineProcessorContract, z } from "iterate/sdk";
+import { StreamProcessorDurableObject } from "iterate/sdk";
+import { StreamProcessor, defineProcessorContract } from "iterate/stream/processor";
+import { z } from "zod";
 const contract = defineProcessorContract({
   slug: "tally",
   version: "1.0.0",
@@ -242,7 +246,9 @@ export const TICK_TALLY: FacetSpec = {
   source: {
     "package.json": '{"main":"worker.js"}',
     "worker.js": /* js */ `
-import { StreamProcessor, StreamProcessorDurableObject, defineProcessorContract, z } from "iterate/sdk";
+import { StreamProcessorDurableObject } from "iterate/sdk";
+import { StreamProcessor, defineProcessorContract } from "iterate/stream/processor";
+import { z } from "zod";
 const contract = defineProcessorContract({
   slug: "tally",
   version: "1.0.0",
@@ -397,7 +403,7 @@ export const CLONE_VERSION_WORKER: WorkerSource = {
   "package.json": '{"main":"worker.js"}',
   "worker.js": /* js */ `
 import { WorkerEntrypoint } from "cloudflare:workers";
-import { withItx } from "iterate/sdk";
+import { withItx } from "iterate/with-itx";
 let isolate;
 export default class Site extends WorkerEntrypoint {
   fetch(request) {
