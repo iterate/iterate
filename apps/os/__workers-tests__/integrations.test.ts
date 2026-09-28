@@ -815,6 +815,44 @@ test("Slack: a move whose held token is gone leaves what the destination's secre
   expect(await secretPathsOf(mover.itx)).toContain("/secrets/slack-acme");
 });
 
+test("Slack: a token whose workspace moved is refused on every use, whatever was merged into it", async () => {
+  const holder = await projectWithMember("slack-merged");
+  const petshop = petshopFakes();
+  await connected(petshop, holder, "slack", "team=T15MERGED");
+  // a field merged into the holder's token keeps the workspace its record names
+  await holder.itx.secrets.set(
+    "/secrets/slack-acme",
+    { clientId: "not-an-app" },
+    { urls: ["https://slack.test"], merge: true },
+  );
+  const mover = await otherProject(holder, "slack-merged-mover");
+  const offer = moveOfferOf(await consented(petshop, mover, "slack", "team=T15MERGED"));
+  // the holder's release of its route fails once, so its secret stays
+  const prepare = env.DB.prepare.bind(env.DB);
+  const prepares = vi.spyOn(env.DB, "prepare").mockImplementation((sql: string) => {
+    if (!sql.startsWith("delete from integration_routes\nwhere provider")) return prepare(sql);
+    prepares.mockRestore();
+    throw new Error("D1 is unavailable");
+  });
+  await expect(projectFacet(mover.itx).confirmIntegrationMove({ offer })).rejects.toThrow(
+    /press Move again/,
+  );
+  // past the re-check of the route the holder's own connect read
+  vi.useFakeTimers({ toFake: ["Date"] });
+  onTestFinished(() => void vi.useRealTimers());
+  vi.setSystemTime(Date.now() + 31_000);
+  // refused on every use, not only the first
+  for (const use of [1, 2]) {
+    const refused = await slackAuthTest(holder.itx);
+    expect({ use, status: refused.status, text: await refused.text() }).toMatchObject({
+      use,
+      status: 502,
+      text: expect.stringContaining("Slack workspace T15MERGED is connected to another project"),
+    });
+  }
+  vi.useRealTimers();
+});
+
 test("Slack: a move that fails to connect puts the team's route back and keeps no token here", async () => {
   const holder = await projectWithMember("slack-restore");
   const petshop = petshopFakes();
