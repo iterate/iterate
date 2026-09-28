@@ -133,7 +133,7 @@ test("MCP has its authorized project's root capabilities: read, commit, publish,
     ),
   ).toBeDefined();
   const requested = events.filter((e) => e.type === "events.iterate.com/itx/run-requested");
-  expect(requested.length).toBe(8);
+  expect(requested.length).toBe(9);
   expect(
     requested.every(
       (e) => e.source.principal.actor === principal.actor && e.source.grant === grantId,
