@@ -6,7 +6,7 @@
 import { setTimeout as sleep } from "node:timers/promises";
 import { z } from "zod";
 import type { OsEnv } from "../../../envs.ts";
-import { onCallMention } from "../../../scripts/ci/slack.ts";
+import { pageText } from "../../../scripts/ci/slack.ts";
 import { CloudflareApiError, type EnvContext } from "../../../scripts/lib/env-context.ts";
 
 /** The Cloudflare API on the parent's account (scripts/lib/env-context.ts: the envelope checked,
@@ -122,25 +122,16 @@ export async function ensureArtifactsNamespace(
  *  act.
  *
  *  No single answer says a namespace is gone. While any delete of it is in flight, Cloudflare
- *  answers some requests as if it were: on 2026-09-24, with three other delete loops running
- *  against pr2817's stuck namespace, 10 of 60 deletes answered 409/10305 ("deletion in
- *  progress"), 9 of 60 reads 404/10200 and 12 of 60 account listings left it out, and it stayed.
- *  Taking 10305 as deleted is how the 2026-09-23 sweep reported pr2817's namespace deleted. So an
- *  accepted delete is confirmed by reads (confirmedGone), and 10305 is waited out like 10202. */
+ *  answers some requests as if it were: with four delete loops on one stuck namespace, 10 of 60
+ *  deletes answered 409/10305 ("deletion in progress"), 9 of 60 reads 404/10200 and 12 of 60
+ *  account listings left it out, and it stayed (measured 2026-09-24). So an accepted delete is confirmed by reads (rowUnlessGone), and 10305 is waited out like
+ *  10202. */
 export async function deleteArtifactsNamespace(
   cf: Cf,
   artifactsNamespaceName: string,
   wait = (ms: number) => sleep(ms),
 ): Promise<StuckArtifactsNamespace | undefined> {
   const route = `/artifacts/namespaces/${encodeURIComponent(artifactsNamespaceName)}`;
-  /** Gone when three reads 2 s apart all answer 404: one 404 can be another delete in flight. */
-  const confirmedGone = async () => {
-    for (let read = 0; read < 3; read++) {
-      if (read > 0) await wait(2000);
-      if (await readArtifactsNamespace(cf, route)) return false;
-    }
-    return true;
-  };
   // One read, not three: a 404 here while another run's delete is in flight leaves the namespace to
   // that run, and to the sweep if it fails.
   if (!(await readArtifactsNamespace(cf, route))) {
@@ -157,7 +148,7 @@ export async function deleteArtifactsNamespace(
     const outcome = await deleteArtifactsRound(cf, route);
     deletedRepos += outcome.deletedRepos;
     if (outcome.deletedRepos > 0) refusedRounds = 0;
-    if (outcome.next === "accepted" && (await confirmedGone())) break;
+    if (outcome.next === "accepted" && !(await rowUnlessGone(cf, route, wait))) break;
     if (outcome.next === "accepted" || outcome.next === "not-empty") refusedRounds++;
     if (refusedRounds >= STUCK_AFTER_REFUSED_ROUNDS) {
       const row = await readArtifactsNamespace(cf, route);
@@ -180,22 +171,65 @@ export async function deleteArtifactsNamespace(
   return undefined;
 }
 
-/** The sweep's page for the namespaces Cloudflare would not delete: what to escalate, and to whom. */
+/** The first words of the sweep's page for the namespaces Cloudflare will not delete, by which the
+ *  next night's sweep finds it open (scripts/ci/slack.ts `keepPage`). */
+export const STUCK_ARTIFACTS_PAGE_MARKER = "preview sweep: Cloudflare will not delete";
+
+/** The sweep's page for the namespaces Cloudflare will not delete: what to escalate. Pure. */
 export function renderStuckArtifactsNamespacesPage(
   stuck: StuckArtifactsNamespace[],
-  jobUrl: string | undefined,
+  input: { jobUrl: string | undefined; testRun: boolean },
 ) {
-  return [
-    `🚨 preview sweep: Cloudflare will not delete ${stuck.length} Artifacts namespace(s) ${onCallMention}`,
-    ...stuck.map(
+  const oldest = stuck
+    .flatMap(({ createdAt }) => (createdAt ? [createdAt.slice(0, 10)] : []))
+    .sort()[0];
+  return pageText({
+    what: `${STUCK_ARTIFACTS_PAGE_MARKER} ${stuck.length} Artifacts namespace(s)`,
+    impact: `each counts toward the account's limit${oldest ? `; the oldest since ${oldest}` : ""}`,
+    action:
+      "escalate to Cloudflare with these ids: a Cloudflare Artifacts fault, not a commit's. The sweep tries again each night.",
+    details: stuck.map(
       ({ namespace, repoCount, createdAt }) =>
-        `• ${namespace}: repo_count ${repoCount ?? "?"} but no repos listed; the namespace DELETE answers 409/10202 "Namespace is not empty"${createdAt ? ` (created ${createdAt.slice(0, 10)})` : ""}`,
+        `• ${namespace}: repo_count ${repoCount ?? "?"} but no repos listed; its DELETE answers 409/10202 "Namespace is not empty"${createdAt ? ` (created ${createdAt.slice(0, 10)})` : ""}`,
     ),
-    "A Cloudflare Artifacts fault, not a commit's: escalate it to Cloudflare with these names. The sweep tries again each night.",
-    jobUrl && `<${jobUrl}|sweep run>`,
-  ]
-    .filter(Boolean)
-    .join("\n");
+    link: input.jobUrl || null,
+    testRun: input.testRun,
+  });
+}
+
+/** The namespaces an open stuck page names (renderStuckArtifactsNamespacesPage's `• <namespace>:`
+ *  lines) that this run did not report, `except`, and that still exist, each with its row. A night
+ *  that did not reach a namespace (a delete failed first, or its preview was kept) says nothing
+ *  about it, so the sweep carries it on the page until reads confirm it gone. */
+export async function stuckNamespacesStillThere(
+  cf: Cf,
+  openPageText: string,
+  except: string[],
+  wait = (ms: number) => sleep(ms),
+): Promise<StuckArtifactsNamespace[]> {
+  const still: StuckArtifactsNamespace[] = [];
+  for (const [, namespace] of openPageText.matchAll(/^• ([^:\s]+):/gmu)) {
+    if (except.includes(namespace!)) continue;
+    const row = await rowUnlessGone(
+      cf,
+      `/artifacts/namespaces/${encodeURIComponent(namespace!)}`,
+      wait,
+    );
+    if (row)
+      still.push({ namespace: namespace!, repoCount: row.repo_count, createdAt: row.created_at });
+  }
+  return still;
+}
+
+/** The namespace's row, or undefined once three reads 2 s apart all answer 404: one 404 can be
+ *  another delete in flight. */
+async function rowUnlessGone(cf: Cf, route: string, wait: (ms: number) => Promise<unknown>) {
+  for (let read = 0; read < 3; read++) {
+    if (read > 0) await wait(2000);
+    const row = await readArtifactsNamespace(cf, route);
+    if (row) return row;
+  }
+  return undefined;
 }
 
 /** The namespace's row, or undefined for its 404/10200. The namespace itself is what answers "does
