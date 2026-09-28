@@ -169,9 +169,13 @@ createFailing(test, /snapshot\(\) dies of "string or blob too big: SQLITE_TOOBIG
 
 /** A processor whose reduce HOARDS every payload: the checkpoint cell grows with the log. */
 const HOARDER_SRC = /* js */ `
-import { StreamProcessor, StreamProcessorDurableObject } from "iterate/sdk";
+import { StreamProcessor, StreamProcessorDurableObject, defineProcessorContract, z } from "iterate/sdk";
+const HoarderContract = defineProcessorContract({
+  slug: "hoarder", version: "1.0.0", description: "keeps every blob it reduces",
+  stateSchema: z.object({ blobs: z.array(z.string()).default([]) }), consumes: ["blob"], emits: [],
+});
 class HoarderProcessor extends StreamProcessor {
-  contract = { slug: "hoarder", version: "1.0.0", consumes: ["blob"], emits: [], initialState: () => ({ blobs: [] }) };
+  contract = HoarderContract;
   reduce({ event, state }) { return { blobs: [...state.blobs, event.payload.blob] }; }
   projectLiveState(state) { return { n: state.blobs.length }; }
 }
@@ -319,9 +323,13 @@ test("B4 — CONTROL: a facet that cannot start is still disable-able — the nu
 /** A processor whose EFFECT hook throws on one marked event. The reduce is guarded (processor.ts
  *  `#reduceAndProcessEvent` reports and skips a throwing reduce); `processEvent` is not. */
 const POISON_SRC = /* js */ `
-import { StreamProcessor, StreamProcessorDurableObject } from "iterate/sdk";
+import { StreamProcessor, StreamProcessorDurableObject, defineProcessorContract, z } from "iterate/sdk";
+const PoisonContract = defineProcessorContract({
+  slug: "poison", version: "1.0.0", description: "counts work; its effect throws on poison",
+  stateSchema: z.object({ n: z.number().default(0) }), consumes: ["work"], emits: [],
+});
 class PoisonProcessor extends StreamProcessor {
-  contract = { slug: "poison", version: "1.0.0", consumes: ["work"], emits: [], initialState: () => ({ n: 0 }) };
+  contract = PoisonContract;
   reduce({ state }) { return { n: state.n + 1 }; }
   processEvent({ event }) { if (event && event.payload && event.payload.poison) throw new Error("poison: refusing offset " + event.offset); }
 }

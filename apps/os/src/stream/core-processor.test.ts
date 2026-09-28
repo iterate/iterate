@@ -255,6 +255,7 @@ test("ingress target: stores and replaces the full expression without creating a
     offset: 1,
     path: "/",
     createdAt: "2026-09-21T00:00:00Z",
+    source: { origin: "/" },
   };
   const state = reduceCoreEvent({ event, state: CoreContract.initialState() })!;
   expect(state).toEqual(

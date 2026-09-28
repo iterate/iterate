@@ -19,8 +19,10 @@
 
 import { memoryUsage } from "node:process";
 import { deserialize, serialize } from "node:v8";
+import { z } from "zod";
 import { errorCode } from "iterate/lib";
 import {
+  defineProcessorContract,
   type ScannedRange,
   type StreamEvent,
   ProcessorEngine,
@@ -142,13 +144,14 @@ const scenarios: Record<string, (args: Record<string, number>) => Promise<void>>
     const stream = bareStream(storage);
     seedLog(stream, { eventCount: args.eventCount, eventChars: args.eventChars });
     class Tally extends StreamProcessor<{ count: number; chars: number }> {
-      readonly contract = {
+      readonly contract = defineProcessorContract({
         slug: "tally",
         version: "1",
+        description: "counts the blobs and their chars",
+        stateSchema: z.object({ count: z.number().default(0), chars: z.number().default(0) }),
         consumes: ["blob"],
         emits: [],
-        initialState: () => ({ count: 0, chars: 0 }),
-      };
+      });
       override reduce({ event, state }: ReduceArgs<{ count: number; chars: number }>) {
         const blob = (event.payload as { blob: string }).blob;
         return { count: state.count + 1, chars: state.chars + blob.length };
@@ -294,13 +297,14 @@ const scenarios: Record<string, (args: Record<string, number>) => Promise<void>>
     const facetCheckpoints = new ReduceCheckpointTable(nodeSqliteDurableObjectStorage().sql); // the facet's OWN storage: same cell ceiling
     type Hoard = { items: string[] };
     class Hoarder extends StreamProcessor<Hoard> {
-      readonly contract = {
+      readonly contract = defineProcessorContract({
         slug: "hoarder",
         version: "1",
+        description: "keeps every blob in state",
+        stateSchema: z.object({ items: z.array(z.string()).default([]) }),
         consumes: ["blob"],
         emits: [],
-        initialState: (): Hoard => ({ items: [] }),
-      };
+      });
       override reduce({ event, state }: ReduceArgs<Hoard>) {
         return { items: [...state.items, (event.payload as { blob: string }).blob] };
       }
@@ -403,13 +407,14 @@ const scenarios: Record<string, (args: Record<string, number>) => Promise<void>>
     class Projector extends StreamProcessor<{ count: number }> {
       items = Array.from({ length: args.itemCount }, () => flatHeapString(args.itemChars));
       edits = 0;
-      readonly contract = {
+      readonly contract = defineProcessorContract({
         slug: "projector",
         version: "1",
+        description: "counts the blobs; its live state is a large array it edits",
+        stateSchema: z.object({ count: z.number().default(0) }),
         consumes: ["blob"],
         emits: [],
-        initialState: () => ({ count: 0 }),
-      };
+      });
       override reduce({ state }: ReduceArgs<{ count: number }>) {
         return { count: state.count + 1 };
       }

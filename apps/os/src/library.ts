@@ -15,7 +15,7 @@
 import { z } from "zod";
 import { keySortedForPrint, InvokeHandle, print, type ItxExpression } from "iterate/expression";
 import { codedError, errorCode, resolveContextPath, withTimeout } from "iterate/lib";
-import type { EventInput, StreamEvent } from "iterate/stream/processor";
+import type { EventInput, ProcessorContract, StreamEvent } from "iterate/stream/processor";
 import type { RunSettled, RunSettlement } from "iterate/stream/run";
 import type { EntityCollectionApi, FileHandle, FileRecord, IterateContextApi } from "iterate/api";
 import type { Caller } from "./caller.ts";
@@ -444,9 +444,7 @@ async function projectFacet(itx: LibraryItx, steps: ItxExpression): Promise<unkn
 }
 
 /** What `entityHandle` reads off a contract: the payload schema of an event type it owns, or none. */
-type EntityContract = {
-  payloadSchemaFor?: (type: string) => z.ZodType | undefined;
-};
+type EntityContract = Pick<ProcessorContract, "payloadSchemaFor">;
 
 // An InvokeHandle's dotted members are DYNAMIC (expression.ts: every unknown member reduces to one
 // dispatch), so a handle types as the facet it dispatches to — the first-party class the name hosts
@@ -487,7 +485,7 @@ function entityHandle(
             ephemeral: z.literal(true).optional(),
           })
           .parse(event);
-        const schema = contract.payloadSchemaFor?.(input.type);
+        const schema = contract.payloadSchemaFor(input.type);
         if (!schema)
           throw new Error(
             `${name}.append: ${JSON.stringify(input.type)} is not an event the ${name} contract owns`,

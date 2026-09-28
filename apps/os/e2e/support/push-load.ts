@@ -168,16 +168,17 @@ export async function fanProbes(itx: any, count: number) {
  *  counting every durable event. */
 const FAN_PROBE = {
   "worker.js": /* js */ `
-import { StreamProcessor, StreamProcessorDurableObject } from "iterate/sdk";
+import { StreamProcessor, StreamProcessorDurableObject, defineProcessorContract, z } from "iterate/sdk";
+const FanProbeContract = defineProcessorContract({
+  slug: "fan-probe",
+  version: "1",
+  description: "counts every durable event — the fan-out probe",
+  stateSchema: z.object({ n: z.number().default(0) }),
+  consumes: ["*"],
+  emits: [],
+});
 class FanProbeProcessor extends StreamProcessor {
-  contract = {
-    slug: "fan-probe",
-    version: "1",
-    description: "counts every durable event — the fan-out probe",
-    consumes: ["*"],
-    emits: [],
-    initialState: () => ({ n: 0 }),
-  };
+  contract = FanProbeContract;
   reduce({ state }) {
     return { n: state.n + 1 };
   }
