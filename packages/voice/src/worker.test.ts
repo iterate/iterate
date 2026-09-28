@@ -57,16 +57,18 @@ test("an incorrect device acknowledgment stops the upload", async () => {
   expect(setImage).toHaveBeenCalledTimes(1);
 });
 
-test.for(["waveshare-rlcd-4-2", "zectrix-note4", "havpe"])(
+test.for(["waveshare_rlcd_4_2", "zectrix_note4", "home_assistant_voice_preview_edition"])(
   "%s: the press puts the relay beside the call's agent and gives the agent its instructions, the screen guide only to a screen",
   async (device) => {
     const { worker, append, create } = await harness();
+    const screen = device !== "home_assistant_voice_preview_edition";
+    const streamPath = `/agents/voice/${device}/2026-09-28-101500-test`;
     await worker.setupVoiceAgent({
-      streamPath: `/agents/voice/v23/${device}/test`,
+      streamPath,
       activation: "test",
-      screen: device !== "havpe",
+      ...(screen && { screen: device }),
     });
-    expect(create).toHaveBeenCalledExactlyOnceWith(`/agents/voice/v23/${device}/test`);
+    expect(create).toHaveBeenCalledExactlyOnceWith(streamPath);
     expect(create.mock.invocationCallOrder[0]).toBeLessThan(append.mock.invocationCallOrder[0]!);
     expect(append).toHaveBeenCalledTimes(1);
     const events = append.mock.calls[0]!;
@@ -87,10 +89,7 @@ test.for(["waveshare-rlcd-4-2", "zectrix-note4", "havpe"])(
       },
     ]);
     const guide = (name: string) =>
-      readFileSync(new URL(`./${name}`, import.meta.url), "utf8").replaceAll(
-        "{{DEVICE}}",
-        device.replaceAll("-", "_"),
-      );
+      readFileSync(new URL(`./${name}`, import.meta.url), "utf8").replaceAll("{{DEVICE}}", device);
     // Instructions start no turn: the agent's first turn is the first hand-over.
     expect(
       events
@@ -102,18 +101,30 @@ test.for(["waveshare-rlcd-4-2", "zectrix-note4", "havpe"])(
         content: guide("voice-context.md"),
         llmRequestPolicy: { behaviour: "dont-trigger-request" },
       },
-      ...(device === "havpe"
-        ? []
-        : [
+      ...(screen
+        ? [
             {
               role: "developer",
               content: guide("screen-context.md"),
               llmRequestPolicy: { behaviour: "dont-trigger-request" },
             },
-          ]),
+          ]
+        : []),
     ]);
   },
 );
+
+test("a screen that is not an itx.clients name is refused before the agent exists", async () => {
+  const { worker, create } = await harness();
+  await expect(
+    worker.setupVoiceAgent({
+      streamPath: "/agents/voice/waveshare/2026-09-28-101500-test",
+      activation: "test",
+      screen: "waveshare-rlcd-4-2",
+    }),
+  ).rejects.toThrow();
+  expect(create).not.toHaveBeenCalled();
+});
 
 // Regression: a photo URL in the September 21 voice stream returned HTTP 404.
 // Chromium still produced a valid PNG containing the broken-image icon.

@@ -187,6 +187,12 @@ EXT_RAM_BSS_ATTR static uint8_t
 static char stream_path[160];
 /* "itx.clients.<device name>" — the itx expression this board answers. */
 static char capability_match[ITERATE_KIT_ITX_MOUNT_CAPABILITY_MATCH_CAPACITY];
+/*
+ * Its client name, the part after "itx.clients.": what names this board's calls
+ * (`/agents/voice/<client>/<UTC>-<activation>`) and its screen to voice.
+ */
+static const char *const client_name =
+    capability_match + sizeof("itx.clients.") - 1U;
 
 enum opening_outcome {
   OPENING_IDLE = 0,
@@ -1213,8 +1219,8 @@ static void begin_activation(uint64_t now) {
       written = snprintf(
           ticket->stream_path,
           sizeof(ticket->stream_path),
-          "/agents/voice/v23/%s/%s-%s",
-          runtime.facts->device_name,
+          "/agents/voice/%s/%s-%s",
+          client_name,
           name,
           runtime.activation);
       if (written < 0 || (size_t)written >= sizeof(ticket->stream_path)) {
@@ -1414,17 +1420,19 @@ static void start_voice_setup(struct voice_setup_ticket *ticket) {
           strcmp(method->path[1], "info") == 0) has_screen = true;
     }
   }
+  /* A board with a screen names the client voice draws on; `screen` comes last
+   * so a board without one sends the first two fields only. */
   const struct capnweb_expression screen = {
-    CAPNWEB_EXPRESSION_BOOLEAN, {.boolean = has_screen},
+    CAPNWEB_EXPRESSION_STRING, {.string = {client_name, strlen(client_name)}},
   };
   const struct capnweb_object_field fields[] = {
-    {{"screen", sizeof("screen") - 1U}, &screen},
     {{"streamPath", sizeof("streamPath") - 1U}, &path},
     {{"activation", sizeof("activation") - 1U}, &activation},
+    {{"screen", sizeof("screen") - 1U}, &screen},
   };
   const struct capnweb_expression args = {
     CAPNWEB_EXPRESSION_OBJECT,
-    {.object = {fields, sizeof(fields) / sizeof(fields[0])}},
+    {.object = {fields, has_screen ? 3U : 2U}},
   };
   enum capnweb_status status;
   const size_t index = (size_t)(ticket - runtime.setup);

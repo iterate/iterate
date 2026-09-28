@@ -125,9 +125,23 @@ static void board_poll(void *context, struct iterate_kit_voice_intent *out) {
   }
 }
 
-/* A capability module with no methods: it counts the loop's step() and
- * session_ended() calls, the two points a module that defers a reply (the
- * screen) relies on. */
+/* A capability module that counts the loop's step() and session_ended()
+ * calls, the two points a module that defers a reply (the screen) relies on.
+ * It advertises `screen.info`, so every setup names this board's screen; the
+ * far end never calls it here. */
+static enum capnweb_status screen_info(
+    void *context, const struct capnweb_call *call, struct capnweb_reply *reply) {
+  (void)context;
+  (void)call;
+  (void)reply;
+  return CAPNWEB_E_UNSUPPORTED;
+}
+
+static const char *const screen_info_path[] = {"screen", "info"};
+static const struct iterate_kit_method screen_methods[] = {
+  {screen_info_path, 2U, screen_info},
+};
+
 static void module_step(void *context) {
   ++((struct board *)context)->module_steps;
 }
@@ -140,6 +154,8 @@ static size_t board_modules(
     void *context, struct iterate_kit_module *out, size_t capacity) {
   if (capacity == 0U) return 0U;
   out[0] = (struct iterate_kit_module){
+    .methods = screen_methods,
+    .method_count = 1U,
     .context = context,
     .session_ended = module_session_ended,
     .step = module_step,
@@ -459,6 +475,11 @@ static void pump(void) {
       if (strstr(message, "setupVoiceAgent") != NULL) {
         assert(copy_setup_stream_path(
             message, setup_stream_path, sizeof(setup_stream_path)));
+        /* `/agents/voice/<client>/<UTC>-<activation>`, and the screen named
+         * by the same client: "host-test" spelled as `itx.clients` spells it. */
+        assert(strncmp(setup_stream_path, "/agents/voice/host_test/",
+                       sizeof("/agents/voice/host_test/") - 1U) == 0);
+        assert(strstr(message, "\"screen\":\"host_test\"") != NULL);
       }
       if (strstr(message, "[\"cd\"]") != NULL) {
         assert(copy_stream_get_path(

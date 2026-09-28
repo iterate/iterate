@@ -18,7 +18,7 @@ shrink the fixture.
 | `http://localhost:<port>/projects/<slug>?agent=<path>`                             | `pnpm --dir apps/agents dev` against a local OS |
 
 - `agent` is the context path, URL-encoded: `/agents/web/<moment>` for a chat started in
-  the browser, `/agents/voice/<version>/<device>/<call>` for a voice call. With no `agent`,
+  the browser, `/agents/voice/<client>/<UTC>-<activation>` for a voice call. With no `agent`,
   the page shows the first agent the project lists.
 - `view=events` is the raw log and `event=<offset>` the inspected row. `llmRequest=<offset>`
   and `scriptRun=<offset>` open a trace sheet. Those offsets are where to look first.

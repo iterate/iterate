@@ -92,7 +92,8 @@ enum iterate_kit_voice_stream_failure {
 };
 
 struct iterate_kit_voice_stream_options {
-  /** Stream path for the call, e.g. "/agents/voice/v23/waveshare". */
+  /** Stream path for the call, e.g.
+   *  "/agents/voice/waveshare/2026-09-28-101500-<activation>". */
   const char *stream_path;
   /** Client-owned, RAM-only activation for the local microphone edge. */
   const char *activation;

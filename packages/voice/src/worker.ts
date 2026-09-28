@@ -3,7 +3,7 @@
  * The voice service, explicitly mounted at `itx.voice`, is what
  * a device calls on the button press:
  *
- *   await root.voice.setupVoiceAgent({ streamPath, activation })   // → { streamPath }
+ *   await root.voice.setupVoiceAgent({ streamPath, activation, screen? })   // → { streamPath }
  *
  * The call is an agent: normal agent creation establishes the parent link, sandbox, catalog entry
  * and the agents app's processor, which answers every delegation. Then one append installs the
@@ -158,13 +158,14 @@ export default class VoiceWorker extends ConfigWorker implements VoiceApi {
   /** The press. `activation` is the device's call identity: the call starts under it at boot and
    * the microphone frames carry it. */
   async setupVoiceAgent(options: Parameters<VoiceApi["setupVoiceAgent"]>[0]) {
-    const streamPath = options.streamPath || `/agents/voice/${crypto.randomUUID()}`;
+    const { streamPath } = options;
     if (!streamPath.startsWith("/")) {
       throw new Error(`voice streamPath must be absolute; received ${JSON.stringify(streamPath)}`);
     }
-    const deviceMatch = /^\/agents\/voice\/v23\/([A-Za-z0-9_-]+)\//.exec(streamPath);
-    const screenDevice =
-      options.screen === true && deviceMatch?.[1] ? deviceMatch[1].replaceAll("-", "_") : undefined;
+    // the device `setImage` will be asked to draw on, so it is held to the same name
+    const screenDevice = options.screen
+      ? ScreenImageInput.shape.device.parse(options.screen)
+      : undefined;
     return this.withItx(async (scope) => {
       // `itx.agents` is the rewrite rule the agents app mounts, which install.ts requires first.
       const itx = scope as IterateContextApiWith<"agents">;
