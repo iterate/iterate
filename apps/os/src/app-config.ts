@@ -26,8 +26,8 @@
 // `APP_CONFIG_LOGIN__PASSWORD`, `APP_CONFIG_SECRETS__KEY` — the parser merges it on top of the object
 // (that is how a deployment's `urls` come from envs.ts while its secrets come from the one blob, and
 // how `secrets.key` stands alone as its own Worker secret so it can rotate with `previousKey` beside
-// it). A blank var is unset. A key the schema does not name is refused at first use, naming itself,
-// as a malformed field is. The mechanism is shared with the apps on top
+// it). A blank var is unset. A key the schema does not name is warned about loudly at boot and
+// dropped, never silently kept. The mechanism is shared with the apps on top
 // (@iterate-com/shared/app-config); this module is the platform's schema and cross-field rules.
 
 import { z } from "zod";
@@ -160,8 +160,8 @@ export const DEFAULT_CLOUDFLARE_SCOPES = ["openid", "user-details.read"];
 
 /** THE `APP_CONFIG` SCHEMA — PER-FIELD validation only; the cross-field rules (a distinct MCP origin,
  *  the ingress routing's hostname, at least one sign-in mechanism) live in `parseAppConfig`, because
- *  the parser refuses a key by walking plain object schemas (`parseAppConfigVars`). Every object
- *  `prefault`s to `{}` so a deployment that names none of a block's keys still gets the block. */
+ *  `warnUnknownKeys` needs plain object schemas to check keys against. Every object `prefault`s to
+ *  `{}` so a deployment that names none of a block's keys still gets the block. */
 export const AppConfig = z.object({
   /** Where this deployment answers. Every one optional. */
   urls: z
@@ -389,7 +389,8 @@ export type AppConfigEnv = { CF_VERSION_METADATA?: { id: string }; APP_CONFIG?: 
 
 /** Parse the configuration out of `env` (a worker env, or any record — only `APP_CONFIG` and the
  *  `APP_CONFIG_*` keys are read; a blank one is unset). Pure; every test parses through it. A
- *  malformed field, or a key the schema does not name, throws naming itself. */
+ *  malformed field throws naming itself; a key the schema does not name is warned about and
+ *  dropped (`parseAppConfigVars`). */
 export function parseAppConfig(env: object, deployId = "unversioned"): AppConfig {
   const parsed = parseAppConfigVars(env, AppConfig);
   const { urls, login } = parsed;

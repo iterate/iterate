@@ -54,7 +54,8 @@ const appConfigRows: {
   vars: Record<string, unknown>;
   becomes?: unknown;
   throws?: RegExp;
-  /** how many warnings the boot prints: one per provider's sign-in without its client */
+  /** how many warnings the boot prints, once each: an unknown key (inside the object or a stray
+   *  var), a provider's sign-in without its client */
   warns?: number;
 }[] = [
   // the object alone, the overrides alone, and both — an override wins over the object
@@ -347,7 +348,8 @@ const appConfigRows: {
     throws: /^APP_CONFIG urls\.mcp \(APP_CONFIG_URLS__MCP\): must differ from urls\.os$/,
   },
   // a key the schema does not name — a typo inside the object, a var no field answers to, a stray
-  // key in a block a var sets whole — is refused naming itself, as a malformed field is
+  // key in a block a var sets whole — is WARNED about loudly and dropped, and the rest parses
+  // (why: parseAppConfigVars); a malformed field beside one still throws
   {
     vars: {
       APP_CONFIG: JSON.stringify({
@@ -355,16 +357,26 @@ const appConfigRows: {
         secrets: { key: "secrets-key" },
       }),
     },
-    throws: /^APP_CONFIG login\.bogus \(APP_CONFIG_LOGIN__BOGUS\): not in the schema/,
+    becomes: MINIMAL_CONFIG,
+    warns: 1,
   },
   {
     vars: { ...MINIMAL, APP_CONFIG_ADMIN_API_SECRET: "admin-bearer" },
-    throws: /^APP_CONFIG adminApiSecret \(APP_CONFIG_ADMIN_API_SECRET\): not in the schema/,
+    becomes: MINIMAL_CONFIG,
+    warns: 1,
   },
   {
     vars: { ...MINIMAL, APP_CONFIG_URLS__INGRESS_ROUTING: '{"type":"paths","wildcard":true}' },
-    throws:
-      /^APP_CONFIG urls\.ingressRouting\.wildcard \(APP_CONFIG_URLS__INGRESS_ROUTING__WILDCARD\): not in the schema/,
+    becomes: {
+      ...MINIMAL_CONFIG,
+      urls: { ...MINIMAL_CONFIG.urls, ingressRouting: { type: "paths" } },
+    },
+    warns: 1,
+  },
+  {
+    vars: { ...MINIMAL, APP_CONFIG_ADMIN_API_SECRET: "admin-bearer", APP_CONFIG_URLS__OS: "os" },
+    throws: /^APP_CONFIG urls\.os \(APP_CONFIG_URLS__OS\): expected an HTTP\(S\) origin/,
+    warns: 1,
   },
   // an override merges INTO the object's block rather than replacing it; a JSON-looking value
   // (object, array, boolean) is parsed, anything else is the string itself
