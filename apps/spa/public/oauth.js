@@ -132,7 +132,12 @@ export function oauthClient({ clients, sessions, redirectUri, launch, registrati
         state,
         resource: `${issuer}/api`,
       }).toString();
-      return finishSignIn(await launch(url.href));
+      // A closed identity window leaves no verifier behind.
+      const callback = await launch(url.href).catch(async (error) => {
+        await sessions.remove(PENDING);
+        throw error;
+      });
+      return finishSignIn(callback);
     },
     finishSignIn,
     /** The stored session, or null — read fresh each time: a refresh rotates the token in it. */

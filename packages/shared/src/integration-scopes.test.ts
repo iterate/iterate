@@ -1,6 +1,6 @@
-// api.test.ts — `missingScopes`, the one rule api.ts ships beside its declarations, as rows.
+// integration-scopes.test.ts — `missingScopes`, as rows.
 import { expect, test } from "vitest";
-import { missingScopes } from "./api.ts";
+import { missingScopes } from "./integration-scopes.ts";
 
 // A PERSON'S ACCOUNT FOR A PROJECT: connected at once when it holds every scope asked, else the
 // scopes it lacks are what Google or Cloudflare is asked to add.

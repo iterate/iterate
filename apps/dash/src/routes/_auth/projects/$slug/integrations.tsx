@@ -33,17 +33,17 @@ import {
 } from "@iterate-com/ui/components/sheet";
 import { Spinner } from "@iterate-com/ui/components/spinner";
 import { Textarea } from "@iterate-com/ui/components/textarea";
+import { missingScopes } from "@iterate-com/shared/integration-scopes";
 import {
   INTEGRATION_PROVIDER_NAMES,
   INTEGRATION_PROVIDERS,
-  missingScopes,
   type IterateAppProvider,
   type SignInProvider,
 } from "iterate/api";
 import { errorCode } from "iterate/lib";
 import { useContextStub, useFacetLiveState } from "iterate/react";
-import { connectWaitrose, WaitroseForm } from "../../../../components/waitrose.tsx";
-import { freshConnectionName } from "../../../../lib/connections.ts";
+import { WaitroseForm } from "../../../../components/waitrose.tsx";
+import { connectWaitrose, freshConnectionName } from "../../../../lib/connections.ts";
 import { addGithubSignInHref, httpOriginOf } from "../../../../lib/origins.ts";
 import { stepUpUrl } from "../../../../lib/scopes.ts";
 
@@ -663,7 +663,7 @@ function accessLabelOf(scopes: string[]) {
   ].join(", ");
 }
 
-/** What `granted` lacks of `asked` (iterate/api `missingScopes`, the platform's own rule), as a
+/** What `granted` lacks of `asked` (`missingScopes`, the platform's own rule), as a
  *  person reads it ("Gmail access", "contacts.readonly access"), "more access" for identity scopes
  *  alone, or null. */
 function missingAccessOf(provider: Provider, granted: string[], asked: string[]) {

@@ -54,7 +54,8 @@ import { Identifier } from "../../components/identifier.tsx";
 import { addGithubSignInHref } from "../../lib/origins.ts";
 import { dateOf } from "../../lib/dates.ts";
 import { AllowAccount } from "../../components/allow-account.tsx";
-import { connectWaitrose, WaitroseForm } from "../../components/waitrose.tsx";
+import { WaitroseForm } from "../../components/waitrose.tsx";
+import { connectWaitrose } from "../../lib/connections.ts";
 
 const GRANT_KIND_LABELS: Record<GrantKind, string> = {
   pending: "Pending sign-in",

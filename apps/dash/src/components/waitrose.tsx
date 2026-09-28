@@ -1,12 +1,8 @@
-// components/waitrose.tsx — CONNECTING WAITROSE, for a project (its Integrations page) or the person
-// (/sessions): a username and a password, no consent. They go to the new connection's secret alone,
-// `/secrets/waitrose-<connection>` with the `waitrose-session` strategy, which the platform logs in
-// with on first use and whenever Waitrose answers 401; then the owner's facet records the connection
-// (apps/os/src/integrations/waitrose-connection.ts `connectWaitrose`).
-// oxlint-disable react/only-export-components -- the connect and its form are one flow: one file.
+// components/waitrose.tsx — THE WAITROSE SHEET'S FORM, for a project (its Integrations page) or the
+// person (/sessions): a username and a password, no consent. lib/connections.ts `connectWaitrose`
+// connects them.
 import { useState, type FormEvent, type RefObject } from "react";
 import { ShoppingBasket } from "lucide-react";
-import type { AuthenticatedApp } from "iterate/app";
 import { Button } from "@iterate-com/ui/components/button";
 import { Field, FieldGroup, FieldLabel } from "@iterate-com/ui/components/field";
 import { Input } from "@iterate-com/ui/components/input";
@@ -17,38 +13,7 @@ import {
   SheetTitle,
 } from "@iterate-com/ui/components/sheet";
 import { Spinner } from "@iterate-com/ui/components/spinner";
-import { freshConnectionName } from "../lib/connections.ts";
-
-/** Where Waitrose logs in (apps/os/src/integrations/waitrose.ts): the secret's pin and its login. */
-const WAITROSE_GRAPHQL_URL = "https://www.waitrose.com/api/graphql";
-
-type WaitroseCredentials = { username: string; password: string };
-
-/** Connect a Waitrose account on `owner` — a project's context, or the person's (`api.user`) —
- *  whose `facet` records its connections. A connect the facet refuses deletes the secret it set. */
-export async function connectWaitrose(
-  owner: AuthenticatedApp["api"]["user"],
-  facet: "project" | "account",
-  { username, password }: WaitroseCredentials,
-) {
-  const connection = freshConnectionName();
-  const secretPath = `/secrets/waitrose-${connection}`;
-  await owner.secrets.set(
-    secretPath,
-    { username, password },
-    {
-      urls: [new URL(WAITROSE_GRAPHQL_URL).origin],
-      refresh: { kind: "waitrose-session", graphqlUrl: WAITROSE_GRAPHQL_URL },
-    },
-  );
-  await owner.facets
-    .get(facet)
-    .invoke([["connectWaitrose", { connection, account: username }]])
-    .catch(async (caught: unknown) => {
-      await owner.secrets.delete(secretPath).catch(() => {});
-      throw caught;
-    });
-}
+import type { WaitroseCredentials } from "../lib/connections.ts";
 
 /** The Waitrose sheet's form: the username and password, and the connect's own error. */
 export function WaitroseForm({
