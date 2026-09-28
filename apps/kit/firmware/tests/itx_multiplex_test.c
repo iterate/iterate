@@ -341,11 +341,11 @@ static void opens_on_one_mounted_session(struct fixture *fixture) {
 
   assert(iterate_kit_stream_get(
       &fixture->stream_a, &fixture->session, project,
-      "/agents/voice/v24/multiplex-a") == CAPNWEB_OK);
+      "/agents/voice/host_test/multiplex-a") == CAPNWEB_OK);
   resolve_latest_pull(fixture, -201);
   assert(iterate_kit_stream_get(
       &fixture->stream_b, &fixture->session, project,
-      "/agents/voice/v24/multiplex-b") == CAPNWEB_OK);
+      "/agents/voice/host_test/multiplex-b") == CAPNWEB_OK);
   resolve_latest_pull(fixture, -202);
 
   fixture->a.epoch = 11U;
@@ -419,11 +419,11 @@ static void multiplexes_and_reclaims(void) {
 
   deliver(&fixture, callback_a,
       "[[{\"type\":\"events.iterate.test/a\",\"offset\":40,"
-      "\"path\":\"/agents/voice/v24/multiplex-a\","
+      "\"path\":\"/agents/voice/host_test/multiplex-a\","
       "\"payload\":{\"round\":1}}]],{\"after\":39,\"through\":40}");
   deliver(&fixture, callback_b,
       "[[{\"type\":\"events.iterate.test/b\",\"offset\":41,"
-      "\"path\":\"/agents/voice/v24/multiplex-b\","
+      "\"path\":\"/agents/voice/host_test/multiplex-b\","
       "\"payload\":{\"round\":1}}]],{\"after\":40,\"through\":41}");
   deliver(&fixture, callback_live,
       "{\"type\":\"snapshot\",\"revision\":7,\"state\":{\"active\":true}}");
@@ -432,11 +432,11 @@ static void multiplexes_and_reclaims(void) {
       "\"patch\":{\"fields\":{\"active\":{\"set\":false}}}}");
 
   assert(fixture.a.calls == 1U);
-  assert(strcmp(fixture.a.path, "/agents/voice/v24/multiplex-a") == 0);
+  assert(strcmp(fixture.a.path, "/agents/voice/host_test/multiplex-a") == 0);
   assert(fixture.a.offset == 40);
   assert(fixture.a.after == 39 && fixture.a.through == 40);
   assert(fixture.b.calls == 1U);
-  assert(strcmp(fixture.b.path, "/agents/voice/v24/multiplex-b") == 0);
+  assert(strcmp(fixture.b.path, "/agents/voice/host_test/multiplex-b") == 0);
   assert(fixture.b.offset == 41);
   assert(fixture.b.after == 40 && fixture.b.through == 41);
   assert(fixture.live.calls == 2U);
@@ -457,11 +457,11 @@ static void multiplexes_and_reclaims(void) {
   }
   assert(fixture.subscription_a.state == ITERATE_KIT_SUBSCRIPTION_CLOSING);
   deliver(&fixture, callback_a,
-      "[[{\"offset\":42,\"path\":\"/agents/voice/v24/multiplex-a\"}]],"
+      "[[{\"offset\":42,\"path\":\"/agents/voice/host_test/multiplex-a\"}]],"
       "{\"after\":41,\"through\":42}");
   assert(fixture.a.calls == 1U);
   deliver(&fixture, callback_b,
-      "[[{\"offset\":43,\"path\":\"/agents/voice/v24/multiplex-b\"}]],"
+      "[[{\"offset\":43,\"path\":\"/agents/voice/host_test/multiplex-b\"}]],"
       "{\"after\":42,\"through\":43}");
   assert(fixture.b.calls == 2U);
   deliver(&fixture, callback_live,
@@ -479,7 +479,7 @@ static void multiplexes_and_reclaims(void) {
   assert(iterate_kit_stream_subscription_reclaimable(&fixture.live_state));
 
   deliver(&fixture, callback_b,
-      "[[{\"offset\":44,\"path\":\"/agents/voice/v24/multiplex-b\"}]],"
+      "[[{\"offset\":44,\"path\":\"/agents/voice/host_test/multiplex-b\"}]],"
       "{\"after\":43,\"through\":44}");
   assert(fixture.b.calls == 3U);
 
@@ -560,7 +560,7 @@ static void pending_open_close_waits_for_remote_callback_release(void) {
   assert(latest_with(&fixture, "[\"close\"]") == NULL);
   assert(latest_with(&fixture, "[\"unsubscribe\"]") != NULL);
   deliver(&fixture, callback_stream,
-      "[[{\"offset\":1,\"path\":\"/agents/voice/v24/pending\"}]],"
+      "[[{\"offset\":1,\"path\":\"/agents/voice/host_test/pending\"}]],"
       "{\"after\":0,\"through\":1}");
   deliver(&fixture, callback_live,
       "{\"type\":\"snapshot\",\"revision\":1,\"state\":{}}");
@@ -642,7 +642,7 @@ static void session_loss_clears_pending_children_before_new_session(void) {
   assert(iterate_kit_stream_get(
       &fixture.stream_b, &fixture.session,
       (struct capnweb_remote_capability){-702},
-      "/agents/voice/v24/lost-get") == CAPNWEB_OK);
+      "/agents/voice/host_test/lost-get") == CAPNWEB_OK);
 
   capnweb_session_close(&fixture.session);
   iterate_kit_stream_session_ended(&fixture.stream_b);
@@ -654,7 +654,7 @@ static void session_loss_clears_pending_children_before_new_session(void) {
   assert(iterate_kit_stream_get(
       &fixture.stream_b, &fixture.session,
       (struct capnweb_remote_capability){-703},
-      "/agents/voice/v24/new-session") == CAPNWEB_OK);
+      "/agents/voice/host_test/new-session") == CAPNWEB_OK);
   assert(strstr(
       latest_with(&fixture, "[\"cd\"]"),
       "-703") != NULL);

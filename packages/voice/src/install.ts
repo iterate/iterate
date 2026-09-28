@@ -66,7 +66,7 @@ export async function installVoice(
       match: "itx.voice",
       target: ["itx", "workers", ["get", { source, cacheKey }]],
       description:
-        "The project's installed voice service: setupVoiceAgent({ activation }), setImage({ device, image }), health()",
+        "The project's installed voice service: setupVoiceAgent({ streamPath, activation, screen? }), setImage({ device, image }), health()",
     },
   });
 }

@@ -237,6 +237,10 @@ static void pump(void) {
       if (strstr(message, "setupVoiceAgent") != NULL) {
         assert(copy_setup_stream_path(
             message, setup_stream_path, sizeof(setup_stream_path)));
+        /* Named for its client; a board without a screen sends none. */
+        assert(strncmp(setup_stream_path, "/agents/voice/host_test_open_mic/",
+                       sizeof("/agents/voice/host_test_open_mic/") - 1U) == 0);
+        assert(strstr(message, "\"screen\"") == NULL);
       }
       if (pull == NULL) continue;
       {

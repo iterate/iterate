@@ -315,7 +315,7 @@ export default class extends WorkerEntrypoint {
   await installVoice(root, { "index.js": voice.replace(liveUrl, providerUrl) });
   expect(await root.voice.health()).toMatchObject({ ok: true, projectId });
 
-  const streamPath = "/agents/voice/v23/zectrix-note4/e2e";
+  const streamPath = "/agents/voice/zectrix_note4/2026-09-28-101500-e2e";
   const activation = "voice-e2e";
   const itx = root.cd(streamPath);
   const ai = model({ websiteUrl });
@@ -329,7 +329,9 @@ export default class extends WorkerEntrypoint {
       received.push(...JSON.parse(JSON.stringify(events)));
     },
   });
-  expect(await root.voice.setupVoiceAgent({ streamPath, activation, screen: true })).toEqual({
+  expect(
+    await root.voice.setupVoiceAgent({ streamPath, activation, screen: "zectrix_note4" }),
+  ).toEqual({
     streamPath,
   });
   // A failed dial must fail this assertion immediately, rather than silently timing out.

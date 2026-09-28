@@ -72,8 +72,8 @@ clock master/MCLK, GPIO polarity, amplifier polarity, gain, DMA sizes, and AEC
 reference. Give a new board a stable `facts.device_name`; firmware derives the
 itx expression it answers, `itx.clients.<device_name>` (every character outside
 `[A-Za-z0-9_]` replaced by `_`, because the far end spells that name in
-JavaScript), and its conversation namespace `/agents/voice/v23/<device_name>`
-from it.
+JavaScript), and its conversation namespace `/agents/voice/<client>`, where
+`<client>` is that `itx.clients` name, from it.
 
 USB-C boards using a FUSB302B can reuse `fusb302_esp_start()` with their I2C
 device and voltage/current/power limits. The driver is a fixed-supply PD 2.0
@@ -253,8 +253,10 @@ error. The voice loop reserves two call slots so a new call can open while the
 previous call finishes releasing its resources.
 
 A button press or wake word starts capture immediately and chooses a fresh
-`/agents/voice/v23/<device_name>/<UTC timestamp>-<activation>` path. Setup puts
-the ordinary Agent and voice processor on that stream. Opening PCM stays in
+`/agents/voice/<client>/<UTC timestamp>-<activation>` path, the convention every
+voice caller follows. Setup puts the ordinary Agent and voice processor on that
+stream; a board with a screen also sends its client name as `screen`, which
+gives the call its screen guide. Opening PCM stays in
 the device's bounded FIFO until setup and the direct stream subscription are
 ready. Microphone and speaker events travel directly through that stream.
 

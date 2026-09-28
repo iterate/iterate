@@ -27,13 +27,15 @@ export interface VoiceApi {
         totalMs: number;
       }
   >;
-  /** The press: create the agent at `streamPath` (default `/agents/voice/<uuid>`), which answers
-   *  the call's delegations, put the voice relay beside it and start the call under `activation`.
-   *  `screen` adds the screen instructions for a device whose path names it. */
+  /** The press: create the agent at `streamPath`, which answers the call's delegations, put the
+   *  voice relay beside it and start the call under `activation`. A caller names its call
+   *  `/agents/voice/<client>/<UTC>-<activation>` (a Kit board's `<client>` is its `itx.clients`
+   *  name, the voice app's is `web`). `screen` is the `itx.clients` name of a device with a
+   *  screen: the call gets instructions for drawing on it with `setImage`. */
   setupVoiceAgent(options: {
-    streamPath?: string;
+    streamPath: string;
     activation: string;
-    screen?: boolean;
+    screen?: string;
   }): Promise<{ streamPath: string }>;
 }
 
