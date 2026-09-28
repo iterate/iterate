@@ -2,7 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { Card } from "@iterate-com/ui/components/card";
 import { FieldSeparator } from "@iterate-com/ui/components/field";
 import { IterateLogo } from "@iterate-com/ui/components/iterate-logo";
-import { ErrorMessage, IssuerPage } from "../components/issuer-page.tsx";
+import { ErrorMessage, StandalonePage } from "@iterate-com/ui/components/standalone-page";
 import { CodeSignInForm } from "../components/login/code-sign-in-form.tsx";
 import { EmailSignInForm } from "../components/login/email-sign-in-form.tsx";
 import { SignInProviders } from "../components/login/sign-in-providers.tsx";
@@ -33,7 +33,7 @@ function LoginPage() {
       ? "Check your inbox"
       : "Sign in to iterate";
   return (
-    <IssuerPage className="max-w-100">
+    <StandalonePage className="max-w-100">
       <Card className="gap-5 p-5 shadow-xs sm:p-6">
         <header className="flex items-center gap-3">
           <IterateLogo alt="" className="size-8" />
@@ -51,7 +51,7 @@ function LoginPage() {
           <SignInOptions state={state} />
         )}
       </Card>
-    </IssuerPage>
+    </StandalonePage>
   );
 }
 

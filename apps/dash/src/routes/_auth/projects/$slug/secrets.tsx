@@ -7,20 +7,17 @@
 // fields the placeholder's `{ field }` picks) and the origins the value may be sent to. Update is
 // the same sheet on an existing row: the name locked, the pin pre-filled, the value pasted again —
 // the current one is never shown, and a pin only ever enters together with the value it guards (the
-// platform has no verb that changes a pin alone). An agent's collection link
-// (`?collect=1&project&platform&path&urls&description&agent`, minted by `itx.secrets.collectFromUser`
-// in apps/os/src/context/built-ins.ts) opens the same sheet only when its project and platform are
-// this page's, with the path and origins locked; once the secret is set, the requesting agent is
-// messaged. The list is the route's loader; a set or a delete invalidates the router, which reloads it.
+// platform has no verb that changes a pin alone). An agent's collection link opens a page of its own,
+// outside the shell (collect-secret.$slug.tsx); a link that names this page (`?collect=1&…`) is sent
+// on there.
+// The list is the route's loader; a set or a delete invalidates the router, which reloads it.
 
-// registers `itx.agents` on InstalledAppRoots
-import type {} from "@iterate-com/agents";
 import { useRef, useState, type FormEvent, type RefObject } from "react";
-import { createFileRoute, useNavigate, useRouter } from "@tanstack/react-router";
+import { createFileRoute, redirect, useNavigate, useRouter } from "@tanstack/react-router";
 import { Plus } from "lucide-react";
 import { z } from "zod";
 import type { AuthenticatedApp } from "iterate/app";
-import type { IterateContextApiWith, SecretCatalogEntry, SecretMaterial } from "iterate/api";
+import type { SecretCatalogEntry } from "iterate/api";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -55,6 +52,7 @@ import {
 } from "@iterate-com/ui/components/table";
 import { Textarea } from "@iterate-com/ui/components/textarea";
 import { Identifier } from "../../../../components/identifier.tsx";
+import { SECRET_NAME, SECRETS_PREFIX, secretMaterialOf } from "../../../../lib/secrets.ts";
 
 export const Route = createFileRoute("/_auth/projects/$slug/secrets")({
   // the sheet's state is the URL: `?new=1` sets a new secret, `?update=<name>` updates that one
@@ -62,13 +60,17 @@ export const Route = createFileRoute("/_auth/projects/$slug/secrets")({
     new: z.literal(1).optional().catch(undefined),
     update: z.string().optional().catch(undefined),
     collect: z.literal(1).optional().catch(undefined),
-    project: z.string().optional().catch(undefined),
-    platform: z.string().optional().catch(undefined),
-    path: z.string().optional().catch(undefined),
-    urls: z.array(z.string()).optional().catch(undefined),
-    description: z.string().optional().catch(undefined),
-    agent: z.string().optional().catch(undefined),
   }),
+  // `?collect=1`: a collection link that names this page, whose query goes on to the link's own page
+  beforeLoad: ({ search, location, params }) => {
+    if (search.collect !== 1) return;
+    const collectionLinkSearch = new URLSearchParams(location.searchStr);
+    collectionLinkSearch.delete("collect");
+    throw redirect({
+      href: `/collect-secret/${encodeURIComponent(params.slug)}?${collectionLinkSearch}`,
+      replace: true,
+    });
+  },
   loader: async ({ context }) => ({
     secrets: await context.api.projects.get(context.project.id).secrets.list(),
   }),
@@ -77,16 +79,8 @@ export const Route = createFileRoute("/_auth/projects/$slug/secrets")({
   component: ProjectSecrets,
 });
 
-/** The name's grammar, mirroring `SECRET_NAME` in apps/os/src/secrets.ts: `[a-zA-Z0-9._-]+`, never
- *  `.` or `..` — what `getSecret("/secrets/<name>")` can spell. Its source is the input's `pattern`,
- *  so the browser says so before the platform has to. The hyphen is escaped because browsers
- *  compile `pattern` with the `v` flag, where a bare `-` in a class is invalid and silently disables
- *  the check (https://html.spec.whatwg.org/multipage/input.html#the-pattern-attribute). */
-const SECRET_NAME = /^(?!\.\.?$)[a-zA-Z0-9_\-.]+$/;
-const SECRETS_PREFIX = "/secrets/";
-
 function ProjectSecrets() {
-  const { api, info, project } = Route.useRouteContext();
+  const { api, project } = Route.useRouteContext();
   const { secrets } = Route.useLoaderData();
   const search = Route.useSearch();
   const navigate = useNavigate({ from: Route.fullPath });
@@ -98,36 +92,9 @@ function ProjectSecrets() {
   const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
   const closeSheet = () => navigate({ search: {}, replace: true });
-  const collectionUrls = (() => {
-    if (!search.urls) return null;
-    const parsed = z.array(z.string().url()).safeParse(search.urls);
-    if (!parsed.success || parsed.data.length === 0) return null;
-    const origins = parsed.data.map((value) => new URL(value));
-    if (
-      origins.some(
-        (url) =>
-          !["http:", "https:"].includes(url.protocol) || Boolean(url.username || url.password),
-      )
-    )
-      return null;
-    return [...new Set(origins.map((url) => url.origin))];
-  })();
-  const collecting = search.collect === 1;
-  const collectionTargetMatches =
-    collecting && search.project === project.id && search.platform === info.platformOrigin;
-  const collectionIsValid =
-    collectionTargetMatches &&
-    Boolean(
-      search.path?.startsWith(SECRETS_PREFIX) &&
-      SECRET_NAME.test(search.path.slice(SECRETS_PREFIX.length)),
-    ) &&
-    Boolean(collectionUrls) &&
-    (!search.agent || search.agent.startsWith("/agents/"));
   /** The row `?update=<name>` names — none when the name is not (or no longer) a secret. */
   const updating =
-    (!collecting &&
-      search.update &&
-      secrets.find((secret) => secret.path === SECRETS_PREFIX + search.update)) ||
+    (search.update && secrets.find((secret) => secret.path === SECRETS_PREFIX + search.update)) ||
     null;
 
   const deleteSecret = async (secretPath: string) => {
@@ -254,27 +221,8 @@ function ProjectSecrets() {
           </Table>
         </div>
       )}
-      {collecting && !collectionTargetMatches && (
-        <p
-          role="alert"
-          data-type="error"
-          className="rounded-lg border border-destructive p-4 text-sm text-destructive"
-        >
-          This collection link is for a different Iterate instance or project. It cannot write to
-          the instance currently connected to Dash.
-        </p>
-      )}
-      {collecting && collectionTargetMatches && !collectionIsValid && (
-        <p
-          role="alert"
-          data-type="error"
-          className="rounded-lg border border-destructive p-4 text-sm text-destructive"
-        >
-          This collection link is incomplete or invalid. Ask the requesting agent for a new link.
-        </p>
-      )}
       <Sheet
-        open={collecting ? collectionIsValid : search.new === 1 || Boolean(search.update)}
+        open={search.new === 1 || Boolean(search.update)}
         onOpenChange={(open) => {
           if (open || pending) return;
           void closeSheet();
@@ -283,28 +231,16 @@ function ProjectSecrets() {
         <SheetContent
           side="right"
           showCloseButton={!pending}
-          initialFocus={updating || collectionIsValid ? valueField : undefined}
+          initialFocus={updating ? valueField : undefined}
           className="overflow-y-auto data-[side=right]:w-full data-[side=right]:sm:max-w-md"
         >
           <SecretForm
             // mounted with the sheet, keyed by what it opens on, so every opening starts from its row
-            key={collecting ? search.path || "collect" : search.update || "new"}
+            key={search.update || "new"}
             api={api}
             projectId={project.id}
             secrets={secrets}
-            initialName={
-              collectionIsValid ? search.path!.slice(SECRETS_PREFIX.length) : search.update || ""
-            }
-            initialUrls={collectionIsValid ? collectionUrls!.join(" ") : undefined}
-            description={collectionIsValid ? search.description : undefined}
-            requestingAgent={collectionIsValid ? search.agent : undefined}
-            collecting={collectionIsValid}
-            expectedPlatformOrigin={search.platform}
-            collectionTarget={
-              collectionIsValid
-                ? `${project.slug} on ${new URL(info.platformOrigin).host}`
-                : undefined
-            }
+            initialName={search.update || ""}
             updating={updating}
             valueField={valueField}
             pending={pending}
@@ -322,22 +258,6 @@ function ProjectSecrets() {
   );
 }
 
-/** The typed value as material: text that parses as a JSON object is that object (its fields are
- *  what `{ field }` picks); anything else is the one string, as typed. The platform never parses a
- *  string (iterate/api `SecretMaterial`), so this form is where pasted JSON becomes fields. */
-function secretMaterialOf(value: string): SecretMaterial {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(value);
-  } catch {
-    return value;
-  }
-  // JSON.parse answers any JSON value; only an object (not null, an array, a number) has fields.
-  return parsed instanceof Object && !Array.isArray(parsed)
-    ? (parsed as Record<string, unknown>)
-    : value;
-}
-
 /** The sheet's body: the name, the value and the pin — one `secrets.set`. On an existing row
  *  (`updating`) the name is locked and the pin pre-filled; the value is always typed here. */
 function SecretForm({
@@ -345,12 +265,6 @@ function SecretForm({
   projectId,
   secrets,
   initialName,
-  initialUrls,
-  description,
-  requestingAgent,
-  collecting,
-  expectedPlatformOrigin,
-  collectionTarget,
   updating,
   valueField,
   pending,
@@ -361,12 +275,6 @@ function SecretForm({
   projectId: string;
   secrets: SecretCatalogEntry[];
   initialName: string;
-  initialUrls?: string;
-  description?: string;
-  requestingAgent?: string;
-  collecting: boolean;
-  expectedPlatformOrigin?: string;
-  collectionTarget?: string;
   updating: SecretCatalogEntry | null;
   valueField: RefObject<HTMLTextAreaElement | null>;
   pending: boolean;
@@ -376,7 +284,7 @@ function SecretForm({
 }) {
   const [name, setName] = useState(initialName);
   const [value, setValue] = useState("");
-  const [urls, setUrls] = useState(updating ? updating.urls.join(" ") : initialUrls || "");
+  const [urls, setUrls] = useState(updating ? updating.urls.join(" ") : "");
   const [error, setError] = useState<string | null>(null);
   const origins = urls.split(/[\s,]+/).filter(Boolean);
   const path = `${SECRETS_PREFIX}${name.trim()}`;
@@ -393,30 +301,11 @@ function SecretForm({
     }
     setPending(true);
     try {
-      if (collecting && (await api.info()).platformOrigin !== expectedPlatformOrigin) {
-        setError("This collection link is for a different Iterate instance or project.");
-        return;
-      }
       await api.projects.get(projectId).secrets.set(path, secretMaterialOf(value), {
         urls: origins,
       });
-      let notification = "";
-      if (requestingAgent) {
-        try {
-          const project = api.projects.get(projectId);
-          // An agent's collection link: the agents app is installed, so the project's root has
-          // `itx.agents` (the assertion iterate/api's `IterateContextApiWith` documents).
-          const withAgents = project as typeof project &
-            Pick<IterateContextApiWith<"agents">, "agents">;
-          await withAgents.agents
-            .get(requestingAgent)
-            .message(`The user submitted the secret at ${path}. Its value was not included.`);
-        } catch {
-          notification = " The secret was saved, but the requesting agent could not be notified.";
-        }
-      }
       await onDone(
-        `${path} is ${existing ? "updated" : "set"}. The value is stored encrypted and is not shown again.${notification}`,
+        `${path} is ${existing ? "updated" : "set"}. The value is stored encrypted and is not shown again.`,
       );
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
@@ -428,14 +317,11 @@ function SecretForm({
   return (
     <form onSubmit={setSecret} className="flex h-full flex-col">
       <SheetHeader className="border-b">
-        <SheetTitle>
-          {updating ? `Update ${updating.path}` : collecting ? `Enter ${path}` : "New secret"}
-        </SheetTitle>
+        <SheetTitle>{updating ? `Update ${updating.path}` : "New secret"}</SheetTitle>
         <SheetDescription>
-          {description ||
-            (updating
-              ? "Paste the value again — the current one is never shown — and check the origins: a pin only ever changes together with the value it guards."
-              : "Stored encrypted and never shown again; the log records who set what and when, never the value.")}
+          {updating
+            ? "Paste the value again — the current one is never shown — and check the origins: a pin only ever changes together with the value it guards."
+            : "Stored encrypted and never shown again; the log records who set what and when, never the value."}
         </SheetDescription>
       </SheetHeader>
       <FieldGroup className="flex-1 p-4">
@@ -453,24 +339,16 @@ function SecretForm({
               autoComplete="off"
               spellCheck={false}
               required
-              readOnly={Boolean(updating || collecting)}
+              readOnly={Boolean(updating)}
               className="font-mono read-only:bg-muted read-only:text-muted-foreground"
             />
           </div>
           <FieldDescription>
             {updating
               ? "A secret is its path; to move it, set a new name and delete this one."
-              : collecting
-                ? `This collection link writes to ${collectionTarget}.`
-                : "Letters, digits, dots, underscores and dashes — the path is what the placeholder spells."}
+              : "Letters, digits, dots, underscores and dashes — the path is what the placeholder spells."}
           </FieldDescription>
         </Field>
-        {collecting && existing && (
-          <p role="note" className="text-sm text-muted-foreground">
-            This replaces the existing secret, currently pinned to {existing.urls.join(", ")}. The
-            requested origins below replace that pin with the new value.
-          </p>
-        )}
         <Field>
           <FieldLabel htmlFor="secret-value">{updating ? "New value" : "Value"}</FieldLabel>
           <Textarea
@@ -503,7 +381,6 @@ function SecretForm({
             autoComplete="off"
             spellCheck={false}
             required
-            readOnly={collecting}
             className="font-mono"
           />
           <FieldDescription>

@@ -183,8 +183,8 @@ It returns `{ path, url }`.
 **3b.** Send the person this message, with the real link and the real keys page. Put the link on a
 line of its own, exactly as returned: no backticks, no link text.
 
-> Open this link, paste your <Service> API key into **Value** and press **Set secret** (**Update
-> secret** if it replaces one):
+> Open this link, paste your <Service> API key into **Value** and press **Save** (**Update** if it
+> replaces one):
 >
 > <url>
 >
@@ -374,7 +374,7 @@ fields, and tell the person exactly what to fill in:
 >    - **<its homepage field, if any>**: `<projectUrl from step 1>`
 >    - **<its callback or redirect URL field>**: `https://os.iterate.com/.secrets/oauth/callback`
 > 2. Save it, then create a client secret.
-> 3. Paste the client secret into **Value** here and press **Set secret**:
+> 3. Paste the client secret into **Value** here and press **Save**:
 >
 >    <url>
 >

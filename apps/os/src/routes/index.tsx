@@ -1,7 +1,7 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { buttonVariants } from "@iterate-com/ui/components/button";
 import { IterateLogo } from "@iterate-com/ui/components/iterate-logo";
-import { IssuerPage } from "../components/issuer-page.tsx";
+import { StandalonePage } from "@iterate-com/ui/components/standalone-page";
 import { getLandingState } from "../issuer.functions.ts";
 import { loginSearchOf } from "../login-search.ts";
 
@@ -14,7 +14,7 @@ export const Route = createFileRoute("/")({
 function LandingPage() {
   const { issuer, dash } = Route.useLoaderData();
   return (
-    <IssuerPage className="text-sm leading-relaxed">
+    <StandalonePage className="text-sm leading-relaxed">
       <IterateLogo alt="" className="size-12" />
       <h1 className="text-xl font-semibold">iterate platform</h1>
       <p>
@@ -43,6 +43,6 @@ function LandingPage() {
         </a>
         .
       </p>
-    </IssuerPage>
+    </StandalonePage>
   );
 }

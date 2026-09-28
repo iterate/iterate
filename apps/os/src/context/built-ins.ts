@@ -1427,11 +1427,11 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
           throw new Error(
             "itx.secrets.collectFromUser: only a project's context can collect a secret",
           );
+        // the Dash's page for the link, outside its shell (apps/dash routes/collect-secret.$slug.tsx)
         const url = new URL(
-          `/projects/${encodeURIComponent(project.projectSlug)}/secrets`,
+          `/collect-secret/${encodeURIComponent(project.projectSlug)}`,
           deps.dashOrigin,
         );
-        url.searchParams.set("collect", "1");
         url.searchParams.set("project", projectId);
         url.searchParams.set("platform", platformOrigin);
         url.searchParams.set("path", secretPath);
