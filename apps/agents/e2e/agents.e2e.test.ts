@@ -425,7 +425,7 @@ test("words sent while a script runs are answered at once: the feed shows the re
     (all) => all.some((e) => e.type === "events.iterate.com/itx/run-settled"),
     { describe: short },
   );
-  expect(feed(settled, true)).toMatchObject({
+  expect(feed(settled, false)).toMatchObject({
     state: { live: null },
     items: [
       { kind: "user", text: "Wait for go." },

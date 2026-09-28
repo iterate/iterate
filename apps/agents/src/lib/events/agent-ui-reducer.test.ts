@@ -1065,9 +1065,9 @@ test("a request that input starts while a script still runs moves the input into
     { kind: "llm", llmRequestOffset: 6, status: "done", outcome: "completed" },
   ]);
 
-  // The script's settlement closes its step; the turn's end closes the one
-  // activity, whole and clean.
-  const settled = settleAtIdle(reduceAll(events), 20);
+  // The script returned nothing, so its settlement ends the turn: journal
+  // facts alone close the one activity, whole and clean.
+  const settled = reduceAll(events);
   expect(settled.live).toBeNull();
   expect(settled.items).toMatchObject([
     { kind: "user", text: "do X" },
@@ -1088,6 +1088,43 @@ test("a request that input starts while a script still runs moves the input into
   expect(summarizeAgentUiActivity(settled.items[3] as AgentUiActivity)).toMatchObject({
     outcome: "clean",
   });
+});
+
+test("a reply that lands at once leaves the activity open when the script returns a value: the follow-up request joins it", () => {
+  const events = [
+    runRequested(1, "async () => longWork()"),
+    {
+      type: "events.iterate.com/agent/context-added",
+      payload: { role: "user", actor: { type: "user", origin: "web" }, content: "and then?" },
+    },
+    { type: "events.iterate.com/agent/llm-request-requested", offset: 3, payload: { model: "m" } },
+    requestSettled(3),
+    {
+      type: "events.iterate.com/agent/web-message-sent",
+      payload: { message: "X is still running.", llmRequestOffset: 3 },
+    },
+    runSettled(1, { status: "succeeded", result: { done: true } }),
+    { type: "events.iterate.com/agent/llm-request-requested", offset: 7, payload: { model: "m" } },
+    requestSettled(7),
+  ];
+
+  const returned = reduceAll(events.slice(0, 6));
+  expect(returned.items).toMatchObject([
+    { kind: "user", text: "and then?" },
+    { kind: "assistant", text: "X is still running." },
+  ]);
+  expect(returned.live?.steps).toMatchObject([
+    { kind: "code", requestOffset: 1, status: "done", success: true },
+    { kind: "llm", llmRequestOffset: 3, status: "done" },
+  ]);
+
+  const followedUp = reduceAll(events);
+  expect(followedUp.items.filter((item) => item.kind === "activity")).toHaveLength(0);
+  expect(followedUp.live?.steps).toMatchObject([
+    { kind: "code", requestOffset: 1 },
+    { kind: "llm", llmRequestOffset: 3 },
+    { kind: "llm", llmRequestOffset: 7, status: "done" },
+  ]);
 });
 
 test("a reply whose request wrote a script that still runs waits for that script, even beside an older running script", () => {

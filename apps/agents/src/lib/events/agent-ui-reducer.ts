@@ -29,6 +29,9 @@ export type AgentUiLlmStep = {
    * from the assistant event). The derived views are then the story: pretty
    * rendering collapses the raw response text behind the raw toggles. */
   interpreted?: boolean;
+  /** True once this request's reply went out while only older work still ran
+   * (see emitAssistantMessageItem): nothing is held for that work to release. */
+  repliedAtOnce?: boolean;
   inputTokens?: number;
   outputTokens?: number;
   durationMs?: number;
@@ -605,11 +608,20 @@ function reduceAgentUiEvent(
       // surface a sent message: settle the activity here and flush. A paused
       // loop is the same situation even with no deferred messages: the pause
       // fact already landed (possibly mid-request), no follow-up round is
-      // coming, and no second pause will arrive to close the activity.
+      // coming, and no second pause will arrive to close the activity. A
+      // reply that already went out at once is the same: when this script
+      // returned nothing (the turn ends, no follow-up round) nothing else
+      // closes the activity. A script that returned a value is followed by a
+      // request that joins this activity, so it stays open for that.
+      const turnEnds = settlement.status === "succeeded" && settlement.result === undefined;
+      const repliedAtOnce = next.live.steps.some(
+        (candidate) => candidate.kind === "llm" && candidate.repliedAtOnce,
+      );
       if (
         (next.deferredAssistantMessages.length > 0 ||
           next.queuedUserMessages.length > 0 ||
-          next.paused) &&
+          next.paused ||
+          (repliedAtOnce && turnEnds)) &&
         !isAgentUiActivityWorking(next.live)
       ) {
         return flushDeferredMessages(settleLive(next, timestampMs, items), items);
@@ -741,7 +753,8 @@ function emitUserMessageItem(
  * during a long script): nothing that request started is running, so the
  * reply lands at once, above the still-live activity, after the held replies
  * before it in log order. The activity stays live and whole until its own
- * settlements close it.
+ * settlements close it; the request's step is marked, so a script settlement
+ * that ends the turn closes it (see itx/run-settled).
  */
 function emitAssistantMessageItem(
   state: AgentUiState,
@@ -758,7 +771,11 @@ function emitAssistantMessageItem(
   }
   if (llmRequestOffset !== null && onlyOlderWorkRuns(settled.live, llmRequestOffset)) {
     items.push(...settled.deferredAssistantMessages, item);
-    return { ...settled, deferredAssistantMessages: [] };
+    const replied = updateLlmStep(settled, llmRequestOffset, (step) => ({
+      ...step,
+      repliedAtOnce: true,
+    }));
+    return { ...replied, deferredAssistantMessages: [] };
   }
   return {
     ...settled,
