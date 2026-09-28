@@ -30,7 +30,7 @@ import {
   TestEvidenceTarget,
   testEvidencePaths,
 } from "@iterate-com/shared/test-support/test-evidence";
-import { OS_DOPPLER_PROJECT, osEnvs, type OsEnv } from "../../../envs.ts";
+import { OS_DOPPLER_PROJECT, osEnv, osEnvs, type OsEnv } from "../../../envs.ts";
 import {
   collectSecrets,
   deployWithSecrets,
@@ -495,12 +495,20 @@ async function deployPreview(
   await deployPreviewSteps(ctx, name, prNumber, apps, folded);
 }
 
-/** The version apps/os's `/version` names (`<versionId> <platformOrigin>`, src/worker.ts): on a
- *  brand-new worker, the one this deploy uploaded. */
-async function deployedVersion(url: string) {
-  const response = await fetch(`${url}/version`, { signal: AbortSignal.timeout(10_000) });
-  if (!response.ok) throw new Error(`${url}/version answered ${response.status}`);
-  return (await response.text()).split(" ")[0]!.trim();
+/** The version this deploy made current, as Cloudflare records it: the worker's latest deployment
+ *  (the first listed), all of its traffic on one version, the id `/version` answers with
+ *  (src/worker.ts). Read from the API, not from `/version`, because a brand-new workers.dev hostname
+ *  answers 404 from some locations for seconds after the deploy's smokes have passed. */
+async function deployedVersion(ctx: EnvContext<OsEnv>, workerName: string) {
+  const { deployments } = await ctx.cf<{
+    deployments: { versions: { version_id: string; percentage: number }[] }[];
+  }>(`/workers/scripts/${workerName}/deployments`);
+  const versions = deployments[0]?.versions ?? [];
+  if (versions.length !== 1 || versions[0]!.percentage !== 100)
+    throw new Error(
+      `${workerName}'s latest deployment is not one version at 100%: ${JSON.stringify(versions)}`,
+    );
+  return versions[0]!.version_id;
 }
 
 /** apps/os (scripts/deploy.ts: its resources created, its D1 migrated, its secrets, its smokes) and
@@ -554,7 +562,7 @@ async function deployPreviewSteps(
     );
   const deployedApps = apps.map((app) => ({ name: app.name, url: urls.apps[app.name]! }));
   const url = urls.os;
-  const versionId = await deployedVersion(url);
+  const versionId = await deployedVersion(ctx, osEnv(name)!.workerName);
   const config = parseAppConfig(collectSecrets(ctx, ["APP_CONFIG", "APP_CONFIG_SECRETS__KEY"]));
   // The gate (preview-readiness.ts says why): nothing is handed on — the PR body's links, the
   // sign-in seed, the suites — until three rounds of eight in a row answer in full on this version.
