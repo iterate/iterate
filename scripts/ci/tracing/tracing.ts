@@ -177,7 +177,7 @@ export function assembleTrace(
       "ci.source.ref": workflow.ref,
       "ci.url": `https://depot.dev/orgs/${DEPOT_ORG}/workflows/${workflow.workflowId}`,
       "ci.evidence":
-        "Depot timestamps; shell and test lifecycle markers. Uninstrumented action time remains in its enclosing job/phase.",
+        "Depot timestamps; shell and test lifecycle markers. Uninstrumented action time remains in its enclosing job.",
     },
     workflow.workflowStatus === "failed",
   );
@@ -223,8 +223,11 @@ export function assembleTrace(
   const shards = workflow.jobs.filter((job) =>
     SPECS_SHARD_JOBS.includes(jobKeyInWorkflow(job.jobKey)),
   );
+  const sharded = shards.some((job) => jobKeyInWorkflow(job.jobKey) === "specs-shard");
   let shardGroup: string | undefined;
-  if (shards.some((job) => jobKeyInWorkflow(job.jobKey) === "specs-shard")) {
+  /** The group's span, added where its first shard's job comes, so it takes that job's place. */
+  const shardGroupSpan = () => {
+    if (shardGroup) return shardGroup;
     const times = shards.flatMap((job) => {
       const attempts = tracedAttempts(job);
       if (!attempts.length) return [rootEnd];
@@ -248,13 +251,14 @@ export function assembleTrace(
       },
       status === "failed",
     );
-  }
+    return shardGroup;
+  };
   for (const job of workflow.jobs) {
     const key = jobKeyInWorkflow(job.jobKey);
-    const parent = shardGroup && SPECS_SHARD_JOBS.includes(key) ? shardGroup : root;
+    const parent = sharded && SPECS_SHARD_JOBS.includes(key) ? shardGroupSpan() : root;
     // a shard by its number, `Browser specs 1/10`; a matrix leg by its own name, `Browser specs 3/10`
     const name =
-      shardGroup && key === "specs"
+      sharded && key === "specs"
         ? `Browser specs 1/${shards.length}`
         : jobLabels.get(key) || job.jobDisplayName || key;
     const attempts = tracedAttempts(job);
@@ -298,41 +302,17 @@ export function assembleTrace(
       const testEnds = new Map(
         events.filter((event) => event.kind === "test-end").map((event) => [event.id, event]),
       );
-      // A test job's suite step opens its Test phase: `suite` in E2E tests and Browser specs,
-      // which share one definition (preview-os.yml).
-      const tests = shells.find((event) => event.step === "suite");
-      const boundaries = [{ name: "Setup", time: start }];
-      if (tests) {
-        boundaries.push({ name: "Test", time: tests.time });
-        const done = shellEnds.get(tests.id);
-        if (done) boundaries.push({ name: "Finish", time: done.time });
-      }
-      const phases = tests
-        ? boundaries.map((boundary, index) => {
-            // Depot job finishes have whole-second precision. A final marker can
-            // fall later within that second: retain both source timestamps,
-            // but give the derived trailing phase zero duration, not negative.
-            const phaseEnd = boundaries[index + 1]?.time || Math.max(boundary.time, end);
-            return {
-              start: boundary.time,
-              end: phaseEnd,
-              id: add(
-                `${attempt.attemptId}/phase/${index}`,
-                jobSpan,
-                boundary.name,
-                boundary.time,
-                phaseEnd,
-                {
-                  "ci.kind": "phase",
-                  "ci.phase": boundary.name.toLowerCase(),
-                  "ci.evidence":
-                    "Grouping from measured step boundaries; includes action/runner gaps",
-                },
-                false,
-              ),
-            };
-          })
-        : [];
+      // A test job's suite step (`suite` in E2E tests and Browser specs, one definition in
+      // preview-os.yml) splits its steps into setup, test and finish, which colour their bars. The
+      // steps sit directly under the job.
+      const suite = shells.find((event) => event.step === "suite");
+      const suiteEnd = suite && shellEnds.get(suite.id)?.time;
+      // none for a job without a suite step (Deploy preview)
+      const phaseOf = (time: number) => {
+        if (!suite) return "";
+        if (time < suite.time) return "setup";
+        return suiteEnd === undefined || time < suiteEnd ? "test" : "finish";
+      };
       const stepParents = new Map<string, string>();
       const stepEnds = new Map<string, number>();
       for (const shell of shells) {
@@ -341,17 +321,19 @@ export function assembleTrace(
         // With no exit marker, keep it incomplete at its start instead of
         // inventing a negative duration. Measured intervals still validate below.
         const shellEnd = done?.time || Math.max(shell.time, end);
-        const parent =
-          phases.findLast((phase) => shell.time >= phase.start && shell.time < phase.end)?.id ||
-          jobSpan;
+        stepEnds.set(shell.stepKey, shellEnd);
+        // A suite step is no row of its own: what it runs sits under the job with its other steps,
+        // its set-up and deploy wait as they are, and its tests in one "Run tests" row (below).
+        if (shell === suite) continue;
         const id = add(
           `${attempt.attemptId}/shell/${shell.id}`,
-          parent,
+          jobSpan,
           shell.stepName || shell.stepId || shell.command || shell.step,
           shell.time,
           shellEnd,
           {
             "ci.kind": "step",
+            "ci.phase": phaseOf(shell.time),
             "ci.step.key": shell.stepKey,
             "ci.step.id": shell.stepId,
             "ci.step.name": shell.stepName,
@@ -366,7 +348,6 @@ export function assembleTrace(
           !!done?.exitCode,
         );
         stepParents.set(shell.stepKey, id);
-        stepEnds.set(shell.stepKey, shellEnd);
       }
       const operations = events.filter((event) => event.kind === "span-start");
       const operationIds = new Map(
@@ -401,7 +382,52 @@ export function assembleTrace(
           done?.status === "failed",
         );
       }
-      for (const test of events.filter((event) => event.kind === "test-start")) {
+      // RUN TESTS: the suite step's tests, from the end of its set-up and deploy wait (its own
+      // operations) to the step's exit, which Playwright's or vitest's start and report fall in.
+      // Also a row, with no tests in it, for a suite that failed after its wait and ran none.
+      const tests = events.filter((event) => event.kind === "test-start");
+      if (suite) {
+        const setUp = operations
+          .filter((operation) => operation.stepKey === suite.stepKey && !operation.parentId)
+          .map((operation) => operationEnds.get(operation.id)?.time || operation.time);
+        const suiteTests = tests.filter((test) => test.stepKey === suite.stepKey);
+        const runEnd = suiteEnd || Math.max(suite.time, end);
+        const runStart = Math.min(
+          Math.max(suite.time, ...setUp),
+          ...suiteTests.map((test) => test.time),
+          runEnd,
+        );
+        const exitCode = shellEnds.get(suite.id)?.exitCode;
+        const setUpFailed = operations.some(
+          (operation) =>
+            operation.stepKey === suite.stepKey &&
+            operationEnds.get(operation.id)?.status === "failed",
+        );
+        if (suiteTests.length || (exitCode && !setUpFailed))
+          stepParents.set(
+            suite.stepKey,
+            add(
+              `${attempt.attemptId}/run-tests`,
+              jobSpan,
+              "Run tests",
+              runStart,
+              runEnd,
+              {
+                "ci.kind": "step",
+                "ci.phase": "test",
+                "ci.step.key": suite.stepKey,
+                "ci.step.id": suite.stepId,
+                "ci.step.name": suite.stepName,
+                "ci.command": suite.command,
+                "ci.status": exitCode === undefined ? "incomplete" : exitCode ? "failed" : "passed",
+                "ci.evidence":
+                  "The suite step's exit, from the end of its set-up and deploy wait (measured operations)",
+              },
+              !!exitCode,
+            ),
+          );
+      }
+      for (const test of tests) {
         const done = testEnds.get(test.id);
         const aggregate = test.framework === "vitest";
         const retryCount = done?.retryCount || 0;

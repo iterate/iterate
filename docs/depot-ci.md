@@ -609,7 +609,7 @@ Each deploy is one job, and every app but SPA, dummy-petshop and ci-reports post
 Preview OS runs these jobs, each a check named for what it proves:
 
 - **Deploy preview** deploys the PR merged into main, each step starting once what it needs is
-  there ([the trace's spans](ci-traces.md#steps-and-phases)).
+  there ([the trace's spans](ci-traces.md#steps)).
 - **E2E tests** (`pnpm preview e2e`) and **Browser specs** (`pnpm preview specs`) start with the
   run, beside Deploy preview, each on its own runner ([reliability defaults](#reliability-defaults)).
   Each sets its suite up while the preview deploys, then waits for the deploy

@@ -255,8 +255,8 @@
       <h1 id="title">Preview CI trace</h1>
       <p id="subtitle"></p>
       <p>
-        Expand a job’s phases, then a step, to see individual tests and retries. Click any bar for
-        its timing and evidence.
+        Expand a job, then a step, to see individual tests and retries. Click any bar for its timing
+        and evidence.
       </p>
       <div class="stats" id="stats"></div>
       <p id="outcome-note"></p>
@@ -268,7 +268,7 @@
           placeholder="Find a test, step or file…"
           aria-label="Filter trace"
         />
-        <button id="phases">Show phases</button><button id="expand">Expand all</button>
+        <button id="phases">Show steps</button><button id="expand">Expand all</button>
         <button id="zoom">Zoom to selection</button><button id="reset">Full run</button>
         <button id="download">Download OTLP JSON</button>
       </div>
@@ -335,6 +335,7 @@
         }));
       const root = spans.find((s) => !s.parentSpanId);
       const byId = new Map(spans.map((span) => [span.spanId, span]));
+      const emitted = new Map(spans.map((span, index) => [span.spanId, index]));
       const rows = new Map();
       function spanLabel(span) {
         let job = span;
@@ -347,23 +348,12 @@
           spans
             .filter((c) => c.parentSpanId === s.spanId)
             .sort((a, b) => {
-              if (s === root) {
-                const rank = (span) =>
-                  span.a["ci.kind"] === "queue"
-                    ? -1
-                    : span.a["ci.job.key"]?.endsWith(":plan")
-                      ? 0
-                      : span.name === "Prepare"
-                        ? 1
-                        : span.name === "App tests"
-                          ? 2
-                          : span.name.startsWith("Playwright ")
-                            ? 3
-                            : 4;
+              // the queue, then the jobs in the order the trace job names them (tracing.ts)
+              if (s === root)
                 return (
-                  rank(a) - rank(b) || a.name.localeCompare(b.name, undefined, { numeric: true })
+                  (b.a["ci.kind"] === "queue") - (a.a["ci.kind"] === "queue") ||
+                  emitted.get(a.spanId) - emitted.get(b.spanId)
                 );
-              }
               // a group's jobs, the Browser specs shards, by their number
               if (s.a["ci.kind"] === "group")
                 return a.name.localeCompare(b.name, undefined, { numeric: true });
@@ -371,8 +361,8 @@
             }),
         ]),
       );
-      // Opened at first and by "Show phases": the workflow and each job's phases, but a group's
-      // jobs (the Browser specs shards) one row each until opened.
+      // Opened at first and by "Show steps": the workflow and each job's steps, but a group's jobs
+      // (the Browser specs shards) one row each until opened.
       const phasesOpen = () =>
         new Set(
           spans

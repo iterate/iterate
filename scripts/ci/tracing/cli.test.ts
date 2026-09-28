@@ -66,15 +66,16 @@ test("no status is posted until the trace's own artifact is in Depot", async () 
   expect(collected.statuses()).toEqual([]);
 });
 
-test("the trace job collects the deploy and both test jobs", async () => {
+test("the trace job collects the deploy and both test jobs, in the order it names them", async () => {
   await using depot = await tracedWorkflow({
     workflowName: "Preview OS",
     workflowPath: "preview-os.yml",
+    // as Depot happens to list them
     jobs: [
-      ["deploy", "finished", 3, 40],
-      ["e2e", "finished", 41, 180],
       ["specs", "finished", 41, 120],
       ["trace", "running", 181, 0],
+      ["e2e", "finished", 41, 180],
+      ["deploy", "finished", 3, 40],
     ],
     needs: ["deploy", "e2e", "specs"],
   });
@@ -83,14 +84,11 @@ test("the trace job collects the deploy and both test jobs", async () => {
 
   const trace = JSON.parse(await readFile(join(depot.directory, "trace.json"), "utf8"));
   const spans: { name: string }[] = trace.resourceSpans[0].scopeSpans[0].spans;
+  // E2E tests' suite step ran no tests, so it has no Run tests row
   expect(spans.map((span) => span.name)).toEqual([
     "Preview OS",
     "Deploy preview",
     "E2E tests",
-    "Setup",
-    "Test",
-    "Finish",
-    "Run the e2e suite against the preview",
     "Browser specs",
   ]);
   expect(spans[0]).toMatchObject({

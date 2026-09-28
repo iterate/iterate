@@ -67,8 +67,14 @@ export default class CiTrace {
     const yaml = await source.text();
     const commands = stepCommands(yaml);
     const traced = tracedJobs(yaml);
-    // Main's delete and alert run beside the trace job, so the trace covers only what it waited for.
-    const jobs = workflow.jobs.filter((job) => traced.includes(jobKeyInWorkflow(job.jobKey)));
+    // Main's delete and alert run beside the trace job, so the trace covers only what it waited for,
+    // in the order it names them: the deploy, then the suites.
+    const jobs = workflow.jobs
+      .filter((job) => traced.includes(jobKeyInWorkflow(job.jobKey)))
+      .toSorted(
+        (a, b) =>
+          traced.indexOf(jobKeyInWorkflow(a.jobKey)) - traced.indexOf(jobKeyInWorkflow(b.jobKey)),
+      );
     const attempts = jobs.flatMap((job) => job.attempts).filter((attempt) => attempt.startedAt);
     const entries = await Promise.all(
       attempts.map(async (attempt) => {
