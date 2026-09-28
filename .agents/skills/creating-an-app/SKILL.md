@@ -15,22 +15,22 @@ instead.
 
 ## 1. The app
 
-Copy these files from `apps/notes`:
+Copy `scripts/app.ts` and `src/routes/` from `apps/notes`:
 
 - `scripts/app.ts`: the app's `StartApp` (`name`, `root`, `envs`) plus the CLI line. `name` is
   the directory, the Doppler project and the local Worker name.
-- `vite.config.ts`: the Cloudflare Vite plugin with
-  `config: startAppWorkerConfig(<app>, process.env.CLOUDFLARE_ENV)`. There is no wrangler file
-  (#2904).
-- `package.json` scripts: `dev`, `build`, `typecheck` (which runs `routes:check`), `deploy`,
-  `ensure-resources`, `routes:generate` and `routes:check`. All of them run `tsx scripts/app.ts …`
-  or `vite`.
-- `src/server.ts`: `/healthz` (the deploy smoke hits it), the `/e/` PostHog proxy, `appAuth`
-  with the app's `client` name and logo, and `export { BrowserSession }`.
-- `src/router.tsx`, `src/routes/__root.tsx`, and `src/routes/_auth.tsx`, which is `ssr: false`
-  with `createIterateClient({ scopes })` in `beforeLoad`.
-- `public/client-logo.svg`, the logo the consent page shows, and `tsconfig.json`, which extends
-  `tsconfig.app.json`.
+- `src/routes/`: `__root.tsx` (`AppDocument`), the landing page `index.tsx`, and `_auth.tsx`, which
+  is `ssr: false` with `createIterateClient({ scopes })` in `beforeLoad`. Keep Notes' `basePath`
+  only if a project proxies the app under paths ingress, as one does Notes (`src/base-path.ts`).
+
+The rest is the shared shell called with the app's own values: `vite.config.ts` is
+`startAppVitePlugins` (`scripts/lib/start-app-vite.ts`; there is no wrangler file, #2904),
+`src/server.ts` is `appServerEntry` (`@iterate-com/ui/apps/server`: `/healthz`, which the deploy
+smoke hits, the PostHog proxy and the sign-in gate under the app's `clientName`) and
+`export { BrowserSession }`, and `src/router.tsx` is `createAppRouter`. Add the `package.json`
+scripts (`dev`, `build`, `typecheck`, which runs `routes:check`, `deploy`, `ensure-resources`,
+`routes:generate` and `routes:check`), `public/client-logo.svg`, the logo the consent page shows,
+and a `tsconfig.json` that extends `tsconfig.app.json`.
 
 Then run `pnpm install` and `pnpm --dir apps/<app> routes:generate`.
 

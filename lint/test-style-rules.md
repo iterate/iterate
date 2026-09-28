@@ -71,14 +71,16 @@ code against a module that does not exist. Pass the dependency in instead: a
 argument (`apps/os/src/context/rpc-stub-relay.test.ts` injects its `waitUntil`).
 `vi.fn()`, `vi.spyOn(...)` and `vi.stubGlobal(...)` are not module mocks.
 
-For `cloudflare:workers`: the os unit project and packages/iterate alias it to
+For `cloudflare:workers`: the os unit project, packages/iterate and packages/ui
+alias it to
 [`cloudflare-workers-shim.ts`](../packages/shared/src/test-support/cloudflare-workers-shim.ts),
 and the os unit project aliases Start's generated server entry to a stand-in page
 ([`src/test/start-server-entry-shim.ts`](../apps/os/src/test/start-server-entry-shim.ts)).
 A module whose only platform dependency is a base class (`RpcTarget`,
 `WorkerEntrypoint`, `DurableObject`) loads in node with no `vi.mock` in the
-test file. Behaviour that needs the real runtime belongs in
-the Workers suite (`apps/os/__workers-tests__/`).
+test file. The shim's `env` starts empty; a test may fill it with the bindings
+the module reads (`packages/ui/src/apps/server.test.ts`). Behaviour that needs
+the real runtime belongs in the Workers suite (`apps/os/__workers-tests__/`).
 
 ## Exact equality
 

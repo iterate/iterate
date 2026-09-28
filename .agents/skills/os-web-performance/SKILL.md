@@ -29,8 +29,9 @@ fingerprinted `/assets/*`.
   `createIterateClient`. The HTML is the pending shell, and every page's data comes over the
   app origin's `/api` capnweb WebSocket (`useLiveState` and friends in `iterate/react`).
   Most time-to-content is therefore JS graph, then auth, then socket, then the first read.
-- **Assets.** Each app serves assets from `env.ASSETS` in `src/server.ts`. Check the headers
-  a real deployment sends before you assume they are cached (see the playbook).
+- **Assets.** Each app serves assets from `env.ASSETS` in its Worker entry (`appServerEntry`,
+  `packages/ui/src/apps/server.ts`). Check the headers a real deployment sends before you assume
+  they are cached (see the playbook).
 
 ## Workflow
 

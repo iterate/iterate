@@ -1,7 +1,7 @@
-import { createRootRouteWithContext, Outlet, Scripts, useHydrated } from "@tanstack/react-router";
+import { createRootRouteWithContext } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
-import { AppProviders } from "@iterate-com/ui/apps/providers";
-import { EnvironmentHeadContent } from "@iterate-com/ui/components/environment-head-content";
+import { AppDocument } from "@iterate-com/ui/apps/document";
+import { appHead } from "@iterate-com/ui/apps/head";
 import { startAppConfigOf } from "@iterate-com/shared/start-app-config";
 import { underBasePath } from "../base-path.ts";
 import css from "../styles.css?url";
@@ -15,35 +15,18 @@ const posthogProjectKey = createServerFn().handler(async () => {
 export const Route = createRootRouteWithContext<{ basePath: string }>()({
   loader: () => posthogProjectKey(),
   staleTime: Infinity,
-  head: ({ match }) => ({
-    meta: [
-      { charSet: "utf-8" },
-      { name: "viewport", content: "width=device-width, initial-scale=1" },
-      { title: "Notes" },
-    ],
-    links: [{ rel: "stylesheet", href: underBasePath(match.context.basePath, css) }],
-  }),
+  head: ({ match }) =>
+    appHead({ title: "Notes", stylesheet: underBasePath(match.context.basePath, css) }),
   component: Root,
 });
 
 function Root() {
-  const apiKey = Route.useLoaderData();
   const { basePath } = Route.useRouteContext();
-  // false in the server's HTML, true once React owns the page: the specs' hydration-waiter
-  // (specs/AGENTS.md) holds actions until then
-  const hydrated = useHydrated();
   return (
-    // the browser's router reads the base path here before it starts (base-path.ts)
-    <html lang="en" data-base-path={basePath || undefined}>
-      <head>
-        <EnvironmentHeadContent productionIcon={`${basePath}/client-logo.svg`} />
-      </head>
-      <body className="min-h-svh bg-background font-sans antialiased" data-hydrated={hydrated}>
-        <AppProviders posthogApiKey={apiKey || undefined}>
-          <Outlet />
-        </AppProviders>
-        <Scripts />
-      </body>
-    </html>
+    <AppDocument
+      icon="/client-logo.svg"
+      basePath={basePath}
+      posthogProjectKey={Route.useLoaderData()}
+    />
   );
 }
