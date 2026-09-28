@@ -6,8 +6,8 @@
 # first seconds (main-os-e2e.yml); the run then deletes the workflow's deployments before it.
 #
 # Every other run (PR previews, Main OS e2e, the soak) runs those turns against a fake provider and
-# spends nothing: one AI Gateway spend cap covers the preview account, and on 2026-09-24 a day of soaks
-# spent it and turned every PR's preview e2e red (docs/testing.md#real-model-rows). A run here costs
+# spends nothing: one AI Gateway spend cap covers the preview account, and a day of soaks against real
+# models would spend it and turn every PR's e2e red (docs/testing.md#real-model-rows). A run here costs
 # about $0.06.
 #
 # The health job judges each scheduled or push run from its telemetry

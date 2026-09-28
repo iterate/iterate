@@ -8,16 +8,11 @@
 # deployment again before their suites, so each measures the other's deploys. Delete a name's
 # deployments when done:
 # `pnpm --dir apps/os preview delete --name <preview>`; the nightly sweep takes them after a day.
-# THE FIRST MINUTES OF A DEPLOYMENT: --input fresh-previews=true deploys a brand-new deployment for
-# every run instead, runs e2e against it at once and deletes it (e2e-soak.ts --fresh-previews) — the
-# shape of every PR's and main's run. Dispatch several at once for more deployments per hour.
-# AN IN-PLACE REDEPLOY: --input redeploy=true deploys the ref's deployment of `preview` again, in
-# place, before every run and runs e2e against it at once, never deleting it (e2e-soak.ts
-# --redeploy) — main on dev's shape. Deploy it once and let it age first: one created minutes ago is
-# still brand-new.
-# DISPATCH ON A REF NOTHING WILL PUSH TO: a push to the dispatched branch cancels the running soak
-# (2026-09-24: two 25-run soaks of a PR branch died at run 2 when the PR was rebased) — push the
-# commit to a branch of its own (`git push origin <sha>:refs/heads/soak/<name>`) and dispatch that.
+# --input fresh-previews=true and --input redeploy=true are e2e-soak.ts's --fresh-previews and
+# --redeploy modes; dispatch several fresh-previews soaks at once for more deployments per hour.
+# DISPATCH ON A REF NOTHING WILL PUSH TO: a push to the dispatched branch cancels the running soak —
+# push the commit to a branch of its own (`git push origin <sha>:refs/heads/soak/<name>`) and
+# dispatch that.
 # Runs from CI on purpose: from a laptop the OAuth-cookie rows answer 401 (an unexplained laptop-side
 # difference), and CI is the environment whose flakes matter. It never pays for a model: the
 # real-model rows run only in os-real-model.yml (docs/testing.md#real-model-rows).
@@ -78,9 +73,7 @@ jobs:
       - name: Setup
         uses: ./.depot/actions/setup
       # THE WORKER IS THIS REF'S: the name's deployment of this checkout is deployed before the suite
-      # runs, so the tests and the worker never skew (2026-09-22: a soak of main's tests against a
-      # `soak` worker three merges older failed one row in every run of a hundred). An explicit
-      # worker-base-url is soaked as given.
+      # runs, so the tests and the worker never skew. An explicit worker-base-url is soaked as given.
       - name: Deploy the soak preview from this ref
         if: inputs.worker-base-url == '' && inputs.fresh-previews != 'true' && inputs.redeploy != 'true'
         working-directory: apps/os

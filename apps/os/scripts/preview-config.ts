@@ -30,7 +30,7 @@ export const MAX_PREVIEW_PREFIX_LENGTH = 28;
 export const APPS: StartApp[] = [dash, agents, notes, voice, kit, admin];
 
 /** THE FORMER PARENTS: `os-preview` and the apps' `<app>-preview` workers, which no deploy names
- *  since main on dev became `os` and `<app>`. The sweep deletes the Worker Previews still hanging
+ *  (main on dev is `os` and `<app>`). The sweep deletes the Worker Previews still hanging
  *  from them, as it does main on dev's (scripts/preview.ts `deleteLegacyWorkerPreviews`), then each
  *  worker with everything under its name (preview-sweep.ts `planFormerParents`): each holds a
  *  Durable Object namespace per class of the account's 500. */
@@ -93,7 +93,7 @@ export function previewDeploymentUrls(name: string) {
     os: deployment.os.baseUrl,
     apps: Object.fromEntries(
       Object.entries(deployment.apps).map(([app, env]) => [app, env.baseUrl]),
-    ) as Record<string, string>,
+    ),
   };
 }
 
@@ -148,8 +148,8 @@ export function splicePullRequestBody(body: string, section: string) {
 
 // ── a previous commit's section ────────────────────────────────────────────────────────────────
 
-/** The heading of a section this module wrote: `### Preview \`<deployment>\``, or, before per-commit
- *  deployments, `### OS preview: \`<preview>\``. */
+/** The heading of a section this module writes, `### Preview \`<deployment>\``, or the
+ *  `### OS preview: \`<preview>\`` an older section in a PR body still has. */
 const SECTION_HEADING = /^### (?:OS preview: |Preview )`([^`]+)`\n*/;
 
 /** A deploy starts by folding the section it will replace into a `<details>`, so the links read as
@@ -314,12 +314,11 @@ export function renderPullRequestSection(input: {
 
 /** A deploy bundles whatever node_modules holds, so an install older than pnpm-lock.yaml would ship
  *  stale dependencies. pnpm keeps the lockfile it installed from as node_modules/.pnpm/lock.yaml:
- *  the same bytes prove the install current, whatever the mtimes say. They say the wrong thing in
- *  CI: checking out the PR head, then the PR merged into main, rewrites pnpm-lock.yaml with
- *  main's content and a new mtime, and scripts/depot-ci/dependencies.mjs rightly reuses the
- *  image's node_modules baked from that same lockfile (2026-09-24, four Preview OS deploys failed
- *  on identical content). Only when the content differs does the laptop rule decide: a lockfile
- *  newer than node_modules/.modules.yaml means `pnpm install` has not run since it changed. */
+ *  the same bytes prove the install current, whatever the mtimes say. They say the wrong thing
+ *  when a checkout after the install rewrites pnpm-lock.yaml with the same content, as checking out
+ *  a PR's head and then the PR merged into main does. Only when the content differs does the laptop
+ *  rule decide: a lockfile newer than node_modules/.modules.yaml means `pnpm install` has not run
+ *  since it changed. */
 export function assertFreshInstall(root: string) {
   const lockfile = readFileSync(path.join(root, "pnpm-lock.yaml"));
   const installedLockfile = readOptional(path.join(root, "node_modules", ".pnpm", "lock.yaml"));

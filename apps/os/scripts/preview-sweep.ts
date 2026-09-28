@@ -206,8 +206,7 @@ export function planPreviewSweep(input: PreviewSweepInput): PreviewSweepVerdict[
     const keep = (reason: string): PreviewSweepVerdict => ({ deployment, verdict: "keep", reason });
     if (hours > 7 * 24) return stale(`${created}, more than 7 days`); // rule 1
     const number = previewPullRequestNumber(prefix);
-    const state =
-      number === undefined ? undefined : input.pullRequestStates.get(number) || "unknown";
+    const state = number ? input.pullRequestStates.get(number) || "unknown" : undefined;
     if (state === "closed" || state === "missing") return stale(`PR #${number} is ${state}`); // rule 2
     const newest = newestOfPrefix.get(prefix) === name;
     if (!newest && !(hours <= 1)) return stale(`not ${prefix}'s newest deployment, ${created}`); // rule 3

@@ -1029,8 +1029,8 @@ async function pullRequestState(number: number): Promise<PullRequestState> {
   }
 }
 
-/** Every open pull request's head branch — what keeps a preview named after a branch (preview-sweep.ts
- *  rule 3) — or undefined when GitHub cannot say, and rule 3 then deletes nothing. */
+/** Every open pull request's head branch — what keeps a deployment whose prefix names a branch
+ *  (preview-sweep.ts rule 4) — or undefined when GitHub cannot say, and rule 4 then deletes nothing. */
 async function openPullRequestBranches() {
   try {
     const github = getOctokit();
@@ -1041,7 +1041,7 @@ async function openPullRequestBranches() {
     });
     return pulls.map((pull) => pull.head.ref);
   } catch (error) {
-    console.warn(`${describe(error)}; previews without a PR number are judged on age alone.`);
+    console.warn(`${describe(error)}; deployments without a PR number are judged on age alone.`);
     return undefined;
   }
 }
@@ -1259,11 +1259,11 @@ export default class Preview {
   async deploy(options: PreviewOptions = {}) {
     await main("deploy", options);
   }
-  /** the vitest e2e suite against a deployment (PREVIEW_DEPLOYMENT, else the prefix's newest) */
+  /** the vitest e2e suite against a deployment (see `main`: which one it tests) */
   async e2e(options: PreviewOptions = {}) {
     await main("e2e", options);
   }
-  /** the Playwright specs against a deployment (PREVIEW_DEPLOYMENT, else the prefix's newest) */
+  /** the Playwright specs against a deployment (see `main`: which one it tests) */
   async specs(options: PreviewOptions = {}) {
     await main("specs", options);
   }
