@@ -138,7 +138,7 @@ test("worker: a userspace Tesco login in the secret's own exchange code logs in 
 
   expect(await bearerCall(itx, "/secrets/tesco", "/api/me")).toMatchObject({
     status: 200,
-    // `tesco-login`, the Tesco login's one client; `tesco-login:<email>` until the shop deploys it
+    // the Tesco client of whichever shop is deployed: `tesco-login`, or `tesco-login:<email>`
     body: { sub: email, clientId: expect.stringMatching(/^tesco-login(:|$)/) },
   });
   await petshopExpireTescoTokens(email);

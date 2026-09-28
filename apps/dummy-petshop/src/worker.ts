@@ -144,7 +144,7 @@ async function handlePetshopRequest(request: Request, deps: PetshopDeps): Promis
   if (key === "GET /")
     return new Response(INDEX, { headers: { "content-type": "text/plain; charset=utf-8" } });
   if (url.pathname.startsWith("/__test-controls/")) return handleTestControls(request, deps);
-  // iterate-lint-disable terminology/no-metaphorical-lane-door-seam -- the deployed route the OS e2e helpers call until they move to /__test-controls
+  // iterate-lint-disable terminology/no-metaphorical-lane-door-seam -- the path the OS e2e helpers (apps/os/e2e/support/petshop.ts) call
   if (url.pathname.startsWith("/__backdoor/"))
     return handleTestControls(
       new Request(url.href.replace("/__backdoor/", "/__test-controls/"), request),
