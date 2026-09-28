@@ -3,7 +3,7 @@
 // (github.com/Domain-Connect/Templates `iterate.com.custom-hostname.json`), writes the three CNAMEs
 // custom-hostnames.ts `customHostnameRecords` names under a host the owner picked. A DNS provider
 // that has onboarded it shows the owner those records and writes them on one click, then sends the
-// browser back. Four steps, each its own function:
+// browser back. Four steps:
 //   discovery    `_domainconnect.<zone>` TXT names the provider's API host (over DNS-over-HTTPS),
 //                trying the zones above the hostname, most specific first
 //   settings     `https://<that>/v2/<zone>/settings`: the provider's name and its apply UX
@@ -12,14 +12,41 @@
 //   the link     the apply URL, SIGNED: RS256 over its query string, which the provider verifies
 //                against the public key published at `_dck1.iterate.com` (the private key is
 //                APP_CONFIG `domainConnect.privateKey`)
-// A provider without Domain Connect, or without our template, answers no link: the owner adds the
-// records by hand.
+// A zone whose provider does not answer for it, or has not onboarded our template, answers no link
+// and the next zone up is tried; with none, the owner adds the records by hand. Every request is
+// bounded (REQUEST_TIMEOUT_MS) and follows no redirect, every answer is parsed, and every URL a DNS
+// record or a provider hands us must be https: what DNS says is data, never trusted as a target.
+// A failure (a DNS error, a provider's 5xx, a timeout) throws — the caller logs it and settles
+// without a link.
+
+import { z } from "zod";
 
 /** Our template and the TXT record holding its signing key, as published. */
 const TEMPLATE = { providerId: "iterate.com", serviceId: "custom-hostname", key: "_dck1" };
 
+/** One provider request's budget: discovery runs inside a hostname's add, which it must never hold. */
+const REQUEST_TIMEOUT_MS = 5_000;
+
 /** What the dash offers: the provider's name and the signed link that applies the records there. */
 export type DomainConnectLink = { provider: string; url: string };
+
+/** An https URL, nothing else: a scheme a DNS record picked is never fetched or linked. */
+const HttpsUrl = z.url({ protocol: /^https$/ });
+
+/** A DNS-over-HTTPS answer (RFC 8484's JSON form): the status, and TXT records as presentation
+ *  strings. */
+const DohTxtAnswer = z.object({
+  Status: z.number(),
+  Answer: z.array(z.object({ type: z.number(), data: z.string() })).optional(),
+});
+
+/** A provider's settings for a zone (Domain Connect spec, "Discover Domain Connect"). */
+const ProviderSettings = z.object({
+  providerName: z.string().min(1),
+  providerDisplayName: z.string().min(1).optional(),
+  urlSyncUX: HttpsUrl,
+  urlAPI: HttpsUrl,
+});
 
 /** The zones `hostname` may live in and the host under each, most specific first:
  *  `iterate.shop.example.com` ⇒ `shop.example.com` host `iterate`, then `example.com` host
@@ -33,9 +60,18 @@ export function domainConnectZonesOf(hostname: string): { domain: string; host: 
   }));
 }
 
+/** A TXT record's text from its presentation form — one or more quoted strings, concatenated
+ *  without the whitespace between them, backslash escapes undone. Pure. */
+export function txtRecordText(data: string): string {
+  const strings = [...data.matchAll(/"((?:[^"\\]|\\.)*)"/g)].map((match) => match[1]!);
+  return (strings.length ? strings.join("") : data).replace(/\\(\d{3}|.)/g, (_, escaped: string) =>
+    escaped.length === 3 ? String.fromCharCode(Number(escaped)) : escaped,
+  );
+}
+
 /** The apply URL for our template on `domain` under `host`, returning the browser to
- *  `redirectUri`, signed with `privateKey` (PKCS#8, base64 DER): the signature covers the query
- *  string exactly as sent, before `sig` and `key` are appended. */
+ *  `redirectUri`, signed with `privateKey` (PKCS#8, base64 DER). The signature covers the query
+ *  string exactly as sent, without `key` and `sig`; `sig` comes LAST (Cloudflare requires it). */
 export async function signedApplyUrl(input: {
   urlSyncUX: string;
   domain: string;
@@ -60,40 +96,56 @@ export async function signedApplyUrl(input: {
   );
   const sig = btoa(String.fromCharCode(...signature));
   const base = input.urlSyncUX.replace(/\/$/, "");
-  return `${base}/v2/domainTemplates/providers/${TEMPLATE.providerId}/services/${TEMPLATE.serviceId}/apply?${query}&${new URLSearchParams({ sig, key: TEMPLATE.key })}`;
+  return `${base}/v2/domainTemplates/providers/${TEMPLATE.providerId}/services/${TEMPLATE.serviceId}/apply?${query}&${new URLSearchParams({ key: TEMPLATE.key, sig })}`;
 }
 
-/** The link that applies our template for `hostname`, or null when its DNS provider has no
- *  Domain Connect or has not onboarded our template. `fetcher` reaches DNS-over-HTTPS and the
- *  provider (a test hands a fake). */
+/** The link that applies our template for `hostname`, or null when no zone above it has a DNS
+ *  provider that answers for it with our template onboarded. Throws on a DNS error, a provider's
+ *  5xx or a timeout. `fetcher` reaches DNS-over-HTTPS and the provider (a test hands a fake). */
 export async function domainConnectLinkOf(
   hostname: string,
   options: { redirectUri: string; privateKey: string; fetcher?: typeof fetch },
 ): Promise<DomainConnectLink | null> {
   const fetcher = options.fetcher || ((input, init) => fetch(input, init));
+  const request = async (url: string, headers?: Record<string, string>) => {
+    const response = await fetcher(url, {
+      headers,
+      redirect: "error",
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    });
+    if (response.status >= 500) throw new Error(`${new URL(url).host} answered ${response.status}`);
+    return response;
+  };
   for (const { domain, host } of domainConnectZonesOf(hostname)) {
-    const dns = await fetcher(
-      `https://cloudflare-dns.com/dns-query?name=${encodeURIComponent(`_domainconnect.${domain}`)}&type=TXT`,
-      { headers: { accept: "application/dns-json" } },
+    const dns = DohTxtAnswer.parse(
+      await (
+        await request(
+          `https://cloudflare-dns.com/dns-query?name=${encodeURIComponent(`_domainconnect.${domain}`)}&type=TXT`,
+          { accept: "application/dns-json" },
+        )
+      ).json(),
     );
-    const answer = ((await dns.json()) as { Answer?: { type: number; data: string }[] }).Answer;
-    const apiHost = answer?.find((record) => record.type === 16)?.data.replaceAll('"', "");
-    if (!apiHost) continue;
-    const settings = await fetcher(`https://${apiHost}/v2/${domain}/settings`);
-    if (!settings.ok) return null;
-    const { providerName, providerDisplayName, urlSyncUX, urlAPI } = (await settings.json()) as {
-      providerName?: string;
-      providerDisplayName?: string;
-      urlSyncUX?: string;
-      urlAPI?: string;
-    };
-    if (!urlSyncUX || !urlAPI) return null;
-    const template = await fetcher(
+    // NOERROR or NXDOMAIN answer the question; anything else (SERVFAIL, REFUSED) is a failure
+    if (dns.Status !== 0 && dns.Status !== 3)
+      throw new Error(`DNS status ${dns.Status} for _domainconnect.${domain}`);
+    const txt = dns.Answer?.find((record) => record.type === 16);
+    if (!txt) continue;
+    const settingsUrl = HttpsUrl.safeParse(
+      `https://${txtRecordText(txt.data).trim()}/v2/${domain}/settings`,
+    );
+    if (!settingsUrl.success) continue;
+    // a provider that does not answer for this zone (a wildcard's TXT, a stale record): try the next
+    const settings = await request(settingsUrl.data);
+    if (!settings.ok) continue;
+    const parsed = ProviderSettings.safeParse(await settings.json());
+    if (!parsed.success) continue;
+    const { providerName, providerDisplayName, urlSyncUX, urlAPI } = parsed.data;
+    const template = await request(
       `${urlAPI.replace(/\/$/, "")}/v2/domainTemplates/providers/${TEMPLATE.providerId}/services/${TEMPLATE.serviceId}`,
     );
-    if (!template.ok) return null;
+    if (!template.ok) continue;
     return {
-      provider: providerDisplayName || providerName || apiHost,
+      provider: providerDisplayName || providerName,
       url: await signedApplyUrl({
         urlSyncUX,
         domain,

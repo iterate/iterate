@@ -2,7 +2,12 @@
 // hostname may live in (a table), the apply link signed so a provider verifying it against our
 // public key accepts it, and discovery → settings → template → link, with each way to answer none.
 import { expect, test } from "vitest";
-import { domainConnectLinkOf, domainConnectZonesOf, signedApplyUrl } from "./domain-connect.ts";
+import {
+  domainConnectLinkOf,
+  domainConnectZonesOf,
+  signedApplyUrl,
+  txtRecordText,
+} from "./domain-connect.ts";
 
 test.for([
   {
@@ -50,8 +55,14 @@ test("the apply link names our template, carries domain, host and redirect_uri, 
       "https://dash.iterate.com/projects/prj_1/hostnames?connected=iterate.templestein.com",
     key: "_dck1",
   });
-  // what the provider does: the query string up to `&sig=`, verified against the public key
-  const signed = url.search.slice(1, url.search.indexOf("&sig="));
+  // Cloudflare requires `sig` last
+  expect([...url.searchParams.keys()].at(-1)).toBe("sig");
+  // what the provider does: the query string without `key` and `sig`, verified against the public key
+  const signed = url.search
+    .slice(1)
+    .split("&")
+    .filter((pair) => !pair.startsWith("key=") && !pair.startsWith("sig="))
+    .join("&");
   const signature = Uint8Array.from(atob(url.searchParams.get("sig")!), (c) => c.charCodeAt(0));
   expect(
     await crypto.subtle.verify(
@@ -81,6 +92,47 @@ test("discovery walks up to the zone that publishes _domainconnect, reads its se
   ]);
 });
 
+test.for([
+  { name: "one string", data: '"api.cloudflare.com/client/v4/dns/domainconnect"' },
+  { name: "split strings", data: '"api.cloudflare.com/client" "/v4/dns/domainconnect"' },
+  { name: "unquoted", data: "api.cloudflare.com/client/v4/dns/domainconnect" },
+])("a TXT record's text: $name", ({ data }) => {
+  expect(txtRecordText(data)).toBe("api.cloudflare.com/client/v4/dns/domainconnect");
+});
+
+test("a zone whose provider does not answer for it is passed over for the next one up", async () => {
+  const { privateKey } = await keyPair();
+  const link = await domainConnectLinkOf("iterate.shop.example.com", {
+    redirectUri: "https://dash.iterate.com/back",
+    privateKey,
+    fetcher: provider([], { zone: "example.com", template: 200, decoy: "shop.example.com" }),
+  });
+  expect(new URL(link!.url).searchParams.get("domain")).toBe("example.com");
+});
+
+test("a DNS error or a provider's 5xx throws (the caller logs it); an http URL from a provider is never followed", async () => {
+  const { privateKey } = await keyPair();
+  const options = { redirectUri: "https://dash.iterate.com/back", privateKey };
+  await expect(
+    domainConnectLinkOf("iterate.example.com", {
+      ...options,
+      fetcher: (async () => Response.json({ Status: 2 })) as unknown as typeof fetch,
+    }),
+  ).rejects.toThrow(/DNS status 2/);
+  await expect(
+    domainConnectLinkOf("iterate.example.com", {
+      ...options,
+      fetcher: provider([], { zone: "example.com", template: 503 }),
+    }),
+  ).rejects.toThrow(/answered 503/);
+  expect(
+    await domainConnectLinkOf("iterate.example.com", {
+      ...options,
+      fetcher: provider([], { zone: "example.com", template: 200, syncUX: "http://ux.dc.test" }),
+    }),
+  ).toBeNull();
+});
+
 test("no link when no zone above the hostname speaks Domain Connect, or its provider has not onboarded our template", async () => {
   const { privateKey } = await keyPair();
   const options = { redirectUri: "https://dash.iterate.com/back", privateKey };
@@ -99,26 +151,36 @@ test("no link when no zone above the hostname speaks Domain Connect, or its prov
 });
 
 /** A DNS-over-HTTPS resolver and a Domain Connect provider, faked: `zone` publishes
- *  `_domainconnect` (null: none does), and the template check answers `template`. */
-function provider(asked: string[], { zone, template }: { zone: string | null; template: number }) {
+ *  `_domainconnect` (null: none does), and so does `decoy`, whose provider answers 404 for it; the
+ *  template check answers `template`; the settings name `syncUX` as the apply UX. */
+function provider(
+  asked: string[],
+  options: { zone: string | null; template: number; decoy?: string; syncUX?: string },
+) {
   return (async (input: string) => {
     const url = new URL(input);
     if (url.hostname === "cloudflare-dns.com") {
       const name = url.searchParams.get("name")!;
       asked.push(`dns ${name}`);
-      return Response.json(
-        name === `_domainconnect.${zone}` ? { Answer: [{ type: 16, data: '"api.dc.test"' }] } : {},
+      const published = [options.zone, options.decoy].some(
+        (zone) => name === `_domainconnect.${zone}`,
       );
+      return Response.json({
+        Status: published ? 0 : 3,
+        ...(published && { Answer: [{ type: 16, data: '"api.dc." "test"' }] }),
+      });
     }
     asked.push(input);
     if (url.pathname.endsWith("/settings"))
-      return Response.json({
-        providerName: "cloudflare",
-        providerDisplayName: "Cloudflare",
-        urlSyncUX: "https://ux.dc.test",
-        urlAPI: "https://api.dc.test",
-      });
-    return new Response(null, { status: template });
+      return url.pathname === `/v2/${options.decoy}/settings`
+        ? new Response(null, { status: 404 })
+        : Response.json({
+            providerName: "cloudflare",
+            providerDisplayName: "Cloudflare",
+            urlSyncUX: options.syncUX || "https://ux.dc.test",
+            urlAPI: "https://api.dc.test",
+          });
+    return new Response(null, { status: options.template });
   }) as typeof fetch;
 }
 

@@ -88,22 +88,23 @@ function ProjectHostnames() {
       payload: { hostname },
     });
   // back from the DNS provider: check the hostname it wrote the records for, once — only one the
-  // project already has, so a crafted link can do no more than check it again
-  const checkedConnected = useRef<string | null>(null);
+  // project already has, so a crafted link can do no more than check it again. The query is cleared
+  // once the check is asked; a failed ask can be retried (the guard is only held while in flight).
+  const checkingConnected = useRef<string | null>(null);
   const connectedIsOurs = Boolean(search.connected && read?.data?.hostnames[search.connected]);
   useEffect(() => {
-    if (!context || !search.connected || checkedConnected.current === search.connected) return;
-    if (!connectedIsOurs) return;
-    checkedConnected.current = search.connected;
+    const hostname = search.connected;
+    if (!context || !hostname || !connectedIsOurs || checkingConnected.current === hostname) return;
+    checkingConnected.current = hostname;
     context
-      .append({
-        type: "events.iterate.com/project/hostname-add-requested",
-        payload: { hostname: search.connected },
-      })
-      .catch((caught: unknown) =>
-        setError(caught instanceof Error ? caught.message : String(caught)),
+      .append({ type: "events.iterate.com/project/hostname-add-requested", payload: { hostname } })
+      .then(
+        () => navigate({ search: {}, replace: true }),
+        (caught: unknown) => {
+          checkingConnected.current = null;
+          setError(caught instanceof Error ? caught.message : String(caught));
+        },
       );
-    void navigate({ search: {}, replace: true });
   }, [context, search.connected, connectedIsOurs, navigate]);
   const add = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
