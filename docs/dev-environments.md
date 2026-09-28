@@ -535,8 +535,7 @@ The `pnpm preview` commands CI runs (`deploy`, `e2e`, `specs`, `delete`,
 [apps/os/README.md](../apps/os/README.md). Given the PR's number, `deploy`
 deploys your checkout's commit as `pr<n>-<sha7>`: the same deployment CI makes
 when your checkout is the commit CI tests, a deployment of its own otherwise.
-`e2e` and `specs` test the PR's newest deployment unless PREVIEW_DEPLOYMENT
-names one.
+`e2e` and `specs` test the PR's newest deployment.
 
 For a focused flake hunt, reuse the exact deployment and run one test file or
 one test repeatedly without redeploying (from `apps/os`):

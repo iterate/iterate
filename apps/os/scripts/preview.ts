@@ -9,8 +9,7 @@
 //                       seed, the PR body's section (the previous one folded first)
 //   e2e, specs          the vitest e2e suite (`--slow-rows`, scripts/slow-rows.ts) or the Playwright
 //                       specs against a deployment: beside its run's deploy, this commit's, once that
-//                       deploy is done (PREVIEW_AWAIT_DEPLOY_JOB); else PREVIEW_DEPLOYMENT, else the
-//                       prefix's newest
+//                       deploy is done (PREVIEW_AWAIT_DEPLOY_JOB); else the prefix's newest
 //   cleanup-superseded  delete the prefix's deployments PREVIEW_DEPLOYMENT supersedes
 //   delete              every deployment of a prefix: a closed PR's (preview-delete.yml)
 //   sweep               the stale deployments, the legacy Worker Previews and the former parents
@@ -389,10 +388,9 @@ async function deletePrefix(cf: Cf, prefix: string, options: { dryRun: boolean }
   if (failures.length > 0) throw new Error(`delete failures:\n  ${failures.join("\n  ")}`);
 }
 
-/** The deployment a suite tests: the one the run just deployed (PREVIEW_DEPLOYMENT, the deploy
- *  job's output), else — a test-only dispatch, a laptop — the prefix's newest. */
+/** The deployment a suite tests away from its run's deploy (a test-only dispatch, a laptop): the
+ *  prefix's newest. */
 async function deploymentToTest(prefix: string) {
-  if (process.env.PREVIEW_DEPLOYMENT) return process.env.PREVIEW_DEPLOYMENT;
   const newest = newestPreviewDeployment(
     await listPreviewDeployments((await accountContext()).cf),
     prefix,
