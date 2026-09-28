@@ -3,24 +3,18 @@ import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import type { FormEvent } from "react";
 import { Button } from "@iterate-com/ui/components/button";
 import { Input } from "@iterate-com/ui/components/input";
+import { useDocList } from "../../lib/doc-list.ts";
 import { authorOf } from "../../lib/author.ts";
-import { DOCS_REPO, docPaths, newDocPath } from "../../lib/docs-repo.ts";
+import { DOCS_REPO, newDocHeading, newDocPath } from "../../lib/docs-repo.ts";
 
-/** Every doc in the project's docs repo, and a box to start one. The repo is made on first visit. */
+/** Every doc in the project's docs repo (the page's live list, which also makes the repo on a
+ *  project's first visit), and a box to start one; `folder/name` makes it in a folder. */
 export const Route = createFileRoute("/_auth/projects/$slug/")({
-  loader: async ({ context }) => {
-    // the project's root context, pipelined: the calls below ride it before it has resolved
-    using itx = context.api.projects.get(context.project.id);
-    await itx.repos.create(DOCS_REPO);
-    using repo = itx.repos.get(DOCS_REPO);
-    const { paths } = await repo.listFiles();
-    return { docs: docPaths(paths) };
-  },
-  component: DocList,
+  component: DocListPage,
 });
 
-function DocList() {
-  const { docs } = Route.useLoaderData();
+function DocListPage() {
+  const { list, docs } = useDocList();
   const { api, project, info } = Route.useRouteContext();
   const { slug } = Route.useParams();
   const navigate = useNavigate();
@@ -29,20 +23,25 @@ function DocList() {
       const path = newDocPath(title);
       if (!path) throw new Error("A title needs a letter or a digit in it.");
       using itx = await api.projects.get(project.id);
+      // made already when the list has loaded, but the box can be quicker
+      await itx.repos.create(DOCS_REPO);
       using repo = itx.repos.get(DOCS_REPO);
       // the repo as it is now, not as the page loaded it: someone may have made this doc since
       const { commitOid, paths } = await repo.listFiles();
       if (!paths.includes(path))
         await repo.commitFiles({
           message: `docs: new ${path}`,
-          changes: [{ path, content: `# ${title.trim()}\n` }],
+          changes: [{ path, content: `# ${newDocHeading(title)}\n` }],
           parent: commitOid,
           author: authorOf(info.principal),
         });
       return path;
     },
     // returned, so the button stays pending until the doc's page has loaded
-    onSuccess: (path) => navigate({ to: "/projects/$slug/$", params: { slug, _splat: path } }),
+    onSuccess: (path) => {
+      list.reload();
+      return navigate({ to: "/projects/$slug/$", params: { slug, _splat: path } });
+    },
   });
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -51,7 +50,14 @@ function DocList() {
   return (
     <main className="mx-auto flex w-full max-w-3xl flex-col gap-6 p-4 md:p-8">
       <form onSubmit={submit} className="flex gap-2">
-        <Input name="title" aria-label="New doc title" placeholder="New doc title" required />
+        <Input
+          name="title"
+          aria-label="New doc title"
+          placeholder="New doc title, or folder/title"
+          // "New doc" in the sidebar lands here to type a title
+          autoFocus
+          required
+        />
         <Button type="submit" disabled={create.isPending}>
           {create.isPending ? "Creating…" : "New doc"}
         </Button>
@@ -61,9 +67,15 @@ function DocList() {
           {create.error.message}
         </p>
       ) : null}
-      {docs.length > 0 ? (
+      {docs.kind === "loading" ? (
+        <p className="text-sm text-muted-foreground">Loading docs…</p>
+      ) : docs.kind === "failed" ? (
+        <p role="alert" className="text-sm text-destructive">
+          Couldn't list the docs: {docs.message}
+        </p>
+      ) : docs.paths.length > 0 ? (
         <ul aria-label="Docs" className="flex flex-col divide-y rounded-lg border">
-          {docs.map((path) => (
+          {docs.paths.map((path) => (
             <li key={path}>
               <Link
                 to="/projects/$slug/$"

@@ -19,6 +19,7 @@ export function ProjectAppShell({
   basePath = "",
   account,
   locationKey,
+  nav,
   children,
 }: {
   app: string;
@@ -29,6 +30,9 @@ export function ProjectAppShell({
   account: Principal;
   /** the router's current href — a change closes the phone's sidebar sheet */
   locationKey: string;
+  /** the app's own navigation in the sidebar, its `SidebarGroup`s (`AppShell`'s `nav`, which ⌘K
+   *  lists too) */
+  nav?: ReactNode;
   children: ReactNode;
 }) {
   return (
@@ -48,6 +52,7 @@ export function ProjectAppShell({
           </BreadcrumbList>
         </Breadcrumb>
       }
+      nav={nav}
       account={account}
       locationKey={locationKey}
     >

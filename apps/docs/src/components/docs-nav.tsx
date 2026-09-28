@@ -1,0 +1,109 @@
+// The sidebar's docs: "New doc", then every doc in /repos/docs as a tree, folders from their
+// paths' `/`s, the open doc highlighted and its folders open. ⌘K (the shell's palette) lists what
+// the sidebar shows, so it finds a doc by name: a folder is a <details>, whose closed rows stay in
+// the page for it to read, and a doc in a folder carries the folder, hidden, as its second text,
+// which the palette shows after its name.
+import { Link, useParams } from "@tanstack/react-router";
+import { ChevronRight, FileText, Folder, Plus } from "lucide-react";
+import {
+  SidebarGroup,
+  SidebarGroupContent,
+  SidebarGroupLabel,
+  SidebarMenu,
+  SidebarMenuButton,
+  SidebarMenuItem,
+  SidebarMenuSub,
+  SidebarMenuSubButton,
+  SidebarMenuSubItem,
+} from "@iterate-com/ui/components/sidebar";
+import { useDocList } from "../lib/doc-list.ts";
+import { docTree, type DocFolder } from "../lib/docs-repo.ts";
+
+export function DocsNav({ slug }: { slug: string }) {
+  const { docs } = useDocList();
+  // the open doc's path, when a doc is open (the doc route's splat)
+  const open = useParams({ strict: false })._splat;
+  return (
+    <SidebarGroup>
+      <SidebarGroupLabel>Docs</SidebarGroupLabel>
+      <SidebarGroupContent>
+        <SidebarMenu>
+          <SidebarMenuItem>
+            <SidebarMenuButton render={<Link to="/projects/$slug" params={{ slug }} />}>
+              <Plus />
+              <span>New doc</span>
+            </SidebarMenuButton>
+          </SidebarMenuItem>
+          {docs.kind === "loaded" ? (
+            <FolderRows folder={docTree(docs.paths)} slug={slug} open={open} top />
+          ) : (
+            <li
+              className={
+                docs.kind === "failed"
+                  ? "px-2 py-1 text-xs text-destructive"
+                  : "px-2 py-1 text-xs text-muted-foreground"
+              }
+            >
+              {docs.kind === "failed" ? `Couldn't list the docs: ${docs.message}` : "Loading docs…"}
+            </li>
+          )}
+        </SidebarMenu>
+      </SidebarGroupContent>
+    </SidebarGroup>
+  );
+}
+
+/** A folder's subfolders, then its docs: the sidebar's top-level rows (`top`), or a folder's
+ *  nested ones. */
+function FolderRows({
+  folder,
+  slug,
+  open,
+  top,
+}: {
+  folder: DocFolder;
+  slug: string;
+  open: string | undefined;
+  top: boolean;
+}) {
+  const Item = top ? SidebarMenuItem : SidebarMenuSubItem;
+  return (
+    <>
+      {folder.folders.map((sub) => (
+        <Item key={sub.path}>
+          {/* open when it holds the open doc; after that the reader's own clicks decide */}
+          <details className="group/folder" open={Boolean(open?.startsWith(`${sub.path}/`))}>
+            <summary className="flex h-8 cursor-pointer list-none items-center gap-2 rounded-md px-2 text-sm text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground group-data-[collapsible=icon]:hidden [&::-webkit-details-marker]:hidden [&>svg]:size-4 [&>svg]:shrink-0">
+              <ChevronRight className="transition-transform group-open/folder:rotate-90" />
+              <Folder />
+              <span className="truncate">{sub.name}</span>
+            </summary>
+            <SidebarMenuSub>
+              <FolderRows folder={sub} slug={slug} open={open} top={false} />
+            </SidebarMenuSub>
+          </details>
+        </Item>
+      ))}
+      {folder.docs.map((path) => {
+        const link = <Link to="/projects/$slug/$" params={{ slug, _splat: path }} />;
+        const name = path.split("/").at(-1)!.replace(/\.md$/, "");
+        return top ? (
+          <SidebarMenuItem key={path}>
+            <SidebarMenuButton render={link} isActive={path === open} tooltip={name}>
+              <FileText />
+              <span>{name}</span>
+            </SidebarMenuButton>
+          </SidebarMenuItem>
+        ) : (
+          <SidebarMenuSubItem key={path}>
+            <SidebarMenuSubButton render={link} isActive={path === open}>
+              <span>{name}</span>
+              {/* what ⌘K shows after the name */}
+              <span hidden>{folder.path}</span>
+            </SidebarMenuSubButton>
+          </SidebarMenuSubItem>
+        );
+      })}
+    </>
+  );
+}

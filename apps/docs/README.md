@@ -9,8 +9,10 @@ host's `/api`, both the platform's; Docs has no OAuth client, no secrets and no 
 The base path handling is Notes', shared in
 [packages/ui/src/apps/base-path.ts](../../packages/ui/src/apps/base-path.ts).
 
-- `/projects/<slug>` lists every `.md` in `/repos/docs` (creating the repo on first visit) and
-  starts new docs.
+- The sidebar shows every `.md` in `/repos/docs` as a tree (creating the repo on first visit), and
+  follows the repo's commits ([src/lib/doc-list.ts](src/lib/doc-list.ts)); ⌘K finds a doc by
+  name. `/projects/<slug>` lists them too and starts new ones (`folder/title` makes one in a
+  folder).
 - `/projects/<slug>/<path>` edits one: CodeMirror over the file's markdown with Atomic's live
   preview (`@atomic-editor/editor`), a formatting bar, Cmd/Ctrl-B, -I, -E, -K and -Shift-X, and a
   Rich / Markdown switch that turns the preview off. Frontmatter shows as page properties in Rich

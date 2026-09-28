@@ -99,15 +99,26 @@ Not the goal: Notion parity. The thing Notion can't do is agents working on the 
       losing either person's typing _(`specs/docs/docs.spec.ts`; the merge-without-loss cases are
       `packages/docs/src/processor.test.ts`)_
 
+## Sidebar (asked for 2026-09-29, after trying the preview)
+
+- [x] The docs as a tree in the sidebar: folders from paths, the open doc highlighted and its folders
+      open, "New doc" at the top _(`src/components/docs-nav.tsx`; folders are `<details>`)_
+- [x] It follows the repo: a doc someone or an agent adds shows up without a reload _(`src/lib/doc-list.ts`
+      subscribes to the root's `repo/commit-completed`)_
+- [x] "New doc" takes `folder/title` _(`newDocPath`, `newDocHeading` in `src/lib/docs-repo.ts`)_
+- [x] ⌘K finds a doc by name, one in a closed folder included _(the shell's palette reads the sidebar's
+      rows; `specs/docs/sidebar.spec.ts`)_
+- [x] Code blocks: syntax highlighting, and a readable fence language name _(`extensions.ts`)_
+
 ## Later
 
 - docs.iterate.com (Host rule in the iterate project's config worker)
 - Comments (design above; the prototype has a working version)
-- Tree: folders, rename (copies comments), delete
+- Tree: rename (copies comments), delete, move (drag), from the sidebar's rows
 - Images: paste/drop → `itx.files`
 - `/` menu over the formatting bar's commands
 - Notion import (only the pages we still use)
-- Search across docs (client-side is fine at our size)
+- Search inside docs, not just their names (client-side is fine at our size)
 - Autosquash: `main` only takes a commit whose parent is the tip, so folding autosaves needs
   something like `commitFiles({replaces: tipOid})`; or autosave less often, since the facet keeps
   the Y.Doc
@@ -200,6 +211,13 @@ set of CodeMirror extensions, so switching later is cheap.
   tests' fake itx answers `whoami` the same way. Checked the other platform assumptions against the
   installed packages that already work: the `itx.repos ⇒ itx.builtins.cd('/').repos` rule and the
   root's `repo/commit-completed` are github-sync's exact spellings.
+- The old app's sidebar (before #2837) was a workspace switcher, Docs/Tasks views and a
+  `@pierre/trees` file tree with git-status badges and a context menu. The workspace parts and the
+  badges have no counterpart here (no overlays, autosave), so the new sidebar is the tree alone.
+  ⌘K came free: the shell's palette lists the sidebar's rows, so a folder is a `<details>` (its
+  closed rows stay in the page) and a doc in a folder carries the folder as hidden text, the
+  palette's "detail". In the editor ⌘K stays the link shortcut; the sidebar's Search row opens the
+  palette from anywhere.
 - Package test "two people's edits land in one autosave commit" was order-flaky: two tabs inserting
   at the same spot at once get a random order in Yjs (by client id), which is correct. The test now
   has Jonas type after he sees Misha's line.
