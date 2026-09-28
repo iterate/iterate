@@ -57,7 +57,7 @@ export const facetSpecOf = ({ source, cacheKey, className }: FacetSpec): FacetSp
   className,
 });
 
-const isWorkerModules = (source: unknown): source is WorkerModules =>
+export const isWorkerModules = (source: unknown): source is WorkerModules =>
   // oxlint-disable-next-line iterate/simple-truthiness-check -- `source` is untrusted `unknown`; the null check is the standard non-null-object runtime guard and keeps this a boolean type predicate
   typeof source === "object" && source !== null && !Array.isArray(source);
 
@@ -96,7 +96,7 @@ const loaderIdGenerations = new Map<
  *  length: djb2 alone collides on two-character differences (`"Aa"` and `"B@"`), and one shared hash
  *  is one shared isolate. A guard against an accidental collision, not a crafted one (trusted clients). */
 const contentHashByWorkerModules = new WeakMap<WorkerModules, string>();
-function contentHashOfWorkerModules(modules: WorkerModules): string {
+export function contentHashOfWorkerModules(modules: WorkerModules): string {
   let hash = contentHashByWorkerModules.get(modules);
   if (!hash) {
     const serialized = JSON.stringify(modules);

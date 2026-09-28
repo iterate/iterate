@@ -81,7 +81,9 @@ import { admitLoadedCodeRow } from "./itx-expression-rewriting.ts";
 import { DurableObjectNameCodec, GLOBAL_PROJECT_ID, resourceScope } from "./paths.ts";
 import {
   assertFacetSourceWithinCeiling,
+  contentHashOfWorkerModules,
   facetSpecOf,
+  isWorkerModules,
   prepareConfinedWorker,
 } from "./worker-loader.ts";
 import type { BuiltInRoot } from "./itx-expression-rewriting.ts";
@@ -1936,7 +1938,14 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
         // only where first-party-facet-placement.ts places it — the facet host refuses it anyway;
         // refused here too, so a row that could never deliver is never appended.
         const firstPartyClassName = firstPartyFacetClassOf(name);
-        const loaded = spec as (FacetSpec & { consumes?: string[] }) | undefined;
+        const given = spec as (FacetSpec & { consumes?: string[] }) | undefined;
+        // A literal source with no cacheKey is keyed by its content, the key the loader gives it
+        // anyway (worker-loader.ts `prepareConfinedWorker`): so changed code is a changed spec that
+        // this enable configures, and the same code again is the same spec, which appends nothing.
+        const loaded =
+          given && given.cacheKey === undefined && isWorkerModules(given.source)
+            ? { ...given, cacheKey: contentHashOfWorkerModules(given.source) }
+            : given;
         if (firstPartyClassName) {
           if (loaded && ("source" in loaded || "className" in loaded))
             throw new Error(
