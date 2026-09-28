@@ -106,6 +106,75 @@ test("copies the pinned subdirectory into a fresh root commit and subscribes bef
   expect(fixture.order.at(-1)).toBe("events.iterate.com/project/created");
 });
 
+test("a template's pkg.pr.new branch is seeded at the commit pkg.pr.new serves, one HEAD per version; devDependencies and other manifests keep their bytes", async () => {
+  const commit = "d".repeat(40);
+  const agentsMain = "https://pkg.pr.new/iterate/iterate/@iterate-com/agents@main";
+  const head = vi.fn(
+    async () => new Response(null, { headers: { "x-commit-key": `iterate:iterate:${commit}` } }),
+  );
+  vi.stubGlobal("fetch", head);
+  const manifestOf = (value: unknown) => `${JSON.stringify(value, null, 2)}\n`;
+  const root = manifestOf({
+    main: "worker.ts",
+    dependencies: { "@iterate-com/agents": agentsMain, hono: "^4" },
+    devDependencies: { iterate: "https://pkg.pr.new/iterate/iterate/iterate@main" },
+  });
+  const agents = manifestOf({
+    main: "index.ts",
+    dependencies: { "@iterate-com/agents": agentsMain },
+  });
+  const fixture = project(undefined, async () => [
+    { path: "package.json", content: root },
+    { path: "worker.ts", content: worker },
+    { path: "agents/package.json", content: agents },
+    { path: "agents/index.ts", content: "export {};" },
+    { path: "fixtures/package.json", content: '{"name":"fixture"}' },
+  ]);
+  await create(fixture, reference);
+  const pinned = `https://pkg.pr.new/iterate/iterate/@iterate-com/agents@${commit}`;
+  expect(fixture.files()).toMatchObject({
+    "package.json": root.replace(agentsMain, pinned),
+    "agents/package.json": agents.replace(agentsMain, pinned),
+    "fixtures/package.json": '{"name":"fixture"}',
+  });
+  expect(head).toHaveBeenCalledExactlyOnceWith(
+    agentsMain,
+    expect.objectContaining({ method: "HEAD" }),
+  );
+  expect(fixture.order.at(-1)).toBe("events.iterate.com/project/created");
+});
+
+test("a template's pkg.pr.new branch that pkg.pr.new cannot pin fails the creation, and nothing is seeded", async () => {
+  const missing = "https://pkg.pr.new/iterate/iterate/@iterate-com/agents@no-such-branch";
+  // pkg.pr.new's 404 echoes the ref it was asked for
+  vi.stubGlobal(
+    "fetch",
+    async () =>
+      new Response(null, {
+        status: 404,
+        headers: { "x-commit-key": "iterate:iterate:no-such-branch" },
+      }),
+  );
+  const fixture = project(undefined, async () => [
+    {
+      path: "package.json",
+      content: JSON.stringify({
+        main: "worker.ts",
+        dependencies: { "@iterate-com/agents": missing },
+      }),
+    },
+    { path: "worker.ts", content: worker },
+  ]);
+  await create(fixture, reference);
+  expect(fixture.repo.commitFiles).not.toHaveBeenCalled();
+  expect(fixture.append).toHaveBeenCalledExactlyOnceWith({
+    type: "events.iterate.com/project/create-failed",
+    payload: {
+      error: `${missing} answered 404 without naming the commit it serves, so it cannot be pinned`,
+    },
+  });
+});
+
 test("a nonempty config repo keeps the project's edits even when a new template is requested", async () => {
   const fixture = project({ "worker.ts": "my edited worker" }, async () => [
     { path: "package.json", content: manifest },

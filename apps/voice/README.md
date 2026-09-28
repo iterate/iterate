@@ -24,8 +24,9 @@ Node), with the browser's microphone and speaker on either end and the relay's l
 A project without a voice agent gets **Install voice** in place of Call: an OpenAI key field if the
 project has no `/secrets/openai`, then `ensureVoiceAgent` (`@iterate-com/voice/install`, the
 installer Kit's Prepare runs too): the config repo gets `agents/` and `voice/` folders pinning the
-`@iterate-com/agents` and `@iterate-com/voice` builds of the commit this app was built from (main's
-when pkg.pr.new has none), and both are installed from them. It works against any platform the app
+`@iterate-com/agents` and `@iterate-com/voice` builds of the commit this app was built from (else
+the commit main's builds are at, which the app's Worker asks pkg.pr.new for), and both are
+installed from them. It works against any platform the app
 connects to, a self-hosted one included.
 
 ## Run

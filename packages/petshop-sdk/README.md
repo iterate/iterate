@@ -12,4 +12,5 @@ const { owner, pets } = await connectPetshop({ token }).listPets();
 ```
 
 pkg.pr.new publishes it on every main push and on a PR that changes it
-(`https://pkg.pr.new/iterate/iterate/@iterate-com/petshop-sdk@<sha|pr|main>`).
+(`https://pkg.pr.new/iterate/iterate/@iterate-com/petshop-sdk@<sha|pr|main>`). A project's
+package.json lists it at a full commit: the loader refuses a branch or PR ref.

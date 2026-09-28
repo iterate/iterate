@@ -19,8 +19,9 @@ import { SCREEN_FONT_CSS } from "./screen-font.ts";
 
 const VoiceHealth = z.object({ ok: z.literal(true) });
 
-/** The source a project installs voice from, by file: `version` is what package.json pins (a
- *  pkg.pr.new URL, or an npm range once the package is on npm). */
+/** The source a project installs voice from, by file: `version` is what package.json pins, a
+ *  pkg.pr.new URL at a commit (@iterate-com/agents/install `agentsFolder` says why) or an npm
+ *  version once the package is on npm. */
 export function voiceFolder(version: string): Record<string, string> {
   return {
     "package.json": `${JSON.stringify({ main: "worker.ts", dependencies: { "@iterate-com/voice": version } }, null, 2)}\n`,

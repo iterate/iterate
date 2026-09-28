@@ -1,6 +1,7 @@
 import type { ComponentProps } from "react";
 import { skipToken, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute, getRouteApi } from "@tanstack/react-router";
+import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 import { Button } from "@iterate-com/ui/components/button";
 import {
@@ -26,7 +27,7 @@ import {
   SelectValue,
 } from "@iterate-com/ui/components/select";
 import { EyeIcon, EyeOffIcon, LogOutIcon, UsbIcon } from "lucide-react";
-import { publishedVersion } from "@iterate-com/agents/install";
+import { pkgPrNewVersion, publishedCommit } from "@iterate-com/shared/pkg-pr-new";
 import { ensureVoiceAgent } from "@iterate-com/voice/install";
 import { SetupWizard, type SetupInput } from "../../components/setup-wizard.tsx";
 import { isStatusVoice, statusVoices } from "../../firmware/config-image.ts";
@@ -36,6 +37,16 @@ import {
   firmwareReleaseTag,
 } from "../../firmware/catalog.ts";
 import { newestFirmware } from "../../firmware/releases.ts";
+
+/** The agents and voice builds an install commits, at one commit (@iterate-com/shared/pkg-pr-new
+ *  `publishedCommit`, which says why the app's Worker resolves it). */
+const publishedApps = createServerFn().handler(async () => {
+  const commit = await publishedCommit("@iterate-com/voice", import.meta.env.VITE_SOURCE_COMMIT);
+  return {
+    agents: pkgPrNewVersion("@iterate-com/agents", commit),
+    voice: pkgPrNewVersion("@iterate-com/voice", commit),
+  };
+});
 
 export const Route = createFileRoute("/_auth/devices/$deviceId")({
   // the project's slug, so the OpenAI key check below follows the picker (and a link keeps it)
@@ -99,12 +110,7 @@ function KitPage() {
     mutationFn: async (input: SetupInput) => {
       try {
         using itx = await api.projects.get(input.project.id);
-        const commit = import.meta.env.VITE_SOURCE_COMMIT;
-        const versions = {
-          agents: await publishedVersion("@iterate-com/agents", commit),
-          voice: await publishedVersion("@iterate-com/voice", commit),
-        };
-        const voice = await ensureVoiceAgent(itx, versions, input.openaiKey);
+        const voice = await ensureVoiceAgent(itx, await publishedApps(), input.openaiKey);
         if (voice === "needs-openai-key")
           throw new Error(`${input.project.slug} needs an OpenAI API key. Close this and add one.`);
         const { token } = await api.grants.mint({

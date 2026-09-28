@@ -563,9 +563,6 @@ importers:
 
   apps/kit:
     dependencies:
-      '@iterate-com/agents':
-        specifier: workspace:*
-        version: link:../../packages/agents
       '@iterate-com/shared':
         specifier: workspace:*
         version: link:../../packages/shared
@@ -860,9 +857,6 @@ importers:
 
   apps/voice:
     dependencies:
-      '@iterate-com/agents':
-        specifier: workspace:*
-        version: link:../../packages/agents
       '@iterate-com/shared':
         specifier: workspace:*
         version: link:../../packages/shared

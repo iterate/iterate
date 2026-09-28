@@ -9,9 +9,11 @@ a value from `this.env.ITX.get()`, and answer data, not handles, from `withItx`:
 a kept value keeps the project's context, and any facet holding it, resident
 after the project goes idle.
 The agents app is the npm package `@iterate-com/agents`. `agents/` is the source the
-project runs it from: `package.json` pins the package, `index.ts` re-exports its two
-classes. To upgrade, pin a newer build and commit: the platform locks the first resolution
-of a version, so pin a commit (`…/@iterate-com/agents@<sha>`) rather than `main` again. The app mounts `itx.agents`
+project runs it from: `package.json` pins the package at a commit, `index.ts` re-exports its
+two classes. The platform pinned the template's `…/@iterate-com/agents@main` to main's build
+when it created the project, and it loads a pkg.pr.new package only at a full commit: to
+upgrade, commit a newer one (`…/@iterate-com/agents@<40-hex sha>`, which a HEAD of the `@main`
+URL names in `x-commit-key`) in `agents/package.json` and the root's. The app mounts `itx.agents`
 through a rewrite rule and owns its catalog and facets. Voice installs the same way:
 `@iterate-com/voice` in a `voice/` folder (`installVoice` from `@iterate-com/voice/install`).
 Files may be TypeScript or JavaScript and import each other by relative path.

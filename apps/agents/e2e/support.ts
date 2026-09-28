@@ -2,7 +2,8 @@ import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { matchesGlob } from "node:path";
-import { installAgents, pkgPrNewVersion } from "@iterate-com/agents/install";
+import { installAgents } from "@iterate-com/agents/install";
+import { pkgPrNewVersion } from "@iterate-com/shared/pkg-pr-new";
 import { build } from "esbuild";
 import { z } from "zod";
 import { openItx, sleep } from "../../os/e2e/support/client.ts";
@@ -69,8 +70,8 @@ async function prPublishesPackages(pr: string): Promise<boolean> {
 }
 
 /** This checkout's pkg.pr.new build of one of the repository's packages: the build of one commit,
- *  waited for while the pkg.pr.new workflow publishes it, never `@main`, which the loader locks to
- *  whatever it first resolved. A PR that changes what that workflow publishes on gets its head
+ *  waited for while the pkg.pr.new workflow publishes it, never `@main`, which the loader refuses
+ *  (@iterate-com/shared/pkg-pr-new). A PR that changes what that workflow publishes on gets its head
  *  published on every push, so its rows pin the head (a first push has no build of the PR until it
  *  lands). Every main commit publishes, so any other run pins its head's merge base with main: the
  *  head itself on a main run, the main commit a PR that publishes nothing branched from. A run that

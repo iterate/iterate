@@ -31,6 +31,7 @@ import {
   StreamProcessor,
 } from "iterate/stream/processor";
 import type { WithItx } from "iterate/sdk";
+import { pinPkgPrNewDependencies } from "@iterate-com/shared/pkg-pr-new";
 import { defaultFiles } from "../generated/config-templates.js";
 import { readPackage } from "../context/module-resolution.ts";
 import type { ItxEntrypointScope } from "../iterate-context.ts";
@@ -508,9 +509,14 @@ export class ProjectProcessor extends StreamProcessor<
         let commitOid: string | null;
         const reference = state.creation?.configRepoTemplate;
         try {
-          const changes = reference
-            ? await this.downloadTemplate(parseConfigRepoTemplateReference(reference))
-            : defaultFiles;
+          // The seed pins its pkg.pr.new dependencies: a template's `…@main` means main's newest
+          // build, and the loader refuses a ref that moves (@iterate-com/shared/pkg-pr-new). A ref
+          // that cannot be pinned fails the creation, like a download that fails.
+          const changes = await pinPkgPrNewDependencies(
+            reference
+              ? await this.downloadTemplate(parseConfigRepoTemplateReference(reference))
+              : defaultFiles,
+          );
           // The seed checks the template's entry with the loader's own rule (`readPackage`).
           readPackage(
             Object.fromEntries(changes.map((file) => [file.path, file.content])),
