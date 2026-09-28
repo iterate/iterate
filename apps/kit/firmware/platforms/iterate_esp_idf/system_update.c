@@ -104,8 +104,10 @@ static void update_task(void *unused) {
   esp_err_t err =
       slot == NULL ? ESP_ERR_NOT_FOUND : esp_https_ota_begin(&config, &ota);
   (void)unused;
-  while (err == ESP_OK &&
-         (err = esp_https_ota_perform(ota)) == ESP_ERR_HTTPS_OTA_IN_PROGRESS) {
+  if (err == ESP_OK) {
+    do {
+      err = esp_https_ota_perform(ota);
+    } while (err == ESP_ERR_HTTPS_OTA_IN_PROGRESS);
   }
   if (err == ESP_OK &&
       !(esp_https_ota_is_complete_data_received(ota) &&
