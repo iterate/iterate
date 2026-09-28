@@ -437,7 +437,7 @@ test("release.yml never takes a kit-firmware tag for the last release", () => {
 test("every job that records flakes uploads its test evidence to R2, where the flake dashboard reads them", () => {
   const jobs = depotWorkflowFiles.flatMap((file) =>
     Object.entries(loadWorkflow(file).jobs).flatMap(([jobId, job]) =>
-      (job.steps || []).some((step) => String(step.with?.name || "").startsWith("flake-records-"))
+      (job.steps || []).some((step) => step.run?.includes("--flake-suites"))
         ? [{ job: `${file}:${jobId}`, steps: job.steps || [] }]
         : [],
     ),
@@ -539,24 +539,26 @@ test.for([
   });
 });
 
-// The main e2e checks read the suite summary each Main OS e2e suite job's newest attempt keeps with
-// its flake records, by the job's key and its attempt's id.
+// The main e2e checks read the suite summary each Main OS e2e suite job's newest attempt keeps
+// beside its flake records in its test results, by the job's key and its attempt's id.
 test.for(mainE2eRecords.jobs)(
   "the alert job reads $jobKey's $suite suite summary",
   ({ jobKey, suite }) => {
     const [file, jobId = ""] = jobKey.split(":");
     const path = `.depot/workflows/${file}`;
     expect(loadWorkflow(path)).toMatchObject({ name: mainE2eRecords.workflow });
-    const records = stepsAsRun(path, jobId).find(
-      (step) =>
-        step.with?.name === mainE2eRecords.artifact(suite, "${{ steps.attempt.outputs.id }}"),
+    const results = stepsAsRun(path, jobId).find(
+      (step) => step.with?.name === mainE2eRecords.artifact("${{ steps.attempt.outputs.id }}"),
     );
     // whatever the suite's outcome, once it had a preview to test (preview-os-workflow.test.ts)
-    expect(records).toMatchObject({
+    expect(results).toMatchObject({
       if: afterTheFinalizer,
       uses: "actions/upload-artifact@v4",
-      with: { path: `test-results/flake-records/${suite}` },
+      with: { path: testEvidencePaths.root },
     });
+    expect(`${testEvidencePaths.root}/${mainE2eRecords.file(suite)}`).toBe(
+      `${testEvidencePaths.flakeRecords}/${suite}/suite-summary.json`,
+    );
     // the finalizer that writes this suite's summary into that folder (scripts/ci/flake-suite-summary.ts)
     const finalizer = stepsAsRun(path, jobId).find((step) =>
       step.run?.includes("scripts/ci/test-evidence.ts finalize"),
@@ -1121,8 +1123,8 @@ test.each([
   const finalizer = steps.find((step) =>
     step.run?.includes("scripts/ci/test-evidence.ts finalize"),
   );
-  // Flake records have their own upload; the raw telemetry and its manifest travel in the whole
-  // test evidence folder's.
+  // The raw telemetry, its manifest, and the flake records beside the suite's summary travel in the
+  // whole test evidence folder's upload.
   const upload = steps.find(
     (step) =>
       step.uses === "actions/upload-artifact@v4" && step.with?.path === testEvidencePaths.root,
@@ -1148,16 +1150,6 @@ test.each([
     with: expect.objectContaining({ "include-hidden-files": true, "if-no-files-found": "error" }),
   });
   expect(steps.indexOf(finalizer!)).toBeLessThan(steps.indexOf(upload!));
-  // The suite's records (and the summary the finalizer wrote beside them) leave the job after the
-  // finalizer, whatever the suite's outcome.
-  const records = steps.find(
-    (step) => step.with?.name === `flake-records-${suite}${attemptSuffix}`,
-  );
-  expect(records, `${file} must upload flake-records-${suite}`).toMatchObject({
-    if: afterIt,
-    uses: "actions/upload-artifact@v4",
-  });
-  expect(steps.indexOf(finalizer!)).toBeLessThan(steps.indexOf(records!));
 });
 
 test.each([
@@ -1456,7 +1448,8 @@ test("the test jobs' flake records go into the test evidence folder", () => {
   const runTests = loadWorkflow(".depot/workflows/test.yml").jobs.test?.steps?.find(
     (step) => step.name === "Run Tests",
   );
-  expect(runTests?.env?.FLAKE_RECORD_DIR).toBe(testEvidencePaths.flakeRecords);
+  // under its suite's name, as the e2e jobs' records are (apps/os/scripts/preview.ts)
+  expect(runTests?.env?.FLAKE_RECORD_DIR).toBe(`${testEvidencePaths.flakeRecords}/unit`);
   for (const path of Object.values(testEvidencePaths).filter((path) => path !== "test-results")) {
     expect(path.startsWith(`${testEvidencePaths.root}/`), path).toBe(true);
   }

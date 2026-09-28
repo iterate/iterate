@@ -25,7 +25,7 @@ test-results/
 ├── ci-telemetry/
 │   ├── raw/<runner>.json           each runner's telemetry: one per Vitest workspace, one for Playwright
 │   └── manifest.json               the finalizer's completeness check (upload-test-telemetry.ts)
-├── flake-records/[<suite>/]*.jsonl createFlake / createFailing / retry lines, plus suite-summary.json
+├── flake-records/<suite>/*.jsonl   createFlake / createFailing / retry lines, plus suite-summary.json
 ├── playwright-output/<test>/       trace.zip, test-failed-*.png, error-context.md, videos, spec screenshots
 ├── playwright-html/                Playwright's HTML report
 └── playwright-results.json         Playwright's JSON reporter

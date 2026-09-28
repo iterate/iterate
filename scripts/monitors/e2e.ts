@@ -15,8 +15,8 @@
 //
 // Each run is judged once, oldest first, so a page names the run where its suite changed state; a
 // first run judges only the newest. The verdicts come from Depot's records: the jobs' results, and
-// the rows from what the jobs kept, the suite summary beside the e2e jobs' flake records
-// (`flake-records-<suite>-attempt-<id>`) and the real-model job's telemetry
+// the rows from what the jobs kept, the suite summary beside each e2e job's flake records in its
+// test results (`main-os-test-artifacts-attempt-<id>`) and the real-model job's telemetry
 // (`os-real-model-telemetry`). A suite whose run proves nothing (no results, a runner that did not
 // finish, one of its rows not run) is a BROKEN PROBE. Real-model e2e's pages nothing and fails the
 // health job. Slow e2e rows' is a state of its own, `broken`, paged ⚪ on its change of state like a
@@ -234,17 +234,17 @@ const WorkflowJobs = z.object({
     .default([]),
 });
 
-/** What the main e2e checks read beside the jobs' results: each suite job's flake records, per job
- *  attempt (docs/depot-ci.md#artifacts-per-job-attempt), and the suite summary in them
- *  (scripts/ci/flake-suite-summary.ts). */
+/** What the main e2e checks read beside the jobs' results: each suite job's test results, per job
+ *  attempt (docs/depot-ci.md#artifacts-per-job-attempt), and the suite summary beside its flake
+ *  records in them (scripts/ci/flake-suite-summary.ts). */
 export const mainE2eRecords = {
   workflow: "Main OS e2e",
   jobs: [
     { jobKey: "main-os-e2e.yml:e2e", suite: "preview-e2e" },
     { jobKey: "main-os-e2e.yml:specs", suite: "specs" },
   ],
-  artifact: (suite: string, attemptId: string) => `flake-records-${suite}-attempt-${attemptId}`,
-  file: "suite-summary.json",
+  artifact: (attemptId: string) => `main-os-test-artifacts-attempt-${attemptId}`,
+  file: (suite: string) => `flake-records/${suite}/suite-summary.json`,
 } as const;
 
 /** Judge the settled runs of `workflow` oldest first, then `current`, the run whose jobs have just
@@ -328,9 +328,9 @@ export async function checkMainE2e(input: {
           ?.attempts.toSorted((a, b) => a.attempt - b.attempt)
           .at(-1);
         if (!newest) return { ran: false as const };
-        const artifact = mainE2eRecords.artifact(suite, newest.attemptId);
+        const artifact = mainE2eRecords.artifact(newest.attemptId);
         const bytes = (await workflowArtifact(input.depot, run, (name) => name === artifact))?.[
-          mainE2eRecords.file
+          mainE2eRecords.file(suite)
         ];
         return {
           ran: true as const,

@@ -268,6 +268,20 @@ test.for([
   expect(depot.requests.filter((request) => request.path === "/archive.zip")).toEqual([]);
 });
 
+test("an artifact Depot does not have, or no longer has, is not found, and nothing else is read", async () => {
+  await using depot = await depotServer();
+  depot.data.missing = true;
+  const response = await serveDepotArtifact(new Request(`${reportUrl}/`), {
+    token: "secret",
+    fetch: depot.fetch,
+  });
+  expect(response).toMatchObject({ status: 404 });
+  expect(await response.text()).toBe("Artifact not found or expired");
+  expect(depot.requests.map((request) => request.path)).toEqual([
+    "/depot.ci.v1.CIService/GetArtifactDownloadURL",
+  ]);
+});
+
 test("a file the artifact does not contain is not found", async () => {
   await using depot = await depotServer();
   const response = await serveDepotArtifact(new Request(`${reportUrl}/raw.log`), {
@@ -316,6 +330,8 @@ async function depotServer(
   const archive = zipSync(files);
   const data = {
     failLocalHeader: false,
+    /** Depot answers the artifact's lookup with a 404: it expired, or never was */
+    missing: false,
     artifact: {
       artifactId,
       workflowId: "preview",
@@ -330,7 +346,10 @@ async function depotServer(
       authorization: req.headers.authorization,
       range: req.headers.range,
     });
-    if (req.url === "/depot.ci.v1.CIService/GetArtifactDownloadURL")
+    if (req.url === "/depot.ci.v1.CIService/GetArtifactDownloadURL" && data.missing) {
+      res.writeHead(404);
+      res.end('{"code":"not_found"}');
+    } else if (req.url === "/depot.ci.v1.CIService/GetArtifactDownloadURL")
       res.end(
         JSON.stringify({ artifact: data.artifact, url: "https://storage.depot.dev/archive.zip" }),
       );

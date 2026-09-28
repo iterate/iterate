@@ -1,12 +1,13 @@
 import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
 import { createCli } from "trpc-cli";
-import { getRunUrl, readEventPayload, type GithubEventPayload } from "./github.ts";
+import { readEventPayload, type GithubEventPayload } from "./github.ts";
 import { getSlackClient, slackChannelIds, slackEscape } from "./slack.ts";
 
 type DeployOptions = {
   app: string;
   status: "success" | "failure";
   commitSha: string;
+  /** the Depot job's page (DEPOT_JOB_URL) */
   runUrl: string;
   publicUrl?: string;
 };
@@ -46,7 +47,7 @@ async function notifyWorkflowFailure() {
   const refName = process.env.GITHUB_REF_NAME || process.env.GITHUB_REF || "unknown ref";
   const message = [
     `🚨 ${failedJobs.join(", ")} failed on ${refName}.`,
-    `<${getRunUrl()}|View Workflow Run>`,
+    `<${readOption("DEPOT_JOB_URL")}|View Workflow Run>`,
     "\n@iterate please investigate",
   ].join(" ");
 
@@ -146,7 +147,7 @@ export async function deploySuccess() {
     app: readOption("APP_DISPLAY_NAME"),
     status: "success",
     commitSha: readOption("GITHUB_SHA"),
-    runUrl: getRunUrl(),
+    runUrl: readOption("DEPOT_JOB_URL"),
     publicUrl: process.env.PUBLIC_URL,
   });
 }
@@ -157,7 +158,7 @@ export async function deployFailure() {
     app: readOption("APP_DISPLAY_NAME"),
     status: "failure",
     commitSha: readOption("GITHUB_SHA"),
-    runUrl: getRunUrl(),
+    runUrl: readOption("DEPOT_JOB_URL"),
     publicUrl: process.env.PUBLIC_URL,
   });
 }
