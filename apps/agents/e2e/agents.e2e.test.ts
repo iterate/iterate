@@ -198,8 +198,9 @@ test("the loop: a person's words → the model → a script run against itx → 
   ]);
   const said = (type: string) => log.filter((e) => e.type === type).map((e) => e.payload);
   expect(said("events.iterate.com/agent/web-message-sent")).toEqual([
-    // The tag's prose and the bare reply alike are appended directly, each with the request it came from.
-    { message: "Let me store that.", llmRequestOffset: expect.any(Number) },
+    // The tag's prose and the bare reply alike are appended directly, each with the request it came
+    // from; the tag's is marked as written beside its script.
+    { message: "Let me store that.", llmRequestOffset: expect.any(Number), besideScript: true },
     { message: "Stored 42 under answer.", llmRequestOffset: expect.any(Number) },
   ]);
   expect(said("events.iterate.com/agent/summary-updated")).toEqual([

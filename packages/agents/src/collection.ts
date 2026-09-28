@@ -42,8 +42,9 @@ export class AgentCollectionRpcTarget extends RpcTarget implements AgentsApi {
     this.base = base;
   }
 
-  /** Rebind existing normal agents when this app is installed or updated. Voice processors
-   * keep their own code; grants, sandbox rules and conversation history are untouched. */
+  /** Rebind every listed agent's `agent` row to this build when the app is installed or updated. A
+   * context whose row is off keeps it off; grants, sandbox rules and conversation history are
+   * untouched. */
   async upgrade() {
     const spec = await this.spec();
     for (const { path } of await this.list()) {
@@ -59,7 +60,7 @@ export class AgentCollectionRpcTarget extends RpcTarget implements AgentsApi {
   get(path: string) {
     path = resolveContextPath(this.base, path);
     if (path === "/") throw new Error("An agent needs its own context path");
-    return new AgentReference(this.withItx, path, this.spec, this.catalog, this.base);
+    return new AgentReference(this.withItx, path, this.catalog, this.base);
   }
 
   /** Every agent born under the project, by path — the certificates cross-posted to `/`, folded. */
@@ -179,26 +180,28 @@ export class AgentCollectionRpcTarget extends RpcTarget implements AgentsApi {
       // answered at once. Otherwise the facet is read by name: the row's own — alive, or dead with
       // the row not yet gone (a retry, or a second delete racing the saga), whose certificate is
       // waited for on this path as ever. NO_FACET there is a row gone meanwhile (dead: answered) or
-      // a live agent whose processors replace the agent's (a voice agent's), read from the spec as
-      // it always was. Over the loopback stub the list's answer types as an RPC result, not the rows
-      // the context declares; the wire copied it.
+      // a live agent without its row, which only `create` binds again: thrown. Over the loopback
+      // stub the list's answer types as an RPC result, not the rows the context declares; the wire
+      // copied it.
       const catalog = await this.catalog();
       if (!catalog.deleted[path] && !catalog.agents[path])
         throw new Error(`agent ${path}: not created — nothing to delete`);
       const rows = async () => (await context.processors.list()) as unknown as { name: string }[];
       if (catalog.deleted[path] && !(await rows()).some((row) => row.name === "agent"))
         return { path };
-      // The facet is this app's AgentDurableObject and `snapshot()` the engine's
-      // `{ offset, state }`, its state the contract's parsed shape — ours, so asserted, not re-validated.
-      const snapshot = async (facet: [method: "get", name: "agent", spec?: FacetSpec]) =>
-        (await context.invoke(["itx", "facets", facet, ["snapshot"]])) as { state: AgentState };
       let state: AgentState;
       try {
-        ({ state } = await snapshot(["get", "agent"]));
+        // The facet is this app's AgentDurableObject and `snapshot()` the engine's
+        // `{ offset, state }`, its state the contract's parsed shape — ours, so asserted, not re-validated.
+        ({ state } = (await context.invoke(["itx", "facets", ["get", "agent"], ["snapshot"]])) as {
+          state: AgentState;
+        });
       } catch (error) {
         if (errorCode(error) !== "NO_FACET") throw error;
         if (catalog.deleted[path] || (await this.catalog()).deleted[path]) return { path };
-        ({ state } = await snapshot(["get", "agent", await this.spec()]));
+        throw new Error(
+          `agent ${path}: its context has no \`agent\` processor — itx.agents.create(${JSON.stringify(path)}) binds it again`,
+        );
       }
       if (state.deletion?.status !== "deleted") {
         if (state.creation?.status !== "created")
@@ -235,33 +238,30 @@ export class AgentCollectionRpcTarget extends RpcTarget implements AgentsApi {
 class AgentReference extends RpcTarget implements AgentHandleApi {
   private readonly withItx: WithItx<ItxEntrypointScope>;
   private readonly path: string;
-  private readonly spec: () => Promise<FacetSpec>;
   private readonly catalog: () => Promise<AgentCatalogState>;
   private readonly base: string;
 
   constructor(
     withItx: WithItx<ItxEntrypointScope>,
     path: string,
-    spec: () => Promise<FacetSpec>,
     catalog: () => Promise<AgentCatalogState>,
     base: string,
   ) {
     super();
     this.withItx = withItx;
     this.path = path;
-    this.spec = spec;
     this.catalog = catalog;
     this.base = base;
   }
 
   /** A person's words: a dead agent refuses from the catalog (the header: its facet is never hosted
-   *  again); a live one's words go to the facet its context hosts, by NAME — never by spec, so no
-   *  facet is hosted for an agent that has none. NO_FACET is then a context without an `agent` row
-   *  or facet: never born, or a live agent whose processors replace it (a voice agent's), which is
-   *  hosted from the spec as it always was. The facet appends them, so they are stamped with the
-   *  agent's own path; the sender rides beside them as the base, which the sender's own
-   *  `itx.agents` row pins (`itx.cd('/').agents.at(<sender>)`, written by `create`) — `/` for every
-   *  context that reaches the root's collection, which the fold reads as a person (processor.ts). */
+   *  again); a live one's words go to the facet its context's `agent` row hosts, by NAME — never by
+   *  spec, so no facet is hosted for an agent that has none. NO_FACET is then a context without an
+   *  `agent` row: never born, dead since, or a live agent without its row, which only `create` binds
+   *  again — each refused. The facet appends them, so they are stamped with the agent's own path;
+   *  the sender rides beside them as the base, which the sender's own `itx.agents` row pins
+   *  (`itx.cd('/').agents.at(<sender>)`, written by `create`) — `/` for every context that reaches
+   *  the root's collection, which the fold reads as a person (processor.ts). */
   async message(input: Parameters<AgentHandleApi["message"]>[0]) {
     const path = this.path;
     const dead = new Error(`agent ${path}: deleted`);
@@ -276,18 +276,16 @@ class AgentReference extends RpcTarget implements AgentHandleApi {
     } catch (error) {
       if (errorCode(error) !== "NO_FACET") throw error;
     }
-    // Read AGAIN before hosting anything: a delete that finished since the first read has taken the
-    // row and the facet, and only a fresh read knows it (as `create()` does).
+    // Read AGAIN to name the refusal: a delete that finished since the first read has taken the row
+    // and the facet, and only a fresh read knows it.
     const catalog = await this.catalog();
     if (catalog.deleted[path]) throw dead;
     if (!catalog.agents[path])
       throw new Error(
         `agent ${path}: not created — itx.agents.create(${JSON.stringify(path)}) first`,
       );
-    const spec = await this.spec();
-    // The same facet's answer as above: ours, so asserted.
-    return (await this.withItx((itx) =>
-      itx.cd(path).invoke(["itx", "facets", ["get", "agent", spec], ["message", input, this.base]]),
-    )) as StreamEvent;
+    throw new Error(
+      `agent ${path}: its context has no \`agent\` processor — itx.agents.create(${JSON.stringify(path)}) binds it again`,
+    );
   }
 }

@@ -27,9 +27,9 @@ export interface VoiceApi {
         totalMs: number;
       }
   >;
-  /** The press: create the agent at `streamPath` (default `/agents/voice/<uuid>`), swap its
-   *  processor for the voice relay and delegate, and start the call under `activation`. `screen`
-   *  adds the screen instructions for a device whose path names it. */
+  /** The press: create the agent at `streamPath` (default `/agents/voice/<uuid>`), which answers
+   *  the call's delegations, put the voice relay beside it and start the call under `activation`.
+   *  `screen` adds the screen instructions for a device whose path names it. */
   setupVoiceAgent(options: {
     streamPath?: string;
     activation: string;

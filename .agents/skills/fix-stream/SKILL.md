@@ -84,9 +84,11 @@ Print the conversation with offsets and times before reading product code. Every
   (`requestOffset`, `result.status`): the model calls.
 - `itx/run-requested` and `itx/run-settled`: the scripts the assistant's codemode ran. The
   request's offset is the run; the settlement names it back (`requestOffset`).
-- `agent/web-message-sent`: what the person saw. `agent/paused` and `agent/resumed`: a breaker
-  or an operator.
-- `voice-agent/*`: a call's transcripts, delegations and commentary (`packages/voice/src/`).
+- `agent/web-message-sent`: what the person saw; `besideScript` marks prose written beside a
+  script, which a voice call does not speak. `agent/paused` and `agent/resumed`: a breaker or an
+  operator.
+- `voice-agent/*`: a call's transcripts, audio frames and lifecycle (`packages/voice/src/`). The
+  live model's hand-overs are `agent/context-added` items `from` the call's own path.
 - Other `itx/*`: the context's own facts, such as wakes (`itx/woken`) and processor rows
   (`itx/subscription-configured`).
 
@@ -104,7 +106,7 @@ deployment and no real model.
 | what the chat shows (missing, duplicated or wrong rows)               | `apps/agents/src/lib/agent-events.test.ts`: `toAgentEvent` → `reduceAgentFeed`, with real offsets             |
 | the reducer behind the agent UI                                       | `apps/agents/src/lib/events/agent-ui-reducer.test.ts`                                                         |
 | what the loop decides (a missing request, a stuck trigger, a breaker) | `packages/agents/src/processor.test.ts`: `reduceProcessor` rows                                               |
-| a voice call                                                          | `packages/voice/src/*.test.ts` (see `agent.test.ts` and `screen-context-repro.json`)                          |
+| a voice call                                                          | `packages/voice/src/voice-agent.test.ts`: what a delegation hands the agent, what the voice is sent           |
 | an effect: a model call, a script run, the birth or death sagas       | `apps/agents/e2e/agents.e2e.test.ts`, with a fake `itx.ai` lent by rule (commands in `apps/agents/README.md`) |
 
 - Save the dump as a JSON fixture beside the test, named for the complaint
