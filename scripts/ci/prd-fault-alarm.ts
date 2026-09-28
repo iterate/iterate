@@ -1,8 +1,7 @@
 // Prd fault alarm (prd-fault-alarm.yml, every 15 minutes): reads the first-party prd Workers' Logs
 // since its last run and pages #error-pulse on any 5xx, a burst of platform-failure heals, or any error.
-// On 2026-09-23 a Cloudflare fault let each first-party facet start answer ONE call for ~2.5 hours:
-// ~1,800 heals and ~2,400 errors per half hour, 41 homepage 500s on lispwoso.com and garple.com —
-// and our recovery kept most requests green, so only the logs knew.
+// It reads the logs because the platform's recovery can keep most requests green through a
+// Cloudflare fault, so the heals and errors it logs are the only sign.
 //
 // Each fault is an incident: a 5xx host, a healed facet's name, or an error message. A new one pages
 // at the top level; its repeats go into that page's thread, back in the channel once it grows
