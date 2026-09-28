@@ -208,6 +208,29 @@ export class CountingTallyDurableObject extends StreamProcessorDurableObject {
   className: "CountingTallyDurableObject",
 };
 
+/** The counter, holding a pushed batch that carries a `test/held` event until `release()`:
+ *  `holding()` says it has one. While it holds, the context's delivery holds the batch's chars
+ *  against its in-flight budget (subscription-delivery.ts `DELIVERY_IN_FLIGHT_BUDGET_CHARS`). */
+export const HOLD: FacetSpec = {
+  source: {
+    "worker.js": counter(/* js */ `
+export class HoldDurableObject extends StreamProcessorDurableObject {
+  static publicMethods = [...super.publicMethods, "holding", "release"];
+  processor = new CounterProcessor();
+  #release;
+  async processEventBatch(events, range) {
+    if (events.some((e) => e.type === "test/held"))
+      await new Promise((resolve) => (this.#release = resolve));
+    return super.processEventBatch(events, range);
+  }
+  holding() { return this.#release !== undefined; }
+  release() { this.#release?.(); }
+}
+`),
+  },
+  className: "HoldDurableObject",
+};
+
 /** A person's own processor that counts the `events.iterate.com/test/ticked` events on its log. */
 export const TICK_TALLY: FacetSpec = {
   source: {

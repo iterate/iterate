@@ -100,7 +100,8 @@ export async function parseAuthorization(env: Env, request: Request): Promise<Au
 }
 
 /** THE ACCOUNT'S STATE — the person's own record (src/account/contract.ts), read AT HEAD from the
- *  `account` facet on `/users/<id>` (the facet catches up from its log before answering): whether
+ *  `account` facet on `/users/<id>` (the read answers once every fact landed before it is folded,
+ *  context/facet-host.ts `#callFacet`): whether
  *  a grant has ended (`endedGrants`, the revocation truth — grants.ts lands the end there and
  *  awaits it), when each was last used. One hop to the person's own Durable Object.
  *

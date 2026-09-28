@@ -13,7 +13,7 @@ import type { StreamEvent } from "iterate/stream/processor";
 import { committedEvent as at, nodeSqliteDurableObjectStorage } from "iterate/stream/test-support";
 import {
   CoreContract,
-  facetIsPushedByARow,
+  rowsPushingFacet,
   reduceCoreEvent,
   reduceCoreEventBatch,
   type CoreState,
@@ -1062,38 +1062,47 @@ test.for(markerRows)("the marker follows the rules: $rule", ({ log, hosts, targe
   if (target) expect(print(s.subscriptions.s.target)).toBe(target);
 });
 
-// ── which facets a row PUSHES — what a facet is told as it starts (`fedByPushes`) ──
+// ── which rows PUSH a facet — what a facet is told as it starts (`fedByPushes`), and what a read of it waits for ──
 
-const pushedRows: { row: string; log: StreamEvent[]; pushesF: boolean }[] = [
+const pushedRows: { row: string; log: StreamEvent[]; pushers: string[] }[] = [
   {
     row: "a processor row in the platform's spelling (its source elided at configure)",
     log: [configured(1, "p", `${facetF}.processEventBatch`)],
-    pushesF: true,
+    pushers: ["p"],
   },
   {
     row: "the caller's short spelling, an address with no spec",
     log: [configured(1, "p", "itx.facets.get('f').processEventBatch")],
-    pushesF: true,
+    pushers: ["p"],
+  },
+  {
+    row: "two rows pushing the facet: both",
+    log: [
+      configured(1, "p", "itx.facets.get('f').processEventBatch"),
+      configured(2, "q", `${facetF}.processEventBatch`),
+      configured(3, "r", `${facetG}.processEventBatch`),
+    ],
+    pushers: ["p", "q"],
   },
   {
     row: "a row through a rule of the caller's that names the facet",
     log: [rule(1, "itx.proc", facetF), configured(2, "s", "itx.proc.processEventBatch")],
-    pushesF: true,
+    pushers: ["s"],
   },
   {
     row: "a row pushing ANOTHER facet of this context",
     log: [configured(1, "p", `${facetG}.processEventBatch`)],
-    pushesF: false,
+    pushers: [],
   },
   {
     row: "a row that calls another method of the facet: the loop walks it, never pushes",
     log: [configured(1, "p", "itx.facets.get('f').fetch")],
-    pushesF: false,
+    pushers: [],
   },
   {
     row: "a row that walks PAST the facet to a member's processEventBatch: walked, never pushed",
     log: [configured(1, "p", "itx.facets.get('f').inner.processEventBatch")],
-    pushesF: false,
+    pushers: [],
   },
   {
     row: "a rule that turns the whole target, method included, into the push: the loop evaluates the head, which resolves nowhere",
@@ -1101,12 +1110,12 @@ const pushedRows: { row: string; log: StreamEvent[]; pushesF: boolean }[] = [
       rule(1, "itx.a.processEventBatch", `${facetF}.processEventBatch`),
       configured(2, "s", "itx.a.processEventBatch"),
     ],
-    pushesF: false,
+    pushers: [],
   },
   {
     row: "a row pushing another context's facet `f` (`cd` resolves past `builtins.facets`)",
     log: [configured(1, "p", "itx.cd('/other').facets.get('f').processEventBatch")],
-    pushesF: false,
+    pushers: [],
   },
   {
     row: "a halted row: the loop skips it until an operator resumes it",
@@ -1118,12 +1127,12 @@ const pushedRows: { row: string; log: StreamEvent[]; pushesF: boolean }[] = [
         attempts: 1,
       }),
     ],
-    pushesF: false,
+    pushers: [],
   },
   {
     row: "a removed row",
     log: [configured(1, "p", "itx.facets.get('f').processEventBatch"), configured(2, "p", null)],
-    pushesF: false,
+    pushers: [],
   },
   {
     row: "a rule re-pointed away from the facet",
@@ -1132,11 +1141,11 @@ const pushedRows: { row: string; log: StreamEvent[]; pushesF: boolean }[] = [
       configured(2, "s", "itx.proc.processEventBatch"),
       rule(3, "itx.proc", facetG),
     ],
-    pushesF: false,
+    pushers: [],
   },
 ];
-test.for(pushedRows)("facetIsPushedByARow: $row", ({ log, pushesF }) => {
-  expect(facetIsPushedByARow(reduceAll(log), "f")).toBe(pushesF);
+test.for(pushedRows)("rowsPushingFacet: $row", ({ log, pushers }) => {
+  expect(rowsPushingFacet(reduceAll(log), "f")).toEqual(pushers);
 });
 
 // ── the platform rows a null MASKS (kept) vs a plain delete ──

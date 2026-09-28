@@ -37,7 +37,10 @@
 // reached the head SHOWN so far: the highest a push showed or — for a processor FED BY PUSHES (its
 // host's word: a row of its context pushes it every commit it consumes) — a catch-up read from the
 // log. So an idle processor a row pushes reads its log once per incarnation, not on every read; one
-// nothing pushes learns of a new event only by reading, and reads every time.
+// nothing pushes learns of a new event only by reading, and reads every time. A head shown is only
+// as fresh as the pushes that have ARRIVED, so the host holds a read back until the pushes it
+// already owes the processor have landed (apps/os SubscriptionDelivery `deliveriesQueuedFor`): a
+// read that follows a commit holds it.
 //
 // `reduce` is a PURE reduce (new object out, its arguments immutable), CHECKPOINTED
 // (`ReduceCheckpointTable` below) with the offset and contract version it was reduced under; bumping
@@ -358,7 +361,8 @@ export class ProcessorEngine<State> {
   /** A catch-up reduced through `reducedThroughOffset`, the head its last page reached: for a
    *  processor FED BY PUSHES, the head is SHOWN. Every later commit it consumes reaches it as a push,
    *  whose `range.through` is recorded the moment the push arrives, so a read that follows the push
-   *  catches up again; while none arrives, nothing it consumes has landed and its reads stop re-reading
+   *  catches up again; the host holds a read back until the pushes it owes have arrived (the header's
+   *  read verbs), so while none arrives, nothing it consumes has landed and its reads stop re-reading
    *  the log. A processor nothing pushes records nothing: it learns of a new event only by reading. */
   #showHeadReadFromLog(reducedThroughOffset: number): void {
     if (!this.#fedByPushes) return;

@@ -31,6 +31,7 @@ import {
   HELLO,
   HELLO_PROCESSOR,
   HELLO_WORKER,
+  HOLD,
   IDENTITY_PROBE,
   PLAIN_DURABLE_OBJECT,
   PRODUCER,
@@ -370,7 +371,9 @@ test("a RUNNING facet is not coupled to loader availability: with the loader ref
 // A processor facet's read verbs catch up from the log unless the reduce has provably reached the
 // head it was SHOWN (iterate/stream/processor.ts). A push shows a head, and a facet a row pushes is
 // told so as it starts (`fedByPushes` in its props, context/facet-host.ts), so its first catch-up's
-// head counts as shown too.
+// head counts as shown too. A read waits for the pushes its context already owes the facet
+// (stream/subscription-delivery.ts `deliveriesQueuedFor`), so a head it was shown is never behind a
+// commit acknowledged before the read.
 
 test("a processor a row pushes, read between commits it does not consume, reads its log once; one appended after is applied before the next read", async () => {
   const ctx = "prj_idle_facet_reads_once";
@@ -394,6 +397,30 @@ test("a processor a row pushes, read between commits it does not consume, reads 
   expect(await facet.snapshot()).toMatchObject({ state: { n: 1 } });
   await stub(ctx).append({ type: "test/noise" }, { type: "test/counted" });
   expect(await facet.snapshot()).toMatchObject({ state: { n: 2 } });
+});
+
+test("a read of a processor a row pushes holds a commit whose push is still waiting behind another row's: the read waits for the push", async () => {
+  const ctx = "prj_read_waits_for_owed_push";
+  await enable(ctx, "hold", HOLD, ["test/held"]);
+  await enable(ctx, "tally", COUNTING_TALLY, ["test/counted"]);
+  const tally = tallyOn(ctx);
+  // Caught up: the head its catch-up read is the head it was shown, so its reads read no log.
+  expect(await tally.snapshot()).toMatchObject({ state: { n: 0 } });
+  // One commit of ~9 MiB the hold facet consumes: its push takes the context's whole in-flight
+  // delivery budget, and the facet keeps it waiting.
+  const blob = "x".repeat(4.5 * 1024 * 1024);
+  await stub(ctx).append(
+    { type: "test/held", payload: { blob } },
+    { type: "test/held", payload: { blob } },
+  );
+  const hold = (step: unknown[]) => stub(ctx).invoke(["itx", "facets", ["get", "hold"], step]);
+  await until("the hold facet holds its push", async () => (await hold(["holding"])) === true);
+  // The tally's push of this commit waits for room behind it; a read that follows the commit
+  // still sees it.
+  await stub(ctx).append({ type: "test/counted" });
+  const read = tally.snapshot();
+  await hold(["release"]);
+  expect(await read).toMatchObject({ state: { n: 1 } });
 });
 
 test("a processor no row pushes reads its log on every read — the host's word is what lets a head read from the log stand", async () => {
