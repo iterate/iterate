@@ -109,7 +109,7 @@ test("itx.workers.get takes the modules INLINE", async () => {
         source: {
           "package.json": '{"main":"worker.js"}',
           "worker.js": `import { WorkerEntrypoint } from "cloudflare:workers";
-import { withItx } from "iterate/sdk";
+import { withItx } from "iterate/with-itx";
 export default class extends WorkerEntrypoint {
   async run() { return (await withItx(this.env.ITX, (itx) => itx.whoami())).projectId; }
 }`,
@@ -322,7 +322,7 @@ const SRC_WORKER_B = {
   "package.json": '{"main":"worker.js"}',
   "worker.js": `
 import { WorkerEntrypoint } from "cloudflare:workers";
-import { withItx } from "iterate/sdk";
+import { withItx } from "iterate/with-itx";
 export default class ConsumerB extends WorkerEntrypoint {
   run(aRef) {
     // withItx hands the real scope. facets.get(name, { source, className }) is a mid-chain

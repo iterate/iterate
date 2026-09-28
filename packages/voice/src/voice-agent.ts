@@ -10,17 +10,17 @@
 // registers `itx.agents` on InstalledAppRoots
 import type {} from "@iterate-com/agents";
 import { AgentContract } from "@iterate-com/agents/contract";
-import { bytesToBase64 } from "@iterate-com/shared/base64";
 import type { IterateContextApiWith } from "iterate/api";
+import { bytesToBase64 } from "iterate/lib";
+import { StreamProcessorDurableObject } from "iterate/sdk";
 import {
   StreamProcessor,
-  StreamProcessorDurableObject,
   defineProcessorContract,
-  z,
   type ConsumedEvent,
   type ProcessEventArgs,
   type ReduceArgs,
-} from "iterate/sdk";
+} from "iterate/stream/processor";
+import { z } from "zod";
 
 /** The device's call identity: the press mints it, the frames carry it. */
 const Activation = z.string().min(1).max(64);

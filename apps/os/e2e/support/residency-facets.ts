@@ -78,7 +78,8 @@ export class ChattyDurableObject extends FacetDurableObject {
 export const CARELESS_CHATROOM_SOURCE = {
   "package.json": '{"main":"worker.js"}',
   // oxlint-disable-next-line iterate/no-raw-itx-get -- the careless sink IS the subject: neither the context nor the facet may stay running on it
-  "worker.js": `import { FacetDurableObject, LiveState } from "iterate/sdk";
+  "worker.js": `import { FacetDurableObject } from "iterate/sdk";
+import { LiveState } from "iterate/stream/processor";
 export class ChatroomDurableObject extends FacetDurableObject {
   static publicMethods = [...super.publicMethods, "post", "state"];
   #chat = new LiveState({ append: (e) => this.env.ITX.get().append(e) }, "chat", { messages: [] });
@@ -107,7 +108,8 @@ export class SiteDurableObject extends FacetDurableObject {
 export const RELEASER_SOURCE = {
   "package.json": '{"main":"worker.js"}',
   // oxlint-disable-next-line iterate/no-raw-itx-get -- the careless keep IS the subject: a claimed facet that keeps its env.ITX answer
-  "worker.js": `import { FacetDurableObject, withItx } from "iterate/sdk";
+  "worker.js": `import { FacetDurableObject } from "iterate/sdk";
+import { withItx } from "iterate/with-itx";
 export class ReleaserDurableObject extends FacetDurableObject {
   static publicMethods = [...super.publicMethods, "start", "beats"];
   kept = [];
@@ -137,7 +139,9 @@ export class ReleaserDurableObject extends FacetDurableObject {
  *  `slept.payload.startedAt` says which one did. */
 export const SLEEPER_SOURCE = {
   "package.json": '{"main":"worker.js"}',
-  "worker.js": `import { StreamProcessor, StreamProcessorDurableObject, defineProcessorContract, z } from "iterate/sdk";
+  "worker.js": `import { StreamProcessorDurableObject } from "iterate/sdk";
+import { StreamProcessor, defineProcessorContract } from "iterate/stream/processor";
+import { z } from "zod";
 const contract = defineProcessorContract({
   slug: "sleeper",
   version: "1.0.0",

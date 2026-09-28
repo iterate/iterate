@@ -2,13 +2,17 @@
  *  resulting durable events. No alarm handler, platform binding, or polling timer is needed. */
 export const scheduledAppendFacetSource = {
   "package.json": '{"main":"worker.js"}',
-  "worker.js": `import { StreamProcessor, StreamProcessorDurableObject } from "iterate/sdk";
+  "worker.js": `import { StreamProcessorDurableObject } from "iterate/sdk";
+import { StreamProcessor, defineProcessorContract } from "iterate/stream/processor";
+import { z } from "zod";
+const DeadlinesContract = defineProcessorContract({
+  slug: "deadlines", version: "1", description: "the jobs whose timeouts fired for this owner",
+  stateSchema: z.object({ timedOut: z.array(z.string()).default([]), audited: z.array(z.string()).default([]) }),
+  consumes: ["job/timed-out", "job/timeout-audit"], emits: [],
+});
 class Deadlines extends StreamProcessor {
   constructor(owner) { super(); this.owner = owner; }
-  contract = {
-    slug: "deadlines", version: "1", consumes: ["job/timed-out", "job/timeout-audit"], emits: [],
-    initialState: () => ({ timedOut: [], audited: [] }),
-  };
+  contract = DeadlinesContract;
   reduce({ event, state }) {
     if (event.payload.owner !== this.owner) return;
     if (event.type === "job/timed-out") return { ...state, timedOut: [...state.timedOut, event.payload.job] };
@@ -38,13 +42,17 @@ export class DeadlinesDurableObject extends StreamProcessorDurableObject {
 /** A pure processor emits scheduling intent with the same durable append API as business facts. */
 export const scheduledAppendProcessorSource = {
   "package.json": '{"main":"worker.js"}',
-  "worker.js": `import { StreamProcessor, StreamProcessorDurableObject } from "iterate/sdk";
+  "worker.js": `import { StreamProcessorDurableObject } from "iterate/sdk";
+import { StreamProcessor, defineProcessorContract } from "iterate/stream/processor";
+import { z } from "zod";
+const RemindersContract = defineProcessorContract({
+  slug: "reminders", version: "1", description: "schedules a reminder for each opened invoice",
+  stateSchema: z.object({ reminded: z.array(z.string()).default([]) }),
+  consumes: ["invoice/opened", "invoice/reminder-due"],
+  emits: ["events.iterate.com/itx/schedule-set"],
+});
 class Reminders extends StreamProcessor {
-  contract = {
-    slug: "reminders", version: "1", consumes: ["invoice/opened", "invoice/reminder-due"],
-    emits: ["events.iterate.com/itx/schedule-set"],
-    initialState: () => ({ reminded: [] }),
-  };
+  contract = RemindersContract;
   reduce({ event, state }) {
     if (event.type === "invoice/reminder-due") return { reminded: [...state.reminded, event.payload.invoiceId] };
   }

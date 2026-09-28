@@ -507,9 +507,10 @@ export class Stream {
       READ_PAGE_BUDGET_BYTES,
     );
     const events: StreamEvent[] = rows.map((row) => {
-      let body: StreamEventInput & { createdAt: string };
+      // Written only by `append`: the input as it committed, its origin stamped, plus `createdAt`.
+      let body: Omit<StreamEvent, "offset" | "path">;
       try {
-        body = JSON.parse(row.body) as StreamEventInput & { createdAt: string };
+        body = JSON.parse(row.body) as Omit<StreamEvent, "offset" | "path">;
       } catch (error) {
         // A stored body that is not JSON is storage corruption; name the offset so a reader can
         // skip past it (`read(offset)`), instead of the platform's parse error naming nothing.

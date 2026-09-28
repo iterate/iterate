@@ -163,22 +163,25 @@ export async function fanProbes(itx: any, count: number) {
   };
 }
 
-/** The fan-out probe: the pure `FanProbeProcessor extends StreamProcessor` plus its one-line host
- *  `FanProbeDurableObject extends StreamProcessorDurableObject` (both from the SDK, `iterate/sdk`),
- *  counting every durable event. */
+/** The fan-out probe: the pure `FanProbeProcessor extends StreamProcessor` (`iterate/stream/processor`)
+ *  plus its one-line host `FanProbeDurableObject extends StreamProcessorDurableObject`
+ *  (`iterate/sdk`), counting every durable event. */
 const FAN_PROBE = {
   "package.json": '{"main":"worker.js"}',
   "worker.js": /* js */ `
-import { StreamProcessor, StreamProcessorDurableObject } from "iterate/sdk";
+import { StreamProcessorDurableObject } from "iterate/sdk";
+import { StreamProcessor, defineProcessorContract } from "iterate/stream/processor";
+import { z } from "zod";
+const FanProbeContract = defineProcessorContract({
+  slug: "fan-probe",
+  version: "1",
+  description: "counts every durable event — the fan-out probe",
+  stateSchema: z.object({ n: z.number().default(0) }),
+  consumes: ["*"],
+  emits: [],
+});
 class FanProbeProcessor extends StreamProcessor {
-  contract = {
-    slug: "fan-probe",
-    version: "1",
-    description: "counts every durable event — the fan-out probe",
-    consumes: ["*"],
-    emits: [],
-    initialState: () => ({ n: 0 }),
-  };
+  contract = FanProbeContract;
   reduce({ state }) {
     return { n: state.n + 1 };
   }

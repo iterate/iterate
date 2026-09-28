@@ -1,7 +1,6 @@
 // App-owned agent facet, loaded into a project through the public SDK.
-import { StreamProcessorDurableObject, type ItxEntrypointService } from "iterate/sdk";
+import { StreamProcessorDurableObject } from "iterate/sdk";
 import type { StreamEvent } from "iterate/stream/processor";
-import type { ItxScope as ItxEntrypointScope } from "iterate/sdk";
 import type { AgentHandleApi } from "./api.ts";
 import type { AgentState, FileAttachment } from "./contract.ts";
 import { AgentProcessor, STREAM_IDLE_BUDGET_MS } from "./processor.ts";
@@ -9,11 +8,7 @@ import { AgentAiSink } from "./ai-transport.ts";
 import { AI_TRANSPORT_SOURCE } from "./ai-transport-source.ts";
 
 export class AgentDurableObject
-  extends StreamProcessorDurableObject<
-    AgentState,
-    { ITX: ItxEntrypointService },
-    ItxEntrypointScope
-  >
+  extends StreamProcessorDurableObject<AgentState>
   implements Pick<AgentHandleApi, "message">
 {
   /** The processor's reads, and a person's words (`message`) — `itx.agents.get(path).message(…)`

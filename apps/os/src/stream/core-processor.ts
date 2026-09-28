@@ -44,7 +44,7 @@ import { jsonEqual } from "iterate/lib";
 import { z } from "zod";
 import type { StreamEvent, ReduceArgs, StreamEventInput } from "iterate/stream/processor";
 import type { RewriteRuleConfigured } from "iterate/api";
-import { RunRequested, RunSettled } from "iterate/stream/run";
+import { RunEventCatalog, RunRequested } from "iterate/stream/run";
 import { firstPartyFacetClassOf } from "../first-party-facets.ts";
 import {
   FetchRouteConfiguredPayload,
@@ -333,23 +333,11 @@ function parseSubscriptionName(name: string): string {
 export const CoreContract = {
   slug: "core",
   version: "15.0.0",
-  /** THE EVENTS THIS CONTRACT OWNS beyond its control events (their schemas: iterate/stream/run
-   *  and core-events.ts). A processor that consumes them names a catalog in its `processorDeps`
-   *  (the agent names RunContract, the Project CoreEventCatalog); the runner and `itx.run` read them
-   *  here. */
-  events: {
-    ...CoreEventCatalog.events,
-    "events.iterate.com/itx/run-requested": {
-      description:
-        "A script this context is asked to run once, against its own itx, by whoever appended it (source.principal); the event's offset is the run.",
-      payloadSchema: RunRequested,
-    },
-    "events.iterate.com/itx/run-settled": {
-      description:
-        "What the requested script returned, or how it failed; a run the context's restart interrupted is settled here too, never re-run.",
-      payloadSchema: RunSettled,
-    },
-  },
+  /** THE EVENTS THIS CONTRACT OWNS beyond its control events, as two catalogs: CoreEventCatalog
+   *  (core-events.ts) and RunEventCatalog (iterate/stream/run). A processor that consumes them names
+   *  the catalog in its `processorDeps` (the Project names CoreEventCatalog, the agent RunEventCatalog);
+   *  the runner and `itx.run` read them here. */
+  events: { ...CoreEventCatalog.events, ...RunEventCatalog.events },
   initialState: (): CoreState => ({
     paused: null,
     itxExpressionRewriteRules: {},

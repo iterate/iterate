@@ -13,7 +13,8 @@ import {
   type ProcessorState,
   type ReduceArgs,
 } from "iterate/stream/processor";
-import type { ItxScope, WithItx } from "iterate/sdk";
+import type { IterateContextApi } from "iterate/api";
+import type { WithItx } from "iterate/sdk";
 import { AiLinterContract, type AiLinterJob } from "./contract.ts";
 import { PROMPT_VERSION } from "./lint.ts";
 import { DEFAULT_MODEL, lintHead, type Gateway } from "./run.ts";
@@ -50,9 +51,9 @@ export class AiLinterProcessor extends StreamProcessor<AiLinterState> {
   contract = AiLinterContract;
   /** Jobs this incarnation is running; state's queue is the truth, this only stops a second start. */
   readonly #running = new Set<string>();
-  readonly #withItx: WithItx<ItxScope>;
+  readonly #withItx: WithItx;
   readonly #storage: LintStorage;
-  constructor(withItx: WithItx<ItxScope>, storage: LintStorage) {
+  constructor(withItx: WithItx, storage: LintStorage) {
     super();
     this.#withItx = withItx;
     this.#storage = storage;
@@ -150,7 +151,7 @@ export class AiLinterProcessor extends StreamProcessor<AiLinterState> {
 
 /** A model through the project's Workers AI binding. `Ai.run`'s types list Workers AI's own models;
  *  a partner model (the Responses API) and Jev take their own inputs, so the call is untyped here. */
-const runModel = (itx: ItxScope, model: string, input: unknown, gateway: Gateway) =>
+const runModel = (itx: IterateContextApi, model: string, input: unknown, gateway: Gateway) =>
   (itx.ai as unknown as { run: (...args: unknown[]) => Promise<unknown> }).run(model, input, {
     gateway,
   });

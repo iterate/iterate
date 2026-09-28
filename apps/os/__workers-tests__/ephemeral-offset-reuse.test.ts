@@ -17,7 +17,7 @@ const DIGEST_MODULES = {
   "package.json": '{"main":"worker.js"}',
   "worker.js": /* js */ `
 import { WorkerEntrypoint } from "cloudflare:workers";
-import { withItx } from "iterate/sdk";
+import { withItx } from "iterate/with-itx";
 export default class Digest extends WorkerEntrypoint {
   processEventBatch(events, range) {
     return withItx(this.env.ITX, async (itx) => {
