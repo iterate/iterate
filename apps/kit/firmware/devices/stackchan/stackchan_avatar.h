@@ -2,8 +2,6 @@
 #define ITERATE_KIT_PLATFORMS_STACKCHAN_AVATAR_H
 
 #include "iterate/kit/conversation_lights.h"
-/* For FACE_RENDER_PIXEL_COUNT, which sizes a capture's destination. */
-#include "iterate/kit/avatar/face_render.h"
 
 #include "esp_err.h"
 
@@ -174,67 +172,19 @@ void iterate_kit_stackchan_avatar_metrics_snapshot(
 bool iterate_kit_stackchan_avatar_display_active(void);
 
 /**
- * Copy the rendered face out, so somebody off the desk can see it.
+ * Lends the glass to a 320x240 big-endian RGB565 frame, or gives it back to
+ * the face with NULL (screen.setImage, stackchan_device.c).
  *
- * `displayActive` says the panel is being driven and `displayTransfers` says
- * how often; neither says what the pixels were, and a face drawn entirely in
- * the background colour satisfies both. This closes that gap: the source
- * surface as the renderer produced it, 160x120 host-order RGB565 — the panel's
- * 320x240 is this doubled by the strip scaler, so nothing is lost by copying
- * the smaller one.
- *
- * `destination` needs FACE_RENDER_PIXEL_COUNT pixels. Returns
- * ESP_ERR_INVALID_STATE before the avatar is running and ESP_ERR_TIMEOUT if a
- * render held the surface for two whole visual ticks.
+ * The render task paints a lent frame once, at its next visual tick, and then
+ * leaves the panel alone. It reads `pixels` only until
+ * iterate_kit_stackchan_avatar_image_painted() is true, so the lender may
+ * rewrite the buffer after that. Latest state, not a queue: a newer loan or
+ * return supersedes one not yet painted.
  */
-/**
- * Fill the whole panel with one host-order RGB565 colour, bypassing the face.
- *
- * The separator of last resort: every counter can read healthy while the glass
- * stays dark, because "the content is wrong" and "the panel shows nothing"
- * look identical from inside the device. A person can tell them apart in one
- * glance. Uses the real strip buffer and transfer path, so a visible fill
- * exonerates exactly the machinery the face uses.
- *
- * The next rendered frame overwrites it — this paints, it does not latch.
- */
-esp_err_t iterate_kit_stackchan_avatar_fill(uint16_t colour);
+void iterate_kit_stackchan_avatar_show_image(const uint8_t *pixels);
 
-esp_err_t iterate_kit_stackchan_avatar_capture(
-    uint16_t *destination,
-    size_t capacity_pixels,
-    uint16_t *width,
-    uint16_t *height);
-
-/**
- * The image overlay's staging surface: FACE_RENDER_PIXEL_COUNT host-order
- * RGB565 pixels, PSRAM, allocated on first use and kept — like the
- * screenshot's buffer, a board asked twice must not fail the second time
- * because the heap moved. NULL means PSRAM could not supply it.
- *
- * SINGLE-WRITER DISCIPLINE:
- * write this surface only while NO show deadline is active, because the
- * render task reads it exactly while one is. The fetch path upholds that by
- * refusing a new image while one is still on the glass.
- */
-uint16_t *iterate_kit_stackchan_avatar_image_staging(void);
-
-/**
- * Publishes "the staged image owns the glass" for the next show_for_ms.
- *
- * A latest-state deadline, not a command queue: the render task compares it
- * to now at its own 15 Hz, paints the staging surface instead of rendering
- * the face while it is in the future, and simply lets the face return when
- * it passes. Nothing to cancel, nothing to replay.
- */
-void iterate_kit_stackchan_avatar_show_image(uint32_t show_for_ms);
-
-/**
- * Image showings the render task watched expire — the "then the face came
- * back" proof, counted at the deadline transition rather than promised at
- * publish time.
- */
-uint32_t iterate_kit_stackchan_avatar_image_shows_completed(void);
+/** Whether the latest loan or return is on the glass. */
+bool iterate_kit_stackchan_avatar_image_painted(void);
 
 #ifdef __cplusplus
 }

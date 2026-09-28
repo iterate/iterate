@@ -102,7 +102,7 @@ dependencies:
       require: private
       version: '>=5.0'
     source:
-      registry_url: https://components.espressif.com/
+      registry_url: https://components.espressif.com
       type: service
     version: 1.3.1
   espressif/esp_lcd_ili9341:
@@ -162,11 +162,10 @@ direct_dependencies:
 - espressif/esp-sr
 - espressif/esp32-camera
 - espressif/esp_codec_dev
-- espressif/esp_jpeg
 - espressif/esp_lcd_ili9341
 - espressif/esp_lcd_touch_ft5x06
 - espressif/led_strip
 - idf
-manifest_hash: f1636acdc6a0495a12031a5285374cc36a93ed25a9a9dea5c3dd0f835f94e2c2
+manifest_hash: 08fb9cce4fb0e410bd6fcc647d317c309b9d1e4e33dc7191a1f61d5ce977a7aa
 target: esp32s3
 version: 3.0.0

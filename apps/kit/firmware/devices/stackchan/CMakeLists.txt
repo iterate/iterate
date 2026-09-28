@@ -6,7 +6,6 @@ idf_component_register(
     stackchan_avatar.c
     stackchan_body.c
     stackchan_camera.c
-    stackchan_image.c
     core_s3_capture_reserve.c
   PRIV_INCLUDE_DIRS .
   REQUIRES
@@ -27,13 +26,10 @@ idf_component_register(
     esp_driver_uart
     esp_lcd
     lcd_transfer
-    esp_http_client
-    mbedtls
     nvs_flash
     espressif__esp-sr
     core_s3_board
-    espressif__esp32-camera
-    espressif__esp_jpeg)
+    espressif__esp32-camera)
 
 include(${CMAKE_CURRENT_LIST_DIR}/../../tools/baked-sounds.cmake)
 iterate_kit_add_baked_sounds(TRIM_WAKE)
