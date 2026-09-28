@@ -116,7 +116,7 @@ export function repoArtifactName(path: string): string {
 
 /** Whether an Artifacts repo can back `path` at all (`repoArtifactName` names one): a project's
  *  deletion asks only such a path's repo to go (project/durable-object.ts). */
-export function canBackRepo(path: string): boolean {
+export function canBackRepo(path: string) {
   return "name" in namedRepo(path);
 }
 
