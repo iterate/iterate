@@ -536,10 +536,9 @@ test.for([
   expect(pageFor(lastPage, judged)).toEqual({ kind, lastPage: next });
 });
 
-// Medians the guard judged, replayed from its state: its red page (2026-09-24 18:47, 23 pushes),
-// then every third hourly run from 19:47 to 09-26 19:47. They fell to 180 s without going under the
-// lines and rose past 200 s from 09-25 22:47. Against the page's median that rise is never 20 s;
-// against the best since, it escalates once. Each other run edits the page.
+// Medians of one red page's hourly runs, every third: they fall to 180 s without going under the
+// lines, then rise past 200 s. Against the page's median that rise is never 20 s; against the best
+// since, it escalates once. Each other run edits the page.
 test("a median that recovers while over and then rises more than 20 s escalates once, over its one page", () => {
   const medians = [
     234.1, 210.4, 195.3, 186.2, 184.8, 181.9, 179.9, 183, 189, 183, 202.9, 205.9, 205.1, 207.3,

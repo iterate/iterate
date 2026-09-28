@@ -12,13 +12,10 @@
 //   DO cost                   the health job: Durable Object hours on both accounts (./do-cost.ts), in
 //                             its own daily thread and pages
 //
-// Each check says what its verdict owes its signal's page (./page.ts `decide`): a page when it turns
-// red or unjudged (scripts/ci/slack.ts `pageText`, mentioning Jonas and Misha, as every #error-pulse
-// message does), an edit of that page while it stays so, a reply in its thread when it gets worse,
-// and on green again a `✅ resolved:` reply in the thread and the page's first line marked resolved
-// (`sendUpdates`). A check that could not read what it judges, or found its probe broken, fails the
-// job after the others have paged: a scheduled run reports on main's head, where red reads as "this
-// commit broke", so a page never turns a job red. Main OS e2e's page job reports on the commit its
+// Each check returns what its verdict owes its signal's page (./page.ts `PageAction`), which
+// `sendUpdates` sends. A check that could not read what it judges, or found its probe broken, fails
+// the job after the others have paged: a scheduled run reports on main's head, where red reads as
+// "this commit broke", so a page never turns a job red. Main OS e2e's page job reports on the commit its
 // run tested, so a broken probe of the slow rows is an unjudged page there (./e2e.ts), and the job
 // fails only when it cannot judge its run or post.
 //
