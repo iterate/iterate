@@ -591,14 +591,12 @@ export function admitLoadedCodeRow(
     );
   const target = payload?.target;
   if (!target) return; // a mask, an un-set (an empty string is the reduce's refusal, not this wall's)
-  // A live object is the lend's own business; an expression is walled but for the code's own lend.
-  if (isItxExpressionInput(target)) {
-    const expression = normalizedItxExpression(target, { holes: true });
-    const [, root, registry, lend] = expression;
-    const ownLend =
-      root === "builtins" && registry === "rpcStubs" && Array.isArray(lend) && lend[0] === "get";
-    if (!ownLend) admitLoadedCodeExpression(expression, base, landsAt);
-  }
+  if (typeof target !== "string" && !Array.isArray(target)) return; // a live object: the lend's own business
+  const expression = normalizedItxExpression(target as ItxExpressionInput, { holes: true });
+  const [, root, registry, lend] = expression;
+  if (root === "builtins" && registry === "rpcStubs" && Array.isArray(lend) && lend[0] === "get")
+    return;
+  admitLoadedCodeExpression(expression, base, landsAt);
 }
 
 /** A JAIL IS LIFTED ONLY BY A PERSON. While a context's table holds its bare `itx ⇒ null`, a row that
@@ -639,12 +637,6 @@ function isCdAppend(expression: ItxExpression): boolean {
     Array.isArray(append) &&
     append[0] === "append"
   );
-}
-
-/** An expression as loaded code spells one, a dotted string or its steps: `normalizedItxExpression`
- *  refuses any other shape of either. */
-function isItxExpressionInput(value: unknown): value is ItxExpressionInput {
-  return typeof value === "string" || Array.isArray(value);
 }
 
 /** A bare `itx` row whose target is `cd` of THIS context is a loop no depth budget can see — every
