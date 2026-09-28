@@ -20,12 +20,15 @@ import { z } from "zod";
 import type { AuthenticatedApp } from "iterate/app";
 import type { IterateContextApiWith } from "iterate/api";
 import { Button } from "@iterate-com/ui/components/button";
-import { Card } from "@iterate-com/ui/components/card";
 import { Field, FieldLabel } from "@iterate-com/ui/components/field";
 import { Input } from "@iterate-com/ui/components/input";
 import { IterateLogo } from "@iterate-com/ui/components/iterate-logo";
 import { Spinner } from "@iterate-com/ui/components/spinner";
-import { ErrorMessage, StandalonePage } from "@iterate-com/ui/components/standalone-page";
+import {
+  ErrorMessage,
+  StandaloneCard,
+  StandalonePage,
+} from "@iterate-com/ui/components/standalone-page";
 import { Textarea } from "@iterate-com/ui/components/textarea";
 import { iterateClient } from "../lib/iterate-client.ts";
 import { SECRET_NAME, SECRETS_PREFIX, secretMaterialOf } from "../lib/secrets.ts";
@@ -114,7 +117,7 @@ function CollectSecret() {
       : null;
   return (
     <StandalonePage className="max-w-100">
-      <Card className="gap-5 p-5 shadow-xs sm:p-6">
+      <StandaloneCard>
         <header className="flex items-center gap-3">
           <IterateLogo alt="" className="size-8" />
           <h1 className="min-w-0 text-xl font-semibold tracking-tight wrap-anywhere">
@@ -150,7 +153,7 @@ function CollectSecret() {
             </p>
           </>
         )}
-      </Card>
+      </StandaloneCard>
     </StandalonePage>
   );
 }
