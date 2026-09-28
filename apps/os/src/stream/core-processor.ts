@@ -187,7 +187,7 @@ export function targetOwnsProgress(state: CoreState, row: Subscription): boolean
  *  into the push while its head resolves elsewhere. A row that addresses another context's facet
  *  (`cd`) resolves past `builtins.facets` and pushes none of this context's. Their deliveries are
  *  what a read of the facet waits for (subscription-delivery.ts `deliveriesQueuedFor`). */
-export function rowsPushingFacet(state: CoreState, facetName: string): string[] {
+export function rowsPushingFacet(state: CoreState, facetName: string) {
   return Object.entries(state.subscriptions)
     .filter(([, row]) => {
       if (row.halted || row.target.length <= 2 || row.target.at(-1) !== "processEventBatch")
