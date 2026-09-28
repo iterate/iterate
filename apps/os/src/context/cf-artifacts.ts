@@ -162,8 +162,8 @@ const PROBE_TOKEN_TTL_SECONDS = 60;
  *  to come free (a deletion that landed, or a failed create letting go of it), counted from the
  *  answer that first found it taken: the first create's own time is Artifacts', and a create can
  *  answer 10400 after ~13.5 s and hold the name 3–13 s more (the preview account, measured
- *  2026-09-28). A deletion frees its name 2–5 s after the delete (measured 2026-09-25). The waits
- *  between its rounds double from 1 s to 4 s at most. A name still taken lands `repo/create-failed`
+ *  2026-09-28), and a deletion frees its name a few seconds after the delete. The waits between
+ *  its rounds double from 1 s to 4 s at most. A name still taken lands `repo/create-failed`
  *  with its reason, and the caller's next create is a new attempt. This bound and a slow first
  *  create together can outlast the 30 s a caller of `itx.repos.create` waits
  *  (project/collection.ts `TERMINAL_WAIT_MS`): that caller then answers WAIT_TIMEOUT while the
