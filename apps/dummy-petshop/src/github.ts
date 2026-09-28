@@ -96,7 +96,7 @@ export async function handleGithubRequest(
       return redirectTo(app.callbackUrl, { setup_action: "request", state: query.state });
     const code = await github.code({
       clientId: app.oauthClientId,
-      // every installation has a user: its registration names one (RegisterApp) or defaults it
+      // every installation has a user: its registration names one (AppRegistration) or defaults it
       grant: { login: query.login || app.users[0]!.login },
     });
     return redirectTo(app.callbackUrl, {
@@ -398,6 +398,8 @@ export async function handleGithubTestControls(
   return Response.json({ ok: true });
 }
 
+const InstallationUser = z.object({ login: z.string(), role: z.enum(["admin", "member"]) });
+
 const RegisterApp = z.object({
   publicKeyPem: z.string().min(1),
   appId: z.string().optional(),
@@ -412,10 +414,7 @@ const RegisterApp = z.object({
       type: z.enum(["Organization", "User"]).optional(),
     })
     .optional(),
-  users: z
-    .array(z.object({ login: z.string(), role: z.enum(["admin", "member"]) }))
-    .min(1)
-    .optional(),
+  users: z.tuple([InstallationUser], InstallationUser).optional(),
   oauthClientId: z.string().optional(),
 });
 

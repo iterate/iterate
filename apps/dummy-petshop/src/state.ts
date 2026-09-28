@@ -428,7 +428,8 @@ interface AppRegistration {
   appSlug?: string;
   callbackUrl?: string;
   account?: { login: string; id?: number; type?: GithubAccount["type"] };
-  users?: GithubInstallationUser[];
+  /** At least one: the first installs the App by default (github.ts). */
+  users?: [GithubInstallationUser, ...GithubInstallationUser[]];
   oauthClientId?: string;
 }
 
