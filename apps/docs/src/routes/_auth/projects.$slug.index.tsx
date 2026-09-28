@@ -41,6 +41,7 @@ function DocList() {
         });
       return path;
     },
+    // returned, so the button stays pending until the doc's page has loaded
     onSuccess: (path) => navigate({ to: "/projects/$slug/$", params: { slug, _splat: path } }),
   });
   function submit(event: FormEvent<HTMLFormElement>) {
@@ -52,7 +53,7 @@ function DocList() {
       <form onSubmit={submit} className="flex gap-2">
         <Input name="title" aria-label="New doc title" placeholder="New doc title" required />
         <Button type="submit" disabled={create.isPending}>
-          New doc
+          {create.isPending ? "Creating…" : "New doc"}
         </Button>
       </form>
       {create.error ? (
