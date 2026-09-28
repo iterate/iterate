@@ -1,4 +1,5 @@
 #include "iterate/kit/platforms/itx_transport.h"
+#include "iterate/kit/platforms/system_update.h"
 #include "iterate/kit/atomic.h"
 #include "iterate/kit/retry_gate.h"
 
@@ -9,7 +10,6 @@
 #include "esp_app_desc.h"
 #include "esp_cpu.h"
 #include "esp_mac.h"
-#include "esp_ota_ops.h"
 #include "esp_task_wdt.h"
 #include "esp_timer.h"
 #include "esp_wifi.h"
@@ -1521,20 +1521,8 @@ enum iterate_kit_status iterate_kit_itx_transport_poll(
           &transport->ready_socket_generation,
           socket_generation);
       transport->state = ITERATE_KIT_ITX_READY;
-      {
-        /*
-         * READY is also the OTA acceptance test: a freshly updated image
-         * boots PENDING_VERIFY, and a client whose one job is the connection
-         * proves itself by mounting. Marking here — not at app start — means
-         * an image that boots but cannot reach /api rolls back on the next
-         * watchdog reset instead of stranding the board.
-         */
-        static bool app_marked_valid;
-        if (!app_marked_valid) {
-          app_marked_valid = true;
-          (void)esp_ota_mark_app_valid_cancel_rollback();
-        }
-      }
+      /* READY is also the OTA acceptance test (system_update.c). */
+      iterate_kit_esp_system_update_accept();
       return ITERATE_KIT_OK;
     case ITERATE_KIT_ITX_CONNECTION_FAILED:
       transport->mount_deadline_us = 0;

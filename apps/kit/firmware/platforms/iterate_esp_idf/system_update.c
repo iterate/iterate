@@ -3,22 +3,40 @@
 #include "iterate/kit/platforms/restart_note.h"
 
 #include <stdbool.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "esp_crt_bundle.h"
-#include "esp_http_client.h"
+#include "esp_https_ota.h"
 #include "esp_log.h"
 #include "esp_ota_ops.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "psa/crypto.h"
 
+/*
+ * `system.update` on ESP-IDF, in Espressif's own OTA shape:
+ *
+ * 1. esp_https_ota streams the image over HTTPS (the certificate bundle;
+ *    redirects followed) into the inactive slot, ota_0 or ota_1 of the
+ *    board's targets/common/partitions-*.csv.
+ * 2. The slot is read back and its SHA-256 compared with the digest the caller
+ *    named. esp_https_ota checks that an image is whole; only this proves it
+ *    is the one that was asked for.
+ * 3. esp_https_ota_finish validates the image and makes the slot the boot
+ *    partition, and the board restarts with the note "system-update".
+ * 4. CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE boots the new image PENDING_VERIFY.
+ *    iterate_kit_esp_system_update_accept() marks it valid; any reset before
+ *    that boots the previous image again.
+ */
+
 static const char tag[] = "system-update";
 
 enum {
   UPDATE_HTTP_TIMEOUT_MS = 20000,
-  UPDATE_READ_BYTES = 4096,
-  /* TLS handshake plus the OTA write path; measured comfortably under this. */
+  /* The HTTP read size, and the size of each read back from the slot. */
+  UPDATE_CHUNK_BYTES = 4096,
+  /* The TLS handshake plus the OTA write path; measured comfortably under. */
   UPDATE_TASK_STACK_BYTES = 12288,
   /*
    * Low priority on the non-audio core: an update is minutes of background
@@ -30,144 +48,100 @@ enum {
 
 static struct {
   char url[512];
-  char sha256_hex[65];
+  uint8_t sha256[32];
   /* One update at a time; cleared only on a failure (success restarts). */
   volatile bool in_flight;
 } update;
 
-static bool digest_matches(const uint8_t digest[32], const char *expected) {
-  char rendered[65];
-  size_t index;
-  for (index = 0U; index < 32U; ++index) {
-    static const char hex[] = "0123456789abcdef";
-    rendered[index * 2U] = hex[digest[index] >> 4];
-    rendered[index * 2U + 1U] = hex[digest[index] & 0x0FU];
+/* Step 2: the first `length` bytes of `slot` hash to the digest asked for. */
+static bool slot_holds_requested_image(
+    const esp_partition_t *slot, size_t length) {
+  psa_hash_operation_t sha = PSA_HASH_OPERATION_INIT;
+  uint8_t *chunk = malloc(UPDATE_CHUNK_BYTES);
+  uint8_t digest[32];
+  size_t digest_length = 0U;
+  size_t offset;
+  bool hashed = chunk != NULL && length > 0U &&
+      psa_hash_setup(&sha, PSA_ALG_SHA_256) == PSA_SUCCESS;
+  for (offset = 0U; hashed && offset < length; offset += UPDATE_CHUNK_BYTES) {
+    const size_t size = length - offset < UPDATE_CHUNK_BYTES
+        ? length - offset
+        : UPDATE_CHUNK_BYTES;
+    hashed = esp_partition_read(slot, offset, chunk, size) == ESP_OK &&
+        psa_hash_update(&sha, chunk, size) == PSA_SUCCESS;
   }
-  rendered[64] = '\0';
-  if (strcmp(rendered, expected) != 0) {
-    ESP_LOGE(tag, "digest mismatch: got %s want %s", rendered, expected);
+  hashed = hashed &&
+      psa_hash_finish(&sha, digest, sizeof(digest), &digest_length) ==
+          PSA_SUCCESS;
+  (void)psa_hash_abort(&sha);
+  free(chunk);
+  if (!hashed) {
+    ESP_LOGE(tag, "could not hash %u bytes of %s", (unsigned)length, slot->label);
+    return false;
+  }
+  if (memcmp(digest, update.sha256, sizeof(digest)) != 0) {
+    ESP_LOGE(tag, "%s holds an image whose sha256 is not the one asked for:",
+        slot->label);
+    ESP_LOG_BUFFER_HEX_LEVEL(tag, digest, sizeof(digest), ESP_LOG_ERROR);
     return false;
   }
   return true;
 }
 
-static void update_task(void *context) {
+static void update_task(void *unused) {
   const esp_partition_t *slot = esp_ota_get_next_update_partition(NULL);
-  esp_ota_handle_t ota = 0;
-  esp_http_client_handle_t client = NULL;
-  psa_hash_operation_t sha = PSA_HASH_OPERATION_INIT;
-  uint8_t *chunk = NULL;
-  size_t total = 0U;
-  bool ota_open = false;
-  (void)context;
-
-  do {
-    const esp_http_client_config_t config = {
-      .url = update.url,
-      .timeout_ms = UPDATE_HTTP_TIMEOUT_MS,
-      .buffer_size = UPDATE_READ_BYTES,
-      .crt_bundle_attach = esp_crt_bundle_attach,
-    };
-    if (slot == NULL) {
-      ESP_LOGE(tag, "no inactive OTA slot — partition table predates OTA");
-      break;
+  const esp_http_client_config_t http = {
+    .url = update.url,
+    .timeout_ms = UPDATE_HTTP_TIMEOUT_MS,
+    .buffer_size = UPDATE_CHUNK_BYTES,
+    .crt_bundle_attach = esp_crt_bundle_attach,
+  };
+  const esp_https_ota_config_t config = {
+    .http_config = &http,
+    .partition = {.staging = slot},
+  };
+  esp_https_ota_handle_t ota = NULL;
+  esp_err_t err =
+      slot == NULL ? ESP_ERR_NOT_FOUND : esp_https_ota_begin(&config, &ota);
+  (void)unused;
+  if (err == ESP_OK) {
+    do {
+      err = esp_https_ota_perform(ota);
+    } while (err == ESP_ERR_HTTPS_OTA_IN_PROGRESS);
+  }
+  if (err == ESP_OK &&
+      !(esp_https_ota_is_complete_data_received(ota) &&
+        slot_holds_requested_image(
+            slot, (size_t)esp_https_ota_get_image_len_read(ota)))) {
+    err = ESP_ERR_INVALID_CRC;
+  }
+  if (ota != NULL) {
+    if (err == ESP_OK) {
+      err = esp_https_ota_finish(ota);
+    } else {
+      (void)esp_https_ota_abort(ota);
     }
-    chunk = malloc(UPDATE_READ_BYTES);
-    if (chunk == NULL) {
-      ESP_LOGE(tag, "no memory for the download buffer");
-      break;
-    }
-    client = esp_http_client_init(&config);
-    if (client == NULL || esp_http_client_open(client, 0) != ESP_OK) {
-      ESP_LOGE(tag, "could not open %s", update.url);
-      break;
-    }
-    (void)esp_http_client_fetch_headers(client);
-    {
-      const int http_status = esp_http_client_get_status_code(client);
-      if (http_status != 200) {
-        ESP_LOGE(tag, "fetch returned HTTP %d", http_status);
-        break;
-      }
-    }
-    if (esp_ota_begin(slot, OTA_SIZE_UNKNOWN, &ota) != ESP_OK) {
-      ESP_LOGE(tag, "esp_ota_begin failed for %s", slot->label);
-      break;
-    }
-    ota_open = true;
-    if (psa_hash_setup(&sha, PSA_ALG_SHA_256) != PSA_SUCCESS) break;
-    for (;;) {
-      const int got =
-          esp_http_client_read(client, (char *)chunk, UPDATE_READ_BYTES);
-      if (got < 0) {
-        ESP_LOGE(tag, "read failed at %u bytes", (unsigned)total);
-        goto failed;
-      }
-      if (got == 0) break;
-      if (psa_hash_update(&sha, chunk, (size_t)got) != PSA_SUCCESS ||
-          esp_ota_write(ota, chunk, (size_t)got) != ESP_OK) {
-        ESP_LOGE(tag, "flash write failed at %u bytes", (unsigned)total);
-        goto failed;
-      }
-      total += (size_t)got;
-    }
-    {
-      uint8_t digest[32];
-      size_t digest_length = 0U;
-      if (total == 0U ||
-          psa_hash_finish(&sha, digest, sizeof(digest), &digest_length) !=
-              PSA_SUCCESS ||
-          !digest_matches(digest, update.sha256_hex)) {
-        break;
-      }
-    }
-    ota_open = false;
-    if (esp_ota_end(ota) != ESP_OK) {
-      ESP_LOGE(tag, "esp_ota_end rejected the image");
-      break;
-    }
-    if (esp_ota_set_boot_partition(slot) != ESP_OK) {
-      ESP_LOGE(tag, "could not select %s for boot", slot->label);
-      break;
-    }
-    ESP_LOGI(
-        tag, "%u bytes verified into %s; restarting", (unsigned)total,
-        slot->label);
-    esp_http_client_cleanup(client);
-    free(chunk);
-    (void)psa_hash_abort(&sha);
-    /*
-     * The rollback config keeps the old image one reset away: the new one
-     * boots PENDING_VERIFY and is marked valid only when the transport
-     * reaches READY — a client whose one job is the connection proves itself
-     * by connecting.
-     */
+  }
+  if (err == ESP_OK) {
+    ESP_LOGI(tag, "verified into %s; restarting", slot->label);
     iterate_kit_platform_restart_with_note("system-update");
-    return;
-  } while (0);
-
-failed:
-  if (ota_open) (void)esp_ota_abort(ota);
-  if (client != NULL) esp_http_client_cleanup(client);
-  free(chunk);
-  (void)psa_hash_abort(&sha);
+  }
+  ESP_LOGE(tag, "update from %s failed: %s", update.url, esp_err_to_name(err));
   update.in_flight = false;
   vTaskDelete(NULL);
 }
 
 enum iterate_kit_status iterate_kit_platform_system_update_begin(
-    void *context, const char *url, const char *sha256_hex) {
+    void *context, const char *url, const uint8_t sha256[32]) {
   (void)context;
-  if (url == NULL || sha256_hex == NULL ||
-      strlen(url) >= sizeof(update.url) ||
-      strlen(sha256_hex) != sizeof(update.sha256_hex) - 1U) {
+  if (url == NULL || sha256 == NULL || strlen(url) >= sizeof(update.url)) {
     return ITERATE_KIT_INVALID_ARGUMENT;
   }
   if (__atomic_exchange_n(&update.in_flight, true, __ATOMIC_ACQ_REL)) {
     return ITERATE_KIT_BACKPRESSURE;
   }
   strcpy(update.url, url);
-  strcpy(update.sha256_hex, sha256_hex);
+  memcpy(update.sha256, sha256, sizeof(update.sha256));
   if (xTaskCreatePinnedToCore(
           update_task,
           "system-update",
@@ -181,4 +155,23 @@ enum iterate_kit_status iterate_kit_platform_system_update_begin(
   }
   ESP_LOGI(tag, "update scheduled from %s", update.url);
   return ITERATE_KIT_OK;
+}
+
+/*
+ * Step 4. READY is the acceptance test because a client whose one job is the
+ * connection proves itself by mounting. An image that boots but never reaches
+ * READY is restarted by the voice loop ("transport never became ready") and
+ * the bootloader boots the previous one.
+ */
+void iterate_kit_esp_system_update_accept(void) {
+  static bool accepted;
+  esp_ota_img_states_t state;
+  if (accepted) return;
+  accepted = true;
+  if (esp_ota_get_state_partition(esp_ota_get_running_partition(), &state) ==
+          ESP_OK &&
+      state == ESP_OTA_IMG_PENDING_VERIFY) {
+    ESP_LOGI(tag, "the updated image reached READY; rollback cancelled");
+    (void)esp_ota_mark_app_valid_cancel_rollback();
+  }
 }

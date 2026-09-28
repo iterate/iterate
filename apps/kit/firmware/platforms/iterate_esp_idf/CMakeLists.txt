@@ -12,7 +12,7 @@ idf_component_register(
     core
     esp_app_format
     esp_event
-    esp_http_client
+    esp_https_ota
     esp_netif
     esp_partition
     esp-tls

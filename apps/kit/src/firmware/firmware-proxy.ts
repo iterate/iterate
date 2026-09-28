@@ -13,8 +13,8 @@ import {
  * Why a proxy: esp-web-tools 10.4.0 `fetch()`es the manifest and every part from the page
  * (src/flash.ts, `build.parts.map(... fetch(url))`), but GitHub's download URL and the
  * release-assets.githubusercontent.com URL it redirects to send no `Access-Control-Allow-Origin`.
- * A plain 200 on Kit's origin is also what a device's own update would need
- * (firmware/platforms/iterate_esp_idf/system_update.c accepts only a 200 and follows no redirect).
+ * A board's own `system.update` takes its app image from here too (firmware/README.md, Over-the-air
+ * updates).
  *
  * The path is checked before anything is fetched, so the Worker only ever requests release files of
  * catalog devices from this repository: a known device, a release version and a plain `.bin` or
