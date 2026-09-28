@@ -47,26 +47,43 @@ async (itx) => ({
 
 Then go to the first line that fits:
 
-- **The service is Slack, Google, Cloudflare, GitHub (as a GitHub App installation) or Waitrose.**
-  These are built in. Say this, and stop:
+- **The service is Slack, Google (Gmail, Calendar, Drive; not the Gemini API), Cloudflare or GitHub
+  (as a GitHub App installation).** These are built in. Get the link that opens its Connect sheet:
 
-  > <Service> is built into iterate: open https://dash.iterate.com/projects/<projectSlug>/integrations
-  > and press **Connect** next to <Service>.
+  ```js
+  async (itx) => itx.integrations.requestFromUser("slack");
+  ```
 
-  `projectSlug` is in what step 1 returned. That link is the only one to send: don't make up
-  another.
+  Send its `url`, then end your turn:
+
+  > Slack is built into iterate. Open this link and press **Connect**:
+  >
+  > <url>
+  >
+  > Reply "done" when it's connected.
+
+  When they reply "done", run step 1 again: the connection is a new secret,
+  `/secrets/slack-<connection>`. Prove it as in step 4C, with
+  `authorization: 'Bearer getSecret("/secrets/slack-<connection>", { field: "accessToken" })'` and
+  a read-only call: Slack's `POST https://slack.com/api/auth.test`, or GitHub's
+  `GET https://api.github.com/installation/repositories?per_page=1` (with a `user-agent` header).
+  Then go to step 6.
 
   If the person wants their own OAuth app instead (for example a GitHub OAuth App that acts as
   them), carry on at step 2.
+
+- **The service is Waitrose.** It's built in too: send
+  https://dash.iterate.com/projects/<projectSlug>/integrations and ask them to press **Connect**
+  next to Waitrose. `projectSlug` is in what step 1 returned: don't make up another link.
 
 - **A secret for the service is already listed** (`/secrets/exa` for Exa, say): go to step 5.
 - **Otherwise:** go to step 2.
 
 ## Step 2. Research the service, then pick a path
 
-Search the service's own documentation. Look for pages called "API keys", "Authentication", "MCP",
-"OpenAPI" and "OAuth". Then write this sheet down for yourself, one line each. "none" is an
-answer, and a guess isn't:
+Search the service's own documentation: pages called "API keys", "Authentication", "MCP",
+"OpenAPI" and "OAuth". Answer the questions in the table below in order, and stop researching at
+the first "yes". Then write down only what that path needs, from the docs, never a guess. For Exa:
 
 ```
 Service:            Exa
@@ -75,16 +92,17 @@ Hosted MCP server:  https://mcp.exa.ai/mcp, key in header x-api-key
 OpenAPI document:   none
 REST API origin:    https://api.exa.ai, key in header x-api-key
 A read-only call:   the MCP tool web_search_exa, or POST https://api.exa.ai/search
-OAuth:              no
+OAuth:              no (if yes: does it register clients itself? step 4D, D0, says how to check)
 ```
 
 Only a JSON OpenAPI 3 document counts: iterate doesn't read YAML or Swagger 2. An origin is scheme
 and host only, `https://api.exa.ai`, with no path.
 
-Now answer these in order. The first "yes" is your path:
+The first "yes" is your path:
 
 | Question                                                                                      | Yes → path                  |
 | --------------------------------------------------------------------------------------------- | --------------------------- |
+| Runs a hosted MCP server that signs in with OAuth and registers clients itself?               | **D**: OAuth, step 4D       |
 | Has no API keys at all, or the person asked for it to act as their own account through OAuth? | **D**: OAuth, step 4D       |
 | Runs a hosted MCP server that takes the API key?                                              | **A**: key + MCP, step 4A   |
 | Publishes a JSON OpenAPI 3 document?                                                          | **B**: key + OpenAPI, 4B    |
@@ -110,10 +128,13 @@ async (itx) =>
 
 It returns `{ path, url }`.
 
-**3b.** Send the person this message, with the real link and the real API keys page:
+**3b.** Send the person this message, with the real link and the real API keys page. Put the link
+on a line of its own, exactly as returned: no backticks, no link text.
 
-> Open this link, paste your Exa API key into **Value** and press **Set secret**:
-> `<url>`
+> Open this link, paste your Exa API key into **Value** and press **Set secret** (**Update
+> secret** if it replaces one):
+>
+> <url>
 >
 > You can create a key at https://dashboard.exa.ai/api-keys. Reply "done" when it's saved, and
 > please don't paste the key here.
@@ -139,7 +160,11 @@ async (itx) => {
   const mcp = await itx.connectToMcp("https://mcp.exa.ai/mcp", {
     headers: { "x-api-key": 'getSecret("/secrets/exa")' },
   });
-  const tools = (await mcp.listTools()).map((tool) => tool.name);
+  // each tool's name and the arguments it takes
+  const tools = (await mcp.listTools()).map((tool) => ({
+    name: tool.name,
+    args: Object.keys(tool.inputSchema?.properties ?? {}),
+  }));
   const result = await mcp.callTool("web_search_exa", { query: "iterate", numResults: 1 });
   await mcp.close();
   return { tools, result };
@@ -237,40 +262,73 @@ Status 200 with real data: go to step 6. Anything else: see "When something goes
 
 ## Step 4D. OAuth
 
-The person registers an OAuth app with the service, and the platform runs the OAuth flow. Its
-callback is on the platform, and you never see the client secret or the tokens. The person acts
-twice: once to register the app and save its client secret, once to approve access.
+The platform runs the OAuth flow. Its callback is on the platform, and you never see a client
+secret or the tokens. You need an OAuth client first, and there are two ways to get one:
+
+- **The service registers clients itself** (its metadata lists a `registration_endpoint`; most
+  hosted MCP servers do): you register one in D1a. The person only approves access.
+- **Otherwise** the person registers an OAuth app with the service (D1b), and saves its client
+  secret through a link. Then they approve access.
 
 **D0. Find the endpoints.** You need the authorization endpoint, the token endpoint, the scopes,
-and how the token endpoint wants the client secret: in the form body (`client_secret_post`) or in
-a Basic header (`client_secret_basic`). Many services publish them:
+whether there is a `registration_endpoint`, and how the token endpoint wants the client secret: in
+the form body (`client_secret_post`) or in a Basic header (`client_secret_basic`). Many services
+publish them. Set `origin` to the MCP server's origin, or the service's auth origin:
 
 ```js
 async (itx) => {
-  const origin = "https://example.com"; // the service's auth origin
-  for (const path of [
-    "/.well-known/oauth-authorization-server",
-    "/.well-known/openid-configuration",
-  ]) {
-    const response = await itx.fetch(new Request(origin + path));
-    if (response.ok) {
-      const metadata = await response.json();
-      return {
-        authorizationEndpoint: metadata.authorization_endpoint,
-        tokenEndpoint: metadata.token_endpoint,
-        clientAuth: metadata.token_endpoint_auth_methods_supported,
-        scopes: metadata.scopes_supported,
-      };
-    }
-  }
-  return "no metadata: read the service's OAuth documentation";
+  const origin = "https://mcp.linear.app";
+  const read = async (url) => {
+    const response = await itx.fetch(new Request(url));
+    return response.ok ? response.json() : null;
+  };
+  // an MCP server may name its authorization server here
+  const resource = await read(`${origin}/.well-known/oauth-protected-resource`);
+  const issuer = resource?.authorization_servers?.[0] ?? origin;
+  const metadata =
+    (await read(`${issuer}/.well-known/oauth-authorization-server`)) ??
+    (await read(`${issuer}/.well-known/openid-configuration`));
+  if (!metadata) return "no metadata: read the service's OAuth documentation";
+  return {
+    authorizationEndpoint: metadata.authorization_endpoint,
+    tokenEndpoint: metadata.token_endpoint,
+    registrationEndpoint:
+      metadata.registration_endpoint ?? "none: the person registers an app (D1b)",
+    clientAuth: metadata.token_endpoint_auth_methods_supported,
+    scopes: metadata.scopes_supported,
+  };
 };
 ```
 
 GitHub publishes none. Its values are in the D2 sample below.
 
-**D1. The app, and a link for its client secret.** First make the link, pinned to the origin of
-the token endpoint:
+**D1a. The service registers clients itself: register one.** No app and no client secret. Send
+exactly this, with the `registration_endpoint` from D0:
+
+```js
+async (itx) => {
+  const response = await itx.fetch(
+    new Request("https://mcp.linear.app/register", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        client_name: "iterate",
+        redirect_uris: ["https://os.iterate.com/.secrets/oauth/callback"],
+        grant_types: ["authorization_code", "refresh_token"],
+        response_types: ["code"],
+        token_endpoint_auth_method: "none",
+      }),
+    }),
+  );
+  return { status: response.status, clientId: (await response.json()).client_id };
+};
+```
+
+Keep the `clientId` it returns, and go straight to D2: leave `clientSecret` out and pass
+`clientAuth: "none"`. Nothing for the person to do yet.
+
+**D1b. Otherwise: the person's app, and a link for its client secret.** First make the link,
+pinned to the origin of the token endpoint:
 
 ```js
 async (itx) =>
@@ -299,8 +357,9 @@ Then tell the person exactly what to do, with the service's real settings page. 
 On a self-hosted iterate, the callback is `/.secrets/oauth/callback` on the origin this guide is
 served from. End your turn.
 
-**D2. The consent.** When the person replies with the client ID, check that the client secret is
-saved (step 3d, with `/secrets/github-client-secret`). Then start the flow:
+**D2. The consent.** After D1b, when the person replies with the client ID, first check that the
+client secret is saved (step 3d, with `/secrets/github-client-secret`). Then start the flow. With
+the person's GitHub app:
 
 ```js
 async (itx) =>
@@ -316,17 +375,34 @@ async (itx) =>
   });
 ```
 
-It returns `{ authorizationUrl }`. Say:
+With a client you registered in D1a, there is no client secret. For Linear's MCP server:
 
-> Open this link and approve access: `<authorizationUrl>`
+```js
+async (itx) =>
+  itx.secrets.beginOAuth("/secrets/linear", {
+    authorizationEndpoint: "https://mcp.linear.app/authorize",
+    tokenEndpoint: "https://mcp.linear.app/token",
+    clientId: "…", // what D1a returned
+    clientAuth: "none",
+    scope: "read",
+    urls: ["https://mcp.linear.app"],
+  });
+```
+
+It returns `{ authorizationUrl }`. Say, with the link on a line of its own:
+
+> Open this link and approve access:
+>
+> <authorizationUrl>
 >
 > It comes back to iterate, and the page says whether it worked. Reply "done" when it says
 > **Done**, or send me what it says instead.
 
-End your turn.
+End your turn. The link works for an hour. If the person comes back later, or the page says it
+expired, run D2 again and send the new link.
 
-- **The service has no client secret** (a public client, PKCE only): skip the collection link in D1,
-  and leave `clientSecret` out.
+- **The person's app has no client secret** (a public client, PKCE only): skip the collection
+  link in D1b, leave `clientSecret` out, and pass `clientAuth: "none"`.
 - **Extra authorize parameters** go in `extra`. Google wants `{ access_type: "offline", prompt:
 "consent" }` before it issues a refresh token.
 
@@ -348,6 +424,21 @@ async (itx) => {
 };
 ```
 
+For an MCP server, the proof is step 4A with the token in the header:
+
+```js
+async (itx) => {
+  const mcp = await itx.connectToMcp("https://mcp.linear.app/mcp", {
+    headers: { authorization: 'Bearer getSecret("/secrets/linear", { field: "accessToken" })' },
+  });
+  const tools = (await mcp.listTools()).map((tool) => tool.name);
+  await mcp.close();
+  return { tools };
+};
+```
+
+Then call one read-only tool from `tools`, as in 4A.
+
 A token that expires is refreshed by the platform when the service answers 401, as long as the
 service issued a refresh token. Go to step 6.
 
@@ -359,8 +450,9 @@ collect it again at the same path (step 3), which replaces it.
 
 ## Step 6. Tell the person, and write it down for the project's agents
 
-Record the connection in the project's config repo, so its agents find it later. Append one line
-to `AGENTS.md` and keep everything already there:
+Only after the proof worked: record the connection in the project's config repo, so its agents
+find it later. This keeps everything in `AGENTS.md` and replaces the service's line if there is
+one:
 
 ```js
 async (itx) => {
@@ -368,9 +460,13 @@ async (itx) => {
   const current = (await repo.readFile("AGENTS.md")) ?? "# Agents\n";
   const line =
     '- Exa: MCP at https://mcp.exa.ai/mcp with header `x-api-key: getSecret("/secrets/exa")`.';
+  const kept = current
+    .trimEnd()
+    .split("\n")
+    .filter((old) => !old.startsWith("- Exa:"));
   return repo.commitFiles({
     message: "Record the Exa connection",
-    changes: [{ path: "AGENTS.md", content: `${current.trimEnd()}\n${line}\n` }],
+    changes: [{ path: "AGENTS.md", content: `${[...kept, line].join("\n")}\n` }],
   });
 };
 ```
@@ -401,16 +497,26 @@ With OAuth (GitHub, as the person's own account):
    consent link. **Your turn ends.**
 4. Person: "done". You run D3: status 200 and their login. Step 6. Done.
 
+With an MCP server that registers clients itself (Linear):
+
+1. Step 1, then step 2: Linear's MCP server signs in with OAuth, and D0 shows a
+   `registration_endpoint`. Path D.
+2. D1a registers a client. D2 starts the flow, and you send the consent link. **Your turn ends.**
+3. Person: "done". D3 lists the tools and calls one that reads. Step 6. Done.
+
 ## When something goes wrong
 
-| What you see                                                               | What it means, and what to do                                                                                                                  |
-| -------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| Your MCP client won't call `run` ("requires approval")                     | Ask the person to approve iterate's `run` tool in their client. For the Codex CLI: `-c mcp_servers.iterate.tools.run.approval_mode="approve"`. |
-| `no stored project secret for getSecret("/secrets/…")`                     | Nothing is saved at that path yet. Check the path, then send the collection link again (step 3b).                                              |
-| `the secret /secrets/… is pinned to … — not sent to …`                     | The secret isn't pinned to the host you called. Collect it again at the same path, with that origin added to `urls`.                           |
-| `connectToOpenApi: fetching … returned 502` for a document on another host | The key was headed to the document's host. Pass `baseUrl` (step 4B).                                                                           |
-| `… is not an OpenAPI 3 document`                                           | It's YAML or Swagger 2. Use step 4C with the same secret.                                                                                      |
-| The service answers 401 or 403                                             | Check the header name and format against its docs (the table in 4C), and that the person created the right kind of key.                        |
-| The OAuth callback page says `the token endpoint returned no access_token` | The client secret or `clientAuth` is wrong, or the app's callback URL doesn't match exactly. Fix it and run D2 again.                          |
-| `beginOAuth` refuses the client secret                                     | The client-secret secret must exist and be pinned to the token endpoint's origin (D1).                                                         |
-| The person pasted a key into the chat                                      | Tell them to revoke it and make a new one, then send the collection link.                                                                      |
+| What you see                                                                          | What it means, and what to do                                                                                                                  |
+| ------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| Your MCP client won't call `run` ("requires approval")                                | Ask the person to approve iterate's `run` tool in their client. For the Codex CLI: `-c mcp_servers.iterate.tools.run.approval_mode="approve"`. |
+| `no stored project secret for getSecret("/secrets/…")`                                | Nothing is saved at that path yet. Check the path, then send the collection link again (step 3b).                                              |
+| `the secret /secrets/… is pinned to … — not sent to …`                                | The secret isn't pinned to the host you called. Collect it again at the same path, with that origin added to `urls`.                           |
+| `connectToOpenApi: fetching … returned 502` for a document on another host            | The key was headed to the document's host. Pass `baseUrl` (step 4B).                                                                           |
+| `… is not an OpenAPI 3 document`                                                      | It's YAML or Swagger 2. Use step 4C with the same secret.                                                                                      |
+| The service answers 401 or 403                                                        | Check the header name and format against its docs (the table in 4C), and that the person created the right kind of key.                        |
+| The OAuth callback page says `the token endpoint returned no access_token`            | The client secret or `clientAuth` is wrong, or the app's callback URL doesn't match exactly. Fix it and run D2 again.                          |
+| `beginOAuth` refuses the client secret                                                | The client-secret secret must exist and be pinned to the token endpoint's origin (D1b).                                                        |
+| `The operation timed out.`                                                            | Run the same script once more.                                                                                                                 |
+| `The RPC receiver does not implement the method "…"`                                  | That name isn't there: check it against `listTools()` or `operations()`, and that you awaited the connection.                                  |
+| The callback page says `This link is not one the platform issued, or it has expired.` | The consent link works for an hour. Run D2 again and send the new link.                                                                        |
+| The person pasted a key into the chat                                                 | Tell them to revoke it and make a new one, then send the collection link.                                                                      |

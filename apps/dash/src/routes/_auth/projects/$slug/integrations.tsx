@@ -1225,9 +1225,10 @@ function agentPromptOf(service: string, projectSlug: string, platformOrigin: str
   const guide = platformOrigin ? `${platformOrigin}/connect-a-service.md` : "connect-a-service.md";
   return [
     `Connect ${name} to my iterate project "${projectSlug}", using iterate's MCP server.`,
-    `Read ${guide} first and follow it step by step.`,
+    `First read the whole guide at ${guide}, through iterate's run tool: async (itx) => (await itx.fetch(new Request("${guide}"))).text()`,
+    "Then follow it step by step.",
     "Never ask me for a key in the chat: send me a link whenever I have to do something, and wait for me to say done.",
-    `Finish with one read-only call to ${name} that shows it works.`,
+    `Before you say it's connected, show me one read-only call to ${name} that works.`,
   ].join("\n");
 }
 
