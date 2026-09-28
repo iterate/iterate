@@ -3,11 +3,9 @@
 # rewrites the issue when its body changed. Nothing is kept between runs. A dispatch with
 # dry-run=true prints the body in the log and writes nothing.
 #
-# #2580 is written as the iterate GitHub App (iterate[bot]): the writer mints an installation token
-# narrowed to writing issues in this repository. The Depot app's job token has no Issues permission
-# (403 on PATCH issues/2580). The app's id and key have one home, the platform's configuration
-# (Doppler os/prd's APP_CONFIG `integrations.github`), which this workflow reads on a schedule or a
-# dispatch only, never on pull_request or push.
+# #2580 is written as the iterate GitHub App (iterate[bot]; the writer says how). The App's id and
+# key have one home, the platform's configuration (Doppler os/prd's APP_CONFIG), which this
+# workflow reads on a schedule or a dispatch only, never on pull_request or push.
 name: Flake dashboard
 permissions:
   contents: read
@@ -38,8 +36,7 @@ jobs:
       - name: Setup
         uses: ./.depot/actions/setup
       # The Cloudflare API token CI uploads the test evidence with (Doppler _shared/preview) reads
-      # it back. The writer parses os/prd's APP_CONFIG (with APP_CONFIG_SECRETS__KEY, which the
-      # parser requires) for the iterate GitHub App that writes the issue.
+      # it back. parseAppConfig requires APP_CONFIG_SECRETS__KEY beside APP_CONFIG.
       - name: Recompute the dashboard issue
         run: |-
           set -euo pipefail

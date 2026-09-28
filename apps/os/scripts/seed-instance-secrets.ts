@@ -99,7 +99,7 @@ export default async function seedInstanceSecrets(options: {
 }
 
 /** One variable of a Doppler `os` config, never echoed. */
-function dopplerSecret(config: string, name: string): string {
+function dopplerSecret(config: string, name: string) {
   const result = spawnSync(
     "doppler",
     ["secrets", "get", name, "--plain", "--project", OS_DOPPLER_PROJECT, "--config", config],
