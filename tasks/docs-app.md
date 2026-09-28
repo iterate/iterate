@@ -5,9 +5,10 @@ size: large
 
 # Docs: team docs instead of Notion
 
-Status: spec only; nothing built yet. One PR, two commits: part 1 is a docs app you can write in on
-your own (autosave from the browser), part 2 adds co-editing (a per-doc Yjs server that also does
-the autosave). docs.iterate.com, comments and the rest come after.
+Status: part 1 built (a docs app you can write in, autosaving from the browser); part 2
+(co-editing through a per-doc Yjs facet) not started. Part 1's browser spec runs on the PR preview
+only; locally the editor was checked in a harness. Not done: the `docs` Doppler project (prd
+deploy), docs.iterate.com, comments.
 
 ## Goal
 
@@ -54,21 +55,25 @@ Not the goal: Notion parity. The thing Notion can't do is agents working on the 
 
 ## Part 1: a docs app you can write in (commit 1)
 
-- [ ] `apps/docs` from `apps/notes`: proxied server, base path, root, `_auth`, projects index
-- [ ] Registered everywhere Notes is: `envs.ts` `docsEnvs` + `PREVIEW_DEPLOYMENT_APPS`,
+- [x] `apps/docs` from `apps/notes`: proxied server, base path, root, `_auth`, projects index _(Notes' base-path helper moved to `packages/ui/src/apps/base-path.ts` for both)_
+- [x] Registered everywhere Notes is: `envs.ts` `docsEnvs` + `PREVIEW_DEPLOYMENT_APPS`,
       `FIRST_PARTY_APPS`, `start-app-config` `urls`, `pnpm-workspace.yaml`, `knip.ts`, `doppler.yaml`,
-      `preview-paths.ts` and the preview workflows' `paths`, `deploy-docs.yml`
-- [ ] `apps/docs/config-worker.ts` serving the `docs` routing slug
-- [ ] Doc list + "New doc" (creates `/repos/docs` idempotently, like Notes creates its repo)
-- [ ] Editor: CodeMirror + Atomic live preview (inline preview, tables, images), Rich / Markdown
+      `preview-paths.ts` and the preview workflows' `paths`, `deploy-docs.yml` _(plus the prd fault
+      alarm, `playwright.config.ts`, `DOCS_BASE_URL` in `apps/os/scripts/preview.ts`, and the docs that
+      list the clients; the `docs` Doppler project itself still needs creating, see log)_
+- [x] `apps/docs/config-worker.ts` serving the `docs` routing slug _(fetches through to `docs.iterate.workers.dev`)_
+- [x] Doc list + "New doc" (creates `/repos/docs` idempotently, like Notes creates its repo) _(`projects.$slug.index.tsx`)_
+- [x] Editor: CodeMirror + Atomic live preview (inline preview, tables, images), Rich / Markdown
       switch top right, formatting bar (undo/redo, bold, italic, strike, code, lists, checklist,
-      block type, link, table, divider)
-- [ ] The papercuts from last time (2026-09-10): Cmd-B/I/E/K do bold/italic/code/link (not the
-      sidebar), Tab indents list items and keeps focus, inline code is readable
-- [ ] Frontmatter as a properties block in Rich mode
-- [ ] Autosave: commit with the tip as parent; refused (someone else committed) → re-read, 3-way
-      merge (diff3), commit again; a status line says where it stands
-- [ ] `specs/docs/docs.spec.ts`: create a doc, type with shortcuts, it autosaves, a reload shows it
+      block type, link, table, divider) _(`src/editor/extensions.ts`, `src/components/doc-editor.tsx`)_
+- [x] The papercuts from last time (2026-09-10): Cmd-B/I/E/K do bold/italic/code/link (not the
+      sidebar), Tab indents list items and keeps focus, inline code is readable _(`stopPropagation`
+      on the bindings; `indentWithTab`; Atomic's colours mapped to the app theme)_
+- [x] Frontmatter as a properties block in Rich mode _(`src/editor/frontmatter.ts`)_
+- [x] Autosave: commit with the tip as parent; refused (someone else committed) → re-read, 3-way
+      merge (diff3), commit again; a status line says where it stands _(`src/editor/doc-session.ts`)_
+- [x] `specs/docs/docs.spec.ts`: create a doc, type with shortcuts, it autosaves, a reload shows it
+      _(also: the sidebar stays put on Cmd-B, and a commit made elsewhere merges in)_
 
 ## Part 2: co-editing (commit 2)
 
@@ -143,3 +148,17 @@ set of CodeMirror extensions, so switching later is cheap.
   for big docs; disabled checkboxes). Expect to bring the first patch back.
 
 ## Implementation log
+
+- 2026-09-28, part 1. `apps/docs` is Notes' shell plus an editor. `DocSession` owns the CodeMirror
+  view and the autosave, and React reads it through `useSyncExternalStore` (no state hooks). The
+  "New doc" button is a react-query mutation.
+- Checked by hand in a gitignored harness (`apps/docs/harness.ignoreme/`: the real `DocEditor` over
+  an in-memory repo): Cmd-B, Tab nesting with focus kept, autosave, a refused save merged with
+  someone else's non-conflicting commit, and a conflicting one keeping ours. The spec's keystrokes
+  were replayed there to pin its expected text.
+- Enter twice after a nested list item lifts it a level (CodeMirror's markdown keymap) instead of
+  leaving the list, so the spec's second edit extends an earlier line instead.
+- Before prd: `doppler projects create docs`, then a `prd` config inheriting `_shared.prd`
+  (`.agents/skills/creating-an-app/references/doppler.md`). Not done here: shared infra.
+- Local `scripts` tests `ci/toolchain.test.ts` and `ci/tracing/tracing.test.ts` fail on macOS's bash
+  3.2 (`inherit_errexit`); unrelated, green on CI's Linux.

@@ -1,5 +1,5 @@
 # MAIN ON THE DEV/PREVIEW ACCOUNT (`pnpm preview deploy-parents`, apps/os/scripts/preview.ts):
-# apps/os's `os` and each app's (`dash`, `agents`, `notes`, `admin`, `voice`, `kit`; envs.ts
+# apps/os's `os` and each app's (`dash`, `agents`, `notes`, `docs`, `admin`, `voice`, `kit`; envs.ts
 # `<app>Envs.preview`), redeployed in place from every push to main that a pull request's preview
 # would run for (scripts/ci/preview-paths.ts `previewPaths`; depot-workflows.test.ts keeps them
 # equal): https://os.iterate-dev-preview.workers.dev is os.iterate.com at main, and
@@ -30,6 +30,7 @@ on:
       - .depot/workflows/deploy-dash.yml
       - .depot/workflows/deploy-agents.yml
       - .depot/workflows/deploy-notes.yml
+      - .depot/workflows/deploy-docs.yml
       - .depot/workflows/deploy-admin.yml
       - .depot/workflows/deploy-voice.yml
       - .depot/workflows/deploy-kit.yml
@@ -39,6 +40,7 @@ on:
       - apps/dash/**
       - apps/agents/**
       - apps/notes/**
+      - apps/docs/**
       - apps/admin/**
       - apps/voice/**
       - apps/kit/**

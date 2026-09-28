@@ -1,0 +1,51 @@
+{
+  "name": "@iterate-com/docs",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite dev",
+    "build": "vite build",
+    "typecheck": "pnpm routes:check && tsc --noEmit",
+    "deploy": "tsx scripts/app.ts deploy",
+    "ensure-resources": "tsx scripts/app.ts ensure-resources",
+    "routes:generate": "tsx scripts/app.ts generate-route-tree",
+    "routes:check": "tsx scripts/app.ts generate-route-tree --check"
+  },
+  "dependencies": {
+    "@atomic-editor/editor": "0.6.2",
+    "@codemirror/autocomplete": "^6.20.3",
+    "@codemirror/commands": "^6.10.2",
+    "@codemirror/lang-markdown": "^6.5.2",
+    "@codemirror/language": "catalog:",
+    "@codemirror/search": "catalog:",
+    "@codemirror/state": "catalog:",
+    "@codemirror/view": "catalog:",
+    "@iterate-com/shared": "workspace:*",
+    "@iterate-com/ui": "workspace:*",
+    "@lezer/common": "^1.5.2",
+    "@lezer/highlight": "^1.2.4",
+    "@lezer/markdown": "^1.7.2",
+    "@tanstack/react-query": "^5.103.2",
+    "@tanstack/react-router": "catalog:",
+    "@tanstack/react-start": "catalog:",
+    "diff": "^8.0.4",
+    "iterate": "workspace:*",
+    "lucide-react": "catalog:",
+    "node-diff3": "3.2.1",
+    "react": "catalog:",
+    "react-dom": "catalog:",
+    "tailwindcss": "catalog:"
+  },
+  "devDependencies": {
+    "@cloudflare/vite-plugin": "catalog:",
+    "@cloudflare/workers-types": "catalog:",
+    "@tailwindcss/vite": "catalog:",
+    "@types/react": "catalog:",
+    "@types/react-dom": "catalog:",
+    "@vitejs/plugin-react": "catalog:",
+    "tsx": "catalog:",
+    "typescript": "catalog:",
+    "vite": "catalog:",
+    "wrangler": "catalog:"
+  }
+}

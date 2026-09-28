@@ -98,7 +98,7 @@ const workspaceDirectories = (
 // ── Depot deployment safety ──
 test("finds the production deploy workflows", () => {
   expect(deploymentWorkflows.map(({ app }) => app)).toEqual(
-    expect.arrayContaining(["os", "dash", "agents", "notes", "voice", "kit", "spa"]),
+    expect.arrayContaining(["os", "dash", "agents", "notes", "docs", "voice", "kit", "spa"]),
   );
 });
 
@@ -212,7 +212,7 @@ test("deploy-os.yml runs for what reaches the Worker, not the app's docs, tests 
 
 test.each(
   deploymentWorkflows.filter(({ app }) =>
-    ["os", "dash", "agents", "notes", "admin", "voice", "kit"].includes(app),
+    ["os", "dash", "agents", "notes", "docs", "admin", "voice", "kit"].includes(app),
   ),
 )("$file posts the deploy's own result to #ci as the deploy job's last step", ({ file }) => {
   const workflow = loadWorkflow(file);
@@ -321,7 +321,7 @@ test.each([
     file: ".depot/workflows/preview-parents.yml",
     permissions: { contents: "read" },
   },
-  ...["os", "admin", "agents", "dash", "notes", "voice", "kit"].map((app) => ({
+  ...["os", "admin", "agents", "dash", "notes", "docs", "voice", "kit"].map((app) => ({
     file: `.depot/workflows/deploy-${app}.yml`,
     permissions: { contents: "read" },
   })),

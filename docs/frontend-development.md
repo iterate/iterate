@@ -220,7 +220,7 @@ the page keeps its data, and no pending component shows. An action that navigate
 No provider. The client is module state; the signed-in layout route is
 `ssr: false` (the session dials a WebSocket and never runs on the server), and
 its `beforeLoad` is the one place `authenticate` is called. The frame is the
-shared `AppShell` from `@iterate-com/ui` (the same frame dash, agents, notes and
+shared `AppShell` from `@iterate-com/ui` (the same frame dash, agents, notes, docs and
 voice use), filled with the `_auth` loader's projects.
 
 ```tsx

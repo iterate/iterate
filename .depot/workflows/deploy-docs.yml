@@ -1,0 +1,53 @@
+name: Deploy Docs
+permissions:
+  contents: read
+concurrency:
+  # Every ref deploys to the same production Worker. Never interrupt a
+  # credentialed deployment midway through its rollout.
+  group: deploy-docs-production
+  cancel-in-progress: false
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .depot/workflows/deploy-docs.yml
+      - apps/docs/**
+      - envs.ts
+      - scripts/lib/**
+      - packages/iterate/**
+      - packages/ui/**
+      - packages/shared/**
+      - package.json
+      - pnpm-lock.yaml
+      - pnpm-workspace.yaml
+  workflow_dispatch:
+jobs:
+  deploy:
+    runs-on: depot-ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+      - name: Setup
+        uses: ./.depot/actions/setup
+        with:
+          # a production deploy never reads Depot Cache (docs/depot-ci.md#depot-cache)
+          pnpm-store: none
+      - name: Deploy apps/docs
+        id: deploy
+        working-directory: apps/docs
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: doppler run --project docs --config prd -- pnpm run-script deploy
+      # The deploy's own result: a success to #ci; a failed, cancelled or timed-out deploy pages
+      # #error-pulse (deploy-os.yml says why `always()`).
+      - name: Notify Slack
+        if: ${{ always() && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          APP_DISPLAY_NAME: Docs
+          PUBLIC_URL: https://docs.iterate.workers.dev
+        run: pnpm tsx scripts/ci/notify.ts deploy-${{ steps.deploy.outcome == 'success' && 'success' || 'failure' }}

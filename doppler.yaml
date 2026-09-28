@@ -13,6 +13,8 @@ setup:
     path: apps/agents/
   - project: notes
     path: apps/notes/
+  - project: docs
+    path: apps/docs/
   - project: admin
     path: apps/admin/
   - project: voice

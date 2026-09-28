@@ -35,6 +35,7 @@ import {
 import {
   agentsEnvs,
   dashEnvs,
+  docsEnvs,
   kitEnvs,
   notesEnvs,
   osEnvs,
@@ -52,6 +53,7 @@ const PRD_WORKERS = [
   dashEnvs.prd,
   agentsEnvs.prd,
   notesEnvs.prd,
+  docsEnvs.prd,
   voiceEnvs.prd,
   kitEnvs.prd,
   spaEnvs.prd,

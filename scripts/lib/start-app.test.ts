@@ -31,6 +31,8 @@ test("on workers.dev our own zones are our apps' hosts, not the accounts they sh
     "admin.iterate-dev-preview.workers.dev",
     "agents.iterate-dev-preview.workers.dev",
     "dash.iterate-dev-preview.workers.dev",
+    "docs.iterate-dev-preview.workers.dev",
+    "docs.iterate.workers.dev",
     "kit.iterate-dev-preview.workers.dev",
     "notes.iterate-dev-preview.workers.dev",
     "os.iterate-dev-preview.workers.dev",

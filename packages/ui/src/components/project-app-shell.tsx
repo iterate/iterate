@@ -24,7 +24,7 @@ export function ProjectAppShell({
   app: string;
   projects: AppShellProject[];
   project: AppShellProject;
-  /** the path the page is served under when a project proxies the app (apps/notes base-path.ts) */
+  /** the path the page is served under when a project proxies the app (packages/ui/src/apps/base-path.ts) */
   basePath?: string;
   account: Principal;
   /** the router's current href — a change closes the phone's sidebar sheet */

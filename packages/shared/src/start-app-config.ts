@@ -1,9 +1,9 @@
 // start-app-config.ts — THE CONFIGURATION OF AN APP ON TOP of the platform: dash, agents, notes,
-// admin, voice and kit, TanStack Start apps that are each an OAuth client of apps/os and nothing
-// else — but notes, which a project's config worker serves under its hosts, on the host's sign-in. The platform's mechanism (app-config.ts): one `APP_CONFIG` object, and any key set alone
+// docs, admin, voice and kit, TanStack Start apps that are each an OAuth client of apps/os and nothing
+// else — but notes and docs, which a project's config worker serves under its hosts, on the host's sign-in. The platform's mechanism (app-config.ts): one `APP_CONFIG` object, and any key set alone
 // as an `APP_CONFIG_*` var merged on top.
 //
-//   { urls: { os, dash, agents, notes, admin, voice, kit }, denyZones, posthogProjectKey }
+//   { urls: { os, dash, agents, notes, docs, admin, voice, kit }, denyZones, posthogProjectKey }
 //
 // scripts/lib/start-app.ts writes it from envs.ts as the Worker's one `APP_CONFIG` var
 // (`startAppWorkerConfig`), and a per-PR preview swaps in the same PR's origins
@@ -35,6 +35,8 @@ export const StartAppConfig = z.object({
        *  is here because `FIRST_PARTY_APPS` is typed against `urls`, which gives Notes' origin its
        *  place in `ownZones` and a per-PR preview its Notes Worker. */
       notes: optionalOrigin,
+      /** read by no app, like `notes`: Docs is served under each project's hosts too. */
+      docs: optionalOrigin,
       admin: optionalOrigin,
       voice: optionalOrigin,
       kit: optionalOrigin,

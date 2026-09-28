@@ -8,6 +8,7 @@ The Iterate context platform runs at **https://os.iterate.com**. `apps/os` owns 
 | `apps/dash`              | Projects, organizations, sessions, and personal access tokens   |
 | `apps/agents`            | Agent conversations and inspection                              |
 | `apps/notes`             | Notes client                                                    |
+| `apps/docs`              | Docs client: a project's markdown docs, served like Notes       |
 | `apps/voice`             | Voice client                                                    |
 | `apps/kit`               | Device installer and firmware using the platform                |
 | `apps/admin`             | Every project and person, and a raw context explorer            |

@@ -78,7 +78,7 @@ Anything else that needs GitHub-only triggers, such as `pull_request_target`, `i
 | `preview-sweep.yml`   | Nightly, dispatch                                | Deletes superseded, stale and half-made deployments, the legacy Worker Previews and the former parents           |
 | `main-os-e2e.yml`     | Main push touching the preview paths, dispatch   | **Main OS e2e**: the pushed commit deployed as `main-<sha7>`, E2E tests, Browser specs, cleanup, its page, trace |
 | `deploy-os.yml`       | Main push touching what OS ships, dispatch       | **Deploy OS**: production, then the project-host check                                                           |
-| `deploy-<app>.yml`    | Main push touching what the app ships, dispatch  | Deploy of Dash, Agents, Notes, Voice, Kit, SPA, dummy-petshop or ci-reports                                      |
+| `deploy-<app>.yml`    | Main push touching what the app ships, dispatch  | Deploy of Dash, Agents, Notes, Docs, Voice, Kit, SPA, dummy-petshop or ci-reports                                |
 | `kit-firmware.yml`    | Firmware PR and main push, daily, dispatch       | Builds the changed boards; main publishes their releases                                                         |
 | `prd-fault-alarm.yml` | Every 15 minutes, dispatch                       | Reads production's Workers Logs and pages #error-pulse on faults                                                 |
 | `health.yml`          | Hourly, dispatch                                 | **Health**: judges the runs below and PR time to green; one #error-pulse page per red signal                     |

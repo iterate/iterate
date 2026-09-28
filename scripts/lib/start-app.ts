@@ -1,5 +1,5 @@
 /**
- * The scripts of a TanStack Start app on Workers — dash, agents, notes, voice and kit. An app
+ * The scripts of a TanStack Start app on Workers — dash, agents, notes, docs, voice and kit. An app
  * describes itself in apps/<app>/scripts/app.ts (a StartApp below), its vite.config.ts hands the
  * Cloudflare Vite plugin `startAppWorkerConfig`, and its package scripts run `startAppCli`:
  *
@@ -21,6 +21,7 @@ import {
   adminEnvs,
   agentsEnvs,
   dashEnvs,
+  docsEnvs,
   kitEnvs,
   notesEnvs,
   osEnvs,
@@ -70,6 +71,7 @@ const FIRST_PARTY_APPS: Record<
   dash: dashEnvs,
   agents: agentsEnvs,
   notes: notesEnvs,
+  docs: docsEnvs,
   admin: adminEnvs,
   voice: voiceEnvs,
   kit: kitEnvs,

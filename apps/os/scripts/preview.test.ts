@@ -57,7 +57,7 @@ test("a deployment's name is its prefix and the tested commit's first 7 digits: 
   );
 });
 
-test("a deployment is derived from its name alone: seven plain workers on the dev/preview account, apps/os's resources named after its worker", () => {
+test("a deployment is derived from its name alone: eight plain workers on the dev/preview account, apps/os's resources named after its worker", () => {
   expect(previewDeployment("pr3144-a1b2c3d")).toMatchObject({
     prefix: "pr3144",
     sha: "a1b2c3d",
@@ -80,6 +80,7 @@ test("a deployment is derived from its name alone: seven plain workers on the de
       dash: "https://pr3144-a1b2c3d-dash.iterate-dev-preview.workers.dev",
       agents: "https://pr3144-a1b2c3d-agents.iterate-dev-preview.workers.dev",
       notes: "https://pr3144-a1b2c3d-notes.iterate-dev-preview.workers.dev",
+      docs: "https://pr3144-a1b2c3d-docs.iterate-dev-preview.workers.dev",
       admin: "https://pr3144-a1b2c3d-admin.iterate-dev-preview.workers.dev",
       voice: "https://pr3144-a1b2c3d-voice.iterate-dev-preview.workers.dev",
       kit: "https://pr3144-a1b2c3d-kit.iterate-dev-preview.workers.dev",
@@ -90,7 +91,7 @@ test("a deployment is derived from its name alone: seven plain workers on the de
     expect(previewDeployment(name)).toBeUndefined();
 });
 
-test("the apps on top are the deployment's six clients", () => {
+test("the apps on top are the deployment's seven clients", () => {
   expect(APPS.map((app) => app.name).toSorted()).toEqual([...PREVIEW_DEPLOYMENT_APPS].toSorted());
 });
 

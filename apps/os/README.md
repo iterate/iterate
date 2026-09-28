@@ -66,8 +66,8 @@ The proxied `*.iterate.com` DNS record and Worker route serve the `iterate` proj
 named Worker routes such as `os.iterate.com`, `mcp.iterate.com`, `dash.iterate.com`, and
 `k.iterate.com` take precedence. The zone has an active `*.iterate.com` edge certificate.
 
-The Preview OS workflow's Deploy preview job deploys the tested commit's platform and all six hosted
-clients (Dash, Agents, Notes, Admin, Voice, Kit). Beside it, its E2E tests job sets up the integration
+The Preview OS workflow's Deploy preview job deploys the tested commit's platform and all seven hosted
+clients (Dash, Agents, Notes, Docs, Admin, Voice, Kit). Beside it, its E2E tests job sets up the integration
 suite and its Browser specs job the browser specs, and each runs its suite against them once the
 deploy has finished, each a required check; after the deploy, Clean up superseded deletes the PR's
 older deployments. A PR that changes no preview path deploys nothing and passes both without testing.

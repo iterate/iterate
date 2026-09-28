@@ -1,10 +1,10 @@
 import { createIsomorphicFn } from "@tanstack/react-start";
 import { getRequest } from "@tanstack/react-start/server";
 import { createAppRouter } from "@iterate-com/ui/apps/router";
-import { basePathOf, basePathRewrite, documentBasePath } from "./base-path.ts";
+import { basePathOf, basePathRewrite, documentBasePath } from "@iterate-com/ui/apps/base-path";
 import { routeTree } from "./routeTree.gen.ts";
 
-/** The base path this page is served under (base-path.ts): the request's in the server render,
+/** The base path this page is served under (@iterate-com/ui/apps/base-path): the request's in the server render,
  *  the document's in the browser. */
 const basePath = createIsomorphicFn()
   .server(() => basePathOf(getRequest().headers))

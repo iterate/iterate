@@ -766,9 +766,9 @@ async function writeDeployedTarget(name: string, apps: TestEvidenceTarget["apps"
  *  Playwright specs (specs/AGENTS.md) — the suites `pnpm e2e` and `pnpm spec` run. Each runner
  *  derives the deployed target itself (e2e/support/deployed-target.ts, from the `APP_CONFIG` in this
  *  process's environment and envs.ts `previewDeployment`): the vitest suite in its global-setup,
- *  the specs in specs/setup.ts. Every spec project runs, the notes and voice projects against this
- *  deployment's Notes, Voice, Dash and Admin apps, the Notes session specs signing out in its Dash
- *  (NOTES_BASE_URL, VOICE_BASE_URL, DASH_BASE_URL, ADMIN_BASE_URL; their specs fail in CI without
+ *  the specs in specs/setup.ts. Every spec project runs, the notes, docs and voice projects against this
+ *  deployment's Notes, Docs, Voice, Dash and Admin apps, the Notes session specs signing out in its Dash
+ *  (NOTES_BASE_URL, DOCS_BASE_URL, VOICE_BASE_URL, DASH_BASE_URL, ADMIN_BASE_URL; their specs fail in CI without
  *  them). The job's check is the verdict. The e2e rows tagged `slow` run as asked, else as the PR's
  *  label and paths say (scripts/slow-rows.ts). Vitest gets the choice as E2E_SLOW_ROWS, which holds
  *  each row to its timeout ceiling (e2e/support/setup.ts), and the PR's number as
@@ -787,6 +787,7 @@ async function runSuite(
       ? {
           WORKER_BASE_URL: url,
           NOTES_BASE_URL: appUrl("notes"),
+          DOCS_BASE_URL: appUrl("docs"),
           VOICE_BASE_URL: appUrl("voice"),
           DASH_BASE_URL: appUrl("dash"),
           ADMIN_BASE_URL: appUrl("admin"),
@@ -868,7 +869,10 @@ async function runSuite(
       name,
       // the client apps the specs run against; the vitest rows use none
       suite === "specs"
-        ? ["notes", "voice", "dash", "admin"].map((app) => ({ name: app, url: appUrl(app) }))
+        ? ["notes", "docs", "voice", "dash", "admin"].map((app) => ({
+            name: app,
+            url: appUrl(app),
+          }))
         : [],
     );
   } catch (error) {

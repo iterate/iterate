@@ -276,6 +276,28 @@ export const notesEnvs = {
   },
 };
 
+/** apps/docs — Notes' shape: served only under a project's hosts, where its config worker
+ *  (apps/docs/config-worker.ts) fetches through to this Worker, whose own URL no one signs in on.
+ *  docs.iterate.com is the iterate project's to route (its config worker), so the Worker keeps a
+ *  workers.dev origin. */
+export const docsEnvs = {
+  // DOCS AT MAIN on the dev/preview account, redeployed in place with the platform
+  // (preview-parents.yml). A PR's docs is its own worker (`previewDeployment`).
+  preview: {
+    cloudflareAccountId: PREVIEW_AND_DEV_ACCOUNT_ID,
+    dopplerConfig: "preview",
+    workerName: "docs",
+    baseUrl: "https://docs.iterate-dev-preview.workers.dev",
+  },
+  prd: {
+    cloudflareAccountId: PRD_ACCOUNT_ID,
+    dopplerConfig: "prd",
+    workerName: "docs",
+    posthogProjectKey: ITERATE_POSTHOG_PROJECT_KEY,
+    baseUrl: "https://docs.iterate.workers.dev",
+  },
+};
+
 /** apps/admin — the platform's admin app (README there); the notes app's shape, on a custom domain. */
 export const adminEnvs = {
   // ADMIN AT MAIN on the dev/preview account, signed in against osEnvs.preview and
@@ -324,6 +346,7 @@ export const PREVIEW_DEPLOYMENT_APPS = [
   "dash",
   "agents",
   "notes",
+  "docs",
   "admin",
   "voice",
   "kit",

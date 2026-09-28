@@ -22,7 +22,7 @@ so `notes--<project>.iterate.app` reaches Notes (see
 (`notesEnvs` `baseUrl`) is only what the config worker fetches. Under paths ingress (every
 preview) it is `<platform>/projects/<project>/notes/`: the edge strips that base path and says it in
 `x-iterate-base-path`, and Notes puts it back on every path the browser addresses — links, assets,
-server functions — while the router drops it ([src/base-path.ts](src/base-path.ts)). The page's
+server functions — while the router drops it ([packages/ui/src/apps/base-path.ts](../../packages/ui/src/apps/base-path.ts)). The page's
 `/.auth/*` and `/api` stay root paths: they are its host's, the platform's own under paths.
 
 The project host stamps `x-itx-principal` only for a project member, so the guard is one check.
@@ -51,7 +51,7 @@ iterate tunnel 5173 --project my-project --name notes-dev
 ```
 
 Vite puts its module URLs and its HMR socket under the base path, and Notes swaps the page's base
-path in for the build's ([src/base-path.ts](src/base-path.ts)). The page runs on the platform's
+path in for the build's ([packages/ui/src/apps/base-path.ts](../../packages/ui/src/apps/base-path.ts)). The page runs on the platform's
 sign-in, as the deployed Notes does. Under subdomains the tunnel's host is an origin of its own, and
 plain `pnpm dev` serves it. The local OS's `pnpm dev` does not forward the HMR socket: its
 Cloudflare Vite plugin drops every `vite-*` WebSocket it does not serve itself

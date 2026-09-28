@@ -354,7 +354,7 @@ test("every first-party prd Worker is read, not os-prd alone", async () => {
       JSON.stringify({
         key: "$metadata.service",
         operation: "in",
-        value: "os-prd,dash,agents,notes,voice,kiterate,iterate-spa",
+        value: "os-prd,dash,agents,notes,docs,voice,kiterate,iterate-spa",
         type: "string",
       }),
     ]),
