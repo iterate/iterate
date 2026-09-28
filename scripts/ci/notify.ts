@@ -425,12 +425,20 @@ export async function deploySuccess(options: { testRun?: boolean } = {}) {
     });
     return;
   }
+  // a failed #ci post still resolves the pages this deploy ends, and both failures fail the step
+  const errors: unknown[] = [];
   await announceDeploy(slack, {
     ...input,
     pushed: readOption("GITHUB_EVENT_NAME") === "push",
     clock: realClock,
-  });
-  await resolveDeployPages(slack, { app: input.app, sha: input.sha, now: new Date(), descends });
+  }).catch((error: unknown) => errors.push(error));
+  await resolveDeployPages(slack, {
+    app: input.app,
+    sha: input.sha,
+    now: new Date(),
+    descends,
+  }).catch((error: unknown) => errors.push(error));
+  if (errors.length > 0) throw new AggregateError(errors, "the deploy's Slack posts failed");
 }
 
 /** Pages #error-pulse with APP_DISPLAY_NAME's failed prd deploy at GITHUB_SHA; UPLOADED is the

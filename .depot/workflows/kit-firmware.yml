@@ -197,7 +197,7 @@ jobs:
 
   # A job, not a final step: it must also report a failed plan (after which nothing else runs), and
   # the publish job's boundary is that it checks out and runs no repository code. A red run pages
-  # #error-pulse (one page while it stays red); the next green run resolves that page.
+  # #error-pulse (one page while it stays red); the next run that builds and publishes resolves it.
   notify:
     needs:
       - plan-firmware
@@ -220,6 +220,8 @@ jobs:
         env:
           NEEDS: ${{ toJSON(needs) }}
         run: node scripts/ci/notify.ts workflow-failure
+      # Only a run that built, published and saw Kit serve the files resolves: a run planning no
+      # release skips those jobs and proves nothing about the failure the page names.
       - name: Resolve the page
-        if: ${{ !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') }}
+        if: needs.build-firmware.result == 'success' && needs.publish-firmware.result == 'success'
         run: node scripts/ci/notify.ts workflow-resolved

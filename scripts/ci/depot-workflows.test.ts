@@ -273,20 +273,32 @@ test("each PR event's line posts from a job with no concurrency; the dashboard's
 });
 
 test.for([
-  { file: ".depot/workflows/kit-firmware.yml", failed: "contains(needs.*.result, 'failure')" },
-  { file: ".depot/workflows/os-crash-hunt.yml", failed: "needs.crash-hunt.result == 'failure'" },
-])("$file pages a red run on main and resolves the page on a green one", ({ file, failed }) => {
-  const notify = loadWorkflow(file).jobs.notify;
-  const steps = notify?.steps || [];
+  {
+    file: ".depot/workflows/kit-firmware.yml",
+    failed: "contains(needs.*.result, 'failure')",
+    // a run that plans no release skips build and publish, and proves nothing
+    green: "needs.build-firmware.result == 'success' && needs.publish-firmware.result == 'success'",
+  },
+  {
+    file: ".depot/workflows/os-crash-hunt.yml",
+    failed: "needs.crash-hunt.result == 'failure'",
+    green: "needs.crash-hunt.result == 'success'",
+  },
+])(
+  "$file pages a red run on main and resolves the page on a green one",
+  ({ file, failed, green }) => {
+    const notify = loadWorkflow(file).jobs.notify;
+    const steps = notify?.steps || [];
 
-  expect(notify?.if).toBe("always() && github.ref == 'refs/heads/main'");
-  expect(steps.find((step) => step.run === "node scripts/ci/notify.ts workflow-failure")?.if).toBe(
-    failed,
-  );
-  expect(
-    steps.find((step) => step.run === "node scripts/ci/notify.ts workflow-resolved")?.if,
-  ).toEqual(expect.any(String));
-});
+    expect(notify?.if).toBe("always() && github.ref == 'refs/heads/main'");
+    expect(
+      steps.find((step) => step.run === "node scripts/ci/notify.ts workflow-failure")?.if,
+    ).toBe(failed);
+    expect(
+      steps.find((step) => step.run === "node scripts/ci/notify.ts workflow-resolved")?.if,
+    ).toBe(green);
+  },
+);
 
 test("runs OS and Notes stateful proofs only against an isolated preview", () => {
   for (const { file } of deploymentWorkflows) {

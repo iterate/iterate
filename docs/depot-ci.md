@@ -763,7 +763,8 @@ Only a run on main pages; a 🧪 test run (each workflow's `test-run` input, eac
 
 Another app failing on the same commit, an app live again, or another deploy failing the host check
 is an edit of the page, not a reply; a red workflow whose failed jobs change also replies in its
-thread. A deploy step posts to #ci only when its whole job succeeded,
+thread. Kit firmware's green run is one that built and published: a run that plans no release
+skips both and resolves nothing. A deploy step posts to #ci only when its whole job succeeded,
 and a failed post never turns the deploy red. Each PR event's line posts from `pr-dashboard.yml`'s
 `notify` job, which has no concurrency group: a group cancels the pending run a newer one replaces,
 and that event would get no line.
