@@ -5,7 +5,11 @@ size: large
 
 # CI change detection: inherit results and reuse deployments
 
-**Status:** an experiment, not a commitment: built to see what inherit and reuse cost in code and save in CI before deciding whether to keep them. Nothing built yet. Decided 2026-09-28: inherit and reuse, as #2712 had them; no suite selection for now. It replaces the 2026-09-25 draft (never committed; `stash@{0}`), which predates #3165.
+**Status:** an experiment, not a commitment: built to see what inherit and reuse cost in code and save in CI before deciding whether to keep them. Decided 2026-09-28: inherit and reuse, as #2712 had them; no suite selection for now. It replaces the 2026-09-25 draft (never committed; `stash@{0}`), which predates #3165.
+
+- **Built:** units (`scripts/ci/preview-units.ts`), inherit (`scripts/ci/preview-inherit.ts`, wired into the `changes` step), reuse (`apps/os/scripts/preview-reuse.ts`, partial deployments, the plan artifact, cleanup and sweep rules), docs.
+- **Proven live:** the inherit step reads GitHub from CI and decides (it correctly ran both suites after a machinery change).
+- **Left:** live checks of a docs-only push, a tests-only push and a notes-only push on this PR.
 
 ## Why now
 
@@ -86,25 +90,25 @@ What else changes:
 
 ### 1. Units (no behavior change)
 
-- [ ] `scripts/ci/preview-units.ts`: units (= `deploy-<unit>.yml` paths), machinery, suites; `changedUnits(files)`, `suiteInputsChanged(suite, files)`
-- [ ] Tests: units equal the deploy workflows' paths; every `previewPaths` file is some unit's or suite's input or a known no-suite file; `changedUnits` table (docs, unit test, lockfile → every unit, machinery → every unit, rename out of `apps/os`)
+- [x] `scripts/ci/preview-units.ts`: units (= `deploy-<unit>.yml` paths), machinery, suites; `changedUnits(files)`, `suiteInputsChanged(suite, files)` _`touchesSuite`; the paths matcher moved here from preview-paths.ts_
+- [x] Tests: units equal the deploy workflows' paths; every `previewPaths` file is some unit's or suite's input or a known no-suite file; `changedUnits` table (docs, unit test, lockfile → every unit, machinery → every unit, rename out of `apps/os`) _preview-units.test.ts; renames are the callers' `--no-renames`_
 
 ### 2. Inherit
 
-- [ ] `planInherit` as a pure function over (PR commits with their check results, labels, changed files) → `inherit <sha> | run`, table-tested: docs push, unit-test push, specs-only push (E2E inherits, specs run), red candidate, cancelled then green, force-push, `slow-e2e` label
-- [ ] E2E tests / Browser specs / Deploy preview: the inherit step, its summary line, and the steps after it skipped
-- [ ] Workflow tests: the truth table gains inheriting runs
+- [x] `planInherit` as a pure function over (PR commits with their check results, labels, changed files) → `inherit <sha> | run`, table-tested: docs push, unit-test push, specs-only push (E2E inherits, specs run), red candidate, cancelled then green, force-push, `slow-e2e` label _preview-inherit.test.ts, 16 rows, GitHub injected as functions_
+- [x] E2E tests / Browser specs / Deploy preview: the inherit step, its summary line, and the steps after it skipped _no new step: `preview-paths.ts changes` asks it (PREVIEW_SUITES) and writes `preview=false`, which every later step and the trace already skip on; `checks: read` added_
+- [x] ~~Workflow tests: the truth table gains inheriting runs~~ _inheriting is `preview=false`, which the table already covers; the tests check each job's step names its suites_
 - [ ] Live check on this PR: a docs-only push, a specs-only push
 
 ### 3. Reuse
 
-- [ ] `planReuse` as a pure function over (candidates with their touched units, requested apps) → `{ reuses, deploys }`, table-tested
-- [ ] `PREVIEW_REUSE` in start-app.ts `linkedEnvironment`: an app of a partial deployment links to the reused os and apps
-- [ ] preview.ts `deploy`: candidates, the plan, deploy only `deploys`, the gate/seed/section on the plan's os, `preview.json` + `preview-plan` artifact
-- [ ] Suites: read the plan after the wait, test its urls
-- [ ] `planSupersededCleanup`: never the plan's `reuses`; 45 min grace for `main`; sweep keeps a prefix's newest partial deployment
-- [ ] PR body section: reused rows name their deployment
-- [ ] Docs: `docs/dev-environments.md` (second pushes, partial deployments), the preview-os.yml header
+- [x] `planReuse` as a pure function over (candidates with their touched units, requested apps) → `{ reuses, deploys }`, table-tested _preview-reuse.test.ts_
+- [x] `PREVIEW_REUSE` in start-app.ts `linkedEnvironment`: an app of a partial deployment links to the reused os and apps _envs.ts `PreviewPlan`/`previewPlanMembers`; viteBuild takes the build's env_
+- [x] preview.ts `deploy`: candidates, the plan, deploy only `deploys`, the gate/seed/section on the plan's os, `preview.json` + `preview-plan` artifact _`planDeployment`, `filesChangedSince` (GitHub resolves the sha7, git fetches it at depth 1)_
+- [x] Suites: read the plan after the wait, test its urls _`planOfThisRun` via await-deploy.ts `artifactOfThisRun`; PR runs only_
+- [x] `planSupersededCleanup`: never the plan's `reuses`; 45 min grace for `main`; sweep keeps a prefix's newest partial deployment _and the sweep counts main's idle hour from its successor's creation_
+- [x] PR body section: reused rows name their deployment
+- [x] Docs: `docs/dev-environments.md` (second pushes, partial deployments), the preview-os.yml header _a row in Second pushes, and an "Inherited verdicts and reused deployments" section_
 - [ ] Live check: a notes-only push on this PR (deploys one worker), a tests-only push (deploys none)
 
 ## Later, not now
