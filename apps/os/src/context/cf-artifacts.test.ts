@@ -322,9 +322,7 @@ test("after a platform failure, a create that landed all the same answers create
 });
 
 test("a create Artifacts answers 10400 after 13.5 s, holding the name 7 s more, ends created: the taken name's wait starts when the name is found taken", async () => {
-  // Artifacts' answers on the preview account (measured 2026-09-28): the create answers 10400 after
-  // ~13.5 s, the retry's create finds the name taken, no repo by it reads, and the name comes free
-  // 3–13 s after the 10400.
+  // Artifacts' failed create as measured at TAKEN_NAME_WAIT_MS (cf-artifacts.ts).
   const recording = recordingNamespace();
   let heldUntil = 0;
   const slowAndFailing: ArtifactsNamespace = {
