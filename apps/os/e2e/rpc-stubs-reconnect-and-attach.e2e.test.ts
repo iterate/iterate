@@ -146,7 +146,7 @@ test("an EXPRESSION rule's handle disposed after a live provider took its match 
     async () => (await observer.invoke("itx.m.echo('a')")) === "echo-live:a" || undefined,
   );
   expressionHandle[Symbol.dispose](); // A lets go of a rule that is no longer its own
-  await sleep(1_000);
+  await removalCommitted(observer, "itx.m");
   expect(await presence(observer)).toContain("itx.m");
   expect(await rpcStubRewriteRuleMatches(observer)).toContain("itx.m");
   expect(await observer.invoke("itx.m.echo('b')")).toBe("echo-live:b");
@@ -167,12 +167,13 @@ createFailing(
   "an EXPRESSION handle disposed after another session provided the IDENTICAL rule leaves that session's row standing",
   async () => {
     const ctx = freshCtx("identical-expression-handles");
+    const observer = openItx(ctx);
     const first = await openItx(ctx).provide("itx.same", "itx.builtins.whoami");
     await openItx(ctx).provide("itx.same", "itx.builtins.whoami"); // the second session, the same rule
     first[Symbol.dispose]();
-    await sleep(1_000);
+    await removalCommitted(observer, "itx.same");
     expect(
-      await openItx(ctx).rewriteRules.get("itx.same"),
+      await observer.rewriteRules.get("itx.same"),
       "the second session's identical rule should outlive the first handle",
     ).toMatchObject({
       target: "itx.builtins.whoami",
@@ -258,6 +259,20 @@ test("a paused stream's refusal of a provide or a subscribe crosses /api CODED â
   await itx.append({ type: "mark", payload: { n: 1 } });
   await until("the mark delivered after resume", () => marks.types().includes("mark"));
 });
+
+/** An EXPRESSION handle's dispose is fire-and-forget: the client's release reaches /api, whose undo
+ *  appends the removal (`target: null` at the match) in the background (src/iterate-context.ts
+ *  `#removeRuleInBackground`). A row that judges what the removal did waits for it to commit. */
+async function removalCommitted(itx: any, match: string): Promise<void> {
+  await until(`the handle's removal of ${match} committed`, async () =>
+    (await readAll(itx)).some(
+      (e) =>
+        e.type === "events.iterate.com/itx/rewrite-rule-configured" &&
+        ruleMatchAtRest(e) === match &&
+        e.payload.target === null,
+    ),
+  );
+}
 
 /** A live watcher of presence: the ephemeral `itx/rpc-stub-attached` events, WITH their offsets. */
 async function watchAttached(ctx: string) {
