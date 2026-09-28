@@ -1,13 +1,13 @@
 import { buttonVariants } from "@iterate-com/ui/components/button";
 import { IterateLogo } from "@iterate-com/ui/components/iterate-logo";
+import { StandalonePage } from "@iterate-com/ui/components/standalone-page";
 import { cn } from "cn";
-import { IssuerPage } from "../issuer-page.tsx";
 
 /** A request the authorization server refused outright, with no client to send the person back
  *  to: the reason, and the way back to iterate. */
 export function InvalidRequest({ description }: { description: string }) {
   return (
-    <IssuerPage className="items-center gap-4 text-center text-sm">
+    <StandalonePage className="items-center gap-4 text-center text-sm">
       <IterateLogo alt="" className="size-14" />
       <h1 className="text-xl font-semibold tracking-tight">Invalid authorization request</h1>
       <div className="flex flex-col gap-1">
@@ -23,6 +23,6 @@ export function InvalidRequest({ description }: { description: string }) {
       >
         Back to iterate
       </a>
-    </IssuerPage>
+    </StandalonePage>
   );
 }

@@ -14,6 +14,7 @@ import { Route as AuthRouteImport } from "./routes/_auth.tsx";
 import { Route as AuthActivityRouteImport } from "./routes/_auth/activity.tsx";
 import { Route as AuthHomeRouteImport } from "./routes/_auth/home.tsx";
 import { Route as AuthSessionsRouteImport } from "./routes/_auth/sessions.tsx";
+import { Route as CollectSecretSlugRouteImport } from "./routes/collect-secret.$slug.tsx";
 import { Route as AuthInvitationsTokenRouteImport } from "./routes/_auth/invitations.$token.tsx";
 import { Route as AuthOrganizationsIndexRouteImport } from "./routes/_auth/organizations/index.tsx";
 import { Route as AuthOrganizationsOrgIdRouteImport } from "./routes/_auth/organizations/$orgId.tsx";
@@ -50,6 +51,11 @@ const AuthSessionsRoute = AuthSessionsRouteImport.update({
   id: "/sessions",
   path: "/sessions",
   getParentRoute: () => AuthRoute,
+} as any);
+const CollectSecretSlugRoute = CollectSecretSlugRouteImport.update({
+  id: "/collect-secret/$slug",
+  path: "/collect-secret/$slug",
+  getParentRoute: () => rootRouteImport,
 } as any);
 const AuthInvitationsTokenRoute = AuthInvitationsTokenRouteImport.update({
   id: "/invitations/$token",
@@ -121,6 +127,7 @@ export interface FileRoutesByFullPath {
   "/activity": typeof AuthActivityRoute;
   "/home": typeof AuthHomeRoute;
   "/sessions": typeof AuthSessionsRoute;
+  "/collect-secret/$slug": typeof CollectSecretSlugRoute;
   "/projects/$slug": typeof AuthProjectsSlugRouteRouteWithChildren;
   "/invitations/$token": typeof AuthInvitationsTokenRoute;
   "/organizations/$orgId": typeof AuthOrganizationsOrgIdRoute;
@@ -139,6 +146,7 @@ export interface FileRoutesByTo {
   "/activity": typeof AuthActivityRoute;
   "/home": typeof AuthHomeRoute;
   "/sessions": typeof AuthSessionsRoute;
+  "/collect-secret/$slug": typeof CollectSecretSlugRoute;
   "/invitations/$token": typeof AuthInvitationsTokenRoute;
   "/organizations/$orgId": typeof AuthOrganizationsOrgIdRoute;
   "/organizations": typeof AuthOrganizationsIndexRoute;
@@ -158,6 +166,7 @@ export interface FileRoutesById {
   "/_auth/activity": typeof AuthActivityRoute;
   "/_auth/home": typeof AuthHomeRoute;
   "/_auth/sessions": typeof AuthSessionsRoute;
+  "/collect-secret/$slug": typeof CollectSecretSlugRoute;
   "/_auth/projects/$slug": typeof AuthProjectsSlugRouteRouteWithChildren;
   "/_auth/invitations/$token": typeof AuthInvitationsTokenRoute;
   "/_auth/organizations/$orgId": typeof AuthOrganizationsOrgIdRoute;
@@ -178,6 +187,7 @@ export interface FileRouteTypes {
     | "/activity"
     | "/home"
     | "/sessions"
+    | "/collect-secret/$slug"
     | "/projects/$slug"
     | "/invitations/$token"
     | "/organizations/$orgId"
@@ -196,6 +206,7 @@ export interface FileRouteTypes {
     | "/activity"
     | "/home"
     | "/sessions"
+    | "/collect-secret/$slug"
     | "/invitations/$token"
     | "/organizations/$orgId"
     | "/organizations"
@@ -214,6 +225,7 @@ export interface FileRouteTypes {
     | "/_auth/activity"
     | "/_auth/home"
     | "/_auth/sessions"
+    | "/collect-secret/$slug"
     | "/_auth/projects/$slug"
     | "/_auth/invitations/$token"
     | "/_auth/organizations/$orgId"
@@ -231,6 +243,7 @@ export interface FileRouteTypes {
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute;
   AuthRoute: typeof AuthRouteWithChildren;
+  CollectSecretSlugRoute: typeof CollectSecretSlugRoute;
 }
 
 declare module "@tanstack/react-router" {
@@ -269,6 +282,13 @@ declare module "@tanstack/react-router" {
       fullPath: "/sessions";
       preLoaderRoute: typeof AuthSessionsRouteImport;
       parentRoute: typeof AuthRoute;
+    };
+    "/collect-secret/$slug": {
+      id: "/collect-secret/$slug";
+      path: "/collect-secret/$slug";
+      fullPath: "/collect-secret/$slug";
+      preLoaderRoute: typeof CollectSecretSlugRouteImport;
+      parentRoute: typeof rootRouteImport;
     };
     "/_auth/invitations/$token": {
       id: "/_auth/invitations/$token";
@@ -409,6 +429,7 @@ const AuthRouteWithChildren = AuthRoute._addFileChildren(AuthRouteChildren);
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AuthRoute: AuthRouteWithChildren,
+  CollectSecretSlugRoute: CollectSecretSlugRoute,
 };
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

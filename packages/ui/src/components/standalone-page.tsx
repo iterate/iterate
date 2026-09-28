@@ -1,9 +1,11 @@
 import type { ReactNode } from "react";
 import { cn } from "cn";
 
-/** The frame of every issuer page: one centred column on a plain background. A `wide` page — the
- *  consent page's two columns — starts at the top instead of the middle of the screen. */
-export function IssuerPage({
+/** The frame of a page outside any app's shell — the issuer's sign-in and consent pages, and the
+ *  Dash's secret collection link — so they read as one family: one centred column on a plain
+ *  background. A `wide` page — the consent page's two columns — starts at the top instead of the
+ *  middle of the screen. */
+export function StandalonePage({
   children,
   className,
   wide,

@@ -744,9 +744,11 @@ export interface IterateContextApi {
     ): Promise<{ authorizationUrl: string; nonce: string }>;
     delete(path: string): Promise<{ path: string }>;
     list(): Promise<SecretCatalogEntry[]>;
-    /** Build the authenticated Dash link where a person enters a value an agent must never see in
-     * chat. The link fixes the project, platform instance, secret path and egress pin. If called
-     * from an agent context, a successful submission messages that same agent with the path only. */
+    /** Build the authenticated Dash link (`/collect-secret/<slug>`, a page of its own) where a
+     * person enters a value an agent must never see in chat. The link fixes the project, platform
+     * instance, secret path and egress pin, and shows `description` as the requester's words. If
+     * called from an agent context, a successful submission messages that same agent with the path
+     * only. */
     collectFromUser(input: CollectSecretInput): Promise<CollectSecretLink>;
     /** A webhook's signature checked against a secret WITHOUT revealing it: one bit back,
      *  constant-time, run in the secret's facet. A secret never set (or a material with no key at
