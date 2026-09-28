@@ -102,9 +102,9 @@ jobs:
         # --expect-unit-workspaces reads the workspaces from the checkout, so the list has one source:
         # the tree whose tests ran.
         run: node scripts/ci/test-evidence.ts finalize --flake-suites unit --expect-unit-workspaces ${{ cancelled() && '--cancelled' || '' }}
-      # THE UPLOADS, side by side: each only reads test-results/, and `fail-fast: false` lets every
-      # one finish whatever another does (docs/depot-ci.md#parallel-steps). Each follows the step
-      # above by its outcome or its outputs, never `hashFiles()` (test-evidence.ts `finalize`).
+      # THE UPLOADS, side by side and each to its end (`fail-fast: false`,
+      # docs/depot-ci.md#parallel-steps), after the step above by its outputs
+      # (docs/test-evidence.md#what-ci-does).
       - fail-fast: false
         parallel:
           # With the Cloudflare API token preview deploys use (Doppler _shared/preview), as S3 keys.

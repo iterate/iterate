@@ -197,11 +197,9 @@ jobs:
           # Node's compile cache, which the upload's Node then starts from
           NODE_COMPILE_CACHE: ${{ runner.temp }}/node-compile-cache
         run: node scripts/ci/test-evidence.ts finalize --only-with-target --flake-suites "$FLAKE_SUITE" ${{ cancelled() && '--cancelled' || '' }}
-      # THE UPLOADS, side by side: each only reads test-results/, and `fail-fast: false` lets every
-      # one finish whatever another does (docs/depot-ci.md#parallel-steps). Each follows the step
-      # above by its outcome or its outputs, never `hashFiles()` (test-evidence.ts `finalize`). The
-      # Depot artifacts follow its failure too: a Node that failed before `evidence=kept` still keeps
-      # a failed suite's traces and flake lines.
+      # THE UPLOADS, side by side and each to its end (`fail-fast: false`,
+      # docs/depot-ci.md#parallel-steps), after the step above by its outputs or its failure
+      # (docs/test-evidence.md#what-ci-does).
       - fail-fast: false
         parallel:
           # With the Cloudflare API token preview deploys use (Doppler _shared/preview), as S3 keys.
