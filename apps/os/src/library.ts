@@ -210,7 +210,7 @@ export function buildLibrary(
 // billed), the runner stops waiting (`runSettlementOf`) and a caller's `itx.run` returns.
 
 /** The source `run` loads, one module that package.json names as its `main`: `script` spliced in
- *  as `const script = (…)`, run inside ONE `withItx` round trip (`iterate/with-itx`, the platform's
+ *  as `const script = …;`, run inside ONE `withItx` round trip (`iterate/with-itx`, the platform's
  *  ~1.5 KB module: a script's isolate never loads the whole SDK) and raced against the deadline. Its value becomes JSON inside the round trip: the log carries
  *  JSON, and a live value (a handle, a function) is released with the round trip. Exported for the
  *  unit pin. */
@@ -220,7 +220,9 @@ export function runScriptModule(script: string) {
     "worker.js": [
       'import { WorkerEntrypoint } from "cloudflare:workers";',
       'import { withItx } from "iterate/with-itx";',
-      `const script = (${script});`,
+      // the script on lines of its own, ended by a `;` of ours: its own trailing `;` or line comment
+      // is then harmless, however an agent or a formatter wrote it
+      `const script =\n${script}\n;`,
       "export default class extends WorkerEntrypoint {",
       "  async run() {",
       "    let deadline;",

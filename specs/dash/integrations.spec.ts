@@ -66,7 +66,7 @@ test("another service: the sheet gives the MCP command and a prompt for the pers
     .getByText(`Connect Linear to my iterate project "${fixture.project.slug}"`, { exact: false })
     .waitFor();
   await sheet
-    .getByText("/connect-a-service.md first and follow it step by step.", { exact: false })
+    .getByText("/connect-a-service.md, through iterate's run tool", { exact: false })
     .waitFor();
 });
 

@@ -196,7 +196,7 @@ test("run: the source: package.json naming worker.js its main, the script splice
   expect(module["worker.js"]).toContain('import { WorkerEntrypoint } from "cloudflare:workers"');
   expect(module["worker.js"]).toContain('import { withItx } from "iterate/with-itx";');
   expect(module["worker.js"]).toContain(
-    "const script = (async (itx) => (await itx.whoami()).path);",
+    "const script =\nasync (itx) => (await itx.whoami()).path\n;",
   );
   expect(module["worker.js"]).toContain("export default class extends WorkerEntrypoint");
   expect(module["worker.js"]).toContain("async run() {");
@@ -242,6 +242,19 @@ test("run: the module's run(): a script that finishes (or throws) settles the ca
   } finally {
     vi.useRealTimers();
   }
+});
+
+test("run: a script written as a statement runs: a trailing `;`, a trailing line comment, or both, as formatters and agents write them", async () => {
+  const scripts = [
+    "async () => 42;",
+    "async () => 42 // the answer",
+    "async (itx) => {\n  return 42;\n};\n",
+    "async () => 42; // the answer\n",
+  ];
+  const outcomes = [];
+  for (const script of scripts)
+    outcomes.push(await (await loadedRun(script)).run().catch((error: Error) => error.message));
+  expect(outcomes).toEqual([42, 42, 42, 42]);
 });
 
 test("run: the module's run() releases every call the script made through its scope, awaited or not, and hands back its value as JSON", async () => {
