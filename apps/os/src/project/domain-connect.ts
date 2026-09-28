@@ -21,8 +21,17 @@
 
 import { z } from "zod";
 
-/** Our template and the TXT record holding its signing key, as published. */
-const TEMPLATE = { providerId: "iterate.com", serviceId: "custom-hostname", key: "_dck1" };
+/** Our templates and the TXT record holding their signing key, as published: `custom-hostname`
+ *  for a name under the zone (hostRequired: the host is the name's labels under it), and
+ *  `custom-hostname-apex` for the zone itself (an APEXCNAME at `@`, for providers with ALIAS or
+ *  flattening). Cloudflare ignores hostRequired and flattens a CNAME at the apex, so there the zone
+ *  itself takes `custom-hostname` without a host. */
+const TEMPLATE = {
+  providerId: "iterate.com",
+  subdomain: "custom-hostname",
+  apex: "custom-hostname-apex",
+  key: "_dck1",
+};
 
 /** One provider request's budget: discovery runs inside a hostname's add, which it must never hold. */
 const REQUEST_TIMEOUT_MS = 5_000;
@@ -69,19 +78,24 @@ export function txtRecordText(data: string): string {
   );
 }
 
-/** The apply URL for our template on `domain` under `host`, returning the browser to
- *  `redirectUri`, signed with `privateKey` (PKCS#8, base64 DER). The signature covers the query
+/** The apply URL for our template `serviceId` on `domain` under `host` (empty: the zone itself),
+ *  for `project` (the template's `%project%`, which its ownership TXT names), returning the browser
+ *  to `redirectUri`, signed with `privateKey` (PKCS#8, base64 DER). The signature covers the query
  *  string exactly as sent, without `key` and `sig`; `sig` comes LAST (Cloudflare requires it). */
 export async function signedApplyUrl(input: {
   urlSyncUX: string;
+  serviceId: string;
   domain: string;
   host: string;
+  project: string;
   redirectUri: string;
   privateKey: string;
 }): Promise<string> {
   const query = new URLSearchParams({
     domain: input.domain,
-    host: input.host,
+    // oxlint-disable-next-line iterate/simple-truthiness-check -- the protocol: no host parameter at all means the zone itself; an empty `host=` is not the same request
+    ...(input.host && { host: input.host }),
+    project: input.project,
     redirect_uri: input.redirectUri,
   }).toString();
   const key = await crypto.subtle.importKey(
@@ -96,15 +110,21 @@ export async function signedApplyUrl(input: {
   );
   const sig = btoa(String.fromCharCode(...signature));
   const base = input.urlSyncUX.replace(/\/$/, "");
-  return `${base}/v2/domainTemplates/providers/${TEMPLATE.providerId}/services/${TEMPLATE.serviceId}/apply?${query}&${new URLSearchParams({ key: TEMPLATE.key, sig })}`;
+  return `${base}/v2/domainTemplates/providers/${TEMPLATE.providerId}/services/${input.serviceId}/apply?${query}&${new URLSearchParams({ key: TEMPLATE.key, sig })}`;
 }
 
-/** The link that applies our template for `hostname`, or null when no zone above it has a DNS
- *  provider that answers for it with our template onboarded. Throws on a DNS error, a provider's
- *  5xx or a timeout. `fetcher` reaches DNS-over-HTTPS and the provider (a test hands a fake). */
+/** The link that applies our template for `hostname` in `project`, or null when no zone at or
+ *  above it has a DNS provider that answers for it with the template it needs onboarded. Throws on a
+ *  DNS error, a provider's 5xx or a timeout. `fetcher` reaches DNS-over-HTTPS and the provider (a
+ *  test hands a fake). */
 export async function domainConnectLinkOf(
   hostname: string,
-  options: { redirectUri: string; privateKey: string; fetcher?: typeof fetch },
+  options: {
+    project: string;
+    redirectUri: string;
+    privateKey: string;
+    fetcher?: typeof fetch;
+  },
 ): Promise<DomainConnectLink | null> {
   const fetcher = options.fetcher || ((input, init) => fetch(input, init));
   const request = async (url: string, headers?: Record<string, string>) => {
@@ -117,7 +137,11 @@ export async function domainConnectLinkOf(
     if (response.status >= 500) throw new Error(`${new URL(url).host} answered ${response.status}`);
     return response;
   };
-  for (const { domain, host } of domainConnectZonesOf(hostname)) {
+  // the hostname itself first: it may be a zone of its own (a bare domain, a delegated subdomain)
+  for (const { domain, host } of [
+    { domain: hostname, host: "" },
+    ...domainConnectZonesOf(hostname),
+  ]) {
     const dns = DohTxtAnswer.parse(
       await (
         await request(
@@ -141,16 +165,20 @@ export async function domainConnectLinkOf(
     const parsed = ProviderSettings.safeParse(await settings.json());
     if (!parsed.success) continue;
     const { providerName, providerDisplayName, urlSyncUX, urlAPI } = parsed.data;
+    const serviceId =
+      host || providerName.toLowerCase() === "cloudflare" ? TEMPLATE.subdomain : TEMPLATE.apex;
     const template = await request(
-      `${urlAPI.replace(/\/$/, "")}/v2/domainTemplates/providers/${TEMPLATE.providerId}/services/${TEMPLATE.serviceId}`,
+      `${urlAPI.replace(/\/$/, "")}/v2/domainTemplates/providers/${TEMPLATE.providerId}/services/${serviceId}`,
     );
     if (!template.ok) continue;
     return {
       provider: providerDisplayName || providerName,
       url: await signedApplyUrl({
         urlSyncUX,
+        serviceId,
         domain,
         host,
+        project: options.project,
         redirectUri: options.redirectUri,
         privateKey: options.privateKey,
       }),
