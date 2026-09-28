@@ -148,28 +148,49 @@ test("a member's verified message says so, and a forged one claiming to be their
   ]);
 });
 
-test("mail to an address on the project wildcard's domain lands on that project's log", async () => {
+test("the project wildcard's project receives mail at any address on its domain, answers from the address it reached, and sends from any other there", async () => {
   const member = await projectWithMember("wildcard-mail");
-  const wildcard = {
-    ...env,
-    APP_CONFIG_URLS__PROJECT_WILDCARD: JSON.stringify({
-      hostname: "wildcard.test",
-      project: "wildcard-mail",
-    }),
-  } as unknown as Env;
   const hello =
     "From: ann@example.com\r\nSubject: Hi\r\nMessage-ID: <hello@example.com>\r\n\r\nHello";
-  expect(await deliver("hello@wildcard.test", hello, wildcard)).toMatchObject({ rejected: [] });
+  expect(await deliver("hello@wildcard.test", hello)).toMatchObject({ rejected: [] });
   const inbox = DurableObjectNameCodec.stringify({
     projectId: member.projectId,
     path: "/integrations/email",
   });
-  expect(mailOf(await readLog(inbox))).toMatchObject([
-    {
-      type: "events.iterate.com/email/received",
-      payload: { messageId: "hello@example.com", envelope: { to: "hello@wildcard.test" } },
-    },
-  ]);
+  const [received] = mailOf(await readLog(inbox));
+  expect(received).toMatchObject({
+    type: "events.iterate.com/email/received",
+    payload: { messageId: "hello@example.com", envelope: { to: "hello@wildcard.test" } },
+  });
+
+  const reply = (await member.itx.email.send({
+    inReplyToOffset: received!.offset,
+    text: "Hello back",
+  })) as StreamEvent;
+  expect(reply).toMatchObject({
+    payload: { from: "hello@wildcard.test", to: ["ann@example.com"], subject: "Re: Hi" },
+  });
+  const news = (await member.itx.email.send({
+    from: "News@Wildcard.test",
+    to: "ann@example.com",
+    subject: "News",
+    text: "…",
+  })) as StreamEvent;
+  expect(news).toMatchObject({ payload: { from: "news@wildcard.test" } });
+  const plain = (await member.itx.email.send({
+    to: "ann@example.com",
+    subject: "Plain",
+    text: "…",
+  })) as StreamEvent;
+  expect(plain).toMatchObject({ payload: { from: "wildcard-mail@projects.test" } });
+});
+
+test("no other project sends from the wildcard's domain or from another project's address", async () => {
+  const other = await projectWithMember("not-the-wildcard");
+  for (const from of ["hello@wildcard.test", "wildcard-mail@projects.test"])
+    await expect(
+      other.itx.email.send({ from, to: "ann@example.com", subject: "Hi", text: "…" }),
+    ).rejects.toThrow(`this project sends from not-the-wildcard@projects.test, not ${from}`);
 });
 
 test("mail for no project, or on another domain, bounces", async () => {
@@ -184,7 +205,7 @@ test("mail for no project, or on another domain, bounces", async () => {
 });
 
 /** One delivery by Cloudflare Email Routing to `to`, and what `receiveEmail` rejected it with. */
-async function deliver(to: string, mime: string, workerEnv = env as unknown as Env) {
+async function deliver(to: string, mime: string) {
   const rejected: string[] = [];
   const raw = new TextEncoder().encode(mime);
   // the fields of a ForwardableEmailMessage that `receiveEmail` reads
@@ -196,7 +217,7 @@ async function deliver(to: string, mime: string, workerEnv = env as unknown as E
     headers: new Headers(),
     setReject: (reason: string) => void rejected.push(reason),
   } as unknown as ForwardableEmailMessage;
-  await receiveEmail(message, workerEnv);
+  await receiveEmail(message, env as unknown as Env);
   return { rejected };
 }
 
