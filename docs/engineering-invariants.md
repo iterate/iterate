@@ -14,7 +14,8 @@ resource leaks.
   durable explanation of what happened. A workaround that heals a platform
   fault logs a warn whose `event` is `<area>.platform-failure-<action>`: the
   [prd fault alarm](../scripts/ci/prd-fault-alarm.ts) pages on bursts of those,
-  on any os-prd 5xx, and on error bursts. Retries follow one policy:
+  on any 5xx a first-party prd Worker answered a visitor, and on errors.
+  Retries follow one policy:
   [Failures and retries](#failures-and-retries).
 - A workaround for an upstream defect (a library, Cloudflare, a vendor) stays
   only while a [`createFailing`](testing.md#pinned-bugs-createfailingtest--not-bare-testfails)
