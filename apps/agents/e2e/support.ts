@@ -40,38 +40,57 @@ function publishPaths(): string[] {
   return [...block.matchAll(/^\s+- (\S+)$/gm)].map((match) => match[1]!);
 }
 
-/** Whether PR `pr` changes a path the pkg.pr.new workflow publishes on (GitHub's list of its files). */
-async function prPublishesPackages(pr: string): Promise<boolean> {
+/** GitHub's REST API for this repository, with the run's token when it has one. */
+async function github<T>(path: string): Promise<T> {
   const repository = process.env.GITHUB_REPOSITORY?.trim() || "iterate/iterate";
   const token = process.env.GITHUB_TOKEN?.trim();
+  const response = await fetch(`https://api.github.com/repos/${repository}/${path}`, {
+    headers: token ? { authorization: `Bearer ${token}` } : {},
+  });
+  if (!response.ok) throw new Error(`GitHub answered ${path} with ${response.status}`);
+  return (await response.json()) as T;
+}
+
+/** Whether PR `pr` changes a path the pkg.pr.new workflow publishes on (GitHub's list of its files). */
+async function prPublishesPackages(pr: string): Promise<boolean> {
   const globs = publishPaths();
   for (let page = 1; ; page++) {
-    const response = await fetch(
-      `https://api.github.com/repos/${repository}/pulls/${pr}/files?per_page=100&page=${page}`,
-      { headers: token ? { authorization: `Bearer ${token}` } : {} },
+    const files = await github<{ filename: string }[]>(
+      `pulls/${pr}/files?per_page=100&page=${page}`,
     );
-    if (!response.ok) throw new Error(`GitHub listed PR ${pr}'s files with ${response.status}`);
-    const files = (await response.json()) as { filename: string }[];
     if (files.some(({ filename }) => globs.some((glob) => matchesGlob(filename, glob))))
       return true;
     if (files.length < 100) return false;
   }
 }
 
-/** This checkout's pkg.pr.new build of one of the repository's packages. A PR that changes what the
+/** How far back from a head the newest published build is looked for. Every main commit publishes,
+ *  so only a branch's own unpublished commits and a main build still in flight stand between. */
+const PUBLISHED_ANCESTOR_DEPTH = 30;
+
+/** This checkout's pkg.pr.new build of one of the repository's packages: a real build of a commit,
+ *  never `@main`, which the loader locks to whatever it first resolved. A PR that changes what the
  *  pkg.pr.new workflow publishes on gets its head published on every push, so its rows pin the head's
  *  build, waited for while that workflow runs beside the preview's deploy (a first push has no build
- *  of the PR at all until it lands); any other run pins main's. */
+ *  of the PR at all until it lands). Any other run (Main OS e2e, a PR that publishes nothing, a
+ *  dispatch) pins the newest build of a commit at or before its head, as GitHub lists them. A run
+ *  that names no head (a local one) pins main's. */
 export async function publishedPackage(name: string): Promise<string> {
   const at = (ref: string) => pkgPrNewVersion(name, ref);
+  const published = async (ref: string) => (await fetch(at(ref), { method: "HEAD" })).ok;
   const pr = process.env.PREVIEW_PR_NUMBER?.trim();
   const head = process.env.TEST_TELEMETRY_HEAD_SHA?.trim();
-  if (!pr || !head || !(await prPublishesPackages(pr))) return at("main");
-  for (
-    const deadline = Date.now() + 60_000;
-    !(await fetch(at(head), { method: "HEAD" })).ok;
-    await sleep(3_000)
-  )
-    if (Date.now() > deadline) throw new Error(`pkg.pr.new has not published ${at(head)}`);
-  return at(head);
+  if (!head) return at("main");
+  if (pr && (await prPublishesPackages(pr))) {
+    for (const deadline = Date.now() + 60_000; !(await published(head)); await sleep(3_000))
+      if (Date.now() > deadline) throw new Error(`pkg.pr.new has not published ${at(head)}`);
+    return at(head);
+  }
+  const commits = await github<{ sha: string }[]>(
+    `commits?sha=${head}&per_page=${PUBLISHED_ANCESTOR_DEPTH}`,
+  );
+  for (const { sha } of commits) if (await published(sha)) return at(sha);
+  throw new Error(
+    `pkg.pr.new has published ${name} for none of the ${PUBLISHED_ANCESTOR_DEPTH} commits up to ${head}`,
+  );
 }
