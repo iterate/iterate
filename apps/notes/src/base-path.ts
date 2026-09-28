@@ -1,3 +1,4 @@
+// ci-change-detection live check: a notes-only push (reverted by a later live check)
 // base-path.ts — THE PATH NOTES IS SERVED UNDER in the browser: "" on its own origin, and
 // `/projects/<project>/<routingSlug>` when a project's config worker (config-worker.ts) proxies it
 // under paths ingress. There the platform's edge strips that prefix from the URL Notes sees and
