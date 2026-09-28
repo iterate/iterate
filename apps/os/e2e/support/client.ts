@@ -17,7 +17,7 @@ const baseUrl = (): string => {
 };
 
 /** The worker's admin bearer (global-setup: the local worker's, or a deployed worker's from its APP_CONFIG). */
-const adminBearer = (): string => {
+const adminBearer = () => {
   const secret = process.env.APP_CONFIG_SECRETS__ADMIN_BEARER;
   if (!secret)
     throw new Error(
