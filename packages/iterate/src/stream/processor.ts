@@ -50,7 +50,7 @@ import { reportIssue, jsonEqual, codedError, diff, errorCode } from "../lib.ts";
 import type { Principal } from "../principal.ts";
 
 /** What a processor declares: its checkpoint slug and reducer version, what it consumes and emits,
- *  and its initial state (`defineProcessorContract` below builds one from zod schemas). */
+ *  and its initial state. `defineProcessorContract` below is the one way to build one. */
 export type ProcessorContract<State = unknown> = {
   slug: string;
   /** Bumping this re-reduces state from offset 0 (reduce only — side effects never re-run). */
@@ -66,9 +66,8 @@ export type ProcessorContract<State = unknown> = {
   /** The zod payload schema for a consumed event type (owned or a dep's), or undefined if the type
    *  is unknown or the contract declares no `events` catalog. The engine validates a consumed event's
    *  payload against it before reducing (a malformed payload for a KNOWN event is skipped, never
-   *  folded). Present on `defineProcessorContract` contracts; a hand-built core contract omits it and
-   *  reduces unvalidated. */
-  payloadSchemaFor?: (type: string) => z.ZodType | undefined;
+   *  folded). */
+  payloadSchemaFor: (type: string) => z.ZodType | undefined;
 };
 
 /** The stream a processor reduces. `read` answers durable rows plus the proof: `scannedThroughOffset`
@@ -596,7 +595,7 @@ export class ProcessorEngine<State> {
     state: State,
   ): { state: State; event: StreamEvent; valid: boolean } {
     // oxlint-disable-next-line iterate/simple-truthiness-check -- only a null/undefined payload defaults to {}; a falsy NON-object payload off the wire (0, false, "") must fail schema validation and be reported, not be folded as an empty object
-    const parsed = this.#contract.payloadSchemaFor?.(event.type)?.safeParse(event.payload ?? {});
+    const parsed = this.#contract.payloadSchemaFor(event.type)?.safeParse(event.payload ?? {});
     if (parsed && !parsed.success) {
       reportIssue("processor.reduce.payload", parsed.error, {
         slug: this.#contract.slug,

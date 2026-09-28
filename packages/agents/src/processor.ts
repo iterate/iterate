@@ -32,7 +32,6 @@ import {
 } from "iterate/stream/processor";
 import type { WithItx } from "iterate/sdk";
 import type { RewriteRuleListEntry } from "iterate/api";
-import type { ItxScope as ItxEntrypointScope } from "iterate/sdk";
 import type { RunSettlement } from "iterate/stream/run";
 import {
   AgentContract,
@@ -307,7 +306,7 @@ export function renderScriptSettlement(settlement: RunSettlement): string | null
 type AgentProcessorDeps = {
   /** The host's scope accessor: `itx.ai`, `itx.files`, `itx.whoami()` — the effects this loop
    *  reaches through the context, under its rules (a test lends a fake `itx.ai` there). */
-  withItx: WithItx<ItxEntrypointScope>;
+  withItx: WithItx;
   /** The host bridges raw provider bodies through awaited byte RPC. */
   runModel(
     path: string,

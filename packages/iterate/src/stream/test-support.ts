@@ -64,9 +64,7 @@ export function reduceProcessor<State>(
 ): State {
   let state = processor.contract.initialState();
   inputs.forEach((input, index) => {
-    const parsed = processor.contract
-      .payloadSchemaFor?.(input.type)
-      ?.safeParse(input.payload ?? {});
+    const parsed = processor.contract.payloadSchemaFor(input.type)?.safeParse(input.payload ?? {});
     if (parsed && !parsed.success) return; // the engine skips a malformed known payload
     const event = {
       ...committedEvent(index + 1, input.type),
