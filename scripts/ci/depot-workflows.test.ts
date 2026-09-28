@@ -122,9 +122,9 @@ test.each(deploymentWorkflows)(
   },
 );
 
-test.each([".depot/workflows/test.yml", ".depot/workflows/lint-typecheck.yml"])(
-  "%s gives every main commit its own run and supersedes a PR branch's older run",
-  (file) => {
+test.for([{ file: ".depot/workflows/test.yml" }, { file: ".depot/workflows/lint-typecheck.yml" }])(
+  "$file gives every main commit its own run and supersedes a PR branch's older run",
+  ({ file }) => {
     const { concurrency } = loadWorkflow(file);
     const group = (context: Record<string, string>) =>
       renderWorkflowString(concurrency!.group, {
@@ -151,7 +151,7 @@ test.each([".depot/workflows/test.yml", ".depot/workflows/lint-typecheck.yml"])(
       });
 
     // one group for all of main cancels the run in progress, or replaces the pending run, when the
-    // next merge lands: that merge commit then has no Test or Lint verdict at all (#3365)
+    // next merge lands: that merge commit then has no Test or Lint verdict at all
     expect(mainPush("a1", "r1")).not.toBe(mainPush("b2", "r2"));
     expect(concurrency!["cancel-in-progress"]).toBe(true);
     expect(prPush("a1", "r1")).toBe(prPush("b2", "r2"));
