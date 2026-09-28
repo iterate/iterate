@@ -1,6 +1,6 @@
 // bench/tail-summary.ts — summarize a `wrangler tail --format json` capture (pretty-printed JSON
 // objects, concatenated) into per-group CPU and wall-time percentiles: the DEPLOYED worker's own
-// numbers, the ones that count. Usage: `tsx bench/tail-summary.ts <tail.log> [label-regex]`.
+// numbers, the ones that count. Usage: `node bench/tail-summary.ts <tail.log> [label-regex]`.
 // Groups: executionModel (stateless = the /api worker, durableObject = the context DO) × the request's
 // path (or the DO event kind). cpuTime/wallTime are Cloudflare's per-invocation milliseconds.
 
@@ -61,7 +61,7 @@ function groupOf(e: TailEvent): string {
 }
 
 const [, , file, labelRegex] = process.argv;
-if (!file) throw new Error("usage: tsx bench/tail-summary.ts <tail.log> [group-regex]");
+if (!file) throw new Error("usage: node bench/tail-summary.ts <tail.log> [group-regex]");
 const events = parseConcatenatedJson(readFileSync(file, "utf8"));
 const groups = new Map<string, { cpu: number[]; wall: number[]; outcomes: Map<string, number> }>();
 for (const e of events) {

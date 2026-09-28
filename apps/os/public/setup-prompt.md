@@ -121,7 +121,7 @@ with the admin bearer (from `iterate/apps/os`, where the SDK resolves). Ask only
 several:
 
 ```bash
-APP_CONFIG_SECRETS__ADMIN_BEARER=<adminBearer> pnpm exec tsx --eval 'import("iterate/node").then(async ({ connectIterate }) => {
+APP_CONFIG_SECRETS__ADMIN_BEARER=<adminBearer> node --eval 'import("iterate/node").then(async ({ connectIterate }) => {
   const c = await connectIterate({ baseUrl: process.argv[1], auth: { type: "admin-secret", secret: process.env.APP_CONFIG_SECRETS__ADMIN_BEARER } });
   console.log((await c.session.projects.list()).map((p) => `project ${p.slug}`).join("\n"));
   console.log((await c.session.users.list()).map((u) => `user ${u.email}`).join("\n")); process.exit(0); })' <origin>
@@ -141,7 +141,7 @@ and mint a personal access token for their project that expires in an hour (what
 Sessions page does). From `iterate/apps/os`, where capnweb resolves:
 
 ```bash
-TOKEN=$(PASSWORD=<password> pnpm exec tsx --eval 'import("capnweb").then(async ({ newHttpBatchRpcSession }) => {
+TOKEN=$(PASSWORD=<password> node --eval 'import("capnweb").then(async ({ newHttpBatchRpcSession }) => {
   const [origin, email, slug] = process.argv.slice(1);
   const login = await fetch(`${origin}/login`, { method: "POST", redirect: "manual", headers: { origin },
     body: new URLSearchParams({ email, password: process.env.PASSWORD, next: "/" }) });
@@ -166,7 +166,7 @@ Expect the project's id, slug and URL, plus the config repo's files. Then revoke
 user's, and the check is done. A key can end itself (`logout`), so no sign-in is needed:
 
 ```bash
-TOKEN=$TOKEN pnpm exec tsx --eval 'import("capnweb").then(async ({ newHttpBatchRpcSession }) => {
+TOKEN=$TOKEN node --eval 'import("capnweb").then(async ({ newHttpBatchRpcSession }) => {
   await newHttpBatchRpcSession(new Request(`${process.argv[1]}/api`, { headers: { authorization: `Bearer ${process.env.TOKEN}` } }))
     .authenticate({ type: "bearer", token: process.env.TOKEN }).logout(); })' <origin>
 ```

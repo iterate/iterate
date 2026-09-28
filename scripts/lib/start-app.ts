@@ -326,7 +326,7 @@ export function buildStartApp(app: StartApp, env: string) {
 }
 
 /**
- * The app's command line: `tsx scripts/app.ts <command> [--env <name>]` behind its package scripts.
+ * The app's command line: `node scripts/app.ts <command> [--env <name>]` behind its package scripts.
  * `--env` names the envs.ts entry, and deploy and ensure-resources require it.
  */
 export function startAppCli(app: StartApp) {

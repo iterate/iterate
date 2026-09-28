@@ -7,8 +7,8 @@
 // timeline from the press.
 //
 //   WORKER_BASE_URL=https://os.iterate.com ITERATE_BEARER_TOKEN=itk_… \
-//   pnpm exec tsx scripts/voice-call.ts --utterance ask.wav --out answer.wav
-//   pnpm exec tsx scripts/voice-call.ts --say "Say exactly: ready."
+//   node scripts/voice-call.ts --utterance ask.wav --out answer.wav
+//   node scripts/voice-call.ts --say "Say exactly: ready."
 //
 // ITERATE_BEARER_TOKEN is a personal access token for the project
 // (`pnpm exec iterate --config prd tokens create`). PROJECT=prj-voice.

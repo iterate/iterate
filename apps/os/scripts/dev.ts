@@ -181,7 +181,7 @@ async function startDetached(args: string[]) {
     if (lockPid() === process.pid) rmSync(lockPath);
   });
   const log = openSync(logPath, "w");
-  // process.execArgv carries tsx's loader (`--import …/tsx/…`), so the child runs this .ts file
+  // process.execArgv carries this node's flags, so the child runs this .ts file the same way
   const child = spawn(
     process.execPath,
     [
@@ -240,7 +240,7 @@ function acquire(): number | null {
 function holder(): number | null {
   const pid = lockPid();
   if (pid === null) return null;
-  // -ww: the full command line — a detached server's (node, tsx's loader flags, then this file's
+  // -ww: the full command line — a detached server's (node, its flags, then this file's
   // absolute path) runs past the terminal's width, to which ps (macOS's, with COLUMNS) truncates
   const command = spawnSync("ps", ["-ww", "-o", "command=", "-p", `${pid}`], {
     encoding: "utf8",
