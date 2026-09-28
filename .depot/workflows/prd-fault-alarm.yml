@@ -11,7 +11,7 @@
 #     --ref <branch> --input test-run=true --input at=2026-09-28T09:35:00Z
 #
 # Secrets (depot ci secrets --org 0p91s0lz49): DOPPLER_TOKEN, with which the script reads its own out
-# of Doppler: the Depot organization token, prd's Cloudflare API token and the Slack bot token.
+# of Doppler (docs/depot-ci.md#secrets).
 
 name: Prd fault alarm (Depot CI)
 

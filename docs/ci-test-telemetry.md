@@ -78,7 +78,7 @@ replay one (without `--dry-run`, a `--since` run delivers):
 
 ```bash
 GITHUB_TOKEN="$(gh auth token)" \
-  node scripts/ci/sync-ci-telemetry.ts --dry-run --since 2026-09-24T00:00:00Z [--until …]
+  node scripts/ci/sync-ci-telemetry.ts --dry-run --since <ISO time> [--until …]
 ```
 
 ## Test telemetry artifacts

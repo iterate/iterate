@@ -22,7 +22,7 @@
  * attempt IDs, so PostHog deduplicates an overlapping replay (`--since`).
  *
  *   GITHUB_TOKEN="$(gh auth token)" \
- *     node scripts/ci/sync-ci-telemetry.ts --dry-run --since 2026-09-24T00:00:00Z
+ *     node scripts/ci/sync-ci-telemetry.ts --dry-run --since <ISO time>
  */
 import { readFile, readdir } from "node:fs/promises";
 import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
