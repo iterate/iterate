@@ -462,101 +462,126 @@ test.for([
 
 test.for([
   {
-    name: "over before any page pages red",
+    name: "over before any page posts one",
     lastPage: undefined,
     judged: { judgement: "over", p50: 170 },
-    page: "over",
+    kind: "post",
     next: { judgement: "over", bestP50: 170 },
   },
   {
-    name: "over after a green page pages red",
+    name: "over after a resolution posts a page",
     lastPage: { judgement: "under", bestP50: 150 },
     judged: { judgement: "over", p50: 170 },
-    page: "over",
+    kind: "post",
     next: { judgement: "over", bestP50: 170 },
   },
   {
-    name: "still over, 20 s over the best since the red page, pages nothing",
+    name: "still over, 20 s over the best since the page, edits it",
     lastPage: { judgement: "over", bestP50: 198 },
     judged: { judgement: "over", p50: 218 },
-    page: null,
+    kind: "edit",
     next: { judgement: "over", bestP50: 198 },
   },
   {
-    name: "still over, more than 20 s over the best since the red page, pages red again",
+    name: "still over, more than 20 s over the best since the page, escalates",
     lastPage: { judgement: "over", bestP50: 198 },
     judged: { judgement: "over", p50: 218.1 },
-    page: "worse",
+    kind: "escalate",
     next: { judgement: "over", bestP50: 218.1 },
   },
   {
-    name: "still over and better lowers the best, and pages nothing",
+    name: "still over and better lowers the best, and edits the page",
     lastPage: { judgement: "over", bestP50: 218 },
     judged: { judgement: "over", p50: 190 },
-    page: null,
+    kind: "edit",
     next: { judgement: "over", bestP50: 190 },
   },
   {
-    name: "back under after a red page pages green",
+    name: "back under after a page resolves it",
     lastPage: { judgement: "over", bestP50: 190 },
     judged: { judgement: "under", p50: 160 },
-    page: "under",
+    kind: "resolve",
     next: { judgement: "under", bestP50: 160 },
   },
   {
-    name: "under and 40 s worse than the green page pages nothing: under the lines only the lines page",
+    name: "under and 40 s worse than the resolution owes nothing: under the lines only the lines page",
     lastPage: { judgement: "under", bestP50: 120 },
     judged: { judgement: "under", p50: 160 },
-    page: null,
+    kind: null,
     next: { judgement: "under", bestP50: 120 },
   },
   {
-    name: "under before any page pages nothing and keeps nothing",
+    name: "under before any page owes nothing and keeps nothing",
     lastPage: undefined,
     judged: { judgement: "under", p50: 160 },
-    page: null,
+    kind: null,
     next: undefined,
   },
   {
-    name: "too few pushes page nothing and keep what the channel was told",
+    name: "too few pushes owe nothing and keep what the channel was told",
     lastPage: { judgement: "over", bestP50: 218 },
     judged: { judgement: "too-few" },
-    page: null,
+    kind: null,
     next: { judgement: "over", bestP50: 218 },
   },
   {
-    name: "too few pushes before any page page nothing",
+    name: "too few pushes before any page owe nothing",
     lastPage: undefined,
     judged: { judgement: "too-few" },
-    page: null,
+    kind: null,
     next: undefined,
   },
-] as const)("$name", ({ lastPage, judged, page, next }) => {
+] as const)("$name", ({ lastPage, judged, kind, next }) => {
   // exact: the state keeps what the channel was told and the best median since, nothing more
-  expect(pageFor(lastPage, judged)).toEqual({ page, lastPage: next });
+  expect(pageFor(lastPage, judged)).toEqual({ kind, lastPage: next });
 });
 
-// Medians the guard judged, replayed from its state: its red page (2026-09-24 18:47, 23 pushes),
-// then every third hourly run from 19:47 to 09-26 19:47. They fell to 180 s without going under the
-// lines and rose past 200 s from 09-25 22:47. Against the red page's median that rise is never 20 s;
-// against the best since, it pages once.
-test("a median that recovers while over and then rises more than 20 s pages red again, once", () => {
+// Medians of one red page's hourly runs, every third: they fall to 180 s without going under the
+// lines, then rise past 200 s. Against the page's median that rise is never 20 s; against the best
+// since, it escalates once. Each other run edits the page.
+test("a median that recovers while over and then rises more than 20 s escalates once, over its one page", () => {
   const medians = [
     234.1, 210.4, 195.3, 186.2, 184.8, 181.9, 179.9, 183, 189, 183, 202.9, 205.9, 205.1, 207.3,
     208.2, 208.2, 210.2, 208.3,
   ];
   let lastPage: Parameters<typeof pageFor>[0];
-  const pages = medians.flatMap((p50) => {
+  const kinds = medians.flatMap((p50) => {
     const owed = pageFor(lastPage, { judgement: "over", p50 });
     lastPage = owed.lastPage;
-    return owed.page ? [{ p50, page: owed.page }] : [];
+    return owed.kind === "edit" ? [] : [{ p50, kind: owed.kind }];
   });
-  // exact: these two pages and no others
-  expect(pages).toEqual([
-    { p50: 234.1, page: "over" },
-    { p50: 202.9, page: "worse" },
+  // exact: this page and this escalation, and edits between
+  expect(kinds).toEqual([
+    { p50: 234.1, kind: "post" },
+    { p50: 202.9, kind: "escalate" },
   ]);
   expect(lastPage).toEqual({ judgement: "over", bestP50: 202.9 });
+});
+
+test("over, then worse, then under: a page, its escalation broadcast in its thread, its resolution", () => {
+  let lastPage: Parameters<typeof pageFor>[0];
+  // 20 green pushes that skipped the slow rows each hour, from `fastest` s up
+  const updates = [170, 200, 140].flatMap((fastest) => {
+    const summary = summarizePushes(
+      Array.from({ length: 20 }, (_, minute) =>
+        push({ seconds: fastest + minute, e2e: "slow-rows-skipped", minute }),
+      ),
+      { from: Date.parse("2026-09-24T12:00:00Z"), to: Date.parse("2026-09-24T13:00:00Z") },
+    );
+    const owed = pageFor(lastPage, judge(summary));
+    const update = owed.kind && renderPage({ kind: owed.kind, summary, lastPage });
+    lastPage = owed.lastPage;
+    return update ? [update] : [];
+  });
+  expect(updates).toMatchObject([
+    { kind: "post", page: { what: "PR time to green over its lines: p50 180 s, p90 187 s" } },
+    {
+      kind: "escalate",
+      broadcast: true,
+      news: "PR time to green more than 20 s worse again: p50 210 s; 180 s at best since the page",
+    },
+    { kind: "resolve", why: "PR time to green back under its lines: p50 150 s, p90 157 s" },
+  ]);
 });
 
 // 20 pushes that skipped the slow rows, all green and ended by Browser specs, a red one that ran every
@@ -572,53 +597,68 @@ const twentyPushes = summarizePushes(
   { from: Date.parse("2026-09-24T12:00:00Z"), to: Date.parse("2026-09-24T13:00:00Z") },
 );
 
-test("a red page gives its lines and the job that ends the pushes", () => {
+test("a page gives its lines and the job that ends the pushes", () => {
   expect(
     renderPage({
-      page: "over",
+      kind: "post",
       summary: twentyPushes,
       lastPage: undefined,
       runUrl: "https://depot.dev/run",
     }),
   ).toEqual({
-    tone: "red",
-    headline:
-      "PR time to green over its lines: pushes that skipped the slow rows, last 24 h: p50 180 s (line 165 s), p90 187 s (line 200 s), n=20",
-    details: ["their critical path ends with preview-os.yml:specs on 20 of the 20"],
-    link: "https://depot.dev/run",
+    signal: "PR time to green",
+    kind: "post",
+    page: {
+      what: "PR time to green over its lines: p50 180 s, p90 187 s",
+      impact:
+        "pushes that skipped the slow rows, last 24 h: p50 180 s (line 165 s), p90 187 s (line 200 s), n=20; their critical path ends with preview-os.yml:specs on 20 of the 20",
+      action: "shorten preview-os.yml:specs, which ends most of their critical paths",
+      link: "https://depot.dev/run",
+    },
   });
 });
 
 test.for([
   {
-    name: "a red page again gives the best median since the last page",
-    page: "worse",
+    name: "an edit gives the best median since the page",
+    kind: "edit",
     summary: twentyPushes,
     lastPage: { judgement: "over", bestP50: 158 },
-    tone: "red",
-    headline:
-      "PR time to green more than 20 s worse again: pushes that skipped the slow rows, last 24 h: p50 180 s (line 165 s; 158 s at best since the last page), p90 187 s (line 200 s), n=20",
+    expected: {
+      page: {
+        impact:
+          "pushes that skipped the slow rows, last 24 h: p50 180 s (line 165 s; 158 s at best since the page), p90 187 s (line 200 s), n=20; their critical path ends with preview-os.yml:specs on 20 of the 20",
+      },
+    },
   },
   {
-    name: "a green page",
-    page: "under",
+    name: "an edit whose median is the lowest since the page gives it as the best",
+    kind: "edit",
     summary: twentyPushes,
-    lastPage: { judgement: "over", bestP50: 180 },
-    tone: "green",
-    headline:
-      "PR time to green back under its lines: pushes that skipped the slow rows, last 24 h: p50 180 s (line 165 s; 180 s at best since the last page), p90 187 s (line 200 s), n=20",
+    lastPage: { judgement: "over", bestP50: 190 },
+    expected: {
+      page: {
+        impact:
+          "pushes that skipped the slow rows, last 24 h: p50 180 s (line 165 s; 180 s at best since the page), p90 187 s (line 200 s), n=20; their critical path ends with preview-os.yml:specs on 20 of the 20",
+      },
+    },
   },
   {
-    name: "a test page before any push skipped the slow rows judges nothing",
-    page: "too-few",
+    name: "a test page before any push skipped the slow rows says it judged nothing",
+    kind: "post",
+    tooFew: true,
     summary: summarizePushes([], { from: 0, to: 1 }),
     lastPage: undefined,
-    tone: "none",
-    headline:
-      "PR time to green not judged below 20 pushes: pushes that skipped the slow rows, last 24 h: none green",
+    expected: {
+      page: {
+        what: "PR time to green not judged below 20 pushes",
+        impact: "no push that skipped the slow rows was green in the last 24 h",
+        action: "read the job log for each group's numbers",
+      },
+    },
   },
-] as const)("$name", ({ tone, headline, ...input }) => {
-  expect(renderPage(input)).toMatchObject({ tone, headline });
+] as const)("$name", ({ expected, ...input }) => {
+  expect(renderPage(input)).toMatchObject(expected);
 });
 
 test("one PostHog event per push with a verdict, the same id whenever it is sent", () => {

@@ -84,9 +84,16 @@ export function pageText(input: {
     .join("\n");
 }
 
-/** The thread reply that closes an incident. */
-function resolvedText(why: string) {
-  return `✅ resolved: ${why} ${onCallMention}`;
+/** The thread reply that closes an incident, with both mentions. A test run's is marked 🧪 and
+ *  mentions nobody. */
+export function resolvedText(why: string, testRun: boolean) {
+  return testRun ? `🧪 TEST RUN — ✅ resolved: ${why}` : `✅ resolved: ${why} ${onCallMention}`;
+}
+
+/** The thread reply for an incident that got worse: what is new, with both mentions. A test run's is
+ *  marked 🧪 and mentions nobody. */
+export function escalationText(news: string, testRun: boolean) {
+  return testRun ? `🧪 TEST RUN — 🚨 ${news}` : `🚨 ${news} ${onCallMention}`;
 }
 
 /** A page's text with its first line starting `✅ resolved:`, mentions kept. It takes the text as
@@ -149,6 +156,7 @@ export async function resolvePage(
   await slack.chat.postMessage({
     channel: input.channel,
     thread_ts: input.ts,
-    text: resolvedText(input.why),
+    // a 🧪 test page is never open (findOpenPage), so this resolves a real one
+    text: resolvedText(input.why, false),
   });
 }

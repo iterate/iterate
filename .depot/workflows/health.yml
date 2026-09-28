@@ -1,8 +1,8 @@
 # HEALTH (scripts/monitors/health.ts): the checks, the message and the failure policy are in
 # docs/depot-ci.md#health. Its memory is its own `health-state` artifact, which the next run reads
 # back with the Depot organization token (Doppler _shared/preview). Test a branch, and the Slack
-# hookup, by dispatching it with test-page=true, which also forces the DO cost alarm's page with a
-# 1 DO-hour ceiling:
+# hookup, by dispatching it with test-page=true, which posts to #ci only and also forces the DO cost
+# alarm's page with a 1 DO-hour ceiling:
 #
 #   depot ci dispatch --org 0p91s0lz49 --repo iterate/iterate --workflow health.yml \
 #     --ref <branch> --input test-page=true
@@ -19,7 +19,7 @@ on:
   workflow_dispatch:
     inputs:
       test-page:
-        description: true = post every check's verdict to #error-pulse as a 🧪 test page; no state kept
+        description: true = post every check's verdict to #ci as a 🧪 test page; no state kept
         required: false
         type: string
         default: "false"
@@ -50,17 +50,12 @@ jobs:
           export DEPOT_CI_TELEMETRY_TOKEN
           DEPOT_CI_TELEMETRY_TOKEN="$(doppler secrets get DEPOT_CI_TELEMETRY_TOKEN --plain --project _shared --config preview)"
           pnpm tsx scripts/monitors/health.ts previous-state --out test-results/health/previous.json
-          # Main OS e2e pages main e2e itself; its state is only the message's last line here, so a
-          # read that fails leaves main e2e at none on that line instead of failing every check.
-          pnpm tsx scripts/monitors/health.ts previous-state --of main-e2e --out test-results/health/main-e2e.json ||
-            echo "::warning::no main e2e state: its now line shows none"
           pnpm tsx scripts/monitors/health.ts run \
             --ref "${{ github.ref }}" \
             --state test-results/health/previous.json \
-            --main-e2e-state test-results/health/main-e2e.json \
             --state-out test-results/health/state.json \
             ${{ inputs.test-page == 'true' && '--test-page' || '' }}
-      # The job writes the state only on a real run on main: after its page, before PostHog.
+      # The job writes the state only on a real run on main: after its posts, before PostHog.
       - name: Keep the state for the next run
         if: always()
         uses: actions/upload-artifact@v4

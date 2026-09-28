@@ -4,7 +4,7 @@ import {
   checkRealModel,
   mainE2eFailedJobs,
   mainE2eVerdict,
-  suitePage,
+  suiteUpdate,
   suiteVerdict,
   summaryRows,
   telemetryRows,
@@ -37,80 +37,144 @@ test("a red page names each failed job, and each cancelled one as timed out", ()
 
 const commit = { sha: "0123456789abcdef", subject: "Some <change> (#1)" };
 
-test.for([
-  { name: "green to red pages red", previous: "green", verdict: "red", tone: "red" },
-  { name: "red to green pages green again", previous: "red", verdict: "green", tone: "green" },
-  { name: "red and still red pages nothing", previous: "red", verdict: "red", tone: undefined },
+const red = { state: "red" as const, since: "0123456789abcdef", runs: 1, failures: ["E2E tests"] };
+
+test.for<{
+  name: string;
+  previous: E2eMemory["suites"]["main e2e"];
+  verdict: "green" | "red" | "broken" | undefined;
+  failedJobs?: string[];
+  kind: string | undefined;
+}>([
+  { name: "green to red posts a page", previous: { state: "green" }, verdict: "red", kind: "post" },
+  { name: "red to green resolves it", previous: red, verdict: "green", kind: "resolve" },
+  { name: "red and still red edits it", previous: red, verdict: "red", kind: "edit" },
   {
-    name: "green and still green pages nothing",
-    previous: "green",
+    name: "red and red with a job its page has not named escalates",
+    previous: red,
+    verdict: "red",
+    failedJobs: ["E2E tests", "Browser specs"],
+    kind: "escalate",
+  },
+  { name: "red to unjudged replaces the page", previous: red, verdict: "broken", kind: "replace" },
+  {
+    name: "green and still green owes nothing",
+    previous: { state: "green" },
     verdict: "green",
-    tone: undefined,
+    kind: undefined,
   },
   // the first run: no suite has paged, and green is what the channel assumes
-  { name: "a first green pages nothing", previous: undefined, verdict: "green", tone: undefined },
-  { name: "a first red pages red", previous: undefined, verdict: "red", tone: "red" },
-  { name: "no verdict pages nothing", previous: "green", verdict: undefined, tone: undefined },
-] as const)("$name", ({ previous, verdict, tone }) => {
-  const page = suitePage({
+  { name: "a first green owes nothing", previous: undefined, verdict: "green", kind: undefined },
+  { name: "a first red posts a page", previous: undefined, verdict: "red", kind: "post" },
+  { name: "no verdict owes nothing", previous: red, verdict: undefined, kind: undefined },
+])("$name", ({ previous, verdict, failedJobs = ["E2E tests"], kind }) => {
+  const { update } = suiteUpdate({
     suite: "main e2e",
     previous,
     verdict,
     commit,
-    failedJobs: [],
+    failedJobs,
     failingRows: [],
+    broken: "no suite summary",
     testRun: false,
   });
-  expect(page?.tone).toBe(tone);
+  expect({ kind: update?.kind }).toEqual({ kind });
 });
 
 test("a red page names the commit, the failed jobs and the failing rows, the first eight", () => {
   expect(
-    suitePage({
+    suiteUpdate({
       suite: "main e2e",
-      previous: "green",
+      previous: { state: "green" },
       verdict: "red",
       commit,
       failedJobs: ["E2E tests"],
-      failingRows: Array.from({ length: 10 }, (_, i) => `row ${i}`),
+      failingRows: Array.from({ length: 10 }, (_, i) => ({ name: `row ${i}` })),
       runUrl: "https://depot.dev/run",
       testRun: false,
     }),
-  ).toEqual({
-    tone: "red",
-    headline: "main e2e red at `012345678` (Some &lt;change&gt; (#1))",
-    details: [
-      "failed: E2E tests",
-      "failing rows: row 0; row 1; row 2; row 3; row 4; row 5; row 6; row 7; … and 2 more",
-    ],
-    link: "https://depot.dev/run",
+  ).toMatchObject({
+    update: {
+      signal: "main e2e",
+      kind: "post",
+      page: {
+        what: "main e2e red at `012345678` (Some &lt;change&gt; (#1))",
+        impact:
+          "failed: E2E tests; failing rows: row 0; row 1; row 2; row 3; row 4; row 5; row 6; row 7; … and 2 more",
+        action: "fix or revert `012345678`; a flaky row gets a fix, not a retry",
+        link: "https://depot.dev/run",
+      },
+    },
   });
-  expect(
-    suitePage({
-      suite: "slow e2e rows",
-      previous: "red",
-      verdict: "green",
-      commit,
-      failedJobs: [],
-      failingRows: [],
-      testRun: false,
-    })?.headline,
-  ).toBe("slow e2e rows green again at `012345678` (Some &lt;change&gt; (#1))");
 });
 
-test("a test page shows the suite's verdict whatever the channel was told", () => {
-  const page = (previous: "red" | "green") =>
-    suitePage({
-      suite: "real-model e2e",
+test("a red page's edit names the newest commit, its rows and how long it has been red", () => {
+  expect(
+    suiteUpdate({
+      suite: "slow e2e rows",
+      previous: { state: "red", since: "fedcba9876543210", runs: 2, failures: ["the facet"] },
+      verdict: "red",
+      commit,
+      failedJobs: [],
+      failingRows: [{ name: "the facet", error: "Error: resident" }],
+      testRun: false,
+    }),
+  ).toEqual({
+    update: {
+      signal: "slow e2e rows",
+      kind: "edit",
+      page: {
+        what: "slow e2e rows red at `012345678` (Some &lt;change&gt; (#1))",
+        impact: "failing rows: the facet (Error: resident); red since `fedcba987`, 3 runs",
+        action: "fix or revert `fedcba987`; a flaky row gets a fix, not a retry",
+        link: undefined,
+      },
+    },
+    memory: { state: "red", since: "fedcba9876543210", runs: 3, failures: ["the facet"] },
+  });
+});
+
+test.for([
+  {
+    name: "green after red is green again",
+    previous: red,
+    why: "slow e2e rows green again at `012345678` (Some &lt;change&gt; (#1))",
+  },
+  {
+    name: "green after unjudged is judged again",
+    previous: { state: "broken" as const, since: "0123456789abcdef", runs: 1, failures: [] },
+    why: "slow e2e rows judged again at `012345678` (Some &lt;change&gt; (#1)): green",
+  },
+])("a resolution says why: $name", ({ previous, why }) => {
+  expect(
+    suiteUpdate({
+      suite: "slow e2e rows",
       previous,
       verdict: "green",
       commit,
       failedJobs: [],
       failingRows: [],
-      testRun: true,
-    });
-  expect(page("green")).toMatchObject({ tone: "green" });
-  expect(page("red")).toMatchObject({ tone: "green" });
+      testRun: false,
+    }),
+  ).toMatchObject({ update: { signal: "slow e2e rows", kind: "resolve", why } });
+});
+
+test("a test page tells the suite's verdict now whatever the channel was told", () => {
+  const kinds = (["green", "red"] as const).flatMap((verdict) =>
+    [{ state: "green" as const }, red].map(
+      (previous) =>
+        suiteUpdate({
+          suite: "real-model e2e",
+          previous,
+          verdict,
+          commit,
+          failedJobs: [],
+          failingRows: [{ name: "REAL: a turn" }],
+          testRun: true,
+        }).update?.kind,
+    ),
+  );
+  expect(kinds).toEqual(["resolve", "resolve", "post", "post"]);
 });
 
 // The rows tagged `slow` of main's E2E tests job, from its suite summary.
@@ -130,7 +194,10 @@ test.for<{ label: string; tests: SummaryTest[]; status?: "incomplete"; verdict: 
       { name: "the careless facet", tags: ["slow"] },
       { name: "the chatty facet", tags: ["slow"], failed: true, error: "Error: resident" },
     ],
-    verdict: { verdict: "red", failingRows: ["the chatty facet (Error: resident)"] },
+    verdict: {
+      verdict: "red",
+      failingRows: [{ name: "the chatty facet", error: "Error: resident" }],
+    },
   },
   {
     label: "no row tagged slow",
@@ -183,7 +250,10 @@ test.for<{ label: string; rows: TelemetryTest[]; status?: string; verdict: unkno
     verdict: {
       verdict: "red",
       failingRows: [
-        "REAL: one turn through the default model (Error: the AI Gateway's spend cap refused the model request)",
+        {
+          name: "REAL: one turn through the default model",
+          error: "Error: the AI Gateway's spend cap refused the model request",
+        },
       ],
     },
   },
@@ -229,36 +299,50 @@ test("a first run judges only the newest settled push run of main e2e: its jobs,
   const judged = await checkMainE2e({ depot, memory: empty, testRun: false, subject });
 
   expect(judged).toEqual({
-    pages: [
+    updates: [
       {
-        tone: "red",
-        headline: "main e2e red at `newestaaa` (the subject of new)",
-        details: [
-          "failed: E2E tests",
-          "failing rows: a plain row; the careless facet; sends a message",
-        ],
-        link: "https://depot.dev/orgs/0p91s0lz49/workflows/wf-newest",
+        signal: "main e2e",
+        kind: "post",
+        page: {
+          what: "main e2e red at `newestaaa` (the subject of new)",
+          impact:
+            "failed: E2E tests; failing rows: a plain row; the careless facet; sends a message",
+          action: "fix or revert `newestaaa`; a flaky row gets a fix, not a retry",
+          link: "https://depot.dev/orgs/0p91s0lz49/workflows/wf-newest",
+        },
       },
       {
-        tone: "red",
-        headline: "slow e2e rows red at `newestaaa` (the subject of new)",
-        details: ["failing rows: the careless facet (Error: resident)"],
-        link: "https://depot.dev/orgs/0p91s0lz49/workflows/wf-newest",
+        signal: "slow e2e rows",
+        kind: "post",
+        page: {
+          what: "slow e2e rows red at `newestaaa` (the subject of new)",
+          impact: "failing rows: the careless facet (Error: resident)",
+          action: "fix or revert `newestaaa`; a flaky row gets a fix, not a retry",
+          link: "https://depot.dev/orgs/0p91s0lz49/workflows/wf-newest",
+        },
       },
     ],
     memory: {
-      suites: { "main e2e": "red", "slow e2e rows": "red" },
+      suites: {
+        "main e2e": redSince("newest", [
+          "E2E tests",
+          "a plain row",
+          "the careless facet",
+          "sends a message",
+        ]),
+        "slow e2e rows": redSince("newest", ["the careless facet"]),
+      },
       judgedAt: { "Main OS e2e": "2026-09-26T20:00:00Z" },
     },
     failures: [],
   });
 
-  // judged once: the next hour, with nothing newer, pages nothing and remembers the same
+  // judged once: the next hour, with nothing newer, owes nothing and remembers the same
   const again = await checkMainE2e({ depot, memory: judged.memory, testRun: false, subject });
-  expect(again).toEqual({ pages: [], memory: judged.memory, failures: [] });
+  expect(again).toEqual({ updates: [], memory: judged.memory, failures: [] });
 });
 
-test("each run since the last judged pages where its suite changed state: green, red, red again pages red at the first red run", async () => {
+test("each run since the last judged owes its suite's page: a red run posts it, a redder one escalates", async () => {
   const depot = fakeDepot({
     "Main OS e2e": [
       mainRun("judged", "2026-09-26T19:00:00Z", {}),
@@ -283,7 +367,7 @@ test("each run since the last judged pages where its suite changed state: green,
   const judged = await checkMainE2e({
     depot,
     memory: {
-      suites: { "main e2e": "green", "slow e2e rows": "green" },
+      suites: { "main e2e": green, "slow e2e rows": green },
       judgedAt: { "Main OS e2e": "2026-09-26T19:00:00Z" },
     },
     testRun: false,
@@ -291,25 +375,45 @@ test("each run since the last judged pages where its suite changed state: green,
   });
 
   expect(judged).toMatchObject({
-    pages: [
+    updates: [
       {
-        tone: "red",
-        headline: "main e2e red at `firstreda` (the subject of fir)",
-        link: "https://depot.dev/orgs/0p91s0lz49/workflows/wf-firstred",
+        signal: "main e2e",
+        kind: "post",
+        page: {
+          what: "main e2e red at `firstreda` (the subject of fir)",
+          link: "https://depot.dev/orgs/0p91s0lz49/workflows/wf-firstred",
+        },
       },
       {
-        tone: "red",
-        headline: "slow e2e rows red at `stillreda` (the subject of sti)",
-        link: "https://depot.dev/orgs/0p91s0lz49/workflows/wf-stillred",
+        signal: "main e2e",
+        kind: "escalate",
+        page: {
+          what: "main e2e red at `stillreda` (the subject of sti)",
+          impact:
+            "failed: E2E tests; failing rows: a slow row; a plain row; red since `firstreda`, 2 runs",
+        },
+        news: "main e2e has new failures at `stillreda` (the subject of sti): a slow row",
+        broadcast: false,
+      },
+      {
+        signal: "slow e2e rows",
+        kind: "post",
+        page: {
+          what: "slow e2e rows red at `stillreda` (the subject of sti)",
+          link: "https://depot.dev/orgs/0p91s0lz49/workflows/wf-stillred",
+        },
       },
     ],
     memory: {
-      suites: { "main e2e": "red", "slow e2e rows": "red" },
+      suites: {
+        "main e2e": { state: "red", runs: 2 },
+        "slow e2e rows": { state: "red", runs: 1 },
+      },
       judgedAt: { "Main OS e2e": "2026-09-26T19:55:00Z" },
     },
     failures: [],
   });
-  expect(judged.pages).toHaveLength(2);
+  expect(judged.updates).toHaveLength(3);
 });
 
 test("the run whose page job this is is judged last, after each settled run the state has not: a run whose page was lost still pages where it turned", async () => {
@@ -332,7 +436,7 @@ test("the run whose page job this is is judged last, after each settled run the 
   const judged = await checkMainE2e({
     depot,
     memory: {
-      suites: { "main e2e": "green", "slow e2e rows": "green" },
+      suites: { "main e2e": green, "slow e2e rows": green },
       judgedAt: { "Main OS e2e": "2026-09-26T19:00:00Z" },
     },
     testRun: false,
@@ -341,22 +445,25 @@ test("the run whose page job this is is judged last, after each settled run the 
   });
 
   expect(judged).toEqual({
-    pages: [
+    updates: [
       {
-        tone: "red",
-        headline: "main e2e red at `lostaaaaa` (the subject of los)",
-        details: ["failed: E2E tests", "failing rows: a plain row"],
-        link: "https://depot.dev/orgs/0p91s0lz49/workflows/wf-lost",
+        signal: "main e2e",
+        kind: "post",
+        page: {
+          what: "main e2e red at `lostaaaaa` (the subject of los)",
+          impact: "failed: E2E tests; failing rows: a plain row",
+          action: "fix or revert `lostaaaaa`; a flaky row gets a fix, not a retry",
+          link: "https://depot.dev/orgs/0p91s0lz49/workflows/wf-lost",
+        },
       },
       {
-        tone: "green",
-        headline: "main e2e green again at `currentaa` (the subject of cur)",
-        details: [],
-        link: "https://depot.dev/orgs/0p91s0lz49/workflows/wf-current",
+        signal: "main e2e",
+        kind: "resolve",
+        why: "main e2e green again at `currentaa` (the subject of cur)",
       },
     ],
     memory: {
-      suites: { "main e2e": "green", "slow e2e rows": "green" },
+      suites: { "main e2e": green, "slow e2e rows": green },
       judgedAt: { "Main OS e2e": "2026-09-26T20:00:00Z" },
     },
     failures: [],
@@ -380,13 +487,13 @@ test("a first run judges only the run whose page job this is", async () => {
     current: settled(current),
   });
   expect(judged).toMatchObject({
-    pages: [{ tone: "red", headline: "main e2e red at `currentaa` (the subject of cur)" }],
+    updates: [{ kind: "post", page: { what: "main e2e red at `currentaa` (the subject of cur)" } }],
     memory: {
-      suites: { "main e2e": "red", "slow e2e rows": "green" },
+      suites: { "main e2e": { state: "red" }, "slow e2e rows": green },
       judgedAt: { "Main OS e2e": "2026-09-26T20:00:00Z" },
     },
   });
-  expect(judged.pages).toHaveLength(1);
+  expect(judged.updates).toHaveLength(1);
 });
 
 test("a re-run, which keeps its creation time, is not judged again", async () => {
@@ -395,7 +502,7 @@ test("a re-run, which keeps its creation time, is not judged again", async () =>
     "Main OS e2e": [rerun, mainRun("newer", "2026-09-26T19:30:00Z", {})],
   });
   const memory: E2eMemory = {
-    suites: { "main e2e": "red", "slow e2e rows": "green" },
+    suites: { "main e2e": redSince("older", ["E2E tests"]), "slow e2e rows": green },
     judgedAt: { "Main OS e2e": "2026-09-26T19:30:00Z" },
   };
   const judged = await checkMainE2e({
@@ -405,7 +512,7 @@ test("a re-run, which keeps its creation time, is not judged again", async () =>
     subject,
     current: settled(rerun),
   });
-  expect(judged).toEqual({ pages: [], memory, failures: [] });
+  expect(judged).toEqual({ updates: [], memory, failures: [] });
 });
 
 test("the run whose page job this is has not settled while Depot lists its suite as running: judging it throws", async () => {
@@ -431,7 +538,7 @@ test("an older run Depot failed before its jobs started has no verdict: the stat
   const judged = await checkMainE2e({
     depot,
     memory: {
-      suites: { "main e2e": "red", "slow e2e rows": "green" },
+      suites: { "main e2e": redSince("older", ["E2E tests"]), "slow e2e rows": green },
       judgedAt: { "Main OS e2e": "2026-09-26T19:00:00Z" },
     },
     testRun: false,
@@ -439,16 +546,15 @@ test("an older run Depot failed before its jobs started has no verdict: the stat
     current: settled(current),
   });
   expect(judged).toEqual({
-    pages: [
+    updates: [
       {
-        tone: "green",
-        headline: "main e2e green again at `currentaa` (the subject of cur)",
-        details: [],
-        link: "https://depot.dev/orgs/0p91s0lz49/workflows/wf-current",
+        signal: "main e2e",
+        kind: "resolve",
+        why: "main e2e green again at `currentaa` (the subject of cur)",
       },
     ],
     memory: {
-      suites: { "main e2e": "green", "slow e2e rows": "green" },
+      suites: { "main e2e": green, "slow e2e rows": green },
       judgedAt: { "Main OS e2e": "2026-09-26T20:00:00Z" },
     },
     failures: [],
@@ -474,18 +580,26 @@ test.for([
     });
     const judged = await checkMainE2e({
       depot,
-      memory: { suites: { "main e2e": "green", "slow e2e rows": "green" }, judgedAt: {} },
+      memory: { suites: { "main e2e": green, "slow e2e rows": green }, judgedAt: {} },
       testRun: false,
       subject,
     });
     expect(judged).toMatchObject({
-      pages: [
+      updates: [
         {
-          headline: "main e2e red at `deployfai` (the subject of dep)",
-          details: ["failed: Deploy preview"],
+          kind: "post",
+          page: {
+            what: "main e2e red at `deployfai` (the subject of dep)",
+            impact: "failed: Deploy preview",
+          },
         },
       ],
-      memory: { suites: { "main e2e": "red", "slow e2e rows": "green" } },
+      memory: {
+        suites: {
+          "main e2e": redSince("deployfailed", ["Deploy preview"]),
+          "slow e2e rows": green,
+        },
+      },
       failures: [],
     });
   },
@@ -550,7 +664,7 @@ test.for<{
   const judged = await checkMainE2e({
     depot,
     memory: {
-      suites: { "main e2e": "green", "slow e2e rows": "green" },
+      suites: { "main e2e": green, "slow e2e rows": green },
       judgedAt: { "Main OS e2e": "2026-09-26T19:00:00Z" },
     },
     testRun: false,
@@ -558,26 +672,36 @@ test.for<{
     current: settled(current),
   });
   expect(judged).toEqual({
-    pages:
+    updates:
       row.slow === "broken"
         ? [
             {
-              tone: "none",
-              headline: "slow e2e rows unjudged at `currentaa` (the subject of cur)",
-              details: [`broken probe: ${row.broken}`],
-              link: "https://depot.dev/orgs/0p91s0lz49/workflows/wf-current",
+              signal: "slow e2e rows",
+              kind: "post",
+              page: {
+                what: "slow e2e rows unjudged at `currentaa` (the subject of cur)",
+                impact: `broken probe: ${row.broken}`,
+                action: "fix the probe: until it judges again, slow e2e rows can break unseen",
+                link: "https://depot.dev/orgs/0p91s0lz49/workflows/wf-current",
+              },
             },
           ]
         : [],
     memory: {
-      suites: { "main e2e": "green", "slow e2e rows": row.slow },
+      suites: {
+        "main e2e": green,
+        "slow e2e rows":
+          row.slow === "broken"
+            ? { state: "broken", since: "current".padEnd(40, "a"), runs: 1, failures: [] }
+            : green,
+      },
       judgedAt: { "Main OS e2e": "2026-09-26T20:00:00Z" },
     },
     failures: [],
   });
 });
 
-test("a broken slow-rows probe pages once: a run still broken pages nothing, and the next verdict pages as a change", async () => {
+test("a broken slow-rows probe has one page: a run still broken edits it, the next verdict resolves it", async () => {
   const brokenRun = (id: string, createdAt: string) =>
     mainRun(id, createdAt, {
       e2eTests: [{ name: "the careless facet", tags: ["slow"] }],
@@ -594,29 +718,43 @@ test("a broken slow-rows probe pages once: a run still broken pages nothing, and
   const judged = await checkMainE2e({
     depot,
     memory: {
-      suites: { "main e2e": "green", "slow e2e rows": "green" },
+      suites: { "main e2e": green, "slow e2e rows": green },
       judgedAt: { "Main OS e2e": "2026-09-26T19:00:00Z" },
     },
     testRun: false,
     subject,
   });
   expect(judged).toEqual({
-    pages: [
+    updates: [
       {
-        tone: "none",
-        headline: "slow e2e rows unjudged at `brokeaaaa` (the subject of bro)",
-        details: ["broken probe: an incomplete run: Missing source branch"],
-        link: "https://depot.dev/orgs/0p91s0lz49/workflows/wf-broke",
+        signal: "slow e2e rows",
+        kind: "post",
+        page: {
+          what: "slow e2e rows unjudged at `brokeaaaa` (the subject of bro)",
+          impact: "broken probe: an incomplete run: Missing source branch",
+          action: "fix the probe: until it judges again, slow e2e rows can break unseen",
+          link: "https://depot.dev/orgs/0p91s0lz49/workflows/wf-broke",
+        },
       },
       {
-        tone: "green",
-        headline: "slow e2e rows green at `judgedgre` (the subject of jud)",
-        details: [],
-        link: "https://depot.dev/orgs/0p91s0lz49/workflows/wf-judgedgreen",
+        signal: "slow e2e rows",
+        kind: "edit",
+        page: {
+          what: "slow e2e rows unjudged at `stillaaaa` (the subject of sti)",
+          impact:
+            "broken probe: an incomplete run: Missing source branch; unjudged since `brokeaaaa`, 2 runs",
+          action: "fix the probe: until it judges again, slow e2e rows can break unseen",
+          link: "https://depot.dev/orgs/0p91s0lz49/workflows/wf-still",
+        },
+      },
+      {
+        signal: "slow e2e rows",
+        kind: "resolve",
+        why: "slow e2e rows judged again at `judgedgre` (the subject of jud): green",
       },
     ],
     memory: {
-      suites: { "main e2e": "green", "slow e2e rows": "green" },
+      suites: { "main e2e": green, "slow e2e rows": green },
       judgedAt: { "Main OS e2e": "2026-09-26T19:30:00Z" },
     },
     failures: [],
@@ -632,17 +770,17 @@ test("an E2E tests job that ran and kept no suite summary is a broken probe, jud
   const depot = fakeDepot({ "Main OS e2e": [withoutRecords] });
   const judged = await checkMainE2e({ depot, memory: empty, testRun: false, subject });
   expect(judged).toMatchObject({
-    pages: [{ tone: "none", details: ["broken probe: no suite summary"] }],
+    updates: [{ kind: "post", page: { impact: "broken probe: no suite summary" } }],
     failures: [],
     memory: {
-      suites: { "main e2e": "green", "slow e2e rows": "broken" },
+      suites: { "main e2e": green, "slow e2e rows": { state: "broken", runs: 1 } },
       judgedAt: { "Main OS e2e": "2026-09-26T20:00:00Z" },
     },
   });
   // judged once: the next run, with nothing newer, pages nothing
   expect(
     await checkMainE2e({ depot, memory: judged.memory, testRun: false, subject }),
-  ).toMatchObject({ pages: [], memory: judged.memory, failures: [] });
+  ).toMatchObject({ updates: [], memory: judged.memory, failures: [] });
 });
 
 test("real-model e2e is the REAL: rows of each scheduled or push run since the last judged, from its telemetry", async () => {
@@ -661,19 +799,19 @@ test("real-model e2e is the REAL: rows of each scheduled or push run since the l
   const judged = await checkRealModel({
     depot,
     memory: {
-      suites: { "real-model e2e": "green" },
+      suites: { "real-model e2e": green },
       judgedAt: { "OS real model": "2026-09-25T05:47:00Z" },
     },
     testRun: false,
     subject,
   });
   expect(judged).toMatchObject({
-    pages: [
-      { tone: "red", headline: "real-model e2e red at `brokebbbb` (the subject of bro)" },
-      { tone: "green", headline: "real-model e2e green again at `fixedbbbb` (the subject of fix)" },
+    updates: [
+      { kind: "post", page: { what: "real-model e2e red at `brokebbbb` (the subject of bro)" } },
+      { kind: "resolve", why: "real-model e2e green again at `fixedbbbb` (the subject of fix)" },
     ],
     memory: {
-      suites: { "real-model e2e": "green" },
+      suites: { "real-model e2e": green },
       judgedAt: { "OS real model": "2026-09-26T06:00:00Z" },
     },
   });
@@ -695,21 +833,32 @@ test("a first run judges only the newest real-model run", async () => {
   });
   const judged = await checkRealModel({
     depot,
-    memory: { suites: { "real-model e2e": "green" }, judgedAt: {} },
+    memory: { suites: { "real-model e2e": green }, judgedAt: {} },
     testRun: false,
     subject,
   });
   expect(judged).toEqual({
-    pages: [
+    updates: [
       {
-        tone: "red",
-        headline: "real-model e2e red at `dailybbbb` (the subject of dai)",
-        details: ["failing rows: REAL: a turn (Error: spend cap)"],
-        link: "https://depot.dev/orgs/0p91s0lz49/workflows/wf-daily",
+        signal: "real-model e2e",
+        kind: "post",
+        page: {
+          what: "real-model e2e red at `dailybbbb` (the subject of dai)",
+          impact: "failing rows: REAL: a turn (Error: spend cap)",
+          action: "fix or revert `dailybbbb`; a flaky row gets a fix, not a retry",
+          link: "https://depot.dev/orgs/0p91s0lz49/workflows/wf-daily",
+        },
       },
     ],
     memory: {
-      suites: { "real-model e2e": "red" },
+      suites: {
+        "real-model e2e": {
+          state: "red",
+          since: "daily".padEnd(40, "b"),
+          runs: 1,
+          failures: ["REAL: a turn"],
+        },
+      },
       judgedAt: { "OS real model": "2026-09-26T06:00:00Z" },
     },
     failures: [],
@@ -717,6 +866,12 @@ test("a first run judges only the newest real-model run", async () => {
 });
 
 const empty: E2eMemory = { suites: {}, judgedAt: {} };
+const green = { state: "green" as const };
+
+/** A suite red since the main run `id` (its sha as mainRun makes it), failing `failures`. */
+function redSince(id: string, failures: string[]) {
+  return { state: "red" as const, since: id.padEnd(40, "a"), runs: 1, failures };
+}
 
 /** A run as ListWorkflows lists it: what the page job passes as its own run. */
 function settled({ jobs: _jobs, artifacts: _artifacts, ...run }: ReturnType<typeof mainRun>) {

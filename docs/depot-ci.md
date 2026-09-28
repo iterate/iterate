@@ -81,7 +81,7 @@ Anything else that needs GitHub-only triggers, such as `pull_request_target`, `i
 | `deploy-<app>.yml`    | Main push touching what the app ships, dispatch  | Deploy of Dash, Agents, Notes, Voice, Kit, SPA, dummy-petshop or ci-reports                                      |
 | `kit-firmware.yml`    | Firmware PR and main push, daily, dispatch       | Builds the changed boards; main publishes their releases                                                         |
 | `prd-fault-alarm.yml` | Every 15 minutes, dispatch                       | Reads production's Workers Logs and pages #error-pulse on faults                                                 |
-| `health.yml`          | Hourly, dispatch                                 | **Health**: judges the runs below and PR time to green; one #error-pulse message per change of state             |
+| `health.yml`          | Hourly, dispatch                                 | **Health**: judges the runs below and PR time to green; one #error-pulse page per red signal                     |
 | `os-crash-hunt.yml`   | Nightly, dispatch                                | The opt-in isolate-ceiling rows against production                                                               |
 | `context-sweep.yml`   | Nightly, dispatch                                | Backs up and destroys production's orphan contexts (`scripts/ci/context-sweep.ts`)                               |
 | `os-e2e-soak.yml`     | Dispatch                                         | The e2e suite N times against one deployed worker, each run then the perf budgets                                |
@@ -713,20 +713,18 @@ and OTLP JSON export.
 ## Slack channels
 
 #error-pulse is for what someone must act on, and every message there mentions Jonas and Misha
-(`onCallMention` in `scripts/ci/slack.ts`), thread replies and 🧪 test pages included: the pages
-below, the prd fault alarm, the prd post-deploy check (`scripts/ci/prd-post-deploy-check.ts`), the
-preview sweep's pages (`apps/os/scripts/preview.ts sweep`), a failed context sweep
+(`onCallMention` in `scripts/ci/slack.ts`), thread replies included: the [health](#health) pages,
+the prd fault alarm, the prd post-deploy check (`scripts/ci/prd-post-deploy-check.ts`), the preview
+sweep's pages (`apps/os/scripts/preview.ts sweep`), a failed context sweep
 (`scripts/ci/context-sweep.ts post`), a failed prd deploy and any other failed scheduled workflow
 (`scripts/ci/notify.ts`). Routine posts go to #ci and mention nobody: each prd deploy that
-succeeded, each pull request event, the PR dashboard, the Durable Object cost alarm's daily thread
-and each context sweep's result, the orphans it destroyed included (the crash hunt leaves some
-every night).
+succeeded, each pull request event, the PR dashboard, the Durable Object cost alarm's daily thread,
+each context sweep's result, the orphans it destroyed included (the crash hunt leaves some every
+night), and the 🧪 test pages.
 
 ## Health
 
-Two jobs page #error-pulse on a change of state, with `scripts/monitors/health.ts`,
-each run's pages in one message, each a red or green block with its details and a
-link to the run, then the state now of every signal the job pages:
+Two jobs keep one page in #error-pulse per red signal, with `scripts/monitors/health.ts`:
 
 - **main e2e** and **slow e2e rows**: Main OS e2e's own `alert` job, as soon as
   the run's deploy and both suites have ended, from their results and the suite
@@ -736,7 +734,7 @@ link to the run, then the state now of every signal the job pages:
   - **real-model e2e**: the `REAL:` rows of each scheduled or push run of OS
     real model, from its telemetry.
   - **latency**: each new scheduled OS latency report, against the budgets and a
-    rolling baseline, red once two runs in a row cross a line.
+    rolling baseline; a metric turns red once two runs in a row cross a line.
   - **PR time to green** ([below](#pr-time-to-green)).
   - **DO cost**: the Durable Object cost alarm (`scripts/monitors/do-cost.ts`). Its daily
     thread in #ci is a headline, the $/day at the latest hour's rate and today so far, and one
@@ -745,26 +743,35 @@ link to the run, then the state now of every signal the job pages:
     edited every hour while it lasts. The first hour at 2× and at 5× the page tier is a broadcast
     reply in its thread, and two complete hours under the ceiling resolve it.
 
-  Its message's last line names main e2e's and slow e2e rows' state too, from
-  Main OS e2e's state, or none when it cannot read that state.
+What each verdict owes its signal's page (`scripts/monitors/page.ts`):
 
-A page leaves the job green; a check that could not read Depot, or found its
-probe broken (a report with no rows, a suite that did not run), fails the job
-once the others have paged. Main OS e2e's page job
-reports on the commit its run tested, where red reads as "main e2e broke": a
-broken probe of its slow rows (a slow row not run, an incomplete or missing suite
-summary) is a ⚪ "unjudged" page on its change of state instead, and the job
-fails only when it cannot judge its run or post. Each run since the last
-judged is judged, oldest first, so a page names the run where its suite changed
-state: Main OS e2e's page job judges its own run after any settled one whose
-page was lost. A settled run that Depot ended before its jobs started has no
-verdict. A re-run keeps its creation time and is not judged again, so the
-next push's run pages it. Each job's memory is its own artifact, `health-state`
-and `main-e2e-state`; a state of another `schemaVersion` is not read, and the job
-starts over. Dispatch `health.yml` with `--input test-page=true` to post every
-one of its checks' verdicts as a 🧪 test page, which keeps no state and sends
-PostHog nothing; a run off main without it posts nothing. A
-dispatch of Main OS e2e pages nothing.
+| Verdict                                                                     | What the channel gets                                                                                   |
+| --------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| Red or unjudged after green                                                 | A page: what broke at which commit with both mentions, its impact, what to do, the run                  |
+| Still red                                                                   | An edit of the page: the newest commit, the failing jobs and rows, "red since `<sha>`, N runs"          |
+| Still red, failing a job or row the page has not named                      | The edit, and a thread reply naming the new failures                                                    |
+| PR time to green more than 20 s worse again                                 | The edit, and a thread reply broadcast to the channel                                                   |
+| Green again                                                                 | A `✅ resolved: …` thread reply, and the page's first line edited to start `✅ resolved:`               |
+| Unjudged after red, or red after unjudged                                   | The open page resolved and a new one opened: an unjudged page never hides a red one                     |
+| Any, when Slack can no longer edit the page (deleted, past its edit window) | The update goes top-level: a new page, with any escalation reply in its thread, or the resolution reply |
+
+A check that could not read Depot, or found its probe broken (a report with no rows, a suite that
+did not run), fails the job once the others have paged. Main OS e2e's page job reports on the
+commit its run tested, where red reads as "main e2e broke": a broken probe of its slow rows (a
+slow row not run, an incomplete or missing suite summary) is an "unjudged" page instead, and the
+job fails only when it cannot judge its run or post. Each run since the last judged is judged,
+oldest first, so a page names the run where its suite changed state: Main OS e2e's page job judges
+its own run after any settled one whose page was lost. A settled run that Depot ended before its
+jobs started has no verdict. A re-run keeps its creation time and is not judged again, so the next
+push's run pages it.
+
+Each job's memory is its own artifact, `health-state` and `main-e2e-state`: its checks' memory
+and each open page's Slack ts and text, written only after every post succeeded. A state of another
+`schemaVersion` is not read, and the job starts over. Dispatch `health.yml` with
+`--input test-page=true` to post every one of its checks' verdicts to #ci as a 🧪 test page, which
+mentions nobody, keeps no state and sends PostHog nothing; a run off main without it posts
+nothing. A dispatch of Main OS e2e pages nothing; `health.ts main-e2e --workflow-id <id>
+--test-page` posts a past run's verdicts to #ci the same way.
 
 ### PR time to green
 
@@ -780,11 +787,12 @@ Pushes are split by what their E2E tests job ran (the suite summary's `slowRows`
 skipped, every row, no summary, and no Preview OS. The job log prints each group's p50 and p90 over
 24 hours and 7 days, and each push is a PostHog event, `pr checks settled`.
 
-It pages red when the pushes that skipped the slow rows took a p50 over 165 s or a p90 over 200 s
-across the last 24 hours, judged from 20 such pushes up; red again whenever that p50 is more than
-20 s over the lowest it judged since its last page; and green once both are back under. The lines
-hold the owner's rule that a push is green within 3 minutes (`LINES` in the script). Each page
-names the job that finished last on most of those pushes (`preview-os.yml:specs`, say).
+It opens a page when the pushes that skipped the slow rows took a p50 over 165 s or a p90 over
+200 s across the last 24 hours, judged from 20 such pushes up; edits it hourly while they stay
+over; escalates whenever that p50 is more than 20 s over the lowest it judged since the page or its
+last escalation; and resolves it once both are back under. The lines hold the owner's rule that a
+push is green within 3 minutes (`LINES` in the script). The page names the job that finished last
+on most of those pushes (`preview-os.yml:specs`, say).
 
 ## Browser reports from artifacts
 

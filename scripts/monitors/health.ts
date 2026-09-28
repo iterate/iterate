@@ -1,8 +1,8 @@
-// scripts/monitors/health.ts — THE PAGES FOR CI AND PLATFORM HEALTH: each pages #error-pulse on a
-// change of state, one message per run. The hourly health job (`run`, .depot/workflows/health.yml)
-// judges what the measuring workflows left; Main OS e2e's page job (`main-e2e`, the `alert` job of
+// scripts/monitors/health.ts — THE PAGES FOR CI AND PLATFORM HEALTH: one page in #error-pulse per red
+// signal. The hourly health job (`run`, .depot/workflows/health.yml) judges what the measuring
+// workflows left; Main OS e2e's page job (`main-e2e`, the `alert` job of
 // .depot/workflows/main-os-e2e.yml) judges its own run as soon as its suites have ended, so a red
-// main pages at once. The checks, in the order a message lists their pages:
+// main pages at once. The signals:
 //
 //   main e2e, slow e2e rows   Main OS e2e's page job: its own push run (./e2e.ts)
 //   real-model e2e            the health job: each new run of OS real model (./e2e.ts)
@@ -12,29 +12,27 @@
 //   DO cost                   the health job: Durable Object hours on both accounts (./do-cost.ts), in
 //                             its own daily thread and pages
 //
-// A page is one block, `🔴 <what> at <commit>` or `🟢 …`, its details as bullets and a link to the
-// run that measured it; the first mentions Jonas and Misha, as every #error-pulse message does. The
-// message ends with the state now of every signal the job pages; the health job's also names main
-// e2e's, from Main OS e2e's state. A check that could not read what it judges, or found its probe
-// broken, fails the job after the others have paged: a scheduled run reports on main's head, where
-// red reads as "this commit broke", so a page never turns a job red. Main OS e2e's page job reports
-// on the commit its run tested, so a broken probe of the slow rows is a ⚪ page there, on its change
-// of state (./e2e.ts), and the job fails only when it cannot judge its run or post.
+// Each check returns what its verdict owes its signal's page (./page.ts `PageAction`), which
+// `sendUpdates` sends. A check that could not read what it judges, or found its probe broken, fails
+// the health job after the others have paged, so a page never turns a job red. Main OS e2e's page
+// job has its own broken-probe rule (./e2e.ts) and fails only when it cannot judge its run or post.
 //
 // Each job's memory between runs is its own state artifact (`stateArtifacts`, depot.ts
-// `saveNewestArtifactFile`), which only a real run on main writes. A state of another `schemaVersion`
-// is not read: the job starts over, as a first run does. A run off main pages nothing and prints what
-// it would; `--test-page` posts every check's verdict now, marked 🧪 TEST RUN, keeping no state and
-// sending nothing to PostHog.
+// `saveNewestArtifactFile`), which only a real run on main writes, after its posts: its checks'
+// memory, and the Slack ts and text of each open page. A state of another `schemaVersion` is not
+// read: the job starts over, as a first run does, which may page once more a signal already paged. A
+// run off main posts nothing and prints what it would; `--test-page` posts every check's verdict now
+// to #ci, marked 🧪 TEST RUN and mentioning nobody, keeping no state and sending nothing to PostHog.
 //
 // Every command reads Depot with DEPOT_CI_TELEMETRY_TOKEN (Doppler _shared/preview):
 //   pnpm tsx scripts/monitors/health.ts previous-state [--of main-e2e] --out <state.json>
 //   pnpm tsx scripts/monitors/health.ts run --ref <git ref> [--state <state.json>] \
-//     [--main-e2e-state <state.json>] [--state-out <next.json>] [--test-page] [--dry-run]
+//     [--state-out <next.json>] [--test-page] [--dry-run]
 //   pnpm tsx scripts/monitors/health.ts main-e2e --ref <git ref> [--workflow-id <id>] \
 //     [--state <state.json>] [--state-out <next.json>] [--test-page] [--dry-run]
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
+import { WebAPIPlatformError } from "@slack/web-api";
 import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
 import { createCli } from "trpc-cli";
 import { z } from "zod";
@@ -43,39 +41,47 @@ import { osEnvs } from "../../envs.ts";
 import { saveNewestArtifactFile, type DepotApi } from "../ci/depot.ts";
 import { getOctokit } from "../ci/github.ts";
 import { sendPostHogEvents } from "../ci/posthog-events.ts";
-import { getSlackClient, onCallMention, slackChannelIds } from "../ci/slack.ts";
-import { checkDoCost } from "./do-cost.ts";
 import {
-  checkMainE2e,
-  checkRealModel,
-  E2eMemory,
-  MAIN_SUITES,
-  mainE2eRecords,
-  type SuiteState,
-} from "./e2e.ts";
+  escalationText,
+  getSlackClient,
+  markResolved,
+  pageChannel,
+  pageText,
+  resolvedText,
+} from "../ci/slack.ts";
+import { checkDoCost } from "./do-cost.ts";
+import { checkMainE2e, checkRealModel, E2eMemory, mainE2eRecords } from "./e2e.ts";
 import { checkLatency, LatencyMemory } from "./latency.ts";
-import type { Page } from "./page.ts";
+import type { PageContent, PageUpdate } from "./page.ts";
 import { checkTtg, TtgMemory } from "./ttg.ts";
 
-/** Where each job leaves its state for its next run: the workflow's `name:`, its artifact, the file.
- *  The health job reads Main OS e2e's too, for its message's last line. */
+/** Where each job leaves its state for its next run: the workflow's `name:`, its artifact, the file. */
 export const stateArtifacts = {
   health: { workflow: "Health", artifact: "health-state", file: "state.json" },
   "main-e2e": { workflow: mainE2eRecords.workflow, artifact: "main-e2e-state", file: "state.json" },
 };
 
+/** Each open page, by its signal: its Slack ts in its channel, and its text as last posted, which
+ *  its resolution marks resolved. */
+export const OpenPages = z.record(z.string(), z.object({ ts: z.string(), text: z.string() }));
+export type OpenPages = z.infer<typeof OpenPages>;
+
 /** The health job's state. Its e2e memory is real-model e2e's: main e2e's is in MainE2eState. */
 export const HealthState = z.object({
-  schemaVersion: z.literal(1),
+  schemaVersion: z.literal(2),
   ttg: TtgMemory,
   latency: LatencyMemory,
   e2e: E2eMemory,
+  pages: OpenPages,
 });
 export type HealthState = z.infer<typeof HealthState>;
 
-/** Main OS e2e's page job's state: main e2e's and slow e2e rows' memory. Version 2 can hold slow e2e
- *  rows `broken`, which version 1's readers cannot parse. */
-export const MainE2eState = z.object({ schemaVersion: z.literal(2), e2e: E2eMemory });
+/** Main OS e2e's page job's state: main e2e's and slow e2e rows' memory, and their open pages. */
+export const MainE2eState = z.object({
+  schemaVersion: z.literal(3),
+  e2e: E2eMemory,
+  pages: OpenPages,
+});
 export type MainE2eState = z.infer<typeof MainE2eState>;
 
 /** The state a health run starts from: the previous run's, or an empty one when there was none or
@@ -83,10 +89,11 @@ export type MainE2eState = z.infer<typeof MainE2eState>;
 export function readState(previous: unknown): HealthState {
   if (!HealthState.pick({ schemaVersion: true }).safeParse(previous).success)
     return {
-      schemaVersion: 1,
+      schemaVersion: 2,
       ttg: { pushes: [] },
       latency: { runs: [], red: [] },
       e2e: { suites: {}, judgedAt: {} },
+      pages: {},
     };
   return HealthState.parse(previous);
 }
@@ -94,52 +101,85 @@ export function readState(previous: unknown): HealthState {
 /** readState for Main OS e2e's page job. Pure. */
 export function readMainE2eState(previous: unknown): MainE2eState {
   if (!MainE2eState.pick({ schemaVersion: true }).safeParse(previous).success)
-    return { schemaVersion: 2, e2e: { suites: {}, judgedAt: {} } };
+    return { schemaVersion: 3, e2e: { suites: {}, judgedAt: {} }, pages: {} };
   return MainE2eState.parse(previous);
 }
 
-const EMOJI = { red: "🔴", green: "🟢", none: "⚪" };
+/** What `sendUpdates` needs of Slack, in the pages' channel: post a message, or a reply in a
+ *  page's thread (sent to the channel too when `broadcast`), answering its ts; edit one, answering
+ *  "gone" when Slack can no longer edit it (`PAGE_GONE`). */
+export type PagePoster = {
+  post(text: string, thread?: { ts: string; broadcast: boolean }): Promise<string>;
+  update(ts: string, text: string): Promise<"edited" | "gone">;
+};
 
-/** A signal as a message's last line names it, with its state now. */
-type Signal = { name: string; tone: Page["tone"] };
+/** Slack's answers to an edit of a page it can no longer edit: someone deleted it, or it is past
+ *  the edit window. The page is gone, and its signal's next update goes top-level. */
+const PAGE_GONE = new Set(["message_not_found", "edit_window_closed", "cant_update_message"]);
 
-/** An e2e suite's state as a signal's tone: none when it is broken or has none. Pure. */
-function suiteTone(state: SuiteState | undefined): Page["tone"] {
-  return state === "red" || state === "green" ? state : "none";
+/** Send the checks' updates in order, each to its signal's page in `pages`, and return the pages
+ *  open after them. A resolution edits the page before it replies, so a failed edit sends no reply
+ *  and the next run owes both again. An update whose signal has no open page, or whose page is
+ *  gone, posts top-level: an edit or escalation a new page, with the escalation's reply in its
+ *  thread; a resolution its reply, when the page is gone or the run is a test run's. A real run's
+ *  resolution with no open page sends nothing: no page of this job is open to resolve. */
+export async function sendUpdates(
+  poster: PagePoster,
+  input: { updates: PageUpdate[]; pages: OpenPages; testRun: boolean },
+) {
+  const pages: OpenPages = { ...input.pages };
+  const { testRun } = input;
+  const open = async (signal: string, text: string) => {
+    const ts = await poster.post(text);
+    pages[signal] = { ts, text };
+    return ts;
+  };
+  const textOf = (page: PageContent) => pageText({ ...page, link: page.link || null, testRun });
+  for (const update of input.updates) {
+    const page = pages[update.signal];
+    if (update.kind === "resolve" || update.kind === "replace") {
+      if (page) {
+        const edited = (await poster.update(page.ts, markResolved(page.text))) === "edited";
+        await poster.post(
+          resolvedText(update.why, testRun),
+          edited ? { ts: page.ts, broadcast: false } : undefined,
+        );
+      } else if (testRun) await poster.post(resolvedText(update.why, testRun));
+      delete pages[update.signal];
+      if (update.kind === "replace") await open(update.signal, textOf(update.page));
+      continue;
+    }
+    const text = textOf(update.page);
+    const edited =
+      update.kind !== "post" && page && (await poster.update(page.ts, text)) === "edited";
+    const ts = edited ? page.ts : await open(update.signal, text);
+    pages[update.signal] = { ts, text };
+    if (update.kind === "escalate")
+      await poster.post(escalationText(update.news, testRun), {
+        ts,
+        broadcast: update.broadcast,
+      });
+  }
+  return pages;
 }
 
-/** The run's one message: each page as a block, the first mentioning Jonas and Misha, then every
- *  signal's state now. Pure. */
-export function renderMessage(input: { pages: Page[]; now: Signal[]; testRun: boolean }) {
-  const blocks = input.pages.flatMap((page, index) => [
-    `${EMOJI[page.tone]} ${page.headline}${index === 0 ? ` ${onCallMention}` : ""}`,
-    ...page.details.map((detail) => `• ${detail}`),
-    ...(page.link ? [`<${page.link}|the run>`] : []),
-  ]);
-  const now = `now: ${input.now.map(({ name, tone }) => `${EMOJI[tone]} ${name}`).join(" · ")}`;
-  return `${input.testRun ? "🧪 TEST RUN " : ""}${[...blocks, now].join("\n")}`;
-}
-
-/** The health job: run every check, post the run's one message, keep the state and send PostHog the
- *  checks' events; then throw when a check failed. */
+/** The health job: run every check, send their updates to their pages, keep the state and send
+ *  PostHog the checks' events; then throw when a check failed. */
 export async function run(options: {
   /** The run's git ref: only refs/heads/main pages, keeps state and sends PostHog events. */
   ref: string;
   /** The previous run's state (`previous-state --out`). */
   state?: string;
-  /** Main OS e2e's newest state (`previous-state --of main-e2e --out`), for the last line. */
-  mainE2eState?: string;
   /** Where to write the state for the next run. */
   stateOut?: string;
-  /** Post every check's verdict now, marked 🧪. */
+  /** Post every check's verdict now to #ci, marked 🧪. */
   testPage?: boolean;
-  /** Print the message instead of posting it. */
+  /** Print the updates instead of sending them. */
   dryRun?: boolean;
 }) {
   const depot = depotApi();
   const { testRun, dryRun, keep } = runMode(options);
-  const state = readState(readStateFile(options.state, 1));
-  const mainState = readMainE2eState(readStateFile(options.mainE2eState, 2));
+  const state = readState(readStateFile(options.state, 2));
   const runUrl = process.env.DEPOT_JOB_URL;
   const subject = commitSubjects();
   const failures: string[] = [];
@@ -168,7 +208,7 @@ export async function run(options: {
 
   const realModel = real?.memory || state.e2e;
   const next: HealthState = {
-    schemaVersion: 1,
+    schemaVersion: 2,
     ttg: ttg?.memory || state.ttg,
     latency: latency?.memory || state.latency,
     // real-model e2e's alone: Main OS e2e keeps main e2e's
@@ -176,34 +216,14 @@ export async function run(options: {
       suites: { "real-model e2e": realModel.suites["real-model e2e"] },
       judgedAt: { "OS real model": realModel.judgedAt["OS real model"] },
     },
+    pages: state.pages,
   };
-  const pages = [
-    ...(real?.pages || []),
-    ...(latency?.pages || []),
-    ...(ttg?.page ? [ttg.page] : []),
+  const updates = [
+    ...(real?.updates || []),
+    ...(latency?.updates || []),
+    ...(ttg?.update ? [ttg.update] : []),
   ];
-  const text =
-    pages.length > 0 &&
-    renderMessage({
-      pages,
-      now: [
-        ...MAIN_SUITES.map((suite): Signal => ({
-          name: suite,
-          tone: suiteTone(mainState.e2e.suites[suite]),
-        })),
-        {
-          name: "real-model e2e",
-          tone: suiteTone(next.e2e.suites["real-model e2e"]),
-        },
-        {
-          name: "latency",
-          tone: next.latency.red.length > 0 ? "red" : "green",
-        },
-        { name: "PR time to green", tone: ttg?.status || "none" },
-      ],
-      testRun,
-    });
-  await postThenKeep({ text, dryRun, keep, stateOut: options.stateOut, next });
+  await postThenKeep({ updates, testRun, dryRun, keep, stateOut: options.stateOut, next });
   const events = [...(ttg?.events || []), ...(latency?.events || [])];
   if (!keep) console.log(`[health] ${events.length} PostHog events not sent`);
   // The iterate project in PostHog EU, as the CI telemetry sync reports to it.
@@ -215,8 +235,8 @@ export async function run(options: {
   if (failures.length > 0) throw new Error(`health: ${failures.join("; ")}`);
 }
 
-/** Main OS e2e's page job (main-os-e2e.yml `alert`): judge this run (`judgeMainE2eRun`), post its
- *  message and keep the state; then throw when a check failed. Its checks page a broken probe
+/** Main OS e2e's page job (main-os-e2e.yml `alert`): judge this run (`judgeMainE2eRun`), send its
+ *  updates and keep the state; then throw when a check failed. Its checks page a broken probe
  *  instead (./e2e.ts `checkMainE2e`): it throws before when it cannot judge its run or post. */
 export async function mainE2e(options: {
   /** The run's git ref: only refs/heads/main pages and keeps state. */
@@ -227,15 +247,15 @@ export async function mainE2e(options: {
   state?: string;
   /** Where to write the state for the next run. */
   stateOut?: string;
-  /** Post this run's verdicts now, marked 🧪. */
+  /** Post this run's verdicts now to #ci, marked 🧪. */
   testPage?: boolean;
-  /** Print the message instead of posting it. */
+  /** Print the updates instead of sending them. */
   dryRun?: boolean;
 }) {
   const { testRun, dryRun, keep } = runMode(options);
   const judged = await judgeMainE2eRun({
     depot: depotApi(),
-    state: readMainE2eState(readStateFile(options.state, 2)),
+    state: readMainE2eState(readStateFile(options.state, 3)),
     workflowId:
       options.workflowId ||
       z
@@ -245,7 +265,7 @@ export async function mainE2e(options: {
     testRun,
     subject: commitSubjects(),
   });
-  await postThenKeep({ ...judged, dryRun, keep, stateOut: options.stateOut });
+  await postThenKeep({ ...judged, testRun, dryRun, keep, stateOut: options.stateOut });
   if (judged.failures.length > 0) throw new Error(`main e2e: ${judged.failures.join("; ")}`);
 }
 
@@ -261,7 +281,7 @@ const CurrentWorkflow = z.object({
 
 /** Main OS e2e's page job's verdicts: the run `workflowId`, whose deploy and suite jobs have just
  *  ended, judged after any settled push run `state` has not (./e2e.ts `checkMainE2e`), as the
- *  message to post (or false, for no change of state), the state to keep and the broken probes. */
+ *  updates its pages owe, the state to keep once they are sent, and the broken probes. */
 export async function judgeMainE2eRun(input: {
   depot: DepotApi;
   state: MainE2eState;
@@ -286,18 +306,8 @@ export async function judgeMainE2eRun(input: {
       createdAt: workflow.workflowCreatedAt,
     },
   });
-  const next: MainE2eState = { schemaVersion: 2, e2e: judged.memory };
-  const text =
-    judged.pages.length > 0 &&
-    renderMessage({
-      pages: judged.pages,
-      now: MAIN_SUITES.map((suite): Signal => ({
-        name: suite,
-        tone: suiteTone(next.e2e.suites[suite]),
-      })),
-      testRun: input.testRun,
-    });
-  return { text, next, failures: judged.failures };
+  const next: MainE2eState = { schemaVersion: 3, e2e: judged.memory, pages: input.state.pages };
+  return { updates: judged.updates, next, failures: judged.failures };
 }
 
 /** The Depot CI API with the organization token (Doppler _shared/preview) bound. */
@@ -323,7 +333,7 @@ function runMode(options: { ref: string; testPage?: boolean; dryRun?: boolean })
 
 /** The previous run's state file as JSON, or undefined when there is none. One of another
  *  `schemaVersion` than the reader's is logged, since the run then starts over. */
-function readStateFile(path: string | undefined, schemaVersion: 1 | 2): unknown {
+function readStateFile(path: string | undefined, schemaVersion: 2 | 3): unknown {
   if (!path || !existsSync(path)) return undefined;
   const previous: unknown = JSON.parse(readFileSync(path, "utf8"));
   if (!z.object({ schemaVersion: z.literal(schemaVersion) }).safeParse(previous).success)
@@ -331,25 +341,73 @@ function readStateFile(path: string | undefined, schemaVersion: 1 | 2): unknown 
   return previous;
 }
 
-/** Post the run's message, then keep its state, in that order: a state records what was posted, so a
- *  message that could not post leaves the state as it was and the next run owes it again. */
+/** Send the run's updates, then keep its state with the pages open after them, in that order: a
+ *  state records what was sent, so an update that could not be sent leaves the state as it was and
+ *  the next run owes it again (and one sent before it, once more). A dry run prints each message
+ *  instead. */
 async function postThenKeep(input: {
-  text: string | false;
+  updates: PageUpdate[];
+  testRun: boolean;
   dryRun: boolean;
   keep: boolean;
   stateOut?: string;
   next: HealthState | MainE2eState;
 }) {
-  console.log(input.text ? `\n${input.text}\n` : "\nno change of state, nothing to page");
-  if (input.text && !input.dryRun)
-    await getSlackClient().chat.postMessage({
-      channel: slackChannelIds["#error-pulse"],
-      text: input.text,
-    });
+  if (input.updates.length === 0) console.log("\nno change of state, nothing to page");
+  const pages = await sendUpdates(input.dryRun ? printingPoster() : slackPoster(input.testRun), {
+    updates: input.updates,
+    // a test run's posts are its own, in #ci: it never touches an open page
+    pages: input.testRun ? {} : input.next.pages,
+    testRun: input.testRun,
+  });
   if (input.keep && input.stateOut) {
     mkdirSync(dirname(input.stateOut), { recursive: true });
-    writeFileSync(input.stateOut, `${JSON.stringify(input.next)}\n`);
+    writeFileSync(input.stateOut, `${JSON.stringify({ ...input.next, pages })}\n`);
   }
+}
+
+/** The pages' channel (`pageChannel`): #error-pulse, or #ci for a test run. */
+function slackPoster(testRun: boolean): PagePoster {
+  const slack = getSlackClient();
+  const channel = pageChannel(testRun);
+  return {
+    async post(text, thread) {
+      // Slack's types take a broadcast reply and a plain one as two shapes
+      const posted = await slack.chat.postMessage(
+        thread?.broadcast
+          ? { channel, text, thread_ts: thread.ts, reply_broadcast: true }
+          : { channel, text, thread_ts: thread?.ts },
+      );
+      console.log(`[health] posted ${posted.ts}${thread ? ` in ${thread.ts}` : ""}:\n${text}`);
+      return z.string().parse(posted.ts);
+    },
+    async update(ts, text) {
+      try {
+        await slack.chat.update({ channel, ts, text });
+      } catch (error) {
+        if (!(error instanceof WebAPIPlatformError && PAGE_GONE.has(error.data.error))) throw error;
+        console.log(`[health] ${ts} is gone (${error.data.error}): its update goes top-level`);
+        return "gone";
+      }
+      console.log(`[health] edited ${ts}:\n${text}`);
+      return "edited";
+    },
+  };
+}
+
+/** A poster that prints what it would send, for a dry run: each post answers a made-up ts. */
+function printingPoster(): PagePoster {
+  let posts = 0;
+  return {
+    async post(text, thread) {
+      console.log(`\n[dry run] post${thread ? ` in ${thread.ts}` : ""}:\n${text}`);
+      return `dry-run-${++posts}`;
+    },
+    async update(ts, text) {
+      console.log(`\n[dry run] edit ${ts}:\n${text}`);
+      return "edited";
+    },
+  };
 }
 
 /** Each commit's subject, read once from GitHub (GITHUB_TOKEN): a job's checkout holds one commit,

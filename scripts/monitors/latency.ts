@@ -12,10 +12,12 @@
 //     own spread, and one slow run does not raise the line the next run is judged by. For a rate:
 //     under a third of the median and under the lowest. A regression that lasts moves the median in ~6
 //     runs; the metric then clears, and its green page names the baseline it moved to.
-// Every measurement goes to PostHog (`os latency measured`: metric, percentile, value, sha, run). It
-// pages on a change of state only: RED once when a metric crossed a line in two runs in a row (one
-// slow run is weather; the next one confirms it — at most 3 hours later), GREEN once when every red
-// metric stayed under its lines two runs in a row. A BROKEN PROBE fails the health run instead: a row
+// Every measurement goes to PostHog (`os latency measured`: metric, percentile, value, sha, run). A
+// metric turns RED when it crossed a line in two runs in a row (one slow run is weather; the next one
+// confirms it — at most 3 hours later), and clears once it stayed under its lines two runs in a row.
+// Latency has one page while any metric is red (./page.ts `advance`): opened when the first turns,
+// edited with each run's readings, escalated in its thread when another metric turns, and resolved
+// once none is red. A BROKEN PROBE fails the health run instead: a row
 // that failed for anything but a budget, a metric no row recorded, no report — unless the platform
 // broke it (PLATFORM_FAILURES below): ONE row that a platform failure broke, and that did not break in
 // the run before, is RECORDED — a warning, a line of the step summary and a PostHog event (`os latency
@@ -40,7 +42,7 @@ import {
   type DepotApi,
 } from "../ci/depot.ts";
 import { systemEvent } from "../ci/posthog-events.ts";
-import { commitText, type Page } from "./page.ts";
+import { advance, commitText, sinceText, SignalMemory, type PageUpdate } from "./page.ts";
 
 /** What the check reads: the scheduled runs of this workflow (its `name:`), and this file of the
  *  artifact each keeps. */
@@ -81,6 +83,8 @@ export const LatencyMemory = z.object({
     }),
   ),
   red: z.array(MetricName),
+  /** Latency's page: open while any metric is red. None before the first run. */
+  signal: SignalMemory.optional(),
   /** The newest OS latency workflow judged: its creation, which orders them. */
   judgedAt: z.iso.datetime().optional(),
 });
@@ -344,10 +348,10 @@ function regressionLineOf(
     : Math.max(median * REGRESSION_FACTOR, median + REGRESSION_FLOOR_MS, ...normal);
 }
 
-/** The state after this run and the page it owes, if any. A metric turns red when it crossed a line
- *  in this run AND the last run that measured it; a red one clears when it was measured under its
- *  lines in both.
- *  `red` pages the metrics that just turned; `green` pages once nothing is red any more. Pure. */
+/** The state after this run and what it owes latency's page (./page.ts `advance`). A metric turns
+ *  red when it crossed a line in this run AND the last run that measured it; a red one clears when
+ *  it was measured under its lines in both. The page's failures are the red metrics, so one that
+ *  turns while the page is open escalates. Pure. */
 export function transition(input: {
   state: LatencyMemory;
   readings: Reading[];
@@ -368,14 +372,18 @@ export function transition(input: {
     (metric) => measuredUnder(input.run, metric) && measuredUnder(before(metric), metric),
   );
   const red = [...input.state.red.filter((metric) => !cleared.includes(metric)), ...turnedRed];
+  const page = advance(input.state.signal, {
+    state: red.length > 0 ? "red" : "green",
+    sha: input.run.sha,
+    failures: red,
+  });
   const next: LatencyMemory = {
     runs: [...input.state.runs, input.run].slice(-HISTORY_RUNS),
     red,
+    signal: page.memory,
     judgedAt: input.state.judgedAt,
   };
-  const page =
-    turnedRed.length > 0 ? "red" : input.state.red.length > 0 && red.length === 0 ? "green" : null;
-  return { next, page, turnedRed, cleared } as const;
+  return { next, action: page.action, turnedRed, cleared } as const;
 }
 
 /** This run as the state remembers it. Pure. */
@@ -393,19 +401,23 @@ export function rememberRun(
   };
 }
 
-/** The page: red names each metric that turned (or, on a test page, crossed) with its value, the
- *  line it crossed and the baseline; green names what came back. Pure. */
+/** What latency's page tells for the update `kind`: the page names each red metric with its value,
+ *  the line it crossed and the baseline; the escalation names the metrics that just turned; the
+ *  resolution names what came back. Pure. */
 export function renderPage(input: {
-  page: "red" | "green";
+  kind: NonNullable<ReturnType<typeof transition>["action"]>;
   readings: Reading[];
-  metrics: LatencyMetricName[];
-  stillRed: LatencyMetricName[];
+  red: LatencyMetricName[];
+  turnedRed: LatencyMetricName[];
+  cleared: LatencyMetricName[];
+  signal: SignalMemory | undefined;
   commit: { sha: string; subject: string };
   runUrl?: string;
-}): Page {
+}): PageUpdate {
+  const signal = "latency";
   const commit = commitText(input.commit);
   const byMetric = new Map(input.readings.map((reading) => [reading.metric, reading]));
-  const lines = input.metrics.map((metric) => {
+  const line = (metric: LatencyMetricName, red: boolean) => {
     const reading = byMetric.get(metric);
     if (!reading || reading.missing) return `${metric}: not measured`;
     const { unit } = LATENCY_METRICS[metric];
@@ -423,22 +435,36 @@ export function renderPage(input: {
     const extreme = rate
       ? `min ${format(reading.summary.min)}`
       : `max ${format(reading.summary.max)}`;
-    return input.page === "red"
+    return red
       ? `*${metric}* ${value}: ${crossed.join(" and ")} (${baseline}); n=${reading.summary.n}, ${extreme}`
       : `${metric} ${value} (budget ${format(reading.budget)}, ${baseline})`;
-  });
-  return {
-    tone: input.page,
-    headline:
-      input.page === "red"
-        ? `latency over its lines at ${commit}`
-        : `latency ${input.metrics.length > 0 ? "back " : ""}under its lines at ${commit}`,
-    details: [
-      ...lines,
-      ...(input.stillRed.length > 0 ? [`still red: ${input.stillRed.join(", ")}`] : []),
-    ],
+  };
+  if (input.kind === "resolve")
+    return {
+      signal,
+      kind: "resolve",
+      why: [
+        `latency ${input.cleared.length > 0 ? "back " : ""}under its lines at ${commit}`,
+        ...input.cleared.map((metric) => line(metric, false)),
+      ].join("; "),
+    };
+  const page = {
+    what: `latency over its lines at ${commit}`,
+    impact: `${input.red.map((metric) => line(metric, true)).join("; ")}${input.signal ? sinceText(input.signal) : ""}`,
+    action: `fix or revert the change that slowed ${input.red.join(", ")}`,
     link: input.runUrl,
   };
+  if (input.kind === "escalate")
+    return {
+      signal,
+      kind: "escalate",
+      page,
+      news: `latency: ${input.turnedRed.join(", ")} over its lines too at ${commit}`,
+      broadcast: false,
+    };
+  if (input.kind === "replace")
+    throw new Error("latency is red or green: it has no unjudged page to replace");
+  return { signal, kind: input.kind, page };
 }
 
 type EventContext = {
@@ -509,8 +535,8 @@ export function latencyEvents(readings: Reading[], context: EventContext) {
 }
 
 /** Judge one perf report (undefined when the run kept none) against `memory`: log every metric,
- *  and return the memory after it, the page it owes (on a test run, whatever crossed in this run
- *  alone, and no memory), its PostHog events and its broken probes. */
+ *  and return the memory after it, the update it owes latency's page (on a test run, what crossed in
+ *  this run alone, and no memory), its PostHog events and its broken probes. */
 export function judgeReport(input: {
   report: unknown;
   memory: LatencyMemory;
@@ -533,21 +559,24 @@ export function judgeReport(input: {
       console.log(
         `${reading.over ? "OVER " : "     "}${reading.metric}: median ${format(reading.value)} — budget ${format(reading.budget)}${reading.baseline === undefined ? "" : `, baseline ${format(reading.baseline)}, regression line ${format(reading.regressionLine!)}`} (n=${reading.summary.n} p50=${format(reading.summary.p50)} p95=${format(reading.summary.p95)} max=${format(reading.summary.max)})`,
       );
+  // a test page tells this run alone: a page for what crossed in it, else the resolution
   const outcome = input.testRun
     ? {
         next: memory,
-        page: run.over.length > 0 ? ("red" as const) : ("green" as const),
+        action: run.over.length > 0 ? ("post" as const) : ("resolve" as const),
         turnedRed: run.over,
         cleared: [],
       }
     : transition({ state: memory, readings, run });
-  const page =
-    outcome.page &&
+  const update =
+    outcome.action &&
     renderPage({
-      page: outcome.page,
+      kind: outcome.action,
       readings,
-      metrics: outcome.page === "red" ? outcome.turnedRed : outcome.cleared,
-      stillRed: outcome.next.red.filter((metric) => !outcome.turnedRed.includes(metric)),
+      red: input.testRun ? run.over : outcome.next.red,
+      turnedRed: outcome.turnedRed,
+      cleared: outcome.cleared,
+      signal: outcome.next.signal,
       commit: measured,
       runUrl: measured.url,
     });
@@ -571,7 +600,7 @@ export function judgeReport(input: {
   };
   return {
     memory: { ...outcome.next, judgedAt: measured.at },
-    page,
+    update,
     events: [...latencyEvents(readings, context), ...brokenEvents(broken, context)],
     broken,
   };
@@ -593,7 +622,7 @@ export async function checkLatency(input: {
   });
   const workflows = input.testRun ? settled.slice(-1) : settled;
   let memory = input.memory;
-  const pages: Page[] = [];
+  const updates: PageUpdate[] = [];
   const events: ReturnType<typeof judgeReport>["events"] = [];
   const red: BrokenVerdict[] = [];
   for (const [index, workflow] of workflows.entries()) {
@@ -618,7 +647,7 @@ export async function checkLatency(input: {
     });
     memory = judged.memory;
     if (!counts) continue;
-    if (judged.page) pages.push(judged.page);
+    if (judged.update) updates.push(judged.update);
     events.push(...judged.events);
     red.push(...judged.broken.filter((probe) => probe.redBecause));
     const reported = brokenReport(judged.broken);
@@ -628,8 +657,7 @@ export async function checkLatency(input: {
   }
   return {
     memory,
-    pages,
-    status: memory.red.length > 0 ? ("red" as const) : ("green" as const),
+    updates,
     events,
     failures: red.map((probe) => `the latency probe is broken: ${brokenLine(probe)}`),
   };
