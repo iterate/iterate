@@ -23,15 +23,6 @@ test.for([
     },
     epochs: [["petshop-default:ada@example.com", 1]],
   },
-  {
-    name: "the Tesco client the OS e2e helpers name, tesco-login:<email>, is the client tesco-login",
-    body: { clientId: "tesco-login:ada@example.com", account: "ada@example.com" },
-    answer: {
-      status: 200,
-      body: { clientId: "tesco-login", account: "ada@example.com", accessTokenEpoch: 1 },
-    },
-    epochs: [["tesco-login:ada@example.com", 1]],
-  },
 ])("expire-tokens $name", async ({ body, answer, epochs }) => {
   const petshop = memoryPetshop();
 

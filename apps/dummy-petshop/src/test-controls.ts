@@ -23,12 +23,7 @@ export async function handleTestControls(request: Request, deps: ShopDeps): Prom
     const input = ExpireTokens.safeParse(await body());
     if (!input.success)
       return invalid("clientId and account are required, so expiry ends no other test's tokens");
-    const { account } = input.data;
-    // The OS e2e helpers' petshopExpireTescoTokens sends the Tesco client with its account
-    // appended; the client its tokens belong to is `tesco-login` (tesco-login.ts).
-    const clientId = input.data.clientId.startsWith("tesco-login:")
-      ? "tesco-login"
-      : input.data.clientId;
+    const { clientId, account } = input.data;
     return Response.json({
       clientId,
       account,
