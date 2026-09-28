@@ -18,6 +18,7 @@ const job: Job = {
 };
 const config = { rules: "rules", model: "openai/gpt-6-astra" };
 
+// iterate-lint-disable-next-line comments/no-narrating-comments -- describes the fixture, whose comment is the narration under test
 /** An added file with a narrating comment (Jev flags it) and a cast (Jev is unsure: the LLM decides). */
 const SOURCE = [
   "export function read(raw: string) {",

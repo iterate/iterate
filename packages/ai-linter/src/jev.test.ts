@@ -123,7 +123,9 @@ test("conditional: the outermost ternary and an if with an else, starting on an 
     "    i();",
     "  }", // 9
     "  if (x) g();", // 10: no else
+    // iterate-lint-disable-next-line comments/no-narrating-comments -- labels a test input line
     "  const b = x > 1 ? (x > 2 ? 'c' : 'b') : 'a';", // 11: parentheses do not split a nested ternary
+    // iterate-lint-disable-next-line comments/no-narrating-comments -- labels a test input line
     "  return x", // 12: starts on a line the pull request did not add
     "    ? 1",
     "    : 2;",
