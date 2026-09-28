@@ -43,6 +43,21 @@ const DohNsAnswer = z.object({
   Answer: z.array(z.object({ name: z.string(), type: z.number(), data: z.string() })).optional(),
 });
 
+/** A country's second-level registry, like `co.uk`, `com.au` or `co.jp`: a name with nameservers
+ *  that is never a customer's zone. Two labels, a two-letter country code, and a common registry
+ *  label — the multi-label public suffixes a customer domain sits under in practice (a full public
+ *  suffix list would be exact, and heavy for this). Pure. */
+export function isCountryRegistry(name: string): boolean {
+  const labels = name.split(".");
+  return (
+    labels.length === 2 &&
+    /^[a-z]{2}$/.test(labels[1]!) &&
+    ["co", "com", "org", "net", "ac", "gov", "edu", "ne", "or", "ltd", "plc", "me", "gen"].includes(
+      labels[0]!,
+    )
+  );
+}
+
 /** The provider a set of nameservers belongs to, or null. Pure. */
 export function dnsProviderOfNameservers(nameservers: readonly string[]): string | null {
   const names = nameservers.map((name) => name.toLowerCase().replace(/\.$/, ""));
@@ -60,7 +75,10 @@ export async function dnsZoneOf(
   fetcher: typeof fetch = (input, init) => fetch(input, init),
 ): Promise<{ zone: string; provider: string | null } | null> {
   const zones = [hostname, ...domainConnectZonesOf(hostname).map(({ domain }) => domain)];
+  // never above a country's registry: past the customer's own zone (a typo, a delegation not yet
+  // seen), `co.uk` would answer, and every record's name would come out wrong
   for (const domain of zones) {
+    if (isCountryRegistry(domain)) return null;
     const response = await fetcher(
       `https://cloudflare-dns.com/dns-query?name=${encodeURIComponent(domain)}&type=NS`,
       { headers: { accept: "application/dns-json" }, signal: AbortSignal.timeout(5_000) },

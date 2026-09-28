@@ -1,7 +1,7 @@
 // src/project/dns-provider.test.ts — which provider a zone's nameservers name (a table of the
 // customer-facing nameserver names), and the zone walk over DNS-over-HTTPS against a fake.
 import { expect, test } from "vitest";
-import { dnsProviderOfNameservers, dnsZoneOf } from "./dns-provider.ts";
+import { dnsProviderOfNameservers, dnsZoneOf, isCountryRegistry } from "./dns-provider.ts";
 
 test.for([
   { name: "Cloudflare", nameservers: ["giancarlo.ns.cloudflare.com."], provider: "cloudflare" },
@@ -76,4 +76,30 @@ test("a DNS error throws (the caller logs it)", async () => {
     dnsZoneOf("iterate.example.com", (async () =>
       Response.json({ Status: 2 })) as unknown as typeof fetch),
   ).rejects.toThrow(/DNS status 2/);
+});
+
+test.for([
+  { name: "co.uk", registry: true },
+  { name: "com.au", registry: true },
+  { name: "co.jp", registry: true },
+  { name: "example.co.uk", registry: false },
+  { name: "effect.ninja", registry: false },
+  { name: "templestein.de", registry: false },
+])("a country's registry is never a zone: $name", ({ name, registry }) => {
+  expect(isCountryRegistry(name)).toBe(registry);
+});
+
+test("the walk stops before a country's registry: a zone that doesn't answer is no zone, never co.uk", async () => {
+  const asked: string[] = [];
+  const found = await dnsZoneOf("iterate.example.co.uk", (async (input: string) => {
+    const name = new URL(input).searchParams.get("name")!;
+    asked.push(name);
+    return Response.json(
+      name === "co.uk"
+        ? { Status: 0, Answer: [{ name: "co.uk.", type: 2, data: "dns1.nic.uk." }] }
+        : { Status: 3 },
+    );
+  }) as unknown as typeof fetch);
+  expect(found).toBeNull();
+  expect(asked).toEqual(["iterate.example.co.uk", "example.co.uk"]);
 });
