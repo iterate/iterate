@@ -26,6 +26,7 @@ import {
   type WorkflowJobs,
 } from "./await-deploy.ts";
 import { depotApi, workflowArtifact, type DepotApi } from "./depot.ts";
+import { traceOperation } from "./tracing/tracing.ts";
 
 /** The matrix job whose legs are the shards after the first (preview-os.yml, main-os-e2e.yml). */
 export const SHARD_JOB = "specs-shard";
@@ -51,48 +52,55 @@ export async function collectShards(input: {
 }) {
   const { depot, workflowId, job, out, log = console.log } = input;
   let reported = "";
-  const { runId, legs, waitedMs } = await pollWorkflow({
-    ...input,
-    tag: "specs-shards",
-    waitingFor: `the ${job} legs`,
-    boundMs: COLLECT_BOUND_MS,
-    settled: ({ runId, jobs }, waitedMs) => {
-      // `<file>:<job id>:matrix-<n>`
-      const legs = jobs.filter((candidate) => candidate.jobKey.split(":")[1] === job);
-      if (!legs.length)
-        throw new Error(`Depot lists no job ${job} in workflow ${workflowId} to collect`);
-      const waiting = legs.filter((leg) => !SETTLED.includes(leg.status));
-      const state = waiting.length
-        ? `waiting for ${waiting.map((leg) => `${name(leg)} (${leg.status})`).join(", ")}`
-        : `all ${legs.length} settled`;
-      if (state !== reported) log(`[specs-shards] ${seconds(waitedMs)}: ${state}`);
-      reported = state;
-      return waiting.length && waitedMs < COLLECT_BOUND_MS ? undefined : { runId, legs, waitedMs };
-    },
-  });
-  await mkdir(out, { recursive: true });
-  const problems = await Promise.all(
-    legs.map(async (leg) => {
-      if (!SETTLED.includes(leg.status))
-        return [`${name(leg)} is still ${leg.status} after ${seconds(waitedMs)}`];
-      const newest = leg.attempts.toSorted((a, b) => a.attempt - b.attempt).at(-1);
-      const files =
-        newest &&
-        (await workflowArtifact(depot, { runId, workflowId }, (artifact) =>
-          artifact.endsWith(`-test-artifacts-attempt-${newest.attemptId}`),
-        ));
-      const blobs = Object.entries(files || {}).filter(([path]) =>
-        /^playwright-blob\/[^/]+\.zip$/u.test(path),
-      );
-      for (const [path, bytes] of blobs) await writeFile(join(out, basename(path)), bytes);
-      if (leg.status === "finished" && blobs.length) return [];
-      return [
-        [
-          `${name(leg)} ${leg.status === "finished" ? "passed" : leg.status}`,
-          ...(blobs.length ? [] : ["left no blob report"]),
-        ].join(" but "),
-      ];
+  // Each part a row of the step in the CI trace (docs/ci-traces.md#steps): the wait is most of it.
+  const { runId, legs, waitedMs } = await traceOperation("Wait for the other shards", () =>
+    pollWorkflow({
+      ...input,
+      tag: "specs-shards",
+      waitingFor: `the ${job} legs`,
+      boundMs: COLLECT_BOUND_MS,
+      settled: ({ runId, jobs }, waitedMs) => {
+        // `<file>:<job id>:matrix-<n>`
+        const legs = jobs.filter((candidate) => candidate.jobKey.split(":")[1] === job);
+        if (!legs.length)
+          throw new Error(`Depot lists no job ${job} in workflow ${workflowId} to collect`);
+        const waiting = legs.filter((leg) => !SETTLED.includes(leg.status));
+        const state = waiting.length
+          ? `waiting for ${waiting.map((leg) => `${name(leg)} (${leg.status})`).join(", ")}`
+          : `all ${legs.length} settled`;
+        if (state !== reported) log(`[specs-shards] ${seconds(waitedMs)}: ${state}`);
+        reported = state;
+        return waiting.length && waitedMs < COLLECT_BOUND_MS
+          ? undefined
+          : { runId, legs, waitedMs };
+      },
     }),
+  );
+  await mkdir(out, { recursive: true });
+  const problems = await traceOperation("Download their blob reports", () =>
+    Promise.all(
+      legs.map(async (leg) => {
+        if (!SETTLED.includes(leg.status))
+          return [`${name(leg)} is still ${leg.status} after ${seconds(waitedMs)}`];
+        const newest = leg.attempts.toSorted((a, b) => a.attempt - b.attempt).at(-1);
+        const files =
+          newest &&
+          (await workflowArtifact(depot, { runId, workflowId }, (artifact) =>
+            artifact.endsWith(`-test-artifacts-attempt-${newest.attemptId}`),
+          ));
+        const blobs = Object.entries(files || {}).filter(([path]) =>
+          /^playwright-blob\/[^/]+\.zip$/u.test(path),
+        );
+        for (const [path, bytes] of blobs) await writeFile(join(out, basename(path)), bytes);
+        if (leg.status === "finished" && blobs.length) return [];
+        return [
+          [
+            `${name(leg)} ${leg.status === "finished" ? "passed" : leg.status}`,
+            ...(blobs.length ? [] : ["left no blob report"]),
+          ].join(" but "),
+        ];
+      }),
+    ),
   );
   return problems.flat();
 }
@@ -121,18 +129,22 @@ export default class SpecsShards {
       job: SHARD_JOB,
       out: blobs,
     });
-    const merged = spawnSync(
-      "pnpm",
-      ["exec", "playwright", "merge-reports", "--reporter", "html", blobs],
-      {
-        stdio: "inherit",
-        env: {
-          ...process.env,
-          PLAYWRIGHT_HTML_OUTPUT_DIR: testEvidencePaths.playwrightReport,
-          PLAYWRIGHT_HTML_OPEN: "never",
+    const merged = await traceOperation("Merge the HTML report", async (span) => {
+      const result = spawnSync(
+        "pnpm",
+        ["exec", "playwright", "merge-reports", "--reporter", "html", blobs],
+        {
+          stdio: "inherit",
+          env: {
+            ...process.env,
+            PLAYWRIGHT_HTML_OUTPUT_DIR: testEvidencePaths.playwrightReport,
+            PLAYWRIGHT_HTML_OPEN: "never",
+          },
         },
-      },
-    );
+      );
+      if (result.status !== 0) span.fail();
+      return result;
+    });
     if (merged.status !== 0)
       problems.push(
         `the blob reports would not merge: playwright merge-reports exited ${merged.status}`,

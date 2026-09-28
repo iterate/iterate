@@ -659,7 +659,8 @@ fullest shard holds `ceil(specs / shards)`.
   blob report from its newest attempt's test results, merges them with its own into the one HTML
   report behind the **Playwright report** status, and fails when a leg did not pass
   (`scripts/ci/specs-shards.ts`). So Browser specs is green only when every spec passed, and
-  there is no separate merge job to start and set up after the specs.
+  there is no separate merge job to start and set up after the specs. In the CI trace the step
+  shows its wait for the other shards, which is nearly all of it, the downloads and the merge.
 - Cost: every shard waits out the deploy on its own runner, about nine more `4x16`s a push than
   one job. More workers against one preview have raised retries before (#3258), so compare the
   retried specs per run before and after changing the count.

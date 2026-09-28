@@ -1,11 +1,11 @@
 ---
-status: in-progress
+status: complete
 size: medium
 ---
 
 # Browser specs in shards again: every spec at once
 
-**Status:** implemented and green locally; waiting on the PR's own CI runs to measure time, retries and cost. Done: shard config, collector, both workflows, trace, main's page, docs, the shard-count guard. Missing: live measurements, and whether `depot ci retry --failed` re-collects a retried leg. Assumptions below were made without Misha; each says why.
+**Status:** done in #3394. Ten shards of six workers, shard 1 collects and gives the verdict, the CI trace groups the shards and shows each job's steps flat. Two green PR runs: Browser specs' verdict 85 s and 103 s after the run started (deploy ends at 56 s), no retries in 112 spec runs. Still open: whether `depot ci retry --failed` re-collects a retried leg (unexercised), and the follow-ups below. Assumptions below were made without Misha; each says why.
 
 Browser specs had six 16-worker shards on the legacy platform (#2659, 2026-09-16). The os-next roll-forward (#2837, 2026-09-23) replaced that workflow with Preview OS's single Browser specs job, so sharding went with it. Bring it back on Preview OS and Main OS e2e, simpler than last time.
 
@@ -53,8 +53,8 @@ What to expect: today the Playwright wall is about 102 s (sum of spec time about
 - [x] Workflow tests (`preview-os-workflow.test.ts`, `depot-workflows.test.ts`) pin the new shape
 - [x] Docs: `docs/depot-ci.md` (preview job shape, reliability defaults), `docs/testing.md` _new section "Browser specs in shards"_
 - [x] Main's alert page and the CI telemetry sync read every shard _`scripts/monitors/e2e.ts` names failing rows from any leg; `testEvidenceJobs` lists `specs-shard`_
-- [ ] Measure on the PR: Playwright wall, job and verdict time, retries per run, over several runs; compare with #3258's numbers
-- [ ] Check `depot ci retry <run> --failed` on a red leg re-runs the leg and shard 1, and shard 1 collects the new attempt
+- [x] Measure on the PR: Playwright wall, job and verdict time, retries per run, over several runs; compare with #3258's numbers _runs `qxmljkwgml`, `jvb8z6wp57`: verdict 85/103 s after the run's start, slowest shard's tests 22.6/40.4 s (vs ~84 s Playwright on one 4x16 in #3258), 0 retries; n=2, so the retry rate is still to watch on main_
+- [ ] ~~Check `depot ci retry <run> --failed` on a red leg re-runs the leg and shard 1, and shard 1 collects the new attempt~~ _not exercised: no leg went red on this PR; the collector reads each leg's newest attempt, which its tests cover_
 
 ## Follow-ups (not in this PR)
 
