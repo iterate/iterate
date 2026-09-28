@@ -143,6 +143,7 @@ export function normalizeSecretOAuth(
     for (const [key, value] of Object.entries(options.extra)) extra[key] = String(value);
   const clientSecret = typeof options.clientSecret === "string" ? options.clientSecret : "";
   clientSecretReferenceOf(clientSecret); // a placeholder among other text is refused here
+  if (!client) clientSecretReferenceOf(String(options.clientId), "clientId");
   return {
     authorizationEndpoint: authorizationEndpoint.href,
     tokenEndpoint: tokenEndpoint.href,

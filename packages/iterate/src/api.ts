@@ -197,13 +197,23 @@ export type SecretCatalogEntry = {
 };
 
 /** The input an agent gives `itx.secrets.collectFromUser`: the write-only secret path, the
- * origins its material may reach, and the short explanation the authenticated collection form
- * shows its user. */
+ * origins its material may reach, what the collection page shows the person, and, for a secret of
+ * several parts, one field each. `description` is markdown: say where the value comes from, with
+ * links (they open in a new tab). */
 export type CollectSecretInput = {
   path: string;
   egress: { urls: string[] };
   description?: string;
+  /** One input per field, saved as one JSON secret `{ [name]: value }`, whose parts are then
+   *  `getSecret(path, { field: name })`: an OAuth app's `clientId` and `clientSecret` (which
+   *  `beginOAuth` takes as placeholders), a webhook's `signingSecret`. Without it, one Value. */
+  fields?: CollectSecretField[];
 };
+
+/** One part of a secret a collection page asks for: its name in the JSON secret
+ *  (`[A-Za-z_][A-Za-z0-9_]*`), the label the person reads, and whether its value is several lines
+ *  (a PEM private key). */
+export type CollectSecretField = { name: string; label: string; multiline?: boolean };
 
 /** A secret collection link. Sending this asks the person to authenticate to the intended
  * Iterate instance; it is not itself permission to write a secret. */

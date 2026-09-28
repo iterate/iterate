@@ -514,9 +514,15 @@ export class SecretDurableObject extends StreamProcessorDurableObject<
       exp: Date.now() + SECRET_OAUTH_TTL_MS,
       next: options.next,
     };
-    const { clientId, clientSecret } = await this.#oauthClientOf(options);
+    const oauthClient = await this.#oauthClientOf(options);
+    const { clientSecret } = oauthClient;
     // a placeholder that cannot resolve is refused now, before a human is sent to consent
     await this.#clientSecretOf(clientSecret, options.tokenEndpoint);
+    // A clientId placeholder resolves once, here: the id goes into the authorize URL, so it is no
+    // secret, and the pending attempt and the record keep the id itself.
+    const clientId = clientSecretReferenceOf(oauthClient.clientId, "clientId")
+      ? await this.#clientSecretOf(oauthClient.clientId, options.tokenEndpoint)
+      : oauthClient.clientId;
     const { pending, authorizationUrl } = await beginSecretOAuth(
       { ...options, clientId },
       {
