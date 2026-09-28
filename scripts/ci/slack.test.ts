@@ -1,7 +1,16 @@
 // The page primitives over a fake Slack. The token lookup and the WebClient itself are out of scope.
 import type { WebClient } from "@slack/web-api";
 import { expect, test } from "vitest";
-import { findOpenPage, markResolved, pageText, resolvePage } from "./slack.ts";
+import {
+  escalationText,
+  findOpenPage,
+  markResolved,
+  pageChannel,
+  pageText,
+  resolvedText,
+  resolvePage,
+  slackChannelIds,
+} from "./slack.ts";
 
 const MENTIONS = "<@U067G4QRFK2> <@U099JH9TAF2>";
 
@@ -46,6 +55,38 @@ test.for([
   expect(markResolved(text)).toBe(
     `✅ resolved: DO cost page for prd: ~$1/h ${MENTIONS}\nImpact: …`,
   );
+});
+
+test.for([
+  {
+    name: "a resolution mentions both",
+    text: resolvedText("main e2e green again", false),
+    expected: `✅ resolved: main e2e green again ${MENTIONS}`,
+  },
+  {
+    name: "a test run's resolution is marked and mentions nobody",
+    text: resolvedText("main e2e green again", true),
+    expected: "🧪 TEST RUN — ✅ resolved: main e2e green again",
+  },
+  {
+    name: "an escalation mentions both",
+    text: escalationText("main e2e has new failures", false),
+    expected: `🚨 main e2e has new failures ${MENTIONS}`,
+  },
+  {
+    name: "a test run's escalation is marked and mentions nobody",
+    text: escalationText("main e2e has new failures", true),
+    expected: "🧪 TEST RUN — 🚨 main e2e has new failures",
+  },
+])("thread replies: $name", ({ text, expected }) => {
+  expect(text).toBe(expected);
+});
+
+test("a test run's page goes to #ci, a real one to #error-pulse", () => {
+  expect({ test: pageChannel(true), real: pageChannel(false) }).toEqual({
+    test: slackChannelIds["#ci"],
+    real: slackChannelIds["#error-pulse"],
+  });
 });
 
 const at = Date.parse("2026-09-22T12:00:00Z") / 1000;

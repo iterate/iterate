@@ -295,10 +295,10 @@ jobs:
         run: doppler run --project os --config preview -- pnpm preview cleanup-superseded
 
   # THE PAGE (scripts/monitors/health.ts `main-e2e`), once the deploy and both suites have ended:
-  # main e2e and slow e2e rows, each on its own change of state, in the health job's message
-  # (docs/depot-ci.md#health). Its memory is its own `main-e2e-state` artifact, which the next run
-  # reads back and the health job reads for its message's last line, with the Depot organization
-  # token (Doppler _shared/preview); runs never overlap, so the next run reads this one's. A push
+  # main e2e and slow e2e rows, each with a page of its own while it is red or unjudged
+  # (docs/depot-ci.md#health). Its memory is its own `main-e2e-state` artifact, with each open
+  # page's Slack ts, which the next run reads back with the Depot organization token (Doppler
+  # _shared/preview); runs never overlap, so the next run reads this one's. A push
   # run only: a dispatch pages nothing and keeps nothing, and a run cancelled by hand is left out.
   alert:
     name: Page a change of state
@@ -329,7 +329,7 @@ jobs:
             --ref "${{ github.ref }}" \
             --state test-results/main-e2e/previous.json \
             --state-out test-results/main-e2e/state.json
-      # The job writes the state only on a run on main, after its page.
+      # The job writes the state only on a run on main, after its posts.
       - name: Keep the state for the next run
         if: always()
         uses: actions/upload-artifact@v4

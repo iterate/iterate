@@ -1,7 +1,7 @@
 // scripts/monitors/e2e.ts — THE E2E CHECKS: main's e2e run and the suites that run beside it, each red
-// or green, paged on a change of state. Main OS e2e's own page job pages its two suites as soon as its
-// run has settled (./health.ts `mainE2e`); the hourly health job pages real-model e2e (./health.ts
-// `run`).
+// or green, each with a page of its own while it is red (./page.ts `advance`). Main OS e2e's own page
+// job pages its two suites as soon as its run has settled (./health.ts `mainE2e`); the hourly health
+// job pages real-model e2e (./health.ts `run`).
 //
 //   main e2e        each push run of Main OS e2e (.depot/workflows/main-os-e2e.yml): red when a job
 //                   failed or timed out (Depot cancels a timed-out job), green when Deploy preview,
@@ -19,8 +19,8 @@
 // test results (`main-os-test-artifacts-attempt-<id>`) and the real-model job's telemetry
 // (`os-real-model-telemetry`). A suite whose run proves nothing (no results, a runner that did not
 // finish, one of its rows not run) is a BROKEN PROBE. Real-model e2e's pages nothing and fails the
-// health job. Slow e2e rows' is a state of its own, `broken`, paged ⚪ on its change of state like a
-// verdict, and fails nothing: Main OS e2e's page job reports on the commit its run tested, where red
+// health job. Slow e2e rows' is a state of its own, `broken`, "unjudged" on a page of its own like a
+// verdict's, and fails nothing: Main OS e2e's page job reports on the commit its run tested, where red
 // reads as "this commit broke main e2e", and main e2e's verdict comes from the jobs whatever the slow
 // rows' summary says. A run a person cancelled, or a push a newer one replaced in the queue, is left
 // out.
@@ -34,23 +34,26 @@ import {
   type SettledWorkflow,
 } from "../ci/depot.ts";
 import { testTelemetryFailed } from "../ci/test-telemetry-completeness.ts";
-import { commitText, type Page } from "./page.ts";
+import {
+  advance,
+  commitText,
+  shortSha,
+  sinceText,
+  SignalMemory,
+  type PageState,
+  type PageUpdate,
+} from "./page.ts";
 
-/** Main OS e2e's suites, which its own page job pages; the health job pages real-model e2e. Both
- *  tuples are `as const` so that z.enum and the pages' `suite` take their names as literals. */
-export const MAIN_SUITES = ["main e2e", "slow e2e rows"] as const;
-const SUITES = [...MAIN_SUITES, "real-model e2e"] as const;
-const Verdict = z.enum(["green", "red"]);
-type Verdict = z.infer<typeof Verdict>;
-/** A suite's state as the channel was last told it: its verdict, or `broken` for a run that proved
- *  nothing about it (slow e2e rows only). */
-const SuiteState = z.enum(["green", "red", "broken"]);
-export type SuiteState = z.infer<typeof SuiteState>;
+/** The suites: Main OS e2e's own page job pages main e2e and slow e2e rows, the health job
+ *  real-model e2e. `as const` so that z.enum and the pages' `suite` take their names as literals. */
+const SUITES = ["main e2e", "slow e2e rows", "real-model e2e"] as const;
+type Verdict = "green" | "red";
 
 /** What the checks remember between runs, in the state of the job that pages them (./health.ts):
- *  each suite's last state, and the newest run of each workflow judged. */
+ *  each suite as its page told it, `broken` for a run that proved nothing about it (slow e2e rows
+ *  only), and the newest run of each workflow judged. */
 export const E2eMemory = z.object({
-  suites: z.partialRecord(z.enum(SUITES), SuiteState),
+  suites: z.partialRecord(z.enum(SUITES), SignalMemory),
   judgedAt: z.partialRecord(z.enum(["Main OS e2e", "OS real model"]), z.iso.datetime()),
 });
 export type E2eMemory = z.infer<typeof E2eMemory>;
@@ -85,18 +88,20 @@ export function mainE2eFailedJobs(results: Record<string, string>): string[] {
 
 /** One row of a suite's run, from a suite summary or a runner's telemetry. */
 type Row = { name: string; tags: string[]; ran: boolean; failed: boolean; error?: string };
+/** A row that failed, with its first failure when the run kept one. */
+type FailingRow = { name: string; error?: string };
 
 /** A suite's rows: those tagged `tag`, or those whose title begins with `titlePrefix`. */
 export type SuiteRows = { tag: string } | { titlePrefix: string };
 
 /** A suite's verdict from a run's rows: green when every one of its rows passed (on its retry too),
- *  red naming each failed row with its first failure, or broken when the run proves nothing: no
+ *  red naming each failed row once with its first failure, or broken when the run proves nothing: no
  *  results, none of its rows, or one of them not run. Rows outside the suite are not its verdict,
  *  whatever their state. Pure. */
 export function suiteVerdict(
   rows: Row[] | { broken: string },
   select: SuiteRows,
-): { verdict: Verdict; failingRows: string[] } | { broken: string } {
+): { verdict: Verdict; failingRows: FailingRow[] } | { broken: string } {
   if ("broken" in rows) return rows;
   const which = "tag" in select ? `tagged ${select.tag}` : `titled ${select.titlePrefix}`;
   const suite = rows.filter((row) =>
@@ -106,13 +111,10 @@ export function suiteVerdict(
   const unrun = suite.filter((row) => !row.ran);
   if (unrun.length > 0)
     return { broken: `${unrun.length} row(s) ${which} did not run: ${unrun[0]!.name}` };
-  const failingRows = [
-    ...new Set(
-      suite
-        .filter((row) => row.failed)
-        .map((row) => (row.error ? `${row.name} (${row.error})` : row.name)),
-    ),
-  ];
+  const failingRows = suite
+    .filter((row) => row.failed)
+    .filter((row, index, failed) => failed.findIndex(({ name }) => name === row.name) === index)
+    .map(({ name, error }) => (error ? { name, error } : { name }));
   return { verdict: failingRows.length > 0 ? "red" : "green", failingRows };
 }
 
@@ -173,51 +175,95 @@ export function telemetryRows(
   );
 }
 
-/** The page for a change of state, or null; on a test page, the suite's state whatever it was: ⚪
- *  `broken` naming why its run proved nothing. Pure. */
-export function suitePage(input: {
+/** What one run's verdict of a suite owes its page (./page.ts `advance`), and the suite's memory
+ *  after it; a run with no verdict owes nothing and leaves the memory as it was. Red's failures are
+ *  its failed jobs and rows, so a red run that fails a job or row its open page has not named
+ *  escalates. A test page tells the verdict now, whatever the memory: a page for red or unjudged,
+ *  the resolution for green. Pure. */
+export function suiteUpdate(input: {
   suite: (typeof SUITES)[number];
-  previous: SuiteState | undefined;
-  verdict: SuiteState | undefined;
+  previous: SignalMemory | undefined;
+  verdict: PageState | undefined;
   commit: { sha: string; subject: string };
   failedJobs: string[];
-  failingRows: string[];
+  failingRows: FailingRow[];
   /** Why the run proved nothing, for a `broken` verdict. */
   broken?: string;
   runUrl?: string;
   testRun: boolean;
-}): Page | null {
-  if (!input.verdict) return null;
-  if (!input.testRun && input.verdict === (input.previous || "green")) return null;
+}): { update: PageUpdate | null; memory: SignalMemory | undefined } {
+  const { suite, verdict, previous } = input;
+  if (!verdict) return { update: null, memory: previous };
+  const failures =
+    verdict === "red" ? [...input.failedJobs, ...input.failingRows.map(({ name }) => name)] : [];
+  const advanced = advance(previous, { state: verdict, sha: input.commit.sha, failures });
+  const kind = input.testRun ? (verdict === "green" ? "resolve" : "post") : advanced.action;
+  const { memory } = advanced;
+  if (!kind) return { update: null, memory };
   const commit = commitText(input.commit);
-  if (input.verdict === "broken")
+  if (kind === "resolve") {
+    const why = {
+      red: `${suite} green again at ${commit}`,
+      broken: `${suite} judged again at ${commit}: green`,
+      green: `${suite} green at ${commit}`,
+    }[previous?.state || "green"];
+    return { update: { signal: suite, kind, why }, memory };
+  }
+  if (memory?.state !== "red" && memory?.state !== "broken")
+    throw new Error(`${suite}: a ${kind} with no open page`);
+  const page =
+    memory.state === "broken"
+      ? {
+          what: `${suite} unjudged at ${commit}`,
+          impact: `broken probe: ${input.broken}${sinceText(memory)}`,
+          action: `fix the probe: until it judges again, ${suite} can break unseen`,
+          link: input.runUrl,
+        }
+      : {
+          what: `${suite} red at ${commit}`,
+          impact: `${failureText(input.failedJobs, input.failingRows)}${sinceText(memory)}`,
+          action: `fix or revert ${shortSha(memory.since)}; a flaky row gets a fix, not a retry`,
+          link: input.runUrl,
+        };
+  if (kind === "replace")
     return {
-      tone: "none",
-      headline: `${input.suite} unjudged at ${commit}`,
-      details: [`broken probe: ${input.broken}`],
-      link: input.runUrl,
+      update: {
+        signal: suite,
+        kind,
+        why:
+          memory.state === "broken"
+            ? `${suite} unjudged at ${commit}, on a page of its own`
+            : `${suite} judged again at ${commit}: red, on a page of its own`,
+        page,
+      },
+      memory,
     };
-  if (input.verdict === "green")
+  if (kind === "escalate")
     return {
-      tone: "green",
-      headline: `${input.suite} green${input.previous === "red" ? " again" : ""} at ${commit}`,
-      details: [],
-      link: input.runUrl,
+      update: {
+        signal: suite,
+        kind,
+        page,
+        news: `${suite} has new failures at ${commit}: ${advanced.news.join("; ")}`,
+        broadcast: false,
+      },
+      memory,
     };
-  const shown = input.failingRows.slice(0, 8);
-  return {
-    tone: "red",
-    headline: `${input.suite} red at ${commit}`,
-    details: [
-      ...(input.failedJobs.length > 0 ? [`failed: ${input.failedJobs.join(", ")}`] : []),
-      ...(shown.length > 0
-        ? [
-            `failing rows: ${shown.join("; ")}${input.failingRows.length > shown.length ? `; … and ${input.failingRows.length - shown.length} more` : ""}`,
-          ]
-        : []),
-    ],
-    link: input.runUrl,
-  };
+  return { update: { signal: suite, kind, page }, memory };
+}
+
+/** A red page's failed jobs and failing rows, the first eight rows with their first failure. Pure. */
+function failureText(failedJobs: string[], failingRows: FailingRow[]) {
+  const shown = failingRows
+    .slice(0, 8)
+    .map(({ name, error }) => (error ? `${name} (${error})` : name));
+  const more = failingRows.length - shown.length;
+  return [
+    ...(failedJobs.length > 0 ? [`failed: ${failedJobs.join(", ")}`] : []),
+    ...(shown.length > 0
+      ? [`failing rows: ${shown.join("; ")}${more > 0 ? `; … and ${more} more` : ""}`]
+      : []),
+  ].join("; ");
 }
 
 // Connect's JSON omits empty lists and strings (https://protobuf.dev/programming-guides/json/).
@@ -258,7 +304,7 @@ async function judgeEachRun(
   judge: (
     run: SettledWorkflow,
     suites: E2eMemory["suites"],
-  ) => Promise<{ pages: Page[]; suites: E2eMemory["suites"]; failures: string[] }>,
+  ) => Promise<{ updates: PageUpdate[]; suites: E2eMemory["suites"]; failures: string[] }>,
 ) {
   const after = input.testRun ? undefined : input.memory.judgedAt[workflow.name];
   const { current } = input;
@@ -268,7 +314,7 @@ async function judgeEachRun(
     ...(current && (!after || current.createdAt > after) ? [current] : []),
   ].toSorted((a, b) => a.createdAt.localeCompare(b.createdAt));
   let memory = input.memory;
-  const pages: Page[] = [];
+  const updates: PageUpdate[] = [];
   const failures: string[] = [];
   for (const run of after ? runs : runs.slice(-1)) {
     const judged = await judge(run, memory.suites);
@@ -276,10 +322,10 @@ async function judgeEachRun(
       suites: judged.suites,
       judgedAt: { ...memory.judgedAt, [workflow.name]: run.createdAt },
     };
-    pages.push(...judged.pages);
+    updates.push(...judged.updates);
     failures.push(...judged.failures);
   }
-  return { pages, memory, failures };
+  return { updates, memory, failures };
 }
 
 /** Judge each push run of Main OS e2e that `memory` has not, the settled ones and then `current`
@@ -343,45 +389,37 @@ export async function checkMainE2e(input: {
       ]);
       const failingRows = [e2e, specs].flatMap((job) =>
         job.ran && job.summary
-          ? job.summary.tests.filter((test) => test.failed).map((test) => test.name)
+          ? job.summary.tests.filter((test) => test.failed).map(({ name }) => ({ name }))
           : [],
       );
       const slow = e2e.ran ? suiteVerdict(summaryRows(e2e.summary), { tag: "slow" }) : undefined;
-      const slowState = slow && ("broken" in slow ? "broken" : slow.verdict);
       console.log(JSON.stringify({ run: run.workflowId, results, verdict, failingRows, slow }));
       const commit = { sha: run.sha, subject: await input.subject(run.sha) };
-      const pages = [
-        suitePage({
-          suite: "main e2e",
-          previous: suites["main e2e"],
-          verdict,
-          commit,
-          failedJobs: mainJobs.length === 0 ? ["the workflow"] : mainE2eFailedJobs(results),
-          failingRows,
-          runUrl: depotWorkflowUrl(run.workflowId),
-          testRun: input.testRun,
-        }),
-        slow &&
-          suitePage({
-            suite: "slow e2e rows",
-            previous: suites["slow e2e rows"],
-            verdict: slowState,
-            commit,
-            failedJobs: [],
-            failingRows: "broken" in slow ? [] : slow.failingRows,
-            broken: "broken" in slow ? slow.broken : undefined,
-            runUrl: depotWorkflowUrl(run.workflowId),
-            testRun: input.testRun,
-          }),
-      ].filter((page) => !!page);
+      const main = suiteUpdate({
+        suite: "main e2e",
+        previous: suites["main e2e"],
+        verdict,
+        commit,
+        failedJobs: mainJobs.length === 0 ? ["the workflow"] : mainE2eFailedJobs(results),
+        failingRows,
+        runUrl: depotWorkflowUrl(run.workflowId),
+        testRun: input.testRun,
+      });
+      const slowRows = suiteUpdate({
+        suite: "slow e2e rows",
+        previous: suites["slow e2e rows"],
+        verdict: slow && ("broken" in slow ? "broken" : slow.verdict),
+        commit,
+        failedJobs: [],
+        failingRows: slow && !("broken" in slow) ? slow.failingRows : [],
+        broken: slow && "broken" in slow ? slow.broken : undefined,
+        runUrl: depotWorkflowUrl(run.workflowId),
+        testRun: input.testRun,
+      });
       return {
-        pages,
-        // a run whose verdict is none leaves the suite's last one standing
-        suites: {
-          ...suites,
-          "main e2e": verdict || suites["main e2e"],
-          "slow e2e rows": slowState || suites["slow e2e rows"],
-        },
+        updates: [main.update, slowRows.update].filter((update) => !!update),
+        // a run whose verdict is none leaves the suite's memory standing
+        suites: { ...suites, "main e2e": main.memory, "slow e2e rows": slowRows.memory },
         failures: [],
       };
     },
@@ -413,11 +451,11 @@ export async function checkRealModel(input: {
       console.log(JSON.stringify({ run: run.workflowId, outcome }));
       if ("broken" in outcome)
         return {
-          pages: [],
+          updates: [],
           suites,
           failures: [`real-model e2e: broken probe: ${outcome.broken}`],
         };
-      const page = suitePage({
+      const realModel = suiteUpdate({
         suite: "real-model e2e",
         previous: suites["real-model e2e"],
         verdict: outcome.verdict,
@@ -428,8 +466,8 @@ export async function checkRealModel(input: {
         testRun: input.testRun,
       });
       return {
-        pages: page ? [page] : [],
-        suites: { ...suites, "real-model e2e": outcome.verdict },
+        updates: realModel.update ? [realModel.update] : [],
+        suites: { ...suites, "real-model e2e": realModel.memory },
         failures: [],
       };
     },
