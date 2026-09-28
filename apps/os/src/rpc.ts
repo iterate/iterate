@@ -43,8 +43,9 @@ export async function rpcResponse(
     }),
   });
   // THE GRANT THIS TRANSPORT CARRIES: the upgrade's (resolved by the gate before this call), or the
-  // one an in-band `authenticate` binds — once; a second token on the same socket is refused, a
-  // refreshed token is a new socket (the guard below closes this one at the grant's expiry).
+  // one an in-band `authenticate` binds — once. A second binding on a bare socket is refused, and so
+  // is an in-band token naming another grant on an upgrade-bound one; a refreshed token is a new
+  // socket (the guard below closes this one at the grant's expiry).
   let bound = auth;
   let binding = false; // an `authenticate` in flight: a second one on the same socket is refused at once
   let bindSocket: ((authorization: Authorization) => void) | undefined;

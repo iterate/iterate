@@ -98,7 +98,7 @@ export async function rpc(token: string) {
   // The guard's 30 s timer is armed when the socket binds its grant — here, for an upgrade's bearer
   // — so a row that measures the interval measures from this instant, not from its own later revoke.
   const boundAt = Date.now();
-  const root = transport.authenticate({ type: "from-server-cookie" });
+  const root = transport.authenticate({ type: "bearer", token });
   return { root, closed, boundAt };
 }
 

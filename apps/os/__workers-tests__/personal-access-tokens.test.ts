@@ -301,7 +301,7 @@ test("a device's key is listed as the device; an expiring key is refused past it
     expiresAt: null,
   });
   // Kit firmware's form (itx_mount.c): the key on the upgrade AND in-band
-  const { root: deviceApi } = await rpc(device.token, { type: "bearer", token: device.token });
+  const { root: deviceApi } = await rpc(device.token);
   expect((await deviceApi.projects.list()).map((row) => row.id)).toEqual([project.id]);
   // login.allowedEmails: a key whose person's email the list stops naming is refused, like a grant
   const addresses = platformAddressesOf(env, new Request(`${ORIGIN}/api`));
@@ -525,9 +525,9 @@ async function hostStream(slug: string, bearer: string) {
 }
 
 /** `/api` upgraded with `token` on the header, as a script or a device opens it, then
- *  authenticated with `credential`: the root, the server's close as the client sees it, and when the
+ *  authenticated in-band with the same token (or `credential`, for a row that presents another): the root, the server's close as the client sees it, and when the
  *  guard's 30 s re-check was armed. */
-async function rpc(token: string, credential: SessionCredentials = { type: "from-server-cookie" }) {
+async function rpc(token: string, credential: SessionCredentials = { type: "bearer", token }) {
   const response = await exports.default.fetch(`${ORIGIN}/api`, {
     headers: { Upgrade: "websocket", Authorization: `Bearer ${token}`, Origin: ORIGIN },
   });

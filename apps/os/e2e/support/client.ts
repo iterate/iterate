@@ -198,7 +198,7 @@ export function publicSession(token: string) {
   const open = openTransports();
   open.sessions.push(transport);
   open.sockets.push(ws as unknown as WebSocket);
-  return transport.authenticate({ type: "from-server-cookie" });
+  return transport.authenticate({ type: "bearer", token });
 }
 
 /** A browser's session: its issuer cookie (a sign-in's `__Host-itx-session`) on the upgrade, from
