@@ -27,8 +27,7 @@ export class AgentDurableObject
   });
 
   /**
-   * WORKAROUND for a Cloudflare defect (ai-transport-source.ts; pinned by
-   * apps/agents/e2e/ai-stream-hung-request.e2e.test.ts). The loaded stateless worker drains the
+   * The WORKAROUND ai-transport-source.ts describes: the loaded stateless worker drains the
    * provider response and awaits every byte handed to this sink. It returns only a plain
    * completion; this DO gives the processor a fresh local body as soon as headers arrive, then
    * closes that body only after the remote call has completed.

@@ -1,23 +1,18 @@
-// e2e/ai-stream-hung-request.e2e.test.ts — A CLOUDFLARE FAULT, PINNED, AND THE AGENTS' WORKAROUND
-// (packages/agents/src/ai-transport.md, the byte relay).
+// e2e/ai-stream-hung-request.e2e.test.ts — THE PIN of the Cloudflare fault the agents' AI byte relay
+// works around (packages/agents/src/ai-transport.md).
 //
-// A Durable Object that receives Workers AI's raw streamed Response over RPC from a second Durable
-// Object reads the whole stream, yet the runtime records "The Workers runtime canceled this request
-// because it detected that your Worker's code had hung and would never generate a response" on the
-// service invocation in between. Here: a loaded facet calls `itx.ai.run` through `env.ITX`
-// (ItxEntrypoint.get), the context Durable Object calls `env.AI.run`, and the facet drains the SSE
-// body. No caller sees a failure; the ItxEntrypoint invocation ends `exception` in Workers Logs.
-// The agents' relay (packages/agents/src/ai-transport-source.ts) keeps provider I/O in a stateless
-// Worker and pushes bytes to the agent, so no Response crosses back to a Durable Object.
+// A Durable Object that reads Workers AI's raw streamed Response, returned over RPC from a second
+// Durable Object, gets the whole body, yet the runtime ends the service invocation in between with
+// "The Workers runtime canceled this request because it detected that your Worker's code had hung
+// and would never generate a response". Here: a loaded facet calls `itx.ai.run` through `env.ITX`
+// (ItxEntrypoint.get), the context Durable Object calls `env.AI.run`, and the facet drains the body
+// itself, with no agents code. No caller sees a failure, so the verdict is the outcome of each
+// ItxEntrypoint invocation that ran `ai.run`, read from Workers Logs (CLOUDFLARE_ACCOUNT_ID and
+// CLOUDFLARE_API_TOKEN, Doppler os/preview). It pays for model calls, so only the real-model suite
+// runs it (os-real-model.yml).
 //
-// THE PIN: the raw fault, no agents code (the facet drains the Response itself), as a createFailing.
-// It pays for model calls, so only the real-model suite runs it (os-real-model.yml). The verdict is
-// read from Workers Logs (CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN, Doppler os/preview): each
-// ItxEntrypoint invocation that ran `ai.run` for this context, found through the traces it shares
-// with the context's own invocations, and its outcome. Most calls fault, not every one, so the body
-// makes STREAMS of them. When it goes red because it passed, Cloudflare fixed the fault: delete the
-// relay (ai-transport-source.ts, ai-transport.ts, ai-transport.md and the agent Durable Object's
-// `#runModel`), let the processor call `itx.ai` itself, and keep this body as a plain row.
+// When it goes red because it passed, Cloudflare fixed the fault: delete the relay (ai-transport.md
+// names its pieces) and keep this body as a plain row.
 import { expect } from "vitest";
 import { z } from "zod";
 import { E2E_CI_RETRIES } from "@iterate-com/shared/test-support/e2e-policy";
@@ -25,8 +20,8 @@ import { createFailing } from "@iterate-com/shared/test-support/failing-test";
 import { freshCtx, openItx, sleep } from "../../os/e2e/support/client.ts";
 import { realModelOnly } from "../../os/e2e/support/project-host.ts";
 
-/** How many raw streams one run makes: 55 of 57 faulted on a preview (2026-09-28), so three that
- *  all end `ok` would be a fix, not luck. */
+/** Raw streams per run. One faults about 96% of the time (measured 2026-09-28), so three that all
+ *  end `ok` by chance happen about once in 20,000 runs. */
 const STREAMS = 3;
 /** How long Workers Logs may take to show an invocation after it ended (under a minute, 2026-09-28). */
 const LOGS_ARRIVE_MS = 120_000;
