@@ -41,8 +41,7 @@ import {
 } from "./secrets.ts";
 
 /** How long an OAuth attempt stays open: the signed `state`'s expiry and the pending attempt's. An
- *  hour, because the link often reaches a person through an agent's chat: ten minutes ran out twice
- *  before a person got to it. */
+ *  hour, because the link often reaches a person through an agent's chat, and they open it later. */
 export const SECRET_OAUTH_TTL_MS = 60 * 60_000;
 
 /** The options validated and normalized — the shape the pending attempt and the exchange read. */
