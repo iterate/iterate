@@ -4,7 +4,7 @@ import {
   deleteArtifactsNamespace,
   ensureArtifactsNamespace,
   renderStuckArtifactsNamespacesPage,
-  stuckNamespacesGone,
+  stuckNamespacesStillThere,
   type Cf,
 } from "./preview-artifacts.ts";
 
@@ -217,35 +217,33 @@ test.for([
   ]);
 });
 
-test.for([
-  { name: "both read 404 three times: gone", existing: [], gone: true },
-  { name: "one still reads its row: not gone", existing: ["os-pr3159-repos"], gone: false },
-])(
-  "a stuck page is resolved only once each namespace it names is gone: $name",
-  async ({ existing, gone }) => {
-    const page = renderStuckArtifactsNamespacesPage(
-      [
-        { namespace: NAMESPACE, repoCount: 1, createdAt: undefined },
-        { namespace: "os-pr3159-repos", repoCount: 1, createdAt: undefined },
-      ],
-      { jobUrl: undefined, testRun: false },
-    );
-    const reads: string[] = [];
-    const cf = (async (path: string) => {
-      reads.push(path);
-      const namespace = path.slice("/artifacts/namespaces/".length);
-      if (existing.includes(namespace)) return { namespace, repo_count: 1 };
-      throw new CloudflareApiError("GET", path, 404, [{ code: 10200 }]);
-    }) as Cf;
+test("a stuck page carries each namespace it named that this run did not report, until three reads find it gone", async () => {
+  const page = renderStuckArtifactsNamespacesPage(
+    ["os-pr1-repos", "os-pr2-repos", "os-pr3-repos"].map((namespace) => ({
+      namespace,
+      repoCount: 1,
+      createdAt: undefined,
+    })),
+    { jobUrl: undefined, testRun: false },
+  );
+  const reads: string[] = [];
+  const cf = (async (path: string) => {
+    const namespace = path.slice("/artifacts/namespaces/".length);
+    reads.push(namespace);
+    if (namespace === "os-pr2-repos")
+      return { namespace, repo_count: 1, created_at: "2026-09-20T08:00:00Z" };
+    throw new CloudflareApiError("GET", path, 404, [{ code: 10200 }]);
+  }) as Cf;
 
-    expect(await stuckNamespacesGone(cf, page, async () => {})).toBe(gone);
-    expect(reads).toEqual([
-      ...Array.from({ length: 3 }, () => ROUTE),
-      "/artifacts/namespaces/os-pr3159-repos",
-      ...(gone ? Array.from({ length: 2 }, () => "/artifacts/namespaces/os-pr3159-repos") : []),
-    ]);
-  },
-);
+  // os-pr1 was reported stuck again tonight; os-pr2 was not reached and is still there; os-pr3 is gone
+  expect({
+    still: await stuckNamespacesStillThere(cf, page, ["os-pr1-repos"], async () => {}),
+    reads,
+  }).toEqual({
+    still: [{ namespace: "os-pr2-repos", repoCount: 1, createdAt: "2026-09-20T08:00:00Z" }],
+    reads: ["os-pr2-repos", "os-pr3-repos", "os-pr3-repos", "os-pr3-repos"],
+  });
+});
 
 /** Cloudflare's answer to deleting a namespace that still holds a repo, or says it does. */
 function notEmpty(method: string, path: string) {

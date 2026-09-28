@@ -226,16 +226,17 @@ test("keepPage: one incident over five nights is posted, edited twice, resolved 
       marker: "preview sweep: Cloudflare will not delete",
       sinceHours: 720,
       now: new Date(at * 1000),
-      text: ids.length
-        ? pageText({
-            what: `preview sweep: Cloudflare will not delete ${ids.length} Artifacts namespace(s)`,
-            impact: "each counts toward the account's limit",
-            action: "escalate to Cloudflare with these ids",
-            details: ids,
-            link: null,
-            testRun: false,
-          })
-        : undefined,
+      render: async () =>
+        ids.length
+          ? pageText({
+              what: `preview sweep: Cloudflare will not delete ${ids.length} Artifacts namespace(s)`,
+              impact: "each counts toward the account's limit",
+              action: "escalate to Cloudflare with these ids",
+              details: ids,
+              link: null,
+              testRun: false,
+            })
+          : undefined,
       why: "Cloudflare deleted them",
     });
   const steps = [];
@@ -274,7 +275,7 @@ test("keepPage: older open pages of the incident are resolved by an edit alone, 
       marker: "sweep: stuck",
       sinceHours: 720,
       now: new Date(at * 1000),
-      text: `🚨 sweep: stuck n=3 ${MENTIONS}`,
+      render: async () => `🚨 sweep: stuck n=3 ${MENTIONS}`,
       why: "gone",
     }),
   ).resolves.toBe("edit");
@@ -295,30 +296,35 @@ test("keepPage: older open pages of the incident are resolved by an edit alone, 
   ]);
 });
 
-test.for([
-  { name: "confirmed gone: resolved", gone: true, step: "resolve", writes: 2 },
-  { name: "not confirmed gone: left open", gone: false, step: "none", writes: 0 },
-])("keepPage with gone, the incident not seen tonight: $name", async ({ gone, step, writes }) => {
+test("keepPage renders from the open page's text: what it named and this run did not see is carried, not dropped", async () => {
   const slack = fakeSlack([
-    { ts: String(at - 60), bot_id: "B1", text: `:rotating_light: sweep: stuck • a ${MENTIONS}` },
+    { ts: String(at - 60), bot_id: "B1", text: `:rotating_light: sweep: stuck\n• a ${MENTIONS}` },
   ]);
-  const asked: string[] = [];
+  const seen: Array<string | undefined> = [];
   await expect(
     keepPage(slack.client, {
       marker: "sweep: stuck",
       sinceHours: 720,
       now: new Date(at * 1000),
-      text: undefined,
-      why: "gone",
-      gone: async (openText) => {
-        asked.push(openText);
-        return gone;
+      render: async (openText) => {
+        seen.push(openText);
+        return `🚨 sweep: stuck\n• a\n• b ${MENTIONS}`;
       },
+      why: "gone",
     }),
-  ).resolves.toBe(step);
-  expect({ asked, writes: slack.writes.length }).toEqual({
-    asked: [`:rotating_light: sweep: stuck • a ${MENTIONS}`],
-    writes,
+  ).resolves.toBe("edit");
+  expect({ seen, writes: slack.writes }).toEqual({
+    seen: [`:rotating_light: sweep: stuck\n• a ${MENTIONS}`],
+    writes: [
+      [
+        "chat.update",
+        {
+          channel: "C09K1CTN4M7",
+          ts: String(at - 60),
+          text: `🚨 sweep: stuck\n• a\n• b ${MENTIONS}`,
+        },
+      ],
+    ],
   });
 });
 

@@ -182,10 +182,11 @@ export function pageStep(
 /**
  * Keeps one incident's #error-pulse page for a poster with no state but the channel: posts it,
  * edits it while the incident lasts (an edit notifies nobody), or resolves it with `why` once this
- * run finds the incident gone (pageStep) and `gone`, when given, confirms it from the open page's
- * text. Older open pages of the same incident (a page per night from before one was kept) are
- * resolved by an edit alone, which notifies nobody. Returns the step taken. A 🧪 test run posts its
- * page to #ci itself and never calls this.
+ * run finds the incident gone (pageStep). `render` is this run's page text, given the open page's
+ * (a poster that cannot see the whole incident in one run carries forward what the page names), or
+ * undefined when the incident is gone. Older open pages of the same incident (a page per night from
+ * before one was kept) are resolved by an edit alone, which notifies nobody. Returns the step
+ * taken. A 🧪 test run posts its page to #ci itself and never calls this.
  */
 export async function keepPage(
   slack: WebClient,
@@ -193,9 +194,8 @@ export async function keepPage(
     marker: string;
     sinceHours: number;
     now: Date;
-    text: string | undefined;
+    render: (openText: string | undefined) => Promise<string | undefined>;
     why: string;
-    gone?: (openText: string) => Promise<boolean>;
   },
 ) {
   const channel = pageChannel(false);
@@ -203,8 +203,7 @@ export async function keepPage(
   const [open, ...older] = await findOpenPages(slack, { channel, marker, sinceHours, now });
   for (const page of older)
     await slack.chat.update({ channel, ts: page.ts, text: markResolved(page.text) });
-  const step = pageStep(open, input.text);
-  if (step.step === "resolve" && input.gone && !(await input.gone(step.text))) return "none";
+  const step = pageStep(open, await input.render(open?.text));
   if (step.step === "post") await slack.chat.postMessage({ channel, text: step.text });
   if (step.step === "edit") await slack.chat.update({ channel, ts: step.ts, text: step.text });
   if (step.step === "resolve")

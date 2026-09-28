@@ -202,7 +202,7 @@ export async function post(options: {
     marker: SWEEP_PAGE_MARKER,
     sinceHours: 30 * 24,
     now: new Date(),
-    text: posts.page,
+    render: async () => posts.page,
     why: "the context sweep succeeded",
   });
   console.log(`#error-pulse page: ${step}`);

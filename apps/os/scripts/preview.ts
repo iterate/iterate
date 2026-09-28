@@ -61,7 +61,7 @@ import {
   isCloudflareError,
   renderStuckArtifactsNamespacesPage,
   STUCK_ARTIFACTS_PAGE_MARKER,
-  stuckNamespacesGone,
+  stuckNamespacesStillThere,
   type ArtifactsNamespaceRow,
   type Cf,
   type StuckArtifactsNamespace,
@@ -1230,39 +1230,52 @@ async function sweep(
   // The run is red only when the sweep could not act. A scheduled run reports on main's head
   // commit, where red reads as "this commit broke", so what Cloudflare left is a page instead (the
   // rule scripts/ci/prd-fault-alarm.ts follows); a page that could not be kept is a failure. A night
-  // may not reach a stuck namespace, so its page is resolved only once each one it names reads 404;
-  // the account's listing after the deletes judges the workerless ones.
+  // may not reach a stuck namespace, so its page keeps each one it named until reads confirm it
+  // gone; the account's listing after the deletes judges the workerless ones.
   const incidents = [
     {
       marker: STUCK_ARTIFACTS_PAGE_MARKER,
-      text:
-        stuckNamespaces.length > 0
-          ? renderStuckArtifactsNamespacesPage(stuckNamespaces, { jobUrl, testRun })
-          : undefined,
-      why: "Cloudflare deleted them",
-      gone: (openText: string) => stuckNamespacesGone(cf, openText),
+      render: async (openText: string | undefined) => {
+        const stuck = [
+          ...stuckNamespaces,
+          ...(openText
+            ? await stuckNamespacesStillThere(
+                cf,
+                openText,
+                stuckNamespaces.map(({ namespace }) => namespace),
+              )
+            : []),
+        ];
+        return stuck.length > 0
+          ? renderStuckArtifactsNamespacesPage(stuck, { jobUrl, testRun })
+          : undefined;
+      },
     },
     {
       marker: WORKERLESS_PAGE_MARKER,
-      text:
+      render: async () =>
         stillWorkerless.length > 0
           ? renderWorkerlessNamespacesPage(stillWorkerless, { jobUrl, testRun })
           : undefined,
-      why: "Cloudflare deleted them",
-      gone: undefined,
     },
   ];
   const slack = options.onMain ? getSlackClient() : undefined;
-  for (const { marker, text, why, gone } of incidents) {
-    if (text) console.log(text);
-    if (!slack) continue;
+  for (const { marker, render } of incidents) {
+    if (!slack) {
+      const text = await render(undefined);
+      if (text) console.log(text);
+      continue;
+    }
     await keepPage(slack, {
       marker,
       sinceHours: PAGE_LOOKBACK_HOURS,
       now: new Date(),
-      text,
-      why,
-      gone,
+      render: async (openText) => {
+        const text = await render(openText);
+        if (text) console.log(text);
+        return text;
+      },
+      why: "Cloudflare deleted them",
     })
       .then((step) => console.log(`#error-pulse page "${marker}": ${step}`))
       .catch((error) => failures.push(`keeping the #error-pulse page: ${describe(error)}`));

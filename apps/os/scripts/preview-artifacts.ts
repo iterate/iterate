@@ -126,7 +126,7 @@ export async function ensureArtifactsNamespace(
  *  against pr2817's stuck namespace, 10 of 60 deletes answered 409/10305 ("deletion in
  *  progress"), 9 of 60 reads 404/10200 and 12 of 60 account listings left it out, and it stayed.
  *  Taking 10305 as deleted is how the 2026-09-23 sweep reported pr2817's namespace deleted. So an
- *  accepted delete is confirmed by reads (confirmedGone), and 10305 is waited out like 10202. */
+ *  accepted delete is confirmed by reads (rowUnlessGone), and 10305 is waited out like 10202. */
 export async function deleteArtifactsNamespace(
   cf: Cf,
   artifactsNamespaceName: string,
@@ -149,7 +149,7 @@ export async function deleteArtifactsNamespace(
     const outcome = await deleteArtifactsRound(cf, route);
     deletedRepos += outcome.deletedRepos;
     if (outcome.deletedRepos > 0) refusedRounds = 0;
-    if (outcome.next === "accepted" && (await confirmedGone(cf, route, wait))) break;
+    if (outcome.next === "accepted" && !(await rowUnlessGone(cf, route, wait))) break;
     if (outcome.next === "accepted" || outcome.next === "not-empty") refusedRounds++;
     if (refusedRounds >= STUCK_AFTER_REFUSED_ROUNDS) {
       const row = await readArtifactsNamespace(cf, route);
@@ -198,29 +198,39 @@ export function renderStuckArtifactsNamespacesPage(
   });
 }
 
-/** Whether every namespace named on an open stuck page (renderStuckArtifactsNamespacesPage's
- *  `• <namespace>:` lines) is gone, each confirmed by reads. A night that did not reach a namespace
- *  (a delete failed first, or its preview was kept) says nothing about it, so the sweep resolves the
- *  page only on this. */
-export async function stuckNamespacesGone(
+/** The namespaces an open stuck page names (renderStuckArtifactsNamespacesPage's `• <namespace>:`
+ *  lines) that this run did not report, `except`, and that still exist, each with its row. A night
+ *  that did not reach a namespace (a delete failed first, or its preview was kept) says nothing
+ *  about it, so the sweep carries it on the page until reads confirm it gone. */
+export async function stuckNamespacesStillThere(
   cf: Cf,
   openPageText: string,
+  except: string[],
   wait = (ms: number) => sleep(ms),
-) {
+): Promise<StuckArtifactsNamespace[]> {
+  const still: StuckArtifactsNamespace[] = [];
   for (const [, namespace] of openPageText.matchAll(/^• ([^:\s]+):/gmu)) {
-    const route = `/artifacts/namespaces/${encodeURIComponent(namespace!)}`;
-    if (!(await confirmedGone(cf, route, wait))) return false;
+    if (except.includes(namespace!)) continue;
+    const row = await rowUnlessGone(
+      cf,
+      `/artifacts/namespaces/${encodeURIComponent(namespace!)}`,
+      wait,
+    );
+    if (row)
+      still.push({ namespace: namespace!, repoCount: row.repo_count, createdAt: row.created_at });
   }
-  return true;
+  return still;
 }
 
-/** Gone when three reads 2 s apart all answer 404: one 404 can be another delete in flight. */
-async function confirmedGone(cf: Cf, route: string, wait: (ms: number) => Promise<unknown>) {
+/** The namespace's row, or undefined once three reads 2 s apart all answer 404: one 404 can be
+ *  another delete in flight. */
+async function rowUnlessGone(cf: Cf, route: string, wait: (ms: number) => Promise<unknown>) {
   for (let read = 0; read < 3; read++) {
     if (read > 0) await wait(2000);
-    if (await readArtifactsNamespace(cf, route)) return false;
+    const row = await readArtifactsNamespace(cf, route);
+    if (row) return row;
   }
-  return true;
+  return undefined;
 }
 
 /** The namespace's row, or undefined for its 404/10200. The namespace itself is what answers "does
