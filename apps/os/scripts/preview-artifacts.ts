@@ -122,10 +122,9 @@ export async function ensureArtifactsNamespace(
  *  act.
  *
  *  No single answer says a namespace is gone. While any delete of it is in flight, Cloudflare
- *  answers some requests as if it were: on 2026-09-24, with three other delete loops running
- *  against pr2817's stuck namespace, 10 of 60 deletes answered 409/10305 ("deletion in
- *  progress"), 9 of 60 reads 404/10200 and 12 of 60 account listings left it out, and it stayed.
- *  So an accepted delete is confirmed by reads (rowUnlessGone), and 10305 is waited out like
+ *  answers some requests as if it were: with four delete loops on one stuck namespace, 10 of 60
+ *  deletes answered 409/10305 ("deletion in progress"), 9 of 60 reads 404/10200 and 12 of 60
+ *  account listings left it out, and it stayed (measured 2026-09-24). So an accepted delete is confirmed by reads (rowUnlessGone), and 10305 is waited out like
  *  10202. */
 export async function deleteArtifactsNamespace(
   cf: Cf,

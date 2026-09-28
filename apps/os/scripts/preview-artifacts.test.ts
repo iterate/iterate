@@ -235,7 +235,7 @@ test("a stuck page carries each namespace it named that this run did not report,
     throw new CloudflareApiError("GET", path, 404, [{ code: 10200 }]);
   }) as Cf;
 
-  // os-pr1 is in this run's report; os-pr2 still has a row; os-pr3 reads 404
+  // os-pr1 is excepted, os-pr2 has a row, os-pr3 answers 404
   expect({
     still: await stuckNamespacesStillThere(cf, page, ["os-pr1-repos"], async () => {}),
     reads,
