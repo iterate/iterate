@@ -8,8 +8,8 @@ size: large
 **Status:** an experiment, not a commitment: built to see what inherit and reuse cost in code and save in CI before deciding whether to keep them. Decided 2026-09-28: inherit and reuse, as #2712 had them; no suite selection for now. It replaces the 2026-09-25 draft (never committed; `stash@{0}`), which predates #3165.
 
 - **Built:** units (`scripts/ci/preview-units.ts`), inherit (`scripts/ci/preview-inherit.ts`, the `changes` step), reuse (`apps/os/scripts/preview-reuse.ts`, partial deployments, the plan artifact, cleanup and sweep rules), docs. Since decision 7, a PR run tests its head, and both walk its history.
-- **Proven live** (under decision 3's first form, testing the merge with main): a docs-only push inherited both suites in 8 s with no deploy; a specs-only push inherited E2E tests; a notes-only push deployed one worker and the specs passed against it; reverting both deployed nothing.
-- **Left:** the live checks under decision 7. On `91866ad` (the first run testing the head) both walks decided as designed; E2E tests and one spec went red on Cloudflare Artifacts errors ("Durable Object storage is no longer accessible") on the brand-new deployment.
+- **Proven live** (testing the head): a notes-only push inherited E2E tests (5 s), reused `pr3340-91866ad` and deployed one worker, specs green against it; its revert reused the same deployment 3 commits back and deployed nothing; a push after a red run inherited nothing and reran both suites on the reused deployment, green (the red was a Cloudflare Artifacts flake). A docs-only push inherits both suites in about 8 s.
+- **Left:** a decision on whether to keep it. Main's deployments live 45 minutes past their successor, so a PR branched from an older main still deploys in full on its first push.
 
 ## Why now
 
@@ -100,7 +100,7 @@ What else changes:
 - [x] `planInherit` as a pure function over (PR commits with their check results, labels, changed files) → `inherit <sha> | run`, table-tested: docs push, unit-test push, specs-only push (E2E inherits, specs run), red candidate, cancelled then green, force-push, `slow-e2e` label _preview-inherit.test.ts, 16 rows, GitHub injected as functions_
 - [x] E2E tests / Browser specs / Deploy preview: the inherit step, its summary line, and the steps after it skipped _no new step: `preview-paths.ts changes` asks it (PREVIEW_SUITES) and writes `preview=false`, which every later step and the trace already skip on; `checks: read` added_
 - [x] ~~Workflow tests: the truth table gains inheriting runs~~ _inheriting is `preview=false`, which the table already covers; the tests check each job's step names its suites_
-- [ ] Live check on this PR: a docs-only push, a specs-only push
+- [x] Live check on this PR: a docs-only push, a specs-only push _`e7fbf83` (docs: both inherited, 8 s, nothing deployed), `60772a1` (spec: E2E inherited); again after decision 7_
 
 ### 3. Reuse
 
@@ -111,7 +111,7 @@ What else changes:
 - [x] `planSupersededCleanup`: never the plan's `reuses`; 45 min grace for `main`; sweep keeps a prefix's newest partial deployment _and the sweep counts main's idle hour from its successor's creation_
 - [x] PR body section: reused rows name their deployment
 - [x] Docs: `docs/dev-environments.md` (second pushes, partial deployments), the preview-os.yml header _a row in Second pushes, and an "Inherited verdicts and reused deployments" section_
-- [ ] Live check: a notes-only push on this PR (deploys one worker), a tests-only push (deploys none)
+- [x] Live check: a notes-only push on this PR (deploys one worker), a tests-only push (deploys none) _`068e2e5` (notes: one worker on `pr3340-91866ad`), `665c364` (revert: nothing deployed), `eb6db04` (docs after red: nothing deployed, both suites rerun)_
 
 ## Later, not now
 
@@ -133,3 +133,4 @@ What else changes:
 
 - 2026-09-28: live checks under the first form of decision 3 (reuse keyed on the tested merge with main): `e7fbf83` (docs) inherited both suites in 8 s; `60772a1` (a spec comment) inherited E2E tests but deployed in full, because main had landed an apps/os change (#3346) since the PR's last deployment; `8f0e8dc` (notes) reused `pr3340-c08836c` and deployed one worker, specs green against it; `5c96717` (reverts) reused it and deployed nothing, Deploy preview 28 s.
 - Misha on `60772a1`: it should have needed no deployment; deployments are per commit, so walk parents like #2712 did. Decision 7: a PR run tests its head. `preview-tested-commit.ts` and the `preview-paths.ts changes` gate are deleted; inherit and reuse both place ancestors through GitHub's compare API.
+- After decision 7: `91866ad` (merge of main) walked into main's history and ran both suites (the PR changes machinery); its E2E tests and one spec went red on Cloudflare Artifacts errors. `eb6db04` (docs) inherited nothing from that red, reused `pr3340-91866ad` and passed. `068e2e5` (notes) and `665c364` (its revert) behaved as the plan says. Old merge-commit deployments (`pr3340-c08836c`) were correctly passed over as "not an ancestor".
