@@ -13,7 +13,6 @@
 #include "esp_task_wdt.h"
 #include "esp_timer.h"
 #include "esp_wifi.h"
-#include "nvs_flash.h"
 
 #include <stdio.h>
 
@@ -1087,24 +1086,6 @@ enum iterate_kit_status iterate_kit_itx_transport_start(
     return ITERATE_KIT_INVALID_ARGUMENT;
   }
 
-  error = nvs_flash_init();
-  if (error == ESP_ERR_NVS_NO_FREE_PAGES ||
-      error == ESP_ERR_NVS_NEW_VERSION_FOUND) {
-    /*
-     * ESP-IDF Wi-Fi requires NVS even though credentials themselves are held in
-     * RAM. These two statuses mean NVS cannot be used in its current format;
-     * erase is the documented recovery. Other errors remain explicit because a
-     * blanket erase would destroy unrelated durable device state.
-     */
-    error = nvs_flash_erase();
-    if (error == ESP_OK) {
-      error = nvs_flash_init();
-    }
-  }
-  if (error != ESP_OK) {
-    remember_platform_error(transport, error);
-    return ITERATE_KIT_IO_ERROR;
-  }
   error = esp_netif_init();
   if (error != ESP_OK && error != ESP_ERR_INVALID_STATE) {
     remember_platform_error(transport, error);

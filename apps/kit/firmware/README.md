@@ -66,6 +66,8 @@ physical controls, chimes and wake-word model in the table. Add code only where
 a table cannot describe it: codec initialization with required ordering, an
 unusual volume register, or a real board extension such as a display BSP.
 Reuse the shared I2S codec, session grammar, LED ring, playout and health path.
+board.c keeps the chosen volume in NVS across reboots, so a board's own
+`set_volume` only writes the chip.
 
 Confirm from vendor source, then measure: microphone slot and sample shape,
 clock master/MCLK, GPIO polarity, amplifier polarity, gain, DMA sizes, and AEC

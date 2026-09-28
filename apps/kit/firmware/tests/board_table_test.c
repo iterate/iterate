@@ -1,4 +1,6 @@
 #include "iterate/kit/platforms/board.h"
+#include "esp_idf.h"
+#include "nvs.h"
 #include <assert.h>
 #include <string.h>
 
@@ -25,6 +27,56 @@ static void volume_table(void) {
     assert(applied == rows[i].applied);
     assert(iterate_kit_board_volume_code(&volume, rows[i].ceiling, rows[i].percent, NULL) == rows[i].code);
   }
+}
+
+/* What the board's one volume path was asked for, standing in for board.c's
+ * ESP half. */
+static uint8_t set_calls, set_last;
+static enum iterate_kit_status set_answer;
+static enum iterate_kit_status record_set(uint8_t percent, uint8_t *applied) {
+  (void)applied;
+  ++set_calls;
+  set_last = percent;
+  return set_answer;
+}
+
+static void restore(uint8_t *calls, uint8_t *percent, enum iterate_kit_status *status) {
+  set_calls = 0U;
+  set_last = 0U;
+  *status = iterate_kit_board_restore_volume(record_set);
+  *calls = set_calls;
+  *percent = set_last;
+}
+
+static void volume_survives_a_reboot(void) {
+  uint8_t calls, percent;
+  enum iterate_kit_status status;
+  nvs_handle_t handle;
+  iterate_kit_host_esp_idf_reset();
+  set_answer = ITERATE_KIT_OK;
+  /* A first boot has nothing kept and plays at the board's own level. */
+  restore(&calls, &percent, &status);
+  assert(status == ITERATE_KIT_OK && calls == 0U);
+  /* The last level kept is the one the next boot replays through set. */
+  iterate_kit_board_save_volume(35U);
+  iterate_kit_board_save_volume(90U);
+  restore(&calls, &percent, &status);
+  assert(status == ITERATE_KIT_OK && calls == 1U && percent == 90U);
+  iterate_kit_board_save_volume(0U);
+  restore(&calls, &percent, &status);
+  assert(calls == 1U && percent == 0U);
+  /* A board that cannot apply it says so, and the caller keeps booting. */
+  set_answer = ITERATE_KIT_IO_ERROR;
+  restore(&calls, &percent, &status);
+  assert(status == ITERATE_KIT_IO_ERROR && calls == 1U);
+  set_answer = ITERATE_KIT_OK;
+  /* A byte that is no percentage is not replayed. */
+  assert(nvs_open("kit", NVS_READWRITE, &handle) == ESP_OK);
+  assert(nvs_set_u8(handle, "volume", 101U) == ESP_OK);
+  nvs_close(handle);
+  restore(&calls, &percent, &status);
+  assert(status == ITERATE_KIT_OK && calls == 0U);
+  iterate_kit_host_esp_idf_reset();
 }
 
 static void i2s_table(void) {
@@ -210,6 +262,7 @@ static void down_edge_wakes_before_release(void) {
 
 int main(void) {
   volume_table();
+  volume_survives_a_reboot();
   i2s_table();
   boot_table();
   iterate_kit_board_defaults_table();

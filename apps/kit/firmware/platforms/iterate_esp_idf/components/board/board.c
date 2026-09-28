@@ -1,5 +1,32 @@
 #include "iterate/kit/platforms/board.h"
 
+#include "nvs.h"
+
+/* The level a person last chose, one byte in NVS for every board. Without it a
+ * reboot, an update or a reflash snapped the board back to its shipped level,
+ * which reads as a board gone quiet, not one freshly booted. */
+#define VOLUME_NAMESPACE "kit"
+#define VOLUME_KEY "volume"
+
+void iterate_kit_board_save_volume(uint8_t percent) {
+  nvs_handle_t handle;
+  if (nvs_open(VOLUME_NAMESPACE, NVS_READWRITE, &handle) != ESP_OK) return;
+  /* NVS skips a write of the value it already holds, so a repeat costs no flash. */
+  if (nvs_set_u8(handle, VOLUME_KEY, percent) == ESP_OK) (void)nvs_commit(handle);
+  nvs_close(handle);
+}
+
+enum iterate_kit_status iterate_kit_board_restore_volume(
+    enum iterate_kit_status (*set)(uint8_t percent, uint8_t *applied)) {
+  nvs_handle_t handle;
+  uint8_t kept;
+  if (nvs_open(VOLUME_NAMESPACE, NVS_READONLY, &handle) != ESP_OK) return ITERATE_KIT_OK;
+  const esp_err_t status = nvs_get_u8(handle, VOLUME_KEY, &kept);
+  nvs_close(handle);
+  if (status != ESP_OK || kept > 100U) return ITERATE_KIT_OK;
+  return set(kept, NULL);
+}
+
 /** Clamp once and map signed register endpoints without losing the applied percent. */
 uint8_t iterate_kit_board_volume_code(
     const struct iterate_kit_volume_register *volume, uint8_t ceiling,
@@ -132,6 +159,7 @@ struct iterate_kit_board_facts iterate_kit_board_defaults(
 #include "freertos/task.h"
 #include "iterate/kit/button.h"
 #include "iterate/kit/platforms/wake_word.h"
+#include "nvs_flash.h"
 
 static const struct iterate_kit_board *board;
 static i2c_master_bus_handle_t i2c_bus;
@@ -230,6 +258,7 @@ enum iterate_kit_status iterate_kit_board_set_volume(uint8_t percent, uint8_t *a
     if (status != ITERATE_KIT_OK) return status;
   }
   volume_percent = clamped;
+  iterate_kit_board_save_volume(clamped);
   if (applied != NULL) *applied = clamped;
   return ITERATE_KIT_OK;
 }
@@ -311,6 +340,9 @@ static bool start(void *context, struct iterate_kit_board_audio *out) {
   if (!iterate_kit_board_finish_wake_word()) return false;
   if (board->facts.speaker.volume != NULL) {
     volume_percent = board->facts.speaker.volume(board->facts.speaker.context);
+  }
+  if (iterate_kit_board_restore_volume(iterate_kit_board_set_volume) != ITERATE_KIT_OK) {
+    ESP_LOGW("board", "kept volume not restored; playing at %u", (unsigned)volume_percent);
   }
   return true;
 }
@@ -437,6 +469,16 @@ static size_t iterate_kit_board_modules(
 /** Install shared startup, presentation, controls, health and modules, then run. */
 void iterate_kit_board_run(const struct iterate_kit_board *value) {
   board = value;
+  /* NVS holds the kept volume and is required by ESP-IDF Wi-Fi. A full or
+   * newer-format partition cannot be used as it is; erase is the documented
+   * recovery. Other errors stay unrecovered, because a blanket erase would
+   * destroy unrelated durable device state, and Wi-Fi start reports them. */
+  esp_err_t nvs = nvs_flash_init();
+  if (nvs == ESP_ERR_NVS_NO_FREE_PAGES || nvs == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+    nvs = nvs_flash_erase();
+    if (nvs == ESP_OK) nvs = nvs_flash_init();
+  }
+  if (nvs != ESP_OK) ESP_LOGE("board", "NVS not started: %s", esp_err_to_name(nvs));
   volume_percent = board->facts.speaker.ceiling;
   struct iterate_kit_board_facts facts = iterate_kit_board_defaults(board);
   facts.speaker.set_volume = set_volume;

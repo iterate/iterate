@@ -612,7 +612,7 @@ static const struct iterate_kit_board board = {
   .device_name = "stackchan",
   .speaker = {
     .context = NULL,
-    .volume = volume, /* Seed board.c from the NVS-restored hardware volume. */
+    .volume = volume, /* The shipped 60, until board.c restores the kept level. */
     .ceiling = STACKCHAN_AUDIO_VOLUME_CEILING,
   },
   /*
