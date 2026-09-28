@@ -88,10 +88,16 @@ function ProjectOverview() {
   const host = projectHostOf(info, project.slug);
   // the project's root context, held for the page's life; the route resolved the project already,
   // so a refusal leaves the plain overview
-  const context = useContextStub(() => api.projects.get(project.id), [api, project.id]).stub;
+  const opened = useContextStub(() => api.projects.get(project.id), [api, project.id]);
+  const context = opened.stub;
   const live = useFacetLiveState(context, "project");
   const parsed = ProjectLive.safeParse(live.value).data;
   const creation = parsed?.creation ?? null;
+  // Until the facet's first value lands the page cannot tell a project still being created from
+  // one that is done: `projects.create` answers before its saga does. A refused context, or a live
+  // state that failed, leaves the plain overview.
+  const creationKnown =
+    live.value !== undefined || live.status === "error" || Boolean(opened.error);
   const configRepoSeeded = Boolean(parsed?.repos["/repos/config"]);
   const githubConnections = Object.values(parsed?.integrations ?? {}).filter(
     (row) => row.provider === "github",
@@ -134,8 +140,12 @@ function ProjectOverview() {
         </dd>
       </dl>
       {/* a project still being created, or whose creation failed, may have no config repo yet */}
-      {creation?.status === "requested" || creation?.status === "failed" ? null : (
-        <ConfigRepo key={project.id} project={project} githubConnections={githubConnections} />
+      {creationKnown ? (
+        creation?.status === "requested" || creation?.status === "failed" ? null : (
+          <ConfigRepo key={project.id} project={project} githubConnections={githubConnections} />
+        )
+      ) : (
+        <p className="text-sm text-muted-foreground">Loading…</p>
       )}
       {org?.role === "owner" ? <DeleteProject project={project} /> : null}
     </div>
@@ -193,7 +203,10 @@ function ConfigRepo({
   useEffect(() => void readOrigin(), [readOrigin]);
 
   const remote = read?.origin ? describeOrigin(read.origin) : null;
-  const linking = !choice && search.configRepo === "link";
+  // The link form, its spinner on, stays until the link is done: a pull that met a diverged main
+  // asks its choice only once the origin is read again, when the choice's buttons are enabled.
+  const linking = search.configRepo === "link" && (!choice || busy === "link");
+  const asking = linking ? null : choice;
   const closeSheet = async () => {
     setChoice(null);
     setError(null);
@@ -245,9 +258,9 @@ function ConfigRepo({
       {label}
     </Button>
   );
-  const name = choice?.remote.name;
+  const name = asking?.remote.name;
   const copy =
-    choice &&
+    asking &&
     {
       diverged: {
         title: `${name}'s main and iterate's have diverged`,
@@ -261,7 +274,7 @@ function ConfigRepo({
         title: `Replace iterate's main with ${name}'s?`,
         description: `iterate's own commits since the two diverged are dropped from main, and the project republishes ${name}'s version.`,
       },
-    }[choice.kind];
+    }[asking.kind];
 
   return (
     <section aria-labelledby="config-repo-heading" className="flex flex-col gap-3">
@@ -309,9 +322,9 @@ function ConfigRepo({
           {outcome}
         </p>
       ) : null}
-      {choice || linking ? null : <Failure error={error} />}
+      {asking || linking ? null : <Failure error={error} />}
       <Sheet
-        open={Boolean(choice) || linking}
+        open={Boolean(asking) || linking}
         onOpenChange={(open) => !open && !busy && void closeSheet()}
       >
         <SheetContent
@@ -378,31 +391,31 @@ function ConfigRepo({
                   </Field>
                 </>
               ) : null}
-              {choice ? (
+              {asking ? (
                 <div className="flex flex-col items-start gap-3">
-                  {choice.kind === "diverged" ? (
+                  {asking.kind === "diverged" ? (
                     <Button
                       type="button"
                       variant="destructive"
                       disabled={Boolean(busy)}
-                      onClick={() => setChoice({ ...choice, kind: "replace" })}
+                      onClick={() => setChoice({ ...asking, kind: "replace" })}
                     >
-                      Replace with {choice.remote.name}&apos;s main
+                      Replace with {asking.remote.name}&apos;s main
                     </Button>
                   ) : null}
-                  {choice.kind === "replace"
+                  {asking.kind === "replace"
                     ? actionButton(
                         "replace",
                         "Replace",
-                        () => sync("pull", choice.remote.url, true),
+                        () => sync("pull", asking.remote.url, true),
                         "destructive",
                       )
                     : actionButton(
                         "force-push",
-                        choice.kind === "diverged"
-                          ? `Push iterate's to ${choice.remote.name}`
+                        asking.kind === "diverged"
+                          ? `Push iterate's to ${asking.remote.name}`
                           : "Push iterate's anyway",
-                        () => sync("push", choice.remote.url, true),
+                        () => sync("push", asking.remote.url, true),
                         "destructive",
                       )}
                 </div>

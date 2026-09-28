@@ -111,8 +111,8 @@ async function createOwnedProject(input: {
   email: string;
   slug: string;
 }) {
-  // create() resolves only after the project-creation saga commits, so no separate lifecycle
-  // poll is needed.
+  // create() answers once the project's creation is requested, before its saga lands
+  // `project/created`: an app's page may open on a project still being created.
   return test.step("create project fixture over /api", async () => {
     // Created as that person, so it lands in an organization they own; its minted id is how a
     // project is addressed — the slug only labels its hosts.
