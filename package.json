@@ -40,8 +40,6 @@
     "oxlint": "^1.85.0",
     "pkg-pr-new": "0.0.79",
     "playwright": "1.63.0",
-    "trpc-cli": "catalog:",
-    "tsx": "catalog:",
     "typescript": "catalog:",
     "zod": "catalog:"
   },

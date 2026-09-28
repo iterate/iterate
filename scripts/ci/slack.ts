@@ -1,6 +1,5 @@
-import { execSync } from "node:child_process";
-
 import { WebClient } from "@slack/web-api";
+import { dopplerSecret } from "../lib/env-context.ts";
 
 export const slackChannelIds = {
   "#error-pulse": "C09K1CTN4M7",
@@ -30,20 +29,6 @@ export const slackUsers = [
   },
 ];
 
-function getSlackBotToken() {
-  if (process.env.SLACK_CI_BOT_TOKEN) {
-    return process.env.SLACK_CI_BOT_TOKEN;
-  }
-  if (process.env.DOPPLER_TOKEN) {
-    return execSync("doppler secrets --project _shared --config prd get --plain SLACK_CI_BOT_TOKEN")
-      .toString()
-      .trim();
-  }
-  throw new Error(
-    "Can't get Slack bot token: neither SLACK_CI_BOT_TOKEN nor DOPPLER_TOKEN is available",
-  );
-}
-
 /** What every message to #error-pulse mentions: Jonas and Misha, on call for prd and main, by Slack
  *  user id. Routine posts (deploys that succeeded, pull request events, the dashboards) go to #ci and
  *  mention nobody. */
@@ -51,8 +36,9 @@ export const onCallMention = ["jonas", "misha"]
   .map((handle) => `<@${slackUsers.find((user) => user.handle === handle)!.id}>`)
   .join(" ");
 
+/** Slack as the CI bot, whose token is Doppler _shared/prd's. */
 export function getSlackClient() {
-  return new WebClient(getSlackBotToken());
+  return new WebClient(dopplerSecret("_shared", "prd", "SLACK_CI_BOT_TOKEN"));
 }
 
 /** Escapes the three characters Slack's mrkdwn treats as control characters. */

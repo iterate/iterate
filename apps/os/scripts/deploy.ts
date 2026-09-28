@@ -69,16 +69,24 @@ export default async function deploy(options: {
       });
     },
     smokes: (env) => [
-      { url: `${env.baseUrl}/version`, ok: (status) => status === 200, label: "version" },
+      {
+        url: `${env.baseUrl}/version`,
+        ok: (response) => response.status === 200,
+        label: "version",
+      },
       {
         url: `${env.baseUrl}/.well-known/oauth-authorization-server`,
-        ok: (status) => status === 200,
+        ok: (response) => response.status === 200,
         label: "OAuth discovery",
       },
-      { url: env.mcpBaseUrl, ok: (status) => status === 401, label: "MCP bearer challenge" },
+      {
+        url: env.mcpBaseUrl,
+        ok: (response) => response.status === 401,
+        label: "MCP bearer challenge",
+      },
       {
         url: `${env.baseUrl}/api`,
-        ok: (status) => status === 401,
+        ok: (response) => response.status === 401,
         label: "Cap’n Web bearer challenge",
       },
     ],

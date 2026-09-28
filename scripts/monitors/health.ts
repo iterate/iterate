@@ -24,11 +24,11 @@
 // run off main posts nothing and prints what it would; `--test-page` posts every check's verdict now
 // to #ci, marked 🧪 TEST RUN and mentioning nobody, keeping no state and sending nothing to PostHog.
 //
-// Every command reads Depot with DEPOT_CI_TELEMETRY_TOKEN (Doppler _shared/preview):
-//   pnpm tsx scripts/monitors/health.ts previous-state [--of main-e2e] --out <state.json>
-//   pnpm tsx scripts/monitors/health.ts run --ref <git ref> [--state <state.json>] \
+// Every command reads Depot with the organization token (../ci/depot.ts `depotApi`):
+//   node scripts/monitors/health.ts previous-state [--of main-e2e] --out <state.json>
+//   node scripts/monitors/health.ts run --ref <git ref> [--state <state.json>] \
 //     [--state-out <next.json>] [--test-page] [--dry-run]
-//   pnpm tsx scripts/monitors/health.ts main-e2e --ref <git ref> [--workflow-id <id>] \
+//   node scripts/monitors/health.ts main-e2e --ref <git ref> [--workflow-id <id>] \
 //     [--state <state.json>] [--state-out <next.json>] [--test-page] [--dry-run]
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
@@ -36,9 +36,8 @@ import { WebAPIPlatformError } from "@slack/web-api";
 import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
 import { createCli } from "trpc-cli";
 import { z } from "zod";
-import { depotCiApi } from "@iterate-com/shared/depot-api";
 import { osEnvs } from "../../envs.ts";
-import { saveNewestArtifactFile, type DepotApi } from "../ci/depot.ts";
+import { depotApi, saveNewestArtifactFile, type DepotApi } from "../ci/depot.ts";
 import { getOctokit } from "../ci/github.ts";
 import { sendPostHogEvents } from "../ci/posthog-events.ts";
 import {
@@ -308,15 +307,6 @@ export async function judgeMainE2eRun(input: {
   });
   const next: MainE2eState = { schemaVersion: 3, e2e: judged.memory, pages: input.state.pages };
   return { updates: judged.updates, next, failures: judged.failures };
-}
-
-/** The Depot CI API with the organization token (Doppler _shared/preview) bound. */
-function depotApi(): DepotApi {
-  const token = z
-    .string({ error: "DEPOT_CI_TELEMETRY_TOKEN is required (Doppler _shared/preview)" })
-    .min(1)
-    .parse(process.env.DEPOT_CI_TELEMETRY_TOKEN);
-  return (method, body) => depotCiApi(method, body, token);
 }
 
 /** What a run may do: only a run on main pages without --test-page (off main it prints instead),

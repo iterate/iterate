@@ -20,12 +20,12 @@
 // drop the session's socket, which is connected again. Each orphan logs one
 // `context-sweep.orphan` line as soon as it is done, so a run cut short still says what it destroyed.
 //
-//   pnpm tsx scripts/ci/context-sweep.ts --env prd [--destroy]
+//   node scripts/ci/context-sweep.ts --env prd [--destroy]
 //
 // The deployment's Cloudflare credentials and APP_CONFIG (its operator bearer) come from its own
 // Doppler config (scripts/lib/env-context.ts `resolveEnvContext`, which refuses a Doppler account
-// that is not envs.ts's); `--destroy` writes the CI bucket with CLOUDFLARE_API_TOKEN from the
-// environment (Doppler `_shared/preview`'s, as the test evidence upload does). It fails when an
+// that is not envs.ts's); `--destroy` writes the CI bucket with its account's Cloudflare API token
+// (envs.ts `ciBucketEnvs`, read from Doppler as the test evidence upload does). It fails when an
 // object could not say who it is or an orphan was not destroyed; orphans alone are the report, not
 // a failure. The report is the step's `report` output too (GITHUB_OUTPUT), which `post` sends to
 // Slack.
@@ -44,7 +44,7 @@ import {
 import { OS_DOPPLER_PROJECT, ciBucketEnvs, osEnvs } from "../../envs.ts";
 import { parseAppConfig } from "../../apps/os/src/app-config.ts";
 import { getWorkerDoNamespaces } from "../lib/do-reset.ts";
-import { resolveEnvContext } from "../lib/env-context.ts";
+import { dopplerSecret, resolveEnvContext } from "../lib/env-context.ts";
 import { ciBucket } from "./ci-bucket.ts";
 import { getSlackClient, keepPage, pageText, slackChannelIds } from "./slack.ts";
 
@@ -402,13 +402,14 @@ function sweepPage(what: string, input: { runUrl: string; testRun: boolean }) {
   });
 }
 
-/** Writes a backup into the CI bucket (scripts/ci/ci-bucket.ts, with the environment's
- *  CLOUDFLARE_API_TOKEN): resolves once R2 holds it (ci-bucket.ts `put`). */
+/** Writes a backup into the CI bucket (scripts/ci/ci-bucket.ts, with its account's Cloudflare API
+ *  token): resolves once R2 holds it (ci-bucket.ts `put`). */
 async function backupWriter() {
+  const { cloudflareAccountId, bucketName, dopplerProject, dopplerConfig } = ciBucketEnvs.ci;
   const bucket = await ciBucket({
-    accountId: ciBucketEnvs.ci.cloudflareAccountId,
-    bucketName: ciBucketEnvs.ci.bucketName,
-    apiToken: required("CLOUDFLARE_API_TOKEN"),
+    accountId: cloudflareAccountId,
+    bucketName,
+    apiToken: dopplerSecret(dopplerProject, dopplerConfig, "CLOUDFLARE_API_TOKEN"),
     area: "context-sweep",
     // a large context's backup is a few hundred megabytes: minutes on a slow link
     timeoutMs: 600_000,

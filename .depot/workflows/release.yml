@@ -99,4 +99,4 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
           RELEASE_NAME: ${{ steps.release_info.outputs.release_name }}
           RELEASE_TITLE: ${{ steps.context.outputs.release_title }}
-        run: pnpm tsx scripts/ci/create-release.ts
+        run: node scripts/ci/create-release.ts

@@ -441,12 +441,12 @@ export const ciReportsEnvs: Record<
 
 /** The CI bucket, `iterate-ci` (docs/test-evidence.md#one-bucket): each CI job attempt's test
  *  evidence folder under `evidence/`, and later the alert guards' state under `state/`. CI tooling, so it lives on the dev/preview account; CI
- *  writes it with the Cloudflare API token it already holds (Doppler `_shared/preview`'s
+ *  writes it with that account's Cloudflare API token (Doppler `_shared/preview`'s
  *  CLOUDFLARE_API_TOKEN, used as S3 keys by `scripts/ci/test-evidence.ts upload`). Created by hand
  *  with that token, with lifecycle rules on `evidence/` only: docs/test-evidence.md#setup. */
 export const ciBucketEnvs = {
   ci: {
-    cloudflareAccountId: PREVIEW_AND_DEV_ACCOUNT_ID,
+    ...cloudflareAccounts["dev/preview"],
     bucketName: "iterate-ci",
   },
 };
