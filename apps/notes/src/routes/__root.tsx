@@ -11,7 +11,7 @@ const posthogProjectKey = createServerFn().handler(async () => {
   return startAppConfigOf(env).posthogProjectKey || null;
 });
 
-/** `basePath`: the path this page is served under, "" on Notes' own origin (base-path.ts). */
+/** `basePath`: the path this page is served under, "" on a project host of its own (base-path.ts). */
 export const Route = createRootRouteWithContext<{ basePath: string }>()({
   loader: () => posthogProjectKey(),
   staleTime: Infinity,

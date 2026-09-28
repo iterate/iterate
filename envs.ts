@@ -175,8 +175,8 @@ export const osEnvs: Record<string, OsEnv> = {
     projectWildcard: {
       hostname: "iterate.com",
       project: "iterate",
-      // These first-party origins have their own routes and OAuth clients. A missing route must
-      // never make their client IDs look like clients of the cheese-game project at consent.
+      // These first-party origins have their own routes and, but for Notes, OAuth clients. A missing
+      // route must never make their client IDs look like clients of the cheese-game project at consent.
       excludedHostnames: [
         "os.iterate.com",
         "mcp.iterate.com",
@@ -245,6 +245,8 @@ export const agentsEnvs = {
   },
 };
 
+/** apps/notes — served only under a project's hosts: its config worker (apps/notes/config-worker.ts)
+ *  fetches through to this Worker, whose own URL no one signs in on. */
 export const notesEnvs = {
   // NOTES AT MAIN on the dev/preview account, signed in against osEnvs.preview and
   // redeployed in place with it (preview-parents.yml). A PR's notes is its own worker (`previewDeployment`).

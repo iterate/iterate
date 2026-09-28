@@ -3,18 +3,14 @@ import type { StartAppConfig } from "@iterate-com/shared/start-app-config";
 /** The first-party apps the dash points at — each its own worker on its own origin, an ordinary
  *  OAuth client of the platform like the dash itself, serving a project at `/projects/<slug>`.
  *  Their origins are this deployment's (`appDirectory`). Nothing here is required for the dash to
- *  work; it is a directory. Kit is not in it: it installs a device, it does not open a project. */
+ *  work; it is a directory. Kit is not in it: it installs a device, it does not open a project.
+ *  Nor is Notes: a project's config worker serves it under the project's hosts (apps/notes). */
 const APPS = [
   {
     id: "agents",
     name: "Agents",
     blurb:
       "Talk to a project's agents: the feed, the scripts they run, the trace of every request.",
-  },
-  {
-    id: "notes",
-    name: "Notes",
-    blurb: "A page of notes per project, kept in the project's workspace.",
   },
   {
     id: "voice",

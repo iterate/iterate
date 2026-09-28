@@ -1,7 +1,6 @@
-// The Notes app's sessions across workers: signed in on its own origin, and through a project's
-// config worker (apps/notes/config-worker.ts), each an OAuth grant of its own that the Dash's
-// sessions page ends without touching the other. Through the project, the grant is the host's: a
-// project host's own under subdomains, the platform's under paths.
+// The Notes app's session: Notes is served only through a project's config worker
+// (apps/notes/config-worker.ts), on its host's sign-in — a project host's own grant under subdomains,
+// the platform's under paths — which the Dash's sessions page ends.
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { expect, type Page } from "@playwright/test";
@@ -14,77 +13,48 @@ import { workerBaseUrl } from "../test-support/worker-base-url.ts";
 // the note's textbox is named by the file it edits (apps/notes/src/routes/_auth/projects.$slug.tsx)
 const noteFile = "/repos/config/notes/log.md";
 
-test("the Notes app keeps a note on its own origin, and ending its session in the Dash signs it out there", async ({
-  page,
-  helpers,
-}) => {
-  const { notes, dash } = appClients(helpers.appOrigin);
-  await using fixture = await helpers.createFixture("notes");
-  const note = `Written on the Notes app: ${fixture.project.slug}`;
-  await page.goto(notes.origin);
-  await page
-    .getByRole("link", { name: "Log in with iterate", exact: true })
-    .click({ noWaitAfter: true });
-  await consent(page, notes);
-  await saveNote(page, note);
-  await page.reload();
-  await page
-    .getByRole("status")
-    .filter({ hasText: /^At commit / })
-    .waitFor();
-  expect(await page.getByRole("textbox", { name: noteFile, exact: true }).inputValue()).toBe(note);
-  // The Dash lists the Notes session among the person's sessions; logging it out there signs the
-  // Notes app out: its next page asks for consent again. The Dash's own session carries on.
-  await endSessionInDash(page, dash, notes);
-  await page.goto(`${notes.origin}/projects`);
-  await consentPage(page, notes);
-  await page.goto(`${dash.origin}/sessions`);
-  await page.getByRole("heading", { name: "Sessions", exact: true }).waitFor();
-});
-
-test("the Notes app works through a project config worker, and its session there ends on its own", async ({
+test("the Notes app works through a project config worker, keeps a note, and ending its session in the Dash signs it out there", async ({
   page,
   context,
   helpers,
 }) => {
   const { ingressRouting } = readOsPlaywrightAuthConfig();
-  const { notes, dash } = appClients(helpers.appOrigin);
+  // the Notes Worker the config worker fetches through to, and the Dash that ends the session
+  const notes = new URL(helpers.appOrigin("notes"));
+  const dash = client(helpers.appOrigin("dash"), "iterate Dash");
   await using fixture = await helpers.createFixture("notes-proxy");
   const { project } = fixture;
-  const note = `Written on the independent app: ${project.slug}`;
-  // the same app on the project's `notes` routing slug: notes--<project>.<hostname> under
-  // subdomains, <platform>/projects/<project>/notes/ under paths (apps/notes/src/base-path.ts)
+  const note = `Written through the project: ${project.slug}`;
+  // the app on the project's `notes` routing slug: notes--<project>.<hostname> under subdomains,
+  // <platform>/projects/<project>/notes/ under paths (apps/notes/src/base-path.ts)
   const proxied = (path: string) =>
     projectUrlOf(ingressRouting, workerBaseUrl, {
       project: project.slug,
       routingSlug: "notes",
       path,
     })!;
-  // WHOSE SIGN-IN the proxied app runs on: its host's `/.auth/*` (apps/os/src/worker.ts). Under
-  // subdomains that host is an origin of its own, a client of its own whose document names no app,
-  // so consent names it by its host. Under paths it is the platform's origin, whose sign-in the
-  // fixture already holds: no consent, and the Dash lists that session as "iterate".
+  // WHOSE SIGN-IN the app runs on: its host's `/.auth/*` (apps/os/src/worker.ts). Under subdomains
+  // that host is an origin of its own, a client of its own whose document names no app, so consent
+  // names it by its host. Under paths it is the platform's origin, whose sign-in the fixture already
+  // holds: no consent, and the Dash lists that session as "iterate".
   const ownOrigin = ingressRouting?.type === "subdomains";
   const proxiedHost = proxied("/").host;
   const proxiedClient = ownOrigin
     ? { origin: proxied("/").origin, name: proxiedHost, host: proxiedHost }
     : { origin: workerBaseUrl, name: "iterate", host: new URL(workerBaseUrl).host };
   // The repository's actual config-worker source, preserving its auth.require gate, pointed at the
-  // Notes app under test: its host and protocol (the source names production's, over https; a local
-  // Notes answers http).
+  // Notes Worker under test: its host and protocol (the source names production's, over https; a
+  // local Notes answers http).
   const source = transformSync(
     readFileSync(resolve(import.meta.dirname, "../../apps/notes/config-worker.ts"), "utf8"),
     { loader: "ts", format: "esm" },
   )
     .code.replace('"notes.iterate.com"', JSON.stringify(notes.host))
-    .replace(
-      'url.protocol = "https:"',
-      `url.protocol = ${JSON.stringify(new URL(notes.origin).protocol)}`,
-    );
+    .replace('url.protocol = "https:"', `url.protocol = ${JSON.stringify(notes.protocol)}`);
   expect(source).toContain(`url.host = ${JSON.stringify(notes.host)}`);
   // The fixture's operator handle publishes the config worker: every host of the project reaches it,
   // the `notes` routing slug with `x-iterate-routing-slug: notes`, and it fetches through to the
-  // Notes worker. Every app interaction after this is real browser RPC.
+  // Notes Worker. Every app interaction after this is real browser RPC.
   // after the project's own saga has published its seed, which would otherwise land after and win
   await fixture.itx.waitForEvent({
     type: ["events.iterate.com/project/created", "events.iterate.com/project/create-failed"],
@@ -99,34 +69,21 @@ test("the Notes app works through a project config worker, and its session there
     ["get", "/repos/config"],
     ["writeFile", "worker.ts", source],
   ]);
-  // On its own origin: one note.
-  await page.goto(notes.origin);
-  await page
-    .getByRole("link", { name: "Log in with iterate", exact: true })
-    .click({ noWaitAfter: true });
-  await consent(page, notes);
-  await saveNote(page, note);
-  // Through the project: the host's grant, the same note, and an edit.
   await page.goto(proxied("/projects").href);
   if (ownOrigin) await consent(page, proxiedClient);
-  expect(await page.getByRole("textbox", { name: noteFile, exact: true }).inputValue()).toBe(note);
-  await saveNote(page, `${note}; edited through the project proxy`);
-  await page.goto(`${notes.origin}/projects`);
+  await saveNote(page, note);
+  await page.reload();
   await page
     .getByRole("status")
     .filter({ hasText: /^At commit / })
     .waitFor();
-  expect(await page.getByRole("textbox", { name: noteFile, exact: true }).inputValue()).toBe(
-    `${note}; edited through the project proxy`,
-  );
-  // Ending the proxy's session leaves the independently granted Notes session usable. The proxied
-  // app signs in again: at consent under subdomains, at the platform's sign-in page under paths.
+  expect(await page.getByRole("textbox", { name: noteFile, exact: true }).inputValue()).toBe(note);
+  // The Dash lists the Notes session among the person's sessions; logging it out there signs Notes
+  // out: at consent under subdomains, at the platform's sign-in page under paths.
   await endSessionInDash(page, dash, proxiedClient);
   await page.goto(proxied("/projects").href);
   if (ownOrigin) await consentPage(page, proxiedClient);
   else await page.getByRole("textbox", { name: "Email", exact: true }).waitFor();
-  await page.goto(`${notes.origin}/projects`);
-  await page.getByRole("textbox", { name: noteFile, exact: true }).waitFor();
   const sessionCookies = (await context.cookies()).filter((cookie) =>
     cookie.name.startsWith("__Host-itx-session"),
   );
@@ -136,16 +93,9 @@ test("the Notes app works through a project config worker, and its session there
 /** An OAuth client as the issuer's consent page names it: the app's name, its domain beneath. */
 type Client = { origin: string; name: string; host: string };
 
-/** The Notes and Dash apps deployed against the platform under test. */
-function appClients(appOrigin: (app: "notes" | "dash") => string): {
-  notes: Client;
-  dash: Client;
-} {
-  const client = (origin: string, name: string) => ({ origin, name, host: new URL(origin).host });
-  return {
-    notes: client(appOrigin("notes"), "iterate Notes"),
-    dash: client(appOrigin("dash"), "iterate Dash"),
-  };
+/** An app deployed against the platform under test, as `Client`. */
+function client(origin: string, name: string): Client {
+  return { origin, name, host: new URL(origin).host };
 }
 
 /** The issuer's consent page for `client`: its name in the heading, always, and beneath it the

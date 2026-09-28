@@ -1,17 +1,9 @@
-import { createFileRoute } from "@tanstack/react-router";
-import { LogInWithIterate } from "@iterate-com/ui/components/log-in-with-iterate";
+import { createFileRoute, redirect } from "@tanstack/react-router";
 
-/** The landing page, for a browser without a session (a signed-in one is sent to /projects by the
- *  worker): the one recognisable button, centred. */
+/** `/` is the notes: the project's config worker signed the browser in before it reached Notes
+ *  (config-worker.ts), so there is no landing page to sign in from. */
 export const Route = createFileRoute("/")({
-  component: Landing,
+  beforeLoad: () => {
+    throw redirect({ to: "/projects", replace: true });
+  },
 });
-
-function Landing() {
-  const { basePath } = Route.useRouteContext();
-  return (
-    <main className="flex min-h-svh items-center justify-center p-6">
-      <LogInWithIterate next={`${basePath}/projects`} />
-    </main>
-  );
-}
