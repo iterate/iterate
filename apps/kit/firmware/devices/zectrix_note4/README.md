@@ -21,7 +21,7 @@ remote client: `itx.clients.zectrix_note4`.
 
 ## Build and recovery
 
-Activate ESP-IDF 6.1, then run:
+Activate the ESP-IDF release that `scripts/ci/esp-idf.sh` pins, then run:
 
 ```sh
 idf.py -C apps/kit/firmware/targets/zectrix_note4 \

@@ -34,6 +34,17 @@ add_subdirectory(components/audio)
 add_subdirectory(components/capabilities)
 add_subdirectory(components/avatar)
 add_subdirectory(components/tinyvoice)
+# The host build holds the portable components to the standard. A board build
+# cannot: ESP-IDF's libc headers use #include_next, a GCC extension -Wpedantic
+# refuses.
+foreach(component IN ITEMS
+    iterate-kit-core
+    iterate-kit-audio
+    iterate-kit-capabilities
+    iterate-kit-avatar
+    iterate-kit-tinyvoice)
+  target_compile_options(${component} PRIVATE -Wpedantic)
+endforeach()
 # The host ESP-IDF, then the shared voice loop built against it. Every ESP
 # board under targets/ runs that loop; on a laptop the tests drive it with a
 # pinned clock and targets/mac runs it as a device.

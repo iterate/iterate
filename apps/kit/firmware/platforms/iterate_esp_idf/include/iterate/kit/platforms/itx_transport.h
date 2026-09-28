@@ -1,15 +1,6 @@
 #ifndef ITERATE_KIT_PLATFORMS_ITX_TRANSPORT_H
 #define ITERATE_KIT_PLATFORMS_ITX_TRANSPORT_H
 
-/*
- * ESP-IDF's public WebSocket/lwIP headers intentionally use GCC extensions
- * such as include_next. Treat this platform boundary as a system header so
- * strict consumers can retain -Wpedantic for their own code.
- */
-#if defined(__GNUC__)
-#pragma GCC system_header
-#endif
-
 #include "iterate/kit/configuration.h"
 #include "iterate/kit/itx_connection.h"
 #include "iterate/kit/itx_outbox_sender.h"
@@ -46,16 +37,17 @@ extern "C" {
 enum {
   /*
    * ESP-IDF defines StackType_t as uint8_t on its supported embedded ports,
-   * so its FreeRTOS stack-depth APIs and this buffer are byte-sized. The task
-   * stack is statically reserved to make the connection's RAM cost visible.
-   * Its size is shared with the lower WebSocket/TLS boundary because the
-   * synchronous handshake, not control-message processing, sets the peak.
-   * 512 bytes of retained headroom is the fail-closed floor below which another
-   * TLS/WebSocket start is unsafe. Control messages are capped at 2 KiB so one
-   * fragmented RPC cannot create an unbounded reassembly allocation.
+   * so its FreeRTOS stack-depth APIs and this buffer are byte-sized. The stack
+   * is statically reserved: visible RAM rather than an allocator gamble. The
+   * stream's connect, not control-message processing, sets the peak: ESP-TLS
+   * verifies the server's certificate on this task's stack, and a production
+   * M5StickS3 trace proved that 3072 bytes crosses the stack canary inside
+   * mbedTLS P-384 verification. Once clean physical runs report the
+   * minimum-ever headroom, that evidence may justify a smaller value. 512 bytes
+   * of retained headroom is the fail-closed floor below which another
+   * TLS/WebSocket start is unsafe.
    */
-  ITERATE_KIT_ESP_IDF_NETWORK_TASK_STACK_BYTES =
-      ITERATE_KIT_ESP_TLS_STREAM_OWNER_STACK_BYTES,
+  ITERATE_KIT_ESP_IDF_NETWORK_TASK_STACK_BYTES = 8192,
   ITERATE_KIT_ESP_IDF_NETWORK_TASK_MINIMUM_HEADROOM_BYTES = 512,
   /*
    * One full microphone append (ITERATE_KIT_VOICE_MIC_FRAMES_PER_APPEND

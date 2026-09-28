@@ -223,8 +223,8 @@ static enum iterate_kit_byte_stream_result drive_resolver(
       : ITERATE_KIT_BYTE_STREAM_WOULD_BLOCK;
 }
 
-void iterate_kit_posix_tls_stream_close(
-    struct iterate_kit_posix_tls_stream *stream) {
+static void stream_close(void *context) {
+  struct iterate_kit_posix_tls_stream *stream = context;
   if (stream == NULL || !stream->initialized) {
     return;
   }
@@ -251,7 +251,7 @@ void iterate_kit_posix_tls_stream_cleanup(
   if (stream == NULL || !stream->initialized) {
     return;
   }
-  iterate_kit_posix_tls_stream_close(stream);
+  stream_close(stream);
   SSL_CTX_free(stream->context);
   memset(stream, 0, sizeof(*stream));
 }
@@ -443,9 +443,8 @@ static bool begin_tls(
   return true;
 }
 
-enum iterate_kit_byte_stream_result
-iterate_kit_posix_tls_stream_connect(
-    struct iterate_kit_posix_tls_stream *stream) {
+static enum iterate_kit_byte_stream_result stream_connect(void *context) {
+  struct iterate_kit_posix_tls_stream *stream = context;
   int result;
   int ssl_error;
   enum iterate_kit_byte_stream_result tcp_result;
@@ -492,7 +491,7 @@ iterate_kit_posix_tls_stream_connect(
     return ITERATE_KIT_BYTE_STREAM_PROGRESS;
   }
   if (stream->ssl == NULL && !begin_tls(stream)) {
-    iterate_kit_posix_tls_stream_close(stream);
+    stream_close(stream);
     return ITERATE_KIT_BYTE_STREAM_FAILED;
   }
   ERR_clear_error();
@@ -501,7 +500,7 @@ iterate_kit_posix_tls_stream_connect(
     if (!stream->dangerous_disable_certificate_verification &&
         SSL_get_verify_result(stream->ssl) != X509_V_OK) {
       remember_failure(stream);
-      iterate_kit_posix_tls_stream_close(stream);
+      stream_close(stream);
       return ITERATE_KIT_BYTE_STREAM_FAILED;
     }
     stream->tls_handshaking = false;
@@ -518,7 +517,7 @@ iterate_kit_posix_tls_stream_connect(
     return ITERATE_KIT_BYTE_STREAM_WOULD_BLOCK;
   }
   remember_failure(stream);
-  iterate_kit_posix_tls_stream_close(stream);
+  stream_close(stream);
   return ITERATE_KIT_BYTE_STREAM_FAILED;
 }
 
@@ -546,11 +545,9 @@ static enum iterate_kit_byte_stream_result classify_socket_io(
   return ITERATE_KIT_BYTE_STREAM_FAILED;
 }
 
-enum iterate_kit_byte_stream_result iterate_kit_posix_tls_stream_read(
-    struct iterate_kit_posix_tls_stream *stream,
-    uint8_t *bytes,
-    size_t byte_capacity,
-    size_t *bytes_read) {
+static enum iterate_kit_byte_stream_result stream_read(
+    void *context, uint8_t *bytes, size_t byte_capacity, size_t *bytes_read) {
+  struct iterate_kit_posix_tls_stream *stream = context;
   int result;
   if (bytes_read != NULL) {
     *bytes_read = 0U;
@@ -575,11 +572,12 @@ enum iterate_kit_byte_stream_result iterate_kit_posix_tls_stream_read(
       : classify_io(stream, result);
 }
 
-enum iterate_kit_byte_stream_result iterate_kit_posix_tls_stream_write(
-    struct iterate_kit_posix_tls_stream *stream,
+static enum iterate_kit_byte_stream_result stream_write(
+    void *context,
     const uint8_t *bytes,
     size_t byte_count,
     size_t *bytes_written) {
+  struct iterate_kit_posix_tls_stream *stream = context;
   int result;
   if (bytes_written != NULL) {
     *bytes_written = 0U;
@@ -602,28 +600,6 @@ enum iterate_kit_byte_stream_result iterate_kit_posix_tls_stream_write(
   return result == 1
       ? ITERATE_KIT_BYTE_STREAM_PROGRESS
       : classify_io(stream, result);
-}
-
-static enum iterate_kit_byte_stream_result stream_connect(void *context) {
-  return iterate_kit_posix_tls_stream_connect(context);
-}
-
-static enum iterate_kit_byte_stream_result stream_read(
-    void *context, uint8_t *bytes, size_t capacity, size_t *bytes_read) {
-  return iterate_kit_posix_tls_stream_read(context, bytes, capacity, bytes_read);
-}
-
-static enum iterate_kit_byte_stream_result stream_write(
-    void *context,
-    const uint8_t *bytes,
-    size_t byte_count,
-    size_t *bytes_written) {
-  return iterate_kit_posix_tls_stream_write(
-      context, bytes, byte_count, bytes_written);
-}
-
-static void stream_close(void *context) {
-  iterate_kit_posix_tls_stream_close(context);
 }
 
 static enum iterate_kit_status stream_random(

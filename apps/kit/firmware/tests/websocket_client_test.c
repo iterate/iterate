@@ -6,6 +6,7 @@
  * cut after any byte, a payload stalled mid-frame, the upgrade's answer and
  * the first frame in one read, a peer that refuses the key.
  */
+#include "iterate/kit/voice_device_profile.h"
 #include "iterate/kit/voice_stream.h"
 #include "iterate/kit/websocket_client.h"
 
@@ -283,7 +284,7 @@ static void prepare(
     .receive_storage_capacity = sizeof(fixture->receive_storage),
     .transmit_storage = fixture->transmit_storage,
     .transmit_storage_capacity = sizeof(fixture->transmit_storage),
-    .keepalive_ms = 60000U,
+    .keepalive_ms = ITERATE_KIT_VOICE_HOP_KEEPALIVE_MS,
     .stream = &fake_stream_ops,
     .stream_context = &fixture->stream,
   };
@@ -647,7 +648,7 @@ static void a_peer_close_is_echoed_and_stops_data(void) {
  * it asks once per period, and a frame from the peer resets the wait.
  */
 static void inbound_silence_pings_once_and_fresh_inbound_defers_it(void) {
-  static const int64_t period = 60000000;
+  static const int64_t period = (int64_t)ITERATE_KIT_VOICE_HOP_KEEPALIVE_MS * 1000;
   static const uint8_t pong[] = {0x8AU, 0x00U};
   struct fixture fixture;
   struct iterate_kit_websocket_chunk chunk;

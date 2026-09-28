@@ -86,6 +86,9 @@ static const struct iterate_kit_posix_tls_resolver_ops fake_resolver_ops = {
   .cancel = fake_resolver_cancel,
 };
 
+static const struct iterate_kit_byte_stream_ops *const ops =
+    &iterate_kit_posix_tls_stream_ops;
+
 static void plain_stream_transfers_bytes_over_loopback(void) {
   static const uint8_t request[] = "ping";
   static const uint8_t response[] = "pong";
@@ -124,8 +127,7 @@ static void plain_stream_transfers_bytes_over_loopback(void) {
   assert(iterate_kit_posix_tls_stream_prepare(
              &stream, &options) == ITERATE_KIT_OK);
   for (poll_count = 0U; poll_count < 1000U; ++poll_count) {
-    const enum iterate_kit_byte_stream_result result =
-        iterate_kit_posix_tls_stream_connect(&stream);
+    const enum iterate_kit_byte_stream_result result = ops->connect(&stream);
     if (result == ITERATE_KIT_BYTE_STREAM_PROGRESS) {
       break;
     }
@@ -136,19 +138,15 @@ static void plain_stream_transfers_bytes_over_loopback(void) {
   assert(resolver.cancellations == 1U);
   peer = accept(listener, NULL, NULL);
   assert(peer >= 0);
-  assert(iterate_kit_posix_tls_stream_write(
-             &stream,
-             request,
-             sizeof(request),
-             &byte_count) == ITERATE_KIT_BYTE_STREAM_PROGRESS);
+  assert(ops->write(&stream, request, sizeof(request), &byte_count) ==
+         ITERATE_KIT_BYTE_STREAM_PROGRESS);
   assert(byte_count == sizeof(request));
   assert(read(peer, bytes, sizeof(request)) == (ssize_t)sizeof(request));
   assert(memcmp(bytes, request, sizeof(request)) == 0);
   assert(write(peer, response, sizeof(response)) == (ssize_t)sizeof(response));
   for (poll_count = 0U; poll_count < 1000U; ++poll_count) {
     const enum iterate_kit_byte_stream_result result =
-        iterate_kit_posix_tls_stream_read(
-            &stream, bytes, sizeof(bytes), &byte_count);
+        ops->read(&stream, bytes, sizeof(bytes), &byte_count);
     if (result == ITERATE_KIT_BYTE_STREAM_PROGRESS) {
       break;
     }
@@ -176,8 +174,7 @@ static void pending_resolution_is_cancelled_on_close(void) {
   };
   assert(iterate_kit_posix_tls_stream_prepare(&stream, &options) ==
          ITERATE_KIT_OK);
-  assert(iterate_kit_posix_tls_stream_connect(&stream) ==
-         ITERATE_KIT_BYTE_STREAM_WOULD_BLOCK);
+  assert(ops->connect(&stream) == ITERATE_KIT_BYTE_STREAM_WOULD_BLOCK);
   assert(resolver.cancellations == 0U);
   iterate_kit_posix_tls_stream_cleanup(&stream);
   assert(resolver.cancellations == 1U);
@@ -197,8 +194,7 @@ static void resolution_error_is_terminal_and_cancelled(void) {
   };
   assert(iterate_kit_posix_tls_stream_prepare(&stream, &options) ==
          ITERATE_KIT_OK);
-  assert(iterate_kit_posix_tls_stream_connect(&stream) ==
-         ITERATE_KIT_BYTE_STREAM_FAILED);
+  assert(ops->connect(&stream) == ITERATE_KIT_BYTE_STREAM_FAILED);
   assert(stream.last_errno == EHOSTUNREACH);
   assert(resolver.cancellations == 1U);
   iterate_kit_posix_tls_stream_cleanup(&stream);

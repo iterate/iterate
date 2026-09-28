@@ -117,33 +117,14 @@ enum iterate_kit_status iterate_kit_posix_tls_stream_prepare(
     struct iterate_kit_posix_tls_stream *stream,
     const struct iterate_kit_posix_tls_stream_options *options);
 
-enum iterate_kit_byte_stream_result
-iterate_kit_posix_tls_stream_connect(
-    struct iterate_kit_posix_tls_stream *stream);
-
-enum iterate_kit_byte_stream_result iterate_kit_posix_tls_stream_read(
-    struct iterate_kit_posix_tls_stream *stream,
-    uint8_t *bytes,
-    size_t byte_capacity,
-    size_t *bytes_read);
-
-enum iterate_kit_byte_stream_result iterate_kit_posix_tls_stream_write(
-    struct iterate_kit_posix_tls_stream *stream,
-    const uint8_t *bytes,
-    size_t byte_count,
-    size_t *bytes_written);
-
-/** Closes one connection generation while retaining the reusable SSL_CTX. */
-void iterate_kit_posix_tls_stream_close(
-    struct iterate_kit_posix_tls_stream *stream);
-
 /** Releases the long-lived OpenSSL context after the final close. */
 void iterate_kit_posix_tls_stream_cleanup(
     struct iterate_kit_posix_tls_stream *stream);
 
 /**
  * The stream as the WebSocket client drives it, with OpenSSL's randomness and
- * SHA-1. The context is a prepared struct iterate_kit_posix_tls_stream.
+ * SHA-1. The context is a prepared struct iterate_kit_posix_tls_stream. close
+ * ends one connection generation and keeps the reusable SSL_CTX.
  */
 extern const struct iterate_kit_byte_stream_ops iterate_kit_posix_tls_stream_ops;
 

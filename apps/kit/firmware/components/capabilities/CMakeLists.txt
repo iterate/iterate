@@ -27,8 +27,3 @@ target_compile_options(${ITERATE_KIT_CAPABILITIES_TARGET} PRIVATE
   -Wall
   -Wextra
   -Werror)
-# The host build holds this C to the standard: ESP-IDF's libc headers use
-# #include_next, a GCC extension -Wpedantic refuses.
-if(NOT COMMAND idf_component_register)
-  target_compile_options(${ITERATE_KIT_CAPABILITIES_TARGET} PRIVATE -Wpedantic)
-endif()
