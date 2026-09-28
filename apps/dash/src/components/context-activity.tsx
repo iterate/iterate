@@ -7,6 +7,7 @@ import { useEffect, useRef, type ReactNode } from "react";
 import type { IterateContextApi } from "iterate/api";
 import { useIterateContext, type IterateContextHandle } from "iterate/react";
 import { ContextView } from "@iterate-com/ui/components/context-view/context-view";
+import type { ContextPathLinks } from "@iterate-com/ui/components/context-view/context-path";
 import type { ContextViewState } from "@iterate-com/ui/components/context-view/context-view-search";
 import { factRenderers } from "../lib/fact-renderers.tsx";
 
@@ -21,6 +22,7 @@ export function ContextActivity({
   ensureProcessor,
   state,
   onStateChange,
+  pathLinks,
 }: {
   itx: ActivityItx | undefined;
   title: ReactNode;
@@ -28,6 +30,8 @@ export function ContextActivity({
   /** The view's state — the route's search (`validateSearch: ContextViewState`), so the page is a link. */
   state: ContextViewState;
   onStateChange: (patch: Partial<ContextViewState>) => void;
+  /** Where a context path a row names links (the explorer's); omitted = plain text. */
+  pathLinks?: ContextPathLinks;
 }) {
   // `liveState` omitted: the hook opens the core reduce's live state and every hosted facet's as the
   // processors table it holds loads — exactly what the panel shows.
@@ -53,6 +57,7 @@ export function ContextActivity({
       renderers={factRenderers}
       state={state}
       onStateChange={onStateChange}
+      pathLinks={pathLinks}
       onAppend={itx ? (events) => itx.append(...events) : undefined}
       // the feed scrolls itself: it fills what the page leaves it, never less than 24rem
       className="min-h-96 flex-1"

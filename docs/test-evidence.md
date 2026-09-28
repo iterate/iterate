@@ -1,40 +1,25 @@
 # Test evidence
 
-Every test run leaves evidence: raw telemetry, flake records, Playwright traces,
-screenshots, videos and reports, logs, the CI trace. Depot artifacts carry it
-to readers, but Depot keeps them about a week, though the workflows ask for 30
-days: on 2026-09-24, main's runs up to 7 days old still listed their 15 or 16
-artifacts, and every run from 8 to 35 days old listed none. So a ci-reports
-link, a "Playwright report" status or a flake record is gone after a week.
-
-So each test run in CI also writes **one folder, with one manifest, uploaded
-straight to R2, into one bucket, `iterate-ci`**. The Test job and the E2E tests
-and Browser specs jobs of Preview OS and Main OS e2e write it. The folder holds
-the run's result, the deployed target of the e2e jobs, Kit's CTest results as
-JUnit XML and the per-test Parquet rows. CI writes the bucket with the
-Cloudflare API token it already holds. One reader is built: the
-[flake dashboard](https://github.com/iterate/iterate/issues/2580) reads the
-recent folders' flake records and suite summaries back every hour
-([reading it back](#reading-it-back)). The other readers, the analytics, local
-runs and skipping CI on a trusted run are designed, not built, and
-[#3110](https://github.com/iterate/iterate/issues/3110) holds that design and its open decisions.
+Depot keeps artifacts about a week, though the workflows ask for 30 days (on 2026-09-24 main's runs
+from 8 to 35 days old listed none), so a ci-reports link, a "Playwright report" status or a flake
+record is gone after a week. So each test run in CI also writes **one folder, with one manifest,
+uploaded straight to R2, into one bucket, `iterate-ci`**. The one reader built is the
+[flake dashboard](https://github.com/iterate/iterate/issues/2580) ([reading it back](#reading-it-back));
+the others (analytics, local runs, skipping CI on a trusted run) are designed in
+[#3110](https://github.com/iterate/iterate/issues/3110).
 
 ## The evidence folder
 
-A **test run** is one CI job attempt that runs tests: the Test job, and the
-E2E tests and Browser specs jobs of Preview OS and Main OS e2e. (A laptop run writes none, and nor
-do the other workflows that run suites against a preview, such as the latency
-and real-model guards: each would need the same write, upload and report steps
-and a line in `testEvidenceJobs`.) Its folder is the repository's
-`test-results/`, the directory most producers already wrote to. The paths are
-`testEvidencePaths` in
-[`packages/shared/src/test-support/test-evidence.ts`](../packages/shared/src/test-support/test-evidence.ts),
-so none of today's readers had to move.
+A **test run** is one CI job attempt that runs tests: the Test job, and the E2E tests and Browser
+specs jobs of Preview OS and Main OS e2e. Each is its own run with its own folder, `testRunId`,
+manifest and R2 prefix. A laptop run writes none, nor do the latency and real-model guards (each
+would need the write, upload and report steps and a line in `testEvidenceJobs`). The folder is
+`test-results/`, its paths `testEvidencePaths` in
+[`packages/shared/src/test-support/test-evidence.ts`](../packages/shared/src/test-support/test-evidence.ts):
 
 ```text
 test-results/
 ├── manifest.json                   written last; the result, and every other file with its sha256
-├── tables/tests.parquet            one row per test, the analytics input
 ├── target.json                     the e2e jobs: the preview and the deployment the suites ran against
 ├── ctest/junit.xml                 the Test job: Kit's firmware host tests
 ├── ci-telemetry/
@@ -48,574 +33,229 @@ test-results/
 
 ### When deploy, e2e and specs are separate jobs
 
-Since #3054, Preview OS and Main OS e2e run Deploy preview, then E2E tests
-and Browser specs as jobs of their own. Each test job is its own test
-run, with its own folder, `testRunId`, manifest, result and prefix in R2:
-
-- its finalizer expects its own workspace in
-  `TEST_TELEMETRY_EXPECTED_WORKSPACES`: `os` for E2E tests, `iterate-root`
-  for Browser specs;
-- the write and upload steps, and its flake-record upload, run in both jobs,
-  each with its own `TEST_EVIDENCE_STEPS` (`e2e=…`, `specs=…`); on a PR, only
-  once the suite started, since a job whose deploy failed has nothing to keep;
-- `runSuite` (`apps/os/scripts/preview.ts`) runs one suite per job, each
-  writing `target.json` before it starts, with the client apps for the specs;
-- `public-playwright-report` comes from the Browser specs job.
-
-Each job pays its own queue and setup (checkout, dependency reconcile,
-Doppler, and Chromium for the specs), in parallel with the other; the CI
-trace's Setup phase per job is where to measure what that costs.
-
-A run against a preview that is already deployed (Preview OS's `action=test`,
-`e2e` or `specs` dispatch, from `depot ci dispatch` or the dashboard) is a test
-run like any other.
-Its folder says both what it tested and with which tests: `target.json` names
-the preview and the deployment its `/version` answered with just before the
-suites started, and `source` names the tree the tests came from. They can
-differ: that job checks out the pull request's head and merges it into
-today's main, which need not be what the earlier deploy built. Comparing
-`target.deploymentId` with the deploy's own `preview.json` tells which.
+Each test job of Preview OS and Main OS e2e expects its own workspace in
+`TEST_TELEMETRY_EXPECTED_WORKSPACES` (`os` for E2E tests, `iterate-root` for Browser specs), passes
+its own `TEST_EVIDENCE_STEPS` (`e2e=…`, `specs=…`), and writes and uploads only once its suite read
+the deployed target. The suite jobs start beside the deploy and wait for it
+([Depot CI](depot-ci.md#suites-start-with-the-run)); `runSuite` (`apps/os/scripts/preview.ts`)
+writes `target.json` once there is a preview, before the suite: the preview, the OS deployment
+`/version` named, and the apps' URLs. So a job whose deploy failed or was cancelled, or that never
+had a preview, keeps no folder. A `target.json` it cannot write fails the job before the suite, so
+no suite passes with its evidence unchecked. A dispatch against a preview already deployed can test
+a different tree than the deploy built: compare `target.deploymentId` with the deploy's own
+`preview.json`.
 
 ### How each producer writes into it
 
-| Producer                                                                          | Writes                                                              | How it gets there                                                                                    |
-| --------------------------------------------------------------------------------- | ------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
-| Vitest, every unit workspace and the OS e2e suite (`retry-telemetry-reporter.ts`) | `ci-telemetry/raw/`                                                 | `TEST_TELEMETRY_ARTIFACT_DIR`, set by the workflows                                                  |
-| Playwright telemetry reporter                                                     | `ci-telemetry/raw/`                                                 | the same variable                                                                                    |
-| createFlake, createFailing, retried plain tests                                   | `flake-records/`                                                    | `FLAKE_RECORD_DIR`: test.yml, and `apps/os/scripts/preview.ts` per suite (from `testEvidencePaths`)  |
-| Playwright output, HTML and JSON reporters                                        | `playwright-output/`, `playwright-html/`, `playwright-results.json` | `playwright.config.ts`, from `testEvidencePaths`                                                     |
-| The telemetry finalizer                                                           | `ci-telemetry/manifest.json`, `suite-summary.json`                  | `scripts/ci/upload-test-telemetry.ts`                                                                |
-| The evidence writer                                                               | `tables/tests.parquet`, then `manifest.json`                        | `scripts/ci/test-evidence.ts write`                                                                  |
-| Kit firmware host tests (CTest)                                                   | `ctest/junit.xml`                                                   | `--output-junit`, which `pnpm --dir apps/kit firmware:test:host` passes to CTest; not yet table rows |
-| The deployed target (e2e jobs)                                                    | `target.json`                                                       | `runSuite`, before the suite: the preview, the OS deployment `/version` names, the apps' URLs        |
+| Producer                                                                          | Writes                                                              | How it gets there                                                                                      |
+| --------------------------------------------------------------------------------- | ------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| Vitest, every unit workspace and the OS e2e suite (`retry-telemetry-reporter.ts`) | `ci-telemetry/raw/`                                                 | `TEST_TELEMETRY_ARTIFACT_DIR`, set by the workflows                                                    |
+| Playwright telemetry reporter                                                     | `ci-telemetry/raw/`                                                 | the same variable                                                                                      |
+| createFlake, createFailing, retried plain tests                                   | `flake-records/`                                                    | `FLAKE_RECORD_DIR`: test.yml, and `apps/os/scripts/preview.ts` per suite (from `testEvidencePaths`)    |
+| Playwright output, HTML and JSON reporters                                        | `playwright-output/`, `playwright-html/`, `playwright-results.json` | `playwright.config.ts`, from `testEvidencePaths`                                                       |
+| The telemetry finalizer                                                           | `ci-telemetry/manifest.json`, `suite-summary.json`                  | `scripts/ci/test-evidence.ts finalize`, which runs `scripts/ci/upload-test-telemetry.ts`'s finalizer   |
+| The evidence writer                                                               | `manifest.json`                                                     | `scripts/ci/test-evidence.ts finalize`, after the finalizer                                            |
+| Kit firmware host tests (CTest)                                                   | `ctest/junit.xml`                                                   | `--output-junit`, which `pnpm --dir apps/kit firmware:test:host` passes to CTest; not in the telemetry |
+| The deployed target (e2e jobs)                                                    | `target.json`                                                       | `runSuite`, before the suite: the preview, the OS deployment `/version` names, the apps' URLs          |
 
-Videos are off in CI: `playwright.config.ts` keeps them only under
-`VIDEO_MODE=1` or on local failures, because retained videos left ffmpeg
-workers holding the job open. When on, they land in `playwright-output/` and
-travel with the folder like everything else.
-
-The Vitest e2e suite, the Playwright specs and the telemetry reporters record
-nothing unless `TEST_TELEMETRY_ARTIFACT_DIR` and `FLAKE_RECORD_DIR` are set, so
-a laptop run records nothing today. Nothing configures Vitest coverage or a
-JUnit or JSON reporter; the telemetry reporter's raw JSON is Vitest's record.
+Videos are off in CI (retained videos left ffmpeg workers holding the job open). Without
+`TEST_TELEMETRY_ARTIFACT_DIR` and `FLAKE_RECORD_DIR` nothing is recorded, so a laptop run records
+nothing.
 
 ### What CI does
 
-In each of those jobs, after the telemetry finalizer:
+In each of those jobs, after the steps that run tests (the Test job's Vitest and Kit's CTest side by
+side, a suite job's suite):
 
-1. **Write the test evidence manifest**
-   (`pnpm tsx scripts/ci/test-evidence.ts write`, `if: always()`,
-   `--cancelled` when the job was, `continue-on-error`, two minutes at most).
-   The workflow passes
-   the outcome of every step that runs tests in `TEST_EVIDENCE_STEPS`
-   (`tests=… kit-host-tests=…` in the Test job, `e2e=…` or `specs=…` in the
-   others). It
-   builds `tables/tests.parquet` from this attempt's raw telemetry and flake
-   records, then hashes every file in the folder and writes `manifest.json`.
-   On real artifacts it takes about half a second (37 files, 3.5 MB).
-2. **Upload the test evidence to R2**
-   (`pnpm tsx scripts/ci/test-evidence.ts upload`), `if: always()` when a
-   manifest exists (`continue-on-error`, three minutes at most; Doppler
-   `_shared/preview` supplies `CLOUDFLARE_API_TOKEN`). A cancelled or
-   timed-out job's folder goes too, when the runner gives `always()` steps
-   the time: its manifest says `cancelled`, and it gets no copy under
-   `tables/`, since its rows stop part way and would skew durations. The
-   step prints the run's prefix
-   (`[test-evidence] r2://iterate-ci/evidence/ci/trust=pr/date=…/job=…/testrun_…/`)
-   and writes it as a line of the job's summary. It runs in one `parallel:`
-   block beside the Depot artifact uploads, since each only reads the folder
-   ([parallel steps](depot-ci.md#parallel-steps)). The e2e jobs' artifacts
-   keep the whole folder as `{preview,main}-os-test-artifacts-attempt-<id>`;
-   the Test job's keep its telemetry and flake records, and its manifest
-   reaches only R2.
-3. **Report a test evidence step that could not**
-   (`scripts/ci/test-evidence-unreported.sh`), after that block, when either
-   step's outcome is `failure` ([below](#a-failed-step)).
+1. **Check test telemetry, write the suite summary and the test evidence manifest**
+   (`node scripts/ci/test-evidence.ts finalize --flake-suites <suite>`, `--cancelled` when the job
+   was, two minutes at most). The Test job runs it `if: always()`; a suite job whenever its suite
+   step ran, with `--only-with-target`, so it keeps a folder only once the suite read the deployed
+   target. One step and one Node process, with Node's own type stripping rather than `tsx`, and
+   Node's compile cache (`NODE_COMPILE_CACHE` in the runner's temporary directory), which the
+   upload's Node starts from. First the telemetry finalizer
+   ([CI telemetry](ci-test-telemetry.md#test-telemetry-artifacts)), then the manifest: the
+   workflow passes the outcome of every step that runs tests in `TEST_EVIDENCE_STEPS`
+   (`tests=… kit-host-tests=…` in the Test job), and it hashes every file and writes
+   `manifest.json`. Its outputs say what the folder holds, each once it is true: `evidence=kept`,
+   `manifest=written`, and `playwright-report=written`. The steps after it read those instead of
+   `hashFiles()`, which costs the runner about 0.2 s per condition, one at a time
+   ([parallel steps](depot-ci.md#parallel-steps)). A suite job's Depot artifact uploads (results
+   and flake records) also run when this step failed, so a Node that failed before `evidence=kept`
+   still keeps a failed suite's traces and flake lines.
+2. **Upload the test evidence to R2** (`node scripts/ci/test-evidence.ts upload`, `if: always()`
+   once the manifest is written, `continue-on-error`, three minutes at most), in one `parallel:`
+   block beside the Depot artifact uploads. Its Doppler secrets (`_shared/preview`) come without
+   a request: an earlier step, "Fetch the evidence upload's secrets", saved them into Doppler's
+   encrypted fallback file in the runner's temporary directory, and `doppler run --fallback-only`
+   reads them. In the Test job that step runs beside the tests, in a suite job before the suite,
+   while the deploy it waits for runs. Without that file (a failed fetch is a warning there) the
+   upload fetches them itself. Up to 32 files at once, the largest first, holding at most 128 MiB of them, then the manifest; a job's folder of 10 to 53
+   files is one or two waves of about half a second each and the manifest's. A cancelled job's
+   folder goes too, its manifest saying `cancelled`. The step prints the run's prefix, the object
+   count and how long the upload and the process took
+   (`[test-evidence] r2://iterate-ci/evidence/ci/trust=pr/date=…/job=…/testrun_…/ (22 objects in …)`)
+   and writes the prefix to the job's summary.
+3. **Report a test evidence step that could not** (`scripts/ci/test-evidence-unreported.sh`), after
+   that block, when either step's outcome is `failure`.
 
-The write step fails when the job has no Depot job attempt to name the run
-after, when git cannot record the source (`testEvidenceSource`), or when a
-runner's fields do not fit the manifest's schema. Everything else it cannot
-read (telemetry that does not parse, no finalizer check, a flake record that
-names no test, a table it cannot write) goes into the manifest's
-`diagnostics`, and the manifest is written anyway: the run whose runner
-crashed is the one whose evidence matters most.
+The write fails only when the job has no Depot job attempt to name the run after, git cannot
+record the source, a runner's fields do not fit the schema, or it is not done within a minute (a
+second or two is usual), which keeps a stuck manifest from running the step into its timeout.
+Everything else it cannot read goes into the manifest's `diagnostics`, and the manifest is written
+anyway: the run whose runner crashed is the one whose evidence matters most.
 
-#### A failed step
-
-Neither step decides the job. The tests' own steps and the finalizer do, so
-both steps are `continue-on-error`, and a failure is made visible instead:
-
-- **The step's own report.** The script catches its failure
-  (`reportStepFailure`), prints a warning annotation ("Test evidence not in
-  R2" or "No test evidence manifest") with the reason, adds a line saying
-  why to the job's summary, and leaves a marker in `$RUNNER_TEMP`.
-- **The fallback.** A step can fail before the script runs or reports:
-  Doppler refusing `DOPPLER_TOKEN`, `pnpm tsx` crashing on import, or the
-  step's own timeout (two and three minutes, so a hang can never reach the
-  job's `timeout-minutes` and turn a green job red). The next step runs
-  when either step's outcome is `failure`, and for a step that left no
-  marker it writes the same annotation and a summary line saying the step
-  failed before it could say why. It is plain shell, so it needs none of
-  the things that failed.
-- **Adding up.** A warning on a green run is easy to miss. The hourly CI
-  telemetry sync reads each Test and e2e job attempt's summary from Depot
-  and sets `test_evidence_uploaded` on its `ci job attempt finished` event
-  in PostHog: `true` when the upload's line names a prefix, `false`
-  otherwise, whatever the reason
-  ([CI telemetry](ci-test-telemetry.md#ci-events-in-posthog)).
-  Attempts whose folder never reached R2 are a count in PostHog, not a
-  warning on a page nobody opened.
+Neither the manifest nor the upload decides the job; the tests' own steps and the finalizer do. The
+first step fails when the finalizer does (missing, incomplete or foreign telemetry, once the
+manifest is written), not when the manifest cannot be written. A failure is made visible instead:
+the script's own warning annotation and summary line ("Test evidence not in R2", "No test evidence
+manifest"); the plain-shell fallback step for a step that failed before it could report (Node or
+Doppler failing, the step's own timeout), which reports the write only when the step left no
+manifest; and `test_evidence_uploaded` on each attempt's `ci job attempt finished` event in PostHog
+([CI telemetry](ci-test-telemetry.md#ci-events-in-posthog)), which counts attempts whose folder
+never reached R2.
 
 ### The manifest
 
 `TestEvidenceManifest` (the same module) is the schema; readers parse with it.
-Abbreviated to one runner and two files, with the identity of a Preview OS
-run from 2026-09-24 (the `result`, `steps`, `completeness`, `target` and
-`diagnostics` fields came after that run, so their values are illustrative):
 
-```json
-{
-  "manifestSchemaVersion": 1,
-  "testRunId": "testrun_1tf879r75h",
-  "createdAt": "2026-09-24T13:15:47.062Z",
-  "result": "passed",
-  "source": {
-    "repository": "iterate/iterate",
-    "commit": "50f69522109a8eedf91f4f57fd0abfdafbf58ecb",
-    "tree": "4ed3ca3b42b277eeaf664e2a3a9553453ba73856",
-    "dirty": false,
-    "lockfileSha256": "c752eac5b45390fe6f91bc5720b458a00b86e67b93d3c79359cbed5d9f58f60b",
-    "headSha": "4a4617db58006f1ed5cea4e34bc683ab5a7584ea",
-    "branch": "draft-test-telemetry-parquet",
-    "pullRequestNumber": 2984
-  },
-  "runner": {
-    "provider": "depot",
-    "trust": "pr",
-    "ref": "refs/pull/2984/merge",
-    "workflowName": "Preview OS",
-    "workflowRunId": "227491187545774",
-    "workflowRunAttempt": "1",
-    "jobName": "e2e",
-    "jobId": "7zncg7grdw",
-    "jobAttemptId": "1tf879r75h",
-    "jobUrl": "https://depot.dev/orgs/0p91s0lz49/workflows/tnvgwdc563?job=7zncg7grdw&attempt=1tf879r75h",
-    "trigger": "pull_request",
-    "actor": "jonastemplestein",
-    "node": "v24.21.0",
-    "platform": "linux",
-    "arch": "x64"
-  },
-  "steps": [{ "name": "e2e", "outcome": "success" }],
-  "completeness": {
-    "cancelled": false,
-    "expectedWorkspaces": ["iterate-root", "os"],
-    "missingWorkspaces": [],
-    "incompleteArtifactIds": [],
-    "foreignArtifactIds": []
-  },
-  "target": {
-    "previewName": "draft-test-telemetry-parquet",
-    "url": "https://draft-test-telemetry-parquet-<os preview host>",
-    "deploymentId": "<the version id /version answered>",
-    "apps": [
-      { "name": "notes", "url": "https://draft-test-telemetry-parquet-<notes preview host>" }
-    ],
-    "checkedAt": "2026-09-24T13:12:38.902Z"
-  },
-  "timings": { "startedAt": "2026-09-24T13:12:39.651Z", "finishedAt": "2026-09-24T13:15:43.644Z" },
-  "runners": [
-    {
-      "artifactId": "vitest:os:1553:1790255559651",
-      "producer": "vitest-retry-telemetry-reporter",
-      "suite": "vitest",
-      "workspace": "os",
-      "status": "passed",
-      "testCount": 335,
-      "startedAt": "2026-09-24T13:12:39.651Z",
-      "finishedAt": "2026-09-24T13:15:43.644Z"
-    }
-  ],
-  "diagnostics": [],
-  "files": [
-    {
-      "path": "ci-telemetry/raw/vitest-os-1553-1790255559651-fd4fc5bccf5e.json",
-      "bytes": 359565,
-      "sha256": "627dff179d047a0412801fec308ce5bf7d716bfcce82097fa7899f400a8c2606"
-    },
-    {
-      "path": "tables/tests.parquet",
-      "bytes": 61645,
-      "sha256": "b19f56bd1b4394f32b28a4b94a696700249b68267ef36346ec5668be454ebd98"
-    }
-  ]
-}
-```
-
-The same run's Test job wrote the same `tree`: both jobs tested one merge
-commit, and neither left the checkout dirty.
-
-- `testRunId` is `testrun_<Depot job attempt id>`, the id every artifact name
-  of that attempt already ends in ([per job attempt](depot-ci.md#artifacts-per-job-attempt)),
-  and the `test_run_id` of every row in the folder's tables. It and the rest
-  of the job's identity come from the job's environment (`DEPOT_JOB_URL`,
-  `GITHUB_*`, `TEST_TELEMETRY_*`, read by the same
-  `ciTelemetrySourceFromEnvironment` the reporters use), not from the
-  telemetry, so a job whose runners never started still has one. Telemetry
-  from another attempt is left out of the rows and named in `diagnostics`.
-- `result` is `cancelled` when the job was; `incomplete` when the finalizer
-  found a workspace missing, a runner cut short or another attempt's
-  artifact, wrote no check, or a step that runs tests was skipped or passed
-  no outcome; `failed` when such a step failed or a runner reported a
-  failure; otherwise `passed`. A Test job whose Vitest runners all passed but
-  whose Kit CTest step failed is `failed`: that step reports no telemetry,
-  which is why the workflow passes the steps' outcomes in.
-- `completeness` is the finalizer's own check (`ci-telemetry/manifest.json`,
-  `scripts/ci/upload-test-telemetry.ts`), copied, not recomputed.
-- `target` is `target.json`, in the E2E tests and Browser specs jobs only
-  ([above](#when-deploy-e2e-and-specs-are-separate-jobs)). Only the OS
-  preview answers with its deployment (`/version`); the client apps answer
-  `/healthz` with `ok`, so their deployments are not recorded.
-- `source.commit` is the checked-out commit: on a pull request, the merge
-  commit CI tests. `source.tree` is the tree of the files on disk when the
-  manifest was written, uncommitted and untracked files included: a copy of
-  the index gets `git add --all` and `git write-tree`, and the real index is
-  untouched. `dirty` says it differs from the commit's tree. Ignored files,
-  `test-results/` among them, are not in it. It is taken after the tests, so
-  it shows what the run left, not what it started from.
-- `runner` is the Depot job attempt and who started it (`GITHUB_EVENT_NAME`,
-  `GITHUB_ACTOR`), plus the toolchain the job ran on. `trust` is `main` for a
-  push or schedule on `refs/heads/main` that tested that commit (`source` not
-  `dirty`, and `commit` the pushed head), and `pr` for everything else,
-  dispatches included, since a dispatch can be told to test a pull request.
-  A push to main whose tree was not the commit's is filed as `pr`, with a
-  diagnostic saying why ([object keys](#object-keys)).
-  Environment variables that change what the tests do (`CI`, the base URLs,
-  `VIDEO_MODE`) are set in the runners' own steps, which this step cannot
-  see, so the manifest does not record them.
-- `timings` spans the first runner's start to the last runner's finish, by
-  the runners' clocks; absent when no runner reported. Queue and setup time
-  are Depot's and the CI trace's.
-- `files` is every file but the manifest, sorted, with its size and sha256.
+- `testRunId` is `testrun_<Depot job attempt id>`, the id every artifact name of that attempt ends
+  in ([per job attempt](depot-ci.md#artifacts-per-job-attempt)). The job's identity comes from its
+  environment (`DEPOT_JOB_URL`, `GITHUB_*`, `TEST_TELEMETRY_*`), so a job whose runners never
+  started still has one.
+- `result`: `cancelled`; `incomplete` when the finalizer found a workspace missing, a runner cut
+  short or another attempt's artifact, or a step that runs tests was skipped or passed no outcome;
+  `failed` when such a step failed or a runner reported a failure (a failed Kit CTest step counts,
+  though it reports no telemetry); otherwise `passed`.
+- `completeness` is the finalizer's own check, copied.
+- `target` is `target.json`, in the e2e jobs only. The client apps answer `/healthz` with `ok`, so
+  only the OS deployment is recorded.
+- `source.commit` is the checked-out commit (a pull request's merge commit); `source.tree` is the
+  tree of the files on disk after the tests, uncommitted and untracked files included; `dirty` says
+  it differs from the commit's.
+- `runner` is the Depot job attempt, who started it, and the toolchain. `trust` is `main` for a push
+  or schedule on `refs/heads/main` that tested that commit (not `dirty`), and `pr` for everything
+  else, dispatches included.
+- `timings` spans the first runner's start to the last runner's finish; `files` is every file but
+  the manifest, with its size and sha256.
 
 ## Upload to R2
 
 ### One bucket
 
-Everything CI keeps in R2 lives in one bucket, **`iterate-ci`**, on the
-dev/preview account (`ciBucketEnvs.ci` in `envs.ts`):
+Everything CI keeps in R2 lives in **`iterate-ci`**, on the dev/preview account
+(`ciBucketEnvs.ci` in `envs.ts`), under `evidence/`. `evidence/local/` and `state/` are reserved
+for laptop runs and the guards' state ([#3110](https://github.com/iterate/iterate/issues/3110)).
+`tables/tests/` holds per-test Parquet copies from before
+[#3247](https://github.com/iterate/iterate/pull/3247); nothing reads it now.
 
-| Prefix      | Holds                                                   | Expires                                     |
-| ----------- | ------------------------------------------------------- | ------------------------------------------- |
-| `evidence/` | Each test run's folder, under `evidence/ci/…`           | By lifecycle rule ([retention](#retention)) |
-| `tables/`   | A copy of each run's `tests.parquet`, for later loading | Never                                       |
-
-`evidence/local/` and `state/` are kept for laptop runs and the guards'
-state, neither of which exists yet ([#3110](https://github.com/iterate/iterate/issues/3110)).
-
-**Why one bucket.** A second bucket isolates data only through credentials:
-an R2 API token can be scoped to buckets, never to a prefix. Today CI has one
-credential. It writes with `CLOUDFLARE_API_TOKEN` from Doppler
-`_shared/preview` ([credentials](#credentials)), the token preview deploys
-use, which can create and delete every bucket on the account, and every CI
-job holding `DOPPLER_TOKEN` can read it, pull request jobs included. Three
-buckets written with that one token would be three names, three lifecycle
-configurations and three places to look, and no boundary. Retention needs no
-second bucket either: lifecycle rules and bucket locks match by prefix.
-
-**When to split: when jobs get credentials scoped to what they write.** If
-those are R2 API tokens, they scope by bucket only, so a writer whose data
-the others must not touch gets its own bucket then. The first is the guards'
-state: a pull request's job must never be able to reset a guard's memory,
-which is why that state stays in Depot artifacts, written only by each
-guard's own runs, until then. Bucket-wide settings are the other reason:
-public access (an `r2.dev` URL, a custom domain) is per bucket, so this one
-is never public, since that would expose every trace. Anything that must be
-public gets a bucket of its own.
+One bucket, because an R2 API token scopes to buckets, never to a prefix, and CI has one
+credential that reaches every bucket anyway ([credentials](#credentials)); lifecycle rules and
+bucket locks match by prefix. Split a bucket off when jobs get credentials scoped to what they write
+(the guards' state first: a pull request's job must never reset a guard's memory, which is why that
+state stays in Depot artifacts until then), or for anything public: public access is per bucket, so
+this one is never public.
 
 ### Object keys
 
 ```text
 evidence/ci/trust=<main|pr>/date=<YYYY-MM-DD>/job=<Depot job id>/<testRunId>/<path in the folder>
-tables/tests/trust=<main|pr>/date=<YYYY-MM-DD>/job=<Depot job id>/<testRunId>.parquet
 ```
 
-For example
-`evidence/ci/trust=pr/date=2026-09-24/job=7zncg7grdw/testrun_1tf879r75h/playwright-html/index.html`
-(`testEvidencePrefix` and `testEvidenceTableKey` in
-`scripts/ci/test-evidence.ts`).
+(`testEvidencePrefix` in `scripts/ci/test-evidence.ts`.)
 
-- **`evidence/` first**, so the folders, which expire, sit apart from
-  `tables/` and `state/`, which never do: no rule on `evidence/…` can reach
-  them.
-- **Then `trust`.** R2 lifecycle rules and bucket locks match by key prefix
-  only, so main's runs and everything else need different prefixes to get
-  different retention, and a run of main's workflow never shares a namespace
-  with a pull request's (the lesson of Nx's CREEP vulnerability,
-  CVE-2025-36852: a pull request's results landing where trusted builds
-  read them). `main` is a push or
-  schedule on `refs/heads/main` whose tree on disk is the pushed commit's;
-  `pr` is everything else, dispatches included, and so is a `depot ci run`
-  from a laptop: on 2026-09-24 one run from a clean `main` checkout got
-  `GITHUB_EVENT_NAME=api` and `GITHUB_REF=refs/heads/main`, and one with
-  local changes has them applied as a patch, so its tree is not the
-  commit's either way.
-- **Only what a Depot OIDC token's claims give.** The token carries `ref` and
-  `event_name` (so `trust`), `iat` (the date), and `job_id`, but no job
-  attempt id and no job name
-  ([claims](https://depot.dev/docs/ci/oidc)). So a notary that mints
-  credentials later ([#3110](https://github.com/iterate/iterate/issues/3110)) can derive everything down to
-  `job=<job_id>/` itself, and the job picks only the last segment, its own
-  attempt's folder, which write-once PUTs keep it from reusing. Today the date
-  is the UTC day the manifest was written, and the job id is
-  `DEPOT_JOB_URL`'s `job=`; that it equals the `job_id` claim is unverified
-  until one job requests a token.
-- The `key=value` segments are Hive-style: DuckDB's `hive_partitioning` turns
-  them into `trust`, `date` and `job` columns and skips whole prefixes by
-  them.
-- **The tables' copy.** Before the manifest, the upload PUTs
-  `tables/tests.parquet` again under `tables/tests/` (not for a cancelled
-  run). A loader can list that prefix, one object per run, instead of every
-  object under `evidence/` (about 7 million a year), and it never expires,
-  so every run can be replayed, not only the last year's folders. The run's
-  manifest, at the same `trust`, `date` and `job` under `evidence/`, is the
-  commit point for the copy too: a copy whose manifest is not there is from
-  a failed upload.
+- **`evidence/` first**, so no rule on it can reach `state/`.
+- **Then `trust`**, because lifecycle rules and bucket locks match by prefix only, and a run of
+  main's workflow must never share a namespace with a pull request's (Nx's CREEP vulnerability,
+  CVE-2025-36852). `main` is a push or schedule on `refs/heads/main` whose tree on disk is the
+  pushed commit's; everything else is `pr`, a laptop's `depot ci run` included.
+- **Only what a Depot OIDC token's claims give** (`ref`, `event_name`, `iat`, `job_id`), so a notary
+  that mints credentials later can derive everything down to `job=<job_id>/` itself
+  ([#3110](https://github.com/iterate/iterate/issues/3110)).
+- The `key=value` segments are Hive-style, for DuckDB's `hive_partitioning`.
 
 ### Addressed by run, verified by content
 
-Files keep their paths under the run's prefix rather than living at
-`sha256/<hash>` keys, because the folder has to work as a folder: Playwright's
-HTML report loads its traces and screenshots by relative path, and a viewer
-serving `…/playwright-html/` from R2 needs them beside it.
+Files keep their paths under the run's prefix, because Playwright's HTML report loads its traces and
+screenshots by relative path. Content still decides what is accepted:
 
-That costs some repetition. In a failing Preview OS folder measured on
-2026-09-24 (68 files, 9.9 MB), about 4.7 MB were copies: the HTML report
-copies every `trace.zip` and `test-failed-*.png` from `playwright-output/`
-into its `data/` byte for byte, and its trace viewer's scripts, styles and
-fonts (about 1.3 MB) are the same in every failing run. A passing folder
-repeats little. At the [costs below](#sizes-and-costs) that is a few dollars a
-month, not worth a viewer that resolves every path through the manifest. If
-failing runs come to dominate, the upload can skip a `playwright-output/` file
-whose sha256 the report's `data/` already holds, with the manifest recording
-both paths.
+- The upload re-hashes each file as it reads it, refuses one that no longer matches the manifest,
+  and signs that sha256 as the SigV4 payload hash, so R2 refuses a body that changed on the way.
+- Every PUT is write-once (`If-None-Match: *`): an existing key answers 412. A 412 on a key already
+  holding the same bytes (its ETag is their MD5) is this upload's own earlier try; other bytes fail
+  it.
+- The manifest goes last, so a folder whose manifest is in R2 is complete, and the manifest's sha256
+  addresses the whole run.
+- Keys carry `=` percent-encoded (`trust%3Dpr`), as S3 clients sign them; R2 stores them decoded.
 
-Content still decides what is accepted. Each of these was checked against the
-bucket on 2026-09-24:
-
-- The upload hashes each file again as it reads it and refuses one that no
-  longer matches the manifest, before sending it. It then signs that sha256
-  as the SigV4 payload hash (`x-amz-content-sha256`), so R2 also refuses a
-  body that changed on the way: a PUT whose header does not match its body
-  gets `400 XAmzContentSHA256Mismatch`
-  ([SigV4](https://docs.aws.amazon.com/AmazonS3/latest/API/sig-v4-header-based-auth.html)).
-- Every PUT is write-once (`If-None-Match: *`,
-  [supported by R2](https://developers.cloudflare.com/r2/api/s3/api/)): an
-  existing key answers 412 and is never replaced. A 412 on a key that already
-  holds the very bytes being sent (a single PUT's ETag is the body's MD5) is
-  this upload's own earlier try, landed after all, or the step run again; the
-  upload goes on. Other bytes at that key fail it.
-- The manifest goes last, after every file and the tables' copy. A folder
-  whose manifest is in R2 is complete, and the manifest's own sha256 is the
-  content address of the whole run: anyone holding it can re-hash every
-  file.
-- Keys carry `=` percent-encoded (`trust%3Dpr`), as S3 clients sign them; R2
-  stores them decoded.
-
-The upload sends one request per object, eight at a time. A Cloudflare 5xx, a
-429 or no answer at all is sent again up to three times, after 1, 2 and 4
-seconds or what a 429's `Retry-After` asks (up to 5), and each retry logs a
-warn whose `event` is `test-evidence.platform-failure-retry`
-([engineering invariant](engineering-invariants.md)); the summary line counts
-them. A request times out after 60 seconds, and 90 seconds into the upload
-the request in flight is aborted and no retry starts: the e2e job is a pull
-request's slowest check, a healthy upload adds about five seconds to it, and
-this evidence decides nothing, so a degraded R2 costs it at most about a
-minute and a half. Anything else, a 4xx included, or a fourth failure, fails
-the step: the warning annotation and the summary line say why, the e2e jobs'
-folder is still in their Depot artifact, and without a manifest nothing
-downstream picks the partial folder up.
+The upload sends eight requests at a time. A Cloudflare 5xx, a 429 or no answer is sent again on
+`CI_HTTP`'s schedule ([failures and retries](engineering-invariants.md#failures-and-retries)), each
+retry logging `test-evidence.platform-failure-retry`. A request times out after 60 s, and 90 s into
+the upload no retry starts: this evidence decides nothing, so a degraded R2 costs the e2e job at most
+about a minute and a half. Anything else, or a fourth failure, fails the step.
 
 ### Reading it back
 
-The upload step's log and the job's summary give the run's prefix. With the
-same token, from the repository root:
+The upload step's log and the job's summary give the run's prefix. With the same token, from the
+repository root:
 
 ```sh
 doppler run --project _shared --config preview -- pnpm --dir apps/os exec wrangler r2 object get "iterate-ci/<prefix>manifest.json" --remote --pipe
 doppler run --project _shared --config preview -- pnpm --dir apps/os exec wrangler r2 object get "iterate-ci/<prefix>playwright-html/index.html" --remote --file index.html
 ```
 
-Every file the manifest lists is at `<prefix><path>`, its bytes hashing to
-the listed sha256.
-
-The per-test rows of many runs read as one table with DuckDB over the
-tables' copies. Its R2 secret takes S3 keys: CI's token gives them as the
-upload derives them ([credentials](#credentials)), or an R2 API token with
-Object Read on the bucket gives its own:
-
-```sql
-CREATE SECRET iterate_ci (TYPE r2, KEY_ID '<token id>', SECRET '<sha256 of the token>', ACCOUNT_ID '376ef7ed81b0573f93524de763666c15');
-
-SELECT module_path, full_name, count(*) AS runs, quantile_cont(duration_ms, 0.95) AS p95_ms
-FROM read_parquet('r2://iterate-ci/tables/tests/*/*/*/*.parquet', hive_partitioning = true, union_by_name = true)
-WHERE trust = 'main' AND date >= current_date - 14 AND state = 'passed' AND retry_count = 0
-GROUP BY ALL ORDER BY p95_ms DESC LIMIT 25;
-```
-
-A downloaded folder works too: `read_parquet('test-results/tables/tests.parquet')`.
-
-The flake dashboard (`scripts/ci/flake-dashboard/evidence.ts`) lists
-`evidence/ci/trust=<main|pr>/date=<day>/` for the last eight UTC days through
-the S3 API, with the credentials the upload derives, and reads the
-`flake-records/` files of the folders whose manifest is listed.
+Every file the manifest lists is at `<prefix><path>`, its bytes hashing to the listed sha256. Each
+runner's tests are one JSON record apiece in `ci-telemetry/raw/*.json` (`TestTelemetryArtifact` in
+`packages/shared/src/test-support/ci-telemetry.ts`). The flake dashboard
+(`scripts/ci/flake-dashboard/evidence.ts`) lists `evidence/ci/trust=<main|pr>/date=<day>/` for the
+last eight UTC days through the S3 API and reads the `flake-records/` of the folders whose manifest
+is listed.
 
 ### Sizes and costs
 
-Measured on real artifacts from 2026-09-24:
+Passing runs of [#3247](https://github.com/iterate/iterate/pull/3247) on 2026-09-26:
 
-| Test run (passing) | Files | Unzipped | Of which                                                                                                                     |
-| ------------------ | ----- | -------- | ---------------------------------------------------------------------------------------------------------------------------- |
-| Test job attempt   | 18    | 3.8 MB   | raw telemetry 2.8 MB, flake suite summary 0.65 MB, `tests.parquet` 0.26 MB (about 2,300 rows), CTest's JUnit XML 0.01 MB     |
-| Preview OS e2e     | 38    | 3.6 MB   | telemetry 1.4 MB, HTML report 0.7 MB, 18 screenshots 0.65 MB, JSON results 0.68 MB, `tests.parquet` 0.06 MB (about 370 rows) |
+| Job attempt (passing) | Objects | Bytes   | Of which                                                                                   |
+| --------------------- | ------- | ------- | ------------------------------------------------------------------------------------------ |
+| Test                  | 21      | 3.0 MB  | raw telemetry 2.1 MB (3,554 tests), flake suite summary 0.84 MB, CTest's JUnit XML 0.01 MB |
+| E2E tests             | 11      | 0.33 MB | raw telemetry 0.23 MB, flake suite summary 0.09 MB                                         |
+| Browser specs         | 29      | 2.4 MB  | JSON results 0.92 MB, HTML report 0.77 MB, 16 screenshots 0.66 MB, raw telemetry 0.03 MB   |
 
-Each is one run's folder; the upload adds the manifest and the table's copy,
-so 20 and 40 objects.
-
-A failing Preview OS attempt with two failed specs was 68 files and 9.9 MB:
-two `trace.zip` files of 2.35 MB together, their copies in the report, and
-the report's trace viewer. Depot ran 178 to 377 pull-request runs and 173 to
-384 push runs a day from 2026-09-21 to 2026-09-23; assume at most 500 Test
-and 300 e2e job attempts a day (PostHog's `ci job attempt finished` can
-confirm it). At [R2 Standard pricing](https://developers.cloudflare.com/r2/pricing/)
-($0.015 per GB-month after 10 GB free, Class A $4.50 per million after 1
-million free, no egress fees):
-
-- **Volume**: about 2.6 GB a day before failures, 80 GB a month. Assume
-  half of it main's and half pull requests' (the run counts above split
-  about evenly).
-- **Storage** at steady state: main's folders for 365 days, about 475 GB;
-  pull requests' for 90 days, about 120 GB; the tables' copies, about 140 MB
-  a day and never deleted, about 50 GB a year. About 650 GB, **about $10 a
-  month**, the tables adding under $1 a month for every year kept. Keeping
-  pull requests' folders a year too would be about $15.
-- **Writes**: about 21,000 PUTs a day, 630,000 a month. The free million
-  Class A operations are the whole dev/preview account's, previews
-  included, so count on paying for them: **about $3 a month**.
-
-Raw telemetry JSON compresses about 16× (a Test attempt's 2.6 MB zips to
-165 KB). Storing it gzipped would cut storage by two thirds but make every
-reader decompress; not worth it at these prices.
+A failing Preview OS attempt was 68 files and 9.9 MB, about half of it the HTML report's copies of
+the traces. Assuming at most 500 Test and 300 each of E2E tests and Browser specs attempts a day, at
+[R2 Standard pricing](https://developers.cloudflare.com/r2/pricing/): about 2.3 GB a day; at the
+retention below about 525 GB at steady state, **about $8 a month**; about 675,000 PUTs a month,
+**about $3 a month**. Gzipping the raw telemetry (13×) would halve storage and make every reader
+decompress: not worth it at these prices.
 
 ### Retention
 
 Lifecycle rules on `iterate-ci`, set when it was created ([setup](#setup)):
 
-- `evidence/ci/trust=main/`: deleted 365 days after upload
-  (`evidence-main-after-365-days`).
-- `evidence/ci/trust=pr/`: 90 days (`evidence-pr-after-90-days`). Most of
-  the volume, and a pull request's evidence matters while it is open and for
-  the flake history after.
-- `evidence/local/`: 30 days (`evidence-local-after-30-days`), in place
-  before any laptop writes there.
-- `tables/` and `state/`: never deleted. Every run's rows, so a table built
-  from them can always be rebuilt from R2.
-- R2's own default rule aborts incomplete multipart uploads after 7 days; the
-  upload makes none.
-- **No bucket lock is set.** A [bucket lock](https://developers.cloudflare.com/r2/buckets/bucket-locks/)
-  on `evidence/ci/trust=main/` and `tables/` for 30 days would keep anyone,
-  CI's token included, from deleting or overwriting them; a lock takes
-  precedence over a lifecycle rule, and 30 days is shorter than every
-  expiry. Whether to set it is open ([#3110](https://github.com/iterate/iterate/issues/3110)).
-
-Nothing in CI deletes objects.
+- `evidence/ci/trust=main/`: 365 days (`evidence-main-after-365-days`).
+- `evidence/ci/trust=pr/`: 90 days (`evidence-pr-after-90-days`).
+- `evidence/local/`: 30 days (`evidence-local-after-30-days`).
+- `tables/` and `state/`: never deleted. Nothing in CI deletes objects.
+- **No bucket lock is set** (30 days on `trust=main/` would stop even CI's token deleting them);
+  whether to set it is open ([#3110](https://github.com/iterate/iterate/issues/3110)).
 
 ### Credentials
 
-- **CI: the token CI already has.** The upload uses Doppler
-  `_shared/preview`'s `CLOUDFLARE_API_TOKEN`, the user API token preview
-  deploys use and the one that created the bucket, so no secret was added.
-  An API token with R2 permissions is also an S3 key pair: its id is the
-  access key id (the upload asks Cloudflare's `GET /user/tokens/verify` for
-  it) and the SHA-256 of its value is the secret
+- **CI uses the token it already has**: Doppler `_shared/preview`'s `CLOUDFLARE_API_TOKEN`, the
+  token preview deploys use. An API token with R2 permissions is also an S3 key pair: its id
+  (from `GET /user/tokens/verify`) is the access key id and the SHA-256 of its value the secret
   ([R2 authentication](https://developers.cloudflare.com/r2/api/tokens/#get-s3-api-credentials-from-an-api-token)).
-  The upload speaks S3 rather than the Cloudflare API's object endpoint,
-  which `wrangler r2 object put` uses, because on 2026-09-24 that endpoint
-  replaced an existing object despite `If-None-Match: *`, stored a body whose
-  `Content-MD5` was wrong, and counted every request against the token
-  owner's 1,200 per five minutes, which preview deploys share (a failing e2e
-  folder is about 70 objects). The S3 endpoint refused both and has no such
-  limit. Wrangler still reads objects back ([above](#reading-it-back)).
-- **What that token can do.** It reaches every bucket on the account, deletes
-  included, and every CI job holding `DOPPLER_TOKEN` can read it, pull
-  request jobs included. Write-once PUTs only keep the honest uploader from
-  replacing a run's evidence; they are no defence against the token, which
-  can plant, replace or delete any object, `trust=main` and `tables/`
-  included, and no bucket lock is set. That is acceptable while evidence
-  proves nothing and no guard keeps its memory in the bucket; it is not
-  acceptable once evidence can skip CI. Before then, jobs get credentials
-  scoped to their own run's prefix, from Depot OIDC and a notary Worker
-  ([#3110](https://github.com/iterate/iterate/issues/3110)). It is also why there is [one bucket](#one-bucket).
-- **Traces.** A failing run's `playwright-output/<test>/trace.zip` holds the
-  browser's network traffic, preview sign-in included, and the HTML report
-  copies every trace byte for byte into `playwright-html/data/`. The bucket
-  is private, but `public-playwright-report`, the same folder as a Depot
-  artifact, is open to anyone with the viewer link, so it exposes them
-  already.
-
-## Tables
-
-`tables/tests.parquet` has one row per test the runners reported, skipped
-tests included. Its columns (`scripts/ci/test-results-parquet.ts`; a test
-holds this table to that file):
-
-| Column                  | Type      | Meaning                                                                                                                                                                          |
-| ----------------------- | --------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `test_run_id`           | STRING    | The folder's `testRunId`: joins a row to its manifest and its evidence                                                                                                           |
-| `repository`            | STRING    | `iterate/iterate`                                                                                                                                                                |
-| `workflow_name`         | STRING    | Workflow display name (`Test`, `Preview OS`)                                                                                                                                     |
-| `workflow_run_id`       | STRING    | `GITHUB_RUN_ID` as Depot sets it                                                                                                                                                 |
-| `workflow_run_attempt`  | STRING    | `GITHUB_RUN_ATTEMPT`                                                                                                                                                             |
-| `job_name`              | STRING    | `GITHUB_JOB` (`test`, `e2e`)                                                                                                                                                     |
-| `job_attempt_id`        | STRING    | Depot's job attempt id                                                                                                                                                           |
-| `depot_job_url`         | STRING    | The job attempt's Depot page                                                                                                                                                     |
-| `head_sha`              | STRING    | The tested PR head or main commit (`TEST_TELEMETRY_HEAD_SHA`)                                                                                                                    |
-| `branch`                | STRING    | Source branch (`main` for main pushes)                                                                                                                                           |
-| `pull_request_number`   | INT32     | Null outside pull requests                                                                                                                                                       |
-| `producer`              | STRING    | `vitest-retry-telemetry-reporter` or `playwright-telemetry-reporter`                                                                                                             |
-| `framework`             | STRING    | `vitest` or `playwright`                                                                                                                                                         |
-| `test_kind`             | STRING    | `unit`, `integration` or `e2e`                                                                                                                                                   |
-| `workspace`             | STRING    | pnpm workspace the runner ran in (`os`, `@iterate-com/shared`, `iterate-root`)                                                                                                   |
-| `test_project`          | STRING    | Playwright project (`os`, `voice`, …); null for Vitest                                                                                                                           |
-| `module_path`           | STRING    | Test file, relative to the repository root                                                                                                                                       |
-| `full_name`             | STRING    | Suite path and title as the runner names it                                                                                                                                      |
-| `leaf_name`             | STRING    | Bare title, the name flake records and the flake dashboard use                                                                                                                   |
-| `test_line`             | INT32     | Line of the test in `module_path` (Playwright)                                                                                                                                   |
-| `state`                 | STRING    | Final state: `passed`, `failed`, `skipped`, `timedout`, …                                                                                                                        |
-| `expected_state`        | STRING    | `passed`; `failed` for createFlake/createFailing/`test.fails`; `skip`                                                                                                            |
-| `outcome`               | STRING    | Playwright's verdict: `expected`, `unexpected`, `flaky`, `skipped`                                                                                                               |
-| `retry_count`           | INT32     | Retries the runner made                                                                                                                                                          |
-| `passed_after_retry`    | BOOLEAN   | A retry rescued it                                                                                                                                                               |
-| `started_at`            | TIMESTAMP | When the test started, by the runner's clock (UTC, milliseconds)                                                                                                                 |
-| `duration_ms`           | DOUBLE    | The runner's reported duration                                                                                                                                                   |
-| `configured_timeout_ms` | DOUBLE    | The test's timeout                                                                                                                                                               |
-| `first_failure`         | STRING    | First failed attempt's error text                                                                                                                                                |
-| `errors`                | JSON      | Final errors: `[{ name?, message, stack? }]`; null when none                                                                                                                     |
-| `attempts`              | JSON      | `[{ attemptIndex, state, durationMs, startedAt?, error? }]` when the runner reports attempts (Playwright); null otherwise. Playwright's per-step phases stay in the raw artifact |
-| `tags`                  | JSON      | Test tags; null when none                                                                                                                                                        |
-| `flake_kind`            | STRING    | `flake` (createFlake) or `failing` (createFailing); null for other tests                                                                                                         |
-| `flake_pattern`         | STRING    | The wrapper's tracked-error pattern                                                                                                                                              |
-| `flake_outcomes`        | JSON      | Its records' outcomes, one per recorded run: `["pinned-fail"]`, `["flake-fail","pass"]`                                                                                          |
-
-Kind `unknown` flake records are not joined: they restate a plain test's
-`passed_after_retry` and final `state`, which the row already has. A
-createFlake or createFailing record that names no test, or more than one,
-is on no row and is named in the manifest's `diagnostics`, never silently
-dropped and never the reason a folder has no manifest.
-
-Vitest reports one aggregate duration and retry count per test, not each
-attempt's ([ci-test-telemetry.md](ci-test-telemetry.md)), so a retried Vitest
-row's `duration_ms` is not a clean sample: rank passed rows with no retry.
+  The upload speaks S3, not the object endpoint `wrangler r2 object put` uses, which on 2026-09-24
+  ignored `If-None-Match: *`, stored a body with a wrong `Content-MD5`, and counted against the
+  token's 1,200 requests per five minutes that preview deploys share.
+- **What that token can do**: every bucket on the account, deletes included, and every CI job
+  holding `DOPPLER_TOKEN` can read it, pull request jobs included. Write-once PUTs are no defence
+  against it. That is acceptable while evidence proves nothing; before evidence can skip CI, jobs
+  get credentials scoped to their own prefix, from Depot OIDC and a notary Worker
+  ([#3110](https://github.com/iterate/iterate/issues/3110)).
+- **Traces**: a failing run's `trace.zip` holds the browser's network traffic, preview sign-in
+  included. The bucket is private, but `public-playwright-report`, the same folder as a Depot
+  artifact, already exposes it to anyone with the viewer link.
 
 ## Setup
 

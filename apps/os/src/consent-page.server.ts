@@ -100,6 +100,9 @@ export async function createConsentProject(
 const ConsentApproval = z.object({
   project: z.array(z.string()),
   scope: z.array(z.string()),
+  /** the user id of the person a platform admin picked under "Sign in as someone else…"
+   *  (consent.ts `approve`) */
+  impersonate: z.string().min(1).optional(),
 });
 
 /** POST /oauth2/auth — the page's Authorize form, posted to the authorization URL itself so the
@@ -109,6 +112,11 @@ const ConsentApproval = z.object({
  *  the session no second time (`admittedThisRequest`), so no body the client sends slowly may
  *  stand between that admission and the grant it approves. */
 export async function approveConsentForm(request: Request, env: Env, ctx: ExecutionContext) {
+  // The issuer's cookie approves a grant — someone else's, for an admin — so this form wants its
+  // Origin present, not only not foreign (issuer-pages.ts): a browser always sends one on a form
+  // POST, and nothing but the page itself ever posts here.
+  if (request.headers.get("origin") !== new URL(request.url).origin)
+    return new Response("403: a consent needs this page's own Origin\n", { status: 403 });
   const authorization = new URL(request.url).search;
   const seeOther = (location: string) =>
     new Response(null, { status: 303, headers: { location, "cache-control": "no-store" } });
@@ -118,6 +126,7 @@ export async function approveConsentForm(request: Request, env: Env, ctx: Execut
   const approval = ConsentApproval.safeParse({
     project: form?.getAll("project"),
     scope: form?.getAll("scope"),
+    impersonate: form?.get("impersonate") ?? undefined,
   });
   if (!approval.success) return new Response("Invalid consent form", { status: 400 });
   const addresses = platformAddressesOf(env, request);
@@ -128,6 +137,7 @@ export async function approveConsentForm(request: Request, env: Env, ctx: Execut
     query: authorization,
     projects: approval.data.project,
     scopes: approval.data.scope,
+    impersonate: approval.data.impersonate,
   });
   return seeOther("redirectTo" in approved ? approved.redirectTo : `/oauth2/auth${authorization}`);
 }

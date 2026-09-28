@@ -3,6 +3,7 @@ import { uniqueFixtureSlug } from "@iterate-com/shared/test-support/fixture-slug
 import type { VideoModePageExtension } from "middlewright";
 import type { OperatorSession } from "./operator.ts";
 import { readOsPlaywrightAuthConfig } from "./auth-config.ts";
+import { workerBaseUrl } from "./worker-base-url.ts";
 
 /**
  * A browser signed in as a fresh person who owns a fresh project, without driving the sign-in page
@@ -28,10 +29,12 @@ export async function createProjectFixture(
 
   return {
     project,
+    /** The fixture's person, for a second project of theirs (`operator.authenticate({ email })`). */
+    email,
     itx: input.operator.authenticate().projects.get(project.id),
     [Symbol.asyncDispose]() {
-      // Disposable Playwright projects are left behind: OS has no project removal, and a
-      // preview's state goes with the preview.
+      // A fixture's project is left behind (a spec that deletes one does so itself): a preview's
+      // state goes with the preview, and a failed spec's project stays to be read.
       return Promise.resolve();
     },
   };
@@ -83,12 +86,11 @@ export function createSessionFixture(slugPrefix: string, input: { page: Page }) 
  * context. The sign-in page itself is the subject of specs/os/issuer-pages.spec.ts.
  */
 async function mintIterateSession(input: { email: string; page: Page }) {
-  // the OS platform, whichever app host the spec's project targets
-  const { osBaseUrl, loginPassword } = readOsPlaywrightAuthConfig();
+  const { loginPassword } = readOsPlaywrightAuthConfig();
   return test.step("sign in with the deployment's test password", async () => {
-    const origin = new URL(osBaseUrl).origin;
-    const login = await input.page.request.post(`${origin}/login`, {
-      headers: { Origin: origin },
+    // the OS platform, whichever app host the spec's project targets
+    const login = await input.page.request.post(`${workerBaseUrl}/login`, {
+      headers: { Origin: workerBaseUrl },
       form: { email: input.email, password: loginPassword, next: "/" },
       maxRedirects: 0,
       // A page.request call inherits the tight actionTimeout, but this is fixture setup over HTTP
@@ -109,8 +111,8 @@ async function createOwnedProject(input: {
   email: string;
   slug: string;
 }) {
-  // create() resolves only after the project-creation saga commits, so no separate lifecycle
-  // poll is needed.
+  // create() answers once the project's creation is requested, before its saga lands
+  // `project/created`: an app's page may open on a project still being created.
   return test.step("create project fixture over /api", async () => {
     // Created as that person, so it lands in an organization they own; its minted id is how a
     // project is addressed — the slug only labels its hosts.

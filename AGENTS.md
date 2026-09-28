@@ -2,7 +2,7 @@
 
 Cloudflare Workers monorepo. The platform is `apps/os`; production issuer: `https://os.iterate.com`.
 
-- Read scoped `AGENTS.md` files. Follow every `rules/**/*.md` whose `files` globs match what you change, honoring exclusions: they are review rules, and no bot enforces them today.
+- Read scoped `AGENTS.md` files. Follow every `rules/**/*.md` whose `files` globs match what you change, honoring exclusions: they are review rules, and the iterate project's AI linter reviews every pull request against them (iterate/config `ai-linter/`).
 - Expected outcomes must be modeled; recovery must be bounded and observable. Operational changes require preview, state, and telemetry evidence. [Engineering invariant](docs/engineering-invariants.md).
 - Never hand-edit a `routeTree.gen.ts`: regenerate it with the app's `pnpm routes:generate` (`pnpm typecheck` fails when one is stale).
 - `envs.ts` owns deployment configuration; Doppler supplies secrets. Workers are never deleted as part of source cleanup.
@@ -21,10 +21,10 @@ Read when relevant:
 
 - [Repository map](README.md) · [Platform](apps/os/README.md) · [Kit firmware](apps/kit/firmware/AGENTS.md)
 - [Dev environments](docs/dev-environments.md): local dev, per-PR previews, and acting as users and operators
-- [Testing](docs/testing.md) · [Browser specs](specs/AGENTS.md) · [Vitest patterns](docs/vitest-patterns.md); a PR that changes residency, alarms, claims or facet lifetimes turns on the [slow e2e rows](docs/testing.md#slow-rows)
+- [Testing](docs/testing.md) · [Browser specs](specs/AGENTS.md) · [Vitest patterns and the shape of a test](docs/vitest-patterns.md); a PR that changes residency, alarms, claims or facet lifetimes turns on the [slow e2e rows](docs/testing.md#slow-rows)
 - [Depot CI](docs/depot-ci.md): workflows, running CI without a PR, runs, logs, artifacts, and waiting on checks
 - TypeScript style: [coding style](docs/coding-style.md) · [conventions](docs/typescript-conventions.md) · [code rules](docs/jonasland-rules.md) · [identifiers](docs/identifiers.md)
 - [Event types](packages/iterate/README.md#event-types): naming rules for every `events.iterate.com` type; `lint/event-types.test.ts` enforces them
-- [Frontend development](docs/frontend-development.md) for the client apps (dash, agents, notes, voice)
+- [Frontend development](docs/frontend-development.md) for the client apps
 - [Brand and tone of voice](docs/brand-and-tone-of-voice.md) for user-facing copy
 - [Instruction maintenance](docs/writing-agent-docs.md): instructions live in `AGENTS.md` files only

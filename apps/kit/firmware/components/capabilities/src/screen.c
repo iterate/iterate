@@ -3,8 +3,18 @@
 #include <stdio.h>
 #include <string.h>
 
+/*
+ * THE LAST CHUNK'S ANSWER IS THE REFRESH'S. `setImage` answers each chunk with
+ * the bytes staged so far, except the chunk that completes the frame: that
+ * answer waits until the driver leaves PENDING, then carries the frame's length
+ * if the panel shows it, or an error if the refresh failed. The caller awaits
+ * one call and asks nothing again (packages/voice/src/worker.ts). An e-paper
+ * refresh takes seconds, so the reply is deferred (`capnweb_reply_defer`) and
+ * `step`, which the device loop runs every pass, answers it; a driver that
+ * shows at once (a reflective LCD) is answered on the spot.
+ */
+
 static const char *const formats[] = {"mono1", "gray4", "rgb565"};
-static const char *const states[] = {"idle", "pending", "shown", "failed"};
 
 size_t iterate_kit_screen_frame_bytes(uint16_t width, uint16_t height,
                                     enum iterate_kit_screen_format format) {
@@ -47,17 +57,6 @@ static enum capnweb_status info(void *context, const struct capnweb_call *call,
   return capnweb_reply_set_borrowed_expression(reply, json, (size_t)length, NULL, NULL);
 }
 
-static enum capnweb_status status(void *context, const struct capnweb_call *call,
-                                 struct capnweb_reply *reply) {
-  (void)call;
-  struct iterate_kit_screen *screen = context;
-  const enum iterate_kit_screen_state state = refresh_state(screen);
-  static char json[96];
-  const int length = snprintf(json, sizeof(json), "{\"uploadId\":%lu,\"state\":\"%s\"}",
-    (unsigned long)screen->upload_id, screen->uploading ? "receiving" : states[state]);
-  return capnweb_reply_set_borrowed_expression(reply, json, (size_t)length, NULL, NULL);
-}
-
 /* Strict padded RFC4648, capped at one transport chunk. Validate the entire
  * chunk before writing so a rejected chunk cannot corrupt staged pixels. */
 static bool decode(const char *text, size_t length, uint8_t *out, size_t capacity, size_t *written) {
@@ -91,7 +90,7 @@ static enum capnweb_status set_image(void *context, const struct capnweb_call *c
   char format[16];
   if (!call || !call->has_arguments || !capnweb_value_array_at(&call->arguments, 0, &input))
     return capnweb_reply_set_error(reply, "TypeError", "screen.setImage needs null or an image chunk");
-  if (refresh_state(screen) == ITERATE_KIT_SCREEN_PENDING)
+  if (screen->shown_answer_owed || refresh_state(screen) == ITERATE_KIT_SCREEN_PENDING)
     return capnweb_reply_set_error(reply, "BusyError", "screen refresh is still pending");
   if (capnweb_value_get_type(&input) == CAPNWEB_JSON_NULL) {
     screen->uploading = false;
@@ -129,7 +128,14 @@ static enum capnweb_status set_image(void *context, const struct capnweb_call *c
     }
     screen->showing_image = true;
     screen->refresh_pending = true;
-    refresh_state(screen);
+    const enum iterate_kit_screen_state state = refresh_state(screen);
+    if (state == ITERATE_KIT_SCREEN_PENDING) {
+      screen->shown_answer = call->responder;
+      screen->shown_answer_owed = true;
+      return capnweb_reply_defer(reply);
+    }
+    if (state != ITERATE_KIT_SCREEN_SHOWN)
+      return capnweb_reply_set_error(reply, "Error", "screen refresh failed");
   }
   return capnweb_reply_set_int64(reply, (int64_t)screen->next_offset);
 invalid:
@@ -137,10 +143,24 @@ invalid:
   return capnweb_reply_set_error(reply, "RangeError", "invalid screen format, upload, offset or base64 chunk");
 }
 
+static void step(void *context) {
+  struct iterate_kit_screen *screen = context;
+  if (!screen->shown_answer_owed) return;
+  const enum iterate_kit_screen_state state = refresh_state(screen);
+  if (state == ITERATE_KIT_SCREEN_PENDING) return;
+  screen->shown_answer_owed = false;
+  /* A session that ended meanwhile has no one to answer; the call failed with it. */
+  if (state == ITERATE_KIT_SCREEN_SHOWN)
+    (void)capnweb_responder_set_int64(screen->shown_answer, (int64_t)screen->next_offset);
+  else
+    (void)capnweb_responder_set_error(screen->shown_answer, "Error", "screen refresh failed");
+}
+
 static void session_ended(void *context) {
   struct iterate_kit_screen *screen = context;
   screen->uploading = false;
   screen->next_offset = 0;
+  screen->shown_answer_owed = false;
 }
 
 bool iterate_kit_screen_init(struct iterate_kit_screen *screen,
@@ -163,8 +183,8 @@ bool iterate_kit_screen_init(struct iterate_kit_screen *screen,
 }
 
 struct iterate_kit_module iterate_kit_screen_module(struct iterate_kit_screen *screen) {
-  static const char *const paths[][2] = {{"screen", "info"}, {"screen", "setImage"}, {"screen", "status"}};
-  static const struct iterate_kit_method methods[] = {{paths[0], 2, info}, {paths[1], 2, set_image}, {paths[2], 2, status}};
-  return (struct iterate_kit_module){.methods = methods, .method_count = 3,
-    .context = screen, .session_ended = session_ended};
+  static const char *const paths[][2] = {{"screen", "info"}, {"screen", "setImage"}};
+  static const struct iterate_kit_method methods[] = {{paths[0], 2, info}, {paths[1], 2, set_image}};
+  return (struct iterate_kit_module){.methods = methods, .method_count = 2,
+    .context = screen, .session_ended = session_ended, .step = step};
 }

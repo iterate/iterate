@@ -5,7 +5,7 @@ import {
   parseConfigRepoTemplateReference,
 } from "./reference.ts";
 
-test.each([
+test.for([
   ["github:iterate/iterate", { owner: "iterate", repo: "iterate" }],
   [
     "github:iterate/iterate#path:configs/default",
@@ -23,7 +23,7 @@ test.each([
     "git+https://github.com/iterate/iterate.git#abc123&path:configs/default",
     { owner: "iterate", path: "configs/default", ref: "abc123", repo: "iterate" },
   ],
-])("parses %s", (input, expected) => {
+] as const)("parses %s", ([input, expected]) => {
   expect(parseConfigRepoTemplateReference(input)).toEqual(expected);
 });
 
@@ -45,7 +45,7 @@ test("formats path-only, ref-only, and repository-root references", () => {
   );
 });
 
-test.each([
+test.for([
   "",
   "https://github.com/iterate/iterate",
   "github:iterate",

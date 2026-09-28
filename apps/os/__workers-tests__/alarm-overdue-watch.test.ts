@@ -80,11 +80,7 @@ async function scheduleAt(ctx: string) {
 }
 
 function spyOnWarn() {
-  const warn = vi.spyOn(console, "warn");
-  onTestFinished(() => {
-    warn.mockRestore();
-  });
-  return warn;
+  return vi.spyOn(console, "warn");
 }
 
 function rearmWarns(warn: ReturnType<typeof spyOnWarn>) {

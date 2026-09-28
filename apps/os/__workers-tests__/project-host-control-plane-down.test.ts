@@ -3,32 +3,46 @@
 // under test (Vite's built worker, in this isolate) has never looked either up — a fresh isolate, as
 // a deploy's are — then makes the worker's catalog reads to D1 throw workerd's opaque internal
 // error, lose their connection, or not answer until the row lets them. An /api session's reads
-// give up at their own 3 s deadline instead (src/rpc.ts).
+// give up at their own 3 s deadline instead (src/rpc.ts). The worker also answers requests no row
+// made — a local port prober's `GET /` on its socket reads the hostname table for `localhost` — so
+// a row fails only the kinds of read its own host makes, and counts a read by what it asked.
 import { exports } from "cloudflare:workers";
 import { expect, type MockInstance, onTestFinished, test, vi } from "vitest";
 import { catalog, type CatalogRead, interceptCatalogReads, signedInSession } from "./support.ts";
 
 test.for([
-  ["throws", "internal error; reference = workers-test", false],
-  ["is cut", "D1_ERROR: Network connection lost.", true],
+  {
+    name: "throw workerd's opaque internal error",
+    how: "throws",
+    message: "internal error; reference = workers-test",
+    kind: "overloaded",
+    retryAfter: "10",
+  },
+  {
+    name: "are cut",
+    how: "is cut",
+    message: "D1_ERROR: Network connection lost.",
+    kind: "disconnected",
+    retryAfter: "1",
+  },
 ] as const)(
-  "the control plane's reads %s: a project host answers 503 at once, the failure logged once as the platform's",
-  async ([how, message, retryable]) => {
+  "the control plane's reads $name: a project host answers 503 at once, the failure logged once as the platform's",
+  async ({ how, message, kind, retryAfter }) => {
     const { host } = await catalogOnlyProject(`down-${how.replace(" ", "-")}`);
-    failReads(how);
+    // a host under the wildcard reads its project's row, never the hostname table
+    failReads(how, ["project"]);
     const warn = vi.spyOn(console, "warn");
-    onTestFinished(() => warn.mockRestore());
 
     const started = Date.now();
     const refused = await call(host);
     expect(Date.now() - started).toBeLessThan(1_000);
-    await expectUnavailable(refused, new URL(host).hostname);
+    await expectUnavailable(refused, new URL(host).hostname, retryAfter);
     expect(controlPlaneWarns(warn)).toEqual([
       {
         event: "control-plane.platform-failure-d1",
+        kind,
         name: "project",
         waitedMs: expect.any(Number),
-        retryable,
         message: `The control plane failed project: ${message}`,
       },
     ]);
@@ -39,7 +53,6 @@ test("a slow read is waited for: the control plane's late answer serves the host
   const { host } = await catalogOnlyProject("slow", { ownHostname: true });
   const outage = failReads("hangs");
   const warn = vi.spyOn(console, "warn");
-  onTestFinished(() => warn.mockRestore());
 
   let settled = false;
   const answer = call(host).finally(() => (settled = true));
@@ -51,8 +64,11 @@ test("a slow read is waited for: the control plane's late answer serves the host
   expect(served).toMatchObject({ status: 404 });
   expect(await served.text()).toMatch(/has no site yet/);
   expect(controlPlaneWarns(warn)).toEqual([]);
-  // the hostname's read brought the row: the admission's second read was a memo hit
-  expect(outage.reads.projectByHostname).toHaveBeenCalledOnce();
+  // the hostname's read brought the row: the admission's second read was of the kept row
+  const hostname = new URL(host).hostname;
+  expect(
+    outage.reads.projectByHostname.mock.calls.filter(([asked]) => asked === hostname),
+  ).toHaveLength(1);
   expect(outage.reads.project).not.toHaveBeenCalled();
 });
 
@@ -63,7 +79,7 @@ test("a signed-in visitor while admission found the control plane down: a 503 be
   const outage = failReads("throws", ["projectByHostname", "accessibleTo"]);
 
   const refused = await call(host, { authorization: `Bearer ${visitor.token}` });
-  await expectUnavailable(refused, new URL(host).hostname);
+  await expectUnavailable(refused, new URL(host).hostname, "10");
   expect(outage.reads.accessibleTo).not.toHaveBeenCalled();
 });
 
@@ -76,17 +92,16 @@ test("a signed-in visitor whose access read fails while admission read through: 
   vi.setSystemTime(Date.now() + 6_000);
   failReads("throws", ["accessibleTo"]);
   const warn = vi.spyOn(console, "warn");
-  onTestFinished(() => warn.mockRestore());
 
   const refused = await call(host, { authorization: `Bearer ${visitor.token}` });
   vi.useRealTimers();
-  await expectUnavailable(refused, new URL(host).hostname);
+  await expectUnavailable(refused, new URL(host).hostname, "10");
   expect(controlPlaneWarns(warn)).toEqual([
     expect.objectContaining({ event: "control-plane.platform-failure-d1", name: "accessibleTo" }),
   ]);
 });
 
-test("/api while the control plane's reads hang: projects.get answers a retryable ControlPlaneUnavailableError at its 3 s deadline, logged once, and the late answer serves the next call", async () => {
+test("/api while the control plane's reads hang: projects.get answers UNAVAILABLE (overloaded) at its 3 s deadline, logged once, and the late answer serves the next call", async () => {
   const session = await signedInSession(
     `api-deadline-${crypto.randomUUID().slice(0, 8)}@example.com`,
   );
@@ -100,7 +115,6 @@ test("/api while the control plane's reads hang: projects.get answers a retryabl
   vi.setSystemTime(Date.now() + 6_000);
   const outage = failReads("hangs", ["accessibleTo"]);
   const warn = vi.spyOn(console, "warn");
-  onTestFinished(() => warn.mockRestore());
 
   const started = performance.now();
   const refusal = await session.projects.get(slug).then(
@@ -108,10 +122,11 @@ test("/api while the control plane's reads hang: projects.get answers a retryabl
     (error: unknown) => error,
   );
   const waited = performance.now() - started;
-  expect(refusal).toMatchObject({ retryable: true, method: "accessibleTo", waitedMs: 3_000 });
-  expect(String(refusal)).toContain(
-    "The control plane failed accessibleTo: no answer within 3000 ms",
-  );
+  expect(refusal).toMatchObject({
+    code: "UNAVAILABLE",
+    data: { kind: "overloaded", retryAfterMs: 10_000 },
+    message: "The control plane failed accessibleTo: no answer within 3000 ms",
+  });
   expect(waited).toBeGreaterThanOrEqual(2_900);
   expect(waited).toBeLessThan(4_500);
   expect(controlPlaneWarns(warn)).toEqual([
@@ -122,7 +137,7 @@ test("/api while the control plane's reads hang: projects.get answers a retryabl
     },
   ]);
 
-  // the read ran on: its answer lands in the memo the next call reads
+  // the read ran on: its answer is kept for the next call to read
   outage.end();
   using project = await session.projects.get(slug);
   expect(await project.invoke(["itx", ["whoami"]])).toMatchObject({ projectId });
@@ -136,12 +151,15 @@ function controlPlaneWarns(warn: MockInstance<typeof console.warn>) {
     .filter((entry) => String(entry?.event).startsWith("control-plane."));
 }
 
-/** The project host's 503 when the control plane is down. */
-async function expectUnavailable(response: Response, hostname: string) {
+/** The project host's 503 when the control plane is down, with the Retry-After of its kind. */
+async function expectUnavailable(response: Response, hostname: string, retryAfter: string) {
   expect(response).toMatchObject({ status: 503 });
-  expect(response.headers.get("cache-control")).toBe("no-store");
+  expect(Object.fromEntries(response.headers)).toMatchObject({
+    "cache-control": "no-store",
+    "retry-after": retryAfter,
+  });
   expect(await response.text()).toBe(
-    `503: the platform could not look up ${hostname} just now; try again in a minute\n`,
+    `503: the platform could not look up ${hostname} just now; try again shortly\n`,
   );
 }
 
@@ -154,6 +172,7 @@ async function catalogOnlyProject(prefix: string, options: { ownHostname?: boole
   const { id: projectId } = await catalog().createProject(
     { principal: { actor: "admin" } },
     { project: slug },
+    Date.now(),
   );
   if (!options.ownHostname) return { slug, projectId, host: `https://${slug}.projects.test/` };
   await catalog().claimHostname(projectId, `${slug}.example.test`);

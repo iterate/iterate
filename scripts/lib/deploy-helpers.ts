@@ -10,12 +10,9 @@ import { spawn } from "node:child_process";
 import { globSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { CLOUDFLARE_API, retryPlatformFailures } from "@iterate-com/shared/platform-retry";
 import { type DeployableEnv, type EnvContext } from "./env-context.ts";
 
-// Wrangler does not expose Retry-After, but a direct API call in the same live
-// incident returned 120s. The final attempt therefore lands just beyond that
-// observed window instead of exhausting the budget at 110s.
-const CLOUDFLARE_COMMAND_429_BACKOFF_MS = [5_000, 15_000, 30_000, 75_000] as const;
 const CAPTURED_COMMAND_OUTPUT_LIMIT = 64 * 1024;
 
 /**
@@ -67,52 +64,44 @@ export async function viteBuild(appRoot: string, cloudflareEnv: string) {
 }
 
 /**
- * Run one Cloudflare CLI command with a bounded retry for an explicit HTTP
- * 429. Wrangler retries some API calls itself, but not the Worker service and
- * version lookups performed by `wrangler deploy`; a shared-account rate-limit
- * window otherwise makes parallel preview deploys fail at random.
+ * Run one Cloudflare CLI command, run again on CLOUDFLARE_API's schedule when Cloudflare's rate
+ * limit ended it. Wrangler retries some API calls itself, but not the Worker service and version
+ * lookups performed by `wrangler deploy`; a shared-account rate-limit window otherwise makes
+ * parallel preview deploys fail at random. Wrangler does not pass on the answer's Retry-After.
  *
- * Output remains live and only a bounded tail is retained for classification.
- * Every non-429 failure surfaces immediately, and the final 429 still fails
- * after the same 5-attempt schedule used by our direct Cloudflare fetches.
+ * Output remains live and only a bounded tail is retained for classification. Every other failure
+ * surfaces at once, and the last 429 fails once the schedule is spent; each run again is a
+ * `cloudflare-api.platform-failure-retry` warn.
  */
 export async function runCloudflareCommandWith429Retry(
   command: string,
   args: string[],
   opts: { cwd: string; env?: Record<string, string> },
-  retryOpts: {
-    backoffMs?: readonly number[];
-    sleep?: (ms: number) => Promise<void>;
-  } = {},
 ): Promise<void> {
-  const backoffMs = retryOpts.backoffMs || CLOUDFLARE_COMMAND_429_BACKOFF_MS;
-  const sleep =
-    retryOpts.sleep || ((ms: number) => new Promise((resolve) => setTimeout(resolve, ms)));
-
-  for (let attempt = 1; attempt <= backoffMs.length + 1; attempt++) {
-    const result = await runStreamingCaptured(command, args, opts);
-    if (result.code === 0) {
-      return;
-    }
-
-    const failure = new Error(
-      `${command} ${args.join(" ")} exited with ${result.code ?? `signal ${result.signal || "unknown"}`}`,
-    );
-    const rateLimitIndex = result.output.lastIndexOf("429 Too Many Requests");
-    const terminalErrorIndex = result.output.lastIndexOf("ERROR");
-    const isRateLimited =
-      rateLimitIndex >= 0 && (terminalErrorIndex < 0 || rateLimitIndex > terminalErrorIndex);
-    if (!isRateLimited || attempt > backoffMs.length) {
-      throw failure;
-    }
-
-    const delayMs = backoffMs[attempt - 1];
-    console.warn(
-      `Cloudflare API rate limited (429) during ${command} ${args.join(" ")} ` +
-        `(attempt ${attempt}/${backoffMs.length + 1}); retrying command in ${Math.round(delayMs / 1000)}s...`,
-    );
-    await sleep(delayMs);
-  }
+  const commandLine = `${command} ${args.join(" ")}`;
+  /** The last run's failure was Cloudflare's rate limit. */
+  let rateLimited = false;
+  await retryPlatformFailures(
+    async () => {
+      rateLimited = false;
+      const result = await runStreamingCaptured(command, args, opts);
+      if (result.code === 0) return;
+      // A 429 wrangler printed after its last ERROR is what ended the command.
+      rateLimited =
+        result.output.lastIndexOf("429 Too Many Requests") > result.output.lastIndexOf("ERROR");
+      throw new Error(
+        `${commandLine} exited with ${result.code ?? `signal ${result.signal || "unknown"}`}`,
+      );
+    },
+    {
+      area: "cloudflare-api",
+      schedule: CLOUDFLARE_API,
+      // Each command names its whole end state (this code deployed, these migrations applied).
+      idempotent: true,
+      kind: () => (rateLimited ? "overloaded" : "failed"),
+      describe: () => ({ command: commandLine }),
+    },
+  );
 }
 
 async function runStreamingCaptured(

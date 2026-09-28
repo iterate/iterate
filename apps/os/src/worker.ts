@@ -1,36 +1,48 @@
 // worker.ts — the one worker's fetch entry: the request is sorted top to bottom — a project host
 // (the files host, else the project's config worker), the MCP origin, then the platform origin's
-// own paths (`/version`, a preview's one-click `/.auth/test-link`, the secret-OAuth callback, Google
-// identity, `/mcp`, the browser adapter's `/api` and `/.auth/*`) and, last, the OAuth provider with
+// own paths (`/version`, a preview's admin sign-in through prd, local dev's one click, the secret-OAuth callback, the
+// integrations' callbacks and webhooks, Google identity, `/mcp`, the browser adapter's `/api` and `/.auth/*`) and, last, the OAuth provider with
 // the issuer's pages as its catch-all.
 // Cap’n Web terminates at `/api`; a project host's request rides into the context DO.
 
 import { proxyPosthogRequest } from "@iterate-com/shared/posthog";
 import { ITX_PRINCIPAL_HEADER, type Principal } from "iterate/principal";
 import { forwardIssues } from "iterate/lib";
-import { ITERATE_ROUTING_SLUG_HEADER, primaryHostnameUrlOf } from "iterate/project-ingress";
+import {
+  ITERATE_BASE_PATH_HEADER,
+  ITERATE_ROUTING_SLUG_HEADER,
+  primaryHostnameUrlOf,
+} from "iterate/project-ingress";
 import { primaryHostnameRedirectOf } from "./primary-hostname-redirect.ts";
 import { ITX_GRANT_HEADER } from "./caller.ts";
 import { IterateContextDurableObject } from "./iterate-context-durable-object.ts";
 import type { Env as WorkerEnv } from "./env.ts";
 import { identityResponse } from "./identity.ts";
-import { SECRET_OAUTH_CALLBACK_PATH } from "./secret-oauth.ts";
+import { OAUTH_INTEGRATION_PROVIDERS } from "./integrations/contract.ts";
+import { SECRET_OAUTH_CALLBACK_PATH, secretOAuthCallbackPathOf } from "./secret-oauth.ts";
 import { secretOAuthCallback } from "./secret-oauth-callback.ts";
-import { ControlPlane, ControlPlaneUnavailableError } from "./control-plane/edge.ts";
+import { receiveEmail } from "./integrations/email.ts";
+import { slackWebhookRoute } from "./integrations/slack.ts";
+import { githubCallbackRoute, githubWebhookRoute } from "./integrations/github.ts";
+import { ControlPlane } from "./control-plane/edge.ts";
+import { unavailableAnswer } from "./unavailable.ts";
 import { oauthResponse } from "./api.ts";
 import { issuerHandler } from "./issuer-pages.ts";
-import { testLinkResponse } from "./issuer-session.ts";
-import { TEST_LINK_PATH } from "./test-link.ts";
+import {
+  ADMIN_SIGN_IN_CALLBACK_PATH,
+  ADMIN_SIGN_IN_CLIENT_PATH,
+  ADMIN_SIGN_IN_PATH,
+  adminSignInCallbackResponse,
+  adminSignInClientMetadata,
+  adminSignInResponse,
+} from "./admin-sign-in.ts";
+import { localSignInResponse } from "./local-sign-in.ts";
 import { appConfigOf, platformAddressesOf, sessionSigningSecretOf } from "./app-config.ts";
 import { captureIssueInPosthog } from "./posthog.ts";
 import { FILES_ROUTING_SLUG, serveProjectFileRequest } from "./context/file-urls.ts";
 import { appCookies, browserAuthorization, browserClient } from "./browser-client.ts";
-import {
-  FETCH_UPGRADE_RESUMABLE_HEADER,
-  ITX_EXPRESSION_FETCH_HEADER,
-  ITX_PLATFORM_ORIGIN_HEADER,
-  spliceEyeballAnswer,
-} from "./context/rpc-stubs.ts";
+import { ITX_EXPRESSION_FETCH_HEADER, ITX_PLATFORM_ORIGIN_HEADER } from "./context/rpc-stubs.ts";
+import { FETCH_UPGRADE_RESUMABLE_HEADER, spliceEyeballAnswer } from "./context/fetch-upgrade.ts";
 import { DurableObjectNameCodec, resourceScope } from "./context/paths.ts";
 import { authorizationForToken, recordGrantUse } from "./oauth.ts";
 import { leasedProjectHostAnswer } from "./project-host-lease.ts";
@@ -42,13 +54,6 @@ import { projectHostCallerOf, projectHostSignInAnswerOf } from "./project-host-s
  *  with fresh Requests is its own cost. */
 const PROJECT_HOST_HOPS_HEADER = "x-itx-expression-hops";
 
-/** THE BASE PATH a project host is served under (paths ingress: `/projects/<project>[/<routingSlug>]`),
- *  alongside `x-iterate-routing-slug`: the edge strips it from the URL the config worker sees and
- *  says it here, so the site's own links and its browser adapter can compose absolute paths. Set or
- *  deleted by the edge on every project request, so a visitor's spelling never reaches the project.
- *  Empty under subdomains (each routing slug owns its origin). */
-const ITERATE_BASE_PATH_HEADER = "x-iterate-base-path";
-
 /** The Request without its base path (paths ingress): the same method, body and upgrade, the URL
  *  starting at the app's root. */
 function withoutBasePath(request: Request, basePath: string): Request {
@@ -59,13 +64,15 @@ function withoutBasePath(request: Request, basePath: string): Request {
 }
 
 /** A project host's answer when a control-plane read it needed failed on the platform's side
- *  (ControlPlaneUnavailableError, which edge.ts logged): a 503 (scripts/ci/prd-fault-alarm.ts
- *  pages on the 5xx), not an exception. Any other error is rethrown. */
+ *  (UNAVAILABLE, which edge.ts logged): the edge's one answer to it (`unavailableAnswer`), a 503
+ *  with its Retry-After (scripts/ci/prd-fault-alarm.ts pages on the 5xx), not an exception. Any
+ *  other error is rethrown. */
 function controlPlaneUnavailable(error: unknown, hostname: string): Response {
-  if (!(error instanceof ControlPlaneUnavailableError)) throw error;
+  const answer = unavailableAnswer(error);
+  if (!answer) throw error;
   return new Response(
-    `503: the platform could not look up ${hostname} just now; try again in a minute\n`,
-    { status: 503, headers: { "cache-control": "no-store", "retry-after": "60" } },
+    `${answer.status}: the platform could not look up ${hostname} just now; try again shortly\n`,
+    answer,
   );
 }
 
@@ -146,12 +153,16 @@ export { BrowserSession } from "iterate/app-session";
 // `ctx.exports` (first-party-facets.ts FIRST_PARTY_FACET_CLASSES) — ordinary bundled
 // worker code with the worker's real env, never a loaded source.
 export { AccountDurableObject } from "./account/durable-object.ts";
+export { EmailDurableObject } from "./email/durable-object.ts";
+export { InstanceDurableObject } from "./instance/durable-object.ts";
 export { OrganizationDurableObject } from "./organization/durable-object.ts";
 export { ProjectDurableObject } from "./project/durable-object.ts";
 export { RepoDurableObject } from "./repo/durable-object.ts";
 export { SecretDurableObject } from "./secret/durable-object.ts";
 export { WorkspaceDurableObject } from "./workspace/durable-object.ts";
 export { ItxEntrypoint } from "./iterate-context.ts";
+// A secret's exchange code's only egress, minted per jail with the pin as props.
+export { PinnedOutbound } from "./secret/exchange-jail.ts";
 
 export default {
   async fetch(request: Request, env: WorkerEnv, ctx: ExecutionContext): Promise<Response> {
@@ -200,17 +211,16 @@ export default {
     // touch, so a hostname whose project the control plane does not know must never reach one —
     // else any label under the wildcard would mint durable storage from the public internet. The
     // host's address (a static rule, else a hostname a project added: one catalog read), then one
-    // catalog read (memoized per isolate: a slug's project never changes; an unknown label five
-    // seconds, edge.ts `getProjectKeepingMisses`) — the row resolves the host's label (a slug, an id
-    // would do too) to the project's id; an unknown label is 421. A slow read is waited for; one
-    // that fails on the platform's side is a 503.
+    // catalog read (a row kept five seconds per isolate, an unknown label never: edge.ts) — the row
+    // resolves the host's label (a slug, an id would do too) to the project's id; an unknown label
+    // is 421. A slow read is waited for; one that fails on the platform's side is a 503.
     const projectHost = await controlPlane
       .projectHostOf(appConfig, url, platformOrigin)
       .catch((error: unknown) => controlPlaneUnavailable(error, url.hostname));
     if (projectHost instanceof Response) return projectHost;
     if (projectHost) {
       const project = await controlPlane
-        .getProjectKeepingMisses(projectHost.project)
+        .getProject(projectHost.project)
         .catch((error: unknown) => controlPlaneUnavailable(error, url.hostname));
       if (project instanceof Response) return project;
       if (!project)
@@ -246,27 +256,22 @@ export default {
         if (browserResponse) return browserResponse;
       }
       // THE PRIMARY HOSTNAME (primary-hostname-redirect.ts): a navigation on the ingress base goes
-      // to the project's own hostname, after the browser adapter so a sign-in under way finishes
-      // where it started.
+      // to the project's own hostname, which the admission's row carries (edge.ts `getProject`),
+      // after the browser adapter so a sign-in under way finishes where it started.
       const redirect = primaryHostnameRedirectOf(request, { routing, platformOrigin });
-      if (redirect) {
-        const primaryHostname = await controlPlane
-          .primaryHostnameOf(projectId)
-          .catch((error: unknown) => controlPlaneUnavailable(error, url.hostname));
-        if (primaryHostname instanceof Response) return primaryHostname;
-        const location =
-          primaryHostname &&
-          primaryHostnameUrlOf(primaryHostname, {
-            routingSlug: redirect.routingSlug,
-            path: `${url.pathname}${url.search}`,
-          });
-        // no-store: a browser keeps a 308 it may cache, and the primary can change
-        if (location)
-          return new Response(null, {
-            status: 308,
-            headers: { location: location.href, "cache-control": "no-store" },
-          });
-      }
+      const location =
+        redirect &&
+        project.primaryHostname &&
+        primaryHostnameUrlOf(project.primaryHostname, {
+          routingSlug: redirect.routingSlug,
+          path: `${url.pathname}${url.search}`,
+        });
+      // no-store: a browser keeps a 308 it may cache, and the primary can change
+      if (location)
+        return new Response(null, {
+          status: 308,
+          headers: { location: location.href, "cache-control": "no-store" },
+        });
       const bearer = /^Bearer\s+(\S+)$/i.exec(request.headers.get("authorization") ?? "")?.[1];
       const authorization = bearer
         ? await authorizationForToken(env, bearer, addresses, "project-host")
@@ -350,18 +355,44 @@ export default {
     // `<deployId> <platformOrigin>`: Cloudflare's version id of this deploy — the stamp a smoke
     // waits for (`wrangler deploy` prints it) — and the origin this deployment answers on.
     if (url.pathname === "/version") return new Response(`${deployId} ${platformOrigin}\n`);
-    // A preview's one-click sign-in (test-link.ts): a 404 wherever `login.testLink` is off — prd,
-    // and every deployment on its own domain, which app-config.ts refuses it on.
-    if (url.pathname === TEST_LINK_PATH && request.method === "GET")
-      return testLinkResponse(request, env);
+    // An admin's sign-in through another issuer (admin-sign-in.ts), prd's for a preview: its start,
+    // that issuer's answer, and this deployment's client metadata document, which the issuer
+    // fetches. None of them exists where `login.adminIssuer` is unset — prd, and every deployment
+    // on its own domain, which app-config.ts refuses it on.
+    const adminIssuer = appConfig.login.adminIssuer;
+    if (adminIssuer && request.method === "GET") {
+      if (url.pathname === ADMIN_SIGN_IN_PATH)
+        return adminSignInResponse(request, env, adminIssuer);
+      if (url.pathname === ADMIN_SIGN_IN_CALLBACK_PATH)
+        return adminSignInCallbackResponse(request, env, adminIssuer);
+      if (url.pathname === ADMIN_SIGN_IN_CLIENT_PATH)
+        return Response.json(adminSignInClientMetadata(platformOrigin), {
+          headers: { "cache-control": "public, max-age=300" },
+        });
+    }
+    // Local dev's one click (local-sign-in.ts, `pnpm getin`): on a laptop's platform alone.
+    const localSignIn = await localSignInResponse(request, env);
+    if (localSignIn) return localSignIn;
     // posthog-js's `api_host` on the issuer's own pages (routes/__root.tsx): PostHog EU through
     // this origin.
     if (url.pathname.startsWith("/e/")) return proxyPosthogRequest({ request, proxyPrefix: "/e" });
 
     // A project secret's OAuth callback (secret-oauth.ts): the provider sends the human back here
-    // with the code. Its own reserved path, `/.secrets/`, beside `/version`.
-    if (url.pathname === SECRET_OAUTH_CALLBACK_PATH)
+    // with the code. Its own reserved path, `/.secrets/`, beside `/version` — and an integration's,
+    // the legacy URL iterate's Slack app and Google client are registered with.
+    if (
+      url.pathname === SECRET_OAUTH_CALLBACK_PATH ||
+      OAUTH_INTEGRATION_PROVIDERS.some(
+        (platform) => url.pathname === secretOAuthCallbackPathOf({ platform }),
+      )
+    )
       return secretOAuthCallback(request, env, addresses);
+    // Slack's and GitHub's webhooks and GitHub's connect callback (src/integrations/).
+    const integrationResponse =
+      (await slackWebhookRoute(request, env)) ||
+      (await githubWebhookRoute(request, env)) ||
+      (await githubCallbackRoute(request, env, addresses));
+    if (integrationResponse) return integrationResponse;
     const identity = await identityResponse(request, env);
     if (identity) return identity;
     if (url.pathname === "/mcp") {
@@ -383,5 +414,10 @@ export default {
     // issuer's pages — the authorize endpoint's consent page among them — as its catch-all
     // (issuer-pages.ts): every one an open path, or a 404.
     return oauthResponse(request, env, ctx, issuerHandler);
+  },
+
+  // Cloudflare Email Routing's catch-all on the project email domain (integrations/email.ts).
+  async email(message: ForwardableEmailMessage, env: WorkerEnv) {
+    await receiveEmail(message, env);
   },
 };

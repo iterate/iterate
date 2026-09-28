@@ -1,9 +1,9 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 import { expect, test } from "vitest";
+import { temporaryDirectory } from "@iterate-com/shared/test-support/temporary-directory";
 
 import { computeReport, getChangedFiles, renderBodySection } from "./loc-report.ts";
 
@@ -114,6 +114,27 @@ test("mixed TypeScript changes count only emitted runtime lines as Significant",
   ]);
 });
 
+test("a TSX change to JSX text alone (UI copy) is Significant", () => {
+  using repo = createGitRepo();
+  const page = (copy: string) =>
+    [
+      "export function Page() {",
+      "  return (",
+      "    <p>",
+      `      ${copy}`,
+      "    </p>",
+      "  );",
+      "}",
+      "",
+    ].join("\n");
+  const base = repo.commit({ "src/page.tsx": page("Sign in to continue") });
+  const head = repo.commit({ "src/page.tsx": page("Sign in to Waitrose") });
+
+  expect(getChangedFiles(base, head, repo.path)).toMatchObject([
+    { path: "src/page.tsx", added: 1, removed: 1, significantAdded: 1, significantRemoved: 1 },
+  ]);
+});
+
 test("runtime-emitting TypeScript syntax remains Significant without compiler-line inflation", () => {
   using repo = createGitRepo();
   const base = repo.commit({ "src/direction.ts": "" });
@@ -184,11 +205,12 @@ test.for([
 });
 
 function createGitRepo() {
-  const path = mkdtempSync(join(tmpdir(), "loc-report-test-"));
+  const directory = temporaryDirectory();
+  const { path } = directory;
   execFileSync("git", ["init", "--quiet"], { cwd: path });
 
   return {
-    path,
+    ...directory,
     commit(files: Record<string, string>) {
       for (const [file, content] of Object.entries(files)) {
         const fullPath = join(path, file);
@@ -211,9 +233,6 @@ function createGitRepo() {
         { cwd: path },
       );
       return execFileSync("git", ["rev-parse", "HEAD"], { cwd: path, encoding: "utf8" }).trim();
-    },
-    [Symbol.dispose]() {
-      rmSync(path, { recursive: true, force: true });
     },
   };
 }

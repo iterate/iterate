@@ -51,7 +51,7 @@ enum iterate_kit_voice_stream_control {
    *
    * Raised from `lastFrameOfAnswer` on the final frame, AFTER that frame is
    * delivered. A separate terminal event routinely overtook the audio it was
-   * about; the note in handle_spk_frame records what that cost.
+   * about; the note in handle_speaker_frame records what that cost.
    */
   ITERATE_KIT_VOICE_STREAM_CONTROL_RESPONSE_DONE,
   /** The bridge hung up (locally, after its idle timeout, or remotely). */
@@ -123,7 +123,7 @@ struct iterate_kit_voice_stream;
  * Send microphone frames while a call is open; the first frame opens it and
  * GPT-Live detects turns. Send a quiet-call keepalive, play speaker frames in
  * order, and clear playout when directed. A local end appends
- * `conversation-ended` for that activation.
+ * `call-ended` for that activation.
  *
  * Single-owner, callback-driven, no internal retry — the enclosing
  * connection owns reconnect policy, mirroring iterate_kit_itx_mount.

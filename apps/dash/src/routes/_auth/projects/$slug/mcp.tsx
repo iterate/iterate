@@ -16,6 +16,7 @@ const shell = getRouteApi("/_auth");
 const projectRoute = getRouteApi("/_auth/projects/$slug");
 
 export const Route = createFileRoute("/_auth/projects/$slug/mcp")({
+  staticData: { page: "MCP" },
   head: ({ params }) => ({ meta: [{ title: `MCP · ${params.slug} · Dash` }] }),
   component: ProjectMcp,
 });

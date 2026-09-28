@@ -1,8 +1,8 @@
 import { spawnSync } from "node:child_process";
-import { copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { copyFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
+import { temporaryDirectory } from "@iterate-com/shared/test-support/temporary-directory";
 import { expect, test } from "vitest";
 
 const projectDir = join(import.meta.dirname, "..", "..");
@@ -15,7 +15,7 @@ const agentMarkers = [
 ];
 const amendBlocked = "ERROR: AI agents are not allowed to use --amend (rewrites history)\n";
 
-test.each([
+test.for([
   { CLAUDE_CODE_CHILD_SESSION: "1" },
   { OPENCODE: "1" },
   { OPENCODE_SESSION: "ses_1" },
@@ -96,7 +96,7 @@ test("a person can amend, including in an IDE terminal that carries CLAUDECODE",
   expect(repo.git("log", "--format=%s")).toMatchObject({ stdout: "reworded\n" });
 });
 
-test.each<Record<string, string>>([{}, { CLAUDE_CODE_CHILD_SESSION: "1" }, { AGENT: "1" }])(
+test.for<Record<string, string>>([{}, { CLAUDE_CODE_CHILD_SESSION: "1" }, { AGENT: "1" }])(
   "the pre-commit hook only formats the staged files, for people and agents alike (%o)",
   (marker) => {
     expect(lintStagedCommands(marker)).toEqual(["oxfmt --no-error-on-unmatched-pattern"]);
@@ -107,7 +107,8 @@ test.each<Record<string, string>>([{}, { CLAUDE_CODE_CHILD_SESSION: "1" }, { AGE
 // detector it loads from the same path as in this repo. The environment keeps none of this
 // process's agent markers or GIT_* variables.
 function scratchRepo(marker: Record<string, string | undefined>) {
-  const dir = mkdtempSync(join(tmpdir(), "prepare-commit-msg-"));
+  const directory = temporaryDirectory();
+  const dir = directory.path;
   mkdirSync(join(dir, "hooks"));
   copyFileSync(
     join(projectDir, ".husky/prepare-commit-msg"),
@@ -142,7 +143,7 @@ function scratchRepo(marker: Record<string, string | undefined>) {
     git,
     shell,
     write: (file: string, text: string) => writeFileSync(join(dir, file), text),
-    [Symbol.dispose]: () => rmSync(dir, { recursive: true, force: true }),
+    [Symbol.dispose]: directory[Symbol.dispose],
   };
 }
 

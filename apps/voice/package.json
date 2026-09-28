@@ -1,5 +1,5 @@
 {
-  "name": "@iterate-com/voice",
+  "name": "@iterate-com/voice-app",
   "private": true,
   "type": "module",
   "scripts": {
@@ -13,8 +13,10 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@iterate-com/agents": "workspace:*",
     "@iterate-com/shared": "workspace:*",
     "@iterate-com/ui": "workspace:*",
+    "@iterate-com/voice": "workspace:*",
     "@tanstack/react-router": "catalog:",
     "@tanstack/react-start": "catalog:",
     "cn": "catalog:",

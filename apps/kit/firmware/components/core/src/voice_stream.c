@@ -8,14 +8,14 @@
 #include <string.h>
 
 /*
- * NAMED ONE BY ONE, BECAUSE "*" NEVER SWEEPS AN EPHEMERAL. `spk-frame` is
+ * NAMED ONE BY ONE, BECAUSE "*" NEVER SWEEPS AN EPHEMERAL. `speaker-frame` is
  * ephemeral and the OS's `consumesEvent` is explicit that a wildcard does not
  * reach one, so the type that carries every syllable of every answer is the
  * one a shorthand would silently drop.
  */
 static const char *const consumed_event_types[] = {
-  "events.iterate.com/voice-agent/spk-frame",
-  "events.iterate.com/voice-agent/conversation-ended",
+  "events.iterate.com/voice-agent/speaker-frame",
+  "events.iterate.com/voice-agent/call-ended",
   "events.iterate.com/voice-agent/conversation-accepted",
   "events.iterate.com/voice-agent/call-started",
 };
@@ -210,7 +210,7 @@ static bool base64_decode(
  * actually lives. Doing it again by audio content would be a second answer to
  * the same question, and the two could disagree.
  */
-static void handle_spk_frame(
+static void handle_speaker_frame(
     struct iterate_kit_voice_stream *voice_stream,
     const struct capnweb_value *payload) {
   struct capnweb_value pcm_value;
@@ -404,9 +404,9 @@ static void process_batch(
          capnweb_value_string_equals(
              &type_value, "events.iterate.com/voice-agent/conversation-accepted") ||
          capnweb_value_string_equals(
-             &type_value, "events.iterate.com/voice-agent/conversation-ended") ||
+             &type_value, "events.iterate.com/voice-agent/call-ended") ||
          capnweb_value_string_equals(
-             &type_value, "events.iterate.com/voice-agent/spk-frame")) &&
+             &type_value, "events.iterate.com/voice-agent/speaker-frame")) &&
         !payload_matches_activation(voice_stream, &payload)) {
       continue;
     }
@@ -433,8 +433,8 @@ static void process_batch(
       }
     }
     if (capnweb_value_string_equals(
-            &type_value, "events.iterate.com/voice-agent/spk-frame")) {
-      handle_spk_frame(voice_stream, &payload);
+            &type_value, "events.iterate.com/voice-agent/speaker-frame")) {
+      handle_speaker_frame(voice_stream, &payload);
     } else if (capnweb_value_string_equals(
                    &type_value, "events.iterate.com/voice-agent/conversation-accepted")) {
       /*
@@ -451,7 +451,7 @@ static void process_batch(
       }
     } else if (capnweb_value_string_equals(
                    &type_value,
-                   "events.iterate.com/voice-agent/conversation-ended")) {
+                   "events.iterate.com/voice-agent/call-ended")) {
       voice_stream->call_active = false;
       voice_stream->answer_open = false;
       voice_stream->last_presence_at_ms = 0U;
@@ -757,7 +757,7 @@ enum capnweb_status iterate_kit_voice_stream_end_activation(
   if (stream == NULL || !valid_activation(activation) ||
       !json_literal_contents_are_safe(reason)) return CAPNWEB_E_INVALID_ARGUMENT;
   length = snprintf(arguments, sizeof(arguments),
-      "[{\"type\":\"events.iterate.com/voice-agent/conversation-ended\",\"payload\":{"
+      "[{\"type\":\"events.iterate.com/voice-agent/call-ended\",\"payload\":{"
       "\"activation\":\"%s\",\"reason\":\"%s\"}}]",
       activation, reason != NULL ? reason : "hangup");
   if (length < 0 || (size_t)length >= sizeof(arguments)) return CAPNWEB_E_LIMIT;

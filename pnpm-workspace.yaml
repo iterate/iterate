@@ -7,20 +7,23 @@ packages:
   - apps/voice
   - apps/kit
   - apps/spa
+  - apps/browser-extension
   - apps/dummy-petshop
   - apps/ci-reports
+  - apps/iterate-com-inbound-email
+  - packages/agents
   - packages/cli
   - packages/iterate
   - packages/petshop-sdk
+  - packages/voice
   - packages/shared
   - packages/ui
   - lint
   - scripts
 # Every dependency two or more packages use is pinned here once and written `catalog:` in each
-# package.json; a dependency only one package uses keeps its version in that package.json.
-# catalogMode strict makes `pnpm add` write `catalog:` for a catalogued dependency and refuses any
-# other version of it.
-catalogMode: strict
+# package.json; a dependency only one package uses keeps its version in that package.json. The
+# catalog is kept by hand: pnpm's other catalog modes have `pnpm add` write every new dependency
+# into it, rewriting this file.
 cleanupUnusedCatalogs: true
 catalog:
   # One Cloudflare toolchain for every Worker in the repo: the Vite plugin, the wrangler it builds
@@ -51,6 +54,7 @@ catalog:
   cn: ^0.4.0
   codemirror: ^6.0.2
   esbuild: ^0.28.2
+  fflate: 0.8.3
   json5: ^2.2.3
   lucide-react: ^1.48.0
   oauth4webapi: ^3.8.8
@@ -62,7 +66,10 @@ catalog:
   trpc-cli: 0.16.0
   tsdown: 0.23.0
   tsx: ^4.23.15
-  typescript: ^6.0.3
+  # TypeScript 7, the native compiler, and no 6 anywhere. typescript-eslint, under the oxlint
+  # jsPlugin @tanstack/eslint-plugin-router, peers on typescript <6.1 (typescript-eslint#10940), so
+  # pnpm warns of an unmet peer; the one rule lint loads from it never reaches TypeScript.
+  typescript: ^7.0.2
   undici: ^8.11.2
   vite: ^8.3.0
   vitest: ^4.1.11
@@ -97,4 +104,5 @@ overrides:
   wrangler: "catalog:"
   ws: "catalog:"
 patchedDependencies:
+  "@cloudflare/vitest-plugin@1.2.5": patches/@cloudflare__vitest-plugin@1.2.5.patch
   zod@4.6.5: patches/zod@4.6.5.patch

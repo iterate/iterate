@@ -62,7 +62,8 @@ const READ_PAGE_MAX_EVENTS = 1000;
 export const RECENT_EPHEMERALS_BUDGET_CHARS = 1024 * 1024;
 
 /** What a PAUSED stream still accepts: the platform's own records (a paused stream still records
- *  its wake, its delivery ladder still ends, its alarm passes stay observable) and the pause/resume
+ *  its wake, its delivery ladder still ends, its alarm passes stay observable, a script it started
+ *  still closes) and the pause/resume
  *  pair itself (it must always accept its own resume). */
 const PAUSE_EXEMPT_EVENT_TYPES = new Set([
   ...PLATFORM_ONLY_EVENT_TYPES,
@@ -72,8 +73,6 @@ const PAUSE_EXEMPT_EVENT_TYPES = new Set([
   "events.iterate.com/itx/aborted",
   "events.iterate.com/itx/facet-aborted",
   "events.iterate.com/itx/schedule-cancelled",
-  // the runner's own record of a run's end — a paused stream must still close a script it started
-  "events.iterate.com/itx/run-settled",
   // a child's announcement — a paused ancestor must still learn which contexts exist below it
   "events.iterate.com/itx/child-created",
 ]);
@@ -154,7 +153,7 @@ export class Stream {
     // reduce inside the transaction below), so there is no separate mark to write. Read WHATEVER
     // version wrote it: a core-version bump still recovers the head and re-reduces the log up to it.
     const checkpoint = this.storage.reduceCheckpoints.read<CoreState>(CoreContract.slug);
-    // A log with rows but NO checkpoint (a lost row; a store from before the SQL layout) is
+    // A log with rows but NO checkpoint (a lost row) is
     // recoverable: the log is the truth and the checkpoint its cache — the mark is the highest row,
     // and the state is re-reduced below exactly as after a version bump. Reported, never fatal: the
     // alternative was re-appending the birth certificate over offset 1 and dying of a UNIQUE
@@ -236,7 +235,8 @@ export class Stream {
    *  hibernated socket). The first arrival appends it, before its own work; the ones after find it done.
    *  In the SAME batch: the `interrupted` settlement of every run the last incarnation left open
    *  (core state `scriptRuns`). A run is never re-run — the executor that started it died with that
-   *  incarnation, and whoever asked reads the settlement, not a second attempt. */
+   *  incarnation (for a processor's request still owed to the alarm, the pass that would have
+   *  started it), and whoever asked reads the settlement, not a second attempt. */
   appendWakeRecord(reason: "alarm" | "request"): void {
     if (this.#wakeRecorded) return;
     const interrupted = Object.keys(this.#coreReducedState.scriptRuns).map(
@@ -261,6 +261,12 @@ export class Stream {
       ...interrupted,
     );
     this.#wakeRecorded = true;
+  }
+
+  /** Whether this incarnation's wake record is on the log yet. Until it is, every open run is one
+   *  a dead incarnation left: every handler records the wake before it commits anything. */
+  wakeRecorded(): boolean {
+    return this.#wakeRecorded;
   }
 
   #rememberEphemeral(event: StreamEvent, chars: number) {
@@ -343,7 +349,12 @@ export class Stream {
     const freshEphemerals: { event: StreamEvent; chars: number }[] = []; // for the ring, once the batch lands
     let throughOffset = afterOffset;
     for (const event of events) {
-      const { offset: expectedOffset, ...eventInput } = event;
+      const { offset: expectedOffset, ...input } = event;
+      // WHERE IT CAME FROM, on every event: a writer's is the platform's stamp (caller.ts
+      // `stampCaller`), and one without — the platform's own records — came from this context.
+      const eventInput = input.source?.origin
+        ? input
+        : { ...input, source: { ...input.source, origin: this.#path } };
       // IDEMPOTENCY: a key already in the log (or earlier in this batch) answers with THAT event and
       // consumes no offset; a different body under the same key refuses the whole batch.
       let existingEvent = eventInput.idempotencyKey
@@ -625,7 +636,7 @@ export type DurableObjectStorageSlice = {
 /** A serialized body longer than this (chars) is split across `event_chunks` rows instead of one
  *  SQLite TEXT cell (which caps around 2MB — SQLITE_TOOBIG). A body at or
  *  under it stays single-cell (the fast path — no chunk join on read). */
-const EVENT_CHUNK_SIZE = 512 * 1024;
+export const EVENT_CHUNK_SIZE = 512 * 1024;
 
 /** THE cursor of a subscription the stream delivers at-least-once (subscription-delivery.ts): the
  *  offset an acked call confirmed, the ladder attempt, when the next attempt is due, and the

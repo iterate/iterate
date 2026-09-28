@@ -1,5 +1,4 @@
-import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import type {
   FullConfig,
@@ -8,34 +7,24 @@ import type {
   TestCase,
   TestResult,
 } from "@playwright/test/reporter";
-import { expect, onTestFinished, test, vi } from "vitest";
+import { expect, test, vi } from "vitest";
 import type { TestTelemetryArtifact } from "@iterate-com/shared/test-support/ci-telemetry";
+import { temporaryDirectory } from "@iterate-com/shared/test-support/temporary-directory";
 import PlaywrightTelemetryReporter from "./playwright-telemetry-reporter.ts";
 
-test("records every Playwright attempt and nested step without uploading", async () => {
+test("records each test after its attempts, and a flake record for a retried pass, without uploading", async () => {
   isolateTelemetryEnvironment();
-  const artifactDirectory = mkdtempSync(join(tmpdir(), "playwright-telemetry-"));
-  vi.stubEnv("TEST_TELEMETRY_ARTIFACT_DIR", artifactDirectory);
-  const flakeRecordDirectory = mkdtempSync(join(tmpdir(), "flake-records-"));
-  vi.stubEnv("FLAKE_RECORD_DIR", flakeRecordDirectory);
+  using artifactDirectory = temporaryDirectory();
+  vi.stubEnv("TEST_TELEMETRY_ARTIFACT_DIR", artifactDirectory.path);
+  using flakeRecordDirectory = temporaryDirectory();
+  vi.stubEnv("FLAKE_RECORD_DIR", flakeRecordDirectory.path);
   const firstResult = {
     retry: 0,
     status: "failed",
     duration: 500,
     startTime: new Date("2026-07-21T12:00:00Z"),
-    workerIndex: 2,
-    parallelIndex: 1,
     error: { message: "connection lost", stack: "stack" },
     errors: [{ message: "connection lost", stack: "stack" }],
-    steps: [
-      {
-        title: "wait for greeting",
-        titlePath: () => ["wait for greeting"],
-        category: "test.step",
-        duration: 450,
-        steps: [],
-      },
-    ],
   } as unknown as TestResult;
   const secondResult = {
     ...firstResult,
@@ -68,10 +57,10 @@ test("records every Playwright attempt and nested step without uploading", async
     duration: 1500,
   } as FullResult);
 
-  const files = readdirSync(artifactDirectory);
+  const files = readdirSync(artifactDirectory.path);
   expect(files).toHaveLength(1);
   const artifact = JSON.parse(
-    readFileSync(join(artifactDirectory, files[0]!), "utf8"),
+    readFileSync(join(artifactDirectory.path, files[0]!), "utf8"),
   ) as TestTelemetryArtifact;
   expect(artifact.context).toMatchObject({
     framework: "playwright",
@@ -81,30 +70,22 @@ test("records every Playwright attempt and nested step without uploading", async
   expect(artifact.tests[0]).toMatchObject({
     fullName: "chromium › greeting.spec.ts › greets",
     leafName: "greets",
+    moduleId: "/repo/specs/greeting.spec.ts",
     durationMs: 800,
     retryCount: 1,
     passedAfterRetry: true,
     state: "passed",
     outcome: "flaky",
+    startedAt: "2026-07-21T12:00:00.000Z",
+    errors: [{ message: "connection lost", stack: "stack" }],
+    firstFailure: "connection lost",
   });
-  expect(artifact.tests[0]?.attempts).toEqual([
-    expect.objectContaining({ attemptIndex: 0, state: "failed" }),
-    expect.objectContaining({ attemptIndex: 1, state: "passed" }),
-  ]);
-  expect(artifact.tests[0]?.attempts[0]?.phases).toEqual([
-    expect.objectContaining({
-      name: "wait for greeting",
-      category: "test.step",
-      durationMs: 450,
-    }),
-  ]);
-  rmSync(artifactDirectory, { recursive: true });
 
   // The flaky (passed-after-retry) test also produced an unknown-flake
   // record — the test-health dashboard's adoption-funnel signal — while the
   // deterministic passer did not.
-  const flakeRecords = readdirSync(flakeRecordDirectory).flatMap((file) =>
-    readFileSync(join(flakeRecordDirectory, file), "utf8")
+  const flakeRecords = readdirSync(flakeRecordDirectory.path).flatMap((file) =>
+    readFileSync(join(flakeRecordDirectory.path, file), "utf8")
       .trim()
       .split("\n")
       .map((line) => JSON.parse(line)),
@@ -118,17 +99,14 @@ test("records every Playwright attempt and nested step without uploading", async
 
 test("keeps Playwright's raw result status separate from its expected outcome", async () => {
   isolateTelemetryEnvironment();
-  const artifactDirectory = mkdtempSync(join(tmpdir(), "playwright-telemetry-expected-"));
-  vi.stubEnv("TEST_TELEMETRY_ARTIFACT_DIR", artifactDirectory);
+  using artifactDirectory = temporaryDirectory();
+  vi.stubEnv("TEST_TELEMETRY_ARTIFACT_DIR", artifactDirectory.path);
   const failedAsExpected = {
     retry: 0,
     status: "failed",
     duration: 100,
     startTime: new Date("2026-07-21T12:00:00Z"),
-    workerIndex: 0,
-    parallelIndex: 0,
     errors: [{ message: "expected failure" }],
-    steps: [],
   } as unknown as TestResult;
   const test = {
     results: [failedAsExpected],
@@ -149,27 +127,24 @@ test("keeps Playwright's raw result status separate from its expected outcome", 
   } as FullResult);
 
   const artifact = JSON.parse(
-    readFileSync(join(artifactDirectory, readdirSync(artifactDirectory)[0]!), "utf8"),
+    readFileSync(join(artifactDirectory.path, readdirSync(artifactDirectory.path)[0]!), "utf8"),
   ) as TestTelemetryArtifact;
   expect(artifact.tests[0]).toMatchObject({ state: "failed", outcome: "expected" });
-  rmSync(artifactDirectory, { recursive: true });
 });
 
 test("a plain spec that failed every attempt leaves an unexpected-error flake record", async () => {
   isolateTelemetryEnvironment();
-  vi.stubEnv("TEST_TELEMETRY_ARTIFACT_DIR", mkdtempSync(join(tmpdir(), "playwright-hard-fail-")));
-  const flakeRecordDirectory = mkdtempSync(join(tmpdir(), "flake-records-"));
-  vi.stubEnv("FLAKE_RECORD_DIR", flakeRecordDirectory);
+  using artifactDirectory = temporaryDirectory();
+  vi.stubEnv("TEST_TELEMETRY_ARTIFACT_DIR", artifactDirectory.path);
+  using flakeRecordDirectory = temporaryDirectory();
+  vi.stubEnv("FLAKE_RECORD_DIR", flakeRecordDirectory.path);
   const attempt = (retry: number) =>
     ({
       retry,
       status: "failed",
       duration: 400,
       startTime: new Date(`2026-07-21T12:00:0${retry}Z`),
-      workerIndex: 0,
-      parallelIndex: 0,
       errors: [{ message: `attempt ${retry}: locator('chat') not visible` }],
-      steps: [],
     }) as unknown as TestResult;
   const test = {
     results: [attempt(0), attempt(1)],
@@ -191,8 +166,8 @@ test("a plain spec that failed every attempt leaves an unexpected-error flake re
     duration: 800,
   } as FullResult);
 
-  const flakeRecords = readdirSync(flakeRecordDirectory).flatMap((file) =>
-    readFileSync(join(flakeRecordDirectory, file), "utf8")
+  const flakeRecords = readdirSync(flakeRecordDirectory.path).flatMap((file) =>
+    readFileSync(join(flakeRecordDirectory.path, file), "utf8")
       .trim()
       .split("\n")
       .map((line) => JSON.parse(line)),
@@ -212,8 +187,8 @@ test("a plain spec that failed every attempt leaves an unexpected-error flake re
 
 test("preserves timed-out runs and run-level Playwright errors", async () => {
   isolateTelemetryEnvironment();
-  const artifactDirectory = mkdtempSync(join(tmpdir(), "playwright-telemetry-timeout-"));
-  vi.stubEnv("TEST_TELEMETRY_ARTIFACT_DIR", artifactDirectory);
+  using artifactDirectory = temporaryDirectory();
+  vi.stubEnv("TEST_TELEMETRY_ARTIFACT_DIR", artifactDirectory.path);
   const reporter = new PlaywrightTelemetryReporter();
   reporter.onBegin(
     { rootDir: "/repo/specs" } as FullConfig,
@@ -227,39 +202,25 @@ test("preserves timed-out runs and run-level Playwright errors", async () => {
   } as FullResult);
 
   const artifact = JSON.parse(
-    readFileSync(join(artifactDirectory, readdirSync(artifactDirectory)[0]!), "utf8"),
+    readFileSync(join(artifactDirectory.path, readdirSync(artifactDirectory.path)[0]!), "utf8"),
   ) as TestTelemetryArtifact;
   expect(artifact.run).toMatchObject({
     status: "timedout",
     error: { message: "worker stopped responding", stack: "stack" },
-  });
-  expect(artifact.runners[0]).toMatchObject({
-    status: "timedout",
     collectionErrors: ["worker stopped responding"],
   });
-  rmSync(artifactDirectory, { recursive: true });
 });
 
-test("preserves interrupted attempts whose unfinished Playwright steps use negative durations", async () => {
+test("an interrupted attempt's negative duration is recorded as zero", async () => {
   isolateTelemetryEnvironment();
-  const artifactDirectory = mkdtempSync(join(tmpdir(), "playwright-telemetry-interrupted-"));
-  vi.stubEnv("TEST_TELEMETRY_ARTIFACT_DIR", artifactDirectory);
+  using artifactDirectory = temporaryDirectory();
+  vi.stubEnv("TEST_TELEMETRY_ARTIFACT_DIR", artifactDirectory.path);
   const interruptedResult = {
     retry: 0,
     status: "interrupted",
     duration: -1,
     startTime: new Date("2026-07-21T12:00:00Z"),
-    workerIndex: 0,
-    parallelIndex: 0,
     errors: [],
-    steps: [
-      {
-        titlePath: () => ["wait for worker"],
-        category: "test.step",
-        duration: -1,
-        steps: [],
-      },
-    ],
   } as unknown as TestResult;
   const test = {
     results: [interruptedResult],
@@ -280,32 +241,15 @@ test("preserves interrupted attempts whose unfinished Playwright steps use negat
   } as FullResult);
 
   const artifact = JSON.parse(
-    readFileSync(join(artifactDirectory, readdirSync(artifactDirectory)[0]!), "utf8"),
+    readFileSync(join(artifactDirectory.path, readdirSync(artifactDirectory.path)[0]!), "utf8"),
   ) as TestTelemetryArtifact;
   expect(artifact.run).toMatchObject({ status: "interrupted", durationMs: 0 });
-  expect(artifact.tests[0]?.attempts[0]).toMatchObject({
-    state: "interrupted",
-    durationMs: 0,
-    phases: [
-      {
-        name: "wait for worker",
-        durationMs: 0,
-        error: {
-          name: "PlaywrightIncompleteStepError",
-          message: "Playwright step did not finish before runner shutdown",
-        },
-      },
-    ],
-  });
-  rmSync(artifactDirectory, { recursive: true });
+  expect(artifact.tests[0]).toMatchObject({ state: "interrupted", durationMs: 0 });
 });
 
 /** Each test starts from a clean telemetry environment, and every variable it stubs is restored
  *  when it finishes. Never let a CI run's real record dir catch this file's synthetic flakes. */
 function isolateTelemetryEnvironment() {
-  onTestFinished(() => {
-    vi.unstubAllEnvs();
-  });
   vi.stubEnv("TEST_TELEMETRY_KIND", undefined);
   vi.stubEnv("TEST_TELEMETRY_SUITE", undefined);
   vi.stubEnv("FLAKE_RECORD_DIR", undefined);

@@ -46,6 +46,7 @@
     "zod": "catalog:"
   },
   "devDependencies": {
+    "@iterate-com/shared": "workspace:*",
     "@types/node": "catalog:",
     "@types/ws": "catalog:",
     "tsdown": "catalog:",

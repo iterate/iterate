@@ -26,15 +26,12 @@ import * as cloudflareWorkers from "cloudflare:workers";
 import {
   InvokeHandle,
   canonicalItxExpressionPrefix,
-  itxExpressionStepName,
   normalizedItxExpression,
   type ItxExpression,
   type ItxExpressionInput,
   installPrototypeInvokeFallback,
 } from "iterate/expression";
-import { retryPlatformFailures } from "@iterate-com/shared/platform-retry";
 import type { FetchRouteInput, IterateContextApi } from "iterate/api";
-import type { StreamProcessorDurableObject } from "iterate/sdk";
 import type { StreamEvent, StreamEventInput } from "iterate/stream/processor";
 import {
   materializeItxHandleReference,
@@ -48,10 +45,12 @@ import {
   encodeFetchExpression,
   stampCallerHeaders,
   terminalFetchOf,
+} from "./context/rpc-stubs.ts";
+import {
   lendRpcStubOverPager,
   type ClientRpcStub,
   type IterateContextDurableObjectStub,
-} from "./context/rpc-stubs.ts";
+} from "./context/rpc-stub-relay.ts";
 import { normalizeRewriteRuleConfigured } from "./context/itx-expression-rewriting.ts";
 import { FetchRouteConfiguredPayload } from "./fetch-routes.ts";
 import type { BuiltInScope } from "./context/built-ins.ts";
@@ -61,73 +60,10 @@ import {
   type DurableObjectAddress,
 } from "./context/paths.ts";
 import { SessionTeardown } from "./session.ts";
-import { isPlatformFailure } from "./retryable-error.ts";
-import type { repoVerbs } from "./repo/durable-object.ts";
-import type { workspaceVerbs } from "./workspace/durable-object.ts";
+import { contextStub } from "./context-stub.ts";
 
 export type IterateContextNamespace = DurableObjectNamespace<IterateContextDurableObject>;
 export type WaitUntil = (p: Promise<unknown>) => void;
-
-/** The reads a platform failure may send twice, by the names of their steps after `itx` (and any
- *  `builtins` or `cd(path)` before them): each changes nothing, so a second run answers as the first
- *  would have. A call is judged as the caller spelled it: a context's own row that redirects one of
- *  these names to a write, or a facet class that overrides one of the SDK's processor reads with a
- *  write, is its owner's to keep safe to repeat. */
-const READ_CALLS: ReadonlySet<string> = new Set([
-  "whoami",
-  "readEvents",
-  "waitForEvent",
-  "kv.get",
-  "kv.list",
-  "rewriteRules.list",
-  "subscriptions.list",
-  "processors.list",
-  ...(
-    [
-      "snapshot",
-      "liveSnapshot",
-      "waitUntilProcessed",
-    ] satisfies (keyof StreamProcessorDurableObject)[]
-  ).map((read) => `facets.get.${read}`),
-  "repos.list",
-  ...(
-    ["tip", "readFile", "modules", "listFiles", "log"] satisfies (typeof repoVerbs)[number][]
-  ).map((verb) => `repos.get.${verb}`),
-  "workspaces.list",
-  ...(
-    [
-      "mounts",
-      "readFile",
-      "readBase",
-      "listAllFiles",
-      "gitStatus",
-      "gitLog",
-    ] satisfies (typeof workspaceVerbs)[number][]
-  ).map((verb) => `workspaces.get.${verb}`),
-]);
-
-/** An event the log answers with itself when it lands twice: a durable one under an idempotency key,
- *  which stream/stream.ts finds in its rows. An ephemeral is never stored, so its key matches
- *  nothing on a second call. */
-const KeyedDurableEvent = z.object({
-  idempotencyKey: z.string().min(1),
-  ephemeral: z.literal(false).optional(),
-});
-
-/** Whether running `itxExpression` twice is running it once: a read (`READ_CALLS`), or an append
- *  whose every event is durable and carries an idempotency key. A call with live args (a Request, a
- *  callback) is neither. */
-function isIdempotentItxCall(itxExpression: ItxExpression, args: unknown[]): boolean {
-  if (args.length > 0) return false;
-  let steps = itxExpression.slice(itxExpression[1] === "builtins" ? 2 : 1);
-  while (Array.isArray(steps[0]) && steps[0][0] === "cd") steps = steps.slice(1);
-  const [call] = steps;
-  if (steps.length === 1 && Array.isArray(call) && call[0] === "append")
-    return (
-      call.length > 1 && call.slice(1).every((event) => KeyedDurableEvent.safeParse(event).success)
-    );
-  return READ_CALLS.has(steps.map(itxExpressionStepName).join("."));
-}
 
 /** What `provide` hands back: dispose it — or let the session end — and the act is un-done (a lent
  *  stub recalled, a rule or deny removed while the row is still its own). The caller already holds
@@ -176,8 +112,12 @@ class SubscriptionHandleRpcTarget extends RpcTarget {
  *  `facets`, `workers`, …) is a member of this class's TYPE by declaration merging — zero runtime; the
  *  prototype fallback at the bottom of this file is the runtime. So a reader of this file sees the
  *  whole surface, and `withItx(env.ITX, (itx) => itx.append(…))` typechecks in loaded code. `cd` is
- *  the edge's own (below) — it returns an EDGE context, not the built-in's handle. */
-export interface IterateContextRpcTarget extends Omit<BuiltInScope, "cd"> {}
+ *  the edge's own (below) — it returns an EDGE context, not the built-in's handle — and `facets` is
+ *  the published one, whose `get<Facet>` lets a caller type the facet it names (the record's own
+ *  `get` answers the physical host's brand, which a caller never sees). */
+export interface IterateContextRpcTarget extends Omit<BuiltInScope, "cd" | "facets"> {
+  facets: IterateContextApi["facets"];
+}
 
 /** The iterate context (`itx`) at one `{ projectId, path }`, as a client holds it. */
 export class IterateContextRpcTarget extends RpcTarget {
@@ -225,32 +165,16 @@ export class IterateContextRpcTarget extends RpcTarget {
    *  it is one whole expression back through `invoke`, so what the client holds is an object of this
    *  stateless worker, and no session onto the actor outlives a call.
    *
-   *  A call the platform failed (retryable-error.ts `isPlatformFailure`: the transport cut, the
-   *  object reset by its storage) is sent ONCE more, on a fresh stub, when running it twice is
-   *  running it once (`isIdempotentItxCall`), logged as `itx.platform-failure-retry`; a second
-   *  failure, and every other call's, is the caller's. */
+   *  The call rides `contextStub` (context-stub.ts), which owns its retry and failure policy. */
   async #invokeOnDurableObject(
     itxExpression: ItxExpression,
     args: unknown[] = [],
   ): Promise<unknown> {
-    const result = await retryPlatformFailures(
-      // The stub's `invoke` is typed as workerd's RPC wrapper over the DO method; the call denotes
-      // whatever expression the caller spelled, so `unknown` is the honest contract here.
-      async () => (await this.#durableObject.invoke(itxExpression, args, this.#caller)) as unknown,
-      {
-        event: "itx.platform-failure-retry",
-        delaysMs: isIdempotentItxCall(itxExpression, args) ? [0] : [],
-        platformFailure: (error) =>
-          isPlatformFailure(error)
-            ? {
-                name: itxExpression.map(itxExpressionStepName).join("."),
-                projectId: this.#durableObjectAddress.projectId,
-                path: this.#durableObjectAddress.path,
-                message: String(error),
-              }
-            : undefined,
-      },
-    );
+    const result = await contextStub(
+      this.#contextNamespace,
+      this.#durableObjectAddress,
+      "itx",
+    ).invoke(itxExpression, args, this.#caller);
     return materializeItxHandleReference(result, (expression) => this.invoke(expression));
   }
 
@@ -261,8 +185,9 @@ export class IterateContextRpcTarget extends RpcTarget {
    *  the global namespace. THE GLOBAL NAMESPACE IS NOT NAVIGABLE: a global context is reached by
    *  IDENTITY only (`session.user`, `session.organizations.get`), so its `cd` is refused — and the
    *  DO's built-in `cd` refuses it too. This is the whole path mask: with no way to name another
-   *  user's path, there is no policy to get wrong. The one exception is a platform admin's handle
-   *  (`#globalPaths`), which walks `/`, `/users/<id>…` and `/organizations/<id>…`. */
+   *  user's path, there is no policy to get wrong. The one exception is the operator's handle
+   *  (`#globalPaths`), which walks `/`, `/users/<id>…`, `/organizations/<id>…` and the deployment's
+   *  own secrets, `/secrets/<name>`. */
   cd(path: string): IterateContextRpcTarget {
     if (this.#durableObjectAddress.projectId === GLOBAL_PROJECT_ID) {
       if (!this.#globalPaths)
@@ -271,15 +196,15 @@ export class IterateContextRpcTarget extends RpcTarget {
           "a global context is reached by identity (session.user, session.organizations), never by path",
         );
       const resolved = resolveContextPath(this.#durableObjectAddress.path, path);
-      if (!/^\/(?:(?:users|organizations)(?:\/.*)?)?$/.test(resolved))
+      if (!/^\/(?:(?:users|organizations|secrets)(?:\/.*)?)?$/.test(resolved))
         throw codedError(
           "INVALID_INPUT",
-          `cd(${JSON.stringify(path)}): a global context is /, /users… or /organizations…`,
+          `cd(${JSON.stringify(path)}): a global context is /, /users…, /organizations… or /secrets…`,
         );
     }
     // LOADED CODE's `cd` is an expression through THIS context's table (`itx.cd ⇒ null` is a wall,
-    // and the resolver's app wall keeps it to self and descendants) — the dotted surface of the handle
-    // it gets back accumulates onto one `invoke`, exactly as the built-in `cd` root answers.
+    // and the resolver's app wall says where it may go) — the dotted surface of the handle it gets
+    // back accumulates onto one `invoke`, exactly as the built-in `cd` root answers.
     if (this.#caller.app)
       return new InvokeHandle(
         (steps) =>
@@ -607,27 +532,29 @@ export class ItxEntrypoint extends cloudflareWorkers.WorkerEntrypoint<
   /** THE handoff: the genuine itx scope — the same `IterateContextRpcTarget` class a capnweb client
    *  gets from `projects.get(id)` (capnweb's RpcTarget IS the native `cloudflare:workers` RpcTarget
    *  on workerd), under `Caller.app` unless minted `platform: true`, so loaded code writes plain
-   *  dotted access and mid-chain handles pipeline natively while the fixed point and a `cd` above
-   *  its context are refused. A
-   *  fresh SessionTeardown per call: this hop lends nothing session-long (a loaded worker's callbacks
-   *  ride as Workers-RPC stubs through the call args, never the pager). Re-resolved per call — never
-   *  a stub held across calls (the back-channel rule). */
+   *  dotted access and mid-chain handles pipeline natively inside the app wall. A fresh
+   *  SessionTeardown per call: this hop lends nothing session-long (a loaded worker's callbacks ride
+   *  as Workers-RPC stubs through the call args, never the pager). Re-resolved per call — never a
+   *  stub held across calls (the back-channel rule). */
   get(): IterateContextRpcTarget {
     // LOADED code's handle runs as app code; a class of THIS worker mints its stub with
     // `platform: true` from its own exports (sdk/index.ts) and gets the full handle. A loaded isolate's
     // `ctx.exports` are its own module's, so the prop cannot be forged from inside one. Either speaks
     // for the project (no principal) at the origin the context was minted with (platform-origin
     // persisted on the DO): every hop from here — this context, a `cd` to a sibling — carries it, so
-    // a sibling never reached from the edge still composes URLs.
+    // a sibling never reached from the edge still composes URLs. The platform's handle `cd`s as an
+    // edge context does, so it carries its own context as `Caller.path`: what it appends elsewhere
+    // (an entity's certificate on `/`) is stamped with where it came from, not where it landed.
+    const address = DurableObjectNameCodec.parse(this.ctx.props.iterateContextName);
     return new IterateContextRpcTarget(
       this.env.ITERATE_CONTEXT,
-      DurableObjectNameCodec.parse(this.ctx.props.iterateContextName),
+      address,
       new SessionTeardown(),
       (p) => this.ctx.waitUntil(p),
       {
         principal: null,
         platformOrigin: this.ctx.props.platformOrigin,
-        ...(!this.ctx.props.platform && { app: true as const }),
+        ...(this.ctx.props.platform ? { path: address.path } : { app: true as const }),
       },
     );
   }
@@ -673,9 +600,15 @@ export function itxEntrypointFor(
   return exports.ItxEntrypoint({ props: { iterateContextName, platformOrigin } });
 }
 
-// THE PUBLISHED API IS DECLARED, NOT GENERATED (iterate/api): a context satisfies it, checked here.
-const _iterateContextApi: IterateContextApi = null as unknown as IterateContextRpcTarget;
-void _iterateContextApi;
+/** THE PUBLISHED API IS DECLARED, NOT GENERATED (iterate/api): an edge context IS one — its own
+ *  verbs and every root merged in above — or this fails to typecheck, naming the root or verb that
+ *  is missing or mistyped. Not `implements`: the class's own verbs take richer arguments than the
+ *  published ones (`provide`'s and `subscribe`'s lent stubs, which the published API types
+ *  `unknown`), and an `implements` class spells the contract's (lint: iterate/mechanical-class-impl). */
+function publishedContextApiOf(context: IterateContextRpcTarget): IterateContextApi {
+  return context;
+}
+void publishedContextApiOf;
 
 /** The `itx/fetch-route-configured` a `provide(match, stub, { fetchRoute })` rides its pager with,
  *  its target the stub's match — refused here, before anything is lent, as `itx.fetchRoutes.set`

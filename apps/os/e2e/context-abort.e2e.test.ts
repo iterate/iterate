@@ -6,6 +6,7 @@
 // for (iterate-context-durable-object.ts `#abortAfterTheAnswer`). The rows:
 //   • the caller's call resolves, the fact is durable, the next call wakes a fresh incarnation
 //     (one more `itx/woken`) over the same log, tables and kv
+//   • it resolves while other calls keep writing: the reset waits for the answer to leave
 //   • `cd(path).abort()` resets that context and not the one the call came through
 //   • a `waitForEvent` pending on the reset context rejects for its waiter
 //   • SCOPE: a session aborts only the projects it reaches (another project's id is FORBIDDEN, and a
@@ -88,6 +89,35 @@ test("itx.abort() resolves for its caller with the durable fact; the next call w
   // …and nothing else resets it: a call now is the same incarnation.
   await itx.whoami();
   expect(wakes(await readAll(itx))).toBe(wakesBefore + 1);
+});
+
+test("itx.abort() answers its caller with the fact while other calls keep writing to the context: the reset waits for the answer to leave", async () => {
+  const ctx = freshCtx("abort_busy");
+  const itx = openItx(ctx);
+  const writer = openItx(ctx);
+  await Promise.all([itx.whoami(), writer.whoami()]);
+  // Writes that land while the abort's fact is being confirmed, so the output gate holds the answer
+  // behind them too — as a fresh child's `ancestors-announced` flag can in the cd row below.
+  const aborted = itx.abort("busy");
+  const refused: string[] = [];
+  let writing = true;
+  const writers = Array.from({ length: 16 }, async () => {
+    while (writing)
+      await writer
+        .append({ type: "note", payload: {} })
+        .catch((error: Error) => refused.push(error.message));
+  });
+  try {
+    expect(await aborted).toMatchObject({
+      type: "events.iterate.com/itx/aborted",
+      payload: { reason: "busy" },
+    });
+  } finally {
+    writing = false;
+    await Promise.all(writers);
+  }
+  // A write still in the actor when the reset lands is one of the calls it rejects, with its message.
+  for (const message of refused) expect(message).toBe("itx.abort() reset the context /: busy");
 });
 
 test("cd(path).abort() resets that context only — through the root's own cd too, the root's incarnation untouched", async () => {

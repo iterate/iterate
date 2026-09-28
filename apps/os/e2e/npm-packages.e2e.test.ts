@@ -10,11 +10,11 @@
 // pets, and whatever the suite's other pet-shop rows added meanwhile.
 import { expect, test } from "vitest";
 import { openItx, runId } from "./support/client.ts";
+import { publishConfigWorker } from "./support/config-worker.ts";
 import {
   fetchProjectUrl,
   freshDnsSafeProjectSlug,
   projectUrl,
-  publishConfigWorker,
   registerProject,
 } from "./support/project-host.ts";
 import { petshopBaseUrl, petshopLegacyBearer } from "./support/petshop.ts";

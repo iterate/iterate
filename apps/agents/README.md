@@ -1,20 +1,24 @@
 # Agents
 
 Agents is an optional app. `apps/os` supplies contexts, streams, workers, facets, model access
-and storage; this app owns the agent catalog, lifecycle, model loop, sandbox setup and voice runtime.
-`itx.agents` is a durable rewrite to the installed collection facet, not a platform built-in.
+and storage; the agents runtime is the npm package `@iterate-com/agents` (packages/agents: the
+catalog, lifecycle, model loop and sandbox setup), and voice is `@iterate-com/voice`
+(packages/voice), which runs on it. `itx.agents` is a durable rewrite to the installed collection
+facet, not a platform built-in. This folder is the web app and the tests that drive both packages.
 
 - `src/` — the web app: chat, attachments, live state, events and traces.
-- `configs/with-agents/agents/` (outside this folder) — the collection and agent processors, the
-  runtime's only source; `runtime/processor.test.ts` is the processor's spec.
-- `voice/` — the voice relay, delegate, screen renderer and their tests.
-- `scripts/` — the voice installer build and voice call/device tools.
+- `scripts/` — the voice call/device tools and `install-packages.ts`, which installs or upgrades
+  the packages in an existing project.
 - `e2e/` and `__workers-tests__/` — integration tests using apps/os's generic worker harness.
 
-Choose **With agents** when creating a project, or open this app on a minimal project and click
-**Install agents**. Installation stores the runtime in project KV, enables the catalog processor,
-and writes the `itx.agents` rewrite. `itx.agents.create(path)` installs an agent at that context;
-`get(path).message(text)` sends a message. The app owns the code and the project owns its data.
+A project installs the app from a folder of its config repo: `agents/package.json` pins
+`@iterate-com/agents`, `agents/index.ts` re-exports its two classes, and `installAgents` from
+`@iterate-com/agents/install` mounts that folder's files (configs/with-agents does it on
+`project/created` and on every commit that changes `agents/`). Choose **With agents** when creating
+a project, or open this app on a minimal project and click **Install agents**, which commits the
+folder pinned to this app's build. Installation stores the source in project KV, enables the
+catalog processor, and writes the `itx.agents` rewrite. `itx.agents.create(path)` installs an agent
+at that context; `get(path).message(text)` sends a message. The project owns the pin and its data.
 
 The collection delegates capabilities to each agent and its script context. Restrict scripts by
 narrowing the sandbox's rewrite rules. A fully masked sandbox can still receive prose replies;
@@ -22,8 +26,10 @@ denied capability introspection advertises no tools to the model. To allow scrip
 explicit `run` grant and grant `rewriteRules.list` so the model can inspect its allowed capabilities.
 Mask the sandbox's specific `itx.agents` grant too when denying access to the collection.
 
-The loader runs the runtime as written (TypeScript, no bundle). Installation also rebinds existing normal agents to the current runtime; their grants and
-history are retained. Reinstalling is safe. Existing projects are not silently migrated by a platform deployment.
+The loader resolves the pinned package through esm.sh and locks it. Installation also rebinds
+existing normal agents to the current runtime; their grants and history are retained. Reinstalling
+is safe. Existing projects are not silently migrated by a platform deployment:
+`scripts/install-packages.ts` upgrades one.
 
 `pnpm test` runs app unit tests. From the repository root, integration tests run with:
 
@@ -32,7 +38,7 @@ pnpm --dir apps/os exec vitest run --configLoader runner --project e2e ../agents
 pnpm --dir apps/os exec vitest run --configLoader runner --project workers ../agents/__workers-tests__
 ```
 
-See [voice/README.md](voice/README.md) for voice setup. Run voice tools from this package:
+See [packages/voice/README.md](../../packages/voice/README.md) for voice setup. Run voice tools from this package:
 `pnpm voice:call`, `pnpm voice:board`. Kit’s Prepare device flow installs voice.
 
 Dev: `pnpm dev` (defaults to https://os.iterate.com; a gitignored `.dev.vars` with

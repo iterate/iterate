@@ -1,12 +1,11 @@
 /**
  * Which deployment a page is on, told apart in the browser tab: a per-PR preview gets a purple icon
  * with its PR number and a `[pr<N>]` title prefix, local dev a teal icon and `[dev]`, and
- * production keeps the app's own plain logo and its titles untouched. Restored from #2197 (the old
- * OS's environment favicons, lost with that platform in #2837) and extended to every client.
+ * production keeps the app's own plain logo and its titles untouched, in every client.
  *
  * Read from the page's own hostname, the one fact the Worker, the server render and the browser
  * all agree on, so no env var or config carries it (envs.ts names the hosts):
- * - `pr<N>-<worker>.<subdomain>.workers.dev`: a per-PR Worker Preview (apps/os/scripts/preview.ts)
+ * - `pr<N>-<sha7>-<app>.<subdomain>.workers.dev`: a PR's per-commit deployment (apps/os/scripts/preview.ts)
  * - `localhost`, `*.localhost`, `127.0.0.1`: `pnpm dev`
  * - anything else: production (os.iterate.com, dash.iterate.com, agents.iterate.com, …)
  *

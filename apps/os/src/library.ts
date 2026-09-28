@@ -3,41 +3,37 @@
 // written against `itx.fetch` alone, so a userspace worker could carry them unchanged. `run` and the
 // entity roots (`repos`, `workspaces`) are platform sugar spelled at the fixed point,
 // `itx.builtins` — the word loaded code may not say; `files` is a path namespace over `itx.r2`.
-// library.test.ts pins what every library file may import at runtime.
+//
+// THE LIBRARY RULE: a library module takes `itx` and nothing else, so at runtime this file and
+// library/*.ts import only npm packages a userspace worker could bundle too (capnweb,
+// cloudflare:workers, zod), the SDK's pure `iterate/expression` (the codec and the pipelinable
+// handle) and `iterate/lib`, the entities' contracts (pure zod, the vocabulary a handle's typed
+// `append` validates against) and each other. Type-only imports are free. Anything else (the
+// stream, the DO, the rest of context/) would make the library un-movable to userspace, which is
+// the whole point of the tier. Lint enforces it (`no-restricted-imports` in .oxlintrc.json).
 
 import { z } from "zod";
 import { keySortedForPrint, InvokeHandle, print, type ItxExpression } from "iterate/expression";
 import { codedError, errorCode, resolveContextPath, withTimeout } from "iterate/lib";
 import type { EventInput, StreamEvent } from "iterate/stream/processor";
 import type { RunSettled, RunSettlement } from "iterate/stream/run";
+import type { EntityCollectionApi, FileHandle, FileRecord, IterateContextApi } from "iterate/api";
 import type { Caller } from "./caller.ts";
 import type { BuiltInScope } from "./context/built-ins.ts";
 import { RepoContract } from "./repo/contract.ts";
 import type { RepoDurableObject, repoVerbs } from "./repo/durable-object.ts";
 import { WorkspaceContract } from "./workspace/contract.ts";
 import type { WorkspaceDurableObject, workspaceVerbs } from "./workspace/durable-object.ts";
-import {
-  connectToCapnweb,
-  type CapnwebConnectOptions,
-  type CapnwebConnection,
-} from "./library/capnweb.ts";
-import {
-  connectToMcp,
-  type McpConnectOptions,
-  type McpConnectionRpcTarget,
-} from "./library/mcp.ts";
-import {
-  connectToOpenApi,
-  type OpenApiConnectOptions,
-  type OpenApiConnectionRpcTarget,
-  type OpenApiDocument,
-} from "./library/openapi.ts";
+import { connectToCapnweb } from "./library/capnweb.ts";
+import { connectToMcp } from "./library/mcp.ts";
+import { connectToOpenApi } from "./library/openapi.ts";
 
 /** What a library module is handed: the itx handle (the record's own dotted surface), narrowed to
  *  what the library uses — `fetch`, the connectors' HTTP; `r2`, the files' storage; `builtins`, the
- *  fixed point `run` and the entity roots spell their own hops at. Widen it here when a module
- *  needs more of itx — never by importing something else. */
-export type LibraryItx = Pick<BuiltInScope, "fetch" | "r2" | "builtins">;
+ *  fixed point `run` and the entity roots spell their own hops at; `cd`, the typed append's hop
+ *  through the table. Widen it here when a module needs more of itx — never by importing something
+ *  else. */
+export type LibraryItx = Pick<BuiltInScope, "fetch" | "r2" | "builtins" | "cd">;
 
 /** The library's roots, exactly as the built-ins record spreads them in: each verb closed over ONE
  *  `itx`. `BuiltInScope` (context/built-ins.ts) extends this, so the typed surface has them once. */
@@ -51,20 +47,17 @@ export interface LibraryRoots {
    *  or that was still running at its ten-minute deadline (RUN_DEADLINE_MS) — is settled as such,
    *  never re-run. JSON in, JSON out. A script bakes in its own values — an agent writes it whole
    *  (an alternative to a tool call), so `run` takes no arguments. */
-  run(script: string): Promise<unknown>;
+  run: IterateContextApi["run"];
   /** An MCP server over Streamable HTTP: `callTool(name, args)`, `listTools()`, and one method per
    *  tool whose name is a legal identifier. */
-  connectToMcp(url: string, options?: McpConnectOptions): Promise<McpConnectionRpcTarget>;
+  connectToMcp: IterateContextApi["connectToMcp"];
   /** An OpenAPI 3 service from its document or the URL of one: one method per `operationId`, taking
    *  one input object (path, query, header and body fields together); `call(operationId, input)` too. */
-  connectToOpenApi(
-    specOrUrl: string | OpenApiDocument,
-    options?: OpenApiConnectOptions,
-  ): Promise<OpenApiConnectionRpcTarget>;
+  connectToOpenApi: IterateContextApi["connectToOpenApi"];
   /** A remote capnweb API's main object as a pipelinable handle — a WebSocket session through egress
    *  (default) or one HTTP batch per chain (`{ transport: "batch" }`); dotted calls chain with no round
    *  trip per step. */
-  connectToCapnweb(url: string, options?: CapnwebConnectOptions): Promise<CapnwebConnection>;
+  connectToCapnweb: IterateContextApi["connectToCapnweb"];
   /** A repo (src/repo/): a stream on any path whose `repo` facet lands the commit facts. `get(path)`
    *  is the handle — the facet's verbs plus the typed `append` of the repo's own events; `list()`
    *  and `create(path)` are the collection's on the `project` facet at `/`. */
@@ -84,43 +77,19 @@ export interface LibraryRoots {
    *  and `.url({ method?, expiresInSeconds? })` — a signed URL on the project host that downloads
    *  (`GET`, the default) or uploads (`PUT`) the file, `itx.r2.presign` underneath. `list(prefix?)`
    *  lists records under a prefix. */
-  files: {
-    get(path: string): InvokeHandle & FileHandle;
-    list(prefix?: string): Promise<FileRecord[]>;
-  };
+  files: IterateContextApi["files"];
 }
 
-/** An entity root (`itx.repos`, `itx.workspaces`): `get(path)` the handle, typed as the facet it
- *  dispatches to; `list()`, `create(path)` and `delete(path)` the collection's. */
-type EntityRoot<Handle> = {
-  get(path: string): InvokeHandle & Handle;
-  list(): Promise<{ path: string; createdAt: string }[]>;
-  create(path: string): Promise<{ path: string }>;
-  /** The entity's deletion saga on that path: the request, the death certificate (cross-posted to `/`, the catalog drops it), then the row disabled. */
-  delete(path: string): Promise<{ path: string }>;
-};
+/** An entity root (`itx.repos`, `itx.workspaces`): the published collection (iterate/api
+ *  `EntityCollectionApi`) with `get(path)` typed as the facet it dispatches to — narrower than the
+ *  published handle, which the edge's `implements IterateContextApi` (iterate-context.ts) checks it
+ *  against. */
+type EntityRoot<Handle> = EntityCollectionApi<InvokeHandle & Handle>;
 
 /** What an entity handle's dotted members reach: the facet's own `Verbs`, and the typed `append` of
  *  the entity's events on that context (`entityHandle`). */
 type EntityHandle<Facet, Verbs extends keyof Facet, Contract> = Pick<Facet, Verbs> & {
   append(...events: EventInput<Contract>[]): Promise<StreamEvent[]>;
-};
-
-/** A stored file as `itx.files` answers it: its path, content type and size. */
-type FileRecord = { path: string; contentType: string; size: number };
-/** What a file handle's dotted members reach. */
-type FileHandle = {
-  put(input: {
-    contentType?: string;
-    data: Uint8Array | ArrayBuffer | string;
-  }): Promise<FileRecord>;
-  bytes(): Promise<Uint8Array>;
-  head(): Promise<FileRecord | null>;
-  delete(): Promise<void>;
-  url(input?: {
-    method?: "GET" | "PUT";
-    expiresInSeconds?: number;
-  }): Promise<{ url: string; expiresAt: string }>;
 };
 
 /** What `buildLibrary` closes over beside `itx`. */
@@ -219,17 +188,17 @@ export function buildLibrary(
 
 // ── run ── `itx.run(script)`: a request on the log, its settlement awaited. `runScript` appends
 // `itx/run-requested` and waits for the `run-settled` naming that request's offset; the EXECUTION is the
-// context DO's runner (iterate-context-durable-object.ts `#executeRun`), which calls `executeScript`
-// below at the request's commit — so a literal `run-requested` appended by anyone (a client over
-// /api, the agent's loop, a schedule) runs exactly as `itx.run` does, and both leave the same pair
-// of events. The script is the text of a function of one parameter — `async (itx) => …` — spliced
-// VERBATIM into the template below (a caller's own code in its own confined isolate: the
-// trusted-client doctrine), so a text that is not one function expression fails at load, in the
-// loader's words. It takes no arguments: a script is an agent's whole output (an alternative to a
-// tool call), its values baked in. The template is the smallest WorkerEntrypoint that hosts it:
-// `run()` hands it the scope of ONE `withItx` round trip, as the SDK's ConfigWorker does, so the
-// scope and every call the script made through it are released when it settles — its unawaited ones
-// and its deadline's included.
+// context DO's runner (iterate-context-durable-object.ts `#startRequestedRuns`), which calls
+// `executeScript` below at the request's commit, or a processor's request in the next alarm pass —
+// so a literal `run-requested` appended by anyone (a client over /api, the agent's loop, a schedule)
+// runs exactly as `itx.run` does, and both leave the same pair of events. The script is the text of
+// a function of one parameter — `async (itx) => …` — spliced VERBATIM into the template below (a
+// caller's own code in its own confined isolate: the trusted-client doctrine), so a text that is not
+// one function expression fails at load, in the loader's words. It takes no arguments: a script is
+// an agent's whole output (an alternative to a tool call), its values baked in. The template is the
+// smallest WorkerEntrypoint that hosts it: `run()` hands it the scope of ONE `withItx` round trip,
+// as the SDK's ConfigWorker does, so the scope and every call the script made through it are
+// released when it settles — its unawaited ones and its deadline's included.
 // The call rides `itx.workers.get(...).run()` on the handle the library holds, so a rule on
 // `itx.workers` applies to it like any other call.
 
@@ -377,7 +346,7 @@ export async function runScript(itx: LibraryItx, script: unknown): Promise<unkno
     afterOffset = settled.offset;
     // Validated at the append boundary against CoreContract's schema (core-processor.ts), so the
     // payload IS a RunSettled: read as such, never re-parsed — the library takes only itx, and the
-    // contract's TYPE is free to import where its runtime is not (library.test.ts, the boundary).
+    // contract's TYPE is free to import where its runtime is not (the library rule, above).
     const { requestOffset: settledOffset, settlement } = settled.payload as RunSettled;
     if (settledOffset !== requestOffset) continue;
     if (settlement.status === "succeeded") return settlement.result;
@@ -418,35 +387,42 @@ function entityRoot<Handle>(
   contract: EntityContract,
 ): EntityRoot<Handle> {
   const collection = `${name}s` as const;
+  // CREATING AND DELETING REACH ONLY STRICTLY BENEATH THE CALLER'S ORIGIN (`Caller.path`, stamped by
+  // the platform, never an argument). Its hops are the platform's (below), so this is what bounds a
+  // jail granted the collection (`itx.repos ⇒ itx.builtins.repos`): reaching further, it could delete
+  // what is not its own (`/repos/config`, for good) or plant a context anywhere, linked to itself.
+  // `get` and `list` stay project-wide: agents edit `/repos/config`, and a workspace mounts every repo.
+  const beneathTheOrigin = (verb: "create" | "delete", path: string) => {
+    const origin = originOf(deps.caller(), deps.path);
+    const absolute = resolveContextPath(origin, path);
+    if (absolute === origin || !absolute.startsWith(origin === "/" ? "/" : `${origin}/`))
+      throw codedError(
+        "FORBIDDEN",
+        `${collection}.${verb}(${JSON.stringify(path)}) from ${JSON.stringify(origin)}: a context creates and deletes only beneath itself`,
+      );
+    return { origin, absolute };
+  };
   return {
     get: (path) =>
       entityHandle(itx, path, name, contract, deps.caller(), deps.path) as InvokeHandle & Handle,
     list: () =>
       projectFacet(itx, [[collection], ["list"]]) as Promise<{ path: string; createdAt: string }[]>,
-    // THE CREATION, from the caller's context: the path resolved against it, and the CREATOR — the
-    // caller's originating context, which the platform stamped, never an argument. The collection's
-    // saga on the `project` facet writes the parent link `itx ⇒ itx.builtins.cd(creator)` on the new
-    // context with `<entity>/create-requested`, before the certificate (itx-expression-rewriting.ts
-    // rule 3: everything the new context does not claim, its creator answers). A created entity
-    // answers at once, and nothing re-points it.
+    // THE CREATION, beneath the CREATOR, the caller's origin. The collection's saga on the `project`
+    // facet writes the parent link `itx ⇒ itx.builtins.cd(creator)` on the new context with
+    // `<entity>/create-requested`, before the certificate (itx-expression-rewriting.ts rule 3:
+    // everything the new context does not claim, its creator answers). The link points up, so it
+    // closes no cycle. A created entity answers at once, and nothing re-points it.
     create: async (path) => {
-      const creator = originOf(deps.caller(), deps.path);
-      const absolute = resolveContextPath(creator, path);
-      // A context never creates its own ancestor: the link it would write there points back down at
-      // itself — a two-context cycle — and a child never holds more than its creator.
-      if (creator !== absolute && creator.startsWith(absolute === "/" ? "/" : `${absolute}/`))
-        throw codedError(
-          "FORBIDDEN",
-          `${collection}.create(${JSON.stringify(path)}) from ${JSON.stringify(creator)}: a context does not create its own ancestor`,
-        );
-      return projectFacet(itx, [[collection], ["create", absolute, { creator }]]) as Promise<{
-        path: string;
-      }>;
+      const { origin, absolute } = beneathTheOrigin("create", path);
+      return projectFacet(itx, [
+        [collection],
+        ["create", absolute, { creator: origin }],
+      ]) as Promise<{ path: string }>;
     },
     delete: async (path) =>
       projectFacet(itx, [
         [collection],
-        ["delete", resolveContextPath(originOf(deps.caller(), deps.path), path)],
+        ["delete", beneathTheOrigin("delete", path).absolute],
       ]) as Promise<{ path: string }>,
   };
 }
@@ -455,7 +431,9 @@ function entityRoot<Handle>(
 // at a jailed context (`itx.repos ⇒ itx.builtins.repos` beside the bare `null`) runs these verbs
 // THERE, where `itx.cd` is masked — the verbs must still reach the entity's context and the catalog
 // at `/`. What a context may reach OF the library its table says; how the library gets there is not
-// the table's business (the same rule as the runner's own log traffic, below).
+// the table's business (the same rule as the runner's own log traffic, below). The one exception is
+// the typed `append` (`entityHandle`): it is the caller's own write, so it goes as the caller's
+// `itx.cd(path).append` would, through the table where the library runs.
 
 /** ONE dispatch on the `project` facet at `/` — the catalog host, where the collections live. */
 async function projectFacet(itx: LibraryItx, steps: ItxExpression): Promise<unknown> {
@@ -466,7 +444,9 @@ async function projectFacet(itx: LibraryItx, steps: ItxExpression): Promise<unkn
 }
 
 /** What `entityHandle` reads off a contract: the payload schema of an event type it owns, or none. */
-type EntityContract = { payloadSchemaFor?: (type: string) => z.ZodType | undefined };
+type EntityContract = {
+  payloadSchemaFor?: (type: string) => z.ZodType | undefined;
+};
 
 // An InvokeHandle's dotted members are DYNAMIC (expression.ts: every unknown member reduces to one
 // dispatch), so a handle types as the facet it dispatches to — the first-party class the name hosts
@@ -477,7 +457,8 @@ type EntityContract = { payloadSchemaFor?: (type: string) => z.ZodType | undefin
 /** The `name` facet on the context at `path`, and the typed write of `contract`'s events there: a
  *  first step `["append", ...events]` with nothing after it validates each event's payload against
  *  the contract (a type the contract does not own is refused, naming both) and appends the parsed
- *  events on the context — the caller's principal on every one; any other chain is one dispatch on
+ *  events on the context through the table (a jail's bare null refuses it, as it would the caller's
+ *  own `itx.cd(path).append`) — the caller's stamp on every one; any other chain is one dispatch on
  *  the facet. */
 function entityHandle(
   itx: LibraryItx,
@@ -490,7 +471,7 @@ function entityHandle(
   return new InvokeHandle(async (itxExpressionSteps) => {
     // TWO dotted calls, never one chain (the `run` section says why): the sibling's handle first —
     // in-process a VALUE — then the chain relative to it. The path means the CALLER's `./x`.
-    const context = await itx.builtins.cd(resolveContextPath(originOf(caller, ownPath), path));
+    const entityPath = resolveContextPath(originOf(caller, ownPath), path);
     const [first, ...rest] = itxExpressionSteps;
     if (Array.isArray(first) && first[0] === "append" && rest.length === 0) {
       const [, ...events] = first;
@@ -513,7 +494,30 @@ function entityHandle(
           );
         return { ...input, payload: schema.parse(input.payload ?? {}) };
       });
-      return context.invoke([["append", ...parsed]]);
+      // The hop is the library's, so the entity's context never learns that loaded code wrote: the
+      // platform's keys are refused here, as the built-in append refuses them (caller.ts
+      // `refusePlatformIdempotencyKeys` says why; the library imports none of the platform's code).
+      if (caller.app)
+        for (const { idempotencyKey } of parsed)
+          if (idempotencyKey && /^(?:itx|project|repo|workspace|secret)[/@]/.test(idempotencyKey))
+            throw codedError(
+              "FORBIDDEN",
+              `idempotency key ${JSON.stringify(idempotencyKey)} is the platform's`,
+            );
+      return (await itx.cd(entityPath)).invoke([["append", ...parsed]]);
+    }
+    const context = await itx.builtins.cd(entityPath);
+    // A repo's pull or push reaches its remote through the CALLER's egress, never the repo's (whose
+    // parent link leads to its creator's): the caller's own `itx.fetch`, through its own rules, so a
+    // caller that may not fetch reaches no remote, and no project secret, through a repo.
+    if (name === "repo" && Array.isArray(first) && (first[0] === "pull" || first[0] === "push")) {
+      const callerContext = await itx.builtins.cd(originOf(caller, ownPath));
+      return context.invoke([
+        "facets",
+        ["get", name],
+        [first[0], first[1], (request: Request) => callerContext.invoke([["fetch", request]])],
+        ...rest,
+      ]);
     }
     return context.invoke(["facets", ["get", name], ...itxExpressionSteps]);
   });

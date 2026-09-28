@@ -1,0 +1,8 @@
+{
+  // Worker code, typed against the Cloudflare types: the agents run as loaded Durable Objects.
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "types": ["@cloudflare/workers-types"]
+  },
+  "include": ["src", "tsdown.config.ts"]
+}

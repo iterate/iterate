@@ -1,0 +1,10 @@
+{
+  // Worker code typed against the Cloudflare types (voice runs as a loaded worker and facets), and
+  // tests that run in Node: the apps' mix of libs.
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "lib": ["ES2024", "ESNext.Disposable", "DOM", "DOM.Iterable"],
+    "types": ["@cloudflare/workers-types", "node"]
+  },
+  "include": ["src", "tsdown.config.ts", "vitest.config.ts"]
+}

@@ -14,7 +14,7 @@ const PROJECT_ID = /^[A-Za-z0-9_-]+$/;
  *  (`session.user` is exactly `session.projects.get(...)` one namespace over) — except that it is NOT
  *  NAVIGABLE: `cd` is refused for every caller, on a global edge handle (IterateContextRpcTarget.cd)
  *  and inside a global DO (built-ins.ts `cd`). A catalog project's id is minted (`prj_<hex>`), but
- *  the admin secret addresses a project the catalog never heard of by any id, so `projects.get` and
+ *  the admin secret addresses a project the catalog never heard of by any `prj_…` id, so `projects.get` and
  *  the MCP `project` refuse the word, and `DurableObjectNameCodec.address` refuses every
  *  `global--…` id (`GLOBAL_OWNER_ID_PREFIX`). */
 export const GLOBAL_PROJECT_ID = "global";
@@ -69,6 +69,14 @@ export function ancestorPathsOf(path: string): string[] {
   const segments = resolveContextPath("/", path).split("/").filter(Boolean);
   return segments.map((_, index) => `/${segments.slice(0, index).join("/")}`);
 }
+
+/** The reset a context's `destroy()` ends with (iterate-context-durable-object.ts), which is also
+ *  the answer its caller reads as done (project/durable-object.ts). */
+export const CONTEXT_DESTROYED = "destroyed: its project was deleted";
+
+/** What a deleted project's root answers, coded FORBIDDEN, after `project <id> `: it is never born
+ *  again (iterate-context-durable-object.ts `#refuseBirthOfDeletedProjectRoot`). */
+export const PROJECT_DELETED = "was deleted: nothing is left of it";
 
 /** A context's path relative to its owner's root (`resourceScope`) — what a secret's placeholder
  *  spells: `/secrets/shop` for a project's `/secrets/shop` and a user's `/users/<id>/secrets/shop`

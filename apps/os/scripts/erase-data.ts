@@ -9,8 +9,8 @@
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import { createCli } from "trpc-cli";
+import { CLOUDFLARE_API, fetchRetryingPlatformFailures } from "@iterate-com/shared/platform-retry";
 import { OS_DOPPLER_PROJECT, osEnvs } from "../../../envs.ts";
-import { fetchCloudflareWith429Retry } from "../../../scripts/lib/cloudflare-429-retry.ts";
 import { getWorkerDoNamespaces, resetWorkerDurableObjects } from "../../../scripts/lib/do-reset.ts";
 import { CloudflareApiError, resolveEnvContext } from "../../../scripts/lib/env-context.ts";
 import { readWranglerBase } from "./generate-wrangler-config.ts";
@@ -69,6 +69,8 @@ async function eraseDataWith(
     env: options.env,
   });
   const { env, cf } = context;
+  if (!env.resources)
+    throw new Error(`${context.name} records no resource ids in envs.ts: nothing to erase them by`);
   console.log(
     `${options.dryRun ? "Inventory" : "Erase"}: ${context.name}, worker ${env.workerName}`,
   );
@@ -114,11 +116,14 @@ async function eraseDataWith(
     let cursor = "";
     do {
       const route = `/accounts/${env.cloudflareAccountId}${store.route}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`;
-      const response = await fetchCloudflareWith429Retry(`GET ${route}`, () =>
-        fetch(`https://api.cloudflare.com/client/v4${route}`, {
-          headers: { authorization: `Bearer ${context.secrets.CLOUDFLARE_API_TOKEN}` },
-          signal: AbortSignal.timeout(60_000),
-        }),
+      const response = await fetchRetryingPlatformFailures(
+        `GET ${route}`,
+        (signal) =>
+          fetch(`https://api.cloudflare.com/client/v4${route}`, {
+            headers: { authorization: `Bearer ${context.secrets.CLOUDFLARE_API_TOKEN}` },
+            signal,
+          }),
+        { area: "cloudflare-api", schedule: CLOUDFLARE_API, idempotent: true, timeoutMs: 60_000 },
       );
       const body = Listing.parse(await response.json());
       if (!response.ok || !body.success)
@@ -146,7 +151,7 @@ async function eraseDataWith(
     z
       .array(z.object({ results: z.array(z.looseObject({})) }))
       .parse(
-        await cf(`/d1/database/${env.resources.dbId}/query`, {
+        await cf(`/d1/database/${env.resources!.dbId}/query`, {
           method: "POST",
           body: JSON.stringify({ sql }),
         }),
@@ -226,7 +231,6 @@ async function eraseDataWith(
       CLOUDFLARE_ACCOUNT_ID: env.cloudflareAccountId,
     },
     compatibilityDate,
-    containerClassNames: [],
   });
   if ((await services.getWorkerDoNamespaces(context, env.workerName)).length)
     throw new Error(

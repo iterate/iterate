@@ -13,7 +13,7 @@ test("production's project hosts come from envs.ts", () => {
   ]);
 });
 
-test.each<{ case: string; hostStatus: number; pages: boolean }>([
+test.for<{ case: string; hostStatus: number; pages: boolean }>([
   { case: "a host that answers", hostStatus: 200, pages: false },
   { case: "a host that redirects still answers", hostStatus: 302, pages: false },
   { case: "a host's own 404 is the site's answer", hostStatus: 404, pages: false },
@@ -33,7 +33,7 @@ test.each<{ case: string; hostStatus: number; pages: boolean }>([
   expect(Boolean(page)).toBe(pages);
 });
 
-test.each<{ case: string; previousVersion?: string; liveVersion?: string; pages: boolean }>([
+test.for<{ case: string; previousVersion?: string; liveVersion?: string; pages: boolean }>([
   {
     case: "/version names a new version",
     previousVersion: "old",
@@ -79,13 +79,15 @@ test("the page names a /version that did not move and each host that is down, an
       ],
       runUrl: "https://depot.dev/run",
     }),
-  ).toMatchInlineSnapshot(`
-    "🚨 prd post-deploy check failed after the os-prd deploy <@U067G4QRFK2>
-    • https://os.iterate.com/version still names \`0f3a9c21\`, the version live before the deploy
-    • the project host https://iterate.com/ answered 421
-    • the project host https://lispwoso.com/ did not answer
-    <https://depot.dev/run|the deploy run>"
-  `);
+  ).toBe(
+    [
+      "🚨 prd post-deploy check failed after the os-prd deploy <@U067G4QRFK2>",
+      "• https://os.iterate.com/version still names `0f3a9c21`, the version live before the deploy",
+      "• the project host https://iterate.com/ answered 421",
+      "• the project host https://lispwoso.com/ did not answer",
+      "<https://depot.dev/run|the deploy run>",
+    ].join("\n"),
+  );
 });
 
 test("every prd deploy checks the project hosts at once, in the deploy job, before notifying", () => {
@@ -96,7 +98,9 @@ test("every prd deploy checks the project hosts at once, in the deploy job, befo
   const steps = workflow.jobs.deploy?.steps || [];
   const deploy = steps.findIndex((step) => step.id === "deploy");
   const previous = steps.findIndex((step) => step.id === "previous");
-  expect(steps[deploy]?.run).toBe("doppler run -- pnpm run-script deploy --env prd");
+  expect(steps[deploy]?.run).toBe(
+    "doppler run --project os --config prd -- pnpm run-script deploy --env prd",
+  );
   // the version live before the deploy is read first, so the check waits for the new one
   expect(previous).toBeGreaterThanOrEqual(0);
   expect(previous).toBeLessThan(deploy);

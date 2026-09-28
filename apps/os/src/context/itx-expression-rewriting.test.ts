@@ -17,6 +17,7 @@ import {
   InvokeHandle,
 } from "iterate/expression";
 import type { RewriteRuleListEntry } from "iterate/api";
+import type { Caller } from "../caller.ts";
 import { normalizeControlEvent } from "../stream/core-processor.ts";
 import { nodeSqliteStream } from "../stream/test-support.ts";
 import {
@@ -29,6 +30,7 @@ import {
   BUILT_IN_ROOT_DESCRIPTIONS,
   CONTEXT_ROOTS,
   admitLoadedCodeRow,
+  refuseLiftingAJail,
   describeRewriteRules,
 } from "./itx-expression-rewriting.ts";
 
@@ -1173,9 +1175,28 @@ test("the app wall (`Caller.app`): on the INPUT expression only, `itx.builtins` 
     expect(() => resolver.resolve(`itx.cd('${to}').whoami()`)).toThrow(/goes down only/);
   expect(() => resolver.resolve("itx.cd('./b').cd('../..').whoami()")).toThrow(/goes down only/);
 });
+test.for<{ call: string; refused?: RegExp }>([
+  { call: "itx.cd('/').append({ type: 'note' })" },
+  { call: "itx.cd('/agents/b').append({ type: 'note' }, { type: 'note' })" },
+  { call: "itx.cd('..').append({ type: 'events.iterate.com/itx/run-requested' })" },
+  { call: "itx.cd('/').append", refused: /goes down only/ },
+  { call: "itx.cd('/').append({ type: 'note' }).offset", refused: /goes down only/ },
+  { call: "itx.cd('/').cd('./x').append({ type: 'note' })", refused: /goes down only/ },
+  { call: "itx.cd('./b').cd('..').append({ type: 'note' })", refused: /goes down only/ },
+  { call: "itx.tool.cd('/').append({ type: 'note' })", refused: /goes down only/ },
+  { call: "itx.cd('/').builtins.append({ type: 'note' })", refused: /goes down only/ },
+  { call: "itx.cd('/').run('async () => 1')", refused: /goes down only/ },
+])(
+  "the app wall, but for an append: loaded code at a child reaches the whole project with exactly `itx.cd(path).append(…)` — $call",
+  ({ call, refused }) => {
+    const resolve = () => appResolverAt("/agents/a", CHILD).resolve(call);
+    if (refused) expect(resolve).toThrow(refused);
+    else expect(resolve).not.toThrow();
+  },
+);
 test("the app wall (`Caller.app`): on the INPUT expression only, `itx.builtins` is refused and `cd` goes down only — from the root too: a ROW loaded code appends is walled on its target: the fixed point and a cd above are refused, its own lend (`itx.builtins.rpcStubs.get`) and a plain expression pass, a mask says nothing", () => {
   const row = (type: string, target: unknown) => () =>
-    admitLoadedCodeRow({ type, payload: { match: "itx.x", target } }, "/agents/a");
+    admitLoadedCodeRow({ type, payload: { match: "itx.x", target } }, "/agents/a", "/agents/a");
   expect(row("events.iterate.com/itx/rewrite-rule-configured", "itx.builtins.cd('/')")).toThrow(
     /not a loaded worker's word/,
   );
@@ -1205,6 +1226,188 @@ test("the app wall (`Caller.app`): on the INPUT expression only, `itx.builtins` 
   ).not.toThrow();
   expect(row("events.iterate.com/itx/rewrite-rule-configured", null)).not.toThrow();
   expect(row("events.iterate.com/note/added", "itx.builtins.cd('/')")).not.toThrow(); // not a row
+});
+// A SOURCE PRODUCER runs at the host as the context itself when the code loads, so it is walled like
+// the call around it, at the context the walk has reached: in a call's spec and in a row's target.
+const PRODUCER_ROWS: { name: string; call: string; refused?: RegExp }[] = [
+  {
+    name: "the config repo's modules: passes",
+    call: "itx.workers.get({ source: \"itx.repos.get('/repos/config').modules()\", cacheKey: 'k' }).run()",
+  },
+  {
+    name: "a descendant's kv, from a descendant: passes",
+    call: "itx.cd('./b').workers.get({ source: \"itx.cd('./c').kv.get('src')\", cacheKey: 'k' }).run()",
+  },
+  {
+    name: "the fixed point in a worker's producer: refused",
+    call: "itx.workers.get({ source: \"itx.builtins.cd('/').append({ type: 'x' })\", cacheKey: 'k' }).run()",
+    refused: /not a loaded worker's word/,
+  },
+  {
+    name: "a cd to the root in a facet's producer: refused",
+    call: "itx.facets.get('f', { source: \"itx.cd('/').append({ type: 'x' })\", className: 'F', cacheKey: 'k' }).x()",
+    refused: /goes down only/,
+  },
+  {
+    name: "a cd up in a processor's producer: refused",
+    call: "itx.processors.enable('p', { source: \"itx.cd('..').kv.get('src')\", className: 'P', cacheKey: 'k' })",
+    refused: /goes down only/,
+  },
+  {
+    name: "walled where the walk has reached: a descendant's producer may not name its base",
+    call: "itx.cd('./b').workers.get({ source: \"itx.cd('/agents/a').kv.get('src')\", cacheKey: 'k' }).run()",
+    refused: /goes down only/,
+  },
+];
+test.for(PRODUCER_ROWS)("the app wall walls a source producer: $name", ({ call, refused }) => {
+  const resolve = () => appResolverAt("/agents/a", CHILD).resolve(call);
+  if (refused) expect(resolve).toThrow(refused);
+  else expect(resolve).not.toThrow();
+});
+test("the app wall on a row walls the source producer in its target too", () => {
+  const row = (source: string) => () =>
+    admitLoadedCodeRow(
+      {
+        type: "events.iterate.com/itx/subscription-configured",
+        payload: {
+          name: "p",
+          target: [
+            "itx",
+            "facets",
+            ["get", "p", { source, className: "P", cacheKey: "k" }],
+            "processEventBatch",
+          ],
+        },
+      },
+      "/agents/a",
+      "/agents/a",
+    );
+  expect(row("itx.builtins.cd('/').kv.get('src')")).toThrow(/not a loaded worker's word/);
+  expect(row("itx.kv.get('src')")).not.toThrow();
+});
+test("the app wall (`Caller.app`): on the INPUT expression only, `itx.builtins` is refused and `cd` goes down only — from the root too: a row has no way round the wall: loaded code removes no row (`ifTarget`, null or not), a scheduled batch is walled event by event as it is scheduled, and a fetch route and the ingress are set only from the project's root", () => {
+  const append =
+    (event: { type: string; payload?: unknown }, base = "/agents/a") =>
+    () =>
+      admitLoadedCodeRow(event, base, base);
+  for (const ifTarget of [null, "itx.cd('./b').tool"])
+    expect(
+      append({
+        type: "events.iterate.com/itx/rewrite-rule-configured",
+        payload: { match: "itx.tool", target: null, ifTarget },
+      }),
+    ).toThrow(/removes no row/);
+  const schedule = (events: { type: string; payload?: unknown }[]) => ({
+    type: "events.iterate.com/itx/schedule-set",
+    payload: { key: "k", when: { afterMs: 0 }, events },
+  });
+  const rewrite = (target: string) => ({
+    type: "events.iterate.com/itx/rewrite-rule-configured",
+    payload: { match: "itx.tool", target },
+  });
+  expect(append(schedule([rewrite("itx.builtins.cd('/').tool")]))).toThrow(
+    /not a loaded worker's word/,
+  );
+  expect(
+    append(schedule([{ type: "events.iterate.com/note/added" }, rewrite("itx.cd('..').tool")])),
+  ).toThrow(/goes down only/);
+  expect(
+    append(schedule([{ type: "events.iterate.com/note/added" }, rewrite("itx.cd('./b').tool")])),
+  ).not.toThrow();
+  const route = {
+    type: "events.iterate.com/itx/fetch-route-configured",
+    payload: {
+      fetchRouteName: "leak",
+      requestMatcher: { routingSlug: "leak" },
+      target: "itx.tool",
+    },
+  };
+  expect(append(route)).toThrow(/set only from the project's root/);
+  expect(append(schedule([route]))).toThrow(/set only from the project's root/);
+  expect(append(route, "/")).not.toThrow();
+  const ingress = {
+    type: "events.iterate.com/itx/ingress-configured",
+    payload: { target: "itx.builtins.kv" },
+  };
+  expect(append(ingress)).toThrow(/set only from the project's root/);
+  expect(append(ingress, "/")).not.toThrow();
+});
+test.for<{ target: string; landsAt: string; refused?: true }>([
+  { target: "itx.cd('./x').tool", landsAt: "/", refused: true }, // at `/`, `./x` is `/x`
+  { target: "itx.cd('/agents/a/x').tool", landsAt: "/" },
+  { target: "itx.cd('..').tool", landsAt: "/agents/a/sandbox" }, // at the sandbox, `..` is the writer itself
+  { target: "itx.cd('../..').tool", landsAt: "/agents/a/sandbox", refused: true },
+  { target: "itx.tool", landsAt: "/" },
+])(
+  "a row's target is walled as it resolves where it lands, beneath where the call started — $target at $landsAt",
+  ({ target, landsAt, refused }) => {
+    const row = {
+      type: "events.iterate.com/itx/rewrite-rule-configured",
+      payload: { match: "itx.x", target },
+    };
+    const admit = () => admitLoadedCodeRow(row, "/agents/a", landsAt);
+    if (refused) expect(admit).toThrow(/goes down only/);
+    else expect(admit).not.toThrow();
+  },
+);
+const reparent = { match: ["itx"], target: ["itx", ["cd", "./open"]] };
+test.for<{
+  name: string;
+  payload: Record<string, unknown>;
+  caller: Caller;
+  jailed?: false;
+  refused?: true;
+}>([
+  {
+    name: "loaded code re-points it",
+    payload: reparent,
+    caller: { principal: null, app: true },
+    refused: true,
+  },
+  {
+    name: "the kernel (a schedule's occurrence, a delivery) re-points it",
+    payload: reparent,
+    caller: { principal: null },
+    refused: true,
+  },
+  {
+    name: "loaded code removes it",
+    payload: { match: ["itx"], target: null, ifTarget: null },
+    caller: { principal: null, app: true },
+    refused: true,
+  },
+  {
+    name: "loaded code masks it again",
+    payload: { match: ["itx"], target: null },
+    caller: { principal: null, app: true },
+  },
+  {
+    name: "loaded code writes a row beside it",
+    payload: { match: ["itx", "tool"], target: ["itx", ["cd", "./tool"]] },
+    caller: { principal: null, app: true },
+  },
+  {
+    name: "a member's session lifts it",
+    payload: reparent,
+    caller: { principal: { actor: "user_1" }, grant: "g" },
+  },
+  {
+    name: "no jail: loaded code re-points its own parent link",
+    payload: reparent,
+    caller: { principal: null, app: true },
+    jailed: false,
+  },
+])("a jail is lifted only by a person — $name", ({ payload, caller, jailed, refused }) => {
+  const rules: Record<string, ItxExpressionRewriteRule> =
+    jailed === false ? {} : { itx: { match: ["itx"], target: null } };
+  const refuse = () =>
+    refuseLiftingAJail(
+      [{ type: "events.iterate.com/itx/rewrite-rule-configured", payload }],
+      rules,
+      caller,
+    );
+  if (refused) expect(refuse).toThrow(/only a member's session re-points or removes it/);
+  else expect(refuse).not.toThrow();
 });
 
 test("cd forwards a factory and terminal fetch together, without exporting an intermediate handle over RPC", async () => {

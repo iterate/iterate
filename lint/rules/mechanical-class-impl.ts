@@ -1,4 +1,4 @@
-import { SignatureKind } from "@typescript/native-preview/unstable/sync";
+import { SignatureKind } from "typescript/unstable/sync";
 import type { Rule } from "eslint";
 
 import {

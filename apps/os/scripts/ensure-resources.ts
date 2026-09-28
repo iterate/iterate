@@ -32,7 +32,7 @@ export default async function ensureResources(options: { env?: string } = {}) {
   }
   // The control plane's D1 (the wrangler generator binds `<resourceNamePrefix>-db` as DB); the deploy
   // migrates it (scripts/d1.ts).
-  resources.dbId = (await ensureD1(ctx.cf, `${ctx.env.resourceNamePrefix}-db`)).uuid;
+  resources.dbId = (await ensureD1(ctx.cf, `${ctx.env.resourceNamePrefix}-db`, "weur")).uuid;
   // The one R2 bucket behind `itx.r2` (the wrangler generator names it `<resourceNamePrefix>-files`).
   const bucketName = `${ctx.env.resourceNamePrefix}-files`;
   const buckets = await ctx.cf<{ buckets: { name: string }[] }>("/r2/buckets?per_page=1000");
@@ -55,9 +55,9 @@ export default async function ensureResources(options: { env?: string } = {}) {
   // IDs live in git, so bring-up always ends in a reviewed commit: on a mismatch with envs.ts, print
   // the entry to paste and fail.
   if (
-    resources.oauthKvId !== ctx.env.resources.oauthKvId ||
-    resources.itxKvId !== ctx.env.resources.itxKvId ||
-    resources.dbId !== ctx.env.resources.dbId
+    resources.oauthKvId !== ctx.env.resources?.oauthKvId ||
+    resources.itxKvId !== ctx.env.resources?.itxKvId ||
+    resources.dbId !== ctx.env.resources?.dbId
   ) {
     console.log(`\nenvs.ts is out of date for ${ctx.name} — update its resources entry to:\n`);
     console.log(`  resources: ${JSON.stringify(resources, null, 2).replaceAll("\n", "\n  ")},\n`);

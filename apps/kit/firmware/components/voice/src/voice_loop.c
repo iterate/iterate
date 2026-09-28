@@ -311,9 +311,8 @@ EXT_RAM_BSS_ATTR static struct {
   uint32_t answers_started;
   /** Answers that replaced speaker audio not yet heard. */
   uint32_t answers_superseded_midplay;
-  /* Replacement controls observed, and the time of the latest one. */
-  uint32_t speaker_drops;
-  uint32_t last_drop_uptime_ms;
+  /* Board uptime when the latest answer started. */
+  uint32_t last_answer_start_uptime_ms;
   uint32_t voice_stream_generation;
   /* Health serialization must fit completely; truncation is not sent. */
   char stats_buffer[2816];
@@ -530,6 +529,9 @@ static void on_session_ended(void *context) {
    * A press made before any session has no call under it yet, and waits.
    */
   if (runtime.activation_live) end_local_activation("session-lost", "call ended");
+  /* The capability modules drop what the session lent them: a camera frame on
+   * loan, a screen upload, the answer a screen owes a call that died with it. */
+  iterate_kit_peer_session_ended(&runtime.peer);
   for (size_t index = 0U; index < 4U; ++index) {
     iterate_kit_stream_subscription_session_ended(&runtime.subscriptions[index]);
   }
@@ -701,9 +703,7 @@ static void on_control(
      * and disarms its starvation accounting on this task. */
     if (abandon_speaker_audio() > 0U) ++runtime.answers_superseded_midplay;
     ++runtime.answers_started;
-    /* Timestamp the local observation for health diagnostics. */
-    ++runtime.speaker_drops;
-    runtime.last_drop_uptime_ms = (uint32_t)(esp_timer_get_time() / 1000);
+    runtime.last_answer_start_uptime_ms = (uint32_t)(esp_timer_get_time() / 1000);
     atomic_store_explicit(
         &runtime.answer_declared_done, false, memory_order_release);
     runtime.view.screen = ITERATE_KIT_VOICE_SCREEN_LISTENING;
@@ -2042,11 +2042,9 @@ static size_t health_json(char *out, size_t capacity) {
     {"spkAnswerStarts", runtime.answers_started},
     /* The subset that cost the listener audio: superseded while still playing. */
     {"spkSupersededMidplay", runtime.answers_superseded_midplay},
-    /* Drops obeyed, and the board uptime at the last one. Compare against
-     * `uptimeMs` in this same payload to get how long ago it happened, on
-     * a clock that owes nothing to the event stream. */
-    {"spkDrops", runtime.speaker_drops},
-    {"spkLastDropUptimeMs", runtime.last_drop_uptime_ms},
+    /* Compare against `uptimeMs` in this same payload to get how long ago the
+     * latest answer started, on a clock that owes nothing to the event stream. */
+    {"spkLastAnswerStartUptimeMs", runtime.last_answer_start_uptime_ms},
     {"spkWaitPriming", runtime.playout.stats.waits_priming},
     {"spkAnswerDrains", runtime.playout.stats.waits_dry},
     {"batches", runtime.voice_stream->batches_on_connection},
@@ -2719,6 +2717,8 @@ void iterate_kit_voice_loop_step(void) {
   {
     (void)esp_task_wdt_reset();
     (void)iterate_kit_itx_transport_poll(&transport, 16U);
+    /* A call whose answer waits on hardware (a screen refresh) is answered here. */
+    iterate_kit_peer_step(&runtime.peer);
     /*
      * The controls, at a human cadence rather than the loop's.
      *
@@ -3223,7 +3223,7 @@ void iterate_kit_voice_loop_step(void) {
       }
       /*
        * THERE IS DELIBERATELY NO BRIDGE-SILENCE WATCHDOG. The bridge can stop
-       * without appending the conversation-ended that would say so, but no
+       * without appending the call-ended that would say so, but no
        * bridge-sourced event arrives while nobody is speaking, so twenty
        * seconds of a person thinking is indistinguishable from a dead bridge —
        * such a watchdog would drop a live call on every thoughtful pause.

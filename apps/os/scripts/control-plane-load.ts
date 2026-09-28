@@ -6,13 +6,14 @@
  * one triple costs ~20). Prints the wall time and the latency distribution per verb, every refusal,
  * then reads back what the control plane knows: the people's reach (their organization, their
  * project), the operator's listings (every user, organization and project counted). A logic error shows as a mismatch; a bottleneck as a verb whose p95 grows with the
- * load. Nothing here is cleaned up: the preview's `pnpm preview reset` is.
+ * load. Nothing here is cleaned up: deleting the deployment is (`pnpm preview delete`, or the next
+ * push's Clean up superseded).
  *
- *   doppler run --project os --config preview -- sh -c 'ADMIN_API_SECRET="$(node -p "JSON.parse(process.env.APP_CONFIG).secrets.adminBearer")" pnpm control-plane-load --worker-base-url https://pr2828-os.iterate-dev-preview.workers.dev --triples 1000 --sockets 50'
+ *   doppler run --project os --config preview -- sh -c 'APP_CONFIG_SECRETS__ADMIN_BEARER="$(node -p "JSON.parse(process.env.APP_CONFIG).secrets.adminBearer")" pnpm control-plane-load --worker-base-url https://pr2828-a1b2c3d-os.iterate-dev-preview.workers.dev --triples 1000 --sockets 50'
  */
-import { newWebSocketRpcSession } from "capnweb";
+import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
+import { connectIterate } from "iterate/node";
 import { createCli } from "trpc-cli";
-import { WebSocket as UndiciWebSocket } from "undici";
 
 const quantiles = (samples: number[]) => {
   const sorted = [...samples].sort((a, b) => a - b);
@@ -30,49 +31,13 @@ export default async function controlPlaneLoad(options: {
   /** A stamp for this run's names; defaults to the time. */
   stamp?: string;
 }) {
-  const secret = process.env.ADMIN_API_SECRET;
-  if (!secret) throw new Error("ADMIN_API_SECRET unset");
+  const secret = process.env.APP_CONFIG_SECRETS__ADMIN_BEARER;
+  if (!secret) throw new Error("APP_CONFIG_SECRETS__ADMIN_BEARER unset");
   const triples = options.triples || 100;
   const socketCount = options.sockets || Math.max(1, Math.ceil(triples / 20));
   const stamp = options.stamp || Date.now().toString(36);
-  const apiUrl = new URL("/api", options.workerBaseUrl);
-  apiUrl.protocol = apiUrl.protocol === "https:" ? "wss:" : "ws:";
-
-  // The operator's surface (src/session.ts), spelled locally: this is a Node script, so it cannot
-  // import the worker-typed `IterateRpcTarget` (it drags in Cloudflare globals this config has no
-  // types for) — the shape a reader needs is written out, its list rows typed like the real
-  // `OrganizationRecord`/`ProjectRecord` so the reach check below reads them without a cast.
-  type Session = {
-    users: {
-      create(input: { email: string }): Promise<{ id: string }>;
-      list(): Promise<unknown[]>;
-    };
-    organizations: {
-      create(input: { name: string; ownerId: string }): Promise<{ id: string }>;
-      list(): Promise<{ id: string; role?: string; projects: number }[]>;
-    };
-    projects: {
-      create(input: { project: string; orgId: string }): Promise<{
-        whoami(): Promise<{ projectId: string; projectSlug?: string }>;
-        [Symbol.dispose](): void;
-      }>;
-      list(): Promise<{ id: string; slug: string; orgId: string }[]>;
-    };
-    [Symbol.dispose](): void;
-  };
-  const open = async () => {
-    const socket = new UndiciWebSocket(apiUrl);
-    const api = newWebSocketRpcSession<{
-      authenticate(credentials: {
-        type: "admin-secret";
-        secret: string;
-        as?: { email: string };
-      }): Promise<Session>;
-      [Symbol.dispose](): void;
-    }>(socket as unknown as WebSocket);
-    const session = await api.authenticate({ type: "admin-secret", secret });
-    return { socket, api, session };
-  };
+  const connect = (as?: { email: string }) =>
+    connectIterate({ baseUrl: options.workerBaseUrl, auth: { type: "admin-secret", secret, as } });
 
   const latency: Record<string, number[]> = { user: [], organization: [], project: [] };
   const refusals: string[] = [];
@@ -85,7 +50,7 @@ export default async function controlPlaneLoad(options: {
     return answer;
   };
 
-  const sockets = await Promise.all(Array.from({ length: socketCount }, open));
+  const sockets = await Promise.all(Array.from({ length: socketCount }, () => connect()));
   console.log(`${socketCount} sockets open; ${triples} triples in flight at once…`);
   const wall = Date.now();
   await Promise.all(
@@ -132,44 +97,32 @@ export default async function controlPlaneLoad(options: {
   console.log(
     `\nindex (root): ${users.length} users, ${organizations.length} organizations, ${projects.length} projects listed (${Date.now() - readBack} ms); ${indexed} of ${made.length} projects of this run indexed`,
   );
-  // a sample of people sign in as themselves and read their own reach: the organization and the project
+  // a sample of people sign in as themselves, each on a connection of its own, and read their own
+  // reach: the organization and the project
   const sample = made.filter((_, i) => i % Math.max(1, Math.floor(made.length / 20)) === 0);
   const reachStarted = Date.now();
   const mismatches: string[] = [];
   await Promise.all(
-    sample.map(async (m, i) => {
-      const { api } = sockets[i % socketCount]!;
-      const person = await api.authenticate({
-        type: "admin-secret",
-        secret,
-        as: { email: m.email },
-      });
-      try {
-        const [orgs, projects] = await Promise.all([
-          person.organizations.list(),
-          person.projects.list(),
-        ]);
-        const org = orgs.find((o) => o.id === m.orgId);
-        const project = projects.find((p) => p.id === m.projectId);
-        if (org?.role !== "owner" || org.projects !== 1 || project?.orgId !== m.orgId)
-          mismatches.push(`${m.email}: ${JSON.stringify({ orgs, projects })}`);
-      } finally {
-        person[Symbol.dispose]?.();
-      }
+    sample.map(async (m) => {
+      using person = await connect({ email: m.email });
+      const [orgs, projects] = await Promise.all([
+        person.session.organizations.list(),
+        person.session.projects.list(),
+      ]);
+      const org = orgs.find((o) => o.id === m.orgId);
+      const project = projects.find((p) => p.id === m.projectId);
+      if (org?.role !== "owner" || org.projects !== 1 || project?.orgId !== m.orgId)
+        mismatches.push(`${m.email}: ${JSON.stringify({ orgs, projects })}`);
     }),
   );
   console.log(
     `reach of ${sample.length} sampled people read in ${Date.now() - reachStarted} ms: ${mismatches.length} mismatches`,
   );
   for (const mismatch of mismatches.slice(0, 5)) console.log(`  ${mismatch}`);
-  for (const { session, api, socket } of sockets) {
-    session[Symbol.dispose]?.();
-    api[Symbol.dispose]?.();
-    socket.close();
-  }
+  for (const connection of sockets) connection[Symbol.dispose]();
   if (refusals.length || mismatches.length || indexed !== made.length)
     throw new Error("control-plane-load: refusals, mismatches or an index behind — see above");
   console.log("✅ every triple made, indexed and reachable");
 }
-if (process.argv[1]?.endsWith("control-plane-load.ts"))
+if (isMainModule(import.meta.url))
   void createCli({ ...import.meta, name: "control-plane-load" }).run();

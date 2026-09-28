@@ -1,6 +1,7 @@
 // The Notes app's sessions across workers: signed in on its own origin, and through a project's
 // config worker (apps/notes/config-worker.ts), each an OAuth grant of its own that the Dash's
-// sessions page ends without touching the other.
+// sessions page ends without touching the other. Through the project, the grant is the host's: a
+// project host's own under subdomains, the platform's under paths.
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { expect, type Page } from "@playwright/test";
@@ -8,6 +9,7 @@ import { transformSync } from "esbuild";
 import { projectUrlOf } from "iterate/project-ingress";
 import { readOsPlaywrightAuthConfig } from "../test-support/auth-config.ts";
 import { test } from "../test-support/test.ts";
+import { workerBaseUrl } from "../test-support/worker-base-url.ts";
 
 // the note's textbox is named by the file it edits (apps/notes/src/routes/_auth/projects.$slug.tsx)
 const noteFile = "/repos/config/notes/log.md";
@@ -45,26 +47,28 @@ test("the Notes app works through a project config worker, and its session there
   context,
   helpers,
 }) => {
-  const { ingressRouting, osBaseUrl: origin } = readOsPlaywrightAuthConfig();
-  // parked: under `paths` routing (every preview) Notes cannot be proxied at /projects/<p>/notes/:
-  // it ignores ITERATE_BASE_PATH_HEADER, its links and assets are root-absolute — #2908, pending the
-  // path-routed hosting decision. No CI job runs this until then. — revisit by 2026-10-21
-  test.skip(
-    ingressRouting?.type !== "subdomains",
-    "Notes is not base-path aware under a proxied project path (#2908)",
-  );
+  const { ingressRouting } = readOsPlaywrightAuthConfig();
   const { notes, dash } = appClients(helpers.appOrigin);
   await using fixture = await helpers.createFixture("notes-proxy");
   const { project } = fixture;
   const note = `Written on the independent app: ${project.slug}`;
-  // the same app on the project's `notes` routing slug: notes--<project>.<hostname>
-  const proxiedUrl = projectUrlOf(ingressRouting, origin, {
-    project: project.slug,
-    routingSlug: "notes",
-  })!;
-  // A project host's `/.auth/*` is the OS edge's (apps/os/src/browser-client.ts), whose client
-  // document names no app off the platform origin: the consent page names the client by its host.
-  const proxied = { origin: proxiedUrl.origin, name: proxiedUrl.host, host: proxiedUrl.host };
+  // the same app on the project's `notes` routing slug: notes--<project>.<hostname> under
+  // subdomains, <platform>/projects/<project>/notes/ under paths (apps/notes/src/base-path.ts)
+  const proxied = (path: string) =>
+    projectUrlOf(ingressRouting, workerBaseUrl, {
+      project: project.slug,
+      routingSlug: "notes",
+      path,
+    })!;
+  // WHOSE SIGN-IN the proxied app runs on: its host's `/.auth/*` (apps/os/src/worker.ts). Under
+  // subdomains that host is an origin of its own, a client of its own whose document names no app,
+  // so consent names it by its host. Under paths it is the platform's origin, whose sign-in the
+  // fixture already holds: no consent, and the Dash lists that session as "iterate".
+  const ownOrigin = ingressRouting?.type === "subdomains";
+  const proxiedHost = proxied("/").host;
+  const proxiedClient = ownOrigin
+    ? { origin: proxied("/").origin, name: proxiedHost, host: proxiedHost }
+    : { origin: workerBaseUrl, name: "iterate", host: new URL(workerBaseUrl).host };
   // The repository's actual config-worker source, preserving its auth.require gate, pointed at the
   // Notes app under test: its host and protocol (the source names production's, over https; a local
   // Notes answers http).
@@ -79,8 +83,8 @@ test("the Notes app works through a project config worker, and its session there
     );
   expect(source).toContain(`url.host = ${JSON.stringify(notes.host)}`);
   // The fixture's operator handle publishes the config worker: every host of the project reaches it,
-  // `notes--<project>` with `x-iterate-routing-slug: notes`, and it fetches through to the Notes
-  // worker. Every app interaction after this is real browser RPC.
+  // the `notes` routing slug with `x-iterate-routing-slug: notes`, and it fetches through to the
+  // Notes worker. Every app interaction after this is real browser RPC.
   // after the project's own saga has published its seed, which would otherwise land after and win
   await fixture.itx.waitForEvent({
     type: ["events.iterate.com/project/created", "events.iterate.com/project/create-failed"],
@@ -102,9 +106,9 @@ test("the Notes app works through a project config worker, and its session there
     .click({ noWaitAfter: true });
   await consent(page, notes);
   await saveNote(page, note);
-  // Through the project: a grant of its own, the same note, and an edit.
-  await page.goto(`${proxied.origin}/projects`);
-  await consent(page, proxied);
+  // Through the project: the host's grant, the same note, and an edit.
+  await page.goto(proxied("/projects").href);
+  if (ownOrigin) await consent(page, proxiedClient);
   expect(await page.getByRole("textbox", { name: noteFile, exact: true }).inputValue()).toBe(note);
   await saveNote(page, `${note}; edited through the project proxy`);
   await page.goto(`${notes.origin}/projects`);
@@ -115,10 +119,12 @@ test("the Notes app works through a project config worker, and its session there
   expect(await page.getByRole("textbox", { name: noteFile, exact: true }).inputValue()).toBe(
     `${note}; edited through the project proxy`,
   );
-  // Ending the proxy's session leaves the independently granted Notes session usable.
-  await endSessionInDash(page, dash, proxied);
-  await page.goto(`${proxied.origin}/projects`);
-  await consentPage(page, proxied);
+  // Ending the proxy's session leaves the independently granted Notes session usable. The proxied
+  // app signs in again: at consent under subdomains, at the platform's sign-in page under paths.
+  await endSessionInDash(page, dash, proxiedClient);
+  await page.goto(proxied("/projects").href);
+  if (ownOrigin) await consentPage(page, proxiedClient);
+  else await page.getByRole("textbox", { name: "Email", exact: true }).waitFor();
   await page.goto(`${notes.origin}/projects`);
   await page.getByRole("textbox", { name: noteFile, exact: true }).waitFor();
   const sessionCookies = (await context.cookies()).filter((cookie) =>
@@ -178,8 +184,10 @@ async function endSessionInDash(page: Page, dash: Client, client: Client) {
   await page.goto(`${dash.origin}/sessions`);
   await consent(page, dash);
   await page.getByRole("heading", { name: "Sessions", exact: true }).waitFor();
+  // by its whole name: the platform's own session, "iterate", is a prefix of every app's
   const session = page
-    .getByRole("row")
+    .getByRole("list", { name: "Sessions" })
+    .getByRole("listitem")
     .filter({ has: page.getByText(client.name, { exact: true }) });
   await session.getByRole("button", { name: "Log out", exact: true }).click();
   // the list reloads without it

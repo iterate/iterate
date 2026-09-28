@@ -1,6 +1,6 @@
 ---
 name: os-web-performance
-description: Diagnose and improve loading speed of the platform's pages (apps/os sign-in and consent) and the TanStack Start clients (dash, agents, notes, voice, kit), including Core Web Vitals, asset caching, bundle waterfalls, hydration, and the first live-state read. Use when an app feels slow, a route shows a spinner for too long, a warm visit re-downloads or revalidates assets, or a performance PR needs evidence from a deployment.
+description: Diagnose and improve loading speed of the platform's pages (apps/os sign-in and consent) and the TanStack Start clients, including Core Web Vitals, asset caching, bundle waterfalls, hydration, and the first live-state read. Use when an app feels slow, a route shows a spinner for too long, a warm visit re-downloads or revalidates assets, or a performance PR needs evidence from a deployment.
 ---
 
 # Web performance
@@ -38,12 +38,15 @@ fingerprinted `/assets/*`.
    JS graph, auth, socket and first read, live fan-out, or an optional heavy runtime. For
    route, loader, split or hydration work, also read [TanStack Start](references/tanstack-start.md).
 2. Measure on the PR's own preview, never only on local dev. The PR body lists every app's
-   preview URL (`appPreviewUrl` in `apps/os/scripts/preview-config.ts`) with a one-click
-   `Sign in ↗` link. The link signs a fresh browser in as `pr<n>@preview.iterate.test` and
-   lands in project `pr<n>`. Use it in an isolated Playwriter session
+   URL in the PR's deployment (`previewDeployment` in `envs.ts`) with a `Sign in ↗` link. It
+   signs the app in as `pr<n>@preview.iterate.test`, inside project `pr<n>`, once an admin
+   signed in to the deployment confirms **Sign in as someone else** on the consent page. prd's
+   admins sign in through prd; an isolated session has no prd sign-in, so sign in as
+   `admin@preview.iterate.test` with the deployment's password (Doppler `os/preview`,
+   `APP_CONFIG` `login.password`), then open the link. Use an isolated Playwriter session
    ([browser testing](../../../docs/browser-testing.md)), never the developer's own Chrome.
    Record cold, warm, and in-app navigation on the same route, with
-   [the evidence the browser-testing doc lists](../../../docs/browser-testing.md#performance-evidence-in-the-browser).
+   [the evidence the playbook lists](references/playbook.md#measure-what-people-get).
    Measure `main` the same way for the "before".
 3. Field data is prd only (previews carry no PostHog key, per `envs.ts`). Follow the PostHog
    instructions in your agent config, confirm that web-vitals events exist for the app before

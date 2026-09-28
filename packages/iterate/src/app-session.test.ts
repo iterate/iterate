@@ -1,6 +1,6 @@
 // Real PKCE/token code with an in-memory DurableObject store and a controlled OAuth token endpoint.
 // Preview smoke verifies the same flow against the deployed issuer and actual DurableObjects.
-import { expect, onTestFinished, test, vi } from "vitest";
+import { expect, test, vi } from "vitest";
 import { BrowserSession } from "./app-session.ts";
 
 test("a device's client id is used at authorization, code exchange and refresh, and its branding survives activation", async () => {
@@ -26,9 +26,6 @@ test("a device's client id is used at authorization, code exchange and refresh, 
   expect(authorize.searchParams.get("code_challenge_method")).toBe("S256");
   expect(await session.client()).toBeUndefined();
   const requests: URLSearchParams[] = [];
-  onTestFinished(() => {
-    vi.unstubAllGlobals();
-  });
   vi.stubGlobal(
     "fetch",
     vi.fn(async (_url: string, init: RequestInit) => {

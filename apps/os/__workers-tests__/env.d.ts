@@ -10,6 +10,13 @@ declare global {
     interface Env extends WorkerEnv {
       /** The control plane's D1 migrations (vitest.config.ts), for apply-migrations.ts. */
       TEST_MIGRATIONS: D1Migration[];
+      /** The public half of the suite's throwaway GitHub App key (vitest.config.ts). */
+      TEST_GITHUB_APP_PUBLIC_KEY?: string;
+      /** wrangler.base.jsonc `version_metadata` binds it (vitest.config.ts
+       *  `workersWranglerConfigPath`); fresh-file.ts gives each file a new id. */
+      CF_VERSION_METADATA: { id: string };
+      /** The pool's verb that deletes this runtime's stored files (vitest.config.ts, empty-runtime.ts). */
+      TEST_STORAGE: Fetcher;
     }
     interface GlobalProps {
       mainModule: typeof import("../src/worker.ts");

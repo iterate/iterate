@@ -47,6 +47,9 @@ export type ResolveOptions = {
 /** Where an entry is looked for when package.json names no `main`, in order. */
 const ENTRY_FILES = ["worker.ts", "worker.js", "index.ts", "index.js"];
 const ESM_ORIGIN = "https://esm.sh";
+/** The runtime's own modules, external to esm.sh like the platform packages: its bundler cannot
+ *  find them, and a package importing one from its entry is refused (404) unless it is named. */
+const WORKERD_BUILTINS = ["cloudflare:email", "cloudflare:sockets", "cloudflare:workers"];
 
 const isRelative = (specifier: string) => specifier.startsWith("./") || specifier.startsWith("../");
 
@@ -308,7 +311,7 @@ async function lockedDependencyGraph(
   const lockInput = {
     specifiers,
     ranges: Object.fromEntries(packages.map((name) => [name, dependencies[name]!])),
-    externals: platformPackages(opts.platform),
+    externals: [...WORKERD_BUILTINS, ...platformPackages(opts.platform)],
   };
   // The prefix names the lock's shape and the rewrite rules: a change to either is a new prefix.
   const key = `module-lock-1/${await sha256(JSON.stringify(lockInput))}`;
@@ -361,6 +364,14 @@ async function fetchModuleText(url: string, fetchFn: typeof fetch): Promise<stri
   return text;
 }
 
+/** A bare `<owner>/<repo>/<package>/<subpath>` in a module esm.sh serves under
+ *  `/pr/<owner>/<repo>/<package>@<commit>/…`: the path of that subpath at the same commit. */
+function prSelfImportOf(specifier: string, importer: URL): string | undefined {
+  const pr = importer.pathname.match(/^\/pr\/([^/]+\/[^/]+\/(?:@[^/]+\/)?[^/@]+)@([^/]+)\//);
+  if (!pr || !specifier.startsWith(`${pr[1]}/`)) return undefined;
+  return `/pr/${pr[1]}@${pr[2]}/${specifier.slice(pr[1]!.length + 1)}`;
+}
+
 /** Crawl esm.sh from each specifier's entry, pipelined: a module is rewritten and its own imports
  *  fetched the moment it arrives (module names follow from URLs alone), so wall time is the graph's
  *  depth in round trips, not its size. */
@@ -399,6 +410,13 @@ async function resolveFromEsm(
           const child = new URL(specifier, url);
           if (child.origin !== ESM_ORIGIN)
             throw new Error(`${url.pathname} imports ${child.href}, outside esm.sh`);
+          const childName = esmModuleName(child);
+          load(child.href, childName);
+          edits.push({ ...edit, specifier: relativeSpecifier(name, childName) });
+        } else if (prSelfImportOf(specifier, url)) {
+          // esm.sh's `/pr/` route spells a package's import of its OWN exported subpath bare, as
+          // `<owner>/<repo>/<package>/<subpath>`; the importing module's URL names the commit.
+          const child = new URL(`${prSelfImportOf(specifier, url)}?${query}`, ESM_ORIGIN);
           const childName = esmModuleName(child);
           load(child.href, childName);
           edits.push({ ...edit, specifier: relativeSpecifier(name, childName) });

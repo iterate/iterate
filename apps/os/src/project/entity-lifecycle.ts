@@ -114,8 +114,10 @@ export function entityLifecycle<const Slug extends "repo" | "workspace">(slug: S
  *  `withItx` and the effects are its constructor arguments, so a unit test constructs it with `new`
  *  and reduces rows (entity-lifecycle.test.ts, in node); the sagas are proven on the worker
  *  (e2e/repos.e2e.test.ts, e2e/workspaces.e2e.test.ts). */
-export class EntityLifecycleProcessor extends StreamProcessor<EntityCreationAndDeletionState> {
-  readonly contract: ProcessorContract<EntityCreationAndDeletionState>;
+export class EntityLifecycleProcessor<
+  State extends EntityCreationAndDeletionState = EntityCreationAndDeletionState,
+> extends StreamProcessor<State> {
+  readonly contract: ProcessorContract<State>;
   private readonly withItx: WithItx<ItxEntrypointScope>;
   /** The path of the context this processor's facet is hosted on — the entity's one name, which the
    *  host reads off its own props (the context's name), never off `itx.whoami()`: that also reads the
@@ -128,7 +130,7 @@ export class EntityLifecycleProcessor extends StreamProcessor<EntityCreationAndD
   };
 
   constructor(
-    contract: EntityLifecycleProcessor["contract"],
+    contract: ProcessorContract<State>,
     withItx: WithItx<ItxEntrypointScope>,
     path: () => string,
     effects: EntityLifecycleProcessor["effects"] = {},
@@ -146,10 +148,7 @@ export class EntityLifecycleProcessor extends StreamProcessor<EntityCreationAndD
   /** The same for this incarnation's deletion attempt; the durable ground is `state.deletion`. */
   #deleting = false;
 
-  override reduce({
-    state,
-    event,
-  }: ReduceArgs<EntityCreationAndDeletionState>): EntityCreationAndDeletionState | undefined {
+  override reduce({ state, event }: ReduceArgs<State>): State | undefined {
     const at = `events.iterate.com/${this.contract.slug}/`;
     switch (event.type) {
       case `${at}create-requested`:
@@ -185,7 +184,7 @@ export class EntityLifecycleProcessor extends StreamProcessor<EntityCreationAndD
     delivery,
     append,
     runInBackground,
-  }: ProcessEventArgs<EntityCreationAndDeletionState>): undefined {
+  }: ProcessEventArgs<State>): undefined {
     // THE SAGAS — state-derived, at head, in the background: at most once per incarnation, and any
     // later delivery over the same state runs them again, so an attempt lost to an eviction costs
     // nothing (the engine revives the host while an attempt is in flight).

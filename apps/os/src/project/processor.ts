@@ -10,15 +10,15 @@
 // commit — publishing a config-repo website needs a commit, not a manual ingress event.
 // Subscribed to `/` (the row `session.projects.create` enables), it runs again after every eviction:
 // an attempt lost with an incarnation is simply run again by the next — the repo tolerates existing,
-// a born `main` refuses the seed, every ingress append is keyed by the commit it points at, the
-// certificate is keyed. The host's `withItx` and the template download are its constructor
+// a born `main` refuses the seed, every ingress append is keyed by the commit it points at (a
+// return to a commit published before, by that commit's fact), the certificate is keyed. The host's `withItx` and the template download are its constructor
 // arguments; a unit test constructs it with `new` and reduces rows (processor.test.ts, in node) or
 // hands it a fake download (templates.test.ts); the effects are proven on
 // the worker (e2e/session.e2e.test.ts: the catalog, the apex answering the seed;
 // e2e/website-publication.e2e.test.ts: a commit publishes).
 
 import { z } from "zod";
-import { jsonEqual } from "iterate/lib";
+import { jsonEqual, resolveContextPath } from "iterate/lib";
 import {
   parseConfigRepoTemplateReference,
   type ConfigRepoTemplateReference,
@@ -34,6 +34,7 @@ import type { WithItx } from "iterate/sdk";
 import { defaultFiles } from "../generated/config-templates.js";
 import type { ItxEntrypointScope } from "../iterate-context.ts";
 import { reduceSecretCatalog } from "../secret/contract.ts";
+import { reduceIntegrations } from "../integrations/contract.ts";
 import { ProjectContract, type ProjectState } from "./contract.ts";
 import { customHostnameProblem, type CustomHostnameProvider } from "./custom-hostnames.ts";
 
@@ -93,6 +94,18 @@ export type ProjectHostnames = {
 const hostnameIsLive = (entry: ProjectState["hostnames"][string] | undefined) =>
   entry?.cloudflare?.status === "active" && entry.cloudflare.sslStatus === "active";
 
+/** What the deletion saga reaches, for THIS project (durable-object.ts builds it): a context's
+ *  destruction, and the project's own kv, files and Artifacts repos. The contexts it destroys are the
+ *  registry's (`state.contexts`). */
+export type ProjectDeletion = {
+  /** Everything the context at `path` holds goes: its log, its facets' storage, its alarm. The
+   *  root's only once the catalog holds the project as deleted: before, it throws (the pass is run
+   *  again). */
+  destroyContext(path: string): Promise<void>;
+  /** The project's kv keys, files and Artifacts repos. */
+  deleteProjectStorage(): Promise<void>;
+};
+
 export class ProjectProcessor extends StreamProcessor<
   ProjectState,
   ConsumedEvent<typeof ProjectContract>
@@ -102,17 +115,29 @@ export class ProjectProcessor extends StreamProcessor<
   private readonly withItx: WithItx<ItxEntrypointScope>;
   private readonly downloadTemplate: TemplateDownload;
   private readonly hostnames: () => ProjectHostnames | null;
+  private readonly deletion: () => ProjectDeletion | null;
 
   constructor(
     withItx: WithItx<ItxEntrypointScope>,
     downloadTemplate: TemplateDownload,
     hostnames: () => ProjectHostnames | null = () => null,
+    deletion: () => ProjectDeletion | null = () => null,
   ) {
     super();
     this.withItx = withItx;
     this.downloadTemplate = downloadTemplate;
     this.hostnames = hostnames;
+    this.deletion = deletion;
   }
+
+  /** This incarnation's deletion attempt, so one at-head pass does not start a second; the durable
+   *  ground is `state.deletion`. `#deletionFailed`: this incarnation gave up after its bounded
+   *  retries (`project/delete-failed` says why), so its own append does not start it again; a later
+   *  incarnation does. `#newestState`: the newest state any delivery has shown, so an attempt that
+   *  waited reads the contexts and hostnames registered meanwhile. */
+  #deleting = false;
+  #deletionFailed = false;
+  #newestState: ProjectState | null = null;
 
   /** The hostnames this incarnation is working on — ONE worker per hostname, so an add and a remove
    *  (or two adds) never race each other's claim — and the newest state any delivery has shown. A
@@ -126,7 +151,8 @@ export class ProjectProcessor extends StreamProcessor<
   #creating = false;
   /** The apex following the config repo: the newest tip any delivery has shown this incarnation,
    *  and the offset it has published. The durable ground is the keyed ingress event itself, reduced
-   *  into `state.publishedCommitOid`: a delivery whose state holds the tip's publication marks it
+   *  into `state.publishedCommitOid` and `publishedAt`: a delivery whose state holds the tip's
+   *  publication, after the tip's fact, marks it
    *  published, so a fresh incarnation owes nothing for a commit an earlier one published. The
    *  state learns of this incarnation's own append a delivery later, so the mark is kept here too.
    *  One attempt runs at a time and DRAINS: a tip that arrives while an append is in flight is
@@ -161,6 +187,11 @@ export class ProjectProcessor extends StreamProcessor<
         return state.creation?.status === "created"
           ? undefined
           : { ...state, creation: { status: "failed", offset: event.offset } };
+      case "events.iterate.com/project/delete-requested":
+        // The platform's fact alone (the session appends it just before the control plane drops
+        // the row): a member can append this type to `/`, and theirs deletes nothing.
+        if (event.source?.platform !== true || state.deletion) return undefined;
+        return { ...state, deletion: { offset: event.offset } };
       case "events.iterate.com/project/hostname-add-requested": {
         const known = state.hostnames[event.payload.hostname];
         return {
@@ -252,7 +283,10 @@ export class ProjectProcessor extends StreamProcessor<
         return { ...state, workspaces };
       }
       case "events.iterate.com/secret/set":
-      case "events.iterate.com/secret/deleted": {
+      case "events.iterate.com/secret/deleted":
+      case "events.iterate.com/secret/lent":
+      case "events.iterate.com/secret/borrowed":
+      case "events.iterate.com/secret/lend-revoked": {
         const secrets = reduceSecretCatalog(state.secrets, event);
         return secrets && { ...state, secrets };
       }
@@ -265,6 +299,19 @@ export class ProjectProcessor extends StreamProcessor<
             [event.payload.childPath]: { createdAt: event.createdAt },
           },
         };
+      case "events.iterate.com/slack/connected":
+      case "events.iterate.com/google/connected":
+      case "events.iterate.com/cloudflare/connected":
+      case "events.iterate.com/github/connected":
+      case "events.iterate.com/waitrose/connected":
+      case "events.iterate.com/slack/disconnected":
+      case "events.iterate.com/google/disconnected":
+      case "events.iterate.com/cloudflare/disconnected":
+      case "events.iterate.com/github/disconnected":
+      case "events.iterate.com/waitrose/disconnected": {
+        const integrations = reduceIntegrations(state.integrations, event);
+        return integrations && { ...state, integrations };
+      }
       case "events.iterate.com/repo/commit-completed":
         // Only the config repo moves the apex; another repo's commit is a fact for its own log.
         if (event.payload.path !== "/repos/config") return undefined;
@@ -273,11 +320,11 @@ export class ProjectProcessor extends StreamProcessor<
           configRepoTip: { commitOid: event.payload.commitOid, offset: event.offset },
         };
       case "events.iterate.com/itx/ingress-configured": {
-        // A target set by hand publishes no commit and moves nothing: the appends below are keyed
-        // by their commit, so a commit once published is never owed again, whatever the apex names.
+        // A target set by hand publishes no commit and moves nothing. Every publication is recorded
+        // with its offset: a pull can return main to a commit published before, which is owed again.
         const commitOid = configRepoCommitOf(event.payload.target);
-        if (!commitOid || commitOid === state.publishedCommitOid) return undefined;
-        return { ...state, publishedCommitOid: commitOid };
+        if (!commitOid) return undefined;
+        return { ...state, publishedCommitOid: commitOid, publishedAt: event.offset };
       }
       default:
         return undefined;
@@ -285,6 +332,7 @@ export class ProjectProcessor extends StreamProcessor<
   }
 
   override processEvent({
+    event,
     state,
     previousState,
     delivery,
@@ -296,6 +344,7 @@ export class ProjectProcessor extends StreamProcessor<
     ConsumedEvent<typeof ProjectContract>,
     EmittedEventInput<typeof ProjectContract>
   >): undefined {
+    this.#newestState = state;
     // THE PRIMARY HOSTNAME, published to the control plane (the edge's redirect and `itx.url` read
     // it there) by the event that changed it: the cursor waits for the write, so an eviction or a
     // failed write runs it again, and every write is the value as of its event, in log order.
@@ -304,6 +353,51 @@ export class ProjectProcessor extends StreamProcessor<
         async () => await this.hostnames()?.setPrimaryHostname(state.primaryHostname),
       );
     if (!delivery.caughtUp) return;
+    // THE DELETION SAGA — state-derived, at head, in the background, and alone: a project being
+    // deleted starts none of the sagas below, and this one first waits out any this incarnation
+    // already started. Each pass reads the NEWEST state, so a context announced while it waited
+    // (the creation saga's `/repos/config`) is destroyed too; deepest first, so a retried
+    // destruction (which wakes a context, and it announces itself) only reaches ancestors that still
+    // exist. Nothing the saga writes is read back, so nothing a member appends can make it skip a
+    // context: a pass after an eviction destroys every registered one again, harmlessly. A pass that
+    // fails is run again twice (5 s, 30 s); then `project/delete-failed` records why, the engine
+    // reports it, and this incarnation stops — a later one, woken by any delivery, starts again.
+    // Only the platform's request opens it.
+    if (state.deletion) {
+      if (this.#deleting || this.#deletionFailed) return;
+      const deletion = this.deletion();
+      if (!deletion) return;
+      this.#deleting = true;
+      runInBackground(async () => {
+        try {
+          while (this.#creating || this.#publishing || this.#hostnameWork.size > 0)
+            await new Promise((resolve) => setTimeout(resolve, 100));
+          // Every step is idempotent, so a failed pass is run again, a bounded number of times, while
+          // this attempt (and the engine's claim on the context's alarm) is still in flight.
+          const retryDelaysMs = [5_000, 30_000];
+          for (let retry = 0; ; retry += 1) {
+            try {
+              await this.#deletionPass(deletion, append);
+              return;
+            } catch (error) {
+              if (retry < retryDelaysMs.length) {
+                await new Promise((resolve) => setTimeout(resolve, retryDelaysMs[retry]));
+                continue;
+              }
+              this.#deletionFailed = true;
+              await append({
+                type: "events.iterate.com/project/delete-failed",
+                payload: { error: error instanceof Error ? error.message : String(error) },
+              });
+              throw error; // the engine reports it (processor.background)
+            }
+          }
+        } finally {
+          this.#deleting = false;
+        }
+      });
+      return;
+    }
     // THE CUSTOM HOSTNAMES — state-derived, at head, in the background: the request each hostname
     // still owes, one hostname at a time, and any later delivery runs it again after an eviction.
     // Every step is idempotent: the claim for the same project, Cloudflare's find-or-create and
@@ -342,13 +436,17 @@ export class ProjectProcessor extends StreamProcessor<
     // THE APEX FOLLOWS THE CONFIG REPO — state-derived, at head, in the background: the latest commit
     // of `/repos/config` (its fact cross-posted here by the repo facet) is published by pointing the
     // ingress at it, keyed by the commit, so this and the seed's own append in the saga below land
-    // ONE event, and an attempt lost with an incarnation is run again by the next. A tip the state
-    // already holds published is owed nothing: no append, and no background work to claim the
+    // ONE event, and an attempt lost with an incarnation is run again by the next; a return to a
+    // commit published before is published again under its fact's own key. A tip the state holds
+    // published AFTER its fact is owed nothing: no append, and no background work to claim the
     // context's alarm for. The target is `configRepoIngressTarget`, the same one the saga writes
     // for the seed.
     if (state.configRepoTip) {
       this.#newestTip = state.configRepoTip;
-      if (state.configRepoTip.commitOid === state.publishedCommitOid)
+      if (
+        state.configRepoTip.commitOid === state.publishedCommitOid &&
+        (state.publishedAt || 0) > state.configRepoTip.offset
+      )
         this.#published = state.configRepoTip.offset;
     }
     if (this.#newestTip && this.#published !== this.#newestTip.offset && !this.#publishing) {
@@ -361,11 +459,20 @@ export class ProjectProcessor extends StreamProcessor<
             tip && this.#published !== tip.offset;
             tip = this.#newestTip
           ) {
-            await append({
+            const payload = { target: configRepoIngressTarget(tip.commitOid) };
+            const [landed] = await append({
               type: "events.iterate.com/itx/ingress-configured",
               idempotencyKey: `itx/ingress-configured:${tip.commitOid}`,
-              payload: { target: configRepoIngressTarget(tip.commitOid) },
+              payload,
             });
+            // A pull can return main to a commit published before (B, C, then B again): the key
+            // answers that older publication, so this fact publishes it again under its own.
+            if (landed && landed.offset < tip.offset)
+              await append({
+                type: "events.iterate.com/itx/ingress-configured",
+                idempotencyKey: `itx/ingress-configured:${tip.commitOid}@${tip.offset}`,
+                payload,
+              });
             this.#published = tip.offset;
           }
         } finally {
@@ -488,6 +595,45 @@ export class ProjectProcessor extends StreamProcessor<
       idempotencyKey: `project/hostname-add:${hostname}:${offset}`,
       payload: { hostname, requestOffset: offset, cloudflare, error },
     };
+  }
+
+  /** One pass of the deletion saga, over the newest state: every registered context, deepest first,
+   *  until no context registered meanwhile is left; then each custom hostname at Cloudflare and then
+   *  its claim; the project's storage; the certificate; and `/` last. */
+  async #deletionPass(
+    deletion: ProjectDeletion,
+    append: (event: EmittedEventInput<typeof ProjectContract>) => Promise<unknown>,
+  ) {
+    const destroyed = new Set<string>();
+    for (;;) {
+      // every descendant the registry names, as a canonical path below `/`: the root is last
+      const paths = Object.keys(this.#newestState?.contexts ?? {}).filter(
+        (path) => path !== "/" && resolveContextPath("/", path) === path && !destroyed.has(path),
+      );
+      if (paths.length === 0) break;
+      paths.sort((a, b) => b.split("/").length - a.split("/").length || a.localeCompare(b));
+      for (const path of paths) {
+        await deletion.destroyContext(path);
+        destroyed.add(path);
+        await append({
+          type: "events.iterate.com/project/context-deleted",
+          idempotencyKey: `project/context-deleted:${path}`,
+          payload: { path },
+        });
+      }
+    }
+    for (const hostname of Object.keys(this.#newestState?.hostnames ?? {})) {
+      const hostnames = this.hostnames();
+      await hostnames?.provider?.remove(hostname);
+      await hostnames?.release(hostname);
+    }
+    await deletion.deleteProjectStorage();
+    await append({
+      type: "events.iterate.com/project/deleted",
+      idempotencyKey: "project/deleted",
+      payload: {},
+    });
+    await deletion.destroyContext("/");
   }
 
   /** Delete the custom hostname, then release the claim: the answer to a remove. */

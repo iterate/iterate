@@ -29,11 +29,11 @@
 //   F. STORAGE UNDER A LIVE INCARNATION — deleteAll() with the stream still in memory
 
 import { evictDurableObject, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
-import { expect, onTestFinished, test, vi } from "vitest";
+import { expect, test, vi } from "vitest";
 import { createFailing } from "@iterate-com/shared/test-support/failing-test";
 import type { ItxExpression } from "iterate/expression";
 import { errorCode } from "iterate/lib";
-import { stub, until } from "./support.ts";
+import { readLog, snapshot, stub, until } from "./support.ts";
 
 const MiB = 1024 * 1024;
 /** The workers project's own test timeout (vitest.config.ts): a pin gets the same budget. */
@@ -121,10 +121,7 @@ test("A2 — CONTROL: the refused configure leaves memory and the log consistent
     }),
   );
   expect(errorCode(err)).toBe("REDUCE_CHECKPOINT_TOO_LARGE");
-  const core = (await s.invoke("itx.facets.get('core').snapshot()")) as {
-    offset: number;
-    state: { itxExpressionRewriteRules: Record<string, unknown> };
-  };
+  const core = await snapshot<{ itxExpressionRewriteRules: Record<string, unknown> }>(ctx, "core");
   expect(Object.keys(core.state.itxExpressionRewriteRules)).toEqual(["itx.bigA"]);
   expect(core).toMatchObject({ offset: a }); // reduced through rule A, not a phantom B
   // The refused batch's offset was never burnt: the next durable event lands at a+1 — exactly
@@ -136,10 +133,7 @@ test("A2 — CONTROL: the refused configure leaves memory and the log consistent
     }),
   );
   expect(c).toBe(a + 1);
-  const page = (await s.invoke(["itx", ["readEvents", 0, 500]])) as {
-    events: { offset: number }[];
-  };
-  expect(page.events.map((e) => e.offset)).toEqual([1, 2, a, c]);
+  expect((await readLog(ctx)).map((e) => e.offset)).toEqual([1, 2, a, c]);
   expect(drainIssues()).toEqual([]);
 });
 
@@ -165,7 +159,7 @@ createFailing(test, /snapshot\(\) dies of "string or blob too big: SQLITE_TOOBIG
     await untilIssue("subscription-delivery.configured", /SQLITE_TOOBIG/);
     await s.append({ type: "work" });
     await untilIssue("subscription-delivery.deliver", /SQLITE_TOOBIG/);
-    const snapshotErr = await rejectionOf(() => snapshotOf(ctx, "big"));
+    const snapshotErr = await rejectionOf(() => snapshot(ctx, "big"));
     expect(
       enableErr && errorCode(enableErr),
       `a hosting spec that cannot be memoized should be refused on append; snapshot() dies of "${snapshotErr?.message}"`,
@@ -206,7 +200,7 @@ test("A4 — a facet whose checkpoint outgrows the cell ceiling is refused coded
     async () => (await subscriptionRow(ctx, "hoarder"))?.halted,
   );
   expect(halted).toMatchObject({ attempts: 1, error: expect.stringMatching(ceiling) });
-  expect(errorCode(await rejectionOf(() => snapshotOf(ctx, "hoarder")))).toBe(
+  expect(errorCode(await rejectionOf(() => snapshot(ctx, "hoarder")))).toBe(
     "REDUCE_CHECKPOINT_TOO_LARGE",
   );
   // …and the NEXT commit, tiny, is not pushed into the same wall: the row stays halted where it was.
@@ -315,7 +309,7 @@ test("B4 — CONTROL: a facet that cannot start is still disable-able — the nu
     await disableProcessorByEvent(ctx, "p");
     expect(await facetStartupMemoPresent(ctx, "p")).toBe(false);
     expect(await subscriptionRow(ctx, "p")).toBeNull();
-    expect(errorCode(await rejectionOf(() => snapshotOf(ctx, "p")))).toBe("NO_FACET");
+    expect(errorCode(await rejectionOf(() => snapshot(ctx, "p")))).toBe("NO_FACET");
   }
   drainIssues();
 });
@@ -352,22 +346,19 @@ createFailing(
     const s = stub(ctx);
     await enableProcessorByEvent(ctx, "poison", POISON_SRC, "PoisonDurableObject", ["work"]);
     await s.append({ type: "work" });
-    await until(
-      "n = 1",
-      async () => ((await snapshotOf(ctx, "poison")) as { state: { n: number } }).state.n === 1,
-    );
+    await until("n = 1", async () => (await snapshot<{ n: number }>(ctx, "poison")).state.n === 1);
     drainIssues();
     const poison = offsetOf(await s.append({ type: "work", payload: { poison: true } }));
     await untilIssue("subscription-delivery.deliver", /poison: refusing offset/);
     drainIssues();
     await s.append({ type: "work" }); // a clean commit after it: dies again (the gap repair re-reads the poison)
     await untilIssue("subscription-delivery.deliver", /poison: refusing offset/);
-    const snapshotErr = await rejectionOf(() => snapshotOf(ctx, "poison"));
+    const snapshotErr = await rejectionOf(() => snapshot(ctx, "poison"));
     // The rebuild: the same log, the same event, the same wall.
     await disableProcessorByEvent(ctx, "poison");
     await enableProcessorByEvent(ctx, "poison", POISON_SRC, "PoisonDurableObject", ["work"]);
     drainIssues();
-    const rebuiltErr = await rejectionOf(() => snapshotOf(ctx, "poison"));
+    const rebuiltErr = await rejectionOf(() => snapshot(ctx, "poison"));
     // WANTED: a throwing effect is reported and skipped like a throwing reduce, so the facet stays
     // readable — `snapshot()` answers as of its checkpoint.
     expect(
@@ -425,8 +416,8 @@ test("C3 — that row under a core version bump: the constructor's re-reduce ski
     return Promise.resolve();
   });
   await evictDurableObject(s);
-  const snapshot = (await s.invoke("itx.facets.get('core').snapshot()")) as { offset: number };
-  expect(snapshot.offset).toBeGreaterThanOrEqual(seed); // re-reduced past the skipped row
+  const core = await snapshot(ctx, "core");
+  expect(core.offset).toBeGreaterThanOrEqual(seed); // re-reduced past the skipped row
   expect(offsetOf(await s.append({ type: "after" }))).toBeGreaterThan(seed); // and the log goes on
 });
 
@@ -448,12 +439,9 @@ test("D1 — the core checkpoint row lost: the constructor re-derives the mark f
     return Promise.resolve();
   });
   await evictDurableObject(s);
-  const snapshot = (await s.invoke("itx.facets.get('core').snapshot()")) as {
-    offset: number;
-    state: unknown;
-  };
-  expect(snapshot.offset).toBeGreaterThanOrEqual(seed); // the mark came back from the rows
-  expect(JSON.stringify(snapshot.state)).toContain(ctx); // the state was re-reduced from `itx/created`
+  const core = await snapshot(ctx, "core");
+  expect(core.offset).toBeGreaterThanOrEqual(seed); // the mark came back from the rows
+  expect(JSON.stringify(core.state)).toContain(ctx); // the state was re-reduced from `itx/created`
   expect(offsetOf(await s.append({ type: "after" }))).toBeGreaterThan(seed); // and the log goes on
 });
 
@@ -565,14 +553,11 @@ createFailing(
  *  passes through. */
 function captureIssueLines(): void {
   const originalConsoleError = console.error.bind(console);
-  const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation((...args: unknown[]) => {
+  vi.spyOn(console, "error").mockImplementation((...args: unknown[]) => {
     const [first] = args;
     if (typeof first === "object" && first && (first as IssueLine).event === "issue")
       issues.push(first as IssueLine);
     else originalConsoleError(...args);
-  });
-  onTestFinished(() => {
-    consoleErrorSpy.mockRestore();
   });
 }
 
@@ -642,10 +627,6 @@ function disableProcessorByEvent(ctx: string, name: string) {
   });
 }
 
-function snapshotOf(ctx: string, name: string) {
-  return stub(ctx).invoke(["itx", "facets", ["get", name], ["snapshot"]]);
-}
-
 function subscriptionRow(ctx: string, name: string) {
   return stub(ctx).invoke(`itx.subscriptions.get('${name}')`) as Promise<SubscriptionRow>;
 }
@@ -688,7 +669,7 @@ async function facetThatCannotStart(
   await enableProcessorByEvent(ctx, "p", src, className);
   await stub(ctx).append({ type: "work" });
   await untilIssue("subscription-delivery.deliver", /./);
-  return rejectionOf(() => snapshotOf(ctx, "p"));
+  return rejectionOf(() => snapshot(ctx, "p"));
 }
 
 // ── C. poison events ──

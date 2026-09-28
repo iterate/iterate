@@ -12,7 +12,7 @@ export function int16ToBase64(pcm: Int16Array): string {
   return bytesToBase64(new Uint8Array(pcm.buffer, pcm.byteOffset, pcm.byteLength));
 }
 
-/** A `spk-frame`'s base64 back to PCM16 samples (a fresh, aligned buffer). */
+/** A `speaker-frame`'s base64 back to PCM16 samples (a fresh, aligned buffer). */
 export function base64ToInt16(base64: string): Int16Array {
   const binary = atob(base64);
   const bytes = new Uint8Array(binary.length - (binary.length % 2));

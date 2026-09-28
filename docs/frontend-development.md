@@ -1,7 +1,6 @@
-# Frontend development (dash, agents, notes, voice)
+# Frontend development
 
-How we write the platform's client apps — `apps/dash`, `apps/agents`,
-`apps/notes`, `apps/voice` (and Kit's installer): **one programming model, a
+How we write the platform's client apps: **one programming model, a
 handful of thin pieces over a capnweb capability tree reached through one
 WebSocket, with live state pushed from Durable Objects** — Elixir-LiveView/Phoenix
 in a React TanStack Start app.
@@ -124,10 +123,8 @@ const { api, info } = Route.useRouteContext(); // or getRouteApi("/_auth").useRo
 const context = await api.projects.get(project.id); // a project's root context, by slug or id
 ```
 
-A context handle a component holds for its life is disposed on unmount
-(`stub[Symbol.dispose]()`), and handed to a state setter as `setContext(() => stub)` —
-a capnweb stub is a callable proxy, and React would take it for an updater and
-call it (dash `routes/_auth/projects/$slug/index.tsx`, `useProjectContext`).
+A component holds a context handle for its life with `useContextStub` (below), which disposes
+it on unmount.
 
 ### Read (finite, cached)
 
@@ -146,9 +143,10 @@ export const Route = createFileRoute("/_auth/projects/$slug/secrets")({
 
 The shell's session reads, the organization tree, are made once by
 `<OrganizationTree>` (`apps/dash/src/components/organization-tree.tsx`) and
-shared by every page through `useOrganizationTree()`: live state on `api.user`
-and `api.organizations.get(orgId)`, or `organizations.list()` and
-`projects.list()` when the session cannot open the account. Resolve the
+shared by every page through `useOrganizationTree()`: `organizations.list()`
+and `projects.list()`, read again whenever a fact lands on `api.user` or an
+`api.organizations.get(orgId)` it subscribes to, and after the page's own
+write (`await reloadOrganizationTree()`). Resolve the
 connection _per call_ through `api` (never a render-captured stub of a closed
 socket): the proxy hands every call to the live connection.
 
@@ -158,7 +156,9 @@ socket): the proxy hands every call to the live connection.
 mini-app — seeds from its `{ rev, state }` read (`readSeed`), then applies every delta the server
 pushes. It never suspends: `value` is `undefined` until the first seed, `status`
 is `"connecting" | "live" | "error"`, and the last value stays visible while a
-gap heals from a fresh seed.
+gap heals from a fresh seed. Until the seed the page does not know the state, so what it renders
+from the value shows as loading, not as the state an empty value would mean: the Dash's project
+overview says "Loading…" until the `project` facet says whether the project is still being created.
 
 ```tsx
 const live = useFacetLiveState(context, "project"); // useLiveState seeded by the facet's liveSnapshot()
@@ -238,24 +238,24 @@ the hooks.
 The entire browser-facing API. A "handle" is a capnweb stub of a context
 (`IterateContextApi`); a "read" is a finite fetch, "live" is server-pushed state.
 
-| Symbol                                              | Kind      | What it gives you                                                                                                                                                                                |
-| --------------------------------------------------- | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `createIterateClient({ scopes })`                   | fn        | The app's one client (`iterate/app`). Create once per app.                                                                                                                                       |
-| `iterate.authenticate(next?)`                       | fn        | Probe `/api`, open the socket, resolve `{ api, info, signInFor }` — or leave for `/.auth/login` (never settles) when there is no session. Single-flight; a failure lets the next call try again. |
-| `api`                                               | stub      | The **session** (`IterateSessionApi`), proxied to the current connection: `projects.list/get/create`, `grants`, `organizations.list/get/create/…`, `user`, `logout()`.                           |
-| `info`                                              | data      | `{ principal, scopes, platformOrigin, ingressRouting, mcpOrigin }` — the granted `scopes` decide what a page offers (consent is task-based: optional scopes may be unticked).                    |
-| `signInFor(project)`                                | fn        | The page names a project this sign-in does not include: leave for `/.auth/login`, which offers to sign in again and returns to this URL.                                                         |
-| `useLiveState(itx, { key, name?, readSeed })`       | hook      | Subscribe to one producer's live state; seed through `readSeed`, apply pushed deltas, heal a gap. Never suspends. The LiveView primitive.                                                        |
-| `useFacetLiveState(itx, facet)`                     | hook      | `useLiveState` for a facet hosted on the context, seeded by its `liveSnapshot()`; the value is unparsed.                                                                                         |
-| `useContextStub(open, deps)`                        | hook      | Hold a context stub (`{ stub, error, pending }`), disposed on unmount and every re-open.                                                                                                         |
-| `useIterateContext(itx, { consumes?, liveState? })` | hook      | The context, live: `events`, `caughtUp`, `error`, `older`, `head`, `processors`, `presence`, `liveState` — the data half of `ContextView`; `history: "all"` reads every page.                    |
-| `connectLiveState(itx, opts)`                       | fn        | The framework-free client under both hooks (`iterate/client`): a store plus `dispose()`.                                                                                                         |
-| `createLiveStateStore()`                            | fn        | The pure reduce: `seed`, `apply` (gap ⇒ resync), `get`, `rev`, `subscribe`.                                                                                                                      |
-| `ContextView`, `AppShell`                           | component | The rendering half, from `@iterate-com/ui` — pure components, no SDK import.                                                                                                                     |
-| `LiveStateResult<S>` (type)                         | type      | `{ value, rev, status, error? }` — what `useLiveState` returns and each `useIterateContext().liveState` entry is.                                                                                |
-| `LiveStateStatus` (type)                            | type      | `"connecting" \| "live" \| "error"`.                                                                                                                                                             |
-| `IterateContextHandle` (type)                       | type      | The slice of a context the context hook reads; a capnweb context stub satisfies it structurally.                                                                                                 |
-| `IterateContextPresence` (type)                     | type      | One presence as the hook hands it out; events are `StreamEvent` (`iterate/stream/processor`), processor rows `SubscriptionListEntry` (`iterate/api`).                                            |
+| Symbol                                              | Kind      | What it gives you                                                                                                                                                                                                                                          |
+| --------------------------------------------------- | --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `createIterateClient({ scopes })`                   | fn        | The app's one client (`iterate/app`). Create once per app.                                                                                                                                                                                                 |
+| `iterate.authenticate(next?)`                       | fn        | Probe `/api`, open the socket, resolve `{ api, info, signInFor }` — or leave for `/.auth/login` (never settles) when there is no session. Single-flight; a failure lets the next call try again.                                                           |
+| `api`                                               | stub      | The **session** (`IterateSessionApi`), proxied to the current connection: `projects.list/get/create`, `grants`, `organizations.list/get/create/…`, `user`, `logout()`.                                                                                     |
+| `info`                                              | data      | `{ principal, scopes, platformOrigin, ingressRouting, mcpOrigin, iterateAppProviders, iterateAppScopes }` — the granted `scopes` decide what a page offers; `iterateAppProviders`, where iterate's app connects, and `iterateAppScopes`, what it asks for. |
+| `signInFor(project)`                                | fn        | The page names a project this sign-in does not include: leave for `/.auth/login`, which offers to sign in again and returns to this URL.                                                                                                                   |
+| `useLiveState(itx, { key, name?, readSeed })`       | hook      | Subscribe to one producer's live state; seed through `readSeed`, apply pushed deltas, heal a gap. Never suspends. The LiveView primitive.                                                                                                                  |
+| `useFacetLiveState(itx, facet)`                     | hook      | `useLiveState` for a facet hosted on the context, seeded by its `liveSnapshot()`; the value is unparsed.                                                                                                                                                   |
+| `useContextStub(open, deps)`                        | hook      | Hold a context stub (`{ stub, error, pending }`), disposed on unmount and every re-open.                                                                                                                                                                   |
+| `useIterateContext(itx, { consumes?, liveState? })` | hook      | The context, live: `events`, `caughtUp`, `error`, `older`, `head`, `processors`, `presence`, `liveState` — the data half of `ContextView`; `history: "all"` reads every page.                                                                              |
+| `connectLiveState(itx, opts)`                       | fn        | The framework-free client under both hooks (`iterate/client`): a store plus `dispose()`.                                                                                                                                                                   |
+| `createLiveStateStore()`                            | fn        | The pure reduce: `seed`, `apply` (gap ⇒ resync), `get`, `rev`, `subscribe`.                                                                                                                                                                                |
+| `ContextView`, `AppShell`                           | component | The rendering half, from `@iterate-com/ui` — pure components, no SDK import.                                                                                                                                                                               |
+| `LiveStateResult<S>` (type)                         | type      | `{ value, rev, status, error? }` — what `useLiveState` returns and each `useIterateContext().liveState` entry is.                                                                                                                                          |
+| `LiveStateStatus` (type)                            | type      | `"connecting" \| "live" \| "error"`.                                                                                                                                                                                                                       |
+| `IterateContextHandle` (type)                       | type      | The slice of a context the context hook reads; a capnweb context stub satisfies it structurally.                                                                                                                                                           |
+| `IterateContextPresence` (type)                     | type      | One presence as the hook hands it out; events are `StreamEvent` (`iterate/stream/processor`), processor rows `SubscriptionListEntry` (`iterate/api`).                                                                                                      |
 
 Mutations have no hook — you call the capability on the handle
 (`context.secrets.set(...)`, `api.organizations.create({ name })`), then
@@ -286,26 +286,18 @@ route `loader` or subscribe with `useLiveState`/`useIterateContext` at the leaf.
 
 ## Secrets on the page
 
-In production every app, and the platform's sign-in pages, record PostHog session replays of what
-people type and see. `posthogPrivacy()` in `packages/ui/src/components/not-recorded.tsx` is the
-privacy every `posthog.init` spreads last. Secrets never go in a replay:
+In production every app, and the platform's sign-in pages, record PostHog session replays with
+PostHog's own privacy defaults ([session replay privacy](https://posthog.com/docs/session-replay/privacy)):
+every input is masked. Masking is set in the PostHog project, not in code.
 
-- A field that takes a secret (a password, an API key, a secret's value, a sign-in code) is a
-  `SecretInput` or `SecretTextarea`. `iterate/secret-field-not-recorded` flags a raw input or
-  textarea that says it takes one: its `type`, `autoComplete`, `id`, `name`, `aria-label`,
-  `placeholder` or label.
 - A secret on screen (a personal access token or an invite link shown once, a link whose URL holds
-  one) goes inside a `NotRecorded`. `iterate/secret-shown-not-recorded` flags a value named like a
-  secret (`token`, `apiKey`, `clientSecret`) rendered outside one.
-- A route whose path holds a secret (`/invitations/<token>`) adds its pattern to
-  `redactSecretPaths` in `packages/ui/src/lib/secret-text.ts`. Page URLs are in every event and
-  replay, and no component can hide them.
+  one) goes inside a `NotRecorded` (`packages/ui/src/components/not-recorded.tsx`), PostHog's
+  `ph-no-capture` class: the replay draws an empty box, and autocapture skips it.
+- A route whose path holds a secret (`/invitations/<token>`) adds its pattern to `redactSecretPaths`
+  in `packages/ui/src/components/posthog.tsx`. Page URLs are in every event and replay, and no
+  component can hide them.
 
-Both components replay as an empty box, and autocapture skips them. Behind them, the replay masks
-at runtime whatever the lint cannot see: a raw field that says it takes a secret (the same test as
-the lint, `namesSecret`) replays as asterisks, and a key or invitation link typed into any other
-field is masked. `posthog-replay.test.tsx` runs posthog-js's own recorder on a React page of these
-components, and `posthog-privacy.test.ts` fails on any other replay or `before_send` setting.
+`posthog-replay.test.tsx` runs posthog-js's own recorder on a React page with both.
 
 ## Where this is going
 

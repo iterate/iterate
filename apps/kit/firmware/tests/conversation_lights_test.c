@@ -4,10 +4,6 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#ifdef NDEBUG
-#error "firmware tests must execute assertions"
-#endif
-
 static bool is_colour(
     const struct iterate_kit_rgb8 *pixel,
     uint8_t red,

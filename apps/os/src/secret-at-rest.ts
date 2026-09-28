@@ -1,5 +1,5 @@
 // secret-at-rest.ts — a project secret's material AT REST: AES-256-GCM under the deployment's key
-// (`APP_CONFIG_SECRETS_KEY`, app-config.ts), the ciphertext BOUND to the one place it may be read
+// (`APP_CONFIG_SECRETS__KEY`, app-config.ts), the ciphertext BOUND to the one place it may be read
 // back from — the secret's context (its Durable Object name: the project and the path), the pin it
 // was stored with, and the revision it was written at (the additional authenticated data).
 // A ciphertext copied into another context, under another pin, or back over a later write does not

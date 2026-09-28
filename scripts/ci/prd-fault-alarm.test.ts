@@ -1,17 +1,25 @@
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync } from "node:fs";
 import { join } from "node:path";
+import { temporaryDirectory } from "@iterate-com/shared/test-support/temporary-directory";
 import type { WebClient } from "@slack/web-api";
-import { expect, test, vi } from "vitest";
+import { expect, onTestFinished, test, vi } from "vitest";
+import { z } from "zod";
 import {
   type AlarmState,
   alarm,
+  type LogFilter,
+  DEPLOY_RESET_SUMMARIES,
   deployResetSummaries,
+  type Exclusion,
+  exclusionQueries,
   type FaultReading,
+  filterNodes,
   logWindow,
+  MAX_FILTER_NODES,
   PIN_QUIET_DAYS,
   PINNED_WORKAROUNDS,
   pinnedWorkarounds,
+  RAY_EXCLUSIONS,
   run,
   triageIncidents,
 } from "./prd-fault-alarm.ts";
@@ -49,32 +57,31 @@ test("the 2026-09-23 fault window pages with hosts, healed facets and collapsed 
         ["internal error; reference = c1k0cg2egm9c43toh6sfipct", 1],
       ],
     }),
-  ).toMatchInlineSnapshot(`
-    "🚨 prd fault page: 07:00–07:30 UTC <@U067G4QRFK2>
-    • 13 5xx responses: garple.com 7, lispwoso.com 6
-    • 1815 platform-failure heals: project 1279, repo 536
-    • 1201 errors: ProjectDurableObject.jsrpc 1199, internal error; reference = … 2
-    <https://dash.cloudflare.com/04b3b57291ef2626c6a8daa9d47065a7/workers-and-pages/observability|Workers Logs>
-    No state from the last run: an incident already paged pages again."
-  `);
+  ).toBe(
+    [
+      "🚨 prd fault page: 07:00–07:30 UTC <@U067G4QRFK2>",
+      "• 13 5xx responses: garple.com 7, lispwoso.com 6",
+      "• 1815 platform-failure heals: project 1279, repo 536",
+      "• 1201 errors: ProjectDurableObject.jsrpc 1199, internal error; reference = … 2",
+      "<https://dash.cloudflare.com/04b3b57291ef2626c6a8daa9d47065a7/workers-and-pages/observability|Workers Logs>",
+      "No state from the last run: an incident already paged pages again.",
+    ].join("\n"),
+  );
 });
 
-test.each([
+test.for([
   ["a quiet prd", {}, false],
   ["one 5xx", { serverErrors: [["https://lispwoso.com/", 1]] }, true],
   ["9 heals", { heals: [["repo", 9]] }, false],
   ["10 heals", { heals: [["repo", 10]] }, true],
   ["one error", { errors: [["boom", 1]] }, true],
-] satisfies [string, Partial<FaultReading>, boolean][])(
-  "%s pages: %s",
-  (_label, reading, pages) => {
-    expect(page(reading) !== null).toBe(pages);
-  },
-);
+] satisfies [string, Partial<FaultReading>, boolean][])("%s pages: %s", ([, reading, pages]) => {
+  expect(page(reading) !== null).toBe(pages);
+});
 
 // A run that could not read prd must fail, never pass as a quiet prd.
 test("a run that cannot read prd fails: a failed Workers Logs query", async () => {
-  await using cloudflare = workersLogs(() => ({
+  const cloudflare = workersLogs(() => ({
     success: false,
     errors: [{ code: 10000, message: "Authentication error" }],
   }));
@@ -82,18 +89,62 @@ test("a run that cannot read prd fails: a failed Workers Logs query", async () =
   await expect(summary(() => slack.client)).rejects.toThrow(
     'Workers Logs query failed: [{"code":10000,"message":"Authentication error"}]',
   );
-  expect(cloudflare.fetch).toHaveBeenCalledTimes(10);
+  expect(cloudflare.fetch).toHaveBeenCalledTimes(12);
   expect(slack).toMatchObject({ posts: [] });
 });
 
 test("a run that cannot read prd fails: no Cloudflare credentials", async () => {
-  await using cloudflare = workersLogs(() => ({ success: true }));
+  const cloudflare = workersLogs(() => ({ success: true }));
   vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "");
   vi.stubEnv("CLOUDFLARE_API_TOKEN", "");
   await expect(run({ dryRun: true })).rejects.toThrow(
     "run under doppler --project os --config prd",
   );
   expect(cloudflare.fetch).not.toHaveBeenCalled();
+});
+
+// Cloudflare's HTML error page, a 5xx or not, is its own failure, not an answer about the query.
+test.for([502, 200])(
+  "a Workers Logs query answered with an HTML %i is asked again, and the retry logged",
+  async (status) => {
+    const cloudflare = workersLogs(serverErrorsOnly(0));
+    cloudflare.fetch.mockImplementationOnce(async () => cloudflareErrorPage(status));
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    await expect(summary()).resolves.toBe("prd is quiet");
+    // A quiet run's 12 queries, one of them twice.
+    expect(cloudflare.fetch).toHaveBeenCalledTimes(13);
+    expect(warn).toHaveBeenCalledOnce();
+    expect(warn).toHaveBeenCalledWith({
+      event: "prd-fault-alarm.platform-failure-retry",
+      kind: "disconnected",
+      view: "calculations",
+      status,
+      message: `Workers Logs query answered HTTP ${status} (text/html; charset=UTF-8): ${errorPage.slice(0, 200)}`,
+      attempt: 1,
+      retryInMs: 2_000,
+    });
+  },
+);
+
+test("a run that cannot read prd fails: Cloudflare keeps answering its HTML error page", async () => {
+  const cloudflare = workersLogs(serverErrorsOnly(0));
+  cloudflare.fetch.mockImplementation(async () => cloudflareErrorPage(502));
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  const slack = fakeSlack();
+  await expect(summary(() => slack.client)).rejects.toMatchObject({
+    message: `Workers Logs query answered HTTP 502 (text/html; charset=UTF-8): ${errorPage.slice(0, 200)}`,
+  });
+  // Each of the 12 queries asked four times, the first and three repeats, then no more.
+  await vi.waitFor(() => expect(cloudflare.fetch).toHaveBeenCalledTimes(48));
+  expect(warn).toHaveBeenCalledWith(
+    expect.objectContaining({
+      event: "prd-fault-alarm.platform-failure-retry",
+      attempt: 3,
+      retryInMs: 10_000,
+    }),
+  );
+  expect(warn).not.toHaveBeenCalledWith(expect.objectContaining({ attempt: 4 }));
+  expect(slack).toMatchObject({ posts: [] });
 });
 
 // A dispatch on a branch reads and pages like any run, but must not move main's read window or its
@@ -103,22 +154,18 @@ test.for([
   ["refs/heads/a-branch", false],
   [undefined, false],
 ] as const)("a run on %s keeps its state: %s", async ([ref, kept]) => {
-  await using _cloudflare = workersLogs(serverErrorsOnly(0));
+  workersLogs(serverErrorsOnly(0));
   vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", credentials.accountId);
   vi.stubEnv("CLOUDFLARE_API_TOKEN", credentials.apiToken);
-  const directory = mkdtempSync(join(tmpdir(), "prd-fault-alarm-"));
-  try {
-    const stateOut = join(directory, "state.json");
-    await expect(run({ ref, stateOut })).resolves.toBe("prd is quiet");
-    expect(existsSync(stateOut)).toBe(kept);
-  } finally {
-    rmSync(directory, { recursive: true });
-  }
+  using directory = temporaryDirectory();
+  const stateOut = join(directory.path, "state.json");
+  await expect(run({ ref, stateOut })).resolves.toBe("prd is quiet");
+  expect(existsSync(stateOut)).toBe(kept);
 });
 
 // Each fault is an incident: a new one pages, its repeats go into that page's thread.
 test("a quiet run never builds a Slack client, so a broken token cannot turn it red", async () => {
-  await using _cloudflare = workersLogs(serverErrorsOnly(0));
+  workersLogs(serverErrorsOnly(0));
   const slack = vi.fn(() => {
     throw new Error("no Slack token");
   });
@@ -129,7 +176,7 @@ test("a quiet run never builds a Slack client, so a broken token cannot turn it 
 });
 
 test("a quiet prd posts nothing and the next run reads on from where this one stopped", async () => {
-  await using _cloudflare = workersLogs(serverErrorsOnly(0));
+  workersLogs(serverErrorsOnly(0));
   const slack = fakeSlack();
   const run1 = await runAt("07:30", null, slack);
   expect(run1).toMatchObject({ summary: "prd is quiet", next: { incidents: {} } });
@@ -183,8 +230,6 @@ test("a new 5xx pages; its repeats reply in the page's thread without mentioning
   });
 });
 
-// Until 2026-09-24 a page held every page for an hour, while each run read only the half hour
-// before it: a different 500 in that hour was never posted.
 test("a different 5xx during an open incident pages at once", async () => {
   const slack = fakeSlack();
   const run1 = await runAt("07:30", null, slack, serverErrorsOnly(1));
@@ -297,7 +342,7 @@ test("a failed invocation's request line is one incident per method and host, no
 });
 
 test("every first-party prd Worker is read, not os-prd alone", async () => {
-  await using cloudflare = workersLogs(serverErrorsOnly(0));
+  const cloudflare = workersLogs(serverErrorsOnly(0));
   await summary();
   const services = cloudflare.fetch.mock.calls.map(
     ([, init]) =>
@@ -326,7 +371,7 @@ test("heals page only in a burst, or as an incident already open", () => {
 });
 
 test("a dry run (no Slack client) resolves to the page it would post", async () => {
-  await using _cloudflare = workersLogs(serverErrorsOnly(1));
+  workersLogs(serverErrorsOnly(1));
   await expect(summary()).resolves.toBe(page({ serverErrors: [["https://lispwoso.com/", 1]] }));
 });
 
@@ -379,15 +424,16 @@ test.for([
 });
 
 test("a reset-only window goes quiet after the re-count and posts nothing", async () => {
-  await using logs = queryableWorkersLogs(resetPair());
+  const logs = queryableWorkersLogs(resetPair());
   const slack = fakeSlack();
   await expect(summary(() => slack.client)).resolves.toBe("prd is quiet");
   expect(slack).toMatchObject({ posts: [] });
-  expect(logs.fetch).toHaveBeenCalledTimes(13);
+  // the re-count reads each of its two counts in two parts: the resets' request IDs, and the rest
+  expect(logs.fetch).toHaveBeenCalledTimes(17);
 });
 
 test("a fresh error sharing the pager URL and every HTTP 5xx survive reset classification", async () => {
-  await using _logs = queryableWorkersLogs([
+  queryableWorkersLogs([
     ...resetPair(),
     {
       ...resetPair()[2]!,
@@ -419,7 +465,7 @@ test("resets arriving between the count and evidence read never subtract away a 
       },
     },
   ];
-  await using _logs = queryableWorkersLogs(events, (query) => {
+  queryableWorkersLogs(events, (query) => {
     if (query.view === "events") events.push(...resetPair());
   });
   const result = await summary();
@@ -427,8 +473,8 @@ test("resets arriving between the count and evidence read never subtract away a 
 });
 
 test("a full evidence page keeps the alarm and reports the cap", async () => {
-  await using _logs = queryableWorkersLogs(Array.from({ length: 25 }, () => resetPair()).flat());
-  using log = vi.spyOn(console, "log");
+  queryableWorkersLogs(Array.from({ length: 25 }, () => resetPair()).flat());
+  const log = vi.spyOn(console, "log");
   const result = await summary();
   expect(result).toContain("50 errors: GET https://rpc-stub-pager.internal/… 50");
   expect(log).toHaveBeenCalledWith(
@@ -439,7 +485,7 @@ test("a full evidence page keeps the alarm and reports the cap", async () => {
 test.for(["network", "HTML", "API", "schema", "re-count"])(
   "a failed optional %s query still posts the original errors and 5xx",
   async (failure) => {
-    await using _logs = queryableWorkersLogs([...resetPair(), ...failedDocsRequest()], (query) => {
+    queryableWorkersLogs([...resetPair(), ...failedDocsRequest()], (query) => {
       if (failure === "re-count" && JSON.stringify(query.parameters.filters).includes('not_in"'))
         throw new Error("re-count failed");
       if (query.view !== "events") return;
@@ -449,7 +495,7 @@ test.for(["network", "HTML", "API", "schema", "re-count"])(
       if (failure === "schema")
         return Response.json({ success: true, result: { events: { events: [{}] } } });
     });
-    using warn = vi.spyOn(console, "warn");
+    const warn = vi.spyOn(console, "warn");
     const slack = fakeSlack();
     const result = await summary(() => slack.client);
     expect(result).toContain("2 5xx responses: docs.iterate.com 2");
@@ -473,20 +519,20 @@ test("null optional evidence fields do not prevent classification of complete re
       outcome: event.$metadata.type === "cf-worker-event" ? "exception" : null,
     },
   }));
-  await using _logs = queryableWorkersLogs(events);
-  using warn = vi.spyOn(console, "warn");
+  queryableWorkersLogs(events);
+  const warn = vi.spyOn(console, "warn");
   await expect(summary()).resolves.toBe("prd is quiet");
   expect(warn).not.toHaveBeenCalled();
 });
 
 test("null identities leave ambiguous summaries visible without treating the payload as malformed", async () => {
-  await using _logs = queryableWorkersLogs(
+  queryableWorkersLogs(
     resetPair().map((event) => ({
       ...event,
       $workers: { ...event.$workers, durableObjectId: null, scriptVersion: null },
     })),
   );
-  using warn = vi.spyOn(console, "warn");
+  const warn = vi.spyOn(console, "warn");
   const result = await summary();
   expect(result).toContain("2 errors: GET https://rpc-stub-pager.internal/… 2");
   expect(warn).not.toHaveBeenCalled();
@@ -505,7 +551,7 @@ test.for(["different time", "missing identity", "another worker"])(
 
 test("a stateless summary with a reset's request ID is never excluded from the count", async () => {
   const stateless = resetPair()[2]!;
-  await using _logs = queryableWorkersLogs([
+  queryableWorkersLogs([
     ...resetPair(),
     { ...stateless, $workers: { ...stateless.$workers, executionModel: "stateless" } },
   ]);
@@ -516,7 +562,7 @@ test("a stateless summary with a reset's request ID is never excluded from the c
 test.for([undefined, null, "", "Network connection lost."])(
   "a structured error is counted exactly once with message %s",
   async (message) => {
-    await using _logs = queryableWorkersLogs([
+    queryableWorkersLogs([
       {
         timestamp: 42,
         $metadata: { type: "cf-worker", message, error: "Network connection lost." },
@@ -529,7 +575,7 @@ test.for([undefined, null, "", "Network connection lost."])(
 );
 
 test("the 11:52 window retains the structured delivery failure while removing the reset summaries", async () => {
-  await using _logs = queryableWorkersLogs([
+  queryableWorkersLogs([
     ...resetPair(),
     {
       timestamp: 1790250570333,
@@ -554,7 +600,7 @@ test.for(["message", "error"])(
       "itx.abort() reset the context",
       "Can't read from request stream after response has been sent.",
     ];
-    await using _logs = queryableWorkersLogs(
+    queryableWorkersLogs(
       messages.map((message) => ({
         timestamp: 42,
         $metadata: { type: "cf-worker", [key]: message },
@@ -568,7 +614,7 @@ test.for(["message", "error"])(
 test.for(["message", "error"])(
   "an unread /api body remains actionable in metadata.%s",
   async (key) => {
-    await using _logs = queryableWorkersLogs([
+    queryableWorkersLogs([
       {
         timestamp: 42,
         $metadata: {
@@ -589,7 +635,7 @@ test.for(["message", "error"])(
 // un-set: 502s, every hop logging a 502 summary, all in the ray of the context DO's
 // `expression-fetch.rpc-stub-offline` info line.
 test("a tunnel's offline-stub 502s, every hop of them, page nothing", async () => {
-  await using _logs = queryableWorkersLogs(rpcStubOfflineRequest("vite-ping"));
+  queryableWorkersLogs(rpcStubOfflineRequest("vite-ping"));
   await expect(summary()).resolves.toBe("prd is quiet");
 });
 
@@ -603,11 +649,35 @@ test.for([
     "4 errors: boom 4",
   ],
 ] as const)("%s still pages", async ([, change, line]) => {
-  await using _logs = queryableWorkersLogs([
+  queryableWorkersLogs([
     ...rpcStubOfflineRequest("vite-ping"),
     ...rpcStubOfflineRequest("vite-ping", change).slice(1),
   ]);
   expect(await summary()).toContain(line);
+});
+
+// A deploy that resets a context an expression fetch dialed, where the hop could not send it again
+// (a request with a body), answers 503: every hop's 503 summary is in the ray of the context DO's
+// `expression-fetch.deploy-reset` info line (prd os-prd 2026-09-25 14:45:21Z paged on these as 500s).
+const deployReset = { event: "expression-fetch.deploy-reset", status: 503 };
+test("a deploy reset's 503s, every hop of them, page nothing", async () => {
+  queryableWorkersLogs(rpcStubOfflineRequest("post", {}, deployReset));
+  await expect(summary()).resolves.toBe("prd is quiet");
+});
+
+test.for([
+  [
+    "a 502 in a deploy reset's ray",
+    rpcStubOfflineRequest("post", { status: 502 }, deployReset).slice(1),
+  ],
+  ["a 503 in an offline stub's ray", rpcStubOfflineRequest("vite-ping", { status: 503 }).slice(1)],
+] as const)("%s still pages", async ([, summaries]) => {
+  queryableWorkersLogs([
+    ...rpcStubOfflineRequest("post", {}, deployReset),
+    ...rpcStubOfflineRequest("vite-ping"),
+    ...summaries,
+  ]);
+  expect(await summary()).toContain("4 5xx responses: blog--p.iterate.app 4");
 });
 
 test.for(["capped", "failed"])(
@@ -619,12 +689,248 @@ test.for(["capped", "failed"])(
         ? Array.from({ length: 2000 }, (_, i) => rpcStubOfflineRequest(`t${i}`)[0]!)
         : []),
     ];
-    await using _logs = queryableWorkersLogs(events, (query) => {
-      if (reason === "failed" && JSON.stringify(query.parameters.groupBys).includes("rayId"))
+    queryableWorkersLogs(events, (query) => {
+      if (reason === "failed" && query.parameters.groupBys?.[0]?.value === "$metadata.rayId")
         throw new Error("network failed");
     });
-    using _warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.spyOn(console, "warn").mockImplementation(() => {});
     expect(await summary()).toContain("4 5xx responses: blog--p.iterate.app 4");
+  },
+);
+
+// A visitor whose connection to a tunnel's WebSocket vanished without a close frame: the edge logs
+// `fetch-upgrade.local-gone` at info, and the runtime fails that invocation with "Network connection
+// lost." and an exception summary, all in one ray (apps/os context/fetch-upgrade-splice.ts).
+test("a vanished visitor's Network connection lost. and its exception summary page nothing", async () => {
+  queryableWorkersLogs(vanishedVisitorRequest("gone"));
+  await expect(summary()).resolves.toBe("prd is quiet");
+});
+
+test.for([
+  [
+    "Network connection lost. in another ray",
+    vanishedVisitorRequest("other").slice(1),
+    "2 errors: Network connection lost. 1, GET https://here-public.templestein.com/… 1",
+  ],
+  [
+    "another error in the vanished visitor's ray",
+    [
+      {
+        ...vanishedVisitorRequest("gone")[1]!,
+        $metadata: { type: "cf-worker", rayId: "gone", message: "boom" },
+      },
+    ],
+    "1 errors: boom 1",
+  ],
+] as const)("%s still pages", async ([, events, line]) => {
+  queryableWorkersLogs([...vanishedVisitorRequest("gone"), ...events]);
+  expect(await summary()).toContain(line);
+});
+
+// Probed against prd's Workers Logs: 16 leaves, a group of 15, or 13 leaves beside a group of a
+// group pass; one more leaf in any of them answers "maximum is 16 filter nodes".
+test("filter nodes count as Cloudflare counts them: every leaf and every group, not the top-level list", () => {
+  const leaf = {
+    key: "$metadata.message",
+    operation: "neq",
+    value: "probe",
+    type: "string",
+  } as const;
+  const or = (...filters: LogFilter[]): LogFilter => ({
+    kind: "group",
+    filterCombination: "or",
+    filters,
+  });
+  const leaves = (n: number) => Array.from({ length: n }, () => leaf);
+  expect(filterNodes(leaves(16))).toBe(MAX_FILTER_NODES);
+  expect(filterNodes([or(...leaves(15))])).toBe(MAX_FILTER_NODES);
+  expect(filterNodes([...leaves(13), or(or(leaf))])).toBe(MAX_FILTER_NODES);
+  expect(filterNodes([...leaves(14), or(or(leaf))])).toBe(MAX_FILTER_NODES + 1);
+});
+
+test("every query a run sends stays within 16 filter nodes, with every outcome's rays, a ray all three logged, and deploy resets", async () => {
+  const [offline, deployed, gone] = RAY_EXCLUSIONS.map(({ event }) => event);
+  // 1,997 rays and one logged by all three: as many as a run excludes, four `not_in` of them
+  const events = [
+    ...rayInfoLines(offline!, [...rays("offline-", 899), "shared"]),
+    ...rayInfoLines(deployed!, [...rays("deployed-", 599), "shared"]),
+    ...rayInfoLines(gone!, [...rays("gone-", 497), "shared"]),
+    ...rpcStubOfflineRequest("offline-7").slice(1),
+    ...vanishedVisitorRequest("gone-3").slice(1),
+    { timestamp: 42, $metadata: { type: "cf-worker", rayId: "shared", message: "boom" } },
+    { timestamp: 42, $metadata: { type: "cf-worker", error: "structured" } },
+    ...failedDocsRequest(),
+    ...resetPair(),
+  ];
+  const logs = queryableWorkersLogs(events);
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  const result = await summary();
+  const nodes = logs.fetch.mock.calls.map(([, init]) =>
+    filterNodes((JSON.parse(init.body) as LogQuery).parameters.filters),
+  );
+  expect(Math.max(...nodes)).toBeLessThanOrEqual(MAX_FILTER_NODES);
+  expect(result).toContain("2 5xx responses: docs.iterate.com 2\n");
+  // The expected 502s and the vanished visitor's two rows go. Past one `not_in` of rays, a query
+  // cannot also hold the resets' keep: their summaries page, and the warn says so.
+  expect(result).toContain(
+    "6 errors: POST https://docs.iterate.com/… 2, GET https://rpc-stub-pager.internal/… 2, boom 1, structured 1\n",
+  );
+  expect(warn).toHaveBeenCalledWith(
+    JSON.stringify({
+      event: "prd-fault-alarm.exclusion-dropped",
+      dropped: [DEPLOY_RESET_SUMMARIES.name],
+      rows: 2,
+    }),
+  );
+});
+
+// The check that fails in CI, not on prd, when an outcome's keep cannot fit beside a count's own
+// filters: each outcome applies in full while the rays a run excludes fit one `not_in`.
+test("each expected outcome applies in full beside the others and deploy resets", async () => {
+  const events = RAY_EXCLUSIONS.flatMap(({ event }, index) => [
+    ...rayInfoLines(event, [...rays(`${index}-`, 100)]),
+    {
+      timestamp: 42,
+      $metadata: { type: "cf-worker", rayId: `${index}-7`, message: `boom ${index}` },
+    },
+    {
+      timestamp: 42,
+      $metadata: {
+        type: "cf-worker",
+        rayId: `${index}-8`,
+        message: "",
+        error: `structured ${index}`,
+      },
+    },
+  ]);
+  const logs = queryableWorkersLogs([
+    ...events,
+    ...rpcStubOfflineRequest("0-3").slice(1),
+    ...vanishedVisitorRequest("2-3").slice(1),
+    ...resetPair(),
+  ]);
+  const warn = vi.spyOn(console, "warn");
+  const log = vi.spyOn(console, "log").mockImplementation(() => {});
+  await summary();
+  const { reading } = z
+    .object({
+      reading: z.object({ serverErrors: z.array(z.unknown()), errors: z.array(z.unknown()) }),
+    })
+    .parse(
+      JSON.parse(String(log.mock.calls.find(([line]) => String(line).includes('"reading"'))![0])),
+    );
+  expect(reading).toEqual({
+    serverErrors: [],
+    errors: [...RAY_EXCLUSIONS.keys()]
+      .flatMap((index) => [`boom ${index}`, `structured ${index}`])
+      .sort((a, b) => Number(a.startsWith("structured")) - Number(b.startsWith("structured")))
+      .map((label) => [label, 1]),
+  });
+  expect(warn).not.toHaveBeenCalled();
+  for (const [, init] of logs.fetch.mock.calls)
+    expect(filterNodes((JSON.parse(init.body) as LogQuery).parameters.filters)).toBeLessThanOrEqual(
+      MAX_FILTER_NODES,
+    );
+});
+
+test.for([
+  ["errors by message", "$metadata.message", true],
+  ["5xx by URL", "$workers.event.request.url", false],
+] as const)(
+  "the split queries count exactly what the one query counted: %s",
+  ([, groupBy, errors]) => {
+    const [offline, deployed, gone] = RAY_EXCLUSIONS.map((exclusion) => ({
+      ...exclusion,
+      name: exclusion.event,
+      key: "$metadata.rayId",
+    }));
+    const answers: Exclusion[] = [
+      { ...offline!, values: [...rays("o-", 1200), "s"] },
+      { ...deployed!, values: ["d-0", "d-1", "s"] },
+    ];
+    const exclusions: Exclusion[] = errors
+      ? [
+          { ...DEPLOY_RESET_SUMMARIES, values: ["first", "second"] },
+          ...answers,
+          { ...gone!, values: ["g-0", "g-1"] },
+        ]
+      : answers;
+    const row = (
+      rayId: string | undefined,
+      type: string | undefined,
+      message: string,
+      workers: Record<string, unknown> = {},
+      requestId?: string,
+    ) => ({
+      $metadata: { service: "os-prd", level: "error", type, rayId, requestId, message },
+      $workers: { event: { request: { url: `https://${message}.test/` } }, ...workers },
+    });
+    const status = (code: number | undefined, outcome = "ok") => ({
+      outcome,
+      event: { request: { url: "https://host.test/" }, response: { status: code } },
+    });
+    const events = [
+      // an offline stub's rays: first and third `not_in` chunk
+      ...["o-0", "o-1100"].flatMap((ray) => [
+        row(ray, "cf-worker-event", "GET 502", status(502)),
+        row(ray, "cf-worker-event", "GET 500", status(500)),
+        row(ray, "cf-worker-event", "GET no status", status(undefined)),
+        row(ray, "cf-worker", "boom"),
+      ]),
+      // a deploy reset's answer
+      row("d-0", "cf-worker-event", "POST 503", status(503)),
+      row("d-0", "cf-worker-event", "POST 502", status(502)),
+      // a vanished visitor, and a row whose type Workers Logs left out
+      row("g-0", "cf-worker", "Network connection lost."),
+      row("g-0", "cf-worker-event", "GET exception", status(101, "exception")),
+      row("g-0", "cf-worker-event", "GET ok", status(101)),
+      row("g-0", "cf-worker", "other"),
+      row("g-1", undefined, "untyped"),
+      // one ray both answers logged
+      row("s", "cf-worker-event", "GET 502", status(502)),
+      row("s", "cf-worker-event", "POST 503", status(503)),
+      row("s", "cf-worker-event", "GET 500", status(500)),
+      row("s", "cf-worker", "boom"),
+      // no ray, and a ray no outcome logged
+      row(undefined, "cf-worker-event", "GET 502", status(502)),
+      row(undefined, "cf-worker", "Network connection lost."),
+      row("x", "cf-worker-event", "GET 502", status(502)),
+      // a reset's summaries: a Durable Object's, a stateless one's, and another type
+      row(undefined, "cf-worker-event", "GET reset", { executionModel: "durableObject" }, "first"),
+      row(undefined, "cf-worker-event", "GET reset", { executionModel: "stateless" }, "first"),
+      row(undefined, "cf-worker", "GET reset", { executionModel: "durableObject" }, "second"),
+      row(
+        "o-5",
+        "cf-worker-event",
+        "GET reset",
+        { ...status(500), executionModel: "durableObject" },
+        "second",
+      ),
+    ];
+    const base: LogFilter[] = errors
+      ? [{ key: "$metadata.level", operation: "eq", value: "error", type: "string" }]
+      : [{ key: "$workers.event.response.status", operation: "gte", value: 500, type: "number" }];
+    const counted = (filterLists: LogFilter[][]) => {
+      const counts = new Map<string, number>();
+      for (const filters of filterLists)
+        for (const event of events)
+          if (filters.every((filter) => matchesLogFilter(event, filter))) {
+            const key = String(logField(event, groupBy));
+            counts.set(key, (counts.get(key) ?? 0) + 1);
+          }
+      return Object.fromEntries([...counts].sort());
+    };
+    const parts = exclusionQueries(base, exclusions);
+    // a part too big for its keeps (a reset's request IDs in the shared ray) holds no rows here
+    expect(
+      counted(parts.filter(({ dropped }) => dropped.length).map(({ filters }) => filters)),
+    ).toEqual({});
+    expect(counted(parts.map(({ filters }) => filters))).toEqual(
+      counted([oneQuery(base, exclusions)]),
+    );
+    expect(Object.values(counted([base])).reduce((sum, n) => sum + n)).toBeGreaterThan(
+      Object.values(counted([oneQuery(base, exclusions)])).reduce((sum, n) => sum + n),
+    );
   },
 );
 
@@ -656,6 +962,8 @@ test("a pinned workaround posts once when its heal has been absent PIN_QUIET_DAY
       [],
       [
         "✅ Cloudflare seems to have fixed held Durable Object alarms: delete the overdue watch in apps/os/src/alarm-coordinator.ts. prd has logged no `iterate-context.platform-failure-alarm-*` since 2026-09-23 (28 days) <@U067G4QRFK2>",
+        "✅ Cloudflare seems to have fixed the Worker Loader defect at facet start: delete the restart in apps/os/src/context/facet-host.ts (`isFacetStartPlatformFailure`). prd has logged no `facet.platform-failure-*` since 2026-09-23 (28 days) <@U067G4QRFK2>",
+        "✅ Cloudflare seems to have fixed the Worker Loader clone-version defect in workers.get: delete its retire and replay in apps/os/src/context/built-ins.ts. prd has logged no `workers.platform-failure-*` since 2026-09-23 (28 days) <@U067G4QRFK2>",
       ],
       [],
       [],
@@ -673,7 +981,11 @@ test("a pinned workaround posts once when its heal has been absent PIN_QUIET_DAY
 test("a run without a pin's state starts its count: a late post, never a false one", () => {
   expect(pinnedWorkarounds([], window, null)).toEqual({
     posts: [],
-    pins: { [heldAlarm!.event]: { lastSeen: now.toISOString(), told: false } },
+    pins: {
+      "iterate-context.platform-failure-alarm-": { lastSeen: now.toISOString(), told: false },
+      "facet.platform-failure-": { lastSeen: now.toISOString(), told: false },
+      "workers.platform-failure-": { lastSeen: now.toISOString(), told: false },
+    },
   });
   expect(
     pinnedWorkarounds([], window, { readUntil: now.toISOString(), incidents: {}, pins: {} }),
@@ -703,10 +1015,10 @@ test("the held-alarm pin reads prd's heals by event and posts its one message to
       post.thread_ts,
       String(post.text).slice(0, 32),
     ]),
-    pin: run2.next.pins,
+    pin: run2.next.pins[heldAlarm!.event],
   }).toEqual({
     posts: [[channel, undefined, "✅ Cloudflare seems to have fixed"]],
-    pin: { [heldAlarm!.event]: { lastSeen: lastSeen.toISOString(), told: true } },
+    pin: { lastSeen: lastSeen.toISOString(), told: true },
   });
 });
 
@@ -737,8 +1049,27 @@ async function summary(slack: (() => WebClient) | null = null) {
   return (await alarm({ window, state: null, cloudflare: credentials, slack })).summary;
 }
 
+/** The clock a query Cloudflare fails is asked again on: CI_HTTP's waits on a fake clock that moves
+ *  on whenever nothing else is left to run, each at its longest (`Math.random` at 1). */
+function cloudflareClock() {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  vi.setTimerTickMode("nextTimerAsync");
+  onTestFinished(() => void vi.useRealTimers());
+  vi.spyOn(Math, "random").mockReturnValue(1);
+}
+
+/** Cloudflare's HTML error page, longer than the 200 bytes a failure's message quotes. */
+const errorPage = `<!DOCTYPE html>\n<html lang="en-US"><head><title>api.cloudflare.com | 502: Bad gateway</title></head><body>${'<div class="cf-error-details"></div>'.repeat(20)}</body></html>`;
+function cloudflareErrorPage(status: number) {
+  return new Response(errorPage, {
+    status,
+    headers: { "content-type": "text/html; charset=UTF-8" },
+  });
+}
+
 /** A Workers Logs API that answers each query with `answer(the field it groups by)`. */
 function workersLogs(answer: (groupBy: string | undefined) => unknown) {
+  cloudflareClock();
   const fetch = vi.fn(async (_url: string, init: { body: string }) => {
     const query = JSON.parse(init.body) as {
       view: string;
@@ -753,13 +1084,7 @@ function workersLogs(answer: (groupBy: string | undefined) => unknown) {
     );
   });
   vi.stubGlobal("fetch", fetch);
-  return {
-    fetch,
-    async [Symbol.asyncDispose]() {
-      vi.unstubAllEnvs();
-      vi.unstubAllGlobals();
-    },
-  };
+  return { fetch };
 }
 
 /** A prd whose only signal is `count` 5xx responses from lispwoso.com, `unlogged` more without
@@ -803,7 +1128,7 @@ async function runAt(
   answer = serverErrorsOnly(0),
   day = "2026-09-23",
 ) {
-  await using _cloudflare = workersLogs(answer);
+  workersLogs(answer);
   return await alarm({
     window: logWindow(new Date(`${day}T${hhmm}:00Z`), state),
     state,
@@ -843,11 +1168,9 @@ function resetPair(message = "GET https://rpc-stub-pager.internal/") {
   ];
 }
 
-// The Workers Logs wire contract used here: filters select events before grouping. Unlike a fixed
-// count response, this fixture catches a discarded re-count or an exclusion that drops other rows.
-type LogFilter =
-  | { key: string; operation: string; value?: unknown }
-  | { kind: "group"; filterCombination: "or"; filters: LogFilter[] };
+// The Workers Logs wire contract used here: filters select events before grouping, and a query past
+// 16 filter nodes is refused as Cloudflare refuses it. Unlike a fixed count response, this fixture
+// catches a discarded re-count or an exclusion that drops other rows.
 type LogQuery = {
   view: string;
   limit?: number;
@@ -857,10 +1180,24 @@ function queryableWorkersLogs(
   events: Record<string, unknown>[],
   intercept?: (query: LogQuery) => Response | void,
 ) {
+  cloudflareClock();
   const fetch = vi.fn(async (_url: string, init: { body: string }) => {
     const query = JSON.parse(init.body) as LogQuery;
     const response = intercept?.(query);
     if (response) return response;
+    if (filterNodes(query.parameters.filters) > MAX_FILTER_NODES)
+      return Response.json(
+        {
+          success: false,
+          errors: [
+            {
+              message: "Bad Request",
+              detail: "Filter expression is too complex; maximum is 16 filter nodes",
+            },
+          ],
+        },
+        { status: 400 },
+      );
     const selected = events
       .map((event) => ({
         ...event,
@@ -899,12 +1236,7 @@ function queryableWorkersLogs(
     });
   });
   vi.stubGlobal("fetch", fetch);
-  return {
-    fetch,
-    async [Symbol.asyncDispose]() {
-      vi.unstubAllGlobals();
-    },
-  };
+  return { fetch };
 }
 function logField(event: unknown, key: string): unknown {
   return key.split(".").reduce(
@@ -914,7 +1246,10 @@ function logField(event: unknown, key: string): unknown {
   );
 }
 function matchesLogFilter(event: unknown, filter: LogFilter): boolean {
-  if ("kind" in filter) return filter.filters.some((child) => matchesLogFilter(event, child));
+  if ("kind" in filter)
+    return filter.filterCombination === "and"
+      ? filter.filters.every((child) => matchesLogFilter(event, child))
+      : filter.filters.some((child) => matchesLogFilter(event, child));
   const value = logField(event, filter.key);
   // oxlint-disable-next-line iterate/simple-truthiness-check -- Cloudflare is_null distinguishes missing fields from present empty strings and zero
   if (filter.operation === "is_null") return value === undefined || value === null;
@@ -960,20 +1295,91 @@ function failedDocsRequest() {
   }));
 }
 
+/** `n` ray IDs starting with `prefix`. */
+function rays(prefix: string, n: number) {
+  return Array.from({ length: n }, (_, i) => `${prefix}${i}`);
+}
+
+/** The info line `event` in each of `rayIds`. */
+function rayInfoLines(event: string, rayIds: string[]) {
+  return rayIds.map((rayId) => ({
+    timestamp: 42,
+    event,
+    $metadata: { type: "cf-worker", level: "info", rayId },
+  }));
+}
+
+// Each expected outcome as one query sent it: a group per 500 values of its key, kept when the key
+// is null, is none of them, or the row passes the keep. The split queries must count the same rows.
+function oneQuery(base: LogFilter[], exclusions: Exclusion[]): LogFilter[] {
+  return [
+    ...base,
+    ...exclusions.flatMap(({ key, values, keep }) =>
+      Array.from({ length: Math.ceil(values.length / 500) }, (_, i): LogFilter => ({
+        kind: "group",
+        filterCombination: "or",
+        filters: [
+          { key, operation: "is_null", type: "string" },
+          {
+            key,
+            operation: "not_in",
+            value: values.slice(i * 500, i * 500 + 500).join(","),
+            type: "string",
+          },
+          { kind: "group", filterCombination: "and", filters: keep },
+        ],
+      })),
+    ),
+  ];
+}
+
+/** One visitor's WebSocket to a tunnel on the edge whose connection vanished, as prd logged it
+ *  (2026-09-25 14:56:17Z, but for the info line, which the edge logs since): the edge's
+ *  `fetch-upgrade.local-gone`, the runtime's "Network connection lost." and the invocation's
+ *  exception summary, one requestId, all in `rayId`. */
+function vanishedVisitorRequest(rayId: string) {
+  const url = "https://here-public.templestein.com/clock";
+  const invocation = { requestId: `${rayId}-edge`, rayId };
+  const $workers = { executionModel: "stateless", event: { request: { url } } };
+  return [
+    {
+      timestamp: 42,
+      event: "fetch-upgrade.local-gone",
+      $metadata: { type: "cf-worker", level: "info", ...invocation },
+      $workers,
+    },
+    {
+      timestamp: 42,
+      $metadata: { type: "cf-worker", message: "Network connection lost.", ...invocation },
+      $workers,
+    },
+    {
+      timestamp: 42,
+      $metadata: { type: "cf-worker-event", message: `GET ${url}`, ...invocation },
+      $workers: { ...$workers, outcome: "exception" },
+    },
+  ];
+}
+
 /** One request to a killed tunnel's host, as a preview logged it (2026-09-24): the offline stub's info
  *  line in the context DO, then a 502 summary from each hop — the project host's Worker, the DO's fetch,
  *  the config worker's ItxEntrypoint and the DO's fetch again — each with its own requestId and all
- *  in `rayId`. `change` alters the four summaries. */
+ *  in `rayId`. `change` alters the four summaries; `answer` is another expected answer's line and
+ *  status (a deploy reset's 503). */
 function rpcStubOfflineRequest(
   rayId: string,
   change: { status?: number; rayId?: string; type?: string; message?: string } = {},
+  answer: { event: string; status: number } = {
+    event: "expression-fetch.rpc-stub-offline",
+    status: 502,
+  },
 ) {
   const url = "https://blog--p.iterate.app/__vite_ping";
   const summaryRayId = "rayId" in change ? change.rayId : rayId;
   return [
     {
       timestamp: 42,
-      event: "expression-fetch.rpc-stub-offline",
+      event: answer.event,
       $metadata: { type: "cf-worker", level: "info", requestId: `${rayId}-inner-do`, rayId },
       $workers: { executionModel: "durableObject", event: { request: { url } } },
     },
@@ -990,7 +1396,7 @@ function rpcStubOfflineRequest(
         outcome: "ok",
         event: {
           request: { url },
-          response: "status" in change ? { status: change.status } : { status: 502 },
+          response: "status" in change ? { status: change.status } : { status: answer.status },
         },
       },
     })),

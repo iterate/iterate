@@ -14,25 +14,33 @@
 //      facts land (session.ts `publishPlatformFacts`, grants.ts, consent.ts) and a user's secrets
 //      catalog is folded (built-ins.ts `ownerRootFacet`).
 //   2. `organization` — an organization's own context, `global:/organizations/<id>`, and nowhere
-//      else: session.ts `foldPlatformFacts` (created, renamed, deleted, a project added to it) and
-//      the organization's secrets catalog (built-ins.ts `ownerRootFacet`).
+//      else: where the organization's activity lands (session.ts `publishOrganizationFacts`) and
+//      its secrets catalog is folded (built-ins.ts `ownerRootFacet`).
 //   3. `project` — a project's root `/`, and nowhere else: its creation saga (session.ts
 //      `projects.create`), the entity collections (library.ts `projectFacet`) and the project's
 //      secrets catalog (built-ins.ts `ownerRootFacet`).
 //   4. `secret` — `/secrets/<name>` directly under its owner's root, the one context `itx.secrets`
 //      and egress resolve a secret to (built-ins.ts `onSecretContext`, the DO's `#egress`): a
 //      project's `/secrets/<name>`, a user's `global:/users/<id>/secrets/<name>`, an organization's
-//      `global:/organizations/<id>/secrets/<name>`. The global root owns no secrets.
+//      `global:/organizations/<id>/secrets/<name>`, the deployment's own `global:/secrets/<name>`
+//      (the operator's, lent to projects).
 //   5. `repo`, `workspace` — any context of a project: `itx.repos.create(path)` and
-//      `itx.workspaces.create(path)` take any path (library.ts `entityRoot`; `/repos/<name>` is a
-//      convention, not a rule). Never the global namespace.
+//      `itx.workspaces.create(path)` take any path beneath the caller's context (library.ts
+//      `entityRoot`; `/repos/<name>` is a convention, not a rule). Never the global namespace.
 //   6. Loaded code — a facet or processor of any other name, hosted from the source its spec names,
 //      and a stateless worker, `itx.workers.get({ source })` (which `itx.run` loads its script
 //      through) — runs only inside a project, any of its contexts, and never in the global
 //      namespace: a person's account, an organization and the global root run the platform's code
-//      alone.
+//      alone. The one exception is not a facet: a secret's own exchange code (`refresh: { kind:
+//      "worker" }`), which the `secret` facet loads itself, wherever rule 4 hosts it — a person's
+//      secret too — in a jail with no env and the pin as its only egress (secret/exchange-jail.ts).
+//   7. `instance` — the global root `global:/`, and nowhere else: the deployment's own secrets
+//      catalog (built-ins.ts `ownerRootFacet`), which only the operator reaches.
+//   8. `email` — a project's `/integrations/email`, and nowhere else: where the platform records
+//      the project's mail (integrations/email.ts).
 import { codedError } from "iterate/lib";
 import type { FIRST_PARTY_FACET_CLASSES } from "../first-party-facets.ts";
+import { EMAIL_PATH } from "../email/contract.ts";
 import { SECRET_PATH } from "../secrets.ts";
 import { GLOBAL_PROJECT_ID, pathUnderOwner, resourceScope } from "./paths.ts";
 
@@ -66,12 +74,10 @@ const FIRST_PARTY_FACET_PLACEMENT_RULES = {
   // 4. The path relative to the owner's root is what the placeholder spells — the secret facet's
   // own `#address` (secret/durable-object.ts).
   secret: {
-    where: "/secrets/<name> directly under a project's, a user's or an organization's root",
-    mayBeHostedOn: ({ projectId, path }) => {
-      const owner = resourceScope(projectId, path);
-      if (owner.kind === "global") return false;
-      return SECRET_PATH.test(pathUnderOwner(owner, path));
-    },
+    where:
+      "/secrets/<name> directly under a project's, a user's, an organization's or the global root",
+    mayBeHostedOn: ({ projectId, path }) =>
+      SECRET_PATH.test(pathUnderOwner(resourceScope(projectId, path), path)),
   },
   // 5.
   repo: {
@@ -82,13 +88,23 @@ const FIRST_PARTY_FACET_PLACEMENT_RULES = {
     where: "a project's context",
     mayBeHostedOn: ({ projectId }) => projectId !== GLOBAL_PROJECT_ID,
   },
+  // 7.
+  instance: {
+    where: "the global root, global:/",
+    mayBeHostedOn: ({ projectId, path }) => projectId === GLOBAL_PROJECT_ID && path === "/",
+  },
+  // 8.
+  email: {
+    where: `a project's ${EMAIL_PATH}`,
+    mayBeHostedOn: ({ projectId, path }) => projectId !== GLOBAL_PROJECT_ID && path === EMAIL_PATH,
+  },
 } satisfies Record<
   keyof typeof FIRST_PARTY_FACET_CLASSES,
   { where: string; mayBeHostedOn: (context: IterateContextAddress) => boolean }
 >;
 
 /** Refuses — FORBIDDEN, which a hosting row's delivery halts on at once — hosting the facet `name`
- *  on `context` where the rules above do not place it: a first-party name by its own rule (1–5), any
+ *  on `context` where the rules above do not place it: a first-party name by its own rule (1–5, 7, 8), any
  *  other name as loaded code (6). */
 export function assertFacetPlacement(name: string, context: IterateContextAddress): void {
   if (!Object.hasOwn(FIRST_PARTY_FACET_PLACEMENT_RULES, name))

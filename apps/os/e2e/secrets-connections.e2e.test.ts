@@ -4,6 +4,9 @@
 //   • `waitrose-session` — the username/password → session archetype (Waitrose's login; the
 //     petshop's GraphQL login speaks the same wire shape): the secret holds ONLY the account
 //     credential, its Durable Object logs in on first use and logs in again on 401.
+//   • `worker` — the same archetype for any vendor, as the secret's own exchange code: the pet shop's
+//     Tesco-shaped two-step login (a CSRF token and its cookie, then the form) runs in the secret's
+//     jail on first use and on 401.
 //   • `oauth-refresh-token`, tokens brought by a trusted party — the OAuth story with the consent
 //     walked by the test: discovery, code exchange, the secret, a call, expiry, rotation, revocation.
 //   • OAuth, the first tokens obtained by the platform, confidential client — `itx.secrets.beginOAuth`
@@ -36,6 +39,7 @@ import {
   petshopBaseUrl,
   petshopConnect,
   petshopExpireGraphqlSessions,
+  petshopExpireTescoTokens,
   petshopExpireTokens,
   petshopFailTokenEndpoint,
   petshopFireAppWebhook,
@@ -43,13 +47,14 @@ import {
   petshopRegisterApp,
   petshopRegisterPublicClient,
   petshopRevokeRefreshToken,
+  petshopTescoExchangeSource,
 } from "./support/petshop.ts";
 import { oauthSession } from "./support/principal.ts";
+import { publishConfigWorker } from "./support/config-worker.ts";
 import {
   deployedOnly,
   freshDnsSafeProjectSlug,
   projectUrl,
-  publishConfigWorker,
   registerProject,
 } from "./support/project-host.ts";
 
@@ -111,6 +116,46 @@ test("waitrose-session: a username/password secret mints its session on first us
   );
 });
 
+test("worker: a userspace Tesco login in the secret's own exchange code logs in on first use and again on a forced 401, and the catalog names the code by its hash — the password never leaves its Durable Object", async () => {
+  const itx = openItx(freshCtx("secrets-tesco"));
+  const petshop = petshopBaseUrl();
+  const email = `shopper-${Date.now().toString(36)}-${crypto.randomUUID().slice(0, 6)}@example.com`;
+  const source = petshopTescoExchangeSource();
+  await itx.secrets.set(
+    "/secrets/tesco",
+    { email, password: "correct-horse" },
+    { urls: [petshop], refresh: { kind: "worker", source } },
+  );
+  expect(await itx.secrets.list()).toEqual([
+    {
+      path: "/secrets/tesco",
+      urls: [petshop],
+      refresh: "worker",
+      refreshSourceSha256: await sha256Hex(source),
+      createdAt: expect.any(String),
+    },
+  ]);
+
+  expect(await bearerCall(itx, "/secrets/tesco", "/api/me")).toMatchObject({
+    status: 200,
+    body: { sub: email, clientId: `tesco-login:${email}` },
+  });
+  await petshopExpireTescoTokens(email);
+  expect(await bearerCall(itx, "/secrets/tesco", "/api/pets")).toMatchObject({
+    status: 200,
+    body: { owner: email, pets: expect.any(Array) },
+  });
+
+  const secret = itx.cd("/secrets/tesco");
+  expect(await refreshedFacts(secret)).toEqual([
+    { kind: "worker", ok: true },
+    { kind: "worker", ok: true },
+  ]);
+  expect(JSON.stringify([await readAll(itx), await readAll(secret)])).not.toContain(
+    "correct-horse",
+  );
+});
+
 // AN OAUTH-PROTECTED API, END TO END. The petshop is a real OAuth 2.0 provider (RFC 8414 discovery,
 // authorization code, HTTP Basic client auth at the token endpoint, refresh tokens that ROTATE on
 // every refresh grant, a backdoor to revoke one). The story in order:
@@ -137,10 +182,9 @@ test("oauth-refresh-token, end to end against the petshop: discovery, consent, t
   const { token_endpoint: tokenEndpoint } = await petshopAuthorizationServer();
   expect(tokenEndpoint).toBe(`${petshop}/oauth/token`);
 
-  // 2. consent + code exchange, as the trusted party — a client of its own, so forcing ITS tokens to
-  //    expire touches no other test
+  // 2. consent + code exchange, as the trusted party, for ada at a client of the row's own
   const client = await petshopMintClient();
-  const first = await petshopConnect(client);
+  const first = await petshopConnect(client, "ada");
 
   // 3. the secret
   await itx.secrets.set(
@@ -160,13 +204,13 @@ test("oauth-refresh-token, end to end against the petshop: discovery, consent, t
   // 4. a call — the token is there, so no strategy runs
   expect(await bearerCall(itx, "/secrets/petshop", "/api/me")).toMatchObject({
     status: 200,
-    body: { clientId: client.clientId },
+    body: { sub: "ada", clientId: client.clientId },
   });
   const secret = itx.cd("/secrets/petshop");
   expect(await refreshedFacts(secret)).toEqual([]);
 
   // 5. expiry → refresh inside the DO → the retried call succeeds; the run is a fact on the path
-  await petshopExpireTokens(client.clientId);
+  await petshopExpireTokens(client.clientId, "ada");
   expect(await bearerCall(itx, "/secrets/petshop", "/api/me")).toMatchObject({
     status: 200,
     body: { clientId: client.clientId },
@@ -176,7 +220,7 @@ test("oauth-refresh-token, end to end against the petshop: discovery, consent, t
   // 6. rotation: the refresh in step 5 handed the DO a NEW refresh token, and it kept that one — so
   //    revoking the original changes nothing for the next expiry
   await petshopRevokeRefreshToken(first.refreshToken);
-  await petshopExpireTokens(client.clientId);
+  await petshopExpireTokens(client.clientId, "ada");
   expect(await bearerCall(itx, "/secrets/petshop", "/api/pets")).toMatchObject({ status: 200 });
 
   // 7. revocation of the CURRENT refresh token: the next refresh grant is invalid_grant, and the
@@ -225,12 +269,12 @@ test("oauth-refresh-token through a token-endpoint outage: one failed refresh, t
   const client = await petshopMintClient();
   await itx.secrets.set(
     "/secrets/petshop",
-    { ...client, ...(await petshopConnect(client)) },
+    { ...client, ...(await petshopConnect(client, "ada")) },
     { urls: [petshop], refresh: { kind: "oauth-refresh-token", tokenEndpoint } },
   );
   const secret = itx.cd("/secrets/petshop");
 
-  await petshopExpireTokens(client.clientId);
+  await petshopExpireTokens(client.clientId, "ada");
   await petshopFailTokenEndpoint(client.clientId, 1);
   // One scheduled 500: had the object retried the refresh, the second grant would have won and
   // this call would be a 200.
@@ -258,10 +302,10 @@ test("oauth-refresh-token through a token-endpoint outage: one failed refresh, t
 });
 
 // THE FIRST TOKENS, obtained by the platform: `itx.secrets.beginOAuth` hands back the provider's
-// authorize URL; the human consents there (the petshop's test-only `approve=1` shortcut stands in for
-// the page); the provider redirects the human to the platform's one callback with the code; the
-// callback admits only a signed-in member of the project (here the member's OAuth bearer; never the
-// operator's, which is `/api`'s alone), and the secret's Durable Object exchanges the code. From then on it is the ordinary
+// authorize URL; the human consents there (the pet shop consents at once); the provider redirects
+// the human to the platform's one callback with the code; the callback admits only a signed-in
+// member of the project (here the member's OAuth bearer; never the operator's, which is `/api`'s
+// alone), and the secret's Durable Object exchanges the code. From then on it is the ordinary
 // `oauth-refresh-token` secret the story above proves. No code outside that object ever held a token
 // — not even the test.
 test("beginOAuth, confidential client, in a catalogued project: authorize URL out, the code back at the platform's callback (a project member only), the exchange inside the secret's Durable Object; then a call, expiry and refresh", async () => {
@@ -294,7 +338,7 @@ test("beginOAuth, confidential client, in a catalogued project: authorize URL ou
   expect(authorize.searchParams.get("redirect_uri")).toBe(callback);
   expect(authorize.searchParams.get("code_challenge_method")).toBe("S256");
   expect(authorizationUrl).not.toContain(client.clientSecret);
-  authorize.searchParams.set("approve", "1");
+  authorize.searchParams.set("user", "ada");
   const consent = await fetch(authorize, { redirect: "manual" });
   expect(consent).toMatchObject({ status: 302 });
   const back = new URL(consent.headers.get("location")!);
@@ -351,9 +395,9 @@ test("beginOAuth, confidential client, in a catalogued project: authorize URL ou
   // now an ordinary oauth-refresh-token secret: a call, expiry, transparent refresh
   expect(await bearerCall(itx, "/secrets/petshop", "/api/me")).toMatchObject({
     status: 200,
-    body: { clientId: client.clientId },
+    body: { sub: "ada", clientId: client.clientId },
   });
-  await petshopExpireTokens(client.clientId);
+  await petshopExpireTokens(client.clientId, "ada");
   expect(await bearerCall(itx, "/secrets/petshop", "/api/me")).toMatchObject({
     status: 200,
     body: { clientId: client.clientId },
@@ -389,7 +433,7 @@ test("beginOAuth, public client (RFC 7591 registration, PKCE alone, client_id in
   const authorize = new URL(authorizationUrl);
   expect(authorize.searchParams.get("client_id")).toBe(clientId);
   expect(authorize.searchParams.get("redirect_uri")).toBe(callback);
-  authorize.searchParams.set("approve", "1");
+  authorize.searchParams.set("user", "ada");
   const consent = await fetch(authorize, { redirect: "manual" });
   expect(consent).toMatchObject({ status: 302 });
   const back = new URL(consent.headers.get("location")!);
@@ -409,10 +453,10 @@ test("beginOAuth, public client (RFC 7591 registration, PKCE alone, client_id in
   ]);
   expect(await bearerCall(itx, "/secrets/petshop-public", "/api/me")).toMatchObject({
     status: 200,
-    body: { clientId },
+    body: { sub: "ada", clientId },
   });
   // expiry → the refresh grant with client_id in the body (no Basic header to send) → 200
-  await petshopExpireTokens(clientId);
+  await petshopExpireTokens(clientId, "ada");
   expect(await bearerCall(itx, "/secrets/petshop-public", "/api/me")).toMatchObject({
     status: 200,
     body: { clientId },
@@ -503,6 +547,12 @@ const bearerCall = async (itx: ReturnType<typeof openItx>, secret: string, path:
   }
   return { status: res.status, body };
 };
+
+/** SHA-256 of a string, hex: what the catalog names exchange code by. */
+async function sha256Hex(value: string): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
 
 /** The `secret/refreshed` facts on a SECRET's log (`itx.cd("/secrets/<name>")`), oldest first — the
  *  facet appends one per strategy run, before it answers the request that ran it. */

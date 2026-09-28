@@ -1,0 +1,75 @@
+{
+  "name": "@iterate-com/agents",
+  "version": "0.1.0",
+  "description": "The agents app for Iterate projects: a collection of agents, each a model that acts through scripts against its context",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/iterate/iterate",
+    "directory": "packages/agents"
+  },
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./install": "./src/install.ts",
+    "./contract": "./src/contract.ts",
+    "./processor": "./src/processor.ts",
+    "./codemode-format": "./src/codemode-format.ts",
+    "./system-prompt": "./src/system-prompt.ts",
+    "./ai-transport-source": "./src/ai-transport-source.ts"
+  },
+  "files": [
+    "dist"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.mts",
+        "import": "./dist/index.mjs"
+      },
+      "./install": {
+        "types": "./dist/install.d.mts",
+        "import": "./dist/install.mjs"
+      },
+      "./contract": {
+        "types": "./dist/contract.d.mts",
+        "import": "./dist/contract.mjs"
+      },
+      "./processor": {
+        "types": "./dist/processor.d.mts",
+        "import": "./dist/processor.mjs"
+      },
+      "./codemode-format": {
+        "types": "./dist/codemode-format.d.mts",
+        "import": "./dist/codemode-format.mjs"
+      },
+      "./system-prompt": {
+        "types": "./dist/system-prompt.d.mts",
+        "import": "./dist/system-prompt.mjs"
+      },
+      "./ai-transport-source": {
+        "types": "./dist/ai-transport-source.d.mts",
+        "import": "./dist/ai-transport-source.mjs"
+      }
+    }
+  },
+  "scripts": {
+    "build": "tsdown",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "prepack": "pnpm build"
+  },
+  "peerDependencies": {
+    "iterate": "*",
+    "zod": "^4"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "catalog:",
+    "iterate": "workspace:*",
+    "tsdown": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:",
+    "zod": "catalog:"
+  }
+}

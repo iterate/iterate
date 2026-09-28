@@ -6,18 +6,16 @@ import {
   SPEC_TEST_TIMEOUT_MS,
 } from "@iterate-com/shared/test-support/e2e-policy";
 import { testEvidencePaths } from "@iterate-com/shared/test-support/test-evidence";
+import { localWorkerPort, workerBaseUrl } from "./specs/test-support/worker-base-url.ts";
 
 const videoMode = process.env.VIDEO_MODE === "1";
 // CI retry artifacts already include screenshots/traces; retaining videos can
 // leave ffmpeg workers alive after a retry and keep the job open.
 const videoArtifactsEnabled = videoMode || !process.env.CI;
 
-/** Note: we use DEMO_BASE_URL as the *os* base url; unset boots a local OS worker. */
-const configuredOsBaseUrl = process.env.DEMO_BASE_URL?.replace(/\/+$/, "");
-const localOsPort = Number(process.env.DEMO_PORT || 8788);
-const osBaseUrl = configuredOsBaseUrl || `http://localhost:${localOsPort}`;
-/** The Notes app deployed against that OS: the notes project's baseURL. Its session specs also
- *  sign in to the Dash (DASH_BASE_URL). Locally, unset skips them; in CI, unset fails them. */
+/** The Notes app deployed against the OS under test: the notes project's baseURL. Its session
+ *  specs also sign in to the Dash (DASH_BASE_URL). Locally, unset skips them; in CI, unset fails
+ *  them. */
 const notesBaseUrl = process.env.NOTES_BASE_URL?.replace(/\/+$/, "");
 /** The Voice app deployed against that OS: the voice project's baseURL. Locally, unset skips its
  *  specs; in CI, unset fails them. */
@@ -69,7 +67,7 @@ export default defineConfig({
     // the app visibly reports progress (see e2e-policy/budgets.ts, which also
     // explains why there is no video-mode or per-project override).
     actionTimeout: SPEC_ACTION_TIMEOUT_MS,
-    baseURL: osBaseUrl,
+    baseURL: workerBaseUrl,
     screenshot: "only-on-failure",
     // Preserve the original failure's network evidence; successful attempts
     // still discard their traces.
@@ -118,12 +116,13 @@ export default defineConfig({
       use: desktopWebUse,
     },
   ],
-  webServer: configuredOsBaseUrl
+  // unset WORKER_BASE_URL boots a local OS worker
+  webServer: process.env.WORKER_BASE_URL
     ? []
     : [
         {
-          command: `pnpm --dir apps/os dev -- --port ${localOsPort}`,
-          url: `${osBaseUrl}/version`,
+          command: `pnpm --dir apps/os dev -- --port ${localWorkerPort}`,
+          url: `${workerBaseUrl}/version`,
           reuseExistingServer: !process.env.CI,
           timeout: 120_000,
           stdout: "pipe" as const,

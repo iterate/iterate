@@ -3,11 +3,11 @@ import { env, exports } from "cloudflare:workers";
 import { newWebSocketRpcSession } from "capnweb";
 import { expect, test } from "vitest";
 import type { IterateRpcTarget } from "../src/session.ts";
+import { publishConfigWorker } from "../e2e/support/config-worker.ts";
 import {
   catalog,
   fakeCloudflareCustomHostnames,
   ORIGIN,
-  publishConfigWorker,
   releasePins,
   SRC_ECHO_APP,
   stub,
@@ -16,7 +16,7 @@ const ADMIN = { type: "admin-secret", secret: env.APP_CONFIG_SECRETS__ADMIN_BEAR
 
 const echoConfigWorker = ["itx", "workers", ["get", { source: SRC_ECHO_APP }]];
 
-test("the edge picks the project only: `<routingSlug>--<project>`, `<routingSlug>.<project>` and the apex all reach the config worker's fetch, x-iterate-routing-slug the host's (absent on the apex) whatever a visitor sent; an unknown routing slug reaches it too; no config worker is 404", async () => {
+test("the edge picks the project only: `<routingSlug>--<project>` and the apex both reach the config worker's fetch, x-iterate-routing-slug the host's (absent on the apex) whatever a visitor sent; an unknown routing slug reaches it too; two labels under the base are no project host (421); no config worker is 404", async () => {
   using session = await api();
   const admin = session.authenticate(ADMIN);
   const itx = await admin.projects.create({ project: "routing-shapes" });
@@ -32,10 +32,9 @@ test("the edge picks the project only: `<routingSlug>--<project>`, `<routingSlug
     expect(await none.text()).toMatch(/no site yet/);
   }
   await publishConfigWorker(itx, echoConfigWorker);
-  // both shapes and an unknown slug: the config worker, the header the edge's — the visitor's overwritten
+  // a routing slug and an unknown one: the config worker, the header the edge's — the visitor's overwritten
   for (const [host, routingSlug] of [
     ["echo--routing-shapes", "echo"],
-    ["echo.routing-shapes", "echo"],
     ["unknown--routing-shapes", "unknown"],
   ]) {
     const seen = await call(`https://${host}.projects.test/`, forged);
@@ -51,6 +50,10 @@ test("the edge picks the project only: `<routingSlug>--<project>`, `<routingSlug
   const apex = await call("https://routing-shapes.projects.test/", forged);
   expect(apex, await apex.clone().text()).toMatchObject({ status: 200 });
   expect(await apex.json()).toMatchObject({ routingSlug: null });
+  // two labels under the base, even naming a live project: no project host, never its config worker
+  const dotted = await call("https://echo.routing-shapes.projects.test/", forged);
+  expect(dotted).toMatchObject({ status: 421 });
+  expect(await dotted.text()).toMatch(/is not a project host/);
 });
 
 /** A loaded worker that fetches its own project through `env.ITX.fetch` — the ingress target (the
@@ -149,8 +152,8 @@ test("a router that answers through this.withItx hands on the app's whole stream
 });
 
 test("under the base, only a project host: a hostname that fails the grammar is 421 — never the control plane; the platform host itself is unaffected", async () => {
-  // `site--prj_1` (an `_`), `a.b.c` (deeper than `<routingSlug>.<project>`), `--x` (no routing slug): none is
-  // a project host, and none may be a working platform ORIGIN on a name the platform never chose
+  // `site--prj_1` (an `_`), `a.b.c` (more than one label under the base), `--x` (no routing slug): none
+  // is a project host, and none may be a working platform ORIGIN on a name the platform never chose
   for (const host of ["site--prj_1", "a.b.c", "--x"]) {
     const res = await call(`https://${host}.projects.test/login`, {
       method: "POST",

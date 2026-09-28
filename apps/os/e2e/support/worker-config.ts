@@ -11,7 +11,7 @@ export const PACKAGE_DIR = dirname(dirname(dirname(fileURLToPath(import.meta.url
 
 /** The e2e worker's admin bearer — what the suite's default session authenticates with
  *  (support/client.ts `adminCredentials`; global-setup hands it to every file). */
-export const E2E_ADMIN_API_SECRET = "e2e-admin-api-secret";
+export const E2E_ADMIN_BEARER = "e2e-admin-api-secret";
 /** The e2e worker's sign-in password — what a browser session is minted with (support/principal.ts:
  *  `POST /login` with an email and this). */
 export const E2E_LOGIN_PASSWORD = "e2e-password";
@@ -62,7 +62,7 @@ export function e2eWorkerConfig(
       APP_CONFIG_URLS__INGRESS_ROUTING: JSON.stringify(ingressRouting),
       APP_CONFIG_LOGIN__PASSWORD: E2E_LOGIN_PASSWORD,
       APP_CONFIG_SECRETS__KEY: "e2e-secrets-key",
-      APP_CONFIG_SECRETS__ADMIN_BEARER: E2E_ADMIN_API_SECRET,
+      APP_CONFIG_SECRETS__ADMIN_BEARER: E2E_ADMIN_BEARER,
     },
   };
 }

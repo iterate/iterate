@@ -27,15 +27,10 @@ shrink the fixture.
 
 ## 2. Dump the log
 
-Use a personal access token for the chat's project, as `ITERATE_BEARER_TOKEN`: the
-person who reported the chat can mint one on the Dash's Sessions page, and if you are signed
-in yourself, `pnpm exec iterate --config prd tokens create --name fix-stream --project <slug>`
-prints one ([credentials](../../../apps/os/docs/credentials.md)). Keep it in the command's
-environment and never print it. A key covers only projects its person belongs to. For a
-project nobody at hand belongs to, use the deployment's operator bearer on `/api` instead:
-`APP_CONFIG_ADMIN_API_SECRET` set to `secrets.adminBearer` from the `APP_CONFIG` of Doppler
-`os/prd` (`os/preview` for any preview), in place of `ITERATE_BEARER_TOKEN` below
-([acting as users and admins](../../../docs/dev-environments.md#acting-as-users-and-admins)).
+Use a personal access token for the chat's project as `ITERATE_BEARER_TOKEN`, or, for a project
+nobody at hand belongs to, the operator bearer as `APP_CONFIG_SECRETS__ADMIN_BEARER`
+([credentials](../../../apps/os/docs/credentials.md#personal-access-tokens)). Keep it in the
+command's environment and never print it.
 
 Save this in your scratchpad as `dump-agent.js`, with the agent's path filled in:
 
@@ -66,13 +61,12 @@ Run at the project root, which is the default `--context /`. Never pass
 `--context <agent path>` for a dump. The run would be recorded in the agent's own log and
 show up in its chat as a script run.
 
-For a quick look with no JSON, use `apps/os/scripts/inspect-context.ts`. It prints one row per
-event, with payloads cut to 200 characters, and then the subscription rows:
+For a quick look with no JSON, the CLI prints the first 500 events as a table, and
+`itx.cd("/agents/web/<moment>").subscriptions.list()` the subscription rows:
 
 ```sh
-cd apps/os
-WORKER_BASE_URL=https://os.iterate.com ITERATE_BEARER_TOKEN=itk_… \
-  PROJECT=<slug> CTX_PATH=/agents/web/<moment> pnpm exec tsx scripts/inspect-context.ts
+ITERATE_BEARER_TOKEN=itk_… pnpm exec iterate --config prd itx run --project <slug> \
+  --eval 'return (await itx.cd("/agents/web/<moment>").readEvents(0, 500)).events'
 ```
 
 The dump holds durable events only. `agent/llm-response-frame` is ephemeral and is never
@@ -81,7 +75,7 @@ stored: the settled `agent/llm-request-settled` carries the text.
 ## 3. Name the complaint
 
 Print the conversation with offsets and times before reading product code. Every type is
-`events.iterate.com/…` (the contract is `configs/with-agents/agents/contract.ts`):
+`events.iterate.com/…` (the contract is `packages/agents/src/contract.ts`):
 
 - `agent/context-added`: the conversation. The `role` is `system`, `developer`, `user` or
   `assistant`. A user item's `actor.type` is `user`, `script` (a script's result) or `agent`.
@@ -92,7 +86,7 @@ Print the conversation with offsets and times before reading product code. Every
   The UI renames them (`adaptContextRuns` in `apps/agents/src/lib/agent-events.ts`).
 - `agent/web-message-sent`: what the person saw. `agent/paused` and `agent/resumed`: a breaker
   or an operator.
-- `voice-agent/*`: a call's transcripts, delegations and commentary (`apps/agents/voice/`).
+- `voice-agent/*`: a call's transcripts, delegations and commentary (`packages/voice/src/`).
 - Other `itx/*`: the context's own facts, such as wakes (`itx/woken`) and processor rows
   (`itx/subscription-configured`).
 
@@ -109,8 +103,8 @@ deployment and no real model.
 | --------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
 | what the chat shows (missing, duplicated or wrong rows)               | `apps/agents/src/lib/agent-events.test.ts`: `toAgentEvent` → `adaptContextRuns` → `reduceAgentFeed`, with real offsets |
 | the reducer behind the agent UI                                       | `apps/agents/src/lib/events/agent-ui-reducer.test.ts`                                                                  |
-| what the loop decides (a missing request, a stuck trigger, a breaker) | `apps/agents/runtime/processor.test.ts`: `reduceProcessor` rows                                                        |
-| a voice call                                                          | `apps/agents/voice/*.test.ts` (see `agent.test.ts` and `screen-context-repro.json`)                                    |
+| what the loop decides (a missing request, a stuck trigger, a breaker) | `packages/agents/src/processor.test.ts`: `reduceProcessor` rows                                                        |
+| a voice call                                                          | `packages/voice/src/*.test.ts` (see `agent.test.ts` and `screen-context-repro.json`)                                   |
 | an effect: a model call, a script run, the birth or death sagas       | `apps/agents/e2e/agents.e2e.test.ts`, with a fake `itx.ai` lent by rule (commands in `apps/agents/README.md`)          |
 
 - Save the dump as a JSON fixture beside the test, named for the complaint
@@ -127,7 +121,7 @@ deployment and no real model.
 
 ## 5. Prove it is red for the right reason
 
-`pnpm --dir apps/agents exec vitest run <file>` (or `packages/ui`'s). A failure only proves
+`pnpm --dir <package> exec vitest run <file>` (`apps/agents`, `packages/agents`, `packages/voice` or `packages/ui`). A failure only proves
 something when its diff shows the prod symptom. To see everything, assert against a string,
 for example `expect(items.map((i) => i.kind)).toEqual("SHOW ME")`, read the diff, then delete
 that assertion. Commit the test and fixture, push, and open or update the PR as a draft so CI
@@ -137,7 +131,7 @@ shows the red. Put a before/after excerpt of the prod log in the PR body.
 
 1. Make the smallest product fix consistent with the design. Grep for an existing path first,
    because the gap is often routing, not missing machinery. Run the test green, then the
-   package suite (`pnpm --dir apps/agents test`, or `packages/ui`'s). Push.
+   package suite (`pnpm --dir <package> test`). Push.
 2. Shrink the fixture: revert the product file (`git checkout <red commit> -- <file>`), cut
    events, and confirm the test is still red. If it turns green, the cut removed the repro, so
    restore it. Keep the system item, the last complete turn before the bad part, and the bad

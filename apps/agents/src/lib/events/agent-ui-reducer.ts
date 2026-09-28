@@ -1,10 +1,10 @@
 import { RunSettled } from "iterate/stream/run";
+import { AgentLlmRequestCancelReason } from "@iterate-com/agents/contract";
 import { appendText, sliceText, type StreamText } from "../chunked-text.ts";
-import { AgentLlmRequestCancelReason } from "../../../../../configs/with-agents/agents/contract.ts";
-import type { Event } from "./types.ts";
+import type { StreamEvent } from "./stream-event.ts";
 
 // The agent UI is a clean chat: user message → activity ("Ran code 2× · 3
-// requests · 7.4 s") → assistant message, with quiet stream wake dividers.
+// requests · 7.4 s") → assistant message, with pause and resume dividers.
 // Reduced from raw events: settled items, plus the in-flight activity and its
 // streamed text.
 
@@ -19,8 +19,6 @@ export type AgentUiLlmStep = {
   thinkingText: StreamText;
   /** Streamed response text — for code-mode agents this is source code. */
   responseText: StreamText;
-  /** Server preview omitted text to stay bounded; durable request replay retains the full output. */
-  previewTruncated?: boolean;
   /** Offset of the committed assistant context-added event carrying this
    * step's final text; links interpretation events back to the step. */
   assistantEventOffset?: number;
@@ -251,14 +249,11 @@ export function deriveAgentUiLiveStatus(state: AgentUiState): AgentUiLiveStatus 
       // The response finished and visibly contains a script: what follows is
       // a journal fact either way — script-run-requested when it extracts,
       // or the format's rejection feedback driving another llm request — so
-      // the turn is not over. Line-anchored, matching the fenced-ts format's
-      // own rule (agent-response-format.ts): a ``` mentioned mid-prose is
-      // not a script and must not hold the card open.
+      // the turn is not over.
       if (
         last.status === "done" &&
         last.outcome === "completed" &&
-        (/^[ \t]*```/m.test(sliceText(last.responseText)) ||
-          sliceText(last.responseText).includes("<codemode"))
+        sliceText(last.responseText).includes("<codemode")
       ) {
         return "processing";
       }
@@ -274,15 +269,6 @@ export type AgentUiFileAttachment = {
   filename: string;
   path: string;
   size: number;
-  url: string;
-};
-
-/** Marks a message that arrived through an external chat integration, or from another agent. */
-export type AgentUiMessageVia = {
-  service: "slack" | "telegram" | "agent" | "email" | "github";
-  /** Best-effort sender label: slack user id, telegram username, email address,
-   * github login, or agent path. */
-  sender?: string;
 };
 
 export type AgentUiMessageItem = {
@@ -291,16 +277,6 @@ export type AgentUiMessageItem = {
   text: string;
   timestampMs: number;
   files?: AgentUiFileAttachment[];
-  via?: AgentUiMessageVia;
-};
-
-export type AgentUiStreamWakeItem = {
-  kind: "stream-woken";
-  id: string;
-  text: string;
-  timestampMs: number;
-  /** Adjacent wake markers represented by this final wake. */
-  count?: number;
 };
 
 export type AgentUiStreamPauseItem = {
@@ -311,11 +287,7 @@ export type AgentUiStreamPauseItem = {
   timestampMs: number;
 };
 
-export type AgentUiItem =
-  | AgentUiMessageItem
-  | AgentUiActivity
-  | AgentUiStreamWakeItem
-  | AgentUiStreamPauseItem;
+export type AgentUiItem = AgentUiMessageItem | AgentUiActivity | AgentUiStreamPauseItem;
 
 export type AgentUiState = {
   /** The running activity (streaming thinking/code), or null when no work is active. */
@@ -324,7 +296,6 @@ export type AgentUiState = {
   deferredAssistantMessages: AgentUiMessageItem[];
   /** User messages that landed while the current request was already running. */
   queuedUserMessages: AgentUiMessageItem[];
-  eventCount: number;
   /**
    * Settled activities whose script outcome was inferred at a boundary rather
    * than supplied by a durable completion. A late completion replaces the
@@ -355,7 +326,6 @@ export function initialAgentUiState(): AgentUiState {
     live: null,
     deferredAssistantMessages: [],
     queuedUserMessages: [],
-    eventCount: 0,
     provisionalActivities: {},
     summaryActivity: null,
     summaryActivityUpdatedAtMs: null,
@@ -371,7 +341,7 @@ export function initialAgentUiState(): AgentUiState {
  */
 export function reduceAgentUi(
   start: AgentUiState,
-  event: Event,
+  event: StreamEvent,
 ): { endState: AgentUiState; items: AgentUiItem[] } {
   const items: AgentUiItem[] = [];
   const endState = reduceAgentUiEvent(start, event, items);
@@ -400,14 +370,10 @@ export function settleAgentUiAtIdleBoundary(
 }
 
 function reduceAgentUiEvent(
-  previous: AgentUiState,
-  event: Event,
+  state: AgentUiState,
+  event: StreamEvent,
   items: AgentUiItem[],
 ): AgentUiState {
-  const state: AgentUiState = {
-    ...previous,
-    eventCount: previous.eventCount + 1,
-  };
   const timestampMs = Date.parse(event.createdAt);
   // Committed events are expected to carry an ISO timestamp. A malformed
   // timestamp must not manufacture NaN durations or accidentally trip a
@@ -417,13 +383,13 @@ function reduceAgentUiEvent(
 
   switch (event.type) {
     // The canonical model-visible context event. User context renders as a
-    // bubble; assistant context replaces the streamed LLM text; developer
-    // context from another human-facing integration renders with its source.
-    // Script-produced developer context is model input, not another bubble.
+    // bubble; assistant context replaces the streamed LLM text; the loop's
+    // own developer context (actor `agent`, a format correction) renders as a
+    // bubble too. Script-produced developer context is model input, not another bubble.
     case "events.iterate.com/agent/context-added": {
       const role = readString(event, "role");
       const text = readString(event, "content");
-      // oxlint-disable-next-line iterate/simple-truthiness-check -- empty content is a real message: a person can send attachments alone (configs/with-agents/agents/durable-object.ts message()), and an assistant's committed text replaces the streamed preview even when empty
+      // oxlint-disable-next-line iterate/simple-truthiness-check -- empty content is a real message: a person can send attachments alone (@iterate-com/agents durable-object.ts message()), and an assistant's committed text replaces the streamed preview even when empty
       if (text == null) return state;
       const actor = readRecord(event, "actor");
       const actorType = typeof actor?.type === "string" ? actor.type : undefined;
@@ -453,33 +419,13 @@ function reduceAgentUiEvent(
           timestampMs,
         });
       }
-      if (
-        actorType === "agent" ||
-        actorType === "slack" ||
-        actorType === "telegram" ||
-        actorType === "email" ||
-        actorType === "github"
-      ) {
-        const rendersFromRawEvent = actorType === "slack" || actorType === "telegram";
-        if (rendersFromRawEvent && files.length === 0) return state;
-        const senderValue =
-          actorType === "agent"
-            ? actor?.path
-            : actorType === "slack"
-              ? actor?.userId
-              : actorType === "telegram"
-                ? (actor?.username ?? actor?.userId)
-                : actorType === "email"
-                  ? actor?.address
-                  : actor?.login;
-        const sender = typeof senderValue === "string" ? senderValue : undefined;
+      if (actorType === "agent") {
         return emitUserMessageItem(state, items, {
           kind: "user",
           id: `user-${event.offset}`,
-          text: rendersFromRawEvent ? "" : text,
+          text,
           ...(files.length === 0 ? {} : { files }),
           timestampMs,
-          via: { service: actorType, sender },
         });
       }
       return state;
@@ -710,17 +656,6 @@ function reduceAgentUiEvent(
       return { ...state, summaryActivity: activity, summaryActivityUpdatedAtMs: timestampMs };
     }
 
-    case "events.iterate.com/itx/woken": {
-      if (isInitialStreamWake(event)) return state;
-      items.push({
-        kind: "stream-woken",
-        id: `stream-woken-${event.offset}`,
-        text: "Stream durable object woke",
-        timestampMs,
-      });
-      return state;
-    }
-
     // The stream-level facts (the whole stream stops accepting appends) and
     // the agent-level facts (the turn loop parks — the autonomous breaker, or
     // an operator) render as the same pause/resume marker rows. A pause is
@@ -770,11 +705,6 @@ function ensureLive(state: AgentUiState, offset: number, startedAtMs: number): A
     steps: [],
     startedAtMs,
   };
-}
-
-function isInitialStreamWake(event: Event): boolean {
-  // Brand-new streams commit itx/created at offset 1 and itx/woken at offset 2.
-  return event.offset <= 2;
 }
 
 function settleLiveIfIdle(
@@ -1012,7 +942,7 @@ function updateLlmStep(
 
 /**
  * The response/thinking text deltas inside one streamed LLM chunk, in the
- * shapes configs/with-agents/agents/processor.ts puts into `llm-response-frame`:
+ * shapes @iterate-com/agents processor.ts puts into `llm-response-frame`:
  * OpenAI Responses API events for a partner model, and a `@cf/` Workers AI
  * model's raw SSE events (`{ response }`, or `choices[].delta` from a model
  * that speaks the OpenAI chat format).
@@ -1075,7 +1005,7 @@ function readUsageTokens(usage: unknown): { input?: number; output?: number } {
   };
 }
 
-function readFileAttachments(event: Event): AgentUiFileAttachment[] {
+function readFileAttachments(event: StreamEvent): AgentUiFileAttachment[] {
   const value = readPayloadRecord(event)?.files;
   if (!Array.isArray(value)) return [];
   return value.flatMap((item): AgentUiFileAttachment[] => {
@@ -1084,40 +1014,37 @@ function readFileAttachments(event: Event): AgentUiFileAttachment[] {
     const filename = typeof item.filename === "string" ? item.filename : null;
     const path = typeof item.path === "string" ? item.path : null;
     const size = typeof item.size === "number" && Number.isFinite(item.size) ? item.size : null;
-    const url = typeof item.url === "string" ? item.url : null;
-    if (!contentType || !filename || !path || size == null || !url) {
-      return [];
-    }
-    return [{ contentType, filename, path, size, url }];
+    if (!contentType || !filename || !path || size == null) return [];
+    return [{ contentType, filename, path, size }];
   });
 }
 
-function readString(event: Event, key: string): string | null {
+function readString(event: StreamEvent, key: string): string | null {
   const value = readPayloadRecord(event)?.[key];
   return typeof value === "string" ? value : null;
 }
 
-function readOptionalReason(event: Event): { reason: string } | Record<string, never> {
+function readOptionalReason(event: StreamEvent): { reason: string } | Record<string, never> {
   const reason = readString(event, "reason");
   return reason ? { reason } : {};
 }
 
-function readNumber(event: Event, key: string): number | null {
+function readNumber(event: StreamEvent, key: string): number | null {
   const value = readPayloadRecord(event)?.[key];
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
 /** The llm-request-requested offset an LLM lifecycle event references. */
-function readLlmRequestOffset(event: Event): number | null {
+function readLlmRequestOffset(event: StreamEvent): number | null {
   return readNumber(event, "llmRequestOffset");
 }
 
-function readRecord(event: Event, key: string): Record<string, unknown> | null {
+function readRecord(event: StreamEvent, key: string): Record<string, unknown> | null {
   const value = readPayloadRecord(event)?.[key];
   return isRecord(value) ? value : null;
 }
 
-function readPayloadRecord(event: Event): Record<string, unknown> | null {
+function readPayloadRecord(event: StreamEvent): Record<string, unknown> | null {
   return isRecord(event.payload) ? event.payload : null;
 }
 

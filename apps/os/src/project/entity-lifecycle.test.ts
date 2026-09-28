@@ -106,6 +106,7 @@ for (const contract of [RepoContract, WorkspaceContract]) {
         () => Promise.reject(new Error("the reduce reaches no itx")),
         () => path,
       );
-      expect(reduceProcessor(processor, events)).toEqual(state);
+      // A repo's state also carries its origin (repo/contract.ts), untouched by the lifecycle.
+      expect(reduceProcessor(processor, events)).toEqual({ ...contract.initialState(), ...state });
     });
 }

@@ -20,12 +20,22 @@ export class SecretProcessor extends StreamProcessor<
     switch (event.type) {
       case "events.iterate.com/secret/set":
         // Every write is the latest; a set after a deletion brings the secret back.
-        return { ...state, material: { offset: event.offset }, deletion: null };
+        return { ...state, material: { offset: event.offset }, deletion: null, borrowed: null };
+      case "events.iterate.com/secret/borrowed":
+        return {
+          material: { offset: event.offset },
+          deletion: null,
+          borrowed: { lendId: event.payload.lendId },
+        };
+      case "events.iterate.com/secret/lend-revoked":
+        // on the lender's path a lend is not the material; on the borrower's it was all there was
+        if (state.borrowed?.lendId !== event.payload.lendId) return undefined;
+        return { material: null, deletion: { offset: event.offset }, borrowed: null };
       case "events.iterate.com/secret/deleted":
         // Dies once: a certificate after the certificate is a harmless fact.
         return !state.material && state.deletion
           ? undefined
-          : { ...state, material: null, deletion: { offset: event.offset } };
+          : { material: null, deletion: { offset: event.offset }, borrowed: null };
       default:
         return undefined;
     }

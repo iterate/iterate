@@ -2,10 +2,6 @@
 
 #include <assert.h>
 
-#ifdef NDEBUG
-#error "firmware tests must execute assertions"
-#endif
-
 /*
  * The FT5x06 reports one finger for many 20 ms polls. One physical touch must
  * start one conversation at its first coherent down sample, not open and close

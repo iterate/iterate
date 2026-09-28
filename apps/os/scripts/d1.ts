@@ -3,7 +3,7 @@
 // file with its `d1_migrations` history row as ONE request, so a file lands whole or not at all
 // (https://developers.cloudflare.com/d1/reference/migrations/; workers-sdk
 // packages/wrangler/src/d1/migrations/helpers.ts). sqlfu never migrates a D1 (sqlfu.config.ts). The
-// deploys (scripts/deploy.ts: prd and the preview parent) and each PR's preview (scripts/preview.ts)
+// deploys (scripts/deploy.ts: prd, main on dev and each per-commit deployment, scripts/preview.ts)
 // migrate before their code uploads. Its own module, not in deploy.ts: trpc-cli turns deploy.ts's
 // exports into commands.
 import { mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
@@ -21,7 +21,7 @@ export type D1Row = { uuid: string; name: string; created_at?: string };
 
 /** The D1 named `name`, or undefined. The list API's `name` filter matches by prefix (measured), so
  *  the exact match is made here, over every page. */
-export async function findD1(cf: Cf, name: string) {
+async function findD1(cf: Cf, name: string) {
   for (let page = 1; ; page++) {
     const rows = await cf<D1Row[]>(`/d1/database?per_page=100&page=${page}`);
     const found = rows.find((row) => row.name === name);
@@ -29,10 +29,20 @@ export async function findD1(cf: Cf, name: string) {
   }
 }
 
-/** The D1 named `name`, created when missing, never changed when found. Its primary is placed in
- *  western Europe, where most of the platform's traffic lands; the hint is only honoured at
- *  creation (https://developers.cloudflare.com/d1/configuration/data-location/). */
-export async function ensureD1(cf: Cf, name: string) {
+/** Where a D1's primary runs, fixed when it is created
+ *  (https://developers.cloudflare.com/d1/configuration/data-location/). Every uncached
+ *  control-plane read is a round trip to it, ~80 ms each when it is across the Atlantic from its
+ *  caller (IAD to LHR, measured 2026-09-25) and under a millisecond inside D1.
+ *  - `weur`: prd and the preview parent (ensure-resources.ts), where most of the platform's traffic
+ *    lands.
+ *  - `automatic`: no hint, so D1 places it near whoever sends the create request. A preview's is
+ *    created by the job that deploys it, and in CI that job's region is where the preview's suites
+ *    and the latency guard call it from. */
+type D1Location = "weur" | "automatic";
+
+/** The D1 named `name`, created at `location` when missing, never changed when found: moving one
+ *  means deleting it (a preview's delete) and creating it again. */
+export async function ensureD1(cf: Cf, name: string, location: D1Location) {
   const existing = await findD1(cf, name);
   if (existing) {
     console.log(`D1 ${name} exists (${existing.uuid})`);
@@ -40,9 +50,14 @@ export async function ensureD1(cf: Cf, name: string) {
   }
   const created = await cf<D1Row>("/d1/database", {
     method: "POST",
-    body: JSON.stringify({ name, primary_location_hint: "weur" }),
+    body: JSON.stringify(
+      location === "automatic" ? { name } : { name, primary_location_hint: location },
+    ),
   });
-  console.log(`created D1 ${name} (${created.uuid})`);
+  const { running_in_region } = await cf<{ running_in_region: string }>(
+    `/d1/database/${created.uuid}`,
+  );
+  console.log(`created D1 ${name} (${created.uuid}), its primary in ${running_in_region}`);
   return created;
 }
 

@@ -16,6 +16,7 @@
     "./test-support/test-evidence": "./src/test-support/test-evidence.ts",
     "./test-support/fetch-safe-port": "./src/test-support/fetch-safe-port.ts",
     "./test-support/fixture-slug": "./src/test-support/fixture-slug.ts",
+    "./test-support/temporary-directory": "./src/test-support/temporary-directory.ts",
     "./slugify": "./src/slugify.ts",
     "./start-app-config": "./src/start-app-config.ts",
     "./posthog": {

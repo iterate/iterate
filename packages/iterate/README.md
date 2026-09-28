@@ -23,7 +23,7 @@ subpath in `package.json`'s `exports` is one public module; nothing else is impo
 - No private core package behind a thin `iterate`: apps/os would then import modules user code
   cannot, and the SDK's types would have to be bundled or published anyway.
 
-Follow-up: type the test harnesses against `iterate/api`. The decision's reasons, and how workerd, the Agents SDK, Convex,
+The decision's reasons, and how workerd, the Agents SDK, Convex,
 Supabase, tRPC, Hono and Wrangler draw the same line:
 [the decision record](https://github.com/iterate/iterate/blob/d52a4e8e0f791c96b683fe178b56570532123c05/docs/2026-09-24-sdk-platform-line.md)
 (#3018).
@@ -55,6 +55,32 @@ reach takes a `WithItx` accessor (`(call) => withItx(this.env.ITX, call)`), neve
 that outlives the call runs under a processor's `runInBackground` claim. Lint refuses a raw
 `ITX.get()` in this repository (`iterate/no-raw-itx-get`).
 
+## Who wrote an event
+
+Anyone in a project can append any event to any context, and every event says where it came from.
+The platform stamps `source.origin`, the context whose code or session wrote it, beside
+`source.principal` (the member) and `source.platform`. A writer's own values are dropped. The one
+field a writer keeps is `source.processor`, the engine's label for which processor wrote it.
+
+```js
+// A script in /agents/a/sandbox:
+await itx.cd("/agents/b").append({
+  type: "events.iterate.com/agent/context-added",
+  payload: { role: "user", content: "hello" },
+});
+// Stamped { origin: "/agents/a/sandbox" }. Agent b's model reads "[from /agents/a/sandbox] hello",
+// and the same from `itx.agents.get("/agents/b").message("hello")`.
+```
+
+Words from `/` (a member's session, the dash) read as a person's, with no sender. `origin` is the
+context whose code ran, not who asked it to run (apps/os `caller.ts` `stampCaller` says why that
+makes it advisory). Batch writes: `append(...events)` is one commit, however many events it carries.
+
+The exception is a jail, a context with a bare `itx ⇒ null` row plus the grants beside it. A bare
+jail is closed both ways: its code appends nowhere, and no code appends into it. Grant it
+`itx.append` and every context can append into it too; its own code still cannot lift the null. A
+jail confines the code that runs in it, not the contexts it creates through a grant: jail those too.
+
 ## Testing a processor
 
 `iterate/stream/test-support` (Node) is the harness the SDK's own engine tests use:
@@ -62,7 +88,7 @@ that outlives the call runs under a processor's `runInBackground` claim. Lint re
 ```ts
 import { reduceProcessor } from "iterate/stream/test-support";
 
-// apps/os/src/client/presence/processor.test.ts: durable ticks are reduced, ephemeral pokes are not
+// apps/os/e2e/support/presence/processor.test.ts: durable ticks are reduced, ephemeral pokes are not
 const state = reduceProcessor(new PresenceProcessor(), [{ type: "tick" }, { type: "poke" }]);
 // state.ticks === 1
 ```
@@ -110,7 +136,8 @@ that prefix belongs to whoever appends it and is opaque to the platform: tests u
   to, which is the defining contract's slug when there is one: `account`, `organization`,
   `project`, `repo`, `workspace`, `secret`, `agent`, `voice-agent`. A fact cross-posted to another
   log keeps its own namespace: `repo/created` on `/` is still a repo fact.
-- **An integration** uses its own name as its namespace, for example `chrome`.
+- **An integration** uses its own name as its namespace, for example `chrome`, `slack`, `google`,
+  `github`.
 - **`test`** holds types that only tests append. Production code never matches a `test/*` type. A
   test contract may keep a slug of its own (`counter`), but its events go under `test/`. A test must
   not borrow a production namespace for a type that does not exist.
@@ -167,19 +194,12 @@ that prefix belongs to whoever appends it and is opaque to the platform: tests u
 | ------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `itx`                                                               | `apps/os/src/stream/core-processor.ts` (and its leaf event catalog), `stream.ts`, `scheduled-appends.ts`, `subscription-delivery.ts`, `apps/os/src/context/built-ins.ts`, `apps/os/src/fetch-routes.ts`, `apps/os/src/iterate-context-durable-object.ts`, `packages/iterate/src/stream/{run,processor}.ts` |
 | `account`, `organization`, `project`, `repo`, `workspace`, `secret` | `apps/os/src/<name>/contract.ts` (repo and workspace also use `project/entity-lifecycle.ts`)                                                                                                                                                                                                               |
-| `agent`                                                             | `configs/with-agents/agents/contract.ts`                                                                                                                                                                                                                                                                   |
-| `voice-agent`                                                       | `apps/agents/voice/voice-agent.ts`, `apps/agents/voice/events.ts`                                                                                                                                                                                                                                          |
-| `chrome`                                                            | `apps/browser-extension/panel.js`                                                                                                                                                                                                                                                                          |
+| `agent`                                                             | `packages/agents/src/contract.ts`                                                                                                                                                                                                                                                                          |
+| `voice-agent`                                                       | `packages/voice/src/voice-agent.ts`, `packages/voice/src/events.ts`                                                                                                                                                                                                                                        |
+| `chrome`                                                            | `apps/browser-extension/public/panel.js`                                                                                                                                                                                                                                                                   |
+| `email`                                                             | `apps/os/src/email/contract.ts`                                                                                                                                                                                                                                                                            |
 | `test`                                                              | tests only                                                                                                                                                                                                                                                                                                 |
 
-Two types break these rules until the Kit firmware migrates:
-
-- `voice-agent/spk-frame` will become `voice-agent/speaker-frame`.
-- `voice-agent/conversation-ended` will become `voice-agent/call-ended`. It pairs with `call-started`
-  and names the activation; the provider session is the `conversation`.
-
 `note/added` is only an example in the Agents composer; no contract defines `note`.
-`email/received` is only an integration's transcript in an agent UI test; no contract defines
-`email`.
 `capability-host/script-run-*` is never written to a log: the agent UI's adapter builds it in
 memory.

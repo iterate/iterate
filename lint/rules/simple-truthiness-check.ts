@@ -8,7 +8,7 @@ import {
   type Type,
   type TypeReference,
   type UnionType,
-} from "@typescript/native-preview/unstable/sync";
+} from "typescript/unstable/sync";
 import type { Expression, Node } from "estree";
 import {
   getTypeAwareLintFileService,

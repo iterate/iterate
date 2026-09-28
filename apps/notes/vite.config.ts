@@ -13,10 +13,25 @@ export default defineConfig({
       config: startAppWorkerConfig(notes, process.env.CLOUDFLARE_ENV),
     }),
     tanstackStart({
-      router: { addExtensions: true, semicolons: true, quoteStyle: "double" },
+      router: {
+        // The router's paths never carry Vite's `base`: Notes routes under the page's base path
+        // itself (src/base-path.ts), and a dev server's `--base` (README) moves only its module
+        // URLs and its HMR socket.
+        basepath: "",
+        addExtensions: true,
+        semicolons: true,
+        quoteStyle: "double",
+      },
       importProtection: { behavior: "error" },
     }),
     viteReact(),
     tailwindcss(),
   ],
+  experimental: {
+    // A chunk's preloaded dependencies resolve beside it, not at the origin's root: a proxied Notes
+    // serves its chunks under a base path (src/base-path.ts). Only the browser's scripts: a `?url`
+    // stays a root path that the page prefixes itself, the same in the server render and the browser.
+    renderBuiltUrl: (filename, { hostType, ssr }) =>
+      !ssr && hostType === "js" && filename.endsWith(".js") ? { relative: true } : undefined,
+  },
 });

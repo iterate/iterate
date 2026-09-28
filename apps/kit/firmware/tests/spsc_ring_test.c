@@ -1,21 +1,11 @@
 #include "iterate/kit/spsc_ring.h"
 
+#include <assert.h>
 #include <pthread.h>
 #include <sched.h>
 #include <stdbool.h>
 #include <stdint.h>
-#include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
-
-#define CHECK(condition)                                                     \
-  do {                                                                       \
-    if (!(condition)) {                                                      \
-      fprintf(stderr, "%s:%d: check failed: %s\n",                         \
-          __FILE__, __LINE__, #condition);                                   \
-      abort();                                                               \
-    }                                                                        \
-  } while (0)
 
 enum {
   SLOT_COUNT = 4,
@@ -30,7 +20,7 @@ struct ring_fixture {
 
 static void fixture_init(struct ring_fixture *fixture) {
   memset(fixture, 0, sizeof(*fixture));
-  CHECK(iterate_kit_spsc_ring_init(
+  assert(iterate_kit_spsc_ring_init(
       &fixture->ring,
       fixture->storage,
       sizeof(fixture->storage[0]),
@@ -57,39 +47,39 @@ static void preserves_order_without_copying_or_blocking(void) {
   fixture_init(&fixture);
 
   for (index = 0U; index < SLOT_COUNT; ++index) {
-    CHECK(iterate_kit_spsc_ring_write_acquire(
+    assert(iterate_kit_spsc_ring_write_acquire(
         &fixture.ring, &write_data, &write_capacity) ==
         ITERATE_KIT_OK);
-    CHECK(write_capacity == sizeof(uint32_t));
-    CHECK(write_data == &fixture.storage[index]);
+    assert(write_capacity == sizeof(uint32_t));
+    assert(write_data == &fixture.storage[index]);
     *(uint32_t *)write_data = (uint32_t)(100U + index);
-    CHECK(iterate_kit_spsc_ring_write_publish(
+    assert(iterate_kit_spsc_ring_write_publish(
         &fixture.ring, sizeof(uint32_t)) == ITERATE_KIT_OK);
   }
-  CHECK(iterate_kit_spsc_ring_write_acquire(
+  assert(iterate_kit_spsc_ring_write_acquire(
       &fixture.ring, &write_data, &write_capacity) ==
       ITERATE_KIT_BACKPRESSURE);
 
   for (index = 0U; index < SLOT_COUNT; ++index) {
-    CHECK(iterate_kit_spsc_ring_read_acquire(
+    assert(iterate_kit_spsc_ring_read_acquire(
         &fixture.ring, &read_data, &read_size) == ITERATE_KIT_OK);
-    CHECK(read_data == &fixture.storage[index]);
-    CHECK(read_size == sizeof(uint32_t));
-    CHECK(*(const uint32_t *)read_data == (uint32_t)(100U + index));
-    CHECK(iterate_kit_spsc_ring_read_release(&fixture.ring) ==
+    assert(read_data == &fixture.storage[index]);
+    assert(read_size == sizeof(uint32_t));
+    assert(*(const uint32_t *)read_data == (uint32_t)(100U + index));
+    assert(iterate_kit_spsc_ring_read_release(&fixture.ring) ==
         ITERATE_KIT_OK);
   }
-  CHECK(iterate_kit_spsc_ring_read_acquire(
+  assert(iterate_kit_spsc_ring_read_acquire(
       &fixture.ring, &read_data, &read_size) ==
       ITERATE_KIT_UNAVAILABLE);
 
   iterate_kit_spsc_ring_metrics(
       &fixture.ring, &metrics);
-  CHECK(metrics.messages_published == SLOT_COUNT);
-  CHECK(metrics.messages_consumed == SLOT_COUNT);
-  CHECK(metrics.producer_backpressure == 1U);
-  CHECK(metrics.high_water_slots == SLOT_COUNT);
-  CHECK(metrics.current_slots == 0U);
+  assert(metrics.messages_published == SLOT_COUNT);
+  assert(metrics.messages_consumed == SLOT_COUNT);
+  assert(metrics.producer_backpressure == 1U);
+  assert(metrics.high_water_slots == SLOT_COUNT);
+  assert(metrics.current_slots == 0U);
 }
 
 /*
@@ -108,29 +98,29 @@ static void a_reader_owns_its_slot_until_release(void) {
   size_t index;
   fixture_init(&fixture);
 
-  CHECK(iterate_kit_spsc_ring_write_acquire(
+  assert(iterate_kit_spsc_ring_write_acquire(
       &fixture.ring, &write_data, &write_capacity) ==
       ITERATE_KIT_OK);
   *(uint32_t *)write_data = 42U;
-  CHECK(iterate_kit_spsc_ring_write_publish(
+  assert(iterate_kit_spsc_ring_write_publish(
       &fixture.ring, sizeof(uint32_t)) == ITERATE_KIT_OK);
-  CHECK(iterate_kit_spsc_ring_read_acquire(
+  assert(iterate_kit_spsc_ring_read_acquire(
       &fixture.ring, &read_data, &read_size) == ITERATE_KIT_OK);
-  CHECK(*(const uint32_t *)read_data == 42U);
+  assert(*(const uint32_t *)read_data == 42U);
 
   for (index = 1U; index < SLOT_COUNT; ++index) {
-    CHECK(iterate_kit_spsc_ring_write_acquire(
+    assert(iterate_kit_spsc_ring_write_acquire(
         &fixture.ring, &write_data, &write_capacity) ==
         ITERATE_KIT_OK);
     *(uint32_t *)write_data = (uint32_t)index;
-    CHECK(iterate_kit_spsc_ring_write_publish(
+    assert(iterate_kit_spsc_ring_write_publish(
         &fixture.ring, sizeof(uint32_t)) == ITERATE_KIT_OK);
   }
-  CHECK(iterate_kit_spsc_ring_write_acquire(
+  assert(iterate_kit_spsc_ring_write_acquire(
       &fixture.ring, &write_data, &write_capacity) ==
       ITERATE_KIT_BACKPRESSURE);
-  CHECK(*(const uint32_t *)read_data == 42U);
-  CHECK(iterate_kit_spsc_ring_read_release(&fixture.ring) ==
+  assert(*(const uint32_t *)read_data == 42U);
+  assert(iterate_kit_spsc_ring_read_release(&fixture.ring) ==
       ITERATE_KIT_OK);
 }
 
@@ -149,9 +139,9 @@ static void *produce(void *context) {
            ITERATE_KIT_BACKPRESSURE) {
       sched_yield();
     }
-    CHECK(capacity == sizeof(value));
+    assert(capacity == sizeof(value));
     memcpy(data, &value, sizeof(value));
-    CHECK(iterate_kit_spsc_ring_write_publish(
+    assert(iterate_kit_spsc_ring_write_publish(
         &stress->fixture.ring, sizeof(value)) == ITERATE_KIT_OK);
   }
   return NULL;
@@ -168,9 +158,9 @@ static void *consume(void *context) {
            ITERATE_KIT_UNAVAILABLE) {
       sched_yield();
     }
-    CHECK(size == sizeof(expected));
-    CHECK(memcmp(data, &expected, sizeof(expected)) == 0);
-    CHECK(iterate_kit_spsc_ring_read_release(
+    assert(size == sizeof(expected));
+    assert(memcmp(data, &expected, sizeof(expected)) == 0);
+    assert(iterate_kit_spsc_ring_read_release(
         &stress->fixture.ring) == ITERATE_KIT_OK);
   }
   return NULL;
@@ -191,17 +181,17 @@ static void remains_ordered_under_real_parallel_load(void) {
   pthread_t consumer;
   fixture_init(&stress.fixture);
 
-  CHECK(pthread_create(&producer, NULL, produce, &stress) == 0);
-  CHECK(pthread_create(&consumer, NULL, consume, &stress) == 0);
-  CHECK(pthread_join(producer, NULL) == 0);
-  CHECK(pthread_join(consumer, NULL) == 0);
+  assert(pthread_create(&producer, NULL, produce, &stress) == 0);
+  assert(pthread_create(&consumer, NULL, consume, &stress) == 0);
+  assert(pthread_join(producer, NULL) == 0);
+  assert(pthread_join(consumer, NULL) == 0);
 
   iterate_kit_spsc_ring_metrics(
       &stress.fixture.ring, &metrics);
-  CHECK(metrics.messages_published == STRESS_MESSAGES);
-  CHECK(metrics.messages_consumed == STRESS_MESSAGES);
-  CHECK(metrics.current_slots == 0U);
-  CHECK(metrics.high_water_slots <= SLOT_COUNT);
+  assert(metrics.messages_published == STRESS_MESSAGES);
+  assert(metrics.messages_consumed == STRESS_MESSAGES);
+  assert(metrics.current_slots == 0U);
+  assert(metrics.high_water_slots <= SLOT_COUNT);
 }
 
 int main(void) {

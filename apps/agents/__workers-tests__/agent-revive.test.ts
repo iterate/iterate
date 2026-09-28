@@ -11,8 +11,8 @@ import { evictDurableObject, runDurableObjectAlarm, runInDurableObject } from "c
 import { RpcTarget } from "capnweb";
 import { expect, test, vi } from "vitest";
 import type { StreamEvent } from "iterate/stream/processor";
-import { installAgents } from "../../../configs/with-agents/agents/install.ts";
-import { agentRuntimeSource } from "../src/lib/agent-runtime-source.ts";
+import { installAgents } from "@iterate-com/agents/install";
+import { agentsWorkspaceSource } from "../e2e/agents-source.ts";
 import {
   adminCredentials,
   openSession,
@@ -29,7 +29,7 @@ const AGENT = `${PROJECT}.iterate/agents/support`;
 test("KILLED MID-CALL, THE REQUEST CONTINUES: the context dies with the model call in flight; its alarm revives the agent, which runs the open request again and settles it", async () => {
   const model = new ParkingModel();
   const itx = await (await openSession()).authenticate(adminCredentials()).projects.get(PROJECT);
-  await installAgents(itx as never, agentRuntimeSource);
+  await installAgents(itx as never, agentsWorkspaceSource);
   const support = itx.cd("/agents/support");
   await support.provide("itx.ai", model);
   await itx.invoke(["itx", "agents", ["create", "/agents/support"]]);

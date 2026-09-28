@@ -1,12 +1,12 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
+import { temporaryDirectory } from "@iterate-com/shared/test-support/temporary-directory";
 import { expect, test } from "vitest";
 import { touchesPreview } from "./preview-paths.ts";
 
 // GitHub's `paths` semantics: any file whose last matching pattern is a positive one triggers.
-test.each([
+test.for([
   { files: ["apps/os/src/worker.ts"], preview: true },
   { files: ["configs/default/AGENTS.md"], preview: true },
   { files: ["package.json"], preview: true },
@@ -27,7 +27,7 @@ test.each([
 // merged into main. A rename counts on both sides: moving a file out of apps/os changes apps/os.
 // A HEAD that is no merge (the head alone, when the pull request conflicts) cannot tell, so it
 // deploys.
-test.each([
+test.for([
   { change: "adds", path: "docs/notes.md", preview: "false" },
   { change: "adds", path: "apps/os/src/worker.ts", preview: "true" },
   { change: "moves apps/os/src/moved.ts to", path: "docs/moved.ts", preview: "true" },
@@ -35,45 +35,42 @@ test.each([
 ])(
   "changes writes preview=$preview when the pull request $change $path",
   ({ change, path, preview }) => {
-    const repo = mkdtempSync(join(tmpdir(), "preview-paths-"));
+    using directory = temporaryDirectory();
+    const repo = directory.path;
     const output = join(repo, "github-output");
-    try {
-      const git = (...args: string[]) => {
-        const result = spawnSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", ...args], {
-          cwd: repo,
-          encoding: "utf8",
-          env: { PATH: process.env.PATH, HOME: repo },
-        });
-        expect(result).toMatchObject({ status: 0 });
-      };
-      git("init", "--quiet", "--initial-branch=main");
-      mkdirSync(join(repo, "apps/os/src"), { recursive: true });
-      writeFileSync(join(repo, "apps/os/src/moved.ts"), "export const moved = 1;\n");
+    const git = (...args: string[]) => {
+      const result = spawnSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", ...args], {
+        cwd: repo,
+        encoding: "utf8",
+        env: { PATH: process.env.PATH, HOME: repo },
+      });
+      expect(result).toMatchObject({ status: 0 });
+    };
+    git("init", "--quiet", "--initial-branch=main");
+    mkdirSync(join(repo, "apps/os/src"), { recursive: true });
+    writeFileSync(join(repo, "apps/os/src/moved.ts"), "export const moved = 1;\n");
+    git("add", ".");
+    git("commit", "--quiet", "-m", "base");
+    git("checkout", "--quiet", "-b", "pr-head");
+    mkdirSync(dirname(join(repo, path)), { recursive: true });
+    if (change.startsWith("moves")) git("mv", "apps/os/src/moved.ts", path);
+    else writeFileSync(join(repo, path), "change\n");
+    git("add", ".");
+    git("commit", "--quiet", "-m", "head");
+    if (!change.startsWith("is not merged")) {
+      git("checkout", "--quiet", "main");
+      writeFileSync(join(repo, "MAIN.md"), "main moved on\n");
       git("add", ".");
-      git("commit", "--quiet", "-m", "base");
-      git("checkout", "--quiet", "-b", "pr-head");
-      mkdirSync(dirname(join(repo, path)), { recursive: true });
-      if (change.startsWith("moves")) git("mv", "apps/os/src/moved.ts", path);
-      else writeFileSync(join(repo, path), "change\n");
-      git("add", ".");
-      git("commit", "--quiet", "-m", "head");
-      if (!change.startsWith("is not merged")) {
-        git("checkout", "--quiet", "main");
-        writeFileSync(join(repo, "MAIN.md"), "main moved on\n");
-        git("add", ".");
-        git("commit", "--quiet", "-m", "main");
-        git("merge", "--quiet", "--no-ff", "-m", "merge", "pr-head");
-      }
-
-      const run = spawnSync(
-        process.execPath,
-        [resolve(import.meta.dirname, "preview-paths.ts"), "changes"],
-        { cwd: repo, encoding: "utf8", env: { PATH: process.env.PATH, GITHUB_OUTPUT: output } },
-      );
-      expect(run).toMatchObject({ status: 0 });
-      expect(readFileSync(output, "utf8")).toBe(`preview=${preview}\n`);
-    } finally {
-      rmSync(repo, { recursive: true, force: true });
+      git("commit", "--quiet", "-m", "main");
+      git("merge", "--quiet", "--no-ff", "-m", "merge", "pr-head");
     }
+
+    const run = spawnSync(
+      process.execPath,
+      [resolve(import.meta.dirname, "preview-paths.ts"), "changes"],
+      { cwd: repo, encoding: "utf8", env: { PATH: process.env.PATH, GITHUB_OUTPUT: output } },
+    );
+    expect(run).toMatchObject({ status: 0 });
+    expect(readFileSync(output, "utf8")).toBe(`preview=${preview}\n`);
   },
 );

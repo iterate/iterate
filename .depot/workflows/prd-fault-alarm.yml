@@ -30,9 +30,7 @@ concurrency:
 jobs:
   alarm:
     name: Prd fault alarm
-    runs-on:
-      size: 2x8
-      image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
+    runs-on: depot-ubuntu-24.04
     timeout-minutes: 15
     env:
       DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
@@ -40,10 +38,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          clean: false
           ref: ${{ github.event_name == 'schedule' && github.event.repository.default_branch || github.sha }}
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile --prefer-offline
+      - name: Setup
+        uses: ./.depot/actions/setup
       - name: Read the previous run's state
         run: |-
           export DEPOT_TOKEN

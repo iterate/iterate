@@ -30,6 +30,7 @@ struct iterate_kit_method {
 typedef struct iterate_kit_poll_result (*iterate_kit_module_close_fn)(
     void *context);
 typedef void (*iterate_kit_module_session_ended_fn)(void *context);
+typedef void (*iterate_kit_module_step_fn)(void *context);
 
 /**
  * One composable capability module. Method and module arrays are borrowed for
@@ -37,7 +38,10 @@ typedef void (*iterate_kit_module_session_ended_fn)(void *context);
  *
  * session_ended() releases session-scoped remote handles without shutting down
  * physical hardware. close() is the separate device-lifecycle boundary and may
- * therefore stop hardware.
+ * therefore stop hardware. step() runs once per device loop pass, on the
+ * peer's owner and outside any dispatch: a method whose answer waits on
+ * hardware defers its reply (`capnweb_reply_defer`) and answers it there,
+ * through the call's responder, once the hardware has finished.
  */
 struct iterate_kit_module {
   const struct iterate_kit_method *methods;
@@ -49,6 +53,8 @@ struct iterate_kit_module {
    * physical device. The owner calls this after that session has ended.
    */
   iterate_kit_module_session_ended_fn session_ended;
+  /** Optional; see above. */
+  iterate_kit_module_step_fn step;
 };
 
 struct iterate_kit_peer_options {
@@ -86,6 +92,8 @@ struct capnweb_capability iterate_kit_peer_capability(
 uint32_t iterate_kit_peer_served_dispatches(
     const struct iterate_kit_peer *peer);
 void iterate_kit_peer_session_ended(struct iterate_kit_peer *peer);
+/** Every module's step(), for the owner's loop to call once per pass. */
+void iterate_kit_peer_step(struct iterate_kit_peer *peer);
 struct iterate_kit_poll_result iterate_kit_peer_close(
     struct iterate_kit_peer *peer);
 

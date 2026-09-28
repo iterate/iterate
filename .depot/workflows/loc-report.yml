@@ -10,9 +10,7 @@ concurrency:
   cancel-in-progress: true
 jobs:
   loc-report:
-    runs-on:
-      size: 2x8
-      image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
+    runs-on: depot-ubuntu-24.04
     env:
       GITHUB_TOKEN: ${{ github.token }}
     steps:
@@ -23,10 +21,9 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          clean: false
           fetch-depth: 0
           ref: ${{ github.sha }}
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile --prefer-offline
+      - name: Setup
+        uses: ./.depot/actions/setup
       - name: Post LOC report
         run: pnpm tsx scripts/ci/loc-report.ts

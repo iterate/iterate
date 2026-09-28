@@ -1,12 +1,16 @@
 // __workers-tests__/support.ts — what every file in the Workers suite (the vitest project that runs
-// INSIDE workerd, next to the worker) shares: the context DO stub by ctx name, the control plane's
-// database, a capnweb session over the worker's /api (disposed at teardown — importing this module
-// registers the afterAll), a live value to lend (`Echo`, tagged per instance), the production pins'
-// release on demand, the alarm a context owes, and the one poll-until.
+// INSIDE workerd, next to the worker) shares: the context DO stub by ctx name, its log and a facet's
+// snapshot read through it, the control plane's database, a capnweb session over the worker's /api
+// (disposed at teardown — importing this module registers the afterAll), a live value to lend
+// (`Echo`, tagged per instance), the production pins' release on demand, the alarm a context owes,
+// the one poll-until, a signed-in member with their browser cookie, and the pet shop's integration
+// fakes. The named loaded sources (COUNTER_SOURCE and the facet rows') are ./sources.ts; other
+// rows inline their own.
 import { runInDurableObject } from "cloudflare:test";
 import { env, exports } from "cloudflare:workers";
 import { newWebSocketRpcSession, RpcTarget } from "capnweb";
-import { afterAll, expect, onTestFinished, vi } from "vitest";
+import { afterAll, expect, vi } from "vitest";
+import type { StreamPage } from "iterate/api";
 import { DurableObjectNameCodec } from "../src/context/paths.ts";
 import { ControlPlaneDatabase } from "../src/control-plane/catalog.ts";
 import { projectsByHostnames } from "../src/control-plane/db/queries/.generated/hostnames.sql.ts";
@@ -15,6 +19,7 @@ import { projectsByRef } from "../src/control-plane/db/queries/.generated/projec
 import { ControlPlane } from "../src/control-plane/edge.ts";
 import type { IterateContextDurableObject } from "../src/iterate-context-durable-object.ts";
 import type { IterateRpcTarget } from "../src/session.ts";
+import { memoryPetshop } from "../../dummy-petshop/src/memory-state.ts";
 
 /** This suite's platform origin (wrangler.test.jsonc `APP_CONFIG_URLS__OS`). */
 export const ORIGIN = "https://control.test";
@@ -24,6 +29,26 @@ export const ORIGIN = "https://control.test";
  *  edge reducing the returns away, plus runInDurableObject over the same instance. */
 export const stub = (ctx: string) =>
   env.ITERATE_CONTEXT.getByName(DurableObjectNameCodec.parse(ctx).name);
+
+/** A context's durable log, its first 500 events: `itx.readEvents` invoked on the context's DO with
+ *  no caller. `includeEphemeral` merges in the ephemerals the running incarnation still holds, where
+ *  the alarm passes' traces are. */
+export async function readLog(ctx: string, options?: { includeEphemeral: true }) {
+  const page = (await stub(ctx).invoke([
+    "itx",
+    ["readEvents", 0, 500, ...(options ? [options] : [])],
+  ])) as StreamPage;
+  return page.events;
+}
+
+/** Facet `facet`'s folded state and the offset it reduced through, from the context's DO:
+ *  `itx.facets.get(facet).snapshot()` invoked with no caller. */
+export async function snapshot<State>(ctx: string, facet: string) {
+  return (await stub(ctx).invoke(["itx", "facets", ["get", facet], ["snapshot"]])) as {
+    offset: number;
+    state: State;
+  };
+}
 
 /** One client's rpc stub, lent under its key: the per-instance tag (`echo-<i>:<s>`) proves no
  *  crosstalk. Provided as `itx.provide(rpcStubKey, new Echo(i))`, so
@@ -72,7 +97,7 @@ export function interceptCatalogReads(fail?: {
   const failing = new WeakSet<D1PreparedStatement>();
   const prepare = env.DB.prepare.bind(env.DB);
   const batch = env.DB.batch.bind(env.DB);
-  const prepares = vi.spyOn(env.DB, "prepare").mockImplementation((sql: string) => {
+  vi.spyOn(env.DB, "prepare").mockImplementation((sql: string) => {
     const statement = prepare(sql);
     const read = readOf(sql);
     if (!read) return statement;
@@ -89,24 +114,18 @@ export function interceptCatalogReads(fail?: {
     };
     return statement;
   });
-  const batches = vi
-    .spyOn(env.DB, "batch")
-    .mockImplementation((statements) =>
-      statements.some((statement) => failing.has(statement))
-        ? fail!.with(() => batch(statements))
-        : batch(statements),
-    );
-  onTestFinished(() => {
-    prepares.mockRestore();
-    batches.mockRestore();
-  });
+  vi.spyOn(env.DB, "batch").mockImplementation((statements) =>
+    statements.some((statement) => failing.has(statement))
+      ? fail!.with(() => batch(statements))
+      : batch(statements),
+  );
   return reads;
 }
 
 /** This suite's admin bearer (wrangler.test.jsonc `APP_CONFIG_SECRETS__ADMIN_BEARER`). */
-const adminApiSecret = (): string => env.APP_CONFIG_SECRETS__ADMIN_BEARER!;
+const adminBearer = (): string => env.APP_CONFIG_SECRETS__ADMIN_BEARER!;
 /** THE suite's credentials (src/session.ts): the admin bearer — every project, `{ actor: "admin" }`. */
-export const adminCredentials = () => ({ type: "admin-secret" as const, secret: adminApiSecret() });
+export const adminCredentials = () => ({ type: "admin-secret" as const, secret: adminBearer() });
 /** This suite's sign-in password (wrangler.test.jsonc `APP_CONFIG_LOGIN__PASSWORD`) — what a browser
  *  session is minted with through `POST /login` (email + password). */
 export const loginPassword = (): string => env.APP_CONFIG_LOGIN__PASSWORD!;
@@ -127,18 +146,6 @@ export default class Echo extends WorkerEntrypoint {
   }
 }`,
 };
-
-/** Publish `target` as the project's config worker — what EVERY host of the project reaches, the
- *  routing slug in `x-iterate-routing-slug` — once the project's own creation saga has settled: the
- *  saga publishes the seeded config repo, and an append before it lands would be overwritten. */
-export async function publishConfigWorker(itx: any, target: unknown): Promise<void> {
-  await itx.waitForEvent({
-    type: ["events.iterate.com/project/created", "events.iterate.com/project/create-failed"],
-    afterOffset: 0,
-    timeoutMs: 30_000,
-  });
-  await itx.append({ type: "events.iterate.com/itx/ingress-configured", payload: { target } });
-}
 
 // capnweb sessions live for the whole file; disposed at teardown (sessions left open turn into
 // unhandled-rejection noise).
@@ -211,10 +218,16 @@ export async function refused(
 }
 
 /** A person signed in through the login form (email + the deployment's password), then on `/api`
- *  with the browser's session cookie: an ordinary user session — no admin credential anywhere. The
- *  issuer fetches its own client metadata while it signs someone in; `fetch` reaches this worker for
- *  that one request (as control-plane.test.ts does), the network being out of reach here. */
+ *  with the browser's session cookie: an ordinary user session — no admin credential anywhere. */
 export async function signedInSession(email: string): Promise<any> {
+  return (await signedInMember(email)).session;
+}
+
+/** `signedInSession`'s person with the browser's session cookie too, for the platform's own pages
+ *  and callbacks. The issuer fetches its own client metadata while it signs someone in; `fetch`
+ *  reaches this worker for that one request (as control-plane.test.ts does), the network being out
+ *  of reach here. */
+export async function signedInMember(email: string): Promise<{ session: any; cookie: string }> {
   const issuerFetch = vi
     .spyOn(globalThis, "fetch")
     .mockImplementation((input, init) => exports.default.fetch(new Request(input, init)));
@@ -225,19 +238,94 @@ export async function signedInSession(email: string): Promise<any> {
     body: new URLSearchParams({ email, password: loginPassword(), next: "/" }),
   });
   issuerFetch.mockRestore();
-  const sessionCookie = login.headers
+  const cookie = login.headers
     .getSetCookie()
-    .find((cookie) => cookie.startsWith("__Host-itx-session="))!
+    .find((value) => value.startsWith("__Host-itx-session="))!
     .split(";")[0]!;
   const response = await exports.default.fetch(`${ORIGIN}/api`, {
-    headers: { Upgrade: "websocket", Origin: ORIGIN, Cookie: sessionCookie },
+    headers: { Upgrade: "websocket", Origin: ORIGIN, Cookie: cookie },
   });
   response.webSocket!.accept();
   const transport = newWebSocketRpcSession<IterateRpcTarget>(
     response.webSocket! as unknown as WebSocket,
   );
   sessions.push(transport);
-  return transport.authenticate({ type: "from-server-cookie" });
+  return { session: await transport.authenticate({ type: "from-server-cookie" }), cookie };
+}
+
+/** `fetch` reaches this worker for the rest of the test: the issuer fetches its own client metadata
+ *  while it signs someone in, and the network is out of reach here. Provider metadata, PKCE,
+ *  exchange, storage and API are real. */
+export function fetchReachesThisWorker() {
+  vi.spyOn(globalThis, "fetch").mockImplementation((input, init) =>
+    exports.default.fetch(new Request(input, init)),
+  );
+}
+
+/** A project `slug` made by a member of its own (`<slug>@example.test`): their itx on it, its id,
+ *  their `/api` session and their browser cookie. */
+export async function projectWithMember(slug: string) {
+  const { session, cookie } = await signedInMember(`${slug}@example.test`);
+  const itx = await session.projects.create({ project: slug });
+  const { projectId } = (await itx.whoami()) as { projectId: string };
+  return { itx, projectId, session, cookie };
+}
+
+/** The hosts the pet shop's Slack, Google, Cloudflare and GitHub fakes answer on in this suite
+ *  (APP_CONFIG `integrations`, wrangler.test.jsonc and vitest.config.ts). */
+const PETSHOP_HOSTS = ["slack.test", "google.test", "cloudflare.test", "github.test"];
+
+/** The pet shop's Slack, Google, Cloudflare and GitHub fakes over in-memory state, answering this isolate's
+ *  `fetch` to their hosts until the test finishes, and the issuer's own requests to this worker;
+ *  every other request goes through. `requests`
+ *  holds each request they were sent, oldest first. Sign everyone in first: `signedInMember` restores
+ *  `fetch`. */
+export function petshopFakes() {
+  const petshop = memoryPetshop();
+  const requests: { method: string; url: string; headers: Record<string, string>; body: string }[] =
+    [];
+  const through = globalThis.fetch;
+  vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+    const request = new Request(input, init);
+    // the issuer fetching its own client metadata while it signs someone in (`signedInMember`)
+    if (new URL(request.url).origin === ORIGIN) return exports.default.fetch(request);
+    if (!PETSHOP_HOSTS.includes(new URL(request.url).hostname)) return through(request);
+    // read here: a body belongs to the Durable Object that sent it
+    const { method, url, headers } = request;
+    requests.push({
+      method,
+      url,
+      headers: Object.fromEntries(headers),
+      body: await request.clone().text(),
+    });
+    return (await petshop.handle(request)) ?? new Response("Not Found", { status: 404 });
+  });
+  return { ...petshop, requests };
+}
+
+/** A human's browser from a provider's consent page back through the platform: each hop at a fake
+ *  answered by the pet shop, each at the platform's `/api/integrations/` sent with `cookie`. Answers
+ *  the first response that goes anywhere else — the platform's redirect to `next`, or its refusal. */
+export async function followConsent(
+  petshop: ReturnType<typeof petshopFakes>,
+  url: string,
+  cookie: string,
+): Promise<Response> {
+  for (let hop = 0; hop < 8; hop++) {
+    const request = new Request(url, { headers: { cookie }, redirect: "manual" });
+    const response = PETSHOP_HOSTS.includes(new URL(url).hostname)
+      ? ((await petshop.handle(request)) ?? new Response("Not Found", { status: 404 }))
+      : await exports.default.fetch(request);
+    const location = response.headers.get("location");
+    const next = location ? new URL(location, url) : null;
+    const onward =
+      next &&
+      (PETSHOP_HOSTS.includes(next.hostname) ||
+        (next.origin === ORIGIN && next.pathname.startsWith("/api/integrations/")));
+    if (!onward) return response;
+    url = next.href;
+  }
+  throw new Error(`followConsent: still redirecting at ${url}`);
 }
 
 /** The pins' RELEASE, run directly, plus every live facet aborted: every borrowed stub returned,
@@ -297,7 +385,7 @@ export function fakeCloudflareCustomHostnames({ active = [] }: { active?: string
   const hostnames: string[] = [...active];
   const writes: string[] = [];
   const through = globalThis.fetch;
-  const spy = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+  vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
     const request = new Request(input, init);
     const url = new URL(request.url);
     if (url.hostname !== "api.cloudflare.com") return through(request);
@@ -326,6 +414,5 @@ export function fakeCloudflareCustomHostnames({ active = [] }: { active?: string
     const asked = url.searchParams.get("hostname");
     return ok(hostnames.filter((hostname) => hostname === asked).map(entry));
   });
-  onTestFinished(() => spy.mockRestore());
   return { hostnames, writes };
 }

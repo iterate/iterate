@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
     "dev": "pnpm --dir apps/os dev",
-    "getin": "tsx scripts/getin.ts",
+    "getin": "pnpm --dir apps/os getin",
     "os": "pnpm --dir apps/os",
     "typecheck": "pnpm -r --parallel typecheck && pnpm typecheck:specs && pnpm typecheck:configs",
     "typecheck:specs": "tsc --noEmit -p specs/tsconfig.json",
@@ -14,12 +14,13 @@
     "lint": "oxlint . --threads 1 --deny-warnings --report-unused-disable-directives-severity error",
     "lint:fix": "oxlint . --fix --threads 1",
     "knip": "knip",
-    "prepare": "is-ci || husky",
+    "prepare": "is-ci || (husky && node scripts/lockfile-stamp.ts)",
     "spec": "playwright test --config playwright.config.ts",
     "test": "pnpm -r --parallel test"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "catalog:",
+    "@iterate-com/agents": "workspace:*",
     "@iterate-com/cli": "workspace:*",
     "@iterate-com/shared": "workspace:*",
     "@playwright/test": "catalog:",
@@ -27,7 +28,6 @@
     "@types/node": "catalog:",
     "capnweb": "catalog:",
     "esbuild": "catalog:",
-    "eslint-plugin-codegen": "0.34.1",
     "eslint-plugin-eslint-comments": "^3.2.0",
     "eslint-plugin-import": "^2.32.0",
     "eslint-plugin-unicorn": "^64.0.0",

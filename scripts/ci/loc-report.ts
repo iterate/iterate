@@ -5,8 +5,9 @@ import { extname, join, matchesGlob } from "node:path";
 
 import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
 import { decode } from "@jridgewell/sourcemap-codec";
+import { parseSync, Visitor } from "oxc-parser";
+import { transformSync } from "oxc-transform";
 import { createCli } from "trpc-cli";
-import ts from "typescript";
 
 import { getOctokit, getRepo, readEventPayload } from "./github.ts";
 import { markdownAnnotator } from "./markdown-annotator.ts";
@@ -142,30 +143,39 @@ function linguistGeneratedPaths(paths: string[], cwd: string): Set<string> {
 const jsExtensions = new Set([".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".mts", ".cts"]);
 const typeScriptExtensions = new Set([".ts", ".tsx", ".mts", ".cts"]);
 
+/** The 0-based lines that hold non-blank JSX text. */
+function jsxTextLines(content: string, path: string) {
+  const lineStarts = [0];
+  for (let index = 0; index < content.length; index++)
+    if (content[index] === "\n") lineStarts.push(index + 1);
+  const lineOf = (offset: number) => {
+    let line = 0;
+    while (line + 1 < lineStarts.length && lineStarts[line + 1]! <= offset) line++;
+    return line;
+  };
+  const lines: number[] = [];
+  new Visitor({
+    JSXText(node) {
+      // each non-blank line of the text, from where the text starts
+      node.value.split("\n").forEach((text, offset) => {
+        if (text.trim()) lines.push(lineOf(node.start) + offset);
+      });
+    },
+  }).visit(parseSync(path, content).program);
+  return lines;
+}
+
 function significantLines(content: string, path: string) {
   if (/\.d\.(?:ts|mts|cts)$/.test(path)) return "";
   const extension = extname(path);
   let runtimeLines: Set<number> | undefined;
   if (typeScriptExtensions.has(extension)) {
-    const transpiled = ts.transpileModule(content, {
-      fileName: path,
-      compilerOptions: {
-        jsx: ts.JsxEmit.Preserve,
-        module: ts.ModuleKind.ESNext,
-        sourceMap: true,
-        target: ts.ScriptTarget.ESNext,
-      },
-    });
-    if (!transpiled.sourceMapText) throw new Error(`TypeScript emitted no source map for ${path}`);
-    const sourceMap: unknown = JSON.parse(transpiled.sourceMapText);
-    if (
-      typeof sourceMap !== "object" ||
-      !sourceMap ||
-      !("mappings" in sourceMap) ||
-      typeof sourceMap.mappings !== "string"
-    ) {
-      throw new Error(`TypeScript emitted an invalid source map for ${path}`);
-    }
+    // oxc strips the types; its source map names every source line that still emits code
+    const transformed = transformSync(path, content, { jsx: "preserve", sourcemap: true });
+    if (transformed.errors.length)
+      throw new Error(`oxc could not transform ${path}: ${transformed.errors[0]!.message}`);
+    if (!transformed.map) throw new Error(`oxc emitted no source map for ${path}`);
+    const sourceMap = transformed.map;
     runtimeLines = new Set(
       decode(sourceMap.mappings).flatMap((line) =>
         line.flatMap((segment) => {
@@ -174,6 +184,9 @@ function significantLines(content: string, path: string) {
         }),
       ),
     );
+    // oxc's map names no line of JSX text (TypeScript's did): UI copy is runtime too
+    if (extension === ".tsx")
+      for (const line of jsxTextLines(content, path)) runtimeLines.add(line);
   }
   const stripped = jsExtensions.has(extension) ? stripJsComments(content) : content;
   return stripped

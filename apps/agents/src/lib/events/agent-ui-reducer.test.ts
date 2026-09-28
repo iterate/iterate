@@ -4,7 +4,7 @@
 // items and live active-work tail the agent feed renders.
 import { expect, test } from "vitest";
 import { appendText } from "../chunked-text.ts";
-import type { Event } from "./types.ts";
+import type { StreamEvent } from "./stream-event.ts";
 import {
   AGENT_UI_PROVISIONAL_ACTIVITY_LIMIT,
   deriveAgentUiLiveStatus,
@@ -555,7 +555,7 @@ test("rejects script requests that do not satisfy the current deadline contract"
 });
 
 test("keeps the live indicator while a running script emits chat messages", () => {
-  const countdownEvents: Array<Partial<Event> & { type: string; payload?: unknown }> = [
+  const countdownEvents: Array<Partial<StreamEvent> & { type: string; payload?: unknown }> = [
     {
       type: "events.iterate.com/agent/llm-request-requested",
       offset: 10,
@@ -567,7 +567,7 @@ test("keeps the live indicator while a running script emits chat messages", () =
         role: "assistant",
         llmRequestOffset: 10,
         content:
-          "```ts\nasync (itx) => {\n  await itx.chat.sendMessage('20');\n  await new Promise((resolve) => setTimeout(resolve, 1000));\n}\n```",
+          "<codemode>\nawait itx.chat.sendMessage('20');\nawait new Promise((resolve) => setTimeout(resolve, 1000));\n</codemode>",
       },
     },
     {
@@ -645,7 +645,7 @@ test("flushes a script-sent reply when its script settles and nothing else is ru
       payload: {
         role: "assistant",
         llmRequestOffset: 10,
-        content: "```ts\nasync (itx) => {\n  await itx.chat.sendMessage('grok');\n}\n```",
+        content: "<codemode>\nawait itx.chat.sendMessage('grok');\n</codemode>",
       },
     },
     {
@@ -719,32 +719,14 @@ test("accumulates agent llm-response-frame deltas", () => {
   });
 });
 
-test("does not show the bootstrap stream wake in the agent feed", () => {
+test("stream wakes are not chat rows", () => {
   const state = reduceAll([
     { type: "events.iterate.com/itx/created" },
+    { type: "events.iterate.com/itx/woken" },
     { type: "events.iterate.com/itx/woken" },
   ]);
 
   expect(state).toMatchObject({ items: [] });
-});
-
-test("shows later stream wakes in the agent feed", () => {
-  const state = reduceAll([
-    { type: "events.iterate.com/itx/created" },
-    { type: "events.iterate.com/itx/woken" },
-    { type: "events.iterate.com/itx/woken" },
-  ]);
-
-  expect(state).toMatchObject({
-    items: [
-      {
-        kind: "stream-woken",
-        id: "stream-woken-3",
-        text: "Stream durable object woke",
-        timestampMs: Date.parse("2026-06-11T00:00:03.000Z"),
-      },
-    ],
-  });
 });
 
 test("a durable rebuild recovers the interrupted partial from the settled fact", () => {
@@ -1235,76 +1217,38 @@ test("does not append late chunks from an interrupted request into the next turn
   });
 });
 
-test("shows only the attachments from the slack-agent's transcribed message", () => {
-  // The slack message itself already rendered from the webhook event; the
-  // slack-agent processor's context-added yaml transcription exists for
-  // the model, not the user — but its stored file attachments are the only
-  // browser-renderable copy of shared files.
+test("renders the loop's own developer context (a format correction) as a user bubble", () => {
+  const state = reduceAll([
+    {
+      type: "events.iterate.com/agent/context-added",
+      payload: {
+        role: "developer",
+        content: "Your code did NOT run: the <codemode> tag was empty.",
+        actor: { type: "agent" },
+      },
+    },
+  ]);
+
+  expect(state.items).toMatchObject([
+    { kind: "user", text: "Your code did NOT run: the <codemode> tag was empty." },
+  ]);
+});
+
+test("a user message's attachments render without a URL: the page signs one per file", () => {
   const file = {
     contentType: "image/png",
     filename: "screenshot.png",
     path: "files/screenshot.png",
     size: 123,
-    url: "https://files.example/screenshot.png",
   };
   const state = reduceAll([
     {
       type: "events.iterate.com/agent/context-added",
-      idempotencyKey: "slack-agent:webhook-to-agent-input:41",
-      payload: {
-        content: "```yaml\nbody: ...\n```",
-        role: "developer",
-        actor: { type: "slack", userId: "U1" },
-        files: [file],
-      },
+      payload: { role: "user", content: "", files: [file] },
     },
   ]);
 
-  expect(state.items).toMatchObject([
-    { kind: "user", text: "", files: [file], via: { service: "slack", sender: "U1" } },
-  ]);
-});
-
-test("keeps email/github transcription text visible — they have no raw-event bubble", () => {
-  const state = reduceAll([
-    {
-      type: "events.iterate.com/agent/context-added",
-      payload: {
-        role: "developer",
-        content: "`events.iterate.com/email/received` event received\n\n```yaml\nsubject: hi\n```",
-        actor: { type: "email", address: "dana@example.com" },
-      },
-    },
-  ]);
-
-  expect(state.items).toMatchObject([
-    {
-      kind: "user",
-      text: expect.stringContaining("subject: hi"),
-      via: { service: "email", sender: "dana@example.com" },
-    },
-  ]);
-});
-
-test("renders inter-agent mail as a labeled user bubble", () => {
-  const state = reduceAll([
-    {
-      type: "events.iterate.com/agent/context-added",
-      payload: {
-        role: "developer",
-        content: "Done. Findings attached below.",
-        actor: { type: "agent", path: "/agents/main/researcher" },
-      },
-    },
-  ]);
-
-  expect(state.items).toMatchObject([
-    {
-      kind: "user",
-      text: "Done. Findings attached below.",
-      via: { service: "agent", sender: "/agents/main/researcher" },
-    },
-  ]);
+  expect(state.items).toMatchObject([{ kind: "user", text: "", files: [file] }]);
 });
 
 test("groups expired and unrecognized cancellations into one failed activity", () => {
@@ -1448,31 +1392,6 @@ test("derived events mark the llm step interpreted; uninterpreted turns stay pla
   const plainStep = plain.live?.steps.find((step) => step.kind === "llm");
   expect(plainStep).toMatchObject({ assistantEventOffset: 2 });
   expect(plainStep).not.toHaveProperty("interpreted");
-});
-
-test("a classic fenced turn's extracted script also marks its step interpreted", () => {
-  const reduced = reduceAll([
-    { type: "events.iterate.com/agent/llm-request-requested", payload: { model: "m" } },
-    {
-      type: "events.iterate.com/agent/context-added",
-      payload: {
-        role: "assistant",
-        content: "```ts\nasync (itx) => 1\n```",
-        llmRequestOffset: 1,
-      },
-    },
-    {
-      type: "events.iterate.com/capability-host/script-run-requested",
-      payload: {
-        code: "async (itx) => 1",
-        executionId: "agent-output:2",
-        expiresAt: SCRIPT_EXPIRES_AT,
-      },
-    },
-  ]);
-  expect(reduced.live?.steps.find((step) => step.kind === "llm")).toMatchObject({
-    interpreted: true,
-  });
 });
 
 test("script-before-prose keeps the whole turn in ONE activity, rounds paired", () => {
@@ -1704,17 +1623,16 @@ test("a value-settled script on a PAUSED loop settles the activity — never pro
   expect(resumed).toMatchObject({ paused: false });
 });
 
-function reduceAll(events: Array<Partial<Event> & { type: string; payload?: unknown }>) {
+function reduceAll(events: Array<Partial<StreamEvent> & { type: string; payload?: unknown }>) {
   let offset = 0;
   const fullEvents = events.map((partial) => {
     offset += 1;
     return {
       offset: partial.offset ?? offset,
       createdAt: partial.createdAt || `2026-06-11T00:00:${String(offset).padStart(2, "0")}.000Z`,
-      streamPath: "/agents/test",
       payload: partial.payload ?? {},
       ...partial,
-    } as unknown as Event;
+    } as unknown as StreamEvent;
   });
   let state = initialAgentUiState();
   // The feed renders every settled item in emission order.

@@ -1,0 +1,8 @@
+{
+  // The published entries' declarations (tsdown.config.ts): tsconfig.json without the tests and the
+  // configs. tsdown emits them with TypeScript 7, which writes a declaration for a file outside the
+  // package next to that file's source, and the tests and vitest.config.ts import apps/os and
+  // packages/shared source.
+  "extends": "./tsconfig.json",
+  "include": ["src/index.ts", "src/install.ts"]
+}

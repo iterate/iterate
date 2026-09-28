@@ -56,6 +56,7 @@ export default class TraceReporter implements Reporter {
         id: `${test.id}/${test.repeatEachIndex}/${result.retry}`,
         time: result.startTime.getTime(),
         title: test.title,
+        framework: "playwright",
         file: relative(process.cwd(), test.location.file),
         line: test.location.line,
         project: test.parent.project()?.name || "default",
@@ -598,8 +599,7 @@ const TraceEvent = z.discriminatedUnion("kind", [
     id: z.string(),
     time: z.number().finite(),
     title: z.string(),
-    // Historical markers were emitted only by Playwright.
-    framework: z.enum(["playwright", "vitest"]).default("playwright"),
+    framework: z.enum(["playwright", "vitest"]),
     file: z.string(),
     line: z.number(),
     project: z.string(),

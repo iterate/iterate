@@ -23,6 +23,7 @@ import {
   type ItxExpressionInput,
 } from "iterate/expression";
 import type { FacetProps } from "iterate/sdk";
+import type { FacetSpec } from "iterate/api";
 import {
   CoreContract,
   facetIsPushedByARow,
@@ -30,6 +31,8 @@ import {
   type CoreState,
 } from "../stream/core-processor.ts";
 import { AccountDurableObject } from "../account/durable-object.ts";
+import { EmailDurableObject } from "../email/durable-object.ts";
+import { InstanceDurableObject } from "../instance/durable-object.ts";
 import { type FIRST_PARTY_FACET_CLASSES, firstPartyFacetClassOf } from "../first-party-facets.ts";
 import { OrganizationDurableObject } from "../organization/durable-object.ts";
 import { ProjectDurableObject } from "../project/durable-object.ts";
@@ -44,7 +47,6 @@ import {
   assertFacetSourceWithinCeiling,
   facetSpecOf,
   prepareConfinedWorker,
-  type FacetSpec,
 } from "./worker-loader.ts";
 
 /** WORKAROUND for a platform defect — https://github.com/iterate/alarm-loader-facet-repro (the
@@ -65,8 +67,7 @@ const isFacetStartPlatformFailure = (error: unknown): error is Error =>
 /** How long one facet call may take before the facet is aborted (a call that never answers would
  *  hold the pins' release, and with it this actor, forever). */
 const FACET_CALL_WATCHDOG_MS = 60_000;
-/** WORKAROUND for a platform defect — e2e/facet-abort-storage-reset.e2e.test.ts (the pin and the
- *  measurements).
+/** WORKAROUND for a platform defect — e2e/facet-abort-storage-reset.e2e.test.ts pins it.
  *  On the edge (never in local workerd), a facet whose SQLite database took a few dozen pages of
  *  writes and then STOPS — aborted (`ctx.facets.abort`), or evicted with its context — makes one of
  *  the context's next storage commits fail with "Internal error in Durable Object storage caused
@@ -109,6 +110,8 @@ export const UNCLAIMED_FACET_SWEEP_AFTER_QUIET_MS = 60_000;
  *  typecheck. */
 const FIRST_PARTY_FACET_PUBLIC_METHODS = {
   account: AccountDurableObject.publicMethods,
+  email: EmailDurableObject.publicMethods,
+  instance: InstanceDurableObject.publicMethods,
   organization: OrganizationDurableObject.publicMethods,
   project: ProjectDurableObject.publicMethods,
   repo: RepoDurableObject.publicMethods,
@@ -123,7 +126,7 @@ type FacetHostDeps = {
   ctx: Pick<DurableObjectState, "facets" | "storage" | "exports" | "blockConcurrencyWhile">;
   /** What `prepareConfinedWorker` reads of the env: the Worker Loader. Read at call time, off the
    *  DO's own `env` field — a workerd test swaps that field for a counting loader
-   *  (__workers-tests__/facet-class-loads-at-startup.test.ts). */
+   *  (__workers-tests__/facets.test.ts). */
   env: () => { LOADER: WorkerLoader; ITX_KV: KVNamespace };
   deployId: string;
   /** The DO's name: a facet's props and the owner half of its loader identity. */
@@ -179,6 +182,11 @@ export class FacetHost {
   /** The generation `itx.facets.abort` ended, per facet, and why: a call in flight on it rejects
    *  FACET_ABORTED (`#call`) — an outcome asked for, not a failure to report or a row to halt. */
   readonly #abortedOnRequest = new Map<string, { generation: number; reason?: string }>();
+  /** The generation the platform restarted under the calls in flight on it, per facet, and why: a
+   *  new loaded identity (`#materialize`) or another call on it timing out (`#call`). A call in
+   *  flight on it rejects FACET_RESTARTED (`#call`) — owed again on the new instance, not a failure
+   *  to report. */
+  readonly #restartedUnderInFlightCalls = new Map<string, { generation: number; reason: string }>();
   /** Each facet's latest recovery (`#recover`), settled either way: the next one starts after it,
    *  so no restart aborts another recovery's retry mid-call. */
   readonly #facetRecoveryByName = new Map<string, Promise<void>>();
@@ -288,10 +296,11 @@ export class FacetHost {
         await this.callFacetAsPlatform(name, [["revive"]]);
         this.#facetRevived(name);
       } catch (error) {
-        // A revive `itx.facets.abort` cut off (FACET_ABORTED) failed at nothing: the reset was asked
-        // for, and the fresh instance is owed the same revive — due now, the next pass's, with no
-        // backoff and no issue.
-        if (errorCode(error) === "FACET_ABORTED") {
+        // A revive `itx.facets.abort` cut off (FACET_ABORTED), or a platform restart (a new loaded
+        // identity, another call's timeout: FACET_RESTARTED), failed at nothing: the fresh instance is owed the same revive
+        // — due now, the next pass's, with no backoff and no issue.
+        const code = errorCode(error);
+        if (code === "FACET_ABORTED" || code === "FACET_RESTARTED") {
           this.#claimFacetAlarm(name, Date.now());
           continue;
         }
@@ -869,7 +878,7 @@ export class FacetHost {
     let retireLoadedIdentity: (() => void) | undefined;
     let recordLoadedIdentity: (() => void) | undefined;
     if (firstPartyClassName) {
-      // `ctx.exports.<Class>({ props })` mints the class (__workers-tests__/facet-from-exports.test.ts).
+      // `ctx.exports.<Class>({ props })` mints the class (__workers-tests__/facets.test.ts).
       const exportsOf = this.#deps.ctx.exports as unknown as Record<
         string,
         (options: { props: FacetProps }) => DurableObjectClass
@@ -878,7 +887,7 @@ export class FacetHost {
     } else {
       const memo = facetStartupMemo!;
       // THE LOADED IDENTITY, resolved — not loaded: `load` runs only for a facet that starts (below;
-      // __workers-tests__/facet-class-loads-at-startup.test.ts). The one await is a dead id's
+      // __workers-tests__/facets.test.ts). The one await is a dead id's
       // recovery (worker-loader.ts).
       const { loaderId, load, retire } = await prepareConfinedWorker({
         env: this.#deps.env(),
@@ -921,11 +930,11 @@ export class FacetHost {
         // A platform start (`#start`, `#recover`) is itself the start that follows; a call restarts
         // it first — abort and start with nothing between (`#restart`), the identity recorded there.
         if (platformStart) {
-          this.#abortFacetIfRunning(name, "loaded identity changed");
+          this.#abortForRestart(name, "loaded identity changed");
           this.#liveFacetNames.delete(name); // cold from here: it starts afresh below
         } else {
           started = await this.#restart(name, () =>
-            this.#abortFacetIfRunning(name, "loaded identity changed"),
+            this.#abortForRestart(name, "loaded identity changed"),
           );
           if (this.#facetStartupMemoByName.get(name) !== memo)
             throw codedError(
@@ -984,7 +993,8 @@ export class FacetHost {
    *  channel back) — then the answer copied out. A facet that never answers (FACET_CALL_WATCHDOG_MS)
    *  is restarted (`#restart`) — unless the call was a platform start, which leaves it — and one
    *  whose startup threw is aborted and starts on its next call: its pending call rejects, the
-   *  counter drains. A call on an instance `abort` reset rejects FACET_ABORTED; one on an instance
+   *  counter drains. A call on an instance `abort` reset rejects FACET_ABORTED; one on an instance a
+   *  new loaded identity or another call's timeout restarted, FACET_RESTARTED; one on an instance
    *  `#deleteFacet` deleted, NO_FACET. */
   async #call(
     { facet, startupFailed, generation }: MaterializedFacet,
@@ -1025,7 +1035,7 @@ export class FacetHost {
           );
         else if (this.#facetGeneration(name) === generation)
           await this.#restart(name, () =>
-            this.#abortFacetIfRunning(name, "call timed out", generation),
+            this.#abortForRestart(name, "call timed out", generation),
           );
       } else if (startupFailed()) {
         if (this.#facetGeneration(name) === generation) {
@@ -1038,6 +1048,14 @@ export class FacetHost {
         throw codedError(
           "FACET_ABORTED",
           `facet "${name}" was aborted${aborted.reason ? `: ${aborted.reason}` : ""} — its next call starts it fresh`,
+        );
+      // A call the watchdog timed out stays TIMEOUT: only the restart's rejection of the calls it
+      // cut off is re-coded.
+      const restarted = this.#restartedUnderInFlightCalls.get(name);
+      if (restarted?.generation === generation && errorCode(error) !== "TIMEOUT")
+        throw codedError(
+          "FACET_RESTARTED",
+          `facet "${name}" was restarted (${restarted.reason}) — its next call runs on the new instance`,
         );
       // The runtime's own words for a call in flight on a facet `ctx.facets.delete` took
       // (workerd server.c++ `deleteFacet`): the removal this call raced, not a failure of it.
@@ -1145,6 +1163,14 @@ export class FacetHost {
     } catch {
       /* facet not running */
     }
+  }
+  /** A platform restart's abort (a new loaded identity, a call timed out), the generation it ended
+   *  recorded so every other call in flight on it rejects FACET_RESTARTED (`#call`). */
+  #abortForRestart(name: string, reason: string, expectedGeneration?: number): void {
+    const generation = this.#facetGeneration(name);
+    this.#abortFacetIfRunning(name, reason, expectedGeneration);
+    if (this.#facetGeneration(name) !== generation)
+      this.#restartedUnderInFlightCalls.set(name, { generation, reason });
   }
   #facetGeneration(name: string): number {
     return this.#facetGenerationByName.get(name) ?? 0;

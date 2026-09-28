@@ -13,7 +13,7 @@ import {
   PlayIcon,
 } from "lucide-react";
 import { Button } from "@iterate-com/ui/components/button";
-import { SerializedObjectCodeBlock } from "@iterate-com/ui/components/serialized-object-code-block";
+import { CodeBlock, SerializedObjectCodeBlock } from "@iterate-com/ui/components/code-block";
 import { Spinner } from "@iterate-com/ui/components/spinner";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@iterate-com/ui/components/tabs";
 import { cn } from "cn";
@@ -44,7 +44,6 @@ import {
   looksLikeCode,
 } from "../lib/agent-events.ts";
 import { useTickingNowMs } from "../lib/use-ticking-now-ms.ts";
-import { SourceCodeBlock } from "./source-code-block.tsx";
 import { Message, MessageContent, MessageResponse } from "./message.tsx";
 import { StreamingCodeBlock, StreamingCursor, StreamingText } from "./streaming-text.tsx";
 
@@ -137,10 +136,6 @@ export function AgentFeedItemRow({
         </div>
       );
     }
-    case "stream-woken":
-      // An apps/os actor quiesces after a short idle and wakes on the next request, so wakes
-      // are a fact of every turn, not a signal — the Events view lists them; the chat does not.
-      return null;
   }
 }
 
@@ -342,7 +337,7 @@ function LlmResponseText({ llm }: { llm: AgentUiLlmStep }) {
     <>
       {text.length === 0 ? null : looksLikeCode(text) ? (
         <div className={cn("w-full max-w-2xl", llm.interpreted && "opacity-75")}>
-          <SourceCodeBlock code={text} language="typescript" showLineNumbers={false} />
+          <CodeBlock code={text} language="typescript" showLineNumbers={false} />
         </div>
       ) : (
         <div
@@ -415,7 +410,7 @@ function RoundTabs({
       </TabsList>
       <TabsContent value="script" className="flex flex-col gap-1.5">
         <div className="max-h-80 overflow-y-auto rounded-lg">
-          <SourceCodeBlock code={code.code} language="typescript" showLineNumbers={false} />
+          <CodeBlock code={code.code} language="typescript" showLineNumbers={false} />
         </div>
         {!hasResult && code.errorMessage ? (
           <pre
@@ -492,12 +487,7 @@ function ScriptResult({ code }: { code: AgentUiCodeStep }) {
         </pre>
       ) : (
         <div className="max-h-80 overflow-y-auto rounded-lg">
-          <SerializedObjectCodeBlock
-            data={code.result}
-            initialFormat="yaml"
-            showToggle
-            showCopyButton
-          />
+          <SerializedObjectCodeBlock data={code.result} />
         </div>
       )}
     </>

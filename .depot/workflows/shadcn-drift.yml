@@ -9,7 +9,7 @@
 # Why its own workflow: it calls shadcn's registry over the network, so it stays off the required
 # checks and off every other pull request's time to green. The path filter runs it only where the
 # answer can change; a registry blip fails it once, and a re-run asks again. Upstream moving with no
-# pull request in sight is the daily report's job (shadcn-upstream.yml).
+# pull request in sight is found by the next pull request that touches these files, or a refresh.
 #
 # Secrets (depot ci secrets --org 0p91s0lz49): none.
 name: shadcn drift
@@ -58,18 +58,15 @@ concurrency:
   cancel-in-progress: true
 jobs:
   shadcn-drift:
-    runs-on:
-      size: 2x8
-      image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
+    runs-on: depot-ubuntu-24.04
     timeout-minutes: 10
     steps:
       # THE RUN'S OWN COMMIT (docs/depot-ci.md#which-tree-a-pull-requests-ci-tests).
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          clean: false
           ref: ${{ github.sha }}
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile --prefer-offline
+      - name: Setup
+        uses: ./.depot/actions/setup
       - name: Compare the vendored files with shadcn add
         run: pnpm tsx scripts/ci/shadcn-drift.ts check

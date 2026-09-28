@@ -75,10 +75,7 @@ test("a use recorded a moment ago admits nothing once the grant has ended: its v
 test("an account read still waiting after five seconds names the person while it waits, and still answers", async () => {
   vi.useFakeTimers();
   const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-  onTestFinished(() => {
-    vi.useRealTimers();
-    warn.mockRestore();
-  });
+  onTestFinished(() => void vi.useRealTimers());
   // what a brand-new account does while Cloudflare holds its first write: it answers late
   let answer!: (snapshot: { offset: number; state: Partial<AccountState> }) => void;
   const env = {

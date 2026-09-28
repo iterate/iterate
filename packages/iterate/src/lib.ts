@@ -18,7 +18,10 @@
 // So: never classify by `name`, `instanceof`, or message regex across a hop; check the code.
 // Human messages stay verbatim and greppable — the code rides beside them, never instead.
 // workerd's own stamped flags (`.retryable`, `.overloaded`, `.durableObjectReset`) ride the same
-// own-property channel; honor them rather than inventing a retry taxonomy.
+// own-property channel. What a failure is, and whether it is asked again, is one model
+// (docs/engineering-invariants.md#failures-and-retries): a code is an expected outcome, never
+// repeated; the platform's own failure crosses a hop as UNAVAILABLE; and "never retry this" is a
+// code (PERMANENT_FAILURE, or the refusal's own), never an invented `retryable: false`.
 
 /** The stable machine-readable codes — SCREAMING_SNAKE, defined once, both ends import this. */
 type ErrorCode =
@@ -26,6 +29,7 @@ type ErrorCode =
   | "INVALID_INPUT"
   | "IDENTITY_CONFLICT" // verified login cannot replace another linked identity
   | "GRANT_NOT_FOUND" // a caller may revoke only a grant in their own inventory
+  | "SECRET_NOT_SET" // itx.secrets.delete of a path that holds no secret: already gone, or never set
   | "NO_ITX_EXPRESSION_MATCH" // no rewrite rule matches the call (default-deny)
   | "IDEMPOTENCY_CONFLICT"
   | "OFFSET_CONFLICT" // an input's expected `offset` is not the offset it would land at
@@ -44,9 +48,13 @@ type ErrorCode =
   | "NOT_A_METHOD" // the dotted path's terminal segment is not callable on the target
   | "NO_FACET" // no facet of that name has been loaded into this context
   | "FACET_ABORTED" // the facet instance this call ran on was reset by `itx.facets.abort` (apps/os context/facet-host.ts) — its next call starts it fresh
+  | "FACET_RESTARTED" // the facet instance this call ran on was restarted by the platform under it — its source or loader identity changed, or another call on it timed out (apps/os context/facet-host.ts) — its next call runs on the new instance
   | "FACET_NO_UPGRADE" // a WebSocket upgrade aimed at a facet: a facet answers RPC and plain HTTP, never a socket — sockets terminate at the edge (apps/os context/facet-host.ts)
   | "WAIT_TIMEOUT" // waitForEvent expired with no matching event committed
-  | "TIMEOUT"; // lib.ts withTimeout: the call did not answer within its deadline
+  | "NOT_FAST_FORWARD" // a repo's pull or push without `force` where neither main contains the other (apps/os repo/durable-object.ts) — `data` is { ours, theirs }
+  | "TIMEOUT" // lib.ts withTimeout: the call did not answer within its deadline
+  | "UNAVAILABLE" // the platform failed the call, not the caller: `data` is { kind, retryAfterMs } — a deploy's reset ("deploy-reset"), a lost connection ("disconnected") or an overload ("overloaded"); an idempotent call may be asked again after retryAfterMs, and an HTTP edge answers it 503 with that Retry-After
+  | "PERMANENT_FAILURE"; // a failure no repeat can change (a subscriber's poison event): a delivery halts on it at once instead of climbing its retry ladder (apps/os stream/subscription-delivery.ts)
 // (There is no separate boundary-validation library: the append method's own runtime guards
 // throw plain Errors; a client is JUST capnweb, so malformed args surface as ordinary errors.)
 

@@ -54,13 +54,11 @@
     "**/dist/",
     "**/build/",
     "pnpm-lock.yaml",
-    "test-results/**",
-    "apps/browser-extension/capnweb.js"
+    "test-results/**"
   ],
   "jsPlugins": [
     "./lint/oxlint-plugin-iterate.ts",
     "@tanstack/eslint-plugin-router",
-    "eslint-plugin-codegen",
     "eslint-plugin-eslint-comments",
     {
       "name": "import-js",
@@ -132,8 +130,6 @@
     "iterate/import-rules": "warn",
     "iterate/no-sr-only-data-attributes": "error",
     "iterate/icon-button-has-hover-text": "error",
-    "iterate/secret-field-not-recorded": "error",
-    "iterate/secret-shown-not-recorded": "error",
     "iterate/relative-import-extensions": "error",
     "iterate/zod-schema-naming": "error",
     "iterate/no-raw-durable-object-binding-access": "error",
@@ -202,7 +198,6 @@
         "no-sequences": "error",
         "prefer-numeric-literals": "error",
         "no-new-func": "error",
-        "codegen/codegen": "error",
         "react/only-export-components": [
           "warn",
           {
@@ -290,6 +285,61 @@
       "files": ["apps/os/**"],
       "rules": {
         "import-js/no-restricted-paths": "off"
+      }
+    },
+    {
+      "files": ["apps/os/src/library.ts"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": [
+                  "**",
+                  "!capnweb",
+                  "!cloudflare:workers",
+                  "!zod",
+                  "!iterate/expression",
+                  "!iterate/lib",
+                  "!./repo/contract.ts",
+                  "!./workspace/contract.ts",
+                  "!./library/*.ts"
+                ],
+                "allowTypeImports": true,
+                "message": "The library rule (apps/os/src/library.ts): a library module takes `itx` and nothing else, so at runtime it imports only what a userspace worker could too: npm packages it would bundle (capnweb, cloudflare:workers, zod), the SDK's pure `iterate/expression` and `iterate/lib`, the entities' contracts and the library's own files. Type-only imports are free."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": ["apps/os/src/library/**"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": [
+                  "**",
+                  "!capnweb",
+                  "!cloudflare:workers",
+                  "!zod",
+                  "!iterate/expression",
+                  "!iterate/lib",
+                  "!../repo/contract.ts",
+                  "!../workspace/contract.ts",
+                  "!./*.ts",
+                  "!../library.ts"
+                ],
+                "allowTypeImports": true,
+                "message": "The library rule (apps/os/src/library.ts): a library module takes `itx` and nothing else, so at runtime it imports only what a userspace worker could too: npm packages it would bundle (capnweb, cloudflare:workers, zod), the SDK's pure `iterate/expression` and `iterate/lib`, the entities' contracts and the library's own files. Type-only imports are free."
+              }
+            ]
+          }
+        ]
       }
     }
   ]

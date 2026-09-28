@@ -33,8 +33,6 @@ on:
       - packages/iterate/**
       - envs.ts
       - scripts/lib/**
-      # Not scripts/depot-ci: it reconciles installs from the frozen lockfile and never changes the
-      # bundle. Preview OS and Main OS e2e run for it.
       - packages/shared/**
       - packages/ui/**
       # A root dependency resolution can change the Worker bundle even when no
@@ -49,41 +47,34 @@ on:
         required: false
         type: string
         default: ""
-env:
-  # The image's baked store: dependencies.mjs fingerprints it (docs/depot-ci.md#custom-image)
-  PNPM_CONFIG_STORE_DIR: /home/runner/.pnpm-store
 
 jobs:
   deploy:
-    runs-on:
-      size: 4x16
-      image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
+    runs-on: depot-ubuntu-24.04-4
     timeout-minutes: 30
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          clean: false
           ref: ${{ inputs.ref || github.sha }}
-      - name: Reconcile dependencies (baked)
-        run: node scripts/depot-ci/dependencies.mjs install
-      # The Doppler project is envs.ts OS_DOPPLER_PROJECT; the deployed Cloudflare Worker is
-      # os-prd.
-      - name: Setup Doppler (baked CLI)
-        run: doppler setup --config prd --project os
-        env:
-          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+      - name: Setup
+        uses: ./.depot/actions/setup
+        with:
+          # a production deploy never reads Depot Cache (docs/depot-ci.md#depot-cache)
+          pnpm-store: none
       # `/version` answers `<version id> <origin>` (apps/os/src/worker.ts): the id prd serves before
       # this deploy, so the host check waits for the new one. Empty when prd does not answer.
       - name: Read the version prd serves
         id: previous
         run: echo "version=$(curl -fsS --max-time 10 https://os.iterate.com/version | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+      # The Doppler project is envs.ts OS_DOPPLER_PROJECT; the deployed Cloudflare Worker is
+      # os-prd.
       - name: Deploy apps/os
         id: deploy
         working-directory: apps/os
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-        run: doppler run -- pnpm run-script deploy --env prd
+        run: doppler run --project os --config prd -- pnpm run-script deploy --env prd
       # READ-ONLY, right after the deploy (scripts/ci/prd-post-deploy-check.ts): once `/version` names
       # the new version (≤ 60 s), one GET of each production project host
       # (scripts/ci/prd-post-deploy-check.ts PRD_PROJECT_HOST_URLS), four tries 10 s apart while it looks down. A host still

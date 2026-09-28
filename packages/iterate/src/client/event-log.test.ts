@@ -6,6 +6,7 @@
 
 import { expect, test } from "vitest";
 import type { StreamEvent } from "../stream/processor.ts";
+import { committedEvent } from "../stream/test-support.ts";
 import { connectEventLog, type EventLogItx } from "./event-log.ts";
 
 test("tail: probes the head, reads the page of offsets below it, and is caught up holding only that", async () => {
@@ -75,6 +76,27 @@ test("pushes and pages dedupe by offset, and a push past the head appends", asyn
   log.dispose();
 });
 
+test("a push that lands before the first read: the older events read as loading, never as the start of the log", async () => {
+  const context = fakeContext(offsetsWithGaps(3000));
+  const read = context.itx.readEvents.bind(context.itx);
+  let release = () => {};
+  const firstRead = new Promise<void>((resolve) => (release = resolve));
+  context.itx.readEvents = async (...args) => {
+    await firstRead;
+    return read(...args);
+  };
+  const log = connectEventLog(context.itx, { consumes: ["*"], history: "tail" });
+  await settle();
+  // the live subscription delivers the newest event while the head probe is still unanswered
+  context.push([context.head + 1]);
+  await settle();
+  expect(log.get()).toMatchObject({ caughtUp: false, older: { loading: true, exhausted: false } });
+  release();
+  await settle();
+  expect(log.get()).toMatchObject({ caughtUp: true, older: { loading: false, exhausted: false } });
+  log.dispose();
+});
+
 test("all: reads every page from the first and is exhausted at once", async () => {
   const context = fakeContext(offsetsWithGaps(3000));
   const log = connectEventLog(context.itx, { consumes: ["*"], history: "all" });
@@ -97,7 +119,7 @@ test("who acted and the processors table's version follow the events held", asyn
   const held = log.get();
   expect(held).toMatchObject({ tableVersion: 2 });
   expect(held.actors.map((actor) => actor.actor)).toEqual(["user_b", "user_a"]);
-  expect(held.actors[1]).toMatchObject({ lastSeenAt: createdAt(2) });
+  expect(held.actors[1]).toMatchObject({ lastSeenAt: "1970-01-01T00:00:02.000Z" });
   log.dispose();
 });
 
@@ -107,14 +129,10 @@ function fakeContext(
   extra: (offset: number) => Partial<StreamEvent> = () => ({}),
 ) {
   const head = offsets.at(-1) ?? 0;
-  const eventAt = (offset: number) =>
-    ({
-      offset,
-      type: "test.example.com/thing",
-      createdAt: createdAt(offset),
-      payload: { offset },
-      ...extra(offset),
-    }) as StreamEvent;
+  const eventAt = (offset: number) => ({
+    ...committedEvent(offset, "test.example.com/thing", { offset }),
+    ...extra(offset),
+  });
   let target: ((batch: unknown[]) => void) | undefined;
   const reads: [number, number][] = [];
   let inFlight = 0;
@@ -157,7 +175,6 @@ function offsetsWithGaps(count: number) {
   return offsets;
 }
 
-const createdAt = (offset: number) => new Date(Date.UTC(2026, 8, 25) + offset * 1000).toISOString();
 const offsetsOf = (events: StreamEvent[]) => events.map((event) => event.offset);
 
 /** Let every read resolve and the next publish (a 16 ms timer outside a browser) run. */

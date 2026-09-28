@@ -2,6 +2,10 @@
 // browser). Press = a fresh context: one `setupVoiceAgent` append puts the relay and the agent on
 // it and starts the call; a subscription brings the answer's frames and the call's facts back;
 // microphone frames go up as ephemeral appends, twenty a second; hanging up appends the terminal.
+
+// registers `itx.voice` on InstalledAppRoots
+import type {} from "@iterate-com/voice";
+import type { IterateContextApiWith } from "iterate/api";
 import type { AuthenticatedApp } from "iterate/app";
 import { base64ToInt16, int16ToBase64, type AudioSession } from "./audio.ts";
 
@@ -37,9 +41,10 @@ export async function startCall(input: {
   ).join("");
   const streamPath = `/agents/voice/web/${new Date().toISOString().slice(0, 19).replace(/[-:T]/g, "")}-${activation}`;
   const project = await api.projects.get(projectId);
-  // The page offers Call only once `itx.voice` is configured (it installs voice otherwise): a
-  // service that is there but failing says so before anything is appended.
-  await project.invoke(["itx", "voice", ["health"]]).catch((error: unknown) => {
+  // The page offers Call only once `itx.voice` is configured (it installs voice otherwise), so the
+  // project answers `voice`; a service that is there but failing says so before anything is appended.
+  const installed = project as typeof project & Pick<IterateContextApiWith<"voice">, "voice">;
+  await installed.voice.health().catch((error: unknown) => {
     throw new Error(
       `This project's voice agent isn't answering (${error instanceof Error ? error.message : String(error)}).`,
     );
@@ -53,13 +58,13 @@ export async function startCall(input: {
     spkMsReceived: 0,
     handshakeMs: null,
   };
-  const setup = project.invoke(["itx", "voice", ["setupVoiceAgent", { streamPath, activation }]]);
+  const setup = installed.voice.setupVoiceAgent({ streamPath, activation });
   const subscription = await call.subscribe({
     name: `web-${activation}`,
     consumes: [
-      "events.iterate.com/voice-agent/spk-frame",
+      "events.iterate.com/voice-agent/speaker-frame",
       "events.iterate.com/voice-agent/conversation-accepted",
-      "events.iterate.com/voice-agent/conversation-ended",
+      "events.iterate.com/voice-agent/call-ended",
       "events.iterate.com/voice-agent/provider-error-reported",
       "events.iterate.com/voice-agent/provider-disconnected",
     ],
@@ -68,7 +73,7 @@ export async function startCall(input: {
         // capnweb hands each row over as a plain JSON value; the shape is the relay's event contract
         const event = raw as { type: string; payload: Record<string, unknown> };
         const p = event.payload;
-        if (event.type === "events.iterate.com/voice-agent/spk-frame") {
+        if (event.type === "events.iterate.com/voice-agent/speaker-frame") {
           if (p.activation !== activation) continue;
           if (p.clearSpeakerBufferBeforeFrame) audio.speaker.clear();
           if (typeof p.pcm === "string" && p.pcm !== "") {
@@ -80,7 +85,7 @@ export async function startCall(input: {
         } else if (event.type === "events.iterate.com/voice-agent/conversation-accepted") {
           stats.handshakeMs = Number(p.handshakeTookMs);
           onFact({ id: factId++, text: `accepted (handshake ${String(p.handshakeTookMs)} ms)` });
-        } else if (event.type === "events.iterate.com/voice-agent/conversation-ended") {
+        } else if (event.type === "events.iterate.com/voice-agent/call-ended") {
           audio.onFrame = null;
           onFact({ id: factId++, text: `ended: ${String(p.reason)}` });
         } else {
@@ -125,7 +130,7 @@ export async function startCall(input: {
       audio.onFrame = null;
       await call
         .append({
-          type: "events.iterate.com/voice-agent/conversation-ended",
+          type: "events.iterate.com/voice-agent/call-ended",
           payload: { activation, reason: "hung up" },
         })
         .catch(() => undefined);

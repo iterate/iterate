@@ -1,10 +1,12 @@
 // alarm-coordinator.ts — THE ONE NATIVE ALARM of a context, derived: it holds no deadline of its
 // own. `reconcile()` asks the deadline sources — the earliest pending schedule (core state), the
 // earliest cursor-row claim (subscription-delivery.ts), the claims of hosted processors (the DO),
-// the unclaimed-facet sweep (context/residency.ts) — and arms the earliest, or deletes the alarm
-// when they report none. Every durable reason is derivable at construction (a schedule is durable,
-// a cursor row is durable and the log is, a claim is a kv row); the sweep is in memory on purpose —
-// it watches the incarnation that armed it, and a fresh one has nothing to watch. So the alarm read
+// the unclaimed-facet sweep (context/residency.ts), the runs processors requested (the DO) — and
+// arms the earliest, or deletes the alarm when they report none. Every durable reason is derivable
+// at construction (a schedule is durable, a cursor row is durable and the log is, a claim is a kv
+// row); the sweep and the owed runs are in memory on purpose — the sweep watches the incarnation
+// that armed it, and a fresh one has nothing to watch; a run a dead incarnation owed is settled
+// `interrupted` by the fresh one's wake record, never started. So the alarm read
 // from storage is only the DEDUPE SEED: the constructor's first reconcile derives the same time (no
 // write) or supersedes it — and a stored time no source still wants (one a dead incarnation left,
 // its sweep's included) is rightly superseded, even though workerd then cancels the run it would
@@ -22,13 +24,14 @@
 // deadline is the common victim. Any `setAlarm()` gets a held alarm run within ~100 ms, and a
 // storage write alone does not (github.com/iterate/do-alarm-held-repro, a Durable Object with no
 // iterate code: 175 of 31,127 moved alarms held; 77 of 77 re-armed ones ran). So the watch re-arms:
-//   - WHILE AN INBOUND CALL HOLDS THIS ACTOR (`held`), a timer at the armed time +
-//     `ALARM_OVERDUE_AFTER_MS` finds an alarm the runtime has not delivered and writes it again for
-//     now. One still undelivered `ALARM_OVERDUE_AFTER_MS` later is written again, at most
-//     `ALARM_MAX_REARMS` times for one armed time; then the watch reports it and leaves it (once, on
-//     2026-09-24, three re-arms 5 s apart went undelivered and the alarm ran 28.8 s late in the
-//     next incarnation). A timer is never pending while the actor is idle: a pending timer holds
-//     off eviction, and nothing may keep an idle actor for this.
+//   - WHILE AN INBOUND CALL HOLDS THIS ACTOR OR A RUN IS OWED TO THE ALARM (`held`), a timer at the
+//     armed time + `ALARM_OVERDUE_AFTER_MS` finds an alarm the runtime has not delivered and writes
+//     it again for now. One still undelivered `ALARM_OVERDUE_AFTER_MS` later is written again, at
+//     most `ALARM_MAX_REARMS` times for one armed time; then the watch reports it and leaves it
+//     (once, on 2026-09-24, three re-arms 5 s apart went undelivered and the alarm ran 28.8 s late
+//     in the next incarnation). A timer is never pending while the actor is idle: a pending timer
+//     holds off eviction, and nothing may keep an idle actor for this. An owed run is not
+//     idleness: its timer holds the actor only until the pass that starts it.
 //   - AT AN INCARNATION'S BIRTH, a stored alarm already overdue is written again for now, the
 //     first of those re-arms.
 // `now`, never the stored time: workerd's ActorSqlite ignores a write of the stored time, and the
@@ -68,7 +71,8 @@ type AlarmCoordinatorDeps = {
   deleteAlarm: () => Promise<void>;
   /** Every source's earliest deadline, epoch ms, `null` for none. */
   deadlines: () => (number | null)[];
-  /** Whether an inbound call holds the actor resident right now: the watch's timer runs only then. */
+  /** Whether an inbound call holds the actor resident right now, or work is owed to the alarm: the
+   *  watch's timer runs only then. */
   held: () => boolean;
   /** The watch acted. */
   onOverdue: (overdue: OverdueAlarm) => void;

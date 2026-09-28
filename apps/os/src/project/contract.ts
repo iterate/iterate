@@ -16,6 +16,7 @@ import { RepoContract } from "../repo/contract.ts";
 import { WorkspaceContract } from "../workspace/contract.ts";
 import { SecretCatalog, SecretContract } from "../secret/contract.ts";
 import { CoreEventCatalog } from "../stream/core-events.ts";
+import { IntegrationConnectionRow, IntegrationEventCatalog } from "../integrations/contract.ts";
 
 /** Where a custom hostname stands at Cloudflare (custom-hostnames.ts reads it off the API). */
 export const CustomHostnameObservation = z.object({
@@ -32,9 +33,9 @@ export const ProjectContract = defineProcessorContract({
   slug: "project",
   // A checkpoint reduced under an older version is reused as-is by the engine, so bumping the version
   // is what re-reduces every existing root log.
-  version: "12",
+  version: "14",
   description:
-    "The project: where its own creation stands, its custom hostnames, every context under it (from the announcements each lands on /), and the catalog of every repo, workspace and secret born under it (from the certificates cross-posted to /).",
+    "The project: where its own creation and deletion stand, its custom hostnames, its integration connections, every context under it (from the announcements each lands on /), and the catalog of every repo, workspace and secret born under it (from the certificates cross-posted to /).",
   /** THE REDUCED STATE — what the reduce keeps between events: where the project's OWN creation
    *  stands, as the OFFSET of the event that says so (the request, the certificate, or the failure —
    *  read that event for the error), and the CATALOG of what exists under it — read by each
@@ -48,6 +49,9 @@ export const ProjectContract = defineProcessorContract({
       })
       .nullable()
       .default(null),
+    /** The project's DELETION, asked for by the platform at this offset: the saga is destroying it,
+     *  its root last. Null while the project lives. */
+    deletion: z.object({ offset: z.number().int().positive() }).nullable().default(null),
     /** Every repo born under the project, by its context path. */
     repos: z.record(z.string(), z.object({ createdAt: z.string() })).default({}),
     /** Every workspace born under the project, by path. */
@@ -69,6 +73,9 @@ export const ProjectContract = defineProcessorContract({
      *  `configRepoIngressTarget`). The publication the tip owes is done once this is the tip's
      *  commit. A target set by hand, or none, leaves it as it was. Null until the first. */
     publishedCommitOid: z.string().min(1).nullable().default(null),
+    /** The offset of the `itx/ingress-configured` that published it: a tip is published only by one
+     *  after its fact, since a pull can return main to a commit published before. */
+    publishedAt: z.number().int().nullable().default(null),
     /** THE CUSTOM HOSTNAMES (custom-hostnames.ts), by hostname: the request the processor owes (an
      *  add — which is also a re-check — or a remove, by the OFFSET of the request), Cloudflare's last
      *  observation (null until provisioned), and the last failure's words. */
@@ -84,6 +91,9 @@ export const ProjectContract = defineProcessorContract({
         }),
       )
       .default({}),
+    /** THE INTEGRATION CONNECTIONS, by the connection's log path: the platform's `<provider>/connected`
+     *  facts, a `disconnected` dropping its row. */
+    integrations: z.record(z.string(), IntegrationConnectionRow).default({}),
     /** THE PRIMARY HOSTNAME: one of `hostnames`, live (Cloudflare's hostname and certificate both
      *  `active`), that `itx.url` composes the project's URLs on and the edge redirects a navigation
      *  on the ingress base to (worker.ts). Null when none; cleared when the hostname's removal is
@@ -108,6 +118,26 @@ export const ProjectContract = defineProcessorContract({
     "events.iterate.com/project/create-failed": {
       description: "What provisioning reported. Terminal until a new request.",
       payloadSchema: z.object({ error: z.string() }),
+    },
+    "events.iterate.com/project/delete-requested": {
+      description:
+        "The project's owner deleted it (`session.projects.delete`): the verb appends this just before the control plane drops the project's row, and the edge admits nothing to the project once the row is gone. The processor destroys every context in the project's registry (deepest first), its custom hostnames, its kv, files and Artifacts repos, lands `project/deleted`, and destroys `/` last, only once the row is gone. Honoured only as the platform's own fact (`source.platform`): a member can append it, and it does nothing.",
+      payloadSchema: z.object({}),
+    },
+    "events.iterate.com/project/context-deleted": {
+      description:
+        "One of the project's contexts was destroyed by the deletion saga: its storage, its facets' and its alarm are gone. A record: nothing reads it back.",
+      payloadSchema: z.object({ path: z.string().min(1) }),
+    },
+    "events.iterate.com/project/delete-failed": {
+      description:
+        "A deletion pass failed three times over (the saga retries after 5 s and 30 s): the error. The saga stops in this incarnation, and a later one starts it again. A record: nothing reads it back.",
+      payloadSchema: z.object({ error: z.string() }),
+    },
+    "events.iterate.com/project/deleted": {
+      description:
+        "Every context but `/`, the custom hostnames, kv, files and Artifacts repos are gone; `/` itself is destroyed next. A record: nothing reads it back.",
+      payloadSchema: z.object({}),
     },
     "events.iterate.com/project/hostname-add-requested": {
       description:
@@ -143,13 +173,22 @@ export const ProjectContract = defineProcessorContract({
       payloadSchema: z.object({ hostname: z.string().min(1).nullable() }),
     },
   },
-  // THE RELATIONSHIP: the project consumes the entities' certificates without owning them, and the
+  // THE RELATIONSHIP: the project consumes the entities' certificates without owning them, its
+  // connections' facts (src/integrations/contract.ts, shared with the account), and the
   // core's apex target (`itx/ingress-configured`), which it both appends and reduces.
-  processorDeps: [RepoContract, WorkspaceContract, SecretContract, CoreEventCatalog],
+  processorDeps: [
+    RepoContract,
+    WorkspaceContract,
+    SecretContract,
+    CoreEventCatalog,
+    IntegrationEventCatalog,
+  ],
   consumes: [
     "events.iterate.com/project/create-requested",
     "events.iterate.com/project/created",
     "events.iterate.com/project/create-failed",
+    "events.iterate.com/project/delete-requested",
+    "events.iterate.com/itx/child-created",
     "events.iterate.com/project/hostname-add-requested",
     "events.iterate.com/project/hostname-add-settled",
     "events.iterate.com/project/hostname-remove-requested",
@@ -161,13 +200,29 @@ export const ProjectContract = defineProcessorContract({
     "events.iterate.com/workspace/deleted",
     "events.iterate.com/secret/set",
     "events.iterate.com/secret/deleted",
+    "events.iterate.com/secret/lent",
+    "events.iterate.com/secret/borrowed",
+    "events.iterate.com/secret/lend-revoked",
     "events.iterate.com/repo/commit-completed",
     "events.iterate.com/itx/ingress-configured",
     "events.iterate.com/itx/child-created",
+    "events.iterate.com/slack/connected",
+    "events.iterate.com/slack/disconnected",
+    "events.iterate.com/google/connected",
+    "events.iterate.com/google/disconnected",
+    "events.iterate.com/cloudflare/connected",
+    "events.iterate.com/cloudflare/disconnected",
+    "events.iterate.com/github/connected",
+    "events.iterate.com/github/disconnected",
+    "events.iterate.com/waitrose/connected",
+    "events.iterate.com/waitrose/disconnected",
   ],
   emits: [
     "events.iterate.com/project/created",
     "events.iterate.com/project/create-failed",
+    "events.iterate.com/project/context-deleted",
+    "events.iterate.com/project/delete-failed",
+    "events.iterate.com/project/deleted",
     "events.iterate.com/project/hostname-add-settled",
     "events.iterate.com/project/hostname-removed",
     // the core's: the saga points the project's apex at the seeded config repo's commit, and the

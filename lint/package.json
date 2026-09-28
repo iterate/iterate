@@ -10,8 +10,8 @@
     "@types/eslint": "9.6.1",
     "@types/esquery": "^1.5.4",
     "@types/estree": "1.0.9",
-    "@typescript/native-preview": "7.0.0-dev.20260707.2",
     "esquery": "1.7.0",
+    "typescript": "catalog:",
     "vitest": "catalog:"
   }
 }

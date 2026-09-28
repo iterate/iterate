@@ -16,9 +16,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   update_dashboard:
-    runs-on:
-      size: 2x8
-      image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
+    runs-on: depot-ubuntu-24.04
     env:
       DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
       GITHUB_TOKEN: ${{ github.token }}
@@ -28,10 +26,9 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          clean: false
           ref: ${{ github.sha }}
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile --prefer-offline
+      - name: Setup
+        uses: ./.depot/actions/setup
       - name: Notify PR update
         run: pnpm tsx scripts/ci/notify.ts pr-update
       - name: Update PR dashboard

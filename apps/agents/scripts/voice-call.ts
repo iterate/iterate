@@ -14,10 +14,13 @@
 //
 // ITERATE_BEARER_TOKEN is a personal access token for the project
 // (`pnpm exec iterate --config prd tokens create`). PROJECT=prj-voice.
+import type {} from "@iterate-com/voice";
 import { readFileSync, writeFileSync } from "node:fs";
 import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
+import type { RpcPromise } from "capnweb";
+import type { IterateContextApiWith } from "iterate/api";
 import { createCli } from "trpc-cli";
-import { credentials, disposeSessions, session } from "./client.ts";
+import { connect } from "./client.ts";
 
 const FRAME_MS = 50;
 const BYTES_PER_MS = 32; // 16 kHz mono PCM16
@@ -99,9 +102,13 @@ export default async function voiceCall(
   const micPcm = UTTERANCE ? pcmFromWav(UTTERANCE) : Buffer.alloc(FRAME_MS * BYTES_PER_MS);
 
   // ONE warm authenticated session and the project root — what a connected device holds.
-  const api = session();
-  const root = api.authenticate(credentials()).projects.get(PROJECT);
   const warm0 = now();
+  using connection = await connect();
+  // The project installed voice (https://k.iterate.com prepares it), so its root has `voice`: the
+  // assertion iterate/api's `IterateContextApiWith` documents for a root that knows an app is there.
+  const root = connection.session.projects.get(PROJECT) as RpcPromise<
+    IterateContextApiWith<"voice">
+  >;
   await root.invoke(["itx", ["whoami"]]);
   console.log(`session + project root ready in ${now() - warm0}ms`);
 
@@ -122,12 +129,9 @@ export default async function voiceCall(
   // the other's answer, so both go out now.
   const setupPromise = Promise.resolve(
     root.voice.setupVoiceAgent({ streamPath: CONTEXT_PATH, activation }),
-  ).then((result: unknown) => {
+  ).then(({ streamPath }) => {
     marks.setup = at();
-    const parsed = JSON.parse(JSON.stringify(result)) as {
-      streamPath: string;
-    };
-    return parsed;
+    return { streamPath };
   });
 
   await itx.subscribe({
@@ -135,8 +139,8 @@ export default async function voiceCall(
     consumes: [
       "events.iterate.com/voice-agent/call-started",
       "events.iterate.com/voice-agent/conversation-accepted",
-      "events.iterate.com/voice-agent/conversation-ended",
-      "events.iterate.com/voice-agent/spk-frame",
+      "events.iterate.com/voice-agent/call-ended",
+      "events.iterate.com/voice-agent/speaker-frame",
       "events.iterate.com/voice-agent/utterance-transcribed",
       "events.iterate.com/voice-agent/answer-transcribed",
       "events.iterate.com/voice-agent/delegation-requested",
@@ -148,8 +152,8 @@ export default async function voiceCall(
         const event = JSON.parse(JSON.stringify(raw));
         const p = event.payload ?? {};
         switch (event.type) {
-          case "events.iterate.com/voice-agent/spk-frame":
-            marks.firstSpkFrame ??= at();
+          case "events.iterate.com/voice-agent/speaker-frame":
+            marks.firstSpeakerFrame ??= at();
             if (p.pcm) speaker.push(Buffer.from(p.pcm, "base64"));
             if (p.lastFrameOfAnswer) marks[`answerDone#${speaker.length}`] = at();
             break;
@@ -159,7 +163,7 @@ export default async function voiceCall(
             marks.upgradeTookMs = p.upgradeTookMs;
             accepted?.();
             break;
-          case "events.iterate.com/voice-agent/conversation-ended":
+          case "events.iterate.com/voice-agent/call-ended":
             ended = String(p.reason);
             marks.ended = at();
             break;
@@ -245,7 +249,7 @@ export default async function voiceCall(
   while (pending > 0) await sleep(20);
 
   await itx.append({
-    type: "events.iterate.com/voice-agent/conversation-ended",
+    type: "events.iterate.com/voice-agent/call-ended",
     payload: { activation, reason: "voice-call script done" },
   });
   marks.terminalSent = at();
@@ -272,7 +276,6 @@ export default async function voiceCall(
       2,
     ),
   );
-  disposeSessions();
 }
 
 if (isMainModule(import.meta.url)) void createCli({ ...import.meta, name: "voice-call" }).run();

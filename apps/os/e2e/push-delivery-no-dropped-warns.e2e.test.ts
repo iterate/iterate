@@ -27,7 +27,7 @@ import {
 } from "./support/client.ts";
 import { startOwnWorker, type OwnWorker } from "./support/own-worker.ts";
 import { projectHostsAreLocal } from "./support/project-host.ts";
-import { E2E_ADMIN_API_SECRET } from "./support/worker-config.ts";
+import { E2E_ADMIN_BEARER } from "./support/worker-config.ts";
 import { enableFixtureProcessor } from "./support/sources.ts";
 
 const localSequential = test.skipIf(!projectHostsAreLocal()).sequential;
@@ -119,7 +119,7 @@ localSequential(
     const wsB = stallableWebSocket(`ws://${worker.url.host}/api`);
     const sessionB: any = newWebSocketRpcSession(wsB as any);
     const victim = sessionB
-      .authenticate({ type: "admin-secret", secret: E2E_ADMIN_API_SECRET })
+      .authenticate({ type: "admin-secret", secret: E2E_ADMIN_BEARER })
       .projects.get(ctx);
     const c = collector();
     await victim.subscribe({ name: "victim", consumes: ["flood"], target: c.fn });

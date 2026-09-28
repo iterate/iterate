@@ -24,6 +24,8 @@ test.each([
 });
 
 test.each([
+  ["pr2990-a1b2c3d-os.iterate-dev-preview.workers.dev", 2990],
+  ["pr2990-a1b2c3d-dash.iterate-dev-preview.workers.dev", 2990],
   ["pr2990-os.iterate-dev-preview.workers.dev", 2990],
   ["pr2990-dash.iterate-dev-preview.workers.dev", 2990],
   ["pr7-kit.iterate-dev-preview.workers.dev", 7],

@@ -1,23 +1,21 @@
 // ingress-project-host.e2e.test.ts — PROJECT-HOST INGRESS (src/worker.ts), the one HTTP way into a
-// project: EVERY host of a project — `<routingSlug>--<project>.<base>`, `<routingSlug>.<project>.<base>`
-// and the apex `<project>.<base>` — reaches the project's config worker `fetch` with the URL verbatim,
-// so a relative asset loads from the same host; inbound `x-itx-*` never reach it and
+// project: EVERY host of a project — `<routingSlug>--<project>.<base>` and the apex `<project>.<base>`
+// — reaches the project's config worker `fetch` with the URL verbatim, so a relative asset loads
+// from the same host; inbound `x-itx-*` never reach it and
 // `x-iterate-routing-slug` is the slug the host names (absent on the apex), whatever a visitor sent;
 // a routing slug the config worker does not serve reaches it too, and its 404 is the config worker's;
 // and — deployed — an upgrade rides through the host to the config worker. The log never names a
 // hostname. WHO, on a host: an OAuth bearer stamps the verified principal; credentials never reach the
-// config worker. Browser cookie flows are in specs/os/auth.spec.ts. RED, deployed: the hop budget
-// counts only what a site forwards — a site fetching its own host with a FRESH Request is not stopped by it.
+// config worker. Browser cookie flows are in specs/os/auth.spec.ts.
 
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { newWebSocketRpcSession } from "capnweb";
 import { transformSync } from "esbuild";
 import { expect, test } from "vitest";
-import { E2E_CI_RETRIES } from "@iterate-com/shared/test-support/e2e-policy";
-import { createFailing } from "@iterate-com/shared/test-support/failing-test";
 import { openItx } from "./support/client.ts";
 import { oauthSession } from "./support/principal.ts";
+import { publishConfigWorker } from "./support/config-worker.ts";
 import {
   appSeesUrl,
   deployedOnly,
@@ -26,9 +24,7 @@ import {
   freshDnsSafeProjectSlug,
   ingressRouting,
   navigateProjectUrl,
-  projectHostsAreLocal,
   projectUrl,
-  publishConfigWorker,
   registerProject,
 } from "./support/project-host.ts";
 
@@ -73,7 +69,7 @@ export default class Site extends WorkerEntrypoint {
 }`,
 };
 
-test("every host of a project reaches its config worker — URL verbatim, relative asset intact, x-itx-* stripped, x-iterate-routing-slug the host's (absent on the apex) whatever a visitor sent; both shapes; an unknown routing slug reaches the config worker too", async () => {
+test("every host of a project reaches its config worker — URL verbatim, relative asset intact, x-itx-* stripped, x-iterate-routing-slug the host's (absent on the apex) whatever a visitor sent; an unknown routing slug reaches the config worker too", async () => {
   const slug = freshDnsSafeProjectSlug("ingress");
   const projectId = await registerProject(slug);
   const itx = openItx(projectId);
@@ -111,17 +107,6 @@ test("every host of a project reaches its config worker — URL verbatim, relati
   expect(seen.itxHeaders).not.toContain("x-itx-expression");
   expect(seen.itxHeaders).not.toContain("x-itx-visitor");
   expect(seen).toMatchObject({ routingSlug: "site" });
-  // the second shape, `<routingSlug>.<project>.<base>`: the same config worker. LOCAL ONLY: a wildcard
-  // certificate covers ONE label under the base (`*.iterate.app`), and a wildcard
-  // never matches two, so on the deployed worker this shape fails the TLS handshake until a
-  // certificate per project subdomain exists — a deploy-side fact, not the edge's (the Workers suite
-  // pins the parse; this pins the whole edge, where it can be reached).
-  const routing = ingressRouting();
-  if (projectHostsAreLocal() && routing?.type === "subdomains") {
-    const dotted = await fetchProjectHost(`site.${slug}.${routing.hostname}`, "/w");
-    expect(dotted, dotted.text).toMatchObject({ status: 200 });
-    expect(dotted.text).toContain(`<p>site.${slug}.${routing.hostname}/w</p>`);
-  }
   // the apex is the same config worker, with no routing slug — a visitor's is deleted by the edge
   const apexRoot = projectUrl({ project: slug, path: "/" });
   const apex = await fetchProjectUrl(apexRoot, { "x-iterate-routing-slug": "site" });
@@ -129,6 +114,7 @@ test("every host of a project reaches its config worker — URL verbatim, relati
   expect(apex.text).toContain("<title>site</title>");
   // a path ON the apex reaches the config worker too — under subdomains: under paths the segment after
   // `/projects/<slug>/` is a ROUTING SLUG, so the apex has its root alone (the paths design's one gap)
+  const routing = ingressRouting();
   if (routing?.type === "subdomains") {
     const echoed = await fetchProjectHost(`${slug}.${routing.hostname}`, "/echo", {
       "x-iterate-routing-slug": "site",
@@ -203,38 +189,6 @@ test("an app's sign-in challenge (401 Bearer realm=iterate): a page load goes to
   expect(await fetchProjectUrl(privateUrl, foreign)).toMatchObject({ status: 403 });
 });
 
-/** A config worker that fetches its own host with a FRESH Request — nothing forwarded, so no hop count. */
-const SRC_SELF_LOOP = {
-  "worker.js": `import { WorkerEntrypoint } from "cloudflare:workers";
-export default class Loop extends WorkerEntrypoint {
-  fetch(request) { return fetch(new Request(request.url)); }
-}`,
-};
-
-// RED BY CONSTRUCTION: the hop budget (src/worker.ts `PROJECT_HOST_HOPS_HEADER`) is the count the
-// site FORWARDS — a site that fetches its own host with a fresh Request re-enters at 1 every pass,
-// and the fourth pass is never reached. Deployed only: the local DO's fetch cannot resolve a
-// `*.localhost` host. OPT-IN (RUN_SELF_LOOP_PROBE=1), like the wake-loop probe: the row starts a
-// REAL self-nesting chain on the deployed worker that runs until the eyeball's 10 s abort — never
-// in a routine deployed run.
-const SELF_LOOP_OPT_IN = process.env.RUN_SELF_LOOP_PROBE === "1";
-createFailing(
-  test.skipIf(projectHostsAreLocal() || !SELF_LOOP_OPT_IN),
-  /TimeoutError: The operation was aborted due to timeout/,
-  { timeoutMs: 60_000, retries: process.env.CI ? E2E_CI_RETRIES : 0 },
-)(
-  "a site that fetches its own host with a FRESH Request is stopped by the hop budget (508 on the fourth pass)",
-  async () => {
-    const slug = freshDnsSafeProjectSlug("ingress-loop");
-    const itx = openItx(await registerProject(slug));
-    await publishConfigWorker(itx, ["itx", "workers", ["get", { source: SRC_SELF_LOOP }]]);
-    const answer = await fetch(projectUrl({ project: slug, path: "/" }), {
-      signal: AbortSignal.timeout(10_000),
-    });
-    expect(answer).toMatchObject({ status: 508 });
-  },
-);
-
 deployedOnly(
   "deployed: a WebSocket upgrade on the project host reaches the config worker",
   async () => {
@@ -260,8 +214,8 @@ deployedOnly(
 
 // THE MINI-APP EXAMPLE (examples/mini-app.ts, TS stripped and routed as specs/os/mini-app.spec.ts
 // publishes it): its capnweb API lives as long as the page's WebSocket, and holds no scope for it —
-// `Notes` takes a `WithItx` accessor, so each method is its own round trip. The spec drives the page
-// and dials a subdomain; this row dials the API itself, so it also runs on a preview's paths.
+// `Notes` takes a `WithItx` accessor, so each method is its own round trip. The spec drives the page;
+// this row dials the API itself.
 deployedOnly(
   "deployed: the mini-app example's notes round-trip over one long-lived WebSocket, each method its own withItx round trip",
   async () => {

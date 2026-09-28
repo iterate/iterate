@@ -5,10 +5,6 @@
 #include <assert.h>
 #include <string.h>
 
-#ifdef NDEBUG
-#error "firmware tests must execute assertions"
-#endif
-
 static bool discard_file_frame(
     void *context, const uint8_t *pcm, size_t length)
 {

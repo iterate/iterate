@@ -7,10 +7,12 @@
   // Start renders the landing and sign-in pages; consent and shared static files live in public/.
   // Worker-first routing keeps assets off project hosts and lets the Worker gate consent.
   "assets": { "directory": "./public", "binding": "ASSETS", "run_worker_first": true },
+  // No compatibility_date here: it is the one every Iterate Worker shares
+  // (scripts/lib/wrangler-config.ts COMPATIBILITY_DATE), which scripts/generate-wrangler-config.ts
+  // readWranglerBase sets.
   // nodejs_compat, spelled out: the DO's AsyncLocalStorage (node:async_hooks) needs it. Loaded
   // userspace isolates are the pure-play half — context/worker-loader.ts mints them with
   // no_nodejs_compat, so what runs inside a context stays portable across workerd builds.
-  "compatibility_date": "2026-09-01",
   // allow_irrevocable_stub_storage (experimental, undocumented): lets loaded code STORE its env.ITX
   // stub in its own durable storage and replay it (e2e/workers-and-facets.e2e.test.ts pins it); every worker
   // in the chain needs it, so the loaded isolates carry it too (context/worker-loader.ts).
@@ -44,7 +46,8 @@
   // remote binding in local wrangler; the Workers test suite omits this the same way it omits `ai`.
   "browser": { "binding": "BROWSER" },
   // Email Sending: the sign-in code's way out (src/password-and-code-sign-in.ts). wrangler dev simulates it (the
-  // message lands in a local file); a deployment sends from APP_CONFIG_LOGIN_EMAIL_FROM (envs.ts).
+  // message lands in a local file); a deployment sends from `login.emailCode.from` in its Doppler
+  // APP_CONFIG (src/app-config.ts).
   "send_email": [{ "name": "EMAIL" }],
   // R2, the built-in root `itx.r2` (`itx.files` on top). Local wrangler keeps it in .wrangler/state;
   // a deployment's bucket is `<resourceNamePrefix>-files` (envs.ts, ensure-resources).
@@ -83,14 +86,8 @@
     // `ctx.exports` (iterate-context-durable-object.ts FIRST_PARTY_FACET_CLASSES) — declared like any
     // DO class (wrangler requires the storage line); their state lives in the facet's own SQLite.
     "AccountDurableObject": { "type": "durable-object", "storage": "sqlite" },
-    // The removed built-in was hosted as a facet of IterateContextDurableObject. Retire its
-    // unused standalone namespace; agent streams and facet storage belong to the context.
-    "AgentDurableObject": { "type": "durable-object", "state": "deleted" },
-    // The control plane moved to D1 (`DB` below). Retire the old singleton's namespace.
-    "ControlPlaneDurableObject": { "type": "durable-object", "state": "deleted" },
-    // The route table moved into each project root's core state (src/fetch-routes.ts); the class
-    // was only ever hosted as a facet, so its standalone namespace holds no object. Retire it.
-    "IngressRoutesDurableObject": { "type": "durable-object", "state": "deleted" },
+    "EmailDurableObject": { "type": "durable-object", "storage": "sqlite" },
+    "InstanceDurableObject": { "type": "durable-object", "storage": "sqlite" },
     "OrganizationDurableObject": { "type": "durable-object", "storage": "sqlite" },
     "ProjectDurableObject": { "type": "durable-object", "storage": "sqlite" },
     "RepoDurableObject": { "type": "durable-object", "storage": "sqlite" },

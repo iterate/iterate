@@ -9,7 +9,7 @@ import type { UserRecord } from "../src/control-plane/catalog.ts";
 import type { IterateRpcTarget } from "../src/session.ts";
 import { startIssuerSession } from "../src/issuer-session.ts";
 import { oauthHelpers } from "../src/oauth.ts";
-import { adminSession, catalog, controlPlane, ORIGIN } from "./support.ts";
+import { adminSession, catalog, controlPlane, fetchReachesThisWorker, ORIGIN } from "./support.ts";
 test("first consent creates organization and project through the ordinary session, then grants only the chosen project", async () => {
   fetchReachesThisWorker();
   const user = await catalog().linkIdentity({
@@ -41,7 +41,11 @@ test("first consent creates organization and project through the ordinary sessio
   expect(login.setCookie).toMatch(/^__Host-itx-session=[\da-f-]+; HttpOnly; Secure;/);
   const headers = { Cookie: login.setCookie.split(";")[0]!, Origin: ORIGIN };
   const api = await connect(headers);
-  expect(await api.info()).toMatchObject({ principal: { actor: user.id, email: user.email } });
+  expect(await api.info()).toMatchObject({
+    principal: { actor: user.id, email: user.email },
+    iterateAppProviders: ["slack", "google", "cloudflare", "github"],
+    signInProviders: ["google", "cloudflare", "github"],
+  });
   expect(await api.organizations.list()).toEqual([]);
   expect(await api.projects.list()).toEqual([]);
   expect(await api.consent.describe(flow.url.search)).toMatchObject({
@@ -464,6 +468,7 @@ test("the consent page renders on the server, and Authorize posts the choice to 
   const project = await catalog().createProject(
     { principal: { actor: user.id, email: user.email } },
     { project: `consent-page-${crypto.randomUUID().slice(0, 8)}` },
+    Date.now(),
   );
   const login = await issuerSignIn(user, "/");
   const cookie = login.setCookie.split(";")[0]!;
@@ -548,17 +553,6 @@ function operator(email?: string) {
     for (const session of sessions) session[Symbol.dispose]();
   });
   return adminSession(sessions, email);
-}
-
-/** `fetch` reaches this worker until the test finishes — DNS transport only. Provider metadata,
- *  PKCE, exchange, storage and API are real. */
-function fetchReachesThisWorker() {
-  const spy = vi
-    .spyOn(globalThis, "fetch")
-    .mockImplementation((input, init) => exports.default.fetch(new Request(input, init)));
-  onTestFinished(() => {
-    spy.mockRestore();
-  });
 }
 
 /** A session on `/api` with `headers` on the upgrade, authenticated from them; disposed when the

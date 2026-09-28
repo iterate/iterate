@@ -6,7 +6,7 @@
 // push and catch-up, the alarm's revive, the `itx.secrets` built-ins, egress, the operator's export —
 // take the facet host's platform entries, which no walk can land on, and read no list. THE RULES,
 // rows of the table tests facet-public-methods.test.ts (beside this file) and
-// __workers-tests__/facet-public-methods.test.ts (end to end, through a person who signed in):
+// __workers-tests__/facets.test.ts (end to end, through a person who signed in):
 //   1. A facet's class lists what a caller may reach in `static publicMethods`. The walk's FIRST step
 //      — the method called on the facet, or the property read off it — must be on that list, or the
 //      call is refused FORBIDDEN before it reaches the facet. Later steps walk what that member

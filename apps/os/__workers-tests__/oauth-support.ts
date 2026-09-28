@@ -5,13 +5,20 @@
 // file one after another (vitest.config.ts LONG_POLES).
 import { env, exports } from "cloudflare:workers";
 import { newWebSocketRpcSession, RpcStub, RpcTarget } from "capnweb";
-import { expect, onTestFinished, vi } from "vitest";
+import { expect, onTestFinished } from "vitest";
 import { appSession } from "iterate/app-server";
 import { platformAddressesOf } from "../src/app-config.ts";
 import type { GrantEnded } from "../src/account/contract.ts";
 import { oauthHelpers } from "../src/oauth.ts";
 import type { IterateRpcTarget } from "../src/session.ts";
-import { adminSession, controlPlane, loginPassword, ORIGIN, stub } from "./support.ts";
+import {
+  adminSession,
+  controlPlane,
+  fetchReachesThisWorker,
+  loginPassword,
+  ORIGIN,
+  stub,
+} from "./support.ts";
 const adminSecret = env.APP_CONFIG_SECRETS__ADMIN_BEARER!;
 
 /** An admin session — `as` the person `email` names, when given — disposed when the test finishes. */
@@ -58,16 +65,6 @@ export async function issuerApprover(cookie: string) {
 
 export function helpers() {
   return oauthHelpers(env, platformAddressesOf(env, new Request(`${ORIGIN}/`)));
-}
-
-/** `fetch` reaches this worker until the test finishes (the network is out of reach here). */
-export function fetchReachesThisWorker() {
-  const spy = vi
-    .spyOn(globalThis, "fetch")
-    .mockImplementation((input, init) => exports.default.fetch(new Request(input, init)));
-  onTestFinished(() => {
-    spy.mockRestore();
-  });
 }
 
 export function call(path: string, init?: RequestInit) {

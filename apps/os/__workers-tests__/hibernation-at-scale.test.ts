@@ -35,7 +35,7 @@
 
 import { evictDurableObject } from "cloudflare:test";
 import { expect, test } from "vitest";
-import { adminCredentials, Echo, openSession, releasePins, stub } from "./support.ts";
+import { adminCredentials, Echo, openSession, releasePins, snapshot, stub } from "./support.ts";
 
 const CTX = "prj_hibscale";
 const CLIENTS = 200;
@@ -175,10 +175,7 @@ async function state(): Promise<TransportState> {
  *  (`itx.facets.get('core').snapshot()`; present from the constructor's wake on — every
  *  incarnation writes one before it serves any call). */
 async function incarnationNow(): Promise<number> {
-  const snap = (await stub(CTX).invoke("itx.facets.get('core').snapshot()")) as {
-    state: { incarnation?: number };
-  };
-  return snap.state.incarnation ?? 0;
+  return (await snapshot<{ incarnation?: number }>(CTX, "core")).state.incarnation ?? 0;
 }
 
 /** The production pins' release on demand (support.ts's `releasePins`), then the two facts this

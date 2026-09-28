@@ -30,7 +30,7 @@ export const FlakeSuiteSummary = z
     failedCount: z.number().int().nonnegative(),
     // The preview e2e suite only: whether it ran its rows tagged `slow`, which a PR that touches
     // none of their code skips. Absent when the suite has no row tagged slow, so every row ran.
-    // scripts/ci/pr-ttg-guard.ts splits the PR time to green on it.
+    // scripts/monitors/ttg.ts splits the PR time to green on it.
     slowRows: z.enum(["ran", "skipped"]).optional(),
     diagnostics: z.array(z.string()),
     runUrl: z.url(),

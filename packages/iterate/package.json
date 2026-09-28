@@ -110,7 +110,7 @@
         "default": "./dist/stream/run.mjs"
       },
       "./with-itx": {
-        "types": "./dist/sdk/record-pipelined-steps.d.ts",
+        "types": "./dist/with-itx.d.mts",
         "import": "./dist/with-itx.mjs",
         "default": "./dist/with-itx.mjs"
       },

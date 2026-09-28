@@ -26,12 +26,14 @@ export default {
   },
   workspaces: {
     ".": {
-      // The config-repo templates: the platform loads worker.ts as a project's config worker.
-      entry: ["configs/*/worker.ts"],
+      // The config-repo templates: the platform loads worker.ts as a project's config worker, and
+      // an app's folder (agents/index.ts) as that app's source.
+      entry: ["configs/*/worker.ts", "configs/*/*/index.ts"],
       project: ["*.ts", "specs/**/*.ts", "configs/**/*.{ts,js}"],
       ignoreDependencies: [
-        // The .depot/workflows steps run this bin from the root.
+        // The .depot/workflows steps run these bins from the root (`pnpm tsx scripts/ci/…`).
         "trpc-cli",
+        "tsx",
         // The `iterate` bin: `pnpm exec iterate` from the root (docs/dev-environments.md).
         "@iterate-com/cli",
         // `cloudflare:workers` parses as the "cloudflare" package.
@@ -42,10 +44,10 @@ export default {
       // The programs .depot/workflows run (knip reads no Depot workflows); the modules beside them
       // get unused-export checks.
       entry: [
-        "ci/{create-release,do-duration-alert,do-duration-probe,loc-report,main-e2e-alert,merges-with-main,notify,os-latency-guard,pr-dashboard,pr-ttg-guard,prd-fault-alarm,prd-post-deploy-check,preview-paths,preview-tested-commit,shadcn-drift,sync-ci-telemetry,test-evidence,upload-test-telemetry}.ts",
+        "ci/{create-release,loc-report,merges-with-main,notify,pr-dashboard,prd-fault-alarm,prd-post-deploy-check,preview-paths,preview-tested-commit,shadcn-drift,sync-ci-telemetry,test-evidence,upload-test-telemetry}.ts",
+        "monitors/{health,do-duration-probe}.ts",
         "ci/flake-dashboard/update.ts",
         "ci/tracing/{cli,tracing}.ts",
-        "depot-ci/dependencies.mjs",
       ],
     },
     "apps/os": {
@@ -53,10 +55,11 @@ export default {
       // setups); the rest are entries here. The browser specs are the root suite (specs/AGENTS.md).
       entry: [
         "src/worker.ts!",
-        "src/client/**/*.{ts,tsx}",
         // the e2e suite's test files are entries; e2e/support/** is project code, so an unused support
         // export is reported
         "e2e/**/*.e2e.test.ts",
+        // read as text and handed over as the presence facet's source (e2e/support/sources.ts)
+        "e2e/support/presence/durable-object.ts",
         "perf/**/*.perf.test.ts",
         "__workers-tests__/**/*.ts",
         "bench/**/*.ts",
@@ -64,7 +67,7 @@ export default {
         // the node programs (build/dev/deploy/preview and the operator CLIs) and their tests, so the
         // library modules beside them (preview-config, preview-sweep, generate-wrangler-config) get
         // unused-export checks
-        "scripts/{build,dev,deploy,preview,ensure-resources,erase-data,control-plane-load,project-seed,e2e-soak,inspect-context}.ts",
+        "scripts/{build,dev,deploy,preview,ensure-resources,erase-data,control-plane-load,project-seed,e2e-soak}.ts",
         // read by the sqlfu CLI (`pnpm db:*`)
         "sqlfu.config.ts",
         "scripts/*.test.ts",
@@ -87,18 +90,10 @@ export default {
       ignoreDependencies: ["cloudflare", "tailwindcss"],
     },
     "apps/agents": {
-      // scripts/build-voice-install.ts bundles the voice entries into the installer.
-      entry: [
-        "scripts/**/*.ts",
-        "voice/{voice-agent,voice-delegate,worker}.ts",
-        "e2e/**/*.e2e.test.ts",
-        "__workers-tests__/**/*.test.ts",
-      ],
+      entry: ["scripts/**/*.ts", "e2e/**/*.e2e.test.ts", "__workers-tests__/**/*.test.ts"],
       project: [
         "scripts/**/*.ts",
         "src/**/*.{ts,tsx,css}!",
-        "runtime/**/*.ts",
-        "voice/**/*.ts",
         "e2e/**/*.ts",
         "__workers-tests__/**/*.ts",
       ],
@@ -128,16 +123,36 @@ export default {
       // vite.config.ts names the Worker's main inline.
       entry: ["src/worker.ts!"],
     },
+    "apps/iterate-com-inbound-email": {
+      // vite.config.ts names the Worker's main inline.
+      entry: ["src/worker.ts!"],
+    },
     "apps/spa": {
       // public/index.html loads app.js, and its import map resolves @iterate-com/capnweb from a CDN.
       entry: ["public/app.js"],
       ignoreDependencies: ["@iterate-com/capnweb"],
+    },
+    "apps/browser-extension": {
+      // public/index.html loads panel.js; its ./capnweb.js is the one the build copies into dist/.
+      entry: ["public/panel.js"],
+      ignoreUnresolved: ["./capnweb.js"],
     },
     "packages/ui": {
       // The package.json export map is the public entry surface (many subpath
       // exports, no src/index.ts) — same posture as packages/shared.
       entry: ["src/**/*.test.{ts,tsx}"],
       project: ["src/**/*.{ts,tsx,css}"],
+    },
+    // The userspace apps a project installs: their export maps are the entries, and index.ts the
+    // classes a project's folder re-exports.
+    "packages/agents": {
+      entry: ["src/**/*.test.ts"],
+      project: ["src/**/*.ts", "tsdown*.ts"],
+      ignoreDependencies: ["cloudflare"],
+    },
+    "packages/voice": {
+      entry: ["src/**/*.test.ts"],
+      project: ["src/**/*.ts", "tsdown*.ts"],
     },
     "packages/cli": {
       // The `iterate` bin (package.json `bin`).

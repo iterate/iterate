@@ -1,18 +1,17 @@
 import { env, exports } from "cloudflare:workers";
 import { newWebSocketRpcSession } from "capnweb";
-import { expect, onTestFinished, test, vi } from "vitest";
+import { expect, onTestFinished, test } from "vitest";
 import type { StreamEvent } from "iterate/stream/processor";
-import type { AccountState } from "../src/account/contract.ts";
 import { ControlPlaneDatabase } from "../src/control-plane/catalog.ts";
-import { ControlPlane, ControlPlaneUnavailableError } from "../src/control-plane/edge.ts";
+import { ControlPlane } from "../src/control-plane/edge.ts";
 import { DurableObjectNameCodec, GLOBAL_PROJECT_ID } from "../src/context/paths.ts";
 import { startLoginCode } from "../src/password-and-code-sign-in.ts";
-import type { OrganizationState } from "../src/organization/contract.ts";
 import type { IterateRpcTarget } from "../src/session.ts";
+import { publishConfigWorker } from "../e2e/support/config-worker.ts";
 import {
   adminSession,
+  fetchReachesThisWorker,
   ORIGIN,
-  publishConfigWorker,
   refused,
   SRC_ECHO_APP,
   stub,
@@ -21,7 +20,6 @@ import {
 
 const secret = env.APP_CONFIG_SECRETS__ADMIN_BEARER!;
 const password = env.APP_CONFIG_LOGIN__PASSWORD!;
-type Session = Awaited<ReturnType<typeof operator>>;
 
 // Public OAuth lifecycle and browser clients are covered by oauth.test.ts.
 test("the directory keeps creation, listing, membership and event attribution coherent", async () => {
@@ -85,7 +83,7 @@ test("the directory keeps creation, listing, membership and event attribution co
   });
 });
 
-test("organizations.create writes the catalog row and lands the facts on the organization and the owner's account under the asker", async () => {
+test("organizations.create writes the catalog row, which every read answers at once, and lands the facts on the organization and the owner's account under the asker", async () => {
   const ada = await operator("Orgs-Owner@directory.test");
   const principal = await ada.whoami();
   const org = await ada.organizations.create({ name: "  Ada's organization " });
@@ -95,19 +93,19 @@ test("organizations.create writes the catalog row and lands the facts on the org
     role: "owner",
     projects: 0,
   });
+  // what the dash reads: the control-plane database, as it stands
   expect(await ada.organizations.list()).toEqual([org]);
-  // the membership is folded on the person's account; the name and the members on the organization
-  expect(await accountState(ada)).toMatchObject({
-    memberships: { [org.id]: { role: "owner", since: expect.any(String) } },
-  });
-  expect(await organizationState(ada, org.id)).toMatchObject({
-    name: "Ada's organization",
-    members: { [principal.actor]: { role: "owner", since: expect.any(String) } },
-  });
-  // the facts on the organization's own log, stamped with who asked
-  const facts = (await globalLog(`/organizations/${org.id}`)).filter((event) =>
-    event.type.startsWith("events.iterate.com/organization/"),
-  );
+  expect(await ada.organizations.members(org.id)).toEqual([
+    {
+      userId: principal.actor,
+      email: "orgs-owner@directory.test",
+      role: "owner",
+      createdAt: expect.any(Number),
+    },
+  ]);
+  expect(await ada.organizations.invitations(org.id)).toEqual([]);
+  // the activity on the organization's own log and the owner's account, stamped with who asked
+  const facts = await organizationFacts(org.id, 2);
   expect(facts.map(({ type, payload }) => ({ type, payload }))).toEqual([
     { type: "events.iterate.com/organization/created", payload: { name: "Ada's organization" } },
     {
@@ -116,11 +114,13 @@ test("organizations.create writes the catalog row and lands the facts on the org
     },
   ]);
   expect(facts.every((event) => event.source?.principal?.actor === principal.actor)).toBe(true);
-  // the control-plane database — the source of truth behind the folds — answers the same rows
-  expect(await catalog("organization", org.id)).toEqual({
-    id: org.id,
-    name: "Ada's organization",
-    projects: 0,
+  const onAccount = await until("the membership lands on the owner's account", async () =>
+    (await globalLog(`/users/${principal.actor}`)).find(
+      (event) => event.type === "events.iterate.com/organization/member-added",
+    ),
+  );
+  expect(onAccount).toMatchObject({
+    payload: { orgId: org.id, userId: principal.actor, role: "owner" },
   });
   expect(await catalog("accessibleTo", principal.actor)).toEqual({
     organizations: [{ id: org.id, name: "Ada's organization", role: "owner", projects: 0 }],
@@ -255,62 +255,48 @@ test("concurrent restores through the control plane: one slug never answers a di
   ]);
 });
 
-test("the operator's project in a named organization lands on the organization's record — the list the dash shows — as a person's does; the same creation again (a project seed's apply, rerun, or two at once) lands nothing twice, and lands one the record lacks", async () => {
+test("a project's creation lands `organization/project-added` on its organization's activity, keyed by the project: the same creation again (a project seed's apply, rerun, or two at once) lands it once; the operator's own organization gets nothing", async () => {
   const admin = await operator();
   // what a seed's apply does: the owner (the operator acting as them) makes the organization, the
   // operator itself makes the project under its archived id
   const owner = await operator("seed-owner@directory.test");
   const { actor: ownerActor } = await owner.whoami();
   const org = await owner.organizations.create({ name: "Seeded organization" });
-  const projectFacts = async () =>
-    (await globalLog(`/organizations/${org.id}`))
-      .filter((event) => event.type === "events.iterate.com/organization/project-added")
-      .map(({ payload, source }) => ({ payload, platform: source?.platform }));
+  const projectFacts = async (count: number) => {
+    const facts = await until(`${count} project-added facts land`, async () => {
+      const landed = (await globalLog(`/organizations/${org.id}`)).filter(
+        (event) => event.type === "events.iterate.com/organization/project-added",
+      );
+      return landed.length >= count && landed;
+    });
+    return facts.map(({ payload, source }) => ({ payload, platform: source?.platform }));
+  };
   const restore = (project: string, restoreProjectId: string) =>
     admin.projects.create({ project, orgId: org.id, restoreProjectId });
   using _seeded = await restore("seeded", "prj_seeded");
-  expect(await organizationState(owner, org.id)).toMatchObject({
-    projects: { prj_seeded: { slug: "seeded", createdAt: expect.any(String) } },
-  });
+  expect(await projectFacts(1)).toEqual([
+    { payload: { projectId: "prj_seeded", slug: "seeded" }, platform: true },
+  ]);
   // the operator lands the project, never itself: the organization's members are still the owner
-  expect(Object.keys((await organizationState(owner, org.id)).members)).toEqual([ownerActor]);
+  expect((await owner.organizations.members(org.id)).map(({ userId }) => userId)).toEqual([
+    ownerActor,
+  ]);
   // the same creation again answers the same project and lands no second fact
   using again = await restore("seeded", "prj_seeded");
   expect(await again.whoami()).toMatchObject({ projectId: "prj_seeded" });
-  expect(await projectFacts()).toEqual([
-    { payload: { projectId: "prj_seeded", slug: "seeded" }, platform: true },
-  ]);
-  // a project the catalog holds and the record lacks (a creation whose landing failed after the
-  // catalog's write): the next create lands it — once, however often it is asked
-  await new ControlPlaneDatabase(env.DB).createProject(
-    { principal: { actor: "admin" } },
-    { project: "seeded-earlier", organizationId: org.id, restoreProjectId: "prj_seeded_earlier" },
-  );
-  expect((await organizationState(owner, org.id)).projects).not.toHaveProperty(
-    "prj_seeded_earlier",
-  );
-  for (let attempt = 0; attempt < 2; attempt++) {
-    using _converged = await restore("seeded-earlier", "prj_seeded_earlier");
-  }
-  expect(await projectFacts()).toEqual([
-    { payload: { projectId: "prj_seeded", slug: "seeded" }, platform: true },
-    { payload: { projectId: "prj_seeded_earlier", slug: "seeded-earlier" }, platform: true },
-  ]);
-  // two creations at the same moment both read the record without it: the key lands it once
+  // two creations at the same moment: the key lands it once
   const raced = await Promise.all([restore("raced", "prj_raced"), restore("raced", "prj_raced")]);
   for (const context of raced) context[Symbol.dispose]();
-  expect(await projectFacts()).toEqual([
+  expect(await projectFacts(2)).toEqual([
     { payload: { projectId: "prj_seeded", slug: "seeded" }, platform: true },
-    { payload: { projectId: "prj_seeded_earlier", slug: "seeded-earlier" }, platform: true },
     { payload: { projectId: "prj_raced", slug: "raced" }, platform: true },
   ]);
-  expect(Object.keys((await organizationState(owner, org.id)).projects).sort()).toEqual([
+  expect((await owner.projects.list()).map(({ id }) => id).sort()).toEqual([
     "prj_raced",
     "prj_seeded",
-    "prj_seeded_earlier",
   ]);
   // a member can't take a project's key first (src/context/built-ins.ts `append`): the same event
-  // unkeyed stays on the log, attributed to them, and the fold ignores it; the platform's lands once
+  // unkeyed stays on the log, attributed to them; the platform's lands beside it
   using ownersRecord = await owner.organizations.get(org.id);
   const squat = {
     type: "events.iterate.com/organization/project-added",
@@ -327,14 +313,11 @@ test("the operator's project in a named organization lands on the organization's
   );
   await ownersRecord.append(squat);
   using _squatted = await restore("squatted", "prj_squatted");
-  expect((await organizationState(owner, org.id)).projects).toMatchObject({
-    prj_squatted: { slug: "squatted" },
-  });
-  expect((await projectFacts()).slice(3)).toEqual([
+  expect((await projectFacts(4)).slice(2)).toEqual([
     { payload: { projectId: "prj_squatted", slug: "someone-elses" }, platform: undefined },
     { payload: { projectId: "prj_squatted", slug: "squatted" }, platform: true },
   ]);
-  // the deployment's own organization (the operator's projects with no orgId) has no record to land on
+  // the deployment's own organization (the operator's projects with no orgId) has no activity
   using _own = await admin.projects.create({ project: "operator-own" });
   expect(
     (await globalLog("/organizations/org_admin")).filter((event) =>
@@ -343,48 +326,38 @@ test("the operator's project in a named organization lands on the organization's
   ).toEqual([]);
 });
 
-test("a person's first project mints their organization: its record gets the creation, the owner and the project in that order; the owner's account the membership, in the background", async () => {
+test("a person's first project mints their organization: its activity gets the creation, the owner and the project in that order, the owner's account the membership", async () => {
   const person = await operator("first-project@directory.test");
   const { actor } = await person.whoami();
   using _project = await person.projects.create({ project: "first-of-mine" });
   const [org] = await person.organizations.list();
   expect(org).toMatchObject({ name: "first-project", role: "owner", projects: 1 });
-  const facts = (await globalLog(`/organizations/${org!.id}`)).filter((event) =>
-    event.type.startsWith("events.iterate.com/organization/"),
-  );
   const { id: projectId } = (await person.projects.list())[0]!;
-  expect(facts.map(({ type, payload }) => ({ type, payload }))).toEqual([
+  expect(
+    (await organizationFacts(org!.id, 3)).map(({ type, payload }) => ({ type, payload })),
+  ).toEqual([
     { type: "events.iterate.com/organization/created", payload: { name: "first-project" } },
     {
       type: "events.iterate.com/organization/member-added",
-      payload: { orgId: org!.id, userId: actor, role: "owner", mint: true },
+      payload: { orgId: org!.id, userId: actor, role: "owner" },
     },
     {
       type: "events.iterate.com/organization/project-added",
       payload: { projectId, slug: "first-of-mine" },
     },
   ]);
-  expect(await organizationState(person, org!.id)).toMatchObject({
-    name: "first-project",
-    members: { [actor]: { role: "owner" } },
-    projects: { [projectId]: { slug: "first-of-mine" } },
-  });
-  // the account's membership lands in the background: the creation never waits on it
-  // (project-create-holds-no-account.test.ts)
   expect(
-    await until(
-      "the membership lands on the owner's account",
-      async () => (await accountState(person)).memberships[org!.id],
+    await until("the membership lands on the owner's account", async () =>
+      (await globalLog(`/users/${actor}`)).find(
+        (event) => event.type === "events.iterate.com/organization/member-added",
+      ),
     ),
-  ).toMatchObject({ role: "owner" });
+  ).toMatchObject({ payload: { orgId: org!.id, role: "owner" } });
   // the next one lands in the same organization, and only the project lands
   using _second = await person.projects.create({ project: "second-of-mine" });
-  expect(
-    (await globalLog(`/organizations/${org!.id}`))
-      .filter((event) => event.type.startsWith("events.iterate.com/organization/"))
-      .map(({ type }) => type)
-      .slice(3),
-  ).toEqual(["events.iterate.com/organization/project-added"]);
+  expect((await organizationFacts(org!.id, 4)).map(({ type }) => type).slice(3)).toEqual([
+    "events.iterate.com/organization/project-added",
+  ]);
   // a person's first two projects at once mint one organization, created and joined once
   const racer = await operator("first-two@directory.test");
   const racing = await Promise.all([
@@ -395,9 +368,9 @@ test("a person's first project mints their organization: its record gets the cre
   const racerOrgs = await racer.organizations.list();
   expect(racerOrgs).toMatchObject([{ name: "first-two", projects: 2 }]);
   expect(
-    (await globalLog(`/organizations/${racerOrgs[0]!.id}`))
-      .filter((event) => event.type.startsWith("events.iterate.com/organization/"))
-      .map(({ type }) => type.replace("events.iterate.com/organization/", "")),
+    (await organizationFacts(racerOrgs[0]!.id, 4))
+      .map(({ type }) => type.replace("events.iterate.com/organization/", ""))
+      .sort(),
   ).toEqual(["created", "member-added", "project-added", "project-added"]);
 });
 
@@ -542,7 +515,7 @@ test("password sign-in rests an address after five wrong tries: the sixth is ref
   );
 });
 
-test("a control-plane call D1 fails on the platform's side is ControlPlaneUnavailableError, retryable where it may be asked again; our own error, or a refusal, is itself", async () => {
+test("a control-plane call D1 fails on the platform's side is UNAVAILABLE, of the kind D1's failure is; our own error, or a refusal, is itself", async () => {
   // D1's documented failures (https://developers.cloudflare.com/d1/observability/debug-d1/): the
   // binding throws them from the call itself, a read's and a batch's alike
   let failure = new Error("D1_ERROR: Network connection lost.");
@@ -553,30 +526,29 @@ test("a control-plane call D1 fails on the platform's side is ControlPlaneUnavai
     batch: () => Promise.reject(failure),
   } as unknown as D1Database;
   const controlPlane = new ControlPlane({ DB });
-  const unavailable = (method: string, retryable: boolean) =>
-    expect.objectContaining({
-      name: "ControlPlaneUnavailableError",
-      method,
-      retryable,
-      message: `The control plane failed ${method}: ${failure.message}`,
-    });
-  await expect(controlPlane.listOrganizations()).rejects.toEqual(
-    unavailable("organizations", true),
+  const unavailable = (method: string, kind: string, retryAfterMs: number) => ({
+    code: "UNAVAILABLE",
+    data: { kind, retryAfterMs },
+    message: `The control plane failed ${method}: ${failure.message}`,
+  });
+  await expect(controlPlane.listOrganizations()).rejects.toMatchObject(
+    unavailable("organizations", "disconnected", 1_000),
   );
-  // a write whose answer was lost may have landed: never asked again for it
-  await expect(controlPlane.createUser({ email: "cut@example.com" })).rejects.toEqual(
-    unavailable("createUser", false),
-  );
-  // the grant writes are whole-row writes, safe to ask again (oauth-store.ts does, once)
-  await expect(controlPlane.deleteOAuthGrant("grant:user_a:g1")).rejects.toEqual(
-    unavailable("deleteOAuthGrant", true),
+  // a write's too: whether to ask again is its caller's, who knows whether the write may land twice
+  await expect(controlPlane.createUser({ email: "cut@example.com" })).rejects.toMatchObject(
+    unavailable("createUser", "disconnected", 1_000),
   );
   failure = new Error("D1_ERROR: D1 DB is overloaded. Requests queued for too long.");
-  await expect(controlPlane.getUser("cut@example.com")).rejects.toEqual(unavailable("user", false));
+  await expect(controlPlane.getUser("cut@example.com")).rejects.toMatchObject(
+    unavailable("user", "overloaded", 10_000),
+  );
+  failure = new Error("D1_ERROR: D1 DB reset because its code was updated.");
+  await expect(controlPlane.deleteOAuthGrant("grant:user_a:g1")).rejects.toMatchObject(
+    unavailable("deleteOAuthGrant", "deploy-reset", 1_000),
+  );
   // ours is itself, with its message only: sqlfu's error holds the SQL and its bound values
   failure = new Error("D1_ERROR: no such table: users: SQLITE_ERROR");
   const own = await controlPlane.getUser("cut@example.com").catch((error: unknown) => error);
-  expect(own).not.toBeInstanceOf(ControlPlaneUnavailableError);
   expect(own).toMatchObject({ message: `The control plane failed user: ${failure.message}` });
   expect(Object.keys(own as Error)).toEqual([]);
   // a refusal the catalog coded is no failure of the platform's
@@ -635,17 +607,6 @@ function operator(email?: string) {
   return adminSession(sessions, email);
 }
 
-/** `fetch` reaches this worker until the test finishes: the issuer fetches its own client metadata
- *  while it signs someone in, and the network is out of reach here. */
-function fetchReachesThisWorker() {
-  const spy = vi
-    .spyOn(globalThis, "fetch")
-    .mockImplementation((input, init) => exports.default.fetch(new Request(input, init)));
-  onTestFinished(() => {
-    spy.mockRestore();
-  });
-}
-
 /** The sign-in page's own post — same-ORIGIN, a form — with or without a browser's cookie. */
 function postLogin(form: Record<string, string>, cookie?: string) {
   return exports.default.fetch(`${ORIGIN}/login`, {
@@ -657,7 +618,7 @@ function postLogin(form: Record<string, string>, cookie?: string) {
 }
 
 /** A read of the control-plane database (src/control-plane/catalog.ts, over this file's D1) with
- *  no session between: `catalog("project", ref)`, `catalog("organization", orgId)`. */
+ *  no session between: `catalog("organizations")`, `catalog("accessibleTo", userId)`. */
 function catalog(method: string, ...args: unknown[]) {
   const database = new ControlPlaneDatabase(env.DB) as unknown as Record<
     string,
@@ -676,22 +637,14 @@ async function globalLog(path: string) {
   ).events;
 }
 
-/** The person's account, folded (src/account/contract.ts) — read through their own context. */
-async function accountState(session: Session) {
-  return (
-    (await session.user.invoke(["itx", "facets", ["get", "account"], ["snapshot"]])) as {
-      state: AccountState;
-    }
-  ).state;
-}
-
-/** The organization's record, folded (src/organization/contract.ts) — read by membership. */
-async function organizationState(session: Session, orgId: string) {
-  return (
-    (await (
-      await session.organizations.get(orgId)
-    ).invoke(["itx", "facets", ["get", "organization"], ["snapshot"]])) as {
-      state: OrganizationState;
-    }
-  ).state;
+/** An organization's activity — its `events.iterate.com/organization/…` facts, oldest first — once
+ *  at least `count` have landed: a verb publishes them in the background (session.ts
+ *  `publishOrganizationFacts`). */
+async function organizationFacts(orgId: string, count: number) {
+  return until(`${count} facts land on ${orgId}`, async () => {
+    const facts = (await globalLog(`/organizations/${orgId}`)).filter((event) =>
+      event.type.startsWith("events.iterate.com/organization/"),
+    );
+    return facts.length >= count && facts;
+  });
 }

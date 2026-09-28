@@ -18,7 +18,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
 import { createCli } from "trpc-cli";
-import { credentials, disposeSessions, session } from "./client.ts";
+import { connect } from "./client.ts";
 
 const run = promisify(execFile);
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -62,7 +62,9 @@ export default async function voiceBoard(
   const DEVICE = options.device || "home_assistant_voice_preview_edition";
   const PROMPT = options.prompt || "Hello there. Please reply with the single word banana.";
   const EXPECT = new RegExp(options.expect || "banana", "i");
-  const root = session().authenticate(credentials()).projects.get(PROJECT);
+  using connection = await connect();
+  // Untyped: the board's capability, `clients.<device>`, is whatever its firmware lends.
+  const root: any = connection.session.projects.get(PROJECT);
   await root.invoke(["itx", ["whoami"]]);
   const kit = root.clients[DEVICE];
   const before = await healthWithRetry(kit);
@@ -101,18 +103,18 @@ export default async function voiceBoard(
   await call.subscribe({
     name: `voice-board-${askedAt}`,
     consumes: [
-      "events.iterate.com/voice-agent/spk-frame",
+      "events.iterate.com/voice-agent/speaker-frame",
       "events.iterate.com/voice-agent/utterance-transcribed",
       "events.iterate.com/voice-agent/answer-transcribed",
       "events.iterate.com/voice-agent/provider-error-reported",
       "events.iterate.com/voice-agent/provider-disconnected",
-      "events.iterate.com/voice-agent/conversation-ended",
+      "events.iterate.com/voice-agent/call-ended",
     ],
     target: (events: any[]) => {
       for (const raw of events) {
         const event = JSON.parse(JSON.stringify(raw));
         const p = event.payload ?? {};
-        if (event.type === "events.iterate.com/voice-agent/spk-frame" && p.lastFrameOfAnswer)
+        if (event.type === "events.iterate.com/voice-agent/speaker-frame" && p.lastFrameOfAnswer)
           answers += 1;
         else if (event.type === "events.iterate.com/voice-agent/utterance-transcribed")
           heardUs += ` ${p.text}`;
@@ -123,7 +125,7 @@ export default async function voiceBoard(
           event.type === "events.iterate.com/voice-agent/provider-disconnected"
         )
           errors.push(`${event.type}: ${JSON.stringify(p).slice(0, 200)}`);
-        else if (event.type === "events.iterate.com/voice-agent/conversation-ended" && !ending)
+        else if (event.type === "events.iterate.com/voice-agent/call-ended" && !ending)
           errors.push(`ended: ${String(p.reason)}`);
       }
     },
@@ -181,7 +183,7 @@ export default async function voiceBoard(
       2,
     ),
   );
-  disposeSessions();
+  connection[Symbol.dispose]();
   process.exit(verdict === "PASS" ? 0 : 1);
 }
 

@@ -1,6 +1,6 @@
 // worker.test.ts — the edge's pure halves as tables: the app config (what the one object becomes,
 // what is refused by name, the per-env memo, the derived keys), the platform's own endpoints (the public
-// protocol origins, `/version`, a preview's `/.auth/test-link`, and under path routing the platform's
+// protocol origins, `/version`, a preview's admin sign-in through prd, local dev's one click, and under path routing the platform's
 // own paths never a project).
 // The ingress convention itself (subdomains, paths, custom hostnames) is the SDK's project-ingress
 // module and its own table.
@@ -14,16 +14,21 @@ import worker from "./worker.ts";
 import {
   appConfigOf,
   atRestKeysOf,
+  DEFAULT_CLOUDFLARE_SCOPES,
+  DEFAULT_GOOGLE_SIGN_IN_SCOPES,
   parseAppConfig,
   projectHostOf,
   sessionSigningSecretOf,
   type AppConfig,
 } from "./app-config.ts";
 import type { Env } from "./env.ts";
-import { mintTestLink, TEST_LINK_PATH } from "./test-link.ts";
 
 // ── app config ── THE TABLE for the app config: what the vars become, what is refused (by name),
 // and the per-env memo. Each row is `{ vars, becomes | throws, warns? }`.
+
+/** prd's origin, and a per-PR preview's. */
+const PRD = "https://os.iterate.com";
+const PR123 = "https://pr123-os.iterate-dev-preview.workers.dev";
 
 /** The smallest valid configuration: the key and one sign-in mechanism, as two override vars. */
 const MINIMAL = {
@@ -49,8 +54,8 @@ const appConfigRows: {
   vars: Record<string, unknown>;
   becomes?: unknown;
   throws?: RegExp;
-  /** how many unknown keys the boot warns about, once each (a key inside the object or a stray
-   *  var) */
+  /** how many warnings the boot prints, once each: an unknown key (inside the object or a stray
+   *  var), a provider's sign-in without its client */
   warns?: number;
 }[] = [
   // the object alone, the overrides alone, and both — an override wins over the object
@@ -96,8 +101,9 @@ const appConfigRows: {
       APP_CONFIG_CLOUDFLARE_API_TOKEN: "cloudflare-token",
       APP_CONFIG_POSTHOG_PROJECT_KEY: "phc_test",
       APP_CONFIG_LOGIN__EMAIL_CODE__FROM: "iterate <login@iterate.com>",
-      APP_CONFIG_LOGIN__GOOGLE__CLIENT_ID: "google-id",
-      APP_CONFIG_LOGIN__GOOGLE__CLIENT_SECRET: "google-secret",
+      APP_CONFIG_LOGIN__GOOGLE: "{}",
+      APP_CONFIG_INTEGRATIONS__GOOGLE__OAUTH_CLIENT_ID: "google-id",
+      APP_CONFIG_INTEGRATIONS__GOOGLE__OAUTH_CLIENT_SECRET: "google-secret",
       APP_CONFIG_SECRETS__PREVIOUS_KEY: "the-old-key",
       APP_CONFIG_SECRETS__ADMIN_BEARER: "admin-bearer",
       LOADER: {},
@@ -122,7 +128,7 @@ const appConfigRows: {
       login: {
         password: "password",
         emailCode: { from: "iterate <login@iterate.com>" },
-        google: { clientId: "google-id", clientSecret: "google-secret" },
+        google: { scopes: DEFAULT_GOOGLE_SIGN_IN_SCOPES },
       },
       admins: [],
       secrets: { key: "secrets-key", previousKey: "the-old-key", adminBearer: "admin-bearer" },
@@ -180,20 +186,28 @@ const appConfigRows: {
       login: { password: "", emailCode: { from: "iterate <login@iterate.com>" } },
     },
   },
+  // a provider's sign-in is its integration's client: on with it, off (and so no mechanism) without
   {
     vars: {
       APP_CONFIG_SECRETS__KEY: "secrets-key",
-      APP_CONFIG_LOGIN__CLOUDFLARE__CLIENT_ID: "cf-id",
-      APP_CONFIG_LOGIN__CLOUDFLARE__CLIENT_SECRET: "cf-secret",
+      APP_CONFIG_LOGIN__CLOUDFLARE: "{}",
+      APP_CONFIG_INTEGRATIONS__CLOUDFLARE__OAUTH_CLIENT_ID: "cf-id",
+      APP_CONFIG_INTEGRATIONS__CLOUDFLARE__OAUTH_CLIENT_SECRET: "cf-secret",
     },
     becomes: {
       ...MINIMAL_CONFIG,
-      login: { password: "", cloudflare: { clientId: "cf-id", clientSecret: "cf-secret" } },
+      login: { password: "", cloudflare: { scopes: DEFAULT_CLOUDFLARE_SCOPES } },
     },
   },
   {
-    vars: { ...MINIMAL, APP_CONFIG_LOGIN__CLOUDFLARE__CLIENT_ID: "cf-id" },
-    throws: /login\.cloudflare\.clientSecret .*required, but unset or blank/,
+    vars: { APP_CONFIG_SECRETS__KEY: "secrets-key", APP_CONFIG_LOGIN__CLOUDFLARE: "{}" },
+    throws: /no sign-in mechanism/,
+    warns: 1,
+  },
+  {
+    vars: { ...MINIMAL, APP_CONFIG_LOGIN__GITHUB: "{}" },
+    becomes: MINIMAL_CONFIG,
+    warns: 1,
   },
   // who may sign in: a JSON array, or a comma-separated list as the var; lowercased; an entry
   // without an @ or an empty list is refused rather than silently admitting nobody or everybody
@@ -221,18 +235,84 @@ const appConfigRows: {
   },
   // the platform admins: exact addresses, lowercased; a pattern is refused, never read as one
   {
-    vars: { ...MINIMAL, APP_CONFIG_ADMINS: '["Jonas@Iterate.com"]' },
-    becomes: { ...MINIMAL_CONFIG, admins: ["jonas@iterate.com"] },
+    vars: {
+      ...MINIMAL,
+      APP_CONFIG_URLS__OS: "http://localhost:8788",
+      APP_CONFIG_ADMINS: '["Jonas@Iterate.com"]',
+    },
+    becomes: {
+      ...MINIMAL_CONFIG,
+      urls: { ...MINIMAL_CONFIG.urls, os: "http://localhost:8788" },
+      admins: ["jonas@iterate.com"],
+    },
+  },
+  // …but beside the global password only where nobody's real data lives: anyone with the password
+  // could sign in as the admin
+  {
+    vars: {
+      ...MINIMAL,
+      APP_CONFIG_URLS__OS: "https://os.example.com",
+      APP_CONFIG_ADMINS: '["jonas@iterate.com"]',
+    },
+    throws: /^APP_CONFIG admins \(APP_CONFIG_ADMINS\): not with login\.password/,
+  },
+  // …nor beside paths ingress, where a project's own code runs on the issuer's origin
+  {
+    vars: {
+      APP_CONFIG_SECRETS__KEY: "secrets-key",
+      APP_CONFIG_LOGIN__EMAIL_CODE__FROM: "login@example.com",
+      APP_CONFIG_URLS__OS: "https://os.example.com",
+      APP_CONFIG_URLS__INGRESS_ROUTING: '{"type":"paths"}',
+      APP_CONFIG_ADMINS: '["jonas@iterate.com"]',
+    },
+    throws: /^APP_CONFIG admins \(APP_CONFIG_ADMINS\): not with paths ingress routing/,
   },
   {
     vars: { ...MINIMAL, APP_CONFIG_ADMINS: '["*@iterate.com"]' },
     throws: /admins\.0 .*expected exact email addresses/,
   },
-  // Google is both halves or neither
+  // admins sign in through another issuer only on a preview's (or a test's) https origin: a
+  // deployment on its own domain takes no other issuer's word, even from a mistaken Doppler value,
+  // and that issuer reads this deployment's client metadata document over https
   {
-    vars: { ...MINIMAL, APP_CONFIG_LOGIN__GOOGLE__CLIENT_ID: "google-id" },
+    vars: { ...MINIMAL, APP_CONFIG_URLS__OS: PR123, APP_CONFIG_LOGIN__ADMIN_ISSUER: PRD },
+    becomes: {
+      ...MINIMAL_CONFIG,
+      urls: { ...MINIMAL_CONFIG.urls, os: PR123 },
+      login: { ...MINIMAL_CONFIG.login, adminIssuer: PRD },
+    },
+  },
+  ...[PRD, "http://localhost:8788", ""].map((os) => ({
+    vars: { ...MINIMAL, APP_CONFIG_URLS__OS: os, APP_CONFIG_LOGIN__ADMIN_ISSUER: PRD },
+    throws: /^APP_CONFIG login\.adminIssuer .*only for a preview or a test on https/,
+  })),
+  // a fake provider signs test people in only where nobody's real data lives: never on prd's own
+  // domain, and a blank urls.os (a self-host on each request's own origin) must name one first
+  {
+    vars: {
+      ...MINIMAL,
+      APP_CONFIG_URLS__OS: "http://localhost:8788",
+      APP_CONFIG_LOGIN__TEST_EMAIL_DOMAIN: "preview.iterate.test",
+    },
+    becomes: {
+      ...MINIMAL_CONFIG,
+      urls: { ...MINIMAL_CONFIG.urls, os: "http://localhost:8788" },
+      login: { ...MINIMAL_CONFIG.login, testEmailDomain: "preview.iterate.test" },
+    },
+  },
+  ...[PRD, ""].map((os) => ({
+    vars: {
+      ...MINIMAL,
+      APP_CONFIG_URLS__OS: os,
+      APP_CONFIG_LOGIN__TEST_EMAIL_DOMAIN: "preview.iterate.test",
+    },
+    throws: /^APP_CONFIG login\.testEmailDomain .*only for a preview, local dev or a test/,
+  })),
+  // a client is both halves or neither
+  {
+    vars: { ...MINIMAL, APP_CONFIG_INTEGRATIONS__CLOUDFLARE__OAUTH_CLIENT_ID: "cf-id" },
     throws:
-      /^APP_CONFIG login\.google\.clientSecret \(APP_CONFIG_LOGIN__GOOGLE__CLIENT_SECRET\): required, but unset or blank$/,
+      /^APP_CONFIG integrations\.cloudflare\.oauthClientSecret \(APP_CONFIG_INTEGRATIONS__CLOUDFLARE__OAUTH_CLIENT_SECRET\): required, but unset or blank$/,
   },
   // the key encrypts every project secret and signs every session: a blank one is refused at
   // first use, not a silent lock-out
@@ -267,22 +347,35 @@ const appConfigRows: {
     },
     throws: /^APP_CONFIG urls\.mcp \(APP_CONFIG_URLS__MCP\): must differ from urls\.os$/,
   },
-  // a key the schema does not name — a typo inside the object, a stray var — is WARNED about
-  // loudly and dropped; the rest parses
+  // a key the schema does not name — a typo inside the object, a var no field answers to, a stray
+  // key in a block a var sets whole — is WARNED about loudly and dropped, and the rest parses
+  // (why: parseAppConfigVars); a malformed field beside one still throws
   {
     vars: {
       APP_CONFIG: JSON.stringify({
         login: { password: "password", bogus: 1 },
         secrets: { key: "secrets-key" },
-        nope: {},
       }),
     },
     becomes: MINIMAL_CONFIG,
-    warns: 2,
+    warns: 1,
   },
   {
-    vars: { ...MINIMAL, APP_CONFIG_PROJECT_TOKEN_SECRET: "retired" },
+    vars: { ...MINIMAL, APP_CONFIG_ADMIN_API_SECRET: "admin-bearer" },
     becomes: MINIMAL_CONFIG,
+    warns: 1,
+  },
+  {
+    vars: { ...MINIMAL, APP_CONFIG_URLS__INGRESS_ROUTING: '{"type":"paths","wildcard":true}' },
+    becomes: {
+      ...MINIMAL_CONFIG,
+      urls: { ...MINIMAL_CONFIG.urls, ingressRouting: { type: "paths" } },
+    },
+    warns: 1,
+  },
+  {
+    vars: { ...MINIMAL, APP_CONFIG_ADMIN_API_SECRET: "admin-bearer", APP_CONFIG_URLS__OS: "os" },
+    throws: /^APP_CONFIG urls\.os \(APP_CONFIG_URLS__OS\): expected an HTTP\(S\) origin/,
     warns: 1,
   },
   // an override merges INTO the object's block rather than replacing it; a JSON-looking value
@@ -318,14 +411,10 @@ const appConfigRows: {
 for (const { vars, becomes, throws, warns } of appConfigRows)
   test(`parseAppConfig: ${JSON.stringify(vars)} → ${throws ? `throws ${throws}` : JSON.stringify(becomes)}`, () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    try {
-      if (throws) expect(() => parseAppConfig(vars)).toThrow(throws);
-      else expect(expose(parseAppConfig(vars))).toEqual(becomes);
-      if (warns !== undefined) expect(warn).toHaveBeenCalledTimes(warns);
-      else expect(warn).not.toHaveBeenCalled();
-    } finally {
-      warn.mockRestore();
-    }
+    if (throws) expect(() => parseAppConfig(vars)).toThrow(throws);
+    else expect(expose(parseAppConfig(vars))).toEqual(becomes);
+    if (warns !== undefined) expect(warn).toHaveBeenCalledTimes(warns);
+    else expect(warn).not.toHaveBeenCalled();
   });
 test("parseAppConfig: a secret never prints", () => {
   const { secrets } = parseAppConfig(MINIMAL);
@@ -495,54 +584,97 @@ test("public protocol origins: under path routing the platform's own paths are n
   });
 });
 
-test("public protocol origins: a preview's one-click sign-in link (test-link.ts) is a 404 on prd, a plain 403 on another preview", async () => {
-  const pr123 = "https://pr123-os.iterate-dev-preview.workers.dev";
-  const pr124 = "https://pr124-os.iterate-dev-preview.workers.dev";
-  const link = (audience: string) =>
-    mintTestLink({
-      key: "secrets-key",
-      audience,
-      email: "pr123@preview.iterate.test",
-      next: `${pr123}/login`,
-      clients: [],
-      expiresAt: Date.now() + 60_000,
-    });
-  expect(
-    await request(
-      `https://os.iterate.com${TEST_LINK_PATH}?t=${await link("https://os.iterate.com")}`,
-    ),
-  ).toMatchObject({ status: 404 });
-  const refused = await request(`${pr124}${TEST_LINK_PATH}?t=${await link(pr123)}`, {
+test("public protocol origins: a preview's admin sign-in (admin-sign-in.ts) asks prd who the browser is, for the userinfo resource alone, and signs nobody in yet; prd has no such route", async () => {
+  expect(await request(`${PRD}/.auth/admin-sign-in?next=%2Flogin`)).toMatchObject({ status: 404 });
+  const started = await request(`${PR123}/.auth/admin-sign-in?next=%2Flogin`, {
     ...MINIMAL,
-    APP_CONFIG_URLS__OS: pr124,
-    APP_CONFIG_LOGIN__TEST_LINK__EMAIL_DOMAIN: "preview.iterate.test",
+    APP_CONFIG_URLS__OS: PR123,
+    APP_CONFIG_LOGIN__ADMIN_ISSUER: PRD,
   });
-  expect(refused).toMatchObject({ status: 403 });
-  expect(await refused.text()).toBe(`This sign-in link is for ${pr123}, not this deployment.\n`);
+  expect(started).toMatchObject({ status: 302 });
+  const authorize = new URL(started.headers.get("location")!);
+  expect({
+    at: `${authorize.origin}${authorize.pathname}`,
+    clientId: authorize.searchParams.get("client_id"),
+    resource: authorize.searchParams.getAll("resource"),
+    cookies: started.headers.getSetCookie().map((cookie) => cookie.split("=")[0]),
+  }).toEqual({
+    at: `${PRD}/oauth2/auth`,
+    clientId: `${PR123}/.auth/admin-sign-in/client.json`,
+    resource: [`${PRD}/oauth2/userinfo`],
+    cookies: ["__Host-itx-admin-sign-in"],
+  });
 });
 
-test("public protocol origins: the issuer's pages admit only their own methods, HTML requests and same-origin posts", async () => {
-  const page = (path: string, init?: RequestInit) =>
-    worker.fetch(
-      new Request(`https://os.iterate.com${path}`, init),
-      { ...bindings, ...origins } as unknown as Env,
-      { waitUntil() {}, passThroughOnException() {} } as unknown as ExecutionContext,
-    );
-  expect(await page("/login")).toMatchObject({ status: 200 });
-  expect(await page("/login", { headers: { accept: "application/json" } })).toMatchObject({
+// Local dev's one click (local-sign-in.ts) exists on a laptop's platform alone: a loopback `urls.os`
+// with a test email domain. Where it signs in is __workers-tests__/local-sign-in.test.ts's.
+test.for<{ name: string; origin: string; vars: Record<string, unknown> }>([
+  { name: "prd", origin: PRD, vars: origins },
+  {
+    name: "a preview, test email domain and all",
+    origin: PR123,
+    vars: {
+      ...MINIMAL,
+      APP_CONFIG_URLS__OS: PR123,
+      APP_CONFIG_LOGIN__TEST_EMAIL_DOMAIN: "preview.iterate.test",
+    },
+  },
+  {
+    name: "a laptop's platform with no test email domain",
+    origin: "http://localhost:8788",
+    vars: { ...MINIMAL, APP_CONFIG_URLS__OS: "http://localhost:8788" },
+  },
+  {
+    name: "a self-host on a laptop (a blank urls.os)",
+    origin: "http://localhost:8787",
+    vars: MINIMAL,
+  },
+])(
+  "public protocol origins: local dev's one click is no route on $name",
+  async ({ origin, vars }) => {
+    const search = new URLSearchParams({ email: "test@preview.iterate.test", next: "/login" });
+    expect(await request(`${origin}/.auth/local-sign-in?${search}`, vars)).toMatchObject({
+      status: 404,
+    });
+  },
+);
+
+// The issuer's pages admit only their own methods, HTML requests and same-origin posts; beside them
+// are the public files, and nothing else.
+test.for<{ name: string; path: string; init: RequestInit; status: number }>([
+  { name: "a page", path: "/login", init: {}, status: 200 },
+  {
+    name: "a page asked for JSON",
+    path: "/login",
+    init: { headers: { accept: "application/json" } },
     status: 406,
-  });
-  expect(await page("/", { method: "POST" })).toMatchObject({ status: 405 });
-  expect(await page("/login", { method: "DELETE" })).toMatchObject({ status: 405 });
-  const crossSite = { method: "POST", headers: { origin: "https://evil.example" } };
-  expect(await page("/login", crossSite)).toMatchObject({ status: 403 });
-  expect(await page("/oauth2/auth?client_id=x", crossSite)).toMatchObject({ status: 403 });
-  // the public files beside the pages, and nothing else
-  expect(await page("/issuer.css")).toMatchObject({ status: 200 });
-  expect(await page("/client-logos/browser-extension.svg")).toMatchObject({ status: 200 });
-  expect(await page("/authorize.js")).toMatchObject({ status: 404 });
-  expect(await page("/capnweb.js")).toMatchObject({ status: 404 });
-});
+  },
+  { name: "a POST to the root", path: "/", init: { method: "POST" }, status: 405 },
+  { name: "a DELETE of a page", path: "/login", init: { method: "DELETE" }, status: 405 },
+  {
+    name: "a cross-site POST to a page",
+    path: "/login",
+    init: { method: "POST", headers: { origin: "https://evil.example" } },
+    status: 403,
+  },
+  {
+    name: "a cross-site POST to authorize",
+    path: "/oauth2/auth?client_id=x",
+    init: { method: "POST", headers: { origin: "https://evil.example" } },
+    status: 403,
+  },
+  { name: "the issuer's stylesheet", path: "/issuer.css", init: {}, status: 200 },
+  { name: "a client logo", path: "/client-logos/browser-extension.svg", init: {}, status: 200 },
+  { name: "a script that is not a public file", path: "/authorize.js", init: {}, status: 404 },
+  { name: "capnweb's script", path: "/capnweb.js", init: {}, status: 404 },
+])(
+  "public protocol origins, the issuer's pages: $name → $status",
+  async ({ path, init, status }) => {
+    expect(await request(new Request(`https://os.iterate.com${path}`, init))).toMatchObject({
+      status,
+    });
+  },
+);
 
 test("public protocol origins: /favicon.svg is production's logo, and a preview's purple PR badge", async () => {
   const assetPaths: string[] = [];
@@ -587,7 +719,7 @@ test("appConfigOf — once per env object: a malformed field throws at first use
 });
 
 /** A public route's answer from the edge over `bindings` and `env` (the origins by default). */
-const request = (url: string, env: Record<string, unknown> = origins) =>
+const request = (url: string | Request, env: Record<string, unknown> = origins) =>
   worker.fetch(
     new Request(url),
     { ...bindings, ...env } as unknown as Env,
@@ -605,18 +737,6 @@ const expose = (config: AppConfig) => ({
   login: {
     ...config.login,
     password: config.login.password.exposeSecret(),
-    ...(config.login.google && {
-      google: {
-        clientId: config.login.google.clientId,
-        clientSecret: config.login.google.clientSecret.exposeSecret(),
-      },
-    }),
-    ...(config.login.cloudflare && {
-      cloudflare: {
-        clientId: config.login.cloudflare.clientId,
-        clientSecret: config.login.cloudflare.clientSecret.exposeSecret(),
-      },
-    }),
   },
   secrets: {
     key: config.secrets.key.exposeSecret(),

@@ -3,7 +3,9 @@
 The account UI: where a person manages their sessions and personal access
 tokens, projects and organizations, and a project's secrets (`/projects/<slug>/secrets`:
 set, list, update and delete, plus agent-requested collection links (`?collect=1`) — the
-platform's `itx.secrets`, whose values never come back out). It is an ordinary OAuth client of the
+platform's `itx.secrets`, whose values never come back out), and its integrations
+(`/projects/<slug>/integrations`: connect Slack, Google and GitHub through iterate's app or your own,
+listed from the project root's `integrations` state). It is an ordinary OAuth client of the
 headless platform at `https://os.iterate.com` (which serves only sign-in and
 consent; everything else lives in apps like this one), asking for the `iterate`,
 `account` and `organizations:write` scopes; the last two are optional and can be unticked at

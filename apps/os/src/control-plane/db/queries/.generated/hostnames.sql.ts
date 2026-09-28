@@ -1,7 +1,17 @@
 import type {Client} from 'sqlfu';
 
 const projectsByHostnamesSql = `
-select h.hostname, p.id, p.slug, p.org_id as orgId
+select
+  h.hostname,
+  p.id,
+  p.slug,
+  p.org_id as orgId,
+  (
+    select ph.hostname
+    from project_primary_hostnames pp
+    join project_hostnames ph on ph.hostname = pp.hostname and ph.project_id = pp.project_id
+    where pp.project_id = p.id
+  ) as primaryHostname
 from project_hostnames h
 join projects p on p.id = h.project_id
 where h.hostname in (?);
@@ -10,7 +20,17 @@ const projectsByHostnamesQuery = (params: projectsByHostnames.Params) => {
 	if (params.hostnames.length === 0) {
 		throw new Error("Parameter \"hostnames\" must be a non-empty array");
 	}
-	const expandedSql = `select h.hostname, p.id, p.slug, p.org_id as orgId
+	const expandedSql = `select
+  h.hostname,
+  p.id,
+  p.slug,
+  p.org_id as orgId,
+  (
+    select ph.hostname
+    from project_primary_hostnames pp
+    join project_hostnames ph on ph.hostname = pp.hostname and ph.project_id = pp.project_id
+    where pp.project_id = p.id
+  ) as primaryHostname
 from project_hostnames h
 join projects p on p.id = h.project_id
 where h.hostname in (${params.hostnames.map(() => '?').join(', ')});`;
@@ -33,6 +53,7 @@ export namespace projectsByHostnames {
 		id: string;
 		slug: string;
 		orgId: string;
+		primaryHostname?: string;
 	};
 }
 
@@ -148,35 +169,5 @@ export const clearPrimaryHostname = Object.assign(
 export namespace clearPrimaryHostname {
 	export type Params = {
 		projectId: string;
-	};
-}
-
-const primaryHostnameOfSql = `
-select h.hostname
-from project_primary_hostnames p
-join project_hostnames h on h.hostname = p.hostname and h.project_id = p.project_id
-where p.project_id = ?
-limit 1;
-`.trim();
-const primaryHostnameOfQuery = (params: primaryHostnameOf.Params) => ({
-	name: "primaryHostnameOf",
-	sql: primaryHostnameOfSql,
-	args: [params.projectId],
-});
-
-export const primaryHostnameOf = Object.assign(
-	async function primaryHostnameOf(client: Client, params: primaryHostnameOf.Params): Promise<primaryHostnameOf.Result | null> {
-		const rows = await client.all<primaryHostnameOf.Result>(primaryHostnameOfQuery(params));
-		return rows.length > 0 ? rows[0] : null;
-	},
-	{ sql: primaryHostnameOfSql, query: primaryHostnameOfQuery },
-);
-
-export namespace primaryHostnameOf {
-	export type Params = {
-		projectId: string;
-	};
-	export type Result = {
-		hostname: string;
 	};
 }

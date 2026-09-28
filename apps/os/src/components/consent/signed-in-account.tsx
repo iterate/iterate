@@ -1,17 +1,23 @@
+import { useHydrated } from "@tanstack/react-router";
 import { Avatar, AvatarFallback, AvatarImage } from "@iterate-com/ui/components/avatar";
 import { Button } from "@iterate-com/ui/components/button";
 
 /** Who is approving — their picture (or initial) and address, wrapped rather than cut when long —
- *  and Switch account, which signs out and comes back to this request through sign-in. */
+ *  and Switch account, which signs out and comes back to this request through sign-in. A platform
+ *  admin also gets "Sign in as someone else…" (`onSignInAsSomeoneElse`, consent-card.tsx). */
 export function SignedInAccount({
   email,
   picture,
   switchAccount,
+  onSignInAsSomeoneElse,
 }: {
   email: string;
   picture?: string;
   switchAccount: string;
+  onSignInAsSomeoneElse?: () => void;
 }) {
+  // the link does nothing until React owns it; disabled, a test (or a quick hand) waits for that
+  const hydrated = useHydrated();
   return (
     <section
       aria-label="Signed-in account"
@@ -38,6 +44,18 @@ export function SignedInAccount({
             Switch account
           </Button>
         </form>
+        {onSignInAsSomeoneElse ? (
+          <Button
+            type="button"
+            variant="link"
+            size="xs"
+            className="px-0 text-muted-foreground underline hover:text-foreground"
+            disabled={!hydrated}
+            onClick={onSignInAsSomeoneElse}
+          >
+            Sign in as someone else…
+          </Button>
+        ) : null}
       </div>
     </section>
   );

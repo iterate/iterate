@@ -54,9 +54,8 @@ const rows: {
       endedGrants: {},
       grantUses: {},
       consents: [],
-      memberships: {},
-      endedMemberships: {},
       secrets: {},
+      integrations: {},
     },
   },
   {
@@ -68,9 +67,8 @@ const rows: {
       endedGrants: {},
       grantUses: {},
       consents: [],
-      memberships: {},
-      endedMemberships: {},
       secrets: {},
+      integrations: {},
     },
   },
   {
@@ -115,14 +113,13 @@ const rows: {
     state: {
       authentications: [],
       secrets: {},
+      integrations: {},
       personalAccessTokens: {
         pat_a: key("laptop", 9, expect.any(String)),
         pat_b: key("phone", null, expect.any(String)),
       },
       endedGrants: { pat_b: { at: expect.any(String) }, pat_a: { at: expect.any(String) } },
       grantUses: {},
-      memberships: {},
-      endedMemberships: {},
       consents: [
         {
           clientId: "c1",
@@ -135,26 +132,16 @@ const rows: {
     },
   },
   {
-    name: "a membership is a row by organization with the role and the first membership's time (the control-plane saga lands it here beside the organization's log); a new role replaces it; removed drops it; a grant's use only moves forward",
+    name: "a membership beginning or ending is activity: the account folds nothing from it; a grant's use only moves forward",
     events: [
-      {
-        type: "events.iterate.com/organization/member-added",
-        payload: { orgId: "org_1", userId: "user_me", role: "member" },
-        source: platform,
-      },
       {
         type: "events.iterate.com/organization/member-added",
         payload: { orgId: "org_1", userId: "user_me", role: "owner" },
         source: platform,
       },
       {
-        type: "events.iterate.com/organization/member-added",
-        payload: { orgId: "org_2", userId: "user_me", role: "member" },
-        source: platform,
-      },
-      {
         type: "events.iterate.com/organization/member-removed",
-        payload: { orgId: "org_2", userId: "user_me" },
+        payload: { orgId: "org_1", userId: "user_me" },
         source: platform,
       },
       {
@@ -174,67 +161,8 @@ const rows: {
       endedGrants: {},
       grantUses: { grant_a: { at: 5 } },
       consents: [],
-      memberships: { org_1: { role: "owner", since: new Date(1000).toISOString() } },
-      endedMemberships: { org_2: { at: expect.any(String) } },
       secrets: {},
-    },
-  },
-  {
-    name: "a MINT — an organization's first membership, landed in the background after the creation that minted it answered — never overrides a membership the account holds, nor revives one that ended, however late it lands; a removal's end is kept even for a membership never held, and joining again clears it",
-    events: [
-      // a demotion that landed before the mint: the mint is older, the account keeps the demotion
-      {
-        type: "events.iterate.com/organization/member-added",
-        payload: { orgId: "org_1", userId: "user_me", role: "member" },
-        source: platform,
-      },
-      {
-        type: "events.iterate.com/organization/member-added",
-        payload: { orgId: "org_1", userId: "user_me", role: "owner", mint: true },
-        source: platform,
-      },
-      // a removal that landed before the mint: the membership stays ended
-      {
-        type: "events.iterate.com/organization/member-removed",
-        payload: { orgId: "org_2", userId: "user_me" },
-        source: platform,
-      },
-      {
-        type: "events.iterate.com/organization/member-added",
-        payload: { orgId: "org_2", userId: "user_me", role: "owner", mint: true },
-        source: platform,
-      },
-      // a mint first, as it lands almost always
-      {
-        type: "events.iterate.com/organization/member-added",
-        payload: { orgId: "org_3", userId: "user_me", role: "owner", mint: true },
-        source: platform,
-      },
-      // joining the ended one again, by invitation
-      {
-        type: "events.iterate.com/organization/member-removed",
-        payload: { orgId: "org_4", userId: "user_me" },
-        source: platform,
-      },
-      {
-        type: "events.iterate.com/organization/member-added",
-        payload: { orgId: "org_4", userId: "user_me", role: "member" },
-        source: platform,
-      },
-    ],
-    state: {
-      authentications: [],
-      personalAccessTokens: {},
-      endedGrants: {},
-      grantUses: {},
-      consents: [],
-      memberships: {
-        org_1: { role: "member", since: expect.any(String) },
-        org_3: { role: "owner", since: expect.any(String) },
-        org_4: { role: "member", since: expect.any(String) },
-      },
-      endedMemberships: { org_2: { at: expect.any(String) } },
-      secrets: {},
+      integrations: {},
     },
   },
   {
@@ -253,9 +181,8 @@ const rows: {
       endedGrants: {},
       grantUses: {},
       consents: [],
-      memberships: {},
-      endedMemberships: {},
       secrets: {},
+      integrations: {},
     },
   },
   {
@@ -274,9 +201,8 @@ const rows: {
       endedGrants: {},
       grantUses: {},
       consents: [],
-      memberships: {},
-      endedMemberships: {},
       secrets: {},
+      integrations: {},
     },
   },
   {
@@ -291,10 +217,6 @@ const rows: {
         type: "events.iterate.com/secret/set",
         payload: { path: "/secrets/forged", urls: ["https://evil.example.test"] },
       },
-      {
-        type: "events.iterate.com/organization/member-added",
-        payload: { orgId: "org_forged", userId: "user_me", role: "owner" },
-      },
       authenticated("op-1", "from-server-cookie"),
       // the platform's mint of a real key, then an end the person appended: the key stays open
       { ...minted("pat_a", "laptop", 9), source: platform },
@@ -307,12 +229,90 @@ const rows: {
       endedGrants: {},
       grantUses: {},
       consents: [],
-      memberships: {},
-      endedMemberships: {},
       secrets: {},
+      integrations: {},
+    },
+  },
+  {
+    name: "a sign-in's connection is the person's row, a disconnect drops it; the secret it keeps lists its lends until each is revoked; a person's own appends of either change nothing",
+    events: [
+      {
+        type: "events.iterate.com/secret/set",
+        payload: {
+          path: "/secrets/google-42",
+          urls: ["https://google.test"],
+          refresh: "oauth-refresh-token",
+        },
+        source: platform,
+      },
+      {
+        type: "events.iterate.com/google/connected",
+        payload: {
+          connection: "42",
+          client: "iterate",
+          account: "ada@example.com",
+          externalId: "42",
+          scopes: ["openid"],
+        },
+        source: platform,
+      },
+      {
+        type: "events.iterate.com/github/connected",
+        payload: { connection: "7", client: "iterate", account: "ada", externalId: "7" },
+        source: platform,
+      },
+      {
+        type: "events.iterate.com/github/disconnected",
+        payload: { connection: "7" },
+        source: platform,
+      },
+      {
+        type: "events.iterate.com/cloudflare/connected",
+        payload: { connection: "evil", client: "iterate", account: "x", externalId: "x" },
+      },
+      lent("lend_a", "prj_1"),
+      lent("lend_b", "prj_2"),
+      {
+        type: "events.iterate.com/secret/lend-revoked",
+        payload: { path: "/secrets/google-42", lendId: "lend_a", reason: "membership-ended" },
+        source: platform,
+      },
+    ],
+    state: {
+      authentications: [],
+      personalAccessTokens: {},
+      endedGrants: {},
+      grantUses: {},
+      consents: [],
+      secrets: {
+        "/secrets/google-42": {
+          urls: ["https://google.test"],
+          refresh: "oauth-refresh-token",
+          createdAt: expect.any(String),
+          lends: { lend_b: { to: "prj_2", as: "/secrets/google-ada", since: expect.any(String) } },
+        },
+      },
+      integrations: {
+        "/integrations/google/42": {
+          provider: "google",
+          connection: "42",
+          client: "iterate",
+          account: "ada@example.com",
+          externalId: "42",
+          scopes: ["openid"],
+        },
+      },
     },
   },
 ];
 for (const { name, events, state } of rows)
   test(`AccountProcessor — the account state folded from facts: ${name}`, () =>
     expect(reduceProcessor(new AccountProcessor(), events)).toEqual(state));
+
+function lent(lendId: string, to: string) {
+  return {
+    type: "events.iterate.com/secret/lent",
+    payload: { path: "/secrets/google-42", lendId, to, as: "/secrets/google-ada" },
+    source: platform,
+  };
+}

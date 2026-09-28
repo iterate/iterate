@@ -8,7 +8,7 @@ const head = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 const newerHead = "dddddddddddddddddddddddddddddddddddddddd";
 const merge = "cccccccccccccccccccccccccccccccccccccccc";
 
-test.each([
+test.for([
   {
     rule: "1: an answer about a newer head leaves the decision to that push's run",
     pullRequest: pullRequest({ headSha: newerHead, mergeable: false }),

@@ -7,8 +7,8 @@ concurrency:
 on:
   push:
     branches: [main]
-    # No root manifests or lockfile: what ships is public/ and the zipped extension, with no npm
-    # dependency inside.
+    # No root manifests or lockfile: what ships is public/ and the zipped extension, and a bump of
+    # the extension's one npm dependency, capnweb, ships with the next deploy rather than its own.
     paths:
       - .depot/workflows/deploy-spa.yml
       - apps/spa/**
@@ -18,15 +18,15 @@ on:
   workflow_dispatch:
 jobs:
   deploy:
-    runs-on:
-      size: 2x8
-      image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
+    runs-on: depot-ubuntu-24.04
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+      - name: Setup
+        uses: ./.depot/actions/setup
         with:
-          clean: false
-      - run: pnpm install --frozen-lockfile --prefer-offline
+          # a production deploy never reads Depot Cache (docs/depot-ci.md#depot-cache)
+          pnpm-store: none
       - name: Deploy static assets and versioned extension bundle
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}

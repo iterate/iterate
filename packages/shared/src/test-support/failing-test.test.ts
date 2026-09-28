@@ -1,8 +1,9 @@
-import { mkdtempSync, readdirSync, readFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { expect, test, vi } from "vitest";
+import { expect, onTestFinished, test, vi } from "vitest";
+import { E2E_CI_RETRY_DELAY_MS } from "./e2e-policy/budgets.ts";
 import { expectFailure, createFailing } from "./failing-test.ts";
+import { temporaryDirectory } from "./temporary-directory.ts";
 
 // The wrapper through vitest's REAL expected-fail machinery is proven by the
 // child-process fixture in ./flake-test-fixture (the createFailing case): a
@@ -45,27 +46,23 @@ test("registration lands on the runner's own expected-fail variant", async () =>
 
 test("every outcome writes a kind-failing record when FLAKE_RECORD_DIR is set", async () => {
   using records = scopedFlakeRecordDir();
-  const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
-  try {
-    const registered: ((...args: unknown[]) => Promise<unknown>)[] = [];
-    const fake = Object.assign(vi.fn(), {
-      fails: (...args: unknown[]) => registered.push(args.at(-1) as any),
-    });
-    const fail = createFailing(fake, /pinned/);
-    fail("holds", async () => {
-      throw new Error("pinned as expected");
-    });
-    fail("fixed?", async () => {});
-    await expect(registered[0]!()).rejects.toThrow(/pinned/);
-    await expect(registered[1]!()).resolves.toBeUndefined();
+  vi.spyOn(console, "error").mockImplementation(() => {});
+  const registered: ((...args: unknown[]) => Promise<unknown>)[] = [];
+  const fake = Object.assign(vi.fn(), {
+    fails: (...args: unknown[]) => registered.push(args.at(-1) as any),
+  });
+  const fail = createFailing(fake, /pinned/);
+  fail("holds", async () => {
+    throw new Error("pinned as expected");
+  });
+  fail("fixed?", async () => {});
+  await expect(registered[0]!()).rejects.toThrow(/pinned/);
+  await expect(registered[1]!()).resolves.toBeUndefined();
 
-    expect(records.records()).toMatchObject([
-      { name: "holds", kind: "failing", outcome: "pinned-fail", pattern: "pinned" },
-      { name: "fixed?", kind: "failing", outcome: "unexpected-pass" },
-    ]);
-  } finally {
-    consoleError.mockRestore();
-  }
+  expect(records.records()).toMatchObject([
+    { name: "holds", kind: "failing", outcome: "pinned-fail", pattern: "pinned" },
+    { name: "fixed?", kind: "failing", outcome: "unexpected-pass" },
+  ]);
 });
 
 test("a playwright-shaped test object registers through .fail", async () => {
@@ -92,27 +89,23 @@ test("a body failing for a different reason returns success, so the native machi
   // kind-failing records into the CI run's real FLAKE_RECORD_DIR.
   using _records = scopedFlakeRecordDir();
   const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
-  try {
-    const registered: ((...args: unknown[]) => Promise<unknown>)[] = [];
-    const fake = Object.assign(vi.fn(), {
-      fails: (...args: unknown[]) => registered.push(args.at(-1) as any),
-    });
-    createFailing(fake, /foo bar exploded/)("name", async () => {
-      throw new Error("ECONNREFUSED: the test infra broke");
-    });
+  const registered: ((...args: unknown[]) => Promise<unknown>)[] = [];
+  const fake = Object.assign(vi.fn(), {
+    fails: (...args: unknown[]) => registered.push(args.at(-1) as any),
+  });
+  createFailing(fake, /foo bar exploded/)("name", async () => {
+    throw new Error("ECONNREFUSED: the test infra broke");
+  });
 
-    // Resolving WITHOUT throwing is the inverted failure signal: test.fails /
-    // test.fail reject a successful body ("Expect test to fail" / "passed
-    // unexpectedly"), so the pin goes red — where a bare test.fails would have
-    // stayed silently green. The reason lives in the adjacent log line.
-    await expect(registered[0]!()).resolves.toBeUndefined();
-    expect(consoleError).toHaveBeenCalledWith(
-      expect.stringMatching(/Expected failure to match \/foo bar exploded\//),
-      expect.objectContaining({ message: expect.stringContaining("ECONNREFUSED") }),
-    );
-  } finally {
-    consoleError.mockRestore();
-  }
+  // Resolving WITHOUT throwing is the inverted failure signal: test.fails /
+  // test.fail reject a successful body ("Expect test to fail" / "passed
+  // unexpectedly"), so the pin goes red — where a bare test.fails would have
+  // stayed silently green. The reason lives in the adjacent log line.
+  await expect(registered[0]!()).resolves.toBeUndefined();
+  expect(consoleError).toHaveBeenCalledWith(
+    expect.stringMatching(/Expected failure to match \/foo bar exploded\//),
+    expect.objectContaining({ message: expect.stringContaining("ECONNREFUSED") }),
+  );
 });
 
 test("a body that succeeds returns success with delete-the-wrapper instructions in the log", async () => {
@@ -120,22 +113,18 @@ test("a body that succeeds returns success with delete-the-wrapper instructions 
   // kind-failing records into the CI run's real FLAKE_RECORD_DIR.
   using _records = scopedFlakeRecordDir();
   const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
-  try {
-    const registered: ((...args: unknown[]) => Promise<unknown>)[] = [];
-    const fake = Object.assign(vi.fn(), {
-      fails: (...args: unknown[]) => registered.push(args.at(-1) as any),
-    });
-    createFailing(fake, /foo bar exploded/)("name", async () => {
-      expect(1 + 1).toBe(2);
-    });
+  const registered: ((...args: unknown[]) => Promise<unknown>)[] = [];
+  const fake = Object.assign(vi.fn(), {
+    fails: (...args: unknown[]) => registered.push(args.at(-1) as any),
+  });
+  createFailing(fake, /foo bar exploded/)("name", async () => {
+    expect(1 + 1).toBe(2);
+  });
 
-    await expect(registered[0]!()).resolves.toBeUndefined();
-    expect(consoleError).toHaveBeenCalledWith(
-      expect.stringMatching(/should have failed .* delete the createFailing\(\) wrapper/s),
-    );
-  } finally {
-    consoleError.mockRestore();
-  }
+  await expect(registered[0]!()).resolves.toBeUndefined();
+  expect(consoleError).toHaveBeenCalledWith(
+    expect.stringMatching(/should have failed .* delete the createFailing\(\) wrapper/s),
+  );
 });
 
 test("a hung body reports as not-the-pinned-failure at the wrapper's own deadline", async () => {
@@ -143,93 +132,92 @@ test("a hung body reports as not-the-pinned-failure at the wrapper's own deadlin
   // kind-failing records into the CI run's real FLAKE_RECORD_DIR.
   using _records = scopedFlakeRecordDir();
   const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
-  try {
-    const registered: ((...args: unknown[]) => Promise<unknown>)[] = [];
-    const fake = Object.assign(vi.fn(), {
-      fails: (...args: unknown[]) => registered.push(args.at(-1) as any),
-    });
-    createFailing(fake, /pinned/, { timeoutMs: 50 })("name", async () => new Promise(() => {}));
+  const registered: ((...args: unknown[]) => Promise<unknown>)[] = [];
+  const fake = Object.assign(vi.fn(), {
+    fails: (...args: unknown[]) => registered.push(args.at(-1) as any),
+  });
+  createFailing(fake, /pinned/, { timeoutMs: 50 })("name", async () => new Promise(() => {}));
 
-    // Without the wrapper's own deadline this would ride to the RUNNER's test
-    // timeout, which the expected-fail machinery counts as the pin holding —
-    // the hang would pass vacuously.
-    await expect(registered[0]!()).resolves.toBeUndefined();
-    expect(consoleError).toHaveBeenCalledWith(expect.stringMatching(/still running after 50ms/));
-  } finally {
-    consoleError.mockRestore();
-  }
+  // Without the wrapper's own deadline this would ride to the RUNNER's test
+  // timeout, which the expected-fail machinery counts as the pin holding —
+  // the hang would pass vacuously.
+  await expect(registered[0]!()).resolves.toBeUndefined();
+  expect(consoleError).toHaveBeenCalledWith(expect.stringMatching(/still running after 50ms/));
 });
 
 // A failure that proves nothing is retried by the wrapper, because vitest's
-// own `retry` never reaches that outcome (see failing-test.ts).
-test("a failure that proves nothing re-runs the body once, and the pin holds on the retry", async () => {
+// own `retry` never reaches that outcome (see failing-test.ts). The retry rows
+// run the production pause on a fake clock.
+test("a failure that proves nothing re-runs the body once, after the e2e retry pause, and the pin holds on the retry", async () => {
   using records = scopedFlakeRecordDir();
+  vi.useFakeTimers();
+  onTestFinished(() => void vi.useRealTimers());
   const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
-  try {
-    const pin = pinWithRetry([
-      async () => {
-        throw new Error("internal error; reference = 5vdta3r5q0132pecveeqsvkr");
-      },
-      async () => {
-        throw new Error("pinned: woke 3 times after dispose");
-      },
-    ]);
-    await expect(pin.run()).rejects.toThrow(/pinned/);
-    expect(pin.calls()).toBe(2);
-    // Never silent: one record per attempt.
-    expect(records.records().map((r) => r.outcome)).toEqual(["unexpected-error", "pinned-fail"]);
-    expect(consoleError).toHaveBeenCalledWith(
-      expect.stringMatching(/proves nothing about the pinned bug; retry 1 of 1/),
-      expect.objectContaining({ message: expect.stringContaining("internal error") }),
-    );
-  } finally {
-    consoleError.mockRestore();
-  }
+  const pin = pinWithRetry([
+    async () => {
+      throw new Error("internal error; reference = 5vdta3r5q0132pecveeqsvkr");
+    },
+    async () => {
+      throw new Error("pinned: woke 3 times after dispose");
+    },
+  ]);
+  const held = expect(pin.run()).rejects.toThrow(/pinned/);
+  await vi.advanceTimersByTimeAsync(E2E_CI_RETRY_DELAY_MS - 1);
+  expect(pin.calls()).toBe(1);
+  await vi.advanceTimersByTimeAsync(1);
+  await held;
+  expect(pin.calls()).toBe(2);
+  // Never silent: one record per attempt.
+  expect(records.records().map((r) => r.outcome)).toEqual(["unexpected-error", "pinned-fail"]);
+  expect(consoleError).toHaveBeenCalledWith(
+    expect.stringMatching(/proves nothing about the pinned bug; retry 1 of 1 in 5000ms/),
+    expect.objectContaining({ message: expect.stringContaining("internal error") }),
+  );
 });
 
 test("a second failure that proves nothing goes red; a pass or the pinned failure never retries", async () => {
   using records = scopedFlakeRecordDir();
-  const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
-  try {
-    const blip = async () => {
-      throw new Error("Network connection lost.");
-    };
-    const twice = pinWithRetry([blip, blip]);
-    await expect(twice.run()).resolves.toBeUndefined(); // success = the native machinery goes red
-    expect(twice.calls()).toBe(2);
-    // No pause past the deadline: with 20ms left of a 100ms budget and a 50ms
-    // pause, the runner's timeout would fire mid-pause and count as the pin
-    // holding — so the first attempt's failure goes red at once instead.
-    const registered: ((...args: unknown[]) => Promise<unknown>)[] = [];
-    const fake = Object.assign(vi.fn(), {
-      fails: (...args: unknown[]) => registered.push(args.at(-1) as any),
-    });
-    const late = vi.fn(
-      () => new Promise((_, reject) => setTimeout(() => reject(new Error("blip")), 80)),
-    );
-    createFailing(fake, /pinned/, { timeoutMs: 100, retries: 1, retryDelayMs: 50 })("name", late);
-    await expect(registered[0]!()).resolves.toBeUndefined();
-    expect(late).toHaveBeenCalledTimes(1);
-    const passed = pinWithRetry([async () => undefined]);
-    await expect(passed.run()).resolves.toBeUndefined();
-    expect(passed.calls()).toBe(1);
-    const held = pinWithRetry([
-      async () => {
-        throw new Error("pinned");
-      },
-    ]);
-    await expect(held.run()).rejects.toThrow(/pinned/);
-    expect(held.calls()).toBe(1);
-    expect(records.records().map((r) => r.outcome)).toEqual([
-      "unexpected-error",
-      "unexpected-error",
-      "unexpected-error",
-      "unexpected-pass",
-      "pinned-fail",
-    ]);
-  } finally {
-    consoleError.mockRestore();
-  }
+  vi.useFakeTimers();
+  onTestFinished(() => void vi.useRealTimers());
+  vi.spyOn(console, "error").mockImplementation(() => {});
+  const blip = async () => {
+    throw new Error("Network connection lost.");
+  };
+  const twice = pinWithRetry([blip, blip]);
+  const wentRed = twice.run();
+  await vi.runAllTimersAsync();
+  await expect(wentRed).resolves.toBeUndefined(); // success = the native machinery goes red
+  expect(twice.calls()).toBe(2);
+  // With 4 s left, the 5 s retry pause must be skipped (see createFailing in ./failing-test.ts).
+  const registered: ((...args: unknown[]) => Promise<unknown>)[] = [];
+  const fake = Object.assign(vi.fn(), {
+    fails: (...args: unknown[]) => registered.push(args.at(-1) as any),
+  });
+  const late = vi.fn(
+    () => new Promise((_, reject) => setTimeout(() => reject(new Error("blip")), 26_000)),
+  );
+  createFailing(fake, /pinned/, { retries: 1 })("name", late);
+  const lateRun = registered[0]!();
+  await vi.runAllTimersAsync();
+  await expect(lateRun).resolves.toBeUndefined();
+  expect(late).toHaveBeenCalledTimes(1);
+  const passed = pinWithRetry([async () => undefined]);
+  await expect(passed.run()).resolves.toBeUndefined();
+  expect(passed.calls()).toBe(1);
+  const held = pinWithRetry([
+    async () => {
+      throw new Error("pinned");
+    },
+  ]);
+  await expect(held.run()).rejects.toThrow(/pinned/);
+  expect(held.calls()).toBe(1);
+  expect(records.records().map((r) => r.outcome)).toEqual([
+    "unexpected-error",
+    "unexpected-error",
+    "unexpected-error",
+    "unexpected-pass",
+    "pinned-fail",
+  ]);
 });
 
 // expectFailure is the standalone assertion for use INSIDE a plain test,
@@ -258,17 +246,18 @@ test("expectFailure: success throws with delete-the-wrapper instructions", async
 // real telemetry, and read back what was written.
 function scopedFlakeRecordDir() {
   const previous = process.env.FLAKE_RECORD_DIR;
-  const dir = mkdtempSync(join(tmpdir(), "failing-test-"));
-  process.env.FLAKE_RECORD_DIR = dir;
+  const directory = temporaryDirectory();
+  process.env.FLAKE_RECORD_DIR = directory.path;
   return {
     records: () =>
-      readdirSync(dir).flatMap((file) =>
-        readFileSync(join(dir, file), "utf8")
+      readdirSync(directory.path).flatMap((file) =>
+        readFileSync(join(directory.path, file), "utf8")
           .trim()
           .split("\n")
           .map((line) => JSON.parse(line)),
       ),
     [Symbol.dispose]() {
+      directory[Symbol.dispose]();
       if (previous) process.env.FLAKE_RECORD_DIR = previous;
       else delete process.env.FLAKE_RECORD_DIR;
     },
@@ -282,7 +271,7 @@ function pinWithRetry(bodies: Array<() => Promise<unknown>>) {
     fails: (...args: unknown[]) => registered.push(args.at(-1) as any),
   });
   let calls = 0;
-  createFailing(fake, /pinned/, { retries: 1, retryDelayMs: 0 })("name", async () => {
+  createFailing(fake, /pinned/, { retries: 1 })("name", async () => {
     calls += 1;
     return bodies[calls - 1]!();
   });

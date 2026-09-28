@@ -22,7 +22,7 @@ import { base64url, sha256Hex, verifyAdminSecret, type Caller } from "./caller.t
 import { templates } from "./generated/config-templates.js";
 import type { ConsentRpcTarget } from "./consent.ts";
 import type { GrantsRpcTarget } from "./grants.ts";
-import { DurableObjectNameCodec, GLOBAL_PROJECT_ID } from "./context/paths.ts";
+import { CONTEXT_DESTROYED, DurableObjectNameCodec, GLOBAL_PROJECT_ID } from "./context/paths.ts";
 import {
   IterateContextRpcTarget,
   type IterateContextNamespace,
@@ -38,10 +38,12 @@ import {
   type UserRecord,
 } from "./control-plane/catalog.ts";
 import { type ControlPlane, describeReach, type Reach } from "./control-plane/edge.ts";
-import { OrganizationRole, type OrganizationState } from "./organization/contract.ts";
-import type { AppConfig } from "./app-config.ts";
-import { isRetryableTransportError } from "./retryable-error.ts";
-import type { AuthenticationFact } from "./account/contract.ts";
+import { OrganizationRole } from "./organization/contract.ts";
+import { iterateAppScopesOf, type AppConfig } from "./app-config.ts";
+import { contextStub } from "./context-stub.ts";
+import type { AccountState, AuthenticationFact } from "./account/contract.ts";
+import { IterateAppProvider } from "./integrations/contract.ts";
+import { IdentityProvider } from "./control-plane/contract.ts";
 import { assertSecretPath } from "./secrets.ts";
 
 /** What `IterateRpcTarget.authenticate` accepts. `from-server-cookie` is the browser and `bearer` is
@@ -90,7 +92,7 @@ export interface SessionInput {
  *  `authenticate({ type: "bearer", token })`, or `authenticate({ type: "admin-secret", secret })`,
  *  the deployment admin secret verified here.
  *  Its teardown owns every context the session it vends hands out. */
-export class IterateRpcTarget extends RpcTarget {
+export class IterateRpcTarget extends RpcTarget implements IterateApi {
   readonly #input: SessionInput;
   readonly #sessionTeardown: SessionTeardown;
   /** The authority the transport already resolved (a credential on the upgrade), or null (a bare
@@ -112,7 +114,7 @@ export class IterateRpcTarget extends RpcTarget {
     this.#sessionTeardown.disposeAll();
   }
 
-  async authenticate(input: unknown): Promise<SessionRpcTarget> {
+  async authenticate(input: unknown) {
     const credentials = SessionCredentials.safeParse(input);
     if (!credentials.success)
       throw codedError(
@@ -174,7 +176,7 @@ export class IterateRpcTarget extends RpcTarget {
       {
         type: "events.iterate.com/account/authenticated",
         payload: { credential, at: Date.now(), operationId } satisfies AuthenticationFact,
-        idempotencyKey: `authenticated/${operationId}`,
+        idempotencyKey: `account/authenticated/${operationId}`,
       },
       { principal },
     );
@@ -192,13 +194,20 @@ const ownerAddress = (owner: FactOwner) =>
     : { processor: "organization", path: `/organizations/${owner.organization}` };
 
 /** The owner's own context on the global project — where its facts land and its fold is read
- *  (oauth.ts `accountStateOf`). */
-export function ownerContext(contextNamespace: IterateContextNamespace, owner: FactOwner) {
-  return contextNamespace.getByName(
-    DurableObjectNameCodec.stringify({
+ *  (oauth.ts `accountStateOf`) — called under the failure model (`contextStub`), its lines named
+ *  `<area>.…`. */
+export function ownerContext(
+  contextNamespace: IterateContextNamespace,
+  owner: FactOwner,
+  area: string,
+) {
+  return contextStub(
+    contextNamespace,
+    DurableObjectNameCodec.address({
       projectId: GLOBAL_PROJECT_ID,
       path: ownerAddress(owner).path,
     }),
+    area,
   );
 }
 
@@ -209,19 +218,12 @@ export function ownerContext(contextNamespace: IterateContextNamespace, owner: F
  *  the one thing the processor folding them trusts (a person can append any type to their own
  *  context; the platform's fixed point, which no rewrite rule redirects, is the only writer of the
  *  stamp). A grant's end (grants.ts, the revocation truth) and a grant's use (oauth.ts) await it;
- *  the organization verbs await it `folded` (`foldPlatformFacts`); the rest goes through
- *  `publishPlatformFacts`.
+ *  the rest goes through `publishPlatformFacts`.
  *
  *  `folded` then waits on the owner's processor's read-your-writes barrier (`waitUntilProcessed`,
  *  which catches up from the log itself and rejects after its ten seconds) through the last fact's
  *  offset: the processor's push is asynchronous, so an append alone does not mean a read of the fold
- *  sees it.
- *
- *  THE CONTROL-PLANE DATABASE IS THE TRUTH; these facts are the fold the dash renders and the entity's
- *  activity, not the source of authority. Two CONCURRENT conflicting commands from different callers
- *  to the same context (a membership added and removed at once) have no ordering between them — the
- *  fold can settle opposite to the database's own order until the next authoritative read.
- *  Acceptable here: the edge authorizes every action against the database, never the fold. */
+ *  sees it. */
 export async function appendPlatformFacts(
   contextNamespace: IterateContextNamespace,
   owner: FactOwner,
@@ -229,7 +231,7 @@ export async function appendPlatformFacts(
   caller: Caller,
   { folded = false }: { folded?: boolean } = {},
 ): Promise<void> {
-  const context = ownerContext(contextNamespace, owner);
+  const context = ownerContext(contextNamespace, owner, "session");
   const events = Array.isArray(facts) ? facts : [facts];
   const { processor } = ownerAddress(owner);
   await context.invoke(["itx", "processors", ["enable", processor]], [], caller);
@@ -246,23 +248,64 @@ export async function appendPlatformFacts(
     );
 }
 
-/** AN ORGANIZATION VERB'S FACTS — on the organization and on each member's account — appended and
- *  FOLDED before the verb answers. The control-plane database already decided the write; the answer
- *  now also means the folds hold it, so a caller's next read sees it and one caller's facts land in
- *  the order it made its calls. Fire-and-forget once let a cold organization context take a rename
- *  before the creation it renamed, and the fold kept the old name for good. A failed append fails
- *  the verb, loudly: the database's write stands (the same rename or membership again lands the
- *  same fact, which the fold absorbs), and the fold is never silently behind it. */
-async function foldPlatformFacts(
-  input: Pick<SessionInput, "contextNamespace">,
-  landings: [FactOwner, StreamEventInput | StreamEventInput[]][],
+/** AN ORGANIZATION'S ACTIVITY: a verb's facts — on the organization's own context and, for a
+ *  membership, on the member's account — published in the background (`publishPlatformFacts`) once
+ *  the control-plane database has made the write. THE DATABASE IS THE TRUTH of organizations,
+ *  members, invitations and projects, and what the dash reads (`organizations.list`, `members`,
+ *  `invitations`, `projects.list`); a fact is the record of who did what, and the dash's signal to
+ *  read again (apps/dash components/organization-tree.tsx), so it lands after the write it records.
+ *  Each fact is keyed by this operation (or by its own key: a project is added once), so the one
+ *  retry lands it once. */
+function publishOrganizationFacts(
+  input: Pick<SessionInput, "contextNamespace" | "waitUntil">,
   caller: Caller,
+  landings: [FactOwner, StreamEventInput[]][],
+): void {
+  const operation = crypto.randomUUID();
+  for (const [owner, facts] of landings)
+    publishPlatformFacts(
+      input,
+      owner,
+      facts.map((fact, index) => ({
+        idempotencyKey: `organization/${operation}/${index}`,
+        ...fact,
+      })),
+      caller,
+    );
+}
+
+/** A person who left an organization: every project they no longer reach stops using their
+ *  accounts — each such lend of theirs ends (`secret/lend-revoked { reason: "membership-ended" }` on
+ *  both sides, and `<provider>/disconnected` on the project's root). Their
+ *  reach is read fresh, past the edge's memo, since it just changed. A use the sweep has not reached
+ *  yet is refused at the lender all the same (secret/durable-object.ts `admitLend`). */
+async function endLendsOutOfReach(
+  input: Pick<SessionInput, "contextNamespace" | "controlPlane">,
+  userId: string,
 ): Promise<void> {
-  await Promise.all(
-    landings.map(([owner, facts]) =>
-      appendPlatformFacts(input.contextNamespace, owner, facts, caller, { folded: true }),
-    ),
+  const account = ownerContext(input.contextNamespace, { account: userId }, "session");
+  // The platform's own read of the account facet: its contract's state.
+  const { state } = (await account.invoke(
+    ["itx", "builtins", "facets", ["get", "account"], ["snapshot"]],
+    [],
+    { principal: null },
+  )) as { state: AccountState };
+  const reached = new Set(
+    (await input.controlPlane.accessibleTo(userId, true)).projects.map((project) => project.id),
   );
+  for (const [path, row] of Object.entries(state.secrets))
+    for (const [lendId, lend] of Object.entries(row.lends || {}))
+      if (!reached.has(lend.to))
+        await account.invoke(
+          [
+            "itx",
+            "builtins",
+            "secrets",
+            ["revokeLend", path, lendId, { reason: "membership-ended" }],
+          ],
+          [],
+          { principal: null, platform: true },
+        );
 }
 
 /** A project creation that answers this late logs where it waited (`session.project-create-slow`).
@@ -299,167 +342,95 @@ class CreateWaits {
   }
 }
 
-/** A PROJECT ON ITS ORGANIZATION'S RECORD — the fold the dash tree lists an organization's projects
- *  from (session-fed: the control-plane database is imperative). ONE path for every creation —
- *  a person's, the operator's acting as one, and the operator's own into a named organization (a
- *  project seed's `apply`) — and for a creation asked again: it lands what the record LACKS, read
- *  at head, so the same creation again (a rerun `apply`, a retry) appends nothing. An organization
- *  the record has never heard of is one this creation minted (a person's first project,
- *  catalog.ts): its creation and its members come first, in one ordered append, so the fold sees
- *  the organization before its project. Each of those memberships also lands on the member's
- *  account, in the BACKGROUND
- *  (`publishPlatformFacts`): the answer never waits on a person's account. A brand-new account's
- *  first write can take Cloudflare seconds to confirm (21.9 s on 2026-09-24), and its output gate
- *  holds every answer until then. Nothing before the answer needs the account: the dash reads it
- *  through live state, and every access check reads the control plane. Landing late, the
- *  membership may arrive after a later membership fact of the same organization, so it is marked
- *  `mint` and the account never lets it override one (account/processor.ts). The deployment's own
- *  organization (the operator's projects with no `orgId`) has no members and no page: nothing
- *  lands there.
- *
- *  TWO AT ONCE both read the record without it, so each fact lands under an idempotency key: the
- *  stream keeps the first event under a key and answers every later one with it. A minted
- *  organization's first members are keyed as that first landing (`:mint`), never as the membership
- *  itself, so a later removal and re-add is never swallowed. Only the platform takes an
- *  `organization/…` key (context/built-ins.ts `append`), so the event a key answers with is always
- *  one the fold keeps. */
-async function landProjectOnOrganization(
-  input: Pick<SessionInput, "contextNamespace" | "controlPlane" | "waitUntil">,
-  project: ProjectRecord,
+/** THE DEPLOYMENT'S LENDS TO EVERY PROJECT, borrowed by a project just created (context/built-ins.ts
+ *  `borrowEveryProjectLends`, on the global root), before the answer: the project's first
+ *  `getSecret` of a lent path finds it. Never fails the creation: a borrow that fails is reported
+ *  there, and the project lacks that path until the same creation runs again. */
+async function borrowEveryProjectLends(
+  input: Pick<SessionInput, "contextNamespace">,
+  projectId: string,
   caller: Caller,
-  waits: CreateWaits,
 ): Promise<void> {
-  if (project.orgId === ADMIN_ORG_ID) return;
-  // The record at head (the facet catches up from its log before answering), its processor enabled
-  // first: an organization this creation just minted has no row yet, and a second enable appends
-  // nothing. `invoke` answers `unknown` across the DO hop; the `organization` facet is the
-  // platform's own OrganizationDurableObject and `snapshot()` the engine's `{ offset, state }`.
-  const organizationContext = ownerContext(input.contextNamespace, { organization: project.orgId });
-  await waits.time("organizationEnable", () =>
-    organizationContext.invoke(["itx", "processors", ["enable", "organization"]], [], caller),
+  const root = input.contextNamespace.getByName(
+    DurableObjectNameCodec.stringify({ projectId: GLOBAL_PROJECT_ID, path: "/" }),
   );
-  const { state: record } = (await waits.time("organizationSnapshot", () =>
-    organizationContext.invoke(
-      ["itx", "facets", ["get", "organization"], ["snapshot"]],
-      [],
-      caller,
-    ),
-  )) as { state: OrganizationState };
-  const onOrganization: StreamEventInput[] = [];
-  if (!record.name) {
-    const organization = await waits.time("controlPlaneOrganization", () =>
-      input.controlPlane.getOrganization(project.orgId),
-    );
-    const members = await waits.time("controlPlaneMembers", () =>
-      input.controlPlane.listMembers(project.orgId),
-    );
-    onOrganization.push({
-      ...orgCreatedFact(organization?.name ?? project.orgId),
-      idempotencyKey: "organization/created",
+  try {
+    await root.invoke(["itx", "builtins", "secrets", ["borrowEveryProjectLends", projectId]], [], {
+      ...caller,
+      platform: true,
     });
-    for (const { userId, role } of members) {
-      if (record.members[userId]?.role === role) continue;
-      const membership = {
-        ...memberAddedFact(project.orgId, userId, role, { mint: true }),
-        idempotencyKey: `organization/member-added:${project.orgId}:${userId}:mint`,
-      };
-      onOrganization.push(membership);
-      publishPlatformFacts(input, { account: userId }, membership, caller);
-    }
+  } catch (error) {
+    reportIssue("session.every-project-lends", error, { projectId });
   }
-  // a project is created once and its slug never changes: every landing of it is the same event
-  if (!record.projects[project.id])
-    onOrganization.push({
-      ...projectAddedFact(project.id, project.slug),
-      idempotencyKey: `organization/project-added:${project.id}`,
-    });
-  if (onOrganization.length)
-    await waits.time("organizationFold", () =>
-      foldPlatformFacts(input, [[{ organization: project.orgId }, onOrganization]], caller),
-    );
 }
 
+type KeyedFact = StreamEventInput & { idempotencyKey: string };
+
 /** `appendPlatformFacts` best-effort and ASYNC (waitUntil), off the verb's own path: the account's
- *  sign-ins, mints and consents — facts no answer depends on. A lost fact is a gap in the record,
- *  never a failed action. A deploy resetting the
- *  owner's Durable Object cuts in-flight appends at the transport (retryable-error.ts) — expected on
- *  every deploy under traffic, so a warning; any other failure is reported, as oauth.ts reports a
- *  grant use it could not record. */
+ *  sign-ins and consents, and an organization's activity — facts no answer depends on. Each is
+ *  KEYED (its sign-in's operation, its consent's grant, its organization verb's operation), so
+ *  running the append twice lands the fact once: the stream answers a key it holds with the event
+ *  it already has, and `ownerContext` sends an append the platform cut ONCE more. A second failure,
+ *  and any other, is reported, as oauth.ts reports a grant use it could not record. */
 export function publishPlatformFacts(
   input: Pick<SessionInput, "contextNamespace" | "waitUntil">,
   owner: FactOwner,
-  facts: StreamEventInput | StreamEventInput[],
+  facts: KeyedFact | KeyedFact[],
   caller: Caller,
 ): void {
+  const events = Array.isArray(facts) ? facts : [facts];
   input.waitUntil(
-    appendPlatformFacts(input.contextNamespace, owner, facts, caller).catch((error) => {
-      const attributes = {
+    appendPlatformFacts(input.contextNamespace, owner, events, caller).catch((error) =>
+      reportIssue("session.platform-fact-not-recorded", error, {
         path: ownerAddress(owner).path,
-        types: [facts]
-          .flat()
-          .map((fact) => fact.type)
-          .join(","),
-      };
-      if (isRetryableTransportError(error)) {
-        console.warn({
-          event: "session.platform-fact-cut",
-          ...attributes,
-          message: String(error),
-        });
-        return;
-      }
-      reportIssue("session.platform-fact-not-recorded", error, attributes);
-    }),
+        type: events.map((event) => event.type).join(" "),
+      }),
+    ),
   );
 }
 
-/** The organization's facts, built once (the same membership fact rides the organization's context
- *  and the member's account). Their shapes are the organization contract's (src/organization/). */
+/** A project on its organization's activity: `organization/project-added`, keyed by the project
+ *  (a creation asked again lands it once), after the organization's creation and its owner when
+ *  this creation minted it (a person's first project, catalog.ts `createProject`) — the owner's
+ *  membership on their account too. The deployment's own organization (the operator's projects
+ *  with no `orgId`) has no members and no page: nothing lands there. */
+function publishProjectAdded(
+  input: Pick<SessionInput, "contextNamespace" | "waitUntil">,
+  project: ProjectRecord & { mintedOrganization?: string },
+  caller: Caller,
+): void {
+  if (project.orgId === ADMIN_ORG_ID) return;
+  const added = {
+    type: "events.iterate.com/organization/project-added",
+    payload: { projectId: project.id, slug: project.slug },
+    idempotencyKey: `organization/project-added:${project.id}`,
+  };
+  if (!project.mintedOrganization)
+    return publishOrganizationFacts(input, caller, [[{ organization: project.orgId }, [added]]]);
+  const membership = memberAddedFact(project.orgId, caller.principal!.actor, "owner");
+  publishOrganizationFacts(input, caller, [
+    [
+      { organization: project.orgId },
+      [orgCreatedFact(project.mintedOrganization), membership, added],
+    ],
+    [{ account: caller.principal!.actor }, [membership]],
+  ]);
+}
+
+/** The facts more than one verb lands (their shapes are the organization contract's,
+ *  src/organization/): a membership rides the organization's log and the member's account alike. */
 const orgCreatedFact = (name: string): StreamEventInput => ({
   type: "events.iterate.com/organization/created",
   payload: { name },
+  idempotencyKey: "organization/created",
 });
-const orgRenamedFact = (name: string): StreamEventInput => ({
-  type: "events.iterate.com/organization/renamed",
-  payload: { name },
-});
-const orgDeletedFact = (): StreamEventInput => ({
-  type: "events.iterate.com/organization/deleted",
-  payload: {},
-});
-const memberAddedFact = (
-  orgId: string,
-  userId: string,
-  role: OrganizationRole,
-  { mint }: { mint?: true } = {},
-): StreamEventInput => ({
+const memberAddedFact = (orgId: string, userId: string, role: OrganizationRole) => ({
   type: "events.iterate.com/organization/member-added",
-  payload: { orgId, userId, role, mint },
+  payload: { orgId, userId, role },
 });
-const memberRemovedFact = (orgId: string, userId: string): StreamEventInput => ({
+const memberRemovedFact = (orgId: string, userId: string) => ({
   type: "events.iterate.com/organization/member-removed",
   payload: { orgId, userId },
-});
-const invitationCreatedFact = (invitation: InvitationRecord): StreamEventInput => ({
-  type: "events.iterate.com/organization/invitation-created",
-  payload: {
-    invitationId: invitation.id,
-    role: invitation.role,
-    emailHint: invitation.emailHint,
-    expiresAt: invitation.expiresAt,
-  },
-});
-const invitationAcceptedFact = (invitationId: string, userId: string): StreamEventInput => ({
-  type: "events.iterate.com/organization/invitation-accepted",
-  payload: { invitationId, userId },
-});
-const invitationRevokedFact = (invitationId: string): StreamEventInput => ({
-  type: "events.iterate.com/organization/invitation-revoked",
-  payload: { invitationId },
-});
-const projectAddedFact = (projectId: string, slug: string): StreamEventInput => ({
-  type: "events.iterate.com/organization/project-added",
-  payload: { projectId, slug },
 });
 
 /** What you authenticate into: a catalog that vends contexts. A session is NOT a context — it is
@@ -480,6 +451,7 @@ export class SessionRpcTarget extends RpcTarget {
   readonly #projects: ProjectCollectionRpcTarget;
   readonly #organizations: OrganizationCollectionRpcTarget;
   readonly #users: UserCollectionRpcTarget;
+  readonly #contexts: ContextSweepRpcTarget;
   readonly #input: SessionInput;
   readonly #authority: SessionAuthority;
 
@@ -498,6 +470,7 @@ export class SessionRpcTarget extends RpcTarget {
     this.#projects = new ProjectCollectionRpcTarget(session, sessionTeardown);
     this.#organizations = new OrganizationCollectionRpcTarget(session);
     this.#users = new UserCollectionRpcTarget(session);
+    this.#contexts = new ContextSweepRpcTarget(session);
   }
 
   [Symbol.dispose](): void {
@@ -552,6 +525,16 @@ export class SessionRpcTarget extends RpcTarget {
       platformOrigin: this.#input.platformOrigin,
       ingressRouting: this.#input.appConfig.urls.ingressRouting,
       mcpOrigin: this.#input.appConfig.urls.mcp,
+      iterateAppProviders: IterateAppProvider.options.filter((provider) =>
+        Boolean(this.#input.appConfig.integrations[provider]),
+      ),
+      iterateAppScopes: iterateAppScopesOf(this.#input.appConfig),
+      // as identity.ts `signInClientOf`: the sign-in's block, and the integration's client it uses
+      signInProviders: IdentityProvider.options.filter(
+        (provider) =>
+          Boolean(this.#input.appConfig.login[provider]) &&
+          Boolean(this.#input.appConfig.integrations[provider]),
+      ),
     };
   }
 
@@ -575,10 +558,12 @@ export class SessionRpcTarget extends RpcTarget {
 
   /** WHO this session is, as an event's stamp: the principal and the grant it acts through. */
   get #caller(): Caller {
+    const { principal, grant, scopes } = this.#authority;
     return {
-      principal: this.#authority.principal,
-      grant: this.#authority.grant,
+      principal,
+      grant,
       platformOrigin: this.#input.platformOrigin,
+      ...(grant && scopes?.includes("account") && !principal.impersonatedBy && { account: true }),
     };
   }
 
@@ -620,17 +605,29 @@ export class SessionRpcTarget extends RpcTarget {
     return this.#users;
   }
 
-  /** THE GLOBAL NAMESPACE'S ROOT `/`, for a platform admin: a context is (namespace, path), the
+  /** THE GLOBAL NAMESPACE'S ROOT `/`, for the operator: a context is (namespace, path), the
    *  namespace a project or the global one, and this handle's `cd` walks the global namespace as a
    *  project's walks its project — `global.cd("/users/<id>")`, `/organizations/<id>…`
-   *  (iterate-context.ts). For a person holding the `admin` scope (reach `every` only while
-   *  `admins` lists them, oauth.ts) alone: not the operator bearer, which names no person, and not
-   *  anyone else, whose global contexts stay reached by identity (`user`, `organizations.get`). */
+   *  (iterate-context.ts) — and its `secrets` are the deployment's own, lent to projects
+   *  (context/built-ins.ts `lend`). For a person holding the `admin` scope (reach `every` only
+   *  while `admins` lists them, oauth.ts), and for the operator bearer itself (actor `admin`, no
+   *  person: a script such as scripts/seed-instance-secrets.ts); not for anyone else, whose global
+   *  contexts stay reached by identity (`user`, `organizations.get`). */
   get global(): IterateContextRpcTarget {
     const { principal, reach, scopes } = this.#authority;
-    if (reach !== "every" || !principal.email || !scopes?.includes("admin"))
+    const operatorBearer = principal.actor === "admin" && !principal.email;
+    const platformAdmin = Boolean(principal.email) && scopes?.includes("admin");
+    if (reach !== "every" || !(operatorBearer || platformAdmin))
       throw codedError("FORBIDDEN", "Only a platform admin opens the global namespace.");
     return this.#globalContext("/", true);
+  }
+
+  /** THE CONTEXT SWEEP's reach (scripts/ci/context-sweep.ts) — the operator's alone: every
+   *  context Cloudflare lists, by id. */
+  get contexts(): ContextSweepRpcTarget {
+    if (this.#authority.reach !== "every")
+      throw codedError("FORBIDDEN", "Only the operator sweeps contexts.");
+    return this.#contexts;
   }
 
   /** The signed-in human's own context in the deployment-global namespace — an ORDINARY
@@ -681,14 +678,16 @@ type SessionOf = {
   organizationsWriter(verb: string): void;
 };
 
-/** The organization catalog. `list()` is the person's organizations, with their role (a grant
- *  narrowed to projects sees only the organizations those projects belong to — unless it holds
- *  `organizations:write`, which is the organizations themselves); `get(orgId)` vends the
- *  organization's context BY MEMBERSHIP (an org the session does not reach is FORBIDDEN, exactly as
- *  `projects.get` outside its reach); `create`, `rename`, `delete`, `addMember`, `removeMember`,
- *  `createInvitation`, `revokeInvitation` and `acceptInvitation` are each one call on the control
- *  plane under this caller, which checks the rest (an owner? the last owner? projects still held?
- *  a link still open?) against its catalog. */
+/** The organization catalog — THE DASH'S READ of organizations, straight from the control-plane
+ *  database: `list()` is the person's organizations, with their role (a grant narrowed to projects
+ *  sees only the organizations those projects belong to — unless it holds `organizations:write`,
+ *  which is the organizations themselves); `members(orgId)` and an owner's `invitations(orgId)` are
+ *  one organization's; `get(orgId)` vends the organization's context — its activity — BY MEMBERSHIP
+ *  (an org the session does not reach is FORBIDDEN, exactly as `projects.get` outside its reach).
+ *  `create`, `rename`, `delete`, `addMember`, `removeMember`, `createInvitation`,
+ *  `revokeInvitation` and `acceptInvitation` are each one call on the control plane under this
+ *  caller, which checks the rest (an owner? the last owner? projects still held? a link still
+ *  open?) against its catalog, and then publish the verb's facts (`publishOrganizationFacts`). */
 class OrganizationCollectionRpcTarget extends RpcTarget {
   readonly #session: SessionOf;
   constructor(session: SessionOf) {
@@ -697,8 +696,7 @@ class OrganizationCollectionRpcTarget extends RpcTarget {
   }
 
   /** The organizations this session reaches, narrowed as the docstring says. `fresh` re-reads the
-   *  person's memberships past the isolate's memo — the re-read before a refusal (edge.ts's rule),
-   *  so a membership that just landed elsewhere is admitted at once. */
+   *  person's memberships past the isolate's memo. */
   async #reachable(fresh = false): Promise<OrganizationRecord[]> {
     const { reach, scopes } = this.#session.authority;
     const { controlPlane } = this.#session.input;
@@ -713,11 +711,12 @@ class OrganizationCollectionRpcTarget extends RpcTarget {
     );
   }
 
-  list(): Promise<OrganizationRecord[]> {
-    return this.#reachable();
-  }
-
-  async get(orgId: string): Promise<IterateContextRpcTarget> {
+  /** `orgId`, when this session reaches it, as `list()` narrows it: a grant bound to projects
+   *  reaches only the organizations those projects belong to (unless it holds
+   *  `organizations:write`), so a personal access token opens no other organization. The admin
+   *  reaches every one. A miss is re-read once past the memo before it is refused: a membership
+   *  that just landed is admitted at once. */
+  async #reached(verb: string, orgId: string): Promise<string> {
     // ONE path segment — the catalog's `org_<hex>` — never a path: the id is interpolated into
     // `/organizations/<id>`, and `..` or `x/../users/<id>` would canonicalize onto another global
     // context (the admin reaches every org, so the membership check alone would not catch it).
@@ -725,12 +724,8 @@ class OrganizationCollectionRpcTarget extends RpcTarget {
     if (!/^[A-Za-z0-9_-]+$/.test(id))
       throw codedError(
         "FORBIDDEN",
-        `organizations.get(${JSON.stringify(id)}): an organization id is one path segment, never a path`,
+        `organizations.${verb}(${JSON.stringify(id)}): an organization id is one path segment, never a path`,
       );
-    // BY MEMBERSHIP, AS `list()` NARROWS IT: a grant bound to projects reaches only the organizations
-    // those projects belong to (unless it holds `organizations:write`), so a personal access token
-    // opens no other organization's context. The admin reaches every one. A miss is re-read once
-    // past the memo before it is refused: a membership that just landed is admitted at once.
     const reaches = (organizations: OrganizationRecord[]) =>
       organizations.some((organization) => organization.id === id);
     const reachable =
@@ -740,17 +735,34 @@ class OrganizationCollectionRpcTarget extends RpcTarget {
     if (!reachable)
       throw codedError(
         "FORBIDDEN",
-        `organizations.get(${JSON.stringify(id)}): not an organization this session belongs to`,
+        `organizations.${verb}(${JSON.stringify(id)}): not an organization this session belongs to`,
       );
-    return this.#session.globalContext(`/organizations/${id}`);
+    return id;
   }
 
-  /** An organization's members with their emails — the operator's alone (the project-seed CLI
-   *  captures an organization's membership with the project). */
+  /** Oldest first, read fresh, past the isolate's memo: the dash reads it again when a fact says it
+   *  changed. */
+  list(): Promise<OrganizationRecord[]> {
+    return this.#reachable(true);
+  }
+
+  async get(orgId: string): Promise<IterateContextRpcTarget> {
+    return this.#session.globalContext(`/organizations/${await this.#reached("get", orgId)}`);
+  }
+
+  /** An organization's members, with their emails and when they joined, in that order — for every
+   *  session that reaches it (the dash's members table, the project-seed CLI's capture). */
   async members(orgId: string): Promise<MemberRecord[]> {
-    if (this.#session.authority.reach !== "every")
-      throw codedError("FORBIDDEN", "Only the operator lists an organization's members.");
-    return this.#session.input.controlPlane.listMembers(z.string().min(1).parse(orgId));
+    const id = await this.#reached("members", orgId);
+    return this.#session.input.controlPlane.listMembers(id);
+  }
+
+  /** An organization's invitation links still open, oldest first — its owners' (the dash's list
+   *  to revoke from), and the operator's; anyone else is refused FORBIDDEN. An expired link stays
+   *  until revoked: `expiresAt` says it. */
+  async invitations(orgId: string): Promise<InvitationRecord[]> {
+    const { input, caller } = this.#session;
+    return input.controlPlane.listInvitations(caller, await this.#reached("invitations", orgId));
   }
 
   /** A new organization named `name`, the person its owner. The operator may name the owner. */
@@ -764,25 +776,17 @@ class OrganizationCollectionRpcTarget extends RpcTarget {
       .parse(input);
     const { input: sessionInput, caller } = this.#session;
     const record = await sessionInput.controlPlane.createOrganization(caller, data);
-    // Land the organization on its own context (the fold the dash renders); the owner's membership
-    // rides there — after the creation, in one ordered append — and on their account. The operator's
-    // scripts add members themselves (an owner named by the operator gets no session here).
+    // The operator's scripts add members themselves (an owner named by the operator gets no
+    // session here).
+    const created = orgCreatedFact(record.name);
     if (record.role === "owner") {
       const membership = memberAddedFact(record.id, caller.principal!.actor, "owner");
-      await foldPlatformFacts(
-        sessionInput,
-        [
-          [{ organization: record.id }, [orgCreatedFact(record.name), membership]],
-          [{ account: caller.principal!.actor }, membership],
-        ],
-        caller,
-      );
+      publishOrganizationFacts(sessionInput, caller, [
+        [{ organization: record.id }, [created, membership]],
+        [{ account: caller.principal!.actor }, [membership]],
+      ]);
     } else
-      await foldPlatformFacts(
-        sessionInput,
-        [[{ organization: record.id }, orgCreatedFact(record.name)]],
-        caller,
-      );
+      publishOrganizationFacts(sessionInput, caller, [[{ organization: record.id }, [created]]]);
     return record;
   }
 
@@ -799,16 +803,17 @@ class OrganizationCollectionRpcTarget extends RpcTarget {
       organizationId,
       data.name,
     );
-    await foldPlatformFacts(
-      sessionInput,
-      [[{ organization: organizationId }, orgRenamedFact(record.name)]],
-      caller,
-    );
+    publishOrganizationFacts(sessionInput, caller, [
+      [
+        { organization: organizationId },
+        [{ type: "events.iterate.com/organization/renamed", payload: { name: record.name } }],
+      ],
+    ]);
     return { ...record, role: "owner" };
   }
 
   /** Delete an organization the person owns, while it holds no project. The deletion lands on the
-   *  organization's own context, and each membership ends on the member's account. */
+   *  organization's own context, and each membership's end on the member's account. */
   async delete(orgId: string): Promise<void> {
     this.#session.organizationsWriter("delete");
     const { input: sessionInput, caller } = this.#session;
@@ -816,17 +821,22 @@ class OrganizationCollectionRpcTarget extends RpcTarget {
     // The members, read before the delete refuses or succeeds — to end their memberships below.
     const members = await sessionInput.controlPlane.listMembers(organizationId);
     await sessionInput.controlPlane.deleteOrganization(caller, organizationId);
-    await foldPlatformFacts(
-      sessionInput,
+    publishOrganizationFacts(sessionInput, caller, [
+      ...members.map(({ userId }): [FactOwner, StreamEventInput[]] => [
+        { account: userId },
+        [memberRemovedFact(organizationId, userId)],
+      ]),
       [
-        ...members.map(({ userId }): [FactOwner, StreamEventInput] => [
-          { account: userId },
-          memberRemovedFact(organizationId, userId),
-        ]),
-        [{ organization: organizationId }, orgDeletedFact()],
+        { organization: organizationId },
+        [
+          {
+            type: "events.iterate.com/organization/deleted",
+            payload: {},
+            idempotencyKey: "organization/deleted",
+          },
+        ],
       ],
-      caller,
-    );
+    ]);
   }
 
   /** Add a person to an organization the caller owns, as an owner or a member. */
@@ -842,14 +852,10 @@ class OrganizationCollectionRpcTarget extends RpcTarget {
     const organizationId = z.string().min(1).parse(orgId);
     const userId = await sessionInput.controlPlane.addMember(caller, organizationId, data);
     const fact = memberAddedFact(organizationId, userId, data.role);
-    await foldPlatformFacts(
-      sessionInput,
-      [
-        [{ organization: organizationId }, fact],
-        [{ account: userId }, fact],
-      ],
-      caller,
-    );
+    publishOrganizationFacts(sessionInput, caller, [
+      [{ organization: organizationId }, [fact]],
+      [{ account: userId }, [fact]],
+    ]);
   }
 
   /** Remove a person from an organization the caller owns. */
@@ -860,22 +866,19 @@ class OrganizationCollectionRpcTarget extends RpcTarget {
     const organizationId = z.string().min(1).parse(orgId);
     const userId = await sessionInput.controlPlane.removeMember(caller, organizationId, data);
     const fact = memberRemovedFact(organizationId, userId);
-    await foldPlatformFacts(
-      sessionInput,
-      [
-        [{ organization: organizationId }, fact],
-        [{ account: userId }, fact],
-      ],
-      caller,
-    );
+    publishOrganizationFacts(sessionInput, caller, [
+      [{ organization: organizationId }, [fact]],
+      [{ account: userId }, [fact]],
+    ]);
+    await endLendsOutOfReach(sessionInput, userId);
   }
 
   /** A new INVITATION LINK to an organization the caller owns: whoever signs in and accepts it
    *  first joins in `role` (default member), until it expires (`expiresInDays`, default 7, at most
    *  30). Answers the invitation with its `token` — the link's secret, shown this once (the
-   *  control plane keeps only its SHA-256); the dash puts it in `/invitations/<token>`. The
-   *  organization's record lists it as pending until it is accepted or revoked. `emailHint` is who
-   *  it is meant for, a note for the owners — never checked against who accepts. */
+   *  control plane keeps only its SHA-256); the dash puts it in `/invitations/<token>`.
+   *  `invitations(orgId)` lists it as open until it is accepted or revoked. `emailHint` is who it
+   *  is meant for, a note for the owners — never checked against who accepts. */
   async createInvitation(
     orgId: string,
     input: { role?: OrganizationRole; emailHint?: string; expiresInDays?: number } = {},
@@ -902,11 +905,22 @@ class OrganizationCollectionRpcTarget extends RpcTarget {
       emailHint: data.emailHint,
       expiresAt: Date.now() + data.expiresInDays * 86_400_000,
     });
-    await foldPlatformFacts(
-      sessionInput,
-      [[{ organization: organizationId }, invitationCreatedFact(invitation)]],
-      caller,
-    );
+    publishOrganizationFacts(sessionInput, caller, [
+      [
+        { organization: organizationId },
+        [
+          {
+            type: "events.iterate.com/organization/invitation-created",
+            payload: {
+              invitationId: invitation.id,
+              role: invitation.role,
+              emailHint: invitation.emailHint,
+              expiresAt: invitation.expiresAt,
+            },
+          },
+        ],
+      ],
+    ]);
     return { ...invitation, token };
   }
 
@@ -918,11 +932,17 @@ class OrganizationCollectionRpcTarget extends RpcTarget {
     const { input: sessionInput, caller } = this.#session;
     const organizationId = z.string().min(1).parse(orgId);
     await sessionInput.controlPlane.revokeInvitation(caller, organizationId, data.invitationId);
-    await foldPlatformFacts(
-      sessionInput,
-      [[{ organization: organizationId }, invitationRevokedFact(data.invitationId)]],
-      caller,
-    );
+    publishOrganizationFacts(sessionInput, caller, [
+      [
+        { organization: organizationId },
+        [
+          {
+            type: "events.iterate.com/organization/invitation-revoked",
+            payload: { invitationId: data.invitationId },
+          },
+        ],
+      ],
+    ]);
   }
 
   /** What an invitation link opens, for the signed-in person holding it — the organization's name
@@ -951,21 +971,23 @@ class OrganizationCollectionRpcTarget extends RpcTarget {
       caller,
       await sha256Hex(z.string().min(1).parse(token)),
     );
-    // landed again on a retry by the same person: the fold absorbs both, and `role` is the
-    // membership as it stands, so a promotion since is never rewound
+    // published again on a retry by the same person: `role` is the membership as it stands, so the
+    // activity never shows a promotion since rewound
     if (accepted) {
       const membership = memberAddedFact(invitation.orgId, userId, role);
-      await foldPlatformFacts(
-        sessionInput,
+      publishOrganizationFacts(sessionInput, caller, [
         [
+          { organization: invitation.orgId },
           [
-            { organization: invitation.orgId },
-            [invitationAcceptedFact(invitation.id, userId), membership],
+            {
+              type: "events.iterate.com/organization/invitation-accepted",
+              payload: { invitationId: invitation.id, userId },
+            },
+            membership,
           ],
-          [{ account: userId }, membership],
         ],
-        caller,
-      );
+        [{ account: userId }, [membership]],
+      ]);
     }
     const row = (await sessionInput.controlPlane.accessibleTo(userId, true)).organizations.find(
       (organization) => organization.id === invitation.orgId,
@@ -988,11 +1010,17 @@ class ProjectCollectionRpcTarget extends RpcTarget {
     this.#sessionTeardown = sessionTeardown;
   }
 
-  /** The projects this session reaches, as catalog rows: the projects of the orgs the user
-   *  belongs to, with their role — narrowed to the projects a grant chose; for the admin secret,
-   *  every project (no role). */
+  /** The projects this session reaches, as catalog rows, oldest first: the projects of the orgs
+   *  the user belongs to, with their role — narrowed to the projects a grant chose; for the admin
+   *  secret, every project (no role). A grant bound to projects with no user lists them in the
+   *  grant's order. Read fresh, past the isolate's memo: the dash reads it again when a fact says
+   *  it changed. */
   list(): Promise<ProjectRecord[]> {
-    return this.#session.input.controlPlane.reachableProjects(this.#session.authority.reach);
+    return this.#session.input.controlPlane.reachableProjects(
+      this.#session.authority.reach,
+      [],
+      true,
+    );
   }
 
   /** The built-in config repo templates a creation may name (generated/config-templates.js); naming
@@ -1004,16 +1032,17 @@ class ProjectCollectionRpcTarget extends RpcTarget {
   /** Create the project named `project` (slugified into its hostname label; its id is minted —
    *  or, for the operator restoring a project seed, the archived `restoreProjectId` — the returned
    *  context's `whoami()` says it, so does `list()`) — in the organization named, or
-   *  the user's own (the first by name when they have several, created on first use when they
-   *  have none), or in the deployment's own for the admin secret — and vend its root context. The
+   *  the user's own (the oldest when they have several, created on first use when they have
+   *  none), or in the deployment's own for the admin secret — and vend its root context. The
    *  config repo template is PINNED to a commit here (a resumed creation always reads the same
    *  tree); the control plane refuses a slug ANY other organization holds (PROJECT_NAME_TAKEN),
    *  answers the same organization's again with the same project, and opens the project's own saga
    *  on its root (src/project/processor.ts seeds it from the template — the dash watches that
-   *  facet's live state). Whoever creates it, the project then lands on its organization's record,
-   *  which the dash lists (`landProjectOnOrganization`); the same creation again lands nothing
-   *  twice, so a project seed's `apply` converges an existing project through this same call. A
-   *  grant narrowed to named projects creates none: FORBIDDEN. */
+   *  facet's live state). Whoever creates it, `organization/project-added` then lands on its
+   *  organization's activity, keyed by the project, so the same creation again (a project seed's
+   *  `apply` converging an existing project) lands it once; an organization the creation minted
+   *  gets its creation and its owner first. A grant narrowed to named projects creates none:
+   *  FORBIDDEN. */
   async create(input: {
     project: string;
     orgId?: string;
@@ -1075,9 +1104,10 @@ class ProjectCollectionRpcTarget extends RpcTarget {
           ],
         ]),
       );
-      // The organization's record, before the answer: the dash lists the project as soon as it has
-      // it. The member's account is not waited on.
-      await landProjectOnOrganization(sessionInput, created, caller, waits);
+      publishProjectAdded(sessionInput, created, caller);
+      await waits.time("everyProjectLends", () =>
+        borrowEveryProjectLends(sessionInput, created.id, caller),
+      );
       return context;
     } finally {
       waits.report({ projectId: project?.id, orgId: project?.orgId });
@@ -1089,8 +1119,9 @@ class ProjectCollectionRpcTarget extends RpcTarget {
    *  reach (`reachableProjectId`), and the id alone goes on: the DO name's host, a grant's list,
    *  `whoami()`. A project only — a context name belongs to `cd`. Outside this session's reach is
    *  FORBIDDEN; so is the global namespace's id (it is no project: a platform admin reaches it as
-   *  `session.global`). The admin secret alone addresses a project the catalog never heard of, by
-   *  id (a fresh context of its own). */
+   *  `session.global`). The admin secret alone addresses a project the catalog never heard of — by
+   *  a `prj_…` id only (a fresh context of its own: the e2e suite's contexts); a slug the catalog
+   *  does not hold is refused for every caller (control-plane/edge.ts `projectIdOf`). */
   async get(project: string): Promise<IterateContextRpcTarget> {
     const address = DurableObjectNameCodec.parse(project);
     if (address.path !== "/")
@@ -1113,6 +1144,64 @@ class ProjectCollectionRpcTarget extends RpcTarget {
     return this.#context(id);
   }
 
+  /** DELETE the project — the owner of its organization, or the operator. Every step is keyed, so
+   *  a delete that failed part way is simply asked again: the control plane says who may (catalog.ts
+   *  `projectToDelete`); the root is asked to delete it, as the platform's own fact; and the
+   *  control plane drops its row, from which moment the edge admits no request to it (a root that
+   *  is reached anyway refuses its birth: `#refuseBirthOfDeletedProjectRoot` in
+   *  iterate-context-durable-object.ts), and then `organization/project-removed` lands on its
+   *  organization's activity. The deletion saga on the root (project/processor.ts) destroys every
+   *  context, its hostnames, kv, files and repos, and the root last, once the row is gone; the
+   *  answer does not wait for it. */
+  async delete(project: string): Promise<void> {
+    const { input: sessionInput, caller } = this.#session;
+    const address = DurableObjectNameCodec.parse(project);
+    const id =
+      address.path === "/" && address.projectId !== GLOBAL_PROJECT_ID
+        ? await sessionInput.controlPlane.reachableProjectId(
+            this.#session.authority.reach,
+            address.projectId,
+          )
+        : null;
+    if (!id)
+      throw codedError("FORBIDDEN", `projects.delete(${JSON.stringify(project)}): no such project`);
+    const doomed = await sessionInput.controlPlane.projectToDelete(caller, id);
+    const root = sessionInput.contextNamespace.getByName(
+      DurableObjectNameCodec.stringify({ projectId: id, path: "/" }),
+    );
+    await root.invoke(["itx", "processors", ["enable", "project"]], [], caller);
+    await root.invoke(
+      [
+        "itx",
+        "builtins",
+        [
+          "append",
+          {
+            type: "events.iterate.com/project/delete-requested",
+            idempotencyKey: "project/delete-requested",
+            payload: {},
+          },
+        ],
+      ],
+      [],
+      { ...caller, platform: true },
+    );
+    await sessionInput.controlPlane.deleteProject(caller, id);
+    if (doomed.orgId !== ADMIN_ORG_ID)
+      publishOrganizationFacts(sessionInput, caller, [
+        [
+          { organization: doomed.orgId },
+          [
+            {
+              type: "events.iterate.com/organization/project-removed",
+              idempotencyKey: `organization/project-removed:${id}`,
+              payload: { projectId: id, slug: doomed.slug },
+            },
+          ],
+        ],
+      ]);
+  }
+
   #context(projectId: string): IterateContextRpcTarget {
     this.#session.input.onProjectAccess?.(projectId);
     return new IterateContextRpcTarget(
@@ -1122,6 +1211,63 @@ class ProjectCollectionRpcTarget extends RpcTarget {
       this.#session.input.waitUntil,
       this.#session.caller,
     );
+  }
+}
+
+/** THE CONTEXT SWEEP (scripts/ci/context-sweep.ts): the contexts Cloudflare lists, by id — each
+ *  says who it is from its own birth record (iterate-context-durable-object.ts `identity`), without
+ *  recording a wake — and an orphan's destruction: a context of a project the control plane no longer
+ *  holds, which its project's deletion missed. */
+class ContextSweepRpcTarget extends RpcTarget {
+  readonly #session: SessionOf;
+  constructor(session: SessionOf) {
+    super();
+    this.#session = session;
+  }
+
+  /** Who each id is — its project and path — or why it could not say. */
+  async identify(
+    ids: string[],
+  ): Promise<({ id: string; projectId: string; path: string } | { id: string; error: string })[]> {
+    const namespace = this.#session.input.contextNamespace;
+    return Promise.all(
+      z
+        .array(z.string().regex(/^[0-9a-f]{64}$/))
+        .parse(ids)
+        .map(async (id) => {
+          try {
+            return { id, ...(await namespace.get(namespace.idFromString(id)).identity()) };
+          } catch (error) {
+            return { id, error: String(error).slice(0, 300) };
+          }
+        }),
+    );
+  }
+
+  /** Destroy the context `id`, an orphan: refused for a global context, and for one whose project
+   *  the control plane still holds (its registry is the project deletion's to use). */
+  async destroy(id: string): Promise<{ projectId: string; path: string }> {
+    const namespace = this.#session.input.contextNamespace;
+    const stub = namespace.get(
+      namespace.idFromString(
+        z
+          .string()
+          .regex(/^[0-9a-f]{64}$/)
+          .parse(id),
+      ),
+    );
+    const { projectId, path } = await stub.identity();
+    if (projectId === GLOBAL_PROJECT_ID)
+      throw codedError("FORBIDDEN", `${path} is a global context: the sweep leaves it alone.`);
+    // by id alone: the lookup also answers a slug, and a stray born under a live project's SLUG
+    // (an operator addressing `templestein` as an id) is no part of that project. Fresh: a row this
+    // isolate keeps may be of a project deleted through another one
+    if ((await this.#session.input.controlPlane.getProject(projectId, true))?.id === projectId)
+      throw codedError("FORBIDDEN", `${projectId} still exists: ${path} is no orphan.`);
+    await stub.destroy().catch((error: unknown) => {
+      if (!String(error).includes(CONTEXT_DESTROYED)) throw error;
+    });
+    return { projectId, path };
   }
 }
 
@@ -1182,10 +1328,6 @@ export class SessionTeardown {
     this.#undoByKey.clear();
   }
 }
-
-// THE PUBLISHED API IS DECLARED, NOT GENERATED (iterate/api): this root satisfies it, checked here.
-const _iterateApi: IterateApi = null as unknown as IterateRpcTarget;
-void _iterateApi;
 
 /** An invitation link's secret: 32 random bytes, base64url — the one path segment of
  *  `/invitations/<token>`, unguessable. The control plane keeps only its `sha256Hex` (`token_hash`),

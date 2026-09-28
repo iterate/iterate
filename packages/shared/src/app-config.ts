@@ -7,7 +7,8 @@
 // `APP_CONFIG_URLS__OS`, `APP_CONFIG_LOGIN__PASSWORD`. The parser merges it on top of the object, so
 // a deployment's generated vars (envs.ts) and its secrets (Doppler) compose, and a laptop's
 // gitignored `.dev.vars` names one local origin without restating the rest. A blank var is unset.
-// A key the schema does not name is warned about loudly and dropped, never silently kept.
+// A key the schema does not name, in the object or as a var, is warned about loudly and dropped,
+// never silently kept.
 //
 // The schemas: the platform's in apps/os/src/app-config.ts, the apps on top's in
 // start-app-config.ts.
@@ -16,7 +17,9 @@ import { z } from "zod";
 
 /** Parse `schema` out of `env` (a worker env, or any record — only `APP_CONFIG` and the
  *  `APP_CONFIG_*` keys are read; a blank one is unset). Pure. A malformed field throws naming
- *  itself in both spellings (`fieldNameOf`). */
+ *  itself in both spellings (`fieldNameOf`); a key the schema does not name is warned about, named
+ *  the same way, and dropped. Unknown keys are tolerated because parallel branches add Doppler
+ *  keys; a key one branch adds must not fail another's deploy — owner decision 2026-09-26. */
 export function parseAppConfigVars<Schema extends z.ZodTypeAny>(
   env: object,
   schema: Schema,
@@ -78,8 +81,9 @@ function envVarNameOf(path: readonly PropertyKey[]): string {
     .join("__")}`;
 }
 
-/** Warn, loudly, about a key the schema does not name — in the object or an `APP_CONFIG_*` override,
- *  checked once on the merged config. Walks the plain objects only; a record accepts any key. */
+/** Warn, loudly, once per key, about a key the schema does not name — in the object or an
+ *  `APP_CONFIG_*` override, checked once on the merged config; the schema's parse then drops it.
+ *  Walks the plain objects only; a record accepts any key. */
 function warnUnknownKeys(raw: unknown, schema: z.ZodTypeAny, path: string[]): void {
   const object = z.record(z.string(), z.unknown()).safeParse(raw);
   if (!object.success) return;
@@ -96,7 +100,7 @@ function warnUnknownKeys(raw: unknown, schema: z.ZodTypeAny, path: string[]): vo
     const child = current.shape[key] as z.ZodTypeAny | undefined;
     if (!child) {
       console.warn(
-        `APP_CONFIG: unknown key "${[...path, key].join(".")}" — not in the schema, ignored. Remove it, or add it to the schema.`,
+        `${fieldNameOf([...path, key])}: not in the schema, ignored — remove it, or add it to the schema`,
       );
       continue;
     }

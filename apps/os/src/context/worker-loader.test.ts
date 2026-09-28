@@ -10,7 +10,9 @@
 // `getCode` (a cold isolate only) and is refused without a cacheKey. The last row pins the workerd
 // WORKAROUND (worker-loader.ts `loaderIdGenerations`): a producer that threw marks its id dead, the
 // next attempt produces outside the loader and loads literally under the id's next generation, and
-// the callers that find it dead while that attempt runs wait on it (two rows, under load).
+// the callers that find it dead while that attempt runs wait on it (two rows, under load). A
+// producer's lost connection is read once more first (platform-retry.ts `ONCE_NOW`), so only a
+// failure that stands marks the id dead.
 import { expect, test } from "vitest";
 import { DurableObjectNameCodec } from "./paths.ts";
 import {
@@ -22,41 +24,17 @@ import {
 test("two literal sources whose djb2 hashes collide never share one Worker Loader cacheKey", async () => {
   // djb2("Aa") === djb2("B@") — one 32-bit hash, two sources.
   const { env, keys } = fakeLoaderEnv();
-  const load = (main: string) =>
-    loadConfined({
-      env,
-      deployId: "deploy-1",
-      platformOrigin: null,
-      itxEntrypoint: {} as Fetcher,
-      kind: "worker",
-      owner: "prj_u.iterate/",
-      source: { "worker.js": main },
-      invoke: () => Promise.reject(new Error("literal modules — nothing to invoke")),
-      where: "workers.get",
-    });
-  await load("Aa");
-  await load("B@");
+  await loadConfined(env, { source: { "worker.js": "Aa" } });
+  await loadConfined(env, { source: { "worker.js": "B@" } });
   expect(new Set(keys)).toMatchObject({ size: 2 });
 });
 
 test("an owner and a caller's cacheKey that concatenate alike never share one Worker Loader cacheKey", async () => {
   // owner "…/x" + key "y:z" vs owner "…/x:y" + key "z": joined with ":" they would spell ONE id.
   const { env, keys } = fakeLoaderEnv();
-  const load = (owner: string, cacheKey: string) =>
-    loadConfined({
-      env,
-      deployId: "deploy-1",
-      platformOrigin: null,
-      itxEntrypoint: {} as Fetcher,
-      kind: "worker",
-      owner,
-      source: { "worker.js": "export default class W {}" },
-      cacheKey,
-      invoke: () => Promise.reject(new Error("literal modules — nothing to invoke")),
-      where: "workers.get",
-    });
-  await load("prj_u.iterate/x", "y:z");
-  await load("prj_u.iterate/x:y", "z");
+  const source = { "worker.js": "export default class W {}" };
+  await loadConfined(env, { owner: "prj_u.iterate/x", cacheKey: "y:z", source });
+  await loadConfined(env, { owner: "prj_u.iterate/x:y", cacheKey: "z", source });
   expect(new Set(keys)).toMatchObject({ size: 2 });
 });
 
@@ -68,15 +46,10 @@ test("two DIFFERENT facet identities never share one Worker Loader cacheKey", as
   const { env, keys } = fakeLoaderEnv();
   const modules = { "worker.js": "export default class Tally {}" };
   const load = (iterateContextName: string, className: string) =>
-    loadConfined({
-      env,
-      deployId: "deploy-1",
-      platformOrigin: null,
-      itxEntrypoint: {} as Fetcher,
+    loadConfined(env, {
       kind: "facet",
       owner: [iterateContextName, className],
       source: modules,
-      invoke: () => Promise.reject(new Error("literal modules — nothing to invoke")),
       where: `facet "${className}"`,
     });
   await load(DurableObjectNameCodec.stringify({ projectId: "prj_u", path: "/x:y" }), "Tally");
@@ -95,18 +68,7 @@ test("a producer source runs INSIDE getCode — once per cold isolate, never on 
     return { "worker.js": "export default class Built {}" };
   };
   const load = (cacheKey?: string) =>
-    loadConfined({
-      env,
-      deployId: "deploy-1",
-      platformOrigin: null,
-      itxEntrypoint: {} as Fetcher,
-      kind: "worker",
-      owner: "prj_u.iterate/",
-      source: "itx.build('todo')",
-      cacheKey,
-      invoke,
-      where: "workers.get",
-    });
+    loadConfined(env, { source: "itx.build('todo')", cacheKey, invoke });
   // refused without a key: hashing the expression would be the stale-code trap
   await expect(load()).rejects.toThrow(/needs a cacheKey/);
   expect(produced).toBe(0);
@@ -130,21 +92,10 @@ test("a producer source runs INSIDE getCode — once per cold isolate, never on 
 
 test("literal modules: the key is their content hash unless the caller names a cacheKey", async () => {
   const { env, keys } = fakeLoaderEnv();
-  const base = {
-    env,
-    deployId: "deploy-1",
-    platformOrigin: null,
-    itxEntrypoint: {} as Fetcher,
-    kind: "worker" as const,
-    owner: "prj_u.iterate/",
-    invoke: () => Promise.reject(new Error("literal modules — nothing to invoke")),
-    where: "workers.get",
-  };
-  const a = await loadConfined({ ...base, source: { "worker.js": "export default 1" } });
-  const b = await loadConfined({ ...base, source: { "worker.js": "export default 2" } });
+  const a = await loadConfined(env, { source: { "worker.js": "export default 1" } });
+  const b = await loadConfined(env, { source: { "worker.js": "export default 2" } });
   expect(a).not.toMatchObject({ loaderId: b.loaderId }); // content decides
-  const named = await loadConfined({
-    ...base,
+  const named = await loadConfined(env, {
     source: { "worker.js": "export default 1" },
     cacheKey: "v7",
   });
@@ -152,7 +103,7 @@ test("literal modules: the key is their content hash unless the caller names a c
     loaderId: JSON.stringify(["worker", "deploy-1", null, "prj_u.iterate/", "v7"]),
   });
   expect(keys.at(-1)).toBe(named.loaderId);
-  await expect(loadConfined({ ...base, source: { "lib.js": "export default 1" } })).rejects.toThrow(
+  await expect(loadConfined(env, { source: { "lib.js": "export default 1" } })).rejects.toThrow(
     /no entry/,
   );
 });
@@ -167,18 +118,7 @@ test("WORKAROUND: a producer that threw marks its id dead; the next attempt prod
     return { "worker.js": "export default class Built {}" };
   };
   const load = () =>
-    loadConfined({
-      env,
-      deployId: "deploy-1",
-      platformOrigin: null,
-      itxEntrypoint: {} as Fetcher,
-      kind: "worker",
-      owner: "prj_u.iterate/",
-      source: "itx.build('todo')",
-      cacheKey: "todo@dead",
-      invoke,
-      where: "workers.get",
-    });
+    loadConfined(env, { source: "itx.build('todo')", cacheKey: "todo@dead", invoke });
   // 1. the producer throws INSIDE getCode — workerd keeps that rejection under the id forever
   const first = await load();
   expect(first).toMatchObject({
@@ -210,18 +150,7 @@ test("WORKAROUND: a producer that threw marks its id dead; the next attempt prod
 
 test("a source that keeps failing to resolve mints one loader id, not one per retry: the recovery resolves outside the loader", async () => {
   const { env, keys } = fakeLoaderEnv();
-  const retry = () =>
-    loadConfined({
-      env,
-      deployId: "deploy-1",
-      platformOrigin: null,
-      itxEntrypoint: {} as Fetcher,
-      kind: "worker",
-      owner: "prj_u.iterate/",
-      source: { "worker.js": `import "./missing.js";` },
-      invoke: () => Promise.reject(new Error("literal files — nothing to invoke")),
-      where: "workers.get",
-    });
+  const retry = () => loadConfined(env, { source: { "worker.js": `import "./missing.js";` } });
   await retry(); // the cold load resolves inside getCode, fails, and marks the id dead
   await settled();
   for (let attempt = 0; attempt < 3; attempt++)
@@ -232,46 +161,68 @@ test("a source that keeps failing to resolve mints one loader id, not one per re
 test("WORKAROUND, under load: every caller that finds the id dead while its recovery runs waits on that one recovery — 50 concurrent callers run the producer once, not 50 times", async () => {
   // prd, 2026-09-24 14:36 UTC: the config worker's first load after a deploy failed, a scanner sent
   // 4,502 requests in 31 s, and each ran its own producer — ~915 `repo.modules` calls at once.
-  const { env, keys } = fakeLoaderEnv();
+  const { env, keys, warm } = fakeLoaderEnv();
   const host = {} as Fetcher; // a context's one `itxEntrypoint` stub per incarnation
   let produced = 0;
-  let failFirst = true;
+  let failures = 2;
   let release!: () => void;
   const slow = new Promise<void>((resolve) => (release = resolve));
   const invoke = async () => {
     produced++;
-    if (failFirst) {
-      failFirst = false;
+    if (failures > 0) {
+      failures--;
       throw new Error("Network connection lost.");
     }
     await slow; // a cold repo fetch: 1–2 s on prd, 40–60 s under the herd
     return { "worker.js": "export default class Site {}" };
   };
   const load = (itxEntrypoint = host) =>
-    loadConfined({
-      env,
-      deployId: "deploy-1",
-      platformOrigin: null,
+    loadConfined(env, {
       itxEntrypoint,
-      kind: "worker",
-      owner: "prj_u.iterate/",
       source: ["itx", "repos", ["get", "/repos/config"], ["modules", { commitOid: "c0ffee" }]],
       cacheKey: "c0ffee",
       invoke,
-      where: "workers.get",
     });
   const dead = JSON.stringify(["worker", "deploy-1", null, "prj_u.iterate/", "c0ffee"]);
-  await load(); // the first load's producer throws inside getCode: the id is dead
-  await settled();
-  expect(produced).toBe(1);
+  // the first load's producer loses its connection, and again on its one repeat, inside getCode:
+  // the id is dead
+  await load();
+  await expect(warm.get(dead)).rejects.toThrow(/Network connection lost/);
+  expect(produced).toBe(2);
   const herd = Array.from({ length: 50 }, () => load());
   await settled();
-  expect(produced).toBe(2); // one recovery, however many callers
+  expect(produced).toBe(3); // one recovery, however many callers
   release();
   const recovered = await Promise.all(herd);
   expect(new Set(recovered.map((r) => r.loaderId))).toEqual(new Set([`${dead}#1`]));
-  expect(produced).toBe(2);
+  expect(produced).toBe(3);
   expect(new Set(keys)).toEqual(new Set([dead, `${dead}#1`]));
+});
+
+test("a producer that loses its connection once inside getCode is read once more, and the id stays live: no dead mark, no next generation", async () => {
+  const { env, keys, warm } = fakeLoaderEnv();
+  let produced = 0;
+  const invoke = async () => {
+    produced++;
+    if (produced === 1) throw new Error("Network connection lost.");
+    return { "worker.js": "export default class Site {}" };
+  };
+  const load = () =>
+    loadConfined(env, {
+      owner: "prj_lost_once.iterate/",
+      source: "itx.build('site')",
+      cacheKey: "site@lost-once",
+      invoke,
+    });
+  const first = await load();
+  await expect(warm.get(first.loaderId)).resolves.toMatchObject({
+    modules: { "worker.js": "export default class Site {}" },
+  });
+  expect(produced).toBe(2);
+  // warm under the same id: the lost connection marked nothing dead
+  await expect(load()).resolves.toMatchObject({ loaderId: first.loaderId });
+  expect(produced).toBe(2);
+  expect(new Set(keys)).toEqual(new Set([first.loaderId]));
 });
 
 test("WORKAROUND, under load: a recovery that fails fails every caller waiting on it, and the next caller starts a fresh one; a recovery another incarnation started is never waited on", async () => {
@@ -285,17 +236,12 @@ test("WORKAROUND, under load: a recovery that fails fails every caller waiting o
     return { "worker.js": "export default class Site {}" };
   };
   const load = (itxEntrypoint: Fetcher) =>
-    loadConfined({
-      env,
-      deployId: "deploy-1",
-      platformOrigin: null,
+    loadConfined(env, {
       itxEntrypoint,
-      kind: "worker",
       owner: "prj_v.iterate/",
       source: "itx.build('site')",
       cacheKey: "site@1",
       invoke,
-      where: "workers.get",
     });
   const incarnation1 = {} as Fetcher;
   await load(incarnation1); // dies inside getCode
@@ -320,17 +266,10 @@ test("WORKAROUND, under load: a recovery that fails fails every caller waiting o
 
 test("retire(): a burst of calls that failed on one identity retires it once, and a late retire from a replaced identity never sends the next generation back to it", async () => {
   const { env } = fakeLoaderEnv();
-  const opts = {
-    env,
-    deployId: "deploy-1",
-    platformOrigin: null,
-    itxEntrypoint: {} as Fetcher,
-    kind: "worker" as const,
+  const opts = workerOptions(env, {
     owner: "prj_retire.iterate/",
     source: { "worker.js": "export default {}" },
-    invoke: () => Promise.reject(new Error("literal modules — nothing to invoke")),
-    where: "workers.get",
-  };
+  });
   // two calls on generation 0 meet the clone-version failure together: one retirement
   const [a, b] = await Promise.all([prepareConfinedWorker(opts), prepareConfinedWorker(opts)]);
   a.retire();
@@ -345,17 +284,14 @@ test("retire(): a burst of calls that failed on one identity retires it once, an
 
 test("prepare resolves the identity without asking the loader; load() is the one call that does, and a repeat is the loader's cache to answer", async () => {
   const { env, keys, warm } = fakeLoaderEnv();
-  const prepared = await prepareConfinedWorker({
-    env,
-    deployId: "deploy-1",
-    platformOrigin: null,
-    itxEntrypoint: {} as Fetcher,
-    kind: "facet",
-    owner: ["prj_u.iterate/", "Counter"],
-    source: { "worker.js": "export default class Counter {}" },
-    invoke: () => Promise.reject(new Error("literal modules — nothing to invoke")),
-    where: 'facet "counter"',
-  });
+  const prepared = await prepareConfinedWorker(
+    workerOptions(env, {
+      kind: "facet",
+      owner: ["prj_u.iterate/", "Counter"],
+      source: { "worker.js": "export default class Counter {}" },
+      where: 'facet "counter"',
+    }),
+  );
   expect(keys).toEqual([]); // `FacetHost#callFacet` stores this identity before any isolate exists
   // the stored restart marker: respelling it restarts every facet once on its next wake
   expect(JSON.parse(prepared.loaderId)).toEqual([
@@ -390,16 +326,7 @@ test("a facet's literal source over the ceiling is refused, coded; a producer ex
 
 test("the platform origin the ITX stub was minted with is part of the loader id: an isolate minted before a self-host learned its origin is never reused after", async () => {
   const { env } = fakeLoaderEnv();
-  const opts = {
-    env,
-    deployId: "deploy-1",
-    itxEntrypoint: {} as Fetcher,
-    kind: "worker" as const,
-    owner: "prj_u.iterate/",
-    source: { "worker.js": "export default class A {}" },
-    invoke: () => Promise.reject(new Error("literal modules — nothing to invoke")),
-    where: "workers.get",
-  };
+  const opts = workerOptions(env, { source: { "worker.js": "export default class A {}" } });
   const before = await prepareConfinedWorker({ ...opts, platformOrigin: null });
   const after = await prepareConfinedWorker({ ...opts, platformOrigin: "https://os.example" });
   const again = await prepareConfinedWorker({ ...opts, platformOrigin: "https://os.example" });
@@ -429,10 +356,30 @@ const fakeLoaderEnv = () => {
   return { env, keys, warm };
 };
 
+type ConfinedWorkerOptions = Parameters<typeof prepareConfinedWorker>[0];
+
+/** A confined worker's options over `env`: a worker of `prj_u.iterate/` on deploy-1 with no platform
+ *  origin, a fresh `itxEntrypoint` stand-in (the one cast) and literal modules nothing invokes, with
+ *  what a row varies in `overrides`. */
+const workerOptions = (
+  env: ConfinedWorkerOptions["env"],
+  overrides: Partial<ConfinedWorkerOptions> & Pick<ConfinedWorkerOptions, "source">,
+): ConfinedWorkerOptions => ({
+  env,
+  deployId: "deploy-1",
+  platformOrigin: null,
+  itxEntrypoint: {} as Fetcher,
+  kind: "worker",
+  owner: "prj_u.iterate/",
+  invoke: () => Promise.reject(new Error("literal modules — nothing to invoke")),
+  where: "workers.get",
+  ...overrides,
+});
+
 /** Prepare AND load at once — the shape `itx.workers.get` takes; the rows above count what reached
  *  `env.LOADER`, and only `load()` reaches it. */
-const loadConfined = async (opts: Parameters<typeof prepareConfinedWorker>[0]) => {
-  const prepared = await prepareConfinedWorker(opts);
+const loadConfined = async (...args: Parameters<typeof workerOptions>) => {
+  const prepared = await prepareConfinedWorker(workerOptions(...args));
   prepared.load();
   return prepared;
 };

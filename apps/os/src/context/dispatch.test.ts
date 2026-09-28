@@ -227,7 +227,7 @@ test("the resolver releases a walk's answer that REJECTS — its caller gets the
 const repoHandleExpression: ItxExpression = ["itx", "repos", ["get", "/repos/x"]];
 
 // Each row builds its answer when it runs: the classes it names are declared below the tests.
-test.each<[string, () => unknown, ItxExpression, unknown[], ItxExpression]>([
+test.for<[string, () => unknown, ItxExpression, unknown[], ItxExpression]>([
   [
     "a path-shaped handle",
     () => new InvokeHandle(() => undefined),
@@ -288,7 +288,7 @@ test.each<[string, () => unknown, ItxExpression, unknown[], ItxExpression]>([
   ],
 ])(
   "an answer leaves a context holding nothing of its session: live, named by its expression: %s",
-  (_, answer, expression, args, expected) => {
+  ([, answer, expression, args, expected]) => {
     expect(itxAnswerDetachedFromSession(answer(), expression, args)).toEqual({
       [ITX_HANDLE_REFERENCE_KEY]: expected,
     });

@@ -77,6 +77,14 @@ const platformFactRenderers: EventRenderers = {
       </>
     );
   },
+  "events.iterate.com/organization/project-removed": (e) => {
+    const p = record(e.payload);
+    return (
+      <>
+        Deleted the project <strong>{str(p.slug)}</strong> {mono(str(p.projectId))}
+      </>
+    );
+  },
 };
 
 /** Only a fact the platform wrote (`source.platform`) reads as a sentence: one a person appended to

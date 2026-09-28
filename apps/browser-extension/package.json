@@ -1,0 +1,14 @@
+{
+  "name": "@iterate-com/browser-extension",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsx scripts/build.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "capnweb": "catalog:",
+    "tsx": "catalog:",
+    "typescript": "catalog:"
+  }
+}

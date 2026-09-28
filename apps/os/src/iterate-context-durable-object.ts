@@ -36,9 +36,14 @@ import {
   normalizedItxExpression,
 } from "iterate/expression";
 import { ITX_PRINCIPAL_HEADER, type Principal } from "iterate/principal";
-import type { RewriteRuleListEntry, StreamPage } from "iterate/api";
+import type { RewriteRuleListEntry, StreamPage, SubscriptionListEntry } from "iterate/api";
 import { ITERATE_ROUTING_SLUG_HEADER } from "iterate/project-ingress";
 import { RunRequested, type RunSettlement } from "iterate/stream/run";
+import {
+  failureKind,
+  isPlatformFailureKind,
+  logPlatformFailure,
+} from "@iterate-com/shared/platform-retry";
 import {
   ITX_APP_HEADER,
   ITX_CALLER_PATH_HEADER,
@@ -50,51 +55,84 @@ import { RpcStubHandle, itxAnswerDetachedFromSession } from "./context/dispatch.
 import { normalizeControlEvent } from "./stream/core-processor.ts";
 import {
   ITX_EXPRESSION_FETCH_HEADER,
-  FETCH_UPGRADE_RESUMABLE_HEADER,
   ITX_PLATFORM_ORIGIN_HEADER,
   itxExpressionEndingInFetch,
-  RpcStubFetchServer,
   RpcStubDirectory,
   RPC_STUB_PAGER_KEEPALIVE_REQUEST,
   RPC_STUB_PAGER_KEEPALIVE_RESPONSE,
   stampCallerHeaders,
   type BorrowedRpcStub,
 } from "./context/rpc-stubs.ts";
+import { FETCH_UPGRADE_RESUMABLE_HEADER, RpcStubFetchServer } from "./context/fetch-upgrade.ts";
 import { buildLibrary, executeScript, runSettlementOf, type LibraryItx } from "./library.ts";
 import { Stream, type ReachableContext } from "./stream/stream.ts";
 import { ALARM_MAX_REARMS, AlarmCoordinator } from "./alarm-coordinator.ts";
 import { itxEntrypointFor } from "./iterate-context.ts";
 import {
   ancestorPathsOf,
+  CONTEXT_DESTROYED,
   DurableObjectNameCodec,
   GLOBAL_PROJECT_ID,
+  pathUnderOwner,
+  PROJECT_DELETED,
   resourceScope,
 } from "./context/paths.ts";
-import { secretPathsReferenced } from "./secrets.ts";
-import { appConfigOf, sessionSigningSecretOf, type AppConfigEnv } from "./app-config.ts";
+import {
+  LEND_USE_HEADER,
+  LENT_AS_HEADER,
+  secretPathsReferenced,
+  verifyLendUse,
+} from "./secrets.ts";
+import { unavailableAnswer } from "./unavailable.ts";
+import {
+  appConfigOf,
+  iterateAppScopesOf,
+  sessionSigningSecretOf,
+  type AppConfigEnv,
+} from "./app-config.ts";
 import {
   ItxExpressionResolver,
   describeRewriteRules,
   rowsNamingRpcStub,
+  refuseLiftingAJail,
   rpcStubKeysNamed,
   implicitRootsAt,
   type ItxExpressionRewriteRule,
 } from "./context/itx-expression-rewriting.ts";
 import { signedFileUrl } from "./context/file-urls.ts";
 import { ControlPlane } from "./control-plane/edge.ts";
-import { buildBuiltIns, type SubscriptionListEntry } from "./context/built-ins.ts";
+import { buildBuiltIns } from "./context/built-ins.ts";
 import { FacetHost } from "./context/facet-host.ts";
 import { firstPartyFacetClassOf } from "./first-party-facets.ts";
 import type { ArtifactsNamespace } from "./context/cf-artifacts.ts";
 import { Residency } from "./context/residency.ts";
 import { SubscriptionDelivery, type DeliveryDeadline } from "./stream/subscription-delivery.ts";
 
-function parseIterateContextDurableObjectName(name: string | undefined) {
-  if (!name)
+/** WHO THIS CONTEXT IS: its name, when it was reached by name (every caller but one); reached by
+ *  id alone — the context sweep (scripts/ci/context-sweep.ts), which knows only the ids Cloudflare
+ *  lists — its own birth record, `itx/created { projectId, path }` at offset 1. A context with no
+ *  birth record and no name is nobody: refused, so no id alone ever mints one. */
+function iterateContextAddressOf(ctx: DurableObjectState) {
+  if (ctx.id.name) return DurableObjectNameCodec.parse(ctx.id.name);
+  let body: string | undefined;
+  try {
+    body = ctx.storage.sql
+      .exec<{ body: string }>("SELECT body FROM events WHERE offset = 1")
+      .toArray()[0]?.body;
+  } catch {
+    // no events table: an empty store
+  }
+  const born = body
+    ? (JSON.parse(body) as { type?: string; payload?: { projectId?: string; path?: string } })
+    : undefined;
+  if (born?.type !== "events.iterate.com/itx/created" || !born.payload?.projectId)
     throw new Error(
-      "IterateContextDurableObject must be addressed by name (reach it via getByName).",
+      "IterateContextDurableObject must be addressed by name (reach it via getByName); by id, only a context that was born answers.",
     );
-  return DurableObjectNameCodec.parse(name);
+  return DurableObjectNameCodec.address({
+    projectId: born.payload.projectId,
+    path: born.payload.path || "/",
+  });
 }
 
 /** ONE ALARM PASS, as the DO saw it — the payload of the ephemeral `itx/alarm-trace` event,
@@ -129,6 +167,8 @@ export type AlarmTrace = {
   durableHead: number;
   /** On `alarm-fired`: how many schedules this pass will append. */
   dueSchedules?: number;
+  /** On `alarm-fired`: how many runs a processor requested this pass started. */
+  runs?: number;
   facetWorkInFlight: number;
   /** Names, at most 32. */
   liveFacets: string[];
@@ -138,9 +178,9 @@ export type AlarmTrace = {
 };
 
 /** The bindings THE DO reads (Vite's built Wrangler config): the DO namespace, the Worker Loader, the kv namespaces,
- *  Workers AI, Browser Run, Artifacts — and, from `AppConfigEnv`, the version-metadata binding and the `APP_CONFIG_*`
+ *  Workers AI, Browser Run, Artifacts, Email Sending — and, from `AppConfigEnv`, the version-metadata binding and the `APP_CONFIG_*`
  *  vars worker.ts's `parseAppConfig` parses. env.ts's `Env` extends this with the issuer's own
- *  (OAuth KV, the browser sessions, the page files, the mailbox): the one worker's env. */
+ *  (OAuth KV, the browser sessions, the page files): the one worker's env. */
 export interface Env extends AppConfigEnv {
   ITERATE_CONTEXT: DurableObjectNamespace<IterateContextDurableObject>;
   /** THE CONTROL PLANE'S D1: the deployment's users, identities, organizations, memberships,
@@ -158,12 +198,17 @@ export interface Env extends AppConfigEnv {
   FILES: R2Bucket;
   /** Cloudflare Artifacts (beta) — the ONE bound namespace behind `itx.cfArtifacts`, project-scoped. */
   ARTIFACTS: ArtifactsNamespace;
+  /** Email Sending (wrangler `send_email`) — the sign-in code (password-and-code-sign-in.ts) and
+   *  `itx.email` (context/built-ins.ts). Simulated by wrangler dev and the test configs; absent where
+   *  a deployment has no mailbox. */
+  EMAIL?: SendEmail;
 }
 
 export class IterateContextDurableObject extends DurableObject<Env> {
   /** Native operator RPC only. Bypass every project rewrite so no project code can observe
    * the admin credential. The first-party secret facet independently verifies it. */
   async exportSecretForProjectSeed(adminSecret: string): Promise<unknown> {
+    if (this.#unborn) throw this.#unborn;
     return this.#facetHost.callFacetAsPlatform("secret", [["exportForProjectSeed", adminSecret]]);
   }
 
@@ -175,7 +220,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
 
   /** WHO THIS DO IS: the DO name parsed ONCE into `{ name, projectId, path }`. A context is only
    *  ever reached `getByName`; an id-addressed instance fails right here, before it can touch anything. */
-  readonly #durableObjectAddress = parseIterateContextDurableObjectName(this.ctx.id.name);
+  readonly #durableObjectAddress = iterateContextAddressOf(this.ctx);
   /** The roots with an implicit row HERE (itx-expression-rewriting.ts `implicitRootsAt`): every built-in at the
    *  resource owner's root, the context roots anywhere else. Fixed for the DO's life — a path is. */
   readonly #implicitRoots = implicitRootsAt(
@@ -201,7 +246,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   }
   /** This deployment's configuration (worker.ts `appConfigOf`) — a malformed var throws here, naming it. */
   readonly #appConfig = appConfigOf(this.env);
-  /** context/rpc-stubs.ts — wired to `fetch` and the two WebSocket handlers below. */
+  /** context/fetch-upgrade.ts — wired to `fetch` and the two WebSocket handlers below. */
   readonly #rpcStubFetch = new RpcStubFetchServer(this.ctx, {
     deployId: this.#appConfig.deployId,
     path: this.#durableObjectAddress.path,
@@ -213,11 +258,13 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     ctx: this.ctx,
     // The SET half of "the DO owns both ends of a lent stub's rule": the events a pager attach
     // carries are committed like any append, in the turn the pager is accepted (the
-    // un-set half is `#unsetWhatNamesRpcStub`). They are a client's events: `source.principal` is
-    // dropped — the DO owns that field, and a lent stub's rule is unattributed.
+    // un-set half is `#unsetWhatNamesRpcStub`). They are a client's events: their `source` is the
+    // DO's — this context's own, and a lent stub's rule is unattributed.
     appendEvents: (events) =>
       void this.#appendAndRunCommittedEffects(
-        events.map((event) => stampCaller(event, { principal: null })),
+        events.map((event) =>
+          stampCaller(event, { principal: null }, this.#durableObjectAddress.path),
+        ),
       ),
     // PRESENCE is physical (`itx.rpcStubs.list()`); its changes are EPHEMERAL facts, never durable
     // rows — the log must never claim a socket is open. A refusal (a paused stream) is nothing to
@@ -334,6 +381,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     // here: the first entry point to run names the wake (`appendWakeRecord` — `alarm()` says "alarm").
     // Not awaited: a constructor cannot, and the runtime holds every event until this settles.
     void this.ctx.blockConcurrencyWhile(async () => {
+      if (await this.#refuseBirthOfDeletedProjectRoot()) return;
       this.#alarmCoordinator.restore(await this.ctx.storage.getAlarm());
       // A deployment that names its origin (`urls.os`: prd, the previews — anything with more than one
       // hostname) knows it outright; one that does not (a self-host on workers.dev) learns it from the
@@ -349,8 +397,49 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       // THE OVERDUE WATCH at birth (alarm-coordinator.ts): a stored alarm well past its time that a
       // source still wants is one the runtime held — an idle actor has no timer watching it; one no
       // source wants (the last incarnation's sweep) is superseded instead.
-      this.#alarmCoordinator.rearmIfOverdue(Date.now());
+      // Not for a context reached by id alone (the context sweep's `identity`): an orphan's held
+      // alarm brought forward would wake it, and a wake announces it to the ancestors its deleted
+      // project lost. An alarm the runtime delivers on its own still runs.
+      if (this.ctx.id.name) this.#alarmCoordinator.rearmIfOverdue(Date.now());
     });
+  }
+
+  /** A DELETED PROJECT'S ROOT IS NEVER BORN AGAIN: a request that read the project's row before it
+   *  was deleted (an isolate's memo) still reaches the root by name, as the operator may with any
+   *  `prj_…` id, and a root born then would hold storage for a project that is gone. So a root's
+   *  birth — a store with no durable row — asks the control plane first (catalog.ts
+   *  `deletedProject`). A deleted project's root is not born: the tables the stream opened as this
+   *  instance was built go, and every entry point answers `#unborn` first (`#unbornStill`), nothing
+   *  run and nothing written — a refusal like any other, where a reset would log an error for
+   *  every request that reaches it. A question that failed fails the birth, the store left as
+   *  empty, and resets this instance, so the next request asks again. Answers whether the birth
+   *  was refused. */
+  async #refuseBirthOfDeletedProjectRoot(): Promise<boolean> {
+    const { projectId, path } = this.#durableObjectAddress;
+    if (path !== "/" || projectId === GLOBAL_PROJECT_ID) return false;
+    if (this.#stream.highestDurableOffset() !== 0) return false;
+    const answer = await this.#controlPlane.deletedProject(projectId).then(
+      (deleted) => ({ deleted }),
+      (error: unknown) => ({ error }),
+    );
+    if ("deleted" in answer && !answer.deleted) return false;
+    await this.ctx.storage.deleteAll();
+    await this.ctx.storage.sync();
+    if ("error" in answer) throw answer.error;
+    this.#unborn = codedError("FORBIDDEN", `project ${projectId} ${PROJECT_DELETED}`);
+    return true;
+  }
+  /** What every entry point answers first on a deleted project's root it refused to bear. */
+  #unborn: Error | null = null;
+  /** `unborn`, asked again (the async entry points `invoke` and `fetch`, which every session call
+   *  and project-host request arrives by): kept as long as it holds, while the project restored
+   *  under its id since (a seed's `restoreProjectId`) resets this instance, failing this one
+   *  request, so the next bears the root. A question that failed keeps the refusal. */
+  async #unbornStill(unborn: Error): Promise<Error> {
+    const { projectId } = this.#durableObjectAddress;
+    if (!(await this.#controlPlane.deletedProject(projectId).catch(() => true)))
+      this.ctx.abort(`project ${projectId} was restored: its root is born on the next request`);
+    return unborn;
   }
 
   /** THE STREAM (stream/stream.ts): the commit pipeline and the core reduce. Its one callback,
@@ -397,11 +486,19 @@ export class IterateContextDurableObject extends DurableObject<Env> {
           type: "events.iterate.com/itx/child-created",
           idempotencyKey: `itx/child-created:${path}`,
           payload: { childPath: path },
+          source: { origin: path },
         }),
       ),
     ).then(
-      () => this.ctx.storage.kv.put("ancestors-announced", true),
+      () => {
+        // a context destroyed meanwhile writes nothing back: its storage stays empty
+        if (!this.#destroyed) this.ctx.storage.kv.put("ancestors-announced", true);
+      },
       (error: unknown) => {
+        // a context of a deleted project, born again by a request that reached it (a handle an open
+        // session kept): its root is not, so it stays unannounced, for the context sweep
+        if (String(error).includes(PROJECT_DELETED))
+          return console.log({ event: "context.announce-to-deleted-project", path });
         console.error({
           event: "context.announce-to-ancestors-failed",
           path,
@@ -410,6 +507,38 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       },
     );
     this.ctx.waitUntil(announced);
+  }
+
+  #destroyed = false;
+
+  /** WHO THIS CONTEXT IS, for the context sweep, which reaches it by id: its project and path.
+   *  Records no wake, so it announces nothing: an orphan asked must not re-create the ancestors its
+   *  deleted project lost. */
+  identity(): { projectId: string; path: string } {
+    const { projectId, path } = this.#durableObjectAddress;
+    return { projectId, path };
+  }
+
+  /** DESTROY THIS CONTEXT (the project deletion saga, project/processor.ts): every byte it holds
+   *  goes — its log, its kv, its alarm, and every facet's storage with it (`deleteAll` deletes the
+   *  facets' databases too) — and the instance is reset in the SAME hold, so no call ever runs on an
+   *  instance whose storage is gone (it would read tables that are not there, or write them back).
+   *  The reset rejects this call too, with `CONTEXT_DESTROYED`: the caller reads that rejection as
+   *  done. A context with no storage stops existing once it shuts down. Called again on a destroyed
+   *  context, it is born empty (and announces itself) and destroyed again; a deleted project's root
+   *  is not born (`#refuseBirthOfDeletedProjectRoot`). */
+  async destroy(): Promise<void> {
+    this.#destroyed = true;
+    await this.ctx.blockConcurrencyWhile(async () => {
+      await this.ctx.storage.deleteAll();
+      // An abort breaks the output gate, and a write not yet confirmed goes with it: without this
+      // sync the deletion itself is rolled back (prd, 2026-09-25: every context of a deleted project
+      // kept its data, and its root woke on its alarm every 40 s). Local workerd confirms at once,
+      // so only a deployed worker shows it. `#abortAfterTheAnswer` syncs for the same reason.
+      await this.ctx.storage.sync();
+      // an alarm this reset interrupts must not run again: it would wake the destroyed context
+      this.ctx.abort(CONTEXT_DESTROYED, { retryAlarm: false });
+    });
   }
 
   /** Inbound append: an inbound call and a `request` wake, then the commit and the committed-event
@@ -423,6 +552,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
    *  a socket event): an inbound call begun and ended (context/residency.ts), then the incarnation's
    *  `request` wake record. */
   #inboundRequestInOneTurn(): void {
+    if (this.#unborn) throw this.#unborn;
     this.#residency.inboundCallInOneTurn();
     this.#stream.appendWakeRecord("request");
   }
@@ -436,9 +566,15 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     // THE APPEND BOUNDARY: every event is validated + normalized here (core-processor's
     // `normalizeControlEvent`), so a control command's itx-expression fields are checked and stored
     // in parsed form — call sites append LITERAL `{ type, payload }`, never an event-builder helper.
-    const committedEvents = this.#stream.append(
-      ...events.map((event) => normalizeControlEvent(event, this.#durableObjectAddress.path)),
+    const normalized = events.map((event) =>
+      normalizeControlEvent(event, this.#durableObjectAddress.path),
     );
+    refuseLiftingAJail(
+      normalized,
+      this.#stream.coreReducedState.itxExpressionRewriteRules,
+      this.#caller,
+    );
+    const committedEvents = this.#stream.append(...normalized);
     // Effects run on FRESH commits only. An idempotency retry ECHOES the historical event (its offset
     // is <= the pre-append head), and re-running an effect on an echo could revert state a later event
     // already moved on — configure A, replace with B, retry A would restore A's facet startup memo.
@@ -511,54 +647,70 @@ export class IterateContextDurableObject extends DurableObject<Env> {
    *  incarnation left open is not here, and the wake record settles it `interrupted` (stream.ts) —
    *  a run is never re-run. */
   readonly #scriptRunsInFlight = new Set<number>();
+  /** Runs a PROCESSOR requested (`source.processor`, the engine's stamp), owed to the next alarm
+   *  pass, by the request's offset: the code, and when it was requested — the coordinator's
+   *  deadline, so re-deriving it writes nothing. In memory: a run a dead incarnation still owed is
+   *  open in `scriptRuns`, and the next wake record settles it `interrupted`, as it does a run cut
+   *  off mid-flight. */
+  readonly #runsOwedToTheAlarm = new Map<number, { code: string; requestedAt: number }>();
 
-  /** THE RUNNER, started at the commit of every `run-requested` — whoever appended it:
-   *  `itx.run` (library.ts: this request, then a wait for its settlement), a client's literal
-   *  append, the agent's loop, a schedule's occurrence. The request's OFFSET is the run's identity:
-   *  the settlement names it. Runs as the kernel: the loaded script's own `env.ITX` calls are
-   *  principal-less anyway (loaded code speaks for the project), and the request event carries who
-   *  asked. Not awaited — the settlement is the run's end, on the log, whether or not the requester
-   *  is still listening. */
+  /** THE RUNNER, for every `run-requested` committed — whoever appended it: `itx.run` (library.ts:
+   *  this request, then a wait for its settlement), a client's literal append, a schedule's
+   *  occurrence, the agent's loop. The request's OFFSET is the run's identity: the settlement names
+   *  it. A caller's request starts at its commit, as deep as the caller. A PROCESSOR's starts in
+   *  the next alarm pass (`#startRunsOwedToTheAlarm`), because an alarm is a fresh invocation.
+   *  Cloudflare refuses a call too many hops below the request it descends from ("Subrequest depth
+   *  limit exceeded"; not configurable — wrangler's `limits` are `cpu_ms` and `subrequests`, a
+   *  count), and a Durable Object's outgoing calls descend from one of its incoming requests
+   *  (workerd `IoContext::getCurrentIncomingRequest`). A loop of processor turns reaches this
+   *  context through ever deeper requests, so a run started at its commit ran out of hops: on a
+   *  preview (2026-09-25) an agent's script had 8 hops left at its first turn and 0 by its twelfth;
+   *  started from the alarm, 13 at every turn. */
   #startRequestedRuns(committedEvents: StreamEvent[]): void {
     for (const event of committedEvents) {
       if (event.type !== "events.iterate.com/itx/run-requested") continue;
       const { code } = event.payload as RunRequested; // parsed at the append boundary (normalizeControlEvent)
-      if (
-        this.#scriptRunsInFlight.has(event.offset) ||
-        !this.#stream.coreReducedState.scriptRuns[event.offset]
-      )
-        continue;
-      this.#scriptRunsInFlight.add(event.offset);
-      void this.#executeRun(event.offset, code);
+      if (event.source?.processor)
+        this.#runsOwedToTheAlarm.set(event.offset, { code, requestedAt: Date.now() });
+      else this.#startRun(event.offset, code);
     }
   }
 
+  /** THE ALARM PASS'S FIRST JOB: every run a processor requested, started inside the alarm's own
+   *  invocation. Not awaited — the settlement is the run's end, as for any run. Answers how many. */
+  #startRunsOwedToTheAlarm(): number {
+    const owed = [...this.#runsOwedToTheAlarm];
+    this.#runsOwedToTheAlarm.clear();
+    return owed.filter(([offset, { code }]) => this.#startRun(offset, code)).length;
+  }
+
+  /** Runs as the kernel: the loaded script's own `env.ITX` calls are principal-less anyway (loaded
+   *  code speaks for the project), and the request event carries who asked. Not awaited — the
+   *  settlement is the run's end, on the log, whether or not the requester is still listening.
+   *  Answers whether it started: never a run already in flight or one already settled. */
+  #startRun(requestOffset: number, code: string): boolean {
+    if (
+      this.#scriptRunsInFlight.has(requestOffset) ||
+      !this.#stream.coreReducedState.scriptRuns[requestOffset]
+    )
+      return false;
+    this.#scriptRunsInFlight.add(requestOffset);
+    void this.#executeRun(requestOffset, code);
+    return true;
+  }
+
   async #executeRun(requestOffset: number, code: string): Promise<void> {
+    // The platform's own record (core-processor.ts `PLATFORM_ONLY_EVENT_TYPES`), straight onto the
+    // stream as the wake record's `interrupted` settlements are: no writer can append one.
     const settle = (settlement: RunSettlement) =>
-      this.#appendAndRunCommittedEffects([
-        {
-          type: "events.iterate.com/itx/run-settled",
-          idempotencyKey: `itx/run-settled:${requestOffset}`,
-          payload: { requestOffset, settlement },
-        },
-      ]);
+      this.#stream.append({
+        type: "events.iterate.com/itx/run-settled",
+        idempotencyKey: `itx/run-settled:${requestOffset}`,
+        payload: { requestOffset, settlement },
+      });
     try {
       // Settled within RUN_DEADLINE_MS, its value released (library.ts `runSettlementOf`).
       const settlement = await runSettlementOf(this.#scriptExecution(code));
-      // An agent's turns nest in the call chain until the runtime refuses a hop (#3019). The failed
-      // settlement is on the log only, so this warn is how its rate shows in Workers Logs. A run
-      // redirected to another context settles, and warns, on both.
-      if (
-        settlement.status === "failed" &&
-        settlement.error.includes("Subrequest depth limit exceeded")
-      )
-        console.warn({
-          event: "iterate-context.run-subrequest-depth-exceeded",
-          namespace: "iterate-context",
-          message: "a script run failed: the runtime refused a hop past its subrequest depth limit",
-          name: this.#durableObjectAddress.name,
-          requestOffset,
-        });
       try {
         settle(settlement);
       } catch (error) {
@@ -619,8 +771,8 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   readonly #controlPlane = new ControlPlane(this.env);
 
   /** This context's project's slug; null for a global context (a user's, an organization's). A
-   *  project's slug never changes — catalog.ts inserts a project's row and nothing updates or
-   *  deletes one, and an erase empties the catalog with this storage — so the control plane's
+   *  project's slug never changes — catalog.ts inserts a project's row and nothing updates one,
+   *  and deleting the project or an erase destroys this storage with the row — so the control plane's
    *  answer is kept in this context's own storage: read once in its life, not once per isolate (a
    *  config worker asks `whoami` on every request). */
   async #projectSlug() {
@@ -640,15 +792,19 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       const slug = await this.#projectSlug();
       return slug ? { projectSlug: slug } : {};
     },
-    primaryHostname: () =>
-      this.#controlPlane.primaryHostnameOf(this.#durableObjectAddress.projectId),
+    primaryHostname: async () =>
+      (await this.#controlPlane.getProject(this.#durableObjectAddress.projectId))
+        ?.primaryHostname ?? null,
     projectId: this.#durableObjectAddress.projectId,
     path: this.#durableObjectAddress.path,
+    otherOwnerContext: (name) => this.env.ITERATE_CONTEXT.getByName(name),
     iterateContextName: this.#durableObjectAddress.name,
     env: this.env,
     deployId: this.#appConfig.deployId,
     ingressRouting: this.#appConfig.urls.ingressRouting,
     dashOrigin: this.#appConfig.urls.dash,
+    platformAdmins: () => this.#appConfig.admins,
+    iterateAppScopes: () => iterateAppScopesOf(this.#appConfig),
     platformOrigin: () => this.#platformOrigin,
     signFileUrl: async (input) => {
       const platformOrigin = this.#platformOrigin;
@@ -670,7 +826,8 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         platformOrigin,
       });
     },
-    invoke: (call) => this.#invokeInProcess(call, [], { principal: null }),
+    // A producer is loaded code's word: walled on its input and on every row it appends.
+    invoke: (call) => this.#invokeInProcess(call, [], { principal: null, app: true }),
     // a sibling context by path; the own path is this DO itself — a ReachableContext structurally (stream.ts)
     context: (p) => (p === this.#durableObjectAddress.path ? this.#localContext : this.#sibling(p)),
     egress: (request) => this.#egress(request),
@@ -762,17 +919,21 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     caller: () => this.#caller,
   });
 
-  /** THE RESET `itx.abort` asked for (built-ins.ts — its fact already appended): every write so far
-   *  made durable, then `ctx.abort(message)` one zero-delay turn later, so the call that asked gets
-   *  its answer. `ctx.abort` inside the call would reject that very call with `message` — the
-   *  runtime aborts every request in flight, and no code can catch it — while a timer fires only
-   *  after this turn's microtasks have resolved the answer and the runtime has sent it. Nor can the
-   *  timer keep an idle actor resident: the actor it fires in is the one it resets. Every OTHER call
-   *  in flight here rejects with `message`. */
-  async #abortAfterTheAnswer(message: string): Promise<void> {
-    // An abort breaks the output gate: a write not yet confirmed would go with it, the fact included.
-    await this.ctx.storage.sync();
-    setTimeout(() => this.ctx.abort(message), 0);
+  /** THE RESET `itx.abort` asked for (built-ins.ts — its fact already appended), after the answer
+   *  left. `ctx.abort` rejects every request still in the actor with `message`, an answer the output
+   *  gate still holds included, and the gate holds an RPC answer until every write made before it
+   *  waits there is confirmed — another call's too (a fresh child's `ancestors-announced` flag). So
+   *  a critical section from the answer's own turn: no other event runs code here, so nothing
+   *  writes before the answer waits at the gate, and `sync()` waits for every write it waits on and
+   *  makes the fact durable (an abort discards unconfirmed writes). The reset is one zero-delay turn
+   *  after, when the gate has let the answer out. Nor can the timer keep an idle actor resident: the
+   *  actor it fires in is the one it resets. Every OTHER call in flight here rejects with
+   *  `message`. */
+  #abortAfterTheAnswer(message: string) {
+    void this.ctx.blockConcurrencyWhile(async () => {
+      await this.ctx.storage.sync();
+      setTimeout(() => this.ctx.abort(message), 0);
+    });
   }
 
   // ── SUBSCRIPTION DELIVERY: the one loop (subscription-delivery.ts), wired to this DO ──
@@ -797,8 +958,11 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     deadlines: () => [
       ...this.#durableAlarmDeadlines(),
       ...Object.values(this.#residency.deadlines()),
+      // The runs a processor requested: due since the earliest was requested.
+      ...[...this.#runsOwedToTheAlarm.values()].map(({ requestedAt }) => requestedAt),
     ],
-    held: () => this.#residency.holdsResident(),
+    // A run owed to the alarm holds the watch too: a held alarm would otherwise hold the run.
+    held: () => this.#residency.holdsResident() || this.#runsOwedToTheAlarm.size > 0,
     // The platform fault the watch works around (alarm-coordinator.ts): a re-arm is a warn the prd
     // fault alarm counts, and its telemetry pin (PINNED_WORKAROUNDS) waits out; a give-up is an
     // error — nothing here acts again for it.
@@ -828,7 +992,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   });
 
   /** The three sources a fresh incarnation derives again — schedules, cursor-row claims, facet
-   *  claims; the unclaimed-facet sweep is this incarnation's alone. */
+   *  claims; the unclaimed-facet sweep and the runs owed to the alarm are this incarnation's alone. */
   #durableAlarmDeadlines(): (number | null)[] {
     return [
       this.#stream.nextScheduledAppendAt(),
@@ -848,7 +1012,8 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     path: this.#durableObjectAddress.path,
     platformOrigin: () => this.#platformOrigin,
     itxEntrypoint: () => this.#itxEntrypoint,
-    invoke: (call) => this.#invokeInProcess(call, [], { principal: null }),
+    // A producer is loaded code's word: walled on its input and on every row it appends.
+    invoke: (call) => this.#invokeInProcess(call, [], { principal: null, app: true }),
     resolveItxExpression: (expression) => this.#itxExpressionResolver.resolve(expression),
     stream: this.#stream,
     reconcileAlarm: () => this.#alarmCoordinator.reconcile(),
@@ -864,7 +1029,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     facetHost: this.#facetHost,
     rpcStubs: this.#rpcStubs,
     library: this.#library,
-    scriptRunsInFlight: () => this.#scriptRunsInFlight.size,
+    scriptRunsInFlight: () => this.#scriptRunsInFlight.size + this.#runsOwedToTheAlarm.size,
     reconcileAlarm: () => this.#alarmCoordinator.reconcile(),
     inboundCallsHeldChanged: () => this.#alarmCoordinator.watch(),
   });
@@ -872,7 +1037,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   #traceAlarm(
     reason: AlarmTrace["reason"],
     before: number | null,
-    extra: Pick<AlarmTrace, "error" | "dueSchedules"> = {},
+    extra: Pick<AlarmTrace, "error" | "dueSchedules" | "runs"> = {},
   ) {
     const delivery = this.#subscriptionDelivery.deadlines();
     const facets = this.#facetHost.snapshot();
@@ -956,19 +1121,30 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     });
   }
 
-  /** THE ALARM PASS, three jobs in order, under the coordinator's hold (nothing re-arms until it
-   *  completes; a pass that dies is retried by the runtime): the due schedules, the stream-kept
-   *  cursors' owed deliveries, the due claims of hosted processors (each spent, then the facet's
-   *  `revive()` — a facet still busy claims again from there). Then the next deadline is derived
-   *  from what is left. The unclaimed-facet sweep is decided first in every pass; a wake with
-   *  nothing durable due is the sweep's alone and does nothing else. */
+  /** THE ALARM PASS, four jobs in order, under the coordinator's hold (nothing re-arms until it
+   *  completes; a pass that dies is retried by the runtime): the runs processors requested
+   *  (`#startRunsOwedToTheAlarm`), the due schedules, the stream-kept cursors' owed deliveries, the
+   *  due claims of hosted processors (each spent, then the facet's `revive()` — a facet still busy
+   *  claims again from there). Then the next deadline is derived from what is left. The
+   *  unclaimed-facet sweep is decided first in every pass; a wake with nothing owed is the sweep's
+   *  alone and does nothing else. */
   async alarm(): Promise<void> {
     const { armedAt: fired } = this.#alarmCoordinator.snapshot();
     // THE SWEEP'S OWN WAKE: no wake record, no trace, no delivery — in a fresh
     // incarnation (its armer was evicted, the normal end) nothing at all but re-deriving the alarm;
     // its birth already reset the unclaimed loaded facets.
     const wokeAt = Date.now();
-    if (!this.#durableAlarmDeadlines().some((at) => at !== null && at <= wokeAt)) {
+    // A run a dead incarnation left open, one it owed this very alarm included, is settled
+    // `interrupted` by this incarnation's wake record, so a wake that finds one takes the full pass,
+    // whose wake record that is. Once the wake is recorded, every open run is this incarnation's.
+    const wakeRecordSettlesARun =
+      !this.#stream.wakeRecorded() &&
+      Object.keys(this.#stream.coreReducedState.scriptRuns).length > 0;
+    if (
+      this.#runsOwedToTheAlarm.size === 0 &&
+      !wakeRecordSettlesARun &&
+      !this.#durableAlarmDeadlines().some((at) => at !== null && at <= wokeAt)
+    ) {
       await this.#alarmCoordinator.pass(async () => this.#residency.alarmPassStarted(wokeAt));
       return;
     }
@@ -979,6 +1155,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         // that knows the reason. Its delivery (every "*" row's) runs and acks within this pass, so an
         // alarm wake that finds nothing else owed ends with no alarm and no alarm write at all.
         this.#stream.appendWakeRecord("alarm");
+        const runs = this.#startRunsOwedToTheAlarm();
         // Append each occurrence locally before awaiting subscriber RPC. A completion in the SAME
         // transaction removes the obligation, so eviction or duplicate alarm delivery cannot repeat it.
         const now = Date.now();
@@ -990,7 +1167,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
               a.scheduledAtOffset - b.scheduledAtOffset,
           )
           .slice(0, 32);
-        this.#traceAlarm("alarm-fired", fired, { dueSchedules: due.length });
+        this.#traceAlarm("alarm-fired", fired, { dueSchedules: due.length, runs });
         for (const row of due) {
           if (this.#stream.coreReducedState.paused) break;
           if (
@@ -1008,6 +1185,9 @@ export class IterateContextDurableObject extends DurableObject<Env> {
               ...row.events.map((event) => ({
                 ...event,
                 source: {
+                  // Where the definition came from: a schedule set here from another context
+                  // fires as that context's words, never as this one's.
+                  ...(row.source?.origin && { origin: row.source.origin }),
                   schedule: {
                     ...payload,
                     ...((row.source?.processor || row.source?.principal) && {
@@ -1098,6 +1278,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     args: unknown[] = [],
     caller: Caller = { principal: null },
   ): Promise<unknown> {
+    if (this.#unborn) throw await this.#unbornStill(this.#unborn);
     this.#residency.inboundCallStarted();
     this.#stream.appendWakeRecord("request");
     const result = await this.#invokeInProcess(call, args, caller).finally(() =>
@@ -1149,6 +1330,11 @@ export class IterateContextDurableObject extends DurableObject<Env> {
 
   /** Ends when the Response is handed back — a body still streaming after that is not counted. */
   async fetch(request: Request): Promise<Response> {
+    // a project host's answer for a project it does not serve, as the edge's admission gives it
+    if (this.#unborn) {
+      const { message } = await this.#unbornStill(this.#unborn);
+      return new Response(`421: ${message}\n`, { status: 421 });
+    }
     this.#residency.inboundCallStarted();
     return this.#serveFetch(request).finally(() =>
       this.#residency.inboundCallEnded(request.headers.get(ITX_APP_HEADER) !== null),
@@ -1157,6 +1343,21 @@ export class IterateContextDurableObject extends DurableObject<Env> {
 
   async #serveFetch(request: Request): Promise<Response> {
     this.#stream.appendWakeRecord("request");
+    // A BORROWED SECRET'S USE (secret/durable-object.ts `fetch`): the lend, signed by the
+    // borrower's facet; anything else carrying the header is refused, never served as egress.
+    const lendUse = request.headers.get(LEND_USE_HEADER);
+    if (lendUse) {
+      const lend = await verifyLendUse(
+        lendUse,
+        await sessionSigningSecretOf(this.#appConfig),
+        this.#durableObjectAddress.name,
+      );
+      if (!lend)
+        return new Response("itx.fetch: a lend use this lender cannot verify\n", { status: 502 });
+      const headers = new Headers(request.headers);
+      headers.delete(LEND_USE_HEADER);
+      return this.#lentFetch(new Request(request, { headers }), lend);
+    }
     // The handlers, in order — each answers or declines: the rpc-stub pager and the rpc-stub fetch
     // upgrade leg; AN ITX-EXPRESSION FETCH (`x-itx-expression` names an itx expression — JSON from a session's
     // terminal `fetch(request)`, "" from a project host (the project's ingress target) or dotted text
@@ -1238,33 +1439,50 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       } catch (error) {
         // A project host makes this path public: default-deny is a 404 (a visitor's "no such app" is
         // no issue), a WebSocket upgrade aimed at a facet-hosted app is the caller's 400 (context/facet-host.ts),
-        // anything else a 500 — the message alone every way, the stack REPORTED, never served.
+        // a lent stub offline or a platform failure the edge's one answer (`unavailableAnswer`: a 502,
+        // a 503 with its Retry-After), anything else a 500 — the message alone every way, the stack
+        // REPORTED, never served.
         const code = errorCode(error);
+        const unavailable = unavailableAnswer(error);
         const status =
           code === "NO_ITX_EXPRESSION_MATCH"
             ? 404
             : code === "FACET_NO_UPGRADE"
               ? 400
-              : code === "RPC_STUB_OFFLINE"
-                ? 502
-                : 500;
+              : (unavailable?.status ?? 500);
         if (status === 500)
           reportIssue("iterate-context.expression-fetch", error, {
             itxExpression: itxExpressionHeader,
           });
         // A lent stub offline (a tunnel killed or asleep, before its rule is un-set) is the
         // upstream's absence: a 502, logged at info and never reported, its header naming the
-        // expression to a client. The prd fault alarm (scripts/ci/prd-fault-alarm.ts) drops the 502
-        // summaries in this line's ray.
-        if (status === 502)
+        // expression to a client. A deploy that reset a context the fetch dialed, where the hop could
+        // not send it again (a request with a body, an upgrade; built-ins.ts `cd`), is a 503 the
+        // visitor retries in a second, logged at info and never reported. The prd fault alarm
+        // (scripts/ci/prd-fault-alarm.ts) drops the 502 and 503 summaries in these lines' rays. Any
+        // other platform failure is a 503 the alarm counts: a lost connection, an overload.
+        const kind = failureKind(error);
+        if (status === 502 || kind === "deploy-reset")
           console.info({
-            event: "expression-fetch.rpc-stub-offline",
+            event:
+              status === 502
+                ? "expression-fetch.rpc-stub-offline"
+                : "expression-fetch.deploy-reset",
             itxExpression: itxExpressionHeader,
+          });
+        else if (isPlatformFailureKind(kind))
+          logPlatformFailure("expression-fetch", "answered", kind, {
+            name: "expression-fetch",
+            itxExpression: itxExpressionHeader,
+            message: String(error),
           });
         const message = error instanceof Error ? error.message : String(error);
         return new Response(`expression fetch error: ${message}\n`, {
           status,
-          headers: status === 502 ? { "x-iterate-rpc-stub-offline": itxExpressionHeader } : {},
+          headers: {
+            ...unavailable?.headers,
+            ...(status === 502 && { "x-iterate-rpc-stub-offline": itxExpressionHeader }),
+          },
         });
       }
     }
@@ -1317,12 +1535,17 @@ export class IterateContextDurableObject extends DurableObject<Env> {
    *  outbound. The hop counter stays — the edge's re-entry guard reads it when an app fetches its
    *  own host. WS-safe: only the headers are rewritten, and every hop is a fetch channel — the
    *  other context's `fetch`, then `ctx.facets.get(name).fetch` — so a 101 flows straight back
-   *  either way (measured: __workers-tests__/secret-facet-proxies-a-socket.test.ts). */
+   *  either way (measured: __workers-tests__/facets.test.ts). */
   #egress(request: Request): Promise<Response> {
     const headers = new Headers(request.headers);
     stampCallerHeaders(headers, null);
     headers.delete(ITX_EXPRESSION_FETCH_HEADER);
     headers.delete(FETCH_UPGRADE_RESUMABLE_HEADER); // the edge's ask of a lent stub, never an origin's
+    // A lend's headers are platform-to-platform (secrets.ts `LEND_USE_HEADER`): never a caller's.
+    for (const name of [...headers.keys()]) if (name.startsWith("x-itx-lend")) headers.delete(name);
+    // A browser cannot set User-Agent on a Request it builds (Chromium drops it), and GitHub's API
+    // refuses a request without one: a caller that names none is sent as `iterate`.
+    if (!headers.has("user-agent")) headers.set("user-agent", "iterate");
     const outbound = new Request(request, { headers });
     const paths = secretPathsReferenced(outbound);
     if (paths.length === 0) return fetch(outbound);
@@ -1344,6 +1567,51 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       ]) as Promise<Response>;
     // Another context's: its own `fetch` lands in ITS `#egress`, the branch above.
     return this.#sibling(secretPath).fetch(outbound);
+  }
+
+  /** A BORROWED SECRET'S USE, from the borrower's `secret` facet (secret/durable-object.ts `fetch`)
+   *  over this DO's `fetch` — a fetch channel, so an upgrade's 101 crosses it — with the lend signed
+   *  in `LEND_USE_HEADER` (secrets.ts), which only platform code holding the deployment's key can
+   *  mint and every egress strips: this context is the lender's secret, whose facet admits the lend
+   *  — live, lent to `borrower`, the lender still in that project — and dispatches the request
+   *  itself. A lend refused because its lender left the project ends here
+   *  (`secret/lend-revoked { reason: "membership-ended" }` on both sides); every refusal is a 502. */
+  async #lentFetch(
+    request: Request,
+    lend: { lendId: string; borrower: string },
+  ): Promise<Response> {
+    // The facet's own answers (secret/durable-object.ts `admitLend`).
+    const verdict = (await this.#facetHost.callFacetAsPlatform("secret", [["admitLend", lend]])) as
+      | { as: string }
+      | { refused: string; revoke?: "membership-ended" };
+    if ("refused" in verdict) {
+      if (verdict.revoke) {
+        const { projectId, path } = this.#durableObjectAddress;
+        await this.invoke(
+          [
+            "itx",
+            "builtins",
+            "secrets",
+            [
+              "revokeLend",
+              pathUnderOwner(resourceScope(projectId, path), path),
+              lend.lendId,
+              { reason: verdict.revoke },
+            ],
+          ],
+          [],
+          { principal: null, platform: true },
+        );
+      }
+      return new Response(`itx.fetch: ${verdict.refused}\n`, { status: 502 });
+    }
+    // The facet's fetch channel, the path it is lent as beside the request: only this DO sets it
+    // (every egress strips `x-itx-lend*` before a request reaches the facet).
+    const headers = new Headers(request.headers);
+    headers.set(LENT_AS_HEADER, JSON.stringify({ as: verdict.as, borrower: lend.borrower }));
+    return this.#facetHost.callFacetAsPlatform("secret", [
+      ["fetch", new Request(request, { headers })],
+    ]) as Promise<Response>;
   }
 
   webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): void {

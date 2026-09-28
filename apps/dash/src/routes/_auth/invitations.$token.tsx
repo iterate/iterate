@@ -44,7 +44,7 @@ function InvitationPage() {
     setJoining(true);
     try {
       const organization = await api.organizations.acceptInvitation(token);
-      reloadOrganizationTree(); // the listed tree's; the live one follows the account by itself
+      await reloadOrganizationTree();
       await navigate({ to: "/organizations/$orgId", params: { orgId: organization.id } });
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
@@ -67,26 +67,13 @@ function InvitationPage() {
       Open {invitation.orgName}
     </Link>
   );
-  // the link they joined by: "Open" accepts it again — it answers the same, and lands the
-  // membership on the organization's record and their account again, should the first answer have
-  // been cut before those folded (the tree reads the folds, so without it the page would be
-  // missing). A session without `organizations:write` cannot accept; it just opens.
+  // the link they joined by
   if (invitation.acceptedByYou && invitation.member)
     return (
       <Notice
         title={`You joined ${invitation.orgName}`}
         description="You accepted this invitation already."
-        action={
-          canWrite ? (
-            <Button type="button" disabled={joining} onClick={() => void join()}>
-              {joining ? <Spinner data-icon="inline-start" /> : null}
-              Open {invitation.orgName}
-            </Button>
-          ) : (
-            open
-          )
-        }
-        error={error}
+        action={open}
       />
     );
   if (invitation.member)

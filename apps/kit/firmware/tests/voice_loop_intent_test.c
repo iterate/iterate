@@ -20,21 +20,11 @@
 #include "iterate/kit/audio_processor.h"
 #include "iterate/kit/voice_device_profile.h"
 
+#include <assert.h>
 #include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
-
-static void test_assert(
-    bool condition, const char *expression, const char *file, int line) {
-  if (condition) return;
-  (void)fprintf(
-      stderr, "%s:%d: assertion failed: %s\n", file, line, expression);
-  abort();
-}
-
-#define assert(expression) \
-  test_assert((expression), #expression, __FILE__, __LINE__)
 
 /* --- a board that is nothing but a screen --------------------------------- */
 
@@ -103,6 +93,9 @@ struct board {
   size_t presented;
   bool started;
   bool microphone_muted;
+  /* What the loop calls on this board's capability module (below). */
+  size_t module_steps;
+  size_t module_sessions_ended;
 };
 
 static bool board_start(void *context, struct iterate_kit_board_audio *out) {
@@ -132,6 +125,28 @@ static void board_poll(void *context, struct iterate_kit_voice_intent *out) {
   }
 }
 
+/* A capability module with no methods: it counts the loop's step() and
+ * session_ended() calls, the two points a module that defers a reply (the
+ * screen) relies on. */
+static void module_step(void *context) {
+  ++((struct board *)context)->module_steps;
+}
+
+static void module_session_ended(void *context) {
+  ++((struct board *)context)->module_sessions_ended;
+}
+
+static size_t board_modules(
+    void *context, struct iterate_kit_module *out, size_t capacity) {
+  if (capacity == 0U) return 0U;
+  out[0] = (struct iterate_kit_module){
+    .context = context,
+    .session_ended = module_session_ended,
+    .step = module_step,
+  };
+  return 1U;
+}
+
 /*
  * The fixture reports only its mute level. It has no physical start/end control,
  * so every conversation intent below arrives over the mounted capability.
@@ -140,6 +155,7 @@ static const struct iterate_kit_board_ops board_ops = {
   .start = board_start,
   .present = board_present,
   .poll = board_poll,
+  .modules = board_modules,
 };
 
 static const struct iterate_kit_board_facts voice_facts = {
@@ -649,7 +665,7 @@ static long latest_callback_export_id(void) {
  */
 static long next_event_offset = 200;
 
-static void deliver_spk_chunk(bool last) {
+static void deliver_speaker_frame(bool last) {
   static char message[768];
   struct iterate_kit_itx_connection *connection =
       iterate_kit_fake_platform_connection();
@@ -660,7 +676,7 @@ static void deliver_spk_chunk(bool last) {
       message,
       sizeof(message),
       "[\"push\",[\"pipeline\",%ld,[],[[["
-      "{\"type\":\"events.iterate.com/voice-agent/spk-frame\","
+      "{\"type\":\"events.iterate.com/voice-agent/speaker-frame\","
       "\"offset\":%ld,"
       "\"payload\":{\"activation\":\"%s\",\"conversationId\":\"convdial\",\"deviceSpeakerFrameSeq\":%ld,%s"
       "\"pcm\":\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\"}}"
@@ -715,7 +731,7 @@ static void deliver_ended_latest(void) {
       message,
       sizeof(message),
       "[\"push\",[\"pipeline\",%ld,[],[[["
-      "{\"type\":\"events.iterate.com/voice-agent/conversation-ended\","
+      "{\"type\":\"events.iterate.com/voice-agent/call-ended\","
       "\"offset\":%ld,"
       "\"payload\":{\"activation\":\"%s\",\"reason\":\"server-ended\"}}"
       "]],{\"after\":%ld,\"through\":%ld}]]]",
@@ -791,7 +807,7 @@ static void same_pass_end_then_start_creates_a_new_activation(void) {
   assert(board.last_view.wants_call);
   assert(strcmp(current_activation(), activation_a) != 0);
   assert(sent_after_contains(
-      before, "\"type\":\"events.iterate.com/voice-agent/conversation-ended\""));
+      before, "\"type\":\"events.iterate.com/voice-agent/call-ended\""));
   quiescent();
 }
 
@@ -819,7 +835,7 @@ static void accepted_call_end_then_start_creates_b_after_a_terminal(void) {
   run_ms(50U);
   assert(strcmp(current_activation(), activation_a) != 0);
   assert(sent_after_contains(
-      before, "\"type\":\"events.iterate.com/voice-agent/conversation-ended\""));
+      before, "\"type\":\"events.iterate.com/voice-agent/call-ended\""));
   assert(sent_after_contains(before, "\"pcm\":"));
   quiescent();
 }
@@ -840,12 +856,12 @@ static void terminal_waits_for_outbox_headroom(void) {
   board_poll_hook = fill_outbox_during_board_poll;
   step();
   assert(!sent_after_contains(
-      before, "\"type\":\"events.iterate.com/voice-agent/conversation-ended\""));
+      before, "\"type\":\"events.iterate.com/voice-agent/call-ended\""));
 
   iterate_kit_fake_platform_drain_control_outbox();
   step();
   assert(sent_after_contains(
-      before, "\"type\":\"events.iterate.com/voice-agent/conversation-ended\""));
+      before, "\"type\":\"events.iterate.com/voice-agent/call-ended\""));
   assert(!iterate_kit_host_esp_idf_restart_requested());
   quiescent();
 }
@@ -934,7 +950,7 @@ static void queued_terminal_survives_session_loss_before_b(void) {
   board_poll_hook = fill_outbox_during_board_poll;
   step();
   assert(!sent_after_contains(
-      before, "\"type\":\"events.iterate.com/voice-agent/conversation-ended\""));
+      before, "\"type\":\"events.iterate.com/voice-agent/call-ended\""));
 
   iterate_kit_itx_connection_lost(iterate_kit_fake_platform_connection());
   iterate_kit_fake_platform_drain_control_outbox();
@@ -948,7 +964,7 @@ static void queued_terminal_survives_session_loss_before_b(void) {
   pump();
   step();
   assert(sent_after_count(
-      after_reconnect, "\"type\":\"events.iterate.com/voice-agent/conversation-ended\"") == 1U);
+      after_reconnect, "\"type\":\"events.iterate.com/voice-agent/call-ended\"") == 1U);
 
   remote_call("conversation", "start");
   step();
@@ -976,7 +992,10 @@ static void losing_the_session_ends_the_call_and_the_next_press_opens_a_new_one(
   step();
   assert(board.last_view.wants_call);
 
+  const size_t sessions_ended = board.module_sessions_ended;
   iterate_kit_itx_connection_lost(iterate_kit_fake_platform_connection());
+  /* The modules hear that the session is gone. */
+  assert(board.module_sessions_ended == sessions_ended + 1U);
   iterate_kit_fake_platform_drain_control_outbox();
   next_inbound_call_id = 1;
   pending_open_connection_count = 0U;
@@ -986,11 +1005,14 @@ static void losing_the_session_ends_the_call_and_the_next_press_opens_a_new_one(
   iterate_kit_fake_platform_connect();
   after_reconnect = iterate_kit_fake_platform_sent_count();
   pump();
+  const size_t steps = board.module_steps;
   step();
   step(); /* the end lands in one pass; the board sees the view on the next */
+  /* Every pass steps the modules. */
+  assert(board.module_steps == steps + 2U);
   assert(!board.last_view.wants_call);
   assert(sent_after_count(
-      after_reconnect, "\"type\":\"events.iterate.com/voice-agent/conversation-ended\"") == 1U);
+      after_reconnect, "\"type\":\"events.iterate.com/voice-agent/call-ended\"") == 1U);
   assert(sent_after_contains(after_reconnect, "\"reason\":\"session-lost\""));
 
   remote_call("conversation", "start");
@@ -1036,7 +1058,7 @@ static void b_pcm_waits_for_its_own_child_after_a_terminal(void) {
   b_open = first_sent_after_containing(after_b_capture, "[\"subscribe\"]");
   b_microphone = first_sent_after_containing(after_b_capture, "\"pcm\":");
   assert(sent_after_contains(
-      after_b_capture, "\"type\":\"events.iterate.com/voice-agent/conversation-ended\""));
+      after_b_capture, "\"type\":\"events.iterate.com/voice-agent/call-ended\""));
   assert(b_open < iterate_kit_fake_platform_sent_count());
   assert(b_microphone < iterate_kit_fake_platform_sent_count());
   assert(b_open < b_microphone);
@@ -1157,7 +1179,7 @@ static void ending_before_acceptance_terminates_a_before_b(void) {
   run_ms(50U);
 
   terminal = first_sent_after_containing(
-      before, "\"type\":\"events.iterate.com/voice-agent/conversation-ended\"");
+      before, "\"type\":\"events.iterate.com/voice-agent/call-ended\"");
   microphone = first_sent_after_containing(after_end, "\"pcm\":");
   assert(terminal < iterate_kit_fake_platform_sent_count());
   assert(microphone < iterate_kit_fake_platform_sent_count());
@@ -1224,8 +1246,8 @@ static void an_idle_accepted_call_is_not_recycled_for_silence(void) {
   /* The words went up (the first frame opens the call) and the call is live. */
   assert(sent_after_contains(after_accept, "mic-frame"));
   /* The answer came and finished: nothing more is owed. */
-  deliver_spk_chunk(false);
-  deliver_spk_chunk(true);
+  deliver_speaker_frame(false);
+  deliver_speaker_frame(true);
   run_ms(1000U);
   after_answer = iterate_kit_fake_platform_sent_count();
   run_ms(ITERATE_KIT_VOICE_DOWNLINK_SILENCE_MS * 3U);
@@ -1251,7 +1273,7 @@ static void a_stream_silent_mid_answer_is_recycled(void) {
   deliver_accepted_latest();
   run_ms(2000U);
   assert(sent_after_contains(after_accept, "mic-frame"));
-  deliver_spk_chunk(false);
+  deliver_speaker_frame(false);
   after_chunk = iterate_kit_fake_platform_sent_count();
   run_ms(ITERATE_KIT_VOICE_DOWNLINK_SILENCE_MS + 2000U);
   assert(sent_after_contains(after_chunk, "[\"subscribe\"]"));
@@ -1296,7 +1318,7 @@ static void an_unaccepted_activation_times_out_once(void) {
   assert(!board.last_view.wants_call);
   assert(strcmp(board.last_view.status, "opening timed out") == 0);
   assert(sent_after_contains(
-      before, "\"type\":\"events.iterate.com/voice-agent/conversation-ended\""));
+      before, "\"type\":\"events.iterate.com/voice-agent/call-ended\""));
   assert(sent_after_contains(before, "opening-timeout"));
 }
 

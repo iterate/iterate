@@ -11,14 +11,8 @@ import { accountStateOf, authorizationForToken } from "../src/oauth.ts";
 import { sha256Hex } from "../src/caller.ts";
 import { indexPersonalAccessToken, newPersonalAccessToken } from "../src/personal-access-token.ts";
 import type { IterateRpcTarget } from "../src/session.ts";
-import {
-  adminSession,
-  controlPlane,
-  loginPassword,
-  ORIGIN,
-  publishConfigWorker,
-  stub,
-} from "./support.ts";
+import { publishConfigWorker } from "../e2e/support/config-worker.ts";
+import { adminSession, controlPlane, loginPassword, ORIGIN, stub } from "./support.ts";
 
 /** An app that answers with what the platform handed it (the principal stamp, the bearer), echoes
  *  a WebSocket's messages, and at `/stream` sends a server-sent event every second until the
@@ -150,9 +144,6 @@ test("a personal access token is the person's one bearer at /api, at /mcp and on
   // no key: a well-formed bearer under an id the account holds with another key's hash (the
   // constant-time comparison says no), an id it does not hold, a broken checksum
   const refusals = vi.spyOn(console, "warn");
-  onTestFinished(() => {
-    refusals.mockRestore();
-  });
   const mismatched = await newPersonalAccessToken(user.id);
   await landKey(user.id, {
     id: mismatched.id,
@@ -246,9 +237,6 @@ test("a key proves itself before any Durable Object is dialled: a well-formed ke
   const victim = (await controlPlane().ensureUser("pat-victim@example.com"))!.id;
   const stranger = `user_${crypto.randomUUID().replaceAll("-", "")}`;
   const dialled = vi.spyOn(env.ITERATE_CONTEXT, "getByName");
-  onTestFinished(() => {
-    dialled.mockRestore();
-  });
   const accountsDialled = (...ids: string[]) =>
     ids.filter((id) => JSON.stringify(dialled.mock.calls).includes(id));
   for (const forger of [stranger, victim]) {
@@ -391,14 +379,11 @@ test("a device's key is listed as the device; an expiring key is refused past it
 /** `fetch` reaches this worker (the issuer's sign-in fetches its own client metadata and token
  *  endpoint), and `https://kit.test` answers with `kit`, until the test finishes. */
 function fetchReaches(kit?: (url: URL) => Response) {
-  const spy = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+  vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
     const request = new Request(input, init);
     const url = new URL(request.url);
     if (url.origin === "https://kit.test" && kit) return kit(url);
     return exports.default.fetch(request);
-  });
-  onTestFinished(() => {
-    spy.mockRestore();
   });
 }
 

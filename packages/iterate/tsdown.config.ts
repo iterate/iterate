@@ -7,7 +7,7 @@ export default defineConfig([
     fixedExtension: true,
     platform: "node",
     target: "node22",
-    tsconfig: "tsconfig.node.json",
+    tsconfig: "tsconfig.node.build.json",
     deps: { neverBundle: ["@cloudflare/workers-types"] },
     dts: true,
     sourcemap: true,

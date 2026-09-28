@@ -4,5 +4,10 @@ import { vitestReporters } from "../shared/src/test-support/e2e-policy/vitest-re
 export default defineConfig({
   test: {
     reporters: vitestReporters,
+    restoreMocks: true,
+    unstubGlobals: true,
+    unstubEnvs: true,
+    chaiConfig: { truncateThreshold: 0 },
+    silent: "passed-only",
   },
 });

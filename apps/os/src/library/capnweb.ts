@@ -9,18 +9,12 @@
 
 import { RpcSession, newWebSocketRpcSession, type RpcStub, type RpcTransport } from "capnweb";
 import { InvokeHandle, walkStepsOnRpcStub } from "iterate/expression";
+import type { CapnwebConnectOptions } from "iterate/api";
 import type { LibraryItx } from "../library.ts";
 import { refuseUnlessOk, responseRefusal } from "./connection.ts";
 
 /** The remote main object: unknown by construction — the caller's dotted calls are its contract. */
 type RemoteMain = RpcStub<any>;
-
-/** Options for `connectToCapnweb`: headers for the handshake (auth), and the transport — a WebSocket
- *  session (default) or one HTTP batch per call chain. */
-export type CapnwebConnectOptions = {
-  headers?: Record<string, string>;
-  transport?: "websocket" | "batch";
-};
 
 /** Connect and hand back the remote main object as a handle. A WebSocket session is opened now and
  *  shared by every later call; the batch transport opens one capnweb batch session PER CHAIN (a

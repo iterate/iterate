@@ -55,7 +55,9 @@ import {
   type ItxExpressionInput,
   type ItxExpressionPrefix,
 } from "iterate/expression";
+import type { StreamEventInput } from "iterate/stream/processor";
 import type { Caller } from "../caller.ts";
+import { ScheduledAppendInput } from "../stream/scheduled-appends.ts";
 import { callOn, walkSteps, awaitAnswerReleasedIfRejected } from "./dispatch.ts";
 import { GLOBAL_PROJECT_ID } from "./paths.ts";
 
@@ -72,6 +74,8 @@ export const BUILT_IN_ROOT_DESCRIPTIONS = {
   kv: "key-value strings, the project's own: `kv.get(k)` · `kv.put(k, v)` · `kv.list(prefix)` · `kv.delete(k)`",
   secrets:
     'names only, never values: `secrets.list()`; `secrets.collectFromUser({ path, egress, description? })` returns an authenticated collection link; a `getSecret("/secrets/x")` placeholder in an outbound request is substituted at egress; `secrets.verifyHmac(path, { payload, signature })` checks a webhook\'s HMAC-SHA256 hex signature without revealing the secret',
+  integrations:
+    "connect a provider through this deployment's app: `integrations.connect(provider, { scopes? })` → { authorizationUrl, connection } (send the human there); a person connects one of their own accounts to a project with `integrations.connect(provider, { account })` from their own session; `integrations.requestFromUser(provider, { scopes? })` → a Dash link asking a person to connect their account (or another) to this project, which then uses it as `/secrets/<provider>-<connection>`",
   fetchRoutes:
     "which itx expression a request on this project's hosts goes to: `fetchRoutes.set(name, { requestMatcher: { routingSlug?, url?, headers? }, target, authRequirement?, priority? } | null)` · `list()` · `match({ url, headers })`; the config worker forwards a match to `route.target`",
   ai: "Workers AI, verbatim: `ai.run(model, inputs)`",
@@ -83,7 +87,7 @@ export const BUILT_IN_ROOT_DESCRIPTIONS = {
     "durable future appends: `schedules.set({ key, when, events })` · `schedules.cancel(key)`",
   readEvents: "read this log: `(await itx.readEvents(afterOffset, limit)).events`",
   waitForEvent: "block until an event lands: `waitForEvent({ type, afterOffset, timeoutMs })`",
-  cd: "a context below this one: `itx.cd('./sandbox')`",
+  cd: "another context: `itx.cd('./sandbox')` goes below this one; `itx.cd(path).append({ type, payload })` writes to any context of the project",
   fetch: "the internet through the project's egress: `itx.fetch(new Request(url))`",
   rpcStubs: "live values clients lent here: `rpcStubs.list()` · `rpcStubs.get(key)`",
   rewriteRules: "this table, described: `await rewriteRules.list()`",
@@ -106,6 +110,8 @@ export const BUILT_IN_ROOT_DESCRIPTIONS = {
     "a private overlay over the repos: `workspaces.get(path).writeFile(f, text)` · `gitCommit({ message, scope })`",
   files:
     "project files: `files.get(path).put({ contentType, data })` · `.bytes()` · `.url()` · `files.list(prefix)`",
+  email:
+    "the project's mail at `<slug>@<email domain>`: `email.send({ to, subject, text?, html?, attachments?: [{ path }] })`, or `{ inReplyToOffset, text }` to answer a message; mail in and out lands on `/integrations/email`, threaded by its `email` facet",
 } as const satisfies Record<string, string>;
 
 /** A built-in root's name — a key of the record above. */
@@ -494,10 +500,15 @@ export function rowsNamingRpcStub(args: {
 
 /** THE APP WALL, as one check over an expression loaded code hands in (the resolver's INPUT, or the
  *  TARGET of a row it appends): never the fixed point, never a `cd` above `base` (self and descendants
- *  only, resolved step by step). Codec-style — nothing here is policy: the rows a call rewrites
- *  through are the owner's and are never checked. */
-function admitLoadedCodeExpression(expression: ItxExpression, base: string): void {
-  let at = base;
+ *  only, resolved step by step). A row's target resolves where the row lands (`from`), so its first
+ *  relative `cd` is resolved there and must still stay beneath `base`. A spec's SOURCE EXPRESSION in a
+ *  call's arguments (`workers.get`, `facets.get`, `processors.enable`) is walled too, at the context
+ *  the walk has reached, so the call fails where it is made; the producer also runs there as loaded
+ *  code when the code loads (the DO's `invoke`). Codec-style — nothing here is policy: the rows a
+ *  call rewrites through are the owner's and are never checked. */
+function admitLoadedCodeExpression(expression: ItxExpression, base: string, from = base): void {
+  let ceiling = base; // what no `cd` may leave
+  let at = from; // what the next relative `cd` resolves against
   for (const step of expression) {
     const name = typeof step === "string" ? step : step[0];
     if (name === "builtins")
@@ -505,46 +516,135 @@ function admitLoadedCodeExpression(expression: ItxExpression, base: string): voi
         "FORBIDDEN",
         `"itx.builtins" is not a loaded worker's word — this context's rows say what its code may spell (${JSON.stringify(print(expression, { holes: true }))})`,
       );
+    if (Array.isArray(step))
+      for (const arg of step.slice(1)) {
+        const source = typeof arg === "object" && arg && "source" in arg ? arg.source : undefined;
+        if (typeof source === "string" || Array.isArray(source))
+          admitLoadedCodeExpression(normalizedItxExpression(source), ceiling, at);
+      }
     if (Array.isArray(step) && step[0] === "cd" && typeof step[1] === "string") {
       const to = resolveContextPath(at, step[1]);
-      if (to !== at && !to.startsWith(at === "/" ? "/" : `${at}/`))
+      if (to !== ceiling && !to.startsWith(ceiling === "/" ? "/" : `${ceiling}/`))
         throw codedError(
           "FORBIDDEN",
-          `cd goes down only for loaded code: ${JSON.stringify(step[1])} from ${JSON.stringify(at)} would leave it`,
+          `cd goes down only for loaded code: ${JSON.stringify(step[1])} from ${JSON.stringify(at)} would leave ${JSON.stringify(ceiling)}`,
         );
-      at = to;
+      at = ceiling = to;
     }
   }
 }
 
-/** THE APP WALL ON A ROW: a rewrite rule or a subscription loaded code appends on its own context is
- *  walled on its TARGET like a call is on its input — else `itx ⇒ itx.builtins.cd('/')` on its own log
- *  would re-parent it past its creator's masks, and a subscription target runs as the kernel. The one
- *  fixed-point target it may write is its OWN lend, `itx.builtins.rpcStubs.get(<key>)`: the registry is
- *  this context's, so the row grants nothing the code does not already hold. A `null` (a mask, an
- *  un-set) says nothing and passes. Any other event passes untouched. */
-export function admitLoadedCodeRow(event: { type: string; payload?: unknown }, base: string): void {
+/** THE APP WALL ON A ROW: a rewrite rule or a subscription loaded code appends is walled on its
+ *  TARGET like a call is on its input, against the context the call started at (`base`) and as it
+ *  will resolve where it lands (`landsAt`) — else a jail granted `itx.append` would write itself
+ *  `itx.x ⇒ itx.builtins.cd('/').x`, a row's `./x` would mean another context's `./x`, and a
+ *  subscription target runs as the kernel. The one fixed-point target it may write is its OWN lend,
+ *  `itx.builtins.rpcStubs.get(<key>)`: the registry is this context's, so the row grants nothing the
+ *  code does not already hold. A `null` (a mask, an un-set) says nothing and passes. Nothing gets
+ *  round the wall:
+ *    • a REMOVAL (`ifTarget`, the reduce's compare-and-set delete) is refused: it hands the name back
+ *      to what lies beneath it, a jail's bare null or a parent link. Loaded code never needs one:
+ *      `provide` lends it live stubs only, whose rows the DO removes when the last pager closes;
+ *    • a SCHEDULED batch (`schedule-set`) is walled event by event as it is scheduled: the alarm
+ *      appends it later as the kernel;
+ *    • a FETCH ROUTE and the project's INGRESS are set only from the project's root: the config
+ *      worker serves them at `/`, so one set from below would publish the root's reach on the
+ *      project's hosts. `match` and `list` only read, and answer from below.
+ *  A jail's own null is the append boundary's (`refuseLiftingAJail`). Any other event passes
+ *  untouched. */
+export function admitLoadedCodeRow(
+  event: { type: string; payload?: unknown },
+  base: string,
+  landsAt: string,
+): void {
+  if (event.type === "events.iterate.com/itx/schedule-set") {
+    for (const occurrence of ScheduledAppendInput.parse(event.payload).events)
+      admitLoadedCodeRow(occurrence, base, landsAt);
+    return;
+  }
+  if (
+    event.type === "events.iterate.com/itx/fetch-route-configured" ||
+    event.type === "events.iterate.com/itx/ingress-configured"
+  ) {
+    if (base !== "/")
+      throw codedError(
+        "FORBIDDEN",
+        `a project's fetch routes and ingress are set only from the project's root: the config worker serves them at "/", and ${JSON.stringify(base)} is below it`,
+      );
+    return;
+  }
   if (
     event.type !== "events.iterate.com/itx/rewrite-rule-configured" &&
     event.type !== "events.iterate.com/itx/subscription-configured"
   )
     return;
-  const target = (event.payload as { target?: unknown } | undefined)?.target;
+  // Wire-fed: each field is `unknown` here and checked where it is read; the codec parses the rest.
+  const payload = event.payload as { target?: unknown } | undefined;
+  if (
+    event.type === "events.iterate.com/itx/rewrite-rule-configured" &&
+    payload &&
+    Object.hasOwn(payload, "ifTarget")
+  )
+    throw codedError(
+      "FORBIDDEN",
+      "loaded code removes no row (`ifTarget`): the name would answer from beneath it again — write `target: null` to mask it",
+    );
+  const target = payload?.target;
   if (!target) return; // a mask, an un-set (an empty string is the reduce's refusal, not this wall's)
   if (typeof target !== "string" && !Array.isArray(target)) return; // a live object: the lend's own business
   const expression = normalizedItxExpression(target as ItxExpressionInput, { holes: true });
   const [, root, registry, lend] = expression;
   if (root === "builtins" && registry === "rpcStubs" && Array.isArray(lend) && lend[0] === "get")
     return;
-  admitLoadedCodeExpression(expression, base);
+  admitLoadedCodeExpression(expression, base, landsAt);
+}
+
+/** A JAIL IS LIFTED ONLY BY A PERSON. While a context's table holds its bare `itx ⇒ null`, a row that
+ *  re-points or removes it lands only from a member's session (a principal). Never from loaded code,
+ *  however it got there: its own `itx.append` granted beside the null, a lend's row (which goes with
+ *  its last pager, and the null with it), a sibling appending into a jail open inward. Never from the
+ *  kernel's own writes either: a schedule's occurrence or a subscription whose target appends a row,
+ *  whenever it was set up. Either would bring the context roots back, `cd` among them, and with it
+ *  the whole project. Runs at the append boundary on the normalized batch (iterate-context-durable-
+ *  object.ts `#appendAndRunCommittedEffects`). */
+export function refuseLiftingAJail(
+  events: readonly StreamEventInput[],
+  rules: Readonly<Record<string, ItxExpressionRewriteRule>>,
+  caller: Caller,
+): void {
+  if (caller.principal || rules.itx?.target !== null) return;
+  for (const event of events) {
+    if (event.type !== "events.iterate.com/itx/rewrite-rule-configured") continue;
+    // Normalized at the append boundary (`normalizeRewriteRuleConfigured`): the match is the parsed
+    // prefix, the target the parsed expression or null.
+    const payload = event.payload as { match: ItxExpressionPrefix; target: ItxExpression | null };
+    if (payload.match.length === 1 && (payload.target || Object.hasOwn(payload, "ifTarget")))
+      throw codedError(
+        "FORBIDDEN",
+        "this context is a jail (a bare `itx ⇒ null`): only a member's session re-points or removes it, never code",
+      );
+  }
+}
+
+/** `itx.cd(path).append(…)` exactly (`ItxExpressionResolver#admit` says why it goes anywhere). */
+function isCdAppend(expression: ItxExpression): boolean {
+  const [, cd, append] = expression;
+  return (
+    expression.length === 3 &&
+    Array.isArray(cd) &&
+    cd[0] === "cd" &&
+    typeof cd[1] === "string" &&
+    Array.isArray(append) &&
+    append[0] === "append"
+  );
 }
 
 /** A bare `itx` row whose target is `cd` of THIS context is a loop no depth budget can see — every
  *  hop is a fresh resolve — so the append boundary refuses it against the path the row lands on
  *  (core-processor.ts `normalizeControlEvent`), whichever caller appends: `provide`, a script's
  *  `itx.append`, a sibling's `cd(path).append`, a schedule's batch, a pager attach. Two contexts
- *  pointing at each other is refused only where it would be created (library.ts `entityRoot`: a
- *  context does not create its own ancestor); rows written by hand can still spell it, a
+ *  pointing at each other is never created (library.ts `entityRoot`: a context creates only
+ *  beneath itself, so the link it writes points up); rows written by hand can still spell it, a
  *  trusted-client misconfiguration. Runs on the normalized row: the match and target parsed once. */
 export function refuseSelfLoopRow(
   row: { match: ItxExpression; target: ItxExpression | null },
@@ -720,18 +820,24 @@ export class ItxExpressionResolver {
     this.#caller = args.caller;
   }
 
-  /** THE APP WALL (`admitLoadedCodeExpression`): loaded code hands in short names and nothing else — never the fixed
-   *  point, never a `cd` above its own context (self and descendants only, resolved step by step). On
-   *  the INPUT only: the rows a call rewrites through are the owner's grants and are never checked, so
-   *  a parent link `itx ⇒ itx.builtins.cd('/agents/x')` carries a script up exactly as far as its
-   *  owner said. Codec-style, kin to the reserved names `parse` refuses — nothing here is policy. */
+  /** THE APP WALL (`admitLoadedCodeExpression`): loaded code hands in short names and nothing else —
+   *  never the fixed point, never a `cd` above its own context (self and descendants only, resolved
+   *  step by step). ONE SHAPE goes anywhere in the project: `itx.cd(path).append(…)`, nothing before
+   *  the `cd` and nothing after the `append`, because anyone may append anywhere and the stamp says
+   *  who did (src/caller.ts `stampCaller`). The destination resolves the append through its own
+   *  table, so a jail's bare null refuses it there, and a row it carries is walled against where the
+   *  call started (`admitLoadedCodeRow`). On the INPUT only: the rows a call rewrites through are the
+   *  owner's grants and are never checked, so a parent link `itx ⇒ itx.builtins.cd('/agents/x')`
+   *  carries a script up exactly as far as its owner said. Codec-style, kin to the reserved names
+   *  `parse` refuses — nothing here is policy. */
   #admit(expression: ItxExpression): void {
     const caller = this.#caller();
     // Only a trusted cd hop stamps path, after the whole input expression passed this check.
     // The remaining expression now includes the owner's rewrites (e.g. the agent's sandbox
     // redirect to builtins.run), not just loaded code's words. Keep app for row admission and
     // attribution, but don't reject the owner's grant again at its destination.
-    if (caller.app && !caller.path) admitLoadedCodeExpression(expression, this.#path);
+    if (caller.app && !caller.path && !isCdAppend(expression))
+      admitLoadedCodeExpression(expression, this.#path);
   }
 
   /** PURE: the chain of rewrites from `call` to the builtins-rooted call that would run

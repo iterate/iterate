@@ -14,9 +14,9 @@ import {
   InputGroup,
   InputGroupAddon,
   InputGroupButton,
+  InputGroupInput,
 } from "@iterate-com/ui/components/input-group";
 import { IterateLogo } from "@iterate-com/ui/components/iterate-logo";
-import { SecretInput } from "@iterate-com/ui/components/not-recorded";
 import {
   Select,
   SelectContent,
@@ -26,7 +26,8 @@ import {
   SelectValue,
 } from "@iterate-com/ui/components/select";
 import { EyeIcon, EyeOffIcon, LogOutIcon, UsbIcon } from "lucide-react";
-import { ensureVoiceAgent, fetchVoiceInstall } from "../../../../agents/voice/install.ts";
+import { publishedVersion } from "@iterate-com/agents/install";
+import { ensureVoiceAgent } from "@iterate-com/voice/install";
 import { SetupWizard, type SetupInput } from "../../components/setup-wizard.tsx";
 import { isStatusVoice, statusVoices } from "../../firmware/config-image.ts";
 import {
@@ -123,7 +124,12 @@ function KitPage() {
     mutationFn: async (input: SetupInput) => {
       try {
         using itx = await api.projects.get(input.project.id);
-        const voice = await ensureVoiceAgent(itx, fetchVoiceInstall, input.openaiKey);
+        const commit = import.meta.env.VITE_SOURCE_COMMIT;
+        const versions = {
+          agents: await publishedVersion("@iterate-com/agents", commit),
+          voice: await publishedVersion("@iterate-com/voice", commit),
+        };
+        const voice = await ensureVoiceAgent(itx, versions, input.openaiKey);
         if (voice === "needs-openai-key")
           throw new Error(`${input.project.slug} needs an OpenAI API key. Close this and add one.`);
         const { token } = await api.grants.mint({
@@ -361,7 +367,7 @@ function KitPage() {
                 OpenAI API key
               </FieldLabel>
               <FieldContent>
-                <SecretInput
+                <Input
                   id="openai-key"
                   name="openai-key"
                   type="password"
@@ -480,13 +486,7 @@ function PasswordInput(props: ComponentProps<"input"> & { id: string }) {
   const shown = useQuery({ queryKey: shownKey, queryFn: skipToken, initialData: false }).data;
   return (
     <InputGroup>
-      {/* InputGroupInput's slot and look, on the SecretInput that keeps it out of session replay */}
-      <SecretInput
-        {...props}
-        type={shown ? "text" : "password"}
-        data-slot="input-group-control"
-        className="flex-1 rounded-none border-0 bg-transparent shadow-none ring-0 focus-visible:ring-0 dark:bg-transparent"
-      />
+      <InputGroupInput {...props} type={shown ? "text" : "password"} spellCheck={false} />
       <InputGroupAddon align="inline-end">
         <InputGroupButton
           size="icon-xs"

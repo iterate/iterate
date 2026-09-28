@@ -4,6 +4,7 @@ import { proxyPosthogRequest } from "@iterate-com/shared/posthog";
 import { startAppConfigOf } from "@iterate-com/shared/start-app-config";
 import { appAuth, appSession } from "iterate/app-server";
 import type { BrowserSession } from "iterate/app-session";
+import { adminScopes } from "./scopes.ts";
 export { BrowserSession } from "iterate/app-session";
 
 declare global {
@@ -32,6 +33,7 @@ export default createServerEntry({
     if (url.pathname.startsWith("/e/")) return proxyPosthogRequest({ request, proxyPrefix: "/e" });
     const auth = await appAuth(request, {
       client: { name: "iterate Admin", logoUri: "/client-logo.svg" },
+      scopes: adminScopes,
       sessions: env.BROWSER_SESSION,
       issuer: config.urls.os,
       resource: `${config.urls.os}/api`,

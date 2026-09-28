@@ -2,6 +2,7 @@ import { expect, test, vi } from "vitest";
 import { CloudflareApiError } from "../../../scripts/lib/env-context.ts";
 import {
   deleteArtifactsNamespace,
+  ensureArtifactsNamespace,
   renderStuckArtifactsNamespacesPage,
   type Cf,
 } from "./preview-artifacts.ts";
@@ -9,82 +10,18 @@ import {
 const NAMESPACE = "os-preview-pr1-repos";
 const ROUTE = `/artifacts/namespaces/${NAMESPACE}`;
 
-test("a repo delete answering 500/10400 once is retried on the next round, logged, and the namespace goes", async () => {
-  let failed = false;
-  const api = fakeArtifactsApi(
-    ["prj_a.repos--config", "prj_a.site", "prj_b.repos--config"],
-    (method, path) => {
-      if (method !== "DELETE" || !path.endsWith("prj_a.repos--config") || failed) return undefined;
-      failed = true;
-      return internalError(method, path);
-    },
-  );
-
-  const outcome = await deleting(api.cf);
-
-  expect(outcome).toMatchObject({
-    error: undefined,
-    platformFailureRetries: [
-      {
-        event: "preview.platform-failure-retry",
-        name: NAMESPACE,
-        round: 1,
-        platformFailureRounds: 1,
-        status: 500,
-        codes: [10400],
-      },
-    ],
-    // the retry's, then the two confirming reads' (confirmedGone)
-    waits: [2000, 2000, 2000],
-  });
-  expect(api.state()).toEqual({ repos: [], namespaceExists: false });
-  // the other two deletes ran in the failing round; the next round deleted the one that failed
-  expect(api.requests.filter((request) => /^DELETE .*\/repos\//.test(request))).toHaveLength(4);
-});
-
-test("a 5xx on the repos list or on the namespace delete is a platform failure too", async () => {
-  const failedOnce = new Set<string>();
-  const api = fakeArtifactsApi(["prj_a.repos--config"], (method, path) => {
-    const request = `${method} ${path.startsWith(`${ROUTE}/repos?`) ? "list" : path}`;
-    if (request !== "GET list" && request !== `DELETE ${ROUTE}`) return undefined;
-    if (failedOnce.has(request)) return undefined;
-    failedOnce.add(request);
-    return new CloudflareApiError(method, path, 503, []);
-  });
-
-  const outcome = await deleting(api.cf);
-
-  expect(outcome).toMatchObject({ error: undefined, waits: [2000, 4000, 2000, 2000] });
-  expect(outcome.platformFailureRetries).toHaveLength(2);
-  expect(api.state()).toEqual({ repos: [], namespaceExists: false });
-});
-
-test("a platform failure that persists surfaces after 8 rounds — bounded, each one logged", async () => {
-  const api = fakeArtifactsApi(["prj_a.repos--config"], (method, path) =>
-    method === "DELETE" ? internalError(method, path) : undefined,
-  );
-
-  const outcome = await deleting(api.cf);
-
-  expect(outcome).toMatchObject({
-    error: {
-      message: expect.stringMatching(/DELETE .*prj_a\.repos--config failed \(500\).*10400/),
-    },
-    waits: [2000, 4000, 8000, 15_000, 15_000, 15_000, 15_000, 15_000],
-  });
-  expect(outcome.platformFailureRetries).toHaveLength(8);
-});
-
-test("a refusal that is not a 5xx surfaces at once, never retried", async () => {
+// A failure of Cloudflare's own is sent again by the API client (env-context's `cloudflareApi`, and
+// its rows in env-context.test.ts); what reaches the delete is Cloudflare's answer.
+test("a refusal surfaces at once, never asked again", async () => {
   const api = fakeArtifactsApi(["prj_a.repos--config"], (method, path) =>
     method === "DELETE" ? new CloudflareApiError(method, path, 403, [{ code: 10000 }]) : undefined,
   );
 
   expect(await deleting(api.cf)).toMatchObject({
     error: { message: expect.stringMatching(/failed \(403\)/) },
-    platformFailureRetries: [],
     waits: [],
   });
+  expect(api.requests.filter((request) => request.startsWith("DELETE"))).toHaveLength(1);
 });
 
 test("a namespace that does not exist is the expected case: nothing deleted, no retry", async () => {
@@ -173,6 +110,79 @@ test("an accepted namespace delete is confirmed by three reads before it counts 
   expect(api.requests.filter((request) => request === `GET ${ROUTE}`)).toHaveLength(4);
 });
 
+// ── a namespace create answered 409/10306 or 409/10201 while its activation settles ────────────
+
+test.for([
+  {
+    name: "409/10306 (activation already in progress)",
+    code: 10306,
+    readsBeforeActive: 3,
+    waits: [2000, 2000],
+    warns: [
+      { event: "preview.platform-failure-retry", name: NAMESPACE, codes: [10306], read: 1 },
+      { event: "preview.platform-failure-retry", name: NAMESPACE, codes: [10306], read: 2 },
+    ],
+    requests: [
+      `GET ${ROUTE}`,
+      "POST /artifacts/namespaces",
+      `GET ${ROUTE}`,
+      `GET ${ROUTE}`,
+      `GET ${ROUTE}`,
+    ],
+  },
+  {
+    name: "409/10201 (already exists)",
+    code: 10201,
+    readsBeforeActive: 1,
+    waits: [],
+    warns: [],
+    requests: [`GET ${ROUTE}`, "POST /artifacts/namespaces", `GET ${ROUTE}`],
+  },
+])(
+  "a create answering $name reads the namespace until its activation lands, each wait a platform-failure warn",
+  async ({ code, readsBeforeActive, waits, warns, requests }) => {
+    const api = fakeArtifactsApi([], activationSettling(code, readsBeforeActive));
+
+    expect(await ensuring(api.cf)).toMatchObject({
+      error: undefined,
+      waits,
+      warns,
+      logs: [`found Artifacts namespace ${NAMESPACE} once its activation landed`],
+    });
+    expect(api).toMatchObject({ requests });
+  },
+);
+
+test("an activation that never lands gives up after 30 reads 2 s apart — bounded", async () => {
+  const api = fakeArtifactsApi([], activationSettling(10306, Number.POSITIVE_INFINITY));
+
+  const outcome = await ensuring(api.cf);
+
+  expect(outcome).toMatchObject({
+    error: {
+      message: `Artifacts namespace ${NAMESPACE} still reads 404 after 30 reads 2 s apart; its create answered 409/10306`,
+    },
+  });
+  expect(outcome.waits.reduce((sum, ms) => sum + ms, 0)).toBe(58_000);
+  expect(outcome.warns).toHaveLength(29);
+  expect(api.requests.filter((request) => request === `GET ${ROUTE}`)).toHaveLength(31);
+});
+
+test("a create refused any other way throws at once, never read again", async () => {
+  const api = fakeArtifactsApi([], (method, path) =>
+    method === "POST"
+      ? new CloudflareApiError(method, path, 403, [{ code: 10000 }])
+      : new CloudflareApiError(method, path, 404, [{ code: 10200 }]),
+  );
+
+  expect(await ensuring(api.cf)).toMatchObject({
+    error: { message: expect.stringMatching(/POST \/artifacts\/namespaces failed \(403\)/) },
+    waits: [],
+    warns: [],
+  });
+  expect(api).toMatchObject({ requests: [`GET ${ROUTE}`, "POST /artifacts/namespaces"] });
+});
+
 test("the sweep's page names each stuck namespace, what to escalate, and the run", () => {
   const page = renderStuckArtifactsNamespacesPage(
     [{ namespace: NAMESPACE, repoCount: 1, createdAt: "2026-09-22T13:11:36Z" }],
@@ -191,13 +201,6 @@ test("the sweep's page names each stuck namespace, what to escalate, and the run
 function notEmpty(method: string, path: string) {
   return new CloudflareApiError(method, path, 409, [
     { code: 10202, message: "Namespace is not empty" },
-  ]);
-}
-
-/** What the Artifacts API answered on 2026-09-23 20:34 and 20:35 to two PR-close repo deletes. */
-function internalError(method: string, path: string) {
-  return new CloudflareApiError(method, path, 500, [
-    { code: 10400, message: "An internal error occurred." },
   ]);
 }
 
@@ -236,34 +239,57 @@ function fakeArtifactsApi(
   return { cf, requests, state: () => ({ repos: [...repos], namespaceExists }) };
 }
 
+/** Cloudflare's answers while the namespace's activation settles: a create answers 409 with
+ *  `code`, and the namespace reads 404 `readsBeforeActive` times before its row. */
+function activationSettling(code: number, readsBeforeActive: number) {
+  let reads = 0;
+  return (method: string, path: string) => {
+    if (method === "POST") return new CloudflareApiError(method, path, 409, [{ code }]);
+    if (path === ROUTE && reads++ < readsBeforeActive)
+      return new CloudflareApiError(method, path, 404, [{ code: 10200 }]);
+    return undefined;
+  };
+}
+
+/** Ensure the namespace with every wait recorded instead of slept; its warns and logs. */
+async function ensuring(cf: Cf) {
+  const waits: number[] = [];
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  const log = vi.spyOn(console, "log").mockImplementation(() => {});
+  const error = await ensureArtifactsNamespace(cf, NAMESPACE, async (ms) => {
+    waits.push(ms);
+  }).then(
+    () => undefined,
+    (failure: Error) => failure,
+  );
+  return {
+    error,
+    waits,
+    warns: warn.mock.calls.map(([entry]) => entry),
+    logs: log.mock.calls.map(([entry]) => entry),
+  };
+}
+
 /** Delete the namespace with every wait recorded instead of slept; its warns, split. */
 async function deleting(cf: Cf) {
   const waits: number[] = [];
   const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
   const log = vi.spyOn(console, "log").mockImplementation(() => {});
-  try {
-    const { stuck, error } = await deleteArtifactsNamespace(cf, NAMESPACE, async (ms) => {
-      waits.push(ms);
-    }).then(
-      (stuck) => ({ stuck, error: undefined }),
-      (failure: Error) => ({ stuck: undefined, error: failure }),
-    );
-    const warns = warn.mock.calls.map(([entry]) => entry);
-    return {
-      error,
-      stuck,
-      waits,
-      warns,
-      logs: log.mock.calls.map(([entry]) => entry),
-      stuckEvents: warns.filter(
-        (entry) => entry?.event === "preview.platform-failure-stuck-namespace",
-      ),
-      platformFailureRetries: warns.filter(
-        (entry) => entry?.event === "preview.platform-failure-retry",
-      ),
-    };
-  } finally {
-    warn.mockRestore();
-    log.mockRestore();
-  }
+  const { stuck, error } = await deleteArtifactsNamespace(cf, NAMESPACE, async (ms) => {
+    waits.push(ms);
+  }).then(
+    (stuck) => ({ stuck, error: undefined }),
+    (failure: Error) => ({ stuck: undefined, error: failure }),
+  );
+  const warns = warn.mock.calls.map(([entry]) => entry);
+  return {
+    error,
+    stuck,
+    waits,
+    warns,
+    logs: log.mock.calls.map(([entry]) => entry),
+    stuckEvents: warns.filter(
+      (entry) => entry?.event === "preview.platform-failure-stuck-namespace",
+    ),
+  };
 }

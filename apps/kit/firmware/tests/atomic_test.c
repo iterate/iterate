@@ -1,24 +1,11 @@
 #include "iterate/kit/atomic.h"
 
+#include <assert.h>
 #include <pthread.h>
 #include <sched.h>
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
-#include <stdio.h>
-#include <stdlib.h>
-
-#define CHECK(condition)                                                     \
-  do {                                                                       \
-    if (!(condition)) {                                                      \
-      fprintf(                                                               \
-          stderr,                                                            \
-          "%s:%d: check failed: %s\n",                                      \
-          __FILE__,                                                          \
-          __LINE__,                                                          \
-          #condition);                                                       \
-      abort();                                                               \
-    }                                                                        \
-  } while (0)
 
 enum {
   WRITER_COUNT = 4,
@@ -52,7 +39,7 @@ static void *observe_counter(void *context) {
              &fixture->writers_finished) < WRITER_COUNT) {
     const uint32_t current =
         iterate_kit_atomic_load_relaxed_u32(&fixture->counter);
-    CHECK(current >= previous);
+    assert(current >= previous);
     iterate_kit_atomic_update_max_relaxed_u32(
         &fixture->maximum_observed, current);
     previous = current;
@@ -79,24 +66,24 @@ static void diagnostic_counters_remain_atomic_under_parallel_sampling(void) {
   pthread_t observer;
   uint32_t index;
 
-  CHECK(pthread_create(
-            &observer, NULL, observe_counter, &fixture) == 0);
+  assert(pthread_create(
+             &observer, NULL, observe_counter, &fixture) == 0);
   for (index = 0U; index < WRITER_COUNT; ++index) {
-    CHECK(pthread_create(
-              &writers[index],
-              NULL,
-              increment_counter,
-              &fixture) == 0);
+    assert(pthread_create(
+               &writers[index],
+               NULL,
+               increment_counter,
+               &fixture) == 0);
   }
   for (index = 0U; index < WRITER_COUNT; ++index) {
-    CHECK(pthread_join(writers[index], NULL) == 0);
+    assert(pthread_join(writers[index], NULL) == 0);
   }
-  CHECK(pthread_join(observer, NULL) == 0);
+  assert(pthread_join(observer, NULL) == 0);
 
-  CHECK(
+  assert(
       iterate_kit_atomic_load_relaxed_u32(&fixture.counter) ==
       WRITER_COUNT * INCREMENTS_PER_WRITER);
-  CHECK(
+  assert(
       iterate_kit_atomic_load_relaxed_u32(
           &fixture.maximum_observed) <=
       WRITER_COUNT * INCREMENTS_PER_WRITER);
@@ -111,9 +98,9 @@ static void diagnostic_counters_remain_atomic_under_parallel_sampling(void) {
 static void diagnostic_counter_saturation_never_wraps(void) {
   uint32_t counter = UINT32_MAX - 1U;
   iterate_kit_atomic_saturating_increment_relaxed_u32(&counter);
-  CHECK(counter == UINT32_MAX);
+  assert(counter == UINT32_MAX);
   iterate_kit_atomic_saturating_increment_relaxed_u32(&counter);
-  CHECK(counter == UINT32_MAX);
+  assert(counter == UINT32_MAX);
 }
 
 static void diagnostic_add_table(void) {
@@ -126,7 +113,7 @@ static void diagnostic_add_table(void) {
   for (size_t i = 0; i < sizeof(rows) / sizeof(rows[0]); ++i) {
     volatile uint32_t counter = rows[i].before;
     iterate_kit_atomic_saturating_add_relaxed_u32(&counter, rows[i].amount);
-    CHECK(iterate_kit_atomic_load_relaxed_u32(&counter) == rows[i].after);
+    assert(iterate_kit_atomic_load_relaxed_u32(&counter) == rows[i].after);
   }
 }
 

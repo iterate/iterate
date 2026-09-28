@@ -1,7 +1,7 @@
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { expect, onTestFinished, test, vi } from "vitest";
+import { temporaryDirectory } from "@iterate-com/shared/test-support/temporary-directory";
+import { expect, test, vi } from "vitest";
 import { runCloudflareCommandWith429Retry, runAsync, smokeResponse } from "./deploy-helpers.ts";
 
 // ── runAsync ──
@@ -18,9 +18,12 @@ test("rejects a nonzero child exit", async () => {
 });
 
 // ── runCloudflareCommandWith429Retry ──
-test("retries an explicit Wrangler 429 and then succeeds", async () => {
-  const directory = mkdtempSync(join(tmpdir(), "deploy-command-retry-"));
-  const attemptFile = join(directory, "attempts");
+// The waits run on a fake clock that moves on whenever nothing else is left to run: CLOUDFLARE_API's
+// schedule, kept, while the commands run for real.
+test("runs a command Cloudflare's rate limit ended again, with a warn, until it succeeds", async () => {
+  using directory = temporaryDirectory();
+  using warn = fakeClockAndWarns();
+  const attemptFile = join(directory.path, "attempts");
   const script = `
       const fs = require("node:fs");
       const file = ${JSON.stringify(attemptFile)};
@@ -31,77 +34,61 @@ test("retries an explicit Wrangler 429 and then succeeds", async () => {
         process.exit(1);
       }
     `;
-  const sleep = vi.fn(async () => {});
 
-  try {
-    await expect(
-      runCloudflareCommandWith429Retry(
-        process.execPath,
-        ["--eval", script],
-        { cwd: process.cwd() },
-        { backoffMs: [7], sleep },
-      ),
-    ).resolves.toBeUndefined();
+  await expect(
+    runCloudflareCommandWith429Retry(process.execPath, ["--eval", script], { cwd: process.cwd() }),
+  ).resolves.toBeUndefined();
 
-    expect(readFileSync(attemptFile, "utf8")).toBe("2");
-    expect(sleep).toHaveBeenCalledExactlyOnceWith(7);
-  } finally {
-    rmSync(directory, { recursive: true, force: true });
-  }
+  expect(readFileSync(attemptFile, "utf8")).toBe("2");
+  expect(warn.lines()).toMatchObject([
+    { event: "cloudflare-api.platform-failure-retry", kind: "overloaded", attempt: 1 },
+  ]);
 });
 
-test("does not retry a non-429 command failure", async () => {
-  const sleep = vi.fn(async () => {});
+test.for([
+  { name: "a non-429 failure is not run again", stderr: "500 Internal Server Error", exit: 7 },
+  {
+    name: "a recovered 429 is not run again when a later unrelated error ends the command",
+    stderr: "429 Too Many Requests\nERROR\n500 Internal Server Error",
+    exit: 7,
+  },
+])("$name", async ({ stderr, exit }) => {
+  using warn = fakeClockAndWarns();
 
   await expect(
     runCloudflareCommandWith429Retry(
       process.execPath,
-      ["--eval", 'console.error("500 Internal Server Error"); process.exit(7)'],
+      ["--eval", `console.error(${JSON.stringify(stderr)}); process.exit(${exit})`],
       { cwd: process.cwd() },
-      { backoffMs: [1, 1], sleep },
     ),
-  ).rejects.toThrow("exited with 7");
-  expect(sleep).not.toHaveBeenCalled();
+  ).rejects.toThrow(`exited with ${exit}`);
+  expect(warn.lines()).toEqual([]);
 });
 
-test("does not retry a recovered 429 when a later unrelated error terminates the command", async () => {
-  const sleep = vi.fn(async () => {});
+test("the last 429 fails once the schedule is spent", async () => {
+  using warn = fakeClockAndWarns();
 
   await expect(
     runCloudflareCommandWith429Retry(
       process.execPath,
-      [
-        "--eval",
-        'console.error("429 Too Many Requests\\nERROR\\n500 Internal Server Error"); process.exit(7)',
-      ],
+      ["--eval", `console.error("429 Too Many Requests"); process.exit(1)`],
       { cwd: process.cwd() },
-      { backoffMs: [1, 1], sleep },
-    ),
-  ).rejects.toThrow("exited with 7");
-  expect(sleep).not.toHaveBeenCalled();
-});
-
-test("fails after the bounded 429 attempt budget is exhausted", async () => {
-  const sleep = vi.fn(async () => {});
-
-  await expect(
-    runCloudflareCommandWith429Retry(
-      process.execPath,
-      ["--eval", 'console.error("429 Too Many Requests"); process.exit(1)'],
-      { cwd: process.cwd() },
-      { backoffMs: [1, 1], sleep },
     ),
   ).rejects.toThrow("exited with 1");
-  expect(sleep).toHaveBeenCalledTimes(2);
+  expect(warn.lines()).toMatchObject([
+    { event: "cloudflare-api.platform-failure-retry", attempt: 1 },
+    { event: "cloudflare-api.platform-failure-retry", attempt: 2 },
+    { event: "cloudflare-api.platform-failure-retry", attempt: 3 },
+    { event: "cloudflare-api.platform-failure-retry", attempt: 4 },
+    { event: "cloudflare-api.platform-failure-retry", attempt: 5 },
+    { event: "cloudflare-api.platform-failure-gave-up", attempts: 6 },
+  ]);
 });
 
 // ── smokeResponse ──
 test("can require an exact response body rather than trusting the status alone", async () => {
   const fetchMock = vi.fn(async () => Response.json({ error: "not found" }, { status: 404 }));
   vi.stubGlobal("fetch", fetchMock);
-  onTestFinished(() => {
-    vi.unstubAllGlobals();
-  });
 
   await expect(
     smokeResponse(
@@ -116,3 +103,16 @@ test("can require an exact response body rather than trusting the status alone",
 
   expect(fetchMock).toHaveBeenCalledOnce();
 });
+
+/** Fake timers that move on whenever nothing else is left to run, and console.warn's lines. */
+function fakeClockAndWarns() {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  vi.setTimerTickMode("nextTimerAsync");
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  return {
+    lines: () => warn.mock.calls.map(([line]) => line),
+    [Symbol.dispose]() {
+      vi.useRealTimers();
+    },
+  };
+}

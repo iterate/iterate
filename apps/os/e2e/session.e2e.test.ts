@@ -19,12 +19,12 @@ import {
   workerUrl,
 } from "./support/client.ts";
 import { oauthSession } from "./support/principal.ts";
+import { publishConfigWorker } from "./support/config-worker.ts";
 import {
   fetchProjectUrl,
   freshDnsSafeProjectSlug,
   projectUrl,
   projectUrlSocket,
-  publishConfigWorker,
   registerProject,
 } from "./support/project-host.ts";
 import { SOURCES } from "./support/sources.ts";

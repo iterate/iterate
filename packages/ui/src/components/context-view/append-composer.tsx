@@ -1,8 +1,8 @@
 // The context view's raw composer, the old platform's (apps/os `stream-view-composer.tsx` raw mode
 // and `example-events-panel.tsx`, removed in #2837): YAML (or JSON) for one event or a list of
 // them, sent through the caller's `onAppend` with ⌘/Ctrl+Enter or the button. Closed it is one
-// "Append event" button under the feed, so it never eats the log; open, the editor is capped (12rem)
-// and the feed keeps the rest. Typing completes the event's fields and, after `type:`, the types
+// "Append event" button under the feed, in the rows' body column, so it never eats the log; open,
+// in the same column under one rule, the editor is capped (12rem) and the feed keeps the rest. Typing completes the event's fields and, after `type:`, the types
 // this context knows (append-completions.ts); "Examples" loads a draft of a type some processor here
 // consumes, grouped by processor. Nothing is inserted here: the appended events arrive by the view's
 // live subscription like anyone's, and the view pins the feed to its tail so they land in view. The
@@ -20,6 +20,7 @@ import {
   DropdownMenuTrigger,
 } from "../dropdown-menu.tsx";
 import { Spinner } from "../spinner.tsx";
+import { RowGutter } from "./event-row.tsx";
 import { appendCompletionsAt, knownEventTypes } from "./append-completions.ts";
 import {
   DEFAULT_APPEND_YAML,
@@ -85,75 +86,81 @@ export function AppendComposer({
   };
   if (!open)
     return (
-      <div>
-        <Button variant="ghost" size="sm" onClick={() => setOpen(true)}>
+      <div className="flex items-center gap-x-3.5 px-3 sm:px-4 py-1">
+        <RowGutter times />
+        {/* the button's own padding sits outside the column, so its words line up with the rows' */}
+        <Button variant="ghost" size="sm" className="-ml-2" onClick={() => setOpen(true)}>
           <PlusIcon /> Append event
         </Button>
+        <span className="hidden text-xs text-muted-foreground sm:inline">YAML · ⌘↵</span>
       </div>
     );
   return (
-    <div className="flex flex-col gap-2 border-t pt-2" data-slot="append-composer">
-      <CodeEditor
-        value={draft}
-        onValueChange={edit}
-        onSubmit={() => void submit()}
-        language="yaml"
-        label="Events to append"
-        placeholder="type: manual/note-added  (a YAML list appends several)"
-        focusOnMount
-        complete={(text, pos, explicit) => appendCompletionsAt(text, pos, explicit, known)}
-      />
-      <div className="flex flex-wrap items-center gap-2">
-        {examples.length > 0 ? (
-          <DropdownMenu>
-            <DropdownMenuTrigger render={<Button variant="ghost" size="sm" />}>
-              <SparklesIcon /> Examples
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="start" side="top" className="w-auto max-w-80">
-              {examples.map((group) => (
-                <DropdownMenuGroup key={group.label}>
-                  <DropdownMenuLabel className="truncate">{group.label}</DropdownMenuLabel>
-                  {group.types.map((type) => (
-                    <DropdownMenuItem
-                      key={type}
-                      title={type}
-                      onClick={() => edit(exampleYaml(type))}
-                      className="font-mono text-xs"
-                    >
-                      <span className="truncate">{shortEventType(type)}</span>
-                    </DropdownMenuItem>
-                  ))}
-                </DropdownMenuGroup>
-              ))}
-            </DropdownMenuContent>
-          </DropdownMenu>
-        ) : null}
-        <span className="min-w-0 flex-1 truncate text-xs" role="status">
-          {outcome && "error" in outcome ? (
-            <span data-type="error" className="text-destructive" title={outcome.error}>
-              {outcome.error}
-            </span>
-          ) : outcome ? (
-            <span className="text-muted-foreground">
-              Appended {outcome.appended === 1 ? "1 event" : `${String(outcome.appended)} events`}
-            </span>
-          ) : (
-            <span className="hidden text-muted-foreground sm:inline">
-              YAML or JSON · Tab completes · ⌘↵ appends
-            </span>
-          )}
-        </span>
-        <Button variant="ghost" size="sm" onClick={() => setOpen(false)}>
-          Close
-        </Button>
-        <Button
-          size="sm"
-          onClick={() => void submit()}
-          disabled={pending || blank}
-          title="Append events (⌘↵)"
-        >
-          {pending ? <Spinner /> : null} Append
-        </Button>
+    <div className="flex gap-x-3.5 border-t px-3 sm:px-4 pt-2 pb-1" data-slot="append-composer">
+      <RowGutter times />
+      <div className="flex min-w-0 flex-1 flex-col gap-2">
+        <CodeEditor
+          value={draft}
+          onValueChange={edit}
+          onSubmit={() => void submit()}
+          language="yaml"
+          label="Events to append"
+          placeholder="type: manual/note-added  (a YAML list appends several)"
+          focusOnMount
+          complete={(text, pos, explicit) => appendCompletionsAt(text, pos, explicit, known)}
+        />
+        <div className="flex flex-wrap items-center gap-2">
+          {examples.length > 0 ? (
+            <DropdownMenu>
+              <DropdownMenuTrigger render={<Button variant="ghost" size="sm" />}>
+                <SparklesIcon /> Examples
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="start" side="top" className="w-auto max-w-80">
+                {examples.map((group) => (
+                  <DropdownMenuGroup key={group.label}>
+                    <DropdownMenuLabel className="truncate">{group.label}</DropdownMenuLabel>
+                    {group.types.map((type) => (
+                      <DropdownMenuItem
+                        key={type}
+                        title={type}
+                        onClick={() => edit(exampleYaml(type))}
+                        className="font-mono text-xs"
+                      >
+                        <span className="truncate">{shortEventType(type)}</span>
+                      </DropdownMenuItem>
+                    ))}
+                  </DropdownMenuGroup>
+                ))}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          ) : null}
+          <span className="min-w-0 flex-1 truncate text-xs" role="status">
+            {outcome && "error" in outcome ? (
+              <span data-type="error" className="text-destructive" title={outcome.error}>
+                {outcome.error}
+              </span>
+            ) : outcome ? (
+              <span className="text-muted-foreground">
+                Appended {outcome.appended === 1 ? "1 event" : `${String(outcome.appended)} events`}
+              </span>
+            ) : (
+              <span className="hidden text-muted-foreground sm:inline">
+                YAML or JSON · Tab completes · ⌘↵ appends
+              </span>
+            )}
+          </span>
+          <Button variant="ghost" size="sm" onClick={() => setOpen(false)}>
+            Close
+          </Button>
+          <Button
+            size="sm"
+            onClick={() => void submit()}
+            disabled={pending || blank}
+            title="Append events (⌘↵)"
+          >
+            {pending ? <Spinner /> : null} Append
+          </Button>
+        </div>
       </div>
     </div>
   );

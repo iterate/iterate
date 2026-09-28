@@ -5,7 +5,8 @@ that copy: later template changes never overwrite it. The public GitHub referenc
 downloader live in `packages/shared/src/config-repo-template`.
 
 - `default/` — minimal homepage and instructions; no agent runtime or subscriptions.
-- `with-agents/` — homepage plus the optional agents app, installed on `project/created`.
+- `with-agents/` — homepage plus the agents app (the `@iterate-com/agents` package, run from the
+  `agents/` folder's re-export), installed on `project/created` and on commits that change `agents/`.
 
 A template must contain `worker.ts`, the main module. It and the files it imports may be TypeScript
 or JavaScript, and import packages by name as listed in `package.json` (`iterate/*` and `zod` come
@@ -16,11 +17,12 @@ platform subscribes the config worker's `processEventBatch(events, range)` befor
 `project/created`, and `ConfigWorker` hands each event to `processEvent({ event, itx })`.
 Templates without that manifest have no lifecycle subscription.
 
-Templates are type-checkable as they stand: `package.json` lists only devDependencies — the SDK's
-types from `https://pkg.pr.new/iterate/iterate/iterate@main`, `@cloudflare/workers-types` and
-`typescript` — so `npm install && npx tsc` checks a project's checkout, while the loader links the
-running platform's SDK (an `iterate` absent from `dependencies` is the platform's). In this repo,
-`pnpm typecheck:configs` checks both templates against the workspace SDK.
+Templates are type-checkable as they stand: `package.json` lists the SDK's types from
+`https://pkg.pr.new/iterate/iterate/iterate@main`, `@cloudflare/workers-types` and `typescript` as
+devDependencies, and the packages the worker imports as dependencies, so `npm install && npx tsc`
+checks a project's checkout, while the loader links the running platform's SDK (an `iterate` absent
+from `dependencies` is the platform's). In this repo, `pnpm typecheck:configs` checks both templates
+against the workspace packages.
 
 `session.projects.templates()` lists presets. `projects.create({ project, configRepoTemplate })`
 also accepts custom references such as `github:owner/repo#main&path:templates/example`. The API

@@ -31,37 +31,36 @@ test("stops writers first and verifies all data stores empty, including later KV
     d1: { users: 0, projects: 0, d1_migrations: 1, _cf_KV: 3, sqlite_sequence: 1 },
   });
 });
-test("remaining Durable Objects prevent resource deletion", async () => {
+test.for([
+  {
+    name: "remaining Durable Objects prevent resource deletion",
+    flag: "retainNamespace",
+    error: "namespaces remain",
+    operations: ["retire"],
+  },
+  {
+    name: "two of the worker's own namespaces of one class cannot be erased by class name",
+    flag: "branchNamespaces",
+    error: "share a class name",
+    operations: [],
+  },
+  {
+    name: "another worker sharing a data store prevents all mutations",
+    flag: "sharedConsumer",
+    error: "Other workers still use",
+    operations: [],
+  },
+  {
+    name: "an active worker without Durable Objects cannot keep writing during an erase",
+    flag: "retainBindings",
+    error: "still has data bindings",
+    operations: ["retire"],
+  },
+] as const)("$name", async ({ flag, error, operations }) => {
   using fixture = eraseFixture();
-  fixture.retainNamespace = true;
-  await expect(eraseDataWith({ env: "preview" }, fixture.services)).rejects.toThrow(
-    "namespaces remain",
-  );
-  expect(fixture).toMatchObject({ operations: ["retire"] });
-});
-test("two of the worker's own namespaces of one class cannot be erased by class name", async () => {
-  using fixture = eraseFixture();
-  fixture.branchNamespaces = true;
-  await expect(eraseDataWith({ env: "preview" }, fixture.services)).rejects.toThrow(
-    "share a class name",
-  );
-  expect(fixture).toMatchObject({ operations: [] });
-});
-test("another worker sharing a data store prevents all mutations", async () => {
-  using fixture = eraseFixture();
-  fixture.sharedConsumer = true;
-  await expect(eraseDataWith({ env: "preview" }, fixture.services)).rejects.toThrow(
-    "Other workers still use",
-  );
-  expect(fixture).toMatchObject({ operations: [] });
-});
-test("an active worker without Durable Objects cannot keep writing during an erase", async () => {
-  using fixture = eraseFixture();
-  fixture.retainBindings = true;
-  await expect(eraseDataWith({ env: "preview" }, fixture.services)).rejects.toThrow(
-    "still has data bindings",
-  );
-  expect(fixture).toMatchObject({ operations: ["retire"] });
+  fixture[flag] = true;
+  await expect(eraseDataWith({ env: "preview" }, fixture.services)).rejects.toThrow(error);
+  expect(fixture).toMatchObject({ operations });
 });
 test("a failed resource deletion aborts instead of reporting a successful erase", async () => {
   using fixture = eraseFixture();
@@ -81,11 +80,10 @@ test("a failed resource deletion aborts instead of reporting a successful erase"
 /** One preview deployment's Cloudflare account as fakes: the worker and its Durable Object
  *  namespaces (the erase's services), the Cloudflare API behind the context's `cf`, and the four
  *  data stores behind the listing `fetch`. The flags set before an erase shape what it finds;
- *  `operations` records what it did, in order. Fake timers, the `fetch` stub and the console spy
- *  are restored on dispose. */
+ *  `operations` records what it did, in order. Fake timers are restored on dispose. */
 function eraseFixture() {
   vi.useFakeTimers();
-  const log = vi.spyOn(console, "log").mockImplementation(() => {});
+  vi.spyOn(console, "log").mockImplementation(() => {});
   const fixture = {
     parked: false,
     retainNamespace: false,
@@ -107,7 +105,7 @@ function eraseFixture() {
     ]),
     cf: vi.fn(async (route: string, init?: RequestInit): Promise<unknown> => {
       if (route === "/workers/scripts")
-        return [{ id: "os-preview" }, ...(fixture.sharedConsumer ? [{ id: "old-worker" }] : [])];
+        return [{ id: "os-example" }, ...(fixture.sharedConsumer ? [{ id: "old-worker" }] : [])];
       if (route === "/workers/scripts/old-worker/settings")
         return { bindings: [{ name: "OAUTH_KV", type: "kv_namespace", namespace_id: "oauth" }] };
       if (route.endsWith("/settings"))
@@ -132,10 +130,10 @@ function eraseFixture() {
         secrets: { CLOUDFLARE_API_TOKEN: "test-token" },
         cf: fixture.cf,
         env: {
-          workerName: "os-preview",
+          workerName: "os-example",
           cloudflareAccountId: "test-account",
-          resourceNamePrefix: "os-preview",
-          artifactsNamespace: "os-preview-repos",
+          resourceNamePrefix: "os-example",
+          artifactsNamespace: "os-example-repos",
           resources: { oauthKvId: "oauth", itxKvId: "itx", dbId: "db" },
         },
       })),
@@ -155,8 +153,6 @@ function eraseFixture() {
     } as unknown as Parameters<typeof eraseDataWith>[1],
     [Symbol.dispose]() {
       vi.useRealTimers();
-      vi.unstubAllGlobals();
-      log.mockRestore();
     },
   };
   /** The D1 `/query` API: each `;`-separated statement's results. */

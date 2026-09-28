@@ -1,0 +1,5 @@
+{
+  "dependencies": {
+    "@iterate-com/agents": "https://pkg.pr.new/iterate/iterate/@iterate-com/agents@main"
+  }
+}

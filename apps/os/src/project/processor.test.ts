@@ -4,7 +4,7 @@
 // landing the request, the processor landing the certificate on `/` — is pinned end to end in
 // e2e/session.e2e.test.ts.
 
-import { expect, test } from "vitest";
+import { expect, onTestFinished, test, vi } from "vitest";
 import type { StreamEventInput } from "iterate/stream/processor";
 import { reduceProcessor } from "iterate/stream/test-support";
 import { normalizeControlEvent } from "../stream/core-processor.ts";
@@ -17,23 +17,27 @@ const requested = {
 };
 const created = { type: "events.iterate.com/project/created", payload: {} };
 const failed = { type: "events.iterate.com/project/create-failed", payload: { error: "boom" } };
+const deleted = { type: "events.iterate.com/project/deleted", payload: {} };
 
 /** The empty state; a row spreads it and names only what its events changed. */
 const empty: ProjectState = {
   creation: null,
+  deletion: null,
   repos: {},
   workspaces: {},
   contexts: {},
   secrets: {},
   configRepoTip: null,
   publishedCommitOid: null,
+  publishedAt: null,
   hostnames: {},
+  integrations: {},
   primaryHostname: null,
 };
 
 const reduceRows: {
   name: string;
-  events: { type: string; payload?: unknown }[];
+  events: { type: string; payload?: unknown; source?: { platform: true } }[];
   state: ProjectState;
 }[] = [
   { name: "the empty state", events: [], state: empty },
@@ -75,20 +79,23 @@ const reduceRows: {
       ingressAt(["itx", "workers", ["get", { source: { "worker.js": "" }, cacheKey: "ccc" }]]),
       ingressAt(null),
     ],
-    state: { ...empty, publishedCommitOid: "bbb" },
+    state: { ...empty, publishedCommitOid: "bbb", publishedAt: 2 },
   },
   {
     name: "a repo's and a workspace's certificates each add one entry, by path, stamped with the event's time — the project's own creation untouched",
     events: [requested, created, repoBorn("/repos/config"), workspaceBorn("/workspaces/notes")],
     state: {
       creation: { status: "created", offset: 2 },
+      deletion: null,
       repos: { "/repos/config": { createdAt: expect.any(String) } },
       workspaces: { "/workspaces/notes": { createdAt: expect.any(String) } },
       contexts: {},
       secrets: {},
       configRepoTip: null,
       publishedCommitOid: null,
+      publishedAt: null,
       hostnames: {},
+      integrations: {},
       primaryHostname: null,
     },
   },
@@ -209,6 +216,47 @@ const reduceRows: {
     },
   },
   {
+    name: "integrations: a platform `<provider>/connected` is the connection's row, by its log path; `disconnected` drops it; a member's append of either changes nothing",
+    events: [
+      integrationFact("slack", "connected", "acme"),
+      integrationFact("github", "connected", "acme"),
+      integrationFact("slack", "connected", "beta"),
+      integrationFact("slack", "disconnected", "beta"),
+      { ...integrationFact("slack", "disconnected", "acme"), source: undefined },
+      { ...integrationFact("google", "connected", "evil"), source: undefined },
+    ],
+    state: {
+      ...empty,
+      integrations: {
+        "/integrations/slack/acme": integrationRow("slack", "acme"),
+        "/integrations/github/acme": integrationRow("github", "acme"),
+      },
+    },
+  },
+  {
+    name: "a lend arriving is a borrowed catalog row, with no material of its own; its revocation drops it, another lend's does not",
+    events: [
+      borrowed("/secrets/google-ada", "lend_a"),
+      borrowed("/secrets/cf", "lend_b"),
+      lendRevoked("/secrets/cf", "lend_x"),
+      lendRevoked("/secrets/cf", "lend_b"),
+    ],
+    state: {
+      ...empty,
+      secrets: {
+        "/secrets/google-ada": {
+          urls: ["https://google.test"],
+          createdAt: expect.any(String),
+          borrowed: {
+            lendId: "lend_a",
+            lender: { userId: "user_ada", email: "ada@example.com" },
+            integration: { provider: "google", account: "ada@example.com", externalId: "42" },
+          },
+        },
+      },
+    },
+  },
+  {
     name: "a live hostname the project holds becomes primary",
     events: [hostname("add-requested"), addSettled(1, "active"), primary("www.acme.test")],
     state: {
@@ -307,6 +355,23 @@ const reduceRows: {
     ],
     state: { ...empty, workspaces: { "/w": { createdAt: expect.any(String) } } },
   },
+  {
+    name: "a delete request the platform stamped opens the deletion, at its offset — once; the saga's own records change nothing",
+    events: [
+      requested,
+      created,
+      deleteRequested({ platform: true }),
+      deleteRequested({ platform: true }),
+      { type: "events.iterate.com/project/context-deleted", payload: { path: "/a" } },
+      deleted,
+    ],
+    state: { ...empty, creation: { status: "created", offset: 2 }, deletion: { offset: 3 } },
+  },
+  {
+    name: "a member's delete request (no platform stamp), or their forged certificate, deletes nothing and stops nothing",
+    events: [requested, created, deleteRequested(), deleted, deleteRequested({ platform: true })],
+    state: { ...empty, creation: { status: "created", offset: 2 }, deletion: { offset: 5 } },
+  },
 ];
 for (const { name, events, state } of reduceRows)
   test(`ProjectProcessor — the reduce: ${name}`, () =>
@@ -316,7 +381,7 @@ for (const { name, events, state } of reduceRows)
 // arguments faked (an `append` that records and can be held open; `runInBackground` runs the work at
 // once). Pinned: a tip that lands WHILE an append is in flight is published by the same attempt once
 // the append settles — no further delivery needed (an idempotent hit lands no fresh event to deliver).
-test("ProjectProcessor — the apex follows the config repo: each tip is published once, keyed by its commit; a tip that lands during an in-flight append is published when it settles", async () => {
+test("ProjectProcessor — the apex follows the config repo: each tip is published once, keyed by its commit's fact; a tip that lands during an in-flight append is published when it settles; a pull back to an earlier commit publishes it again", async () => {
   const processor = new ProjectProcessor(
     () => Promise.reject(new Error("unused")),
     () => Promise.reject(new Error("unused")),
@@ -325,11 +390,12 @@ test("ProjectProcessor — the apex follows the config repo: each tip is publish
   let release!: () => void;
   const held = new Promise<void>((resolve) => (release = resolve));
   let calls = 0;
+  let answer: { offset: number }[] = [];
   const append = async (...events: unknown[]) => {
     calls += 1;
     if (calls === 1) await held; // the first append stays in flight
     appended.push(...(events as typeof appended));
-    return [];
+    return answer;
   };
   deliver(processor, { ...empty, configRepoTip: tip("aaa", 5) }, append);
   // A second commit lands while the first publication is in flight: dropped by the guard, kept as the newest tip.
@@ -349,6 +415,18 @@ test("ProjectProcessor — the apex follows the config repo: each tip is publish
   deliver(processor, { ...empty, configRepoTip: tip("bbb", 7) }, append);
   await new Promise((r) => setTimeout(r, 0));
   expect(appended).toHaveLength(2);
+  // A forced pull back to the first commit is a new fact: the commit's key answers its first
+  // publication (an older event), so it is published again under the fact's own key.
+  answer = [{ offset: 6 }];
+  deliver(processor, { ...empty, configRepoTip: tip("aaa", 9) }, append);
+  await new Promise((r) => setTimeout(r, 0));
+  await new Promise((r) => setTimeout(r, 0));
+  expect(appended.map((e) => e.idempotencyKey)).toEqual([
+    "itx/ingress-configured:aaa",
+    "itx/ingress-configured:bbb",
+    "itx/ingress-configured:aaa",
+    "itx/ingress-configured:aaa@9",
+  ]);
 });
 
 // Every wake of the project's root pushes the facet its wake record, and a fresh incarnation of the
@@ -378,10 +456,50 @@ test("ProjectProcessor — a tip the state does not hold published is published;
     committed("/repos/config", "aaa"),
     normalizeControlEvent(appended[0]!, "/"),
   ]);
-  expect(state).toEqual({ ...empty, configRepoTip: tip("aaa", 1), publishedCommitOid: "aaa" });
+  expect(state).toEqual({
+    ...empty,
+    configRepoTip: tip("aaa", 1),
+    publishedCommitOid: "aaa",
+    publishedAt: 2,
+  });
   deliver(processorWithoutHostnames(), state, append, runInBackground);
   await settle();
   expect({ appends: appended.length, background }).toEqual({ appends: 1, background: 1 });
+});
+
+test("ProjectProcessor — a tip is published only by a publication after its fact: a pull back to a commit published before is published again, even when another commit's publication landed after that fact", async () => {
+  const appended: StreamEventInput[] = [];
+  const append = async (...events: unknown[]) => {
+    appended.push(...(events as StreamEventInput[]));
+    return [{ offset: 3 }]; // the commit's key answers its first publication, at 3
+  };
+  const runInBackground = (work: () => Promise<unknown>) => void work();
+  // aaa published at 3; bbb's fact at 7; back to aaa at 9; bbb's publication landed at 10
+  const state = {
+    ...empty,
+    configRepoTip: tip("aaa", 9),
+    publishedCommitOid: "bbb",
+    publishedAt: 10,
+  };
+  deliver(processorWithoutHostnames(), state, append, runInBackground);
+  await settle();
+  expect(appended.map((event) => event.idempotencyKey)).toEqual([
+    "itx/ingress-configured:aaa",
+    "itx/ingress-configured:aaa@9",
+  ]);
+  // the same commit, published before its fact: owed as well
+  appended.length = 0;
+  deliver(
+    processorWithoutHostnames(),
+    { ...empty, configRepoTip: tip("aaa", 9), publishedCommitOid: "aaa", publishedAt: 3 },
+    append,
+    runInBackground,
+  );
+  await settle();
+  expect(appended.map((event) => event.idempotencyKey)).toEqual([
+    "itx/ingress-configured:aaa",
+    "itx/ingress-configured:aaa@9",
+  ]);
 });
 
 test("ProjectProcessor — an event that changes the primary hostname holds the cursor until the control plane has it; one that changes nothing writes nothing", async () => {
@@ -566,6 +684,176 @@ test("ProjectProcessor — a drained re-check knows the add it just answered pro
   expect(calls).toEqual(["claim www.acme.test", "claim www.acme.test"]);
 });
 
+// THE DELETION SAGA — driven by hand like the effects above, over a fake reach (processor.ts
+// `ProjectDeletion`) that records every call.
+test("ProjectProcessor — the deletion: the saga destroys each context the registry names deepest first, each answered by a keyed context-deleted that nothing reads back, then the hostnames, the project's storage, the certificate, and `/` last — and no other saga runs meanwhile", async () => {
+  const calls: string[] = [];
+  const processor = new ProjectProcessor(
+    () => {
+      calls.push("withItx (another saga ran)");
+      return Promise.reject(new Error("unused"));
+    },
+    () => Promise.reject(new Error("unused")),
+    () => ({
+      reservedZones: [],
+      claim: async () => {},
+      release: async (name) => void calls.push(`release ${name}`),
+      setPrimaryHostname: async () => {},
+      provider: {
+        provision: async () => observation("active"),
+        remove: async (name) => void calls.push(`remove ${name}`),
+      },
+    }),
+    () => ({
+      destroyContext: async (path) => void calls.push(`destroy ${path}`),
+      deleteProjectStorage: async () => void calls.push("delete storage"),
+    }),
+  );
+  // the registry, as the announcements reduce into it (a non-canonical path is no context)
+  const announced = [
+    "/repos",
+    "/repos/config",
+    "/agents/web/1",
+    "/agents",
+    "/agents/web",
+    "/x/../y",
+  ].map(childCreated);
+  const registered = reduceProcessor(processorWithoutHostnames(), announced);
+  const appended: { type: string; idempotencyKey?: string; payload: unknown }[] = [];
+  const state: ProjectState = {
+    ...registered,
+    creation: { status: "requested", offset: 1 }, // would run the creation saga, were it not deleted
+    deletion: { offset: 9 },
+    hostnames: {
+      "www.acme.test": { requested: null, cloudflare: observation("active"), error: null },
+    },
+  };
+  deliver(processor, state, async (...events) => {
+    appended.push(...(events as typeof appended));
+  });
+  await settle();
+  expect(calls).toEqual([
+    "destroy /agents/web/1",
+    "destroy /agents/web",
+    "destroy /repos/config",
+    "destroy /agents",
+    "destroy /repos",
+    "remove www.acme.test",
+    "release www.acme.test",
+    "delete storage",
+    "destroy /",
+  ]);
+  expect(appended.map((event) => event.idempotencyKey)).toEqual([
+    "project/context-deleted:/agents/web/1",
+    "project/context-deleted:/agents/web",
+    "project/context-deleted:/repos/config",
+    "project/context-deleted:/agents",
+    "project/context-deleted:/repos",
+    "project/deleted",
+  ]);
+  // nothing the saga writes is read back: the registry still names every context, so a pass
+  // after an eviction destroys them all again, and a member's forged record skips none
+  const deleted = appended.filter(
+    (event) => event.type === "events.iterate.com/project/context-deleted",
+  );
+  expect(reduceProcessor(processorWithoutHostnames(), [...announced, ...deleted])).toMatchObject({
+    contexts: registered.contexts,
+  });
+});
+
+test("ProjectProcessor — the deletion: a context announced while a pass runs (the creation saga's `/repos/config`) is destroyed by the same pass, before `/`", async () => {
+  const calls: string[] = [];
+  const registered = reduceProcessor(processorWithoutHostnames(), ["/a", "/b"].map(childCreated));
+  const state: ProjectState = { ...registered, deletion: { offset: 9 } };
+  const processor: ProjectProcessor = new ProjectProcessor(
+    () => Promise.reject(new Error("unused")),
+    () => Promise.reject(new Error("unused")),
+    () => null,
+    () => ({
+      destroyContext: async (path) => {
+        calls.push(`destroy ${path}`);
+        if (path !== "/a") return;
+        // its announcement is delivered while the pass is destroying `/a`
+        const announced = reduceProcessor(processorWithoutHostnames(), [
+          ...["/a", "/b"].map(childCreated),
+          childCreated("/repos/config"),
+        ]);
+        processor.processEvent({
+          event: childCreated("/repos/config") as never,
+          state: { ...announced, deletion: { offset: 9 } },
+          previousState: state,
+          delivery: { caughtUp: false },
+          append: (async () => []) as never,
+          blockProcessorWhile: () => {},
+          runInBackground: () => {},
+        });
+      },
+      deleteProjectStorage: async () => void calls.push("delete storage"),
+    }),
+  );
+  deliver(processor, state, async () => {});
+  await settle();
+  expect(calls).toEqual([
+    "destroy /a",
+    "destroy /b",
+    "destroy /repos/config",
+    "delete storage",
+    "destroy /",
+  ]);
+});
+
+test("ProjectProcessor — the deletion: a pass that keeps failing runs again after 5 s and 30 s, then records delete-failed, is reported, and stops in this incarnation; a later incarnation starts it again", async () => {
+  vi.useFakeTimers();
+  onTestFinished(() => void vi.useRealTimers());
+  let passes = 0;
+  const appended: unknown[] = [];
+  const reported: unknown[] = [];
+  const incarnation = () =>
+    new ProjectProcessor(
+      () => Promise.reject(new Error("unused")),
+      () => Promise.reject(new Error("unused")),
+      () => null,
+      () => ({
+        destroyContext: async () => {
+          passes += 1;
+          throw new Error("Cloudflare said no");
+        },
+        deleteProjectStorage: async () => {},
+      }),
+    );
+  const state: ProjectState = {
+    ...reduceProcessor(processorWithoutHostnames(), [childCreated("/a")]),
+    deletion: { offset: 9 },
+  };
+  const run = (processor: ProjectProcessor) =>
+    deliver(
+      processor,
+      state,
+      async (...events) => void appended.push(...events),
+      (work) => void work().catch((error: unknown) => void reported.push(error)),
+    );
+  const first = incarnation();
+  run(first);
+  await vi.advanceTimersByTimeAsync(0);
+  expect(passes).toBe(1);
+  await vi.advanceTimersByTimeAsync(5_000);
+  expect(passes).toBe(2);
+  await vi.advanceTimersByTimeAsync(30_000);
+  expect(passes).toBe(3);
+  expect(appended).toMatchObject([
+    { type: "events.iterate.com/project/delete-failed", payload: { error: "Cloudflare said no" } },
+  ]);
+  expect(reported).toMatchObject([{ message: "Cloudflare said no" }]);
+  // its own delete-failed, delivered to it, does not start it again: no retry storm
+  run(first);
+  await vi.advanceTimersByTimeAsync(60_000);
+  expect(passes).toBe(3);
+  // a later incarnation does
+  run(incarnation());
+  await vi.advanceTimersByTimeAsync(0);
+  expect(passes).toBe(4);
+});
+
 test("template provenance survives replay of the project creation request", () => {
   const configRepoTemplate = "github:example/config#" + "a".repeat(40) + "&path:starter";
   expect(
@@ -664,6 +952,30 @@ function removed(requestOffset: number) {
   };
 }
 
+function integrationRow(provider: "slack" | "google" | "github", connection: string) {
+  return {
+    provider,
+    connection,
+    client: "iterate" as const,
+    account: `Acme ${provider}`,
+    externalId: "X1",
+  };
+}
+
+/** A connection's fact on `/`, stamped `source.platform` as src/integrations/ stamps it. */
+function integrationFact(
+  provider: "slack" | "google" | "github",
+  fact: "connected" | "disconnected",
+  connection: string,
+) {
+  const { provider: _provider, ...connected } = integrationRow(provider, connection);
+  return {
+    type: `events.iterate.com/${provider}/${fact}`,
+    payload: fact === "connected" ? connected : { connection },
+    source: { platform: true as const },
+  };
+}
+
 function observation(status: string) {
   return {
     status,
@@ -675,6 +987,10 @@ function observation(status: string) {
 /** A context announcing itself to `/` (iterate-context-durable-object.ts `announceToAncestors`). */
 function childCreated(childPath: string) {
   return { type: "events.iterate.com/itx/child-created", payload: { childPath } };
+}
+
+function deleteRequested(source?: { platform: true }) {
+  return { type: "events.iterate.com/project/delete-requested", payload: {}, source };
 }
 
 /** Two turns: a background effect's awaits, then its append. */
@@ -697,3 +1013,23 @@ const deliver = (
     blockProcessorWhile: () => {},
     runInBackground,
   });
+
+function borrowed(path: string, lendId: string) {
+  return {
+    type: "events.iterate.com/secret/borrowed",
+    payload: {
+      path,
+      lendId,
+      lender: { userId: "user_ada", email: "ada@example.com" },
+      urls: ["https://google.test"],
+      integration: { provider: "google", account: "ada@example.com", externalId: "42" },
+    },
+  };
+}
+
+function lendRevoked(path: string, lendId: string) {
+  return {
+    type: "events.iterate.com/secret/lend-revoked",
+    payload: { path, lendId, reason: "lender" },
+  };
+}

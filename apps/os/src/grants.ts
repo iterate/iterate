@@ -26,6 +26,8 @@ const DisplayMetadata = z.object({
   clientName: z.string().optional(),
   logoUri: ClientDisplayUrl.optional().catch(undefined),
   clientDomain: z.string().optional(),
+  /** a platform admin's sign-in as the person (consent.ts `#impersonate`): the admin's email */
+  impersonatedBy: z.string().optional(),
 });
 const MintInput = z.object({
   name: z.string().trim().min(1).max(100),
@@ -157,6 +159,7 @@ export class GrantsRpcTarget extends RpcTarget {
           clientId: grant.clientId,
           logoUri: metadata.logoUri,
           clientDomain: metadata.clientDomain,
+          impersonatedBy: metadata.impersonatedBy,
           kind: grant.expiresAt ? "session" : "pending",
           resource: resourceNames.get(String(grant.resource)),
           createdAt: grant.createdAt * 1000,

@@ -1,11 +1,14 @@
 // The two ends of a resumable upgrade over a fake context: a socket pair per dial, the context
 // forwarding frames between the two sides by upgradeId and closing a side's peer when it closes
-// (rpc-stubs.ts `RpcStubFetchServer`), and a `reset()` that cuts every socket it holds the way a
+// (fetch-upgrade.ts `RpcStubFetchServer`), and a `reset()` that cuts every socket it holds the way a
 // deploy does (1006, no close frame). The visitor's and the provider's sockets are what a person
 // and a local server see.
 
 import { expect, test, vi } from "vitest";
 import {
+  contextAbortedOffsetOf,
+  FETCH_UPGRADE_CONTEXT_ABORTED_OFFSET_HEADER,
+  FETCH_UPGRADE_DEPLOY_ID_HEADER,
   FETCH_UPGRADE_RESUME_DEADLINE_MS,
   FETCH_UPGRADE_UNACKED_MAX_BYTES,
   FetchUpgradeSpliceEnd,
@@ -48,11 +51,11 @@ test("a deploy resets the context mid-stream: both ends re-dial, what was in fli
   await vi.advanceTimersByTimeAsync(0);
   expect(splice.provider).toMatchObject({ received: ["v1", "v2", "v3", "v4"], closed: null });
   expect(splice.visitor).toMatchObject({ received: ["p1", "p2", "p3"], closed: null });
-  // dials at 0 s and 1 s met the reset; the one at 2 s was answered on the new deploy
+  // dials at 0, 0.25 and 0.75 s met the reset; the one at 1.75 s was answered on the new deploy
   expect(splice).toMatchObject({
     reports: [
-      { type: "resumed", deployReset: true, dials: 3, resent: 2 },
-      { type: "resumed", deployReset: true, dials: 3, resent: 2 },
+      { type: "resumed", deployReset: true, dials: 4, resent: 2 },
+      { type: "resumed", deployReset: true, dials: 4, resent: 2 },
     ],
   });
 });
@@ -118,29 +121,65 @@ test("an orderly close on either socket closes the other with its code and reaso
 });
 
 // A tunnel killed outright (`kill -9` on the CLI) ends its capnweb session, and the provider's socket
-// on the relay closes without a status (capnweb's tunneled socket, on the session's end) or fails.
-// The relay knows the provider is gone: the visitor's socket closes at once, not at the deadline.
+// on the relay closes without a status (capnweb's tunneled socket, on the session's end) or fails;
+// a visitor's network vanishing does the same to the visitor's socket on the edge. The end knows its
+// side is gone: it says so (`local-gone`, logged at info), the other side's socket closes at once
+// with 1011, a drop's code (websocket-close.ts), not at the deadline, and its own socket is closed
+// too (the runtime waits on it otherwise).
 test.for([
-  { name: "closes without a status (1006)", end: (provider: FakeSocket) => provider.other.cut() },
   {
-    name: "fails",
-    end: (provider: FakeSocket) => provider.other.emit("error", {}),
+    gone: "the provider's socket closes without a status (1006)",
+    end: (splice: ReturnType<typeof spliced>) => splice.provider.other.cut(),
+    expected: {
+      visitor: { closed: { code: 1011, reason: "tunnel disconnected" } },
+      reports: [{ type: "local-gone", side: "leg", upgradeId: "upgrade-1", code: 1006 }],
+    },
+  },
+  {
+    gone: "the provider's socket fails",
+    end: (splice: ReturnType<typeof spliced>) => splice.provider.other.emit("error", {}),
+    expected: {
+      visitor: { closed: { code: 1011, reason: "tunnel disconnected" } },
+      provider: { other: { closed: { code: 1011, reason: "tunnel disconnected" } } },
+      reports: [{ type: "local-gone", side: "leg", upgradeId: "upgrade-1", code: undefined }],
+    },
+  },
+  {
+    gone: "the visitor's socket fails",
+    end: (splice: ReturnType<typeof spliced>) => splice.visitor.other.emit("error", {}),
+    expected: {
+      provider: { closed: { code: 1011, reason: "visitor disconnected" } },
+      visitor: { other: { closed: { code: 1011, reason: "visitor disconnected" } } },
+      reports: [{ type: "local-gone", side: "eyeball", upgradeId: "upgrade-1", code: undefined }],
+    },
   },
 ])(
-  "the provider's socket $name — its tunnel's session ended: the visitor's socket closes at once, 1001 tunnel disconnected",
-  async ({ end }) => {
+  "$gone: the other side's socket closes at once, and the end says so",
+  async ({ end, expected }) => {
     vi.useFakeTimers();
     using splice = spliced();
     splice.connectEyeball();
     await vi.advanceTimersByTimeAsync(0);
-    end(splice.provider);
+    end(splice);
     await vi.advanceTimersByTimeAsync(0);
-    expect(splice).toMatchObject({
-      visitor: { closed: { code: 1001, reason: "tunnel disconnected" } },
-      reports: [],
-    });
+    expect(splice).toMatchObject(expected);
   },
 );
+
+test("an error after the local socket's own close is not its side gone: nothing more is said", async () => {
+  vi.useFakeTimers();
+  using splice = spliced();
+  splice.connectEyeball();
+  await vi.advanceTimersByTimeAsync(0);
+  splice.visitor.close(1000, "tab closed");
+  await vi.advanceTimersByTimeAsync(0);
+  splice.visitor.other.emit("error", {});
+  await vi.advanceTimersByTimeAsync(0);
+  expect(splice).toMatchObject({
+    provider: { closed: { code: 1000, reason: "tab closed" } },
+    reports: [],
+  });
+});
 
 test("the visitor closes while the context is down: its code and reason reach the provider once the ends resume, after the frames it sent first", async () => {
   vi.useFakeTimers();
@@ -200,10 +239,10 @@ test.for([
   "a resume $resumed is logged as $logged.event ($logged.level)",
   ({ deployReset, contextAbortedOffset, logged }) => {
     const lines: { level: string; event: unknown }[] = [];
-    const info = vi.spyOn(console, "info").mockImplementation((line: { event: unknown }) => {
+    vi.spyOn(console, "info").mockImplementation((line: { event: unknown }) => {
       lines.push({ level: "info", event: line.event });
     });
-    const warn = vi.spyOn(console, "warn").mockImplementation((line: { event: unknown }) => {
+    vi.spyOn(console, "warn").mockImplementation((line: { event: unknown }) => {
       lines.push({ level: "warn", event: line.event });
     });
     reportFetchUpgradeSpliceEvent({
@@ -216,8 +255,6 @@ test.for([
       deployReset,
       contextAbortedOffset,
     });
-    info.mockRestore();
-    warn.mockRestore();
     expect(lines).toEqual([logged]);
   },
 );
@@ -226,7 +263,7 @@ test("the platform cuts every socket, and a stale close reaches the context afte
   vi.useFakeTimers();
   using splice = spliced();
   splice.connectEyeball();
-  splice.context.failing.leg = 1; // the relay's first re-dial fails: its next is 1 s later
+  splice.context.failing.leg = 1; // the relay's first re-dial fails: its next is 250 ms later
   splice.context.cutAll(5);
   splice.visitor.send("v1");
   splice.provider.send("p1");
@@ -260,6 +297,63 @@ test("the other end never comes back (its relay died with the tunnel): the edge'
       expect.objectContaining({ type: "gave-up", side: "eyeball", downMs: 30_000 }),
     ]),
   });
+});
+
+// An end gives up as soon as its re-dial does (redial.ts), not at the resume deadline: at once on a
+// refusal (an answer under 500 without a socket), and after its eighth try (at 23.75 s) when every
+// answer is the context not ready (a 5xx), before the 30 s deadline. The other end still waits.
+test.for([
+  {
+    name: "a refusal (409) gives up at once",
+    answers: [409],
+    expected: {
+      visitor: {
+        closed: {
+          code: 1011,
+          reason: "the context answered no re-dial (the context answered 409)",
+        },
+      },
+      reports: [
+        {
+          type: "gave-up",
+          side: "eyeball",
+          downMs: 0,
+          dials: 1,
+          why: "the context answered no re-dial (the context answered 409)",
+        },
+      ],
+    },
+  },
+  {
+    name: "only 503s give up at 23.75 s, before the 30 s resume deadline",
+    answers: Array<number>(10).fill(503),
+    expected: {
+      visitor: {
+        closed: {
+          code: 1011,
+          reason: "the context answered no re-dial (the context answered 503)",
+        },
+      },
+      reports: [
+        {
+          type: "gave-up",
+          side: "eyeball",
+          downMs: 23_750,
+          dials: 8,
+          why: "the context answered no re-dial (the context answered 503)",
+        },
+      ],
+    },
+  },
+])("the edge's re-dial answered without a socket: $name", async ({ answers, expected }) => {
+  vi.useFakeTimers();
+  using splice = spliced();
+  splice.connectEyeball();
+  await vi.advanceTimersByTimeAsync(0);
+  splice.context.answering.eyeball = [...answers];
+  splice.context.drop("eyeball");
+  await vi.advanceTimersByTimeAsync(expected.reports[0]!.downMs);
+  expect(splice).toMatchObject(expected);
 });
 
 test("acknowledged frames are forgotten: 20 MiB flows through an end whose cap on unacknowledged bytes is 16 MiB", async () => {
@@ -301,6 +395,7 @@ class FakeSocket {
   readonly received: unknown[] = [];
   closed: { code: number; reason: string } | null = null;
   readonly #listeners = new Map<string, Listener[]>();
+  accept(): void {}
   addEventListener(type: string, listener: Listener): void {
     this.#listeners.set(type, [...(this.#listeners.get(type) ?? []), listener]);
   }
@@ -345,7 +440,7 @@ function socketPair(): [FakeSocket, FakeSocket] {
   return [a, b];
 }
 
-/** The context, as rpc-stubs.ts `RpcStubFetchServer` behaves: the sockets it holds per side,
+/** The context, as fetch-upgrade.ts `RpcStubFetchServer` behaves: the sockets it holds per side,
  *  frames forwarded to the other side's current socket, a new dial of a side REPLACING the older
  *  one (closed without touching its peer), and a side's close — delivered when the context gets to
  *  it — closing the other side's current socket. A cut socket stays listed until its close is
@@ -365,18 +460,21 @@ class FakeContext {
 
   /** Dials of a side that fail next (a slow relay's re-dial). */
   readonly failing = { eyeball: 0, leg: 0 };
+  /** The statuses the next dials of a side are answered with, without a socket: a refusal (under
+   *  500) or the context not ready (5xx). */
+  readonly answering: Record<"eyeball" | "leg", number[]> = { eyeball: [], leg: [] };
 
-  dial(side: "eyeball" | "leg"): {
-    socket: FakeSocket;
-    deployId: string;
-    contextAbortedOffset: number | null;
-  } | null {
+  /** A dial of `side`, answered as the DO's 101 is: the socket, the deploy, and the abort its
+   *  incarnation began after (`FETCH_UPGRADE_*_HEADER`). */
+  dial(side: "eyeball" | "leg"): Response {
     this.dials += 1;
     if (Date.now() < this.#downUntil) throw new Error("the context is resetting");
     if (this.failing[side] > 0) {
       this.failing[side] -= 1;
       throw new Error("the dial failed");
     }
+    const status = this.answering[side].shift();
+    if (status !== undefined) return answer({ status, body: null });
     for (const older of this.#listed.filter((entry) => entry.side === side)) {
       older.replaced = true;
       older.socket.close(1000, "replaced");
@@ -395,10 +493,19 @@ class FakeContext {
         peer.socket.send((event as MessageEvent).data as ArrayBuffer);
     });
     held.addEventListener("close", () => this.#closed(entry));
+    const headers = new Headers({ [FETCH_UPGRADE_DEPLOY_ID_HEADER]: this.deployId });
+    if (this.contextAbortedOffset !== null)
+      headers.set(FETCH_UPGRADE_CONTEXT_ABORTED_OFFSET_HEADER, String(this.contextAbortedOffset));
+    return answer({ status: 101, webSocket: end, headers });
+  }
+
+  /** The first dial of `side`, as an end is constructed with it. */
+  connect(side: "eyeball" | "leg") {
+    const answer = this.dial(side);
     return {
-      socket: end,
-      deployId: this.deployId,
-      contextAbortedOffset: this.contextAbortedOffset,
+      socket: answer.webSocket as unknown as FakeSocket,
+      deployId: answer.headers.get(FETCH_UPGRADE_DEPLOY_ID_HEADER),
+      contextAbortedOffset: contextAbortedOffsetOf(answer),
     };
   }
 
@@ -440,6 +547,17 @@ class FakeContext {
   }
 }
 
+/** The context's answer to a dial, shaped as an end reads it: a Response cannot carry a socket the
+ *  runtime did not make. */
+function answer(fields: {
+  status: number;
+  webSocket?: FakeSocket;
+  headers?: Headers;
+  body?: null;
+}): Response {
+  return fields as unknown as Response;
+}
+
 /** A provider's socket (the relay's local end), the leg end over the fake context, and — once
  *  `connectEyeball()` — the edge's end and the visitor's socket. */
 function spliced() {
@@ -452,9 +570,9 @@ function spliced() {
     side: "leg",
     upgradeId,
     local: providerLocal,
-    localGoneClose: { code: 1001, reason: "tunnel disconnected" },
-    ...context.dial("leg")!,
-    redial: dial("leg"),
+    localGoneReason: "tunnel disconnected",
+    ...context.connect("leg"),
+    dial: dial("leg"),
     report: (event) => reports.push(event),
   });
   const [visitor, visitorLocal] = socketPair();
@@ -468,9 +586,9 @@ function spliced() {
         side: "eyeball",
         upgradeId,
         local: visitorLocal,
-        localGoneClose: { code: 1001, reason: "visitor disconnected" },
-        ...context.dial("eyeball")!,
-        redial: dial("eyeball"),
+        localGoneReason: "visitor disconnected",
+        ...context.connect("eyeball"),
+        dial: dial("eyeball"),
         report: (event) => reports.push(event),
       });
     },

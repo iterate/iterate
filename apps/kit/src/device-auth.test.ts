@@ -87,7 +87,7 @@ test("setup reads the stored consent identity; query parameters cannot change it
   ).toBe(401);
 });
 
-test("generic login and old firmware bookmarks return to device selection without starting generic consent", async () => {
+test("the generic login returns to device selection without starting generic consent", async () => {
   const f = fixture();
   const response = await deviceAuth(
     new Request(`${origin}/.auth/login?next=/devices/satellite1/firmware/latest`),
@@ -103,28 +103,24 @@ test("a failed end is observable and does not create another authorization", asy
   const f = fixture();
   f.end.mockRejectedValue(new Error("issuer unavailable"));
   const log = vi.spyOn(console, "error").mockImplementation(() => {});
-  try {
-    const response = await deviceAuth(
-      new Request(`${origin}/devices/satellite1/login`, {
-        method: "POST",
-        headers: { origin, cookie },
-      }),
-      f.kit,
-      f.deps,
-    );
-    expect(response?.status).toBe(503);
-    expect(f.begin).not.toHaveBeenCalled();
-    expect(log).toHaveBeenCalledWith(
-      "kit.device_login_failed",
-      expect.objectContaining({ deviceId: "satellite1" }),
-    );
-    // the refusal says which sign-in it couldn't end, and offers to forget it
-    const page = await response!.text();
-    expect(page).toContain("issuer.example");
-    expect(page).toContain('<form method="post" action="/.auth/forget?device=satellite1">');
-  } finally {
-    log.mockRestore();
-  }
+  const response = await deviceAuth(
+    new Request(`${origin}/devices/satellite1/login`, {
+      method: "POST",
+      headers: { origin, cookie },
+    }),
+    f.kit,
+    f.deps,
+  );
+  expect(response?.status).toBe(503);
+  expect(f.begin).not.toHaveBeenCalled();
+  expect(log).toHaveBeenCalledWith(
+    "kit.device_login_failed",
+    expect.objectContaining({ deviceId: "satellite1" }),
+  );
+  // the refusal says which sign-in it couldn't end, and offers to forget it
+  const page = await response!.text();
+  expect(page).toContain("issuer.example");
+  expect(page).toContain('<form method="post" action="/.auth/forget?device=satellite1">');
 });
 
 test("a connect link to another iterate platform carries it to device selection, checked", async () => {

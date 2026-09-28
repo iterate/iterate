@@ -1,12 +1,11 @@
-// The agent's log as the shared agent-UI reducer (packages/ui) reads it. The agent speaks the
-// shared reducer's event vocabulary for the loop, so `reduceAgentUi` folds every committed event
+// The agent's log as the agent-UI reducer (events/agent-ui-reducer.ts) reads it. The agent speaks
+// the reducer's event vocabulary for the loop, so `reduceAgentUi` folds every committed event
 // into messages and activities (an LLM step that wrote a script, the code step that ran it, grouped
-// into rounds). Two differences are adapted here: an attachment carries no `url` on apps/os (the
-// page signs one when it renders); and a SCRIPT is the CONTEXT's on apps/os —
+// into rounds). One difference is adapted here: a SCRIPT is the CONTEXT's on apps/os —
 // `itx/run-requested` / `itx/run-settled`, identified by the request's offset
-// (apps/os/src/stream/core-processor.ts) — where the shared reducer reads
+// (apps/os/src/stream/core-processor.ts) — where the reducer reads
 // `capability-host/script-run-*` with an `executionId`. `adaptContextRuns` renames the one into the
-// other and fills in the fields a failed settlement lacks under the shared reducer's strict schema.
+// other and fills in the fields a failed settlement lacks under the reducer's strict schema.
 import { z } from "zod";
 import { sliceText, type StreamText } from "./chunked-text.ts";
 import {
@@ -17,7 +16,7 @@ import {
   type AgentUiState,
   type AgentUiStep,
 } from "./events/agent-ui-reducer.ts";
-import type { Event } from "./events/types.ts";
+import type { StreamEvent } from "./events/stream-event.ts";
 
 // Loose: the Events view is the raw log, so every envelope field the wire carries survives.
 const Committed = z.looseObject({
@@ -29,30 +28,23 @@ const Committed = z.looseObject({
   idempotencyKey: z.string().optional(),
 });
 
-/** A wire event (a capnweb proxy value or a plain object) as the reducer's `Event`, or null when it
- *  is not a committed row. */
-export function toAgentEvent(raw: unknown, streamPath: string): Event | null {
+/** A wire event (a capnweb proxy value or a plain object) as the reducer's `StreamEvent`, or null
+ *  when it is not a committed row. */
+export function toAgentEvent(raw: unknown): StreamEvent | null {
   const parsed = Committed.safeParse(JSON.parse(JSON.stringify(raw)));
-  if (!parsed.success) return null;
-  const event = parsed.data;
-  const payload = isRecord(event.payload) ? { ...event.payload } : event.payload;
-  if (isRecord(payload) && Array.isArray(payload.files))
-    payload.files = payload.files.map((file: unknown) =>
-      isRecord(file) && typeof file.url !== "string" ? { ...file, url: "" } : file,
-    );
-  return { ...event, payload, streamPath };
+  return parsed.success ? parsed.data : null;
 }
 
-/** apps/os's script events as the shared reducer reads them. An `itx/run-requested` the agent
+/** apps/os's script events as the reducer reads them. An `itx/run-requested` the agent
  *  appended while processing an assistant item (`source.processor.whileProcessing`, the engine's
- *  stamp) is the shared reducer's `script-run-requested` with the id it keys on,
+ *  stamp) is the reducer's `script-run-requested` with the id it keys on,
  *  `agent-output:<that offset>`, and one any other caller asked for (`itx.run` on the agent's path)
  *  is `run:<its offset>`; its `itx/run-settled` names the request by offset, so the settlement
  *  takes the same id. `expiresAt` is the run's deadline — apps/os's runner settles a script
  *  still running ten minutes after it started as failed (`deadline`, apps/os/src/library.ts
  *  RUN_DEADLINE_MS) — which the reducer's inferred close needs; the request's offset rides along as
  *  `requestOffset`, what a settlement's developer item names (`actor`). */
-export function adaptContextRuns(events: readonly Event[]): Event[] {
+export function adaptContextRuns(events: readonly StreamEvent[]): StreamEvent[] {
   const executionIdByRequestOffset = new Map<number, string>();
   return events.map((event) => {
     if (event.type === "events.iterate.com/itx/run-requested") {
@@ -92,11 +84,11 @@ export function adaptContextRuns(events: readonly Event[]): Event[] {
   });
 }
 
-/** The whole feed from the log: every event in offset order through the shared reducer, then —
+/** The whole feed from the log: every event in offset order through the reducer, then —
  *  when the agent facet reports itself idle and no step is still running — the turn boundary,
  *  dated at the last fact. */
 export function reduceAgentFeed(
-  events: readonly Event[],
+  events: readonly StreamEvent[],
   idle: boolean,
 ): { state: AgentUiState; items: AgentUiItem[] } {
   let state = initialAgentUiState();
@@ -161,7 +153,7 @@ export function liveActivityLabel(runningSteps: readonly AgentUiStep[]): string 
 
 /** The llm request behind each assistant bubble (its item id → the request offset), so clicking the
  *  message opens its trace: a `web-message-sent` names its request directly. */
-export function traceOffsetByMessage(events: readonly Event[]): Map<string, number> {
+export function traceOffsetByMessage(events: readonly StreamEvent[]): Map<string, number> {
   const map = new Map<string, number>();
   for (const event of events) {
     if (event.type !== "events.iterate.com/agent/web-message-sent") continue;
@@ -193,7 +185,10 @@ export type LlmTrace = {
   derived: { prose?: string; scriptExecutionId?: string };
 };
 
-export function llmTrace(events: readonly Event[], llmRequestOffset: number): LlmTrace | null {
+export function llmTrace(
+  events: readonly StreamEvent[],
+  llmRequestOffset: number,
+): LlmTrace | null {
   const requested = events.find((event) => event.offset === llmRequestOffset);
   if (!requested || requested.type !== "events.iterate.com/agent/llm-request-requested")
     return null;
@@ -272,7 +267,10 @@ type ScriptTrace = {
   rendered?: string;
 };
 
-export function scriptTrace(events: readonly Event[], executionId: string): ScriptTrace | null {
+export function scriptTrace(
+  events: readonly StreamEvent[],
+  executionId: string,
+): ScriptTrace | null {
   const requested = events.find((event) => {
     if (event.type !== "events.iterate.com/capability-host/script-run-requested") return false;
     const p = isRecord(event.payload) ? event.payload : {};

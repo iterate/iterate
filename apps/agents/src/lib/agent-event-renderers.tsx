@@ -1,5 +1,5 @@
 // How the Events tab reads an agent's log: one sentence per event type the agent loop records
-// (configs/with-agents/agents/contract.ts) — the context view's renderer registry for this app. The
+// (@iterate-com/agents contract.ts) — the context view's renderer registry for this app. The
 // platform's own events (born, woke, script runs) come with the view; anything else falls back to
 // the view's default row.
 import type {

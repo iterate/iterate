@@ -1,28 +1,7 @@
-// e2e/fixtures.ts — the agent stories' shared fixtures (agents*.e2e.test.ts): a model that answers
-// from a script, the model a story configures, the operator's prompt, the log readers and a 1×1 PNG.
-import { RpcTarget } from "capnweb";
-import { readAll, sleep, until } from "../../os/e2e/support/client.ts";
-
-/** A model that answers from a script of replies, in order, recording what it was asked. A reply
- *  may take its time (`{ text, afterMs }`): the request stays in flight that long — what an
- *  interruption needs to have something to cut short. The fake answers WHOLE (a lent stub carries
- *  no stream), so the loop journals its one chunk window; streaming proper is the deployed story. */
-export class ScriptedAi extends RpcTarget {
-  readonly calls: { model: string; messages: { role: string; content: string }[] }[] = [];
-  private readonly replies: (string | Error | { text: string; afterMs: number })[];
-  constructor(replies: (string | Error | { text: string; afterMs: number })[]) {
-    super();
-    this.replies = replies;
-  }
-  async run(model: string, inputs: { messages: { role: string; content: string }[] }) {
-    this.calls.push({ model, messages: inputs.messages });
-    const reply = this.replies[Math.min(this.calls.length, this.replies.length) - 1];
-    if (reply instanceof Error) throw reply;
-    if (typeof reply === "string") return { response: reply };
-    await sleep(reply.afterMs);
-    return { response: reply.text };
-  }
-}
+// e2e/fixtures.ts — the agent stories' shared fixtures (agents*.e2e.test.ts): the model a story
+// configures, the operator's prompt, the log readers and a 1×1 PNG. The model itself is the one fake
+// `itx.ai` (../../os/e2e/support/fake-ai.ts).
+import { readAll, until } from "../../os/e2e/support/client.ts";
 
 export const short = (log: { type: string }[]) =>
   log
@@ -40,9 +19,9 @@ export const configureModel = (
     payload: { config: { llm: { model } } },
   });
 
-/** The operator's instructions, their own keyed system item after the birth. */
-export const operatorPrompt = (agent: { append: (event: unknown) => Promise<unknown> }) =>
-  agent.append({
+/** The operator's instructions, their own keyed system item on the agent's context after the birth. */
+export const operatorPrompt = (support: { append: (event: unknown) => Promise<unknown> }) =>
+  support.append({
     type: "events.iterate.com/agent/context-added",
     payload: { role: "system", content: "Be terse." },
     idempotencyKey: "operator-prompt:v1",

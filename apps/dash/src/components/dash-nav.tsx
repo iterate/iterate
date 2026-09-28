@@ -1,10 +1,11 @@
 // The dash's own navigation inside the shared shell (`AppShell`, packages/ui): inside a project its
 // overview, contexts (any context's log, live), MCP, secrets and its site; outside one the account's pages, THE TREE — the person's
-// organizations, each with its projects (components/organization-tree.tsx, live) — and the other
+// organizations, each with its projects (components/organization-tree.tsx) — and the other
 // first-party apps.
 import { getRouteApi, Link, useMatchRoute } from "@tanstack/react-router";
 import {
   Activity,
+  Blocks,
   Building2,
   ExternalLink,
   FolderKanban,
@@ -37,6 +38,7 @@ const PROJECT_PAGES = [
   { to: "/projects/$slug/contexts/$", label: "Contexts", icon: Waypoints },
   { to: "/projects/$slug/mcp", label: "MCP", icon: Plug },
   { to: "/projects/$slug/secrets", label: "Secrets", icon: LockKeyhole },
+  { to: "/projects/$slug/integrations", label: "Integrations", icon: Blocks },
   { to: "/projects/$slug/hostnames", label: "Hostnames", icon: Globe },
 ] as const;
 
@@ -190,7 +192,7 @@ function TopLevelNav() {
 }
 
 /** The tree: each organization the person belongs to (→ its settings), its projects under it
- *  (→ each overview). Skeleton rows while the account's memberships are still connecting. */
+ *  (→ each overview). Skeleton rows until the tree's first read answers. */
 function OrganizationTreeNav() {
   const tree = useOrganizationTree();
   const matchRoute = useMatchRoute();
@@ -230,13 +232,7 @@ function OrganizationTreeNav() {
                 <Building2 />
                 <span>{org.name}</span>
               </SidebarMenuButton>
-              {org.error ? (
-                <SidebarMenuSub>
-                  <SidebarMenuSubItem data-type="error" className="px-2 text-xs text-destructive">
-                    {org.error}
-                  </SidebarMenuSubItem>
-                </SidebarMenuSub>
-              ) : org.projects.length ? (
+              {org.projects.length ? (
                 <SidebarMenuSub>
                   {org.projects.map((project) => (
                     <SidebarMenuSubItem key={project.id}>

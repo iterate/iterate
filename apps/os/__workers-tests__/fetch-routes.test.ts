@@ -5,8 +5,8 @@
 //
 //   eyeball `blog--<project>.projects.test` → the edge → the context DO → the config worker (loaded)
 //   → `fetchRoutes.match` (the root's core state) → `env.ITX.fetch` → the DO's expression fetch of
-//   the route's target `itx.tunnels.blog` → the lent stub (context/rpc-stubs.ts, the fetch-upgrade
-//   leg for a socket).
+//   the route's target `itx.tunnels.blog` → the lent stub (context/rpc-stubs.ts; the upgrade leg
+//   for a socket, context/fetch-upgrade.ts).
 //
 // The WebSocket half carries a SUBPROTOCOL: a browser that asked for one (Vite's HMR client asks
 // for `vite-hmr`) drops a 101 that names none, so the provider's choice must survive the upgrade
@@ -18,7 +18,8 @@
 import { exports } from "cloudflare:workers";
 import { RpcTarget } from "capnweb";
 import { expect, test, vi } from "vitest";
-import { adminCredentials, openSession, publishConfigWorker } from "./support.ts";
+import { publishConfigWorker } from "../e2e/support/config-worker.ts";
+import { adminCredentials, openSession } from "./support.ts";
 
 test("a config worker routes by `itx.fetchRoutes.match` to a lent stub: HTTP, a WebSocket that keeps its subprotocol, the private route's 401 challenge, a 404 once the lend is recalled", async () => {
   const project = "fetch-routes-tunnel";
@@ -167,8 +168,8 @@ test("a route whose target is a lent stub that is offline answers 502, logged at
     target: "itx.tunnels.ghost",
   });
   await publishConfigWorker(itx, ["itx", "workers", ["get", { source: SRC_FETCH_ROUTER }]]);
-  using info = vi.spyOn(console, "info");
-  using error = vi.spyOn(console, "error");
+  const info = vi.spyOn(console, "info");
+  const error = vi.spyOn(console, "error");
   const offline = await exports.default.fetch(`https://ghost--${project}.projects.test/`);
   expect({
     status: offline.status,

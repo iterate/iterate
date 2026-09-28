@@ -10,7 +10,6 @@
 // deployed suite runs ONE real turn through Workers AI.
 import { RpcTarget } from "capnweb";
 import { expect, test } from "vitest";
-import { createFlake } from "@iterate-com/shared/test-support/flake-test";
 import { errorCode } from "iterate/lib";
 import {
   disposeSessions,
@@ -23,10 +22,10 @@ import {
   until,
   untilValue,
 } from "../../os/e2e/support/client.ts";
+import { FakeAi } from "../../os/e2e/support/fake-ai.ts";
 import { openAgentItx } from "./support.ts";
 import {
   RED_PNG_BASE64,
-  ScriptedAi,
   WORKERS_AI_MODEL,
   assistantWords,
   configureModel,
@@ -38,7 +37,7 @@ test("a fully masked visitor sandbox can receive a prose reply without gaining t
   const itx = await openAgentItx(freshCtx("agent-no-tools"));
   const path = "/agents/visitor";
   const support = itx.cd(path);
-  await support.provide("itx.ai", new ScriptedAi(["Here is a domain from the catalogue."]));
+  await support.provide("itx.ai", new FakeAi(["Here is a domain from the catalogue."]));
   await itx.agents.create(path);
   await itx.cd(`${path}/sandbox`).append(
     {
@@ -75,10 +74,18 @@ test("itx.agents.create(path) births the agent — the processor row, the reques
   await expect(agent.message("hi")).rejects.toThrow(
     /not created — itx\.agents\.create\("\/agents\/support"\) first/,
   );
+  // anyone may append anywhere: a birth certificate appended on `/` ahead of the agent, under the
+  // key the agent's own certificate carries on its path, counts for nothing and takes nothing away
+  await itx.append({
+    type: "events.iterate.com/agent/created",
+    payload: { path: "/agents/support" },
+    idempotencyKey: "agent/created:/agents/support",
+  });
+  expect(await itx.agents.list()).toEqual([]);
   expect(await itx.agents.create("/agents/support")).toEqual({ path: "/agents/support" });
   // The operator's instructions ADD to the default prompt — their own keyed item after the
-  // birth, through the handle's typed append; a system item raises no turn.
-  await agent.append({
+  // birth, a plain append on the agent's context; a system item raises no turn.
+  await itx.cd("/agents/support").append({
     type: "events.iterate.com/agent/context-added",
     payload: { role: "system", content: "Be terse." },
     idempotencyKey: "operator-prompt:v1",
@@ -107,7 +114,19 @@ test("itx.agents.create(path) births the agent — the processor row, the reques
       .filter((e) => e.type === "events.iterate.com/itx/subscription-configured")
       .map((e) => e.payload.name),
   ).toEqual(["agent"]);
-  expect(short(await readAll(itx))).toEqual(["agent/created"]); // only the certificate crosses to /
+  // only the certificate crosses to /, stamped with the agent it names (after the one from `/`)
+  const rootLog = await readAll(itx);
+  expect(short(rootLog)).toEqual(["agent/created", "agent/created"]);
+  expect(
+    rootLog
+      .filter((e) => e.type === "events.iterate.com/agent/created")
+      .map((e) => e.source.origin),
+  ).toEqual(["/", "/agents/support"]);
+  // …and a death appended from anywhere but the agent lands, and changes nothing
+  await itx.append({
+    type: "events.iterate.com/agent/deleted",
+    payload: { path: "/agents/support" },
+  });
   expect(await itx.agents.list()).toEqual([
     { path: "/agents/support", createdAt: expect.any(String) },
   ]);
@@ -119,14 +138,14 @@ test("itx.agents.create(path) births the agent — the processor row, the reques
 test("the loop: a person's words → the model → a script run against itx → its result → the model → prose, then idle; the script's write is real", async () => {
   const itx = await openAgentItx(freshCtx("agent-loop"));
   const support = itx.cd("/agents/support");
-  const ai = new ScriptedAi([
+  const ai = new FakeAi([
     'Let me store that.\n<codemode status="Storing the answer">\nawait itx.kv.put("answer", "42")\nreturn { stored: true }\n</codemode>',
     "Stored 42 under answer.",
   ]);
   await support.provide("itx.ai", ai);
   await itx.agents.create("/agents/support");
   const agent = itx.agents.get("/agents/support");
-  await operatorPrompt(agent);
+  await operatorPrompt(support);
   await configureModel(support);
   const asked = await agent.message("Store 42 under the key answer and tell me when done.");
   expect(asked).toMatchObject({
@@ -199,7 +218,7 @@ test("the loop: a person's words → the model → a script run against itx → 
   // The second call saw the whole conversation: both prompts, person, its own script, the result.
   expect(ai.calls).toHaveLength(2);
   expect(ai.calls[1]).toMatchObject({ model: WORKERS_AI_MODEL });
-  expect(ai.calls[1]!.messages.map((m) => m.role)).toEqual([
+  expect(ai.calls[1]!.inputs.messages.map((m) => m.role)).toEqual([
     "system", // the journaled default prompt
     "system", // the operator's
     "system", // the capability tree, rendered this turn
@@ -207,7 +226,7 @@ test("the loop: a person's words → the model → a script run against itx → 
     "assistant",
     "system",
   ]);
-  expect(ai.calls[1]!.messages[5]!.content).toContain('"stored": true');
+  expect(ai.calls[1]!.inputs.messages[5]!.content).toContain('"stored": true');
   // Idle: no obligation open, one autonomous turn counted, nothing paused.
   expect((await support.facets.get("agent").snapshot()).state).toMatchObject({
     openRequest: null,
@@ -218,14 +237,45 @@ test("the loop: a person's words → the model → a script run against itx → 
   expect(await itx.agents.list()).toHaveLength(1);
 });
 
+/** The sender's label: packages/agents collection.ts `AgentReference.message` and the fold (processor.ts). */
+test("an agent's words to another say who sent them, by message() or by a plain append: the other's model reads `[from /agents/a/sandbox]`, a person's words no sender", async () => {
+  const itx = await openAgentItx(freshCtx("agent-to-agent"));
+  const b = JSON.stringify("/agents/b");
+  const aAi = new FakeAi([
+    `<codemode status="Telling b">\nawait itx.agents.get(${b}).message("by message");\nawait itx.cd(${b}).append({ type: "events.iterate.com/agent/context-added", payload: { role: "user", content: "by append" } });\n</codemode>`,
+    "Told b.",
+  ]);
+  const bAi = new FakeAi(["Heard."]);
+  await itx.cd("/agents/a").provide("itx.ai", aAi);
+  await itx.cd("/agents/b").provide("itx.ai", bAi);
+  for (const path of ["/agents/a", "/agents/b"]) {
+    await itx.agents.create(path);
+    await configureModel(itx.cd(path));
+  }
+  await itx.agents.get("/agents/a").message("Tell b.");
+  const userWords = (ai: FakeAi) =>
+    (ai.calls.at(-1)?.inputs.messages ?? [])
+      .filter((message) => message.role === "user")
+      .map((message) => message.content);
+  expect(
+    await untilValue(
+      "b's model reads both words",
+      async () => userWords(bAi),
+      (words) => words.length === 2,
+      { timeoutMs: 40_000 },
+    ),
+  ).toEqual(["[from /agents/a/sandbox] by message", "[from /agents/a/sandbox] by append"]);
+  expect(userWords(aAi)[0]).toBe("Tell b.");
+});
+
 test("debounced: two messages inside the window are answered by ONE request that saw both; a message after the answer is another turn", async () => {
   const itx = await openAgentItx(freshCtx("agent-debounce"));
   const support = itx.cd("/agents/support");
-  const ai = new ScriptedAi(["Both noted.", "Third noted."]);
+  const ai = new FakeAi(["Both noted.", "Third noted."]);
   await support.provide("itx.ai", ai);
   await itx.agents.create("/agents/support");
   const agent = itx.agents.get("/agents/support");
-  await operatorPrompt(agent);
+  await operatorPrompt(support);
   // The window is the story's premise — the second words must land inside it, a full round trip
   // after the first — so it is generous: at 1.5 s a loaded run's second message landed after it
   // closed, and the one request saw the first words alone (soak 2026-09-24, agents.e2e).
@@ -254,7 +304,7 @@ test("debounced: two messages inside the window are answered by ONE request that
   expect(short(first).filter((t) => t === "agent/llm-request-settled")).toHaveLength(1);
   expect(ai.calls).toHaveLength(1);
   // The one call saw both messages — the prompt is built from the log at run time.
-  expect(ai.calls[0]!.messages.map((m) => m.role)).toEqual([
+  expect(ai.calls[0]!.inputs.messages.map((m) => m.role)).toEqual([
     "system", // the default prompt
     "system", // the operator's
     "system", // the capability tree
@@ -281,14 +331,14 @@ test("debounced: two messages inside the window are answered by ONE request that
 test("a script that returns nothing ends the turn: no result item, no further request — over every RPC hop", async () => {
   const itx = await openAgentItx(freshCtx("agent-quiet"));
   const support = itx.cd("/agents/support");
-  const ai = new ScriptedAi([
+  const ai = new FakeAi([
     'On it.\n<codemode status="Writing">\nawait itx.kv.put("note", "written")\n</codemode>',
     "SHOULD NEVER BE ASKED",
   ]);
   await support.provide("itx.ai", ai);
   await itx.agents.create("/agents/support");
   const agent = itx.agents.get("/agents/support");
-  await operatorPrompt(agent);
+  await operatorPrompt(support);
   await configureModel(support);
   await agent.message("Write the note.");
   // a wait that runs out names the turn's log so far (which hop it stopped at)
@@ -326,13 +376,10 @@ test("bounded: a model that never stops scripting trips the autonomous-turn brea
   const support = itx.cd("/agents/support");
   // Three scripted answers (the person's turn and two self-triggered ones), then the model is down.
   const script = '<codemode status="Looping">\nreturn { again: true }\n</codemode>';
-  await support.provide(
-    "itx.ai",
-    new ScriptedAi([script, script, script, new Error("model down")]),
-  );
+  await support.provide("itx.ai", new FakeAi([script, script, script, new Error("model down")]));
   await itx.agents.create("/agents/support");
   const agent = itx.agents.get("/agents/support");
-  await operatorPrompt(agent);
+  await operatorPrompt(support);
   await support.append({
     type: "events.iterate.com/agent/configured",
     payload: {
@@ -402,11 +449,11 @@ test("bounded: a model that never stops scripting trips the autonomous-turn brea
 test("an attached image is stored under the agent's path and SHOWN to the model as an image part; a non-image is named", async () => {
   const itx = await openAgentItx(freshCtx("agent-vision"));
   const support = itx.cd("/agents/support");
-  const ai = new ScriptedAi(["A red square and a note."]);
+  const ai = new FakeAi(["A red square and a note."]);
   await support.provide("itx.ai", ai);
   await itx.agents.create("/agents/support");
   const agent = itx.agents.get("/agents/support");
-  await operatorPrompt(agent);
+  await operatorPrompt(support);
   await configureModel(support);
   const asked = await agent.message({
     message: "What do you see?",
@@ -445,7 +492,7 @@ test("an attached image is stored under the agent's path and SHOWN to the model 
   // The model saw the pixels (a data: URL of the stored bytes) and was told about the note.
   const [call] = ai.calls;
   // the default prompt, the operator's, the capability tree, then the person's words with their attachments
-  const message = call!.messages[3] as unknown as {
+  const message = call!.inputs.messages[3] as unknown as {
     role: string;
     content: { type: string; text?: string; image_url?: { url: string } }[];
   };
@@ -464,11 +511,17 @@ test("interrupted: the person's next words cut the running answer short — sett
   const itx = await openAgentItx(freshCtx("agent-interrupt"));
   const support = itx.cd("/agents/support");
   // The first answer takes long enough to be cut short; the second is what the person gets.
-  const ai = new ScriptedAi([{ text: "A long answer that never lands.", afterMs: 8_000 }, "Sure."]);
+  const ai = new FakeAi([
+    async () => {
+      await sleep(8_000);
+      return { response: "A long answer that never lands." };
+    },
+    "Sure.",
+  ]);
   await support.provide("itx.ai", ai);
   await itx.agents.create("/agents/support");
   const agent = itx.agents.get("/agents/support");
-  await operatorPrompt(agent);
+  await operatorPrompt(support);
   await configureModel(support);
   await agent.message("Tell me everything.");
   // The interrupt lands MID-CALL: the fake holds the first request, so the runner is awaiting its
@@ -509,7 +562,9 @@ test("interrupted: the person's next words cut the running answer short — sett
   // interruption as the newest words.
   expect(assistantWords(log)).toEqual(["Sure."]);
   expect(ai.calls).toHaveLength(2);
-  expect(ai.calls[1]!.messages.at(-1)!.content).toContain("interrupted the in-progress response");
+  expect(ai.calls[1]!.inputs.messages.at(-1)!.content).toContain(
+    "interrupted the in-progress response",
+  );
   expect((await support.facets.get("agent").snapshot()).state).toMatchObject({
     openRequest: null,
     pendingLlmRequestTrigger: null,
@@ -522,18 +577,20 @@ test("interrupted: the person's next words cut the running answer short — sett
 test("the model is shown the SANDBOX's rewriteRules.list() every turn: a capability provided at the root with a description reaches the prompt, tagged with the context it came from", async () => {
   const itx = await openAgentItx(freshCtx("agent-tree"));
   const support = itx.cd("/agents/support");
-  const ai = new ScriptedAi(["Nothing to do."]);
+  const ai = new FakeAi(["Nothing to do."]);
   await support.provide("itx.ai", ai);
   await itx.provide("itx.tool", "itx.whoami", {
     description: "who this project is, really: itx.tool()",
   });
   const agent = itx.agents.get("/agents/support");
   await itx.agents.create("/agents/support");
-  await operatorPrompt(agent);
+  await operatorPrompt(support);
   await configureModel(support);
   await agent.message("hello");
   await until("the model was asked", () => (ai.calls.length > 0 ? true : undefined));
-  const system = ai.calls[0]!.messages.filter((m) => m.role === "system").map((m) => m.content);
+  const system = ai.calls[0]!.inputs.messages.filter((m) => m.role === "system").map(
+    (m) => m.content,
+  );
   const tree = system.find((content) =>
     content.includes("CAPABILITY TREE (`await itx.rewriteRules.list()`)"),
   );
@@ -543,177 +600,216 @@ test("the model is shown the SANDBOX's rewriteRules.list() every turn: a capabil
   expect(tree).toContain("itx.kv — "); // the root's implicit rows, described
 });
 
-/** THE PLATFORM'S SUBREQUEST DEPTH, THE JAIL's one known flake. An agent's turns can nest in
- *  Cloudflare's call chain: a Durable Object's outgoing calls count from the depth of its NEWEST
- *  in-flight incoming call (workerd `IoContext::getCurrentIncomingRequest`), and each turn's
- *  run-requested arrives at the agent's context from its facet (facet → env.ITX → context), a hop
- *  or three deeper than the delivery that started the turn. When no shallower call reaches the
- *  context in between, the next turn starts from there, and a script's platform hops (here the
- *  physical `itx.repos` grant: sandbox → loaded isolate → env.ITX → sandbox → `/` → the `project`
- *  facet) eventually pass the limit: "Subrequest depth limit exceeded". Measured on a preview
- *  (2026-09-24): from a session a sandbox script has 9 levels of nested `itx.run` left; turn by
- *  turn in the agent loop it had 9,9,9,9,9,8,8,8,8,7,7,7 or 9,8,7,7,9,… — the chain grows until a
- *  shallower call resets it. Soaked alone THE JAIL failed 1 of 40 runs this way, beside the rest of
- *  this file 3 of 46, and 5 of 15 in the full suite (never a different error). The agent loop's
- *  depth is the product's to fix (the turn must start from a fresh invocation); until then the
- *  row is green on exactly this failure and recorded, and any other failure is red. */
-const jailFlake = createFlake(test, /Subrequest depth limit exceeded/, { timeoutMs: 60_000 });
-
-jailFlake(
-  "THE JAIL: a bare null on the agent's sandbox plus one grant — an injected script reaches nothing but the grant, and the tables are untouched afterwards",
-  async () => {
-    const ctx = freshCtx("agent-jail");
-    const itx = await openAgentItx(ctx);
-    const agentPath = "/agents/web/v1";
-    const support = itx.cd(agentPath);
-    const catalogue = new (class extends RpcTarget {
-      search(input: { q: string }) {
-        return [{ name: `${input.q}.com`, price: 42 }];
-      }
-    })();
-    await itx.provide("itx.catalogue", catalogue, { description: "search the catalogue" });
-    const scripts = [
-      "return await itx.kv.list()",
-      "return await itx.cd('/').whoami()",
-      "return await itx.builtins.whoami()",
-      "const r = await fetch('https://example.com/'); return r.status",
-      "await itx.append({ type: 'events.iterate.com/itx/rewrite-rule-configured', payload: { match: 'itx', target: \"itx.builtins.cd('/')\" } }); return 'granted myself'",
-      "await itx.schedules.set({ key: 'later', when: { afterMs: 10 }, events: [{ type: 't' }] }); return 'scheduled'",
-      "await itx.provide('itx.catalogue', () => 'mine now'); return 'lent over the grant'",
-      "await itx.subscribe({ target: () => {} }); return 'subscribed'",
-      "return await itx.catalogue.search({ q: 'ship' })",
-      "return await itx.repos.list()",
-    ];
-    const ai = new ScriptedAi([
-      ...scripts.map((code) => `<codemode status="probing">\n${code}\n</codemode>`),
-      "Done probing.",
-    ]);
-    await support.provide("itx.ai", ai);
-    const agent = itx.agents.get(agentPath);
-    await itx.agents.create(agentPath);
-    await configureModel(support);
-    // THE OWNER's jail, in ONE batch: the mask replaces the sandbox's link, the grant sits beside it
-    // (the append itself resolves before the mask lands; afterwards the owner writes through
-    // `builtins`, which a session may spell and loaded code may not)
-    await itx.cd(`${agentPath}/sandbox`).append(
-      {
-        type: "events.iterate.com/itx/rewrite-rule-configured",
-        payload: {
-          match: "itx",
-          target: null,
-          description: "this agent's scripts get only the rows below",
-        },
-      },
-      {
-        type: "events.iterate.com/itx/rewrite-rule-configured",
-        payload: {
-          match: "itx.catalogue",
-          target: "itx.builtins.cd('/').catalogue",
-          description: "search the catalogue: itx.catalogue.search({ q })",
-        },
-      },
-      {
-        // a PHYSICAL grant to a library root: the verb runs HERE, its hops at the fixed point
-        type: "events.iterate.com/itx/rewrite-rule-configured",
-        payload: {
-          match: "itx.repos",
-          target: "itx.builtins.repos",
-          description: "the project's repos: itx.repos.list()",
-        },
-      },
-    );
-    await itx.cd(`${agentPath}/sandbox`).builtins.append(
-      {
-        type: "events.iterate.com/itx/rewrite-rule-configured",
-        payload: { match: "itx.run", target: "itx.builtins.run" },
-      },
-      {
-        type: "events.iterate.com/itx/rewrite-rule-configured",
-        payload: { match: "itx.rewriteRules", target: "itx.builtins.rewriteRules" },
-      },
-      {
-        type: "events.iterate.com/itx/rewrite-rule-configured",
-        payload: { match: "itx.agents", target: null },
-      },
-    );
-    const rootRulesBefore = await itx.rewriteRules.list();
-    const sandboxRulesBefore = await itx.cd(`${agentPath}/sandbox`).builtins.rewriteRules.list();
-    // The agent never outlives the test: a turn a failure cut short would otherwise run on after the
-    // session's lend of the fake is gone — into the real model.
-    try {
-      await agent.message("Probe everything.");
-      // THE TURN ENDS WITH THE FAKE'S LAST WORDS, and only then may the test end: its session lends the
-      // model, so a test that ended at the tenth settlement dropped the lend under the agent's eleventh
-      // request, which then went to the REAL default route (Workers AI) and kept probing — up to ten
-      // billed turns after the test had passed (13 JAIL runs on a soak preview, 2026-09-24: 9 did).
-      // The flake ends the wait at once (and the `finally` below deletes the agent, so a turn cut
-      // short never reaches a real model either).
-      const depthRefusalIn = (log: { offset: number; type: string; payload?: any }[]) =>
-        log.find(
-          (e) =>
-            /\/(itx\/run-settled|agent\/llm-request-settled)$/.test(e.type) &&
-            JSON.stringify(e.payload).includes("Subrequest depth limit exceeded"),
-        );
-      const log = await until(
-        "the probing turn's last words",
-        async () => {
-          const all = await readAll(support);
-          return assistantWords(all).includes("Done probing.") ||
-            all.some((e) => e.type === "events.iterate.com/agent/paused") ||
-            depthRefusalIn(all)
-            ? all
-            : undefined;
-        },
-        60_000,
-      ).catch(async (error: unknown) => {
-        const all = await readAll(support);
-        throw new Error(`${String(error)} — the turn so far: ${turnSummary(all)}`);
-      });
-      const depthRefusal = depthRefusalIn(log);
-      if (depthRefusal)
-        throw new Error(
-          `the platform refused a hop at offset ${depthRefusal.offset}: Subrequest depth limit exceeded — the turn: ${turnSummary(log)}`,
-        );
-      const settled = log
-        .filter((e) => e.type === "events.iterate.com/itx/run-settled")
-        .map((e) => e.payload.settlement as { status: string; result?: unknown; error?: string });
-      expect(assistantWords(log).at(-1)).toBe("Done probing."); // the turn ended on the fake's words
-      // a mismatch names every settlement — which script answered what
-      expect(
-        settled.map((s) => s.status),
-        JSON.stringify(settled),
-      ).toEqual([
-        "failed",
-        "failed",
-        "failed",
-        "succeeded",
-        "failed",
-        "failed",
-        "failed",
-        "failed",
-        "succeeded",
-        "succeeded",
-      ]);
-      expect(settled[0]!.error).toMatch(/is masked/); // kv: the bare null
-      expect(settled[1]!.error).toMatch(/masked|goes down only/); // cd('/'): the wall, or the app rule
-      expect(settled[2]!.error).toMatch(/not a loaded worker's word/); // itx.builtins
-      expect(settled[3]).toMatchObject({ result: 404 }); // raw fetch: the expression fetch found no `itx.fetch` row
-      expect(settled[4]!.error).toMatch(/is masked/); // the self-grant: append is masked
-      expect(settled[5]!.error).toMatch(/is masked/); // schedules: masked
-      expect(settled[6]!.error).toMatch(/is masked/); // a live lend over the grant: its row is an append, masked
-      expect(settled[7]!.error).toMatch(/is masked/); // a live subscription: its row likewise
-      expect(settled[8]).toMatchObject({ result: [{ name: "ship.com", price: 42 }] }); // the one grant, still the owner's
-      expect(settled[9]).toMatchObject({ result: [] }); // the library root granted physically: its hops are the platform's
-      // nothing moved: the root's table and the sandbox's are what the owner wrote
-      expect(await itx.rewriteRules.list()).toEqual(rootRulesBefore);
-      expect(await itx.cd(`${agentPath}/sandbox`).builtins.rewriteRules.list()).toEqual(
-        sandboxRulesBefore,
-      );
-    } finally {
-      await Promise.race([itx.agents.delete(agentPath).catch(() => undefined), sleep(5_000)]);
+test("THE JAIL: a bare null on the agent's sandbox plus one grant — an injected script reaches nothing but the grant, and the tables are untouched afterwards", async () => {
+  const ctx = freshCtx("agent-jail");
+  const itx = await openAgentItx(ctx);
+  const agentPath = "/agents/web/v1";
+  const support = itx.cd(agentPath);
+  const catalogue = new (class extends RpcTarget {
+    search(input: { q: string }) {
+      return [{ name: `${input.q}.com`, price: 42 }];
     }
-  },
-);
+  })();
+  await itx.provide("itx.catalogue", catalogue, { description: "search the catalogue" });
+  const scripts = [
+    "return await itx.kv.list()",
+    "return await itx.cd('/').whoami()",
+    "return await itx.builtins.whoami()",
+    "const r = await fetch('https://example.com/'); return r.status",
+    "await itx.append({ type: 'events.iterate.com/itx/rewrite-rule-configured', payload: { match: 'itx', target: \"itx.builtins.cd('/')\" } }); return 'granted myself'",
+    "await itx.schedules.set({ key: 'later', when: { afterMs: 10 }, events: [{ type: 't' }] }); return 'scheduled'",
+    "await itx.provide('itx.catalogue', () => 'mine now'); return 'lent over the grant'",
+    "await itx.subscribe({ target: () => {} }); return 'subscribed'",
+    "return await itx.catalogue.search({ q: 'ship' })",
+    "return await itx.repos.list()",
+    "return await itx.repos.get('/repos/config').append({ type: 'events.iterate.com/repo/delete-requested', payload: {} })",
+  ];
+  const ai = new FakeAi([
+    ...scripts.map((code) => `<codemode status="probing">\n${code}\n</codemode>`),
+    "Done probing.",
+  ]);
+  await support.provide("itx.ai", ai);
+  const agent = itx.agents.get(agentPath);
+  await itx.agents.create(agentPath);
+  await configureModel(support);
+  // THE OWNER's jail, in ONE batch: the mask replaces the sandbox's link, the grant sits beside it
+  // (the append itself resolves before the mask lands; afterwards the owner writes through
+  // `builtins`, which a session may spell and loaded code may not)
+  await itx.cd(`${agentPath}/sandbox`).append(
+    {
+      type: "events.iterate.com/itx/rewrite-rule-configured",
+      payload: {
+        match: "itx",
+        target: null,
+        description: "this agent's scripts get only the rows below",
+      },
+    },
+    {
+      type: "events.iterate.com/itx/rewrite-rule-configured",
+      payload: {
+        match: "itx.catalogue",
+        target: "itx.builtins.cd('/').catalogue",
+        description: "search the catalogue: itx.catalogue.search({ q })",
+      },
+    },
+    {
+      // a PHYSICAL grant to a library root: the verb runs HERE, its hops at the fixed point
+      type: "events.iterate.com/itx/rewrite-rule-configured",
+      payload: {
+        match: "itx.repos",
+        target: "itx.builtins.repos",
+        description: "the project's repos: itx.repos.list()",
+      },
+    },
+  );
+  await itx.cd(`${agentPath}/sandbox`).builtins.append(
+    {
+      type: "events.iterate.com/itx/rewrite-rule-configured",
+      payload: { match: "itx.run", target: "itx.builtins.run" },
+    },
+    {
+      type: "events.iterate.com/itx/rewrite-rule-configured",
+      payload: { match: "itx.rewriteRules", target: "itx.builtins.rewriteRules" },
+    },
+    {
+      type: "events.iterate.com/itx/rewrite-rule-configured",
+      payload: { match: "itx.agents", target: null },
+    },
+  );
+  const rootRulesBefore = await itx.rewriteRules.list();
+  const sandboxRulesBefore = await itx.cd(`${agentPath}/sandbox`).builtins.rewriteRules.list();
+  // The agent never outlives the test: a turn a failure cut short would otherwise run on after the
+  // session's lend of the fake is gone — into the real model.
+  try {
+    await agent.message("Probe everything.");
+    // THE TURN ENDS WITH THE FAKE'S LAST WORDS, and only then may the test end: its session lends the
+    // model, so a test that ended at the tenth settlement dropped the lend under the agent's eleventh
+    // request, which then went to the REAL default route (Workers AI) and kept probing — up to ten
+    // billed turns after the test had passed (13 JAIL runs on a soak preview, 2026-09-24: 9 did).
+    // A pause ends the wait at once (and the `finally` below deletes the agent, so a turn cut short
+    // never reaches a real model either).
+    const log = await until(
+      "the probing turn's last words",
+      async () => {
+        const all = await readAll(support);
+        return assistantWords(all).includes("Done probing.") ||
+          all.some((e) => e.type === "events.iterate.com/agent/paused")
+          ? all
+          : undefined;
+      },
+      60_000,
+    ).catch(async (error: unknown) => {
+      const all = await readAll(support);
+      throw new Error(`${String(error)} — the turn so far: ${turnSummary(all)}`);
+    });
+    const settled = log
+      .filter((e) => e.type === "events.iterate.com/itx/run-settled")
+      .map((e) => e.payload.settlement as { status: string; result?: unknown; error?: string });
+    expect(assistantWords(log).at(-1)).toBe("Done probing."); // the turn ended on the fake's words
+    // a mismatch names every settlement — which script answered what
+    expect(
+      settled.map((s) => s.status),
+      JSON.stringify(settled),
+    ).toEqual([
+      "failed",
+      "failed",
+      "failed",
+      "succeeded",
+      "failed",
+      "failed",
+      "failed",
+      "failed",
+      "succeeded",
+      "succeeded",
+      "failed",
+    ]);
+    expect(settled[0]!.error).toMatch(/is masked/); // kv: the bare null
+    expect(settled[1]!.error).toMatch(/masked|goes down only/); // cd('/'): the wall, or the app rule
+    expect(settled[2]!.error).toMatch(/not a loaded worker's word/); // itx.builtins
+    expect(settled[3]).toMatchObject({ result: 404 }); // raw fetch: the expression fetch found no `itx.fetch` row
+    expect(settled[4]!.error).toMatch(/is masked/); // the self-grant: append is masked
+    expect(settled[5]!.error).toMatch(/is masked/); // schedules: masked
+    expect(settled[6]!.error).toMatch(/is masked/); // a live lend over the grant: its row is an append, masked
+    expect(settled[7]!.error).toMatch(/is masked/); // a live subscription: its row likewise
+    expect(settled[8]).toMatchObject({ result: [{ name: "ship.com", price: 42 }] }); // the one grant, still the owner's
+    expect(settled[9]).toMatchObject({ result: [] }); // the library root granted physically: its hops are the platform's
+    expect(settled[10]!.error).toMatch(/is masked/); // …but for its typed append, the script's own write: through the table
+    // nothing moved: the root's table and the sandbox's are what the owner wrote
+    expect(await itx.rewriteRules.list()).toEqual(rootRulesBefore);
+    expect(await itx.cd(`${agentPath}/sandbox`).builtins.rewriteRules.list()).toEqual(
+      sandboxRulesBefore,
+    );
+  } finally {
+    await Promise.race([itx.agents.delete(agentPath).catch(() => undefined), sleep(5_000)]);
+  }
+});
+
+/** AN AGENT'S SCRIPTS KEEP THEIR HOPS: the context starts every run a processor requested in its
+ *  alarm pass, a fresh invocation, so an agent's script has as many hops left before Cloudflare's
+ *  "Subrequest depth limit exceeded" at its fifth turn as at its first, and as a person's `itx.run`
+ *  (why: iterate-context-durable-object.ts `#startRequestedRuns`). Each turn's script counts the
+ *  contexts of a forwarding chain it can still reach. The log is read every three seconds rather
+ *  than continuously: a person's read is itself a fresh request and would mask a loop that piles up
+ *  depth. workerd counts no depth, so a local run reaches the whole chain every time. */
+test("an agent's script has as many hops left at its fifth turn as at its first, and as a person's itx.run", async () => {
+  const itx = await openAgentItx(freshCtx("agent-depth"));
+  const path = "/agents/depth";
+  const support = itx.cd(path);
+  const chain = 16;
+  const turns = 5;
+  await Promise.all(
+    Array.from({ length: chain }, (_, i) =>
+      itx.cd(`${path}/sandbox/chain/${i}`).append({
+        type: "events.iterate.com/itx/rewrite-rule-configured",
+        payload: {
+          match: "itx.hop",
+          target:
+            i === chain - 1
+              ? "itx.builtins.whoami"
+              : `itx.builtins.cd(${JSON.stringify(`${path}/sandbox/chain/${i + 1}`)}).hop`,
+        },
+      }),
+    ),
+  );
+  // Entered at index chain-n, the chain costs n hops: the longest that went through is what is left.
+  const probe = `for (let n = 1; n <= ${chain}; n++) { try { await itx.cd("./chain/" + (${chain} - n)).hop(); } catch { return n - 1; } } return ${chain};`;
+  await support.provide(
+    "itx.ai",
+    new FakeAi([
+      ...Array.from({ length: turns }, () => `<codemode status="counting">\n${probe}\n</codemode>`),
+      "Counted.",
+    ]),
+  );
+  await itx.agents.create(path);
+  await configureModel(support);
+  const personHops = await itx.cd(`${path}/sandbox`).run(`async (itx) => { ${probe} }`);
+  try {
+    await itx.agents.get(path).message("Count the hops.");
+    const log = await until(
+      "the counting turns' last words",
+      async () => {
+        await sleep(3_000);
+        const all = await readAll(support);
+        return assistantWords(all).includes("Counted.") ||
+          all.some((e) => e.type === "events.iterate.com/agent/paused")
+          ? all
+          : undefined;
+      },
+      50_000,
+    );
+    const agentHops = log
+      .filter((e) => e.type === "events.iterate.com/itx/run-settled")
+      .map((e) => e.payload.settlement.result as number);
+    expect(agentHops).toHaveLength(turns);
+    // Allow one hop of noise: a cold context's first control-plane read is one more subrequest.
+    expect(
+      Math.min(...agentHops),
+      JSON.stringify({ personHops, agentHops }),
+    ).toBeGreaterThanOrEqual(personHops - 1);
+  } finally {
+    await Promise.race([itx.agents.delete(path).catch(() => undefined), sleep(5_000)]);
+  }
+});
 
 test("itx.agents.delete(path) lands the request and the death certificate on the agent's path AND on /, drops the processor row; message() refuses and the loop runs no more turns; a second delete answers at once; never created, nothing to delete; deleted, not re-creatable", async () => {
   const itx = await openAgentItx(freshCtx("agent-delete"));
@@ -750,10 +846,10 @@ test("itx.agents.delete(path) lands the request and the death certificate on the
       "NO_FACET",
     );
   await noAgentFacet();
-  // Words appended PAST the verb (the handle's typed append lands under the caller's principal, no
-  // guard) raise no turn: no row, no facet, nothing folds them — no request is recorded long after
-  // the debounce window (250 ms) would have closed.
-  await agent.append({
+  // Words appended PAST the verb (a plain append lands under the caller's principal, no guard)
+  // raise no turn: no row, no facet, nothing folds them — no request is recorded long after the
+  // debounce window (250 ms) would have closed.
+  await itx.cd("/agents/gone").append({
     type: "events.iterate.com/agent/context-added",
     payload: { role: "user", content: "anyone there?", actor: { type: "user" } },
   });

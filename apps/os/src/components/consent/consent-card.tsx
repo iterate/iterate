@@ -14,11 +14,14 @@ import type { ProjectSelection } from "./project-choices.tsx";
 import type { ProjectDraft } from "./project-fields.tsx";
 import { ProjectsStep } from "./projects-step.tsx";
 import { SignedInAccount } from "./signed-in-account.tsx";
+import { SomeoneElseStep } from "./someone-else-step.tsx";
 
 /** The consent page for a request the platform accepted. Three steps: a first project for someone
  *  with none, then which projects the client may reach, then which of the permissions it asked for
- *  to grant. Choices live here, so a refreshed description (after a project is created) and a trip
- *  between the steps never drop one. Authorize is a plain POST to this very authorization URL. */
+ *  to grant — or, for a platform admin, "Sign in as someone else…" instead, which a link naming
+ *  someone opens on. Choices live here, so a refreshed description (after a project is created)
+ *  and a trip between the steps never drop one. Authorize is a plain POST to this very
+ *  authorization URL. */
 export function ConsentCard({
   view,
   authorization,
@@ -32,7 +35,10 @@ export function ConsentCard({
   const createProject = useServerFn(createProjectForConsent);
   const hydrated = useHydrated();
   const [pending, startTransition] = useTransition();
-  const [step, setStep] = useState<"projects" | "permissions">("projects");
+  // a link that named someone (`impersonation.suggested`) opens on signing in as them
+  const [step, setStep] = useState<"projects" | "permissions" | "someone-else">(
+    view.impersonation?.suggested ? "someone-else" : "projects",
+  );
   const [selection, setSelection] = useState<ProjectSelection>({
     all: !view.projectBound,
     excluded: new Set(),
@@ -65,7 +71,7 @@ export function ConsentCard({
   const switchAccount = switchAccountHref(`/oauth2/auth${authorization}`);
 
   /** Change step and move focus to its heading, so the change is announced. */
-  function showStep(next: "projects" | "permissions") {
+  function showStep(next: "projects" | "permissions" | "someone-else") {
     flushSync(() => {
       setStep(next);
       setError(null);
@@ -94,7 +100,9 @@ export function ConsentCard({
         // An ended session is redirected to sign-in: useServerFn has already navigated there and
         // resolves with nothing, so this page has nothing left to update.
         if (!result) return;
-        await router.invalidate();
+        // `sync`: "Creating project…" stays up until the description shows the new project, rather
+        // than ending on the old one (docs/frontend-development.md#act-mutations).
+        await router.invalidate({ sync: true });
         // An organization made for a refused project stays chosen for the retry.
         const orgId = result.orgId || draft.orgId;
         if (result.error) {
@@ -122,7 +130,14 @@ export function ConsentCard({
 
   const frame = {
     account: (
-      <SignedInAccount email={view.email} picture={view.picture} switchAccount={switchAccount} />
+      <SignedInAccount
+        email={view.email}
+        picture={view.picture}
+        switchAccount={switchAccount}
+        onSignInAsSomeoneElse={
+          view.impersonation && step !== "someone-else" ? () => showStep("someone-else") : undefined
+        }
+      />
     ),
     error,
     // Creating a project takes the platform a few seconds; say so while the controls wait.
@@ -137,7 +152,16 @@ export function ConsentCard({
         clientLogoUri={view.clientLogoUri}
         clientDomain={view.clientDomain}
       />
-      {onboarding ? (
+      {step === "someone-else" && view.impersonation ? (
+        <SomeoneElseStep
+          headingRef={headingRef}
+          frame={frame}
+          clientName={view.clientName}
+          clientId={view.clientId}
+          impersonation={view.impersonation}
+          onBack={() => showStep("projects")}
+        />
+      ) : onboarding ? (
         <OnboardingStep
           headingRef={headingRef}
           frame={frame}

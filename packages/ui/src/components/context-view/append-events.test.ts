@@ -8,7 +8,7 @@ import {
   parseAppendYaml,
 } from "./append-events.ts";
 
-test.each([
+test.for([
   {
     name: "the prefilled draft",
     yaml: DEFAULT_APPEND_YAML,
@@ -36,7 +36,7 @@ test.each([
   expect(parseAppendYaml(yaml)).toEqual({ events });
 });
 
-test.each([
+test.for([
   { name: "an empty draft", yaml: "", error: "Nothing to append." },
   { name: "a comment only", yaml: "# nothing", error: "Nothing to append." },
   { name: "an empty list", yaml: "[]", error: "Nothing to append." },
@@ -80,7 +80,7 @@ test("an example loads as a draft that parses back to its type", () => {
   });
 });
 
-test.each([
+test.for([
   {
     name: "one group per processor, by name; types once each, sorted; wildcards left out",
     processors: [

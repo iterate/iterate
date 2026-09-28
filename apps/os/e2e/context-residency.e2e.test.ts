@@ -129,7 +129,7 @@ test("a repo read through its facet does not keep its own context resident", asy
 // The root answers `repos.create` / `repos.list` by walking `facets.get('project').repos().create(…)`:
 // the collection stub the facet answers `repos()` with is walked on, never answered — the resolver
 // releases it once the answer is in (itx-expression-rewriting.ts `invoke`). Kept, it held the project
-// facet and so the root resident (~2 min after a create; until the next deploy before #2846).
+// facet and so the root resident (~2 min after a create).
 test("creating a repo does not keep the project root resident", async () => {
   const { ctx, path } = await repoBornAndRead("residency_root");
   const itx = openItx(ctx);
@@ -427,7 +427,7 @@ test(
 // flight. A careless facet that calls its own context every few seconds keeps that context resident,
 // so no birth would ever reset it; it is reset in place a quiet minute after the last outside call.
 // That outside HTTP restarts the clock is decided in the Workers suite
-// (__workers-tests__/facet-birth-reset.test.ts); that a context under 5 s of traffic keeps one
+// (__workers-tests__/facets.test.ts); that a context under 5 s of traffic keeps one
 // instance is Cloudflare's, timed in the opt-in perf file: here that row saw two when the control
 // plane stalled 12.8 s mid-traffic and the context, reached by nothing for 16 s, evicted (#2899).
 

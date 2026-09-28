@@ -20,7 +20,6 @@ import { type Reach } from "./control-plane/edge.ts";
 import { emailAllowed } from "./allowed-emails.ts";
 import { appConfigOf, platformAddressesOf, type PlatformAddresses } from "./app-config.ts";
 import { providerStore } from "./oauth-store.ts";
-import { isDeployReset, isRetryableTransportError } from "./retryable-error.ts";
 import { watchSlowStep } from "./sign-in-watch.ts";
 import {
   isPersonalAccessToken,
@@ -29,7 +28,7 @@ import {
 } from "./personal-access-token.ts";
 
 /** Encrypted by the provider. Every grant is created through parseAuthorization, so it is bound to
- * one of the authorization server's two resources: the issuer's own session or a client's. */
+ * one of the authorization server's resources: the issuer's own session or a client's. */
 export const GrantProps = z.object({
   kind: z.enum(["issuer", "app"]),
   userId: z.string().startsWith("user_"),
@@ -39,18 +38,13 @@ export const GrantProps = z.object({
    *  organization name */
   picture: z.string().optional(),
   name: z.string().optional(),
-  /** An issuer session a preview's test link started (test-link.ts, issuer-session.ts
-   *  `testLinkResponse`): the sibling app previews' origins the link signed, and the test person's
-   *  project — consent.ts approves such a client for that project without the Allow page. */
-  testLink: z.object({ clients: z.array(z.string()), project: z.string() }).optional(),
   projects: z.array(z.string()).nullable(),
   /** Epoch ms: the grant is refused from here on, however recently it was used (`grantLifetime`). */
   deadline: z.number().int().positive(),
-  /** A PLATFORM ADMIN VIEWING AN APP AS THIS PERSON (consent.ts `#impersonate`): the grant is the
-   *  person's, and the admin is stamped beside them on every call (`Principal.impersonatedBy`). */
-  impersonatedBy: z
-    .object({ userId: z.string().startsWith("user_"), email: z.string() })
-    .optional(),
+  /** A PLATFORM ADMIN SIGNED IN AS THIS PERSON (consent.ts `#impersonate`): the grant is the
+   *  person's, and the admin is stamped beside them on every call — `Principal.impersonatedBy`, the
+   *  same shape. */
+  impersonatedBy: z.object({ actor: z.string().startsWith("user_"), email: z.string() }).optional(),
 });
 export type GrantProps = z.infer<typeof GrantProps>;
 
@@ -86,6 +80,8 @@ export type Authorization = {
  *  (`refreshTokenIdleTTL`, the library's README "PKCE and token lifecycle"), never past its
  *  `deadline` (`grantLifetime`). */
 const SESSION_IDLE_SECONDS = 7 * 24 * 3600;
+/** An access token's lifetime; `grantLifetime` shortens it to the grant's deadline. */
+const ACCESS_TOKEN_SECONDS = 3600;
 
 /** The provider validates the client, redirect, PKCE and the resource: one of the two the
  * authorization server declares (a request naming none, both, or another is `invalid_target`). We
@@ -108,44 +104,26 @@ export async function parseAuthorization(env: Env, request: Request): Promise<Au
  *  a grant has ended (`endedGrants`, the revocation truth — grants.ts lands the end there and
  *  awaits it), when each was last used. One hop to the person's own Durable Object.
  *
- *  Read again ONCE, on a fresh stub, when the read was cut at the transport (retryable-error.ts):
- *  every admission and every code exchange reads here (`grantLifetime`), so a deploy's reset of
- *  the person's Durable Object would otherwise fail a sign-in's token request with a 500. The read
- *  is idempotent; a second failure throws. A deploy's reset is expected; any other cut is a
- *  platform failure the prd fault alarm counts.
+ *  A read is sent ONCE more when a deploy's reset or a lost connection cut it (session.ts
+ *  `ownerContext`): every admission and every code exchange reads here (`grantLifetime`), so a
+ *  deploy's reset of the person's Durable Object would otherwise fail a sign-in's token request.
  *
  *  A read still pending after five seconds logs `oauth.step-slow` naming the person while it waits
  *  (sign-in-watch.ts). A person's account is often brand new at their first sign-in's code
  *  exchange, and Cloudflare can hold a new Durable Object's answers until its first write is
  *  confirmed. */
 export async function accountStateOf(env: Env, userId: string): Promise<AccountState> {
-  // The stub's `invoke` is typed as workerd's RPC wrapper over the DO method; the facet is the
-  // platform's own AccountDurableObject and `snapshot()` the engine's `{ offset, state }`.
-  const read = async () =>
-    (
-      (await watchSlowStep(
-        { event: "oauth.step-slow", step: "account-state", userId },
-        ownerContext(env.ITERATE_CONTEXT, { account: userId }).invoke(
-          ["itx", "facets", ["get", "account"], ["snapshot"]],
-          [],
-          { principal: null },
-        ),
-      )) as { state: AccountState }
-    ).state;
-  try {
-    return await read();
-  } catch (error) {
-    if (!isRetryableTransportError(error)) throw error;
-    console.warn({
-      event: isDeployReset(error)
-        ? "oauth.deploy-reset-account-state-retry"
-        : "oauth.platform-failure-account-state-retry",
-      name: "account-state",
-      userId,
-      message: String(error),
-    });
-    return read();
-  }
+  // `invoke` answers `unknown` across the DO hop; the facet is the platform's own
+  // AccountDurableObject and `snapshot()` the engine's `{ offset, state }`.
+  const { state } = (await watchSlowStep(
+    { event: "oauth.step-slow", step: "account-state", userId },
+    ownerContext(env.ITERATE_CONTEXT, { account: userId }, "oauth").invoke(
+      ["itx", "facets", ["get", "account"], ["snapshot"]],
+      [],
+      { principal: null },
+    ),
+  )) as { state: AccountState };
+  return state;
 }
 
 /** Whether `email` is one of the deployment's platform admins (app-config.ts `admins`), as the
@@ -157,7 +135,7 @@ export function isAdmin(env: Env, email: string): boolean {
 /** A grant's admin claims, against the `admins` list as it reads NOW: the `admin` scope needs its
  *  own person listed, an impersonation its admin. Every admission and every refresh asks, so an
  *  address the list drops loses both at its next request. */
-function adminClaimsHold(
+function grantAdminsStillListed(
   env: Env,
   grant: Pick<GrantProps, "email" | "impersonatedBy"> & { scope: readonly string[] },
 ): boolean {
@@ -166,7 +144,7 @@ function adminClaimsHold(
 }
 
 /** Whether `grant` still admits its bearer: its token unexpired, its deadline not passed, its
- * person's email one `login.allowedEmails` admits, its admin claims still held (`adminClaimsHold`),
+ * person's email one `login.allowedEmails` admits, its admins still listed (`grantAdminsStillListed`),
  * and no end on the person's account. A fresh read of the account on each admission — never memoized: provider
  * KV expiry/deletion alone cannot deny a token during propagation or a refresh racing with logout,
  * and a memo here would let a revoked grant through for its life. (The live socket's 30 s
@@ -182,17 +160,17 @@ async function liveGrantAccount(env: Env, grant: AccessGrant): Promise<AccountSt
     grant.expiresAt <= Date.now() ||
     grant.deadline <= Date.now() ||
     !emailAllowed(appConfigOf(env).login.allowedEmails, grant.email) ||
-    !adminClaimsHold(env, grant)
+    !grantAdminsStillListed(env, grant)
   )
     return null;
   const account = await accountStateOf(env, grant.userId);
   return account.endedGrants[grant.grantId] ? null : account;
 }
 
-/** THE PLATFORM'S TOKEN VALIDATOR, for either resource (api.ts hosts both with it). Three bearers:
+/** THE PLATFORM'S TOKEN VALIDATOR, for every resource (api.ts hosts each with it). Three bearers:
  *  - a token the authorization server issued for `resource` (audience-checked, its props
  *    decrypted) whose grant is still live;
- *  - a personal access token (personal-access-token.ts), at either resource: the library's
+ *  - a personal access token (personal-access-token.ts), at any resource: the library's
  *    resource servers take any validator ("`validateToken` is just a function",
  *    docs/resource-servers.md "Another issuer, at your own risk"), so the key's check is a branch
  *    here, and it names the resource that asked as its audience. At `/mcp` a key is outside the MCP
@@ -340,7 +318,16 @@ export async function recordGrantUse(env: Env, grant: AccessGrant): Promise<void
         type: "events.iterate.com/account/grant-used",
         payload: { grantId: grant.grantId, at: now } satisfies GrantUsed,
       },
-      { principal: { actor: grant.userId, email: grant.email }, grant: grant.grantId },
+      {
+        // an impersonation's use names the admin beside the person, as every event it causes does
+        principal: {
+          actor: grant.userId,
+          email: grant.email,
+          // oxlint-disable-next-line iterate/simple-truthiness-check -- as `authorizationOf`'s principal: only an impersonation carries the key
+          ...(grant.impersonatedBy && { impersonatedBy: grant.impersonatedBy }),
+        },
+        grant: grant.grantId,
+      },
     );
   } catch (error) {
     grantUseRecordedAt.delete(key); // the next use tries again
@@ -390,14 +377,16 @@ export const TOKEN_ENDPOINT = "/oauth2/token";
 export const CLIENT_REGISTRATION_ENDPOINT = "/oauth2/register";
 
 /** THE AUTHORIZATION SERVER at `addresses` (the library's role-based API, its
- *  docs/resource-servers.md "Same Worker"): the issuer, for the platform's two resources, `/api`
- *  (Cap'n Web) and `/mcp` — each hosted in this worker by api.ts. Every grant and access token is
- *  bound to exactly one of them (RFC 8707). Built per request: where `urls.os` is unset the addresses
- *  are the request's own. */
-function authorizationServer(env: Env, { platformOrigin, api, mcp }: PlatformAddresses) {
+ *  docs/resource-servers.md "Same Worker"): the issuer, for the platform's three resources, `/api`
+ *  (Cap'n Web), `/mcp` and `/oauth2/userinfo` (who the bearer is, and nothing else — what another
+ *  deployment asks to know an admin by, admin-sign-in.ts) — each hosted in this worker by api.ts.
+ *  Every grant and access token is bound to exactly one of them (RFC 8707): a userinfo token is
+ *  refused at `/api` and `/mcp` by the audience check itself. Built per request: where `urls.os` is
+ *  unset the addresses are the request's own. */
+function authorizationServer(env: Env, { platformOrigin, api, mcp, userinfo }: PlatformAddresses) {
   return new OAuthAuthorizationServer<Env>({
     issuer: platformOrigin,
-    resources: [api, mcp],
+    resources: [api, mcp, userinfo],
     authorizeEndpoint: AUTHORIZE_ENDPOINT,
     tokenEndpoint: TOKEN_ENDPOINT,
     // DCR is served on every deployment (not just local http): CIMD stays the apps' own path
@@ -406,6 +395,7 @@ function authorizationServer(env: Env, { platformOrigin, api, mcp }: PlatformAdd
     clientRegistrationEndpoint: CLIENT_REGISTRATION_ENDPOINT,
     clientIdMetadataDocumentEnabled: true,
     scopesSupported: OAuthScope.options,
+    accessTokenTTL: ACCESS_TOKEN_SECONDS,
     refreshTokenTTL: SESSION_IDLE_SECONDS,
     refreshTokenIdleTTL: SESSION_IDLE_SECONDS,
     tokenExchangeCallback: (input) => grantLifetime(env, input),
@@ -427,25 +417,29 @@ function authorizationServer(env: Env, { platformOrigin, api, mcp }: PlatformAdd
 
 /** A validated token as the platform's authorization, or null when its grant is no longer live. A
  *  platform admin's grant (the `admin` scope, its person listed: `liveGrantAccount`) reaches every
- *  project as that person; an impersonation reaches what the person viewed does, the admin named
- *  beside them. */
+ *  project as that person; an impersonation reaches what the person does, the admin named beside
+ *  them. */
 async function authorizationOf(
   env: Env,
   token: ValidatedAccessToken,
 ): Promise<Authorization | null> {
   const props = TokenProps.safeParse(token.props);
   if (!props.success || props.data.userId !== token.userId) return null;
-  const grant = { ...props.data, scope: token.scope, expiresAt: token.expiresAt * 1000 };
+  // the deadline bounds the token too (`grantLifetime`), so every check of `expiresAt` — a batch's
+  // calls (rpc.ts), a socket's lease (project-host-lease.ts) — honours it
+  const grant = {
+    ...props.data,
+    scope: token.scope,
+    expiresAt: Math.min(token.expiresAt * 1000, props.data.deadline),
+  };
   const account = await liveGrantAccount(env, grant);
   if (!account) return null;
-  const { impersonatedBy } = grant;
   return {
     principal: {
       actor: grant.userId,
       email: grant.email,
-      ...(impersonatedBy && {
-        impersonatedBy: { actor: impersonatedBy.userId, email: impersonatedBy.email },
-      }),
+      // oxlint-disable-next-line iterate/simple-truthiness-check -- the principal crosses Cap'n Web and JSON to callers (`whoami`, a project host's header): an `impersonatedBy: undefined` key arrives there as a key, so only an impersonation carries one
+      ...(grant.impersonatedBy && { impersonatedBy: grant.impersonatedBy }),
     },
     reach: grant.scope.includes("admin")
       ? "every"
@@ -534,18 +528,23 @@ async function grantLifetime(
   const grant = parsed.data;
   if (!emailAllowed(appConfigOf(env).login.allowedEmails, grant.email))
     throw refused("email_not_allowed", "The session is no longer active.");
-  if (!adminClaimsHold(env, { ...grant, scope: input.scope }))
+  if (!grantAdminsStillListed(env, { ...grant, scope: input.scope }))
     throw refused("admin_not_listed", "The session is no longer active.");
   const remaining = Math.floor((grant.deadline - Date.now()) / 1000);
   // KV's shortest expiry, below which the library refuses a lifetime (`invalid_request`).
   if (remaining < 60) throw refused("deadline_passed", "The session has expired.");
-  const accessTokenProps = { ...grant, grantId: input.grantId };
-  if (remaining >= SESSION_IDLE_SECONDS) return { accessTokenProps };
+  // No access token outlives the deadline either: an hour's impersonation whose code is exchanged
+  // late gets a token that ends with the hour, not the library's hour from the exchange.
+  const token = {
+    accessTokenProps: { ...grant, grantId: input.grantId },
+    accessTokenTTL: Math.min(ACCESS_TOKEN_SECONDS, remaining),
+  };
+  if (remaining >= SESSION_IDLE_SECONDS) return token;
   // The library honors `refreshTokenTTL` only at the code exchange and `refreshTokenIdleTTL` only at
   // a refresh, and refuses either key anywhere else.
   return input.grantType === GrantType.AUTHORIZATION_CODE
-    ? { accessTokenProps, refreshTokenTTL: remaining }
-    : { accessTokenProps, refreshTokenIdleTTL: remaining };
+    ? { ...token, refreshTokenTTL: remaining }
+    : { ...token, refreshTokenIdleTTL: remaining };
 }
 
 /** The env the provider runs over: the worker's, with `OAUTH_KV` the provider's store

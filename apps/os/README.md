@@ -16,7 +16,7 @@ pnpm install
 pnpm dev
 pnpm typecheck
 pnpm test
-pnpm e2e
+pnpm os e2e
 pnpm spec
 ```
 
@@ -33,9 +33,10 @@ pnpm --dir apps/os e2e
 The Worker is a TanStack Start app built by Vite: `src/worker.ts` serves the platform, and the
 pages people see (`/`, `/login`, the `/oauth2/auth` consent) are server-rendered routes in
 `src/routes/` using the shared `@iterate-com/ui` components. The build emits the Worker and its
-`dist/server/wrangler.json`, which the tests, deploys and previews use. `WORKER_BASE_URL` selects a deployed target for integration tests; browser tests
-(`pnpm spec`, [specs/](../../specs/AGENTS.md) at the repo root) use `DEMO_BASE_URL`. See
-[testing](../../docs/testing.md) for the suite boundary and required evidence.
+`dist/server/wrangler.json`, which the tests, deploys and previews use. `WORKER_BASE_URL` selects
+a deployed target for the integration tests and the browser tests (`pnpm spec`,
+[specs/](../../specs/AGENTS.md) at the repo root). See [testing](../../docs/testing.md) for the
+suite boundary and required evidence.
 
 ## Configuration and deployment
 
@@ -49,43 +50,45 @@ pnpm --dir apps/os run deploy --env <environment>
 
 Production uses `https://os.iterate.com` as its OAuth issuer and
 `https://mcp.iterate.com` for MCP. Register these identity-provider callbacks before a hostname
-cutover: `https://os.iterate.com/.auth/identity/callback` for Google and
-`https://os.iterate.com/.auth/identity/cloudflare/callback` for Cloudflare. The production Doppler
+cutover: `https://os.iterate.com/.auth/identity/callback` for Google,
+`https://os.iterate.com/.auth/identity/cloudflare/callback` for Cloudflare and
+`https://os.iterate.com/.auth/identity/github/callback` for GitHub. The production Doppler
 `APP_CONFIG` email-code sender must use a verified Iterate sending domain. Project ingress and the
 Cloudflare for SaaS fallback use `iterate.app`; custom apexes hosted in other accounts point at
 `cname.iterate.app` and must show an active hostname and certificate on that zone.
+A project's email is `<slug>@iterate.app` (src/integrations/email.ts): the zone is onboarded for
+Email Sending, and its Email Routing catch-all rule delivers every inbound message to `os-prd`'s
+`email()` handler.
 The proxied `*.iterate.com` DNS record and Worker route serve the `iterate` project's config worker;
 named Worker routes such as `os.iterate.com`, `mcp.iterate.com`, `dash.iterate.com`, and
 `k.iterate.com` take precedence. The zone has an active `*.iterate.com` edge certificate.
 
-The Preview OS workflow's Deploy preview job deploys a platform preview and all five hosted clients
-(Dash, Agents, Notes, Voice, Kit); then its E2E tests job runs the integration suite and its Browser
-specs job the browser specs against them, side by side, each a required check. A PR that changes no
-preview path deploys nothing and skips both. The commands to run them from a checkout or from CI are
-below.
+The Preview OS workflow's Deploy preview job deploys the tested commit's platform and all six hosted
+clients (Dash, Agents, Notes, Admin, Voice, Kit). Beside it, its E2E tests job sets up the integration
+suite and its Browser specs job the browser specs, and each runs its suite against them once the
+deploy has finished, each a required check; after the deploy, Clean up superseded deletes the PR's
+older deployments. A PR that changes no preview path deploys nothing and passes both without testing.
+The commands to run them from a checkout or from CI are below.
 
-A PR's previews are named `pr<n>`: `https://pr<n>-os.iterate-dev-preview.workers.dev` for the
-platform, `https://pr<n>-dash.iterate-dev-preview.workers.dev` and so on for the clients. Each is a
-Cloudflare Worker Preview of a parent Worker named after its app (`os`, `dash`, …; envs.ts
-`<app>Envs.preview`). The parents are main on the dev/preview account: the Preview parents workflow
-deploys them from every push to main that a PR's preview would run for, and
+Every tested commit gets a deployment of its own, a set of plain Workers named `<prefix>-<sha7>-<app>`
+on the dev/preview account (envs.ts `previewDeployment`): for PR 3144 at `a1b2c3d`,
+`https://pr3144-a1b2c3d-os.iterate-dev-preview.workers.dev` for the platform,
+`https://pr3144-a1b2c3d-dash.iterate-dev-preview.workers.dev` and so on for the clients, which sign
+in against it. The platform has its own Durable Objects, D1, KV, R2 and Artifacts namespace, and
+deploys through `scripts/deploy.ts` like prd (`pnpm run deploy --env pr3144-a1b2c3d` works too).
+Nothing is redeployed in place and no data survives a push. Closing the PR deletes its deployments;
+the nightly sweep removes superseded, stale and half-made ones (`scripts/preview-sweep.ts` for the
+rules). Deployments use workers.dev and have no project hosts. Main OS e2e, the latency guard and
+the real-model suite use the prefixes `main`, `latency` and `real-model`; leave those names to CI.
+
+Main on the dev/preview account is `os`, `dash`, … (envs.ts `<app>Envs.preview`): the Preview parents
+workflow redeploys them in place from every push to main that a PR's deployment would run for, and
 `https://dash.iterate-dev-preview.workers.dev` signs in against
 `https://os.iterate-dev-preview.workers.dev`. What people leave there is erased nightly
-(`pnpm preview reset-parent`, in the Preview sweep workflow); PR previews keep their data and keep
-serving through it. A platform preview has its own Durable Objects, D1, KV, R2, and Artifacts namespace. Closing the PR deletes the preview and its resources. The nightly sweep also removes stale previews and orphaned resources;
-see `scripts/preview-sweep.ts` for the rules. Previews use workers.dev and have no project hosts.
-Main OS e2e, the latency guard and the real-model suite each keep one preview, `main`, `latency` and
-`real-model`, which every run redeploys in place, its readiness gate waiting until the preview runs
-the new version ([why](../../docs/depot-ci.md#main-os-e2e-keeps-one-preview)). Leave those names to
-CI.
+(`pnpm preview reset-parent`, in the Preview sweep workflow). No PR deployment depends on it. To
+deploy it by hand, from a checkout: `pnpm preview deploy-parents`.
 
-A new Durable Object class needs care. An existing preview cannot gain a class it lacked when it was
-created: `wrangler preview` fails with Cloudflare 10061 ("Cannot create binding for class … not
-exported by the script"). The deploy then deletes that preview and its resources and creates it
-again, once. A new preview does not need the class on its parent. To deploy the parents by hand,
-from a checkout: `pnpm preview deploy-parents`.
-
-Run preview operations from this directory under the parent Doppler config:
+Run preview operations from this directory under Doppler `os/preview`:
 
 ```sh
 doppler run --project os --config preview -- \
@@ -95,14 +98,17 @@ doppler run --project os --config preview -- \
 doppler run --project os --config preview -- \
   pnpm preview specs --name main
 doppler run --project os --config preview -- \
-  pnpm preview sweep
+  pnpm preview delete --pr <number>
+doppler run --project os --config preview -- \
+  pnpm preview sweep --dry-run
 doppler run --project os --config preview -- \
   pnpm preview deploy-parents
 ```
 
-Use `e2e` (the vitest e2e suite) or `specs` (the Playwright specs) in place of `deploy` to test a
-preview as it is deployed, named by PR number or, without `--pr`, by its name (`--name main` is the
-one Main OS e2e keeps). CI does the same without redeploying:
+`deploy` deploys this checkout's commit as `pr<number>-<sha7>` (or `<name>-<sha7>` with `--name`).
+Use `e2e` (the vitest e2e suite) or `specs` (the Playwright specs) in place of `deploy` to test the
+newest deployment of a PR, or without `--pr` of a name (`--name main` is Main OS e2e's), or the
+one PREVIEW_DEPLOYMENT names. CI does the same without deploying:
 
 ```sh
 depot ci dispatch --org 0p91s0lz49 --repo iterate/iterate --workflow preview-os.yml --ref ci-soak/<name> \
@@ -114,25 +120,29 @@ depot ci dispatch --org 0p91s0lz49 --repo iterate/iterate --workflow preview-os.
 `action=test` runs both suites, `e2e` or `specs` one of them. Dispatch from a scratch branch cut
 from main ([Run CI without a PR](../../docs/depot-ci.md#run-ci-without-a-pr)), never from main,
 whose head would carry the result, and one suite alone never from the PR's branch
-([why](../../docs/depot-ci.md#run-the-suites-against-a-deployed-preview)). `reset` destroys that
-preview's state before redeploying; `delete` removes it. CI publishes URLs and operation links in
-the PR body, under a status line (deploying, deployed, deploy failed, with the CI job) and a line
-per suite (`E2E tests` and `Browser specs`: passed or failed, each with its CI job),
-with one-click `Sign in ↗` links as the PR's test person, `pr<N>@preview.iterate.test`, and
-one-click "New project from template" links into the Dash
-([dev environments](../../docs/dev-environments.md), `src/test-link.ts`).
-For an operational change, verify the preview's resulting state and telemetry as well as its checks.
+([why](../../docs/depot-ci.md#run-the-suites-against-a-deployed-preview)). `delete` removes every
+deployment of the PR or name. CI writes each deployment's links into the PR body: per worker, a
+`Sign in ↗` that signs the app in as the PR's test person, `pr<N>@preview.iterate.test`, once one of
+prd's admins signs in to the deployment through prd (`src/admin-sign-in.ts`) and confirms "Sign in
+as someone else" on the consent page, and its Cloudflare dashboard; "New project from template"
+links into the Dash; and the previous commit's section folded while the next deploys
+([dev environments](../../docs/dev-environments.md)). For an operational change, verify the
+deployment's resulting state and telemetry as well as its checks.
 The [engineering invariant](../../docs/engineering-invariants.md) defines the required standard.
 
 ## The control plane's database
 
 The control plane — users, identities, organizations, memberships, projects, invitations, custom
 hostnames and the OAuth provider's grants — is one D1 per deployment, bound as `DB`: `os-prd-db`,
-`os-parent-db`, `os-<preview>-db` for each preview, and `os-dev-db` locally
-(`src/control-plane/db/`). [sqlfu](https://github.com/mmkal/sqlfu) authors it: the schema is
+`os-parent-db` (main on dev), `<deployment>-os-db` for each per-commit deployment, and `os-dev-db`
+locally (`src/control-plane/db/`). prd's and main on dev's primaries are in western Europe; a
+per-commit deployment's is created near the job that deploys it, which for CI is where its suites
+run (`scripts/d1.ts`). [sqlfu](https://github.com/mmkal/sqlfu) authors it: the schema is
 `definitions.sql`, the migrations `migrations/*.sql`, and every query a named statement in
 `queries/*.sql`, typed into `queries/.generated/` (committed); `db/index.ts` says why each write is
-one statement or one batch.
+one statement or one batch. It is the one truth of organizations, members, invitations and projects:
+`session.organizations` and `session.projects` read it as it stands (the Dash reads nothing else),
+and the facts a verb lands on an organization's context and a member's account are their activity.
 
 To change the schema, edit `definitions.sql`, write the next migration (`pnpm --dir apps/os db:draft`
 drafts it), then:
@@ -143,14 +153,16 @@ pnpm --dir apps/os db:generate  # the typed queries; commit what changes
 pnpm --dir apps/os db:migrate   # this worktree's local D1 (`pnpm dev` runs it too)
 ```
 
-Wrangler migrates a deployment's D1 when it deploys, and a preview's when the preview deploys,
+Wrangler migrates a deployment's D1 when it deploys, a per-commit deployment's too (created first),
 before the code that reads it uploads (`scripts/d1.ts`): a migration must keep the running version
 working until then. D1 Time Travel restores a database to any minute of the last 30 days.
 
 ## Projects and MCP
 
 `session.projects.create()` starts a durable project-creation saga. Each project has a config
-repository; commits to `/repos/config` publish the pinned `worker.ts` revision. The optional
+repository; commits to `/repos/config` publish the pinned `worker.ts` revision. A repo can remember
+a git remote as its origin and `pull()` or `push()` it, fast-forward only unless `force`, keeping one
+history with the same commits on both ([a config repo on GitHub](docs/project-creation.md#a-config-repo-on-github)). The optional
 `configs/with-agents` template adds userspace agents. See [project creation](docs/project-creation.md).
 
 A context hosts Durable Object classes as facets (`itx.facets.get(name, { source, className })`, or
@@ -169,5 +181,11 @@ https://mcp.iterate.com). It exposes `run({ project?, script })`, where `script`
 [shows runnable examples](e2e/mcp-project-root.e2e.test.ts). An MCP client signs in with OAuth or
 presents a personal access token; [credentials](docs/credentials.md) says which bearer works
 where, and why the operator bearer is `/api`'s alone.
+
+## Integrations
+
+How a project connects Slack, Google, Cloudflare and GitHub (iterate's apps or its own), uses a
+member's own accounts, borrows the deployment's keys, holds a WebSocket through a secret, and logs
+in to vendors without OAuth: [integrations](docs/integrations.md).
 
 For a deployment in another Cloudflare account, follow [self-hosting](SELF-HOSTING.md).

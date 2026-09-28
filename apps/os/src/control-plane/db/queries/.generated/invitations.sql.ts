@@ -201,8 +201,8 @@ export namespace acceptInvitation {
 }
 
 const insertAcceptedMembershipSql = `
-insert into memberships (org_id, user_id, role)
-select org_id, accepted_by, role
+insert into memberships (org_id, user_id, role, created_at)
+select org_id, accepted_by, role, accepted_at
 from invitations
 where token_hash = ? and acceptance_id = ?;
 `.trim();
@@ -223,5 +223,50 @@ export namespace insertAcceptedMembership {
 	export type Params = {
 		tokenHash: string;
 		acceptanceId: string;
+	};
+}
+
+const openInvitationsSql = `
+select
+  id,
+  org_id as orgId,
+  role,
+  email_hint as emailHint,
+  expires_at as expiresAt
+from invitations
+where org_id = ?
+  and accepted_by is null
+  and revoked_at is null
+  and (? = 1 or exists (
+    select 1 from memberships a
+    where a.org_id = invitations.org_id and a.user_id = ? and a.role = 'owner'
+  ))
+order by created_at, id;
+`.trim();
+const openInvitationsQuery = (params: openInvitations.Params) => ({
+	name: "openInvitations",
+	sql: openInvitationsSql,
+	args: [params.orgId, params.asOperator, params.actorId],
+});
+
+export const openInvitations = Object.assign(
+	async function openInvitations(client: Client, params: openInvitations.Params): Promise<openInvitations.Result[]> {
+		return client.all<openInvitations.Result>(openInvitationsQuery(params));
+	},
+	{ sql: openInvitationsSql, query: openInvitationsQuery },
+);
+
+export namespace openInvitations {
+	export type Params = {
+		orgId: string;
+		asOperator: number;
+		actorId: string;
+	};
+	export type Result = {
+		id: string;
+		orgId: string;
+		role: ('owner' | 'member');
+		emailHint?: string;
+		expiresAt: number;
 	};
 }

@@ -97,13 +97,14 @@ proof, `apps/agents/scripts/voice-board.ts`, takes the device name on
 
 `components/capabilities/screen` owns the shared image protocol. A board
 provides dimensions, supported/preferred wire formats, refresh timing, a
-staging buffer, and submit/status callbacks. `screen.info()` exposes these
+staging buffer, and submit/state callbacks. `screen.info()` exposes these
 facts; `screen.setImage()` accepts contiguous bounded base64 chunks and
-`screen.status()` acknowledges hardware completion. Monochrome (`mono1`),
+answers the chunk that completes the frame only once the hardware has shown it
+(an error if the refresh failed). Monochrome (`mono1`),
 16-level grayscale (`gray4`) and big-endian RGB565 use row-major pixels with
 each row padded to whole bytes. Panel-native packing belongs to the driver.
 
-`apps/agents/voice/screen.ts` validates metadata and converts
+`packages/voice/src/screen.ts` validates metadata and converts
 browser PNGs at the advertised resolution; `voice.setImage` waits for a bounded
 refresh acknowledgment. E-paper submits to a separate task so image updates
 cannot stall voice capture, playback or button handling. The voice loop checks

@@ -39,21 +39,8 @@ cat >"$app/Contents/Info.plist" <<'PLIST'
 </plist>
 PLIST
 
-# Signing. Default: ad-hoc, so LaunchServices gives it a stable identity (Touch
-# ID from the CLI still works — signing lives with the enclave key) and the
-# osascript notification path is used. Set SIGN_IDENTITY to a real Developer ID
-# to unlock UserNotifications' rich, actionable Approve/Reject banners:
-#
-#   SIGN_IDENTITY="Developer ID Application: You (TEAMID)" ./build-menubar-app.sh
-#
-if [ -n "${SIGN_IDENTITY:-}" ]; then
-  codesign --force --deep --options runtime \
-    --entitlements "$here/Iterate.entitlements" \
-    --sign "$SIGN_IDENTITY" "$app"
-  echo "Signed with: $SIGN_IDENTITY (actionable notifications enabled)"
-else
-  codesign --force --deep --sign - "$app" >/dev/null 2>&1 || true
-fi
+# Ad-hoc signing gives LaunchServices a stable identity for the bundle.
+codesign --force --deep --sign - "$app" >/dev/null 2>&1 || true
 
 echo "Built: $app"
 echo "Launch: open \"$app\""

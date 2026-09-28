@@ -4,7 +4,8 @@
 // `paths` filter skips its workflow, and counts a job skipped by its `if` as passing
 // (https://docs.github.com/en/pull-requests/how-tos/merge-and-close-pull-requests/troubleshooting-required-status-checks#handling-skipped-but-required-checks).
 // So the Deploy preview job's first step decides instead of a `paths` filter: a pull request that
-// changes none of `previewPaths` deploys nothing, and both test jobs skip, which passes.
+// changes none of `previewPaths` deploys nothing. Both test jobs, which start beside it, run the
+// same step on the same commit, and pass once it says so, having tested nothing.
 //
 //   node scripts/ci/preview-paths.ts changes
 //
@@ -51,6 +52,9 @@ export const previewPaths = [
   // apps/os/e2e/iterate-cli.e2e.test.ts drives the built CLI.
   "packages/cli/**",
   "packages/iterate/**",
+  // the agents and voice rows install these (apps/agents/e2e)
+  "packages/agents/**",
+  "packages/voice/**",
   "packages/shared/**",
   "packages/ui/**",
   "package.json",
@@ -58,7 +62,9 @@ export const previewPaths = [
   "pnpm-workspace.yaml",
   "envs.ts",
   "scripts/lib/**",
-  "scripts/depot-ci/**",
+  // the setup every preview job runs (docs/depot-ci.md#setup-on-depots-stock-image)
+  ".depot/actions/**",
+  "scripts/ci/toolchain.sh",
 ];
 
 /** GitHub's `paths` filter over `previewPaths`: true when any file would have triggered it. */

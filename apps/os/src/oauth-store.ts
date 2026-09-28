@@ -25,9 +25,9 @@
 //     `completeAuthorization`'s revocation of earlier grants lists with metadata, and every call
 //     here passes `revokeExistingGrants: false`.
 //   • It calls these four members only, in the shapes below.
+import { failureKind, ONCE_NOW, retryPlatformFailures } from "@iterate-com/shared/platform-retry";
 import { ControlPlane } from "./control-plane/edge.ts";
 import type { Env } from "./env.ts";
-import { isRetryableTransportError } from "./retryable-error.ts";
 import { watchSlowStep } from "./sign-in-watch.ts";
 
 const GRANT_KEY_PREFIX = "grant:";
@@ -43,23 +43,18 @@ export function providerStore(env: Pick<Env, "DB" | "OAUTH_KV">): KVNamespace {
    *  plane and writes its access token to KV. A KV call names its key's kind, never the key. */
   const watched = <T>(step: string, work: PromiseLike<T>, key?: string | null) =>
     watchSlowStep({ event: "oauth.step-slow", step, keyKind: key?.split(":", 1)[0] }, work);
-  /** Asked again ONCE when D1 failed on the platform's side and says to send it again (edge.ts
-   *  `ControlPlaneUnavailableError`, `retryable`). Each operation is idempotent (a read, or a
-   *  whole-row write or delete); a second failure throws. The retry is a platform failure, which the
-   *  prd fault alarm counts. */
-  const ask = async <T>(operation: string, call: () => Promise<T>): Promise<T> => {
+  /** Asked again ONCE, at once, when a deploy's reset or a lost connection failed it (the control
+   *  plane's UNAVAILABLE): each operation is idempotent (a read, or a whole-row write or delete). An
+   *  overload is not asked again at once, and a second failure throws. */
+  const ask = <T>(operation: string, call: () => Promise<T>): Promise<T> => {
     const step = `grant-store-${operation}`;
-    try {
-      return await watched(step, call());
-    } catch (error) {
-      if (!isRetryableTransportError(error)) throw error;
-      console.warn({
-        event: "oauth.platform-failure-grant-store-retry",
-        name: step,
-        message: String(error),
-      });
-      return watched(step, call());
-    }
+    return retryPlatformFailures(() => watched(step, call()), {
+      area: "oauth",
+      schedule: ONCE_NOW,
+      idempotent: true,
+      kind: failureKind,
+      describe: () => ({ name: step }),
+    });
   };
   const store = {
     async get(key: string, options?: "text" | "json" | { type?: "text" | "json" }) {

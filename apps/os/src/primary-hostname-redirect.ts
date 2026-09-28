@@ -1,11 +1,11 @@
 // src/primary-hostname-redirect.ts — WHEN THE EDGE SENDS A VISITOR TO A PROJECT'S PRIMARY HOSTNAME
 // (project/contract.ts `primaryHostname`): a browser's top-level navigation on the ingress base's own
-// form of a project host — `<routingSlug>--<project>.<base>`, `<routingSlug>.<project>.<base>` or
-// `<project>.<base>` — is answered with a 308 to the same routing slug, path and query on the
-// primary hostname. Nothing else is: another method, a fetch, a WebSocket upgrade, the files host, a
-// request already on a project's own hostname or a project wildcard, and anything under paths
-// routing, which shares the platform's origin and has no custom hostnames. Pure; worker.ts reads
-// the primary hostname only for a request this admits.
+// form of a project host — `<routingSlug>--<project>.<base>` or `<project>.<base>` — is answered
+// with a 308 to the same routing slug, path and query on the primary hostname. Nothing else is:
+// another method, a fetch, a WebSocket upgrade, the files host, a request already on a project's
+// own hostname or a project wildcard, anything that is not a project host, and anything under paths
+// routing, which shares the platform's origin and has no custom hostnames. Pure; the primary
+// hostname rides the project's row that admitted the request (worker.ts).
 import { projectAddressOf, type IngressRouting } from "iterate/project-ingress";
 import { FILES_ROUTING_SLUG } from "./context/file-urls.ts";
 

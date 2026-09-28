@@ -305,7 +305,7 @@ export function canonicalItxExpressionPrefix(source: ItxExpressionInput): string
 // fails at the capability table, not a crisp missing-method error.
 //
 // apps/os's library tier (src/library.ts) builds its connectors on this section and the codec, as a
-// userspace worker would (library.test.ts pins that).
+// userspace worker would (library.ts's library rule, which lint enforces).
 
 /** The dispatch method every dotted miss collapses onto. `IterateContextRpcTarget` implements it directly (root
  *  `itx`); a mid-chain `InvokeHandle` implements it relative to itself (empty root). */

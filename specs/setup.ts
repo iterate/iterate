@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { deployedTarget } from "../apps/os/e2e/support/deployed-target.ts";
 import { OsPlaywrightAuthEnv } from "./test-support/auth-config.ts";
+import { workerBaseUrl } from "./test-support/worker-base-url.ts";
 
 /** Runs once before test workers; their environments inherit the prepared values. */
 export default function setup() {
@@ -30,24 +31,19 @@ export default function setup() {
  *  subdomain under localhost. A deployment's come out of its own `APP_CONFIG` under `doppler run`
  *  (apps/os/e2e/support/deployed-target.ts, which the vitest e2e suite reads too). */
 function osTargetEnv(): Record<string, string> {
-  const origin = new URL(
-    process.env.DEMO_BASE_URL || `http://localhost:${process.env.DEMO_PORT || 8788}`,
-  ).origin;
-  if (new URL(origin).hostname === "localhost") {
+  if (new URL(workerBaseUrl).hostname === "localhost") {
     return {
-      ADMIN_API_SECRET: "dev-admin-api-secret",
+      APP_CONFIG_SECRETS__ADMIN_BEARER: "dev-admin-api-secret",
       LOGIN_PASSWORD: "dev",
       PROJECT_INGRESS_ROUTING: JSON.stringify({ type: "subdomains", hostname: "localhost" }),
-      MCP_BASE_URL: `${origin}/mcp`,
-      OS_BASE_URL: origin,
+      MCP_BASE_URL: `${workerBaseUrl}/mcp`,
     };
   }
-  const target = deployedTarget(origin);
+  const target = deployedTarget(workerBaseUrl);
   return {
-    ADMIN_API_SECRET: target.adminApiSecret,
+    APP_CONFIG_SECRETS__ADMIN_BEARER: target.adminBearer,
     LOGIN_PASSWORD: target.loginPassword,
     PROJECT_INGRESS_ROUTING: target.ingressRouting,
     MCP_BASE_URL: target.mcpBaseUrl,
-    OS_BASE_URL: origin,
   };
 }

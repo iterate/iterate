@@ -1,33 +1,42 @@
 // session.test.ts — the platform-fact append's await-vs-best-effort split: a grant's end awaits
-// `appendPlatformFacts` (the revocation truth: a failed append must fail the verb), and the
-// organization verbs await it FOLDED (the answer implies the fold); the account's sign-ins, mints and
-// consents go through `publishPlatformFacts`, best-effort in waitUntil: a deploy's cut is a warning,
-// any other failure is reported.
+// `appendPlatformFacts` (the revocation truth: a failed append must fail the verb), and a sign-in's
+// connection awaits it FOLDED (the answer implies the fold); the account's sign-ins and consents and
+// an organization's activity go through `publishPlatformFacts`, best-effort in waitUntil: each fact
+// is keyed, so an append the platform cut is sent once more (`ownerContext`, context-stub.ts) and
+// lands once, and a second failure is reported.
 
 import { expect, test, vi } from "vitest";
+import type { ItxExpression } from "iterate/expression";
+import type { StreamEventInput } from "iterate/stream/processor";
 import { DurableObjectNameCodec, GLOBAL_PROJECT_ID } from "./context/paths.ts";
 import { appendPlatformFacts, publishPlatformFacts, SessionTeardown } from "./session.ts";
+import { nodeSqliteStream } from "./stream/test-support.ts";
 
 const fact = { type: "events.iterate.com/test/fact-appended", payload: {} };
+const keyedFact = {
+  type: "events.iterate.com/account/consent-approved",
+  idempotencyKey: "account/consent-approved/grant_1",
+  payload: { clientId: "c1", clientName: "c1", projects: null, scopes: [] },
+};
 
 test("appendPlatformFacts enables the owner's processor, then appends stamped platform — and a failed append rejects", async () => {
   const { namespace, calls, names } = failingAppendNamespace();
   await expect(
     appendPlatformFacts(namespace, { account: "u1" }, fact, { principal: null }),
   ).rejects.toThrow("append refused");
-  expect(names).toEqual([globalName("/users/u1")]);
+  expect(names).toEqual([globalName("/users/u1"), globalName("/users/u1")]); // a stub per call
   expect(calls).toEqual([
     [["itx", "processors", ["enable", "account"]], [], { principal: null }],
     [["itx", "builtins", ["append", fact]], [], { principal: null, platform: true }],
   ]);
 });
 
-test("an organization's facts land on its own context, folded by the organization processor", async () => {
+test("an organization's facts land on its own context, its processor enabled first", async () => {
   const { namespace, calls, names } = failingAppendNamespace();
   await expect(
     appendPlatformFacts(namespace, { organization: "org_1" }, [fact, fact], { principal: null }),
   ).rejects.toThrow("append refused");
-  expect(names).toEqual([globalName("/organizations/org_1")]);
+  expect(names).toEqual([globalName("/organizations/org_1"), globalName("/organizations/org_1")]);
   expect(calls).toEqual([
     [["itx", "processors", ["enable", "organization"]], [], { principal: null }],
     [["itx", "builtins", ["append", fact, fact]], [], { principal: null, platform: true }],
@@ -47,68 +56,141 @@ test("appendPlatformFacts `folded` waits on the owner's processor barrier throug
   >[0];
   await appendPlatformFacts(
     namespace,
-    { organization: "org_1" },
+    { account: "u1" },
     [fact, fact],
     { principal: null },
     { folded: true },
   );
   expect(calls.at(-1)).toEqual([
-    ["itx", "facets", ["get", "organization"], ["waitUntilProcessed", { offset: 8 }]],
+    ["itx", "facets", ["get", "account"], ["waitUntilProcessed", { offset: 8 }]],
     [],
     { principal: null },
   ]);
 });
 
-test("publishPlatformFacts hands waitUntil a promise that resolves and reports when the append fails", async () => {
+test.for([
+  {
+    name: "a deploy's reset that cut the answer after the fact landed is sent again: the stream answers with the fact it holds",
+    failures: [{ failure: "deploy reset", afterLanding: true }],
+    landed: 1,
+    lines: [
+      [
+        "info",
+        appendLine("session.deploy-reset-retry", "deploy-reset", {
+          message: "Error: Durable Object reset because its code was updated.",
+          attempt: 1,
+          retryInMs: 0,
+        }),
+      ],
+    ],
+    reported: undefined,
+  },
+  {
+    name: "a lost connection that cut the append before it landed is sent again and lands it",
+    failures: [{ failure: "connection lost", afterLanding: false }],
+    landed: 1,
+    lines: [
+      [
+        "warn",
+        appendLine("session.platform-failure-retry", "disconnected", {
+          message: "Error: Network connection lost.",
+          attempt: 1,
+          retryInMs: 0,
+        }),
+      ],
+    ],
+    reported: undefined,
+  },
+  {
+    name: "a second cut is reported, never dropped",
+    failures: [
+      { failure: "connection lost", afterLanding: false },
+      { failure: "connection lost", afterLanding: false },
+    ],
+    landed: 0,
+    lines: [
+      [
+        "warn",
+        appendLine("session.platform-failure-retry", "disconnected", {
+          message: "Error: Network connection lost.",
+          attempt: 1,
+          retryInMs: 0,
+        }),
+      ],
+      [
+        "warn",
+        appendLine("session.platform-failure-gave-up", "disconnected", {
+          message: "Error: Network connection lost.",
+          attempts: 2,
+        }),
+      ],
+    ],
+    reported: "Network connection lost.",
+  },
+  {
+    name: "a refusal is reported at once",
+    failures: [{ failure: "refusal", afterLanding: false }],
+    landed: 0,
+    lines: [],
+    reported: "append refused",
+  },
+] satisfies {
+  name: string;
+  failures: { failure: Failure; afterLanding: boolean }[];
+  landed: number;
+  lines: [string, object][];
+  reported: string | undefined;
+}[])("publishPlatformFacts: $name", async ({ failures, landed, lines, reported }) => {
+  const logged: [string, unknown][] = [];
+  vi.spyOn(console, "info").mockImplementation((line) => void logged.push(["info", line]));
+  vi.spyOn(console, "warn").mockImplementation((line) => void logged.push(["warn", line]));
   const issue = vi.spyOn(console, "error").mockImplementation(() => {});
-  const { namespace } = failingAppendNamespace();
+  const { stream, events } = nodeSqliteStream();
+  const left = [...failures];
+  const invoke = vi.fn(async (expression: ItxExpression) => {
+    const [verb, ...appended] = expression[2] as [string, ...StreamEventInput[]];
+    if (verb !== "append") return; // the owner's processor enable
+    const cut = left.shift();
+    if (cut && !cut.afterLanding) throw platformError(cut.failure);
+    const answer = stream.append(...appended);
+    if (cut) throw platformError(cut.failure);
+    return answer;
+  });
+  const getByName = vi.fn(() => ({ invoke }));
   const pending: Promise<unknown>[] = [];
   publishPlatformFacts(
-    { contextNamespace: namespace, waitUntil: (promise) => void pending.push(promise) },
+    {
+      // The fake namespace answers the one method the append calls on it.
+      contextNamespace: { getByName } as unknown as Parameters<typeof appendPlatformFacts>[0],
+      waitUntil: (promise) => void pending.push(promise),
+    },
     { account: "u1" },
-    fact,
+    keyedFact,
     { principal: null },
   );
   expect(pending).toHaveLength(1);
   await expect(pending[0]).resolves.toBeUndefined();
-  expect(issue).toHaveBeenCalledWith(
-    expect.objectContaining({
-      event: "issue",
-      failureSite: "session.platform-fact-not-recorded",
-      path: "/users/u1",
-      types: fact.type,
-    }),
+  expect(events.map((event) => event.idempotencyKey)).toEqual(
+    Array.from({ length: landed }, () => keyedFact.idempotencyKey),
   );
-  issue.mockRestore();
-});
-
-test("publishPlatformFacts warns, not reports, when a deploy's reset cuts the append at the transport", async () => {
-  const issue = vi.spyOn(console, "error").mockImplementation(() => {});
-  const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
-  const { namespace } = failingAppendNamespace(
-    Object.assign(new Error("Durable Object reset because its code was updated."), {
-      retryable: true,
-      durableObjectReset: true,
-    }),
+  // the enable, then each append on a fresh stub
+  const retries = lines.filter(([, line]) => "retryInMs" in line).length;
+  expect(getByName).toHaveBeenCalledTimes(2 + retries);
+  // Exact: the lines are the prd fault alarm's input.
+  expect(logged).toEqual(lines);
+  expect(issue.mock.calls.map(([line]) => line)).toEqual(
+    reported
+      ? [
+          expect.objectContaining({
+            event: "issue",
+            failureSite: "session.platform-fact-not-recorded",
+            path: "/users/u1",
+            type: keyedFact.type,
+            error: expect.objectContaining({ message: reported }),
+          }),
+        ]
+      : [],
   );
-  const pending: Promise<unknown>[] = [];
-  publishPlatformFacts(
-    { contextNamespace: namespace, waitUntil: (promise) => void pending.push(promise) },
-    { organization: "org_1" },
-    fact,
-    { principal: null },
-  );
-  await expect(pending[0]).resolves.toBeUndefined();
-  expect(issue).not.toHaveBeenCalled();
-  expect(warning).toHaveBeenCalledWith(
-    expect.objectContaining({
-      event: "session.platform-fact-cut",
-      path: "/organizations/org_1",
-      types: fact.type,
-    }),
-  );
-  issue.mockRestore();
-  warning.mockRestore();
 });
 
 // SessionTeardown, the lease: a handle disposes only what it registered.
@@ -144,13 +226,13 @@ const globalName = (path: string) =>
   DurableObjectNameCodec.stringify({ projectId: GLOBAL_PROJECT_ID, path });
 
 /** A context namespace whose append (the second `invoke`, after the processor enable) rejects. */
-function failingAppendNamespace(failure: Error = new Error("append refused")) {
+function failingAppendNamespace() {
   const calls: unknown[][] = [];
   const names: string[] = [];
   const context = {
     invoke: async (...args: unknown[]) => {
       calls.push(args);
-      if (calls.length === 2) throw failure;
+      if (calls.length === 2) throw new Error("append refused");
     },
   };
   const namespace = {
@@ -163,3 +245,30 @@ function failingAppendNamespace(failure: Error = new Error("append refused")) {
 }
 
 const undo = (log: string[], label: string) => ({ dispose: () => void log.push(label) });
+
+type Failure = "deploy reset" | "connection lost" | "refusal";
+
+/** Each failure as workerd hands it to the caller: a DISCONNECTED one stamped `retryable`, a
+ *  deploy's also `durableObjectReset`; the callee's own refusal carries neither. */
+function platformError(failure: Failure): Error {
+  if (failure === "deploy reset")
+    return Object.assign(new Error("Durable Object reset because its code was updated."), {
+      retryable: true,
+      durableObjectReset: true,
+    });
+  if (failure === "connection lost")
+    return Object.assign(new Error("Network connection lost."), { retryable: true });
+  return new Error("append refused");
+}
+
+/** A line the keyed append's repeat, or giving up on it, logs. */
+function appendLine(event: string, kind: string, fields: object) {
+  return {
+    event,
+    kind,
+    name: "itx.builtins.append",
+    projectId: "global",
+    path: "/users/u1",
+    ...fields,
+  };
+}

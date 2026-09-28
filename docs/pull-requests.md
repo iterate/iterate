@@ -94,7 +94,7 @@ gh api -X PATCH repos/iterate/iterate/pulls/<n> --input payload.json
 
 ## Previews
 
-Every open PR (draft or ready) whose change touches the platform or its clients gets a preview deployment: the Preview OS workflow deploys one Cloudflare Worker Preview of `apps/os` per PR, plus the Dash, Agents, Notes, Voice and Kit clients on top (**Deploy preview**), runs the integration suite (**E2E tests**) and the browser specs (**Browser specs**) against it, and writes the links and operations into the PR body. E2E tests and Browser specs are required checks. A PR that touches none of the preview paths deploys nothing, and both skip, which counts as passing. Commands for resetting, re-running the suites or deleting the preview: [apps/os/README.md](../apps/os/README.md).
+Every open PR (draft or ready) whose change touches the platform or its clients gets a preview deployment: the Preview OS workflow deploys the tested commit as a fresh set of plain Workers, `apps/os` plus the Dash, Agents, Notes, Admin, Voice and Kit clients on top (**Deploy preview**), runs the integration suite (**E2E tests**) and the browser specs (**Browser specs**) against it, deletes the PR's older deployments (**Clean up superseded**), and writes the links and operations into the PR body. E2E tests and Browser specs are required checks. A PR that touches none of the preview paths deploys nothing, and both pass without testing. Commands for re-running the suites or deleting the deployments: [apps/os/README.md](../apps/os/README.md).
 
 For operational changes, inspect the preview's resulting state and telemetry in addition to test results. Production rollout remains gated on the [engineering invariant](engineering-invariants.md).
 
@@ -107,6 +107,7 @@ These rules apply whenever an agent is asked to open, babysit, address review, o
 - **Do wait** for **Cursor Bugbot** (and any other review bot that posts threads) to finish before treating the PR as “done,” unless the human says not to.
 - Bugbot is done when its check-run reaches `status: completed` (`success`, `skipped` and `neutral` all count); its findings are the unresolved review threads, which must reach zero. Rules 1–3 below say how to poll both.
 - Prefer waiting for **Cursor Bugbot** over merging on lint/test green alone.
+- The **Iterate GitHub AI linter** check reviews each head of an open, non-draft PR against `rules/` at the PR's base, as `iterate[bot]` (it runs on the prd `iterate` project from iterate/config `ai-linter/`). It is done at `status: completed`: `success` means no findings, and `neutral` means its inline comments are review threads like Bugbot's. It never blocks a merge.
 
 #### Agent wait loops: gate on the head commit's check-runs
 

@@ -1,6 +1,6 @@
 ---
 name: creating-an-app
-description: Add a new first-party app under apps/, which is a TanStack Start app on its own Worker and an OAuth client of the platform, like dash, agents, notes, voice and kit. Covers the envs.ts entry, Doppler project, per-PR previews and the prd deploy workflow. Use when someone asks for a new app, client or Worker.
+description: Add a new first-party app under apps/, which is a TanStack Start app on its own Worker and an OAuth client of the platform, like the other clients in apps/. Covers the envs.ts entry, Doppler project, per-PR previews and the prd deploy workflow. Use when someone asks for a new app, client or Worker.
 ---
 
 # Creating an app
@@ -36,22 +36,20 @@ Then run `pnpm install` and `pnpm --dir apps/<app> routes:generate`.
 
 ## 2. Register it
 
-| File                                                                                          | Change                                                                                                                                                         |
-| --------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `envs.ts`                                                                                     | `<app>Envs` with `preview` (the per-PR parent: dev/preview account, `<app>-preview` on `iterate-dev-preview.workers.dev`) and `prd` (with `posthogProjectKey`) |
-| `scripts/lib/start-app.ts`                                                                    | `FIRST_PARTY_APPS`, which drives the deny zones and the apps' `APP_CONFIG` `urls`                                                                              |
-| `packages/shared/src/start-app-config.ts`                                                     | the app's name under `urls`, which `FIRST_PARTY_APPS` is typed against                                                                                         |
-| `apps/os/scripts/preview-config.ts`                                                           | `APPS`, so each PR previews it next to the platform and it gets its own `Sign in ↗` link                                                                       |
-| `pnpm-workspace.yaml`, `knip.ts`, `doppler.yaml`                                              | the workspace entry, the `apps/{dash,kit,notes,voice}` knip block, `project: <app>` with `path: apps/<app>/`                                                   |
-| `scripts/ci/preview-paths.ts`, `preview-delete.yml`, `main-os-e2e.yml`, `preview-parents.yml` | `apps/<app>/**` and `deploy-<app>.yml` in `previewPaths` and the three workflows' `paths`, and the app list in `preview-os.yml`'s `apps` description           |
-| `apps/dash/src/apps.ts`                                                                       | only if the app opens a project: the dash's directory, keyed by the same name                                                                                  |
-| `envs.ts` `osEnvs.prd.projectWildcard.excludedHostnames`                                      | only for a custom domain under `iterate.com`                                                                                                                   |
+| File                                                                                          | Change                                                                                                                                                                                             |
+| --------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `envs.ts`                                                                                     | `<app>Envs` with `preview` (main on dev: dev/preview account, `<app>` on `iterate-dev-preview.workers.dev`) and `prd` (with `posthogProjectKey`); `PREVIEW_DEPLOYMENT_APPS`, so each PR deploys it |
+| `scripts/lib/start-app.ts`                                                                    | `FIRST_PARTY_APPS`, which drives the deny zones and the apps' `APP_CONFIG` `urls`                                                                                                                  |
+| `packages/shared/src/start-app-config.ts`                                                     | the app's name under `urls`, which `FIRST_PARTY_APPS` is typed against                                                                                                                             |
+| `apps/os/scripts/preview-config.ts`                                                           | `APPS`, so each PR deploys it next to the platform and it gets its own `Sign in ↗` link                                                                                                            |
+| `pnpm-workspace.yaml`, `knip.ts`, `doppler.yaml`                                              | the workspace entry, the `apps/{dash,kit,notes,voice}` knip block, `project: <app>` with `path: apps/<app>/`                                                                                       |
+| `scripts/ci/preview-paths.ts`, `preview-delete.yml`, `main-os-e2e.yml`, `preview-parents.yml` | `apps/<app>/**` and `deploy-<app>.yml` in `previewPaths` and the three workflows' `paths`, and the app list in `preview-os.yml`'s `apps` description                                               |
+| `apps/dash/src/apps.ts`                                                                       | only if the app opens a project: the dash's directory, keyed by the same name                                                                                                                      |
+| `envs.ts` `osEnvs.prd.projectWildcard.excludedHostnames`                                      | only for a custom domain under `iterate.com`                                                                                                                                                       |
 
-The parent `<app>` Worker on the dev/preview account must exist before the app's first PR
-preview: a Worker Preview branches from it, and without it the preview deploy fails with "the
-parent worker <app> is missing". The Preview parents workflow deploys it from `main`, which a new
-app is not on yet, so deploy it once by hand from the PR's branch:
-`pnpm --dir apps/<app> run deploy --env preview` (it reads Doppler `<app>/preview`, below).
+A PR deploys the app as `pr<n>-<sha7>-<app>` beside the platform with no setup: nothing on the
+dev/preview account needs to exist first. Main on dev's `<app>` worker is deployed by the Preview
+parents workflow once the app is on `main`.
 
 ## 3. Doppler and the prd deploy
 
@@ -70,6 +68,8 @@ plus `pnpm --dir apps/<app> ensure-resources --env prd` once for the proxied DNS
 - Locally: `pnpm dev` for the platform, plus `APP_CONFIG_URLS__OS=http://localhost:8788` in the
   app's gitignored `.dev.vars`, then `pnpm --dir apps/<app> dev`.
 - On the PR: the Preview OS workflow deploys the app next to the platform. Open its `Sign in ↗`
-  link in an isolated browser session and check that it lands signed in inside project `pr<n>`.
+  link in an isolated browser session, sign in to the preview as `admin@preview.iterate.test`
+  with its password, confirm **Sign in as someone else**, and check that the app lands inside
+  project `pr<n>`.
 - Browser specs go under `specs/<app>/`, with a Playwright project in `playwright.config.ts`
   and a base URL that `runSuite` (`apps/os/scripts/preview.ts`) passes. Notes is the example.

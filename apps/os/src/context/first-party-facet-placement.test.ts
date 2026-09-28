@@ -1,7 +1,7 @@
 // context/first-party-facet-placement.test.ts — every rule of first-party-facet-placement.ts as table
 // rows: the facet (or a stateless worker), the context written `<projectId>:<path>`, and whether it
 // may be hosted there. The refusal end to end, through a person who signed in, is
-// __workers-tests__/first-party-facet-placement.test.ts.
+// __workers-tests__/facets.test.ts.
 import { expect, test } from "vitest";
 import { errorCode } from "iterate/lib";
 import { FIRST_PARTY_FACET_CLASSES } from "../first-party-facets.ts";
@@ -34,7 +34,7 @@ const FIRST_PARTY_FACET_PLACEMENT_ROWS = [
   { facet: "project", context: "global:/users/user_1", allowed: false },
   { facet: "project", context: "global:/organizations/org_1", allowed: false },
   { facet: "project", context: "global:/projects/prj_1", allowed: false },
-  // 4. `secret` — `/secrets/<name>` directly under its owner's root; the global root owns none.
+  // 4. `secret` — `/secrets/<name>` directly under its owner's root, the global root's included.
   { facet: "secret", context: "prj_1:/secrets/api-key", allowed: true },
   { facet: "secret", context: "prj_1:/secrets/a.b_c-1", allowed: true },
   { facet: "secret", context: "prj_1:/secrets/...", allowed: true },
@@ -49,7 +49,9 @@ const FIRST_PARTY_FACET_PLACEMENT_ROWS = [
   { facet: "secret", context: "global:/users/user_1", allowed: false },
   { facet: "secret", context: "global:/users/user_1/notes/secrets/api-key", allowed: false },
   { facet: "secret", context: "global:/organizations/org_1", allowed: false },
-  { facet: "secret", context: "global:/secrets/api-key", allowed: false },
+  { facet: "secret", context: "global:/secrets/api-key", allowed: true },
+  { facet: "secret", context: "global:/secrets", allowed: false },
+  { facet: "secret", context: "global:/notes/secrets/api-key", allowed: false },
   { facet: "secret", context: "global:/", allowed: false },
   // 5. `repo`, `workspace` — any context of a project; never the global namespace.
   { facet: "repo", context: "prj_1:/repos/config", allowed: true },
@@ -72,6 +74,16 @@ const FIRST_PARTY_FACET_PLACEMENT_ROWS = [
   { facet: "tally", context: "global:/organizations/org_1", allowed: false },
   { facet: "tally", context: "global:/", allowed: false },
   { facet: "toString", context: "global:/", allowed: false },
+  // 7. `instance` — the global root, and nowhere else.
+  { facet: "instance", context: "global:/", allowed: true },
+  { facet: "instance", context: "global:/secrets/api-key", allowed: false },
+  { facet: "instance", context: "global:/users/user_1", allowed: false },
+  { facet: "instance", context: "prj_1:/", allowed: false },
+  // 8. `email` — a project's `/integrations/email`, and nowhere else.
+  { facet: "email", context: "prj_1:/integrations/email", allowed: true },
+  { facet: "email", context: "prj_1:/", allowed: false },
+  { facet: "email", context: "prj_1:/integrations/email/x", allowed: false },
+  { facet: "email", context: "global:/integrations/email", allowed: false },
 ];
 
 /** 6., the stateless worker (`itx.workers.get({ source })`, and `itx.run`'s script through it). */
@@ -83,7 +95,7 @@ const LOADED_WORKER_PLACEMENT_ROWS = [
   { context: "global:/", allowed: false },
 ];
 
-test.each(FIRST_PARTY_FACET_PLACEMENT_ROWS)(
+test.for(FIRST_PARTY_FACET_PLACEMENT_ROWS)(
   "facet $facet on $context: allowed $allowed",
   ({ facet, context, allowed }) => {
     expect(refusalOf(() => assertFacetPlacement(facet, contextAddress(context)))).toBe(
@@ -92,7 +104,7 @@ test.each(FIRST_PARTY_FACET_PLACEMENT_ROWS)(
   },
 );
 
-test.each(LOADED_WORKER_PLACEMENT_ROWS)(
+test.for(LOADED_WORKER_PLACEMENT_ROWS)(
   "a loaded worker on $context: allowed $allowed",
   ({ context, allowed }) => {
     expect(refusalOf(() => assertLoadedCodePlacement("workers.get", contextAddress(context)))).toBe(

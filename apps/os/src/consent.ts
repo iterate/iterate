@@ -15,7 +15,7 @@ import {
 } from "iterate/oauth-scopes";
 import type { IngressRouting } from "iterate/project-ingress";
 import { suggestOrganizationName } from "./name-suggestions.ts";
-import { type ConsentApproved, type ImpersonationStarted } from "./account/contract.ts";
+import { type ConsentApproved, type Impersonation } from "./account/contract.ts";
 import type { Env } from "./env.ts";
 import type { OrganizationRecord, ProjectRecord, UserRecord } from "./control-plane/catalog.ts";
 import { ControlPlane } from "./control-plane/edge.ts";
@@ -57,18 +57,39 @@ export type ConsentView =
       /** the onboarding step's first draft of an organization name: from the person's display name,
        *  else their email's company domain or local part */
       suggestedOrganizationName: string;
+      /** For a platform admin only: what "Sign in as someone else…" offers and must show before
+       *  it signs the client in as someone (`approve`'s `impersonate`, `#impersonate`). */
+      impersonation?: {
+        /** everyone else on the platform */
+        people: UserRecord[];
+        /** what the grant would hold: the request's scopes but `admin` */
+        scopes: ConsentScope[];
+        resource: "API" | "MCP";
+        /** where the authorization code goes */
+        redirectHost: string;
+        /** CIMD's metadata host — the one verified fact of who the client is; none for a client
+         *  that registered itself */
+        metadataHost?: string;
+        /** one of this deployment's own apps, as far as the issuer can tell (`isOwnApp`) */
+        ownApp: boolean;
+        /** THE PERSON A LINK NAMED: the authorization's `login_hint` (iterate/app-server.ts
+         *  `/.auth/login`; a PR body's `Sign in ↗`, scripts/preview.ts), when it is one of `people`
+         *  under the test email domain (`login.testEmailDomain`, none on prd) and the client one of
+         *  our own apps. The page opens on "Sign in as someone else" with
+         *  them filled in, and the admin still confirms: `approve` never reads the hint, only the
+         *  page's own post. */
+        suggested?: string;
+      };
     }
   | {
-      /** a platform admin's request to view the client as `target` (`act_as`, `#impersonate`) */
-      kind: "impersonate";
+      /** a client asking only who the person is (the `/oauth2/userinfo` resource, `#identify`) */
+      kind: "identify";
       clientName: string;
       clientId: string;
       clientLogoUri?: string;
       clientDomain?: string;
-      /** the admin, signed in */
+      /** the person, signed in: what the client will learn */
       email: string;
-      /** the person the client will act as */
-      target: string;
       denyLocation: string;
     }
   | { kind: "redirect"; location: string }
@@ -77,7 +98,7 @@ export type ConsentView =
 /** A platform-served project CIMD client can receive only that project's authority — its
  *  client.json on a project host (control-plane/edge.ts `projectHostOf`, as the edge admits one).
  *  `expected` are the ids the caller refuses without — approve's ticked projects, re-read past
- *  the isolate's access memo before one is left out (edge.ts `reachableProjects`). */
+ *  what the isolate keeps of their access before one is left out (edge.ts `reachableProjects`). */
 export async function projectsForClient(
   env: Env,
   platformOrigin: string,
@@ -95,6 +116,43 @@ export async function projectsForClient(
   if (!host) return { projects, projectBound: false };
   const project = await controlPlane.getProject(host.project);
   return { projects: projects.filter((p) => p.id === project?.id), projectBound: true };
+}
+
+/** How long a userinfo grant (`kind: "identify"`) lives: the client reads who signed in once, at
+ *  once, and revokes it (admin-sign-in.ts); ten minutes bounds one it never revoked. */
+const IDENTIFY_GRANT_MS = 10 * 60_000;
+
+/** The host of a CIMD client id (`https://<host>/…`, its metadata document's URL): the one fact of
+ *  who a client is that the platform verified, by fetching it there. */
+function cimdHostOf(clientId: string) {
+  const url = URL.canParse(clientId) ? new URL(clientId) : null;
+  return url?.protocol === "https:" ? url.host : undefined;
+}
+
+/** Whether a client is one of this deployment's own apps, as far as the issuer can tell: the app
+ *  SDK's CIMD document (`/.auth/client.json`, iterate/app-server.ts) on a sibling of the platform's
+ *  host — dash.iterate.com beside os.iterate.com, a preview's `pr1-dash` beside its `pr1-os` —
+ *  and not a project's host, which is userspace. On a laptop's platform every app returning to the
+ *  laptop counts: a local app registers itself (iterate/app-session.ts), and nothing there is
+ *  anyone's real data. It grants nothing: the impersonation confirm's warning reads it, and
+ *  whether a link may pre-fill that confirm (`#impersonation`). */
+function isOwnApp(request: AuthRequest, platformOrigin: string, projectBound: boolean) {
+  if (projectBound) return false;
+  const loopback = (url: string) => ["localhost", "127.0.0.1"].includes(new URL(url).hostname);
+  if (loopback(platformOrigin)) return loopback(request.redirectUri);
+  const url = URL.canParse(request.clientId) ? new URL(request.clientId) : null;
+  if (url?.protocol !== "https:" || url.pathname !== "/.auth/client.json") return false;
+  const parentOf = (hostname: string) => hostname.slice(hostname.indexOf(".") + 1);
+  return parentOf(url.hostname) === parentOf(new URL(platformOrigin).hostname);
+}
+
+/** The grant an approval minted: `completeAuthorization` stores it before it answers, and its code
+ *  is `<userId>:<grantId>:<secret>` (@cloudflare/workers-oauth-provider; this issuer offers no
+ *  implicit flow, so the code always rides the redirect's query). */
+function grantIdOf(approved: { redirectTo: string }) {
+  const grantId = new URL(approved.redirectTo).searchParams.get("code")?.split(":")[1];
+  if (!grantId) throw new Error("The authorization code names no grant.");
+  return grantId;
 }
 
 /** Expected OAuth refusals retain the validated client redirect when one exists. */
@@ -161,31 +219,28 @@ export class ConsentRpcTarget extends RpcTarget {
     try {
       const request = await this.#request(query);
       const client = await oauthHelpers(env, this.#addresses).lookupClient(request.clientId);
-      const actAs = await this.#actAs(query);
-      if (actAs && "error" in actAs) return { kind: "invalid", description: actAs.error };
-      const testLinkApproval = actAs ? null : await this.#testLinkApproval(request, client);
-      if (testLinkApproval) return { kind: "redirect", location: testLinkApproval.redirectTo };
+      const identify = request.resource === this.#addresses.userinfo;
       const display = clientDisplay(client, request.clientId);
       const denied = new URL(request.redirectUri);
       denied.searchParams.set("error", "access_denied");
       denied.searchParams.set("error_description", "The user declined access.");
       if (request.state) denied.searchParams.set("state", request.state);
       if (request.issuer) denied.searchParams.set("iss", request.issuer);
-      if (actAs)
+      if (identify)
         return {
-          kind: "impersonate",
+          kind: "identify",
           clientName: display.clientName,
           clientId: request.clientId,
           clientLogoUri: display.logoUri,
           clientDomain: display.clientDomain,
           email: this.#grant.email,
-          target: actAs.target.email,
           denyLocation: denied.href,
         };
-      // The page lists what the person holds NOW, read past this isolate's access memo: a project
-      // just made (the page's New project form, served by whichever isolate) is listed at once.
-      // The project list below reads the answer this read just memoized.
-      const { organizations } = await new ControlPlane(env).accessibleTo(this.#grant.userId, true);
+      // The page lists what the person holds NOW, read past what this isolate keeps of their
+      // access: a project just made (the page's New project form, served by whichever isolate) is
+      // listed at once. The project list below reads the answer this read just kept.
+      const controlPlane = new ControlPlane(env);
+      const { organizations } = await controlPlane.accessibleTo(this.#grant.userId, true);
       const bound = await projectsForClient(
         env,
         this.#addresses.platformOrigin,
@@ -214,19 +269,55 @@ export class ConsentRpcTarget extends RpcTarget {
           email: this.#grant.email,
         }),
         ...bound,
+        ...(isAdmin(env, this.#grant.email) && {
+          impersonation: await this.#impersonation(request, query, bound.projectBound),
+        }),
       };
     } catch (error) {
       return authorizationFailure(error);
     }
   }
+
+  /** What an admin's "Sign in as someone else…" offers for `request` (`ConsentView`'s
+   *  `impersonation`), `query` its raw authorization query. */
+  async #impersonation(request: AuthRequest, query: string, projectBound: boolean) {
+    const people = (await new ControlPlane(this.#env).listUsers()).filter(
+      (user) => user.id !== this.#grant.userId,
+    );
+    const ownApp = isOwnApp(request, this.#addresses.platformOrigin, projectBound);
+    // a link pre-fills only a test person (a PR body's `pr<N>@…`), and only for one of our apps:
+    // prd has no test email domain, so there, like for a third party, the choice stays the admin's
+    const testEmailDomain = appConfigOf(this.#env).login.testEmailDomain;
+    const hint = new URLSearchParams(query).get("login_hint")?.trim().toLowerCase();
+    const named = ownApp && testEmailDomain && hint?.endsWith(`@${testEmailDomain}`);
+    return {
+      people,
+      scopes: request.scope
+        .filter((scope) => scope !== "admin")
+        .map((scope) => {
+          const name = OAuthScope.parse(scope);
+          return { name, ...OAuthScopeDescriptions[name] };
+        }),
+      resource: request.resource === this.#addresses.mcp ? "MCP" : "API",
+      redirectHost: new URL(request.redirectUri).host,
+      metadataHost: cimdHostOf(request.clientId),
+      ownApp,
+      suggested: named ? people.find((person) => person.email === hint)?.email : undefined,
+    } satisfies Extract<ConsentView, { kind: "consent" }>["impersonation"];
+  }
+
   /** Approve: the projects ticked (`["*"]` = every current and future project) and, task-based
    *  consent, the scopes left ticked — `iterate` always, never one the request did not ask for; the
    *  grant and its tokens carry exactly that set (`session.info().scopes` tells the app). Without
-   *  `scopes`, the request's whole set. */
+   *  `scopes`, the request's whole set. With `impersonate` (a person's user id, the page's "Sign in
+   *  as someone else…"), a platform admin signs the client in as that person instead
+   *  (`#impersonate`); anyone else is refused, whatever the page showed them. The admin is never
+   *  read from the input: only from this target's live issuer grant. */
   async approve(input: {
     query: string;
     projects: string[];
     scopes?: string[];
+    impersonate?: string;
   }): Promise<{ redirectTo: string } | { error: string }> {
     const env = this.#env;
     const data = z
@@ -234,16 +325,18 @@ export class ConsentRpcTarget extends RpcTarget {
         query: z.string(),
         projects: z.array(z.string()),
         scopes: z.array(z.string()).optional(),
+        impersonate: z.string().startsWith("user_").optional(),
       })
       .parse(input);
     try {
       const request = await this.#request(data.query);
       const client = await oauthHelpers(env, this.#addresses).lookupClient(request.clientId);
-      const actAs = await this.#actAs(data.query);
-      if (actAs)
-        return "error" in actAs
-          ? { error: actAs.error }
-          : await this.#impersonate(request, client, actAs.target);
+      if (request.resource === this.#addresses.userinfo) {
+        if (data.impersonate)
+          return { error: "Signing in as someone else is not for this client." };
+        return await this.#complete(request, client, [], ["iterate"], IDENTIFY_GRANT_MS);
+      }
+      if (data.impersonate) return await this.#impersonate(request, client, data.impersonate);
       const { projects, projectBound } = await projectsForClient(
         env,
         this.#addresses.platformOrigin,
@@ -282,30 +375,25 @@ export class ConsentRpcTarget extends RpcTarget {
     return request.scope.filter((scope) => admin || scope !== "admin");
   }
 
-  /** The person an authorization's `act_as` names — a platform admin's "view this app as them", put
-   *  there by the app's `/.auth/login?act_as=<email>` (iterate/app-server.ts) — or why it is
-   *  refused: to anyone but an admin, and for an address nobody signed in as. Null when it names
-   *  nobody. */
-  async #actAs(query: string): Promise<{ target: UserRecord } | { error: string } | null> {
-    const actAs = new URLSearchParams(query.replace(/^\?/, "")).get("act_as");
-    if (!actAs) return null;
-    if (!isAdmin(this.#env, this.#grant.email))
-      return { error: "only a platform admin can view an app as someone else" };
-    const target = await new ControlPlane(this.#env).getUser(actAs);
-    if (!target) return { error: `nobody has signed in as ${actAs}` };
-    return { target };
-  }
-
-  /** VIEW AN APP AS SOMEONE ELSE: a platform admin's approval of an authorization naming `act_as`.
-   *  The client gets a grant of the PERSON VIEWED — stored under them, so it is in their Sessions —
-   *  that reaches exactly what theirs would (every project of theirs, the scopes the client asked
-   *  for but `admin`), with the admin beside them on every call it makes (`impersonatedBy`,
-   *  oauth.ts). An hour, never refreshed past it; ended at once if the admin leaves `admins`. The
-   *  person's own grants stay: `revokeExistingGrants`' default would sign them out. The start lands
-   *  on their account, AWAITED, before the grant exists. */
-  async #impersonate(request: AuthRequest, client: ClientInfo | null, target: UserRecord) {
+  /** SIGN IN AS SOMEONE ELSE: a platform admin's approval of any authorization — a first-party
+   *  app's or a third party's, for `/api` or `/mcp` — as the person `userId` names; refused to anyone
+   *  the platform's `admins` does not list (the page offers it to no one else, but a form can be
+   *  posted by hand) and for an address nobody signed in as. The client gets a grant of the
+   *  PERSON — stored under them, so it is in their Sessions, marked with the admin — that reaches
+   *  exactly what theirs would (every project of theirs, the scopes the client asked for but
+   *  `admin`), with the admin beside them on every call it makes (`impersonatedBy`, oauth.ts). An
+   *  hour, never refreshed past it; ended at once if the admin leaves `admins`. The person's own
+   *  grants stay: `revokeExistingGrants`' default would sign them out. The code reaches the client
+   *  only once both accounts record the grant, AWAITED: the person's that it started, the admin's
+   *  that they did it. A record that fails leaves the code unsent, and the grant unexchanged dies
+   *  with the code's ten minutes. */
+  async #impersonate(request: AuthRequest, client: ClientInfo | null, userId: string) {
     const env = this.#env;
-    const impersonatedBy = { userId: this.#grant.userId, email: this.#grant.email };
+    if (!isAdmin(env, this.#grant.email))
+      return { error: "Only a platform admin can sign in as someone else." };
+    const target = await new ControlPlane(env).getUser(userId);
+    if (!target) return { error: "Nobody on this platform has that id." };
+    const impersonatedBy = { actor: this.#grant.userId, email: this.#grant.email };
     const scope = request.scope.filter((scope) => scope !== "admin");
     // bound as the person's own grant for this client would be: a project host's client reaches
     // that one project (`projectsForClient`), never the rest of their work
@@ -318,28 +406,12 @@ export class ConsentRpcTarget extends RpcTarget {
     if (projectBound && !projects.length)
       return { error: `${target.email} cannot reach this project.` };
     const deadline = Date.now() + 3600_000;
-    await appendPlatformFacts(
-      env.ITERATE_CONTEXT,
-      { account: target.id },
-      {
-        type: "events.iterate.com/account/impersonation-started",
-        payload: {
-          clientId: request.clientId,
-          clientName: client?.clientName ?? request.clientId,
-          scopes: scope,
-          impersonatedBy,
-          expiresAt: deadline,
-        } satisfies ImpersonationStarted,
-      },
-      {
-        principal: { actor: impersonatedBy.userId, email: impersonatedBy.email },
-        grant: this.#grant.grantId,
-      },
-    );
-    return oauthHelpers(env, this.#addresses).completeAuthorization({
+    const display = clientDisplay(client, request.clientId);
+    const approved = await oauthHelpers(env, this.#addresses).completeAuthorization({
       request,
       userId: target.id,
-      metadata: clientDisplay(client, request.clientId),
+      // the person's Sessions list shows who started it (grants.ts)
+      metadata: { ...display, impersonatedBy: impersonatedBy.email },
       scope,
       revokeExistingGrants: false,
       props: {
@@ -351,6 +423,35 @@ export class ConsentRpcTarget extends RpcTarget {
         impersonatedBy,
       } satisfies GrantProps,
     });
+    // the records keep the grant's id, never the code, so either person can find and end it
+    const grantId = grantIdOf(approved);
+    const payload = {
+      grantId,
+      target: { userId: target.id, email: target.email },
+      impersonatedBy,
+      clientId: request.clientId,
+      clientName: display.clientName,
+      resource: request.resource === this.#addresses.mcp ? "mcp" : "api",
+      scopes: scope,
+      projects: projectBound ? projects.map((project) => project.id) : null,
+      expiresAt: deadline,
+    } satisfies Impersonation;
+    const caller = { principal: impersonatedBy, grant: this.#grant.grantId };
+    await Promise.all([
+      appendPlatformFacts(
+        env.ITERATE_CONTEXT,
+        { account: target.id },
+        { type: "events.iterate.com/account/impersonation-started", payload },
+        caller,
+      ),
+      appendPlatformFacts(
+        env.ITERATE_CONTEXT,
+        { account: impersonatedBy.actor },
+        { type: "events.iterate.com/account/impersonation-performed", payload },
+        caller,
+      ),
+    ]);
+    return approved;
   }
 
   /** Grant `client` the `projects` (null = every current and future one) and `scope`, and record
@@ -361,6 +462,8 @@ export class ConsentRpcTarget extends RpcTarget {
     client: ClientInfo | null,
     projects: string[] | null,
     scope: string[],
+    // a platform admin's `admin` grant lives 12 hours: no refresh outlives its deadline
+    lifetimeMs = (scope.includes("admin") ? 12 : 30 * 24) * 3600_000,
   ) {
     const env = this.#env;
     const approved = await oauthHelpers(env, this.#addresses).completeAuthorization({
@@ -374,8 +477,7 @@ export class ConsentRpcTarget extends RpcTarget {
         userId: this.#grant.userId,
         email: this.#grant.email,
         projects,
-        // a platform admin's `admin` grant lives 12 hours: no refresh outlives its deadline
-        deadline: Date.now() + (scope.includes("admin") ? 12 : 30 * 24) * 3600_000,
+        deadline: Date.now() + lifetimeMs,
       } satisfies GrantProps,
     });
     publishPlatformFacts(
@@ -386,6 +488,7 @@ export class ConsentRpcTarget extends RpcTarget {
       { account: this.#grant.userId },
       {
         type: "events.iterate.com/account/consent-approved",
+        idempotencyKey: `account/consent-approved/${grantIdOf(approved)}`,
         payload: {
           clientId: request.clientId,
           clientName: client?.clientName ?? request.clientId,
@@ -399,35 +502,5 @@ export class ConsentRpcTarget extends RpcTarget {
       },
     );
     return approved;
-  }
-
-  /** ONE CLICK, NOT TWO: an issuer session a preview's test link started (issuer-session.ts
-   *  `testLinkResponse`) approves, without the Allow page, a sibling app preview the link signed —
-   *  an authorization that returns to the app's own `/.auth/callback` at one of the grant's
-   *  `testLink.clients` (the redirect, not the client id: an app previewed on https is its CIMD
-   *  client, one on localhost registers itself — iterate/app-session.ts — and either way the
-   *  code can only land at that app) — once the test person's project (`pr<N>`, CI's seed) exists,
-   *  with the scopes the app asked for and "All my projects": the person is a throwaway preview
-   *  identity, and a grant narrowed to named projects could not create another in the Dash.
-   *  Anything else (another app, no project yet, every other session) gets the page. */
-  async #testLinkApproval(request: AuthRequest, client: ClientInfo | null) {
-    const testLink = this.#grant.testLink;
-    if (!testLink) return null;
-    const returnsTo = new URL(request.redirectUri);
-    if (returnsTo.pathname !== "/.auth/callback" || !testLink.clients.includes(returnsTo.origin))
-      return null;
-    const project = await new ControlPlane(this.#env).getProject(testLink.project);
-    if (!project) return null;
-    // `expected`: CI may have seeded the project on another isolate moments ago (the specs do)
-    const { projects, projectBound } = await projectsForClient(
-      this.#env,
-      this.#addresses.platformOrigin,
-      request.clientId,
-      this.#grant.userId,
-      [project.id],
-    );
-    // a project host's own client is bound to its one project: never "All my projects"
-    if (projectBound || !projects.some((reachable) => reachable.id === project.id)) return null;
-    return this.#complete(request, client, null, this.#grantable(request, projectBound));
   }
 }

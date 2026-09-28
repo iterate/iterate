@@ -78,7 +78,7 @@ test("pending-push bound: over the budget, the OLDEST events are dropped and the
 
 // ── an operator's resume wakes a halted FACET row now — the facet catches up from the log itself ──
 
-test.each([
+test.for([
   { incarnation: "the incarnation that halted it", evicted: false },
   { incarnation: "a FRESH incarnation (evicted between the halt and the resume)", evicted: true },
 ])(
@@ -122,8 +122,8 @@ test("halt once: a push queued behind an in-flight delivery is NOT delivered to 
   expect(rig).toMatchObject({ facetMethods: ["catchUpFromLog"], pushes: [] });
 });
 
-test("halt once: a facet catch-up refused for good (retryable: false — a latched checkpoint) HALTS the row at once, ONE fact; on a resume, the catch-up and the resumed event's push see the same refusal and append ONE more fact, not two", async () => {
-  const latched = Object.assign(new Error("checkpoint latched"), { retryable: false });
+test("halt once: a facet catch-up refused for good (REDUCE_CHECKPOINT_TOO_LARGE, a latched checkpoint) HALTS the row at once, ONE fact; on a resume, the catch-up and the resumed event's push see the same refusal and append ONE more fact, not two", async () => {
+  const latched = codedError("REDUCE_CHECKPOINT_TOO_LARGE", "checkpoint latched");
   const facetMethods: string[] = [];
   const rig = incarnation(
     () =>
@@ -229,7 +229,7 @@ test("halt once: a refusal of a call made for a row since REPLACED halts nothing
   await drainDeliveries(); // the push is in flight, parked
   const replacement = configure(); // REPLACES the row (a new identity) under the parked push
   await drainDeliveries();
-  refuseInFlightPush(Object.assign(new Error("poison"), { retryable: false }));
+  refuseInFlightPush(codedError("PERMANENT_FAILURE", "poison"));
   await drainDeliveries();
   expect(haltFactsFor(rig.stream, "swap")).toEqual([]);
   expect(rig.stream.coreReducedState.subscriptions.swap).toMatchObject({
@@ -488,7 +488,7 @@ test("a two-step target (`itx.<alias>` — the spelling every provide mints) IS 
 // the read budget (8 MiB of stored bytes) and each event's offset and path ride on top, so a full
 // page serializes PAST the reservation. Acquiring the overshoot while holding the whole budget
 // waited on the reservation itself — forever — and every other cursor row on the context behind it.
-test.each([
+test.for([
   { bodyShortfall: 100, label: "CONTROL: a body 100 chars under the ceiling (the page fits)" },
   {
     bodyShortfall: 5,
@@ -508,6 +508,7 @@ test.each([
   const overhead = JSON.stringify({
     type: "blob",
     payload: { blob: "" },
+    source: { origin: "/" }, // the stream's own stamp of where an unstamped event came from
     createdAt: new Date().toISOString(),
   }).length;
   const [big] = rig.stream.append({
@@ -909,59 +910,55 @@ test("alarm claim: an ephemeral that outgrows the ring while caught-up rows wait
   // so each reserves the ring's 1 MiB and waits. A 5 MiB ephemeral lands meanwhile. Woken, each
   // must reserve what the ring now holds: 5 + 5 MiB is past the budget, so one reads and the other
   // waits for it — never two 5 MiB batches in flight on 2 MiB of room.
-  const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
-  try {
-    const parked: Record<string, (() => void)[]> = { big: [], a: [], b: [] };
-    const pushes: Record<string, number[][]> = { big: [], a: [], b: [] };
-    const rig = incarnation((printed) => {
-      const name = printed.replace(/^itx\./, "");
-      return (
-        name in parked && {
-          push: (events: { payload?: { n?: number } }[]) => {
-            pushes[name].push(ns(events));
-            return new Promise<void>((resolve) => parked[name].push(resolve));
-          },
-        }
-      );
-    });
-    const release = async (name: string) => {
-      parked[name].splice(0).forEach((resolve) => resolve());
-      await drainDeliveries();
-    };
-    for (const [name, consumes] of [
-      ["a", "demo/ping"],
-      ["b", "demo/ping"],
-      ["big", "blob"],
-    ] as const)
-      rig.stream.append(
-        normalizeControlEvent(
-          {
-            type: "events.iterate.com/itx/subscription-configured",
-            payload: { name, target: `itx.${name}.push`, consumes: [consumes] },
-          },
-          "/",
-        ),
-      );
+  vi.spyOn(console, "warn").mockImplementation(() => undefined);
+  const parked: Record<string, (() => void)[]> = { big: [], a: [], b: [] };
+  const pushes: Record<string, number[][]> = { big: [], a: [], b: [] };
+  const rig = incarnation((printed) => {
+    const name = printed.replace(/^itx\./, "");
+    return (
+      name in parked && {
+        push: (events: { payload?: { n?: number } }[]) => {
+          pushes[name].push(ns(events));
+          return new Promise<void>((resolve) => parked[name].push(resolve));
+        },
+      }
+    );
+  });
+  const release = async (name: string) => {
+    parked[name].splice(0).forEach((resolve) => resolve());
     await drainDeliveries();
-    rig.stream.append({ type: "blob", payload: { n: 0, blob: "x".repeat(7.5 * MiB) } });
-    await drainDeliveries(); // `big` parks holding ~7.5 MiB; `a` and `b` were moved along: at the mark
-    rig.stream.append({ type: "demo/ping", ephemeral: true, payload: { n: 1 } });
-    await drainDeliveries(); // both reserved the ring's 1 MiB and wait for room
-    rig.stream.append({
-      type: "demo/ping",
-      ephemeral: true,
-      payload: { n: 2, blob: "x".repeat(5 * MiB) },
-    });
-    await drainDeliveries();
-    expect({ a: pushes.a, b: pushes.b }).toEqual({ a: [], b: [] });
-    await release("big");
-    expect(pushes.a.length + pushes.b.length).toBe(1); // one 5 MiB batch in flight, the other waits
-    await release("a");
-    await release("b");
-    expect({ a: pushes.a, b: pushes.b }).toEqual({ a: [[2]], b: [[2]] }); // n=1 was evicted by n=2
-  } finally {
-    warn.mockRestore();
-  }
+  };
+  for (const [name, consumes] of [
+    ["a", "demo/ping"],
+    ["b", "demo/ping"],
+    ["big", "blob"],
+  ] as const)
+    rig.stream.append(
+      normalizeControlEvent(
+        {
+          type: "events.iterate.com/itx/subscription-configured",
+          payload: { name, target: `itx.${name}.push`, consumes: [consumes] },
+        },
+        "/",
+      ),
+    );
+  await drainDeliveries();
+  rig.stream.append({ type: "blob", payload: { n: 0, blob: "x".repeat(7.5 * MiB) } });
+  await drainDeliveries(); // `big` parks holding ~7.5 MiB; `a` and `b` were moved along: at the mark
+  rig.stream.append({ type: "demo/ping", ephemeral: true, payload: { n: 1 } });
+  await drainDeliveries(); // both reserved the ring's 1 MiB and wait for room
+  rig.stream.append({
+    type: "demo/ping",
+    ephemeral: true,
+    payload: { n: 2, blob: "x".repeat(5 * MiB) },
+  });
+  await drainDeliveries();
+  expect({ a: pushes.a, b: pushes.b }).toEqual({ a: [], b: [] });
+  await release("big");
+  expect(pushes.a.length + pushes.b.length).toBe(1); // one 5 MiB batch in flight, the other waits
+  await release("a");
+  await release("b");
+  expect({ a: pushes.a, b: pushes.b }).toEqual({ a: [[2]], b: [[2]] }); // n=1 was evicted by n=2
 });
 
 test("alarm claim: two ephemeral batches that land during ONE in-flight cursor call BOTH reach the target, in one delivery, from the ring", async () => {
@@ -1003,38 +1000,34 @@ test("alarm claim: an ephemeral over the ring's whole budget reaches a caught-up
 
 test("alarm claim: ephemerals the ring evicts before a busy cursor row reads them are reported, as a dropped push is", async () => {
   const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
-  try {
-    const rig = parkedSinkRig();
-    rig.stream.append({ type: "demo/ping", payload: { n: 1 } });
-    await drainDeliveries(); // n=1 is in flight, parked
-    // ~400 KiB each: the third evicts the first from the 1 MiB ring before the row reads on
-    const [lost] = rig.stream.append({
+  const rig = parkedSinkRig();
+  rig.stream.append({ type: "demo/ping", payload: { n: 1 } });
+  await drainDeliveries(); // n=1 is in flight, parked
+  // ~400 KiB each: the third evicts the first from the 1 MiB ring before the row reads on
+  const [lost] = rig.stream.append({
+    type: "demo/ping",
+    ephemeral: true,
+    payload: { n: 2, blob: "x".repeat(400 * 1024) },
+  });
+  for (const n of [3, 4])
+    rig.stream.append({
       type: "demo/ping",
       ephemeral: true,
-      payload: { n: 2, blob: "x".repeat(400 * 1024) },
+      payload: { n, blob: "x".repeat(400 * 1024) },
     });
-    for (const n of [3, 4])
-      rig.stream.append({
-        type: "demo/ping",
-        ephemeral: true,
-        payload: { n, blob: "x".repeat(400 * 1024) },
-      });
-    await rig.release(); // acks n=1; the loop reads the ring, which no longer holds n=2
-    await rig.release();
-    expect(rig).toMatchObject({ pushes: [[1], [3, 4]] }); // the loss itself is the contract
-    expect(
-      warn,
-      "the ring's eviction of ephemerals a cursor row had not read should be reported",
-    ).toHaveBeenCalledWith(
-      expect.objectContaining({
-        event: "delivery.cursor.ephemerals-evicted",
-        name: "s",
-        lostThroughOffset: lost.offset,
-      }),
-    );
-  } finally {
-    warn.mockRestore();
-  }
+  await rig.release(); // acks n=1; the loop reads the ring, which no longer holds n=2
+  await rig.release();
+  expect(rig).toMatchObject({ pushes: [[1], [3, 4]] }); // the loss itself is the contract
+  expect(
+    warn,
+    "the ring's eviction of ephemerals a cursor row had not read should be reported",
+  ).toHaveBeenCalledWith(
+    expect.objectContaining({
+      event: "delivery.cursor.ephemerals-evicted",
+      name: "s",
+      lostThroughOffset: lost.offset,
+    }),
+  );
 });
 
 test("alarm claim: a pass that finds a call in flight WAITS for it: the deadline it leaves is derived after the ack — never a claim now past, never one for a row since caught up", async () => {
@@ -1443,8 +1436,6 @@ test.for([
     issues: events(error, "issue"),
     removals: events(log, "delivery.facet-removed-in-flight"),
   }).toEqual(expected);
-  error.mockRestore();
-  log.mockRestore();
 });
 
 function nextMacrotask() {

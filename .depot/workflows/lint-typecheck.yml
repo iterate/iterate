@@ -1,4 +1,7 @@
 name: Lint and Typecheck
+# Read-only, as every reader of Depot Cache (docs/depot-ci.md#depot-cache).
+permissions:
+  contents: read
 on:
   push:
     branches:
@@ -10,15 +13,10 @@ on:
 concurrency:
   group: lint-typecheck-${{ github.head_ref || github.ref_name || github.run_id }}
   cancel-in-progress: true
-env:
-  # The image's baked store: dependencies.mjs fingerprints it (docs/depot-ci.md#custom-image)
-  PNPM_CONFIG_STORE_DIR: /home/runner/.pnpm-store
 
 jobs:
   lint-typecheck:
-    runs-on:
-      size: 8x32
-      image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
+    runs-on: depot-ubuntu-24.04-8
     timeout-minutes: 20
     steps:
       # THE RUN'S OWN COMMIT, the tree this workflow file was read from: on a pull request, the
@@ -28,10 +26,9 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          clean: false
           ref: ${{ github.sha }}
-      - name: Reconcile dependencies (baked)
-        run: node scripts/depot-ci/dependencies.mjs install
+      - name: Setup
+        uses: ./.depot/actions/setup
       - fail-fast: false
         parallel:
           - name: Run Lint
@@ -42,6 +39,14 @@ jobs:
             run: pnpm format:check
           - name: Run Knip
             run: pnpm knip
+          # A commit whose pnpm-lock.yaml.sha256 is not its lockfile's hash fails (scripts/lockfile-stamp.ts).
+          - name: Check the lockfile stamp
+            run: |
+              node scripts/lockfile-stamp.ts
+              test -z "$(git status --porcelain -- pnpm-lock.yaml.sha256)" || {
+                echo 'Run `node scripts/lockfile-stamp.ts` at the repo root and commit pnpm-lock.yaml.sha256.' >&2
+                exit 1
+              }
           # The control plane's D1 (apps/os/src/control-plane/db): its migrations replay to
           # definitions.sql, and the typed queries are what sqlfu generates from them. Every
           # deployment runs the migrations; the types are checked against definitions.sql.

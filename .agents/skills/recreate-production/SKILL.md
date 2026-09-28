@@ -6,75 +6,52 @@ description: Capture or restore a selected project after a deliberate production
 # Recreate a production project
 
 Use this skill only for a deliberate production recovery. Read
-[Project recovery seeds](../../../apps/os/docs/project-seeds.md) before acting. A seed is a
-semantic snapshot of one project, not a database dump.
+[Project recovery seeds](../../../apps/os/docs/project-seeds.md) before acting: it explains what a
+seed holds, what `apply` converges and refuses, hostnames, and the merge pause. A seed is a semantic
+snapshot of one project, not a database dump.
 
 Use `pnpm --dir apps/os project-seed` and always pass `--env`. Keep archives outside the
-repository. They contain encrypted secret cells and must never be committed or printed.
+repository. They contain encrypted secret cells and must never be committed or printed. Report only
+non-secret counts, hostnames and paths.
 
-## Capture
+## Steps
 
-```sh
-pnpm --dir apps/os project-seed capture \
-  --env prd --project <slug> --file <absolute-path>.json
-pnpm --dir apps/os project-seed check \
-  --env prd --file <absolute-path>.json
-```
+1. Capture each project, then the users, organizations and memberships (a project seed carries only
+   its own organization):
 
-Capture creates a mode-0600 archive, Git mirror, working clone, and receipt. It refuses to
-overwrite an earlier archive. The archive also records the project's custom hostnames
-(`hostnames`) and its primary hostname (`primaryHostname`). Report only the non-secret
-counts, hostnames and paths.
+   ```sh
+   pnpm --dir apps/os project-seed capture \
+     --env prd --project <slug> --file <absolute-path>.json
+   pnpm --dir apps/os project-seed check \
+     --env prd --file <absolute-path>.json
+   pnpm --dir apps/os project-seed structure --env prd --file <absolute-path>-structure.json
+   ```
 
-Capture the users, organizations and memberships as well; a project seed carries only its own
-organization:
-
-```sh
-pnpm --dir apps/os project-seed structure --env prd --file <absolute-path>-structure.json
-```
-
-## Pause merges from the erase until verification
-
-Every merge to `main` that touches the Worker redeploys prd (Deploy OS). A deploy during the
-restore resets Durable Objects under a running `apply`. Before the erase:
-
-1. The owner or you announce a merge pause where the team merges, lasting until
-   `verify-structure` passes. Nothing enforces it.
-2. Check that no Deploy OS run is in flight: the `Deploy OS / deploy` check run on each of
-   main's recent commits reads `completed` (the command is in
+2. Pause merges from the erase until `verify-structure` passes: every merge that touches the Worker
+   redeploys prd, and a deploy resets Durable Objects under a running `apply`. The owner or you
+   announce the pause where the team merges (nothing enforces it), and check that no Deploy OS run
+   is in flight (the command is in
    [`apps/os/docs/project-seeds.md`](../../../apps/os/docs/project-seeds.md), "Pause merges").
+3. Inventory the erase with `pnpm --dir apps/os erase-data --env prd --yes-i-mean-prd --dry-run`.
+   The erase and the deploy after it are separate operations, run only on the user's explicit
+   request; no seed command performs either.
+4. Restore every seed, then compare the whole structure with the capture:
 
-If a deploy lands mid-restore anyway (for example `apply` fails with "Durable Object reset
-because its code was updated"), wait for it to finish. Then rerun `apply` for every seed, not
-only the one that failed, with the same `--organization` and `--owners` as the first run, and
-then `verify-structure`. Lift the pause once verification passes.
+   ```sh
+   pnpm --dir apps/os project-seed apply \
+     --env prd --yes-i-mean-prd --file <absolute-path>.json \
+     --organization <organization> --owners <owner-email> [...]
+   pnpm --dir apps/os project-seed verify-structure --env prd --file <absolute-path>-structure.json
+   ```
 
-A rerun of `apply` resets the project to its archive: the config tree (files added since are
-deleted), every archived secret's value, and the members. Inside the restore window that only
-finishes what was cut off. Never rerun it on a live deployment hours later.
+   If a deploy lands mid-restore anyway (`apply` fails with "Durable Object reset because its code
+   was updated"), wait for it to finish, rerun `apply` for every seed with the same
+   `--organization` and `--owners`, then `verify-structure`. Lift the pause once verification
+   passes.
 
-## Restore
-
-```sh
-pnpm --dir apps/os project-seed apply \
-  --env prd --yes-i-mean-prd --file <absolute-path>.json \
-  --organization <organization> --owners <owner-email> [...]
-```
-
-`apply` creates or converges the selected project through normal project, repository, and secret
-operations. It restores the config tree, organization membership, and secrets into fresh project
-identity bindings. It lands the project on its organization's record, the list the dash shows,
-and restores the custom hostnames, then the primary hostname, on the deployment the seed was
-captured from (a primary whose certificate is not yet active is reported, not set). It verifies the
-Git tree, published commit, membership roles, the organization's record, secret readback and
-each hostname's Cloudflare answer before returning. Project IDs are kept; user and organization
-IDs are minted afresh.
-
-After every seed is applied, compare the whole structure with the capture:
-
-```sh
-pnpm --dir apps/os project-seed verify-structure --env prd --file <absolute-path>-structure.json
-```
+A rerun of `apply` resets the project to its archive (config tree, every archived secret's value,
+the members). Inside the restore window that only finishes what was cut off. Never rerun it on a
+live deployment hours later.
 
 ## Boundaries
 
@@ -83,9 +60,5 @@ pnpm --dir apps/os project-seed verify-structure --env prd --file <absolute-path
   R2 files, agents, or workspaces. A seed does not contain them.
 - Retain the deployment's `APP_CONFIG_SECRETS__KEY`; an archive cannot be restored without it or a
   retained previous key.
-- Before an erase, inventory with `pnpm --dir apps/os erase-data --env prd --yes-i-mean-prd --dry-run`.
-  The erase and deployment are separate operations; no seed command performs either implicitly.
-  The erase empties the control plane's D1 rows (users, organizations, projects, grants) with the
-  rest and keeps its schema, so the next deploy's migration is a no-op.
 - If a command fails, preserve the archive and fix the reported condition before retrying. Do not
   attempt recovery by appending legacy events or restoring database rows.

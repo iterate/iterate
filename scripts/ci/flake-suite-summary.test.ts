@@ -1,9 +1,9 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, test } from "vitest";
 import { TestTelemetryArtifact } from "@iterate-com/shared/test-support/ci-telemetry";
 import { unknownFlakeRecordFromTelemetry } from "@iterate-com/shared/test-support/flake-record";
+import { temporaryDirectory } from "@iterate-com/shared/test-support/temporary-directory";
 import { writeFlakeSuiteSummary } from "./flake-suite-summary.ts";
 
 test("a complete clean browser run publishes a summary even without flake records", async () => {
@@ -38,6 +38,8 @@ test("per-test evidence uses the retry record's identity and never counts retrie
     { ...base, leafName: "failure", state: "failed", outcome: "unexpected" },
     { ...base, leafName: "skip", state: "skipped", expectedState: "skipped" },
     { ...base, leafName: "expected failure", expectedState: "failed" },
+    // a vitest row that skipped itself (its context's `skip()`): it finished, as a skip
+    { ...base, leafName: "skipped itself", state: "skipped", expectedState: "skip" },
   ];
   await writeFlakeSuiteSummary({
     directory: output.path,
@@ -50,7 +52,7 @@ test("per-test evidence uses the retry record's identity and never counts retrie
   const summary = JSON.parse(readFileSync(join(output.path, "specs/suite-summary.json"), "utf8"));
   expect(summary).toMatchObject({
     status: "complete",
-    testCount: 5,
+    testCount: 6,
     // The retried pass and the hard failure: both leave a kind "unknown" record.
     unknownFlakeCount: 2,
     tests: [
@@ -59,6 +61,7 @@ test("per-test evidence uses the retry record's identity and never counts retrie
       { name: "failure", outcome: "fail" },
       { name: "skip", outcome: "skip" },
       { name: "expected failure", outcome: "fail" },
+      { name: "skipped itself", outcome: "skip" },
     ],
   });
 });
@@ -109,7 +112,7 @@ test("each row carries what the dashboard's Cost section reads", async () => {
   });
 });
 
-test.each(["interrupted", "missing workspace", "wrong commit", "unexecuted test"])(
+test.for(["interrupted", "missing workspace", "wrong commit", "unexecuted test"])(
   "%s cannot publish a clean complete result",
   async (failure) => {
     using output = temporaryDirectory();
@@ -137,7 +140,7 @@ test.each(["interrupted", "missing workspace", "wrong commit", "unexecuted test"
 
 // Each of the two preview test jobs summarizes its own suite: the other suite's result, which a
 // job never has, cannot stand in for its own.
-test.each(["specs", "preview-e2e"] as const)(
+test.for(["specs", "preview-e2e"] as const)(
   "the %s summary counts only its own runner's result",
   async (suite) => {
     using output = temporaryDirectory();
@@ -167,7 +170,7 @@ test.each(["specs", "preview-e2e"] as const)(
   },
 );
 
-test.each([
+test.for([
   { states: ["passed", "failed"], slowRows: "ran" },
   { states: ["skipped", "skipped"], slowRows: "skipped" },
   { states: [], slowRows: undefined },
@@ -207,19 +210,9 @@ test.each([
   },
 );
 
-function temporaryDirectory() {
-  const path = mkdtempSync(join(tmpdir(), "flake-summary-"));
-  return {
-    path,
-    [Symbol.dispose]() {
-      rmSync(path, { recursive: true, force: true });
-    },
-  };
-}
-
 function browserResult() {
   return TestTelemetryArtifact.parse({
-    artifactSchemaVersion: 2,
+    artifactSchemaVersion: 3,
     artifactId: "playwright-1",
     producer: "playwright-telemetry-reporter",
     createdAt: "2026-09-15T12:01:00.000Z",
@@ -229,8 +222,6 @@ function browserResult() {
       branch: "main",
       workflowRunId: "1",
       workflowRunAttempt: "1",
-      runnerProvider: "depot",
-      executionContext: "ci",
       depotJobUrl: "https://depot.dev/runs/1",
     },
     context: {
@@ -244,6 +235,7 @@ function browserResult() {
       startedAt: "2026-09-15T12:00:00.000Z",
       finishedAt: "2026-09-15T12:01:00.000Z",
       durationMs: 60_000,
+      collectionErrors: [],
     },
     tests: [
       {
@@ -253,17 +245,11 @@ function browserResult() {
         state: "passed",
         outcome: "expected",
         tags: [],
-        annotations: [],
         retryCount: 0,
         passedAfterRetry: false,
         durationMs: 20,
-        attemptDetail: "complete",
-        attempts: [],
-        phases: [],
         errors: [],
       },
     ],
-    modules: [],
-    runners: [],
   });
 }

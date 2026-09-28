@@ -5,7 +5,7 @@
 import { useState } from "react";
 import { CheckIcon, ChevronRightIcon, CopyIcon } from "lucide-react";
 import { Button } from "@iterate-com/ui/components/button";
-import { SerializedObjectCodeBlock } from "@iterate-com/ui/components/serialized-object-code-block";
+import { CodeBlock, SerializedObjectCodeBlock } from "@iterate-com/ui/components/code-block";
 import {
   Sheet,
   SheetContent,
@@ -17,14 +17,14 @@ import { toast } from "sonner";
 import { Spinner } from "@iterate-com/ui/components/spinner";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@iterate-com/ui/components/tabs";
 import { cn } from "cn";
-import type { Event } from "../lib/events/types.ts";
+import { parseCodemodeResponse } from "@iterate-com/agents/codemode-format";
+import type { StreamEvent } from "../lib/events/stream-event.ts";
 import {
   formatAgentUiDuration,
   type AgentUiActivity,
   type AgentUiLlmStep,
 } from "../lib/events/agent-ui-reducer.ts";
 import { sliceText, type StreamText } from "../lib/chunked-text.ts";
-import { parseCodemodeResponse } from "../../../../configs/with-agents/agents/codemode-format.ts";
 import {
   formatDateTime,
   isRecord,
@@ -32,7 +32,6 @@ import {
   scriptTrace,
   type LlmTrace,
 } from "../lib/agent-events.ts";
-import { SourceCodeBlock } from "./source-code-block.tsx";
 import { MessageResponse } from "./message.tsx";
 import { StreamingCursor, StreamingText } from "./streaming-text.tsx";
 
@@ -48,7 +47,7 @@ export function InspectorSheet({
   inspected,
   onInspect,
 }: {
-  events: readonly Event[];
+  events: readonly StreamEvent[];
   /** The reduced live activity, so an in-flight request's trace streams its raw response. */
   live: AgentUiActivity | null;
   inspected: Inspected;
@@ -94,7 +93,7 @@ function LlmTraceContent({
   liveStep,
   onInspect,
 }: {
-  events: readonly Event[];
+  events: readonly StreamEvent[];
   llmRequestOffset: number;
   liveStep: AgentUiLlmStep | undefined;
   onInspect: (next: Inspected) => void;
@@ -280,7 +279,7 @@ function ResponseView({
             raw response
           </p>
           <div className="max-h-96 overflow-y-auto rounded-lg">
-            <SourceCodeBlock code={raw!} language="markdown" showLineNumbers={false} />
+            <CodeBlock code={raw!} language="markdown" showLineNumbers={false} />
           </div>
         </div>
       ) : null}
@@ -305,7 +304,7 @@ function ResponseView({
             ) : null}
           </div>
           <div className="max-h-96 overflow-y-auto rounded-lg">
-            <SourceCodeBlock code={script} language="typescript" showLineNumbers={false} />
+            <CodeBlock code={script} language="typescript" showLineNumbers={false} />
           </div>
         </div>
       ) : null}
@@ -394,7 +393,7 @@ function ScriptTraceContent({
   events,
   executionId,
 }: {
-  events: readonly Event[];
+  events: readonly StreamEvent[];
   executionId: string;
 }) {
   const trace = scriptTrace(events, executionId);
@@ -433,16 +432,11 @@ function ScriptTraceContent({
           <TabsTrigger value="agent">What the agent saw</TabsTrigger>
         </TabsList>
         <TabsContent value="code" className="min-h-0 flex-1 overflow-y-auto border-t p-4">
-          <SourceCodeBlock code={trace.code} language="typescript" showCopyButton />
+          <CodeBlock code={trace.code} language="typescript" />
         </TabsContent>
         <TabsContent value="result" className="min-h-0 flex-1 overflow-y-auto border-t p-4">
           {settlement ? (
-            <SerializedObjectCodeBlock
-              data={settlement}
-              initialFormat="yaml"
-              showToggle
-              showCopyButton
-            />
+            <SerializedObjectCodeBlock data={settlement} />
           ) : (
             <p className="text-sm text-muted-foreground">Not settled yet.</p>
           )}

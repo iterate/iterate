@@ -1,3 +1,4 @@
+import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
 import { agentsEnvs } from "../../../envs.ts";
 import { startAppCli } from "../../../scripts/lib/start-app.ts";
 
@@ -7,4 +8,4 @@ export const agents = {
   root: new URL("..", import.meta.url),
   envs: agentsEnvs,
 };
-if (process.argv[1]?.endsWith("app.ts")) void startAppCli(agents).run();
+if (isMainModule(import.meta.url)) void startAppCli(agents).run();

@@ -1,8 +1,8 @@
-import { mkdtempSync, readFileSync, readdirSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { expect, test, vi } from "vitest";
 import { appendFlakeRecord, unknownFlakeRecordFromTelemetry } from "./flake-record.ts";
+import { temporaryDirectory } from "./temporary-directory.ts";
 
 test("a plain test that passed after retry maps to an unknown-flake record", () => {
   expect(
@@ -45,56 +45,65 @@ test("a plain test that failed every attempt maps to an unexpected-error record"
     });
 });
 
-test("passing, unfinished and expected-fail tests map to nothing", () => {
-  const base = {
-    fullName: "some test",
-    passedAfterRetry: true,
-    durationMs: 10,
-  };
-  const firstTime = { ...base, passedAfterRetry: false };
-  expect(unknownFlakeRecordFromTelemetry({ ...firstTime, state: "passed" })).toBeNull();
-  expect(unknownFlakeRecordFromTelemetry({ ...firstTime, state: "skipped" })).toBeNull();
-  expect(unknownFlakeRecordFromTelemetry({ ...firstTime, state: "interrupted" })).toBeNull();
+test.for([
+  { name: "a first attempt that passed", telemetry: { passedAfterRetry: false, state: "passed" } },
+  { name: "a skipped test", telemetry: { passedAfterRetry: false, state: "skipped" } },
+  { name: "an interrupted test", telemetry: { passedAfterRetry: false, state: "interrupted" } },
   // Playwright calls a test whose first attempt failed and whose retry was cut short by a cancelled
   // run "unexpected"; the retry never finished, so it is not a hard failure.
+  {
+    name: "a retry a cancelled run cut short",
+    telemetry: { passedAfterRetry: false, state: "interrupted", outcome: "unexpected" },
+  },
+  {
+    name: "a failure Playwright expected",
+    telemetry: { passedAfterRetry: false, state: "failed", outcome: "expected" },
+  },
+  // createFlake / createFailing register in the runner's expected-fail mode: their outcomes,
+  // retried or failed, must never masquerade as unknown flakes.
+  { name: "an expected-fail retried pass", telemetry: { expectedState: "failed" } },
+  {
+    name: "an expected-fail test that failed",
+    telemetry: { passedAfterRetry: false, expectedState: "failed", state: "failed" },
+  },
+  { name: "a skip-mode test", telemetry: { expectedState: "skip" } },
+])("$name maps to no flake record", ({ telemetry }) => {
   expect(
-    unknownFlakeRecordFromTelemetry({ ...firstTime, state: "interrupted", outcome: "unexpected" }),
+    unknownFlakeRecordFromTelemetry({
+      fullName: "some test",
+      passedAfterRetry: true,
+      durationMs: 10,
+      ...telemetry,
+    }),
   ).toBeNull();
+});
+
+test("vitest reports options only for tests that set any: a missing expectedState is a plain test", () => {
   expect(
-    unknownFlakeRecordFromTelemetry({ ...firstTime, state: "failed", outcome: "expected" }),
-  ).toBeNull();
-  // createFlake / createFailing register in the runner's expected-fail mode:
-  // their outcomes, retried or failed, must never masquerade as unknown flakes.
-  expect(unknownFlakeRecordFromTelemetry({ ...base, expectedState: "failed" })).toBeNull();
-  expect(
-    unknownFlakeRecordFromTelemetry({ ...firstTime, expectedState: "failed", state: "failed" }),
-  ).toBeNull();
-  expect(unknownFlakeRecordFromTelemetry({ ...base, expectedState: "skip" })).toBeNull();
-  // vitest only reports options for tests that set any — a missing
-  // expectedState means a plain test.
-  expect(unknownFlakeRecordFromTelemetry(base)).toMatchObject({ outcome: "retried-pass" });
+    unknownFlakeRecordFromTelemetry({
+      fullName: "some test",
+      passedAfterRetry: true,
+      durationMs: 10,
+    }),
+  ).toMatchObject({ outcome: "retried-pass" });
 });
 
 test("appendFlakeRecord writes one jsonl line per record into FLAKE_RECORD_DIR", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "flake-record-"));
-  vi.stubEnv("FLAKE_RECORD_DIR", dir);
+  using dir = temporaryDirectory();
+  vi.stubEnv("FLAKE_RECORD_DIR", dir.path);
   vi.stubEnv("GITHUB_WORKSPACE", "");
-  try {
-    await appendFlakeRecord({
-      name: "some test",
-      kind: "unknown",
-      outcome: "retried-pass",
-      durationMs: 5,
-      at: "2026-09-04T09:00:00Z",
-    });
-    const lines = readdirSync(dir).flatMap((file) =>
-      readFileSync(join(dir, file), "utf8")
-        .trim()
-        .split("\n")
-        .map((line) => JSON.parse(line)),
-    );
-    expect(lines).toMatchObject([{ name: "some test", kind: "unknown" }]);
-  } finally {
-    vi.unstubAllEnvs();
-  }
+  await appendFlakeRecord({
+    name: "some test",
+    kind: "unknown",
+    outcome: "retried-pass",
+    durationMs: 5,
+    at: "2026-09-04T09:00:00Z",
+  });
+  const lines = readdirSync(dir.path).flatMap((file) =>
+    readFileSync(join(dir.path, file), "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line)),
+  );
+  expect(lines).toMatchObject([{ name: "some test", kind: "unknown" }]);
 });

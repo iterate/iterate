@@ -10,5 +10,5 @@
     "sqlfu.config.ts",
     "scripts/*.ts"
   ],
-  "exclude": ["scripts/inspect-context.ts", "scripts/project-seed*.ts"]
+  "exclude": ["scripts/project-seed*.ts"]
 }

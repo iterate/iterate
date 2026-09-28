@@ -32,28 +32,24 @@ on:
         default: ""
 jobs:
   deploy:
-    runs-on:
-      size: 2x8
-      image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
+    runs-on: depot-ubuntu-24.04
     timeout-minutes: 20
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          clean: false
           ref: ${{ inputs.ref || github.sha }}
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile --prefer-offline
-      - name: Setup Doppler (baked CLI)
-        run: doppler setup --config prd --project dash
-        env:
-          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+      - name: Setup
+        uses: ./.depot/actions/setup
+        with:
+          # a production deploy never reads Depot Cache (docs/depot-ci.md#depot-cache)
+          pnpm-store: none
       - name: Deploy apps/dash
         id: deploy
         working-directory: apps/dash
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-        run: doppler run -- pnpm run-script deploy
+        run: doppler run --project dash --config prd -- pnpm run-script deploy
       # The deploy's own result to #ci, a failed, cancelled or timed-out deploy included
       # (deploy-os.yml says why `always()`).
       - name: Notify Slack

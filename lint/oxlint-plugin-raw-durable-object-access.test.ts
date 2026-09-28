@@ -39,6 +39,11 @@ test("raw env.X.getByName is allowed only in apps/os's edge entry points and Dur
       reported: false,
     },
     {
+      path: "apps/os/src/integrations/slack.ts",
+      source: 'env.ITERATE_CONTEXT.getByName("p:/");',
+      reported: false,
+    },
+    {
       path: "apps/os/src/iterate-context.ts",
       source: 'class E { f() { return this.env.ITERATE_CONTEXT.getByName("p:/"); } }',
       reported: false,

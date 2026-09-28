@@ -22,30 +22,15 @@
 // author wrote IS what runs, and it always enters through an EXPORTED entrypoint.
 
 import { codedError } from "iterate/lib";
-import {
-  normalizedItxExpression,
-  type ItxExpression,
-  type ItxExpressionInput,
-} from "iterate/expression";
+import { normalizedItxExpression, type ItxExpression } from "iterate/expression";
+import type { FacetSpec, WorkerSource } from "iterate/api";
+import { failureKind, ONCE_NOW, retryPlatformFailures } from "@iterate-com/shared/platform-retry";
 import PLATFORM_MODULES from "../generated/platform-modules.js";
 import { readPackage, resolveModules } from "./module-resolution.ts";
 
 /** A worker's FILES as authored, path → code (module-resolution.ts `readPackage` finds the entry and
  *  resolves the rest into what the loader takes). */
 export type WorkerModules = Record<string, string>;
-/** A worker/facet SOURCE: the modules, literally — or an itx expression that PRODUCES them (a
- *  files record, or one string — a bundle, as the voice install's KV entries are — loaded as `worker.js`), evaluated only when no isolate is warm under the
- *  caller's `cacheKey` (header). Stored where it is named: a facet's startup memo, a subscription's
- *  target, a rewrite rule's target. */
-export type WorkerSource = WorkerModules | ItxExpressionInput;
-
-/** Cloudflare's loader id for the cache; REQUIRED when `source` is a producer expression (the caller
- *  owns "same key ⇒ same code"), optional beside literal modules (it then replaces the content hash). */
-export type WorkerCacheKey = string;
-
-/** What hosts a class as a durable FACET — `itx.facets.get(name, spec)`, `processors.enable(name, spec)`:
- *  the source (modules, or a producer expression with its `cacheKey`) and the exported class. */
-export type FacetSpec = { source: WorkerSource; cacheKey?: WorkerCacheKey; className: string };
 /** The most a facet's LITERAL source may be, serialized — the startup memo is one kv cell in the DO
  *  (re-read on every post-eviction wake) and the hosting event one log row under the 8 MiB event
  *  ceiling; an oversize source must fail where it is handed in, coded, not late at materialization. A
@@ -72,7 +57,7 @@ export const facetSpecOf = ({ source, cacheKey, className }: FacetSpec): FacetSp
   className,
 });
 
-const isWorkerModules = (source: unknown): source is WorkerModules =>
+export const isWorkerModules = (source: unknown): source is WorkerModules =>
   // oxlint-disable-next-line iterate/simple-truthiness-check -- `source` is untrusted `unknown`; the null check is the standard non-null-object runtime guard and keeps this a boolean type predicate
   typeof source === "object" && source !== null && !Array.isArray(source);
 
@@ -111,7 +96,7 @@ const loaderIdGenerations = new Map<
  *  length: djb2 alone collides on two-character differences (`"Aa"` and `"B@"`), and one shared hash
  *  is one shared isolate. A guard against an accidental collision, not a crafted one (trusted clients). */
 const contentHashByWorkerModules = new WeakMap<WorkerModules, string>();
-function contentHashOfWorkerModules(modules: WorkerModules): string {
+export function contentHashOfWorkerModules(modules: WorkerModules): string {
   let hash = contentHashByWorkerModules.get(modules);
   if (!hash) {
     const serialized = JSON.stringify(modules);
@@ -153,7 +138,7 @@ type PrepareConfinedWorkerOptions = {
    *  (worker-loader.test.ts). */
   owner: string | readonly [iterateContextName: string, className: string];
   source: WorkerSource;
-  cacheKey?: WorkerCacheKey;
+  cacheKey?: string;
   /** Evaluate a producer expression through the owning context's dispatch — inside `getCode`, so
    *  only on a cold isolate. */
   invoke: (call: ItxExpression) => Promise<unknown>;
@@ -206,8 +191,21 @@ export async function prepareConfinedWorker(
         `${where}: a source EXPRESSION needs a cacheKey (a build id, a commit) — the producer runs only when no isolate is warm under it, so the key must change whenever the code does`,
       );
     sourceVersion = cacheKey;
+    // The producer is a read the cacheKey names, so running it twice is running it once: a read a
+    // deploy's reset of the context it reads cut (the project ingress's
+    // `itx.repos.get("/repos/config")`, read on the first request after every deploy), or a lost
+    // connection, is read once more, from that context's fresh incarnation.
     getModules = async () => {
-      const produced = await opts.invoke(normalizedItxExpression(source));
+      const produced = await retryPlatformFailures(
+        () => opts.invoke(normalizedItxExpression(source)),
+        {
+          area: "worker-loader",
+          schedule: ONCE_NOW,
+          idempotent: true,
+          kind: failureKind,
+          describe: () => ({ name: opts.owner, where }),
+        },
+      );
       return requireFiles(typeof produced === "string" ? { "worker.js": produced } : produced);
     };
   }

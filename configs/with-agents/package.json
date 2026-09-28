@@ -1,9 +1,12 @@
 {
   "private": true,
   "type": "module",
+  "dependencies": {
+    "@iterate-com/agents": "https://pkg.pr.new/iterate/iterate/@iterate-com/agents@main"
+  },
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20260925.1",
     "iterate": "https://pkg.pr.new/iterate/iterate/iterate@main",
-    "typescript": "^6.0.3"
+    "typescript": "^7.0.2"
   }
 }

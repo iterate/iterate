@@ -8,7 +8,7 @@
 //     delivery chain per subscription;
 //   • anything else cannot own progress, so THE STREAM KEEPS A CURSOR for it (a `subscription_cursors`
 //     row, never in the log): the awaited call IS the ack, one bounded retry ladder (1s·2ⁿ, ≤30 min,
-//     15 attempts, `retryable: false` halts at once) then a `subscription-delivery-halted` fact; an
+//     15 attempts, PERMANENT_FAILURE halts at once) then a `subscription-delivery-halted` fact; an
 //     operator's `subscription-delivery-resumed` un-halts and may seek. Retries ride the DO's own
 //     alarm (facets have none, workerd#6810 — which is why this is kernel code, not a facet processor).
 //
@@ -35,6 +35,7 @@
 
 import type { ItxExpression } from "iterate/expression";
 import { errorCode, reportIssue, withTimeout } from "iterate/lib";
+import { durableLadderDelayMs } from "@iterate-com/shared/platform-retry";
 import type { StreamPage } from "iterate/api";
 import { type StreamEvent, consumesEvent, type ScannedRange } from "iterate/stream/processor";
 import { callOn, walkSteps, FacetHandle, RpcStubHandle } from "../context/dispatch.ts";
@@ -82,13 +83,13 @@ const CURSOR_READ_BUDGET_CHARS = 8 * 1024 * 1024;
  *  payloads the same way the in-flight budget does (above). */
 const PENDING_PUSHES_TOTAL_BUDGET_CHARS = 8 * 1024 * 1024;
 
-/** A failure that can only repeat — halt the row now, not after the ladder: the flag workerd itself
- *  stamps (`retryable: false`, processor.ts's ReduceCheckpointTable stamps it too) or one of OUR codes that a
- *  retry cannot change (a target that is not callable, a checkpoint or an event over its ceiling).
- *  Never NO_ITX_EXPRESSION_MATCH: a target nothing resolves DANGLES (`danglingUnder`), it is not halted. */
+/** A failure that can only repeat — halt the row now, not after the ladder: a subscriber's
+ *  PERMANENT_FAILURE, or one of OUR codes that a retry cannot change (a target that is not callable,
+ *  a checkpoint or an event over its ceiling). Never NO_ITX_EXPRESSION_MATCH: a target nothing
+ *  resolves DANGLES (`danglingUnder`), it is not halted. */
 const deterministicFailure = (error: unknown): boolean =>
-  (error as { retryable?: unknown } | null)?.retryable === false ||
   [
+    "PERMANENT_FAILURE",
     "NOT_A_METHOD",
     "REDUCE_CHECKPOINT_TOO_LARGE",
     "EVENT_TOO_LARGE",
@@ -380,8 +381,11 @@ export class SubscriptionDelivery {
         this.#haltRow(name, row.configuredAtOffset, row.configuredAtOffset, 1, error);
         return;
       }
-      // A catch-up an `itx.facets.abort` cut off is owed by the fresh instance: run it there.
-      if (errorCode(error) === "FACET_ABORTED") return this.#catchUpFacetRow(name, row);
+      // A catch-up an `itx.facets.abort` or a platform restart (a new loaded identity, another
+      // call's timeout) cut off is owed by the fresh instance: run it there.
+      const code = errorCode(error);
+      if (code === "FACET_ABORTED" || code === "FACET_RESTARTED")
+        return this.#catchUpFacetRow(name, row);
       throw error;
     }
   }
@@ -575,9 +579,11 @@ export class SubscriptionDelivery {
         // log — queued behind whatever already waits on this row (a later push heals the same gap
         // on its own; the catch-up is then a no-op). ONE catch-up per timed-out push: a batch that
         // is slow every time costs two aborts per commit and never loops. A push an
-        // `itx.facets.abort` cut off (FACET_ABORTED) is the same loss, asked for: caught up alike.
+        // `itx.facets.abort` cut off (FACET_ABORTED) is the same loss, asked for, and so is one a
+        // platform restart cut off (FACET_RESTARTED: a new loaded identity, or ANOTHER call on the
+        // facet timed out — this push keeps no TIMEOUT of its own): caught up alike.
         const code = errorCode(error);
-        if (code === "TIMEOUT" || code === "FACET_ABORTED")
+        if (code === "TIMEOUT" || code === "FACET_ABORTED" || code === "FACET_RESTARTED")
           this.#catchUpAfterPushTimeout(name, row);
         throw error;
       }
@@ -588,6 +594,18 @@ export class SubscriptionDelivery {
       // FACET_ABORTED is a reset someone asked for, its batch caught up above.
       const code = errorCode(error);
       if (code === "NO_ITX_EXPRESSION_MATCH" || code === "FACET_ABORTED") return;
+      // FACET_RESTARTED is a platform restart (a code change, another call's timeout), its batch
+      // caught up above: logged, no issue.
+      if (code === "FACET_RESTARTED") {
+        console.log({
+          event: "delivery.facet-restarted-in-flight",
+          namespace: "subscription-delivery",
+          failureSite: "subscription-delivery.deliver",
+          name,
+          code,
+        });
+        return;
+      }
       if (code === "NO_FACET" && this.#isStillTheRow(name, row)) return;
       this.#reportFacetRowFailure("subscription-delivery.deliver", name, row, error);
     }
@@ -1006,10 +1024,7 @@ export class SubscriptionDelivery {
               this.#haltCursorRow(name, row, cursor, attempt, error);
               return;
             }
-            const backoff =
-              // 1s·2ⁿ, topped at half an hour
-              Math.min(1000 * 2 ** (attempt - 1), 30 * 60_000) * (0.8 + Math.random() * 0.4);
-            const nextAttemptAtMs = Date.now() + Math.round(backoff);
+            const nextAttemptAtMs = Date.now() + durableLadderDelayMs(attempt);
             // The ladder's time IS the row's claim from here (durable, so it survives eviction).
             this.#adoptCursor(name, { ...cursor, attempt, nextAttemptAtMs }, true);
             return;

@@ -9,6 +9,7 @@
     "bradlc.vscode-tailwindcss",
     "yoavbls.pretty-ts-errors",
     "github.vscode-github-actions",
-    "oxc.oxc-vscode"
+    "oxc.oxc-vscode",
+    "TypeScriptTeam.native-preview"
   ]
 }
