@@ -105,7 +105,7 @@ export const BUILT_IN_ROOT_DESCRIPTIONS = {
     "a live OpenAPI handle: one method per operationId, `call(operationId, input)` too",
   connectToCapnweb: "a live capnweb handle: `itx.connectToCapnweb(url)`, dotted calls pipelined",
   repos:
-    "git on Artifacts; `/repos/config` is the project's code: `repos.get(path).readFile(f)` · `commitFiles({ message, changes })` · `repos.list()`",
+    "git on Artifacts; `/repos/config` is the project's code: `repos.get(path).readFile(f)` · `commitFiles({ message, changes, parent? })` with whole files (edit the text in your script: `replace`, a regex) · `repos.list()`",
   workspaces:
     "a private overlay over the repos: `workspaces.get(path).writeFile(f, text)` · `gitCommit({ message, scope })`",
   files:
