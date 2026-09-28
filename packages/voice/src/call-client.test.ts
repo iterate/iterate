@@ -106,10 +106,11 @@ test("microphone frames are ephemeral appends, five in flight at most: the sixth
   await call.hangUp("done");
 });
 
-test("a live call says keepalive every VOICE_CALL_KEEPALIVE_MS; hanging up waits for the frames in flight, appends call-ended and ends the subscription", async () => {
+test("a live call says keepalive every VOICE_CALL_KEEPALIVE_MS; hanging up waits for the frames in flight, appends call-ended and ends the subscription once it comes back", async () => {
   vi.useFakeTimers();
   const root = project();
-  const call = await startVoiceCall(root, callbacks());
+  const heard = callbacks();
+  const call = await startVoiceCall(root, heard);
   await vi.advanceTimersByTimeAsync(VOICE_CALL_KEEPALIVE_MS * 2);
   expect(root.appendedTypes()).toEqual([
     "events.iterate.com/voice-agent/keepalive",
@@ -136,8 +137,29 @@ test("a live call says keepalive every VOICE_CALL_KEEPALIVE_MS; hanging up waits
       },
     ],
   ]);
+  expect(heard.facts).toMatchObject([
+    { type: "events.iterate.com/voice-agent/call-ended", payload: { reason: "hung up" } },
+  ]);
   expect(root.subscriptions).toMatchObject([{ disposed: true }]);
   expect(call.sendMicFrame("after the end")).toBe(false);
+});
+
+test("hanging up keeps the subscription for the answer's last frames until call-ended comes back, and ends it after a bounded wait when it does not", async () => {
+  vi.useFakeTimers();
+  const root = project();
+  const heard = callbacks();
+  const call = await startVoiceCall(root, heard);
+  root.append.mockImplementationOnce(async () => []); // this call-ended never comes back
+  const hungUp = call.hangUp("done");
+  await vi.advanceTimersByTimeAsync(0);
+  root.deliver([frame(call.activation, { pcm: "", lastFrameOfAnswer: true })]);
+  expect(root.subscriptions).toMatchObject([{ disposed: false }]);
+  await vi.advanceTimersByTimeAsync(5_000);
+  await hungUp;
+  vi.useRealTimers();
+
+  expect(heard).toMatchObject({ frames: [{ pcm: "", lastFrameOfAnswer: true }] });
+  expect(root.subscriptions).toMatchObject([{ disposed: true }]);
 });
 
 test("a press that answers another path is refused", async () => {
@@ -160,7 +182,15 @@ function project() {
     target: (events: unknown[]) => void;
     disposed: boolean;
   }[] = [];
-  const append = vi.fn(async (..._events: { type: string }[]): Promise<never[]> => []);
+  // The log hands a call's terminal back to the call's subscription, as the real one does.
+  const append = vi.fn(async (...events: { type: string }[]): Promise<never[]> => {
+    const ended = events.filter(
+      (event) => event.type === "events.iterate.com/voice-agent/call-ended",
+    );
+    for (const subscription of subscriptions)
+      if (ended.length > 0 && !subscription.disposed) subscription.target(ended);
+    return [];
+  });
   const setupVoiceAgent = vi.fn(async (options: { streamPath?: string; activation: string }) => {
     presses.push(options);
     return { streamPath: options.streamPath || "" };

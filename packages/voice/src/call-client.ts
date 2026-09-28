@@ -18,6 +18,11 @@ export const VOICE_CALL_KEEPALIVE_MS = 20_000;
  *  flight at once. */
 const MAX_MIC_FRAMES_IN_FLIGHT = 5;
 
+/** How long hanging up waits for a `call-ended` to come back through the subscription before it
+ *  ends it. The subscription delivers in log order, so once the echo is here every speaker frame
+ *  the relay wrote before the end has reached `onSpeakerFrame`. */
+const HANG_UP_ECHO_MS = 2_000;
+
 /** One chunk of the answer as the relay wrote it: 16 kHz mono PCM16, base64 (empty on a frame that
  *  only marks the answer's end). */
 export type VoiceCallSpeakerFrame = {
@@ -104,7 +109,8 @@ export type VoiceCall<Context> = {
    *  the link is too slow and the frame was dropped. */
   sendMicFrame(pcm: string): boolean;
   /** Stop the microphone and the keepalive, wait for the frames in flight, append `call-ended`
-   *  with `reason`, and end the subscription. */
+   *  with `reason`, wait (at most 2 s) for the answer's last frames to arrive, and end the
+   *  subscription. */
   hangUp(reason: string): Promise<void>;
 };
 
@@ -137,6 +143,7 @@ export async function startVoiceCall<
     spkMsReceived: 0,
     handshakeMs: null,
   };
+  const callEnded = Promise.withResolvers<void>();
   // THE PRESS, pipelined with the subscription: neither waits for the other's answer.
   const [{ streamPath: settledPath }, subscription] = await Promise.all([
     project.voice.setupVoiceAgent({ streamPath, activation }),
@@ -164,6 +171,7 @@ export async function startVoiceCall<
           if (!fact.success) continue;
           if (fact.data.type === "events.iterate.com/voice-agent/conversation-accepted")
             stats.handshakeMs = fact.data.payload.handshakeTookMs;
+          if (fact.data.type === "events.iterate.com/voice-agent/call-ended") callEnded.resolve();
           onFact(fact.data);
         }
       },
@@ -208,12 +216,23 @@ export async function startVoiceCall<
       open = false;
       clearInterval(keepalive);
       await Promise.all(inFlight);
-      await itx
+      const appended = await itx
         .append({
           type: "events.iterate.com/voice-agent/call-ended",
           payload: { activation, reason },
         })
-        .catch(() => undefined);
+        .then(
+          () => true,
+          () => false,
+        );
+      if (appended) {
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        await Promise.race([
+          callEnded.promise,
+          new Promise((resolve) => (timer = setTimeout(resolve, HANG_UP_ECHO_MS))),
+        ]);
+        clearTimeout(timer);
+      }
       try {
         subscription[Symbol.dispose]();
       } catch {
