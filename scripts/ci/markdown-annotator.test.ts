@@ -21,6 +21,13 @@ test.for<{ name: string; body: string; contents: string; expected: string }>([
     expected: "<!-- loc-report -->\ntable\n<!-- /loc-report -->\n",
   },
   {
+    name: "a marker quoted inside a sentence is prose, and the section is appended below it",
+    body: "The markers are `<!-- loc-report -->` and `<!-- /loc-report -->`.\n",
+    contents: "table",
+    expected:
+      "The markers are `<!-- loc-report -->` and `<!-- /loc-report -->`.\n\n<!-- loc-report -->\ntable\n<!-- /loc-report -->\n",
+  },
+  {
     name: "another label's section is left alone",
     body: "<!-- os-preview -->\nlinks\n<!-- /os-preview -->\n",
     contents: "table",
