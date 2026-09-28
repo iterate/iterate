@@ -29,6 +29,7 @@ import {
 } from "@iterate-com/ui/components/sheet";
 import { cn } from "cn";
 import { useContextStub, useFacetLiveState } from "iterate/react";
+import { DNS_PROVIDER_GUIDES, type DnsProviderGuide } from "../../../../lib/dns-provider-guides.ts";
 
 const shell = getRouteApi("/_auth");
 
@@ -49,6 +50,7 @@ const HostnamesLive = z.looseObject({
           sslStatus: z.string(),
           records: z.array(z.object({ name: z.string(), value: z.string() })),
           connect: z.object({ provider: z.string(), url: z.string() }).nullish(),
+          dnsProvider: z.string().nullish(),
         })
         .nullable(),
       error: z.string().nullable(),
@@ -338,24 +340,11 @@ function HostnameRow({
                     </p>
                   </div>
                 )}
-                <div className="flex flex-col gap-1">
-                  <p className="text-sm text-muted-foreground">
-                    {entry.cloudflare.connect
-                      ? "Or add these records yourself:"
-                      : "Add these records at your DNS provider (on Cloudflare, set them to DNS only):"}
-                  </p>
-                  <table className="w-full text-left font-mono text-xs">
-                    <tbody>
-                      {entry.cloudflare.records.map((record) => (
-                        <tr key={record.name} className="align-top">
-                          <td className="py-0.5 pr-4 break-all">{record.name}</td>
-                          <td className="py-0.5 pr-4 text-muted-foreground">CNAME</td>
-                          <td className="py-0.5 break-all">{record.value}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
+                <ManualRecords
+                  records={entry.cloudflare.records}
+                  guide={DNS_PROVIDER_GUIDES[entry.cloudflare.dnsProvider || ""]}
+                  alternative={Boolean(entry.cloudflare.connect)}
+                />
               </div>
             )}
           </Step>
@@ -408,5 +397,62 @@ function Step({
         {!done && children}
       </div>
     </li>
+  );
+}
+
+/** The three CNAMEs to add by hand — with the owner's DNS provider's own clicks when we know it
+ *  (lib/dns-provider-guides.ts), else plainly. `alternative`: shown under a Connect button. */
+function ManualRecords({
+  records,
+  guide,
+  alternative,
+}: {
+  records: { name: string; value: string }[];
+  guide: DnsProviderGuide | undefined;
+  alternative: boolean;
+}) {
+  return (
+    <div className="flex flex-col gap-2">
+      <p className="text-sm text-muted-foreground">
+        {alternative ? "Or add these records yourself" : "Add these records"}
+        {guide ? (
+          <>
+            {" "}
+            in{" "}
+            <a href={guide.url} target="_blank" rel="noreferrer" className="underline">
+              {guide.name}
+            </a>
+            :
+          </>
+        ) : (
+          " at your DNS provider (on Cloudflare, set them to DNS only):"
+        )}
+      </p>
+      {guide && (
+        <ol className="flex list-decimal flex-col gap-0.5 pl-5 text-sm text-muted-foreground">
+          {guide.steps.map((step) => (
+            <li key={step}>{step}</li>
+          ))}
+        </ol>
+      )}
+      <table className="w-full text-left font-mono text-xs">
+        <tbody>
+          {records.map((record) => (
+            <tr key={record.name} className="align-top">
+              <td className="py-0.5 pr-4 break-all">{record.name}</td>
+              <td className="py-0.5 pr-4 text-muted-foreground">CNAME</td>
+              <td className="py-0.5 break-all">
+                {guide?.trailingDot ? `${record.value}.` : record.value}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {guide?.notes?.map((note) => (
+        <p key={note} className="text-xs text-muted-foreground">
+          {note}
+        </p>
+      ))}
+    </div>
   );
 }

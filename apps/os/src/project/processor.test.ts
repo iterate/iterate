@@ -514,6 +514,7 @@ test("ProjectProcessor — an event that changes the primary hostname holds the 
       setPrimaryHostname: async (hostname) => void written.push(hostname),
       provider: null,
       connect: async () => null,
+      dnsProvider: async () => null,
     }),
   );
   const blockers: (() => Promise<unknown>)[] = [];
@@ -547,6 +548,7 @@ test("ProjectProcessor — a hostname add claims, provisions and answers keyed b
       release: async (name) => void calls.push(`release ${name}`),
       setPrimaryHostname: async () => {},
       connect: async (name) => ({ provider: "Cloudflare", url: `https://dc.test/apply/${name}` }),
+      dnsProvider: async () => "cloudflare",
       provider: {
         provision: async (name) => {
           calls.push(`provision ${name}`);
@@ -606,6 +608,7 @@ test("ProjectProcessor — a hostname add claims, provisions and answers keyed b
   expect(appended[0]!.payload.cloudflare).toMatchObject({
     status: "pending",
     connect: { provider: "Cloudflare", url: "https://dc.test/apply/www.acme.test" },
+    dnsProvider: "cloudflare",
   });
 });
 
@@ -622,6 +625,7 @@ test("ProjectProcessor — one request per hostname at a time: a remove asked wh
       release: async (name) => void calls.push(`release ${name}`),
       setPrimaryHostname: async () => {},
       connect: async () => null,
+      dnsProvider: async () => null,
       provider: {
         provision: async () => {
           await held;
@@ -666,6 +670,7 @@ test("ProjectProcessor — a drained re-check knows the add it just answered pro
       release: async (name) => void calls.push(`release ${name}`),
       setPrimaryHostname: async () => {},
       connect: async () => null,
+      dnsProvider: async () => null,
       provider: {
         provision: async () => {
           provisions += 1;
@@ -712,6 +717,7 @@ test("ProjectProcessor — the deletion: the saga destroys each context the regi
       release: async (name) => void calls.push(`release ${name}`),
       setPrimaryHostname: async () => {},
       connect: async () => null,
+      dnsProvider: async () => null,
       provider: {
         provision: async () => observation("active"),
         remove: async (name) => void calls.push(`remove ${name}`),
@@ -1007,6 +1013,7 @@ function observation(status: string) {
     sslStatus: status,
     records: [{ name: "www.acme.test", value: "cname.iterate.app" }],
     connect: null,
+    dnsProvider: null,
   };
 }
 

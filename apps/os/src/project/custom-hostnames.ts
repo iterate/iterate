@@ -57,7 +57,7 @@ export function customHostnameRecords(
 /** What the project processor needs of Cloudflare, each idempotent: find-or-create (and so re-read)
  *  a wildcard custom hostname, and delete one (none is done already). */
 export type CustomHostnameProvider = {
-  provision(hostname: string): Promise<Omit<CustomHostnameObservation, "connect">>;
+  provision(hostname: string): Promise<Omit<CustomHostnameObservation, "connect" | "dnsProvider">>;
   remove(hostname: string): Promise<void>;
 };
 

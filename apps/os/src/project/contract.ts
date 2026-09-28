@@ -30,6 +30,9 @@ export const CustomHostnameObservation = z.object({
    *  `records` there, when that provider has onboarded our Domain Connect template and the
    *  hostname is not live yet. Null otherwise: the owner adds the records by hand. */
   connect: z.object({ provider: z.string(), url: z.string() }).nullable().default(null),
+  /** Who hosts the hostname's DNS (dns-provider.ts), by the id the dash keys its instructions by,
+   *  while the hostname is not live yet; null when unknown. */
+  dnsProvider: z.string().nullable().default(null),
 });
 export type CustomHostnameObservation = z.infer<typeof CustomHostnameObservation>;
 

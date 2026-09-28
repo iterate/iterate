@@ -1,0 +1,71 @@
+// src/project/dns-provider.ts — WHO HOSTS A HOSTNAME'S DNS, so the dash can say where and how to add
+// its records when Domain Connect can't (domain-connect.ts): the nameservers of the nearest zone
+// above the hostname (DNS-over-HTTPS NS lookups, the same zone walk), matched against the providers
+// below by their customer-facing nameserver names. The answer is a provider id the dash's Hostnames
+// page keys its instructions by (apps/dash `DNS_PROVIDER_GUIDES`); null for anything not listed.
+// Best effort like Domain Connect: every request bounded, a failure throws for the caller to log.
+
+import { z } from "zod";
+import { domainConnectZonesOf } from "./domain-connect.ts";
+
+/** The providers we recognise, by the nameserver names they hand their customers. Order matters
+ *  only where patterns could overlap (none do today). */
+const PROVIDERS: { id: string; nameservers: RegExp }[] = [
+  { id: "cloudflare", nameservers: /\.ns\.cloudflare\.com$/ },
+  { id: "namecheap", nameservers: /\.registrar-servers\.com$/ },
+  { id: "godaddy", nameservers: /\.domaincontrol\.com$/ },
+  { id: "route53", nameservers: /\.awsdns-\d+\.(com|net|org|co\.uk)$/ },
+  { id: "google-cloud-dns", nameservers: /^ns-cloud-[a-z]\d\.googledomains\.com$/ },
+  { id: "porkbun", nameservers: /\.ns\.porkbun\.com$/ },
+  { id: "gandi", nameservers: /\.gandi\.net$/ },
+  { id: "ovh", nameservers: /\.ovh\.(net|ca)$/ },
+  { id: "hover", nameservers: /\.hover\.com$/ },
+  { id: "name-com", nameservers: /\.name\.com$/ },
+  { id: "digitalocean", nameservers: /\.digitalocean\.com$/ },
+  { id: "vercel", nameservers: /\.vercel-dns\.com$/ },
+  { id: "dnsimple", nameservers: /\.dnsimple(-edge)?\.(com|net|org|info)$/ },
+  { id: "hetzner", nameservers: /\.(ns\.hetzner\.(com|de)|second-ns\.(com|de))$/ },
+  { id: "ionos", nameservers: /\.ui-dns\.(com|de|org|biz)$/ },
+  { id: "dynadot", nameservers: /\.dyna-ns\.net$/ },
+  { id: "namesilo", nameservers: /\.dnsowl\.com$/ },
+  { id: "wix", nameservers: /\.wixdns\.net$/ },
+  { id: "azure", nameservers: /\.azure-dns\.(com|net|org|info)$/ },
+  { id: "linode", nameservers: /^ns\d\.linode\.com$/ },
+  { id: "desec", nameservers: /\.desec\.(io|org)$/ },
+  { id: "spaceship", nameservers: /^launch\d\.spaceship\.(net|com)$/ },
+];
+
+/** A DNS-over-HTTPS answer (RFC 8484's JSON form), as far as NS records go. */
+const DohNsAnswer = z.object({
+  Status: z.number(),
+  Answer: z.array(z.object({ type: z.number(), data: z.string() })).optional(),
+});
+
+/** The provider a set of nameservers belongs to, or null. Pure. */
+export function dnsProviderOfNameservers(nameservers: readonly string[]): string | null {
+  const names = nameservers.map((name) => name.toLowerCase().replace(/\.$/, ""));
+  return (
+    PROVIDERS.find(({ nameservers: pattern }) => names.some((name) => pattern.test(name)))?.id ??
+    null
+  );
+}
+
+/** The provider hosting `hostname`'s DNS: the nameservers of the nearest zone above it that has
+ *  any. Throws on a DNS error or a timeout. `fetcher` reaches DNS-over-HTTPS (a test hands a fake). */
+export async function dnsProviderOf(
+  hostname: string,
+  fetcher: typeof fetch = (input, init) => fetch(input, init),
+): Promise<string | null> {
+  for (const { domain } of domainConnectZonesOf(hostname)) {
+    const response = await fetcher(
+      `https://cloudflare-dns.com/dns-query?name=${encodeURIComponent(domain)}&type=NS`,
+      { headers: { accept: "application/dns-json" }, signal: AbortSignal.timeout(5_000) },
+    );
+    const dns = DohNsAnswer.parse(await response.json());
+    if (dns.Status !== 0 && dns.Status !== 3)
+      throw new Error(`DNS status ${dns.Status} for ${domain} NS`);
+    const nameservers = (dns.Answer || []).filter((record) => record.type === 2);
+    if (nameservers.length) return dnsProviderOfNameservers(nameservers.map((ns) => ns.data));
+  }
+  return null;
+}

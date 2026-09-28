@@ -38,6 +38,7 @@ import { EntityCollectionRpcTarget } from "./collection.ts";
 import type { ProjectState } from "./contract.ts";
 import { cloudflareCustomHostnameProvider } from "./custom-hostnames.ts";
 import { domainConnectLinkOf } from "./domain-connect.ts";
+import { dnsProviderOf } from "./dns-provider.ts";
 import { ProjectProcessor, type ProjectDeletion, type ProjectHostnames } from "./processor.ts";
 
 export class ProjectDurableObject extends StreamProcessorDurableObject<
@@ -140,6 +141,7 @@ export class ProjectDurableObject extends StreamProcessorDurableObject<
             })
           : null;
       },
+      dnsProvider: (hostname) => dnsProviderOf(hostname),
     };
   }
 
