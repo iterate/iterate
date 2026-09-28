@@ -5,9 +5,11 @@
 //                  project (a `+tag` after it is ignored). Each attachment becomes a project file
 //                  under `/email/<message key>/`, then `email/received` lands on `/integrations/email`,
 //                  keyed by the Message-ID and the address it reached, so a redelivery lands nothing
-//                  new and a copy to another of the project's addresses is its own. Mail for no project
-//                  is rejected (a bounce the sender sees); a failure of ours throws, and the sending
-//                  server retries.
+//                  new and a copy to another of the project's addresses is its own. The fact says who
+//                  sent it as far as the platform can tell (email/sender.ts): whether the From address
+//                  is verified, whether it is a member's, and whether the mail is automated; nothing
+//                  is refused for it, the reader decides. Mail for no project is rejected (a bounce
+//                  the sender sees); a failure of ours throws, and the sending server retries.
 //   sendEmail    — `itx.email.send` (context/built-ins.ts): from the project's own address, with
 //                  project files attached, then `email/sent` on `/integrations/email`. Given
 //                  `inReplyToOffset`, a message on that log, it answers it in its thread.
@@ -26,6 +28,7 @@ import type { Env } from "../env.ts";
 import { sha256Hex } from "../secrets.ts";
 import type { ReachableContext } from "../stream/stream.ts";
 import { EMAIL_PATH, EmailContract, emailDomainOf } from "../email/contract.ts";
+import { authenticationOf, isAutomated } from "../email/sender.ts";
 
 /** A body longer than this many characters is cut, so no message outgrows one event. */
 const BODY_MAX_CHARS = 100_000;
@@ -33,10 +36,9 @@ const BODY_MAX_CHARS = 100_000;
 export async function receiveEmail(message: ForwardableEmailMessage, env: Env) {
   const domain = emailDomainOf(appConfigOf(env).urls.ingressRouting);
   const recipient = /^([^@+]+)(?:\+[^@]*)?@(.+)$/.exec(message.to.trim().toLowerCase());
+  const controlPlane = new ControlPlane(env);
   const project =
-    recipient && recipient[2] === domain
-      ? await new ControlPlane(env).getProject(recipient[1]!)
-      : null;
+    recipient && recipient[2] === domain ? await controlPlane.getProject(recipient[1]!) : null;
   if (!project) return message.setReject("No such address.");
 
   const raw = await new Response(message.raw).arrayBuffer();
@@ -60,6 +62,9 @@ export async function receiveEmail(message: ForwardableEmailMessage, env: Env) {
   );
   const replyTo = addressesOf(email.replyTo)[0];
   const from = addressesOf(email.from && [email.from])[0] ?? message.from;
+  const { authentication, verified } = authenticationOf(email.headers, from);
+  const user = verified ? await controlPlane.getUser(from) : null;
+  const member = !!user && (await controlPlane.reachesProject({ userId: user.id }, project.id));
   await recordEmail(
     env.ITERATE_CONTEXT.getByName(
       DurableObjectNameCodec.stringify({ projectId: project.id, path: EMAIL_PATH }),
@@ -81,6 +86,9 @@ export async function receiveEmail(message: ForwardableEmailMessage, env: Env) {
         references: bareMessageIdsOf(email.references),
         attachments,
         envelope: { from: message.from, to: message.to },
+        sender: { verified, member },
+        automated: isAutomated(email.headers, message.from),
+        authentication,
       },
     },
   );
