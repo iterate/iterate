@@ -919,17 +919,21 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     caller: () => this.#caller,
   });
 
-  /** THE RESET `itx.abort` asked for (built-ins.ts — its fact already appended): every write so far
-   *  made durable, then `ctx.abort(message)` one zero-delay turn later, so the call that asked gets
-   *  its answer. `ctx.abort` inside the call would reject that very call with `message` — the
-   *  runtime aborts every request in flight, and no code can catch it — while a timer fires only
-   *  after this turn's microtasks have resolved the answer and the runtime has sent it. Nor can the
-   *  timer keep an idle actor resident: the actor it fires in is the one it resets. Every OTHER call
-   *  in flight here rejects with `message`. */
-  async #abortAfterTheAnswer(message: string): Promise<void> {
-    // An abort breaks the output gate: a write not yet confirmed would go with it, the fact included.
-    await this.ctx.storage.sync();
-    setTimeout(() => this.ctx.abort(message), 0);
+  /** THE RESET `itx.abort` asked for (built-ins.ts — its fact already appended), after the answer
+   *  left. `ctx.abort` rejects every request still in the actor with `message`, an answer the output
+   *  gate still holds included, and the gate holds an RPC answer until every write made before it
+   *  waits there is confirmed — another call's too (a fresh child's `ancestors-announced` flag). So
+   *  a critical section from the answer's own turn: no other event runs code here, so nothing
+   *  writes before the answer waits at the gate, and `sync()` waits for every write it waits on and
+   *  makes the fact durable (an abort discards unconfirmed writes). The reset is one zero-delay turn
+   *  after, when the gate has let the answer out. Nor can the timer keep an idle actor resident: the
+   *  actor it fires in is the one it resets. Every OTHER call in flight here rejects with
+   *  `message`. */
+  #abortAfterTheAnswer(message: string): void {
+    void this.ctx.blockConcurrencyWhile(async () => {
+      await this.ctx.storage.sync();
+      setTimeout(() => this.ctx.abort(message), 0);
+    });
   }
 
   // ── SUBSCRIPTION DELIVERY: the one loop (subscription-delivery.ts), wired to this DO ──
