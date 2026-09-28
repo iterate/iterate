@@ -92,6 +92,23 @@ test("the merge's line found on the third read gets the deploy as a thread reply
   expect(clock.waited()).toBe(90);
 });
 
+test("the merge's line behind 358 older lines in the 6 h is found on the first read", async () => {
+  // 358 lines in 6 h, #ci's count on 2026-09-28: more than one page of history
+  const slack = fakeSlack({ now });
+  for (let index = 0; index < 358; index++)
+    slack.seed("#ci", "🟢 PR opened", { ageHours: 5.9 - index / 100 });
+  slack.seed("#ci", mergeLine(fix));
+  const clock = testClock();
+
+  await announceDeploy(slack.client, { ...deploy("OS"), pushed: true, clock });
+
+  const merge = slack.channel("#ci").at(-1);
+  expect(merge?.replies.map((reply) => reply.text)).toEqual([
+    "🚀 OS live · <https://depot.dev/OS|run>",
+  ]);
+  expect(clock.waited()).toBe(0);
+});
+
 test("a second deploy of the same commit is marked a re-run", async () => {
   const slack = fakeSlack({ now });
   slack.seed("#ci", mergeLine(fix));
@@ -109,6 +126,36 @@ test("a second deploy of the same commit is marked a re-run", async () => {
     "🚀 Agents live · <https://depot.dev/Agents|run>",
     "🚀 OS live (re-run) · <https://depot.dev/OS|run>",
   ]);
+});
+
+test("a test run replies 🧪 in the merge's thread, and a real deploy after it is no re-run", async () => {
+  const slack = fakeSlack({ now });
+  slack.seed("#ci", mergeLine(fix));
+  const clock = testClock();
+
+  await announceDeploy(slack.client, { ...deploy("OS"), pushed: true, clock, testRun: true });
+  await announceDeploy(slack.client, { ...deploy("OS"), pushed: true, clock });
+
+  expect(slack.channel("#ci")[0]?.replies.map((reply) => reply.text)).toEqual([
+    "🧪 TEST RUN — 🚀 OS live · <https://depot.dev/OS|run>",
+    "🚀 OS live · <https://depot.dev/OS|run>",
+  ]);
+  expect(clock.waited()).toBe(0);
+});
+
+test("a test run with no merge's line reads once and posts 🧪 top-level, logging nothing", async () => {
+  const slack = fakeSlack({ now });
+  const log = vi.spyOn(console, "log").mockImplementation(() => {});
+  const clock = testClock();
+
+  await announceDeploy(slack.client, { ...deploy("OS"), pushed: true, clock, testRun: true });
+
+  expect(clock.waited()).toBe(0);
+  expect(slack.channel("#ci").map((message) => message.text)).toEqual([
+    "🧪 TEST RUN — 🚀 OS live at 89abcde · <https://depot.dev/OS|run>",
+  ]);
+  expect(log).not.toHaveBeenCalled();
+  log.mockRestore();
 });
 
 test("no merge's line within 180 s: the deploy posts top-level with its sha, and logs it", async () => {

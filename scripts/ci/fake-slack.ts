@@ -16,11 +16,12 @@ const SHORTCODES: Record<string, string> = {
 
 /**
  * Slack's Web API as the CI posters call it, answering from memory: auth.test, chat.postMessage (a
- * thread reply with `thread_ts`), chat.update, chat.delete, conversations.history (newest first,
- * `limit` a page, with next_cursor) and conversations.replies. History spells the posters' emoji as
- * Slack's does. Every call is recorded in `calls`. A message's ts is `now` in seconds plus a
- * counter, so messages keep their order. With `failUpdates`, every chat.update is refused after it
- * is recorded, as Slack answers an error.
+ * thread reply with `thread_ts`), chat.update, chat.delete, conversations.history (each page newest
+ * first, `limit` a page, with next_cursor; given `oldest` without `latest`, the first page is the
+ * window's oldest, as Slack's is) and conversations.replies. History spells the posters' emoji as
+ * Slack's does. Every call is recorded in `calls`. A message's ts is a second before `now` plus a
+ * counter, so messages keep their order and none is newer than a read at `now`. With
+ * `failUpdates`, every chat.update is refused after it is recorded, as Slack answers an error.
  */
 export function fakeSlack(options: { now: number; failUpdates?: boolean }) {
   const channels = new Map<string, FakeMessage[]>(
@@ -35,7 +36,7 @@ export function fakeSlack(options: { now: number; failUpdates?: boolean }) {
   }[] = [];
   let counter = 0;
   const nextTs = (ageHours = 0) =>
-    (options.now / 1000 - ageHours * 3600 + ++counter / 10_000).toFixed(6);
+    (options.now / 1000 - ageHours * 3600 - 1 + ++counter / 10_000).toFixed(6);
   const messages = (channel: string) => {
     const list = channels.get(channel);
     if (!list) throw new Error(`the fake has no channel ${channel}`);
@@ -92,19 +93,28 @@ export function fakeSlack(options: { now: number; failUpdates?: boolean }) {
       history: async (args: {
         channel: string;
         oldest?: string;
+        latest?: string;
         limit?: number;
         cursor?: string;
       }) => {
         calls.push({ method: "conversations.history", channel: args.channel });
-        const newestFirst = messages(args.channel)
-          .filter((message) => Number(message.ts) >= Number(args.oldest || 0))
-          .sort((a, b) => Number(b.ts) - Number(a.ts));
+        const inWindow = messages(args.channel).filter(
+          (message) =>
+            Number(message.ts) >= Number(args.oldest || 0) &&
+            Number(message.ts) <= Number(args.latest || Infinity),
+        );
+        // Slack pages from the window's oldest end when `oldest` comes without `latest`
+        const fromOldest = args.oldest !== undefined && args.latest === undefined;
+        const ordered = inWindow.sort((a, b) =>
+          fromOldest ? Number(a.ts) - Number(b.ts) : Number(b.ts) - Number(a.ts),
+        );
         const start = Number(args.cursor || 0);
         const end = start + (args.limit || 100);
+        const page = ordered.slice(start, end);
         return {
           ok: true,
-          messages: newestFirst.slice(start, end).map(asHistory),
-          response_metadata: { next_cursor: end < newestFirst.length ? String(end) : "" },
+          messages: (fromOldest ? page.reverse() : page).map(asHistory),
+          response_metadata: { next_cursor: end < ordered.length ? String(end) : "" },
         };
       },
       replies: async (args: { channel: string; ts: string }) => {

@@ -753,7 +753,8 @@ incident are marked resolved by an edit alone. The page's first line is its stat
 history is the only state a poster keeps; a run that sees only part of an incident (the preview
 sweep's stuck namespaces, the apps that failed on a commit) carries forward what the open page names.
 Only a run on main pages; a 🧪 test run (each workflow's `test-run` input, each `notify.ts` command's
-`--test-run`) posts to #ci, mentions nobody and never reads #error-pulse.
+`--test-run`) posts to #ci, mentions nobody and never reads #error-pulse. `notify.ts deploy-success
+--test-run` with a merged commit's `GITHUB_SHA` replies in that merge's thread, as its deploy did.
 
 | Poster                                                  | One page per   | Resolved by                                                  |
 | ------------------------------------------------------- | -------------- | ------------------------------------------------------------ |

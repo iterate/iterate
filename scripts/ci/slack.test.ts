@@ -151,6 +151,21 @@ test.for([
     open: [":rotating_light: DO cost page for prd: e"],
   },
   {
+    name: "newest first across history pages",
+    history: [
+      { ageSeconds: 3600, text: ":rotating_light: DO cost page for prd: old" },
+      ...Array.from({ length: 250 }, (_, index) => ({
+        ageSeconds: 100 - index * 0.1,
+        text: "PR opened",
+      })),
+      { ageSeconds: 5, text: ":rotating_light: DO cost page for prd: new" },
+    ],
+    open: [
+      ":rotating_light: DO cost page for prd: new",
+      ":rotating_light: DO cost page for prd: old",
+    ],
+  },
+  {
     name: "a page older than the window is not open",
     history: [{ ageSeconds: 49 * 3600, text: ":rotating_light: DO cost page for prd: f" }],
     open: [],

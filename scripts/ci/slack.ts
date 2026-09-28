@@ -127,6 +127,8 @@ export async function findOpenPages(
     const history = await slack.conversations.history({
       channel: input.channel,
       oldest: String(input.now.getTime() / 1000 - input.sinceHours * 3600),
+      // without `latest`, Slack's first page is the window's oldest
+      latest: String(input.now.getTime() / 1000),
       limit: 200,
       cursor,
     });
