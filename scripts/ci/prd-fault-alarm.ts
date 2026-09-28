@@ -23,6 +23,7 @@ import { dirname } from "node:path";
 import type { WebClient } from "@slack/web-api";
 import { createCli } from "trpc-cli";
 import { z } from "zod";
+import { depotCiApi } from "@iterate-com/shared/depot-api";
 import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
 import {
   CI_HTTP,
@@ -970,9 +971,17 @@ export function deployResetSummaries(events: z.infer<typeof WorkerErrorEvent>[])
   return expected;
 }
 
-/** The newest main run's state, written to `out`; nothing when no run of the last 20 kept one. */
+/** The newest main run's state, written to `out`; nothing when no run of the last 20 kept one.
+ *  Depot is read with DEPOT_CI_TELEMETRY_TOKEN (Doppler _shared/preview). */
 export async function previousState(options: { out: string }) {
-  return saveNewestArtifactFile({ ...stateArtifact, out: options.out });
+  const token = z
+    .string({ error: "DEPOT_CI_TELEMETRY_TOKEN is required (Doppler _shared/preview)" })
+    .min(1)
+    .parse(process.env.DEPOT_CI_TELEMETRY_TOKEN);
+  return saveNewestArtifactFile((method, body) => depotCiApi(method, body, token), {
+    ...stateArtifact,
+    out: options.out,
+  });
 }
 
 if (isMainModule(import.meta.url))

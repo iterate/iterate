@@ -23,7 +23,6 @@ const artifact: TestTelemetryArtifact = {
     workflowName: "Preview",
     workflowRunId: "123",
     workflowRunAttempt: "1",
-    workflowRunUrl: "https://example.test/runs/123",
     jobName: "preview",
     depotJobUrl: "https://depot.test/jobs/1",
   },

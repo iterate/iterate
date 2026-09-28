@@ -27,18 +27,20 @@
 // it would; `--test-page` posts every check's verdict now, marked 🧪 TEST RUN, keeping no state and
 // sending nothing to PostHog.
 //
+// Every command reads Depot with DEPOT_CI_TELEMETRY_TOKEN (Doppler _shared/preview):
 //   pnpm tsx scripts/monitors/health.ts previous-state [--of main-e2e] --out <state.json>
-//   DEPOT_TOKEN=… pnpm tsx scripts/monitors/health.ts run --ref <git ref> [--state <state.json>] \
+//   pnpm tsx scripts/monitors/health.ts run --ref <git ref> [--state <state.json>] \
 //     [--main-e2e-state <state.json>] [--state-out <next.json>] [--test-page] [--dry-run]
-//   DEPOT_TOKEN=… pnpm tsx scripts/monitors/health.ts main-e2e --ref <git ref> [--workflow-id <id>] \
+//   pnpm tsx scripts/monitors/health.ts main-e2e --ref <git ref> [--workflow-id <id>] \
 //     [--state <state.json>] [--state-out <next.json>] [--test-page] [--dry-run]
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
 import { createCli } from "trpc-cli";
 import { z } from "zod";
+import { depotCiApi } from "@iterate-com/shared/depot-api";
 import { osEnvs } from "../../envs.ts";
-import { depotCiApi, saveNewestArtifactFile, type DepotApi } from "../ci/depot.ts";
+import { saveNewestArtifactFile, type DepotApi } from "../ci/depot.ts";
 import { getOctokit } from "../ci/github.ts";
 import { sendPostHogEvents } from "../ci/posthog-events.ts";
 import { getSlackClient, onCallMention, slackChannelIds } from "../ci/slack.ts";
@@ -301,9 +303,9 @@ export async function judgeMainE2eRun(input: {
 /** The Depot CI API with the organization token (Doppler _shared/preview) bound. */
 function depotApi(): DepotApi {
   const token = z
-    .string({ error: "DEPOT_TOKEN is required (Doppler _shared/preview)" })
+    .string({ error: "DEPOT_CI_TELEMETRY_TOKEN is required (Doppler _shared/preview)" })
     .min(1)
-    .parse(process.env.DEPOT_TOKEN);
+    .parse(process.env.DEPOT_CI_TELEMETRY_TOKEN);
   return (method, body) => depotCiApi(method, body, token);
 }
 
@@ -379,7 +381,10 @@ export async function previousState(options: {
   of?: "health" | "main-e2e";
 }) {
   console.log(
-    await saveNewestArtifactFile({ ...stateArtifacts[options.of || "health"], out: options.out }),
+    await saveNewestArtifactFile(depotApi(), {
+      ...stateArtifacts[options.of || "health"],
+      out: options.out,
+    }),
   );
 }
 

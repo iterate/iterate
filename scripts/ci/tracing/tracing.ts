@@ -5,7 +5,7 @@ import { relative } from "node:path";
 import type { Reporter, TestCase, TestResult } from "@playwright/test/reporter";
 import { parse } from "yaml";
 import { z } from "zod";
-import { DEPOT_ORG } from "../depot.ts";
+import { DEPOT_ORG } from "@iterate-com/shared/depot-api";
 
 /** Measured work inside a CI step. Parallel operations keep their own parent. */
 export async function traceOperation<T>(

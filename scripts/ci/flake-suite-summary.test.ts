@@ -129,12 +129,12 @@ test.for(["interrupted", "missing workspace", "wrong commit", "unexecuted test"]
       cancelled: false,
       headSha: "abc123",
     });
-    expect(JSON.parse(readFileSync(join(output.path, "suite-summary.json"), "utf8"))).toMatchObject(
-      {
-        status: "incomplete",
-        diagnostics: expect.arrayContaining([expect.any(String)]),
-      },
-    );
+    expect(
+      JSON.parse(readFileSync(join(output.path, "unit/suite-summary.json"), "utf8")),
+    ).toMatchObject({
+      status: "incomplete",
+      diagnostics: expect.arrayContaining([expect.any(String)]),
+    });
   },
 );
 

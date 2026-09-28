@@ -224,15 +224,9 @@ jobs:
               offline=()
               if [ -s "$RUNNER_TEMP/doppler-shared-preview" ]; then offline=(--fallback-only); fi
               doppler run --project _shared --config preview --fallback "$RUNNER_TEMP/doppler-shared-preview" "${offline[@]}" -- node scripts/ci/test-evidence.ts upload
-          - name: Upload flake records
-            if: ${{ always() && (steps.evidence-write.outputs.evidence == 'kept' || steps.evidence-write.outcome == 'failure') }}
-            uses: actions/upload-artifact@v4
-            with:
-              name: flake-records-${{ env.FLAKE_SUITE }}-attempt-${{ steps.attempt.outputs.id }}
-              path: test-results/flake-records/${{ env.FLAKE_SUITE }}
-              if-no-files-found: ignore
           # EVERYTHING THE RUN WROTE and the specs' Playwright HTML report, as a PR preview's test
-          # jobs keep them (docs/depot-ci.md#browser-reports-from-artifacts).
+          # jobs keep them (docs/depot-ci.md#browser-reports-from-artifacts): the suite summary in
+          # them is what the `alert` job pages on.
           - name: Upload results
             if: ${{ always() && (steps.evidence-write.outputs.evidence == 'kept' || steps.evidence-write.outcome == 'failure') }}
             uses: actions/upload-artifact@v4
@@ -323,13 +317,13 @@ jobs:
           ref: ${{ github.sha }}
       - name: Setup
         uses: ./.depot/actions/setup
-      # The Depot token reads the runs and artifacts through the API and the previous state through
-      # the Depot CLI; the Slack bot token comes from Doppler _shared/prd (scripts/ci/slack.ts).
+      # The Depot organization token reads the runs, the artifacts and the previous state through
+      # Depot's API; the Slack bot token comes from Doppler _shared/prd (scripts/ci/slack.ts).
       - name: Judge, page #error-pulse on a change of state
         run: |-
           set -euo pipefail
-          export DEPOT_TOKEN
-          DEPOT_TOKEN="$(doppler secrets get DEPOT_CI_TELEMETRY_TOKEN --plain --project _shared --config preview)"
+          export DEPOT_CI_TELEMETRY_TOKEN
+          DEPOT_CI_TELEMETRY_TOKEN="$(doppler secrets get DEPOT_CI_TELEMETRY_TOKEN --plain --project _shared --config preview)"
           pnpm tsx scripts/monitors/health.ts previous-state --of main-e2e --out test-results/main-e2e/previous.json
           pnpm tsx scripts/monitors/health.ts main-e2e \
             --ref "${{ github.ref }}" \

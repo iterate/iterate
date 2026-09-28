@@ -157,7 +157,15 @@ const r7cjwv9crwz: RunMetrics = {
       jobs: [
         {
           job: { jobKey: "preview-os.yml:deploy", status: "finished" },
-          attempts: [{ attempt: { attempt: 1, finishedAt: "2026-09-25T20:13:35.959Z" } }],
+          attempts: [
+            {
+              attempt: {
+                attemptId: "deploy-1",
+                attempt: 1,
+                finishedAt: "2026-09-25T20:13:35.959Z",
+              },
+            },
+          ],
         },
         ...["e2e", "specs", "trace"].map((job) => ({
           job: { jobKey: `preview-os.yml:${job}`, status: "skipped" },
@@ -660,7 +668,7 @@ function check(
     jobs: Object.entries(ends).map(([jobKey, attempts]) => ({
       job: { jobKey, status: "finished" },
       attempts: attempts.map((end, index) => ({
-        attempt: { attempt: index + 1, finishedAt: end },
+        attempt: { attemptId: `${jobKey}-${index + 1}`, attempt: index + 1, finishedAt: end },
       })),
     })),
   };

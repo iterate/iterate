@@ -3,9 +3,9 @@
 // every hour and ./dashboard.ts computes issue #2580 from them; nothing is kept between runs.
 //
 // A folder's flake records are `flake-records/<suite>/*.jsonl` beside that suite's
-// `suite-summary.json` (the e2e jobs' `preview-e2e` and `specs`), or `flake-records/*.jsonl` for
-// the Test job, whose one suite is `unit`. A folder counts once its `manifest.json` is listed: the
-// upload writes the manifest last, so a folder without one is still uploading or failed part way.
+// `suite-summary.json`: the Test job's `unit`, the e2e jobs' `preview-e2e` and `specs`. A folder
+// counts once its `manifest.json` is listed: the upload writes the manifest last, so a folder
+// without one is still uploading or failed part way.
 import { createHash } from "node:crypto";
 import { AwsClient } from "aws4fetch";
 import { z } from "zod";
@@ -86,9 +86,9 @@ export function planReads(objects: { key: string; lastModified: string }[], now:
     };
     folders.set(match.folder!, folder);
     if (match.path === "manifest.json") folder.manifestAt = lastModified;
-    const file = /^flake-records\/(?:(?<suite>[^/]+)\/)?(?<name>[^/]+)$/u.exec(match.path!)?.groups;
+    const file = /^flake-records\/(?<suite>[^/]+)\/(?<name>[^/]+)$/u.exec(match.path!)?.groups;
     if (!file) continue;
-    const suite = file.suite || "unit";
+    const suite = file.suite!;
     const files = folder.suites.get(suite) || { recordKeys: [] };
     folder.suites.set(suite, files);
     if (file.name === "suite-summary.json") files.summaryKey = key;

@@ -61,7 +61,7 @@ jobs:
             id: tests
             env:
               DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-              FLAKE_RECORD_DIR: test-results/flake-records
+              FLAKE_RECORD_DIR: test-results/flake-records/unit
               TEST_TELEMETRY_ARTIFACT_DIR: test-results/ci-telemetry/raw
               TEST_TELEMETRY_BRANCH: ${{ github.head_ref || github.ref_name }}
               TEST_TELEMETRY_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
@@ -123,17 +123,8 @@ jobs:
               offline=()
               if [ -s "$RUNNER_TEMP/doppler-shared-preview" ]; then offline=(--fallback-only); fi
               doppler run --project _shared --config preview --fallback "$RUNNER_TEMP/doppler-shared-preview" "${offline[@]}" -- node scripts/ci/test-evidence.ts upload
-          # The recorder lines and the finalizer's suite-summary.json as a workflow
-          # artifact, one per job attempt. The flake dashboard reads the same files
-          # from the test evidence in R2 (docs/testing.md#flakes-and-pinned-failures).
-          - name: Upload flake records
-            if: always()
-            uses: actions/upload-artifact@v4
-            with:
-              name: flake-records-unit-attempt-${{ steps.attempt.outputs.id }}
-              path: test-results/flake-records
-              if-no-files-found: ignore
-          # Everything the run wrote under test-results/, as the e2e jobs keep theirs.
+          # Everything the run wrote under test-results/, as the e2e jobs keep theirs: the telemetry,
+          # and the flake records beside the finalizer's suite-summary.json.
           - name: Upload results
             if: always()
             uses: actions/upload-artifact@v4

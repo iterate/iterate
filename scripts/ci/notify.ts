@@ -1,13 +1,14 @@
 import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
 import { createCli } from "trpc-cli";
 import { z } from "zod";
-import { getRunUrl, readEventPayload, type GithubEventPayload } from "./github.ts";
+import { readEventPayload, type GithubEventPayload } from "./github.ts";
 import { getSlackClient, onCallMention, slackChannelIds, slackEscape } from "./slack.ts";
 
 type DeployOptions = {
   app: string;
   status: "success" | "failure";
   commitSha: string;
+  /** the Depot job's page (DEPOT_JOB_URL) */
   runUrl: string;
   publicUrl?: string;
 };
@@ -137,7 +138,7 @@ function deployOptions() {
   return {
     app: readOption("APP_DISPLAY_NAME"),
     commitSha: readOption("GITHUB_SHA"),
-    runUrl: getRunUrl(),
+    runUrl: readOption("DEPOT_JOB_URL"),
     publicUrl: process.env.PUBLIC_URL,
   };
 }
@@ -164,7 +165,7 @@ export async function workflowFailure() {
     workflowFailureMessage({
       needs: WorkflowNeeds.parse(JSON.parse(readOption("NEEDS"))),
       refName: process.env.GITHUB_REF_NAME || process.env.GITHUB_REF || "unknown ref",
-      runUrl: getRunUrl(),
+      runUrl: readOption("DEPOT_JOB_URL"),
     }),
   );
 }

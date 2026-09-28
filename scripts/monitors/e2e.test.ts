@@ -626,7 +626,8 @@ test("a broken slow-rows probe pages once: a run still broken pages nothing, and
 test("an E2E tests job that ran and kept no suite summary is a broken probe, judged once", async () => {
   const withoutRecords = mainRun("norecords", "2026-09-26T20:00:00Z", {});
   withoutRecords.artifacts = Object.fromEntries(
-    Object.entries(withoutRecords.artifacts).filter(([name]) => !name.includes("preview-e2e")),
+    // the E2E tests job's test results, each attempt's
+    Object.entries(withoutRecords.artifacts).filter(([name]) => !name.includes("-norecords-e2e-")),
   );
   const depot = fakeDepot({ "Main OS e2e": [withoutRecords] });
   const judged = await checkMainE2e({ depot, memory: empty, testRun: false, subject });

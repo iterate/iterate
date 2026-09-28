@@ -144,7 +144,7 @@ export function summary(
 }
 
 /** A push run of Main OS e2e: its jobs' statuses (finished unless named) and the suite summary each
- *  suite job's newest attempt uploaded with its flake records. A `running` one is the run whose page
+ *  suite job's attempts uploaded in their test results. A `running` one is the run whose page
  *  job judges it: its deploy and suites have ended, its trace and page jobs have not. */
 export function mainRun(
   id: string,
@@ -180,12 +180,16 @@ export function mainRun(
     tests: SummaryTest[],
     status?: { status: "incomplete"; diagnostics: string[] },
   ) => ({
-    // the older attempt's records, which a retried job keeps beside the newest's
-    [`flake-records-${suite}-attempt-${id}-${key}-1`]: {
-      "suite-summary.json": JSON.stringify(summary([{ name: "an older attempt", failed: true }])),
+    // the older attempt's results, which a retried job keeps beside the newest's
+    [`main-os-test-artifacts-attempt-${id}-${key}-1`]: {
+      [`flake-records/${suite}/suite-summary.json`]: JSON.stringify(
+        summary([{ name: "an older attempt", failed: true }]),
+      ),
     },
-    [`flake-records-${suite}-attempt-${id}-${key}-2`]: {
-      "suite-summary.json": JSON.stringify(summary(tests, status?.status, status?.diagnostics)),
+    [`main-os-test-artifacts-attempt-${id}-${key}-2`]: {
+      [`flake-records/${suite}/suite-summary.json`]: JSON.stringify(
+        summary(tests, status?.status, status?.diagnostics),
+      ),
     },
   });
   return {
